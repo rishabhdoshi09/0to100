@@ -89,8 +89,17 @@ class Backtester:
             capital=self._portfolio.initial_capital,
         )
 
+        # Fetch news once at startup (historical backtest sees today's news anyway;
+        # re-fetching every N bars adds HTTP latency with no accuracy gain)
         news_cache: List = []
-        news_refresh_idx = 0
+        if self._use_llm and self._news_fetcher is not None:
+            try:
+                raw_news = self._news_fetcher.fetch_all(max_age_hours=24)
+                news_cache = self._news_normalizer.normalize(raw_news)
+                log.info("backtest_news_fetched", articles=len(news_cache))
+            except Exception as exc:
+                log.warning("backtest_news_fetch_failed", error=str(exc))
+
         bar_closes: Dict[str, float] = {}
         bar_time = all_dates[-1] if all_dates else None
 
@@ -114,12 +123,6 @@ class Backtester:
 
             # Update current prices for unrealized PnL
             self._portfolio.update_prices(bar_closes)
-
-            # ── Step 2: Refresh news occasionally (expensive LLM prep) ────
-            if self._use_llm and bar_idx - news_refresh_idx >= 5:
-                raw_news = self._news_fetcher.fetch_all(max_age_hours=24)
-                news_cache = self._news_normalizer.normalize(raw_news)
-                news_refresh_idx = bar_idx
 
             # ── Step 3: Score all symbols, rank, cap LLM calls per bar ───
             # Phase A: compute technical signals for all symbols (free)
