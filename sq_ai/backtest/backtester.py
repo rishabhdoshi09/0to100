@@ -166,7 +166,7 @@ class Backtester:
             self._portfolio.record_equity_point(timestamp=bar_time)
 
         # Final close-out — mark all positions at last available price
-        self._close_all_positions(bar_closes)
+        self._close_all_positions(bar_closes, last_bar_time=bar_time)
 
         log.info("backtest_complete", total_bars=len(all_dates))
         return self._build_result()
@@ -277,7 +277,9 @@ class Backtester:
             for sym, pos_data in state.get("positions", {}).items()
         }
 
-    def _close_all_positions(self, last_prices: Dict[str, float]) -> None:
+    def _close_all_positions(
+        self, last_prices: Dict[str, float], last_bar_time=None
+    ) -> None:
         state = self._portfolio.get_state_dict()
         for sym in list(state.get("positions", {}).keys()):
             price = last_prices.get(sym)
@@ -287,6 +289,7 @@ class Backtester:
                     price=price,
                     order_id=f"CLOSEOUT-{sym}",
                     transaction_cost_rate=settings.backtest_transaction_cost,
+                    timestamp=last_bar_time,
                 )
 
     def _build_result(self) -> Dict[str, Any]:
