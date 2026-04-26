@@ -38,7 +38,7 @@ from logger import get_logger
 
 log = get_logger(__name__)
 
-_MIN_WARMUP_BARS = 50   # need at least 50 bars for indicator warmup
+_MIN_WARMUP_BARS = 20   # minimum bars needed for indicators (RSI-14 + SMA-20)
 
 
 class Backtester:
@@ -91,6 +91,8 @@ class Backtester:
 
         news_cache: List = []
         news_refresh_idx = 0
+        bar_closes: Dict[str, float] = {}
+        bar_time = all_dates[-1] if all_dates else None
 
         for bar_idx, bar_time in enumerate(all_dates):
             if bar_idx < _MIN_WARMUP_BARS:
