@@ -163,7 +163,7 @@ class Backtester:
                     )
 
             # ── Step 4: Equity snapshot ───────────────────────────────────
-            self._portfolio.record_equity_point()
+            self._portfolio.record_equity_point(timestamp=bar_time)
 
         # Final close-out — mark all positions at last available price
         self._close_all_positions(bar_closes)
@@ -224,13 +224,13 @@ class Backtester:
         reasoning = "no_clear_signal"
 
         if zscore is not None and rsi is not None:
-            if zscore < -1.5 and rsi < 50 and trend == "up" and not has_position:
+            if zscore < -1.0 and rsi < 55 and not has_position:
                 action = "BUY"
-                confidence = min(0.95, 0.6 + abs(zscore) * 0.1)
+                confidence = min(0.92, 0.60 + abs(zscore) * 0.08)
                 reasoning = f"mean_reversion_buy: zscore={zscore:.2f}, rsi={rsi:.1f}"
-            elif (zscore > 1.5 or (rsi and rsi > 70)) and has_position:
+            elif has_position and (zscore > 1.0 or rsi > 65):
                 action = "SELL"
-                confidence = min(0.95, 0.6 + abs(zscore) * 0.1)
+                confidence = min(0.92, 0.60 + abs(zscore) * 0.08)
                 reasoning = f"mean_reversion_exit: zscore={zscore:.2f}, rsi={rsi:.1f}"
 
         from dataclasses import dataclass
@@ -257,6 +257,7 @@ class Backtester:
                     reasoning=fill.reasoning,
                     confidence=fill.confidence,
                     transaction_cost_rate=0.0,  # already baked into fill
+                    timestamp=fill.fill_time,
                 )
             elif fill.action == "SELL":
                 realized = self._portfolio.close_position(
@@ -264,6 +265,7 @@ class Backtester:
                     price=fill.fill_price,
                     order_id=fill.order_id,
                     transaction_cost_rate=0.0,
+                    timestamp=fill.fill_time,
                 )
                 self._risk.record_pnl(realized)
             self._results.append(fill.to_dict())

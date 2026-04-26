@@ -114,19 +114,22 @@ class PortfolioState:
         reasoning: str = "",
         confidence: float = 0.0,
         transaction_cost_rate: float = 0.001,
+        timestamp: Optional[datetime] = None,
     ) -> None:
         cost = quantity * price
         tc = cost * transaction_cost_rate
+        ts = timestamp or datetime.now(timezone.utc)
         with self._lock:
             self._cash -= (cost + tc)
             self._positions[symbol] = Position(
                 symbol=symbol,
                 quantity=quantity,
                 avg_entry_price=price,
-                entry_time=datetime.now(timezone.utc),
+                entry_time=ts,
                 current_price=price,
             )
             self._record_trade(
+                timestamp=ts,
                 symbol=symbol,
                 action="BUY",
                 quantity=quantity,
@@ -145,8 +148,10 @@ class PortfolioState:
         price: float,
         order_id: str,
         transaction_cost_rate: float = 0.001,
+        timestamp: Optional[datetime] = None,
     ) -> float:
         """Close existing position. Returns realized PnL."""
+        ts = timestamp or datetime.now(timezone.utc)
         with self._lock:
             pos = self._positions.get(symbol)
             if pos is None:
@@ -158,6 +163,7 @@ class PortfolioState:
             self._cash += proceeds - tc
             del self._positions[symbol]
             self._record_trade(
+                timestamp=ts,
                 symbol=symbol,
                 action="SELL",
                 quantity=pos.quantity,
@@ -183,11 +189,12 @@ class PortfolioState:
             market_value = sum(p.market_value for p in self._positions.values())
             return self._cash + market_value
 
-    def record_equity_point(self) -> None:
+    def record_equity_point(self, timestamp: Optional[datetime] = None) -> None:
         equity = self.snapshot_equity()
+        ts = timestamp or datetime.now(timezone.utc)
         with self._lock:
             self._equity_curve.append({
-                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "timestamp": ts.isoformat(),
                 "equity": round(equity, 2),
                 "cash": round(self._cash, 2),
                 "open_positions": len(self._positions),
@@ -235,8 +242,9 @@ class PortfolioState:
     # ── Internals ──────────────────────────────────────────────────────────
 
     def _record_trade(self, **kwargs) -> None:
+        ts = kwargs.pop("timestamp", datetime.now(timezone.utc))
         record = TradeRecord(
-            timestamp=datetime.now(timezone.utc),
+            timestamp=ts,
             value=kwargs["quantity"] * kwargs["price"],
             **{k: v for k, v in kwargs.items()},
         )
