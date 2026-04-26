@@ -104,21 +104,39 @@ class RiskManager:
         if signal.action == "HOLD" or signal.rejected:
             return self._block(signal, "hold_or_rejected", 0.0)
 
-        # ── 3. Max open positions ──────────────────────────────────────────
+        # ── 3. SELL fast-path — exits always approved if position exists ──────
+        if signal.action == "SELL":
+            pos_value = open_positions.get(signal.symbol, 0.0)
+            if pos_value <= 0:
+                return self._block(signal, "no_position_to_sell", 0.0)
+            if last_price <= 0:
+                return self._block(signal, "invalid_price:zero", 0.0)
+            quantity = max(1, int(pos_value / last_price))
+            log.info("risk_approved_sell", symbol=signal.symbol, quantity=quantity)
+            return RiskDecision(
+                approved=True,
+                reason="sell_approved",
+                adjusted_size=quantity,
+                signal=signal,
+            )
+
+        # ── 4. BUY checks only below this line ────────────────────────────
+
+        # ── 5. Max open positions ──────────────────────────────────────────
         current_open = len(open_positions)
-        if signal.action == "BUY" and current_open >= settings.max_open_positions:
+        if current_open >= settings.max_open_positions:
             return self._block(signal, f"max_open_positions:{current_open}", 0.0)
 
-        # ── 4. Duplicate position guard (don't add to existing long) ───────
-        if signal.action == "BUY" and signal.symbol in open_positions:
+        # ── 6. Duplicate position guard ────────────────────────────────────
+        if signal.symbol in open_positions:
             return self._block(signal, f"already_long:{signal.symbol}", 0.0)
 
-        # ── 5. Max capital exposure check ─────────────────────────────────
+        # ── 7. Max capital exposure check ─────────────────────────────────
         total_exposure = sum(open_positions.values())
         if total_exposure / max(portfolio_value, 1) >= settings.max_capital_exposure:
             return self._block(signal, f"max_exposure_breached:{total_exposure:.0f}", 0.0)
 
-        # ── 6. Compute trade size (shares) ─────────────────────────────────
+        # ── 8. Compute BUY size (shares) ───────────────────────────────────
         max_trade_value = portfolio_value * settings.max_position_size_pct
         desired_trade_value = portfolio_value * min(
             signal.position_size, settings.max_position_size_pct
