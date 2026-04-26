@@ -119,23 +119,52 @@ class Backtester:
                 news_cache = self._news_normalizer.normalize(raw_news)
                 news_refresh_idx = bar_idx
 
-            # ── Step 3: Generate signals for each symbol ──────────────────
+            # ── Step 3: Score all symbols, rank, cap LLM calls per bar ───
+            # Phase A: compute technical signals for all symbols (free)
+            tech_scores: List[tuple] = []  # (priority, symbol, hist_slice, bar_close)
             for symbol in self._data.keys():
+                if bar_time not in self._data[symbol].index:
+                    continue
+                hist_slice = self._data[symbol].loc[:bar_time]
+                indicators = self._indicators.compute(hist_slice, symbol)
+                tech = self._technical_signal(symbol, indicators, bar_close=bar_closes.get(symbol, 0))
+                has_pos = self._portfolio.has_position(symbol)
+                # Priority: open positions first (exit monitoring), then BUY by |z-score|
+                zscore = abs(indicators.get("zscore_20") or 0)
+                if has_pos:
+                    priority = 10 + zscore  # always evaluate open positions
+                elif tech.action == "BUY":
+                    priority = zscore        # rank BUY candidates by signal strength
+                else:
+                    priority = -1            # HOLD/phantom SELL — skip LLM
+                tech_scores.append((priority, symbol, hist_slice, bar_closes.get(symbol, 0), tech, indicators))
+
+            # Phase B: sort by priority, cap LLM at 3 per bar
+            tech_scores.sort(key=lambda x: x[0], reverse=True)
+            llm_budget = 3 if self._use_llm else 0
+            llm_used = 0
+
+            for priority, symbol, hist_slice, bar_close, tech_signal, indicator_data in tech_scores:
                 if self._risk.is_kill_switch_active():
                     break
 
-                if bar_time not in self._data[symbol].index:
-                    continue
+                if priority < 0:
+                    # HOLD/no-signal symbols — use technical result directly
+                    signal = tech_signal
+                elif self._use_llm and llm_used < llm_budget:
+                    # Worth an LLM call
+                    signal = self._get_signal_llm(
+                        symbol=symbol,
+                        hist_df=hist_slice,
+                        bar_close=bar_close,
+                        indicator_data=indicator_data,
+                        news_cache=news_cache,
+                    )
+                    llm_used += 1
+                else:
+                    # Budget exhausted — fall back to technical
+                    signal = tech_signal
 
-                # Slice data up to (and including) current bar — NO lookahead
-                hist_slice = self._data[symbol].loc[:bar_time]
-
-                signal = self._get_signal(
-                    symbol=symbol,
-                    hist_df=hist_slice,
-                    bar_close=bar_closes.get(symbol, 0),
-                    news_cache=news_cache,
-                )
                 if signal is None:
                     continue
 
@@ -180,25 +209,24 @@ class Backtester:
         bar_close: float,
         news_cache: List,
     ) -> Optional[TradingSignal]:
+        """Used by live/LLM-mode path when budget isn't a concern."""
         indicator_data = self._indicators.compute(hist_df, symbol)
-
         if not self._use_llm or self._llm is None:
             return self._technical_signal(symbol, indicator_data, bar_close)
+        return self._get_signal_llm(symbol, hist_df, bar_close, indicator_data, news_cache)
 
-        # Technical pre-filter: skip LLM unless there is genuinely something
-        # to act on. Rules:
-        #   - No position + tech says HOLD or SELL → nothing to do, skip
-        #   - No position + tech says BUY          → worth asking LLM
-        #   - Has position                         → always ask LLM (monitor exit)
-        tech = self._technical_signal(symbol, indicator_data, bar_close)
-        has_position = self._portfolio.has_position(symbol)
-        if not has_position and tech.action != "BUY":
-            return tech  # HOLD or phantom SELL — skip LLM
-
+    def _get_signal_llm(
+        self,
+        symbol: str,
+        hist_df: pd.DataFrame,
+        bar_close: float,
+        indicator_data: Dict[str, Any],
+        news_cache: List,
+    ) -> Optional[TradingSignal]:
+        """Send to DeepSeek and validate response."""
         news_block = self._news_summarizer.build_context_block(symbol, news_cache)
         portfolio_state = self._portfolio.get_state_dict()
         risk_limits = self._risk.get_risk_limits_dict()
-
         market_snapshot = {"symbol": symbol, "last_price": bar_close}
         context_prompt = self._context.build(
             symbol=symbol,
