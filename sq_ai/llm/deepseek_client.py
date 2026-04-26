@@ -72,12 +72,12 @@ class DeepSeekClient:
                     {"role": "system", "content": _SYSTEM_PROMPT},
                     {"role": "user", "content": context_prompt},
                 ],
-                "max_tokens": 1024,
+                "max_tokens": 8000 if self._is_reasoner else 1024,
             }
 
             if self._is_reasoner:
-                # R1 does not accept temperature or response_format params.
-                # It reasons internally then outputs the answer.
+                # R1: no temperature/response_format — reasoning fills tokens first,
+                # needs large max_tokens so JSON output is not truncated
                 pass
             else:
                 # V3: deterministic + enforce JSON output
