@@ -185,12 +185,15 @@ class Backtester:
         if not self._use_llm or self._llm is None:
             return self._technical_signal(symbol, indicator_data, bar_close)
 
-        # Technical pre-filter: only invoke LLM when there is already a
-        # meaningful signal. This cuts ~90% of LLM calls in backtest.
+        # Technical pre-filter: skip LLM unless there is genuinely something
+        # to act on. Rules:
+        #   - No position + tech says HOLD or SELL → nothing to do, skip
+        #   - No position + tech says BUY          → worth asking LLM
+        #   - Has position                         → always ask LLM (monitor exit)
         tech = self._technical_signal(symbol, indicator_data, bar_close)
         has_position = self._portfolio.has_position(symbol)
-        if tech.action == "HOLD" and not has_position:
-            return tech  # nothing interesting — skip LLM call
+        if not has_position and tech.action != "BUY":
+            return tech  # HOLD or phantom SELL — skip LLM
 
         news_block = self._news_summarizer.build_context_block(symbol, news_cache)
         portfolio_state = self._portfolio.get_state_dict()
