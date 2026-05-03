@@ -1,32 +1,28 @@
-# Broker + Market Data
-kiteconnect>=5.0.1
-
-# LLM
-openai>=1.30.0          # DeepSeek uses OpenAI-compatible API
-
-# News
-feedparser>=6.0.10
-requests>=2.31.0
-
-# Data + Analytics
-pandas>=2.0.0
-numpy>=1.26.0
-scipy>=1.11.0
 
 # Async + Scheduling
-apscheduler>=3.10.4
-
+# Broker + Market Data
 # Config + Env
-python-dotenv>=1.0.0
-pydantic>=2.6.0
-pydantic-settings>=2.2.0
-
+# Data + Analytics
+# LLM
 # Logging + Monitoring
-structlog>=24.1.0
-rich>=13.7.0
-
-# Storage
-sqlalchemy>=2.0.0
-
+# News
 # Plotting (analytics)
+# Storage
+anthropic==0.97.0
+apscheduler>=3.10.4
+feedparser>=6.0.10
+kiteconnect>=5.0.1
 matplotlib>=3.8.0
+numpy>=1.26.0
+openai>=1.30.0          # DeepSeek uses OpenAI-compatible API
+pandas>=2.0.0
+pydantic-settings>=2.2.0
+pydantic>=2.6.0
+pytest==9.0.3
+python-dotenv>=1.0.0
+requests>=2.31.0
+rich>=13.7.0
+ruff==0.15.12
+scipy>=1.11.0
+sqlalchemy>=2.0.0
+structlog>=24.1.0

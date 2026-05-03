@@ -23,6 +23,9 @@ from signals.composite_signal import CompositeSignal
 from features.market_structure import is_recent_swing_breakout
 from paper_trading import init_db, open_position, close_position, get_open_positions, get_closed_positions, get_equity_curve, get_trading_summary
 from llm.claude_client import ClaudeClient
+from sq_ai.signals.conviction import ConvictionScorer
+from sq_ai.signals.profiles import PROFILES
+from sq_ai.signals.trade_setup import compute_trade_setup
 
 load_dotenv()
 
@@ -837,6 +840,42 @@ with st.sidebar:
             st.warning("Please select a stock first.")
     if "swot_result" in st.session_state:
         st.markdown(st.session_state.swot_result)
+    st.divider()
+    st.header("🎯 Decision Terminal")
+    _dt_profile = st.selectbox("Trader profile", list(PROFILES.keys()), key="dt_profile")
+    _dt_capital = st.number_input("Capital (₹)", value=100_000, step=10_000, key="dt_capital")
+    if st.button("▶ Run Conviction Score", use_container_width=True, key="dt_run"):
+        if selected:
+            with st.spinner("Computing conviction…"):
+                _dt_df = fetch_historical(selected, days=100)
+            if _dt_df is not None and len(_dt_df) >= 30:
+                _dt_ind = ie.compute(_dt_df, selected)
+                _dt_scorer = ConvictionScorer(PROFILES[_dt_profile])
+                _dt_res = _dt_scorer.score(_dt_ind)
+                _dt_atr = _dt_ind.get("atr_14", _dt_df['close'].iloc[-1] * 0.015)
+                _dt_price = _dt_df['close'].iloc[-1]
+                _dt_setup = compute_trade_setup(
+                    selected, _dt_res.verdict, _dt_price, _dt_atr, _dt_capital
+                ) if _dt_res.verdict in ("BUY", "SELL") else None
+                st.session_state["dt_result"] = (_dt_res, _dt_setup, _dt_price)
+            else:
+                st.warning("Not enough data for conviction scoring.")
+        else:
+            st.warning("Select a stock first.")
+    if "dt_result" in st.session_state:
+        _dt_res, _dt_setup, _dt_price = st.session_state["dt_result"]
+        _col_a, _col_b = st.columns(2)
+        _col_a.metric("Conviction", f"{_dt_res.score:.1f}/100")
+        _v_color = "🟢" if _dt_res.verdict == "BUY" else "🔴" if _dt_res.verdict == "SELL" else "🟡"
+        _col_b.metric("Verdict", f"{_v_color} {_dt_res.verdict}")
+        if not _dt_res.gates_passed:
+            st.warning("Gates failed: " + " | ".join(_dt_res.gate_failures))
+        if _dt_setup:
+            st.markdown(
+                f"**Entry** ₹{_dt_setup.entry} · **Stop** ₹{_dt_setup.stop} · "
+                f"**Target** ₹{_dt_setup.target} · **Qty** {_dt_setup.quantity} · "
+                f"**R:R** {_dt_setup.rr_ratio}×"
+            )
 
 if analyze and selected:
     with st.spinner(f"Fetching data for {selected}..."):
