@@ -804,11 +804,11 @@ with tabs[2]:
             _price  = _df['close'].iloc[-1]
             _setup  = compute_trade_setup(dt_sym, _res.verdict, _price, _atr, dt_capital) \
                       if _res.verdict in ("BUY","SELL") else None
-            st.session_state["dt_res"]   = _res
-            st.session_state["dt_setup"] = _setup
-            st.session_state["dt_price"] = _price
-            st.session_state["dt_ind"]   = _ind
-            st.session_state["dt_sym"]   = dt_sym
+            st.session_state["dt_res"]      = _res
+            st.session_state["dt_setup"]    = _setup
+            st.session_state["dt_price"]    = _price
+            st.session_state["dt_ind"]      = _ind
+            st.session_state["dt_sym_val"]  = dt_sym
         else:
             st.warning("Not enough data.")
 
@@ -858,7 +858,7 @@ with tabs[2]:
                 if st.button("🤖 Get Claude Opinion", key="dt_claude"):
                     with st.spinner("Asking Claude…"):
                         _c_ctx = (
-                            f"Symbol: {st.session_state['dt_sym']} | Price: ₹{dt_price:.2f} | "
+                            f"Symbol: {st.session_state.get('dt_sym_val', dt_sym)} | Price: ₹{dt_price:.2f} | "
                             f"Conviction: {r.score:.0f}/100 | Verdict: {r.verdict} | "
                             f"Gates passed: {r.gates_passed}\n"
                             f"Components: {json.dumps({k:round(v,2) for k,v in comp.items()})}"
