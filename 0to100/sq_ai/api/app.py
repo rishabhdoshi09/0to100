@@ -43,6 +43,7 @@ from sq_ai.backend.earnings_analyzer import analyse_call, list_calls
 from sq_ai.backend.data_fetcher import KiteFetcher
 from sq_ai.backend.universe import fetch_all_instruments
 from sq_ai.backend.watchlist import WatchlistService
+from sq_ai.backend.conviction import get_conviction
 
 
 class ManualTrade(BaseModel):
@@ -239,6 +240,12 @@ async def trade(t: ManualTrade) -> dict[str, Any]:
 
 
 # ───────────────────────────────────────────────────────── stock research
+@app.get("/api/stock/conviction/{symbol}")
+async def stock_conviction(symbol: str) -> dict[str, Any]:
+    """5-pillar conviction score: BUY / SELL / HOLD with weighted breakdown."""
+    return get_conviction(symbol)
+
+
 @app.get("/api/stock/profile/{symbol}")
 async def stock_profile(symbol: str) -> dict[str, Any]:
     return full_profile(symbol)
@@ -320,6 +327,60 @@ async def dynamic_screener(req: ScreenerRequest) -> list[dict]:
         include_fundamentals=req.include_fundamentals,
         max_results=req.max_results,
     )
+
+
+_BUZZING_PRESETS: dict[str, dict] = {
+    "breakout": {
+        "price_vs_sma20": "above",
+        "price_vs_sma50": "above",
+        "from_52w_high_pct": {"min": -0.08, "max": 0.02},
+        "volume": "above_avg",
+        "macd": "bullish",
+    },
+    "momentum": {
+        "ret_1w_min": 0.02,
+        "ret_1m_min": 0.06,
+        "ret_3m_min": 0.12,
+        "price_vs_sma50": "above",
+        "macd": "bullish",
+    },
+    "value_growth": {
+        "pe": {"min": 1, "max": 25},
+        "roe": {"min": 0.15},
+        "debt_to_equity": {"max": 0.7},
+        "price_vs_sma50": "above",
+        "market_cap_min_cr": 2000,
+    },
+    "volume_surge": {
+        "atr_pct": {"min": 0.01},
+        "volume": "above_avg",
+        "macd": "bullish",
+        "ret_1w_min": 0.01,
+    },
+    "consolidation_breakout": {
+        "rsi": {"min": 50, "max": 72},
+        "price_vs_sma20": "above",
+        "price_vs_sma50": "above",
+        "from_52w_high_pct": {"min": -0.20, "max": -0.02},
+        "volume": "above_avg",
+    },
+}
+
+
+@app.get("/api/screener/buzzing")
+async def screener_buzzing(preset: str = "breakout",
+                           max_results: int = 20) -> list[dict]:
+    """Run one of the built-in high-conviction presets."""
+    filters = _BUZZING_PRESETS.get(preset, _BUZZING_PRESETS["breakout"])
+    sched: TradingScheduler = app.state.sched
+    from sq_ai.backend.universe import get_active_universe
+    syms = get_active_universe(
+        max_symbols=300, tracker=sched.tracker,
+        fallback_yaml=sched.cfg.get("universe") or [],
+    )
+    return run_screener(syms, filters=filters,
+                        include_fundamentals=False,
+                        max_results=max_results)
 
 
 @app.get("/api/screener/presets")
