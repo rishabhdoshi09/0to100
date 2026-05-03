@@ -41,3 +41,12 @@ timesfm/
 signals/lgb_trading_model.pkl
 paper_trading.db
 *.db
+-e 
+# Environment and credential files
+.env
+.env.*
+*.env
+credentials.json
+*.pem
+*.key
+.credentials
