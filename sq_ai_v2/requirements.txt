@@ -1,0 +1,59 @@
+# ── Core ──────────────────────────────────────────────────────────────────────
+python-dotenv>=1.0.0
+pydantic>=2.6.0
+pydantic-settings>=2.2.0
+loguru>=0.7.2
+
+# ── Data / Numerics ──────────────────────────────────────────────────────────
+pandas>=2.0.0
+numpy>=1.26.0
+scipy>=1.11.0
+pyarrow>=14.0.0
+
+# ── Broker / Market Data ─────────────────────────────────────────────────────
+kiteconnect>=5.0.1
+yfinance>=0.2.36
+
+# ── ML / Deep Learning ───────────────────────────────────────────────────────
+lightgbm>=4.3.0
+scikit-learn>=1.4.0
+torch>=2.2.0
+torch-geometric>=2.5.0
+hmmlearn>=0.3.0
+gplearn>=0.4.2
+
+# ── NLP / Sentiment ──────────────────────────────────────────────────────────
+transformers>=4.40.0
+# FinBERT is loaded from HuggingFace: ProsusAI/finbert
+sentencepiece>=0.2.0
+
+# ── Calibration ──────────────────────────────────────────────────────────────
+# scikit-learn covers Platt / Isotonic
+
+# ── Storage clients ──────────────────────────────────────────────────────────
+psycopg2-binary>=2.9.9
+redis>=5.0.3
+questdb>=1.1.0            # QuestDB Python client (ILP protocol)
+sqlalchemy>=2.0.0
+
+# ── API / Async ───────────────────────────────────────────────────────────────
+fastapi>=0.110.0
+uvicorn[standard]>=0.29.0
+websockets>=12.0
+httpx>=0.27.0
+
+# ── Dashboard ────────────────────────────────────────────────────────────────
+streamlit>=1.33.0
+plotly>=5.21.0
+
+# ── Monitoring ───────────────────────────────────────────────────────────────
+prometheus-client>=0.20.0
+
+# ── Scheduling ───────────────────────────────────────────────────────────────
+apscheduler>=3.10.4
+
+# ── Misc ─────────────────────────────────────────────────────────────────────
+requests>=2.31.0
+feedparser>=6.0.10
+joblib>=1.3.0
+tqdm>=4.66.0
