@@ -800,7 +800,7 @@ symbol_list = sorted(symbol_map.keys())
 
 with st.sidebar:
     st.header("⚙️ Controls")
-    if st.button("🔄 Refresh All Data", use_container_width=True):
+    if st.button("🔄 Refresh All Data", width="stretch"):
         st.cache_data.clear()
         st.rerun()
     _auto = st.checkbox("⏱ Auto-refresh (30s)", value=False)
@@ -828,7 +828,7 @@ with st.sidebar:
     st.divider()
     st.header("🔍 Stock Analysis")
     selected = st.selectbox("Choose a stock", symbol_list, format_func=lambda x: f"{x} – {symbol_map[x]}")
-    analyze = st.button("🚀 Analyze & Get Verdict", use_container_width=True)
+    analyze = st.button("🚀 Analyze & Get Verdict", width="stretch")
     st.divider()
     st.header("📊 SWOT Analysis")
     if st.button("Generate SWOT", key="swot_btn"):
@@ -971,7 +971,7 @@ with tabs[1]:
                 vwap_series = cum_pv / cum_vol
                 fig.add_trace(go.Scatter(x=df.index, y=vwap_series, mode='lines', line=dict(color='blue', width=1.5, dash='dot'), name='VWAP'))
             fig.update_layout(title=f"{selected} – Candlestick with EMAs", xaxis_title="Date", yaxis_title="Price (₹)", height=600)
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width="stretch")
             # Technical table
             rsi = indicators_for_table.get('rsi_14', 50)
             zscore = indicators_for_table.get('zscore_20', 0)
@@ -992,7 +992,7 @@ with tabs[1]:
                     "Above VWAP = premium (sell); below = discount (buy)"
                 ]
             })
-            st.dataframe(tec_df, use_container_width=True, hide_index=True)
+            st.dataframe(tec_df, width="stretch", hide_index=True)
         else:
             st.warning("Not enough historical data.")
     else:
@@ -1063,7 +1063,7 @@ with tabs[5]:
                              color_continuous_scale=['red','yellow','green'],
                              title=f"{cap_choice} – Daily % Change (Kite)")
             fig.update_traces(textinfo="label+value", textposition="middle center")
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width="stretch")
             st.caption(f"Showing {len(df_heat)} stocks; data from Kite historical.")
         else:
             st.error("No data retrieved. Check Kite connection or symbol availability.")
@@ -1231,7 +1231,7 @@ with tabs[11]:
                         fig_trend = px.line(trend_df, x="Quarter", y=["FII (%)", "DII (%)"],
                                             title="FII / DII Investment Trend",
                                             markers=True, color_discrete_map={"FII (%)": "orange", "DII (%)": "green"})
-                        st.plotly_chart(fig_trend, use_container_width=True)
+                        st.plotly_chart(fig_trend, width="stretch")
                         if len(fii_data) >= 2:
                             fii_change = fii_data[-1] - fii_data[-2]
                             dii_change = dii_data[-1] - dii_data[-2]
@@ -1283,7 +1283,7 @@ with tabs[12]:
             name='Equity'
         ))
         _fig_eq.update_layout(height=280, margin=dict(t=20, b=20), xaxis_title="Date", yaxis_title="Equity (₹)")
-        st.plotly_chart(_fig_eq, use_container_width=True)
+        st.plotly_chart(_fig_eq, width="stretch")
     else:
         st.info("No equity curve data yet. Trades will populate this chart.")
 
@@ -1298,7 +1298,7 @@ with tabs[12]:
         _op_display = open_positions[['symbol', 'entry_date', 'entry_price', 'quantity', 'direction']].copy()
         st.dataframe(
             _op_display.style.applymap(_color_direction, subset=['direction']),
-            use_container_width=True, hide_index=True
+            width="stretch", hide_index=True
         )
     else:
         st.info("No open positions.")
@@ -1315,7 +1315,7 @@ with tabs[12]:
 
         st.dataframe(
             _cp_display.style.applymap(_color_pnl, subset=['pnl']),
-            use_container_width=True, hide_index=True
+            width="stretch", hide_index=True
         )
     else:
         st.info("No closed trades yet.")
@@ -1325,7 +1325,7 @@ with tabs[12]:
     # --- Execute paper trade ---
     st.subheader("⚡ Execute Paper Trade")
     if selected:
-        if st.button("▶ Run Signal & Trade", use_container_width=True):
+        if st.button("▶ Run Signal & Trade", width="stretch"):
             with st.spinner(f"Analysing {selected}…"):
                 verdict = get_stock_verdict(selected)
             if "error" in verdict:
