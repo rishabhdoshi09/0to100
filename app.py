@@ -84,6 +84,7 @@ def get_all_equity_symbols():
         symbol_name = {"RELIANCE":"Reliance Industries", "TCS":"Tata Consultancy", "HDFCBANK":"HDFC Bank"}
     return symbol_name
 
+@st.cache_data(ttl=300)
 def fetch_historical(symbol, days=250):
     to_date = datetime.now().strftime("%Y-%m-%d")
     from_date = (datetime.now() - timedelta(days=days+30)).strftime("%Y-%m-%d")
