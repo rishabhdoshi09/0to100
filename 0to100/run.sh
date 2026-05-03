@@ -27,7 +27,17 @@ fi
 mkdir -p data logs models reports
 
 if [ ! -f ".env" ]; then
-  echo "✗ .env missing – cp .env.template .env and fill keys" >&2
+  if [ -f ".env.example" ]; then
+    cp .env.example .env
+    echo "✓ Created .env from .env.example — please fill in your API keys before proceeding." >&2
+    echo "  Required: ANTHROPIC_API_KEY, DEEPSEEK_API_KEY" >&2
+    echo "  Optional: KITE_API_KEY + KITE_ACCESS_TOKEN (needed for live trading)" >&2
+    echo "  Optional: NEWSAPI_KEY, ALPHA_VANTAGE_KEY" >&2
+    echo "" >&2
+    echo "  Re-run ./run.sh once you have filled in your keys." >&2
+    exit 1
+  fi
+  echo "✗ .env missing – cp .env.example .env and fill keys" >&2
   exit 1
 fi
 set -a

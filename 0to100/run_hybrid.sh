@@ -26,7 +26,12 @@ fi
 mkdir -p data logs models
 
 if [ ! -f ".env" ]; then
-  echo "✗ .env missing – copy .env.template and fill keys" >&2
+  if [ -f ".env.example" ]; then
+    cp .env.example .env
+    echo "✓ Created .env from .env.example — fill in your API keys, then re-run." >&2
+    exit 1
+  fi
+  echo "✗ .env missing – cp .env.example .env and fill keys" >&2
   exit 1
 fi
 set -a
