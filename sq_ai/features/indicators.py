@@ -53,6 +53,8 @@ class IndicatorEngine:
         result.update(self._atr(high, low, close))
         result.update(self._volume_analysis(close, volume))
         result.update(self._trend(close))
+        result.update(self._regime(close))
+        result.update(self._ml_feature_aliases(result))
 
         return result
 
@@ -168,6 +170,64 @@ class IndicatorEngine:
         slope = float(np.polyfit(range(5), close.iloc[-5:].values, 1)[0])
         trend = "up" if slope > 0 else "down"
         return {"trend_5d": trend, "trend_slope_5d": self._scalar(slope)}
+
+    # ── Regime ────────────────────────────────────────────────────────────
+
+    def _regime(self, close: pd.Series) -> Dict[str, Any]:
+        """
+        Numeric market regime:
+          2 = bull  (SMA20 > SMA50 > SMA200, or SMA20 > SMA50 with SMA50 rising)
+          1 = neutral
+          0 = bear  (SMA20 < SMA50 and SMA50 declining)
+        Also returns regime_signal: +1 (bull), 0 (neutral), -1 (bear) for
+        backwards compat with any code that still reads regime_signal.
+        """
+        if len(close) < 50:
+            return {"regime": 1, "regime_signal": 0}
+
+        sma20 = close.rolling(20).mean().iloc[-1]
+        sma50 = close.rolling(50).mean().iloc[-1]
+        # SMA50 trend over last 5 bars
+        sma50_5ago = close.rolling(50).mean().iloc[-6] if len(close) >= 55 else sma50
+
+        if sma20 > sma50 and sma50 >= sma50_5ago:
+            regime = 2
+            regime_signal = 1
+        elif sma20 < sma50 and sma50 <= sma50_5ago:
+            regime = 0
+            regime_signal = -1
+        else:
+            regime = 1
+            regime_signal = 0
+
+        return {"regime": regime, "regime_signal": self._scalar(regime_signal)}
+
+    # ── ML feature name aliases ────────────────────────────────────────────
+
+    @staticmethod
+    def _ml_feature_aliases(ind: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        The trained LightGBM model may expect different names than the indicator
+        engine uses internally.  Return all known alias variants so that
+        whichever name the model was trained with will be present.
+        """
+        return {
+            # volatility aliases
+            "volatility_20": ind.get("vol_20d_ann"),
+            "volatility_10": ind.get("vol_10d_ann"),
+            # momentum aliases
+            "momentum_5d": ind.get("momentum_5d_pct"),
+            "momentum_10d": ind.get("momentum_10d_pct"),
+            "momentum_20d": ind.get("momentum_20d_pct"),
+            # RSI alias (some models trained with bare 'rsi')
+            "rsi": ind.get("rsi_14"),
+            # ATR alias
+            "atr": ind.get("atr_14"),
+            # volume trend: 5d avg volume / 20d avg volume
+            "volume_trend": (
+                (ind.get("volume_ratio") or 1.0)  # volume_ratio = last_vol / avg20
+            ),
+        }
 
     # ── Helper ────────────────────────────────────────────────────────────
 

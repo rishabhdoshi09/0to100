@@ -47,11 +47,17 @@ class Settings(BaseSettings):
         return [s.strip() for s in self.universe.split(",") if s.strip()]
 
     # ── Risk ──────────────────────────────────────────────────────────────────
-    max_capital_exposure: float = Field(default=0.20)
-    max_position_size_pct: float = Field(default=0.10)
-    max_open_positions: int = Field(default=5)
-    max_daily_loss_pct: float = Field(default=0.02)
-    min_signal_confidence: float = Field(default=0.60)
+    # max_capital_exposure: raised from 0.20 → 0.50 (was blocking every BUY
+    #   after the first 2 positions were opened)
+    max_capital_exposure: float = Field(default=0.50)
+    # max_position_size_pct: reduced 0.10 → 0.08 (smaller per-trade risk)
+    max_position_size_pct: float = Field(default=0.08)
+    max_open_positions: int = Field(default=4)
+    # max_daily_loss_pct: raised 0.02 → 0.04 (2% was firing kill switch on
+    #   the first bad trade — need room for normal intraday swings)
+    max_daily_loss_pct: float = Field(default=0.04)
+    # min_signal_confidence: lowered slightly to allow more entries
+    min_signal_confidence: float = Field(default=0.58)
 
     # ── Engine ────────────────────────────────────────────────────────────────
     cycle_interval_seconds: int = Field(default=300)

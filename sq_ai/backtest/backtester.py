@@ -23,6 +23,11 @@ from typing import Any, Dict, List, Optional
 
 import pandas as pd
 
+import pickle
+from pathlib import Path
+
+import numpy as np
+
 from backtest.simulator import SimulatedBroker, SimFill
 from config import settings
 from features.indicators import IndicatorEngine
@@ -38,7 +43,33 @@ from logger import get_logger
 
 log = get_logger(__name__)
 
-_MIN_WARMUP_BARS = 20   # minimum bars needed for indicators (RSI-14 + SMA-20)
+_MIN_WARMUP_BARS = 55   # need SMA-50 + regime (was 20)
+
+_ATR_STOP_MULT = 2.0    # hard stop = entry - 2×ATR
+_PROFIT_MULT   = 3.0    # profit target = entry + 3×ATR  (R:R = 1.5)
+_MAX_HOLD_BARS = 20     # time stop: exit flat/losing position after N bars
+
+# ── ML model path ─────────────────────────────────────────────────────────────
+_ML_MODEL_PATHS = [
+    Path("models/lgb_trading_model.pkl"),
+    Path("../models/lgb_trading_model.pkl"),
+    Path(__file__).parent.parent / "models" / "lgb_trading_model.pkl",
+]
+
+
+def _load_ml_model():
+    """Load LightGBM model if it exists; return None otherwise."""
+    for p in _ML_MODEL_PATHS:
+        if p.exists():
+            try:
+                with open(p, "rb") as f:
+                    model = pickle.load(f)
+                log.info("ml_model_loaded", path=str(p))
+                return model
+            except Exception as exc:
+                log.warning("ml_model_load_failed", path=str(p), error=str(exc))
+    log.info("ml_model_not_found_using_technical_only")
+    return None
 
 
 class Backtester:
@@ -72,6 +103,16 @@ class Backtester:
 
         self._results: List[Dict[str, Any]] = []
 
+        # ── Stop-loss / time-stop state ───────────────────────────────────
+        # symbol → (stop_price, profit_target_price, entry_bar_idx, entry_atr)
+        self._stops: Dict[str, tuple] = {}
+        # Stops staged when a BUY order is submitted, applied on fill.
+        self._pending_stops: Dict[str, tuple] = {}
+        self._bar_idx: int = 0
+
+        # ── ML model ─────────────────────────────────────────────────────
+        self._ml_model = _load_ml_model()
+
     def run(self) -> Dict[str, Any]:
         """
         Run the full backtest.
@@ -104,6 +145,7 @@ class Backtester:
         bar_time = all_dates[-1] if all_dates else None
 
         for bar_idx, bar_time in enumerate(all_dates):
+            self._bar_idx = bar_idx
             if bar_idx < _MIN_WARMUP_BARS:
                 # Skip warmup period — not enough data for indicators
                 continue
@@ -123,6 +165,9 @@ class Backtester:
 
             # Update current prices for unrealized PnL
             self._portfolio.update_prices(bar_closes)
+
+            # ── Step 1b: Check ATR stops and time stops ───────────────────
+            self._check_stops(bar_closes, bar_time, bar_idx)
 
             # ── Step 3: Score all symbols, rank, cap LLM calls per bar ───
             # Phase A: compute technical signals for all symbols (free)
@@ -195,6 +240,14 @@ class Backtester:
                         reasoning=signal.reasoning,
                         confidence=signal.confidence,
                     )
+                    # Stage ATR stop for BUY orders
+                    if signal.action == "BUY":
+                        self._stage_stop(
+                            symbol=symbol,
+                            approx_entry=bar_closes.get(symbol, 0.0),
+                            bar_idx=bar_idx,
+                            indicators=indicator_data,
+                        )
 
             # ── Step 4: Equity snapshot ───────────────────────────────────
             self._portfolio.record_equity_point(timestamp=bar_time)
@@ -251,40 +304,230 @@ class Backtester:
         bar_close: float,
     ) -> TradingSignal:
         """
-        Pure technical strategy (used when use_llm=False):
-          - z-score mean reversion: BUY when z < -1.5, SELL when z > 1.5
-          - RSI filter: avoid buying overbought / selling oversold
-          - Trend filter: only buy in uptrend
+        Composite signal (regime-filtered mean-reversion + optional ML model):
+
+        Entry rules (ALL must pass):
+          1. Regime ≥ 1  (bull or neutral — never buy in bear)
+          2. z-score < -1.0  (oversold relative to 20-day mean)
+          3. RSI 14 < 55  (not yet overbought)
+          4. Not already long this symbol
+
+        Exit rules (ANY triggers sell):
+          • Stops handled separately in _check_stops (ATR + time + profit target)
+          • z-score > 1.0  (mean reverted — take profit)
+          • RSI > 68       (overbought exit)
+          • Regime turned bear (risk-off exit)
+
+        ML model (if loaded) adjusts confidence:
+          • Predicts P(up) from the same indicators; blended 50/50 with technical.
+          • If P(up) < 0.45, suppress the BUY even if technical says yes.
         """
-        zscore = indicators.get("zscore_20")
-        rsi = indicators.get("rsi_14")
-        trend = indicators.get("trend_5d")
-        has_position = self._portfolio.has_position(symbol)
+        zscore    = indicators.get("zscore_20")
+        rsi       = indicators.get("rsi_14")
+        regime    = indicators.get("regime", 1)   # 0=bear 1=neutral 2=bull
+        atr_pct   = indicators.get("atr_pct", 2.0)
+        has_pos   = self._portfolio.has_position(symbol)
 
-        action = "HOLD"
+        action    = "HOLD"
         confidence = 0.5
-        reasoning = "no_clear_signal"
+        reasoning  = "no_clear_signal"
 
-        if zscore is not None and rsi is not None:
-            if zscore < -1.0 and rsi < 55 and not has_position:
-                action = "BUY"
-                confidence = min(0.92, 0.60 + abs(zscore) * 0.08)
-                reasoning = f"mean_reversion_buy: zscore={zscore:.2f}, rsi={rsi:.1f}"
-            elif has_position and (zscore > 1.0 or rsi > 65):
+        # ── ML probability ─────────────────────────────────────────────
+        ml_prob = self._ml_predict(indicators)
+
+        # ── Exit checks (open positions only) ─────────────────────────
+        if has_pos:
+            if zscore is not None and zscore > 1.0:
                 action = "SELL"
-                confidence = min(0.92, 0.60 + abs(zscore) * 0.08)
-                reasoning = f"mean_reversion_exit: zscore={zscore:.2f}, rsi={rsi:.1f}"
+                confidence = min(0.90, 0.65 + zscore * 0.06)
+                reasoning  = f"mean_reverted: zscore={zscore:.2f}"
+            elif rsi is not None and rsi > 68:
+                action = "SELL"
+                confidence = 0.75
+                reasoning  = f"rsi_overbought: rsi={rsi:.1f}"
+            elif regime == 0:
+                action = "SELL"
+                confidence = 0.80
+                reasoning  = "regime_turned_bear: risk_off_exit"
+            return TradingSignal(
+                symbol=symbol,
+                action=action,
+                confidence=confidence,
+                time_horizon="swing",
+                position_size=settings.max_position_size_pct,
+                reasoning=reasoning,
+                risk_level="medium",
+            )
 
-        from dataclasses import dataclass
+        # ── Entry checks (no open position) ───────────────────────────
+        if zscore is None or rsi is None:
+            return TradingSignal(
+                symbol=symbol, action="HOLD", confidence=0.5,
+                time_horizon="swing", position_size=0,
+                reasoning="insufficient_indicators", risk_level="low",
+            )
+
+        # Gate 1: regime filter
+        if regime == 0:
+            return TradingSignal(
+                symbol=symbol, action="HOLD", confidence=0.5,
+                time_horizon="swing", position_size=0,
+                reasoning=f"bear_regime_filter: regime={regime}", risk_level="low",
+            )
+
+        # Gate 2: mean-reversion entry
+        if zscore < -1.0 and rsi < 55:
+            tech_confidence = min(0.88, 0.60 + abs(zscore) * 0.08)
+
+            # Gate 3: ML model veto
+            if ml_prob is not None and ml_prob < 0.45:
+                return TradingSignal(
+                    symbol=symbol, action="HOLD", confidence=0.5,
+                    time_horizon="swing", position_size=0,
+                    reasoning=f"ml_veto: p_up={ml_prob:.2f}", risk_level="low",
+                )
+
+            # Blend ML confidence
+            if ml_prob is not None:
+                blended_conf = 0.5 * tech_confidence + 0.5 * ml_prob
+            else:
+                blended_conf = tech_confidence
+
+            # Scale position by ATR volatility (smaller size in volatile stocks)
+            vol_scalar = min(1.0, 2.0 / max(atr_pct, 0.5))
+            pos_size = settings.max_position_size_pct * vol_scalar
+
+            action     = "BUY"
+            confidence = round(blended_conf, 3)
+            reasoning  = (
+                f"regime={regime} zscore={zscore:.2f} rsi={rsi:.1f} "
+                f"ml_p={ml_prob:.2f if ml_prob else 'N/A'} atr_pct={atr_pct:.2f}"
+            )
+            return TradingSignal(
+                symbol=symbol,
+                action=action,
+                confidence=confidence,
+                time_horizon="swing",
+                position_size=pos_size,
+                reasoning=reasoning,
+                risk_level="medium",
+            )
+
         return TradingSignal(
-            symbol=symbol,
-            action=action,
-            confidence=confidence,
-            time_horizon="swing",
-            position_size=settings.max_position_size_pct,
-            reasoning=reasoning,
-            risk_level="medium",
+            symbol=symbol, action="HOLD", confidence=0.5,
+            time_horizon="swing", position_size=0,
+            reasoning="no_entry_condition", risk_level="low",
         )
+
+    # ── ML prediction ──────────────────────────────────────────────────────
+
+    def _ml_predict(self, indicators: Dict[str, Any]) -> Optional[float]:
+        """
+        Returns P(up next bar) ∈ [0,1] or None if model unavailable.
+        Builds feature vector matching the trained model's feature_names_in_.
+        Unknown features default to 0 with a warning (once).
+        """
+        if self._ml_model is None:
+            return None
+
+        try:
+            feat_names = list(getattr(self._ml_model, "feature_names_in_", []))
+            if not feat_names:
+                # Try booster feature names (raw lgb.Booster)
+                feat_names = getattr(self._ml_model, "feature_name_", [])
+
+            if not feat_names:
+                return None
+
+            row = []
+            for name in feat_names:
+                val = indicators.get(name, 0.0)
+                if val is None or (isinstance(val, float) and np.isnan(val)):
+                    val = 0.0
+                row.append(float(val))
+
+            X = np.array(row).reshape(1, -1)
+            proba = self._ml_model.predict_proba(X)[0]
+            # sklearn classifiers: proba[1] = P(class=1=up)
+            return float(proba[1]) if len(proba) > 1 else float(proba[0])
+        except Exception as exc:
+            log.debug("ml_predict_failed", error=str(exc))
+            return None
+
+    # ── ATR stop / time stop / profit target ──────────────────────────────
+
+    def _stage_stop(
+        self,
+        symbol: str,
+        approx_entry: float,
+        bar_idx: int,
+        indicators: Dict[str, Any],
+    ) -> None:
+        """
+        Stage stop levels when a BUY order is submitted.
+        Actual registration happens in _apply_fills when the order is filled.
+        approx_entry is the current bar close (actual fill will be next open).
+        """
+        atr    = indicators.get("atr_14") or (approx_entry * 0.02)
+        stop   = approx_entry - _ATR_STOP_MULT * atr
+        target = approx_entry + _PROFIT_MULT   * atr
+        self._pending_stops[symbol] = (stop, target, bar_idx, atr)
+        log.debug(
+            "stop_staged",
+            symbol=symbol,
+            approx_entry=round(approx_entry, 2),
+            stop=round(stop, 2),
+            target=round(target, 2),
+        )
+
+    def _check_stops(
+        self,
+        bar_closes: Dict[str, float],
+        bar_time,
+        bar_idx: int,
+    ) -> None:
+        """
+        Submit SELL orders for any position that has:
+          • Breached the ATR hard stop
+          • Hit the profit target
+          • Been held > _MAX_HOLD_BARS with no profit
+        """
+        for sym, (stop, target, entry_bar, _atr) in list(self._stops.items()):
+            if not self._portfolio.has_position(sym):
+                del self._stops[sym]
+                continue
+
+            price = bar_closes.get(sym)
+            if price is None:
+                continue
+
+            reason = None
+            if price <= stop:
+                reason = f"atr_stop: price={price:.2f} <= stop={stop:.2f}"
+            elif price >= target:
+                reason = f"profit_target: price={price:.2f} >= target={target:.2f}"
+            else:
+                bars_held = bar_idx - entry_bar
+                if bars_held >= _MAX_HOLD_BARS:
+                    state = self._portfolio.get_state_dict()
+                    pos = state.get("positions", {}).get(sym, {})
+                    entry_avg = pos.get("avg_entry_price", price)
+                    if price <= entry_avg:
+                        reason = f"time_stop: held={bars_held} bars, flat/losing"
+
+            if reason:
+                qty = self._portfolio.get_state_dict().get("positions", {}).get(sym, {}).get("quantity", 0)
+                if qty > 0:
+                    self._broker.submit_order(
+                        symbol=sym,
+                        action="SELL",
+                        quantity=qty,
+                        submitted_at=bar_time,
+                        reasoning=reason,
+                        confidence=0.99,
+                    )
+                    log.info("stop_triggered", symbol=sym, reason=reason)
+                del self._stops[sym]
 
     # ── Fill application ───────────────────────────────────────────────────
 
@@ -301,6 +544,23 @@ class Backtester:
                     transaction_cost_rate=0.0,  # already baked into fill
                     timestamp=fill.fill_time,
                 )
+                # Register ATR stop for this new position.
+                # We don't have fresh indicator data at fill time, so we use
+                # the cached stop data set during signal generation (stored
+                # via _pending_stops keyed by symbol).
+                pending = self._pending_stops.pop(fill.symbol, None)
+                if pending:
+                    stop, target, entry_bar, atr = pending
+                    self._stops[fill.symbol] = (stop, target, entry_bar, atr)
+                else:
+                    # Fallback: 2% hard stop
+                    rough_atr = fill.fill_price * 0.02
+                    self._stops[fill.symbol] = (
+                        fill.fill_price - _ATR_STOP_MULT * rough_atr,
+                        fill.fill_price + _PROFIT_MULT  * rough_atr,
+                        self._bar_idx,
+                        rough_atr,
+                    )
             elif fill.action == "SELL":
                 realized = self._portfolio.close_position(
                     symbol=fill.symbol,
@@ -310,6 +570,9 @@ class Backtester:
                     timestamp=fill.fill_time,
                 )
                 self._risk.record_pnl(realized)
+                # Clean up any pending stop for this symbol
+                self._stops.pop(fill.symbol, None)
+                self._pending_stops.pop(fill.symbol, None)
             self._results.append(fill.to_dict())
 
     def _get_entry_prices(self) -> Dict[str, float]:
