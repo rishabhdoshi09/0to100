@@ -70,6 +70,28 @@ backtester, decision engine, walk-forward, screener, stock research.
 * Real Anthropic + DeepSeek calls (placeholder keys → fallback paths).
 * Daily PDF on real network (yfinance for index data — sandbox blocks it).
 
+## Tasks done (2026-05-03) — instruments + live tracking
+
+* **Full NSE instruments listing + live price tracker**:
+  - `universe.py`: new `fetch_all_instruments()` fetches every instrument
+    (EQ, FUT, CE/PE, INDEX) from Kite SDK first, then falls back to the
+    public `https://api.kite.trade/instruments/NSE` CSV — no credentials needed
+    for the instrument list.
+  - `universe.py`: `_normalise()` unifies SDK and CSV field names;
+    `_filter_eq` now works on normalised rows.
+  - `portfolio/tracker.py`: `instruments_cache` schema extended with
+    `instrument_type`, `segment`, `lot_size`, `tick_size`. Migration via
+    `ALTER TABLE … ADD COLUMN` (no data loss on existing DBs).
+  - `api/app.py`:
+      - `GET /api/universe?q=` — cached EQ list with search
+      - `GET /api/universe/all?q=&exchange=` — full live listing (all types)
+      - `GET /api/ltp?symbols=NSE:X,NSE:Y` — Kite LTP for any symbol list
+  - `ui/instruments_page.py`: new Streamlit page — searchable/filterable
+    full-listing table + live price tracker with auto-refresh toggle
+    (configurable 2–60 s interval, uses `st.rerun()`).
+  - Wired into `streamlit_app.py` nav as "📋 Instruments".
+  - 5 new tests in `test_universe.py`; 76/76 pass. ruff clean.
+
 ## Tasks done (2026-05-03) — P0 complete + P1.1 done
 
 ### P0 (all items closed)

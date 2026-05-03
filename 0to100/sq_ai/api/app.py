@@ -40,6 +40,8 @@ from sq_ai.backend.analyst_estimates import get_estimates
 from sq_ai.backend.shareholding import get_shareholding
 from sq_ai.backend.corporate_actions import get_actions
 from sq_ai.backend.earnings_analyzer import analyse_call, list_calls
+from sq_ai.backend.data_fetcher import KiteFetcher
+from sq_ai.backend.universe import fetch_all_instruments
 from sq_ai.backend.watchlist import WatchlistService
 
 
@@ -161,13 +163,56 @@ async def screener_run() -> dict[str, Any]:
 
 # ─── universe ──────────────────────────────────────────────────────────────
 @app.get("/api/universe")
-async def universe_list() -> list[dict]:
-    return app.state.sched.tracker.get_cached_instruments()
+async def universe_list(q: str = "", limit: int = 2000) -> list[dict]:
+    """Cached EQ universe.  Optional ``q`` filters by symbol/name prefix."""
+    rows = app.state.sched.tracker.get_cached_instruments()
+    if q:
+        q_up = q.upper()
+        rows = [
+            r for r in rows
+            if q_up in (r.get("trading_symbol") or "").upper()
+            or q_up in (r.get("name") or "").upper()
+        ]
+    return rows[:limit]
 
 
 @app.post("/api/universe/refresh")
 async def universe_refresh() -> dict[str, Any]:
     return app.state.sched._refresh_universe()
+
+
+@app.get("/api/universe/all")
+async def universe_all(q: str = "", exchange: str = "NSE",
+                       limit: int = 5000) -> list[dict]:
+    """Full live instrument listing direct from Kite (or public CSV).
+
+    Includes EQ, FO, indices — everything Kite knows about.
+    Use ``q`` to filter by symbol or company name (case-insensitive).
+    """
+    rows = fetch_all_instruments(exchange=exchange)
+    if q:
+        q_up = q.upper()
+        rows = [
+            r for r in rows
+            if q_up in (r.get("trading_symbol") or "").upper()
+            or q_up in (r.get("name") or "").upper()
+        ]
+    return rows[:limit]
+
+
+# ─── live prices (LTP) ─────────────────────────────────────────────────────
+@app.get("/api/ltp")
+async def ltp(symbols: str = "") -> dict[str, Any]:
+    """Return last traded prices for a comma-separated list of instruments.
+
+    Each symbol must be exchange-prefixed: ``NSE:RELIANCE,NSE:TCS``.
+    Falls back to an empty dict when Kite credentials are absent.
+    """
+    if not symbols:
+        return {}
+    instrument_list = [s.strip() for s in symbols.split(",") if s.strip()]
+    fetcher = KiteFetcher()
+    return fetcher.ltp(instrument_list)
 
 
 # ─── disagreements ─────────────────────────────────────────────────────────

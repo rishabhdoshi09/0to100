@@ -78,6 +78,10 @@ CREATE TABLE IF NOT EXISTS instruments_cache (
     trading_symbol   TEXT PRIMARY KEY,
     instrument_token INTEGER,
     name             TEXT,
+    instrument_type  TEXT,
+    segment          TEXT,
+    lot_size         INTEGER,
+    tick_size        REAL,
     last_refresh     TEXT NOT NULL
 );
 
@@ -121,6 +125,17 @@ class PortfolioTracker:
         self._lock = threading.RLock()
         with self._conn() as c:
             c.executescript(SCHEMA)
+            # migrate: add columns added after initial release
+            for col, defn in [
+                ("instrument_type", "TEXT"),
+                ("segment",         "TEXT"),
+                ("lot_size",        "INTEGER"),
+                ("tick_size",       "REAL"),
+            ]:
+                try:
+                    c.execute(f"ALTER TABLE instruments_cache ADD COLUMN {col} {defn}")
+                except Exception:
+                    pass  # column already exists
 
     # ------------------------------------------------------------------ utils
     @contextmanager
@@ -274,11 +289,20 @@ class PortfolioTracker:
             con.execute("DELETE FROM instruments_cache")
             con.executemany(
                 "INSERT OR REPLACE INTO instruments_cache "
-                "(trading_symbol, instrument_token, name, last_refresh) "
-                "VALUES(?,?,?,?)",
+                "(trading_symbol, instrument_token, name, "
+                " instrument_type, segment, lot_size, tick_size, last_refresh) "
+                "VALUES(?,?,?,?,?,?,?,?)",
                 [
-                    (i["trading_symbol"], i.get("instrument_token"),
-                     i.get("name", ""), ts)
+                    (
+                        i["trading_symbol"],
+                        i.get("instrument_token"),
+                        i.get("name", ""),
+                        i.get("instrument_type"),
+                        i.get("segment"),
+                        i.get("lot_size"),
+                        i.get("tick_size"),
+                        ts,
+                    )
                     for i in instruments
                 ],
             )

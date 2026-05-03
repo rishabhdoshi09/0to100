@@ -8,13 +8,14 @@ from __future__ import annotations
 import streamlit as st
 
 from sq_ai.ui import (
-    dashboard_page, portfolio_page, reports_page,
+    dashboard_page, instruments_page, portfolio_page, reports_page,
     screener_page, settings_page, stock_research_page,
 )
 
 
 PAGES = {
     "📊 Dashboard":        dashboard_page,
+    "📋 Instruments":      instruments_page,
     "🔎 Screener":         screener_page,
     "🔬 Stock research":   stock_research_page,
     "💼 Portfolio":        portfolio_page,
