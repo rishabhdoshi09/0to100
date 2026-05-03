@@ -1,4 +1,3 @@
-import re
 
 with open('backtest/backtester.py', 'r') as f:
     content = f.read()

@@ -5,7 +5,7 @@ Identifies high/low volume nodes and value area boundaries.
 
 import numpy as np
 import pandas as pd
-from typing import Dict, List, Tuple, Optional
+from typing import Dict, Tuple, Optional
 
 
 class VolumeProfile:

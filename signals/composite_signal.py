@@ -2,7 +2,6 @@ import os
 import joblib
 import pandas as pd
 from typing import Dict, Optional, Any
-import numpy as np
 from features.volume_profile import VolumeProfile
 
 class CompositeSignal:
@@ -171,7 +170,7 @@ class CompositeSignal:
             self._last_vp_signal_type = signal_type
             
             return signal
-        except Exception as e:
+        except Exception:
             return 0.0
 
     def load_ml_model(self, model_path: str) -> bool:

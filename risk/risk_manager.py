@@ -19,7 +19,7 @@ from __future__ import annotations
 import threading
 from dataclasses import dataclass
 from datetime import date
-from typing import Dict, Optional
+from typing import Dict
 
 from config import settings
 from llm.signal_validator import TradingSignal

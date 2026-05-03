@@ -12,7 +12,6 @@ import json
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import time
-import re
 from bs4 import BeautifulSoup
 
 from data.kite_client import KiteClient
@@ -22,7 +21,6 @@ from features.indicators import IndicatorEngine
 from features.volume_profile import VolumeProfile
 from signals.composite_signal import CompositeSignal
 from features.market_structure import is_recent_swing_breakout
-from backtest.walk_forward import walk_forward_backtest
 from paper_trading import init_db, open_position, close_position, get_open_positions, get_closed_positions, get_equity_curve, get_trading_summary
 
 load_dotenv()
@@ -136,7 +134,7 @@ def get_global_indices():
                 prev = hist['Close'].iloc[-2]
                 change = ((last - prev) / prev) * 100
                 data[name] = {"price": last, "change": change}
-        except:
+        except Exception:
             continue
     return data
 
@@ -166,7 +164,7 @@ def get_market_cap(symbol):
         info = ticker.info
         mc = info.get('marketCap', 0)
         return mc / 1e7 if mc else 0
-    except:
+    except Exception:
         return 0
 
 def categorize_by_mcap(symbol):
@@ -204,7 +202,7 @@ def get_stock_change_kite(symbol):
             prev = df['close'].iloc[-2]
             change = ((last - prev) / prev) * 100
             return change
-    except:
+    except Exception:
         pass
     return None
 
@@ -311,7 +309,7 @@ def scrape_screener_shareholding(symbol):
                 txt = cell.text.strip().replace('%', '')
                 try:
                     values.append(float(txt))
-                except:
+                except Exception:
                     values.append(None)
             if 'Promoter' in label:
                 promoter_data = values
@@ -429,15 +427,6 @@ def get_stock_verdict(symbol):
     if df is None or len(df) < 50:
         return {"error": f"Insufficient data for {symbol}"}
     indicators = ie.compute(df, symbol)
-    factor_score = (
-        (1 if indicators.get('rsi_14',50)<30 else -1 if indicators.get('rsi_14',50)>70 else 0) * 0.5 +
-        (1 if indicators.get('zscore_20',0)<-1.5 else -1 if indicators.get('zscore_20',0)>1.5 else 0) * 0.3 +
-        (1 if indicators.get('momentum_5d_pct',0)>0.02 else -1 if indicators.get('momentum_5d_pct',0)<-0.02 else 0) * 0.2
-    )
-    ml_score = cs._compute_ml_signal(indicators)
-    regime_score = cs._compute_regime_signal(indicators)
-    llm_score = 0.5
-    session_score = session_signal()
     signal_result = cs.compute(indicators, llm_signal=None, regime=1)
     latest_price = df['close'].iloc[-1]
     last_date = df.index[-1].strftime('%Y-%m-%d')
@@ -445,7 +434,7 @@ def get_stock_verdict(symbol):
         ticker = yf.Ticker(symbol + ".NS")
         info = ticker.info
         fundamentals = {"P/E Ratio": info.get('trailingPE', 'N/A'), "ROE (%)": info.get('returnOnEquity', 0)*100 if info.get('returnOnEquity') else 'N/A'}
-    except:
+    except Exception:
         fundamentals = {"P/E Ratio": "N/A", "ROE (%)": "N/A"}
     past = get_recent_memory(symbol)
     past_text = "\n".join([f"- {p['date']}: {p['decision']} (conf {p['confidence']:.0f}%) → actual return {p.get('actual_return', 'pending')}%" for p in past]) if past else "- No past trades."
@@ -545,7 +534,7 @@ def fetch_and_test(symbol, test_func, days=150):
         df = fetch_historical(symbol, days=days)
         if df is not None and len(df) >= days-20:
             return symbol, test_func(df)
-    except:
+    except Exception:
         pass
     return symbol, False
 
@@ -581,7 +570,9 @@ def test_buzzing(sym):
         if df is None or len(df) < 20:
             return False
         latest = df.iloc[-1]
-        close = latest['close']; open_ = latest['open']; volume = latest['volume']
+        close = latest['close']
+        open_ = latest['open']
+        volume = latest['volume']
         if close <= open_:
             return False
         price_change = (close - open_) / open_ * 100
@@ -594,7 +585,7 @@ def test_buzzing(sym):
         if rsi < 60:
             return False
         return True
-    except:
+    except Exception:
         return False
 
 def find_buzzing_stocks_parallel(symbols, categories, min_price_change=3.0, limit=20, workers=8):
@@ -606,7 +597,8 @@ def find_buzzing_stocks_parallel(symbols, categories, min_price_change=3.0, limi
             sym, passed = future.result()
             if passed:
                 df = fetch_historical(sym, days=30)
-                close = df['close'].iloc[-1]; open_ = df['open'].iloc[-1]
+                close = df['close'].iloc[-1]
+                open_ = df['open'].iloc[-1]
                 chg = (close - open_) / open_ * 100
                 vol_r = df['volume'].iloc[-1] / df['volume'].iloc[-21:-1].mean()
                 rsi = compute_rsi(df['close']).iloc[-1]
@@ -650,7 +642,7 @@ Generate a concise Daily Street Pulse report using ONLY bullet points for each s
     try:
         resp = requests.post(url, json=payload, headers=headers, timeout=30)
         return resp.json()['choices'][0]['message']['content']
-    except:
+    except Exception:
         return "Error generating pulse"
 
 def macro_regime_allocation_explained():
@@ -675,7 +667,7 @@ def macro_regime_allocation_explained():
             regime = "🟡 Neutral – Mixed signals."
             allocation = "Equities 40% | Gold 25% | Bonds 25% | Cash 10%"
         return regime, allocation
-    except:
+    except Exception:
         return "⚠️ Regime data unavailable", "N/A"
 
 def generate_swot(symbol):
@@ -687,7 +679,7 @@ def generate_swot(symbol):
         roe = info.get('returnOnEquity', 'N/A')
         mc = info.get('marketCap', 0)
         mc_cr = mc / 1e7 if mc else 'N/A'
-    except:
+    except Exception:
         sector = pe = roe = mc_cr = 'N/A'
     prompt = f"""
 You are a financial analyst. Provide a concise SWOT analysis for the Indian stock {symbol} (NSE/BSE) based on the following known data and general market knowledge:
@@ -752,7 +744,7 @@ Give your verdict as a single bullet point: "VERDICT: BUY/SELL/HOLD (confidence:
                         try:
                             conf_str = line.split('confidence:')[1].strip().split()[0]
                             confidence = int(conf_str)
-                        except:
+                        except Exception:
                             pass
                 elif 'REASON:' in line.upper():
                     reason = line.split('REASON:')[1].strip()
@@ -877,7 +869,7 @@ if analyze and selected:
 - **Value Area (70% of volume):** ₹{val:.2f} – ₹{vah:.2f} – Fair value zone.
 - **Current price location:** {'Above Value Area' if current_price > vah else 'Inside Value Area' if val <= current_price <= vah else 'Below Value Area'}
 - **High volume zones (walls):** {', '.join([f'₹{h:.2f}' for h in hvns]) if hvns else 'None'}
-- **Low volume zones (fast zones):** {', '.join([f'₹{l:.2f}' for l in lvns]) if lvns else 'None'}
+- **Low volume zones (fast zones):** {', '.join([f'₹{lvn:.2f}' for lvn in lvns]) if lvns else 'None'}
 """)
             else:
                 st.info("Not enough data for volume profile (need 50+ days).")
@@ -1013,7 +1005,7 @@ with tabs[2]:
                 cat = categorize_stock(df)
                 if cat:
                     categories[cat].append(sym)
-            except:
+            except Exception:
                 continue
         progress.empty()
         if categories:

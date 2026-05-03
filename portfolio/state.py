@@ -14,7 +14,7 @@ Thread-safe. Single source of truth for portfolio state.
 from __future__ import annotations
 
 import threading
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 

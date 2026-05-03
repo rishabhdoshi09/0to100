@@ -5,7 +5,6 @@ and normalizes into a consistent structured format for downstream use.
 
 from __future__ import annotations
 
-import re
 from typing import List
 
 from config import settings

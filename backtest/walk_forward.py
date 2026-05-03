@@ -1,4 +1,3 @@
-import pandas as pd
 from datetime import timedelta
 from backtest.backtester import Backtester
 from analytics.reporter import PerformanceReporter
@@ -20,7 +19,7 @@ def walk_forward_backtest(historical_data, initial_capital=1_000_000,
         test_end = train_end + timedelta(days=test_months*30)
         if test_end > end_date:
             break
-        train_data = {sym: df.loc[current_start:train_end] for sym, df in historical_data.items()}
+        _train_data = {sym: df.loc[current_start:train_end] for sym, df in historical_data.items()}  # noqa: F841
         test_data = {sym: df.loc[train_end:test_end] for sym, df in historical_data.items()}
         bt = Backtester(test_data, initial_capital=initial_capital, use_llm=use_llm)
         result = bt.run()

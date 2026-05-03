@@ -17,7 +17,7 @@ from __future__ import annotations
 import csv
 import json
 import math
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -216,7 +216,6 @@ class PerformanceReporter:
             import matplotlib
             matplotlib.use("Agg")
             import matplotlib.pyplot as plt
-            import matplotlib.dates as mdates
 
             fig, axes = plt.subplots(2, 1, figsize=(14, 8), sharex=True)
             fig.suptitle(

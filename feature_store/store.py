@@ -6,7 +6,7 @@ Handles DataFrames with DatetimeIndex (from Kite)
 import pandas as pd
 from sortedcontainers import SortedList
 from datetime import datetime
-from typing import Dict, List, Optional
+from typing import Dict
 
 class PointInTimeFeatureStore:
     """Every feature computed uses ONLY data available at that timestamp."""

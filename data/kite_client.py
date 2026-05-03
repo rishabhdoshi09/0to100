@@ -12,7 +12,6 @@ The access_token must be stored in the .env file as KITE_ACCESS_TOKEN
 
 from __future__ import annotations
 
-import time
 from typing import Any, Dict, List, Optional
 
 import pandas as pd

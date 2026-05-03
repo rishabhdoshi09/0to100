@@ -14,5 +14,5 @@ request_token = input("\nPaste the request_token here: ")
 session = kite.generate_session(request_token, api_secret=API_SECRET)
 access_token = session["access_token"]
 
-print(f"\nYour new access_token (copy this to .env):")
+print("\nYour new access_token (copy this to .env):")
 print(access_token)

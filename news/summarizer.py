@@ -7,7 +7,7 @@ bullet-point text that can be safely inserted into the LLM prompt.
 
 from __future__ import annotations
 
-from typing import List, Optional
+from typing import List
 
 from news.normalizer import NormalizedArticle
 from logger import get_logger

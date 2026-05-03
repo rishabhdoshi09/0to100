@@ -10,10 +10,9 @@ from __future__ import annotations
 import hashlib
 import time
 from datetime import datetime, timezone
-from typing import List, Optional
+from typing import List
 
 import feedparser
-import requests
 
 from config import settings
 from logger import get_logger
@@ -107,7 +106,6 @@ class NewsFetcher:
     @staticmethod
     def _parse_entry_time(entry, fallback: datetime) -> datetime:
         try:
-            import email.utils
             struct = entry.get("published_parsed") or entry.get("updated_parsed")
             if struct:
                 ts = time.mktime(struct)

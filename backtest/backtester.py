@@ -17,8 +17,6 @@ Strict no-lookahead guarantee:
 
 from __future__ import annotations
 
-import uuid
-from datetime import date, timedelta
 from typing import Any, Dict, List, Optional
 
 import pandas as pd
@@ -187,7 +185,6 @@ class Backtester:
                 portfolio_value = self._portfolio.snapshot_equity()
                 last_price = bar_closes.get(symbol, 0.0)
 
-                from risk.risk_manager import RiskDecision
                 risk_decision = self._risk.evaluate(
                     signal=signal,
                     portfolio_value=portfolio_value,
@@ -279,7 +276,7 @@ class Backtester:
         """
         zscore = indicators.get("zscore_20")
         rsi = indicators.get("rsi_14")
-        trend = indicators.get("trend_5d")
+        _trend = indicators.get("trend_5d")  # noqa: F841
         has_position = self._portfolio.has_position(symbol)
 
         action = "HOLD"
@@ -296,7 +293,6 @@ class Backtester:
                 confidence = min(0.92, 0.60 + abs(zscore) * 0.08)
                 reasoning = f"mean_reversion_exit: zscore={zscore:.2f}, rsi={rsi:.1f}"
 
-        from dataclasses import dataclass
         return TradingSignal(
             symbol=symbol,
             action=action,

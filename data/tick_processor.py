@@ -8,7 +8,6 @@ OHLCV bar builder (1-minute bars by default).
 from __future__ import annotations
 
 import threading
-from collections import defaultdict
 from datetime import datetime, timezone
 from typing import Callable, Dict, List, Optional
 

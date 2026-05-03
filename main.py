@@ -112,7 +112,7 @@ def cmd_backtest(args) -> None:
     instruments = InstrumentManager()
     historical = HistoricalDataFetcher(kite, instruments)
 
-    print(f"\n=== SimpleQuant AI — Backtest ===")
+    print("\n=== SimpleQuant AI — Backtest ===")
     print(f"Period  : {from_date} → {to_date}")
     print(f"Universe: {', '.join(settings.symbol_list)}")
     print(f"LLM     : {'enabled' if use_llm else 'disabled (technical-only)'}")
@@ -147,7 +147,7 @@ def cmd_backtest(args) -> None:
 
     print("\nGenerating performance report…")
     reporter = PerformanceReporter()
-    metrics = reporter.generate_report(
+    reporter.generate_report(
         equity_curve=result["equity_curve"],
         trade_journal=result["trade_journal"],
         initial_capital=result["initial_capital"],
