@@ -26,6 +26,7 @@ from sq_ai.backend.ensemble import (
 )
 from sq_ai.backend.executor import Executor, Order
 from sq_ai.backend.llm_clients import ClaudeClient, DeepSeekClient
+from sq_ai.backend.meta_trader import MetaTrader
 from sq_ai.backend.risk_manager import RiskManager
 from sq_ai.portfolio.tracker import PortfolioTracker
 from sq_ai.signals.composite_signal import CompositeSignal
@@ -42,6 +43,7 @@ class DecisionEngine:
                  deepseek: DeepSeekClient | None = None,
                  executor: Executor | None = None,
                  risk: RiskManager | None = None,
+                 meta_trader: MetaTrader | None = None,
                  ensemble_threshold_pct: float = 10.0) -> None:
         self.tracker = tracker or PortfolioTracker()
         self.composite = composite or CompositeSignal()
@@ -49,6 +51,7 @@ class DecisionEngine:
         self.deepseek = deepseek or DeepSeekClient()
         self.executor = executor or Executor(self.tracker)
         self.risk = risk or RiskManager()
+        self.meta_trader = meta_trader or MetaTrader()
         self.ensemble = EnsembleVeto(
             tracker=self.tracker, claude=self.claude, deepseek=self.deepseek,
             threshold_pct=ensemble_threshold_pct,
@@ -163,17 +166,30 @@ class DecisionEngine:
                 cycle["vetoes"] += 1
                 decision["action"] = veto["final_action"]
 
-            # 6. log signal
+            # 6. MetaTrader deep risk validation
+            mt_result = self.meta_trader.validate(sym, decision, f, snap)
+            decision["meta_trader"] = mt_result
+            mt_verdict = mt_result.get("verdict", "ACCEPT")
+            if mt_verdict == "REJECT":
+                decision["action"] = "HOLD"
+            elif mt_verdict == "SCALE_DOWN":
+                multiplier = float(mt_result.get("size_multiplier", 1.0))
+                decision["size_pct"] = float(decision.get("size_pct", 0)) * multiplier
+            elif mt_verdict == "HOLD":
+                decision["action"] = "HOLD"
+
+            # 7. log signal
             self.tracker.log_signal(
                 symbol=sym, action=decision["action"],
                 confidence=float(decision.get("confidence", 0)),
                 regime=int(f.get("regime", 1)),
                 reasoning=decision.get("reasoning", ""),
                 extra={"size_pct": decision.get("size_pct", 0),
-                       "veto": veto},
+                       "veto": veto,
+                       "meta_trader": mt_result},
             )
 
-            # 7. execute BUY only
+            # 8. execute BUY only
             if decision["action"] == "BUY":
                 price = last_prices.get(sym)
                 atr_v = f.get("atr", 0.0)

@@ -40,6 +40,27 @@ def zscore(series: pd.Series, period: int = 20) -> pd.Series:
     return ((series - mu) / sd.replace(0, np.nan)).fillna(0.0)
 
 
+def adx(df: pd.DataFrame, period: int = 14) -> pd.Series:
+    """Average Directional Index — trend strength 0-100.
+
+    <20 = weak/sideways, 20-40 = trending, >40 = strong trend.
+    """
+    high, low_, close = df["high"], df["low"], df["close"]
+    up_move = high.diff()
+    down_move = -low_.diff()
+    plus_dm = up_move.where((up_move > down_move) & (up_move > 0), 0.0)
+    minus_dm = down_move.where((down_move > up_move) & (down_move > 0), 0.0)
+    tr = pd.concat(
+        [(high - low_), (high - close.shift()).abs(), (low_ - close.shift()).abs()],
+        axis=1,
+    ).max(axis=1)
+    atr_s = tr.ewm(span=period, adjust=False).mean()
+    plus_di = 100 * plus_dm.ewm(span=period, adjust=False).mean() / atr_s.replace(0, np.nan)
+    minus_di = 100 * minus_dm.ewm(span=period, adjust=False).mean() / atr_s.replace(0, np.nan)
+    dx = (100 * (plus_di - minus_di).abs() / (plus_di + minus_di).replace(0, np.nan)).fillna(0)
+    return dx.ewm(span=period, adjust=False).mean()
+
+
 def regime_from_smas(sma20: float | None, sma50: float | None) -> int:
     """0 = downtrend, 1 = sideways, 2 = uptrend."""
     if sma20 is None or sma50 is None or pd.isna(sma20) or pd.isna(sma50):
@@ -85,6 +106,7 @@ class CompositeSignal:
             if df["volume"].rolling(20).mean().iloc[-1] else 1.0
         rsi_14 = float(rsi(close, 14).iloc[-1])
         atr_14 = float(atr(df, 14).iloc[-1])
+        adx_14 = float(adx(df, 14).iloc[-1])
         regime = regime_from_smas(sma_20, sma_50)
         z_20 = float(zscore(close, 20).iloc[-1])
 
@@ -96,6 +118,7 @@ class CompositeSignal:
             "volume_trend": vol_ratio,
             "rsi": rsi_14,
             "atr": atr_14,
+            "adx": adx_14,
             "regime": regime,        # ← THE FIX
             "zscore_20": z_20,
             "close": float(close.iloc[-1]),
@@ -204,4 +227,4 @@ class CompositeSignal:
         return 0.0
 
 
-__all__ = ["CompositeSignal", "regime_from_smas", "rsi", "atr", "zscore"]
+__all__ = ["CompositeSignal", "regime_from_smas", "rsi", "atr", "zscore", "adx"]
