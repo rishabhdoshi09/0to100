@@ -28,6 +28,12 @@ openai==1.51.0
 # Config
 PyYAML==6.0.2
 
+# PDF / fundamentals helpers
+reportlab==4.2.2
+pdfplumber==0.11.4
+alpha_vantage==3.0.0
+newsapi-python==0.2.7
+
 # UI
 textual==0.47.0
 rich==13.7.1

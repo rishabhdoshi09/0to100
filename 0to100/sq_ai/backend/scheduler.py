@@ -18,6 +18,7 @@ from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 
 from sq_ai.backend.decision import DecisionEngine
+from sq_ai.backend.report_scheduler import ReportGenerator
 from sq_ai.backend.screener import Screener, load_config
 from sq_ai.backend.universe import refresh_universe
 from sq_ai.portfolio.tracker import PortfolioTracker
@@ -94,6 +95,12 @@ class TradingScheduler:
             trigger=CronTrigger(hour=23, minute=0, timezone=IST),
             id="screener_nightly", replace_existing=True,
         )
+        # 5. 17:30 IST daily PDF report
+        self._scheduler.add_job(
+            self.run_daily_report,
+            trigger=CronTrigger(hour=17, minute=30, timezone=IST),
+            id="daily_report", replace_existing=True,
+        )
 
         # one-shot warm-up: refresh universe immediately so the screener has data
         self._scheduler.add_job(self._refresh_universe, id="universe_warmup")
@@ -114,6 +121,11 @@ class TradingScheduler:
         out = self.screener.run()
         self._last_screener = out
         return out
+
+    # ---------------------------------------------------------- report
+    def run_daily_report(self) -> dict[str, Any]:
+        gen = ReportGenerator(tracker=self.tracker)
+        return gen.generate()
 
     # ---------------------------------------------------------- decision
     def run_cycle(self) -> dict[str, Any]:

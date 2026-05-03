@@ -1,70 +1,93 @@
-# sq_ai – dual-LLM quant cockpit (PRD v0.2)
+# sq_ai – unified Bloomberg + Screener.in + Moneycontrol cockpit (PRD v0.3)
 
 ## Original problem statement
-Transform a broken backtester (–7 % in 2022) into a 100×-better live
-trading cockpit on a MacBook Air 2015 (8 GB RAM, no GPU). v0.2 adds a
-**dual-LLM hybrid**: DeepSeek as the cheap pre-filter (every 30 min,
-universe up to 500), Claude as the decision engine on the top 10
-(every 5 min), with an **ensemble veto** when Claude proposes
-`size_pct > 10 %`.
+Build a single-laptop platform that fuses:
+
+* **Bloomberg-grade live cockpit**  (existing v0.2 dual-LLM trading loop)
+* **Screener.in-style dynamic screener** (technical + fundamental + momentum)
+* **Moneycontrol-style stock-research hub** (technicals, financials,
+  earnings calls + Claude-extracted highlights, analyst estimates,
+  shareholding, corporate actions, news, peers)
+* **Daily PDF market report**           (auto at 17:30 IST)
+
+Constraint: MacBook Air 2015, 8 GB RAM, no GPU. < 500 MB resident.
 
 ## Architecture
-* FastAPI (port 8000)
-* APScheduler – 08:00 IST universe refresh • 0/30 min DeepSeek screener
-  • every 5 min Claude decision • 23:00 IST nightly screener
-* SQLite tables: prices, trades, signals, daily_equity,
-  screener_results, **llm_disagreements**, **instruments_cache**
-* Textual TUI (2-s polling)
-* Anthropic + OpenAI SDKs (DeepSeek via `base_url`)
-* LightGBM `.pkl` inference; training in Colab notebook
-* Risk manager: Kelly + vol-target + 4 % daily-loss kill-switch + 50 % exposure
-* Streamlit dashboard (optional)
+* FastAPI (port 8000) – cockpit + research + screener + reports + watchlist
+* Streamlit multi-page web UI (port 8501) – Dashboard / Screener / Stock
+  Research / Portfolio / Reports / Settings
+* Textual TUI (low-mem alternative)
+* APScheduler – 08:00 universe / 0:30 DeepSeek screen / 5-min Claude /
+  17:30 PDF report / 23:00 nightly screener (tz Asia/Kolkata)
+* SQLite cache (TTL `kv_cache` table + structured tables: prices, trades,
+  signals, daily_equity, screener_results, screener_presets, user_watchlist,
+  earnings_calls, llm_disagreements, instruments_cache, reports)
+* LightGBM inference, Anthropic Claude, DeepSeek (OpenAI-compat),
+  yfinance, Alpha Vantage, NewsAPI, Kite Connect
+* PDF rendering via `reportlab` (Plotly charts saved as PNG)
 
-## Critical fix
+## Critical regime fix (still preserved end-to-end)
 `signals/composite_signal.py::compute_indicators` emits `regime ∈ {0,1,2}`;
 `compute()` enforces a hard regime gate (no BUY in downtrend). Reused by
-`backtester.py`, `decision.py` and the Colab notebook → backtest = live.
+backtester, decision engine, walk-forward, screener, stock research.
 
 ## Tasks done (2026-01)
-* v0.1 cockpit: FastAPI, scheduler, executor, signals, backtester, TUI,
-  Colab notebook, walk-forward, README + run.sh.
-* **v0.2 dual-LLM upgrade**:
-  - `backend/llm_clients.py`           — ClaudeClient + DeepSeekClient (`generate(prompt, max_tokens, temperature)`)
-  - `backend/screener.py`              — 30-min DeepSeek pre-filter, deterministic fallback
-  - `backend/decision.py`              — 5-min Claude decision engine + ensemble veto wiring
-  - `backend/ensemble.py`              — >10 % size veto, disagreement logging
-  - `backend/universe.py`              — Kite instrument-master cache
-  - `portfolio/tracker.py`             — added `llm_disagreements` + `instruments_cache` tables
-  - `backend/executor.py`              — journal.md append + live broker stop/target follow-up
-  - `api/app.py`                       — `/api/cycle/status`, `/api/screener/latest`, `/api/disagreements`, `/api/universe`, `/api/universe/refresh`
-  - `config.yaml`                      — universe, cadences, ensemble threshold, risk knobs
-  - `.env.template`, `run_hybrid.sh`
-  - 4 new test files (`test_llm_clients`, `test_screener`, `test_ensemble`, `test_universe`)
-* **52/52 pytest cases pass**, ruff lint-clean, FastAPI smoke green.
+* v0.1 cockpit (FastAPI, scheduler, executor, signals, backtester, TUI,
+  Colab notebook, walk-forward, README + run.sh).
+* v0.2 dual-LLM upgrade (DeepSeek pre-filter + Claude decision +
+  ensemble veto + dynamic Kite universe).
+* **v0.3 unified platform**:
+  - `backend/cache.py`          – SQLite TTL kv-cache + `@cached` decorator
+  - `backend/financials.py`     – ratios + annual + quarterly (Alpha Vantage → yfinance fallback)
+  - `backend/analyst_estimates.py` – EPS / target / rating distribution
+  - `backend/shareholding.py`   – promoter/FII/DII history (yfinance + synth)
+  - `backend/corporate_actions.py` – dividends + splits + buybacks
+  - `backend/earnings_analyzer.py` – pdfplumber → Claude extracted highlights+guidance
+  - `backend/screener_engine.py` – declarative JSON filter + score
+  - `backend/stock_research.py` – aggregator for `/api/stock/profile/{sym}`
+  - `backend/watchlist.py`      – CRUD service
+  - `backend/report_scheduler.py` – daily snapshot + Claude narrative + reportlab PDF
+  - tracker.py: added `user_watchlist`, `screener_presets`, `reports`,
+    `earnings_calls` tables + helpers
+  - api/app.py: 16 new routes (`/api/stock/*`, `/api/screener/run`,
+    `/api/screener/presets`, `/api/watchlist`, `/api/reports/*`)
+  - 6 Streamlit pages: dashboard, screener, stock_research, portfolio,
+    reports, settings + shared `_api.py` helper
+  - run.sh now boots FastAPI + Streamlit + Textual TUI together
+  - 4 new test files (cache, screener_engine, watchlist_presets, report)
+* **71/71 pytest pass**, ruff lint-clean, FastAPI smoke green.
 
-## What is NOT exercised locally
-* Live KiteConnect order placement (paper mode default; broker stop/target code is `pragma: no cover`).
-* Real Anthropic + DeepSeek calls (placeholder keys → graceful fallback paths).
-* Textual TUI render (terminal-only widget).
-* Colab notebook execution (designed for Google Colab T4).
+## What works without keys
+* All routes return 200 with deterministic fallbacks (no Kite, no NewsAPI,
+  no Alpha Vantage, no Anthropic, no DeepSeek required).
+* Stock-profile shows yfinance / synthesised data when keys are absent.
+* Screener works fully offline as long as price history is available
+  (LightGBM inference + composite ranking).
+
+## What needs MacBook to verify
+* Streamlit pages render (server starts, but rendering is a browser call).
+* Live KiteConnect order placement (paper mode default).
+* Real Anthropic + DeepSeek calls (placeholder keys → fallback paths).
+* Daily PDF on real network (yfinance for index data — sandbox blocks it).
 
 ## Backlog
 | P | item |
 |---|------|
-| P1 | NewsAPI per-symbol headline injection in decision prompt (already wired, needs key) |
+| P1 | Streamlit Plotly chart-rendering once Streamlit is reachable |
 | P1 | Liquidity sort in `get_active_universe` (turnover-weighted) |
-| P1 | `/api/equity` chart endpoint for Streamlit dashboard |
+| P1 | Auto-refresh SSE for cockpit dashboard |
 | P2 | LSTM head from Colab |
 | P2 | Auto-retraining trigger when AUC < 0.55 for 30 d |
-| P2 | Multi-broker abstraction (Upstox / Dhan) |
+| P2 | Multi-broker abstraction |
 
 ## Performance targets
 | metric | target |
 |---|---|
-| Cockpit RAM | < 400 MB |
+| Cockpit + Streamlit RAM | < 500 MB |
 | 2022 walk-forward Sharpe | > 1.0 |
 | Profit factor | > 1.3 |
-| Anthropic + DeepSeek spend / month | < $5 |
+| LLM spend / month | < $5 |
 | TUI refresh | 2 s |
 | Decision cycle | 5 min IST |
 | Screener cycle | 30 min IST |
+| Report cadence | 17:30 IST |

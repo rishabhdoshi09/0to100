@@ -80,6 +80,35 @@ CREATE TABLE IF NOT EXISTS instruments_cache (
     name             TEXT,
     last_refresh     TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS user_watchlist (
+    symbol     TEXT PRIMARY KEY,
+    note       TEXT,
+    added_at   TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS screener_presets (
+    name        TEXT PRIMARY KEY,
+    filters_json TEXT NOT NULL,
+    created_at  TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS reports (
+    filename   TEXT PRIMARY KEY,
+    generated_at TEXT NOT NULL,
+    summary    TEXT
+);
+
+CREATE TABLE IF NOT EXISTS earnings_calls (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    symbol TEXT NOT NULL,
+    quarter TEXT NOT NULL,
+    call_date TEXT,
+    transcript_url TEXT,
+    highlights_json TEXT,
+    guidance_json TEXT,
+    UNIQUE(symbol, quarter)
+);
 """
 
 
@@ -261,6 +290,107 @@ class PortfolioTracker:
                 "SELECT * FROM instruments_cache ORDER BY trading_symbol"
             ).fetchall()
         return [dict(r) for r in rows]
+
+    # ---------------------------------------------------------- watchlist
+    def watchlist_list(self) -> list[dict]:
+        with self._conn() as con:
+            rows = con.execute(
+                "SELECT symbol, note, added_at FROM user_watchlist "
+                "ORDER BY added_at DESC"
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    def watchlist_add(self, symbol: str, note: str = "") -> None:
+        with self._conn() as con:
+            con.execute(
+                "INSERT OR REPLACE INTO user_watchlist(symbol, note, added_at) "
+                "VALUES(?,?,?)",
+                (symbol, note, self._now()),
+            )
+
+    def watchlist_remove(self, symbol: str) -> int:
+        with self._conn() as con:
+            cur = con.execute("DELETE FROM user_watchlist WHERE symbol=?", (symbol,))
+            return cur.rowcount
+
+    # ---------------------------------------------------------- presets
+    def preset_save(self, name: str, filters: dict) -> None:
+        with self._conn() as con:
+            con.execute(
+                "INSERT OR REPLACE INTO screener_presets(name, filters_json, created_at) "
+                "VALUES(?,?,?)",
+                (name, json.dumps(filters), self._now()),
+            )
+
+    def preset_list(self) -> list[dict]:
+        with self._conn() as con:
+            rows = con.execute(
+                "SELECT name, filters_json, created_at FROM screener_presets "
+                "ORDER BY created_at DESC"
+            ).fetchall()
+        out = []
+        for r in rows:
+            d = dict(r)
+            try:
+                d["filters"] = json.loads(d.pop("filters_json"))
+            except Exception:
+                d["filters"] = {}
+            out.append(d)
+        return out
+
+    def preset_delete(self, name: str) -> int:
+        with self._conn() as con:
+            cur = con.execute("DELETE FROM screener_presets WHERE name=?", (name,))
+            return cur.rowcount
+
+    # ---------------------------------------------------------- reports
+    def report_record(self, filename: str, summary: str = "") -> None:
+        with self._conn() as con:
+            con.execute(
+                "INSERT OR REPLACE INTO reports(filename, generated_at, summary) "
+                "VALUES(?,?,?)",
+                (filename, self._now(), summary),
+            )
+
+    def report_list(self) -> list[dict]:
+        with self._conn() as con:
+            rows = con.execute(
+                "SELECT filename, generated_at, summary FROM reports "
+                "ORDER BY generated_at DESC"
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    # ---------------------------------------------------------- earnings calls
+    def earnings_save(self, symbol: str, quarter: str, *,
+                      call_date: str | None = None,
+                      transcript_url: str | None = None,
+                      highlights: dict | None = None,
+                      guidance: dict | None = None) -> None:
+        with self._conn() as con:
+            con.execute(
+                "INSERT OR REPLACE INTO earnings_calls(symbol, quarter, call_date, "
+                "transcript_url, highlights_json, guidance_json) VALUES(?,?,?,?,?,?)",
+                (symbol, quarter, call_date, transcript_url,
+                 json.dumps(highlights or {}), json.dumps(guidance or {})),
+            )
+
+    def earnings_list(self, symbol: str) -> list[dict]:
+        with self._conn() as con:
+            rows = con.execute(
+                "SELECT * FROM earnings_calls WHERE symbol=? ORDER BY quarter DESC",
+                (symbol,),
+            ).fetchall()
+        out = []
+        for r in rows:
+            d = dict(r)
+            try:
+                d["highlights"] = json.loads(d.pop("highlights_json") or "{}")
+                d["guidance"] = json.loads(d.pop("guidance_json") or "{}")
+            except Exception:
+                d["highlights"] = {}
+                d["guidance"] = {}
+            out.append(d)
+        return out
 
     def latest_screener(self) -> list[dict]:
         with self._conn() as con:
