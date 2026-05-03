@@ -4,7 +4,7 @@ VENV   := venv
 PIP    := $(VENV)/bin/pip
 PY     := $(VENV)/bin/python
 
-.PHONY: install ingest train backtest api dashboard docker-up docker-down clean lint test
+.PHONY: install install-torch ingest train backtest api dashboard docker-up docker-down clean lint test
 
 # ── Setup ────────────────────────────────────────────────────────────────────
 install:
@@ -13,6 +13,10 @@ install:
 	$(PIP) install -r requirements.txt
 	@echo "✓ Virtual environment ready. Activate with: source $(VENV)/bin/activate"
 	@cp -n .env.example .env 2>/dev/null && echo "✓ Created .env from .env.example" || echo "  .env already exists"
+
+install-torch:
+	$(PIP) install -r requirements-torch.txt
+	@echo "✓ PyTorch extras installed (requires Python <=3.12)"
 
 # ── Data ─────────────────────────────────────────────────────────────────────
 ingest:

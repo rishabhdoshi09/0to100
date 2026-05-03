@@ -1,0 +1,6 @@
+# Deep learning extras — requires Python <=3.12
+# Install with: pip install -r requirements-torch.txt
+torch>=2.2.0
+torch-geometric>=2.5.0
+transformers>=4.40.0
+sentencepiece>=0.2.0

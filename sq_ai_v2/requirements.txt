@@ -17,15 +17,16 @@ yfinance>=0.2.36
 # ── ML / Deep Learning ───────────────────────────────────────────────────────
 lightgbm>=4.3.0
 scikit-learn>=1.4.0
-torch>=2.2.0
-torch-geometric>=2.5.0
+# torch and torch-geometric require Python <=3.12.
+# Install separately via: pip install torch  (after switching to Python 3.12)
+# or run: make install-torch
 hmmlearn>=0.3.0
 gplearn>=0.4.2
 
 # ── NLP / Sentiment ──────────────────────────────────────────────────────────
-transformers>=4.40.0
-# FinBERT is loaded from HuggingFace: ProsusAI/finbert
-sentencepiece>=0.2.0
+# transformers also requires Python <=3.12 for full support.
+# Install separately: pip install transformers sentencepiece
+# sentencepiece>=0.2.0
 
 # ── Calibration ──────────────────────────────────────────────────────────────
 # scikit-learn covers Platt / Isotonic
