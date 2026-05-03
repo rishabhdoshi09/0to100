@@ -1,0 +1,3 @@
+[tool.ruff]
+exclude = ["sq_ai/train/colab_train.ipynb"]
+line-length = 100

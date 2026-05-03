@@ -10,7 +10,6 @@ import os
 
 import httpx
 import pandas as pd
-import plotly.graph_objects as go
 import streamlit as st
 
 HOST = os.environ.get("SQ_API_HOST", "127.0.0.1")

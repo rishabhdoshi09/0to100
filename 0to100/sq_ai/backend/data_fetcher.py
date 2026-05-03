@@ -12,11 +12,13 @@ from __future__ import annotations
 
 import os
 import time
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Any
 
 import pandas as pd
 import requests
+
+from sq_ai.backend.cache import cached
 
 
 # ── yfinance --------------------------------------------------------------
@@ -84,6 +86,7 @@ class KiteFetcher:
 
 
 # ── NewsAPI --------------------------------------------------------------
+@cached("news", ttl_seconds=1800)  # 30-min TTL: free tier is 100 req/day
 def fetch_news(query: str, top_n: int = 3,
                api_key: str | None = None) -> list[dict[str, Any]]:
     api_key = api_key or os.environ.get("NEWSAPI_KEY", "")

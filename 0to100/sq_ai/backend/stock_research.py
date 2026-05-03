@@ -8,7 +8,6 @@ from __future__ import annotations
 
 from typing import Any
 
-import pandas as pd
 
 from sq_ai.backend.analyst_estimates import get_estimates
 from sq_ai.backend.cache import cached

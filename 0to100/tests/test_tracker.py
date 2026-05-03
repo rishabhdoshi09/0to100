@@ -1,6 +1,4 @@
 """Tests for SQLite portfolio tracker."""
-import os
-import tempfile
 
 import pytest
 

@@ -25,7 +25,7 @@ def test_claude_client_generate_with_mock():
     out = c.generate("prompt", max_tokens=50, temperature=0.1)
     assert out == '{"action":"BUY"}'
     kwargs = c._client.messages.create.call_args.kwargs
-    assert kwargs["model"] == "claude-3-sonnet-20240229"
+    assert kwargs["model"] == "claude-haiku-4-5-20251001"
     assert kwargs["max_tokens"] == 50
     assert kwargs["temperature"] == 0.1
     assert kwargs["messages"][0]["role"] == "user"

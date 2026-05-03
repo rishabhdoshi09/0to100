@@ -42,6 +42,5 @@ def test_backtester_no_buy_in_downtrend():
     }, index=pd.date_range("2022-01-01", periods=n, freq="B"))
     res = Backtester().run_single(df, symbol="DOWN")
     # in a sustained downtrend the regime gate should drastically limit trades
-    longs_in_downtrend = [t for t in res.trades]   # any trade would be a buy
     # we are not asserting zero (rare bumps may pass) but losses contained
     assert res.stats["max_drawdown"] >= -1.0

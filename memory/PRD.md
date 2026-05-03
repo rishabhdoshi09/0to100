@@ -70,6 +70,28 @@ backtester, decision engine, walk-forward, screener, stock research.
 * Real Anthropic + DeepSeek calls (placeholder keys → fallback paths).
 * Daily PDF on real network (yfinance for index data — sandbox blocks it).
 
+## Tasks done (2026-05-03)
+* **P0.1 – Fix deprecated Claude model**: updated `DEFAULT_MODEL` in
+  `sq_ai/backend/llm_clients.py` from `claude-3-sonnet-20240229` (returns 404
+  since 2024-07-21) to `claude-haiku-4-5-20251001`. Created
+  `0to100/.env.example` documenting all required env vars including
+  `CLAUDE_MODEL` override, `NEWSAPI_KEY`, and cost guidance. Updated
+  `tests/test_llm_clients.py` to assert new model name.
+* **P0.2 – NewsAPI caching**: added `@cached("news", ttl_seconds=1800)`
+  decorator to `fetch_news` in `sq_ai/backend/data_fetcher.py`. NewsAPI free
+  tier is 100 req/day; without the cache the 5-min loop hitting 10 symbols
+  would exhaust the quota in ~8 minutes. With 30-min cache, daily usage is
+  ~20 requests. The news headlines were already being injected into the Claude
+  decision prompt via `build_decision_prompt` — this only adds the cache layer.
+* **Lint sweep**: ran `ruff --fix`, added `pyproject.toml` to exclude
+  `colab_train.ipynb`, removed unused `longs_in_downtrend` variable in
+  `tests/test_backtester.py`. `ruff check .` now reports zero errors.
+* **P0.3 – Trained model**: requires a fresh Colab run
+  (`sq_ai/train/colab_train.ipynb → Runtime ▸ Run all`), then copy
+  `lgb_trading_model.pkl` + `feature_names.txt` into `~/0to100/models/`.
+  Cannot be automated from this environment.
+* 71/71 pytest pass. ruff lint-clean.
+
 ## Backlog
 | P | item |
 |---|------|

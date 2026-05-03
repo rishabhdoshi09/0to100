@@ -1,5 +1,4 @@
 """Tests for watchlist + presets + reports persistence."""
-import json
 
 from sq_ai.backend.watchlist import WatchlistService
 from sq_ai.portfolio.tracker import PortfolioTracker

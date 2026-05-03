@@ -18,7 +18,7 @@ from typing import Optional
 class ClaudeClient:
     """Anthropic Claude wrapper."""
 
-    DEFAULT_MODEL = "claude-3-sonnet-20240229"
+    DEFAULT_MODEL = "claude-haiku-4-5-20251001"
 
     def __init__(self, api_key: Optional[str] = None,
                  model: Optional[str] = None) -> None:
