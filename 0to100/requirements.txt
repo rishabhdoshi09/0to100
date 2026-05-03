@@ -1,0 +1,39 @@
+fastapi==0.115.0
+uvicorn[standard]==0.30.6
+pydantic==2.9.2
+pydantic-settings==2.5.2
+python-dotenv==1.0.1
+
+# Scheduler
+APScheduler==3.10.4
+pytz==2024.2
+
+# Data / quant
+numpy==1.26.4
+pandas==2.2.2
+scipy==1.13.1
+joblib==1.4.2
+lightgbm==4.3.0
+yfinance==0.2.43
+
+# Brokers / data feeds
+kiteconnect==4.2.0
+requests==2.32.3
+httpx==0.27.2
+
+# LLM
+anthropic==0.34.0
+
+# UI
+textual==0.47.0
+rich==13.7.1
+streamlit==1.38.0
+plotly==5.24.1
+
+# DB
+SQLAlchemy==2.0.35
+
+# Testing / tooling
+pytest==8.3.3
+pytest-asyncio==0.24.0
+ruff==0.6.9
