@@ -60,6 +60,26 @@ CREATE TABLE IF NOT EXISTS screener_results (
     reasoning TEXT,
     PRIMARY KEY(date, rank)
 );
+
+CREATE TABLE IF NOT EXISTS llm_disagreements (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    timestamp TEXT NOT NULL,
+    symbol TEXT NOT NULL,
+    claude_action TEXT,
+    deepseek_action TEXT,
+    claude_confidence REAL,
+    deepseek_confidence REAL,
+    prompt_hash TEXT,
+    final_action TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_disagree_ts ON llm_disagreements(timestamp);
+
+CREATE TABLE IF NOT EXISTS instruments_cache (
+    trading_symbol   TEXT PRIMARY KEY,
+    instrument_token INTEGER,
+    name             TEXT,
+    last_refresh     TEXT NOT NULL
+);
 """
 
 
@@ -196,6 +216,51 @@ class PortfolioTracker:
                 [(date, i + 1, r["symbol"], r.get("score", 0.0),
                   r.get("reasoning", "")) for i, r in enumerate(ranked)],
             )
+
+    # ----------------------------------------------------------- disagreements
+    def log_disagreement(self, row: dict[str, Any]) -> None:
+        with self._conn() as con:
+            con.execute(
+                "INSERT INTO llm_disagreements(timestamp, symbol, claude_action, "
+                "deepseek_action, claude_confidence, deepseek_confidence, "
+                "prompt_hash, final_action) VALUES(?,?,?,?,?,?,?,?)",
+                (self._now(), row["symbol"], row.get("claude_action"),
+                 row.get("deepseek_action"),
+                 row.get("claude_confidence"), row.get("deepseek_confidence"),
+                 row.get("prompt_hash"), row.get("final_action")),
+            )
+
+    def latest_disagreements(self, limit: int = 50) -> list[dict]:
+        with self._conn() as con:
+            rows = con.execute(
+                "SELECT * FROM llm_disagreements ORDER BY id DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    # --------------------------------------------------------- instruments
+    def cache_instruments(self, instruments: list[dict[str, Any]]) -> int:
+        ts = self._now()
+        with self._conn() as con:
+            con.execute("DELETE FROM instruments_cache")
+            con.executemany(
+                "INSERT OR REPLACE INTO instruments_cache "
+                "(trading_symbol, instrument_token, name, last_refresh) "
+                "VALUES(?,?,?,?)",
+                [
+                    (i["trading_symbol"], i.get("instrument_token"),
+                     i.get("name", ""), ts)
+                    for i in instruments
+                ],
+            )
+        return len(instruments)
+
+    def get_cached_instruments(self) -> list[dict]:
+        with self._conn() as con:
+            rows = con.execute(
+                "SELECT * FROM instruments_cache ORDER BY trading_symbol"
+            ).fetchall()
+        return [dict(r) for r in rows]
 
     def latest_screener(self) -> list[dict]:
         with self._conn() as con:

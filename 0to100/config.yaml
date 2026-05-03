@@ -1,0 +1,84 @@
+# sq_ai – runtime configuration
+# Edit this file to change universe & cadence without touching code.
+
+# Top liquid NSE largecaps (extend up to 200 — yfinance suffix = .NS).
+universe:
+  - RELIANCE.NS
+  - TCS.NS
+  - HDFCBANK.NS
+  - INFY.NS
+  - ICICIBANK.NS
+  - HINDUNILVR.NS
+  - ITC.NS
+  - SBIN.NS
+  - BHARTIARTL.NS
+  - KOTAKBANK.NS
+  - LT.NS
+  - AXISBANK.NS
+  - ASIANPAINT.NS
+  - MARUTI.NS
+  - TITAN.NS
+  - BAJFINANCE.NS
+  - HCLTECH.NS
+  - WIPRO.NS
+  - ULTRACEMCO.NS
+  - SUNPHARMA.NS
+  - NESTLEIND.NS
+  - BAJAJFINSV.NS
+  - POWERGRID.NS
+  - NTPC.NS
+  - ONGC.NS
+  - M&M.NS
+  - TATAMOTORS.NS
+  - TATASTEEL.NS
+  - JSWSTEEL.NS
+  - HINDALCO.NS
+  - GRASIM.NS
+  - DRREDDY.NS
+  - CIPLA.NS
+  - DIVISLAB.NS
+  - APOLLOHOSP.NS
+  - BRITANNIA.NS
+  - DABUR.NS
+  - GODREJCP.NS
+  - MARICO.NS
+  - PIDILITIND.NS
+  - HAVELLS.NS
+  - SIEMENS.NS
+  - ADANIENT.NS
+  - ADANIPORTS.NS
+  - COALINDIA.NS
+  - IOC.NS
+  - BPCL.NS
+  - GAIL.NS
+  - INDUSINDBK.NS
+  - HDFCLIFE.NS
+  - SBILIFE.NS
+  - ICICIGI.NS
+  - BAJAJ-AUTO.NS
+  - HEROMOTOCO.NS
+  - EICHERMOT.NS
+  - TECHM.NS
+  - LTIM.NS
+  - VEDL.NS
+  - DLF.NS
+  - GODREJPROP.NS
+  - INDIGO.NS
+  # add up to 200 symbols (e.g., NIFTY MIDCAP 100 + smallcap leaders)
+
+# Hard caps & cadence
+max_universe_size: 200
+screener_top_n: 10
+screener_interval_minutes: 30        # DeepSeek pre-filter
+decision_interval_minutes: 5         # Claude decision loop
+universe_refresh_hour: 7             # IST – reserved for future re-fetch
+ensemble_threshold_percent: 10.0     # claude size_pct above which veto fires
+
+# Risk
+daily_loss_limit_pct: 4.0
+max_exposure_pct: 50.0
+target_vol_pct: 15.0
+max_position_pct: 10.0
+atr_stop_mult: 2.0
+atr_target_mult: 3.0
+time_stop_bars: 20

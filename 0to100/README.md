@@ -1,13 +1,14 @@
-# sq_ai – Bloomberg-grade quant cockpit on a MacBook Air
+# sq_ai – Bloomberg-grade quant cockpit on a MacBook Air (dual-LLM v0.2)
 
 A zero-bloat, 8 GB-friendly trading cockpit:
 
+* **Two-stage LLM pipeline** — DeepSeek (cheap) screens the universe every 30 min, Claude (smart) decides on the top 10 every 5 min, **ensemble veto** kicks in when Claude proposes >10 % size.
 * FastAPI backend (port **8000**)
 * Textual TUI (terminal cockpit)
-* SQLite cache
-* APScheduler → 5-min decision loop + 23:00 IST screener
+* SQLite cache (prices, trades, signals, screener_results, llm_disagreements, instruments_cache)
+* APScheduler → 08:00 universe refresh + 0/30 min screener + 5-min decision + 23:00 nightly screener (timezone Asia/Kolkata)
 * LightGBM **inference only** (training happens on Colab)
-* Anthropic Claude as the senior PM that signs off every trade
+* Hand-curated `journal.md` written after every BUY
 
 > **Architectural rule:** the laptop is the cockpit, not the engine.
 > All training, walk-forward validation, and bulk downloads run in
@@ -29,17 +30,30 @@ A zero-bloat, 8 GB-friendly trading cockpit:
 ```bash
 git clone https://github.com/rishabhdoshi09/0to100.git
 cd 0to100
-cp .env .env.local           # then fill in your real keys
+cp .env.template .env        # then fill in your real keys
 ```
 
-`run.sh` will create `.venv`, install `requirements.txt`, start FastAPI on
-`127.0.0.1:8000`, and launch the Textual TUI:
+Required keys in `.env`:
+
+| Variable               | Where to obtain                                              |
+|------------------------|--------------------------------------------------------------|
+| `ANTHROPIC_API_KEY`    | https://console.anthropic.com/settings/keys                  |
+| `DEEPSEEK_API_KEY`     | https://platform.deepseek.com/api_keys                       |
+| `KITE_API_KEY` + `KITE_ACCESS_TOKEN` | https://kite.trade/ (developer app + daily token)  |
+| `NEWSAPI_KEY`          | https://newsapi.org (free tier OK)                           |
+| `ALPHA_VANTAGE_KEY`    | https://www.alphavantage.co/support/#api-key                 |
+
+Two launcher scripts are provided:
 
 ```bash
-./run.sh
+./run.sh           # original single-LLM mode
+./run_hybrid.sh    # NEW – dual-LLM (Claude + DeepSeek) with ensemble veto
 ```
 
-Press **q** in the TUI to quit (the FastAPI process is killed automatically).
+Both create `.venv`, install `requirements.txt`, start FastAPI on
+`127.0.0.1:8000`, then launch the Textual TUI.
+
+Press **q** to quit (the FastAPI process is killed automatically).
 
 ---
 
@@ -122,18 +136,40 @@ crontab -e
 ## 6. Architecture (one-screen)
 
 ```
-┌─ MACBOOK AIR (cockpit, <300 MB) ───────────────────────────────┐
-│  Textual TUI ──polls 2s──▶ FastAPI :8000 ──▶ SQLite (cache)    │
-│                                  │                              │
-│                     APScheduler (every 5 min)                   │
-└──────────────────────────────────┼──────────────────────────────┘
-                  ┌────────────────┼────────────────┐
-                  ▼                ▼                ▼
-           ┌──────────┐    ┌──────────────┐  ┌──────────────┐
-           │ Claude   │    │ Kite + yfin  │  │ Google Colab │
-           │ Sonnet   │    │ live + hist. │  │ training T4  │
-           └──────────┘    └──────────────┘  └──────────────┘
+┌─ MACBOOK AIR (cockpit, <400 MB) ───────────────────────────────────────┐
+│  Textual TUI ──polls 2s──▶ FastAPI :8000 ──▶ SQLite (cache)            │
+│                                  │                                      │
+│                  APScheduler (08:00 universe / 0:30 screener /          │
+│                                5 min decision / 23:00 nightly)          │
+└──────────────────────────────────┼──────────────────────────────────────┘
+                                   │
+       ┌───────────────────┬───────┴──────────────┬─────────────────┐
+       ▼                   ▼                      ▼                 ▼
+ ┌──────────┐       ┌────────────┐         ┌─────────────┐    ┌───────────┐
+ │ DeepSeek │       │  Claude    │         │ Kite + yfin │    │  Colab T4 │
+ │ (screen) │       │ (decide)   │         │ live + hist │    │ training  │
+ └──────────┘       └─────┬──────┘         └─────────────┘    └───────────┘
+                          │
+                  size>10 %?  → DeepSeek 2nd opinion (ensemble veto)
+                          │
+                          ▼
+                    Executor + journal.md
 ```
+
+### Dual-LLM data-flow
+
+1. **08:00 IST** – `universe.refresh_universe()` pulls Kite NSE
+   instrument master into `instruments_cache`.
+2. **0/30 min** – `Screener.run()` fetches yfinance OHLCV for the
+   cached universe, computes 5 indicators, asks DeepSeek for the top 10,
+   persists to `screener_results`. Falls back to a deterministic momentum
+   score when DeepSeek is offline.
+3. **Every 5 min** (market hours) – `DecisionEngine.run()` reads the
+   latest top-10, computes the full feature dict (incl. **regime fix**),
+   asks Claude for a JSON decision per symbol, applies the **ensemble
+   veto** when `size_pct > 10 %`, executes via `Executor`, appends the
+   trade to `journal.md`, and stores the decision row in `signals`.
+4. **23:00 IST** – nightly summary screener (legacy job, useful for cron).
 
 ---
 
@@ -169,14 +205,25 @@ crontab -e
 ```
 0to100/
 ├── sq_ai/
-│   ├── api/app.py                 # FastAPI cockpit
-│   ├── backend/{scheduler,data_fetcher,claude_client,executor,risk_manager}.py
+│   ├── api/app.py                                # FastAPI cockpit
+│   ├── backend/
+│   │   ├── llm_clients.py    # ClaudeClient + DeepSeekClient
+│   │   ├── screener.py       # 30-min DeepSeek pre-filter
+│   │   ├── decision.py       # 5-min Claude decision engine
+│   │   ├── ensemble.py       # >10 % size veto + disagreement log
+│   │   ├── universe.py       # Kite instrument master cache
+│   │   ├── scheduler.py      # APScheduler glue
+│   │   ├── data_fetcher.py   # yfinance / Kite / NewsAPI
+│   │   ├── claude_client.py  # legacy hi-level brief builder
+│   │   ├── executor.py       # paper/live + journal.md
+│   │   └── risk_manager.py   # Kelly + vol-target + kill-switch
 │   ├── signals/{composite_signal,ml_model}.py    # ← regime fix lives here
-│   ├── portfolio/tracker.py       # SQLite repo
-│   ├── ui/{terminal,dashboard}.py # Textual + Streamlit
+│   ├── portfolio/tracker.py  # SQLite repo
+│   ├── ui/{terminal,dashboard}.py
 │   ├── backtest/{backtester,metrics}.py
 │   ├── train/{colab_train.ipynb,walk_forward.py}
 │   └── main.py
-├── tests/
-├── .env  .gitignore  requirements.txt  run.sh  README.md
+├── tests/                    # 52 pytest cases (lint-clean)
+├── .env  .env.template  .gitignore  config.yaml
+├── requirements.txt  run.sh  run_hybrid.sh  README.md
 ```

@@ -4,9 +4,35 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 from sq_ai.portfolio.tracker import PortfolioTracker
+
+
+JOURNAL_PATH = os.environ.get(
+    "SQ_JOURNAL_PATH",
+    str(Path(__file__).resolve().parents[2] / "journal.md"),
+)
+JOURNAL_HEADER = (
+    "| timestamp | symbol | regime | reasoning | entry_price | "
+    "stop_price | target_price |\n"
+    "|---|---|---|---|---|---|---|\n"
+)
+
+
+def _journal_append(row: dict[str, Any]) -> None:
+    p = Path(JOURNAL_PATH)
+    if not p.exists():
+        p.write_text(JOURNAL_HEADER)
+    safe_reason = (row.get("reasoning") or "").replace("|", "/").replace("\n", " ")[:240]
+    line = (
+        f"| {row['timestamp']} | {row['symbol']} | {row.get('regime', '')} | "
+        f"{safe_reason} | {row['entry_price']:.2f} | "
+        f"{row['stop_price']:.2f} | {row['target_price']:.2f} |\n"
+    )
+    with p.open("a") as f:
+        f.write(line)
 
 
 @dataclass
@@ -40,13 +66,26 @@ class Executor:
                 self.paper = True
 
     # -------------------------------------------------------------- BUY
-    def buy(self, order: Order) -> dict[str, Any]:
+    def buy(self, order: Order, reasoning: str = "",
+            regime: int | str = "") -> dict[str, Any]:
         if order.qty <= 0:
             return {"status": "skip", "reason": "qty<=0"}
         broker_id = self._place(order, "BUY")
+        # immediately push stop/target as separate broker orders (live only)
+        if not self.paper and self._kite is not None:
+            self._place_stop_target(order)
         trade_id = self.tracker.open_trade(
             order.symbol, order.price, order.qty, order.stop, order.target
         )
+        _journal_append({
+            "timestamp": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "symbol": order.symbol,
+            "regime": regime,
+            "reasoning": reasoning,
+            "entry_price": order.price,
+            "stop_price": order.stop,
+            "target_price": order.target,
+        })
         return {"status": "ok", "trade_id": trade_id, "broker_id": broker_id,
                 "mode": "paper" if self.paper else "live"}
 
@@ -76,7 +115,6 @@ class Executor:
                                "reason": "target", "price": ltp,
                                **self.exit_position(pos["id"], ltp)})
             else:
-                # time stop = 20 bars (≈ 20 trading days)
                 entry_dt = datetime.fromisoformat(pos["entry_date"].replace("Z", "+00:00"))
                 age_days = (datetime.now(timezone.utc) - entry_dt).days
                 if age_days >= 20:
@@ -102,3 +140,22 @@ class Executor:
         except Exception as exc:                       # pragma: no cover
             print(f"[Executor._place] live order failed: {exc}")
             return f"live-failed-{side}"
+
+    def _place_stop_target(self, order: Order) -> None:                # pragma: no cover
+        try:
+            self._kite.place_order(
+                tradingsymbol=order.symbol.replace(".NS", ""),
+                exchange="NSE", transaction_type="SELL",
+                quantity=order.qty, order_type="SL",
+                price=order.stop, trigger_price=order.stop,
+                product="CNC", variety="regular",
+            )
+            self._kite.place_order(
+                tradingsymbol=order.symbol.replace(".NS", ""),
+                exchange="NSE", transaction_type="SELL",
+                quantity=order.qty, order_type="LIMIT",
+                price=order.target,
+                product="CNC", variety="regular",
+            )
+        except Exception as exc:
+            print(f"[Executor._place_stop_target] {exc}")
