@@ -23,7 +23,7 @@ from features.volume_profile import VolumeProfile
 from signals.composite_signal import CompositeSignal
 from features.market_structure import is_recent_swing_breakout
 from backtest.walk_forward import walk_forward_backtest
-from paper_trading import init_db, open_position, close_position, get_open_positions
+from paper_trading import init_db, open_position, close_position, get_open_positions, get_closed_positions, get_equity_curve, get_trading_summary
 
 load_dotenv()
 
@@ -70,6 +70,7 @@ def init_clients():
 
 kite, im, fetcher, ie, vp, cs = init_clients()
 
+@st.cache_data(ttl=3600)
 def get_all_equity_symbols():
     symbol_name = {}
     for sym, meta in im._meta_map.items():
@@ -758,15 +759,60 @@ Give your verdict as a single bullet point: "VERDICT: BUY/SELL/HOLD (confidence:
     return results
 
 # -------------------------------
+# MARKET HOURS HELPER
+# -------------------------------
+def market_status():
+    now = datetime.now()
+    t = now.time()
+    open_t = datetime.strptime("09:15", "%H:%M").time()
+    close_t = datetime.strptime("15:30", "%H:%M").time()
+    if now.weekday() >= 5:
+        return "🔴 Closed (Weekend)", "#fee2e2"
+    if t < open_t:
+        delta = datetime.combine(now.date(), open_t) - now
+        mins = int(delta.total_seconds() // 60)
+        return f"🟡 Pre-Market · Opens in {mins}m", "#fef9c3"
+    if t > close_t:
+        return "🔴 Closed (After Hours)", "#fee2e2"
+    return "🟢 Market Open", "#dcfce7"
+
+# -------------------------------
 # MAIN UI
 # -------------------------------
 st.title("🧠 Prism Quant")
 st.caption("Live Kite Data · AI Debate · Quant Models · Bullet‑point Insights")
 
+# --- System status banner ---
+_mstatus, _mcolor = market_status()
+_is_paper = os.getenv("SQ_PAPER_TRADING", "true").lower() == "true"
+_mode_badge = "📄 Paper Trading" if _is_paper else "💸 Live Trading"
+_mode_color = "#dbeafe" if _is_paper else "#fef3c7"
+_last_refresh = datetime.now().strftime("%H:%M:%S")
+
+_s1, _s2, _s3 = st.columns(3)
+_s1.markdown(f"<div style='background:{_mcolor};border-radius:10px;padding:0.5rem 1rem;text-align:center;font-weight:600'>{_mstatus}</div>", unsafe_allow_html=True)
+_s2.markdown(f"<div style='background:{_mode_color};border-radius:10px;padding:0.5rem 1rem;text-align:center;font-weight:600'>{_mode_badge}</div>", unsafe_allow_html=True)
+_s3.markdown(f"<div style='background:#f1f5f9;border-radius:10px;padding:0.5rem 1rem;text-align:center;font-weight:600'>🕐 Refreshed {_last_refresh}</div>", unsafe_allow_html=True)
+st.write("")
+
 symbol_map = get_all_equity_symbols()
 symbol_list = sorted(symbol_map.keys())
 
 with st.sidebar:
+    st.header("⚙️ Controls")
+    if st.button("🔄 Refresh All Data", use_container_width=True):
+        st.cache_data.clear()
+        st.rerun()
+    _auto = st.checkbox("⏱ Auto-refresh (30s)", value=False)
+    if _auto:
+        import time as _time
+        _countdown = st.empty()
+        for _i in range(30, 0, -1):
+            _countdown.caption(f"Refreshing in {_i}s…")
+            _time.sleep(1)
+        st.cache_data.clear()
+        st.rerun()
+    st.divider()
     st.header("🔥 Daily Buzzing Stocks")
     buzz_min_change = st.slider("Min price change (%)", 1.0, 10.0, 3.0, 0.5)
     if st.button("Find Buzzing Stocks"):
@@ -853,16 +899,36 @@ with tabs[0]:
         st.subheader("🇮🇳 Indian Indices (Kite)")
         ind_data = get_indices_data()
         if ind_data:
-            df_ind = pd.DataFrame([{"Index": k, "Price": f"{v['price']:.1f}", "Change %": f"{v['change']:+.2f}%"} for k,v in ind_data.items()])
-            st.dataframe(df_ind, use_container_width=True, hide_index=True)
+            for idx_name, v in ind_data.items():
+                chg = v['change']
+                arrow = "▲" if chg >= 0 else "▼"
+                color = "#16a34a" if chg >= 0 else "#dc2626"
+                st.markdown(
+                    f"<div style='display:flex;justify-content:space-between;align-items:center;"
+                    f"background:#f8fafc;border-radius:10px;padding:0.5rem 1rem;margin-bottom:0.4rem;"
+                    f"border-left:4px solid {color}'>"
+                    f"<span style='font-weight:600'>{idx_name}</span>"
+                    f"<span>₹{v['price']:.1f} &nbsp; <span style='color:{color};font-weight:700'>{arrow} {abs(chg):.2f}%</span></span>"
+                    f"</div>", unsafe_allow_html=True
+                )
         else:
             st.info("No index data available.")
     with col2:
         st.subheader("🌏 Global Indices")
         global_data = get_global_indices()
         if global_data:
-            df_glob = pd.DataFrame([{"Index": k, "Price": f"{v['price']:.1f}", "Change %": f"{v['change']:+.2f}%"} for k,v in global_data.items()])
-            st.dataframe(df_glob, use_container_width=True, hide_index=True)
+            for idx_name, v in global_data.items():
+                chg = v['change']
+                arrow = "▲" if chg >= 0 else "▼"
+                color = "#16a34a" if chg >= 0 else "#dc2626"
+                st.markdown(
+                    f"<div style='display:flex;justify-content:space-between;align-items:center;"
+                    f"background:#f8fafc;border-radius:10px;padding:0.5rem 1rem;margin-bottom:0.4rem;"
+                    f"border-left:4px solid {color}'>"
+                    f"<span style='font-weight:600'>{idx_name}</span>"
+                    f"<span>{v['price']:.1f} &nbsp; <span style='color:{color};font-weight:700'>{arrow} {abs(chg):.2f}%</span></span>"
+                    f"</div>", unsafe_allow_html=True
+                )
         else:
             st.info("No global data available.")
 
@@ -1013,8 +1079,15 @@ with tabs[6]:
 
 with tabs[7]:
     st.subheader("🌍 Global Indices")
-    for name, val in get_global_indices().items():
-        st.metric(name, f"{val['price']:.1f}", f"{val['change']:+.2f}%")
+    _gl = get_global_indices()
+    if _gl:
+        _gc1, _gc2, _gc3 = st.columns(3)
+        for _gi, (name, val) in enumerate(_gl.items()):
+            _chg = val['change']
+            _delta_color = "normal" if _chg >= 0 else "inverse"
+            [_gc1, _gc2, _gc3][_gi % 3].metric(name, f"{val['price']:.1f}", f"{_chg:+.2f}%", delta_color="normal" if _chg >= 0 else "inverse")
+    else:
+        st.info("Global index data unavailable.")
 
 with tabs[8]:
     st.header("🌅 Pre-Market Report (Moneycontrol)")
@@ -1183,30 +1256,101 @@ with tabs[11]:
         st.info("Select a stock from the sidebar first.")
 
 with tabs[12]:
-    st.header("📋 Paper Trading (Simulated)")
+    st.header("📋 Paper Trading Dashboard")
     init_db()
+
+    # --- Summary metrics ---
+    _summary = get_trading_summary()
+    _mc1, _mc2, _mc3, _mc4 = st.columns(4)
+    _mc1.metric("Total P&L", f"₹{_summary['total_pnl']:,.2f}",
+                delta=f"₹{_summary['total_pnl']:,.2f}", delta_color="normal" if _summary['total_pnl'] >= 0 else "inverse")
+    _mc2.metric("Win Rate", f"{_summary['win_rate']:.1f}%")
+    _mc3.metric("Total Trades", str(_summary['num_trades']))
+    _mc4.metric("Best / Worst", f"₹{_summary['best_trade']:,.0f} / ₹{_summary['worst_trade']:,.0f}")
+
+    st.divider()
+
+    # --- Equity curve ---
+    _eq_df = get_equity_curve()
+    if not _eq_df.empty:
+        st.subheader("📈 Equity Curve")
+        _fig_eq = go.Figure()
+        _fig_eq.add_trace(go.Scatter(
+            x=_eq_df['date'], y=_eq_df['equity'],
+            mode='lines+markers', fill='tozeroy',
+            line=dict(color='#2563eb', width=2),
+            fillcolor='rgba(37,99,235,0.08)',
+            name='Equity'
+        ))
+        _fig_eq.update_layout(height=280, margin=dict(t=20, b=20), xaxis_title="Date", yaxis_title="Equity (₹)")
+        st.plotly_chart(_fig_eq, use_container_width=True)
+    else:
+        st.info("No equity curve data yet. Trades will populate this chart.")
+
+    st.divider()
+
+    # --- Open positions ---
+    st.subheader("🟢 Open Positions")
     open_positions = get_open_positions()
     if not open_positions.empty:
-        st.subheader("Open Positions")
-        st.dataframe(open_positions[['symbol','entry_date','entry_price','quantity','direction']])
+        def _color_direction(val):
+            return "color: #16a34a; font-weight: 700" if val == "BUY" else "color: #dc2626; font-weight: 700"
+        _op_display = open_positions[['symbol', 'entry_date', 'entry_price', 'quantity', 'direction']].copy()
+        st.dataframe(
+            _op_display.style.applymap(_color_direction, subset=['direction']),
+            use_container_width=True, hide_index=True
+        )
     else:
         st.info("No open positions.")
+
+    # --- Closed trades ---
+    st.subheader("📜 Trade History")
+    closed_positions = get_closed_positions()
+    if not closed_positions.empty:
+        _cp_display = closed_positions[['symbol', 'entry_date', 'exit_date', 'entry_price', 'exit_price', 'quantity', 'direction', 'pnl']].copy()
+        _cp_display['pnl'] = _cp_display['pnl'].round(2)
+
+        def _color_pnl(val):
+            return "color: #16a34a; font-weight: 700" if val > 0 else ("color: #dc2626; font-weight: 700" if val < 0 else "")
+
+        st.dataframe(
+            _cp_display.style.applymap(_color_pnl, subset=['pnl']),
+            use_container_width=True, hide_index=True
+        )
+    else:
+        st.info("No closed trades yet.")
+
+    st.divider()
+
+    # --- Execute paper trade ---
+    st.subheader("⚡ Execute Paper Trade")
     if selected:
-        if st.button("Run Daily Paper Trading"):
-            verdict = get_stock_verdict(selected)
-            if verdict['direction'] == 1:
-                existing = open_positions[open_positions['symbol'] == selected]
-                if existing.empty:
-                    open_position(selected, verdict['price'], 100, "BUY", datetime.now().strftime("%Y-%m-%d"))
-                    st.success(f"Opened BUY position for {selected} at ₹{verdict['price']}")
-                else:
-                    st.info("Position already open.")
-            elif verdict['direction'] == -1:
-                for idx, row in open_positions.iterrows():
-                    if row['symbol'] == selected:
-                        close_position(row['id'], verdict['price'], datetime.now().strftime("%Y-%m-%d"))
-                        st.success(f"Closed position for {selected} at ₹{verdict['price']}")
+        if st.button("▶ Run Signal & Trade", use_container_width=True):
+            with st.spinner(f"Analysing {selected}…"):
+                verdict = get_stock_verdict(selected)
+            if "error" in verdict:
+                st.error(verdict["error"])
             else:
-                st.info("No action: HOLD signal.")
+                dir_label = {1: "BUY", -1: "SELL", 0: "HOLD"}[verdict['direction']]
+                color_cls = "buy" if verdict['direction'] == 1 else "sell" if verdict['direction'] == -1 else "hold"
+                st.markdown(f"<div class='recommendation {color_cls}'>{dir_label} · Confidence {verdict['confidence']:.1f}%</div>", unsafe_allow_html=True)
+                if verdict['direction'] == 1:
+                    existing = open_positions[open_positions['symbol'] == selected]
+                    if existing.empty:
+                        open_position(selected, verdict['price'], 100, "BUY", datetime.now().strftime("%Y-%m-%d"))
+                        st.success(f"Opened BUY position for {selected} at ₹{verdict['price']:.2f}")
+                    else:
+                        st.info("Position already open for this symbol.")
+                elif verdict['direction'] == -1:
+                    _closed_any = False
+                    for _idx, _row in open_positions.iterrows():
+                        if _row['symbol'] == selected:
+                            close_position(_row['id'], verdict['price'], datetime.now().strftime("%Y-%m-%d"))
+                            st.success(f"Closed position for {selected} at ₹{verdict['price']:.2f}")
+                            _closed_any = True
+                    if not _closed_any:
+                        st.info("No open position to close.")
+                else:
+                    st.info("Signal: HOLD — no action taken.")
     else:
         st.info("Select a stock from the sidebar first.")

@@ -61,3 +61,32 @@ def update_equity(date, total_equity):
     c.execute("INSERT OR REPLACE INTO equity_curve (date, equity) VALUES (?,?)", (date, total_equity))
     conn.commit()
     conn.close()
+
+def get_closed_positions():
+    conn = sqlite3.connect(DB_PATH)
+    df = pd.read_sql_query("SELECT * FROM positions WHERE status='closed' ORDER BY exit_date DESC", conn)
+    conn.close()
+    return df
+
+def get_equity_curve():
+    conn = sqlite3.connect(DB_PATH)
+    df = pd.read_sql_query("SELECT date, equity FROM equity_curve ORDER BY date ASC", conn)
+    conn.close()
+    return df
+
+def get_trading_summary():
+    conn = sqlite3.connect(DB_PATH)
+    df = pd.read_sql_query("SELECT * FROM positions WHERE status='closed'", conn)
+    conn.close()
+    if df.empty:
+        return {"total_pnl": 0.0, "win_rate": 0.0, "num_trades": 0, "best_trade": 0.0, "worst_trade": 0.0}
+    total_pnl = df['pnl'].sum()
+    wins = (df['pnl'] > 0).sum()
+    win_rate = (wins / len(df)) * 100 if len(df) > 0 else 0.0
+    return {
+        "total_pnl": round(total_pnl, 2),
+        "win_rate": round(win_rate, 1),
+        "num_trades": len(df),
+        "best_trade": round(df['pnl'].max(), 2),
+        "worst_trade": round(df['pnl'].min(), 2),
+    }
