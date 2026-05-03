@@ -1,540 +1,295 @@
-import streamlit as st
-import pandas as pd
-import numpy as np
-import plotly.graph_objects as go
-import plotly.express as px
-from datetime import datetime, timedelta
-import requests
 import os
-import yfinance as yf
-from dotenv import load_dotenv
 import json
+import time
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
-import time
-from bs4 import BeautifulSoup
+from datetime import datetime, timedelta
 
-from data.kite_client import KiteClient
-from data.instruments import InstrumentManager
+import numpy as np
+import pandas as pd
+import plotly.express as px
+import plotly.graph_objects as go
+import requests
+import streamlit as st
+import yfinance as yf
+from bs4 import BeautifulSoup
+from dotenv import load_dotenv
+
 from data.historical import HistoricalDataFetcher
+from data.instruments import InstrumentManager
+from data.kite_client import KiteClient
 from features.indicators import IndicatorEngine
-from features.volume_profile import VolumeProfile
-from signals.composite_signal import CompositeSignal
 from features.market_structure import is_recent_swing_breakout
-from paper_trading import init_db, open_position, close_position, get_open_positions, get_closed_positions, get_equity_curve, get_trading_summary
+from features.volume_profile import VolumeProfile
 from llm.claude_client import ClaudeClient
+from paper_trading import (
+    close_position,
+    get_closed_positions,
+    get_equity_curve,
+    get_open_positions,
+    get_trading_summary,
+    init_db,
+    open_position,
+)
+from signals.composite_signal import CompositeSignal
 from sq_ai.signals.conviction import ConvictionScorer
 from sq_ai.signals.profiles import PROFILES
 from sq_ai.signals.trade_setup import compute_trade_setup
 
 load_dotenv()
 
-# Guarded Claude instance — no-op when ANTHROPIC_API_KEY is absent
-_claude = ClaudeClient()
-
+# ── Page config ───────────────────────────────────────────────────────────────
 st.set_page_config(page_title="Prism Quant", layout="wide", initial_sidebar_state="expanded")
 
 st.markdown("""
 <style>
-    .stApp { background-color: #f8fafc; font-family: 'Inter', system-ui, sans-serif; }
-    .card { background: #ffffff; border-radius: 20px; padding: 1.25rem; margin-bottom: 1.5rem; box-shadow: 0 4px 12px rgba(0,0,0,0.03); border: 1px solid #eef2f6; }
-    .metric-value { font-size: 2rem; font-weight: 600; color: #0f172a; }
-    .metric-label { font-size: 0.75rem; font-weight: 500; text-transform: uppercase; color: #475569; }
-    .recommendation { font-size: 1.5rem; font-weight: 700; text-align: center; padding: 0.75rem; border-radius: 16px; margin-top: 0.25rem; }
-    .buy { background: linear-gradient(135deg, #e6f7e6 0%, #d0f0d0 100%); color: #1e5a1e; border-left: 4px solid #2e7d32; }
-    .sell { background: linear-gradient(135deg, #ffe6e5 0%, #ffd6d5 100%); color: #b71c1c; border-left: 4px solid #c62828; }
-    .hold { background: linear-gradient(135deg, #fff8e1 0%, #ffeecc 100%); color: #e65100; border-left: 4px solid #f57c00; }
-    .stButton button { background: #1e2a3e; color: white; border-radius: 12px; border: none; padding: 0.5rem 1.25rem; font-weight: 500; transition: all 0.2s; }
-    .stButton button:hover { background: #2c3e5c; transform: translateY(-1px); }
-    .stTabs [data-baseweb="tab-list"] { gap: 0.5rem; background-color: #ffffff; padding: 0.5rem; border-radius: 20px; border: 1px solid #eef2f6; }
-    .stTabs [data-baseweb="tab"] { border-radius: 16px; padding: 0.5rem 1rem; font-weight: 500; }
-    .stTabs [aria-selected="true"] { background-color: #1e2a3e; color: white !important; }
-    @media only screen and (max-width: 768px) {
-        .stTabs [data-baseweb="tab-list"] { flex-wrap: nowrap; overflow-x: auto; white-space: nowrap; gap: 0.5rem; }
-        .stColumn { width: 100% !important; min-width: 100% !important; }
-        .metric-value { font-size: 1.4rem; }
-        .recommendation { font-size: 1.2rem; }
-        .card { padding: 1rem; }
-        section[data-testid="stSidebar"] { width: 80% !important; }
-    }
+  .stApp { background-color: #f8fafc; font-family: 'Inter', system-ui, sans-serif; }
+  .card  { background: #fff; border-radius: 20px; padding: 1.25rem; margin-bottom: 1.5rem;
+           box-shadow: 0 4px 12px rgba(0,0,0,.03); border: 1px solid #eef2f6; }
+  .recommendation { font-size: 1.5rem; font-weight: 700; text-align: center;
+                    padding: .75rem; border-radius: 16px; margin-top: .25rem; }
+  .buy  { background: linear-gradient(135deg,#e6f7e6,#d0f0d0); color:#1e5a1e; border-left:4px solid #2e7d32; }
+  .sell { background: linear-gradient(135deg,#ffe6e5,#ffd6d5); color:#b71c1c; border-left:4px solid #c62828; }
+  .hold { background: linear-gradient(135deg,#fff8e1,#ffeecc); color:#e65100; border-left:4px solid #f57c00; }
+  .stButton button { background:#1e2a3e; color:white; border-radius:12px; border:none;
+                     padding:.5rem 1.25rem; font-weight:500; transition:all .2s; }
+  .stButton button:hover { background:#2c3e5c; transform:translateY(-1px); }
+  .stTabs [data-baseweb="tab-list"] { gap:.5rem; background:#fff; padding:.5rem;
+                                      border-radius:20px; border:1px solid #eef2f6; }
+  .stTabs [data-baseweb="tab"]       { border-radius:16px; padding:.5rem 1rem; font-weight:500; }
+  .stTabs [aria-selected="true"]     { background:#1e2a3e; color:white !important; }
+  @media(max-width:768px){
+    .stTabs [data-baseweb="tab-list"]{ flex-wrap:nowrap; overflow-x:auto; }
+    .stColumn{ width:100% !important; }
+  }
 </style>
 """, unsafe_allow_html=True)
 
-# -------------------------------
-# INIT CLIENTS
-# -------------------------------
+# ── Cached resource init ───────────────────────────────────────────────────────
 @st.cache_resource
 def init_clients():
-    kite = KiteClient()
-    im = InstrumentManager()
+    kite    = KiteClient()
+    im      = InstrumentManager()
     fetcher = HistoricalDataFetcher(kite, im)
-    ie = IndicatorEngine()
-    vp = VolumeProfile()
-    cs = CompositeSignal()
-    return kite, im, fetcher, ie, vp, cs
+    ie      = IndicatorEngine()
+    vp      = VolumeProfile()
+    cs      = CompositeSignal()
+    claude  = ClaudeClient()
+    return kite, im, fetcher, ie, vp, cs, claude
 
-kite, im, fetcher, ie, vp, cs = init_clients()
+kite, im, fetcher, ie, vp, cs, _claude = init_clients()
 
+# ── Symbol universe ────────────────────────────────────────────────────────────
 @st.cache_data(ttl=3600)
 def get_all_equity_symbols():
-    symbol_name = {}
+    out = {}
     for sym, meta in im._meta_map.items():
-        ex = meta.get('exchange', '')
-        segment = meta.get('segment', '')
-        inst_type = meta.get('instrument_type', '')
-        if ex in ('NSE', 'BSE') and segment == ex and inst_type == 'EQ':
+        ex, seg, it = meta.get('exchange',''), meta.get('segment',''), meta.get('instrument_type','')
+        if ex in ('NSE','BSE') and seg == ex and it == 'EQ':
             if not sym[0].isdigit() and '-' not in sym and len(sym) <= 10:
-                symbol_name[sym] = meta.get('companyName', sym)
-    if not symbol_name:
-        symbol_name = {"RELIANCE":"Reliance Industries", "TCS":"Tata Consultancy", "HDFCBANK":"HDFC Bank"}
-    return symbol_name
+                out[sym] = meta.get('companyName', sym)
+    return out or {"RELIANCE":"Reliance Industries","TCS":"Tata Consultancy","HDFCBANK":"HDFC Bank"}
 
+# ── Historical OHLCV (5-min cache) ────────────────────────────────────────────
 @st.cache_data(ttl=300)
 def fetch_historical(symbol, days=250):
-    to_date = datetime.now().strftime("%Y-%m-%d")
-    from_date = (datetime.now() - timedelta(days=days+30)).strftime("%Y-%m-%d")
-    df = fetcher.fetch(symbol, from_date, to_date, interval="day")
+    to_d   = datetime.now().strftime("%Y-%m-%d")
+    from_d = (datetime.now() - timedelta(days=days+30)).strftime("%Y-%m-%d")
+    df = fetcher.fetch(symbol, from_d, to_d, interval="day")
     if df is None or len(df) == 0:
-        from_date = (datetime.now() - timedelta(days=days+100)).strftime("%Y-%m-%d")
-        df = fetcher.fetch(symbol, from_date, to_date, interval="day")
+        from_d = (datetime.now() - timedelta(days=days+100)).strftime("%Y-%m-%d")
+        df = fetcher.fetch(symbol, from_d, to_d, interval="day")
     return df
 
+# ── Index data ─────────────────────────────────────────────────────────────────
 @st.cache_data(ttl=3600)
 def get_indices_data():
-    indices = {
-        "Nifty 50": "NIFTY 50",
-        "Bank Nifty": "NIFTY BANK",
-        "Nifty IT": "NIFTY IT",
-        "Nifty Pharma": "NIFTY PHARMA",
-        "Nifty FMCG": "NIFTY FMCG"
-    }
-    data = {}
-    for name, kite_symbol in indices.items():
+    names = {"Nifty 50":"NIFTY 50","Bank Nifty":"NIFTY BANK",
+             "Nifty IT":"NIFTY IT","Nifty Pharma":"NIFTY PHARMA","Nifty FMCG":"NIFTY FMCG"}
+    out = {}
+    for name, sym in names.items():
         try:
-            df = fetch_historical(kite_symbol, days=5)
+            df = fetch_historical(sym, days=5)
             if df is not None and len(df) >= 2:
-                last = df['close'].iloc[-1]
-                prev = df['close'].iloc[-2]
-                change = ((last - prev) / prev) * 100
-                data[name] = {"price": last, "change": change}
+                last, prev = df['close'].iloc[-1], df['close'].iloc[-2]
+                out[name] = {"price": last, "change": (last-prev)/prev*100}
             elif df is not None and len(df) == 1:
-                last = df['close'].iloc[-1]
-                data[name] = {"price": last, "change": 0.0}
+                out[name] = {"price": df['close'].iloc[-1], "change": 0.0}
         except Exception:
             continue
-    return data
+    return out
 
 @st.cache_data(ttl=3600)
 def get_global_indices():
-    indices = {
-        "S&P 500": "^GSPC", "Dow Jones": "^DJI", "Nasdaq": "^IXIC",
-        "FTSE 100": "^FTSE", "DAX": "^GDAXI", "CAC 40": "^FCHI",
-        "Nikkei 225": "^N225", "Hang Seng": "^HSI", "Shanghai": "000001.SS"
-    }
-    data = {}
-    for name, ticker in indices.items():
+    tickers = {"S&P 500":"^GSPC","Dow Jones":"^DJI","Nasdaq":"^IXIC",
+               "FTSE 100":"^FTSE","DAX":"^GDAXI","Nikkei 225":"^N225",
+               "Hang Seng":"^HSI","Shanghai":"000001.SS"}
+    out = {}
+    for name, t in tickers.items():
         try:
-            tick = yf.Ticker(ticker)
-            hist = tick.history(period="2d")
-            if len(hist) >= 2:
-                last = hist['Close'].iloc[-1]
-                prev = hist['Close'].iloc[-2]
-                change = ((last - prev) / prev) * 100
-                data[name] = {"price": last, "change": change}
+            h = yf.Ticker(t).history(period="2d")
+            if len(h) >= 2:
+                last, prev = h['Close'].iloc[-1], h['Close'].iloc[-2]
+                out[name] = {"price": last, "change": (last-prev)/prev*100}
         except Exception:
             continue
-    return data
+    return out
 
-# -------------------------------
-# SESSION FILTER
-# -------------------------------
-def session_signal(current_time=None):
-    if current_time is None:
-        current_time = datetime.now().time()
-    if current_time < datetime.strptime("09:15", "%H:%M").time() or current_time > datetime.strptime("15:30", "%H:%M").time():
-        return 0.0
-    if datetime.strptime("09:15", "%H:%M").time() <= current_time <= datetime.strptime("09:45", "%H:%M").time():
-        return 0.1
-    if datetime.strptime("12:00", "%H:%M").time() <= current_time <= datetime.strptime("13:00", "%H:%M").time():
-        return -0.1
-    if datetime.strptime("14:30", "%H:%M").time() <= current_time <= datetime.strptime("15:30", "%H:%M").time():
-        return 0.05
-    return 0.0
-
-# -------------------------------
-# HEATMAP & MARKET CAP
-# -------------------------------
+# ── Market cap helpers ─────────────────────────────────────────────────────────
 @st.cache_data(ttl=86400)
 def get_market_cap(symbol):
     try:
-        ticker = yf.Ticker(symbol + ".NS")
-        info = ticker.info
+        info = yf.Ticker(symbol+".NS").info
         mc = info.get('marketCap', 0)
-        return mc / 1e7 if mc else 0
+        return mc/1e7 if mc else 0
     except Exception:
         return 0
 
 def categorize_by_mcap(symbol):
     mc = get_market_cap(symbol)
-    if mc >= 20000:
-        return "Largecap"
-    elif mc >= 5000:
-        return "Midcap"
-    elif mc > 0:
-        return "Smallcap"
+    if mc >= 20000: return "Largecap"  # noqa: E701,E702,E741
+    if mc >= 5000:  return "Midcap"  # noqa: E701,E702,E741
+    if mc > 0:      return "Smallcap"  # noqa: E701,E702,E741
     return "Unknown"
 
 def get_symbols_by_market_cap(cap_filter, max_symbols=500):
-    all_symbols = list(get_all_equity_symbols().keys())
+    all_syms = list(get_all_equity_symbols().keys())
     if cap_filter == "All":
-        return all_symbols[:max_symbols]
-    filtered = []
-    for sym in all_symbols:
+        return all_syms[:max_symbols]
+    out = []
+    for sym in all_syms:
         mc = get_market_cap(sym)
-        if mc >= 20000 and cap_filter == "Largecap":
-            filtered.append(sym)
-        elif 5000 <= mc < 20000 and cap_filter == "Midcap":
-            filtered.append(sym)
-        elif 0 < mc < 5000 and cap_filter == "Smallcap":
-            filtered.append(sym)
-        if len(filtered) >= max_symbols:
-            break
-    return filtered
+        if   mc >= 20000 and cap_filter == "Largecap": out.append(sym)  # noqa: E701,E702,E741
+        elif 5000 <= mc < 20000 and cap_filter == "Midcap": out.append(sym)  # noqa: E701,E702,E741
+        elif 0 < mc < 5000 and cap_filter == "Smallcap": out.append(sym)  # noqa: E701,E702,E741
+        if len(out) >= max_symbols: break  # noqa: E701,E702,E741
+    return out
 
-def get_stock_change_kite(symbol):
-    try:
-        df = fetch_historical(symbol, days=5)
-        if df is not None and len(df) >= 2:
-            last = df['close'].iloc[-1]
-            prev = df['close'].iloc[-2]
-            change = ((last - prev) / prev) * 100
-            return change
-    except Exception:
-        pass
-    return None
+# ── Market status ──────────────────────────────────────────────────────────────
+def market_status():
+    now = datetime.now()
+    t   = now.time()
+    ot  = datetime.strptime("09:15","%H:%M").time()
+    ct  = datetime.strptime("15:30","%H:%M").time()
+    if now.weekday() >= 5:
+        return "🔴 Closed (Weekend)", "#fee2e2"
+    if t < ot:
+        mins = int((datetime.combine(now.date(), ot)-now).total_seconds()//60)
+        return f"🟡 Pre-Market · Opens in {mins}m", "#fef9c3"
+    if t > ct:
+        return "🔴 Closed (After Hours)", "#fee2e2"
+    return "🟢 Market Open", "#dcfce7"
 
-def get_heatmap_data(selected_cap, max_symbols=200):
-    symbols = get_symbols_by_market_cap(selected_cap, max_symbols)
-    results = []
-    with st.spinner(f"Fetching data for {len(symbols)} stocks..."):
-        for sym in symbols:
-            change = get_stock_change_kite(sym)
-            if change is not None:
-                results.append({"Stock": sym, "Change %": change})
-            time.sleep(0.02)
-    return pd.DataFrame(results)
+# ── Memory helpers ─────────────────────────────────────────────────────────────
+_MEMORY_FILE = "trading_memory.json"
 
-# -------------------------------
-# PRE-MARKET SCRAPER
-# -------------------------------
-@st.cache_data(ttl=1800)
-def get_moneycontrol_premarket():
-    url = "https://www.moneycontrol.com/pre-market/"
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-    }
-    try:
-        session = requests.Session()
-        session.headers.update(headers)
-        resp = session.get(url, timeout=15)
-        if resp.status_code != 200:
-            return None, f"HTTP {resp.status_code}"
-        soup = BeautifulSoup(resp.text, 'html.parser')
-        content_div = soup.find('div', class_='premarket_data')
-        if not content_div:
-            content_div = soup.find('div', {'id': 'premarket'})
-        if not content_div:
-            text = soup.get_text(separator='\n')
-            lines = text.split('\n')
-            relevant = []
-            keywords = ['S&P', 'Dow', 'Nasdaq', 'Gift Nifty', 'SGX Nifty', 'Gold', 'Crude', 'Asian markets', 'pre-market']
-            for line in lines:
-                if any(kw in line for kw in keywords):
-                    relevant.append(line.strip())
-            if relevant:
-                return "\n".join(relevant[:30]), None
-        else:
-            text = content_div.get_text(separator='\n', strip=True)
-            return text[:3000], None
-        return None, "Could not parse pre-market data"
-    except Exception as e:
-        return None, str(e)
-
-# -------------------------------
-# SCREENER.IN SCRAPERS
-# -------------------------------
-@st.cache_data(ttl=86400)
-def scrape_screener_shareholding(symbol):
-    symbol = symbol.upper()
-    url = f"https://www.screener.in/company/{symbol}/"
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-    }
-    session = requests.Session()
-    session.headers.update(headers)
-    try:
-        resp = session.get(url, timeout=15)
-        if resp.status_code != 200:
-            return None, None, None, None, f"Page not found (HTTP {resp.status_code})"
-        soup = BeautifulSoup(resp.text, 'html.parser')
-        sh = soup.find('section', id='shareholding')
-        if not sh:
-            tables = soup.find_all('table', class_='data-table')
-            for table in tables:
-                if 'Promoter' in table.text:
-                    sh = table
-                    break
-        if not sh:
-            return None, None, None, None, "No shareholding table found."
-        if sh.name == 'table':
-            table = sh
-        else:
-            table = sh.find('table', class_='data-table')
-        if not table:
-            return None, None, None, None, "Shareholding table not found."
-        thead = table.find('thead')
-        if not thead:
-            return None, None, None, None, "No header row."
-        quarters = [th.text.strip() for th in thead.find_all('th')]
-        if len(quarters) < 2:
-            quarters = None
-        else:
-            quarters = quarters[1:]
-        rows = table.find_all('tr')
-        promoter_data = []
-        fii_data = []
-        dii_data = []
-        for row in rows:
-            cells = row.find_all('td')
-            if len(cells) < 2:
-                continue
-            label = cells[0].text.strip()
-            values = []
-            for cell in cells[1:]:
-                txt = cell.text.strip().replace('%', '')
-                try:
-                    values.append(float(txt))
-                except Exception:
-                    values.append(None)
-            if 'Promoter' in label:
-                promoter_data = values
-            elif 'Foreign' in label or 'FII' in label:
-                fii_data = values
-            elif 'Domestic' in label or 'DII' in label:
-                dii_data = values
-        if not promoter_data and not fii_data and not dii_data:
-            return None, None, None, None, "Could not parse any shareholding data."
-        return quarters, promoter_data, fii_data, dii_data, None
-    except Exception as e:
-        return None, None, None, None, f"Error: {str(e)}"
-
-@st.cache_data(ttl=43200)
-def scrape_screener_concall(symbol):
-    symbol = symbol.upper()
-    url = f"https://www.screener.in/company/{symbol}/"
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"}
-    try:
-        resp = requests.get(url, headers=headers, timeout=15)
-        if resp.status_code != 200:
-            return f"Could not load page (HTTP {resp.status_code})."
-        soup = BeautifulSoup(resp.text, 'html.parser')
-        concall_section = soup.find('section', id='concall')
-        if not concall_section:
-            return "No concall transcript found on Screener.in for this symbol."
-        paragraphs = concall_section.find_all('p')
-        if not paragraphs:
-            text = concall_section.get_text(separator=' ', strip=True)
-        else:
-            text = ' '.join([p.get_text(strip=True) for p in paragraphs])
-        if len(text) < 50:
-            return "Concall summary too short or not available."
-        return text[:1500]
-    except Exception as e:
-        return f"Error fetching concall: {str(e)}"
-
-# -------------------------------
-# MEMORY AND DEEPSEEK
-# -------------------------------
-MEMORY_FILE = "trading_memory.json"
 def load_memory():
-    if os.path.exists(MEMORY_FILE):
-        with open(MEMORY_FILE, 'r') as f:
+    if os.path.exists(_MEMORY_FILE):
+        with open(_MEMORY_FILE) as f:
             return json.load(f)
     return {}
 
-def save_memory(memory):
-    with open(MEMORY_FILE, 'w') as f:
-        json.dump(memory, f, indent=2)
+def save_memory(mem):
+    with open(_MEMORY_FILE, 'w') as f:
+        json.dump(mem, f, indent=2)
 
-def update_memory(symbol, decision, confidence, price, actual_return=None):
-    memory = load_memory()
-    if symbol not in memory:
-        memory[symbol] = []
-    memory[symbol].append({
+def update_memory(symbol, decision, confidence, price):
+    mem = load_memory()
+    mem.setdefault(symbol, []).append({
         "date": datetime.now().strftime("%Y-%m-%d"),
-        "decision": decision,
-        "confidence": confidence,
-        "price": price,
-        "actual_return": actual_return
+        "decision": decision, "confidence": confidence,
+        "price": price, "actual_return": "pending"
     })
-    memory[symbol] = memory[symbol][-10:]
-    save_memory(memory)
+    mem[symbol] = mem[symbol][-10:]
+    save_memory(mem)
 
 def get_recent_memory(symbol, limit=3):
-    memory = load_memory()
-    return memory.get(symbol, [])[-limit:]
+    return load_memory().get(symbol, [])[-limit:]
 
+# ── DeepSeek helper ────────────────────────────────────────────────────────────
 def call_deepseek(prompt, system="You are a financial analyst."):
     key = os.getenv("DEEPSEEK_API_KEY")
     if not key:
         return None
-    url = "https://api.deepseek.com/v1/chat/completions"
-    headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
-    payload = {
-        "model": "deepseek-chat",
-        "messages": [{"role": "system", "content": system}, {"role": "user", "content": prompt}],
-        "temperature": 0.3,
-        "max_tokens": 800
-    }
     try:
-        resp = requests.post(url, json=payload, headers=headers, timeout=30)
+        resp = requests.post(
+            "https://api.deepseek.com/v1/chat/completions",
+            headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+            json={"model":"deepseek-chat",
+                  "messages":[{"role":"system","content":system},{"role":"user","content":prompt}],
+                  "temperature":0.3, "max_tokens":800},
+            timeout=30
+        )
         return resp.json()['choices'][0]['message']['content']
     except Exception as e:
         return f"Error: {e}"
 
-def bull_bear_debate(symbol, price, rsi, zscore, momentum, volume_ratio, fundamentals):
-    prompt = f"""
-You are a trading debate moderator. Given the following data for {symbol} (current price ₹{price}):
-- RSI: {rsi:.1f}
-- Z-Score: {zscore:.2f}
-- 5-day momentum: {momentum:.2f}%
-- Volume ratio: {volume_ratio:.2f}x
-- Fundamentals: P/E {fundamentals.get('P/E Ratio', 'N/A')}, ROE {fundamentals.get('ROE (%)', 'N/A')}%
-
-Provide a balanced debate with verdict. Format as bullet points:
-
-**Bull Case**
-- point1
-- point2
-
-**Bear Case**
-- point1
-- point2
-
-**Verdict**
-- BUY/SELL/HOLD (confidence: XX)
-- one line reasoning
-"""
-    return call_deepseek(prompt, system="You are a professional trading debate moderator. Use ONLY bullet points.")
-
+# ── Core verdict engine ────────────────────────────────────────────────────────
 def get_stock_verdict(symbol):
     df = fetch_historical(symbol, days=250)
     if df is None or len(df) < 50:
         return {"error": f"Insufficient data for {symbol}"}
-    indicators = ie.compute(df, symbol)
+    indicators   = ie.compute(df, symbol)
     signal_result = cs.compute(indicators, llm_signal=None, regime=1)
+
+    # Conviction score (new layer)
+    conviction_result = ConvictionScorer().score(indicators)
+
     latest_price = df['close'].iloc[-1]
-    last_date = df.index[-1].strftime('%Y-%m-%d')
+    last_date    = df.index[-1].strftime('%Y-%m-%d')
+
     try:
-        ticker = yf.Ticker(symbol + ".NS")
-        info = ticker.info
-        fundamentals = {"P/E Ratio": info.get('trailingPE', 'N/A'), "ROE (%)": info.get('returnOnEquity', 0)*100 if info.get('returnOnEquity') else 'N/A'}
+        info = yf.Ticker(symbol+".NS").info
+        fundamentals = {
+            "P/E Ratio": info.get('trailingPE', 'N/A'),
+            "ROE (%)":   info.get('returnOnEquity', 0)*100 if info.get('returnOnEquity') else 'N/A'
+        }
     except Exception:
         fundamentals = {"P/E Ratio": "N/A", "ROE (%)": "N/A"}
+
     past = get_recent_memory(symbol)
-    past_text = "\n".join([f"- {p['date']}: {p['decision']} (conf {p['confidence']:.0f}%) → actual return {p.get('actual_return', 'pending')}%" for p in past]) if past else "- No past trades."
-    debate = bull_bear_debate(symbol, latest_price, indicators.get('rsi_14', 50), indicators.get('zscore_20', 0),
-                              indicators.get('momentum_5d_pct', 0), indicators.get('volume_ratio', 1), fundamentals)
+    past_text = "\n".join(
+        [f"- {p['date']}: {p['decision']} (conf {p['confidence']:.0f}%) → {p.get('actual_return','pending')}%"
+         for p in past]
+    ) if past else "- No past trades."
+
+    # DeepSeek bull/bear debate
+    rsi = indicators.get('rsi_14', 50)
+    zsc = indicators.get('zscore_20', 0)
+    mom = indicators.get('momentum_5d_pct', 0)
+    vol = indicators.get('volume_ratio', 1)
+    debate = call_deepseek(f"""
+You are a trading debate moderator. Data for {symbol} (₹{latest_price}):
+- RSI: {rsi:.1f}  Z-Score: {zsc:.2f}  5d-momentum: {mom:.2f}%  Volume: {vol:.2f}x
+- P/E: {fundamentals['P/E Ratio']}  ROE: {fundamentals['ROE (%)']}%
+
+Format as bullet points only:
+**Bull Case** - 2 points
+**Bear Case**  - 2 points
+**Verdict** - BUY/SELL/HOLD (confidence: XX) + one-line reason
+""", system="You are a professional trading debate moderator. Use ONLY bullet points.")
+
     return {
-        "price": latest_price,
-        "signal": signal_result['signal'],
-        "direction": signal_result['direction'],
+        "price":      latest_price,
+        "signal":     signal_result['signal'],
+        "direction":  signal_result['direction'],
         "confidence": signal_result['confidence'],
-        "attribution": signal_result['attribution'],
-        "last_date": last_date,
-        "debate": debate,
-        "past_memory": past_text
+        "attribution":signal_result['attribution'],
+        "conviction": conviction_result,
+        "indicators": indicators,
+        "df":         df,
+        "last_date":  last_date,
+        "debate":     debate,
+        "past_memory":past_text,
+        "fundamentals": fundamentals,
     }
 
-def categorize_stock(df):
-    if df is None or len(df) < 50:
-        return None
-    close = df['close']
-    volume = df['volume']
-    daily_move = (close.iloc[-1] - close.iloc[-2]) / close.iloc[-2] * 100
-    is_buzzing = daily_move > 15 and volume.iloc[-1] > 2 * volume.iloc[-20:-1].mean()
-    ema10 = close.ewm(span=10).mean()
-    bounce = (close.iloc[-1] > ema10.iloc[-1]) and (close.iloc[-2] < ema10.iloc[-2]) and (volume.iloc[-1] > volume.iloc[-2])
-    ema50 = close.ewm(span=50).mean()
-    losing = (close.iloc[-1] < ema50.iloc[-1]) and (close.iloc[-2] > ema50.iloc[-2])
-    if is_buzzing:
-        return "Buzzing Stock"
-    elif bounce:
-        return "Gaining Strength"
-    elif losing:
-        return "Losing Momentum"
-    return None
-
-def is_breakout_candidate(df):
-    if df is None or len(df) < 120:
-        return False
-    close = df['close']
-    base_high = close.rolling(90).max().iloc[-1]
-    base_low = close.rolling(90).min().iloc[-1]
-    near_top = (close.iloc[-1] - base_low) / (base_high - base_low) > 0.8
-    avg_vol_6m = df['volume'].rolling(120).mean().iloc[-1]
-    last_month_vol = df['volume'].iloc[-20:].mean()
-    volume_dry = last_month_vol < 0.7 * avg_vol_6m
-    swing_break = is_recent_swing_breakout(df, lookback=3)
-    if not swing_break:
-        return False
-    vol_spike = df['volume'].iloc[-1] > 1.5 * df['volume'].rolling(20).mean().iloc[-1]
-    ema10 = close.ewm(span=10).mean()
-    ema20 = close.ewm(span=20).mean()
-    ema50 = close.ewm(span=50).mean()
-    ema200 = close.ewm(span=200).mean()
-    ema_bull = (ema10.iloc[-1] > ema20.iloc[-1] > ema50.iloc[-1] > ema200.iloc[-1])
-    consecutive_up = (close.diff().iloc[-5:] > 0).all()
-    return near_top and volume_dry and vol_spike and ema_bull and consecutive_up
-
-def is_momentum_breakout(df):
-    if df is None or len(df) < 50:
-        return False
-    close = df['close']
-    volume = df['volume']
-    sma20 = close.rolling(20).mean()
-    sma50 = close.rolling(50).mean()
-    if close.iloc[-1] <= sma20.iloc[-1] or close.iloc[-1] <= sma50.iloc[-1]:
-        return False
-    if sma20.iloc[-1] <= sma50.iloc[-1]:
-        return False
-    mom_5d = (close.iloc[-1] - close.iloc[-6]) / close.iloc[-6] * 100 if len(close) >= 6 else 0
-    if mom_5d <= 5:
-        return False
-    avg_vol = volume.iloc[-21:-1].mean()
-    if volume.iloc[-1] < 1.5 * avg_vol:
-        return False
-    high_20 = df['high'].rolling(20).max()
-    if close.iloc[-1] < high_20.iloc[-1]:
-        return False
-    delta = close.diff()
-    gain = delta.where(delta > 0, 0).rolling(14).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
-    rs = gain / loss
-    rsi = 100 - (100 / (1 + rs))
-    if rsi.iloc[-1] < 60 or rsi.iloc[-1] > 80:
-        return False
-    return True
-
+# ── Scanner helpers ────────────────────────────────────────────────────────────
 def compute_rsi(close, period=14):
     delta = close.diff()
-    gain = delta.where(delta > 0, 0).rolling(period).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(period).mean()
-    rs = gain / loss
-    rsi = 100 - (100 / (1 + rs))
-    return rsi
+    gain  = delta.where(delta>0, 0).rolling(period).mean()
+    loss  = (-delta.where(delta<0, 0)).rolling(period).mean()
+    return 100 - (100/(1+gain/loss))
 
 def fetch_and_test(symbol, test_func, days=150):
     try:
@@ -545,870 +300,885 @@ def fetch_and_test(symbol, test_func, days=150):
         pass
     return symbol, False
 
-def scan_breakouts_categorized(symbols, categories_filter, limit=500, workers=8):
-    categorized = {"Largecap": [], "Midcap": [], "Smallcap": [], "Unknown": []}
-    to_scan = symbols[:limit]
-    with ThreadPoolExecutor(max_workers=workers) as executor:
-        futures = [executor.submit(fetch_and_test, sym, is_breakout_candidate, 120) for sym in to_scan]
-        for future in as_completed(futures):
-            sym, passed = future.result()
+def is_breakout_candidate(df):
+    if df is None or len(df) < 120: return False  # noqa: E701,E702,E741
+    close = df['close']
+    base_high = close.rolling(90).max().iloc[-1]
+    base_low  = close.rolling(90).min().iloc[-1]
+    if (base_high - base_low) == 0: return False  # noqa: E701,E702,E741
+    near_top = (close.iloc[-1]-base_low)/(base_high-base_low) > 0.8
+    volume_dry = df['volume'].iloc[-20:].mean() < 0.7*df['volume'].rolling(120).mean().iloc[-1]
+    if not is_recent_swing_breakout(df, lookback=3): return False  # noqa: E701,E702,E741
+    vol_spike = df['volume'].iloc[-1] > 1.5*df['volume'].rolling(20).mean().iloc[-1]
+    ema10  = close.ewm(span=10).mean()
+    ema20  = close.ewm(span=20).mean()
+    ema50  = close.ewm(span=50).mean()
+    ema200 = close.ewm(span=200).mean()
+    ema_bull = ema10.iloc[-1] > ema20.iloc[-1] > ema50.iloc[-1] > ema200.iloc[-1]
+    consec_up = (close.diff().iloc[-5:] > 0).all()
+    return near_top and volume_dry and vol_spike and ema_bull and consec_up
+
+def is_momentum_breakout(df):
+    if df is None or len(df) < 50: return False  # noqa: E701,E702,E741
+    close, volume = df['close'], df['volume']
+    sma20 = close.rolling(20).mean()
+    sma50 = close.rolling(50).mean()
+    if close.iloc[-1] <= sma20.iloc[-1] or close.iloc[-1] <= sma50.iloc[-1]: return False  # noqa: E701,E702,E741
+    if sma20.iloc[-1] <= sma50.iloc[-1]: return False  # noqa: E701,E702,E741
+    mom_5d = (close.iloc[-1]-close.iloc[-6])/close.iloc[-6]*100 if len(close)>=6 else 0
+    if mom_5d <= 5: return False  # noqa: E701,E702,E741
+    if volume.iloc[-1] < 1.5*volume.iloc[-21:-1].mean(): return False  # noqa: E701,E702,E741
+    if close.iloc[-1] < df['high'].rolling(20).max().iloc[-1]: return False  # noqa: E701,E702,E741
+    rsi = compute_rsi(close)
+    return 60 <= rsi.iloc[-1] <= 80
+
+def is_buzzing(df):
+    if df is None or len(df) < 20: return False  # noqa: E701,E702,E741
+    latest = df.iloc[-1]
+    close, open_, volume = latest['close'], latest['open'], latest['volume']
+    if close <= open_: return False  # noqa: E701,E702,E741
+    if (close-open_)/open_*100 < 3.0: return False  # noqa: E701,E702,E741
+    if volume < 1.5*df['volume'].iloc[-21:-1].mean(): return False  # noqa: E701,E702,E741
+    return compute_rsi(df['close']).iloc[-1] >= 60
+
+def scan_parallel(symbols, test_func, days, cap_filter, limit=500, workers=8):
+    categorized = {"Largecap":[], "Midcap":[], "Smallcap":[], "Unknown":[]}
+    with ThreadPoolExecutor(max_workers=workers) as ex:
+        futures = [ex.submit(fetch_and_test, s, test_func, days) for s in symbols[:limit]]
+        for fut in as_completed(futures):
+            sym, passed = fut.result()
             if passed:
                 cat = categorize_by_mcap(sym)
-                if cat in categories_filter or "All" in categories_filter:
+                if cat in cap_filter or "All" in cap_filter:
                     categorized[cat].append(sym)
     return categorized
 
-def scan_momentum_breakouts(symbols, categories_filter, limit=500, workers=8):
-    categorized = {"Largecap": [], "Midcap": [], "Smallcap": [], "Unknown": []}
-    to_scan = symbols[:limit]
-    with ThreadPoolExecutor(max_workers=workers) as executor:
-        futures = [executor.submit(fetch_and_test, sym, is_momentum_breakout, 90) for sym in to_scan]
-        for future in as_completed(futures):
-            sym, passed = future.result()
-            if passed:
-                cat = categorize_by_mcap(sym)
-                if cat in categories_filter or "All" in categories_filter:
-                    categorized[cat].append(sym)
-    return categorized
-
-def test_buzzing(sym):
-    try:
-        df = fetch_historical(sym, days=30)
-        if df is None or len(df) < 20:
-            return False
-        latest = df.iloc[-1]
-        close = latest['close']
-        open_ = latest['open']
-        volume = latest['volume']
-        if close <= open_:
-            return False
-        price_change = (close - open_) / open_ * 100
-        if price_change < 3.0:
-            return False
-        avg_vol = df['volume'].iloc[-21:-1].mean()
-        if volume < 1.5 * avg_vol:
-            return False
-        rsi = compute_rsi(df['close']).iloc[-1]
-        if rsi < 60:
-            return False
-        return True
-    except Exception:
-        return False
-
-def find_buzzing_stocks_parallel(symbols, categories, min_price_change=3.0, limit=20, workers=8):
+def find_buzzing_stocks(symbols, limit=20, workers=8):
     results = []
-    to_scan = symbols[:500]
-    with ThreadPoolExecutor(max_workers=workers) as executor:
-        futures = [executor.submit(fetch_and_test, sym, test_buzzing, 30) for sym in to_scan]
-        for future in as_completed(futures):
-            sym, passed = future.result()
+    with ThreadPoolExecutor(max_workers=workers) as ex:
+        futures = [ex.submit(fetch_and_test, s, is_buzzing, 30) for s in symbols[:500]]
+        for fut in as_completed(futures):
+            sym, passed = fut.result()
             if passed:
                 df = fetch_historical(sym, days=30)
-                close = df['close'].iloc[-1]
-                open_ = df['open'].iloc[-1]
-                chg = (close - open_) / open_ * 100
-                vol_r = df['volume'].iloc[-1] / df['volume'].iloc[-21:-1].mean()
-                rsi = compute_rsi(df['close']).iloc[-1]
-                results.append((sym, chg, vol_r, rsi))
+                if df is not None and len(df) >= 2:
+                    close, open_ = df['close'].iloc[-1], df['open'].iloc[-1]
+                    chg   = (close-open_)/open_*100
+                    vol_r = df['volume'].iloc[-1]/df['volume'].iloc[-21:-1].mean()
+                    rsi   = compute_rsi(df['close']).iloc[-1]
+                    results.append((sym, chg, vol_r, rsi))
     results.sort(key=lambda x: x[1], reverse=True)
     return results[:limit]
 
-def generate_auto_pulse():
-    indices = get_indices_data()
-    nifty = indices.get("Nifty 50", {"price": "N/A", "change": 0})
-    sample_largecaps = get_symbols_by_market_cap("Largecap", 30)
-    gainers, losers = [], []
-    for sym in sample_largecaps:
-        change = get_stock_change_kite(sym)
-        if change is not None:
-            gainers.append((sym, change))
-            losers.append((sym, change))
-    gainers.sort(key=lambda x: x[1], reverse=True)
-    losers.sort(key=lambda x: x[1])
-    sp500 = get_global_indices().get("S&P 500", {"price": "N/A", "change": 0})
-    prompt = f"""
-Today's date: {datetime.now().strftime('%d-%m-%Y')}
-Nifty 50: {nifty['price']:.1f} ({nifty['change']:+.2f}%)
-Top Gainers: {', '.join([f"{s} ({c:+.2f}%)" for s,c in gainers[:3]])}
-Top Losers: {', '.join([f"{s} ({c:+.2f}%)" for s,c in losers[:3]])}
-S&P 500: {sp500['price']:.1f} ({sp500['change']:+.2f}%)
-Generate a concise Daily Street Pulse report using ONLY bullet points for each section. Sections:
-- Market Overview (3–4 bullets)
-- Top Gainers/Losers (2–3 bullets)
-- Global Cues (2–3 bullets)
-- Stock of the Day (2–3 bullets)
-- Top Updates (2–3 bullets)
-- Technical Outlook (3–4 bullets)
-"""
-    deepseek_key = os.getenv("DEEPSEEK_API_KEY")
-    if not deepseek_key:
-        return "DeepSeek API key missing."
-    url = "https://api.deepseek.com/v1/chat/completions"
-    headers = {"Authorization": f"Bearer {deepseek_key}", "Content-Type": "application/json"}
-    payload = {"model": "deepseek-chat", "messages":[{"role":"user","content":prompt}], "temperature":0.4, "max_tokens":800}
+# ── Screener.in scrapers ───────────────────────────────────────────────────────
+@st.cache_data(ttl=86400)
+def scrape_screener_shareholding(symbol):
+    url = f"https://www.screener.in/company/{symbol.upper()}/"
+    headers = {"User-Agent":"Mozilla/5.0","Accept":"text/html"}
     try:
-        resp = requests.post(url, json=payload, headers=headers, timeout=30)
+        resp = requests.Session().get(url, headers=headers, timeout=15)
+        if resp.status_code != 200:
+            return None,None,None,None,f"HTTP {resp.status_code}"
+        soup  = BeautifulSoup(resp.text, 'html.parser')
+        sh    = soup.find('section', id='shareholding')
+        table = sh.find('table', class_='data-table') if sh and sh.name != 'table' else sh
+        if not table:
+            return None,None,None,None,"No shareholding table."
+        thead = table.find('thead')
+        if not thead:
+            return None,None,None,None,"No header row."
+        quarters = [th.text.strip() for th in thead.find_all('th')][1:]
+        p_data, f_data, d_data = [], [], []
+        for row in table.find_all('tr'):
+            cells = row.find_all('td')
+            if len(cells) < 2: continue  # noqa: E701,E702,E741
+            label  = cells[0].text.strip()
+            values = []
+            for cell in cells[1:]:
+                try:   values.append(float(cell.text.strip().replace('%','')))  # noqa: E701,E702,E741
+                except Exception: values.append(None)  # noqa: E701,E702,E741
+            if 'Promoter' in label: p_data = values  # noqa: E701,E702,E741
+            elif 'Foreign' in label or 'FII' in label: f_data = values  # noqa: E701,E702,E741
+            elif 'Domestic' in label or 'DII' in label: d_data = values  # noqa: E701,E702,E741
+        if not any([p_data, f_data, d_data]):
+            return None,None,None,None,"Could not parse shareholding."
+        return quarters, p_data, f_data, d_data, None
+    except Exception as e:
+        return None,None,None,None,str(e)
+
+@st.cache_data(ttl=43200)
+def scrape_screener_concall(symbol):
+    url = f"https://www.screener.in/company/{symbol.upper()}/"
+    try:
+        resp = requests.get(url, headers={"User-Agent":"Mozilla/5.0"}, timeout=15)
+        if resp.status_code != 200:
+            return f"HTTP {resp.status_code}"
+        soup = BeautifulSoup(resp.text, 'html.parser')
+        sec  = soup.find('section', id='concall')
+        if not sec:
+            return "No concall transcript found."
+        paras = sec.find_all('p')
+        text  = ' '.join(p.get_text(strip=True) for p in paras) if paras else sec.get_text(' ', strip=True)
+        return text[:1500] if len(text) >= 50 else "Concall too short or unavailable."
+    except Exception as e:
+        return f"Error: {e}"
+
+@st.cache_data(ttl=1800)
+def get_moneycontrol_premarket():
+    url  = "https://www.moneycontrol.com/pre-market/"
+    hdrs = {"User-Agent":"Mozilla/5.0","Accept":"text/html"}
+    try:
+        resp = requests.Session().get(url, headers=hdrs, timeout=15)
+        if resp.status_code != 200:
+            return None, f"HTTP {resp.status_code}"
+        soup = BeautifulSoup(resp.text, 'html.parser')
+        div  = soup.find('div', class_='premarket_data') or soup.find('div', {'id':'premarket'})
+        if div:
+            return div.get_text('\n', strip=True)[:3000], None
+        kws = ['S&P','Dow','Nasdaq','Gift Nifty','Gold','Crude','Asian','pre-market']
+        relevant = [l.strip() for l in soup.get_text('\n').split('\n')  # noqa: E701,E702,E741
+                    if any(k in l for k in kws)]
+        return ('\n'.join(relevant[:30]) or None), (None if relevant else "No data")
+    except Exception as e:
+        return None, str(e)
+
+# ── DeepSeek market pulse ──────────────────────────────────────────────────────
+def generate_auto_pulse():
+    key = os.getenv("DEEPSEEK_API_KEY")
+    if not key: return "DeepSeek API key missing."  # noqa: E701,E702,E741
+    indices = get_indices_data()
+    nifty   = indices.get("Nifty 50", {"price":0,"change":0})
+    sp500   = get_global_indices().get("S&P 500", {"price":0,"change":0})
+    lcs     = get_symbols_by_market_cap("Largecap", 30)
+    moves   = [(s, get_stock_change_kite(s)) for s in lcs]
+    moves   = [(s,c) for s,c in moves if c is not None]
+    gainers = sorted(moves, key=lambda x: x[1], reverse=True)[:3]
+    losers  = sorted(moves, key=lambda x: x[1])[:3]
+    prompt  = f"""Date: {datetime.now().strftime('%d-%m-%Y')}
+Nifty 50: {nifty['price']:.1f} ({nifty['change']:+.2f}%)
+Top Gainers: {', '.join(f"{s}({c:+.2f}%)" for s,c in gainers)}
+Top Losers:  {', '.join(f"{s}({c:+.2f}%)" for s,c in losers)}
+S&P 500: {sp500['price']:.1f} ({sp500['change']:+.2f}%)
+Write Daily Street Pulse as bullet points: Market Overview, Top Gainers/Losers, Global Cues, Technical Outlook."""
+    try:
+        resp = requests.post(
+            "https://api.deepseek.com/v1/chat/completions",
+            headers={"Authorization":f"Bearer {key}","Content-Type":"application/json"},
+            json={"model":"deepseek-chat","messages":[{"role":"user","content":prompt}],
+                  "temperature":0.4,"max_tokens":800},
+            timeout=30
+        )
         return resp.json()['choices'][0]['message']['content']
     except Exception:
-        return "Error generating pulse"
+        return "Error generating pulse."
 
-def macro_regime_allocation_explained():
+def get_stock_change_kite(symbol):
     try:
-        nifty = yf.Ticker("^NSEI")
-        nifty_hist = nifty.history(period="1mo")
-        nifty_return = (nifty_hist['Close'].iloc[-1] - nifty_hist['Close'].iloc[0]) / nifty_hist['Close'].iloc[0]
-        gold = yf.Ticker("GC=F")
-        gold_hist = gold.history(period="1mo")
-        gold_return = (gold_hist['Close'].iloc[-1] - gold_hist['Close'].iloc[0]) / gold_hist['Close'].iloc[0]
-        tnx = yf.Ticker("^TNX")
-        tnx_hist = tnx.history(period="1mo")
-        yield_change = tnx_hist['Close'].iloc[-1] - tnx_hist['Close'].iloc[0]
-        score = nifty_return - gold_return - (yield_change / 100)
-        if score > 0.02:
-            regime = "🟢 Risk ON – Optimistic, favor equities."
-            allocation = "Equities 70% | Gold 15% | Bonds 15%"
-        elif score < -0.02:
-            regime = "🔴 Risk OFF – Fearful, raise cash."
-            allocation = "Cash 40% | Gold 30% | Bonds 20% | Equities 10%"
-        else:
-            regime = "🟡 Neutral – Mixed signals."
-            allocation = "Equities 40% | Gold 25% | Bonds 25% | Cash 10%"
-        return regime, allocation
+        df = fetch_historical(symbol, days=5)
+        if df is not None and len(df) >= 2:
+            return (df['close'].iloc[-1]-df['close'].iloc[-2])/df['close'].iloc[-2]*100
     except Exception:
-        return "⚠️ Regime data unavailable", "N/A"
+        pass
+    return None
+
+def macro_regime_allocation():
+    try:
+        nifty_r = (lambda h: (h['Close'].iloc[-1]-h['Close'].iloc[0])/h['Close'].iloc[0])(yf.Ticker("^NSEI").history(period="1mo"))
+        gold_r  = (lambda h: (h['Close'].iloc[-1]-h['Close'].iloc[0])/h['Close'].iloc[0])(yf.Ticker("GC=F").history(period="1mo"))
+        yld_chg = (lambda h: h['Close'].iloc[-1]-h['Close'].iloc[0])(yf.Ticker("^TNX").history(period="1mo"))
+        score   = nifty_r - gold_r - yld_chg/100
+        if score > 0.02:
+            return "🟢 Risk ON – favour equities", "Equities 70% | Gold 15% | Bonds 15%"
+        if score < -0.02:
+            return "🔴 Risk OFF – raise cash",      "Cash 40% | Gold 30% | Bonds 20% | Equities 10%"
+        return "🟡 Neutral – mixed signals",         "Equities 40% | Gold 25% | Bonds 25% | Cash 10%"
+    except Exception:
+        return "⚠️ Regime unavailable", "N/A"
 
 def generate_swot(symbol):
     try:
-        ticker = yf.Ticker(symbol + ".NS")
-        info = ticker.info
-        sector = info.get('sector', 'N/A')
-        pe = info.get('trailingPE', 'N/A')
-        roe = info.get('returnOnEquity', 'N/A')
-        mc = info.get('marketCap', 0)
-        mc_cr = mc / 1e7 if mc else 'N/A'
+        info  = yf.Ticker(symbol+".NS").info
+        sector = info.get('sector','N/A')
+        pe     = info.get('trailingPE','N/A')
+        roe    = info.get('returnOnEquity',0)*100 if info.get('returnOnEquity') else 'N/A'
+        mc_cr  = info.get('marketCap',0)/1e7
     except Exception:
         sector = pe = roe = mc_cr = 'N/A'
-    prompt = f"""
-You are a financial analyst. Provide a concise SWOT analysis for the Indian stock {symbol} (NSE/BSE) based on the following known data and general market knowledge:
-
-- Sector: {sector}
-- P/E Ratio: {pe}
-- ROE: {roe}
-- Market Cap: ₹{mc_cr} Cr
-
-Also consider recent news, sector trends, and technical conditions.
-
-Format your response using ONLY bullet points for each section:
-
-**Strengths**
-- point1
-- point2
-
-**Weaknesses**
-- point1
-- point2
-
-**Opportunities**
-- point1
-- point2
-
-**Threats**
-- point1
-- point2
-
-Keep each section to 2–3 bullet points. Be specific to {symbol}.
-"""
-    response = call_deepseek(prompt, system="You are a professional equity research analyst. Use ONLY bullet points.")
-    return response if response else "Could not generate SWOT analysis."
+    return call_deepseek(f"""SWOT for {symbol} (NSE). Sector:{sector} P/E:{pe} ROE:{roe} MCap:₹{mc_cr}Cr.
+Format: **Strengths** / **Weaknesses** / **Opportunities** / **Threats** — 2-3 bullet points each.""",
+    system="You are an equity research analyst. Output ONLY bullet points.")
 
 def swarm_consensus(symbol, news_text):
     personas = [
-        {"name": "🟢 Bullish Trader", "style": "Aggressive growth seeker, follows momentum, ignores valuation."},
-        {"name": "🔴 Risk-Averse Pension Fund", "style": "Stable, dividend-paying stocks only. Avoids volatility."},
-        {"name": "📊 Quant Chartist", "style": "Looks at price patterns, moving averages, volume. Ignores fundamentals."},
-        {"name": "💼 Value Investor", "style": "Focuses on P/E, P/B, ROE. Buys only when price < intrinsic value."},
-        {"name": "🌍 Macro Hedge Fund", "style": "Considers global cues, interest rates, currency, sector rotation."}
+        ("🟢 Bullish Trader",       "Aggressive growth, follows momentum."),
+        ("🔴 Pension Fund",          "Conservative, dividends only, avoids volatility."),
+        ("📊 Quant Chartist",        "Price patterns, MAs, volume. Ignores fundamentals."),
+        ("💼 Value Investor",        "P/E, P/B, ROE. Buys below intrinsic value."),
+        ("🌍 Macro Hedge Fund",      "Global cues, rates, currency, sector rotation."),
     ]
     results = []
-    for persona in personas:
-        prompt = f"""
-You are a {persona['name']}. {persona['style']}
-You see the following news about {symbol}: "{news_text}"
-Based ONLY on your investment style, would you BUY, SELL, or HOLD the stock? 
-Give your verdict as a single bullet point: "VERDICT: BUY/SELL/HOLD (confidence: XX)". Then one-line reason.
-"""
-        response = call_deepseek(prompt, system="You are a professional investor. Output ONLY two bullet points.")
-        if response:
-            lines = response.split('\n')
-            verdict = "HOLD"
-            confidence = 50
-            reason = "Could not parse"
-            for line in lines:
+    for name, style in personas:
+        resp = call_deepseek(
+            f"You are {name}. {style}\nNews about {symbol}: \"{news_text}\"\n"
+            "Output ONE line: 'VERDICT: BUY/SELL/HOLD (confidence: XX)' then one-line REASON.",
+            system="Professional investor. Two lines only."
+        )
+        verdict, confidence, reason = "HOLD", 50, "—"
+        if resp:
+            for line in resp.split('\n'):
                 if 'VERDICT:' in line.upper():
                     parts = line.split('VERDICT:')[1].strip().split()
-                    verdict = parts[0].upper()
-                    if 'confidence' in line.lower():
-                        try:
-                            conf_str = line.split('confidence:')[1].strip().split()[0]
-                            confidence = int(conf_str)
-                        except Exception:
-                            pass
+                    verdict = parts[0].upper() if parts else "HOLD"
+                    try: confidence = int(line.split('confidence:')[1].strip().split()[0])  # noqa: E701,E702,E741
+                    except Exception: pass  # noqa: E701,E702,E741
                 elif 'REASON:' in line.upper():
                     reason = line.split('REASON:')[1].strip()
-            results.append({"persona": persona['name'], "verdict": verdict, "confidence": confidence, "reason": reason})
+        results.append({"persona":name, "verdict":verdict, "confidence":confidence, "reason":reason})
     return results
 
-# -------------------------------
-# MARKET HOURS HELPER
-# -------------------------------
-def market_status():
-    now = datetime.now()
-    t = now.time()
-    open_t = datetime.strptime("09:15", "%H:%M").time()
-    close_t = datetime.strptime("15:30", "%H:%M").time()
-    if now.weekday() >= 5:
-        return "🔴 Closed (Weekend)", "#fee2e2"
-    if t < open_t:
-        delta = datetime.combine(now.date(), open_t) - now
-        mins = int(delta.total_seconds() // 60)
-        return f"🟡 Pre-Market · Opens in {mins}m", "#fef9c3"
-    if t > close_t:
-        return "🔴 Closed (After Hours)", "#fee2e2"
-    return "🟢 Market Open", "#dcfce7"
+# ── UI Helpers ─────────────────────────────────────────────────────────────────
+def _index_card(name, price, change, currency="₹"):
+    color = "#16a34a" if change >= 0 else "#dc2626"
+    arrow = "▲" if change >= 0 else "▼"
+    st.markdown(
+        f"<div style='display:flex;justify-content:space-between;align-items:center;"
+        f"background:#f8fafc;border-radius:10px;padding:.5rem 1rem;margin-bottom:.4rem;"
+        f"border-left:4px solid {color}'>"
+        f"<span style='font-weight:600'>{name}</span>"
+        f"<span>{currency}{price:.1f} &nbsp;"
+        f"<span style='color:{color};font-weight:700'>{arrow} {abs(change):.2f}%</span></span>"
+        f"</div>", unsafe_allow_html=True
+    )
 
-# -------------------------------
+def _verdict_badge(direction):
+    label = {1:"BUY", -1:"SELL", 0:"HOLD"}[direction]
+    css   = {1:"buy",  -1:"sell",  0:"hold"}[direction]
+    return label, css
+
+def get_heatmap_data(cap, max_symbols=200):
+    symbols = get_symbols_by_market_cap(cap, max_symbols)
+    results = []
+    with st.spinner(f"Fetching {len(symbols)} stocks…"):
+        for sym in symbols:
+            chg = get_stock_change_kite(sym)
+            if chg is not None:
+                results.append({"Stock": sym, "Change %": chg})
+            time.sleep(0.02)
+    return pd.DataFrame(results)
+
+# ══════════════════════════════════════════════════════════════════════════════
 # MAIN UI
-# -------------------------------
+# ══════════════════════════════════════════════════════════════════════════════
 st.title("🧠 Prism Quant")
-st.caption("Live Kite Data · AI Debate · Quant Models · Bullet‑point Insights")
+st.caption("Kite · DeepSeek · Claude · Conviction Scoring · Paper Trading")
 
-# --- System status banner ---
-_mstatus, _mcolor = market_status()
-_is_paper = os.getenv("SQ_PAPER_TRADING", "true").lower() == "true"
-_mode_badge = "📄 Paper Trading" if _is_paper else "💸 Live Trading"
-_mode_color = "#dbeafe" if _is_paper else "#fef3c7"
-_last_refresh = datetime.now().strftime("%H:%M:%S")
-
-_s1, _s2, _s3 = st.columns(3)
-_s1.markdown(f"<div style='background:{_mcolor};border-radius:10px;padding:0.5rem 1rem;text-align:center;font-weight:600'>{_mstatus}</div>", unsafe_allow_html=True)
-_s2.markdown(f"<div style='background:{_mode_color};border-radius:10px;padding:0.5rem 1rem;text-align:center;font-weight:600'>{_mode_badge}</div>", unsafe_allow_html=True)
-_s3.markdown(f"<div style='background:#f1f5f9;border-radius:10px;padding:0.5rem 1rem;text-align:center;font-weight:600'>🕐 Refreshed {_last_refresh}</div>", unsafe_allow_html=True)
+# Status banner
+_ms, _mc = market_status()
+_paper   = os.getenv("SQ_PAPER_TRADING","true").lower() == "true"
+_b1, _b2, _b3 = st.columns(3)
+_b1.markdown(f"<div style='background:{_mc};border-radius:10px;padding:.5rem 1rem;text-align:center;font-weight:600'>{_ms}</div>", unsafe_allow_html=True)
+_b2.markdown(f"<div style='background:{'#dbeafe' if _paper else '#fef3c7'};border-radius:10px;padding:.5rem 1rem;text-align:center;font-weight:600'>{'📄 Paper Trading' if _paper else '💸 Live Trading'}</div>", unsafe_allow_html=True)
+_b3.markdown(f"<div style='background:#f1f5f9;border-radius:10px;padding:.5rem 1rem;text-align:center;font-weight:600'>🕐 {datetime.now().strftime('%H:%M:%S')}</div>", unsafe_allow_html=True)
 st.write("")
 
-symbol_map = get_all_equity_symbols()
+symbol_map  = get_all_equity_symbols()
 symbol_list = sorted(symbol_map.keys())
 
+# ── SIDEBAR ────────────────────────────────────────────────────────────────────
 with st.sidebar:
     st.header("⚙️ Controls")
-    if st.button("🔄 Refresh All Data", width="stretch"):
+    if st.button("🔄 Refresh All Data", use_container_width=True):
         st.cache_data.clear()
         st.rerun()
-    _auto = st.checkbox("⏱ Auto-refresh (30s)", value=False)
-    if _auto:
-        import time as _time
-        _countdown = st.empty()
+    if st.checkbox("⏱ Auto-refresh (30s)"):
+        _cd = st.empty()
         for _i in range(30, 0, -1):
-            _countdown.caption(f"Refreshing in {_i}s…")
-            _time.sleep(1)
+            _cd.caption(f"Refreshing in {_i}s…")
+            time.sleep(1)
         st.cache_data.clear()
         st.rerun()
-    st.divider()
-    st.header("🔥 Daily Buzzing Stocks")
-    buzz_min_change = st.slider("Min price change (%)", 1.0, 10.0, 3.0, 0.5)
-    if st.button("Find Buzzing Stocks"):
-        all_syms = list(symbol_map.keys())
-        with st.spinner("Scanning in parallel..."):
-            buzzing = find_buzzing_stocks_parallel(all_syms, [], buzz_min_change, limit=20, workers=8)
-        if buzzing:
-            st.write(f"**Top {len(buzzing)} buzzing stocks:**")
-            for sym, chg, vol_r, rsi in buzzing:
-                st.write(f"🟢 **{sym}** | +{chg:.1f}% | Vol {vol_r:.1f}x | RSI {rsi:.0f}")
-        else:
-            st.info("No buzzing stocks found.")
-    st.divider()
-    st.header("🔍 Stock Analysis")
-    selected = st.selectbox("Choose a stock", symbol_list, format_func=lambda x: f"{x} – {symbol_map[x]}")
-    analyze = st.button("🚀 Analyze & Get Verdict", width="stretch")
-    st.divider()
-    st.header("📊 SWOT Analysis")
-    if st.button("Generate SWOT", key="swot_btn"):
-        if selected:
-            with st.spinner("Generating SWOT..."):
-                swot = generate_swot(selected)
-            st.session_state.swot_result = swot
-        else:
-            st.warning("Please select a stock first.")
-    if "swot_result" in st.session_state:
-        st.markdown(st.session_state.swot_result)
-    st.divider()
-    st.header("🎯 Decision Terminal")
-    _dt_profile = st.selectbox("Trader profile", list(PROFILES.keys()), key="dt_profile")
-    _dt_capital = st.number_input("Capital (₹)", value=100_000, step=10_000, key="dt_capital")
-    if st.button("▶ Run Conviction Score", use_container_width=True, key="dt_run"):
-        if selected:
-            with st.spinner("Computing conviction…"):
-                _dt_df = fetch_historical(selected, days=100)
-            if _dt_df is not None and len(_dt_df) >= 30:
-                _dt_ind = ie.compute(_dt_df, selected)
-                _dt_scorer = ConvictionScorer(PROFILES[_dt_profile])
-                _dt_res = _dt_scorer.score(_dt_ind)
-                _dt_atr = _dt_ind.get("atr_14", _dt_df['close'].iloc[-1] * 0.015)
-                _dt_price = _dt_df['close'].iloc[-1]
-                _dt_setup = compute_trade_setup(
-                    selected, _dt_res.verdict, _dt_price, _dt_atr, _dt_capital
-                ) if _dt_res.verdict in ("BUY", "SELL") else None
-                st.session_state["dt_result"] = (_dt_res, _dt_setup, _dt_price)
-            else:
-                st.warning("Not enough data for conviction scoring.")
-        else:
-            st.warning("Select a stock first.")
-    if "dt_result" in st.session_state:
-        _dt_res, _dt_setup, _dt_price = st.session_state["dt_result"]
-        _col_a, _col_b = st.columns(2)
-        _col_a.metric("Conviction", f"{_dt_res.score:.1f}/100")
-        _v_color = "🟢" if _dt_res.verdict == "BUY" else "🔴" if _dt_res.verdict == "SELL" else "🟡"
-        _col_b.metric("Verdict", f"{_v_color} {_dt_res.verdict}")
-        if not _dt_res.gates_passed:
-            st.warning("Gates failed: " + " | ".join(_dt_res.gate_failures))
-        if _dt_setup:
-            st.markdown(
-                f"**Entry** ₹{_dt_setup.entry} · **Stop** ₹{_dt_setup.stop} · "
-                f"**Target** ₹{_dt_setup.target} · **Qty** {_dt_setup.quantity} · "
-                f"**R:R** {_dt_setup.rr_ratio}×"
-            )
 
+    st.divider()
+    st.header("🔍 Stock Picker")
+    selected = st.selectbox("Symbol", symbol_list, format_func=lambda x: f"{x} – {symbol_map[x]}")
+    analyze  = st.button("🚀 Analyze", use_container_width=True)
+
+    st.divider()
+    st.header("🔥 Buzzing Stocks")
+    buzz_min = st.slider("Min change %", 1.0, 10.0, 3.0, 0.5)
+    if st.button("Scan Now"):
+        with st.spinner("Scanning…"):
+            buzzing = find_buzzing_stocks(list(symbol_map.keys()), limit=20)
+        if buzzing:
+            for sym, chg, vol_r, rsi in buzzing:
+                st.write(f"🟢 **{sym}** +{chg:.1f}% · {vol_r:.1f}x vol · RSI {rsi:.0f}")
+        else:
+            st.info("None found.")
+
+    st.divider()
+    st.header("📊 SWOT")
+    if st.button("Generate SWOT"):
+        with st.spinner():
+            st.session_state.swot = generate_swot(selected)
+    if "swot" in st.session_state:
+        st.markdown(st.session_state.swot)
+
+# ── VERDICT CARD (after Analyze click) ────────────────────────────────────────
 if analyze and selected:
-    with st.spinner(f"Fetching data for {selected}..."):
+    with st.spinner(f"Analysing {selected}…"):
         verdict = get_stock_verdict(selected)
+    st.session_state["last_verdict"]  = verdict
+    st.session_state["last_selected"] = selected
+
+if "last_verdict" in st.session_state:
+    verdict   = st.session_state["last_verdict"]
+    _selected = st.session_state.get("last_selected", selected)
+
     if "error" in verdict:
         st.error(verdict["error"])
     else:
-        st.subheader(f"📊 {selected} – {symbol_map[selected]}")
-        col1, col2, col3, col4 = st.columns(4)
-        col1.metric("Last Price", f"₹{verdict['price']:.2f}")
-        col2.metric("Composite Signal", f"{verdict['signal']:.3f}")
-        col3.metric("Confidence", f"{verdict['confidence']:.1f}%")
-        dir_text = {1:"BUY", -1:"SELL", 0:"HOLD"}[verdict['direction']]
-        color_class = "buy" if verdict['direction']==1 else "sell" if verdict['direction']==-1 else "hold"
-        col4.markdown(f"<div class='recommendation {color_class}'>{dir_text}</div>", unsafe_allow_html=True)
-        st.caption(f"Data as of {verdict['last_date']} (last trading day)")
+        cv = verdict["conviction"]
+        dir_text, css = _verdict_badge(verdict['direction'])
 
-        with st.expander("📝 Bull/Bear LLM Debate"):
-            st.markdown(verdict['debate'])
-        with st.expander("🔧 Signal Attribution"):
-            st.json(verdict['attribution'])
-        with st.expander("📊 Volume Profile – What it means"):
-            df_vp = fetch_historical(selected, days=250)
-            if df_vp is not None and len(df_vp) >= 50:
-                profile = vp.compute(df_vp)
-                current_price = verdict['price']
-                poc = profile['poc']
-                vah = profile['vah']
-                val = profile['val']
-                hvns = profile['hvns'][:5]
-                lvns = profile['lvns'][:5]
-                st.markdown(f"""
-- **Most traded price (POC):** ₹{poc:.2f} – Highest volume bar. Price often returns here.
-- **Value Area (70% of volume):** ₹{val:.2f} – ₹{vah:.2f} – Fair value zone.
-- **Current price location:** {'Above Value Area' if current_price > vah else 'Inside Value Area' if val <= current_price <= vah else 'Below Value Area'}
-- **High volume zones (walls):** {', '.join([f'₹{h:.2f}' for h in hvns]) if hvns else 'None'}
-- **Low volume zones (fast zones):** {', '.join([f'₹{lvn:.2f}' for lvn in lvns]) if lvns else 'None'}
+        st.subheader(f"📊 {_selected} – {symbol_map.get(_selected,'')}")
+        c1, c2, c3, c4, c5 = st.columns(5)
+        c1.metric("Price",          f"₹{verdict['price']:.2f}")
+        c2.metric("Signal",         f"{verdict['signal']:.3f}")
+        c3.metric("ML Confidence",  f"{verdict['confidence']:.1f}%")
+        c4.metric("Conviction",     f"{cv.score:.0f}/100")
+        c5.markdown(f"<div class='recommendation {css}'>{dir_text}</div>", unsafe_allow_html=True)
+
+        if not cv.gates_passed:
+            st.warning("⚠️ Gate failures: " + " | ".join(cv.gate_failures))
+
+        st.caption(f"Data as of {verdict['last_date']}")
+
+        col_l, col_r = st.columns(2)
+        with col_l:
+            with st.expander("📝 DeepSeek Bull/Bear Debate"):
+                st.markdown(verdict['debate'] or "_DeepSeek key not set._")
+            with st.expander("🔧 Signal Attribution"):
+                st.json(verdict['attribution'])
+            with st.expander("🎯 Conviction Breakdown"):
+                comp = cv.components
+                cdf  = pd.DataFrame({"Component": list(comp.keys()),
+                                     "Score (0-1)": [round(v,3) for v in comp.values()]})
+                st.dataframe(cdf, hide_index=True, use_container_width=True)
+                st.caption(f"Profile: Conservative · Verdict: **{cv.verdict}**")
+
+        with col_r:
+            with st.expander("📊 Volume Profile"):
+                if len(verdict['df']) >= 50:
+                    prof = vp.compute(verdict['df'])
+                    px_  = verdict['price']
+                    loc  = ('Above' if px_ > prof['vah'] else
+                            'Inside' if prof['val'] <= px_ <= prof['vah'] else 'Below')
+                    st.markdown(f"""
+- **POC:** ₹{prof['poc']:.2f}
+- **Value Area:** ₹{prof['val']:.2f} – ₹{prof['vah']:.2f}
+- **Price Location:** {loc} Value Area
+- **HVN walls:** {', '.join(f'₹{h:.2f}' for h in prof['hvns'][:4]) or 'None'}
+- **LVN gaps:** {', '.join(f'₹{lvn:.2f}' for lvn in prof['lvns'][:4]) or 'None'}
 """)
-            else:
-                st.info("Not enough data for volume profile (need 50+ days).")
-        with st.expander("🧠 Past Memory (same stock)"):
-            st.markdown(verdict['past_memory'])
-        with st.expander("🤖 Claude Final Signal (Anthropic)", expanded=False):
-            if not _claude.available:
-                st.info("ANTHROPIC_API_KEY not set — Claude signal disabled. Add key to .env to enable.")
-            elif st.button("Ask Claude", key="claude_ask"):
-                with st.spinner("Calling Claude…"):
-                    _ctx = (
-                        f"Symbol: {selected} | Price: ₹{verdict['price']:.2f} | "
-                        f"Composite signal: {verdict['signal']:.3f} | "
-                        f"Confidence: {verdict['confidence']:.1f}% | "
-                        f"Direction: {dir_text}\n\n"
-                        f"DeepSeek debate summary:\n{verdict['debate'][:800]}"
-                    )
-                    _claude_sig = _claude.get_signal(_ctx)
-                if _claude_sig:
-                    _ca = _claude_sig.get("action", "HOLD")
-                    _cc = _claude_sig.get("confidence", 0)
-                    _cs_color = "buy" if _ca == "BUY" else "sell" if _ca == "SELL" else "hold"
-                    st.markdown(f"<div class='recommendation {_cs_color}'>{_ca} · {_cc*100:.0f}%</div>", unsafe_allow_html=True)
-                    st.markdown(f"**Reasoning:** {_claude_sig.get('reasoning', '')}")
-                    st.caption(f"Sentiment score: {_claude_sig.get('sentiment_score', 0):.2f}")
-                else:
-                    st.warning("Claude returned no signal — check API key or logs.")
-        update_memory(selected, dir_text, verdict['confidence'], verdict['price'])
-        st.success("Decision saved to memory.")
+            with st.expander("🤖 Claude Final Signal"):
+                if not _claude.available:
+                    st.info("Set ANTHROPIC_API_KEY in .env to enable Claude.")
+                elif st.button("Ask Claude", key="claude_btn"):
+                    with st.spinner("Calling Claude…"):
+                        _sig = _claude.get_signal(
+                            f"Symbol: {_selected} | Price: ₹{verdict['price']:.2f} | "
+                            f"Signal: {verdict['signal']:.3f} | Confidence: {verdict['confidence']:.1f}% | "
+                            f"Conviction: {cv.score:.0f}/100 | Direction: {dir_text}\n\n"
+                            f"DeepSeek analysis:\n{(verdict['debate'] or '')[:600]}"
+                        )
+                    if _sig:
+                        _act = _sig.get("action","HOLD")
+                        _cc  = _sig.get("confidence",0)
+                        _, _scss = _verdict_badge({"BUY":1,"SELL":-1,"HOLD":0}.get(_act,0))
+                        st.markdown(f"<div class='recommendation {_scss}'>{_act} · {_cc*100:.0f}%</div>",
+                                    unsafe_allow_html=True)
+                        st.markdown(f"**Reasoning:** {_sig.get('reasoning','')}")
+                        st.caption(f"Sentiment: {_sig.get('sentiment_score',0):.2f}")
+                    else:
+                        st.warning("No signal returned.")
+            with st.expander("🧠 Trade Memory"):
+                st.markdown(verdict['past_memory'])
 
-# -------------------------------
-# TABS (12 tabs – all guaranteed to work)
-# -------------------------------
-tabs = st.tabs(["📊 Market Dashboard", "📈 Charts & EMAs", "🔍 Stock Categories", "🔥 Breakout Forecast",
-                "🚀 Momentum Breakout", "🗺️ Heatmap", "🤖 Auto Pulse", "🌍 Global Markets",
-                "📰 Pre-Market Report", "🏦 Quant Hedge Fund", "🐟 Swarm Consensus", 
-                "📊 Fundamentals & Ownership", "📋 Paper Trading"])
+        update_memory(_selected, dir_text, verdict['confidence'], verdict['price'])
 
+# ── TABS ───────────────────────────────────────────────────────────────────────
+tabs = st.tabs([
+    "📊 Market Dashboard",
+    "📈 Charts & EMAs",
+    "🎯 Decision Terminal",
+    "🔍 Stock Categories",
+    "🔥 Breakout Scanner",
+    "🚀 Momentum Scanner",
+    "🗺️ Heatmap",
+    "🤖 Daily Pulse",
+    "🐟 Swarm Intel",
+    "🌍 Global Markets",
+    "📰 Pre-Market",
+    "🏦 Quant Hedge Fund",
+    "📊 Fundamentals",
+    "📋 Paper Trading",
+])
+
+# ── Tab 0: Market Dashboard ────────────────────────────────────────────────────
 with tabs[0]:
-    col1, col2 = st.columns(2)
-    with col1:
-        st.subheader("🇮🇳 Indian Indices (Kite)")
-        ind_data = get_indices_data()
-        if ind_data:
-            for idx_name, v in ind_data.items():
-                chg = v['change']
-                arrow = "▲" if chg >= 0 else "▼"
-                color = "#16a34a" if chg >= 0 else "#dc2626"
-                st.markdown(
-                    f"<div style='display:flex;justify-content:space-between;align-items:center;"
-                    f"background:#f8fafc;border-radius:10px;padding:0.5rem 1rem;margin-bottom:0.4rem;"
-                    f"border-left:4px solid {color}'>"
-                    f"<span style='font-weight:600'>{idx_name}</span>"
-                    f"<span>₹{v['price']:.1f} &nbsp; <span style='color:{color};font-weight:700'>{arrow} {abs(chg):.2f}%</span></span>"
-                    f"</div>", unsafe_allow_html=True
-                )
-        else:
-            st.info("No index data available.")
-    with col2:
+    t0c1, t0c2 = st.columns(2)
+    with t0c1:
+        st.subheader("🇮🇳 Indian Indices")
+        for n, v in get_indices_data().items():
+            _index_card(n, v['price'], v['change'])
+    with t0c2:
         st.subheader("🌏 Global Indices")
-        global_data = get_global_indices()
-        if global_data:
-            for idx_name, v in global_data.items():
-                chg = v['change']
-                arrow = "▲" if chg >= 0 else "▼"
-                color = "#16a34a" if chg >= 0 else "#dc2626"
-                st.markdown(
-                    f"<div style='display:flex;justify-content:space-between;align-items:center;"
-                    f"background:#f8fafc;border-radius:10px;padding:0.5rem 1rem;margin-bottom:0.4rem;"
-                    f"border-left:4px solid {color}'>"
-                    f"<span style='font-weight:600'>{idx_name}</span>"
-                    f"<span>{v['price']:.1f} &nbsp; <span style='color:{color};font-weight:700'>{arrow} {abs(chg):.2f}%</span></span>"
-                    f"</div>", unsafe_allow_html=True
-                )
-        else:
-            st.info("No global data available.")
+        for n, v in get_global_indices().items():
+            _index_card(n, v['price'], v['change'], currency="")
 
+# ── Tab 1: Charts & EMAs ───────────────────────────────────────────────────────
 with tabs[1]:
-    if analyze and selected:
-        df = fetch_historical(selected, days=150)
+    if "last_verdict" in st.session_state and "error" not in st.session_state["last_verdict"]:
+        _sel = st.session_state.get("last_selected", selected)
+        df   = fetch_historical(_sel, days=150)
         if df is not None and len(df) > 50:
-            indicators_for_table = ie.compute(df, selected)
-            df['EMA10'] = df['close'].ewm(span=10).mean()
-            df['EMA20'] = df['close'].ewm(span=20).mean()
-            df['EMA50'] = df['close'].ewm(span=50).mean()
+            ind = ie.compute(df, _sel)
+            df['EMA10']  = df['close'].ewm(span=10).mean()
+            df['EMA20']  = df['close'].ewm(span=20).mean()
+            df['EMA50']  = df['close'].ewm(span=50).mean()
             df['EMA200'] = df['close'].ewm(span=200).mean()
-            close = df['close'].iloc[-1]
-            ema10, ema20, ema50, ema200 = df['EMA10'].iloc[-1], df['EMA20'].iloc[-1], df['EMA50'].iloc[-1], df['EMA200'].iloc[-1]
-            interp = []
-            if close > ema10 and close > ema20 and close > ema50 and close > ema200:
-                interp.append("🟢 Price above all EMAs – Strong bullish trend.")
-            elif close > ema10 and close > ema20:
-                interp.append("🟡 Price above short‑term EMAs – Short‑term bullish.")
-            else:
-                interp.append("🔴 Price below 10 EMA – Weak short‑term momentum.")
-            if ema10 > ema20 > ema50:
-                interp.append("📈 Golden cross alignment (10>20>50) – Trend is up.")
-            elif ema10 < ema20 < ema50:
-                interp.append("📉 Death cross alignment – Trend is down.")
-            pct_from_200 = (close - ema200) / ema200 * 100
-            interp.append(f"📊 Price is {pct_from_200:.1f}% {'above' if close > ema200 else 'below'} 200 EMA – {'Long‑term uptrend' if close > ema200 else 'Long‑term downtrend'}.")
-            st.info("\n".join(interp))
-            show_vwap = st.checkbox("Show VWAP (Volume Weighted Avg Price)", value=False)
+            close_now = df['close'].iloc[-1]
+            e10,e20,e50,e200 = df['EMA10'].iloc[-1],df['EMA20'].iloc[-1],df['EMA50'].iloc[-1],df['EMA200'].iloc[-1]
+            msgs = []
+            if close_now > e10 > e20 > e50 > e200: msgs.append("🟢 Above all EMAs — strong uptrend.")  # noqa: E701,E702,E741
+            elif close_now > e10 and close_now > e20: msgs.append("🟡 Above short-term EMAs — short-term bullish.")  # noqa: E701,E702,E741
+            else: msgs.append("🔴 Below EMA10 — weak momentum.")  # noqa: E701,E702,E741
+            if e10 > e20 > e50: msgs.append("📈 Golden cross alignment (10>20>50).")  # noqa: E701,E702,E741
+            elif e10 < e20 < e50: msgs.append("📉 Death cross — trend is down.")  # noqa: E701,E702,E741
+            msgs.append(f"📊 {((close_now-e200)/e200*100):.1f}% from 200 EMA.")
+            st.info("\n".join(msgs))
             fig = go.Figure()
-            fig.add_trace(go.Candlestick(x=df.index, open=df['open'], high=df['high'], low=df['low'], close=df['close'], name="Price"))
-            fig.add_trace(go.Scatter(x=df.index, y=df['EMA10'], mode='lines', line=dict(color='green', width=1), name="10 EMA"))
-            fig.add_trace(go.Scatter(x=df.index, y=df['EMA20'], mode='lines', line=dict(color='yellow', width=1), name="20 EMA"))
-            fig.add_trace(go.Scatter(x=df.index, y=df['EMA50'], mode='lines', line=dict(color='purple', width=1), name="50 EMA"))
-            fig.add_trace(go.Scatter(x=df.index, y=df['EMA200'], mode='lines', line=dict(color='red', width=1), name="200 EMA"))
-            if show_vwap:
-                typical = (df['high'] + df['low'] + df['close']) / 3
-                cum_vol = df['volume'].cumsum()
-                cum_pv = (typical * df['volume']).cumsum()
-                vwap_series = cum_pv / cum_vol
-                fig.add_trace(go.Scatter(x=df.index, y=vwap_series, mode='lines', line=dict(color='blue', width=1.5, dash='dot'), name='VWAP'))
-            fig.update_layout(title=f"{selected} – Candlestick with EMAs", xaxis_title="Date", yaxis_title="Price (₹)", height=600)
-            st.plotly_chart(fig, width="stretch")
-            # Technical table
-            rsi = indicators_for_table.get('rsi_14', 50)
-            zscore = indicators_for_table.get('zscore_20', 0)
-            mom = indicators_for_table.get('momentum_5d_pct', 0)
-            vol_ratio = indicators_for_table.get('volume_ratio', 1)
-            typical = (df['high'] + df['low'] + df['close']) / 3
-            cum_vol = df['volume'].cumsum()
-            cum_pv = (typical * df['volume']).cumsum()
-            vwap_last = (cum_pv / cum_vol).iloc[-1]
-            tec_df = pd.DataFrame({
-                "Indicator": ["RSI (14)", "Z‑Score (20)", "5‑day Momentum (%)", "Volume Ratio", "VWAP"],
-                "Value": [f"{rsi:.1f}", f"{zscore:.2f}", f"{mom:.2f}%", f"{vol_ratio:.2f}x", f"₹{vwap_last:.2f}"],
-                "Meaning": [
-                    "Oversold (<30) / Overbought (>70)",
-                    "Extreme (<-2 or >2) suggests mean reversion",
-                    "Bullish if >2%, Bearish if <-2%",
-                    "High (>1.5) confirms moves",
-                    "Above VWAP = premium (sell); below = discount (buy)"
-                ]
-            })
-            st.dataframe(tec_df, width="stretch", hide_index=True)
-        else:
-            st.warning("Not enough historical data.")
-    else:
-        st.info("Select a stock and click 'Analyze & Get Verdict' first.")
+            fig.add_trace(go.Candlestick(x=df.index,open=df['open'],high=df['high'],low=df['low'],close=df['close'],name="Price"))
+            for span, color, name in [(10,'#22c55e','EMA10'),(20,'#eab308','EMA20'),(50,'#a855f7','EMA50'),(200,'#ef4444','EMA200')]:
+                fig.add_trace(go.Scatter(x=df.index,y=df[f'EMA{span}'],mode='lines',line=dict(color=color,width=1),name=name))
+            if st.checkbox("Show VWAP"):
+                tp = (df['high']+df['low']+df['close'])/3
+                fig.add_trace(go.Scatter(x=df.index,y=(tp*df['volume']).cumsum()/df['volume'].cumsum(),
+                                         mode='lines',line=dict(color='#3b82f6',width=1.5,dash='dot'),name='VWAP'))
+            fig.update_layout(title=f"{_sel} — Candlestick + EMAs", height=580,
+                              xaxis_title="Date", yaxis_title="Price (₹)")
+            st.plotly_chart(fig, use_container_width=True)
 
+            rsi_v = ind.get('rsi_14',50); zsc_v=ind.get('zscore_20',0); mom_v=ind.get('momentum_5d_pct',0); vol_v=ind.get('volume_ratio',1)  # noqa: E701,E702,E741
+            tp2 = (df['high']+df['low']+df['close'])/3
+            vwap_v = ((tp2*df['volume']).cumsum()/df['volume'].cumsum()).iloc[-1]
+            st.dataframe(pd.DataFrame({
+                "Indicator":["RSI(14)","Z-Score(20)","Momentum 5d","Volume Ratio","VWAP"],
+                "Value":[f"{rsi_v:.1f}",f"{zsc_v:.2f}",f"{mom_v:.2f}%",f"{vol_v:.2f}x",f"₹{vwap_v:.2f}"],
+                "Signal":["Oversold<30/OB>70","Extreme<-2|>2","Bullish>2%","High>1.5x","Below=discount"],
+            }), hide_index=True, use_container_width=True)
+    else:
+        st.info("Select a stock and click Analyze first.")
+
+# ── Tab 2: Decision Terminal ───────────────────────────────────────────────────
 with tabs[2]:
-    st.subheader("🔍 Universe Stock Categorization")
-    max_scan = st.slider("Number of stocks to scan", 100, 1000, 300, step=100)
-    if st.button("Run Universe Scan"):
+    st.header("🎯 Decision Terminal")
+    st.caption("Conviction score · ATR trade setup · Claude final opinion")
+
+    dt_c1, dt_c2 = st.columns([1,2])
+    with dt_c1:
+        dt_profile = st.selectbox("Trader Profile", list(PROFILES.keys()), key="dt_p")
+        dt_capital = st.number_input("Capital (₹)", value=100_000, step=10_000, key="dt_cap")
+        dt_sym     = st.selectbox("Symbol", symbol_list, key="dt_sym",
+                                   format_func=lambda x: f"{x} – {symbol_map[x]}")
+        run_dt = st.button("▶ Run", use_container_width=True, key="dt_go")
+
+    if run_dt:
+        with st.spinner("Computing…"):
+            _df = fetch_historical(dt_sym, days=100)
+        if _df is not None and len(_df) >= 30:
+            _ind    = ie.compute(_df, dt_sym)
+            _scorer = ConvictionScorer(PROFILES[dt_profile])
+            _res    = _scorer.score(_ind)
+            _atr    = _ind.get("atr_14", _df['close'].iloc[-1]*0.015)
+            _price  = _df['close'].iloc[-1]
+            _setup  = compute_trade_setup(dt_sym, _res.verdict, _price, _atr, dt_capital) \
+                      if _res.verdict in ("BUY","SELL") else None
+            st.session_state["dt_res"]   = _res
+            st.session_state["dt_setup"] = _setup
+            st.session_state["dt_price"] = _price
+            st.session_state["dt_ind"]   = _ind
+            st.session_state["dt_sym"]   = dt_sym
+        else:
+            st.warning("Not enough data.")
+
+    if "dt_res" in st.session_state:
+        r       = st.session_state["dt_res"]
+        setup   = st.session_state["dt_setup"]
+        dt_price= st.session_state["dt_price"]
+        _lbl, _css = _verdict_badge({"BUY":1,"SELL":-1,"HOLD":0}.get(r.verdict, 0))
+
+        with dt_c2:
+            m1,m2,m3 = st.columns(3)
+            m1.metric("Conviction Score", f"{r.score:.1f}/100")
+            m2.markdown(f"<div class='recommendation {_css}' style='font-size:1.1rem'>{_lbl}</div>",
+                        unsafe_allow_html=True)
+            m3.metric("Gates", "✅ All pass" if r.gates_passed else f"❌ {len(r.gate_failures)} failed")
+
+            if not r.gates_passed:
+                for gf in r.gate_failures:
+                    st.warning(f"Gate: {gf}")
+
+            if setup:
+                st.markdown("#### 📐 ATR Trade Setup")
+                s1,s2,s3,s4,s5 = st.columns(5)
+                s1.metric("Entry",  f"₹{setup.entry}")
+                s2.metric("Stop",   f"₹{setup.stop}")
+                s3.metric("Target", f"₹{setup.target}")
+                s4.metric("Qty",    str(setup.quantity))
+                s5.metric("R:R",    f"{setup.rr_ratio}×")
+                st.caption(f"Risk ₹{setup.risk_amount:,.0f} · Reward ₹{setup.reward_amount:,.0f}")
+            else:
+                st.info("No trade setup — HOLD signal.")
+
+            # Component bar chart
+            comp = r.components
+            fig_bar = go.Figure(go.Bar(
+                x=list(comp.values()),
+                y=list(comp.keys()),
+                orientation='h',
+                marker_color=['#22c55e' if v>=0.5 else '#ef4444' for v in comp.values()]
+            ))
+            fig_bar.update_layout(title="Conviction Components (0-1)", height=250,
+                                  xaxis_range=[0,1], margin=dict(t=30,b=10))
+            st.plotly_chart(fig_bar, use_container_width=True)
+
+            # Claude final opinion for Decision Terminal
+            if _claude.available:
+                if st.button("🤖 Get Claude Opinion", key="dt_claude"):
+                    with st.spinner("Asking Claude…"):
+                        _c_ctx = (
+                            f"Symbol: {st.session_state['dt_sym']} | Price: ₹{dt_price:.2f} | "
+                            f"Conviction: {r.score:.0f}/100 | Verdict: {r.verdict} | "
+                            f"Gates passed: {r.gates_passed}\n"
+                            f"Components: {json.dumps({k:round(v,2) for k,v in comp.items()})}"
+                        )
+                        _cop = _claude.get_signal(_c_ctx)
+                    if _cop:
+                        _ca = _cop.get("action","HOLD")
+                        _, _ccss = _verdict_badge({"BUY":1,"SELL":-1,"HOLD":0}.get(_ca,0))
+                        st.markdown(f"<div class='recommendation {_ccss}'>"
+                                    f"Claude: {_ca} · {_cop.get('confidence',0)*100:.0f}%</div>",
+                                    unsafe_allow_html=True)
+                        st.markdown(f"**Reasoning:** {_cop.get('reasoning','')}")
+            else:
+                st.caption("Add ANTHROPIC_API_KEY to .env to enable Claude here.")
+
+# ── Tab 3: Stock Categories ────────────────────────────────────────────────────
+with tabs[3]:
+    st.subheader("🔍 Stock Categorization")
+    max_scan = st.slider("Stocks to scan", 100, 1000, 300, 100)
+    if st.button("Run Scan"):
         all_syms = list(get_all_equity_symbols().keys())
-        categories = defaultdict(list)
-        progress = st.progress(0)
+        cats     = defaultdict(list)
+        prog     = st.progress(0)
         for i, sym in enumerate(all_syms[:max_scan]):
-            progress.progress((i+1)/max_scan)
+            prog.progress((i+1)/max_scan)
             try:
                 df = fetch_historical(sym, days=100)
-                cat = categorize_stock(df)
-                if cat:
-                    categories[cat].append(sym)
+                if df is None or len(df) < 50: continue  # noqa: E701,E702,E741
+                close, vol = df['close'], df['volume']
+                dm   = (close.iloc[-1]-close.iloc[-2])/close.iloc[-2]*100
+                e10  = close.ewm(span=10).mean()
+                e50  = close.ewm(span=50).mean()
+                if dm > 15 and vol.iloc[-1] > 2*vol.iloc[-20:-1].mean():
+                    cats["Buzzing Stock"].append(sym)
+                elif close.iloc[-1]>e10.iloc[-1] and close.iloc[-2]<e10.iloc[-2] and vol.iloc[-1]>vol.iloc[-2]:
+                    cats["Gaining Strength"].append(sym)
+                elif close.iloc[-1]<e50.iloc[-1] and close.iloc[-2]>e50.iloc[-2]:
+                    cats["Losing Momentum"].append(sym)
             except Exception:
                 continue
-        progress.empty()
-        if categories:
-            for cat, syms in categories.items():
-                st.subheader(cat)
-                st.write(", ".join(syms[:20]) + ("..." if len(syms)>20 else ""))
-        else:
+        prog.empty()
+        for cat, syms in cats.items():
+            st.subheader(cat)
+            st.write(", ".join(syms[:20]) + ("…" if len(syms)>20 else ""))
+        if not cats:
             st.info("No stocks matched criteria today.")
 
-with tabs[3]:
-    st.subheader("🚀 Breakout Stocks (Mean‑Reversion)")
-    categories_filter = st.multiselect("Market cap", ["Largecap", "Midcap", "Smallcap", "All"], default=["All"])
-    if st.button("Run Breakout Scanner"):
-        all_syms = list(get_all_equity_symbols().keys())
-        with st.spinner("Scanning in parallel..."):
-            result = scan_breakouts_categorized(all_syms, categories_filter, limit=500, workers=8)
-        for cap, syms in result.items():
-            if cap != "Unknown" and syms:
-                st.write(f"**{cap}:** {', '.join(syms)}")
-        if not any(result.values()):
-            st.info("No breakouts found.")
-    else:
-        st.info("Select categories and click to scan.")
-
+# ── Tab 4: Breakout Scanner ────────────────────────────────────────────────────
 with tabs[4]:
-    st.subheader("🚀 Momentum Breakout Scanner")
-    categories_filter_mom = st.multiselect("Market cap", ["Largecap", "Midcap", "Smallcap", "All"], default=["All"], key="mom_cat")
-    if st.button("Run Momentum Scan"):
-        all_syms = list(get_all_equity_symbols().keys())
-        with st.spinner("Scanning in parallel..."):
-            result = scan_momentum_breakouts(all_syms, categories_filter_mom, limit=500, workers=8)
-        for cap, syms in result.items():
-            if cap != "Unknown" and syms:
-                st.write(f"**{cap}:** {', '.join(syms)}")
-        if not any(result.values()):
-            st.info("No momentum breakouts found.")
-    else:
-        st.info("Select categories and click to scan.")
+    st.subheader("🔥 Breakout Scanner")
+    cap_filter_bo = st.multiselect("Market cap", ["Largecap","Midcap","Smallcap","All"], default=["All"])
+    if st.button("Run Breakout Scan"):
+        syms = list(get_all_equity_symbols().keys())
+        with st.spinner("Scanning…"):
+            result = scan_parallel(syms, is_breakout_candidate, 120, cap_filter_bo)
+        found = False
+        for cap, s in result.items():
+            if cap != "Unknown" and s:
+                st.write(f"**{cap}:** {', '.join(s)}")
+                found = True
+        if not found: st.info("No breakouts found.")  # noqa: E701,E702,E741
 
+# ── Tab 5: Momentum Scanner ────────────────────────────────────────────────────
 with tabs[5]:
-    st.subheader("🗺️ Market Heatmap (Kite Data)")
-    cap_choice = st.radio("Select market cap", ["Largecap", "Midcap", "Smallcap", "All"], horizontal=True)
-    max_symbols = st.slider("Max symbols to display", 50, 500, 200, step=50)
+    st.subheader("🚀 Momentum Breakout Scanner")
+    cap_filter_mo = st.multiselect("Market cap", ["Largecap","Midcap","Smallcap","All"], default=["All"], key="mo_cap")
+    if st.button("Run Momentum Scan"):
+        syms = list(get_all_equity_symbols().keys())
+        with st.spinner("Scanning…"):
+            result = scan_parallel(syms, is_momentum_breakout, 90, cap_filter_mo)
+        found = False
+        for cap, s in result.items():
+            if cap != "Unknown" and s:
+                st.write(f"**{cap}:** {', '.join(s)}")
+                found = True
+        if not found: st.info("No momentum breakouts found.")  # noqa: E701,E702,E741
+
+# ── Tab 6: Heatmap ─────────────────────────────────────────────────────────────
+with tabs[6]:
+    st.subheader("🗺️ Market Heatmap")
+    cap_hm  = st.radio("Market cap", ["Largecap","Midcap","Smallcap","All"], horizontal=True)
+    max_hm  = st.slider("Max symbols", 50, 500, 200, 50)
     if st.button("Refresh Heatmap"):
-        df_heat = get_heatmap_data(cap_choice, max_symbols)
+        df_heat = get_heatmap_data(cap_hm, max_hm)
         if not df_heat.empty:
             fig = px.treemap(df_heat, path=['Stock'], values='Change %', color='Change %',
                              color_continuous_scale=['red','yellow','green'],
-                             title=f"{cap_choice} – Daily % Change (Kite)")
+                             title=f"{cap_hm} — Daily % Change")
             fig.update_traces(textinfo="label+value", textposition="middle center")
-            st.plotly_chart(fig, width="stretch")
-            st.caption(f"Showing {len(df_heat)} stocks; data from Kite historical.")
+            st.plotly_chart(fig, use_container_width=True)
         else:
-            st.error("No data retrieved. Check Kite connection or symbol availability.")
-    else:
-        st.info("Click 'Refresh Heatmap' to fetch latest changes from Kite.")
+            st.error("No data. Check Kite connection.")
 
-with tabs[6]:
-    st.subheader("🤖 Generate Daily Street Pulse")
-    if st.button("Generate Today's Pulse"):
-        with st.spinner("Generating bullet-point summary..."):
+# ── Tab 7: Daily Pulse ─────────────────────────────────────────────────────────
+with tabs[7]:
+    st.subheader("🤖 Daily Street Pulse (DeepSeek)")
+    if st.button("Generate Pulse"):
+        with st.spinner("Generating…"):
             pulse = generate_auto_pulse()
         st.markdown(f"<div class='card'>{pulse}</div>", unsafe_allow_html=True)
 
-with tabs[7]:
-    st.subheader("🌍 Global Indices")
-    _gl = get_global_indices()
-    if _gl:
-        _gc1, _gc2, _gc3 = st.columns(3)
-        for _gi, (name, val) in enumerate(_gl.items()):
-            _chg = val['change']
-            _delta_color = "normal" if _chg >= 0 else "inverse"
-            [_gc1, _gc2, _gc3][_gi % 3].metric(name, f"{val['price']:.1f}", f"{_chg:+.2f}%", delta_color="normal" if _chg >= 0 else "inverse")
-    else:
-        st.info("Global index data unavailable.")
-
+# ── Tab 8: Swarm Intelligence ──────────────────────────────────────────────────
 with tabs[8]:
-    st.header("🌅 Pre-Market Report (Moneycontrol)")
-    if st.button("Refresh Report"):
-        with st.spinner("Fetching latest pre-market data..."):
-            try:
-                report, error = get_moneycontrol_premarket()
-                if report:
-                    st.markdown(f"<div class='card'>{report}</div>", unsafe_allow_html=True)
-                    st.caption("Source: Moneycontrol. Data may be delayed.")
-                else:
-                    st.error(f"Moneycontrol scraping failed: {error}")
-                    st.subheader("📊 Global Cues (Raw data)")
-                    global_data = get_global_indices()
-                    for name, val in global_data.items():
-                        st.write(f"{name}: {val['price']:.1f} ({val['change']:+.2f}%)")
-                    st.info("Could not fetch pre‑market report from Moneycontrol. Try again later or check the link manually.")
-            except Exception as e:
-                st.error(f"Unexpected error: {str(e)}")
-                st.info("You can check [Moneycontrol Pre-market](https://www.moneycontrol.com/pre-market/) manually.")
-    else:
-        st.info("Click 'Refresh Report' to get the latest pre-market data from Moneycontrol.")
-
-with tabs[9]:
-    st.header("🏦 Quant Hedge Fund – One Click")
-    if st.button("🚀 Run All Quant Models (Auto Fetch Data)"):
-        if selected:
-            with st.spinner("Fetching data and analyzing..."):
-                df = fetch_historical(selected, days=300)
-                if df is None or len(df) < 200:
-                    st.error(f"Could not fetch enough data for {selected} from Kite. Ensure Kite session is active and symbol has sufficient history.")
-                else:
-                    st.success(f"Data fetched from Kite ({len(df)} days).")
-                    if len(df) < 252:
-                        st.warning(f"⚠️ Only {len(df)} days (less than ideal 252). Momentum signal may be less reliable.")
-                    close = df['close']
-                    if len(close) >= 200:
-                        ret = (close.iloc[-1] - close.iloc[-200]) / close.iloc[-200]
-                        daily_vol = close.pct_change().rolling(60).std().iloc[-1] * np.sqrt(252) if len(close) >= 60 else 0
-                        if daily_vol and daily_vol != 0:
-                            mom_signal = np.clip(ret / daily_vol, -1, 1)
-                            mom_verdict = "🟢 BUY" if mom_signal > 0.3 else "🔴 SELL" if mom_signal < -0.3 else "⚪ HOLD"
-                        else:
-                            mom_signal, mom_verdict = 0, "Insufficient volatility data"
-                    else:
-                        mom_signal, mom_verdict = 0, "Insufficient data (need 200 days)"
-                    if len(df) >= 60:
-                        returns = df['close'].pct_change().dropna().iloc[-60:]
-                        realized_vol = returns.std() * np.sqrt(252)
-                        mult = np.clip(0.20 / realized_vol, 0.2, 3.0) if realized_vol != 0 else 1.0
-                        vol_verdict = "📈 Increase size" if mult > 1.2 else "📉 Reduce size" if mult < 0.8 else "✅ Normal size"
-                    else:
-                        mult = 1.0
-                        vol_verdict = "Insufficient data (need 60 days)"
-                    samples = get_symbols_by_market_cap("Largecap", 50)
-                    best_pair = None
-                    best_corr = 0
-                    for sym in samples[:20]:
-                        if sym == selected:
-                            continue
-                        df2 = fetch_historical(sym, days=250)
-                        if df2 is None or len(df2) < 200:
-                            continue
-                        close2 = df2['close']
-                        common = close.index.intersection(close2.index)
-                        if len(common) < 100:
-                            continue
-                        corr = close.loc[common].corr(close2.loc[common])
-                        if abs(corr) > abs(best_corr):
-                            best_corr = corr
-                            best_pair = sym
-                    if best_pair:
-                        common = close.index.intersection(close2.index)
-                        ratio = close.loc[common] / close2.loc[common]
-                        zscore = (ratio.iloc[-1] - ratio.mean()) / ratio.std()
-                        if zscore > 2:
-                            pair_verdict = f"🔴 SELL {selected} / BUY {best_pair} (expensive)"
-                        elif zscore < -2:
-                            pair_verdict = f"🟢 BUY {selected} / SELL {best_pair} (cheap)"
-                        else:
-                            pair_verdict = f"⚪ HOLD – Fairly priced (z-score {zscore:.2f})"
-                    else:
-                        pair_verdict = "No strongly correlated stock found."
-                    regime, alloc = macro_regime_allocation_explained()
-                    st.subheader("📊 Results")
-                    st.markdown(f"""
-- **Time Series Momentum:** {mom_signal:.2f} – {mom_verdict}
-- **Volatility Targeting:** Multiplier = {mult:.2f}x – {vol_verdict}
-- **Relative Value Spread:** {pair_verdict}
-- **Macro Regime:** {regime} – Allocation: {alloc}
-""")
-        else:
-            st.warning("Please select a stock from the sidebar first.")
-    else:
-        st.info("Click the button to automatically fetch data (Kite only) and run all four quant models.")
-
-with tabs[10]:
-    st.header("🐟 Swarm Intelligence – 5 Investor Personas")
-    news = st.text_area("📰 News or event", height=100, placeholder="HDFC Life profit up 4%...")
+    st.header("🐟 Swarm Intelligence — 5 Personas")
+    news_input = st.text_area("News / event", height=80,
+                               placeholder="HDFC Life profit up 4%…")
     if st.button("Run Swarm"):
-        if not news:
-            st.warning("Enter news.")
+        if not news_input:
+            st.warning("Enter some news.")
         else:
-            with st.spinner("Contacting personas..."):
-                results = swarm_consensus(selected if 'selected' in locals() else "RELIANCE", news)
-            for r in results:
-                st.markdown(f"**{r['persona']}** – {r['verdict']} (conf {r['confidence']}%)  \n*{r['reason']}*")
-            buy = sum(1 for r in results if r['verdict']=="BUY")
-            sell = sum(1 for r in results if r['verdict']=="SELL")
-            hold = sum(1 for r in results if r['verdict']=="HOLD")
-            st.info(f"Consensus: BUY {buy} | SELL {sell} | HOLD {hold}")
+            with st.spinner("Asking 5 personas…"):
+                sw_results = swarm_consensus(selected, news_input)
+            for r in sw_results:
+                col_a, col_b = st.columns([3,7])
+                with col_a:
+                    _, css = _verdict_badge({"BUY":1,"SELL":-1,"HOLD":0}.get(r['verdict'],0))
+                    st.markdown(f"**{r['persona']}**")
+                    st.markdown(f"<div class='recommendation {css}' style='font-size:1rem;padding:.4rem'>"
+                                f"{r['verdict']} {r['confidence']}%</div>", unsafe_allow_html=True)
+                with col_b:
+                    st.caption(r['reason'])
+            buy_  = sum(1 for r in sw_results if r['verdict']=="BUY")
+            sell_ = sum(1 for r in sw_results if r['verdict']=="SELL")
+            hold_ = sum(1 for r in sw_results if r['verdict']=="HOLD")
+            st.info(f"Consensus → BUY: {buy_} | SELL: {sell_} | HOLD: {hold_}")
 
-with tabs[11]:
-    st.header("📊 Fundamentals & Ownership")
-    if selected:
-        with st.spinner("Fetching company data..."):
-            ticker = yf.Ticker(selected + ".NS")
-            info = ticker.info
-            st.subheader("🏢 Company Overview")
-            st.write(f"**Name:** {info.get('longName', selected)}")
-            st.write(f"**Sector:** {info.get('sector', 'N/A')}  |  **Industry:** {info.get('industry', 'N/A')}")
-            st.write(f"**Description:** {info.get('longBusinessSummary', 'No description available.')[:500]}...")
-            st.write(f"**Website:** {info.get('website', 'N/A')}")
-        st.subheader("📈 Shareholding Pattern (Screener.in)")
-        quarters, promoter_data, fii_data, dii_data, err = scrape_screener_shareholding(selected)
-        if err:
-            st.warning(f"Could not fetch shareholding data: {err}")
-            st.markdown(f"👉 [View on Screener.in](https://www.screener.in/company/{selected.upper()}/)")
-        else:
-            if quarters and promoter_data and len(promoter_data) > 0:
-                latest_promoter = promoter_data[-1] if promoter_data else 0
-                st.metric("Promoter Holding (latest)", f"{latest_promoter:.2f}%")
-                min_len = min(len(quarters), len(fii_data), len(dii_data))
-                if min_len > 0:
-                    trend_df = pd.DataFrame({
-                        "Quarter": quarters[:min_len],
-                        "FII (%)": fii_data[:min_len],
-                        "DII (%)": dii_data[:min_len]
-                    }).dropna()
-                    if not trend_df.empty:
-                        fig_trend = px.line(trend_df, x="Quarter", y=["FII (%)", "DII (%)"],
-                                            title="FII / DII Investment Trend",
-                                            markers=True, color_discrete_map={"FII (%)": "orange", "DII (%)": "green"})
-                        st.plotly_chart(fig_trend, width="stretch")
-                        if len(fii_data) >= 2:
-                            fii_change = fii_data[-1] - fii_data[-2]
-                            dii_change = dii_data[-1] - dii_data[-2]
-                            st.write(f"**FII change:** +{fii_change:.2f}%" if fii_change>0 else f"**FII change:** {fii_change:.2f}%")
-                            st.write(f"**DII change:** +{dii_change:.2f}%" if dii_change>0 else f"**DII change:** {dii_change:.2f}%")
-                    else:
-                        st.info("Insufficient quarterly data for FII/DII trend.")
-                else:
-                    st.info("No quarterly data available for trend.")
-            else:
-                st.warning("No shareholding data found for this symbol.")
-                st.markdown(f"👉 [Check manually on Screener.in](https://www.screener.in/company/{selected.upper()}/)")
-        st.subheader("📞 Latest Concall Summary")
-        concall = scrape_screener_concall(selected)
-        if "No concall" in concall or "not found" in concall:
-            st.warning(concall)
-            st.markdown(f"👉 [Check announcements on Screener.in](https://www.screener.in/company/{selected.upper()}/)")
-        else:
-            st.markdown(concall)
-        st.caption("Source: Screener.in (management commentary). May not be available for all stocks.")
+# ── Tab 9: Global Markets ──────────────────────────────────────────────────────
+with tabs[9]:
+    st.subheader("🌍 Global Indices")
+    gl = get_global_indices()
+    if gl:
+        gc = st.columns(3)
+        for i, (name, val) in enumerate(gl.items()):
+            gc[i%3].metric(name, f"{val['price']:.1f}", f"{val['change']:+.2f}%",
+                           delta_color="normal" if val['change']>=0 else "inverse")
     else:
-        st.info("Select a stock from the sidebar first.")
+        st.info("Unavailable.")
 
+# ── Tab 10: Pre-Market Report ──────────────────────────────────────────────────
+with tabs[10]:
+    st.header("🌅 Pre-Market Report")
+    if st.button("Fetch Moneycontrol"):
+        with st.spinner():
+            report, err = get_moneycontrol_premarket()
+        if report:
+            st.markdown(f"<div class='card'>{report}</div>", unsafe_allow_html=True)
+        else:
+            st.error(f"Failed: {err}")
+            st.subheader("Raw Global Cues")
+            for n,v in get_global_indices().items():
+                st.write(f"{n}: {v['price']:.1f} ({v['change']:+.2f}%)")
+
+# ── Tab 11: Quant Hedge Fund ───────────────────────────────────────────────────
+with tabs[11]:
+    st.header("🏦 Quant Hedge Fund")
+    if st.button("🚀 Run All Quant Models"):
+        with st.spinner("Fetching & computing…"):
+            df = fetch_historical(selected, days=300)
+        if df is None or len(df) < 60:
+            st.error("Need at least 60 days of data.")
+        else:
+            close = df['close']
+            # Time-series momentum
+            if len(close) >= 200:
+                ret     = (close.iloc[-1]-close.iloc[-200])/close.iloc[-200]
+                dv      = close.pct_change().rolling(60).std().iloc[-1]*np.sqrt(252)
+                msig    = float(np.clip(ret/dv, -1, 1)) if dv else 0
+                mv      = "🟢 BUY" if msig>0.3 else ("🔴 SELL" if msig<-0.3 else "⚪ HOLD")
+            else:
+                msig, mv = 0.0, "Insufficient (need 200d)"
+
+            # Volatility targeting
+            rv   = close.pct_change().dropna().iloc[-60:].std()*np.sqrt(252)
+            mult = float(np.clip(0.20/rv, 0.2, 3.0)) if rv else 1.0
+            vv   = "📈 Increase size" if mult>1.2 else ("📉 Reduce size" if mult<0.8 else "✅ Normal size")
+
+            # Pair trade (best largecap correlation)
+            best_pair, best_corr, close2 = None, 0, None
+            for sym in get_symbols_by_market_cap("Largecap", 30):
+                if sym == selected: continue  # noqa: E701,E702,E741
+                df2 = fetch_historical(sym, days=250)
+                if df2 is None or len(df2)<100: continue  # noqa: E701,E702,E741
+                common = close.index.intersection(df2['close'].index)
+                if len(common)<100: continue  # noqa: E701,E702,E741
+                corr = close.loc[common].corr(df2['close'].loc[common])
+                if abs(corr) > abs(best_corr):
+                    best_corr, best_pair, close2 = corr, sym, df2['close']
+            if best_pair and close2 is not None:
+                common = close.index.intersection(close2.index)
+                ratio  = close.loc[common]/close2.loc[common]
+                zscore = (ratio.iloc[-1]-ratio.mean())/ratio.std()
+                pv     = (f"🔴 SELL {selected}/BUY {best_pair}" if zscore>2 else
+                          f"🟢 BUY {selected}/SELL {best_pair}" if zscore<-2 else
+                          f"⚪ HOLD (z={zscore:.2f})")
+            else:
+                pv = "No correlated pair found."
+
+            regime, alloc = macro_regime_allocation()
+            st.markdown(f"""
+- **Momentum Signal:** `{msig:.2f}` → {mv}
+- **Vol Targeting Mult:** `{mult:.2f}x` → {vv}
+- **Pair Trade:** {pv}
+- **Macro Regime:** {regime} — {alloc}
+""")
+
+# ── Tab 12: Fundamentals & Ownership ─────────────────────────────────────────
 with tabs[12]:
+    st.header("📊 Fundamentals & Ownership")
+    f_sym = st.selectbox("Symbol", symbol_list, key="fund_sym",
+                          format_func=lambda x: f"{x} – {symbol_map[x]}")
+    if st.button("Load", key="fund_load"):
+        with st.spinner():
+            info = yf.Ticker(f_sym+".NS").info
+        st.subheader("🏢 Overview")
+        st.write(f"**{info.get('longName',f_sym)}** | {info.get('sector','N/A')} → {info.get('industry','N/A')}")
+        st.write(info.get('longBusinessSummary','')[:500] + "…")
+
+        st.subheader("📈 Shareholding (Screener.in)")
+        qtr,p,fi,di,err = scrape_screener_shareholding(f_sym)
+        if err:
+            st.warning(err)
+        else:
+            if p: st.metric("Promoter Holding", f"{p[-1]:.2f}%")  # noqa: E701,E702,E741
+            if qtr and fi and di:
+                mn = min(len(qtr),len(fi),len(di))
+                td = pd.DataFrame({"Quarter":qtr[:mn],"FII (%)":fi[:mn],"DII (%)":di[:mn]}).dropna()
+                if not td.empty:
+                    fig_fi = px.line(td, x="Quarter", y=["FII (%)","DII (%)"],
+                                     markers=True, color_discrete_map={"FII (%)":"orange","DII (%)":"green"})
+                    st.plotly_chart(fig_fi, use_container_width=True)
+
+        st.subheader("📞 Concall Summary")
+        cc = scrape_screener_concall(f_sym)
+        st.markdown(cc)
+
+# ── Tab 13: Paper Trading ──────────────────────────────────────────────────────
+with tabs[13]:
     st.header("📋 Paper Trading Dashboard")
     init_db()
 
-    # --- Summary metrics ---
-    _summary = get_trading_summary()
-    _mc1, _mc2, _mc3, _mc4 = st.columns(4)
-    _mc1.metric("Total P&L", f"₹{_summary['total_pnl']:,.2f}",
-                delta=f"₹{_summary['total_pnl']:,.2f}", delta_color="normal" if _summary['total_pnl'] >= 0 else "inverse")
-    _mc2.metric("Win Rate", f"{_summary['win_rate']:.1f}%")
-    _mc3.metric("Total Trades", str(_summary['num_trades']))
-    _mc4.metric("Best / Worst", f"₹{_summary['best_trade']:,.0f} / ₹{_summary['worst_trade']:,.0f}")
+    # Summary metrics
+    summ = get_trading_summary()
+    m1,m2,m3,m4 = st.columns(4)
+    m1.metric("Total P&L",   f"₹{summ['total_pnl']:,.2f}",
+              delta=f"₹{summ['total_pnl']:,.2f}",
+              delta_color="normal" if summ['total_pnl']>=0 else "inverse")
+    m2.metric("Win Rate",    f"{summ['win_rate']:.1f}%")
+    m3.metric("Trades",      str(summ['num_trades']))
+    m4.metric("Best/Worst",  f"₹{summ['best_trade']:,.0f} / ₹{summ['worst_trade']:,.0f}")
 
-    st.divider()
-
-    # --- Equity curve ---
-    _eq_df = get_equity_curve()
-    if not _eq_df.empty:
+    # Equity curve
+    eq_df = get_equity_curve()
+    if not eq_df.empty:
         st.subheader("📈 Equity Curve")
-        _fig_eq = go.Figure()
-        _fig_eq.add_trace(go.Scatter(
-            x=_eq_df['date'], y=_eq_df['equity'],
+        fig_eq = go.Figure(go.Scatter(
+            x=eq_df['date'], y=eq_df['equity'],
             mode='lines+markers', fill='tozeroy',
             line=dict(color='#2563eb', width=2),
-            fillcolor='rgba(37,99,235,0.08)',
-            name='Equity'
+            fillcolor='rgba(37,99,235,.08)'
         ))
-        _fig_eq.update_layout(height=280, margin=dict(t=20, b=20), xaxis_title="Date", yaxis_title="Equity (₹)")
-        st.plotly_chart(_fig_eq, width="stretch")
-    else:
-        st.info("No equity curve data yet. Trades will populate this chart.")
+        fig_eq.update_layout(height=260, margin=dict(t=10,b=10),
+                             xaxis_title="Date", yaxis_title="Equity (₹)")
+        st.plotly_chart(fig_eq, use_container_width=True)
 
     st.divider()
+    pt_c1, pt_c2 = st.columns(2)
 
-    # --- Open positions ---
-    st.subheader("🟢 Open Positions")
-    open_positions = get_open_positions()
-    if not open_positions.empty:
-        def _color_direction(val):
-            return "color: #16a34a; font-weight: 700" if val == "BUY" else "color: #dc2626; font-weight: 700"
-        _op_display = open_positions[['symbol', 'entry_date', 'entry_price', 'quantity', 'direction']].copy()
-        st.dataframe(
-            _op_display.style.applymap(_color_direction, subset=['direction']),
-            width="stretch", hide_index=True
-        )
-    else:
-        st.info("No open positions.")
+    # Open positions
+    with pt_c1:
+        st.subheader("🟢 Open Positions")
+        op = get_open_positions()
+        if not op.empty:
+            def _cd(v): return "color:#16a34a;font-weight:700" if v=="BUY" else "color:#dc2626;font-weight:700"
+            st.dataframe(op[['symbol','entry_date','entry_price','quantity','direction']]
+                         .style.applymap(_cd, subset=['direction']),
+                         hide_index=True, use_container_width=True)
+        else:
+            st.info("No open positions.")
 
-    # --- Closed trades ---
-    st.subheader("📜 Trade History")
-    closed_positions = get_closed_positions()
-    if not closed_positions.empty:
-        _cp_display = closed_positions[['symbol', 'entry_date', 'exit_date', 'entry_price', 'exit_price', 'quantity', 'direction', 'pnl']].copy()
-        _cp_display['pnl'] = _cp_display['pnl'].round(2)
-
-        def _color_pnl(val):
-            return "color: #16a34a; font-weight: 700" if val > 0 else ("color: #dc2626; font-weight: 700" if val < 0 else "")
-
-        st.dataframe(
-            _cp_display.style.applymap(_color_pnl, subset=['pnl']),
-            width="stretch", hide_index=True
-        )
-    else:
-        st.info("No closed trades yet.")
+    # Closed trades
+    with pt_c2:
+        st.subheader("📜 Trade History")
+        cp = get_closed_positions()
+        if not cp.empty:
+            cp2 = cp[['symbol','entry_date','exit_date','entry_price','exit_price','quantity','pnl']].copy()
+            cp2['pnl'] = cp2['pnl'].round(2)
+            def _cpnl(v): return "color:#16a34a;font-weight:700" if v>0 else ("color:#dc2626;font-weight:700" if v<0 else "")
+            st.dataframe(cp2.style.applymap(_cpnl, subset=['pnl']),
+                         hide_index=True, use_container_width=True)
+        else:
+            st.info("No closed trades.")
 
     st.divider()
-
-    # --- Execute paper trade ---
     st.subheader("⚡ Execute Paper Trade")
-    if selected:
-        if st.button("▶ Run Signal & Trade", width="stretch"):
-            with st.spinner(f"Analysing {selected}…"):
-                verdict = get_stock_verdict(selected)
-            if "error" in verdict:
-                st.error(verdict["error"])
-            else:
-                dir_label = {1: "BUY", -1: "SELL", 0: "HOLD"}[verdict['direction']]
-                color_cls = "buy" if verdict['direction'] == 1 else "sell" if verdict['direction'] == -1 else "hold"
-                st.markdown(f"<div class='recommendation {color_cls}'>{dir_label} · Confidence {verdict['confidence']:.1f}%</div>", unsafe_allow_html=True)
-                if verdict['direction'] == 1:
-                    existing = open_positions[open_positions['symbol'] == selected]
-                    if existing.empty:
-                        open_position(selected, verdict['price'], 100, "BUY", datetime.now().strftime("%Y-%m-%d"))
-                        st.success(f"Opened BUY position for {selected} at ₹{verdict['price']:.2f}")
-                    else:
-                        st.info("Position already open for this symbol.")
-                elif verdict['direction'] == -1:
-                    _closed_any = False
-                    for _idx, _row in open_positions.iterrows():
-                        if _row['symbol'] == selected:
-                            close_position(_row['id'], verdict['price'], datetime.now().strftime("%Y-%m-%d"))
-                            st.success(f"Closed position for {selected} at ₹{verdict['price']:.2f}")
-                            _closed_any = True
-                    if not _closed_any:
-                        st.info("No open position to close.")
+    pt_sym = st.selectbox("Symbol", symbol_list, key="pt_sym",
+                           format_func=lambda x: f"{x} – {symbol_map[x]}")
+    if st.button("▶ Run Signal & Trade", use_container_width=True):
+        with st.spinner(f"Analysing {pt_sym}…"):
+            v2 = get_stock_verdict(pt_sym)
+        if "error" in v2:
+            st.error(v2["error"])
+        else:
+            dl, css2 = _verdict_badge(v2['direction'])
+            st.markdown(f"<div class='recommendation {css2}'>{dl} · {v2['confidence']:.1f}%</div>",
+                        unsafe_allow_html=True)
+            open_pos = get_open_positions()
+            if v2['direction'] == 1:
+                if open_pos[open_pos['symbol']==pt_sym].empty:
+                    open_position(pt_sym, v2['price'], 100, "BUY", datetime.now().strftime("%Y-%m-%d"))
+                    st.success(f"BUY opened: {pt_sym} @ ₹{v2['price']:.2f}")
                 else:
-                    st.info("Signal: HOLD — no action taken.")
-    else:
-        st.info("Select a stock from the sidebar first.")
+                    st.info("Position already open.")
+            elif v2['direction'] == -1:
+                closed = False
+                for _, row in open_pos.iterrows():
+                    if row['symbol'] == pt_sym:
+                        close_position(row['id'], v2['price'], datetime.now().strftime("%Y-%m-%d"))
+                        st.success(f"Position closed: {pt_sym} @ ₹{v2['price']:.2f}")
+                        closed = True
+                if not closed:
+                    st.info("No open position to close.")
+            else:
+                st.info("HOLD — no action.")
