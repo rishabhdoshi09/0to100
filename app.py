@@ -22,8 +22,12 @@ from features.volume_profile import VolumeProfile
 from signals.composite_signal import CompositeSignal
 from features.market_structure import is_recent_swing_breakout
 from paper_trading import init_db, open_position, close_position, get_open_positions, get_closed_positions, get_equity_curve, get_trading_summary
+from llm.claude_client import ClaudeClient
 
 load_dotenv()
+
+# Guarded Claude instance — no-op when ANTHROPIC_API_KEY is absent
+_claude = ClaudeClient()
 
 st.set_page_config(page_title="Prism Quant", layout="wide", initial_sidebar_state="expanded")
 
@@ -875,6 +879,28 @@ if analyze and selected:
                 st.info("Not enough data for volume profile (need 50+ days).")
         with st.expander("🧠 Past Memory (same stock)"):
             st.markdown(verdict['past_memory'])
+        with st.expander("🤖 Claude Final Signal (Anthropic)", expanded=False):
+            if not _claude.available:
+                st.info("ANTHROPIC_API_KEY not set — Claude signal disabled. Add key to .env to enable.")
+            elif st.button("Ask Claude", key="claude_ask"):
+                with st.spinner("Calling Claude…"):
+                    _ctx = (
+                        f"Symbol: {selected} | Price: ₹{verdict['price']:.2f} | "
+                        f"Composite signal: {verdict['signal']:.3f} | "
+                        f"Confidence: {verdict['confidence']:.1f}% | "
+                        f"Direction: {dir_text}\n\n"
+                        f"DeepSeek debate summary:\n{verdict['debate'][:800]}"
+                    )
+                    _claude_sig = _claude.get_signal(_ctx)
+                if _claude_sig:
+                    _ca = _claude_sig.get("action", "HOLD")
+                    _cc = _claude_sig.get("confidence", 0)
+                    _cs_color = "buy" if _ca == "BUY" else "sell" if _ca == "SELL" else "hold"
+                    st.markdown(f"<div class='recommendation {_cs_color}'>{_ca} · {_cc*100:.0f}%</div>", unsafe_allow_html=True)
+                    st.markdown(f"**Reasoning:** {_claude_sig.get('reasoning', '')}")
+                    st.caption(f"Sentiment score: {_claude_sig.get('sentiment_score', 0):.2f}")
+                else:
+                    st.warning("Claude returned no signal — check API key or logs.")
         update_memory(selected, dir_text, verdict['confidence'], verdict['price'])
         st.success("Decision saved to memory.")
 
