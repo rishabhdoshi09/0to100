@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import pandas as pd
+import plotly.graph_objects as go
 import streamlit as st
 
 from sq_ai.ui._api import get, post
@@ -80,3 +81,45 @@ def render() -> None:
     if st.button("Run cycle now"):
         with st.spinner("running…"):
             st.json(post("/api/cycle/run"))
+
+    # --- Equity curve --------------------------------------------------------
+    st.divider()
+    st.subheader("Equity curve")
+    eq_data = get("/api/equity") or []
+    if not eq_data:
+        st.caption("No equity history yet — equity is recorded after each decision cycle.")
+    else:
+        eq_df = pd.DataFrame(eq_data)
+        eq_df["date"] = pd.to_datetime(eq_df["date"])
+        initial = eq_df["equity"].iloc[0]
+        eq_df["return_pct"] = (eq_df["equity"] / initial - 1) * 100
+
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(
+            x=eq_df["date"], y=eq_df["equity"],
+            name="Equity", line={"color": "#00b4d8", "width": 2},
+            hovertemplate="₹%{y:,.0f}<extra>Equity</extra>",
+        ))
+        fig.add_trace(go.Scatter(
+            x=eq_df["date"], y=eq_df["cash"],
+            name="Cash", line={"color": "#90e0ef", "width": 1.5, "dash": "dot"},
+            hovertemplate="₹%{y:,.0f}<extra>Cash</extra>",
+        ))
+        fig.update_layout(
+            height=320,
+            margin={"l": 0, "r": 0, "t": 24, "b": 0},
+            legend={"orientation": "h", "yanchor": "bottom", "y": 1.02},
+            yaxis={"tickprefix": "₹", "tickformat": ",.0f"},
+            xaxis={"showgrid": False},
+            hovermode="x unified",
+        )
+        st.plotly_chart(fig, use_container_width=True)
+
+        latest_ret = eq_df["return_pct"].iloc[-1]
+        peak = eq_df["equity"].max()
+        trough_after_peak = eq_df.loc[eq_df["equity"].idxmax():, "equity"].min()
+        max_dd = (trough_after_peak / peak - 1) * 100 if peak else 0.0
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Total return", f"{latest_ret:+.2f}%")
+        c2.metric("Peak equity", f"₹{peak:,.0f}")
+        c3.metric("Max drawdown", f"{max_dd:.2f}%")

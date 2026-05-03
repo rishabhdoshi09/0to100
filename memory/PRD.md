@@ -70,6 +70,30 @@ backtester, decision engine, walk-forward, screener, stock research.
 * Real Anthropic + DeepSeek calls (placeholder keys → fallback paths).
 * Daily PDF on real network (yfinance for index data — sandbox blocks it).
 
+## Tasks done (2026-05-03) — P0 complete + P1.1 done
+
+### P0 (all items closed)
+* **P0.1 – Claude model fix**: `DEFAULT_MODEL` in `llm_clients.py`
+  `claude-3-sonnet-20240229` (404 since 2024-07-21) → `claude-haiku-4-5-20251001`.
+  Cost projection ~$1.25/month (780 calls/market-day at Haiku pricing), well under $5 cap.
+  Created `0to100/.env.example` with all env vars + cost guidance. `CLAUDE_MODEL` override documented.
+* **P0.2 – NewsAPI caching**: `@cached("news", ttl_seconds=1800)` on `fetch_news`.
+  Verified: 2nd same-query call hits in 0.3 ms (vs 3.6 ms first call); keys are
+  query-isolated (RELIANCE ≠ TCS). Free tier: ~20 req/day vs 100-req limit.
+* **Lint sweep**: `ruff --fix` → 0 errors; `pyproject.toml` excludes notebook.
+  Removed unused `longs_in_downtrend` in `test_backtester.py`.
+* **P0.3 – Trained model**: network blocked in sandbox. `train_local.py` script created
+  (`python -m sq_ai.train.train_local` from repo root) — identical feature engineering
+  to Colab notebook, no Colab needed. Run on MacBook when ready.
+
+### P1.1 – `/api/equity` + dashboard equity curve
+* Added `GET /api/equity` route to `api/app.py` returning the full `daily_equity`
+  series as `[{date, equity, cash}]`.
+* Added Plotly line chart to `ui/dashboard_page.py` (equity + cash lines, unified
+  hover, ₹ y-axis) with summary metrics: total return %, peak equity, max drawdown.
+  Gracefully shows a caption when no history exists yet.
+* 2 new tests in `test_api.py`; 73/73 pass.
+
 ## Tasks done (2026-05-03)
 * **P0.1 – Fix deprecated Claude model**: updated `DEFAULT_MODEL` in
   `sq_ai/backend/llm_clients.py` from `claude-3-sonnet-20240229` (returns 404

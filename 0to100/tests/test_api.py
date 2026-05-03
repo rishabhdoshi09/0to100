@@ -68,3 +68,30 @@ def test_screener_endpoint_returns_list():
         r = cl.get("/api/screener")
         assert r.status_code == 200
         assert isinstance(r.json(), list)
+
+
+def test_equity_curve_returns_list_with_expected_keys():
+    with TestClient(app) as cl:
+        r = cl.get("/api/equity")
+        assert r.status_code == 200
+        rows = r.json()
+        assert isinstance(rows, list)
+        if rows:
+            assert {"date", "equity", "cash"} <= set(rows[0].keys())
+
+
+def test_equity_curve_reflects_recorded_rows():
+    with TestClient(app) as cl:
+        tracker = app.state.sched.tracker
+        tracker.record_equity(1_050_000.0, 800_000.0, date="2026-05-01")
+        tracker.record_equity(1_080_000.0, 750_000.0, date="2026-05-02")
+        r = cl.get("/api/equity")
+        assert r.status_code == 200
+        rows = r.json()
+        assert len(rows) >= 2
+        dates = [row["date"] for row in rows]
+        assert "2026-05-01" in dates
+        assert "2026-05-02" in dates
+        equities = {row["date"]: row["equity"] for row in rows}
+        assert equities["2026-05-01"] == 1_050_000.0
+        assert equities["2026-05-02"] == 1_080_000.0

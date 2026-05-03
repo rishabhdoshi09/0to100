@@ -310,6 +310,13 @@ async def watchlist_remove(symbol: str) -> dict[str, Any]:
     return WatchlistService(app.state.sched.tracker).remove(symbol)
 
 
+# ───────────────────────────────────────────────────────── equity curve
+@app.get("/api/equity")
+async def equity_curve() -> list[dict]:
+    """Daily equity + cash series for charting the portfolio curve."""
+    return app.state.sched.tracker.equity_curve()
+
+
 # ───────────────────────────────────────────────────────── reports
 @app.post("/api/reports/generate")
 async def report_generate() -> dict[str, Any]:
