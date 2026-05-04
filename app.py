@@ -729,6 +729,7 @@ tabs = st.tabs([
     "⚠️ Risk Metrics",
     "🔮 What-If",
     "🔗 Correlations",
+    "🔬 Deep Fundamentals",
 ])
 
 # ── Tab 0: Market Dashboard ────────────────────────────────────────────────────
@@ -1460,3 +1461,75 @@ with tabs[19]:
 
             except Exception as e:
                 st.error(f"Error: {e}")
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# TAB 20 — Deep Fundamentals (screener.in full data)
+# ═══════════════════════════════════════════════════════════════════════════════
+with tabs[20]:
+    st.subheader("🔬 Deep Fundamentals")
+    st.caption("Full screener.in data: Key Ratios, P&L, Balance Sheet, Quarterly, Shareholding, Cash Flow. Cached 24h.")
+
+    df_sym_input = st.text_input("NSE Symbol", value="BEL", key="df_sym_in").upper().strip()
+    df_col1, df_col2 = st.columns([1, 1])
+    with df_col1:
+        df_force = st.checkbox("Force refresh (ignore cache)", key="df_force")
+    with df_col2:
+        df_load_btn = st.button("📥 Load Fundamentals", key="df_load")
+
+    if df_load_btn and df_sym_input:
+        with st.spinner(f"Fetching fundamentals for {df_sym_input}…"):
+            try:
+                from fundamentals.fetcher import get_deep_fundamentals
+                fund_data = get_deep_fundamentals(df_sym_input, force_refresh=df_force)
+
+                # Company header
+                about = fund_data.get("about", "")
+                meta  = fund_data.get("metadata", {})
+                st.markdown(f"**{df_sym_input}** · {'Consolidated' if meta.get('consolidated') else 'Standalone'} · "
+                            f"[screener.in]({fund_data.get('url','#')})")
+                if about:
+                    with st.expander("About the company"):
+                        st.write(about)
+
+                # ── Key Ratios ────────────────────────────────────────────
+                key_ratios = fund_data.get("key_ratios", [])
+                if key_ratios:
+                    st.markdown("### 📊 Key Ratios")
+                    ratio_cols = st.columns(min(len(key_ratios), 5))
+                    for i, ratio in enumerate(key_ratios[:10]):
+                        with ratio_cols[i % 5]:
+                            st.metric(
+                                label=ratio.get("name", ""),
+                                value=ratio.get("value", "—"),
+                            )
+
+                # ── Section tabs ──────────────────────────────────────────
+                _section_defs = [
+                    ("📈 P&L",           "profit_loss"),
+                    ("🏦 Balance Sheet",  "balance_sheet"),
+                    ("📅 Quarterly",      "quarterly_results"),
+                    ("👥 Shareholding",   "shareholding"),
+                    ("💵 Cash Flow",      "cash_flow"),
+                    ("🏢 Peers",          "peer_comparison"),
+                ]
+                fund_tabs = st.tabs([s[0] for s in _section_defs])
+
+                for tab_obj, (_, section_key) in zip(fund_tabs, _section_defs):
+                    with tab_obj:
+                        rows = fund_data.get(section_key, [])
+                        if not rows:
+                            st.info("No data available for this section.")
+                            continue
+                        import pandas as pd
+                        df_sec = pd.DataFrame(rows)
+                        st.dataframe(
+                            df_sec,
+                            use_container_width=True,
+                            hide_index=True,
+                        )
+                        st.caption(f"{len(rows)} rows · Data from screener.in")
+
+            except ValueError as ve:
+                st.error(f"Symbol not found: {ve}")
+            except Exception as ex:
+                st.error(f"Failed to load fundamentals: {ex}")

@@ -161,6 +161,75 @@ def cmd_backtest(args) -> None:
     print(f"Reports saved to: {settings.log_dir}/")
 
 
+def cmd_screener(args) -> None:
+    """Fetch deep fundamentals from screener.in for a symbol."""
+    symbol: str = args.symbol.upper()
+    force: bool = args.force
+    table_filter: str = args.table or ""
+
+    log.info("screener_fetch_requested", symbol=symbol, force=force)
+
+    from fundamentals.fetcher import get_deep_fundamentals
+
+    print(f"\nFetching fundamentals for {symbol} {'(force refresh)' if force else '(cache-first)'}…")
+
+    try:
+        data = get_deep_fundamentals(symbol, force_refresh=force)
+    except ValueError as exc:
+        print(f"\nError: {exc}")
+        sys.exit(1)
+    except Exception as exc:
+        print(f"\nFailed to fetch: {exc}")
+        sys.exit(1)
+
+    # Determine which sections to print
+    _ALL_SECTIONS = [
+        "key_ratios", "profit_loss", "balance_sheet",
+        "quarterly_results", "shareholding", "cash_flow",
+        "peer_comparison",
+    ]
+    sections = [table_filter] if table_filter else _ALL_SECTIONS
+
+    try:
+        from tabulate import tabulate
+        _HAS_TABULATE = True
+    except ImportError:
+        _HAS_TABULATE = False
+
+    import json as _json
+
+    print(f"\n{'═'*60}")
+    print(f"  {symbol} — Deep Fundamentals  (source: screener.in)")
+    print(f"  {'Consolidated' if data.get('metadata', {}).get('consolidated') else 'Standalone'}")
+    print(f"{'═'*60}")
+
+    about = data.get("about", "")
+    if about and not table_filter:
+        print(f"\nAbout:\n  {about[:300]}{'…' if len(about) > 300 else ''}\n")
+
+    for section in sections:
+        rows = data.get(section)
+        if not rows:
+            continue
+
+        heading = section.replace("_", " ").title()
+        print(f"\n{'─'*60}")
+        print(f"  {heading}")
+        print(f"{'─'*60}")
+
+        if isinstance(rows, list) and rows:
+            if _HAS_TABULATE:
+                print(tabulate(rows[:25], headers="keys", tablefmt="rounded_outline", floatfmt=".2f"))
+            else:
+                print(_json.dumps(rows[:20], indent=2, ensure_ascii=False))
+        elif isinstance(rows, dict):
+            print(_json.dumps(rows, indent=2, ensure_ascii=False))
+
+    meta = data.get("metadata", {})
+    print(f"\n[Rows scraped: {meta.get('total_rows_scraped', '?')} | URL: {data.get('url', '?')}]")
+    print()
+
+
 def cmd_ensemble(args) -> None:
     """Print ensemble ML signal for a symbol."""
     symbol = args.symbol.upper()
@@ -449,6 +518,17 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("fnolive", help="Start live trading with F&O execution (requires ENABLE_FNO=true)")
 
+    scr = sub.add_parser("screener", help="Fetch deep fundamentals from screener.in")
+    scr.add_argument("--symbol", required=True, metavar="SYMBOL", help="NSE symbol, e.g. BEL")
+    scr.add_argument("--force", action="store_true", help="Ignore cache and re-scrape")
+    scr.add_argument(
+        "--table",
+        default="",
+        metavar="SECTION",
+        help="Print only one section: key_ratios | profit_loss | balance_sheet | "
+             "quarterly_results | shareholding | cash_flow",
+    )
+
     ens = sub.add_parser("ensemble", help="Print ensemble ML signal for a symbol")
     ens.add_argument("--symbol", required=True, metavar="SYMBOL", help="NSE symbol, e.g. RELIANCE")
 
@@ -470,6 +550,7 @@ def main() -> None:
         "backtest": cmd_backtest,
         "walkforward": cmd_walkforward,
         "fnolive": cmd_fnolive,
+        "screener": cmd_screener,
         "ensemble": cmd_ensemble,
         "alerts": cmd_alerts,
         "kill": cmd_kill,
