@@ -18,6 +18,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from data.kite_client import KiteClient
+from execution.nse_guards import NseOrderGuard
 from risk.risk_manager import RiskDecision
 from logger import get_logger
 
@@ -58,8 +59,15 @@ class OrderResult:
 class ZerodhaBroker:
     def __init__(self, kite: KiteClient) -> None:
         self._kite = kite
+        self._nse_guard = NseOrderGuard()
 
-    def execute(self, decision: RiskDecision, order_type: str = "MARKET") -> OrderResult:
+    def execute(
+        self,
+        decision: RiskDecision,
+        order_type: str = "MARKET",
+        portfolio_positions: Dict[str, Any] = None,  # type: ignore[assignment]
+        quote: Dict[str, Any] = None,  # type: ignore[assignment]
+    ) -> OrderResult:
         """
         Place order from an approved RiskDecision.
         Returns OrderResult after polling for fill confirmation.
@@ -80,6 +88,27 @@ class ZerodhaBroker:
         symbol = decision.signal.symbol
         action = decision.signal.action
         quantity = int(decision.adjusted_size)
+
+        # ── NSE pre-flight checks ─────────────────────────────────────────
+        from config import settings
+        guard_ok, guard_reason = self._nse_guard.validate(
+            symbol=symbol,
+            action=action,
+            quantity=quantity,
+            price=quote.get("last_price", 0.0) if quote else 0.0,
+            product=settings.product_type,
+            order_type=order_type,
+            portfolio_positions=portfolio_positions or {},
+            quote=quote,
+        )
+        if not guard_ok:
+            log.warning(
+                "nse_guard_rejected_order",
+                symbol=symbol,
+                action=action,
+                reason=guard_reason,
+            )
+            return self._error_result(symbol, action, quantity, guard_reason)
 
         log.info(
             "placing_order",

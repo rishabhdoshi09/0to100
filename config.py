@@ -63,6 +63,19 @@ class Settings(BaseSettings):
     backtest_transaction_cost: float = Field(default=0.001)
     backtest_initial_capital: float = Field(default=1_000_000.0)
 
+    # ── Walk-Forward ──────────────────────────────────────────────────────────
+    walkforward_is_days: int = Field(default=252)
+    walkforward_oos_days: int = Field(default=63)
+
+    # ── XGBoost ───────────────────────────────────────────────────────────────
+    xgboost_train_days: int = Field(default=252)
+    xgboost_retrain_days: int = Field(default=21)
+
+    # ── F&O ───────────────────────────────────────────────────────────────────
+    enable_fno: bool = Field(default=False)
+    fno_default_product: str = Field(default="NRML")
+    fno_rollover_days: int = Field(default=3)
+
     # ── Logging ───────────────────────────────────────────────────────────────
     log_level: str = Field(default="INFO")
     log_dir: Path = Field(default=Path("logs"))

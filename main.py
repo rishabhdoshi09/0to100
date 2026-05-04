@@ -161,6 +161,141 @@ def cmd_backtest(args) -> None:
     print(f"Reports saved to: {settings.log_dir}/")
 
 
+def cmd_fnolive(args) -> None:
+    """Start the live trading loop with F&O execution enabled."""
+    if not settings.enable_fno:
+        print("F&O trading is disabled. Set ENABLE_FNO=true in .env to enable.")
+        sys.exit(0)
+
+    _assert_credentials()
+    log.info("starting_fno_live_trading")
+
+    from data.kite_client import KiteClient
+    from data.instruments import InstrumentManager
+    from data.historical import HistoricalDataFetcher
+    from execution.zerodha_broker import ZerodhaBroker
+    from execution.fo_executor import FnOExecutor
+    from portfolio.state import PortfolioState
+    from risk.risk_manager import RiskManager
+    from engine.trade_engine import TradeEngine
+
+    print("\n" + "=" * 60)
+    print("  WARNING: F&O trading enabled.")
+    print("  Losses can exceed capital.")
+    print("  Confirm you understand margin requirements.")
+    print("=" * 60)
+    confirm = input('\nType "YES" to continue, anything else to abort: ').strip()
+    if confirm != "YES":
+        print("Aborted.")
+        sys.exit(0)
+
+    kite = KiteClient()
+    instruments = InstrumentManager()
+    historical = HistoricalDataFetcher(kite, instruments)
+    portfolio = PortfolioState(settings.backtest_initial_capital)
+    risk = RiskManager()
+    broker = ZerodhaBroker(kite)
+    _fno = FnOExecutor(kite)  # available for strategy-layer use; engine unchanged
+
+    engine = TradeEngine(
+        kite=kite,
+        portfolio=portfolio,
+        risk_manager=risk,
+        broker=broker,
+        instruments=instruments,
+        historical=historical,
+    )
+
+    print("\n=== SimpleQuant AI — F&O Live Trading ===")
+    print(f"Universe : {', '.join(settings.symbol_list)}")
+    print(f"Cycle    : every {settings.cycle_interval_seconds}s")
+    print(f"Product  : {settings.fno_default_product}")
+    print("\nPress Ctrl+C to stop gracefully.\n")
+
+    engine.run()
+
+
+def cmd_walkforward(args) -> None:
+    """Run walk-forward validation on historical Kite data."""
+    _assert_credentials()
+
+    from_date: str = args.from_date
+    to_date: str = args.to_date
+
+    log.info(
+        "starting_walk_forward",
+        from_date=from_date,
+        to_date=to_date,
+    )
+
+    from data.kite_client import KiteClient
+    from data.instruments import InstrumentManager
+    from data.historical import HistoricalDataFetcher
+    from backtest.walk_forward import WalkForwardValidator
+
+    kite = KiteClient()
+    instruments = InstrumentManager()
+    historical = HistoricalDataFetcher(kite, instruments)
+
+    print("\n=== SimpleQuant AI — Walk-Forward Validation ===")
+    print(f"Period  : {from_date} → {to_date}")
+    print(f"Universe: {', '.join(settings.symbol_list)}")
+    print(f"IS days : {settings.walkforward_is_days}  |  OOS days: {settings.walkforward_oos_days}")
+    print(f"Capital : ₹{settings.backtest_initial_capital:,.0f}\n")
+
+    print("Downloading historical data…")
+    hist_data = {}
+    for symbol in settings.symbol_list:
+        df = historical.fetch(
+            symbol=symbol,
+            from_date=from_date,
+            to_date=to_date,
+            interval="day",
+        )
+        if not df.empty:
+            hist_data[symbol] = df
+            print(f"  {symbol}: {len(df)} bars")
+        else:
+            print(f"  {symbol}: no data — skipped")
+
+    if not hist_data:
+        print("No data available. Check Kite credentials and symbol names.")
+        sys.exit(1)
+
+    print("\nRunning walk-forward validation…")
+    validator = WalkForwardValidator()
+    summary = validator.run(hist_data)
+
+    if not summary:
+        print("Walk-forward produced no results — insufficient data.")
+        sys.exit(1)
+
+    print(f"\n{'─'*52}")
+    print(f"  Windows completed     : {summary['total_windows']}")
+    print(f"  Mean OOS Sharpe       : {summary['mean_oos_sharpe']:.3f}")
+    print(f"  Mean IS  Sharpe       : {summary['mean_is_sharpe']:.3f}")
+    print(f"  IS/OOS Sharpe ratio   : {summary['is_oos_sharpe_ratio']:.3f}  (>2.0 = overfitting)")
+    print(f"  % Profitable OOS wins : {summary['pct_profitable_oos_windows']:.1f}%")
+    print(f"{'─'*52}")
+
+    if summary["is_oos_sharpe_ratio"] > 2.0:
+        print("  WARNING: IS/OOS ratio > 2.0 — strategy may be overfit to IS data.")
+
+    print("\nOOS Window Details:")
+    for w in summary.get("window_details", []):
+        print(
+            f"  [{w['window']:02d}] {w['oos_start']} → {w['oos_end']} "
+            f"Sharpe={w['oos_sharpe']:+.3f}  ret={w['oos_total_return_pct']:+.2f}%  "
+            f"dd={w['oos_max_drawdown_pct']:.2f}%"
+        )
+
+    print("\nMost-frequent winning parameter sets:")
+    for params_str, count in list(summary.get("best_params_frequency", {}).items())[:3]:
+        print(f"  {count}x  {params_str}")
+
+    print(f"\nDone. Reports available in {settings.log_dir}/")
+
+
 def cmd_kill(args) -> None:
     """Write a kill switch flag file. The live engine checks this on startup."""
     flag = Path("logs/.kill_switch")
@@ -248,6 +383,22 @@ def build_parser() -> argparse.ArgumentParser:
         help="Use pure technical strategy (no DeepSeek calls — fast, free)",
     )
 
+    wf = sub.add_parser("walkforward", help="Run walk-forward parameter validation")
+    wf.add_argument(
+        "--from",
+        dest="from_date",
+        default=(date.today() - timedelta(days=3 * 365)).strftime("%Y-%m-%d"),
+        metavar="YYYY-MM-DD",
+    )
+    wf.add_argument(
+        "--to",
+        dest="to_date",
+        default=date.today().strftime("%Y-%m-%d"),
+        metavar="YYYY-MM-DD",
+    )
+
+    sub.add_parser("fnolive", help="Start live trading with F&O execution (requires ENABLE_FNO=true)")
+
     sub.add_parser("kill", help="Write kill switch flag")
     sub.add_parser("status", help="Print live portfolio status from Kite")
 
@@ -262,6 +413,8 @@ def main() -> None:
         "login": cmd_login,
         "live": cmd_live,
         "backtest": cmd_backtest,
+        "walkforward": cmd_walkforward,
+        "fnolive": cmd_fnolive,
         "kill": cmd_kill,
         "status": cmd_status,
     }
