@@ -161,6 +161,56 @@ def cmd_backtest(args) -> None:
     print(f"Reports saved to: {settings.log_dir}/")
 
 
+def cmd_ensemble(args) -> None:
+    """Print ensemble ML signal for a symbol."""
+    symbol = args.symbol.upper()
+    log.info("ensemble_signal_requested", symbol=symbol)
+
+    from data.kite_client import KiteClient
+    from data.instruments import InstrumentManager
+    from data.historical import HistoricalDataFetcher
+    from ml.ensemble_signal import EnsembleSignalGenerator
+
+    kite = KiteClient()
+    instruments = InstrumentManager()
+    historical = HistoricalDataFetcher(kite, instruments)
+
+    import sys
+    from datetime import date, timedelta as td
+    to_d = date.today().strftime("%Y-%m-%d")
+    from_d = (date.today() - td(days=400)).strftime("%Y-%m-%d")
+
+    print(f"\nFetching data for {symbol}…")
+    df = historical.fetch(symbol=symbol, from_date=from_d, to_date=to_d, interval="day")
+    if df is None or df.empty:
+        print(f"No data for {symbol}. Check Kite credentials.")
+        sys.exit(1)
+
+    gen = EnsembleSignalGenerator()
+    sig = gen.generate_signal(df, symbol)
+
+    print(f"\n{'─'*50}")
+    print(f"  Symbol    : {sig['symbol']}")
+    print(f"  Action    : {sig['action']}")
+    print(f"  Confidence: {sig['confidence']:.1%}")
+    print(f"  Reasoning : {sig['reasoning']}")
+    details = sig.get("ensemble_details", {})
+    if details:
+        print("\n  Model breakdown:")
+        for model_name, info in details.items():
+            if isinstance(info, dict):
+                print(f"    {model_name:12s}: {info.get('action','?'):4s} @ {info.get('confidence',0):.1%}")
+    print(f"{'─'*50}\n")
+
+
+def cmd_alerts(args) -> None:
+    """Start the background signal monitor (runs until Ctrl+C)."""
+    log.info("alerts_monitor_starting")
+    from notify.alerts import SignalMonitor
+    monitor = SignalMonitor()
+    monitor.run()
+
+
 def cmd_fnolive(args) -> None:
     """Start the live trading loop with F&O execution enabled."""
     if not settings.enable_fno:
@@ -399,6 +449,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("fnolive", help="Start live trading with F&O execution (requires ENABLE_FNO=true)")
 
+    ens = sub.add_parser("ensemble", help="Print ensemble ML signal for a symbol")
+    ens.add_argument("--symbol", required=True, metavar="SYMBOL", help="NSE symbol, e.g. RELIANCE")
+
+    sub.add_parser("alerts", help="Start background signal monitor (Telegram alerts)")
+
     sub.add_parser("kill", help="Write kill switch flag")
     sub.add_parser("status", help="Print live portfolio status from Kite")
 
@@ -415,6 +470,8 @@ def main() -> None:
         "backtest": cmd_backtest,
         "walkforward": cmd_walkforward,
         "fnolive": cmd_fnolive,
+        "ensemble": cmd_ensemble,
+        "alerts": cmd_alerts,
         "kill": cmd_kill,
         "status": cmd_status,
     }
