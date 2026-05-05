@@ -43,6 +43,8 @@ class TradingSignal:
     rejected: bool = False
     rejection_reason: str = ""
     raw: Dict[str, Any] = field(default_factory=dict)
+    # Tracks which LLM had final say: "deepseek" | "claude_validated" | "claude_override"
+    llm_decision_maker: str = "deepseek"
 
     def is_actionable(self) -> bool:
         return not self.rejected and self.action in ("BUY", "SELL")
