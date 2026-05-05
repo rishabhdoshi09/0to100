@@ -164,71 +164,131 @@ def cmd_backtest(args) -> None:
 
 
 def cmd_screener(args) -> None:
-    """Fetch deep fundamentals from screener.in for a symbol."""
-    symbol: str = args.symbol.upper()
-    force: bool = args.force
-    table_filter: str = args.table or ""
+    """
+    Screen NSE stocks by fundamentals + technicals, or fetch one symbol's data.
 
-    log.info("screener_fetch_requested", symbol=symbol, force=force)
-
-    from fundamentals.fetcher import get_deep_fundamentals
-
-    print(f"\nFetching fundamentals for {symbol} {'(force refresh)' if force else '(cache-first)'}…")
-
-    try:
-        data = get_deep_fundamentals(symbol, force_refresh=force)
-    except ValueError as exc:
-        print(f"\nError: {exc}")
-        sys.exit(1)
-    except Exception as exc:
-        print(f"\nFailed to fetch: {exc}")
-        sys.exit(1)
-
-    # Determine which sections to print
-    _ALL_SECTIONS = [
-        "key_ratios", "profit_loss", "balance_sheet",
-        "quarterly_results", "shareholding", "cash_flow",
-        "peer_comparison",
-    ]
-    sections = [table_filter] if table_filter else _ALL_SECTIONS
-
-    try:
-        from tabulate import tabulate
-        _HAS_TABULATE = True
-    except ImportError:
-        _HAS_TABULATE = False
-
+    Single-symbol mode  : python main.py screener --symbol RELIANCE
+    Multi-stock screen  : python main.py screener --pe-max 20 --roe-min 15 --rsi-max 35
+    Export results      : python main.py screener --pe-max 25 --export results.csv
+    """
     import json as _json
 
+    # ── SINGLE-SYMBOL MODE ────────────────────────────────────────────────
+    symbol: str = (args.symbol or "").upper().strip()
+    _multi_flags = [
+        args.pe_max, args.roe_min, args.debt_max, args.market_cap_min,
+        args.promoter_min, args.div_yield_min, args.rsi_max, args.rsi_min,
+        args.volume_spike, args.above_sma, args.below_sma, args.signal,
+    ]
+    if symbol and not any(_multi_flags):
+        # Old behaviour: full fundamentals for one symbol
+        from fundamentals.fetcher import get_deep_fundamentals
+        force = args.force
+        table_filter = args.table or ""
+        log.info("screener_single_symbol", symbol=symbol, force=force)
+        print(f"\nFetching fundamentals for {symbol} "
+              f"{'(force refresh)' if force else '(cache-first)'}…")
+        try:
+            data = get_deep_fundamentals(symbol, force_refresh=force)
+        except ValueError as exc:
+            print(f"\nError: {exc}")
+            sys.exit(1)
+        except Exception as exc:
+            print(f"\nFailed: {exc}")
+            sys.exit(1)
+
+        _ALL_SECTIONS = [
+            "key_ratios", "profit_loss", "balance_sheet",
+            "quarterly_results", "shareholding", "cash_flow", "peer_comparison",
+        ]
+        sections = [table_filter] if table_filter else _ALL_SECTIONS
+        try:
+            from tabulate import tabulate as _tab
+            _HAS_TAB = True
+        except ImportError:
+            _HAS_TAB = False
+
+        print(f"\n{'═'*60}")
+        print(f"  {symbol} — Deep Fundamentals  (source: screener.in)")
+        print(f"  {'Consolidated' if data.get('metadata', {}).get('consolidated') else 'Standalone'}")
+        print(f"{'═'*60}")
+        about = data.get("about", "")
+        if about and not table_filter:
+            print(f"\nAbout:\n  {about[:300]}{'…' if len(about) > 300 else ''}\n")
+        for sec in sections:
+            rows = data.get(sec)
+            if not rows:
+                continue
+            print(f"\n{'─'*60}\n  {sec.replace('_',' ').title()}\n{'─'*60}")
+            if isinstance(rows, list) and rows:
+                if _HAS_TAB:
+                    print(_tab(rows[:25], headers="keys",
+                               tablefmt="rounded_outline", floatfmt=".2f"))
+                else:
+                    print(_json.dumps(rows[:20], indent=2, ensure_ascii=False))
+        meta = data.get("metadata", {})
+        print(f"\n[Rows: {meta.get('total_rows_scraped','?')} | {data.get('url','?')}]\n")
+        return
+
+    # ── MULTI-STOCK SCREEN MODE ───────────────────────────────────────────
+    log.info("screener_multi_stock", filters={
+        "pe_max": args.pe_max, "roe_min": args.roe_min,
+        "rsi_max": args.rsi_max, "limit": args.limit,
+    })
+
+    from screener.engine import ScreenerEngine
+    engine = ScreenerEngine()
+
     print(f"\n{'═'*60}")
-    print(f"  {symbol} — Deep Fundamentals  (source: screener.in)")
-    print(f"  {'Consolidated' if data.get('metadata', {}).get('consolidated') else 'Standalone'}")
-    print(f"{'═'*60}")
+    print("  NSE Stock Screener")
+    active = {k: v for k, v in {
+        "P/E ≤": args.pe_max, "ROE ≥": args.roe_min, "Debt/Eq ≤": args.debt_max,
+        "MCap ≥ ₹Cr": args.market_cap_min, "Promoter ≥%": args.promoter_min,
+        "Div Yield ≥%": args.div_yield_min, "RSI ≤": args.rsi_max,
+        "RSI ≥": args.rsi_min, "Vol spike ≥": args.volume_spike,
+        "Above SMA": args.above_sma, "Below SMA": args.below_sma,
+        "Signal": args.signal,
+    }.items() if v is not None}
+    for k, v in active.items():
+        print(f"  {k}: {v}")
+    print(f"{'═'*60}\n")
 
-    about = data.get("about", "")
-    if about and not table_filter:
-        print(f"\nAbout:\n  {about[:300]}{'…' if len(about) > 300 else ''}\n")
+    try:
+        df = engine.screen_by_ratios(
+            pe_max=args.pe_max,
+            roe_min=args.roe_min,
+            debt_max=args.debt_max,
+            market_cap_min_cr=args.market_cap_min,
+            promoter_holding_min=args.promoter_min,
+            dividend_yield_min=args.div_yield_min,
+            rsi_max=args.rsi_max,
+            rsi_min=args.rsi_min,
+            volume_spike_min=args.volume_spike,
+            price_above_sma_days=args.above_sma,
+            price_below_sma_days=args.below_sma,
+            ensemble_signal=args.signal,
+            limit=args.limit,
+            scrape_missing_fundamentals=args.scrape,
+        )
+    except Exception as exc:
+        print(f"\nScreener error: {exc}")
+        sys.exit(1)
 
-    for section in sections:
-        rows = data.get(section)
-        if not rows:
-            continue
+    if df.empty:
+        print("No stocks match the criteria.\n")
+        return
 
-        heading = section.replace("_", " ").title()
-        print(f"\n{'─'*60}")
-        print(f"  {heading}")
-        print(f"{'─'*60}")
+    print(f"\nFound {len(df)} stocks:\n")
+    try:
+        from tabulate import tabulate as _tab
+        print(_tab(df, headers="keys", tablefmt="rounded_outline",
+                   floatfmt=".2f", showindex=False))
+    except ImportError:
+        print(df.to_string(index=False))
 
-        if isinstance(rows, list) and rows:
-            if _HAS_TABULATE:
-                print(tabulate(rows[:25], headers="keys", tablefmt="rounded_outline", floatfmt=".2f"))
-            else:
-                print(_json.dumps(rows[:20], indent=2, ensure_ascii=False))
-        elif isinstance(rows, dict):
-            print(_json.dumps(rows, indent=2, ensure_ascii=False))
-
-    meta = data.get("metadata", {})
-    print(f"\n[Rows scraped: {meta.get('total_rows_scraped', '?')} | URL: {data.get('url', '?')}]")
+    if args.export:
+        df.to_csv(args.export, index=False)
+        print(f"\nExported {len(df)} rows → {args.export}")
     print()
 
 
@@ -601,16 +661,47 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("fnolive", help="Start live trading with F&O execution (requires ENABLE_FNO=true)")
 
-    scr = sub.add_parser("screener", help="Fetch deep fundamentals from screener.in")
-    scr.add_argument("--symbol", required=True, metavar="SYMBOL", help="NSE symbol, e.g. BEL")
-    scr.add_argument("--force", action="store_true", help="Ignore cache and re-scrape")
-    scr.add_argument(
-        "--table",
-        default="",
-        metavar="SECTION",
-        help="Print only one section: key_ratios | profit_loss | balance_sheet | "
-             "quarterly_results | shareholding | cash_flow",
+    scr = sub.add_parser(
+        "screener",
+        help="Screen ALL NSE stocks by fundamentals + technicals, OR fetch one symbol's data",
     )
+    scr.add_argument("--symbol",    metavar="SYMBOL",  default="",
+                     help="Single symbol: show full fundamentals (e.g. BEL)")
+    scr.add_argument("--force",     action="store_true",
+                     help="Force-refresh cache for single-symbol mode")
+    scr.add_argument("--table",     default="", metavar="SECTION",
+                     help="(single-symbol) Print only one section: key_ratios | profit_loss | …")
+    # ── multi-stock filter flags ──────────────────────────────────────────
+    scr.add_argument("--pe-max",            type=float, metavar="N",
+                     help="Maximum P/E ratio")
+    scr.add_argument("--roe-min",           type=float, metavar="N",
+                     help="Minimum ROE %%")
+    scr.add_argument("--debt-max",          type=float, metavar="N",
+                     help="Maximum Debt/Equity ratio")
+    scr.add_argument("--market-cap-min",    type=float, metavar="CR",
+                     help="Minimum market cap (₹ Crore)")
+    scr.add_argument("--promoter-min",      type=float, metavar="PCT",
+                     help="Minimum promoter holding %%")
+    scr.add_argument("--div-yield-min",     type=float, metavar="N",
+                     help="Minimum dividend yield %%")
+    scr.add_argument("--rsi-max",           type=float, metavar="N",
+                     help="Maximum RSI-14 (e.g. 30 = oversold)")
+    scr.add_argument("--rsi-min",           type=float, metavar="N",
+                     help="Minimum RSI-14 (e.g. 70 = overbought)")
+    scr.add_argument("--volume-spike",      type=float, metavar="X",
+                     help="Min volume ratio vs 30-day avg (e.g. 1.5)")
+    scr.add_argument("--above-sma",         type=int,   metavar="DAYS",
+                     help="Price must be above SMA(N) — 20 or 50")
+    scr.add_argument("--below-sma",         type=int,   metavar="DAYS",
+                     help="Price must be below SMA(N) — 20 or 50")
+    scr.add_argument("--signal",            choices=["BUY", "SELL", "HOLD"],
+                     help="Ensemble ML signal filter")
+    scr.add_argument("--limit",             type=int, default=50,
+                     help="Max results to display (default: 50)")
+    scr.add_argument("--export",            metavar="FILE.csv",
+                     help="Export results to CSV")
+    scr.add_argument("--scrape",            action="store_true",
+                     help="Scrape screener.in for symbols missing fundamentals (slower)")
 
     ens = sub.add_parser("ensemble", help="Print ensemble ML signal for a symbol")
     ens.add_argument("--symbol", required=True, metavar="SYMBOL", help="NSE symbol, e.g. RELIANCE")

@@ -36,3 +36,4 @@ ruff==0.15.12
 scipy>=1.11.0
 sqlalchemy>=2.0.0
 structlog>=24.1.0
+tqdm>=4.66.0
