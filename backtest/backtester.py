@@ -26,7 +26,7 @@ from config import settings
 from features.indicators import IndicatorEngine
 from signals.composite_signal import CompositeSignal
 from llm.context_builder import ContextBuilder
-from llm.deepseek_client import DeepSeekClient
+from llm.dual_engine import DualLLMEngine
 from llm.signal_validator import SignalValidator, TradingSignal
 from news.fetcher import NewsFetcher
 from news.normalizer import NewsNormalizer
@@ -60,7 +60,7 @@ class Backtester:
         self._validator = SignalValidator()
 
         if use_llm:
-            self._llm = DeepSeekClient()
+            self._llm = DualLLMEngine()
             self._news_fetcher = NewsFetcher()
             self._news_normalizer = NewsNormalizer()
             self._news_summarizer = NewsSummarizer()
@@ -246,7 +246,7 @@ class Backtester:
         indicator_data: Dict[str, Any],
         news_cache: List,
     ) -> Optional[TradingSignal]:
-        """Send to DeepSeek and validate response."""
+        """Run dual-LLM pipeline (DeepSeek → Claude) and return validated signal."""
         news_block = self._news_summarizer.build_context_block(symbol, news_cache)
         portfolio_state = self._portfolio.get_state_dict()
         risk_limits = self._risk.get_risk_limits_dict()
@@ -259,8 +259,7 @@ class Backtester:
             portfolio_state=portfolio_state,
             risk_limits=risk_limits,
         )
-        raw_signal = self._llm.get_signal(context_prompt)
-        return self._validator.validate(raw_signal, symbol)
+        return self._llm.get_signal(context_prompt, symbol)
 
     def _technical_signal(
         self,

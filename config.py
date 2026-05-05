@@ -25,6 +25,9 @@ class Settings(BaseSettings):
     kite_api_secret: str = Field(default="")
     kite_access_token: str = Field(default="")
 
+    # ── Anthropic (Claude) ────────────────────────────────────────────────────
+    anthropic_api_key: str = Field(default="")
+
     # ── DeepSeek ──────────────────────────────────────────────────────────────
     deepseek_api_key: str = Field(default="")
     deepseek_base_url: str = Field(default="https://api.deepseek.com")

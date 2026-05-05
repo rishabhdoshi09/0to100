@@ -33,7 +33,7 @@ from data.instruments import InstrumentManager
 from execution.zerodha_broker import ZerodhaBroker
 from features.indicators import IndicatorEngine
 from llm.context_builder import ContextBuilder
-from llm.deepseek_client import DeepSeekClient
+from llm.dual_engine import DualLLMEngine
 from llm.signal_validator import SignalValidator
 from news.fetcher import NewsFetcher
 from news.normalizer import NewsNormalizer
@@ -69,7 +69,7 @@ class TradeEngine:
         self._news_normalizer = NewsNormalizer()
         self._news_summarizer = NewsSummarizer()
         self._indicators = IndicatorEngine()
-        self._llm = DeepSeekClient()
+        self._llm = DualLLMEngine()
         self._context = ContextBuilder()
         self._validator = SignalValidator()
 
@@ -210,11 +210,8 @@ class TradeEngine:
             risk_limits=risk_limits,
         )
 
-        # ── LLM call ──────────────────────────────────────────────────────
-        raw_signal = self._llm.get_signal(context_prompt)
-
-        # ── Validation ────────────────────────────────────────────────────
-        signal = self._validator.validate(raw_signal, symbol)
+        # ── Dual-LLM call (DeepSeek → Claude) ────────────────────────────
+        signal = self._llm.get_signal(context_prompt, symbol)
 
         # ── Risk check ────────────────────────────────────────────────────
         open_positions = self._portfolio.get_open_positions()
@@ -235,6 +232,7 @@ class TradeEngine:
             "risk_reason": risk_decision.reason,
             "quantity": int(risk_decision.adjusted_size),
             "reasoning": signal.reasoning,
+            "llm_decision_maker": signal.llm_decision_maker,
         }
 
         # ── Execute ───────────────────────────────────────────────────────

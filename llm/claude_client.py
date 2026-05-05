@@ -8,10 +8,10 @@ so callers can treat a missing key as a HOLD / neutral signal.
 from __future__ import annotations
 
 import json
-import os
 import re
 from typing import Any, Dict, Optional
 
+from config import settings
 from logger import get_logger
 
 log = get_logger(__name__)
@@ -48,7 +48,7 @@ Rules:
 """
 
     def __init__(self) -> None:
-        self._key = os.getenv("ANTHROPIC_API_KEY")
+        self._key = settings.anthropic_api_key
         self._client: Any = None
         if self._key and _ANTHROPIC_AVAILABLE:
             self._client = _anthropic_sdk.Anthropic(api_key=self._key)
