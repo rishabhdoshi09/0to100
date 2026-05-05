@@ -731,6 +731,7 @@ tabs = st.tabs([
     "🔗 Correlations",
     "🔬 Deep Fundamentals",
     "📊 Professional Charts",
+    "🔎 Stock Screener",
 ])
 
 # ── Tab 0: Market Dashboard ────────────────────────────────────────────────────
@@ -1678,3 +1679,104 @@ with tabs[21]:
             st.exception(_pc_err)
     else:
         st.info("Enter a symbol and click **Load Charts** to begin.")
+
+# ── TAB 22 — Stock Screener ────────────────────────────────────────────────────
+with tabs[22]:
+    st.subheader("🔎 NSE Stock Screener")
+    st.caption(
+        "Filter the entire NSE universe (~2000 stocks) by fundamentals, "
+        "technicals, and ensemble ML signal. "
+        "Technical data is cached locally; fundamental data is fetched from screener.in."
+    )
+
+    # ── Filter controls ───────────────────────────────────────────────────
+    with st.expander("📐 Fundamental Filters", expanded=True):
+        _sf1, _sf2, _sf3 = st.columns(3)
+        with _sf1:
+            _sc_pe_max   = st.number_input("P/E ≤",           min_value=0.0, max_value=500.0, value=0.0, step=1.0, key="sc_pe_max",   help="Max P/E ratio (0 = no filter)")
+            _sc_roe_min  = st.number_input("ROE ≥ %",         min_value=0.0, max_value=100.0, value=0.0, step=1.0, key="sc_roe_min",  help="Min Return on Equity %")
+        with _sf2:
+            _sc_debt_max = st.number_input("Debt/Equity ≤",   min_value=0.0, max_value=50.0,  value=0.0, step=0.1, key="sc_debt_max", help="Max Debt-to-Equity (0 = no filter)")
+            _sc_mcap_min = st.number_input("Market Cap ≥ ₹Cr",min_value=0.0, max_value=1e7,   value=0.0, step=100.0, key="sc_mcap_min")
+        with _sf3:
+            _sc_prom_min = st.number_input("Promoter Holding ≥ %", min_value=0.0, max_value=100.0, value=0.0, step=1.0, key="sc_prom_min")
+            _sc_div_min  = st.number_input("Dividend Yield ≥ %",   min_value=0.0, max_value=20.0,  value=0.0, step=0.1, key="sc_div_min")
+
+    with st.expander("📊 Technical Filters", expanded=True):
+        _st1, _st2, _st3 = st.columns(3)
+        with _st1:
+            _sc_rsi_max = st.number_input("RSI ≤ (oversold)", min_value=0.0, max_value=100.0, value=0.0, step=1.0, key="sc_rsi_max")
+            _sc_rsi_min = st.number_input("RSI ≥ (overbought)",min_value=0.0, max_value=100.0, value=0.0, step=1.0, key="sc_rsi_min")
+        with _st2:
+            _sc_vol_spike = st.number_input("Volume spike ≥ ×", min_value=0.0, max_value=20.0, value=0.0, step=0.1, key="sc_vol_spike", help="Volume ratio vs 30-day avg")
+            _sc_above_sma = st.selectbox("Price above SMA", [None, 20, 50], key="sc_above_sma")
+        with _st3:
+            _sc_below_sma = st.selectbox("Price below SMA", [None, 20, 50], key="sc_below_sma")
+            _sc_signal    = st.selectbox("Ensemble signal", [None, "BUY", "SELL", "HOLD"], key="sc_signal")
+
+    _sc_lim_col, _sc_scrape_col = st.columns([3, 2])
+    with _sc_lim_col:
+        _sc_limit = st.slider("Max results", 5, 200, 50, 5, key="sc_limit")
+    with _sc_scrape_col:
+        _sc_scrape = st.checkbox(
+            "Scrape missing fundamentals (slow, 1st run)",
+            value=False, key="sc_scrape",
+            help="If unchecked, stocks without cached fundamentals are skipped"
+        )
+
+    _sc_run = st.button("🚀 Run Screener", key="sc_run", type="primary")
+
+    if _sc_run:
+        # Convert 0 → None for "no filter"
+        def _nz(v):
+            return v if v and v > 0 else None
+
+        _sc_filters = dict(
+            pe_max               = _nz(_sc_pe_max),
+            roe_min              = _nz(_sc_roe_min),
+            debt_max             = _nz(_sc_debt_max),
+            market_cap_min_cr    = _nz(_sc_mcap_min),
+            promoter_holding_min = _nz(_sc_prom_min),
+            dividend_yield_min   = _nz(_sc_div_min),
+            rsi_max              = _nz(_sc_rsi_max),
+            rsi_min              = _nz(_sc_rsi_min),
+            volume_spike_min     = _nz(_sc_vol_spike),
+            price_above_sma_days = _sc_above_sma,
+            price_below_sma_days = _sc_below_sma,
+            ensemble_signal      = _sc_signal,
+            limit                = _sc_limit,
+            scrape_missing_fundamentals = _sc_scrape,
+        )
+
+        active_filters = {k: v for k, v in _sc_filters.items() if v is not None and v is not False}
+        if not active_filters:
+            st.warning("Set at least one filter before running.")
+        else:
+            import time as _time
+            _t0 = _time.time()
+            _prog = st.progress(0, text="Loading NSE universe …")
+            try:
+                from screener.engine import ScreenerEngine as _SE
+                _prog.progress(20, text="Updating technicals cache (may take a few minutes on first run) …")
+                _sc_df = _SE().screen_by_ratios(**_sc_filters)
+                _prog.progress(100, text="Done!")
+                _elapsed = round(_time.time() - _t0, 1)
+
+                if _sc_df.empty:
+                    st.info("No stocks match the current filters.")
+                else:
+                    st.success(f"Found **{len(_sc_df)}** stocks in {_elapsed}s")
+                    st.dataframe(_sc_df, use_container_width=True)
+
+                    _csv_bytes = _sc_df.to_csv(index=False).encode()
+                    st.download_button(
+                        "⬇️ Download CSV",
+                        data=_csv_bytes,
+                        file_name="screener_results.csv",
+                        mime="text/csv",
+                    )
+
+            except Exception as _sc_err:
+                _prog.empty()
+                st.error(f"Screener error: {_sc_err}")
+                st.exception(_sc_err)
