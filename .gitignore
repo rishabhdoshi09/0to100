@@ -1,15 +1,14 @@
-# Environment
+# ── Credentials & secrets ─────────────────────────────────────────────────────
 .env
+.env.*
 *.env
+credentials.json
+*.pem
+*.key
+.credentials
+trading_memory.json
 
-# Logs and output
-logs/
-*.log
-*.csv
-*.png
-*.json
-
-# Python
+# ── Python ────────────────────────────────────────────────────────────────────
 __pycache__/
 *.py[cod]
 *.pyo
@@ -23,76 +22,25 @@ dist/
 build/
 *.egg
 
-# IDE
+# ── Data / outputs ────────────────────────────────────────────────────────────
+logs/
+*.log
+*.csv
+*.png
+*.db
+*.pkl
+*.json
+
+# ── IDE ───────────────────────────────────────────────────────────────────────
 .idea/
 .vscode/
 *.swp
 *.swo
 .DS_Store
 
-# Kite instrument cache (regenerated daily)
-logs/instruments_cache.csv
-.env
-trading_memory.json
-__pycache__/
-*.pyc
-logs/
+# ── Project-specific ──────────────────────────────────────────────────────────
+data/instruments_cache.csv
+charts/
+models/
+memory/
 timesfm/
-signals/lgb_trading_model.pkl
-paper_trading.db
-*.db
--e 
-# Environment and credential files
-.env
-.env.*
-*.env
-credentials.json
-*.pem
-*.key
-.credentials
--e 
-# Environment and credential files
-.env
-.env.*
-*.env
-credentials.json
-*.pem
-*.key
-.credentials
--e 
-# Environment and credential files
-.env
-.env.*
-*.env
-credentials.json
-*.pem
-*.key
-.credentials
--e 
-# Environment and credential files
-.env
-.env.*
-*.env
-credentials.json
-*.pem
-*.key
-.credentials
--e 
-# Environment and credential files
-.env
-.env.*
-*.env
-credentials.json
-*.pem
-*.key
-.credentials
--e 
-# Environment and credential files
-.env
-.env.*
-*.env
-credentials.json
-*.pem
-*.key
-.credentials
-*.pkl
