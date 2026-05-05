@@ -20,6 +20,8 @@ import sys
 from datetime import date, timedelta
 from pathlib import Path
 
+import pandas as pd
+
 # Add simplequant to path for cleaner imports
 sys.path.insert(0, str(Path(__file__).parent))
 
@@ -280,6 +282,87 @@ def cmd_alerts(args) -> None:
     monitor.run()
 
 
+def cmd_chart(args) -> None:
+    """
+    Generate a professional interactive chart for a symbol and save to HTML.
+    Optionally show only a specific chart type (main | footprint | liquidity).
+    """
+    import yfinance as yf
+    from pathlib import Path as _Path
+
+    symbol = args.symbol.upper()
+    period = args.period          # e.g. "3mo", "1y", "5d"
+    chart_type = args.type        # "main" | "footprint" | "liquidity" | "all"
+
+    # ── fetch data ────────────────────────────────────────────────────────
+    _PERIOD_INTERVAL = {
+        "1d": "5m", "5d": "30m",
+        "1mo": "1d", "3mo": "1d", "6mo": "1d", "1y": "1d",
+    }
+    interval = _PERIOD_INTERVAL.get(period, "1d")
+    ticker = f"{symbol}.NS"
+    print(f"\nFetching {ticker}  period={period}  interval={interval} …")
+    df = yf.download(ticker, period=period, interval=interval,
+                     auto_adjust=True, progress=False)
+    if df.empty:
+        print(f"No data returned for {ticker}. Check the symbol spelling.")
+        sys.exit(1)
+
+    # yfinance may return MultiIndex columns — flatten them
+    if isinstance(df.columns, pd.MultiIndex):
+        df.columns = [c[0].lower() for c in df.columns]
+    else:
+        df.columns = [c.lower() for c in df.columns]
+    df = df[["open", "high", "low", "close", "volume"]].dropna()
+    print(f"Got {len(df)} bars.")
+
+    out_dir = _Path("charts")
+    out_dir.mkdir(exist_ok=True)
+
+    saved = []
+
+    # ── main chart ────────────────────────────────────────────────────────
+    if chart_type in ("main", "all"):
+        from charting.engine import SmartChart
+        fig = SmartChart().build(df, symbol=symbol, show_vp=True)
+        out = out_dir / f"chart_{symbol}_{period}.html"
+        fig.write_html(str(out), include_plotlyjs="cdn")
+        saved.append(str(out))
+
+    # ── footprint chart ───────────────────────────────────────────────────
+    if chart_type in ("footprint", "all"):
+        from charting.footprint import FootprintAnalyzer
+        fig = FootprintAnalyzer().build_figure(df, symbol=symbol)
+        out = out_dir / f"footprint_{symbol}_{period}.html"
+        fig.write_html(str(out), include_plotlyjs="cdn")
+        saved.append(str(out))
+
+    # ── liquidity heatmap ─────────────────────────────────────────────────
+    if chart_type in ("liquidity", "all"):
+        from charting.liquidity import LiquidityHeatmap
+        current_price = float(df["close"].iloc[-1])
+        book = LiquidityHeatmap().simulate_book(current_price)
+        fig = LiquidityHeatmap().build_figure(book, symbol=symbol)
+        out = out_dir / f"liquidity_{symbol}_{period}.html"
+        fig.write_html(str(out), include_plotlyjs="cdn")
+        saved.append(str(out))
+
+    print("\nCharts saved:")
+    for path in saved:
+        print(f"  {path}")
+    print("\nOpen any .html file in a browser to view the interactive chart.\n")
+
+
+def cmd_explain(args) -> None:
+    """Print a plain-language explanation for an indicator."""
+    from charting.explanations import explain, list_all
+    indicator = args.indicator
+    if indicator.lower() in ("list", "all", "?"):
+        print("\nAvailable indicators:\n  " + "\n  ".join(list_all()) + "\n")
+        return
+    print(explain(indicator))
+
+
 def cmd_fnolive(args) -> None:
     """Start the live trading loop with F&O execution enabled."""
     if not settings.enable_fno:
@@ -534,6 +617,20 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("alerts", help="Start background signal monitor (Telegram alerts)")
 
+    ch = sub.add_parser("chart", help="Build professional interactive chart (saved as HTML)")
+    ch.add_argument("--symbol", required=True, metavar="SYMBOL",
+                    help="NSE symbol, e.g. RELIANCE")
+    ch.add_argument("--period", default="3mo",
+                    choices=["1d", "5d", "1mo", "3mo", "6mo", "1y"],
+                    help="Data period (default: 3mo)")
+    ch.add_argument("--type", default="main",
+                    choices=["main", "footprint", "liquidity", "all"],
+                    help="Chart type: main | footprint | liquidity | all (default: main)")
+
+    ex = sub.add_parser("explain", help="Print plain-language explanation for an indicator")
+    ex.add_argument("--indicator", required=True, metavar="INDICATOR",
+                    help="Indicator name (e.g. vwap, rsi, macd) or 'list' to see all")
+
     sub.add_parser("kill", help="Write kill switch flag")
     sub.add_parser("status", help="Print live portfolio status from Kite")
 
@@ -545,16 +642,18 @@ def main() -> None:
     args = parser.parse_args()
 
     dispatch = {
-        "login": cmd_login,
-        "live": cmd_live,
-        "backtest": cmd_backtest,
+        "login":      cmd_login,
+        "live":       cmd_live,
+        "backtest":   cmd_backtest,
         "walkforward": cmd_walkforward,
-        "fnolive": cmd_fnolive,
-        "screener": cmd_screener,
-        "ensemble": cmd_ensemble,
-        "alerts": cmd_alerts,
-        "kill": cmd_kill,
-        "status": cmd_status,
+        "fnolive":    cmd_fnolive,
+        "screener":   cmd_screener,
+        "ensemble":   cmd_ensemble,
+        "alerts":     cmd_alerts,
+        "chart":      cmd_chart,
+        "explain":    cmd_explain,
+        "kill":       cmd_kill,
+        "status":     cmd_status,
     }
     dispatch[args.command](args)
 

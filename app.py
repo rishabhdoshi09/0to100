@@ -730,6 +730,7 @@ tabs = st.tabs([
     "🔮 What-If",
     "🔗 Correlations",
     "🔬 Deep Fundamentals",
+    "📊 Professional Charts",
 ])
 
 # ── Tab 0: Market Dashboard ────────────────────────────────────────────────────
@@ -1533,3 +1534,147 @@ with tabs[20]:
                 st.error(f"Symbol not found: {ve}")
             except Exception as ex:
                 st.error(f"Failed to load fundamentals: {ex}")
+
+# ── TAB 21 — Professional Charts ──────────────────────────────────────────────
+with tabs[21]:
+    st.subheader("📊 Professional Charts")
+    st.caption(
+        "Candlestick · VWAP · Bollinger Bands · Donchian Channels · "
+        "Volume Profile · RSI · MACD · ATR · Footprint · Liquidity Heatmap"
+    )
+
+    # ── sidebar controls ──────────────────────────────────────────────────
+    pc_col1, pc_col2, pc_col3 = st.columns([2, 2, 3])
+    with pc_col1:
+        pc_symbol = st.text_input(
+            "Symbol", value="RELIANCE", key="pc_symbol",
+            help="NSE symbol — uses yfinance (.NS suffix added automatically)"
+        ).upper().strip()
+    with pc_col2:
+        pc_period = st.selectbox(
+            "Period", ["1mo", "3mo", "6mo", "1y", "5d", "1d"],
+            index=1, key="pc_period"
+        )
+    with pc_col3:
+        pc_vp_bins = st.slider("Volume Profile bins", 20, 80, 40, 5, key="pc_vp_bins")
+
+    pc_show_vp = st.checkbox("Show Volume Profile sidebar", value=True, key="pc_show_vp")
+    pc_load = st.button("🔄 Load Charts", key="pc_load", type="primary")
+
+    # ── explain panel ─────────────────────────────────────────────────────
+    with st.expander("❓ Explain an indicator (plain language)", expanded=False):
+        from charting.explanations import list_all as _pc_list_all, explain as _pc_explain
+        _indicator_list = _pc_list_all()
+        _selected_ind = st.selectbox(
+            "Choose an indicator",
+            _indicator_list,
+            format_func=lambda k: k.replace("_", " ").title(),
+            key="pc_explain_select",
+        )
+        if st.button("Explain this to me", key="pc_explain_btn"):
+            st.session_state["pc_explain_text"] = _pc_explain(_selected_ind)
+        if "pc_explain_text" in st.session_state:
+            st.code(st.session_state["pc_explain_text"], language=None)
+
+    # ── data fetch & charts ───────────────────────────────────────────────
+    if pc_load or st.session_state.get("pc_data_loaded"):
+        try:
+            import yfinance as _yf
+            import pandas as _pd
+            from charting.engine import SmartChart as _SmartChart
+            from charting.footprint import FootprintAnalyzer as _FootprintAnalyzer
+            from charting.liquidity import LiquidityHeatmap as _LiqHeatmap
+
+            _PERIOD_INTERVAL = {
+                "1d": "5m", "5d": "30m",
+                "1mo": "1d", "3mo": "1d", "6mo": "1d", "1y": "1d",
+            }
+            _interval = _PERIOD_INTERVAL.get(pc_period, "1d")
+            _ticker = f"{pc_symbol}.NS"
+
+            with st.spinner(f"Fetching {_ticker}  period={pc_period}  interval={_interval} …"):
+                _df = _yf.download(
+                    _ticker, period=pc_period, interval=_interval,
+                    auto_adjust=True, progress=False
+                )
+
+            if _df.empty:
+                st.error(f"No data for {_ticker}. Check the symbol spelling.")
+            else:
+                # Flatten MultiIndex columns (yfinance may return them)
+                if isinstance(_df.columns, _pd.MultiIndex):
+                    _df.columns = [c[0].lower() for c in _df.columns]
+                else:
+                    _df.columns = [c.lower() for c in _df.columns]
+                _df = _df[["open", "high", "low", "close", "volume"]].dropna()
+
+                st.session_state["pc_data_loaded"] = True
+                st.caption(
+                    f"✅ {len(_df)} bars loaded for **{pc_symbol}** "
+                    f"(latest close: ₹{_df['close'].iloc[-1]:,.2f})"
+                )
+
+                # ── Chart sub-tabs ────────────────────────────────────────
+                _ct1, _ct2, _ct3 = st.tabs([
+                    "📈 Main Chart (VWAP · BB · Donchian · Volume Profile)",
+                    "🦶 Footprint & Order Flow",
+                    "💧 Liquidity Heatmap",
+                ])
+
+                with _ct1:
+                    _smart_fig = _SmartChart().build(
+                        _df, symbol=pc_symbol,
+                        show_vp=pc_show_vp,
+                        vp_bins=pc_vp_bins,
+                    )
+                    st.plotly_chart(_smart_fig, use_container_width=True)
+
+                    # Quick indicator legend
+                    _leg_col1, _leg_col2, _leg_col3 = st.columns(3)
+                    with _leg_col1:
+                        st.markdown(
+                            "**🟠 VWAP** — Today's volume-weighted fair price\n\n"
+                            "**🔵 Bollinger Bands** — Price channels ±2σ from SMA-20\n\n"
+                            "**🟣 Donchian Channels** — 20-period high/low range"
+                        )
+                    with _leg_col2:
+                        st.markdown(
+                            "**🟡 POC** — Price with highest volume (magnet level)\n\n"
+                            "**🟢 Value Area** — 70% of all volume traded here\n\n"
+                            "**📊 Volume bars** — Green = up candle, Red = down candle"
+                        )
+                    with _leg_col3:
+                        st.markdown(
+                            "**RSI > 70** — Overbought (may pull back)\n\n"
+                            "**RSI < 30** — Oversold (may bounce)\n\n"
+                            "**MACD cross ↑** — Bullish momentum shift"
+                        )
+
+                with _ct2:
+                    _fp_fig = _FootprintAnalyzer().build_figure(_df, symbol=pc_symbol)
+                    st.plotly_chart(_fp_fig, use_container_width=True)
+                    st.info(
+                        "⭐ **Green star above candle** = ask imbalance (buyers ≥ 3× sellers at that level — bullish pressure)  \n"
+                        "⭐ **Red star below candle** = bid imbalance (sellers ≥ 3× buyers — bearish pressure)  \n"
+                        "📊 **Cumulative Delta** = running total of (ask vol − bid vol). Rising = buyers winning; falling = sellers winning.  \n"
+                        "🔍 *Hover over any candle to see bid vol, ask vol, and delta.*  \n"
+                        "⚠️ *Simulated from OHLCV data — real tick data requires Zerodha WebSocket.*"
+                    )
+
+                with _ct3:
+                    _current_price = float(_df["close"].iloc[-1])
+                    _book = _LiqHeatmap().simulate_book(_current_price)
+                    _liq_fig = _LiqHeatmap().build_figure(_book, symbol=pc_symbol)
+                    st.plotly_chart(_liq_fig, use_container_width=True)
+                    st.info(
+                        "🟢 **Green bars (left)** = pending buy orders (bids) — act as support  \n"
+                        "🔴 **Red bars (right)** = pending sell orders (asks) — act as resistance  \n"
+                        "**Bigger/brighter bar** = larger order cluster = stronger support/resistance  \n"
+                        "⚠️ *Simulated — live order book requires Zerodha WebSocket market depth.*"
+                    )
+
+        except Exception as _pc_err:
+            st.error(f"Chart error: {_pc_err}")
+            st.exception(_pc_err)
+    else:
+        st.info("Enter a symbol and click **Load Charts** to begin.")
