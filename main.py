@@ -20,6 +20,8 @@ import sys
 from datetime import date, timedelta
 from pathlib import Path
 
+import pandas as pd
+
 # Add simplequant to path for cleaner imports
 sys.path.insert(0, str(Path(__file__).parent))
 
@@ -161,6 +163,341 @@ def cmd_backtest(args) -> None:
     print(f"Reports saved to: {settings.log_dir}/")
 
 
+def cmd_screener(args) -> None:
+    """Fetch deep fundamentals from screener.in for a symbol."""
+    symbol: str = args.symbol.upper()
+    force: bool = args.force
+    table_filter: str = args.table or ""
+
+    log.info("screener_fetch_requested", symbol=symbol, force=force)
+
+    from fundamentals.fetcher import get_deep_fundamentals
+
+    print(f"\nFetching fundamentals for {symbol} {'(force refresh)' if force else '(cache-first)'}…")
+
+    try:
+        data = get_deep_fundamentals(symbol, force_refresh=force)
+    except ValueError as exc:
+        print(f"\nError: {exc}")
+        sys.exit(1)
+    except Exception as exc:
+        print(f"\nFailed to fetch: {exc}")
+        sys.exit(1)
+
+    # Determine which sections to print
+    _ALL_SECTIONS = [
+        "key_ratios", "profit_loss", "balance_sheet",
+        "quarterly_results", "shareholding", "cash_flow",
+        "peer_comparison",
+    ]
+    sections = [table_filter] if table_filter else _ALL_SECTIONS
+
+    try:
+        from tabulate import tabulate
+        _HAS_TABULATE = True
+    except ImportError:
+        _HAS_TABULATE = False
+
+    import json as _json
+
+    print(f"\n{'═'*60}")
+    print(f"  {symbol} — Deep Fundamentals  (source: screener.in)")
+    print(f"  {'Consolidated' if data.get('metadata', {}).get('consolidated') else 'Standalone'}")
+    print(f"{'═'*60}")
+
+    about = data.get("about", "")
+    if about and not table_filter:
+        print(f"\nAbout:\n  {about[:300]}{'…' if len(about) > 300 else ''}\n")
+
+    for section in sections:
+        rows = data.get(section)
+        if not rows:
+            continue
+
+        heading = section.replace("_", " ").title()
+        print(f"\n{'─'*60}")
+        print(f"  {heading}")
+        print(f"{'─'*60}")
+
+        if isinstance(rows, list) and rows:
+            if _HAS_TABULATE:
+                print(tabulate(rows[:25], headers="keys", tablefmt="rounded_outline", floatfmt=".2f"))
+            else:
+                print(_json.dumps(rows[:20], indent=2, ensure_ascii=False))
+        elif isinstance(rows, dict):
+            print(_json.dumps(rows, indent=2, ensure_ascii=False))
+
+    meta = data.get("metadata", {})
+    print(f"\n[Rows scraped: {meta.get('total_rows_scraped', '?')} | URL: {data.get('url', '?')}]")
+    print()
+
+
+def cmd_ensemble(args) -> None:
+    """Print ensemble ML signal for a symbol."""
+    symbol = args.symbol.upper()
+    log.info("ensemble_signal_requested", symbol=symbol)
+
+    from data.kite_client import KiteClient
+    from data.instruments import InstrumentManager
+    from data.historical import HistoricalDataFetcher
+    from ml.ensemble_signal import EnsembleSignalGenerator
+
+    kite = KiteClient()
+    instruments = InstrumentManager()
+    historical = HistoricalDataFetcher(kite, instruments)
+
+    import sys
+    from datetime import date, timedelta as td
+    to_d = date.today().strftime("%Y-%m-%d")
+    from_d = (date.today() - td(days=400)).strftime("%Y-%m-%d")
+
+    print(f"\nFetching data for {symbol}…")
+    df = historical.fetch(symbol=symbol, from_date=from_d, to_date=to_d, interval="day")
+    if df is None or df.empty:
+        print(f"No data for {symbol}. Check Kite credentials.")
+        sys.exit(1)
+
+    gen = EnsembleSignalGenerator()
+    sig = gen.generate_signal(df, symbol)
+
+    print(f"\n{'─'*50}")
+    print(f"  Symbol    : {sig['symbol']}")
+    print(f"  Action    : {sig['action']}")
+    print(f"  Confidence: {sig['confidence']:.1%}")
+    print(f"  Reasoning : {sig['reasoning']}")
+    details = sig.get("ensemble_details", {})
+    if details:
+        print("\n  Model breakdown:")
+        for model_name, info in details.items():
+            if isinstance(info, dict):
+                print(f"    {model_name:12s}: {info.get('action','?'):4s} @ {info.get('confidence',0):.1%}")
+    print(f"{'─'*50}\n")
+
+
+def cmd_alerts(args) -> None:
+    """Start the background signal monitor (runs until Ctrl+C)."""
+    log.info("alerts_monitor_starting")
+    from notify.alerts import SignalMonitor
+    monitor = SignalMonitor()
+    monitor.run()
+
+
+def cmd_chart(args) -> None:
+    """
+    Generate a professional interactive chart for a symbol and save to HTML.
+    Optionally show only a specific chart type (main | footprint | liquidity).
+    """
+    import yfinance as yf
+    from pathlib import Path as _Path
+
+    symbol = args.symbol.upper()
+    period = args.period          # e.g. "3mo", "1y", "5d"
+    chart_type = args.type        # "main" | "footprint" | "liquidity" | "all"
+
+    # ── fetch data ────────────────────────────────────────────────────────
+    _PERIOD_INTERVAL = {
+        "1d": "5m", "5d": "30m",
+        "1mo": "1d", "3mo": "1d", "6mo": "1d", "1y": "1d",
+    }
+    interval = _PERIOD_INTERVAL.get(period, "1d")
+    ticker = f"{symbol}.NS"
+    print(f"\nFetching {ticker}  period={period}  interval={interval} …")
+    df = yf.download(ticker, period=period, interval=interval,
+                     auto_adjust=True, progress=False)
+    if df.empty:
+        print(f"No data returned for {ticker}. Check the symbol spelling.")
+        sys.exit(1)
+
+    # yfinance may return MultiIndex columns — flatten them
+    if isinstance(df.columns, pd.MultiIndex):
+        df.columns = [c[0].lower() for c in df.columns]
+    else:
+        df.columns = [c.lower() for c in df.columns]
+    df = df[["open", "high", "low", "close", "volume"]].dropna()
+    print(f"Got {len(df)} bars.")
+
+    out_dir = _Path("charts")
+    out_dir.mkdir(exist_ok=True)
+
+    saved = []
+
+    # ── main chart ────────────────────────────────────────────────────────
+    if chart_type in ("main", "all"):
+        from charting.engine import SmartChart
+        fig = SmartChart().build(df, symbol=symbol, show_vp=True)
+        out = out_dir / f"chart_{symbol}_{period}.html"
+        fig.write_html(str(out), include_plotlyjs="cdn")
+        saved.append(str(out))
+
+    # ── footprint chart ───────────────────────────────────────────────────
+    if chart_type in ("footprint", "all"):
+        from charting.footprint import FootprintAnalyzer
+        fig = FootprintAnalyzer().build_figure(df, symbol=symbol)
+        out = out_dir / f"footprint_{symbol}_{period}.html"
+        fig.write_html(str(out), include_plotlyjs="cdn")
+        saved.append(str(out))
+
+    # ── liquidity heatmap ─────────────────────────────────────────────────
+    if chart_type in ("liquidity", "all"):
+        from charting.liquidity import LiquidityHeatmap
+        current_price = float(df["close"].iloc[-1])
+        book = LiquidityHeatmap().simulate_book(current_price)
+        fig = LiquidityHeatmap().build_figure(book, symbol=symbol)
+        out = out_dir / f"liquidity_{symbol}_{period}.html"
+        fig.write_html(str(out), include_plotlyjs="cdn")
+        saved.append(str(out))
+
+    print("\nCharts saved:")
+    for path in saved:
+        print(f"  {path}")
+    print("\nOpen any .html file in a browser to view the interactive chart.\n")
+
+
+def cmd_explain(args) -> None:
+    """Print a plain-language explanation for an indicator."""
+    from charting.explanations import explain, list_all
+    indicator = args.indicator
+    if indicator.lower() in ("list", "all", "?"):
+        print("\nAvailable indicators:\n  " + "\n  ".join(list_all()) + "\n")
+        return
+    print(explain(indicator))
+
+
+def cmd_fnolive(args) -> None:
+    """Start the live trading loop with F&O execution enabled."""
+    if not settings.enable_fno:
+        print("F&O trading is disabled. Set ENABLE_FNO=true in .env to enable.")
+        sys.exit(0)
+
+    _assert_credentials()
+    log.info("starting_fno_live_trading")
+
+    from data.kite_client import KiteClient
+    from data.instruments import InstrumentManager
+    from data.historical import HistoricalDataFetcher
+    from execution.zerodha_broker import ZerodhaBroker
+    from execution.fo_executor import FnOExecutor
+    from portfolio.state import PortfolioState
+    from risk.risk_manager import RiskManager
+    from engine.trade_engine import TradeEngine
+
+    print("\n" + "=" * 60)
+    print("  WARNING: F&O trading enabled.")
+    print("  Losses can exceed capital.")
+    print("  Confirm you understand margin requirements.")
+    print("=" * 60)
+    confirm = input('\nType "YES" to continue, anything else to abort: ').strip()
+    if confirm != "YES":
+        print("Aborted.")
+        sys.exit(0)
+
+    kite = KiteClient()
+    instruments = InstrumentManager()
+    historical = HistoricalDataFetcher(kite, instruments)
+    portfolio = PortfolioState(settings.backtest_initial_capital)
+    risk = RiskManager()
+    broker = ZerodhaBroker(kite)
+    _fno = FnOExecutor(kite)  # available for strategy-layer use; engine unchanged
+
+    engine = TradeEngine(
+        kite=kite,
+        portfolio=portfolio,
+        risk_manager=risk,
+        broker=broker,
+        instruments=instruments,
+        historical=historical,
+    )
+
+    print("\n=== SimpleQuant AI — F&O Live Trading ===")
+    print(f"Universe : {', '.join(settings.symbol_list)}")
+    print(f"Cycle    : every {settings.cycle_interval_seconds}s")
+    print(f"Product  : {settings.fno_default_product}")
+    print("\nPress Ctrl+C to stop gracefully.\n")
+
+    engine.run()
+
+
+def cmd_walkforward(args) -> None:
+    """Run walk-forward validation on historical Kite data."""
+    _assert_credentials()
+
+    from_date: str = args.from_date
+    to_date: str = args.to_date
+
+    log.info(
+        "starting_walk_forward",
+        from_date=from_date,
+        to_date=to_date,
+    )
+
+    from data.kite_client import KiteClient
+    from data.instruments import InstrumentManager
+    from data.historical import HistoricalDataFetcher
+    from backtest.walk_forward import WalkForwardValidator
+
+    kite = KiteClient()
+    instruments = InstrumentManager()
+    historical = HistoricalDataFetcher(kite, instruments)
+
+    print("\n=== SimpleQuant AI — Walk-Forward Validation ===")
+    print(f"Period  : {from_date} → {to_date}")
+    print(f"Universe: {', '.join(settings.symbol_list)}")
+    print(f"IS days : {settings.walkforward_is_days}  |  OOS days: {settings.walkforward_oos_days}")
+    print(f"Capital : ₹{settings.backtest_initial_capital:,.0f}\n")
+
+    print("Downloading historical data…")
+    hist_data = {}
+    for symbol in settings.symbol_list:
+        df = historical.fetch(
+            symbol=symbol,
+            from_date=from_date,
+            to_date=to_date,
+            interval="day",
+        )
+        if not df.empty:
+            hist_data[symbol] = df
+            print(f"  {symbol}: {len(df)} bars")
+        else:
+            print(f"  {symbol}: no data — skipped")
+
+    if not hist_data:
+        print("No data available. Check Kite credentials and symbol names.")
+        sys.exit(1)
+
+    print("\nRunning walk-forward validation…")
+    validator = WalkForwardValidator()
+    summary = validator.run(hist_data)
+
+    if not summary:
+        print("Walk-forward produced no results — insufficient data.")
+        sys.exit(1)
+
+    print(f"\n{'─'*52}")
+    print(f"  Windows completed     : {summary['total_windows']}")
+    print(f"  Mean OOS Sharpe       : {summary['mean_oos_sharpe']:.3f}")
+    print(f"  Mean IS  Sharpe       : {summary['mean_is_sharpe']:.3f}")
+    print(f"  IS/OOS Sharpe ratio   : {summary['is_oos_sharpe_ratio']:.3f}  (>2.0 = overfitting)")
+    print(f"  % Profitable OOS wins : {summary['pct_profitable_oos_windows']:.1f}%")
+    print(f"{'─'*52}")
+
+    if summary["is_oos_sharpe_ratio"] > 2.0:
+        print("  WARNING: IS/OOS ratio > 2.0 — strategy may be overfit to IS data.")
+
+    print("\nOOS Window Details:")
+    for w in summary.get("window_details", []):
+        print(
+            f"  [{w['window']:02d}] {w['oos_start']} → {w['oos_end']} "
+            f"Sharpe={w['oos_sharpe']:+.3f}  ret={w['oos_total_return_pct']:+.2f}%  "
+            f"dd={w['oos_max_drawdown_pct']:.2f}%"
+        )
+
+    print("\nMost-frequent winning parameter sets:")
+    for params_str, count in list(summary.get("best_params_frequency", {}).items())[:3]:
+        print(f"  {count}x  {params_str}")
+
+    print(f"\nDone. Reports available in {settings.log_dir}/")
+
+
 def cmd_kill(args) -> None:
     """Write a kill switch flag file. The live engine checks this on startup."""
     flag = Path("logs/.kill_switch")
@@ -248,6 +585,52 @@ def build_parser() -> argparse.ArgumentParser:
         help="Use pure technical strategy (no DeepSeek calls — fast, free)",
     )
 
+    wf = sub.add_parser("walkforward", help="Run walk-forward parameter validation")
+    wf.add_argument(
+        "--from",
+        dest="from_date",
+        default=(date.today() - timedelta(days=3 * 365)).strftime("%Y-%m-%d"),
+        metavar="YYYY-MM-DD",
+    )
+    wf.add_argument(
+        "--to",
+        dest="to_date",
+        default=date.today().strftime("%Y-%m-%d"),
+        metavar="YYYY-MM-DD",
+    )
+
+    sub.add_parser("fnolive", help="Start live trading with F&O execution (requires ENABLE_FNO=true)")
+
+    scr = sub.add_parser("screener", help="Fetch deep fundamentals from screener.in")
+    scr.add_argument("--symbol", required=True, metavar="SYMBOL", help="NSE symbol, e.g. BEL")
+    scr.add_argument("--force", action="store_true", help="Ignore cache and re-scrape")
+    scr.add_argument(
+        "--table",
+        default="",
+        metavar="SECTION",
+        help="Print only one section: key_ratios | profit_loss | balance_sheet | "
+             "quarterly_results | shareholding | cash_flow",
+    )
+
+    ens = sub.add_parser("ensemble", help="Print ensemble ML signal for a symbol")
+    ens.add_argument("--symbol", required=True, metavar="SYMBOL", help="NSE symbol, e.g. RELIANCE")
+
+    sub.add_parser("alerts", help="Start background signal monitor (Telegram alerts)")
+
+    ch = sub.add_parser("chart", help="Build professional interactive chart (saved as HTML)")
+    ch.add_argument("--symbol", required=True, metavar="SYMBOL",
+                    help="NSE symbol, e.g. RELIANCE")
+    ch.add_argument("--period", default="3mo",
+                    choices=["1d", "5d", "1mo", "3mo", "6mo", "1y"],
+                    help="Data period (default: 3mo)")
+    ch.add_argument("--type", default="main",
+                    choices=["main", "footprint", "liquidity", "all"],
+                    help="Chart type: main | footprint | liquidity | all (default: main)")
+
+    ex = sub.add_parser("explain", help="Print plain-language explanation for an indicator")
+    ex.add_argument("--indicator", required=True, metavar="INDICATOR",
+                    help="Indicator name (e.g. vwap, rsi, macd) or 'list' to see all")
+
     sub.add_parser("kill", help="Write kill switch flag")
     sub.add_parser("status", help="Print live portfolio status from Kite")
 
@@ -259,11 +642,18 @@ def main() -> None:
     args = parser.parse_args()
 
     dispatch = {
-        "login": cmd_login,
-        "live": cmd_live,
-        "backtest": cmd_backtest,
-        "kill": cmd_kill,
-        "status": cmd_status,
+        "login":      cmd_login,
+        "live":       cmd_live,
+        "backtest":   cmd_backtest,
+        "walkforward": cmd_walkforward,
+        "fnolive":    cmd_fnolive,
+        "screener":   cmd_screener,
+        "ensemble":   cmd_ensemble,
+        "alerts":     cmd_alerts,
+        "chart":      cmd_chart,
+        "explain":    cmd_explain,
+        "kill":       cmd_kill,
+        "status":     cmd_status,
     }
     dispatch[args.command](args)
 

@@ -722,6 +722,15 @@ tabs = st.tabs([
     "🏦 Quant Hedge Fund",
     "📊 Fundamentals",
     "📋 Paper Trading",
+    # ── New Enhancement Tabs ──────────────────────────────────────────────
+    "📐 Multi-Timeframe",
+    "🌡️ Regime",
+    "🧠 Ensemble ML",
+    "⚠️ Risk Metrics",
+    "🔮 What-If",
+    "🔗 Correlations",
+    "🔬 Deep Fundamentals",
+    "📊 Professional Charts",
 ])
 
 # ── Tab 0: Market Dashboard ────────────────────────────────────────────────────
@@ -1182,3 +1191,490 @@ with tabs[13]:
                     st.info("No open position to close.")
             else:
                 st.info("HOLD — no action.")
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# TAB 14 — Multi-Timeframe Signal Aligner
+# ═══════════════════════════════════════════════════════════════════════════════
+with tabs[14]:
+    st.subheader("📐 Multi-Timeframe Signal Aligner")
+    st.caption("Checks XGBoost signal direction across 5-min, 15-min, 1-h, and daily timeframes.")
+
+    mtf_sym = st.selectbox("Symbol", options=list(get_all_equity_symbols().keys()), key="mtf_sym")
+    mtf_tfs = st.multiselect("Timeframes", ["5min", "15min", "1h", "1d"], default=["5min", "15min", "1h"], key="mtf_tfs")
+
+    if st.button("🔍 Run Multi-Timeframe Analysis", key="mtf_run"):
+        with st.spinner("Fetching data and running signals…"):
+            try:
+                from analysis.multi_timeframe import MultiTimeframeAligner
+                aligner = MultiTimeframeAligner(fetcher=fetcher)
+                result = aligner.align(mtf_sym, mtf_tfs)
+
+                score = result.get("alignment_score", 0.0)
+                consensus = result.get("consensus_action", "HOLD")
+                colour = {"BUY": "#2e7d32", "SELL": "#c62828", "HOLD": "#e65100"}.get(consensus, "#555")
+
+                col_a, col_b = st.columns([1, 2])
+                with col_a:
+                    st.markdown(f"""
+                    <div style="background:#fff;border-radius:16px;padding:1.5rem;text-align:center;
+                                box-shadow:0 2px 8px rgba(0,0,0,.05);border:1px solid #eef2f6">
+                      <p style="margin:0;font-size:.85rem;color:#666">Alignment Score</p>
+                      <p style="margin:.25rem 0;font-size:2.5rem;font-weight:700;color:{colour}">{score:+.2f}</p>
+                      <p style="margin:0;font-size:1rem;font-weight:600;color:{colour}">{consensus}</p>
+                    </div>""", unsafe_allow_html=True)
+
+                with col_b:
+                    tf_data = result.get("timeframes", {})
+                    if tf_data:
+                        import pandas as pd
+                        rows = [
+                            {"Timeframe": tf, "Action": v.get("action","?"), "Confidence": f"{v.get('confidence',0):.1%}"}
+                            for tf, v in tf_data.items()
+                        ]
+                        df_tf = pd.DataFrame(rows)
+                        st.dataframe(df_tf, hide_index=True, use_container_width=True)
+
+            except Exception as e:
+                st.error(f"Error: {e}")
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# TAB 15 — Market Regime Detector
+# ═══════════════════════════════════════════════════════════════════════════════
+with tabs[15]:
+    st.subheader("🌡️ Market Regime Detector")
+    st.caption("Combines Hurst exponent, ADX, India VIX, and F&O expiry proximity.")
+
+    if st.button("🔄 Detect Current Regime", key="regime_run"):
+        with st.spinner("Analysing market regime…"):
+            try:
+                from analysis.regime_detector import RegimeDetector
+                rd = RegimeDetector(fetcher=fetcher)
+                r = rd.detect()
+
+                regime = r.get("regime", "UNKNOWN")
+                vix_label = r.get("vix_label", "?")
+                colour = "#c62828" if "HIGH_VOL" in regime else "#2e7d32" if "LOW_VOL" in regime else "#e65100"
+
+                st.markdown(f"""
+                <div style="background:{colour}11;border:2px solid {colour};border-radius:16px;
+                            padding:1.25rem;text-align:center;margin-bottom:1rem">
+                  <span style="font-size:1.4rem;font-weight:700;color:{colour}">{regime}</span>
+                </div>""", unsafe_allow_html=True)
+
+                if r.get("expiry_warning"):
+                    st.warning("⚠️ F&O expiry within 3 days — expect elevated volatility and thin liquidity.")
+
+                c1, c2, c3 = st.columns(3)
+                c1.metric("Hurst Exponent", f"{r.get('hurst') or 'N/A'}", help="<0.45=Mean Rev, >0.55=Trending")
+                c2.metric("ADX", f"{r.get('adx') or 'N/A'}", help=">25=Trending, <20=Sideways")
+                c3.metric("India VIX", f"{r.get('india_vix') or 'N/A'}", help="<13=Low, >18=High")
+
+                st.info(f"**Recommended strategy:** {r.get('recommended_strategy','')}")
+
+            except Exception as e:
+                st.error(f"Error: {e}")
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# TAB 16 — Ensemble ML Signal
+# ═══════════════════════════════════════════════════════════════════════════════
+with tabs[16]:
+    st.subheader("🧠 Ensemble ML Signal")
+    st.caption("XGBoost + LightGBM (+ optional Chronos-Bolt) weighted-vote signal.")
+
+    ens_sym = st.selectbox("Symbol", options=list(get_all_equity_symbols().keys()), key="ens_sym")
+
+    if st.button("🤖 Generate Ensemble Signal", key="ens_run"):
+        with st.spinner("Training / loading models and generating signal…"):
+            try:
+                from ml.ensemble_signal import EnsembleSignalGenerator
+                gen = EnsembleSignalGenerator()
+                df_ens = fetch_historical(ens_sym, days=400)
+                if df_ens is None or df_ens.empty:
+                    st.warning("No data available.")
+                else:
+                    sig = gen.generate_signal(df_ens, ens_sym)
+                    action = sig.get("action", "HOLD")
+                    conf = sig.get("confidence", 0)
+                    colour = {"BUY": "#2e7d32", "SELL": "#c62828", "HOLD": "#e65100"}.get(action, "#555")
+
+                    c1, c2 = st.columns(2)
+                    c1.markdown(f"""
+                    <div class="recommendation {action.lower()}">{action}</div>
+                    <p style="text-align:center;margin-top:.5rem">Confidence: <b>{conf:.1%}</b></p>
+                    """, unsafe_allow_html=True)
+                    with c2:
+                        st.write("**Reasoning:**", sig.get("reasoning", ""))
+                        details = sig.get("ensemble_details", {})
+                        if details:
+                            rows = [
+                                {"Model": m, "Action": v.get("action","?"), "Confidence": f"{v.get('confidence',0):.1%}", "Weight": v.get("weight","")}
+                                for m, v in details.items() if isinstance(v, dict)
+                            ]
+                            import pandas as pd
+                            if rows:
+                                st.dataframe(pd.DataFrame(rows), hide_index=True)
+
+            except Exception as e:
+                st.error(f"Error: {e}")
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# TAB 17 — Risk Metrics
+# ═══════════════════════════════════════════════════════════════════════════════
+with tabs[17]:
+    st.subheader("⚠️ Risk Metrics")
+    st.caption("VaR, CVaR, Sortino, Calmar, Beta vs Nifty, Max Drawdown — last 2 years of daily data.")
+
+    rm_sym = st.selectbox("Symbol", options=list(get_all_equity_symbols().keys()), key="rm_sym")
+
+    if st.button("📊 Compute Risk Metrics", key="rm_run"):
+        with st.spinner("Computing risk metrics…"):
+            try:
+                from analytics.risk_metrics import RiskMetrics
+                rm = RiskMetrics(fetcher=fetcher)
+                m = rm.compute(rm_sym)
+
+                if m.get("error"):
+                    st.warning(f"Could not compute metrics: {m['error']}")
+                else:
+                    risk_score = m.get("risk_score", 5)
+                    score_colour = "#c62828" if risk_score >= 7 else "#e65100" if risk_score >= 5 else "#2e7d32"
+
+                    st.markdown(f"""
+                    <div style="background:{score_colour}11;border:2px solid {score_colour};
+                                border-radius:12px;padding:1rem;text-align:center;margin-bottom:1rem">
+                      <span style="font-size:1rem;color:#666">Risk Score</span><br>
+                      <span style="font-size:2.5rem;font-weight:700;color:{score_colour}">{risk_score}/10</span>
+                    </div>""", unsafe_allow_html=True)
+
+                    import pandas as pd
+                    rows = [
+                        ("Annualised Return", f"{m.get('annualised_return_pct','N/A')}%"),
+                        ("Annualised Volatility", f"{m.get('annualised_volatility_pct','N/A')}%"),
+                        ("Sharpe Ratio", m.get('sharpe_ratio','N/A')),
+                        ("Sortino Ratio", m.get('sortino_ratio','N/A')),
+                        ("Calmar Ratio", m.get('calmar_ratio','N/A')),
+                        ("Max Drawdown", f"{m.get('max_drawdown_pct','N/A')}%"),
+                        ("VaR 95%", m.get('var_95','N/A')),
+                        ("VaR 99%", m.get('var_99','N/A')),
+                        ("CVaR 95%", m.get('cvar_95','N/A')),
+                        ("CVaR 99%", m.get('cvar_99','N/A')),
+                        ("Beta vs Nifty", m.get('beta','N/A')),
+                    ]
+                    df_rm = pd.DataFrame(rows, columns=["Metric", "Value"])
+                    st.dataframe(df_rm, hide_index=True, use_container_width=True)
+
+            except Exception as e:
+                st.error(f"Error: {e}")
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# TAB 18 — What-If Simulator
+# ═══════════════════════════════════════════════════════════════════════════════
+with tabs[18]:
+    st.subheader("🔮 What-If Trade Simulator")
+    st.caption("Estimates trade outcomes using historical rolling-window distributions.")
+
+    with st.form("whatif_form"):
+        wi_col1, wi_col2 = st.columns(2)
+        with wi_col1:
+            wi_sym = st.selectbox("Symbol", options=list(get_all_equity_symbols().keys()), key="wi_sym_sel")
+            wi_qty = st.number_input("Quantity (shares)", min_value=1, value=100, step=1)
+        with wi_col2:
+            wi_price = st.number_input("Entry Price (₹)", min_value=1.0, value=1000.0, step=1.0)
+            wi_days = st.number_input("Holding Days", min_value=1, max_value=60, value=5, step=1)
+        submitted = st.form_submit_button("🔮 Simulate")
+
+    if submitted:
+        with st.spinner("Running simulation…"):
+            try:
+                from simulator.whatif import WhatIfSimulator
+                sim = WhatIfSimulator(fetcher=fetcher)
+                r = sim.simulate(wi_sym, wi_qty, wi_price, wi_days)
+
+                if r.get("error"):
+                    st.warning(f"Could not simulate: {r['error']}")
+                else:
+                    c1, c2, c3, c4 = st.columns(4)
+                    c1.metric("Prob. Profit", f"{r.get('prob_profit',0):.0%}")
+                    c2.metric("Prob. Loss >2%", f"{r.get('prob_loss_gt_2pct',0):.0%}")
+                    c3.metric("Expected Return", f"{r.get('expected_return_pct',0):.2f}%")
+                    c4.metric("99% VaR", f"₹{r.get('var_99',0):,.0f}", help="Worst-case loss at 99% confidence")
+
+                    st.caption(f"Based on {r.get('simulation_samples',0)} historical windows · "
+                               f"Current price: ₹{r.get('current_price','N/A')}")
+                    st.warning("⚠️ Past return distributions do not guarantee future results. "
+                               "This is for educational purposes only — not financial advice.")
+
+            except Exception as e:
+                st.error(f"Error: {e}")
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# TAB 19 — Correlation Matrix Heatmap
+# ═══════════════════════════════════════════════════════════════════════════════
+with tabs[19]:
+    st.subheader("🔗 Correlation Matrix Heatmap")
+    st.caption("Pairwise return correlations. Pairs >0.7 highlighted in red.")
+
+    all_syms = list(get_all_equity_symbols().keys())
+    corr_syms = st.multiselect(
+        "Select up to 20 symbols",
+        options=all_syms,
+        default=["RELIANCE", "TCS", "HDFCBANK", "INFY", "ICICIBANK"][:min(5, len(all_syms))],
+        max_selections=20,
+        key="corr_syms",
+    )
+    corr_days = st.slider("Lookback days", 20, 252, 60, key="corr_days")
+
+    if st.button("📊 Compute Correlations", key="corr_run") and corr_syms:
+        with st.spinner("Fetching prices and computing correlations…"):
+            try:
+                from analysis.correlation import CorrelationAnalyzer
+                ca = CorrelationAnalyzer(fetcher=fetcher)
+                summary = ca.summary(corr_syms, lookback_days=corr_days)
+
+                if summary.get("error"):
+                    st.warning(f"Could not compute: {summary['error']}")
+                else:
+                    import plotly.express as px
+                    import pandas as pd
+                    corr_df = pd.DataFrame(summary["matrix"])
+
+                    fig = px.imshow(
+                        corr_df,
+                        color_continuous_scale="RdYlGn",
+                        zmin=-1, zmax=1,
+                        title=f"Return Correlation — {corr_days}d",
+                        text_auto=".2f",
+                    )
+                    fig.update_layout(height=500)
+                    st.plotly_chart(fig, use_container_width=True)
+
+                    high_pairs = summary.get("high_corr_pairs", [])
+                    if high_pairs:
+                        st.markdown("**Highly correlated pairs (>0.7):**")
+                        hp_df = pd.DataFrame(high_pairs)
+                        st.dataframe(hp_df, hide_index=True, use_container_width=True)
+
+                    avg_c = summary.get("avg_correlation", {})
+                    if avg_c:
+                        st.markdown("**Average correlation to universe:**")
+                        avg_df = pd.DataFrame(avg_c.items(), columns=["Symbol", "Avg Correlation"]).sort_values("Avg Correlation", ascending=False)
+                        st.dataframe(avg_df, hide_index=True, use_container_width=True)
+
+            except Exception as e:
+                st.error(f"Error: {e}")
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# TAB 20 — Deep Fundamentals (screener.in full data)
+# ═══════════════════════════════════════════════════════════════════════════════
+with tabs[20]:
+    st.subheader("🔬 Deep Fundamentals")
+    st.caption("Full screener.in data: Key Ratios, P&L, Balance Sheet, Quarterly, Shareholding, Cash Flow. Cached 24h.")
+
+    df_sym_input = st.text_input("NSE Symbol", value="BEL", key="df_sym_in").upper().strip()
+    df_col1, df_col2 = st.columns([1, 1])
+    with df_col1:
+        df_force = st.checkbox("Force refresh (ignore cache)", key="df_force")
+    with df_col2:
+        df_load_btn = st.button("📥 Load Fundamentals", key="df_load")
+
+    if df_load_btn and df_sym_input:
+        with st.spinner(f"Fetching fundamentals for {df_sym_input}…"):
+            try:
+                from fundamentals.fetcher import get_deep_fundamentals
+                fund_data = get_deep_fundamentals(df_sym_input, force_refresh=df_force)
+
+                # Company header
+                about = fund_data.get("about", "")
+                meta  = fund_data.get("metadata", {})
+                st.markdown(f"**{df_sym_input}** · {'Consolidated' if meta.get('consolidated') else 'Standalone'} · "
+                            f"[screener.in]({fund_data.get('url','#')})")
+                if about:
+                    with st.expander("About the company"):
+                        st.write(about)
+
+                # ── Key Ratios ────────────────────────────────────────────
+                key_ratios = fund_data.get("key_ratios", [])
+                if key_ratios:
+                    st.markdown("### 📊 Key Ratios")
+                    ratio_cols = st.columns(min(len(key_ratios), 5))
+                    for i, ratio in enumerate(key_ratios[:10]):
+                        with ratio_cols[i % 5]:
+                            st.metric(
+                                label=ratio.get("name", ""),
+                                value=ratio.get("value", "—"),
+                            )
+
+                # ── Section tabs ──────────────────────────────────────────
+                _section_defs = [
+                    ("📈 P&L",           "profit_loss"),
+                    ("🏦 Balance Sheet",  "balance_sheet"),
+                    ("📅 Quarterly",      "quarterly_results"),
+                    ("👥 Shareholding",   "shareholding"),
+                    ("💵 Cash Flow",      "cash_flow"),
+                    ("🏢 Peers",          "peer_comparison"),
+                ]
+                fund_tabs = st.tabs([s[0] for s in _section_defs])
+
+                for tab_obj, (_, section_key) in zip(fund_tabs, _section_defs):
+                    with tab_obj:
+                        rows = fund_data.get(section_key, [])
+                        if not rows:
+                            st.info("No data available for this section.")
+                            continue
+                        import pandas as pd
+                        df_sec = pd.DataFrame(rows)
+                        st.dataframe(
+                            df_sec,
+                            use_container_width=True,
+                            hide_index=True,
+                        )
+                        st.caption(f"{len(rows)} rows · Data from screener.in")
+
+            except ValueError as ve:
+                st.error(f"Symbol not found: {ve}")
+            except Exception as ex:
+                st.error(f"Failed to load fundamentals: {ex}")
+
+# ── TAB 21 — Professional Charts ──────────────────────────────────────────────
+with tabs[21]:
+    st.subheader("📊 Professional Charts")
+    st.caption(
+        "Candlestick · VWAP · Bollinger Bands · Donchian Channels · "
+        "Volume Profile · RSI · MACD · ATR · Footprint · Liquidity Heatmap"
+    )
+
+    # ── sidebar controls ──────────────────────────────────────────────────
+    pc_col1, pc_col2, pc_col3 = st.columns([2, 2, 3])
+    with pc_col1:
+        pc_symbol = st.text_input(
+            "Symbol", value="RELIANCE", key="pc_symbol",
+            help="NSE symbol — uses yfinance (.NS suffix added automatically)"
+        ).upper().strip()
+    with pc_col2:
+        pc_period = st.selectbox(
+            "Period", ["1mo", "3mo", "6mo", "1y", "5d", "1d"],
+            index=1, key="pc_period"
+        )
+    with pc_col3:
+        pc_vp_bins = st.slider("Volume Profile bins", 20, 80, 40, 5, key="pc_vp_bins")
+
+    pc_show_vp = st.checkbox("Show Volume Profile sidebar", value=True, key="pc_show_vp")
+    pc_load = st.button("🔄 Load Charts", key="pc_load", type="primary")
+
+    # ── explain panel ─────────────────────────────────────────────────────
+    with st.expander("❓ Explain an indicator (plain language)", expanded=False):
+        from charting.explanations import list_all as _pc_list_all, explain as _pc_explain
+        _indicator_list = _pc_list_all()
+        _selected_ind = st.selectbox(
+            "Choose an indicator",
+            _indicator_list,
+            format_func=lambda k: k.replace("_", " ").title(),
+            key="pc_explain_select",
+        )
+        if st.button("Explain this to me", key="pc_explain_btn"):
+            st.session_state["pc_explain_text"] = _pc_explain(_selected_ind)
+        if "pc_explain_text" in st.session_state:
+            st.code(st.session_state["pc_explain_text"], language=None)
+
+    # ── data fetch & charts ───────────────────────────────────────────────
+    if pc_load or st.session_state.get("pc_data_loaded"):
+        try:
+            import yfinance as _yf
+            import pandas as _pd
+            from charting.engine import SmartChart as _SmartChart
+            from charting.footprint import FootprintAnalyzer as _FootprintAnalyzer
+            from charting.liquidity import LiquidityHeatmap as _LiqHeatmap
+
+            _PERIOD_INTERVAL = {
+                "1d": "5m", "5d": "30m",
+                "1mo": "1d", "3mo": "1d", "6mo": "1d", "1y": "1d",
+            }
+            _interval = _PERIOD_INTERVAL.get(pc_period, "1d")
+            _ticker = f"{pc_symbol}.NS"
+
+            with st.spinner(f"Fetching {_ticker}  period={pc_period}  interval={_interval} …"):
+                _df = _yf.download(
+                    _ticker, period=pc_period, interval=_interval,
+                    auto_adjust=True, progress=False
+                )
+
+            if _df.empty:
+                st.error(f"No data for {_ticker}. Check the symbol spelling.")
+            else:
+                # Flatten MultiIndex columns (yfinance may return them)
+                if isinstance(_df.columns, _pd.MultiIndex):
+                    _df.columns = [c[0].lower() for c in _df.columns]
+                else:
+                    _df.columns = [c.lower() for c in _df.columns]
+                _df = _df[["open", "high", "low", "close", "volume"]].dropna()
+
+                st.session_state["pc_data_loaded"] = True
+                st.caption(
+                    f"✅ {len(_df)} bars loaded for **{pc_symbol}** "
+                    f"(latest close: ₹{_df['close'].iloc[-1]:,.2f})"
+                )
+
+                # ── Chart sub-tabs ────────────────────────────────────────
+                _ct1, _ct2, _ct3 = st.tabs([
+                    "📈 Main Chart (VWAP · BB · Donchian · Volume Profile)",
+                    "🦶 Footprint & Order Flow",
+                    "💧 Liquidity Heatmap",
+                ])
+
+                with _ct1:
+                    _smart_fig = _SmartChart().build(
+                        _df, symbol=pc_symbol,
+                        show_vp=pc_show_vp,
+                        vp_bins=pc_vp_bins,
+                    )
+                    st.plotly_chart(_smart_fig, use_container_width=True)
+
+                    # Quick indicator legend
+                    _leg_col1, _leg_col2, _leg_col3 = st.columns(3)
+                    with _leg_col1:
+                        st.markdown(
+                            "**🟠 VWAP** — Today's volume-weighted fair price\n\n"
+                            "**🔵 Bollinger Bands** — Price channels ±2σ from SMA-20\n\n"
+                            "**🟣 Donchian Channels** — 20-period high/low range"
+                        )
+                    with _leg_col2:
+                        st.markdown(
+                            "**🟡 POC** — Price with highest volume (magnet level)\n\n"
+                            "**🟢 Value Area** — 70% of all volume traded here\n\n"
+                            "**📊 Volume bars** — Green = up candle, Red = down candle"
+                        )
+                    with _leg_col3:
+                        st.markdown(
+                            "**RSI > 70** — Overbought (may pull back)\n\n"
+                            "**RSI < 30** — Oversold (may bounce)\n\n"
+                            "**MACD cross ↑** — Bullish momentum shift"
+                        )
+
+                with _ct2:
+                    _fp_fig = _FootprintAnalyzer().build_figure(_df, symbol=pc_symbol)
+                    st.plotly_chart(_fp_fig, use_container_width=True)
+                    st.info(
+                        "⭐ **Green star above candle** = ask imbalance (buyers ≥ 3× sellers at that level — bullish pressure)  \n"
+                        "⭐ **Red star below candle** = bid imbalance (sellers ≥ 3× buyers — bearish pressure)  \n"
+                        "📊 **Cumulative Delta** = running total of (ask vol − bid vol). Rising = buyers winning; falling = sellers winning.  \n"
+                        "🔍 *Hover over any candle to see bid vol, ask vol, and delta.*  \n"
+                        "⚠️ *Simulated from OHLCV data — real tick data requires Zerodha WebSocket.*"
+                    )
+
+                with _ct3:
+                    _current_price = float(_df["close"].iloc[-1])
+                    _book = _LiqHeatmap().simulate_book(_current_price)
+                    _liq_fig = _LiqHeatmap().build_figure(_book, symbol=pc_symbol)
+                    st.plotly_chart(_liq_fig, use_container_width=True)
+                    st.info(
+                        "🟢 **Green bars (left)** = pending buy orders (bids) — act as support  \n"
+                        "🔴 **Red bars (right)** = pending sell orders (asks) — act as resistance  \n"
+                        "**Bigger/brighter bar** = larger order cluster = stronger support/resistance  \n"
+                        "⚠️ *Simulated — live order book requires Zerodha WebSocket market depth.*"
+                    )
+
+        except Exception as _pc_err:
+            st.error(f"Chart error: {_pc_err}")
+            st.exception(_pc_err)
+    else:
+        st.info("Enter a symbol and click **Load Charts** to begin.")

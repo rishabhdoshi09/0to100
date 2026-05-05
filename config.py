@@ -63,6 +63,38 @@ class Settings(BaseSettings):
     backtest_transaction_cost: float = Field(default=0.001)
     backtest_initial_capital: float = Field(default=1_000_000.0)
 
+    # ── Walk-Forward ──────────────────────────────────────────────────────────
+    walkforward_is_days: int = Field(default=252)
+    walkforward_oos_days: int = Field(default=63)
+
+    # ── XGBoost ───────────────────────────────────────────────────────────────
+    xgboost_train_days: int = Field(default=252)
+    xgboost_retrain_days: int = Field(default=21)
+
+    # ── F&O ───────────────────────────────────────────────────────────────────
+    enable_fno: bool = Field(default=False)
+    fno_default_product: str = Field(default="NRML")
+    fno_rollover_days: int = Field(default=3)
+
+    # ── Multi-Timeframe ───────────────────────────────────────────────────────
+    multi_timeframe_periods: str = Field(default="5min,15min,1h")
+
+    @property
+    def multi_timeframe_list(self) -> List[str]:
+        return [t.strip() for t in self.multi_timeframe_periods.split(",") if t.strip()]
+
+    # ── What-If Simulator ─────────────────────────────────────────────────────
+    whatif_default_holding_days: int = Field(default=5)
+
+    # ── Alert System ─────────────────────────────────────────────────────────
+    telegram_bot_token: str = Field(default="")
+    telegram_chat_id: str = Field(default="")
+    alert_watchlist: str = Field(default="RELIANCE,TCS,HDFCBANK")
+
+    @property
+    def alert_watchlist_list(self) -> List[str]:
+        return [s.strip() for s in self.alert_watchlist.split(",") if s.strip()]
+
     # ── Logging ───────────────────────────────────────────────────────────────
     log_level: str = Field(default="INFO")
     log_dir: Path = Field(default=Path("logs"))
