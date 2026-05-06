@@ -1562,6 +1562,47 @@ with tabs[21]:
     pc_show_vp = st.checkbox("Show Volume Profile sidebar", value=True, key="pc_show_vp")
     pc_load = st.button("🔄 Load Charts", key="pc_load", type="primary")
 
+    # ── quick legend ──────────────────────────────────────────────────────
+    with st.expander("📖 Chart Legend — what each indicator means", expanded=False):
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.markdown("""
+**On the price chart**
+🟠 **VWAP** — Today's volume-weighted fair price
+🔵 **Bollinger Bands** — Price channels ±2σ from SMA-20
+🟣 **Donchian Channels** — 20-period high/low range
+🟡 **POC** — Price with highest volume (magnet level)
+🟢 **Value Area** — 70% of all volume traded here
+📊 **Volume bars** — Green = up candle, Red = down candle
+""")
+        with col2:
+            st.markdown("""
+**RSI (Relative Strength Index)**
+🔴 RSI > 70 — Overbought (may pull back)
+🟢 RSI < 30 — Oversold (may bounce)
+⚪ RSI 30–70 — Neutral zone
+
+**MACD**
+↑ MACD cross above signal — Bullish momentum shift
+↓ MACD cross below signal — Bearish momentum shift
+🟩 Green histogram — Buying pressure building
+🟥 Red histogram — Selling pressure building
+""")
+        with col3:
+            st.markdown("""
+**ATR (Average True Range)**
+📏 Measures volatility — higher ATR = bigger swings
+Use to set stop-loss distance (e.g. 1.5× ATR below entry)
+
+**Volume Profile (right sidebar)**
+Wide bars = heavy trading at that price (strong support/resistance)
+Narrow bars = light trading (price moved through quickly)
+
+**Footprint chart**
+Shows buy vs sell volume per candle
+⬆ Imbalance = aggressive buyers dominating
+""")
+
     # ── explain panel ─────────────────────────────────────────────────────
     with st.expander("❓ Explain an indicator (plain language)", expanded=False):
         from charting.explanations import list_all as _pc_list_all, explain as _pc_explain
