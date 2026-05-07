@@ -84,16 +84,18 @@ def _kelly_fraction(win_rate: float, avg_win: float, avg_loss: float) -> float:
 
 def _run_bias_detector(entries_json: str) -> str:
     """Use dual-LLM (DeepSeek → Claude) to detect cognitive biases in the trade journal."""
-    from llm.dual_chat import DualChatEngine
-    engine = DualChatEngine()
+    from ai.dual_llm_service import get_service
+    svc = get_service()
     prompt = (
         "Analyse this trading journal for cognitive biases. "
         "Look for: revenge trading, FOMO entries, premature exits, anchoring, overconfidence. "
         "Be specific and reference actual trades. Suggest one concrete fix for each bias found.\n\n"
         "Journal (JSON):\n" + entries_json[:3000]
     )
-    result, _ = engine.ask(prompt, max_tokens=600)
-    return result
+    text, dm, detail = svc.ask(prompt, max_tokens=600)
+    from ai.dual_llm_service import get_service as _gs
+    badge = _gs().badge(dm, detail)
+    return f"{badge}<br>{text}"
 
 
 def render_journal():
