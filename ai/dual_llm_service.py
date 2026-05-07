@@ -11,17 +11,23 @@ Benefits:
   - One place to tune models, timeouts, fallback behaviour
   - Badges and disagreement details generated consistently everywhere
   - Chat history shared across UI surfaces via st.session_state["devbloom_chat"]
+  - Latency logging: every stage is timed; logs warn when a stage exceeds 10 s
 """
 from __future__ import annotations
 
+import logging
 import os
+import time
+from datetime import datetime
 from typing import Generator
 
-from llm.dual_chat import DualChatEngine, decision_badge_html, _DECISION_MAKER_BADGE  # noqa: F401
+from llm.dual_chat import DualChatEngine, _DECISION_MAKER_BADGE  # noqa: F401
 
+_log = logging.getLogger("devbloom.svc")
 
 _SHARED_HISTORY_KEY = "devbloom_chat"
 _MAX_HISTORY = 40  # messages kept in session (user + assistant pairs)
+_LATENCY_WARN_S = 10.0  # log a warning if any stage exceeds this
 
 
 class DualLLMService:
@@ -40,8 +46,9 @@ class DualLLMService:
         signal.action / signal.confidence / signal.reasoning / signal.llm_decision_maker
 
     Badge HTML (consistent across all call sites):
-        service.badge(decision_maker)                   # colour chip only
-        service.badge(decision_maker, detail=detail)    # chip + tooltip with disagreement detail
+        service.badge(decision_maker)                        # colour chip only
+        service.badge(decision_maker, detail=detail)         # chip + tooltip
+        service.badge(decision_maker, detail, ts=True)       # chip + tooltip + timestamp
     """
 
     def __init__(self):
@@ -73,6 +80,7 @@ class DualLLMService:
             "content": content,
             "decision_maker": decision_maker,
             "detail": detail,
+            "ts": datetime.now().strftime("%H:%M"),
         })
         st.session_state[_SHARED_HISTORY_KEY] = history[-_MAX_HISTORY * 2:]
 
@@ -96,20 +104,19 @@ class DualLLMService:
         history = self.get_history()
         prior = [m for m in history if m["role"] in ("user", "assistant")]
 
-        ds_draft = ""
-        full = ""
-        dm = "claude_validated"
-        override_detail = ""
-
-        # Pull DeepSeek draft out of the engine internals so we can surface it
-        # in the override tooltip. We monkey-patch nothing — instead we pass
-        # a sentinel context key that the engine already ignores gracefully.
         from llm.dual_chat import _deepseek_chat, _claude_stream, _CLAUDE_REVIEW_SYSTEM
         from llm.dual_chat import DualChatEngine as _Engine
 
         enriched = _Engine._enrich(user_message, context or {})
         ds_prompt = _Engine._build_ds_prompt(enriched, prior[:-1] if prior else [])
+
+        # ── Stage 1: DeepSeek (timed) ─────────────────────────────────────────
+        t0 = time.perf_counter()
         ds_draft = _deepseek_chat(ds_prompt) or ""
+        ds_elapsed = time.perf_counter() - t0
+        _log.info("deepseek_stage elapsed=%.2fs chars=%d", ds_elapsed, len(ds_draft))
+        if ds_elapsed > _LATENCY_WARN_S:
+            _log.warning("deepseek_slow elapsed=%.2fs", ds_elapsed)
 
         has_claude = bool(os.getenv("ANTHROPIC_API_KEY", ""))
 
@@ -119,22 +126,34 @@ class DualLLMService:
 
         if not ds_draft:
             messages = _Engine._build_claude_messages(enriched, prior, ds_answer=None)
+            full = ""
+            t1 = time.perf_counter()
             for chunk in _claude_stream(messages, _CLAUDE_REVIEW_SYSTEM.replace("Stage-1 analysis from DeepSeek", "question")):
                 full += chunk
                 yield (chunk, "claude_solo", "")
+            _log.info("claude_solo_stage elapsed=%.2fs", time.perf_counter() - t1)
             return
 
         if not has_claude:
             yield (ds_draft, "deepseek", "")
             return
 
+        # ── Stage 2: Claude (timed) ───────────────────────────────────────────
         messages = _Engine._build_claude_messages(enriched, prior, ds_draft)
+        full = ""
+        dm = "claude_validated"
+        override_detail = ""
+        t2 = time.perf_counter()
         for chunk in _claude_stream(messages, _CLAUDE_REVIEW_SYSTEM):
             full += chunk
             if "[OVERRIDE]" in full and not override_detail:
                 dm = "claude_override"
-                override_detail = ds_draft[:400]  # what Claude disagreed with
+                override_detail = ds_draft[:400]
             yield (chunk, dm, override_detail)
+        cl_elapsed = time.perf_counter() - t2
+        _log.info("claude_stage dm=%s elapsed=%.2fs", dm, cl_elapsed)
+        if cl_elapsed > _LATENCY_WARN_S:
+            _log.warning("claude_slow elapsed=%.2fs", cl_elapsed)
 
     # ── Sync chat ─────────────────────────────────────────────────────────────
 
@@ -145,10 +164,10 @@ class DualLLMService:
         max_tokens: int = 700,
     ) -> tuple[str, str, str]:
         """Returns (text, decision_maker, detail)."""
+        t0 = time.perf_counter()
         text, dm = self._chat.ask(prompt, context, max_tokens)
+        _log.info("dual_ask dm=%s elapsed=%.2fs", dm, time.perf_counter() - t0)
         detail = ""
-        # For override, re-run DeepSeek to surface the disagreement detail
-        # (bias detector, one-shot analysis — latency not critical here)
         if dm == "claude_override":
             from llm.dual_chat import _deepseek_chat
             ds = _deepseek_chat(prompt, max_tokens=max_tokens // 2)
@@ -162,28 +181,35 @@ class DualLLMService:
         if self._signal_engine is None:
             from llm.dual_engine import DualLLMEngine
             self._signal_engine = DualLLMEngine()
-        return self._signal_engine.get_signal(context_prompt, symbol)
+        t0 = time.perf_counter()
+        sig = self._signal_engine.get_signal(context_prompt, symbol)
+        _log.info("signal symbol=%s dm=%s elapsed=%.2fs", symbol, sig.llm_decision_maker, time.perf_counter() - t0)
+        return sig
 
     # ── Badge HTML ────────────────────────────────────────────────────────────
 
     @staticmethod
-    def badge(decision_maker: str, detail: str = "") -> str:
+    def badge(decision_maker: str, detail: str = "", ts: str = "") -> str:
         """
         Returns an HTML badge span.
-        If `detail` is provided and the decision is claude_override, the badge
-        gains a title tooltip showing the DeepSeek draft Claude disagreed with.
+        - If `detail` is set and decision is claude_override, adds hover tooltip
+          showing what DeepSeek originally said.
+        - If `ts` is set (HH:MM string), appends a timestamp after the label.
         """
         label, color = _DECISION_MAKER_BADGE.get(decision_maker, ("?", "#8892a4"))
         title_attr = ""
         if detail and decision_maker == "claude_override":
-            # Escape quotes for HTML attribute
             escaped = detail.replace('"', "&quot;").replace("'", "&#39;")
             title_attr = f' title="DeepSeek said: {escaped}"'
+        ts_html = (
+            f"<span style='font-size:.55rem;color:{color}88;margin-left:.3rem;font-family:JetBrains Mono,monospace'>{ts}</span>"
+            if ts else ""
+        )
         return (
             f"<span style='font-size:.65rem;color:{color};font-weight:600;"
             f"font-family:JetBrains Mono,monospace;background:rgba(255,255,255,.05);"
             f"padding:.15rem .4rem;border-radius:4px;border:1px solid {color}44;"
-            f"cursor:default'{title_attr}>{label}</span>"
+            f"cursor:default'{title_attr}>{label}</span>{ts_html}"
         )
 
     # ── Order confirmation check ──────────────────────────────────────────────

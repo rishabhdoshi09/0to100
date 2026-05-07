@@ -258,9 +258,22 @@ COMMAND_PALETTE_JS = """
   });
   overlay.addEventListener('click', e=>{ if(e.target===overlay) close(); });
 
-  // Global shortcut: Cmd/Ctrl+K
+  // Global shortcuts: Cmd/Ctrl+K → command palette
+  //                    Space (when not in a text input) → jump to Co-Pilot tab
   window.addEventListener('keydown', e=>{
-    if((e.metaKey||e.ctrlKey) && e.key==='k'){ e.preventDefault(); open(); }
+    if((e.metaKey||e.ctrlKey) && e.key==='k'){ e.preventDefault(); open(); return; }
+
+    // Space → Co-Pilot: only when focus is NOT in an input / textarea / contenteditable
+    if(e.key===' ' && !e.metaKey && !e.ctrlKey && !e.altKey){
+      const tag = document.activeElement?.tagName?.toLowerCase();
+      const editable = document.activeElement?.isContentEditable;
+      if(tag !== 'input' && tag !== 'textarea' && tag !== 'select' && !editable){
+        e.preventDefault();
+        // Click the "⚡ Dev" tab (tab index 3 in the Streamlit tab bar)
+        const tabs = window.parent.document.querySelectorAll('[data-testid="stTabs"] [data-baseweb="tab"]');
+        if(tabs[3]) tabs[3].click();
+      }
+    }
   }, true);
 })();
 </script>

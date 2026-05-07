@@ -27,9 +27,15 @@ def _init_journal_db():
             indicators  TEXT,
             news_snap   TEXT,
             voice_note  TEXT,
-            chart_state TEXT
+            chart_state TEXT,
+            ai_verdict  TEXT
         )
     """)
+    # Non-destructive migration: add ai_verdict column to existing DBs
+    try:
+        conn.execute("ALTER TABLE journal_entries ADD COLUMN ai_verdict TEXT")
+    except Exception:
+        pass  # column already exists
     conn.commit()
     conn.close()
 
@@ -42,13 +48,15 @@ def log_trade_to_journal(
     indicators: dict | None = None,
     news_snap: str = "",
     chart_state: dict | None = None,
+    ai_verdict: str = "",
 ):
-    """Called automatically when a trade is placed. Snapshots context."""
+    """Called automatically when a trade is placed. Snapshots context + AI verdict."""
     _init_journal_db()
     conn = sqlite3.connect(JOURNAL_DB)
     conn.execute(
-        "INSERT INTO journal_entries (timestamp,symbol,action,price,qty,indicators,news_snap,chart_state) "
-        "VALUES (?,?,?,?,?,?,?,?)",
+        "INSERT INTO journal_entries "
+        "(timestamp,symbol,action,price,qty,indicators,news_snap,chart_state,ai_verdict) "
+        "VALUES (?,?,?,?,?,?,?,?,?)",
         (
             datetime.now().isoformat(),
             symbol,
@@ -58,6 +66,7 @@ def log_trade_to_journal(
             json.dumps(indicators or {}),
             news_snap[:500],
             json.dumps(chart_state or {}),
+            ai_verdict,
         ),
     )
     conn.commit()
@@ -191,12 +200,20 @@ def render_journal():
             ts  = row.get("timestamp", "")[:16]
             action_color = "#00d4ff" if row["action"] == "BUY" else "#ff4466"
             rsi_txt = f"RSI {ind.get('rsi_14', '—'):.1f}" if "rsi_14" in ind else ""
+            ai_v = row.get("ai_verdict", "") or ""
+            ai_v_color = {"GO": "#00ff88", "CAUTION": "#ffb800", "ABORT": "#ff4466"}.get(ai_v, "")
+            ai_v_html = (
+                f"<span style='font-size:.65rem;color:{ai_v_color};font-weight:600;"
+                f"font-family:JetBrains Mono,monospace;margin-left:.4rem'>{ai_v}</span>"
+                if ai_v else ""
+            )
 
             st.markdown(
                 f"<div class='devbloom-card' style='padding:.55rem 1rem;margin-bottom:.35rem'>"
                 f"<div style='display:flex;justify-content:space-between'>"
                 f"  <span style='color:{action_color};font-weight:700;font-size:.8rem'>"
                 f"    {row['action']} {row['symbol']} — ₹{row['price']:,.2f} × {row['qty']}"
+                f"    {ai_v_html}"
                 f"  </span>"
                 f"  <span style='color:#8892a4;font-size:.7rem'>{ts}</span>"
                 f"</div>"

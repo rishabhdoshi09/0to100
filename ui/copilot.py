@@ -57,9 +57,9 @@ def _morning_prompt() -> str:
     )
 
 
-def _render_assistant_msg(content: str, decision_maker: str, detail: str = "", sidebar: bool = False):
+def _render_assistant_msg(content: str, decision_maker: str, detail: str = "", ts: str = "", sidebar: bool = False):
     svc = get_service()
-    badge = svc.badge(decision_maker, detail)
+    badge = svc.badge(decision_maker, detail, ts=ts)
     if sidebar:
         st.sidebar.markdown(
             f"<div style='background:rgba(255,255,255,.04);border-left:2px solid #8892a4;"
@@ -106,6 +106,7 @@ def render_copilot_sidebar(context: dict | None = None):
                 msg["content"],
                 msg.get("decision_maker", "claude_validated"),
                 msg.get("detail", ""),
+                ts=msg.get("ts", ""),
                 sidebar=True,
             )
 
@@ -172,6 +173,7 @@ def render_copilot_inline(context: dict | None = None):
                 msg["content"],
                 msg.get("decision_maker", "claude_validated"),
                 msg.get("detail", ""),
+                ts=msg.get("ts", ""),
                 sidebar=False,
             )
 

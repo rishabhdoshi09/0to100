@@ -20,6 +20,15 @@ from paper_trading import (
 from sq_ai.signals.trade_setup import compute_trade_setup
 
 
+def _log_ai_verdict(symbol: str, action: str, price: float, verdict: str):
+    """Write the AI pre-trade verdict alongside the journal entry."""
+    try:
+        from ui.journal import log_trade_to_journal
+        log_trade_to_journal(symbol, action, price, 0, ai_verdict=verdict)
+    except Exception:
+        pass
+
+
 def render_order_pad(symbol: str = "", price: float = 0.0, indicators: dict | None = None):
     """Advanced order pad with bracket orders and live risk preview."""
     ind = indicators or {}
@@ -71,52 +80,66 @@ def render_order_pad(symbol: str = "", price: float = 0.0, indicators: dict | No
 
         col_ai, col_place = st.columns([1, 2])
         ai_check = col_ai.form_submit_button("🤖 AI Check", use_container_width=True)
-        submitted = col_place.form_submit_button("⚡ Place Paper Order", use_container_width=True)
+
+        # ABORT blocks Place Order — user must clear to override
+        ai_data   = st.session_state.get("_order_ai_verdict")
+        is_aborted = ai_data and ai_data[0] == "ABORT"
+        submitted  = col_place.form_submit_button(
+            "⚡ Place Paper Order",
+            use_container_width=True,
+            disabled=bool(is_aborted),
+        )
 
         if ai_check and sym:
             with st.spinner("DeepSeek → Claude trade check…"):
                 from ai.dual_llm_service import get_service
-                verdict, dm, detail = get_service().order_confirmation(
+                svc = get_service()
+                verdict, dm, detail = svc.order_confirmation(
                     sym, action, entry or price, stop_loss, target, qty, ind
                 )
-            from ai.dual_llm_service import get_service as _gs
-            badge = _gs().badge(dm, detail)
-            color = {"GO": "#00ff88", "CAUTION": "#ffb800", "ABORT": "#ff4466"}.get(verdict, "#8892a4")
-            st.session_state["_order_ai_verdict"] = (verdict, badge)
+            from datetime import datetime as _dt
+            badge = svc.badge(dm, detail, ts=_dt.now().strftime("%H:%M"))
+            st.session_state["_order_ai_verdict"] = (verdict, badge, dm)
 
-        # Show stored AI verdict if present
-        if "._order_ai_verdict" in st.session_state or "_order_ai_verdict" in st.session_state:
-            v_data = st.session_state.get("_order_ai_verdict")
-            if v_data:
-                v_verdict, v_badge = v_data
-                v_color = {"GO": "#00ff88", "CAUTION": "#ffb800", "ABORT": "#ff4466"}.get(v_verdict, "#8892a4")
-                st.markdown(
-                    f"<div class='devbloom-card' style='padding:.5rem 1rem'>"
-                    f"{v_badge} "
-                    f"<span style='color:{v_color};font-weight:700;font-family:JetBrains Mono,monospace'>"
-                    f"{v_verdict}</span></div>",
-                    unsafe_allow_html=True,
-                )
+        # Show stored AI verdict
+        ai_data = st.session_state.get("_order_ai_verdict")
+        if ai_data:
+            v_verdict, v_badge, _v_dm = ai_data
+            v_color = {"GO": "#00ff88", "CAUTION": "#ffb800", "ABORT": "#ff4466"}.get(v_verdict, "#8892a4")
+            abort_note = " — Place Order disabled. Clear to override." if v_verdict == "ABORT" else ""
+            st.markdown(
+                f"<div class='devbloom-card' style='padding:.5rem 1rem'>"
+                f"{v_badge} "
+                f"<span style='color:{v_color};font-weight:700;font-family:JetBrains Mono,monospace'>"
+                f"{v_verdict}</span>"
+                f"<span style='color:#8892a4;font-size:.7rem'>{abort_note}</span>"
+                f"</div>",
+                unsafe_allow_html=True,
+            )
 
         if submitted:
             if not sym:
                 st.error("Enter a symbol.")
-            elif action == "BUY":
-                open_position(sym, entry or price, qty, "BUY", datetime.now().strftime("%Y-%m-%d"))
-                st.success(f"✅ BUY {qty}×{sym} @ ₹{entry or price:,.2f} placed (paper)")
-                st.session_state.pop("_order_ai_verdict", None)
             else:
-                open_pos = get_open_positions()
-                if open_pos is not None and not open_pos.empty:
-                    match = open_pos[open_pos["symbol"] == sym]
-                    if not match.empty:
-                        close_position(match.iloc[0]["id"], entry or price, datetime.now().strftime("%Y-%m-%d"))
-                        st.success(f"✅ SELL {sym} @ ₹{entry or price:,.2f} — position closed")
-                        st.session_state.pop("_order_ai_verdict", None)
-                    else:
-                        st.warning(f"No open position in {sym}.")
+                ai_verdict_str = (ai_data[0] if ai_data else "")
+                if action == "BUY":
+                    open_position(sym, entry or price, qty, "BUY", datetime.now().strftime("%Y-%m-%d"))
+                    _log_ai_verdict(sym, action, entry or price, ai_verdict_str)
+                    st.success(f"✅ BUY {qty}×{sym} @ ₹{entry or price:,.2f} placed (paper)")
+                    st.session_state.pop("_order_ai_verdict", None)
                 else:
-                    st.warning("No open positions.")
+                    open_pos = get_open_positions()
+                    if open_pos is not None and not open_pos.empty:
+                        match = open_pos[open_pos["symbol"] == sym]
+                        if not match.empty:
+                            close_position(match.iloc[0]["id"], entry or price, datetime.now().strftime("%Y-%m-%d"))
+                            _log_ai_verdict(sym, action, entry or price, ai_verdict_str)
+                            st.success(f"✅ SELL {sym} @ ₹{entry or price:,.2f} — position closed")
+                            st.session_state.pop("_order_ai_verdict", None)
+                        else:
+                            st.warning(f"No open position in {sym}.")
+                    else:
+                        st.warning("No open positions.")
 
 
 def render_position_monitor():
