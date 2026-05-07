@@ -78,8 +78,28 @@ class RegimeDetector:
         if expiry_warning:
             result["regime"] = "PRE_EXPIRY_" + regime
 
-        log.info("regime_detected", regime=result["regime"], hurst=hurst, adx=adx, vix=india_vix)
+        # Augment with HMM regime
+        hmm_result = self.get_hmm_regime(nifty_df)
+        result["hmm_label"]   = hmm_result.get("label", "UNKNOWN")
+        result["hmm_key"]     = hmm_result.get("hmm_key", "UNKNOWN_HMM")
+        result["hmm_swap_prob"] = hmm_result.get("swap_prob")
+        # Final combined key, e.g. "TRENDING_LOW_VOL" → "TRENDING_LOW_VOL_HMM"
+        result["regime_key"] = f"{result['regime']}_{result['hmm_label']}"
+
+        log.info("regime_detected", regime=result["regime"], hurst=hurst, adx=adx,
+                 vix=india_vix, hmm=result["hmm_label"])
         return result
+
+    def get_hmm_regime(self, df: pd.DataFrame = None) -> dict:
+        """Run HMM regime detection on Nifty data."""
+        try:
+            from analysis.hmm_regime import HMMRegimeDetector
+            if df is None or df.empty:
+                df = self._fetch_nifty()
+            return HMMRegimeDetector().detect(df)
+        except Exception as exc:
+            log.warning("hmm_regime_failed", error=str(exc))
+            return {"label": "UNKNOWN", "hmm_key": "UNKNOWN_HMM", "swap_prob": None}
 
     # ── Data Fetching ──────────────────────────────────────────────────────
 
