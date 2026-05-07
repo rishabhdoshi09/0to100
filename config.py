@@ -74,6 +74,10 @@ class Settings(BaseSettings):
     xgboost_train_days: int = Field(default=252)
     xgboost_retrain_days: int = Field(default=21)
 
+    # ── LightGBM ──────────────────────────────────────────────────────────────
+    lgbm_train_days: int = Field(default=252)
+    lgbm_retrain_days: int = Field(default=21)
+
     # ── F&O ───────────────────────────────────────────────────────────────────
     enable_fno: bool = Field(default=False)
     fno_default_product: str = Field(default="NRML")

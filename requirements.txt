@@ -33,6 +33,7 @@ python-dotenv>=1.0.0
 requests>=2.31.0
 rich>=13.7.0
 ruff==0.15.12
+hmmlearn>=0.3.0
 scikit-learn>=1.4.0
 scipy>=1.11.0
 sqlalchemy>=2.0.0

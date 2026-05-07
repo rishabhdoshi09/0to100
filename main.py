@@ -334,6 +334,124 @@ def cmd_ensemble(args) -> None:
     print(f"{'─'*50}\n")
 
 
+def cmd_lgb(args) -> None:
+    """LightGBM signal for a single symbol."""
+    symbol = args.symbol.upper()
+    from data.kite_client import KiteClient
+    from data.instruments import InstrumentManager
+    from data.historical import HistoricalDataFetcher
+    from ml.lgbm_signal import LightGBMSignalGenerator
+    import sys
+    from datetime import date, timedelta as td
+
+    kite = KiteClient()
+    historical = HistoricalDataFetcher(kite, InstrumentManager())
+    to_d = date.today().strftime("%Y-%m-%d")
+    from_d = (date.today() - td(days=400)).strftime("%Y-%m-%d")
+
+    print(f"\nFetching data for {symbol}…")
+    df = historical.fetch(symbol=symbol, from_date=from_d, to_date=to_d, interval="day")
+    if df is None or df.empty:
+        print(f"No data for {symbol}. Check Kite credentials.")
+        sys.exit(1)
+
+    sig = LightGBMSignalGenerator().generate_signal(df, symbol)
+    print(f"\n{'─'*50}")
+    print(f"  Symbol    : {sig['symbol']}")
+    print(f"  Action    : {sig['action']}")
+    print(f"  Confidence: {sig['confidence']:.1%}")
+    print(f"  Reasoning : {sig['reasoning']}")
+    print(f"{'─'*50}\n")
+
+
+def cmd_multi(args) -> None:
+    """Multi-horizon (1d/5d/10d) signal for a single symbol."""
+    symbol = args.symbol.upper()
+    from data.kite_client import KiteClient
+    from data.instruments import InstrumentManager
+    from data.historical import HistoricalDataFetcher
+    from ml.multi_horizon import MultiHorizonSignalGenerator
+    import sys
+    from datetime import date, timedelta as td
+
+    kite = KiteClient()
+    historical = HistoricalDataFetcher(kite, InstrumentManager())
+    to_d = date.today().strftime("%Y-%m-%d")
+    from_d = (date.today() - td(days=500)).strftime("%Y-%m-%d")
+
+    print(f"\nFetching data for {symbol}…")
+    df = historical.fetch(symbol=symbol, from_date=from_d, to_date=to_d, interval="day")
+    if df is None or df.empty:
+        print(f"No data for {symbol}. Check Kite credentials.")
+        sys.exit(1)
+
+    result = MultiHorizonSignalGenerator().generate_signals(df, symbol)
+    print(f"\n{'─'*55}")
+    print(f"  Multi-Horizon Signal — {symbol}")
+    print(f"{'─'*55}")
+    for h in ["horizon_1d", "horizon_5d", "horizon_10d"]:
+        hr = result[h]
+        print(f"  {h:14s}: {hr['action']:4s}  confidence={hr['confidence']:.1%}")
+    cons = result["consensus"]
+    print(f"{'─'*55}")
+    print(f"  CONSENSUS   : {cons['action']:4s}  confidence={cons['confidence']:.1%}  "
+          f"agreement={cons['agreement']}/3")
+    print(f"{'─'*55}\n")
+
+
+def cmd_monitor(args) -> None:
+    """Compute and display model decay metrics."""
+    from monitoring.decay_monitor import ModelDecayMonitor
+    mon = ModelDecayMonitor()
+    metrics = mon.compute_decay_metrics()
+
+    if metrics.empty:
+        print("\nNo live trades recorded in the last 30 days.\n"
+              "Trades are logged automatically when the live engine closes positions.\n")
+        return
+
+    print(f"\n{'─'*70}")
+    print(f"  Model Decay Monitor — rolling 30-day window")
+    print(f"{'─'*70}")
+    print(f"  {'Strategy':<18} {'Trades':>6} {'Live Sharpe':>12} "
+          f"{'BT Sharpe':>10} {'Decay':>7} {'Alert':>6}")
+    print(f"  {'─'*18} {'─'*6} {'─'*12} {'─'*10} {'─'*7} {'─'*6}")
+    for _, row in metrics.iterrows():
+        decay = f"{row['decay_ratio']:.2f}" if row["decay_ratio"] is not None else "N/A"
+        alert = "⚠️ YES" if row["alert"] else "OK"
+        print(f"  {row['strategy']:<18} {row['trade_count']:>6} "
+              f"{row['live_sharpe']:>12.3f} {row['backtest_sharpe']:>10.3f} "
+              f"{decay:>7} {alert:>6}")
+    print(f"{'─'*70}\n")
+
+    alerted = mon.check_and_alert(metrics)
+    if alerted:
+        print(f"Telegram alerts sent for: {', '.join(alerted)}\n")
+
+
+def cmd_strategy(args) -> None:
+    """Enable / disable / show status of individual strategies."""
+    from monitoring.strategy_manager import StrategyManager
+    sm = StrategyManager()
+
+    if args.strategy_cmd == "status":
+        print(f"\n{'─'*35}")
+        print(f"  Strategy Kill-Switch Status")
+        print(f"{'─'*35}")
+        for name, enabled in sm.status().items():
+            icon = "✅" if enabled else "🔴"
+            print(f"  {icon}  {name:<20} {'ON' if enabled else 'OFF'}")
+        print(f"{'─'*35}\n")
+
+    elif args.strategy_cmd == "enable":
+        sm.enable(args.name)
+        print(f"✅ Strategy '{args.name}' enabled.")
+
+    elif args.strategy_cmd == "disable":
+        sm.disable(args.name)
+        print(f"🔴 Strategy '{args.name}' disabled.")
+
+
 def cmd_alerts(args) -> None:
     """Start the background signal monitor (runs until Ctrl+C)."""
     log.info("alerts_monitor_starting")
@@ -706,6 +824,24 @@ def build_parser() -> argparse.ArgumentParser:
     ens = sub.add_parser("ensemble", help="Print ensemble ML signal for a symbol")
     ens.add_argument("--symbol", required=True, metavar="SYMBOL", help="NSE symbol, e.g. RELIANCE")
 
+    lgb_p = sub.add_parser("lgb", help="LightGBM signal for a symbol (trains if needed)")
+    lgb_p.add_argument("--symbol", required=True, metavar="SYMBOL")
+
+    multi_p = sub.add_parser("multi", help="Multi-horizon (1d/5d/10d) signal for a symbol")
+    multi_p.add_argument("--symbol", required=True, metavar="SYMBOL")
+
+    sub.add_parser("monitor", help="Show model decay metrics (live vs backtest Sharpe)")
+
+    strat = sub.add_parser("strategy", help="Enable / disable / show strategy kill switches")
+    strat_sub = strat.add_subparsers(dest="strategy_cmd", required=True)
+    strat_sub.add_parser("status", help="Show all strategy on/off states")
+    en_p = strat_sub.add_parser("enable",  help="Enable a strategy")
+    en_p.add_argument("--name", required=True,
+                      choices=["lgbm", "xgboost", "multi_horizon", "ensemble"])
+    dis_p = strat_sub.add_parser("disable", help="Disable a strategy")
+    dis_p.add_argument("--name", required=True,
+                       choices=["lgbm", "xgboost", "multi_horizon", "ensemble"])
+
     sub.add_parser("alerts", help="Start background signal monitor (Telegram alerts)")
 
     ch = sub.add_parser("chart", help="Build professional interactive chart (saved as HTML)")
@@ -740,6 +876,10 @@ def main() -> None:
         "fnolive":    cmd_fnolive,
         "screener":   cmd_screener,
         "ensemble":   cmd_ensemble,
+        "lgb":        cmd_lgb,
+        "multi":      cmd_multi,
+        "monitor":    cmd_monitor,
+        "strategy":   cmd_strategy,
         "alerts":     cmd_alerts,
         "chart":      cmd_chart,
         "explain":    cmd_explain,
