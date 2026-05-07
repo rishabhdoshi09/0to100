@@ -22,6 +22,7 @@ from features.indicators import IndicatorEngine
 from features.market_structure import is_recent_swing_breakout
 from features.volume_profile import VolumeProfile
 from llm.claude_client import ClaudeClient
+from llm.dual_engine import DualLLMEngine
 from paper_trading import (
     close_position,
     get_closed_positions,
@@ -70,9 +71,10 @@ def init_clients():
     ie      = IndicatorEngine()
     vp      = VolumeProfile()
     claude  = ClaudeClient()
-    return kite, im, fetcher, ie, vp, claude
+    dual    = DualLLMEngine()
+    return kite, im, fetcher, ie, vp, claude, dual
 
-kite, im, fetcher, ie, vp, _claude = init_clients()
+kite, im, fetcher, ie, vp, _claude, _dual = init_clients()
 
 # ── Symbol universe ────────────────────────────────────────────────────────────
 @st.cache_data(ttl=3600)
@@ -681,25 +683,27 @@ if "last_verdict" in st.session_state:
 - **HVN walls:** {', '.join(f'₹{h:.2f}' for h in prof['hvns'][:4]) or 'None'}
 - **LVN gaps:** {', '.join(f'₹{lvn:.2f}' for lvn in prof['lvns'][:4]) or 'None'}
 """)
-            with st.expander("🤖 Claude Final Signal"):
-                if not _claude.available:
-                    st.info("Set ANTHROPIC_API_KEY in .env to enable Claude.")
-                elif st.button("Ask Claude", key="claude_btn"):
-                    with st.spinner("Calling Claude…"):
-                        _sig = _claude.get_signal(
+            with st.expander("🤖 Dual-LLM Final Signal (DeepSeek → Claude)"):
+                if st.button("Ask DeepSeek → Claude", key="claude_btn"):
+                    with st.spinner("Running dual-LLM pipeline…"):
+                        _sig = _dual.get_signal(
                             f"Symbol: {_selected} | Price: ₹{verdict['price']:.2f} | "
                             f"Signal: {verdict['signal']:.3f} | Confidence: {verdict['confidence']:.1f}% | "
                             f"Conviction: {cv.score:.0f}/100 | Direction: {dir_text}\n\n"
-                            f"DeepSeek analysis:\n{(verdict['debate'] or '')[:600]}"
+                            f"DeepSeek analysis:\n{(verdict['debate'] or '')[:600]}",
+                            _selected,
                         )
                     if _sig:
-                        _act = _sig.get("action","HOLD")
-                        _cc  = _sig.get("confidence",0)
+                        _act = _sig.action
+                        _cc  = _sig.confidence
                         _, _scss = _verdict_badge({"BUY":1,"SELL":-1,"HOLD":0}.get(_act,0))
-                        st.markdown(f"<div class='recommendation {_scss}'>{_act} · {_cc*100:.0f}%</div>",
-                                    unsafe_allow_html=True)
-                        st.markdown(f"**Reasoning:** {_sig.get('reasoning','')}")
-                        st.caption(f"Sentiment: {_sig.get('sentiment_score',0):.2f}")
+                        from llm.dual_chat import decision_badge_html as _dbh
+                        st.markdown(
+                            f"{_dbh(_sig.llm_decision_maker)} "
+                            f"<div class='recommendation {_scss}'>{_act} · {_cc*100:.0f}%</div>",
+                            unsafe_allow_html=True,
+                        )
+                        st.markdown(f"**Reasoning:** {_sig.reasoning}")
                     else:
                         st.warning("No signal returned.")
             with st.expander("🧠 Trade Memory"):
@@ -922,26 +926,26 @@ with tabs[2]:
                                   xaxis_range=[0,1], margin=dict(t=30,b=10))
             st.plotly_chart(fig_bar, use_container_width=True)
 
-            # Claude final opinion for Decision Terminal
-            if _claude.available:
-                if st.button("🤖 Get Claude Opinion", key="dt_claude"):
-                    with st.spinner("Asking Claude…"):
-                        _c_ctx = (
-                            f"Symbol: {st.session_state.get('dt_sym_val', dt_sym)} | Price: ₹{dt_price:.2f} | "
-                            f"Conviction: {r.score:.0f}/100 | Verdict: {r.verdict} | "
-                            f"Gates passed: {r.gates_passed}\n"
-                            f"Components: {json.dumps({k:round(v,2) for k,v in comp.items()})}"
-                        )
-                        _cop = _claude.get_signal(_c_ctx)
-                    if _cop:
-                        _ca = _cop.get("action","HOLD")
-                        _, _ccss = _verdict_badge({"BUY":1,"SELL":-1,"HOLD":0}.get(_ca,0))
-                        st.markdown(f"<div class='recommendation {_ccss}'>"
-                                    f"Claude: {_ca} · {_cop.get('confidence',0)*100:.0f}%</div>",
-                                    unsafe_allow_html=True)
-                        st.markdown(f"**Reasoning:** {_cop.get('reasoning','')}")
-            else:
-                st.caption("Add ANTHROPIC_API_KEY to .env to enable Claude here.")
+            # Dual-LLM final opinion for Decision Terminal
+            if st.button("🤖 Get Dual-LLM Opinion (DeepSeek → Claude)", key="dt_claude"):
+                with st.spinner("Running DeepSeek → Claude pipeline…"):
+                    _c_ctx = (
+                        f"Symbol: {st.session_state.get('dt_sym_val', dt_sym)} | Price: ₹{dt_price:.2f} | "
+                        f"Conviction: {r.score:.0f}/100 | Verdict: {r.verdict} | "
+                        f"Gates passed: {r.gates_passed}\n"
+                        f"Components: {json.dumps({k:round(v,2) for k,v in comp.items()})}"
+                    )
+                    _cop = _dual.get_signal(_c_ctx, st.session_state.get('dt_sym_val', dt_sym))
+                if _cop:
+                    _ca = _cop.action
+                    _, _ccss = _verdict_badge({"BUY":1,"SELL":-1,"HOLD":0}.get(_ca,0))
+                    from llm.dual_chat import decision_badge_html as _dbh2
+                    st.markdown(
+                        f"{_dbh2(_cop.llm_decision_maker)} "
+                        f"<div class='recommendation {_ccss}'>{_ca} · {_cop.confidence*100:.0f}%</div>",
+                        unsafe_allow_html=True,
+                    )
+                    st.markdown(f"**Reasoning:** {_cop.reasoning}")
 
 # ── Tab 3: AI Co-Pilot ───────────────────────────────────────────────────────
 with tabs[3]:

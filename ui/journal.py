@@ -83,27 +83,17 @@ def _kelly_fraction(win_rate: float, avg_win: float, avg_loss: float) -> float:
 
 
 def _run_bias_detector(entries_json: str) -> str:
-    """Ask Claude to detect cognitive biases in the trade journal."""
-    try:
-        import anthropic
-        client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY", ""))
-        resp = client.messages.create(
-            model="claude-haiku-4-5-20251001",
-            max_tokens=600,
-            messages=[{
-                "role": "user",
-                "content": (
-                    "Analyse this trading journal for cognitive biases. "
-                    "Look for: revenge trading, FOMO entries, premature exits, anchoring, overconfidence. "
-                    "Be specific and reference actual trades. Suggest one concrete fix for each bias found.\n\n"
-                    "Journal (JSON):\n" + entries_json[:3000]
-                ),
-            }],
-            system="You are a trading psychologist. Be concise and actionable. Use bullet points.",
-        )
-        return resp.content[0].text
-    except Exception as e:
-        return f"Bias detection unavailable (ANTHROPIC_API_KEY not set or error: {e})."
+    """Use dual-LLM (DeepSeek → Claude) to detect cognitive biases in the trade journal."""
+    from llm.dual_chat import DualChatEngine
+    engine = DualChatEngine()
+    prompt = (
+        "Analyse this trading journal for cognitive biases. "
+        "Look for: revenge trading, FOMO entries, premature exits, anchoring, overconfidence. "
+        "Be specific and reference actual trades. Suggest one concrete fix for each bias found.\n\n"
+        "Journal (JSON):\n" + entries_json[:3000]
+    )
+    result, _ = engine.ask(prompt, max_tokens=600)
+    return result
 
 
 def render_journal():
