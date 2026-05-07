@@ -1,0 +1,1419 @@
+<analysis>**original_problem_statement**: The user wants a Bloomberg-terminal-grade quantitative trading system that runs locally on an 8GB MacBook Air (max 300MB local RAM, using Colab for ML training). The system relies on FastAPI, SQLite, Textual TUI, Streamlit, and a dual-LLM setup (Claude + DeepSeek). 
+**PRODUCT REQUIREMENTS (v0.5)**: Implement a Decision Terminal layer over the existing cockpit. This includes deterministic conviction scoring, strict filters, Conservative and Aggressive trader profiles, and a new Streamlit UI page. The user provided a strict 5-Phase implementation prompt (Message 137).
+
+**User's preferred language**: English
+*(INSTRUCTION to next agent: Respond in English)*
+
+**what currently exists?**: A fully functional quant trading cockpit (v0.1 - v0.3) containing a FastAPI backend, Streamlit/Textual UIs, a dual-LLM execution engine, backtester, PDF report generator, and a SQLite cache. The user also has a local Claude session that recently built a MetaTrader risk validator,  endpoint, and an NSE instruments tracker (86/86 tests passing on GitHub). The agent just cloned this updated GitHub branch into .
+
+**Last working item**:
+- Last item agent was working: The agent *just* cloned the user's GitHub repository ( branch) into  to pull in the user's local commits. The agent is preparing to execute Phase 0 of the v0.5 Decision Terminal prompt.
+- Status: IN PROGRESS
+- Agent Testing Done: N
+- Which testing method agent to use?: backend testing agent / manual testing by ============================= test session starts ==============================
+platform linux -- Python 3.11.15, pytest-8.3.3, pluggy-1.6.0
+rootdir: /app
+plugins: asyncio-0.24.0, anyio-4.13.0
+asyncio: mode=Mode.STRICT, default_loop_scope=None
+collected 0 items
+
+============================ no tests ran in 0.01s =============================
+- User Testing Done: N
+
+**All Pending/In progress Issue list**:
+- Issue 1: Repo Sanitization (Phase 0 of v0.5 prompt) - P0
+   - Attempted fixes: NA (Just started)
+   - Next debug checklist: Go to . Move everything from the nested  folder up to the repo root. Delete all legacy pre-v0.1 files currently at the root (, , , , , junk files with shell-meta names). Keep  intact. Ensure 86/86 tests still pass after flattening.
+   - Why fix this issue and what will be achieved with the fix?: Removes duplicate/legacy code, ensuring a single source of truth for the v0.5 build.
+   - Status: NOT STARTED
+   - Is recurring issue? N
+   - Should Test frontend/backend/both after fix?: backend (============================= test session starts ==============================
+platform linux -- Python 3.11.15, pytest-8.3.3, pluggy-1.6.0
+rootdir: /app
+plugins: asyncio-0.24.0, anyio-4.13.0
+asyncio: mode=Mode.STRICT, default_loop_scope=None
+collected 86 items
+
+0to100_fresh/0to100/tests/test_api.py ........                           [  9%]
+0to100_fresh/0to100/tests/test_backtester.py ..                          [ 11%]
+0to100_fresh/0to100/tests/test_cache.py ....                             [ 16%]
+0to100_fresh/0to100/tests/test_ensemble.py .......                       [ 24%]
+0to100_fresh/0to100/tests/test_llm_clients.py .......                    [ 32%]
+0to100_fresh/0to100/tests/test_meta_trader.py ..........                 [ 44%]
+0to100_fresh/0to100/tests/test_metrics.py ........                       [ 53%]
+0to100_fresh/0to100/tests/test_report.py ..                              [ 55%]
+0to100_fresh/0to100/tests/test_screener.py ......                        [ 62%]
+0to100_fresh/0to100/tests/test_screener_engine.py ......                 [ 69%]
+0to100_fresh/0to100/tests/test_signals.py .......                        [ 77%]
+0to100_fresh/0to100/tests/test_tracker.py .....                          [ 83%]
+0to100_fresh/0to100/tests/test_universe.py .......                       [ 91%]
+0to100_fresh/0to100/tests/test_watchlist_presets.py .......              [100%]
+
+=============================== warnings summary ===============================
+../root/.venv/lib/python3.11/site-packages/starlette/formparsers.py:12
+  /root/.venv/lib/python3.11/site-packages/starlette/formparsers.py:12: PendingDeprecationWarning: Please use `import python_multipart` instead.
+    import multipart
+
+../root/.venv/lib/python3.11/site-packages/requests/__init__.py:113
+  /root/.venv/lib/python3.11/site-packages/requests/__init__.py:113: RequestsDependencyWarning: urllib3 (2.6.3) or chardet (7.4.3)/charset_normalizer (3.4.7) doesn't match a supported version!
+    warnings.warn(
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+======================== 86 passed, 2 warnings in 6.30s ========================)
+
+**In progress Task List**:
+- Task 1: Build v0.5 Backend Modules (Phase 1) - P0
+   - Where to resume: Inside the flattened  directory. 
+   - What will be achieved with this?: Create , ,  (core deterministic scoring), , , and . Also add  to the tracker.
+   - Status: NOT STARTED
+   - Should Test frontend/backend/both after fix?: backend
+   - Blocked on something: Issue 1 (Repo Sanitization)
+- Task 2: Build v0.5 API Endpoints & UI (Phases 2 & 3) - P0
+   - Where to resume:  and .
+   - What will be achieved with this?: Wire up , , ,  (ensuring  query parameters are passed properly). Create the new Streamlit landing page.
+   - Status: NOT STARTED
+   - Should Test frontend/backend/both after fix?: both
+   - Blocked on something: Task 1
+- Task 3: Write v0.5 Tests & Documentation (Phases 4 & 5) - P0
+   - Where to resume:  folder, , .
+   - What will be achieved with this?: Add 28 new test cases across 4 files (total tests must be ≥ 114). Add the profile-decision matrix to documentation.
+   - Status: NOT STARTED
+   - Should Test frontend/backend/both after fix?: backend
+   - Blocked on something: Task 2
+
+**Upcoming and Future Tasks**:
+- P2: Position-level review on the dashboard (track conviction decay vs at entry).
+- P2: Weekly journal-review script joining  ↔  ↔  to compute realised win-rate.
+- P2: LSTM head on Colab blended with LightGBM.
+- P2: Auto-retraining trigger if rolling AUC < 0.55 for 30 days.
+
+**Completed work in this session**:
+- Built foundational v0.1 - v0.3 cockpit (FastAPI, UI, dual-LLM integration, SQLite).
+- Updated deprecated Claude model to  in .
+- Added  on  to protect API limits.
+- Agent successfully convinced user to provide a crystal-clear, heavily guarded prompt for v0.5.
+- Cloned the user's latest remote branch into .
+
+**Earlier issues found/mentioned but not fixed**:
+- Issue 1: Environment Variable Hopping
+   - Debug checklist: Setting  from Streamlit does not safely cross to the FastAPI process. The fix (agreed upon in msg 136) is to pass  explicitly in all  API calls and endpoint signatures.
+   - Why to solve this issue: Prevents the backend from silently running a different trader profile than the UI selected.
+   - Should Test frontend/backend/both after fix: both
+   - Is recurring issue? N
+
+**Known issue recurrence from previous fork**:
+- Issue recurrence in previous fork: None. First job in this specific tasking chain.
+- Recurrence count: 0
+- Status: NOT STARTED
+
+**Code Architecture**:
+Currently nested inside  (Needs flattening in Phase 0):
+
+
+**Key Technical Concepts**:
+FastAPI, Streamlit, Textual (TUI), SQLite (cache & state), LightGBM (inference), APScheduler. LLM routing (Claude + DeepSeek). Strict adherence to  memory footprint locally.
+
+**key DB schema**:
+- : symbol, date, OHLCV
+- : timestamp, symbol, action, confidence, regime
+- : timestamp, ranked_symbols_json
+- : key, value, expires_at (for API call caching)
+- : tracks DeepSeek vs Claude ensemble vetoes
+- : stores Kite instrument master data
+
+**changes in tech stack**:
+- None in the last interaction, but relies heavily on ============================= test session starts ==============================
+platform linux -- Python 3.11.15, pytest-8.3.3, pluggy-1.6.0
+rootdir: /app
+plugins: asyncio-0.24.0, anyio-4.13.0
+asyncio: mode=Mode.STRICT, default_loop_scope=None
+collected 86 items
+
+0to100_fresh/0to100/tests/test_api.py ........                           [  9%]
+0to100_fresh/0to100/tests/test_backtester.py ..                          [ 11%]
+0to100_fresh/0to100/tests/test_cache.py ....                             [ 16%]
+0to100_fresh/0to100/tests/test_ensemble.py .......                       [ 24%]
+0to100_fresh/0to100/tests/test_llm_clients.py .......                    [ 32%]
+0to100_fresh/0to100/tests/test_meta_trader.py ..........                 [ 44%]
+0to100_fresh/0to100/tests/test_metrics.py ........                       [ 53%]
+0to100_fresh/0to100/tests/test_report.py ..                              [ 55%]
+0to100_fresh/0to100/tests/test_screener.py ......                        [ 62%]
+0to100_fresh/0to100/tests/test_screener_engine.py ......                 [ 69%]
+0to100_fresh/0to100/tests/test_signals.py .......                        [ 77%]
+0to100_fresh/0to100/tests/test_tracker.py .....                          [ 83%]
+0to100_fresh/0to100/tests/test_universe.py .......                       [ 91%]
+0to100_fresh/0to100/tests/test_watchlist_presets.py .......              [100%]
+
+=============================== warnings summary ===============================
+../root/.venv/lib/python3.11/site-packages/starlette/formparsers.py:12
+  /root/.venv/lib/python3.11/site-packages/starlette/formparsers.py:12: PendingDeprecationWarning: Please use `import python_multipart` instead.
+    import multipart
+
+../root/.venv/lib/python3.11/site-packages/requests/__init__.py:113
+  /root/.venv/lib/python3.11/site-packages/requests/__init__.py:113: RequestsDependencyWarning: urllib3 (2.6.3) or chardet (7.4.3)/charset_normalizer (3.4.7) doesn't match a supported version!
+    warnings.warn(
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+======================== 86 passed, 2 warnings in 4.98s ======================== and  for code quality checks.
+
+**All files of reference**:
+-  - **CRITICAL**: The agent cloned the GitHub repo here to capture the user's local commits. **ALL WORK MUST BE DONE IN THIS FOLDER.**
+- User's exact prompt for v0.5 is in **Message 137**.
+
+**Areas that need refactoring**:
+- Repo root is cluttered with pre-v0.1 legacy code. Must execute the Phase 0 flattening as the absolute first step.
+
+**key api endpoints**:
+- Existing: , , , 
+- To build: , , , 
+
+**Critical Info for New Agent**:
+1. **WORKING DIRECTORY**: You must  to do your work. The  directory is stale and missing the user's local commits. 
+2. **STRICT PLAN**: Follow Message 137 to the letter. It is divided into Phase 0 through Phase 5.
+3. **ZERO REGRESSION**: You must maintain the 86/86 passing tests before adding the new 28 tests (final target ≥ 114). Run 
+no tests ran in 0.00s and 0to100_fresh/add_stop_loss.py:1:8: F401 [*] `re` imported but unused
+  |
+1 | import re
+  |        ^^ F401
+2 | 
+3 | with open('backtest/backtester.py', 'r') as f:
+  |
+  = help: Remove unused import: `re`
+
+0to100_fresh/analytics/reporter.py:20:32: F401 [*] `datetime.timezone` imported but unused
+   |
+18 | import json
+19 | import math
+20 | from datetime import datetime, timezone
+   |                                ^^^^^^^^ F401
+21 | from pathlib import Path
+22 | from typing import Any, Dict, List, Optional, Tuple
+   |
+   = help: Remove unused import: `datetime.timezone`
+
+0to100_fresh/analytics/reporter.py:219:40: F401 [*] `matplotlib.dates` imported but unused
+    |
+217 |             matplotlib.use("Agg")
+218 |             import matplotlib.pyplot as plt
+219 |             import matplotlib.dates as mdates
+    |                                        ^^^^^^ F401
+220 | 
+221 |             fig, axes = plt.subplots(2, 1, figsize=(14, 8), sharex=True)
+    |
+    = help: Remove unused import: `matplotlib.dates`
+
+0to100_fresh/app.py:15:8: F401 [*] `re` imported but unused
+   |
+13 | from concurrent.futures import ThreadPoolExecutor, as_completed
+14 | import time
+15 | import re
+   |        ^^ F401
+16 | from bs4 import BeautifulSoup
+   |
+   = help: Remove unused import: `re`
+
+0to100_fresh/app.py:25:35: F401 [*] `backtest.walk_forward.walk_forward_backtest` imported but unused
+   |
+23 | from signals.composite_signal import CompositeSignal
+24 | from features.market_structure import is_recent_swing_breakout
+25 | from backtest.walk_forward import walk_forward_backtest
+   |                                   ^^^^^^^^^^^^^^^^^^^^^ F401
+26 | from paper_trading import init_db, open_position, close_position, get_open_positions
+   |
+   = help: Remove unused import: `backtest.walk_forward.walk_forward_backtest`
+
+0to100_fresh/app.py:137:9: E722 Do not use bare `except`
+    |
+135 |                 change = ((last - prev) / prev) * 100
+136 |                 data[name] = {"price": last, "change": change}
+137 |         except:
+    |         ^^^^^^ E722
+138 |             continue
+139 |     return data
+    |
+
+0to100_fresh/app.py:167:5: E722 Do not use bare `except`
+    |
+165 |         mc = info.get('marketCap', 0)
+166 |         return mc / 1e7 if mc else 0
+167 |     except:
+    |     ^^^^^^ E722
+168 |         return 0
+    |
+
+0to100_fresh/app.py:205:5: E722 Do not use bare `except`
+    |
+203 |             change = ((last - prev) / prev) * 100
+204 |             return change
+205 |     except:
+    |     ^^^^^^ E722
+206 |         pass
+207 |     return None
+    |
+
+0to100_fresh/app.py:312:17: E722 Do not use bare `except`
+    |
+310 |                 try:
+311 |                     values.append(float(txt))
+312 |                 except:
+    |                 ^^^^^^ E722
+313 |                     values.append(None)
+314 |             if 'Promoter' in label:
+    |
+
+0to100_fresh/app.py:430:5: F841 Local variable `factor_score` is assigned to but never used
+    |
+428 |         return {"error": f"Insufficient data for {symbol}"}
+429 |     indicators = ie.compute(df, symbol)
+430 |     factor_score = (
+    |     ^^^^^^^^^^^^ F841
+431 |         (1 if indicators.get('rsi_14',50)<30 else -1 if indicators.get('rsi_14',50)>70 else 0) * 0.5 +
+432 |         (1 if indicators.get('zscore_20',0)<-1.5 else -1 if indicators.get('zscore_20',0)>1.5 else 0) * 0.3 +
+    |
+    = help: Remove assignment to unused variable `factor_score`
+
+0to100_fresh/app.py:435:5: F841 Local variable `ml_score` is assigned to but never used
+    |
+433 |         (1 if indicators.get('momentum_5d_pct',0)>0.02 else -1 if indicators.get('momentum_5d_pct',0)<-0.02 else 0) * 0.2
+434 |     )
+435 |     ml_score = cs._compute_ml_signal(indicators)
+    |     ^^^^^^^^ F841
+436 |     regime_score = cs._compute_regime_signal(indicators)
+437 |     llm_score = 0.5
+    |
+    = help: Remove assignment to unused variable `ml_score`
+
+0to100_fresh/app.py:436:5: F841 Local variable `regime_score` is assigned to but never used
+    |
+434 |     )
+435 |     ml_score = cs._compute_ml_signal(indicators)
+436 |     regime_score = cs._compute_regime_signal(indicators)
+    |     ^^^^^^^^^^^^ F841
+437 |     llm_score = 0.5
+438 |     session_score = session_signal()
+    |
+    = help: Remove assignment to unused variable `regime_score`
+
+0to100_fresh/app.py:437:5: F841 Local variable `llm_score` is assigned to but never used
+    |
+435 |     ml_score = cs._compute_ml_signal(indicators)
+436 |     regime_score = cs._compute_regime_signal(indicators)
+437 |     llm_score = 0.5
+    |     ^^^^^^^^^ F841
+438 |     session_score = session_signal()
+439 |     signal_result = cs.compute(indicators, llm_signal=None, regime=1)
+    |
+    = help: Remove assignment to unused variable `llm_score`
+
+0to100_fresh/app.py:438:5: F841 Local variable `session_score` is assigned to but never used
+    |
+436 |     regime_score = cs._compute_regime_signal(indicators)
+437 |     llm_score = 0.5
+438 |     session_score = session_signal()
+    |     ^^^^^^^^^^^^^ F841
+439 |     signal_result = cs.compute(indicators, llm_signal=None, regime=1)
+440 |     latest_price = df['close'].iloc[-1]
+    |
+    = help: Remove assignment to unused variable `session_score`
+
+0to100_fresh/app.py:446:5: E722 Do not use bare `except`
+    |
+444 |         info = ticker.info
+445 |         fundamentals = {"P/E Ratio": info.get('trailingPE', 'N/A'), "ROE (%)": info.get('returnOnEquity', 0)*100 if info.get('returnOnEquity') else 'N/A'}
+446 |     except:
+    |     ^^^^^^ E722
+447 |         fundamentals = {"P/E Ratio": "N/A", "ROE (%)": "N/A"}
+448 |     past = get_recent_memory(symbol)
+    |
+
+0to100_fresh/app.py:546:5: E722 Do not use bare `except`
+    |
+544 |         if df is not None and len(df) >= days-20:
+545 |             return symbol, test_func(df)
+546 |     except:
+    |     ^^^^^^ E722
+547 |         pass
+548 |     return symbol, False
+    |
+
+0to100_fresh/app.py:582:32: E702 Multiple statements on one line (semicolon)
+    |
+580 |             return False
+581 |         latest = df.iloc[-1]
+582 |         close = latest['close']; open_ = latest['open']; volume = latest['volume']
+    |                                ^ E702
+583 |         if close <= open_:
+584 |             return False
+    |
+
+0to100_fresh/app.py:582:56: E702 Multiple statements on one line (semicolon)
+    |
+580 |             return False
+581 |         latest = df.iloc[-1]
+582 |         close = latest['close']; open_ = latest['open']; volume = latest['volume']
+    |                                                        ^ E702
+583 |         if close <= open_:
+584 |             return False
+    |
+
+0to100_fresh/app.py:595:5: E722 Do not use bare `except`
+    |
+593 |             return False
+594 |         return True
+595 |     except:
+    |     ^^^^^^ E722
+596 |         return False
+    |
+
+0to100_fresh/app.py:607:45: E702 Multiple statements on one line (semicolon)
+    |
+605 |             if passed:
+606 |                 df = fetch_historical(sym, days=30)
+607 |                 close = df['close'].iloc[-1]; open_ = df['open'].iloc[-1]
+    |                                             ^ E702
+608 |                 chg = (close - open_) / open_ * 100
+609 |                 vol_r = df['volume'].iloc[-1] / df['volume'].iloc[-21:-1].mean()
+    |
+
+0to100_fresh/app.py:651:5: E722 Do not use bare `except`
+    |
+649 |         resp = requests.post(url, json=payload, headers=headers, timeout=30)
+650 |         return resp.json()['choices'][0]['message']['content']
+651 |     except:
+    |     ^^^^^^ E722
+652 |         return "Error generating pulse"
+    |
+
+0to100_fresh/app.py:676:5: E722 Do not use bare `except`
+    |
+674 |             allocation = "Equities 40% | Gold 25% | Bonds 25% | Cash 10%"
+675 |         return regime, allocation
+676 |     except:
+    |     ^^^^^^ E722
+677 |         return "⚠️ Regime data unavailable", "N/A"
+    |
+
+0to100_fresh/app.py:688:5: E722 Do not use bare `except`
+    |
+686 |         mc = info.get('marketCap', 0)
+687 |         mc_cr = mc / 1e7 if mc else 'N/A'
+688 |     except:
+    |     ^^^^^^ E722
+689 |         sector = pe = roe = mc_cr = 'N/A'
+690 |     prompt = f"""
+    |
+
+0to100_fresh/app.py:753:25: E722 Do not use bare `except`
+    |
+751 |                             conf_str = line.split('confidence:')[1].strip().split()[0]
+752 |                             confidence = int(conf_str)
+753 |                         except:
+    |                         ^^^^^^ E722
+754 |                             pass
+755 |                 elif 'REASON:' in line.upper():
+    |
+
+0to100_fresh/app.py:833:66: E741 Ambiguous variable name: `l`
+    |
+831 | - **Current price location:** {'Above Value Area' if current_price > vah else 'Inside Value Area' if val <= current_price <= vah else 'Below Value Area'}
+832 | - **High volume zones (walls):** {', '.join([f'₹{h:.2f}' for h in hvns]) if hvns else 'None'}
+833 | - **Low volume zones (fast zones):** {', '.join([f'₹{l:.2f}' for l in lvns]) if lvns else 'None'}
+    |                                                                  ^ E741
+834 | """)
+835 |             else:
+    |
+
+0to100_fresh/app.py:949:13: E722 Do not use bare `except`
+    |
+947 |                 if cat:
+948 |                     categories[cat].append(sym)
+949 |             except:
+    |             ^^^^^^ E722
+950 |                 continue
+951 |         progress.empty()
+    |
+
+0to100_fresh/backtest/backtester.py:20:8: F401 [*] `uuid` imported but unused
+   |
+18 | from __future__ import annotations
+19 | 
+20 | import uuid
+   |        ^^^^ F401
+21 | from datetime import date, timedelta
+22 | from typing import Any, Dict, List, Optional
+   |
+   = help: Remove unused import: `uuid`
+
+0to100_fresh/backtest/backtester.py:21:22: F401 [*] `datetime.date` imported but unused
+   |
+20 | import uuid
+21 | from datetime import date, timedelta
+   |                      ^^^^ F401
+22 | from typing import Any, Dict, List, Optional
+   |
+   = help: Remove unused import
+
+0to100_fresh/backtest/backtester.py:21:28: F401 [*] `datetime.timedelta` imported but unused
+   |
+20 | import uuid
+21 | from datetime import date, timedelta
+   |                            ^^^^^^^^^ F401
+22 | from typing import Any, Dict, List, Optional
+   |
+   = help: Remove unused import
+
+0to100_fresh/backtest/backtester.py:190:47: F401 [*] `risk.risk_manager.RiskDecision` imported but unused
+    |
+188 |                 last_price = bar_closes.get(symbol, 0.0)
+189 | 
+190 |                 from risk.risk_manager import RiskDecision
+    |                                               ^^^^^^^^^^^^ F401
+191 |                 risk_decision = self._risk.evaluate(
+192 |                     signal=signal,
+    |
+    = help: Remove unused import: `risk.risk_manager.RiskDecision`
+
+0to100_fresh/backtest/backtester.py:282:9: F841 Local variable `trend` is assigned to but never used
+    |
+280 |         zscore = indicators.get("zscore_20")
+281 |         rsi = indicators.get("rsi_14")
+282 |         trend = indicators.get("trend_5d")
+    |         ^^^^^ F841
+283 |         has_position = self._portfolio.has_position(symbol)
+    |
+    = help: Remove assignment to unused variable `trend`
+
+0to100_fresh/backtest/backtester.py:299:33: F401 [*] `dataclasses.dataclass` imported but unused
+    |
+297 |                 reasoning = f"mean_reversion_exit: zscore={zscore:.2f}, rsi={rsi:.1f}"
+298 | 
+299 |         from dataclasses import dataclass
+    |                                 ^^^^^^^^^ F401
+300 |         return TradingSignal(
+301 |             symbol=symbol,
+    |
+    = help: Remove unused import: `dataclasses.dataclass`
+
+0to100_fresh/backtest/ranking_backtester_patch.py:5:13: SyntaxError: Invalid assignment target
+  |
+3 | # Inside run(), after computing composite for all symbols:
+4 | scores = []
+5 | for symbol, ...:
+  |             ^
+6 |     composite = self.composite_signal.compute(features, llm_context)
+7 |     scores.append((symbol, composite['direction'] * composite['confidence'] / 100))  # signed score
+  |
+
+0to100_fresh/backtest/ranking_backtester_patch.py:5:16: SyntaxError: Expected 'in', found ':'
+  |
+3 | # Inside run(), after computing composite for all symbols:
+4 | scores = []
+5 | for symbol, ...:
+  |                ^
+6 |     composite = self.composite_signal.compute(features, llm_context)
+7 |     scores.append((symbol, composite['direction'] * composite['confidence'] / 100))  # signed score
+  |
+
+0to100_fresh/backtest/simulator.py:16:36: F401 [*] `dataclasses.field` imported but unused
+   |
+14 | from __future__ import annotations
+15 | 
+16 | from dataclasses import dataclass, field
+   |                                    ^^^^^ F401
+17 | from datetime import datetime
+18 | from typing import Any, Dict, List, Optional
+   |
+   = help: Remove unused import: `dataclasses.field`
+
+0to100_fresh/backtest/walk_forward.py:1:18: F401 [*] `pandas` imported but unused
+  |
+1 | import pandas as pd
+  |                  ^^ F401
+2 | from datetime import timedelta
+3 | from backtest.backtester import Backtester
+  |
+  = help: Remove unused import: `pandas`
+
+0to100_fresh/backtest/walk_forward.py:23:9: F841 Local variable `train_data` is assigned to but never used
+   |
+21 |         if test_end > end_date:
+22 |             break
+23 |         train_data = {sym: df.loc[current_start:train_end] for sym, df in historical_data.items()}
+   |         ^^^^^^^^^^ F841
+24 |         test_data = {sym: df.loc[train_end:test_end] for sym, df in historical_data.items()}
+25 |         bt = Backtester(test_data, initial_capital=initial_capital, use_llm=use_llm)
+   |
+   = help: Remove assignment to unused variable `train_data`
+
+0to100_fresh/data/historical.py:14:26: F401 [*] `typing.Optional` imported but unused
+   |
+12 | import time
+13 | from datetime import datetime, timedelta
+14 | from typing import Dict, Optional
+   |                          ^^^^^^^^ F401
+15 | 
+16 | import pandas as pd
+   |
+   = help: Remove unused import: `typing.Optional`
+
+0to100_fresh/data/kite_client.py:15:8: F401 [*] `time` imported but unused
+   |
+13 | from __future__ import annotations
+14 | 
+15 | import time
+   |        ^^^^ F401
+16 | from typing import Any, Dict, List, Optional
+   |
+   = help: Remove unused import: `time`
+
+0to100_fresh/data/tick_processor.py:11:25: F401 [*] `collections.defaultdict` imported but unused
+   |
+10 | import threading
+11 | from collections import defaultdict
+   |                         ^^^^^^^^^^^ F401
+12 | from datetime import datetime, timezone
+13 | from typing import Callable, Dict, List, Optional
+   |
+   = help: Remove unused import: `collections.defaultdict`
+
+0to100_fresh/feature_store/store.py:9:26: F401 [*] `typing.List` imported but unused
+   |
+ 7 | from sortedcontainers import SortedList
+ 8 | from datetime import datetime
+ 9 | from typing import Dict, List, Optional
+   |                          ^^^^ F401
+10 | 
+11 | class PointInTimeFeatureStore:
+   |
+   = help: Remove unused import
+
+0to100_fresh/feature_store/store.py:9:32: F401 [*] `typing.Optional` imported but unused
+   |
+ 7 | from sortedcontainers import SortedList
+ 8 | from datetime import datetime
+ 9 | from typing import Dict, List, Optional
+   |                                ^^^^^^^^ F401
+10 | 
+11 | class PointInTimeFeatureStore:
+   |
+   = help: Remove unused import
+
+0to100_fresh/features/volume_profile.py:8:26: F401 [*] `typing.List` imported but unused
+  |
+6 | import numpy as np
+7 | import pandas as pd
+8 | from typing import Dict, List, Tuple, Optional
+  |                          ^^^^ F401
+  |
+  = help: Remove unused import: `typing.List`
+
+0to100_fresh/get_token.py:17:7: F541 [*] f-string without any placeholders
+   |
+15 | access_token = session["access_token"]
+16 | 
+17 | print(f"\nYour new access_token (copy this to .env):")
+   |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ F541
+18 | print(access_token)
+   |
+   = help: Remove extraneous `f` prefix
+
+0to100_fresh/llm/context_builder.py:11:31: F401 [*] `typing.List` imported but unused
+   |
+ 9 | import json
+10 | from datetime import datetime, timezone
+11 | from typing import Any, Dict, List, Optional
+   |                               ^^^^ F401
+12 | 
+13 | from logger import get_logger
+   |
+   = help: Remove unused import
+
+0to100_fresh/llm/context_builder.py:11:37: F401 [*] `typing.Optional` imported but unused
+   |
+ 9 | import json
+10 | from datetime import datetime, timezone
+11 | from typing import Any, Dict, List, Optional
+   |                                     ^^^^^^^^ F401
+12 | 
+13 | from logger import get_logger
+   |
+   = help: Remove unused import
+
+0to100_fresh/llm/signal_validator.py:18:31: F401 [*] `typing.List` imported but unused
+   |
+17 | from dataclasses import dataclass, field
+18 | from typing import Any, Dict, List, Optional
+   |                               ^^^^ F401
+19 | 
+20 | from config import settings
+   |
+   = help: Remove unused import: `typing.List`
+
+0to100_fresh/main.py:115:11: F541 [*] f-string without any placeholders
+    |
+113 |     historical = HistoricalDataFetcher(kite, instruments)
+114 | 
+115 |     print(f"\n=== SimpleQuant AI — Backtest ===")
+    |           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ F541
+116 |     print(f"Period  : {from_date} → {to_date}")
+117 |     print(f"Universe: {', '.join(settings.symbol_list)}")
+    |
+    = help: Remove extraneous `f` prefix
+
+0to100_fresh/main.py:150:5: F841 Local variable `metrics` is assigned to but never used
+    |
+148 |     print("\nGenerating performance report…")
+149 |     reporter = PerformanceReporter()
+150 |     metrics = reporter.generate_report(
+    |     ^^^^^^^ F841
+151 |         equity_curve=result["equity_curve"],
+152 |         trade_journal=result["trade_journal"],
+    |
+    = help: Remove assignment to unused variable `metrics`
+
+0to100_fresh/news/fetcher.py:13:26: F401 [*] `typing.Optional` imported but unused
+   |
+11 | import time
+12 | from datetime import datetime, timezone
+13 | from typing import List, Optional
+   |                          ^^^^^^^^ F401
+14 | 
+15 | import feedparser
+   |
+   = help: Remove unused import: `typing.Optional`
+
+0to100_fresh/news/fetcher.py:16:8: F401 [*] `requests` imported but unused
+   |
+15 | import feedparser
+16 | import requests
+   |        ^^^^^^^^ F401
+17 | 
+18 | from config import settings
+   |
+   = help: Remove unused import: `requests`
+
+0to100_fresh/news/fetcher.py:110:20: F401 [*] `email.utils` imported but unused
+    |
+108 |     def _parse_entry_time(entry, fallback: datetime) -> datetime:
+109 |         try:
+110 |             import email.utils
+    |                    ^^^^^^^^^^^ F401
+111 |             struct = entry.get("published_parsed") or entry.get("updated_parsed")
+112 |             if struct:
+    |
+    = help: Remove unused import: `email.utils`
+
+0to100_fresh/news/normalizer.py:8:8: F401 [*] `re` imported but unused
+  |
+6 | from __future__ import annotations
+7 | 
+8 | import re
+  |        ^^ F401
+9 | from typing import List
+  |
+  = help: Remove unused import: `re`
+
+0to100_fresh/news/summarizer.py:10:26: F401 [*] `typing.Optional` imported but unused
+   |
+ 8 | from __future__ import annotations
+ 9 | 
+10 | from typing import List, Optional
+   |                          ^^^^^^^^ F401
+11 | 
+12 | from news.normalizer import NormalizedArticle
+   |
+   = help: Remove unused import: `typing.Optional`
+
+0to100_fresh/paper_trading.py:3:22: F401 [*] `datetime.datetime` imported but unused
+  |
+1 | import sqlite3
+2 | import pandas as pd
+3 | from datetime import datetime
+  |                      ^^^^^^^^ F401
+4 | 
+5 | DB_PATH = "paper_trading.db"
+  |
+  = help: Remove unused import: `datetime.datetime`
+
+0to100_fresh/portfolio/state.py:17:36: F401 [*] `dataclasses.field` imported but unused
+   |
+16 | import threading
+17 | from dataclasses import dataclass, field
+   |                                    ^^^^^ F401
+18 | from datetime import datetime, timezone
+19 | from typing import Any, Dict, List, Optional
+   |
+   = help: Remove unused import: `dataclasses.field`
+
+0to100_fresh/risk/risk_manager.py:22:26: F401 [*] `typing.Optional` imported but unused
+   |
+20 | from dataclasses import dataclass
+21 | from datetime import date
+22 | from typing import Dict, Optional
+   |                          ^^^^^^^^ F401
+23 | 
+24 | from config import settings
+   |
+   = help: Remove unused import: `typing.Optional`
+
+0to100_fresh/signals/composite_signal.py:5:17: F401 [*] `numpy` imported but unused
+  |
+3 | import pandas as pd
+4 | from typing import Dict, Optional, Any
+5 | import numpy as np
+  |                 ^^ F401
+6 | from features.volume_profile import VolumeProfile
+  |
+  = help: Remove unused import: `numpy`
+
+0to100_fresh/signals/composite_signal.py:174:29: F841 [*] Local variable `e` is assigned to but never used
+    |
+173 |             return signal
+174 |         except Exception as e:
+    |                             ^ F841
+175 |             return 0.0
+    |
+    = help: Remove assignment to unused variable `e`
+
+add_stop_loss.py:1:8: F401 [*] `re` imported but unused
+  |
+1 | import re
+  |        ^^ F401
+2 | 
+3 | with open('backtest/backtester.py', 'r') as f:
+  |
+  = help: Remove unused import: `re`
+
+analytics/reporter.py:20:32: F401 [*] `datetime.timezone` imported but unused
+   |
+18 | import json
+19 | import math
+20 | from datetime import datetime, timezone
+   |                                ^^^^^^^^ F401
+21 | from pathlib import Path
+22 | from typing import Any, Dict, List, Optional, Tuple
+   |
+   = help: Remove unused import: `datetime.timezone`
+
+analytics/reporter.py:219:40: F401 [*] `matplotlib.dates` imported but unused
+    |
+217 |             matplotlib.use("Agg")
+218 |             import matplotlib.pyplot as plt
+219 |             import matplotlib.dates as mdates
+    |                                        ^^^^^^ F401
+220 | 
+221 |             fig, axes = plt.subplots(2, 1, figsize=(14, 8), sharex=True)
+    |
+    = help: Remove unused import: `matplotlib.dates`
+
+app.py:15:8: F401 [*] `re` imported but unused
+   |
+13 | from concurrent.futures import ThreadPoolExecutor, as_completed
+14 | import time
+15 | import re
+   |        ^^ F401
+16 | from bs4 import BeautifulSoup
+   |
+   = help: Remove unused import: `re`
+
+app.py:25:35: F401 [*] `backtest.walk_forward.walk_forward_backtest` imported but unused
+   |
+23 | from signals.composite_signal import CompositeSignal
+24 | from features.market_structure import is_recent_swing_breakout
+25 | from backtest.walk_forward import walk_forward_backtest
+   |                                   ^^^^^^^^^^^^^^^^^^^^^ F401
+26 | from paper_trading import init_db, open_position, close_position, get_open_positions
+   |
+   = help: Remove unused import: `backtest.walk_forward.walk_forward_backtest`
+
+app.py:137:9: E722 Do not use bare `except`
+    |
+135 |                 change = ((last - prev) / prev) * 100
+136 |                 data[name] = {"price": last, "change": change}
+137 |         except:
+    |         ^^^^^^ E722
+138 |             continue
+139 |     return data
+    |
+
+app.py:167:5: E722 Do not use bare `except`
+    |
+165 |         mc = info.get('marketCap', 0)
+166 |         return mc / 1e7 if mc else 0
+167 |     except:
+    |     ^^^^^^ E722
+168 |         return 0
+    |
+
+app.py:205:5: E722 Do not use bare `except`
+    |
+203 |             change = ((last - prev) / prev) * 100
+204 |             return change
+205 |     except:
+    |     ^^^^^^ E722
+206 |         pass
+207 |     return None
+    |
+
+app.py:312:17: E722 Do not use bare `except`
+    |
+310 |                 try:
+311 |                     values.append(float(txt))
+312 |                 except:
+    |                 ^^^^^^ E722
+313 |                     values.append(None)
+314 |             if 'Promoter' in label:
+    |
+
+app.py:430:5: F841 Local variable `factor_score` is assigned to but never used
+    |
+428 |         return {"error": f"Insufficient data for {symbol}"}
+429 |     indicators = ie.compute(df, symbol)
+430 |     factor_score = (
+    |     ^^^^^^^^^^^^ F841
+431 |         (1 if indicators.get('rsi_14',50)<30 else -1 if indicators.get('rsi_14',50)>70 else 0) * 0.5 +
+432 |         (1 if indicators.get('zscore_20',0)<-1.5 else -1 if indicators.get('zscore_20',0)>1.5 else 0) * 0.3 +
+    |
+    = help: Remove assignment to unused variable `factor_score`
+
+app.py:435:5: F841 Local variable `ml_score` is assigned to but never used
+    |
+433 |         (1 if indicators.get('momentum_5d_pct',0)>0.02 else -1 if indicators.get('momentum_5d_pct',0)<-0.02 else 0) * 0.2
+434 |     )
+435 |     ml_score = cs._compute_ml_signal(indicators)
+    |     ^^^^^^^^ F841
+436 |     regime_score = cs._compute_regime_signal(indicators)
+437 |     llm_score = 0.5
+    |
+    = help: Remove assignment to unused variable `ml_score`
+
+app.py:436:5: F841 Local variable `regime_score` is assigned to but never used
+    |
+434 |     )
+435 |     ml_score = cs._compute_ml_signal(indicators)
+436 |     regime_score = cs._compute_regime_signal(indicators)
+    |     ^^^^^^^^^^^^ F841
+437 |     llm_score = 0.5
+438 |     session_score = session_signal()
+    |
+    = help: Remove assignment to unused variable `regime_score`
+
+app.py:437:5: F841 Local variable `llm_score` is assigned to but never used
+    |
+435 |     ml_score = cs._compute_ml_signal(indicators)
+436 |     regime_score = cs._compute_regime_signal(indicators)
+437 |     llm_score = 0.5
+    |     ^^^^^^^^^ F841
+438 |     session_score = session_signal()
+439 |     signal_result = cs.compute(indicators, llm_signal=None, regime=1)
+    |
+    = help: Remove assignment to unused variable `llm_score`
+
+app.py:438:5: F841 Local variable `session_score` is assigned to but never used
+    |
+436 |     regime_score = cs._compute_regime_signal(indicators)
+437 |     llm_score = 0.5
+438 |     session_score = session_signal()
+    |     ^^^^^^^^^^^^^ F841
+439 |     signal_result = cs.compute(indicators, llm_signal=None, regime=1)
+440 |     latest_price = df['close'].iloc[-1]
+    |
+    = help: Remove assignment to unused variable `session_score`
+
+app.py:446:5: E722 Do not use bare `except`
+    |
+444 |         info = ticker.info
+445 |         fundamentals = {"P/E Ratio": info.get('trailingPE', 'N/A'), "ROE (%)": info.get('returnOnEquity', 0)*100 if info.get('returnOnEquity') else 'N/A'}
+446 |     except:
+    |     ^^^^^^ E722
+447 |         fundamentals = {"P/E Ratio": "N/A", "ROE (%)": "N/A"}
+448 |     past = get_recent_memory(symbol)
+    |
+
+app.py:546:5: E722 Do not use bare `except`
+    |
+544 |         if df is not None and len(df) >= days-20:
+545 |             return symbol, test_func(df)
+546 |     except:
+    |     ^^^^^^ E722
+547 |         pass
+548 |     return symbol, False
+    |
+
+app.py:582:32: E702 Multiple statements on one line (semicolon)
+    |
+580 |             return False
+581 |         latest = df.iloc[-1]
+582 |         close = latest['close']; open_ = latest['open']; volume = latest['volume']
+    |                                ^ E702
+583 |         if close <= open_:
+584 |             return False
+    |
+
+app.py:582:56: E702 Multiple statements on one line (semicolon)
+    |
+580 |             return False
+581 |         latest = df.iloc[-1]
+582 |         close = latest['close']; open_ = latest['open']; volume = latest['volume']
+    |                                                        ^ E702
+583 |         if close <= open_:
+584 |             return False
+    |
+
+app.py:595:5: E722 Do not use bare `except`
+    |
+593 |             return False
+594 |         return True
+595 |     except:
+    |     ^^^^^^ E722
+596 |         return False
+    |
+
+app.py:607:45: E702 Multiple statements on one line (semicolon)
+    |
+605 |             if passed:
+606 |                 df = fetch_historical(sym, days=30)
+607 |                 close = df['close'].iloc[-1]; open_ = df['open'].iloc[-1]
+    |                                             ^ E702
+608 |                 chg = (close - open_) / open_ * 100
+609 |                 vol_r = df['volume'].iloc[-1] / df['volume'].iloc[-21:-1].mean()
+    |
+
+app.py:651:5: E722 Do not use bare `except`
+    |
+649 |         resp = requests.post(url, json=payload, headers=headers, timeout=30)
+650 |         return resp.json()['choices'][0]['message']['content']
+651 |     except:
+    |     ^^^^^^ E722
+652 |         return "Error generating pulse"
+    |
+
+app.py:676:5: E722 Do not use bare `except`
+    |
+674 |             allocation = "Equities 40% | Gold 25% | Bonds 25% | Cash 10%"
+675 |         return regime, allocation
+676 |     except:
+    |     ^^^^^^ E722
+677 |         return "⚠️ Regime data unavailable", "N/A"
+    |
+
+app.py:688:5: E722 Do not use bare `except`
+    |
+686 |         mc = info.get('marketCap', 0)
+687 |         mc_cr = mc / 1e7 if mc else 'N/A'
+688 |     except:
+    |     ^^^^^^ E722
+689 |         sector = pe = roe = mc_cr = 'N/A'
+690 |     prompt = f"""
+    |
+
+app.py:753:25: E722 Do not use bare `except`
+    |
+751 |                             conf_str = line.split('confidence:')[1].strip().split()[0]
+752 |                             confidence = int(conf_str)
+753 |                         except:
+    |                         ^^^^^^ E722
+754 |                             pass
+755 |                 elif 'REASON:' in line.upper():
+    |
+
+app.py:833:66: E741 Ambiguous variable name: `l`
+    |
+831 | - **Current price location:** {'Above Value Area' if current_price > vah else 'Inside Value Area' if val <= current_price <= vah else 'Below Value Area'}
+832 | - **High volume zones (walls):** {', '.join([f'₹{h:.2f}' for h in hvns]) if hvns else 'None'}
+833 | - **Low volume zones (fast zones):** {', '.join([f'₹{l:.2f}' for l in lvns]) if lvns else 'None'}
+    |                                                                  ^ E741
+834 | """)
+835 |             else:
+    |
+
+app.py:949:13: E722 Do not use bare `except`
+    |
+947 |                 if cat:
+948 |                     categories[cat].append(sym)
+949 |             except:
+    |             ^^^^^^ E722
+950 |                 continue
+951 |         progress.empty()
+    |
+
+backtest/backtester.py:20:8: F401 [*] `uuid` imported but unused
+   |
+18 | from __future__ import annotations
+19 | 
+20 | import uuid
+   |        ^^^^ F401
+21 | from datetime import date, timedelta
+22 | from typing import Any, Dict, List, Optional
+   |
+   = help: Remove unused import: `uuid`
+
+backtest/backtester.py:21:22: F401 [*] `datetime.date` imported but unused
+   |
+20 | import uuid
+21 | from datetime import date, timedelta
+   |                      ^^^^ F401
+22 | from typing import Any, Dict, List, Optional
+   |
+   = help: Remove unused import
+
+backtest/backtester.py:21:28: F401 [*] `datetime.timedelta` imported but unused
+   |
+20 | import uuid
+21 | from datetime import date, timedelta
+   |                            ^^^^^^^^^ F401
+22 | from typing import Any, Dict, List, Optional
+   |
+   = help: Remove unused import
+
+backtest/backtester.py:190:47: F401 [*] `risk.risk_manager.RiskDecision` imported but unused
+    |
+188 |                 last_price = bar_closes.get(symbol, 0.0)
+189 | 
+190 |                 from risk.risk_manager import RiskDecision
+    |                                               ^^^^^^^^^^^^ F401
+191 |                 risk_decision = self._risk.evaluate(
+192 |                     signal=signal,
+    |
+    = help: Remove unused import: `risk.risk_manager.RiskDecision`
+
+backtest/backtester.py:282:9: F841 Local variable `trend` is assigned to but never used
+    |
+280 |         zscore = indicators.get("zscore_20")
+281 |         rsi = indicators.get("rsi_14")
+282 |         trend = indicators.get("trend_5d")
+    |         ^^^^^ F841
+283 |         has_position = self._portfolio.has_position(symbol)
+    |
+    = help: Remove assignment to unused variable `trend`
+
+backtest/backtester.py:299:33: F401 [*] `dataclasses.dataclass` imported but unused
+    |
+297 |                 reasoning = f"mean_reversion_exit: zscore={zscore:.2f}, rsi={rsi:.1f}"
+298 | 
+299 |         from dataclasses import dataclass
+    |                                 ^^^^^^^^^ F401
+300 |         return TradingSignal(
+301 |             symbol=symbol,
+    |
+    = help: Remove unused import: `dataclasses.dataclass`
+
+backtest/ranking_backtester_patch.py:5:13: SyntaxError: Invalid assignment target
+  |
+3 | # Inside run(), after computing composite for all symbols:
+4 | scores = []
+5 | for symbol, ...:
+  |             ^
+6 |     composite = self.composite_signal.compute(features, llm_context)
+7 |     scores.append((symbol, composite['direction'] * composite['confidence'] / 100))  # signed score
+  |
+
+backtest/ranking_backtester_patch.py:5:16: SyntaxError: Expected 'in', found ':'
+  |
+3 | # Inside run(), after computing composite for all symbols:
+4 | scores = []
+5 | for symbol, ...:
+  |                ^
+6 |     composite = self.composite_signal.compute(features, llm_context)
+7 |     scores.append((symbol, composite['direction'] * composite['confidence'] / 100))  # signed score
+  |
+
+backtest/simulator.py:16:36: F401 [*] `dataclasses.field` imported but unused
+   |
+14 | from __future__ import annotations
+15 | 
+16 | from dataclasses import dataclass, field
+   |                                    ^^^^^ F401
+17 | from datetime import datetime
+18 | from typing import Any, Dict, List, Optional
+   |
+   = help: Remove unused import: `dataclasses.field`
+
+backtest/walk_forward.py:1:18: F401 [*] `pandas` imported but unused
+  |
+1 | import pandas as pd
+  |                  ^^ F401
+2 | from datetime import timedelta
+3 | from backtest.backtester import Backtester
+  |
+  = help: Remove unused import: `pandas`
+
+backtest/walk_forward.py:23:9: F841 Local variable `train_data` is assigned to but never used
+   |
+21 |         if test_end > end_date:
+22 |             break
+23 |         train_data = {sym: df.loc[current_start:train_end] for sym, df in historical_data.items()}
+   |         ^^^^^^^^^^ F841
+24 |         test_data = {sym: df.loc[train_end:test_end] for sym, df in historical_data.items()}
+25 |         bt = Backtester(test_data, initial_capital=initial_capital, use_llm=use_llm)
+   |
+   = help: Remove assignment to unused variable `train_data`
+
+data/historical.py:14:26: F401 [*] `typing.Optional` imported but unused
+   |
+12 | import time
+13 | from datetime import datetime, timedelta
+14 | from typing import Dict, Optional
+   |                          ^^^^^^^^ F401
+15 | 
+16 | import pandas as pd
+   |
+   = help: Remove unused import: `typing.Optional`
+
+data/kite_client.py:15:8: F401 [*] `time` imported but unused
+   |
+13 | from __future__ import annotations
+14 | 
+15 | import time
+   |        ^^^^ F401
+16 | from typing import Any, Dict, List, Optional
+   |
+   = help: Remove unused import: `time`
+
+data/tick_processor.py:11:25: F401 [*] `collections.defaultdict` imported but unused
+   |
+10 | import threading
+11 | from collections import defaultdict
+   |                         ^^^^^^^^^^^ F401
+12 | from datetime import datetime, timezone
+13 | from typing import Callable, Dict, List, Optional
+   |
+   = help: Remove unused import: `collections.defaultdict`
+
+feature_store/store.py:9:26: F401 [*] `typing.List` imported but unused
+   |
+ 7 | from sortedcontainers import SortedList
+ 8 | from datetime import datetime
+ 9 | from typing import Dict, List, Optional
+   |                          ^^^^ F401
+10 | 
+11 | class PointInTimeFeatureStore:
+   |
+   = help: Remove unused import
+
+feature_store/store.py:9:32: F401 [*] `typing.Optional` imported but unused
+   |
+ 7 | from sortedcontainers import SortedList
+ 8 | from datetime import datetime
+ 9 | from typing import Dict, List, Optional
+   |                                ^^^^^^^^ F401
+10 | 
+11 | class PointInTimeFeatureStore:
+   |
+   = help: Remove unused import
+
+features/volume_profile.py:8:26: F401 [*] `typing.List` imported but unused
+  |
+6 | import numpy as np
+7 | import pandas as pd
+8 | from typing import Dict, List, Tuple, Optional
+  |                          ^^^^ F401
+  |
+  = help: Remove unused import: `typing.List`
+
+get_token.py:17:7: F541 [*] f-string without any placeholders
+   |
+15 | access_token = session["access_token"]
+16 | 
+17 | print(f"\nYour new access_token (copy this to .env):")
+   |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ F541
+18 | print(access_token)
+   |
+   = help: Remove extraneous `f` prefix
+
+llm/context_builder.py:11:31: F401 [*] `typing.List` imported but unused
+   |
+ 9 | import json
+10 | from datetime import datetime, timezone
+11 | from typing import Any, Dict, List, Optional
+   |                               ^^^^ F401
+12 | 
+13 | from logger import get_logger
+   |
+   = help: Remove unused import
+
+llm/context_builder.py:11:37: F401 [*] `typing.Optional` imported but unused
+   |
+ 9 | import json
+10 | from datetime import datetime, timezone
+11 | from typing import Any, Dict, List, Optional
+   |                                     ^^^^^^^^ F401
+12 | 
+13 | from logger import get_logger
+   |
+   = help: Remove unused import
+
+llm/signal_validator.py:18:31: F401 [*] `typing.List` imported but unused
+   |
+17 | from dataclasses import dataclass, field
+18 | from typing import Any, Dict, List, Optional
+   |                               ^^^^ F401
+19 | 
+20 | from config import settings
+   |
+   = help: Remove unused import: `typing.List`
+
+main.py:115:11: F541 [*] f-string without any placeholders
+    |
+113 |     historical = HistoricalDataFetcher(kite, instruments)
+114 | 
+115 |     print(f"\n=== SimpleQuant AI — Backtest ===")
+    |           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ F541
+116 |     print(f"Period  : {from_date} → {to_date}")
+117 |     print(f"Universe: {', '.join(settings.symbol_list)}")
+    |
+    = help: Remove extraneous `f` prefix
+
+main.py:150:5: F841 Local variable `metrics` is assigned to but never used
+    |
+148 |     print("\nGenerating performance report…")
+149 |     reporter = PerformanceReporter()
+150 |     metrics = reporter.generate_report(
+    |     ^^^^^^^ F841
+151 |         equity_curve=result["equity_curve"],
+152 |         trade_journal=result["trade_journal"],
+    |
+    = help: Remove assignment to unused variable `metrics`
+
+news/fetcher.py:13:26: F401 [*] `typing.Optional` imported but unused
+   |
+11 | import time
+12 | from datetime import datetime, timezone
+13 | from typing import List, Optional
+   |                          ^^^^^^^^ F401
+14 | 
+15 | import feedparser
+   |
+   = help: Remove unused import: `typing.Optional`
+
+news/fetcher.py:16:8: F401 [*] `requests` imported but unused
+   |
+15 | import feedparser
+16 | import requests
+   |        ^^^^^^^^ F401
+17 | 
+18 | from config import settings
+   |
+   = help: Remove unused import: `requests`
+
+news/fetcher.py:110:20: F401 [*] `email.utils` imported but unused
+    |
+108 |     def _parse_entry_time(entry, fallback: datetime) -> datetime:
+109 |         try:
+110 |             import email.utils
+    |                    ^^^^^^^^^^^ F401
+111 |             struct = entry.get("published_parsed") or entry.get("updated_parsed")
+112 |             if struct:
+    |
+    = help: Remove unused import: `email.utils`
+
+news/normalizer.py:8:8: F401 [*] `re` imported but unused
+  |
+6 | from __future__ import annotations
+7 | 
+8 | import re
+  |        ^^ F401
+9 | from typing import List
+  |
+  = help: Remove unused import: `re`
+
+news/summarizer.py:10:26: F401 [*] `typing.Optional` imported but unused
+   |
+ 8 | from __future__ import annotations
+ 9 | 
+10 | from typing import List, Optional
+   |                          ^^^^^^^^ F401
+11 | 
+12 | from news.normalizer import NormalizedArticle
+   |
+   = help: Remove unused import: `typing.Optional`
+
+paper_trading.py:3:22: F401 [*] `datetime.datetime` imported but unused
+  |
+1 | import sqlite3
+2 | import pandas as pd
+3 | from datetime import datetime
+  |                      ^^^^^^^^ F401
+4 | 
+5 | DB_PATH = "paper_trading.db"
+  |
+  = help: Remove unused import: `datetime.datetime`
+
+portfolio/state.py:17:36: F401 [*] `dataclasses.field` imported but unused
+   |
+16 | import threading
+17 | from dataclasses import dataclass, field
+   |                                    ^^^^^ F401
+18 | from datetime import datetime, timezone
+19 | from typing import Any, Dict, List, Optional
+   |
+   = help: Remove unused import: `dataclasses.field`
+
+risk/risk_manager.py:22:26: F401 [*] `typing.Optional` imported but unused
+   |
+20 | from dataclasses import dataclass
+21 | from datetime import date
+22 | from typing import Dict, Optional
+   |                          ^^^^^^^^ F401
+23 | 
+24 | from config import settings
+   |
+   = help: Remove unused import: `typing.Optional`
+
+signals/composite_signal.py:5:17: F401 [*] `numpy` imported but unused
+  |
+3 | import pandas as pd
+4 | from typing import Dict, Optional, Any
+5 | import numpy as np
+  |                 ^^ F401
+6 | from features.volume_profile import VolumeProfile
+  |
+  = help: Remove unused import: `numpy`
+
+signals/composite_signal.py:174:29: F841 [*] Local variable `e` is assigned to but never used
+    |
+173 |             return signal
+174 |         except Exception as e:
+    |                             ^ F841
+175 |             return 0.0
+    |
+    = help: Remove assignment to unused variable `e`
+
+Found 118 errors.
+[*] 66 fixable with the `--fix` option (16 hidden fixes can be enabled with the `--unsafe-fixes` option). continuously.
+4.  is the SINGLE SOURCE OF TRUTH for indicators. Do not recompute SMA, RSI, ATR, or regime anywhere else.
+5. All external network calls must use .
+6. DO NOT optimize, refactor, or tweak scoring weights beyond what is in the spec.
+
+**documents and test reports created in this job**:
+-  (needs to be updated with v0.5 details)
+
+**Last 10 User Messages and any pending HUMAN messages**:
+- The user finalized a massive spec for v0.5 with Trader Profiles (Conservative vs Aggressive) in Message 137.
+- The agent advised the user to run the prompt in their *local* Claude session to prevent git merge conflicts.
+- The user initially agreed (I will stand down here. Go paste your final prompt into that session.).
+- The user abruptly changed their mind: I want you to create the system and start right away.
+- The agent executed  into  to pull the latest codebase.
+- **Pending**: The agent needs to execute the v0.5 implementation inside .
+
+**Project Health Check**:
+Broken (Mid-transition. The repo needs immediate sanitization/flattening before implementing the new features).
+
+**3rd Party Integrations**:
+- Anthropic Claude () — requires User API Key
+- DeepSeek (via OpenAI SDK) — requires User API Key
+- Kite Connect — requires User API Key
+- NewsAPI — requires User API Key
+- Alpha Vantage — requires User API Key
+
+**Testing status**:
+- Testing agent used after significant changes: NO
+- Troubleshoot agent used after agent stuck in loop: NO
+- Test files created: None yet (pending creation of , , , )
+- Known regressions: None. Current baseline on GitHub is 86/86 passing tests.
+
+**Credentials to test flow**:
+Local keys required in  (system gracefully degrades if missing).
+
+**What agent forgot to execute**:
+The agent *just* completed the clone step into . The entire Phase 0 through Phase 5 roadmap (Message 137) is pending execution by the next agent.</analysis>

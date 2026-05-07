@@ -1,0 +1,42 @@
+
+# Async + Scheduling
+# Broker + Market Data
+# Config + Env
+# Data + Analytics
+# LLM
+# Logging + Monitoring
+# News
+# Plotting (analytics)
+# Storage
+anthropic==0.97.0
+apscheduler>=3.10.4
+beautifulsoup4>=4.12.0
+lxml>=4.9.0
+tabulate>=0.9.0
+joblib>=1.3.0
+lightgbm>=4.0.0
+plotly>=5.18.0
+pytz>=2024.1
+schedule>=1.2.0
+xgboost>=2.0.0
+yfinance>=0.2.36
+feedparser>=6.0.10
+kiteconnect>=5.0.1
+matplotlib>=3.8.0
+numpy>=1.26.0
+openai>=1.30.0          # DeepSeek uses OpenAI-compatible API
+pandas>=2.0.0
+pydantic-settings>=2.2.0
+pydantic>=2.6.0
+pytest==9.0.3
+python-dotenv>=1.0.0
+requests>=2.31.0
+rich>=13.7.0
+ruff==0.15.12
+hmmlearn>=0.3.0
+scikit-learn>=1.4.0
+scipy>=1.11.0
+sqlalchemy>=2.0.0
+structlog>=24.1.0
+streamlit>=1.32.0
+tqdm>=4.66.0
