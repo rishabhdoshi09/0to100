@@ -24,7 +24,7 @@ import pandas as pd
 from backtest.simulator import SimulatedBroker, SimFill
 from config import settings
 from features.indicators import IndicatorEngine
-from signals.composite_signal import CompositeSignal
+from sq_ai.signals.conviction import ConvictionScorer
 from llm.context_builder import ContextBuilder
 from llm.dual_engine import DualLLMEngine
 from llm.signal_validator import SignalValidator, TradingSignal
@@ -55,7 +55,7 @@ class Backtester:
         self._risk = RiskManager()
         self._broker = SimulatedBroker(slippage=slippage, transaction_cost=transaction_cost)
         self._indicators = IndicatorEngine()
-        self.composite_signal = CompositeSignal()
+        self._conviction = ConvictionScorer()
         self._context = ContextBuilder()
         self._validator = SignalValidator()
 
@@ -129,15 +129,15 @@ class Backtester:
                     continue
                 hist_slice = self._data[symbol].loc[:bar_time]
                 indicators = self._indicators.compute(hist_slice, symbol)
-                # Get ML-enhanced composite signal
-                composite = self.composite_signal.compute(indicators, llm_signal=None, regime=1)
+                cr = self._conviction.score(indicators)
+                _dir = {"BUY": 1, "SELL": -1, "HOLD": 0}[cr.verdict]
                 tech = TradingSignal(
                     symbol=symbol,
-                    action="BUY" if composite["direction"] == 1 else "SELL" if composite["direction"] == -1 else "HOLD",
-                    confidence=composite["confidence"],
+                    action=cr.verdict,
+                    confidence=cr.score,
                     time_horizon="swing",
                     position_size=settings.max_position_size_pct,
-                    reasoning=f'composite: f={composite.get("attribution", composite)["factor"]:.2f}, ml={composite.get("attribution", composite)["ml"]:.2f}',
+                    reasoning=f'conviction: ml={cr.components.get("ml", 0):.2f}, trend={cr.components.get("trend", 0):.2f}',
                     risk_level="medium"
                 )
                 has_pos = self._portfolio.has_position(symbol)
@@ -222,21 +222,18 @@ class Backtester:
     ) -> Optional[TradingSignal]:
         """Used by live/LLM-mode path when budget isn't a concern."""
         indicator_data = self._indicators.compute(hist_df, symbol)
-        if not self._use_llm or self._llm is None:
-            composite = self.composite_signal.compute(indicator_data, llm_signal=None, regime=1)
-        direction = composite.get('direction', 0)
-        confidence = composite.get('confidence', 50)
-        attribution = composite.get('attribution', {})
+        if self._use_llm and self._llm is not None:
+            return self._get_signal_llm(symbol, hist_df, bar_close, indicator_data, news_cache)
+        cr = self._conviction.score(indicator_data)
         return TradingSignal(
             symbol=symbol,
-            action="BUY" if direction == 1 else "SELL" if direction == -1 else "HOLD",
-            confidence=confidence,
+            action=cr.verdict,
+            confidence=cr.score,
             time_horizon="swing",
             position_size=settings.max_position_size_pct,
-            reasoning=f"ml={attribution.get('ml', 0):.2f}, combined={attribution.get('combined', 0):.2f}",
+            reasoning=f"ml={cr.components.get('ml', 0):.2f}, trend={cr.components.get('trend', 0):.2f}",
             risk_level="medium"
         )
-        return self._get_signal_llm(symbol, hist_df, bar_close, indicator_data, news_cache)
 
     def _get_signal_llm(
         self,

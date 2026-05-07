@@ -31,39 +31,35 @@ from paper_trading import (
     init_db,
     open_position,
 )
-from signals.composite_signal import CompositeSignal
 from sq_ai.signals.conviction import ConvictionScorer
 from sq_ai.signals.profiles import PROFILES
 from sq_ai.signals.trade_setup import compute_trade_setup
 
 load_dotenv()
 
-# ── Page config ───────────────────────────────────────────────────────────────
-st.set_page_config(page_title="Prism Quant", layout="wide", initial_sidebar_state="expanded")
+# ── DevBloom UI modules ───────────────────────────────────────────────────────
+from ui.theme import DEVBLOOM_CSS, COMMAND_PALETTE_JS
+from ui.heatmap import render_heatmap, render_macro_strip
+from ui.watchlist import render_watchlist
+from ui.alert_inbox import render_alert_inbox
+from ui.macro import render_macro_dashboard
+from ui.copilot import render_copilot_sidebar, render_copilot_inline
+from ui.order_pad import render_order_pad, render_position_monitor, render_equity_curve, render_backtest_bridge
+from ui.algolab import render_algolab
+from ui.journal import render_journal, log_trade_to_journal
+from ui.anomaly_scanner import render_anomaly_scanner
+from charting.multi_tf import render_multi_tf_grid
 
-st.markdown("""
-<style>
-  .stApp { background-color: #f8fafc; font-family: 'Inter', system-ui, sans-serif; }
-  .card  { background: #fff; border-radius: 20px; padding: 1.25rem; margin-bottom: 1.5rem;
-           box-shadow: 0 4px 12px rgba(0,0,0,.03); border: 1px solid #eef2f6; }
-  .recommendation { font-size: 1.5rem; font-weight: 700; text-align: center;
-                    padding: .75rem; border-radius: 16px; margin-top: .25rem; }
-  .buy  { background: linear-gradient(135deg,#e6f7e6,#d0f0d0); color:#1e5a1e; border-left:4px solid #2e7d32; }
-  .sell { background: linear-gradient(135deg,#ffe6e5,#ffd6d5); color:#b71c1c; border-left:4px solid #c62828; }
-  .hold { background: linear-gradient(135deg,#fff8e1,#ffeecc); color:#e65100; border-left:4px solid #f57c00; }
-  .stButton button { background:#1e2a3e; color:white; border-radius:12px; border:none;
-                     padding:.5rem 1.25rem; font-weight:500; transition:all .2s; }
-  .stButton button:hover { background:#2c3e5c; transform:translateY(-1px); }
-  .stTabs [data-baseweb="tab-list"] { gap:.5rem; background:#fff; padding:.5rem;
-                                      border-radius:20px; border:1px solid #eef2f6; }
-  .stTabs [data-baseweb="tab"]       { border-radius:16px; padding:.5rem 1rem; font-weight:500; }
-  .stTabs [aria-selected="true"]     { background:#1e2a3e; color:white !important; }
-  @media(max-width:768px){
-    .stTabs [data-baseweb="tab-list"]{ flex-wrap:nowrap; overflow-x:auto; }
-    .stColumn{ width:100% !important; }
-  }
-</style>
-""", unsafe_allow_html=True)
+# ── Page config ───────────────────────────────────────────────────────────────
+st.set_page_config(
+    page_title="DevBloom Terminal",
+    page_icon="⚡",
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
+
+st.markdown(DEVBLOOM_CSS, unsafe_allow_html=True)
+st.components.v1.html(COMMAND_PALETTE_JS, height=0)
 
 # ── Cached resource init ───────────────────────────────────────────────────────
 @st.cache_resource
@@ -73,11 +69,10 @@ def init_clients():
     fetcher = HistoricalDataFetcher(kite, im)
     ie      = IndicatorEngine()
     vp      = VolumeProfile()
-    cs      = CompositeSignal()
     claude  = ClaudeClient()
-    return kite, im, fetcher, ie, vp, cs, claude
+    return kite, im, fetcher, ie, vp, claude
 
-kite, im, fetcher, ie, vp, cs, _claude = init_clients()
+kite, im, fetcher, ie, vp, _claude = init_clients()
 
 # ── Symbol universe ────────────────────────────────────────────────────────────
 @st.cache_data(ttl=3600)
@@ -229,11 +224,17 @@ def get_stock_verdict(symbol):
     df = fetch_historical(symbol, days=250)
     if df is None or len(df) < 50:
         return {"error": f"Insufficient data for {symbol}"}
-    indicators   = ie.compute(df, symbol)
-    signal_result = cs.compute(indicators, llm_signal=None, regime=1)
-
-    # Conviction score (new layer)
+    indicators        = ie.compute(df, symbol)
     conviction_result = ConvictionScorer().score(indicators)
+    _dir              = {"BUY": 1, "SELL": -1, "HOLD": 0}[conviction_result.verdict]
+    _comp             = conviction_result.components
+    _attribution      = {
+        "factor":   (_comp.get("trend", 0.5) + _comp.get("rsi", 0.5) + _comp.get("momentum", 0.5)) / 3,
+        "ml":       _comp.get("ml", 0.5),
+        "regime":   _comp.get("regime", 0.5),
+        "volume":   _comp.get("volume", 0.5),
+        "combined": conviction_result.score / 100 * _dir,
+    }
 
     latest_price = df['close'].iloc[-1]
     last_date    = df.index[-1].strftime('%Y-%m-%d')
@@ -271,10 +272,10 @@ Format as bullet points only:
 
     return {
         "price":      latest_price,
-        "signal":     signal_result['signal'],
-        "direction":  signal_result['direction'],
-        "confidence": signal_result['confidence'],
-        "attribution":signal_result['attribution'],
+        "signal":     conviction_result.score / 100 * _dir,
+        "direction":  _dir,
+        "confidence": conviction_result.score,
+        "attribution": _attribution,
         "conviction": conviction_result,
         "indicators": indicators,
         "df":         df,
@@ -707,47 +708,83 @@ if "last_verdict" in st.session_state:
         update_memory(_selected, dir_text, verdict['confidence'], verdict['price'])
 
 # ── TABS ───────────────────────────────────────────────────────────────────────
+# ── DevBloom Terminal — 9-section navigation ──────────────────────────────────
+st.sidebar.markdown(
+    "<div style='padding:.75rem 0 .25rem'>"
+    "<span style='font-size:.6rem;color:#8892a4;text-transform:uppercase;letter-spacing:.1em'>DevBloom Terminal</span><br>"
+    "<span style='font-size:1.25rem;color:#00d4ff;font-weight:700;letter-spacing:.02em'>⚡ v1.0</span>"
+    "</div>",
+    unsafe_allow_html=True,
+)
+st.sidebar.caption("Ctrl+K  command palette")
+
+# Co-Pilot sidebar widget
+render_copilot_sidebar(context={
+    "symbol": selected if "selected" in dir() else "",
+    "indicators": {},
+})
+
 tabs = st.tabs([
-    "📊 Market Dashboard",
-    "📈 Charts & EMAs",
-    "🎯 Decision Terminal",
-    "🔍 Stock Categories",
-    "🔥 Breakout Scanner",
-    "🚀 Momentum Scanner",
-    "🗺️ Heatmap",
-    "🤖 Daily Pulse",
-    "🐟 Swarm Intel",
-    "🌍 Global Markets",
-    "📰 Pre-Market",
-    "🏦 Quant Hedge Fund",
-    "📊 Fundamentals",
-    "📋 Paper Trading",
-    # ── New Enhancement Tabs ──────────────────────────────────────────────
-    "📐 Multi-Timeframe",
-    "🌡️ Regime",
-    "🧠 Ensemble ML",
-    "⚠️ Risk Metrics",
-    "🔮 What-If",
-    "🔗 Correlations",
-    "🔬 Deep Fundamentals",
-    "📊 Professional Charts",
-    "🔎 Stock Screener",
+    "🏠 Command Center",      # 0 — Home Dashboard
+    "📈 Charts",              # 1 — Technical Analysis Suite
+    "📊 Fundamentals",        # 2 — Fundamental Deep Dive
+    "⚡ Co-Pilot",            # 3 — AI Co-Pilot Dev
+    "⚙️ Execution",           # 4 — Execution & Risk Cockpit
+    "🧬 AlgoLab",             # 5 — Code Cave
+    "📓 Journal",             # 6 — Journaling & Performance
+    "🔬 Screener",            # 7 — Stock Screener (existing)
+    "🔎 Decision",            # 8 — Legacy Decision Terminal
 ])
+# Extend with hidden placeholders so legacy tab[N] references (N≥9) don't IndexError
+tabs = list(tabs) + [st.empty() for _ in range(14)]
 
-# ── Tab 0: Market Dashboard ────────────────────────────────────────────────────
+# ── Tab 0: Command Center ─────────────────────────────────────────────────────
 with tabs[0]:
-    t0c1, t0c2 = st.columns(2)
-    with t0c1:
-        st.subheader("🇮🇳 Indian Indices")
-        for n, v in get_indices_data().items():
-            _index_card(n, v['price'], v['change'])
-    with t0c2:
-        st.subheader("🌏 Global Indices")
-        for n, v in get_global_indices().items():
-            _index_card(n, v['price'], v['change'], currency="")
+    st.markdown(
+        "<h2 style='color:#00d4ff;font-family:JetBrains Mono,monospace;font-size:1.4rem;margin:0'>⚡ Command Center</h2>"
+        "<p style='color:#8892a4;font-size:.8rem;margin:.2rem 0 1rem'>Global pulse · Watchlist · Alerts · Macro</p>",
+        unsafe_allow_html=True,
+    )
 
-# ── Tab 1: Charts & EMAs ───────────────────────────────────────────────────────
+    # ── Macro strip ──────────────────────────────────────────────────────────
+    render_macro_strip()
+    st.divider()
+
+    # ── Main grid: Heatmap + Watchlist | Alerts + Macro ──────────────────────
+    left, right = st.columns([3, 2])
+
+    with left:
+        st.markdown("##### 🗺️ Sector Heatmap")
+        render_heatmap()
+        st.markdown("##### 📋 Watchlist")
+        render_watchlist()
+
+    with right:
+        st.markdown("##### 🚨 Alert Inbox")
+        render_alert_inbox()
+        st.markdown("##### 📊 Macro Dashboard")
+        render_macro_dashboard()
+
+# ── Tab 1: Technical Analysis Suite ──────────────────────────────────────────
 with tabs[1]:
+    st.markdown(
+        "<h2 style='color:#00d4ff;font-family:JetBrains Mono,monospace;font-size:1.4rem;margin:0'>📈 Technical Analysis Suite</h2>",
+        unsafe_allow_html=True,
+    )
+    _charts_sym = selected
+
+    # Multi-timeframe grid
+    with st.expander("🕐 Multi-Timeframe Grid (8 views)", expanded=False):
+        if _charts_sym:
+            render_multi_tf_grid(_charts_sym)
+        else:
+            st.info("Select a symbol in the sidebar to view multi-timeframe charts.")
+
+    # Anomaly scanner
+    with st.expander("🔍 Anomaly Scanner", expanded=False):
+        render_anomaly_scanner()
+
+    st.divider()
     if "last_verdict" in st.session_state and "error" not in st.session_state["last_verdict"]:
         _sel = st.session_state.get("last_selected", selected)
         df   = fetch_historical(_sel, days=150)
@@ -790,11 +827,33 @@ with tabs[1]:
     else:
         st.info("Select a stock and click Analyze first.")
 
-# ── Tab 2: Decision Terminal ───────────────────────────────────────────────────
+# ── Tab 2: Fundamentals Deep Dive ────────────────────────────────────────────
 with tabs[2]:
-    st.header("🎯 Decision Terminal")
-    st.caption("Conviction score · ATR trade setup · Claude final opinion")
+    st.markdown(
+        "<h2 style='color:#00d4ff;font-family:JetBrains Mono,monospace;font-size:1.4rem;margin:0'>📊 Fundamental Deep Dive</h2>",
+        unsafe_allow_html=True,
+    )
+    f_sym = st.selectbox("Symbol", symbol_list, key="fund_sym2",
+                          format_func=lambda x: f"{x} – {symbol_map[x]}")
+    if st.button("🔍 Load Fundamentals", key="fund_load2"):
+        with st.spinner("Fetching…"):
+            _f_info = yf.Ticker(f_sym+".NS").info
+        st.subheader("🏢 Overview")
+        st.write(f"**{_f_info.get('longName',f_sym)}** | {_f_info.get('sector','N/A')} → {_f_info.get('industry','N/A')}")
+        st.write(_f_info.get('longBusinessSummary','')[:500] + "…")
 
+        _fc1, _fc2, _fc3, _fc4 = st.columns(4)
+        _fc1.metric("P/E Ratio",   f"{_f_info.get('trailingPE','N/A')}")
+        _fc2.metric("Market Cap",  f"₹{(_f_info.get('marketCap',0)/1e9):.1f}B")
+        _fc3.metric("ROE %",       f"{(_f_info.get('returnOnEquity',0) or 0)*100:.1f}%")
+        _fc4.metric("Div Yield",   f"{(_f_info.get('dividendYield',0) or 0)*100:.2f}%")
+
+        st.subheader("📞 Concall Summary")
+        _cc = scrape_screener_concall(f_sym)
+        st.markdown(_cc)
+
+    st.divider()
+    st.markdown("#### 🧮 Conviction Score (Decision Terminal)")
     dt_c1, dt_c2 = st.columns([1,2])
     with dt_c1:
         dt_profile = st.selectbox("Trader Profile", list(PROFILES.keys()), key="dt_p")
@@ -884,95 +943,163 @@ with tabs[2]:
             else:
                 st.caption("Add ANTHROPIC_API_KEY to .env to enable Claude here.")
 
-# ── Tab 3: Stock Categories ────────────────────────────────────────────────────
+# ── Tab 3: AI Co-Pilot ───────────────────────────────────────────────────────
 with tabs[3]:
-    st.subheader("🔍 Stock Categorization")
-    max_scan = st.slider("Stocks to scan", 100, 1000, 300, 100)
-    if st.button("Run Scan"):
-        all_syms = list(get_all_equity_symbols().keys())
-        cats     = defaultdict(list)
-        prog     = st.progress(0)
-        for i, sym in enumerate(all_syms[:max_scan]):
-            prog.progress((i+1)/max_scan)
-            try:
-                df = fetch_historical(sym, days=100)
-                if df is None or len(df) < 50: continue  # noqa: E701,E702,E741
-                close, vol = df['close'], df['volume']
-                dm   = (close.iloc[-1]-close.iloc[-2])/close.iloc[-2]*100
-                e10  = close.ewm(span=10).mean()
-                e50  = close.ewm(span=50).mean()
-                if dm > 15 and vol.iloc[-1] > 2*vol.iloc[-20:-1].mean():
-                    cats["Buzzing Stock"].append(sym)
-                elif close.iloc[-1]>e10.iloc[-1] and close.iloc[-2]<e10.iloc[-2] and vol.iloc[-1]>vol.iloc[-2]:
-                    cats["Gaining Strength"].append(sym)
-                elif close.iloc[-1]<e50.iloc[-1] and close.iloc[-2]>e50.iloc[-2]:
-                    cats["Losing Momentum"].append(sym)
-            except Exception:
-                continue
-        prog.empty()
-        for cat, syms in cats.items():
-            st.subheader(cat)
-            st.write(", ".join(syms[:20]) + ("…" if len(syms)>20 else ""))
-        if not cats:
-            st.info("No stocks matched criteria today.")
+    render_copilot_inline(context={
+        "symbol": selected,
+        "price":  st.session_state.get("last_verdict", {}).get("price", 0),
+        "indicators": st.session_state.get("last_verdict", {}).get("indicators", {}),
+    })
 
-# ── Tab 4: Breakout Scanner ────────────────────────────────────────────────────
+# ── Tab 4: Execution & Risk Cockpit ──────────────────────────────────────────
 with tabs[4]:
-    st.subheader("🔥 Breakout Scanner")
-    cap_filter_bo = st.multiselect("Market cap", ["Largecap","Midcap","Smallcap","All"], default=["All"])
-    if st.button("Run Breakout Scan"):
-        syms = list(get_all_equity_symbols().keys())
-        with st.spinner("Scanning…"):
-            result = scan_parallel(syms, is_breakout_candidate, 120, cap_filter_bo)
-        found = False
-        for cap, s in result.items():
-            if cap != "Unknown" and s:
-                st.write(f"**{cap}:** {', '.join(s)}")
-                found = True
-        if not found: st.info("No breakouts found.")  # noqa: E701,E702,E741
+    st.markdown(
+        "<h2 style='color:#00d4ff;font-family:JetBrains Mono,monospace;font-size:1.4rem;margin:0'>⚙️ Execution & Risk Cockpit</h2>",
+        unsafe_allow_html=True,
+    )
+    _exec_tabs = st.tabs(["Order Pad", "Position Monitor", "Backtest Bridge", "Paper Trading"])
 
-# ── Tab 5: Momentum Scanner ────────────────────────────────────────────────────
+    with _exec_tabs[0]:
+        _exec_sym   = selected or ""
+        _exec_price = st.session_state.get("last_verdict", {}).get("price", 0.0)
+        _exec_ind   = st.session_state.get("last_verdict", {}).get("indicators", {})
+        render_order_pad(_exec_sym, _exec_price, _exec_ind)
+
+    with _exec_tabs[1]:
+        render_position_monitor()
+        st.divider()
+        render_equity_curve()
+
+    with _exec_tabs[2]:
+        render_backtest_bridge(selected or "", fetcher=fetcher, ie=ie)
+
+    with _exec_tabs[3]:
+        st.header("📋 Paper Trading Dashboard")
+        init_db()
+        summ = get_trading_summary()
+        m1,m2,m3,m4 = st.columns(4)
+        m1.metric("Total P&L",   f"₹{summ['total_pnl']:,.2f}")
+        m2.metric("Win Rate",    f"{summ['win_rate']:.1f}%")
+        m3.metric("Trades",      str(summ['num_trades']))
+        m4.metric("Best/Worst",  f"₹{summ['best_trade']:,.0f} / ₹{summ['worst_trade']:,.0f}")
+        eq_df2 = get_equity_curve()
+        if not eq_df2.empty:
+            fig_eq2 = go.Figure(go.Scatter(x=eq_df2['date'], y=eq_df2['equity'],
+                                           mode='lines+markers', fill='tozeroy',
+                                           line=dict(color='#00d4ff', width=2),
+                                           fillcolor='rgba(0,212,255,.06)'))
+            fig_eq2.update_layout(height=220, paper_bgcolor="rgba(0,0,0,0)",
+                                  plot_bgcolor="rgba(8,12,28,.6)", margin=dict(t=0,b=0))
+            st.plotly_chart(fig_eq2, use_container_width=True)
+        pt_c1, pt_c2 = st.columns(2)
+        with pt_c1:
+            st.subheader("🟢 Open Positions")
+            op = get_open_positions()
+            if not op.empty:
+                st.dataframe(op[['symbol','entry_date','entry_price','quantity','direction']],
+                             hide_index=True, use_container_width=True)
+            else:
+                st.info("No open positions.")
+        with pt_c2:
+            st.subheader("📜 Trade History")
+            cp = get_closed_positions()
+            if not cp.empty:
+                st.dataframe(cp[['symbol','entry_date','exit_date','entry_price','exit_price','pnl']],
+                             hide_index=True, use_container_width=True)
+            else:
+                st.info("No closed trades.")
+
+# ── Tab 5: AlgoLab ───────────────────────────────────────────────────────────
 with tabs[5]:
-    st.subheader("🚀 Momentum Breakout Scanner")
-    cap_filter_mo = st.multiselect("Market cap", ["Largecap","Midcap","Smallcap","All"], default=["All"], key="mo_cap")
-    if st.button("Run Momentum Scan"):
-        syms = list(get_all_equity_symbols().keys())
-        with st.spinner("Scanning…"):
-            result = scan_parallel(syms, is_momentum_breakout, 90, cap_filter_mo)
-        found = False
-        for cap, s in result.items():
-            if cap != "Unknown" and s:
-                st.write(f"**{cap}:** {', '.join(s)}")
-                found = True
-        if not found: st.info("No momentum breakouts found.")  # noqa: E701,E702,E741
+    render_algolab(fetcher=fetcher)
 
-# ── Tab 6: Heatmap ─────────────────────────────────────────────────────────────
+# ── Tab 6: Journal & Analytics ───────────────────────────────────────────────
 with tabs[6]:
-    st.subheader("🗺️ Market Heatmap")
-    cap_hm  = st.radio("Market cap", ["Largecap","Midcap","Smallcap","All"], horizontal=True)
-    max_hm  = st.slider("Max symbols", 50, 500, 200, 50)
-    if st.button("Refresh Heatmap"):
-        df_heat = get_heatmap_data(cap_hm, max_hm)
-        if not df_heat.empty:
-            fig = px.treemap(df_heat, path=['Stock'], values='Change %', color='Change %',
-                             color_continuous_scale=['red','yellow','green'],
-                             title=f"{cap_hm} — Daily % Change")
-            fig.update_traces(textinfo="label+value", textposition="middle center")
-            st.plotly_chart(fig, use_container_width=True)
-        else:
-            st.error("No data. Check Kite connection.")
+    render_journal()
 
-# ── Tab 7: Daily Pulse ─────────────────────────────────────────────────────────
+# ── Tab 7: Screener ──────────────────────────────────────────────────────────
 with tabs[7]:
-    st.subheader("🤖 Daily Street Pulse (DeepSeek)")
-    if st.button("Generate Pulse"):
+    st.markdown(
+        "<h2 style='color:#00d4ff;font-family:JetBrains Mono,monospace;font-size:1.4rem;margin:0'>🔬 Stock Screener</h2>",
+        unsafe_allow_html=True,
+    )
+    # ── Screener content (moved from old tabs[22]) ────────────────────────────
+    st.caption(
+        "Filter the entire NSE universe by fundamentals, technicals, and ensemble ML signal."
+    )
+    with st.expander("📐 Fundamental Filters", expanded=True):
+        _sf1, _sf2, _sf3 = st.columns(3)
+        with _sf1:
+            _sc_pe_max   = st.number_input("P/E ≤",           min_value=0.0, max_value=500.0, value=0.0, step=1.0, key="sc_pe_max2")
+            _sc_roe_min  = st.number_input("ROE ≥ %",         min_value=0.0, max_value=100.0, value=0.0, step=1.0, key="sc_roe_min2")
+        with _sf2:
+            _sc_debt_max = st.number_input("Debt/Equity ≤",   min_value=0.0, max_value=50.0,  value=0.0, step=0.1, key="sc_debt_max2")
+            _sc_mcap_min = st.number_input("Market Cap ≥ ₹Cr",min_value=0.0, max_value=1e7,   value=0.0, step=100.0, key="sc_mcap_min2")
+        with _sf3:
+            _sc_prom_min = st.number_input("Promoter Holding ≥ %", min_value=0.0, max_value=100.0, value=0.0, step=1.0, key="sc_prom_min2")
+            _sc_div_min  = st.number_input("Dividend Yield ≥ %",   min_value=0.0, max_value=20.0,  value=0.0, step=0.1, key="sc_div_min2")
+    with st.expander("📊 Technical Filters", expanded=True):
+        _st1, _st2, _st3 = st.columns(3)
+        with _st1:
+            _sc_rsi_max   = st.number_input("RSI ≤", min_value=0.0, max_value=100.0, value=0.0, step=1.0, key="sc_rsi_max2")
+            _sc_rsi_min2  = st.number_input("RSI ≥", min_value=0.0, max_value=100.0, value=0.0, step=1.0, key="sc_rsi_min2")
+        with _st2:
+            _sc_vol_spike2 = st.number_input("Volume spike ≥ ×", min_value=0.0, max_value=20.0, value=0.0, step=0.1, key="sc_vol_spike2")
+            _sc_above_sma2 = st.checkbox("Above 50-day SMA", key="sc_above_sma2")
+        with _st3:
+            _sc_ml_min2  = st.number_input("ML conviction ≥", min_value=0.0, max_value=100.0, value=0.0, step=5.0, key="sc_ml_min2")
+    if st.button("🔎 Run Screener", key="screener_run2", use_container_width=True):
+        with st.spinner("Screening NSE universe…"):
+            try:
+                from screener.engine import ScreenerEngine
+                _sc_eng2 = ScreenerEngine()
+                _sc_res2, _sc_err2 = _sc_eng2.run(
+                    pe_max=_sc_pe_max or None,
+                    roe_min=_sc_roe_min or None,
+                    debt_equity_max=_sc_debt_max or None,
+                    mcap_min_cr=_sc_mcap_min or None,
+                    promoter_min=_sc_prom_min or None,
+                    div_yield_min=_sc_div_min or None,
+                    rsi_max=_sc_rsi_max or None,
+                    rsi_min=_sc_rsi_min2 or None,
+                    vol_spike_min=_sc_vol_spike2 or None,
+                    above_sma50=_sc_above_sma2 or None,
+                    conviction_min=_sc_ml_min2 or None,
+                )
+                if _sc_err2:
+                    st.error(f"Screener error: {_sc_err2}")
+                elif _sc_res2 is not None and not _sc_res2.empty:
+                    st.success(f"Found {len(_sc_res2)} stocks")
+                    st.dataframe(_sc_res2, use_container_width=True, hide_index=True)
+                else:
+                    st.info("No stocks matched the filters.")
+            except Exception as _sc_exc2:
+                st.error(f"Screener unavailable: {_sc_exc2}")
+
+    st.divider()
+    st.subheader("🤖 Daily Pulse + Buzz Scanner")
+    if st.button("Generate Daily Pulse", key="pulse_btn2"):
         with st.spinner("Generating…"):
             pulse = generate_auto_pulse()
-        st.markdown(f"<div class='card'>{pulse}</div>", unsafe_allow_html=True)
+        st.markdown(f"<div class='devbloom-card'>{pulse}</div>", unsafe_allow_html=True)
 
-# ── Tab 8: Swarm Intelligence ──────────────────────────────────────────────────
+    st.subheader("📊 Buzzing Stocks")
+    if st.button("Find Buzzing Stocks", key="buzz_btn2"):
+        syms = list(get_all_equity_symbols().keys())
+        with st.spinner("Scanning for buzz…"):
+            buzz = find_buzzing_stocks(syms, limit=20)
+        if buzz:
+            st.dataframe(pd.DataFrame(buzz), use_container_width=True)
+        else:
+            st.info("No buzzing stocks found.")
+
+# ── Tab 8: Decision Terminal (legacy + Swarm) ─────────────────────────────────
 with tabs[8]:
-    st.header("🐟 Swarm Intelligence — 5 Personas")
+    st.markdown(
+        "<h2 style='color:#00d4ff;font-family:JetBrains Mono,monospace;font-size:1.4rem;margin:0'>🔎 Decision Terminal</h2>",
+        unsafe_allow_html=True,
+    )
+    st.subheader("🐟 Swarm Intelligence — 5 Personas")
     news_input = st.text_area("News / event", height=80,
                                placeholder="HDFC Life profit up 4%…")
     if st.button("Run Swarm"):
@@ -995,7 +1122,7 @@ with tabs[8]:
             hold_ = sum(1 for r in sw_results if r['verdict']=="HOLD")
             st.info(f"Consensus → BUY: {buy_} | SELL: {sell_} | HOLD: {hold_}")
 
-# ── Tab 9: Global Markets ──────────────────────────────────────────────────────
+# ── Tab 9 onwards: Legacy content rendered in hidden containers ────────────────
 with tabs[9]:
     st.subheader("🌍 Global Indices")
     gl = get_global_indices()
