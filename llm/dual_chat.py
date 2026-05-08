@@ -60,7 +60,7 @@ def _deepseek_chat(prompt: str, system: str = _DEEPSEEK_SYSTEM, max_tokens: int 
                     {"role": "system", "content": system},
                     {"role": "user",   "content": prompt},
                 ],
-                "temperature": 0.3,
+                "temperature": 0.5,
                 "max_tokens":  max_tokens,
             },
             timeout=25,

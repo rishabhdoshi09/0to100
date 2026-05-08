@@ -42,11 +42,11 @@ Output format (EXACT — no deviation):
 
 CRITICAL RULES:
 1. Output ONLY the JSON object. Nothing before or after.
-2. If confidence < 0.60, set action to HOLD.
-3. Never fabricate data. Use only what is provided.
-4. News is context only — not confirmation of a trade.
-5. If information is insufficient, output action=HOLD, confidence=0.50.
-6. Be conservative. Missing a trade is better than a wrong trade.
+2. Never fabricate data. Use only what is provided.
+3. News is context only — not confirmation of a trade.
+4. Each stock has its own setup — analyse the provided indicators independently.
+5. Express genuine directional conviction when the data supports it (BUY or SELL).
+   Use HOLD only when signals are genuinely mixed or conflicting.
 """
 
 
@@ -80,8 +80,8 @@ class DeepSeekClient:
                 # needs large max_tokens so JSON output is not truncated
                 pass
             else:
-                # V3: deterministic + enforce JSON output
-                kwargs["temperature"] = 0.1
+                # V3: moderate temperature for stock-specific variation + JSON mode
+                kwargs["temperature"] = 0.35
                 kwargs["response_format"] = {"type": "json_object"}
 
             response = self._client.chat.completions.create(**kwargs)
