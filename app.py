@@ -60,7 +60,7 @@ st.set_page_config(
 )
 
 st.markdown(DEVBLOOM_CSS, unsafe_allow_html=True)
-st.components.v1.html(COMMAND_PALETTE_JS, height=0)
+st.components.v1.html(COMMAND_PALETTE_JS, height=1)
 
 # ── Cached resource init ───────────────────────────────────────────────────────
 @st.cache_resource

@@ -28,9 +28,13 @@ MACRO_SPOTS = {
 def _spot(ticker: str) -> tuple[float, float]:
     """Return (price, pct_change) for a yfinance ticker."""
     try:
-        fi = yf.Ticker(ticker).fast_info
-        price = fi.get("last_price") or fi.get("regularMarketPrice", 0)
-        prev  = fi.get("previous_close") or fi.get("regularMarketPreviousClose", price)
+        h = yf.Ticker(ticker).history(period="5d")
+        if h is None or len(h) < 2:
+            return 0.0, 0.0
+        if isinstance(h.columns, pd.MultiIndex):
+            h.columns = [c[0] for c in h.columns]
+        price = float(h["Close"].iloc[-1])
+        prev  = float(h["Close"].iloc[-2])
         chg   = (price - prev) / prev * 100 if prev else 0.0
         return round(price, 2), round(chg, 2)
     except Exception:
