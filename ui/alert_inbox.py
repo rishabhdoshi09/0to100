@@ -40,7 +40,7 @@ def _relevance(title: str, watchlist: set[str]) -> float:
     return min(100.0, sym_hit + buy_hit + sel_hit)
 
 
-@st.cache_data(ttl=180)
+@st.cache_data(ttl=180, persist="disk")
 def _fetch_news_alerts(watchlist_tuple: tuple) -> list[Alert]:
     if not HAS_FEEDPARSER:
         return []

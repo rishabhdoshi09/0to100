@@ -766,24 +766,31 @@ with tabs[0]:
         unsafe_allow_html=True,
     )
 
-    # ── Macro strip ──────────────────────────────────────────────────────────
-    render_macro_strip()
-    st.divider()
+    _cc_loaded = st.session_state.get("_cc_loaded", False)
+    if not _cc_loaded:
+        st.info("📡 Click **Load Market Data** to fetch live prices and sector heatmap.")
+        if st.button("📡 Load Market Data", key="cc_load"):
+            st.session_state["_cc_loaded"] = True
+            st.rerun()
+    else:
+        # ── Macro strip ──────────────────────────────────────────────────────
+        render_macro_strip()
+        st.divider()
 
-    # ── Main grid: Heatmap + Watchlist | Alerts + Macro ──────────────────────
-    left, right = st.columns([3, 2])
+        # ── Main grid: Heatmap + Watchlist | Alerts + Macro ──────────────────
+        left, right = st.columns([3, 2])
 
-    with left:
-        st.markdown("##### 🗺️ Sector Heatmap")
-        render_heatmap()
-        st.markdown("##### 📋 Watchlist")
-        render_watchlist()
+        with left:
+            st.markdown("##### 🗺️ Sector Heatmap")
+            render_heatmap()
+            st.markdown("##### 📋 Watchlist")
+            render_watchlist()
 
-    with right:
-        st.markdown("##### 🚨 Alert Inbox")
-        render_alert_inbox()
-        st.markdown("##### 📊 Macro Dashboard")
-        render_macro_dashboard()
+        with right:
+            st.markdown("##### 🚨 Alert Inbox")
+            render_alert_inbox()
+            st.markdown("##### 📊 Macro Dashboard")
+            render_macro_dashboard()
 
 # ── Tab 1: Technical Analysis Suite ──────────────────────────────────────────
 with tabs[1]:
