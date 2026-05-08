@@ -60,10 +60,6 @@ st.set_page_config(
 )
 
 st.markdown(DEVBLOOM_CSS, unsafe_allow_html=True)
-try:
-    st.components.v1.html(COMMAND_PALETTE_JS, height=1)
-except Exception:
-    pass
 
 # ── Cached resource init ───────────────────────────────────────────────────────
 @st.cache_resource
