@@ -255,7 +255,10 @@ def render_algolab(fetcher=None):
                 import yfinance as yf
                 df = yf.download(bt_sym + ".NS", period=f"{bt_days}d", interval="1d",
                                  progress=False, auto_adjust=True)
-                df.columns = [c.lower() for c in df.columns]
+                if isinstance(df.columns, __import__("pandas").MultiIndex):
+                    df.columns = [c[0].lower() for c in df.columns]
+                else:
+                    df.columns = [c.lower() for c in df.columns]
                 df = df.dropna()
                 if len(df) < 20:
                     st.error("Not enough data to backtest.")

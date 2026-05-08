@@ -24,8 +24,13 @@ def _compute_zscore_row(symbol: str) -> dict | None:
                          progress=False, auto_adjust=True, timeout=8)
         if df is None or len(df) < 20:
             return None
-        closes  = df["Close"].squeeze()
-        volumes = df["Volume"].squeeze()
+        import pandas as _pd
+        if isinstance(df.columns, _pd.MultiIndex):
+            df.columns = [c[0].lower() for c in df.columns]
+        else:
+            df.columns = [c.lower() for c in df.columns]
+        closes  = df["close"].squeeze()
+        volumes = df["volume"].squeeze()
 
         ret_20 = closes.pct_change()
         price_z = (ret_20.iloc[-1] - ret_20.iloc[-21:-1].mean()) / (ret_20.iloc[-21:-1].std() + 1e-9)

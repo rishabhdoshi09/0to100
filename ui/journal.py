@@ -153,6 +153,8 @@ def render_journal():
         try:
             import yfinance as yf
             n50 = yf.download("^NSEI", period="1y", interval="1d", progress=False, auto_adjust=True)
+            if isinstance(n50.columns, pd.MultiIndex):
+                n50.columns = [c[0] for c in n50.columns]
             n50 = n50["Close"].reset_index()
             n50.columns = ["date", "nifty"]
             n50["date"] = n50["date"].astype(str)

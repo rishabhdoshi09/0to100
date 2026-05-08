@@ -31,12 +31,19 @@ TF_LABELS = {
 }
 
 
-@st.cache_data(ttl=300)
+@st.cache_data(ttl=300, show_spinner=False)
 def _fetch_ohlcv(symbol: str, period: str, interval: str) -> pd.DataFrame:
     try:
-        df = yf.download(symbol + ".NS", period=period, interval=interval,
+        ticker = symbol if symbol.endswith(".NS") else symbol + ".NS"
+        df = yf.download(ticker, period=period, interval=interval,
                          progress=False, auto_adjust=True)
-        df.columns = [c.lower() for c in df.columns]
+        if df.empty:
+            return pd.DataFrame()
+        # yfinance ≥0.2.40 returns MultiIndex columns like ('Close', 'RELIANCE.NS')
+        if isinstance(df.columns, pd.MultiIndex):
+            df.columns = [c[0].lower() for c in df.columns]
+        else:
+            df.columns = [c.lower() for c in df.columns]
         return df.dropna()
     except Exception:
         return pd.DataFrame()
