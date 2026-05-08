@@ -116,7 +116,7 @@ def render_copilot_sidebar(context: dict | None = None):
         key="copilot_sidebar_input",
         label_visibility="collapsed",
     )
-    send = st.sidebar.button("Send ↵", key="copilot_sidebar_send", use_container_width=True)
+    send = st.sidebar.button("Send ↵", key="copilot_sidebar_send", width="stretch")
 
     if send and user_input.strip():
         svc.append_user(user_input.strip())
@@ -182,7 +182,7 @@ def render_copilot_inline(context: dict | None = None):
         "Message", placeholder="Type /why RELIANCE or ask anything…",
         label_visibility="collapsed", key="copilot_inline_input",
     )
-    send = col2.button("Send", key="copilot_inline_send", use_container_width=True)
+    send = col2.button("Send", key="copilot_inline_send", width="stretch")
 
     if send and user_input.strip():
         svc.append_user(user_input.strip())

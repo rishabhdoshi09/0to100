@@ -92,4 +92,4 @@ def render_multi_tf_grid(symbol: str, selected_tfs: list[str] | None = None):
             period, interval, _ = TIMEFRAMES[tf]
             df = _fetch_ohlcv(symbol, period, interval)
             fig = _mini_chart(df, TF_LABELS[tf])
-            col.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+            col.plotly_chart(fig, width="stretch", config={"displayModeBar": False})

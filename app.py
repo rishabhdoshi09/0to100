@@ -608,7 +608,7 @@ symbol_list = sorted(symbol_map.keys())
 # ── SIDEBAR ────────────────────────────────────────────────────────────────────
 with st.sidebar:
     st.header("⚙️ Controls")
-    if st.button("🔄 Refresh All Data", use_container_width=True):
+    if st.button("🔄 Refresh All Data", width="stretch"):
         st.cache_data.clear()
         st.rerun()
     if st.checkbox("⏱ Auto-refresh (30s)"):
@@ -622,7 +622,7 @@ with st.sidebar:
     st.divider()
     st.header("🔍 Stock Picker")
     selected = st.selectbox("Symbol", symbol_list, format_func=lambda x: f"{x} – {symbol_map[x]}")
-    analyze  = st.button("🚀 Analyze", use_container_width=True)
+    analyze  = st.button("🚀 Analyze", width="stretch")
 
     st.divider()
     st.header("🔥 Buzzing Stocks")
@@ -684,7 +684,7 @@ if "last_verdict" in st.session_state:
                 comp = cv.components
                 cdf  = pd.DataFrame({"Component": list(comp.keys()),
                                      "Score (0-1)": [round(v,3) for v in comp.values()]})
-                st.dataframe(cdf, hide_index=True, use_container_width=True)
+                st.dataframe(cdf, hide_index=True, width="stretch")
                 st.caption(f"Profile: Conservative · Verdict: **{cv.verdict}**")
 
         with col_r:
@@ -835,7 +835,7 @@ with tabs[1]:
                                          mode='lines',line=dict(color='#3b82f6',width=1.5,dash='dot'),name='VWAP'))
             fig.update_layout(title=f"{_sel} — Candlestick + EMAs", height=580,
                               xaxis_title="Date", yaxis_title="Price (₹)")
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width="stretch")
 
             rsi_v = ind.get('rsi_14',50); zsc_v=ind.get('zscore_20',0); mom_v=ind.get('momentum_5d_pct',0); vol_v=ind.get('volume_ratio',1)  # noqa: E701,E702,E741
             tp2 = (df['high']+df['low']+df['close'])/3
@@ -844,7 +844,7 @@ with tabs[1]:
                 "Indicator":["RSI(14)","Z-Score(20)","Momentum 5d","Volume Ratio","VWAP"],
                 "Value":[f"{rsi_v:.1f}",f"{zsc_v:.2f}",f"{mom_v:.2f}%",f"{vol_v:.2f}x",f"₹{vwap_v:.2f}"],
                 "Signal":["Oversold<30/OB>70","Extreme<-2|>2","Bullish>2%","High>1.5x","Below=discount"],
-            }), hide_index=True, use_container_width=True)
+            }), hide_index=True, width="stretch")
     else:
         st.info("Select a stock and click Analyze first.")
 
@@ -881,7 +881,7 @@ with tabs[2]:
         dt_capital = st.number_input("Capital (₹)", value=100_000, step=10_000, key="dt_cap")
         dt_sym     = st.selectbox("Symbol", symbol_list, key="dt_sym",
                                    format_func=lambda x: f"{x} – {symbol_map[x]}")
-        run_dt = st.button("▶ Run", use_container_width=True, key="dt_go")
+        run_dt = st.button("▶ Run", width="stretch", key="dt_go")
 
     if run_dt:
         with st.spinner("Computing…"):
@@ -941,7 +941,7 @@ with tabs[2]:
             ))
             fig_bar.update_layout(title="Conviction Components (0-1)", height=250,
                                   xaxis_range=[0,1], margin=dict(t=30,b=10))
-            st.plotly_chart(fig_bar, use_container_width=True)
+            st.plotly_chart(fig_bar, width="stretch")
 
             # Dual-LLM final opinion for Decision Terminal
             if st.button("🤖 Get Dual-LLM Opinion (DeepSeek → Claude)", key="dt_claude"):
@@ -1011,14 +1011,14 @@ with tabs[4]:
                                            fillcolor='rgba(0,212,255,.06)'))
             fig_eq2.update_layout(height=220, paper_bgcolor="rgba(0,0,0,0)",
                                   plot_bgcolor="rgba(8,12,28,.6)", margin=dict(t=0,b=0))
-            st.plotly_chart(fig_eq2, use_container_width=True)
+            st.plotly_chart(fig_eq2, width="stretch")
         pt_c1, pt_c2 = st.columns(2)
         with pt_c1:
             st.subheader("🟢 Open Positions")
             op = get_open_positions()
             if not op.empty:
                 st.dataframe(op[['symbol','entry_date','entry_price','quantity','direction']],
-                             hide_index=True, use_container_width=True)
+                             hide_index=True, width="stretch")
             else:
                 st.info("No open positions.")
         with pt_c2:
@@ -1026,7 +1026,7 @@ with tabs[4]:
             cp = get_closed_positions()
             if not cp.empty:
                 st.dataframe(cp[['symbol','entry_date','exit_date','entry_price','exit_price','pnl']],
-                             hide_index=True, use_container_width=True)
+                             hide_index=True, width="stretch")
             else:
                 st.info("No closed trades.")
 
@@ -1069,7 +1069,7 @@ with tabs[7]:
             _sc_above_sma2 = st.checkbox("Above 50-day SMA", key="sc_above_sma2")
         with _st3:
             _sc_ml_min2  = st.number_input("ML conviction ≥", min_value=0.0, max_value=100.0, value=0.0, step=5.0, key="sc_ml_min2")
-    if st.button("🔎 Run Screener", key="screener_run2", use_container_width=True):
+    if st.button("🔎 Run Screener", key="screener_run2", width="stretch"):
         with st.spinner("Screening NSE universe…"):
             try:
                 from screener.engine import ScreenerEngine
@@ -1091,7 +1091,7 @@ with tabs[7]:
                     st.error(f"Screener error: {_sc_err2}")
                 elif _sc_res2 is not None and not _sc_res2.empty:
                     st.success(f"Found {len(_sc_res2)} stocks")
-                    st.dataframe(_sc_res2, use_container_width=True, hide_index=True)
+                    st.dataframe(_sc_res2, width="stretch", hide_index=True)
                 else:
                     st.info("No stocks matched the filters.")
             except Exception as _sc_exc2:
@@ -1110,7 +1110,7 @@ with tabs[7]:
         with st.spinner("Scanning for buzz…"):
             buzz = find_buzzing_stocks(syms, limit=20)
         if buzz:
-            st.dataframe(pd.DataFrame(buzz), use_container_width=True)
+            st.dataframe(pd.DataFrame(buzz), width="stretch")
         else:
             st.info("No buzzing stocks found.")
 
@@ -1246,7 +1246,7 @@ with tabs[12]:
                 if not td.empty:
                     fig_fi = px.line(td, x="Quarter", y=["FII (%)","DII (%)"],
                                      markers=True, color_discrete_map={"FII (%)":"orange","DII (%)":"green"})
-                    st.plotly_chart(fig_fi, use_container_width=True)
+                    st.plotly_chart(fig_fi, width="stretch")
 
         st.subheader("📞 Concall Summary")
         cc = scrape_screener_concall(f_sym)
@@ -1279,7 +1279,7 @@ with tabs[13]:
         ))
         fig_eq.update_layout(height=260, margin=dict(t=10,b=10),
                              xaxis_title="Date", yaxis_title="Equity (₹)")
-        st.plotly_chart(fig_eq, use_container_width=True)
+        st.plotly_chart(fig_eq, width="stretch")
 
     st.divider()
     pt_c1, pt_c2 = st.columns(2)
@@ -1292,7 +1292,7 @@ with tabs[13]:
             def _cd(v): return "color:#16a34a;font-weight:700" if v=="BUY" else "color:#dc2626;font-weight:700"
             st.dataframe(op[['symbol','entry_date','entry_price','quantity','direction']]
                          .style.applymap(_cd, subset=['direction']),
-                         hide_index=True, use_container_width=True)
+                         hide_index=True, width="stretch")
         else:
             st.info("No open positions.")
 
@@ -1305,7 +1305,7 @@ with tabs[13]:
             cp2['pnl'] = cp2['pnl'].round(2)
             def _cpnl(v): return "color:#16a34a;font-weight:700" if v>0 else ("color:#dc2626;font-weight:700" if v<0 else "")
             st.dataframe(cp2.style.applymap(_cpnl, subset=['pnl']),
-                         hide_index=True, use_container_width=True)
+                         hide_index=True, width="stretch")
         else:
             st.info("No closed trades.")
 
@@ -1313,7 +1313,7 @@ with tabs[13]:
     st.subheader("⚡ Execute Paper Trade")
     pt_sym = st.selectbox("Symbol", symbol_list, key="pt_sym",
                            format_func=lambda x: f"{x} – {symbol_map[x]}")
-    if st.button("▶ Run Signal & Trade", use_container_width=True):
+    if st.button("▶ Run Signal & Trade", width="stretch"):
         with st.spinner(f"Analysing {pt_sym}…"):
             v2 = get_stock_verdict(pt_sym)
         if "error" in v2:
@@ -1381,7 +1381,7 @@ with tabs[14]:
                             for tf, v in tf_data.items()
                         ]
                         df_tf = pd.DataFrame(rows)
-                        st.dataframe(df_tf, hide_index=True, use_container_width=True)
+                        st.dataframe(df_tf, hide_index=True, width="stretch")
 
             except Exception as e:
                 st.error(f"Error: {e}")
@@ -1510,7 +1510,7 @@ with tabs[17]:
                         ("Beta vs Nifty", m.get('beta','N/A')),
                     ]
                     df_rm = pd.DataFrame(rows, columns=["Metric", "Value"])
-                    st.dataframe(df_rm, hide_index=True, use_container_width=True)
+                    st.dataframe(df_rm, hide_index=True, width="stretch")
 
             except Exception as e:
                 st.error(f"Error: {e}")
@@ -1595,19 +1595,19 @@ with tabs[19]:
                         text_auto=".2f",
                     )
                     fig.update_layout(height=500)
-                    st.plotly_chart(fig, use_container_width=True)
+                    st.plotly_chart(fig, width="stretch")
 
                     high_pairs = summary.get("high_corr_pairs", [])
                     if high_pairs:
                         st.markdown("**Highly correlated pairs (>0.7):**")
                         hp_df = pd.DataFrame(high_pairs)
-                        st.dataframe(hp_df, hide_index=True, use_container_width=True)
+                        st.dataframe(hp_df, hide_index=True, width="stretch")
 
                     avg_c = summary.get("avg_correlation", {})
                     if avg_c:
                         st.markdown("**Average correlation to universe:**")
                         avg_df = pd.DataFrame(avg_c.items(), columns=["Symbol", "Avg Correlation"]).sort_values("Avg Correlation", ascending=False)
-                        st.dataframe(avg_df, hide_index=True, use_container_width=True)
+                        st.dataframe(avg_df, hide_index=True, width="stretch")
 
             except Exception as e:
                 st.error(f"Error: {e}")
@@ -1674,7 +1674,7 @@ with tabs[20]:
                         df_sec = pd.DataFrame(rows)
                         st.dataframe(
                             df_sec,
-                            use_container_width=True,
+                            width="stretch",
                             hide_index=True,
                         )
                         st.caption(f"{len(rows)} rows · Data from screener.in")
@@ -1817,7 +1817,7 @@ Shows buy vs sell volume per candle
                         show_vp=pc_show_vp,
                         vp_bins=pc_vp_bins,
                     )
-                    st.plotly_chart(_smart_fig, use_container_width=True)
+                    st.plotly_chart(_smart_fig, width="stretch")
 
                     # Quick indicator legend
                     _leg_col1, _leg_col2, _leg_col3 = st.columns(3)
@@ -1842,7 +1842,7 @@ Shows buy vs sell volume per candle
 
                 with _ct2:
                     _fp_fig = _FootprintAnalyzer().build_figure(_df, symbol=pc_symbol)
-                    st.plotly_chart(_fp_fig, use_container_width=True)
+                    st.plotly_chart(_fp_fig, width="stretch")
                     st.info(
                         "⭐ **Green star above candle** = ask imbalance (buyers ≥ 3× sellers at that level — bullish pressure)  \n"
                         "⭐ **Red star below candle** = bid imbalance (sellers ≥ 3× buyers — bearish pressure)  \n"
@@ -1855,7 +1855,7 @@ Shows buy vs sell volume per candle
                     _current_price = float(_df["close"].iloc[-1])
                     _book = _LiqHeatmap().simulate_book(_current_price)
                     _liq_fig = _LiqHeatmap().build_figure(_book, symbol=pc_symbol)
-                    st.plotly_chart(_liq_fig, use_container_width=True)
+                    st.plotly_chart(_liq_fig, width="stretch")
                     st.info(
                         "🟢 **Green bars (left)** = pending buy orders (bids) — act as support  \n"
                         "🔴 **Red bars (right)** = pending sell orders (asks) — act as resistance  \n"
@@ -1955,7 +1955,7 @@ with tabs[22]:
                     st.info("No stocks match the current filters.")
                 else:
                     st.success(f"Found **{len(_sc_df)}** stocks in {_elapsed}s")
-                    st.dataframe(_sc_df, use_container_width=True)
+                    st.dataframe(_sc_df, width="stretch")
 
                     _csv_bytes = _sc_df.to_csv(index=False).encode()
                     st.download_button(

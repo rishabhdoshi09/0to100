@@ -93,7 +93,7 @@ def render_heatmap():
         plot_bgcolor="rgba(0,0,0,0)",
         height=260,
     )
-    st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+    st.plotly_chart(fig, width="stretch", config={"displayModeBar": False})
 
 
 def render_macro_strip():
