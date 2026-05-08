@@ -34,11 +34,17 @@ def _fetch_changes(tickers: dict[str, str]) -> dict[str, float]:
     out: dict[str, float] = {}
     for name, sym in tickers.items():
         try:
-            d = yf.Ticker(sym).fast_info
-            prev  = d.get("previous_close") or d.get("regularMarketPreviousClose", 0)
-            price = d.get("last_price") or d.get("regularMarketPrice", prev)
-            if prev and prev != 0:
-                out[name] = round((price - prev) / prev * 100, 2)
+            h = yf.Ticker(sym).history(period="5d")
+            if h is None or len(h) < 2:
+                out[name] = 0.0
+                continue
+            # Handle MultiIndex columns
+            if isinstance(h.columns, pd.MultiIndex):
+                h.columns = [c[0] for c in h.columns]
+            close_col = "Close" if "Close" in h.columns else h.columns[3]
+            prev  = float(h[close_col].iloc[-2])
+            price = float(h[close_col].iloc[-1])
+            out[name] = round((price - prev) / prev * 100, 2) if prev else 0.0
         except Exception:
             out[name] = 0.0
     return out

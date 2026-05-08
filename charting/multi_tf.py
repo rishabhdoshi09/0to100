@@ -55,11 +55,13 @@ def _mini_chart(df: pd.DataFrame, label: str) -> go.Figure:
         fig.add_annotation(text="No data", x=0.5, y=0.5, xref="paper", yref="paper",
                            showarrow=False, font=dict(color="#8892a4", size=11))
     else:
-        color = "#00d4ff" if df["close"].iloc[-1] >= df["close"].iloc[0] else "#ff4466"
+        is_up     = df["close"].iloc[-1] >= df["close"].iloc[0]
+        color     = "#00d4ff" if is_up else "#ff4466"
+        fill_rgba = "rgba(0,212,255,0.07)" if is_up else "rgba(255,68,102,0.07)"
         fig = go.Figure(go.Scatter(
             x=df.index, y=df["close"],
             mode="lines", line=dict(color=color, width=1.5),
-            fill="tozeroy", fillcolor=color.replace("ff", "1a").replace("66", "0d") + "18",
+            fill="tozeroy", fillcolor=fill_rgba,
             hovertemplate="%{x|%Y-%m-%d}: ₹%{y:,.2f}<extra></extra>",
         ))
 
