@@ -13,13 +13,13 @@ BORDER = "rgba(255,255,255,0.08)"
 
 DEVBLOOM_CSS = """
 <style>
-/* ─── Base ──────────────────────────────────────────────── */
-@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&family=Inter:wght@400;500;600;700&display=swap');
-
-html, body, [data-testid="stAppViewContainer"], .stApp {
+/* ─── Base (colours handled by .streamlit/config.toml) ──── */
+/* Use system fonts — no external @import to avoid render-blocking */
+html, body, [data-testid="stAppViewContainer"],
+[data-testid="stMain"], [data-testid="stMainBlockContainer"], .stApp {
   background: #0a0e1a !important;
   color: #e8eaf0 !important;
-  font-family: 'Inter', system-ui, sans-serif !important;
+  font-family: 'Inter', system-ui, -apple-system, sans-serif !important;
 }
 
 /* ─── Sidebar ────────────────────────────────────────────── */
