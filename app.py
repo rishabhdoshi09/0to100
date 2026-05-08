@@ -75,7 +75,7 @@ def init_clients():
 kite, im, fetcher, ie, vp, _claude = init_clients()
 
 # ── Symbol universe ────────────────────────────────────────────────────────────
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=3600, persist="disk")
 def get_all_equity_symbols():
     out = {}
     for sym, meta in im._meta_map.items():
@@ -113,7 +113,7 @@ def fetch_historical(symbol, days=250):
     return df
 
 # ── Index data ─────────────────────────────────────────────────────────────────
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=3600, persist="disk")
 def get_indices_data():
     names = {"Nifty 50":"NIFTY 50","Bank Nifty":"NIFTY BANK",
              "Nifty IT":"NIFTY IT","Nifty Pharma":"NIFTY PHARMA","Nifty FMCG":"NIFTY FMCG"}
@@ -130,7 +130,7 @@ def get_indices_data():
             continue
     return out
 
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=3600, persist="disk")
 def get_global_indices():
     tickers = {"S&P 500":"^GSPC","Dow Jones":"^DJI","Nasdaq":"^IXIC",
                "FTSE 100":"^FTSE","DAX":"^GDAXI","Nikkei 225":"^N225",
@@ -800,12 +800,13 @@ with tabs[1]:
     )
     _charts_sym = selected
 
-    # Multi-timeframe grid
+    # Multi-timeframe grid — only after user clicks Analyze (avoids 8 cold yfinance calls)
     with st.expander("🕐 Multi-Timeframe Grid (8 views)", expanded=False):
-        if _charts_sym:
-            render_multi_tf_grid(_charts_sym)
+        _mtf_sym = st.session_state.get("last_selected")
+        if _mtf_sym:
+            render_multi_tf_grid(_mtf_sym)
         else:
-            st.info("Select a symbol in the sidebar to view multi-timeframe charts.")
+            st.info("Click **Analyze** on any symbol first to load multi-timeframe charts.")
 
     # Anomaly scanner
     with st.expander("🔍 Anomaly Scanner", expanded=False):
@@ -1152,14 +1153,17 @@ with tabs[8]:
 # ── Tab 9 onwards: Legacy content rendered in hidden containers ────────────────
 with tabs[9]:
     st.subheader("🌍 Global Indices")
-    gl = get_global_indices()
-    if gl:
-        gc = st.columns(3)
-        for i, (name, val) in enumerate(gl.items()):
-            gc[i%3].metric(name, f"{val['price']:.1f}", f"{val['change']:+.2f}%",
-                           delta_color="normal" if val['change']>=0 else "inverse")
+    if st.button("Load Global Indices", key="gl_load"):
+        gl = get_global_indices()
+        if gl:
+            gc = st.columns(3)
+            for i, (name, val) in enumerate(gl.items()):
+                gc[i%3].metric(name, f"{val['price']:.1f}", f"{val['change']:+.2f}%",
+                               delta_color="normal" if val['change']>=0 else "inverse")
+        else:
+            st.info("Unavailable.")
     else:
-        st.info("Unavailable.")
+        st.caption("Click to fetch live global index data.")
 
 # ── Tab 10: Pre-Market Report ──────────────────────────────────────────────────
 with tabs[10]:
