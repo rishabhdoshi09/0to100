@@ -91,9 +91,8 @@ def _load_strategy(name: str) -> str:
 
 def _run_backtest(code: str, df: pd.DataFrame, capital: float = 1_000_000) -> dict:
     """Execute user strategy in a sandboxed namespace and simulate trades."""
-    namespace = {"pd": pd, "__builtins__": {"range": range, "len": len, "abs": abs,
-                                             "min": min, "max": max, "round": round,
-                                             "print": print, "zip": zip, "enumerate": enumerate}}
+    import builtins
+    namespace = {"pd": pd, "__builtins__": builtins.__dict__}
     try:
         exec(compile(code, "<algolab>", "exec"), namespace)  # noqa: S102
     except Exception as e:
@@ -166,6 +165,10 @@ def render_algolab(fetcher=None):
     """Render the AlgoLab tab."""
     st.markdown("### 🧬 AlgoLab — Code Cave")
     st.caption("Write, test, and save Python trading strategies. Results are simulated on historical data.")
+
+    # Ensure the strategy code is always seeded — Live Runner reads from session state.
+    if "algolab_code" not in st.session_state:
+        st.session_state["algolab_code"] = STARTER_STRATEGY
 
     # ── Strategy manager ──────────────────────────────────────────────────────
     col_l, col_r = st.columns([3, 1])
@@ -269,3 +272,8 @@ def render_algolab(fetcher=None):
             with st.expander("Trade Log"):
                 if result["trades"]:
                     st.dataframe(pd.DataFrame(result["trades"]), width="stretch")
+
+    # ── Live Runner ──────────────────────────────────────────────────────────
+    st.divider()
+    from ui.live_runner import render_live_runner
+    render_live_runner(default_symbol=st.session_state.get("algolab_sym", "RELIANCE"))

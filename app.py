@@ -775,31 +775,79 @@ render_copilot_sidebar(context={
     "indicators": {},
 })
 
-tabs = st.tabs([
-    "🏠 Command Center",      # 0 — Home Dashboard
-    "📈 Charts",              # 1 — Technical Analysis Suite
-    "📊 Fundamentals",        # 2 — Fundamental Deep Dive
-    "⚡ Co-Pilot",            # 3 — AI Co-Pilot Dev
-    "⚙️ Execution",           # 4 — Execution & Risk Cockpit
-    "🧬 AlgoLab",             # 5 — Code Cave
-    "📓 Journal",             # 6 — Journaling & Performance
-    "🔬 Screener (Quick)",    # 7 — Stock Screener (existing)
-    "🔎 Decision",            # 8 — Legacy Decision Terminal
-    "🌍 Global",              # 9 — Global Indices
-    "🌅 Pre-Market",          # 10 — Moneycontrol pre-market
-    "🏦 Quant",               # 11 — Quant Hedge Fund
-    "📊 Ownership",           # 12 — Fundamentals & Ownership
-    "📋 Paper Trading",       # 13 — Paper Trading Dashboard
-    "📐 MTF Aligner",         # 14 — Multi-Timeframe Aligner
-    "🌡️ Regime",              # 15 — Market Regime Detector
-    "🧠 Ensemble ML",         # 16 — Ensemble ML Signal
-    "⚠️ Risk Metrics",        # 17 — Risk Metrics
-    "🔮 What-If",             # 18 — What-If Trade Simulator
-    "🔗 Correlation",         # 19 — Correlation Matrix
-    "🔬 Deep Fundamentals",   # 20 — Deep Fundamentals
-    "📊 Pro Charts",          # 21 — Professional Charts
-    "🔎 Screener",            # 22 — NSE Stock Screener
+# ── Consolidated 6-tab layout (23 legacy panels grouped into 6 themes) ──────
+# Top-level tabs: Command Center | Research | Signals | AlgoLab | Execute | Tools
+_top_tabs = st.tabs([
+    "🏠 Command Center",
+    "📊 Research",
+    "🧠 Signals",
+    "🧬 AlgoLab",
+    "⚙️ Execute",
+    "🔬 Tools",
 ])
+
+# Sub-tabs declared INSIDE each top-level tab so they render in the right place.
+with _top_tabs[1]:
+    _research_sub = st.tabs([
+        "📈 Charts",          # legacy 1
+        "📊 Pro Charts",      # legacy 21
+        "📐 Multi-TF",        # legacy 14
+        "📊 Fundamentals",    # legacy 2
+        "🔬 Deep Fund",       # legacy 20
+        "📊 Ownership",       # legacy 12
+    ])
+with _top_tabs[2]:
+    _signals_sub = st.tabs([
+        "🔎 Decision",        # legacy 8
+        "🧠 Ensemble ML",     # legacy 16
+        "🌡️ Regime",          # legacy 15
+        "⚡ Co-Pilot",        # legacy 3
+        "🏦 Quant",           # legacy 11
+    ])
+with _top_tabs[4]:
+    _exec_sub = st.tabs([
+        "⚙️ Trading Cockpit", # legacy 4 (Order Pad / Positions / Backtest Bridge)
+        "📋 Paper Trading",   # legacy 13
+        "⚠️ Risk Metrics",    # legacy 17
+        "🔮 What-If",         # legacy 18
+    ])
+with _top_tabs[5]:
+    _tools_sub = st.tabs([
+        "🔎 Screener",        # legacy 22 (full NSE screener)
+        "🔍 Quick Screener",  # legacy 7
+        "🔗 Correlation",     # legacy 19
+        "📓 Journal",         # legacy 6
+        "🌅 Pre-Market",      # legacy 10
+        "🌍 Global",          # legacy 9
+    ])
+
+# Backwards-compatible mapping: existing `with tabs[N]:` calls in the
+# rest of the script keep working because each index points to the
+# correct nested DeltaGenerator.
+tabs = [None] * 23
+tabs[0]  = _top_tabs[0]        # Command Center
+tabs[1]  = _research_sub[0]    # Charts
+tabs[2]  = _research_sub[3]    # Fundamentals
+tabs[3]  = _signals_sub[3]     # Co-Pilot
+tabs[4]  = _exec_sub[0]        # Trading Cockpit (Order Pad / Positions / Backtest Bridge)
+tabs[5]  = _top_tabs[3]        # AlgoLab — top-level
+tabs[6]  = _tools_sub[3]       # Journal
+tabs[7]  = _tools_sub[1]       # Screener (Quick)
+tabs[8]  = _signals_sub[0]     # Decision
+tabs[9]  = _tools_sub[5]       # Global
+tabs[10] = _tools_sub[4]       # Pre-Market
+tabs[11] = _signals_sub[4]     # Quant
+tabs[12] = _research_sub[5]    # Ownership
+tabs[13] = _exec_sub[1]        # Paper Trading
+tabs[14] = _research_sub[2]    # Multi-TF
+tabs[15] = _signals_sub[2]     # Regime
+tabs[16] = _signals_sub[1]     # Ensemble ML
+tabs[17] = _exec_sub[2]        # Risk Metrics
+tabs[18] = _exec_sub[3]        # What-If
+tabs[19] = _tools_sub[2]       # Correlation
+tabs[20] = _research_sub[4]    # Deep Fundamentals
+tabs[21] = _research_sub[1]    # Pro Charts
+tabs[22] = _tools_sub[0]       # Screener (full)
 
 # ── Tab 0: Command Center ─────────────────────────────────────────────────────
 with tabs[0]:
@@ -1028,7 +1076,7 @@ with tabs[4]:
         "<h2 style='color:#00d4ff;font-family:JetBrains Mono,monospace;font-size:1.4rem;margin:0'>⚙️ Execution & Risk Cockpit</h2>",
         unsafe_allow_html=True,
     )
-    _exec_tabs = st.tabs(["Order Pad", "Position Monitor", "Backtest Bridge", "Paper Trading"])
+    _exec_tabs = st.tabs(["Order Pad", "Position Monitor", "Backtest Bridge"])
 
     with _exec_tabs[0]:
         _exec_sym   = selected or ""
@@ -1043,42 +1091,6 @@ with tabs[4]:
 
     with _exec_tabs[2]:
         render_backtest_bridge(selected or "", fetcher=fetcher, ie=ie)
-
-    with _exec_tabs[3]:
-        st.header("📋 Paper Trading Dashboard")
-        init_db()
-        summ = get_trading_summary()
-        m1,m2,m3,m4 = st.columns(4)
-        m1.metric("Total P&L",   f"₹{summ['total_pnl']:,.2f}")
-        m2.metric("Win Rate",    f"{summ['win_rate']:.1f}%")
-        m3.metric("Trades",      str(summ['num_trades']))
-        m4.metric("Best/Worst",  f"₹{summ['best_trade']:,.0f} / ₹{summ['worst_trade']:,.0f}")
-        eq_df2 = get_equity_curve()
-        if not eq_df2.empty:
-            fig_eq2 = go.Figure(go.Scatter(x=eq_df2['date'], y=eq_df2['equity'],
-                                           mode='lines+markers', fill='tozeroy',
-                                           line=dict(color='#00d4ff', width=2),
-                                           fillcolor='rgba(0,212,255,.06)'))
-            fig_eq2.update_layout(height=220, paper_bgcolor="rgba(0,0,0,0)",
-                                  plot_bgcolor="rgba(8,12,28,.6)", margin=dict(t=0,b=0))
-            st.plotly_chart(fig_eq2, width="stretch")
-        pt_c1, pt_c2 = st.columns(2)
-        with pt_c1:
-            st.subheader("🟢 Open Positions")
-            op = get_open_positions()
-            if not op.empty:
-                st.dataframe(op[['symbol','entry_date','entry_price','quantity','direction']],
-                             hide_index=True, width="stretch")
-            else:
-                st.info("No open positions.")
-        with pt_c2:
-            st.subheader("📜 Trade History")
-            cp = get_closed_positions()
-            if not cp.empty:
-                st.dataframe(cp[['symbol','entry_date','exit_date','entry_price','exit_price','pnl']],
-                             hide_index=True, width="stretch")
-            else:
-                st.info("No closed trades.")
 
 # ── Tab 5: AlgoLab ───────────────────────────────────────────────────────────
 with tabs[5]:
