@@ -125,7 +125,8 @@ def get_global_indices():
         try:
             h = yf.Ticker(t).history(period="2d")
             if len(h) >= 2:
-                last, prev = h['Close'].iloc[-1], h['Close'].iloc[-2]
+                _hc = h["Close"] if "Close" in h.columns else h[h.columns[3]]
+                last, prev = float(_hc.iloc[-1]), float(_hc.iloc[-2])
                 out[name] = {"price": last, "change": (last-prev)/prev*100}
         except Exception:
             continue
@@ -485,9 +486,11 @@ def get_stock_change_kite(symbol):
 
 def macro_regime_allocation():
     try:
-        nifty_r = (lambda h: (h['Close'].iloc[-1]-h['Close'].iloc[0])/h['Close'].iloc[0])(yf.Ticker("^NSEI").history(period="1mo"))
-        gold_r  = (lambda h: (h['Close'].iloc[-1]-h['Close'].iloc[0])/h['Close'].iloc[0])(yf.Ticker("GC=F").history(period="1mo"))
-        yld_chg = (lambda h: h['Close'].iloc[-1]-h['Close'].iloc[0])(yf.Ticker("^TNX").history(period="1mo"))
+        def _pct(h): c = h["Close"] if "Close" in h.columns else h.iloc[:, 3]; return (float(c.iloc[-1])-float(c.iloc[0]))/float(c.iloc[0])
+        def _chg(h): c = h["Close"] if "Close" in h.columns else h.iloc[:, 3]; return float(c.iloc[-1])-float(c.iloc[0])
+        nifty_r = _pct(yf.Ticker("^NSEI").history(period="1mo"))
+        gold_r  = _pct(yf.Ticker("GC=F").history(period="1mo"))
+        yld_chg = _chg(yf.Ticker("^TNX").history(period="1mo"))
         score   = nifty_r - gold_r - yld_chg/100
         if score > 0.02:
             return "🟢 Risk ON – favour equities", "Equities 70% | Gold 15% | Bonds 15%"

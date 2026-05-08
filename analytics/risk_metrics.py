@@ -216,6 +216,9 @@ class RiskMetrics:
             from_d = (datetime.now() - timedelta(days=days_needed)).strftime("%Y-%m-%d")
             df = yf.download(_NIFTY_YF, start=from_d, end=to_d, progress=False)
             if df is not None and len(df) > 10:
+                import pandas as _pd
+                if isinstance(df.columns, _pd.MultiIndex):
+                    df.columns = [c[0] for c in df.columns]
                 close = df["Close"]
                 returns = np.log(close / close.shift(1)).dropna()
                 return returns

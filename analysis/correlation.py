@@ -126,6 +126,9 @@ class CorrelationAnalyzer:
             import yfinance as yf
             df = yf.download(f"{symbol}.NS", start=from_d, end=to_d, progress=False)
             if df is not None and len(df) >= 10:
+                import pandas as _pd
+                if isinstance(df.columns, _pd.MultiIndex):
+                    df.columns = [c[0] for c in df.columns]
                 return df["Close"].astype(float)
         except Exception as exc:
             log.warning("corr_yf_failed", symbol=symbol, error=str(exc))

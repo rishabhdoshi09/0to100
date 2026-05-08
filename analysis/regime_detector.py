@@ -140,7 +140,8 @@ class RegimeDetector:
             ticker = yf.Ticker(_INDIA_VIX_YF_TICKER)
             hist = ticker.history(period="5d")
             if hist is not None and len(hist) > 0:
-                return float(hist["Close"].iloc[-1])
+                _c = hist["Close"] if "Close" in hist.columns else hist.iloc[:, 3]
+                return float(_c.iloc[-1])
         except Exception as exc:
             log.warning("india_vix_fetch_failed", error=str(exc))
         return None

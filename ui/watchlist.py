@@ -41,6 +41,8 @@ def _fetch_row(symbol: str) -> dict:
         prev  = info.get("previous_close") or info.get("regularMarketPreviousClose", price)
         chg   = (price - prev) / prev * 100 if prev else 0
         vol   = info.get("last_volume") or 0
+        if not hist.empty and isinstance(hist.columns, __import__("pandas").MultiIndex):
+            hist.columns = [c[0] for c in hist.columns]
         avg_v = hist["Volume"].mean() if len(hist) > 5 else 1
         vol_spike = vol / avg_v if avg_v else 1.0
         closes = hist["Close"].tolist()[-15:]

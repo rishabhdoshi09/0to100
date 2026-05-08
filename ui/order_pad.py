@@ -161,8 +161,8 @@ def render_position_monitor():
         entry_p  = row.get("entry_price", 0)
         qty      = row.get("quantity", 0)
         sym      = row.get("symbol", "")
-        side     = row.get("side", "BUY")
-        date_in  = row.get("date", "")
+        side     = row.get("direction", row.get("side", "BUY"))   # schema uses "direction"
+        date_in  = row.get("entry_date", row.get("date", ""))
 
         # Try to fetch current price
         try:
