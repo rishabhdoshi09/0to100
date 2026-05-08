@@ -89,12 +89,28 @@ def get_all_equity_symbols():
 # ── Historical OHLCV (5-min cache) ────────────────────────────────────────────
 @st.cache_data(ttl=300)
 def fetch_historical(symbol, days=250):
+    # Try Kite first
     to_d   = datetime.now().strftime("%Y-%m-%d")
     from_d = (datetime.now() - timedelta(days=days+30)).strftime("%Y-%m-%d")
     df = fetcher.fetch(symbol, from_d, to_d, interval="day")
     if df is None or len(df) == 0:
         from_d = (datetime.now() - timedelta(days=days+100)).strftime("%Y-%m-%d")
         df = fetcher.fetch(symbol, from_d, to_d, interval="day")
+
+    # Fallback to yfinance when Kite is unavailable
+    if df is None or len(df) == 0:
+        try:
+            ticker = symbol if symbol.endswith(".NS") or symbol.startswith("^") else symbol + ".NS"
+            raw = yf.download(ticker, period=f"{days}d", interval="1d",
+                              progress=False, auto_adjust=True)
+            if not raw.empty:
+                if isinstance(raw.columns, pd.MultiIndex):
+                    raw.columns = [c[0].lower() for c in raw.columns]
+                else:
+                    raw.columns = [c.lower() for c in raw.columns]
+                df = raw[["open","high","low","close","volume"]].dropna()
+        except Exception:
+            pass
     return df
 
 # ── Index data ─────────────────────────────────────────────────────────────────

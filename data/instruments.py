@@ -40,12 +40,21 @@ class InstrumentManager:
                 log.info("instruments_loaded_from_cache", count=len(self._token_map))
                 return
 
+        # Skip network download when Kite credentials are not configured
+        if not settings.kite_api_key:
+            log.info("instruments_skipped_no_kite_key")
+            return
+
         self._download()
 
     def _download(self) -> None:
         log.info("downloading_instrument_list")
-        resp = requests.get(_INSTRUMENT_URL, timeout=30)
-        resp.raise_for_status()
+        try:
+            resp = requests.get(_INSTRUMENT_URL, timeout=15)
+            resp.raise_for_status()
+        except Exception as exc:
+            log.warning("instruments_download_failed", error=str(exc))
+            return
         text = resp.text
         _CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
         _CACHE_FILE.write_text(text, encoding="utf-8")
