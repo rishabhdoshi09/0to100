@@ -31,6 +31,7 @@ SPOT_TICKERS = {
 
 @st.cache_data(ttl=120)
 def _fetch_changes(tickers: dict[str, str]) -> dict[str, float]:
+    """Fetch % change for a dict of {label: yfinance_ticker}."""
     out: dict[str, float] = {}
     for name, sym in tickers.items():
         try:
@@ -38,7 +39,6 @@ def _fetch_changes(tickers: dict[str, str]) -> dict[str, float]:
             if h is None or len(h) < 2:
                 out[name] = 0.0
                 continue
-            # Handle MultiIndex columns
             if isinstance(h.columns, pd.MultiIndex):
                 h.columns = [c[0] for c in h.columns]
             close_col = "Close" if "Close" in h.columns else h.columns[3]
@@ -48,6 +48,16 @@ def _fetch_changes(tickers: dict[str, str]) -> dict[str, float]:
         except Exception:
             out[name] = 0.0
     return out
+
+
+@st.cache_data(ttl=60)
+def _fetch_sector_changes_kite() -> dict[str, float]:
+    """Use Kite for NSE sector indices if token is available."""
+    from data.market_data import _kite_available
+    if not _kite_available():
+        return {}
+    # Kite doesn't support index quotes via ohlc — fall through to yfinance
+    return {}
 
 
 def render_heatmap():

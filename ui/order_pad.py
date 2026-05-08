@@ -164,10 +164,10 @@ def render_position_monitor():
         side     = row.get("direction", row.get("side", "BUY"))   # schema uses "direction"
         date_in  = row.get("entry_date", row.get("date", ""))
 
-        # Try to fetch current price
+        # Try to fetch current price via Kite (or yfinance fallback)
         try:
-            import yfinance as yf
-            price = yf.Ticker(sym + ".NS").fast_info.get("last_price", entry_p) or entry_p
+            from data.market_data import get_provider
+            price = get_provider().quote(sym).get("price", 0) or entry_p
         except Exception:
             price = entry_p
 
