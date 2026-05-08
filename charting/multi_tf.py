@@ -31,7 +31,7 @@ TF_LABELS = {
 }
 
 
-@st.cache_data(ttl=300, show_spinner=False, persist="disk")
+@st.cache_data(ttl=300, show_spinner=False)
 def _fetch_ohlcv(symbol: str, period: str, interval: str) -> pd.DataFrame:
     try:
         ticker = symbol if symbol.endswith(".NS") else symbol + ".NS"

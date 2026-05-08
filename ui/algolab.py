@@ -1,4 +1,4 @@
-"""AlgoLab (Code Cave) — Monaco-style strategy editor with live backtest runner."""
+"""AlgoLab (Code Cave) — strategy editor with live backtest runner."""
 from __future__ import annotations
 
 import hashlib
@@ -12,7 +12,6 @@ from pathlib import Path
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
-import streamlit.components.v1 as components
 
 DB_PATH = Path("algolab_strategies.db")
 
@@ -43,33 +42,7 @@ def generate_signals(df: pd.DataFrame) -> pd.Series:
     return signals
 '''
 
-MONACO_HTML = """
-<div id="monaco-root" style="width:100%;height:{height}px;border:1px solid rgba(255,255,255,0.1);border-radius:8px;overflow:hidden"></div>
-<script src="https://cdn.jsdelivr.net/npm/monaco-editor@0.44.0/min/vs/loader.js"></script>
-<script>
-require.config({{ paths: {{ 'vs': 'https://cdn.jsdelivr.net/npm/monaco-editor@0.44.0/min/vs' }} }});
-require(['vs/editor/editor.main'], function() {{
-  const editor = monaco.editor.create(document.getElementById('monaco-root'), {{
-    value: {code_json},
-    language: 'python',
-    theme: 'vs-dark',
-    minimap: {{ enabled: false }},
-    fontSize: 13,
-    fontFamily: "'JetBrains Mono', 'Fira Code', monospace",
-    lineNumbers: 'on',
-    scrollBeyondLastLine: false,
-    automaticLayout: true,
-    padding: {{ top: 12 }},
-  }});
-  // Persist code changes to parent via postMessage
-  editor.onDidChangeModelContent(function() {{
-    window.parent.postMessage({{ type: 'algolab_code', code: editor.getValue() }}, '*');
-  }});
-  // Expose global so Streamlit can read it
-  window._algolabEditor = editor;
-}});
-</script>
-"""
+MONACO_HTML = ""  # noqa — kept as no-op to preserve module imports; Monaco removed (deprecated components.html)
 
 
 def _init_db():
@@ -219,20 +192,14 @@ def render_algolab(fetcher=None):
             else:
                 st.error("Enter a strategy name.")
 
-    # ── Code editor (Monaco) ─────────────────────────────────────────────────
+    # ── Code editor (textarea — Monaco removed; deprecated components.html) ─
     with col_l:
         current_code = st.session_state.get("algolab_code", STARTER_STRATEGY)
         st.markdown("**Strategy Editor** (Python)")
-        components.html(
-            MONACO_HTML.format(code_json=json.dumps(current_code), height=380),
-            height=400,
-            scrolling=False,
-        )
-        # Fallback text area (synced)
         new_code = st.text_area(
-            "Code (editable fallback)",
+            "Strategy code",
             value=current_code,
-            height=200,
+            height=380,
             key="algolab_textarea",
             label_visibility="collapsed",
         )

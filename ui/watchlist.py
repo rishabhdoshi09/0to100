@@ -28,7 +28,7 @@ def _mini_sparkline_svg(closes: list[float], width=60, height=22) -> str:
     )
 
 
-@st.cache_data(ttl=60, persist="disk")
+@st.cache_data(ttl=60)
 def _fetch_group(symbols: tuple[str, ...]) -> dict[str, dict]:
     """Fetch quotes for a group of symbols (cached 60 s)."""
     mdp = get_provider()

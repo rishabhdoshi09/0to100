@@ -29,7 +29,7 @@ SPOT_TICKERS = {
 }
 
 
-@st.cache_data(ttl=120, persist="disk")
+@st.cache_data(ttl=120)
 def _fetch_changes(tickers: dict[str, str]) -> dict[str, float]:
     """Fetch % change for a dict of {label: yfinance_ticker}."""
     out: dict[str, float] = {}
@@ -50,7 +50,7 @@ def _fetch_changes(tickers: dict[str, str]) -> dict[str, float]:
     return out
 
 
-@st.cache_data(ttl=60, persist="disk")
+@st.cache_data(ttl=60)
 def _fetch_sector_changes_kite() -> dict[str, float]:
     """Use Kite for NSE sector indices if token is available."""
     from data.market_data import _kite_available

@@ -24,7 +24,7 @@ MACRO_SPOTS = {
 }
 
 
-@st.cache_data(ttl=180, persist="disk")
+@st.cache_data(ttl=180)
 def _spot(ticker: str) -> tuple[float, float]:
     """Return (price, pct_change) for a yfinance ticker."""
     try:
@@ -41,7 +41,7 @@ def _spot(ticker: str) -> tuple[float, float]:
         return 0.0, 0.0
 
 
-@st.cache_data(ttl=300, persist="disk")
+@st.cache_data(ttl=300)
 def _yield_curve_data() -> pd.Series:
     maturities = {"3M": "^IRX", "5Y": "^FVX", "10Y": "^TNX", "30Y": "^TYX"}
     data = {}

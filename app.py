@@ -1,6 +1,8 @@
+import logging
 import os
 import json
 import time
+import traceback
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
@@ -14,6 +16,23 @@ import streamlit as st
 import yfinance as yf
 from bs4 import BeautifulSoup
 from dotenv import load_dotenv
+
+# ── Lightweight, dependency-free structured logger for the Streamlit process ──
+# Avoids importing the heavy `structlog`/`rich` `logger.py` here so that the
+# Streamlit script thread never blocks on logging configuration during rerun.
+_LOG_DIR = os.environ.get("DEVBLOOM_LOG_DIR", "logs")
+os.makedirs(_LOG_DIR, exist_ok=True)
+_log_handler = logging.FileHandler(os.path.join(_LOG_DIR, "streamlit_app.log"),
+                                   encoding="utf-8")
+_log_handler.setFormatter(logging.Formatter(
+    "%(asctime)s [%(levelname)s] %(name)s: %(message)s"))
+logger = logging.getLogger("devbloom.app")
+if not logger.handlers:
+    logger.addHandler(_log_handler)
+    logger.addHandler(logging.StreamHandler())
+    logger.setLevel(logging.INFO)
+    logger.propagate = False
+logger.info("streamlit_script_start pid=%s", os.getpid())
 
 from data.historical import HistoricalDataFetcher
 from data.instruments import InstrumentManager
@@ -75,7 +94,7 @@ def init_clients():
 kite, im, fetcher, ie, vp, _claude = init_clients()
 
 # ── Symbol universe ────────────────────────────────────────────────────────────
-@st.cache_data(ttl=3600, persist="disk")
+@st.cache_data(ttl=3600)
 def get_all_equity_symbols():
     out = {}
     for sym, meta in im._meta_map.items():
@@ -113,7 +132,7 @@ def fetch_historical(symbol, days=250):
     return df
 
 # ── Index data ─────────────────────────────────────────────────────────────────
-@st.cache_data(ttl=3600, persist="disk")
+@st.cache_data(ttl=3600)
 def get_indices_data():
     names = {"Nifty 50":"NIFTY 50","Bank Nifty":"NIFTY BANK",
              "Nifty IT":"NIFTY IT","Nifty Pharma":"NIFTY PHARMA","Nifty FMCG":"NIFTY FMCG"}
@@ -130,7 +149,7 @@ def get_indices_data():
             continue
     return out
 
-@st.cache_data(ttl=3600, persist="disk")
+@st.cache_data(ttl=3600)
 def get_global_indices():
     tickers = {"S&P 500":"^GSPC","Dow Jones":"^DJI","Nasdaq":"^IXIC",
                "FTSE 100":"^FTSE","DAX":"^GDAXI","Nikkei 225":"^N225",
@@ -610,13 +629,25 @@ with st.sidebar:
     if st.button("🔄 Refresh All Data", width="stretch"):
         st.cache_data.clear()
         st.rerun()
-    if st.checkbox("⏱ Auto-refresh (30s)"):
-        _cd = st.empty()
-        for _i in range(30, 0, -1):
-            _cd.caption(f"Refreshing in {_i}s…")
-            time.sleep(1)
-        st.cache_data.clear()
-        st.rerun()
+
+    # Non-blocking auto-refresh.
+    # ROOT-CAUSE FIX: the previous implementation used `time.sleep(1)` × 30 in
+    # the script thread, which blocked Streamlit's WebSocket → page went blank
+    # after a few seconds. We now use streamlit-autorefresh which schedules the
+    # rerun on the browser side and does NOT block the script thread.
+    _auto = st.checkbox("⏱ Auto-refresh (30s)", key="auto_refresh_enabled")
+    if _auto:
+        try:
+            from streamlit_autorefresh import st_autorefresh
+            _ticks = st_autorefresh(interval=30_000, key="devbloom_autorefresh")
+            # On every tick boundary, clear data caches so widgets re-fetch.
+            if _ticks and _ticks != st.session_state.get("_last_auto_tick"):
+                st.session_state["_last_auto_tick"] = _ticks
+                st.cache_data.clear()
+            st.caption(f"🟢 Auto-refresh active (tick #{_ticks})")
+        except Exception as _ar_err:  # graceful fallback — never block UI
+            logger.warning("autorefresh_unavailable err=%s", _ar_err)
+            st.caption("⚠️ Auto-refresh unavailable — install `streamlit-autorefresh`.")
 
     st.divider()
     st.header("🔍 Stock Picker")
@@ -752,11 +783,23 @@ tabs = st.tabs([
     "⚙️ Execution",           # 4 — Execution & Risk Cockpit
     "🧬 AlgoLab",             # 5 — Code Cave
     "📓 Journal",             # 6 — Journaling & Performance
-    "🔬 Screener",            # 7 — Stock Screener (existing)
+    "🔬 Screener (Quick)",    # 7 — Stock Screener (existing)
     "🔎 Decision",            # 8 — Legacy Decision Terminal
+    "🌍 Global",              # 9 — Global Indices
+    "🌅 Pre-Market",          # 10 — Moneycontrol pre-market
+    "🏦 Quant",               # 11 — Quant Hedge Fund
+    "📊 Ownership",           # 12 — Fundamentals & Ownership
+    "📋 Paper Trading",       # 13 — Paper Trading Dashboard
+    "📐 MTF Aligner",         # 14 — Multi-Timeframe Aligner
+    "🌡️ Regime",              # 15 — Market Regime Detector
+    "🧠 Ensemble ML",         # 16 — Ensemble ML Signal
+    "⚠️ Risk Metrics",        # 17 — Risk Metrics
+    "🔮 What-If",             # 18 — What-If Trade Simulator
+    "🔗 Correlation",         # 19 — Correlation Matrix
+    "🔬 Deep Fundamentals",   # 20 — Deep Fundamentals
+    "📊 Pro Charts",          # 21 — Professional Charts
+    "🔎 Screener",            # 22 — NSE Stock Screener
 ])
-# Extend with hidden placeholders so legacy tab[N] references (N≥9) don't IndexError
-tabs = list(tabs) + [st.empty() for _ in range(14)]
 
 # ── Tab 0: Command Center ─────────────────────────────────────────────────────
 with tabs[0]:

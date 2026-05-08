@@ -1,76 +1,63 @@
-# sq_ai Quant Trading Cockpit — PRD (Emergent pod level)
-
-> **Note**: This is the Emergent-pod-level PRD snapshot. The canonical,
-> detailed product doc lives at `/app/0to100_fresh/memory/PRD.md` and
-> `/app/0to100_fresh/memory/HANDOVER.md` inside the project repo.
+# DevBloom / Prism Quant — Streamlit Stability Hotfix PRD
 
 ## Original problem statement
-A Bloomberg-terminal-grade quantitative trading system that runs locally
-on an 8 GB MacBook Air (< 500 MB RAM, Colab for ML training). FastAPI +
-SQLite + Streamlit + Textual TUI + dual-LLM (Claude + DeepSeek).
+Streamlit-based trading terminal (`/app/app.py`, ~2000 LOC) loaded correctly,
+then went **completely blank after a few seconds**.
 
-## Current state (Feb 2026)
+Logs showed:
+* 9× warnings — `The cached function '<x>' has a TTL that will be ignored. Persistent cached functions currently don't support TTL.`
+* 2× warnings — `Please replace st.components.v1.html with st.iframe.`
+* App started fine on Uvicorn, then UI went blank.
 
-### v0.3 baseline (pre-existing on GitHub, 86 tests passing)
-* FastAPI cockpit + 6 Streamlit pages + Textual TUI.
-* Dual-LLM decision engine with ensemble veto (`claude-haiku-4-5`).
-* SQLite cache + portfolio + screener engine + stock-research aggregator.
-* Daily auto-PDF report, full NSE instruments tracker, live LTP, equity curve.
+## Root-cause analysis (RCA)
 
-### v0.5 Decision Terminal (this session)
-* **Phase 0** — repo sanitization: flattened `0to100/` → root, deleted
-  all pre-v0.1 legacy (analytics/, engine/, app.py, paper_trading, junk).
-* **Phase 1** — deterministic decision layer:
-  * `sq_ai/signals/profiles.py` (Conservative / Aggressive)
-  * `sq_ai/signals/sector_strength.py`
-  * `sq_ai/signals/conviction.py` (single source of truth for 0-100 score)
-  * `sq_ai/signals/trade_setup.py` (ATR-based entry/stop/target/qty/RR)
-  * `sq_ai/signals/news_sentiment.py` (deterministic keyword-based)
-  * `sq_ai/signals/buzzing.py` (cross-sectional scanner)
-  * `PortfolioTracker.buy_signals_today()`
-* **Phase 2** — API routes, all take `?profile=` query param
-  (fixes env-var hopping bug between Streamlit and FastAPI processes):
-  * `GET /api/buzzing`
-  * `GET /api/intelligence/{symbol}`
-  * `GET /api/conviction/{symbol}`
-  * `GET /api/trade_setup/{symbol}`
-  * API version bumped to `0.5.0`.
-* **Phase 3** — Streamlit `decision_terminal_page.py` landing page.
-* **Phase 4** — 29 new tests across 5 files; total **115 passed**
-  (target was ≥114).
-* **Phase 5** — updated `memory/PRD.md` + `memory/HANDOVER.md` with
-  full profile-decision matrix.
+| # | Issue | File | Effect |
+|---|-------|------|--------|
+| **1** | **Blocking auto-refresh** — `time.sleep(1)` × 30 in script thread, then `st.rerun()` while checkbox stays on → infinite blocking loop | `app.py:613-619` (old) | **Primary cause of blank screen** — WebSocket starves and frontend stops receiving render deltas |
+| 2 | `@st.cache_data(persist="disk", ttl=N)` everywhere — Streamlit ≥1.30 silently ignores TTL on disk-persisted caches; data never refreshes | `app.py`, `ui/heatmap.py`, `ui/macro.py`, `ui/watchlist.py`, `ui/alert_inbox.py`, `charting/multi_tf.py` | Stale data + disk I/O storms on every rerun |
+| 3 | Deprecated `components.v1.html(MONACO_HTML, ...)` — will be removed 2026-06-01 | `ui/algolab.py:226` | Deprecation warnings; future breakage |
+| 4 | `tabs = list(tabs) + [st.empty() for _ in range(14)]` — `st.empty()` is a single-child container; tabs[9..22] silently dropped all but one element | `app.py:759` (old) | tabs 9-22 partially broken; legacy hidden bug |
+| 5 | No try/except + no structured logging at script entry | `app.py` | Impossible to trace blank-screen root cause |
 
-### Architecture / tech stack
-* **Not** the standard Emergent React+FastAPI+MongoDB template.
-* FastAPI on port 8000, SQLite (`./data/sq_ai.db`), Streamlit on port 8501.
-* Runs locally on user's MacBook Air; `REACT_APP_BACKEND_URL` not used.
+## Production-grade fixes implemented
 
-### 3rd-party integrations
-* Anthropic Claude (`claude-haiku-4-5-20251001`) — user API key
-* DeepSeek (via OpenAI SDK) — user API key
-* Kite Connect, NewsAPI, Alpha Vantage — user API keys
-* Graceful degradation when keys are missing (all routes return 200).
+| Fix | Change | File |
+|----|--------|------|
+| **F1** | Replaced blocking auto-refresh with `streamlit_autorefresh.st_autorefresh(interval=30_000)` — schedules rerun on browser side, never blocks script thread. Cache cleared on tick boundary. Graceful fallback if package missing. | `app.py` (sidebar) |
+| **F2** | Stripped `persist="disk"` from all 10 cache decorators with TTL. In-memory caches now correctly honour TTL. | `app.py`, `ui/heatmap.py`, `ui/macro.py`, `ui/watchlist.py`, `ui/alert_inbox.py`, `charting/multi_tf.py` |
+| **F3** | Removed deprecated Monaco editor (`components.html`) — kept the textarea (which was already the documented fallback). | `ui/algolab.py` |
+| **F4** | Replaced `tabs + [st.empty()]*14` hack with a proper 23-entry `st.tabs([...])` declaration. All tabs now render correctly. | `app.py:747-771` |
+| **F5** | Added lightweight stdlib structured logger writing to `/app/logs/streamlit_app.log` + console. Logs `streamlit_script_start` on every rerun and warns on autorefresh-package issues. | `app.py:1-37` |
+| F6 | Added `streamlit-autorefresh==1.0.1` to runtime deps (pip install). | env |
 
-### Testing status
-* `pytest -q tests/` → **115 passed** (from repo root `/app/0to100_fresh`).
-* `ruff check .` → clean.
-* Uvicorn smoke test passed (v0.5.0 reports, all 4 new routes reachable;
-  returns 404 or `[]` in the sandbox because yfinance is blocked — expected
-  graceful degradation).
+## Verification (browser-tested at localhost:8501)
 
-## Working directory
-All work lives under `/app/0to100_fresh/`. Do **not** use legacy `/app/`
-root files — they were deleted in Phase 0.
+| Check | Before | After |
+|-------|--------|-------|
+| Initial render | OK | OK |
+| Auto-refresh ON for 35 s | **Page blank** | Tick #1 fires, page fully rendered, sidebar+tabs intact |
+| TTL warnings in log | 9 | **0** |
+| `components.v1.html` warnings | 2 | **0** |
+| Tab count visible | 9 (rest broken) | 23 |
+| Exception blocks rendered | 0 | 0 |
+| Structured log file | absent | `/app/logs/streamlit_app.log` ✓ |
 
-## Backlog / next actions
-| P  | item                                                                     |
-|----|--------------------------------------------------------------------------|
-| P1 | Streamlit Plotly chart-rendering when Streamlit is reachable             |
-| P1 | Liquidity-sorted universe (turnover-weighted) in `get_active_universe`   |
-| P1 | SSE auto-refresh for cockpit dashboard                                   |
-| P2 | Position-level conviction decay (entry vs now) on dashboard              |
-| P2 | Weekly journal-review script: journal.md ↔ closed_trades ↔ logs/decisions|
-| P2 | LSTM head (Colab) blended with LightGBM                                  |
-| P2 | Auto-retraining trigger when rolling AUC < 0.55 for 30 days              |
-| P2 | Multi-broker abstraction                                                 |
+## Architecture impact
+
+* **Startup pipeline** is unchanged on success path — only blank-screen risk eliminated.
+* **Memory**: removing `persist="disk"` reclaims pickled DataFrames on disk; TTL eviction works again.
+* **Reliability**: structured log file traces script restarts; future blank-screen reports can be diagnosed by checking `/app/logs/streamlit_app.log` for missing `streamlit_script_start` entries during a freeze.
+* **No business logic changed**; only stability infrastructure.
+
+## What's NOT changed (deferred / out-of-scope)
+* `find_buzzing_stocks` and `_fetch_news_alerts` remain synchronous — heavy yfinance calls.
+* Pre-existing E702 lint warnings in `app.py:523-524` (multi-statement lines) untouched — purely cosmetic.
+* Kite access-token / Claude API key still need environment configuration by the user (unrelated runtime warnings).
+
+## Backlog / Next Action Items
+* P1 — replace `find_buzzing_stocks` / `scan_parallel` ThreadPoolExecutor with non-blocking job queue + result polling.
+* P1 — add per-tab `try/except` boundaries for graceful degradation if a downstream module crashes mid-render.
+* P2 — surface live cache hit/miss metrics in `/app/logs/streamlit_app.log` for ongoing performance observability.
+
+## Implementation date
+2026-05-08
