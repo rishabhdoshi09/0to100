@@ -273,7 +273,19 @@ def render_algolab(fetcher=None):
                 if result["trades"]:
                     st.dataframe(pd.DataFrame(result["trades"]), width="stretch")
 
-    # ── Live Runner ──────────────────────────────────────────────────────────
+    # ── Bulk Backtest (multi-symbol simulator) ───────────────────────────────
+    st.divider()
+    with st.expander("🔁 Bulk Backtest — run strategy across many stocks", expanded=False):
+        from ui.bulk_simulator import render_bulk_backtest
+        render_bulk_backtest()
+
+    # ── Live Runner (single symbol) ──────────────────────────────────────────
     st.divider()
     from ui.live_runner import render_live_runner
     render_live_runner(default_symbol=st.session_state.get("algolab_sym", "RELIANCE"))
+
+    # ── Bulk Live Scan (multi-symbol latest signals) ─────────────────────────
+    st.divider()
+    with st.expander("📊 Bulk Live Scan — daily glance across many stocks", expanded=False):
+        from ui.bulk_simulator import render_bulk_live_signals
+        render_bulk_live_signals()
