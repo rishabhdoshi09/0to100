@@ -89,8 +89,123 @@ def cmd_live(args) -> None:
     engine.run()
 
 
+def cmd_backtest_strategy(args) -> None:
+    """
+    Backtest mode triggered by `main.py backtest --strategy NAME`.
+
+    Loads `generate_signals` from the AlgoLab DB, fetches OHLCV via
+    HistoricalDataFetcher (Kite when available, yfinance fallback), and
+    runs the same vectorised simulation that AlgoLab UI uses.
+    """
+    from utils.strategy_loader import load_strategy_from_db, simulate_strategy
+
+    # 1. Load the strategy callable
+    try:
+        generate_signals = load_strategy_from_db(args.strategy)
+    except Exception as exc:
+        print(f"\n❌ Failed to load strategy '{args.strategy}': {exc}")
+        sys.exit(1)
+    print(f"\n✅ Loaded strategy '{args.strategy}' from algolab_strategies.db")
+
+    # 2. Resolve symbol universe
+    if args.symbols:
+        symbols = [s.strip().upper() for s in args.symbols.split(",") if s.strip()]
+    else:
+        symbols = list(settings.symbol_list)
+    if not symbols:
+        print("❌ No symbols to backtest. Pass --symbols RELIANCE,TCS or set SYMBOL_LIST in .env")
+        sys.exit(1)
+
+    capital = float(args.capital) if args.capital else float(settings.backtest_initial_capital)
+    from_date, to_date = args.from_date, args.to_date
+
+    print("=== AlgoLab Strategy Backtest ===")
+    print(f"Strategy : {args.strategy}")
+    print(f"Period   : {from_date} → {to_date}")
+    print(f"Symbols  : {', '.join(symbols)}")
+    print(f"Capital  : ₹{capital:,.0f} per symbol\n")
+
+    # 3. Fetch OHLCV — Kite if creds present, else yfinance fallback
+    use_kite = bool(getattr(settings, "kite_access_token", None) and settings.kite_access_token)
+    if use_kite:
+        from data.kite_client import KiteClient
+        from data.instruments import InstrumentManager
+        from data.historical import HistoricalDataFetcher
+        kite = KiteClient()
+        instruments = InstrumentManager()
+        historical = HistoricalDataFetcher(kite, instruments)
+
+        def fetch(sym):
+            return historical.fetch(symbol=sym, from_date=from_date,
+                                    to_date=to_date, interval="day")
+    else:
+        try:
+            import yfinance as yf
+        except ImportError:
+            print("❌ yfinance not installed and Kite token missing. "
+                  "Install yfinance or set KITE_ACCESS_TOKEN.")
+            sys.exit(1)
+        print("(Kite token not set — using yfinance fallback)\n")
+        def fetch(sym):
+            t = sym if sym.endswith(".NS") else sym + ".NS"
+            raw = yf.download(t, start=from_date, end=to_date, interval="1d",
+                              progress=False, auto_adjust=True)
+            if raw.empty:
+                return raw
+            if isinstance(raw.columns, pd.MultiIndex):
+                raw.columns = [c[0].lower() for c in raw.columns]
+            else:
+                raw.columns = [c.lower() for c in raw.columns]
+            return raw.dropna()
+
+    # 4. Run simulation per symbol
+    rows: list[dict] = []
+    for sym in symbols:
+        df = fetch(sym)
+        if df is None or df.empty:
+            print(f"  {sym:12s}: no data — skipped")
+            rows.append({"Symbol": sym, "Status": "no_data"})
+            continue
+        result = simulate_strategy(generate_signals, df, capital=capital)
+        if "error" in result:
+            print(f"  {sym:12s}: error — {result['error']}")
+            rows.append({"Symbol": sym, "Status": result["error"]})
+            continue
+        print(f"  {sym:12s}: bars={len(df):4d}  return={result['total_return']:+7.2f}%  "
+              f"sharpe={result['sharpe']:5.2f}  max_dd={result['max_dd']:6.2f}%  "
+              f"trades={result['n_trades']:3d}  win_rate={result['win_rate']:5.1f}%")
+        rows.append({
+            "Symbol": sym,
+            "Return %": round(result["total_return"], 2),
+            "Sharpe":   result["sharpe"],
+            "Max DD %": result["max_dd"],
+            "Win %":    result["win_rate"],
+            "Trades":   result["n_trades"],
+        })
+
+    # 5. Aggregate summary
+    ok_rows = [r for r in rows if "Return %" in r]
+    if ok_rows:
+        df_summary = pd.DataFrame(ok_rows).sort_values("Sharpe", ascending=False)
+        print("\n=== Ranked summary (by Sharpe) ===")
+        print(df_summary.to_string(index=False))
+        avg_ret    = df_summary["Return %"].mean()
+        avg_sharpe = df_summary["Sharpe"].mean()
+        print(f"\nMean across {len(df_summary)} symbols: "
+              f"return {avg_ret:+.2f}%  ·  sharpe {avg_sharpe:.2f}")
+    else:
+        print("\n❌ No symbol produced a successful backtest.")
+        sys.exit(1)
+
+
 def cmd_backtest(args) -> None:
     """Run backtest on historical Kite data."""
+    # ── --strategy mode: bypass the ML+LLM Backtester and run the
+    # AlgoLab-style vectorised simulation against a user-saved strategy. ──
+    if args.strategy:
+        cmd_backtest_strategy(args)
+        return
+
     _assert_credentials()
 
     from_date: str = args.from_date
@@ -761,6 +876,24 @@ def build_parser() -> argparse.ArgumentParser:
         "--no-llm",
         action="store_true",
         help="Use pure technical strategy (no DeepSeek calls — fast, free)",
+    )
+    bt.add_argument(
+        "--strategy",
+        type=str, default=None, metavar="NAME",
+        help="Run an AlgoLab strategy from algolab_strategies.db "
+             "(bypasses ML+LLM signals; uses generate_signals from the saved code).",
+    )
+    bt.add_argument(
+        "--symbols",
+        type=str, default=None, metavar="SYM1,SYM2,...",
+        help="Comma-separated NSE symbols to backtest (used only with --strategy). "
+             "Defaults to settings.symbol_list.",
+    )
+    bt.add_argument(
+        "--capital",
+        type=float, default=None, metavar="AMOUNT",
+        help="Per-symbol capital for --strategy mode "
+             "(default: settings.backtest_initial_capital).",
     )
 
     wf = sub.add_parser("walkforward", help="Run walk-forward parameter validation")
