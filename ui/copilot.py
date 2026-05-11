@@ -22,6 +22,7 @@ from datetime import datetime
 import streamlit as st
 
 from ai.dual_llm_service import get_service
+from ai.mem0_store import get_memory
 
 _COPILOT_INTRO = """You are Dev, the AI co-pilot in DevBloom Terminal — a professional trading cockpit for NSE equities.
 
@@ -142,7 +143,19 @@ def render_copilot_inline(context: dict | None = None):
     """Full inline Co-Pilot tab — dual-LLM streaming chat, shares history with sidebar."""
     ctx = context or {}
     svc = get_service()
+    mem = get_memory()
     history = svc.get_history()
+
+    # ── Memory context strip ──────────────────────────────────────────────────
+    recent_mems = mem.get_recent(5)
+    if recent_mems:
+        with st.expander(f"🧠 Memory context active ({mem.count()} stored)", expanded=False):
+            for m in recent_mems:
+                st.markdown(
+                    f"<div style='font-size:.8rem;color:#8892a4;padding:.15rem 0'>"
+                    f"<span style='color:#00d4ff'>[{m['category']}]</span> {m['content']}</div>",
+                    unsafe_allow_html=True,
+                )
 
     st.markdown("### ⚡ Dev — AI Co-Pilot")
     st.caption(
@@ -185,7 +198,19 @@ def render_copilot_inline(context: dict | None = None):
     send = col2.button("Send", key="copilot_inline_send", width="stretch")
 
     if send and user_input.strip():
-        svc.append_user(user_input.strip())
+        raw_input = user_input.strip()
+
+        # ── Prepend relevant memories to the query ────────────────────────────
+        relevant_mems = mem.search(raw_input, limit=3)
+        if relevant_mems:
+            mem_lines = "\n".join(f"- {m['content']}" for m in relevant_mems)
+            enriched_input = (
+                f"[My remembered context for this query:\n{mem_lines}]\n\n{raw_input}"
+            )
+        else:
+            enriched_input = raw_input
+
+        svc.append_user(raw_input)  # store clean version in history
 
         # Two-phase streaming display:
         # Phase 1 (DeepSeek drafting) — muted italic ghost text
@@ -198,7 +223,7 @@ def render_copilot_inline(context: dict | None = None):
         full, dm, detail = "", "claude_validated", ""
         claude_started = False
 
-        for chunk, dm, detail in svc.stream(user_input.strip(), ctx):
+        for chunk, dm, detail in svc.stream(enriched_input, ctx):
             full += chunk
             if not claude_started and ("[VALIDATED]" in full or "[OVERRIDE]" in full):
                 claude_started = True
@@ -218,7 +243,29 @@ def render_copilot_inline(context: dict | None = None):
             unsafe_allow_html=True,
         )
         svc.append_assistant(full, dm, detail)
+
+        # ── Auto-save exchange to persistent memory if substantive ────────────
+        if len(full) > 200:
+            try:
+                mem.add(
+                    f"Q: {raw_input[:120]} | A: {full[:300]}",
+                    category="exchange",
+                    metadata={"decision_maker": dm},
+                )
+            except Exception:
+                pass
+
         st.rerun()
+
+    # ── "Remember this" button ────────────────────────────────────────────────
+    if history and history[-1]["role"] == "assistant":
+        last_content = history[-1]["content"]
+        rcol1, rcol2 = st.columns([1, 5])
+        with rcol1:
+            if st.button("💾 Remember", key="copilot_remember_last", help="Save last insight to persistent memory"):
+                mem.add(last_content[:500], category="insight", metadata={"ts": history[-1].get("ts", "")})
+                st.success("Saved to memory vault!")
+                st.rerun()
 
     if st.button("🗑 Clear chat", key="copilot_inline_clear"):
         svc.clear_history()

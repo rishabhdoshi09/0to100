@@ -110,6 +110,19 @@ class XGBoostSignalGenerator:
         if features is None or features.empty:
             return self._hold_signal(symbol, 0.5, "feature_build_failed")
 
+        # ── Inject live news sentiment into the inference row ─────────────────
+        news_sentiment = 0.0
+        try:
+            from news.semantic_index import SemanticNewsIndex
+            from news.vader_scorer import batch_score
+            articles = SemanticNewsIndex().search(symbol, top_k=5)
+            if articles:
+                scored = batch_score(articles)
+                news_sentiment = sum(a.get("vader_score", 0.0) for a in scored) / len(scored)
+                features.iloc[-1, features.columns.get_loc("news_sentiment_5d")] = news_sentiment
+        except Exception:
+            pass
+
         # Use the last row (most recent bar) for prediction
         last_row = features.iloc[[-1]][_FEATURE_COLS].copy()
         last_row = last_row.fillna(0.0)
@@ -131,10 +144,22 @@ class XGBoostSignalGenerator:
         else:
             action = "HOLD"
 
+        # ── News sentiment alignment — nudge confidence ±3% max ──────────────
+        if news_sentiment != 0.0:
+            aligned = (action == "BUY" and news_sentiment > 0.05) or \
+                      (action == "SELL" and news_sentiment < -0.05)
+            opposed = (action == "BUY" and news_sentiment < -0.05) or \
+                      (action == "SELL" and news_sentiment > 0.05)
+            if aligned:
+                confidence = min(confidence * 1.03, 0.99)
+            elif opposed:
+                confidence = max(confidence * 0.97, 0.01)
+
         reasoning = (
             f"xgb: sell_p={proba[_CLS_SELL]:.3f}, "
             f"hold_p={proba[_CLS_HOLD]:.3f}, "
-            f"buy_p={proba[_CLS_BUY]:.3f}"
+            f"buy_p={proba[_CLS_BUY]:.3f}, "
+            f"news_vader={news_sentiment:+.3f}"
         )
 
         log.info(
@@ -294,6 +319,11 @@ class XGBoostSignalGenerator:
         feat_df["return_2d"] = ret_2d.values
         feat_df["return_3d"] = ret_3d.values
         feat_df["return_5d"] = ret_5d.values
+
+        # ── News sentiment (18th feature — inference-time only) ───────────────
+        # Default 0.0 for all historical rows (VADER uses live retrieval).
+        # generate_signal() overwrites the last row before prediction.
+        feat_df["news_sentiment_5d"] = 0.0
 
         return feat_df
 

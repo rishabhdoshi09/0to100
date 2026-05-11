@@ -42,3 +42,6 @@ streamlit>=1.32.0
 streamlit-autorefresh>=1.0.1
 tqdm>=4.66.0
 langgraph>=0.2.0           # Multi-agent orchestration (agents/ package)
+qdrant-client>=1.9.0       # Local vector DB for semantic news index (Feature 1)
+vaderSentiment>=3.3.2      # Rule-based financial news pre-scoring (Feature 1)
+youtube-transcript-api>=0.6.0  # Earnings call transcript fetcher (Feature 3)

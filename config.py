@@ -28,6 +28,9 @@ class Settings(BaseSettings):
     # ── Anthropic (Claude) ────────────────────────────────────────────────────
     anthropic_api_key: str = Field(default="")
 
+    # ── OpenAI (embeddings for semantic news index) ───────────────────────────
+    openai_api_key: str = Field(default="")
+
     # ── DeepSeek ──────────────────────────────────────────────────────────────
     deepseek_api_key: str = Field(default="")
     deepseek_base_url: str = Field(default="https://api.deepseek.com")
