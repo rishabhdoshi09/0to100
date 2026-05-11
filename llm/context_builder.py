@@ -26,6 +26,8 @@ class ContextBuilder:
         news_block: str,
         portfolio_state: Dict[str, Any],
         risk_limits: Dict[str, Any],
+        vader_sentiment: float | None = None,
+        memory_context: str = "",
     ) -> str:
         """
         Assemble the full context string to send to the LLM.
@@ -39,6 +41,15 @@ class ContextBuilder:
         portfolio_json = json.dumps(self._clean(portfolio_state), indent=2)
         risk_json = json.dumps(self._clean(risk_limits), indent=2)
 
+        vader_block = ""
+        if vader_sentiment is not None:
+            label = "BULLISH" if vader_sentiment > 0.05 else ("BEARISH" if vader_sentiment < -0.05 else "NEUTRAL")
+            vader_block = f"\n--- VADER SENTIMENT SCORE ---\nComposite: {vader_sentiment:+.3f} ({label})\n"
+
+        memory_block = ""
+        if memory_context:
+            memory_block = f"\n--- TRADER MEMORY CONTEXT ---\n{memory_context}\n"
+
         prompt = f"""=== SIMPLEQUANT AI — DECISION REQUEST ===
 Timestamp: {now}
 Symbol to evaluate: {symbol}
@@ -50,8 +61,7 @@ Symbol to evaluate: {symbol}
 {indicator_json}
 
 --- NEWS CONTEXT (use as context only, not ground truth) ---
-{news_block}
-
+{news_block}{vader_block}{memory_block}
 --- CURRENT PORTFOLIO STATE ---
 {portfolio_json}
 

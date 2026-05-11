@@ -81,6 +81,9 @@ class Settings(BaseSettings):
     lgbm_train_days: int = Field(default=252)
     lgbm_retrain_days: int = Field(default=21)
 
+    # ── Agent Supervisor ─────────────────────────────────────────────────────
+    enable_agent_supervisor: bool = Field(default=False)
+
     # ── F&O ───────────────────────────────────────────────────────────────────
     enable_fno: bool = Field(default=False)
     fno_default_product: str = Field(default="NRML")

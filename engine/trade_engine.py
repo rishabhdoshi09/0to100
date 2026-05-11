@@ -44,6 +44,31 @@ from logger import get_logger
 
 log = get_logger(__name__)
 
+# Optional feature imports — degrade silently if unavailable
+try:
+    from news.semantic_index import SemanticNewsIndex
+    _semantic_available = True
+except Exception:
+    _semantic_available = False
+
+try:
+    from news.vader_scorer import batch_score as _vader_batch_score
+    _vader_available = True
+except Exception:
+    _vader_available = False
+
+try:
+    from ai.mem0_store import get_memory as _get_memory
+    _memory_available = True
+except Exception:
+    _memory_available = False
+
+try:
+    from agents.supervisor import AgentSupervisor
+    _supervisor_available = True
+except Exception:
+    _supervisor_available = False
+
 _HISTORY_BARS = 250          # candles per symbol for indicator computation
 _HISTORY_INTERVAL = "day"
 
@@ -75,6 +100,31 @@ class TradeEngine:
 
         self._running = False
         self._cycle_count = 0
+
+        # ── Optional AI features (graceful degradation) ───────────────────
+        self._semantic_idx = None
+        if _semantic_available:
+            try:
+                self._semantic_idx = SemanticNewsIndex()
+                log.info("semantic_news_index_ready")
+            except Exception as exc:
+                log.warning("semantic_news_index_unavailable", error=str(exc))
+
+        self._memory = None
+        if _memory_available:
+            try:
+                self._memory = _get_memory()
+                log.info("persistent_memory_ready")
+            except Exception as exc:
+                log.warning("persistent_memory_unavailable", error=str(exc))
+
+        self._agent_supervisor = None
+        if _supervisor_available and settings.enable_agent_supervisor:
+            try:
+                self._agent_supervisor = AgentSupervisor()
+                log.info("agent_supervisor_ready")
+            except Exception as exc:
+                log.warning("agent_supervisor_unavailable", error=str(exc))
 
         # Handle SIGINT/SIGTERM gracefully
         signal_module.signal(signal_module.SIGINT, self._shutdown_handler)
@@ -129,6 +179,31 @@ class TradeEngine:
         raw_news = self._news_fetcher.fetch_all()
         norm_news = self._news_normalizer.normalize(raw_news)
 
+        # ── Step 2a: Semantic index + VADER scoring ───────────────────────
+        vader_score_map: Dict[str, float] = {}
+        if self._semantic_idx is not None:
+            try:
+                self._semantic_idx.index(raw_news)
+            except Exception as exc:
+                log.warning("semantic_index_failed", error=str(exc))
+
+        if _vader_available and raw_news:
+            try:
+                scored = _vader_batch_score(
+                    [{"headline": a.title, "summary": getattr(a, "summary", "")} for a in raw_news]
+                )
+                for symbol in settings.symbol_list:
+                    sym_lower = symbol.lower()
+                    relevant = [
+                        s["vader_score"] for s in scored
+                        if sym_lower in s.get("headline", "").lower()
+                        or sym_lower in s.get("summary", "").lower()
+                    ]
+                    if relevant:
+                        vader_score_map[symbol] = round(sum(relevant) / len(relevant), 4)
+            except Exception as exc:
+                log.warning("vader_scoring_failed", error=str(exc))
+
         # ── Step 3: Per-symbol decision loop ─────────────────────────────
         cycle_decisions: List[Dict[str, Any]] = []
 
@@ -137,7 +212,7 @@ class TradeEngine:
                 log.critical("kill_switch_active_skipping_remaining_symbols")
                 break
 
-            decision = self._process_symbol(symbol, ltp, norm_news)
+            decision = self._process_symbol(symbol, ltp, norm_news, vader_score_map)
             if decision:
                 cycle_decisions.append(decision)
 
@@ -161,6 +236,7 @@ class TradeEngine:
         symbol: str,
         ltp: Dict[str, float],
         norm_news,
+        vader_score_map: Dict[str, float] | None = None,
     ) -> Optional[Dict[str, Any]]:
         last_price = ltp.get(symbol)
         if last_price is None or last_price <= 0:
@@ -194,8 +270,26 @@ class TradeEngine:
             "oi": quote.get("oi"),
         }
 
-        # ── News context ──────────────────────────────────────────────────
-        news_block = self._news_summarizer.build_context_block(symbol, norm_news)
+        # ── News context (semantic search preferred, keyword fallback) ────
+        vader_avg: float | None = (vader_score_map or {}).get(symbol)
+        if self._semantic_idx is not None:
+            try:
+                sem_articles = self._semantic_idx.search(symbol, top_k=8)
+                news_block = self._build_semantic_news_block(symbol, sem_articles, vader_avg)
+            except Exception:
+                news_block = self._news_summarizer.build_context_block(symbol, norm_news)
+        else:
+            news_block = self._news_summarizer.build_context_block(symbol, norm_news)
+
+        # ── Persistent memory context ─────────────────────────────────────
+        memory_context = ""
+        if self._memory is not None:
+            try:
+                mems = self._memory.search(symbol, limit=3)
+                if mems:
+                    memory_context = "\n".join(f"- {m['content']}" for m in mems)
+            except Exception:
+                pass
 
         # ── LLM context ───────────────────────────────────────────────────
         portfolio_state = self._portfolio.get_state_dict()
@@ -208,10 +302,42 @@ class TradeEngine:
             news_block=news_block,
             portfolio_state=portfolio_state,
             risk_limits=risk_limits,
+            vader_sentiment=vader_avg,
+            memory_context=memory_context,
         )
 
         # ── Dual-LLM call (DeepSeek → Claude) ────────────────────────────
         signal = self._llm.get_signal(context_prompt, symbol)
+
+        # ── AgentSupervisor cross-validation ─────────────────────────────
+        if self._agent_supervisor is not None and signal.action in ("BUY", "SELL"):
+            try:
+                sv_result = self._agent_supervisor.evaluate_stock(symbol)
+                sv_action = str(sv_result.get("action", "HOLD")).upper()
+                risk_override = sv_result.get("risk_override", False)
+
+                if risk_override:
+                    signal.confidence *= 0.4
+                    signal.reasoning = (
+                        f"[AgentSupervisor RISK_OVERRIDE] {signal.reasoning}"
+                    )
+                    log.warning("supervisor_risk_override", symbol=symbol)
+                elif sv_action == signal.action:
+                    signal.confidence = min(signal.confidence * 1.05, 1.0)
+                    log.info("supervisor_agreement", symbol=symbol, action=sv_action)
+                else:
+                    signal.confidence *= 0.65
+                    signal.reasoning = (
+                        f"[AgentSupervisor CONTRADICTION: {sv_action}] {signal.reasoning}"
+                    )
+                    log.info(
+                        "supervisor_contradiction",
+                        symbol=symbol,
+                        llm_action=signal.action,
+                        sv_action=sv_action,
+                    )
+            except Exception as exc:
+                log.warning("supervisor_failed", symbol=symbol, error=str(exc))
 
         # ── Risk check ────────────────────────────────────────────────────
         open_positions = self._portfolio.get_open_positions()
@@ -261,10 +387,29 @@ class TradeEngine:
                     self._risk.record_pnl(realized_pnl)
                     decision_record["realized_pnl"] = round(realized_pnl, 2)
 
+        decision_record["vader_sentiment"] = vader_avg
         log.info("symbol_cycle_done", **decision_record)
         return decision_record
 
     # ── Helpers ────────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _build_semantic_news_block(
+        symbol: str,
+        articles: List[Dict[str, Any]],
+        vader_avg: float | None,
+    ) -> str:
+        if not articles:
+            return f"No recent news found for {symbol}."
+        lines = [f"Semantic news for {symbol} (top {len(articles)} relevant articles):"]
+        for a in articles:
+            score = a.get("vader_score")
+            score_str = f" [VADER: {score:+.2f}]" if score is not None else ""
+            lines.append(f"• {a.get('title', a.get('headline', 'N/A'))}{score_str}")
+        if vader_avg is not None:
+            label = "BULLISH" if vader_avg > 0.05 else ("BEARISH" if vader_avg < -0.05 else "NEUTRAL")
+            lines.append(f"\nAggregate news sentiment: {vader_avg:+.3f} ({label})")
+        return "\n".join(lines)
 
     def _safe_fetch_ltp(self, symbols: List[str]) -> Dict[str, float]:
         try:
