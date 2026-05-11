@@ -14,6 +14,7 @@ import numpy as np
 import pandas as pd
 
 from logger import get_logger
+from features.numta_wrapper import add_numta_indicators, numta_available
 
 log = get_logger(__name__)
 
@@ -21,7 +22,7 @@ log = get_logger(__name__)
 class IndicatorEngine:
     """Compute a rich set of indicators from an OHLCV DataFrame."""
 
-    def compute(self, df: pd.DataFrame, symbol: str = "") -> Dict[str, Any]:
+    def compute(self, df: pd.DataFrame, symbol: str = "", use_numta: bool = True) -> Dict[str, Any]:
         """
         Compute all indicators.
 
@@ -53,6 +54,9 @@ class IndicatorEngine:
         result.update(self._atr(high, low, close))
         result.update(self._volume_analysis(close, volume))
         result.update(self._trend(close))
+
+        if use_numta and numta_available():
+            result.update(add_numta_indicators(df))
 
         return result
 
