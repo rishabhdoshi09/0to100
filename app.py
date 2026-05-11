@@ -72,6 +72,7 @@ from charting.multi_tf import render_multi_tf_grid
 from ui.agent_dashboard import render_agent_dashboard
 from ui.memory_vault import render_memory_vault
 from ui.earnings_page import render_earnings_page
+from ui.news_feed import render_news_feed
 
 # ── Page config ───────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -826,13 +827,15 @@ with _top_tabs[5]:
     ])
 
 with _top_tabs[6]:
-    _agent_sub = st.tabs(["🤖 Multi-Agent", "🧠 Memory Vault", "🎙️ Earnings"])
+    _agent_sub = st.tabs(["🤖 Multi-Agent", "🧠 Memory Vault", "🎙️ Earnings", "📰 News Feed"])
     with _agent_sub[0]:
         render_agent_dashboard()
     with _agent_sub[1]:
         render_memory_vault()
     with _agent_sub[2]:
         render_earnings_page()
+    with _agent_sub[3]:
+        render_news_feed()
 
 # Backwards-compatible mapping: existing `with tabs[N]:` calls in the
 # rest of the script keep working because each index points to the

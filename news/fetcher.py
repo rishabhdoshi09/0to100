@@ -58,7 +58,7 @@ class NewsFetcher:
         self._seen_ids: set[str] = set()   # dedup across cycles
 
     def fetch_all(self, max_age_hours: int = _MAX_AGE_HOURS) -> List[RawArticle]:
-        """Pull news from all configured RSS feeds. Returns deduplicated list."""
+        """Pull news from RSS feeds + Marketaux (if key is set). Returns deduplicated list."""
         articles: List[RawArticle] = []
         for url in settings.rss_feed_list:
             try:
@@ -66,6 +66,19 @@ class NewsFetcher:
                 articles.extend(new)
             except Exception as exc:
                 log.warning("rss_fetch_failed", url=url, error=str(exc))
+
+        # Marketaux enrichment — one API call for the full universe
+        try:
+            from news.marketaux_news import get_marketaux_client
+            mx = get_marketaux_client()
+            if mx is not None:
+                mx_articles = mx.fetch_as_raw_articles(
+                    symbols=settings.symbol_list, limit=10, days_back=2
+                )
+                articles.extend(mx_articles)
+                log.info("marketaux_articles_merged", count=len(mx_articles))
+        except Exception as exc:
+            log.warning("marketaux_fetch_failed", error=str(exc))
 
         # Deduplicate
         fresh: List[RawArticle] = []
