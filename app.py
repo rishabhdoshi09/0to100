@@ -69,6 +69,7 @@ from ui.algolab import render_algolab
 from ui.journal import render_journal, log_trade_to_journal
 from ui.anomaly_scanner import render_anomaly_scanner
 from charting.multi_tf import render_multi_tf_grid
+from ui.agent_dashboard import render_agent_dashboard
 
 # ── Page config ───────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -784,6 +785,7 @@ _top_tabs = st.tabs([
     "🧬 AlgoLab",
     "⚙️ Execute",
     "🔬 Tools",
+    "🤖 Agents",
 ])
 
 # Sub-tabs declared INSIDE each top-level tab so they render in the right place.
@@ -820,6 +822,9 @@ with _top_tabs[5]:
         "🌅 Pre-Market",      # legacy 10
         "🌍 Global",          # legacy 9
     ])
+
+with _top_tabs[6]:
+    render_agent_dashboard()
 
 # Backwards-compatible mapping: existing `with tabs[N]:` calls in the
 # rest of the script keep working because each index points to the

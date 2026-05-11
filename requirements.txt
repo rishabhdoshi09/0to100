@@ -41,3 +41,4 @@ structlog>=24.1.0
 streamlit>=1.32.0
 streamlit-autorefresh>=1.0.1
 tqdm>=4.66.0
+langgraph>=0.2.0           # Multi-agent orchestration (agents/ package)
