@@ -21,6 +21,65 @@ from logger import get_logger
 
 log = get_logger(__name__)
 
+
+# ── DeepSeekDual: V3 (fast) + R1 (chain-of-thought) in one class ─────────────
+# Consolidated from ai/deepseek_dual.py — canonical location for all DeepSeek calls.
+
+class DeepSeekDual:
+    """Thin dual-model wrapper: V3 for speed, R1 for deep reasoning."""
+
+    def __init__(self, api_key: str | None = None) -> None:
+        import os
+        self._client = OpenAI(
+            api_key=api_key or settings.deepseek_api_key,
+            base_url=settings.deepseek_base_url,
+        )
+        self.model_fast = "deepseek-chat"        # V3
+        self.model_reason = "deepseek-reasoner"  # R1
+
+    def chat(
+        self,
+        messages: list[dict],
+        temperature: float = 0.7,
+        reasoning: bool = False,
+    ) -> str:
+        model = self.model_reason if reasoning else self.model_fast
+        kwargs: dict = {
+            "model": model,
+            "messages": messages,
+            "max_tokens": 8000 if reasoning else 2048,
+        }
+        if not reasoning:
+            kwargs["temperature"] = temperature
+        resp = self._client.chat.completions.create(**kwargs)
+        return resp.choices[0].message.content or ""
+
+    def structured_response(
+        self,
+        prompt: str,
+        system: str | None = None,
+        reasoning: bool = False,
+    ) -> dict:
+        messages: list[dict] = []
+        if system:
+            messages.append({"role": "system", "content": system})
+        messages.append({"role": "user", "content": prompt})
+        resp = self.chat(messages, reasoning=reasoning)
+        if "```" in resp:
+            resp = re.sub(r"```(?:json)?", "", resp).strip().rstrip("`").strip()
+        try:
+            return json.loads(resp)
+        except json.JSONDecodeError:
+            pass
+        start, end = resp.find("{"), resp.rfind("}") + 1
+        if start != -1 and end > start:
+            try:
+                return json.loads(resp[start:end])
+            except json.JSONDecodeError:
+                pass
+        return {"raw": resp}
+
+
 _SYSTEM_PROMPT = """You are a quantitative trading signal generator for Indian equities (NSE).
 
 Your role:

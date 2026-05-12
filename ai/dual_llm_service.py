@@ -1,17 +1,13 @@
 """
-DualLLMService — single access point for all dual-LLM interactions in DevBloom.
+DualLLMService — single access point for all DeepSeek interactions in DevBloom.
 
-Every AI surface (Co-Pilot, sidebar, Charts, Decision Terminal, bias detector,
-order confirmation) routes through this class. It wraps both:
+Every AI surface (Co-Pilot, Charts, Decision Terminal, order confirmation)
+routes through this class. It wraps:
 
-  · DualChatEngine  — free-form conversational queries (streaming + sync)
-  · DualLLMEngine   — structured trading signals (returns TradingSignal)
+  · DualChatEngine  — free-form chat (V3 streaming, optional R1 validation)
+  · DualLLMEngine   — structured trading signals (V3 fast pass, R1 validation)
 
-Benefits:
-  - One place to tune models, timeouts, fallback behaviour
-  - Badges and disagreement details generated consistently everywhere
-  - Chat history shared across UI surfaces via st.session_state["devbloom_chat"]
-  - Latency logging: every stage is timed; logs warn when a stage exceeds 10 s
+Pure DeepSeek — no Claude dependency.
 """
 from __future__ import annotations
 
@@ -98,62 +94,16 @@ class DualLLMService:
     ) -> Generator[tuple[str, str, str], None, None]:
         """
         Yields (text_chunk, decision_maker, detail) triples.
-        `detail` carries the DeepSeek draft for override tooltips — populated
-        once Claude has labelled its response [OVERRIDE].
+        Streams DeepSeek V3 tokens directly for instant UI feedback.
+        detail is always "" (no override tooltip needed in V3-only mode).
         """
         history = self.get_history()
         prior = [m for m in history if m["role"] in ("user", "assistant")]
 
-        from llm.dual_chat import _deepseek_chat, _claude_stream, _CLAUDE_REVIEW_SYSTEM
-        from llm.dual_chat import DualChatEngine as _Engine
-
-        enriched = _Engine._enrich(user_message, context or {})
-        ds_prompt = _Engine._build_ds_prompt(enriched, prior[:-1] if prior else [])
-
-        # ── Stage 1: DeepSeek (timed) ─────────────────────────────────────────
         t0 = time.perf_counter()
-        ds_draft = _deepseek_chat(ds_prompt) or ""
-        ds_elapsed = time.perf_counter() - t0
-        _log.info("deepseek_stage elapsed=%.2fs chars=%d", ds_elapsed, len(ds_draft))
-        if ds_elapsed > _LATENCY_WARN_S:
-            _log.warning("deepseek_slow elapsed=%.2fs", ds_elapsed)
-
-        has_claude = bool(os.getenv("ANTHROPIC_API_KEY", ""))
-
-        if not ds_draft and not has_claude:
-            yield ("⚠️ Both LLMs unavailable — check DEEPSEEK_API_KEY and ANTHROPIC_API_KEY in `.env`.", "offline", "")
-            return
-
-        if not ds_draft:
-            messages = _Engine._build_claude_messages(enriched, prior, ds_answer=None)
-            full = ""
-            t1 = time.perf_counter()
-            for chunk in _claude_stream(messages, _CLAUDE_REVIEW_SYSTEM.replace("Stage-1 analysis from DeepSeek", "question")):
-                full += chunk
-                yield (chunk, "claude_solo", "")
-            _log.info("claude_solo_stage elapsed=%.2fs", time.perf_counter() - t1)
-            return
-
-        if not has_claude:
-            yield (ds_draft, "deepseek", "")
-            return
-
-        # ── Stage 2: Claude (timed) ───────────────────────────────────────────
-        messages = _Engine._build_claude_messages(enriched, prior, ds_draft)
-        full = ""
-        dm = "claude_validated"
-        override_detail = ""
-        t2 = time.perf_counter()
-        for chunk in _claude_stream(messages, _CLAUDE_REVIEW_SYSTEM):
-            full += chunk
-            if "[OVERRIDE]" in full and not override_detail:
-                dm = "claude_override"
-                override_detail = ds_draft[:400]
-            yield (chunk, dm, override_detail)
-        cl_elapsed = time.perf_counter() - t2
-        _log.info("claude_stage dm=%s elapsed=%.2fs", dm, cl_elapsed)
-        if cl_elapsed > _LATENCY_WARN_S:
-            _log.warning("claude_slow elapsed=%.2fs", cl_elapsed)
+        for chunk, dm in self._chat.stream(user_message, prior, context):
+            yield (chunk, dm, "")
+        _log.info("stream_complete elapsed=%.2fs", time.perf_counter() - t0)
 
     # ── Sync chat ─────────────────────────────────────────────────────────────
 
@@ -162,17 +112,13 @@ class DualLLMService:
         prompt: str,
         context: dict | None = None,
         max_tokens: int = 700,
+        use_r1: bool = False,
     ) -> tuple[str, str, str]:
-        """Returns (text, decision_maker, detail)."""
+        """Returns (text, decision_maker, detail). detail always ""."""
         t0 = time.perf_counter()
-        text, dm = self._chat.ask(prompt, context, max_tokens)
+        text, dm = self._chat.ask(prompt, context, max_tokens, use_r1=use_r1)
         _log.info("dual_ask dm=%s elapsed=%.2fs", dm, time.perf_counter() - t0)
-        detail = ""
-        if dm == "claude_override":
-            from llm.dual_chat import _deepseek_chat
-            ds = _deepseek_chat(prompt, max_tokens=max_tokens // 2)
-            detail = (ds or "")[:400]
-        return text, dm, detail
+        return text, dm, ""
 
     # ── Structured signal ─────────────────────────────────────────────────────
 
@@ -196,11 +142,8 @@ class DualLLMService:
           showing what DeepSeek originally said.
         - If `ts` is set (HH:MM string), appends a timestamp after the label.
         """
-        label, color = _DECISION_MAKER_BADGE.get(decision_maker, ("?", "#8892a4"))
+        label, color = _DECISION_MAKER_BADGE.get(decision_maker, ("🔵 DeepSeek V3", "#8892a4"))
         title_attr = ""
-        if detail and decision_maker == "claude_override":
-            escaped = detail.replace('"', "&quot;").replace("'", "&#39;")
-            title_attr = f' title="DeepSeek said: {escaped}"'
         ts_html = (
             f"<span style='font-size:.55rem;color:{color}88;margin-left:.3rem;font-family:JetBrains Mono,monospace'>{ts}</span>"
             if ts else ""

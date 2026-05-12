@@ -17,7 +17,7 @@ from __future__ import annotations
 import re
 from typing import Any, Dict
 
-from ai.deepseek_dual import DeepSeekDual
+from llm.deepseek_client import DeepSeekDual
 
 _ANALYSIS_PROMPT = """You are a sell-side equity research analyst specialising in Indian listed companies.
 

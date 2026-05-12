@@ -16,7 +16,7 @@ import json
 from typing import Any, Dict
 
 from agents.prompts import SENTIMENT_AGENT_PROMPT
-from ai.deepseek_dual import DeepSeekDual
+from llm.deepseek_client import DeepSeekDual
 
 
 class SentimentAgent:

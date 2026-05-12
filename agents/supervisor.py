@@ -13,7 +13,7 @@ from agents.prompts import SUPERVISOR_PROMPT
 from agents.risk_agent import RiskAgent
 from agents.sentiment_agent import SentimentAgent
 from agents.technical_agent import TechnicalAgent
-from ai.deepseek_dual import DeepSeekDual
+from llm.deepseek_client import DeepSeekDual
 
 
 class AgentSupervisor:

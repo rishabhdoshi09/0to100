@@ -7,7 +7,7 @@ from typing import Any, Dict
 
 from agents.prompts import TECHNICAL_AGENT_PROMPT
 from agents.tools import get_technical_indicators
-from ai.deepseek_dual import DeepSeekDual
+from llm.deepseek_client import DeepSeekDual
 
 
 class TechnicalAgent:

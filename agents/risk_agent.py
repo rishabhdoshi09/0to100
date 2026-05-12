@@ -7,7 +7,7 @@ from typing import Any, Dict, Optional
 
 from agents.prompts import RISK_AGENT_PROMPT
 from agents.tools import get_portfolio_state, get_technical_indicators
-from ai.deepseek_dual import DeepSeekDual
+from llm.deepseek_client import DeepSeekDual
 
 
 class RiskAgent:
