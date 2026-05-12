@@ -21,8 +21,10 @@ class BSEScraper(BaseScraper):
         try:
             page = await ctx.new_page()
             self._setup_interceptor(page)
+
             await self._navigate_with_retry(page, settings.bse_base_url)
             await self._human_delay()
+
             data = {}
             for key, url_tpl in _ENDPOINTS.items():
                 try:
@@ -37,6 +39,7 @@ class BSEScraper(BaseScraper):
                         data[key] = resp
                 except Exception as exc:
                     log.warning("bse_endpoint_failed", symbol=symbol, key=key, error=str(exc))
+
             return ScrapeResult(symbol=symbol, success=bool(data), data=data)
         except Exception as exc:
             return ScrapeResult(symbol=symbol, success=False, error=str(exc))

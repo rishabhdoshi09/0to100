@@ -17,14 +17,17 @@ _ENDPOINTS = {
 class NSEScraper(BaseScraper):
     def __init__(self, browser_pool: BrowserPool) -> None:
         super().__init__(browser_pool)
+        self._session_established = False
 
     async def scrape_company(self, symbol: str) -> ScrapeResult:
         ctx = await self._pool.new_context()
         try:
             page = await ctx.new_page()
             self._setup_interceptor(page)
+
             await self._establish_session(page)
             data = {}
+
             for key, endpoint_tpl in _ENDPOINTS.items():
                 endpoint = endpoint_tpl.format(symbol=symbol)
                 try:
@@ -33,6 +36,7 @@ class NSEScraper(BaseScraper):
                         data[key] = api_data
                 except Exception as exc:
                     log.warning("nse_endpoint_failed", symbol=symbol, endpoint=key, error=str(exc))
+
             return ScrapeResult(symbol=symbol, success=bool(data), data=data, intercepted=self._intercepted)
         except Exception as exc:
             log.error("nse_scrape_failed", symbol=symbol, error=str(exc))
@@ -43,12 +47,17 @@ class NSEScraper(BaseScraper):
     async def _establish_session(self, page) -> None:
         await self._navigate_with_retry(page, settings.nse_base_url)
         await self._human_delay(1000, 2000)
+        self._session_established = True
 
     async def _call_internal_api(self, page, endpoint: str) -> dict | None:
         url = f"{settings.nse_base_url}{endpoint}"
-        return await page.evaluate(
+        resp = await page.evaluate(
             f"""async () => {{
-                const r = await fetch('{url}', {{ headers: {{ 'Accept': 'application/json' }} }});
-                return r.ok ? await r.json() : null;
+                const r = await fetch('{url}', {{
+                    headers: {{ 'Accept': 'application/json' }}
+                }});
+                if (!r.ok) return null;
+                return await r.json();
             }}"""
         )
+        return resp

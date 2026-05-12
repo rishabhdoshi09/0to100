@@ -1,4 +1,5 @@
 from __future__ import annotations
+import re
 import structlog
 from bs4 import BeautifulSoup
 from app.scrapers.base import BaseScraper, BrowserPool, ScrapeResult
@@ -16,12 +17,15 @@ class ScreenerScraper(BaseScraper):
         try:
             page = await ctx.new_page()
             self._setup_interceptor(page)
+
             url = f"{settings.screener_base_url}/company/{symbol}/consolidated/"
             await self._navigate_with_retry(page, url)
             await self._scroll_to_bottom(page)
             await self._human_delay()
+
             html = await page.content()
             soup = BeautifulSoup(html, "lxml")
+
             data = {
                 "key_ratios": self._extract_key_ratios(soup),
                 "financials_income": self._extract_table(soup, "income"),
@@ -29,6 +33,7 @@ class ScreenerScraper(BaseScraper):
                 "shareholding": self._extract_shareholding(soup),
                 "peers": self._extract_peers(soup),
             }
+
             return ScrapeResult(symbol=symbol, success=True, data=data)
         except Exception as exc:
             log.error("screener_scrape_failed", symbol=symbol, error=str(exc))
@@ -90,9 +95,11 @@ class ScreenerScraper(BaseScraper):
         text = text.strip().replace(",", "")
         multiplier = 1
         if text.endswith("Cr"):
-            text, multiplier = text[:-2].strip(), 10_000_000
+            text = text[:-2].strip()
+            multiplier = 10_000_000
         elif text.endswith("L"):
-            text, multiplier = text[:-1].strip(), 100_000
+            text = text[:-1].strip()
+            multiplier = 100_000
         try:
             return float(text) * multiplier
         except ValueError:

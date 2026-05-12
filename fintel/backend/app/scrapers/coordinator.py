@@ -4,6 +4,7 @@ import structlog
 from app.scrapers.base import BrowserPool, ScrapeResult
 from app.scrapers.nse import NSEScraper
 from app.scrapers.screener import ScreenerScraper
+from app.core.config import settings
 
 log = structlog.get_logger(__name__)
 
@@ -25,22 +26,26 @@ class ScrapingCoordinator:
     async def scrape_company_full(self, symbol: str) -> ScrapeResult:
         nse_scraper = NSEScraper(self._pool)
         screener_scraper = ScreenerScraper(self._pool)
-        nse_result, screener_result = await asyncio.gather(
-            nse_scraper.scrape_company(symbol),
-            screener_scraper.scrape_company(symbol),
-            return_exceptions=True,
-        )
+
+        nse_task = asyncio.create_task(nse_scraper.scrape_company(symbol))
+        screener_task = asyncio.create_task(screener_scraper.scrape_company(symbol))
+
+        nse_result, screener_result = await asyncio.gather(nse_task, screener_task, return_exceptions=True)
+
         merged_data = {}
         if isinstance(nse_result, ScrapeResult) and nse_result.success:
             merged_data["nse"] = nse_result.data
         if isinstance(screener_result, ScrapeResult) and screener_result.success:
             merged_data["screener"] = screener_result.data
+
         log.info("scrape_complete", symbol=symbol, sources=list(merged_data.keys()))
         return ScrapeResult(symbol=symbol, success=bool(merged_data), data=merged_data)
 
     async def scrape_filings(self, symbol: str) -> list[dict]:
-        result = await NSEScraper(self._pool).scrape_company(symbol)
+        nse_scraper = NSEScraper(self._pool)
+        result = await nse_scraper.scrape_company(symbol)
         filings_raw = result.data.get("filings", {}).get("data", [])
+
         seen, filings = set(), []
         for f in filings_raw:
             key = (f.get("subject", ""), f.get("an_dt", ""))
@@ -50,7 +55,8 @@ class ScrapingCoordinator:
         return filings
 
     async def scrape_shareholding(self, symbol: str) -> dict:
-        result = await ScreenerScraper(self._pool).scrape_company(symbol)
+        screener_scraper = ScreenerScraper(self._pool)
+        result = await screener_scraper.scrape_company(symbol)
         return result.data.get("shareholding", {})
 
 
