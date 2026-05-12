@@ -1,9 +1,9 @@
 """Tests for ConvictionScorer, TraderProfile, and TradeSetup."""
 
 import pytest
-from sq_ai.signals.profiles import CONSERVATIVE, AGGRESSIVE, TraderProfile
-from sq_ai.signals.conviction import ConvictionScorer, _clamp
-from sq_ai.signals.trade_setup import compute_trade_setup
+from signals.profiles import CONSERVATIVE, AGGRESSIVE, TraderProfile
+from signals.conviction import ConvictionScorer, _clamp
+from signals.trade_setup import compute_trade_setup
 
 
 # ── Profile tests ──────────────────────────────────────────────────────────────

@@ -21,7 +21,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Dict
 
-from sq_ai.signals.profiles import TraderProfile, CONSERVATIVE
+from signals.profiles import TraderProfile, CONSERVATIVE
 
 
 @dataclass

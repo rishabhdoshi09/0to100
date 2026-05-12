@@ -17,7 +17,7 @@ from paper_trading import (
     init_db,
     open_position,
 )
-from sq_ai.signals.trade_setup import compute_trade_setup
+from signals.trade_setup import compute_trade_setup
 
 
 def _log_ai_verdict(symbol: str, action: str, price: float, verdict: str):

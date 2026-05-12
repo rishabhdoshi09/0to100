@@ -24,7 +24,7 @@ import pandas as pd
 from backtest.simulator import SimulatedBroker, SimFill
 from config import settings
 from features.indicators import IndicatorEngine
-from sq_ai.signals.conviction import ConvictionScorer
+from signals.conviction import ConvictionScorer
 from llm.context_builder import ContextBuilder
 from llm.dual_engine import DualLLMEngine
 from llm.signal_validator import SignalValidator, TradingSignal

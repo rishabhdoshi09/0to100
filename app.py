@@ -50,9 +50,9 @@ from paper_trading import (
     init_db,
     open_position,
 )
-from sq_ai.signals.conviction import ConvictionScorer
-from sq_ai.signals.profiles import PROFILES
-from sq_ai.signals.trade_setup import compute_trade_setup
+from signals.conviction import ConvictionScorer
+from signals.profiles import PROFILES
+from signals.trade_setup import compute_trade_setup
 
 load_dotenv()
 
