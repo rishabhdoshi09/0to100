@@ -1,0 +1,95 @@
+version: "3.9"
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: fintel
+      POSTGRES_USER: fintel
+      POSTGRES_PASSWORD: fintel
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./postgres/init.sql:/docker-entrypoint-initdb.d/init.sql
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+
+  qdrant:
+    image: qdrant/qdrant:latest
+    restart: unless-stopped
+    ports:
+      - "6333:6333"
+    volumes:
+      - qdrant_data:/qdrant/storage
+
+  api:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    env_file:
+      - ../.env
+    depends_on:
+      - postgres
+      - redis
+    volumes:
+      - ../backend:/app
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+  worker-scraping:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile.worker
+    restart: unless-stopped
+    env_file:
+      - ../.env
+    depends_on:
+      - postgres
+      - redis
+    command: celery -A app.workers.celery_app worker -Q scraping -c 2 --loglevel=info
+
+  worker-ai:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile.worker
+    restart: unless-stopped
+    env_file:
+      - ../.env
+    depends_on:
+      - postgres
+      - redis
+    command: celery -A app.workers.celery_app worker -Q ai,ingestion,embeddings -c 4 --loglevel=info
+
+  beat:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile.worker
+    restart: unless-stopped
+    env_file:
+      - ../.env
+    depends_on:
+      - redis
+    command: celery -A app.workers.celery_app beat --loglevel=info
+
+  flower:
+    image: mher/flower:2.0
+    restart: unless-stopped
+    ports:
+      - "5555:5555"
+    env_file:
+      - ../.env
+    depends_on:
+      - redis
+    command: celery flower --broker=${CELERY_BROKER_URL:-redis://redis:6379/1}
+
+volumes:
+  postgres_data:
+  qdrant_data:
