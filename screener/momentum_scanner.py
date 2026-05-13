@@ -32,6 +32,7 @@ class MomentumStock:
     volume_ratio: float      # today's volume / 20-day avg volume
     momentum_score: float    # 0-100 composite
     signal: str              # BUY | WATCH | NEUTRAL
+    mtf_confirmed: bool = True  # True if 1H timeframe also shows bullish structure
 
 
 @dataclass
@@ -197,6 +198,13 @@ class MomentumScanner:
         else:
             signal = "NEUTRAL"
 
+        # Multi-timeframe confirmation: only for BUY signals on non-large scans
+        mtf_confirmed = True
+        if signal == "BUY" and not getattr(self, "_large_scan", False):
+            mtf_confirmed = self._check_1h_alignment(symbol)
+            if not mtf_confirmed:
+                signal = "WATCH"
+
         return MomentumStock(
             symbol=symbol,
             price=round(float(close[-1]), 2),
@@ -205,7 +213,35 @@ class MomentumScanner:
             volume_ratio=round(vol_ratio, 2),
             momentum_score=round(composite, 1),
             signal=signal,
+            mtf_confirmed=mtf_confirmed,
         )
+
+    def _check_1h_alignment(self, symbol: str) -> bool:
+        """Returns True if 1H chart also shows bullish structure.
+
+        Checks two conditions on 30 days of hourly data:
+          - Price is above the 20-period 1H moving average
+          - 1H RSI(14) is above 48
+
+        Falls back to True (don't penalise) if data is unavailable.
+        """
+        try:
+            import yfinance as yf
+            df = yf.Ticker(f"{symbol}.NS").history(period="30d", interval="1h")
+            if df is None or len(df) < 20:
+                return True  # can't check, don't penalise
+            close = df["Close"].values
+            # 1H bullish: price above 20-period MA AND 1H RSI > 48
+            ma20 = close[-20:].mean()
+            # RSI on 1H
+            delta = pd.Series(close).diff()
+            gain = delta.where(delta > 0, 0).rolling(14).mean()
+            loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
+            rs = gain / loss.replace(0, float("nan"))
+            rsi_1h = float((100 - 100 / (1 + rs)).iloc[-1])
+            return float(close[-1]) > ma20 and rsi_1h > 48
+        except Exception:
+            return True  # fallback: don't block
 
     def _check_breakout(self, symbol: str) -> Optional[BreakoutStock]:
         df = self._get_df(symbol, days=260)  # need 52W

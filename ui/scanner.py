@@ -99,13 +99,15 @@ def render_scanner(universe: list[str]) -> None:
 
 | Signal | Condition |
 |--------|-----------|
-| 🟢 **BUY** | Composite ≥ 65 AND RSI < 75 |
-| 🟡 **WATCH** | Composite 45–64 |
+| 🟢 **BUY ✓MTF** | Composite ≥ 65 AND RSI < 75 AND 1H aligned (price > 1H MA20, 1H RSI > 48) |
+| 🟢 **BUY** | Composite ≥ 65 AND RSI < 75 (large-scan mode, 1H not checked) |
+| 🟡 **WATCH** | Composite 45–64, or daily BUY but 1H not aligned |
 | ⚪ **NEUTRAL** | Composite < 45 |
 
 - **Momentum** — 5-day price change normalised (-5% to +10%)
 - **RSI** — 14-day RSI, ideal zone 50–70
 - **Volume** — today's volume vs 20-day avg (surge = bullish)
+- **MTF (multi-timeframe)** — 1H confirmation fetched for BUY candidates only; skipped in Full NSE scan
 - **Breakouts** — 52W high cross, Golden Cross (SMA50 > SMA200), Volume squeeze
             """,
             unsafe_allow_html=True,
@@ -197,6 +199,23 @@ def render_scanner(universe: list[str]) -> None:
         with st.spinner(f"Scanning momentum across {len(symbols)} stocks…"):
             momentum_stocks = _cached_momentum(symbols_key, top_n=40)
 
+        # ── Log BUY/WATCH signals to the feedback tracker ─────────────────
+        try:
+            from screener.signal_tracker import SignalTracker as _SignalTracker
+            _tracker = _SignalTracker()
+            for _ms in momentum_stocks:
+                if _ms.signal in ("BUY", "WATCH"):
+                    _tracker.log_signal(
+                        symbol=_ms.symbol,
+                        signal=_ms.signal,
+                        price=_ms.price,
+                        score=_ms.momentum_score,
+                        rsi=_ms.rsi,
+                        volume_ratio=_ms.volume_ratio,
+                    )
+        except Exception:
+            pass  # never let tracker errors break the scanner UI
+
         if mcap_filter != "All":
             momentum_stocks = _filter_by_mcap(momentum_stocks, mcap_filter)
 
@@ -254,6 +273,12 @@ def _render_momentum_table(stocks) -> None:
         chg_color = "#00d4a0" if s.change_pct >= 0 else "#ff4b4b"
         sig_color = _SIGNAL_COLOR.get(s.signal, "#8892a4")
         bar_pct   = min(int(s.momentum_score), 100)
+        mtf_confirmed = getattr(s, "mtf_confirmed", True)
+        mtf_badge = (
+            " <span style='font-size:.55rem;color:#00d4a0;opacity:.85'>✓MTF</span>"
+            if s.signal == "BUY" and mtf_confirmed
+            else ""
+        )
         st.markdown(
             f"<div style='display:grid;grid-template-columns:90px 75px 60px 50px 55px 55px;"
             f"gap:4px;padding:5px 8px;font-size:.72rem;font-family:JetBrains Mono,monospace;"
@@ -263,7 +288,7 @@ def _render_momentum_table(stocks) -> None:
             f"<span style='color:{chg_color}'>{s.change_pct:+.1f}%</span>"
             f"<span style='color:#8892a4'>{s.rsi:.0f}</span>"
             f"<span style='color:#8892a4'>{s.volume_ratio:.1f}x</span>"
-            f"<span style='color:{sig_color};font-weight:700;font-size:.65rem'>{s.signal}</span>"
+            f"<span style='color:{sig_color};font-weight:700;font-size:.65rem'>{s.signal}{mtf_badge}</span>"
             f"</div>"
             f"<div style='height:2px;margin:0 8px 3px;background:rgba(255,255,255,.04);border-radius:1px'>"
             f"<div style='height:2px;width:{bar_pct}%;background:{sig_color}88;border-radius:1px'></div>"
