@@ -70,7 +70,7 @@ class MomentumScanner:
             if not settings.kite_access_token:
                 raise ValueError("kite_access_token not set")
             kite = KiteClient()
-            im = InstrumentManager(kite)
+            im = InstrumentManager()
             self._kite_fetcher = HistoricalDataFetcher(kite, im)
             self._kite_ok = True
             log.info("scanner_kite_connected")
