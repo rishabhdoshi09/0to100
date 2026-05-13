@@ -84,7 +84,6 @@ from ui.agent_dashboard import render_agent_dashboard
 from ui.memory_vault import render_memory_vault
 from ui.earnings_page import render_earnings_page
 from ui.news_feed import render_news_feed
-from ui.bulk_simulator import render_bulk_backtest, render_bulk_live_signals
 from ui.homepage import render_homepage
 from ui.scanner import render_scanner
 
@@ -1384,11 +1383,10 @@ with tab_research:
 # TAB: ALGOLAB
 # ══════════════════════════════════════════════════════════════════════════════
 with tab_algolab:
-    _al1, _al2, _al3, _al4 = st.tabs([
+    _al1, _al2, _al3 = st.tabs([
         "💻 Strategy Editor",
         "🧪 Backtest",
         "📊 Walk-Forward",
-        "📈 Bulk Simulator",
     ])
 
     with _al1:
@@ -1425,14 +1423,6 @@ with tab_algolab:
                         )
                 except Exception as _wfe:
                     st.error(f"Walk-forward error: {_wfe}")
-
-    with _al4:
-        st.subheader("📈 Bulk Simulator")
-        _bs_tabs = st.tabs(["Bulk Backtest", "Live Signals"])
-        with _bs_tabs[0]:
-            render_bulk_backtest()
-        with _bs_tabs[1]:
-            render_bulk_live_signals()
 
 
 # ══════════════════════════════════════════════════════════════════════════════

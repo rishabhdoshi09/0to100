@@ -102,15 +102,33 @@ class MomentumScanner:
         return results
 
     def _get_df(self, symbol: str, days: int = 100) -> Optional[pd.DataFrame]:
+        # Try Kite first
         try:
+            from data.kite_client import KiteClient
+            from data.instruments import InstrumentManager
             from data.historical import HistoricalDataFetcher
-            fetcher = HistoricalDataFetcher()
-            to_dt = datetime.now()
-            from_dt = to_dt - timedelta(days=days)
-            df = fetcher.fetch(symbol, interval="day", from_dt=from_dt, to_dt=to_dt)
+            kite = KiteClient()
+            if kite.is_connected():
+                instruments = InstrumentManager(kite)
+                fetcher = HistoricalDataFetcher(kite, instruments)
+                to_dt = datetime.now()
+                from_dt = to_dt - timedelta(days=days)
+                df = fetcher.fetch(symbol, interval="day", from_dt=from_dt, to_dt=to_dt)
+                if df is not None and len(df) >= 30:
+                    return df
+        except Exception:
+            pass
+
+        # yfinance fallback
+        try:
+            import yfinance as yf
+            ticker = yf.Ticker(f"{symbol}.NS")
+            df = ticker.history(period=f"{days}d", interval="1d")
             if df is None or len(df) < 30:
                 return None
-            return df
+            df = df.rename(columns=str.lower)
+            df.index.name = "date"
+            return df.reset_index()
         except Exception as exc:
             log.debug("fetch_failed", symbol=symbol, error=str(exc))
             return None
