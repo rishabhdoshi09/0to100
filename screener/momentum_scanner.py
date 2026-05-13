@@ -53,7 +53,7 @@ class MomentumScanner:
     Uses existing HistoricalDataFetcher + IndicatorEngine — no new dependencies.
     """
 
-    def __init__(self, max_workers: int = 8) -> None:
+    def __init__(self, max_workers: int = 16) -> None:
         self._max_workers = max_workers
 
     def scan_momentum(
