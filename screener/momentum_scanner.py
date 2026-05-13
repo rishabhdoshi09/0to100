@@ -50,11 +50,30 @@ class BreakoutStock:
 class MomentumScanner:
     """
     Scans a list of symbols for momentum and breakout setups.
-    Uses existing HistoricalDataFetcher + IndicatorEngine — no new dependencies.
+    Data priority: Kite Connect (if connected) → yfinance fallback.
+    Kite clients initialised ONCE per scanner instance, not per stock.
     """
 
     def __init__(self, max_workers: int = 16) -> None:
         self._max_workers = max_workers
+        self._kite_fetcher = None   # set once in _init_kite()
+        self._kite_ok      = False
+        self._init_kite()
+
+    def _init_kite(self) -> None:
+        """Try to set up Kite fetcher once. Silent on failure."""
+        try:
+            from data.kite_client import KiteClient
+            from data.instruments import InstrumentManager
+            from data.historical import HistoricalDataFetcher
+            kite = KiteClient()
+            if kite.is_connected():
+                im = InstrumentManager(kite)
+                self._kite_fetcher = HistoricalDataFetcher(kite, im)
+                self._kite_ok = True
+                log.info("scanner_kite_connected")
+        except Exception as exc:
+            log.debug("scanner_kite_unavailable", error=str(exc))
 
     def scan_momentum(
         self,
@@ -102,31 +121,34 @@ class MomentumScanner:
         return results
 
     def _get_df(self, symbol: str, days: int = 100) -> Optional[pd.DataFrame]:
-        # Try Kite first
-        try:
-            from data.kite_client import KiteClient
-            from data.instruments import InstrumentManager
-            from data.historical import HistoricalDataFetcher
-            kite = KiteClient()
-            if kite.is_connected():
-                instruments = InstrumentManager(kite)
-                fetcher = HistoricalDataFetcher(kite, instruments)
-                to_dt = datetime.now()
-                from_dt = to_dt - timedelta(days=days)
-                df = fetcher.fetch(symbol, interval="day", from_dt=from_dt, to_dt=to_dt)
-                if df is not None and len(df) >= 30:
+        # ── Kite Connect (preferred) ──────────────────────────────────────
+        if self._kite_ok and self._kite_fetcher is not None:
+            try:
+                to_date   = datetime.now().strftime("%Y-%m-%d")
+                from_date = (datetime.now() - timedelta(days=days + 10)).strftime("%Y-%m-%d")
+                df = self._kite_fetcher.fetch(
+                    symbol, from_date=from_date, to_date=to_date, interval="day"
+                )
+                if df is not None and not df.empty and len(df) >= 30:
+                    # Normalise: DatetimeIndex → reset to plain columns
+                    if not isinstance(df, pd.DataFrame):
+                        raise ValueError("not a dataframe")
+                    if hasattr(df.index, "name") and df.index.name == "date":
+                        df = df.reset_index()
+                    # Ensure lowercase column names
+                    df.columns = [c.lower() for c in df.columns]
                     return df
-        except Exception:
-            pass
+            except Exception as exc:
+                log.debug("kite_fetch_failed", symbol=symbol, error=str(exc))
 
-        # yfinance fallback
+        # ── yfinance fallback ─────────────────────────────────────────────
         try:
             import yfinance as yf
             ticker = yf.Ticker(f"{symbol}.NS")
             df = ticker.history(period=f"{days}d", interval="1d")
-            if df is None or len(df) < 30:
+            if df is None or df.empty or len(df) < 30:
                 return None
-            df = df.rename(columns=str.lower)
+            df.columns = [c.lower() for c in df.columns]
             df.index.name = "date"
             return df.reset_index()
         except Exception as exc:
