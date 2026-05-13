@@ -1,3 +1,1 @@
-from features.indicators import IndicatorEngine
-
-__all__ = ["IndicatorEngine"]
+# Lazy imports — do not eagerly import here to avoid circular deps
