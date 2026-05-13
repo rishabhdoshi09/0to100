@@ -49,12 +49,13 @@ def render_order_pad(symbol: str = "", price: float = 0.0, indicators: dict | No
 
         # Auto-fill bracket from ATR trade setup
         if price and ind:
-            setup = compute_trade_setup(price, ind)
-            if setup:
-                default_stop   = setup.get("stop_loss", price * 0.98)
-                default_target = setup.get("target", price * 1.04)
-            else:
-                default_stop, default_target = price * 0.98, price * 1.04
+            try:
+                _atr = float(ind.get("atr_14", price * 0.015) or price * 0.015)
+                _setup = compute_trade_setup(symbol or "STOCK", "BUY", price, _atr)
+                default_stop   = float(_setup.stop)
+                default_target = float(_setup.target)
+            except Exception:
+                default_stop, default_target = round(price * 0.98, 2), round(price * 1.04, 2)
         else:
             default_stop, default_target = 0.0, 0.0
 
@@ -90,7 +91,7 @@ def render_order_pad(symbol: str = "", price: float = 0.0, indicators: dict | No
         )
 
         if ai_check and sym:
-            with st.spinner("DeepSeek → Claude trade check…"):
+            with st.spinner("DeepSeek trade check…"):
                 from ai.dual_llm_service import get_service
                 svc = get_service()
                 verdict, dm, detail = svc.order_confirmation(
