@@ -312,9 +312,13 @@ def call_deepseek(prompt, system="You are a financial analyst."):
             },
             timeout=30,
         )
-        return resp.json()["choices"][0]["message"]["content"]
+        data = resp.json()
+        if "choices" not in data:
+            err = data.get("error", {})
+            return f"DeepSeek error: {err.get('message', resp.text[:200])}"
+        return data["choices"][0]["message"]["content"]
     except Exception as e:
-        return f"Error: {e}"
+        return f"DeepSeek unavailable: {e}"
 
 
 # ── Scanner helpers ────────────────────────────────────────────────────────────
@@ -610,7 +614,10 @@ def generate_auto_pulse():
             },
             timeout=30,
         )
-        return resp.json()["choices"][0]["message"]["content"]
+        data = resp.json()
+        if "choices" not in data:
+            return "Error generating pulse."
+        return data["choices"][0]["message"]["content"]
     except Exception:
         return "Error generating pulse."
 
