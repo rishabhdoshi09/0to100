@@ -13,6 +13,13 @@ _SIGNAL_BG    = {"BUY": "rgba(0,212,160,.08)", "SELL": "rgba(255,75,75,.08)",
 
 
 def render_homepage(universe: list[str]) -> None:
+    # ── Regime Bar ────────────────────────────────────────────────────────────
+    try:
+        from ui.regime_bar import render_regime_bar
+        render_regime_bar()
+    except Exception:
+        pass
+
     # ── Row 1: Heatmap (left) + Crude Oil + News (right) ─────────────────────
     col_heat, col_right = st.columns([3, 2])
 

@@ -90,6 +90,7 @@ from ui.alerts_page import render_alerts_page
 from ui.options_page import render_options_page
 from ui.fii_dii_page import render_fii_dii_page
 from ui.vcp_page import render_vcp_page
+from ui.institutional_terminal import render_institutional_terminal
 
 # ── Page config ───────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -688,6 +689,86 @@ def get_stock_verdict(symbol):
     }
 
 
+def _render_playbooks_tab():
+    """Render the Playbook Engine tab under Research."""
+    from analytics.playbook import PLAYBOOKS, get_regime_aligned_playbooks, enrich_with_live_stats
+    from ui.regime_bar import get_regime
+
+    regime = get_regime()
+    regime_name = regime.get("regime", "UNKNOWN")
+
+    st.markdown(
+        "<h3 style='color:#a78bfa;font-family:JetBrains Mono,monospace;"
+        "font-size:1rem;letter-spacing:2px;margin-bottom:4px'>"
+        "📋 TRADING PLAYBOOKS</h3>"
+        "<p style='color:#4a5568;font-size:.72rem'>"
+        "Evidence-based setup templates with historical expectancy · Regime-aligned ranking</p>",
+        unsafe_allow_html=True,
+    )
+
+    col_a, col_b = st.columns([3, 1])
+    with col_a:
+        filter_regime = st.toggle(
+            f"Show only regime-aligned playbooks ({regime_name})",
+            value=True, key="pb_regime_filter"
+        )
+    with col_b:
+        st.markdown(
+            f"<span style='font-size:.7rem;color:{regime.get('emoji','⚪')}'>"
+            f"Current: {regime_name}</span>",
+            unsafe_allow_html=True,
+        )
+
+    playbooks = get_regime_aligned_playbooks(regime_name) if filter_regime else PLAYBOOKS
+    playbooks = enrich_with_live_stats(playbooks)
+
+    for pb in playbooks:
+        live  = pb.live_stats
+        cat_colors = {
+            "BREAKOUT":    "#00d4ff",
+            "MOMENTUM":    "#00d4a0",
+            "POSITIONAL":  "#a78bfa",
+            "REVERSAL":    "#f59e0b",
+        }
+        cat_col = cat_colors.get(pb.category, "#8892a4")
+
+        with st.expander(f"{pb.emoji} {pb.name} — {pb.category}", expanded=False):
+            c1, c2, c3, c4 = st.columns(4)
+            with c1:
+                wr = live["win_rate"] * 100 if live else pb.win_rate * 100
+                st.metric("Win Rate", f"{wr:.0f}%",
+                          delta=f"live {live['sample_size']}t" if live else "static")
+            with c2:
+                exp = live["expectancy"] if live else pb.expectancy
+                st.metric("Expectancy", f"{exp:+.1f}%")
+            with c3:
+                st.metric("Risk:Reward", f"{pb.risk_reward:.1f}x")
+            with c4:
+                st.metric("Avg Holding", f"{pb.avg_holding_days}d")
+
+            st.markdown(f"**Description:** {pb.description}")
+
+            col_l, col_r = st.columns(2)
+            with col_l:
+                st.markdown("**Conditions:**")
+                for cond in pb.conditions:
+                    st.markdown(f"- {cond}")
+            with col_r:
+                st.markdown(f"**Entry:** {pb.entry_rule}")
+                st.markdown(f"**Stop:** {pb.stop_rule}")
+                st.markdown(f"**Target:** {pb.target_rule}")
+
+            if pb.notes:
+                st.info(pb.notes)
+
+            aligned_label = (
+                "✅ Aligned with current regime"
+                if regime_name in pb.ideal_regime
+                else f"⚠️ Best in: {', '.join(pb.ideal_regime)}"
+            )
+            st.caption(aligned_label)
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # SIDEBAR
 # ══════════════════════════════════════════════════════════════════════════════
@@ -706,7 +787,7 @@ with st.sidebar:
     # ── Navigation ─────────────────────────────────────────────────────────
     _nav_page = st.radio(
         "Navigate",
-        ["🏠  Dashboard", "⚡  Terminal", "🔬  Research", "🧬  AlgoLab", "🛠️  Tools"],
+        ["🏠  Dashboard", "🏛️  Institutional", "⚡  Terminal", "🔬  Research", "🧬  AlgoLab", "🛠️  Tools"],
         label_visibility="collapsed",
         key="sidebar_nav",
     )
@@ -794,6 +875,13 @@ if st.session_state.get("active_tab") == "terminal":
 # ══════════════════════════════════════════════════════════════════════════════
 if _page == "Dashboard":
     render_homepage(universe)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# PAGE: INSTITUTIONAL TERMINAL
+# ══════════════════════════════════════════════════════════════════════════════
+elif _page == "Institutional":
+    render_institutional_terminal(universe)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -972,7 +1060,7 @@ elif _page == "Terminal":
 # PAGE: RESEARCH
 # ══════════════════════════════════════════════════════════════════════════════
 elif _page == "Research":
-    _r1, _r2, _r3, _r4, _r5, _r6, _r7 = st.tabs([
+    _r1, _r2, _r3, _r4, _r5, _r6, _r7, _r8 = st.tabs([
         "📈 Charts",
         "📊 Fundamentals",
         "📐 Multi-TF",
@@ -980,6 +1068,7 @@ elif _page == "Research":
         "🎯 Options",
         "🌊 FII/DII",
         "🎯 VCP Scanner",
+        "📋 Playbooks",
     ])
 
     # ── Charts ─────────────────────────────────────────────────────────────
@@ -1429,6 +1518,9 @@ elif _page == "Research":
 
     with _r7:
         render_vcp_page(universe)
+
+    with _r8:
+        _render_playbooks_tab()
 
 
 # ══════════════════════════════════════════════════════════════════════════════

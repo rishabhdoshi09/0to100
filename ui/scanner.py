@@ -90,6 +90,21 @@ def render_scanner(universe: list[str]) -> None:
         "📡 MARKET SCANNER</h2>",
         unsafe_allow_html=True,
     )
+    # Regime context pill
+    try:
+        from ui.regime_bar import get_regime
+        _r = get_regime()
+        _rc = {"BULL_TREND": "#00d4a0", "EXPANSION": "#00d4ff", "CHOPPY": "#f59e0b",
+               "DISTRIBUTION": "#fb923c", "BEAR": "#ff4b4b"}.get(_r["regime"], "#8892a4")
+        st.markdown(
+            f"<span style='background:{_rc}18;border:1px solid {_rc}44;border-radius:6px;"
+            f"padding:2px 10px;font-size:.65rem;color:{_rc};font-family:JetBrains Mono,monospace'>"
+            f"{_r['emoji']} {_r['regime'].replace('_',' ')} · Score {_r['regime_score']:.0f} "
+            f"· Setup ×{_r['quality_multiplier']:.2f}</span>",
+            unsafe_allow_html=True,
+        )
+    except Exception:
+        pass
 
     # ── Signal legend ─────────────────────────────────────────────────────────
     with st.expander("ℹ️ How signals are calculated", expanded=False):

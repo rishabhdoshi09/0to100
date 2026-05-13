@@ -43,6 +43,13 @@ def _run_vcp_scan(symbols_key: str, top_n: int) -> list:
 # ── Public entry point ────────────────────────────────────────────────────────
 
 def render_vcp_page(universe: list[str]) -> None:
+    # ── Regime Bar ────────────────────────────────────────────────────────────
+    try:
+        from ui.regime_bar import render_regime_bar
+        render_regime_bar()
+    except Exception:
+        pass
+
     # ── Header ────────────────────────────────────────────────────────────────
     st.markdown(
         "<h2 style='color:#00d4ff;font-family:JetBrains Mono,monospace;"
