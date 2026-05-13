@@ -10,32 +10,75 @@ import streamlit as st
 @st.cache_data(ttl=900, show_spinner=False)
 def _get_regime_cached() -> dict:
     """Cache regime for 15 min — regime doesn't change minute to minute."""
+    # Try core (production) engine first, fall back to analytics engine
     try:
-        from analytics.regime_engine import compute_regime
+        from core.regime_engine import compute_regime
         r = compute_regime()
+        leaders = getattr(r, "leading_sectors", [])
         return {
-            "regime": r.regime,
-            "regime_score": r.regime_score,
-            "emoji": r.emoji,
-            "nifty_price": r.nifty_price,
-            "nifty_change_pct": r.nifty_change_pct,
-            "vix": r.vix,
-            "vix_state": r.vix_state,
-            "breadth": r.breadth,
-            "sector_leader": r.sector_leader,
+            "regime":           r.market_regime,
+            "market":           r.market_regime,
+            "regime_score":     r.regime_score,
+            "emoji":            _regime_emoji(r.market_regime),
+            "nifty_price":      r.nifty_price,
+            "nifty_change_pct": r.nifty_change_1d,
+            "vix":              r.vix,
+            "vix_state":        r.volatility_regime,
+            "breadth":          r.breadth_label,
+            "sector_leader":    leaders[0] if leaders else "N/A",
             "quality_multiplier": r.quality_multiplier,
-            "timestamp": r.timestamp,
-            "atr_regime": r.atr_regime,
+            "timestamp":        r.timestamp,
+            "atr_regime":       r.volatility_regime,
+            "volatility":       r.volatility_regime,
+            "risk_mode":        r.risk_mode,
+            "inst_activity":    r.institutional_activity,
+            "leaders":          r.leading_sectors,
+            "laggards":         r.lagging_sectors,
+            "rotation":         r.rotation_mode,
+            "breakout_env":     r.breakout_environment,
+            "playbooks":        r.recommended_playbooks,
+            "avoid":            r.avoid_patterns,
+            "breadth_score":    r.breadth_strength,
+            "nifty_5d":         r.nifty_change_5d,
+            "sector_returns":   r.sector_returns,
+        }
+    except Exception:
+        pass
+    # Fallback to old analytics engine
+    try:
+        from analytics.regime_engine import compute_regime as _old_compute
+        r = _old_compute()
+        return {
+            "regime": r.regime, "market": r.regime,
+            "regime_score": r.regime_score, "emoji": r.emoji,
+            "nifty_price": r.nifty_price, "nifty_change_pct": r.nifty_change_pct,
+            "vix": r.vix, "vix_state": r.vix_state, "breadth": r.breadth,
+            "sector_leader": r.sector_leader, "quality_multiplier": r.quality_multiplier,
+            "timestamp": r.timestamp, "atr_regime": r.atr_regime,
+            "volatility": r.vix_state, "risk_mode": "NEUTRAL",
+            "inst_activity": "NEUTRAL", "leaders": [r.sector_leader],
+            "laggards": [], "rotation": "MIXED", "breakout_env": "NEUTRAL",
+            "playbooks": [], "avoid": [], "breadth_score": r.regime_score,
+            "nifty_5d": 0.0, "sector_returns": {},
         }
     except Exception:
         return {
-            "regime": "UNKNOWN", "regime_score": 50.0, "emoji": "⚪",
-            "nifty_price": 0.0, "nifty_change_pct": 0.0,
-            "vix": 16.0, "vix_state": "NORMAL",
-            "breadth": "NEUTRAL", "sector_leader": "N/A",
-            "quality_multiplier": 1.0, "timestamp": "--",
-            "atr_regime": "STABLE",
+            "regime": "UNKNOWN", "market": "UNKNOWN", "regime_score": 50.0, "emoji": "⚪",
+            "nifty_price": 0.0, "nifty_change_pct": 0.0, "vix": 16.0,
+            "vix_state": "NORMAL", "breadth": "NEUTRAL", "sector_leader": "N/A",
+            "quality_multiplier": 1.0, "timestamp": "--", "atr_regime": "STABLE",
+            "volatility": "NORMAL", "risk_mode": "NEUTRAL", "inst_activity": "NEUTRAL",
+            "leaders": [], "laggards": [], "rotation": "MIXED", "breakout_env": "NEUTRAL",
+            "playbooks": [], "avoid": [], "breadth_score": 50.0,
+            "nifty_5d": 0.0, "sector_returns": {},
         }
+
+
+def _regime_emoji(regime: str) -> str:
+    return {
+        "TRENDING_BULL": "🟢", "EXPANSION": "🚀", "CHOPPY": "🟡",
+        "COMPRESSION": "🔵", "DISTRIBUTION": "🟠", "TRENDING_BEAR": "🔴",
+    }.get(regime, "⚪")
 
 
 def get_regime() -> dict:

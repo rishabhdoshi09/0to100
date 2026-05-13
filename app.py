@@ -91,6 +91,7 @@ from ui.options_page import render_options_page
 from ui.fii_dii_page import render_fii_dii_page
 from ui.vcp_page import render_vcp_page
 from ui.institutional_terminal import render_institutional_terminal
+from ui.market_narrative import render_market_narrative
 
 # ── Page config ───────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -1060,7 +1061,8 @@ elif _page == "Terminal":
 # PAGE: RESEARCH
 # ══════════════════════════════════════════════════════════════════════════════
 elif _page == "Research":
-    _r1, _r2, _r3, _r4, _r5, _r6, _r7, _r8 = st.tabs([
+    _r0, _r1, _r2, _r3, _r4, _r5, _r6, _r7, _r8 = st.tabs([
+        "📰 Market Brief",
         "📈 Charts",
         "📊 Fundamentals",
         "📐 Multi-TF",
@@ -1070,6 +1072,10 @@ elif _page == "Research":
         "🎯 VCP Scanner",
         "📋 Playbooks",
     ])
+
+    # ── Market Brief ──────────────────────────────────────────────────────
+    with _r0:
+        render_market_narrative()
 
     # ── Charts ─────────────────────────────────────────────────────────────
     with _r1:
