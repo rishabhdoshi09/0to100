@@ -2,593 +2,184 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>QUANTTERM — System Architecture</title>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body {
-    background: #060b18;
-    color: #e8eaf0;
-    font-family: 'JetBrains Mono', 'Fira Code', 'Courier New', monospace;
-    min-height: 100vh;
-    padding: 2rem;
+    background: #f5f5f5;
+    font-family: Arial, sans-serif;
+    font-size: 11px;
+    color: #111;
+    padding: 30px;
   }
-
   h1 {
     text-align: center;
-    color: #00d4ff;
-    font-size: 1.6rem;
-    letter-spacing: .15em;
-    margin-bottom: .25rem;
+    font-size: 15px;
+    font-weight: bold;
+    margin-bottom: 24px;
+    color: #111;
+    letter-spacing: .03em;
   }
-  .subtitle {
-    text-align: center;
-    color: #4a5568;
-    font-size: .72rem;
-    letter-spacing: .08em;
-    margin-bottom: 2.5rem;
-  }
-
-  /* ── Layer labels ── */
-  .layer {
-    display: flex;
-    align-items: flex-start;
-    gap: 1rem;
-    margin-bottom: 1.2rem;
+  .wrap {
     position: relative;
+    width: 1060px;
+    height: 900px;
+    margin: 0 auto;
+    background: #fff;
+    border: 1px solid #bbb;
   }
-  .layer-label {
-    writing-mode: vertical-rl;
-    transform: rotate(180deg);
-    font-size: .6rem;
-    color: #4a5568;
-    letter-spacing: .12em;
-    text-transform: uppercase;
-    min-width: 18px;
+  /* ── Box ── */
+  .box {
+    position: absolute;
+    background: #fff;
+    border: 1.5px solid #333;
+    border-radius: 4px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
     text-align: center;
-    padding-top: .5rem;
+    padding: 5px 8px;
+    line-height: 1.35;
+    font-size: 11px;
+    font-family: Arial, sans-serif;
   }
-  .layer-content {
-    flex: 1;
-    display: flex;
-    flex-wrap: wrap;
-    gap: .65rem;
-    align-items: flex-start;
+  .box.start {
+    border-width: 2px;
+    font-weight: bold;
+    background: #f0f0f0;
   }
-
-  /* ── Nodes ── */
-  .node {
-    border-radius: 10px;
-    padding: .55rem .9rem;
-    font-size: .72rem;
-    font-weight: 600;
-    border: 1px solid;
-    position: relative;
-    white-space: nowrap;
+  .box.output {
+    border-width: 2px;
+    background: #e8f4e8;
   }
-  .node .sub {
-    display: block;
-    font-size: .58rem;
-    font-weight: 400;
-    opacity: .65;
-    margin-top: .2rem;
-  }
-  .node.primary {
-    background: rgba(0,212,255,.08);
-    border-color: rgba(0,212,255,.35);
-    color: #00d4ff;
-  }
-  .node.green {
-    background: rgba(0,212,160,.08);
-    border-color: rgba(0,212,160,.35);
-    color: #00d4a0;
-  }
-  .node.purple {
-    background: rgba(168,85,247,.08);
-    border-color: rgba(168,85,247,.35);
-    color: #c084fc;
-  }
-  .node.amber {
-    background: rgba(255,184,0,.07);
-    border-color: rgba(255,184,0,.3);
-    color: #ffb800;
-  }
-  .node.red {
-    background: rgba(255,68,102,.07);
-    border-color: rgba(255,68,102,.3);
-    color: #ff4466;
-  }
-  .node.gray {
-    background: rgba(255,255,255,.04);
-    border-color: rgba(255,255,255,.1);
-    color: #8892a4;
-  }
-  .node.teal {
-    background: rgba(20,184,166,.08);
-    border-color: rgba(20,184,166,.35);
-    color: #2dd4bf;
-  }
-  .node.orange {
-    background: rgba(251,146,60,.08);
-    border-color: rgba(251,146,60,.3);
-    color: #fb923c;
-  }
-  .node.wide { min-width: 160px; }
-  .node.xwide { min-width: 220px; }
-
-  /* ── Arrows ── */
-  .arrows {
-    display: flex;
-    justify-content: center;
-    align-items: center;
-    gap: 2rem;
-    margin: .4rem 0;
-    padding-left: 2rem;
-  }
-  .arrow-down {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    color: #4a5568;
-    font-size: .62rem;
-    gap: 1px;
-  }
-  .arrow-line {
-    width: 1px;
-    height: 18px;
-    background: rgba(255,255,255,.12);
-  }
-  .arrow-head { color: #4a5568; }
-
-  /* ── Flow connector row ── */
-  .connector {
-    width: 100%;
-    height: 1px;
-    background: linear-gradient(90deg, transparent, rgba(255,255,255,.07), transparent);
-    margin: .3rem 0;
-  }
-
-  /* ── Feedback loop band ── */
-  .feedback-band {
-    border: 1px dashed rgba(255,184,0,.25);
-    border-radius: 14px;
-    padding: .8rem 1.2rem .8rem 1.5rem;
-    background: rgba(255,184,0,.03);
-    margin-bottom: 1.2rem;
-  }
-  .feedback-label {
-    font-size: .6rem;
-    color: #ffb80088;
-    letter-spacing: .1em;
-    text-transform: uppercase;
-    margin-bottom: .6rem;
-  }
-
-  /* ── Section dividers ── */
-  .section-title {
-    font-size: .62rem;
-    color: #4a5568;
-    letter-spacing: .12em;
-    text-transform: uppercase;
-    border-left: 2px solid rgba(255,255,255,.08);
-    padding-left: .6rem;
-    margin-bottom: .7rem;
-  }
-
-  /* ── Legend ── */
-  .legend {
-    display: flex;
-    gap: 1.2rem;
-    flex-wrap: wrap;
-    justify-content: center;
-    margin-top: 2rem;
-    padding-top: 1.2rem;
-    border-top: 1px solid rgba(255,255,255,.05);
-  }
-  .legend-item {
-    display: flex;
-    align-items: center;
-    gap: .4rem;
-    font-size: .62rem;
-    color: #8892a4;
-  }
-  .legend-dot {
-    width: 10px;
-    height: 10px;
-    border-radius: 3px;
-    border: 1px solid;
-  }
-
-  /* ── Two-column layout for middle layers ── */
-  .two-col {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: .65rem;
-  }
-  .col-box {
-    border: 1px solid rgba(255,255,255,.07);
-    border-radius: 12px;
-    padding: .75rem 1rem;
-    background: rgba(255,255,255,.02);
-  }
-  .col-box-title {
-    font-size: .62rem;
-    color: #4a5568;
-    letter-spacing: .1em;
-    text-transform: uppercase;
-    margin-bottom: .6rem;
-  }
-  .node-group {
-    display: flex;
-    flex-wrap: wrap;
-    gap: .5rem;
-  }
-
-  /* ── Pipeline flow ── */
-  .pipeline {
-    display: flex;
-    align-items: center;
-    gap: .5rem;
-    flex-wrap: wrap;
-    padding-left: 2rem;
-  }
-  .pipe-arrow {
-    color: #4a5568;
-    font-size: .8rem;
+  svg {
+    position: absolute;
+    top: 0; left: 0;
+    width: 100%; height: 100%;
+    overflow: visible;
+    pointer-events: none;
   }
 </style>
 </head>
 <body>
+<h1>QUANTTERM — System Architecture Flowchart</h1>
+<div class="wrap" id="diagram">
 
-<h1>⚡ QUANTTERM</h1>
-<div class="subtitle">COMPLETE SYSTEM ARCHITECTURE · NSE/BSE ALGO TRADING TERMINAL · DeepSeek V3 + R1</div>
+  <!-- ═══════════════ BOXES ═══════════════ -->
 
-<!-- ══════════════════════════════════════════════════════════ -->
-<!-- LAYER 1: UI / FRONTEND -->
-<!-- ══════════════════════════════════════════════════════════ -->
-<div class="layer">
-  <div class="layer-label">UI</div>
-  <div class="layer-content" style="flex-direction:column;gap:.5rem">
-    <div class="section-title">Streamlit App — app.py · Sidebar navigation</div>
-    <div style="display:flex;gap:.65rem;flex-wrap:wrap">
-      <div class="node primary wide">🏠 Dashboard
-        <span class="sub">Scanner · Watchlist · Market Strip</span>
-      </div>
-      <div class="node primary wide">⚡ Terminal
-        <span class="sub">Chart 65% · Signal Panel 35%</span>
-      </div>
-      <div class="node primary wide">🔬 Research
-        <span class="sub">Charts · Fundamentals · Heatmap · Multi-TF</span>
-      </div>
-      <div class="node primary wide">🧬 AlgoLab
-        <span class="sub">Strategy Editor · Backtest · Walk-Forward</span>
-      </div>
-      <div class="node primary wide">🛠️ Tools
-        <span class="sub">News · Alerts · Journal · Agents · Memory</span>
-      </div>
-    </div>
-    <div style="display:flex;gap:.65rem;flex-wrap:wrap;margin-top:.3rem">
-      <div class="node gray">Sidebar Co-Pilot <span class="sub">DeepSeek chat · context-aware</span></div>
-      <div class="node gray">Command Palette <span class="sub">Cmd+K · instant navigation</span></div>
-      <div class="node gray">Order Pad <span class="sub">Entry · Stop · Target · Qty</span></div>
-      <div class="node gray">Position Monitor <span class="sub">Live P&L · open positions</span></div>
-    </div>
-  </div>
+  <!-- COL 1: Earnings branch (x≈55) -->
+  <div class="box" id="b_earnings"    style="left:30px;  top:390px; width:120px; height:44px">add earnings<br>agent.py</div>
+  <div class="box" id="b_youtube"     style="left:30px;  top:470px; width:120px; height:44px">automatically find<br>YouTube earning call</div>
+  <div class="box" id="b_transcript"  style="left:30px;  top:550px; width:120px; height:44px">transcript<br>extractor</div>
+  <div class="box" id="b_summary"     style="left:30px;  top:630px; width:120px; height:44px">summarization</div>
+  <div class="box output" id="b_eps"  style="left:30px;  top:720px; width:120px; height:50px">Revenue / EPS /<br>guidance insights</div>
+
+  <!-- COL 2: Stock ticker + Ensemble + MI (x≈210) -->
+  <div class="box start" id="b_ticker"   style="left:205px; top:180px; width:120px; height:44px">Stock ticker</div>
+  <div class="box" id="b_ensemble"       style="left:205px; top:310px; width:120px; height:44px">Ensemble<br>signal.py</div>
+  <div class="box" id="b_mi"             style="left:205px; top:440px; width:130px; height:50px">MI layer to<br>sure the buy/sell</div>
+  <div class="box output" id="b_refined" style="left:205px; top:570px; width:130px; height:50px">Give a refined<br>buy/sell call<br>using DeepSeek</div>
+
+  <!-- COL 3: signal.py + LLM (x≈400) -->
+  <div class="box" id="b_signal"  style="left:390px; top:310px; width:135px; height:55px">signal.py<br>Get data from<br>processor + give score</div>
+  <div class="box" id="b_llm"    style="left:390px; top:440px; width:135px; height:50px">process the data<br>Use LLM –<br>DeepSeek</div>
+  <div class="box output" id="b_frontend" style="left:350px; top:620px; width:135px; height:44px">show frontend<br>computation</div>
+
+  <!-- COL 4: Technical branch (x≈595) -->
+  <div class="box" id="b_tagent"   style="left:580px; top:50px;  width:120px; height:44px">Technical<br>agemt.py</div>
+  <div class="box" id="b_xgboost"  style="left:580px; top:150px; width:120px; height:44px">use xgboost</div>
+  <div class="box" id="b_techchart"style="left:560px; top:280px; width:140px; height:55px">Technical + chart<br>pattern recognition<br>numta</div>
+  <div class="box" id="b_multih"   style="left:730px; top:280px; width:120px; height:44px">multihorizo n.py<br>computation</div>
+
+  <!-- COL 5: Agents + News + Fundamentals (x≈730) -->
+  <div class="box" id="b_agents"  style="left:730px; top:390px; width:120px; height:44px">MULTIPle<br>agents</div>
+  <div class="box" id="b_news"    style="left:880px; top:310px; width:120px; height:44px">News for<br>sentiment</div>
+  <div class="box" id="b_builder" style="left:880px; top:440px; width:120px; height:44px">builder.py</div>
+  <div class="box" id="b_fund"    style="left:730px; top:520px; width:120px; height:44px">Fundamentals</div>
+
+  <!-- ═══════════════ ARROWS (SVG) ═══════════════ -->
+  <svg>
+    <defs>
+      <marker id="arr" markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto">
+        <path d="M0,0 L0,6 L8,3 z" fill="#333"/>
+      </marker>
+    </defs>
+
+    <!-- Earnings branch: top-down -->
+    <!-- earnings → youtube -->
+    <line x1="90"  y1="434" x2="90"  y2="468" stroke="#333" stroke-width="1.5" marker-end="url(#arr)"/>
+    <!-- youtube → transcript -->
+    <line x1="90"  y1="514" x2="90"  y2="548" stroke="#333" stroke-width="1.5" marker-end="url(#arr)"/>
+    <!-- transcript → summary -->
+    <line x1="90"  y1="594" x2="90"  y2="628" stroke="#333" stroke-width="1.5" marker-end="url(#arr)"/>
+    <!-- summary → eps -->
+    <line x1="90"  y1="674" x2="90"  y2="718" stroke="#333" stroke-width="1.5" marker-end="url(#arr)"/>
+
+    <!-- Stock ticker → Ensemble -->
+    <line x1="265" y1="224" x2="265" y2="308" stroke="#333" stroke-width="1.5" marker-end="url(#arr)"/>
+
+    <!-- Ensemble → MI -->
+    <line x1="265" y1="354" x2="265" y2="438" stroke="#333" stroke-width="1.5" marker-end="url(#arr)"/>
+
+    <!-- MI → Refined -->
+    <line x1="265" y1="490" x2="265" y2="568" stroke="#333" stroke-width="1.5" marker-end="url(#arr)"/>
+
+    <!-- Refined → frontend (right to frontend) -->
+    <line x1="335" y1="595" x2="352" y2="637" stroke="#333" stroke-width="1.5" marker-end="url(#arr)"/>
+
+    <!-- Stock ticker → signal.py (right) -->
+    <line x1="325" y1="202" x2="457" y2="308" stroke="#333" stroke-width="1.5" marker-end="url(#arr)"/>
+
+    <!-- Ensemble → signal.py (right) -->
+    <line x1="325" y1="332" x2="388" y2="332" stroke="#333" stroke-width="1.5" marker-end="url(#arr)"/>
+
+    <!-- signal.py → LLM -->
+    <line x1="457" y1="365" x2="457" y2="438" stroke="#333" stroke-width="1.5" marker-end="url(#arr)"/>
+
+    <!-- LLM → frontend -->
+    <line x1="457" y1="490" x2="457" y2="618" stroke="#333" stroke-width="1.5" marker-end="url(#arr)"/>
+
+    <!-- technical agemt → xgboost -->
+    <line x1="640" y1="94"  x2="640" y2="148" stroke="#333" stroke-width="1.5" marker-end="url(#arr)"/>
+
+    <!-- xgboost → techchart -->
+    <line x1="640" y1="194" x2="640" y2="278" stroke="#333" stroke-width="1.5" marker-end="url(#arr)"/>
+
+    <!-- multihorizo → techchart (left arrow) -->
+    <line x1="730" y1="302" x2="702" y2="302" stroke="#333" stroke-width="1.5" marker-end="url(#arr)"/>
+
+    <!-- techchart → LLM (down-left) -->
+    <line x1="630" y1="335" x2="527" y2="440" stroke="#333" stroke-width="1.5" marker-end="url(#arr)"/>
+
+    <!-- Stock ticker → agents (right, dashed) -->
+    <line x1="325" y1="202" x2="790" y2="388" stroke="#666" stroke-width="1.5" stroke-dasharray="5,4" marker-end="url(#arr)"/>
+
+    <!-- agents → news (up-right) -->
+    <line x1="850" y1="390" x2="940" y2="355" stroke="#333" stroke-width="1.5" marker-end="url(#arr)"/>
+
+    <!-- agents → builder (right) -->
+    <line x1="850" y1="412" x2="878" y2="462" stroke="#333" stroke-width="1.5" marker-end="url(#arr)"/>
+
+    <!-- agents → fundamentals (down) -->
+    <line x1="790" y1="434" x2="790" y2="518" stroke="#333" stroke-width="1.5" marker-end="url(#arr)"/>
+
+    <!-- fundamentals → frontend (left) -->
+    <line x1="730" y1="542" x2="487" y2="642" stroke="#333" stroke-width="1.5" marker-end="url(#arr)"/>
+
+    <!-- techchart → agents (right) -->
+    <line x1="700" y1="307" x2="728" y2="398" stroke="#333" stroke-width="1.5" marker-end="url(#arr)"/>
+
+    <!-- ticker → earnings agent (left, down) -->
+    <line x1="205" y1="213" x2="150" y2="402" stroke="#666" stroke-width="1.5" stroke-dasharray="5,4" marker-end="url(#arr)"/>
+
+    <!-- news → builder -->
+    <line x1="940" y1="354" x2="940" y2="438" stroke="#333" stroke-width="1.5" marker-end="url(#arr)"/>
+  </svg>
+
 </div>
 
-<div class="arrows"><div class="arrow-down"><div class="arrow-line"></div>▼</div></div>
-
-<!-- ══════════════════════════════════════════════════════════ -->
-<!-- LAYER 2: SCANNER -->
-<!-- ══════════════════════════════════════════════════════════ -->
-<div class="layer">
-  <div class="layer-label">Scanner</div>
-  <div class="layer-content" style="flex-direction:column;gap:.5rem">
-    <div class="section-title">screener/ — MomentumScanner · StockUniverseFetcher</div>
-    <div style="display:flex;gap:.65rem;flex-wrap:wrap">
-      <div class="node orange xwide">📡 MomentumScanner
-        <span class="sub">16 parallel workers · ThreadPoolExecutor</span>
-      </div>
-      <div class="node orange wide">🚀 Momentum Score
-        <span class="sub">RSI 35% · 5d mom 40% · Vol 25%</span>
-      </div>
-      <div class="node orange wide">💥 Breakout Detector
-        <span class="sub">52W_HIGH · GOLDEN_CROSS · VOL_SQUEEZE · RESISTANCE_BREAK</span>
-      </div>
-      <div class="node orange wide">🌐 Universe Fetcher
-        <span class="sub">NSE CSV → ~1900 EQ symbols · SQLite cache 7d</span>
-      </div>
-    </div>
-  </div>
-</div>
-
-<div class="arrows"><div class="arrow-down"><div class="arrow-line"></div>▼</div></div>
-
-<!-- ══════════════════════════════════════════════════════════ -->
-<!-- LAYER 3: DATA -->
-<!-- ══════════════════════════════════════════════════════════ -->
-<div class="layer">
-  <div class="layer-label">Data</div>
-  <div class="layer-content" style="flex-direction:column;gap:.5rem">
-    <div class="section-title">data/ — Kite Connect primary · yfinance fallback</div>
-    <div style="display:flex;gap:.65rem;flex-wrap:wrap">
-      <div class="node green xwide">🟢 Kite Connect (Primary)
-        <span class="sub">kite_client.py · historical.py · instruments.py</span>
-      </div>
-      <div class="node gray wide">🟡 yfinance (Fallback)
-        <span class="sub">Auto-switches if Kite not connected</span>
-      </div>
-      <div class="node green wide">📋 InstrumentManager
-        <span class="sub">Symbol → instrument_token · daily cache</span>
-      </div>
-      <div class="node green wide">📈 HistoricalDataFetcher
-        <span class="sub">Batched OHLCV · rate-limited 0.4s · in-memory cache</span>
-      </div>
-      <div class="node gray wide">📰 News Fetcher
-        <span class="sub">RSS feeds · feedparser · normaliser</span>
-      </div>
-    </div>
-  </div>
-</div>
-
-<div class="arrows"><div class="arrow-down"><div class="arrow-line"></div>▼</div></div>
-
-<!-- ══════════════════════════════════════════════════════════ -->
-<!-- LAYER 4: FEATURES -->
-<!-- ══════════════════════════════════════════════════════════ -->
-<div class="layer">
-  <div class="layer-label">Features</div>
-  <div class="layer-content" style="flex-direction:column;gap:.5rem">
-    <div class="section-title">features/ — Technical Indicators · Market Structure</div>
-    <div style="display:flex;gap:.65rem;flex-wrap:wrap">
-      <div class="node teal wide">⚙️ IndicatorEngine
-        <span class="sub">RSI-14 · EMA 10/20/50/200 · ATR-14 · Z-Score-20</span>
-      </div>
-      <div class="node teal wide">📊 More Indicators
-        <span class="sub">Momentum 5d/20d · Volume Ratio · Bollinger · MACD</span>
-      </div>
-      <div class="node teal wide">🏗️ MarketStructure
-        <span class="sub">Swing highs/lows · breakout detection · trend</span>
-      </div>
-      <div class="node teal wide">📦 VolumeProfile
-        <span class="sub">POC · Value Area · HVN/LVN levels</span>
-      </div>
-    </div>
-  </div>
-</div>
-
-<div class="arrows"><div class="arrow-down"><div class="arrow-line"></div>▼</div></div>
-
-<!-- ══════════════════════════════════════════════════════════ -->
-<!-- LAYER 5: SIGNAL BRAIN (LLM + AGENTS) -->
-<!-- ══════════════════════════════════════════════════════════ -->
-<div class="layer">
-  <div class="layer-label">Signal Brain</div>
-  <div class="layer-content" style="flex-direction:column;gap:.6rem">
-    <div class="section-title">llm/ · agents/ — 5-stage pipeline · pure DeepSeek</div>
-
-    <!-- Pipeline flow -->
-    <div class="pipeline">
-      <div class="node purple">
-        Stage 1<br>
-        <span style="font-size:.65rem;opacity:.8">⚡ DeepSeek V3</span>
-        <span class="sub">deepseek-chat · fast JSON signal</span>
-      </div>
-      <div class="pipe-arrow">→</div>
-      <div class="node purple">
-        Stage 2<br>
-        <span style="font-size:.65rem;opacity:.8">🧠 DeepSeek R1</span>
-        <span class="sub">deepseek-reasoner · chain-of-thought validation</span>
-      </div>
-      <div class="pipe-arrow">→</div>
-      <div class="node red">
-        Stage 3<br>
-        <span style="font-size:.65rem;opacity:.8">😈 Devil's Advocate</span>
-        <span class="sub">R1 only if confidence ≥ 55% · "10 reasons this FAILS"</span>
-      </div>
-      <div class="pipe-arrow">→</div>
-      <div class="node purple">
-        Stage 4<br>
-        <span style="font-size:.65rem;opacity:.8">🤖 5 Agents</span>
-        <span class="sub">Technical · Sentiment · Risk · Earnings · Supervisor</span>
-      </div>
-      <div class="pipe-arrow">→</div>
-      <div class="node purple">
-        Stage 5<br>
-        <span style="font-size:.65rem;opacity:.8">📊 Signal Memory</span>
-        <span class="sub">SQLite · win-rate lookup · ±confidence adjust</span>
-      </div>
-    </div>
-
-    <!-- Decision makers -->
-    <div style="display:flex;gap:.5rem;flex-wrap:wrap;padding-left:2rem;margin-top:.3rem">
-      <div class="node gray">deepseek_v3 <span class="sub">V3 only · fast path</span></div>
-      <div class="node green">deepseek_r1_validated <span class="sub">R1 agreed with V3</span></div>
-      <div class="node red">deepseek_r1_override <span class="sub">R1 disagreed — replaced signal</span></div>
-      <div class="node amber">devil_penalised <span class="sub">Confidence reduced by devil</span></div>
-      <div class="node red">devil_rejected <span class="sub">Override ≥ 0.75 — trade blocked</span></div>
-    </div>
-  </div>
-</div>
-
-<div class="arrows"><div class="arrow-down"><div class="arrow-line"></div>▼</div></div>
-
-<!-- ══════════════════════════════════════════════════════════ -->
-<!-- LAYER 6: SIGNAL VALIDATOR + CONVICTION -->
-<!-- ══════════════════════════════════════════════════════════ -->
-<div class="layer">
-  <div class="layer-label">Scoring</div>
-  <div class="layer-content" style="flex-direction:column;gap:.5rem">
-    <div class="section-title">llm/signal_validator.py · signals/ — Final signal assembly</div>
-    <div style="display:flex;gap:.65rem;flex-wrap:wrap">
-      <div class="node teal wide">✅ SignalValidator
-        <span class="sub">Type checks · range clamp · schema validation · TradingSignal</span>
-      </div>
-      <div class="node teal wide">💡 ConvictionScorer
-        <span class="sub">signals/conviction.py · 0-100 composite score</span>
-      </div>
-      <div class="node teal wide">👤 Trader Profiles
-        <span class="sub">signals/profiles.py · aggressive / balanced / conservative</span>
-      </div>
-      <div class="node teal wide">📐 TradeSetup
-        <span class="sub">signals/trade_setup.py · Entry · Stop (1×ATR) · Target (2×ATR) · Qty</span>
-      </div>
-    </div>
-  </div>
-</div>
-
-<div class="arrows"><div class="arrow-down"><div class="arrow-line"></div>▼</div></div>
-
-<!-- ══════════════════════════════════════════════════════════ -->
-<!-- LAYER 7: RISK -->
-<!-- ══════════════════════════════════════════════════════════ -->
-<div class="layer">
-  <div class="layer-label">Risk</div>
-  <div class="layer-content" style="flex-direction:column;gap:.5rem">
-    <div class="section-title">risk/ — Gatekeeper · every trade must pass all checks</div>
-    <div style="display:flex;gap:.65rem;flex-wrap:wrap">
-      <div class="node amber xwide">🛡️ RiskManager
-        <span class="sub">risk/risk_manager.py</span>
-      </div>
-      <div class="node amber wide">MAX_CAPITAL_EXPOSURE
-        <span class="sub">20% max total deployed</span>
-      </div>
-      <div class="node amber wide">MAX_POSITION_SIZE
-        <span class="sub">10% per single stock</span>
-      </div>
-      <div class="node amber wide">MAX_OPEN_POSITIONS
-        <span class="sub">5 simultaneous max</span>
-      </div>
-      <div class="node amber wide">MAX_DAILY_LOSS
-        <span class="sub">2% of capital · hard stop</span>
-      </div>
-      <div class="node amber wide">MIN_CONFIDENCE
-        <span class="sub">60% threshold required</span>
-      </div>
-      <div class="node red wide">🛑 Kill Switch
-        <span class="sub">Instant · blocks all new trades</span>
-      </div>
-    </div>
-  </div>
-</div>
-
-<div class="arrows"><div class="arrow-down"><div class="arrow-line"></div>▼</div></div>
-
-<!-- ══════════════════════════════════════════════════════════ -->
-<!-- LAYER 8: EXECUTION -->
-<!-- ══════════════════════════════════════════════════════════ -->
-<div class="layer">
-  <div class="layer-label">Execution</div>
-  <div class="layer-content" style="flex-direction:column;gap:.5rem">
-    <div class="section-title">execution/ · paper_trading.py — Order routing</div>
-    <div style="display:flex;gap:.65rem;flex-wrap:wrap">
-      <div class="node gray wide">📄 Paper Trading (default)
-        <span class="sub">paper_trading.py · SQLite · P&L · equity curve</span>
-      </div>
-      <div class="node gray wide">💸 Zerodha Live
-        <span class="sub">zerodha_broker.py · place · cancel · poll orders</span>
-      </div>
-      <div class="node gray wide">📊 Portfolio State
-        <span class="sub">portfolio/state.py · positions · trade journal</span>
-      </div>
-      <div class="node gray wide">📈 Analytics Reporter
-        <span class="sub">analytics/reporter.py · Sharpe · CAGR · drawdown · win rate</span>
-      </div>
-    </div>
-  </div>
-</div>
-
-<!-- ══════════════════════════════════════════════════════════ -->
-<!-- FEEDBACK LOOP -->
-<!-- ══════════════════════════════════════════════════════════ -->
-<div class="arrows"><div class="arrow-down"><div class="arrow-line"></div>▼</div></div>
-
-<div class="feedback-band">
-  <div class="feedback-label">🔄 Feedback Loop — trade outcome → future signal confidence</div>
-  <div style="display:flex;gap:.65rem;flex-wrap:wrap">
-    <div class="node amber wide">📝 record_signal()
-      <span class="sub">ai/signal_memory.py · stores signal fingerprint to SQLite</span>
-    </div>
-    <div class="node amber wide">✅ update_outcome()
-      <span class="sub">WIN/LOSS + pnl_pct after trade closes</span>
-    </div>
-    <div class="node amber wide">🔍 query_similar()
-      <span class="sub">RSI bucket + momentum direction matching</span>
-    </div>
-    <div class="node amber wide">📊 Confidence Adjust
-      <span class="sub">win_rate ≥ 60% → +8% · win_rate ≤ 40% → −12%</span>
-    </div>
-  </div>
-  <div style="margin-top:.6rem;color:#ffb80066;font-size:.62rem">
-    ↑ Outcome feeds back into Stage 5 (Signal Memory) to adjust next signal's confidence
-  </div>
-</div>
-
-<!-- ══════════════════════════════════════════════════════════ -->
-<!-- BACKTEST ENGINE -->
-<!-- ══════════════════════════════════════════════════════════ -->
-<div class="layer">
-  <div class="layer-label">Backtest</div>
-  <div class="layer-content" style="flex-direction:column;gap:.5rem">
-    <div class="section-title">backtest/ · AlgoLab — Historical simulation · no lookahead</div>
-    <div style="display:flex;gap:.65rem;flex-wrap:wrap">
-      <div class="node gray wide">🔁 Backtester
-        <span class="sub">backtest/backtester.py · uses df[:bar_t] only</span>
-      </div>
-      <div class="node gray wide">📉 Simulator
-        <span class="sub">backtest/simulator.py · slippage · transaction costs</span>
-      </div>
-      <div class="node gray wide">🔀 Walk-Forward
-        <span class="sub">backtest/walk_forward.py · overfitting detection</span>
-      </div>
-      <div class="node gray wide">📦 Bulk Runner
-        <span class="sub">ui/bulk_simulator.py · 500+ stocks · 16 workers</span>
-      </div>
-    </div>
-  </div>
-</div>
-
-<!-- ══════════════════════════════════════════════════════════ -->
-<!-- LEGEND -->
-<!-- ══════════════════════════════════════════════════════════ -->
-<div class="legend">
-  <div class="legend-item">
-    <div class="legend-dot" style="background:rgba(0,212,255,.2);border-color:rgba(0,212,255,.5)"></div>
-    UI / Frontend
-  </div>
-  <div class="legend-item">
-    <div class="legend-dot" style="background:rgba(251,146,60,.2);border-color:rgba(251,146,60,.5)"></div>
-    Scanner
-  </div>
-  <div class="legend-item">
-    <div class="legend-dot" style="background:rgba(0,212,160,.2);border-color:rgba(0,212,160,.5)"></div>
-    Data Layer
-  </div>
-  <div class="legend-item">
-    <div class="legend-dot" style="background:rgba(20,184,166,.2);border-color:rgba(20,184,166,.5)"></div>
-    Features / Scoring
-  </div>
-  <div class="legend-item">
-    <div class="legend-dot" style="background:rgba(168,85,247,.2);border-color:rgba(168,85,247,.5)"></div>
-    LLM / Agents
-  </div>
-  <div class="legend-item">
-    <div class="legend-dot" style="background:rgba(255,184,0,.2);border-color:rgba(255,184,0,.5)"></div>
-    Risk / Feedback
-  </div>
-  <div class="legend-item">
-    <div class="legend-dot" style="background:rgba(255,68,102,.2);border-color:rgba(255,68,102,.5)"></div>
-    Kill / Override
-  </div>
-  <div class="legend-item">
-    <div class="legend-dot" style="background:rgba(255,255,255,.05);border-color:rgba(255,255,255,.15)"></div>
-    Execution / Backtest
-  </div>
-</div>
-
-<div style="text-align:center;margin-top:1.5rem;color:#4a5568;font-size:.6rem;letter-spacing:.08em">
-  QUANTTERM · DeepSeek V3 + R1 · Kite Connect + yfinance · NSE/BSE · Pure Python
-</div>
-
+<p style="text-align:center;font-size:11px;color:#888;margin-top:14px">
+  QUANTTERM AI — System Architecture &nbsp;|&nbsp; DeepSeek V3 + R1 Pipeline &nbsp;|&nbsp; NSE/BSE
+</p>
 </body>
 </html>
