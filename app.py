@@ -1464,7 +1464,7 @@ elif _page == "AlgoLab":
 # PAGE: TOOLS
 # ══════════════════════════════════════════════════════════════════════════════
 elif _page == "Tools":
-    _t0, _t1, _t2, _t3, _t4, _t5, _t6, _t7, _t8 = st.tabs([
+    _t0, _t1, _t2, _t3, _t4, _t5, _t6, _t7, _t8, _t9 = st.tabs([
         "📄 Daily Report",
         "📰 News",
         "🔔 Alerts",
@@ -1474,6 +1474,7 @@ elif _page == "Tools":
         "🤖 Agents",
         "🧠 Memory",
         "🎙️ Earnings",
+        "📊 Signal Tracker",
     ])
 
     # ── Daily Street Pulse Report ──────────────────────────────────────────
@@ -1986,6 +1987,11 @@ elif _page == "Tools":
     # ── Earnings ───────────────────────────────────────────────────────────
     with _t8:
         render_earnings_page()
+
+    # ── Signal Tracker ─────────────────────────────────────────────────────
+    with _t9:
+        from ui.signal_tracker_page import render_signal_tracker
+        render_signal_tracker()
 
 
 # ── Paper trading dashboard (accessible from any tab via sidebar session) ────
