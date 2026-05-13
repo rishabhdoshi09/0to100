@@ -89,6 +89,7 @@ from ui.scanner import render_scanner
 from ui.alerts_page import render_alerts_page
 from ui.options_page import render_options_page
 from ui.fii_dii_page import render_fii_dii_page
+from ui.vcp_page import render_vcp_page
 
 # ── Page config ───────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -971,13 +972,14 @@ elif _page == "Terminal":
 # PAGE: RESEARCH
 # ══════════════════════════════════════════════════════════════════════════════
 elif _page == "Research":
-    _r1, _r2, _r3, _r4, _r5, _r6 = st.tabs([
+    _r1, _r2, _r3, _r4, _r5, _r6, _r7 = st.tabs([
         "📈 Charts",
         "📊 Fundamentals",
         "📐 Multi-TF",
         "🔥 Heatmap",
         "🎯 Options",
         "🌊 FII/DII",
+        "🎯 VCP Scanner",
     ])
 
     # ── Charts ─────────────────────────────────────────────────────────────
@@ -1424,6 +1426,9 @@ elif _page == "Research":
     # ── FII/DII ────────────────────────────────────────────────────────────
     with _r6:
         render_fii_dii_page()
+
+    with _r7:
+        render_vcp_page(universe)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
