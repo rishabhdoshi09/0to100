@@ -1,19 +1,10 @@
 """
-DevBloom AI Co-Pilot "Dev" — dual-LLM streaming chat (DeepSeek → Claude).
+QUANTTERM AI Co-Pilot "Dev" — DeepSeek V3 streaming chat.
 
-Both the sidebar mini-copilot and the full inline tab share a single
-st.session_state key ("devbloom_chat") via DualLLMService, so a question
-asked in the sidebar is visible when the user opens the Co-Pilot tab and
-vice versa.
+Sidebar mini-copilot and full inline tab share a single session_state key
+("devbloom_chat") via DualLLMService — history is shared across both.
 
-Pipeline:
-  Stage 1 · DeepSeek  — fast first-pass analysis (shown as "draft" until
-                         Claude completes)
-  Stage 2 · Claude    — validates, refines, or overrides; labels response
-                         [VALIDATED] / [OVERRIDE]
-
-The UI shows a decision badge on every assistant message. When Claude
-overrides DeepSeek, the badge gains a tooltip showing what DeepSeek had said.
+Pipeline: DeepSeek V3 (streaming) → optional R1 deep validation (use_r1=True).
 """
 from __future__ import annotations
 
@@ -89,7 +80,7 @@ def render_copilot_sidebar(context: dict | None = None):
         "<div style='padding:.5rem 0 .25rem'>"
         "<span style='font-size:.6rem;color:#8892a4;text-transform:uppercase;letter-spacing:.06em'>AI Co-Pilot</span><br>"
         "<span style='font-size:1.1rem;color:#00d4ff;font-weight:700'>⚡ Dev</span>"
-        "<span style='font-size:.6rem;color:#8892a4;margin-left:.5rem'>DeepSeek → Claude</span>"
+        "<span style='font-size:.6rem;color:#8892a4;margin-left:.5rem'>DeepSeek V3</span>"
         "</div>",
         unsafe_allow_html=True,
     )
@@ -105,7 +96,7 @@ def render_copilot_sidebar(context: dict | None = None):
         else:
             _render_assistant_msg(
                 msg["content"],
-                msg.get("decision_maker", "claude_validated"),
+                msg.get("decision_maker", "deepseek_v3"),
                 msg.get("detail", ""),
                 ts=msg.get("ts", ""),
                 sidebar=True,
@@ -123,7 +114,7 @@ def render_copilot_sidebar(context: dict | None = None):
         svc.append_user(user_input.strip())
         with st.sidebar:
             placeholder = st.empty()
-            full, dm, detail = "", "claude_validated", ""
+            full, dm, detail = "", "deepseek_v3", ""
             for chunk, dm, detail in svc.stream(user_input.strip(), ctx):
                 full += chunk
                 placeholder.markdown(
@@ -159,13 +150,13 @@ def render_copilot_inline(context: dict | None = None):
 
     st.markdown("### ⚡ Dev — AI Co-Pilot")
     st.caption(
-        "Powered by **DeepSeek → Claude** dual-LLM pipeline. "
-        "DeepSeek generates the first-pass draft; Claude validates or overrides. "
-        "Hover a **⚡ Claude Override** badge to see what DeepSeek originally said. "
+        "Powered by **DeepSeek V3** dual-LLM pipeline. "
+        "DeepSeek generates the first-pass draft; DeepSeek V3 analysis. "
+        ""
         "Use `/why`, `/model`, `/idea`, `/compare` slash commands."
     )
 
-    if st.button("☀️ Generate Morning Trade Ideas  (DeepSeek → Claude)", key="morning_ideas"):
+    if st.button("☀️ Generate Morning Trade Ideas  (DeepSeek V3)", key="morning_ideas"):
         _fire_and_append(svc, _morning_prompt(), ctx)
         st.rerun()
 
@@ -184,7 +175,7 @@ def render_copilot_inline(context: dict | None = None):
         else:
             _render_assistant_msg(
                 msg["content"],
-                msg.get("decision_maker", "claude_validated"),
+                msg.get("decision_maker", "deepseek_v3"),
                 msg.get("detail", ""),
                 ts=msg.get("ts", ""),
                 sidebar=False,
@@ -214,29 +205,19 @@ def render_copilot_inline(context: dict | None = None):
 
         # Two-phase streaming display:
         # Phase 1 (DeepSeek drafting) — muted italic ghost text
-        # Phase 2 (Claude label arrives) — full-brightness final text
+        # Stream DeepSeek V3 tokens
         st.markdown(
-            "<span style='color:#8892a4;font-size:.7rem;font-weight:600'>⚡ Dev (DeepSeek drafting…)</span>",
+            "<span style='color:#8892a4;font-size:.7rem;font-weight:600'>⚡ Dev (thinking…)</span>",
             unsafe_allow_html=True,
         )
         placeholder = st.empty()
-        full, dm, detail = "", "claude_validated", ""
-        claude_started = False
-
+        full, dm, detail = "", "deepseek_v3", ""
         for chunk, dm, detail in svc.stream(enriched_input, ctx):
             full += chunk
-            if not claude_started and ("[VALIDATED]" in full or "[OVERRIDE]" in full):
-                claude_started = True
-            if claude_started:
-                placeholder.markdown(
-                    f"<div style='color:#e8eaf0;font-size:.88rem;line-height:1.7'>{full}▍</div>",
-                    unsafe_allow_html=True,
-                )
-            else:
-                placeholder.markdown(
-                    f"<div style='color:#8892a4;font-size:.85rem;line-height:1.7;font-style:italic'>{full}▍</div>",
-                    unsafe_allow_html=True,
-                )
+            placeholder.markdown(
+                f"<div style='color:#e8eaf0;font-size:.88rem;line-height:1.7'>{full}▍</div>",
+                unsafe_allow_html=True,
+            )
 
         placeholder.markdown(
             f"<div style='color:#e8eaf0;font-size:.88rem;line-height:1.7'>{full}</div>",

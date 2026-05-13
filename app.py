@@ -1457,7 +1457,8 @@ elif _page == "AlgoLab":
 # PAGE: TOOLS
 # ══════════════════════════════════════════════════════════════════════════════
 elif _page == "Tools":
-    _t1, _t2, _t3, _t4, _t5, _t6, _t7, _t8 = st.tabs([
+    _t0, _t1, _t2, _t3, _t4, _t5, _t6, _t7, _t8 = st.tabs([
+        "📄 Daily Report",
         "📰 News",
         "🔔 Alerts",
         "📊 Screener",
@@ -1467,6 +1468,82 @@ elif _page == "Tools":
         "🧠 Memory",
         "🎙️ Earnings",
     ])
+
+    # ── Daily Street Pulse Report ──────────────────────────────────────────
+    with _t0:
+        st.markdown(
+            "<h2 style='color:#00d4ff;font-family:JetBrains Mono,monospace;"
+            "font-size:1.2rem;letter-spacing:2px;margin-bottom:.25rem'>"
+            "📄 DAILY STREET PULSE</h2>"
+            "<p style='color:#4a5568;font-size:.75rem;margin-bottom:1.2rem'>"
+            "Auto-generated daily market report · DeepSeek V3 analysis · "
+            "Nifty snapshot · Top movers · Breakout picks</p>",
+            unsafe_allow_html=True,
+        )
+
+        _rp_col1, _rp_col2, _rp_col3 = st.columns([2, 2, 3])
+        with _rp_col1:
+            _gen_report = st.button(
+                "⚡ Generate Today's Report",
+                key="gen_daily_report",
+                type="primary",
+                use_container_width=True,
+            )
+        with _rp_col2:
+            _rp_format = st.radio(
+                "Format", ["PDF", "HTML"],
+                horizontal=True, key="report_format",
+            )
+        with _rp_col3:
+            st.caption(
+                "Fetches live data from Kite/yfinance + runs DeepSeek analysis. "
+                "Takes ~30-60 seconds."
+            )
+
+        if _gen_report:
+            with st.spinner("Fetching market data and running DeepSeek analysis…"):
+                try:
+                    from reports.daily_pulse import build_report_data, generate_pdf, generate_html_bytes, render_html
+                    _rdata = build_report_data()
+                    st.success(f"Report generated for {_rdata['date']}")
+
+                    if _rp_format == "PDF":
+                        try:
+                            _pdf_bytes = generate_pdf(_rdata)
+                            st.download_button(
+                                label="📥 Download PDF",
+                                data=_pdf_bytes,
+                                file_name=f"daily_street_pulse_{datetime.now().strftime('%Y%m%d')}.pdf",
+                                mime="application/pdf",
+                                key="download_pdf_btn",
+                            )
+                        except Exception as _pdf_err:
+                            st.warning(f"PDF generation failed ({_pdf_err}), downloading HTML instead.")
+                            _html_bytes = generate_html_bytes(_rdata)
+                            st.download_button(
+                                label="📥 Download HTML",
+                                data=_html_bytes,
+                                file_name=f"daily_street_pulse_{datetime.now().strftime('%Y%m%d')}.html",
+                                mime="text/html",
+                                key="download_html_fallback_btn",
+                            )
+                    else:
+                        _html_bytes = generate_html_bytes(_rdata)
+                        st.download_button(
+                            label="📥 Download HTML",
+                            data=_html_bytes,
+                            file_name=f"daily_street_pulse_{datetime.now().strftime('%Y%m%d')}.html",
+                            mime="text/html",
+                            key="download_html_btn",
+                        )
+
+                    # Preview in app
+                    with st.expander("👁 Preview Report", expanded=True):
+                        st.components.v1.html(render_html(_rdata), height=900, scrolling=True)
+
+                except Exception as _re:
+                    st.error(f"Report generation failed: {_re}")
+
 
     # ── News ───────────────────────────────────────────────────────────────
     with _t1:
