@@ -1,11 +1,15 @@
 """
 Market Scanner UI — Momentum & Breakout panels.
 
-Two modes:
-  · Quick Scan  — your configured universe (instant, ~10-30 stocks)
-  · Full NSE    — all ~1900 NSE EQ symbols scanned on-click (takes 2-4 min)
+Signal logic:
+  BUY   — composite score ≥ 65 AND RSI < 75
+           composite = momentum(40%) + RSI(35%) + volume(25%)
+  WATCH — composite score 45-64
+  NEUTRAL — composite < 45
 
-Rendered on the Dashboard homepage.
+Two scan modes:
+  · Quick Scan  — your configured universe (instant, ~10-30 stocks)
+  · Full NSE    — all ~1900 NSE EQ symbols (takes 2-4 min), yfinance
 """
 from __future__ import annotations
 
@@ -19,6 +23,15 @@ _BREAKOUT_ICONS = {
     "CUP_HANDLE":       "⭐",
 }
 _SIGNAL_COLOR = {"BUY": "#00d4a0", "WATCH": "#f59e0b", "NEUTRAL": "#8892a4"}
+
+# Market cap buckets (approx in Cr)
+_MCAP_FILTER = {
+    "All":        (0,        99_999_999),
+    "Largecap":   (20_000,   99_999_999),
+    "Midcap":     (5_000,    19_999),
+    "Smallcap":   (500,       4_999),
+    "Microcap":   (0,           499),
+}
 
 
 @st.cache_data(ttl=300, show_spinner=False)
@@ -37,12 +50,36 @@ def _cached_breakouts(symbols_key: str, top_n: int):
 
 @st.cache_data(ttl=86_400, show_spinner=False)
 def _get_full_universe() -> list[str]:
-    """Load full NSE EQ universe (~1900 symbols). Cached 24h."""
     try:
         from screener.universe import StockUniverseFetcher
         return StockUniverseFetcher().get_all_symbols()
     except Exception:
         return []
+
+
+@st.cache_data(ttl=3_600, show_spinner=False)
+def _get_mcap_cr(symbol: str) -> float:
+    """Fetch market cap in Cr via yfinance. Cached 1h."""
+    try:
+        import yfinance as yf
+        info = yf.Ticker(f"{symbol}.NS").fast_info
+        mc = getattr(info, "market_cap", None)
+        return round(float(mc) / 1e7, 0) if mc else 0.0
+    except Exception:
+        return 0.0
+
+
+def _filter_by_mcap(stocks, mcap_filter: str):
+    """Filter a list of MomentumStock/BreakoutStock by market cap bucket."""
+    if mcap_filter == "All":
+        return stocks
+    lo, hi = _MCAP_FILTER[mcap_filter]
+    filtered = []
+    for s in stocks:
+        mc = _get_mcap_cr(s.symbol)
+        if mc == 0 or lo <= mc <= hi:   # include unknowns so we don't lose everything
+            filtered.append(s)
+    return filtered
 
 
 def render_scanner(universe: list[str]) -> None:
@@ -54,8 +91,28 @@ def render_scanner(universe: list[str]) -> None:
         unsafe_allow_html=True,
     )
 
-    # ── Mode selector + buttons ───────────────────────────────────────────────
-    _c1, _c2, _c3, _c4 = st.columns([2, 1, 1, 3])
+    # ── Signal legend ─────────────────────────────────────────────────────────
+    with st.expander("ℹ️ How signals are calculated", expanded=False):
+        st.markdown(
+            """
+**Composite Score** = Momentum×40% + RSI×35% + Volume×25%
+
+| Signal | Condition |
+|--------|-----------|
+| 🟢 **BUY** | Composite ≥ 65 AND RSI < 75 |
+| 🟡 **WATCH** | Composite 45–64 |
+| ⚪ **NEUTRAL** | Composite < 45 |
+
+- **Momentum** — 5-day price change normalised (-5% to +10%)
+- **RSI** — 14-day RSI, ideal zone 50–70
+- **Volume** — today's volume vs 20-day avg (surge = bullish)
+- **Breakouts** — 52W high cross, Golden Cross (SMA50 > SMA200), Volume squeeze
+            """,
+            unsafe_allow_html=True,
+        )
+
+    # ── Controls ──────────────────────────────────────────────────────────────
+    _c1, _c2, _c3, _c4, _c5 = st.columns([2, 1, 1, 1, 2])
     with _c1:
         scan_mode = st.radio(
             "Scan mode",
@@ -75,20 +132,26 @@ def render_scanner(universe: list[str]) -> None:
             use_container_width=True,
         )
     with _c4:
+        mcap_filter = st.selectbox(
+            "Market Cap",
+            options=list(_MCAP_FILTER.keys()),
+            index=0,
+            key="scanner_mcap",
+            label_visibility="collapsed",
+            help="Filter by market cap: Largecap >₹20k Cr · Midcap ₹5k-20k Cr · Smallcap ₹500-5k Cr",
+        )
+    with _c5:
         if scan_mode == "Full NSE (~1900 stocks)":
-            st.caption("⏱ Full scan: ~3-4 min · parallel 16 workers · results cached 5 min")
+            st.caption("⏱ Full scan: ~3-4 min · 16 workers · yfinance · results cached 5 min")
         else:
-            st.caption(f"Scanning {len(universe)} stocks from your universe · cached 5 min")
+            st.caption(f"Scanning {len(universe)} stocks · Kite data · cached 5 min")
 
-    # ── Resolve symbol list ────────────────────────────────────────────────────
+    # ── Resolve symbol list ───────────────────────────────────────────────────
     if scan_full or scan_mode == "Full NSE (~1900 stocks)":
         with st.spinner("Loading NSE symbol list…"):
             all_nse = _get_full_universe()
-        if not all_nse:
-            st.warning("Could not load NSE universe. Using your configured universe.")
-            symbols = universe
-        else:
-            symbols = all_nse
+        symbols = all_nse if all_nse else universe
+        if all_nse:
             st.caption(
                 f"<span style='color:#00d4ff;font-size:.72rem'>✅ {len(symbols)} NSE symbols loaded</span>",
                 unsafe_allow_html=True,
@@ -98,17 +161,24 @@ def render_scanner(universe: list[str]) -> None:
 
     symbols_key = ",".join(symbols)
 
-    # Clear cache on manual scan trigger
     if scan_quick or scan_full:
         st.cache_data.clear()
 
-    # ── Show progress for full scan ───────────────────────────────────────────
     if len(symbols) > 100:
         st.info(
             f"🔄 Scanning **{len(symbols)} stocks** in parallel (16 workers). "
             "This may take 3-4 minutes. Results appear when complete.",
             icon="⏱",
         )
+
+    # ── Market cap filter note ────────────────────────────────────────────────
+    if mcap_filter != "All":
+        lo, hi = _MCAP_FILTER[mcap_filter]
+        if hi > 90_000_000:
+            cap_label = f"Largecap (>₹{lo:,} Cr)"
+        else:
+            cap_label = f"{mcap_filter} (₹{lo:,}–₹{hi:,} Cr)"
+        st.caption(f"🔍 Filtering: **{cap_label}** — fetches market cap per stock (may slow down slightly)")
 
     # ── Two-column results ────────────────────────────────────────────────────
     col_mom, col_brk = st.columns(2)
@@ -119,18 +189,23 @@ def render_scanner(universe: list[str]) -> None:
             "border-radius:10px;padding:12px 16px;margin-bottom:8px'>"
             "<span style='color:#00d4a0;font-size:.75rem;font-weight:700;"
             "letter-spacing:2px'>🚀 TOP MOMENTUM</span>"
-            "<span style='color:#4a5568;font-size:.65rem;margin-left:.5rem'>top 20 by composite score</span>"
+            "<span style='color:#4a5568;font-size:.65rem;margin-left:.5rem'>"
+            "Score = Momentum 40% + RSI 35% + Volume 25%</span>"
             "</div>",
             unsafe_allow_html=True,
         )
         with st.spinner(f"Scanning momentum across {len(symbols)} stocks…"):
-            momentum_stocks = _cached_momentum(symbols_key, top_n=20)
+            momentum_stocks = _cached_momentum(symbols_key, top_n=40)
+
+        if mcap_filter != "All":
+            momentum_stocks = _filter_by_mcap(momentum_stocks, mcap_filter)
+
+        momentum_stocks = momentum_stocks[:20]
 
         if not momentum_stocks:
             st.markdown(
                 "<div style='text-align:center;padding:2rem;color:#4a5568;font-size:.82rem'>"
-                "No momentum signals found.<br><span style='font-size:.7rem'>"
-                "Try Full NSE Scan for more results.</span></div>",
+                "No momentum signals found for this filter.</div>",
                 unsafe_allow_html=True,
             )
         else:
@@ -142,18 +217,23 @@ def render_scanner(universe: list[str]) -> None:
             "border-radius:10px;padding:12px 16px;margin-bottom:8px'>"
             "<span style='color:#f97316;font-size:.75rem;font-weight:700;"
             "letter-spacing:2px'>💥 BREAKOUTS</span>"
-            "<span style='color:#4a5568;font-size:.65rem;margin-left:.5rem'>top 20 by confidence</span>"
+            "<span style='color:#4a5568;font-size:.65rem;margin-left:.5rem'>"
+            "52W high · Golden cross · Vol squeeze</span>"
             "</div>",
             unsafe_allow_html=True,
         )
         with st.spinner(f"Scanning breakouts across {len(symbols)} stocks…"):
-            breakout_stocks = _cached_breakouts(symbols_key, top_n=20)
+            breakout_stocks = _cached_breakouts(symbols_key, top_n=40)
+
+        if mcap_filter != "All":
+            breakout_stocks = _filter_by_mcap(breakout_stocks, mcap_filter)
+
+        breakout_stocks = breakout_stocks[:20]
 
         if not breakout_stocks:
             st.markdown(
                 "<div style='text-align:center;padding:2rem;color:#4a5568;font-size:.82rem'>"
-                "No breakout setups detected.<br><span style='font-size:.7rem'>"
-                "Try Full NSE Scan for more results.</span></div>",
+                "No breakout setups for this filter.</div>",
                 unsafe_allow_html=True,
             )
         else:
