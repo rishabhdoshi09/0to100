@@ -283,7 +283,7 @@ def render_bulk_backtest():
     workers, timeout = _workers_slider("bbt")
 
     if st.button(f"▶ Run on {len(symbols)} symbols", key="bbt_run",
-                 type="primary", width="stretch", disabled=not symbols):
+                 type="primary", use_container_width=True, disabled=not symbols):
         results = _run_parallel(
             lambda s: _backtest_one(s, code, int(days), float(capital)),
             symbols, workers, timeout,
@@ -309,7 +309,7 @@ def render_bulk_backtest():
 
         view = st.radio("View", ["Table", "Heatmap"], horizontal=True, key="bbt_view")
         if view == "Table":
-            st.dataframe(df, hide_index=True, width="stretch")
+            st.dataframe(df, hide_index=True, use_container_width=True)
         else:
             r_lo, r_hi = df["Return %"].min(), df["Return %"].max()
             s_lo, s_hi = df["Sharpe"].min(),    df["Sharpe"].max()
@@ -330,11 +330,11 @@ def render_bulk_backtest():
                 axis=0,
             ).format({"Return %":"{:+.1f}", "Sharpe":"{:.2f}",
                       "Max DD %":"{:.1f}", "Win %":"{:.0f}", "LTP ₹":"₹{:,.2f}"})
-            st.dataframe(styler, hide_index=True, width="stretch")
+            st.dataframe(styler, hide_index=True, use_container_width=True)
 
     if bad:
         with st.expander(f"⚠️ {len(bad)} symbols skipped"):
-            st.dataframe(pd.DataFrame(bad), hide_index=True, width="stretch")
+            st.dataframe(pd.DataFrame(bad), hide_index=True, use_container_width=True)
 
 
 def render_bulk_live_signals():
@@ -351,7 +351,7 @@ def render_bulk_live_signals():
     workers, timeout = _workers_slider("bls")
 
     if st.button(f"📡 Scan {len(symbols)} symbols", key="bls_run",
-                 type="primary", width="stretch", disabled=not symbols):
+                 type="primary", use_container_width=True, disabled=not symbols):
         results = _run_parallel(
             lambda s: _signal_one(s, code),
             symbols, workers, timeout,
@@ -384,7 +384,7 @@ def render_bulk_live_signals():
 
         view = st.radio("View", ["Table", "Heatmap"], horizontal=True, key="bls_view")
         if view == "Table":
-            st.dataframe(df, hide_index=True, width="stretch")
+            st.dataframe(df, hide_index=True, use_container_width=True)
         else:
             d_lo, d_hi = df["Day %"].min(), df["Day %"].max()
             styler = df.style.apply(
@@ -395,8 +395,8 @@ def render_bulk_live_signals():
                             else [""] * len(col),
                 axis=0,
             ).format({"LTP ₹":"₹{:,.2f}", "Day %":"{:+.2f}%"})
-            st.dataframe(styler, hide_index=True, width="stretch")
+            st.dataframe(styler, hide_index=True, use_container_width=True)
 
     if bad:
         with st.expander(f"⚠️ {len(bad)} symbols skipped"):
-            st.dataframe(pd.DataFrame(bad), hide_index=True, width="stretch")
+            st.dataframe(pd.DataFrame(bad), hide_index=True, use_container_width=True)

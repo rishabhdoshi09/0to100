@@ -190,7 +190,7 @@ def render_journal():
             xaxis=dict(color="#8892a4", showgrid=False),
             yaxis=dict(color="#8892a4", tickprefix="₹", gridcolor="rgba(255,255,255,0.04)"),
         )
-        st.plotly_chart(fig, width="stretch", config={"displayModeBar": False})
+        st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False}, key="journal_equity_chart")
 
     # ── Auto-journal entries ───────────────────────────────────────────────────
     st.markdown("#### Auto-Journal")
@@ -243,4 +243,4 @@ def render_journal():
     # ── Closed positions table ────────────────────────────────────────────────
     if closed is not None and not closed.empty:
         with st.expander("Closed Trades"):
-            st.dataframe(closed, width="stretch")
+            st.dataframe(closed, use_container_width=True)

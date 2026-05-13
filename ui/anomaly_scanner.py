@@ -81,7 +81,7 @@ def render_anomaly_scanner(universe: list[str] | None = None):
 
     uni = tuple((universe or UNIVERSE_FALLBACK)[:int(max_symbols)])
 
-    if st.button("🔎 Scan Now", key="anomaly_scan", width="stretch"):
+    if st.button("🔎 Scan Now", key="anomaly_scan", use_container_width=True):
         with st.spinner(f"Scanning {len(uni)} symbols for anomalies…"):
             df = run_anomaly_scan(uni, z_threshold=z_thresh)
             st.session_state["anomaly_results"] = df

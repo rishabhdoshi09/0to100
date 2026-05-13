@@ -92,7 +92,7 @@ def render_macro_dashboard():
                 xaxis=dict(color="#8892a4", tickfont=dict(size=10)),
                 yaxis=dict(color="#8892a4", tickfont=dict(size=10), ticksuffix="%"),
             )
-            st.plotly_chart(fig, width="stretch", config={"displayModeBar": False})
+            st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False}, key="macro_chart")
             # 2s10s spread
             if "2Y" in yc.index and "10Y" in yc.index:
                 spread = yc["10Y"] - yc.get("2Y", yc["3M"])

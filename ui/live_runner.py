@@ -185,7 +185,7 @@ def render_live_runner(default_symbol: str = "RELIANCE"):
     capital = c2.number_input("Capital ₹", value=10_000, step=1_000,
                               min_value=1_000, key="lr_cap")
     mode = c3.radio("Mode", ["Paper", "Kite Live"], horizontal=False, key="lr_mode")
-    eval_btn = c4.button("🔎 Evaluate", key="lr_eval_btn", width="stretch")
+    eval_btn = c4.button("🔎 Evaluate", key="lr_eval_btn", use_container_width=True)
 
     if eval_btn:
         with st.spinner(f"Fetching latest data for {sym}…"):
@@ -273,7 +273,7 @@ def render_live_runner(default_symbol: str = "RELIANCE"):
     confirm_label = (f"✅ Confirm & Place {mode_now.upper()} {action} Order  "
                      f"({qty} × ₹{ltp:,.2f} = ₹{qty*ltp:,.0f})")
     if st.button(confirm_label, key="lr_confirm",
-                 disabled=confirm_disabled, type="primary", width="stretch"):
+                 disabled=confirm_disabled, type="primary", use_container_width=True):
         try:
             if mode_now == "Paper":
                 oid = _place_paper_order(eval_state["symbol"], action, ltp, qty)

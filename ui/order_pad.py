@@ -79,14 +79,13 @@ def render_order_pad(symbol: str = "", price: float = 0.0, indicators: dict | No
             )
 
         col_ai, col_place = st.columns([1, 2])
-        ai_check = col_ai.form_submit_button("🤖 AI Check", width="stretch")
+        ai_check = col_ai.form_submit_button("🤖 AI Check", use_container_width=True)
 
         # ABORT blocks Place Order — user must clear to override
         ai_data   = st.session_state.get("_order_ai_verdict")
         is_aborted = ai_data and ai_data[0] == "ABORT"
         submitted  = col_place.form_submit_button(
-            "⚡ Place Paper Order",
-            width="stretch",
+            "⚡ Place Paper Order", use_container_width=True,
             disabled=bool(is_aborted),
         )
 
@@ -225,7 +224,7 @@ def render_equity_curve():
                    gridcolor="rgba(255,255,255,0.04)"),
         showlegend=False,
     )
-    st.plotly_chart(fig, width="stretch", config={"displayModeBar": False})
+    st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
 
 
 def render_backtest_bridge(symbol: str, fetcher=None, ie=None):
@@ -238,7 +237,7 @@ def render_backtest_bridge(symbol: str, fetcher=None, ie=None):
     slippage  = col2.slider("Slippage %", 0.0, 1.0, 0.05, 0.01)
     use_llm   = col3.checkbox("Include LLM signals", value=False)
 
-    if st.button("▶ Run Backtest", width="stretch", key="run_backtest_bridge"):
+    if st.button("▶ Run Backtest", use_container_width=True, key="run_backtest_bridge"):
         if not symbol:
             st.error("No symbol selected.")
             return
@@ -294,7 +293,7 @@ def render_backtest_bridge(symbol: str, fetcher=None, ie=None):
                         yaxis=dict(color="#8892a4", tickprefix="₹",
                                    gridcolor="rgba(255,255,255,0.04)"),
                     )
-                    st.plotly_chart(fig, width="stretch", config={"displayModeBar": False})
+                    st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
 
             except Exception as e:
                 st.error(f"Backtest failed: {e}")

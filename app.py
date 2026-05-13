@@ -681,55 +681,65 @@ def get_stock_verdict(symbol):
 # SIDEBAR
 # ══════════════════════════════════════════════════════════════════════════════
 with st.sidebar:
+    # ── Logo ───────────────────────────────────────────────────────────────
     st.markdown(
-        "<div style='padding:.5rem 0 .25rem'>"
-        "<span style='font-size:.6rem;color:#8892a4;text-transform:uppercase;letter-spacing:.1em'>AlgoTrading Terminal</span><br>"
-        "<span style='font-size:1.4rem;color:#00d4ff;font-weight:700;letter-spacing:.03em'>⚡ QUANTTERM</span>"
+        "<div style='padding:.75rem 0 .5rem'>"
+        "<span style='font-size:.6rem;color:#4a5568;text-transform:uppercase;"
+        "letter-spacing:.15em;font-family:JetBrains Mono,monospace'>AlgoTrading Terminal</span><br>"
+        "<span style='font-size:1.5rem;color:#00d4ff;font-weight:800;"
+        "letter-spacing:.04em;font-family:JetBrains Mono,monospace'>⚡ QUANTTERM</span>"
         "</div>",
         unsafe_allow_html=True,
     )
 
-    st.divider()
-
-    # ── Universe settings ──────────────────────────────────────────────────
-    st.markdown("**Universe**")
-    _default_universe = "\n".join(settings.symbol_list)
-    _universe_input = st.text_area(
-        "Symbols (one per line)",
-        value=_default_universe,
-        height=120,
-        key="universe_input",
+    # ── Navigation ─────────────────────────────────────────────────────────
+    _nav_page = st.radio(
+        "Navigate",
+        ["🏠  Dashboard", "⚡  Terminal", "🔬  Research", "🧬  AlgoLab", "🛠️  Tools"],
         label_visibility="collapsed",
+        key="sidebar_nav",
     )
-    universe = [s.strip().upper() for s in _universe_input.split("\n") if s.strip()]
-    if not universe:
-        universe = settings.symbol_list
+    _page = _nav_page.split("  ", 1)[-1].strip()  # "Dashboard", "Terminal", …
 
     st.divider()
 
-    # ── Paper trading toggle ───────────────────────────────────────────────
-    _paper = st.toggle(
-        "📄 Paper Trading",
-        value=os.getenv("SQ_PAPER_TRADING", "true").lower() == "true",
-        key="paper_trading_toggle",
-    )
-
-    # ── DeepSeek model indicator ───────────────────────────────────────────
-    _ds_model = settings.deepseek_model
-    _model_label = "DeepSeek R1" if "r1" in _ds_model.lower() else "DeepSeek V3"
-    _ds_key_ok   = bool(os.getenv("DEEPSEEK_API_KEY"))
-    st.caption(
-        f"🤖 Model: **{_model_label}**  {'🟢' if _ds_key_ok else '🔴'}"
-    )
-
-    # ── System status ──────────────────────────────────────────────────────
+    # ── Status strip ───────────────────────────────────────────────────────
     _ms, _mc = market_status()
+    _paper = os.getenv("SQ_PAPER_TRADING", "true").lower() == "true"
+    _ds_key_ok = bool(os.getenv("DEEPSEEK_API_KEY"))
     st.markdown(
-        f"<div style='background:{_mc};border-radius:8px;padding:.4rem .8rem;"
-        f"text-align:center;font-size:.85rem;font-weight:600'>{_ms}</div>",
+        f"<div style='background:{_mc}22;border:1px solid {_mc}55;border-radius:8px;"
+        f"padding:.35rem .75rem;font-size:.78rem;font-weight:600;"
+        f"font-family:JetBrains Mono,monospace;color:{_mc}'>{_ms}</div>",
         unsafe_allow_html=True,
     )
-    st.caption(f"🕐 {datetime.now().strftime('%H:%M:%S')}  |  {'📄 Paper' if _paper else '💸 Live'}")
+    st.markdown(
+        f"<div style='display:flex;gap:.5rem;margin-top:.4rem;flex-wrap:wrap'>"
+        f"<span style='font-size:.65rem;color:#8892a4'>🕐 {datetime.now().strftime('%H:%M')}</span>"
+        f"<span style='font-size:.65rem;color:{'#4a5568' if _paper else '#00d4a0'}'>{'📄 Paper' if _paper else '💸 Live'}</span>"
+        f"<span style='font-size:.65rem;color:{'#00d4a0' if _ds_key_ok else '#ff4466'}'>{'🟢 DeepSeek' if _ds_key_ok else '🔴 No API Key'}</span>"
+        f"</div>",
+        unsafe_allow_html=True,
+    )
+
+    # ── Universe (collapsed by default) ───────────────────────────────────
+    with st.expander("📋 Universe", expanded=False):
+        _default_universe = "\n".join(settings.symbol_list)
+        _universe_input = st.text_area(
+            "Symbols (one per line)",
+            value=_default_universe,
+            height=100,
+            key="universe_input",
+            label_visibility="collapsed",
+        )
+        universe = [s.strip().upper() for s in _universe_input.split("\n") if s.strip()]
+        if not universe:
+            universe = settings.symbol_list
+        _paper_toggle = st.toggle("📄 Paper Trading", value=_paper, key="paper_trading_toggle")
+
+    if st.button("🔄 Refresh Data", use_container_width=True):
+        st.cache_data.clear()
+        st.rerun()
 
     # ── Auto-refresh ───────────────────────────────────────────────────────
     _auto = st.checkbox("⏱ Auto-refresh (30s)", key="auto_refresh_enabled")
@@ -740,14 +750,8 @@ with st.sidebar:
             if _ticks and _ticks != st.session_state.get("_last_auto_tick"):
                 st.session_state["_last_auto_tick"] = _ticks
                 st.cache_data.clear()
-            st.caption(f"🟢 Auto-refresh active (tick #{_ticks})")
-        except Exception as _ar_err:
-            logger.warning("autorefresh_unavailable err=%s", _ar_err)
-            st.caption("⚠️ streamlit-autorefresh not installed.")
-
-    if st.button("🔄 Refresh All Data", use_container_width=True):
-        st.cache_data.clear()
-        st.rerun()
+        except Exception:
+            pass
 
     st.divider()
 
@@ -758,72 +762,72 @@ with st.sidebar:
     })
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# MAIN TABS
-# ══════════════════════════════════════════════════════════════════════════════
-tab_home, tab_terminal, tab_research, tab_algolab, tab_tools = st.tabs([
-    "🏠 Home",
-    "⚡ Terminal",
-    "🔬 Research",
-    "🧬 AlgoLab",
-    "🛠️ Tools",
-])
-
-# ── Shared symbol data (built once, used across tabs) ─────────────────────────
+# ── Shared symbol data (built once) ──────────────────────────────────────────
 symbol_map  = get_all_equity_symbols()
 symbol_list = sorted(symbol_map.keys())
 
+# ── Route to active page ──────────────────────────────────────────────────────
+if "sidebar_nav" not in st.session_state:
+    st.session_state["sidebar_nav"] = "🏠  Dashboard"
+_page = st.session_state.get("sidebar_nav", "🏠  Dashboard").split("  ", 1)[-1].strip()
+
+# Handle session-state navigation from watchlist / homepage buttons
+if st.session_state.get("active_tab") == "terminal":
+    st.session_state["sidebar_nav"] = "⚡  Terminal"
+    st.session_state.pop("active_tab", None)
+    _page = "Terminal"
+
 
 # ══════════════════════════════════════════════════════════════════════════════
-# TAB: HOME
+# PAGE: DASHBOARD
 # ══════════════════════════════════════════════════════════════════════════════
-with tab_home:
+if _page == "Dashboard":
     render_homepage(universe)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# TAB: TERMINAL
+# PAGE: TERMINAL
 # ══════════════════════════════════════════════════════════════════════════════
-with tab_terminal:
-    col_watchlist, col_chart, col_agent, col_portfolio = st.columns([15, 45, 25, 15])
-
-    # ── Col 1: Watchlist ──────────────────────────────────────────────────
-    with col_watchlist:
-        st.markdown("**Watchlist**")
-        render_watchlist()
-
-    # ── Col 2: Chart ──────────────────────────────────────────────────────
-    with col_chart:
-        st.markdown("**Chart**")
+elif _page == "Terminal":
+    # ── Top bar: symbol picker + timeframe ───────────────────────────────
+    _tb_c1, _tb_c2, _tb_c3, _tb_c4 = st.columns([3, 2, 1, 1])
+    with _tb_c1:
         _chart_sym = st.selectbox(
             "Symbol",
             options=symbol_list,
-            format_func=lambda x: f"{x} – {symbol_map.get(x, x)}",
+            index=symbol_list.index(st.session_state.get("terminal_symbol", "RELIANCE"))
+                  if st.session_state.get("terminal_symbol", "RELIANCE") in symbol_list else 0,
+            format_func=lambda x: f"{x}  ·  {symbol_map.get(x, '')}",
             key="terminal_chart_sym",
             label_visibility="collapsed",
         )
+    with _tb_c2:
         _tf = st.radio(
-            "Timeframe",
-            ["1m", "5m", "15m", "1h", "1D"],
-            horizontal=True,
-            key="terminal_tf",
+            "Timeframe", ["5m", "15m", "1h", "1D"],
+            horizontal=True, key="terminal_tf", label_visibility="collapsed",
         )
-        _show_ema = st.checkbox("EMAs", value=True, key="terminal_ema")
-        _show_rsi = st.checkbox("RSI", value=True, key="terminal_rsi")
+    with _tb_c3:
+        _load_chart = st.button("📈 Load Chart", key="terminal_chart_load",
+                                type="primary", use_container_width=True)
+    with _tb_c4:
+        _run_analysis = st.button("🤖 Analyse", key="terminal_run_analysis",
+                                  use_container_width=True)
 
-        if st.button("Load Chart", key="terminal_chart_load", type="primary"):
-            _PERIOD_MAP = {"1m": ("1d", "1m"), "5m": ("5d", "5m"), "15m": ("5d", "15m"),
+    # ── Two-panel layout: chart (65%) + signal panel (35%) ───────────────
+    col_chart, col_signal = st.columns([65, 35])
+
+    with col_chart:
+        if _load_chart or st.session_state.get("terminal_chart_loaded_sym") == _chart_sym:
+            _PERIOD_MAP = {"5m": ("5d", "5m"), "15m": ("5d", "15m"),
                            "1h": ("1mo", "60m"), "1D": ("1y", "1d")}
             _period, _interval = _PERIOD_MAP.get(_tf, ("3mo", "1d"))
-            _ticker = f"{_chart_sym}.NS"
-            with st.spinner(f"Fetching {_ticker}…"):
+            with st.spinner(f"Fetching {_chart_sym}…"):
                 try:
-                    import yfinance as _yf
                     from charting.engine import SmartChart as _SC
-                    _df = _yf.download(_ticker, period=_period, interval=_interval,
-                                       auto_adjust=True, progress=False)
+                    _df = yf.download(f"{_chart_sym}.NS", period=_period, interval=_interval,
+                                      auto_adjust=True, progress=False)
                     if _df.empty:
-                        st.error(f"No data for {_ticker}")
+                        st.error(f"No data for {_chart_sym}.NS")
                     else:
                         if isinstance(_df.columns, pd.MultiIndex):
                             _df.columns = [c[0].lower() for c in _df.columns]
@@ -831,108 +835,132 @@ with tab_terminal:
                             _df.columns = [c.lower() for c in _df.columns]
                         _df = _df[["open", "high", "low", "close", "volume"]].dropna()
                         _fig = _SC().build(_df, symbol=_chart_sym, show_vp=False)
-                        st.plotly_chart(_fig, use_container_width=True)
+                        st.plotly_chart(_fig, use_container_width=True, key="terminal_main_chart")
+                        st.session_state["terminal_chart_loaded_sym"] = _chart_sym
                 except Exception as _ce:
                     st.error(f"Chart error: {_ce}")
-
-    # ── Col 3: Agent Reasoning ────────────────────────────────────────────
-    with col_agent:
-        st.markdown("**DeepSeek Analysis**")
-        _agent_sym = st.text_input(
-            "Symbol",
-            value=_chart_sym if "_chart_sym" in dir() else "RELIANCE",
-            key="terminal_agent_sym",
-            label_visibility="collapsed",
-        ).upper().strip()
-
-        if st.button("Run Analysis", key="terminal_run_analysis", use_container_width=True):
-            with st.spinner(f"Analysing {_agent_sym}…"):
-                _v = get_stock_verdict(_agent_sym)
-            st.session_state["last_verdict"]  = _v
-            st.session_state["last_selected"] = _agent_sym
-
-        if "last_verdict" in st.session_state and "error" not in st.session_state["last_verdict"]:
-            _v   = st.session_state["last_verdict"]
-            _cv  = _v["conviction"]
-            _lbl, _css = _verdict_badge(_v["direction"])
-
+        else:
             st.markdown(
-                f"<div class='recommendation {_css}' style='text-align:center;font-size:1.1rem;"
-                f"padding:.5rem;border-radius:8px;margin:.5rem 0'>{_lbl}</div>",
+                "<div style='height:460px;display:flex;align-items:center;justify-content:center;"
+                "background:rgba(255,255,255,0.02);border:1px dashed rgba(255,255,255,0.08);"
+                "border-radius:12px;color:#4a5568;font-size:.9rem;flex-direction:column;gap:.5rem'>"
+                "<span style='font-size:2rem'>📈</span>"
+                "Select a symbol and click <b style='color:#00d4ff'>Load Chart</b>"
+                "</div>",
+                unsafe_allow_html=True,
+            )
+
+        # ── Open positions strip ──────────────────────────────────────────
+        init_db()
+        _op = get_open_positions()
+        if not _op.empty:
+            st.markdown(
+                "<div style='margin-top:.75rem;font-size:.7rem;color:#8892a4;"
+                "text-transform:uppercase;letter-spacing:.08em'>Open Positions</div>",
+                unsafe_allow_html=True,
+            )
+            _pos_cols = st.columns(min(len(_op), 4))
+            for _pi, (_, _row) in enumerate(_op.iterrows()):
+                with _pos_cols[_pi % 4]:
+                    _dc = "#00d4a0" if _row["direction"] == "BUY" else "#ff4466"
+                    st.markdown(
+                        f"<div style='background:rgba(255,255,255,0.03);border:1px solid {_dc}33;"
+                        f"border-left:3px solid {_dc};border-radius:8px;padding:.4rem .6rem'>"
+                        f"<span style='font-size:.82rem;font-weight:700;color:#e8eaf0'>{_row['symbol']}</span>"
+                        f"<span style='font-size:.72rem;color:#8892a4;margin-left:.4rem'>@ ₹{_row['entry_price']:.0f}</span>"
+                        f"</div>",
+                        unsafe_allow_html=True,
+                    )
+
+    with col_signal:
+        # ── Run analysis ──────────────────────────────────────────────────
+        if _run_analysis:
+            with st.spinner(f"Analysing {_chart_sym}…"):
+                _v = get_stock_verdict(_chart_sym)
+            st.session_state["last_verdict"]  = _v
+            st.session_state["last_selected"] = _chart_sym
+
+        _v = st.session_state.get("last_verdict", {})
+        _active_sym = st.session_state.get("last_selected", "")
+
+        if _v and "error" not in _v and _active_sym == _chart_sym:
+            _lbl, _css = _verdict_badge(_v["direction"])
+            # Signal badge
+            st.markdown(
+                f"<div class='recommendation {_css}' style='font-size:1.3rem;"
+                f"padding:.75rem;border-radius:10px;margin-bottom:.5rem'>"
+                f"{_lbl}</div>",
                 unsafe_allow_html=True,
             )
             st.progress(int(_v["confidence"]), text=f"Confidence: {_v['confidence']:.0f}%")
-            st.markdown(f"**Reasoning:**")
-            st.markdown(_v.get("debate") or "_Run analysis to see DeepSeek reasoning._")
 
-            if st.button("DeepSeek Final Signal", key="terminal_ds_final", use_container_width=True):
-                with st.spinner("Running DeepSeek pipeline…"):
+            # Price + indicators
+            _ind = _v.get("indicators", {})
+            _m1, _m2, _m3 = st.columns(3)
+            _m1.metric("Price",    f"₹{_v.get('price', 0):,.0f}")
+            _m2.metric("RSI",      f"{_ind.get('rsi_14', '—')}")
+            _m3.metric("Momentum", f"{_ind.get('momentum_5d_pct', 0):.1f}%")
+
+            with st.expander("Reasoning", expanded=True):
+                st.caption(_v.get("debate") or "—")
+
+            # DeepSeek signal
+            if st.button("⚡ DeepSeek Signal", key="terminal_ds_final", use_container_width=True):
+                with st.spinner("Running V3 → R1 pipeline…"):
                     _sig = _get_svc().signal(
-                        f"Symbol: {_agent_sym} | Price: ₹{_v['price']:.2f} | "
-                        f"Confidence: {_v['confidence']:.1f}% | Direction: {_lbl}\n\n"
-                        f"Analysis:\n{(_v.get('debate') or '')[:600]}",
-                        _agent_sym,
+                        f"Symbol: {_chart_sym} | Price: ₹{_v['price']:.2f} | "
+                        f"Conviction: {_v['confidence']:.0f}%\n{(_v.get('debate') or '')[:400]}",
+                        _chart_sym,
                     )
                 if _sig:
                     _, _scss = _verdict_badge({"BUY": 1, "SELL": -1, "HOLD": 0}.get(_sig.action, 0))
                     st.markdown(
-                        f"{_get_svc().badge(_sig.llm_decision_maker)} "
-                        f"<div class='recommendation {_scss}'>{_sig.action} · {_sig.confidence * 100:.0f}%</div>",
+                        f"{_get_svc().badge(_sig.llm_decision_maker)}<br>"
+                        f"<div class='recommendation {_scss}' style='margin-top:.4rem'>"
+                        f"{_sig.action}  ·  {_sig.confidence * 100:.0f}%</div>",
                         unsafe_allow_html=True,
                     )
                     st.caption(_sig.reasoning)
 
             st.divider()
-            st.markdown("**Execute**")
-            render_order_pad(
-                _agent_sym,
-                _v.get("price", 0.0),
-                _v.get("indicators", {}),
+            render_order_pad(_chart_sym, _v.get("price", 0.0), _ind)
+
+        else:
+            # Empty state
+            st.markdown(
+                "<div style='text-align:center;padding:2rem 1rem;color:#4a5568'>"
+                "<div style='font-size:2.5rem;margin-bottom:.5rem'>🤖</div>"
+                "<div style='font-size:.85rem'>Click <b style='color:#00d4ff'>Analyse</b><br>"
+                "to run DeepSeek V3 → R1 signal</div></div>",
+                unsafe_allow_html=True,
             )
 
-    # ── Col 4: Portfolio Stats ─────────────────────────────────────────────
-    with col_portfolio:
-        st.markdown("**Portfolio**")
-        init_db()
+        # ── Portfolio summary ─────────────────────────────────────────────
+        st.divider()
         _summ = get_trading_summary()
         _pnl  = _summ.get("total_pnl", 0)
-        _pnl_color = "#16a34a" if _pnl >= 0 else "#dc2626"
+        _pc   = "#00d4a0" if _pnl >= 0 else "#ff4466"
         st.markdown(
-            f"<div style='text-align:center;padding:.75rem;background:#f8fafc;"
-            f"border-radius:10px;border-left:4px solid {_pnl_color}'>"
-            f"<div style='font-size:.7rem;color:#8892a4'>Today's P&L</div>"
-            f"<div style='font-size:1.5rem;font-weight:700;color:{_pnl_color}'>₹{_pnl:,.0f}</div>"
+            f"<div style='display:flex;justify-content:space-between;align-items:center;"
+            f"background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.07);"
+            f"border-radius:10px;padding:.6rem .9rem'>"
+            f"<div><div style='font-size:.65rem;color:#8892a4;text-transform:uppercase;letter-spacing:.08em'>Today P&L</div>"
+            f"<div style='font-size:1.2rem;font-weight:700;color:{_pc};font-family:JetBrains Mono,monospace'>₹{_pnl:,.0f}</div></div>"
+            f"<div style='text-align:right'>"
+            f"<div style='font-size:.72rem;color:#8892a4'>Win rate</div>"
+            f"<div style='font-size:.9rem;font-weight:600;color:#e8eaf0'>{_summ.get('win_rate', 0):.0f}%</div></div>"
             f"</div>",
             unsafe_allow_html=True,
         )
-        st.metric("Win Rate",   f"{_summ.get('win_rate', 0):.1f}%")
-        st.metric("Trades",     str(_summ.get("num_trades", 0)))
-
-        _op = get_open_positions()
-        st.markdown(f"**Open Positions** ({len(_op)})")
-        if not _op.empty:
-            for _, row in _op.iterrows():
-                _d_color = "#16a34a" if row["direction"] == "BUY" else "#dc2626"
-                st.markdown(
-                    f"<div style='font-size:.8rem;padding:.3rem .5rem;background:#f8fafc;"
-                    f"border-radius:6px;margin:.2rem 0;border-left:3px solid {_d_color}'>"
-                    f"<b>{row['symbol']}</b> @ ₹{row['entry_price']:.0f}"
-                    f"</div>",
-                    unsafe_allow_html=True,
-                )
-        else:
-            st.caption("No open positions")
-
-        st.divider()
-        if st.button("🛑 Kill Switch", use_container_width=True, type="primary"):
-            st.error("⚠️ Kill switch activated — all trading halted.")
+        if st.button("🛑 Kill Switch", use_container_width=True, type="primary", key="terminal_kill"):
+            st.error("⚠️ Kill switch activated.")
             st.session_state["kill_switch"] = True
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# TAB: RESEARCH
+# PAGE: RESEARCH
 # ══════════════════════════════════════════════════════════════════════════════
-with tab_research:
+elif _page == "Research":
     _r1, _r2, _r3, _r4 = st.tabs([
         "📈 Charts",
         "📊 Fundamentals",
@@ -1380,9 +1408,9 @@ with tab_research:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# TAB: ALGOLAB
+# PAGE: ALGOLAB
 # ══════════════════════════════════════════════════════════════════════════════
-with tab_algolab:
+elif _page == "AlgoLab":
     _al1, _al2, _al3 = st.tabs([
         "💻 Strategy Editor",
         "🧪 Backtest",
@@ -1426,9 +1454,9 @@ with tab_algolab:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# TAB: TOOLS
+# PAGE: TOOLS
 # ══════════════════════════════════════════════════════════════════════════════
-with tab_tools:
+elif _page == "Tools":
     _t1, _t2, _t3, _t4, _t5, _t6, _t7, _t8 = st.tabs([
         "📰 News",
         "🔔 Alerts",
