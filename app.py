@@ -744,7 +744,7 @@ with st.sidebar:
             universe = settings.symbol_list
         _paper_toggle = st.toggle("📄 Paper Trading", value=_paper, key="paper_trading_toggle")
 
-    if st.button("🔄 Refresh Data", use_container_width=True):
+    if st.button("🔄 Refresh Data", width='stretch'):
         st.cache_data.clear()
         st.rerun()
 
@@ -815,10 +815,10 @@ elif _page == "Terminal":
         )
     with _tb_c3:
         _load_chart = st.button("📈 Load Chart", key="terminal_chart_load",
-                                type="primary", use_container_width=True)
+                                type="primary", width='stretch')
     with _tb_c4:
         _run_analysis = st.button("🤖 Analyse", key="terminal_run_analysis",
-                                  use_container_width=True)
+                                  width='stretch')
 
     # ── Two-panel layout: chart (65%) + signal panel (35%) ───────────────
     col_chart, col_signal = st.columns([65, 35])
@@ -842,7 +842,7 @@ elif _page == "Terminal":
                             _df.columns = [c.lower() for c in _df.columns]
                         _df = _df[["open", "high", "low", "close", "volume"]].dropna()
                         _fig = _SC().build(_df, symbol=_chart_sym, show_vp=False)
-                        st.plotly_chart(_fig, use_container_width=True, key="terminal_main_chart")
+                        st.plotly_chart(_fig, width='stretch', key="terminal_main_chart")
                         st.session_state["terminal_chart_loaded_sym"] = _chart_sym
                 except Exception as _ce:
                     st.error(f"Chart error: {_ce}")
@@ -912,7 +912,7 @@ elif _page == "Terminal":
                 st.caption(_v.get("debate") or "—")
 
             # DeepSeek signal
-            if st.button("⚡ DeepSeek Signal", key="terminal_ds_final", use_container_width=True):
+            if st.button("⚡ DeepSeek Signal", key="terminal_ds_final", width='stretch'):
                 with st.spinner("Running V3 → R1 pipeline…"):
                     _sig = _get_svc().signal(
                         f"Symbol: {_chart_sym} | Price: ₹{_v['price']:.2f} | "
@@ -1048,7 +1048,7 @@ elif _page == "Research":
                     title=f"{_charts_sym} — Candlestick + EMAs",
                     height=580, xaxis_title="Date", yaxis_title="Price (₹)",
                 )
-                st.plotly_chart(_fig_r, use_container_width=True)
+                st.plotly_chart(_fig_r, width='stretch')
 
                 _rsi_v = _ind_r.get("rsi_14", 50)
                 _zsc_v = _ind_r.get("zscore_20", 0)
@@ -1063,7 +1063,7 @@ elif _page == "Research":
                         "Signal":     ["Oversold<30/OB>70", "Extreme<-2|>2", "Bullish>2%", "High>1.5x", "Below=discount"],
                     }),
                     hide_index=True,
-                    use_container_width=True,
+                    width='stretch',
                 )
             else:
                 st.warning("Not enough data.")
@@ -1151,10 +1151,10 @@ elif _page == "Research":
                     with _pct1:
                         st.plotly_chart(
                             _SmartChart().build(_pc_df, symbol=_pc_sym, show_vp=_pc_show_vp, vp_bins=_pc_vp_bins),
-                            use_container_width=True,
+                            width='stretch',
                         )
                     with _pct2:
-                        st.plotly_chart(_FPA().build_figure(_pc_df, symbol=_pc_sym), use_container_width=True)
+                        st.plotly_chart(_FPA().build_figure(_pc_df, symbol=_pc_sym), width='stretch')
                         st.info(
                             "⭐ Green star = ask imbalance (bullish pressure)  \n"
                             "⭐ Red star = bid imbalance (bearish pressure)  \n"
@@ -1163,7 +1163,7 @@ elif _page == "Research":
                     with _pct3:
                         _cp  = float(_pc_df["close"].iloc[-1])
                         _book = _LiqHM().simulate_book(_cp)
-                        st.plotly_chart(_LiqHM().build_figure(_book, symbol=_pc_sym), use_container_width=True)
+                        st.plotly_chart(_LiqHM().build_figure(_book, symbol=_pc_sym), width='stretch')
                         st.info(
                             "🟢 Green bars = pending buy orders (support)  \n"
                             "🔴 Red bars = pending sell orders (resistance)  \n"
@@ -1210,7 +1210,7 @@ elif _page == "Research":
                     "Symbol", symbol_list, key="dt_sym_r",
                     format_func=lambda x: f"{x} – {symbol_map.get(x, x)}",
                 )
-                if st.button("▶ Compute", key="dt_go_r", use_container_width=True):
+                if st.button("▶ Compute", key="dt_go_r", width='stretch'):
                     with st.spinner("Computing…"):
                         _dt_df = fetch_historical(_dt_sym, days=100)
                     if _dt_df is not None and len(_dt_df) >= 30:
@@ -1264,9 +1264,9 @@ elif _page == "Research":
                     ))
                     _fb.update_layout(title="Conviction Components (0-1)", height=250,
                                       xaxis_range=[0, 1], margin=dict(t=30, b=10))
-                    st.plotly_chart(_fb, use_container_width=True)
+                    st.plotly_chart(_fb, width='stretch')
 
-                    if st.button("🤖 DeepSeek Analysis", key="dt_ds_r", use_container_width=True):
+                    if st.button("🤖 DeepSeek Analysis", key="dt_ds_r", width='stretch'):
                         _ds_ctx = (
                             f"Symbol: {st.session_state.get('dt_sym_r_val')} | "
                             f"Price: ₹{st.session_state.get('dt_price_r', 0):.2f} | "
@@ -1359,7 +1359,7 @@ elif _page == "Research":
                                 markers=True,
                                 color_discrete_map={"FII (%)": "orange", "DII (%)": "green"},
                             )
-                            st.plotly_chart(_fig_fi, use_container_width=True)
+                            st.plotly_chart(_fig_fi, width='stretch')
                 st.subheader("📞 Concall Summary")
                 st.markdown(scrape_screener_concall(_own_sym))
 
@@ -1402,7 +1402,7 @@ elif _page == "Research":
                                      "Confidence": f"{v.get('confidence', 0):.1%}"}
                                     for _tf, v in _tf_data.items()
                                 ]),
-                                hide_index=True, use_container_width=True,
+                                hide_index=True, width='stretch',
                             )
                 except Exception as _mte:
                     st.error(f"Error: {_mte}")
@@ -1454,7 +1454,7 @@ elif _page == "AlgoLab":
                         _wf_c3.metric("Degradation",        f"{_wf_res.get('degradation_pct', 'N/A'):.1f}%")
                         st.dataframe(
                             pd.DataFrame(_wf_res.get("folds", [])),
-                            hide_index=True, use_container_width=True,
+                            hide_index=True, width='stretch',
                         )
                 except Exception as _wfe:
                     st.error(f"Walk-forward error: {_wfe}")
@@ -1494,7 +1494,7 @@ elif _page == "Tools":
                 "⚡ Generate Today's Report",
                 key="gen_daily_report",
                 type="primary",
-                use_container_width=True,
+                width='stretch',
             )
         with _rp_col2:
             _rp_format = st.radio(
@@ -1622,7 +1622,7 @@ elif _page == "Tools":
                             st.info("No stocks match the current filters.")
                         else:
                             st.success(f"Found **{len(_sc_df)}** stocks in {_elapsed}s")
-                            st.dataframe(_sc_df, use_container_width=True)
+                            st.dataframe(_sc_df, width='stretch')
                             st.download_button(
                                 "⬇️ Download CSV",
                                 data=_sc_df.to_csv(index=False).encode(),
@@ -1657,7 +1657,7 @@ elif _page == "Tools":
                     _qsc_above_sma2 = st.checkbox("Above 50-day SMA", key="sc_above_sma2")
                 with _qst3:
                     _qsc_ml_min2 = st.number_input("ML conviction ≥", min_value=0.0, max_value=100.0, value=0.0, step=5.0, key="sc_ml_min2")
-            if st.button("🔎 Run Quick Screener", key="screener_run2", use_container_width=True):
+            if st.button("🔎 Run Quick Screener", key="screener_run2", width='stretch'):
                 with st.spinner("Screening…"):
                     try:
                         from screener.engine import ScreenerEngine
@@ -1694,7 +1694,7 @@ elif _page == "Tools":
                     _buzz = find_buzzing_stocks(_syms, limit=20)
                 if _buzz:
                     st.dataframe(pd.DataFrame(_buzz, columns=["Symbol", "Change%", "Vol Ratio", "RSI"]),
-                                 use_container_width=True)
+                                 width='stretch')
                 else:
                     st.info("No buzzing stocks found.")
 
@@ -1723,11 +1723,11 @@ elif _page == "Tools":
                                 title=f"Return Correlation — {_corr_days}d", text_auto=".2f",
                             )
                             _cfig.update_layout(height=500)
-                            st.plotly_chart(_cfig, use_container_width=True)
+                            st.plotly_chart(_cfig, width='stretch')
                             _hp = _summary.get("high_corr_pairs", [])
                             if _hp:
                                 st.markdown("**Highly correlated pairs (>0.7):**")
-                                st.dataframe(pd.DataFrame(_hp), hide_index=True, use_container_width=True)
+                                st.dataframe(pd.DataFrame(_hp), hide_index=True, width='stretch')
                     except Exception as _coe:
                         st.error(f"Error: {_coe}")
 
@@ -1893,7 +1893,7 @@ elif _page == "Tools":
                                 ("CVaR 95%",             _rm_m.get("cvar_95", "N/A")),
                                 ("Beta vs Nifty",        _rm_m.get("beta", "N/A")),
                             ], columns=["Metric", "Value"]),
-                            hide_index=True, use_container_width=True,
+                            hide_index=True, width='stretch',
                         )
                 except Exception as _rme:
                     st.error(f"Error: {_rme}")

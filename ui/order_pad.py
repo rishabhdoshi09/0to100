@@ -225,7 +225,7 @@ def render_equity_curve():
                    gridcolor="rgba(255,255,255,0.04)"),
         showlegend=False,
     )
-    st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+    st.plotly_chart(fig, width='stretch', config={"displayModeBar": False})
 
 
 def render_backtest_bridge(symbol: str, fetcher=None, ie=None):
@@ -294,7 +294,7 @@ def render_backtest_bridge(symbol: str, fetcher=None, ie=None):
                         yaxis=dict(color="#8892a4", tickprefix="₹",
                                    gridcolor="rgba(255,255,255,0.04)"),
                     )
-                    st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+                    st.plotly_chart(fig, width='stretch', config={"displayModeBar": False})
 
             except Exception as e:
                 st.error(f"Backtest failed: {e}")

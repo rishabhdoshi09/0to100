@@ -267,7 +267,7 @@ def render_algolab(fetcher=None):
                     yaxis=dict(color="#8892a4", tickprefix="₹",
                                gridcolor="rgba(255,255,255,0.04)"),
                 )
-                st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False}, key="algolab_equity_chart")
+                st.plotly_chart(fig, width='stretch', config={"displayModeBar": False}, key="algolab_equity_chart")
 
             with st.expander("Trade Log"):
                 if result["trades"]:

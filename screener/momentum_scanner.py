@@ -66,12 +66,14 @@ class MomentumScanner:
             from data.kite_client import KiteClient
             from data.instruments import InstrumentManager
             from data.historical import HistoricalDataFetcher
+            from config import settings
+            if not settings.kite_access_token:
+                raise ValueError("kite_access_token not set")
             kite = KiteClient()
-            if kite.is_connected():
-                im = InstrumentManager(kite)
-                self._kite_fetcher = HistoricalDataFetcher(kite, im)
-                self._kite_ok = True
-                log.info("scanner_kite_connected")
+            im = InstrumentManager(kite)
+            self._kite_fetcher = HistoricalDataFetcher(kite, im)
+            self._kite_ok = True
+            log.info("scanner_kite_connected")
         except Exception as exc:
             log.debug("scanner_kite_unavailable", error=str(exc))
 
