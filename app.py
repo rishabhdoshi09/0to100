@@ -86,6 +86,9 @@ from ui.earnings_page import render_earnings_page
 from ui.news_feed import render_news_feed
 from ui.homepage import render_homepage
 from ui.scanner import render_scanner
+from ui.alerts_page import render_alerts_page
+from ui.options_page import render_options_page
+from ui.fii_dii_page import render_fii_dii_page
 
 # ── Page config ───────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -968,11 +971,13 @@ elif _page == "Terminal":
 # PAGE: RESEARCH
 # ══════════════════════════════════════════════════════════════════════════════
 elif _page == "Research":
-    _r1, _r2, _r3, _r4 = st.tabs([
+    _r1, _r2, _r3, _r4, _r5, _r6 = st.tabs([
         "📈 Charts",
         "📊 Fundamentals",
         "📐 Multi-TF",
         "🔥 Heatmap",
+        "🎯 Options",
+        "🌊 FII/DII",
     ])
 
     # ── Charts ─────────────────────────────────────────────────────────────
@@ -1413,6 +1418,13 @@ elif _page == "Research":
         st.divider()
         render_heatmap()
 
+    with _r5:
+        render_options_page()
+
+    # ── FII/DII ────────────────────────────────────────────────────────────
+    with _r6:
+        render_fii_dii_page()
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 # PAGE: ALGOLAB
@@ -1559,7 +1571,11 @@ elif _page == "Tools":
 
     # ── Alerts ─────────────────────────────────────────────────────────────
     with _t2:
-        render_alert_inbox()
+        _al_sub1, _al_sub2 = st.tabs(["🔔 Telegram Alerts", "📥 Alert Inbox"])
+        with _al_sub1:
+            render_alerts_page()
+        with _al_sub2:
+            render_alert_inbox()
 
     # ── Screener ───────────────────────────────────────────────────────────
     with _t3:

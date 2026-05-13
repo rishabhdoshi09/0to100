@@ -230,6 +230,19 @@ def render_scanner(universe: list[str]) -> None:
         else:
             _render_momentum_table(momentum_stocks)
 
+        # ── Telegram alert check (lazy, only when configured) ────────────────
+        try:
+            from alerts.telegram_alerts import AlertEngine, AlertManager as _AM
+            if AlertEngine().is_configured():
+                _am = _AM()
+                for _s in momentum_stocks:
+                    try:
+                        _am.check_and_fire(_s.symbol, _s.price, _s.rsi)
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
     with col_brk:
         st.markdown(
             "<div style='background:rgba(251,146,60,.06);border:1px solid rgba(251,146,60,.25);"
