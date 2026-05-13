@@ -83,6 +83,8 @@ class MomentumScanner:
         top_n: int = 20,
     ) -> list[MomentumStock]:
         """Return top N momentum stocks sorted by composite score."""
+        # Kite only for small configured universe; large scans always use yfinance
+        self._large_scan = len(symbols) > 50
         results = self._scan_all(symbols)
         momentum = [r for r in results if r is not None and isinstance(r, MomentumStock)]
         return sorted(momentum, key=lambda x: x.momentum_score, reverse=True)[:top_n]
@@ -94,6 +96,7 @@ class MomentumScanner:
     ) -> list[BreakoutStock]:
         """Return top N breakout stocks sorted by confidence."""
         from concurrent.futures import ThreadPoolExecutor, as_completed
+        self._large_scan = len(symbols) > 50
         breakouts: list[BreakoutStock] = []
 
         with ThreadPoolExecutor(max_workers=self._max_workers) as pool:
@@ -123,8 +126,8 @@ class MomentumScanner:
         return results
 
     def _get_df(self, symbol: str, days: int = 100) -> Optional[pd.DataFrame]:
-        # ── Kite Connect (preferred) ──────────────────────────────────────
-        if self._kite_ok and self._kite_fetcher is not None:
+        # Use Kite only for small universe scans — never hammer Kite with 2000+ stocks
+        if self._kite_ok and self._kite_fetcher is not None and not getattr(self, "_large_scan", False):
             try:
                 to_date   = datetime.now().strftime("%Y-%m-%d")
                 from_date = (datetime.now() - timedelta(days=days + 10)).strftime("%Y-%m-%d")
@@ -132,12 +135,8 @@ class MomentumScanner:
                     symbol, from_date=from_date, to_date=to_date, interval="day"
                 )
                 if df is not None and not df.empty and len(df) >= 30:
-                    # Normalise: DatetimeIndex → reset to plain columns
-                    if not isinstance(df, pd.DataFrame):
-                        raise ValueError("not a dataframe")
                     if hasattr(df.index, "name") and df.index.name == "date":
                         df = df.reset_index()
-                    # Ensure lowercase column names
                     df.columns = [c.lower() for c in df.columns]
                     return df
             except Exception as exc:
