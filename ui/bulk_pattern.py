@@ -236,7 +236,6 @@ def render_bulk_pattern(universe: list[str]) -> None:
 
         prog.empty()
         st.session_state["bulk_pat_results"] = results
-        st.session_state["bulk_pat_tf"] = tf
 
     results: list[PatternResult] = st.session_state.get("bulk_pat_results", [])
     if not results:
