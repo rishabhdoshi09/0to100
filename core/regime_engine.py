@@ -697,7 +697,7 @@ def compute_regime() -> RegimeState:
         quality_multiplier=qm,
         recommended_playbooks=recommended,
         avoid_patterns=avoid,
-        timestamp=fetch_time_utc.isoformat(),
+        timestamp=fetch_time_utc.strftime("%H:%M"),
         data_age_mins=data_age_mins,
     )
 

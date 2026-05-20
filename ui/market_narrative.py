@@ -107,91 +107,51 @@ def _render_regime_block(r: dict | None) -> None:
         st.warning("Regime data unavailable — check yfinance connectivity.")
         return
 
-    regime_colors = {
-        "TRENDING_BULL":  ("#00d4a0", "#001a12"),
-        "EXPANSION":      ("#00d4ff", "#001520"),
-        "CHOPPY":         ("#f59e0b", "#1a1200"),
-        "COMPRESSION":    ("#60a5fa", "#001020"),
-        "DISTRIBUTION":   ("#fb923c", "#1a0800"),
-        "TRENDING_BEAR":  ("#ff4b4b", "#1a0000"),
+    regime_emoji = {
+        "TRENDING_BULL": "🟢", "EXPANSION": "🚀", "CHOPPY": "🟡",
+        "COMPRESSION": "🔵", "DISTRIBUTION": "🟠", "TRENDING_BEAR": "🔴",
     }
-    fg, bg = regime_colors.get(r["market"], ("#8892a4", "#111827"))
+    market   = r.get("market", "UNKNOWN")
+    emoji    = regime_emoji.get(market, "⚪")
+    score    = r.get("regime_score", 50)
+    qm       = r.get("quality_mult", 1.0)
+    nifty    = r.get("nifty", 0)
+    chg_1d   = r.get("nifty_1d", 0)
+    chg_5d   = r.get("nifty_5d", 0)
+    vix      = r.get("vix", 16)
+    vix_st   = r.get("vix_state", "NORMAL").replace("_", " ")
+    breadth  = r.get("breadth", "NEUTRAL")
+    b_score  = r.get("breadth_score", 50)
+    bk_env   = r.get("breakout_env", "NEUTRAL")
+    risk_m   = r.get("risk_mode", "NEUTRAL").replace("_", " ")
+    inst     = r.get("inst_activity", "NEUTRAL")
+    ts       = r.get("timestamp", "--")
 
-    nifty_chg = r["nifty_1d"]
-    chg_col   = "#00d4a0" if nifty_chg >= 0 else "#ff4b4b"
-    chg_arrow = "▲" if nifty_chg >= 0 else "▼"
-    breadth_col = {"STRONG": "#00d4a0", "NEUTRAL": "#f59e0b", "WEAK": "#ff4b4b"}.get(r["breadth"], "#8892a4")
-    vix_col     = {"LOW_VOL_COMPRESSION": "#00d4a0", "NORMAL": "#f59e0b",
-                   "TREND_VOLATILITY": "#fb923c", "ELEVATED": "#ff4b4b", "PANIC": "#ff0000"}.get(r["vix_state"], "#8892a4")
-    bk_col      = {"FAVORABLE": "#00d4a0", "NEUTRAL": "#f59e0b", "UNFAVORABLE": "#ff4b4b"}.get(r["breakout_env"], "#8892a4")
-    rm_col      = {"RISK_ON": "#00d4a0", "NEUTRAL": "#f59e0b", "RISK_OFF": "#ff4b4b"}.get(r["risk_mode"], "#8892a4")
+    st.caption(f"📡 Market Intelligence Brief — Updated {ts}")
 
-    score_bar = int(r.get("regime_score", 50))
+    c1, c2, c3, c4, c5, c6, c7, c8 = st.columns(8)
 
-    st.markdown(
-        f"""<div style='background:{bg};border:1px solid {fg}33;border-radius:12px;
-                padding:12px 18px;font-family:JetBrains Mono,monospace'>
-          <div style='display:flex;align-items:center;gap:6px;margin-bottom:8px'>
-            <span style='font-size:.62rem;color:#4a5568;letter-spacing:.12em;text-transform:uppercase'>
-              Market Intelligence Brief</span>
-            <span style='font-size:.58rem;color:#4a5568;margin-left:auto'>
-              Updated {r.get('timestamp','—')}</span>
-          </div>
-          <div style='display:flex;gap:24px;flex-wrap:wrap;align-items:center'>
-
-            <div>
-              <div style='font-size:.56rem;color:#4a5568;text-transform:uppercase;letter-spacing:.1em'>Regime</div>
-              <div style='font-size:1.1rem;color:{fg};font-weight:800;letter-spacing:.04em'>
-                {r["market"].replace("_"," ")}</div>
-              <div style='height:4px;width:100px;background:#1e293b;border-radius:2px;margin-top:3px'>
-                <div style='height:4px;width:{score_bar}px;background:{fg};border-radius:2px'></div>
-              </div>
-            </div>
-
-            <div>
-              <div style='font-size:.56rem;color:#4a5568;text-transform:uppercase;letter-spacing:.1em'>Nifty 50</div>
-              <div style='font-size:.95rem;color:#e8eaf0;font-weight:700'>
-                {r["nifty"]:,.0f}
-                <span style='font-size:.75rem;color:{chg_col}'> {chg_arrow}{abs(nifty_chg):.2f}%</span>
-              </div>
-              <div style='font-size:.6rem;color:#4a5568'>5d: {r["nifty_5d"]:+.2f}%</div>
-            </div>
-
-            <div>
-              <div style='font-size:.56rem;color:#4a5568;text-transform:uppercase;letter-spacing:.1em'>VIX</div>
-              <div style='font-size:.95rem;color:{vix_col};font-weight:700'>{r["vix"]:.1f}</div>
-              <div style='font-size:.6rem;color:{vix_col}'>{r["vix_state"].replace("_"," ")}</div>
-            </div>
-
-            <div>
-              <div style='font-size:.56rem;color:#4a5568;text-transform:uppercase;letter-spacing:.1em'>Breadth</div>
-              <div style='font-size:.95rem;color:{breadth_col};font-weight:700'>{r["breadth"]}</div>
-              <div style='font-size:.6rem;color:{breadth_col}'>{r["breadth_score"]:.0f}/100</div>
-            </div>
-
-            <div>
-              <div style='font-size:.56rem;color:#4a5568;text-transform:uppercase;letter-spacing:.1em'>Breakout Env</div>
-              <div style='font-size:.95rem;color:{bk_col};font-weight:700'>{r["breakout_env"]}</div>
-            </div>
-
-            <div>
-              <div style='font-size:.56rem;color:#4a5568;text-transform:uppercase;letter-spacing:.1em'>Risk Mode</div>
-              <div style='font-size:.95rem;color:{rm_col};font-weight:700'>{r["risk_mode"].replace("_"," ")}</div>
-            </div>
-
-            <div>
-              <div style='font-size:.56rem;color:#4a5568;text-transform:uppercase;letter-spacing:.1em'>Institutional</div>
-              <div style='font-size:.82rem;color:#8892a4;font-weight:600'>{r["inst_activity"]}</div>
-            </div>
-
-            <div style='margin-left:auto;text-align:right'>
-              <div style='font-size:.56rem;color:#4a5568;text-transform:uppercase;letter-spacing:.1em'>Setup Multiplier</div>
-              <div style='font-size:1.2rem;color:{fg};font-weight:800'>×{r["quality_mult"]:.2f}</div>
-            </div>
-          </div>
-        </div>""",
-        unsafe_allow_html=True,
-    )
+    with c1:
+        chg_str = f"{chg_1d:+.2f}%"
+        st.metric(f"{emoji} Regime", market.replace("_", " "), f"Score {score:.0f}/100")
+    with c2:
+        st.metric("Nifty 50", f"{nifty:,.0f}", chg_str)
+        st.caption(f"5d: {chg_5d:+.2f}%")
+    with c3:
+        st.metric("India VIX", f"{vix:.1f}", vix_st)
+    with c4:
+        st.metric("Breadth", breadth, f"{b_score:.0f}/100")
+    with c5:
+        bk_icon = "✅" if bk_env == "FAVORABLE" else ("⚠️" if bk_env == "NEUTRAL" else "🔴")
+        st.metric("Breakout Env", f"{bk_icon} {bk_env}")
+    with c6:
+        rm_icon = "✅" if "ON" in risk_m else ("⚠️" if "NEUTRAL" in risk_m else "🔴")
+        st.metric("Risk Mode", f"{rm_icon} {risk_m}")
+    with c7:
+        st.metric("Institutional", inst.replace("_", " "))
+    with c8:
+        qm_icon = "🟢" if qm >= 1.1 else ("🟡" if qm >= 0.9 else "🔴")
+        st.metric("Setup ×", f"{qm_icon} ×{qm:.2f}")
 
 
 def _render_market_state(r: dict | None, bh: dict | None) -> None:
