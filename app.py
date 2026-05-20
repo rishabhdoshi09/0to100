@@ -870,12 +870,25 @@ if st.session_state.get("active_tab") == "terminal":
     st.session_state.pop("active_tab", None)
     _page = "Terminal"
 
+# Handle session-state navigation from Command Center "View Details" buttons
+if st.session_state.get("selected_page"):
+    _nav_target = st.session_state.pop("selected_page")
+    _nav_map = {
+        "Institutional": "🏛️  Institutional",
+        "Terminal":      "⚡  Terminal",
+        "Dashboard":     "🏠  Dashboard",
+    }
+    if _nav_target in _nav_map:
+        st.session_state["sidebar_nav"] = _nav_map[_nav_target]
+        _page = _nav_target
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 # PAGE: DASHBOARD
 # ══════════════════════════════════════════════════════════════════════════════
 if _page == "Dashboard":
-    render_homepage(universe)
+    from ui.command_center import render_command_center
+    render_command_center(universe)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
