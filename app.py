@@ -796,10 +796,19 @@ with st.sidebar:
     # ── Navigation ─────────────────────────────────────────────────────────
     _nav_page = st.radio(
         "Navigate",
-        ["🏠  Dashboard", "🏛️  Institutional", "🤖  JARVIS", "⚡  Terminal", "🔬  Research", "🧬  AlgoLab", "🛠️  Tools"],
+        ["🏠  Dashboard", "🏛️  Institutional", "🤖  JARVIS", "⚡  Terminal",
+         "🔬  Research", "🧬  AlgoLab", "🛠️  Tools",
+         "👁  My Watchlist", "💼  My Holdings", "🚀  IPO Calendar", "🔍  Stock Screener"],
         label_visibility="collapsed",
         key="sidebar_nav",
     )
+    st.divider()
+    # Plain English mode toggle
+    try:
+        from ui.plain_english import render_mode_toggle
+        render_mode_toggle()
+    except Exception:
+        pass
     _page = _nav_page.split("  ", 1)[-1].strip()  # "Dashboard", "Terminal", …
 
     st.divider()
@@ -896,6 +905,12 @@ if st.session_state.get("selected_page"):
 # PAGE: DASHBOARD
 # ══════════════════════════════════════════════════════════════════════════════
 if _page == "Dashboard":
+    # Today Card — 30-second daily brief at the very top
+    try:
+        from ui.today_card import render_today_card
+        render_today_card(universe)
+    except Exception:
+        pass
     from ui.command_center import render_command_center
     render_command_center(universe)
 
@@ -2147,6 +2162,47 @@ elif _page == "Tools":
         from ui.signal_tracker_page import render_signal_tracker
         render_signal_tracker()
 
+
+# ══════════════════════════════════════════════════════════════════════════════
+# RETAIL INVESTOR PAGES
+# ══════════════════════════════════════════════════════════════════════════════
+
+elif _page == "My Watchlist":
+    st.markdown("## 👁 My Watchlist")
+    st.caption("Track your favourite stocks with price zones and alerts.")
+    try:
+        from ui.watchlist import render_watchlist
+        render_watchlist()
+    except Exception as e:
+        st.error(f"Watchlist error: {e}")
+
+elif _page == "My Holdings":
+    st.markdown("## 💼 My Holdings")
+    st.caption("Your real Zerodha portfolio with tax timing insights.")
+    try:
+        from ui.real_holdings import render_real_holdings
+        render_real_holdings()
+    except Exception as e:
+        st.error(f"Holdings error: {e}")
+        st.info("Connect your Zerodha account: add KITE_ACCESS_TOKEN to your .env file.")
+
+elif _page == "IPO Calendar":
+    st.markdown("## 🚀 IPO Calendar")
+    st.caption("Upcoming, open, and recently listed IPOs.")
+    try:
+        from ui.ipo_calendar import render_ipo_calendar
+        render_ipo_calendar()
+    except Exception as e:
+        st.error(f"IPO Calendar error: {e}")
+
+elif _page == "Stock Screener":
+    st.markdown("## 🔍 Stock Screener")
+    st.caption("Find stocks by fundamentals. No jargon — just results.")
+    try:
+        from ui.fundamental_screener import render_fundamental_screener
+        render_fundamental_screener(universe)
+    except Exception as e:
+        st.error(f"Screener error: {e}")
 
 # ── Paper trading dashboard (accessible from any tab via sidebar session) ────
 # Initialise DB on every load so paper_trading tables exist

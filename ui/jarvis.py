@@ -83,6 +83,15 @@ def _get_setups_for_jarvis(universe_key: str) -> list[dict]:
 
 # ── Sub-components ────────────────────────────────────────────────────────────
 
+def _plain(text: str) -> str:
+    """Apply plain English translation if mode is active."""
+    try:
+        from ui.plain_english import translate
+        return translate(text)
+    except Exception:
+        return text
+
+
 def _render_header() -> None:
     st.markdown(
         "<div style='background:linear-gradient(135deg,#0d1117 0%,#161b22 100%);"
@@ -152,6 +161,21 @@ def _render_opportunity_score() -> None:
             f"</div>",
             unsafe_allow_html=True,
         )
+
+        # Plain English regime explanation (shown when mode is active)
+        try:
+            from ui.plain_english import regime_card_html, is_plain_english
+            if is_plain_english():
+                html = regime_card_html(
+                    regime.market_regime,
+                    getattr(regime, "regime_score", 50),
+                    regime.vix,
+                    regime.breadth_label,
+                )
+                if html:
+                    st.markdown(html, unsafe_allow_html=True)
+        except Exception:
+            pass
 
         # Store rules in session for other components to use
         st.session_state["jarvis_trading_rules"] = {
