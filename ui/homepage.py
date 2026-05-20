@@ -185,17 +185,42 @@ def _render_pattern_check(universe: list[str]):
 
 @st.cache_data(ttl=300, show_spinner=False)
 def _pattern_data(symbol: str, period: str, interval: str):
-    import yfinance as yf
     import pandas as pd
-    df = yf.download(f"{symbol}.NS", period=period, interval=interval,
-                     auto_adjust=True, progress=False)
-    if df is None or df.empty:
-        return None
-    if isinstance(df.columns, pd.MultiIndex):
-        df.columns = [c[0].lower() for c in df.columns]
-    else:
-        df.columns = [c.lower() for c in df.columns]
-    return df[["open", "high", "low", "close", "volume"]].dropna()
+    _TF_DAYS = {"1d": 365, "1wk": 730, "60m": 30, "1h": 30}
+    _KI_MAP  = {"1d": "day", "1wk": "week", "60m": "60minute", "1h": "60minute"}
+    days = _TF_DAYS.get(interval, 365)
+    kite_interval = _KI_MAP.get(interval, "day")
+    # 1. Kite Connect
+    try:
+        from data.kite_client import KiteClient
+        from data.instruments import InstrumentManager
+        from data.historical import HistoricalDataFetcher
+        from datetime import date, timedelta
+        kite = KiteClient()
+        if kite.is_connected():
+            fetcher = HistoricalDataFetcher(kite, InstrumentManager())
+            to_dt = date.today().strftime("%Y-%m-%d")
+            from_dt = (date.today() - timedelta(days=days)).strftime("%Y-%m-%d")
+            df = fetcher.fetch(symbol, from_dt, to_dt, interval=kite_interval)
+            if df is not None and len(df) >= 30:
+                df.columns = [c.lower() for c in df.columns]
+                return df[["open", "high", "low", "close", "volume"]].dropna()
+    except Exception:
+        pass
+    # 2. yfinance fallback
+    try:
+        import yfinance as yf
+        df = yf.download(f"{symbol}.NS", period=period, interval=interval,
+                         auto_adjust=True, progress=False)
+        if df is not None and not df.empty:
+            if isinstance(df.columns, pd.MultiIndex):
+                df.columns = [c[0].lower() for c in df.columns]
+            else:
+                df.columns = [c.lower() for c in df.columns]
+            return df[["open", "high", "low", "close", "volume"]].dropna()
+    except Exception:
+        pass
+    return None
 
 
 def _run_pattern_check(symbol: str, tf: str):

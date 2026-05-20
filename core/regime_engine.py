@@ -105,11 +105,69 @@ class RegimeState:
 
 
 # ---------------------------------------------------------------------------
+# Kite instrument tokens for NSE indices (fixed/stable across sessions)
+# ---------------------------------------------------------------------------
+
+_KITE_INDEX_TOKENS: dict[str, int] = {
+    "^NSEI":     256265,   # NIFTY 50
+    "^INDIAVIX": 264969,   # INDIA VIX
+    "^NSEBANK":  260105,   # NIFTY BANK
+    "^CNXIT":    259849,   # NIFTY IT
+    "^CNXAUTO":  258049,   # NIFTY AUTO
+    "^CNXPHARMA": 261249,  # NIFTY PHARMA
+    "^CNXFMCG":  257801,   # NIFTY FMCG
+    "^CNXMETAL":  234249,  # NIFTY METAL
+    "^CNXENERGY": 258921,  # NIFTY ENERGY
+    "^CNXREALTY": 261633,  # NIFTY REALTY
+}
+
+
+def _fetch_ohlcv_kite(ticker: str, days: int = 365) -> Optional[pd.DataFrame]:
+    """Fetch index OHLCV from Kite Connect using known instrument tokens."""
+    token = _KITE_INDEX_TOKENS.get(ticker)
+    if token is None:
+        return None
+    try:
+        from data.kite_client import KiteClient
+        kite = KiteClient()
+        if not kite.is_connected():
+            return None
+        from datetime import date, timedelta
+        to_dt = date.today().strftime("%Y-%m-%d")
+        from_dt = (date.today() - timedelta(days=days)).strftime("%Y-%m-%d")
+        df = kite.get_historical(
+            instrument_token=token,
+            from_date=from_dt,
+            to_date=to_dt,
+            interval="day",
+        )
+        if df is None or df.empty or len(df) < 10:
+            return None
+        # Normalize column names to match yfinance convention (Title case)
+        df = df.rename(columns={
+            "open": "Open", "high": "High", "low": "Low",
+            "close": "Close", "volume": "Volume",
+        })
+        df.index = pd.to_datetime(df.index)
+        df.sort_index(inplace=True)
+        return df
+    except Exception as exc:
+        logger.debug("Kite fetch failed for %s: %s", ticker, exc)
+        return None
+
+
+# ---------------------------------------------------------------------------
 # yfinance helpers
 # ---------------------------------------------------------------------------
 
 def _fetch_ohlcv(ticker: str, period: str = "1y") -> Optional[pd.DataFrame]:
-    """Download OHLCV; return None on failure."""
+    """Download OHLCV; try Kite first for index tickers, then yfinance."""
+    # Try Kite first for known index tickers
+    days = 400 if period == "1y" else 30
+    df = _fetch_ohlcv_kite(ticker, days=days)
+    if df is not None:
+        return df
+    # Fall back to yfinance
     try:
         df = yf.download(ticker, period=period, progress=False, auto_adjust=True)
         if df is None or df.empty:

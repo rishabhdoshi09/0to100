@@ -88,17 +88,46 @@ def _run_pipeline(universe_key: str, top_n: int = 30) -> list[dict]:
 
 @st.cache_data(ttl=300, show_spinner=False)
 def _fetch_chart(symbol: str, timeframe: str) -> pd.DataFrame | None:
+    tf_map = {"Daily": (250, "day"), "Weekly": (756, "week"), "Hourly": (30, "60minute")}
+    days, kite_interval = tf_map.get(timeframe, (250, "day"))
+    # 1. Kite Connect
+    try:
+        from data.kite_client import KiteClient
+        from data.instruments import InstrumentManager
+        from data.historical import HistoricalDataFetcher
+        from datetime import date, timedelta
+        kite = KiteClient()
+        if kite.is_connected():
+            fetcher = HistoricalDataFetcher(kite, InstrumentManager())
+            to_dt = date.today().strftime("%Y-%m-%d")
+            from_dt = (date.today() - timedelta(days=days)).strftime("%Y-%m-%d")
+            df = fetcher.fetch(symbol, from_dt, to_dt, interval=kite_interval)
+            if df is not None and not df.empty:
+                if "close" not in df.columns and "Close" in df.columns:
+                    df.columns = [c.lower() for c in df.columns]
+                return df
+    except Exception:
+        pass
+    # 2. yfinance fallback
     try:
         import yfinance as yf
-        tf_map = {"Daily": ("250d", "1d"), "Weekly": ("3y", "1wk"), "Hourly": ("30d", "1h")}
-        period, interval = tf_map.get(timeframe, ("250d", "1d"))
+        yf_map = {"Daily": ("250d", "1d"), "Weekly": ("3y", "1wk"), "Hourly": ("30d", "1h")}
+        period, interval = yf_map.get(timeframe, ("250d", "1d"))
         df = yf.Ticker(f"{symbol}.NS").history(period=period, interval=interval)
-        if df is None or df.empty:
-            return None
-        df.columns = [c.lower() for c in df.columns]
-        return df
+        if df is not None and not df.empty:
+            df.columns = [c.lower() for c in df.columns]
+            return df
     except Exception:
-        return None
+        pass
+    # 3. Demo OHLCV
+    try:
+        from core.demo_data import make_demo_ohlcv
+        rows = make_demo_ohlcv(symbol, bars=min(days, 250))
+        if rows:
+            return pd.DataFrame(rows)
+    except Exception:
+        pass
+    return None
 
 
 # ── Left Panel: Setup Queue ────────────────────────────────────────────────────

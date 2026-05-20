@@ -41,6 +41,26 @@ class SetupCandidate:
 
 
 def _fetch(symbol: str, days: int = 260) -> Optional[pd.DataFrame]:
+    # 1. Try Kite Connect (live data, highest quality)
+    try:
+        from data.kite_client import KiteClient
+        from data.instruments import InstrumentManager
+        from data.historical import HistoricalDataFetcher
+        from datetime import date, timedelta
+        kite = KiteClient()
+        if kite.is_connected():
+            fetcher = HistoricalDataFetcher(kite, InstrumentManager())
+            to_dt = date.today().strftime("%Y-%m-%d")
+            from_dt = (date.today() - timedelta(days=days)).strftime("%Y-%m-%d")
+            df = fetcher.fetch(symbol, from_dt, to_dt, interval="day")
+            if df is not None and len(df) >= 30:
+                # HistoricalDataFetcher returns lowercase columns
+                if "close" not in df.columns and "Close" in df.columns:
+                    df.columns = [c.lower() for c in df.columns]
+                return df
+    except Exception:
+        pass
+    # 2. Try yfinance
     try:
         import yfinance as yf
         df = yf.Ticker(f"{symbol}.NS").history(period=f"{days}d", interval="1d")
@@ -49,13 +69,12 @@ def _fetch(symbol: str, days: int = 260) -> Optional[pd.DataFrame]:
             return df
     except Exception:
         pass
-    # Fallback: synthetic demo OHLCV for network-restricted environments
+    # 3. Demo OHLCV for network-restricted environments
     try:
         from core.demo_data import make_demo_ohlcv
         rows = make_demo_ohlcv(symbol, bars=max(days, 60))
         if rows:
-            df = pd.DataFrame(rows)
-            return df
+            return pd.DataFrame(rows)
     except Exception:
         pass
     return None

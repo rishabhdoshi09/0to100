@@ -84,8 +84,8 @@ class MomentumScanner:
         top_n: int = 20,
     ) -> list[MomentumStock]:
         """Return top N momentum stocks sorted by composite score."""
-        # Kite only for small configured universe; large scans always use yfinance
-        self._large_scan = len(symbols) > 50
+        # Use Kite for all scans when connected; yfinance only as fallback
+        self._large_scan = False
         results = self._scan_all(symbols)
         momentum = [r for r in results if r is not None and isinstance(r, MomentumStock)]
         return sorted(momentum, key=lambda x: x.momentum_score, reverse=True)[:top_n]
@@ -97,7 +97,7 @@ class MomentumScanner:
     ) -> list[BreakoutStock]:
         """Return top N breakout stocks sorted by confidence."""
         from concurrent.futures import ThreadPoolExecutor, as_completed
-        self._large_scan = len(symbols) > 50
+        self._large_scan = False
         breakouts: list[BreakoutStock] = []
 
         with ThreadPoolExecutor(max_workers=self._max_workers) as pool:
