@@ -1,52 +1,55 @@
 """
 JARVIS — Just A Rather Very Intelligent System.
-A conversational AI co-pilot that knows everything about the current market,
-your setups, your edge, and your portfolio.
 
-Unlike a chatbot, JARVIS has full system context injected into every message.
-It knows the regime, the top setups, your win rate, open positions.
-It doesn't just answer — it anticipates.
+True autonomous multi-agent trading co-pilot.
+Spawns specialist agents (Data, Research, Code, Analysis, System),
+runs them in parallel, shows live activity, and synthesises the answer.
+
+Capabilities:
+  · Internet access (web search, URL fetch, news scraping)
+  · Code deployment (write files, git commit/push/merge/branch)
+  · System control (logs, restart, process management, pip install)
+  · Live market data via Kite Connect
+  · Deep market analysis (regime, patterns, indicators)
+  · Memory across conversation (session history)
 """
 from __future__ import annotations
 
-import json
 import os
 from datetime import datetime
 
 import streamlit as st
 
 
-_SYSTEM_PROMPT = """You are JARVIS, the AI co-pilot for QUANTTERM — an institutional-grade trading intelligence system.
+# ── Agent colour palette ──────────────────────────────────────────────────────
 
-You have real-time access to:
-- Current market regime, Nifty levels, VIX, sector rotation
-- Live scan results: top setups ranked by quality and expected value
-- The user's personal trade edge (win rates by playbook and regime)
-- Portfolio position and risk state
-- Opportunity Score (0-100) synthesising all market dimensions
+_AGENT_COLORS = {
+    "DataAgent":      "#00d4ff",
+    "ResearchAgent":  "#a78bfa",
+    "CodeAgent":      "#34d399",
+    "AnalysisAgent":  "#fb923c",
+    "SystemAgent":    "#f87171",
+    "ORCHESTRATOR":   "#fbbf24",
+}
+_AGENT_ICONS = {
+    "DataAgent":      "📡",
+    "ResearchAgent":  "🌐",
+    "CodeAgent":      "⚙️",
+    "AnalysisAgent":  "📊",
+    "SystemAgent":    "🖥️",
+    "ORCHESTRATOR":   "🧠",
+}
+_MSG_TYPE_COLORS = {
+    "STATUS":  "#8892a4",
+    "LOG":     "#4a5568",
+    "RESULT":  "#00d4a0",
+    "REQUEST": "#f59e0b",
+}
 
-Your personality:
-- Terse, confident, institutional. Like a senior prop trader.
-- Never hedge excessively. Give a clear view.
-- If the market is bad, say so directly. If it's good, say so.
-- Use numbers. ₹ for prices. R-multiples for trade outcomes. % for rates.
-- No fluff. No "great question!" No disclaimers about market risk (user knows).
-- Think in probability and expectancy, not certainty.
 
-Capabilities:
-- Explain any setup, playbook, or regime in plain language
-- Calculate position size given account size and risk
-- Compare current conditions to historical analogs
-- Identify what's wrong with a trade idea
-- Give a structured entry/stop/target for any setup in the queue
-- Analyse the user's journal data for patterns and biases
-
-Always start your first response in a session with a 2-sentence market brief.
-After that, respond directly to what's asked."""
-
+# ── Context builder ───────────────────────────────────────────────────────────
 
 def _get_context() -> str:
-    """Pull live system context."""
     try:
         from core.intelligence_hub import build_jarvis_context, compute_opportunity_score
         from core.regime_engine import compute_regime
@@ -65,7 +68,6 @@ def _get_context() -> str:
 
 @st.cache_data(ttl=1800, show_spinner=False)
 def _get_setups_for_jarvis(universe_key: str) -> list[dict]:
-    """Pre-run pipeline so JARVIS has setup context."""
     try:
         from scan.pipeline import ScanPipeline
         from core.regime_engine import compute_regime
@@ -79,54 +81,31 @@ def _get_setups_for_jarvis(universe_key: str) -> list[dict]:
         return []
 
 
-def _call_deepseek(messages: list[dict]) -> str:
-    key = os.getenv("DEEPSEEK_API_KEY", "")
-    if not key:
-        return "DEEPSEEK_API_KEY not configured. Add it to your .env file."
-    import requests
-    try:
-        resp = requests.post(
-            "https://api.deepseek.com/v1/chat/completions",
-            headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
-            json={
-                "model": "deepseek-chat",
-                "messages": messages,
-                "temperature": 0.2,
-                "max_tokens": 600,
-            },
-            timeout=30,
-        )
-        data = resp.json()
-        if "choices" in data:
-            return data["choices"][0]["message"]["content"]
-        return f"Error: {data.get('error', {}).get('message', 'Unknown error')}"
-    except Exception as e:
-        return f"Connection error: {e}"
+# ── Sub-components ────────────────────────────────────────────────────────────
 
-
-def render_jarvis(universe: list[str]) -> None:
-    # Pre-load setup context
-    universe_key = ",".join(sorted(universe))
-    if "jarvis_setups" not in st.session_state:
-        with st.spinner("JARVIS loading market intelligence…"):
-            st.session_state["jarvis_setups"] = _get_setups_for_jarvis(universe_key)
-
-    # ── Header ────────────────────────────────────────────────────────────────
+def _render_header() -> None:
     st.markdown(
         "<div style='background:linear-gradient(135deg,#0d1117 0%,#161b22 100%);"
         "border:1px solid #00d4ff33;border-radius:14px;padding:1rem 1.4rem;margin-bottom:1rem'>"
+        "<div style='display:flex;align-items:center;justify-content:space-between'>"
         "<div style='display:flex;align-items:center;gap:.8rem'>"
         "<div style='font-size:1.6rem'>🤖</div>"
         "<div>"
         "<div style='color:#00d4ff;font-family:JetBrains Mono,monospace;font-size:.95rem;"
         "font-weight:700;letter-spacing:2px'>J.A.R.V.I.S</div>"
         "<div style='color:#4a5568;font-size:.65rem;letter-spacing:.08em'>"
-        "JUST A RATHER VERY INTELLIGENT SYSTEM · QUANTTERM AI CO-PILOT</div>"
+        "JUST A RATHER VERY INTELLIGENT SYSTEM · AUTONOMOUS MULTI-AGENT CO-PILOT</div>"
+        "</div></div>"
+        "<div style='text-align:right'>"
+        "<div style='color:#00d4a0;font-size:.65rem;font-family:JetBrains Mono,monospace'>"
+        "● AGENTS ONLINE</div>"
+        "<div style='color:#4a5568;font-size:.6rem'>DataAgent · ResearchAgent · CodeAgent · AnalysisAgent · SystemAgent</div>"
         "</div></div></div>",
         unsafe_allow_html=True,
     )
 
-    # ── Opportunity Score sidebar ─────────────────────────────────────────────
+
+def _render_opportunity_score() -> None:
     try:
         from core.intelligence_hub import compute_opportunity_score
         from core.regime_engine import compute_regime
@@ -146,7 +125,6 @@ def render_jarvis(universe: list[str]) -> None:
         c4.metric("Aggression", opp.recommended_aggression.split("(")[0].strip())
         c5.metric("Max Trades", str(opp.max_open_trades))
 
-        # Score bar
         color = opp.color
         pct = opp.total
         st.markdown(
@@ -158,7 +136,8 @@ def render_jarvis(universe: list[str]) -> None:
     except Exception:
         pass
 
-    # ── Alerts ────────────────────────────────────────────────────────────────
+
+def _render_alerts(regime: object, opp: object) -> None:
     try:
         from core.intelligence_hub import generate_alerts
         prev_regime = st.session_state.get("jarvis_prev_regime", "")
@@ -171,7 +150,6 @@ def render_jarvis(universe: list[str]) -> None:
         new_alerts = [a for a in alerts if not a.dismissed]
         if new_alerts:
             st.session_state.setdefault("jarvis_alerts", [])
-            # Deduplicate by title
             existing_titles = {a.get("title") for a in st.session_state["jarvis_alerts"]}
             for a in new_alerts:
                 if a.title not in existing_titles:
@@ -183,7 +161,7 @@ def render_jarvis(universe: list[str]) -> None:
         stored = st.session_state.get("jarvis_alerts", [])
         if stored:
             with st.expander(f"🔔 {len(stored)} Active Alert{'s' if len(stored)!=1 else ''}", expanded=False):
-                for i, alert in enumerate(reversed(stored[-5:])):
+                for alert in reversed(stored[-5:]):
                     lvl = alert.get("level", "INFO")
                     col = _level_colors.get(lvl, "#8892a4")
                     icon = _level_icons.get(lvl, "ℹ")
@@ -193,7 +171,6 @@ def render_jarvis(universe: list[str]) -> None:
                         f"<span style='color:{col};font-weight:700;font-size:.8rem'>"
                         f"{icon} {alert.get('title','')}</span><br>"
                         f"<span style='color:#8892a4;font-size:.75rem'>{alert.get('body','')}</span>"
-                        f"<span style='color:#4a5568;font-size:.65rem;float:right'>{alert.get('timestamp','')}</span>"
                         f"</div>",
                         unsafe_allow_html=True,
                     )
@@ -203,128 +180,102 @@ def render_jarvis(universe: list[str]) -> None:
     except Exception:
         pass
 
-    st.divider()
 
-    # ── Chat interface ────────────────────────────────────────────────────────
-    if "jarvis_messages" not in st.session_state:
-        st.session_state["jarvis_messages"] = []
+def _render_agent_activity(activity: list[dict], agent_results: dict) -> None:
+    if not activity and not agent_results:
+        return
 
-    # ── Pending code-change confirmation ──────────────────────────────────────
-    pending = st.session_state.get("jarvis_pending_change")
-    if pending:
-        plan = pending
-        st.markdown(
-            "<div style='background:#0d1117;border:2px solid #f59e0b55;"
-            "border-radius:12px;padding:1rem 1.2rem;margin:.6rem 0'>"
-            "<div style='color:#f59e0b;font-size:.72rem;font-weight:700;"
-            "letter-spacing:.1em;margin-bottom:.5rem'>⚡ JARVIS WANTS TO MAKE AN ADJUSTMENT</div>",
-            unsafe_allow_html=True,
-        )
+    with st.expander(
+        f"🔬 Agent Activity — {len(agent_results)} agent{'s' if len(agent_results)!=1 else ''} ran",
+        expanded=True,
+    ):
+        # Per-agent result cards
+        if agent_results:
+            cols = st.columns(min(len(agent_results), 3))
+            for idx, (name, res) in enumerate(agent_results.items()):
+                col = cols[idx % len(cols)]
+                color = _AGENT_COLORS.get(name, "#8892a4")
+                icon = _AGENT_ICONS.get(name, "🤖")
+                status_icon = "✓" if res.success else "✗"
+                status_color = "#00d4a0" if res.success else "#ff4b4b"
+                with col:
+                    st.markdown(
+                        f"<div style='background:#0d1117;border:1px solid {color}44;"
+                        f"border-radius:10px;padding:.6rem .8rem;margin:.2rem 0'>"
+                        f"<div style='color:{color};font-size:.7rem;font-weight:700;"
+                        f"font-family:JetBrains Mono,monospace'>{icon} {name}</div>"
+                        f"<div style='color:{status_color};font-size:.65rem;margin:.1rem 0'>"
+                        f"{status_icon} {len(res.steps)} step{'s' if len(res.steps)!=1 else ''}</div>"
+                        f"<div style='color:#8892a4;font-size:.7rem;line-height:1.4'>"
+                        f"{res.task[:80]}…</div>"
+                        f"</div>",
+                        unsafe_allow_html=True,
+                    )
 
-        st.markdown(f"**What's missing:** {plan.get('gap', '')}")
-        st.markdown(f"**What I'll build:** {plan.get('explanation', '')}")
-        st.markdown("**Changes:**")
-        for step in plan.get("what_changes", []):
-            st.markdown(f"- {step}")
-        st.markdown(f"**You'll see:** {plan.get('estimated_output', '')}")
+                # Steps detail
+                if res.steps:
+                    with st.expander(f"{name} steps", expanded=False):
+                        for i, step in enumerate(res.steps, 1):
+                            action = step.get("action", "?")
+                            thought = step.get("thought", "")[:100]
+                            obs = step.get("observation", "")[:200]
+                            st.markdown(
+                                f"**Step {i}** `{action}`  \n"
+                                f"*{thought}*  \n"
+                                f"`{obs}`"
+                            )
 
-        complexity_color = {"SIMPLE": "#00d4a0", "MODERATE": "#f59e0b", "COMPLEX": "#ff4b4b"}.get(
-            plan.get("complexity", "SIMPLE"), "#8892a4"
-        )
-        st.markdown(
-            f"<span style='background:{complexity_color}22;border:1px solid {complexity_color}55;"
-            f"border-radius:4px;padding:.15rem .5rem;font-size:.72rem;color:{complexity_color}'>"
-            f"{plan.get('complexity','SIMPLE')} change</span>",
-            unsafe_allow_html=True,
-        )
-        st.markdown("</div>", unsafe_allow_html=True)
-
-        col_yes, col_no, col_show = st.columns([2, 2, 3])
-        with col_yes:
-            if st.button("✅ Yes, do the adjustments", key="jarvis_confirm_yes",
-                         use_container_width=True, type="primary"):
-                st.session_state["jarvis_execute_plan"] = plan
-                st.session_state.pop("jarvis_pending_change", None)
-                st.rerun()
-        with col_no:
-            if st.button("❌ No, skip", key="jarvis_confirm_no", use_container_width=True):
-                st.session_state.pop("jarvis_pending_change", None)
-                st.session_state["jarvis_messages"].append({
-                    "role": "assistant",
-                    "content": "Understood — skipping the adjustment. Ask me something else.",
-                })
-                st.rerun()
-        with col_show:
-            if st.button("👁 Preview code first", key="jarvis_preview_code",
-                         use_container_width=True):
-                st.session_state["jarvis_preview_plan"] = plan
-                st.session_state.pop("jarvis_pending_change", None)
-                st.rerun()
-
-    # ── Code preview mode ─────────────────────────────────────────────────────
-    preview_plan = st.session_state.get("jarvis_preview_plan")
-    if preview_plan:
-        context = _get_context()
-        with st.spinner("Generating code preview…"):
-            from ui.jarvis_coder import generate_code
-            code = generate_code(
-                preview_plan.get("query", ""),
-                preview_plan,
-                context,
+        # Communication timeline
+        if activity:
+            st.markdown(
+                "<div style='color:#4a5568;font-size:.65rem;font-family:JetBrains Mono,monospace;"
+                "letter-spacing:.08em;margin:.6rem 0 .2rem'>AGENT COMMUNICATION TIMELINE</div>",
+                unsafe_allow_html=True,
             )
-        st.code(code, language="python")
-        col_run, col_cancel = st.columns([2, 2])
-        with col_run:
-            if st.button("▶ Run this code", key="jarvis_run_preview",
-                         use_container_width=True, type="primary"):
-                preview_plan["_code"] = code
-                st.session_state["jarvis_execute_plan"] = preview_plan
-                st.session_state.pop("jarvis_preview_plan", None)
-                st.rerun()
-        with col_cancel:
-            if st.button("Cancel", key="jarvis_cancel_preview", use_container_width=True):
-                st.session_state.pop("jarvis_preview_plan", None)
-                st.rerun()
+            for msg in activity:
+                from_ag = msg.get("from", "?")
+                color = _AGENT_COLORS.get(from_ag, "#8892a4")
+                type_color = _MSG_TYPE_COLORS.get(msg.get("type", "LOG"), "#4a5568")
+                icon = _AGENT_ICONS.get(from_ag, "●")
+                st.markdown(
+                    f"<div style='display:flex;gap:.5rem;align-items:flex-start;"
+                    f"padding:.2rem 0;border-bottom:1px solid #161b22'>"
+                    f"<span style='color:#4a5568;font-size:.6rem;font-family:JetBrains Mono,monospace;"
+                    f"min-width:4rem'>{msg.get('ts','')}</span>"
+                    f"<span style='color:{color};font-size:.65rem;font-weight:700;min-width:7rem'>"
+                    f"{icon} {from_ag}</span>"
+                    f"<span style='color:{type_color};font-size:.6rem;min-width:4.5rem'>"
+                    f"[{msg.get('type','LOG')}]</span>"
+                    f"<span style='color:#8892a4;font-size:.7rem'>{msg.get('content','')[:120]}</span>"
+                    f"</div>",
+                    unsafe_allow_html=True,
+                )
 
-    # ── Code execution ────────────────────────────────────────────────────────
-    exec_plan = st.session_state.pop("jarvis_execute_plan", None)
-    if exec_plan:
-        context = _get_context()
-        from ui.jarvis_coder import generate_code, execute_code, format_result_for_jarvis
 
-        code = exec_plan.get("_code") or ""
-        if not code:
-            with st.spinner("JARVIS writing code…"):
-                code = generate_code(exec_plan.get("query", ""), exec_plan, context)
-
-        with st.spinner("JARVIS executing…"):
-            stdout, error, result = execute_code(code)
-
-        response = format_result_for_jarvis(
-            exec_plan.get("query", ""), exec_plan, stdout, error, result
-        )
-
-        # Prepend a header so the user knows this was live-generated
-        response = f"✅ **Adjustment complete.** Here's what I found:\n\n{response}"
-        if not error:
-            response += f"\n\n*Generated live — ask me to save this as a permanent feature if useful.*"
-
-        st.session_state["jarvis_messages"].append({"role": "assistant", "content": response})
-        st.rerun()
-
-    # ── Chat history ──────────────────────────────────────────────────────────
-    # Render chat history
-    for msg in st.session_state["jarvis_messages"]:
+def _render_chat_history() -> None:
+    for msg in st.session_state.get("jarvis_messages", []):
         role = msg["role"]
         content = msg["content"]
+        used = msg.get("used_agents", [])
+
         if role == "assistant":
+            agent_badge = ""
+            if used:
+                badges = " ".join(
+                    f"<span style='background:{_AGENT_COLORS.get(a, \"#4a5568\")}22;"
+                    f"border:1px solid {_AGENT_COLORS.get(a, \"#4a5568\")}44;"
+                    f"border-radius:3px;padding:.05rem .3rem;font-size:.6rem;color:"
+                    f"{_AGENT_COLORS.get(a, \"#4a5568\")}'>{_AGENT_ICONS.get(a,\"\")} {a}</span>"
+                    for a in used
+                )
+                agent_badge = f"<div style='margin-bottom:.3rem'>{badges}</div>"
             st.markdown(
                 f"<div style='background:#0d1117;border:1px solid #21262d;border-radius:10px;"
                 f"padding:.7rem 1rem;margin:.4rem 0;border-left:3px solid #00d4ff'>"
                 f"<span style='color:#00d4ff;font-size:.65rem;font-weight:700;letter-spacing:.1em'>"
-                f"JARVIS</span><br>"
-                f"<span style='color:#c8cfe0;font-size:.85rem;line-height:1.6'>{content}</span>"
-                f"</div>",
+                f"JARVIS</span><br>{agent_badge}"
+                f"<span style='color:#c8cfe0;font-size:.85rem;line-height:1.6'>"
+                f"{content}</span></div>",
                 unsafe_allow_html=True,
             )
         else:
@@ -338,18 +289,106 @@ def render_jarvis(universe: list[str]) -> None:
                 unsafe_allow_html=True,
             )
 
-    # Suggested prompts (only when chat is empty)
+
+def _render_system_panel() -> None:
+    """Quick-action system control panel."""
+    with st.expander("⚡ System Control", expanded=False):
+        st.caption("Direct system actions via JARVIS agents. Requires confirmation for destructive ops.")
+        c1, c2, c3, c4 = st.columns(4)
+        with c1:
+            if st.button("📋 Git Status", key="sys_git_status", use_container_width=True):
+                st.session_state["jarvis_pending"] = "Show me the current git status and any uncommitted changes"
+                st.rerun()
+        with c2:
+            if st.button("🔄 Git Pull", key="sys_git_pull", use_container_width=True):
+                st.session_state["jarvis_pending"] = "Pull the latest changes from the remote git repository"
+                st.rerun()
+        with c3:
+            if st.button("📜 View Logs", key="sys_view_logs", use_container_width=True):
+                st.session_state["jarvis_pending"] = "Show me the last 30 lines of the application log"
+                st.rerun()
+        with c4:
+            if st.button("🌐 Market Scan", key="sys_market_scan", use_container_width=True):
+                st.session_state["jarvis_pending"] = "Run a full market scan and show me the top 5 setups right now"
+                st.rerun()
+
+        c5, c6, c7, c8 = st.columns(4)
+        with c5:
+            if st.button("💾 Deploy Code", key="sys_deploy", use_container_width=True):
+                st.session_state["jarvis_pending"] = "Commit all uncommitted changes and push to the current branch"
+                st.rerun()
+        with c6:
+            if st.button("🔍 Web Search", key="sys_websearch", use_container_width=True):
+                st.session_state["jarvis_pending"] = "Search the web for latest Nifty 50 market news and analysis today"
+                st.rerun()
+        with c7:
+            if st.button("🖥️ System Info", key="sys_info", use_container_width=True):
+                st.session_state["jarvis_pending"] = "Show me system status: running processes, disk usage, and environment config"
+                st.rerun()
+        with c8:
+            if st.button("📡 Live Prices", key="sys_prices", use_container_width=True):
+                st.session_state["jarvis_pending"] = "Show me live prices for Nifty, VIX, Bank Nifty and today's regime"
+                st.rerun()
+
+
+# ── Main render ───────────────────────────────────────────────────────────────
+
+def render_jarvis(universe: list[str]) -> None:
+    universe_key = ",".join(sorted(universe))
+    if "jarvis_setups" not in st.session_state:
+        with st.spinner("JARVIS loading market intelligence…"):
+            st.session_state["jarvis_setups"] = _get_setups_for_jarvis(universe_key)
+
+    if "jarvis_messages" not in st.session_state:
+        st.session_state["jarvis_messages"] = []
+
+    # ── Header ────────────────────────────────────────────────────────────────
+    _render_header()
+
+    # ── Opportunity score ─────────────────────────────────────────────────────
+    _render_opportunity_score()
+
+    # ── Alerts ────────────────────────────────────────────────────────────────
+    try:
+        from core.regime_engine import compute_regime
+        from core.intelligence_hub import compute_opportunity_score
+        from core.adaptive_engine import AdaptiveEngine
+        regime = compute_regime()
+        edge = AdaptiveEngine()
+        opp = compute_opportunity_score(regime, st.session_state.get("jarvis_setups", []), edge)
+        _render_alerts(regime, opp)
+    except Exception:
+        pass
+
+    # ── System control panel ──────────────────────────────────────────────────
+    _render_system_panel()
+
+    st.divider()
+
+    # ── Latest agent activity (from last run) ─────────────────────────────────
+    if st.session_state.get("jarvis_last_activity"):
+        _render_agent_activity(
+            st.session_state["jarvis_last_activity"],
+            st.session_state.get("jarvis_last_agent_results", {}),
+        )
+
+    # ── Chat history ──────────────────────────────────────────────────────────
+    _render_chat_history()
+
+    # ── Suggested prompts ─────────────────────────────────────────────────────
     if not st.session_state["jarvis_messages"]:
         st.markdown(
             "<div style='color:#4a5568;font-size:.7rem;text-transform:uppercase;"
-            "letter-spacing:.08em;margin:.5rem 0 .3rem'>Quick questions</div>",
+            "letter-spacing:.08em;margin:.5rem 0 .3rem'>Ask anything — agents will do the work</div>",
             unsafe_allow_html=True,
         )
         suggestions = [
-            "What's the best trade setup today?",
-            "Is this a good day to trade? Give me the opportunity score breakdown.",
-            "Show me sector P/E ratios for NSE",
-            "What's my win rate by playbook type?",
+            "What's the best setup right now? Run a scan.",
+            "Search the web for Nifty 50 outlook this week",
+            "Show me sector P/E ratios — look it up online",
+            "Commit my changes and push to the current branch",
+            "What's my win rate and edge by playbook type?",
+            "Check the logs for any errors in the last hour",
         ]
         cols = st.columns(2)
         for i, sug in enumerate(suggestions):
@@ -357,19 +396,18 @@ def render_jarvis(universe: list[str]) -> None:
                 st.session_state["jarvis_pending"] = sug
                 st.rerun()
 
-    # Input bar
+    # ── Input bar ─────────────────────────────────────────────────────────────
     col_in, col_send = st.columns([8, 1])
     with col_in:
         user_input = st.text_input(
             "Ask JARVIS",
             key="jarvis_input",
-            placeholder="Ask anything — if it doesn't exist yet, I'll build it live…",
+            placeholder="Ask anything — agents have internet access, code execution, and git control…",
             label_visibility="collapsed",
         )
     with col_send:
         send = st.button("Send", key="jarvis_send", use_container_width=True, type="primary")
 
-    # Handle pending suggestion click
     if "jarvis_pending" in st.session_state:
         user_input = st.session_state.pop("jarvis_pending")
         send = True
@@ -377,54 +415,50 @@ def render_jarvis(universe: list[str]) -> None:
     if (send or user_input) and user_input and user_input.strip():
         query = user_input.strip()
         context = _get_context()
+        history = st.session_state["jarvis_messages"]
 
-        # Store user message
         st.session_state["jarvis_messages"].append({"role": "user", "content": query})
 
-        # Step 1: Diagnose — does this need new code?
-        with st.spinner("JARVIS thinking…"):
-            from ui.jarvis_coder import diagnose_query
-            diagnosis = diagnose_query(query, context)
+        with st.spinner("🧠 JARVIS orchestrating…"):
+            from ai.jarvis_orchestrator import get_orchestrator
+            orchestrator = get_orchestrator()
+            result = orchestrator.run(query, context, history)
 
-        if diagnosis.get("type") == "NEEDS_CODE":
-            # Store plan with original query attached
-            plan = dict(diagnosis)
-            plan["query"] = query
-            st.session_state["jarvis_pending_change"] = plan
+        # Store activity for display
+        agent_results_dicts = {}
+        if result.routed:
+            for name, res in result.agent_results.items():
+                agent_results_dicts[name] = res
 
-            # Show JARVIS acknowledgement in chat
-            ack = (
-                f"I can answer that, but it requires a quick adjustment — "
-                f"**{plan.get('gap', 'this data isn\\'t currently in the system')}**. "
-                f"I've prepared the change below. Review and confirm."
-            )
-            st.session_state["jarvis_messages"].append({"role": "assistant", "content": ack})
+        st.session_state["jarvis_last_activity"] = result.agent_activity
+        st.session_state["jarvis_last_agent_results"] = agent_results_dicts
 
-        else:
-            # Normal chat answer
-            messages = [
-                {"role": "system", "content": _SYSTEM_PROMPT + "\n\n" + context},
-            ]
-            for m in st.session_state["jarvis_messages"][-12:]:
-                messages.append({"role": m["role"], "content": m["content"]})
-
-            with st.spinner("JARVIS answering…"):
-                response = _call_deepseek(messages)
-
-            st.session_state["jarvis_messages"].append({"role": "assistant", "content": response})
+        # Append assistant message with agent metadata
+        st.session_state["jarvis_messages"].append({
+            "role": "assistant",
+            "content": result.answer,
+            "used_agents": result.used_agents,
+        })
 
         st.rerun()
 
-    # Controls
-    cc1, cc2, _ = st.columns([2, 2, 6])
+    # ── Controls ──────────────────────────────────────────────────────────────
+    cc1, cc2, cc3, _ = st.columns([2, 2, 2, 4])
     with cc1:
         if st.button("Clear chat", key="jarvis_clear_chat"):
             st.session_state["jarvis_messages"] = []
-            st.session_state.pop("jarvis_pending_change", None)
-            st.session_state.pop("jarvis_preview_plan", None)
+            st.session_state.pop("jarvis_last_activity", None)
+            st.session_state.pop("jarvis_last_agent_results", None)
             st.rerun()
     with cc2:
         if st.button("Refresh context", key="jarvis_refresh"):
             st.session_state.pop("jarvis_setups", None)
             st.cache_data.clear()
+            st.rerun()
+    with cc3:
+        if st.button("Reset agents", key="jarvis_reset_agents"):
+            # Force fresh orchestrator
+            import ai.jarvis_orchestrator as _orch_mod
+            _orch_mod._orchestrator = None
+            st.success("Agents restarted")
             st.rerun()
