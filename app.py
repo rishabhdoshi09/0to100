@@ -788,7 +788,7 @@ with st.sidebar:
     # ── Navigation ─────────────────────────────────────────────────────────
     _nav_page = st.radio(
         "Navigate",
-        ["🏠  Dashboard", "🏛️  Institutional", "⚡  Terminal", "🔬  Research", "🧬  AlgoLab", "🛠️  Tools"],
+        ["🏠  Dashboard", "🏛️  Institutional", "🤖  JARVIS", "⚡  Terminal", "🔬  Research", "🧬  AlgoLab", "🛠️  Tools"],
         label_visibility="collapsed",
         key="sidebar_nav",
     )
@@ -875,6 +875,7 @@ if st.session_state.get("selected_page"):
     _nav_target = st.session_state.pop("selected_page")
     _nav_map = {
         "Institutional": "🏛️  Institutional",
+        "JARVIS":        "🤖  JARVIS",
         "Terminal":      "⚡  Terminal",
         "Dashboard":     "🏠  Dashboard",
     }
@@ -896,6 +897,14 @@ if _page == "Dashboard":
 # ══════════════════════════════════════════════════════════════════════════════
 elif _page == "Institutional":
     render_institutional_terminal(universe)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# PAGE: JARVIS
+# ══════════════════════════════════════════════════════════════════════════════
+elif _page == "JARVIS":
+    from ui.jarvis import render_jarvis
+    render_jarvis(universe)
 
 
 # ══════════════════════════════════════════════════════════════════════════════

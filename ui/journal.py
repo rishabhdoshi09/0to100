@@ -50,8 +50,23 @@ def log_trade_to_journal(
     chart_state: dict | None = None,
     ai_verdict: str = "",
 ):
-    """Called automatically when a trade is placed. Snapshots context + AI verdict."""
+    """Called automatically when a trade is placed. Snapshots context + AI verdict.
+    Auto-enriches indicators with live regime context for the adaptive engine."""
     _init_journal_db()
+
+    # Auto-enrich with regime context so AdaptiveEngine can learn from every trade
+    enriched = dict(indicators or {})
+    if "regime" not in enriched:
+        try:
+            from core.regime_engine import compute_regime
+            r = compute_regime()
+            enriched.setdefault("regime", r.market_regime)
+            enriched.setdefault("volatility_regime", r.volatility_regime)
+            enriched.setdefault("regime_score", r.regime_score)
+            enriched.setdefault("breadth", r.breadth_label)
+        except Exception:
+            pass
+
     conn = sqlite3.connect(JOURNAL_DB)
     conn.execute(
         "INSERT INTO journal_entries "
@@ -63,7 +78,7 @@ def log_trade_to_journal(
             action,
             price,
             qty,
-            json.dumps(indicators or {}),
+            json.dumps(enriched),
             news_snap[:500],
             json.dumps(chart_state or {}),
             ai_verdict,

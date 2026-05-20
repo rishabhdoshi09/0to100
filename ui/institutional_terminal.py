@@ -589,6 +589,7 @@ def _deepseek_analyse(symbol: str, setup: dict | None, regime: dict) -> str:
 
 def render_institutional_terminal(universe: list[str]) -> None:
     from ui.regime_bar import render_regime_bar, get_regime
+    from ui.nl_query import render_nl_query
 
     # Persistent regime bar
     render_regime_bar()
@@ -621,6 +622,12 @@ def render_institutional_terminal(universe: list[str]) -> None:
     setup_data = st.session_state.get("iq2_setup_data")
 
     universe_key = ",".join(sorted(universe))
+
+    # NL Query bar — filters the setup queue
+    current_setups = st.session_state.get(f"pipeline_{universe_key}", [])
+    nl_filtered = render_nl_query(universe, current_setups)
+    if nl_filtered is not None:
+        st.session_state[f"pipeline_nl_{universe_key}"] = nl_filtered
 
     # 3-panel layout
     col_left, col_center, col_right = st.columns([28, 44, 28])
