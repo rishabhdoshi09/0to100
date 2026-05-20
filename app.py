@@ -1061,7 +1061,7 @@ elif _page == "Terminal":
 # PAGE: RESEARCH
 # ══════════════════════════════════════════════════════════════════════════════
 elif _page == "Research":
-    _r0, _r1, _r2, _r3, _r4, _r5, _r6, _r7, _r8 = st.tabs([
+    _r0, _r1, _r2, _r3, _r4, _r5, _r6, _r7, _r8, _r9 = st.tabs([
         "📰 Market Brief",
         "📈 Charts",
         "📊 Fundamentals",
@@ -1071,6 +1071,7 @@ elif _page == "Research":
         "🌊 FII/DII",
         "🎯 VCP Scanner",
         "📋 Playbooks",
+        "🔍 Bulk Patterns",
     ])
 
     # ── Market Brief ──────────────────────────────────────────────────────
@@ -1527,6 +1528,10 @@ elif _page == "Research":
 
     with _r8:
         _render_playbooks_tab()
+
+    with _r9:
+        from ui.bulk_pattern import render_bulk_pattern
+        render_bulk_pattern(universe)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
