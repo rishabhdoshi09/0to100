@@ -105,6 +105,14 @@ st.markdown(DEVBLOOM_CSS, unsafe_allow_html=True)
 # ── Settings ──────────────────────────────────────────────────────────────────
 settings = Settings()
 
+# ── Market monitor (daemon thread — Telegram alerts during market hours) ──────
+if "monitor_started" not in st.session_state:
+    st.session_state["monitor_started"] = True
+    try:
+        from core.market_monitor import start_if_market_hours
+        start_if_market_hours()
+    except Exception:
+        pass
 
 # ── Cached client initialisation ─────────────────────────────────────────────
 @st.cache_resource

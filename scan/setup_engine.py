@@ -38,6 +38,7 @@ class SetupCandidate:
     stop_level: float
     behavioral_evidence: list[str]   # human-readable evidence list
     raw_indicators: dict             # supporting indicator values
+    fno_banned: bool = False         # True if in NSE F&O ban period (no fresh positions)
 
 
 def _fetch(symbol: str, days: int = 260) -> Optional[pd.DataFrame]:

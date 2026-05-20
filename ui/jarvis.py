@@ -166,50 +166,85 @@ def _render_opportunity_score() -> None:
         pass
 
 
-def _render_fii_dii() -> None:
-    """FII/DII flow panel."""
+def _render_intelligence_bar() -> None:
+    """FII/DII + block deals + circuit breakers — institutional intelligence feed."""
+    rows = []
+
+    # ── FII/DII ───────────────────────────────────────────────────────────────
     try:
         from data.fii_flow import get_fii_dii_flow
         flow = get_fii_dii_flow(days=5)
-        if flow.get("error") or not flow.get("today"):
-            return
-        today = flow["today"]
-        fii = today.get("fii_net_cr", 0)
-        dii = today.get("dii_net_cr", 0)
-        fii_streak = flow.get("fii_streak", 0)
-        dii_streak = flow.get("dii_streak", 0)
+        today = flow.get("today", {})
+        if today:
+            fii = today.get("fii_net_cr", 0)
+            dii = today.get("dii_net_cr", 0)
+            fs  = flow.get("fii_streak", 0)
+            ds  = flow.get("dii_streak", 0)
+            fii_c = "#00d4a0" if fii >= 0 else "#ff4b4b"
+            dii_c = "#00d4a0" if dii >= 0 else "#ff4b4b"
 
-        fii_color = "#00d4a0" if fii >= 0 else "#ff4b4b"
-        dii_color = "#00d4a0" if dii >= 0 else "#ff4b4b"
-        fii_icon = "▲" if fii >= 0 else "▼"
-        dii_icon = "▲" if dii >= 0 else "▼"
+            def streak_tag(s: int) -> str:
+                if not s:
+                    return ""
+                return f"<span style='color:#4a5568;font-size:.6rem'> {abs(s)}d {'buy' if s>0 else 'sell'}</span>"
 
-        def streak_txt(s: int) -> str:
-            if s == 0:
-                return ""
-            direction = "buy" if s > 0 else "sell"
-            return f" · {abs(s)}d {direction} streak"
-
-        st.markdown(
-            f"<div style='background:#0d1117;border:1px solid #21262d;border-radius:10px;"
-            f"padding:.5rem 1rem;margin-bottom:.5rem;display:flex;gap:2rem;align-items:center'>"
-            f"<div style='color:#4a5568;font-size:.65rem;font-family:JetBrains Mono,monospace;min-width:3rem'>FII/DII</div>"
-            f"<div>"
-            f"<span style='color:{fii_color};font-size:.78rem;font-weight:700'>"
-            f"{fii_icon} FII ₹{abs(fii):,.0f}Cr</span>"
-            f"<span style='color:#4a5568;font-size:.65rem'>{streak_txt(fii_streak)}</span>"
-            f"</div>"
-            f"<div>"
-            f"<span style='color:{dii_color};font-size:.78rem;font-weight:700'>"
-            f"{dii_icon} DII ₹{abs(dii):,.0f}Cr</span>"
-            f"<span style='color:#4a5568;font-size:.65rem'>{streak_txt(dii_streak)}</span>"
-            f"</div>"
-            f"<div style='color:#8892a4;font-size:.72rem;flex:1'>{flow.get('insight','')}</div>"
-            f"</div>",
-            unsafe_allow_html=True,
-        )
+            rows.append(
+                f"<span style='color:#4a5568;font-size:.65rem;font-family:JetBrains Mono,monospace'>FII/DII</span>&nbsp;&nbsp;"
+                f"<span style='color:{fii_c};font-weight:700'>{'▲' if fii>=0 else '▼'} ₹{abs(fii):,.0f}Cr</span>{streak_tag(fs)}"
+                f"&nbsp;&nbsp;"
+                f"<span style='color:{dii_c};font-weight:700'>DII {'▲' if dii>=0 else '▼'} ₹{abs(dii):,.0f}Cr</span>{streak_tag(ds)}"
+                f"&nbsp;&nbsp;<span style='color:#8892a4;font-size:.7rem'>{flow.get('insight','')}</span>"
+            )
     except Exception:
         pass
+
+    # ── Block deals ───────────────────────────────────────────────────────────
+    try:
+        from data.block_deals import get_significant_deals, format_deal_insight
+        from config import settings
+        uni = list(getattr(settings, "universe", []))[:30] or []
+        deals = get_significant_deals(uni, min_value_cr=25.0) if uni else []
+        if deals:
+            insight = format_deal_insight(deals[:2])
+            rows.append(
+                f"<span style='color:#4a5568;font-size:.65rem;font-family:JetBrains Mono,monospace'>BLOCK</span>&nbsp;&nbsp;"
+                f"<span style='color:#a78bfa;font-size:.72rem'>{insight}</span>"
+            )
+    except Exception:
+        pass
+
+    # ── Circuit breakers ──────────────────────────────────────────────────────
+    try:
+        from data.circuit_breakers import get_circuit_stocks
+        circuits = get_circuit_stocks("both")
+        if circuits:
+            upper = [c for c in circuits if c.circuit_type == "UPPER"]
+            lower = [c for c in circuits if c.circuit_type == "LOWER"]
+            parts = []
+            if upper:
+                syms = ", ".join(c.symbol for c in upper[:3])
+                parts.append(f"<span style='color:#00d4a0'>↑UC: {syms}</span>")
+            if lower:
+                syms = ", ".join(c.symbol for c in lower[:3])
+                parts.append(f"<span style='color:#ff4b4b'>↓LC: {syms}</span>")
+            if parts:
+                rows.append(
+                    f"<span style='color:#4a5568;font-size:.65rem;font-family:JetBrains Mono,monospace'>CIRCUIT</span>&nbsp;&nbsp;"
+                    + "&nbsp;&nbsp;".join(parts)
+                )
+    except Exception:
+        pass
+
+    if not rows:
+        return
+
+    content = "&nbsp;&nbsp;<span style='color:#21262d'>|</span>&nbsp;&nbsp;".join(rows)
+    st.markdown(
+        f"<div style='background:#0d1117;border:1px solid #21262d;border-radius:10px;"
+        f"padding:.45rem 1rem;margin-bottom:.5rem;font-size:.75rem;line-height:1.8;overflow-x:auto'>"
+        f"{content}</div>",
+        unsafe_allow_html=True,
+    )
 
 
 def _render_memory_context() -> None:
@@ -527,8 +562,8 @@ def render_jarvis(universe: list[str]) -> None:
     # ── Opportunity score ─────────────────────────────────────────────────────
     _render_opportunity_score()
 
-    # ── FII/DII Flow ──────────────────────────────────────────────────────────
-    _render_fii_dii()
+    # ── Intelligence Bar (FII/DII + Block Deals + Circuit Breakers) ──────────
+    _render_intelligence_bar()
 
     # ── Alerts ────────────────────────────────────────────────────────────────
     try:

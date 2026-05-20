@@ -86,6 +86,99 @@ class AlertManager:
         # Fallback: already logged above
         return False
 
+    # ── Structured alert helpers ──────────────────────────────────────────
+
+    def send_regime_change(
+        self,
+        from_regime: str,
+        to_regime: str,
+        score: float,
+        confidence: str,
+    ) -> bool:
+        """Send a regime-change notification via Telegram."""
+        text = (
+            f"📊 REGIME CHANGE\n"
+            f"{from_regime} → {to_regime}\n"
+            f"Score: {score:.0f}/100 | Confidence: {confidence}"
+        )
+        log.info("send_regime_change", from_regime=from_regime, to_regime=to_regime)
+        if self._telegram_ok:
+            return self._send_telegram(text)
+        return False
+
+    def send_price_alert_fired(
+        self,
+        symbol: str,
+        target_price: float,
+        ltp: float,
+        direction: str,
+    ) -> bool:
+        """Send a price-alert-triggered notification via Telegram."""
+        text = (
+            f"🎯 PRICE ALERT TRIGGERED\n"
+            f"{symbol} {direction} ₹{target_price:,} — now at ₹{ltp:,.2f}"
+        )
+        log.info("send_price_alert_fired", symbol=symbol, target_price=target_price, ltp=ltp)
+        if self._telegram_ok:
+            return self._send_telegram(text)
+        return False
+
+    def send_morning_brief(
+        self,
+        regime_str: str,
+        opp_score: float,
+        opp_grade: str,
+        top_setups: list,
+        trading_rules: str,
+    ) -> bool:
+        """Send the morning market brief via Telegram."""
+        now_ist = datetime.now(_IST).strftime("%I:%M %p IST")
+        bullets = "\n".join(f"• {s}" for s in top_setups[:3]) if top_setups else "• No setups found."
+        text = (
+            f"🌅 QUANTTERM MORNING BRIEF\n"
+            f"{now_ist}\n\n"
+            f"Regime: {regime_str}\n"
+            f"Opportunity: {opp_score:.0f}/100 (Grade {opp_grade})\n"
+            f"Rules: {trading_rules}\n\n"
+            f"Top setups:\n{bullets}"
+        )
+        log.info("send_morning_brief", regime=regime_str, opp_score=opp_score)
+        if self._telegram_ok:
+            return self._send_telegram(text)
+        return False
+
+    def send_vix_spike(self, vix_prev: float, vix_now: float) -> bool:
+        """Send a VIX spike alert via Telegram."""
+        change = vix_now - vix_prev
+        text = (
+            f"⚠️ VIX SPIKE\n"
+            f"{vix_prev:.1f} → {vix_now:.1f} ({change:+.1f})\n"
+            f"Widen stops, reduce size."
+        )
+        log.info("send_vix_spike", vix_prev=vix_prev, vix_now=vix_now)
+        if self._telegram_ok:
+            return self._send_telegram(text)
+        return False
+
+    def send_eod_summary(
+        self,
+        total_trades: int,
+        win_rate: float,
+        total_pnl: float,
+        open_positions: int,
+    ) -> bool:
+        """Send the end-of-day summary via Telegram."""
+        text = (
+            f"📈 END OF DAY SUMMARY\n"
+            f"Trades today: {total_trades} | Win rate: {win_rate:.0f}%\n"
+            f"P&L: ₹{total_pnl:+,.0f}\n"
+            f"Open positions: {open_positions}"
+        )
+        log.info("send_eod_summary", total_trades=total_trades, total_pnl=total_pnl)
+        if self._telegram_ok:
+            return self._send_telegram(text)
+        return False
+
     # ── Telegram ───────────────────────────────────────────────────────────
 
     def _send_telegram(self, text: str) -> bool:

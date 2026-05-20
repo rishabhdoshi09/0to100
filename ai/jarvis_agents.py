@@ -486,6 +486,9 @@ class AnalysisAgent(BaseJarvisAgent):
             "detect_patterns": self._detect_patterns,
             "compute_indicators": self._compute_indicators,
             "get_journal_stats": self._get_journal_stats,
+            "get_fno_ban_list": self._get_fno_ban,
+            "get_block_deals": self._get_block_deals,
+            "get_circuit_stocks": self._get_circuits,
         }
 
     def _compute_regime(self) -> dict:
@@ -570,6 +573,38 @@ class AnalysisAgent(BaseJarvisAgent):
             from paper_trading import get_trading_summary, init_db
             init_db()
             return get_trading_summary() or {"no_data": True}
+        except Exception as e:
+            return {"error": str(e)}
+
+    def _get_fno_ban(self) -> list[str]:
+        """Get the current NSE F&O securities ban list."""
+        try:
+            from data.fno_ban import get_fno_ban_list
+            return sorted(get_fno_ban_list())
+        except Exception as e:
+            return [f"error: {e}"]
+
+    def _get_block_deals(self, min_value_cr: float = 25.0) -> list[dict]:
+        """Get significant block/bulk deals from NSE (institutional transactions)."""
+        try:
+            from data.block_deals import get_significant_deals
+            deals = get_significant_deals([], min_value_cr=min_value_cr)
+            return [{"symbol": d.symbol, "client": d.client_name, "deal_type": d.deal_type,
+                     "qty": d.quantity, "price": d.price, "value_cr": d.value_cr} for d in deals[:10]]
+        except Exception as e:
+            return [{"error": str(e)}]
+
+    def _get_circuits(self) -> dict:
+        """Get stocks hitting upper/lower price circuits today."""
+        try:
+            from data.circuit_breakers import get_circuit_stocks
+            stocks = get_circuit_stocks("both")
+            return {
+                "upper": [{"symbol": c.symbol, "pct": c.pct_change, "days": c.consecutive_days}
+                          for c in stocks if c.circuit_type == "UPPER"],
+                "lower": [{"symbol": c.symbol, "pct": c.pct_change, "days": c.consecutive_days}
+                          for c in stocks if c.circuit_type == "LOWER"],
+            }
         except Exception as e:
             return {"error": str(e)}
 

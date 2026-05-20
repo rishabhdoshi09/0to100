@@ -45,9 +45,28 @@ SECTOR_TICKERS: dict[str, str] = {
 OFFENSIVE_SECTORS = {"IT", "AUTO", "METAL"}
 DEFENSIVE_SECTORS = {"PHARMA", "FMCG", "ENERGY"}
 
-CACHE_TTL_SECS = 15 * 60  # 15 minutes
+_CACHE_TTL_DEFAULT = 15 * 60   # 15 min outside market hours
 
 _CACHE: dict = {}          # keys: "regime_state", "timestamp"
+
+
+def _cache_ttl() -> int:
+    """Dynamic TTL — 60s during market hours, 5m pre-market, 15m otherwise."""
+    try:
+        import pytz
+        from datetime import time as _time
+        ist = pytz.timezone("Asia/Kolkata")
+        now = datetime.now(ist)
+        if now.weekday() >= 5:           # weekend
+            return 60 * 60
+        t = now.time()
+        if _time(9, 10) <= t <= _time(15, 35):
+            return 60                    # every minute during live session
+        if _time(8, 0) <= t < _time(9, 10):
+            return 5 * 60               # pre-market warmup
+    except Exception:
+        pass
+    return _CACHE_TTL_DEFAULT
 
 # ---------------------------------------------------------------------------
 # Data classes
@@ -745,7 +764,7 @@ def compute_regime() -> RegimeState:
     cached = _CACHE.get("regime_state")
     cached_ts = _CACHE.get("timestamp", 0.0)
 
-    if cached is not None and (now - cached_ts) < CACHE_TTL_SECS:
+    if cached is not None and (now - cached_ts) < _cache_ttl():
         return cached
 
     # ---- parallel data fetch ------------------------------------------------

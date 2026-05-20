@@ -127,10 +127,27 @@ class ScanPipeline:
         ).rank(candidates, quality_scores)
 
         result = ranked[:top_n]
+
+        # ── 8. F&O Ban annotation ─────────────────────────────────────────────
+        try:
+            from data.fno_ban import annotate_setups, get_fno_ban_list
+            ban = get_fno_ban_list()
+            if ban:
+                annotated = []
+                for r in result:
+                    sym = getattr(r, "symbol", "").upper()
+                    if sym in ban:
+                        r = r.__class__(**{**vars(r), "fno_banned": True})
+                        log.info("fno_ban_flagged", symbol=sym)
+                    annotated.append(r)
+                result = annotated
+        except Exception as exc:
+            log.debug("fno_ban_skip", error=str(exc))
+
         elapsed = round(time.time() - t0, 1)
         log.info("pipeline_done", results=len(result), elapsed_s=elapsed)
 
-        # ── 8. Alerts (optional) ──────────────────────────────────────────────
+        # ── 9. Alerts (optional) ──────────────────────────────────────────────
         if self._fire_alerts:
             self._fire_elite_alerts(result)
 

@@ -9,7 +9,7 @@ import threading
 import time
 import json
 import requests
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 
@@ -64,8 +64,31 @@ class JarvisMemory:
                     """
                 )
                 conn.commit()
+                # Non-destructive migration: add expires_at column if not present
+                try:
+                    conn.execute("ALTER TABLE facts ADD COLUMN expires_at TEXT")
+                    conn.commit()
+                except Exception:
+                    pass  # column already exists
             finally:
                 conn.close()
+        self._cleanup_stale_facts()
+
+    def _cleanup_stale_facts(self) -> None:
+        try:
+            with self._lock:
+                conn = self._connect()
+                try:
+                    now = self._now_iso()
+                    conn.execute(
+                        "DELETE FROM facts WHERE expires_at IS NOT NULL AND expires_at < ?",
+                        (now,),
+                    )
+                    conn.commit()
+                finally:
+                    conn.close()
+        except Exception as exc:
+            print(f"[JarvisMemory] _cleanup_stale_facts error: {exc}")
 
     @staticmethod
     def _now_iso() -> str:
@@ -75,21 +98,45 @@ class JarvisMemory:
     # Facts
     # ------------------------------------------------------------------
 
-    def remember(self, key: str, value: str, category: str = "fact") -> None:
+    _CATEGORY_EXPIRY_DAYS: dict = {
+        "position": 7,
+        "watchlist": 30,
+        "fact": 90,
+        "preference": None,
+    }
+
+    def remember(
+        self,
+        key: str,
+        value: str,
+        category: str = "fact",
+        expires_days: int | None = None,
+    ) -> None:
         try:
+            # Determine expiry: explicit arg wins; else use category default
+            if expires_days is None:
+                expires_days = self._CATEGORY_EXPIRY_DAYS.get(category, 90)
+
+            expires_at: str | None = None
+            if expires_days is not None:
+                expires_at = (
+                    datetime.now(timezone.utc) + timedelta(days=expires_days)
+                ).isoformat()
+
             with self._lock:
                 conn = self._connect()
                 try:
                     conn.execute(
                         """
-                        INSERT INTO facts (key, value, category, updated_at)
-                        VALUES (?, ?, ?, ?)
+                        INSERT INTO facts (key, value, category, updated_at, expires_at)
+                        VALUES (?, ?, ?, ?, ?)
                         ON CONFLICT(key) DO UPDATE SET
                             value      = excluded.value,
                             category   = excluded.category,
-                            updated_at = excluded.updated_at
+                            updated_at = excluded.updated_at,
+                            expires_at = excluded.expires_at
                         """,
-                        (key, str(value), category, self._now_iso()),
+                        (key, str(value), category, self._now_iso(), expires_at),
                     )
                     conn.commit()
                 finally:
