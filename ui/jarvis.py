@@ -107,7 +107,7 @@ def _render_header() -> None:
 
 def _render_opportunity_score() -> None:
     try:
-        from core.intelligence_hub import compute_opportunity_score
+        from core.intelligence_hub import compute_opportunity_score, get_trading_rules
         from core.regime_engine import compute_regime
         regime = compute_regime()
         setups = st.session_state.get("jarvis_setups", [])
@@ -117,22 +117,198 @@ def _render_opportunity_score() -> None:
         except Exception:
             edge = None
         opp = compute_opportunity_score(regime, setups, edge)
+        rules = get_trading_rules(opp)
+
+        confidence = getattr(regime, "regime_confidence", 0)
+        confidence_label = getattr(regime, "regime_confidence_label", "—")
+        conf_color = {"HIGH": "#00d4a0", "MODERATE": "#f59e0b", "LOW": "#f97316", "UNCERTAIN": "#ff4b4b"}.get(confidence_label, "#8892a4")
 
         c1, c2, c3, c4, c5 = st.columns(5)
         c1.metric("Opportunity", f"{opp.total:.0f}/100", opp.grade)
-        c2.metric("Regime", f"{getattr(regime, 'regime_score', 0):.0f}/100")
-        c3.metric("Breadth", f"{getattr(regime, 'breadth_strength', 0)}/100")
-        c4.metric("Aggression", opp.recommended_aggression.split("(")[0].strip())
-        c5.metric("Max Trades", str(opp.max_open_trades))
+        c2.metric("Regime Score", f"{getattr(regime, 'regime_score', 0):.0f}/100")
+        c3.metric("Confidence", f"{confidence:.0f}%", confidence_label)
+        c4.metric("Max Positions", str(rules.max_positions))
+        c5.metric("Size", rules.display_size())
 
-        color = opp.color
+        color = rules.color
         pct = opp.total
         st.markdown(
-            f"<div style='background:#161b22;border-radius:6px;height:6px;margin:-.3rem 0 .8rem'>"
+            f"<div style='background:#161b22;border-radius:6px;height:6px;margin:-.3rem 0 .4rem'>"
             f"<div style='background:{color};width:{pct}%;height:6px;border-radius:6px;"
             f"transition:width .5s'></div></div>",
             unsafe_allow_html=True,
         )
+
+        # Hard rules banner — always visible, color-coded
+        border_style = f"2px solid {rules.color}55" if rules.allow_new_trades else f"2px solid {rules.color}"
+        st.markdown(
+            f"<div style='background:{rules.color}11;border:{border_style};"
+            f"border-radius:8px;padding:.4rem .9rem;margin-bottom:.6rem;"
+            f"display:flex;justify-content:space-between;align-items:center'>"
+            f"<span style='color:{rules.color};font-family:JetBrains Mono,monospace;"
+            f"font-size:.72rem;font-weight:700'>"
+            f"{'🚫' if not rules.allow_new_trades else '⚡'} {rules.label.upper()}: {rules.one_liner()}</span>"
+            f"<span style='color:#4a5568;font-size:.65rem'>{rules.rationale}</span>"
+            f"</div>",
+            unsafe_allow_html=True,
+        )
+
+        # Store rules in session for other components to use
+        st.session_state["jarvis_trading_rules"] = {
+            "max_positions": rules.max_positions,
+            "size_multiplier": rules.size_multiplier,
+            "min_tier": rules.min_tier,
+            "allow_new_trades": rules.allow_new_trades,
+            "label": rules.label,
+            "color": rules.color,
+        }
+    except Exception:
+        pass
+
+
+def _render_fii_dii() -> None:
+    """FII/DII flow panel."""
+    try:
+        from data.fii_flow import get_fii_dii_flow
+        flow = get_fii_dii_flow(days=5)
+        if flow.get("error") or not flow.get("today"):
+            return
+        today = flow["today"]
+        fii = today.get("fii_net_cr", 0)
+        dii = today.get("dii_net_cr", 0)
+        fii_streak = flow.get("fii_streak", 0)
+        dii_streak = flow.get("dii_streak", 0)
+
+        fii_color = "#00d4a0" if fii >= 0 else "#ff4b4b"
+        dii_color = "#00d4a0" if dii >= 0 else "#ff4b4b"
+        fii_icon = "▲" if fii >= 0 else "▼"
+        dii_icon = "▲" if dii >= 0 else "▼"
+
+        def streak_txt(s: int) -> str:
+            if s == 0:
+                return ""
+            direction = "buy" if s > 0 else "sell"
+            return f" · {abs(s)}d {direction} streak"
+
+        st.markdown(
+            f"<div style='background:#0d1117;border:1px solid #21262d;border-radius:10px;"
+            f"padding:.5rem 1rem;margin-bottom:.5rem;display:flex;gap:2rem;align-items:center'>"
+            f"<div style='color:#4a5568;font-size:.65rem;font-family:JetBrains Mono,monospace;min-width:3rem'>FII/DII</div>"
+            f"<div>"
+            f"<span style='color:{fii_color};font-size:.78rem;font-weight:700'>"
+            f"{fii_icon} FII ₹{abs(fii):,.0f}Cr</span>"
+            f"<span style='color:#4a5568;font-size:.65rem'>{streak_txt(fii_streak)}</span>"
+            f"</div>"
+            f"<div>"
+            f"<span style='color:{dii_color};font-size:.78rem;font-weight:700'>"
+            f"{dii_icon} DII ₹{abs(dii):,.0f}Cr</span>"
+            f"<span style='color:#4a5568;font-size:.65rem'>{streak_txt(dii_streak)}</span>"
+            f"</div>"
+            f"<div style='color:#8892a4;font-size:.72rem;flex:1'>{flow.get('insight','')}</div>"
+            f"</div>",
+            unsafe_allow_html=True,
+        )
+    except Exception:
+        pass
+
+
+def _render_memory_context() -> None:
+    """Show what JARVIS remembers — collapsible."""
+    try:
+        from ai.jarvis_memory import get_memory
+        mem = get_memory()
+        sessions = mem.get_recent_sessions(1)
+        facts = mem.recall(limit=10)
+        alerts = mem.get_active_alerts()
+
+        if not sessions and not facts and not alerts:
+            return
+
+        with st.expander("🧠 JARVIS Memory", expanded=False):
+            if sessions:
+                s = sessions[0]
+                ts = s["timestamp"][:10]
+                st.markdown(
+                    f"<div style='color:#8892a4;font-size:.72rem'>"
+                    f"<span style='color:#00d4ff;font-weight:700'>Last session ({ts}):</span> "
+                    f"{s['summary']}</div>",
+                    unsafe_allow_html=True,
+                )
+            if facts:
+                st.markdown(
+                    "<div style='color:#4a5568;font-size:.65rem;margin-top:.4rem;"
+                    "font-family:JetBrains Mono,monospace;letter-spacing:.06em'>REMEMBERED FACTS</div>",
+                    unsafe_allow_html=True,
+                )
+                for f in facts[:8]:
+                    st.markdown(
+                        f"<div style='color:#8892a4;font-size:.72rem'>"
+                        f"<span style='color:#a78bfa'>{f['key']}</span>: {f['value']}</div>",
+                        unsafe_allow_html=True,
+                    )
+            if alerts:
+                st.markdown(
+                    "<div style='color:#f59e0b;font-size:.65rem;margin-top:.4rem;"
+                    "font-family:JetBrains Mono,monospace'>PRICE ALERTS ACTIVE</div>",
+                    unsafe_allow_html=True,
+                )
+                for a in alerts:
+                    st.markdown(
+                        f"<div style='color:#8892a4;font-size:.72rem'>"
+                        f"<span style='color:#fbbf24'>{a['symbol']}</span> "
+                        f"{a['direction']} ₹{a['price']:,.0f}</div>",
+                        unsafe_allow_html=True,
+                    )
+            col_clear, _ = st.columns([2, 6])
+            with col_clear:
+                if st.button("Clear memory", key="clear_jarvis_memory"):
+                    for f in facts:
+                        mem.forget(f["key"])
+                    st.rerun()
+    except Exception:
+        pass
+
+
+def _render_regime_analog() -> None:
+    """Historical regime analog — show similar past periods."""
+    try:
+        from core.regime_analog import find_analogs
+        from core.regime_engine import compute_regime
+        regime = compute_regime()
+        regime_dict = {
+            "market_regime": regime.market_regime,
+            "volatility_regime": regime.volatility_regime,
+            "breadth_label": regime.breadth_label,
+            "vix": regime.vix,
+            "nifty_change_5d": regime.nifty_change_5d,
+            "sector_returns": regime.sector_returns,
+        }
+        analogs = find_analogs(regime_dict, top_n=2)
+        if not analogs:
+            return
+
+        with st.expander("📅 Historical Regime Analogs", expanded=False):
+            for analog in analogs:
+                color = "#00d4ff" if analog.similarity_score >= 70 else "#f59e0b"
+                st.markdown(
+                    f"<div style='background:#0d1117;border:1px solid {color}33;"
+                    f"border-radius:8px;padding:.6rem .9rem;margin:.3rem 0'>"
+                    f"<div style='display:flex;justify-content:space-between'>"
+                    f"<span style='color:{color};font-weight:700;font-size:.8rem'>"
+                    f"{analog.period}</span>"
+                    f"<span style='color:#4a5568;font-size:.65rem'>"
+                    f"Similarity: {analog.similarity_score:.0f}%</span>"
+                    f"</div>"
+                    f"<div style='color:#8892a4;font-size:.72rem;margin:.2rem 0'>"
+                    f"{analog.outcome_summary}</div>"
+                    f"<div style='display:flex;gap:1rem;margin-top:.3rem'>"
+                    f"<div><div style='color:#00d4a0;font-size:.65rem;font-weight:700'>WORKED</div>"
+                    + "".join(f"<div style='color:#8892a4;font-size:.7rem'>✓ {w}</div>" for w in analog.what_worked[:2])
+                    + f"</div><div><div style='color:#ff4b4b;font-size:.65rem;font-weight:700'>FAILED</div>"
+                    + "".join(f"<div style='color:#8892a4;font-size:.7rem'>✗ {f}</div>" for f in analog.what_failed[:2])
+                    + f"</div></div></div>",
+                    unsafe_allow_html=True,
+                )
     except Exception:
         pass
 
@@ -261,13 +437,16 @@ def _render_chat_history() -> None:
         if role == "assistant":
             agent_badge = ""
             if used:
-                badges = " ".join(
-                    f"<span style='background:{_AGENT_COLORS.get(a, \"#4a5568\")}22;"
-                    f"border:1px solid {_AGENT_COLORS.get(a, \"#4a5568\")}44;"
-                    f"border-radius:3px;padding:.05rem .3rem;font-size:.6rem;color:"
-                    f"{_AGENT_COLORS.get(a, \"#4a5568\")}'>{_AGENT_ICONS.get(a,\"\")} {a}</span>"
-                    for a in used
-                )
+                badge_parts = []
+                for a in used:
+                    c = _AGENT_COLORS.get(a, "#4a5568")
+                    ic = _AGENT_ICONS.get(a, "")
+                    badge_parts.append(
+                        f"<span style='background:{c}22;border:1px solid {c}44;"
+                        f"border-radius:3px;padding:.05rem .3rem;font-size:.6rem;color:{c}'>"
+                        f"{ic} {a}</span>"
+                    )
+                badges = " ".join(badge_parts)
                 agent_badge = f"<div style='margin-bottom:.3rem'>{badges}</div>"
             st.markdown(
                 f"<div style='background:#0d1117;border:1px solid #21262d;border-radius:10px;"
@@ -348,6 +527,9 @@ def render_jarvis(universe: list[str]) -> None:
     # ── Opportunity score ─────────────────────────────────────────────────────
     _render_opportunity_score()
 
+    # ── FII/DII Flow ──────────────────────────────────────────────────────────
+    _render_fii_dii()
+
     # ── Alerts ────────────────────────────────────────────────────────────────
     try:
         from core.regime_engine import compute_regime
@@ -359,6 +541,13 @@ def render_jarvis(universe: list[str]) -> None:
         _render_alerts(regime, opp)
     except Exception:
         pass
+
+    # ── Memory context + Regime analog ───────────────────────────────────────
+    col_mem, col_analog = st.columns(2)
+    with col_mem:
+        _render_memory_context()
+    with col_analog:
+        _render_regime_analog()
 
     # ── System control panel ──────────────────────────────────────────────────
     _render_system_panel()
@@ -446,6 +635,14 @@ def render_jarvis(universe: list[str]) -> None:
     cc1, cc2, cc3, _ = st.columns([2, 2, 2, 4])
     with cc1:
         if st.button("Clear chat", key="jarvis_clear_chat"):
+            # Save session to memory before clearing
+            msgs = st.session_state.get("jarvis_messages", [])
+            if len(msgs) >= 4:
+                try:
+                    from ai.jarvis_orchestrator import get_orchestrator
+                    get_orchestrator().save_session(msgs)
+                except Exception:
+                    pass
             st.session_state["jarvis_messages"] = []
             st.session_state.pop("jarvis_last_activity", None)
             st.session_state.pop("jarvis_last_agent_results", None)

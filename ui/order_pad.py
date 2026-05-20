@@ -79,16 +79,33 @@ def render_order_pad(symbol: str = "", price: float = 0.0, indicators: dict | No
                 unsafe_allow_html=True,
             )
 
-        col_ai, col_place = st.columns([1, 2])
+        col_checklist, col_ai, col_place = st.columns([1, 1, 2])
+        checklist_btn = col_checklist.form_submit_button("✅ Pre-Trade Gate", use_container_width=True)
         ai_check = col_ai.form_submit_button("🤖 AI Check", use_container_width=True)
 
         # ABORT blocks Place Order — user must clear to override
-        ai_data   = st.session_state.get("_order_ai_verdict")
-        is_aborted = ai_data and ai_data[0] == "ABORT"
+        ai_data    = st.session_state.get("_order_ai_verdict")
+        gate_data  = st.session_state.get("_order_gate_result")
+        is_aborted = (ai_data and ai_data[0] == "ABORT") or (gate_data and gate_data.get("grade") == "ABORT")
         submitted  = col_place.form_submit_button(
             "⚡ Place Paper Order", use_container_width=True,
             disabled=bool(is_aborted),
         )
+
+        if checklist_btn and sym and entry:
+            with st.spinner("Running pre-trade checklist…"):
+                try:
+                    from ui.pre_trade_checklist import run_checklist
+                    result = run_checklist(
+                        symbol=sym, action=action, price=float(entry or price),
+                        stop=float(stop_loss), target=float(target), qty=int(qty),
+                    )
+                    st.session_state["_order_gate_result"] = {
+                        "grade": result.grade, "score": result.score,
+                        "summary": result.summary, "result_obj": result,
+                    }
+                except Exception as exc:
+                    st.session_state["_order_gate_result"] = {"grade": "CAUTION", "score": 50, "summary": str(exc)}
 
         if ai_check and sym:
             with st.spinner("DeepSeek trade check…"):
@@ -100,6 +117,29 @@ def render_order_pad(symbol: str = "", price: float = 0.0, indicators: dict | No
             from datetime import datetime as _dt
             badge = svc.badge(dm, detail, ts=_dt.now().strftime("%H:%M"))
             st.session_state["_order_ai_verdict"] = (verdict, badge, dm)
+
+        # Show pre-trade checklist result
+        gate_data = st.session_state.get("_order_gate_result")
+        if gate_data:
+            g_grade = gate_data.get("grade", "CAUTION")
+            g_color = {"GO": "#00d4a0", "CAUTION": "#f59e0b", "ABORT": "#ff4b4b"}.get(g_grade, "#8892a4")
+            g_score = gate_data.get("score", 0)
+            g_summary = gate_data.get("summary", "")
+            result_obj = gate_data.get("result_obj")
+            if result_obj is not None:
+                try:
+                    from ui.pre_trade_checklist import render_checklist_ui
+                    render_checklist_ui(result_obj)
+                except Exception:
+                    pass
+            else:
+                st.markdown(
+                    f"<div style='background:{g_color}11;border:1px solid {g_color}55;"
+                    f"border-radius:8px;padding:.5rem 1rem'>"
+                    f"<span style='color:{g_color};font-weight:700'>Gate: {g_grade} ({g_score:.0f}/100)</span> "
+                    f"<span style='color:#8892a4;font-size:.75rem'>{g_summary}</span></div>",
+                    unsafe_allow_html=True,
+                )
 
         # Show stored AI verdict
         ai_data = st.session_state.get("_order_ai_verdict")

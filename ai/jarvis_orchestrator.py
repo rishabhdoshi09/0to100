@@ -96,13 +96,29 @@ Include concrete numbers. No fluff. Max 400 words."""
 
 _SYSTEM_PROMPT = """You are JARVIS, the AI co-pilot for QUANTTERM — an institutional trading system.
 
-Personality: terse, confident, institutional. Like a senior prop trader.
+Personality: terse, confident, institutional. Like a senior prop trader who's seen it all.
 - Never hedge excessively. Give a clear view.
 - Use numbers: ₹ for prices, R-multiples for trades, % for rates.
-- No fluff. No disclaimers.
+- No fluff. No disclaimers unless the risk is REAL.
 - Think in probability and expectancy.
+- You REMEMBER previous sessions — reference them when relevant.
 
-Start your first session response with a 2-sentence market brief."""
+CRITICAL RULE — PUSHBACK PROTOCOL:
+If the user asks about entering a trade, buying, or selling a specific stock:
+1. Check the ACTIVE TRADING RULES in context — if allow_new_trades=False, REFUSE and explain.
+2. Check the user's PERSONAL EDGE data. If their win rate in the current regime is below 40%,
+   or expectancy is negative, you MUST lead with a direct warning using their actual numbers.
+   Format: "Your edge here is negative: [X]% win rate in [REGIME] regime on [PLAYBOOK] = [Y]R expectancy.
+   Historical outcome: lose money. Here's why this is different from what you might be thinking..."
+3. You NEVER approve a bad trade just because the user is excited about it.
+4. If conditions are good and the trade idea is sound, confirm with specific entry/stop/target.
+
+MEMORY CONTEXT:
+If previous session data is included, reference it naturally: "Last time you were watching HDFCBANK —
+it's now at ₹X" or "You mentioned your capital is ₹Y — sizing at 2R risk = ₹Z position."
+
+Start your first response in a session with a 2-sentence market brief, then reference what you
+remember from last time if relevant."""
 
 
 # ── Orchestrator ──────────────────────────────────────────────────────────────
@@ -168,16 +184,29 @@ class JarvisOrchestrator:
     ) -> OrchestratorResult:
         self.bus.clear()
 
+        # Load persistent memory
+        memory_context = ""
+        try:
+            from ai.jarvis_memory import get_memory
+            mem = get_memory()
+            memory_context = mem.build_morning_context()
+            # Auto-detect and store price alert requests
+            self._extract_and_store_facts(query, mem)
+        except Exception:
+            pass
+
+        full_context = (memory_context + "\n\n" + context).strip() if memory_context else context
+
         # Route
-        plan = self._route(query, context)
+        plan = self._route(query, full_context)
 
         if not plan["needs_agents"]:
             # Direct chat — no agents needed
-            messages = [{"role": "system", "content": _SYSTEM_PROMPT + "\n\n" + context}]
+            messages = [{"role": "system", "content": _SYSTEM_PROMPT + "\n\n" + full_context}]
             for m in (history or [])[-10:]:
                 messages.append({"role": m["role"], "content": m["content"]})
             messages.append({"role": "user", "content": query})
-            answer = _llm(messages, temperature=0.2, max_tokens=600)
+            answer = _llm(messages, temperature=0.2, max_tokens=700)
             return OrchestratorResult(
                 query=query,
                 answer=answer,
@@ -196,7 +225,7 @@ class JarvisOrchestrator:
         agent_results: dict[str, AgentResult] = {}
         with ThreadPoolExecutor(max_workers=len(plan["agent_tasks"])) as ex:
             futures = {
-                ex.submit(self._agents[name].run, task, context): name
+                ex.submit(self._agents[name].run, task, full_context): name
                 for name, task in plan["agent_tasks"].items()
             }
             for future in as_completed(futures):
@@ -233,6 +262,54 @@ class JarvisOrchestrator:
             used_agents=list(agent_results.keys()),
             routed=True,
         )
+
+
+    def _extract_and_store_facts(self, query: str, mem) -> None:
+        """Auto-detect price alerts and capital mentions from the user's message."""
+        import re
+        # Price alert: "alert me when X hits Y" / "set alert RELIANCE above 1400"
+        alert_pattern = re.search(
+            r"alert[^\w]*(?:me\s+)?(?:when\s+)?([A-Z]{2,12})\s+(?:hits?|above|below|crosses?|reaches?)\s+[₹]?([\d,]+)",
+            query, re.IGNORECASE,
+        )
+        if alert_pattern:
+            sym = alert_pattern.group(1).upper()
+            price_str = alert_pattern.group(2).replace(",", "")
+            try:
+                price = float(price_str)
+                direction = "above" if re.search(r"above|crosses|hits|reaches", query, re.IGNORECASE) else "below"
+                mem.set_price_alert(sym, price, direction)
+            except Exception:
+                pass
+
+        # Capital mention: "my capital is X lakh" / "I have X lakh"
+        cap_pattern = re.search(
+            r"(?:capital|portfolio|account)[^\d]*[₹]?([\d,]+)\s*(lakh|lac|cr|crore|k|thousand)?",
+            query, re.IGNORECASE,
+        )
+        if cap_pattern:
+            val = cap_pattern.group(1).replace(",", "")
+            unit = (cap_pattern.group(2) or "").lower()
+            multiplier = {"lakh": 100_000, "lac": 100_000, "cr": 10_000_000,
+                          "crore": 10_000_000, "k": 1_000, "thousand": 1_000}.get(unit, 1)
+            try:
+                mem.remember("capital_size", f"₹{int(val) * multiplier:,}", "preference")
+            except Exception:
+                pass
+
+        # Risk preference
+        if re.search(r"\b(aggressive|full risk|high risk)\b", query, re.IGNORECASE):
+            mem.remember("risk_preference", "aggressive", "preference")
+        elif re.search(r"\b(conservative|low risk|cautious)\b", query, re.IGNORECASE):
+            mem.remember("risk_preference", "conservative", "preference")
+
+    def save_session(self, messages: list[dict]) -> None:
+        """Call at end of session to compress conversation into memory."""
+        try:
+            from ai.jarvis_memory import get_memory
+            get_memory().summarize_and_save_session(messages)
+        except Exception:
+            pass
 
 
 # ── Module-level singleton ────────────────────────────────────────────────────

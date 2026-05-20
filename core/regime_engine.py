@@ -80,6 +80,8 @@ class RegimeState:
 
     # Derived / actionable
     regime_score: float             # 0-100, overall bullishness
+    regime_confidence: float        # 0-100, how certain is the classification
+    regime_confidence_label: str    # "HIGH" | "MODERATE" | "LOW" | "UNCERTAIN"
     quality_multiplier: float       # applied to downstream setup scores
     recommended_playbooks: list[str]
     avoid_patterns: list[str]
@@ -542,6 +544,61 @@ def _compute_regime_score(
     return round(min(max(score, 0), 100), 2)
 
 
+def _compute_regime_confidence(
+    market_regime: str,
+    volatility_regime: str,
+    breadth_label: str,
+    institutional: str,
+    nifty_vs_sma200: float,
+    vix: float,
+) -> tuple[float, str]:
+    """
+    Confidence = how many sub-signals agree on the regime direction.
+    Returns (0-100, label).
+    """
+    bull_signals = 0
+    bear_signals = 0
+    total = 4
+
+    # 1. Market regime direction
+    if market_regime in ("TRENDING_BULL", "EXPANSION"):
+        bull_signals += 1
+    elif market_regime in ("TRENDING_BEAR", "DISTRIBUTION"):
+        bear_signals += 1
+
+    # 2. Nifty above/below SMA200
+    if nifty_vs_sma200 > 1.0:     # above
+        bull_signals += 1
+    elif nifty_vs_sma200 < -1.0:  # below
+        bear_signals += 1
+
+    # 3. Breadth
+    if breadth_label == "STRONG":
+        bull_signals += 1
+    elif breadth_label == "WEAK":
+        bear_signals += 1
+
+    # 4. Institutional
+    if institutional in ("ACCUMULATION", "RISK_ON"):
+        bull_signals += 1
+    elif institutional in ("DISTRIBUTION", "RISK_OFF"):
+        bear_signals += 1
+
+    max_aligned = max(bull_signals, bear_signals)
+    confidence = (max_aligned / total) * 100
+
+    if confidence >= 75:
+        label = "HIGH"
+    elif confidence >= 50:
+        label = "MODERATE"
+    elif confidence >= 25:
+        label = "LOW"
+    else:
+        label = "UNCERTAIN"
+
+    return round(confidence, 1), label
+
+
 def _quality_multiplier(market_regime: str, volatility_regime: str) -> float:
     base = {
         "TRENDING_BULL": 1.25,
@@ -747,6 +804,8 @@ def compute_regime() -> RegimeState:
                 sma200=_d["sma200"],
                 vix=_d["vix"],
                 regime_score=_d["regime_score"],
+                regime_confidence=60.0,
+                regime_confidence_label="MODERATE",
                 quality_multiplier=_d["quality_multiplier"],
                 recommended_playbooks=_d["recommended_playbooks"],
                 avoid_patterns=_d["avoid_patterns"],
@@ -761,6 +820,10 @@ def compute_regime() -> RegimeState:
 
     # ---- derived fields -----------------------------------------------------
     regime_score = _compute_regime_score(market_regime, volatility_regime, breadth_score, institutional)
+    nifty_vs_sma200 = ((nifty_price - sma200) / sma200 * 100) if sma200 and not np.isnan(sma200) else 0.0
+    regime_confidence, confidence_label = _compute_regime_confidence(
+        market_regime, volatility_regime, breadth_label, institutional, nifty_vs_sma200, vix
+    )
     qm = _quality_multiplier(market_regime, volatility_regime)
     recommended, avoid = _derive_playbooks(
         market_regime, volatility_regime, breadth_label, rotation_mode, institutional
@@ -790,6 +853,8 @@ def compute_regime() -> RegimeState:
         sma200=round(sma200, 2) if not np.isnan(sma200) else 0.0,
         vix=round(vix, 2) if not np.isnan(vix) else 0.0,
         regime_score=regime_score,
+        regime_confidence=regime_confidence,
+        regime_confidence_label=confidence_label,
         quality_multiplier=qm,
         recommended_playbooks=recommended,
         avoid_patterns=avoid,

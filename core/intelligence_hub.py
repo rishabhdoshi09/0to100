@@ -17,6 +17,66 @@ from datetime import datetime
 from typing import Optional
 
 
+# ── Trading Rules (score → hard behaviour) ───────────────────────────────────
+
+@dataclass
+class TradingRules:
+    """Hard constraints derived from the opportunity score. Not advisory — enforced."""
+    max_positions: int
+    size_multiplier: float     # 1.0 = full, 0.5 = half
+    min_tier: str              # "ELITE_A_PLUS" | "A" | "B" | "WATCHLIST"
+    allow_new_trades: bool
+    label: str
+    color: str
+    rationale: str             # one-line reason
+
+    def display_size(self) -> str:
+        return f"{int(self.size_multiplier * 100)}% of normal"
+
+    def one_liner(self) -> str:
+        if not self.allow_new_trades:
+            return f"🚫 NO NEW TRADES — {self.rationale}"
+        return (
+            f"Max {self.max_positions} position{'s' if self.max_positions != 1 else ''} · "
+            f"{self.display_size()} size · {self.min_tier}+ setups only"
+        )
+
+
+def get_trading_rules(opp_score: "OpportunityScore") -> TradingRules:
+    """Hard rules enforced by the system based on opportunity score."""
+    total = opp_score.total
+    if total >= 75:
+        return TradingRules(
+            max_positions=3, size_multiplier=1.0, min_tier="B",
+            allow_new_trades=True, label="Full Aggression", color="#00d4a0",
+            rationale="Prime conditions across all dimensions",
+        )
+    elif total >= 60:
+        return TradingRules(
+            max_positions=2, size_multiplier=0.8, min_tier="A",
+            allow_new_trades=True, label="Standard", color="#00d4ff",
+            rationale="Good conditions, standard approach",
+        )
+    elif total >= 45:
+        return TradingRules(
+            max_positions=2, size_multiplier=0.6, min_tier="A",
+            allow_new_trades=True, label="Cautious", color="#f59e0b",
+            rationale="Mixed conditions — reduce exposure, be selective",
+        )
+    elif total >= 30:
+        return TradingRules(
+            max_positions=1, size_multiplier=0.5, min_tier="ELITE_A_PLUS",
+            allow_new_trades=True, label="Defensive", color="#f97316",
+            rationale="Poor conditions — only the very best setups",
+        )
+    else:
+        return TradingRules(
+            max_positions=0, size_multiplier=0.0, min_tier="ELITE_A_PLUS",
+            allow_new_trades=False, label="STAND DOWN", color="#ff4b4b",
+            rationale=f"Score {total:.0f} — conditions too poor to trade",
+        )
+
+
 # ── Opportunity Score breakdown ───────────────────────────────────────────────
 
 @dataclass
@@ -392,6 +452,14 @@ def build_jarvis_context(
                 ]
         except Exception:
             pass
+
+    if opp_score is not None:
+        rules = get_trading_rules(opp_score)
+        lines += [
+            f"\nACTIVE TRADING RULES (score {opp_score.total:.0f}/100):",
+            f"  {rules.one_liner()}",
+            f"  Rationale: {rules.rationale}",
+        ]
 
     lines.append("\n=== END CONTEXT ===")
     return "\n".join(lines)
