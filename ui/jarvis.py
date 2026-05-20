@@ -209,6 +209,110 @@ def render_jarvis(universe: list[str]) -> None:
     if "jarvis_messages" not in st.session_state:
         st.session_state["jarvis_messages"] = []
 
+    # ── Pending code-change confirmation ──────────────────────────────────────
+    pending = st.session_state.get("jarvis_pending_change")
+    if pending:
+        plan = pending
+        st.markdown(
+            "<div style='background:#0d1117;border:2px solid #f59e0b55;"
+            "border-radius:12px;padding:1rem 1.2rem;margin:.6rem 0'>"
+            "<div style='color:#f59e0b;font-size:.72rem;font-weight:700;"
+            "letter-spacing:.1em;margin-bottom:.5rem'>⚡ JARVIS WANTS TO MAKE AN ADJUSTMENT</div>",
+            unsafe_allow_html=True,
+        )
+
+        st.markdown(f"**What's missing:** {plan.get('gap', '')}")
+        st.markdown(f"**What I'll build:** {plan.get('explanation', '')}")
+        st.markdown("**Changes:**")
+        for step in plan.get("what_changes", []):
+            st.markdown(f"- {step}")
+        st.markdown(f"**You'll see:** {plan.get('estimated_output', '')}")
+
+        complexity_color = {"SIMPLE": "#00d4a0", "MODERATE": "#f59e0b", "COMPLEX": "#ff4b4b"}.get(
+            plan.get("complexity", "SIMPLE"), "#8892a4"
+        )
+        st.markdown(
+            f"<span style='background:{complexity_color}22;border:1px solid {complexity_color}55;"
+            f"border-radius:4px;padding:.15rem .5rem;font-size:.72rem;color:{complexity_color}'>"
+            f"{plan.get('complexity','SIMPLE')} change</span>",
+            unsafe_allow_html=True,
+        )
+        st.markdown("</div>", unsafe_allow_html=True)
+
+        col_yes, col_no, col_show = st.columns([2, 2, 3])
+        with col_yes:
+            if st.button("✅ Yes, do the adjustments", key="jarvis_confirm_yes",
+                         use_container_width=True, type="primary"):
+                st.session_state["jarvis_execute_plan"] = plan
+                st.session_state.pop("jarvis_pending_change", None)
+                st.rerun()
+        with col_no:
+            if st.button("❌ No, skip", key="jarvis_confirm_no", use_container_width=True):
+                st.session_state.pop("jarvis_pending_change", None)
+                st.session_state["jarvis_messages"].append({
+                    "role": "assistant",
+                    "content": "Understood — skipping the adjustment. Ask me something else.",
+                })
+                st.rerun()
+        with col_show:
+            if st.button("👁 Preview code first", key="jarvis_preview_code",
+                         use_container_width=True):
+                st.session_state["jarvis_preview_plan"] = plan
+                st.session_state.pop("jarvis_pending_change", None)
+                st.rerun()
+
+    # ── Code preview mode ─────────────────────────────────────────────────────
+    preview_plan = st.session_state.get("jarvis_preview_plan")
+    if preview_plan:
+        context = _get_context()
+        with st.spinner("Generating code preview…"):
+            from ui.jarvis_coder import generate_code
+            code = generate_code(
+                preview_plan.get("query", ""),
+                preview_plan,
+                context,
+            )
+        st.code(code, language="python")
+        col_run, col_cancel = st.columns([2, 2])
+        with col_run:
+            if st.button("▶ Run this code", key="jarvis_run_preview",
+                         use_container_width=True, type="primary"):
+                preview_plan["_code"] = code
+                st.session_state["jarvis_execute_plan"] = preview_plan
+                st.session_state.pop("jarvis_preview_plan", None)
+                st.rerun()
+        with col_cancel:
+            if st.button("Cancel", key="jarvis_cancel_preview", use_container_width=True):
+                st.session_state.pop("jarvis_preview_plan", None)
+                st.rerun()
+
+    # ── Code execution ────────────────────────────────────────────────────────
+    exec_plan = st.session_state.pop("jarvis_execute_plan", None)
+    if exec_plan:
+        context = _get_context()
+        from ui.jarvis_coder import generate_code, execute_code, format_result_for_jarvis
+
+        code = exec_plan.get("_code") or ""
+        if not code:
+            with st.spinner("JARVIS writing code…"):
+                code = generate_code(exec_plan.get("query", ""), exec_plan, context)
+
+        with st.spinner("JARVIS executing…"):
+            stdout, error, result = execute_code(code)
+
+        response = format_result_for_jarvis(
+            exec_plan.get("query", ""), exec_plan, stdout, error, result
+        )
+
+        # Prepend a header so the user knows this was live-generated
+        response = f"✅ **Adjustment complete.** Here's what I found:\n\n{response}"
+        if not error:
+            response += f"\n\n*Generated live — ask me to save this as a permanent feature if useful.*"
+
+        st.session_state["jarvis_messages"].append({"role": "assistant", "content": response})
+        st.rerun()
+
+    # ── Chat history ──────────────────────────────────────────────────────────
     # Render chat history
     for msg in st.session_state["jarvis_messages"]:
         role = msg["role"]
@@ -244,8 +348,8 @@ def render_jarvis(universe: list[str]) -> None:
         suggestions = [
             "What's the best trade setup today?",
             "Is this a good day to trade? Give me the opportunity score breakdown.",
-            "Which playbooks should I focus on right now?",
-            "Explain the current regime and what it means for my trades.",
+            "Show me sector P/E ratios for NSE",
+            "What's my win rate by playbook type?",
         ]
         cols = st.columns(2)
         for i, sug in enumerate(suggestions):
@@ -259,7 +363,7 @@ def render_jarvis(universe: list[str]) -> None:
         user_input = st.text_input(
             "Ask JARVIS",
             key="jarvis_input",
-            placeholder="Ask anything about the market, your setups, or trading strategy…",
+            placeholder="Ask anything — if it doesn't exist yet, I'll build it live…",
             label_visibility="collapsed",
         )
     with col_send:
@@ -271,30 +375,53 @@ def render_jarvis(universe: list[str]) -> None:
         send = True
 
     if (send or user_input) and user_input and user_input.strip():
-        # Build message list with system context
+        query = user_input.strip()
         context = _get_context()
-        messages = [
-            {"role": "system", "content": _SYSTEM_PROMPT + "\n\n" + context},
-        ]
-        # Add conversation history (last 6 turns to stay within token budget)
-        for m in st.session_state["jarvis_messages"][-12:]:
-            messages.append({"role": m["role"], "content": m["content"]})
-        messages.append({"role": "user", "content": user_input.strip()})
 
         # Store user message
-        st.session_state["jarvis_messages"].append({"role": "user", "content": user_input.strip()})
+        st.session_state["jarvis_messages"].append({"role": "user", "content": query})
 
+        # Step 1: Diagnose — does this need new code?
         with st.spinner("JARVIS thinking…"):
-            response = _call_deepseek(messages)
+            from ui.jarvis_coder import diagnose_query
+            diagnosis = diagnose_query(query, context)
 
-        st.session_state["jarvis_messages"].append({"role": "assistant", "content": response})
+        if diagnosis.get("type") == "NEEDS_CODE":
+            # Store plan with original query attached
+            plan = dict(diagnosis)
+            plan["query"] = query
+            st.session_state["jarvis_pending_change"] = plan
+
+            # Show JARVIS acknowledgement in chat
+            ack = (
+                f"I can answer that, but it requires a quick adjustment — "
+                f"**{plan.get('gap', 'this data isn\\'t currently in the system')}**. "
+                f"I've prepared the change below. Review and confirm."
+            )
+            st.session_state["jarvis_messages"].append({"role": "assistant", "content": ack})
+
+        else:
+            # Normal chat answer
+            messages = [
+                {"role": "system", "content": _SYSTEM_PROMPT + "\n\n" + context},
+            ]
+            for m in st.session_state["jarvis_messages"][-12:]:
+                messages.append({"role": m["role"], "content": m["content"]})
+
+            with st.spinner("JARVIS answering…"):
+                response = _call_deepseek(messages)
+
+            st.session_state["jarvis_messages"].append({"role": "assistant", "content": response})
+
         st.rerun()
 
     # Controls
-    cc1, cc2, cc3 = st.columns([2, 2, 6])
+    cc1, cc2, _ = st.columns([2, 2, 6])
     with cc1:
         if st.button("Clear chat", key="jarvis_clear_chat"):
             st.session_state["jarvis_messages"] = []
+            st.session_state.pop("jarvis_pending_change", None)
+            st.session_state.pop("jarvis_preview_plan", None)
             st.rerun()
     with cc2:
         if st.button("Refresh context", key="jarvis_refresh"):
