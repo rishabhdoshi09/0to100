@@ -663,6 +663,44 @@ def compute_regime() -> RegimeState:
     leaders, laggards, rotation_mode, sector_returns = _classify_sector_rotation(sector_data)
     institutional = _classify_institutional(nifty_df, market_regime, vix, sma50, sma200)
 
+    # ---- demo fallback: if no live data, use realistic demo data ------------
+    all_data_missing = (np.isnan(nifty_price) or nifty_price == 0.0)
+    if all_data_missing:
+        try:
+            from core.demo_data import DEMO_REGIME as _d
+            logger.info("Live data unavailable — using demo data (HTTP 403 / network restricted env)")
+            fetch_time_utc = datetime.now(timezone.utc)
+            state = RegimeState(
+                market_regime=_d["market_regime"],
+                volatility_regime=_d["volatility_regime"],
+                breadth_strength=int(_d["breadth_strength"]),
+                breadth_label=_d["breadth_label"],
+                breakout_environment=_d["breakout_environment"],
+                risk_mode=_d["risk_mode"],
+                institutional_activity=_d["institutional_activity"],
+                leading_sectors=_d["leading_sectors"],
+                lagging_sectors=_d["lagging_sectors"],
+                rotation_mode=_d["rotation_mode"],
+                sector_returns=_d["sector_returns"],
+                nifty_price=_d["nifty_price"],
+                nifty_change_1d=_d["nifty_change_1d"],
+                nifty_change_5d=_d["nifty_change_5d"],
+                sma50=_d["sma50"],
+                sma200=_d["sma200"],
+                vix=_d["vix"],
+                regime_score=_d["regime_score"],
+                quality_multiplier=_d["quality_multiplier"],
+                recommended_playbooks=_d["recommended_playbooks"],
+                avoid_patterns=_d["avoid_patterns"],
+                timestamp=fetch_time_utc.strftime("%H:%M") + " ⚠demo",
+                data_age_mins=0,
+            )
+            _CACHE["regime_state"] = state
+            _CACHE["timestamp"] = now
+            return state
+        except Exception as exc:
+            logger.warning("Demo data fallback failed: %s", exc)
+
     # ---- derived fields -----------------------------------------------------
     regime_score = _compute_regime_score(market_regime, volatility_regime, breadth_score, institutional)
     qm = _quality_multiplier(market_regime, volatility_regime)

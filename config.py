@@ -46,7 +46,13 @@ class Settings(BaseSettings):
         return [u.strip() for u in self.news_rss_feeds.split(",") if u.strip()]
 
     # ── Universe ──────────────────────────────────────────────────────────────
-    universe: str = Field(default="RELIANCE,INFY,TCS,HDFCBANK,ICICIBANK")
+    universe: str = Field(
+        default=(
+            "HDFCBANK,ICICIBANK,RELIANCE,INFY,TCS,TATAMOTORS,BAJFINANCE,AXISBANK,"
+            "LT,WIPRO,SUNPHARMA,ULTRACEMCO,TITAN,NESTLEIND,HCLTECH,MARUTI,SBIN,"
+            "KOTAKBANK,ASIANPAINT,POWERGRID"
+        )
+    )
 
     @property
     def symbol_list(self) -> List[str]:

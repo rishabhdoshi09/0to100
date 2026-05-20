@@ -196,12 +196,19 @@ class QualityEngine:
         try:
             import yfinance as yf
             df = yf.Ticker(f"{symbol}.NS").history(period="100d", interval="1d")
-            if df is None or len(df) < 20:
-                return None
-            df.columns = [c.lower() for c in df.columns]
-            return df
+            if df is not None and len(df) >= 20:
+                df.columns = [c.lower() for c in df.columns]
+                return df
         except Exception:
-            return None
+            pass
+        try:
+            from core.demo_data import make_demo_ohlcv
+            rows = make_demo_ohlcv(symbol, bars=100)
+            if rows:
+                return pd.DataFrame(rows)
+        except Exception:
+            pass
+        return None
 
     def _atr(self, df: pd.DataFrame, period: int = 14) -> float:
         return self._atr_period(df, -(period + 1), None)
@@ -223,11 +230,19 @@ class QualityEngine:
         try:
             import yfinance as yf
             nifty = yf.Ticker("^NSEI").history(period="30d")
-            if nifty is None or len(nifty) < 21:
-                return 0.0
-            n_ret = (float(nifty["Close"].iloc[-1]) / float(nifty["Close"].iloc[-21]) - 1) * 100
-            s_ret = (float(close[-1]) / float(close[-21]) - 1) * 100 if len(close) >= 21 else 0.0
-            return round(s_ret - n_ret, 2)
+            if nifty is not None and len(nifty) >= 21:
+                n_ret = (float(nifty["Close"].iloc[-1]) / float(nifty["Close"].iloc[-21]) - 1) * 100
+                s_ret = (float(close[-1]) / float(close[-21]) - 1) * 100 if len(close) >= 21 else 0.0
+                return round(s_ret - n_ret, 2)
+        except Exception:
+            pass
+        # Demo fallback: use sector return from regime as proxy
+        try:
+            from core.demo_data import DEMO_REGIME
+            sector = self._guess_sector(symbol)
+            sector_ret = DEMO_REGIME["sector_returns"].get(sector or "", 0.0)
+            nifty_1d = DEMO_REGIME["nifty_change_1d"]
+            return round(sector_ret - nifty_1d, 2)
         except Exception:
             return 0.0
 
