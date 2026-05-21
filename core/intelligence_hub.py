@@ -29,6 +29,7 @@ class TradingRules:
     label: str
     color: str
     rationale: str             # one-line reason
+    kelly_size: Optional[float] = None
 
     def display_size(self) -> str:
         return f"{int(self.size_multiplier * 100)}% of normal"
@@ -75,6 +76,39 @@ def get_trading_rules(opp_score: "OpportunityScore") -> TradingRules:
             allow_new_trades=False, label="STAND DOWN", color="#ff4b4b",
             rationale=f"Score {total:.0f} — conditions too poor to trade",
         )
+
+
+def kelly_position_size(
+    win_rate: float,
+    avg_win_pct: float,
+    avg_loss_pct: float,
+    base_multiplier: float = 1.0,
+    max_fraction: float = 0.15,
+    kelly_fraction: float = 0.25,
+) -> float:
+    """
+    Fractional Kelly position size (0.0 to max_fraction of portfolio).
+
+    Uses 25% of full Kelly to avoid volatility of ruin.
+    Never exceeds max_fraction regardless of Kelly output.
+    Returns 0.0 if edge is negative.
+
+    Args:
+        win_rate: historical win rate for this setup+regime (Bayesian posterior preferred)
+        avg_win_pct: average win in % (e.g. 8.0 for 8%)
+        avg_loss_pct: average loss in % (e.g. 4.0 for 4%, positive number)
+        base_multiplier: from TradingRules (regime-based scalar)
+        max_fraction: hard cap on position size as % of portfolio
+        kelly_fraction: what fraction of full Kelly to use (0.25 = quarter Kelly)
+    """
+    if avg_loss_pct <= 0 or win_rate <= 0:
+        return 0.0
+    b = avg_win_pct / avg_loss_pct          # win/loss ratio
+    k = (b * win_rate - (1 - win_rate)) / b # full Kelly fraction
+    if k <= 0:
+        return 0.0                           # negative edge — don't trade
+    fractional_k = k * kelly_fraction * base_multiplier
+    return round(min(fractional_k, max_fraction), 4)
 
 
 # ── Opportunity Score breakdown ───────────────────────────────────────────────

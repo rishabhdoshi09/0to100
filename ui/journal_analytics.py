@@ -444,37 +444,44 @@ def render_journal_analytics() -> None:
 
     df = load_closed_trades()
 
-    if df.empty:
-        _render_empty_state()
-        return
+    tab_analytics, tab_calibration = st.tabs(["📊 Analytics", "📐 Calibration"])
 
-    # Section 1 — KPIs
-    _section_kpis(df)
+    with tab_analytics:
+        if df.empty:
+            _render_empty_state()
+            return
 
-    st.markdown("")  # spacer
+        # Section 1 — KPIs
+        _section_kpis(df)
 
-    # Sections 2 & 3 side-by-side
-    col_left, col_right = st.columns([3, 2])
-    with col_left:
-        _section_equity_curve(df)
-    with col_right:
-        _section_win_loss_dist(df)
+        st.markdown("")  # spacer
 
-    # Sections 4 & 5
-    col_a, col_b = st.columns(2)
-    with col_a:
-        _section_by_symbol(df)
-    with col_b:
-        _section_monthly_pnl(df)
+        # Sections 2 & 3 side-by-side
+        col_left, col_right = st.columns([3, 2])
+        with col_left:
+            _section_equity_curve(df)
+        with col_right:
+            _section_win_loss_dist(df)
 
-    # Sections 6 & 7
-    col_c, col_d = st.columns([2, 3])
-    with col_c:
-        _section_duration_analysis(df)
-    with col_d:
-        _section_streak_analysis(df)
+        # Sections 4 & 5
+        col_a, col_b = st.columns(2)
+        with col_a:
+            _section_by_symbol(df)
+        with col_b:
+            _section_monthly_pnl(df)
 
-    st.markdown("")
+        # Sections 6 & 7
+        col_c, col_d = st.columns([2, 3])
+        with col_c:
+            _section_duration_analysis(df)
+        with col_d:
+            _section_streak_analysis(df)
 
-    # Section 8 — Recent trades
-    _section_recent_trades(df)
+        st.markdown("")
+
+        # Section 8 — Recent trades
+        _section_recent_trades(df)
+
+    with tab_calibration:
+        from analytics.calibration import render_calibration_ui
+        render_calibration_ui()

@@ -93,6 +93,17 @@ class QualityEngine:
             elif depth < 14: base_pts = 10
             elif depth < 20: base_pts = 5
             else:            disqualifiers.append(f"Wide base {depth:.1f}%")
+
+        # Recency decay — bases older than 6 weeks score lower; setups expire
+        if len(close) >= 42:
+            # Proxy: measure how much the recent 5 bars moved vs the full base
+            recent_move = float(np.std(close[-5:])) / float(np.mean(close[-42:])) * 100
+            days_est = 42  # we always look at 42-bar windows
+            recency_mult = max(0.65, 1.0 - (days_est / 130) * 0.35)
+        else:
+            recency_mult = 0.85
+        base_pts = round(base_pts * recency_mult, 2)
+
         factors["base_quality"] = base_pts
 
         # ── 2. Volume Contraction (0-15) ──────────────────────────────────────
