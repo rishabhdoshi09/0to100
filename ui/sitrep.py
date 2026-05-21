@@ -418,6 +418,15 @@ def render_sitrep() -> None:
 
     st.divider()
 
+    # ── Section 3b: Sector Rotation Acceleration ─────────────────────────────
+    try:
+        from core.sector_rotation import render_rotation_matrix
+        render_rotation_matrix()
+    except Exception:
+        pass
+
+    st.divider()
+
     # ── Section 4: IronLock Gate Status ──────────────────────────────────────
     st.markdown("### 🔒 IronLock Gate Status")
 

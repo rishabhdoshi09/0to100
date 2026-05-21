@@ -105,6 +105,37 @@ def render_order_pad(symbol: str = "", price: float = 0.0, indicators: dict | No
                 unsafe_allow_html=True,
             )
 
+        # ── Concentration Reality Check ───────────────────────────────────────
+        try:
+            from risk.concentration_check import render_concentration_warning
+            from paper_trading import get_open_positions as _get_open_pos
+            _open_pos = _get_open_pos()
+            if _open_pos is not None and not _open_pos.empty:
+                _pos_dict = {
+                    row["symbol"]: float(row.get("quantity", 1) * row.get("entry_price", 0))
+                    for _, row in _open_pos.iterrows()
+                    if row.get("symbol")
+                }
+                # Normalise to % of a rough portfolio value
+                _total_val = sum(_pos_dict.values()) or 1.0
+                _pos_pct = {s: v / _total_val * 100 for s, v in _pos_dict.items()}
+            else:
+                _pos_pct = {}
+            if sym and entry:
+                _portfolio_val = sum(v for _, row in (_open_pos.iterrows() if _open_pos is not None and not _open_pos.empty else iter([])) for v in [float(row.get("quantity", 1) * row.get("entry_price", 0))]) or 100_000
+                _size_pct = (qty * entry) / _portfolio_val * 100 if _portfolio_val else 0.0
+                render_concentration_warning(sym, _size_pct, _pos_pct)
+        except Exception:
+            pass
+
+        # ── Trade Thesis Input ────────────────────────────────────────────────
+        try:
+            from ai.thesis_recorder import render_thesis_input
+            _thesis_val = render_thesis_input(sym or "STOCK", "MANUAL")
+            st.session_state["pending_thesis"] = _thesis_val
+        except Exception:
+            pass
+
         col_checklist, col_ai, col_place = st.columns([1, 1, 2])
         checklist_btn = col_checklist.form_submit_button("✅ Pre-Trade Gate", use_container_width=True)
         ai_check = col_ai.form_submit_button("🤖 AI Check", use_container_width=True)
