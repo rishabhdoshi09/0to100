@@ -122,6 +122,13 @@ class RankingEngine:
             kelly    = (pb.baseline_win_rate * pb.baseline_risk_reward - (1 - pb.baseline_win_rate))
             half_kelly = max(0, kelly * 0.5)  # half-Kelly conservative sizing
             pos_pct  = min(10.0, round(half_kelly * 100 * (2.0 / max(risk_pct, 0.5)), 1))
+            # Apply earnings proximity size multiplier if available
+            try:
+                earnings_mult = getattr(qs, "earnings_multiplier", 1.0)
+                if earnings_mult < 1.0:
+                    pos_pct = round(pos_pct * earnings_mult, 1)
+            except Exception:
+                pass
 
             # Regime alignment label
             reg_aligned = pb_id in [r.id for r in regime_playbooks]

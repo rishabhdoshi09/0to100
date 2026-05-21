@@ -34,6 +34,24 @@ try:
 except Exception:
     _HAS_BREAKOUT_MEMORY = False
 
+try:
+    from core.market_timing import get_timing_score, render_timing_badge
+    _HAS_TIMING = True
+except Exception:
+    _HAS_TIMING = False
+
+try:
+    from risk.smart_stop import format_stop_note, suggest_smart_stop
+    _HAS_SMART_STOP = True
+except Exception:
+    _HAS_SMART_STOP = False
+
+try:
+    from data.earnings_calendar import render_earnings_chip, get_earnings_risk
+    _HAS_EARNINGS = True
+except Exception:
+    _HAS_EARNINGS = False
+
 
 # ── Plain-English translations ─────────────────────────────────────────────────
 _ARCHETYPE_PLAIN = {
@@ -314,6 +332,15 @@ def _render_threat_level_bar(universe: list[str]) -> None:
     except Exception:
         pass
 
+    # Market Microstructure Timing
+    if _HAS_TIMING:
+        try:
+            timing = get_timing_score()
+            if timing["score"] < 40:
+                threats.append(("CAUTION", f"⏰ Bad timing: {timing['reason']}"))
+        except Exception:
+            pass
+
     # Determine aggregate threat level
     if any(lvl == "DANGER" for lvl, _ in threats):
         level = "DANGER"
@@ -551,6 +578,20 @@ def _render_hero_card(best: dict, regime: dict) -> None:
         if st.button("🔄 Re-scan", key="hero_rescan", use_container_width=True):
             st.cache_data.clear()
             st.rerun()
+
+    # Timing badge — subtle row below action buttons
+    if _HAS_TIMING:
+        try:
+            badge_html = render_timing_badge()
+            if badge_html:
+                st.markdown(
+                    f"<div style='margin-top:6px;display:flex;align-items:center;gap:8px'>"
+                    f"<span style='font-size:.58rem;color:#4a5568;text-transform:uppercase;"
+                    f"letter-spacing:.08em'>Entry timing</span>{badge_html}</div>",
+                    unsafe_allow_html=True,
+                )
+        except Exception:
+            pass
 
 
 # ── 3. MARKET PULSE ───────────────────────────────────────────────────────────
@@ -980,6 +1021,38 @@ def _render_intelligence_panel(symbol: str, setup: dict | None, regime: dict) ->
                 f"{bullets}</div>",
                 unsafe_allow_html=True,
             )
+
+        # Smart stop note
+        if _HAS_SMART_STOP:
+            try:
+                df_chart = _fetch_chart(symbol, "Daily")
+                smart_result = suggest_smart_stop(
+                    symbol=symbol,
+                    df=df_chart,
+                    entry_price=float(pivot),
+                    archetype=setup.get("archetype", "VCP_BREAKOUT"),
+                )
+                stop_note = format_stop_note(smart_result)
+                st.markdown(
+                    f"<div style='font-size:.65rem;color:#8892a4;margin-bottom:6px;"
+                    f"padding:4px 8px;background:#111827;border-radius:5px;"
+                    f"border-left:2px solid #ff4b4b44'>🛡 {stop_note}</div>",
+                    unsafe_allow_html=True,
+                )
+            except Exception:
+                pass
+
+        # Earnings proximity chip
+        if _HAS_EARNINGS:
+            try:
+                chip_html = render_earnings_chip(symbol)
+                if chip_html:
+                    st.markdown(
+                        f"<div style='margin-bottom:8px'>{chip_html}</div>",
+                        unsafe_allow_html=True,
+                    )
+            except Exception:
+                pass
 
     # AI Analysis button + output
     cache_key = f"iq2_analysis_{symbol}"
