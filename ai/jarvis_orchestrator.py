@@ -57,14 +57,14 @@ Available specialist agents:
 
 Classify this query and decide which agents (if any) are needed.
 Return ONLY valid JSON:
-{
+{{
   "needs_agents": true/false,
   "reason": "one-line reasoning",
-  "agent_tasks": {
+  "agent_tasks": {{
     "AgentName": "precise task description for this agent"
-  },
+  }},
   "synthesis_prompt": "how to combine agent outputs into the final answer (empty if needs_agents=false)"
-}
+}}
 
 Use agents when: live internet data needed, code changes/deployment needed, git operations,
 system operations, real-time stock data, news scraping, file management.
