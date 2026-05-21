@@ -94,6 +94,12 @@ try:
 except ImportError:
     _streamlit_available = False
 
+try:
+    from core.regime_drift import record_regime_snapshot as _record_regime_snapshot
+    _regime_drift_available = True
+except Exception:
+    _regime_drift_available = False
+
 _HISTORY_BARS     = 250
 _HISTORY_INTERVAL = "day"
 
@@ -220,6 +226,15 @@ class TradeEngine:
         # 5. Equity snapshot
         self._portfolio.record_equity_point()
         equity = self._portfolio.snapshot_equity()
+
+        # 5b. Regime drift snapshot (non-blocking)
+        if _regime_drift_available:
+            try:
+                from core.regime_engine import compute_regime as _compute_regime
+                _regime_snap = _compute_regime()
+                _record_regime_snapshot(_regime_snap)
+            except Exception:
+                pass
 
         elapsed = (datetime.now(timezone.utc) - cycle_start).total_seconds()
         log.info("cycle_complete", cycle=self._cycle_count,

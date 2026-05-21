@@ -213,3 +213,10 @@ def render_regime_bar() -> None:
         + "</div>"
     )
     st.markdown(pills_html, unsafe_allow_html=True)
+
+    # ── Regime Drift Early Warning ────────────────────────────────────────────
+    try:
+        from core.regime_drift import render_drift_alert
+        render_drift_alert()
+    except Exception:
+        pass

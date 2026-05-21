@@ -109,6 +109,9 @@ class RegimeState:
     timestamp: str
     data_age_mins: int
 
+    # Sector rotation leaders (from acceleration matrix) — optional
+    rotation_leaders: list[dict] = field(default_factory=list)
+
     # ------------------------------------------------------------------
     def to_dict(self) -> dict:
         return asdict(self)
@@ -969,6 +972,13 @@ def compute_regime() -> RegimeState:
         timestamp=fetch_time_utc.strftime("%H:%M"),
         data_age_mins=data_age_mins,
     )
+
+    # ---- sector rotation acceleration leaders (non-blocking) ---------------
+    try:
+        from core.sector_rotation import get_rotation_leaders as _get_rotation_leaders
+        state.rotation_leaders = _get_rotation_leaders()
+    except Exception:
+        pass
 
     _CACHE["regime_state"] = state
     _CACHE["timestamp"] = now
