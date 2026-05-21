@@ -399,6 +399,26 @@ def render_real_holdings() -> None:
                 unsafe_allow_html=True,
             )
 
+    # ── Conviction Tracker ────────────────────────────────────────────────────
+    try:
+        from ui.conviction_tracker import render_conviction_panel as _render_conviction
+
+        # Build position list from holdings for conviction scoring
+        conviction_positions = [
+            {
+                "tradingsymbol": h["tradingsymbol"],
+                "average_price": h["average_price"],
+                "archetype": "",
+                "regime_at_entry": st.session_state.get("session_opening_regime", "UNKNOWN"),
+            }
+            for h in holdings
+        ]
+        if conviction_positions:
+            st.divider()
+            _render_conviction(conviction_positions)
+    except Exception:
+        pass
+
     if is_demo:
         st.caption(
             "This is demo data. Connect your Zerodha account to see your real portfolio."
