@@ -94,6 +94,14 @@ from ui.vcp_page import render_vcp_page
 from ui.institutional_terminal import render_institutional_terminal
 from ui.market_narrative import render_market_narrative
 
+# ── IronLock status widget (optional — graceful fallback if unavailable) ───────
+try:
+    from ui.ironlock_widget import render_ironlock_status as _render_ironlock_status
+    _IRONLOCK_AVAILABLE = True
+except Exception:
+    _render_ironlock_status = None  # type: ignore[assignment]
+    _IRONLOCK_AVAILABLE = False
+
 # ── Page config ───────────────────────────────────────────────────────────────
 st.set_page_config(
     page_title="QUANTTERM",
@@ -911,6 +919,18 @@ if st.session_state.get("selected_page"):
 # PAGE: DASHBOARD
 # ══════════════════════════════════════════════════════════════════════════════
 if _page == "Dashboard":
+    # ── Regime command strip + IronLock gates ─────────────────────────────
+    try:
+        from ui.regime_bar import render_regime_bar as _render_regime_bar
+        _render_regime_bar()
+    except Exception:
+        pass
+    if _IRONLOCK_AVAILABLE and _render_ironlock_status is not None:
+        try:
+            _render_ironlock_status()
+        except Exception:
+            pass
+
     # Today Card — 30-second daily brief at the very top
     try:
         from ui.today_card import render_today_card

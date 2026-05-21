@@ -421,39 +421,52 @@ def render_sitrep() -> None:
     # ── Section 4: IronLock Gate Status ──────────────────────────────────────
     st.markdown("### 🔒 IronLock Gate Status")
 
-    # Gather values from session state / regime with safe defaults
-    kill_switch_active = st.session_state.get("kill_switch_active", False)
-    today_drawdown = float(st.session_state.get("today_drawdown_pct", 0.0))
-    fno_banned = st.session_state.get("fno_banned", False)
-    consecutive_losses = int(st.session_state.get("consecutive_losses", 0))
-    open_positions_list = st.session_state.get("open_positions", [])
-    open_positions_count = len(open_positions_list) if isinstance(open_positions_list, list) else 0
-    max_positions = int(st.session_state.get("max_open_positions", 5))
-    regime_confidence = float(regime.regime_confidence) if regime else 0.0
+    try:
+        from ui.ironlock_widget import render_ironlock_status, is_all_clear
+        render_ironlock_status()
+        if is_all_clear():
+            st.success("All gates clear — system is armed and ready to trade.")
+        else:
+            # Count blocked gates from the widget's data
+            from ui.ironlock_widget import _get_gate_statuses
+            blocked = sum(1 for _, is_open, _ in _get_gate_statuses() if not is_open)
+            if blocked == 1:
+                st.warning(f"{blocked} gate blocked — review before trading.")
+            else:
+                st.error(f"{blocked} gates blocked — do NOT enter new trades.")
+    except Exception:
+        # Fallback: inline gate display if widget unavailable
+        kill_switch_active = st.session_state.get("kill_switch_active", False)
+        today_drawdown = float(st.session_state.get("today_drawdown_pct", 0.0))
+        fno_banned = st.session_state.get("fno_banned", False)
+        consecutive_losses = int(st.session_state.get("consecutive_losses", 0))
+        open_positions_list = st.session_state.get("open_positions", [])
+        open_positions_count = len(open_positions_list) if isinstance(open_positions_list, list) else 0
+        max_positions = int(st.session_state.get("max_open_positions", 5))
+        regime_confidence = float(getattr(regime, "regime_confidence", 0.0)) if regime else 0.0
 
-    gates = [
-        ("Kill Switch", not kill_switch_active, "Kill switch is active — all trading halted"),
-        ("Regime", regime_confidence >= 40, f"Confidence {regime_confidence:.0f}% < 40% — unreliable"),
-        ("Daily Loss", today_drawdown < 5.0, f"Down {today_drawdown:.1f}% today — limit breached"),
-        ("F&O Ban", not fno_banned, "Symbol is in F&O ban list"),
-        ("Consecutive Losses", consecutive_losses < 3, f"{consecutive_losses} losses in a row — tilt risk"),
-        ("Positions", open_positions_count < max_positions,
-         f"{open_positions_count}/{max_positions} positions open"),
-    ]
+        gates = [
+            ("Kill Switch", not kill_switch_active, "Kill switch is active — all trading halted"),
+            ("Regime", regime_confidence >= 40, f"Confidence {regime_confidence:.0f}% < 40% — unreliable"),
+            ("Daily Loss", today_drawdown < 5.0, f"Down {today_drawdown:.1f}% today — limit breached"),
+            ("F&O Ban", not fno_banned, "Symbol is in F&O ban list"),
+            ("Consecutive Losses", consecutive_losses < 3, f"{consecutive_losses} losses in a row — tilt risk"),
+            ("Positions", open_positions_count < max_positions,
+             f"{open_positions_count}/{max_positions} positions open"),
+        ]
 
-    gate_cols = st.columns(6)
-    for i, (label, is_open, reason) in enumerate(gates):
-        with gate_cols[i]:
-            _gate_badge(label, is_open, "" if is_open else reason)
+        gate_cols = st.columns(6)
+        for i, (label, is_open, reason) in enumerate(gates):
+            with gate_cols[i]:
+                _gate_badge(label, is_open, "" if is_open else reason)
 
-    # Count blocked gates
-    blocked = sum(1 for _, is_open, _ in gates if not is_open)
-    if blocked == 0:
-        st.success("All gates clear — system is armed and ready to trade.")
-    elif blocked == 1:
-        st.warning(f"{blocked} gate blocked — review before trading.")
-    else:
-        st.error(f"{blocked} gates blocked — do NOT enter new trades.")
+        blocked = sum(1 for _, is_open, _ in gates if not is_open)
+        if blocked == 0:
+            st.success("All gates clear — system is armed and ready to trade.")
+        elif blocked == 1:
+            st.warning(f"{blocked} gate blocked — review before trading.")
+        else:
+            st.error(f"{blocked} gates blocked — do NOT enter new trades.")
 
     st.divider()
 
