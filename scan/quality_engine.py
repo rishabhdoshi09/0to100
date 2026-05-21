@@ -41,6 +41,7 @@ class QualityScore:
     factors: dict[str, float]      # factor_name → points scored
     evidence: list[str]            # top evidence bullets
     disqualifiers: list[str]       # reasons for deduction
+    earnings_multiplier: float = 1.0  # size multiplier from earnings proximity
 
 
 class QualityEngine:
@@ -242,9 +243,22 @@ class QualityEngine:
                 tier = t
                 break
 
+        # ── Earnings proximity: compute size multiplier ───────────────────────
+        earnings_multiplier = 1.0
+        try:
+            from data.earnings_calendar import get_earnings_risk
+            e_risk = get_earnings_risk(candidate.symbol)
+            earnings_multiplier = float(e_risk.get("size_multiplier", 1.0))
+            e_note = e_risk.get("note", "")
+            if earnings_multiplier < 1.0 and e_note:
+                disqualifiers.append(e_note)
+        except Exception:
+            pass
+
         return QualityScore(
             symbol=candidate.symbol, tier=tier, score=round(total, 1),
             factors=factors, evidence=evidence, disqualifiers=disqualifiers,
+            earnings_multiplier=earnings_multiplier,
         )
 
     # ── Helpers ───────────────────────────────────────────────────────────────
