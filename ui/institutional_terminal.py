@@ -15,6 +15,34 @@ import pandas as pd
 import numpy as np
 
 
+# ── Plain-English translations (retail-friendly labels) ───────────────────────
+_ARCHETYPE_PLAIN = {
+    "VCP_BREAKOUT":           "Coiling for breakout",
+    "MOMENTUM_EXPANSION":     "Strong upward momentum",
+    "EARLY_LEADER":           "Early stage leader",
+    "ACCUMULATION_BREAKOUT":  "Institutions quietly buying",
+    "EARNINGS_CONTINUATION":  "Strong after earnings",
+    "FAILED_BREAKOUT":        "Breakout failed – avoid",
+    "MEAN_REVERSION":         "Bouncing from low",
+    "TREND_CONTINUATION":     "Uptrend continuing",
+    "HIGH_TIGHT_FLAG":        "Tight flag — explosive potential",
+}
+_TIER_PLAIN = {
+    "ELITE_A_PLUS": "Best Trade",
+    "A":            "Strong Trade",
+    "B":            "Good Trade",
+    "WATCHLIST":    "Watch Only",
+    "AVOID":        "Avoid",
+}
+_REGIME_PLAIN = {
+    "TRENDING_BULL": "Market is rising — good for buying",
+    "EXPANSION":     "Market expanding — moderate buying",
+    "CHOPPY":        "Market is choppy — be cautious",
+    "COMPRESSION":   "Market consolidating — wait",
+    "DISTRIBUTION":  "Smart money selling — be careful",
+    "TRENDING_BEAR": "Market falling — avoid new buys",
+}
+
 # ── Color constants ────────────────────────────────────────────────────────────
 _TIER_COLORS = {
     "ELITE_A_PLUS": ("#00d4a0", "#001a12"),
@@ -182,9 +210,12 @@ def _render_setup_queue(universe_key: str, regime: dict) -> None:
     for s in filtered[:20]:
         fg, bg = _TIER_COLORS.get(s["tier"], ("#8892a4", "#111827"))
         emoji  = _ARCHETYPE_EMOJI.get(s["archetype"], "◆")
-        ev_str = f"+{s['ev_r']:.1f}R" if s['ev_r'] >= 0 else f"{s['ev_r']:.1f}R"
-        ev_col = "#00d4a0" if s['ev_r'] > 0 else "#ff4b4b"
+        ev_val = s['ev_r']
+        ev_str = f"+{ev_val:.1f}× risk" if ev_val >= 0 else f"{ev_val:.1f}× risk"
+        ev_col = "#00d4a0" if ev_val > 0 else "#ff4b4b"
         sl_badge = " 🏆" if s.get("sector_leader") else ""
+        tier_plain     = _TIER_PLAIN.get(s["tier"], s["tier"].replace("_", " "))
+        archetype_plain = _ARCHETYPE_PLAIN.get(s["archetype"], s["archetype"].replace("_", " "))
 
         selected = st.session_state.get("iq2_selected") == s["symbol"]
         btn_style = f"border: 1px solid {fg}66;" if selected else ""
@@ -205,13 +236,13 @@ def _render_setup_queue(universe_key: str, regime: dict) -> None:
             f"<div style='display:flex;gap:8px;align-items:center'>"
             f"<span style='background:{fg}22;color:{fg};font-size:.55rem;"
             f"padding:1px 6px;border-radius:4px;font-weight:700'>"
-            f"{s['tier'].replace('_',' ')}</span>"
+            f"{tier_plain}</span>"
             f"<span style='font-size:.6rem;color:#4a5568'>"
-            f"{s['archetype'].replace('_',' ')[:14]}</span>"
+            f"{archetype_plain[:20]}</span>"
             f"</div>"
             f"<div style='display:flex;gap:8px;align-items:center'>"
-            f"<span style='font-size:.65rem;color:{ev_col};font-weight:700'>{ev_str}</span>"
-            f"<span style='font-size:.65rem;color:{fg};font-weight:700'>{s['adj_score']:.0f}</span>"
+            f"<span style='font-size:.65rem;color:{ev_col};font-weight:700'>Profit potential: {ev_str}</span>"
+            f"<span style='font-size:.65rem;color:{fg};font-weight:700'>Confidence: {s['adj_score']:.0f}</span>"
             f"</div></div>",
             unsafe_allow_html=True,
         )
@@ -380,29 +411,32 @@ def _render_institutional_summary(setup: dict) -> None:
     ev_col = "#00d4a0" if setup['ev_r'] > 0 else "#ff4b4b"
     wr_pct = setup['win_rate'] * 100
 
+    tier_plain      = _TIER_PLAIN.get(tier, tier.replace("_", " "))
+    archetype_plain = _ARCHETYPE_PLAIN.get(setup["archetype"], setup["archetype"].replace("_", " "))
+
     st.markdown(
         f"<div style='background:#111827;border:1px solid {fg}33;"
         f"border-radius:8px;padding:10px 12px;font-family:JetBrains Mono,monospace'>"
 
         f"<div style='display:flex;justify-content:space-between;margin-bottom:6px'>"
         f"<span style='color:{fg};font-size:.78rem;font-weight:800'>"
-        f"{emoji} {setup['archetype'].replace('_',' ')}</span>"
+        f"{emoji} {archetype_plain}</span>"
         f"<span style='background:{fg}22;color:{fg};font-size:.62rem;"
         f"padding:2px 8px;border-radius:4px;font-weight:700'>"
-        f"{tier.replace('_',' ')}</span>"
+        f"{tier_plain}</span>"
         f"</div>"
 
         f"<div style='display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin:6px 0'>"
         f"<div style='background:#0d1117;border-radius:6px;padding:5px 8px'>"
-        f"<div style='font-size:.55rem;color:#4a5568'>EXP VALUE</div>"
+        f"<div style='font-size:.55rem;color:#4a5568'>Expected Profit</div>"
         f"<div style='font-size:.82rem;color:{ev_col};font-weight:800'>{ev_str}</div>"
         f"</div>"
         f"<div style='background:#0d1117;border-radius:6px;padding:5px 8px'>"
-        f"<div style='font-size:.55rem;color:#4a5568'>WIN RATE</div>"
+        f"<div style='font-size:.55rem;color:#4a5568'>Historical Win Rate</div>"
         f"<div style='font-size:.82rem;color:#f59e0b;font-weight:800'>{wr_pct:.0f}%</div>"
         f"</div>"
         f"<div style='background:#0d1117;border-radius:6px;padding:5px 8px'>"
-        f"<div style='font-size:.55rem;color:#4a5568'>REG ALIGN</div>"
+        f"<div style='font-size:.55rem;color:#4a5568'>Market Fit</div>"
         f"<div style='font-size:.82rem;color:#a78bfa;font-weight:800'>{setup['reg_align']}</div>"
         f"</div>"
         f"</div>"
@@ -439,6 +473,16 @@ def _render_risk_matrix(setup: dict) -> None:
     target_1r = pivot * (1 + risk / 100)
     target_2r = pivot * (1 + risk * 2 / 100)
 
+    risk_amt  = pivot - stop
+    reward_1r = target_1r - pivot
+    reward_2r = target_2r - pivot
+    if risk_amt > 0:
+        plain_liner = (
+            f"Risk ₹{risk_amt:,.0f} to potentially make "
+            f"₹{reward_1r:,.0f}–₹{reward_2r:,.0f}"
+        )
+        st.caption(plain_liner)
+
     st.markdown(
         f"<div style='background:#111827;border:1px solid rgba(255,75,75,.15);"
         f"border-radius:8px;padding:8px 12px;font-family:JetBrains Mono,monospace'>"
@@ -447,9 +491,9 @@ def _render_risk_matrix(setup: dict) -> None:
         f"<span style='font-size:.75rem;color:#00d4ff;font-weight:700'>₹{pivot:,.0f}</span></div>"
         f"<div><span style='font-size:.55rem;color:#4a5568'>Stop Loss</span><br>"
         f"<span style='font-size:.75rem;color:#ff4b4b;font-weight:700'>₹{stop:,.0f}</span></div>"
-        f"<div><span style='font-size:.55rem;color:#4a5568'>1R Target</span><br>"
+        f"<div><span style='font-size:.55rem;color:#4a5568'>Target 1 (break-even)</span><br>"
         f"<span style='font-size:.75rem;color:#f59e0b;font-weight:700'>₹{target_1r:,.0f}</span></div>"
-        f"<div><span style='font-size:.55rem;color:#4a5568'>2R Target</span><br>"
+        f"<div><span style='font-size:.55rem;color:#4a5568'>Target 2 (profit)</span><br>"
         f"<span style='font-size:.75rem;color:#00d4a0;font-weight:700'>₹{target_2r:,.0f}</span></div>"
         f"<div><span style='font-size:.55rem;color:#4a5568'>Risk %</span><br>"
         f"<span style='font-size:.75rem;color:#fb923c;font-weight:700'>{risk:.1f}%</span></div>"
@@ -466,6 +510,9 @@ def _render_regime_playbooks(regime: dict) -> None:
         "letter-spacing:.08em'>TODAY'S PLAYBOOKS</span>",
         unsafe_allow_html=True,
     )
+    regime_plain = _REGIME_PLAIN.get(regime.get("market", ""), "")
+    if regime_plain:
+        st.caption(regime_plain)
     try:
         from playbooks import get_playbooks_for_regime
         pbs = get_playbooks_for_regime(
@@ -623,11 +670,49 @@ def render_institutional_terminal(universe: list[str]) -> None:
 
     universe_key = ",".join(sorted(universe))
 
+    # ── Action Card: Best Trade Right Now ─────────────────────────────────────
+    with st.spinner("Loading top setup…"):
+        _top_setups = _run_pipeline(universe_key, top_n=30)
+    if _top_setups:
+        _best = _top_setups[0]
+        _best_tier  = _best.get("tier", "")
+        _best_plain = _ARCHETYPE_PLAIN.get(_best.get("archetype", ""), _best.get("archetype", ""))
+        _best_tier_plain = _TIER_PLAIN.get(_best_tier, _best_tier.replace("_", " "))
+        _ev_r   = _best.get("ev_r", 0.0)
+        _conf   = _best.get("adj_score", 0.0)
+        _pivot  = _best.get("pivot", 0)
+        _stop   = _best.get("stop", 0)
+        _price  = _best.get("price", 0)
+        _target_1r = _pivot * (1 + _best.get("risk_pct", 5.0) / 100)
+        _target_2r = _pivot * (1 + _best.get("risk_pct", 5.0) * 2 / 100)
+        _action_md = (
+            f"**🎯 BEST TRADE RIGHT NOW**\n\n"
+            f"**{_best['symbol']}** • {_best_plain}\n\n"
+            f"Buy above ₹{_pivot:,.0f} • Stop ₹{_stop:,.0f} • Target ₹{_target_1r:,.0f}–₹{_target_2r:,.0f}\n\n"
+            f"Confidence: {_conf:.0f}/100 • Expected profit: +{_ev_r:.1f}× your risk"
+        )
+        if _best_tier in ("ELITE_A_PLUS", "A", "B"):
+            st.success(_action_md)
+        else:
+            st.warning(_action_md)
+
     # NL Query bar — filters the setup queue
     current_setups = st.session_state.get(f"pipeline_{universe_key}", [])
     nl_filtered = render_nl_query(universe, current_setups)
     if nl_filtered is not None:
         st.session_state[f"pipeline_nl_{universe_key}"] = nl_filtered
+
+    # ── Help expander ─────────────────────────────────────────────────────────
+    with st.expander("❓ How to use this page"):
+        st.markdown("""
+**Left panel**: Ranked list of trading opportunities — click any to see chart and details.
+**Center**: Price chart with entry (blue) and stop-loss (red) levels marked.
+**Right**: AI analysis — click 'Analyse' for DeepSeek's view on the trade.
+
+**Confidence score**: 0-100. Above 65 = worth considering. Above 80 = high conviction.
+**Expected profit**: e.g. +2.3× risk means if you risk ₹1000, expected gain is ₹2300.
+**Stop loss**: The price where you exit if wrong — never skip this.
+        """)
 
     # 3-panel layout
     col_left, col_center, col_right = st.columns([28, 44, 28])
