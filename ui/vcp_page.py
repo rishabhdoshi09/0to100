@@ -49,6 +49,11 @@ def render_vcp_page(universe: list[str]) -> None:
         render_regime_bar()
     except Exception:
         pass
+    try:
+        from ui.ironlock_widget import render_ironlock_status
+        render_ironlock_status()
+    except Exception:
+        pass
 
     # ── Header ────────────────────────────────────────────────────────────────
     st.markdown(
