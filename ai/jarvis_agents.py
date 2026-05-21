@@ -41,23 +41,28 @@ class AgentResult:
 # ── LLM call helper ───────────────────────────────────────────────────────────
 
 def _llm(messages: list[dict], temperature: float = 0.1, max_tokens: int = 800) -> str:
-    key = os.getenv("DEEPSEEK_API_KEY", "")
+    from config import settings
+    key = settings.deepseek_api_key or os.getenv("DEEPSEEK_API_KEY", "")
     if not key:
-        return '{"thought":"No API key","action":"DONE","result":"DEEPSEEK_API_KEY not set"}'
+        return '{"thought":"No API key","action":"DONE","result":"DEEPSEEK_API_KEY not set in .env"}'
     import requests as _req
     try:
         resp = _req.post(
-            "https://api.deepseek.com/v1/chat/completions",
+            f"{settings.deepseek_base_url}/chat/completions",
             headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
             json={
-                "model": "deepseek-chat",
+                "model": settings.deepseek_model,
                 "messages": messages,
                 "temperature": temperature,
                 "max_tokens": max_tokens,
             },
             timeout=25,
         )
-        return resp.json()["choices"][0]["message"]["content"].strip()
+        data = resp.json()
+        if "choices" not in data:
+            err = data.get("message", data.get("error", {}).get("message", str(data)))
+            return json.dumps({"thought": "API error", "action": "DONE", "result": f"DeepSeek API error: {err}"})
+        return data["choices"][0]["message"]["content"].strip()
     except Exception as e:
         return json.dumps({"thought": str(e), "action": "DONE", "result": f"LLM error: {e}"})
 
