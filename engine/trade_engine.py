@@ -88,6 +88,12 @@ try:
 except Exception:
     _signal_memory_available = False
 
+try:
+    import streamlit as _st
+    _streamlit_available = True
+except ImportError:
+    _streamlit_available = False
+
 _HISTORY_BARS     = 250
 _HISTORY_INTERVAL = "day"
 
@@ -271,6 +277,22 @@ class TradeEngine:
             vader_sentiment=vader_avg,
             memory_context=memory_context,
         )
+
+        # ── IronLock hard gate — runs before LLM, cannot be overridden ───────
+        from risk.iron_lock import IronLock
+        lock_verdict = IronLock.check(
+            regime_confidence=getattr(regime_state, "regime_confidence", 50.0) if 'regime_state' in dir() else 50.0,
+            today_drawdown_pct=self._portfolio.today_drawdown_pct if hasattr(self._portfolio, "today_drawdown_pct") else 0.0,
+            fno_banned=getattr(setup, "fno_banned", False) if 'setup' in dir() else False,
+            consecutive_losses=getattr(self._portfolio, "consecutive_losses", 0),
+            open_positions=list(self._portfolio.positions.values()) if hasattr(self._portfolio, "positions") else [],
+            candidate_sector=getattr(setup, "sector", None) if 'setup' in dir() else None,
+            kill_switch_active=_st.session_state.get("kill_switch_active", False) if _streamlit_available else False,
+            max_open_positions=settings.max_open_positions,
+        )
+        if not lock_verdict.approved:
+            log.warning("ironlock_blocked", symbol=symbol, rule=lock_verdict.rule_failed, detail=lock_verdict.detail)
+            return None
 
         # ── Step A: DeepSeek V3 → R1 signal ─────────────────────────────────
         signal = self._llm.get_signal(context_prompt, symbol)

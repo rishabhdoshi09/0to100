@@ -36,6 +36,32 @@ def render_order_pad(symbol: str = "", price: float = 0.0, indicators: dict | No
     st.markdown("#### Order Pad")
     init_db()
 
+    # ── Emergency Kill Switch ─────────────────────────────────────────────────────
+    kill_active = st.session_state.get("kill_switch_active", False)
+    if kill_active:
+        st.error("🚨 KILL SWITCH ACTIVE — All new trades blocked. Restart app to resume.")
+    else:
+        if st.button("🚨 EMERGENCY STOP", type="secondary", help="Cancel all open orders and block new trades immediately"):
+            st.session_state["kill_switch_active"] = True
+            try:
+                from risk.risk_manager import RiskManager
+                RiskManager().activate_kill_switch()
+            except Exception:
+                pass
+            try:
+                from config import settings
+                import requests
+                if settings.telegram_bot_token and settings.telegram_chat_id:
+                    requests.post(
+                        f"https://api.telegram.org/bot{settings.telegram_bot_token}/sendMessage",
+                        json={"chat_id": settings.telegram_chat_id,
+                              "text": "🚨 EMERGENCY STOP ACTIVATED from UI. All trading halted."},
+                        timeout=5,
+                    )
+            except Exception:
+                pass
+            st.rerun()
+
     with st.form("order_pad_form", clear_on_submit=True):
         col1, col2, col3 = st.columns(3)
         sym    = col1.text_input("Symbol", value=symbol.upper() or "", placeholder="RELIANCE")

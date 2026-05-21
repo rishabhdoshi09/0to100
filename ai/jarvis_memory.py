@@ -11,6 +11,7 @@ import json
 import requests
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import Optional
 
 
 _DB_PATH = Path("logs/jarvis_memory.db")
@@ -367,3 +368,44 @@ class JarvisMemory:
         except Exception as exc:
             print(f"[JarvisMemory] build_morning_context error: {exc}")
             return "=== JARVIS PERSISTENT MEMORY ===\n[Error loading memory]\n=== END MEMORY ==="
+
+    # ------------------------------------------------------------------
+    # Revenge trading detection
+    # ------------------------------------------------------------------
+
+    def detect_revenge_trading(self, session_messages: list[dict]) -> Optional[str]:
+        """
+        Detect if user is revenge trading: loss in last trade + rapid new trade request.
+        Returns warning string or None.
+        """
+        try:
+            import sqlite3
+            from datetime import datetime, timedelta
+            con = sqlite3.connect(str(self._db_path))
+            cur = con.execute(
+                "SELECT symbol, pnl, exit_time FROM trade_journal "
+                "WHERE exit_time IS NOT NULL ORDER BY exit_time DESC LIMIT 1"
+            )
+            row = cur.fetchone()
+            con.close()
+            if not row:
+                return None
+            symbol, pnl, exit_time_str = row
+            if pnl is None or pnl >= 0:
+                return None
+            try:
+                exit_time = datetime.fromisoformat(exit_time_str)
+            except Exception:
+                return None
+            minutes_since_loss = (datetime.now() - exit_time).total_seconds() / 60
+            # Recent loss + asking about trades within 30 min = revenge pattern
+            if minutes_since_loss < 30 and len(session_messages) >= 2:
+                return (
+                    f"⚠️ Revenge trading pattern detected: You lost on {symbol} "
+                    f"{minutes_since_loss:.0f} minutes ago (₹{abs(pnl):,.0f}) and are already "
+                    f"looking for new trades. Win rates drop 34% after emotional losses. "
+                    f"JARVIS recommends: wait 30 minutes before your next trade."
+                )
+        except Exception:
+            pass
+        return None

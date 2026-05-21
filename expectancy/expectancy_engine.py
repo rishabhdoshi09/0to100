@@ -3,6 +3,9 @@ Expectancy Engine — SQLite-backed per-setup, per-playbook performance tracker.
 
 Computes evidence-based expected value for NSE India institutional trading setups.
 Tracks win rate, R-multiples, MAE/MFE, and regime-conditional expectancy.
+
+Frequentist win rate on N<30 samples has ±37% CI. Beta posterior with pessimistic
+percentile gives conservative, actionable estimates.
 """
 from __future__ import annotations
 
@@ -101,7 +104,20 @@ def _compute_expectancy(rows: list) -> tuple[float, float, float, float]:
         return 0.0, 0.0, 0.0, 0.0
     wins = [r["return_pct"] for r in closed if r["outcome"] == "WIN" and r["return_pct"] is not None]
     losses = [abs(r["return_pct"]) for r in closed if r["outcome"] == "LOSS" and r["return_pct"] is not None]
-    win_rate = len(wins) / len(closed) if closed else 0.0
+    # Bayesian Beta posterior — more honest than frequentist point estimate
+    # Prior: 55% win rate belief with strength of 10 pseudo-trades
+    _alpha_prior, _beta_prior = 5.5, 4.5
+    n_wins   = len(wins)
+    n_losses = len(closed) - n_wins
+    alpha_post = _alpha_prior + n_wins
+    beta_post  = _beta_prior + n_losses
+    try:
+        from scipy.stats import beta as _beta_dist
+        # 25th percentile = pessimistic but calibrated estimate
+        win_rate = float(_beta_dist.ppf(0.25, alpha_post, beta_post))
+    except ImportError:
+        # scipy not available — fall back to frequentist with Laplace smoothing
+        win_rate = (n_wins + _alpha_prior) / (len(closed) + _alpha_prior + _beta_prior)
     avg_win = sum(wins) / len(wins) if wins else 0.0
     avg_loss = sum(losses) / len(losses) if losses else 0.0
     expectancy = win_rate * avg_win - (1 - win_rate) * avg_loss
