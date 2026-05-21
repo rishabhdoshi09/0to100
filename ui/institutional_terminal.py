@@ -161,6 +161,35 @@ def _fetch_chart(symbol: str, timeframe: str) -> pd.DataFrame | None:
     return None
 
 
+@st.cache_data(ttl=600, show_spinner=False)
+def _auto_verdict(symbol: str, archetype: str, tier: str, ev_r: float,
+                  win_rate: float, regime: str) -> str:
+    """Quick DeepSeek verdict — called automatically, no button needed."""
+    from config import settings
+    if not settings.deepseek_api_key:
+        return ""
+    import requests
+    prompt = (
+        f"In exactly 2 sentences: Should a retail trader take this setup?\n"
+        f"Stock: {symbol} | Pattern: {archetype} | Tier: {tier} | "
+        f"EV: {ev_r:+.1f}R | Win rate: {win_rate*100:.0f}% | Regime: {regime}\n"
+        f"Sentence 1: Verdict (BUY AT PIVOT / WAIT / SKIP). Sentence 2: The single biggest reason."
+    )
+    try:
+        resp = requests.post(
+            f"{settings.deepseek_base_url}/chat/completions",
+            headers={"Authorization": f"Bearer {settings.deepseek_api_key}"},
+            json={"model": settings.deepseek_model, "messages": [
+                {"role": "user", "content": prompt}
+            ], "temperature": 0.0, "max_tokens": 80},
+            timeout=10,
+        )
+        data = resp.json()
+        return data["choices"][0]["message"]["content"].strip() if "choices" in data else ""
+    except Exception:
+        return ""
+
+
 @st.cache_data(ttl=1800, show_spinner=False)
 def _deepseek_analyse(symbol: str, setup: dict | None, regime: dict) -> str:
     import os, requests
@@ -417,6 +446,60 @@ def _render_hero_card(best: dict, regime: dict) -> None:
         f"</div>",
         unsafe_allow_html=True,
     )
+
+    # ── AUTO-VERDICT ──────────────────────────────────────────────────────────
+    verdict = _auto_verdict(
+        symbol=symbol,
+        archetype=best["archetype"],
+        tier=best["tier"],
+        ev_r=best["ev_r"],
+        win_rate=best["win_rate"],
+        regime=regime.get("market", ""),
+    )
+    if verdict:
+        verdict_upper = verdict.upper()
+        if verdict_upper.startswith("BUY"):
+            verdict_bg     = "#001a0e"
+            verdict_border = "#00d4a0"
+            verdict_col    = "#00d4a0"
+        elif verdict_upper.startswith("WAIT"):
+            verdict_bg     = "#1f1500"
+            verdict_border = "#f59e0b"
+            verdict_col    = "#f59e0b"
+        else:  # SKIP or anything else
+            verdict_bg     = "#1a0505"
+            verdict_border = "#ff4b4b"
+            verdict_col    = "#ff4b4b"
+
+        st.markdown(
+            f"<div style='background:{verdict_bg};border:1px solid {verdict_border}55;"
+            f"border-radius:10px;padding:10px 16px;margin-bottom:10px'>"
+            f"<div style='font-size:.58rem;color:#4a5568;text-transform:uppercase;"
+            f"letter-spacing:.1em;margin-bottom:4px'>AUTO-VERDICT</div>"
+            f"<div style='font-size:.78rem;color:{verdict_col};font-weight:700;"
+            f"line-height:1.6'>{verdict}</div>"
+            f"</div>",
+            unsafe_allow_html=True,
+        )
+
+        # Personal edge note below the verdict
+        try:
+            from core.learning_loop import get_personal_edge
+            edge = get_personal_edge()
+            archetype_edge = edge.get(best["archetype"], {})
+            if archetype_edge.get("trades", 0) >= 5:
+                personal_wr = archetype_edge["win_rate"] * 100
+                vs_base     = archetype_edge["vs_baseline"] * 100
+                color       = "#00d4a0" if vs_base > 0 else "#ff4b4b"
+                arch_label  = best["archetype"].replace("_", " ")
+                st.markdown(
+                    f"<span style='color:{color};font-size:.65rem'>"
+                    f"Your personal edge in {arch_label}: {personal_wr:.0f}% WR "
+                    f"({vs_base:+.0f}% vs baseline)</span>",
+                    unsafe_allow_html=True,
+                )
+        except Exception:
+            pass
 
     # Action buttons
     b1, b2, b3, b4 = st.columns([2, 2, 2, 2])
@@ -933,6 +1016,11 @@ def render_institutional_terminal(universe: list[str]) -> None:
 
     # Persistent regime bar at top
     render_regime_bar()
+    try:
+        from ui.ironlock_widget import render_ironlock_status
+        render_ironlock_status()
+    except Exception:
+        pass
     regime = get_regime()
 
     # ── Page Title ──────────────────────────────────────────────────────────────
