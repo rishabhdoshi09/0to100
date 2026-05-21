@@ -22,6 +22,30 @@ def numta_available() -> bool:
     return _NUMTA_AVAILABLE
 
 
+def detect_chart_patterns(df: pd.DataFrame) -> Dict[str, Any]:
+    """Detect candlestick patterns. Returns empty dict if numta not installed."""
+    if not _NUMTA_AVAILABLE or len(df) < 10:
+        return {}
+    required = {"open", "high", "low", "close"}
+    if not required.issubset(df.columns):
+        return {}
+    op = df["open"].to_numpy(dtype=float)
+    hi = df["high"].to_numpy(dtype=float)
+    lo = df["low"].to_numpy(dtype=float)
+    cl = df["close"].to_numpy(dtype=float)
+    out: Dict[str, Any] = {}
+    try:
+        out["engulfing"]    = int(numta.CDLENGULFING(op, hi, lo, cl)[-1])
+        out["hammer"]       = int(numta.CDLHAMMER(op, hi, lo, cl)[-1])
+        out["shooting_star"]= int(numta.CDLSHOOTINGSTAR(op, hi, lo, cl)[-1])
+        out["doji"]         = int(numta.CDLDOJI(op, hi, lo, cl)[-1])
+        out["morning_star"] = int(numta.CDLMORNINGSTAR(op, hi, lo, cl)[-1])
+        out["evening_star"] = int(numta.CDLEVENINGSTAR(op, hi, lo, cl)[-1])
+    except Exception:
+        pass
+    return out
+
+
 def add_numta_indicators(df: pd.DataFrame) -> Dict[str, Any]:
     """
     Compute numta indicators from an OHLCV DataFrame.
