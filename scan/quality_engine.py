@@ -190,6 +190,52 @@ class QualityEngine:
 
         # ── Final score ───────────────────────────────────────────────────────
         total = sum(factors.values())
+
+        # ── Bonus: Relative Strength RS score ────────────────────────────────
+        try:
+            from scan.relative_strength import compute_rs_score
+            rs_score = compute_rs_score(candidate.symbol, df)
+            if rs_score >= 90:
+                total += 8
+                evidence.append(f"RS {rs_score:.0f} — top 10% vs Nifty")
+            factors["rs_bonus"] = 8.0 if rs_score >= 90 else 0.0
+        except Exception:
+            factors["rs_bonus"] = 0.0
+
+        # ── Bonus/Penalty: Setup Freshness ───────────────────────────────────
+        try:
+            from scan.setup_freshness import compute_freshness
+            archetype_str = getattr(candidate, "archetype", "VCP_BREAKOUT")
+            freshness = compute_freshness(candidate.symbol, archetype_str, df)
+            freshness_status = freshness.get("status", "")
+            if freshness_status == "STALE":
+                total -= 10
+                disqualifiers.append(freshness.get("note", "Setup is stale"))
+                factors["freshness_penalty"] = -10.0
+            elif freshness_status == "OPTIMAL":
+                total += 5
+                evidence.append(freshness.get("note", "Setup in optimal window"))
+                factors["freshness_bonus"] = 5.0
+            else:
+                factors["freshness_bonus"] = 0.0
+        except Exception:
+            factors["freshness_bonus"] = 0.0
+
+        # ── Penalty: Breakout Memory confidence multiplier ───────────────────
+        try:
+            from scan.breakout_memory import confidence_penalty, get_false_breakout_rate
+            penalty = confidence_penalty(candidate.symbol)
+            if penalty < 1.0:
+                total = total * penalty
+                stats = get_false_breakout_rate(candidate.symbol)
+                if stats.get("warning"):
+                    disqualifiers.append(stats["warning"])
+            factors["breakout_memory_mult"] = penalty
+        except Exception:
+            factors["breakout_memory_mult"] = 1.0
+
+        total = max(0.0, total)
+
         tier  = "AVOID"
         for t, threshold in _TIER_THRESHOLDS.items():
             if total >= threshold:

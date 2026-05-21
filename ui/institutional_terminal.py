@@ -15,6 +15,25 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 
+# ── Optional feature imports (graceful fallback if unavailable) ───────────────
+try:
+    from scan.relative_strength import compute_rs_score, get_rs_badge
+    _HAS_RS = True
+except Exception:
+    _HAS_RS = False
+
+try:
+    from scan.setup_freshness import compute_freshness, freshness_badge
+    _HAS_FRESHNESS = True
+except Exception:
+    _HAS_FRESHNESS = False
+
+try:
+    from scan.breakout_memory import get_false_breakout_rate
+    _HAS_BREAKOUT_MEMORY = True
+except Exception:
+    _HAS_BREAKOUT_MEMORY = False
+
 
 # ── Plain-English translations ─────────────────────────────────────────────────
 _ARCHETYPE_PLAIN = {
@@ -666,6 +685,38 @@ def _render_setup_list(setups: list[dict], universe_key: str) -> None:
         emoji_pat = _ARCHETYPE_EMOJI.get(s["archetype"], "◆")
         sl_badge  = " 🏆" if s.get("sector_leader") else ""
 
+        # ── RS badge (next to symbol name) ───────────────────────────────────
+        rs_badge_html = ""
+        if _HAS_RS:
+            try:
+                rs_score = compute_rs_score(sym, pd.DataFrame())  # score from pipeline cache
+                rs_badge_html = "&nbsp;" + get_rs_badge(rs_score)
+            except Exception:
+                pass
+
+        # ── Freshness badge (next to archetype) ───────────────────────────────
+        freshness_badge_html = ""
+        if _HAS_FRESHNESS:
+            try:
+                # Use a minimal proxy df — freshness badge is best-effort
+                freshness_result = compute_freshness(sym, s.get("archetype", "VCP_BREAKOUT"), pd.DataFrame())
+                freshness_badge_html = "&nbsp;" + freshness_badge(freshness_result)
+            except Exception:
+                pass
+
+        # ── Breakout memory warning ───────────────────────────────────────────
+        breakout_warning_html = ""
+        if _HAS_BREAKOUT_MEMORY:
+            try:
+                bk_stats = get_false_breakout_rate(sym)
+                if bk_stats.get("warning"):
+                    breakout_warning_html = (
+                        f"<div style='font-size:.58rem;color:#ff4b4b;margin-top:2px;"
+                        f"font-weight:600'>⚠ {bk_stats['warning']}</div>"
+                    )
+            except Exception:
+                pass
+
         # Confidence color
         if score >= 70:
             conf_col = "#00d4a0"
@@ -692,11 +743,15 @@ def _render_setup_list(setups: list[dict], universe_key: str) -> None:
 
             f"<span style='font-size:.65rem;color:#4a5568;font-weight:700'>{rank}</span>"
 
+            f"<div>"
             f"<span style='font-size:.82rem;color:#ffffff;font-weight:800;"
             f"font-family:JetBrains Mono,monospace'>{sym}{sl_badge}</span>"
+            f"{rs_badge_html}"
+            f"{breakout_warning_html}"
+            f"</div>"
 
             f"<span style='font-size:.68rem;color:#8892a4'>"
-            f"{emoji_pat} {pattern[:30]}</span>"
+            f"{emoji_pat} {pattern[:30]}{freshness_badge_html}</span>"
 
             f"<span style='font-size:.75rem;color:#c9d1e0;font-family:JetBrains Mono,monospace;"
             f"text-align:right'>₹{price:,.0f}</span>"
