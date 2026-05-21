@@ -100,12 +100,10 @@ def _render_empty_state() -> None:
         line=dict(color=_CYAN, width=2, dash="dot"),
         name="Starting Capital ₹10L",
     ))
-    fig.update_layout(
-        **_LAYOUT_BASE,
-        height=200,
-        title=dict(text="Equity Curve (placeholder)", font=dict(color="#8892a4", size=12)),
-        yaxis=dict(tickprefix="₹", **{k: v for k, v in _LAYOUT_BASE["yaxis"].items()}),
-    )
+    _layout = {**_LAYOUT_BASE, "height": 200,
+               "title": dict(text="Equity Curve (placeholder)", font=dict(color="#8892a4", size=12))}
+    _layout["yaxis"] = dict(tickprefix="₹", **{k: v for k, v in _LAYOUT_BASE.get("yaxis", {}).items()})
+    fig.update_layout(**_layout)
     st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False},
                     key="ja_empty_equity")
 
