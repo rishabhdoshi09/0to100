@@ -572,6 +572,9 @@ def _render_system_panel() -> None:
 # ── Main render ───────────────────────────────────────────────────────────────
 
 def render_jarvis(universe: list[str]) -> None:
+    # Consume pre-filled query from other pages
+    _prefill = st.session_state.pop("jarvis_prefill", None)
+
     universe_key = ",".join(sorted(universe))
     if "jarvis_setups" not in st.session_state:
         with st.spinner("JARVIS loading market intelligence…"):
@@ -613,6 +616,25 @@ def render_jarvis(universe: list[str]) -> None:
 
     st.divider()
 
+    # ── Context banner (when arriving from another page via prefill) ──────────
+    if _prefill:
+        st.info(f"💬 Pre-loaded from your last action: _{_prefill}_")
+
+    # ── Back-navigation buttons (when a symbol is in context) ────────────────
+    sym = st.session_state.get("selected_symbol")
+    if sym:
+        col1, col2 = st.columns([1, 1])
+        with col1:
+            if st.button(f"📊 View {sym} in Institutional", key="jarvis_to_inst"):
+                st.session_state["_nav_pending"] = "🏛️  Institutional"
+                st.session_state["iq2_selected"] = sym
+                st.rerun()
+        with col2:
+            if st.button(f"⚡ Trade {sym}", key="jarvis_to_terminal"):
+                st.session_state["_nav_pending"] = "⚡  Terminal"
+                st.session_state["terminal_symbol"] = sym
+                st.rerun()
+
     # ── Latest agent activity (from last run) ─────────────────────────────────
     if st.session_state.get("jarvis_last_activity"):
         _render_agent_activity(
@@ -643,6 +665,11 @@ def render_jarvis(universe: list[str]) -> None:
             if cols[i % 2].button(sug, key=f"jarvis_sug_{i}", use_container_width=True):
                 st.session_state["jarvis_pending"] = sug
                 st.rerun()
+
+    # ── Auto-submit prefill from cross-page navigation ───────────────────────
+    if _prefill and not st.session_state.get(f"_prefill_done_{hash(_prefill)}"):
+        st.session_state[f"_prefill_done_{hash(_prefill)}"] = True
+        st.session_state["jarvis_pending"] = _prefill
 
     # ── Input bar ─────────────────────────────────────────────────────────────
     col_in, col_send = st.columns([8, 1])
