@@ -551,7 +551,7 @@ def _render_setup_card(setup: dict) -> None:
     ):
         st.session_state["selected_page"] = "Institutional"
         st.session_state["iq2_selected"]  = symbol
-        st.session_state["sidebar_nav"]   = "🏛️  Institutional"
+        st.session_state["_nav_pending"]  = "🏛️  Institutional"
         st.rerun()
 
 
@@ -724,7 +724,7 @@ def render_command_center(universe: list[str]) -> None:
             "Dashboard":     "🏠  Dashboard",
         }
         if target in nav_map:
-            st.session_state["sidebar_nav"] = nav_map[target]
+            st.session_state["_nav_pending"] = nav_map[target]
             st.rerun()
 
     # Page header

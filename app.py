@@ -795,11 +795,18 @@ with st.sidebar:
     )
 
     # ── Navigation ─────────────────────────────────────────────────────────
+    _nav_options = ["🏠  Dashboard", "🏛️  Institutional", "🤖  JARVIS", "⚡  Terminal",
+                    "🔬  Research", "🧬  AlgoLab", "🛠️  Tools",
+                    "👁  My Watchlist", "💼  My Holdings", "🚀  IPO Calendar", "🔍  Stock Screener"]
+    # Consume pending navigation set by child pages (can't set widget key directly)
+    if "_nav_pending" in st.session_state:
+        st.session_state["sidebar_nav"] = st.session_state.pop("_nav_pending")
+    _nav_default = st.session_state.get("sidebar_nav", "🏠  Dashboard")
+    _nav_idx = _nav_options.index(_nav_default) if _nav_default in _nav_options else 0
     _nav_page = st.radio(
         "Navigate",
-        ["🏠  Dashboard", "🏛️  Institutional", "🤖  JARVIS", "⚡  Terminal",
-         "🔬  Research", "🧬  AlgoLab", "🛠️  Tools",
-         "👁  My Watchlist", "💼  My Holdings", "🚀  IPO Calendar", "🔍  Stock Screener"],
+        _nav_options,
+        index=_nav_idx,
         label_visibility="collapsed",
         key="sidebar_nav",
     )
