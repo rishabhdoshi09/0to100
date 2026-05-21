@@ -563,6 +563,90 @@ def _compute_regime_score(
     return round(min(max(score, 0), 100), 2)
 
 
+def _multi_tf_coherence(
+    daily_regime: str,
+    hourly_regime: str | None,
+    min15_regime: str | None,
+) -> float:
+    """
+    Confidence multiplier (0.4–1.0) based on timeframe agreement.
+    All three agreeing = 1.0. Two agreeing = 0.75. All different = 0.4.
+    If sub-timeframes unavailable, returns 0.85 (mild penalty for unknown).
+    """
+    if hourly_regime is None and min15_regime is None:
+        return 0.85  # only daily available — mild uncertainty
+
+    bull_regimes = {"TRENDING_BULL", "EXPANSION"}
+    bear_regimes = {"TRENDING_BEAR", "DISTRIBUTION"}
+    neutral_regimes = {"CHOPPY", "COMPRESSION"}
+
+    def _classify(r: str | None) -> str:
+        if r in bull_regimes:    return "bull"
+        if r in bear_regimes:    return "bear"
+        if r in neutral_regimes: return "neutral"
+        return "unknown"
+
+    classes = [_classify(daily_regime)]
+    if hourly_regime:  classes.append(_classify(hourly_regime))
+    if min15_regime:   classes.append(_classify(min15_regime))
+
+    unique = set(classes) - {"unknown"}
+    if len(unique) == 1:  return 1.0   # full agreement
+    if len(unique) == 2:  return 0.75  # partial agreement
+    return 0.40                         # conflict — significant uncertainty
+
+
+def _get_pcr_signal() -> float:
+    """
+    Put-Call Ratio from NSE options data.
+    Returns confidence boost: 0-33 points.
+    PCR < 0.7 = calls dominating = risk-on = +33
+    PCR 0.7-1.0 = neutral = +15
+    PCR > 1.0 = puts dominating = fear = +0
+    """
+    try:
+        import requests
+        resp = requests.get(
+            "https://www.nseindia.com/api/option-chain-indices?symbol=NIFTY",
+            headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json"},
+            timeout=5,
+        )
+        data = resp.json()
+        ce_oi = sum(r.get("CE", {}).get("openInterest", 0)
+                    for r in data.get("records", {}).get("data", []) if "CE" in r)
+        pe_oi = sum(r.get("PE", {}).get("openInterest", 0)
+                    for r in data.get("records", {}).get("data", []) if "PE" in r)
+        pcr = pe_oi / ce_oi if ce_oi > 0 else 1.0
+        if pcr < 0.7:  return 33.0
+        if pcr < 1.0:  return 15.0
+        return 0.0
+    except Exception:
+        return 15.0  # neutral assumption when unavailable
+
+
+def _get_fii_futures_signal() -> float:
+    """
+    FII net position in index futures (not cash — futures reveals conviction).
+    Returns confidence boost: 0-33 points.
+    Positive net long = risk-on = +33
+    """
+    try:
+        import requests
+        resp = requests.get(
+            "https://www.nseindia.com/api/fiidiiTradeReact",
+            headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json"},
+            timeout=5,
+        )
+        data = resp.json()
+        for entry in data:
+            if "future" in str(entry.get("category", "")).lower():
+                net = float(entry.get("netAmount", 0) or 0)
+                return 33.0 if net > 0 else 0.0
+    except Exception:
+        pass
+    return 15.0  # neutral when unavailable
+
+
 def _compute_regime_confidence(
     market_regime: str,
     volatility_regime: str,
@@ -570,6 +654,7 @@ def _compute_regime_confidence(
     institutional: str,
     nifty_vs_sma200: float,
     vix: float,
+    tf_coherence: float = 0.85,
 ) -> tuple[float, str]:
     """
     Confidence = how many sub-signals agree on the regime direction.
@@ -605,6 +690,9 @@ def _compute_regime_confidence(
 
     max_aligned = max(bull_signals, bear_signals)
     confidence = (max_aligned / total) * 100
+
+    # Apply multi-timeframe coherence multiplier
+    confidence = round(min(100.0, confidence * tf_coherence), 1)
 
     if confidence >= 75:
         label = "HIGH"
@@ -841,7 +929,8 @@ def compute_regime() -> RegimeState:
     regime_score = _compute_regime_score(market_regime, volatility_regime, breadth_score, institutional)
     nifty_vs_sma200 = ((nifty_price - sma200) / sma200 * 100) if sma200 and not np.isnan(sma200) else 0.0
     regime_confidence, confidence_label = _compute_regime_confidence(
-        market_regime, volatility_regime, breadth_label, institutional, nifty_vs_sma200, vix
+        market_regime, volatility_regime, breadth_label, institutional, nifty_vs_sma200, vix,
+        tf_coherence=0.85,
     )
     qm = _quality_multiplier(market_regime, volatility_regime)
     recommended, avoid = _derive_playbooks(

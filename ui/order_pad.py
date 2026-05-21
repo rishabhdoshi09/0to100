@@ -364,3 +364,22 @@ def render_backtest_bridge(symbol: str, fetcher=None, ie=None):
 
             except Exception as e:
                 st.error(f"Backtest failed: {e}")
+
+    # ── Shadow Trader Divergence Report ──────────────────────────────────────────
+    with st.expander("🔬 Shadow Trader — Live vs Paper Comparison", expanded=False):
+        try:
+            from engine.shadow_trader import get_divergence_report
+            report = get_divergence_report()
+            if report.get("status") == "insufficient_data":
+                st.caption(f"Tracking {report['closed_trades']}/{report['required']} trades needed for analysis.")
+            else:
+                if report.get("warning"):
+                    st.warning(report["warning"])
+                c1, c2, c3 = st.columns(3)
+                c1.metric("Live PnL", f"{report['total_live_pnl_pct']:+.1f}%")
+                c2.metric("Paper PnL", f"{report['total_paper_pnl_pct']:+.1f}%")
+                c3.metric("Divergence", f"{report['overall_divergence_pct']:+.1f}%",
+                          delta_color="inverse" if report['overall_divergence_pct'] > 0 else "normal")
+                st.caption(f"Based on {report['closed_trades']} closed shadow trades.")
+        except Exception as e:
+            st.caption(f"Shadow trader data unavailable: {e}")
