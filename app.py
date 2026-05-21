@@ -885,15 +885,13 @@ symbol_map  = get_all_equity_symbols()
 symbol_list = sorted(symbol_map.keys())
 
 # ── Route to active page ──────────────────────────────────────────────────────
-if "sidebar_nav" not in st.session_state:
-    st.session_state["sidebar_nav"] = "🏠  Dashboard"
 _page = st.session_state.get("sidebar_nav", "🏠  Dashboard").split("  ", 1)[-1].strip()
 
 # Handle session-state navigation from watchlist / homepage buttons
 if st.session_state.get("active_tab") == "terminal":
-    st.session_state["sidebar_nav"] = "⚡  Terminal"
+    st.session_state["_nav_pending"] = "⚡  Terminal"
     st.session_state.pop("active_tab", None)
-    _page = "Terminal"
+    st.rerun()
 
 # Handle session-state navigation from Command Center "View Details" buttons
 if st.session_state.get("selected_page"):
@@ -905,8 +903,8 @@ if st.session_state.get("selected_page"):
         "Dashboard":     "🏠  Dashboard",
     }
     if _nav_target in _nav_map:
-        st.session_state["sidebar_nav"] = _nav_map[_nav_target]
-        _page = _nav_target
+        st.session_state["_nav_pending"] = _nav_map[_nav_target]
+        st.rerun()
 
 
 # ══════════════════════════════════════════════════════════════════════════════
