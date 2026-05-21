@@ -23,7 +23,8 @@ from bs4 import BeautifulSoup
 from dotenv import load_dotenv
 
 # ── Lightweight structured logger ────────────────────────────────────────────
-_LOG_DIR = os.environ.get("DEVBLOOM_LOG_DIR", "logs")
+from config import settings as _settings
+_LOG_DIR = str(_settings.log_dir)
 os.makedirs(_LOG_DIR, exist_ok=True)
 _log_handler = logging.FileHandler(
     os.path.join(_LOG_DIR, "streamlit_app.log"), encoding="utf-8"
@@ -305,7 +306,7 @@ def get_recent_memory(symbol, limit=3):
 
 # ── DeepSeek API helper ────────────────────────────────────────────────────────
 def call_deepseek(prompt, system="You are a financial analyst."):
-    key = os.getenv("DEEPSEEK_API_KEY")
+    key = _settings.deepseek_api_key
     if not key:
         return None
     try:
@@ -597,7 +598,7 @@ def swarm_consensus(symbol, news_text):
 
 
 def generate_auto_pulse():
-    key = os.getenv("DEEPSEEK_API_KEY")
+    key = _settings.deepseek_api_key
     if not key:
         return "DeepSeek API key missing."
     indices = get_indices_data()
@@ -815,8 +816,8 @@ with st.sidebar:
 
     # ── Status strip ───────────────────────────────────────────────────────
     _ms, _mc = market_status()
-    _paper = os.getenv("SQ_PAPER_TRADING", "true").lower() == "true"
-    _ds_key_ok = bool(os.getenv("DEEPSEEK_API_KEY"))
+    _paper = getattr(_settings, "sq_paper_trading", True)
+    _ds_key_ok = bool(_settings.deepseek_api_key)
     st.markdown(
         f"<div style='background:{_mc}22;border:1px solid {_mc}55;border-radius:8px;"
         f"padding:.35rem .75rem;font-size:.78rem;font-weight:600;"

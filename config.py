@@ -114,6 +114,9 @@ class Settings(BaseSettings):
     def alert_watchlist_list(self) -> List[str]:
         return [s.strip() for s in self.alert_watchlist.split(",") if s.strip()]
 
+    # ── Paper Trading ─────────────────────────────────────────────────────────
+    sq_paper_trading: bool = Field(default=True)
+
     # ── Logging ───────────────────────────────────────────────────────────────
     log_level: str = Field(default="INFO")
     log_dir: Path = Field(default=Path("logs"))

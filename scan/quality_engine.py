@@ -193,6 +193,8 @@ class QualityEngine:
     # ── Helpers ───────────────────────────────────────────────────────────────
 
     def _fetch(self, symbol: str) -> Optional[pd.DataFrame]:
+        """Fallback fetch — only used when SetupEngine cache miss. All failures logged."""
+        _qlog = __import__("logger").get_logger(__name__)
         # 1. Try Kite Connect
         try:
             from data.kite_client import KiteClient
@@ -209,25 +211,28 @@ class QualityEngine:
                     if "close" not in df.columns and "Close" in df.columns:
                         df.columns = [c.lower() for c in df.columns]
                     return df
-        except Exception:
-            pass
+        except Exception as e:
+            _qlog.debug("quality_kite_fetch_failed", symbol=symbol, error=str(e))
         # 2. Try yfinance
         try:
             import yfinance as yf
             df = yf.Ticker(f"{symbol}.NS").history(period="100d", interval="1d")
             if df is not None and len(df) >= 20:
                 df.columns = [c.lower() for c in df.columns]
+                _qlog.debug("quality_yfinance_fallback", symbol=symbol)
                 return df
-        except Exception:
-            pass
+        except Exception as e:
+            _qlog.debug("quality_yfinance_failed", symbol=symbol, error=str(e))
         # 3. Demo data
         try:
             from core.demo_data import make_demo_ohlcv
             rows = make_demo_ohlcv(symbol, bars=100)
             if rows:
+                _qlog.debug("quality_demo_fallback", symbol=symbol)
                 return pd.DataFrame(rows)
-        except Exception:
-            pass
+        except Exception as e:
+            _qlog.debug("quality_demo_failed", symbol=symbol, error=str(e))
+        _qlog.warning("quality_all_sources_failed", symbol=symbol)
         return None
 
     def _atr(self, df: pd.DataFrame, period: int = 14) -> float:

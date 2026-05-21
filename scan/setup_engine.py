@@ -41,7 +41,11 @@ class SetupCandidate:
     fno_banned: bool = False         # True if in NSE F&O ban period (no fresh positions)
 
 
+_log = __import__("logger").get_logger(__name__)
+
+
 def _fetch(symbol: str, days: int = 260) -> Optional[pd.DataFrame]:
+    """Fetch OHLCV with Kite → yfinance → demo fallback chain. All failures logged."""
     # 1. Try Kite Connect (live data, highest quality)
     try:
         from data.kite_client import KiteClient
@@ -55,29 +59,31 @@ def _fetch(symbol: str, days: int = 260) -> Optional[pd.DataFrame]:
             from_dt = (date.today() - timedelta(days=days)).strftime("%Y-%m-%d")
             df = fetcher.fetch(symbol, from_dt, to_dt, interval="day")
             if df is not None and len(df) >= 30:
-                # HistoricalDataFetcher returns lowercase columns
                 if "close" not in df.columns and "Close" in df.columns:
                     df.columns = [c.lower() for c in df.columns]
                 return df
-    except Exception:
-        pass
+    except Exception as e:
+        _log.debug("kite_fetch_failed", symbol=symbol, error=str(e))
     # 2. Try yfinance
     try:
         import yfinance as yf
         df = yf.Ticker(f"{symbol}.NS").history(period=f"{days}d", interval="1d")
         if df is not None and len(df) >= 30:
             df.columns = [c.lower() for c in df.columns]
+            _log.debug("yfinance_fallback_used", symbol=symbol)
             return df
-    except Exception:
-        pass
+    except Exception as e:
+        _log.debug("yfinance_fetch_failed", symbol=symbol, error=str(e))
     # 3. Demo OHLCV for network-restricted environments
     try:
         from core.demo_data import make_demo_ohlcv
         rows = make_demo_ohlcv(symbol, bars=max(days, 60))
         if rows:
+            _log.debug("demo_data_fallback_used", symbol=symbol)
             return pd.DataFrame(rows)
-    except Exception:
-        pass
+    except Exception as e:
+        _log.debug("demo_data_failed", symbol=symbol, error=str(e))
+    _log.warning("all_data_sources_failed", symbol=symbol)
     return None
 
 
@@ -108,6 +114,12 @@ class SetupEngine:
 
     def __init__(self, max_workers: int = 16):
         self._max_workers = max_workers
+        self._df_cache: dict[str, pd.DataFrame] = {}
+        self._cache_lock = __import__("threading").Lock()
+
+    def get_cached_df(self, symbol: str) -> Optional[pd.DataFrame]:
+        """Return the DataFrame fetched during detect() for this symbol."""
+        return self._df_cache.get(symbol)
 
     def detect(self, symbols: list[str]) -> list[SetupCandidate]:
         from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -119,12 +131,15 @@ class SetupEngine:
                     r = fut.result()
                     if r:
                         results.append(r)
-                except Exception:
-                    pass
+                except Exception as e:
+                    _log.debug("detect_one_error", error=str(e))
         return results
 
     def _detect_one(self, symbol: str) -> Optional[SetupCandidate]:
         df = _fetch(symbol, days=260)
+        if df is not None:
+            with self._cache_lock:
+                self._df_cache[symbol] = df
         if df is None or len(df) < 50:
             return None
         close  = df["close"].values

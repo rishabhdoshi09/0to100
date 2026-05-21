@@ -91,13 +91,14 @@ class ScanPipeline:
 
         # ── 3. Setup Detection ────────────────────────────────────────────────
         from scan.setup_engine import SetupEngine
-        candidates = SetupEngine(max_workers=self._max_workers).detect(regime_filtered)
+        se = SetupEngine(max_workers=self._max_workers)
+        candidates = se.detect(regime_filtered)
         log.info("setup_detection_done", candidates=len(candidates))
 
         if not candidates:
             return []
 
-        # ── 4. Quality Scoring ────────────────────────────────────────────────
+        # ── 4. Quality Scoring — reuse DataFrames from SetupEngine (no N+1 fetch) ──
         from scan.quality_engine import QualityEngine
         qe = QualityEngine(
             leading_sectors=leading_sectors,
@@ -105,7 +106,7 @@ class ScanPipeline:
             market_regime=market_regime,
             institutional_activity=inst_activity,
         )
-        quality_scores = [qe.score(c) for c in candidates]
+        quality_scores = [qe.score(c, df=se.get_cached_df(c.symbol)) for c in candidates]
 
         # Filter by minimum score
         if self._skip_avoid:
@@ -167,9 +168,9 @@ class ScanPipeline:
             if not AlertEngine().is_configured():
                 return
             import requests
-            import os
-            token   = os.getenv("TELEGRAM_BOT_TOKEN", "")
-            chat_id = os.getenv("TELEGRAM_CHAT_ID", "")
+            from config import settings
+            token   = settings.telegram_bot_token
+            chat_id = settings.telegram_chat_id
             if not token or not chat_id:
                 return
             elite = [s for s in setups if s.quality_tier == "ELITE_A_PLUS"]

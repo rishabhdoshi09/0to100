@@ -216,6 +216,42 @@ class KiteClient:
 
     # ── Utility ───────────────────────────────────────────────────────────
 
+    def is_connected(self) -> bool:
+        """True if access token is configured. Lightweight check — no network call."""
+        from config import settings
+        return bool(settings.kite_access_token)
+
+    def batch_quotes(self, symbols: list[str]) -> dict[str, dict]:
+        """
+        Fetch full market quotes for up to 500 symbols in ONE API call.
+        Returns {symbol: {ltp, open, high, low, close, volume, ...}}.
+        Falls back to empty dict on error.
+        """
+        if not symbols:
+            return {}
+        try:
+            from config import settings
+            instruments = [f"{settings.exchange}:{s}" if ":" not in s
+                           else s for s in symbols]
+            raw = self._kite.quote(instruments)
+            result: dict[str, dict] = {}
+            for key, val in raw.items():
+                sym = key.split(":")[-1]
+                ohlc = val.get("ohlc", {})
+                result[sym] = {
+                    "ltp":    val.get("last_price", 0.0),
+                    "open":   ohlc.get("open", 0.0),
+                    "high":   ohlc.get("high", 0.0),
+                    "low":    ohlc.get("low", 0.0),
+                    "close":  ohlc.get("close", 0.0),
+                    "volume": val.get("volume", 0),
+                    "change": val.get("change", 0.0),
+                }
+            return result
+        except Exception as e:
+            log.warning("batch_quotes_failed", symbols_count=len(symbols), error=str(e))
+            return {}
+
     @property
     def raw(self) -> KiteConnect:
         """Escape hatch to the underlying KiteConnect object."""
