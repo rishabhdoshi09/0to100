@@ -421,11 +421,17 @@ def _render_hero_card(best: dict, regime: dict) -> None:
     # Action buttons
     b1, b2, b3, b4 = st.columns([2, 2, 2, 2])
     with b1:
-        if st.button("🔍 Analyse with AI", key="hero_analyse", use_container_width=True):
-            st.session_state["iq2_selected"]    = symbol
-            st.session_state["iq2_setup_data"]  = best
-            st.session_state["iq2_show_chart"]  = True
-            st.session_state["iq2_trigger_ai"]  = True
+        if st.button("🤖 Ask JARVIS →", key="hero_analyse", use_container_width=True):
+            ev_str = f"+{best['ev_r']:.1f}R" if best['ev_r'] >= 0 else f"{best['ev_r']:.1f}R"
+            st.session_state["jarvis_prefill"] = (
+                f"Institutional setup for {symbol}: {archetype} ({tier_plain}). "
+                f"Confidence {score:.0f}/100. "
+                f"Expected value {ev_str}. "
+                f"Win rate {win_rate:.0f}%. "
+                f"Entry ₹{pivot:,.0f}, Stop ₹{stop:,.0f}. "
+                f"Should I take this trade?"
+            )
+            st.session_state["_nav_pending"] = "🤖  JARVIS"
             st.rerun()
     with b2:
         if st.button("📈 View Chart", key="hero_chart", use_container_width=True):
@@ -435,9 +441,9 @@ def _render_hero_card(best: dict, regime: dict) -> None:
             st.rerun()
     with b3:
         if st.button("⚡ Trade This", key="hero_trade", use_container_width=True, type="primary"):
-            st.session_state["iq2_selected"]    = symbol
-            st.session_state["iq2_setup_data"]  = best
-            st.session_state["active_tab"]      = "Order Pad"
+            st.session_state["terminal_symbol"]  = symbol
+            st.session_state["selected_symbol"]  = symbol
+            st.session_state["_nav_pending"]     = "⚡  Terminal"
             st.rerun()
     with b4:
         if st.button("🔄 Re-scan", key="hero_rescan", use_container_width=True):
@@ -846,10 +852,31 @@ def _render_intelligence_panel(symbol: str, setup: dict | None, regime: dict) ->
             analysis = _deepseek_analyse(symbol, setup, regime)
         st.session_state[cache_key] = analysis
 
-    if st.button("🧠 Analyse with AI", key=f"iq2_btn_{symbol}", use_container_width=True):
-        with st.spinner("DeepSeek reasoning…"):
-            analysis = _deepseek_analyse(symbol, setup, regime)
-        st.session_state[cache_key] = analysis
+    col_ai, col_jarvis = st.columns(2)
+    with col_ai:
+        if st.button("🧠 Analyse with AI", key=f"iq2_btn_{symbol}", use_container_width=True):
+            with st.spinner("DeepSeek reasoning…"):
+                analysis = _deepseek_analyse(symbol, setup, regime)
+            st.session_state[cache_key] = analysis
+    with col_jarvis:
+        if st.button("🤖 Ask JARVIS →", key=f"iq2_jarvis_{symbol}", use_container_width=True):
+            if setup:
+                ev_r_val = setup.get("ev_r", 0.0)
+                wr_val   = setup.get("win_rate", 0.0) * 100
+                tier_v   = _TIER_PLAIN.get(setup.get("tier", ""), setup.get("tier", ""))
+                arch_v   = _ARCHETYPE_PLAIN.get(setup.get("archetype", ""), setup.get("archetype", ""))
+                ev_s     = f"+{ev_r_val:.1f}R" if ev_r_val >= 0 else f"{ev_r_val:.1f}R"
+                jarvis_q = (
+                    f"Institutional setup for {symbol}: {arch_v} ({tier_v}). "
+                    f"Expected value {ev_s}. "
+                    f"Win rate {wr_val:.0f}%. "
+                    f"Should I take this trade?"
+                )
+            else:
+                jarvis_q = f"Analyse {symbol} for me. Is it a good trade right now?"
+            st.session_state["jarvis_prefill"] = jarvis_q
+            st.session_state["_nav_pending"]   = "🤖  JARVIS"
+            st.rerun()
 
     analysis = st.session_state.get(cache_key)
     if analysis:

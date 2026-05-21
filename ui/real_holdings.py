@@ -6,6 +6,21 @@ from typing import Any
 
 import streamlit as st
 
+try:
+    from ui.context import go_to, nav_button
+except Exception:
+    def go_to(page, symbol=None, jarvis_query=None):
+        st.session_state["_nav_pending"] = page
+        if symbol:
+            st.session_state["selected_symbol"] = symbol
+        if jarvis_query:
+            st.session_state["jarvis_prefill"] = jarvis_query
+        st.rerun()
+
+    def nav_button(label, page, symbol=None, jarvis_query=None, key="", **kwargs):
+        if st.button(label, key=key, **kwargs):
+            go_to(page, symbol=symbol, jarvis_query=jarvis_query)
+
 # ── Sector map for common NSE symbols ─────────────────────────────────────────
 _SECTOR_MAP: dict[str, str] = {
     # Financials
@@ -250,6 +265,16 @@ def render_real_holdings() -> None:
 
     st.divider()
 
+    # ── Top portfolio review button ───────────────────────────────────────────
+    nav_button(
+        "🤖 Review my portfolio with JARVIS",
+        "🤖  JARVIS",
+        jarvis_query="Review my current portfolio holdings and give me a risk assessment",
+        key="holdings_jarvis_review",
+    )
+
+    st.markdown("<div style='height:.4rem'></div>", unsafe_allow_html=True)
+
     # ── Holding cards ─────────────────────────────────────────────────────────
     for h in holdings:
         sym        = h["tradingsymbol"]
@@ -313,6 +338,25 @@ def render_real_holdings() -> None:
             f"</div>"
         )
         st.markdown(card, unsafe_allow_html=True)
+
+        # Per-holding action buttons
+        hact1, hact2 = st.columns(2)
+        with hact1:
+            nav_button(
+                "⚡ Trade",
+                "⚡  Terminal",
+                symbol=sym,
+                key=f"holding_trade_{sym}",
+                use_container_width=True,
+            )
+        with hact2:
+            nav_button(
+                "🤖 Ask JARVIS",
+                "🤖  JARVIS",
+                jarvis_query=f"I hold {sym}. Current P&L is {pnl_pct:.1f}%. Should I hold, add, or exit?",
+                key=f"holding_jarvis_{sym}",
+                use_container_width=True,
+            )
 
     # ── Sector concentration (3+ holdings) ───────────────────────────────────
     if len(holdings) >= 3:

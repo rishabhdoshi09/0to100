@@ -8,6 +8,21 @@ from typing import Optional
 
 import streamlit as st
 
+try:
+    from ui.context import go_to, nav_button
+except Exception:
+    def go_to(page, symbol=None, jarvis_query=None):
+        st.session_state["_nav_pending"] = page
+        if symbol:
+            st.session_state["selected_symbol"] = symbol
+        if jarvis_query:
+            st.session_state["jarvis_prefill"] = jarvis_query
+        st.rerun()
+
+    def nav_button(label, page, symbol=None, jarvis_query=None, key="", **kwargs):
+        if st.button(label, key=key, **kwargs):
+            go_to(page, symbol=symbol, jarvis_query=jarvis_query)
+
 WATCHLIST_DB = Path("logs/watchlist.db")
 
 
@@ -181,6 +196,13 @@ def render_watchlist() -> None:
 
     st.markdown("<div style='height:.5rem'></div>", unsafe_allow_html=True)
 
+    # ── Top-level scan button ─────────────────────────────────────────────────
+    if st.button("🏛️ Scan my watchlist in Institutional →", key="wl_scan_institutional"):
+        st.session_state["iq2_scan_watchlist"] = True
+        go_to("🏛️  Institutional")
+
+    st.markdown("<div style='height:.5rem'></div>", unsafe_allow_html=True)
+
     # ── Watchlist cards ───────────────────────────────────────────────────────
     rows = _get_watchlist()
 
@@ -332,9 +354,25 @@ def render_watchlist() -> None:
 
             st.markdown(card_html, unsafe_allow_html=True)
 
-            # Remove button
-            _, btn_col = st.columns([8, 1])
-            with btn_col:
+            # Action buttons row
+            act1, act2, act3 = st.columns([3, 3, 2])
+            with act1:
+                nav_button(
+                    "📊 View Setup",
+                    "🏛️  Institutional",
+                    symbol=sym,
+                    key=f"wl_view_setup_{item['id']}",
+                    use_container_width=True,
+                )
+            with act2:
+                nav_button(
+                    "🤖 Ask JARVIS",
+                    "🤖  JARVIS",
+                    jarvis_query=f"Analyse {sym} for me. Is it a good trade right now?",
+                    key=f"wl_jarvis_{item['id']}",
+                    use_container_width=True,
+                )
+            with act3:
                 if st.button("Remove", key=f"wl_rm_{item['id']}", use_container_width=True):
                     to_remove.append(item["id"])
 
