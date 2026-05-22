@@ -10,18 +10,6 @@ import pandas as pd
 import streamlit as st
 
 _SECTOR_ETFS: dict[str, str] = {
-    "Banking":  "NIFTYBANK.NS",
-    "IT":       "CNXIT.NS",
-    "Auto":     "CNXAUTO.NS",
-    "Pharma":   "CNXPHARMA.NS",
-    "FMCG":     "CNXFMCG.NS",
-    "Metal":    "CNXMETAL.NS",
-    "Realty":   "CNXREALTY.NS",
-    "Energy":   "NIFTYENERGY.NS",
-}
-
-# Fallback tickers (Yahoo Finance NSE index format)
-_SECTOR_ETFS_FALLBACK: dict[str, str] = {
     "Banking":  "^NSEBANK",
     "IT":       "^CNXIT",
     "Auto":     "^CNXAUTO",
@@ -31,6 +19,9 @@ _SECTOR_ETFS_FALLBACK: dict[str, str] = {
     "Realty":   "^CNXREALTY",
     "Energy":   "^CNXENERGY",
 }
+
+# Fallback tickers (same as primary — kept for compatibility)
+_SECTOR_ETFS_FALLBACK: dict[str, str] = _SECTOR_ETFS
 
 
 @st.cache_data(ttl=3600, show_spinner=False)

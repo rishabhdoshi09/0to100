@@ -14,16 +14,16 @@ import pandas as pd
 _nifty_cache: dict = {"df": None, "ts": 0.0}
 _NIFTY_CACHE_TTL = 3600  # seconds
 
-# Sector ETF proxies (NSE tickers via yfinance .NS)
+# Sector index proxies (Yahoo Finance NSE index format)
 _SECTOR_ETF = {
-    "BANK":   "NIFTYBANK.NS",
-    "IT":     "NIFTYIT.NS",
-    "PHARMA": "NIFTYPHARMA.NS",
-    "AUTO":   "NIFTYAUTO.NS",
-    "FMCG":   "NIFTYFMCG.NS",
-    "METAL":  "NIFTYMETAL.NS",
-    "INFRA":  "NIFTYINFRA.NS",
-    "ENERGY": "NIFTYENERGY.NS",
+    "BANK":   "^NSEBANK",
+    "IT":     "^CNXIT",
+    "PHARMA": "^CNXPHARMA",
+    "AUTO":   "^CNXAUTO",
+    "FMCG":   "^CNXFMCG",
+    "METAL":  "^CNXMETAL",
+    "INFRA":  "^CNXINFRA",
+    "ENERGY": "^CNXENERGY",
 }
 
 

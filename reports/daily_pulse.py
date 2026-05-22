@@ -29,9 +29,9 @@ _INDIA_INDICES = {
     "Nifty 50":       "^NSEI",
     "Bank Nifty":     "^NSEBANK",
     "Nifty Smallcap": "^CNXSC",
-    "Nifty Metal":    "CNXMETAL.NS",
+    "Nifty Metal":    "^CNXMETAL",
     "Nifty IT":       "^CNXIT",
-    "Nifty FMCG":     "CNXFMCG.NS",
+    "Nifty FMCG":     "^CNXFMCG",
 }
 _GLOBAL_INDICES = {
     "S&P 500":     "^GSPC",
