@@ -50,16 +50,31 @@ _COMMODITIES = {
     "DXY":     "DX-Y.NYB",
 }
 
-_NIFTY50_SYMBOLS = [
-    "RELIANCE","TCS","HDFCBANK","INFY","ICICIBANK","HINDUNILVR","ITC","SBIN",
-    "BHARTIARTL","KOTAKBANK","LT","AXISBANK","ASIANPAINT","MARUTI","TITAN",
-    "BAJFINANCE","WIPRO","SUNPHARMA","ULTRACEMCO","NTPC","POWERGRID","TECHM",
-    "HCLTECH","ADANIENT","ADANIPORTS","JSWSTEEL","TATAMOTORS","TATASTEEL",
-    "COALINDIA","ONGC","BAJAJFINSV","CIPLA","DIVISLAB","DRREDDY","EICHERMOT",
-    "GRASIM","HEROMOTOCO","HINDALCO","INDUSINDBK","MM","NESTLEIND","SBILIFE",
-    "SHRIRAMFIN","TATACONSUM","APOLLOHOSP","BPCL","BRITANNIA","HDFCLIFE",
-    "BAJAJ-AUTO","UPL",
-]
+def _get_scan_universe() -> list[str]:
+    """Full NSE universe — Kite instruments cache → nse_universe → Nifty500 fallback."""
+    try:
+        from data.nse_universe import get_nse_universe
+        syms = get_nse_universe()
+        if len(syms) > 50:
+            return syms
+    except Exception:
+        pass
+    # Fallback: Nifty500 constant
+    try:
+        from data.nse_universe import NIFTY500
+        return NIFTY500
+    except Exception:
+        pass
+    return [
+        "RELIANCE","TCS","HDFCBANK","INFY","ICICIBANK","HINDUNILVR","ITC","SBIN",
+        "BHARTIARTL","KOTAKBANK","LT","AXISBANK","ASIANPAINT","MARUTI","TITAN",
+        "BAJFINANCE","WIPRO","SUNPHARMA","ULTRACEMCO","NTPC","POWERGRID","TECHM",
+        "HCLTECH","ADANIENT","ADANIPORTS","JSWSTEEL","TATAMOTORS","TATASTEEL",
+        "COALINDIA","ONGC","BAJAJFINSV","CIPLA","DIVISLAB","DRREDDY","EICHERMOT",
+        "GRASIM","HEROMOTOCO","HINDALCO","INDUSINDBK","MM","NESTLEIND","SBILIFE",
+        "SHRIRAMFIN","TATACONSUM","APOLLOHOSP","BPCL","BRITANNIA","HDFCLIFE",
+        "BAJAJ-AUTO","UPL",
+    ]
 
 
 def _fetch_index_data(ticker: str) -> dict:
@@ -76,19 +91,33 @@ def _fetch_index_data(ticker: str) -> dict:
     return {"price": 0.0, "change": 0.0, "volume": 0}
 
 
-def _fetch_nifty50_movers() -> tuple[list, list]:
-    """Returns (top5_gainers, top5_losers) as list of dicts."""
+def _fetch_nifty50_movers(universe: list[str] | None = None) -> tuple[list, list]:
+    """Returns (top5_gainers, top5_losers) across the full universe."""
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    syms = universe or _get_scan_universe()
+    # Cap at 200 for speed — pick a random spread so we get mid/small caps too
+    import random
+    sample = syms if len(syms) <= 200 else random.sample(syms, 200)
+
     results = []
-    for sym in _NIFTY50_SYMBOLS[:30]:  # limit to avoid timeout
+
+    def _fetch(sym):
         try:
             info = yf.Ticker(f"{sym}.NS").fast_info
             price = float(getattr(info, "last_price", 0) or 0)
             prev  = float(getattr(info, "previous_close", price) or price)
-            if prev:
-                chg = (price - prev) / prev * 100
-                results.append({"symbol": sym, "price": price, "change": chg})
+            if prev and price > 0:
+                return {"symbol": sym, "price": price, "change": (price - prev) / prev * 100}
         except Exception:
             pass
+        return None
+
+    with ThreadPoolExecutor(max_workers=20) as ex:
+        for res in ex.map(_fetch, sample):
+            if res:
+                results.append(res)
+
     results.sort(key=lambda x: x["change"], reverse=True)
     return results[:5], results[-5:][::-1]
 
@@ -144,15 +173,16 @@ def build_report_data() -> dict:
     global_idx  = {name: _fetch_index_data(t) for name, t in _GLOBAL_INDICES.items()}
     commodities = {name: _fetch_index_data(t) for name, t in _COMMODITIES.items()}
 
-    # ── Nifty 50 movers ───────────────────────────────────────────────────
-    gainers, losers = _fetch_nifty50_movers()
+    # ── All NSE movers (not just Nifty50) ────────────────────────────────
+    _universe = _get_scan_universe()
+    gainers, losers = _fetch_nifty50_movers(_universe)
 
-    # ── Momentum stocks (from scanner) ───────────────────────────────────
+    # ── Momentum stocks (full universe scan) ─────────────────────────────
     try:
         from screener.momentum_scanner import MomentumScanner
         scanner  = MomentumScanner(max_workers=8)
-        momentum = scanner.scan_momentum(_NIFTY50_SYMBOLS, top_n=5)
-        breakouts = scanner.scan_breakouts(_NIFTY50_SYMBOLS, top_n=5)
+        momentum = scanner.scan_momentum(_universe, top_n=5)
+        breakouts = scanner.scan_breakouts(_universe, top_n=5)
     except Exception as exc:
         log.warning("scanner_failed", error=str(exc))
         momentum, breakouts = [], []
