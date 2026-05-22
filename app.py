@@ -805,7 +805,8 @@ with st.sidebar:
     # ── Navigation ─────────────────────────────────────────────────────────
     _nav_options = ["🏠  Dashboard", "🏛️  Institutional", "🤖  JARVIS", "⚡  Terminal",
                     "🔬  Research", "🧬  AlgoLab", "🛠️  Tools",
-                    "👁  My Watchlist", "💼  My Holdings", "🚀  IPO Calendar", "🔍  Stock Screener"]
+                    "👁  My Watchlist", "💼  My Holdings", "🚀  IPO Calendar", "🔍  Stock Screener",
+                    "📊  Market Breadth", "🎯  Edge Tracker", "📋  Trade Replay", "🔔  Smart Alerts"]
     # Consume pending navigation set by child pages (can't set widget key directly)
     if "_nav_pending" in st.session_state:
         st.session_state["sidebar_nav"] = st.session_state.pop("_nav_pending")
@@ -939,6 +940,16 @@ if _page == "Dashboard":
         pass
     from ui.command_center import render_command_center
     render_command_center(universe)
+
+    # ── Portfolio Heatmap (if positions exist) ─────────────────────────────
+    _dash_positions = st.session_state.get("paper_positions", [])
+    if _dash_positions:
+        st.divider()
+        try:
+            from ui.portfolio_heatmap import render_portfolio_heatmap
+            render_portfolio_heatmap(_dash_positions)
+        except Exception as _phm_e:
+            st.error(f"Portfolio Heatmap error: {_phm_e}")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1132,7 +1143,7 @@ elif _page == "Terminal":
 # PAGE: RESEARCH
 # ══════════════════════════════════════════════════════════════════════════════
 elif _page == "Research":
-    _r0, _r1, _r2, _r3, _r4, _r5, _r6, _r7, _r8, _r9 = st.tabs([
+    _r0, _r1, _r2, _r3, _r4, _r5, _r6, _r7, _r8, _r9, _r10, _r11, _r12, _r13 = st.tabs([
         "📰 Market Brief",
         "📈 Charts",
         "📊 Fundamentals",
@@ -1143,6 +1154,10 @@ elif _page == "Research":
         "🎯 VCP Scanner",
         "📋 Playbooks",
         "🔍 Bulk Patterns",
+        "📡 SitRep",
+        "🌅 Session Debrief",
+        "🎯 Conviction Tracker",
+        "📰 Patterns & News",
     ])
 
     # ── Market Brief ──────────────────────────────────────────────────────
@@ -1604,6 +1619,42 @@ elif _page == "Research":
         from ui.bulk_pattern import render_bulk_pattern
         render_bulk_pattern(universe)
 
+    # ── SitRep ─────────────────────────────────────────────────────────────
+    with _r10:
+        try:
+            from ui.sitrep import render_sitrep
+            render_sitrep()
+        except Exception as _sr_e:
+            st.error(f"SitRep error: {_sr_e}")
+
+    # ── Session Debrief ────────────────────────────────────────────────────
+    with _r11:
+        try:
+            from ui.session_debrief import render_session_debrief
+            render_session_debrief()
+        except Exception as _sd_e:
+            st.error(f"Session Debrief error: {_sd_e}")
+
+    # ── Conviction Tracker ─────────────────────────────────────────────────
+    with _r12:
+        try:
+            from ui.conviction_tracker import render_conviction_tracker
+            render_conviction_tracker()
+        except Exception as _ct_e:
+            st.error(f"Conviction Tracker error: {_ct_e}")
+
+    # ── Patterns & News Panel ──────────────────────────────────────────────
+    with _r13:
+        _pnp_sym = st.selectbox(
+            "Symbol", symbol_list, key="pnp_sym_r",
+            format_func=lambda x: f"{x} – {symbol_map.get(x, x)}",
+        )
+        try:
+            from ui.patterns_news_panel import render_patterns_news_panel
+            render_patterns_news_panel(_pnp_sym)
+        except Exception as _pnp_e:
+            st.error(f"Patterns & News error: {_pnp_e}")
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 # PAGE: ALGOLAB
@@ -1655,7 +1706,7 @@ elif _page == "AlgoLab":
 # PAGE: TOOLS
 # ══════════════════════════════════════════════════════════════════════════════
 elif _page == "Tools":
-    _t0, _t1, _t2, _t3, _t4, _t5, _t6, _t7, _t8, _t9 = st.tabs([
+    _t0, _t1, _t2, _t3, _t4, _t5, _t6, _t7, _t8, _t9, _t10, _t11, _t12, _t13 = st.tabs([
         "📄 Daily Report",
         "📰 News",
         "🔔 Alerts",
@@ -1666,6 +1717,10 @@ elif _page == "Tools":
         "🧠 Memory",
         "🎙️ Earnings",
         "📊 Signal Tracker",
+        "🗺️ Portfolio Heatmap",
+        "📓 Journal Analytics",
+        "💬 NL Query",
+        "⚡ Bulk Simulator",
     ])
 
     # ── Daily Street Pulse Report ──────────────────────────────────────────
@@ -2188,6 +2243,39 @@ elif _page == "Tools":
         from ui.signal_tracker_page import render_signal_tracker
         render_signal_tracker()
 
+    # ── Portfolio Heatmap ──────────────────────────────────────────────────
+    with _t10:
+        try:
+            from ui.portfolio_heatmap import render_portfolio_heatmap
+            _tool_positions = st.session_state.get("paper_positions", [])
+            render_portfolio_heatmap(_tool_positions)
+        except Exception as _tphm_e:
+            st.error(f"Portfolio Heatmap error: {_tphm_e}")
+
+    # ── Journal Analytics ──────────────────────────────────────────────────
+    with _t11:
+        try:
+            from ui.journal_analytics import render_journal_analytics
+            render_journal_analytics()
+        except Exception as _ja_e:
+            st.error(f"Journal Analytics error: {_ja_e}")
+
+    # ── NL Query ───────────────────────────────────────────────────────────
+    with _t12:
+        try:
+            from ui.nl_query import render_nl_query
+            render_nl_query(universe)
+        except Exception as _nlq_e:
+            st.error(f"NL Query error: {_nlq_e}")
+
+    # ── Bulk Simulator ─────────────────────────────────────────────────────
+    with _t13:
+        try:
+            from ui.bulk_simulator import render_bulk_simulator
+            render_bulk_simulator(universe)
+        except Exception as _bs_e:
+            st.error(f"Bulk Simulator error: {_bs_e}")
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 # RETAIL INVESTOR PAGES
@@ -2229,6 +2317,50 @@ elif _page == "Stock Screener":
         render_fundamental_screener(universe)
     except Exception as e:
         st.error(f"Screener error: {e}")
+
+elif _page == "Market Breadth":
+    st.markdown("## 📊 Market Breadth")
+    st.caption("NSE breadth indicators — A/D line, highs/lows, McClellan oscillator.")
+    try:
+        from ui.market_breadth import render_market_breadth
+        render_market_breadth()
+    except Exception as e:
+        st.error(f"Market Breadth error: {e}")
+
+elif _page == "Edge Tracker":
+    st.markdown("## 🎯 Edge Tracker")
+    st.caption("Is your trading edge intact? Alpha decay, Kelly sizing, execution quality.")
+    try:
+        _et0, _et1, _et2 = st.tabs(["Alpha Decay", "Kelly Sizer", "Execution Quality"])
+        with _et0:
+            from ui.alpha_decay import render_alpha_decay
+            render_alpha_decay()
+        with _et1:
+            from ui.kelly_sizer import render_kelly_sizer
+            render_kelly_sizer()
+        with _et2:
+            from ui.execution_quality import render_execution_quality
+            render_execution_quality()
+    except Exception as e:
+        st.error(f"Edge Tracker error: {e}")
+
+elif _page == "Trade Replay":
+    st.markdown("## 📋 Trade Replay")
+    st.caption("Replay past trades frame by frame. Learn from every entry and exit.")
+    try:
+        from ui.trade_replay import render_trade_replay
+        render_trade_replay()
+    except Exception as e:
+        st.error(f"Trade Replay error: {e}")
+
+elif _page == "Smart Alerts":
+    st.markdown("## 🔔 Smart Alerts")
+    st.caption("Multi-condition alerts — price, RSI, volume, SMA. All in one rule.")
+    try:
+        from ui.smart_alerts import render_smart_alerts
+        render_smart_alerts()
+    except Exception as e:
+        st.error(f"Smart Alerts error: {e}")
 
 # ── Paper trading dashboard (accessible from any tab via sidebar session) ────
 # Initialise DB on every load so paper_trading tables exist
