@@ -1,5 +1,5 @@
 """
-Market Breadth Dashboard — NSE / Nifty50
+Market Breadth Dashboard — NSE universe (Nifty50 / Nifty500 / Full NSE)
 Shows A/D line, 52-week highs/lows, above/below 200 SMA, McClellan Oscillator,
 breadth divergence warning, and a composite Breadth Score.
 """
@@ -7,23 +7,23 @@ from __future__ import annotations
 
 import datetime
 import warnings
-from typing import Tuple
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import List, Tuple
 
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
+from data.nse_universe import get_nse_universe, NIFTY50, NIFTY500
+
 warnings.filterwarnings("ignore")
 
-# ── Constants ─────────────────────────────────────────────────────────────────
+# ── Helpers ────────────────────────────────────────────────────────────────────
 
-NIFTY50_SYMBOLS = [
-    "RELIANCE.NS", "TCS.NS", "HDFCBANK.NS", "INFY.NS", "ICICIBANK.NS",
-    "HINDUNILVR.NS", "KOTAKBANK.NS", "LT.NS", "SBIN.NS", "BHARTIARTL.NS",
-    "AXISBANK.NS", "ASIANPAINT.NS", "MARUTI.NS", "NESTLEIND.NS", "ULTRACEMCO.NS",
-    "BAJFINANCE.NS", "WIPRO.NS", "HCLTECH.NS", "TECHM.NS", "SUNPHARMA.NS",
-]
+def _symbols_with_ns(symbols: List[str]) -> List[str]:
+    """Append .NS suffix for yfinance."""
+    return [s + ".NS" for s in symbols]
 
 _LAYOUT = dict(
     paper_bgcolor="rgba(0,0,0,0)",
@@ -44,35 +44,103 @@ WHITE = "#e8eaf0"
 
 # ── Data fetching ─────────────────────────────────────────────────────────────
 
+def _download_chunk(ns_symbols: List[str], start: str, end: str) -> pd.DataFrame:
+    """Download a chunk of symbols via yfinance and return Close prices."""
+    import yfinance as yf
+    raw = yf.download(
+        ns_symbols,
+        start=start,
+        end=end,
+        auto_adjust=True,
+        progress=False,
+        group_by="ticker",
+    )
+    if raw.empty:
+        return pd.DataFrame()
+    # Normalise to a flat Close DataFrame
+    if isinstance(raw.columns, pd.MultiIndex):
+        # MultiIndex: (field, ticker)
+        if "Close" in raw.columns.get_level_values(0):
+            close = raw["Close"]
+        elif "close" in raw.columns.get_level_values(0):
+            close = raw["close"]
+        else:
+            close = raw.xs("Close", axis=1, level=0, drop_level=True) if "Close" in raw.columns.get_level_values(0) else pd.DataFrame()
+    else:
+        close = raw[["Close"]] if "Close" in raw.columns else raw
+    return close
+
+
 @st.cache_data(ttl=900, show_spinner=False)
-def _fetch_breadth_data() -> Tuple[pd.DataFrame, pd.DataFrame]:
+def _fetch_breadth_data(universe_size: str = "Nifty500 (Recommended)") -> Tuple[pd.DataFrame, pd.DataFrame]:
     """
     Returns (daily_close_df, today_stats_df).
     daily_close_df  — 252 trading days of adjusted close prices, columns = symbols
     today_stats_df  — per-symbol row: last, prev_close, high52, low52, sma200
     Falls back to synthetic data if yfinance is unavailable or rate-limited.
-    """
-    try:
-        import yfinance as yf  # lazy import
-        end   = datetime.datetime.today()
-        start = end - datetime.timedelta(days=400)  # enough for 252 td + 200 SMA warmup
-        raw   = yf.download(
-            NIFTY50_SYMBOLS,
-            start=start.strftime("%Y-%m-%d"),
-            end=end.strftime("%Y-%m-%d"),
-            auto_adjust=True,
-            progress=False,
-        )
-        if raw.empty:
-            raise ValueError("Empty download")
 
-        close = raw["Close"] if "Close" in raw.columns else raw.xs("Close", axis=1, level=0)
+    Parameters
+    ----------
+    universe_size : str
+        One of "Nifty50", "Nifty500 (Recommended)", "Full NSE (Slow)".
+    """
+    # Determine symbol list
+    if universe_size == "Nifty50":
+        plain_syms = list(dict.fromkeys(NIFTY50))
+    elif universe_size == "Full NSE (Slow)":
+        plain_syms = get_nse_universe()
+    else:  # Nifty500 (Recommended) — default
+        plain_syms = list(dict.fromkeys(NIFTY500))
+
+    ns_symbols = _symbols_with_ns(plain_syms)
+
+    try:
+        import yfinance as yf
+        end_dt   = datetime.datetime.today()
+        start_dt = end_dt - datetime.timedelta(days=400)
+        start_s  = start_dt.strftime("%Y-%m-%d")
+        end_s    = end_dt.strftime("%Y-%m-%d")
+
+        # For large universes, batch in chunks of 50 with parallel workers
+        if len(ns_symbols) > 50:
+            chunk_size = 50
+            chunks = [ns_symbols[i:i + chunk_size] for i in range(0, len(ns_symbols), chunk_size)]
+            close_parts: List[pd.DataFrame] = []
+            with ThreadPoolExecutor(max_workers=5) as executor:
+                futures = {executor.submit(_download_chunk, chunk, start_s, end_s): chunk
+                           for chunk in chunks}
+                for fut in as_completed(futures):
+                    try:
+                        part = fut.result()
+                        if part is not None and not part.empty:
+                            close_parts.append(part)
+                    except Exception:
+                        pass
+            if not close_parts:
+                raise ValueError("All chunks returned empty data")
+            close = pd.concat(close_parts, axis=1)
+        else:
+            raw = yf.download(
+                ns_symbols,
+                start=start_s,
+                end=end_s,
+                auto_adjust=True,
+                progress=False,
+            )
+            if raw.empty:
+                raise ValueError("Empty download")
+            if isinstance(raw.columns, pd.MultiIndex):
+                close = raw["Close"] if "Close" in raw.columns.get_level_values(0) else raw.xs("Close", axis=1, level=0)
+            else:
+                close = raw[["Close"]] if "Close" in raw.columns else raw
+
         close = close.dropna(how="all").ffill().tail(252)
+        # Remove duplicate columns
+        close = close.loc[:, ~close.columns.duplicated()]
 
         # Try live quotes from Kite for today's actual price
         try:
             from data.market_data import get_provider
-            plain_syms = [s.replace(".NS", "") for s in NIFTY50_SYMBOLS]
             live_quotes = get_provider().quotes(plain_syms)
         except Exception:
             live_quotes = {}
@@ -82,7 +150,7 @@ def _fetch_breadth_data() -> Tuple[pd.DataFrame, pd.DataFrame]:
             s = close[sym].dropna()
             if len(s) < 2:
                 continue
-            plain = sym.replace(".NS", "")
+            plain = sym.replace(".NS", "") if isinstance(sym, str) else sym
             lq    = live_quotes.get(plain, {})
             # Prefer live price from Kite, fallback to last historical close
             last  = lq.get("price") or float(s.iloc[-1])
@@ -105,7 +173,7 @@ def _fetch_breadth_data() -> Tuple[pd.DataFrame, pd.DataFrame]:
         # ── Synthetic fallback ──────────────────────────────────────────────
         rng  = np.random.default_rng(42)
         days = 252
-        syms = NIFTY50_SYMBOLS
+        syms = ns_symbols[:50]  # cap synthetic data to 50 symbols for performance
         prices = {}
         for sym in syms:
             drift  = rng.uniform(-0.0002, 0.0005)
@@ -338,11 +406,18 @@ def _mclellan_chart(breadth_df: pd.DataFrame) -> go.Figure:
 
 def render_market_breadth() -> None:
     st.markdown("## 📊 Market Breadth Dashboard")
-    st.caption("NSE Nifty50 universe · data cached 15 min")
+
+    universe_size = st.selectbox(
+        "Universe",
+        ["Nifty500 (Recommended)", "Nifty50", "Full NSE (Slow)"],
+        index=0,
+        key="breadth_universe_select",
+    )
+    st.caption(f"Universe: {universe_size} · data cached 15 min")
 
     with st.spinner("Fetching breadth data…"):
         try:
-            close, stats = _fetch_breadth_data()
+            close, stats = _fetch_breadth_data(universe_size)
             nifty        = _fetch_nifty_index()
         except Exception as exc:
             st.error(f"Data fetch failed: {exc}")

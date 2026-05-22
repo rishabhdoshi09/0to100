@@ -8,6 +8,8 @@ from typing import NamedTuple
 
 import streamlit as st
 
+from data.nse_universe import NIFTY50
+
 try:
     import feedparser  # type: ignore
     HAS_FEEDPARSER = True
@@ -82,7 +84,7 @@ def push_alert(category: str, symbol: str, message: str, score: float = 50.0):
 
 
 def render_alert_inbox(watchlist: list[str] | None = None):
-    wl = tuple(watchlist or ["RELIANCE", "TCS", "HDFCBANK", "ICICIBANK", "INFY"])
+    wl = tuple(watchlist or NIFTY50)
 
     news_alerts = _fetch_news_alerts(wl)
     tech_alerts = _session_alerts()

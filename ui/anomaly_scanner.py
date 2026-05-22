@@ -9,13 +9,11 @@ import pandas as pd
 import streamlit as st
 import yfinance as yf
 
-UNIVERSE_FALLBACK = [
-    "RELIANCE", "TCS", "HDFCBANK", "INFY", "ICICIBANK", "WIPRO", "AXISBANK",
-    "SBIN", "LT", "BAJFINANCE", "TATAMOTORS", "MARUTI", "HCLTECH", "BHARTIARTL",
-    "ASIANPAINT", "NESTLEIND", "HINDUNILVR", "ULTRACEMCO", "ITC", "ONGC",
-    "COALINDIA", "NTPC", "POWERGRID", "BPCL", "ADANIPORTS", "DRREDDY",
-    "SUNPHARMA", "GRASIM", "JSWSTEEL", "TATASTEEL",
-]
+from data.nse_universe import get_nse_universe, NIFTY500
+
+# Default scanning universe: NIFTY500 (broad coverage without being too slow).
+# Expand to get_nse_universe() for the full NSE listing.
+UNIVERSE_FALLBACK = NIFTY500
 
 
 def _compute_zscore_row(symbol: str) -> dict | None:
