@@ -1869,7 +1869,10 @@ elif _page == "Tools":
 
                     # Preview in app
                     with st.expander("👁 Preview Report", expanded=True):
-                        st.components.v1.html(render_html(_rdata), height=900, scrolling=True)
+                        try:
+                            st.iframe(render_html(_rdata), height=900, scrolling=True)
+                        except Exception:
+                            st.components.v1.html(render_html(_rdata), height=900, scrolling=True)
 
                 except Exception as _re:
                     st.error(f"Report generation failed: {_re}")

@@ -191,17 +191,20 @@ def _fetch_ohlcv(ticker: str, period: str = "1y") -> Optional[pd.DataFrame]:
     df = _fetch_ohlcv_kite(ticker, days=days)
     if df is not None:
         return df
-    # Fall back to yfinance
+    # Fall back to yfinance — suppress noisy warnings for known-missing sector indices
     try:
-        df = yf.download(ticker, period=period, progress=False, auto_adjust=True)
+        import warnings
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            df = yf.download(ticker, period=period, progress=False, auto_adjust=True)
         if df is None or df.empty:
-            logger.warning("No data for %s", ticker)
+            logger.debug("No yfinance data for %s (Kite may not be connected)", ticker)
             return None
         df.index = pd.to_datetime(df.index)
         df.sort_index(inplace=True)
         return df
     except Exception as exc:
-        logger.warning("Failed to fetch %s: %s", ticker, exc)
+        logger.debug("yfinance fetch skipped for %s: %s", ticker, exc)
         return None
 
 
