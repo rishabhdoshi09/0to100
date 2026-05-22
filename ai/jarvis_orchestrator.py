@@ -105,13 +105,19 @@ Personality: terse, confident, institutional. Like a senior prop trader who's se
 
 CRITICAL RULE — PUSHBACK PROTOCOL:
 If the user asks about entering a trade, buying, or selling a specific stock:
-1. Check the ACTIVE TRADING RULES in context — if allow_new_trades=False, REFUSE and explain.
-2. Check the user's PERSONAL EDGE data. If their win rate in the current regime is below 40%,
-   or expectancy is negative, you MUST lead with a direct warning using their actual numbers.
-   Format: "Your edge here is negative: [X]% win rate in [REGIME] regime on [PLAYBOOK] = [Y]R expectancy.
-   Historical outcome: lose money. Here's why this is different from what you might be thinking..."
+1. Check the ACTIVE TRADING RULES in context — if allow_new_trades=False, REFUSE and explain once clearly.
+2. Check the user's PERSONAL EDGE data. If win rate in the current regime is below 40%,
+   or expectancy is negative, lead with a direct warning using their actual numbers.
 3. You NEVER approve a bad trade just because the user is excited about it.
 4. If conditions are good and the trade idea is sound, confirm with specific entry/stop/target.
+
+IMPORTANT — REPEAT QUESTION HANDLING:
+- Only treat a question as "repeated" if the EXACT same question appears in the CURRENT conversation
+  multiple times in a row immediately before the current message.
+- Do NOT count questions from earlier topics in the conversation as repeats of a new question.
+- Each new distinct question gets a fresh, complete answer — never say "I've answered this before"
+  for a genuinely new question.
+- Never escalate tone or lecture the user based on history from a DIFFERENT topic.
 
 MEMORY CONTEXT:
 If previous session data is included, reference it naturally: "Last time you were watching HDFCBANK —
@@ -119,6 +125,49 @@ it's now at ₹X" or "You mentioned your capital is ₹Y — sizing at 2R risk =
 
 Start your first response in a session with a 2-sentence market brief, then reference what you
 remember from last time if relevant."""
+
+
+# ── History trimmer ───────────────────────────────────────────────────────────
+
+def _trim_history(history: list[dict], current_query: str, window: int = 6) -> list[dict]:
+    """
+    Return the most relevant recent history for the current query.
+
+    Strategy: take the last `window` messages, but if the conversation
+    recently switched topics (detected by a gap in subject keywords),
+    only include messages from after the last topic switch.
+    This prevents "I'll buy WIPRO?" spam history from poisoning a fresh question.
+    """
+    if not history:
+        return []
+
+    recent = history[-window * 2:]  # look at a wider window to find topic boundary
+
+    # Find the last "topic boundary" — a user message that is clearly different
+    # from the current query (no keyword overlap)
+    current_words = set(current_query.lower().split())
+    boundary_idx = 0
+
+    for i, msg in enumerate(recent):
+        if msg["role"] != "user":
+            continue
+        msg_words = set(msg["content"].lower().split())
+        overlap = current_words & msg_words
+        # If overlap is very low and this is a user message that was repeated
+        # many times, treat it as a topic boundary
+        if len(overlap) <= 1 and len(msg_words) > 2:
+            # Count consecutive occurrences of this message
+            count = sum(
+                1 for m in recent
+                if m["role"] == "user" and m["content"].strip().lower() == msg["content"].strip().lower()
+            )
+            if count >= 2:
+                # This is a repeated different-topic message — mark boundary after it
+                boundary_idx = i + 1
+
+    # Return messages from boundary onwards, capped at window
+    trimmed = recent[boundary_idx:]
+    return trimmed[-window:]
 
 
 # ── Orchestrator ──────────────────────────────────────────────────────────────
@@ -203,7 +252,10 @@ class JarvisOrchestrator:
         if not plan["needs_agents"]:
             # Direct chat — no agents needed
             messages = [{"role": "system", "content": _SYSTEM_PROMPT + "\n\n" + full_context}]
-            for m in (history or [])[-10:]:
+            # Send last 6 messages but only if they are topically related to the current query.
+            # This prevents history from a different topic polluting the current answer.
+            trimmed_history = _trim_history(history or [], query, window=6)
+            for m in trimmed_history:
                 messages.append({"role": m["role"], "content": m["content"]})
             messages.append({"role": "user", "content": query})
             answer = _llm(messages, temperature=0.2, max_tokens=700)
