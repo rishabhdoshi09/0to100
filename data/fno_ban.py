@@ -23,7 +23,13 @@ logger = logging.getLogger(__name__)
 _CACHE: dict = {"symbols": set(), "date": None, "fetched_at": 0.0}
 _TTL = 4 * 60 * 60   # refresh every 4 hours (ban list changes once daily at market open)
 
-_NSE_CSV_URL = "https://archives.nseindia.com/web/sites/default/files/content/fo_secban.csv"
+# NSE has moved URLs multiple times — try all known locations in order
+_NSE_CSV_URLS = [
+    "https://nsearchives.nseindia.com/content/fo/fo_secban.csv",
+    "https://www.nseindia.com/archives/fo/fo_secban.csv",
+    "https://archives.nseindia.com/content/fo/fo_secban.csv",
+    "https://archives.nseindia.com/web/sites/default/files/content/fo_secban.csv",  # old, may 404
+]
 _NSE_API_URL  = "https://www.nseindia.com/api/equity-stockIndices?index=SECURITIES%20IN%20F%26O%20BAN%20PERIOD"
 _NSE_HOME     = "https://www.nseindia.com/"
 
@@ -35,14 +41,21 @@ _HEADERS = {
 
 
 def _fetch_via_csv() -> set[str]:
-    resp = requests.get(_NSE_CSV_URL, headers=_HEADERS, timeout=10)
-    resp.raise_for_status()
-    symbols: set[str] = set()
-    for line in resp.text.splitlines():
-        s = line.strip().strip('"').upper()
-        if s and not s.startswith("SYMBOL") and len(s) <= 20:
-            symbols.add(s)
-    return symbols
+    last_exc: Exception | None = None
+    for url in _NSE_CSV_URLS:
+        try:
+            resp = requests.get(url, headers=_HEADERS, timeout=10)
+            resp.raise_for_status()
+            symbols: set[str] = set()
+            for line in resp.text.splitlines():
+                s = line.strip().strip('"').upper()
+                if s and not s.startswith("SYMBOL") and len(s) <= 20:
+                    symbols.add(s)
+            return symbols
+        except Exception as exc:
+            last_exc = exc
+            continue
+    raise last_exc or RuntimeError("All CSV URLs failed")
 
 
 def _fetch_via_api() -> set[str]:
@@ -79,7 +92,7 @@ def get_fno_ban_list() -> set[str]:
                 logger.info("F&O ban list loaded via %s: %d symbols", name, len(symbols))
                 break
         except Exception as exc:
-            logger.warning("F&O ban fetch failed (%s): %s", name, exc)
+            logger.debug("F&O ban fetch failed (%s): %s", name, exc)
 
     _CACHE["symbols"] = symbols
     _CACHE["date"] = today
