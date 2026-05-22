@@ -144,6 +144,7 @@ kite, im, fetcher, ie, vp = init_clients()
 @st.cache_data(ttl=3600)
 def get_all_equity_symbols():
     out = {}
+    # Try InstrumentManager first
     for sym, meta in im._meta_map.items():
         ex  = meta.get("exchange", "")
         seg = meta.get("segment", "")
@@ -151,11 +152,16 @@ def get_all_equity_symbols():
         if ex in ("NSE", "BSE") and seg == ex and it == "EQ":
             if not sym[0].isdigit() and "-" not in sym and len(sym) <= 10:
                 out[sym] = meta.get("companyName", sym)
-    return out or {
-        "RELIANCE": "Reliance Industries",
-        "TCS": "Tata Consultancy",
-        "HDFCBANK": "HDFC Bank",
-    }
+    if len(out) < 100:
+        # Fallback to nse_universe module
+        try:
+            from data.nse_universe import get_nse_universe_with_names
+            out.update(get_nse_universe_with_names())
+        except Exception:
+            pass
+    if not out:
+        return {"RELIANCE": "Reliance Industries", "TCS": "Tata Consultancy", "HDFCBANK": "HDFC Bank"}
+    return out
 
 
 @st.cache_data(ttl=300)
@@ -903,6 +909,25 @@ with st.sidebar:
             universe = settings.symbol_list
         _paper_toggle = st.toggle("📄 Paper Trading", value=_paper, key="paper_trading_toggle")
 
+    with st.expander("🔍 Add any NSE stock", expanded=False):
+        try:
+            from data.nse_universe import get_nse_universe_with_names
+            _all_nse = get_nse_universe_with_names()
+            _search_opts = [f"{sym} — {name}" for sym, name in sorted(_all_nse.items())]
+            _picked = st.multiselect(
+                "Search and add stocks",
+                options=_search_opts,
+                placeholder="Type to search any NSE stock...",
+                key="extra_stocks_picker",
+                label_visibility="collapsed",
+            )
+            for _p in _picked:
+                _sym = _p.split(" — ")[0].strip()
+                if _sym not in universe:
+                    universe.append(_sym)
+        except Exception:
+            st.caption("Full NSE list unavailable — add symbols manually above.")
+
     if st.button("🔄 Refresh Data", width='stretch'):
         st.cache_data.clear()
         st.rerun()
@@ -930,7 +955,17 @@ with st.sidebar:
 
 # ── Shared symbol data (built once) ──────────────────────────────────────────
 symbol_map  = get_all_equity_symbols()
-symbol_list = sorted(symbol_map.keys())
+
+# Full NSE symbol list for search boxes (selectboxes that need all stocks)
+try:
+    from data.nse_universe import get_nse_universe
+    _full_nse_list = get_nse_universe()
+    # Merge: universe stocks first (user's picks at top), then rest of NSE
+    _sidebar_universe = st.session_state.get("universe_input", "")
+    _active_universe = [s.strip().upper() for s in _sidebar_universe.split("\n") if s.strip()] if _sidebar_universe else settings.symbol_list
+    symbol_list = _active_universe + [s for s in _full_nse_list if s not in _active_universe]
+except Exception:
+    symbol_list = sorted(symbol_map.keys())
 
 # ── Route to active page ──────────────────────────────────────────────────────
 _page = st.session_state.get("sidebar_nav", "🏠  Dashboard").split("  ", 1)[-1].strip()
