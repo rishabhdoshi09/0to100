@@ -69,13 +69,24 @@ def _fetch_breadth_data() -> Tuple[pd.DataFrame, pd.DataFrame]:
         close = raw["Close"] if "Close" in raw.columns else raw.xs("Close", axis=1, level=0)
         close = close.dropna(how="all").ffill().tail(252)
 
+        # Try live quotes from Kite for today's actual price
+        try:
+            from data.market_data import get_provider
+            plain_syms = [s.replace(".NS", "") for s in NIFTY50_SYMBOLS]
+            live_quotes = get_provider().quotes(plain_syms)
+        except Exception:
+            live_quotes = {}
+
         stats_rows = []
         for sym in close.columns:
             s = close[sym].dropna()
             if len(s) < 2:
                 continue
-            last       = float(s.iloc[-1])
-            prev       = float(s.iloc[-2])
+            plain = sym.replace(".NS", "")
+            lq    = live_quotes.get(plain, {})
+            # Prefer live price from Kite, fallback to last historical close
+            last  = lq.get("price") or float(s.iloc[-1])
+            prev  = lq.get("prev_close") or float(s.iloc[-2])
             high52     = float(s.tail(252).max())
             low52      = float(s.tail(252).min())
             sma200_val = float(s.tail(200).mean()) if len(s) >= 200 else float(s.mean())

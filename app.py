@@ -188,30 +188,62 @@ def fetch_historical(symbol, days=250):
     return df
 
 
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=60)  # 1-min cache for live index prices
 def get_indices_data():
-    names = {
-        "Nifty 50": "NIFTY 50",
-        "Bank Nifty": "NIFTY BANK",
-        "Nifty IT": "NIFTY IT",
-        "Nifty Pharma": "NIFTY PHARMA",
-        "Nifty FMCG": "NIFTY FMCG",
+    # Kite index symbols → display names
+    kite_map = {
+        "Nifty 50":    "^NSEI",
+        "Bank Nifty":  "^NSEBANK",
+        "Nifty IT":    "^CNXIT",
+        "Nifty Pharma": "^CNXPHARMA",
+        "Nifty FMCG":  "^CNXFMCG",
+    }
+    # yfinance fallback symbols
+    yf_map = {
+        "Nifty 50":    "^NSEI",
+        "Bank Nifty":  "^NSEBANK",
+        "Nifty IT":    "^CNXIT",
+        "Nifty Pharma": "^CNXPHARMA",
+        "Nifty FMCG":  "^CNXFMCG",
     }
     out = {}
-    for name, sym in names.items():
+    try:
+        from data.market_data import get_provider
+        provider = get_provider()
+        if provider.source == "kite":
+            quotes = provider.quotes(list(kite_map.values()))
+            for name, kite_sym in kite_map.items():
+                q = quotes.get(kite_sym, {})
+                price = q.get("price", 0.0)
+                prev  = q.get("prev_close", 0.0)
+                if price > 0:
+                    out[name] = {"price": price, "change": q.get("chg_pct", 0.0)}
+    except Exception:
+        pass
+
+    # Fill missing via yfinance fast_info
+    for name, t in yf_map.items():
+        if name in out:
+            continue
         try:
-            df = fetch_historical(sym, days=5)
+            tk = yf.Ticker(t)
+            fi = getattr(tk, "fast_info", None)
+            price = float(fi.last_price) if fi and getattr(fi, "last_price", None) else 0.0
+            prev  = float(fi.previous_close) if fi and getattr(fi, "previous_close", None) else 0.0
+            if price > 0:
+                out[name] = {"price": price, "change": (price - prev) / prev * 100 if prev else 0.0}
+                continue
+            # Last resort: historical
+            df = fetch_historical(t, days=5)
             if df is not None and len(df) >= 2:
-                last, prev = df["close"].iloc[-1], df["close"].iloc[-2]
-                out[name] = {"price": last, "change": (last - prev) / prev * 100}
-            elif df is not None and len(df) == 1:
-                out[name] = {"price": df["close"].iloc[-1], "change": 0.0}
+                last, prev2 = df["close"].iloc[-1], df["close"].iloc[-2]
+                out[name] = {"price": last, "change": (last - prev2) / prev2 * 100}
         except Exception:
             continue
     return out
 
 
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=300)
 def get_global_indices():
     tickers = {
         "S&P 500": "^GSPC", "Dow Jones": "^DJI", "Nasdaq": "^IXIC",
@@ -221,11 +253,18 @@ def get_global_indices():
     out = {}
     for name, t in tickers.items():
         try:
-            h = yf.Ticker(t).history(period="2d")
+            tk = yf.Ticker(t)
+            fi = getattr(tk, "fast_info", None)
+            price = float(fi.last_price) if fi and getattr(fi, "last_price", None) else 0.0
+            prev  = float(fi.previous_close) if fi and getattr(fi, "previous_close", None) else 0.0
+            if price > 0:
+                out[name] = {"price": price, "change": (price - prev) / prev * 100 if prev else 0.0}
+                continue
+            h = tk.history(period="2d")
             if len(h) >= 2:
                 _hc = h["Close"] if "Close" in h.columns else h[h.columns[3]]
-                last, prev = float(_hc.iloc[-1]), float(_hc.iloc[-2])
-                out[name] = {"price": last, "change": (last - prev) / prev * 100}
+                last, prev2 = float(_hc.iloc[-1]), float(_hc.iloc[-2])
+                out[name] = {"price": last, "change": (last - prev2) / prev2 * 100}
         except Exception:
             continue
     return out

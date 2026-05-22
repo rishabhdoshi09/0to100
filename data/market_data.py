@@ -5,11 +5,11 @@ All UI modules that need live prices, % change, volume, or OHLC should
 import from here instead of calling yfinance directly.
 
 Priority:
-  1. Zerodha Kite — real NSE tick data, no MultiIndex weirdness, accurate
+  1. Zerodha Kite — real NSE tick data, no delay, accurate
   2. yfinance     — fallback when KITE_ACCESS_TOKEN is not set
 
 Usage:
-    from data.market_data import get_provider
+    from data.market_data import get_provider, get_historical_data
     mdp = get_provider()
 
     # Single quote
@@ -114,8 +114,8 @@ def get_historical_data(
 ) -> pd.DataFrame:
     """
     Unified OHLCV entry point.
-    source = "auto"  → try Kite first, fall back to yfinance
-    source = "kite"  → Kite only (raises on failure)
+    source = "auto"    → try Kite first, fall back to yfinance
+    source = "kite"    → Kite only (raises on failure)
     source = "yfinance" → yfinance only
     """
     if source == "yfinance":
@@ -133,68 +133,8 @@ def get_historical_data(
 
 # ── Live quote providers ──────────────────────────────────────────────────────
 
-class _KiteProvider:
-    def __init__(self):
-        from data.kite_client import KiteClient
-        self._kite = KiteClient()
-
-    def quote(self, symbol: str) -> dict:
-        return self.quotes([symbol]).get(symbol, _empty_quote())
-
-    def quotes(self, symbols: list[str]) -> dict[str, dict]:
-        try:
-            instruments = [f"NSE:{s}" for s in symbols]
-            raw = self._kite.raw.ohlc(instruments)
-            out = {}
-            for sym in symbols:
-                key = f"NSE:{sym}"
-                if key not in raw:
-                    out[sym] = _empty_quote()
-                    continue
-                d = raw[key]
-                price = float(d.get("last_price", 0))
-                prev  = float(d.get("ohlc", {}).get("close", price))
-                chg   = (price - prev) / prev * 100 if prev else 0.0
-                out[sym] = {"price": price, "prev_close": prev, "chg_pct": chg, "volume": 0}
-            return out
-        except Exception:
-            return {s: _empty_quote() for s in symbols}
-
-    def history_closes(self, symbol: str, days: int = 20) -> list[float]:
-        return _yf_history_closes(symbol, days)
-
-
-class _YFinanceProvider:
-    def quote(self, symbol: str) -> dict:
-        return self.quotes([symbol]).get(symbol, _empty_quote())
-
-    def quotes(self, symbols: list[str]) -> dict[str, dict]:
-        out = {}
-        import yfinance as yf
-        for sym in symbols:
-            try:
-                h = yf.Ticker(sym + ".NS").history(period="5d")
-                if h is None or len(h) < 2:
-                    out[sym] = _empty_quote()
-                    continue
-                if isinstance(h.columns, pd.MultiIndex):
-                    h.columns = [c[0] for c in h.columns]
-                price = float(h["Close"].iloc[-1])
-                prev  = float(h["Close"].iloc[-2])
-                vol   = float(h["Volume"].iloc[-1]) if "Volume" in h.columns else 0
-                avg_v = float(h["Volume"].iloc[:-1].mean()) if "Volume" in h.columns else 1
-                chg   = (price - prev) / prev * 100 if prev else 0.0
-                out[sym] = {
-                    "price": price, "prev_close": prev,
-                    "chg_pct": chg, "volume": vol,
-                    "avg_volume": avg_v,
-                }
-            except Exception:
-                out[sym] = _empty_quote()
-        return out
-
-    def history_closes(self, symbol: str, days: int = 20) -> list[float]:
-        return _yf_history_closes(symbol, days)
+def _empty_quote() -> dict:
+    return {"price": 0.0, "prev_close": 0.0, "chg_pct": 0.0, "volume": 0, "avg_volume": 1}
 
 
 def _yf_history_closes(symbol: str, days: int) -> list[float]:
@@ -210,8 +150,146 @@ def _yf_history_closes(symbol: str, days: int) -> list[float]:
         return []
 
 
-def _empty_quote() -> dict:
-    return {"price": 0.0, "prev_close": 0.0, "chg_pct": 0.0, "volume": 0, "avg_volume": 1}
+_KITE_INDEX_SYMBOLS = {
+    "NIFTY50": "NSE:NIFTY 50",
+    "NIFTY 50": "NSE:NIFTY 50",
+    "^NSEI": "NSE:NIFTY 50",
+    "BANKNIFTY": "NSE:NIFTY BANK",
+    "NIFTY BANK": "NSE:NIFTY BANK",
+    "^NSEBANK": "NSE:NIFTY BANK",
+}
+
+
+class _KiteProvider:
+    def __init__(self):
+        from data.kite_client import KiteClient
+        self._kite_client = KiteClient()
+        self._exchange = os.getenv("KITE_EXCHANGE", "NSE")
+
+    def quote(self, symbol: str) -> dict:
+        return self.quotes([symbol]).get(symbol, _empty_quote())
+
+    def quotes(self, symbols: list[str]) -> dict[str, dict]:
+        try:
+            # Separate indices from equities
+            index_syms = [s for s in symbols if s.upper() in _KITE_INDEX_SYMBOLS or s.startswith("^")]
+            equity_syms = [s for s in symbols if s not in index_syms]
+
+            out: dict[str, dict] = {}
+
+            # Fetch equities via get_ohlcv
+            if equity_syms:
+                raw = self._kite_client.get_ohlcv(equity_syms)
+                for sym in equity_syms:
+                    key = f"{self._exchange}:{sym}"
+                    if key not in raw:
+                        out[sym] = _empty_quote()
+                        continue
+                    d = raw[key]
+                    price = float(d.get("last_price", 0))
+                    ohlc  = d.get("ohlc", {})
+                    prev  = float(ohlc.get("close", price))
+                    vol   = float(d.get("volume_traded", 0))
+                    chg   = (price - prev) / prev * 100 if prev else 0.0
+                    out[sym] = {
+                        "price": price, "prev_close": prev, "chg_pct": chg,
+                        "volume": vol, "avg_volume": vol or 1,
+                        "open": float(ohlc.get("open", price)),
+                        "high": float(ohlc.get("high", price)),
+                        "low":  float(ohlc.get("low", price)),
+                    }
+
+            # Fetch indices via ltp
+            if index_syms:
+                kite_index_keys = [_KITE_INDEX_SYMBOLS.get(s.upper(), f"NSE:{s}") for s in index_syms]
+                raw_ltp = self._kite_client._kite.ltp(kite_index_keys)
+                for sym, kite_key in zip(index_syms, kite_index_keys):
+                    d = raw_ltp.get(kite_key, {})
+                    price = float(d.get("last_price", 0))
+                    ohlc  = d.get("ohlc", {})
+                    prev  = float(ohlc.get("close", price))
+                    chg   = (price - prev) / prev * 100 if prev else 0.0
+                    out[sym] = {
+                        "price": price, "prev_close": prev, "chg_pct": chg,
+                        "volume": 0, "avg_volume": 1,
+                        "open": float(ohlc.get("open", price)),
+                        "high": float(ohlc.get("high", price)),
+                        "low":  float(ohlc.get("low", price)),
+                    }
+
+            return out
+        except Exception as e:
+            print(f"[KiteProvider] quotes failed: {e}")
+            return {s: _empty_quote() for s in symbols}
+
+    def live_ltp(self, symbols: list[str]) -> dict[str, float]:
+        """Fast LTP fetch — one call, returns {symbol: price}."""
+        try:
+            instruments = [f"{self._exchange}:{s}" for s in symbols]
+            raw = self._kite_client._kite.ltp(instruments)
+            return {
+                k.split(":")[1]: float(v.get("last_price", 0))
+                for k, v in raw.items()
+            }
+        except Exception:
+            return {}
+
+    def history_closes(self, symbol: str, days: int = 20) -> list[float]:
+        return _yf_history_closes(symbol, days)
+
+    @property
+    def source(self) -> str:
+        return "kite"
+
+
+class _YFinanceProvider:
+    def quote(self, symbol: str) -> dict:
+        return self.quotes([symbol]).get(symbol, _empty_quote())
+
+    def quotes(self, symbols: list[str]) -> dict[str, dict]:
+        out = {}
+        import yfinance as yf
+        for sym in symbols:
+            try:
+                ticker_sym = sym + ".NS" if not sym.endswith(".NS") else sym
+                t = yf.Ticker(ticker_sym)
+
+                # fast_info gives real-time last price (no API key needed)
+                fi = getattr(t, "fast_info", None)
+                price = float(fi.last_price) if fi and getattr(fi, "last_price", None) else 0.0
+                prev  = float(fi.previous_close) if fi and getattr(fi, "previous_close", None) else 0.0
+                vol   = float(fi.three_month_average_volume or 0) if fi else 0.0
+                avg_v = vol or 1.0
+
+                # Fallback if fast_info unavailable
+                if price == 0.0:
+                    h = t.history(period="5d", progress=False)
+                    if h is None or len(h) < 1:
+                        out[sym] = _empty_quote()
+                        continue
+                    if isinstance(h.columns, pd.MultiIndex):
+                        h.columns = [c[0] for c in h.columns]
+                    price = float(h["Close"].iloc[-1])
+                    prev  = float(h["Close"].iloc[-2]) if len(h) >= 2 else price
+                    vol   = float(h["Volume"].iloc[-1]) if "Volume" in h.columns else 0
+                    avg_v = float(h["Volume"].iloc[:-1].mean()) if "Volume" in h.columns and len(h) > 1 else 1
+
+                chg = (price - prev) / prev * 100 if prev else 0.0
+                out[sym] = {
+                    "price": price, "prev_close": prev,
+                    "chg_pct": chg, "volume": vol,
+                    "avg_volume": avg_v or 1,
+                }
+            except Exception:
+                out[sym] = _empty_quote()
+        return out
+
+    def history_closes(self, symbol: str, days: int = 20) -> list[float]:
+        return _yf_history_closes(symbol, days)
+
+    @property
+    def source(self) -> str:
+        return "yfinance"
 
 
 _provider: Optional[_KiteProvider | _YFinanceProvider] = None
@@ -236,112 +314,3 @@ def reset_provider():
     global _provider, _kite_instruments_cache
     _provider = None
     _kite_instruments_cache = None
-
-
-def _kite_available() -> bool:
-    return bool(os.getenv("KITE_API_KEY", "") and os.getenv("KITE_ACCESS_TOKEN", ""))
-
-
-class _KiteProvider:
-    def __init__(self):
-        from data.kite_client import KiteClient
-        self._kite = KiteClient()
-
-    def quote(self, symbol: str) -> dict:
-        return self.quotes([symbol]).get(symbol, _empty_quote())
-
-    def quotes(self, symbols: list[str]) -> dict[str, dict]:
-        try:
-            instruments = [f"NSE:{s}" for s in symbols]
-            raw = self._kite.raw.ohlc(instruments)
-            out = {}
-            for sym in symbols:
-                key = f"NSE:{sym}"
-                if key not in raw:
-                    out[sym] = _empty_quote()
-                    continue
-                d = raw[key]
-                price = float(d.get("last_price", 0))
-                prev  = float(d.get("ohlc", {}).get("close", price))
-                chg   = (price - prev) / prev * 100 if prev else 0.0
-                out[sym] = {"price": price, "prev_close": prev, "chg_pct": chg, "volume": 0}
-            return out
-        except Exception:
-            return {s: _empty_quote() for s in symbols}
-
-    def history_closes(self, symbol: str, days: int = 20) -> list[float]:
-        # Kite historical requires instrument tokens — fall back to yfinance for sparklines
-        return _yf_history_closes(symbol, days)
-
-
-class _YFinanceProvider:
-    def quote(self, symbol: str) -> dict:
-        return self.quotes([symbol]).get(symbol, _empty_quote())
-
-    def quotes(self, symbols: list[str]) -> dict[str, dict]:
-        out = {}
-        import yfinance as yf
-        for sym in symbols:
-            try:
-                h = yf.Ticker(sym + ".NS").history(period="5d")
-                if h is None or len(h) < 2:
-                    out[sym] = _empty_quote()
-                    continue
-                if isinstance(h.columns, pd.MultiIndex):
-                    h.columns = [c[0] for c in h.columns]
-                price = float(h["Close"].iloc[-1])
-                prev  = float(h["Close"].iloc[-2])
-                vol   = float(h["Volume"].iloc[-1]) if "Volume" in h.columns else 0
-                avg_v = float(h["Volume"].iloc[:-1].mean()) if "Volume" in h.columns else 1
-                chg   = (price - prev) / prev * 100 if prev else 0.0
-                out[sym] = {
-                    "price": price, "prev_close": prev,
-                    "chg_pct": chg, "volume": vol,
-                    "avg_volume": avg_v,
-                }
-            except Exception:
-                out[sym] = _empty_quote()
-        return out
-
-    def history_closes(self, symbol: str, days: int = 20) -> list[float]:
-        return _yf_history_closes(symbol, days)
-
-
-def _yf_history_closes(symbol: str, days: int) -> list[float]:
-    try:
-        import yfinance as yf
-        h = yf.Ticker(symbol + ".NS").history(period=f"{max(days + 5, 30)}d")
-        if h is None or h.empty:
-            return []
-        if isinstance(h.columns, pd.MultiIndex):
-            h.columns = [c[0] for c in h.columns]
-        return [float(x) for x in h["Close"].dropna().tolist()[-days:]]
-    except Exception:
-        return []
-
-
-def _empty_quote() -> dict:
-    return {"price": 0.0, "prev_close": 0.0, "chg_pct": 0.0, "volume": 0, "avg_volume": 1}
-
-
-_provider: Optional[_KiteProvider | _YFinanceProvider] = None
-
-
-def get_provider() -> _KiteProvider | _YFinanceProvider:
-    """Return a cached provider. Kite if token is set, else yfinance."""
-    global _provider
-    if _provider is None:
-        if _kite_available():
-            try:
-                _provider = _KiteProvider()
-            except Exception:
-                _provider = _YFinanceProvider()
-        else:
-            _provider = _YFinanceProvider()
-    return _provider
-
-
-def reset_provider():
-    """Call this after updating .env at runtime to pick up new credentials."""
-    global _provider
-    _provider = None

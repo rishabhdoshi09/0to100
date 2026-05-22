@@ -108,25 +108,41 @@ def _nse(sym: str) -> str:
     return s if s.endswith(".NS") else s + ".NS"
 
 
-@st.cache_data(ttl=300, show_spinner=False)
+@st.cache_data(ttl=60, show_spinner=False)
 def _fetch_market_data(symbol: str) -> dict[str, Any] | None:
-    """Fetch latest price, RSI, SMAs, 52W high/low, volume from yfinance."""
+    """Fetch latest price, RSI, SMAs, 52W high/low, volume. Kite-first, yfinance fallback."""
     try:
+        from data.market_data import get_provider, get_historical_data
         import yfinance as yf
-        ticker  = yf.Ticker(_nse(symbol))
-        hist    = ticker.history(period="1y", interval="1d")
-        if hist.empty or len(hist) < 10:
+
+        # Live quote — Kite if available, else yfinance
+        provider = get_provider()
+        live = provider.quote(symbol.upper().replace(".NS", ""))
+        live_price = live.get("price", 0.0)
+        live_prev  = live.get("prev_close", 0.0)
+
+        # Historical for indicators — get_historical_data (Kite→yfinance)
+        try:
+            hist_df = get_historical_data(symbol.upper().replace(".NS", ""), interval="day")
+            close  = hist_df["close"] if "close" in hist_df.columns else hist_df.iloc[:, 3]
+            volume = hist_df["volume"] if "volume" in hist_df.columns else pd.Series([0]*len(close))
+        except Exception:
+            # Last resort: direct yfinance
+            ticker = yf.Ticker(_nse(symbol))
+            hist   = ticker.history(period="1y", interval="1d")
+            if hist.empty or len(hist) < 10:
+                return None
+            hist.index = pd.to_datetime(hist.index).tz_localize(None) if hist.index.tz else pd.to_datetime(hist.index)
+            close  = hist["Close"]
+            volume = hist["Volume"]
+
+        if len(close) < 10:
             return None
 
-        hist.index = pd.to_datetime(hist.index).tz_localize(None) if hist.index.tz else pd.to_datetime(hist.index)
-        close   = hist["Close"]
-        volume  = hist["Volume"]
-
-        # Current price
-        price = float(close.iloc[-1])
-
-        # % change today
-        pct_change = float((close.iloc[-1] - close.iloc[-2]) / close.iloc[-2] * 100) if len(close) >= 2 else 0.0
+        # Use live price if available, else use last historical close
+        price = live_price if live_price > 0 else float(close.iloc[-1])
+        prev  = live_prev  if live_prev  > 0 else float(close.iloc[-2])
+        pct_change = (price - prev) / prev * 100 if prev else 0.0
 
         # SMAs
         sma20  = float(close.rolling(20).mean().iloc[-1])  if len(close) >= 20  else price
