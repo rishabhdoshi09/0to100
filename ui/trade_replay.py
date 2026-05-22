@@ -526,7 +526,7 @@ def render_trade_replay() -> None:
         entry_price, exit_price,
         symbol, replay_day,
     )
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width="stretch")
 
     # ── P&L equity curve ──────────────────────────────────────────────────────
     pnl_curve = ((df_slice["Close"] - entry_price) / entry_price * 100).values
@@ -559,7 +559,7 @@ def render_trade_replay() -> None:
         yaxis_title="PnL %",
         height=220,
     )
-    st.plotly_chart(fig_pnl, use_container_width=True)
+    st.plotly_chart(fig_pnl, width="stretch")
 
     # ── What-if panel ─────────────────────────────────────────────────────────
     st.divider()

@@ -362,7 +362,7 @@ def render_watchlist() -> None:
                     "🏛️  Institutional",
                     symbol=sym,
                     key=f"wl_view_setup_{item['id']}",
-                    use_container_width=True,
+                    width="stretch",
                 )
             with act2:
                 nav_button(
@@ -370,10 +370,10 @@ def render_watchlist() -> None:
                     "🤖  JARVIS",
                     jarvis_query=f"Analyse {sym} for me. Is it a good trade right now?",
                     key=f"wl_jarvis_{item['id']}",
-                    use_container_width=True,
+                    width="stretch",
                 )
             with act3:
-                if st.button("Remove", key=f"wl_rm_{item['id']}", use_container_width=True):
+                if st.button("Remove", key=f"wl_rm_{item['id']}", width="stretch"):
                     to_remove.append(item["id"])
 
     for row_id in to_remove:

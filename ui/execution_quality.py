@@ -366,7 +366,7 @@ def render_execution_quality() -> None:
             yaxis_title="Count",
             height=320,
         )
-        st.plotly_chart(fig_slip, use_container_width=True)
+        st.plotly_chart(fig_slip, width="stretch")
 
         # Slippage by symbol
         st.markdown("#### Avg Slippage by Symbol")
@@ -391,7 +391,7 @@ def render_execution_quality() -> None:
             yaxis_title="Avg Slippage (bps)",
             height=300,
         )
-        st.plotly_chart(fig_sym, use_container_width=True)
+        st.plotly_chart(fig_sym, width="stretch")
 
     # ── Tab 2: VWAP ───────────────────────────────────────────────────────────
     with tab2:
@@ -425,7 +425,7 @@ def render_execution_quality() -> None:
             yaxis_title="Entry vs VWAP (%)",
             height=340,
         )
-        st.plotly_chart(fig_vwap, use_container_width=True)
+        st.plotly_chart(fig_vwap, width="stretch")
 
         # Summary
         buys = scored[scored["action"].str.upper() == "BUY"]
@@ -506,7 +506,7 @@ def render_execution_quality() -> None:
             height=360,
             barmode="group",
         )
-        st.plotly_chart(fig_tod, use_container_width=True)
+        st.plotly_chart(fig_tod, width="stretch")
 
         # Trade count table
         st.markdown("#### Trade Count by Hour")
@@ -515,7 +515,7 @@ def render_execution_quality() -> None:
         by_hour_display["Hour"] = by_hour_display["Hour"].apply(lambda h: f"{h:02d}:00")
         by_hour_display["Avg PnL %"] = by_hour_display["Avg PnL %"].map("{:.2f}%".format)
         by_hour_display["Avg Fill Score"] = by_hour_display["Avg Fill Score"].map("{:.1f}".format)
-        st.dataframe(by_hour_display, use_container_width=True, hide_index=True)
+        st.dataframe(by_hour_display, width="stretch", hide_index=True)
 
     # ── Tab 4: Leaderboard ────────────────────────────────────────────────────
     with tab4:
@@ -538,7 +538,7 @@ def render_execution_quality() -> None:
                 top5_display["vwap_rel"] = top5_display["vwap_rel"].map("{:+.3f}%".format)
             if "fill_score" in top5_display:
                 top5_display["fill_score"] = top5_display["fill_score"].map("{:.1f}".format)
-            st.dataframe(top5_display, use_container_width=True, hide_index=True)
+            st.dataframe(top5_display, width="stretch", hide_index=True)
 
         with col_b:
             st.markdown("#### ⚠️ Bottom 5 Fills")
@@ -551,7 +551,7 @@ def render_execution_quality() -> None:
                 bot5_display["vwap_rel"] = bot5_display["vwap_rel"].map("{:+.3f}%".format)
             if "fill_score" in bot5_display:
                 bot5_display["fill_score"] = bot5_display["fill_score"].map("{:.1f}".format)
-            st.dataframe(bot5_display, use_container_width=True, hide_index=True)
+            st.dataframe(bot5_display, width="stretch", hide_index=True)
 
         # Fill score distribution
         st.markdown("#### Fill Score Distribution")
@@ -576,7 +576,7 @@ def render_execution_quality() -> None:
             yaxis_title="Count",
             height=300,
         )
-        st.plotly_chart(fig_score, use_container_width=True)
+        st.plotly_chart(fig_score, width="stretch")
 
     # ── Tab 5: Suggestions ────────────────────────────────────────────────────
     with tab5:
@@ -625,4 +625,4 @@ def render_execution_quality() -> None:
                             color=_GREEN, showgrid=False),
                 height=320,
             )
-            st.plotly_chart(fig_setup, use_container_width=True)
+            st.plotly_chart(fig_setup, width="stretch")

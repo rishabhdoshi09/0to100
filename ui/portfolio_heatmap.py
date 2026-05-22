@@ -118,7 +118,7 @@ def render_portfolio_heatmap(positions: list[dict]) -> None:
         coloraxis_showscale=False,
     )
 
-    st.plotly_chart(fig, use_container_width=True, key="portfolio_heatmap")
+    st.plotly_chart(fig, width="stretch", key="portfolio_heatmap")
 
     # ── Compact risk summary ──────────────────────────────────────────────────
     total_deployed = sum(p["position_pct"] for p in rows)

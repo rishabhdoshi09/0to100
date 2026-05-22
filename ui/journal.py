@@ -258,7 +258,7 @@ def render_journal():
     # ── Closed positions table ────────────────────────────────────────────────
     if closed is not None and not closed.empty:
         with st.expander("Closed Trades"):
-            st.dataframe(closed, use_container_width=True)
+            st.dataframe(closed, width="stretch")
 
     # ── Enhanced analytics ────────────────────────────────────────────────────
     from ui.journal_analytics import render_journal_analytics

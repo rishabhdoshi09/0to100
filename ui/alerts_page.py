@@ -63,7 +63,7 @@ Then restart the app.
         with _c1:
             st.success("✅ **Telegram connected** — alerts will be delivered to your chat.", icon="✅")
         with _c2:
-            if st.button("📤 Send Test Alert", key="tg_test_btn", use_container_width=True):
+            if st.button("📤 Send Test Alert", key="tg_test_btn", width="stretch"):
                 with st.spinner("Sending…"):
                     ok = engine.send_test()
                 if ok:
@@ -114,7 +114,7 @@ Then restart the app.
             submitted = st.form_submit_button(
                 "➕ Add Alert",
                 type="primary",
-                use_container_width=True,
+                width="stretch",
             )
 
         if submitted:
@@ -185,7 +185,7 @@ Then restart the app.
                     "🗑️",
                     key=f"del_rule_{rule.rule_id}",
                     help=f"Delete alert #{rule.rule_id}",
-                    use_container_width=True,
+                    width="stretch",
                 ):
                     manager.delete_rule(rule.rule_id)
                     st.rerun()

@@ -1208,7 +1208,7 @@ elif _page == "Terminal":
             f"</div>",
             unsafe_allow_html=True,
         )
-        if st.button("🛑 Kill Switch", use_container_width=True, type="primary", key="terminal_kill"):
+        if st.button("🛑 Kill Switch", width="stretch", type="primary", key="terminal_kill"):
             st.error("⚠️ Kill switch activated.")
             st.session_state["kill_switch"] = True
 
@@ -1586,7 +1586,7 @@ elif _page == "Research":
                                 if not _rows:
                                     st.info("No data.")
                                 else:
-                                    st.dataframe(pd.DataFrame(_rows), use_container_width=True, hide_index=True)
+                                    st.dataframe(pd.DataFrame(_rows), width="stretch", hide_index=True)
                     except ValueError as _ve:
                         st.error(f"Symbol not found: {_ve}")
                     except Exception as _ex:
@@ -2001,7 +2001,7 @@ elif _page == "Tools":
                             st.error(f"Screener error: {_qsc_err}")
                         elif _qsc_res is not None and not _qsc_res.empty:
                             st.success(f"Found {len(_qsc_res)} stocks")
-                            st.dataframe(_qsc_res, use_container_width=True, hide_index=True)
+                            st.dataframe(_qsc_res, width="stretch", hide_index=True)
                         else:
                             st.info("No stocks matched.")
                     except Exception as _qsce:

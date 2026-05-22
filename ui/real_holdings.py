@@ -347,7 +347,7 @@ def render_real_holdings() -> None:
                 "⚡  Terminal",
                 symbol=sym,
                 key=f"holding_trade_{sym}",
-                use_container_width=True,
+                width="stretch",
             )
         with hact2:
             nav_button(
@@ -355,7 +355,7 @@ def render_real_holdings() -> None:
                 "🤖  JARVIS",
                 jarvis_query=f"I hold {sym}. Current P&L is {pnl_pct:.1f}%. Should I hold, add, or exit?",
                 key=f"holding_jarvis_{sym}",
-                use_container_width=True,
+                width="stretch",
             )
 
     # ── Sector concentration (3+ holdings) ───────────────────────────────────

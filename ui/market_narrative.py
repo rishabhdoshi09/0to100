@@ -319,7 +319,7 @@ def _render_deepseek_narrative(r: dict | None, bh: dict | None) -> None:
         unsafe_allow_html=True,
     )
 
-    if st.button("📊 Generate Market Brief", key="narrative_gen", use_container_width=False):
+    if st.button("📊 Generate Market Brief", key="narrative_gen", width="content"):
         with st.spinner("Generating institutional brief…"):
             brief = _generate_brief(r, bh)
         st.session_state["narrative_brief"] = brief

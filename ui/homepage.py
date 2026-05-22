@@ -257,7 +257,7 @@ def _render_quick_nav() -> None:
                     f"<div style='font-size:.68rem;color:#8892a4;margin-bottom:.2rem'>{desc}</div>",
                     unsafe_allow_html=True,
                 )
-                nav_button(label, page, key=f"home_nav_{page}", use_container_width=True)
+                nav_button(label, page, key=f"home_nav_{page}", width="stretch")
 
 
 # ── Main entry point ──────────────────────────────────────────────────────────

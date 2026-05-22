@@ -218,7 +218,7 @@ def render_algolab(fetcher=None):
     bt_cap  = bt_col3.number_input("Capital ₹", value=1_000_000, step=50_000, key="algolab_cap")
     bt_col4.empty()
 
-    if st.button("▶ Run", key="algolab_run", use_container_width=True):
+    if st.button("▶ Run", key="algolab_run", width="stretch"):
         code = st.session_state.get("algolab_code", STARTER_STRATEGY)
         with st.spinner(f"Running strategy on {bt_sym} ({bt_days}d)…"):
             try:
@@ -271,7 +271,7 @@ def render_algolab(fetcher=None):
 
             with st.expander("Trade Log"):
                 if result["trades"]:
-                    st.dataframe(pd.DataFrame(result["trades"]), use_container_width=True)
+                    st.dataframe(pd.DataFrame(result["trades"]), width="stretch")
 
     # ── Bulk Backtest (multi-symbol simulator) ───────────────────────────────
     st.divider()

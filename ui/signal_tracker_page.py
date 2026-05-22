@@ -128,7 +128,7 @@ def render_signal_tracker() -> None:
                 tickfont=dict(size=11, color="#8892a4"),
             ),
         )
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
     else:
         st.info("No signals logged yet. Run the scanner to start building the feedback loop.", icon="📡")
 
@@ -189,7 +189,7 @@ def render_signal_tracker() -> None:
 
         styled = df_disp.style.applymap(_color_outcome, subset=["Outcome"])
 
-        st.dataframe(styled, hide_index=True, use_container_width=True, height=420)
+        st.dataframe(styled, hide_index=True, width="stretch", height=420)
     else:
         st.caption("No signals yet.")
 
@@ -252,6 +252,6 @@ def render_signal_tracker() -> None:
                 f"{len(sym_history)} signal(s) found</span>",
                 unsafe_allow_html=True,
             )
-            st.dataframe(styled_sym, hide_index=True, use_container_width=True)
+            st.dataframe(styled_sym, hide_index=True, width="stretch")
         else:
             st.info(f"No signals logged for **{lookup_sym.upper()}** yet.")

@@ -125,7 +125,7 @@ def render_vcp_page(universe: list[str]) -> None:
         run_scan = st.button(
             "🔍 Run VCP Scan",
             type="primary",
-            use_container_width=True,
+            width="stretch",
             key="vcp_run",
         )
 
@@ -562,7 +562,7 @@ def _render_vcp_chart(setup) -> None:
             showgrid=True,
         )
 
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
 
     except Exception as exc:
         st.warning(f"Chart error for {setup.symbol}: {exc}")

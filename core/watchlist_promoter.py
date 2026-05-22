@@ -318,7 +318,7 @@ def render_promotion_alerts() -> None:
                         if st.button(
                             "View →",
                             key=f"promo_view_{ev_id}",
-                            use_container_width=True,
+                            width="stretch",
                         ):
                             try:
                                 from ui.context import go_to
@@ -331,7 +331,7 @@ def render_promotion_alerts() -> None:
                         if st.button(
                             "Add →",
                             key=f"promo_add_{ev_id}",
-                            use_container_width=True,
+                            width="stretch",
                         ):
                             # Auto-add to watchlist DB
                             try:
@@ -357,7 +357,7 @@ def render_promotion_alerts() -> None:
                     if st.button(
                         "Setup →",
                         key=f"promo_setup_{ev_id}",
-                        use_container_width=True,
+                        width="stretch",
                     ):
                         try:
                             from ui.context import go_to
@@ -372,7 +372,7 @@ def render_promotion_alerts() -> None:
                     if st.button(
                         "Dismiss",
                         key=f"promo_dismiss_{ev_id}",
-                        use_container_width=True,
+                        width="stretch",
                     ):
                         mark_actioned(ev_id)
                         to_dismiss.append(ev_id)

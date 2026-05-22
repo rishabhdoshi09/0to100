@@ -209,7 +209,7 @@ def render_options_page() -> None:
             label_visibility="collapsed",
         )
     with tb3:
-        refresh = st.button("↻ Refresh", key="opt_refresh", use_container_width=True)
+        refresh = st.button("↻ Refresh", key="opt_refresh", width="stretch")
 
     if refresh:
         st.cache_data.clear()

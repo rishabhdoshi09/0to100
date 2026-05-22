@@ -141,12 +141,12 @@ def render_scanner(universe: list[str]) -> None:
     with _c2:
         scan_quick = st.button(
             "⚡ Quick Scan", key="scanner_quick",
-            type="primary", use_container_width=True,
+            type="primary", width="stretch",
         )
     with _c3:
         scan_full = st.button(
             "🌐 Full NSE Scan", key="scanner_full",
-            use_container_width=True,
+            width="stretch",
         )
     with _c4:
         mcap_filter = st.selectbox(

@@ -224,7 +224,7 @@ def render_kelly_sizer() -> None:
 
     preset_used = False
     if journal_stats:
-        if st.button("📂 Load from Journal Stats", use_container_width=False):
+        if st.button("📂 Load from Journal Stats", width="content"):
             st.session_state["ks_winrate"]  = journal_stats["win_rate"]
             st.session_state["ks_avg_win"]  = journal_stats["avg_win_pct"]
             st.session_state["ks_avg_loss"] = journal_stats["avg_loss_pct"]
@@ -317,7 +317,7 @@ def render_kelly_sizer() -> None:
     # ── Comparison bar chart ─────────────────────────────────────────────────
     st.plotly_chart(
         _kelly_comparison_chart(capital, full_kelly, half_kelly, quarter_kelly),
-        use_container_width=True,
+        width="stretch",
     )
 
     st.markdown("---")
@@ -381,7 +381,7 @@ def render_kelly_sizer() -> None:
                              n_trades=100, n_paths=1000)
 
     fig_mc = _mc_fan_chart(paths, capital)
-    st.plotly_chart(fig_mc, use_container_width=True)
+    st.plotly_chart(fig_mc, width="stretch")
 
     # Outcome stats
     final_equities = paths[:, -1] * capital

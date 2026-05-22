@@ -550,7 +550,7 @@ def _render_hero_card(best: dict, regime: dict) -> None:
     # Action buttons
     b1, b2, b3, b4 = st.columns([2, 2, 2, 2])
     with b1:
-        if st.button("🤖 Ask JARVIS →", key="hero_analyse", use_container_width=True):
+        if st.button("🤖 Ask JARVIS →", key="hero_analyse", width="stretch"):
             ev_str = f"+{best['ev_r']:.1f}R" if best['ev_r'] >= 0 else f"{best['ev_r']:.1f}R"
             st.session_state["jarvis_prefill"] = (
                 f"Institutional setup for {symbol}: {archetype} ({tier_plain}). "
@@ -563,19 +563,19 @@ def _render_hero_card(best: dict, regime: dict) -> None:
             st.session_state["_nav_pending"] = "🤖  JARVIS"
             st.rerun()
     with b2:
-        if st.button("📈 View Chart", key="hero_chart", use_container_width=True):
+        if st.button("📈 View Chart", key="hero_chart", width="stretch"):
             st.session_state["iq2_selected"]    = symbol
             st.session_state["iq2_setup_data"]  = best
             st.session_state["iq2_show_chart"]  = True
             st.rerun()
     with b3:
-        if st.button("⚡ Trade This", key="hero_trade", use_container_width=True, type="primary"):
+        if st.button("⚡ Trade This", key="hero_trade", width="stretch", type="primary"):
             st.session_state["terminal_symbol"]  = symbol
             st.session_state["selected_symbol"]  = symbol
             st.session_state["_nav_pending"]     = "⚡  Terminal"
             st.rerun()
     with b4:
-        if st.button("🔄 Re-scan", key="hero_rescan", use_container_width=True):
+        if st.button("🔄 Re-scan", key="hero_rescan", width="stretch"):
             st.cache_data.clear()
             st.rerun()
 
@@ -819,7 +819,7 @@ def _render_setup_list(setups: list[dict], universe_key: str) -> None:
         with st.container():
             row_cols = st.columns([28+90+200+90+80+100+6, 80])
             with row_cols[1]:
-                if st.button("Select", key=f"sel_{sym}_{rank}", use_container_width=True):
+                if st.button("Select", key=f"sel_{sym}_{rank}", width="stretch"):
                     st.session_state["iq2_selected"]   = sym
                     st.session_state["iq2_setup_data"] = s
                     st.session_state["iq2_show_chart"] = True
@@ -918,7 +918,7 @@ def _render_chart_workspace(symbol: str, setup: dict | None, regime: dict) -> No
                     bgcolor="rgba(0,0,0,0)"),
         hovermode="x unified",
     )
-    st.plotly_chart(fig, use_container_width=True, key=f"iq2_c_{symbol}_{tf}")
+    st.plotly_chart(fig, width="stretch", key=f"iq2_c_{symbol}_{tf}")
 
     if "volume" in df.columns:
         vols  = df["volume"]
@@ -933,7 +933,7 @@ def _render_chart_workspace(symbol: str, setup: dict | None, regime: dict) -> No
             xaxis=dict(showgrid=False, showticklabels=False),
             yaxis=dict(showgrid=False, showticklabels=False),
         )
-        st.plotly_chart(vfig, use_container_width=True, key=f"iq2_v_{symbol}_{tf}")
+        st.plotly_chart(vfig, width="stretch", key=f"iq2_v_{symbol}_{tf}")
 
 
 # ── 5. INTELLIGENCE PANEL ────────────────────────────────────────────────────
@@ -1065,12 +1065,12 @@ def _render_intelligence_panel(symbol: str, setup: dict | None, regime: dict) ->
 
     col_ai, col_jarvis = st.columns(2)
     with col_ai:
-        if st.button("🧠 Analyse with AI", key=f"iq2_btn_{symbol}", use_container_width=True):
+        if st.button("🧠 Analyse with AI", key=f"iq2_btn_{symbol}", width="stretch"):
             with st.spinner("DeepSeek reasoning…"):
                 analysis = _deepseek_analyse(symbol, setup, regime)
             st.session_state[cache_key] = analysis
     with col_jarvis:
-        if st.button("🤖 Ask JARVIS →", key=f"iq2_jarvis_{symbol}", use_container_width=True):
+        if st.button("🤖 Ask JARVIS →", key=f"iq2_jarvis_{symbol}", width="stretch"):
             if setup:
                 ev_r_val = setup.get("ev_r", 0.0)
                 wr_val   = setup.get("win_rate", 0.0) * 100

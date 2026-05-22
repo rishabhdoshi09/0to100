@@ -104,7 +104,7 @@ def _render_empty_state() -> None:
                "title": dict(text="Equity Curve (placeholder)", font=dict(color="#8892a4", size=12))}
     _layout["yaxis"] = dict(tickprefix="₹", **{k: v for k, v in _LAYOUT_BASE.get("yaxis", {}).items()})
     fig.update_layout(**_layout)
-    st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False},
+    st.plotly_chart(fig, width="stretch", config={"displayModeBar": False},
                     key="ja_empty_equity")
 
 
@@ -193,7 +193,7 @@ def _section_equity_curve(df: pd.DataFrame) -> None:
         height=260,
         yaxis=dict(tickprefix="₹", **{k: v for k, v in _LAYOUT_BASE["yaxis"].items()}),
     )
-    st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False},
+    st.plotly_chart(fig, width="stretch", config={"displayModeBar": False},
                     key="ja_equity_curve")
 
 
@@ -227,7 +227,7 @@ def _section_win_loss_dist(df: pd.DataFrame) -> None:
         xaxis=dict(title="Return %", **{k: v for k, v in _LAYOUT_BASE["xaxis"].items()}),
         yaxis=dict(title="Trades", **{k: v for k, v in _LAYOUT_BASE["yaxis"].items()}),
     )
-    st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False},
+    st.plotly_chart(fig, width="stretch", config={"displayModeBar": False},
                     key="ja_win_loss_dist")
 
 
@@ -260,7 +260,7 @@ def _section_by_symbol(df: pd.DataFrame) -> None:
         yaxis=dict(tickprefix="₹", title="Total PnL",
                    **{k: v for k, v in _LAYOUT_BASE["yaxis"].items()}),
     )
-    st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False},
+    st.plotly_chart(fig, width="stretch", config={"displayModeBar": False},
                     key="ja_by_symbol")
 
 
@@ -290,7 +290,7 @@ def _section_monthly_pnl(df: pd.DataFrame) -> None:
         yaxis=dict(tickprefix="₹", title="Net PnL",
                    **{k: v for k, v in _LAYOUT_BASE["yaxis"].items()}),
     )
-    st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False},
+    st.plotly_chart(fig, width="stretch", config={"displayModeBar": False},
                     key="ja_monthly_pnl")
 
 
@@ -330,7 +330,7 @@ def _section_duration_analysis(df: pd.DataFrame) -> None:
         height=220,
         yaxis=dict(title="Avg Days", **{k: v for k, v in _LAYOUT_BASE["yaxis"].items()}),
     )
-    st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False},
+    st.plotly_chart(fig, width="stretch", config={"displayModeBar": False},
                     key="ja_duration")
 
 

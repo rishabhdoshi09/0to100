@@ -79,7 +79,7 @@ def _render_deals_table(df: pd.DataFrame, key: str) -> None:
     st.dataframe(
         display.style.apply(_row_style, axis=1),
         hide_index=True,
-        use_container_width=True,
+        width="stretch",
         key=key,
     )
 
@@ -162,7 +162,7 @@ def render_fii_dii_page() -> None:
             yaxis_title="₹ Crore",
         )
         fig.update_layout(**layout)
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
     else:
         st.warning("Could not load FII/DII flow data from NSE. NSE sometimes blocks automated requests — try refreshing later.")
 

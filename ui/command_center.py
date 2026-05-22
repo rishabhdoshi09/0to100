@@ -547,7 +547,7 @@ def _render_setup_card(setup: dict) -> None:
     if st.button(
         f"View Details — {symbol}",
         key=f"view_details_{symbol}_{setup.get('archetype','')}",
-        use_container_width=True,
+        width="stretch",
     ):
         st.session_state["selected_page"] = "Institutional"
         st.session_state["iq2_selected"]  = symbol
@@ -602,7 +602,7 @@ def _render_regime_column(regime: dict) -> None:
             "margin-bottom:.2rem'>5-day Nifty</div>",
             unsafe_allow_html=True,
         )
-        st.bar_chart(spark_df, height=80, use_container_width=True)
+        st.bar_chart(spark_df, height=80, width="stretch")
 
     # Implications
     implications = _get_implications(regime)

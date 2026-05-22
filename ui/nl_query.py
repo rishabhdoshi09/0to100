@@ -272,9 +272,9 @@ def render_nl_query(universe: list[str], current_setups: list[dict]) -> list[dic
             label_visibility="collapsed",
         )
     with col_btn:
-        run = st.button("Search", key="nl_query_run", use_container_width=True, type="primary")
+        run = st.button("Search", key="nl_query_run", width="stretch", type="primary")
     with col_clear:
-        clear = st.button("Clear", key="nl_query_clear", use_container_width=True)
+        clear = st.button("Clear", key="nl_query_clear", width="stretch")
 
     st.markdown("</div>", unsafe_allow_html=True)
 

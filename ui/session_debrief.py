@@ -157,7 +157,7 @@ def render_session_debrief() -> None:
             unsafe_allow_html=True,
         )
     with col_dismiss:
-        if st.button("Dismiss", key="debrief_dismiss_btn", use_container_width=True):
+        if st.button("Dismiss", key="debrief_dismiss_btn", width="stretch"):
             st.session_state[today_key] = True
             st.rerun()
 

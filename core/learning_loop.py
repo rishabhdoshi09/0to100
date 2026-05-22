@@ -272,7 +272,7 @@ def render_personal_edge_ui() -> None:
                 tickfont=dict(size=9, color="#4a5568"),
             ),
         )
-        st.plotly_chart(fig, use_container_width=True, key="learning_loop_bar_chart")
+        st.plotly_chart(fig, width="stretch", key="learning_loop_bar_chart")
     except Exception as exc:
         st.caption(f"Chart unavailable: {exc}")
 

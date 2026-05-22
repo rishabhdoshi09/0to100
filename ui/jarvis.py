@@ -534,37 +534,37 @@ def _render_system_panel() -> None:
         st.caption("Direct system actions via JARVIS agents. Requires confirmation for destructive ops.")
         c1, c2, c3, c4 = st.columns(4)
         with c1:
-            if st.button("📋 Git Status", key="sys_git_status", use_container_width=True):
+            if st.button("📋 Git Status", key="sys_git_status", width="stretch"):
                 st.session_state["jarvis_pending"] = "Show me the current git status and any uncommitted changes"
                 st.rerun()
         with c2:
-            if st.button("🔄 Git Pull", key="sys_git_pull", use_container_width=True):
+            if st.button("🔄 Git Pull", key="sys_git_pull", width="stretch"):
                 st.session_state["jarvis_pending"] = "Pull the latest changes from the remote git repository"
                 st.rerun()
         with c3:
-            if st.button("📜 View Logs", key="sys_view_logs", use_container_width=True):
+            if st.button("📜 View Logs", key="sys_view_logs", width="stretch"):
                 st.session_state["jarvis_pending"] = "Show me the last 30 lines of the application log"
                 st.rerun()
         with c4:
-            if st.button("🌐 Market Scan", key="sys_market_scan", use_container_width=True):
+            if st.button("🌐 Market Scan", key="sys_market_scan", width="stretch"):
                 st.session_state["jarvis_pending"] = "Run a full market scan and show me the top 5 setups right now"
                 st.rerun()
 
         c5, c6, c7, c8 = st.columns(4)
         with c5:
-            if st.button("💾 Deploy Code", key="sys_deploy", use_container_width=True):
+            if st.button("💾 Deploy Code", key="sys_deploy", width="stretch"):
                 st.session_state["jarvis_pending"] = "Commit all uncommitted changes and push to the current branch"
                 st.rerun()
         with c6:
-            if st.button("🔍 Web Search", key="sys_websearch", use_container_width=True):
+            if st.button("🔍 Web Search", key="sys_websearch", width="stretch"):
                 st.session_state["jarvis_pending"] = "Search the web for latest Nifty 50 market news and analysis today"
                 st.rerun()
         with c7:
-            if st.button("🖥️ System Info", key="sys_info", use_container_width=True):
+            if st.button("🖥️ System Info", key="sys_info", width="stretch"):
                 st.session_state["jarvis_pending"] = "Show me system status: running processes, disk usage, and environment config"
                 st.rerun()
         with c8:
-            if st.button("📡 Live Prices", key="sys_prices", use_container_width=True):
+            if st.button("📡 Live Prices", key="sys_prices", width="stretch"):
                 st.session_state["jarvis_pending"] = "Show me live prices for Nifty, VIX, Bank Nifty and today's regime"
                 st.rerun()
 
@@ -662,7 +662,7 @@ def render_jarvis(universe: list[str]) -> None:
         ]
         cols = st.columns(2)
         for i, sug in enumerate(suggestions):
-            if cols[i % 2].button(sug, key=f"jarvis_sug_{i}", use_container_width=True):
+            if cols[i % 2].button(sug, key=f"jarvis_sug_{i}", width="stretch"):
                 st.session_state["jarvis_pending"] = sug
                 st.rerun()
 
@@ -681,7 +681,7 @@ def render_jarvis(universe: list[str]) -> None:
             label_visibility="collapsed",
         )
     with col_send:
-        send = st.button("Send", key="jarvis_send", use_container_width=True, type="primary")
+        send = st.button("Send", key="jarvis_send", width="stretch", type="primary")
 
     if "jarvis_pending" in st.session_state:
         user_input = st.session_state.pop("jarvis_pending")

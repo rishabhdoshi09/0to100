@@ -496,30 +496,30 @@ def render_market_breadth() -> None:
     with g1:
         st.plotly_chart(
             _gauge_chart(float(today_b["ad_ratio"]), "A/D Ratio", max_val=1.0),
-            use_container_width=True,
+            width="stretch",
         )
     with g2:
         st.plotly_chart(
             _gauge_chart(float(today_b["pct_above200"]) / 100, "Above 200 SMA", max_val=1.0),
-            use_container_width=True,
+            width="stretch",
         )
     with g3:
         hl_total = today_b["new_highs"] + today_b["new_lows"]
         hl_ratio = float(today_b["new_highs"]) / max(hl_total, 1)
         st.plotly_chart(
             _gauge_chart(hl_ratio, "Highs / (Highs+Lows)", max_val=1.0),
-            use_container_width=True,
+            width="stretch",
         )
 
     # ── A/D line chart ───────────────────────────────────────────────────────
-    st.plotly_chart(_ad_line_chart(breadth_df, nifty), use_container_width=True)
+    st.plotly_chart(_ad_line_chart(breadth_df, nifty), width="stretch")
 
     # ── Highs/Lows + McClellan ────────────────────────────────────────────────
     c1, c2 = st.columns(2)
     with c1:
-        st.plotly_chart(_highs_lows_chart(breadth_df), use_container_width=True)
+        st.plotly_chart(_highs_lows_chart(breadth_df), width="stretch")
     with c2:
-        st.plotly_chart(_mclellan_chart(breadth_df), use_container_width=True)
+        st.plotly_chart(_mclellan_chart(breadth_df), width="stretch")
 
     # ── Raw table ────────────────────────────────────────────────────────────
     with st.expander("📋 Raw breadth data (last 10 sessions)"):
@@ -528,4 +528,4 @@ def render_market_breadth() -> None:
                                "ad_line"]].tail(10).copy()
         display["ad_ratio"]     = display["ad_ratio"].map("{:.1%}".format)
         display["pct_above200"] = display["pct_above200"].map("{:.1f}%".format)
-        st.dataframe(display[::-1], use_container_width=True)
+        st.dataframe(display[::-1], width="stretch")

@@ -343,25 +343,25 @@ def render_alpha_decay() -> None:
     # ── Rolling charts ───────────────────────────────────────────────────────
     col1, col2 = st.columns(2)
     with col1:
-        st.plotly_chart(_win_rate_chart(df), use_container_width=True)
+        st.plotly_chart(_win_rate_chart(df), width="stretch")
     with col2:
-        st.plotly_chart(_expectancy_chart(df), use_container_width=True)
+        st.plotly_chart(_expectancy_chart(df), width="stretch")
 
     # ── Setup breakdown ──────────────────────────────────────────────────────
-    st.plotly_chart(_setup_breakdown_chart(df), use_container_width=True)
+    st.plotly_chart(_setup_breakdown_chart(df), width="stretch")
 
     # ── Monthly heatmap + regime ─────────────────────────────────────────────
     col3, col4 = st.columns(2)
     with col3:
         fig_heat = _monthly_pnl_heatmap(df)
         if fig_heat.data:
-            st.plotly_chart(fig_heat, use_container_width=True)
+            st.plotly_chart(fig_heat, width="stretch")
         else:
             st.caption("Insufficient data for monthly heatmap.")
     with col4:
         fig_reg = _regime_chart(df)
         if fig_reg.data:
-            st.plotly_chart(fig_reg, use_container_width=True)
+            st.plotly_chart(fig_reg, width="stretch")
         else:
             st.caption("No regime data in notes column.")
 
@@ -370,4 +370,4 @@ def render_alpha_decay() -> None:
         show_cols = [c for c in ["date","symbol","action","pnl","pnl_pct","setup_type","notes","win"]
                      if c in df.columns]
         st.dataframe(df[show_cols].tail(20)[::-1].reset_index(drop=True),
-                     use_container_width=True)
+                     width="stretch")

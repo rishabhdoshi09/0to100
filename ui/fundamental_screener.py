@@ -382,7 +382,7 @@ def render_fundamental_screener(universe: list[str]) -> None:
     chosen_preset: Optional[str] = None
     for col, label in zip(preset_cols, _PRESETS):
         with col:
-            if st.button(label, key=f"preset_{label}", use_container_width=True):
+            if st.button(label, key=f"preset_{label}", width="stretch"):
                 chosen_preset = label
 
     # Store preset in session so sliders auto-update
@@ -480,7 +480,7 @@ def render_fundamental_screener(universe: list[str]) -> None:
         "🔍 Find Stocks",
         type="primary",
         key="fs_scan",
-        use_container_width=False,
+        width="content",
     )
 
     if not scan_clicked:
@@ -599,7 +599,7 @@ def render_fundamental_screener(universe: list[str]) -> None:
     st.dataframe(
         display_df.style.apply(_row_color, axis=1),
         hide_index=True,
-        use_container_width=True,
+        width="stretch",
         key="fs_results_table",
     )
 

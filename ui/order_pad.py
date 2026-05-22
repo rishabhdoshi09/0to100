@@ -137,15 +137,15 @@ def render_order_pad(symbol: str = "", price: float = 0.0, indicators: dict | No
             pass
 
         col_checklist, col_ai, col_place = st.columns([1, 1, 2])
-        checklist_btn = col_checklist.form_submit_button("✅ Pre-Trade Gate", use_container_width=True)
-        ai_check = col_ai.form_submit_button("🤖 AI Check", use_container_width=True)
+        checklist_btn = col_checklist.form_submit_button("✅ Pre-Trade Gate", width="stretch")
+        ai_check = col_ai.form_submit_button("🤖 AI Check", width="stretch")
 
         # ABORT blocks Place Order — user must clear to override
         ai_data    = st.session_state.get("_order_ai_verdict")
         gate_data  = st.session_state.get("_order_gate_result")
         is_aborted = (ai_data and ai_data[0] == "ABORT") or (gate_data and gate_data.get("grade") == "ABORT")
         submitted  = col_place.form_submit_button(
-            "⚡ Place Paper Order", use_container_width=True,
+            "⚡ Place Paper Order", width="stretch",
             disabled=bool(is_aborted),
         )
 
@@ -335,7 +335,7 @@ def render_backtest_bridge(symbol: str, fetcher=None, ie=None):
     slippage  = col2.slider("Slippage %", 0.0, 1.0, 0.05, 0.01)
     use_llm   = col3.checkbox("Include LLM signals", value=False)
 
-    if st.button("▶ Run Backtest", use_container_width=True, key="run_backtest_bridge"):
+    if st.button("▶ Run Backtest", width="stretch", key="run_backtest_bridge"):
         if not symbol:
             st.error("No symbol selected.")
             return

@@ -212,7 +212,7 @@ def render_bulk_pattern(universe: list[str]) -> None:
     with col_run:
         st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
         run = st.button("⚡ Run Bulk Scan", key="bulk_pat_run",
-                        use_container_width=True, type="primary")
+                        width="stretch", type="primary")
 
     if not run and "bulk_pat_results" not in st.session_state:
         st.caption(f"Universe: {len(universe)} symbols. Click **Run Bulk Scan** to analyse all.")

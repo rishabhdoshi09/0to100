@@ -39,7 +39,7 @@ def render_agent_dashboard() -> None:
     with col_btn:
         st.write("")  # vertical alignment
         st.write("")
-        run_btn = st.button("🤖 Analyse", key="agent_run", type="primary", use_container_width=True)
+        run_btn = st.button("🤖 Analyse", key="agent_run", type="primary", width="stretch")
 
     st.divider()
 
