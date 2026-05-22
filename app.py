@@ -1712,8 +1712,9 @@ elif _page == "Research":
     # ── Conviction Tracker ─────────────────────────────────────────────────
     with _r12:
         try:
-            from ui.conviction_tracker import render_conviction_tracker
-            render_conviction_tracker()
+            from ui.conviction_tracker import render_conviction_panel
+            _ct_positions = st.session_state.get("paper_positions", [])
+            render_conviction_panel(_ct_positions)
         except Exception as _ct_e:
             st.error(f"Conviction Tracker error: {_ct_e}")
 
@@ -1724,8 +1725,9 @@ elif _page == "Research":
             format_func=lambda x: f"{x} – {symbol_map.get(x, x)}",
         )
         try:
-            from ui.patterns_news_panel import render_patterns_news_panel
-            render_patterns_news_panel(_pnp_sym)
+            from ui.patterns_news_panel import render_patterns_news
+            _pnp_df = fetch_historical(_pnp_sym, days=250)
+            render_patterns_news(_pnp_sym, _pnp_df)
         except Exception as _pnp_e:
             st.error(f"Patterns & News error: {_pnp_e}")
 
@@ -2338,15 +2340,20 @@ elif _page == "Tools":
     with _t12:
         try:
             from ui.nl_query import render_nl_query
-            render_nl_query(universe)
+            _nlq_setups = st.session_state.get("last_setups", [])
+            render_nl_query(universe, _nlq_setups)
         except Exception as _nlq_e:
             st.error(f"NL Query error: {_nlq_e}")
 
     # ── Bulk Simulator ─────────────────────────────────────────────────────
     with _t13:
         try:
-            from ui.bulk_simulator import render_bulk_simulator
-            render_bulk_simulator(universe)
+            from ui.bulk_simulator import render_bulk_backtest, render_bulk_live_signals
+            _bs0, _bs1 = st.tabs(["📊 Bulk Backtest", "⚡ Live Signals"])
+            with _bs0:
+                render_bulk_backtest()
+            with _bs1:
+                render_bulk_live_signals()
         except Exception as _bs_e:
             st.error(f"Bulk Simulator error: {_bs_e}")
 
