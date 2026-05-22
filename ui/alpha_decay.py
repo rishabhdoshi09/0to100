@@ -53,7 +53,7 @@ def _generate_demo_trades(n: int = 60) -> pd.DataFrame:
     rows = []
     date = datetime.date.today() - datetime.timedelta(days=n * 2)
     for i in range(n):
-        date += datetime.timedelta(days=rng.integers(1, 4))
+        date += datetime.timedelta(days=int(rng.integers(1, 4)))
         won   = rng.random() < win_probs[i]
         ep    = rng.uniform(200, 3000)
         if won:
