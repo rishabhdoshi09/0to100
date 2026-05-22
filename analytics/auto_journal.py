@@ -1,0 +1,557 @@
+"""
+Auto Journal — automatically creates a complete journal entry for every trade,
+capturing the full context at entry and exit.
+
+SQLite at logs/auto_journal.db
+"""
+from __future__ import annotations
+
+import csv
+import io
+import json
+import sqlite3
+import uuid
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Dict, List, Optional
+
+_DB_PATH = Path("logs/auto_journal.db")
+
+_SCHEMA = """
+CREATE TABLE IF NOT EXISTS journal_entries (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    trade_id TEXT UNIQUE,
+    symbol TEXT,
+    archetype TEXT,
+    entry_date TEXT,
+    entry_time TEXT,
+    entry_price REAL,
+    exit_date TEXT,
+    exit_price REAL,
+    quantity INTEGER,
+    pnl_inr REAL,
+    pnl_r REAL,
+
+    -- Context at entry (captured automatically)
+    regime_at_entry TEXT,
+    vix_at_entry REAL,
+    institutional_activity TEXT,
+    quality_score REAL,
+    rs_score REAL,
+    timing_label TEXT,
+    earnings_days INTEGER,
+    whipsaw_verdict TEXT,
+
+    -- Thesis (from thesis_recorder)
+    thesis TEXT,
+    thesis_correct INTEGER,
+
+    -- Outcome analysis (filled at exit)
+    exit_reason TEXT,
+    regime_at_exit TEXT,
+    conviction_at_exit REAL,
+
+    -- Tags (auto-generated)
+    tags TEXT,
+
+    notes TEXT
+)
+"""
+
+
+def _get_conn() -> sqlite3.Connection:
+    _DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(str(_DB_PATH))
+    conn.execute(_SCHEMA)
+    conn.commit()
+    return conn
+
+
+def _row_to_dict(row, cursor: sqlite3.Cursor) -> Dict[str, Any]:
+    cols = [d[0] for d in cursor.description]
+    return dict(zip(cols, row))
+
+
+# ---------------------------------------------------------------------------
+# Core public API
+# ---------------------------------------------------------------------------
+
+def create_entry(
+    symbol: str,
+    archetype: str,
+    entry_price: float,
+    quantity: int,
+    regime: str,
+    quality_score: float,
+    rs_score: float,
+    timing: str,
+    earnings_days: Optional[int],
+    whipsaw: str,
+    thesis: str,
+    vix_at_entry: Optional[float] = None,
+    institutional_activity: Optional[str] = None,
+) -> str:
+    """
+    Creates a new journal entry at trade entry time.
+    Returns the trade_id (UUID string).
+    """
+    trade_id = str(uuid.uuid4())
+    now = datetime.now(timezone.utc)
+
+    # Auto-generate tags from context
+    tags: List[str] = [archetype.lower()]
+    if regime in ("TRENDING_BULL", "EXPANSION"):
+        tags.append("bull_regime")
+    if rs_score and rs_score >= 90:
+        tags.append("high_rs")
+    if timing == "OPTIMAL":
+        tags.append("optimal_timing")
+    if earnings_days is not None and earnings_days <= 7:
+        tags.append("pre_earnings")
+
+    conn = _get_conn()
+    try:
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO journal_entries (
+                trade_id, symbol, archetype,
+                entry_date, entry_time, entry_price,
+                quantity, regime_at_entry, vix_at_entry,
+                institutional_activity, quality_score, rs_score,
+                timing_label, earnings_days, whipsaw_verdict,
+                thesis, tags
+            ) VALUES (
+                ?, ?, ?,
+                ?, ?, ?,
+                ?, ?, ?,
+                ?, ?, ?,
+                ?, ?, ?,
+                ?, ?
+            )
+            """,
+            (
+                trade_id, symbol, archetype,
+                now.strftime("%Y-%m-%d"), now.strftime("%H:%M:%S"), float(entry_price),
+                int(quantity), regime, vix_at_entry,
+                institutional_activity, quality_score, rs_score,
+                timing, earnings_days, whipsaw,
+                thesis, json.dumps(tags),
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    return trade_id
+
+
+def close_entry(
+    trade_id: str,
+    exit_price: float,
+    pnl_inr: float,
+    pnl_r: float,
+    exit_reason: str,
+    regime_at_exit: str,
+    conviction_score: float,
+) -> None:
+    """
+    Updates the journal entry at trade close.
+    Calls score_thesis_at_exit if thesis exists.
+    """
+    now = datetime.now(timezone.utc)
+    conn = _get_conn()
+    try:
+        conn.execute(
+            """
+            UPDATE journal_entries
+            SET exit_date = ?,
+                exit_price = ?,
+                pnl_inr = ?,
+                pnl_r = ?,
+                exit_reason = ?,
+                regime_at_exit = ?,
+                conviction_at_exit = ?
+            WHERE trade_id = ?
+            """,
+            (
+                now.strftime("%Y-%m-%d"),
+                float(exit_price),
+                float(pnl_inr),
+                float(pnl_r),
+                exit_reason,
+                regime_at_exit,
+                float(conviction_score),
+                trade_id,
+            ),
+        )
+        conn.commit()
+
+        # Score thesis if present
+        row = conn.execute(
+            "SELECT thesis FROM journal_entries WHERE trade_id = ?",
+            (trade_id,),
+        ).fetchone()
+        if row and row[0]:
+            try:
+                from ai.thesis_recorder import score_thesis_at_exit
+                score_thesis_at_exit(trade_id, exit_price, pnl_r)
+
+                # Sync thesis_correct back from thesis_recorder DB
+                try:
+                    from pathlib import Path as _Path
+                    import sqlite3 as _sqlite3
+                    thesis_db = _Path("logs/thesis_db.db")
+                    if thesis_db.exists():
+                        tc_conn = _sqlite3.connect(str(thesis_db))
+                        tc_row = tc_conn.execute(
+                            "SELECT thesis_correct FROM trade_theses WHERE trade_id = ? "
+                            "ORDER BY id DESC LIMIT 1",
+                            (trade_id,),
+                        ).fetchone()
+                        tc_conn.close()
+                        if tc_row and tc_row[0] is not None:
+                            conn.execute(
+                                "UPDATE journal_entries SET thesis_correct = ? WHERE trade_id = ?",
+                                (tc_row[0], trade_id),
+                            )
+                            conn.commit()
+                except Exception:
+                    pass
+            except Exception:
+                pass
+    except Exception:
+        pass
+    finally:
+        conn.close()
+
+
+def get_journal_stats() -> Dict[str, Any]:
+    """
+    Returns aggregate performance statistics across all closed journal entries.
+    """
+    conn = _get_conn()
+    try:
+        rows = conn.execute(
+            """
+            SELECT symbol, archetype, regime_at_entry, timing_label,
+                   entry_date, exit_date, pnl_inr, pnl_r,
+                   thesis_correct
+            FROM journal_entries
+            WHERE exit_date IS NOT NULL AND pnl_inr IS NOT NULL
+            """
+        ).fetchall()
+    finally:
+        conn.close()
+
+    if not rows:
+        return {
+            "total_trades": 0,
+            "win_rate": 0.0,
+            "avg_r": 0.0,
+            "best_regime": "",
+            "best_archetype": "",
+            "best_timing": "",
+            "avg_holding_days": 0.0,
+            "thesis_accuracy": 0.0,
+            "lucky_wins": 0,
+        }
+
+    total = len(rows)
+    wins = sum(1 for r in rows if (r[6] or 0) > 0)
+    win_rate = wins / total * 100.0 if total else 0.0
+
+    r_values = [r[7] for r in rows if r[7] is not None]
+    avg_r = sum(r_values) / len(r_values) if r_values else 0.0
+
+    # Best regime (highest win rate among regimes with >= 2 trades)
+    from collections import defaultdict
+    regime_wins: Dict[str, List[float]] = defaultdict(list)
+    archetype_wins: Dict[str, List[float]] = defaultdict(list)
+    timing_wins: Dict[str, List[float]] = defaultdict(list)
+
+    holding_days_list: List[float] = []
+
+    for r in rows:
+        _symbol, archetype, regime, timing, entry_date, exit_date, pnl_inr, pnl_r, _ = r
+        won = 1.0 if (pnl_inr or 0) > 0 else 0.0
+        if regime:
+            regime_wins[regime].append(won)
+        if archetype:
+            archetype_wins[archetype].append(won)
+        if timing:
+            timing_wins[timing].append(won)
+        if entry_date and exit_date:
+            try:
+                d0 = datetime.strptime(entry_date, "%Y-%m-%d")
+                d1 = datetime.strptime(exit_date, "%Y-%m-%d")
+                holding_days_list.append(max(0.0, (d1 - d0).days))
+            except Exception:
+                pass
+
+    def _best_key(d: Dict[str, List[float]]) -> str:
+        candidates = {k: sum(v) / len(v) for k, v in d.items() if len(v) >= 2}
+        return max(candidates, key=lambda k: candidates[k]) if candidates else ""
+
+    best_regime = _best_key(regime_wins)
+    best_archetype = _best_key(archetype_wins)
+    best_timing = _best_key(timing_wins)
+    avg_holding_days = sum(holding_days_list) / len(holding_days_list) if holding_days_list else 0.0
+
+    # Thesis accuracy
+    scored = [(r[8], r[7]) for r in rows if r[8] is not None]
+    thesis_accuracy = (
+        sum(1 for s in scored if s[0] == 1) / len(scored) * 100.0 if scored else 0.0
+    )
+    lucky_wins = sum(1 for s in scored if s[0] == 0 and (s[1] or 0) > 0)
+
+    return {
+        "total_trades": total,
+        "win_rate": round(win_rate, 1),
+        "avg_r": round(avg_r, 3),
+        "best_regime": best_regime,
+        "best_archetype": best_archetype,
+        "best_timing": best_timing,
+        "avg_holding_days": round(avg_holding_days, 1),
+        "thesis_accuracy": round(thesis_accuracy, 1),
+        "lucky_wins": lucky_wins,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Streamlit rendering
+# ---------------------------------------------------------------------------
+
+def render_journal_entry(entry: Dict[str, Any]) -> None:
+    """Render a single journal entry as a rich card."""
+    try:
+        import streamlit as st
+    except ImportError:
+        return
+
+    pnl_inr = entry.get("pnl_inr") or 0.0
+    pnl_r = entry.get("pnl_r") or 0.0
+    symbol = entry.get("symbol", "—")
+    archetype = entry.get("archetype", "—")
+    pnl_color = "#00ff88" if pnl_inr >= 0 else "#ff4466"
+    pnl_sign = "+" if pnl_inr >= 0 else ""
+    r_sign = "+" if pnl_r >= 0 else ""
+
+    # Thesis correctness
+    thesis_correct = entry.get("thesis_correct")
+    thesis_icon = ""
+    if thesis_correct == 1:
+        thesis_icon = "✅"
+    elif thesis_correct == 0:
+        thesis_icon = "❌"
+
+    # Tags
+    tags_raw = entry.get("tags") or "[]"
+    try:
+        tags_list = json.loads(tags_raw) if isinstance(tags_raw, str) else (tags_raw or [])
+    except Exception:
+        tags_list = []
+
+    tags_html = "".join(
+        f"<span style='display:inline-block;background:rgba(0,212,255,.12);"
+        f"color:#00d4ff;font-size:.62rem;font-family:JetBrains Mono,monospace;"
+        f"border-radius:4px;padding:1px 7px;margin-right:4px;'>{t}</span>"
+        for t in tags_list
+    )
+
+    entry_date = entry.get("entry_date", "")
+    exit_date = entry.get("exit_date", "")
+    entry_price = entry.get("entry_price") or 0.0
+    exit_price = entry.get("exit_price") or 0.0
+    regime_entry = entry.get("regime_at_entry", "—")
+    regime_exit = entry.get("regime_at_exit", "—") or "—"
+    rs_score = entry.get("rs_score")
+    timing = entry.get("timing_label", "—")
+    thesis = entry.get("thesis", "") or ""
+    exit_reason = entry.get("exit_reason", "—") or "—"
+    qty = entry.get("quantity") or 0
+
+    rs_html = (
+        f"<span style='color:#ffb800'>RS {rs_score:.0f}</span>"
+        if rs_score is not None else ""
+    )
+
+    thesis_html = ""
+    if thesis:
+        thesis_html = (
+            f"<div style='margin-top:.4rem;color:#c8cfe0;font-size:.76rem;font-style:italic'>"
+            f"Thesis: {thesis} {thesis_icon}</div>"
+        )
+
+    st.markdown(
+        f"""
+        <div style='background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.08);
+                    border-radius:10px;padding:12px 16px;margin-bottom:.5rem'>
+            <div style='display:flex;justify-content:space-between;align-items:flex-start'>
+                <div>
+                    <span style='color:#e8eaf0;font-weight:700;font-size:.9rem;
+                                 font-family:JetBrains Mono,monospace'>{symbol}</span>
+                    <span style='color:#8892a4;font-size:.75rem;margin-left:.6rem'>{archetype}</span>
+                </div>
+                <div style='text-align:right'>
+                    <span style='color:{pnl_color};font-weight:700;font-size:.88rem'>
+                        {pnl_sign}₹{abs(pnl_inr):,.0f}
+                    </span>
+                    <span style='color:{pnl_color};font-size:.75rem;margin-left:.35rem'>
+                        ({r_sign}{pnl_r:.2f}R)
+                    </span>
+                </div>
+            </div>
+            <div style='color:#8892a4;font-size:.72rem;margin-top:.3rem'>
+                Entry {entry_date} @ ₹{entry_price:,.2f} &nbsp;→&nbsp;
+                Exit {exit_date} @ ₹{exit_price:,.2f} &nbsp;|&nbsp; Qty {qty}
+            </div>
+            <div style='color:#8892a4;font-size:.72rem;margin-top:.2rem'>
+                Regime: <span style='color:#00d4ff'>{regime_entry}</span>
+                &nbsp;→&nbsp; <span style='color:#00d4ff'>{regime_exit}</span>
+                &nbsp;|&nbsp; {rs_html} &nbsp;|&nbsp; Timing: {timing}
+                &nbsp;|&nbsp; Exit: <span style='color:#ffb800'>{exit_reason}</span>
+            </div>
+            {thesis_html}
+            <div style='margin-top:.45rem'>{tags_html}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def render_auto_journal_page() -> None:
+    """Full auto-journal page with stats, filters, entries, and CSV export."""
+    try:
+        import streamlit as st
+    except ImportError:
+        return
+
+    st.markdown(
+        "<h3 style='color:#00d4ff;font-family:JetBrains Mono,monospace;"
+        "letter-spacing:2px;margin-bottom:.5rem'>📓 AUTO JOURNAL</h3>",
+        unsafe_allow_html=True,
+    )
+
+    # ── Stats bar ─────────────────────────────────────────────────────────────
+    stats = get_journal_stats()
+
+    c1, c2, c3, c4, c5, c6 = st.columns(6)
+    c1.metric("Total Trades", stats["total_trades"])
+    c2.metric("Win Rate", f"{stats['win_rate']:.1f}%")
+    c3.metric("Avg R", f"{stats['avg_r']:+.2f}R")
+    c4.metric("Best Regime", stats["best_regime"] or "—")
+    c5.metric("Thesis Accuracy", f"{stats['thesis_accuracy']:.1f}%")
+    c6.metric("Lucky Wins", stats["lucky_wins"])
+
+    if stats["best_archetype"] or stats["best_timing"] or stats["avg_holding_days"]:
+        st.markdown(
+            f"<div style='color:#8892a4;font-size:.75rem;margin:.3rem 0 .8rem'>"
+            f"Best archetype: <span style='color:#00ff88'>{stats['best_archetype'] or '—'}</span>"
+            f" &nbsp;|&nbsp; Best timing: <span style='color:#00ff88'>"
+            f"{stats['best_timing'] or '—'}</span>"
+            f" &nbsp;|&nbsp; Avg hold: "
+            f"<span style='color:#00d4ff'>{stats['avg_holding_days']:.1f}d</span></div>",
+            unsafe_allow_html=True,
+        )
+
+    st.divider()
+
+    # ── Filters ───────────────────────────────────────────────────────────────
+    conn = _get_conn()
+    try:
+        all_rows = conn.execute(
+            "SELECT * FROM journal_entries ORDER BY entry_date DESC, entry_time DESC"
+        ).fetchall()
+        col_names = [d[0] for d in conn.execute(
+            "SELECT * FROM journal_entries LIMIT 0"
+        ).description] if False else [
+            "id", "trade_id", "symbol", "archetype", "entry_date", "entry_time",
+            "entry_price", "exit_date", "exit_price", "quantity", "pnl_inr", "pnl_r",
+            "regime_at_entry", "vix_at_entry", "institutional_activity", "quality_score",
+            "rs_score", "timing_label", "earnings_days", "whipsaw_verdict",
+            "thesis", "thesis_correct", "exit_reason", "regime_at_exit",
+            "conviction_at_exit", "tags", "notes",
+        ]
+    finally:
+        conn.close()
+
+    entries = [dict(zip(col_names, r)) for r in all_rows]
+
+    if not entries:
+        st.info("No journal entries yet. Entries are auto-created when trades are executed.")
+        return
+
+    # Build filter options
+    all_symbols = sorted({e["symbol"] for e in entries if e.get("symbol")})
+    all_archetypes = sorted({e["archetype"] for e in entries if e.get("archetype")})
+    all_regimes = sorted({e["regime_at_entry"] for e in entries if e.get("regime_at_entry")})
+    all_tags: List[str] = []
+    for e in entries:
+        try:
+            for t in json.loads(e.get("tags") or "[]"):
+                if t not in all_tags:
+                    all_tags.append(t)
+        except Exception:
+            pass
+
+    f1, f2, f3, f4 = st.columns(4)
+    with f1:
+        sel_symbol = st.selectbox("Symbol", ["All"] + all_symbols, key="aj_filter_symbol")
+    with f2:
+        sel_archetype = st.selectbox("Archetype", ["All"] + all_archetypes, key="aj_filter_arch")
+    with f3:
+        sel_regime = st.selectbox("Regime", ["All"] + all_regimes, key="aj_filter_regime")
+    with f4:
+        sel_tag = st.selectbox("Tag", ["All"] + sorted(all_tags), key="aj_filter_tag")
+
+    date_col1, date_col2 = st.columns(2)
+    with date_col1:
+        from_date = st.date_input("From date", value=None, key="aj_from_date")
+    with date_col2:
+        to_date = st.date_input("To date", value=None, key="aj_to_date")
+
+    # Apply filters
+    filtered = entries
+    if sel_symbol != "All":
+        filtered = [e for e in filtered if e.get("symbol") == sel_symbol]
+    if sel_archetype != "All":
+        filtered = [e for e in filtered if e.get("archetype") == sel_archetype]
+    if sel_regime != "All":
+        filtered = [e for e in filtered if e.get("regime_at_entry") == sel_regime]
+    if sel_tag != "All":
+        def _has_tag(e: Dict[str, Any], tag: str) -> bool:
+            try:
+                return tag in json.loads(e.get("tags") or "[]")
+            except Exception:
+                return False
+        filtered = [e for e in filtered if _has_tag(e, sel_tag)]
+    if from_date:
+        filtered = [e for e in filtered if (e.get("entry_date") or "") >= str(from_date)]
+    if to_date:
+        filtered = [e for e in filtered if (e.get("entry_date") or "") <= str(to_date)]
+
+    st.markdown(
+        f"<div style='color:#8892a4;font-size:.75rem;margin:.3rem 0'>"
+        f"Showing {len(filtered)} of {len(entries)} entries</div>",
+        unsafe_allow_html=True,
+    )
+
+    # ── CSV Export ────────────────────────────────────────────────────────────
+    if filtered:
+        csv_buf = io.StringIO()
+        writer = csv.DictWriter(csv_buf, fieldnames=col_names, extrasaction="ignore")
+        writer.writeheader()
+        writer.writerows(filtered)
+        st.download_button(
+            label="⬇ Export to CSV",
+            data=csv_buf.getvalue().encode("utf-8"),
+            file_name=f"auto_journal_{datetime.now().strftime('%Y%m%d')}.csv",
+            mime="text/csv",
+            key="aj_csv_export",
+        )
+
+    st.divider()
+
+    # ── Entry list (most recent first) ────────────────────────────────────────
+    for entry in filtered[:50]:
+        render_journal_entry(entry)
