@@ -4,11 +4,25 @@ but which is ACCELERATING. Early rotation = bigger opportunity.
 """
 from __future__ import annotations
 
+from datetime import date, timedelta
 from typing import Optional
 
 import pandas as pd
 import streamlit as st
 
+# Kite instrument tokens for NSE sector indices
+_SECTOR_KITE_TOKENS: dict[str, int] = {
+    "Banking":  260105,   # NIFTY BANK
+    "IT":       259849,   # NIFTY IT
+    "Auto":     258049,   # NIFTY AUTO
+    "Pharma":   261249,   # NIFTY PHARMA
+    "FMCG":     257801,   # NIFTY FMCG
+    "Metal":    234249,   # NIFTY METAL
+    "Realty":   261633,   # NIFTY REALTY
+    "Energy":   258921,   # NIFTY ENERGY
+}
+
+# yfinance fallback symbols
 _SECTOR_ETFS: dict[str, str] = {
     "Banking":  "^NSEBANK",
     "IT":       "^CNXIT",
@@ -20,36 +34,50 @@ _SECTOR_ETFS: dict[str, str] = {
     "Energy":   "^CNXENERGY",
 }
 
-# Fallback tickers (same as primary — kept for compatibility)
-_SECTOR_ETFS_FALLBACK: dict[str, str] = _SECTOR_ETFS
+
+def _fetch_sector_kite(sector: str, weeks: int) -> Optional[pd.Series]:
+    """Fetch weekly sector index closes from Kite. Returns None on failure."""
+    token = _SECTOR_KITE_TOKENS.get(sector)
+    if not token:
+        return None
+    try:
+        import os
+        if not (os.getenv("KITE_API_KEY") and os.getenv("KITE_ACCESS_TOKEN")):
+            return None
+        from data.kite_client import KiteClient
+        kite = KiteClient()
+        to_dt   = date.today().strftime("%Y-%m-%d")
+        from_dt = (date.today() - timedelta(weeks=weeks + 4)).strftime("%Y-%m-%d")
+        df = kite.get_historical(token, from_dt, to_dt, interval="week")
+        if df is None or df.empty or len(df) < 2:
+            return None
+        col = "close" if "close" in df.columns else df.columns[-1]
+        return df[col]
+    except Exception:
+        return None
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def _fetch_sector_data(lookback_weeks: int = 4) -> dict[str, pd.Series]:
-    """Fetch weekly closing prices for each sector. Cached for 1 hour."""
+    """Fetch weekly closing prices for each sector. Kite primary, yfinance fallback."""
     import yfinance as yf
 
     result: dict[str, pd.Series] = {}
     period = f"{lookback_weeks + 2}wk"
 
-    for sector, ticker in _SECTOR_ETFS.items():
+    for sector, yf_ticker in _SECTOR_ETFS.items():
+        # Primary: Kite
+        series = _fetch_sector_kite(sector, lookback_weeks)
+        if series is not None and len(series) >= 2:
+            result[sector] = series
+            continue
+        # Fallback: yfinance
         try:
-            hist = yf.Ticker(ticker).history(period=period, interval="1wk")
+            hist = yf.Ticker(yf_ticker).history(period=period, interval="1wk")
             if hist is not None and not hist.empty and len(hist) >= 2:
                 result[sector] = hist["Close"]
-                continue
         except Exception:
             pass
-
-        # Try fallback ticker
-        fallback = _SECTOR_ETFS_FALLBACK.get(sector)
-        if fallback:
-            try:
-                hist = yf.Ticker(fallback).history(period=period, interval="1wk")
-                if hist is not None and not hist.empty and len(hist) >= 2:
-                    result[sector] = hist["Close"]
-            except Exception:
-                pass
 
     return result
 

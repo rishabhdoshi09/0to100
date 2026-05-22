@@ -28,21 +28,44 @@ _SECTOR_ETF = {
 
 
 def _get_nifty_df() -> Optional[pd.DataFrame]:
-    """Fetch ^NSEI via yfinance, cached for 1 hour."""
+    """Fetch Nifty50 daily OHLCV. Kite primary (token 256265), yfinance fallback."""
     global _nifty_cache
     now = time.time()
     if _nifty_cache["df"] is not None and (now - _nifty_cache["ts"]) < _NIFTY_CACHE_TTL:
         return _nifty_cache["df"]
+
+    df = None
+
+    # Primary: Kite
     try:
-        import yfinance as yf
-        df = yf.Ticker("^NSEI").history(period="100d", interval="1d")
-        if df is not None and len(df) >= 20:
-            df.columns = [c.lower() for c in df.columns]
-            _nifty_cache["df"] = df
-            _nifty_cache["ts"] = now
-            return df
+        import os
+        from datetime import date, timedelta
+        if os.getenv("KITE_API_KEY") and os.getenv("KITE_ACCESS_TOKEN"):
+            from data.kite_client import KiteClient
+            kite = KiteClient()
+            to_dt   = date.today().strftime("%Y-%m-%d")
+            from_dt = (date.today() - timedelta(days=150)).strftime("%Y-%m-%d")
+            df = kite.get_historical(256265, from_dt, to_dt, interval="day")
+            if df is not None and len(df) >= 20:
+                df.columns = [c.lower() for c in df.columns]
     except Exception:
-        pass
+        df = None
+
+    # Fallback: yfinance
+    if df is None or len(df) < 20:
+        try:
+            import yfinance as yf
+            raw = yf.Ticker("^NSEI").history(period="100d", interval="1d")
+            if raw is not None and len(raw) >= 20:
+                raw.columns = [c.lower() for c in raw.columns]
+                df = raw
+        except Exception:
+            pass
+
+    if df is not None and len(df) >= 20:
+        _nifty_cache["df"] = df
+        _nifty_cache["ts"] = now
+
     return _nifty_cache["df"]  # return stale cache rather than None
 
 
