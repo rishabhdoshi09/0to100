@@ -8,7 +8,6 @@ from __future__ import annotations
 from typing import Any, Dict, List
 
 import pandas as pd
-import yfinance as yf
 
 from features.indicators import IndicatorEngine
 
@@ -16,8 +15,23 @@ _ie = IndicatorEngine()
 
 
 def _fetch_ohlcv(symbol: str, days: int = 100) -> pd.DataFrame | None:
-    """Fetch OHLCV via yfinance (Kite-free fallback for agent context)."""
+    """Fetch OHLCV. Kite primary, yfinance fallback."""
     try:
+        from data.market_data import get_historical_data
+        from datetime import datetime, timedelta
+        from_date = (datetime.today() - timedelta(days=days + 10)).strftime("%Y-%m-%d")
+        df = get_historical_data(symbol, interval="day", from_date=from_date)
+        if df is not None and not df.empty:
+            # Normalise column names
+            df.columns = [c.lower() for c in df.columns]
+            needed = [c for c in ["open", "high", "low", "close", "volume"] if c in df.columns]
+            return df[needed].dropna()
+    except Exception:
+        pass
+
+    # Last resort: yfinance
+    try:
+        import yfinance as yf
         ticker = yf.Ticker(f"{symbol}.NS")
         df = ticker.history(period=f"{days}d")
         if df is None or df.empty:
@@ -31,16 +45,50 @@ def _fetch_ohlcv(symbol: str, days: int = 100) -> pd.DataFrame | None:
         return None
 
 
+def _get_live_price(symbol: str) -> float | None:
+    """Return live LTP from Kite or yfinance fast_info. Never returns stale historical close."""
+    try:
+        from data.market_data import get_provider
+        q = get_provider().quote(symbol)
+        price = q.get("price", 0.0)
+        if price > 0:
+            return price
+    except Exception:
+        pass
+    try:
+        import yfinance as yf
+        fi = getattr(yf.Ticker(f"{symbol}.NS"), "fast_info", None)
+        if fi and getattr(fi, "last_price", None):
+            return float(fi.last_price)
+    except Exception:
+        pass
+    return None
+
+
 def get_technical_indicators(symbol: str, days: int = 100) -> Dict[str, Any]:
-    """Compute SMA/EMA, RSI, ATR, volatility, momentum, volume for a symbol."""
+    """Compute SMA/EMA, RSI, ATR, volatility, momentum, volume for a symbol.
+    Live LTP is injected so the LLM sees the actual current price, not yesterday's close.
+    """
     df = _fetch_ohlcv(symbol, days)
     if df is None:
         return {"error": f"No data for {symbol}", "symbol": symbol}
-    return _ie.compute(df, symbol=symbol)
+
+    result = _ie.compute(df, symbol=symbol)
+
+    # Override price with live LTP so JARVIS never quotes stale prices
+    live = _get_live_price(symbol)
+    if live and live > 0:
+        result["price"] = live
+        result["ltp"] = live
+        result["price_source"] = "live"
+    else:
+        result["price_source"] = "historical_close"
+
+    return result
 
 
 def get_fundamentals(symbol: str) -> Dict[str, Any]:
-    """Return PE, PB, ROE, market cap.  Tries screener cache, falls back to yfinance."""
+    """Return PE, PB, ROE, market cap. Tries screener cache, falls back to yfinance."""
     try:
         from fundamentals.fetcher import get_deep_fundamentals
         data = get_deep_fundamentals(symbol, force_refresh=False)
@@ -50,6 +98,7 @@ def get_fundamentals(symbol: str) -> Dict[str, Any]:
         pass
 
     try:
+        import yfinance as yf
         info = yf.Ticker(f"{symbol}.NS").info
         return {
             "symbol": symbol,
@@ -75,7 +124,6 @@ def get_recent_news(symbol: str, days: int = 7) -> List[Dict]:
             a.to_dict() for a in articles
             if sym_lower in a.headline.lower() or sym_lower in a.summary.lower()
         ]
-        # Fall back to top general news if nothing symbol-specific
         if not relevant:
             relevant = [a.to_dict() for a in articles[:5]]
         return relevant[:10]
