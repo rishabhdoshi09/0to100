@@ -148,24 +148,55 @@ def _apply_filters(setups: list[dict], intent: QueryIntent, universe: list[str])
     # Sector filter
     if intent.sectors:
         _SECTOR_SYMBOLS: dict[str, list[str]] = {
-            "IT":     ["INFY", "TCS", "WIPRO", "HCLTECH", "TECHM", "MPHASIS", "LTIM", "COFORGE"],
+            "IT":     ["INFY", "TCS", "WIPRO", "HCLTECH", "TECHM", "MPHASIS", "LTIM", "COFORGE",
+                       "PERSISTENT", "KPITTECH", "CYIENT", "HEXAWARE", "LTTS", "TATAELXSI",
+                       "ZENSAR", "BIRLASOFT", "INTELLECT", "MASTEK", "SONATSOFTW", "HAPPSTMNDS",
+                       "ROUTE", "ECLERX", "OFSS"],
             "BANK":   ["HDFCBANK", "ICICIBANK", "AXISBANK", "KOTAKBANK", "SBIN", "BANDHANBNK",
-                       "INDUSINDBK", "FEDERALBNK", "AUBANK", "IDFCFIRSTB", "BAJFINANCE"],
+                       "INDUSINDBK", "FEDERALBNK", "AUBANK", "IDFCFIRSTB", "BAJFINANCE",
+                       "RBLBANK", "CUB", "DCBBANK", "UJJIVANSFB", "EQUITASBNK", "KARURVYSYA",
+                       "BANKBARODA", "PNB", "CANBK", "UNIONBANK", "JKBANK", "SOUTHBANK",
+                       "CSBBANK", "KTKBANK"],
             "AUTO":   ["TATAMOTORS", "MARUTI", "BAJAJ-AUTO", "EICHERMOT", "HEROMOTOCO",
-                       "TVSMOTORS", "MOTHERSON", "BOSCHLTD"],
+                       "TVSMOTOR", "MOTHERSON", "BOSCHLTD", "ASHOKLEY", "BHARATFORG",
+                       "EXIDEIND", "MRF", "APOLLOTYRE", "CEATLTD", "TIINDIA", "ENDURANCE",
+                       "SUNDRMFAST", "SUPRAJIT", "MAHINDCIE", "SCHAEFFLER"],
             "PHARMA": ["SUNPHARMA", "DRREDDY", "CIPLA", "DIVISLAB", "AUROPHARMA",
-                       "ALKEM", "IPCALAB", "GLENMARK"],
+                       "ALKEM", "IPCA", "GLENMARK", "ABBOTINDIA", "PFIZER",
+                       "LAURUSLABS", "GRANULES", "AJANTPHARM", "BIOCON", "ZYDUSLIFE",
+                       "GLAND", "STRIDES", "METROPOLIS", "THYROCARE", "FORTIS",
+                       "MAXHEALTH", "APOLLOHOSP", "SYNGENE", "NATCOPHARM"],
             "FMCG":   ["HINDUNILVR", "NESTLEIND", "BRITANNIA", "DABUR", "GODREJCP",
-                       "MARICO", "COLPAL", "EMAMILTD"],
-            "METAL":  ["TATASTEEL", "HINDALCO", "JSWSTEEL", "SAIL", "HINDZINC", "NATIONALUM"],
-            "ENERGY": ["RELIANCE", "ONGC", "BPCL", "IOC", "GAIL", "POWERGRID", "NTPC"],
-            "REALTY": ["DLF", "GODREJPROP", "OBEROIRLTY", "BRIGADE", "PRESTIGE"],
-            "INFRA":  ["LT", "ADANIPORTS", "ADANIGREEN", "IRFC", "HAL", "BEL"],
-            "CONS":   ["TITAN", "ASIANPAINT", "HAVELLS", "VOLTAS", "WHIRLPOOL"],
+                       "MARICO", "COLPAL", "EMAMI", "VBL", "RADICO", "JYOTHYLAB",
+                       "BAJAJCON", "GILLETTE", "PGHH", "ZYDUSWELL", "TATACONSUM"],
+            "METAL":  ["TATASTEEL", "HINDALCO", "JSWSTEEL", "SAIL", "HINDZINC", "NATIONALUM",
+                       "RATNAMANI", "WELSPUNIND", "SARDA", "GPIL", "JINDALPOLY",
+                       "JINDALSAW", "HINDCOPPER", "MOIL", "NMDC"],
+            "ENERGY": ["RELIANCE", "ONGC", "BPCL", "IOC", "GAIL", "POWERGRID", "NTPC",
+                       "TATAPOWER", "TORNTPOWER", "JSWENERGY", "NHPC", "SJVN",
+                       "SUZLON", "INOXWIND", "CESC", "JSPL", "ATGL", "MGL", "IGL",
+                       "GUJGASLTD", "GSPL", "PETRONET", "ADANIENSOL"],
+            "REALTY": ["DLF", "GODREJPROP", "OBEROIRLTY", "BRIGADE", "PRESTIGE",
+                       "SOBHA", "MAHLIFE", "KOLTEPATIL", "PHOENIXLTD", "LODHA",
+                       "NESCO", "SUNTECK", "KEYSTONE"],
+            "INFRA":  ["LT", "ADANIPORTS", "ADANIGREEN", "IRFC", "HAL", "BEL",
+                       "GMRAIRPORT", "IRB", "PNC", "KNRCON", "HGINFRA", "PSPPROJECT",
+                       "KEC", "KALPATPOWR", "PFC", "RVNL", "IRCON", "RITES"],
+            "CONS":   ["TITAN", "ASIANPAINT", "HAVELLS", "VOLTAS", "WHIRLPOOL",
+                       "BLUESTARCO", "AMBER", "DIXON", "CROMPTON", "VGUARD",
+                       "ORIENTELEC", "BAJAJELEC", "BATAINDIA", "RELAXO",
+                       "ABFRL", "RAYMOND", "SHOPERSTOP"],
         }
         allowed = set()
         for sec in intent.sectors:
             allowed.update(_SECTOR_SYMBOLS.get(sec, []))
+        # Broader fallback: if sector is not in map, include all universe stocks
+        if not allowed:
+            try:
+                from data.nse_universe import get_nse_universe
+                allowed = set(get_nse_universe())
+            except Exception:
+                pass
         # Also include universe stocks that match sector keywords if not in map
         result = [s for s in result if s.get("symbol", "") in allowed or not allowed]
 

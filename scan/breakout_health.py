@@ -19,13 +19,18 @@ import yfinance as yf
 # ---------------------------------------------------------------------------
 # Default NSE universe to sample when signal_tracker.db is unavailable
 # ---------------------------------------------------------------------------
-_DEFAULT_UNIVERSE = [
-    "RELIANCE", "INFY", "TCS", "HDFCBANK", "ICICIBANK",
-    "SBIN", "AXISBANK", "WIPRO", "LT", "BAJFINANCE",
-    "TATAMOTORS", "ASIANPAINT", "MARUTI", "SUNPHARMA", "TITAN",
-    "ULTRACEMCO", "NESTLEIND", "POWERGRID", "NTPC", "COALINDIA",
-    "HCLTECH", "TECHM", "DIVISLAB", "DRREDDY", "CIPLA",
-]
+def _get_default_universe() -> list[str]:
+    try:
+        from data.nse_universe import get_nse_universe
+        return get_nse_universe()
+    except Exception:
+        return [
+            "RELIANCE", "INFY", "TCS", "HDFCBANK", "ICICIBANK",
+            "SBIN", "AXISBANK", "WIPRO", "LT", "BAJFINANCE",
+            "TATAMOTORS", "ASIANPAINT", "MARUTI", "SUNPHARMA", "TITAN",
+            "ULTRACEMCO", "NESTLEIND", "POWERGRID", "NTPC", "COALINDIA",
+            "HCLTECH", "TECHM", "DIVISLAB", "DRREDDY", "CIPLA",
+        ]
 
 _SIGNAL_TRACKER_DB = os.path.join(
     os.path.dirname(os.path.dirname(__file__)), "logs", "signal_tracker.db"
@@ -57,7 +62,7 @@ def _get_candidate_symbols(max_symbols: int = 40) -> list[str]:
     """Pull recent BUY-signal symbols from signal_tracker.db, fall back to default."""
     try:
         if not os.path.exists(_SIGNAL_TRACKER_DB):
-            return _DEFAULT_UNIVERSE[:max_symbols]
+            return _get_default_universe()[:max_symbols]
         conn = sqlite3.connect(_SIGNAL_TRACKER_DB)
         conn.row_factory = sqlite3.Row
         cutoff = (date.today() - timedelta(days=30)).isoformat()
@@ -74,14 +79,14 @@ def _get_candidate_symbols(max_symbols: int = 40) -> list[str]:
         symbols = [r["symbol"] for r in rows]
         if len(symbols) < 10:
             # Supplement with defaults
-            for sym in _DEFAULT_UNIVERSE:
+            for sym in _get_default_universe():
                 if sym not in symbols:
                     symbols.append(sym)
                 if len(symbols) >= max_symbols:
                     break
         return symbols[:max_symbols]
     except Exception:
-        return _DEFAULT_UNIVERSE[:max_symbols]
+        return _get_default_universe()[:max_symbols]
 
 
 def _fetch_ohlcv(symbol: str, days: int = 30) -> "Optional[object]":

@@ -44,8 +44,12 @@ _SETUP_TYPES = ["Breakout", "Pullback", "Reversal", "Momentum", "Mean-Revert", "
 
 def _generate_demo_trades(n: int = 60) -> pd.DataFrame:
     rng     = np.random.default_rng(2024)
-    symbols = ["RELIANCE", "TCS", "INFY", "HDFCBANK", "ICICIBANK",
-               "SBIN", "WIPRO", "LT", "AXISBANK", "BAJFINANCE"]
+    try:
+        from data.nse_universe import NIFTY500
+        symbols = NIFTY500
+    except Exception:
+        symbols = ["RELIANCE", "TCS", "INFY", "HDFCBANK", "ICICIBANK",
+                   "SBIN", "WIPRO", "LT", "AXISBANK", "BAJFINANCE"]
 
     # Recent trades degrade slightly to simulate alpha decay
     win_probs = np.linspace(0.62, 0.38, n)  # decays from 62% → 38%

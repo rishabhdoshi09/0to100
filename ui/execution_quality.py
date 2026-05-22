@@ -48,8 +48,12 @@ def _nse(symbol: str) -> str:
 def _demo_trades() -> pd.DataFrame:
     random.seed(42)
     np.random.seed(42)
-    symbols = ["RELIANCE", "INFY", "TCS", "HDFCBANK", "ICICIBANK",
-               "SBIN", "AXISBANK", "WIPRO", "LT", "BAJFINANCE"]
+    try:
+        from data.nse_universe import NIFTY500
+        symbols = NIFTY500
+    except Exception:
+        symbols = ["RELIANCE", "INFY", "TCS", "HDFCBANK", "ICICIBANK",
+                   "SBIN", "AXISBANK", "WIPRO", "LT", "BAJFINANCE"]
     setups  = ["Breakout", "Mean Reversion", "Momentum", "VWAP Bounce", "Gap Fill"]
     rows = []
     base_date = datetime(2024, 6, 1)

@@ -38,9 +38,14 @@ def render_news_feed() -> None:
     # ── Controls ──────────────────────────────────────────────────────────────
     col1, col2, col3, col4 = st.columns([3, 1, 1, 1])
     with col1:
+        try:
+            from data.nse_universe import get_nse_universe
+            _default_tickers = ",".join(get_nse_universe()[:10])
+        except Exception:
+            _default_tickers = "RELIANCE,INFY,TCS,HDFCBANK"
         raw_tickers = st.text_input(
             "Tickers (comma-separated)",
-            value="RELIANCE,INFY,TCS,HDFCBANK",
+            value=_default_tickers,
             key="mx_tickers",
             label_visibility="collapsed",
             placeholder="RELIANCE,INFY,TCS …",

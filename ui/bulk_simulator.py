@@ -53,20 +53,20 @@ NIFTY_NEXT_50 = [
 NIFTY_100 = NIFTY_50 + NIFTY_NEXT_50
 
 
-def _get_nifty_500() -> list[str]:
-    """First 500 NSE equity symbols from the instrument cache."""
+def _get_nse_universe() -> list[str]:
+    """Full NSE equity universe from data/nse_universe.py (~2000 stocks, or 423 NIFTY500 fallback)."""
     try:
-        from app import get_all_equity_symbols  # type: ignore
-        return list(get_all_equity_symbols().keys())[:500]
+        from data.nse_universe import get_nse_universe
+        return get_nse_universe()
     except Exception:
-        # Fallback if running standalone — Nifty 100 doubled
+        # Fallback if import fails — use Nifty 100
         return list(dict.fromkeys(NIFTY_100 * 5))[:500]
 
 
 UNIVERSES = {
     "Nifty 50":         lambda: NIFTY_50,
     "Nifty 100":        lambda: NIFTY_100,
-    "Nifty 500":        _get_nifty_500,
+    "NSE Full Universe": _get_nse_universe,
     "Custom watchlist": lambda: [],   # user-provided
 }
 

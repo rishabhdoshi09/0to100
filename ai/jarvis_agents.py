@@ -518,8 +518,10 @@ class AnalysisAgent(BaseJarvisAgent):
             from scan.pipeline import ScanPipeline
             from core.regime_engine import compute_regime
             regime = compute_regime()
-            uni = universe or ["RELIANCE", "INFY", "TCS", "HDFCBANK", "ICICIBANK",
-                               "SBIN", "AXISBANK", "LT", "BAJFINANCE", "WIPRO"]
+            if universe is None:
+                from data.nse_universe import get_nse_universe
+                universe = get_nse_universe()
+            uni = universe
             results = ScanPipeline(max_workers=8, min_quality_score=40).run(
                 uni, top_n=top_n, regime_state=regime, skip_liquidity_filter=True
             )
