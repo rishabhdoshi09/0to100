@@ -853,18 +853,73 @@ with st.sidebar:
                     "👁  My Watchlist", "💼  My Holdings", "🚀  IPO Calendar", "🔍  Stock Screener",
                     "📊  Market Breadth", "🎯  Edge Tracker", "📋  Trade Replay", "🔔  Smart Alerts",
                     "🚪  Exit Intelligence", "🌊  Options Flow"]
-    # Consume pending navigation set by child pages (can't set widget key directly)
-    if "_nav_pending" in st.session_state:
-        st.session_state["sidebar_nav"] = st.session_state.pop("_nav_pending")
-    _nav_default = st.session_state.get("sidebar_nav", "🏠  Dashboard")
-    _nav_idx = _nav_options.index(_nav_default) if _nav_default in _nav_options else 0
-    _nav_page = st.radio(
-        "Navigate",
-        _nav_options,
-        index=_nav_idx,
-        label_visibility="collapsed",
-        key="sidebar_nav",
-    )
+
+    # Grouped navigation using option_menu
+    try:
+        from streamlit_option_menu import option_menu as _option_menu
+        if "_nav_pending" in st.session_state:
+            st.session_state["sidebar_nav"] = st.session_state.pop("_nav_pending")
+        _cur = st.session_state.get("sidebar_nav", "🏠  Dashboard").split("  ", 1)[-1].strip()
+
+        _nav_page_raw = _option_menu(
+            menu_title=None,
+            options=[
+                "Command",
+                "JARVIS", "Scanner", "Terminal", "Options Flow",
+                "Watchlist", "Exit Intelligence", "Holdings",
+                "Journal", "Edge Tracker", "Trade Replay",
+                "Research", "AlgoLab", "Tools",
+            ],
+            icons=[
+                "lightning-charge-fill",
+                "robot", "radar", "activity", "water",
+                "eye", "door-open", "briefcase",
+                "journal-text", "bullseye", "play-circle",
+                "search", "dna", "tools",
+            ],
+            menu_icon=None,
+            default_index=0,
+            styles={
+                "container":     {"padding": "0", "background-color": "transparent"},
+                "nav-link":      {"font-size": "0.72rem", "font-family": "JetBrains Mono, monospace",
+                                  "color": "#8892a4", "padding": "5px 10px", "border-radius": "6px"},
+                "nav-link-selected": {"background-color": "#00d4ff18", "color": "#00d4ff",
+                                      "font-weight": "700"},
+                "icon":          {"color": "#4a5568", "font-size": "0.75rem"},
+            },
+            key="sidebar_nav_menu",
+        )
+
+        # Map option_menu names → page names used in routing
+        _MENU_MAP = {
+            "Command":          "Dashboard",
+            "JARVIS":           "JARVIS",
+            "Scanner":          "Institutional",
+            "Terminal":         "Terminal",
+            "Options Flow":     "Options Flow",
+            "Watchlist":        "My Watchlist",
+            "Exit Intelligence":"Exit Intelligence",
+            "Holdings":         "My Holdings",
+            "Journal":          "Tools",
+            "Edge Tracker":     "Edge Tracker",
+            "Trade Replay":     "Trade Replay",
+            "Research":         "Research",
+            "AlgoLab":          "AlgoLab",
+            "Tools":            "Tools",
+        }
+        _nav_page = _MENU_MAP.get(_nav_page_raw, _nav_page_raw)
+        st.session_state["sidebar_nav"] = _nav_page + "  " * 0  # keep compat
+
+    except Exception:
+        # Fallback: flat radio if option_menu fails
+        if "_nav_pending" in st.session_state:
+            st.session_state["sidebar_nav"] = st.session_state.pop("_nav_pending")
+        _nav_default = st.session_state.get("sidebar_nav", "🏠  Dashboard")
+        _nav_idx = _nav_options.index(_nav_default) if _nav_default in _nav_options else 0
+        _nav_page = st.radio(
+            "Navigate", _nav_options, index=_nav_idx,
+            label_visibility="collapsed", key="sidebar_nav",
+        ).split("  ", 1)[-1].strip()
     st.divider()
     # Plain English mode toggle
     try:

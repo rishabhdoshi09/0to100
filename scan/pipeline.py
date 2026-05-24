@@ -152,6 +152,27 @@ class ScanPipeline:
         if self._fire_alerts:
             self._fire_elite_alerts(result)
 
+        # ── 10. Auto-log READY_TO_TRADE signals for outcome tracking ──────────
+        try:
+            from core.signal_outcome_tracker import log_signal
+            regime_name = getattr(regime_state, "market_regime", "UNKNOWN") if regime_state else "UNKNOWN"
+            for setup in result:
+                if getattr(setup, "verdict", "") == "READY_TO_TRADE":
+                    log_signal(
+                        symbol=setup.symbol,
+                        signal_type="READY_TO_TRADE",
+                        entry_price=setup.pivot_level,
+                        pivot_price=setup.pivot_level,
+                        stop_price=setup.stop_level,
+                        target_price=getattr(setup, "target_price", 0),
+                        quality_score=setup.quality_score,
+                        accum_score=getattr(setup, "accum_score", 0),
+                        archetype=setup.archetype,
+                        regime=regime_name,
+                    )
+        except Exception:
+            pass  # never let tracker break the scan
+
         return result
 
     def _get_regime(self):

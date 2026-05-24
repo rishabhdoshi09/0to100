@@ -369,6 +369,21 @@ class JarvisOrchestrator:
             except Exception:
                 pass
 
+            # System signal accuracy (self-improving feedback)
+            try:
+                from core.signal_outcome_tracker import get_accuracy_report, update_outcomes
+                update_outcomes()  # refresh any pending outcomes
+                acc = get_accuracy_report()
+                if acc.get("total_signals", 0) >= 5:
+                    lines.append(
+                        f"Signal accuracy (self-tracking): {acc['overall_accuracy']:.0f}% "
+                        f"({acc['wins']}W/{acc['losses']}L) | "
+                        f"Best setup: {acc.get('best_archetype','?')} | "
+                        f"System edge: {acc.get('system_edge', 0):+.2f}R"
+                    )
+            except Exception:
+                pass
+
             # Historical analog — what did the market do last time conditions were like this?
             try:
                 from core.regime_analog import find_analogs, format_analog_insight
