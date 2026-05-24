@@ -2610,6 +2610,242 @@ elif _page == "Options Flow":
     except Exception as e:
         st.error(f"Options Flow error: {e}")
 
+
+# ══════════════════════════════════════════════════════════════════════════════
+# PAGE: TOOLS6 — 6-item nav "Tools" sub-tabbed hub
+# ══════════════════════════════════════════════════════════════════════════════
+elif _page == "Tools6":
+    st.markdown(
+        "<h2 style='color:#00d4ff;font-family:JetBrains Mono,monospace;"
+        "font-size:1.3rem;letter-spacing:2px;margin-bottom:4px'>🛠️ TOOLS</h2>",
+        unsafe_allow_html=True,
+    )
+    try:
+        _tools_tabs = st.tabs([
+            "🌊 Options Flow",
+            "👁 Watchlist",
+            "🚪 Exit Intelligence",
+            "🎯 Edge Tracker",
+            "📋 Trade Replay",
+            "🔬 Research",
+            "🧬 AlgoLab",
+            "📦 More Tools",
+        ])
+
+        with _tools_tabs[0]:
+            try:
+                from ui.options_flow_scanner import render_options_flow_scanner
+                render_options_flow_scanner()
+            except Exception as _e:
+                st.error(f"Options Flow error: {_e}")
+
+        with _tools_tabs[1]:
+            try:
+                from ui.watchlist import render_watchlist
+                render_watchlist()
+            except Exception as _e:
+                st.error(f"Watchlist error: {_e}")
+
+        with _tools_tabs[2]:
+            try:
+                from ui.exit_intelligence import render_exit_intelligence
+                render_exit_intelligence()
+            except Exception as _e:
+                st.error(f"Exit Intelligence error: {_e}")
+
+        with _tools_tabs[3]:
+            try:
+                _et0, _et1, _et2 = st.tabs(["Alpha Decay", "Kelly Sizer", "Execution Quality"])
+                with _et0:
+                    from ui.alpha_decay import render_alpha_decay
+                    render_alpha_decay()
+                with _et1:
+                    from ui.kelly_sizer import render_kelly_sizer
+                    render_kelly_sizer()
+                with _et2:
+                    from ui.execution_quality import render_execution_quality
+                    render_execution_quality()
+            except Exception as _e:
+                st.error(f"Edge Tracker error: {_e}")
+
+        with _tools_tabs[4]:
+            try:
+                from ui.trade_replay import render_trade_replay
+                render_trade_replay()
+            except Exception as _e:
+                st.error(f"Trade Replay error: {_e}")
+
+        with _tools_tabs[5]:
+            # Research page inline
+            try:
+                _r0, _r1, _r2, _r3, _r4, _r5, _r6, _r7, _r8, _r9, _r10, _r11, _r12, _r13 = st.tabs([
+                    "📰 News",
+                    "🌍 Macro",
+                    "📊 Market Breadth",
+                    "📋 Daily Report",
+                    "🔔 Alerts",
+                    "📊 Screener",
+                    "🚀 IPO Calendar",
+                    "📊 FII/DII Flow",
+                    "🎙️ Earnings",
+                    "📋 VCP Scanner",
+                    "📊 Signal Tracker",
+                    "💬 NL Query",
+                    "🗺️ Portfolio Heatmap",
+                    "📓 Journal Analytics",
+                ])
+                with _r0:
+                    try:
+                        from ui.news_feed import render_news_feed
+                        render_news_feed(universe)
+                    except Exception as _ne:
+                        st.error(f"News error: {_ne}")
+                with _r1:
+                    try:
+                        from ui.macro import render_macro
+                        render_macro()
+                    except Exception as _ne:
+                        st.error(f"Macro error: {_ne}")
+                with _r2:
+                    try:
+                        from ui.market_breadth import render_market_breadth
+                        render_market_breadth()
+                    except Exception as _ne:
+                        st.error(f"Breadth error: {_ne}")
+                with _r3:
+                    try:
+                        from ui.sitrep import render_sitrep
+                        render_sitrep(universe)
+                    except Exception as _ne:
+                        st.error(f"Report error: {_ne}")
+                with _r4:
+                    try:
+                        from ui.alerts_page import render_alerts_page
+                        _al_sub1, _al_sub2 = st.tabs(["🔔 Telegram Alerts", "📥 Alert Inbox"])
+                        with _al_sub1:
+                            render_alerts_page()
+                        with _al_sub2:
+                            from ui.alert_inbox import render_alert_inbox
+                            render_alert_inbox()
+                    except Exception as _ne:
+                        st.error(f"Alerts error: {_ne}")
+                with _r5:
+                    try:
+                        from ui.fundamental_screener import render_fundamental_screener
+                        render_fundamental_screener(universe)
+                    except Exception as _ne:
+                        st.error(f"Screener error: {_ne}")
+                with _r6:
+                    try:
+                        from ui.ipo_calendar import render_ipo_calendar
+                        render_ipo_calendar()
+                    except Exception as _ne:
+                        st.error(f"IPO error: {_ne}")
+                with _r7:
+                    try:
+                        from ui.fii_dii_page import render_fii_dii_page
+                        render_fii_dii_page()
+                    except Exception as _ne:
+                        st.error(f"FII/DII error: {_ne}")
+                with _r8:
+                    try:
+                        from ui.earnings_page import render_earnings_page
+                        render_earnings_page()
+                    except Exception as _ne:
+                        st.error(f"Earnings error: {_ne}")
+                with _r9:
+                    try:
+                        from ui.vcp_page import render_vcp_page
+                        render_vcp_page(universe)
+                    except Exception as _ne:
+                        st.error(f"VCP error: {_ne}")
+                with _r10:
+                    try:
+                        from ui.signal_tracker_page import render_signal_tracker_page
+                        render_signal_tracker_page()
+                    except Exception as _ne:
+                        st.error(f"Signal Tracker error: {_ne}")
+                with _r11:
+                    try:
+                        from ui.nl_query import render_nl_query
+                        render_nl_query(universe)
+                    except Exception as _ne:
+                        st.error(f"NL Query error: {_ne}")
+                with _r12:
+                    try:
+                        from ui.portfolio_heatmap import render_portfolio_heatmap
+                        _ph_positions = st.session_state.get("paper_positions", [])
+                        if _ph_positions:
+                            render_portfolio_heatmap(_ph_positions)
+                        else:
+                            st.info("No open positions to display.")
+                    except Exception as _ne:
+                        st.error(f"Portfolio Heatmap error: {_ne}")
+                with _r13:
+                    try:
+                        from ui.journal_analytics import render_journal_analytics
+                        render_journal_analytics()
+                    except Exception as _ne:
+                        st.error(f"Journal Analytics error: {_ne}")
+            except Exception as _re:
+                st.error(f"Research tab error: {_re}")
+
+        with _tools_tabs[6]:
+            # AlgoLab inline
+            try:
+                _al1, _al2, _al3 = st.tabs([
+                    "📊 Walk-Forward Optimizer",
+                    "📈 Backtest Engine",
+                    "🎯 Position Sizer",
+                ])
+                with _al1:
+                    try:
+                        from ui.algolab import render_algolab
+                        render_algolab(universe)
+                    except Exception as _ae:
+                        st.error(f"AlgoLab error: {_ae}")
+                with _al2:
+                    try:
+                        from ui.bulk_simulator import render_bulk_simulator
+                        render_bulk_simulator(universe)
+                    except Exception as _ae:
+                        st.error(f"Backtest error: {_ae}")
+                with _al3:
+                    try:
+                        from ui.kelly_sizer import render_kelly_sizer
+                        render_kelly_sizer()
+                    except Exception as _ae:
+                        st.error(f"Kelly Sizer error: {_ae}")
+            except Exception as _ale:
+                st.error(f"AlgoLab tab error: {_ale}")
+
+        with _tools_tabs[7]:
+            # More Tools
+            st.markdown("### More Tools")
+            _mt_col1, _mt_col2, _mt_col3 = st.columns(3)
+            with _mt_col1:
+                if st.button("📊 Market Breadth", key="mt_breadth", use_container_width=True):
+                    st.session_state["sidebar_nav"] = "Market Breadth"
+                    st.rerun()
+                if st.button("🔔 Smart Alerts", key="mt_alerts", use_container_width=True):
+                    st.session_state["sidebar_nav"] = "Smart Alerts"
+                    st.rerun()
+            with _mt_col2:
+                if st.button("🚀 IPO Calendar", key="mt_ipo", use_container_width=True):
+                    st.session_state["sidebar_nav"] = "IPO Calendar"
+                    st.rerun()
+                if st.button("🔍 Stock Screener", key="mt_screener", use_container_width=True):
+                    st.session_state["sidebar_nav"] = "Stock Screener"
+                    st.rerun()
+            with _mt_col3:
+                if st.button("💼 Holdings", key="mt_holdings", use_container_width=True):
+                    st.session_state["sidebar_nav"] = "My Holdings"
+                    st.rerun()
+
+    except Exception as _tools6_e:
+        st.error(f"Tools page error: {_tools6_e}")
+
+
 # ── Paper trading dashboard (accessible from any tab via sidebar session) ────
 # Initialise DB on every load so paper_trading tables exist
 init_db()

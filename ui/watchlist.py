@@ -10,6 +10,68 @@ import streamlit as st
 
 
 @st.cache_data(ttl=300, show_spinner=False)
+def _quick_readiness_extended(symbols_key: str) -> dict[str, dict]:
+    """
+    Extended readiness check — returns dict of {symbol: {verdict, volume_ratio, week52_high, week52_low, price}}
+    """
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    from agents.tools import get_technical_indicators
+    symbols = [s for s in symbols_key.split(",") if s]
+
+    def _score(sym: str) -> tuple[str, dict]:
+        try:
+            d = get_technical_indicators(sym, days=60)
+            if "error" in d:
+                return sym, {"verdict": "WATCH", "volume_ratio": 1.0, "week52_high": 0.0, "week52_low": 0.0}
+            score = 0
+            price = d.get("ltp") or d.get("price") or 0
+            ema20 = d.get("ema_20")
+            rsi   = d.get("rsi_14") or 50
+            vr    = float(d.get("volume_ratio") or 1.0)
+            m5    = d.get("momentum_5d_pct") or 0.0
+            m20   = d.get("momentum_20d_pct") or 0.0
+            gc    = d.get("golden_cross", False)
+
+            if price and ema20 and float(price) > float(ema20): score += 1
+            if float(rsi) >= 50 and float(rsi) <= 72:           score += 1
+            if vr >= 1.5:                                        score += 2
+            elif vr >= 1.0:                                      score += 1
+            if float(m5) > 2:                                    score += 1
+            if float(m20) > 5:                                   score += 1
+            if gc:                                               score += 1
+
+            if score >= 5:   verdict = "READY"
+            elif score >= 3: verdict = "BUILDING"
+            else:            verdict = "WATCH"
+
+            # Try to get 52W high/low
+            w52_high, w52_low = 0.0, 0.0
+            try:
+                import yfinance as yf
+                fi = yf.Ticker(f"{sym}.NS").fast_info
+                w52_high = float(getattr(fi, "year_high", 0) or 0)
+                w52_low  = float(getattr(fi, "year_low",  0) or 0)
+            except Exception:
+                pass
+
+            return sym, {"verdict": verdict, "volume_ratio": vr,
+                         "week52_high": w52_high, "week52_low": w52_low}
+        except Exception:
+            return sym, {"verdict": "WATCH", "volume_ratio": 1.0, "week52_high": 0.0, "week52_low": 0.0}
+
+    result: dict[str, dict] = {}
+    with ThreadPoolExecutor(max_workers=10) as ex:
+        futs = {ex.submit(_score, s): s for s in symbols}
+        for f in as_completed(futs):
+            try:
+                sym, info = f.result()
+                result[sym] = info
+            except Exception:
+                pass
+    return result
+
+
+@st.cache_data(ttl=300, show_spinner=False)
 def _quick_readiness(symbols_key: str) -> dict[str, str]:
     """
     Quick actionability check for watchlist stocks.
@@ -267,29 +329,40 @@ def render_watchlist() -> None:
         )
         return
 
-    # Auto-graduation: quick check each symbol's readiness
+    # Auto-graduation: extended readiness check (includes volume_ratio, 52W data)
     symbols_key = ",".join(r["symbol"] for r in rows)
-    readiness: dict[str, str] = {}
+    readiness_ext: dict[str, dict] = {}
     try:
         with st.spinner("Checking setup readiness…"):
-            readiness = _quick_readiness(symbols_key)
+            readiness_ext = _quick_readiness_extended(symbols_key)
     except Exception:
         pass
+
+    # Build simple readiness dict for backward compat
+    readiness = {sym: info.get("verdict", "WATCH") for sym, info in readiness_ext.items()}
 
     # Sort: READY stocks float to top
     _order = {"READY": 0, "BUILDING": 1, "WATCH": 2}
     rows = sorted(rows, key=lambda r: _order.get(readiness.get(r["symbol"], "WATCH"), 2))
 
-    # Summary badge row
-    ready_count = sum(1 for v in readiness.values() if v == "READY")
+    # Summary line at the top
+    ready_count    = sum(1 for v in readiness.values() if v == "READY")
     building_count = sum(1 for v in readiness.values() if v == "BUILDING")
-    if ready_count > 0:
+    avoid_count    = sum(1 for v in readiness.values() if v == "WATCH")
+    parts = []
+    if ready_count:
+        parts.append(f"<span style='color:#00d4a0;font-weight:700'>⚡ {ready_count} stock{'s' if ready_count>1 else ''} Ready</span>")
+    if building_count:
+        parts.append(f"<span style='color:#f59e0b;font-weight:700'>🔨 {building_count} Building</span>")
+    if avoid_count:
+        parts.append(f"<span style='color:#8892a4'>👁 {avoid_count} Watch</span>")
+    if parts:
         st.markdown(
-            f"<div style='background:#00d4a014;border:1px solid #00d4a044;border-radius:8px;"
-            f"padding:8px 14px;margin-bottom:12px;font-size:.75rem;color:#00d4a0'>"
-            f"⚡ <b>{ready_count} stock{'s' if ready_count > 1 else ''} READY TO TRADE</b>"
-            f"{f' · {building_count} building' if building_count else ''}"
-            f" — check scanner for full details</div>",
+            f"<div style='background:#0d1421;border:1px solid #1e293b;border-radius:8px;"
+            f"padding:8px 14px;margin-bottom:12px;font-size:.78rem;"
+            f"font-family:JetBrains Mono,monospace'>"
+            + "  ·  ".join(parts)
+            + "</div>",
             unsafe_allow_html=True,
         )
 
@@ -306,6 +379,12 @@ def render_watchlist() -> None:
         added_date = item["added_date"]
 
         current_px = _get_price(sym)
+
+        # Extended data
+        ext = readiness_ext.get(sym, {})
+        vr        = ext.get("volume_ratio", 1.0)
+        w52_high  = ext.get("week52_high", 0.0)
+        w52_low   = ext.get("week52_low",  0.0)
 
         # Percentage change from added price
         if added_px and added_px > 0:
@@ -326,20 +405,26 @@ def render_watchlist() -> None:
             and current_px >= target_px * 0.97
         )
 
-        # Auto-graduation badge
+        # Verdict badge (trader-friendly labels)
         verdict = readiness.get(sym, "WATCH")
-        verdict_html = {
-            "READY":    "<span style='background:#00d4a022;border:1px solid #00d4a066;border-radius:4px;padding:1px 7px;font-size:.6rem;font-weight:700;color:#00d4a0;margin-left:6px'>⚡ READY</span>",
-            "BUILDING": "<span style='background:#f59e0b22;border:1px solid #f59e0b66;border-radius:4px;padding:1px 7px;font-size:.6rem;font-weight:700;color:#f59e0b;margin-left:6px'>🔨 BUILDING</span>",
-        }.get(verdict, "")
+        verdict_cfg = {
+            "READY":    ("#00d4a0", "#00d4a022", "#00d4a066", "⚡ Ready"),
+            "BUILDING": ("#f59e0b", "#f59e0b22", "#f59e0b66", "🔨 Building"),
+        }.get(verdict, ("#8892a4", "#8892a422", "#8892a466", "👁 Watch"))
+        vfg, vbg, vborder, vlabel = verdict_cfg
+        verdict_html = (
+            f"<span style='background:{vbg};border:1px solid {vborder};border-radius:4px;"
+            f"padding:2px 8px;font-size:.65rem;font-weight:700;color:{vfg};"
+            f"font-family:JetBrains Mono,monospace;white-space:nowrap'>{vlabel}</span>"
+        )
 
         if below_stop:
             border_color = "#ff4466"
-            status_label = "Below Stop Loss"
+            status_label = "Below Stop"
             status_color = "#ff4466"
         elif verdict == "READY":
             border_color = "#00d4a0"
-            status_label = "Setup READY"
+            status_label = "Setup Ready"
             status_color = "#00d4a0"
         elif in_buy_zone:
             border_color = "#00d4a0"
@@ -355,11 +440,41 @@ def render_watchlist() -> None:
             status_color = "#8892a4"
 
         chg_color = "#00d4a0" if change_pct >= 0 else "#ff4466"
+        chg_arrow = "▲" if change_pct >= 0 else "▼"
         chg_sign  = "+" if change_pct >= 0 else ""
+
+        # Volume fire emoji
+        vol_fire = ""
+        try:
+            if float(vr) >= 2.0:
+                vol_fire = " 🔥🔥"
+            elif float(vr) >= 1.5:
+                vol_fire = " 🔥"
+        except Exception:
+            pass
 
         # Target upside / stop downside
         upside_pct   = ((target_px - current_px) / current_px * 100) if (target_px and current_px > 0) else None
         downside_pct = ((current_px - stop_px) / current_px * 100) if (stop_px and current_px > 0) else None
+
+        # 52W position bar
+        w52_bar_html = ""
+        if w52_high and w52_low and current_px and w52_high > w52_low:
+            try:
+                pct_52 = min(max((current_px - w52_low) / (w52_high - w52_low) * 100, 0), 100)
+                bar_color = "#00d4a0" if pct_52 >= 70 else ("#f59e0b" if pct_52 >= 40 else "#ff4b4b")
+                w52_bar_html = (
+                    f"<div style='margin-top:6px'>"
+                    f"<div style='font-size:.6rem;color:#4a5568;margin-bottom:2px'>"
+                    f"52W Range: ₹{w52_low:,.0f} ◄ <span style='color:{bar_color}'>{pct_52:.0f}%</span> ► ₹{w52_high:,.0f}</div>"
+                    f"<div style='background:#1a2035;border-radius:3px;height:4px;width:100%;position:relative'>"
+                    f"<div style='width:{pct_52:.0f}%;background:{bar_color};height:4px;border-radius:3px'></div>"
+                    f"<div style='position:absolute;top:-3px;left:{pct_52:.0f}%;transform:translateX(-50%);"
+                    f"width:2px;height:10px;background:#fff8;border-radius:1px'></div>"
+                    f"</div></div>"
+                )
+            except Exception:
+                pass
 
         with st.container():
             card_html = (
@@ -367,28 +482,30 @@ def render_watchlist() -> None:
                 f"border:1px solid {border_color}44;"
                 f"border-left:4px solid {border_color};"
                 f"border-radius:10px;padding:14px 18px;margin-bottom:10px'>"
-                # Header row
-                f"<div style='display:flex;justify-content:space-between;align-items:center;margin-bottom:8px'>"
-                f"<span style='color:#e8eaf0;font-size:1.05rem;font-weight:700;"
-                f"font-family:JetBrains Mono,monospace'>{sym}</span>{verdict_html}"
-                + (
-                    f"<span style='color:{status_color};font-size:.68rem;font-weight:700;"
-                    f"background:rgba(255,255,255,.05);padding:2px 8px;border-radius:5px;"
-                    f"border:1px solid {status_color}44'>{status_label}</span>"
-                    if status_label else ""
-                )
-                + f"</div>"
-                # Price row
-                f"<div style='margin-bottom:6px'>"
-                f"<span style='color:#e8eaf0;font-size:1.15rem;font-weight:700;"
+                # Header row: symbol left, verdict badge right
+                f"<div style='display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:6px'>"
+                f"<span style='color:#e8eaf0;font-size:1rem;font-weight:700;"
+                f"font-family:JetBrains Mono,monospace;letter-spacing:.03em'>{sym}</span>"
+                f"{verdict_html}"
+                f"</div>"
+                # Price + % change — most prominent
+                f"<div style='margin-bottom:4px'>"
+                f"<span style='color:#e8eaf0;font-size:1.1rem;font-weight:700;"
                 f"font-family:JetBrains Mono,monospace'>₹{current_px:,.2f}</span>"
+                f"</div>"
+                f"<div style='margin-bottom:6px'>"
+                f"<span style='color:{chg_color};font-size:.9rem;font-weight:700'>"
+                f"{chg_arrow} {chg_sign}{change_pct:.2f}%{vol_fire}</span>"
                 + (
-                    f" <span style='color:{chg_color};font-size:.78rem'>"
-                    f"{chg_sign}{change_pct:.1f}% since added</span>"
+                    f" <span style='color:#4a5568;font-size:.65rem'>since added</span>"
                     if added_px > 0 else ""
                 )
                 + f"</div>"
             )
+
+            # 52W bar
+            if w52_bar_html:
+                card_html += w52_bar_html
 
             # Buy zone bar
             if buy_low is not None and buy_high is not None:
@@ -415,11 +532,11 @@ def render_watchlist() -> None:
                 s_color = "#ff4466" if below_stop else "#8892a4"
                 dn_str = f" ({downside_pct:.1f}% buffer)" if downside_pct is not None else ""
                 details.append(
-                    f"<span style='color:{s_color}'>Stop Loss: ₹{stop_px:,.2f}{dn_str}</span>"
+                    f"<span style='color:{s_color}'>Stop: ₹{stop_px:,.2f}{dn_str}</span>"
                 )
             if details:
                 card_html += (
-                    f"<div style='font-size:.76rem;margin:.3rem 0;display:flex;gap:1.2rem'>"
+                    f"<div style='font-size:.76rem;margin:.4rem 0;display:flex;gap:1.2rem;flex-wrap:wrap'>"
                     + " ".join(details)
                     + "</div>"
                 )
@@ -432,10 +549,17 @@ def render_watchlist() -> None:
                     f"{notes_text}</div>"
                 )
 
-            # Added date
+            # Added date + status badge
             card_html += (
-                f"<div style='font-size:.65rem;color:#374151;margin-top:.4rem'>Added: {added_date}"
+                f"<div style='font-size:.65rem;color:#374151;margin-top:.4rem;"
+                f"display:flex;justify-content:space-between;align-items:center'>"
+                f"<span>Added: {added_date}"
                 + (f" at ₹{added_px:,.2f}" if added_px else "")
+                + "</span>"
+                + (
+                    f"<span style='color:{status_color};font-size:.65rem;font-weight:700'>{status_label}</span>"
+                    if status_label else ""
+                )
                 + "</div>"
                 "</div>"
             )

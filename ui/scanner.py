@@ -100,10 +100,10 @@ def _cached_elite_setups(symbols_key: str, top_n: int = 20):
 
 def _verdict_badge(verdict: str) -> str:
     cfg = {
-        "READY_TO_TRADE": ("#00d4a0", "#00d4a014", "✅ READY"),
-        "BUILDING":       ("#f59e0b", "#f59e0b14", "🔨 BUILDING"),
-        "AVOID":          ("#ff4b4b", "#ff4b4b14", "🚫 AVOID"),
-    }.get(verdict, ("#8892a4", "#88", "⚪ UNKNOWN"))
+        "READY_TO_TRADE": ("#00d4a0", "#00d4a014", "⚡ Ready to Buy"),
+        "BUILDING":       ("#f59e0b", "#f59e0b14", "🔨 Building"),
+        "AVOID":          ("#ff4b4b", "#ff4b4b14", "✗ Avoid"),
+    }.get(verdict, ("#8892a4", "#8892a414", "👁 Watch"))
     fg, bg, label = cfg
     return (
         f"<span style='background:{bg};border:1px solid {fg}44;border-radius:5px;"
@@ -115,7 +115,7 @@ def _verdict_badge(verdict: str) -> str:
 def _accum_bar(score: float) -> str:
     pct = min(max(int((score + 100) / 2), 0), 100)  # -100..+100 → 0..100
     color = "#00d4a0" if score >= 0 else "#ff4b4b"
-    label = "ACCUM" if score >= 0 else "DISTR"
+    label = "Buying Pressure" if score >= 0 else "Selling Pressure"
     return (
         f"<div style='font-size:.55rem;color:#4a5568;margin-top:2px'>{label} {score:+.0f}</div>"
         f"<div style='background:#1a2035;border-radius:3px;height:4px;width:60px'>"
@@ -123,68 +123,105 @@ def _accum_bar(score: float) -> str:
     )
 
 
+def _tier_label(tier: str) -> str:
+    """Convert internal tier names to trader-friendly labels."""
+    return {
+        "ELITE_A_PLUS": "A+ Setup",
+        "ELITE_A":      "A Setup",
+        "A_PLUS":       "A+ Setup",
+        "A":            "A Setup",
+        "B":            "B Setup",
+        "WATCHLIST":    "Watch",
+    }.get(tier, tier.replace("_", " "))
+
+
 def _render_elite_setups(setups) -> None:
-    """Render the quality-pipeline ranked setups with verdict, trade plan, accumulation."""
+    """Render the quality-pipeline ranked setups with plain-English trade cards."""
     for s in setups:
         verdict  = getattr(s, "verdict", "BUILDING")
         target   = getattr(s, "target_price", 0.0)
         accum    = getattr(s, "accum_score", 0.0)
         weekly   = getattr(s, "weekly_aligned", False)
         tier_color = {
-            "ELITE_A_PLUS": "#f59e0b", "A": "#00d4a0",
+            "ELITE_A_PLUS": "#f59e0b", "A_PLUS": "#f59e0b",
+            "ELITE_A": "#00d4a0", "A": "#00d4a0",
             "B": "#60a5fa", "WATCHLIST": "#8892a4",
         }.get(s.quality_tier, "#4a5568")
 
         weekly_tag = (
-            "<span style='color:#00d4a0;font-size:.58rem;margin-left:4px'>📅 W↑</span>"
+            "<span style='color:#00d4a0;font-size:.58rem;margin-left:6px'>✓ Weekly Trend OK</span>"
             if weekly else ""
         )
+
+        # Calculate R:R
+        entry  = s.pivot_level
+        stop   = s.stop_level
+        risk_pts = abs(entry - stop) if entry and stop else 0
+        rr     = abs(target - entry) / risk_pts if (risk_pts > 0 and target) else 0.0
+
+        # Plain-English summary line
+        summary_html = ""
+        if entry and stop and target:
+            summary_html = (
+                f"<div style='background:#111827;border-radius:5px;padding:6px 10px;"
+                f"margin-top:8px;font-size:.78rem;color:#c9d1e0;font-style:italic;"
+                f"border-left:3px solid #f59e0b44'>"
+                f"Buy above <span style='color:#f59e0b;font-weight:700'>₹{entry:,.1f}</span> "
+                f"with stop at <span style='color:#ff4b4b;font-weight:700'>₹{stop:,.1f}</span>. "
+                f"Target <span style='color:#00d4a0;font-weight:700'>₹{target:,.1f}</span> "
+                f"({rr:.1f}× reward).</div>"
+            )
+
+        ev_r = getattr(s, "expected_value_r", 0.0)
+        strength = min(int(getattr(s, "quality_score", 0)), 100)
 
         st.markdown(
             f"""
             <div style='background:#0d1421;border:1px solid #1e293b;border-radius:8px;
-                        padding:10px 14px;margin-bottom:6px'>
-              <div style='display:flex;align-items:center;justify-content:space-between'>
-                <div>
-                  <span style='color:#e2e8f0;font-weight:700;font-size:.9rem;
+                        padding:12px 16px;margin-bottom:8px'>
+              <!-- Header row -->
+              <div style='display:flex;align-items:center;justify-content:space-between;margin-bottom:4px'>
+                <div style='display:flex;align-items:center;gap:8px'>
+                  <span style='color:#e2e8f0;font-weight:700;font-size:1rem;
                     font-family:JetBrains Mono,monospace'>{s.symbol}</span>
-                  <span style='color:{tier_color};font-size:.62rem;margin-left:6px;
-                    font-weight:700'>{s.quality_tier.replace("_"," ")}</span>
+                  <span style='color:{tier_color};font-size:.65rem;font-weight:700;
+                    background:{tier_color}18;border:1px solid {tier_color}44;
+                    border-radius:4px;padding:1px 7px'>{_tier_label(s.quality_tier)}</span>
                   {weekly_tag}
                 </div>
                 {_verdict_badge(verdict)}
               </div>
-              <div style='display:flex;gap:16px;margin-top:6px;flex-wrap:wrap'>
-                <div style='font-size:.7rem'>
-                  <span style='color:#4a5568'>Price</span>
-                  <span style='color:#e2e8f0;margin-left:4px;font-weight:600'>₹{s.price:,.1f}</span>
+              <!-- Key numbers — large & prominent -->
+              <div style='display:flex;gap:20px;margin-top:8px;flex-wrap:wrap;align-items:flex-end'>
+                <div>
+                  <div style='font-size:.6rem;color:#4a5568;text-transform:uppercase;letter-spacing:.06em'>Entry</div>
+                  <div style='font-size:.95rem;color:#f59e0b;font-weight:700;font-family:JetBrains Mono,monospace'>₹{entry:,.1f}</div>
                 </div>
-                <div style='font-size:.7rem'>
-                  <span style='color:#4a5568'>Entry</span>
-                  <span style='color:#f59e0b;margin-left:4px;font-weight:600'>₹{s.pivot_level:,.1f}</span>
+                <div>
+                  <div style='font-size:.6rem;color:#4a5568;text-transform:uppercase;letter-spacing:.06em'>Stop</div>
+                  <div style='font-size:.95rem;color:#ff4b4b;font-weight:700;font-family:JetBrains Mono,monospace'>₹{stop:,.1f}</div>
                 </div>
-                <div style='font-size:.7rem'>
-                  <span style='color:#4a5568'>Stop</span>
-                  <span style='color:#ff4b4b;margin-left:4px;font-weight:600'>₹{s.stop_level:,.1f}</span>
+                <div>
+                  <div style='font-size:.6rem;color:#4a5568;text-transform:uppercase;letter-spacing:.06em'>Target</div>
+                  <div style='font-size:.95rem;color:#00d4a0;font-weight:700;font-family:JetBrains Mono,monospace'>₹{target:,.1f}</div>
                 </div>
-                <div style='font-size:.7rem'>
-                  <span style='color:#4a5568'>Target 2.5R</span>
-                  <span style='color:#00d4a0;margin-left:4px;font-weight:600'>₹{target:,.1f}</span>
+                <div style='border-left:1px solid #1e293b;padding-left:16px'>
+                  <div style='font-size:.6rem;color:#4a5568;text-transform:uppercase;letter-spacing:.06em'>Risk:Reward</div>
+                  <div style='font-size:.88rem;color:#e2e8f0;font-weight:700'>{rr:.1f}×</div>
                 </div>
-                <div style='font-size:.7rem'>
-                  <span style='color:#4a5568'>Risk</span>
-                  <span style='color:#e2e8f0;margin-left:4px'>{s.risk_pct:.1f}%</span>
+                <div>
+                  <div style='font-size:.6rem;color:#4a5568;text-transform:uppercase;letter-spacing:.06em'>Strength</div>
+                  <div style='font-size:.88rem;color:#e2e8f0;font-weight:700'>{strength}/100</div>
                 </div>
-                <div style='font-size:.7rem'>
-                  <span style='color:#4a5568'>EV</span>
-                  <span style='color:#60a5fa;margin-left:4px;font-weight:600'>+{s.expected_value_r:.1f}R</span>
-                </div>
-                <div style='font-size:.7rem'>
-                  <span style='color:#4a5568'>Size</span>
-                  <span style='color:#e2e8f0;margin-left:4px'>{s.suggested_position_pct:.1f}%</span>
+                <div>
+                  <div style='font-size:.6rem;color:#4a5568;text-transform:uppercase;letter-spacing:.06em'>Edge per trade</div>
+                  <div style='font-size:.88rem;color:#60a5fa;font-weight:700'>+{ev_r:.1f}R</div>
                 </div>
               </div>
-              <div style='display:flex;align-items:center;gap:16px;margin-top:6px'>
+              <!-- Plain-English summary -->
+              {summary_html}
+              <!-- Evidence + Buying Pressure bar -->
+              <div style='display:flex;align-items:center;gap:16px;margin-top:8px'>
                 <div style='font-size:.65rem;color:#4a5568;flex:1'>
                   {" · ".join(s.behavioral_evidence[:3]) if s.behavioral_evidence else s.archetype.replace("_"," ")}
                 </div>
