@@ -856,154 +856,153 @@ with st.sidebar:
         unsafe_allow_html=True,
     )
 
-    # ── Universal Stock Search Bar (Fix 2) ────────────────────────────────
-    try:
-        _search_sym = st.text_input(
-            "🔍 Quick Search",
-            placeholder="Type NSE symbol…",
-            key="quick_search_sym",
-            label_visibility="collapsed",
-        )
-        if _search_sym and _search_sym.strip():
-            _qs = _search_sym.strip().upper()
+    # ── Search bar (Moneycontrol-style) ──────────────────────────────────
+    _search = st.text_input("", placeholder="🔍 Search any NSE stock…", key="qs")
+    if _search and _search.strip():
+        _qs = _search.strip().upper()
 
-            @st.cache_data(ttl=120, show_spinner=False)
-            def _qs_fetch(sym: str) -> dict:
-                out: dict = {}
-                try:
-                    from data.market_data import get_provider
-                    mdp = get_provider()
-                    q = mdp.quote(sym)
-                    out["price"] = q.get("last_price") or q.get("ltp") or 0.0
-                    out["prev"]  = q.get("prev_close") or q.get("previous_close") or 0.0
-                except Exception:
-                    pass
-                try:
-                    import yfinance as yf
-                    fi = yf.Ticker(sym + ".NS").fast_info
-                    if not out.get("price"):
-                        out["price"] = float(getattr(fi, "last_price", 0) or 0)
-                    if not out.get("prev"):
-                        out["prev"]  = float(getattr(fi, "previous_close", 0) or 0)
-                    out["week52_high"] = float(getattr(fi, "year_high", 0) or 0)
-                    out["week52_low"]  = float(getattr(fi, "year_low",  0) or 0)
-                except Exception:
-                    pass
-                return out
-
-            _qd = {}
+        @st.cache_data(ttl=120, show_spinner=False)
+        def _qs_fetch(sym: str) -> dict:
+            out: dict = {}
             try:
-                _qd = _qs_fetch(_qs)
+                from data.market_data import get_provider
+                mdp = get_provider()
+                q = mdp.quote(sym)
+                out["price"] = q.get("last_price") or q.get("ltp") or 0.0
+                out["prev"]  = q.get("prev_close") or q.get("previous_close") or 0.0
             except Exception:
                 pass
+            try:
+                import yfinance as yf
+                fi = yf.Ticker(sym + ".NS").fast_info
+                if not out.get("price"):
+                    out["price"] = float(getattr(fi, "last_price", 0) or 0)
+                if not out.get("prev"):
+                    out["prev"]  = float(getattr(fi, "previous_close", 0) or 0)
+                out["week52_high"] = float(getattr(fi, "year_high", 0) or 0)
+                out["week52_low"]  = float(getattr(fi, "year_low",  0) or 0)
+            except Exception:
+                pass
+            return out
 
-            _qpx   = _qd.get("price", 0.0)
-            _qprev = _qd.get("prev", 0.0)
-            _qchg  = ((_qpx - _qprev) / _qprev * 100) if _qprev else 0.0
-            _qchg_col = "#00d4a0" if _qchg >= 0 else "#ff4b4b"
-            _qchg_arrow = "▲" if _qchg >= 0 else "▼"
-            _q52h  = _qd.get("week52_high", 0.0)
-            _q52l  = _qd.get("week52_low",  0.0)
+        _qd = {}
+        try:
+            _qd = _qs_fetch(_qs)
+        except Exception:
+            pass
 
-            _q52_html = ""
-            if _q52h and _q52l:
-                _q52_html = (
-                    f"<div style='font-size:.65rem;color:#6b7280;margin-top:2px'>"
-                    f"52W: ₹{_q52l:,.0f} – ₹{_q52h:,.0f}</div>"
-                )
+        _qpx   = _qd.get("price", 0.0)
+        _qprev = _qd.get("prev", 0.0)
+        _qchg  = ((_qpx - _qprev) / _qprev * 100) if _qprev else 0.0
+        _qchg_col = "#00d4a0" if _qchg >= 0 else "#ff4b4b"
+        _qchg_arrow = "▲" if _qchg >= 0 else "▼"
+        _q52h  = _qd.get("week52_high", 0.0)
+        _q52l  = _qd.get("week52_low",  0.0)
 
-            if _qpx:
-                st.sidebar.markdown(
-                    f"<div style='background:#0d1421;border:1px solid #1e293b;border-radius:8px;"
-                    f"padding:8px 12px;font-family:JetBrains Mono,monospace;margin-bottom:4px'>"
-                    f"<div style='color:#e8eaf0;font-weight:700;font-size:.9rem'>{_qs}</div>"
-                    f"<div style='color:#e8eaf0;font-size:1.05rem;font-weight:700'>₹{_qpx:,.2f}</div>"
-                    f"<div style='color:{_qchg_col};font-size:.8rem;font-weight:700'>"
-                    f"{_qchg_arrow} {_qchg:+.2f}%</div>"
-                    f"{_q52_html}"
-                    f"</div>",
-                    unsafe_allow_html=True,
-                )
-            else:
-                st.sidebar.caption("Data unavailable")
+        _q52_html = ""
+        if _q52h and _q52l:
+            _q52_html = (
+                f"<div style='font-size:.65rem;color:#6b7280;margin-top:2px'>"
+                f"52W: ₹{_q52l:,.0f} – ₹{_q52h:,.0f}</div>"
+            )
 
-            if st.sidebar.button(
-                "→ Open in Terminal",
-                key="qs_open_terminal",
-                use_container_width=True,
-            ):
-                st.session_state["sidebar_nav"] = "Terminal"
-                st.session_state["terminal_symbol"] = _qs
-                st.rerun()
-    except Exception:
-        pass
+        if _qpx:
+            st.sidebar.markdown(
+                f"<div style='background:#0d1421;border:1px solid #1e293b;border-radius:8px;"
+                f"padding:8px 12px;font-family:JetBrains Mono,monospace;margin-bottom:4px'>"
+                f"<div style='color:#e8eaf0;font-weight:700;font-size:.9rem'>{_qs}</div>"
+                f"<div style='color:#e8eaf0;font-size:1.05rem;font-weight:700'>₹{_qpx:,.2f}</div>"
+                f"<div style='color:{_qchg_col};font-size:.8rem;font-weight:700'>"
+                f"{_qchg_arrow} {_qchg:+.2f}%</div>"
+                f"{_q52_html}"
+                f"</div>",
+                unsafe_allow_html=True,
+            )
+        else:
+            st.sidebar.caption("Data unavailable")
 
-    # ── Navigation (Fix 3 — 6 logical groups) ─────────────────────────────
-    _nav_options = ["🏠  Dashboard", "🏛️  Institutional", "🤖  JARVIS", "⚡  Terminal",
-                    "🔬  Research", "🧬  AlgoLab", "🛠️  Tools",
-                    "👁  My Watchlist", "💼  My Holdings", "🚀  IPO Calendar", "🔍  Stock Screener",
-                    "📊  Market Breadth", "🎯  Edge Tracker", "📋  Trade Replay", "🔔  Smart Alerts",
-                    "🚪  Exit Intelligence", "🌊  Options Flow"]
+        if st.sidebar.button(
+            "→ Open in Terminal",
+            key="qs_open_terminal",
+            use_container_width=True,
+        ):
+            st.session_state["sidebar_nav"] = "Terminal"
+            st.session_state["terminal_symbol"] = _qs
+            st.rerun()
 
-    # 6-item grouped navigation using option_menu
+    # ── Main Navigation — exactly 5 items (Moneycontrol-style) ───────────
+    if "_nav_pending" in st.session_state:
+        st.session_state["sidebar_nav"] = st.session_state.pop("_nav_pending")
+
     try:
         from streamlit_option_menu import option_menu as _option_menu
-        if "_nav_pending" in st.session_state:
-            st.session_state["sidebar_nav"] = st.session_state.pop("_nav_pending")
 
         _nav_page_raw = _option_menu(
             menu_title=None,
-            options=[
-                "Markets",
-                "Find Setups",
-                "My Trades",
-                "Analyse",
-                "JARVIS",
-                "Tools",
-            ],
-            icons=[
-                "graph-up-arrow",
-                "radar",
-                "briefcase",
-                "cpu",
-                "robot",
-                "wrench",
-            ],
+            options=["Today", "Stocks", "Options", "My Portfolio", "JARVIS"],
+            icons=["house-fill", "graph-up", "bar-chart-fill", "briefcase-fill", "robot"],
             menu_icon=None,
             default_index=0,
             styles={
-                "container":     {"padding": "0", "background-color": "transparent"},
-                "nav-link":      {"font-size": "0.72rem", "font-family": "JetBrains Mono, monospace",
-                                  "color": "#8892a4", "padding": "5px 10px", "border-radius": "6px"},
-                "nav-link-selected": {"background-color": "#00d4ff18", "color": "#00d4ff",
-                                      "font-weight": "700"},
-                "icon":          {"color": "#4a5568", "font-size": "0.75rem"},
+                "container":         {"padding": "0", "background-color": "transparent"},
+                "nav-link":          {"font-size": "0.75rem", "font-family": "Inter, system-ui, sans-serif",
+                                      "color": "#8892a4", "padding": "6px 10px", "border-radius": "8px"},
+                "nav-link-selected": {"background-color": "#0d1421", "color": "#00d4ff",
+                                      "font-weight": "700", "border": "1px solid #1e3a5f"},
+                "icon":              {"color": "#4a5568", "font-size": "0.8rem"},
             },
             key="sidebar_nav_menu",
         )
 
-        # Map 6-item nav → existing page routing names
-        _MENU_MAP = {
-            "Markets":     "Dashboard",
-            "Find Setups": "Institutional",
-            "My Trades":   "My Holdings",
-            "Analyse":     "Terminal",
-            "JARVIS":      "JARVIS",
-            "Tools":       "Tools6",   # special key for sub-tabbed tools page
+        # Map 5-item nav → page routing keys
+        _5NAV_MAP = {
+            "Today":        "Dashboard",
+            "Stocks":       "Institutional",
+            "Options":      "Options Flow",
+            "My Portfolio": "My Holdings",
+            "JARVIS":       "JARVIS",
         }
-        _nav_page = _MENU_MAP.get(_nav_page_raw, _nav_page_raw)
+        _nav_page = _5NAV_MAP.get(_nav_page_raw, _nav_page_raw)
         st.session_state["sidebar_nav"] = _nav_page
 
     except Exception:
-        # Fallback: flat radio if option_menu fails
-        if "_nav_pending" in st.session_state:
-            st.session_state["sidebar_nav"] = st.session_state.pop("_nav_pending")
-        _nav_default = st.session_state.get("sidebar_nav", "🏠  Dashboard")
-        _nav_idx = _nav_options.index(_nav_default) if _nav_default in _nav_options else 0
-        _nav_page = st.radio(
-            "Navigate", _nav_options, index=_nav_idx,
-            label_visibility="collapsed", key="sidebar_nav",
-        ).split("  ", 1)[-1].strip()
+        # Fallback radio if option_menu unavailable
+        _5_options = ["Today", "Stocks", "Options", "My Portfolio", "JARVIS"]
+        _5_map = {
+            "Today":        "Dashboard",
+            "Stocks":       "Institutional",
+            "Options":      "Options Flow",
+            "My Portfolio": "My Holdings",
+            "JARVIS":       "JARVIS",
+        }
+        _nav_raw = st.radio(
+            "Navigate", _5_options, index=0,
+            label_visibility="collapsed", key="sidebar_nav_radio",
+        )
+        _nav_page = _5_map.get(_nav_raw, _nav_raw)
+        st.session_state["sidebar_nav"] = _nav_page
+
+    # ── More Tools expander (all non-primary pages) ────────────────────────
+    with st.expander("⚙️ More Tools"):
+        _more_tools = [
+            ("Terminal",          "⚡ Terminal"),
+            ("Research",          "🔬 Research"),
+            ("AlgoLab",           "🧬 AlgoLab"),
+            ("Tools",             "🛠️ Tools"),
+            ("My Watchlist",      "👁 My Watchlist"),
+            ("Exit Intelligence", "🚪 Exit Intelligence"),
+            ("Journal",           "📋 Journal"),
+            ("Edge Tracker",      "🎯 Edge Tracker"),
+            ("Trade Replay",      "📋 Trade Replay"),
+            ("Market Breadth",    "📊 Market Breadth"),
+            ("Smart Alerts",      "🔔 Smart Alerts"),
+            ("IPO Calendar",      "🚀 IPO Calendar"),
+            ("Stock Screener",    "🔍 Stock Screener"),
+        ]
+        for _mt_key, _mt_label in _more_tools:
+            if st.button(_mt_label, key=f"more_{_mt_key}", use_container_width=True):
+                st.session_state["sidebar_nav"] = _mt_key
+                st.rerun()
     st.divider()
     # Plain English mode toggle
     try:
