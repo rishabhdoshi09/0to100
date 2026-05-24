@@ -82,6 +82,120 @@ def _filter_by_mcap(stocks, mcap_filter: str):
     return filtered
 
 
+@st.cache_data(ttl=300, show_spinner=False)
+def _cached_elite_setups(symbols_key: str, top_n: int = 20):
+    """Run the full quality pipeline and return RankedSetup list with verdict/accum/target."""
+    from scan.pipeline import ScanPipeline
+    from core.regime_engine import compute_regime
+    symbols = [s.strip() for s in symbols_key.split(",") if s.strip()][:500]
+    try:
+        regime = compute_regime()
+        results = ScanPipeline(max_workers=12, min_quality_score=38).run(
+            symbols, top_n=top_n, regime_state=regime, skip_liquidity_filter=True
+        )
+        return results
+    except Exception:
+        return []
+
+
+def _verdict_badge(verdict: str) -> str:
+    cfg = {
+        "READY_TO_TRADE": ("#00d4a0", "#00d4a014", "✅ READY"),
+        "BUILDING":       ("#f59e0b", "#f59e0b14", "🔨 BUILDING"),
+        "AVOID":          ("#ff4b4b", "#ff4b4b14", "🚫 AVOID"),
+    }.get(verdict, ("#8892a4", "#88", "⚪ UNKNOWN"))
+    fg, bg, label = cfg
+    return (
+        f"<span style='background:{bg};border:1px solid {fg}44;border-radius:5px;"
+        f"padding:2px 8px;font-size:.62rem;font-weight:700;color:{fg};"
+        f"font-family:JetBrains Mono,monospace;white-space:nowrap'>{label}</span>"
+    )
+
+
+def _accum_bar(score: float) -> str:
+    pct = min(max(int((score + 100) / 2), 0), 100)  # -100..+100 → 0..100
+    color = "#00d4a0" if score >= 0 else "#ff4b4b"
+    label = "ACCUM" if score >= 0 else "DISTR"
+    return (
+        f"<div style='font-size:.55rem;color:#4a5568;margin-top:2px'>{label} {score:+.0f}</div>"
+        f"<div style='background:#1a2035;border-radius:3px;height:4px;width:60px'>"
+        f"<div style='width:{pct}%;background:{color};height:4px;border-radius:3px'></div></div>"
+    )
+
+
+def _render_elite_setups(setups) -> None:
+    """Render the quality-pipeline ranked setups with verdict, trade plan, accumulation."""
+    for s in setups:
+        verdict  = getattr(s, "verdict", "BUILDING")
+        target   = getattr(s, "target_price", 0.0)
+        accum    = getattr(s, "accum_score", 0.0)
+        weekly   = getattr(s, "weekly_aligned", False)
+        tier_color = {
+            "ELITE_A_PLUS": "#f59e0b", "A": "#00d4a0",
+            "B": "#60a5fa", "WATCHLIST": "#8892a4",
+        }.get(s.quality_tier, "#4a5568")
+
+        weekly_tag = (
+            "<span style='color:#00d4a0;font-size:.58rem;margin-left:4px'>📅 W↑</span>"
+            if weekly else ""
+        )
+
+        st.markdown(
+            f"""
+            <div style='background:#0d1421;border:1px solid #1e293b;border-radius:8px;
+                        padding:10px 14px;margin-bottom:6px'>
+              <div style='display:flex;align-items:center;justify-content:space-between'>
+                <div>
+                  <span style='color:#e2e8f0;font-weight:700;font-size:.9rem;
+                    font-family:JetBrains Mono,monospace'>{s.symbol}</span>
+                  <span style='color:{tier_color};font-size:.62rem;margin-left:6px;
+                    font-weight:700'>{s.quality_tier.replace("_"," ")}</span>
+                  {weekly_tag}
+                </div>
+                {_verdict_badge(verdict)}
+              </div>
+              <div style='display:flex;gap:16px;margin-top:6px;flex-wrap:wrap'>
+                <div style='font-size:.7rem'>
+                  <span style='color:#4a5568'>Price</span>
+                  <span style='color:#e2e8f0;margin-left:4px;font-weight:600'>₹{s.price:,.1f}</span>
+                </div>
+                <div style='font-size:.7rem'>
+                  <span style='color:#4a5568'>Entry</span>
+                  <span style='color:#f59e0b;margin-left:4px;font-weight:600'>₹{s.pivot_level:,.1f}</span>
+                </div>
+                <div style='font-size:.7rem'>
+                  <span style='color:#4a5568'>Stop</span>
+                  <span style='color:#ff4b4b;margin-left:4px;font-weight:600'>₹{s.stop_level:,.1f}</span>
+                </div>
+                <div style='font-size:.7rem'>
+                  <span style='color:#4a5568'>Target 2.5R</span>
+                  <span style='color:#00d4a0;margin-left:4px;font-weight:600'>₹{target:,.1f}</span>
+                </div>
+                <div style='font-size:.7rem'>
+                  <span style='color:#4a5568'>Risk</span>
+                  <span style='color:#e2e8f0;margin-left:4px'>{s.risk_pct:.1f}%</span>
+                </div>
+                <div style='font-size:.7rem'>
+                  <span style='color:#4a5568'>EV</span>
+                  <span style='color:#60a5fa;margin-left:4px;font-weight:600'>+{s.expected_value_r:.1f}R</span>
+                </div>
+                <div style='font-size:.7rem'>
+                  <span style='color:#4a5568'>Size</span>
+                  <span style='color:#e2e8f0;margin-left:4px'>{s.suggested_position_pct:.1f}%</span>
+                </div>
+              </div>
+              <div style='display:flex;align-items:center;gap:16px;margin-top:6px'>
+                <div style='font-size:.65rem;color:#4a5568;flex:1'>
+                  {" · ".join(s.behavioral_evidence[:3]) if s.behavioral_evidence else s.archetype.replace("_"," ")}
+                </div>
+                {_accum_bar(accum)}
+              </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+
 def render_scanner(universe: list[str]) -> None:
     # ── Header ────────────────────────────────────────────────────────────────
     st.markdown(
@@ -285,6 +399,48 @@ def render_scanner(universe: list[str]) -> None:
             )
         else:
             _render_breakout_table(breakout_stocks)
+
+    # ── Elite Setups (full pipeline) ─────────────────────────────────────────
+    st.markdown(
+        "<div style='background:rgba(245,158,11,.06);border:1px solid rgba(245,158,11,.25);"
+        "border-radius:10px;padding:12px 16px;margin:16px 0 8px'>"
+        "<span style='color:#f59e0b;font-size:.75rem;font-weight:700;letter-spacing:2px'>"
+        "⭐ ELITE SETUPS — VERDICT + TRADE PLAN</span>"
+        "<span style='color:#4a5568;font-size:.65rem;margin-left:.5rem'>"
+        "Volume accumulation · Multi-timeframe · Pre-calculated entry/stop/target/size</span>"
+        "</div>",
+        unsafe_allow_html=True,
+    )
+
+    with st.spinner("Running quality pipeline…"):
+        elite = _cached_elite_setups(symbols_key, top_n=20)
+
+    if not elite:
+        st.caption("No elite setups found — try Full NSE Scan mode or broaden the universe.")
+    else:
+        ready  = [s for s in elite if getattr(s, "verdict", "") == "READY_TO_TRADE"]
+        build  = [s for s in elite if getattr(s, "verdict", "") == "BUILDING"]
+        others = [s for s in elite if getattr(s, "verdict", "") not in ("READY_TO_TRADE", "BUILDING")]
+
+        if ready:
+            st.markdown(
+                "<div style='font-size:.68rem;color:#00d4a0;font-weight:700;"
+                "letter-spacing:1px;margin-bottom:4px'>✅ READY TO TRADE NOW</div>",
+                unsafe_allow_html=True,
+            )
+            _render_elite_setups(ready)
+
+        if build:
+            st.markdown(
+                "<div style='font-size:.68rem;color:#f59e0b;font-weight:700;"
+                "letter-spacing:1px;margin:8px 0 4px'>🔨 BUILDING — WATCH THESE</div>",
+                unsafe_allow_html=True,
+            )
+            _render_elite_setups(build[:8])
+
+        if others:
+            with st.expander(f"Show {len(others)} more setups"):
+                _render_elite_setups(others)
 
 
 def _render_momentum_table(stocks) -> None:

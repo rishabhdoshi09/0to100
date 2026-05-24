@@ -42,6 +42,7 @@ class QualityScore:
     evidence: list[str]            # top evidence bullets
     disqualifiers: list[str]       # reasons for deduction
     earnings_multiplier: float = 1.0  # size multiplier from earnings proximity
+    accum_score: float = 0.0          # accumulation score: -100 (distribution) to +100 (accumulation)
 
 
 class QualityEngine:
@@ -117,6 +118,31 @@ class QualityEngine:
             elif ratio < 0.75: vol_pts = 10
             elif ratio < 0.90: vol_pts = 5
         factors["volume_contraction"] = vol_pts
+
+        # ── 2b. Accumulation / Distribution (0-12) ───────────────────────────
+        accum_pts = 0.0
+        accum_net = 0
+        if len(volume) >= 11 and len(close) >= 11:
+            avg_vol_ref = float(volume[-20:].mean()) if len(volume) >= 20 else float(volume.mean())
+            up_heavy = down_heavy = 0
+            for i in range(-10, 0):
+                is_up = close[i] > close[i - 1]
+                is_heavy = volume[i] > avg_vol_ref
+                if is_up and is_heavy:
+                    up_heavy += 1
+                elif not is_up and is_heavy:
+                    down_heavy += 1
+            accum_net = up_heavy - down_heavy
+            if accum_net >= 4:
+                accum_pts = 12; evidence.append(f"Accumulation: {up_heavy}↑ {down_heavy}↓ heavy-vol days — smart money buying")
+            elif accum_net >= 2:
+                accum_pts = 8; evidence.append(f"Mild accumulation: {up_heavy}↑ {down_heavy}↓ heavy-vol days")
+            elif accum_net >= 0:
+                accum_pts = 4
+            else:
+                accum_pts = 0
+                disqualifiers.append(f"Distribution: {down_heavy} heavy-vol down days vs {up_heavy} up days")
+        factors["accumulation"] = accum_pts
 
         # ── 3. Volatility Contraction (0-12) ─────────────────────────────────
         atr_pts = 0.0
@@ -255,10 +281,12 @@ class QualityEngine:
         except Exception:
             pass
 
+        accum_score_pct = accum_net * 10.0  # -100 to +100
         return QualityScore(
             symbol=candidate.symbol, tier=tier, score=round(total, 1),
             factors=factors, evidence=evidence, disqualifiers=disqualifiers,
             earnings_multiplier=earnings_multiplier,
+            accum_score=round(accum_score_pct, 1),
         )
 
     # ── Helpers ───────────────────────────────────────────────────────────────

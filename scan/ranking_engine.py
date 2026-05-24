@@ -48,6 +48,12 @@ class RankedSetup:
     # Institutional summary (for right panel)
     institutional_summary: str
 
+    # Enhanced trade intelligence
+    verdict: str = "BUILDING"          # READY_TO_TRADE | BUILDING | AVOID
+    target_price: float = 0.0          # 2.5R auto-calculated target
+    accum_score: float = 0.0           # -100 (distribution) to +100 (accumulation)
+    weekly_aligned: bool = False       # price > SMA50 + golden cross = weekly trend up
+
     def rank_key(self) -> float:
         """Used for sorting. Higher = better."""
         tier_boost = {
@@ -142,6 +148,27 @@ class RankingEngine:
 
             summary = self._format_summary(cand, qs, pb, ev_r, reg_label, fail_risk, regime_name)
 
+            # ── Enhanced trade intelligence ───────────────────────────────
+            # Verdict: one clear signal per setup
+            if qs.tier in ("ELITE_A_PLUS", "A") and qs.score >= 65 and getattr(qs, "accum_score", 0) >= 0:
+                verdict = "READY_TO_TRADE"
+            elif qs.tier == "AVOID" or qs.score < 42:
+                verdict = "AVOID"
+            else:
+                verdict = "BUILDING"
+
+            # 2.5R auto-calculated target
+            pivot = cand.pivot_level or cand.price
+            stop  = cand.stop_level or (pivot * 0.95)
+            r_size = max(pivot - stop, pivot * 0.01)
+            target_price = round(pivot + 2.5 * r_size, 2)
+
+            # Weekly alignment: price > SMA50 proxied by pct_above_sma50 > 0 + golden cross
+            raw = cand.raw_indicators or {}
+            weekly_aligned = bool(
+                raw.get("pct_above_sma50", -1) > 0 and raw.get("golden_cross", False)
+            )
+
             results.append(RankedSetup(
                 symbol=cand.symbol,
                 archetype=cand.archetype,
@@ -162,6 +189,10 @@ class RankingEngine:
                 sector_leader=sec_leader,
                 suggested_position_pct=pos_pct,
                 institutional_summary=summary,
+                verdict=verdict,
+                target_price=target_price,
+                accum_score=getattr(qs, "accum_score", 0.0),
+                weekly_aligned=weekly_aligned,
             ))
 
         return sorted(results, key=lambda x: x.rank_key(), reverse=True)
