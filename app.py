@@ -22,6 +22,15 @@ import yfinance as yf
 from bs4 import BeautifulSoup
 from dotenv import load_dotenv
 
+# ── Fix yfinance SQLite tz-cache lock under concurrent Streamlit threads ───────
+try:
+    import tempfile
+    _yf_cache = os.path.join(tempfile.gettempdir(), "yf_tz_cache")
+    os.makedirs(_yf_cache, exist_ok=True)
+    yf.set_tz_cache_location(_yf_cache)
+except Exception:
+    pass
+
 # ── Lightweight structured logger ────────────────────────────────────────────
 from config import settings as _settings
 _LOG_DIR = str(_settings.log_dir)

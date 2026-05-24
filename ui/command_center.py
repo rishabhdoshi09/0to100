@@ -241,6 +241,8 @@ def _gen_morning_brief(regime_json: str) -> str:
             max_tokens=512,
             temperature=0.5,
         )
+        if resp is None or not resp.choices:
+            raise ValueError("Empty response from DeepSeek API")
         return resp.choices[0].message.content or ""
     except Exception as exc:
         logger.warning("DeepSeek brief failed: %s", exc)
@@ -380,7 +382,7 @@ def _nifty_5d_close() -> list[float]:
     try:
         import yfinance as yf
         df = yf.download("^NSEI", period="10d", interval="1d",
-                         auto_adjust=True, progress=False)
+                         auto_adjust=True, progress=False, threads=False)
         if df is None or df.empty:
             return []
         if hasattr(df.columns, "get_level_values"):

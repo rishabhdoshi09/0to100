@@ -79,6 +79,20 @@ def get_historical_data_kite(
     return df
 
 
+def _init_yf_cache() -> None:
+    """Point yfinance tz-cache at /tmp to avoid SQLite lock errors under concurrent threads."""
+    try:
+        import os, tempfile, yfinance as yf
+        cache_dir = os.path.join(tempfile.gettempdir(), "yf_tz_cache")
+        os.makedirs(cache_dir, exist_ok=True)
+        yf.set_tz_cache_location(cache_dir)
+    except Exception:
+        pass
+
+
+_init_yf_cache()
+
+
 def get_historical_data_yfinance(
     symbol: str,
     interval: str = "day",
@@ -92,10 +106,15 @@ def get_historical_data_yfinance(
         "15minute": "15m", "60minute": "1h", "week": "1wk", "month": "1mo",
     }
     yf_interval = _interval_map.get(interval, "1d")
-    ticker = symbol if symbol.endswith(".NS") else symbol + ".NS"
+    # Index symbols (^NSEI etc.) don't get .NS suffix
+    if symbol.startswith("^") or symbol.endswith(".NS") or symbol.endswith(".BO"):
+        ticker = symbol
+    else:
+        ticker = symbol + ".NS"
     from_dt = from_date or (datetime.today() - timedelta(days=365)).strftime("%Y-%m-%d")
     to_dt = to_date or datetime.today().strftime("%Y-%m-%d")
-    df = yf.download(ticker, start=from_dt, end=to_dt, interval=yf_interval, progress=False, auto_adjust=True)
+    df = yf.download(ticker, start=from_dt, end=to_dt, interval=yf_interval,
+                     progress=False, auto_adjust=True, threads=False)
     if df is None or df.empty:
         raise ValueError(f"No data returned from yfinance for {symbol}")
     if isinstance(df.columns, pd.MultiIndex):
