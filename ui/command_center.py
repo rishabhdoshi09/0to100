@@ -240,12 +240,19 @@ def _gen_morning_brief(regime_json: str) -> str:
             messages=[{"role": "user", "content": prompt}],
             max_tokens=512,
             temperature=0.5,
+            timeout=15,
         )
         if resp is None or not resp.choices:
             raise ValueError("Empty response from DeepSeek API")
         return resp.choices[0].message.content or ""
     except Exception as exc:
-        logger.warning("DeepSeek brief failed: %s", exc)
+        # Truncate HTML error pages (504 gateway etc.) to one clean line
+        err_str = str(exc)
+        if "<" in err_str:
+            err_str = "504 Gateway Timeout (DeepSeek API unavailable)"
+        elif len(err_str) > 120:
+            err_str = err_str[:120] + "…"
+        logger.warning("DeepSeek brief failed: %s", err_str)
         return ""
 
 
