@@ -216,6 +216,246 @@ def _check_opportunity_score() -> tuple[ChecklistItem, float]:
         return ChecklistItem(question, None, f"Could not compute opportunity score: {exc}", 2), 50.0
 
 
+def _check_volume(symbol: str) -> ChecklistItem:
+    """Check: Is volume confirming the move?"""
+    question = "Volume confirming the move?"
+    try:
+        from agents.tools import get_technical_indicators
+        data = get_technical_indicators(symbol)
+        if "error" in data:
+            return ChecklistItem(question, None, f"Could not fetch volume data: {data['error']}", 2)
+
+        vr = data.get("volume_ratio")
+        avg_vol = data.get("avg_volume_20d")
+        if vr is None:
+            return ChecklistItem(question, None, "Volume data unavailable.", 2)
+
+        vr = float(vr)
+        avg_str = f" (20d avg: {int(avg_vol):,})" if avg_vol else ""
+        if vr >= 1.5:
+            return ChecklistItem(question, True, f"Volume ratio {vr:.2f}x above average{avg_str} — strong institutional participation.", 2)
+        elif vr >= 0.8:
+            return ChecklistItem(question, None, f"Volume ratio {vr:.2f}x — average interest{avg_str}. Prefer > 1.5x for conviction.", 2)
+        else:
+            return ChecklistItem(question, False, f"Volume ratio {vr:.2f}x — below average{avg_str}. Weak conviction, avoid.", 2)
+    except Exception as exc:
+        return ChecklistItem(question, None, f"Volume check error: {exc}", 2)
+
+
+def _check_momentum(symbol: str, action: str) -> ChecklistItem:
+    """Check: Is price momentum aligned with the trade direction?"""
+    question = "Price momentum aligned with trade?"
+    try:
+        from agents.tools import get_technical_indicators
+        data = get_technical_indicators(symbol)
+        if "error" in data:
+            return ChecklistItem(question, None, f"Could not fetch momentum data: {data['error']}", 2)
+
+        mom_20 = data.get("momentum_20d_pct")
+        mom_5  = data.get("momentum_5d_pct")
+        above_ema20 = data.get("pct_above_sma20")  # reuse sma20 proxy
+        ema20  = data.get("ema_20")
+        ema50  = data.get("ema_50")
+        price  = data.get("price") or data.get("ltp")
+
+        parts = []
+        score = 0  # 0-3 points
+
+        if mom_20 is not None:
+            m20 = float(mom_20)
+            parts.append(f"20d mom {m20:+.1f}%")
+            score += (1 if (action == "BUY" and m20 > 0) or (action != "BUY" and m20 < 0) else 0)
+
+        if mom_5 is not None:
+            m5 = float(mom_5)
+            parts.append(f"5d mom {m5:+.1f}%")
+            score += (1 if (action == "BUY" and m5 > 0) or (action != "BUY" and m5 < 0) else 0)
+
+        if price and ema20 and ema50:
+            p, e20, e50 = float(price), float(ema20), float(ema50)
+            above_20 = p > e20
+            above_50 = p > e50
+            if action == "BUY":
+                if above_20 and above_50:
+                    parts.append("Price > EMA20 > EMA50 ✓")
+                    score += 1
+                elif above_20:
+                    parts.append("Price > EMA20 but < EMA50")
+                else:
+                    parts.append("Price < EMA20 ✗")
+            else:
+                if not above_20 and not above_50:
+                    parts.append("Price < EMA20 < EMA50 ✓")
+                    score += 1
+                elif not above_20:
+                    parts.append("Price < EMA20 but > EMA50")
+                else:
+                    parts.append("Price > EMA20 ✗")
+
+        detail = " | ".join(parts) if parts else "Insufficient data."
+        if score >= 2:
+            return ChecklistItem(question, True, detail, 2)
+        elif score == 1:
+            return ChecklistItem(question, None, detail, 2)
+        else:
+            return ChecklistItem(question, False, detail, 2)
+    except Exception as exc:
+        return ChecklistItem(question, None, f"Momentum check error: {exc}", 2)
+
+
+def _check_news_sentiment(symbol: str, action: str) -> ChecklistItem:
+    """Check: Is recent news sentiment supportive?"""
+    question = "News sentiment supportive?"
+    try:
+        from agents.tools import get_recent_news
+        articles = get_recent_news(symbol, days=3)
+
+        if not articles or (len(articles) == 1 and "error" in articles[0]):
+            return ChecklistItem(question, None, "No recent news found — neutral.", 1)
+
+        positive_kw = {"surge", "rally", "beat", "upgrade", "buy", "strong", "growth", "profit",
+                       "record", "outperform", "bullish", "positive", "gain", "rise", "up"}
+        negative_kw = {"fall", "drop", "crash", "downgrade", "sell", "weak", "loss", "miss",
+                       "fraud", "ban", "warning", "decline", "cut", "bearish", "negative", "down"}
+
+        pos = neg = 0
+        for a in articles[:5]:
+            text = (a.get("headline", "") + " " + a.get("summary", "")).lower()
+            pos += sum(1 for kw in positive_kw if kw in text)
+            neg += sum(1 for kw in negative_kw if kw in text)
+
+        total = pos + neg
+        headline_sample = articles[0].get("headline", "")[:80] if articles else ""
+        detail = f'Latest: "{headline_sample}..." | Positive signals: {pos}, Negative: {neg}'
+
+        if action == "BUY":
+            if pos > neg:
+                return ChecklistItem(question, True, detail, 1)
+            elif pos == neg:
+                return ChecklistItem(question, None, detail, 1)
+            else:
+                return ChecklistItem(question, False, detail, 1)
+        else:
+            if neg > pos:
+                return ChecklistItem(question, True, detail, 1)
+            elif pos == neg:
+                return ChecklistItem(question, None, detail, 1)
+            else:
+                return ChecklistItem(question, False, detail, 1)
+    except Exception as exc:
+        return ChecklistItem(question, None, f"News check error: {exc}", 1)
+
+
+def _check_sector_strength(symbol: str, action: str) -> ChecklistItem:
+    """Check: Is the stock's sector showing strength?"""
+    question = "Sector showing relative strength?"
+    try:
+        from core.sector_rotation import compute_rotation_matrix
+        matrix = compute_rotation_matrix()
+        if not matrix:
+            return ChecklistItem(question, None, "Sector rotation data unavailable.", 2)
+
+        # Sort: leaders have positive 1w return, laggards negative
+        sectors_list = list(matrix.values()) if isinstance(matrix, dict) else matrix
+        sorted_sectors = sorted(sectors_list, key=lambda x: x.get("return_1w", 0), reverse=True)
+        leaders  = [s["sector"] for s in sorted_sectors if s.get("return_1w", 0) > 0]
+        laggards = [s["sector"] for s in sorted_sectors if s.get("return_1w", 0) < 0]
+
+        top_leaders  = ", ".join(leaders[:3])  if leaders  else "none"
+        top_laggards = ", ".join(laggards[:3]) if laggards else "none"
+        detail = f"Leading: {top_leaders} | Lagging: {top_laggards}"
+
+        # Try to map stock to a sector
+        stock_sector = None
+        try:
+            from fundamentals.fetcher import get_deep_fundamentals
+            fund = get_deep_fundamentals(symbol, force_refresh=False) or {}
+            stock_sector = fund.get("sector") or fund.get("industry")
+        except Exception:
+            pass
+
+        if stock_sector:
+            detail = f"Stock sector: {stock_sector} | " + detail
+            in_leaders  = any(stock_sector.lower() in l.lower() for l in leaders)
+            in_laggards = any(stock_sector.lower() in l.lower() for l in laggards)
+            if action == "BUY":
+                if in_leaders:
+                    return ChecklistItem(question, True, detail, 2)
+                elif in_laggards:
+                    return ChecklistItem(question, False, detail, 2)
+
+        # Fallback: broad market breadth
+        if action == "BUY":
+            return ChecklistItem(question, True if len(leaders) >= len(laggards) else None, detail, 2)
+        else:
+            return ChecklistItem(question, True if len(laggards) >= len(leaders) else None, detail, 2)
+    except Exception as exc:
+        return ChecklistItem(question, None, f"Sector check error: {exc}", 2)
+
+
+def _check_chart_pattern(symbol: str, action: str) -> ChecklistItem:
+    """Check: Is there a valid chart pattern / technical structure?"""
+    question = "Chart pattern / structure valid?"
+    try:
+        from agents.tools import get_technical_indicators
+        data = get_technical_indicators(symbol)
+        if "error" in data:
+            return ChecklistItem(question, None, f"Could not fetch chart data: {data['error']}", 2)
+
+        findings = []
+        score = 0  # 0-4
+
+        # Golden / death cross
+        gc = data.get("golden_cross")
+        if gc is True:
+            findings.append("Golden cross (SMA50 > SMA200) ✓")
+            score += 1 if action == "BUY" else 0
+        elif gc is False:
+            findings.append("Death cross (SMA50 < SMA200)")
+            score += 1 if action != "BUY" else 0
+
+        # Z-score: is price extended?
+        zscore = data.get("zscore_20")
+        if zscore is not None:
+            z = float(zscore)
+            if abs(z) < 1.5:
+                findings.append(f"Z-score {z:.2f} (within normal range) ✓")
+                score += 1
+            elif abs(z) < 2.5:
+                findings.append(f"Z-score {z:.2f} (mildly extended)")
+            else:
+                findings.append(f"Z-score {z:.2f} (extremely extended) ✗")
+
+        # Trend direction
+        trend = data.get("trend_5d")
+        if trend is not None:
+            t = float(trend)
+            if action == "BUY" and t > 0:
+                findings.append(f"5d trend slope positive (+{t:.3f}) ✓")
+                score += 1
+            elif action != "BUY" and t < 0:
+                findings.append(f"5d trend slope negative ({t:.3f}) ✓")
+                score += 1
+            else:
+                findings.append(f"5d trend slope {t:+.3f} (against trade direction)")
+
+        # ATR context
+        atr_pct = data.get("atr_pct")
+        if atr_pct is not None:
+            findings.append(f"ATR {float(atr_pct):.1f}% daily range")
+
+        detail = " | ".join(findings) if findings else "Insufficient data for pattern check."
+
+        if score >= 3:
+            return ChecklistItem(question, True, detail, 2)
+        elif score >= 1:
+            return ChecklistItem(question, None, detail, 2)
+        else:
+            return ChecklistItem(question, False, detail, 2)
+    except Exception as exc:
+        return ChecklistItem(question, None, f"Pattern check error: {exc}", 2)
+
+
 def _check_not_against_trend(action: str) -> ChecklistItem:
     """Check 7 (weight=1): Is the trade not fighting the regime trend?"""
     question = "Trade not fighting the dominant trend?"
@@ -341,7 +581,7 @@ def run_checklist(
     # 4. R:R ratio (weight=2)
     items.append(_check_rr_ratio(action, price, stop, target))
 
-    # 5. Not overextended (weight=2)
+    # 5. Not overextended / RSI (weight=2)
     items.append(_check_not_overextended(symbol, action))
 
     # 6. Opportunity score (weight=2)
@@ -350,6 +590,21 @@ def run_checklist(
 
     # 7. Not against trend (weight=1)
     items.append(_check_not_against_trend(action))
+
+    # 8. Volume confirmation (weight=2)
+    items.append(_check_volume(symbol))
+
+    # 9. Momentum alignment (weight=2)
+    items.append(_check_momentum(symbol, action))
+
+    # 10. News sentiment (weight=1)
+    items.append(_check_news_sentiment(symbol, action))
+
+    # 11. Sector strength (weight=2)
+    items.append(_check_sector_strength(symbol, action))
+
+    # 12. Chart pattern / structure (weight=2)
+    items.append(_check_chart_pattern(symbol, action))
 
     score = _compute_score(items)
 

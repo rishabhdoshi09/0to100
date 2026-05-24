@@ -490,6 +490,7 @@ class AnalysisAgent(BaseJarvisAgent):
             "get_opportunity_score": self._get_opp_score,
             "detect_patterns": self._detect_patterns,
             "compute_indicators": self._compute_indicators,
+            "run_pre_trade_checklist": self._run_pre_trade_checklist,
             "get_journal_stats": self._get_journal_stats,
             "get_fno_ban_list": self._get_fno_ban,
             "get_block_deals": self._get_block_deals,
@@ -573,6 +574,47 @@ class AnalysisAgent(BaseJarvisAgent):
             return get_technical_indicators(symbol)
         except Exception as e:
             return {"error": str(e)}
+
+    def _run_pre_trade_checklist(
+        self,
+        symbol: str,
+        action: str = "BUY",
+        price: float = 0.0,
+        stop: float = 0.0,
+        target: float = 0.0,
+        qty: int = 1,
+        account_size: float = 1_000_000,
+    ) -> dict:
+        """Run the full pre-trade checklist for a symbol — volume, momentum, news, sector, pattern, regime, R:R."""
+        try:
+            from ui.pre_trade_checklist import run_checklist
+            result = run_checklist(
+                symbol=symbol,
+                action=action,
+                price=price,
+                stop=stop,
+                target=target,
+                qty=qty,
+                account_size=account_size,
+            )
+            return {
+                "symbol": result.symbol,
+                "action": result.action,
+                "grade": result.grade,
+                "score": result.score,
+                "summary": result.summary,
+                "checks": [
+                    {
+                        "question": item.question,
+                        "passed": item.passed,
+                        "detail": item.detail,
+                        "weight": item.weight,
+                    }
+                    for item in result.items
+                ],
+            }
+        except Exception as e:
+            return {"error": str(e), "symbol": symbol}
 
     def _get_journal_stats(self) -> dict:
         """Get win rate, P&L, and edge from the trade journal."""

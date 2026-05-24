@@ -52,7 +52,7 @@ Available specialist agents:
 - DataAgent: Live Kite quotes, historical OHLCV, option chain, open positions, index values
 - ResearchAgent: Internet/web search, URL fetching, news scraping, NSE website data
 - CodeAgent: Write/deploy Python code, read/write files, git commit/push/merge/branch, run shell commands
-- AnalysisAgent: Market regime, setup scan, opportunity score, chart patterns, technical indicators, journal stats
+- AnalysisAgent: Market regime, setup scan, opportunity score, chart patterns, technical indicators, journal stats, pre-trade checklist (volume + momentum + news + sector + pattern all-in-one for a specific stock)
 - SystemAgent: Process management, application logs, disk usage, pip install, restart Streamlit
 
 Classify this query and decide which agents (if any) are needed.
