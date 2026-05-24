@@ -851,7 +851,8 @@ with st.sidebar:
     _nav_options = ["🏠  Dashboard", "🏛️  Institutional", "🤖  JARVIS", "⚡  Terminal",
                     "🔬  Research", "🧬  AlgoLab", "🛠️  Tools",
                     "👁  My Watchlist", "💼  My Holdings", "🚀  IPO Calendar", "🔍  Stock Screener",
-                    "📊  Market Breadth", "🎯  Edge Tracker", "📋  Trade Replay", "🔔  Smart Alerts"]
+                    "📊  Market Breadth", "🎯  Edge Tracker", "📋  Trade Replay", "🔔  Smart Alerts",
+                    "🚪  Exit Intelligence"]
     # Consume pending navigation set by child pages (can't set widget key directly)
     if "_nav_pending" in st.session_state:
         st.session_state["sidebar_nav"] = st.session_state.pop("_nav_pending")
@@ -2445,6 +2446,13 @@ elif _page == "Smart Alerts":
         render_smart_alerts()
     except Exception as e:
         st.error(f"Smart Alerts error: {e}")
+
+elif _page == "Exit Intelligence":
+    try:
+        from ui.exit_intelligence import render_exit_intelligence
+        render_exit_intelligence()
+    except Exception as e:
+        st.error(f"Exit Intelligence error: {e}")
 
 # ── Paper trading dashboard (accessible from any tab via sidebar session) ────
 # Initialise DB on every load so paper_trading tables exist

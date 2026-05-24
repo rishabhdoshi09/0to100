@@ -317,6 +317,59 @@ def get_journal_stats() -> Dict[str, Any]:
     }
 
 
+def get_personal_edge_by_archetype(min_trades: int = 3) -> Dict[str, Dict]:
+    """
+    Returns personal win rates and avg-R by archetype (and by archetype×regime).
+    Used by the ranking engine to personalise EV calculations.
+    """
+    conn = _get_conn()
+    try:
+        rows = conn.execute(
+            """
+            SELECT archetype, regime_at_entry, pnl_inr, pnl_r
+            FROM journal_entries
+            WHERE exit_date IS NOT NULL AND pnl_inr IS NOT NULL AND archetype IS NOT NULL
+            """
+        ).fetchall()
+    finally:
+        conn.close()
+
+    from collections import defaultdict
+    arch_data: Dict[str, Dict] = defaultdict(lambda: {"wins": 0, "total": 0, "r_vals": []})
+    arch_regime: Dict[str, Dict] = defaultdict(lambda: {"wins": 0, "total": 0})
+
+    for archetype, regime, pnl_inr, pnl_r in rows:
+        arch = archetype or "UNKNOWN"
+        won = (pnl_inr or 0) > 0
+        arch_data[arch]["total"] += 1
+        arch_data[arch]["wins"] += int(won)
+        if pnl_r is not None:
+            arch_data[arch]["r_vals"].append(float(pnl_r))
+        if regime:
+            key = f"{arch}|{regime}"
+            arch_regime[key]["total"] += 1
+            arch_regime[key]["wins"] += int(won)
+
+    result: Dict[str, Dict] = {}
+    for arch, d in arch_data.items():
+        if d["total"] < min_trades:
+            continue
+        wr = d["wins"] / d["total"]
+        avg_r = sum(d["r_vals"]) / len(d["r_vals"]) if d["r_vals"] else 0.0
+        regime_breakdown = {}
+        for k, rd in arch_regime.items():
+            a, reg = k.split("|", 1)
+            if a == arch and rd["total"] >= 2:
+                regime_breakdown[reg] = round(rd["wins"] / rd["total"], 3)
+        result[arch] = {
+            "win_rate": round(wr, 3),
+            "avg_r": round(avg_r, 3),
+            "count": d["total"],
+            "regime_breakdown": regime_breakdown,
+        }
+    return result
+
+
 # ---------------------------------------------------------------------------
 # Streamlit rendering
 # ---------------------------------------------------------------------------

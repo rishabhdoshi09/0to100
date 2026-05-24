@@ -70,6 +70,13 @@ class RankingEngine:
     def __init__(self, regime_state=None, quality_multiplier: float = 1.0):
         self._regime        = regime_state
         self._quality_mult  = quality_multiplier
+        # Load personal journal edge once per instance (lightweight read)
+        self._personal_edge: dict = {}
+        try:
+            from analytics.auto_journal import get_personal_edge_by_archetype
+            self._personal_edge = get_personal_edge_by_archetype(min_trades=3)
+        except Exception:
+            pass
 
     def rank(
         self,
@@ -121,6 +128,22 @@ class RankingEngine:
 
             # Expected value (use live from ExpectancyEngine if available, else playbook baseline)
             ev_r = self._get_ev(pb_id, pb, qs.tier, regime_name)
+
+            # ── Personal edge override (journal data beats generic playbook) ─
+            try:
+                personal_wr = None
+                ped = self._personal_edge.get(cand.archetype, {}) if self._personal_edge else {}
+                if ped.get("count", 0) >= 3:
+                    # Check regime-specific win rate first, fall back to overall
+                    regime_wr = ped.get("regime_breakdown", {}).get(regime_name)
+                    personal_wr = regime_wr if regime_wr is not None else ped["win_rate"]
+                    personal_avg_r = ped.get("avg_r", pb.avg_winner_r)
+                    # Blend 60% personal / 40% generic (regression to mean until enough trades)
+                    blend = min(1.0, ped["count"] / 20)  # full personal weight after 20 trades
+                    blended_wr = personal_wr * blend + pb.baseline_win_rate * (1 - blend)
+                    ev_r = round(blended_wr * personal_avg_r - (1 - blended_wr) * pb.avg_loser_r, 3)
+            except Exception:
+                pass
 
             # Position sizing: 2% portfolio risk × Kelly fraction
             risk_pct = max(0.5, (cand.pivot_level - cand.stop_level) / cand.pivot_level * 100

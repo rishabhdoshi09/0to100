@@ -8,6 +8,57 @@ from typing import Optional
 
 import streamlit as st
 
+
+@st.cache_data(ttl=300, show_spinner=False)
+def _quick_readiness(symbols_key: str) -> dict[str, str]:
+    """
+    Quick actionability check for watchlist stocks.
+    Returns {symbol: "READY" | "BUILDING" | "WATCH"} using lightweight indicator scoring.
+    No full pipeline — fast enough for watchlist rendering.
+    """
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    from agents.tools import get_technical_indicators
+    symbols = [s for s in symbols_key.split(",") if s]
+
+    def _score(sym: str) -> tuple[str, str]:
+        try:
+            d = get_technical_indicators(sym, days=60)
+            if "error" in d:
+                return sym, "WATCH"
+            score = 0
+            price = d.get("ltp") or d.get("price") or 0
+            ema20 = d.get("ema_20")
+            rsi   = d.get("rsi_14") or 50
+            vr    = d.get("volume_ratio") or 1.0
+            m5    = d.get("momentum_5d_pct") or 0.0
+            m20   = d.get("momentum_20d_pct") or 0.0
+            gc    = d.get("golden_cross", False)
+
+            if price and ema20 and float(price) > float(ema20): score += 1
+            if float(rsi) >= 50 and float(rsi) <= 72:           score += 1
+            if float(vr) >= 1.5:                                 score += 2
+            elif float(vr) >= 1.0:                               score += 1
+            if float(m5) > 2:                                    score += 1
+            if float(m20) > 5:                                   score += 1
+            if gc:                                                score += 1
+
+            if score >= 5:   return sym, "READY"
+            elif score >= 3: return sym, "BUILDING"
+            else:            return sym, "WATCH"
+        except Exception:
+            return sym, "WATCH"
+
+    result: dict[str, str] = {}
+    with ThreadPoolExecutor(max_workers=10) as ex:
+        futs = {ex.submit(_score, s): s for s in symbols}
+        for f in as_completed(futs):
+            try:
+                sym, verdict = f.result()
+                result[sym] = verdict
+            except Exception:
+                pass
+    return result
+
 try:
     from ui.context import go_to, nav_button
 except Exception:
@@ -216,6 +267,32 @@ def render_watchlist() -> None:
         )
         return
 
+    # Auto-graduation: quick check each symbol's readiness
+    symbols_key = ",".join(r["symbol"] for r in rows)
+    readiness: dict[str, str] = {}
+    try:
+        with st.spinner("Checking setup readiness…"):
+            readiness = _quick_readiness(symbols_key)
+    except Exception:
+        pass
+
+    # Sort: READY stocks float to top
+    _order = {"READY": 0, "BUILDING": 1, "WATCH": 2}
+    rows = sorted(rows, key=lambda r: _order.get(readiness.get(r["symbol"], "WATCH"), 2))
+
+    # Summary badge row
+    ready_count = sum(1 for v in readiness.values() if v == "READY")
+    building_count = sum(1 for v in readiness.values() if v == "BUILDING")
+    if ready_count > 0:
+        st.markdown(
+            f"<div style='background:#00d4a014;border:1px solid #00d4a044;border-radius:8px;"
+            f"padding:8px 14px;margin-bottom:12px;font-size:.75rem;color:#00d4a0'>"
+            f"⚡ <b>{ready_count} stock{'s' if ready_count > 1 else ''} READY TO TRADE</b>"
+            f"{f' · {building_count} building' if building_count else ''}"
+            f" — check scanner for full details</div>",
+            unsafe_allow_html=True,
+        )
+
     to_remove: list[int] = []
 
     for item in rows:
@@ -249,10 +326,21 @@ def render_watchlist() -> None:
             and current_px >= target_px * 0.97
         )
 
+        # Auto-graduation badge
+        verdict = readiness.get(sym, "WATCH")
+        verdict_html = {
+            "READY":    "<span style='background:#00d4a022;border:1px solid #00d4a066;border-radius:4px;padding:1px 7px;font-size:.6rem;font-weight:700;color:#00d4a0;margin-left:6px'>⚡ READY</span>",
+            "BUILDING": "<span style='background:#f59e0b22;border:1px solid #f59e0b66;border-radius:4px;padding:1px 7px;font-size:.6rem;font-weight:700;color:#f59e0b;margin-left:6px'>🔨 BUILDING</span>",
+        }.get(verdict, "")
+
         if below_stop:
             border_color = "#ff4466"
             status_label = "Below Stop Loss"
             status_color = "#ff4466"
+        elif verdict == "READY":
+            border_color = "#00d4a0"
+            status_label = "Setup READY"
+            status_color = "#00d4a0"
         elif in_buy_zone:
             border_color = "#00d4a0"
             status_label = "In Buy Zone"
@@ -282,7 +370,7 @@ def render_watchlist() -> None:
                 # Header row
                 f"<div style='display:flex;justify-content:space-between;align-items:center;margin-bottom:8px'>"
                 f"<span style='color:#e8eaf0;font-size:1.05rem;font-weight:700;"
-                f"font-family:JetBrains Mono,monospace'>{sym}</span>"
+                f"font-family:JetBrains Mono,monospace'>{sym}</span>{verdict_html}"
                 + (
                     f"<span style='color:{status_color};font-size:.68rem;font-weight:700;"
                     f"background:rgba(255,255,255,.05);padding:2px 8px;border-radius:5px;"

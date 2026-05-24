@@ -246,6 +246,11 @@ class JarvisOrchestrator:
 
         full_context = (memory_context + "\n\n" + context).strip() if memory_context else context
 
+        # ── Live regime block (injected fresh on every query) ─────────────────
+        live_state = self._build_live_state_block()
+        if live_state:
+            full_context = live_state + "\n\n" + full_context
+
         # Route
         plan = self._route(query, full_context)
 
@@ -315,6 +320,74 @@ class JarvisOrchestrator:
             routed=True,
         )
 
+
+    def _build_live_state_block(self) -> str:
+        """
+        Build a structured live-market context block injected into every JARVIS query.
+        Gives JARVIS regime, VIX, breadth, personal edge — so it never gives
+        generic advice when market conditions are extreme.
+        """
+        lines = []
+        try:
+            from datetime import datetime
+            lines.append(f"── LIVE MARKET STATE ({datetime.now().strftime('%H:%M')}) ──")
+
+            # Regime
+            try:
+                from core.regime_engine import compute_regime
+                r = compute_regime()
+                regime = r.market_regime
+                score  = r.regime_score
+                vix    = r.vix
+                breadth = r.breadth_label
+
+                regime_advice = {
+                    "TRENDING_BULL": "✅ Bull trend — full size, chase breakouts, let winners run.",
+                    "EXPANSION":     "✅ Expansion — good conditions, normal sizing.",
+                    "CHOPPY":        "⚠️ Choppy — reduce size 50%, be selective, quick profits.",
+                    "DISTRIBUTION":  "🔴 Distribution — no new longs, protect capital.",
+                    "TRENDING_BEAR": "🔴 Bear trend — cash is a position, only shorts or wait.",
+                    "COMPRESSION":   "⏸ Compression — wait for breakout, no new positions.",
+                }.get(regime, "Monitor conditions.")
+
+                lines.append(f"Regime: {regime} (score {score:.0f}/100) | VIX: {vix:.1f} | Breadth: {breadth}")
+                lines.append(f"Regime guidance: {regime_advice}")
+            except Exception:
+                pass
+
+            # Personal edge from journal
+            try:
+                from analytics.auto_journal import get_personal_edge_by_archetype, get_journal_stats
+                stats = get_journal_stats()
+                if stats.get("total_trades", 0) >= 3:
+                    lines.append(
+                        f"Personal edge: {stats['total_trades']} trades | "
+                        f"Win rate {stats['win_rate']:.0f}% | Avg {stats['avg_r']:+.2f}R | "
+                        f"Best setup: {stats.get('best_archetype','?')} | "
+                        f"Best regime: {stats.get('best_regime','?')}"
+                    )
+            except Exception:
+                pass
+
+            # Active trading rules
+            try:
+                from core.intelligence_hub import compute_opportunity_score
+                from core.regime_engine import compute_regime
+                from core.adaptive_engine import AdaptiveEngine
+                opp = compute_opportunity_score(compute_regime(), [], AdaptiveEngine())
+                allow = opp.total >= 30
+                lines.append(
+                    f"Market opportunity score: {opp.total:.0f}/100 ({opp.grade})"
+                )
+                if not allow:
+                    lines.append("ACTIVE TRADING RULES: allow_new_trades=False — conditions too poor. Refuse new entries.")
+            except Exception:
+                pass
+
+        except Exception:
+            pass
+
+        return "\n".join(lines) if len(lines) > 1 else ""
 
     def _extract_and_store_facts(self, query: str, mem) -> None:
         """Auto-detect price alerts and capital mentions from the user's message."""
