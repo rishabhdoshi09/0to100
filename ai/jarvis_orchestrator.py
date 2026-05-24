@@ -416,6 +416,82 @@ class JarvisOrchestrator:
             except Exception:
                 pass
 
+            # ── User's watchlist ──────────────────────────────────────────
+            try:
+                import sqlite3
+                from pathlib import Path
+                _wdb = Path("logs/watchlist.db")
+                if _wdb.exists():
+                    _conn = sqlite3.connect(_wdb, check_same_thread=False)
+                    _rows = _conn.execute(
+                        "SELECT symbol, notes FROM watchlist ORDER BY added_date DESC LIMIT 15"
+                    ).fetchall()
+                    _conn.close()
+                    if _rows:
+                        _wl_syms = [r[0] for r in _rows]
+                        lines.append(f"User's watchlist ({len(_wl_syms)} stocks): {', '.join(_wl_syms)}")
+                        _notes = [(r[0], r[1]) for r in _rows if r[1]]
+                        if _notes:
+                            for sym, note in _notes[:3]:
+                                lines.append(f"  Watchlist note — {sym}: {note}")
+            except Exception:
+                pass
+
+            # ── Open positions / holdings ─────────────────────────────────
+            try:
+                from portfolio.state import PortfolioState
+                _ps = PortfolioState(initial_capital=1_000_000)
+                _pos = _ps.get_open_positions()
+                if _pos:
+                    _pos_parts = []
+                    for sym, qty in list(_pos.items())[:8]:
+                        _pos_parts.append(f"{sym}×{qty:.0f}")
+                    lines.append(f"Open positions ({len(_pos)}): {', '.join(_pos_parts)}")
+                else:
+                    lines.append("Open positions: None (fully in cash)")
+            except Exception:
+                pass
+
+            # ── Today's top scanner setups (cached, lightweight) ──────────
+            try:
+                _cache_key = f"jarvis_ctx_setups_{datetime.now().strftime('%Y%m%d%H')}"
+                if not hasattr(self, "_setup_cache") or getattr(self, "_setup_cache_key", "") != _cache_key:
+                    from scan.pipeline import ScanPipeline
+                    from core.regime_engine import compute_regime as _cr
+                    from config import settings as _cfg
+                    _regime_s = _cr()
+                    _uni = (_cfg.symbol_list or [])[:30]
+                    _results = ScanPipeline(max_workers=8, min_quality_score=45).run(
+                        _uni, top_n=5, regime_state=_regime_s, skip_liquidity_filter=True,
+                    )
+                    self._setup_cache = _results
+                    self._setup_cache_key = _cache_key
+                _setups = getattr(self, "_setup_cache", [])
+                if _setups:
+                    _s_lines = []
+                    for _s in _setups[:5]:
+                        _sym  = getattr(_s, "symbol", "?")
+                        _ent  = getattr(_s, "entry", 0) or 0
+                        _stp  = getattr(_s, "stop", 0) or 0
+                        _tgt  = getattr(_s, "target_price", 0) or 0
+                        _vrd  = getattr(_s, "verdict", "?")
+                        _s_lines.append(f"{_sym} [{_vrd}] entry ₹{_ent:.0f} stop ₹{_stp:.0f} target ₹{_tgt:.0f}")
+                    lines.append(f"Today's top setups: {' | '.join(_s_lines)}")
+                else:
+                    lines.append("Today's top setups: None found in current universe")
+            except Exception:
+                pass
+
+            # ── Recent news headlines ─────────────────────────────────────
+            try:
+                from news.fetcher import NewsFetcher
+                _articles = NewsFetcher().fetch_all(max_age_hours=6)
+                if _articles:
+                    _headlines = [a.title for a in _articles[:5] if a.title]
+                    lines.append(f"Recent news headlines: {' | '.join(_headlines)}")
+            except Exception:
+                pass
+
         except Exception:
             pass
 
