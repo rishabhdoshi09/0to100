@@ -856,35 +856,118 @@ with st.sidebar:
         unsafe_allow_html=True,
     )
 
-    # ── Navigation ─────────────────────────────────────────────────────────
+    # ── Universal Stock Search Bar (Fix 2) ────────────────────────────────
+    try:
+        _search_sym = st.text_input(
+            "🔍 Quick Search",
+            placeholder="Type NSE symbol…",
+            key="quick_search_sym",
+            label_visibility="collapsed",
+        )
+        if _search_sym and _search_sym.strip():
+            _qs = _search_sym.strip().upper()
+
+            @st.cache_data(ttl=120, show_spinner=False)
+            def _qs_fetch(sym: str) -> dict:
+                out: dict = {}
+                try:
+                    from data.market_data import get_provider
+                    mdp = get_provider()
+                    q = mdp.quote(sym)
+                    out["price"] = q.get("last_price") or q.get("ltp") or 0.0
+                    out["prev"]  = q.get("prev_close") or q.get("previous_close") or 0.0
+                except Exception:
+                    pass
+                try:
+                    import yfinance as yf
+                    fi = yf.Ticker(sym + ".NS").fast_info
+                    if not out.get("price"):
+                        out["price"] = float(getattr(fi, "last_price", 0) or 0)
+                    if not out.get("prev"):
+                        out["prev"]  = float(getattr(fi, "previous_close", 0) or 0)
+                    out["week52_high"] = float(getattr(fi, "year_high", 0) or 0)
+                    out["week52_low"]  = float(getattr(fi, "year_low",  0) or 0)
+                except Exception:
+                    pass
+                return out
+
+            _qd = {}
+            try:
+                _qd = _qs_fetch(_qs)
+            except Exception:
+                pass
+
+            _qpx   = _qd.get("price", 0.0)
+            _qprev = _qd.get("prev", 0.0)
+            _qchg  = ((_qpx - _qprev) / _qprev * 100) if _qprev else 0.0
+            _qchg_col = "#00d4a0" if _qchg >= 0 else "#ff4b4b"
+            _qchg_arrow = "▲" if _qchg >= 0 else "▼"
+            _q52h  = _qd.get("week52_high", 0.0)
+            _q52l  = _qd.get("week52_low",  0.0)
+
+            _q52_html = ""
+            if _q52h and _q52l:
+                _q52_html = (
+                    f"<div style='font-size:.65rem;color:#6b7280;margin-top:2px'>"
+                    f"52W: ₹{_q52l:,.0f} – ₹{_q52h:,.0f}</div>"
+                )
+
+            if _qpx:
+                st.sidebar.markdown(
+                    f"<div style='background:#0d1421;border:1px solid #1e293b;border-radius:8px;"
+                    f"padding:8px 12px;font-family:JetBrains Mono,monospace;margin-bottom:4px'>"
+                    f"<div style='color:#e8eaf0;font-weight:700;font-size:.9rem'>{_qs}</div>"
+                    f"<div style='color:#e8eaf0;font-size:1.05rem;font-weight:700'>₹{_qpx:,.2f}</div>"
+                    f"<div style='color:{_qchg_col};font-size:.8rem;font-weight:700'>"
+                    f"{_qchg_arrow} {_qchg:+.2f}%</div>"
+                    f"{_q52_html}"
+                    f"</div>",
+                    unsafe_allow_html=True,
+                )
+            else:
+                st.sidebar.caption("Data unavailable")
+
+            if st.sidebar.button(
+                "→ Open in Terminal",
+                key="qs_open_terminal",
+                use_container_width=True,
+            ):
+                st.session_state["sidebar_nav"] = "Terminal"
+                st.session_state["terminal_symbol"] = _qs
+                st.rerun()
+    except Exception:
+        pass
+
+    # ── Navigation (Fix 3 — 6 logical groups) ─────────────────────────────
     _nav_options = ["🏠  Dashboard", "🏛️  Institutional", "🤖  JARVIS", "⚡  Terminal",
                     "🔬  Research", "🧬  AlgoLab", "🛠️  Tools",
                     "👁  My Watchlist", "💼  My Holdings", "🚀  IPO Calendar", "🔍  Stock Screener",
                     "📊  Market Breadth", "🎯  Edge Tracker", "📋  Trade Replay", "🔔  Smart Alerts",
                     "🚪  Exit Intelligence", "🌊  Options Flow"]
 
-    # Grouped navigation using option_menu
+    # 6-item grouped navigation using option_menu
     try:
         from streamlit_option_menu import option_menu as _option_menu
         if "_nav_pending" in st.session_state:
             st.session_state["sidebar_nav"] = st.session_state.pop("_nav_pending")
-        _cur = st.session_state.get("sidebar_nav", "🏠  Dashboard").split("  ", 1)[-1].strip()
 
         _nav_page_raw = _option_menu(
             menu_title=None,
             options=[
-                "Command",
-                "JARVIS", "Scanner", "Terminal", "Options Flow",
-                "Watchlist", "Exit Intelligence", "Holdings",
-                "Journal", "Edge Tracker", "Trade Replay",
-                "Research", "AlgoLab", "Tools",
+                "Markets",
+                "Find Setups",
+                "My Trades",
+                "Analyse",
+                "JARVIS",
+                "Tools",
             ],
             icons=[
-                "lightning-charge-fill",
-                "robot", "radar", "activity", "water",
-                "eye", "door-open", "briefcase",
-                "journal-text", "bullseye", "play-circle",
-                "search", "dna", "tools",
+                "graph-up-arrow",
+                "radar",
+                "briefcase",
+                "cpu",
+                "robot",
+                "wrench",
             ],
             menu_icon=None,
             default_index=0,
@@ -899,25 +982,17 @@ with st.sidebar:
             key="sidebar_nav_menu",
         )
 
-        # Map option_menu names → page names used in routing
+        # Map 6-item nav → existing page routing names
         _MENU_MAP = {
-            "Command":          "Dashboard",
-            "JARVIS":           "JARVIS",
-            "Scanner":          "Institutional",
-            "Terminal":         "Terminal",
-            "Options Flow":     "Options Flow",
-            "Watchlist":        "My Watchlist",
-            "Exit Intelligence":"Exit Intelligence",
-            "Holdings":         "My Holdings",
-            "Journal":          "Tools",
-            "Edge Tracker":     "Edge Tracker",
-            "Trade Replay":     "Trade Replay",
-            "Research":         "Research",
-            "AlgoLab":          "AlgoLab",
-            "Tools":            "Tools",
+            "Markets":     "Dashboard",
+            "Find Setups": "Institutional",
+            "My Trades":   "My Holdings",
+            "Analyse":     "Terminal",
+            "JARVIS":      "JARVIS",
+            "Tools":       "Tools6",   # special key for sub-tabbed tools page
         }
         _nav_page = _MENU_MAP.get(_nav_page_raw, _nav_page_raw)
-        st.session_state["sidebar_nav"] = _nav_page + "  " * 0  # keep compat
+        st.session_state["sidebar_nav"] = _nav_page
 
     except Exception:
         # Fallback: flat radio if option_menu fails
@@ -1033,11 +1108,14 @@ except Exception:
     symbol_list = sorted(symbol_map.keys())
 
 # ── Route to active page ──────────────────────────────────────────────────────
-_page = st.session_state.get("sidebar_nav", "🏠  Dashboard").split("  ", 1)[-1].strip()
+_page = st.session_state.get("sidebar_nav", "Dashboard")
+# Normalise legacy emoji-prefixed values that may still be in session state
+if "  " in _page:
+    _page = _page.split("  ", 1)[-1].strip()
 
 # Handle session-state navigation from watchlist / homepage buttons
 if st.session_state.get("active_tab") == "terminal":
-    st.session_state["_nav_pending"] = "⚡  Terminal"
+    st.session_state["sidebar_nav"] = "Terminal"
     st.session_state.pop("active_tab", None)
     st.rerun()
 
@@ -1045,20 +1123,27 @@ if st.session_state.get("active_tab") == "terminal":
 if st.session_state.get("selected_page"):
     _nav_target = st.session_state.pop("selected_page")
     _nav_map = {
-        "Institutional": "🏛️  Institutional",
-        "JARVIS":        "🤖  JARVIS",
-        "Terminal":      "⚡  Terminal",
-        "Dashboard":     "🏠  Dashboard",
+        "Institutional": "Institutional",
+        "JARVIS":        "JARVIS",
+        "Terminal":      "Terminal",
+        "Dashboard":     "Dashboard",
     }
     if _nav_target in _nav_map:
-        st.session_state["_nav_pending"] = _nav_map[_nav_target]
+        st.session_state["sidebar_nav"] = _nav_map[_nav_target]
         st.rerun()
+
+# ── Market Pulse Strip (Fix 1) — shown at top of every page ──────────────────
+try:
+    from ui.market_pulse import render_market_pulse
+    render_market_pulse()
+except Exception:
+    pass
 
 
 # ══════════════════════════════════════════════════════════════════════════════
 # PAGE: DASHBOARD
 # ══════════════════════════════════════════════════════════════════════════════
-if _page == "Dashboard":
+if _page in ("Dashboard", "Markets"):
     # ── Regime command strip + IronLock gates ─────────────────────────────
     try:
         from ui.regime_bar import render_regime_bar as _render_regime_bar
@@ -1094,7 +1179,7 @@ if _page == "Dashboard":
 # ══════════════════════════════════════════════════════════════════════════════
 # PAGE: INSTITUTIONAL TERMINAL
 # ══════════════════════════════════════════════════════════════════════════════
-elif _page == "Institutional":
+elif _page in ("Institutional", "Find Setups"):
     render_institutional_terminal(universe)
 
 
@@ -1109,7 +1194,7 @@ elif _page == "JARVIS":
 # ══════════════════════════════════════════════════════════════════════════════
 # PAGE: TERMINAL
 # ══════════════════════════════════════════════════════════════════════════════
-elif _page == "Terminal":
+elif _page in ("Terminal", "Analyse"):
     # ── Top bar: symbol picker + timeframe ───────────────────────────────
     _tb_c1, _tb_c2, _tb_c3, _tb_c4 = st.columns([3, 2, 1, 1])
     with _tb_c1:
