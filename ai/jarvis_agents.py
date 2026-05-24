@@ -491,6 +491,8 @@ class AnalysisAgent(BaseJarvisAgent):
             "detect_patterns": self._detect_patterns,
             "compute_indicators": self._compute_indicators,
             "run_pre_trade_checklist": self._run_pre_trade_checklist,
+            "rank_vs_sector_peers": self._rank_vs_peers,
+            "get_options_flow": self._get_options_flow,
             "get_journal_stats": self._get_journal_stats,
             "get_fno_ban_list": self._get_fno_ban,
             "get_block_deals": self._get_block_deals,
@@ -572,6 +574,50 @@ class AnalysisAgent(BaseJarvisAgent):
         try:
             from agents.tools import get_technical_indicators
             return get_technical_indicators(symbol)
+        except Exception as e:
+            return {"error": str(e)}
+
+    def _rank_vs_peers(self, symbol: str) -> dict:
+        """Rank a stock vs all peers in its sector — who's the leader?"""
+        try:
+            from core.peer_ranker import rank_vs_peers
+            result = rank_vs_peers(symbol)
+            if result is None:
+                return {"error": f"Sector not found for {symbol}"}
+            return {
+                "symbol": result.symbol,
+                "sector": result.sector,
+                "rank": result.rank,
+                "total_peers": result.total_peers,
+                "verdict": result.verdict,
+                "score": result.score,
+                "momentum_rank": result.momentum_rank,
+                "rs_rank": result.rs_rank,
+                "top_3": [p["symbol"] for p in result.peers_ranked[:3]],
+                "bottom_3": [p["symbol"] for p in result.peers_ranked[-3:]],
+            }
+        except Exception as e:
+            return {"error": str(e)}
+
+    def _get_options_flow(self, symbol: str) -> dict:
+        """Check options flow for a symbol — PCR, IV rank, max pain, OI walls."""
+        try:
+            from options.analytics import (
+                get_option_chain, compute_pcr, compute_max_pain,
+                get_atm_iv, get_oi_buildup, get_iv_percentile,
+            )
+            df, spot_str = get_option_chain(symbol)
+            if df is None or df.empty:
+                return {"error": f"No options data for {symbol}"}
+            spot = float(spot_str) if spot_str else 0.0
+            return {
+                "symbol": symbol, "spot": spot,
+                "pcr": round(compute_pcr(df), 3),
+                "max_pain": compute_max_pain(df),
+                "atm_iv": round(get_atm_iv(df, spot), 1),
+                "iv_percentile": round(get_iv_percentile(df), 1),
+                "oi_buildup": get_oi_buildup(df, spot),
+            }
         except Exception as e:
             return {"error": str(e)}
 

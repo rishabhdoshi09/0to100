@@ -852,7 +852,7 @@ with st.sidebar:
                     "🔬  Research", "🧬  AlgoLab", "🛠️  Tools",
                     "👁  My Watchlist", "💼  My Holdings", "🚀  IPO Calendar", "🔍  Stock Screener",
                     "📊  Market Breadth", "🎯  Edge Tracker", "📋  Trade Replay", "🔔  Smart Alerts",
-                    "🚪  Exit Intelligence"]
+                    "🚪  Exit Intelligence", "🌊  Options Flow"]
     # Consume pending navigation set by child pages (can't set widget key directly)
     if "_nav_pending" in st.session_state:
         st.session_state["sidebar_nav"] = st.session_state.pop("_nav_pending")
@@ -2453,6 +2453,13 @@ elif _page == "Exit Intelligence":
         render_exit_intelligence()
     except Exception as e:
         st.error(f"Exit Intelligence error: {e}")
+
+elif _page == "Options Flow":
+    try:
+        from ui.options_flow_scanner import render_options_flow_scanner
+        render_options_flow_scanner()
+    except Exception as e:
+        st.error(f"Options Flow error: {e}")
 
 # ── Paper trading dashboard (accessible from any tab via sidebar session) ────
 # Initialise DB on every load so paper_trading tables exist

@@ -369,6 +369,23 @@ class JarvisOrchestrator:
             except Exception:
                 pass
 
+            # Historical analog — what did the market do last time conditions were like this?
+            try:
+                from core.regime_analog import find_analogs, format_analog_insight
+                regime_state_dict = {
+                    "market_regime": getattr(r, "market_regime", ""),
+                    "volatility_regime": getattr(r, "volatility_regime", ""),
+                    "breadth_label": getattr(r, "breadth_label", ""),
+                    "vix": getattr(r, "vix", 0),
+                }
+                analogs = find_analogs(regime_state_dict, top_n=2)
+                if analogs:
+                    analog_text = format_analog_insight(analogs)
+                    if analog_text:
+                        lines.append(f"Historical analog: {analog_text[:300]}")
+            except Exception:
+                pass
+
             # Active trading rules
             try:
                 from core.intelligence_hub import compute_opportunity_score

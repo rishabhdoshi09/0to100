@@ -456,6 +456,27 @@ def _check_chart_pattern(symbol: str, action: str) -> ChecklistItem:
         return ChecklistItem(question, None, f"Pattern check error: {exc}", 2)
 
 
+def _check_market_timing() -> ChecklistItem:
+    """Check: Is this a good time of day to enter a trade?"""
+    question = "Intraday timing optimal for entry?"
+    try:
+        from core.market_timing import get_timing_score
+        t = get_timing_score()
+        score = t["score"]
+        label = t["label"]
+        reason = t["reason"]
+        time_str = t.get("time", "")
+        detail = f"{label} ({score}/100) at {time_str} — {reason}"
+        if label in ("OPTIMAL", "GOOD"):
+            return ChecklistItem(question, True, detail, 1)
+        elif label in ("CAUTION", "WEAK"):
+            return ChecklistItem(question, None, detail, 1)
+        else:  # DANGER, CLOSED, PRE-MARKET
+            return ChecklistItem(question, False, detail, 1)
+    except Exception as exc:
+        return ChecklistItem(question, None, f"Timing check error: {exc}", 1)
+
+
 def _check_not_against_trend(action: str) -> ChecklistItem:
     """Check 7 (weight=1): Is the trade not fighting the regime trend?"""
     question = "Trade not fighting the dominant trend?"
@@ -605,6 +626,9 @@ def run_checklist(
 
     # 12. Chart pattern / structure (weight=2)
     items.append(_check_chart_pattern(symbol, action))
+
+    # 13. Intraday timing (weight=1)
+    items.append(_check_market_timing())
 
     score = _compute_score(items)
 

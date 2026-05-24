@@ -55,10 +55,21 @@ def _analyse_position(symbol: str, entry: float, stop: float, target: float) -> 
         r_size = abs(entry - stop) if abs(entry - stop) > 0 else entry * 0.02
         profit_r = (price - entry) / r_size if entry > 0 else None
 
-        # ATR-based trailing stop (1.5× ATR below price)
-        atr_val  = float(atr) if atr else r_size
-        trail_stop = round(price - 1.5 * atr_val, 2)
-        new_stop   = max(stop, trail_stop)  # never move stop down
+        # ── Smart stop: volume support + round-number avoidance (not naive ATR) ──
+        new_stop = stop
+        stop_reason = "original stop"
+        try:
+            from agents.tools import _fetch_ohlcv
+            from risk.smart_stop import suggest_smart_stop
+            df_ohlcv = _fetch_ohlcv(symbol, days=60)
+            if df_ohlcv is not None and len(df_ohlcv) >= 15:
+                ss = suggest_smart_stop(symbol, df_ohlcv, price, archetype="VCP_BREAKOUT")
+                smart_trail = ss["suggested_stop"]
+                stop_reason = ss["reason"]
+                new_stop = max(stop, smart_trail)  # trail up, never down
+        except Exception:
+            atr_val  = float(atr) if atr else r_size
+            new_stop = max(stop, round(price - 1.5 * atr_val, 2))
 
         # ── Check 1: Hard stop hit
         if price <= stop:
@@ -99,7 +110,7 @@ def _analyse_position(symbol: str, entry: float, stop: float, target: float) -> 
 
         # ── Check 7: Trailing stop update opportunity
         if action == "HOLD" and profit_r and profit_r >= 1.0 and new_stop > stop:
-            reasons.append(f"Trail stop from ₹{stop:.1f} → ₹{new_stop:.1f} (1.5× ATR below price)")
+            reasons.append(f"Trail stop from ₹{stop:.1f} → ₹{new_stop:.1f} ({stop_reason})")
             action, urgency = "TRAIL_STOP", "LOW"
 
         # ── Default: position valid, hold
