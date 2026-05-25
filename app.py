@@ -1179,7 +1179,13 @@ if _page in ("Dashboard", "Markets"):
 # PAGE: INSTITUTIONAL TERMINAL
 # ══════════════════════════════════════════════════════════════════════════════
 elif _page in ("Institutional", "Find Setups"):
-    render_institutional_terminal(universe)
+    # Use full NSE list so scanner finds setups from all listed stocks
+    try:
+        from data.nse_universe import get_nse_universe as _get_nse
+        _all_syms = _get_nse() or symbol_list
+    except Exception:
+        _all_syms = symbol_list
+    render_scanner(_all_syms)
 
 
 # ══════════════════════════════════════════════════════════════════════════════

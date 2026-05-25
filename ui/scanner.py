@@ -164,30 +164,19 @@ def _render_momentum_card(s) -> None:
 
 def render_scanner(universe: list[str]) -> None:
     # ── Controls ──────────────────────────────────────────────────────────────
-    c1, c2, c3 = st.columns([2, 1, 1])
+    c1, c2, c3 = st.columns([3, 1, 1])
     with c1:
-        scan_mode = st.radio(
-            "Mode", ["My Stocks", "All NSE (~1900)"],
-            horizontal=True, key="scanner_mode",
-            label_visibility="collapsed",
-        )
+        st.caption(f"Scanning **{len(universe)} NSE stocks** · results cached 5 min")
     with c2:
-        run_scan = st.button("🔍 Find Setups", key="scanner_run",
+        run_scan = st.button("🔍 Scan Now", key="scanner_run",
                              type="primary", use_container_width=True)
     with c3:
-        buy_only = st.toggle("Buy signals only", value=False, key="scanner_buy_only")
+        buy_only = st.toggle("Buy only", value=False, key="scanner_buy_only")
 
     if run_scan:
         st.cache_data.clear()
 
-    # ── Resolve symbols ────────────────────────────────────────────────────────
-    if scan_mode == "All NSE (~1900)":
-        with st.spinner("Loading NSE universe…"):
-            syms = _full_nse_universe() or universe
-        st.caption(f"Scanning {len(syms)} stocks — this takes 3-4 minutes")
-    else:
-        syms = universe
-
+    syms = universe
     symbols_key = ",".join(syms)
 
     # ── Run elite pipeline (entry/stop/target) ────────────────────────────────
