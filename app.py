@@ -857,7 +857,7 @@ with st.sidebar:
     )
 
     # ── Search bar (Moneycontrol-style) ──────────────────────────────────
-    _search = st.text_input("", placeholder="🔍 Search any NSE stock…", key="qs")
+    _search = st.text_input("Search", placeholder="🔍 Search any NSE stock…", key="qs", label_visibility="collapsed")
     if _search and _search.strip():
         _qs = _search.strip().upper()
 
@@ -1143,26 +1143,14 @@ except Exception:
 # PAGE: DASHBOARD
 # ══════════════════════════════════════════════════════════════════════════════
 if _page in ("Dashboard", "Markets"):
-    # ── Regime command strip + IronLock gates ─────────────────────────────
-    try:
-        from ui.regime_bar import render_regime_bar as _render_regime_bar
-        _render_regime_bar()
-    except Exception:
-        pass
-    if _IRONLOCK_AVAILABLE and _render_ironlock_status is not None:
-        try:
-            _render_ironlock_status()
-        except Exception:
-            pass
-
-    # Today Card — 30-second daily brief at the very top
-    try:
-        from ui.today_card import render_today_card
-        render_today_card(universe)
-    except Exception:
-        pass
     from ui.command_center import render_command_center
-    render_command_center(universe)
+    # Use full NSE list so dashboard setups come from all listed stocks
+    try:
+        from data.nse_universe import get_nse_universe as _get_nse_dash
+        _dash_syms = _get_nse_dash() or symbol_list
+    except Exception:
+        _dash_syms = symbol_list
+    render_command_center(_dash_syms)
 
     # ── Portfolio Heatmap (if positions exist) ─────────────────────────────
     _dash_positions = st.session_state.get("paper_positions", [])
