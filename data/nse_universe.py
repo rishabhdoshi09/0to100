@@ -181,19 +181,42 @@ _BASE_DIR = Path(__file__).resolve().parent.parent  # repo root
 
 
 def _is_valid_symbol(sym: str) -> bool:
-    """Filter out non-equity / derivative / SME symbols."""
+    """
+    Keep only clean NSE equity symbols — regular stocks that trade on yfinance.
+    Rejects bonds/NCDs, suspended, SME, rights, settlement securities.
+    Valid examples: RELIANCE, BAJAJ-AUTO, MCDOWELL-N, M&M, L&TFH
+    """
     if not sym:
         return False
-    # Skip symbols starting with digit
-    if sym[0].isdigit():
+    # Must start with a letter
+    if not sym[0].isalpha():
         return False
-    # Skip overly long symbols (derivatives, SME boards)
-    if len(sym) > 12:
+    # Max 15 chars (MCDOWELL-N = 10, BAJAJ-AUTO = 10, BAJAJFINSV = 10)
+    if len(sym) > 15:
         return False
-    # Skip suffixed variants (rights, SME, etc.)
-    for suffix in ("-BE", "-BL", "-SM", "-IL"):
-        if sym.endswith(suffix):
+    # Reject specific bad suffixes that indicate non-equity instruments
+    # -ST=suspended, -BZ=trade-to-trade, -SF=settlement, -IT/-IL=institutional
+    # -BE/-BL=rights/book, -SM=SME, -N0..-N9=bonds/NCDs, -NL=non-listed
+    _BAD_SUFFIXES = (
+        "-ST", "-BZ", "-SF", "-IT", "-IL", "-BE", "-BL", "-SM",
+        "-N0", "-N1", "-N2", "-N3", "-N4", "-N5", "-N6", "-N7", "-N8", "-N9",
+        "-NL", "-NI", "-NA", "-NB", "-NC", "-ND", "-NE", "-NF", "-NG",
+    )
+    for suf in _BAD_SUFFIXES:
+        if sym.endswith(suf):
             return False
+    # Reject if symbol ends in a digit after a hyphen (bond series like AAFS29A-N0)
+    if "-" in sym:
+        after_hyphen = sym.split("-")[-1]
+        # Keep BAJAJ-AUTO, MCDOWELL-N; reject -N0, -N3, -BZ, -ST etc.
+        if after_hyphen and after_hyphen[-1].isdigit():
+            return False
+        # Also reject 2-char suffixes that are all letters but in bad set
+        if len(after_hyphen) == 2 and after_hyphen.isalpha() and after_hyphen not in ("AU", "MO"):
+            return False
+    # Reject symbols that end in digits (bond series without hyphen)
+    if len(sym) > 4 and sym[-1].isdigit() and sym[-2].isdigit():
+        return False
     return True
 
 
