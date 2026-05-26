@@ -163,10 +163,30 @@ def _render_momentum_card(s) -> None:
 # ── Main render ───────────────────────────────────────────────────────────────
 
 def render_scanner(universe: list[str]) -> None:
+    # ── Universe selector ─────────────────────────────────────────────────────
+    try:
+        from data.nse_universe import get_nifty500_universe
+        nifty500 = get_nifty500_universe()
+    except Exception:
+        nifty500 = universe[:500]
+
+    scope_options = {
+        f"NIFTY 500 ({len(nifty500)} stocks — fast)": nifty500,
+        f"All NSE ({len(universe)} stocks — slow)": universe,
+    }
+    scope_label = st.selectbox(
+        "Universe",
+        list(scope_options.keys()),
+        index=0,
+        key="scanner_scope",
+        label_visibility="collapsed",
+    )
+    syms = scope_options[scope_label]
+
     # ── Controls ──────────────────────────────────────────────────────────────
     c1, c2, c3 = st.columns([3, 1, 1])
     with c1:
-        st.caption(f"Scanning **{len(universe)} NSE stocks** · results cached 5 min")
+        st.caption(f"Scanning **{len(syms)} stocks** · results cached 5 min")
     with c2:
         run_scan = st.button("🔍 Scan Now", key="scanner_run",
                              type="primary", use_container_width=True)
@@ -176,7 +196,6 @@ def render_scanner(universe: list[str]) -> None:
     if run_scan:
         st.cache_data.clear()
 
-    syms = universe
     symbols_key = ",".join(syms)
 
     # ── Run elite pipeline (entry/stop/target) ────────────────────────────────

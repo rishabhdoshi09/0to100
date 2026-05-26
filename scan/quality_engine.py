@@ -322,16 +322,8 @@ class QualityEngine:
                 return df
         except Exception as e:
             _qlog.debug("quality_yfinance_failed", symbol=symbol, error=str(e))
-        # 3. Demo data
-        try:
-            from core.demo_data import make_demo_ohlcv
-            rows = make_demo_ohlcv(symbol, bars=100)
-            if rows:
-                _qlog.debug("quality_demo_fallback", symbol=symbol)
-                return pd.DataFrame(rows)
-        except Exception as e:
-            _qlog.debug("quality_demo_failed", symbol=symbol, error=str(e))
-        _qlog.warning("quality_all_sources_failed", symbol=symbol)
+        # 3. Both sources failed — skip, never use fake data
+        _qlog.debug("quality_all_sources_failed_skipping", symbol=symbol)
         return None
 
     def _atr(self, df: pd.DataFrame, period: int = 14) -> float:

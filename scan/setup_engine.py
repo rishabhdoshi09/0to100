@@ -74,16 +74,8 @@ def _fetch(symbol: str, days: int = 260) -> Optional[pd.DataFrame]:
             return df
     except Exception as e:
         _log.debug("yfinance_fetch_failed", symbol=symbol, error=str(e))
-    # 3. Demo OHLCV for network-restricted environments
-    try:
-        from core.demo_data import make_demo_ohlcv
-        rows = make_demo_ohlcv(symbol, bars=max(days, 60))
-        if rows:
-            _log.debug("demo_data_fallback_used", symbol=symbol)
-            return pd.DataFrame(rows)
-    except Exception as e:
-        _log.debug("demo_data_failed", symbol=symbol, error=str(e))
-    _log.warning("all_data_sources_failed", symbol=symbol)
+    # 3. Both sources failed — skip this stock, never use fake data
+    _log.debug("all_data_sources_failed_skipping", symbol=symbol)
     return None
 
 

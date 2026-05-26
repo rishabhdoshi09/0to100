@@ -191,6 +191,9 @@ def _is_valid_symbol(sym: str) -> bool:
     # Must start with a letter
     if not sym[0].isalpha():
         return False
+    # Reject index/market symbols with spaces (e.g. "INDIA VIX")
+    if " " in sym:
+        return False
     # Max 15 chars (MCDOWELL-N = 10, BAJAJ-AUTO = 10, BAJAJFINSV = 10)
     if len(sym) > 15:
         return False
@@ -379,6 +382,11 @@ def get_nse_universe() -> List[str]:
     """
     syms, _ = _load_universe()
     return syms
+
+
+def get_nifty500_universe() -> List[str]:
+    """Returns the NIFTY 500 list — fast default for scanning (~500 stocks)."""
+    return sorted(NIFTY500)
 
 
 def get_nse_universe_with_names() -> Dict[str, str]:
