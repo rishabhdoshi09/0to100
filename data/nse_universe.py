@@ -214,8 +214,12 @@ def _is_valid_symbol(sym: str) -> bool:
         # Also reject 2-char suffixes that are all letters but in bad set
         if len(after_hyphen) == 2 and after_hyphen.isalpha() and after_hyphen not in ("AU", "MO"):
             return False
-    # Reject symbols that end in digits (bond series without hyphen)
-    if len(sym) > 4 and sym[-1].isdigit() and sym[-2].isdigit():
+    # Reject ETF iNAV tickers (indicative NAV — not tradeable stocks)
+    if sym.endswith("INAV"):
+        return False
+    # Reject symbols longer than 10 chars unless they're known valid patterns
+    # (most real equity symbols are ≤10 chars; longer ones are usually ETF/index)
+    if len(sym) > 10 and not any(c in sym for c in ("-", "&")):
         return False
     return True
 
