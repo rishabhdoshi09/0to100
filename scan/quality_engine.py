@@ -292,8 +292,16 @@ class QualityEngine:
     # ── Helpers ───────────────────────────────────────────────────────────────
 
     def _fetch(self, symbol: str) -> Optional[pd.DataFrame]:
-        """Fallback fetch — only used when SetupEngine cache miss. All failures logged."""
+        """Fallback fetch — bulk cache → Kite → yfinance. Never uses fake data."""
         _qlog = __import__("logger").get_logger(__name__)
+        # 0. Bulk cache (pre-populated by pipeline)
+        try:
+            from scan.bulk_fetcher import get_cached
+            df = get_cached(symbol)
+            if df is not None and len(df) >= 20:
+                return df
+        except Exception:
+            pass
         # 1. Try Kite Connect
         try:
             from data.kite_client import KiteClient

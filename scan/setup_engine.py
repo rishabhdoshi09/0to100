@@ -45,7 +45,15 @@ _log = __import__("logger").get_logger(__name__)
 
 
 def _fetch(symbol: str, days: int = 260) -> Optional[pd.DataFrame]:
-    """Fetch OHLCV with Kite → yfinance → demo fallback chain. All failures logged."""
+    """Fetch OHLCV — bulk cache → Kite → yfinance. Never uses fake data."""
+    # 0. Check bulk prefetch cache (fastest — populated by pipeline before this runs)
+    try:
+        from scan.bulk_fetcher import get_cached
+        df = get_cached(symbol)
+        if df is not None and len(df) >= 30:
+            return df
+    except Exception:
+        pass
     # 1. Try Kite Connect (live data, highest quality)
     try:
         from data.kite_client import KiteClient

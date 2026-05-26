@@ -77,6 +77,13 @@ class ScanPipeline:
         if not liquid:
             return []
 
+        # ── 1b. Bulk OHLCV prefetch — one batch call instead of N individual requests ─
+        try:
+            from scan.bulk_fetcher import prefetch
+            prefetch(liquid)
+        except Exception as _exc:
+            log.debug("bulk_prefetch_skip", error=str(_exc))
+
         # ── 2. Regime Filter ──────────────────────────────────────────────────
         # Only apply regime stage filter for large universes
         if len(liquid) > 50:

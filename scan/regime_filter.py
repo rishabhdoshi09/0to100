@@ -64,12 +64,22 @@ class RegimeFilter:
 
     def _profile(self, symbol: str) -> Optional[StockRegimeProfile]:
         try:
-            import yfinance as yf
             import numpy as np
-            h = yf.Ticker(f"{symbol}.NS").history(period="250d", interval="1d")
+            # Check bulk cache first (pre-populated by pipeline before this stage)
+            h = None
+            try:
+                from scan.bulk_fetcher import get_cached
+                h = get_cached(symbol)
+            except Exception:
+                pass
+            if h is None or len(h) < 50:
+                import yfinance as yf
+                h = yf.Ticker(f"{symbol}.NS").history(period="250d", interval="1d")
             if h is None or len(h) < 50:
                 return None
-            close = h["Close"].values
+            # Normalise column names — bulk cache uses lowercase, yfinance uses Title case
+            h.columns = [c.lower() for c in h.columns]
+            close = h["close"].values
             price = float(close[-1])
             sma50  = float(np.mean(close[-50:])) if len(close) >= 50 else price
             sma200 = float(np.mean(close[-200:])) if len(close) >= 200 else price
@@ -91,8 +101,10 @@ class RegimeFilter:
 
             # RS vs Nifty
             try:
+                import yfinance as yf
                 nifty = yf.Ticker("^NSEI").history(period="7d")
-                nifty_ret = (float(nifty["Close"].iloc[-1]) / float(nifty["Close"].iloc[-6]) - 1) if len(nifty) >= 6 else 0.0
+                nifty_close = nifty["Close"] if "Close" in nifty.columns else nifty["close"]
+                nifty_ret = (float(nifty_close.iloc[-1]) / float(nifty_close.iloc[-6]) - 1) if len(nifty) >= 6 else 0.0
             except Exception:
                 nifty_ret = 0.0
             stock_ret = (price / float(close[-6]) - 1) if len(close) >= 6 else 0.0
