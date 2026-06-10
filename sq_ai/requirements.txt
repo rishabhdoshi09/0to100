@@ -8,6 +8,9 @@ openai>=1.30.0          # DeepSeek uses OpenAI-compatible API
 feedparser>=6.0.10
 requests>=2.31.0
 
+# Fundamentals (forensics module)
+yfinance>=0.2.40
+
 # Data + Analytics
 pandas>=2.0.0
 numpy>=1.26.0

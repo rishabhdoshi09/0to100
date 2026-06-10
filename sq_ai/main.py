@@ -161,6 +161,21 @@ def cmd_backtest(args) -> None:
     print(f"Reports saved to: {settings.log_dir}/")
 
 
+def cmd_analyze(args) -> None:
+    """Run the Quant Red Flag Analyst on one or more symbols."""
+    from forensics import QuantRedFlagAnalyst
+    from forensics.report import render
+
+    analyst = QuantRedFlagAnalyst()
+    for symbol in args.symbols:
+        try:
+            report = analyst.analyze(symbol)
+        except Exception as exc:
+            print(f"\n{symbol}: analysis failed — {exc}")
+            continue
+        render(report, explain=args.explain)
+
+
 def cmd_kill(args) -> None:
     """Write a kill switch flag file. The live engine checks this on startup."""
     flag = Path("logs/.kill_switch")
@@ -248,6 +263,22 @@ def build_parser() -> argparse.ArgumentParser:
         help="Use pure technical strategy (no DeepSeek calls — fast, free)",
     )
 
+    an = sub.add_parser(
+        "analyze",
+        help="Quant Red Flag Analyst — forensic + quant analysis of a stock",
+    )
+    an.add_argument(
+        "symbols",
+        nargs="+",
+        metavar="SYMBOL",
+        help="NSE symbol (e.g. RELIANCE) or explicit ticker (e.g. AAPL, TCS.NS)",
+    )
+    an.add_argument(
+        "--explain",
+        action="store_true",
+        help="Include the full metric glossary (what/why/good/implication)",
+    )
+
     sub.add_parser("kill", help="Write kill switch flag")
     sub.add_parser("status", help="Print live portfolio status from Kite")
 
@@ -262,6 +293,7 @@ def main() -> None:
         "login": cmd_login,
         "live": cmd_live,
         "backtest": cmd_backtest,
+        "analyze": cmd_analyze,
         "kill": cmd_kill,
         "status": cmd_status,
     }

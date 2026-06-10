@@ -45,8 +45,21 @@ simplequant/
 │   ├── backtester.py    # Event-driven backtester (no lookahead)
 │   └── simulator.py     # Simulated order book with slippage + TC
 │
-└── analytics/           # Performance reporting
-    └── reporter.py      # Sharpe, CAGR, drawdown, win rate, plots, CSV export
+├── analytics/           # Performance reporting
+│   └── reporter.py      # Sharpe, CAGR, drawdown, win rate, plots, CSV export
+│
+└── forensics/           # Quant Red Flag Analyst™ (institutional module)
+    ├── analyzer.py      # Orchestrator: runs all layers, cross-layer flag checks
+    ├── data_source.py   # yfinance fundamentals fetcher (no Kite creds needed)
+    ├── models.py        # Metric / RedFlag / LayerResult / FundamentalData
+    ├── statement_forensics.py  # L1: accruals, cash conversion, receivables, debt
+    ├── quant_risk.py    # L2: vol, drawdown, beta, Sharpe/Sortino, anomalies
+    ├── fraud_models.py  # L3: Beneish M-Score, Altman Z-Score, Piotroski F-Score
+    ├── governance.py    # L4+L5: governance risk, insider & institutional flows
+    ├── valuation.py     # L6: multiples vs the stock's own 5y history
+    ├── altdata.py       # L7: headcount, analyst momentum, short interest
+    ├── scoring.py       # Institutional Quality Score (weighted) + verdict rules
+    └── report.py        # Rich terminal scorecard, gauges, red flag timeline
 ```
 
 ## Running the system
@@ -71,7 +84,11 @@ python main.py backtest --from 2023-01-01 --to 2024-01-01 --no-llm
 # 6. Run backtest with LLM signals
 python main.py backtest --from 2023-01-01 --to 2024-01-01
 
-# 7. Emergency stop
+# 7. Forensic stock analysis (Quant Red Flag Analyst — needs no Kite creds)
+python main.py analyze RELIANCE              # NSE symbol (auto .NS suffix)
+python main.py analyze AAPL TCS.NS --explain # multiple symbols + metric glossary
+
+# 8. Emergency stop
 python main.py kill
 
 # 8. Check live positions
