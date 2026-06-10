@@ -105,6 +105,48 @@ def render(report: AnalysisReport, console: Optional[Console] = None,
                            f"confidence {comp.confidence} ",
                   subtitle_align="right"))
 
+    # ── Explainability graph: what moved the score off neutral 50 ────────────
+    if comp.contributions:
+        wf = Table(box=None, show_header=False, padding=(0, 1))
+        wf.add_column(min_width=22)
+        wf.add_column(justify="right", min_width=7)
+        wf.add_column()
+        max_abs = max(abs(v) for _, v in comp.contributions) or 1
+        for label, v in comp.contributions:
+            bar = "█" * max(1, round(abs(v) / max_abs * 16))
+            style = "green" if v >= 0 else "red"
+            wf.add_row(label, Text(f"{v:+.1f}", style=f"bold {style}"),
+                       Text(bar, style=style))
+        c.print(Panel(wf, title=" SCORE ATTRIBUTION — points vs neutral 50 ",
+                      border_style="grey39", box=box.HEAVY))
+
+    # ── Institutional Accumulation Score (microstructure) ────────────────────
+    micro = report.layers.get("microstructure")
+    if micro and micro.score is not None:
+        acc = Table(box=None, show_header=False, padding=(0, 2))
+        acc.add_column(style="bold", min_width=30)
+        acc.add_column()
+        acc.add_row("Institutional Accumulation Score", _gauge(micro.score))
+        c.print(Panel(acc, title=" MARKET MICROSTRUCTURE ",
+                      border_style="grey39", box=box.HEAVY))
+
+    # ── Blow-up similarity ────────────────────────────────────────────────────
+    bl = report.layers.get("blowup")
+    if bl and bl.extras.get("matches"):
+        bt = Table(box=box.SIMPLE_HEAD, header_style="bold dim", expand=True)
+        bt.add_column("HISTORICAL FAILURE", min_width=18)
+        bt.add_column("SIMILARITY", min_width=30)
+        bt.add_column("DRIVEN BY")
+        for name, sim, drivers in bl.extras["matches"]:
+            style = "bold red" if sim >= 0.6 else ("yellow" if sim >= 0.4 else "green")
+            bar = "█" * round(sim * 20) + "░" * (20 - round(sim * 20))
+            bt.add_row(name,
+                       Text(f"{bar} {sim:.0%}", style=style),
+                       Text(", ".join(drivers) or "—", style="dim"))
+        c.print(Panel(bt, title=" BLOW-UP SIMILARITY ENGINE ",
+                      border_style="red" if bl.extras["matches"][0][1] >= 0.6
+                      else "grey39", box=box.HEAVY))
+
     # ── Fraud probability meter ────────────────────────────────────────────────
     fraud = report.layers.get("fraud")
     if fraud and fraud.extras:
@@ -134,7 +176,7 @@ def render(report: AnalysisReport, console: Optional[Console] = None,
 
     # ── Layer panels ──────────────────────────────────────────────────────────
     order = ["forensics", "quant", "fraud", "governance", "smart_money",
-             "valuation", "altdata"]
+             "valuation", "altdata", "microstructure"]
     for key in order:
         if key in report.layers and (report.layers[key].metrics
                                      or report.layers[key].notes):
@@ -175,6 +217,28 @@ def render(report: AnalysisReport, console: Optional[Console] = None,
                                   ("Here: ", "bold dim"), m.implication or "—"))
         c.print(Panel(ex, title=" METRIC GLOSSARY ", border_style="grey39",
                       box=box.HEAVY))
+
+    # ── AI Investment Committee ───────────────────────────────────────────────
+    if report.committee:
+        cm = report.committee
+        vt = Table(box=box.SIMPLE_HEAD, header_style="bold dim", expand=True)
+        vt.add_column("ANALYST", min_width=16)
+        vt.add_column("VOTE", min_width=6)
+        vt.add_column("RATIONALE")
+        vote_style = {"Buy": "bold green", "Hold": "yellow", "Sell": "bold red"}
+        for v in cm.votes:
+            vt.add_row(Text.assemble((f"{v.analyst}\n", "bold"),
+                                     (v.mandate, "dim italic")),
+                       Text(v.vote.upper(), style=vote_style[v.vote]),
+                       v.rationale)
+        tally = "  ·  ".join(f"{k} {n}" for k, n in cm.tally.items())
+        c.print(Panel(vt, title=" AI INVESTMENT COMMITTEE ",
+                      subtitle=Text.assemble(
+                          (f" {tally}  →  CONSENSUS: ", "dim"),
+                          (f" {cm.consensus.upper()} ", vote_style[cm.consensus]),
+                          (" ",)),
+                      subtitle_align="right",
+                      border_style="bright_blue", box=box.HEAVY))
 
     # ── Verdict ───────────────────────────────────────────────────────────────
     parts = []

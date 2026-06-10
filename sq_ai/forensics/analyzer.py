@@ -12,9 +12,10 @@ from typing import Dict, List
 
 from logger import get_logger
 from forensics import (
-    altdata, data_source, fraud_models, governance, quant_risk,
-    statement_forensics, valuation,
+    altdata, blowup, committee, data_source, fraud_models, governance,
+    microstructure, quant_risk, statement_forensics, valuation,
 )
+from forensics.committee import CommitteeResult
 from forensics.models import (
     FundamentalData, LayerResult, RedFlag, Severity, SEVERITY_ORDER,
     stmt_row, val, pct_change,
@@ -33,6 +34,7 @@ class AnalysisReport:
     layers: Dict[str, LayerResult] = field(default_factory=dict)
     flags: List[RedFlag] = field(default_factory=list)
     composite: CompositeResult = None  # type: ignore[assignment]
+    committee: CommitteeResult = None  # type: ignore[assignment]
 
 
 def _cross_layer_flags(d: FundamentalData) -> List[RedFlag]:
@@ -72,7 +74,13 @@ class QuantRedFlagAnalyst:
             "smart_money": governance.analyze_smart_money(d),
             "valuation": valuation.analyze(d),
             "altdata": altdata.analyze(d),
+            "microstructure": microstructure.analyze(d),
         }
+        layers["blowup"] = blowup.analyze(
+            d,
+            m_score=layers["fraud"].extras.get("m_score"),
+            z_score=layers["fraud"].extras.get("z_score"),
+        )
 
         flags = _cross_layer_flags(d)
         for L in layers.values():
@@ -80,6 +88,7 @@ class QuantRedFlagAnalyst:
         flags.sort(key=lambda f: -SEVERITY_ORDER[f.severity])
 
         composite = compose(layers, flags)
+        committee_result = committee.convene(d, layers, flags)
         log.info("analysis_complete", symbol=symbol,
                  score=composite.score, verdict=composite.verdict.value,
                  flags=len(flags))
@@ -91,4 +100,5 @@ class QuantRedFlagAnalyst:
             layers=layers,
             flags=flags,
             composite=composite,
+            committee=committee_result,
         )

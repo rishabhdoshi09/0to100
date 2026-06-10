@@ -30,6 +30,9 @@ class CompositeResult:
     score: Optional[float]
     coverage: float                       # fraction of weight backed by real data
     components: List[Tuple[str, float, Optional[float]]]  # (label, weight, score)
+    # Explainability graph: signed points each component moved the score
+    # away from the neutral 50 baseline.
+    contributions: List[Tuple[str, float]] = field(default_factory=list)
     verdict: Verdict = Verdict.NEUTRAL
     confidence: str = "Low"
     strengths: List[str] = field(default_factory=list)
@@ -72,6 +75,12 @@ def compose(layers: Dict[str, LayerResult], all_flags: List[RedFlag]) -> Composi
     coverage = wsum / sum(WEIGHTS.values())
 
     res = CompositeResult(score=score, coverage=coverage, components=components)
+    if wsum > 0:
+        res.contributions = sorted(
+            ((LABELS[key], (s - 50) * w / wsum)
+             for key, w in WEIGHTS.items()
+             if (s := layer_scores.get(key)) is not None),
+            key=lambda t: -t[1])
     res.confidence = ("High" if coverage >= 0.85 else
                       "Medium" if coverage >= 0.6 else "Low")
 

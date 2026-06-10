@@ -58,6 +58,9 @@ simplequant/
     ├── governance.py    # L4+L5: governance risk, insider & institutional flows
     ├── valuation.py     # L6: multiples vs the stock's own 5y history
     ├── altdata.py       # L7: headcount, analyst momentum, short interest
+    ├── microstructure.py# L8: volume anomalies, VWAP, A/D, OBV smart-money flow
+    ├── blowup.py        # L11: similarity vs Enron/Satyam/DHFL/Wirecard et al.
+    ├── committee.py     # L12: 5-persona AI investment committee (rules-based)
     ├── scoring.py       # Institutional Quality Score (weighted) + verdict rules
     └── report.py        # Rich terminal scorecard, gauges, red flag timeline
 ```

@@ -20,7 +20,8 @@ from forensics.models import FundamentalData
 from forensics.scoring import compose
 from forensics.report import render
 from forensics import (statement_forensics, quant_risk, fraud_models,
-                       governance, valuation, altdata)
+                       governance, valuation, altdata, microstructure,
+                       blowup, committee)
 
 years = pd.to_datetime(["2026-03-31", "2025-03-31", "2024-03-31", "2023-03-31"])
 
@@ -70,8 +71,15 @@ quarterly_income = pd.DataFrame({d: {"Total Revenue": r}
 
 rng = np.random.default_rng(7)
 idx = pd.bdate_range("2021-06-01", "2026-06-01")
-px = pd.DataFrame({"Close": 100 * np.exp(np.cumsum(
-    rng.normal(0.0002, 0.025, len(idx))))}, index=idx)
+close = 100 * np.exp(np.cumsum(rng.normal(0.0002, 0.025, len(idx))))
+vol = rng.lognormal(13, 0.4, len(idx))
+vol[-15] *= 8  # planted volume spike
+px = pd.DataFrame({
+    "Close": close,
+    "High": close * (1 + rng.uniform(0, 0.02, len(idx))),
+    "Low": close * (1 - rng.uniform(0, 0.02, len(idx))),
+    "Volume": vol,
+}, index=idx)
 bench = pd.DataFrame({"Close": 100 * np.exp(np.cumsum(
     rng.normal(0.0004, 0.011, len(idx))))}, index=idx)
 
@@ -102,16 +110,22 @@ layers = {
     "smart_money": governance.analyze_smart_money(d),
     "valuation": valuation.analyze(d),
     "altdata": altdata.analyze(d),
+    "microstructure": microstructure.analyze(d),
 }
+layers["blowup"] = blowup.analyze(
+    d, m_score=layers["fraud"].extras.get("m_score"),
+    z_score=layers["fraud"].extras.get("z_score"))
 flags = az._cross_layer_flags(d)
 for L in layers.values():
     flags.extend(L.flags)
 from forensics.models import SEVERITY_ORDER
 flags.sort(key=lambda f: -SEVERITY_ORDER[f.severity])
 composite = compose(layers, flags)
+committee_result = committee.convene(d, layers, flags)
 report = az.AnalysisReport(symbol="SYNTH", ticker="SYNTH.NS",
                            company=info["longName"], layers=layers,
-                           flags=flags, composite=composite)
+                           flags=flags, composite=composite,
+                           committee=committee_result)
 render(report, explain=True)
 
 # ── Assertions: planted flags must be detected ─────────────────────────────────
@@ -131,5 +145,16 @@ assert not missed, f"Planted flags not detected: {missed}"
 assert composite.score is not None and composite.score < 55, composite.score
 assert composite.verdict.value in ("High Risk", "Avoid", "Caution"), composite.verdict
 assert any("anomaly" in t.lower() for t in titles), "QoQ outlier not detected"
+
+# New layers: blow-up similarity, committee, explainability, microstructure
+matches = layers["blowup"].extras.get("matches", [])
+assert matches, "Blow-up engine produced no matches"
+top_name, top_sim, _ = matches[0]
+assert top_sim > 0.6, f"Planted DHFL-style profile under-matched: {top_name} {top_sim:.0%}"
+assert committee_result.consensus == "Sell", committee_result.tally
+assert composite.contributions, "Explainability contributions missing"
+assert layers["microstructure"].score is not None, "Accumulation score missing"
 print(f"\nSMOKE TEST PASSED — {len(flags)} flags, score "
-      f"{composite.score:.1f}, verdict {composite.verdict.value}")
+      f"{composite.score:.1f}, verdict {composite.verdict.value}, "
+      f"committee {committee_result.tally} → {committee_result.consensus}, "
+      f"top blow-up match {top_name} {top_sim:.0%}")
