@@ -24,7 +24,8 @@ from forensics import (statement_forensics, quant_risk, fraud_models,
                        blowup, committee, capital_allocation, tearsheet,
                        stress_test, position_sizing, prediction_ledger,
                        promoter_intelligence, auditor_intelligence,
-                       knowledge_graph as kg)
+                       management_credibility, event_timeline,
+                       dal, replay, knowledge_graph as kg)
 from forensics.data_reliability import CoverageTracker
 
 years = pd.to_datetime(["2026-03-31", "2025-03-31", "2024-03-31", "2023-03-31"])
@@ -120,9 +121,35 @@ layers = {
 layers["blowup"] = blowup.analyze(
     d, m_score=layers["fraud"].extras.get("m_score"),
     z_score=layers["fraud"].extras.get("z_score"))
+# ── Plant DAL records: a resigned auditor with a fee spike, and a management
+#    team that chronically over-promises ─────────────────────────────────────
+dal.put("auditors", "SYNTH", {
+    "auditor_name": "Shady & Associates",
+    "tenure_years": 1,
+    "change_type": "resigned",
+    "qualified_opinion": False,
+    "emphasis_of_matter": True,
+    "caro_observations": ["Delayed statutory dues", "Inventory records incomplete"],
+    "audit_fees": [{"year": 2026, "fee": 21.0}, {"year": 2025, "fee": 12.0}],
+}, source="Alternative / Web Data", period="2026-03-31")
+
+dal.put("concalls", "SYNTH", {"guidance": [
+    {"fy": "FY23", "metric": "revenue_growth", "statement": "We expect 30% growth",
+     "guided": 0.30, "actual": 0.06},
+    {"fy": "FY24", "metric": "revenue_growth", "statement": "We expect 25% growth",
+     "guided": 0.25, "actual": 0.11},
+    {"fy": "FY25", "metric": "ebitda_margin", "statement": "Margins will expand to 22%",
+     "guided": 0.22, "actual": 0.14},
+    {"fy": "FY26", "metric": "revenue_growth", "statement": "We expect 28% growth",
+     "guided": 0.28, "actual": 0.05},
+    {"fy": "FY27", "metric": "revenue_growth", "statement": "We expect 20% growth",
+     "guided": 0.20},
+]}, source="Concall Transcript", period="2026-03-31")
+
 tracker = CoverageTracker()
 layers["promoter"] = promoter_intelligence.analyze(d, tracker)
 layers["auditor"] = auditor_intelligence.analyze(d, tracker)
+layers["credibility"] = management_credibility.analyze(d, tracker)
 coverage = tracker.report()
 flags = az._cross_layer_flags(d)
 for L in layers.values():
@@ -134,6 +161,7 @@ committee_result = committee.convene(d, layers, flags)
 sizing_result = position_sizing.recommend(composite, flags, layers)
 scenarios = stress_test.run(d)
 graph = kg.build(flags)
+timeline = event_timeline.build("SYNTH", layers, flags)
 report = az.AnalysisReport(symbol="SYNTH", ticker="SYNTH.NS",
                            company=info["longName"], layers=layers,
                            flags=flags, composite=composite,
@@ -141,7 +169,8 @@ report = az.AnalysisReport(symbol="SYNTH", ticker="SYNTH.NS",
                            sizing=sizing_result,
                            stress=scenarios,
                            coverage=coverage,
-                           graph=graph)
+                           graph=graph,
+                           timeline=timeline)
 render(report, explain=True)
 
 # ── Assertions: planted flags must be detected ─────────────────────────────────
@@ -254,6 +283,43 @@ if graph.nodes:
 assert "promoter" in layers, "Promoter intelligence layer missing"
 assert "auditor" in layers, "Auditor intelligence layer missing"
 assert layers["auditor"].extras.get("audit_risk_score") is not None
+
+# DAL: roundtrip + point-in-time query
+rec = dal.get_latest("auditors", "SYNTH")
+assert rec is not None and rec.payload["auditor_name"] == "Shady & Associates"
+assert rec.reliability == 60.0  # Alternative / Web Data tier
+from datetime import date as _date
+assert dal.get_as_of("auditors", "SYNTH", _date(2025, 1, 1)) is None, \
+    "Point-in-time query leaked a future record"
+assert dal.get_as_of("auditors", "SYNTH", _date(2026, 6, 1)) is not None
+
+# Auditor Intelligence picked up the DAL record: resignation + fee spike + CARO
+assert "Auditor changed or resigned" in titles, "Auditor resignation not flagged"
+assert "Audit fee spike" in titles, "Audit fee spike (+75% YoY) not flagged"
+assert "CARO observations flagged" in titles, "CARO observations not flagged"
+assert layers["auditor"].extras["audit_risk_score"] < 60, \
+    f"Audit risk score too lenient: {layers['auditor'].extras['audit_risk_score']}"
+
+# Management Credibility: 0/4 resolved items met → chronic over-promising
+cred = layers["credibility"]
+assert cred.score is not None and cred.score < 50, f"Credibility score: {cred.score}"
+assert "Management chronically over-promises" in titles, \
+    "Chronic over-promising not flagged"
+assert cred.extras["n_pending"] == 1
+
+# Corporate Event Timeline merges auditor + guidance + forensic events
+assert timeline, "Event timeline empty"
+cats = {e.category for e in timeline}
+assert "Auditor" in cats and "Guidance" in cats, f"Timeline categories: {cats}"
+
+# Research Replay: point-in-time clipping must not leak the future
+clipped = replay.clip(d, _date(2025, 6, 1))
+assert len(clipped.income.columns) == 3, \
+    f"Expected 3 fiscal periods as of 2025-06-01, got {len(clipped.income.columns)}"
+assert clipped.prices.index[-1].date() <= _date(2025, 6, 1)
+assert "marketCap" in clipped.info  # rescaled, not dropped
+fwd = replay._fwd_return(d.prices, _date(2025, 6, 1), 6)
+assert fwd is not None, "Forward return computation failed"
 
 print(f"\nSMOKE TEST PASSED — {len(flags)} flags, score "
       f"{composite.score:.1f}, verdict {composite.verdict.value}, "

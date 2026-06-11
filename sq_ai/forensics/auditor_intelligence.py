@@ -52,7 +52,28 @@ _W = {
     "emphasis_of_matter":    8,
     "related_party_flags":   7,
     "high_iss_audit_risk":   5,   # ISS decile 8-10
+    "fee_spike":             8,   # audit fee +40% YoY
 }
+
+FEE_SPIKE_THRESHOLD = 0.40
+
+
+def _fee_spike(rec: "AuditorRecord") -> Optional[float]:
+    """YoY audit-fee growth if it exceeds the spike threshold, else None.
+
+    Fee spikes often mean extra audit work was required — expanded scope,
+    disagreements, or remediation — and pre-date qualifications."""
+    if len(rec.audit_fees) < 2:
+        return None
+    try:
+        curr = float(rec.audit_fees[0]["fee"])
+        prev = float(rec.audit_fees[1]["fee"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    if prev <= 0:
+        return None
+    growth = (curr - prev) / prev
+    return growth if growth > FEE_SPIKE_THRESHOLD else None
 
 
 @dataclass
@@ -67,17 +88,30 @@ class AuditorRecord:
     related_party_flags: bool = False
     going_concern_doubt: bool = False
     years: List[Dict] = field(default_factory=list)
+    audit_fees: List[Dict] = field(default_factory=list)  # [{"year": 2025, "fee": 12.5}, ...] newest first
+
+
+def _record_from_dict(data: Dict) -> AuditorRecord:
+    return AuditorRecord(**{k: v for k, v in data.items()
+                            if k in AuditorRecord.__dataclass_fields__})
 
 
 def _load_json(symbol: str) -> Optional[AuditorRecord]:
+    # Preferred: the Data Acquisition Layer (data/auditors/)
+    try:
+        from forensics import dal
+        rec = dal.get_latest("auditors", symbol)
+        if rec is not None and isinstance(rec.payload, dict):
+            return _record_from_dict(rec.payload)
+    except Exception:
+        pass
+    # Legacy: logs/{SYMBOL}_auditor.json
     path = _LOGS / f"{symbol}_auditor.json"
     if not path.exists():
         return None
     try:
         with open(path) as f:
-            data = json.load(f)
-        return AuditorRecord(**{k: v for k, v in data.items()
-                                if k in AuditorRecord.__dataclass_fields__})
+            return _record_from_dict(json.load(f))
     except Exception:
         return None
 
@@ -115,6 +149,8 @@ def _score(rec: AuditorRecord, iss_audit_risk: Optional[int]) -> int:
         penalty += _W["related_party_flags"]
     if iss_audit_risk and iss_audit_risk >= 8:
         penalty += _W["high_iss_audit_risk"]
+    if _fee_spike(rec) is not None:
+        penalty += _W["fee_spike"]
 
     return min(penalty, 100)
 
@@ -271,6 +307,25 @@ def analyze(d: FundamentalData,
             precedent="IL&FS subsidiaries had emphasis of matter notes before going concern qualification.",
             sources=[source_label],
             evidence_rows=[("Finding", "Emphasis of matter noted")],
+        ))
+
+    spike = _fee_spike(rec)
+    if spike is not None:
+        flags.append(RedFlag(
+            title="Audit fee spike",
+            severity=Severity.MEDIUM,
+            evidence=f"Audit fees grew {spike:+.0%} YoY "
+                     f"({rec.audit_fees[1]['fee']} → {rec.audit_fees[0]['fee']}).",
+            why_it_matters="Sharp fee increases indicate expanded audit scope — "
+                           "often remediation work or unresolved disagreements.",
+            precedent="Wirecard's audit fees rose sharply in the two years "
+                      "before the special KPMG investigation.",
+            sources=[source_label],
+            evidence_rows=[
+                ("Audit fee (latest)", str(rec.audit_fees[0]["fee"])),
+                ("Audit fee (prior)", str(rec.audit_fees[1]["fee"])),
+                ("YoY growth", f"{spike:+.0%}"),
+            ],
         ))
 
     if rec.related_party_flags:

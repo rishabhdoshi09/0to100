@@ -237,7 +237,8 @@ def render(report: AnalysisReport, console: Optional[Console] = None,
 
     # ── Layer panels ──────────────────────────────────────────────────────────
     order = ["forensics", "quant", "fraud", "governance", "smart_money",
-             "valuation", "altdata", "microstructure", "promoter", "auditor"]
+             "valuation", "altdata", "microstructure", "promoter", "auditor",
+             "credibility"]
     for key in order:
         if key in report.layers and (report.layers[key].metrics
                                      or report.layers[key].notes):
@@ -268,6 +269,22 @@ def render(report: AnalysisReport, console: Optional[Console] = None,
                 Text("\n".join(fl.sources or ["—"]), style="dim"))
         c.print(Panel(el, title=f" EVIDENCE LOCKER — {len(auditable)} auditable flags ",
                       border_style="bright_blue", box=box.HEAVY))
+
+    # ── Corporate Event Timeline ──────────────────────────────────────────────
+    if report.timeline:
+        et = Table(box=box.SIMPLE_HEAD, header_style="bold dim", expand=True)
+        et.add_column("WHEN", min_width=10)
+        et.add_column("CATEGORY", min_width=10)
+        et.add_column("EVENT")
+        sev_txt = {"CRITICAL": "bold white on red", "HIGH": "bold red",
+                   "MEDIUM": "yellow", "LOW": "cyan", "INFO": "dim"}
+        for ev in report.timeline:
+            et.add_row(ev.date, Text(ev.category, style="bright_cyan"),
+                       Text(ev.description,
+                            style=sev_txt.get(ev.severity, "white")))
+        c.print(Panel(et, title=f" CORPORATE EVENT TIMELINE — "
+                                f"{len(report.timeline)} events ",
+                      border_style="grey39", box=box.HEAVY))
 
     # ── Red flag timeline ─────────────────────────────────────────────────────
     if report.flags:
@@ -428,3 +445,50 @@ def render(report: AnalysisReport, console: Optional[Console] = None,
     c.print(Text("Analysis identifies quality, risk and manipulation signals — "
                  "it does not predict prices. Not investment advice.",
                  style="dim italic"))
+
+
+def render_replay(result, console: Optional[Console] = None,
+                  full: bool = False) -> None:
+    """Render a Research Replay result: the as-of verdict vs what followed."""
+    c = console or Console()
+    rep = result.report
+    comp = rep.composite
+
+    if full:
+        render(rep, console=c)
+
+    body = Table(box=None, show_header=False, padding=(0, 2))
+    body.add_column(style="bold", min_width=26)
+    body.add_column()
+    body.add_row("As-of Date", Text(result.as_of.isoformat(), style="bright_white"))
+    score_txt = f"{comp.score:.0f}/100" if comp.score is not None else "N/A"
+    body.add_row("IQS (then)", Text(score_txt, style=_score_color(comp.score)))
+    body.add_row("Verdict (then)",
+                 Text(f" {comp.verdict.value} ", style=VERDICT_STYLE[comp.verdict]))
+    if rep.sizing:
+        body.add_row("Position Bucket (then)", Text(rep.sizing.bucket))
+    n_crit = sum(1 for f in rep.flags if f.severity == Severity.CRITICAL)
+    n_high = sum(1 for f in rep.flags if f.severity == Severity.HIGH)
+    body.add_row("Flags (then)",
+                 Text(f"{len(rep.flags)} total · {n_crit} critical · {n_high} high"))
+
+    body.add_row("", Text(""))
+    for h in ("6m", "12m", "to date"):
+        r = result.forward_returns.get(h)
+        b = result.benchmark_returns.get(h)
+        if r is None:
+            continue
+        style = "bold green" if r >= 0 else "bold red"
+        line = Text(f"{r:+.1%}", style=style)
+        if b is not None:
+            line.append(f"   (benchmark {b:+.1%}, alpha {r - b:+.1%})", style="dim")
+        body.add_row(f"What happened after ({h})", line)
+
+    c.print(Panel(body,
+                  title=f" RESEARCH REPLAY — {rep.company} @ "
+                        f"{result.as_of.isoformat()} ",
+                  border_style="bright_blue", box=box.DOUBLE))
+
+    if result.caveats:
+        c.print(Text("\n".join(f"· {cv}" for cv in result.caveats),
+                     style="dim italic"))

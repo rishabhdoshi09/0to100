@@ -228,6 +228,25 @@ def cmd_analyze(args) -> None:
             print(f"\nTear sheet saved → {', '.join(paths)}")
 
 
+def cmd_replay(args) -> None:
+    """Research Replay: point-in-time analysis on a historical date."""
+    from datetime import date as _date
+    from forensics import replay as rp
+    from forensics.report import render_replay
+
+    try:
+        as_of = _date.fromisoformat(args.date)
+    except ValueError:
+        print(f"Invalid date '{args.date}' — use YYYY-MM-DD.")
+        return
+    try:
+        result = rp.replay(args.symbol, as_of)
+    except Exception as exc:
+        print(f"\n{args.symbol}: replay failed — {exc}")
+        return
+    render_replay(result, full=args.full)
+
+
 def cmd_kill(args) -> None:
     """Write a kill switch flag file. The live engine checks this on startup."""
     flag = Path("logs/.kill_switch")
@@ -347,6 +366,16 @@ def build_parser() -> argparse.ArgumentParser:
     lc.add_argument("symbol")
     led_sub.add_parser("stats", help="Platform-wide hit rate and Brier score")
 
+    rp = sub.add_parser(
+        "replay",
+        help="Research Replay — run the analyst as of a historical date "
+             "and compare against what actually happened",
+    )
+    rp.add_argument("symbol", help="Symbol to replay")
+    rp.add_argument("date", help="As-of date, YYYY-MM-DD")
+    rp.add_argument("--full", action="store_true",
+                    help="Render the full point-in-time report, not just the summary")
+
     sub.add_parser("kill", help="Write kill switch flag")
     sub.add_parser("status", help="Print live portfolio status from Kite")
 
@@ -363,6 +392,7 @@ def main() -> None:
         "backtest": cmd_backtest,
         "analyze": cmd_analyze,
         "ledger": cmd_ledger,
+        "replay": cmd_replay,
         "kill": cmd_kill,
         "status": cmd_status,
     }

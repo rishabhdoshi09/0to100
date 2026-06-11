@@ -17,7 +17,8 @@ from forensics import (
     statement_forensics, valuation,
 )
 from forensics import (stress_test, position_sizing, prediction_ledger,
-                       promoter_intelligence, auditor_intelligence)
+                       promoter_intelligence, auditor_intelligence,
+                       management_credibility, event_timeline)
 from forensics.committee import CommitteeResult
 from forensics.models import (
     FundamentalData, LayerResult, RedFlag, Severity, SEVERITY_ORDER,
@@ -47,6 +48,7 @@ class AnalysisReport:
     predictions_saved: int = 0
     coverage: Optional[CoverageReport] = None
     graph: Optional[kg.KnowledgeGraph] = None
+    timeline: list = field(default_factory=list)  # List[TimelineEvent]
 
 
 def _cross_layer_flags(d: FundamentalData) -> List[RedFlag]:
@@ -79,69 +81,80 @@ def _cross_layer_flags(d: FundamentalData) -> List[RedFlag]:
     return flags
 
 
+def run_pipeline(d: FundamentalData,
+                 save_predictions: bool = False) -> AnalysisReport:
+    """Run every analysis layer on already-fetched data.
+
+    Separated from fetching so Research Replay can run the identical
+    pipeline on point-in-time clipped data."""
+    tracker = CoverageTracker()
+
+    layers: Dict[str, LayerResult] = {
+        "forensics": statement_forensics.analyze(d),
+        "quant": quant_risk.analyze(d),
+        "fraud": fraud_models.analyze(d),
+        "governance": governance.analyze_governance(d),
+        "smart_money": governance.analyze_smart_money(d),
+        "valuation": valuation.analyze(d),
+        "altdata": altdata.analyze(d),
+        "microstructure": microstructure.analyze(d),
+        "capital_allocation": capital_allocation.analyze(d),
+    }
+    layers["blowup"] = blowup.analyze(
+        d,
+        m_score=layers["fraud"].extras.get("m_score"),
+        z_score=layers["fraud"].extras.get("z_score"),
+    )
+    layers["promoter"] = promoter_intelligence.analyze(d, tracker)
+    layers["auditor"] = auditor_intelligence.analyze(d, tracker)
+    layers["credibility"] = management_credibility.analyze(d, tracker)
+
+    flags = _cross_layer_flags(d)
+    for L in layers.values():
+        flags.extend(L.flags)
+    flags.sort(key=lambda f: -SEVERITY_ORDER[f.severity])
+
+    coverage = tracker.report()
+    graph = kg.build(flags)
+    timeline = event_timeline.build(d.symbol, layers, flags)
+
+    composite = compose(layers, flags, data_reliability=coverage.overall)
+    committee_result = committee.convene(d, layers, flags)
+    sizing = position_sizing.recommend(composite, flags, layers)
+    scenarios = stress_test.run(d)
+
+    n_saved = 0
+    if save_predictions:
+        baseline = prediction_ledger.extract_baseline_metrics(layers)
+        preds = prediction_ledger.generate_predictions(
+            d.symbol, d.ticker, flags, baseline)
+        n_saved = prediction_ledger.save_predictions(preds)
+        log.info("predictions_saved", symbol=d.symbol, count=n_saved)
+
+    log.info("analysis_complete", symbol=d.symbol,
+             score=composite.score, verdict=composite.verdict.value,
+             bucket=sizing.bucket, flags=len(flags))
+
+    return AnalysisReport(
+        symbol=d.symbol,
+        ticker=d.ticker,
+        company=d.info.get("longName") or d.symbol,
+        layers=layers,
+        flags=flags,
+        composite=composite,
+        committee=committee_result,
+        sizing=sizing,
+        stress=scenarios,
+        predictions_saved=n_saved,
+        coverage=coverage,
+        graph=graph,
+        timeline=timeline,
+    )
+
+
 class QuantRedFlagAnalyst:
 
     def analyze(self, symbol: str, save_predictions: bool = False) -> AnalysisReport:
         d = data_source.fetch_fundamentals(symbol)
         log.info("analysis_started", symbol=symbol, ticker=d.ticker)
-
-        tracker = CoverageTracker()
-
-        layers: Dict[str, LayerResult] = {
-            "forensics": statement_forensics.analyze(d),
-            "quant": quant_risk.analyze(d),
-            "fraud": fraud_models.analyze(d),
-            "governance": governance.analyze_governance(d),
-            "smart_money": governance.analyze_smart_money(d),
-            "valuation": valuation.analyze(d),
-            "altdata": altdata.analyze(d),
-            "microstructure": microstructure.analyze(d),
-            "capital_allocation": capital_allocation.analyze(d),
-        }
-        layers["blowup"] = blowup.analyze(
-            d,
-            m_score=layers["fraud"].extras.get("m_score"),
-            z_score=layers["fraud"].extras.get("z_score"),
-        )
-        layers["promoter"] = promoter_intelligence.analyze(d, tracker)
-        layers["auditor"] = auditor_intelligence.analyze(d, tracker)
-
-        flags = _cross_layer_flags(d)
-        for L in layers.values():
-            flags.extend(L.flags)
-        flags.sort(key=lambda f: -SEVERITY_ORDER[f.severity])
-
-        coverage = tracker.report()
-        graph = kg.build(flags)
-
-        composite = compose(layers, flags, data_reliability=coverage.overall)
-        committee_result = committee.convene(d, layers, flags)
-        sizing = position_sizing.recommend(composite, flags, layers)
-        scenarios = stress_test.run(d)
-
-        n_saved = 0
-        if save_predictions:
-            baseline = prediction_ledger.extract_baseline_metrics(layers)
-            preds = prediction_ledger.generate_predictions(
-                d.symbol, d.ticker, flags, baseline)
-            n_saved = prediction_ledger.save_predictions(preds)
-            log.info("predictions_saved", symbol=d.symbol, count=n_saved)
-
-        log.info("analysis_complete", symbol=symbol,
-                 score=composite.score, verdict=composite.verdict.value,
-                 bucket=sizing.bucket, flags=len(flags))
-
-        return AnalysisReport(
-            symbol=d.symbol,
-            ticker=d.ticker,
-            company=d.info.get("longName") or d.symbol,
-            layers=layers,
-            flags=flags,
-            composite=composite,
-            committee=committee_result,
-            sizing=sizing,
-            stress=scenarios,
-            predictions_saved=n_saved,
-            coverage=coverage,
-            graph=graph,
-        )
+        return run_pipeline(d, save_predictions=save_predictions)
