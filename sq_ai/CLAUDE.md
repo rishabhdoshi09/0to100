@@ -88,8 +88,11 @@ python main.py backtest --from 2023-01-01 --to 2024-01-01 --no-llm
 python main.py backtest --from 2023-01-01 --to 2024-01-01
 
 # 7. Forensic stock analysis (Quant Red Flag Analyst — needs no Kite creds)
-python main.py analyze RELIANCE              # NSE symbol (auto .NS suffix)
+python main.py analyze RELIANCE              # clean plain-English summary (default)
+python main.py analyze RELIANCE --pro        # full institutional report
 python main.py analyze AAPL TCS.NS --explain # multiple symbols + metric glossary
+python main.py replay RELIANCE 2023-06-01    # point-in-time verdict vs what followed
+python main.py ledger stats                  # prediction hit rate + Brier score
 
 # 8. Emergency stop
 python main.py kill

@@ -208,6 +208,7 @@ def cmd_analyze(args) -> None:
     """Run the Quant Red Flag Analyst on one or more symbols."""
     from forensics import QuantRedFlagAnalyst
     from forensics.report import render
+    from forensics.simple_report import render_simple
     from forensics import tearsheet as ts
 
     analyst = QuantRedFlagAnalyst()
@@ -217,7 +218,10 @@ def cmd_analyze(args) -> None:
         except Exception as exc:
             print(f"\n{symbol}: analysis failed — {exc}")
             continue
-        render(report, explain=args.explain)
+        if args.pro or args.explain:
+            render(report, explain=args.explain)
+        else:
+            render_simple(report)
         if report.predictions_saved:
             print(f"\n  Predictions logged: {report.predictions_saved} "
                   f"(run: python main.py ledger check {symbol})")
@@ -345,9 +349,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="NSE symbol (e.g. RELIANCE) or explicit ticker (e.g. AAPL, TCS.NS)",
     )
     an.add_argument(
+        "--pro",
+        action="store_true",
+        help="Full institutional report (all panels, evidence locker, "
+             "causal graph). Default is a clean plain-English summary.",
+    )
+    an.add_argument(
         "--explain",
         action="store_true",
-        help="Include the full metric glossary (what/why/good/implication)",
+        help="Include the full metric glossary (implies --pro)",
     )
     an.add_argument(
         "--tearsheet",

@@ -173,6 +173,11 @@ report = az.AnalysisReport(symbol="SYNTH", ticker="SYNTH.NS",
                            timeline=timeline)
 render(report, explain=True)
 
+# Layman view (default CLI output) must render without error
+from forensics.simple_report import render_simple
+print("\n" + "=" * 80 + "\nSIMPLE (LAYMAN) VIEW\n" + "=" * 80)
+render_simple(report)
+
 # ── Assertions: planted flags must be detected ─────────────────────────────────
 titles = [f.title for f in flags]
 expected = [
