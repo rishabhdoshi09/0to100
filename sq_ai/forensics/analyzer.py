@@ -12,8 +12,9 @@ from typing import Dict, List
 
 from logger import get_logger
 from forensics import (
-    altdata, blowup, committee, data_source, fraud_models, governance,
-    microstructure, quant_risk, statement_forensics, valuation,
+    altdata, blowup, capital_allocation, committee, data_source,
+    fraud_models, governance, microstructure, quant_risk,
+    statement_forensics, valuation,
 )
 from forensics.committee import CommitteeResult
 from forensics.models import (
@@ -55,6 +56,15 @@ def _cross_layer_flags(d: FundamentalData) -> List[RedFlag]:
                            "this divergence is the #1 screen used by activist shorts.",
             precedent="Both Luckin Coffee and Gensol Engineering showed booming "
                       "revenue with deteriorating cash flow before fraud surfaced.",
+            evidence_rows=[
+                ("Revenue (current year)", f"{val(rev):,.0f}"),
+                ("Revenue (prior year)", f"{val(rev, 1):,.0f}"),
+                ("Revenue growth YoY", f"{rev_g:+.1%}"),
+                ("Operating Cash Flow (current year)", f"{val(cfo):,.0f}"),
+                ("Operating Cash Flow (prior year)", f"{val(cfo, 1):,.0f}"),
+                ("CFO growth YoY", f"{cfo_g:+.1%}"),
+            ],
+            sources=["Income Statement", "Cash Flow Statement"],
         ))
     return flags
 
@@ -75,6 +85,7 @@ class QuantRedFlagAnalyst:
             "valuation": valuation.analyze(d),
             "altdata": altdata.analyze(d),
             "microstructure": microstructure.analyze(d),
+            "capital_allocation": capital_allocation.analyze(d),
         }
         layers["blowup"] = blowup.analyze(
             d,

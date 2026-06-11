@@ -15,13 +15,14 @@ from forensics.models import LayerResult, RedFlag, Severity, SEVERITY_ORDER, Ver
 
 # layer key → (weight, layer name used in results dict)
 WEIGHTS: Dict[str, float] = {
-    "forensics": 0.25,    # Financial Quality
+    "forensics": 0.20,        # Financial Quality
     "governance": 0.15,
-    "quant": 0.15,        # Quant Stability
-    "valuation": 0.15,
-    "fraud": 0.15,        # Fraud Risk
-    "cashflow": 0.10,     # Cash Flow Strength (sub-score of forensics layer)
+    "quant": 0.15,            # Quant Stability
+    "valuation": 0.10,
+    "fraud": 0.15,            # Fraud Risk
+    "cashflow": 0.10,         # Cash Flow Strength (sub-score of forensics layer)
     "altdata": 0.05,
+    "capital_allocation": 0.10,
 }
 
 
@@ -44,7 +45,7 @@ LABELS = {
     "forensics": "Financial Quality", "governance": "Governance",
     "quant": "Quant Stability", "valuation": "Valuation",
     "fraud": "Fraud Risk", "cashflow": "Cash Flow Strength",
-    "altdata": "Alternative Data",
+    "altdata": "Alternative Data", "capital_allocation": "Capital Allocation",
 }
 
 
@@ -62,6 +63,8 @@ def compose(layers: Dict[str, LayerResult], all_flags: List[RedFlag]) -> Composi
         k: layers[k].score for k in WEIGHTS if k in layers}
     layer_scores["cashflow"] = _cashflow_subscore(layers["forensics"]) \
         if "forensics" in layers else None
+    layer_scores["capital_allocation"] = layers["capital_allocation"].score \
+        if "capital_allocation" in layers else None
 
     components, weighted, wsum = [], 0.0, 0.0
     for key, w in WEIGHTS.items():

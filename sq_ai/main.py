@@ -165,6 +165,7 @@ def cmd_analyze(args) -> None:
     """Run the Quant Red Flag Analyst on one or more symbols."""
     from forensics import QuantRedFlagAnalyst
     from forensics.report import render
+    from forensics import tearsheet as ts
 
     analyst = QuantRedFlagAnalyst()
     for symbol in args.symbols:
@@ -174,6 +175,11 @@ def cmd_analyze(args) -> None:
             print(f"\n{symbol}: analysis failed — {exc}")
             continue
         render(report, explain=args.explain)
+        if args.tearsheet:
+            bundle = ts.generate(report)
+            prefix = f"logs/{symbol.replace('/', '_')}"
+            paths = ts.save(bundle, prefix)
+            print(f"\nTear sheet saved → {', '.join(paths)}")
 
 
 def cmd_kill(args) -> None:
@@ -277,6 +283,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--explain",
         action="store_true",
         help="Include the full metric glossary (what/why/good/implication)",
+    )
+    an.add_argument(
+        "--tearsheet",
+        action="store_true",
+        help="Save institutional tear sheet, one-pager, and social card to logs/",
     )
 
     sub.add_parser("kill", help="Write kill switch flag")

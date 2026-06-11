@@ -94,6 +94,14 @@ def analyze(d: FundamentalData) -> LayerResult:
                                "underperform; accruals reverse into future earnings misses.",
                 precedent="Enron and Satyam both showed years of profits with weak "
                           "operating cash flow before collapse.",
+                evidence_rows=[
+                    ("Net Income", f"{ni0:,.0f}"),
+                    ("Operating Cash Flow", f"{cfo0:,.0f}"),
+                    ("NI − CFO", f"{ni0 - cfo0:,.0f}"),
+                    ("Total Assets", f"{assets0:,.0f}"),
+                    ("Accrual Ratio (NI−CFO)/Assets", _fmt_pct(accrual) + "  (flag >10%)"),
+                ],
+                sources=["Income Statement", "Cash Flow Statement", "Balance Sheet"],
             ))
 
     # ── Cash conversion: CFO / Net Income ─────────────────────────────────────
@@ -120,6 +128,12 @@ def analyze(d: FundamentalData) -> LayerResult:
                                "quality is poor and may be unsustainable.",
                 precedent="Manpasand Beverages reported strong profits with weak cash "
                           "conversion before its auditor resigned (2018).",
+                evidence_rows=[
+                    ("Net Income", f"{ni0:,.0f}"),
+                    ("Operating Cash Flow", f"{cfo0:,.0f}"),
+                    ("CFO / NI ratio", f"{conv:.2f}x  (threshold 0.50x)"),
+                ],
+                sources=["Income Statement", "Cash Flow Statement"],
             ))
 
     # ── Receivables vs revenue growth (DSO-style check) ───────────────────────
@@ -149,6 +163,16 @@ def analyze(d: FundamentalData) -> LayerResult:
                                "single predictors of restatements and SEC enforcement.",
                 precedent="Sunbeam (1998) and Ricoh India (2016) both stuffed channels, "
                           "showing receivables spikes before restating revenue.",
+                evidence_rows=[
+                    ("Revenue (current year)", f"{val(rev):,.0f}"),
+                    ("Revenue (prior year)", f"{val(rev, 1):,.0f}"),
+                    ("Revenue growth YoY", _fmt_pct(rev_g)),
+                    ("Receivables (current year)", f"{val(recv):,.0f}"),
+                    ("Receivables (prior year)", f"{val(recv, 1):,.0f}"),
+                    ("Receivables growth YoY", _fmt_pct(recv_g)),
+                    ("Gap (recv − rev growth)", _fmt_pct(gap)),
+                ],
+                sources=["Balance Sheet", "Income Statement"],
             ))
 
     # ── Inventory build-up ─────────────────────────────────────────────────────

@@ -58,10 +58,12 @@ class RedFlag:
     """A detected red flag with evidence and context."""
     title: str
     severity: Severity
-    evidence: str                     # the numbers that triggered it
+    evidence: str                     # human-readable summary
     why_it_matters: str
     precedent: str                    # historical precedent
-    period: str = ""                  # fiscal period it occurred in (timeline)
+    period: str = ""                  # fiscal period
+    evidence_rows: list = field(default_factory=list)  # [(label, value), ...]
+    sources: list = field(default_factory=list)        # statement sources used
 
 
 @dataclass

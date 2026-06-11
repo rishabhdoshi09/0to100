@@ -18,6 +18,16 @@ from rich.text import Text
 from forensics.analyzer import AnalysisReport
 from forensics.models import LayerResult, Severity, Verdict
 
+
+def _grade_color(grade: str) -> str:
+    if grade.startswith("A"):
+        return "bold green"
+    if grade.startswith("B"):
+        return "green"
+    if grade == "C":
+        return "yellow"
+    return "bold red"
+
 GAUGE_WIDTH = 24
 
 SEV_STYLE = {
@@ -174,6 +184,18 @@ def render(report: AnalysisReport, console: Optional[Console] = None,
         c.print(Panel(meter, title=" FRAUD PROBABILITY METER ",
                       border_style="grey39", box=box.HEAVY))
 
+    # ── Capital Allocation panel ───────────────────────────────────────────────
+    cap = report.layers.get("capital_allocation")
+    if cap and (cap.metrics or cap.notes):
+        grade = cap.extras.get("grade", "N/A")
+        grade_style = _grade_color(grade)
+        c.print(Panel(
+            Group(*[_layer_panel(cap)]),
+            title=Text.assemble(" CAPITAL ALLOCATION  ", ("Grade: ", "dim"),
+                                (f" {grade} ", grade_style + " bold")),
+            subtitle=_gauge(cap.score), subtitle_align="right",
+            border_style="grey39", box=box.HEAVY))
+
     # ── Layer panels ──────────────────────────────────────────────────────────
     order = ["forensics", "quant", "fraud", "governance", "smart_money",
              "valuation", "altdata", "microstructure"]
@@ -181,6 +203,27 @@ def render(report: AnalysisReport, console: Optional[Console] = None,
         if key in report.layers and (report.layers[key].metrics
                                      or report.layers[key].notes):
             c.print(_layer_panel(report.layers[key]))
+
+    # ── Evidence Locker ───────────────────────────────────────────────────────
+    auditable = [fl for fl in report.flags if fl.evidence_rows]
+    if auditable:
+        el = Table(box=box.SIMPLE_HEAD, header_style="bold dim", expand=True)
+        el.add_column("FLAG", min_width=30)
+        el.add_column("AUDITABLE EVIDENCE")
+        el.add_column("SOURCE", min_width=14)
+        for fl in auditable:
+            ev_table = Table(box=None, show_header=False, padding=(0, 1))
+            ev_table.add_column(style="dim", min_width=28)
+            ev_table.add_column(style="bold bright_white")
+            for lbl, vval in fl.evidence_rows:
+                ev_table.add_row(lbl, vval)
+            el.add_row(
+                Text.assemble((fl.title + "\n", "bold"),
+                              (fl.severity.value, SEV_STYLE[fl.severity])),
+                ev_table,
+                Text("\n".join(fl.sources or ["—"]), style="dim"))
+        c.print(Panel(el, title=f" EVIDENCE LOCKER — {len(auditable)} auditable flags ",
+                      border_style="bright_blue", box=box.HEAVY))
 
     # ── Red flag timeline ─────────────────────────────────────────────────────
     if report.flags:

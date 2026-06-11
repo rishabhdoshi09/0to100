@@ -21,7 +21,7 @@ from forensics.scoring import compose
 from forensics.report import render
 from forensics import (statement_forensics, quant_risk, fraud_models,
                        governance, valuation, altdata, microstructure,
-                       blowup, committee)
+                       blowup, committee, capital_allocation, tearsheet)
 
 years = pd.to_datetime(["2026-03-31", "2025-03-31", "2024-03-31", "2023-03-31"])
 
@@ -111,6 +111,7 @@ layers = {
     "valuation": valuation.analyze(d),
     "altdata": altdata.analyze(d),
     "microstructure": microstructure.analyze(d),
+    "capital_allocation": capital_allocation.analyze(d),
 }
 layers["blowup"] = blowup.analyze(
     d, m_score=layers["fraud"].extras.get("m_score"),
@@ -154,7 +155,29 @@ assert top_sim > 0.6, f"Planted DHFL-style profile under-matched: {top_name} {to
 assert committee_result.consensus == "Sell", committee_result.tally
 assert composite.contributions, "Explainability contributions missing"
 assert layers["microstructure"].score is not None, "Accumulation score missing"
+
+# L9: capital allocation — synthetic company has goodwill=45% of assets + falling ROIC
+cap_layer = layers["capital_allocation"]
+assert cap_layer.score is not None, "Capital allocation score missing"
+grade = cap_layer.extras.get("grade")
+assert grade in ("D", "F", "C"), f"Expected poor grade for empire-builder: {grade}"
+emp_sigs = cap_layer.extras.get("empire_signals", [])
+assert emp_sigs, "Empire building signals not detected"
+
+# Evidence Locker: key flags should carry structured evidence_rows
+auditable = [f for f in flags if f.evidence_rows]
+assert len(auditable) >= 3, f"Only {len(auditable)} flags have structured evidence"
+
+# L15: tear sheet generation
+bundle = tearsheet.generate(report)
+assert "INSTITUTIONAL TEAR SHEET" in bundle.institutional
+assert "Capital Allocation:" in bundle.one_pager
+assert "Institutional Quality Score" in bundle.social_card
+assert "╔" in bundle.social_card, "Social card missing box art"
+
 print(f"\nSMOKE TEST PASSED — {len(flags)} flags, score "
       f"{composite.score:.1f}, verdict {composite.verdict.value}, "
       f"committee {committee_result.tally} → {committee_result.consensus}, "
-      f"top blow-up match {top_name} {top_sim:.0%}")
+      f"top blow-up {top_name} {top_sim:.0%}, "
+      f"capital grade {grade}, empire signals: {emp_sigs}, "
+      f"{len(auditable)} auditable flags")
