@@ -95,11 +95,20 @@ def render(report: AnalysisReport, console: Optional[Console] = None,
     header.add_column(justify="left")
     header.add_column(justify="right")
     score_txt = (f"{comp.score:.0f}/100" if comp.score is not None else "N/A")
+    score_detail = Text.assemble(
+        ("INSTITUTIONAL QUALITY SCORE\n", "dim"),
+        (score_txt, f"bold {_score_color(comp.score)} underline"))
+    if comp.raw_score is not None and abs(comp.evidence_discount) >= 0.05:
+        score_detail.append(
+            f"\nraw {comp.raw_score:.0f} · evidence discount "
+            f"{-comp.evidence_discount:+.1f}", style="dim")
+    if comp.data_reliability is not None:
+        score_detail.append(
+            f"\ndata reliability {comp.data_reliability:.0f}/100", style="dim")
     header.add_row(
         Text.assemble((f"{report.company}\n", "bold bright_white"),
                       (f"{report.ticker}", "dim")),
-        Text.assemble(("INSTITUTIONAL QUALITY SCORE\n", "dim"),
-                      (score_txt, f"bold {_score_color(comp.score)} underline")),
+        score_detail,
     )
     c.print(Panel(header, title=" QUANT RED FLAG ANALYST™ — INSTITUTIONAL MODULE ",
                   border_style="bright_blue", box=box.DOUBLE))
@@ -247,9 +256,14 @@ def render(report: AnalysisReport, console: Optional[Console] = None,
             ev_table.add_column(style="bold bright_white")
             for lbl, vval in fl.evidence_rows:
                 ev_table.add_row(lbl, vval)
+            rel = fl.reliability
+            rel_style = ("green" if rel >= 0.9 else
+                         "yellow" if rel >= 0.7 else "red")
             el.add_row(
                 Text.assemble((fl.title + "\n", "bold"),
-                              (fl.severity.value, SEV_STYLE[fl.severity])),
+                              (fl.severity.value, SEV_STYLE[fl.severity]),
+                              ("  ·  evidence weight ", "dim"),
+                              (f"{rel:.0%}", rel_style)),
                 ev_table,
                 Text("\n".join(fl.sources or ["—"]), style="dim"))
         c.print(Panel(el, title=f" EVIDENCE LOCKER — {len(auditable)} auditable flags ",
@@ -375,6 +389,21 @@ def render(report: AnalysisReport, console: Optional[Console] = None,
                           (f" {cm.consensus.upper()} ", vote_style[cm.consensus]),
                           (" ",)),
                       subtitle_align="right",
+                      border_style="bright_blue", box=box.HEAVY))
+
+    # ── Evidence Chain: why this verdict ──────────────────────────────────────
+    if report.graph and report.graph.chains:
+        ev_lines = kg.explain_verdict(report.graph, report.flags,
+                                      comp.verdict.value)
+        ev_text = Text()
+        for line in ev_lines:
+            if "VERDICT:" in line and "→" not in line:
+                ev_text.append(line + "\n", style="bold bright_white")
+            elif "→" in line:
+                ev_text.append(line + "\n", style="bright_cyan")
+            else:
+                ev_text.append(line + "\n", style="dim")
+        c.print(Panel(ev_text, title=" WHY THIS VERDICT — EVIDENCE CHAIN ",
                       border_style="bright_blue", box=box.HEAVY))
 
     # ── Verdict ───────────────────────────────────────────────────────────────

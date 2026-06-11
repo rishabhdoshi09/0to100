@@ -188,6 +188,48 @@ def build(flags) -> KnowledgeGraph:
     )
 
 
+def explain_verdict(g: KnowledgeGraph, flags, verdict: str) -> List[str]:
+    """Render the verdict as a traceable chain of evidence.
+
+    For each causal chain the graph found, append the verdict as the terminal
+    node and attach the underlying evidence rows (metric values + sources)
+    of the root-cause flag — so "Why is this an Avoid?" is answered with
+    data, not prose.
+    """
+    if not g.nodes:
+        return [f"Verdict {verdict} is score-driven; no causal flag chains active."]
+
+    by_title = {fl.title: fl for fl in flags}
+    sev_rank = {"CRITICAL": 4, "HIGH": 3, "MEDIUM": 2, "LOW": 1, "INFO": 0}
+
+    def short(code: str) -> str:
+        return CODE_LABEL.get(code, code).replace("\n", " ")
+
+    # Strongest chain first: rank by max severity along the chain, then length
+    def chain_rank(chain: List[str]) -> tuple:
+        sevs = [sev_rank.get(g.nodes[c].severity, 0) for c in chain if c in g.nodes]
+        return (max(sevs, default=0), len(chain))
+
+    lines: List[str] = []
+    lines.append(f"  VERDICT: {verdict} — traced to "
+                 f"{len(g.roots)} root cause(s)")
+    lines.append("")
+    for chain in sorted(g.chains, key=chain_rank, reverse=True)[:5]:
+        parts = [short(c) for c in chain] + [f"VERDICT: {verdict}"]
+        lines.append("  " + "  →  ".join(parts))
+        # Attach root-cause evidence
+        root_node = g.nodes.get(chain[0])
+        fl = by_title.get(root_node.flag_title) if root_node else None
+        if fl is not None:
+            for lbl, v in (fl.evidence_rows or [])[:4]:
+                lines.append(f"      · {lbl}: {v}")
+            if fl.sources:
+                lines.append(f"      · Source: {', '.join(fl.sources)} "
+                             f"(reliability {fl.reliability:.0%})")
+        lines.append("")
+    return lines
+
+
 def render_text(g: KnowledgeGraph) -> List[str]:
     """Return lines of ASCII art for the knowledge graph."""
     if not g.nodes:

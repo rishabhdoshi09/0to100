@@ -117,6 +117,7 @@ def analyze(d: FundamentalData) -> LayerResult:
                            "subsequently charged with accounting fraud.",
             precedent="Enron scored as a manipulator in 1998 — three years before "
                       "bankruptcy.",
+            sources=["Income Statement", "Balance Sheet", "Cash Flow Statement"],
         ))
 
     # ── Altman Z-Score ─────────────────────────────────────────────────────────

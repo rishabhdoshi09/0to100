@@ -70,6 +70,26 @@ SOURCE_RELIABILITY: dict = {
 }
 
 
+# Maps the informal source labels used in RedFlag.sources to reliability
+# weights (0–1). Statement-derived flags are near-audited quality; alt-data
+# flags carry materially less evidentiary force.
+FLAG_SOURCE_WEIGHT: dict = {
+    "Audited Annual Report":      1.00,
+    "Income Statement":           0.95,
+    "Balance Sheet":              0.95,
+    "Cash Flow Statement":        0.95,
+    "Exchange Filing (XBRL)":     0.95,
+    "NSE Shareholding Pattern":   0.95,
+    "BSE Filing":                 0.90,
+    "Concall Transcript":         0.80,
+    "Market Data (yfinance)":     0.75,
+    "Insider Transactions":       0.75,
+    "Price/Volume Data":          0.70,
+    "Analyst Estimate":           0.60,
+    "Alternative / Web Data":     0.50,
+}
+
+
 @dataclass
 class RedFlag:
     """A detected red flag with evidence and context."""
@@ -81,6 +101,17 @@ class RedFlag:
     period: str = ""                  # fiscal period
     evidence_rows: list = field(default_factory=list)  # [(label, value), ...]
     sources: list = field(default_factory=list)        # statement sources used
+
+    @property
+    def reliability(self) -> float:
+        """Evidence weight 0–1 from the flag's data sources (mean of weights).
+
+        Flags with no declared source default to 0.75 (derived from market
+        data feeds) rather than 1.0 — unattributed evidence is not free."""
+        if not self.sources:
+            return 0.75
+        weights = [FLAG_SOURCE_WEIGHT.get(s, 0.65) for s in self.sources]
+        return sum(weights) / len(weights)
 
 
 @dataclass

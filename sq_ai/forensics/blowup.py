@@ -188,6 +188,8 @@ def analyze(d: FundamentalData, m_score: Optional[float],
                 why_it_matters=top_case.summary,
                 precedent=f"{top_case.name} — equity holders were effectively "
                           "wiped out.",
+                sources=["Income Statement", "Balance Sheet",
+                         "Cash Flow Statement"],
             ))
     else:
         res.notes.append("Insufficient data to fingerprint against historical "

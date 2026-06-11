@@ -129,7 +129,7 @@ for L in layers.values():
     flags.extend(L.flags)
 from forensics.models import SEVERITY_ORDER
 flags.sort(key=lambda f: -SEVERITY_ORDER[f.severity])
-composite = compose(layers, flags)
+composite = compose(layers, flags, data_reliability=coverage.overall)
 committee_result = committee.convene(d, layers, flags)
 sizing_result = position_sizing.recommend(composite, flags, layers)
 scenarios = stress_test.run(d)
@@ -212,6 +212,30 @@ assert len(preds) >= 3, f"Expected ≥3 predictions from {len(flags)} flags, got
 for p in preds:
     assert 0 < p.confidence < 1, f"Bad confidence: {p.confidence}"
     assert p.horizon_days > 0
+
+# Coverage-Adjusted IQS: raw score should exist and adjusted score should be
+# shrunk toward 50 when evidence is imperfect
+assert composite.raw_score is not None
+assert composite.data_reliability == coverage.overall
+if composite.raw_score < 50:
+    assert composite.score >= composite.raw_score, \
+        "Weak-evidence low score should regress toward neutral 50"
+
+# Reliability-weighted flags: statement-sourced flags carry more force
+rev_cfo = next(f for f in flags
+               if f.title == "Revenue growing while operating cash flow shrinks")
+assert rev_cfo.reliability > 0.9, f"Statement flag under-weighted: {rev_cfo.reliability}"
+for f in flags:
+    assert 0 < f.reliability <= 1.0
+
+# Reliability-aware predictions: confidence haircut applied per source
+for p in preds:
+    assert 0 < p.source_reliability <= 1.0
+    assert p.confidence <= 0.95
+
+# Evidence chain rendering
+ev_lines = kg.explain_verdict(graph, flags, composite.verdict.value)
+assert any("VERDICT" in ln for ln in ev_lines), "Evidence chain missing verdict"
 
 # Data Reliability Framework
 assert coverage.overall >= 0, "Coverage overall score should be numeric"

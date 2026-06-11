@@ -28,7 +28,7 @@ WEIGHTS: Dict[str, float] = {
 
 @dataclass
 class CompositeResult:
-    score: Optional[float]
+    score: Optional[float]                # coverage/reliability-adjusted IQS
     coverage: float                       # fraction of weight backed by real data
     components: List[Tuple[str, float, Optional[float]]]  # (label, weight, score)
     # Explainability graph: signed points each component moved the score
@@ -39,6 +39,9 @@ class CompositeResult:
     strengths: List[str] = field(default_factory=list)
     risks: List[str] = field(default_factory=list)
     hidden_signals: List[str] = field(default_factory=list)
+    raw_score: Optional[float] = None     # IQS before evidence discount
+    data_reliability: Optional[float] = None  # 0–100 from coverage report
+    evidence_discount: float = 0.0        # points removed by weak evidence
 
 
 LABELS = {
@@ -58,7 +61,14 @@ def _cashflow_subscore(forensics: LayerResult) -> Optional[float]:
     return sum(m.score for m in cf_metrics) / len(cf_metrics)
 
 
-def compose(layers: Dict[str, LayerResult], all_flags: List[RedFlag]) -> CompositeResult:
+def compose(layers: Dict[str, LayerResult], all_flags: List[RedFlag],
+            data_reliability: Optional[float] = None) -> CompositeResult:
+    """Compose the IQS.
+
+    `data_reliability` (0–100, from the CoverageTracker report) discounts the
+    raw score toward neutral 50: a score built on weak evidence should not
+    claim the same conviction as one built on audited filings.
+    """
     layer_scores: Dict[str, Optional[float]] = {
         k: layers[k].score for k in WEIGHTS if k in layers}
     layer_scores["cashflow"] = _cashflow_subscore(layers["forensics"]) \
@@ -74,10 +84,25 @@ def compose(layers: Dict[str, LayerResult], all_flags: List[RedFlag]) -> Composi
             weighted += s * w
             wsum += w
 
-    score = weighted / wsum if wsum > 0 else None
+    raw_score = weighted / wsum if wsum > 0 else None
     coverage = wsum / sum(WEIGHTS.values())
 
-    res = CompositeResult(score=score, coverage=coverage, components=components)
+    # ── Coverage-Adjusted IQS ──────────────────────────────────────────────────
+    # Evidence quality blends layer coverage with source reliability; the score
+    # is shrunk toward neutral 50 proportionally to evidence weakness.
+    score = raw_score
+    evidence_discount = 0.0
+    if raw_score is not None:
+        rel = data_reliability if data_reliability is not None else coverage * 100
+        evidence_quality = (coverage * 100 * 0.5 + rel * 0.5) / 100  # 0–1
+        shrink = 0.6 + 0.4 * evidence_quality
+        score = 50 + (raw_score - 50) * shrink
+        evidence_discount = raw_score - score
+
+    res = CompositeResult(score=score, coverage=coverage, components=components,
+                          raw_score=raw_score,
+                          data_reliability=data_reliability,
+                          evidence_discount=evidence_discount)
     if wsum > 0:
         res.contributions = sorted(
             ((LABELS[key], (s - 50) * w / wsum)
@@ -88,16 +113,21 @@ def compose(layers: Dict[str, LayerResult], all_flags: List[RedFlag]) -> Composi
                       "Medium" if coverage >= 0.6 else "Low")
 
     # ── Verdict rules: score sets the base, severity caps it ──────────────────
-    n_crit = sum(1 for f in all_flags if f.severity == Severity.CRITICAL)
-    n_high = sum(1 for f in all_flags if f.severity == Severity.HIGH)
+    # Flags are weighted by evidence reliability: a CRITICAL flag sourced from
+    # audited statements (weight ~0.95) carries near-full force; one from
+    # alt-data (weight 0.5) counts as half a flag.
+    n_crit = sum(f.reliability for f in all_flags
+                 if f.severity == Severity.CRITICAL)
+    n_high = sum(f.reliability for f in all_flags
+                 if f.severity == Severity.HIGH)
 
     if score is None:
         res.verdict = Verdict.NEUTRAL
-    elif n_crit >= 2:
+    elif n_crit >= 1.6:
         res.verdict = Verdict.AVOID
-    elif n_crit == 1:
+    elif n_crit >= 0.8:
         res.verdict = Verdict.HIGH_RISK
-    elif n_high >= 3:
+    elif n_high >= 2.5:
         res.verdict = Verdict.HIGH_RISK if score < 50 else Verdict.CAUTION
     elif score >= 75 and n_high == 0:
         res.verdict = Verdict.STRONG_CANDIDATE

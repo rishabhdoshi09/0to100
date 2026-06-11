@@ -52,7 +52,8 @@ CREATE TABLE IF NOT EXISTS predictions (
     status          TEXT NOT NULL DEFAULT 'PENDING',
     outcome_notes   TEXT,
     checked_date    TEXT,
-    checked_value   REAL
+    checked_value   REAL,
+    source_reliability REAL DEFAULT 0.75
 );
 CREATE INDEX IF NOT EXISTS idx_symbol ON predictions(symbol);
 CREATE INDEX IF NOT EXISTS idx_status ON predictions(status);
@@ -153,6 +154,12 @@ def _conn() -> sqlite3.Connection:
     c = sqlite3.connect(DB_PATH)
     c.row_factory = sqlite3.Row
     c.executescript(SCHEMA)
+    # Migrate pre-reliability databases
+    cols = {r["name"] for r in c.execute("PRAGMA table_info(predictions)")}
+    if "source_reliability" not in cols:
+        c.execute("ALTER TABLE predictions "
+                  "ADD COLUMN source_reliability REAL DEFAULT 0.75")
+        c.commit()
     return c
 
 
@@ -184,6 +191,7 @@ class NewPrediction:
     baseline_metric: str
     baseline_value: Optional[float]
     prediction_direction: str
+    source_reliability: float = 0.75
 
 
 def generate_predictions(
@@ -193,13 +201,19 @@ def generate_predictions(
     baseline_metrics: Dict[str, Optional[float]],
 ) -> List[NewPrediction]:
     today = date.today()
-    flag_titles = {f.title for f in flags}
+    flags_by_title = {f.title: f for f in flags}
     preds: List[NewPrediction] = []
 
     for (title, prediction, conf, horizon,
          metric, direction, code) in SIGNAL_PREDICTIONS:
-        if title not in flag_titles:
+        fl = flags_by_title.get(title)
+        if fl is None:
             continue
+        # Confidence is the literature base rate scaled by evidence quality:
+        # an audited-statement signal keeps full confidence; an alt-data
+        # signal is haircut toward the 50/50 prior.
+        rel = fl.reliability
+        adj_conf = 0.5 + (conf - 0.5) * rel
         check_dt = (today + timedelta(days=horizon)).isoformat()
         preds.append(NewPrediction(
             id=str(uuid.uuid4()),
@@ -208,13 +222,14 @@ def generate_predictions(
             signal_type=code,
             signal_title=title,
             prediction=prediction,
-            confidence=conf,
+            confidence=round(adj_conf, 3),
             horizon_days=horizon,
             signal_date=today.isoformat(),
             check_date=check_dt,
             baseline_metric=metric,
             baseline_value=baseline_metrics.get(metric),
             prediction_direction=direction,
+            source_reliability=round(rel, 3),
         ))
     return preds
 
@@ -230,11 +245,12 @@ def save_predictions(preds: List[NewPrediction]) -> int:
         if p.signal_type in skip:
             continue
         conn.execute(
-            "INSERT INTO predictions VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "INSERT INTO predictions VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (p.id, p.symbol, p.ticker, p.signal_type, p.signal_title,
              p.prediction, p.confidence, p.horizon_days, p.signal_date,
              p.check_date, p.baseline_metric, p.baseline_value,
-             p.prediction_direction, "PENDING", None, None, None),
+             p.prediction_direction, "PENDING", None, None, None,
+             p.source_reliability),
         )
         saved += 1
     conn.commit()
@@ -378,6 +394,27 @@ def get_stats(symbol: Optional[str] = None) -> Dict:
             for r in resolved_rows
         ) / len(resolved_rows)
 
+    # Per-reliability-tier hit rates: are audited signals actually more
+    # predictive than alternative-data signals?
+    conn3 = _conn()
+    tier_rows = conn3.execute(
+        f"SELECT CASE WHEN source_reliability >= 0.9 THEN 'Audited / Filing'"
+        f"            WHEN source_reliability >= 0.7 THEN 'Market Data'"
+        f"            ELSE 'Alt / Estimate' END AS tier, "
+        f"       status, confidence, COUNT(*) AS n "
+        f"FROM predictions {where} "
+        f"{'AND' if where else 'WHERE'} status IN ('CORRECT','INCORRECT') "
+        f"GROUP BY tier, status", params
+    ).fetchall()
+    conn3.close()
+    tiers: Dict[str, Dict] = {}
+    for r in tier_rows:
+        t = tiers.setdefault(r["tier"], {"correct": 0, "incorrect": 0})
+        t["correct" if r["status"] == "CORRECT" else "incorrect"] += r["n"]
+    for t in tiers.values():
+        n = t["correct"] + t["incorrect"]
+        t["hit_rate"] = t["correct"] / n if n else None
+
     return {
         "total": total,
         "pending": counts.get("PENDING", 0),
@@ -386,6 +423,7 @@ def get_stats(symbol: Optional[str] = None) -> Dict:
         "inconclusive": counts.get("INCONCLUSIVE", 0),
         "hit_rate": hit_rate,
         "brier_score": brier,
+        "by_reliability_tier": tiers,
     }
 
 

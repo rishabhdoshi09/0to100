@@ -114,7 +114,7 @@ class QuantRedFlagAnalyst:
         coverage = tracker.report()
         graph = kg.build(flags)
 
-        composite = compose(layers, flags)
+        composite = compose(layers, flags, data_reliability=coverage.overall)
         committee_result = committee.convene(d, layers, flags)
         sizing = position_sizing.recommend(composite, flags, layers)
         scenarios = stress_test.run(d)
