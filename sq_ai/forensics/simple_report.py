@@ -208,8 +208,7 @@ def render_simple(report: AnalysisReport,
         more = len([f for f in report.flags
                     if f.severity in (Severity.CRITICAL, Severity.HIGH)]) - len(serious)
         if more > 0:
-            rows.append(Text(f"…and {more} more (run with --pro for everything)",
-                             style="dim italic"))
+            rows.append(Text(f"…and {more} more", style="dim italic"))
         c.print(Panel(Padding(Group(*rows), (0, 1)),
                       title=" What worries us ", title_align="left",
                       box=box.ROUNDED, border_style="red"))
@@ -243,13 +242,10 @@ def render_simple(report: AnalysisReport,
             bottom.append(
                 f"  (suggested size: about {report.sizing.suggested_weight:.0f}% "
                 "of a portfolio)", style="dim")
-    if report.graph and report.graph.chains:
-        bottom.append("\nWant the full reasoning? Run with ", style="dim")
-        bottom.append("--pro", style="bold dim")
-        bottom.append(" to see every number and how we got here.", style="dim")
     c.print(Panel(Padding(bottom, (0, 1)), title=" Bottom line ",
                   title_align="left", box=box.ROUNDED,
                   border_style="bright_blue"))
 
-    c.print(Text("  This is automated analysis of public data — "
-                 "not investment advice.", style="dim italic"))
+    c.print(Text(f"  Full details: python main.py {report.symbol} --pro   ·   "
+                 "Automated analysis of public data — not investment advice.",
+                 style="dim italic"))

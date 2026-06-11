@@ -37,5 +37,15 @@ def configure_logging() -> None:
     )
 
 
+def quiet_console() -> None:
+    """Silence INFO/DEBUG chatter on the terminal (file log unaffected).
+
+    Used by user-facing commands like `analyze` so the report is the only
+    thing on screen."""
+    for h in logging.getLogger().handlers:
+        if isinstance(h, RichHandler):
+            h.setLevel(logging.WARNING)
+
+
 def get_logger(name: str) -> structlog.BoundLogger:
     return structlog.get_logger(name)

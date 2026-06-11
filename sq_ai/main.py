@@ -206,22 +206,30 @@ def cmd_ledger(args) -> None:
 
 def cmd_analyze(args) -> None:
     """Run the Quant Red Flag Analyst on one or more symbols."""
+    from rich.console import Console
     from forensics import QuantRedFlagAnalyst
     from forensics.report import render
     from forensics.simple_report import render_simple
     from forensics import tearsheet as ts
+    from logger import quiet_console
+
+    pro = args.pro or args.explain
+    if not pro:
+        quiet_console()
+    console = Console()
 
     analyst = QuantRedFlagAnalyst()
     for symbol in args.symbols:
         try:
-            report = analyst.analyze(symbol, save_predictions=args.ledger)
+            with console.status(f"Checking {symbol.upper()}…", spinner="dots"):
+                report = analyst.analyze(symbol, save_predictions=args.ledger)
         except Exception as exc:
-            print(f"\n{symbol}: analysis failed — {exc}")
+            console.print(f"\n[red]Couldn't analyze {symbol.upper()}[/red] — {exc}")
             continue
-        if args.pro or args.explain:
+        if pro:
             render(report, explain=args.explain)
         else:
-            render_simple(report)
+            render_simple(report, console=console)
         if report.predictions_saved:
             print(f"\n  Predictions logged: {report.predictions_saved} "
                   f"(run: python main.py ledger check {symbol})")
@@ -243,6 +251,9 @@ def cmd_replay(args) -> None:
     except ValueError:
         print(f"Invalid date '{args.date}' — use YYYY-MM-DD.")
         return
+    from logger import quiet_console
+    if not args.full:
+        quiet_console()
     try:
         result = rp.replay(args.symbol, as_of)
     except Exception as exc:
@@ -311,7 +322,10 @@ def _assert_credentials() -> None:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="simplequant",
-        description="SimpleQuant AI — Zerodha + DeepSeek trading system",
+        description="Check any stock for red flags: python main.py RELIANCE\n"
+                    "(also a full Zerodha + DeepSeek trading system — see "
+                    "commands below)",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
@@ -392,9 +406,34 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+_COMMANDS = {"login", "live", "backtest", "analyze", "ledger",
+             "replay", "kill", "status"}
+
+
+def _humanize_argv(argv: list) -> list:
+    """Let people just type a stock name.
+
+    `python main.py RELIANCE`        → analyze RELIANCE
+    `python main.py` (no arguments)  → ask which stock to check
+    Known commands and flags pass through untouched."""
+    if not argv:
+        try:
+            answer = input("Which stock do you want to check? (e.g. RELIANCE): ")
+        except (EOFError, KeyboardInterrupt):
+            print()
+            sys.exit(0)
+        symbols = answer.split()
+        if not symbols:
+            sys.exit(0)
+        return ["analyze"] + symbols
+    if argv[0] not in _COMMANDS and not argv[0].startswith("-"):
+        return ["analyze"] + argv
+    return argv
+
+
 def main() -> None:
     parser = build_parser()
-    args = parser.parse_args()
+    args = parser.parse_args(_humanize_argv(sys.argv[1:]))
 
     dispatch = {
         "login": cmd_login,
