@@ -22,7 +22,10 @@ from forensics.report import render
 from forensics import (statement_forensics, quant_risk, fraud_models,
                        governance, valuation, altdata, microstructure,
                        blowup, committee, capital_allocation, tearsheet,
-                       stress_test, position_sizing, prediction_ledger)
+                       stress_test, position_sizing, prediction_ledger,
+                       promoter_intelligence, auditor_intelligence,
+                       knowledge_graph as kg)
+from forensics.data_reliability import CoverageTracker
 
 years = pd.to_datetime(["2026-03-31", "2025-03-31", "2024-03-31", "2023-03-31"])
 
@@ -117,6 +120,10 @@ layers = {
 layers["blowup"] = blowup.analyze(
     d, m_score=layers["fraud"].extras.get("m_score"),
     z_score=layers["fraud"].extras.get("z_score"))
+tracker = CoverageTracker()
+layers["promoter"] = promoter_intelligence.analyze(d, tracker)
+layers["auditor"] = auditor_intelligence.analyze(d, tracker)
+coverage = tracker.report()
 flags = az._cross_layer_flags(d)
 for L in layers.values():
     flags.extend(L.flags)
@@ -126,12 +133,15 @@ composite = compose(layers, flags)
 committee_result = committee.convene(d, layers, flags)
 sizing_result = position_sizing.recommend(composite, flags, layers)
 scenarios = stress_test.run(d)
+graph = kg.build(flags)
 report = az.AnalysisReport(symbol="SYNTH", ticker="SYNTH.NS",
                            company=info["longName"], layers=layers,
                            flags=flags, composite=composite,
                            committee=committee_result,
                            sizing=sizing_result,
-                           stress=scenarios)
+                           stress=scenarios,
+                           coverage=coverage,
+                           graph=graph)
 render(report, explain=True)
 
 # ── Assertions: planted flags must be detected ─────────────────────────────────
@@ -202,6 +212,24 @@ assert len(preds) >= 3, f"Expected ≥3 predictions from {len(flags)} flags, got
 for p in preds:
     assert 0 < p.confidence < 1, f"Bad confidence: {p.confidence}"
     assert p.horizon_days > 0
+
+# Data Reliability Framework
+assert coverage.overall >= 0, "Coverage overall score should be numeric"
+assert len(coverage.dimensions) == 5, f"Expected 5 coverage dimensions, got {len(coverage.dimensions)}"
+
+# Knowledge Graph
+assert graph is not None, "Knowledge graph not built"
+# The synthetic company fires many flags so the graph should have chains
+if graph.nodes:
+    assert len(graph.nodes) >= 3, f"Expected ≥3 active nodes, got {len(graph.nodes)}"
+    # render_text should work without error
+    lines = kg.render_text(graph)
+    assert lines, "Knowledge graph render produced no output"
+
+# Promoter and Auditor layers exist
+assert "promoter" in layers, "Promoter intelligence layer missing"
+assert "auditor" in layers, "Auditor intelligence layer missing"
+assert layers["auditor"].extras.get("audit_risk_score") is not None
 
 print(f"\nSMOKE TEST PASSED — {len(flags)} flags, score "
       f"{composite.score:.1f}, verdict {composite.verdict.value}, "

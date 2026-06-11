@@ -16,7 +16,8 @@ from forensics import (
     fraud_models, governance, microstructure, quant_risk,
     statement_forensics, valuation,
 )
-from forensics import stress_test, position_sizing, prediction_ledger
+from forensics import (stress_test, position_sizing, prediction_ledger,
+                       promoter_intelligence, auditor_intelligence)
 from forensics.committee import CommitteeResult
 from forensics.models import (
     FundamentalData, LayerResult, RedFlag, Severity, SEVERITY_ORDER,
@@ -26,6 +27,8 @@ from forensics.scoring import CompositeResult, compose
 from forensics.statement_forensics import REVENUE, CFO
 from forensics.position_sizing import SizingResult
 from forensics.stress_test import ScenarioResult
+from forensics.data_reliability import CoverageTracker, CoverageReport
+from forensics import knowledge_graph as kg
 
 log = get_logger("forensics.analyzer")
 
@@ -42,6 +45,8 @@ class AnalysisReport:
     sizing: Optional[SizingResult] = None
     stress: List[ScenarioResult] = field(default_factory=list)
     predictions_saved: int = 0
+    coverage: Optional[CoverageReport] = None
+    graph: Optional[kg.KnowledgeGraph] = None
 
 
 def _cross_layer_flags(d: FundamentalData) -> List[RedFlag]:
@@ -80,6 +85,8 @@ class QuantRedFlagAnalyst:
         d = data_source.fetch_fundamentals(symbol)
         log.info("analysis_started", symbol=symbol, ticker=d.ticker)
 
+        tracker = CoverageTracker()
+
         layers: Dict[str, LayerResult] = {
             "forensics": statement_forensics.analyze(d),
             "quant": quant_risk.analyze(d),
@@ -96,11 +103,16 @@ class QuantRedFlagAnalyst:
             m_score=layers["fraud"].extras.get("m_score"),
             z_score=layers["fraud"].extras.get("z_score"),
         )
+        layers["promoter"] = promoter_intelligence.analyze(d, tracker)
+        layers["auditor"] = auditor_intelligence.analyze(d, tracker)
 
         flags = _cross_layer_flags(d)
         for L in layers.values():
             flags.extend(L.flags)
         flags.sort(key=lambda f: -SEVERITY_ORDER[f.severity])
+
+        coverage = tracker.report()
+        graph = kg.build(flags)
 
         composite = compose(layers, flags)
         committee_result = committee.convene(d, layers, flags)
@@ -130,4 +142,6 @@ class QuantRedFlagAnalyst:
             sizing=sizing,
             stress=scenarios,
             predictions_saved=n_saved,
+            coverage=coverage,
+            graph=graph,
         )

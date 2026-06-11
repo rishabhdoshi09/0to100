@@ -17,6 +17,7 @@ from rich.text import Text
 
 from forensics.analyzer import AnalysisReport
 from forensics.models import LayerResult, Severity, Verdict
+from forensics import knowledge_graph as kg
 
 
 def _grade_color(grade: str) -> str:
@@ -184,6 +185,35 @@ def render(report: AnalysisReport, console: Optional[Console] = None,
         c.print(Panel(meter, title=" FRAUD PROBABILITY METER ",
                       border_style="grey39", box=box.HEAVY))
 
+    # ── Knowledge Graph ───────────────────────────────────────────────────────
+    if report.graph and report.graph.nodes:
+        g = report.graph
+        kg_lines = kg.render_text(g)
+        kg_text = Text()
+        for line in kg_lines:
+            kg_text.append(line + "\n", style="bright_cyan" if "→" in line else "dim")
+        c.print(Panel(kg_text,
+                      title=f" CAUSAL SIGNAL GRAPH — {len(g.nodes)} active nodes ",
+                      border_style="bright_cyan", box=box.HEAVY))
+
+    # ── Data Coverage Report ──────────────────────────────────────────────────
+    if report.coverage:
+        cov = report.coverage
+        ct = Table(box=box.SIMPLE_HEAD, header_style="bold dim", expand=False)
+        ct.add_column("DIMENSION", min_width=18)
+        ct.add_column("COVERAGE", min_width=28)
+        ct.add_column("MISSING", min_width=20)
+        for dim in cov.dimensions:
+            missing_str = ", ".join(dim.missing[:3]) if dim.missing else "—"
+            ct.add_row(dim.dimension, _gauge(dim.score, 20),
+                       Text(missing_str, style="dim red" if dim.missing else "dim"))
+        c.print(Panel(ct,
+                      title=Text.assemble(
+                          " DATA RELIABILITY FRAMEWORK  ",
+                          ("Overall Coverage: ", "dim"),
+                          (f"{cov.overall:.0f}/100 ", _score_color(cov.overall))),
+                      border_style="grey39", box=box.HEAVY))
+
     # ── Capital Allocation panel ───────────────────────────────────────────────
     cap = report.layers.get("capital_allocation")
     if cap and (cap.metrics or cap.notes):
@@ -198,7 +228,7 @@ def render(report: AnalysisReport, console: Optional[Console] = None,
 
     # ── Layer panels ──────────────────────────────────────────────────────────
     order = ["forensics", "quant", "fraud", "governance", "smart_money",
-             "valuation", "altdata", "microstructure"]
+             "valuation", "altdata", "microstructure", "promoter", "auditor"]
     for key in order:
         if key in report.layers and (report.layers[key].metrics
                                      or report.layers[key].notes):
