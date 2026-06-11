@@ -51,6 +51,23 @@ class Metric:
     good: str                         # what is considered good?
     implication: str                  # what does THIS result imply?
     score: Optional[float] = None     # 0–100 contribution, None = not scored
+    source: str = ""                  # data source label
+    reliability: float = 0.0         # source reliability 0–100
+
+
+# ── Source reliability tiers ──────────────────────────────────────────────────
+SOURCE_RELIABILITY: dict = {
+    "Audited Annual Report":    100.0,
+    "Exchange Filing (XBRL)":    95.0,
+    "NSE Shareholding Pattern":  95.0,
+    "BSE Filing":                90.0,
+    "Concall Transcript":        85.0,
+    "Market Data (yfinance)":    75.0,
+    "Analyst Estimate":          70.0,
+    "Alternative / Web Data":    60.0,
+    "Estimated / Computed":      55.0,
+    "Not Available":              0.0,
+}
 
 
 @dataclass
