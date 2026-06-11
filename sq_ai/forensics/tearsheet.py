@@ -175,6 +175,29 @@ def _institutional(report: AnalysisReport) -> str:
 
     # Verdict
     lines.append("─" * 78)
+    # Position sizing
+    if report.sizing:
+        sz = report.sizing
+        lines.append("POSITION SIZING")
+        lines.append(f"  Bucket:           {sz.bucket}")
+        if sz.bucket != "Avoid":
+            lines.append(f"  Range:            {sz.weight_lo}%–{sz.weight_hi}%")
+            lines.append(f"  Suggested Weight: {sz.suggested_weight:.1f}%")
+        if sz.hard_gate:
+            lines.append(f"  Hard Gate:        {sz.hard_gate}")
+        if sz.soft_cap:
+            lines.append(f"  Soft Cap:         {sz.soft_cap}")
+        lines.append("")
+
+    # Stress testing
+    if report.stress:
+        lines.append("SCENARIO STRESS TESTING")
+        for sc in report.stress:
+            lines.append(f"  {sc.name:<22}  {sc.outcome:<12}  "
+                         f"Survival {sc.survival_probability:.0f}%")
+        lines.append("")
+
+    lines.append("─" * 78)
     lines.append(f"  VERDICT:  {_verdict_line(c.verdict)}"
                  f"   (confidence: {c.confidence})")
     lines.append("─" * 78)
@@ -209,6 +232,15 @@ def _one_pager(report: AnalysisReport) -> str:
     if comm:
         lines.append(f"  Committee:          {comm.consensus}  "
                      f"({comm.tally['Buy']}B/{comm.tally['Hold']}H/{comm.tally['Sell']}S)")
+    if report.sizing:
+        sz = report.sizing
+        weight_str = (f"  {sz.suggested_weight:.1f}%" if sz.bucket != "Avoid"
+                      else "  0% — avoid")
+        lines.append(f"  Position Sizing:    {sz.bucket}{weight_str}")
+    if report.stress:
+        worst = min(report.stress, key=lambda s: s.survival_probability)
+        lines.append(f"  Worst Stress:       {worst.name} → {worst.outcome} "
+                     f"({worst.survival_probability:.0f}%)")
     if top_match:
         name, sim, _ = top_match
         lines.append(f"  Blow-Up Similarity: {name}  {sim:.0%}")
@@ -287,6 +319,10 @@ def _social_card(report: AnalysisReport) -> str:
     lines.append(row())
     lines.append(divider())
     lines.append(row())
+    if report.sizing:
+        sz = report.sizing
+        wt = f"  {sz.suggested_weight:.1f}%" if sz.bucket != "Avoid" else ""
+        lines.append(row(f"📐 Position:  {sz.bucket}{wt}"))
     lines.append(row(f"📊 Verdict:  {c.verdict.value}"))
     lines.append(row(f"   Confidence: {c.confidence}"))
     lines.append(row())

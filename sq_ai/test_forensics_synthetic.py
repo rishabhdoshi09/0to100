@@ -21,7 +21,8 @@ from forensics.scoring import compose
 from forensics.report import render
 from forensics import (statement_forensics, quant_risk, fraud_models,
                        governance, valuation, altdata, microstructure,
-                       blowup, committee, capital_allocation, tearsheet)
+                       blowup, committee, capital_allocation, tearsheet,
+                       stress_test, position_sizing, prediction_ledger)
 
 years = pd.to_datetime(["2026-03-31", "2025-03-31", "2024-03-31", "2023-03-31"])
 
@@ -123,10 +124,14 @@ from forensics.models import SEVERITY_ORDER
 flags.sort(key=lambda f: -SEVERITY_ORDER[f.severity])
 composite = compose(layers, flags)
 committee_result = committee.convene(d, layers, flags)
+sizing_result = position_sizing.recommend(composite, flags, layers)
+scenarios = stress_test.run(d)
 report = az.AnalysisReport(symbol="SYNTH", ticker="SYNTH.NS",
                            company=info["longName"], layers=layers,
                            flags=flags, composite=composite,
-                           committee=committee_result)
+                           committee=committee_result,
+                           sizing=sizing_result,
+                           stress=scenarios)
 render(report, explain=True)
 
 # ── Assertions: planted flags must be detected ─────────────────────────────────
@@ -174,10 +179,35 @@ assert "INSTITUTIONAL TEAR SHEET" in bundle.institutional
 assert "Capital Allocation:" in bundle.one_pager
 assert "Institutional Quality Score" in bundle.social_card
 assert "╔" in bundle.social_card, "Social card missing box art"
+assert "Position:" in bundle.social_card or "Avoid" in bundle.social_card
+
+# Position sizing: synthetic fraud company must be Avoid or Tracking at most
+assert sizing_result.bucket in ("Avoid", "Tracking", "Speculative"), \
+    f"Expected Avoid/Tracking for fraud-flagged company, got: {sizing_result.bucket}"
+assert sizing_result.hard_gate or sizing_result.soft_cap, \
+    "Expected hard gate or soft cap for company with CRITICAL flag"
+
+# Stress testing: 4 scenarios, Severe Recession must show distress
+assert len(scenarios) == 4, f"Expected 4 scenarios, got {len(scenarios)}"
+severe = next((s for s in scenarios if s.name == "Severe Recession"), None)
+assert severe is not None
+assert severe.outcome in ("High Risk", "Critical", "Stressed"), \
+    f"Severe Recession outcome too optimistic: {severe.outcome}"
+
+# Prediction ledger: predictions generated from flags
+baseline = prediction_ledger.extract_baseline_metrics(layers)
+preds = prediction_ledger.generate_predictions("SYNTH", "SYNTH.NS", flags, baseline)
+assert len(preds) >= 3, f"Expected ≥3 predictions from {len(flags)} flags, got {len(preds)}"
+# verify each has confidence between 0 and 1
+for p in preds:
+    assert 0 < p.confidence < 1, f"Bad confidence: {p.confidence}"
+    assert p.horizon_days > 0
 
 print(f"\nSMOKE TEST PASSED — {len(flags)} flags, score "
       f"{composite.score:.1f}, verdict {composite.verdict.value}, "
       f"committee {committee_result.tally} → {committee_result.consensus}, "
+      f"position bucket {sizing_result.bucket}, "
+      f"severe recession → {severe.outcome} ({severe.survival_probability:.0f}%), "
+      f"{len(preds)} predictions generated, "
       f"top blow-up {top_name} {top_sim:.0%}, "
-      f"capital grade {grade}, empire signals: {emp_sigs}, "
-      f"{len(auditable)} auditable flags")
+      f"capital grade {grade}, {len(auditable)} auditable flags")

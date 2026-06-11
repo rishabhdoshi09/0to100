@@ -161,6 +161,49 @@ def cmd_backtest(args) -> None:
     print(f"Reports saved to: {settings.log_dir}/")
 
 
+def cmd_ledger(args) -> None:
+    """Prediction Ledger management."""
+    from forensics import prediction_ledger as pl
+
+    if args.ledger_cmd == "stats":
+        s = pl.get_stats()
+        print("\n=== Prediction Ledger — Platform Stats ===")
+        print(f"  Total predictions:   {s['total']}")
+        print(f"  Pending:             {s['pending']}")
+        print(f"  Correct:             {s['correct']}")
+        print(f"  Incorrect:           {s['incorrect']}")
+        print(f"  Inconclusive:        {s['inconclusive']}")
+        if s["hit_rate"] is not None:
+            print(f"  Hit Rate:            {s['hit_rate']:.1%}")
+        if s["brier_score"] is not None:
+            print(f"  Brier Score:         {s['brier_score']:.4f}  "
+                  "(0 = perfect calibration)")
+
+    elif args.ledger_cmd == "check":
+        symbol = args.symbol
+        print(f"\nRe-running analysis for {symbol} to check pending predictions…")
+        from forensics import QuantRedFlagAnalyst
+        from forensics import prediction_ledger as pl
+        analyst = QuantRedFlagAnalyst()
+        try:
+            report = analyst.analyze(symbol)
+        except Exception as exc:
+            print(f"Analysis failed: {exc}")
+            return
+        baseline = pl.extract_baseline_metrics(report.layers)
+        res = pl.check_outcomes(symbol, baseline)
+        print(f"  Checked: {res['checked']}  "
+              f"Correct: {res['correct']}  "
+              f"Incorrect: {res['incorrect']}  "
+              f"Inconclusive: {res['inconclusive']}")
+        open_preds = pl.get_open_predictions(symbol)
+        if open_preds:
+            print(f"\n  Open predictions for {symbol}:")
+            for p in open_preds:
+                print(f"    [{p['check_date']}] ({p['confidence']:.0%}) "
+                      f"{p['prediction']}")
+
+
 def cmd_analyze(args) -> None:
     """Run the Quant Red Flag Analyst on one or more symbols."""
     from forensics import QuantRedFlagAnalyst
@@ -170,11 +213,14 @@ def cmd_analyze(args) -> None:
     analyst = QuantRedFlagAnalyst()
     for symbol in args.symbols:
         try:
-            report = analyst.analyze(symbol)
+            report = analyst.analyze(symbol, save_predictions=args.ledger)
         except Exception as exc:
             print(f"\n{symbol}: analysis failed — {exc}")
             continue
         render(report, explain=args.explain)
+        if report.predictions_saved:
+            print(f"\n  Predictions logged: {report.predictions_saved} "
+                  f"(run: python main.py ledger check {symbol})")
         if args.tearsheet:
             bundle = ts.generate(report)
             prefix = f"logs/{symbol.replace('/', '_')}"
@@ -289,6 +335,17 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Save institutional tear sheet, one-pager, and social card to logs/",
     )
+    an.add_argument(
+        "--ledger",
+        action="store_true",
+        help="Log testable predictions to the Prediction Ledger (logs/predictions.db)",
+    )
+
+    led = sub.add_parser("ledger", help="Prediction Ledger — track signal outcomes")
+    led_sub = led.add_subparsers(dest="ledger_cmd", required=True)
+    lc = led_sub.add_parser("check", help="Check outcomes for a symbol")
+    lc.add_argument("symbol")
+    led_sub.add_parser("stats", help="Platform-wide hit rate and Brier score")
 
     sub.add_parser("kill", help="Write kill switch flag")
     sub.add_parser("status", help="Print live portfolio status from Kite")
@@ -305,6 +362,7 @@ def main() -> None:
         "live": cmd_live,
         "backtest": cmd_backtest,
         "analyze": cmd_analyze,
+        "ledger": cmd_ledger,
         "kill": cmd_kill,
         "status": cmd_status,
     }

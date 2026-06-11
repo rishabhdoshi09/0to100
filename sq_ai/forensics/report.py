@@ -261,6 +261,70 @@ def render(report: AnalysisReport, console: Optional[Console] = None,
         c.print(Panel(ex, title=" METRIC GLOSSARY ", border_style="grey39",
                       box=box.HEAVY))
 
+    # ── Position Sizing ───────────────────────────────────────────────────────
+    if report.sizing:
+        sz = report.sizing
+        bucket_style = {
+            "Core Compounder": "bold black on green",
+            "High Conviction": "bold black on bright_green",
+            "Standard": "bold black on yellow",
+            "Speculative": "yellow",
+            "Tracking": "dim",
+            "Avoid": "bold white on red",
+        }.get(sz.bucket, "white")
+        sz_rows = Table(box=None, show_header=False, padding=(0, 2))
+        sz_rows.add_column(style="bold", min_width=26)
+        sz_rows.add_column()
+        sz_rows.add_row("Bucket", Text(f" {sz.bucket} ", style=bucket_style))
+        if sz.bucket != "Avoid":
+            sz_rows.add_row(
+                "Position Range",
+                Text(f"{sz.weight_lo}% – {sz.weight_hi}%", style="bright_white"))
+            sz_rows.add_row(
+                "Suggested Weight",
+                Text(f"{sz.suggested_weight:.1f}%", style="bold bright_white"))
+        if sz.hard_gate:
+            sz_rows.add_row("Hard Gate", Text(sz.hard_gate, style="bold red"))
+        if sz.soft_cap:
+            sz_rows.add_row("Soft Cap", Text(sz.soft_cap, style="yellow"))
+        sz_rows.add_row("Sizing Score", _gauge(sz.sizing_score))
+        for k, v in sz.inputs.items():
+            sz_rows.add_row(k, Text(v, style="dim"))
+        if sz.reasoning:
+            sz_rows.add_row("Logic", Text(" → ".join(sz.reasoning), style="dim italic"))
+        c.print(Panel(sz_rows, title=" POSITION SIZING ENGINE ",
+                      border_style="bright_blue", box=box.DOUBLE))
+
+    # ── Scenario Stress Testing ───────────────────────────────────────────────
+    if report.stress:
+        outcome_style = {
+            "Safe": "bold green", "Stressed": "yellow",
+            "High Risk": "bold red", "Critical": "bold white on red",
+        }
+        st = Table(box=box.SIMPLE_HEAD, header_style="bold dim", expand=True)
+        st.add_column("SCENARIO", min_width=18)
+        st.add_column("SHOCKS", min_width=26)
+        st.add_column("KEY METRICS")
+        st.add_column("SURVIVAL", min_width=12)
+        st.add_column("OUTCOME", min_width=10)
+        for sc in report.stress:
+            shocks = ", ".join(filter(None, [
+                f"Rev {sc.revenue_shock:+.0%}" if sc.revenue_shock else "",
+                f"Margin {sc.margin_shock:+.0%}pp" if sc.margin_shock else "",
+                f"Rate +{sc.interest_shock:.0%}" if sc.interest_shock else "",
+                f"CFO {sc.cfo_shock:+.0%}" if sc.cfo_shock else "",
+            ]))
+            metrics_txt = "\n".join(f"{lbl}: {val}" for lbl, val in sc.details
+                                    if lbl != "Survival Probability")
+            st.add_row(
+                sc.name, shocks, metrics_txt,
+                Text(f"{sc.survival_probability:.0f}%",
+                     style=outcome_style.get(sc.outcome, "white")),
+                Text(sc.outcome, style=outcome_style.get(sc.outcome, "white")),
+            )
+        c.print(Panel(st, title=" SCENARIO STRESS TESTING ",
+                      border_style="grey39", box=box.HEAVY))
+
     # ── AI Investment Committee ───────────────────────────────────────────────
     if report.committee:
         cm = report.committee

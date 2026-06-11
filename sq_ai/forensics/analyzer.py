@@ -1,14 +1,14 @@
 """
 Quant Red Flag Analyst — orchestrator.
 
-Runs all analysis layers against one symbol, performs cross-layer red flag
-checks, and produces the composite Institutional Quality Score + verdict.
+Runs all analysis layers, cross-layer flag checks, position sizing, stress
+testing, and optionally persists predictions to the ledger.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 from logger import get_logger
 from forensics import (
@@ -16,6 +16,7 @@ from forensics import (
     fraud_models, governance, microstructure, quant_risk,
     statement_forensics, valuation,
 )
+from forensics import stress_test, position_sizing, prediction_ledger
 from forensics.committee import CommitteeResult
 from forensics.models import (
     FundamentalData, LayerResult, RedFlag, Severity, SEVERITY_ORDER,
@@ -23,6 +24,8 @@ from forensics.models import (
 )
 from forensics.scoring import CompositeResult, compose
 from forensics.statement_forensics import REVENUE, CFO
+from forensics.position_sizing import SizingResult
+from forensics.stress_test import ScenarioResult
 
 log = get_logger("forensics.analyzer")
 
@@ -36,10 +39,12 @@ class AnalysisReport:
     flags: List[RedFlag] = field(default_factory=list)
     composite: CompositeResult = None  # type: ignore[assignment]
     committee: CommitteeResult = None  # type: ignore[assignment]
+    sizing: Optional[SizingResult] = None
+    stress: List[ScenarioResult] = field(default_factory=list)
+    predictions_saved: int = 0
 
 
 def _cross_layer_flags(d: FundamentalData) -> List[RedFlag]:
-    """Critical checks that span statements (the classic short-seller screen)."""
     flags: List[RedFlag] = []
     rev = stmt_row(d.income, REVENUE)
     cfo = stmt_row(d.cashflow, CFO)
@@ -70,9 +75,8 @@ def _cross_layer_flags(d: FundamentalData) -> List[RedFlag]:
 
 
 class QuantRedFlagAnalyst:
-    """Institutional enhancement layer — run all forensic/quant engines on a symbol."""
 
-    def analyze(self, symbol: str) -> AnalysisReport:
+    def analyze(self, symbol: str, save_predictions: bool = False) -> AnalysisReport:
         d = data_source.fetch_fundamentals(symbol)
         log.info("analysis_started", symbol=symbol, ticker=d.ticker)
 
@@ -100,9 +104,20 @@ class QuantRedFlagAnalyst:
 
         composite = compose(layers, flags)
         committee_result = committee.convene(d, layers, flags)
+        sizing = position_sizing.recommend(composite, flags, layers)
+        scenarios = stress_test.run(d)
+
+        n_saved = 0
+        if save_predictions:
+            baseline = prediction_ledger.extract_baseline_metrics(layers)
+            preds = prediction_ledger.generate_predictions(
+                d.symbol, d.ticker, flags, baseline)
+            n_saved = prediction_ledger.save_predictions(preds)
+            log.info("predictions_saved", symbol=d.symbol, count=n_saved)
+
         log.info("analysis_complete", symbol=symbol,
                  score=composite.score, verdict=composite.verdict.value,
-                 flags=len(flags))
+                 bucket=sizing.bucket, flags=len(flags))
 
         return AnalysisReport(
             symbol=d.symbol,
@@ -112,4 +127,7 @@ class QuantRedFlagAnalyst:
             flags=flags,
             composite=composite,
             committee=committee_result,
+            sizing=sizing,
+            stress=scenarios,
+            predictions_saved=n_saved,
         )
