@@ -48,6 +48,12 @@ simplequant/
 ├── analytics/           # Performance reporting
 │   └── reporter.py      # Sharpe, CAGR, drawdown, win rate, plots, CSV export
 │
+├── screener/             # Momentum / breakout scanner (Kite price data)
+│   ├── nse_universe.py  # Curated NSE symbols tagged Large/Mid/Small cap
+│   └── momentum_screener.py # Scores trend/volume/breakout via IndicatorEngine
+│
+├── app.py               # Streamlit frontend — "Check a stock" + "Find winning trades"
+│
 └── forensics/           # Quant Red Flag Analyst™ (institutional module)
     ├── analyzer.py      # Orchestrator: runs all layers, cross-layer flag checks
     ├── data_source.py   # yfinance fundamentals fetcher (no Kite creds needed)
@@ -100,7 +106,15 @@ python main.py kill
 
 # 8. Check live positions
 python main.py status
+
+# 9. Web frontend (stock check + momentum/breakout screener)
+streamlit run app.py
 ```
+
+The screener tab in `app.py` scans a curated NSE universe via Kite Connect
+(`KITE_ACCESS_TOKEN` must be valid — run `python main.py login` each
+morning). Fundamentals in the "Check a stock" tab still use yfinance,
+since Kite has no financial-statements API.
 
 ## Key Design Invariants
 
