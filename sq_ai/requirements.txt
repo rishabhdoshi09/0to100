@@ -33,3 +33,6 @@ sqlalchemy>=2.0.0
 
 # Plotting (analytics)
 matplotlib>=3.8.0
+
+# Web frontend
+streamlit>=1.35.0
