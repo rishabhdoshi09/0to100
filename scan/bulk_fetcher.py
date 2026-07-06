@@ -60,7 +60,7 @@ def prefetch(
                 period=period,
                 interval="1d",
                 group_by="ticker",
-                threads=True,
+                threads=8,   # bounded — unbounded threads exhaust macOS's fd limit
                 progress=False,
                 auto_adjust=True,
             )

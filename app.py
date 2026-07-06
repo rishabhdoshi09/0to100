@@ -8,6 +8,17 @@ import os
 import json
 import time
 import traceback
+
+# ── Raise file-descriptor limit (macOS default is 256 — whole-market scans
+#    open thousands of sockets and hit "Too many open files") ─────────────────
+try:
+    import resource
+    _soft, _hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+    if _soft < 8192:
+        resource.setrlimit(resource.RLIMIT_NOFILE,
+                           (min(8192, _hard if _hard > 0 else 8192), _hard))
+except Exception:
+    pass
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
