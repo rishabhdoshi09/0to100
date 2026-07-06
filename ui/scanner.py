@@ -33,6 +33,41 @@ _CAT_COLOR = {"Momentum": "#38bdf8", "Breakout": "#a78bfa", "Pattern": "#f472b6"
               "PreBreakout": "#facc15"}
 
 
+@st.cache_data(ttl=180, show_spinner=False)
+def _live_quotes(symbols_key: str) -> dict:
+    """Fresh Google Finance quotes for the stocks on screen. Cached 3 min."""
+    try:
+        from data.google_finance import get_quotes
+        return get_quotes(symbols_key.split(",")[:40])
+    except Exception:
+        return {}
+
+
+def _apply_live_prices(results: list[dict]) -> None:
+    """Overlay current prices on results at render time — no stale cards."""
+    syms = [r["symbol"] for r in results[:40]]
+    if not syms:
+        return
+    live = _live_quotes(",".join(syms))
+    for r in results[:40]:
+        q = live.get(r["symbol"])
+        if not (q and q.get("price")):
+            continue
+        r["price"] = q["price"]
+        r["change_pct"] = q["chg_pct"]
+        entry = float(r.get("entry") or 0)
+        if entry and q["price"] < entry * 0.97 and r.get("verdict") in ("STRONG BUY", "BUY"):
+            slip = (entry - q["price"]) / entry * 100
+            r["verdict"] = "WATCH"
+            r.setdefault("reasons", []).insert(
+                0, f"⚠ Live ₹{q['price']:,.0f} — entry ₹{entry:,.0f} se "
+                   f"{slip:.0f}% neeche, setup pullback mein hai")
+            if r.get("checks"):
+                r["checks"].insert(
+                    0, f"⚠ Live ₹{q['price']:,.0f} entry se {slip:.0f}% neeche — "
+                       f"chase mat karo")
+
+
 @st.cache_data(ttl=600, show_spinner=False)
 def _accuracy_stat() -> str:
     """Measured accuracy from the outcome tracker — '' if not enough data yet."""
@@ -175,8 +210,10 @@ def render_scanner(universe: list[str]) -> None:
         st.rerun()
 
     results, universe_size, last_ts, status = get_results()
+    _apply_live_prices(results)   # Google Finance live overlay at render time
     if last_ts:
-        fresh_note = f"Last scan: **{_freshness(last_ts)}** · {universe_size} stocks covered"
+        fresh_note = (f"Last scan: **{_freshness(last_ts)}** · {universe_size} stocks "
+                      f"covered · prices live via Google Finance (3-min refresh)")
         if status == "scanning":
             fresh_note += " · ⟳ refreshing in background…"
         st.caption(fresh_note)

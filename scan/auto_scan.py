@@ -151,15 +151,34 @@ def _scan_once(universe: Optional[list[str]] = None, progress=None) -> None:
         # Live price overlay from Google Finance (history is official NSE EOD)
         try:
             from data.google_finance import get_quotes
-            top_syms = [r["symbol"] for r in serialized[:40]]
+            top_syms = [r["symbol"] for r in serialized[:60]]
             live = get_quotes(top_syms)
-            for r in serialized[:40]:
+            overlaid = 0
+            for r in serialized[:60]:
                 q = live.get(r["symbol"])
-                if q and q.get("price"):
-                    r["price"] = q["price"]
-                    r["change_pct"] = q["chg_pct"]
+                if not (q and q.get("price")):
+                    continue
+                r["price"] = q["price"]
+                r["change_pct"] = q["chg_pct"]
+                overlaid += 1
+                # EOD signal sanity vs live price: if the stock has already
+                # slipped well below its entry/pivot, the setup is broken —
+                # demote and warn instead of showing a stale Buy.
+                entry = float(r.get("entry") or 0)
+                if entry and q["price"] < entry * 0.97:
+                    slip = (entry - q["price"]) / entry * 100
+                    r.setdefault("reasons", []).insert(
+                        0, f"⚠ Live price ₹{q['price']:,.0f} — entry ₹{entry:,.0f} "
+                           f"se {slip:.0f}% neeche aa gaya, setup abhi valid nahi")
+                    if r.get("verdict") in ("STRONG BUY", "BUY"):
+                        r["verdict"] = "WATCH"
+                    if r.get("checks"):
+                        r["checks"].insert(
+                            0, f"⚠ Live ₹{q['price']:,.0f} entry se {slip:.0f}% neeche "
+                               f"— pullback mein hai, chase mat karo")
+            log.info("live_overlay_done", overlaid=overlaid, of=min(60, len(serialized)))
         except Exception as exc:
-            log.debug("live_overlay_skip", error=str(exc))
+            log.warning("live_overlay_failed", error=str(exc))
         # Proactive delivery — user ko dhundhna na pade, setups khud pahunchein
         _push_new_setups(serialized[:15])
         with _lock:

@@ -142,6 +142,13 @@ class UnifiedScanner:
         if vol is not None and np.nanmean(vol[-20:]) * price < 1e7:
             return None              # < ₹1 cr avg daily turnover — illiquid
 
+        # Honest dating — signals are computed on the latest EOD session
+        try:
+            session = pd.Timestamp(df.index[-1]).strftime("%d %b")
+        except Exception:
+            session = ""
+        sess_tag = f" ({session} close)" if session else ""
+
         chg = (close[-1] / close[-2] - 1) * 100 if len(close) > 1 else 0.0
         mom5 = (close[-1] / close[-6] - 1) * 100 if len(close) > 5 else 0.0
         rsi = _rsi(close)
@@ -167,12 +174,13 @@ class UnifiedScanner:
             hi52 = float(np.max(high[:-1]))
             if price > hi52 * 0.998:
                 signals.append("BREAKOUT_52W")
-                reasons.append(f"Broke 52-week high ₹{hi52:,.0f} today")
+                reasons.append(f"Broke 52-week high ₹{hi52:,.0f}{sess_tag}")
             else:
                 res20 = float(np.max(high[-21:-1]))
                 if price > res20 and vratio > 1.5:
                     signals.append("BREAKOUT_RES")
-                    reasons.append(f"Broke ₹{res20:,.0f} resistance on {vratio:.1f}× volume")
+                    reasons.append(f"Broke ₹{res20:,.0f} resistance on "
+                                   f"{vratio:.1f}× volume{sess_tag}")
 
         if len(close) >= 201:
             s50, s200 = close[-50:].mean(), close[-200:].mean()
@@ -341,19 +349,23 @@ def _detect_patterns(close, high, low, vol) -> list[tuple[str, str, float]]:
         if lo1 > 0 and abs(lo1 - lo2) / lo1 <= 0.03 and (i2 - i1) >= 15:
             neckline = float(np.max(high[-90:][i1:i2 + 1]))
             depth_ok = neckline > max(lo1, lo2) * 1.08
-            if depth_ok and price >= neckline * 0.95:
+            # price near the neckline only — far above = pattern already done
+            if depth_ok and neckline * 0.95 <= price <= neckline * 1.05:
                 found.append(("DOUBLE_BOTTOM",
                               f"W-pattern bana — do baar ₹{lo1:,.0f} se wapas uchhla, "
                               f"neckline ₹{neckline:,.0f}", neckline))
 
-    # Cup & handle proxy: prior high, rounded 15-35% cup, small handle near rim
+    # Cup & handle proxy: prior high, rounded 15-35% cup, small handle near rim.
+    # Price must be NEAR the rim (±8%) — far above means the pattern already
+    # played out long ago (stale signal).
     if len(close) >= 130:
         left_rim = float(np.max(high[-130:-65]))
         cup_low = float(np.min(low[-90:-20]))
         cup_depth = (left_rim - cup_low) / left_rim if left_rim > 0 else 1
         handle_lo = float(np.min(low[-15:]))
         handle_ok = handle_lo >= cup_low + (left_rim - cup_low) * 0.5
-        if 0.15 <= cup_depth <= 0.35 and handle_ok and price >= left_rim * 0.92:
+        if 0.15 <= cup_depth <= 0.35 and handle_ok \
+                and left_rim * 0.92 <= price <= left_rim * 1.08:
             found.append(("CUP_HANDLE",
                           f"Cup formed, handle near ₹{left_rim:,.0f} rim", left_rim))
 
