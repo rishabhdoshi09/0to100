@@ -36,10 +36,13 @@ INDEX_MAP = {
     "SENSEX":    "SENSEX:INDEXBOM",
 }
 
-# <div class="YMlKec fxKbKc">₹1,388.70</div>  — current price
-_PRICE_RE = re.compile(r'class="YMlKec fxKbKc"[^>]*>\s*(?:₹|Rs\.?|INR)?\s*([\d,]+\.?\d*)')
+# Primary: stable data attributes Google embeds on the quote container
+#   <div ... data-last-price="1388.7" data-last-normal-market-timestamp="..." ...>
+_ATTR_PRICE_RE = re.compile(r'data-last-price="([\d.]+)"')
+# Fallbacks: rendered text (CSS classes — Google changes these sometimes)
+_PRICE_RE = re.compile(r'class="YMlKec fxKbKc"[^>]*>\s*(?:₹|Rs\.?|INR|\$)?\s*([\d,]+\.?\d*)')
 # Previous close appears in the stats table inside class="P6K39c"
-_PREV_RE = re.compile(r'Previous close.*?class="P6K39c"[^>]*>\s*(?:₹|Rs\.?|INR)?\s*([\d,]+\.?\d*)',
+_PREV_RE = re.compile(r'[Pp]revious close.*?class="P6K39c"[^>]*>\s*(?:₹|Rs\.?|INR|\$)?\s*([\d,]+\.?\d*)',
                       re.DOTALL)
 
 
@@ -58,12 +61,19 @@ def get_quote(symbol: str, timeout: int = 8) -> Optional[dict]:
     try:
         resp = requests.get(url, headers=_HEADERS, timeout=timeout)
         if resp.status_code != 200:
+            log.debug("google_finance_http", symbol=symbol, status=resp.status_code)
             return None
         html = resp.text
-        m_price = _PRICE_RE.search(html)
-        if not m_price:
-            return None
-        price = _to_float(m_price.group(1))
+        # Primary: data attribute (stable). Fallback: rendered price div.
+        m_attr = _ATTR_PRICE_RE.search(html)
+        if m_attr:
+            price = float(m_attr.group(1))
+        else:
+            m_price = _PRICE_RE.search(html)
+            if not m_price:
+                log.debug("google_finance_parse_miss", symbol=symbol)
+                return None
+            price = _to_float(m_price.group(1))
         m_prev = _PREV_RE.search(html)
         prev = _to_float(m_prev.group(1)) if m_prev else 0.0
         chg = (price - prev) / prev * 100 if prev else 0.0

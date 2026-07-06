@@ -38,21 +38,24 @@ def _live_quotes(symbols_key: str) -> dict:
     """Fresh Google Finance quotes for the stocks on screen. Cached 3 min."""
     try:
         from data.google_finance import get_quotes
-        return get_quotes(symbols_key.split(",")[:40])
+        return get_quotes(symbols_key.split(",")[:80])
     except Exception:
         return {}
 
 
 def _apply_live_prices(results: list[dict]) -> None:
-    """Overlay current prices on results at render time — no stale cards."""
-    syms = [r["symbol"] for r in results[:40]]
+    """Overlay current prices at render time. Marks each card live/EOD —
+    a stale price must LOOK stale, never pretend to be current."""
+    syms = [r["symbol"] for r in results[:80]]
     if not syms:
         return
     live = _live_quotes(",".join(syms))
-    for r in results[:40]:
+    for r in results[:80]:
         q = live.get(r["symbol"])
         if not (q and q.get("price")):
+            r["live"] = False
             continue
+        r["live"] = True
         r["price"] = q["price"]
         r["change_pct"] = q["chg_pct"]
         entry = float(r.get("entry") or 0)
@@ -95,11 +98,13 @@ def _health() -> list[tuple[str, bool, str]]:
         out.append(("NSE data", ok, detail))
     except Exception:
         out.append(("NSE data", False, "error"))
-    # Google Finance live quotes
+    # Google Finance live quotes — test the STOCK path (what cards actually use)
     try:
         from data.google_finance import get_quote
-        q = get_quote("NIFTY", timeout=5)
-        out.append(("Live quotes", bool(q and q.get("price")), "Google Finance"))
+        q = get_quote("RELIANCE", timeout=6)
+        ok = bool(q and q.get("price"))
+        out.append(("Live quotes", ok,
+                    f"Google Finance ₹{q['price']:,.0f}" if ok else "parse/network fail"))
     except Exception:
         out.append(("Live quotes", False, "unreachable"))
     # Kite
@@ -148,6 +153,10 @@ def _render_card(s: dict, key_prefix: str = "") -> None:
     chg = s["change_pct"]
     chg_color = "#00d4a0" if chg >= 0 else "#ff4b4b"
     chg_arrow = "▲" if chg >= 0 else "▼"
+    # Live vs EOD transparency — stale price must never look current
+    live_tag = ("" if s.get("live")
+                else "<span style='background:#1e293b;border-radius:4px;padding:1px 6px;"
+                     "font-size:.62rem;color:#8892a4;margin-left:6px'>EOD close</span>")
 
     chips = "".join(
         f"<span style='background:#1e293b;border-radius:5px;padding:2px 8px;"
@@ -202,7 +211,7 @@ def _render_card(s: dict, key_prefix: str = "") -> None:
             f"      font-family:JetBrains Mono,monospace'>{s['symbol']}</span>"
             f"    <span style='color:#e2e8f0;font-size:.95rem;margin-left:12px'>₹{s['price']:,.1f}</span>"
             f"    <span style='color:{chg_color};font-size:.82rem;margin-left:6px;font-weight:600'>"
-            f"      {chg_arrow}{abs(chg):.1f}%</span>"
+            f"      {chg_arrow}{abs(chg):.1f}%</span>{live_tag}"
             f"  </div>"
             f"  <span style='background:{vcolor}18;border:1px solid {vcolor}55;border-radius:6px;"
             f"    padding:3px 10px;font-size:.7rem;font-weight:700;color:{vcolor}'>{label}</span>"
