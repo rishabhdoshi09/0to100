@@ -219,10 +219,36 @@ def is_auto_enabled() -> bool:
         return _auto_enabled
 
 
+_pulse_pushed_date: str = ""
+
+
+def _maybe_push_morning_pulse() -> None:
+    """Once per weekday, 8:30-10:00 window: full Daily Pulse to Telegram."""
+    global _pulse_pushed_date
+    now = datetime.now()
+    today = now.strftime("%Y-%m-%d")
+    if now.weekday() >= 5 or _pulse_pushed_date == today:
+        return
+    if not (8 * 60 + 30 <= now.hour * 60 + now.minute <= 10 * 60):
+        return
+    try:
+        from alerts.telegram_alerts import AlertEngine
+        engine = AlertEngine()
+        if not engine.is_configured():
+            return
+        from reports.street_pulse import build_pulse, pulse_to_telegram
+        if engine.send(pulse_to_telegram(build_pulse())):
+            _pulse_pushed_date = today
+            log.info("morning_pulse_pushed")
+    except Exception as exc:
+        log.debug("morning_pulse_skip", error=str(exc))
+
+
 def _worker() -> None:
     while True:
         if is_auto_enabled():
             _scan_once()
+            _maybe_push_morning_pulse()
             time.sleep(_MARKET_REFRESH_S if _is_market_hours() else _OFFHOURS_REFRESH_S)
         else:
             time.sleep(30)   # paused by user — just idle and re-check

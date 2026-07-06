@@ -95,11 +95,43 @@ class StockSignal:
         return (self.target - self.entry) / risk if risk > 0 else 0.0
 
 
+def _load_calibration() -> dict[str, float]:
+    """
+    Score multipliers from the walk-forward backtest — signals that
+    historically lose get their weight cut automatically; proven ones
+    get a boost. 1.0 for everything until a backtest has been run.
+    """
+    mult: dict[str, float] = {}
+    try:
+        from scan.signal_backtest import load_report
+        rep = load_report()
+        if not rep:
+            return mult
+        for sig, s in rep.get("signals", {}).items():
+            if s.get("trades", 0) < 20:
+                continue                       # not enough evidence — leave at 1.0
+            exp = s.get("expectancy_r", 0.0)
+            if exp >= 0.30:
+                mult[sig] = 1.25
+            elif exp >= 0.10:
+                mult[sig] = 1.0
+            elif exp >= -0.10:
+                mult[sig] = 0.75
+            else:
+                mult[sig] = 0.45               # proven loser — heavily discounted
+    except Exception:
+        pass
+    return mult
+
+
 class UnifiedScanner:
     """Scans the full universe from the bulk cache. Compute-only, no network."""
 
     def __init__(self, max_workers: int = 8):
         self._max_workers = max_workers
+        self._calib = _load_calibration()
+        if self._calib:
+            log.info("scanner_calibrated", signals=len(self._calib))
 
     def scan(self, symbols: list[str], progress=None) -> list[StockSignal]:
         from scan.bulk_fetcher import prefetch, get_cached, cached_symbols
@@ -271,8 +303,8 @@ class UnifiedScanner:
         stop = round(entry - 2 * atr, 1) if atr > 0 else round(entry * 0.95, 1)
         target = round(entry + 4 * atr, 1) if atr > 0 else round(entry * 1.10, 1)
 
-        # ── Composite score ───────────────────────────────────────────────────
-        base = sum(SIGNAL_META[s][2] for s in signals)
+        # ── Composite score (backtest-calibrated weights) ─────────────────────
+        base = sum(SIGNAL_META[s][2] * self._calib.get(s, 1.0) for s in signals)
         trend_bonus = 10 if (len(close) >= 200 and price > close[-200:].mean()) else 0
         score = min(100.0, base + trend_bonus + mom_score * 0.2)
 
