@@ -152,6 +152,13 @@ def _scan_once(universe: Optional[list[str]] = None, progress=None) -> None:
         raw = UnifiedScanner(max_workers=8).scan(universe, progress=progress)
         _log_buys_for_tracking(raw)
         serialized = [_serialize(r) for r in raw]
+        # Sector heat — packs of 3+ signals in one sector boost each other
+        try:
+            from scan.sector_heat import apply_sector_heat
+            apply_sector_heat(serialized)
+            serialized.sort(key=lambda r: r.get("score", 0), reverse=True)
+        except Exception as exc:
+            log.debug("sector_heat_skip", error=str(exc))
         # JARVIS conviction layer — news buzz + earnings evidence on top picks
         try:
             from scan.conviction import build_conviction
