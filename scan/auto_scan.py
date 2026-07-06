@@ -352,6 +352,12 @@ def _worker() -> None:
                     push_position_alerts()
                 except Exception as exc:
                     log.debug("position_review_skip", error=str(exc))
+                # Watchlist chowkidaari — buy-zone / broken-setup alerts
+                try:
+                    from risk.watchlist_watcher import push_watchlist_alerts
+                    push_watchlist_alerts()
+                except Exception as exc:
+                    log.debug("watchlist_watch_skip", error=str(exc))
             time.sleep(_MARKET_REFRESH_S if _is_market_hours() else _OFFHOURS_REFRESH_S)
         else:
             time.sleep(30)   # paused by user — just idle and re-check
