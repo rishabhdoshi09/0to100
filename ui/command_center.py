@@ -289,35 +289,57 @@ def _render_setup_card(setup: dict) -> None:
 
 
 def _render_setups_section(universe: list[str]) -> None:
-    """Section B — header + up to 5 plain setup cards."""
+    """Section B — top picks from the whole-market auto-scan (instant, no wait)."""
     hdr_col, btn_col = st.columns([5, 1])
     with hdr_col:
         st.markdown(
             "<div style='font-size:.65rem;color:#8892a4;text-transform:uppercase;"
-            "letter-spacing:.1em;margin-bottom:.5rem'>Today's Setups</div>",
+            "letter-spacing:.1em;margin-bottom:.5rem'>Today's Setups · whole market</div>",
             unsafe_allow_html=True,
         )
     with btn_col:
-        if st.button("⟳", key="cc_rescan", help="Re-scan universe"):
-            _run_command_scan.clear()
+        if st.button("⟳", key="cc_rescan", help="Re-scan whole market"):
+            try:
+                from scan.auto_scan import force_rescan
+                force_rescan()
+            except Exception:
+                pass
             st.rerun()
 
-    universe_key = ",".join(sorted(universe))
-    with st.spinner("Scanning…"):
-        setups = _run_command_scan(universe_key)
+    # Read from the background auto-scan store — zero wait
+    try:
+        from scan.auto_scan import start_background_scan, get_results
+        start_background_scan()
+        results, _, _, status = get_results()
+    except Exception:
+        results, status = [], "error"
 
-    if not setups:
+    picks = [r for r in results if r.get("verdict") in ("STRONG BUY", "BUY")][:5]
+    if not picks:
+        picks = results[:5]
+
+    if not picks:
+        msg = ("⏳ Whole-market scan is running — top picks will appear here "
+               "in a few minutes." if status in ("scanning", "idle")
+               else "No strong setups today. Wait for clearer market conditions.")
         st.markdown(
             f"<div style='{_CARD};text-align:center;padding:1.5rem'>"
-            "<span style='color:#8892a4;font-size:.88rem'>"
-            "No strong setups today. Wait for clearer market conditions.</span>"
+            f"<span style='color:#8892a4;font-size:.88rem'>{msg}</span>"
             "</div>",
             unsafe_allow_html=True,
         )
         return
 
-    for s in setups[:5]:
-        _render_setup_card(s)
+    for s in picks:
+        # Adapt unified-scanner dict to the setup card's expected fields
+        _render_setup_card({
+            "symbol": s["symbol"],
+            "archetype": " + ".join(s.get("signals", [])[:2]),
+            "quality_tier": "A" if s.get("verdict") == "BUY" else "WATCHLIST",
+            "price": s.get("price"),
+            "pivot_level": s.get("entry"),
+            "stop_level": s.get("stop"),
+        })
 
 
 # ---------------------------------------------------------------------------

@@ -131,6 +131,13 @@ if "monitor_started" not in st.session_state:
         start_if_market_hours()
     except Exception:
         pass
+    # Whole-market auto-scan — warms in the background so results are
+    # ready the moment the user opens the Stocks page or Dashboard.
+    try:
+        from scan.auto_scan import start_background_scan
+        start_background_scan()
+    except Exception:
+        pass
 
 # ── Cached client initialisation ─────────────────────────────────────────────
 @st.cache_resource

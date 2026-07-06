@@ -1,14 +1,15 @@
 """
-Smart Scanner — every signal engine, one clean page.
+Smart Scanner — the whole market, always current, zero wait.
 
-Momentum + Breakouts (52W high, resistance, golden cross, squeeze)
-+ Chart Patterns (VCP, flat base, cup & handle, high tight flag)
-run in a single pass over the whole universe from the bulk cache.
-
-Layman-friendly: plain-English reasons, one card per stock,
-entry/stop/target on every idea.
+A background auto-scan (scan/auto_scan.py) covers the ENTIRE NSE and
+refreshes every 15 min during market hours. This page just reads the
+store — results appear instantly. Every BUY is logged to the outcome
+tracker, so the accuracy shown here is measured, not promised.
 """
 from __future__ import annotations
+
+import time
+from datetime import datetime
 
 import streamlit as st
 
@@ -20,32 +21,39 @@ _CATEGORY_MAP = {
 }
 
 _VERDICT_STYLE = {
-    "BUY":   ("⚡ Buy Signal", "#00d4a0"),
-    "WATCH": ("👁 Watch",      "#f59e0b"),
+    "STRONG BUY": ("🔥 Strong Buy", "#22d3ee"),
+    "BUY":        ("⚡ Buy Signal", "#00d4a0"),
+    "WATCH":      ("👁 Watch",      "#f59e0b"),
 }
+_BUY_VERDICTS = ("STRONG BUY", "BUY")
 
 _CAT_COLOR = {"Momentum": "#38bdf8", "Breakout": "#a78bfa", "Pattern": "#f472b6"}
 
 
-# ── Cached scan ───────────────────────────────────────────────────────────────
-
-@st.cache_data(ttl=300, show_spinner=False)
-def _run_unified_scan(symbols_key: str) -> list[dict]:
-    """Run the unified scanner and return plain dicts (picklable for cache)."""
-    from scan.unified_scanner import UnifiedScanner
-    symbols = [s for s in symbols_key.split(",") if s]
+@st.cache_data(ttl=600, show_spinner=False)
+def _accuracy_stat() -> str:
+    """Measured accuracy from the outcome tracker — '' if not enough data yet."""
     try:
-        results = UnifiedScanner(max_workers=8).scan(symbols)
+        from core.signal_outcome_tracker import get_accuracy_report
+        rep = get_accuracy_report()
+        closed = (rep.get("wins", 0) or 0) + (rep.get("losses", 0) or 0)
+        if closed >= 5:
+            return (f"🎯 Verified accuracy: <b>{rep.get('overall_accuracy', 0):.0f}%</b> "
+                    f"on {closed} tracked signals")
     except Exception:
-        return []
-    return [{
-        "symbol": r.symbol, "price": r.price, "change_pct": r.change_pct,
-        "momentum_5d": r.momentum_5d, "volume_ratio": r.volume_ratio,
-        "signals": r.signal_labels, "categories": sorted(r.categories),
-        "reasons": r.reasons, "score": r.score, "verdict": r.verdict,
-        "entry": r.entry, "stop": r.stop, "target": r.target,
-        "rr": round(r.risk_reward, 1),
-    } for r in results]
+        pass
+    return ""
+
+
+def _freshness(ts: float) -> str:
+    if not ts:
+        return ""
+    mins = int((time.time() - ts) / 60)
+    if mins < 1:
+        return "just now"
+    if mins < 60:
+        return f"{mins} min ago"
+    return datetime.fromtimestamp(ts).strftime("%I:%M %p")
 
 
 # ── Card renderer ─────────────────────────────────────────────────────────────
@@ -62,7 +70,16 @@ def _render_card(s: dict, key_prefix: str = "") -> None:
         for sig in s["signals"]
     )
 
-    reason = " · ".join(s["reasons"][:2])
+    # Conviction checklist (from JARVIS layer) or plain scanner reasons
+    checks = s.get("checks") or []
+    if checks:
+        reason = "<br>".join(
+            f"<span style='color:{'#00d4a0' if c.startswith('✓') else '#f59e0b' if c.startswith('⚠') else '#94a3b8'}'>"
+            f"{c}</span>"
+            for c in checks[:5]
+        )
+    else:
+        reason = " · ".join(s["reasons"][:2])
     plan = (
         f"<div style='margin-top:7px;font-size:.78rem;color:#94a3b8'>"
         f"Entry <span style='color:#f59e0b;font-weight:700'>₹{s['entry']:,.0f}</span>"
@@ -104,56 +121,67 @@ def _render_card(s: dict, key_prefix: str = "") -> None:
 # ── Main render ───────────────────────────────────────────────────────────────
 
 def render_scanner(universe: list[str]) -> None:
-    try:
-        from data.nse_universe import get_nifty500_universe
-        nifty500 = get_nifty500_universe()
-    except Exception:
-        nifty500 = universe[:500]
+    from scan.auto_scan import start_background_scan, force_rescan, get_results
+    start_background_scan()   # idempotent — first visitor kicks it off
 
-    # ── Top controls ──────────────────────────────────────────────────────────
-    c1, c2, c3 = st.columns([2.2, 1.6, 1])
+    results, universe_size, last_ts, status = get_results()
+
+    # ── Header ────────────────────────────────────────────────────────────────
+    c1, c2 = st.columns([4, 1])
     with c1:
-        st.markdown("### 🔍 Smart Scanner")
-        st.caption("Momentum · Breakouts · Chart patterns — one scan, whole market")
+        st.markdown("### 🔍 Smart Scanner — whole market")
+        sub = f"Momentum · Breakouts · Chart patterns across **all {universe_size or len(universe)} NSE stocks**"
+        if last_ts:
+            sub += f" · updated **{_freshness(last_ts)}**"
+            if status == "scanning":
+                sub += " · ⟳ refreshing…"
+        st.caption(sub)
     with c2:
-        scope_options = {
-            f"NIFTY 500 · fast (~1 min)": nifty500,
-            f"All NSE · {len(universe)} stocks (~3-4 min)": universe,
-        }
-        scope_label = st.selectbox("Universe", list(scope_options.keys()),
-                                   index=0, key="scanner_scope",
-                                   label_visibility="collapsed")
-        syms = scope_options[scope_label]
-    with c3:
-        if st.button("🔍 Scan Now", key="scanner_run", type="primary",
-                     use_container_width=True):
-            _run_unified_scan.clear()
+        if st.button("⟳ Rescan", key="scanner_run", type="primary",
+                     use_container_width=True, disabled=(status == "scanning")):
+            force_rescan()
+            st.rerun()
 
-    symbols_key = ",".join(syms)
-    with st.spinner(f"Scanning {len(syms)} stocks — downloading data in bulk…"):
-        results = _run_unified_scan(symbols_key)
-
+    # ── First scan still running ──────────────────────────────────────────────
     if not results:
-        st.info("No signals right now. Markets may be closed or data is unavailable — "
-                "hit **Scan Now** to retry.")
+        if status in ("scanning", "idle"):
+            st.info("⏳ First market scan is running in the background (~3-4 min for "
+                    "the full NSE). You can use the rest of the app — results will "
+                    "be waiting here.")
+            if st.button("⟳ Check again", key="scanner_poll"):
+                st.rerun()
+        else:
+            st.warning("Scan couldn't fetch market data. Check your internet "
+                       "connection, then hit **Rescan**.")
         return
 
     # ── Summary strip ─────────────────────────────────────────────────────────
-    n_buy = sum(1 for r in results if r["verdict"] == "BUY")
+    n_strong = sum(1 for r in results if r["verdict"] == "STRONG BUY")
+    n_buy = sum(1 for r in results if r["verdict"] in _BUY_VERDICTS)
     n_mom = sum(1 for r in results if "Momentum" in r["categories"])
     n_brk = sum(1 for r in results if "Breakout" in r["categories"])
     n_pat = sum(1 for r in results if "Pattern" in r["categories"])
+    acc = _accuracy_stat()
     st.markdown(
         f"<div style='background:#0d1421;border:1px solid #1e293b;border-radius:8px;"
         f"padding:9px 14px;margin:4px 0 12px 0;font-size:.84rem;color:#c9d1d9'>"
-        f"Scanned <b>{len(syms)}</b> stocks → <b>{len(results)}</b> signals &nbsp;·&nbsp; "
-        f"<span style='color:#00d4a0'>⚡ {n_buy} buy</span> &nbsp;·&nbsp; "
+        f"<b>{universe_size}</b> stocks scanned → <b>{len(results)}</b> signals &nbsp;·&nbsp; "
+        + (f"<span style='color:#22d3ee'>🔥 {n_strong} strong buy</span> &nbsp;·&nbsp; " if n_strong else "")
+        + f"<span style='color:#00d4a0'>⚡ {n_buy} buy</span> &nbsp;·&nbsp; "
         f"<span style='color:{_CAT_COLOR['Momentum']}'>🚀 {n_mom} momentum</span> &nbsp;·&nbsp; "
         f"<span style='color:{_CAT_COLOR['Breakout']}'>💥 {n_brk} breakouts</span> &nbsp;·&nbsp; "
         f"<span style='color:{_CAT_COLOR['Pattern']}'>📐 {n_pat} patterns</span>"
-        f"</div>",
+        + (f" &nbsp;·&nbsp; {acc}" if acc else "")
+        + "</div>",
         unsafe_allow_html=True,
     )
+
+    # ── Search within results ─────────────────────────────────────────────────
+    q = st.text_input("Filter", placeholder="🔍 Filter by symbol…",
+                      key="scanner_filter", label_visibility="collapsed")
+    if q:
+        qq = q.strip().upper()
+        results = [r for r in results if qq in r["symbol"]]
 
     # ── Category tabs ─────────────────────────────────────────────────────────
     tabs = st.tabs(_CATEGORY_TABS)
@@ -169,15 +197,15 @@ def render_scanner(universe: list[str]) -> None:
             buy_only = st.toggle("⚡ Buy signals only", value=False,
                                  key=f"buyonly_{tab_name}")
             if buy_only:
-                subset = [r for r in subset if r["verdict"] == "BUY"]
+                subset = [r for r in subset if r["verdict"] in _BUY_VERDICTS]
 
-            buys = [r for r in subset if r["verdict"] == "BUY"]
+            buys = [r for r in subset if r["verdict"] in _BUY_VERDICTS]
             watch = [r for r in subset if r["verdict"] == "WATCH"]
 
             kp = tab_name.split(" ")[-1].lower()
-            for r in buys[:15]:
+            for r in buys[:20]:
                 _render_card(r, key_prefix=kp)
             if watch and not buy_only:
                 st.markdown("###### 👁 Worth watching")
-                for r in watch[:15]:
+                for r in watch[:20]:
                     _render_card(r, key_prefix=kp)
