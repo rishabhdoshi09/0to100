@@ -452,33 +452,61 @@ class JarvisOrchestrator:
             except Exception:
                 pass
 
-            # ── Today's top scanner setups (cached, lightweight) ──────────
+            # ── Today's top setups — from the whole-market auto-scan store ─
             try:
-                _cache_key = f"jarvis_ctx_setups_{datetime.now().strftime('%Y%m%d%H')}"
-                if not hasattr(self, "_setup_cache") or getattr(self, "_setup_cache_key", "") != _cache_key:
-                    from scan.pipeline import ScanPipeline
-                    from core.regime_engine import compute_regime as _cr
-                    from config import settings as _cfg
-                    _regime_s = _cr()
-                    _uni = (_cfg.symbol_list or [])[:30]
-                    _results = ScanPipeline(max_workers=8, min_quality_score=45).run(
-                        _uni, top_n=5, regime_state=_regime_s, skip_liquidity_filter=True,
-                    )
-                    self._setup_cache = _results
-                    self._setup_cache_key = _cache_key
-                _setups = getattr(self, "_setup_cache", [])
-                if _setups:
+                from scan.auto_scan import get_results as _asr
+                _results, _uni_size, _scan_ts, _ = _asr()
+                if _results:
                     _s_lines = []
-                    for _s in _setups[:5]:
-                        _sym  = getattr(_s, "symbol", "?")
-                        _ent  = getattr(_s, "entry", 0) or 0
-                        _stp  = getattr(_s, "stop", 0) or 0
-                        _tgt  = getattr(_s, "target_price", 0) or 0
-                        _vrd  = getattr(_s, "verdict", "?")
-                        _s_lines.append(f"{_sym} [{_vrd}] entry ₹{_ent:.0f} stop ₹{_stp:.0f} target ₹{_tgt:.0f}")
-                    lines.append(f"Today's top setups: {' | '.join(_s_lines)}")
+                    for _s in _results[:6]:
+                        _sig = "+".join(_s.get("signals", [])[:2])
+                        _s_lines.append(
+                            f"{_s['symbol']} [{_s.get('verdict','?')}] {_sig} "
+                            f"entry ₹{_s.get('entry',0):.0f} stop ₹{_s.get('stop',0):.0f} "
+                            f"target ₹{_s.get('target',0):.0f}")
+                    _age_min = int((datetime.now().timestamp() - _scan_ts) / 60) if _scan_ts else -1
+                    lines.append(f"Today's top setups (whole market, {_uni_size} stocks, "
+                                 f"scanned {_age_min} min ago): {' | '.join(_s_lines)}")
+                    # Hot sectors from the same scan
+                    _secs: dict = {}
+                    for _s in _results:
+                        if _s.get("sector"):
+                            _secs[_s["sector"]] = _secs.get(_s["sector"], 0) + 1
+                    if _secs:
+                        _hot = ", ".join(f"{k} ({v})" for k, v in
+                                         sorted(_secs.items(), key=lambda kv: -kv[1])[:3])
+                        lines.append(f"Hot sectors right now: {_hot}")
                 else:
-                    lines.append("Today's top setups: None found in current universe")
+                    lines.append("Today's top setups: scan not completed yet")
+            except Exception:
+                pass
+
+            # ── Measured signal accuracy (walk-forward backtest) ──────────
+            try:
+                from scan.signal_backtest import load_report as _lbr
+                _rep = _lbr()
+                if _rep:
+                    _best = sorted(_rep.get("signals", {}).items(),
+                                   key=lambda kv: -kv[1].get("expectancy_r", 0))
+                    _parts = [f"{k}: {v['win_rate']:.0f}%WR {v['expectancy_r']:+.2f}R"
+                              for k, v in _best[:4] if v.get("trades", 0) >= 20]
+                    if _parts:
+                        lines.append(f"Backtested signal accuracy (trust these numbers): "
+                                     f"{' | '.join(_parts)}")
+            except Exception:
+                pass
+
+            # ── Data freshness ─────────────────────────────────────────────
+            try:
+                from datetime import date as _date
+                from data.bhavcopy_store import get_ohlcv as _go
+                _df = _go("RELIANCE")
+                if _df is not None and len(_df):
+                    _last = _df.index[-1].date()
+                    lines.append("Data freshness: LIVE intraday bar loaded"
+                                 if _last == _date.today()
+                                 else f"Data freshness: EOD close of {_last} (market data "
+                                      f"is {( _date.today() - _last).days} day(s) old)")
             except Exception:
                 pass
 
