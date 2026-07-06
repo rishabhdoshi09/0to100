@@ -26,20 +26,20 @@ def _is_market_open() -> bool:
 
 @st.cache_data(ttl=180, show_spinner=False)
 def _fetch_pulse_data() -> dict:
-    """Fetch NIFTY, BANKNIFTY, VIX — Google Finance first, yfinance backup. Cached 3 min."""
+    """NIFTY, BANKNIFTY, VIX — Kite first (real-time), Google/yfinance backup. Cached 3 min."""
     result: dict = {}
 
-    # Primary: Google Finance
+    # Primary: unified index quotes (Kite → Google Finance)
     try:
-        from data.google_finance import get_quote as _gq
-        for key, sym in (("nifty", "NIFTY"), ("banknifty", "BANKNIFTY")):
-            q = _gq(sym)
-            if q and q.get("price"):
-                result[key] = {"price": q["price"], "chg": q["chg_pct"]}
+        from data.live_quotes import get_index_quotes
+        q = get_index_quotes(["NIFTY", "BANKNIFTY", "VIX"])
+        for key, name in (("nifty", "NIFTY"), ("banknifty", "BANKNIFTY"), ("vix", "VIX")):
+            if q.get(name, {}).get("price"):
+                result[key] = {"price": q[name]["price"], "chg": q[name]["chg_pct"]}
     except Exception:
         pass
 
-    # Backup / VIX (not on Google Finance): yfinance
+    # Backup: yfinance for anything still missing
     try:
         import yfinance as yf
 
@@ -57,7 +57,8 @@ def _fetch_pulse_data() -> dict:
             result["nifty"] = _safe_fetch("^NSEI")
         if "banknifty" not in result:
             result["banknifty"] = _safe_fetch("^NSEBANK")
-        result["vix"] = _safe_fetch("^INDIAVIX")
+        if "vix" not in result:
+            result["vix"] = _safe_fetch("^INDIAVIX")
     except Exception:
         pass
     return result

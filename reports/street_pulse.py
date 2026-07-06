@@ -30,12 +30,12 @@ def _market_snapshot() -> dict:
     """NIFTY/BANKNIFTY live + regime commentary."""
     out: dict = {"indices": [], "commentary": ""}
     try:
-        from data.google_finance import get_quote
-        for name, sym in (("NIFTY 50", "NIFTY"), ("BANK NIFTY", "BANKNIFTY")):
-            q = get_quote(sym)
-            if q:
-                out["indices"].append({"name": name, "price": q["price"],
-                                       "chg_pct": q["chg_pct"]})
+        from data.live_quotes import get_index_quotes
+        q = get_index_quotes(["NIFTY", "BANKNIFTY"])
+        for name, key in (("NIFTY 50", "NIFTY"), ("BANK NIFTY", "BANKNIFTY")):
+            if q.get(key, {}).get("price"):
+                out["indices"].append({"name": name, "price": q[key]["price"],
+                                       "chg_pct": q[key]["chg_pct"]})
     except Exception:
         pass
     try:
