@@ -1010,20 +1010,16 @@ with st.sidebar:
 
     # ── More Tools expander (all non-primary pages) ────────────────────────
     with st.expander("⚙️ More Tools"):
+        # Trimmed to what a trader actually opens — AlgoLab / Edge Tracker /
+        # Trade Replay / Market Breadth removed (user request: advanced clutter)
         _more_tools = [
             ("Terminal",          "⚡ Terminal"),
-            ("Research",          "🔬 Research"),
-            ("AlgoLab",           "🧬 AlgoLab"),
-            ("Tools",             "🛠️ Tools"),
             ("My Watchlist",      "👁 My Watchlist"),
-            ("Exit Intelligence", "🚪 Exit Intelligence"),
             ("Journal",           "📋 Journal"),
-            ("Edge Tracker",      "🎯 Edge Tracker"),
-            ("Trade Replay",      "📋 Trade Replay"),
-            ("Market Breadth",    "📊 Market Breadth"),
             ("Smart Alerts",      "🔔 Smart Alerts"),
             ("IPO Calendar",      "🚀 IPO Calendar"),
-            ("Stock Screener",    "🔍 Stock Screener"),
+            ("Research",          "🔬 Research"),
+            ("Tools",             "🛠️ Tools"),
         ]
         for _mt_key, _mt_label in _more_tools:
             if st.button(_mt_label, key=f"more_{_mt_key}", use_container_width=True):
