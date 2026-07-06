@@ -249,3 +249,37 @@ class TestUnifiedScanner:
         close2 = np.linspace(100, 200, 260)
         thin = np.full(260, 50)                            # ~₹10k/day turnover
         assert sc._analyze("X", self._df(close2, thin)) is None
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 8. Error guard — crashes must be logged, log must not grow unbounded
+# ══════════════════════════════════════════════════════════════════════════════
+
+class TestErrorGuard:
+    def test_log_and_recall(self, tmp_path, monkeypatch):
+        import core.error_guard as eg
+        monkeypatch.setattr(eg, "_ERR_LOG", tmp_path / "errors.log")
+        try:
+            raise ValueError("atr blew up")
+        except ValueError as e:
+            eg.log_error("Scanner", e)
+        errs = eg.recent_errors(5)
+        assert len(errs) == 1
+        assert "Scanner" in errs[0] and "ValueError" in errs[0]
+
+    def test_rotation_caps_size(self, tmp_path, monkeypatch):
+        import core.error_guard as eg
+        monkeypatch.setattr(eg, "_ERR_LOG", tmp_path / "errors.log")
+        monkeypatch.setattr(eg, "_MAX_LOG_BYTES", 500)
+        for i in range(50):
+            try:
+                raise KeyError(f"e{i}")
+            except KeyError as e:
+                eg.log_error("rot", e)
+        assert (tmp_path / "errors.log").stat().st_size < 5000
+
+    def test_config_check_covers_integrations(self):
+        from core.error_guard import check_config
+        names = [c[0] for c in check_config()]
+        assert "Kite token (daily)" in names
+        assert "Telegram alerts" in names

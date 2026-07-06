@@ -1023,6 +1023,24 @@ with st.sidebar:
             if st.button(_mt_label, key=f"more_{_mt_key}", use_container_width=True):
                 st.session_state["sidebar_nav"] = _mt_key
                 st.rerun()
+
+    # ── Diagnostics — config self-check + recent errors ────────────────────
+    with st.expander("🩺 Diagnostics"):
+        try:
+            from core.error_guard import check_config, recent_errors
+            for _name, _ok, _hint in check_config():
+                _dot = "🟢" if _ok else "🔴"
+                st.caption(f"{_dot} {_name}" + ("" if _ok else f" — {_hint}"))
+            _errs = recent_errors(3)
+            if _errs:
+                st.caption(f"⚠️ Recent errors ({len(_errs)}):")
+                for _e in _errs:
+                    _first = _e.splitlines()[0][:70] if _e.splitlines() else ""
+                    st.code(_first, language="text")
+            else:
+                st.caption("✅ Koi recent error nahi")
+        except Exception:
+            st.caption("diagnostics unavailable")
     st.divider()
     # Plain English mode toggle
     try:
@@ -1163,14 +1181,16 @@ except Exception:
 # PAGE: DASHBOARD
 # ══════════════════════════════════════════════════════════════════════════════
 if _page in ("Dashboard", "Markets"):
-    from ui.command_center import render_command_center
-    # Use full NSE list so dashboard setups come from all listed stocks
-    try:
-        from data.nse_universe import get_nse_universe as _get_nse_dash
-        _dash_syms = _get_nse_dash() or symbol_list
-    except Exception:
-        _dash_syms = symbol_list
-    render_command_center(_dash_syms)
+    from core.error_guard import guard as _guard
+    with _guard("Today (Dashboard)"):
+        from ui.command_center import render_command_center
+        # Use full NSE list so dashboard setups come from all listed stocks
+        try:
+            from data.nse_universe import get_nse_universe as _get_nse_dash
+            _dash_syms = _get_nse_dash() or symbol_list
+        except Exception:
+            _dash_syms = symbol_list
+        render_command_center(_dash_syms)
 
     # ── Portfolio Heatmap (if positions exist) ─────────────────────────────
     _dash_positions = st.session_state.get("paper_positions", [])
@@ -1187,8 +1207,10 @@ if _page in ("Dashboard", "Markets"):
 # PAGE: DAILY PULSE
 # ══════════════════════════════════════════════════════════════════════════════
 elif _page == "Daily Pulse":
-    from ui.street_pulse_page import render_street_pulse
-    render_street_pulse()
+    from core.error_guard import guard as _guard
+    with _guard("Daily Pulse"):
+        from ui.street_pulse_page import render_street_pulse
+        render_street_pulse()
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1196,12 +1218,14 @@ elif _page == "Daily Pulse":
 # ══════════════════════════════════════════════════════════════════════════════
 elif _page in ("Institutional", "Find Setups"):
     # Use full NSE list so scanner finds setups from all listed stocks
-    try:
-        from data.nse_universe import get_nse_universe as _get_nse
-        _all_syms = _get_nse() or symbol_list
-    except Exception:
-        _all_syms = symbol_list
-    render_scanner(_all_syms)
+    from core.error_guard import guard as _guard
+    with _guard("Smart Scanner"):
+        try:
+            from data.nse_universe import get_nse_universe as _get_nse
+            _all_syms = _get_nse() or symbol_list
+        except Exception:
+            _all_syms = symbol_list
+        render_scanner(_all_syms)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
