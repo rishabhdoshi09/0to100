@@ -379,6 +379,16 @@ def _worker() -> None:
             _maybe_push_morning_pulse()
             _maybe_run_nightly_backtest()
             _maybe_push_weekly_coach()
+            # Breakout sniper — tick-stream instant alerts on the hottest names
+            if _is_market_hours():
+                try:
+                    from scan.breakout_sniper import start_sniper, refresh_watch
+                    with _lock:
+                        _cur = list(_results)
+                    if start_sniper():
+                        refresh_watch(_cur)
+                except Exception as exc:
+                    log.debug("sniper_skip", error=str(exc))
             # Position babysitting — exit alerts for open trades
             if _is_market_hours():
                 try:
