@@ -35,28 +35,12 @@ _CAT_COLOR = {"Momentum": "#38bdf8", "Breakout": "#a78bfa", "Pattern": "#f472b6"
 
 @st.cache_data(ttl=120, show_spinner=False)
 def _live_quotes(symbols_key: str) -> dict:
-    """
-    Live quotes for the stocks on screen. NSE snapshot first (one bulk
-    call, authoritative, covers ~750 stocks), Google Finance fills any
-    gaps per-symbol. Cached 2 min.
-    """
-    syms = symbols_key.split(",")[:80]
-    quotes: dict = {}
-    # 1. NSE bulk snapshot — one request, most reliable for NSE stocks
+    """Live quotes — Kite → NSE → Google (unified source). Cached 2 min."""
     try:
-        from data.nse_live import live_quotes as _nse_lq
-        quotes.update(_nse_lq(syms))
+        from data.live_quotes import get_live_quotes
+        return get_live_quotes(symbols_key.split(",")[:80])
     except Exception:
-        pass
-    # 2. Google Finance for whatever NSE didn't cover
-    missing = [s for s in syms if s not in quotes]
-    if missing:
-        try:
-            from data.google_finance import get_quotes
-            quotes.update(get_quotes(missing))
-        except Exception:
-            pass
-    return quotes
+        return {}
 
 
 def _apply_live_prices(results: list[dict]) -> None:
@@ -121,20 +105,11 @@ def _health() -> list[tuple[str, bool, str]]:
         out.append(("NSE data", ok, detail))
     except Exception:
         out.append(("NSE data", False, "error"))
-    # Live quotes — NSE bulk snapshot first, then Google Finance
+    # Live quotes — unified source (Kite → NSE → Google), shows which won
     try:
-        from data.nse_live import live_quotes as _nse_lq
-        nseq = _nse_lq(["RELIANCE"])
-        if nseq.get("RELIANCE"):
-            out.append(("Live quotes", True,
-                        f"NSE snapshot ₹{nseq['RELIANCE']['price']:,.0f}"))
-        else:
-            from data.google_finance import get_quote
-            q = get_quote("RELIANCE", timeout=6)
-            ok = bool(q and q.get("price"))
-            out.append(("Live quotes", ok,
-                        f"Google Finance ₹{q['price']:,.0f}" if ok
-                        else "NSE + Google dono fail"))
+        from data.live_quotes import source_health
+        ok, detail = source_health("RELIANCE")
+        out.append(("Live quotes", ok, detail))
     except Exception:
         out.append(("Live quotes", False, "unreachable"))
     # Kite

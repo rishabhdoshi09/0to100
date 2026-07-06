@@ -165,18 +165,20 @@ def _scan_once(universe: Optional[list[str]] = None, progress=None) -> None:
             serialized = build_conviction(serialized)
         except Exception as exc:
             log.debug("conviction_skip", error=str(exc))
-        # Live price overlay from Google Finance (history is official NSE EOD)
+        # Live price overlay — Kite → NSE → Google (history is official NSE EOD)
         try:
-            from data.google_finance import get_quotes
+            from data.live_quotes import get_live_quotes
             top_syms = [r["symbol"] for r in serialized[:60]]
-            live = get_quotes(top_syms)
+            live = get_live_quotes(top_syms)
             overlaid = 0
             for r in serialized[:60]:
                 q = live.get(r["symbol"])
                 if not (q and q.get("price")):
+                    r["live"] = False
                     continue
                 r["price"] = q["price"]
                 r["change_pct"] = q["chg_pct"]
+                r["live"] = True
                 overlaid += 1
                 # EOD signal sanity vs live price: if the stock has already
                 # slipped well below its entry/pivot, the setup is broken —
