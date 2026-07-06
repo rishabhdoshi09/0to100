@@ -261,6 +261,53 @@ def render_scanner(universe: list[str]) -> None:
                                  "Off: sirf tumhare button dabane par scan hoga.")
         set_auto_enabled(auto_on)
 
+    # ── Signal accuracy (walk-forward backtest on real NSE data) ─────────────
+    with st.expander("📊 Signal accuracy — kaunsa signal kitna sahi (backtest)"):
+        try:
+            from scan.signal_backtest import (load_report, run_in_background,
+                                              get_state)
+            from scan.unified_scanner import SIGNAL_META
+            _bt_state = get_state()
+            _rep = load_report()
+            bc1, bc2 = st.columns([1.4, 2.6])
+            with bc1:
+                if st.button("▶ Backtest chalao", key="bt_run",
+                             disabled=_bt_state["running"],
+                             use_container_width=True):
+                    run_in_background()
+                    st.rerun()
+                if _bt_state["running"]:
+                    st.caption(f"⏳ Chal raha hai… {_bt_state['progress']}/"
+                               f"{_bt_state['total']} stocks")
+            with bc2:
+                st.caption("Har signal ko pichhle ~100 sessions pe walk-forward "
+                           "test karta hai (no lookahead): entry ke baad target "
+                           "(2R) pehle laga ya stop. Isse pata chalta hai kis "
+                           "signal pe kitna bharosa karna chahiye.")
+            if _rep:
+                rows = []
+                for key, s in sorted(_rep.get("signals", {}).items(),
+                                     key=lambda kv: -kv[1].get("win_rate", 0)):
+                    if s.get("closed", 0) < 10:
+                        continue
+                    label = SIGNAL_META.get(key, (key,))[0]
+                    rows.append({
+                        "Signal": label,
+                        "Win rate": f"{s['win_rate']:.0f}%",
+                        "Expectancy": f"{s['expectancy_r']:+.2f}R",
+                        "Trades": s["closed"],
+                    })
+                if rows:
+                    st.dataframe(rows, use_container_width=True, hide_index=True)
+                    st.caption(f"Last run: {_rep.get('generated_at')} · "
+                               f"{_rep.get('symbols')} stocks · "
+                               f"{_rep.get('horizon_days')}-day horizon · "
+                               f"Expectancy +0.5R se upar = solid edge")
+            else:
+                st.caption("Abhi tak backtest nahi chala — ▶ dabao (~2-3 min).")
+        except Exception as _bt_exc:
+            st.caption(f"Backtest unavailable: {_bt_exc}")
+
     # ── Capital for position sizing ───────────────────────────────────────────
     with st.expander("💰 Position sizing — apna capital set karo"):
         try:
