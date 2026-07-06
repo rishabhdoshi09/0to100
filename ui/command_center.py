@@ -318,6 +318,20 @@ def _render_setups_section(universe: list[str]) -> None:
     if not picks:
         picks = results[:5]
 
+    # Render-time live prices (same treatment the scanner cards get)
+    try:
+        @st.cache_data(ttl=120, show_spinner=False)
+        def _cc_live(_syms_key: str) -> dict:
+            from data.live_quotes import get_live_quotes
+            return get_live_quotes(_syms_key.split(","))
+        _live = _cc_live(",".join(p["symbol"] for p in picks))
+        for p in picks:
+            q = _live.get(p["symbol"])
+            if q and q.get("price"):
+                p["price"] = q["price"]
+    except Exception:
+        pass
+
     if not picks:
         msg = ("⏳ Whole-market scan is running — top picks will appear here "
                "in a few minutes." if status in ("scanning", "idle")

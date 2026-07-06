@@ -496,6 +496,30 @@ class JarvisOrchestrator:
             except Exception:
                 pass
 
+            # ── My open trades + portfolio risk (the user's ACTUAL book) ──
+            try:
+                from risk.position_manager import review_positions
+                _mypos = review_positions()
+                if _mypos:
+                    _p_lines = []
+                    for _p in _mypos[:6]:
+                        _rp = (f"{_p['r_progress']:+.1f}R"
+                               if _p.get("r_progress") is not None else "?R")
+                        _p_lines.append(f"{_p['symbol']} ({_p['mode']}) {_rp}: "
+                                        f"{_p['advice'][:80]}")
+                    lines.append("User's open trades: " + " | ".join(_p_lines))
+                from risk.portfolio_risk import portfolio_risk_report
+                _prr = portfolio_risk_report()
+                if _prr["n_positions"]:
+                    lines.append(
+                        f"Portfolio risk: {_prr['verdict']} — open risk "
+                        f"{_prr['open_risk_pct']:.1f}% of capital, "
+                        f"{_prr['n_positions']}/{_prr['max_positions']} positions"
+                        + ("; " + "; ".join(_prr["warnings"][:2])
+                           if _prr["warnings"] else ""))
+            except Exception:
+                pass
+
             # ── Data freshness ─────────────────────────────────────────────
             try:
                 from datetime import date as _date
