@@ -250,6 +250,100 @@ def _sparkline_svg(symbol: str, entry: float = 0.0) -> str:
         return ""
 
 
+# ── Trade Ticket (scan → execution, one click) ────────────────────────────────
+
+def _trade_ticket_body(s: dict) -> None:
+    """Prefilled order ticket: qty from 1% rule, stop/target from the setup."""
+    from execution.trade_executor import place_trade, kite_ready
+    from risk.position_sizer import size_position
+
+    live_mode = kite_ready()
+    sym = s["symbol"]
+    px = float(s.get("price") or 0)
+    d_entry = float(s.get("entry") or px)
+    d_stop = float(s.get("stop") or round(d_entry * 0.95, 1))
+    d_target = float(s.get("target") or round(d_entry * 1.10, 1))
+
+    if live_mode:
+        st.markdown("<div style='background:#00d4a018;border:1px solid #00d4a055;"
+                    "border-radius:8px;padding:6px 12px;font-size:.8rem;color:#00d4a0'>"
+                    "🟢 <b>LIVE</b> — order seedha Zerodha jayega, GTT stop+target ke saath"
+                    "</div>", unsafe_allow_html=True)
+    else:
+        st.markdown("<div style='background:#f59e0b18;border:1px solid #f59e0b55;"
+                    "border-radius:8px;padding:6px 12px;font-size:.8rem;color:#f59e0b'>"
+                    "📝 <b>PAPER</b> — Kite logged-in nahi; trade sirf record hoga, "
+                    "paisa nahi lagega</div>", unsafe_allow_html=True)
+
+    st.markdown(f"#### {sym} &nbsp; <span style='font-size:1rem;color:#94a3b8'>"
+                f"live ₹{px:,.1f}</span>", unsafe_allow_html=True)
+
+    c1, c2 = st.columns(2)
+    with c1:
+        entry_type = st.radio("Order type", ["LIMIT", "MARKET"], horizontal=True,
+                              key=f"tt_type_{sym}")
+        entry_price = st.number_input("Entry price (₹)", min_value=1.0,
+                                      value=float(d_entry), step=0.5,
+                                      key=f"tt_entry_{sym}",
+                                      disabled=(entry_type == "MARKET"))
+        product = st.radio("Product", ["CNC (delivery)", "MIS (intraday)"],
+                           horizontal=True, key=f"tt_prod_{sym}")
+    with c2:
+        cap = st.session_state.get("user_capital")
+        ps = size_position(d_entry, d_stop, capital=cap)
+        qty = st.number_input("Quantity (1% rule suggest karta hai: "
+                              f"{ps['qty']})", min_value=1,
+                              value=max(1, int(ps["qty"] or 1)), step=1,
+                              key=f"tt_qty_{sym}")
+        stop = st.number_input("Stop loss (₹)", min_value=0.1,
+                               value=float(d_stop), step=0.5, key=f"tt_stop_{sym}")
+        target = st.number_input("Target (₹)", min_value=0.1,
+                                 value=float(d_target), step=0.5,
+                                 key=f"tt_tgt_{sym}")
+
+    eff_entry = px if entry_type == "MARKET" else entry_price
+    deploy = qty * eff_entry
+    max_loss = qty * max(0.0, eff_entry - stop)
+    reward = qty * max(0.0, target - eff_entry)
+    rr = (target - eff_entry) / (eff_entry - stop) if eff_entry > stop else 0
+
+    st.markdown(
+        f"<div style='background:#0d1421;border:1px solid #1e293b;border-radius:8px;"
+        f"padding:10px 14px;font-size:.85rem;color:#c9d1d9;margin:8px 0'>"
+        f"💵 Deploy: <b>₹{deploy:,.0f}</b> &nbsp;·&nbsp; "
+        f"<span style='color:#ff4b4b'>Max loss: <b>₹{max_loss:,.0f}</b></span> &nbsp;·&nbsp; "
+        f"<span style='color:#00d4a0'>Reward: <b>₹{reward:,.0f}</b></span> &nbsp;·&nbsp; "
+        f"R:R <b>{rr:.1f}×</b>"
+        f"</div>", unsafe_allow_html=True)
+
+    label = ("🚀 Place LIVE order (Zerodha)" if live_mode
+             else "📝 Record paper trade")
+    if st.button(label, key=f"tt_go_{sym}", type="primary",
+                 use_container_width=True):
+        res = place_trade(symbol=sym, qty=int(qty), entry_type=entry_type,
+                          entry_price=float(eff_entry), stop=float(stop),
+                          target=float(target),
+                          product="CNC" if product.startswith("CNC") else "MIS")
+        if res["ok"]:
+            st.success(res["message"])
+            if res.get("entry_order_id"):
+                st.caption(f"Order ID: `{res['entry_order_id']}`"
+                           + (f" · GTT ID: `{res['gtt_id']}`" if res.get("gtt_id") else ""))
+        else:
+            st.error(res["message"])
+
+
+def _open_trade_ticket(s: dict) -> None:
+    if hasattr(st, "dialog"):
+        @st.dialog(f"💰 Trade — {s['symbol']}", width="large")
+        def _dlg():
+            _trade_ticket_body(s)
+        _dlg()
+    else:
+        st.session_state["trade_ticket_row"] = s
+        st.rerun()
+
+
 # ── Card renderer ─────────────────────────────────────────────────────────────
 
 def _render_card(s: dict, key_prefix: str = "") -> None:
@@ -344,6 +438,9 @@ def _render_card(s: dict, key_prefix: str = "") -> None:
             unsafe_allow_html=True,
         )
     with col2:
+        if st.button("💰 Trade", key=f"trade_{key_prefix}_{s['symbol']}",
+                     type="primary", use_container_width=True):
+            _open_trade_ticket(s)
         if st.button("Analyse →", key=f"scan_{key_prefix}_{s['symbol']}", use_container_width=True):
             st.session_state["sidebar_nav"] = "Terminal"
             st.session_state["terminal_symbol"] = s["symbol"]
@@ -507,6 +604,33 @@ def render_scanner(universe: list[str]) -> None:
             st.warning("Scan market data nahi laa paya. Internet check karke "
                        "**Scan Market** dobara dabao.")
         return
+
+    # ── Fallback trade panel (older Streamlit without st.dialog) ──────────────
+    if not hasattr(st, "dialog") and st.session_state.get("trade_ticket_row"):
+        with st.container(border=True):
+            tc1, tc2 = st.columns([6, 1])
+            with tc2:
+                if st.button("✕ Band karo", key="tt_close"):
+                    st.session_state.pop("trade_ticket_row", None)
+                    st.rerun()
+            _trade_ticket_body(st.session_state["trade_ticket_row"])
+
+    # ── Recent trades journal ─────────────────────────────────────────────────
+    try:
+        from execution.trade_executor import recent_trades
+        _rt = recent_trades(10)
+        if _rt:
+            with st.expander(f"📒 Mere trades ({len(_rt)} recent)"):
+                st.dataframe(
+                    [{"Time": t["placed_at"][5:16], "Mode": t["mode"],
+                      "Stock": t["symbol"], "Qty": t["qty"],
+                      "Entry": f"₹{t['entry_price']:,.1f}" if t["entry_price"] else "-",
+                      "Stop": f"₹{t['stop_price']:,.1f}" if t["stop_price"] else "-",
+                      "Target": f"₹{t['target_price']:,.1f}" if t["target_price"] else "-",
+                      "Status": t["status"]} for t in _rt],
+                    use_container_width=True, hide_index=True)
+    except Exception:
+        pass
 
     # ── Summary strip ─────────────────────────────────────────────────────────
     n_strong = sum(1 for r in results if r["verdict"] == "STRONG BUY")
