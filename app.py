@@ -1190,12 +1190,16 @@ elif _page == "JARVIS":
 elif _page in ("Terminal", "Analyse"):
     # ── Top bar: symbol picker + timeframe ───────────────────────────────
     _tb_c1, _tb_c2, _tb_c3, _tb_c4 = st.columns([3, 2, 1, 1])
+    # Any NSE stock can arrive here from the scanner — not just the configured list
+    _term_options = list(symbol_list)
+    _term_sym = st.session_state.get("terminal_symbol", "RELIANCE")
+    if _term_sym not in _term_options:
+        _term_options.insert(0, _term_sym)
     with _tb_c1:
         _chart_sym = st.selectbox(
             "Symbol",
-            options=symbol_list,
-            index=symbol_list.index(st.session_state.get("terminal_symbol", "RELIANCE"))
-                  if st.session_state.get("terminal_symbol", "RELIANCE") in symbol_list else 0,
+            options=_term_options,
+            index=_term_options.index(_term_sym) if _term_sym in _term_options else 0,
             format_func=lambda x: f"{x}  ·  {symbol_map.get(x, '')}",
             key="terminal_chart_sym",
             label_visibility="collapsed",

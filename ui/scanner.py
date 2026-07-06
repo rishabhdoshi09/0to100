@@ -1,137 +1,76 @@
 """
-Market Scanner — simple, actionable stock list.
+Smart Scanner — every signal engine, one clean page.
 
-One unified view: stocks worth watching today, sorted by signal strength.
-Each card shows exactly what a trader needs: price, signal, entry/stop/target.
+Momentum + Breakouts (52W high, resistance, golden cross, squeeze)
++ Chart Patterns (VCP, flat base, cup & handle, high tight flag)
+run in a single pass over the whole universe from the bulk cache.
+
+Layman-friendly: plain-English reasons, one card per stock,
+entry/stop/target on every idea.
 """
 from __future__ import annotations
 
 import streamlit as st
 
+_CATEGORY_TABS = ["🔥 All Signals", "🚀 Momentum", "💥 Breakouts", "📐 Chart Patterns"]
+_CATEGORY_MAP = {
+    "🚀 Momentum": "Momentum",
+    "💥 Breakouts": "Breakout",
+    "📐 Chart Patterns": "Pattern",
+}
 
-# ── Data fetchers (cached) ────────────────────────────────────────────────────
+_VERDICT_STYLE = {
+    "BUY":   ("⚡ Buy Signal", "#00d4a0"),
+    "WATCH": ("👁 Watch",      "#f59e0b"),
+}
+
+_CAT_COLOR = {"Momentum": "#38bdf8", "Breakout": "#a78bfa", "Pattern": "#f472b6"}
+
+
+# ── Cached scan ───────────────────────────────────────────────────────────────
 
 @st.cache_data(ttl=300, show_spinner=False)
-def _fetch_elite(symbols_key: str, top_n: int = 20):
-    """Full quality pipeline — returns RankedSetup list with entry/stop/target."""
-    from scan.pipeline import ScanPipeline
-    from core.regime_engine import compute_regime
-    symbols = [s.strip() for s in symbols_key.split(",") if s.strip()][:500]
+def _run_unified_scan(symbols_key: str) -> list[dict]:
+    """Run the unified scanner and return plain dicts (picklable for cache)."""
+    from scan.unified_scanner import UnifiedScanner
+    symbols = [s for s in symbols_key.split(",") if s]
     try:
-        regime = compute_regime()
-        return ScanPipeline(max_workers=12, min_quality_score=38).run(
-            symbols, top_n=top_n, regime_state=regime, skip_liquidity_filter=True,
-        )
+        results = UnifiedScanner(max_workers=8).scan(symbols)
     except Exception:
         return []
+    return [{
+        "symbol": r.symbol, "price": r.price, "change_pct": r.change_pct,
+        "momentum_5d": r.momentum_5d, "volume_ratio": r.volume_ratio,
+        "signals": r.signal_labels, "categories": sorted(r.categories),
+        "reasons": r.reasons, "score": r.score, "verdict": r.verdict,
+        "entry": r.entry, "stop": r.stop, "target": r.target,
+        "rr": round(r.risk_reward, 1),
+    } for r in results]
 
 
-@st.cache_data(ttl=300, show_spinner=False)
-def _fetch_momentum(symbols_key: str, top_n: int = 30):
-    """Lightweight momentum scan — fallback when elite pipeline is slow."""
-    from screener.momentum_scanner import MomentumScanner
-    symbols = [s.strip() for s in symbols_key.split(",") if s.strip()]
-    try:
-        return MomentumScanner().scan_momentum(symbols, top_n=top_n)
-    except Exception:
-        return []
+# ── Card renderer ─────────────────────────────────────────────────────────────
 
+def _render_card(s: dict, key_prefix: str = "") -> None:
+    label, vcolor = _VERDICT_STYLE.get(s["verdict"], _VERDICT_STYLE["WATCH"])
+    chg = s["change_pct"]
+    chg_color = "#00d4a0" if chg >= 0 else "#ff4b4b"
+    chg_arrow = "▲" if chg >= 0 else "▼"
 
-@st.cache_data(ttl=86_400, show_spinner=False)
-def _full_nse_universe() -> list[str]:
-    try:
-        from screener.universe import StockUniverseFetcher
-        return StockUniverseFetcher().get_all_symbols()
-    except Exception:
-        return []
+    chips = "".join(
+        f"<span style='background:#1e293b;border-radius:5px;padding:2px 8px;"
+        f"font-size:.68rem;color:#94a3b8;margin-right:6px'>{sig}</span>"
+        for sig in s["signals"]
+    )
 
-
-# ── Card renderers ────────────────────────────────────────────────────────────
-
-def _signal_badge(verdict: str) -> tuple[str, str]:
-    """(label, color) for verdict string."""
-    return {
-        "READY_TO_TRADE": ("⚡ Buy Signal", "#00d4a0"),
-        "BUILDING":       ("👁 Watch",       "#f59e0b"),
-        "AVOID":          ("✗ Avoid",        "#ff4b4b"),
-    }.get(verdict, ("👁 Watch", "#f59e0b"))
-
-
-def _render_elite_card(s) -> None:
-    """One clean trade card from a RankedSetup."""
-    verdict = getattr(s, "verdict", "BUILDING")
-    label, color = _signal_badge(verdict)
-
-    entry  = getattr(s, "pivot_level", 0) or 0
-    stop   = getattr(s, "stop_level",  0) or 0
-    target = getattr(s, "target_price", 0) or 0
-    price  = getattr(s, "price", entry) or entry
-    risk   = abs(entry - stop) if entry and stop else 0
-    rr     = abs(target - entry) / risk if (risk > 0 and target) else 0
-
-    chg_pct = getattr(s, "momentum_5d_pct", 0) or 0
-    chg_color = "#00d4a0" if chg_pct >= 0 else "#ff4b4b"
-    chg_arrow = "▲" if chg_pct >= 0 else "▼"
-
-    # Trade plan line
-    plan_html = ""
-    if entry and stop and target:
-        plan_html = (
-            f"<div style='margin-top:6px;font-size:.78rem;color:#94a3b8'>"
-            f"Entry <span style='color:#f59e0b;font-weight:700'>₹{entry:,.0f}</span>"
-            f" &nbsp;·&nbsp; Stop <span style='color:#ff4b4b;font-weight:700'>₹{stop:,.0f}</span>"
-            f" &nbsp;·&nbsp; Target <span style='color:#00d4a0;font-weight:700'>₹{target:,.0f}</span>"
-            f" &nbsp;·&nbsp; <span style='color:#e2e8f0'>Reward {rr:.1f}×</span>"
-            f"</div>"
-        )
-    elif entry:
-        plan_html = (
-            f"<div style='margin-top:6px;font-size:.78rem;color:#94a3b8'>"
-            f"Near <span style='color:#f59e0b;font-weight:700'>₹{entry:,.0f}</span> — watch for breakout"
-            f"</div>"
-        )
-
-    sym = s.symbol
-    col1, col2 = st.columns([5, 1])
-    with col1:
-        st.markdown(
-            f"<div style='background:#0d1421;border:1px solid #1e293b;border-radius:10px;"
-            f"padding:12px 16px;margin-bottom:6px'>"
-            f"<div style='display:flex;justify-content:space-between;align-items:center'>"
-            f"  <div>"
-            f"    <span style='color:#e2e8f0;font-weight:700;font-size:1rem;"
-            f"      font-family:JetBrains Mono,monospace'>{sym}</span>"
-            f"    <span style='color:#e2e8f0;font-size:.95rem;margin-left:12px'>₹{price:,.1f}</span>"
-            f"    <span style='color:{chg_color};font-size:.82rem;margin-left:6px;font-weight:600'>"
-            f"      {chg_arrow}{abs(chg_pct):.1f}%</span>"
-            f"  </div>"
-            f"  <span style='background:{color}18;border:1px solid {color}55;border-radius:6px;"
-            f"    padding:3px 10px;font-size:.7rem;font-weight:700;color:{color}'>{label}</span>"
-            f"</div>"
-            f"{plan_html}"
-            f"</div>",
-            unsafe_allow_html=True,
-        )
-    with col2:
-        if st.button("Analyse →", key=f"scan_analyse_{sym}", use_container_width=True):
-            st.session_state["sidebar_nav"] = "Terminal"
-            st.session_state["terminal_symbol"] = sym
-            st.rerun()
-
-
-def _render_momentum_card(s) -> None:
-    """Simpler card for MomentumStock (no full trade plan)."""
-    sig = getattr(s, "signal", "NEUTRAL")
-    if sig == "BUY":
-        label, color = "⚡ Buy Signal", "#00d4a0"
-    elif sig == "WATCH":
-        label, color = "👁 Watch", "#f59e0b"
-    else:
-        return  # skip NEUTRAL in simple view
-
-    chg_color = "#00d4a0" if s.change_pct >= 0 else "#ff4b4b"
-    chg_arrow = "▲" if s.change_pct >= 0 else "▼"
-    sym = s.symbol
+    reason = " · ".join(s["reasons"][:2])
+    plan = (
+        f"<div style='margin-top:7px;font-size:.78rem;color:#94a3b8'>"
+        f"Entry <span style='color:#f59e0b;font-weight:700'>₹{s['entry']:,.0f}</span>"
+        f" &nbsp;·&nbsp; Stop <span style='color:#ff4b4b;font-weight:700'>₹{s['stop']:,.0f}</span>"
+        f" &nbsp;·&nbsp; Target <span style='color:#00d4a0;font-weight:700'>₹{s['target']:,.0f}</span>"
+        + (f" &nbsp;·&nbsp; <span style='color:#e2e8f0'>Reward {s['rr']:.1f}×</span>" if s["rr"] > 0 else "")
+        + "</div>"
+    )
 
     col1, col2 = st.columns([5, 1])
     with col1:
@@ -141,115 +80,104 @@ def _render_momentum_card(s) -> None:
             f"<div style='display:flex;justify-content:space-between;align-items:center'>"
             f"  <div>"
             f"    <span style='color:#e2e8f0;font-weight:700;font-size:1rem;"
-            f"      font-family:JetBrains Mono,monospace'>{sym}</span>"
-            f"    <span style='color:#e2e8f0;font-size:.95rem;margin-left:12px'>₹{s.price:,.1f}</span>"
+            f"      font-family:JetBrains Mono,monospace'>{s['symbol']}</span>"
+            f"    <span style='color:#e2e8f0;font-size:.95rem;margin-left:12px'>₹{s['price']:,.1f}</span>"
             f"    <span style='color:{chg_color};font-size:.82rem;margin-left:6px;font-weight:600'>"
-            f"      {chg_arrow}{abs(s.change_pct):.1f}%</span>"
+            f"      {chg_arrow}{abs(chg):.1f}%</span>"
             f"  </div>"
-            f"  <span style='background:{color}18;border:1px solid {color}55;border-radius:6px;"
-            f"    padding:3px 10px;font-size:.7rem;font-weight:700;color:{color}'>{label}</span>"
+            f"  <span style='background:{vcolor}18;border:1px solid {vcolor}55;border-radius:6px;"
+            f"    padding:3px 10px;font-size:.7rem;font-weight:700;color:{vcolor}'>{label}</span>"
             f"</div>"
-            f"<div style='margin-top:6px;font-size:.75rem;color:#4a5568'>Building momentum — watch for entry</div>"
+            f"<div style='margin-top:7px'>{chips}</div>"
+            f"<div style='margin-top:6px;font-size:.78rem;color:#c9d1d9'>{reason}</div>"
+            f"{plan}"
             f"</div>",
             unsafe_allow_html=True,
         )
     with col2:
-        if st.button("Analyse →", key=f"scan_mom_{sym}", use_container_width=True):
+        if st.button("Analyse →", key=f"scan_{key_prefix}_{s['symbol']}", use_container_width=True):
             st.session_state["sidebar_nav"] = "Terminal"
-            st.session_state["terminal_symbol"] = sym
+            st.session_state["terminal_symbol"] = s["symbol"]
             st.rerun()
 
 
 # ── Main render ───────────────────────────────────────────────────────────────
 
 def render_scanner(universe: list[str]) -> None:
-    # ── Universe selector ─────────────────────────────────────────────────────
     try:
         from data.nse_universe import get_nifty500_universe
         nifty500 = get_nifty500_universe()
     except Exception:
         nifty500 = universe[:500]
 
-    scope_options = {
-        f"NIFTY 500 ({len(nifty500)} stocks — fast)": nifty500,
-        f"All NSE ({len(universe)} stocks — slow)": universe,
-    }
-    scope_label = st.selectbox(
-        "Universe",
-        list(scope_options.keys()),
-        index=0,
-        key="scanner_scope",
-        label_visibility="collapsed",
-    )
-    syms = scope_options[scope_label]
-
-    # ── Controls ──────────────────────────────────────────────────────────────
-    c1, c2, c3 = st.columns([3, 1, 1])
+    # ── Top controls ──────────────────────────────────────────────────────────
+    c1, c2, c3 = st.columns([2.2, 1.6, 1])
     with c1:
-        st.caption(f"Scanning **{len(syms)} stocks** · results cached 5 min")
+        st.markdown("### 🔍 Smart Scanner")
+        st.caption("Momentum · Breakouts · Chart patterns — one scan, whole market")
     with c2:
-        run_scan = st.button("🔍 Scan Now", key="scanner_run",
-                             type="primary", use_container_width=True)
+        scope_options = {
+            f"NIFTY 500 · fast (~1 min)": nifty500,
+            f"All NSE · {len(universe)} stocks (~3-4 min)": universe,
+        }
+        scope_label = st.selectbox("Universe", list(scope_options.keys()),
+                                   index=0, key="scanner_scope",
+                                   label_visibility="collapsed")
+        syms = scope_options[scope_label]
     with c3:
-        buy_only = st.toggle("Buy only", value=False, key="scanner_buy_only")
-
-    if run_scan:
-        st.cache_data.clear()
+        if st.button("🔍 Scan Now", key="scanner_run", type="primary",
+                     use_container_width=True):
+            _run_unified_scan.clear()
 
     symbols_key = ",".join(syms)
+    with st.spinner(f"Scanning {len(syms)} stocks — downloading data in bulk…"):
+        results = _run_unified_scan(symbols_key)
 
-    # ── Run elite pipeline (entry/stop/target) ────────────────────────────────
-    with st.spinner(f"Scanning {len(syms)} stocks…"):
-        elite = _fetch_elite(symbols_key, top_n=25)
-
-    # ── Filter ────────────────────────────────────────────────────────────────
-    if buy_only:
-        elite = [s for s in elite if getattr(s, "verdict", "") == "READY_TO_TRADE"]
-
-    # ── Results ───────────────────────────────────────────────────────────────
-    ready   = [s for s in elite if getattr(s, "verdict", "") == "READY_TO_TRADE"]
-    watch   = [s for s in elite if getattr(s, "verdict", "") == "BUILDING"]
-    avoid   = [s for s in elite if getattr(s, "verdict", "") == "AVOID"]
-
-    total = len(ready) + len(watch)
-    if total == 0:
-        st.info("No setups found. Try scanning All NSE or check back later.")
-        # Fallback to lightweight momentum scan
-        with st.spinner("Running quick momentum scan…"):
-            mom = _fetch_momentum(symbols_key, top_n=20)
-        buys = [s for s in mom if s.signal == "BUY"]
-        if buys:
-            st.markdown(f"**{len(buys)} momentum signals found:**")
-            for s in buys[:10]:
-                _render_momentum_card(s)
+    if not results:
+        st.info("No signals right now. Markets may be closed or data is unavailable — "
+                "hit **Scan Now** to retry.")
         return
 
-    # Summary line
-    parts = []
-    if ready: parts.append(f"⚡ {len(ready)} ready to buy")
-    if watch:  parts.append(f"👁 {len(watch)} to watch")
+    # ── Summary strip ─────────────────────────────────────────────────────────
+    n_buy = sum(1 for r in results if r["verdict"] == "BUY")
+    n_mom = sum(1 for r in results if "Momentum" in r["categories"])
+    n_brk = sum(1 for r in results if "Breakout" in r["categories"])
+    n_pat = sum(1 for r in results if "Pattern" in r["categories"])
     st.markdown(
         f"<div style='background:#0d1421;border:1px solid #1e293b;border-radius:8px;"
-        f"padding:8px 14px;margin-bottom:12px;font-size:.82rem;color:#c9d1d9'>"
-        f"{'  ·  '.join(parts)}"
+        f"padding:9px 14px;margin:4px 0 12px 0;font-size:.84rem;color:#c9d1d9'>"
+        f"Scanned <b>{len(syms)}</b> stocks → <b>{len(results)}</b> signals &nbsp;·&nbsp; "
+        f"<span style='color:#00d4a0'>⚡ {n_buy} buy</span> &nbsp;·&nbsp; "
+        f"<span style='color:{_CAT_COLOR['Momentum']}'>🚀 {n_mom} momentum</span> &nbsp;·&nbsp; "
+        f"<span style='color:{_CAT_COLOR['Breakout']}'>💥 {n_brk} breakouts</span> &nbsp;·&nbsp; "
+        f"<span style='color:{_CAT_COLOR['Pattern']}'>📐 {n_pat} patterns</span>"
         f"</div>",
         unsafe_allow_html=True,
     )
 
-    # Buy signals first
-    if ready:
-        st.markdown("#### ⚡ Ready to Buy")
-        for s in ready:
-            _render_elite_card(s)
+    # ── Category tabs ─────────────────────────────────────────────────────────
+    tabs = st.tabs(_CATEGORY_TABS)
+    for tab, tab_name in zip(tabs, _CATEGORY_TABS):
+        with tab:
+            cat = _CATEGORY_MAP.get(tab_name)
+            subset = results if cat is None else [
+                r for r in results if cat in r["categories"]]
+            if not subset:
+                st.caption("Nothing in this category right now.")
+                continue
 
-    # Watch list
-    if watch and not buy_only:
-        st.markdown("#### 👁 Watch These")
-        for s in watch[:8]:
-            _render_elite_card(s)
+            buy_only = st.toggle("⚡ Buy signals only", value=False,
+                                 key=f"buyonly_{tab_name}")
+            if buy_only:
+                subset = [r for r in subset if r["verdict"] == "BUY"]
 
-    # Avoid — collapsed
-    if avoid and not buy_only:
-        with st.expander(f"✗ Avoid ({len(avoid)} stocks)"):
-            for s in avoid[:5]:
-                _render_elite_card(s)
+            buys = [r for r in subset if r["verdict"] == "BUY"]
+            watch = [r for r in subset if r["verdict"] == "WATCH"]
+
+            kp = tab_name.split(" ")[-1].lower()
+            for r in buys[:15]:
+                _render_card(r, key_prefix=kp)
+            if watch and not buy_only:
+                st.markdown("###### 👁 Worth watching")
+                for r in watch[:15]:
+                    _render_card(r, key_prefix=kp)
