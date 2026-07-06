@@ -90,10 +90,20 @@ def _push_new_setups(picks: list[dict]) -> None:
                 emoji = "🔥" if p["verdict"] == "STRONG BUY" else "⚡"
                 why = p.get("checks") or [f"✓ {r}" for r in p.get("reasons", [])]
                 why_txt = "\n".join(f"   {w}" for w in why[:3])
+                size_line = ""
+                try:
+                    from risk.position_sizer import size_position
+                    ps = size_position(float(p["entry"]), float(p["stop"]))
+                    if ps["qty"] >= 1:
+                        size_line = (f"\n   📏 {ps['qty']} shares · max loss "
+                                     f"₹{ps['max_loss']:,.0f} (1% rule)")
+                except Exception:
+                    pass
                 lines.append(
                     f"\n{emoji} <b>{p['symbol']}</b> ₹{p['price']:,.1f} — {p['verdict']}\n"
                     f"{why_txt}\n"
                     f"   Entry ₹{p['entry']:,.0f} · Stop ₹{p['stop']:,.0f} · Target ₹{p['target']:,.0f}"
+                    f"{size_line}"
                 )
         if pre:
             lines.append("\n⏳ <b>Breakout ke kareeb — nazar rakho</b>")

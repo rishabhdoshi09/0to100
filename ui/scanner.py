@@ -83,6 +83,53 @@ def _accuracy_stat() -> str:
     return ""
 
 
+@st.cache_data(ttl=300, show_spinner=False)
+def _health() -> list[tuple[str, bool, str]]:
+    """[(name, ok, detail)] — data-source health so failures can't hide."""
+    out = []
+    # NSE bhavcopy store
+    try:
+        from data.bhavcopy_store import is_ready, _store_last_day
+        ok = is_ready()
+        detail = str(_store_last_day) if ok else "not built"
+        out.append(("NSE data", ok, detail))
+    except Exception:
+        out.append(("NSE data", False, "error"))
+    # Google Finance live quotes
+    try:
+        from data.google_finance import get_quote
+        q = get_quote("NIFTY", timeout=5)
+        out.append(("Live quotes", bool(q and q.get("price")), "Google Finance"))
+    except Exception:
+        out.append(("Live quotes", False, "unreachable"))
+    # Kite
+    try:
+        from config import settings
+        out.append(("Kite", bool(settings.kite_access_token), "token set" if settings.kite_access_token else "not logged in"))
+    except Exception:
+        out.append(("Kite", False, "—"))
+    # Telegram
+    try:
+        from alerts.telegram_alerts import AlertEngine
+        ok = AlertEngine().is_configured()
+        out.append(("Telegram", ok, "alerts on" if ok else "not set"))
+    except Exception:
+        out.append(("Telegram", False, "—"))
+    return out
+
+
+def _render_health() -> None:
+    items = _health()
+    html = " &nbsp;&nbsp; ".join(
+        f"<span style='color:{'#00d4a0' if ok else '#ff4b4b'}'>●</span> "
+        f"<span style='color:#94a3b8'>{name}</span> "
+        f"<span style='color:#4a5568;font-size:.68rem'>({detail})</span>"
+        for name, ok, detail in items)
+    st.markdown(
+        f"<div style='font-size:.74rem;padding:4px 0 8px 0'>{html}</div>",
+        unsafe_allow_html=True)
+
+
 def _freshness(ts: float) -> str:
     if not ts:
         return ""
@@ -118,13 +165,30 @@ def _render_card(s: dict, key_prefix: str = "") -> None:
         )
     else:
         reason = " · ".join(s["reasons"][:2])
+
+    # Position size — the 1% discipline line
+    size_html = ""
+    try:
+        from risk.position_sizer import size_position
+        cap = st.session_state.get("user_capital")
+        ps = size_position(float(s["entry"]), float(s["stop"]), capital=cap)
+        if ps["qty"] >= 1:
+            size_html = (
+                f"<div style='margin-top:4px;font-size:.75rem;color:#7dd3fc'>"
+                f"📏 Tumhare liye: <b>{ps['qty']} shares</b> (₹{ps['invested']:,.0f} lagenge) "
+                f"· max loss ₹{ps['max_loss']:,.0f} ({ps['risk_pct_used']:.1f}% of capital)"
+                + (" · position cap laga" if ps["capped"] else "")
+                + "</div>")
+    except Exception:
+        pass
+
     plan = (
         f"<div style='margin-top:7px;font-size:.78rem;color:#94a3b8'>"
         f"Entry <span style='color:#f59e0b;font-weight:700'>₹{s['entry']:,.0f}</span>"
         f" &nbsp;·&nbsp; Stop <span style='color:#ff4b4b;font-weight:700'>₹{s['stop']:,.0f}</span>"
         f" &nbsp;·&nbsp; Target <span style='color:#00d4a0;font-weight:700'>₹{s['target']:,.0f}</span>"
         + (f" &nbsp;·&nbsp; <span style='color:#e2e8f0'>Reward {s['rr']:.1f}×</span>" if s["rr"] > 0 else "")
-        + "</div>"
+        + f"</div>{size_html}"
     )
 
     col1, col2 = st.columns([5, 1])
@@ -173,6 +237,7 @@ def render_scanner(universe: list[str]) -> None:
     st.markdown("### 🔍 Smart Scanner")
     st.caption("Momentum · Breakouts · Chart patterns — button dabao, "
                "poore market se ache setups nikal ke aayenge")
+    _render_health()
 
     # ── Your controls ─────────────────────────────────────────────────────────
     c1, c2, c3 = st.columns([2.2, 1.4, 1.4])
@@ -195,6 +260,23 @@ def render_scanner(universe: list[str]) -> None:
                             help="On: system market hours mein khud scan karta rahega. "
                                  "Off: sirf tumhare button dabane par scan hoga.")
         set_auto_enabled(auto_on)
+
+    # ── Capital for position sizing ───────────────────────────────────────────
+    with st.expander("💰 Position sizing — apna capital set karo"):
+        try:
+            from config import settings as _cfg
+            _default_cap = float(st.session_state.get("user_capital")
+                                 or _cfg.trading_capital)
+        except Exception:
+            _default_cap = 100_000.0
+        _cap = st.number_input(
+            "Trading capital (₹)", min_value=10_000.0, max_value=100_000_000.0,
+            value=_default_cap, step=10_000.0, key="capital_input",
+            help="Har card pe exact shares dikhengi — 1% risk rule ke hisaab se. "
+                 "Yeh discipline hi account ko zinda rakhti hai.")
+        st.session_state["user_capital"] = _cap
+        st.caption(f"Har trade pe max risk: ₹{_cap * 0.01:,.0f} (1%) · "
+                   f"ek stock mein max: ₹{_cap * 0.10:,.0f} (10%)")
 
     # ── Manual scan (user-controlled, with live progress) ────────────────────
     if scan_clicked:

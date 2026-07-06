@@ -59,6 +59,8 @@ class Settings(BaseSettings):
         return [s.strip() for s in self.universe.split(",") if s.strip()]
 
     # ── Risk ──────────────────────────────────────────────────────────────────
+    trading_capital: float = Field(default=100_000.0)   # capital used for position sizing
+    risk_per_trade_pct: float = Field(default=0.01)      # risk 1% of capital per trade
     max_capital_exposure: float = Field(default=0.20)
     max_position_size_pct: float = Field(default=0.10)
     max_open_positions: int = Field(default=5)
