@@ -315,6 +315,39 @@ def _maybe_run_nightly_backtest() -> None:
         log.debug("nightly_backtest_skip", error=str(exc))
 
 
+_kite_reminder_date: str = ""
+
+
+def _maybe_remind_kite_login() -> None:
+    """8:30-9:15 weekday window: if Kite isn't usable, one Telegram nudge —
+    warna poora din live data ke bina chalta hai aur pata bhi nahi chalta."""
+    global _kite_reminder_date
+    now = datetime.now()
+    today = now.strftime("%Y-%m-%d")
+    if now.weekday() >= 5 or _kite_reminder_date == today:
+        return
+    if not (8 * 60 + 30 <= now.hour * 60 + now.minute <= 9 * 60 + 15):
+        return
+    try:
+        from execution.trade_executor import kite_ready
+        if kite_ready():
+            _kite_reminder_date = today          # token fresh — no nudge needed
+            return
+        from alerts.telegram_alerts import AlertEngine
+        engine = AlertEngine()
+        if not engine.is_configured():
+            return
+        if engine.send(
+                "🔑 <b>Kite login pending</b>\n"
+                "Market khulne wala hai aur token fresh nahi hai — live "
+                "quotes/orders NSE fallback pe chalenge.\n\n"
+                "<code>cd ~/0to100 && python main.py login</code>"):
+            _kite_reminder_date = today
+            log.info("kite_login_reminder_sent")
+    except Exception as exc:
+        log.debug("kite_reminder_skip", error=str(exc))
+
+
 _coach_pushed_week: str = ""
 
 
@@ -342,6 +375,7 @@ def _worker() -> None:
     while True:
         if is_auto_enabled():
             _scan_once()
+            _maybe_remind_kite_login()
             _maybe_push_morning_pulse()
             _maybe_run_nightly_backtest()
             _maybe_push_weekly_coach()

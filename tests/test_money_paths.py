@@ -283,3 +283,126 @@ class TestErrorGuard:
         names = [c[0] for c in check_config()]
         assert "Kite token (daily)" in names
         assert "Telegram alerts" in names
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 9. Position manager — R-levels, auto-close, advice
+# ══════════════════════════════════════════════════════════════════════════════
+
+class TestPositionManager:
+    def _seed(self, tmp_path, monkeypatch, positions):
+        import execution.trade_executor as te
+        monkeypatch.setattr(te, "_DB", tmp_path / "trades.db")
+        monkeypatch.setattr(te, "kite_ready", lambda: False)
+        for sym, entry, stop, target in positions:
+            te.place_trade(sym, qty=10, entry_type="LIMIT",
+                           entry_price=entry, stop=stop, target=target)
+
+    def test_r_levels_and_auto_close(self, tmp_path, monkeypatch):
+        import risk.position_manager as pm
+        import data.live_quotes as lq
+        self._seed(tmp_path, monkeypatch, [
+            ("WINNER", 100, 95, 120), ("HALFWAY", 200, 190, 230),
+            ("DANGER", 500, 480, 560), ("DEAD", 300, 290, 340)])
+        monkeypatch.setattr(lq, "get_live_quotes", lambda syms: {
+            "WINNER": {"price": 112.0}, "HALFWAY": {"price": 211.0},
+            "DANGER": {"price": 483.0}, "DEAD": {"price": 288.0}})
+        alerts = {r["symbol"]: r["alert"] for r in pm.review_positions()}
+        assert alerts["WINNER"] == "TARGET_ZONE"
+        assert alerts["HALFWAY"] == "BOOK_HALF"
+        assert alerts["DANGER"] == "NEAR_STOP"
+        assert alerts["DEAD"] == "STOP_HIT"
+        # DEAD auto-closed on next review
+        assert "DEAD" not in {r["symbol"] for r in pm.review_positions()}
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 10. Portfolio risk — concentration and total-risk verdicts
+# ══════════════════════════════════════════════════════════════════════════════
+
+class TestPortfolioRisk:
+    def test_verdict_ladder(self, tmp_path, monkeypatch):
+        import execution.trade_executor as te
+        import risk.portfolio_risk as prm
+        monkeypatch.setattr(te, "_DB", tmp_path / "trades.db")
+        monkeypatch.setattr(te, "kite_ready", lambda: False)
+        assert prm.portfolio_risk_report()["verdict"] == "OK"
+        te.place_trade("DLF", 20, "LIMIT", 800, 780, 850)
+        te.place_trade("GODREJPROP", 10, "LIMIT", 2500, 2450, 2650)
+        assert prm.portfolio_risk_report()["verdict"] in ("CAUTION", "DANGER")
+        te.place_trade("PRESTIGE", 10, "LIMIT", 1500, 1470, 1600)
+        assert prm.portfolio_risk_report()["verdict"] == "DANGER"
+
+    def test_simulation_never_mutates(self, tmp_path, monkeypatch):
+        import execution.trade_executor as te
+        import risk.portfolio_risk as prm
+        monkeypatch.setattr(te, "_DB", tmp_path / "trades.db")
+        monkeypatch.setattr(te, "kite_ready", lambda: False)
+        te.place_trade("HAL", 10, "LIMIT", 4500, 4300, 4900)
+        prm.check_new_trade("INFY", 200, 1500, 1450)
+        assert prm.portfolio_risk_report()["n_positions"] == 1
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 11. Watchlist watcher — zone / broken / ran-away events
+# ══════════════════════════════════════════════════════════════════════════════
+
+class TestWatchlistWatcher:
+    def test_events(self, tmp_path, monkeypatch):
+        import sqlite3
+        import risk.watchlist_watcher as ww
+        import data.live_quotes as lq
+        db = tmp_path / "watchlist.db"
+        monkeypatch.setattr(ww, "_WL_DB", db)
+        conn = sqlite3.connect(db)
+        conn.execute("""CREATE TABLE watchlist (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, symbol TEXT NOT NULL,
+            added_date TEXT NOT NULL, buy_zone_low REAL, buy_zone_high REAL,
+            target_price REAL, stop_price REAL, notes TEXT, added_price REAL)""")
+        for sym, lo, hi, tgt, stp in [("INZONE", 495, 505, 560, 470),
+                                      ("BROKEN", 195, 205, 230, 185),
+                                      ("QUIET", 295, 305, 340, 280)]:
+            conn.execute("INSERT INTO watchlist (symbol, added_date, buy_zone_low,"
+                         " buy_zone_high, target_price, stop_price) VALUES (?,?,?,?,?,?)",
+                         (sym, "2026-07-01", lo, hi, tgt, stp))
+        conn.commit(); conn.close()
+        monkeypatch.setattr(lq, "get_live_quotes", lambda syms: {
+            "INZONE": {"price": 500.0}, "BROKEN": {"price": 180.0},
+            "QUIET": {"price": 320.0}})
+        by_sym = {e["symbol"]: e["event"] for e in ww.check_watchlist()}
+        assert by_sym == {"INZONE": "IN_ZONE", "BROKEN": "BROKEN"}
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 12. Trade coach — behavioral flags
+# ══════════════════════════════════════════════════════════════════════════════
+
+class TestTradeCoach:
+    def test_flags_bad_habits(self, tmp_path, monkeypatch):
+        import sqlite3
+        from datetime import datetime, timedelta
+        import execution.trade_executor as te
+        import reports.trade_coach as tc
+        db = tmp_path / "trades.db"
+        monkeypatch.setattr(te, "_DB", db)
+        conn = sqlite3.connect(db)
+        conn.execute("""CREATE TABLE trades (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, placed_at TEXT NOT NULL,
+            mode TEXT NOT NULL, symbol TEXT NOT NULL, qty INTEGER NOT NULL,
+            entry_type TEXT NOT NULL, entry_price REAL, stop_price REAL,
+            target_price REAL, product TEXT, entry_order_id TEXT, gtt_id TEXT,
+            status TEXT, note TEXT)""")
+        def seed(sym, entry, stop, qty, days_ago, status="PAPER_OPEN"):
+            ts = (datetime.now() - timedelta(days=days_ago)).isoformat(timespec="seconds")
+            conn.execute("INSERT INTO trades (placed_at, mode, symbol, qty, "
+                         "entry_type, entry_price, stop_price, target_price, "
+                         "product, status) VALUES (?,?,?,?,?,?,?,?,?,?)",
+                         (ts, "PAPER", sym, qty, "LIMIT", entry, stop,
+                          entry * 1.1, "CNC", status))
+        seed("AAA", 100, 99.0, 10, 20, "PAPER_LOSS")
+        seed("AAA", 101, 99.9, 10, 19)                 # revenge + tight stop
+        seed("BBB", 500, 490, 100, 15, "PAPER_WIN")    # 100x risk of smallest
+        conn.commit(); conn.close()
+        joined = " ".join(tc.gather_stats(28)["insights"])
+        assert "Risk inconsistent" in joined
+        assert "Revenge" in joined
