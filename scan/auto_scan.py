@@ -127,6 +127,18 @@ def _scan_once(universe: Optional[list[str]] = None, progress=None) -> None:
             serialized = build_conviction(serialized)
         except Exception as exc:
             log.debug("conviction_skip", error=str(exc))
+        # Live price overlay from Google Finance (history is official NSE EOD)
+        try:
+            from data.google_finance import get_quotes
+            top_syms = [r["symbol"] for r in serialized[:40]]
+            live = get_quotes(top_syms)
+            for r in serialized[:40]:
+                q = live.get(r["symbol"])
+                if q and q.get("price"):
+                    r["price"] = q["price"]
+                    r["change_pct"] = q["chg_pct"]
+        except Exception as exc:
+            log.debug("live_overlay_skip", error=str(exc))
         # Proactive delivery — user ko dhundhna na pade, setups khud pahunchein
         _push_new_setups(serialized[:15])
         with _lock:
