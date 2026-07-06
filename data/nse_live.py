@@ -74,6 +74,8 @@ def fetch_live_snapshot() -> dict[str, dict]:
                         "low":    float(row.get("dayLow") or last),
                         "close":  float(last),
                         "volume": float(row.get("totalTradedVolume") or 0),
+                        "prev_close": float(row.get("previousClose") or 0),
+                        "pchange": float(row.get("pChange") or 0),
                     }
                 if len(snap) >= 100:
                     _last_snapshot = snap
@@ -137,3 +139,18 @@ def apply_live_to_store() -> int:
     except Exception as exc:
         log.warning("live_overlay_store_failed", error=str(exc))
         return 0
+
+
+def live_quotes(symbols: list[str]) -> dict[str, dict]:
+    """
+    {symbol: {price, chg_pct}} from today's NSE snapshot — one bulk call
+    covers the whole list. Empty for symbols not in the snapshot (caller
+    falls back to Google Finance / EOD). Uses NSE's own pChange field.
+    """
+    snap = fetch_live_snapshot()
+    out: dict[str, dict] = {}
+    for sym in symbols:
+        bar = snap.get(sym.upper())
+        if bar and bar.get("close"):
+            out[sym] = {"price": bar["close"], "chg_pct": round(bar.get("pchange", 0), 2)}
+    return out
