@@ -83,6 +83,10 @@ def _read_day(d: date) -> Optional[pd.DataFrame]:
             "close":  pd.to_numeric(df["CLOSE_PRICE"], errors="coerce"),
             "volume": pd.to_numeric(df["TTL_TRD_QNTY"], errors="coerce"),
         })
+        # Delivery % — institutional accumulation footprint (buy-and-hold vs intraday)
+        if "DELIV_PER" in df.columns:
+            out["deliv_per"] = pd.to_numeric(
+                df["DELIV_PER"].str.strip().replace("-", None), errors="coerce")
         out["date"] = pd.Timestamp(d)
         return out.dropna(subset=["close"])
     except Exception as exc:
@@ -144,11 +148,14 @@ def build_store(days: int = 260, progress=None) -> int:
         return 0
 
     allday = pd.concat(frames, ignore_index=True)
+    keep_cols = ["open", "high", "low", "close", "volume"]
+    if "deliv_per" in allday.columns:
+        keep_cols.append("deliv_per")
     new_store: dict[str, pd.DataFrame] = {}
     for sym, g in allday.groupby("symbol"):
         g = g.sort_values("date").set_index("date")
         if len(g) >= 30:
-            new_store[sym] = g[["open", "high", "low", "close", "volume"]]
+            new_store[sym] = g[[c for c in keep_cols if c in g.columns]]
 
     with _lock:
         _store = new_store

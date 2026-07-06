@@ -13,8 +13,10 @@ from datetime import datetime
 
 import streamlit as st
 
-_CATEGORY_TABS = ["🔥 All Signals", "🚀 Momentum", "💥 Breakouts", "📐 Chart Patterns"]
+_CATEGORY_TABS = ["🔥 All Signals", "⏳ Breakout Soon", "🚀 Momentum",
+                  "💥 Breakouts", "📐 Chart Patterns"]
 _CATEGORY_MAP = {
+    "⏳ Breakout Soon": "PreBreakout",
     "🚀 Momentum": "Momentum",
     "💥 Breakouts": "Breakout",
     "📐 Chart Patterns": "Pattern",
@@ -27,7 +29,8 @@ _VERDICT_STYLE = {
 }
 _BUY_VERDICTS = ("STRONG BUY", "BUY")
 
-_CAT_COLOR = {"Momentum": "#38bdf8", "Breakout": "#a78bfa", "Pattern": "#f472b6"}
+_CAT_COLOR = {"Momentum": "#38bdf8", "Breakout": "#a78bfa", "Pattern": "#f472b6",
+              "PreBreakout": "#facc15"}
 
 
 @st.cache_data(ttl=600, show_spinner=False)
@@ -197,6 +200,7 @@ def render_scanner(universe: list[str]) -> None:
     n_mom = sum(1 for r in results if "Momentum" in r["categories"])
     n_brk = sum(1 for r in results if "Breakout" in r["categories"])
     n_pat = sum(1 for r in results if "Pattern" in r["categories"])
+    n_pre = sum(1 for r in results if "PreBreakout" in r["categories"])
     acc = _accuracy_stat()
     st.markdown(
         f"<div style='background:#0d1421;border:1px solid #1e293b;border-radius:8px;"
@@ -204,7 +208,8 @@ def render_scanner(universe: list[str]) -> None:
         f"<b>{universe_size}</b> stocks scanned → <b>{len(results)}</b> signals &nbsp;·&nbsp; "
         + (f"<span style='color:#22d3ee'>🔥 {n_strong} strong buy</span> &nbsp;·&nbsp; " if n_strong else "")
         + f"<span style='color:#00d4a0'>⚡ {n_buy} buy</span> &nbsp;·&nbsp; "
-        f"<span style='color:{_CAT_COLOR['Momentum']}'>🚀 {n_mom} momentum</span> &nbsp;·&nbsp; "
+        + (f"<span style='color:{_CAT_COLOR['PreBreakout']}'>⏳ {n_pre} breakout soon</span> &nbsp;·&nbsp; " if n_pre else "")
+        + f"<span style='color:{_CAT_COLOR['Momentum']}'>🚀 {n_mom} momentum</span> &nbsp;·&nbsp; "
         f"<span style='color:{_CAT_COLOR['Breakout']}'>💥 {n_brk} breakouts</span> &nbsp;·&nbsp; "
         f"<span style='color:{_CAT_COLOR['Pattern']}'>📐 {n_pat} patterns</span>"
         + (f" &nbsp;·&nbsp; {acc}" if acc else "")
@@ -236,6 +241,10 @@ def render_scanner(universe: list[str]) -> None:
             cat = _CATEGORY_MAP.get(tab_name)
             subset = results if cat is None else [
                 r for r in results if cat in r["categories"]]
+            if cat == "PreBreakout":
+                # closest to the pivot first — those may break out any moment
+                subset = sorted(subset,
+                                key=lambda r: r.get("pivot_distance_pct") or 99)
             if not subset:
                 st.caption("Nothing in this category right now.")
                 continue

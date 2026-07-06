@@ -1,21 +1,34 @@
 """
 Unified Smart Scanner — one engine, every signal type.
 
-Accumulates everything built so far into a single pass over the bulk
-OHLCV cache (no per-stock HTTP):
+One pass over the bulk OHLCV cache (no per-stock HTTP). Signals:
 
-  MOMENTUM        — RSI + price momentum + volume surge
+BREAKOUT (already happened — confirm & ride):
   BREAKOUT_52W    — new 52-week high
   BREAKOUT_RES    — 20-day resistance break on volume
   GOLDEN_CROSS    — 50 SMA crossing above 200 SMA
   VOL_SQUEEZE     — Bollinger squeeze expanding upward
+
+PATTERN (structure forming — breakout likely ahead):
   VCP             — volatility contraction pattern near pivot
   FLAT_BASE       — tight 6+ week base near ceiling
   CUP_HANDLE      — cup with handle proxy
   HIGH_TIGHT_FLAG — 80%+ run then tight flag
+  ASC_TRIANGLE    — flat top + rising lows
+  DOUBLE_BOTTOM   — W-shape, neckline overhead
 
-Every stock gets ONE row with all its detected signals, a composite
-score, and an entry/stop/target plan. Plain-English reasons included.
+PRE-BREAKOUT (catch it before it happens):
+  PRE_BREAKOUT    — within 2.5% of pivot with volume building
+  ACCUMULATION    — volume dry-up + up-day volume dominance near highs
+  DELIVERY_SPIKE  — NSE delivery %% rising (buy-and-hold money entering)
+  NR7_COIL        — narrowest range in 7 sessions inside an uptrend
+  POCKET_PIVOT    — up-day volume beats every down-day volume of 10 days
+
+MOMENTUM:
+  MOMENTUM        — RSI + price momentum + volume surge
+
+Every stock gets ONE row with all detected signals, a composite score,
+and an entry/stop/target plan. Plain-English reasons included.
 """
 from __future__ import annotations
 
@@ -32,15 +45,22 @@ log = get_logger(__name__)
 
 # Signal metadata: label shown to user, category for filtering, base score
 SIGNAL_META = {
-    "BREAKOUT_52W":    ("52-week high breakout",      "Breakout",  30),
-    "BREAKOUT_RES":    ("Resistance break on volume", "Breakout",  26),
-    "GOLDEN_CROSS":    ("Golden cross (50/200 SMA)",  "Breakout",  22),
-    "VOL_SQUEEZE":     ("Squeeze breakout",           "Breakout",  22),
-    "VCP":             ("VCP — tightening base",      "Pattern",   28),
-    "FLAT_BASE":       ("Flat base near breakout",    "Pattern",   24),
-    "CUP_HANDLE":      ("Cup & handle",               "Pattern",   24),
-    "HIGH_TIGHT_FLAG": ("High tight flag",            "Pattern",   30),
-    "MOMENTUM":        ("Strong momentum",            "Momentum",  20),
+    "BREAKOUT_52W":    ("52-week high breakout",       "Breakout",    30),
+    "BREAKOUT_RES":    ("Resistance break on volume",  "Breakout",    26),
+    "GOLDEN_CROSS":    ("Golden cross (50/200 SMA)",   "Breakout",    22),
+    "VOL_SQUEEZE":     ("Squeeze breakout",            "Breakout",    22),
+    "VCP":             ("VCP — tightening base",       "Pattern",     28),
+    "FLAT_BASE":       ("Flat base near breakout",     "Pattern",     24),
+    "CUP_HANDLE":      ("Cup & handle",                "Pattern",     24),
+    "HIGH_TIGHT_FLAG": ("High tight flag",             "Pattern",     30),
+    "ASC_TRIANGLE":    ("Ascending triangle",          "Pattern",     24),
+    "DOUBLE_BOTTOM":   ("Double bottom",               "Pattern",     22),
+    "PRE_BREAKOUT":    ("Breakout ke kareeb",          "PreBreakout", 26),
+    "ACCUMULATION":    ("Smart-money accumulation",    "PreBreakout", 24),
+    "DELIVERY_SPIKE":  ("Delivery buying rising",      "PreBreakout", 18),
+    "NR7_COIL":        ("Coiled — tightest day in 7",  "PreBreakout", 14),
+    "POCKET_PIVOT":    ("Pocket pivot volume",         "PreBreakout", 20),
+    "MOMENTUM":        ("Strong momentum",             "Momentum",    20),
 }
 
 
@@ -59,6 +79,7 @@ class StockSignal:
     stop: float = 0.0
     target: float = 0.0
     verdict: str = "WATCH"                 # BUY | WATCH
+    pivot_distance_pct: float = 0.0        # how far below the pivot (0 = at/above)
 
     @property
     def categories(self) -> set[str]:
@@ -112,6 +133,8 @@ class UnifiedScanner:
         high = df["high"].values.astype(float) if "high" in df.columns else close
         low = df["low"].values.astype(float) if "low" in df.columns else close
         vol = df["volume"].values.astype(float) if "volume" in df.columns else None
+        deliv = (df["deliv_per"].values.astype(float)
+                 if "deliv_per" in df.columns else None)
 
         price = float(close[-1])
         if price < 20:               # skip penny stocks
@@ -127,6 +150,7 @@ class UnifiedScanner:
             avg = np.nanmean(vol[-21:-1])
             vratio = float(vol[-1] / avg) if avg > 0 else 1.0
         atr = _atr(high, low, close)
+        sma50 = close[-50:].mean() if len(close) >= 50 else price
 
         signals: list[str] = []
         reasons: list[str] = []
@@ -138,7 +162,7 @@ class UnifiedScanner:
             signals.append("MOMENTUM")
             reasons.append(f"Up {mom5:+.1f}% in 5 days on {vratio:.1f}× volume")
 
-        # ── Breakouts ─────────────────────────────────────────────────────────
+        # ── Breakouts (confirmed) ─────────────────────────────────────────────
         if len(high) > 60:
             hi52 = float(np.max(high[:-1]))
             if price > hi52 * 0.998:
@@ -165,17 +189,77 @@ class UnifiedScanner:
                 signals.append("VOL_SQUEEZE")
                 reasons.append("Tight squeeze just expanded upward")
 
-        # ── Chart patterns ────────────────────────────────────────────────────
-        pat, pat_reason, pivot = _detect_pattern(close, high, low, vol)
-        if pat:
-            signals.append(pat)
-            reasons.append(pat_reason)
+        # ── Chart patterns (structure — breakout ahead) ───────────────────────
+        patterns = _detect_patterns(close, high, low, vol)
+        pivot = 0.0
+        for key, reason, pv in patterns[:2]:          # max 2 patterns per stock
+            signals.append(key)
+            reasons.append(reason)
+            if pv and not pivot:
+                pivot = pv
+
+        # ── Pre-breakout evidence ─────────────────────────────────────────────
+        pivot_ref = pivot or (float(np.max(high[-41:-1])) if len(high) > 41 else 0.0)
+        pivot_dist = ((pivot_ref - price) / price * 100) if pivot_ref > price else 0.0
+
+        # About to break: just below pivot with volume building
+        if pivot_ref > price and pivot_dist <= 2.5 and vol is not None and len(vol) >= 20:
+            vol_building = np.nanmean(vol[-5:]) > np.nanmean(vol[-20:-5]) * 1.15
+            has_structure = any(k in signals for k in
+                                ("VCP", "FLAT_BASE", "CUP_HANDLE", "ASC_TRIANGLE"))
+            if vol_building and (has_structure or price > sma50):
+                signals.append("PRE_BREAKOUT")
+                reasons.append(f"Sirf {pivot_dist:.1f}% neeche hai ₹{pivot_ref:,.0f} "
+                               f"ke breakout se — volume badh raha hai")
+
+        # Accumulation: volume dry-up + up-day volume dominance near highs
+        if vol is not None and len(vol) >= 60 and len(close) >= 60:
+            dryup = np.nanmean(vol[-10:]) < np.nanmean(vol[-60:-10]) * 0.70
+            rets = np.diff(close[-16:])
+            v15 = vol[-15:]
+            up_vol = float(np.nansum(v15[rets > 0])) if len(v15) == len(rets) else 0.0
+            dn_vol = float(np.nansum(v15[rets < 0])) if len(v15) == len(rets) else 1.0
+            hi60, lo60 = float(np.max(high[-60:])), float(np.min(low[-60:]))
+            in_top_third = price >= lo60 + (hi60 - lo60) * 0.66 if hi60 > lo60 else False
+            if dryup and dn_vol > 0 and up_vol / dn_vol >= 1.4 and in_top_third:
+                signals.append("ACCUMULATION")
+                reasons.append(f"Sellers sookh gaye — buying volume {up_vol/dn_vol:.1f}× "
+                               f"selling volume, price highs ke paas tikka hua")
+
+        # Delivery spike: NSE delivery %% rising (only bhavcopy data has this)
+        if deliv is not None and len(deliv) >= 30:
+            d_recent = float(np.nanmean(deliv[-5:]))
+            d_base = float(np.nanmean(deliv[-30:-5]))
+            if d_base > 0 and d_recent > d_base * 1.25 and d_recent >= 40:
+                signals.append("DELIVERY_SPIKE")
+                reasons.append(f"Delivery {d_recent:.0f}% (normal {d_base:.0f}%) — "
+                               f"log hold karne ke liye khareed rahe hain")
+
+        # NR7: narrowest daily range in 7 sessions inside an uptrend near highs
+        if len(high) >= 45 and price > sma50:
+            ranges = high[-7:] - low[-7:]
+            near_high = price >= float(np.max(high[-41:-1])) * 0.95
+            if ranges[-1] > 0 and ranges[-1] == ranges.min() and near_high:
+                signals.append("NR7_COIL")
+                reasons.append("Aaj 7 dinon ka sabse tight din — spring coil ho chuki hai")
+
+        # Pocket pivot: up-day volume beats every down-day volume of last 10
+        if vol is not None and len(vol) >= 12 and chg > 0 and price > sma50:
+            rets10 = np.diff(close[-11:])
+            down_vols = vol[-10:][rets10 < 0]
+            if len(down_vols) > 0 and vol[-1] > float(np.max(down_vols)) \
+                    and price >= float(np.max(high[-41:-1])) * 0.92:
+                signals.append("POCKET_PIVOT")
+                reasons.append("Aaj ki buying volume ne pichhle 10 din ki har "
+                               "selling volume ko hara diya")
 
         if not signals:
             return None
+        signals = signals[:6]
+        reasons = reasons[:6]
 
         # ── Trade plan ────────────────────────────────────────────────────────
-        entry = pivot if pivot and pivot > price else price
+        entry = pivot_ref if pivot_ref > price else price
         stop = round(entry - 2 * atr, 1) if atr > 0 else round(entry * 0.95, 1)
         target = round(entry + 4 * atr, 1) if atr > 0 else round(entry * 1.10, 1)
 
@@ -193,23 +277,26 @@ class UnifiedScanner:
             volume_ratio=round(vratio, 2), signals=signals, reasons=reasons,
             score=round(score, 1), entry=round(entry, 1), stop=stop,
             target=target, verdict=verdict,
+            pivot_distance_pct=round(pivot_dist, 2),
         )
 
 
 # ── Pattern detection ─────────────────────────────────────────────────────────
 
-def _detect_pattern(close, high, low, vol) -> tuple[Optional[str], str, float]:
-    """Returns (signal_key, reason, pivot_level) — best single pattern or None."""
+def _detect_patterns(close, high, low, vol) -> list[tuple[str, str, float]]:
+    """All structural patterns found, strongest first: [(key, reason, pivot)]."""
+    found: list[tuple[str, str, float]] = []
     price = float(close[-1])
 
-    # High tight flag: 80%+ run in ~8 weeks, then <25% pullback flag 2-4 weeks
+    # High tight flag: 80%+ run in ~8 weeks, then <25% pullback flag
     if len(close) >= 60:
         run = close[-15] / close[-55] - 1
         flag_hi = float(np.max(high[-15:]))
         flag_lo = float(np.min(low[-15:]))
         if run >= 0.8 and flag_hi > 0 and (flag_hi - flag_lo) / flag_hi <= 0.25 \
                 and price >= flag_hi * 0.93:
-            return "HIGH_TIGHT_FLAG", f"Ran {run*100:.0f}% then tight flag — rare leader", flag_hi
+            found.append(("HIGH_TIGHT_FLAG",
+                          f"Ran {run*100:.0f}% then tight flag — rare leader", flag_hi))
 
     # VCP: successive pullbacks contracting, price within 5% of pivot
     if len(close) >= 120:
@@ -220,7 +307,20 @@ def _detect_pattern(close, high, low, vol) -> tuple[Optional[str], str, float]:
             pivot = float(np.max(high[-40:]))
             if price >= pivot * 0.95:
                 seq = " → ".join(f"{p:.0f}%" for p in pullbacks)
-                return "VCP", f"Pullbacks shrinking ({seq}) — coiling near ₹{pivot:,.0f}", pivot
+                found.append(("VCP",
+                              f"Pullbacks shrinking ({seq}) — coiling near ₹{pivot:,.0f}",
+                              pivot))
+
+    # Ascending triangle: flat ceiling (3+ touches) + rising lows
+    if len(high) >= 45:
+        h40, l40 = high[-40:], low[-40:]
+        ceiling = float(np.max(h40))
+        touches = int(np.sum(h40 >= ceiling * 0.985))
+        lows_rising = float(np.min(l40[:20])) < float(np.min(l40[20:]))
+        if touches >= 3 and lows_rising and price >= ceiling * 0.96:
+            found.append(("ASC_TRIANGLE",
+                          f"Har dip pe buyers upar aa rahe — ceiling ₹{ceiling:,.0f} "
+                          f"ko {touches} baar test kiya", ceiling))
 
     # Flat base: 30+ days within a 12% range, price in top third
     if len(close) >= 45:
@@ -228,7 +328,23 @@ def _detect_pattern(close, high, low, vol) -> tuple[Optional[str], str, float]:
         base_lo = float(np.min(low[-35:]))
         depth = (base_hi - base_lo) / base_hi if base_hi > 0 else 1
         if depth <= 0.12 and price >= base_hi * 0.96:
-            return "FLAT_BASE", f"7-week flat base, sitting at ₹{base_hi:,.0f} ceiling", base_hi
+            found.append(("FLAT_BASE",
+                          f"7-week flat base, sitting at ₹{base_hi:,.0f} ceiling",
+                          base_hi))
+
+    # Double bottom: two lows within 3%, ≥15 sessions apart, price near neckline
+    if len(low) >= 90:
+        l90 = low[-90:]
+        i1 = int(np.argmin(l90[:45]))
+        i2 = 45 + int(np.argmin(l90[45:]))
+        lo1, lo2 = float(l90[i1]), float(l90[i2])
+        if lo1 > 0 and abs(lo1 - lo2) / lo1 <= 0.03 and (i2 - i1) >= 15:
+            neckline = float(np.max(high[-90:][i1:i2 + 1]))
+            depth_ok = neckline > max(lo1, lo2) * 1.08
+            if depth_ok and price >= neckline * 0.95:
+                found.append(("DOUBLE_BOTTOM",
+                              f"W-pattern bana — do baar ₹{lo1:,.0f} se wapas uchhla, "
+                              f"neckline ₹{neckline:,.0f}", neckline))
 
     # Cup & handle proxy: prior high, rounded 15-35% cup, small handle near rim
     if len(close) >= 130:
@@ -238,9 +354,10 @@ def _detect_pattern(close, high, low, vol) -> tuple[Optional[str], str, float]:
         handle_lo = float(np.min(low[-15:]))
         handle_ok = handle_lo >= cup_low + (left_rim - cup_low) * 0.5
         if 0.15 <= cup_depth <= 0.35 and handle_ok and price >= left_rim * 0.92:
-            return "CUP_HANDLE", f"Cup formed, handle near ₹{left_rim:,.0f} rim", left_rim
+            found.append(("CUP_HANDLE",
+                          f"Cup formed, handle near ₹{left_rim:,.0f} rim", left_rim))
 
-    return None, "", 0.0
+    return found
 
 
 def _pullback_depths(high, low, lookback: int = 120) -> list[float]:

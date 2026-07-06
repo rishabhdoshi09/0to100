@@ -47,6 +47,7 @@ def _serialize(r) -> dict:
         "reasons": r.reasons, "score": r.score, "verdict": r.verdict,
         "entry": r.entry, "stop": r.stop, "target": r.target,
         "rr": round(r.risk_reward, 1),
+        "pivot_distance_pct": getattr(r, "pivot_distance_pct", 0.0),
     }
 
 
@@ -71,22 +72,42 @@ def _push_new_setups(picks: list[dict]) -> None:
         fresh = [p for p in picks
                  if p["verdict"] in ("STRONG BUY", "BUY")
                  and p["symbol"] not in _pushed[today]][:5]
-        if not fresh:
+
+        # Pre-breakout watch: stock pivot ke 2.5% andar, breakout abhi hua nahi
+        pre = [p for p in picks
+               if "PreBreakout" in p.get("categories", [])
+               and 0 < p.get("pivot_distance_pct", 0) <= 2.5
+               and p["symbol"] not in _pushed[today]
+               and p not in fresh][:4]
+
+        if not fresh and not pre:
             return
 
-        lines = ["🎯 <b>QuantTerm — naye setups mile</b>"]
-        for p in fresh:
-            emoji = "🔥" if p["verdict"] == "STRONG BUY" else "⚡"
-            why = p.get("checks") or [f"✓ {r}" for r in p.get("reasons", [])]
-            why_txt = "\n".join(f"   {w}" for w in why[:3])
-            lines.append(
-                f"\n{emoji} <b>{p['symbol']}</b> ₹{p['price']:,.1f} — {p['verdict']}\n"
-                f"{why_txt}\n"
-                f"   Entry ₹{p['entry']:,.0f} · Stop ₹{p['stop']:,.0f} · Target ₹{p['target']:,.0f}"
-            )
+        lines = []
+        if fresh:
+            lines.append("🎯 <b>QuantTerm — naye setups mile</b>")
+            for p in fresh:
+                emoji = "🔥" if p["verdict"] == "STRONG BUY" else "⚡"
+                why = p.get("checks") or [f"✓ {r}" for r in p.get("reasons", [])]
+                why_txt = "\n".join(f"   {w}" for w in why[:3])
+                lines.append(
+                    f"\n{emoji} <b>{p['symbol']}</b> ₹{p['price']:,.1f} — {p['verdict']}\n"
+                    f"{why_txt}\n"
+                    f"   Entry ₹{p['entry']:,.0f} · Stop ₹{p['stop']:,.0f} · Target ₹{p['target']:,.0f}"
+                )
+        if pre:
+            lines.append("\n⏳ <b>Breakout ke kareeb — nazar rakho</b>")
+            for p in pre:
+                first_reason = (p.get("reasons") or [""])[0]
+                lines.append(
+                    f"\n👀 <b>{p['symbol']}</b> ₹{p['price']:,.1f} — "
+                    f"pivot ₹{p['entry']:,.0f} se {p['pivot_distance_pct']:.1f}% neeche\n"
+                    f"   {first_reason}\n"
+                    f"   Breakout confirm hone par hi entry — stop ₹{p['stop']:,.0f}"
+                )
         if engine.send("\n".join(lines)):
-            _pushed[today].update(p["symbol"] for p in fresh)
-            log.info("setups_pushed_to_telegram", count=len(fresh))
+            _pushed[today].update(p["symbol"] for p in fresh + pre)
+            log.info("setups_pushed_to_telegram", buys=len(fresh), prebreakout=len(pre))
     except Exception as exc:
         log.debug("push_setups_skip", error=str(exc))
 
