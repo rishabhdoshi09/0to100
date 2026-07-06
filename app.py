@@ -957,8 +957,8 @@ with st.sidebar:
 
         _nav_page_raw = _option_menu(
             menu_title=None,
-            options=["Today", "Stocks", "Options", "My Portfolio", "JARVIS"],
-            icons=["house-fill", "graph-up", "bar-chart-fill", "briefcase-fill", "robot"],
+            options=["Today", "Pulse", "Stocks", "Options", "My Portfolio", "JARVIS"],
+            icons=["house-fill", "newspaper", "graph-up", "bar-chart-fill", "briefcase-fill", "robot"],
             menu_icon=None,
             default_index=0,
             styles={
@@ -975,6 +975,7 @@ with st.sidebar:
         # Map 5-item nav → page routing keys
         _5NAV_MAP = {
             "Today":        "Dashboard",
+            "Pulse":        "Daily Pulse",
             "Stocks":       "Institutional",
             "Options":      "Options Flow",
             "My Portfolio": "My Holdings",
@@ -985,9 +986,10 @@ with st.sidebar:
 
     except Exception:
         # Fallback radio if option_menu unavailable
-        _5_options = ["Today", "Stocks", "Options", "My Portfolio", "JARVIS"]
+        _5_options = ["Today", "Pulse", "Stocks", "Options", "My Portfolio", "JARVIS"]
         _5_map = {
             "Today":        "Dashboard",
+            "Pulse":        "Daily Pulse",
             "Stocks":       "Institutional",
             "Options":      "Options Flow",
             "My Portfolio": "My Holdings",
@@ -1179,6 +1181,14 @@ if _page in ("Dashboard", "Markets"):
             render_portfolio_heatmap(_dash_positions)
         except Exception as _phm_e:
             st.error(f"Portfolio Heatmap error: {_phm_e}")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# PAGE: DAILY PULSE
+# ══════════════════════════════════════════════════════════════════════════════
+elif _page == "Daily Pulse":
+    from ui.street_pulse_page import render_street_pulse
+    render_street_pulse()
 
 
 # ══════════════════════════════════════════════════════════════════════════════
