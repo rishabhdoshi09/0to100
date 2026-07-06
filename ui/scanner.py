@@ -344,6 +344,99 @@ def _open_trade_ticket(s: dict) -> None:
         st.rerun()
 
 
+# ── Best Trade hero card ──────────────────────────────────────────────────────
+
+def _pick_best_trade(results: list[dict]) -> dict | None:
+    """The single most actionable setup: buy verdict + non-negative measured
+    edge + live price not broken below entry. Results are already sorted
+    verdict-first + edge-weighted, so the first qualifier IS the best."""
+    for r in results[:25]:
+        if r.get("verdict") not in ("STRONG BUY", "BUY"):
+            continue
+        if (r.get("edge_r") is not None) and r["edge_r"] < 0:
+            continue
+        return r
+    return None
+
+
+def _render_best_trade(results: list[dict]) -> None:
+    best = _pick_best_trade(results)
+    if not best:
+        return
+    from risk.position_sizer import size_position
+
+    sym = best["symbol"]
+    chg = best.get("change_pct", 0)
+    chg_col = "#00d4a0" if chg >= 0 else "#ff4b4b"
+    arrow = "▲" if chg >= 0 else "▼"
+    label, vcol = _VERDICT_STYLE.get(best["verdict"], _VERDICT_STYLE["WATCH"])
+
+    checks = (best.get("checks") or [f"✓ {r}" for r in best.get("reasons", [])])[:3]
+    checks_html = "".join(
+        f"<div style='font-size:.8rem;color:"
+        f"{'#00d4a0' if c.startswith('✓') else '#f59e0b' if c.startswith('⚠') else '#94a3b8'};"
+        f"margin:2px 0'>{c}</div>" for c in checks)
+
+    edge = best.get("edge_r")
+    edge_html = (f"<span style='color:#00d4a0;font-size:.75rem;font-weight:700'>"
+                 f"🎯 Measured edge {edge:+.2f}R/trade</span>"
+                 if edge is not None and edge >= 0.05 else "")
+
+    cap = st.session_state.get("user_capital")
+    ps = size_position(float(best.get("entry") or 0), float(best.get("stop") or 0),
+                       capital=cap)
+    size_line = (f"📏 <b>{ps['qty']} shares</b> = ₹{ps['invested']:,.0f} · "
+                 f"max loss ₹{ps['max_loss']:,.0f}" if ps["qty"] else "")
+
+    spark = _sparkline_svg(sym, float(best.get("entry") or 0))
+
+    hc1, hc2 = st.columns([4.2, 1])
+    with hc1:
+        st.markdown(
+            f"<div style='background:linear-gradient(135deg,#0d1f2d,#0d1421);"
+            f"border:1px solid {vcol}66;border-radius:12px;padding:16px 20px;"
+            f"margin-bottom:4px'>"
+            f"<div style='font-size:.68rem;color:{vcol};text-transform:uppercase;"
+            f"letter-spacing:.15em;margin-bottom:6px'>⭐ Aaj ka Best Trade</div>"
+            f"<div style='display:flex;justify-content:space-between;align-items:center'>"
+            f"  <div>"
+            f"    <span style='color:#e6edf3;font-weight:800;font-size:1.35rem;"
+            f"      font-family:JetBrains Mono,monospace'>{sym}</span>"
+            f"    <span style='color:#e2e8f0;font-size:1.05rem;margin-left:14px'>"
+            f"      ₹{best['price']:,.1f}</span>"
+            f"    <span style='color:{chg_col};font-size:.9rem;margin-left:8px;"
+            f"      font-weight:700'>{arrow}{abs(chg):.1f}%</span>"
+            f"  </div>"
+            f"  <div style='display:flex;align-items:center;gap:14px'>{spark}"
+            f"    <span style='background:{vcol}22;border:1px solid {vcol};"
+            f"      border-radius:8px;padding:5px 14px;font-size:.8rem;"
+            f"      font-weight:800;color:{vcol}'>{label}</span>"
+            f"  </div>"
+            f"</div>"
+            f"<div style='margin-top:8px'>{checks_html}</div>"
+            f"<div style='margin-top:8px;font-size:.85rem;color:#c9d1d9'>"
+            f"Entry <b style='color:#f59e0b'>₹{best['entry']:,.0f}</b> · "
+            f"Stop <b style='color:#ff4b4b'>₹{best['stop']:,.0f}</b> · "
+            f"Target <b style='color:#00d4a0'>₹{best['target']:,.0f}</b> · "
+            f"Reward <b>{best.get('rr', 0):.1f}×</b>"
+            + (f" &nbsp;&nbsp;{edge_html}" if edge_html else "")
+            + f"</div>"
+            + (f"<div style='margin-top:4px;font-size:.8rem;color:#7dd3fc'>{size_line}</div>"
+               if size_line else "")
+            + "</div>",
+            unsafe_allow_html=True,
+        )
+    with hc2:
+        st.markdown("<div style='height:1.4rem'></div>", unsafe_allow_html=True)
+        if st.button("💰 Trade Now", key="hero_trade", type="primary",
+                     use_container_width=True):
+            _open_trade_ticket(best)
+        if st.button("Analyse →", key="hero_analyse", use_container_width=True):
+            st.session_state["sidebar_nav"] = "Terminal"
+            st.session_state["terminal_symbol"] = sym
+            st.rerun()
+
+
 # ── Card renderer ─────────────────────────────────────────────────────────────
 
 def _render_card(s: dict, key_prefix: str = "") -> None:
@@ -604,6 +697,9 @@ def render_scanner(universe: list[str]) -> None:
             st.warning("Scan market data nahi laa paya. Internet check karke "
                        "**Scan Market** dobara dabao.")
         return
+
+    # ── ⭐ Best Trade — sabse pehle, sabse bada, ek click pe trade ────────────
+    _render_best_trade(results)
 
     # ── Fallback trade panel (older Streamlit without st.dialog) ──────────────
     if not hasattr(st, "dialog") and st.session_state.get("trade_ticket_row"):
