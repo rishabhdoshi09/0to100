@@ -153,6 +153,38 @@ def _freshness(ts: float) -> str:
     return datetime.fromtimestamp(ts).strftime("%I:%M %p")
 
 
+@st.cache_data(ttl=900, show_spinner=False)
+def _sparkline_svg(symbol: str, entry: float = 0.0) -> str:
+    """Inline 30-day price sparkline SVG from the bhav store. '' on miss."""
+    try:
+        from data.bhavcopy_store import get_ohlcv
+        df = get_ohlcv(symbol)
+        if df is None or len(df) < 10:
+            return ""
+        closes = df["close"].values[-30:].astype(float)
+        lo, hi = closes.min(), closes.max()
+        if hi <= lo:
+            return ""
+        W, H, PAD = 150, 38, 3
+        xs = [PAD + i * (W - 2 * PAD) / (len(closes) - 1) for i in range(len(closes))]
+        ys = [H - PAD - (c - lo) / (hi - lo) * (H - 2 * PAD) for c in closes]
+        pts = " ".join(f"{x:.1f},{y:.1f}" for x, y in zip(xs, ys))
+        up = closes[-1] >= closes[0]
+        color = "#00d4a0" if up else "#ff4b4b"
+        # entry level line (if inside the visible range)
+        entry_line = ""
+        if entry and lo <= entry <= hi:
+            ey = H - PAD - (entry - lo) / (hi - lo) * (H - 2 * PAD)
+            entry_line = (f"<line x1='{PAD}' y1='{ey:.1f}' x2='{W-PAD}' y2='{ey:.1f}' "
+                          f"stroke='#f59e0b' stroke-width='1' stroke-dasharray='3,3'/>")
+        return (f"<svg width='{W}' height='{H}' style='vertical-align:middle'>"
+                f"<polyline points='{pts}' fill='none' stroke='{color}' "
+                f"stroke-width='1.6' stroke-linejoin='round'/>"
+                f"{entry_line}</svg>")
+    except Exception:
+        return ""
+
+
 # ── Card renderer ─────────────────────────────────────────────────────────────
 
 def _render_card(s: dict, key_prefix: str = "") -> None:
@@ -207,6 +239,7 @@ def _render_card(s: dict, key_prefix: str = "") -> None:
         + f"</div>{size_html}"
     )
 
+    spark = _sparkline_svg(s["symbol"], float(s.get("entry") or 0))
     col1, col2 = st.columns([5, 1])
     with col1:
         st.markdown(
@@ -220,8 +253,10 @@ def _render_card(s: dict, key_prefix: str = "") -> None:
             f"    <span style='color:{chg_color};font-size:.82rem;margin-left:6px;font-weight:600'>"
             f"      {chg_arrow}{abs(chg):.1f}%</span>{live_tag}"
             f"  </div>"
+            f"  <div style='display:flex;align-items:center;gap:12px'>{spark}"
             f"  <span style='background:{vcolor}18;border:1px solid {vcolor}55;border-radius:6px;"
             f"    padding:3px 10px;font-size:.7rem;font-weight:700;color:{vcolor}'>{label}</span>"
+            f"  </div>"
             f"</div>"
             f"<div style='margin-top:7px'>{chips}</div>"
             f"<div style='margin-top:6px;font-size:.78rem;color:#c9d1d9'>{reason}</div>"
@@ -398,6 +433,35 @@ def render_scanner(universe: list[str]) -> None:
         + "</div>",
         unsafe_allow_html=True,
     )
+
+    # ── Hot sectors strip (sector heat working = visible here) ───────────────
+    _sec_counts: dict = {}
+    for r in results:
+        if r.get("sector"):
+            _sec_counts[r["sector"]] = _sec_counts.get(r["sector"], 0) + 1
+    if _sec_counts:
+        _hot_html = " ".join(
+            f"<span style='background:#f59e0b18;border:1px solid #f59e0b44;"
+            f"border-radius:6px;padding:2px 10px;font-size:.72rem;color:#f59e0b;"
+            f"margin-right:6px'>🔥 {sec} · {cnt} stocks</span>"
+            for sec, cnt in sorted(_sec_counts.items(), key=lambda kv: -kv[1])[:4])
+        st.markdown(
+            f"<div style='margin:-4px 0 10px 0'>"
+            f"<span style='font-size:.7rem;color:#8892a4;margin-right:8px'>"
+            f"HOT SECTORS</span>{_hot_html}</div>",
+            unsafe_allow_html=True)
+
+    # ── Calibration badge (backtest weights active = visible here) ───────────
+    try:
+        from scan.unified_scanner import _load_calibration
+        _cal = _load_calibration()
+        if _cal:
+            _boosted = sum(1 for v in _cal.values() if v > 1)
+            _cut = sum(1 for v in _cal.values() if v < 1)
+            st.caption(f"🎯 Scores backtest-calibrated: {_boosted} signal(s) boosted, "
+                       f"{_cut} discounted — evidence se, andaaze se nahi")
+    except Exception:
+        pass
 
     # ── Telegram push hint (only when not configured) ─────────────────────────
     try:

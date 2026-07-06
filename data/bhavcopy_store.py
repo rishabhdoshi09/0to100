@@ -47,23 +47,31 @@ def _day_path(d: date) -> Path:
     return _BHAV_DIR / f"{d.strftime('%d%m%Y')}.csv"
 
 
-def _download_day(d: date) -> bool:
-    """Fetch one bhavcopy to disk. False if unavailable (holiday/404)."""
+def _download_day(d: date, retries: int = 2) -> bool:
+    """
+    Fetch one bhavcopy to disk. 404 = holiday (no retry). Network errors
+    retry with backoff so a flaky connection can't punch holes in history.
+    """
     path = _day_path(d)
     if path.exists():
         return True
     import requests
-    try:
-        url = _URL.format(d=d.strftime("%d%m%Y"))
-        resp = requests.get(url, headers=_HEADERS, timeout=12)
-        if resp.status_code != 200 or len(resp.content) < 1000:
-            return False
-        _BHAV_DIR.mkdir(parents=True, exist_ok=True)
-        path.write_bytes(resp.content)
-        return True
-    except Exception as exc:
-        log.debug("bhav_download_failed", day=str(d), error=str(exc))
-        return False
+    url = _URL.format(d=d.strftime("%d%m%Y"))
+    for attempt in range(retries + 1):
+        try:
+            resp = requests.get(url, headers=_HEADERS, timeout=12)
+            if resp.status_code == 404:
+                return False          # holiday/weekend — retrying won't help
+            if resp.status_code == 200 and len(resp.content) >= 1000:
+                _BHAV_DIR.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(resp.content)
+                return True
+        except Exception as exc:
+            if attempt == retries:
+                log.debug("bhav_download_failed", day=str(d), error=str(exc))
+        if attempt < retries:
+            time.sleep(1.5 * (attempt + 1))
+    return False
 
 
 def _read_day(d: date) -> Optional[pd.DataFrame]:
