@@ -40,7 +40,10 @@ _URL = "https://nsearchives.nseindia.com/products/content/sec_bhavdata_full_{d}.
 _lock = threading.Lock()
 _store: dict[str, pd.DataFrame] = {}     # symbol -> OHLCV df (lowercase cols)
 _store_last_day: Optional[date] = None
+_store_sessions: int = 0                  # how many sessions the store covers
 _MIN_DAYS = 60                            # need at least this much history to be usable
+_PKL = _BHAV_DIR / "store_cache.pkl"      # consolidated cache — skip re-parsing CSVs
+DEFAULT_DAYS = 500                        # ~2 years: doubles backtest evidence
 
 
 def _day_path(d: date) -> Path:
@@ -112,17 +115,112 @@ def _trading_days_back(n_days: int) -> list[date]:
     return out
 
 
-def build_store(days: int = 260, progress=None) -> int:
-    """
-    Ensure the in-memory store covers ~`days` sessions. Downloads only
-    missing files (first run: full history; later runs: today only).
-    Returns the number of symbols available.
-    """
-    global _store, _store_last_day
+def _save_pkl() -> None:
+    """Persist the built store so restarts load in seconds, not minutes."""
+    try:
+        import pickle
+        with _lock:
+            data = {"store": _store, "last_day": _store_last_day,
+                    "sessions": _store_sessions}
+        _PKL.parent.mkdir(parents=True, exist_ok=True)
+        tmp = _PKL.with_suffix(".pkl.tmp")
+        with open(tmp, "wb") as f:
+            pickle.dump(data, f, protocol=pickle.HIGHEST_PROTOCOL)
+        tmp.replace(_PKL)                     # atomic — no half-written cache
+    except Exception as exc:
+        log.debug("bhav_pkl_save_failed", error=str(exc))
 
+
+def _load_pkl() -> bool:
+    """Load the consolidated cache. False if absent/corrupt."""
+    global _store, _store_last_day, _store_sessions
+    try:
+        import pickle
+        if not _PKL.exists():
+            return False
+        with open(_PKL, "rb") as f:
+            data = pickle.load(f)
+        if not data.get("store"):
+            return False
+        with _lock:
+            _store = data["store"]
+            _store_last_day = data["last_day"]
+            _store_sessions = int(data.get("sessions") or 0)
+        log.info("bhav_store_loaded_from_cache", symbols=len(_store),
+                 sessions=_store_sessions, latest=str(_store_last_day))
+        return True
+    except Exception as exc:
+        log.debug("bhav_pkl_load_failed", error=str(exc))
+        try:
+            _PKL.unlink()                     # corrupt cache — remove it
+        except Exception:
+            pass
+        return False
+
+
+def _full_build(available: list[date]) -> int:
+    global _store, _store_last_day, _store_sessions
+    frames = []
+    for d in sorted(available):
+        f = _read_day(d)
+        if f is not None:
+            frames.append(f)
+    if not frames:
+        return 0
+    allday = pd.concat(frames, ignore_index=True)
+    keep_cols = ["open", "high", "low", "close", "volume"]
+    if "deliv_per" in allday.columns:
+        keep_cols.append("deliv_per")
+    new_store: dict[str, pd.DataFrame] = {}
+    for sym, g in allday.groupby("symbol"):
+        g = g.sort_values("date").set_index("date")
+        if len(g) >= 30:
+            new_store[sym] = g[[c for c in keep_cols if c in g.columns]]
+    with _lock:
+        _store = new_store
+        _store_last_day = max(available)
+        _store_sessions = len(frames)
+    log.info("bhav_store_built", symbols=len(new_store), sessions=len(frames),
+             latest=str(max(available)))
+    _save_pkl()
+    return len(new_store)
+
+
+def _incremental_append(new_days: list[date]) -> None:
+    """Append only the fresh sessions onto the loaded store."""
+    global _store_last_day, _store_sessions
+    frames = [f for d in sorted(new_days)
+              if (f := _read_day(d)) is not None]
+    if not frames:
+        return
+    allday = pd.concat(frames, ignore_index=True)
+    with _lock:
+        for sym, g in allday.groupby("symbol"):
+            g = g.sort_values("date").set_index("date")
+            cols = [c for c in ("open", "high", "low", "close", "volume",
+                                "deliv_per") if c in g.columns]
+            old = _store.get(sym)
+            if old is not None:
+                merged = pd.concat([old, g[[c for c in cols if c in old.columns
+                                            or c in g.columns]]])
+                _store[sym] = merged[~merged.index.duplicated(keep="last")]
+            elif len(g) >= 1:
+                _store[sym] = g[cols]
+        _store_last_day = max(new_days)
+        _store_sessions += len(frames)
+    log.info("bhav_store_appended", days=len(frames), latest=str(max(new_days)))
+    _save_pkl()
+
+
+def build_store(days: int = DEFAULT_DAYS, progress=None) -> int:
+    """
+    Ensure the store covers ~`days` sessions (~2 years by default).
+    Fast paths: in-memory → pickle cache → incremental append of new
+    days only. Full CSV re-parse happens once, then never again.
+    """
     candidates = _trading_days_back(days)
 
-    # Download whatever is missing, newest first, bounded concurrency
+    # Download whatever is missing on disk, bounded concurrency
     missing = [d for d in candidates if not _day_path(d).exists()]
     if missing:
         log.info("bhav_download_start", missing=len(missing))
@@ -141,36 +239,30 @@ def build_store(days: int = 260, progress=None) -> int:
     if len(available) < _MIN_DAYS:
         log.warning("bhav_insufficient_history", have=len(available))
         return 0
-
     newest = max(available)
-    with _lock:
-        if _store and _store_last_day == newest:
-            return len(_store)   # already built and current
-
-    frames = []
-    for d in sorted(available):
-        f = _read_day(d)
-        if f is not None:
-            frames.append(f)
-    if not frames:
-        return 0
-
-    allday = pd.concat(frames, ignore_index=True)
-    keep_cols = ["open", "high", "low", "close", "volume"]
-    if "deliv_per" in allday.columns:
-        keep_cols.append("deliv_per")
-    new_store: dict[str, pd.DataFrame] = {}
-    for sym, g in allday.groupby("symbol"):
-        g = g.sort_values("date").set_index("date")
-        if len(g) >= 30:
-            new_store[sym] = g[[c for c in keep_cols if c in g.columns]]
 
     with _lock:
-        _store = new_store
-        _store_last_day = newest
-    log.info("bhav_store_built", symbols=len(new_store), sessions=len(frames),
-             latest=str(newest))
-    return len(new_store)
+        have_store = bool(_store)
+        last, sessions = _store_last_day, _store_sessions
+
+    # Cold start → try the pickle cache before parsing 500 CSVs
+    if not have_store and _load_pkl():
+        with _lock:
+            last, sessions = _store_last_day, _store_sessions
+        have_store = True
+
+    if have_store:
+        deep_enough = sessions >= min(days, len(available)) * 0.9
+        if last == newest and deep_enough:
+            with _lock:
+                return len(_store)            # current — nothing to do
+        if deep_enough and last and last < newest:
+            _incremental_append([d for d in available if d > last])
+            with _lock:
+                return len(_store)
+        # store too shallow (e.g. old 260-day cache, now want 500) → rebuild
+
+    return _full_build(available)
 
 
 def get_ohlcv(symbol: str) -> Optional[pd.DataFrame]:

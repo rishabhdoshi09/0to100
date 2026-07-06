@@ -59,7 +59,7 @@ def _simulate(entry: float, stop: float, target: float,
     return "NO_FILL", 0.0
 
 
-def run_backtest(sample_step: int = 5, lookback_sessions: int = 100,
+def run_backtest(sample_step: int = 5, lookback_sessions: int = 250,
                  horizon: int = 10, max_symbols: int = 800) -> dict:
     """
     Walk-forward backtest across the bhav store. Returns and persists
