@@ -1,0 +1,36 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run test suite (network-free)
+        run: |
+          python -m pytest tests/ -q --tb=short
+        env:
+          # Tests must never touch real accounts even if secrets leak into env
+          KITE_ACCESS_TOKEN: ""
+          TELEGRAM_BOT_TOKEN: ""
+          DEEPSEEK_API_KEY: ""
+
+      - name: Compile every module (import-safety net)
+        run: |
+          python -m compileall -q data scan risk execution ui reports ai core alerts news
