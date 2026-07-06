@@ -198,6 +198,32 @@ def _scan_once(universe: Optional[list[str]] = None, progress=None) -> None:
             log.info("live_overlay_done", overlaid=overlaid, of=min(60, len(serialized)))
         except Exception as exc:
             log.warning("live_overlay_failed", error=str(exc))
+        # Measured edge on every result — backtest data working FOR the user
+        try:
+            from scan.signal_backtest import combo_edge
+            from scan.unified_scanner import SIGNAL_META
+            _key_by_label = {v[0]: k for k, v in SIGNAL_META.items()}
+            for r in serialized:
+                keys = [_key_by_label.get(lbl) for lbl in r.get("signals", [])]
+                keys = [k for k in keys if k]
+                edge = combo_edge(keys)
+                if edge is None:
+                    continue
+                r["edge_r"] = edge
+                if edge < -0.02 and r.get("verdict") in ("STRONG BUY", "BUY"):
+                    r["verdict"] = "WATCH"
+                    r.setdefault("reasons", []).insert(
+                        0, f"⚠ Backtest verdict: is pattern-combo ki measured edge "
+                           f"{edge:+.2f}R hai (800 stocks pe test) — Buy nahi banta")
+            # Proven edge floats to the top; demoted setups sink below every
+            # buy — in cards, Telegram, Dashboard and JARVIS alike.
+            _vrank = {"STRONG BUY": 2, "BUY": 1}
+            serialized.sort(
+                key=lambda r: (_vrank.get(r.get("verdict"), 0),
+                               float(r.get("score", 0)) + float(r.get("edge_r", 0) or 0) * 40),
+                reverse=True)
+        except Exception as exc:
+            log.debug("edge_apply_skip", error=str(exc))
         # Proactive delivery — user ko dhundhna na pade, setups khud pahunchein
         _push_new_setups(serialized[:15])
         with _lock:
@@ -253,11 +279,40 @@ def _maybe_push_morning_pulse() -> None:
         log.debug("morning_pulse_skip", error=str(exc))
 
 
+_bt_done_date: str = ""
+
+
+def _maybe_run_nightly_backtest() -> None:
+    """Auto-refresh the signal backtest once per day, off-market hours —
+    the calibration stays current without the user pressing anything."""
+    global _bt_done_date
+    today = datetime.now().strftime("%Y-%m-%d")
+    if _bt_done_date == today or _is_market_hours():
+        return
+    try:
+        from data.bhavcopy_store import is_ready
+        from scan.signal_backtest import run_backtest, get_state, load_report
+        if not is_ready() or get_state()["running"]:
+            return
+        rep = load_report()
+        if rep and str(rep.get("generated_at", "")).startswith(today.replace("-", "")[:4]):
+            # already ran today? generated_at format is "YYYY-MM-DD HH:MM"
+            if str(rep.get("generated_at", ""))[:10] == today:
+                _bt_done_date = today
+                return
+        log.info("nightly_backtest_start")
+        run_backtest(max_symbols=800)
+        _bt_done_date = today
+    except Exception as exc:
+        log.debug("nightly_backtest_skip", error=str(exc))
+
+
 def _worker() -> None:
     while True:
         if is_auto_enabled():
             _scan_once()
             _maybe_push_morning_pulse()
+            _maybe_run_nightly_backtest()
             time.sleep(_MARKET_REFRESH_S if _is_market_hours() else _OFFHOURS_REFRESH_S)
         else:
             time.sleep(30)   # paused by user — just idle and re-check

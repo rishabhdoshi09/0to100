@@ -267,6 +267,20 @@ def _render_card(s: dict, key_prefix: str = "") -> None:
         f"font-size:.68rem;color:#94a3b8;margin-right:6px'>{sig}</span>"
         for sig in s["signals"]
     )
+    # Measured edge badge — backtest verdict in one glance, no table needed
+    edge = s.get("edge_r")
+    if edge is not None:
+        if edge >= 0.25:
+            e_col, e_txt = "#00d4a0", f"🎯 Proven edge {edge:+.2f}R/trade"
+        elif edge >= 0.05:
+            e_col, e_txt = "#7dd3fc", f"🎯 Mild edge {edge:+.2f}R/trade"
+        elif edge >= -0.02:
+            e_col, e_txt = "#8892a4", f"🎯 No edge yet ({edge:+.2f}R)"
+        else:
+            e_col, e_txt = "#ff4b4b", f"🎯 Negative edge {edge:+.2f}R — skip"
+        chips += (f"<span style='background:{e_col}18;border:1px solid {e_col}44;"
+                  f"border-radius:5px;padding:2px 8px;font-size:.68rem;"
+                  f"color:{e_col};font-weight:600'>{e_txt}</span>")
 
     # Conviction checklist (from JARVIS layer) or plain scanner reasons
     checks = s.get("checks") or []
@@ -396,10 +410,11 @@ def render_scanner(universe: list[str]) -> None:
                     st.caption(f"⏳ Chal raha hai… {_bt_state['progress']}/"
                                f"{_bt_state['total']} stocks")
             with bc2:
-                st.caption("Har signal ko pichhle ~100 sessions pe walk-forward "
-                           "test karta hai (no lookahead): entry ke baad target "
-                           "(2R) pehle laga ya stop. Isse pata chalta hai kis "
-                           "signal pe kitna bharosa karna chahiye.")
+                st.caption("**Yeh data ab khud kaam karta hai — tumhe kuch nahi "
+                           "karna:** har card pe 🎯 edge badge, negative-edge "
+                           "combos auto-demote (Buy → Watch), proven-edge setups "
+                           "sabse upar, aur backtest roz raat khud refresh hota "
+                           "hai. Neeche ki table sirf transparency ke liye hai.")
             if _rep:
                 rows = []
                 for key, s in sorted(_rep.get("signals", {}).items(),

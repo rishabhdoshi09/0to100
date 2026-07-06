@@ -165,6 +165,23 @@ def load_report() -> dict | None:
     return None
 
 
+def combo_edge(signal_keys: list[str], min_trades: int = 30) -> float | None:
+    """
+    Measured expectancy (avg R/trade) for a stock's signal combo —
+    mean of each signal's backtested expectancy, using only signals
+    with enough evidence. None when no backtest / no evidenced signal.
+    """
+    rep = load_report()
+    if not rep:
+        return None
+    vals = []
+    for k in signal_keys:
+        s = rep.get("signals", {}).get(k)
+        if s and s.get("trades", 0) >= min_trades:
+            vals.append(float(s.get("expectancy_r", 0)))
+    return round(sum(vals) / len(vals), 2) if vals else None
+
+
 def accuracy_for(signal_key: str) -> str:
     """'62% WR (145 trades)' for a signal, or '' if no backtest yet."""
     rep = load_report()
