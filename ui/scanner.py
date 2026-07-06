@@ -176,6 +176,16 @@ def render_scanner(universe: list[str]) -> None:
         unsafe_allow_html=True,
     )
 
+    # ── Telegram push hint (only when not configured) ─────────────────────────
+    try:
+        from alerts.telegram_alerts import AlertEngine
+        if not AlertEngine().is_configured():
+            st.caption("💡 Naye setups **khud aap tak** pahunch sakte hain — `.env` mein "
+                       "`TELEGRAM_BOT_TOKEN` & `TELEGRAM_CHAT_ID` daalo, har scan ke baad "
+                       "fresh Buy setups Telegram pe milenge.")
+    except Exception:
+        pass
+
     # ── Search within results ─────────────────────────────────────────────────
     q = st.text_input("Filter", placeholder="🔍 Filter by symbol…",
                       key="scanner_filter", label_visibility="collapsed")

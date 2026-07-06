@@ -50,6 +50,47 @@ def _serialize(r) -> dict:
     }
 
 
+# {YYYY-MM-DD: set of symbols already pushed} — one alert per stock per day
+_pushed: dict[str, set] = {}
+
+
+def _push_new_setups(picks: list[dict]) -> None:
+    """Proactively send fresh BUY/STRONG BUY setups to Telegram. Silent if unconfigured."""
+    try:
+        from alerts.telegram_alerts import AlertEngine
+        engine = AlertEngine()
+        if not engine.is_configured():
+            return
+        today = datetime.now().strftime("%Y-%m-%d")
+        _pushed.setdefault(today, set())
+        # Drop stale day keys
+        for k in list(_pushed):
+            if k != today:
+                del _pushed[k]
+
+        fresh = [p for p in picks
+                 if p["verdict"] in ("STRONG BUY", "BUY")
+                 and p["symbol"] not in _pushed[today]][:5]
+        if not fresh:
+            return
+
+        lines = ["🎯 <b>QuantTerm — naye setups mile</b>"]
+        for p in fresh:
+            emoji = "🔥" if p["verdict"] == "STRONG BUY" else "⚡"
+            why = p.get("checks") or [f"✓ {r}" for r in p.get("reasons", [])]
+            why_txt = "\n".join(f"   {w}" for w in why[:3])
+            lines.append(
+                f"\n{emoji} <b>{p['symbol']}</b> ₹{p['price']:,.1f} — {p['verdict']}\n"
+                f"{why_txt}\n"
+                f"   Entry ₹{p['entry']:,.0f} · Stop ₹{p['stop']:,.0f} · Target ₹{p['target']:,.0f}"
+            )
+        if engine.send("\n".join(lines)):
+            _pushed[today].update(p["symbol"] for p in fresh)
+            log.info("setups_pushed_to_telegram", count=len(fresh))
+    except Exception as exc:
+        log.debug("push_setups_skip", error=str(exc))
+
+
 def _log_buys_for_tracking(results) -> None:
     """Feed BUY signals into the outcome tracker (dedupes per day itself)."""
     try:
@@ -85,6 +126,8 @@ def _scan_once() -> None:
             serialized = build_conviction(serialized)
         except Exception as exc:
             log.debug("conviction_skip", error=str(exc))
+        # Proactive delivery — user ko dhundhna na pade, setups khud pahunchein
+        _push_new_setups(serialized[:15])
         with _lock:
             _results = serialized
             _scanned_count = len(universe)
