@@ -149,6 +149,12 @@ if "monitor_started" not in st.session_state:
         start_background_scan()
     except Exception:
         pass
+    # Telegram button-tap listener — phone se paper-trade / watchlist
+    try:
+        from alerts.telegram_actions import start_telegram_listener
+        start_telegram_listener()
+    except Exception:
+        pass
 
 # ── Cached client initialisation ─────────────────────────────────────────────
 @st.cache_resource

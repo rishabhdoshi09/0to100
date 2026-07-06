@@ -115,7 +115,15 @@ def _push_new_setups(picks: list[dict]) -> None:
                     f"   {first_reason}\n"
                     f"   Breakout confirm hone par hi entry — stop ₹{p['stop']:,.0f}"
                 )
-        if engine.send("\n".join(lines)):
+        # Inline action buttons — phone se hi paper-trade / watchlist
+        markup = None
+        try:
+            from alerts.telegram_actions import build_setup_keyboard
+            if fresh:
+                markup = build_setup_keyboard(fresh)
+        except Exception:
+            pass
+        if engine.send("\n".join(lines), reply_markup=markup):
             _pushed[today].update(p["symbol"] for p in fresh + pre)
             log.info("setups_pushed_to_telegram", buys=len(fresh), prebreakout=len(pre))
     except Exception as exc:

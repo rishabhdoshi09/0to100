@@ -62,9 +62,10 @@ class AlertEngine:
         """Return True if both token and chat_id are present in env."""
         return self.enabled
 
-    def send(self, message: str) -> bool:
+    def send(self, message: str, reply_markup: dict | None = None) -> bool:
         """
-        POST *message* to Telegram sendMessage.
+        POST *message* to Telegram sendMessage. Optional reply_markup
+        attaches inline action buttons (see alerts/telegram_actions.py).
         Returns True on success, False on any error (silent fail).
         """
         if not self.enabled:
@@ -75,6 +76,8 @@ class AlertEngine:
             "text":       message,
             "parse_mode": "HTML",
         }
+        if reply_markup:
+            payload["reply_markup"] = reply_markup
         try:
             resp = requests.post(url, json=payload, timeout=8)
             resp.raise_for_status()

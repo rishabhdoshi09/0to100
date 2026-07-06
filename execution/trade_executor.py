@@ -100,16 +100,19 @@ def kite_ready() -> bool:
 
 
 def place_trade(symbol: str, qty: int, entry_type: str, entry_price: float,
-                stop: float, target: float, product: str = "CNC") -> dict:
+                stop: float, target: float, product: str = "CNC",
+                paper: bool = False) -> dict:
     """
     Full trade: entry + GTT OCO exits + journal.
+    paper=True forces paper mode even when Kite is connected — Telegram
+    buttons use this (live orders need the app's full ticket, on purpose).
     Returns {ok, mode, entry_order_id, gtt_id, message}.
     """
     err = _validate(symbol, qty, entry_price, stop, target)
     if err:
         return {"ok": False, "mode": "-", "message": err}
 
-    if not kite_ready():
+    if paper or not kite_ready():
         # ── Paper mode — same flow, no money ─────────────────────────────
         _journal({"mode": "PAPER", "symbol": symbol, "qty": qty,
                   "entry_type": entry_type, "entry_price": entry_price,
