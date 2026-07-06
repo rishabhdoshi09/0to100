@@ -1278,24 +1278,66 @@ elif _page in ("Terminal", "Analyse"):
     col_chart, col_signal = st.columns([65, 35])
 
     with col_chart:
-        if _load_chart or st.session_state.get("terminal_chart_loaded_sym") == _chart_sym:
+        # Auto-load when arriving from the scanner's Analyse button
+        _came_from_scanner = st.session_state.get("terminal_symbol") == _chart_sym
+        if _load_chart or _came_from_scanner \
+                or st.session_state.get("terminal_chart_loaded_sym") == _chart_sym:
             _PERIOD_MAP = {"5m": ("5d", "5m"), "15m": ("5d", "15m"),
                            "1h": ("1mo", "60m"), "1D": ("1y", "1d")}
             _period, _interval = _PERIOD_MAP.get(_tf, ("3mo", "1d"))
             with st.spinner(f"Fetching {_chart_sym}…"):
                 try:
                     from charting.engine import SmartChart as _SC
-                    _df = yf.download(f"{_chart_sym}.NS", period=_period, interval=_interval,
-                                      auto_adjust=True, progress=False)
+                    _df = pd.DataFrame()
+                    # Daily charts: official NSE bhav store first (no Yahoo)
+                    if _tf == "1D":
+                        try:
+                            from data.bhavcopy_store import get_ohlcv as _bh_get
+                            _bdf = _bh_get(_chart_sym)
+                            if _bdf is not None and len(_bdf) >= 30:
+                                _df = _bdf[["open", "high", "low", "close",
+                                            "volume"]].dropna()
+                        except Exception:
+                            pass
+                    if _df.empty:   # intraday timeframes / store miss
+                        _df = yf.download(f"{_chart_sym}.NS", period=_period,
+                                          interval=_interval,
+                                          auto_adjust=True, progress=False)
+                        if not _df.empty:
+                            if isinstance(_df.columns, pd.MultiIndex):
+                                _df.columns = [c[0].lower() for c in _df.columns]
+                            else:
+                                _df.columns = [c.lower() for c in _df.columns]
+                            _df = _df[["open", "high", "low", "close",
+                                       "volume"]].dropna()
                     if _df.empty:
                         st.error(f"No data for {_chart_sym}.NS")
                     else:
-                        if isinstance(_df.columns, pd.MultiIndex):
-                            _df.columns = [c[0].lower() for c in _df.columns]
-                        else:
-                            _df.columns = [c.lower() for c in _df.columns]
-                        _df = _df[["open", "high", "low", "close", "volume"]].dropna()
                         _fig = _SC().build(_df, symbol=_chart_sym, show_vp=False)
+                        # ── Scanner trade-plan overlay: entry/stop/target ─────
+                        try:
+                            from scan.auto_scan import get_results as _asr
+                            _sres, _, _, _ = _asr()
+                            _setup = next((r for r in _sres
+                                           if r["symbol"] == _chart_sym), None)
+                            if _setup and _setup.get("entry"):
+                                for _lvl, _lcol, _lab in (
+                                        (_setup.get("entry"), "#f59e0b", "Entry"),
+                                        (_setup.get("stop"), "#ff4b4b", "Stop"),
+                                        (_setup.get("target"), "#00d4a0", "Target")):
+                                    if _lvl:
+                                        _fig.add_hline(
+                                            y=_lvl, line_color=_lcol,
+                                            line_dash="dash", line_width=1,
+                                            annotation_text=f"{_lab} ₹{_lvl:,.0f}",
+                                            annotation_font_color=_lcol,
+                                            annotation_position="right")
+                                st.caption(
+                                    f"📋 Scanner plan: "
+                                    f"{' + '.join(_setup.get('signals', [])[:2])} · "
+                                    f"{_setup.get('verdict', '')} · lines chart pe")
+                        except Exception:
+                            pass
                         st.plotly_chart(_fig, width='stretch', key="terminal_main_chart")
                         st.session_state["terminal_chart_loaded_sym"] = _chart_sym
                 except Exception as _ce:
