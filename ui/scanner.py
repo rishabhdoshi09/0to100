@@ -72,6 +72,16 @@ def _apply_live_prices(results: list[dict]) -> None:
 
 
 @st.cache_data(ttl=600, show_spinner=False)
+def _sector_perf() -> list[dict]:
+    """Sector performance from the bhav store. Cached 10 min."""
+    try:
+        from scan.sector_heat import sector_performance
+        return sector_performance()
+    except Exception:
+        return []
+
+
+@st.cache_data(ttl=600, show_spinner=False)
 def _accuracy_stat() -> str:
     """Measured accuracy from the outcome tracker — '' if not enough data yet."""
     try:
@@ -751,12 +761,48 @@ def render_scanner(universe: list[str]) -> None:
         unsafe_allow_html=True,
     )
 
-    # ── Hot sectors strip (sector heat working = visible here) ───────────────
+    # ── 📊 Sector Pulse — kaunsa sector bhaag raha hai + kitne setups ─────────
+    # Annotate every result with its sector (cheap lookup) for counting/filter
+    try:
+        from scan.sector_heat import sector_of as _sec_of
+        for r in results:
+            if not r.get("sector"):
+                r["sector"] = _sec_of(r["symbol"]) or ""
+    except Exception:
+        pass
     _sec_counts: dict = {}
     for r in results:
         if r.get("sector"):
             _sec_counts[r["sector"]] = _sec_counts.get(r["sector"], 0) + 1
-    if _sec_counts:
+
+    _perf = _sector_perf()
+    if _perf:
+        top5 = _perf[:5]
+        worst = _perf[-1] if len(_perf) > 5 else None
+        chips = ""
+        for p in top5:
+            col = "#00d4a0" if p["chg_1d"] >= 0 else "#ff4b4b"
+            arrow = "▲" if p["chg_1d"] >= 0 else "▼"
+            cnt = _sec_counts.get(p["sector"], 0)
+            chips += (f"<span style='background:{col}14;border:1px solid {col}44;"
+                      f"border-radius:6px;padding:3px 10px;font-size:.72rem;"
+                      f"color:{col};margin-right:6px'>"
+                      f"{p['sector']} {arrow}{abs(p['chg_1d']):.1f}%"
+                      f"<span style='color:#8892a4'> · 5d {p['chg_5d']:+.1f}%"
+                      + (f" · {cnt} setups" if cnt else "")
+                      + "</span></span>")
+        if worst and worst["chg_1d"] < 0:
+            chips += (f"<span style='background:#ff4b4b14;border:1px solid #ff4b4b44;"
+                      f"border-radius:6px;padding:3px 10px;font-size:.72rem;"
+                      f"color:#ff4b4b'>Sabse weak: {worst['sector']} "
+                      f"▼{abs(worst['chg_1d']):.1f}%</span>")
+        st.markdown(
+            f"<div style='margin:-4px 0 10px 0'>"
+            f"<span style='font-size:.7rem;color:#8892a4;margin-right:8px'>"
+            f"📊 SECTOR PULSE</span>{chips}</div>",
+            unsafe_allow_html=True)
+    elif _sec_counts:
+        # Fallback: signal counts only (store not warm yet)
         _hot_html = " ".join(
             f"<span style='background:#f59e0b18;border:1px solid #f59e0b44;"
             f"border-radius:6px;padding:2px 10px;font-size:.72rem;color:#f59e0b;"
@@ -790,12 +836,22 @@ def render_scanner(universe: list[str]) -> None:
     except Exception:
         pass
 
-    # ── Search within results ─────────────────────────────────────────────────
-    q = st.text_input("Filter", placeholder="🔍 Filter by symbol…",
-                      key="scanner_filter", label_visibility="collapsed")
+    # ── Search + sector filter ────────────────────────────────────────────────
+    fc1, fc2 = st.columns([2.5, 1.5])
+    with fc1:
+        q = st.text_input("Filter", placeholder="🔍 Filter by symbol…",
+                          key="scanner_filter", label_visibility="collapsed")
+    with fc2:
+        _sectors_avail = sorted({r["sector"] for r in results if r.get("sector")})
+        sec_pick = st.selectbox("Sector", ["Saare sectors"] + _sectors_avail,
+                                key="scanner_sector_filter",
+                                label_visibility="collapsed")
     if q:
         qq = q.strip().upper()
         results = [r for r in results if qq in r["symbol"]]
+    if sec_pick and sec_pick != "Saare sectors":
+        results = [r for r in results if r.get("sector") == sec_pick]
+        st.caption(f"Sirf **{sec_pick}** ke {len(results)} setups dikh rahe hain")
 
     # ── Category tabs ─────────────────────────────────────────────────────────
     tabs = st.tabs(_CATEGORY_TABS)

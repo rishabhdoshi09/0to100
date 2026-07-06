@@ -60,6 +60,46 @@ def sector_of(symbol: str) -> str:
     return _load_map().get(symbol.upper(), "")
 
 
+def sector_performance(min_members: int = 3) -> list[dict]:
+    """
+    [{sector, chg_1d, chg_5d, members}] — average price move per sector
+    from the bhav store, best 1-day performers first. Sectors with too
+    few members with data are skipped (one stock ≠ a sector).
+    """
+    import numpy as np
+    smap = _load_map()
+    if not smap:
+        return []
+    try:
+        from data.bhavcopy_store import get_ohlcv
+    except Exception:
+        return []
+
+    agg: dict[str, list[tuple[float, float]]] = {}
+    for sym, sec in smap.items():
+        df = get_ohlcv(sym)
+        if df is None or len(df) < 6:
+            continue
+        close = df["close"].values
+        c1 = (close[-1] / close[-2] - 1) * 100
+        c5 = (close[-1] / close[-6] - 1) * 100
+        if np.isfinite(c1) and np.isfinite(c5):
+            agg.setdefault(sec, []).append((float(c1), float(c5)))
+
+    out = []
+    for sec, moves in agg.items():
+        if len(moves) < min_members:
+            continue
+        out.append({
+            "sector": sec,
+            "chg_1d": round(sum(m[0] for m in moves) / len(moves), 2),
+            "chg_5d": round(sum(m[1] for m in moves) / len(moves), 2),
+            "members": len(moves),
+        })
+    out.sort(key=lambda r: r["chg_1d"], reverse=True)
+    return out
+
+
 def apply_sector_heat(results: list[dict], min_pack: int = 3,
                       boost: float = 6.0) -> dict[str, int]:
     """
