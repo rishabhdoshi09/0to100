@@ -326,8 +326,27 @@ def _trade_ticket_body(s: dict) -> None:
         f"R:R <b>{rr:.1f}×</b>"
         f"</div>", unsafe_allow_html=True)
 
+    # Portfolio impact — is trade ke BAAD account kaisa dikhega
+    try:
+        from risk.portfolio_risk import check_new_trade
+        pr = check_new_trade(sym, int(qty), float(eff_entry), float(stop))
+        _v_col = {"OK": "#00d4a0", "CAUTION": "#f59e0b", "DANGER": "#ff4b4b"}[pr["verdict"]]
+        st.markdown(
+            f"<div style='font-size:.78rem;color:{_v_col};margin:2px 0'>"
+            f"Portfolio after this trade: {pr['n_positions']} positions · "
+            f"total open risk {pr['open_risk_pct']:.1f}% · verdict "
+            f"<b>{pr['verdict']}</b></div>", unsafe_allow_html=True)
+        for w in pr["warnings"]:
+            st.markdown(f"<div style='font-size:.76rem;color:#f59e0b'>{w}</div>",
+                        unsafe_allow_html=True)
+    except Exception:
+        pr = {"verdict": "OK"}
+
     label = ("🚀 Place LIVE order (Zerodha)" if live_mode
              else "📝 Record paper trade")
+    if pr["verdict"] == "DANGER":
+        st.error("🔴 Portfolio DANGER zone mein hai — yeh trade lene se pehle "
+                 "warnings padho. Button phir bhi neeche hai, decision tumhara.")
     if st.button(label, key=f"tt_go_{sym}", type="primary",
                  use_container_width=True):
         res = place_trade(symbol=sym, qty=int(qty), entry_type=entry_type,
@@ -727,6 +746,26 @@ def render_scanner(universe: list[str]) -> None:
         _pos = review_positions()
         if _pos:
             with st.expander(f"📍 Meri positions ({len(_pos)} open)", expanded=True):
+                # Portfolio risk meter — account-level, not per-trade
+                try:
+                    from risk.portfolio_risk import portfolio_risk_report
+                    _prr = portfolio_risk_report()
+                    _vc = {"OK": "#00d4a0", "CAUTION": "#f59e0b",
+                           "DANGER": "#ff4b4b"}[_prr["verdict"]]
+                    st.markdown(
+                        f"<div style='background:{_vc}12;border:1px solid {_vc}44;"
+                        f"border-radius:8px;padding:8px 14px;margin-bottom:8px;"
+                        f"font-size:.8rem;color:#c9d1d9'>"
+                        f"<b style='color:{_vc}'>Portfolio: {_prr['verdict']}</b> · "
+                        f"deployed ₹{_prr['deployed']:,.0f} ({_prr['deployed_pct']:.0f}%) · "
+                        f"agar saare stops hit hue: <b style='color:#ff4b4b'>"
+                        f"−₹{_prr['open_risk']:,.0f}</b> ({_prr['open_risk_pct']:.1f}% "
+                        f"of capital) · {_prr['n_positions']}/{_prr['max_positions']} positions"
+                        + "".join(f"<div style='color:#f59e0b;margin-top:3px'>{w}</div>"
+                                  for w in _prr["warnings"])
+                        + "</div>", unsafe_allow_html=True)
+                except Exception:
+                    pass
                 for p in _pos:
                     r = p.get("r_progress")
                     pnl = p.get("pnl")
