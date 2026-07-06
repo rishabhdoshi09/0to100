@@ -130,6 +130,73 @@ def _health() -> list[tuple[str, bool, str]]:
     return out
 
 
+def _data_freshness() -> dict:
+    """What data are cards actually built on — for the loud banner."""
+    from datetime import date as _date
+    info = {"scan_date": None, "is_today": False, "detail": ""}
+    try:
+        from data.bhavcopy_store import get_ohlcv
+        df = get_ohlcv("RELIANCE")
+        if df is not None and len(df):
+            last = df.index[-1].date()
+            info["scan_date"] = last
+            info["is_today"] = (last == _date.today())
+    except Exception:
+        pass
+    return info
+
+
+def _render_freshness_banner(results: list[dict]) -> None:
+    """
+    Loud, unmissable banner separating the two data paths that confused
+    the user: displayed PRICE (live via Google Finance) vs SCAN DATA
+    (NSE bhavcopy + today's intraday overlay).
+    """
+    from datetime import date as _date
+    fi = _data_freshness()
+    live_cards = sum(1 for r in results[:80] if r.get("live"))
+    total_cards = min(80, len(results))
+
+    # Scan-data half
+    if fi["is_today"]:
+        scan_txt = "🟢 Scan data: <b>aaj ka (live intraday)</b>"
+        scan_col = "#00d4a0"
+    elif fi["scan_date"]:
+        days_old = (_date.today() - fi["scan_date"]).days
+        scan_txt = (f"🟡 Scan data: <b>{fi['scan_date'].strftime('%d %b')} close</b> "
+                    f"({days_old} din purana — NSE intraday abhi nahi mila)")
+        scan_col = "#f59e0b"
+    else:
+        scan_txt = "🔴 Scan data: <b>load nahi hua</b>"
+        scan_col = "#ff4b4b"
+
+    # Displayed-price half
+    if total_cards and live_cards >= total_cards * 0.6:
+        price_txt = f"🟢 Card prices: <b>LIVE</b> (Google Finance, {live_cards}/{total_cards})"
+        price_col = "#00d4a0"
+    elif live_cards:
+        price_txt = f"🟡 Card prices: <b>{live_cards}/{total_cards} live</b>, baaki EOD"
+        price_col = "#f59e0b"
+    else:
+        price_txt = "🔴 Card prices: <b>EOD close</b> (live quotes nahi mile)"
+        price_col = "#ff4b4b"
+
+    st.markdown(
+        f"<div style='background:#0d1421;border:1px solid #1e293b;border-radius:10px;"
+        f"padding:10px 16px;margin-bottom:10px;display:flex;gap:24px;flex-wrap:wrap;"
+        f"font-size:.82rem'>"
+        f"<span style='color:{scan_col}'>{scan_txt}</span>"
+        f"<span style='color:{price_col}'>{price_txt}</span>"
+        f"</div>",
+        unsafe_allow_html=True,
+    )
+    if not fi["is_today"]:
+        st.caption("💡 NSE intraday snapshot sirf market hours (9:15–4 PM, "
+                   "weekday) mein milta hai. Us waqt scan chalao toh signals aaj "
+                   "ke move pe banenge. Card ke prices phir bhi Google Finance se "
+                   "live hote hain.")
+
+
 def _render_health() -> None:
     items = _health()
     html = " &nbsp;&nbsp; ".join(
@@ -391,9 +458,26 @@ def render_scanner(universe: list[str]) -> None:
 
     results, universe_size, last_ts, status = get_results()
     _apply_live_prices(results)   # Google Finance live overlay at render time
+
+    # ── Loud data-freshness banner (the two paths, explicit) ──────────────────
+    if results:
+        fb1, fb2 = st.columns([5, 1])
+        with fb2:
+            if st.button("🔄 Live data", key="refresh_live",
+                         use_container_width=True,
+                         help="Google Finance prices + NSE intraday snapshot dubara laao"):
+                _live_quotes.clear()
+                _health.clear()
+                try:
+                    from data.nse_live import apply_live_to_store
+                    apply_live_to_store()
+                except Exception:
+                    pass
+                st.rerun()
+        with fb1:
+            _render_freshness_banner(results)
     if last_ts:
-        fresh_note = (f"Last scan: **{_freshness(last_ts)}** · {universe_size} stocks "
-                      f"covered · prices live via Google Finance (3-min refresh)")
+        fresh_note = f"Last scan: **{_freshness(last_ts)}** · {universe_size} stocks covered"
         if status == "scanning":
             fresh_note += " · ⟳ refreshing in background…"
         st.caption(fresh_note)
