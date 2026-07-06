@@ -44,6 +44,13 @@ def prefetch(
         from data.bhavcopy_store import build_store, store_symbols
         n = build_store(days=260, progress=progress)
         if n >= 200:                      # sane whole-market build
+            # During market hours: overlay TODAY's live bar so scans see
+            # today's move, not yesterday's close (bhavcopy is EOD).
+            try:
+                from data.nse_live import apply_live_to_store
+                apply_live_to_store()
+            except Exception:
+                pass
             with _lock:
                 _bhav_ok = True
             covered = set(store_symbols())

@@ -90,11 +90,18 @@ def _accuracy_stat() -> str:
 def _health() -> list[tuple[str, bool, str]]:
     """[(name, ok, detail)] — data-source health so failures can't hide."""
     out = []
-    # NSE bhavcopy store
+    # NSE data — show the actual latest bar date (live intraday vs EOD)
     try:
-        from data.bhavcopy_store import is_ready, _store_last_day
+        from datetime import date as _date
+        from data.bhavcopy_store import is_ready, get_ohlcv
         ok = is_ready()
-        detail = str(_store_last_day) if ok else "not built"
+        detail = "not built"
+        if ok:
+            _df = get_ohlcv("RELIANCE")
+            if _df is not None and len(_df):
+                _last = _df.index[-1].date()
+                detail = (f"aaj ka live bar ✓" if _last == _date.today()
+                          else f"EOD {_last.strftime('%d %b')}")
         out.append(("NSE data", ok, detail))
     except Exception:
         out.append(("NSE data", False, "error"))
