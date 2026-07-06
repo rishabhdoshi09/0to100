@@ -261,6 +261,41 @@ class _KiteProvider:
         return "kite"
 
 
+class _GoogleFinanceProvider:
+    """Live quotes from Google Finance; yfinance per-symbol backup."""
+
+    def __init__(self):
+        self._yf_backup = _YFinanceProvider()
+
+    def quote(self, symbol: str) -> dict:
+        return self.quotes([symbol]).get(symbol, _empty_quote())
+
+    def quotes(self, symbols: list[str]) -> dict[str, dict]:
+        from data.google_finance import get_quotes as _gf_quotes
+        out: dict[str, dict] = {}
+        try:
+            gf = _gf_quotes(symbols)
+        except Exception:
+            gf = {}
+        for sym, q in gf.items():
+            out[sym] = {
+                "price": q["price"], "prev_close": q["prev_close"],
+                "chg_pct": q["chg_pct"], "volume": 0.0, "avg_volume": 1.0,
+            }
+        missing = [s for s in symbols if s not in out]
+        if missing:
+            out.update(self._yf_backup.quotes(missing))
+        return out
+
+    def history_closes(self, symbol: str, days: int = 20) -> list[float]:
+        # Google Finance publishes no historical series — use yfinance
+        return _yf_history_closes(symbol, days)
+
+    @property
+    def source(self) -> str:
+        return "google_finance"
+
+
 class _YFinanceProvider:
     def quote(self, symbol: str) -> dict:
         return self.quotes([symbol]).get(symbol, _empty_quote())
@@ -311,20 +346,21 @@ class _YFinanceProvider:
         return "yfinance"
 
 
-_provider: Optional[_KiteProvider | _YFinanceProvider] = None
+_provider: Optional[_KiteProvider | _GoogleFinanceProvider | _YFinanceProvider] = None
 
 
-def get_provider() -> _KiteProvider | _YFinanceProvider:
-    """Return a cached provider. Kite if token is set, else yfinance."""
+def get_provider() -> _KiteProvider | _GoogleFinanceProvider | _YFinanceProvider:
+    """Return a cached provider. Kite if token is set, else Google Finance
+    (live quotes, with yfinance as per-symbol backup)."""
     global _provider
     if _provider is None:
         if _kite_available():
             try:
                 _provider = _KiteProvider()
             except Exception:
-                _provider = _YFinanceProvider()
+                _provider = _GoogleFinanceProvider()
         else:
-            _provider = _YFinanceProvider()
+            _provider = _GoogleFinanceProvider()
     return _provider
 
 
