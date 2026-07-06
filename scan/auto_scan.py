@@ -313,6 +313,13 @@ def _worker() -> None:
             _scan_once()
             _maybe_push_morning_pulse()
             _maybe_run_nightly_backtest()
+            # Position babysitting — exit alerts for open trades
+            if _is_market_hours():
+                try:
+                    from risk.position_manager import push_position_alerts
+                    push_position_alerts()
+                except Exception as exc:
+                    log.debug("position_review_skip", error=str(exc))
             time.sleep(_MARKET_REFRESH_S if _is_market_hours() else _OFFHOURS_REFRESH_S)
         else:
             time.sleep(30)   # paused by user — just idle and re-check

@@ -721,6 +721,36 @@ def render_scanner(universe: list[str]) -> None:
                     st.rerun()
             _trade_ticket_body(st.session_state["trade_ticket_row"])
 
+    # ── 📍 Open positions — live R-progress + exit guidance ──────────────────
+    try:
+        from risk.position_manager import review_positions
+        _pos = review_positions()
+        if _pos:
+            with st.expander(f"📍 Meri positions ({len(_pos)} open)", expanded=True):
+                for p in _pos:
+                    r = p.get("r_progress")
+                    pnl = p.get("pnl")
+                    pnl_col = "#00d4a0" if (pnl or 0) >= 0 else "#ff4b4b"
+                    live_txt = f"₹{p['live']:,.1f}" if p["live"] else "—"
+                    st.markdown(
+                        f"<div style='background:#0d1421;border:1px solid #1e293b;"
+                        f"border-radius:10px;padding:10px 14px;margin-bottom:6px'>"
+                        f"<span style='color:#e2e8f0;font-weight:700;"
+                        f"font-family:JetBrains Mono,monospace'>{p['symbol']}</span>"
+                        f"<span style='font-size:.72rem;color:#8892a4'> "
+                        f"({p['mode']}) · {p['qty']} sh @ ₹{p['entry']:,.1f}</span>"
+                        f" &nbsp; live <b style='color:#e2e8f0'>{live_txt}</b>"
+                        + (f" &nbsp; <b style='color:{pnl_col}'>₹{pnl:+,.0f}</b>"
+                           if pnl is not None else "")
+                        + (f" &nbsp; <span style='font-size:.75rem;color:#7dd3fc'>"
+                           f"{r:+.1f}R</span>" if r is not None else "")
+                        + f"<div style='font-size:.8rem;color:#c9d1d9;margin-top:5px'>"
+                          f"{p['advice']}</div>"
+                        + "</div>",
+                        unsafe_allow_html=True)
+    except Exception:
+        pass
+
     # ── Recent trades journal ─────────────────────────────────────────────────
     try:
         from execution.trade_executor import recent_trades
