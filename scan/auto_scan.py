@@ -315,12 +315,36 @@ def _maybe_run_nightly_backtest() -> None:
         log.debug("nightly_backtest_skip", error=str(exc))
 
 
+_coach_pushed_week: str = ""
+
+
+def _maybe_push_weekly_coach() -> None:
+    """Sunday evening: coach review to Telegram, once per week."""
+    global _coach_pushed_week
+    now = datetime.now()
+    week = now.strftime("%Y-W%W")
+    if now.weekday() != 6 or now.hour < 17 or _coach_pushed_week == week:
+        return
+    try:
+        from alerts.telegram_alerts import AlertEngine
+        engine = AlertEngine()
+        if not engine.is_configured():
+            return
+        from reports.trade_coach import build_coach_review
+        if engine.send(build_coach_review()):
+            _coach_pushed_week = week
+            log.info("weekly_coach_pushed")
+    except Exception as exc:
+        log.debug("weekly_coach_skip", error=str(exc))
+
+
 def _worker() -> None:
     while True:
         if is_auto_enabled():
             _scan_once()
             _maybe_push_morning_pulse()
             _maybe_run_nightly_backtest()
+            _maybe_push_weekly_coach()
             # Position babysitting — exit alerts for open trades
             if _is_market_hours():
                 try:

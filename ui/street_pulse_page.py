@@ -245,6 +245,20 @@ def render_street_pulse() -> None:
     except Exception as _vd_exc:
         st.caption(f"Report card unavailable: {_vd_exc}")
 
+    # ── 🧠 Coach ki Raay — tumhare trading patterns ka sach ──────────────────
+    _section_title("🧠 Coach ki Raay")
+    try:
+        @st.cache_data(ttl=86_400, show_spinner=False)
+        def _coach_note() -> str:
+            from reports.trade_coach import build_coach_review
+            return build_coach_review()
+        _note = _coach_note()
+        st.markdown(
+            f"<div style='{_CARD};font-size:.85rem;color:#c9d1d9;"
+            f"white-space:pre-line'>{_note}</div>", unsafe_allow_html=True)
+    except Exception as _c_exc:
+        st.caption(f"Coach unavailable: {_c_exc}")
+
     # ── Actions ───────────────────────────────────────────────────────────────
     a1, a2, _ = st.columns([1.2, 1.2, 2.6])
     with a1:
