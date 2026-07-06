@@ -209,6 +209,42 @@ def render_street_pulse() -> None:
                               f"margin:4px 0'>• {h}</div>" for h in heads)
                     + "</div>", unsafe_allow_html=True)
 
+    # ── 📈 System Report Card — kya yeh system real paise ke laayak hai? ──────
+    _section_title("📈 System Report Card — signals follow karte toh?")
+    try:
+        from reports.verdict_dashboard import build_equity_curve
+        cap = st.session_state.get("user_capital") or 100_000.0
+        vd = build_equity_curve(start_capital=float(cap))
+        if vd["points"]:
+            s = vd["stats"]
+            m1, m2, m3, m4 = st.columns(4)
+            m1.metric("Signals tracked", s["closed"])
+            m2.metric("Win rate", f"{s['win_rate']:.0f}%")
+            m3.metric("Return (1% rule)", f"{s['total_return_pct']:+.1f}%")
+            m4.metric("Max drawdown", f"{s['max_drawdown_pct']:.1f}%")
+            try:
+                import plotly.graph_objects as go
+                xs = [p[0] for p in vd["points"]]
+                ys = [p[1] for p in vd["points"]]
+                up = ys[-1] >= ys[0]
+                fig = go.Figure(go.Scatter(
+                    x=xs, y=ys, mode="lines", fill="tozeroy",
+                    line=dict(color="#00d4a0" if up else "#ff4b4b", width=2)))
+                fig.update_layout(height=220, margin=dict(l=10, r=10, t=10, b=10),
+                                  paper_bgcolor="rgba(0,0,0,0)",
+                                  plot_bgcolor="rgba(0,0,0,0)",
+                                  yaxis=dict(gridcolor="#1e293b"),
+                                  xaxis=dict(gridcolor="#1e293b"))
+                st.plotly_chart(fig, use_container_width=True,
+                                config={"displayModeBar": False})
+            except Exception:
+                pass
+        st.markdown(
+            f"<div style='{_CARD};font-size:.85rem;color:#c9d1d9'>{vd['verdict']}</div>",
+            unsafe_allow_html=True)
+    except Exception as _vd_exc:
+        st.caption(f"Report card unavailable: {_vd_exc}")
+
     # ── Actions ───────────────────────────────────────────────────────────────
     a1, a2, _ = st.columns([1.2, 1.2, 2.6])
     with a1:
