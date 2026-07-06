@@ -121,38 +121,74 @@ def _render_card(s: dict, key_prefix: str = "") -> None:
 # ── Main render ───────────────────────────────────────────────────────────────
 
 def render_scanner(universe: list[str]) -> None:
-    from scan.auto_scan import start_background_scan, force_rescan, get_results
+    from scan.auto_scan import (start_background_scan, get_results,
+                                run_manual_scan, set_auto_enabled, is_auto_enabled)
     start_background_scan()   # idempotent — first visitor kicks it off
 
-    results, universe_size, last_ts, status = get_results()
+    try:
+        from data.nse_universe import get_nifty500_universe
+        nifty500 = get_nifty500_universe()
+    except Exception:
+        nifty500 = universe[:500]
 
     # ── Header ────────────────────────────────────────────────────────────────
-    c1, c2 = st.columns([4, 1])
-    with c1:
-        st.markdown("### 🔍 Smart Scanner — whole market")
-        sub = f"Momentum · Breakouts · Chart patterns across **all {universe_size or len(universe)} NSE stocks**"
-        if last_ts:
-            sub += f" · updated **{_freshness(last_ts)}**"
-            if status == "scanning":
-                sub += " · ⟳ refreshing…"
-        st.caption(sub)
-    with c2:
-        if st.button("⟳ Rescan", key="scanner_run", type="primary",
-                     use_container_width=True, disabled=(status == "scanning")):
-            force_rescan()
-            st.rerun()
+    st.markdown("### 🔍 Smart Scanner")
+    st.caption("Momentum · Breakouts · Chart patterns — button dabao, "
+               "poore market se ache setups nikal ke aayenge")
 
-    # ── First scan still running ──────────────────────────────────────────────
+    # ── Your controls ─────────────────────────────────────────────────────────
+    c1, c2, c3 = st.columns([2.2, 1.4, 1.4])
+    with c1:
+        scope_options = {
+            "NIFTY 500 — fast (~1 min)": nifty500,
+            f"Poora NSE — {len(universe)} stocks (~3-4 min)": universe,
+        }
+        scope_label = st.selectbox("Kahan scan karein", list(scope_options.keys()),
+                                   index=0, key="scanner_scope")
+        scan_syms = scope_options[scope_label]
+    with c2:
+        st.markdown("<div style='height:1.75rem'></div>", unsafe_allow_html=True)
+        scan_clicked = st.button("🔍 Scan Market", key="scanner_run",
+                                 type="primary", use_container_width=True)
+    with c3:
+        st.markdown("<div style='height:1.75rem'></div>", unsafe_allow_html=True)
+        auto_on = st.toggle("Auto-refresh (15 min)", value=is_auto_enabled(),
+                            key="scanner_auto",
+                            help="On: system market hours mein khud scan karta rahega. "
+                                 "Off: sirf tumhare button dabane par scan hoga.")
+        set_auto_enabled(auto_on)
+
+    # ── Manual scan (user-controlled, with live progress) ────────────────────
+    if scan_clicked:
+        pbar = st.progress(0.0, text=f"Scanning {len(scan_syms)} stocks…")
+
+        def _on_progress(done: int, total: int) -> None:
+            pct = done / total if total else 0.0
+            pbar.progress(min(pct, 0.95),
+                          text=f"Downloading market data… {done}/{total} stocks")
+
+        run_manual_scan(universe=scan_syms, progress=_on_progress)
+        pbar.progress(1.0, text="Done — setups ready ✓")
+        st.rerun()
+
+    results, universe_size, last_ts, status = get_results()
+    if last_ts:
+        fresh_note = f"Last scan: **{_freshness(last_ts)}** · {universe_size} stocks covered"
+        if status == "scanning":
+            fresh_note += " · ⟳ refreshing in background…"
+        st.caption(fresh_note)
+
+    # ── No results yet ────────────────────────────────────────────────────────
     if not results:
         if status in ("scanning", "idle"):
-            st.info("⏳ First market scan is running in the background (~3-4 min for "
-                    "the full NSE). You can use the rest of the app — results will "
-                    "be waiting here.")
+            st.info("⏳ Pehla scan background mein chal raha hai — ya **Scan Market** "
+                    "dabao aur progress dekho. Baaki app use kar sakte ho, results "
+                    "yahin milenge.")
             if st.button("⟳ Check again", key="scanner_poll"):
                 st.rerun()
         else:
-            st.warning("Scan couldn't fetch market data. Check your internet "
-                       "connection, then hit **Rescan**.")
+            st.warning("Scan market data nahi laa paya. Internet check karke "
+                       "**Scan Market** dobara dabao.")
         return
 
     # ── Summary strip ─────────────────────────────────────────────────────────

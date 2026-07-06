@@ -109,15 +109,16 @@ def _log_buys_for_tracking(results) -> None:
         log.debug("auto_scan_tracking_skip", error=str(exc))
 
 
-def _scan_once() -> None:
+def _scan_once(universe: Optional[list[str]] = None, progress=None) -> None:
     global _results, _scanned_count, _last_scan_ts, _status
     with _lock:
         _status = "scanning"
     try:
-        from data.nse_universe import get_nse_universe
         from scan.unified_scanner import UnifiedScanner
-        universe = get_nse_universe()
-        raw = UnifiedScanner(max_workers=8).scan(universe)
+        if universe is None:
+            from data.nse_universe import get_nse_universe
+            universe = get_nse_universe()
+        raw = UnifiedScanner(max_workers=8).scan(universe, progress=progress)
         _log_buys_for_tracking(raw)
         serialized = [_serialize(r) for r in raw]
         # JARVIS conviction layer — news buzz + earnings evidence on top picks
@@ -140,10 +141,29 @@ def _scan_once() -> None:
         log.warning("auto_scan_failed", error=str(exc))
 
 
+_auto_enabled: bool = True
+
+
+def set_auto_enabled(enabled: bool) -> None:
+    """User control: pause/resume the automatic background refresh."""
+    global _auto_enabled
+    with _lock:
+        _auto_enabled = enabled
+    log.info("auto_scan_toggled", enabled=enabled)
+
+
+def is_auto_enabled() -> bool:
+    with _lock:
+        return _auto_enabled
+
+
 def _worker() -> None:
     while True:
-        _scan_once()
-        time.sleep(_MARKET_REFRESH_S if _is_market_hours() else _OFFHOURS_REFRESH_S)
+        if is_auto_enabled():
+            _scan_once()
+            time.sleep(_MARKET_REFRESH_S if _is_market_hours() else _OFFHOURS_REFRESH_S)
+        else:
+            time.sleep(30)   # paused by user — just idle and re-check
 
 
 def start_background_scan() -> None:
@@ -161,6 +181,17 @@ def start_background_scan() -> None:
 def force_rescan() -> None:
     """Trigger an immediate rescan in the background (non-blocking)."""
     threading.Thread(target=_scan_once, name="auto-scan-force", daemon=True).start()
+
+
+def run_manual_scan(universe: Optional[list[str]] = None, progress=None) -> list[dict]:
+    """
+    User-controlled scan: runs synchronously (blocks until done) so the UI
+    can show live progress, then returns the fresh results. Also updates
+    the shared store so Dashboard/Telegram stay in sync.
+    """
+    _scan_once(universe=universe, progress=progress)
+    with _lock:
+        return list(_results)
 
 
 def get_results() -> tuple[list[dict], int, float, str]:
