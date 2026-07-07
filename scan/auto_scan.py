@@ -416,6 +416,12 @@ def _worker() -> None:
                     push_position_alerts()
                 except Exception as exc:
                     log.debug("position_review_skip", error=str(exc))
+                # Pending GTTs — fill hone par exchange-exit lagao
+                try:
+                    from execution.trade_executor import ensure_pending_gtts
+                    ensure_pending_gtts()
+                except Exception as exc:
+                    log.debug("pending_gtt_skip", error=str(exc))
                 # Watchlist chowkidaari — buy-zone / broken-setup alerts
                 try:
                     from risk.watchlist_watcher import push_watchlist_alerts

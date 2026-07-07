@@ -39,7 +39,7 @@ def _open_trades() -> list[dict]:
         conn.row_factory = sqlite3.Row
         rows = conn.execute(
             "SELECT * FROM trades WHERE status IN "
-            "('PAPER_OPEN','PLACED','PLACED_NO_GTT') ORDER BY id DESC"
+            "('PAPER_OPEN','PLACED','PLACED_NO_GTT','PENDING_GTT') ORDER BY id DESC"
         ).fetchall()
         conn.close()
         return [dict(r) for r in rows]

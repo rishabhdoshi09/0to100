@@ -148,8 +148,59 @@ def place_trade(symbol: str, qty: int, entry_type: str, entry_price: float,
                   "note": str(exc)[:200]})
         return result
 
-    # 2. GTT OCO — stop-loss + target at the exchange
+    # 2. Wait briefly for the fill. GTT before fill is DANGEROUS: a stop
+    #    trigger on an unfilled entry fires a sell with no shares, gets
+    #    rejected, consumes the GTT — and the later-filled position sits
+    #    UNPROTECTED while looking protected.
+    filled = _entry_filled(kite, result["entry_order_id"], wait_s=8)
+
     gtt_msg = ""
+    if filled:
+        gtt_id, gtt_msg = _place_gtt(kite, symbol, qty, entry_price, stop,
+                                     target, product)
+        result["gtt_id"] = gtt_id
+        status = "PLACED" + ("" if gtt_id else "_NO_GTT")
+    else:
+        status = "PENDING_GTT"
+        gtt_msg = (" · ⏳ Entry abhi fill nahi hua — GTT fill hone ke BAAD "
+                   "khud lag jayegi (system har scan cycle pe check karta hai)")
+
+    result["ok"] = True
+    result["message"] = (f"✅ Order placed: {qty} × {symbol} "
+                         f"({entry_type} @ ₹{entry_price:,.1f}){gtt_msg}")
+    _journal({"mode": "LIVE", "symbol": symbol, "qty": qty,
+              "entry_type": entry_type, "entry_price": entry_price,
+              "stop_price": stop, "target_price": target, "product": product,
+              "entry_order_id": result["entry_order_id"],
+              "gtt_id": result["gtt_id"],
+              "status": status})
+    log.info("live_trade_placed", symbol=symbol, qty=qty,
+             order_id=result["entry_order_id"], gtt=result["gtt_id"],
+             status=status)
+    return result
+
+
+def _entry_filled(kite, order_id: str, wait_s: int = 8) -> bool:
+    """Poll order status briefly. True only on COMPLETE."""
+    import time as _time
+    deadline = _time.time() + wait_s
+    while _time.time() < deadline:
+        try:
+            hist = kite.raw.order_history(order_id)
+            status = str(hist[-1].get("status", "")).upper() if hist else ""
+            if status == "COMPLETE":
+                return True
+            if status in ("REJECTED", "CANCELLED"):
+                return False
+        except Exception:
+            pass
+        _time.sleep(1.5)
+    return False
+
+
+def _place_gtt(kite, symbol: str, qty: int, entry_price: float,
+               stop: float, target: float, product: str) -> tuple:
+    """(gtt_id|None, message). Loud warning string on failure."""
     try:
         raw = kite.raw
         gtt = raw.place_gtt(
@@ -165,25 +216,70 @@ def place_trade(symbol: str, qty: int, entry_type: str, entry_price: float,
                  "order_type": "LIMIT", "product": product,
                  "price": round(target, 1)},
             ])
-        result["gtt_id"] = gtt.get("trigger_id") if isinstance(gtt, dict) else gtt
-        gtt_msg = f" · GTT OCO set (stop ₹{stop:,.1f} / target ₹{target:,.1f})"
+        gtt_id = gtt.get("trigger_id") if isinstance(gtt, dict) else gtt
+        return gtt_id, f" · GTT OCO set (stop ₹{stop:,.1f} / target ₹{target:,.1f})"
     except Exception as exc:
-        gtt_msg = (f" · ⚠ GTT nahi laga ({str(exc)[:80]}) — stop-loss MANUALLY "
-                   f"lagao Kite app mein!")
         log.warning("gtt_failed", symbol=symbol, error=str(exc))
+        return None, (f" · ⚠ GTT nahi laga ({str(exc)[:80]}) — stop-loss "
+                      f"MANUALLY lagao Kite app mein!")
 
-    result["ok"] = True
-    result["message"] = (f"✅ Order placed: {qty} × {symbol} "
-                         f"({entry_type} @ ₹{entry_price:,.1f}){gtt_msg}")
-    _journal({"mode": "LIVE", "symbol": symbol, "qty": qty,
-              "entry_type": entry_type, "entry_price": entry_price,
-              "stop_price": stop, "target_price": target, "product": product,
-              "entry_order_id": result["entry_order_id"],
-              "gtt_id": result["gtt_id"],
-              "status": "PLACED" + ("" if result["gtt_id"] else "_NO_GTT")})
-    log.info("live_trade_placed", symbol=symbol, qty=qty,
-             order_id=result["entry_order_id"], gtt=result["gtt_id"])
-    return result
+
+def ensure_pending_gtts() -> int:
+    """
+    Babysit PENDING_GTT trades: once the entry fills, place the GTT and
+    upgrade the journal row. Rejected/cancelled entries get closed out.
+    Called every scan cycle during market hours. Returns GTTs placed.
+    """
+    import sqlite3
+    if not kite_ready():
+        return 0
+    try:
+        with _db_lock:
+            if not _DB.exists():
+                return 0
+            conn = sqlite3.connect(_DB)
+            conn.row_factory = sqlite3.Row
+            rows = [dict(r) for r in conn.execute(
+                "SELECT * FROM trades WHERE status='PENDING_GTT'").fetchall()]
+            conn.close()
+        if not rows:
+            return 0
+
+        from data.kite_client import KiteClient
+        kite = KiteClient()
+        placed = 0
+        for t in rows:
+            oid = t["entry_order_id"]
+            try:
+                hist = kite.raw.order_history(oid)
+                status = str(hist[-1].get("status", "")).upper() if hist else ""
+            except Exception:
+                continue
+            new_status, gtt_id = None, None
+            if status == "COMPLETE":
+                gtt_id, _msg = _place_gtt(
+                    kite, t["symbol"], int(t["qty"]), float(t["entry_price"]),
+                    float(t["stop_price"]), float(t["target_price"]),
+                    t["product"] or "CNC")
+                new_status = "PLACED" if gtt_id else "PLACED_NO_GTT"
+                if gtt_id:
+                    placed += 1
+            elif status in ("REJECTED", "CANCELLED"):
+                new_status = "ENTRY_FAILED"
+            if new_status:
+                with _db_lock:
+                    conn = sqlite3.connect(_DB)
+                    conn.execute(
+                        "UPDATE trades SET status=?, gtt_id=? WHERE id=?",
+                        (new_status, str(gtt_id or ""), t["id"]))
+                    conn.commit()
+                    conn.close()
+                log.info("pending_gtt_resolved", symbol=t["symbol"],
+                         status=new_status)
+        return placed
+    except Exception as exc:
+        log.debug("ensure_pending_gtts_skip", error=str(exc))
+        return 0
 
 
 def recent_trades(limit: int = 20) -> list[dict]:
