@@ -133,11 +133,18 @@ def _build_index_store_locked(days: int = 400) -> int:
             import pickle
             with open(_PKL, "rb") as f:
                 data = pickle.load(f)
-            with _lock:
-                _store = data["store"]
-                _last_day = data["last_day"]
-            log.info("index_store_loaded", indices=len(_store),
-                     latest=str(_last_day))
+            # Schema validation — a cache built by older code (e.g. missing
+            # the Volume column) must rebuild, not poison the regime engine
+            _sample = next(iter(data.get("store", {}).values()), None)
+            if _sample is not None and "Volume" not in _sample.columns:
+                log.info("index_store_cache_outdated_rebuilding")
+                _PKL.unlink()
+            else:
+                with _lock:
+                    _store = data["store"]
+                    _last_day = data["last_day"]
+                log.info("index_store_loaded", indices=len(_store),
+                         latest=str(_last_day))
         except Exception:
             pass
 
