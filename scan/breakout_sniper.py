@@ -174,7 +174,7 @@ def start_sniper() -> bool:
             log.info("sniper_ws_closed_will_restart", code=code,
                      reason=str(reason)[:80])
 
-        kws = KiteClient().ticker(on_ticks, on_connect, on_close)
+        kws = KiteClient().get_ticker(on_ticks, on_connect, on_close)
         kws.connect(threaded=True)
         _ticker = kws
         with _lock:

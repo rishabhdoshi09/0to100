@@ -70,6 +70,9 @@ def get_live_quotes(symbols: list[str]) -> dict[str, dict]:
     """
     {symbol: {price, chg_pct, source}} — Kite → NSE → Google, each only
     filling what the previous missed. Logs which source covered how many.
+    Offline short-circuit: when Kite AND NSE both return nothing (DNS
+    down / no internet), skip the per-symbol Google pass entirely —
+    60 doomed requests add minutes of latency and pure log spam.
     """
     if not symbols:
         return {}
@@ -79,6 +82,9 @@ def get_live_quotes(symbols: list[str]) -> dict[str, dict]:
                      ("google", _google_quotes)):
         missing = [s for s in symbols if s not in quotes]
         if not missing:
+            break
+        if name == "google" and not quotes and len(missing) > 5:
+            log.info("live_quotes_offline_skip", missing=len(missing))
             break
         got = fn(missing)
         quotes.update(got)
