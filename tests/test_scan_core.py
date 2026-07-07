@@ -457,23 +457,25 @@ class TestSetupEngineCache:
 class TestQualityEnginePerfectSetup:
 
     def _tight_liquid_df(self, seed=42, n=120) -> pd.DataFrame:
-        """High-liquidity, tight-base DF for a perfect quality score."""
+        """
+        High-liquidity, tight-base DF for a perfect quality score.
+        Freshness-aware: the engine dates a pattern from the lowest low of
+        the last 90 bars, so the ramp ends BEFORE that lookback and one
+        engineered dip sits 38 bars back — mid of VCP's optimal 21-56 window.
+        """
         np.random.seed(seed)
-        prices = np.linspace(90, 99, n) + np.random.randn(n) * 0.2
-        prices[-42:] = 99 + np.random.randn(42) * 0.3  # tight base ≈ 1%
+        prices = np.empty(n)
+        prices[:30] = np.linspace(90, 99, 30)            # ramp outside lookback
+        prices[30:] = 99 + np.random.randn(n - 30) * 0.3  # tight plateau ≈ 1%
         high = prices + 0.4
         low = prices - 0.4
+        low[n - 39] = 97.5     # pattern low, age 38 bars → OPTIMAL freshness
         vol = np.ones(n) * 1_000_000  # 1M shares × ₹99 = ~₹10Cr/day (liquid)
         vol[-20:] = vol[-40:-20].mean() * 0.5  # strong volume contraction
         return pd.DataFrame(
             {"open": prices - 0.1, "high": high, "low": low, "close": prices, "volume": vol}
         )
 
-    @pytest.mark.xfail(
-        reason="Scoring drifted: fixture base is 33 days past the engine's "
-               "optimal-window disqualifier and earnings enrichment needs "
-               "network. Fixture needs recalibration — tracked, not hidden.",
-        strict=False)
     def test_perfect_setup_scores_elite_a_plus(self):
         from scan.quality_engine import QualityEngine
 
