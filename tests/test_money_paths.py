@@ -406,3 +406,54 @@ class TestTradeCoach:
         joined = " ".join(tc.gather_stats(28)["insights"])
         assert "Risk inconsistent" in joined
         assert "Revenge" in joined
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 13. Outcome tracker — the feedback loop must resolve via bulk quotes
+# ══════════════════════════════════════════════════════════════════════════════
+
+class TestOutcomeTracker:
+    def test_outcomes_resolve_via_bulk_quotes(self, tmp_path, monkeypatch):
+        from datetime import datetime, timedelta
+        import core.signal_outcome_tracker as tr
+        import data.live_quotes as lq
+        monkeypatch.setattr(tr, "_DB_PATH", str(tmp_path / "outcomes.db"))
+        conn = tr._get_conn()
+        six_days = (datetime.now() - timedelta(days=6)).isoformat(timespec="seconds")
+        for sym, entry in [("WINSYM", 100), ("LOSESYM", 200), ("FLATSYM", 300)]:
+            conn.execute(
+                "INSERT INTO signal_log (symbol, logged_at, signal_type, "
+                "entry_price, stop_price) VALUES (?,?,?,?,?)",
+                (sym, six_days, "UNIFIED_BUY", entry, entry * 0.96))
+        conn.commit(); conn.close()
+        monkeypatch.setattr(lq, "get_live_quotes", lambda syms: {
+            "WINSYM": {"price": 105.0}, "LOSESYM": {"price": 194.0},
+            "FLATSYM": {"price": 301.5}})
+        tr.update_outcomes()
+        conn = tr._get_conn()
+        d = {r["symbol"]: r["worked"] for r in conn.execute(
+            "SELECT symbol, worked FROM signal_log").fetchall()}
+        conn.close()
+        assert d["WINSYM"] == 1
+        assert d["LOSESYM"] == 0
+        assert d["FLATSYM"] is None   # ±band → stays open
+
+    def test_fresh_signals_not_judged_early(self, tmp_path, monkeypatch):
+        from datetime import datetime
+        import core.signal_outcome_tracker as tr
+        import data.live_quotes as lq
+        monkeypatch.setattr(tr, "_DB_PATH", str(tmp_path / "o2.db"))
+        conn = tr._get_conn()
+        conn.execute(
+            "INSERT INTO signal_log (symbol, logged_at, signal_type, "
+            "entry_price, stop_price) VALUES (?,?,?,?,?)",
+            ("FRESH", datetime.now().isoformat(timespec="seconds"),
+             "UNIFIED_BUY", 100, 96))
+        conn.commit(); conn.close()
+        monkeypatch.setattr(lq, "get_live_quotes",
+                            lambda syms: {"FRESH": {"price": 150.0}})
+        tr.update_outcomes()
+        conn = tr._get_conn()
+        row = conn.execute("SELECT worked FROM signal_log").fetchone()
+        conn.close()
+        assert row["worked"] is None   # <5 days old — too early to judge

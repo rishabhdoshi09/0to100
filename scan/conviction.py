@@ -62,8 +62,24 @@ def _fetch_buzz_map(symbols: list[str]) -> dict[str, str]:
 
 # ── Earnings ──────────────────────────────────────────────────────────────────
 
+# Earnings facts change daily at most — cache per symbol per day so the
+# 15-min scan cycle doesn't hammer yfinance with 40 slow .info calls.
+_earn_cache: dict[str, dict] = {}
+_earn_cache_day: str = ""
+
+
 def _earnings_info(symbol: str) -> dict:
-    """{growth_pct: float|None, days_to_results: int|None} — best effort."""
+    """{growth_pct: float|None, days_to_results: int|None} — best effort,
+    cached for the trading day."""
+    global _earn_cache, _earn_cache_day
+    from datetime import datetime as _dt
+    today = _dt.now().strftime("%Y-%m-%d")
+    if _earn_cache_day != today:
+        _earn_cache = {}
+        _earn_cache_day = today
+    if symbol in _earn_cache:
+        return dict(_earn_cache[symbol])
+
     out: dict = {"growth_pct": None, "days_to_results": None}
     try:
         import yfinance as yf
@@ -80,6 +96,7 @@ def _earnings_info(symbol: str) -> dict:
             out["days_to_results"] = (d - date.today()).days
     except Exception:
         pass
+    _earn_cache[symbol] = dict(out)
     return out
 
 
