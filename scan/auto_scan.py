@@ -314,7 +314,10 @@ def _scan_once_locked(universe: Optional[list[str]] = None, progress=None) -> No
     except Exception as exc:
         with _lock:
             _status = "error" if not _results else "ready"
-        log.warning("auto_scan_failed", error=str(exc))
+        if "interpreter shutdown" in str(exc):
+            log.info("scan_aborted_by_shutdown")   # Ctrl+C mid-cycle — benign
+        else:
+            log.warning("auto_scan_failed", error=str(exc))
 
 
 _auto_enabled: bool = True

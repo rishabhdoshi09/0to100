@@ -94,6 +94,9 @@ def _read_day(d: date) -> Optional[pd.DataFrame]:
             "High":  pd.to_numeric(df["High Index Value"], errors="coerce"),
             "Low":   pd.to_numeric(df["Low Index Value"], errors="coerce"),
             "Close": pd.to_numeric(df["Closing Index Value"], errors="coerce"),
+            # Regime engine expects a Volume column (yfinance shape)
+            "Volume": (pd.to_numeric(df["Volume"], errors="coerce").fillna(0)
+                       if "Volume" in df.columns else 0.0),
         })
         out["date"] = pd.Timestamp(d)
         return out.dropna(subset=["Close"])
@@ -102,8 +105,17 @@ def _read_day(d: date) -> Optional[pd.DataFrame]:
         return None
 
 
+_build_lock = threading.Lock()   # 8 parallel regime fetches must build ONCE
+
+
 def build_index_store(days: int = 400) -> int:
-    """Download-missing → consolidate → pickle. Returns #indices covered."""
+    """Download-missing → consolidate → pickle. Returns #indices covered.
+    Serialised: concurrent callers wait, then reuse the finished build."""
+    with _build_lock:
+        return _build_index_store_locked(days)
+
+
+def _build_index_store_locked(days: int = 400) -> int:
     global _store, _last_day
 
     candidates = []
@@ -149,7 +161,7 @@ def build_index_store(days: int = 400) -> int:
     new_store: dict[str, pd.DataFrame] = {}
     for name, g in allday.groupby("name"):
         g = g.sort_values("date").set_index("date")
-        new_store[str(name)] = g[["Open", "High", "Low", "Close"]]
+        new_store[str(name)] = g[[c for c in ("Open", "High", "Low", "Close", "Volume") if c in g.columns]]
     with _lock:
         _store = new_store
         _last_day = newest
