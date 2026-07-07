@@ -185,13 +185,23 @@ def _fetch_ohlcv_kite(ticker: str, days: int = 365) -> Optional[pd.DataFrame]:
 # ---------------------------------------------------------------------------
 
 def _fetch_ohlcv(ticker: str, period: str = "1y") -> Optional[pd.DataFrame]:
-    """Download OHLCV; try Kite first for index tickers, then yfinance."""
-    # Try Kite first for known index tickers
+    """Index OHLCV: NSE official index store → Kite → yfinance (last resort).
+    Kite historical needs a paid add-on and Yahoo's crumb auth keeps
+    breaking, so the free official ind_close_all archive leads."""
     days = 400 if period == "1y" else 30
+    # 1. NSE official index store (free, offline-cached)
+    try:
+        from data.index_store import get_index_ohlcv
+        df = get_index_ohlcv(ticker)
+        if df is not None and len(df) >= 30:
+            return df.tail(days)
+    except Exception as exc:
+        logger.debug("index_store miss for %s: %s", ticker, exc)
+    # 2. Kite (only works with the historical-API subscription)
     df = _fetch_ohlcv_kite(ticker, days=days)
     if df is not None:
         return df
-    # Fall back to yfinance — suppress noisy warnings for known-missing sector indices
+    # 3. Fall back to yfinance — suppress noisy warnings for known-missing sector indices
     try:
         import warnings
         with warnings.catch_warnings():

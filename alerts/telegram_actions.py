@@ -133,6 +133,7 @@ def _listener() -> None:
     token = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
     chat = os.environ.get("TELEGRAM_CHAT_ID", "").strip()
     offset = 0
+    fails = 0
     while True:
         try:
             r = requests.get(
@@ -144,9 +145,20 @@ def _listener() -> None:
                 offset = max(offset, int(upd.get("update_id", 0)) + 1)
                 if "callback_query" in upd:
                     _handle_callback(upd["callback_query"], token, chat)
+            if fails >= 3:
+                log.info("telegram_listener_recovered")
+            fails = 0
         except Exception as exc:
-            log.debug("telegram_listener_hiccup", error=str(exc))
-            time.sleep(10)
+            fails += 1
+            # Backoff during outages: 10s → 60s after 3 straight fails.
+            # One warning when entering backoff, then silence — a dead
+            # network must not fill the log at 6 lines/minute.
+            if fails == 3:
+                log.warning("telegram_listener_offline_backoff",
+                            error=str(exc)[:100])
+            elif fails < 3:
+                log.debug("telegram_listener_hiccup", error=str(exc)[:100])
+            time.sleep(60 if fails >= 3 else 10)
 
 
 def start_telegram_listener() -> None:
