@@ -41,9 +41,9 @@ class Settings(BaseSettings):
         default=(
             "https://economictimes.indiatimes.com/markets/rssfeeds/1977021501.cms,"
             "https://economictimes.indiatimes.com/markets/stocks/rssfeeds/2146842.cms,"
-            "https://www.moneycontrol.com/rss/buzzingstocks.xml,"
-            "https://www.moneycontrol.com/rss/marketreports.xml,"
-            "https://www.livemint.com/rss/markets"
+            "https://www.livemint.com/rss/markets,"
+            "https://www.business-standard.com/rss/markets-106.rss,"
+            "https://www.cnbctv18.com/commonfeeds/v1/cne/rss/market.xml"
         )
     )
 
