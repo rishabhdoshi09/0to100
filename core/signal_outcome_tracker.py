@@ -114,10 +114,11 @@ def log_signal(
         pass  # never crash on tracker errors
 
 
-def update_outcomes(lookback_days: int = 10) -> None:
+def update_outcomes(lookback_days: int = 30) -> None:
     """
     Check outcomes for signals logged > 5 days ago that are still OPEN (worked=NULL).
-    Fetches current price via get_technical_indicators().
+    Prices come from the unified quote chain in ONE bulk call (Kite→NSE→Google);
+    the slow per-symbol path survives only as fallback for misses.
     outcome_pct = (current_price - entry_price) / entry_price * 100
     worked = 1 if outcome_pct >= 2.0 else (0 if outcome_pct <= -1.0 else None)
     """
@@ -145,6 +146,16 @@ def update_outcomes(lookback_days: int = 10) -> None:
         if not rows:
             return
 
+        # One bulk quote call covers most symbols cheaply
+        _bulk_prices: dict[str, float] = {}
+        try:
+            from data.live_quotes import get_live_quotes
+            _bulk = get_live_quotes(sorted({r["symbol"] for r in rows}))
+            _bulk_prices = {s: float(q["price"]) for s, q in _bulk.items()
+                            if q.get("price")}
+        except Exception:
+            pass
+
         # Filter out recently errored symbols
         def _should_skip(symbol: str) -> bool:
             with _error_lock:
@@ -157,6 +168,12 @@ def update_outcomes(lookback_days: int = 10) -> None:
             """Returns (id, outcome_price, outcome_pct, worked) or None on error."""
             symbol = row["symbol"]
             entry = row["entry_price"]
+            # Bulk-quote fast path — no per-symbol HTTP
+            price = _bulk_prices.get(symbol, 0.0)
+            if price > 0 and entry > 0:
+                pct = (price - entry) / entry * 100.0
+                worked = 1 if pct >= 2.0 else (0 if pct <= -1.0 else None)
+                return (row["id"], price, pct, worked)
             if _should_skip(symbol):
                 return None
             try:

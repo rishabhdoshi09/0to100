@@ -348,6 +348,25 @@ def _maybe_remind_kite_login() -> None:
         log.debug("kite_reminder_skip", error=str(exc))
 
 
+_outcomes_checked_date: str = ""
+
+
+def _maybe_update_outcomes() -> None:
+    """Daily: resolve pending signal outcomes so the Report Card and
+    accuracy calibration keep learning WITHOUT anyone opening JARVIS."""
+    global _outcomes_checked_date
+    today = datetime.now().strftime("%Y-%m-%d")
+    if _outcomes_checked_date == today:
+        return
+    try:
+        from core.signal_outcome_tracker import update_outcomes
+        update_outcomes()
+        _outcomes_checked_date = today
+        log.info("signal_outcomes_updated")
+    except Exception as exc:
+        log.debug("outcomes_update_skip", error=str(exc))
+
+
 _coach_pushed_week: str = ""
 
 
@@ -377,6 +396,7 @@ def _worker() -> None:
             _scan_once()
             _maybe_remind_kite_login()
             _maybe_push_morning_pulse()
+            _maybe_update_outcomes()
             _maybe_run_nightly_backtest()
             _maybe_push_weekly_coach()
             # Breakout sniper — tick-stream instant alerts on the hottest names
