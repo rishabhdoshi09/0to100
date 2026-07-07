@@ -200,7 +200,25 @@ def _log_buys_for_tracking(results) -> None:
         log.debug("auto_scan_tracking_skip", error=str(exc))
 
 
+_scan_gate = threading.Lock()   # one scan at a time — no duplicate work
+
+
 def _scan_once(universe: Optional[list[str]] = None, progress=None) -> None:
+    global _results, _scanned_count, _last_scan_ts, _status
+    # Non-blocking gate: worker + page-triggered scans were running the
+    # whole pipeline TWICE in parallel (double Kite calls, double logs).
+    # Second caller just waits for the running scan and uses its result.
+    if not _scan_gate.acquire(blocking=False):
+        log.debug("scan_already_running_skip")
+        with _scan_gate:      # wait for the in-flight scan to finish
+            return
+    try:
+        _scan_once_locked(universe, progress)
+    finally:
+        _scan_gate.release()
+
+
+def _scan_once_locked(universe: Optional[list[str]] = None, progress=None) -> None:
     global _results, _scanned_count, _last_scan_ts, _status
     with _lock:
         _status = "scanning"
