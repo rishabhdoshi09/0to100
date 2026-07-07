@@ -652,13 +652,15 @@ def render_jarvis(universe: list[str]) -> None:
             "letter-spacing:.08em;margin:.5rem 0 .3rem'>Ask anything — agents will do the work</div>",
             unsafe_allow_html=True,
         )
+        # Trader-first questions — each maps to live context JARVIS already
+        # has (setups, positions, portfolio risk, sectors, options, report card)
         suggestions = [
-            "What's the best setup right now? Run a scan.",
-            "Search the web for Nifty 50 outlook this week",
-            "Show me sector P/E ratios — look it up online",
-            "Commit my changes and push to the current branch",
-            "What's my win rate and edge by playbook type?",
-            "Check the logs for any errors in the last hour",
+            "Aaj ka best trade kya hai aur kyun? Poora case do.",
+            "Meri positions kaisi chal rahi hain — kya action lena chahiye?",
+            "Kaunsa sector garam hai aaj? Uske top setups dikhao.",
+            "Mera portfolio risk kitna hai? Ek aur trade le sakta hoon?",
+            "System ka report card kya bolta hai — edge real hai ya nahi?",
+            "Market ka mood batao — regime, options data, sab mila ke.",
         ]
         cols = st.columns(2)
         for i, sug in enumerate(suggestions):
