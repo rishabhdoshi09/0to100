@@ -54,6 +54,57 @@ def _serialize(r) -> dict:
 # {YYYY-MM-DD: set of symbols already pushed} — one alert per stock per day
 _pushed: dict[str, set] = {}
 
+# ── Restart persistence — scan results + push-dedupe survive restarts ─────────
+from pathlib import Path as _Path
+_STATE_FILE = _Path(__file__).resolve().parent.parent / "logs" / "scan_store.json"
+
+
+def _save_state() -> None:
+    """Atomic dump of results + dedupe so a restart resumes, not forgets."""
+    import json
+    try:
+        with _lock:
+            data = {
+                "ts": _last_scan_ts,
+                "count": _scanned_count,
+                "results": _results[:400],          # cap file size
+                "pushed": {k: sorted(v) for k, v in _pushed.items()},
+            }
+        _STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        tmp = _STATE_FILE.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(data))
+        tmp.replace(_STATE_FILE)
+    except Exception as exc:
+        log.debug("scan_state_save_failed", error=str(exc))
+
+
+def _load_state() -> None:
+    """Warm the store from disk at startup — results show instantly with
+    their honest age instead of a blank 'pehla scan chal raha hai'."""
+    global _results, _scanned_count, _last_scan_ts, _status, _pushed
+    import json
+    try:
+        if not _STATE_FILE.exists():
+            return
+        data = json.loads(_STATE_FILE.read_text())
+        if not data.get("results"):
+            return
+        # Stale beyond 3 days → ignore (weekend ke baad Monday tak theek hai)
+        if time.time() - float(data.get("ts") or 0) > 3 * 86400:
+            return
+        with _lock:
+            if _results:
+                return                      # live scan already beat us to it
+            _results = data["results"]
+            _scanned_count = int(data.get("count") or 0)
+            _last_scan_ts = float(data.get("ts") or 0)
+            _status = "ready"
+            _pushed = {k: set(v) for k, v in (data.get("pushed") or {}).items()}
+        log.info("scan_state_restored", results=len(data["results"]),
+                 age_min=int((time.time() - _last_scan_ts) / 60))
+    except Exception as exc:
+        log.debug("scan_state_load_failed", error=str(exc))
+
 
 def _push_new_setups(picks: list[dict]) -> None:
     """Proactively send fresh BUY/STRONG BUY setups to Telegram. Silent if unconfigured."""
@@ -125,6 +176,7 @@ def _push_new_setups(picks: list[dict]) -> None:
             pass
         if engine.send("\n".join(lines), reply_markup=markup):
             _pushed[today].update(p["symbol"] for p in fresh + pre)
+            _save_state()   # dedupe survives restarts — no duplicate pushes
             log.info("setups_pushed_to_telegram", buys=len(fresh), prebreakout=len(pre))
     except Exception as exc:
         log.debug("push_setups_skip", error=str(exc))
@@ -239,6 +291,7 @@ def _scan_once(universe: Optional[list[str]] = None, progress=None) -> None:
             _scanned_count = len(universe)
             _last_scan_ts = time.time()
             _status = "ready"
+        _save_state()   # restart pe results turant wapas milenge
         log.info("auto_scan_complete", universe=len(universe), signals=len(serialized))
     except Exception as exc:
         with _lock:
@@ -440,6 +493,7 @@ def start_background_scan() -> None:
         if _thread_started:
             return
         _thread_started = True
+    _load_state()   # warm from disk — instant results after restart
     t = threading.Thread(target=_worker, name="auto-scan", daemon=True)
     t.start()
     log.info("auto_scan_started")
