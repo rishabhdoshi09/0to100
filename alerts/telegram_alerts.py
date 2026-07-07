@@ -62,29 +62,57 @@ class AlertEngine:
         """Return True if both token and chat_id are present in env."""
         return self.enabled
 
+    _MAX_LEN = 3800   # Telegram hard cap is 4096; headroom for HTML entities
+
+    @staticmethod
+    def _split_message(message: str, max_len: int) -> list[str]:
+        """Split on blank-line boundaries so no chunk exceeds the cap —
+        a too-long message must degrade to N messages, never to silence."""
+        if len(message) <= max_len:
+            return [message]
+        chunks, current = [], ""
+        for block in message.split("\n\n"):
+            while len(block) > max_len:          # single huge block: hard cut
+                chunks.append(block[:max_len])
+                block = block[max_len:]
+            if len(current) + len(block) + 2 > max_len:
+                if current:
+                    chunks.append(current)
+                current = block
+            else:
+                current = f"{current}\n\n{block}" if current else block
+        if current:
+            chunks.append(current)
+        return chunks
+
     def send(self, message: str, reply_markup: dict | None = None) -> bool:
         """
         POST *message* to Telegram sendMessage. Optional reply_markup
         attaches inline action buttons (see alerts/telegram_actions.py).
-        Returns True on success, False on any error (silent fail).
+        Long messages auto-split at the 4096-char API cap (buttons ride
+        on the last chunk). Returns True only if EVERY chunk delivered.
         """
         if not self.enabled:
             return False
         url = self._TELEGRAM_API.format(token=self._token)
-        payload = {
-            "chat_id":    self._chat_id,
-            "text":       message,
-            "parse_mode": "HTML",
-        }
-        if reply_markup:
-            payload["reply_markup"] = reply_markup
-        try:
-            resp = requests.post(url, json=payload, timeout=8)
-            resp.raise_for_status()
-            return True
-        except Exception as exc:
-            logger.warning("Telegram send failed: %s", exc)
-            return False
+        chunks = self._split_message(message, self._MAX_LEN)
+        ok = True
+        for i, chunk in enumerate(chunks):
+            payload = {
+                "chat_id":    self._chat_id,
+                "text":       chunk,
+                "parse_mode": "HTML",
+            }
+            if reply_markup and i == len(chunks) - 1:
+                payload["reply_markup"] = reply_markup
+            try:
+                resp = requests.post(url, json=payload, timeout=8)
+                resp.raise_for_status()
+            except Exception as exc:
+                logger.warning("Telegram send failed (chunk %d/%d): %s",
+                               i + 1, len(chunks), exc)
+                ok = False
+        return ok
 
     # ------------------------------------------------------------------
     # Formatted alert senders

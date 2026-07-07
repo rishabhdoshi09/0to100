@@ -457,3 +457,30 @@ class TestOutcomeTracker:
         row = conn.execute("SELECT worked FROM signal_log").fetchone()
         conn.close()
         assert row["worked"] is None   # <5 days old — too early to judge
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 14. Telegram delivery — long messages must split, never silently drop
+# ══════════════════════════════════════════════════════════════════════════════
+
+class TestTelegramSplit:
+    def test_short_message_unsplit(self):
+        from alerts.telegram_alerts import AlertEngine
+        assert AlertEngine._split_message("hello", 3800) == ["hello"]
+
+    def test_long_message_splits_lossless(self):
+        from alerts.telegram_alerts import AlertEngine
+        blocks = [f"BLOCK{i} " + "x" * 790 for i in range(10)]
+        msg = "\n\n".join(blocks)
+        chunks = AlertEngine._split_message(msg, 3800)
+        assert len(chunks) >= 2
+        assert all(len(c) <= 3800 for c in chunks)
+        joined = "".join(chunks)
+        for i in range(10):
+            assert f"BLOCK{i}" in joined     # nothing dropped
+
+    def test_monster_block_hard_cut(self):
+        from alerts.telegram_alerts import AlertEngine
+        chunks = AlertEngine._split_message("y" * 9000, 3800)
+        assert all(len(c) <= 3800 for c in chunks)
+        assert sum(len(c) for c in chunks) == 9000
