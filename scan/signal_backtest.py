@@ -76,6 +76,19 @@ def run_backtest(sample_step: int = 5, lookback_sessions: int = 250,
         _state.update(running=True, progress=0, total=len(symbols))
 
     t0 = time.time()
+    try:
+        return _run_backtest_inner(sc, stats, symbols, sample_step,
+                                   lookback_sessions, horizon, t0)
+    finally:
+        # Crash-proof: 'running' can never stick True and freeze the UI button
+        with _state_lock:
+            _state["running"] = False
+
+
+def _run_backtest_inner(sc, stats, symbols, sample_step, lookback_sessions,
+                        horizon, t0):
+    from data.bhavcopy_store import get_ohlcv
+
     for si, sym in enumerate(symbols):
         df = get_ohlcv(sym)
         if df is None or len(df) < 60 + horizon + 20:

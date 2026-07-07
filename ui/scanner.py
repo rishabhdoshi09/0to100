@@ -611,7 +611,13 @@ def render_scanner(universe: list[str]) -> None:
         set_auto_enabled(auto_on)
 
     # ── Signal accuracy (walk-forward backtest on real NSE data) ─────────────
-    with st.expander("📊 Signal accuracy — kaunsa signal kitna sahi (backtest)"):
+    try:
+        from scan.signal_backtest import get_state as _btgs
+        _bt_running_now = _btgs()["running"]
+    except Exception:
+        _bt_running_now = False
+    with st.expander("📊 Signal accuracy — kaunsa signal kitna sahi (backtest)",
+                     expanded=_bt_running_now or st.session_state.get("bt_open", False)):
         try:
             from scan.signal_backtest import (load_report, run_in_background,
                                               get_state)
@@ -623,11 +629,23 @@ def render_scanner(universe: list[str]) -> None:
                 if st.button("▶ Backtest chalao", key="bt_run",
                              disabled=_bt_state["running"],
                              use_container_width=True):
+                    st.session_state["bt_open"] = True
                     run_in_background()
                     st.rerun()
                 if _bt_state["running"]:
-                    st.caption(f"⏳ Chal raha hai… {_bt_state['progress']}/"
-                               f"{_bt_state['total']} stocks")
+                    _pct = (_bt_state["progress"] / _bt_state["total"]
+                            if _bt_state["total"] else 0.0)
+                    st.progress(_pct, text=f"⏳ {_bt_state['progress']}/"
+                                           f"{_bt_state['total']} stocks…")
+                    # Live progress — page khud refresh hota rahega
+                    try:
+                        from streamlit_autorefresh import st_autorefresh
+                        st_autorefresh(interval=2500, limit=300, key="bt_poll")
+                    except Exception:
+                        if st.button("⟳ Progress dekho", key="bt_poll_btn"):
+                            st.rerun()
+                elif st.session_state.pop("bt_open", False):
+                    st.success("✅ Backtest complete — table update ho gayi")
             with bc2:
                 st.caption("**Yeh data ab khud kaam karta hai — tumhe kuch nahi "
                            "karna:** har card pe 🎯 edge badge, negative-edge "
