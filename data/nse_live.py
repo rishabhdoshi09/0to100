@@ -97,9 +97,45 @@ def _is_trading_now() -> bool:
     return 9 * 60 + 15 <= minutes <= 16 * 60   # till ~4 PM (post-close prints)
 
 
+def _kite_snapshot(symbols: list[str]) -> dict[str, dict]:
+    """
+    Today's OHLCV bar from Kite quotes — the reliable path (user's Kite
+    works even when NSE's cookie-fussy public API refuses requests).
+    500 symbols per call.
+    """
+    try:
+        from execution.trade_executor import kite_ready
+        if not kite_ready():
+            return {}
+        from data.kite_client import KiteClient
+        kite = KiteClient()
+        snap: dict[str, dict] = {}
+        for i in range(0, len(symbols), 500):
+            chunk = symbols[i:i + 500]
+            raw = kite.batch_quotes(chunk)
+            for sym, q in raw.items():
+                ltp = float(q.get("ltp") or 0)
+                if ltp <= 0:
+                    continue
+                snap[sym] = {
+                    "open":   float(q.get("open") or ltp),
+                    "high":   float(q.get("high") or ltp),
+                    "low":    float(q.get("low") or ltp),
+                    "close":  ltp,
+                    "volume": float(q.get("volume") or 0),
+                }
+        if snap:
+            log.info("kite_intraday_snapshot", symbols=len(snap))
+        return snap
+    except Exception as exc:
+        log.debug("kite_snapshot_failed", error=str(exc))
+        return {}
+
+
 def apply_live_to_store() -> int:
     """
     Overlay today's live bar onto the bhavcopy store during market hours.
+    Source order: Kite (reliable) → NSE public API (fallback).
     Returns number of symbols updated. No-op when the store already has
     today's session (evening bhavcopy landed) or market is closed.
     """
@@ -113,8 +149,18 @@ def apply_live_to_store() -> int:
         if last_day == date.today():
             return 0            # today's official bhavcopy already in store
 
-        snap = fetch_live_snapshot()
+        # Kite first — proven working; NSE public API only as fallback
+        try:
+            from data.nse_universe import get_nse_universe
+            _uni = get_nse_universe()
+        except Exception:
+            _uni = []
+        snap = _kite_snapshot(_uni) if _uni else {}
         if not snap:
+            snap = fetch_live_snapshot()
+        if not snap:
+            log.info("live_bar_unavailable",
+                     hint="Kite login + NSE API dono se intraday nahi mila")
             return 0
 
         today_ts = pd.Timestamp(date.today())
