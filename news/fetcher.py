@@ -64,6 +64,10 @@ class NewsFetcher:
             try:
                 new = self._fetch_rss(url, max_age_hours)
                 articles.extend(new)
+                # Per-feed visibility — a dead feed must show in logs,
+                # never hide inside a silent zero
+                log.info("rss_feed_result", feed=url.split("/")[2],
+                         articles=len(new))
             except Exception as exc:
                 log.warning("rss_fetch_failed", url=url, error=str(exc))
 

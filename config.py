@@ -38,7 +38,13 @@ class Settings(BaseSettings):
 
     # ── News ──────────────────────────────────────────────────────────────────
     news_rss_feeds: str = Field(
-        default="https://feeds.feedburner.com/ndtvprofit-latest"
+        default=(
+            "https://economictimes.indiatimes.com/markets/rssfeeds/1977021501.cms,"
+            "https://economictimes.indiatimes.com/markets/stocks/rssfeeds/2146842.cms,"
+            "https://www.moneycontrol.com/rss/buzzingstocks.xml,"
+            "https://www.moneycontrol.com/rss/marketreports.xml,"
+            "https://www.livemint.com/rss/markets"
+        )
     )
 
     @property
