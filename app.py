@@ -2618,7 +2618,22 @@ elif _page == "My Watchlist":
         st.error(f"Watchlist error: {e}")
 
 elif _page == "My Holdings":
-    st.markdown("## 💼 My Holdings")
+    st.markdown("## 💼 My Portfolio")
+
+    # ── System-managed trades (paper + live) — same truth as the scanner ──
+    try:
+        from ui.positions_panel import render_open_positions, render_trade_journal
+        _n_open = render_open_positions()
+        if _n_open:
+            st.caption(f"👆 {_n_open} system-managed position(s) — R-progress "
+                       f"aur exit advice har 15 min update hoti hai")
+        render_trade_journal()
+        if _n_open:
+            st.divider()
+    except Exception:
+        pass
+
+    st.markdown("#### 🏦 Zerodha Holdings")
     st.caption("Your real Zerodha portfolio with tax timing insights.")
     try:
         from ui.real_holdings import render_real_holdings

@@ -740,70 +740,15 @@ def render_scanner(universe: list[str]) -> None:
                     st.rerun()
             _trade_ticket_body(st.session_state["trade_ticket_row"])
 
-    # ── 📍 Open positions — live R-progress + exit guidance ──────────────────
+    # ── 📍 My book — shared panel (same truth as My Portfolio page) ──────────
     try:
-        from risk.position_manager import review_positions
-        _pos = review_positions()
-        if _pos:
-            with st.expander(f"📍 Meri positions ({len(_pos)} open)", expanded=True):
-                # Portfolio risk meter — account-level, not per-trade
-                try:
-                    from risk.portfolio_risk import portfolio_risk_report
-                    _prr = portfolio_risk_report()
-                    _vc = {"OK": "#00d4a0", "CAUTION": "#f59e0b",
-                           "DANGER": "#ff4b4b"}[_prr["verdict"]]
-                    st.markdown(
-                        f"<div style='background:{_vc}12;border:1px solid {_vc}44;"
-                        f"border-radius:8px;padding:8px 14px;margin-bottom:8px;"
-                        f"font-size:.8rem;color:#c9d1d9'>"
-                        f"<b style='color:{_vc}'>Portfolio: {_prr['verdict']}</b> · "
-                        f"deployed ₹{_prr['deployed']:,.0f} ({_prr['deployed_pct']:.0f}%) · "
-                        f"agar saare stops hit hue: <b style='color:#ff4b4b'>"
-                        f"−₹{_prr['open_risk']:,.0f}</b> ({_prr['open_risk_pct']:.1f}% "
-                        f"of capital) · {_prr['n_positions']}/{_prr['max_positions']} positions"
-                        + "".join(f"<div style='color:#f59e0b;margin-top:3px'>{w}</div>"
-                                  for w in _prr["warnings"])
-                        + "</div>", unsafe_allow_html=True)
-                except Exception:
-                    pass
-                for p in _pos:
-                    r = p.get("r_progress")
-                    pnl = p.get("pnl")
-                    pnl_col = "#00d4a0" if (pnl or 0) >= 0 else "#ff4b4b"
-                    live_txt = f"₹{p['live']:,.1f}" if p["live"] else "—"
-                    st.markdown(
-                        f"<div style='background:#0d1421;border:1px solid #1e293b;"
-                        f"border-radius:10px;padding:10px 14px;margin-bottom:6px'>"
-                        f"<span style='color:#e2e8f0;font-weight:700;"
-                        f"font-family:JetBrains Mono,monospace'>{p['symbol']}</span>"
-                        f"<span style='font-size:.72rem;color:#8892a4'> "
-                        f"({p['mode']}) · {p['qty']} sh @ ₹{p['entry']:,.1f}</span>"
-                        f" &nbsp; live <b style='color:#e2e8f0'>{live_txt}</b>"
-                        + (f" &nbsp; <b style='color:{pnl_col}'>₹{pnl:+,.0f}</b>"
-                           if pnl is not None else "")
-                        + (f" &nbsp; <span style='font-size:.75rem;color:#7dd3fc'>"
-                           f"{r:+.1f}R</span>" if r is not None else "")
-                        + f"<div style='font-size:.8rem;color:#c9d1d9;margin-top:5px'>"
-                          f"{p['advice']}</div>"
-                        + "</div>",
-                        unsafe_allow_html=True)
-    except Exception:
-        pass
-
-    # ── Recent trades journal ─────────────────────────────────────────────────
-    try:
-        from execution.trade_executor import recent_trades
-        _rt = recent_trades(10)
-        if _rt:
-            with st.expander(f"📒 Mere trades ({len(_rt)} recent)"):
-                st.dataframe(
-                    [{"Time": t["placed_at"][5:16], "Mode": t["mode"],
-                      "Stock": t["symbol"], "Qty": t["qty"],
-                      "Entry": f"₹{t['entry_price']:,.1f}" if t["entry_price"] else "-",
-                      "Stop": f"₹{t['stop_price']:,.1f}" if t["stop_price"] else "-",
-                      "Target": f"₹{t['target_price']:,.1f}" if t["target_price"] else "-",
-                      "Status": t["status"]} for t in _rt],
-                    use_container_width=True, hide_index=True)
+        from ui.positions_panel import render_open_positions, render_trade_journal
+        from risk.position_manager import review_positions as _rp
+        _n_pos = len(_rp())
+        if _n_pos:
+            with st.expander(f"📍 Meri positions ({_n_pos} open)", expanded=True):
+                render_open_positions()
+        render_trade_journal()
     except Exception:
         pass
 
