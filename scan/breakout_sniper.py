@@ -165,7 +165,14 @@ def start_sniper() -> bool:
             log.info("sniper_connected", watching=len(tokens))
 
         def on_close(ws, code, reason):
-            log.info("sniper_ws_closed", code=code, reason=str(reason)[:80])
+            # Mark dead so the next scan cycle restarts with a FRESH token —
+            # otherwise a daily token expiry kills the sniper until app restart.
+            global _started, _ticker
+            with _lock:
+                _started = False
+                _ticker = None
+            log.info("sniper_ws_closed_will_restart", code=code,
+                     reason=str(reason)[:80])
 
         kws = KiteClient().ticker(on_ticks, on_connect, on_close)
         kws.connect(threaded=True)

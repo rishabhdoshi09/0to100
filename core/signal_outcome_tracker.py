@@ -132,7 +132,7 @@ def update_outcomes(lookback_days: int = 30) -> None:
         try:
             rows = conn.execute(
                 """
-                SELECT id, symbol, entry_price
+                SELECT id, symbol, entry_price, logged_at
                 FROM signal_log
                 WHERE worked IS NULL
                   AND logged_at <= ?
@@ -156,6 +156,26 @@ def update_outcomes(lookback_days: int = 30) -> None:
         except Exception:
             pass
 
+        def _entry_was_triggered(symbol: str, entry: float, logged_at: str) -> bool:
+            """
+            Fill-awareness: a breakout entry sits ABOVE the market. If the
+            high since the signal never reached it, the trade never existed —
+            judging it by today's price would poison the accuracy stats.
+            Unknown history → assume triggered (fail open, never lose data).
+            """
+            try:
+                import pandas as pd
+                from data.bhavcopy_store import get_ohlcv
+                df = get_ohlcv(symbol)
+                if df is None or df.empty or "high" not in df.columns:
+                    return True
+                since = df[df.index >= pd.Timestamp(str(logged_at)[:10])]
+                if since.empty:
+                    return True
+                return float(since["high"].max()) >= entry * 0.999
+            except Exception:
+                return True
+
         # Filter out recently errored symbols
         def _should_skip(symbol: str) -> bool:
             with _error_lock:
@@ -168,6 +188,11 @@ def update_outcomes(lookback_days: int = 30) -> None:
             """Returns (id, outcome_price, outcome_pct, worked) or None on error."""
             symbol = row["symbol"]
             entry = row["entry_price"]
+            # No-fill check first: order never triggered = not a trade.
+            # worked=-1 marks NO_FILL (excluded from all accuracy math).
+            if entry and not _entry_was_triggered(symbol, float(entry),
+                                                  row["logged_at"]):
+                return (row["id"], 0.0, 0.0, -1)
             # Bulk-quote fast path — no per-symbol HTTP
             price = _bulk_prices.get(symbol, 0.0)
             if price > 0 and entry > 0:
@@ -217,13 +242,17 @@ def update_outcomes(lookback_days: int = 30) -> None:
         conn = _get_conn()
         try:
             for (row_id, price, pct, worked) in results:
+                # NO_FILL rows carry NULL price/pct — they must never look
+                # like flat trades to the Report Card or accuracy math.
+                _price = None if worked == -1 else price
+                _pct = None if worked == -1 else pct
                 conn.execute(
                     """
                     UPDATE signal_log
                     SET outcome_checked_at=?, outcome_price=?, outcome_pct=?, worked=?
                     WHERE id=?
                     """,
-                    (now_iso, price, pct, worked, row_id),
+                    (now_iso, _price, _pct, worked, row_id),
                 )
             conn.commit()
         finally:
