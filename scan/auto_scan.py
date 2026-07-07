@@ -303,11 +303,14 @@ _auto_enabled: bool = True
 
 
 def set_auto_enabled(enabled: bool) -> None:
-    """User control: pause/resume the automatic background refresh."""
+    """User control: pause/resume the automatic background refresh.
+    Logs only on CHANGE — every page rerun calls this."""
     global _auto_enabled
     with _lock:
+        changed = _auto_enabled != enabled
         _auto_enabled = enabled
-    log.info("auto_scan_toggled", enabled=enabled)
+    if changed:
+        log.info("auto_scan_toggled", enabled=enabled)
 
 
 def is_auto_enabled() -> bool:

@@ -58,7 +58,10 @@ if not logger.handlers:
     logger.addHandler(logging.StreamHandler())
     logger.setLevel(logging.INFO)
     logger.propagate = False
-logger.info("quantterm_start pid=%s", os.getpid())
+import sys as _sys
+if not getattr(_sys, "_qt_start_logged", False):
+    _sys._qt_start_logged = True
+    logger.info("quantterm_start pid=%s", os.getpid())
 
 load_dotenv()
 
@@ -948,7 +951,7 @@ with st.sidebar:
         if st.sidebar.button(
             "→ Open in Terminal",
             key="qs_open_terminal",
-            use_container_width=True,
+            width="stretch",
         ):
             st.session_state["sidebar_nav"] = "Terminal"
             st.session_state["terminal_symbol"] = _qs
@@ -1022,7 +1025,7 @@ with st.sidebar:
             ("Tools",             "🛠️ Tools"),
         ]
         for _mt_key, _mt_label in _more_tools:
-            if st.button(_mt_label, key=f"more_{_mt_key}", use_container_width=True):
+            if st.button(_mt_label, key=f"more_{_mt_key}", width="stretch"):
                 st.session_state["sidebar_nav"] = _mt_key
                 st.rerun()
 
@@ -2932,21 +2935,21 @@ elif _page == "Tools6":
             st.markdown("### More Tools")
             _mt_col1, _mt_col2, _mt_col3 = st.columns(3)
             with _mt_col1:
-                if st.button("📊 Market Breadth", key="mt_breadth", use_container_width=True):
+                if st.button("📊 Market Breadth", key="mt_breadth", width="stretch"):
                     st.session_state["sidebar_nav"] = "Market Breadth"
                     st.rerun()
-                if st.button("🔔 Smart Alerts", key="mt_alerts", use_container_width=True):
+                if st.button("🔔 Smart Alerts", key="mt_alerts", width="stretch"):
                     st.session_state["sidebar_nav"] = "Smart Alerts"
                     st.rerun()
             with _mt_col2:
-                if st.button("🚀 IPO Calendar", key="mt_ipo", use_container_width=True):
+                if st.button("🚀 IPO Calendar", key="mt_ipo", width="stretch"):
                     st.session_state["sidebar_nav"] = "IPO Calendar"
                     st.rerun()
-                if st.button("🔍 Stock Screener", key="mt_screener", use_container_width=True):
+                if st.button("🔍 Stock Screener", key="mt_screener", width="stretch"):
                     st.session_state["sidebar_nav"] = "Stock Screener"
                     st.rerun()
             with _mt_col3:
-                if st.button("💼 Holdings", key="mt_holdings", use_container_width=True):
+                if st.button("💼 Holdings", key="mt_holdings", width="stretch"):
                     st.session_state["sidebar_nav"] = "My Holdings"
                     st.rerun()
 

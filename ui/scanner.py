@@ -348,7 +348,7 @@ def _trade_ticket_body(s: dict) -> None:
         st.error("🔴 Portfolio DANGER zone mein hai — yeh trade lene se pehle "
                  "warnings padho. Button phir bhi neeche hai, decision tumhara.")
     if st.button(label, key=f"tt_go_{sym}", type="primary",
-                 use_container_width=True):
+                 width="stretch"):
         res = place_trade(symbol=sym, qty=int(qty), entry_type=entry_type,
                           entry_price=float(eff_entry), stop=float(stop),
                           target=float(target),
@@ -458,9 +458,9 @@ def _render_best_trade(results: list[dict]) -> None:
     with hc2:
         st.markdown("<div style='height:1.4rem'></div>", unsafe_allow_html=True)
         if st.button("💰 Trade Now", key="hero_trade", type="primary",
-                     use_container_width=True):
+                     width="stretch"):
             _open_trade_ticket(best)
-        if st.button("Analyse →", key="hero_analyse", use_container_width=True):
+        if st.button("Analyse →", key="hero_analyse", width="stretch"):
             st.session_state["sidebar_nav"] = "Terminal"
             st.session_state["terminal_symbol"] = sym
             st.rerun()
@@ -561,9 +561,9 @@ def _render_card(s: dict, key_prefix: str = "") -> None:
         )
     with col2:
         if st.button("💰 Trade", key=f"trade_{key_prefix}_{s['symbol']}",
-                     type="primary", use_container_width=True):
+                     type="primary", width="stretch"):
             _open_trade_ticket(s)
-        if st.button("Analyse →", key=f"scan_{key_prefix}_{s['symbol']}", use_container_width=True):
+        if st.button("Analyse →", key=f"scan_{key_prefix}_{s['symbol']}", width="stretch"):
             st.session_state["sidebar_nav"] = "Terminal"
             st.session_state["terminal_symbol"] = s["symbol"]
             st.rerun()
@@ -601,7 +601,7 @@ def render_scanner(universe: list[str]) -> None:
     with c2:
         st.markdown("<div style='height:1.75rem'></div>", unsafe_allow_html=True)
         scan_clicked = st.button("🔍 Scan Market", key="scanner_run",
-                                 type="primary", use_container_width=True)
+                                 type="primary", width="stretch")
     with c3:
         st.markdown("<div style='height:1.75rem'></div>", unsafe_allow_html=True)
         auto_on = st.toggle("Auto-refresh (15 min)", value=is_auto_enabled(),
@@ -628,7 +628,7 @@ def render_scanner(universe: list[str]) -> None:
             with bc1:
                 if st.button("▶ Backtest chalao", key="bt_run",
                              disabled=_bt_state["running"],
-                             use_container_width=True):
+                             width="stretch"):
                     st.session_state["bt_open"] = True
                     run_in_background()
                     st.rerun()
@@ -666,7 +666,7 @@ def render_scanner(universe: list[str]) -> None:
                         "Trades": s["closed"],
                     })
                 if rows:
-                    st.dataframe(rows, use_container_width=True, hide_index=True)
+                    st.dataframe(rows, width="stretch", hide_index=True)
                     st.caption(f"Last run: {_rep.get('generated_at')} · "
                                f"{_rep.get('symbols')} stocks · "
                                f"{_rep.get('horizon_days')}-day horizon · "
@@ -714,7 +714,7 @@ def render_scanner(universe: list[str]) -> None:
         fb1, fb2 = st.columns([5, 1])
         with fb2:
             if st.button("🔄 Live data", key="refresh_live",
-                         use_container_width=True,
+                         width="stretch",
                          help="Google Finance prices + NSE intraday snapshot dubara laao"):
                 _live_quotes.clear()
                 _health.clear()

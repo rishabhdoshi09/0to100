@@ -86,4 +86,4 @@ def render_trade_journal(limit: int = 10) -> None:
               "Stop": f"₹{t['stop_price']:,.1f}" if t["stop_price"] else "-",
               "Target": f"₹{t['target_price']:,.1f}" if t["target_price"] else "-",
               "Status": t["status"]} for t in rt],
-            use_container_width=True, hide_index=True)
+            width="stretch", hide_index=True)

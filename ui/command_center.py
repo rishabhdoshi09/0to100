@@ -280,7 +280,7 @@ def _render_setup_card(setup: dict) -> None:
     if st.button(
         f"View Analysis →  {symbol}",
         key=f"cc_view_{symbol}_{setup.get('archetype', '')}",
-        use_container_width=True,
+        width="stretch",
     ):
         st.session_state["sidebar_nav"]     = "Terminal"
         st.session_state["terminal_symbol"] = symbol
