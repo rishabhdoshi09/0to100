@@ -520,6 +520,16 @@ class JarvisOrchestrator:
             except Exception:
                 pass
 
+            # ── Options market read (NIFTY chain) ─────────────────────────
+            try:
+                from options.analytics import nifty_options_summary
+                _opt = nifty_options_summary()
+                if _opt:
+                    lines.append(f"NIFTY options: {_opt['bias']} — {_opt['note']}; "
+                                 f"max pain {_opt['max_pain']:,.0f}")
+            except Exception:
+                pass
+
             # ── Data freshness ─────────────────────────────────────────────
             try:
                 from datetime import date as _date

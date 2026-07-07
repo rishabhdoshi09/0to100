@@ -50,6 +50,14 @@ def _market_snapshot() -> dict:
             getattr(regime, "market_regime", ""), "")
     except Exception:
         pass
+    # Options market read — kya keh raha hai derivatives ka paisa
+    try:
+        from options.analytics import nifty_options_summary
+        opt = nifty_options_summary()
+        if opt:
+            out["options"] = opt
+    except Exception:
+        pass
     return out
 
 
@@ -157,6 +165,9 @@ def build_pulse() -> dict:
                          f"({gainers[0]['chg_pct']:+.1f}%)")
     if snapshot["commentary"]:
         takeaways.append(snapshot["commentary"])
+    if snapshot.get("options"):
+        opt = snapshot["options"]
+        takeaways.append(f"Options: {opt['note']} · max pain {opt['max_pain']:,.0f}")
 
     return {
         "date": datetime.now().strftime("%d %B %Y"),

@@ -145,6 +145,32 @@ def get_option_chain(symbol: str = "NIFTY") -> tuple[Optional[pd.DataFrame], Opt
 # Analytical computations
 # ─────────────────────────────────────────────────────────────────────────────
 
+def nifty_options_summary() -> Optional[dict]:
+    """
+    One-line NIFTY options read for Pulse/JARVIS:
+    {pcr, max_pain, bias, note}. None when the chain is unavailable.
+    """
+    try:
+        df, _expiry = get_option_chain("NIFTY")
+        if df is None or df.empty:
+            return None
+        pcr = compute_pcr(df)
+        max_pain = compute_max_pain(df)
+        if pcr >= 1.3:
+            bias = "BULLISH"
+            note = (f"PCR {pcr:.2f} — puts zyada likhe hain, sellers ko girne "
+                    f"ki umeed NAHI (support strong)")
+        elif pcr <= 0.7:
+            bias = "BEARISH"
+            note = f"PCR {pcr:.2f} — call writers haavi, upar resistance bhaari"
+        else:
+            bias = "NEUTRAL"
+            note = f"PCR {pcr:.2f} — options market balanced"
+        return {"pcr": pcr, "max_pain": max_pain, "bias": bias, "note": note}
+    except Exception:
+        return None
+
+
 def compute_pcr(df: pd.DataFrame) -> float:
     """Put-Call Ratio by OI."""
     if df is None or df.empty:
