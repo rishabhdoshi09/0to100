@@ -262,7 +262,9 @@ class _KiteProvider:
 
 
 class _GoogleFinanceProvider:
-    """Live quotes from Google Finance; yfinance per-symbol backup."""
+    """Non-Kite fallback provider — routes through the unified quote
+    chain (data.live_quotes: NSE snapshot → Google), yfinance backup.
+    Name kept for backwards compat; Google is no longer the first hop."""
 
     def __init__(self):
         self._yf_backup = _YFinanceProvider()
@@ -271,29 +273,38 @@ class _GoogleFinanceProvider:
         return self.quotes([symbol]).get(symbol, _empty_quote())
 
     def quotes(self, symbols: list[str]) -> dict[str, dict]:
-        from data.google_finance import get_quotes as _gf_quotes
         out: dict[str, dict] = {}
         try:
-            gf = _gf_quotes(symbols)
+            from data.live_quotes import get_live_quotes
+            for sym, q in get_live_quotes(symbols).items():
+                price = float(q["price"])
+                chg = float(q.get("chg_pct") or 0)
+                prev = price / (1 + chg / 100) if chg > -100 else 0.0
+                out[sym] = {
+                    "price": price, "prev_close": round(prev, 2),
+                    "chg_pct": chg, "volume": 0.0, "avg_volume": 1.0,
+                }
         except Exception:
-            gf = {}
-        for sym, q in gf.items():
-            out[sym] = {
-                "price": q["price"], "prev_close": q["prev_close"],
-                "chg_pct": q["chg_pct"], "volume": 0.0, "avg_volume": 1.0,
-            }
+            pass
         missing = [s for s in symbols if s not in out]
         if missing:
             out.update(self._yf_backup.quotes(missing))
         return out
 
     def history_closes(self, symbol: str, days: int = 20) -> list[float]:
-        # Google Finance publishes no historical series — use yfinance
+        # Prefer the official bhav store; yfinance only as last resort
+        try:
+            from data.bhavcopy_store import get_ohlcv
+            df = get_ohlcv(symbol)
+            if df is not None and len(df) >= days:
+                return [float(x) for x in df["close"].values[-days:]]
+        except Exception:
+            pass
         return _yf_history_closes(symbol, days)
 
     @property
     def source(self) -> str:
-        return "google_finance"
+        return "unified_fallback"
 
 
 class _YFinanceProvider:
