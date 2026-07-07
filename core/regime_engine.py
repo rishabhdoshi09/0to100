@@ -194,6 +194,9 @@ def _fetch_ohlcv(ticker: str, period: str = "1y") -> Optional[pd.DataFrame]:
         from data.index_store import get_index_ohlcv
         df = get_index_ohlcv(ticker)
         if df is not None and len(df) >= 30:
+            if "Volume" not in df.columns:   # old-cache shape safety
+                df = df.copy()
+                df["Volume"] = 0.0
             return df.tail(days)
     except Exception as exc:
         logger.debug("index_store miss for %s: %s", ticker, exc)
