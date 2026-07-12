@@ -157,6 +157,11 @@ def start_sniper() -> bool:
         from data.kite_client import KiteClient
 
         def on_ticks(ws, ticks):
+            try:
+                from core.health import beat as _hb
+                _hb("sniper", note=f"{len(ticks)} ticks")
+            except Exception:
+                pass
             with _lock:
                 watch = dict(_watch)
                 today = datetime.now().strftime("%Y-%m-%d")

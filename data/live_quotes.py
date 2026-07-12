@@ -14,9 +14,22 @@ three simply isn't included — the caller shows an honest EOD tag.
 """
 from __future__ import annotations
 
+import threading
+import time
+
 from logger import get_logger
 
 log = get_logger(__name__)
+
+# ── Micro-cache: same quotes, one network trip ────────────────────────────────
+# Within one 15-min cycle the position manager, watchlist watcher, autopilot
+# (×3 internal passes) and the UI overlay all ask for overlapping symbols —
+# previously ~6 full Kite/NSE round-trips. 8 seconds is far fresher than any
+# consumer needs (the sniper has its own tick stream and does NOT use this
+# path), so correctness is untouched while redundant calls collapse to one.
+_QUOTE_TTL_S = 8.0
+_qcache: dict[str, tuple[float, dict]] = {}      # symbol -> (fetched_ts, quote)
+_qcache_lock = threading.Lock()
 
 
 def _kite_quotes(symbols: list[str]) -> dict[str, dict]:
@@ -66,31 +79,76 @@ def _google_quotes(symbols: list[str]) -> dict[str, dict]:
         return {}
 
 
-def get_live_quotes(symbols: list[str]) -> dict[str, dict]:
+def get_live_quotes(symbols: list[str], ttl: float = _QUOTE_TTL_S) -> dict[str, dict]:
     """
     {symbol: {price, chg_pct, source}} — Kite → NSE → Google, each only
     filling what the previous missed. Logs which source covered how many.
     Offline short-circuit: when Kite AND NSE both return nothing (DNS
     down / no internet), skip the per-symbol Google pass entirely —
     60 doomed requests add minutes of latency and pure log spam.
+
+    A symbol fetched within `ttl` seconds is served from the micro-cache
+    (pass ttl=0 to force a fresh fetch). Only found quotes are cached —
+    a missing symbol stays missing and is retried on the next call.
     """
     if not symbols:
         return {}
     quotes: dict[str, dict] = {}
 
+    # 1. Micro-cache pass
+    if ttl > 0:
+        now = time.time()
+        with _qcache_lock:
+            for s in symbols:
+                hit = _qcache.get(s)
+                if hit and now - hit[0] < ttl:
+                    quotes[s] = dict(hit[1])
+        if quotes:
+            try:
+                from core.health import count
+                count("quote_cache", "hits", len(quotes))
+            except Exception:
+                pass
+        if len(quotes) == len(symbols):
+            return quotes
+
+    # 2. Network chain for the rest
+    t0 = time.perf_counter()
+    fetched: dict[str, dict] = {}
     for name, fn in (("kite", _kite_quotes), ("nse", _nse_quotes),
                      ("google", _google_quotes)):
-        missing = [s for s in symbols if s not in quotes]
+        missing = [s for s in symbols if s not in quotes and s not in fetched]
         if not missing:
             break
-        if name == "google" and not quotes and len(missing) > 5:
+        if name == "google" and not quotes and not fetched and len(missing) > 5:
             log.info("live_quotes_offline_skip", missing=len(missing))
             break
         got = fn(missing)
-        quotes.update(got)
+        fetched.update(got)
         if got:
             log.info("live_quotes_source", source=name, filled=len(got),
-                     still_missing=len(symbols) - len(quotes))
+                     still_missing=len(symbols) - len(quotes) - len(fetched))
+
+    if fetched:
+        now = time.time()
+        with _qcache_lock:
+            for s, q in fetched.items():
+                _qcache[s] = (now, dict(q))
+            # bounded: drop expired entries once the cache grows big
+            if len(_qcache) > 4000:
+                cutoff = now - max(_QUOTE_TTL_S, ttl)
+                for k in [k for k, (ts, _) in _qcache.items() if ts < cutoff]:
+                    del _qcache[k]
+        quotes.update(fetched)
+    try:
+        from core.health import count, record_latency, beat
+        count("quote_cache", "misses", len(fetched))
+        record_latency("quote_fetch", time.perf_counter() - t0)
+        if fetched:
+            src = next(iter(fetched.values())).get("source", "?")
+            beat("quotes", note=f"{src} · {len(fetched)} syms")
+    except Exception:
+        pass
     return quotes
 
 

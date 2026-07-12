@@ -136,6 +136,12 @@ def _listener() -> None:
     fails = 0
     while True:
         try:
+            from core.health import beat as _hb
+            _hb("telegram_listener",
+                note="ok" if fails == 0 else f"{fails} fails")
+        except Exception:
+            pass
+        try:
             r = requests.get(
                 f"https://api.telegram.org/bot{token}/getUpdates",
                 params={"offset": offset, "timeout": 25,

@@ -637,6 +637,11 @@ def report_card() -> dict:
 def review_cycle() -> None:
     """Called every scan cycle during market hours."""
     s = _load()
+    try:
+        from core.health import beat
+        beat("autopilot", note=f"{'ARMED ' + s['mode'] if s['armed'] else 'off'}")
+    except Exception:
+        pass
     if s["allocation"] <= 0:
         return
     try:

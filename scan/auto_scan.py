@@ -476,7 +476,15 @@ def _maybe_push_weekly_coach() -> None:
 def _worker() -> None:
     while True:
         if is_auto_enabled():
-            _scan_once()
+            try:
+                from core.health import beat as _hb, timed as _ht
+                _hb("auto_scan", note=_status)
+                _cycle_timer = _ht("scan_cycle")
+            except Exception:
+                import contextlib
+                _cycle_timer = contextlib.nullcontext()
+            with _cycle_timer:
+                _scan_once()
             _maybe_remind_kite_login()
             _maybe_push_morning_pulse()
             _maybe_update_outcomes()

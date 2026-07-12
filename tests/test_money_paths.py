@@ -733,3 +733,84 @@ class TestAutopilot:
         # market hours / weekend never fire
         assert ap.eod_digest(now=dt(2026, 7, 10, 14, 0)) is False
         assert ap.eod_digest(now=dt(2026, 7, 11, 16, 0)) is False
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 16. System Pulse + quote micro-cache — smoothness is money too
+# ══════════════════════════════════════════════════════════════════════════════
+
+class TestSystemHealth:
+    def test_beat_status_ladder(self, monkeypatch):
+        import core.health as h
+        monkeypatch.setattr(h, "_beats", {}, raising=False)
+        assert h.daemon_status("auto_scan")[0] == "NEVER"
+        h.beat("auto_scan", note="ready")
+        status, age = h.daemon_status("auto_scan")
+        assert status == "OK" and age < 5
+        # age past warn → SLOW; past dead → DEAD (cadence 1200/4500)
+        import time as t
+        h._beats["auto_scan"]["ts"] = t.time() - 2000
+        assert h.daemon_status("auto_scan")[0] == "SLOW"
+        h._beats["auto_scan"]["ts"] = t.time() - 5000
+        assert h.daemon_status("auto_scan")[0] == "DEAD"
+
+    def test_latency_percentiles_and_pulse(self, monkeypatch):
+        import core.health as h
+        monkeypatch.setattr(h, "_lat", {}, raising=False)
+        monkeypatch.setattr(h, "_beats", {}, raising=False)
+        monkeypatch.setattr(h, "_counters", {}, raising=False)
+        for ms in range(1, 101):                     # 1..100 ms
+            h.record_latency("quote_fetch", ms / 1000)
+        p = h.pulse()["latency"]["quote_fetch"]
+        assert p["n"] == 100
+        assert 45 <= p["p50_ms"] <= 55
+        assert 90 <= p["p95_ms"] <= 100
+        with h.timed("x"):
+            pass
+        assert h.pulse()["latency"]["x"]["n"] == 1
+
+
+class TestQuoteMicroCache:
+    def _fresh(self, monkeypatch):
+        import data.live_quotes as lq
+        monkeypatch.setattr(lq, "_qcache", {}, raising=False)
+        calls = {"n": 0}
+
+        def fake_kite(symbols):
+            calls["n"] += 1
+            return {s: {"price": 100.0, "chg_pct": 1.0, "source": "kite"}
+                    for s in symbols if s != "MISSING"}
+        monkeypatch.setattr(lq, "_kite_quotes", fake_kite)
+        monkeypatch.setattr(lq, "_nse_quotes", lambda s: {})
+        monkeypatch.setattr(lq, "_google_quotes", lambda s: {})
+        return lq, calls
+
+    def test_second_call_within_ttl_is_free(self, monkeypatch):
+        lq, calls = self._fresh(monkeypatch)
+        q1 = lq.get_live_quotes(["HAL", "BEL"])
+        assert calls["n"] == 1 and q1["HAL"]["price"] == 100.0
+        q2 = lq.get_live_quotes(["HAL", "BEL"])
+        assert calls["n"] == 1                      # served from cache
+        assert q2 == q1
+        # partial overlap: only the new symbol hits the network
+        lq.get_live_quotes(["HAL", "TCS"])
+        assert calls["n"] == 2
+
+    def test_ttl_zero_bypasses_and_misses_not_cached(self, monkeypatch):
+        lq, calls = self._fresh(monkeypatch)
+        lq.get_live_quotes(["HAL"])
+        lq.get_live_quotes(["HAL"], ttl=0)
+        assert calls["n"] == 2                      # forced fresh fetch
+        # a symbol no source can answer is retried every call, never cached
+        assert lq.get_live_quotes(["MISSING"]) == {}
+        assert lq.get_live_quotes(["MISSING"]) == {}
+        assert calls["n"] == 4
+
+    def test_expiry_refetches(self, monkeypatch):
+        lq, calls = self._fresh(monkeypatch)
+        lq.get_live_quotes(["HAL"])
+        # age the cache entry past the TTL
+        ts, q = lq._qcache["HAL"]
+        lq._qcache["HAL"] = (ts - 60, q)
+        lq.get_live_quotes(["HAL"])
+        assert calls["n"] == 2

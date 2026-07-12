@@ -1034,6 +1034,12 @@ with st.sidebar:
     # ── Diagnostics — config self-check + recent errors ────────────────────
     with st.expander("🩺 Diagnostics"):
         try:
+            from ui.system_pulse import render_system_pulse
+            render_system_pulse()
+            st.divider()
+        except Exception:
+            pass
+        try:
             from core.error_guard import check_config, recent_errors
             for _name, _ok, _hint in check_config():
                 _dot = "🟢" if _ok else "🔴"
