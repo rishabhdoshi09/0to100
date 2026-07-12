@@ -153,10 +153,12 @@ def get_live_quotes(symbols: list[str], ttl: float = _QUOTE_TTL_S) -> dict[str, 
 
 
 _KITE_INDEX_KEYS = {
-    "NIFTY":     "NSE:NIFTY 50",
-    "BANKNIFTY": "NSE:NIFTY BANK",
-    "VIX":       "NSE:INDIA VIX",
-    "SENSEX":    "BSE:SENSEX",
+    "NIFTY":      "NSE:NIFTY 50",
+    "BANKNIFTY":  "NSE:NIFTY BANK",
+    "FINNIFTY":   "NSE:NIFTY FIN SERVICE",
+    "MIDCPNIFTY": "NSE:NIFTY MID SELECT",
+    "VIX":        "NSE:INDIA VIX",
+    "SENSEX":     "BSE:SENSEX",
 }
 
 

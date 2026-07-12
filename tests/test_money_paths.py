@@ -969,6 +969,27 @@ class TestSystemHealth:
         assert h.pulse()["latency"]["x"]["n"] == 1
 
 
+class TestProviderPolicy:
+    def test_provider_upgrades_to_kite_after_login(self, monkeypatch):
+        """App opened before morning Kite login must NOT stay on Google
+        scrape all day — the provider re-checks and upgrades to Kite."""
+        import data.market_data as md
+
+        class _FakeKite:
+            pass
+        monkeypatch.setattr(md, "_KiteProvider", _FakeKite)
+        monkeypatch.setattr(md, "_provider", None, raising=False)
+        # before login → Google provider
+        monkeypatch.setattr(md, "_kite_available", lambda: False)
+        assert isinstance(md.get_provider(), md._GoogleFinanceProvider)
+        # user logs in mid-session → next call upgrades to Kite
+        monkeypatch.setattr(md, "_kite_available", lambda: True)
+        assert isinstance(md.get_provider(), _FakeKite)
+        # and stays Kite (cached, no rebuild churn)
+        p = md.get_provider()
+        assert md.get_provider() is p
+
+
 class TestQuoteMicroCache:
     def _fresh(self, monkeypatch):
         import data.live_quotes as lq

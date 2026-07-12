@@ -31,7 +31,15 @@ _SPOT_YF = {
 
 @st.cache_data(ttl=120, show_spinner=False)
 def _get_spot(symbol: str) -> float:
-    """Fetch approximate spot price for ATM positioning."""
+    """Spot for ATM positioning — Kite REAL-TIME index quote first
+    (data policy: Kite primary, scrapes fallback), yfinance backup."""
+    try:
+        from data.live_quotes import get_index_quotes
+        q = get_index_quotes([symbol]).get(symbol.upper())
+        if q and q.get("price"):
+            return float(q["price"])
+    except Exception:
+        pass
     try:
         import yfinance as yf
 
