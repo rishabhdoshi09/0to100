@@ -71,6 +71,10 @@ _DEFAULTS = {
     "start_time": "09:30",
     "end_time": "14:45",
     "target_pct": 3.0,             # aim +3%, not the scanner target
+    "trailing_enabled": True,      # +breakeven_trigger% → stop moves to entry
+    "breakeven_trigger_pct": 2.0,  # profit level that arms the breakeven trail
+    "regime_gate": True,           # no new entries in DISTRIBUTION / BEAR tape
+    "digest_date": "",             # last day the EOD digest was sent
     "trades_today": {},            # {YYYY-MM-DD: count}
     "traded_symbols": {},          # {YYYY-MM-DD: [symbols]}
     "disarmed_reason": "",
@@ -158,10 +162,15 @@ def set_config(**kwargs) -> None:
         "min_score": (40.0, 95.0),
         "sector_top_n": (1, 8),
         "target_pct": (1.0, 10.0),
+        "breakeven_trigger_pct": (0.5, 8.0),
     }
+    bools = ("trailing_enabled", "regime_gate")
     with _lock:
         s = _load()
         for k, v in kwargs.items():
+            if k in bools:
+                s[k] = bool(v)
+                continue
             if k in ("start_time", "end_time") and isinstance(v, str):
                 # HH:MM hi accept — galat format gate ko silently na tode
                 try:
@@ -279,6 +288,46 @@ def _set_status(trade_id: int, status: str, note_suffix: str) -> None:
         log.debug("autopilot_status_update_failed", error=str(exc))
 
 
+def _ensure_exit_col() -> None:
+    """Additive journal column for ACTUAL exchange exit fills. Idempotent —
+    existing rows/readers are untouched (NULL = fall back to planned exit)."""
+    import sqlite3
+    try:
+        from execution.trade_executor import _DB
+        conn = sqlite3.connect(_DB)
+        for col in ("exit_price REAL", "orig_stop REAL"):
+            try:
+                conn.execute(f"ALTER TABLE trades ADD COLUMN {col}")
+                conn.commit()
+            except sqlite3.OperationalError:
+                pass                                # column already exists
+        conn.close()
+    except Exception as exc:
+        log.debug("autopilot_exit_col_failed", error=str(exc))
+
+
+def _update_trade(trade_id: int, sets: str, params: tuple) -> None:
+    import sqlite3
+    try:
+        from execution.trade_executor import _DB
+        conn = sqlite3.connect(_DB)
+        conn.execute(f"UPDATE trades SET {sets} WHERE id=?", (*params, trade_id))
+        conn.commit()
+        conn.close()
+    except Exception as exc:
+        log.debug("autopilot_trade_update_failed", error=str(exc))
+
+
+def _planned_exit(t: dict) -> float:
+    """Exit price for P&L: ACTUAL exchange fill when reconciled, else the
+    planned GTT leg (target on WIN, stop on LOSS)."""
+    actual = float(t.get("exit_price") or 0)
+    if actual > 0:
+        return actual
+    return (float(t["target_price"] or 0) if t["status"] in _CLOSED_WIN
+            else float(t["stop_price"] or 0))
+
+
 # ── Gates ─────────────────────────────────────────────────────────────────────
 
 def _in_window(now: datetime | None = None) -> bool:
@@ -324,7 +373,25 @@ def _passes_gates(symbol: str, score: float, edge, sector: str) -> str | None:
         return f"sector '{sector or '?'}' not in top {len(tops)} {tops}"
     if not tops:
         return "no positive sector trend right now"
+    if s.get("regime_gate", True):
+        reg = _market_regime()
+        if reg in _BAD_REGIMES:
+            return f"market regime {reg} — breakout entries yahan fail hote hain"
     return None
+
+
+# Regimes where fresh breakout longs have historically the worst odds.
+# UNKNOWN passes (fail-open): the sector gate already demands a positive
+# tape, and a data hiccup should not paralyse the system.
+_BAD_REGIMES = ("DISTRIBUTION", "TRENDING_BEAR", "BEAR")
+
+
+def _market_regime() -> str:
+    try:
+        from ui.regime_bar import get_regime
+        return str((get_regime() or {}).get("regime", "UNKNOWN")).upper()
+    except Exception:
+        return "UNKNOWN"
 
 
 # ── Sizing ────────────────────────────────────────────────────────────────────
@@ -476,9 +543,12 @@ def report_card() -> dict:
         qty = int(t["qty"] or 0)
         stop = float(t["stop_price"] or 0)
         win = t["status"] in _CLOSED_WIN
-        exit_px = float(t["target_price"] or 0) if win else stop
+        exit_px = _planned_exit(t)
         pnl = round((exit_px - entry) * qty, 0)
-        risk = (entry - stop) * qty
+        # R uses the ORIGINAL stop — a breakeven-trailed stop would zero
+        # the denominator and hide the risk that was actually taken
+        risk_stop = float(t.get("orig_stop") or 0) or stop
+        risk = (entry - risk_stop) * qty
         equity = round(equity + pnl, 0)
         peak = max(peak, equity)
         max_dd = max(max_dd, peak - equity)
@@ -544,11 +614,200 @@ def review_cycle() -> None:
     if s["allocation"] <= 0:
         return
     try:
+        _reconcile_live_fills()      # exchange truth first…
         _account_closed_trades()
-        _close_crossed_live_trades()
+        _close_crossed_live_trades() # …price-cross estimate as fallback
+        _trail_stops()
         _circuit_breaker()
     except Exception as exc:
         log.debug("autopilot_review_failed", error=str(exc))
+
+
+# ── Fill reconciliation: journal follows the EXCHANGE, not estimates ──────────
+
+def _reconcile_live_fills() -> None:
+    """Sync open LIVE autopilot trades with the Kite orderbook:
+    - entry COMPLETE → journal entry_price becomes the ACTUAL avg fill
+    - entry REJECTED/CANCELLED → ENTRY_FAILED (frees the pool; position
+      never existed, so it must not count as deployed)
+    - a COMPLETE SELL of the same symbol+qty (a GTT leg firing) → close
+      with the ACTUAL exit fill, so compounding uses exchange numbers
+    Orderbook only covers today, so older exits still fall back to the
+    price-cross estimate in _close_crossed_live_trades()."""
+    open_live = [t for t in _open_autopilot_trades() if t["mode"] == "LIVE"]
+    if not open_live:
+        return
+    try:
+        from data.kite_client import KiteClient
+        kc = KiteClient()
+        if not kc.is_connected():
+            return
+        orders = kc.get_orders() or []
+    except Exception as exc:
+        log.debug("autopilot_orderbook_failed", error=str(exc))
+        return
+    _ensure_exit_col()
+    for t in open_live:
+        oid = str(t.get("entry_order_id") or "")
+        od = next((o for o in orders
+                   if str(o.get("order_id", "")) == oid), None) if oid else None
+        if od:
+            stt = str(od.get("status", "")).upper()
+            if stt in ("REJECTED", "CANCELLED"):
+                _set_status(t["id"], "ENTRY_FAILED", f"entry {stt} at broker")
+                _log_activity(f"❌ {t['symbol']} entry {stt} — position bani "
+                              f"hi nahi, pool free")
+                continue
+            if stt == "COMPLETE":
+                avg = float(od.get("average_price") or 0)
+                if avg > 0 and abs(avg - float(t["entry_price"] or 0)) >= 0.05:
+                    _update_trade(t["id"], "entry_price=?, note=note||?",
+                                  (avg, f" | fill ₹{avg:,.2f}"))
+        sells = [o for o in orders
+                 if str(o.get("tradingsymbol", "")) == t["symbol"]
+                 and str(o.get("transaction_type", "")).upper() == "SELL"
+                 and str(o.get("status", "")).upper() == "COMPLETE"
+                 and int(o.get("quantity") or 0) == int(t["qty"] or 0)
+                 and str(o.get("order_id", "")) != oid]
+        if sells:
+            exit_px = float(sells[-1].get("average_price") or 0)
+            if exit_px > 0:
+                entry = float(t["entry_price"] or 0)
+                status = "AUTO_WIN" if exit_px >= entry else "AUTO_LOSS"
+                _update_trade(t["id"],
+                              "exit_price=?, status=?, note=note||?",
+                              (exit_px, status,
+                               f" | exchange exit ₹{exit_px:,.2f}"))
+                _log_activity(f"{'🟢' if exit_px >= entry else '🔴'} "
+                              f"{t['symbol']} exit fill ₹{exit_px:,.2f} "
+                              f"(exchange-reconciled)")
+
+
+# ── Breakeven trailing: free-trade conversion ─────────────────────────────────
+
+def _trail_stops() -> None:
+    """Once a position is +breakeven_trigger_pct in profit, the stop moves
+    to the entry price — worst case becomes a scratch, the +target_pct
+    upside stays open. LIVE moves the GTT AT THE EXCHANGE first; the
+    journal only follows a successful broker modify."""
+    s = _load()
+    if not s.get("trailing_enabled", True):
+        return
+    candidates = [t for t in _open_autopilot_trades()
+                  if 0 < float(t["stop_price"] or 0) < float(t["entry_price"] or 0)]
+    if not candidates:
+        return
+    try:
+        from data.live_quotes import get_live_quotes
+        live = get_live_quotes(sorted({t["symbol"] for t in candidates}))
+    except Exception:
+        return
+    trigger = 1 + s.get("breakeven_trigger_pct", 2.0) / 100
+    for t in candidates:
+        q = live.get(t["symbol"])
+        if not (q and q.get("price")):
+            continue
+        px = float(q["price"])
+        entry = float(t["entry_price"] or 0)
+        if entry <= 0 or px < entry * trigger:
+            continue
+        new_stop = round(entry, 1)
+        if t["mode"] == "LIVE" and not _modify_gtt_stop(t, new_stop, px):
+            continue                      # exchange refused — journal stays true
+        _ensure_exit_col()
+        _update_trade(t["id"],
+                      "orig_stop=?, stop_price=?, note=note||?",
+                      (float(t["stop_price"] or 0), new_stop,
+                       f" | breakeven trail @ ₹{px:,.1f}"))
+        _log_activity(f"🛡 {t['symbol']} stop → breakeven ₹{new_stop:,.1f} "
+                      f"(LTP ₹{px:,.1f}, +{(px/entry-1)*100:.1f}%)")
+        _notify(f"🛡 <b>{t['symbol']}</b> ab FREE TRADE hai — stop breakeven "
+                f"₹{new_stop:,.1f} pe (LTP ₹{px:,.1f}). Worst case: scratch.")
+
+
+def _modify_gtt_stop(t: dict, new_stop: float, ltp: float) -> bool:
+    """Move the live GTT OCO's stop leg at the exchange. True on success."""
+    try:
+        from data.kite_client import KiteClient
+        raw = KiteClient().raw
+        qty = int(t["qty"] or 0)
+        target = float(t["target_price"] or 0)
+        product = t["product"] or "CNC"
+        raw.modify_gtt(
+            trigger_id=int(t["gtt_id"]),
+            trigger_type=raw.GTT_TYPE_OCO,
+            tradingsymbol=t["symbol"], exchange="NSE",
+            trigger_values=[round(new_stop, 1), round(target, 1)],
+            last_price=ltp,
+            orders=[
+                {"transaction_type": "SELL", "quantity": qty,
+                 "order_type": "LIMIT", "product": product,
+                 "price": round(new_stop * 0.995, 1)},
+                {"transaction_type": "SELL", "quantity": qty,
+                 "order_type": "LIMIT", "product": product,
+                 "price": round(target, 1)},
+            ])
+        return True
+    except Exception as exc:
+        log.warning("autopilot_gtt_trail_failed", symbol=t.get("symbol"),
+                    error=str(exc))
+        return False
+
+
+# ── EOD digest: din ka hisaab, khud aata hai ─────────────────────────────────
+
+def eod_digest(now: datetime | None = None) -> bool:
+    """Post-close daily summary on Telegram — once per trading day, only
+    when there is something to report. Returns True if sent."""
+    s = _load()
+    if s["allocation"] <= 0:
+        return False
+    now = now or datetime.now()
+    if now.weekday() >= 5 or now.strftime("%H:%M") < "15:31":
+        return False
+    today = date.today().isoformat()
+    if s.get("digest_date") == today:
+        return False
+
+    placed = int(s.get("trades_today", {}).get(today, 0))
+    open_trades = _open_autopilot_trades()
+    closed_today = [t for t in _autopilot_trades(_CLOSED_WIN + _CLOSED_LOSS)
+                    if str(t["placed_at"])[:10] == today]
+    if not (placed or open_trades or closed_today or s["armed"]):
+        return False                       # boring day, koi spam nahi
+
+    wins = [t for t in closed_today if t["status"] in _CLOSED_WIN]
+    day_pnl = sum((_planned_exit(t) - float(t["entry_price"] or 0))
+                  * int(t["qty"] or 0) for t in closed_today)
+    unreal = 0.0
+    if open_trades:
+        try:
+            from data.live_quotes import get_live_quotes
+            live = get_live_quotes(sorted({t["symbol"] for t in open_trades}))
+            for t in open_trades:
+                q = live.get(t["symbol"])
+                if q and q.get("price"):
+                    unreal += ((float(q["price"]) - float(t["entry_price"] or 0))
+                               * int(t["qty"] or 0))
+        except Exception:
+            pass
+    st = get_status()
+    rc = report_card()
+    lines = [f"📒 <b>EOD Digest</b> — {now.strftime('%d %b %Y')} "
+             f"({s['mode']}{', ARMED' if s['armed'] else ', off'})",
+             f"Aaj: {placed} entries · {len(wins)}W/"
+             f"{len(closed_today) - len(wins)}L closed (₹{day_pnl:+,.0f})",
+             f"Open: {len(open_trades)} positions "
+             f"(unrealized ₹{unreal:+,.0f})",
+             f"Pool: ₹{st['pool']:,.0f} · available ₹{st['available']:,.0f} · "
+             f"total realized ₹{s['realized_pnl']:+,.0f}",
+             f"Report Card: {rc['verdict_reason']}"]
+    _notify("\n".join(lines))
+    with _lock:
+        _load()["digest_date"] = today
+    _save()
+    _log_activity(f"EOD digest bheja ({placed} entries, ₹{day_pnl:+,.0f} closed)")
+    return True
 
 
 def _account_closed_trades() -> None:
@@ -563,9 +822,7 @@ def _account_closed_trades() -> None:
                 continue
             entry = float(t["entry_price"] or 0)
             qty = int(t["qty"] or 0)
-            exit_px = (float(t["target_price"] or 0)
-                       if t["status"] in _CLOSED_WIN
-                       else float(t["stop_price"] or 0))
+            exit_px = _planned_exit(t)
             pnl = round((exit_px - entry) * qty, 0)
             s["realized_pnl"] = round(s.get("realized_pnl", 0.0) + pnl, 0)
             seen.add(t["id"])
@@ -615,10 +872,7 @@ def _circuit_breaker() -> None:
     for t in _autopilot_trades(_CLOSED_WIN + _CLOSED_LOSS):
         if str(t["placed_at"])[:10] == today:
             entry = float(t["entry_price"] or 0)
-            exit_px = (float(t["target_price"] or 0)
-                       if t["status"] in _CLOSED_WIN
-                       else float(t["stop_price"] or 0))
-            day_realized += (exit_px - entry) * int(t["qty"] or 0)
+            day_realized += (_planned_exit(t) - entry) * int(t["qty"] or 0)
 
     unrealized = 0.0
     open_trades = _open_autopilot_trades()

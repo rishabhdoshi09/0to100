@@ -517,6 +517,12 @@ def _worker() -> None:
                     push_watchlist_alerts()
                 except Exception as exc:
                     log.debug("watchlist_watch_skip", error=str(exc))
+            # 🤖 Autopilot EOD digest — post-close din ka hisaab (once/day)
+            try:
+                from execution.autopilot import eod_digest
+                eod_digest()
+            except Exception as exc:
+                log.debug("autopilot_digest_skip", error=str(exc))
             time.sleep(_MARKET_REFRESH_S if _is_market_hours() else _OFFHOURS_REFRESH_S)
         else:
             time.sleep(30)   # paused by user — just idle and re-check

@@ -501,6 +501,7 @@ class TestAutopilot:
         ap._state = {}
         monkeypatch.setattr(ap, "_notify", lambda msg: None)
         monkeypatch.setattr(ap, "_broker_cash", lambda: 500000.0)
+        monkeypatch.setattr(ap, "_market_regime", lambda: "TRENDING_BULL")
         monkeypatch.setattr(sh, "sector_performance", lambda min_members=3: [
             {"sector": "Defence", "chg_1d": 1.5, "chg_5d": 3.0, "members": 4},
             {"sector": "IT / Software", "chg_1d": 0.8, "chg_5d": 1.0, "members": 5},
@@ -641,3 +642,79 @@ class TestAutopilot:
         # gross win 750 / loss 500 → PF 1.5, expectancy > 0 → READY
         assert rc2["verdict"] == "READY_CANDIDATE"
         assert rc2["stats"]["profit_factor"] == 1.5
+
+    def test_regime_gate_blocks_bad_tape(self, tmp_path, monkeypatch):
+        """DISTRIBUTION / BEAR tape mein koi naya entry nahi; bull tape ok."""
+        ap, te = self._setup(tmp_path, monkeypatch)
+        ap.arm()
+        monkeypatch.setattr(ap, "_in_window", lambda now=None: True)
+        monkeypatch.setattr(ap, "_market_regime", lambda: "DISTRIBUTION")
+        assert ap.consider("HAL", 4500, 4300, 80, 0.2, "Defence", "t") is False
+        monkeypatch.setattr(ap, "_market_regime", lambda: "TRENDING_BULL")
+        assert ap.consider("HAL", 4500, 4300, 80, 0.2, "Defence", "t") is True
+        # user can disable the gate — their call, their money
+        ap.set_config(regime_gate=False)
+        monkeypatch.setattr(ap, "_market_regime", lambda: "DISTRIBUTION")
+        assert ap.consider("BEL", 300, 290, 80, 0.2, "Defence", "t") is True
+
+    def test_breakeven_trail_moves_stop_keeps_original(self, tmp_path, monkeypatch):
+        """+2% pe stop entry pe; orig_stop preserved so R stays honest."""
+        import sqlite3
+        import data.live_quotes as lq
+        ap, te = self._setup(tmp_path, monkeypatch)
+        ap.arm()
+        monkeypatch.setattr(ap, "_in_window", lambda now=None: True)
+        assert ap.consider("HAL", 4500, 4300, 80, 0.2, "Defence", "t") is True
+        # +1% — no trail yet
+        monkeypatch.setattr(lq, "get_live_quotes",
+                            lambda syms: {"HAL": {"price": 4545.0}})
+        ap._trail_stops()
+        t = te.recent_trades(1)[0]
+        assert float(t["stop_price"]) == 4300
+        # +2.2% — stop moves to breakeven, original stop preserved
+        monkeypatch.setattr(lq, "get_live_quotes",
+                            lambda syms: {"HAL": {"price": 4600.0}})
+        ap._trail_stops()
+        conn = sqlite3.connect(te._DB); conn.row_factory = sqlite3.Row
+        row = dict(conn.execute(
+            "SELECT * FROM trades WHERE symbol='HAL'").fetchone())
+        conn.close()
+        assert float(row["stop_price"]) == 4500.0
+        assert float(row["orig_stop"]) == 4300.0
+        assert "breakeven trail" in row["note"]
+        # idempotent: second pass must not re-trail (stop no longer < entry)
+        ap._trail_stops()
+
+    def test_exchange_fill_preferred_over_planned_exit(self, tmp_path, monkeypatch):
+        """Reconciled exit_price beats the planned GTT leg in P&L everywhere."""
+        import sqlite3
+        ap, te = self._setup(tmp_path, monkeypatch)
+        ap.arm()
+        monkeypatch.setattr(ap, "_in_window", lambda now=None: True)
+        assert ap.consider("HAL", 4500, 4300, 80, 0.2, "Defence", "t") is True
+        ap._ensure_exit_col()
+        conn = sqlite3.connect(te._DB)
+        # actual exchange exit ₹4550 (planned target was 4635)
+        conn.execute("UPDATE trades SET status='AUTO_WIN', exit_price=4550 "
+                     "WHERE symbol='HAL'")
+        conn.commit(); conn.close()
+        ap._account_closed_trades()
+        qty = int(te.recent_trades(1)[0]["qty"])
+        assert ap.get_status()["realized_pnl"] == (4550 - 4500) * qty
+        rc = ap.report_card()
+        assert rc["trades"][0]["exit"] == 4550
+        assert rc["trades"][0]["pnl"] == (4550 - 4500) * qty
+
+    def test_eod_digest_once_per_day(self, tmp_path, monkeypatch):
+        from datetime import datetime as dt
+        ap, _ = self._setup(tmp_path, monkeypatch)
+        sent = []
+        monkeypatch.setattr(ap, "_notify", lambda msg: sent.append(msg))
+        ap.arm()
+        friday_close = dt(2026, 7, 10, 16, 0)
+        assert ap.eod_digest(now=friday_close) is True
+        assert len(sent) >= 1 and "EOD Digest" in sent[-1]
+        assert ap.eod_digest(now=friday_close) is False      # once per day
+        # market hours / weekend never fire
+        assert ap.eod_digest(now=dt(2026, 7, 10, 14, 0)) is False
+        assert ap.eod_digest(now=dt(2026, 7, 11, 16, 0)) is False

@@ -115,6 +115,24 @@ def render_autopilot() -> None:
             end_t = st.text_input("Entries end (HH:MM)", s["end_time"],
                                   key="ap_end",
                                   help="Iske baad naye entries nahi (exits GTT se chalte rahenge)")
+        t1, t2, t3 = st.columns(3)
+        with t1:
+            trail_on = st.toggle(
+                "🛡 Breakeven trail", value=bool(s.get("trailing_enabled", True)),
+                key="ap_trail",
+                help="Profit trigger pe stop entry pe chala jata hai — "
+                     "worst case scratch, upside khula")
+        with t2:
+            trail_trig = st.slider(
+                "Trail trigger (+% profit)", 0.5, 8.0,
+                float(s.get("breakeven_trigger_pct", 2.0)), 0.5,
+                key="ap_trailtrig")
+        with t3:
+            regime_on = st.toggle(
+                "📡 Regime gate", value=bool(s.get("regime_gate", True)),
+                key="ap_regime",
+                help="DISTRIBUTION / BEAR tape mein naye entries band — "
+                     "breakouts wahan sabse zyada fail hote hain")
         if st.button("💾 Save limits", key="ap_save", width="stretch"):
             set_config(allocation=alloc, mode=mode_pick,
                        cash_reserve_pct=reserve / 100,
@@ -125,7 +143,10 @@ def render_autopilot() -> None:
                        min_score=float(min_score),
                        sector_top_n=int(top_n),
                        start_time=start_t.strip() or "09:30",
-                       end_time=end_t.strip() or "14:45")
+                       end_time=end_t.strip() or "14:45",
+                       trailing_enabled=trail_on,
+                       breakeven_trigger_pct=float(trail_trig),
+                       regime_gate=regime_on)
             st.success("Limits saved. (Mode change hua ho toh dobara ARM karna hoga.)")
             st.rerun()
 
