@@ -110,7 +110,11 @@ def render_autopilot() -> None:
             top_n = st.number_input("Top-N strong sectors", 1, 8,
                                     int(s["sector_top_n"]), key="ap_topn")
             start_t = st.text_input("Entries start (HH:MM)", s["start_time"],
-                                    key="ap_start")
+                                    key="ap_start",
+                                    help="Market khulne ke baad settle hone do — 09:30 se pehle mat karo")
+            end_t = st.text_input("Entries end (HH:MM)", s["end_time"],
+                                  key="ap_end",
+                                  help="Iske baad naye entries nahi (exits GTT se chalte rahenge)")
         if st.button("💾 Save limits", key="ap_save", width="stretch"):
             set_config(allocation=alloc, mode=mode_pick,
                        cash_reserve_pct=reserve / 100,
@@ -120,7 +124,8 @@ def render_autopilot() -> None:
                        daily_loss_limit_pct=day_loss / 100,
                        min_score=float(min_score),
                        sector_top_n=int(top_n),
-                       start_time=start_t.strip() or "09:30")
+                       start_time=start_t.strip() or "09:30",
+                       end_time=end_t.strip() or "14:45")
             st.success("Limits saved. (Mode change hua ho toh dobara ARM karna hoga.)")
             st.rerun()
 

@@ -569,3 +569,22 @@ class TestAutopilot:
         ap.set_config(mode="LIVE")
         ok, _ = ap.arm("wrong phrase")
         assert not ok
+
+    def test_sector_fallback_lookup(self, tmp_path, monkeypatch):
+        """Signal without a sector tag must be judged by sector_of(), not
+        auto-rejected — a lone strong stock in a top sector still trades."""
+        import scan.sector_heat as sh
+        ap, te = self._setup(tmp_path, monkeypatch)
+        ap.arm()
+        monkeypatch.setattr(ap, "_in_window", lambda now=None: True)
+        monkeypatch.setattr(sh, "sector_of", lambda sym: "Defence")
+        assert ap.consider("BEL", 300, 290, 80, 0.2, "", "t") is True
+        # and a lone stock whose real sector is weak still gets rejected
+        monkeypatch.setattr(sh, "sector_of", lambda sym: "Cement")
+        assert ap.consider("ACC", 2400, 2320, 80, 0.2, "", "t") is False
+
+    def test_bad_time_format_rejected(self, tmp_path, monkeypatch):
+        ap, _ = self._setup(tmp_path, monkeypatch)
+        ap.set_config(start_time="around ten", end_time="25:99")
+        st = ap.get_status()
+        assert st["start_time"] == "09:30" and st["end_time"] == "14:45"

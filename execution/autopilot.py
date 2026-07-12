@@ -47,6 +47,10 @@ log = get_logger(__name__)
 
 _STATE_FILE = Path(__file__).resolve().parent.parent / "logs" / "autopilot.json"
 _lock = threading.RLock()
+# Serialises the whole gate→size→place path. Scanner aur sniper alag
+# threads se consider() bulate hain — bina iske dono ek saath daily/position
+# count gates paar kar sakte hain (double entry).
+_consider_lock = threading.Lock()
 
 TAG = "AUTOPILOT"
 ARM_PHRASE = "ARM LIVE"        # must be typed exactly to arm LIVE mode
@@ -159,7 +163,12 @@ def set_config(**kwargs) -> None:
         s = _load()
         for k, v in kwargs.items():
             if k in ("start_time", "end_time") and isinstance(v, str):
-                s[k] = v
+                # HH:MM hi accept — galat format gate ko silently na tode
+                try:
+                    datetime.strptime(v.strip(), "%H:%M")
+                    s[k] = v.strip()
+                except ValueError:
+                    log.warning("autopilot_bad_time", field=k, value=v)
             elif k in clamps:
                 lo, hi = clamps[k]
                 s[k] = type(_DEFAULTS[k])(min(hi, max(lo, v)))
@@ -336,9 +345,28 @@ def _size(entry: float, stop: float) -> int:
 
 def consider(symbol: str, entry: float, stop: float, score: float,
              edge, sector: str, source: str) -> bool:
-    """Full gate → size → execute path. Returns True if a trade was placed."""
+    """Full gate → size → execute path. Returns True if a trade was placed.
+
+    Thread-safe: scanner + sniper hooks may call this concurrently; the
+    lock guarantees the count-gates see every prior trade before passing.
+    """
+    with _consider_lock:
+        return _consider_locked(symbol, entry, stop, score, edge, sector, source)
+
+
+def _consider_locked(symbol: str, entry: float, stop: float, score: float,
+                     edge, sector: str, source: str) -> bool:
     try:
         s = _load()
+        # Scan results sirf "pack" (≥3 setups ek sector se) hone par sector
+        # carry karte hain — akela strong stock bhi apne sector se judge ho,
+        # isliye fallback lookup yahin karo (Gate 7 accuracy).
+        if not sector:
+            try:
+                from scan.sector_heat import sector_of
+                sector = sector_of(symbol)
+            except Exception:
+                sector = ""
         reject = _passes_gates(symbol, score, edge, sector)
         if reject:
             log.debug("autopilot_reject", symbol=symbol, reason=reject)
