@@ -56,7 +56,8 @@ def render_open_positions() -> int:
             f"<span style='color:#e2e8f0;font-weight:700;"
             f"font-family:JetBrains Mono,monospace'>{p['symbol']}</span>"
             f"<span style='font-size:.72rem;color:#8892a4'> "
-            f"({p['mode']}) · {p['qty']} sh @ ₹{p['entry']:,.1f}</span>"
+            f"({p['mode']}{' · 🤖' if p.get('autopilot') else ''}) · "
+            f"{p['qty']} sh @ ₹{p['entry']:,.1f}</span>"
             f" &nbsp; live <b style='color:#e2e8f0'>{live_txt}</b>"
             + (f" &nbsp; <b style='color:{pnl_col}'>₹{pnl:+,.0f}</b>"
                if pnl is not None else "")

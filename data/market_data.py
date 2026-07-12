@@ -30,6 +30,10 @@ from typing import Optional
 
 import pandas as pd
 
+from logger import get_logger
+
+log = get_logger(__name__)
+
 
 def _kite_available() -> bool:
     return bool(os.getenv("KITE_API_KEY", "") and os.getenv("KITE_ACCESS_TOKEN", ""))
@@ -146,7 +150,7 @@ def get_historical_data(
         try:
             return get_historical_data_kite(symbol, interval, from_date, to_date)
         except Exception as e:
-            print(f"[market_data] Kite failed for {symbol}: {e}. Falling back to yfinance.")
+            log.debug("kite_hist_fallback_yf", symbol=symbol, error=str(e)[:80])
     return get_historical_data_yfinance(symbol, interval, from_date, to_date)
 
 
@@ -238,7 +242,7 @@ class _KiteProvider:
 
             return out
         except Exception as e:
-            print(f"[KiteProvider] quotes failed: {e}")
+            log.debug("kite_provider_quotes_failed", error=str(e)[:80])
             return {s: _empty_quote() for s in symbols}
 
     def live_ltp(self, symbols: list[str]) -> dict[str, float]:

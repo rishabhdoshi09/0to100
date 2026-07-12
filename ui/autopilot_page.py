@@ -155,6 +155,27 @@ def render_autopilot() -> None:
                 key="ap_hold",
                 help="Itne din flat → PAPER close (capital recycle), "
                      "LIVE pe sirf Telegram nudge")
+        # 🎯 Target % — backtest ka evidence saath mein
+        _rec_txt = ""
+        try:
+            from scan.signal_backtest import load_report
+            _bt = load_report() or {}
+            _rec = _bt.get("recommended_target_pct")
+            if _rec:
+                _sw = (_bt.get("target_sweep") or {}).get(f"+{_rec:.0f}%", {})
+                _rec_txt = (f"Backtest recommends +{_rec:.0f}% "
+                            f"({_sw.get('expectancy_r', 0):+.2f}R measured, "
+                            f"{_sw.get('trades', 0)} samples)")
+        except Exception:
+            pass
+        target_pct = st.slider(
+            "Profit target (%)", 1.0, 10.0, float(s.get("target_pct", 3.0)),
+            0.5, key="ap_target",
+            help=(_rec_txt or "Har entry ka GTT target = entry × (1 + yeh %). "
+                              "Backtest chalao toh evidence-backed "
+                              "recommendation yahan dikhegi"))
+        if _rec_txt:
+            st.caption(f"📊 {_rec_txt} — slider tumhara hai, evidence humara.")
         if st.button("💾 Save limits", key="ap_save", width="stretch"):
             set_config(allocation=alloc, mode=mode_pick,
                        cash_reserve_pct=reserve / 100,
@@ -171,7 +192,8 @@ def render_autopilot() -> None:
                        regime_gate=regime_on,
                        conviction_sizing=conv_on,
                        adaptive_source_gate=adapt_on,
-                       max_hold_days=int(hold_days))
+                       max_hold_days=int(hold_days),
+                       target_pct=float(target_pct))
             st.success("Limits saved. (Mode change hua ho toh dobara ARM karna hoga.)")
             st.rerun()
 

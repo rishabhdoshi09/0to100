@@ -61,9 +61,65 @@ def _get_context() -> str:
         except Exception:
             edge = None
         opp = compute_opportunity_score(regime, setups, edge)
-        return build_jarvis_context(regime, setups, opp, edge)
+        ctx = build_jarvis_context(regime, setups, opp, edge)
+        return ctx + _extra_context()
     except Exception as e:
         return f"System context unavailable: {e}"
+
+
+def _extra_context() -> str:
+    """Autopilot + backtest playbook + high-conviction tier — JARVIS ko
+    wahi dikhna chahiye jo har tab pe user ko dikh raha hai."""
+    lines: list[str] = []
+    try:
+        from execution.autopilot import get_status, report_card
+        s = get_status()
+        if s["allocation"] > 0:
+            rc = report_card()
+            lines += [
+                "\nAUTOPILOT:",
+                f"State: {'ARMED ' + s['mode'] if s['armed'] else 'OFF'}"
+                + (f" ({s['disarmed_reason']})" if s.get("disarmed_reason") else ""),
+                f"Pool ₹{s['pool']:,.0f} · deployed ₹{s['deployed']:,.0f} · "
+                f"available ₹{s['available']:,.0f} · realized "
+                f"₹{s['realized_pnl']:+,.0f}",
+                f"Today: {s['trades_today_count']}/{s['max_trades_per_day']} "
+                f"trades · open {len(s['open_trades'])}",
+                f"Report Card: {rc['verdict_reason']}",
+            ]
+    except Exception:
+        pass
+    try:
+        from scan.signal_backtest import trading_playbook
+        from scan.unified_scanner import SIGNAL_META
+        pb = trading_playbook()
+        if pb:
+            best = ", ".join(
+                f"{SIGNAL_META.get(b['signal'], (b['signal'],))[0]} "
+                f"{b['expectancy_r']:+.2f}R" for b in pb.get("best", []))
+            lines += [
+                "\nBACKTEST PLAYBOOK:",
+                f"Tape regime: {pb['regime']} · best signals: {best or 'none'}",
+            ]
+            if pb.get("avoid"):
+                lines.append("Avoid (proven losers): " + ", ".join(
+                    SIGNAL_META.get(k, (k,))[0] for k in pb["avoid"]))
+            if pb.get("recommended_target_pct"):
+                lines.append(f"Measured best target: "
+                             f"+{pb['recommended_target_pct']:.0f}%")
+    except Exception:
+        pass
+    try:
+        from scan.auto_scan import get_results
+        results, _, _, _ = get_results()
+        hc = [r for r in results if r.get("high_conviction")][:5]
+        if hc:
+            lines.append("\nHIGH CONVICTION (score+measured edge): " + ", ".join(
+                f"{r['symbol']} (score {r.get('score', 0):.0f}, "
+                f"edge {float(r.get('edge_r') or 0):+.2f}R)" for r in hc))
+    except Exception:
+        pass
+    return ("\n" + "\n".join(lines)) if lines else ""
 
 
 @st.cache_data(ttl=1800, show_spinner=False)

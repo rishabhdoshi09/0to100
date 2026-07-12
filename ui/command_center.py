@@ -288,6 +288,46 @@ def _render_setup_card(setup: dict) -> None:
         st.rerun()
 
 
+def _render_wiring_strip() -> None:
+    """One compact line connecting the subsystems: autopilot state,
+    today's best-earning signal for the current tape, avoid list."""
+    bits = []
+    try:
+        from execution.autopilot import get_status
+        s = get_status()
+        if s["armed"]:
+            _c = "#00d4a0" if s["mode"] == "PAPER" else "#ff4b4b"
+            bits.append(f"<span style='color:{_c}'>🤖 Autopilot ARMED "
+                        f"({s['mode']}) · {s['trades_today_count']}/"
+                        f"{s['max_trades_per_day']} today · pool "
+                        f"₹{s['pool']:,.0f}</span>")
+        elif s["allocation"] > 0:
+            bits.append("<span style='color:#8892a4'>🤖 Autopilot off</span>")
+    except Exception:
+        pass
+    try:
+        from scan.signal_backtest import trading_playbook
+        from scan.unified_scanner import SIGNAL_META
+        pb = trading_playbook()
+        if pb and pb.get("best"):
+            b = pb["best"][0]
+            lbl = SIGNAL_META.get(b["signal"], (b["signal"],))[0]
+            bits.append(f"🧭 {pb['regime']} tape · best: <b>{lbl}</b> "
+                        f"{b['expectancy_r']:+.2f}R")
+            if pb.get("avoid"):
+                bits.append("❌ avoid: " + ", ".join(
+                    SIGNAL_META.get(k, (k,))[0] for k in pb["avoid"][:2]))
+    except Exception:
+        pass
+    if bits:
+        st.markdown(
+            "<div style='background:#0d1421;border:1px solid #1e293b;"
+            "border-radius:8px;padding:7px 14px;margin-bottom:10px;"
+            "font-size:.74rem;color:#c9d1d9;font-family:JetBrains Mono,"
+            "monospace'>" + " &nbsp;·&nbsp; ".join(bits) + "</div>",
+            unsafe_allow_html=True)
+
+
 def _render_setups_section(universe: list[str]) -> None:
     """Section B — top picks from the whole-market auto-scan (instant, no wait)."""
     hdr_col, btn_col = st.columns([5, 1])
@@ -314,7 +354,12 @@ def _render_setups_section(universe: list[str]) -> None:
     except Exception:
         results, status = [], "error"
 
-    picks = [r for r in results if r.get("verdict") in ("STRONG BUY", "BUY")][:5]
+    # 🎯 High-conviction tier pehle — same priority order as scanner/autopilot
+    _hc = [r for r in results if r.get("high_conviction")]
+    _buys = [r for r in results
+             if r.get("verdict") in ("STRONG BUY", "BUY")
+             and not r.get("high_conviction")]
+    picks = (_hc + _buys)[:5]
     if not picks:
         picks = results[:5]
 
@@ -346,9 +391,12 @@ def _render_setups_section(universe: list[str]) -> None:
 
     for s in picks:
         # Adapt unified-scanner dict to the setup card's expected fields
+        _arch = " + ".join(s.get("signals", [])[:2])
+        if s.get("high_conviction"):
+            _arch = "🎯 " + _arch      # evidence tier — score+edge dono strong
         _render_setup_card({
             "symbol": s["symbol"],
-            "archetype": " + ".join(s.get("signals", [])[:2]),
+            "archetype": _arch,
             "quality_tier": "A" if s.get("verdict") == "BUY" else "WATCHLIST",
             "price": s.get("price"),
             "pivot_level": s.get("entry"),
@@ -395,7 +443,9 @@ def _gen_brief(regime_json: str) -> str:
         return ""
     except Exception as exc:
         err = str(exc)
-        if "<" in err:
+        if "402" in err or "Insufficient Balance" in err:
+            err = "DeepSeek balance khatam — recharge karo (brief tab tak skip)"
+        elif "<" in err:
             err = "DeepSeek API unavailable (gateway timeout)"
         elif len(err) > 120:
             err = err[:120] + "…"
@@ -490,6 +540,9 @@ def render_command_center(universe: list[str]) -> None:
 
     # ── Section A: Market Status Card ────────────────────────────────────────
     _render_market_status_card(regime)
+
+    # ── Wiring strip: autopilot + aaj ka playbook, ek nazar mein ─────────────
+    _render_wiring_strip()
 
     # ── Section B: Today's Setups ─────────────────────────────────────────────
     _render_setups_section(universe)

@@ -93,6 +93,7 @@ def review_positions() -> list[dict]:
 
         row = {"symbol": sym, "qty": qty, "entry": entry, "stop": stop,
                "target": target, "live": px, "mode": t["mode"],
+               "autopilot": "AUTOPILOT" in str(t["note"] or ""),
                "r_progress": None, "pnl": None, "alert": "", "advice": ""}
 
         if px is None or risk <= 0:

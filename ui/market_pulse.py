@@ -64,6 +64,15 @@ def _fetch_pulse_data() -> dict:
     return result
 
 
+@st.cache_data(ttl=900, show_spinner=False)
+def _cached_regime() -> str:
+    try:
+        from scan.signal_backtest import current_regime_simple
+        return current_regime_simple()
+    except Exception:
+        return "UNKNOWN"
+
+
 def render_market_pulse() -> None:
     """
     Render a minimal single-line dark bar:
@@ -119,6 +128,27 @@ def render_market_pulse() -> None:
             "<span style='color:#ff4b4b;font-weight:700'>🔴 CLOSED</span>"
         )
         parts.append(status_html)
+
+        # 🧭 Tape regime — same rule as the backtest buckets (cached 15 min)
+        try:
+            reg = _cached_regime()
+            if reg and reg != "UNKNOWN":
+                _rc = {"BULL": "#00d4a0", "BEAR": "#ff4b4b",
+                       "CHOP": "#f59e0b"}.get(reg, "#8892a4")
+                parts.append(f"<span style='color:{_rc};font-weight:700'>"
+                             f"🧭 {reg}</span>")
+        except Exception:
+            pass
+        # 🤖 Autopilot chip — armed state visible on EVERY page
+        try:
+            from execution.autopilot import get_status as _ap_status
+            _s = _ap_status()
+            if _s["armed"]:
+                _ac = "#00d4a0" if _s["mode"] == "PAPER" else "#ff4b4b"
+                parts.append(f"<span style='color:{_ac};font-weight:700'>"
+                             f"🤖 {_s['mode']}</span>")
+        except Exception:
+            pass
 
         body = sep.join(parts)
 
