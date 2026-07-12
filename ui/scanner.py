@@ -373,6 +373,46 @@ def _open_trade_ticket(s: dict) -> None:
         st.rerun()
 
 
+# ── 🎯 High Conviction strip — evidence tier, priority display ────────────────
+
+def _render_high_conviction(results: list[dict]) -> None:
+    """Golden strip of the setups where EVERYTHING measured lines up:
+    buy verdict + score ≥75 + backtested edge ≥ +0.10R (tagged by the
+    scan pipeline). These deserve the first look — and the autopilot
+    fills its daily slots from this same ranking."""
+    hc = sorted([r for r in results if r.get("high_conviction")],
+                key=lambda r: float(r.get("conviction_rank", 0)),
+                reverse=True)[:5]
+    if not hc:
+        return
+    st.markdown(
+        "<div style='font-size:.68rem;color:#fbbf24;text-transform:uppercase;"
+        "letter-spacing:.15em;margin:6px 0 4px'>🎯 High Conviction — "
+        "score + measured edge dono strong, pehle yeh dekho</div>",
+        unsafe_allow_html=True)
+    for r in hc:
+        edge = float(r.get("edge_r") or 0)
+        sigs = " · ".join((r.get("signals") or [])[:3])
+        live_tag = ("<span style='color:#00d4a0;font-size:.62rem'>● live</span>"
+                    if r.get("live") else
+                    "<span style='color:#64748b;font-size:.62rem'>EOD</span>")
+        st.markdown(
+            f"<div style='background:#1a1509;border:1px solid #fbbf2455;"
+            f"border-left:4px solid #fbbf24;border-radius:8px;"
+            f"padding:8px 14px;margin-bottom:6px;font-size:.82rem;"
+            f"color:#e2e8f0'>"
+            f"<b style='font-family:JetBrains Mono,monospace'>{r['symbol']}</b> "
+            f"₹{float(r.get('price') or 0):,.1f} {live_tag} &nbsp;·&nbsp; "
+            f"<span style='color:#fbbf24'>{r.get('verdict')}</span> "
+            f"score {float(r.get('score') or 0):.0f} · "
+            f"edge <b style='color:#00d4a0'>{edge:+.2f}R</b> (measured)"
+            f"<br><span style='font-size:.72rem;color:#94a3b8'>"
+            f"{sigs} &nbsp;·&nbsp; entry ₹{float(r.get('entry') or 0):,.1f} / "
+            f"stop ₹{float(r.get('stop') or 0):,.1f} / "
+            f"target ₹{float(r.get('target') or 0):,.1f}</span></div>",
+            unsafe_allow_html=True)
+
+
 # ── Best Trade hero card ──────────────────────────────────────────────────────
 
 def _pick_best_trade(results: list[dict]) -> dict | None:
@@ -747,6 +787,9 @@ def render_scanner(universe: list[str]) -> None:
 
     # ── ⭐ Best Trade — sabse pehle, sabse bada, ek click pe trade ────────────
     _render_best_trade(results)
+
+    # ── 🎯 High Conviction — evidence tier, priority mein sabse upar ─────────
+    _render_high_conviction(results)
 
     # ── Fallback trade panel (older Streamlit without st.dialog) ──────────────
     if not hasattr(st, "dialog") and st.session_state.get("trade_ticket_row"):

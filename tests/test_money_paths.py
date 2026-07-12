@@ -821,7 +821,57 @@ class TestAutopilot:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# 16. System Pulse + quote micro-cache — smoothness is money too
+# 16. Conviction tier — highest conviction first, everywhere
+# ══════════════════════════════════════════════════════════════════════════════
+
+class TestConvictionTier:
+    def test_high_conviction_is_evidence_only(self):
+        from scan.auto_scan import tag_conviction
+        rows = [
+            {"symbol": "A", "verdict": "STRONG BUY", "score": 80, "edge_r": 0.20},
+            {"symbol": "B", "verdict": "BUY", "score": 75, "edge_r": 0.10},
+            {"symbol": "C", "verdict": "BUY", "score": 90},              # no edge data
+            {"symbol": "D", "verdict": "WATCH", "score": 95, "edge_r": 0.50},
+            {"symbol": "E", "verdict": "BUY", "score": 74, "edge_r": 0.30},
+        ]
+        tag_conviction(rows)
+        flags = {r["symbol"]: r["high_conviction"] for r in rows}
+        assert flags == {"A": True, "B": True,          # boundary inclusive
+                         "C": False,                    # unmeasured ≠ conviction
+                         "D": False,                    # WATCH never high
+                         "E": False}                    # score below 75
+        # rank ordering: any BUY outranks the best WATCH
+        ranks = {r["symbol"]: r["conviction_rank"] for r in rows}
+        assert ranks["A"] > ranks["B"] > ranks["D"]
+        assert min(ranks["B"], ranks["E"]) > ranks["D"]
+
+    def test_autopilot_fills_slots_highest_conviction_first(
+            self, tmp_path, monkeypatch):
+        import execution.autopilot as ap
+        monkeypatch.setattr(ap, "_STATE_FILE", tmp_path / "ap.json")
+        ap._state = {}
+        ap.set_config(allocation=100000, mode="PAPER")
+        monkeypatch.setattr(ap, "_notify", lambda m: None)
+        ap.arm()
+        taken = []
+        monkeypatch.setattr(
+            ap, "consider",
+            lambda symbol, **kw: taken.append(symbol) or True)
+        ap.on_setups([
+            {"symbol": "LOW", "verdict": "BUY", "score": 60,
+             "conviction_rank": 160, "price": 100, "stop": 95},
+            {"symbol": "TOP", "verdict": "STRONG BUY", "score": 88,
+             "conviction_rank": 295, "price": 100, "stop": 95},
+            {"symbol": "MID", "verdict": "BUY", "score": 80,
+             "conviction_rank": 182, "price": 100, "stop": 95},
+            {"symbol": "SKIP", "verdict": "WATCH", "score": 99,
+             "conviction_rank": 99, "price": 100, "stop": 95},
+        ])
+        assert taken == ["TOP", "MID", "LOW"]           # priority order, WATCH out
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 17. System Pulse + quote micro-cache — smoothness is money too
 # ══════════════════════════════════════════════════════════════════════════════
 
 class TestSystemHealth:

@@ -39,6 +39,25 @@ def _is_market_hours() -> bool:
     return 9 * 60 + 15 <= minutes <= 15 * 60 + 30
 
 
+def tag_conviction(serialized: list[dict]) -> None:
+    """In-place: har result ko conviction_rank + high_conviction tag.
+
+    high_conviction is an EVIDENCE tier, not a vibe tier: buy verdict
+    AND calibrated score ≥ 75 AND measured backtest edge ≥ +0.10R.
+    No measured edge (edge_r missing) = not high conviction, period.
+    """
+    _vr = {"STRONG BUY": 2, "BUY": 1}
+    for r in serialized:
+        edge = float(r.get("edge_r", 0) or 0)
+        score = float(r.get("score", 0) or 0)
+        r["conviction_rank"] = round(
+            _vr.get(r.get("verdict"), 0) * 100 + score + edge * 40, 1)
+        r["high_conviction"] = bool(
+            r.get("verdict") in ("STRONG BUY", "BUY")
+            and score >= 75
+            and float(r.get("edge_r") or 0) >= 0.10)
+
+
 def _serialize(r) -> dict:
     return {
         "symbol": r.symbol, "price": r.price, "change_pct": r.change_pct,
@@ -302,6 +321,8 @@ def _scan_once_locked(universe: Optional[list[str]] = None, progress=None) -> No
                 reverse=True)
         except Exception as exc:
             log.debug("edge_apply_skip", error=str(exc))
+        # 🎯 Conviction tier — highest conviction sabse pehle, har surface pe
+        tag_conviction(serialized)
         # Proactive delivery — user ko dhundhna na pade, setups khud pahunchein
         _push_new_setups(serialized[:15])
         # 🤖 Autopilot hook — same signals, alert logic untouched

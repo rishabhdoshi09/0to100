@@ -554,11 +554,19 @@ def _consider_locked(symbol: str, entry: float, stop: float, score: float,
 
 
 def on_setups(results: list[dict]) -> None:
-    """Hook: called after every scan with serialized results (read-only)."""
+    """Hook: called after every scan with serialized results (read-only).
+    Candidates are taken HIGHEST CONVICTION FIRST — daily trade slots and
+    pool capital are limited, so the best-evidenced setups claim them."""
     s = _load()
     if not s["armed"]:
         return
-    for r in results[:20]:
+    ranked = sorted(
+        results[:20],
+        key=lambda r: float(r.get("conviction_rank")
+                            if r.get("conviction_rank") is not None
+                            else float(r.get("score", 0) or 0)),
+        reverse=True)
+    for r in ranked:
         if r.get("verdict") not in ("STRONG BUY", "BUY"):
             continue
         consider(symbol=r["symbol"], entry=float(r.get("price") or r.get("entry") or 0),
