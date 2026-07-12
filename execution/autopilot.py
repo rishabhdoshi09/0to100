@@ -385,13 +385,31 @@ def _passes_gates(symbol: str, score: float, edge, sector: str) -> str | None:
 # tape, and a data hiccup should not paralyse the system.
 _BAD_REGIMES = ("DISTRIBUTION", "TRENDING_BEAR", "BEAR")
 
+# Own 15-min cache: the ui.regime_bar cache is @st.cache_data, which is a
+# NO-OP in the scan/sniper daemon threads (no Streamlit context) — without
+# this, every candidate would recompute the full regime and slow the scan.
+_regime_cache = {"ts": 0.0, "value": "UNKNOWN"}
+
 
 def _market_regime() -> str:
+    import time as _t
+    now = _t.time()
+    if now - _regime_cache["ts"] < 900:
+        return _regime_cache["value"]
+    val = "UNKNOWN"
     try:
-        from ui.regime_bar import get_regime
-        return str((get_regime() or {}).get("regime", "UNKNOWN")).upper()
+        from core.regime_engine import compute_regime   # streamlit-free path
+        val = str(getattr(compute_regime(), "market_regime",
+                          "UNKNOWN") or "UNKNOWN").upper()
     except Exception:
-        return "UNKNOWN"
+        try:
+            from ui.regime_bar import get_regime
+            val = str((get_regime() or {}).get("regime", "UNKNOWN")).upper()
+        except Exception:
+            val = "UNKNOWN"
+    _regime_cache["ts"] = now
+    _regime_cache["value"] = val
+    return val
 
 
 # ── Sizing ────────────────────────────────────────────────────────────────────
@@ -434,13 +452,21 @@ def _consider_locked(symbol: str, entry: float, stop: float, score: float,
                 sector = sector_of(symbol)
             except Exception:
                 sector = ""
+        entry = float(entry)
+        stop = float(stop)
+        # Invariant #3: har trade exchange-side exit ke saath. Bina real stop
+        # (sniper hits from watchlist rows can carry stop=0) koi trade nahi —
+        # stop invent karna fake data hai.
+        if entry <= 0 or stop <= 0 or stop >= entry:
+            log.debug("autopilot_reject", symbol=symbol,
+                      reason=f"invalid stop {stop} for entry {entry}")
+            return False
+
         reject = _passes_gates(symbol, score, edge, sector)
         if reject:
             log.debug("autopilot_reject", symbol=symbol, reason=reject)
             return False
 
-        entry = float(entry)
-        stop = float(stop)
         target = round(entry * (1 + s["target_pct"] / 100), 1)
         qty = _size(entry, stop)
         if qty < 1:
@@ -703,6 +729,7 @@ def _trail_stops() -> None:
     except Exception:
         return
     trigger = 1 + s.get("breakeven_trigger_pct", 2.0) / 100
+    _ensure_exit_col()
     for t in candidates:
         q = live.get(t["symbol"])
         if not (q and q.get("price")):
@@ -714,7 +741,6 @@ def _trail_stops() -> None:
         new_stop = round(entry, 1)
         if t["mode"] == "LIVE" and not _modify_gtt_stop(t, new_stop, px):
             continue                      # exchange refused — journal stays true
-        _ensure_exit_col()
         _update_trade(t["id"],
                       "orig_stop=?, stop_price=?, note=note||?",
                       (float(t["stop_price"] or 0), new_stop,
@@ -768,6 +794,14 @@ def eod_digest(now: datetime | None = None) -> bool:
     today = date.today().isoformat()
     if s.get("digest_date") == today:
         return False
+
+    # Digest exchange truth, estimates nahi — close ke baad ke GTT fills
+    # market-hours review cycle ne nahi dekhe hote
+    try:
+        _reconcile_live_fills()
+        _account_closed_trades()
+    except Exception as exc:
+        log.debug("autopilot_digest_reconcile_skip", error=str(exc))
 
     placed = int(s.get("trades_today", {}).get(today, 0))
     open_trades = _open_autopilot_trades()

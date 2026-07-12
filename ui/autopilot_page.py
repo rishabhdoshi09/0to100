@@ -75,11 +75,14 @@ def render_autopilot() -> None:
                     if ok:
                         st.rerun()
     with c2:
-        st.caption("**Gates (har trade se pehle, isi order mein):** armed → "
-                   "9:30 ke baad → daily limit → position limit → symbol "
-                   "ek-baar/din → sector top-N positive mein → score+edge → "
+        st.caption("**Gates (har trade se pehle, isi order mein):** valid "
+                   "stop zaroori → armed → 9:30 ke baad → daily limit → "
+                   "position limit → symbol ek-baar/din → score+edge → "
+                   "sector top-N positive mein → market regime theek → "
                    "capital available (reserve untouched) → LIVE mein broker "
-                   "cash double-check. Din ka loss limit cross → khud DISARM.")
+                   "cash double-check. Din ka loss limit cross → khud DISARM. "
+                   "Profit mein: stop khud breakeven pe (free trade). "
+                   "LIVE fills exchange se reconcile hote hain, estimate nahi.")
 
     # ── Limits (tumhari safety, tumhare numbers) ──────────────────────────────
     with st.expander("⚙️ Limits — apne numbers set karo", expanded=not s["allocation"]):

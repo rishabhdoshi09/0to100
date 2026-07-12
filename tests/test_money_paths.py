@@ -705,6 +705,21 @@ class TestAutopilot:
         assert rc["trades"][0]["exit"] == 4550
         assert rc["trades"][0]["pnl"] == (4550 - 4500) * qty
 
+    def test_no_trade_without_valid_stop(self, tmp_path, monkeypatch):
+        """Sniper hits can carry stop=0 (watchlist rows without a plan) —
+        a trade without a real stop must NEVER be placed (invariant #3)."""
+        ap, te = self._setup(tmp_path, monkeypatch)
+        ap.arm()
+        monkeypatch.setattr(ap, "_in_window", lambda now=None: True)
+        assert ap.consider("HAL", 4500, 0, 80, 0.2, "Defence", "t") is False
+        assert ap.consider("HAL", 4500, 4600, 80, 0.2, "Defence", "t") is False
+        assert ap.consider("HAL", 0, 0, 80, 0.2, "Defence", "t") is False
+        assert te.recent_trades(3) == []
+        # sniper hook path with stop=0 also rejected end-to-end
+        ap.on_breakout({"symbol": "HAL", "ltp": 4500, "trigger": 4480,
+                        "stop": 0, "target": 0})
+        assert te.recent_trades(3) == []
+
     def test_eod_digest_once_per_day(self, tmp_path, monkeypatch):
         from datetime import datetime as dt
         ap, _ = self._setup(tmp_path, monkeypatch)
