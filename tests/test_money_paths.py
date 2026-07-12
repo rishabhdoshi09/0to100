@@ -124,6 +124,70 @@ class TestBacktestSimulate:
         out, r = self._sim(110, 100, 130, bars)
         assert out == "LOSS"
 
+    def test_regime_classifier_same_rule_history_and_today(self):
+        from scan.signal_backtest import classify_regime
+        rising = pd.Series(np.linspace(100, 200, 100))
+        assert classify_regime(rising).iloc[-1] == "BULL"
+        falling = pd.Series(np.linspace(200, 100, 100))
+        assert classify_regime(falling).iloc[-1] == "BEAR"
+        flat = pd.Series([100.0] * 100)
+        assert classify_regime(flat).iloc[-1] == "CHOP"
+
+    def test_wilson_ci_honest_on_thin_samples(self):
+        from scan.signal_backtest import wilson_ci_pp
+        assert wilson_ci_pp(0, 0) == 0.0
+        thin = wilson_ci_pp(6, 12)          # 50% WR on 12 trades
+        assert 25 <= thin <= 32             # ±~28pp — huge, and shown
+        fat = wilson_ci_pp(300, 600)        # same WR on 600 trades
+        assert fat < 5
+
+    def test_signal_verdict_ladder(self):
+        from scan.signal_backtest import signal_verdict
+        assert signal_verdict(10, 2.0) == "THIN"       # hype without evidence
+        assert signal_verdict(50, 0.30) == "PROVEN"
+        assert signal_verdict(50, 0.10) == "POSITIVE"
+        assert signal_verdict(50, 0.00) == "NEUTRAL"
+        assert signal_verdict(50, -0.20) == "LOSER"
+
+    def test_target_sweep_geometry(self):
+        from scan.signal_backtest import sweep_targets
+        h = np.array([100.5, 103.5]); l = np.array([98.0, 99.0])
+        c = np.array([100.0, 103.0])
+        out = sweep_targets(100, 95, h, l, c)
+        assert out["+2%"][0] == "WIN" and out["+2%"][1] == pytest.approx(0.4)
+        assert out["+3%"][0] == "WIN" and out["+3%"][1] == pytest.approx(0.6)
+        assert out["+4%"][0] == "FLAT"      # 104 never printed — honest MTM
+
+    def test_regime_edge_and_playbook(self, tmp_path, monkeypatch):
+        import scan.signal_backtest as sb
+        monkeypatch.setattr(sb, "_OUT", tmp_path / "bt.json")
+        monkeypatch.setattr(sb, "current_regime_simple", lambda: "BULL")
+        (tmp_path / "bt.json").write_text(json.dumps({
+            "generated_at": "2026-07-12", "recommended_target_pct": 3.0,
+            "target_sweep": {"+3%": {"trades": 500, "hit_rate": 60,
+                                     "expectancy_r": 0.2}},
+            "signals": {
+                "VCP": {"trades": 50, "closed": 40, "expectancy_r": 0.20,
+                        "verdict": "POSITIVE",
+                        "by_regime": {"BULL": {"trades": 25,
+                                               "expectancy_r": 0.40}}},
+                "MOMENTUM": {"trades": 60, "closed": 50, "expectancy_r": 0.15,
+                             "verdict": "POSITIVE",
+                             "by_regime": {"BULL": {"trades": 5,
+                                                    "expectancy_r": 3.0}}},
+                "NR7_COIL": {"trades": 40, "closed": 35, "expectancy_r": -0.30,
+                             "verdict": "LOSER", "by_regime": {}},
+            }}))
+        # regime bucket used when evidenced; thin bucket falls back to overall
+        assert sb.edge_in_regime(["VCP"], "BULL") == 0.40
+        assert sb.edge_in_regime(["MOMENTUM"], "BULL") == 0.15
+        pb = sb.trading_playbook()
+        assert pb["regime"] == "BULL"
+        assert pb["best"][0]["signal"] == "VCP"          # 0.40R regime beats all
+        assert pb["best"][0]["basis"] == "regime"
+        assert pb["avoid"] == ["NR7_COIL"]
+        assert pb["recommended_target_pct"] == 3.0
+
     def test_combo_edge_requires_evidence(self, tmp_path, monkeypatch):
         import scan.signal_backtest as sb
         monkeypatch.setattr(sb, "_OUT", tmp_path / "bt.json")

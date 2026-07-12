@@ -693,16 +693,81 @@ def render_scanner(universe: list[str]) -> None:
                            "sabse upar, aur backtest roz raat khud refresh hota "
                            "hai. Neeche ki table sirf transparency ke liye hai.")
             if _rep:
+                # ── 🧭 Trading playbook — backtest as ACTION ──────────────
+                try:
+                    from scan.signal_backtest import trading_playbook
+                    _pb = trading_playbook()
+                except Exception:
+                    _pb = None
+                if _pb:
+                    _reg = _pb["regime"]
+                    _reg_col = {"BULL": "#00d4a0", "BEAR": "#ff4b4b",
+                                "CHOP": "#f59e0b"}.get(_reg, "#8892a4")
+                    _best_txt = " · ".join(
+                        f"<b>{SIGNAL_META.get(b['signal'], (b['signal'],))[0]}</b> "
+                        f"{b['expectancy_r']:+.2f}R"
+                        + (" (is regime mein)" if b["basis"] == "regime" else "")
+                        for b in _pb["best"]) or "koi positive-edge signal nahi"
+                    _avoid_txt = ", ".join(
+                        SIGNAL_META.get(k, (k,))[0] for k in _pb["avoid"])
+                    st.markdown(
+                        f"<div style='background:#0d1421;border:1px solid "
+                        f"{_reg_col}55;border-left:4px solid {_reg_col};"
+                        f"border-radius:8px;padding:10px 14px;margin-bottom:8px;"
+                        f"font-size:.8rem;color:#c9d1d9'>"
+                        f"🧭 <b style='color:{_reg_col}'>Aaj ka tape: {_reg}"
+                        f"</b><br>Isme sabse zyada earn: {_best_txt}"
+                        + (f"<br>❌ Avoid (proven losers): {_avoid_txt}"
+                           if _avoid_txt else "")
+                        + "</div>",
+                        unsafe_allow_html=True)
+                    _tsw = _pb.get("target_sweep") or {}
+                    if _tsw:
+                        _rec = _pb.get("recommended_target_pct")
+                        _bits = []
+                        for _lbl in sorted(_tsw):
+                            _t = _tsw[_lbl]
+                            _hot = (_rec is not None
+                                    and _lbl == f"+{_rec:.0f}%")
+                            _bits.append(
+                                (f"<b style='color:#fbbf24'>{_lbl}: "
+                                 if _hot else f"{_lbl}: ")
+                                + f"{_t['expectancy_r']:+.2f}R · "
+                                  f"{_t['hit_rate']:.0f}% hit"
+                                + ("</b> ⭐" if _hot else ""))
+                        st.markdown(
+                            "<div style='font-size:.74rem;color:#94a3b8;"
+                            "margin-bottom:8px'>🎯 Target geometry (same "
+                            "stops, measured): " + " &nbsp;|&nbsp; ".join(_bits)
+                            + " — ⭐ wala Autopilot ke target % ke liye "
+                              "evidence-backed choice hai</div>",
+                            unsafe_allow_html=True)
+
+                _vchip = {"PROVEN": "🟢 PROVEN", "POSITIVE": "🟢 positive",
+                          "NEUTRAL": "🟡 neutral", "LOSER": "🔴 LOSER",
+                          "THIN": "⚪ thin"}
                 rows = []
                 for key, s in sorted(_rep.get("signals", {}).items(),
-                                     key=lambda kv: -kv[1].get("win_rate", 0)):
+                                     key=lambda kv: -kv[1].get("expectancy_r", 0)):
                     if s.get("closed", 0) < 10:
                         continue
                     label = SIGNAL_META.get(key, (key,))[0]
+                    _ci = s.get("wr_ci_pp")
+                    _br = s.get("by_regime") or {}
+
+                    def _rexp(reg):
+                        d = _br.get(reg)
+                        return (f"{d['expectancy_r']:+.2f}R"
+                                if d and d.get("trades", 0) >= 20 else "—")
                     rows.append({
                         "Signal": label,
-                        "Win rate": f"{s['win_rate']:.0f}%",
+                        "Verdict": _vchip.get(s.get("verdict", ""), ""),
+                        "Win rate": f"{s['win_rate']:.0f}%"
+                                    + (f" ±{_ci:.0f}" if _ci else ""),
                         "Expectancy": f"{s['expectancy_r']:+.2f}R",
+                        "Bull": _rexp("BULL"),
+                        "Chop": _rexp("CHOP"),
+                        "Bear": _rexp("BEAR"),
                         "Trades": s["closed"],
                     })
                 if rows:
@@ -710,7 +775,8 @@ def render_scanner(universe: list[str]) -> None:
                     st.caption(f"Last run: {_rep.get('generated_at')} · "
                                f"{_rep.get('symbols')} stocks · "
                                f"{_rep.get('horizon_days')}-day horizon · "
-                               f"Expectancy +0.5R se upar = solid edge")
+                               f"± = 95% confidence · regime columns 20+ "
+                               f"trades pe hi number dikhate hain")
             else:
                 st.caption("Abhi tak backtest nahi chala — ▶ dabao (~2-3 min).")
         except Exception as _bt_exc:

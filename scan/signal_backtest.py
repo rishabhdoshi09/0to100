@@ -59,6 +59,80 @@ def _simulate(entry: float, stop: float, target: float,
     return "NO_FILL", 0.0
 
 
+# ── Regime classification — SAME rule for history and today ──────────────────
+# Signals behave differently in bull/chop/bear tape. Classifying every
+# historical sample lets the report say "VCP earns +0.4R in BULL and
+# −0.2R in CHOP" — and because today's regime uses the identical rule,
+# the number is directly actionable.
+
+def classify_regime(close) -> "pd.Series":
+    """BULL / CHOP / BEAR per day: price vs 50DMA + 20-day return."""
+    import pandas as pd
+    close = pd.Series(close) if not isinstance(close, pd.Series) else close
+    sma50 = close.rolling(50).mean()
+    ret20 = close.pct_change(20)
+    out = pd.Series("CHOP", index=close.index)
+    out[(close > sma50) & (ret20 > 0.02)] = "BULL"
+    out[(close < sma50) & (ret20 < -0.02)] = "BEAR"
+    return out
+
+
+def _nifty_regime_series():
+    try:
+        from data.index_store import get_index_ohlcv
+        df = get_index_ohlcv("^NSEI")
+        if df is None or len(df) < 70:
+            return None
+        col = next((c for c in df.columns if c.lower() == "close"), None)
+        return classify_regime(df[col]) if col else None
+    except Exception as exc:
+        log.debug("backtest_regime_series_failed", error=str(exc))
+        return None
+
+
+def current_regime_simple() -> str:
+    """Today's regime by the SAME rule the backtest buckets used."""
+    s = _nifty_regime_series()
+    return str(s.iloc[-1]) if s is not None and len(s) else "UNKNOWN"
+
+
+# ── Statistics helpers ────────────────────────────────────────────────────────
+
+def wilson_ci_pp(wins: int, n: int, z: float = 1.96) -> float:
+    """± half-width of the win-rate CI in percentage points. Honest
+    claims: '62% WR' on 12 trades is really '62% ± 27' — say so."""
+    if n <= 0:
+        return 0.0
+    p = wins / n
+    return round(z * ((p * (1 - p) / n) ** 0.5) * 100, 1)
+
+
+def signal_verdict(closed: int, expectancy_r: float) -> str:
+    """PROVEN / POSITIVE / NEUTRAL / LOSER / THIN — one usable word."""
+    if closed < 30:
+        return "THIN"
+    if expectancy_r >= 0.25:
+        return "PROVEN"
+    if expectancy_r >= 0.05:
+        return "POSITIVE"
+    if expectancy_r <= -0.05:
+        return "LOSER"
+    return "NEUTRAL"
+
+
+def sweep_targets(entry: float, stop: float, fwd_high, fwd_low, fwd_close,
+                  pcts=(2.0, 3.0, 4.0)) -> dict[str, tuple]:
+    """{'+2%': (outcome, r)} — same entry/stop, different profit targets.
+    Measures which target geometry actually earns; feeds the autopilot's
+    target_pct recommendation with evidence instead of a hunch."""
+    out = {}
+    for p in pcts:
+        tgt = entry * (1 + p / 100)
+        out[f"+{p:.0f}%"] = _simulate(entry, stop, tgt,
+                                      fwd_high, fwd_low, fwd_close)
+    return out
+
+
 def run_backtest(sample_step: int = 5, lookback_sessions: int = 250,
                  horizon: int = 10, max_symbols: int = 800) -> dict:
     """
@@ -89,6 +163,9 @@ def _run_backtest_inner(sc, stats, symbols, sample_step, lookback_sessions,
                         horizon, t0):
     from data.bhavcopy_store import get_ohlcv
 
+    regime_series = _nifty_regime_series()      # None → regime split skipped
+    tgt_stats: dict[str, dict] = {}             # target label → aggregate
+
     for si, sym in enumerate(symbols):
         df = get_ohlcv(sym)
         if df is None or len(df) < 60 + horizon + 20:
@@ -112,9 +189,33 @@ def _run_backtest_inner(sc, stats, symbols, sample_step, lookback_sessions,
                                         fwd["close"].values)
             if outcome == "NO_FILL":
                 continue          # order never triggered — not a trade
+
+            regime = ""
+            if regime_series is not None:
+                try:
+                    reg = regime_series.asof(df.index[t - 1])
+                    regime = str(reg) if isinstance(reg, str) else ""
+                except Exception:
+                    regime = ""
+
+            # Target geometry sweep — same fill, +2/+3/+4% targets
+            for label, (o2, r2) in sweep_targets(
+                    r.entry, r.stop, fwd["high"].values,
+                    fwd["low"].values, fwd["close"].values).items():
+                ts = tgt_stats.setdefault(label, {"trades": 0, "wins": 0,
+                                                  "closed": 0, "r_sum": 0.0})
+                ts["trades"] += 1
+                ts["r_sum"] += r2
+                if o2 == "WIN":
+                    ts["wins"] += 1
+                    ts["closed"] += 1
+                elif o2 == "LOSS":
+                    ts["closed"] += 1
+
             for sig in r.signals:
                 s = stats.setdefault(sig, {"trades": 0, "wins": 0, "losses": 0,
-                                           "flat": 0, "r_sum": 0.0})
+                                           "flat": 0, "r_sum": 0.0,
+                                           "regimes": {}})
                 s["trades"] += 1
                 s["r_sum"] += r_mult
                 if outcome == "WIN":
@@ -123,6 +224,17 @@ def _run_backtest_inner(sc, stats, symbols, sample_step, lookback_sessions,
                     s["losses"] += 1
                 else:
                     s["flat"] += 1
+                if regime:
+                    rg = s["regimes"].setdefault(
+                        regime, {"trades": 0, "wins": 0, "closed": 0,
+                                 "r_sum": 0.0})
+                    rg["trades"] += 1
+                    rg["r_sum"] += r_mult
+                    if outcome == "WIN":
+                        rg["wins"] += 1
+                        rg["closed"] += 1
+                    elif outcome == "LOSS":
+                        rg["closed"] += 1
         with _state_lock:
             _state["progress"] = si + 1
 
@@ -132,16 +244,47 @@ def _run_backtest_inner(sc, stats, symbols, sample_step, lookback_sessions,
     for sig, s in stats.items():
         closed = s["wins"] + s["losses"]
         wr = s["wins"] / closed if closed else 0.0
+        exp = round(s["r_sum"] / s["trades"], 2) if s["trades"] else 0.0
+        by_regime = {}
+        for reg, rg in (s.get("regimes") or {}).items():
+            by_regime[reg] = {
+                "trades": rg["trades"],
+                "win_rate": round(rg["wins"] / rg["closed"] * 100, 1)
+                            if rg["closed"] else 0.0,
+                "expectancy_r": round(rg["r_sum"] / rg["trades"], 2)
+                                if rg["trades"] else 0.0,
+            }
         report[sig] = {
             "trades": s["trades"], "closed": closed,
             "win_rate": round(wr * 100, 1),
-            "expectancy_r": round(s["r_sum"] / s["trades"], 2) if s["trades"] else 0.0,
+            "wr_ci_pp": wilson_ci_pp(s["wins"], closed),
+            "expectancy_r": exp,
+            "verdict": signal_verdict(closed, exp),
             "flat": s["flat"],
+            "by_regime": by_regime,
         }
+
+    target_sweep = {}
+    for label, ts in tgt_stats.items():
+        target_sweep[label] = {
+            "trades": ts["trades"],
+            "hit_rate": round(ts["wins"] / ts["closed"] * 100, 1)
+                        if ts["closed"] else 0.0,
+            "expectancy_r": round(ts["r_sum"] / ts["trades"], 2)
+                            if ts["trades"] else 0.0,
+        }
+    recommended = None
+    evidenced = {k: v for k, v in target_sweep.items()
+                 if v["trades"] >= 100}
+    if evidenced:
+        best = max(evidenced.items(), key=lambda kv: kv[1]["expectancy_r"])
+        recommended = float(best[0].strip("+%"))
 
     out = {"generated_at": time.strftime("%Y-%m-%d %H:%M"),
            "symbols": len(symbols), "horizon_days": horizon,
            "signals": report,
+           "target_sweep": target_sweep,
+           "recommended_target_pct": recommended,
            "elapsed_s": round(time.time() - t0, 1)}
     try:
         _OUT.parent.mkdir(parents=True, exist_ok=True)
@@ -193,6 +336,55 @@ def combo_edge(signal_keys: list[str], min_trades: int = 30) -> float | None:
         if s and s.get("trades", 0) >= min_trades:
             vals.append(float(s.get("expectancy_r", 0)))
     return round(sum(vals) / len(vals), 2) if vals else None
+
+
+def edge_in_regime(signal_keys: list[str], regime: str,
+                   min_trades: int = 20) -> float | None:
+    """combo_edge, but conditioned on a regime bucket. Falls back to the
+    overall number per signal when its regime bucket is too thin —
+    honest specificity, never thin-slice noise."""
+    rep = load_report()
+    if not rep:
+        return None
+    vals = []
+    for k in signal_keys:
+        s = rep.get("signals", {}).get(k)
+        if not s:
+            continue
+        rg = (s.get("by_regime") or {}).get(regime)
+        if rg and rg.get("trades", 0) >= min_trades:
+            vals.append(float(rg["expectancy_r"]))
+        elif s.get("trades", 0) >= 30:
+            vals.append(float(s.get("expectancy_r", 0)))
+    return round(sum(vals) / len(vals), 2) if vals else None
+
+
+def trading_playbook() -> dict | None:
+    """The backtest as ACTION, not a table: aaj ka regime, usme kaunse
+    signals earn karte hain, kaunse avoid, aur kaunsa target geometry
+    sabse zyada expectancy deta hai. None until a backtest has run."""
+    rep = load_report()
+    if not rep:
+        return None
+    regime = current_regime_simple()
+    best: list[dict] = []
+    for k, s in rep.get("signals", {}).items():
+        rg = (s.get("by_regime") or {}).get(regime)
+        if rg and rg.get("trades", 0) >= 20:
+            best.append({"signal": k, "expectancy_r": rg["expectancy_r"],
+                         "trades": rg["trades"], "basis": "regime"})
+        elif s.get("trades", 0) >= 30:
+            best.append({"signal": k, "expectancy_r": s["expectancy_r"],
+                         "trades": s["trades"], "basis": "overall"})
+    best.sort(key=lambda d: -d["expectancy_r"])
+    avoid = sorted(k for k, s in rep.get("signals", {}).items()
+                   if s.get("verdict") == "LOSER")
+    return {"regime": regime,
+            "best": [b for b in best if b["expectancy_r"] > 0][:3],
+            "avoid": avoid,
+            "target_sweep": rep.get("target_sweep") or {},
+            "recommended_target_pct": rep.get("recommended_target_pct"),
+            "generated_at": rep.get("generated_at")}
 
 
 def accuracy_for(signal_key: str) -> str:
