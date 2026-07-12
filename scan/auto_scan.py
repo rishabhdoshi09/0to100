@@ -304,6 +304,12 @@ def _scan_once_locked(universe: Optional[list[str]] = None, progress=None) -> No
             log.debug("edge_apply_skip", error=str(exc))
         # Proactive delivery — user ko dhundhna na pade, setups khud pahunchein
         _push_new_setups(serialized[:15])
+        # 🤖 Autopilot hook — same signals, alert logic untouched
+        try:
+            from execution.autopilot import on_setups as _ap_setups
+            _ap_setups(serialized[:20])
+        except Exception as exc:
+            log.debug("autopilot_setups_skip", error=str(exc))
         with _lock:
             _results = serialized
             _scanned_count = len(universe)
@@ -499,6 +505,12 @@ def _worker() -> None:
                     ensure_pending_gtts()
                 except Exception as exc:
                     log.debug("pending_gtt_skip", error=str(exc))
+                # 🤖 Autopilot — closes, compounding, circuit breaker
+                try:
+                    from execution.autopilot import review_cycle
+                    review_cycle()
+                except Exception as exc:
+                    log.debug("autopilot_review_skip", error=str(exc))
                 # Watchlist chowkidaari — buy-zone / broken-setup alerts
                 try:
                     from risk.watchlist_watcher import push_watchlist_alerts

@@ -112,6 +112,15 @@ def _alert(hits: list[dict]) -> None:
                          f"(₹{h['ltp']:,.1f}){plan}")
         engine.send("\n".join(lines))
         log.info("sniper_fired", symbols=[h["symbol"] for h in fresh])
+        # 🤖 Autopilot hook — off-thread, tick stream kabhi block nahi hota
+        def _feed_autopilot(hits_copy=list(fresh)):
+            try:
+                from execution.autopilot import on_breakout
+                for h in hits_copy:
+                    on_breakout(h)
+            except Exception as exc:
+                log.debug("autopilot_breakout_skip", error=str(exc))
+        threading.Thread(target=_feed_autopilot, daemon=True).start()
     except Exception as exc:
         log.debug("sniper_alert_failed", error=str(exc))
 

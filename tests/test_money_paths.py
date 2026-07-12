@@ -484,3 +484,88 @@ class TestTelegramSplit:
         chunks = AlertEngine._split_message("y" * 9000, 3800)
         assert all(len(c) <= 3800 for c in chunks)
         assert sum(len(c) for c in chunks) == 9000
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 15. Autopilot — every guardrail is money-critical
+# ══════════════════════════════════════════════════════════════════════════════
+
+class TestAutopilot:
+    def _setup(self, tmp_path, monkeypatch):
+        import execution.autopilot as ap
+        import execution.trade_executor as te
+        import scan.sector_heat as sh
+        monkeypatch.setattr(ap, "_STATE_FILE", tmp_path / "autopilot.json")
+        monkeypatch.setattr(te, "_DB", tmp_path / "trades.db")
+        monkeypatch.setattr(ap, "_state", {}, raising=False)
+        ap._state = {}
+        monkeypatch.setattr(ap, "_notify", lambda msg: None)
+        monkeypatch.setattr(ap, "_broker_cash", lambda: 500000.0)
+        monkeypatch.setattr(sh, "sector_performance", lambda min_members=3: [
+            {"sector": "Defence", "chg_1d": 1.5, "chg_5d": 3.0, "members": 4},
+            {"sector": "IT / Software", "chg_1d": 0.8, "chg_5d": 1.0, "members": 5},
+        ])
+        ap.set_config(allocation=100000, mode="PAPER")
+        return ap, te
+
+    def test_not_armed_never_trades(self, tmp_path, monkeypatch):
+        ap, te = self._setup(tmp_path, monkeypatch)
+        assert ap.consider("HAL", 4500, 4300, 80, 0.2, "Defence", "t") is False
+        assert te.recent_trades(2) == []
+
+    def test_gates_and_three_pct_target(self, tmp_path, monkeypatch):
+        ap, te = self._setup(tmp_path, monkeypatch)
+        ok, _ = ap.arm()
+        assert ok
+        monkeypatch.setattr(ap, "_in_window", lambda now=None: True)
+        # weak sector / low score / negative edge all rejected
+        assert ap.consider("X", 500, 480, 80, 0.2, "Cement", "t") is False
+        assert ap.consider("HAL", 4500, 4300, 45, 0.2, "Defence", "t") is False
+        assert ap.consider("HAL", 4500, 4300, 80, -0.1, "Defence", "t") is False
+        # valid → placed, tagged, +3% target (not scanner target)
+        assert ap.consider("HAL", 4500, 4300, 80, 0.2, "Defence", "t") is True
+        t = te.recent_trades(1)[0]
+        assert "AUTOPILOT" in t["note"]
+        assert abs(float(t["target_price"]) - 4500 * 1.03) < 1.0
+        # symbol once per day
+        assert ap.consider("HAL", 4500, 4300, 80, 0.2, "Defence", "t") is False
+
+    def test_reserve_never_deployable_and_compounding(self, tmp_path, monkeypatch):
+        import sqlite3
+        ap, te = self._setup(tmp_path, monkeypatch)
+        ap.arm()
+        monkeypatch.setattr(ap, "_in_window", lambda now=None: True)
+        ap.consider("HAL", 4500, 4300, 80, 0.2, "Defence", "t")
+        st = ap.get_status()
+        assert st["available"] <= st["pool"] * 0.90 - st["deployed"] + 1
+        # close as WIN → pool compounds
+        conn = sqlite3.connect(te._DB)
+        conn.execute("UPDATE trades SET status='PAPER_WIN' WHERE symbol='HAL'")
+        conn.commit(); conn.close()
+        ap._account_closed_trades()
+        st2 = ap.get_status()
+        assert st2["realized_pnl"] > 0 and st2["pool"] > 100000
+
+    def test_circuit_breaker_disarms(self, tmp_path, monkeypatch):
+        import sqlite3
+        from datetime import datetime
+        ap, te = self._setup(tmp_path, monkeypatch)
+        ap.arm()
+        conn = sqlite3.connect(te._DB)
+        conn.execute(te._DDL)
+        conn.execute(
+            "INSERT INTO trades (placed_at, mode, symbol, qty, entry_type, "
+            "entry_price, stop_price, target_price, product, status, note) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+            (datetime.now().isoformat(timespec='seconds'), "PAPER", "CRASH",
+             100, "MARKET", 500, 450, 515, "CNC", "PAPER_LOSS", "AUTOPILOT:t"))
+        conn.commit(); conn.close()
+        ap._circuit_breaker()
+        st = ap.get_status()
+        assert not st["armed"] and "circuit breaker" in st["disarmed_reason"]
+
+    def test_live_arm_needs_exact_phrase(self, tmp_path, monkeypatch):
+        ap, _ = self._setup(tmp_path, monkeypatch)
+        ap.set_config(mode="LIVE")
+        ok, _ = ap.arm("wrong phrase")
+        assert not ok

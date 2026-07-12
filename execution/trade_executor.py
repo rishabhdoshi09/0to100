@@ -101,7 +101,7 @@ def kite_ready() -> bool:
 
 def place_trade(symbol: str, qty: int, entry_type: str, entry_price: float,
                 stop: float, target: float, product: str = "CNC",
-                paper: bool = False) -> dict:
+                paper: bool = False, note: str = "") -> dict:
     """
     Full trade: entry + GTT OCO exits + journal.
     paper=True forces paper mode even when Kite is connected — Telegram
@@ -117,7 +117,7 @@ def place_trade(symbol: str, qty: int, entry_type: str, entry_price: float,
         _journal({"mode": "PAPER", "symbol": symbol, "qty": qty,
                   "entry_type": entry_type, "entry_price": entry_price,
                   "stop_price": stop, "target_price": target,
-                  "product": product, "status": "PAPER_OPEN"})
+                  "product": product, "status": "PAPER_OPEN", "note": note})
         log.info("paper_trade_placed", symbol=symbol, qty=qty)
         return {"ok": True, "mode": "PAPER",
                 "message": f"📝 Paper trade recorded: {qty} × {symbol} @ "
@@ -173,7 +173,7 @@ def place_trade(symbol: str, qty: int, entry_type: str, entry_price: float,
               "stop_price": stop, "target_price": target, "product": product,
               "entry_order_id": result["entry_order_id"],
               "gtt_id": result["gtt_id"],
-              "status": status})
+              "status": status, "note": note})
     log.info("live_trade_placed", symbol=symbol, qty=qty,
              order_id=result["entry_order_id"], gtt=result["gtt_id"],
              status=status)

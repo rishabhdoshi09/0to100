@@ -966,8 +966,8 @@ with st.sidebar:
 
         _nav_page_raw = _option_menu(
             menu_title=None,
-            options=["Today", "Pulse", "Stocks", "Options", "My Portfolio", "JARVIS"],
-            icons=["house-fill", "newspaper", "graph-up", "bar-chart-fill", "briefcase-fill", "robot"],
+            options=["Today", "Pulse", "Stocks", "Options", "Autopilot", "My Portfolio", "JARVIS"],
+            icons=["house-fill", "newspaper", "graph-up", "bar-chart-fill", "cpu", "briefcase-fill", "robot"],
             menu_icon=None,
             default_index=0,
             styles={
@@ -987,6 +987,7 @@ with st.sidebar:
             "Pulse":        "Daily Pulse",
             "Stocks":       "Institutional",
             "Options":      "Options Flow",
+            "Autopilot":    "Autopilot",
             "My Portfolio": "My Holdings",
             "JARVIS":       "JARVIS",
         }
@@ -995,12 +996,13 @@ with st.sidebar:
 
     except Exception:
         # Fallback radio if option_menu unavailable
-        _5_options = ["Today", "Pulse", "Stocks", "Options", "My Portfolio", "JARVIS"]
+        _5_options = ["Today", "Pulse", "Stocks", "Options", "Autopilot", "My Portfolio", "JARVIS"]
         _5_map = {
             "Today":        "Dashboard",
             "Pulse":        "Daily Pulse",
             "Stocks":       "Institutional",
             "Options":      "Options Flow",
+            "Autopilot":    "Autopilot",
             "My Portfolio": "My Holdings",
             "JARVIS":       "JARVIS",
         }
@@ -1206,6 +1208,16 @@ if _page in ("Dashboard", "Markets"):
             render_portfolio_heatmap(_dash_positions)
         except Exception as _phm_e:
             st.error(f"Portfolio Heatmap error: {_phm_e}")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# PAGE: AUTOPILOT
+# ══════════════════════════════════════════════════════════════════════════════
+elif _page == "Autopilot":
+    from core.error_guard import guard as _guard
+    with _guard("Autopilot"):
+        from ui.autopilot_page import render_autopilot
+        render_autopilot()
 
 
 # ══════════════════════════════════════════════════════════════════════════════
