@@ -734,6 +734,91 @@ class TestAutopilot:
         assert ap.eod_digest(now=dt(2026, 7, 10, 14, 0)) is False
         assert ap.eod_digest(now=dt(2026, 7, 11, 16, 0)) is False
 
+    def test_conviction_multiplier_evidence_only(self, tmp_path, monkeypatch):
+        ap, _ = self._setup(tmp_path, monkeypatch)
+        f = ap._conviction_multiplier
+        assert f(85, 0.30) == 1.5      # strong score + proven edge
+        assert f(60, 0.10) == 1.0      # ordinary evidence → base
+        assert f(60, None) == 0.75     # unmeasured = low conviction
+        assert f(85, None) == 1.0      # strong score, no backtest data
+        assert f(60, 0.01) == 0.75     # marginal edge → half-ish
+        assert f(85, 0.01) == 1.0
+        assert 0.5 <= f(0, None) <= 1.5
+
+    def test_conviction_sizing_changes_qty(self, tmp_path, monkeypatch):
+        ap, te = self._setup(tmp_path, monkeypatch)
+        ap.arm()
+        monkeypatch.setattr(ap, "_in_window", lambda now=None: True)
+        # base: pool 1L, risk 1% = 1000 / (500-450) = 20 qty
+        ap.set_config(conviction_sizing=False)
+        assert ap.consider("BASE", 500, 450, 85, 0.30, "Defence", "t") is True
+        assert int(te.recent_trades(1)[0]["qty"]) == 20
+        # conviction on: 1.5× → 30 qty (caps still respected)
+        ap.set_config(conviction_sizing=True)
+        assert ap.consider("CONV", 500, 450, 85, 0.30, "Defence", "t") is True
+        assert int(te.recent_trades(1)[0]["qty"]) == 30
+
+    def test_adaptive_source_gate_pauses_proven_loser(self, tmp_path, monkeypatch):
+        ap, te = self._setup(tmp_path, monkeypatch)
+        ap.arm()
+        monkeypatch.setattr(ap, "_in_window", lambda now=None: True)
+        # 14 sniper losses — below evidence threshold, still allowed
+        for i in range(14):
+            self._insert_closed(te, f"S{i}", 100, 95, 103, 10, win=False,
+                                source="sniper")
+        assert ap._source_paused("sniper") is None
+        # 15th loss → sniper pauses itself; scanner unaffected
+        self._insert_closed(te, "S14", 100, 95, 103, 10, win=False,
+                            source="sniper")
+        assert "paused" in (ap._source_paused("sniper") or "")
+        assert ap.consider("HAL", 4500, 4300, 80, 0.2, "Defence",
+                           "sniper") is False
+        assert ap.consider("HAL", 4500, 4300, 80, 0.2, "Defence",
+                           "scanner") is True
+        # user override: gate off → source trades again
+        ap.set_config(adaptive_source_gate=False)
+        assert ap.consider("BEL", 300, 290, 80, 0.2, "Defence",
+                           "sniper") is True
+
+    def test_time_stop_paper_closes_live_nudges_once(self, tmp_path, monkeypatch):
+        import sqlite3
+        from datetime import datetime as dt, timedelta
+        import data.live_quotes as lq
+        ap, te = self._setup(tmp_path, monkeypatch)
+        ap.arm()
+        monkeypatch.setattr(ap, "_in_window", lambda now=None: True)
+        assert ap.consider("HAL", 500, 450, 80, 0.2, "Defence", "t") is True
+        old = (dt.now() - timedelta(days=6)).isoformat(timespec="seconds")
+        conn = sqlite3.connect(te._DB)
+        conn.execute("UPDATE trades SET placed_at=? WHERE symbol='HAL'", (old,))
+        conn.execute(
+            "INSERT INTO trades (placed_at, mode, symbol, qty, entry_type, "
+            "entry_price, stop_price, target_price, product, status, note) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+            (old, "LIVE", "BEL", 10, "MARKET", 300, 290, 309, "CNC",
+             "PLACED", "AUTOPILOT:t"))
+        conn.commit(); conn.close()
+        monkeypatch.setattr(lq, "get_live_quotes",
+                            lambda syms, ttl=8.0: {"HAL": {"price": 505.0},
+                                                   "BEL": {"price": 301.0}})
+        nudges = []
+        monkeypatch.setattr(ap, "_notify", lambda m: nudges.append(m))
+        ap._time_stop()
+        conn = sqlite3.connect(te._DB); conn.row_factory = sqlite3.Row
+        hal = dict(conn.execute(
+            "SELECT * FROM trades WHERE symbol='HAL'").fetchone())
+        bel = dict(conn.execute(
+            "SELECT * FROM trades WHERE symbol='BEL'").fetchone())
+        conn.close()
+        # PAPER: closed at market with honest outcome + real exit price
+        assert hal["status"] == "PAPER_WIN" and float(hal["exit_price"]) == 505.0
+        assert "time-stop" in hal["note"]
+        # LIVE: still open, nudged exactly once even across repeat cycles
+        assert bel["status"] == "PLACED"
+        assert len([n for n in nudges if "BEL" in n]) == 1
+        ap._time_stop()
+        assert len([n for n in nudges if "BEL" in n]) == 1
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 # 16. System Pulse + quote micro-cache — smoothness is money too

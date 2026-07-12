@@ -136,6 +136,25 @@ def render_autopilot() -> None:
                 key="ap_regime",
                 help="DISTRIBUTION / BEAR tape mein naye entries band — "
                      "breakouts wahan sabse zyada fail hote hain")
+        u1, u2, u3 = st.columns(3)
+        with u1:
+            conv_on = st.toggle(
+                "🎯 Conviction sizing", value=bool(s.get("conviction_sizing", True)),
+                key="ap_conv",
+                help="Risk 0.5×–1.5× scale hota hai measured score+edge se — "
+                     "strong evidence pe zyada, weak pe aadha")
+        with u2:
+            adapt_on = st.toggle(
+                "🧠 Adaptive source gate",
+                value=bool(s.get("adaptive_source_gate", True)), key="ap_adapt",
+                help="Scanner/sniper apne 15+ trades ke record se negative "
+                     "nikla toh woh source khud pause ho jata hai")
+        with u3:
+            hold_days = st.number_input(
+                "Time-stop (days)", 2, 15, int(s.get("max_hold_days", 5)),
+                key="ap_hold",
+                help="Itne din flat → PAPER close (capital recycle), "
+                     "LIVE pe sirf Telegram nudge")
         if st.button("💾 Save limits", key="ap_save", width="stretch"):
             set_config(allocation=alloc, mode=mode_pick,
                        cash_reserve_pct=reserve / 100,
@@ -149,7 +168,10 @@ def render_autopilot() -> None:
                        end_time=end_t.strip() or "14:45",
                        trailing_enabled=trail_on,
                        breakeven_trigger_pct=float(trail_trig),
-                       regime_gate=regime_on)
+                       regime_gate=regime_on,
+                       conviction_sizing=conv_on,
+                       adaptive_source_gate=adapt_on,
+                       max_hold_days=int(hold_days))
             st.success("Limits saved. (Mode change hua ho toh dobara ARM karna hoga.)")
             st.rerun()
 
@@ -220,6 +242,17 @@ def _render_report_card() -> None:
               help="Average R-multiple per trade — positive hona zaroori")
     r5.metric("Profit factor", f"{stats['profit_factor']:.2f}",
               delta=f"max DD ₹{stats['max_drawdown']:,.0f}", delta_color="off")
+
+    by_src = rc.get("by_source", {})
+    if by_src:
+        bits = []
+        for src, d in sorted(by_src.items()):
+            icon = "🔭" if src == "scanner" else "🎯"
+            bits.append(f"{icon} {src}: {d['n']}t · "
+                        f"{d['wins']}/{d['n']} wins · ₹{d['total_pnl']:+,.0f} "
+                        f"· {d['expectancy_r']:+.2f}R")
+        st.caption("**By source** — " + "  |  ".join(bits) +
+                   "  (negative source 15+ trades pe khud pause)")
 
     try:
         import plotly.graph_objects as go

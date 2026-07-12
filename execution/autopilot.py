@@ -75,6 +75,10 @@ _DEFAULTS = {
     "breakeven_trigger_pct": 2.0,  # profit level that arms the breakeven trail
     "regime_gate": True,           # no new entries in DISTRIBUTION / BEAR tape
     "digest_date": "",             # last day the EOD digest was sent
+    "conviction_sizing": True,     # risk scales 0.5×–1.5× with measured edge
+    "adaptive_source_gate": True,  # pause a source its OWN record proves negative
+    "max_hold_days": 5,            # time-stop: stale flat positions recycle
+    "time_nudges": {},             # {date: [symbols]} LIVE stale-nudge dedupe
     "trades_today": {},            # {YYYY-MM-DD: count}
     "traded_symbols": {},          # {YYYY-MM-DD: [symbols]}
     "disarmed_reason": "",
@@ -163,8 +167,10 @@ def set_config(**kwargs) -> None:
         "sector_top_n": (1, 8),
         "target_pct": (1.0, 10.0),
         "breakeven_trigger_pct": (0.5, 8.0),
+        "max_hold_days": (2, 15),
     }
-    bools = ("trailing_enabled", "regime_gate")
+    bools = ("trailing_enabled", "regime_gate", "conviction_sizing",
+             "adaptive_source_gate")
     with _lock:
         s = _load()
         for k, v in kwargs.items():
@@ -414,13 +420,37 @@ def _market_regime() -> str:
 
 # ── Sizing ────────────────────────────────────────────────────────────────────
 
-def _size(entry: float, stop: float) -> int:
-    """Qty from 1%-of-pool risk, capped by per-trade % and available cash."""
+def _conviction_multiplier(score: float, edge) -> float:
+    """Kelly-lite: risk scales with MEASURED conviction, never with vibes.
+
+    Base 1.0. Only evidence moves it:
+      score ≥ 80          → +0.25   (calibrated composite is strong)
+      backtested edge     → +0.25 if ≥ +0.20R · −0.25 if < +0.05R
+      edge is None (no backtest data, e.g. raw sniper hit) → −0.25:
+      unmeasured conviction is LOW conviction by definition.
+    Clamped to [0.5, 1.5] — the 1%-rule never more than 1.5× stretched,
+    and a weak-but-passing signal risks half.
+    """
+    m = 1.0
+    if score >= 80:
+        m += 0.25
+    if edge is None:
+        m -= 0.25
+    elif edge >= 0.20:
+        m += 0.25
+    elif edge < 0.05:
+        m -= 0.25
+    return min(1.5, max(0.5, m))
+
+
+def _size(entry: float, stop: float, mult: float = 1.0) -> int:
+    """Qty from 1%-of-pool risk (× conviction multiplier), capped by
+    per-trade % and available cash — the caps always win over conviction."""
     st = get_status()
     pool, available = st["pool"], st["available"]
     if pool <= 0 or available <= 0 or entry <= stop or entry <= 0:
         return 0
-    risk_qty = int((pool * _load()["risk_per_trade_pct"]) / (entry - stop))
+    risk_qty = int((pool * _load()["risk_per_trade_pct"] * mult) / (entry - stop))
     cap_qty = int((pool * _load()["per_trade_cap_pct"]) / entry)
     avail_qty = int(available / entry)
     return max(0, min(risk_qty, cap_qty, avail_qty))
@@ -467,8 +497,18 @@ def _consider_locked(symbol: str, entry: float, stop: float, score: float,
             log.debug("autopilot_reject", symbol=symbol, reason=reject)
             return False
 
+        # Gate 12: source's OWN measured record — a feed that has proven
+        # it loses money gets paused, evidence over vibes on ourselves too
+        if s.get("adaptive_source_gate", True):
+            paused = _source_paused(source)
+            if paused:
+                _log_activity(f"SKIP {symbol}: {paused}")
+                return False
+
         target = round(entry * (1 + s["target_pct"] / 100), 1)
-        qty = _size(entry, stop)
+        mult = (_conviction_multiplier(score, edge)
+                if s.get("conviction_sizing", True) else 1.0)
+        qty = _size(entry, stop, mult)
         if qty < 1:
             _log_activity(f"SKIP {symbol}: pool/limits ke andar 1 share bhi "
                           f"nahi aata (entry ₹{entry:,.0f})")
@@ -503,7 +543,7 @@ def _consider_locked(symbol: str, entry: float, stop: float, score: float,
         _save()
         _log_activity(f"BUY {qty}×{symbol} @ ₹{entry:,.1f} "
                       f"(stop ₹{stop:,.1f} / target ₹{target:,.1f}) "
-                      f"[{source}] [{s['mode']}]")
+                      f"[{source}] [{s['mode']}] [conviction {mult:.2f}×]")
         _notify(f"BUY <b>{qty} × {symbol}</b> @ ₹{entry:,.1f} ({s['mode']})\n"
                 f"stop ₹{stop:,.1f} · target ₹{target:,.1f} (+{s['target_pct']}%) "
                 f"· via {source}")
@@ -540,6 +580,102 @@ def on_breakout(hit: dict) -> None:
     consider(symbol=hit["symbol"], entry=float(hit.get("ltp") or hit.get("trigger") or 0),
              stop=float(hit.get("stop") or 0), score=70.0,
              edge=None, sector=sector, source="sniper")
+
+
+# ── Adaptive source gate: the autopilot judges its own feeds ─────────────────
+
+_SOURCE_MIN_TRADES = 15      # evidence threshold before a source can be paused
+
+
+def source_stats() -> dict[str, dict]:
+    """{source: {n, wins, total_pnl, expectancy_r}} from CLOSED autopilot
+    trades — scanner vs sniper, measured on our own record."""
+    out: dict[str, dict] = {}
+    for t in _autopilot_trades(_CLOSED_WIN + _CLOSED_LOSS):
+        src = "sniper" if "sniper" in (t["note"] or "") else "scanner"
+        entry = float(t["entry_price"] or 0)
+        qty = int(t["qty"] or 0)
+        stop = float(t.get("orig_stop") or 0) or float(t["stop_price"] or 0)
+        pnl = (_planned_exit(t) - entry) * qty
+        risk = (entry - stop) * qty
+        d = out.setdefault(src, {"n": 0, "wins": 0, "total_pnl": 0.0, "_r": 0.0})
+        d["n"] += 1
+        d["wins"] += 1 if pnl > 0 else 0
+        d["total_pnl"] = round(d["total_pnl"] + pnl, 0)
+        d["_r"] += (pnl / risk) if risk > 0 else 0.0
+    for d in out.values():
+        d["expectancy_r"] = round(d.pop("_r") / d["n"], 2) if d["n"] else 0.0
+    return out
+
+
+def _source_paused(source: str) -> str | None:
+    """Rejection reason if this source's own record (≥15 closed trades)
+    shows negative expectancy — None otherwise. Fails open on any error."""
+    try:
+        key = "sniper" if "sniper" in (source or "") else "scanner"
+        st = source_stats().get(key)
+        if st and st["n"] >= _SOURCE_MIN_TRADES and st["expectancy_r"] < 0:
+            return (f"source '{source}' apne hi record se paused "
+                    f"({st['n']} trades, {st['expectancy_r']:+.2f}R) — "
+                    f"pehle scanner/backtest sudharo")
+    except Exception as exc:
+        log.debug("autopilot_source_stats_failed", error=str(exc))
+    return None
+
+
+# ── Time-stop: dead money is a cost ──────────────────────────────────────────
+
+def _time_stop() -> None:
+    """Positions older than max_hold_days that hit neither stop nor target:
+    PAPER → close at market (capital recycles, outcome recorded honestly).
+    LIVE  → Telegram nudge only, once per day — autonomous selling of a
+    live position is the user's call, not the machine's."""
+    s = _load()
+    max_days = int(s.get("max_hold_days", 5))
+    stale = []
+    for t in _open_autopilot_trades():
+        try:
+            placed = datetime.fromisoformat(str(t["placed_at"]))
+        except Exception:
+            continue
+        if (datetime.now() - placed).days >= max_days:
+            stale.append(t)
+    if not stale:
+        return
+    try:
+        from data.live_quotes import get_live_quotes
+        live = get_live_quotes(sorted({t["symbol"] for t in stale}))
+    except Exception:
+        return
+    today = date.today().isoformat()
+    for t in stale:
+        q = live.get(t["symbol"])
+        if not (q and q.get("price")):
+            continue
+        px = float(q["price"])
+        entry = float(t["entry_price"] or 0)
+        if t["mode"] == "PAPER":
+            _ensure_exit_col()
+            status = "PAPER_WIN" if px >= entry else "PAPER_LOSS"
+            _update_trade(t["id"], "exit_price=?, status=?, note=note||?",
+                          (px, status,
+                           f" | time-stop day {max_days} @ ₹{px:,.1f}"))
+            _log_activity(f"⏳ TIME-STOP {t['symbol']} @ ₹{px:,.1f} "
+                          f"(₹{(px-entry)*int(t['qty'] or 0):+,.0f}) — "
+                          f"{max_days} din flat, capital recycle")
+        else:
+            with _lock:
+                nudged = _load().setdefault("time_nudges", {})
+                done = nudged.get(today, [])
+                if t["symbol"] in done:
+                    continue
+                nudged.clear()
+                nudged[today] = done + [t["symbol"]]
+            _save()
+            _notify(f"⏳ <b>{t['symbol']}</b> {max_days}+ din se flat hai "
+                    f"(LTP ₹{px:,.1f} vs entry ₹{entry:,.1f}). Capital "
+                    f"recycle karna ho toh Kite se exit karo — LIVE position "
+                    f"main khud nahi bechta.")
 
 
 # ── Report Card: autopilot's own track record ────────────────────────────────
@@ -628,7 +764,7 @@ def report_card() -> dict:
                    f"{n} trades: expectancy {stats['expectancy_r']:+.2f}R, "
                    f"profit factor {stats['profit_factor']:.2f} — system "
                    f"abhi paisa deserve nahi karta. PAPER mein raho.")
-    return {"trades": trades, "stats": stats,
+    return {"trades": trades, "stats": stats, "by_source": source_stats(),
             "verdict": verdict[0], "verdict_reason": verdict[1]}
 
 
@@ -649,6 +785,7 @@ def review_cycle() -> None:
         _account_closed_trades()
         _close_crossed_live_trades() # …price-cross estimate as fallback
         _trail_stops()
+        _time_stop()
         _circuit_breaker()
     except Exception as exc:
         log.debug("autopilot_review_failed", error=str(exc))
