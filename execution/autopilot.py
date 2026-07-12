@@ -449,6 +449,93 @@ def on_breakout(hit: dict) -> None:
              edge=None, sector=sector, source="sniper")
 
 
+# ── Report Card: autopilot's own track record ────────────────────────────────
+
+# Evidence thresholds — CLAUDE.md invariant: <30 trades = no claim.
+_EVIDENCE_MIN_TRADES = 30
+_READY_PROFIT_FACTOR = 1.3
+
+
+def report_card() -> dict:
+    """Autopilot ka apna scorecard — sirf uske trades, manual alag.
+
+    Returns {trades, stats, verdict}: closed trades oldest-first with
+    per-trade P&L / R-multiple / running equity, aggregate stats, and an
+    evidence-gated verdict for the PAPER→LIVE decision. Exit prices are
+    the journal's stop/target (the GTT legs), so P&L is the planned
+    exit — fill-reconciliation with the Kite orderbook can tighten this
+    later.
+    """
+    closed = _autopilot_trades(_CLOSED_WIN + _CLOSED_LOSS)
+    trades: list[dict] = []
+    equity = 0.0
+    peak = 0.0
+    max_dd = 0.0
+    for t in reversed(closed):                      # oldest → newest
+        entry = float(t["entry_price"] or 0)
+        qty = int(t["qty"] or 0)
+        stop = float(t["stop_price"] or 0)
+        win = t["status"] in _CLOSED_WIN
+        exit_px = float(t["target_price"] or 0) if win else stop
+        pnl = round((exit_px - entry) * qty, 0)
+        risk = (entry - stop) * qty
+        equity = round(equity + pnl, 0)
+        peak = max(peak, equity)
+        max_dd = max(max_dd, peak - equity)
+        trades.append({
+            "date": str(t["placed_at"])[:10],
+            "symbol": t["symbol"],
+            "mode": t["mode"],
+            "source": "sniper" if "sniper" in (t["note"] or "") else "scanner",
+            "qty": qty,
+            "entry": entry,
+            "exit": exit_px,
+            "win": win,
+            "pnl": pnl,
+            "r": round(pnl / risk, 2) if risk > 0 else 0.0,
+            "equity": equity,
+        })
+
+    n = len(trades)
+    wins = [t for t in trades if t["pnl"] > 0]
+    losses = [t for t in trades if t["pnl"] <= 0]
+    gross_win = sum(t["pnl"] for t in wins)
+    gross_loss = abs(sum(t["pnl"] for t in losses))
+    stats = {
+        "n": n,
+        "wins": len(wins),
+        "losses": len(losses),
+        "win_rate": round(len(wins) / n * 100, 1) if n else 0.0,
+        "total_pnl": round(sum(t["pnl"] for t in trades), 0),
+        "avg_win": round(gross_win / len(wins), 0) if wins else 0.0,
+        "avg_loss": round(-gross_loss / len(losses), 0) if losses else 0.0,
+        "expectancy_r": round(sum(t["r"] for t in trades) / n, 2) if n else 0.0,
+        "profit_factor": (round(gross_win / gross_loss, 2) if gross_loss
+                          else (99.0 if gross_win else 0.0)),
+        "max_drawdown": round(max_dd, 0),
+        "paper_n": sum(1 for t in trades if t["mode"] == "PAPER"),
+        "live_n": sum(1 for t in trades if t["mode"] == "LIVE"),
+    }
+
+    # Evidence-gated verdict — vibes se LIVE nahi jaana
+    if n < _EVIDENCE_MIN_TRADES:
+        verdict = ("COLLECTING_EVIDENCE",
+                   f"Abhi koi claim nahi — {n}/{_EVIDENCE_MIN_TRADES} closed "
+                   f"trades. PAPER mein chalne do.")
+    elif stats["expectancy_r"] > 0 and stats["profit_factor"] >= _READY_PROFIT_FACTOR:
+        verdict = ("READY_CANDIDATE",
+                   f"{n} trades: expectancy {stats['expectancy_r']:+.2f}R, "
+                   f"profit factor {stats['profit_factor']:.2f} — LIVE "
+                   f"sochne layak record. Chhoti allocation se shuru karo.")
+    else:
+        verdict = ("NOT_READY",
+                   f"{n} trades: expectancy {stats['expectancy_r']:+.2f}R, "
+                   f"profit factor {stats['profit_factor']:.2f} — system "
+                   f"abhi paisa deserve nahi karta. PAPER mein raho.")
+    return {"trades": trades, "stats": stats,
+            "verdict": verdict[0], "verdict_reason": verdict[1]}
+
+
 # ── Review cycle: closes, compounding, circuit breaker ───────────────────────
 
 def review_cycle() -> None:

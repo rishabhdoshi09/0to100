@@ -588,3 +588,56 @@ class TestAutopilot:
         ap.set_config(start_time="around ten", end_time="25:99")
         st = ap.get_status()
         assert st["start_time"] == "09:30" and st["end_time"] == "14:45"
+
+    def _insert_closed(self, te, symbol, entry, stop, target, qty, win,
+                       source="scanner"):
+        import sqlite3
+        from datetime import datetime
+        conn = sqlite3.connect(te._DB)
+        conn.execute(te._DDL)
+        conn.execute(
+            "INSERT INTO trades (placed_at, mode, symbol, qty, entry_type, "
+            "entry_price, stop_price, target_price, product, status, note) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+            (datetime.now().isoformat(timespec='seconds'), "PAPER", symbol,
+             qty, "MARKET", entry, stop, target, "CNC",
+             "PAPER_WIN" if win else "PAPER_LOSS", f"AUTOPILOT:{source}"))
+        conn.commit(); conn.close()
+
+    def test_report_card_math_and_evidence_gate(self, tmp_path, monkeypatch):
+        """P&L / R / equity curve exact; <30 trades can never claim READY."""
+        ap, te = self._setup(tmp_path, monkeypatch)
+        # win: (515-500)*10 = +150 @ risk (500-450)*10=500 → +0.3R
+        self._insert_closed(te, "W1", 500, 450, 515, 10, win=True)
+        # loss: (450-500)*10 = -500 → -1R
+        self._insert_closed(te, "L1", 500, 450, 515, 10, win=False,
+                            source="sniper")
+        rc = ap.report_card()
+        s = rc["stats"]
+        assert s["n"] == 2 and s["wins"] == 1 and s["win_rate"] == 50.0
+        assert s["total_pnl"] == -350
+        assert rc["trades"][0]["pnl"] == 150 and rc["trades"][0]["r"] == 0.3
+        assert rc["trades"][1]["pnl"] == -500 and rc["trades"][1]["r"] == -1.0
+        assert rc["trades"][1]["equity"] == -350          # running curve
+        assert rc["trades"][1]["source"] == "sniper"
+        assert s["max_drawdown"] == 500                   # peak 150 → -350
+        # evidence gate: profitable ya nahi, <30 trades = no claim
+        assert rc["verdict"] == "COLLECTING_EVIDENCE"
+
+    def test_report_card_verdict_after_evidence(self, tmp_path, monkeypatch):
+        """30+ trades: positive expectancy → READY; negative → NOT_READY."""
+        ap, te = self._setup(tmp_path, monkeypatch)
+        for i in range(20):
+            self._insert_closed(te, f"W{i}", 100, 95, 103, 10, win=True)
+        for i in range(10):
+            self._insert_closed(te, f"L{i}", 100, 95, 103, 10, win=False)
+        rc = ap.report_card()
+        assert rc["stats"]["n"] == 30
+        # gross win 20*30=600, gross loss 10*50=500 → PF 1.2 < 1.3 → NOT_READY
+        assert rc["verdict"] == "NOT_READY"
+        for i in range(5):
+            self._insert_closed(te, f"W2{i}", 100, 95, 103, 10, win=True)
+        rc2 = ap.report_card()
+        # gross win 750 / loss 500 → PF 1.5, expectancy > 0 → READY
+        assert rc2["verdict"] == "READY_CANDIDATE"
+        assert rc2["stats"]["profit_factor"] == 1.5

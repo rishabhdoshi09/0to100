@@ -143,6 +143,9 @@ def render_autopilot() -> None:
                 f"target ₹{float(t['target_price'] or 0):,.1f} · "
                 f"{t['status']}</span></div>", unsafe_allow_html=True)
 
+    # ── Report Card — autopilot ka apna track record ──────────────────────────
+    _render_report_card()
+
     # ── Activity log ──────────────────────────────────────────────────────────
     st.markdown("#### 📜 Activity")
     acts = s.get("activity", [])
@@ -154,3 +157,70 @@ def render_autopilot() -> None:
     else:
         st.caption("Abhi koi activity nahi — allocation set karke ARM karo "
                    "(PAPER se shuru!), phir har decision yahan dikhega.")
+
+
+def _render_report_card() -> None:
+    """Autopilot ke closed trades ki equity curve + stats + LIVE-readiness
+    verdict. Manual trades isme nahi aate — machine apne record pe judge ho."""
+    from execution.autopilot import report_card
+
+    st.markdown("#### 📊 Report Card — kya autopilot paisa deserve karta hai?")
+    rc = report_card()
+    stats, trades = rc["stats"], rc["trades"]
+
+    v_style = {
+        "COLLECTING_EVIDENCE": ("#f59e0b", "🟡 EVIDENCE JAMA HO RAHA HAI"),
+        "READY_CANDIDATE":     ("#00d4a0", "🟢 LIVE CANDIDATE"),
+        "NOT_READY":           ("#ff4b4b", "🔴 NOT READY"),
+    }
+    v_col, v_label = v_style.get(rc["verdict"], ("#8892a4", rc["verdict"]))
+    st.markdown(
+        f"<div style='{_CARD};border-left:4px solid {v_col}'>"
+        f"<span style='font-weight:800;color:{v_col}'>{v_label}</span> "
+        f"<span style='font-size:.8rem;color:#c9d1d9'>· {rc['verdict_reason']}"
+        f"</span></div>", unsafe_allow_html=True)
+
+    if not trades:
+        st.caption("Closed trades abhi zero hain — curve pehle trade ke "
+                   "close hone pe shuru hogi.")
+        return
+
+    r1, r2, r3, r4, r5 = st.columns(5)
+    r1.metric("Closed trades", f"{stats['n']}",
+              delta=f"{stats['paper_n']} paper · {stats['live_n']} live",
+              delta_color="off")
+    r2.metric("Win rate", f"{stats['win_rate']:.0f}%",
+              delta=f"{stats['wins']}W / {stats['losses']}L", delta_color="off")
+    r3.metric("Total P&L", f"₹{stats['total_pnl']:+,.0f}")
+    r4.metric("Expectancy", f"{stats['expectancy_r']:+.2f}R",
+              help="Average R-multiple per trade — positive hona zaroori")
+    r5.metric("Profit factor", f"{stats['profit_factor']:.2f}",
+              delta=f"max DD ₹{stats['max_drawdown']:,.0f}", delta_color="off")
+
+    try:
+        import plotly.graph_objects as go
+        eq = [0.0] + [t["equity"] for t in trades]
+        fig = go.Figure(go.Scatter(
+            y=eq, mode="lines+markers", line=dict(color=v_col, width=2),
+            marker=dict(size=5), hovertemplate="₹%{y:,.0f}<extra></extra>"))
+        fig.update_layout(
+            height=220, margin=dict(l=10, r=10, t=10, b=10),
+            paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+            xaxis=dict(title="Trade #", color="#8892a4", gridcolor="#1e293b"),
+            yaxis=dict(title="Cumulative P&L (₹)", color="#8892a4",
+                       gridcolor="#1e293b"))
+        st.plotly_chart(fig, width="stretch",
+                        config={"displayModeBar": False})
+    except Exception:
+        pass
+
+    with st.expander(f"📒 Trade ledger ({stats['n']} closed)"):
+        for t in reversed(trades):        # newest first
+            p_col = "#00d4a0" if t["win"] else "#ff4b4b"
+            st.markdown(
+                f"<div style='font-size:.78rem;color:#c9d1d9;"
+                f"font-family:JetBrains Mono,monospace;padding:2px 0'>"
+                f"{t['date']} · <b>{t['symbol']}</b> ({t['mode']}·{t['source']}) "
+                f"· {t['qty']} sh ₹{t['entry']:,.1f}→₹{t['exit']:,.1f} · "
+                f"<span style='color:{p_col}'>₹{t['pnl']:+,.0f} "
+                f"({t['r']:+.1f}R)</span></div>", unsafe_allow_html=True)
