@@ -11,6 +11,7 @@ _LABEL = {
     "auto_scan":         "Market scan",
     "autopilot":         "Autopilot",
     "sniper":            "Breakout sniper",
+    "live_ticker":       "Live Watch stream",
     "telegram_listener": "Telegram buttons",
     "quotes":            "Quote source",
 }
@@ -40,8 +41,8 @@ def render_system_pulse() -> None:
                    "(pehla cycle chalne do)")
         return
 
-    for name in ("auto_scan", "autopilot", "sniper", "telegram_listener",
-                 "quotes"):
+    for name in ("auto_scan", "autopilot", "sniper", "live_ticker",
+                 "telegram_listener", "quotes"):
         d = daemons.get(name)
         if not d:
             continue

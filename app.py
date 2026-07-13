@@ -1019,6 +1019,7 @@ with st.sidebar:
         # Trade Replay / Market Breadth removed (user request: advanced clutter)
         _more_tools = [
             ("Terminal",          "⚡ Terminal"),
+            ("Live Watch",        "📡 Live Watch"),
             ("My Watchlist",      "👁 My Watchlist"),
             ("Journal",           "📋 Journal"),
             ("Smart Alerts",      "🔔 Smart Alerts"),
@@ -1224,6 +1225,15 @@ elif _page == "Autopilot":
     with _guard("Autopilot"):
         from ui.autopilot_page import render_autopilot
         render_autopilot()
+
+# ══════════════════════════════════════════════════════════════════════════════
+# PAGE: LIVE WATCH — Kite WebSocket tick board
+# ══════════════════════════════════════════════════════════════════════════════
+elif _page == "Live Watch":
+    from core.error_guard import guard as _guard
+    with _guard("Live Watch"):
+        from ui.live_watch import render_live_watch
+        render_live_watch()
 
 
 # ══════════════════════════════════════════════════════════════════════════════

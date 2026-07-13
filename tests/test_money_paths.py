@@ -969,6 +969,34 @@ class TestSystemHealth:
         assert h.pulse()["latency"]["x"]["n"] == 1
 
 
+class TestLiveTicker:
+    def test_tick_fold_and_age(self, monkeypatch):
+        import data.live_ticker as lt
+        monkeypatch.setattr(lt, "_store", {}, raising=False)
+        ticks = [
+            {"instrument_token": 1, "last_price": 4512.5,
+             "volume_traded": 120000,
+             "ohlc": {"close": 4450.0, "high": 4520.0, "low": 4440.0}},
+            {"instrument_token": 2, "last_price": 0},          # junk → skipped
+            {"instrument_token": 99, "last_price": 100},       # unknown token
+        ]
+        n = lt.update_store(ticks, {1: "HAL", 2: "BEL"}, now=1000.0)
+        assert n == 1
+        monkeypatch.setattr(lt.time, "time", lambda: 1003.0)
+        snap = lt.get_ticks(["HAL"])
+        assert snap["HAL"]["price"] == 4512.5
+        assert snap["HAL"]["chg_pct"] == pytest.approx(1.4, abs=0.05)
+        assert snap["HAL"]["age_s"] == 3.0        # stale must look stale
+        assert "BEL" not in snap
+
+    def test_status_without_stream(self, monkeypatch):
+        import data.live_ticker as lt
+        monkeypatch.setattr(lt, "_store", {}, raising=False)
+        monkeypatch.setattr(lt, "_started", False, raising=False)
+        s = lt.status()
+        assert s["streaming"] is False and s["last_tick_age_s"] is None
+
+
 class TestDeadSymbolRegistry:
     def _fresh(self, tmp_path, monkeypatch):
         import data.dead_symbols as ds

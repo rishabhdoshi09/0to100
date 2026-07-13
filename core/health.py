@@ -31,6 +31,7 @@ _CADENCE = {
     "auto_scan":          (1200, 4500),
     "telegram_listener":  (120, 600),
     "sniper":             (300, 1800),
+    "live_ticker":        (300, 1800),
     "autopilot":          (1200, 4500),
 }
 _DEFAULT_CADENCE = (900, 3600)
