@@ -828,6 +828,32 @@ class TestAutopilot:
         assert float(t["entry_price"]) == 4530.0            # live, not 4500
         assert abs(float(t["target_price"]) - 4530 * 1.03) < 1.0
 
+    def test_pnl_snapshot_live_and_day(self, tmp_path, monkeypatch):
+        """Frontend P&L: unrealized from live quotes, day realized from
+        today's closes, missing quote = None (never fake zero)."""
+        import data.live_quotes as lq
+        ap, te = self._setup(tmp_path, monkeypatch)
+        ap.arm()
+        monkeypatch.setattr(ap, "_in_window", lambda now=None: True)
+        assert ap.consider("HAL", 500, 450, 80, 0.2, "Defence", "t") is True
+        qty = int(te.recent_trades(1)[0]["qty"])
+        # closed WIN today: (515-500)*10 = +150
+        self._insert_closed(te, "DONE", 500, 450, 515, 10, win=True)
+        monkeypatch.setattr(lq, "get_live_quotes",
+                            lambda syms, ttl=8.0: {"HAL": {"price": 512.0}})
+        pnl = ap.pnl_snapshot()
+        assert pnl["unrealized"] == (512 - 500) * qty
+        assert pnl["day_realized"] == 150 and pnl["day_closed"] == 1
+        assert pnl["day_pnl"] == 150 + (512 - 500) * qty
+        pos = {p["symbol"]: p for p in pnl["positions"]}
+        assert pos["HAL"]["pnl"] == (512 - 500) * qty
+        assert pos["HAL"]["pnl_pct"] == pytest.approx(2.4)
+        # quote gayab → P&L None, zero nahi
+        monkeypatch.setattr(lq, "get_live_quotes", lambda syms, ttl=8.0: {})
+        pnl2 = ap.pnl_snapshot()
+        assert pnl2["positions"][0]["pnl"] is None
+        assert pnl2["unrealized"] == 0 and pnl2["day_realized"] == 150
+
     def test_fill_preserves_signal_price_once(self, tmp_path, monkeypatch):
         """Reconciled fill overwrites entry_price but the ORIGINAL signal
         price survives in signal_price — and a second fill can't clobber it."""

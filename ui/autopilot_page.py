@@ -48,6 +48,26 @@ def render_autopilot() -> None:
               help=f"Reserve {s['cash_reserve_pct']*100:.0f}% kabhi deploy nahi hota")
     m4.metric("Trades today", f"{s['trades_today_count']}/{s['max_trades_per_day']}")
 
+    # ── 💰 P&L — aaj ka scoreboard, live ─────────────────────────────────────
+    try:
+        from execution.autopilot import pnl_snapshot
+        pnl = pnl_snapshot()
+    except Exception:
+        pnl = None
+    if pnl and (pnl["positions"] or pnl["day_closed"] or pnl["realized_total"]):
+        p1, p2, p3, p4 = st.columns(4)
+        _dc = "normal" if pnl["day_pnl"] >= 0 else "inverse"
+        p1.metric("📅 Day P&L", f"₹{pnl['day_pnl']:+,.0f}",
+                  delta=f"{pnl['day_closed']} closed today"
+                        if pnl["day_closed"] else "koi close nahi aaj",
+                  delta_color="off",
+                  help="Aaj ke closed trades + open positions ka unrealized")
+        p2.metric("📈 Unrealized (open)", f"₹{pnl['unrealized']:+,.0f}",
+                  delta=f"{len(pnl['positions'])} open", delta_color="off")
+        p3.metric("✅ Realized today", f"₹{pnl['day_realized']:+,.0f}")
+        p4.metric("🏦 Realized total", f"₹{pnl['realized_total']:+,.0f}",
+                  help="Poora compounded ledger — pool isi se badhta hai")
+
     # ── Arm / Disarm ─────────────────────────────────────────────────────────
     c1, c2 = st.columns([1.2, 2.8])
     with c1:
@@ -209,19 +229,38 @@ def render_autopilot() -> None:
             st.success("Limits saved. (Mode change hua ho toh dobara ARM karna hoga.)")
             st.rerun()
 
-    # ── Open autopilot positions ──────────────────────────────────────────────
-    if s["open_trades"]:
+    # ── Open autopilot positions — live price + P&L ke saath ─────────────────
+    _pos = (pnl or {}).get("positions") or []
+    if not _pos and s["open_trades"]:      # snapshot fail hua toh bhi dikhao
+        _pos = [{"symbol": t["symbol"], "mode": t["mode"],
+                 "qty": int(t["qty"] or 0),
+                 "entry": float(t["entry_price"] or 0), "live": None,
+                 "pnl": None, "pnl_pct": None,
+                 "stop": float(t["stop_price"] or 0),
+                 "target": float(t["target_price"] or 0),
+                 "status": t["status"]} for t in s["open_trades"]]
+    if _pos:
         st.markdown("#### 📍 Autopilot positions")
-        for t in s["open_trades"]:
+        for p in _pos:
+            if p["pnl"] is not None:
+                _pc = "#00d4a0" if p["pnl"] >= 0 else "#ff4b4b"
+                _live_bit = (f" &nbsp; live <b style='color:#e2e8f0'>"
+                             f"₹{p['live']:,.1f}</b> &nbsp; "
+                             f"<b style='color:{_pc}'>₹{p['pnl']:+,.0f} "
+                             f"({p['pnl_pct']:+.2f}%)</b>")
+            else:
+                _live_bit = (" &nbsp; <span style='color:#f59e0b;"
+                             "font-size:.72rem'>live quote nahi — P&L "
+                             "unknown (zero NAHI)</span>")
             st.markdown(
                 f"<div style='{_CARD}'>"
                 f"<span style='color:#e2e8f0;font-weight:700;"
-                f"font-family:JetBrains Mono,monospace'>{t['symbol']}</span>"
-                f"<span style='font-size:.75rem;color:#8892a4'> ({t['mode']}) · "
-                f"{t['qty']} sh @ ₹{float(t['entry_price'] or 0):,.1f} · "
-                f"stop ₹{float(t['stop_price'] or 0):,.1f} · "
-                f"target ₹{float(t['target_price'] or 0):,.1f} · "
-                f"{t['status']}</span></div>", unsafe_allow_html=True)
+                f"font-family:JetBrains Mono,monospace'>{p['symbol']}</span>"
+                f"<span style='font-size:.75rem;color:#8892a4'> ({p['mode']}) · "
+                f"{p['qty']} sh @ ₹{p['entry']:,.1f}</span>{_live_bit}"
+                f"<div style='font-size:.72rem;color:#8892a4;margin-top:3px'>"
+                f"stop ₹{p['stop']:,.1f} · target ₹{p['target']:,.1f} · "
+                f"{p['status']}</div></div>", unsafe_allow_html=True)
 
     # ── Report Card — autopilot ka apna track record ──────────────────────────
     _render_report_card()

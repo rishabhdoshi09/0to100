@@ -692,6 +692,64 @@ def on_breakout(hit: dict) -> None:
              edge=None, sector=sector, source="sniper")
 
 
+# ── P&L snapshot: frontend ke liye ek sach — live, realized, day ─────────────
+
+def pnl_snapshot() -> dict:
+    """Autopilot ka poora P&L ek call mein:
+    - positions: har open trade LIVE price + unrealized ₹/% ke saath
+    - unrealized: total on open positions (live quotes; quote na mile
+      toh us position ka pnl None — stale ko zero bola nahi jata)
+    - day_realized: aaj place hue closed trades ka P&L (actual exchange
+      fill jahan reconciled, warna planned GTT leg)
+    - realized_total: full compounded ledger (= pool - allocation)
+    - day_pnl: day_realized + unrealized — aaj ka asli scoreboard
+    """
+    s = _load()
+    open_trades = _open_autopilot_trades()
+    live: dict = {}
+    if open_trades:
+        try:
+            from data.live_quotes import get_live_quotes
+            live = get_live_quotes(sorted({t["symbol"] for t in open_trades}))
+        except Exception:
+            live = {}
+    positions: list[dict] = []
+    unreal = 0.0
+    for t in open_trades:
+        entry = float(t["entry_price"] or 0)
+        qty = int(t["qty"] or 0)
+        q = live.get(t["symbol"])
+        px = float(q["price"]) if q and q.get("price") else None
+        pnl = round((px - entry) * qty, 0) if (px and entry) else None
+        if pnl is not None:
+            unreal += pnl
+        positions.append({
+            "symbol": t["symbol"], "mode": t["mode"], "qty": qty,
+            "entry": entry, "live": px, "pnl": pnl,
+            "pnl_pct": (round((px / entry - 1) * 100, 2)
+                        if (px and entry) else None),
+            "stop": float(t["stop_price"] or 0),
+            "target": float(t["target_price"] or 0),
+            "status": t["status"],
+        })
+    today = date.today().isoformat()
+    day_realized = 0.0
+    day_closed = 0
+    for t in _autopilot_trades(_CLOSED_WIN + _CLOSED_LOSS):
+        if str(t["placed_at"])[:10] == today:
+            day_realized += ((_planned_exit(t) - float(t["entry_price"] or 0))
+                             * int(t["qty"] or 0))
+            day_closed += 1
+    return {
+        "positions": positions,
+        "unrealized": round(unreal, 0),
+        "day_realized": round(day_realized, 0),
+        "day_closed": day_closed,
+        "realized_total": round(float(s.get("realized_pnl", 0.0)), 0),
+        "day_pnl": round(day_realized + unreal, 0),
+    }
+
+
 # ── Adaptive source gate: the autopilot judges its own feeds ─────────────────
 
 _SOURCE_MIN_TRADES = 15      # evidence threshold before a source can be paused
