@@ -121,6 +121,10 @@ def render_live_watch() -> None:
                 f"{hl}</div>",
                 unsafe_allow_html=True)
 
+    # ── 🇺🇸 US market — yfinance poll (Kite US data nahi deta) ────────────────
+    st.divider()
+    _render_us_watch()
+
     # Auto-repaint: stream 2s, REST 10s
     try:
         from streamlit_autorefresh import st_autorefresh
@@ -128,3 +132,104 @@ def render_live_watch() -> None:
     except Exception:
         if st.button("⟳ Refresh", key="lw_refresh"):
             st.rerun()
+
+
+# ── US market section ─────────────────────────────────────────────────────────
+
+_US_DEFAULT = "^GSPC, ^IXIC, ^DJI, AAPL, NVDA, TSLA"
+_US_NAMES = {"^GSPC": "S&P 500", "^IXIC": "NASDAQ", "^DJI": "DOW",
+             "^VIX": "VIX (US)"}
+
+
+def _us_market_open(now=None) -> bool:
+    """NYSE/Nasdaq regular session — 9:30–16:00 America/New_York.
+    IST mein (summer) shaam ~7:00pm se raat 1:30am."""
+    try:
+        import pytz
+        from datetime import datetime as _dt
+        ny = pytz.timezone("America/New_York")
+        now = now.astimezone(ny) if now is not None else _dt.now(ny)
+        if now.weekday() >= 5:
+            return False
+        hm = now.hour * 60 + now.minute
+        return 9 * 60 + 30 <= hm <= 16 * 60
+    except Exception:
+        return False
+
+
+@st.cache_data(ttl=15, show_spinner=False)
+def _us_quotes(symbols_key: str) -> dict:
+    """yfinance fast_info poll. Honest source — indices near-real-time,
+    kuch stocks 15-min delayed ho sakte hain (free feed ki limit)."""
+    out: dict = {}
+    try:
+        import yfinance as yf
+        for sym in symbols_key.split(","):
+            sym = sym.strip()
+            if not sym:
+                continue
+            try:
+                fi = yf.Ticker(sym).fast_info
+                px = float(getattr(fi, "last_price", 0) or 0)
+                prev = float(getattr(fi, "previous_close", 0) or 0)
+                if px > 0:
+                    out[sym.upper()] = {
+                        "price": px,
+                        "chg_pct": round((px - prev) / prev * 100, 2)
+                                   if prev else 0.0,
+                        "high": float(getattr(fi, "day_high", 0) or 0),
+                        "low": float(getattr(fi, "day_low", 0) or 0),
+                    }
+            except Exception:
+                continue
+    except Exception:
+        pass
+    return out
+
+
+def _render_us_watch() -> None:
+    is_open = _us_market_open()
+    chip = ("<span style='color:#00d4a0'>🟢 US OPEN</span>" if is_open else
+            "<span style='color:#8892a4'>🔴 US CLOSED</span>")
+    st.markdown(
+        f"<div style='font-size:.8rem;font-weight:700;color:#e2e8f0'>"
+        f"🇺🇸 US Market &nbsp;{chip}&nbsp; "
+        f"<span style='font-size:.65rem;color:#8892a4;font-weight:400'>"
+        f"yfinance poll ~15s · indices near-real-time, stocks 15-min "
+        f"delayed ho sakte hain (free feed) · IST: 7:00pm–1:30am</span></div>",
+        unsafe_allow_html=True)
+    raw = st.text_input("US symbols", value=st.session_state.get(
+        "lw_us_syms", _US_DEFAULT), key="lw_us_input",
+        help="Yahoo tickers: AAPL, NVDA, ^GSPC (S&P), ^IXIC (Nasdaq)…")
+    st.session_state["lw_us_syms"] = raw
+    symbols = [x.strip().upper() for x in raw.split(",") if x.strip()][:10]
+    if not symbols:
+        return
+    q = _us_quotes(",".join(symbols))
+    cols = st.columns(3)
+    for i, sym in enumerate(symbols):
+        d = q.get(sym)
+        with cols[i % 3]:
+            label = _US_NAMES.get(sym, sym)
+            if not d:
+                st.markdown(
+                    f"<div style='{_TILE};opacity:.55;margin-bottom:8px'>"
+                    f"<b style='font-family:JetBrains Mono,monospace'>{label}"
+                    f"</b><br><span style='font-size:.72rem;color:#8892a4'>"
+                    f"data nahi</span></div>", unsafe_allow_html=True)
+                continue
+            c = "#00d4a0" if d["chg_pct"] >= 0 else "#ff4b4b"
+            hl = (f"<br><span style='font-size:.68rem;color:#64748b'>day "
+                  f"{d['low']:,.1f}–{d['high']:,.1f}</span>"
+                  if d.get("high") else "")
+            st.markdown(
+                f"<div style='{_TILE};margin-bottom:8px'>"
+                f"<span style='font-weight:800;font-family:JetBrains Mono,"
+                f"monospace;color:#e2e8f0'>{label}</span> "
+                f"<span style='float:right;font-size:.6rem;color:#8892a4'>"
+                f"{'poll' if is_open else 'close'}</span><br>"
+                f"<span style='font-size:1.2rem;font-weight:800;"
+                f"color:#e8eaf0'>{d['price']:,.2f}</span> "
+                f"<span style='color:{c};font-weight:700'>"
+                f"{d['chg_pct']:+.2f}%</span>{hl}</div>",
+                unsafe_allow_html=True)

@@ -1119,6 +1119,20 @@ class TestStrictLiveDisplay:
         assert sc._pick_best_trade(rows)["symbol"] == "STALE"
 
 
+class TestUSMarketClock:
+    def test_us_session_boundaries(self):
+        import pytz
+        from datetime import datetime as dt
+        from ui.live_watch import _us_market_open
+        ny = pytz.timezone("America/New_York")
+        # Tue 10:00 NY → open; Tue 09:00 → pre-market; Tue 16:30 → closed
+        assert _us_market_open(ny.localize(dt(2026, 7, 14, 10, 0))) is True
+        assert _us_market_open(ny.localize(dt(2026, 7, 14, 9, 0))) is False
+        assert _us_market_open(ny.localize(dt(2026, 7, 14, 16, 30))) is False
+        # weekend
+        assert _us_market_open(ny.localize(dt(2026, 7, 12, 12, 0))) is False
+
+
 class TestLiveTicker:
     def test_tick_fold_and_age(self, monkeypatch):
         import data.live_ticker as lt
