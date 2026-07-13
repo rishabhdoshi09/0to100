@@ -828,6 +828,54 @@ class TestAutopilot:
         assert float(t["entry_price"]) == 4530.0            # live, not 4500
         assert abs(float(t["target_price"]) - 4530 * 1.03) < 1.0
 
+    def test_fill_preserves_signal_price_once(self, tmp_path, monkeypatch):
+        """Reconciled fill overwrites entry_price but the ORIGINAL signal
+        price survives in signal_price — and a second fill can't clobber it."""
+        import sqlite3
+        ap, te = self._setup(tmp_path, monkeypatch)
+        ap.arm()
+        monkeypatch.setattr(ap, "_in_window", lambda now=None: True)
+        assert ap.consider("HAL", 4500, 4300, 80, 0.2, "Defence", "t") is True
+        ap._ensure_exit_col()
+        tid = te.recent_trades(1)[0]["id"]
+        ap._apply_entry_fill(tid, 4507.35)
+        ap._apply_entry_fill(tid, 4999.0)      # bogus second reconcile
+        conn = sqlite3.connect(te._DB); conn.row_factory = sqlite3.Row
+        row = dict(conn.execute("SELECT * FROM trades WHERE id=?",
+                                (tid,)).fetchone())
+        conn.close()
+        assert float(row["signal_price"]) == 4500.0    # original, once
+        assert float(row["entry_price"]) == 4999.0     # latest broker truth
+
+    def test_execution_quality_math(self, tmp_path, monkeypatch):
+        import sqlite3
+        from datetime import datetime as dt
+        ap, te = self._setup(tmp_path, monkeypatch)
+        conn = sqlite3.connect(te._DB)
+        conn.execute(te._DDL)
+        conn.commit(); conn.close()
+        ap._ensure_exit_col()
+        conn = sqlite3.connect(te._DB)
+        # WIN: signal 100 → fill 100.5 (+0.5% entry slip), target 103,
+        # actual exit 102.8 (−0.194% exit slip). qty 10.
+        conn.execute(
+            "INSERT INTO trades (placed_at, mode, symbol, qty, entry_type, "
+            "entry_price, stop_price, target_price, product, status, note, "
+            "signal_price, exit_price) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (dt.now().isoformat(timespec='seconds'), "LIVE", "W", 10,
+             "MARKET", 100.5, 95, 103, "CNC", "AUTO_WIN", "AUTOPILOT:t",
+             100.0, 102.8))
+        conn.commit(); conn.close()
+        eq = ap.execution_quality()
+        assert eq["n_entry"] == 1 and eq["n_exit"] == 1
+        assert eq["avg_entry_slip_pct"] == pytest.approx(0.5)
+        assert eq["avg_exit_slip_pct"] == pytest.approx(-0.194, abs=0.01)
+        # cost = (100.5-100)*10 + (103-102.8)*10 = 5 + 2 = 7
+        assert eq["slippage_cost"] == 7
+        # PAPER trades kabhi ledger mein nahi aate
+        self._insert_closed(te, "P", 100, 95, 103, 10, win=True)
+        assert ap.execution_quality()["n_entry"] == 1
+
     def test_eod_digest_once_per_day(self, tmp_path, monkeypatch):
         from datetime import datetime as dt
         ap, _ = self._setup(tmp_path, monkeypatch)

@@ -303,7 +303,7 @@ def _ensure_exit_col() -> None:
     try:
         from execution.trade_executor import _DB
         conn = sqlite3.connect(_DB)
-        for col in ("exit_price REAL", "orig_stop REAL"):
+        for col in ("exit_price REAL", "orig_stop REAL", "signal_price REAL"):
             try:
                 conn.execute(f"ALTER TABLE trades ADD COLUMN {col}")
                 conn.commit()
@@ -324,6 +324,65 @@ def _update_trade(trade_id: int, sets: str, params: tuple) -> None:
         conn.close()
     except Exception as exc:
         log.debug("autopilot_trade_update_failed", error=str(exc))
+
+
+def _apply_entry_fill(trade_id: int, avg_fill: float) -> None:
+    """Actual fill journal mein — SIGNAL price pehle preserve hota hai
+    (COALESCE: sirf pehli baar), warna slippage kabhi measure nahi hogi."""
+    import sqlite3
+    try:
+        from execution.trade_executor import _DB
+        conn = sqlite3.connect(_DB)
+        conn.execute(
+            "UPDATE trades SET signal_price=COALESCE(signal_price, entry_price), "
+            "entry_price=?, note=note||? WHERE id=?",
+            (avg_fill, f" | fill ₹{avg_fill:,.2f}", trade_id))
+        conn.commit()
+        conn.close()
+    except Exception as exc:
+        log.debug("autopilot_entry_fill_failed", error=str(exc))
+
+
+def execution_quality() -> dict:
+    """Slippage ledger — backtest aur reality ke beech ka gap, measured.
+
+    Entry slip: actual fill vs signal price (positive = zyada diya).
+    Exit slip: actual exchange exit vs planned GTT leg (negative = kam
+    mila). Cost ₹: dono sides ka total — '3% target' asli mein kitna
+    hai, yeh number batata hai. LIVE trades only; PAPER mein slippage
+    hota hi nahi.
+    """
+    rows = [t for t in _autopilot_trades(
+        _OPEN_STATUSES + _CLOSED_WIN + _CLOSED_LOSS) if t["mode"] == "LIVE"]
+    entry_slips: list[float] = []
+    exit_slips: list[float] = []
+    cost = 0.0
+    for t in rows:
+        qty = int(t["qty"] or 0)
+        sig = float(t.get("signal_price") or 0)
+        entry = float(t["entry_price"] or 0)
+        if sig > 0 and entry > 0:
+            entry_slips.append((entry - sig) / sig * 100)
+            cost += (entry - sig) * qty
+        actual_exit = float(t.get("exit_price") or 0)
+        if actual_exit > 0:
+            planned = (float(t["target_price"] or 0)
+                       if t["status"] in _CLOSED_WIN
+                       else float(t["stop_price"] or 0))
+            if planned > 0:
+                exit_slips.append((actual_exit - planned) / planned * 100)
+                cost += (planned - actual_exit) * qty
+    return {
+        "n_entry": len(entry_slips),
+        "avg_entry_slip_pct": (round(sum(entry_slips) / len(entry_slips), 3)
+                               if entry_slips else 0.0),
+        "worst_entry_slip_pct": (round(max(entry_slips), 3)
+                                 if entry_slips else 0.0),
+        "n_exit": len(exit_slips),
+        "avg_exit_slip_pct": (round(sum(exit_slips) / len(exit_slips), 3)
+                              if exit_slips else 0.0),
+        "slippage_cost": round(cost, 0),
+    }
 
 
 def _planned_exit(t: dict) -> float:
@@ -880,8 +939,7 @@ def _reconcile_live_fills() -> None:
             if stt == "COMPLETE":
                 avg = float(od.get("average_price") or 0)
                 if avg > 0 and abs(avg - float(t["entry_price"] or 0)) >= 0.05:
-                    _update_trade(t["id"], "entry_price=?, note=note||?",
-                                  (avg, f" | fill ₹{avg:,.2f}"))
+                    _apply_entry_fill(t["id"], avg)
         sells = [o for o in orders
                  if str(o.get("tradingsymbol", "")) == t["symbol"]
                  and str(o.get("transaction_type", "")).upper() == "SELL"

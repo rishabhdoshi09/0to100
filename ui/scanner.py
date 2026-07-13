@@ -653,7 +653,7 @@ def render_scanner(universe: list[str]) -> None:
     with c1:
         scope_options = {
             "NIFTY 500 — fast (~1 min)": nifty500,
-            f"Poora NSE — {len(universe)} stocks (~3-4 min)": universe,
+            f"Poora NSE — {len(universe)} stocks (warm ~1 min · pehli baar ~3-4 min)": universe,
         }
         scope_label = st.selectbox("Kahan scan karein", list(scope_options.keys()),
                                    index=0, key="scanner_scope")

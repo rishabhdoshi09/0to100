@@ -277,6 +277,26 @@ def _render_report_card() -> None:
     r5.metric("Profit factor", f"{stats['profit_factor']:.2f}",
               delta=f"max DD ₹{stats['max_drawdown']:,.0f}", delta_color="off")
 
+    try:
+        from execution.autopilot import execution_quality
+        eq = execution_quality()
+        if eq["n_entry"] or eq["n_exit"]:
+            _eff = ""
+            if eq["n_entry"] >= 5:
+                from execution.autopilot import get_status as _gs
+                _tp = float(_gs().get("target_pct", 3.0))
+                _eff = (f" · asli target ≈ +{_tp - eq['avg_entry_slip_pct'] + eq['avg_exit_slip_pct']:.2f}%"
+                        f" (set +{_tp:.0f}%)")
+            st.caption(
+                f"⚙️ **Execution quality (LIVE fills)** — entry slip avg "
+                f"{eq['avg_entry_slip_pct']:+.2f}% (worst "
+                f"{eq['worst_entry_slip_pct']:+.2f}%, n={eq['n_entry']}) · "
+                f"exit slip avg {eq['avg_exit_slip_pct']:+.2f}% "
+                f"(n={eq['n_exit']}) · slippage cost ₹{eq['slippage_cost']:,.0f}"
+                + _eff)
+    except Exception:
+        pass
+
     by_src = rc.get("by_source", {})
     if by_src:
         bits = []

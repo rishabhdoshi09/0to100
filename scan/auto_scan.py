@@ -27,7 +27,10 @@ _last_scan_ts: float = 0.0
 _status: str = "idle"          # idle | scanning | ready | error
 _thread_started: bool = False
 
-_MARKET_REFRESH_S = 900        # 15 min during market hours
+_MARKET_REFRESH_S = 300        # 5 min during market hours — warm scan is
+                               # ~13s on the cached store, so 15 min was
+                               # habit, not necessity; breakouts 10 min
+                               # earlier + fresher sniper watch-map
 _OFFHOURS_REFRESH_S = 3600     # hourly otherwise
 
 
