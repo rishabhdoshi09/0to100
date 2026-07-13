@@ -27,10 +27,14 @@ _last_scan_ts: float = 0.0
 _status: str = "idle"          # idle | scanning | ready | error
 _thread_started: bool = False
 
-_MARKET_REFRESH_S = 300        # 5 min during market hours — warm scan is
-                               # ~13s on the cached store, so 15 min was
-                               # habit, not necessity; breakouts 10 min
-                               # earlier + fresher sniper watch-map
+# 15 min is a DECISION, not a leftover: instant breakouts are the
+# sniper's job (WebSocket ticks); this scan's job is structural —
+# patterns, sector heat, conviction — and patterns don't form in 5
+# minutes. Faster cycles just 3× the NSE-snapshot/news load (public
+# API block risk) and the laptop's duty cycle for marginal value.
+# Tune via .env QT_SCAN_REFRESH_S if ever needed — not via code edits.
+import os as _os
+_MARKET_REFRESH_S = int(_os.getenv("QT_SCAN_REFRESH_S", "900") or 900)
 _OFFHOURS_REFRESH_S = 3600     # hourly otherwise
 
 
