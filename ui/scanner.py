@@ -33,29 +33,41 @@ _CAT_COLOR = {"Momentum": "#38bdf8", "Breakout": "#a78bfa", "Pattern": "#f472b6"
               "PreBreakout": "#facc15"}
 
 
-@st.cache_data(ttl=120, show_spinner=False)
+@st.cache_data(ttl=60, show_spinner=False)
 def _live_quotes(symbols_key: str) -> dict:
-    """Live quotes — Kite → NSE → Google (unified source). Cached 2 min."""
+    """Live quotes — Kite → NSE → Google (unified source). Cached 1 min;
+    STRICT: no cap — every displayed card gets a render-time price
+    (Kite bulk quote is 500 symbols/call)."""
     try:
         from data.live_quotes import get_live_quotes
-        return get_live_quotes(symbols_key.split(",")[:80])
+        return get_live_quotes(symbols_key.split(","))
     except Exception:
         return {}
 
 
+def _mkt_open() -> bool:
+    try:
+        from scan.auto_scan import _is_market_hours
+        return _is_market_hours()
+    except Exception:
+        return False
+
+
 def _apply_live_prices(results: list[dict]) -> None:
-    """Overlay current prices at render time. Marks each card live/EOD —
-    a stale price must LOOK stale, never pretend to be current."""
-    syms = [r["symbol"] for r in results[:80]]
+    """Overlay current prices at render time — EVERY card, not a top slice.
+    Marks each card live/EOD — a stale price must LOOK stale, never
+    pretend to be current. Off-hours nothing is 'live' by definition."""
+    syms = [r["symbol"] for r in results]
     if not syms:
         return
     live = _live_quotes(",".join(syms))
-    for r in results[:80]:
+    is_open = _mkt_open()
+    for r in results:
         q = live.get(r["symbol"])
         if not (q and q.get("price")):
             r["live"] = False
             continue
-        r["live"] = True
+        r["live"] = is_open      # market band → koi card 'live' nahi
         r["price"] = q["price"]
         r["change_pct"] = q["chg_pct"]
         entry = float(r.get("entry") or 0)
@@ -380,7 +392,9 @@ def _render_high_conviction(results: list[dict]) -> None:
     buy verdict + score ≥75 + backtested edge ≥ +0.10R (tagged by the
     scan pipeline). These deserve the first look — and the autopilot
     fills its daily slots from this same ranking."""
-    hc = sorted([r for r in results if r.get("high_conviction")],
+    require_live = _mkt_open()
+    hc = sorted([r for r in results if r.get("high_conviction")
+                 and (r.get("live") or not require_live)],
                 key=lambda r: float(r.get("conviction_rank", 0)),
                 reverse=True)[:5]
     if not hc:
@@ -418,11 +432,17 @@ def _render_high_conviction(results: list[dict]) -> None:
 def _pick_best_trade(results: list[dict]) -> dict | None:
     """The single most actionable setup: buy verdict + non-negative measured
     edge + live price not broken below entry. Results are already sorted
-    verdict-first + edge-weighted, so the first qualifier IS the best."""
+    verdict-first + edge-weighted, so the first qualifier IS the best.
+
+    STRICT: market hours mein bina live-verified price ke koi card
+    'THE trade' nahi ban sakta — unverified hero = stale hero."""
+    require_live = _mkt_open()
     for r in results[:25]:
         if r.get("verdict") not in ("STRONG BUY", "BUY"):
             continue
         if (r.get("edge_r") is not None) and r["edge_r"] < 0:
+            continue
+        if require_live and not r.get("live"):
             continue
         return r
     return None

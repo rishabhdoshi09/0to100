@@ -1013,6 +1013,38 @@ class TestSystemHealth:
         assert h.pulse()["latency"]["x"]["n"] == 1
 
 
+class TestStrictLiveDisplay:
+    def test_every_card_live_or_honestly_eod(self, monkeypatch):
+        import ui.scanner as sc
+        monkeypatch.setattr(sc, "_live_quotes",
+                            lambda key: {"A": {"price": 105.0, "chg_pct": 2.0}})
+        monkeypatch.setattr(sc, "_mkt_open", lambda: True)
+        rows = [{"symbol": "A", "price": 100.0, "entry": 104, "verdict": "BUY"},
+                {"symbol": "B", "price": 200.0, "entry": 205, "verdict": "BUY"}]
+        sc._apply_live_prices(rows)
+        assert rows[0]["live"] is True and rows[0]["price"] == 105.0
+        assert rows[1]["live"] is False          # quote nahi → EOD, loudly
+        # market band → kuch bhi 'live' nahi, chahe quote mile
+        monkeypatch.setattr(sc, "_mkt_open", lambda: False)
+        rows2 = [{"symbol": "A", "price": 100.0, "entry": 104,
+                  "verdict": "BUY"}]
+        sc._apply_live_prices(rows2)
+        assert rows2[0]["live"] is False
+
+    def test_hero_requires_live_in_market_hours(self, monkeypatch):
+        import ui.scanner as sc
+        rows = [
+            {"symbol": "STALE", "verdict": "STRONG BUY", "edge_r": 0.3,
+             "live": False},
+            {"symbol": "FRESH", "verdict": "BUY", "edge_r": 0.2, "live": True},
+        ]
+        monkeypatch.setattr(sc, "_mkt_open", lambda: True)
+        assert sc._pick_best_trade(rows)["symbol"] == "FRESH"
+        # off-hours: EOD hero theek hai (tag already honest)
+        monkeypatch.setattr(sc, "_mkt_open", lambda: False)
+        assert sc._pick_best_trade(rows)["symbol"] == "STALE"
+
+
 class TestLiveTicker:
     def test_tick_fold_and_age(self, monkeypatch):
         import data.live_ticker as lt

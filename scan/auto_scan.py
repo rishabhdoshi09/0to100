@@ -262,13 +262,15 @@ def _scan_once_locked(universe: Optional[list[str]] = None, progress=None) -> No
             serialized = build_conviction(serialized)
         except Exception as exc:
             log.debug("conviction_skip", error=str(exc))
-        # Live price overlay — Kite → NSE → Google (history is official NSE EOD)
+        # Live price overlay — Kite → NSE → Google (history is official NSE
+        # EOD). STRICT: har signal-wale stock pe, sirf top-60 nahi — Kite
+        # bulk quote 500/call hai, poora set 2-3 calls mein aa jata hai.
         try:
             from data.live_quotes import get_live_quotes
-            top_syms = [r["symbol"] for r in serialized[:60]]
+            top_syms = [r["symbol"] for r in serialized]
             live = get_live_quotes(top_syms)
             overlaid = 0
-            for r in serialized[:60]:
+            for r in serialized:
                 q = live.get(r["symbol"])
                 if not (q and q.get("price")):
                     r["live"] = False
@@ -292,7 +294,7 @@ def _scan_once_locked(universe: Optional[list[str]] = None, progress=None) -> No
                         r["checks"].insert(
                             0, f"⚠ Live ₹{q['price']:,.0f} entry se {slip:.0f}% neeche "
                                f"— pullback mein hai, chase mat karo")
-            log.info("live_overlay_done", overlaid=overlaid, of=min(60, len(serialized)))
+            log.info("live_overlay_done", overlaid=overlaid, of=len(serialized))
         except Exception as exc:
             log.warning("live_overlay_failed", error=str(exc))
         # Measured edge on every result — backtest data working FOR the user
