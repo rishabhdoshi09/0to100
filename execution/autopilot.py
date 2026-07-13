@@ -75,6 +75,7 @@ _DEFAULTS = {
     "breakeven_trigger_pct": 2.0,  # profit level that arms the breakeven trail
     "regime_gate": True,           # no new entries in DISTRIBUTION / BEAR tape
     "digest_date": "",             # last day the EOD digest was sent
+    "max_chase_pct": 1.0,          # live price entry se itna upar → chase NAHI
     "conviction_sizing": True,     # risk scales 0.5×–1.5× with measured edge
     "adaptive_source_gate": True,  # pause a source its OWN record proves negative
     "max_hold_days": 5,            # time-stop: stale flat positions recycle
@@ -168,6 +169,7 @@ def set_config(**kwargs) -> None:
         "target_pct": (1.0, 10.0),
         "breakeven_trigger_pct": (0.5, 8.0),
         "max_hold_days": (2, 15),
+        "max_chase_pct": (0.25, 5.0),
     }
     bools = ("trailing_enabled", "regime_gate", "conviction_sizing",
              "adaptive_source_gate")
@@ -418,6 +420,36 @@ def _market_regime() -> str:
     return val
 
 
+# ── Live price anchor: EOD/scan-time price pe trade NAHI hota ────────────────
+
+def _anchor_live(symbol: str, entry: float, stop: float,
+                 max_chase_pct: float) -> tuple[float | None, str]:
+    """(live_entry, '') ya (None, reason). Har autopilot entry ka price
+    order ke MOMENT ka live quote hota hai — signal ka entry sirf
+    reference level hai:
+      - live quote hi nahi (source down / off-hours) → NO TRADE, kabhi
+        kal ke close pe order nahi jata
+      - live stop ke neeche → setup already toota, entry bekaar
+      - live entry-level se max_chase% upar → bhaagti train ka peecha
+        nahi — extension pe buy karna edge kha jata hai
+    """
+    try:
+        from data.live_quotes import get_live_quotes
+        q = get_live_quotes([symbol]).get(symbol) or {}
+    except Exception:
+        q = {}
+    px = float(q.get("price") or 0)
+    if px <= 0:
+        return None, "live quote nahi mila — EOD/stale price pe trade NAHI"
+    if px <= stop:
+        return None, (f"live ₹{px:,.1f} stop ₹{stop:,.1f} ke neeche — "
+                      f"setup toota hua hai")
+    if entry > 0 and px > entry * (1 + max_chase_pct / 100):
+        return None, (f"live ₹{px:,.1f} entry ₹{entry:,.1f} se "
+                      f"{(px / entry - 1) * 100:.1f}% upar — chase nahi karte")
+    return px, ""
+
+
 # ── Sizing ────────────────────────────────────────────────────────────────────
 
 def _conviction_multiplier(score: float, edge) -> float:
@@ -505,6 +537,15 @@ def _consider_locked(symbol: str, entry: float, stop: float, score: float,
                 _log_activity(f"SKIP {symbol}: {paused}")
                 return False
 
+        # Gate 13: LIVE price anchor — order, target, sizing sab order ke
+        # MOMENT ke price pe, kabhi kal ke close ya 15-min-purane scan pe nahi
+        live_entry, why = _anchor_live(symbol, entry, stop,
+                                       s.get("max_chase_pct", 1.0))
+        if live_entry is None:
+            _log_activity(f"SKIP {symbol}: {why}")
+            return False
+        entry = live_entry
+
         target = round(entry * (1 + s["target_pct"] / 100), 1)
         mult = (_conviction_multiplier(score, edge)
                 if s.get("conviction_sizing", True) else 1.0)
@@ -569,7 +610,9 @@ def on_setups(results: list[dict]) -> None:
     for r in ranked:
         if r.get("verdict") not in ("STRONG BUY", "BUY"):
             continue
-        consider(symbol=r["symbol"], entry=float(r.get("price") or r.get("entry") or 0),
+        # PLANNED entry (breakout level) as the chase reference — the
+        # live anchor inside consider() supplies the actual order price
+        consider(symbol=r["symbol"], entry=float(r.get("entry") or r.get("price") or 0),
                  stop=float(r.get("stop") or 0), score=float(r.get("score") or 0),
                  edge=r.get("edge_r"), sector=r.get("sector") or "",
                  source="scanner")

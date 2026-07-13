@@ -566,6 +566,11 @@ class TestAutopilot:
         monkeypatch.setattr(ap, "_notify", lambda msg: None)
         monkeypatch.setattr(ap, "_broker_cash", lambda: 500000.0)
         monkeypatch.setattr(ap, "_market_regime", lambda: "TRENDING_BULL")
+        # tests signal price ko hi live maanein — real anchor apne dedicated
+        # tests mein alag se verify hota hai
+        self._real_anchor = ap._anchor_live
+        monkeypatch.setattr(ap, "_anchor_live",
+                            lambda sym, entry, stop, mc: (entry, ""))
         monkeypatch.setattr(sh, "sector_performance", lambda min_members=3: [
             {"sector": "Defence", "chg_1d": 1.5, "chg_5d": 3.0, "members": 4},
             {"sector": "IT / Software", "chg_1d": 0.8, "chg_5d": 1.0, "members": 5},
@@ -783,6 +788,45 @@ class TestAutopilot:
         ap.on_breakout({"symbol": "HAL", "ltp": 4500, "trigger": 4480,
                         "stop": 0, "target": 0})
         assert te.recent_trades(3) == []
+
+    def test_live_anchor_rules(self, tmp_path, monkeypatch):
+        """No live quote / broken setup / runaway price → NO trade."""
+        import data.live_quotes as lq
+        ap, _ = self._setup(tmp_path, monkeypatch)
+        anchor = self._real_anchor
+        # live quote hi nahi → None (EOD pe trade nahi)
+        monkeypatch.setattr(lq, "get_live_quotes", lambda syms, ttl=8.0: {})
+        px, why = anchor("HAL", 4500, 4300, 1.0)
+        assert px is None and "live quote nahi" in why
+        # live stop ke neeche → setup toota
+        monkeypatch.setattr(lq, "get_live_quotes",
+                            lambda syms, ttl=8.0: {"HAL": {"price": 4250.0}})
+        px, why = anchor("HAL", 4500, 4300, 1.0)
+        assert px is None and "stop" in why
+        # 1% se zyada upar → chase reject
+        monkeypatch.setattr(lq, "get_live_quotes",
+                            lambda syms, ttl=8.0: {"HAL": {"price": 4560.0}})
+        px, why = anchor("HAL", 4500, 4300, 1.0)
+        assert px is None and "chase" in why
+        # theek range mein → live price hi entry banta hai
+        monkeypatch.setattr(lq, "get_live_quotes",
+                            lambda syms, ttl=8.0: {"HAL": {"price": 4530.0}})
+        px, why = anchor("HAL", 4500, 4300, 1.0)
+        assert px == 4530.0 and why == ""
+
+    def test_order_anchored_to_live_not_signal(self, tmp_path, monkeypatch):
+        """Placed trade's entry/target = LIVE price, not the signal's."""
+        import data.live_quotes as lq
+        ap, te = self._setup(tmp_path, monkeypatch)
+        monkeypatch.setattr(ap, "_anchor_live", self._real_anchor)  # real one
+        monkeypatch.setattr(lq, "get_live_quotes",
+                            lambda syms, ttl=8.0: {"HAL": {"price": 4530.0}})
+        ap.arm()
+        monkeypatch.setattr(ap, "_in_window", lambda now=None: True)
+        assert ap.consider("HAL", 4500, 4300, 80, 0.2, "Defence", "t") is True
+        t = te.recent_trades(1)[0]
+        assert float(t["entry_price"]) == 4530.0            # live, not 4500
+        assert abs(float(t["target_price"]) - 4530 * 1.03) < 1.0
 
     def test_eod_digest_once_per_day(self, tmp_path, monkeypatch):
         from datetime import datetime as dt

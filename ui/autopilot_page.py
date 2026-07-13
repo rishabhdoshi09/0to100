@@ -79,6 +79,8 @@ def render_autopilot() -> None:
                    "stop zaroori → armed → 9:30 ke baad → daily limit → "
                    "position limit → symbol ek-baar/din → score+edge → "
                    "sector top-N positive mein → market regime theek → "
+                   "LIVE price anchor (fresh quote zaroori, stop-toota/"
+                   "chase reject — kal ke close pe trade KABHI nahi) → "
                    "capital available (reserve untouched) → LIVE mein broker "
                    "cash double-check. Din ka loss limit cross → khud DISARM. "
                    "Profit mein: stop khud breakeven pe (free trade). "
@@ -168,12 +170,21 @@ def render_autopilot() -> None:
                             f"{_sw.get('trades', 0)} samples)")
         except Exception:
             pass
-        target_pct = st.slider(
-            "Profit target (%)", 1.0, 10.0, float(s.get("target_pct", 3.0)),
-            0.5, key="ap_target",
-            help=(_rec_txt or "Har entry ka GTT target = entry × (1 + yeh %). "
-                              "Backtest chalao toh evidence-backed "
-                              "recommendation yahan dikhegi"))
+        tg1, tg2 = st.columns(2)
+        with tg1:
+            target_pct = st.slider(
+                "Profit target (%)", 1.0, 10.0, float(s.get("target_pct", 3.0)),
+                0.5, key="ap_target",
+                help=(_rec_txt or "Har entry ka GTT target = LIVE entry price "
+                                  "× (1 + yeh %). Backtest chalao toh "
+                                  "evidence-backed recommendation dikhegi"))
+        with tg2:
+            chase_pct = st.slider(
+                "Max chase (%)", 0.25, 5.0,
+                float(s.get("max_chase_pct", 1.0)), 0.25, key="ap_chase",
+                help="Live price signal-entry se isse zyada upar → trade "
+                     "SKIP. Bhaagti train ka peecha nahi — extension pe "
+                     "buy karna edge kha jata hai")
         if _rec_txt:
             st.caption(f"📊 {_rec_txt} — slider tumhara hai, evidence humara.")
         if st.button("💾 Save limits", key="ap_save", width="stretch"):
@@ -193,7 +204,8 @@ def render_autopilot() -> None:
                        conviction_sizing=conv_on,
                        adaptive_source_gate=adapt_on,
                        max_hold_days=int(hold_days),
-                       target_pct=float(target_pct))
+                       target_pct=float(target_pct),
+                       max_chase_pct=float(chase_pct))
             st.success("Limits saved. (Mode change hua ho toh dobara ARM karna hoga.)")
             st.rerun()
 
