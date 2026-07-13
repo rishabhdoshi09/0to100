@@ -34,6 +34,14 @@ from logger import get_logger
 
 log = get_logger(__name__)
 
+# yfinance apna '404 / possibly delisted / 1 Failed download' spam khud
+# print karta hai — uska logger yahin muzzle karo, hamare debug logs kaafi hain
+try:
+    import logging as _logging
+    _logging.getLogger("yfinance").setLevel(_logging.CRITICAL)
+except Exception:
+    pass
+
 
 def _kite_available() -> bool:
     return bool(os.getenv("KITE_API_KEY", "") and os.getenv("KITE_ACCESS_TOKEN", ""))
@@ -145,13 +153,29 @@ def get_historical_data(
         return get_historical_data_yfinance(symbol, interval, from_date, to_date)
     if source == "kite":
         return get_historical_data_kite(symbol, interval, from_date, to_date)
-    # auto
+    # auto — dead-symbol registry first: a delisted symbol must not cost
+    # a Kite miss + a Yahoo 404 on EVERY cycle
+    try:
+        from data.dead_symbols import is_dead, mark_dead
+    except Exception:
+        is_dead = lambda s: False           # noqa: E731
+        mark_dead = lambda s, r="": None    # noqa: E731
+    if is_dead(symbol):
+        raise ValueError(f"{symbol}: dead-symbol registry (delisted?) — skip")
+    kite_says_missing = False
     if _kite_available():
         try:
             return get_historical_data_kite(symbol, interval, from_date, to_date)
         except Exception as e:
+            kite_says_missing = "not found in NSE instrument" in str(e)
             log.debug("kite_hist_fallback_yf", symbol=symbol, error=str(e)[:80])
-    return get_historical_data_yfinance(symbol, interval, from_date, to_date)
+    try:
+        return get_historical_data_yfinance(symbol, interval, from_date, to_date)
+    except Exception:
+        if kite_says_missing:
+            # Both authorities agree the symbol doesn't exist → register
+            mark_dead(symbol, "kite instrument missing + yfinance no data")
+        raise
 
 
 # ── Live quote providers ──────────────────────────────────────────────────────

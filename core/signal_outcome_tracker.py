@@ -188,6 +188,14 @@ def update_outcomes(lookback_days: int = 30) -> None:
             """Returns (id, outcome_price, outcome_pct, worked) or None on error."""
             symbol = row["symbol"]
             entry = row["entry_price"]
+            # Delisted symbol can NEVER resolve — close it as VOID (worked=-1,
+            # excluded from accuracy math) instead of retrying every cycle
+            try:
+                from data.dead_symbols import is_dead
+                if is_dead(symbol):
+                    return (row["id"], 0.0, 0.0, -1)
+            except Exception:
+                pass
             # No-fill check first: order never triggered = not a trade.
             # worked=-1 marks NO_FILL (excluded from all accuracy math).
             if entry and not _entry_was_triggered(symbol, float(entry),

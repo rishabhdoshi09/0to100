@@ -123,6 +123,15 @@ def get_live_quotes(symbols: list[str], ttl: float = _QUOTE_TTL_S) -> dict[str, 
         if name == "google" and not quotes and not fetched and len(missing) > 5:
             log.info("live_quotes_offline_skip", missing=len(missing))
             break
+        if name == "google":
+            # per-symbol scrape pass — registered-dead symbols skip karo
+            try:
+                from data.dead_symbols import is_dead
+                missing = [s for s in missing if not is_dead(s)]
+            except Exception:
+                pass
+            if not missing:
+                break
         got = fn(missing)
         fetched.update(got)
         if got:

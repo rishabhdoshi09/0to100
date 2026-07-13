@@ -969,6 +969,67 @@ class TestSystemHealth:
         assert h.pulse()["latency"]["x"]["n"] == 1
 
 
+class TestDeadSymbolRegistry:
+    def _fresh(self, tmp_path, monkeypatch):
+        import data.dead_symbols as ds
+        monkeypatch.setattr(ds, "_FILE", tmp_path / "dead.json")
+        monkeypatch.setattr(ds, "_cache", None, raising=False)
+        return ds
+
+    def test_mark_ttl_and_persistence(self, tmp_path, monkeypatch):
+        ds = self._fresh(tmp_path, monkeypatch)
+        assert not ds.is_dead("ACLGATI")
+        ds.mark_dead("ACLGATI", "kite missing + yf 404")
+        assert ds.is_dead("ACLGATI") and ds.is_dead("aclgati")
+        # survives a process restart (reload from disk)
+        monkeypatch.setattr(ds, "_cache", None, raising=False)
+        assert ds.is_dead("ACLGATI")
+        # TTL expiry → one fresh chance (relist/rename auto-heals)
+        ds._load()["ACLGATI"]["ts"] = 0
+        assert not ds.is_dead("ACLGATI")
+
+    def test_history_path_registers_and_stops_asking(self, tmp_path, monkeypatch):
+        import data.market_data as md
+        ds = self._fresh(tmp_path, monkeypatch)
+        calls = {"yf": 0}
+
+        def _kite_fail(*a, **k):
+            raise ValueError("Instrument ACLGATI not found in NSE instrument list")
+
+        def _yf_fail(*a, **k):
+            calls["yf"] += 1
+            raise ValueError("No data returned from yfinance for ACLGATI")
+        monkeypatch.setattr(md, "_kite_available", lambda: True)
+        monkeypatch.setattr(md, "get_historical_data_kite", _kite_fail)
+        monkeypatch.setattr(md, "get_historical_data_yfinance", _yf_fail)
+        # first attempt: both fail → registered
+        with pytest.raises(ValueError):
+            md.get_historical_data("ACLGATI")
+        assert calls["yf"] == 1 and ds.is_dead("ACLGATI")
+        # every later attempt: instant skip, ZERO network calls
+        with pytest.raises(ValueError, match="dead-symbol registry"):
+            md.get_historical_data("ACLGATI")
+        assert calls["yf"] == 1
+
+    def test_live_symbol_never_registered(self, tmp_path, monkeypatch):
+        """Kite down for a NORMAL reason (token expired) must not mark
+        a healthy symbol dead even if yfinance also hiccups."""
+        import data.market_data as md
+        ds = self._fresh(tmp_path, monkeypatch)
+
+        def _kite_fail(*a, **k):
+            raise ValueError("Incorrect `api_key` or `access_token`")
+
+        def _yf_fail(*a, **k):
+            raise ValueError("timeout")
+        monkeypatch.setattr(md, "_kite_available", lambda: True)
+        monkeypatch.setattr(md, "get_historical_data_kite", _kite_fail)
+        monkeypatch.setattr(md, "get_historical_data_yfinance", _yf_fail)
+        with pytest.raises(ValueError):
+            md.get_historical_data("RELIANCE")
+        assert not ds.is_dead("RELIANCE")
+
+
 class TestProviderPolicy:
     def test_provider_upgrades_to_kite_after_login(self, monkeypatch):
         """App opened before morning Kite login must NOT stay on Google
