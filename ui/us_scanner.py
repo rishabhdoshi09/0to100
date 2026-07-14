@@ -14,7 +14,8 @@ import streamlit as st
 _CARD = ("background:#0d1421;border:1px solid #1e293b;border-radius:10px;"
          "padding:12px 16px;margin-bottom:8px")
 _CAT_COLOR = {"Momentum": "#38bdf8", "Breakout": "#a78bfa",
-              "Pattern": "#f472b6", "PreBreakout": "#facc15"}
+              "Pattern": "#f472b6", "PreBreakout": "#facc15",
+              "Pullback": "#34d399"}
 
 
 @st.cache_data(ttl=900, show_spinner=False)
@@ -68,6 +69,21 @@ def render_us_scanner() -> None:
         f"<span style='color:#00d4a0'>⚡ {n_buy} buy</span> · "
         f"<span style='color:#fbbf24'>🎯 {n_hc} high-conviction</span></div>",
         unsafe_allow_html=True)
+
+    # ── Category filter — poora spectrum, sirf breakouts nahi ────────────────
+    _cats = ["All", "Breakout", "Pullback", "Pattern", "PreBreakout", "Momentum"]
+    _counts = {c: sum(1 for r in results if c in r.get("categories", []))
+               for c in _cats[1:]}
+    _pick = st.radio(
+        "Type", [c + (f" ({_counts[c]})" if c in _counts and _counts[c] else "")
+                 for c in _cats],
+        horizontal=True, key="us_cat_filter", label_visibility="collapsed")
+    _pick_cat = _pick.split(" (")[0]
+    if _pick_cat != "All":
+        results = [r for r in results if _pick_cat in r.get("categories", [])]
+        if not results:
+            st.caption(f"Abhi koi '{_pick_cat}' setup nahi.")
+            return
 
     for r in results[:30]:
         v = r.get("verdict", "WATCH")

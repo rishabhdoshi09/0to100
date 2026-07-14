@@ -30,7 +30,7 @@ _VERDICT_STYLE = {
 _BUY_VERDICTS = ("STRONG BUY", "BUY")
 
 _CAT_COLOR = {"Momentum": "#38bdf8", "Breakout": "#a78bfa", "Pattern": "#f472b6",
-              "PreBreakout": "#facc15"}
+              "PreBreakout": "#facc15", "Pullback": "#34d399"}
 
 
 @st.cache_data(ttl=60, show_spinner=False)

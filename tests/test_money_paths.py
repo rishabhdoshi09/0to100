@@ -1398,6 +1398,49 @@ class TestBreakoutConfirmation:
             assert r.breakout_grade == ""
 
 
+class TestPullbackSetup:
+    def test_pullback_detected_not_at_high(self):
+        """A Stage-2 uptrend that pulled back to a rising EMA on drying
+        volume + tightening = a buyable pullback, NOT a 52-week-high break."""
+        import numpy as np
+        from scan.unified_scanner import detect_pullback_support, _atr
+        # long uptrend 60→120, then a mild pullback off the ~120 high to ~112,
+        # tightening range + volume drying up
+        up = np.linspace(60, 120, 200)
+        pull = np.linspace(120, 112, 15)
+        close = np.concatenate([up, pull])
+        high = close + 0.6
+        low = close - 0.6
+        high[-15:] = close[-15:] + 0.3          # tightening
+        low[-15:] = close[-15:] - 0.3
+        vol = np.concatenate([np.full(200, 2_000_000), np.full(15, 800_000)])
+        atr = _atr(high, low, close)
+        ok, reason, pivot = detect_pullback_support(close, high, low, vol, atr)
+        assert ok is True
+        assert "pullback" in reason.lower()
+        assert pivot > close[-1]                 # recent high above current px
+
+    def test_no_pullback_when_extended(self):
+        import numpy as np
+        from scan.unified_scanner import detect_pullback_support, _atr
+        # straight vertical run, no pullback, price AT the high → not a pullback
+        close = np.linspace(60, 130, 215)
+        high = close + 0.6; low = close - 0.6
+        vol = np.full(215, 2_000_000)
+        ok, _, _ = detect_pullback_support(close, high, low, vol, _atr(high, low, close))
+        assert ok is False
+
+    def test_no_pullback_in_downtrend(self):
+        import numpy as np
+        from scan.unified_scanner import detect_pullback_support, _atr
+        # below a falling 50-EMA → never a buyable pullback
+        close = np.linspace(130, 70, 215)
+        high = close + 0.6; low = close - 0.6
+        vol = np.full(215, 1_000_000)
+        ok, _, _ = detect_pullback_support(close, high, low, vol, _atr(high, low, close))
+        assert ok is False
+
+
 class TestFallingKnifeFilter:
     def test_beaten_down_arr_threshold(self):
         from scan.unified_scanner import is_beaten_down_arr

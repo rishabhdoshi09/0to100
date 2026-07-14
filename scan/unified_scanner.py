@@ -228,6 +228,7 @@ SIGNAL_META = {
     "NR7_COIL":        ("Coiled — tightest day in 7",  "PreBreakout", 14),
     "POCKET_PIVOT":    ("Pocket pivot volume",         "PreBreakout", 20),
     "MOMENTUM":        ("Strong momentum",             "Momentum",    20),
+    "PULLBACK_SUPPORT": ("Uptrend pullback to support", "Pullback",   26),
 }
 
 
@@ -506,6 +507,15 @@ class UnifiedScanner:
                 reasons.append("Aaj ki buying volume ne pichhle 10 din ki har "
                                "selling volume ko hara diya")
 
+        # ── Buyable pullback (NOT at 52w high — the other kind of setup) ──────
+        pb_ok, pb_reason, pb_pivot = detect_pullback_support(
+            close, high, low, vol, atr)
+        if pb_ok:
+            signals.append("PULLBACK_SUPPORT")
+            reasons.append(pb_reason + sess_tag)
+            if pb_pivot and not pivot:
+                pivot = pb_pivot
+
         if not signals:
             return None
         signals = signals[:6]
@@ -662,3 +672,66 @@ def _bb_width(close: np.ndarray, idx: int, period: int = 20) -> float:
 
 def _norm(val: float, lo: float, hi: float) -> float:
     return max(0.0, min(1.0, (val - lo) / (hi - lo))) if hi != lo else 0.5
+
+
+def _ema_np(arr, span: int) -> float:
+    """Latest EMA value of a numpy array (no pandas in the hot loop)."""
+    a = arr[-(span * 3):] if len(arr) > span * 3 else arr
+    if len(a) == 0:
+        return 0.0
+    k = 2.0 / (span + 1)
+    e = float(a[0])
+    for x in a[1:]:
+        e = float(x) * k + e * (1 - k)
+    return e
+
+
+def detect_pullback_support(close, high, low, vol, atr: float) -> tuple[bool, str, float]:
+    """Buyable pullback: a Stage-2 uptrend stock that has PULLED BACK to a
+    rising 20/50-EMA on drying volume and is tightening — a low-risk
+    continuation entry that is NOT at a 52-week high. (The other setups
+    hug the highs; this one deliberately does not.)
+
+    Returns (found, reason, pivot). Pivot = the recent minor swing high
+    the next leg would clear."""
+    try:
+        import numpy as _np
+        if len(close) < 60:
+            return False, "", 0.0
+        price = float(close[-1])
+        ema20 = _ema_np(close, 20)
+        ema50 = _ema_np(close, 50)
+        ema50_prior = _ema_np(close[:-10], 50)
+        sma200 = float(_np.mean(close[-200:])) if len(close) >= 200 else 0.0
+        # Stage-2 uptrend: RISING 50-EMA + above the 200-SMA. Price may dip
+        # slightly BELOW the 50-EMA on the pullback (that's the point) — allow
+        # up to 3% below; a deeper break isn't a pullback.
+        if not (ema50 > ema50_prior and price > ema50 * 0.97):
+            return False, "", 0.0
+        if sma200 and price < sma200:
+            return False, "", 0.0
+        # Pulled back from a recent high — a real dip, not extended, not a break
+        recent_high = float(_np.max(high[-30:]))
+        off_high = (recent_high - price) / recent_high if recent_high else 0.0
+        if not (0.03 <= off_high <= 0.18):
+            return False, "", 0.0
+        # Sitting ON support: within ~3.5% of the 20- or 50-EMA
+        near = (abs(price - ema20) / ema20 <= 0.035 if ema20 else False) or \
+               (abs(price - ema50) / ema50 <= 0.035 if ema50 else False)
+        if not near:
+            return False, "", 0.0
+        # Healthy pullback: volume drying up + range tightening
+        vol_dry = True
+        if vol is not None and len(vol) >= 20:
+            vol_dry = float(_np.mean(vol[-5:])) < float(_np.mean(vol[-20:]))
+        rng_now = float(_np.mean(high[-5:] - low[-5:]))
+        rng_prior = float(_np.mean(high[-20:-5] - low[-20:-5]))
+        tightening = rng_prior > 0 and rng_now < rng_prior
+        if not (vol_dry and tightening):
+            return False, "", 0.0
+        ema_lbl = "20-EMA" if (ema20 and abs(price - ema20) / ema20 <= 0.035) \
+            else "50-EMA"
+        return True, (f"Uptrend mein {off_high*100:.0f}% pullback, {ema_lbl} pe "
+                      f"support, volume dry + tightening — buyable pullback"), recent_high
+    except Exception:
+        return False, "", 0.0
