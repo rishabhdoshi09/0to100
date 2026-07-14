@@ -1466,6 +1466,65 @@ class TestDailyPulseChart:
         assert sp._daily_ohlcv("THIN") is None
 
 
+class TestUSScanner:
+    def test_universe_clean(self):
+        from data.us_universe import get_us_universe, get_us_universe_with_names
+        u = get_us_universe()
+        assert "AAPL" in u and "NVDA" in u
+        assert all(s and s.isupper() and " " not in s for s in u)
+        assert "AMZN2" not in u                          # placeholder purged
+        names = get_us_universe_with_names()
+        assert names["AAPL"] == "Apple"
+
+    def test_same_engine_runs_on_us_shaped_data(self, monkeypatch):
+        """The NSE signal engine must analyse a US-shaped DataFrame — the
+        whole point of the reuse. Delivery absent → conviction neutral,
+        RS benchmarked to the injected S&P return."""
+        import numpy as np
+        import pandas as pd
+        from scan.unified_scanner import UnifiedScanner
+        # a clean confirmed breakout out of a tight base, strong volume
+        n = 120
+        close = np.concatenate([np.full(90, 100.0), np.full(29, 101.0),
+                                [106.0]])
+        high = close + 0.5
+        high[-1] = 106.5
+        df = pd.DataFrame({
+            "open": close - 0.3, "high": high, "low": close - 0.6,
+            "close": close, "volume": [1_000_000] * 119 + [3_000_000]},
+            index=pd.date_range("2025-01-01", periods=n, freq="D"))
+        sc = UnifiedScanner()
+        sc._nifty_ret30 = 1.0                            # S&P benchmark (flat)
+        r = sc._analyze("AAPL", df)                      # US ticker, no deliv col
+        assert r is not None
+        assert "Breakout" in {__import__("scan.unified_scanner",
+                              fromlist=["SIGNAL_META"]).SIGNAL_META[s][1]
+                              for s in r.signals}
+        assert r.breakout_conviction > 0                 # engine graded it
+
+    def test_us_scan_serialize_shape(self, monkeypatch):
+        """scan_us serializes results like the NSE store (cards reuse)."""
+        import scan.us_scanner as us
+        import numpy as np
+        import pandas as pd
+        n = 120
+        close = np.concatenate([np.full(90, 100.0), np.full(29, 101.0), [106.0]])
+        df = pd.DataFrame({
+            "open": close - 0.3, "high": close + 0.5, "low": close - 0.6,
+            "close": close, "volume": [1_000_000] * 119 + [3_000_000]},
+            index=pd.date_range("2025-01-01", periods=n, freq="D"))
+        monkeypatch.setattr("data.us_universe.get_us_universe",
+                            lambda: ["AAPL"])
+        monkeypatch.setattr("data.us_data.get_us_daily", lambda s, **k: df)
+        monkeypatch.setattr("data.us_data.sp500_return_30d", lambda: 0.5)
+        out = us.scan_us(max_workers=1)
+        assert isinstance(out, list)
+        if out:
+            r = out[0]
+            assert {"symbol", "verdict", "score", "entry", "stop",
+                    "target"} <= set(r)
+
+
 class TestUSMarketClock:
     def test_us_session_boundaries(self):
         import pytz

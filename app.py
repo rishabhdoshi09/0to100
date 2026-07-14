@@ -1035,6 +1035,7 @@ with st.sidebar:
         _more_tools = [
             ("Terminal",          "⚡ Terminal"),
             ("Live Watch",        "📡 Live Watch"),
+            ("US Scanner",        "🇺🇸 US Scanner"),
             ("My Watchlist",      "👁 My Watchlist"),
             ("Journal",           "📋 Journal"),
             ("Smart Alerts",      "🔔 Smart Alerts"),
@@ -1249,6 +1250,15 @@ elif _page == "Live Watch":
     with _guard("Live Watch"):
         from ui.live_watch import render_live_watch
         render_live_watch()
+
+# ══════════════════════════════════════════════════════════════════════════════
+# PAGE: US SCANNER — same engine on US equities
+# ══════════════════════════════════════════════════════════════════════════════
+elif _page == "US Scanner":
+    from core.error_guard import guard as _guard
+    with _guard("US Scanner"):
+        from ui.us_scanner import render_us_scanner
+        render_us_scanner()
 
 
 # ══════════════════════════════════════════════════════════════════════════════
