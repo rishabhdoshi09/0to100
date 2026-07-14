@@ -1119,6 +1119,48 @@ class TestStrictLiveDisplay:
         assert sc._pick_best_trade(rows)["symbol"] == "STALE"
 
 
+class TestBreakoutConfirmation:
+    def test_grade_breakout_rules(self):
+        from scan.unified_scanner import grade_breakout as g
+        # clean: 1.0xATR clearance on 2.5x volume → grade A
+        ok, grade, _ = g(price=105, level=100, atr=5, vratio=2.5, day_change=3)
+        assert ok and grade == "A"
+        # decent: 0.6xATR on 1.7x volume → grade B (confirmed)
+        ok, grade, _ = g(price=103, level=100, atr=5, vratio=1.7, day_change=3)
+        assert ok and grade == "B"
+        # marginal clearance: 0.2xATR → NOT confirmed (false-break risk)
+        ok, grade, note = g(price=101, level=100, atr=5, vratio=2.0, day_change=3)
+        assert not ok and "clearance" in note
+        # no volume: 0.6xATR but 1.0x volume → NOT confirmed
+        ok, _, note = g(price=103, level=100, atr=5, vratio=1.0, day_change=3)
+        assert not ok and "volume" in note
+        # exhaustion gap: +10% day → NOT confirmed (chase risk)
+        ok, _, note = g(price=110, level=100, atr=5, vratio=3.0, day_change=10)
+        assert not ok and "exhaustion" in note
+        # price below level → nothing
+        assert g(price=99, level=100, atr=5, vratio=3, day_change=1)[0] is False
+
+    def test_marginal_break_is_watch_not_buy(self):
+        import numpy as np
+        import pandas as pd
+        from scan.unified_scanner import UnifiedScanner
+        n = 80
+        # flat base at ~100, resistance ~102; last bar pokes 102.3 on FLAT
+        # volume → must NOT fire a BREAKOUT (false-break guard)
+        close = np.full(n, 100.0)
+        high = np.full(n, 102.0)
+        close[-1], high[-1] = 102.3, 102.4
+        df = pd.DataFrame({
+            "open": close - 0.2, "high": high, "low": close - 1.0,
+            "close": close, "volume": [1_000_000] * n},
+            index=pd.date_range("2025-06-01", periods=n, freq="D"))
+        r = UnifiedScanner()._analyze("POKE", df)
+        if r is not None:
+            assert "BREAKOUT_52W" not in r.signals
+            assert "BREAKOUT_RES" not in r.signals
+            assert r.breakout_grade == ""
+
+
 class TestFallingKnifeFilter:
     def test_beaten_down_arr_threshold(self):
         from scan.unified_scanner import is_beaten_down_arr

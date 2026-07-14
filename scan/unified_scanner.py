@@ -53,6 +53,36 @@ _MAX_DROP = max(0.40, float(_os.getenv("QT_MAX_DROP_FROM_HIGH", "0.60") or 0.60)
 _DROP_LOOKBACK = 250
 
 
+# ── Breakout quality (the pro filter) ────────────────────────────────────────
+# A level being *touched* is not a breakout — the false-break is the single
+# biggest killer of breakout traders. A CONFIRMED breakout clears the level
+# by a slice of ATR (real room, not a 0.1% poke) AND carries volume (real
+# conviction). Marginal breaks are demoted to a WATCH, never a buy.
+_BREAKOUT_ATR_BUFFER = float(_os.getenv("QT_BREAKOUT_ATR_BUFFER", "0.25") or 0.25)
+_BREAKOUT_MIN_VOL = float(_os.getenv("QT_BREAKOUT_MIN_VOL", "1.5") or 1.5)
+_BREAKOUT_MAX_GAP = 8.0        # >8% gap up = exhaustion risk, not a clean break
+
+
+def grade_breakout(price: float, level: float, atr: float, vratio: float,
+                   day_change: float) -> tuple[bool, str, str]:
+    """(confirmed, grade, note). Grade A = clears by ≥1×ATR on ≥2× volume;
+    B = clears by buffer on ≥min volume; not confirmed = marginal poke."""
+    if level <= 0 or price <= level:
+        return False, "", ""
+    clearance = price - level
+    atr_mult = clearance / atr if atr > 0 else 0.0
+    if day_change > _BREAKOUT_MAX_GAP:
+        return False, "", f"gap {day_change:+.0f}% — exhaustion risk, chase nahi"
+    vol_ok = vratio >= _BREAKOUT_MIN_VOL
+    room_ok = atr_mult >= _BREAKOUT_ATR_BUFFER
+    if not (vol_ok and room_ok):
+        why = ("volume kam" if not vol_ok else f"clearance sirf {atr_mult:.2f}×ATR")
+        return False, "", f"marginal break ({why}) — close confirm ka wait"
+    if atr_mult >= 1.0 and vratio >= 2.0:
+        return True, "A", f"clean break: {atr_mult:.1f}×ATR upar, {vratio:.1f}× volume"
+    return True, "B", f"confirmed: {atr_mult:.2f}×ATR clear, {vratio:.1f}× volume"
+
+
 def is_beaten_down_arr(highs, close: float, max_drop: float = _MAX_DROP) -> bool:
     """Array fast-path for the scan hot loop: close vs 52-week peak high."""
     try:
@@ -128,6 +158,7 @@ class StockSignal:
     target: float = 0.0
     verdict: str = "WATCH"                 # BUY | WATCH
     pivot_distance_pct: float = 0.0        # how far below the pivot (0 = at/above)
+    breakout_grade: str = ""               # A | B | "" — confirmed-breakout quality
 
     @property
     def categories(self) -> set[str]:
@@ -253,18 +284,27 @@ class UnifiedScanner:
             signals.append("MOMENTUM")
             reasons.append(f"Up {mom5:+.1f}% in 5 days on {vratio:.1f}× volume")
 
-        # ── Breakouts (confirmed) ─────────────────────────────────────────────
+        # ── Breakouts — CONFIRMED only (ATR-cleared + volume-backed) ──────────
+        # A marginal poke is not a buy; it becomes a PRE_BREAKOUT watch so the
+        # trader waits for the close to confirm instead of chasing a false break.
+        breakout_grade = ""
         if len(high) > 60:
             hi52 = float(np.max(high[:-1]))
-            if price > hi52 * 0.998:
-                signals.append("BREAKOUT_52W")
-                reasons.append(f"Broke 52-week high ₹{hi52:,.0f}{sess_tag}")
-            else:
-                res20 = float(np.max(high[-21:-1]))
-                if price > res20 and vratio > 1.5:
-                    signals.append("BREAKOUT_RES")
-                    reasons.append(f"Broke ₹{res20:,.0f} resistance on "
-                                   f"{vratio:.1f}× volume{sess_tag}")
+            res20 = float(np.max(high[-21:-1]))
+            level, tag = (hi52, "52-week high") if price > hi52 else (res20, "resistance")
+            ok, grade, note = grade_breakout(level=level, price=price, atr=atr,
+                                             vratio=vratio, day_change=chg)
+            if ok:
+                breakout_grade = grade
+                key = "BREAKOUT_52W" if level == hi52 else "BREAKOUT_RES"
+                signals.append(key)
+                reasons.append(f"[{grade}] Broke ₹{level:,.0f} {tag} — "
+                               f"{note}{sess_tag}")
+            elif price > level and note:
+                # Cleared the level but not cleanly → watch, not buy
+                if "PRE_BREAKOUT" not in signals:
+                    signals.append("PRE_BREAKOUT")
+                    reasons.append(f"₹{level:,.0f} {tag} pe hai par {note}{sess_tag}")
 
         if len(close) >= 201:
             s50, s200 = close[-50:].mean(), close[-200:].mean()
@@ -370,6 +410,7 @@ class UnifiedScanner:
             score=round(score, 1), entry=round(entry, 1), stop=stop,
             target=target, verdict=verdict,
             pivot_distance_pct=round(pivot_dist, 2),
+            breakout_grade=breakout_grade,
         )
 
 
