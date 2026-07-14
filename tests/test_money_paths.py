@@ -745,6 +745,28 @@ class TestAutopilot:
         assert rc2["verdict"] == "READY_CANDIDATE"
         assert rc2["stats"]["profit_factor"] == 1.5
 
+    def test_sector_concentration_cap(self, tmp_path, monkeypatch):
+        """Gate 14: ek sector mein max_per_sector se zyada open positions
+        nahi — correlation cap for survival."""
+        import scan.sector_heat as sh
+        ap, te = self._setup(tmp_path, monkeypatch)
+        ap.arm()
+        monkeypatch.setattr(ap, "_in_window", lambda now=None: True)
+        ap.set_config(max_per_sector=2)
+        # everything is Defence
+        monkeypatch.setattr(sh, "sector_of", lambda sym: "Defence")
+        assert ap.consider("HAL", 4500, 4300, 80, 0.2, "Defence", "t") is True
+        assert ap.consider("BEL", 300, 290, 80, 0.2, "Defence", "t") is True
+        # third Defence name → blocked by the concentration cap
+        assert ap.consider("BDL", 1200, 1150, 80, 0.2, "Defence", "t") is False
+        # a different sector still gets through
+        monkeypatch.setattr(sh, "sector_of",
+                            lambda sym: "Defence" if sym in ("HAL", "BEL")
+                            else "IT / Software")
+        # (IT must be a top sector for the sector gate; it is in _setup)
+        assert ap.consider("INFY", 1500, 1450, 80, 0.2, "IT / Software",
+                           "t") is True
+
     def test_regime_gate_blocks_bad_tape(self, tmp_path, monkeypatch):
         """DISTRIBUTION / BEAR tape mein koi naya entry nahi; bull tape ok."""
         ap, te = self._setup(tmp_path, monkeypatch)

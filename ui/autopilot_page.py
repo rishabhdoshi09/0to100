@@ -125,6 +125,12 @@ def render_autopilot() -> None:
                                   int(s["per_trade_cap_pct"] * 100), key="ap_cap")
             max_pos = st.number_input("Max open positions", 1, 10,
                                       int(s["max_open_positions"]), key="ap_pos")
+            max_sec = st.number_input("Max per sector", 1, 5,
+                                      int(s.get("max_per_sector", 2)),
+                                      key="ap_sec",
+                                      help="Ek sector mein itni se zyada open "
+                                           "positions nahi — correlation cap, "
+                                           "sector bika toh sab saath na girein")
             max_day = st.number_input("Max trades / day", 1, 15,
                                       int(s["max_trades_per_day"]), key="ap_day")
         with l3:
@@ -212,6 +218,7 @@ def render_autopilot() -> None:
                        cash_reserve_pct=reserve / 100,
                        per_trade_cap_pct=per_trade / 100,
                        max_open_positions=int(max_pos),
+                       max_per_sector=int(max_sec),
                        max_trades_per_day=int(max_day),
                        daily_loss_limit_pct=day_loss / 100,
                        min_score=float(min_score),

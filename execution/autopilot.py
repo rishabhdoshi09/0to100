@@ -64,6 +64,7 @@ _DEFAULTS = {
     "per_trade_cap_pct": 0.20,     # one trade ≤ 20% of pool
     "risk_per_trade_pct": 0.01,    # 1% rule within the pool
     "max_open_positions": 3,
+    "max_per_sector": 2,           # correlation cap — ek sector mein zyada nahi
     "max_trades_per_day": 4,
     "daily_loss_limit_pct": 0.03,  # -3% day → circuit breaker
     "min_score": 60.0,
@@ -162,6 +163,7 @@ def set_config(**kwargs) -> None:
         "per_trade_cap_pct": (0.05, 0.50),
         "risk_per_trade_pct": (0.0025, 0.02),
         "max_open_positions": (1, 10),
+        "max_per_sector": (1, 5),
         "max_trades_per_day": (1, 15),
         "daily_loss_limit_pct": (0.01, 0.10),
         "min_score": (40.0, 95.0),
@@ -444,6 +446,18 @@ def _top_sectors() -> list[str]:
         return []
 
 
+def _open_in_sector(sector: str) -> int:
+    """Kitni open autopilot positions isi sector ki hain (correlation cap)."""
+    if not sector:
+        return 0
+    try:
+        from scan.sector_heat import sector_of
+        return sum(1 for t in _open_autopilot_trades()
+                   if sector_of(t["symbol"]) == sector)
+    except Exception:
+        return 0
+
+
 def _passes_gates(symbol: str, score: float, edge, sector: str) -> str | None:
     """None = all gates pass; otherwise the (logged) rejection reason."""
     s = _load()
@@ -458,6 +472,11 @@ def _passes_gates(symbol: str, score: float, edge, sector: str) -> str | None:
         return "max open positions reached"
     if symbol in s.get("traded_symbols", {}).get(today, []):
         return "symbol already traded today"
+    # Gate 14: sector concentration — ek sector ki N positions ek hi bet hai,
+    # woh sector bika toh sab saath stop out. Survival > extra exposure.
+    if sector and _open_in_sector(sector) >= s.get("max_per_sector", 2):
+        return (f"sector '{sector}' mein already {s['max_per_sector']} "
+                f"positions — concentration cap (ek sector = ek bet)")
     if score < s["min_score"]:
         return f"score {score:.0f} < min {s['min_score']:.0f}"
     if edge is not None and edge < 0:
