@@ -316,6 +316,17 @@ def _render_report_card() -> None:
     r5.metric("Profit factor", f"{stats['profit_factor']:.2f}",
               delta=f"max DD ₹{stats['max_drawdown']:,.0f}", delta_color="off")
 
+    # 💰 Cost transparency — gross vs net, kitna slippage+charges kha gaya
+    _gross = stats.get("gross_pnl", 0.0)
+    _costs = stats.get("total_costs", 0.0)
+    if _costs:
+        _drag = (_costs / abs(_gross) * 100) if _gross else 0.0
+        st.caption(
+            f"💰 **Reality check** — gross ₹{_gross:+,.0f} · slippage + "
+            f"charges ₹{_costs:,.0f} kha gaye ({_drag:.0f}% of gross) · "
+            f"**net ₹{stats['total_pnl']:+,.0f}**. Yeh actual Zerodha costs "
+            f"hain — paper bhi ab jhooth nahi bolta, LIVE jaisa hi feel.")
+
     try:
         from execution.autopilot import execution_quality
         eq = execution_quality()

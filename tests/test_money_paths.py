@@ -578,6 +578,18 @@ class TestAutopilot:
         ap.set_config(allocation=100000, mode="PAPER")
         return ap, te
 
+    def _zero_costs(self, monkeypatch):
+        """Neutralise slippage + charges so aggregation/verdict LOGIC tests
+        stay deterministic; cost behaviour is covered by TestCostModel."""
+        import execution.cost_model as cm
+        monkeypatch.setattr(cm, "simulate_fill",
+                            lambda price, side, is_stop=False: price)
+        monkeypatch.setattr(cm, "zerodha_charges",
+                            lambda *a, **k: {"stt": 0.0, "txn": 0.0,
+                                             "sebi": 0.0, "stamp": 0.0,
+                                             "dp": 0.0, "brokerage": 0.0,
+                                             "gst": 0.0, "total": 0.0})
+
     def test_not_armed_never_trades(self, tmp_path, monkeypatch):
         ap, te = self._setup(tmp_path, monkeypatch)
         assert ap.consider("HAL", 4500, 4300, 80, 0.2, "Defence", "t") is False
@@ -599,6 +611,25 @@ class TestAutopilot:
         assert abs(float(t["target_price"]) - 4500 * 1.03) < 1.0
         # symbol once per day
         assert ap.consider("HAL", 4500, 4300, 80, 0.2, "Defence", "t") is False
+
+    def test_pnl_is_net_of_costs_everywhere(self, tmp_path, monkeypatch):
+        """Report Card + compounding use NET P&L (slippage + Zerodha
+        charges), not idealised gross — paper must not flatter itself."""
+        import sqlite3
+        ap, te = self._setup(tmp_path, monkeypatch)
+        # WIN paper trade: entry 500, target 515, 100 sh → gross +1500
+        self._insert_closed(te, "WIN1", 500, 480, 515, 100, win=True)
+        rc = ap.report_card()
+        t0 = rc["trades"][0]
+        assert t0["gross"] == 1500                       # ideal
+        assert t0["cost"] > 0                             # costs measured
+        assert t0["pnl"] < 1500                           # net < gross
+        assert t0["pnl"] == t0["gross"] - t0["cost"]
+        assert rc["stats"]["total_costs"] > 0
+        assert rc["stats"]["total_pnl"] < rc["stats"]["gross_pnl"]
+        # compounding folds the NET number into the pool
+        ap._account_closed_trades()
+        assert 0 < ap.get_status()["realized_pnl"] < 1500
 
     def test_reserve_never_deployable_and_compounding(self, tmp_path, monkeypatch):
         import sqlite3
@@ -677,6 +708,7 @@ class TestAutopilot:
     def test_report_card_math_and_evidence_gate(self, tmp_path, monkeypatch):
         """P&L / R / equity curve exact; <30 trades can never claim READY."""
         ap, te = self._setup(tmp_path, monkeypatch)
+        self._zero_costs(monkeypatch)
         # win: (515-500)*10 = +150 @ risk (500-450)*10=500 → +0.3R
         self._insert_closed(te, "W1", 500, 450, 515, 10, win=True)
         # loss: (450-500)*10 = -500 → -1R
@@ -697,6 +729,7 @@ class TestAutopilot:
     def test_report_card_verdict_after_evidence(self, tmp_path, monkeypatch):
         """30+ trades: positive expectancy → READY; negative → NOT_READY."""
         ap, te = self._setup(tmp_path, monkeypatch)
+        self._zero_costs(monkeypatch)
         for i in range(20):
             self._insert_closed(te, f"W{i}", 100, 95, 103, 10, win=True)
         for i in range(10):
@@ -758,6 +791,7 @@ class TestAutopilot:
         """Reconciled exit_price beats the planned GTT leg in P&L everywhere."""
         import sqlite3
         ap, te = self._setup(tmp_path, monkeypatch)
+        self._zero_costs(monkeypatch)
         ap.arm()
         monkeypatch.setattr(ap, "_in_window", lambda now=None: True)
         assert ap.consider("HAL", 4500, 4300, 80, 0.2, "Defence", "t") is True
@@ -833,6 +867,7 @@ class TestAutopilot:
         today's closes, missing quote = None (never fake zero)."""
         import data.live_quotes as lq
         ap, te = self._setup(tmp_path, monkeypatch)
+        self._zero_costs(monkeypatch)
         ap.arm()
         monkeypatch.setattr(ap, "_in_window", lambda now=None: True)
         assert ap.consider("HAL", 500, 450, 80, 0.2, "Defence", "t") is True
@@ -1117,6 +1152,41 @@ class TestStrictLiveDisplay:
         # off-hours: EOD hero theek hai (tag already honest)
         monkeypatch.setattr(sc, "_mkt_open", lambda: False)
         assert sc._pick_best_trade(rows)["symbol"] == "STALE"
+
+
+class TestCostModel:
+    def test_zerodha_cnc_charges_accurate(self):
+        from execution.cost_model import zerodha_charges
+        # buy 100@1000, sell 100@1050 — known Zerodha CNC round trip
+        c = zerodha_charges(1000, 1050, 100, "CNC")
+        assert c["stt"] == pytest.approx(205.0)          # 0.1% both sides
+        assert c["stamp"] == pytest.approx(15.0)         # 0.015% buy
+        assert c["dp"] == pytest.approx(13.5)            # flat per scrip sell
+        assert c["brokerage"] == 0.0                     # free delivery
+        assert c["total"] == pytest.approx(243.36, abs=0.1)
+
+    def test_slippage_directions(self):
+        from execution.cost_model import simulate_fill
+        assert simulate_fill(1000, "BUY") > 1000         # buys slip up
+        assert simulate_fill(1000, "SELL") < 1000        # sells slip down
+        # stop sells slip MORE than target sells
+        assert simulate_fill(1000, "SELL", is_stop=True) < \
+               simulate_fill(1000, "SELL", is_stop=False)
+
+    def test_net_result_paper_vs_live(self):
+        from execution.cost_model import net_result
+        paper = net_result(1000, 1050, 100, "CNC", exit_is_stop=False, paper=True)
+        live = net_result(1000, 1050, 100, "CNC", exit_is_stop=False, paper=False)
+        assert paper["gross"] == 5000
+        assert paper["slippage"] > 0 and paper["charges"] > 0
+        assert paper["net"] < paper["gross"]             # costs bite
+        assert live["slippage"] == 0                      # real fills, no sim
+        assert live["net"] < live["gross"]                # charges still apply
+
+    def test_zero_qty_safe(self):
+        from execution.cost_model import zerodha_charges, net_result
+        assert zerodha_charges(1000, 1050, 0)["total"] == 0.0
+        assert net_result(0, 0, 0)["net"] == 0.0
 
 
 class TestBreakoutConviction:

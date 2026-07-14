@@ -395,6 +395,33 @@ def _planned_exit(t: dict) -> float:
             else float(t["stop_price"] or 0))
 
 
+def _trade_costs(t: dict) -> dict:
+    """Honest bottom line for a closed trade: gross, slippage, charges,
+    net. PAPER simulates fills (slippage); LIVE uses reconciled fills.
+    Single source of truth for every P&L number in the system."""
+    entry = float(t.get("entry_price") or 0)
+    qty = int(t.get("qty") or 0)
+    exit_px = _planned_exit(t)
+    if entry <= 0 or qty <= 0 or exit_px <= 0:
+        return {"gross": 0.0, "slippage": 0.0, "charges": 0.0,
+                "net": 0.0, "net_pct": 0.0}
+    try:
+        from execution.cost_model import net_result
+        return net_result(entry, exit_px, qty,
+                          product=(t.get("product") or "CNC"),
+                          exit_is_stop=(t.get("status") in _CLOSED_LOSS),
+                          paper=(t.get("mode") == "PAPER"))
+    except Exception:
+        gross = (exit_px - entry) * qty
+        return {"gross": gross, "slippage": 0.0, "charges": 0.0,
+                "net": gross, "net_pct": 0.0}
+
+
+def _net_pnl(t: dict) -> float:
+    """Realistic net P&L for a closed trade (gross − slippage − charges)."""
+    return _trade_costs(t)["net"]
+
+
 # ── Gates ─────────────────────────────────────────────────────────────────────
 
 def _in_window(now: datetime | None = None) -> bool:
@@ -737,8 +764,7 @@ def pnl_snapshot() -> dict:
     day_closed = 0
     for t in _autopilot_trades(_CLOSED_WIN + _CLOSED_LOSS):
         if str(t["placed_at"])[:10] == today:
-            day_realized += ((_planned_exit(t) - float(t["entry_price"] or 0))
-                             * int(t["qty"] or 0))
+            day_realized += _net_pnl(t)         # net of costs
             day_closed += 1
     return {
         "positions": positions,
@@ -764,7 +790,7 @@ def source_stats() -> dict[str, dict]:
         entry = float(t["entry_price"] or 0)
         qty = int(t["qty"] or 0)
         stop = float(t.get("orig_stop") or 0) or float(t["stop_price"] or 0)
-        pnl = (_planned_exit(t) - entry) * qty
+        pnl = _net_pnl(t)
         risk = (entry - stop) * qty
         d = out.setdefault(src, {"n": 0, "wins": 0, "total_pnl": 0.0, "_r": 0.0})
         d["n"] += 1
@@ -874,7 +900,8 @@ def report_card() -> dict:
         stop = float(t["stop_price"] or 0)
         win = t["status"] in _CLOSED_WIN
         exit_px = _planned_exit(t)
-        pnl = round((exit_px - entry) * qty, 0)
+        costs = _trade_costs(t)
+        pnl = round(costs["net"], 0)            # NET of slippage + charges
         # R uses the ORIGINAL stop — a breakeven-trailed stop would zero
         # the denominator and hide the risk that was actually taken
         risk_stop = float(t.get("orig_stop") or 0) or stop
@@ -890,8 +917,10 @@ def report_card() -> dict:
             "qty": qty,
             "entry": entry,
             "exit": exit_px,
-            "win": win,
+            "win": pnl > 0,
             "pnl": pnl,
+            "gross": round(costs["gross"], 0),
+            "cost": round(costs["slippage"] + costs["charges"], 0),
             "r": round(pnl / risk, 2) if risk > 0 else 0.0,
             "equity": equity,
         })
@@ -907,6 +936,8 @@ def report_card() -> dict:
         "losses": len(losses),
         "win_rate": round(len(wins) / n * 100, 1) if n else 0.0,
         "total_pnl": round(sum(t["pnl"] for t in trades), 0),
+        "gross_pnl": round(sum(t["gross"] for t in trades), 0),
+        "total_costs": round(sum(t["cost"] for t in trades), 0),
         "avg_win": round(gross_win / len(wins), 0) if wins else 0.0,
         "avg_loss": round(-gross_loss / len(losses), 0) if losses else 0.0,
         "expectancy_r": round(sum(t["r"] for t in trades) / n, 2) if n else 0.0,
@@ -1120,8 +1151,7 @@ def eod_digest(now: datetime | None = None) -> bool:
         return False                       # boring day, koi spam nahi
 
     wins = [t for t in closed_today if t["status"] in _CLOSED_WIN]
-    day_pnl = sum((_planned_exit(t) - float(t["entry_price"] or 0))
-                  * int(t["qty"] or 0) for t in closed_today)
+    day_pnl = sum(_net_pnl(t) for t in closed_today)      # net of costs
     unreal = 0.0
     if open_trades:
         try:
@@ -1163,15 +1193,13 @@ def _account_closed_trades() -> None:
         for t in closed:
             if t["id"] in seen:
                 continue
-            entry = float(t["entry_price"] or 0)
             qty = int(t["qty"] or 0)
-            exit_px = _planned_exit(t)
-            pnl = round((exit_px - entry) * qty, 0)
+            pnl = round(_net_pnl(t), 0)         # net of slippage + charges
             s["realized_pnl"] = round(s.get("realized_pnl", 0.0) + pnl, 0)
             seen.add(t["id"])
             changed = True
             _notify(f"CLOSED <b>{t['symbol']}</b> {'🟢 WIN' if pnl >= 0 else '🔴 LOSS'} "
-                    f"₹{pnl:+,.0f}\nPool ab: ₹{s['allocation'] + s['realized_pnl']:,.0f} "
+                    f"₹{pnl:+,.0f} (net)\nPool ab: ₹{s['allocation'] + s['realized_pnl']:,.0f} "
                     f"(compounded)")
         s["accounted_ids"] = sorted(seen)[-500:]
     if changed:
@@ -1214,8 +1242,7 @@ def _circuit_breaker() -> None:
     day_realized = 0.0
     for t in _autopilot_trades(_CLOSED_WIN + _CLOSED_LOSS):
         if str(t["placed_at"])[:10] == today:
-            entry = float(t["entry_price"] or 0)
-            day_realized += (_planned_exit(t) - entry) * int(t["qty"] or 0)
+            day_realized += _net_pnl(t)         # net of costs — breaker on truth
 
     unrealized = 0.0
     open_trades = _open_autopilot_trades()
