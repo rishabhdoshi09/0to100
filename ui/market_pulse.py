@@ -64,6 +64,28 @@ def _fetch_pulse_data() -> dict:
     return result
 
 
+@st.cache_data(ttl=180, show_spinner=False)
+def _fetch_us_pulse_data() -> dict:
+    """S&P 500, Nasdaq, Dow — for the US market-hours strip."""
+    result: dict = {}
+    try:
+        import yfinance as yf
+        for key, tk in (("nifty", "^GSPC"), ("banknifty", "^IXIC"),
+                        ("vix", "^DJI")):
+            try:
+                fi = yf.Ticker(tk).fast_info
+                last = float(getattr(fi, "last_price", 0) or 0)
+                prev = float(getattr(fi, "previous_close", 0) or 0)
+                if last:
+                    result[key] = {"price": last,
+                                   "chg": ((last - prev) / prev * 100) if prev else 0.0}
+            except Exception:
+                continue
+    except Exception:
+        pass
+    return result
+
+
 @st.cache_data(ttl=900, show_spinner=False)
 def _cached_regime() -> str:
     try:
@@ -80,8 +102,23 @@ def render_market_pulse() -> None:
     Nothing else.
     """
     try:
-        data    = _fetch_pulse_data()
-        is_open = _is_market_open()
+        # Market-aware: US active → US indices, warna NSE indices
+        _us = False
+        try:
+            _us = st.session_state.get("active_market") == "US"
+        except Exception:
+            _us = False
+        data    = _fetch_us_pulse_data() if _us else _fetch_pulse_data()
+        if _us:
+            try:
+                from core.market_session import us_market_open
+                is_open = us_market_open()
+            except Exception:
+                is_open = False
+        else:
+            is_open = _is_market_open()
+        _labels = (("S&P 500", "NASDAQ", "DOW") if _us
+                   else ("NIFTY", "BANKNIFTY", "VIX"))
 
         def _arrow(chg: float) -> str:
             return "▲" if chg >= 0 else "▼"
@@ -98,6 +135,7 @@ def render_market_pulse() -> None:
         b_px  = bank.get("price", 0)
         b_chg = bank.get("chg", 0)
         v_px  = vix.get("price", 0)
+        v_chg = vix.get("chg", 0)
 
         sep = "  <span style='color:#2d3748'>|</span>  "
 
@@ -105,22 +143,29 @@ def render_market_pulse() -> None:
         if n_px:
             parts.append(
                 f"<span style='color:{_chg_col(n_chg)}'>{_arrow(n_chg)}</span> "
-                f"<span style='color:#e8eaf0;font-weight:600'>NIFTY</span> "
+                f"<span style='color:#e8eaf0;font-weight:600'>{_labels[0]}</span> "
                 f"<span style='color:#e8eaf0'>{n_px:,.0f}</span> "
                 f"<span style='color:{_chg_col(n_chg)}'>{n_chg:+.2f}%</span>"
             )
         if b_px:
             parts.append(
                 f"<span style='color:{_chg_col(b_chg)}'>{_arrow(b_chg)}</span> "
-                f"<span style='color:#e8eaf0;font-weight:600'>BANKNIFTY</span> "
+                f"<span style='color:#e8eaf0;font-weight:600'>{_labels[1]}</span> "
                 f"<span style='color:#e8eaf0'>{b_px:,.0f}</span> "
                 f"<span style='color:{_chg_col(b_chg)}'>{b_chg:+.2f}%</span>"
             )
         if v_px:
-            parts.append(
-                f"<span style='color:#e8eaf0;font-weight:600'>VIX</span> "
-                f"<span style='color:#e8eaf0'>{v_px:.1f}</span>"
-            )
+            # NSE: VIX (level only). US: DOW (index with % change).
+            if _us:
+                parts.append(
+                    f"<span style='color:{_chg_col(v_chg)}'>{_arrow(v_chg)}</span> "
+                    f"<span style='color:#e8eaf0;font-weight:600'>{_labels[2]}</span> "
+                    f"<span style='color:#e8eaf0'>{v_px:,.0f}</span> "
+                    f"<span style='color:{_chg_col(v_chg)}'>{v_chg:+.2f}%</span>")
+            else:
+                parts.append(
+                    f"<span style='color:#e8eaf0;font-weight:600'>{_labels[2]}</span> "
+                    f"<span style='color:#e8eaf0'>{v_px:.1f}</span>")
 
         status_html = (
             "<span style='color:#00d4a0;font-weight:700'>🟢 OPEN</span>"
