@@ -4,12 +4,15 @@ Breakout Sniper — pivot cross hote hi USI SECOND alert.
 The 15-min scan cycle can be up to 15 minutes late on a breakout.
 This module subscribes a Kite WebSocket tick stream to the stocks
 that matter — pre-breakout candidates (within 2.5%% of pivot) and
-watchlist entries — and fires the moment a tick crosses the level:
+watchlist entries — and fires when a break CLEARS the level and HOLDS:
 
-  🚨 KAYNES ne ₹4,250 ka pivot ABHI toda (₹4,251.5) —
+  🚨 KAYNES ne ₹4,250 ka pivot toda (₹4,268, 45s tak upar ruka) —
      plan: stop ₹4,100 / target ₹4,550
 
 Design for safety:
+  - two-stage confirmation kills the intraday false-break: a wick that
+    pokes the level then reverses disarms and never alerts; only a
+    break that clears the level and holds for the dwell window fires
   - pure trigger logic (process_ticks) is unit-tested; the WebSocket
     wrapper is a thin shell around it
   - one alert per symbol per day; auto-rebuilds the watch map after
@@ -17,7 +20,9 @@ Design for safety:
 """
 from __future__ import annotations
 
+import os
 import threading
+import time
 from datetime import datetime
 
 from logger import get_logger
@@ -27,15 +32,36 @@ log = get_logger(__name__)
 _lock = threading.Lock()
 _watch: dict[int, dict] = {}       # token -> {symbol, trigger, stop, target}
 _fired: dict[str, set] = {}        # {YYYY-MM-DD: {symbols}}
+_arm: dict[str, float] = {}        # symbol -> ts when it first CLEARED the level
 _ticker = None
 _started = False
+
+# ── Confirmation thresholds (the false-break killer) ─────────────────────────
+# A tick TOUCHING the level is not a breakout — the intraday false-break is
+# what burns breakout traders (e.g. a wick to ₹182.5 that then keeps falling).
+# We fire only when the break (a) CLEARS the level by a buffer and (b) HOLDS
+# above it for a dwell window. A wick that reverses within the window disarms
+# and never alerts. Both tunable via .env.
+_CLEARANCE_PCT = float(os.getenv("QT_SNIPER_CLEARANCE_PCT", "0.0015") or 0.0015)
+_HOLD_SECONDS = float(os.getenv("QT_SNIPER_HOLD_SECONDS", "45") or 45)
 
 
 # ── Pure, testable core ───────────────────────────────────────────────────────
 
 def process_ticks(ticks: list[dict], watch: dict[int, dict],
-                  already_fired: set) -> list[dict]:
-    """[{symbol, trigger, ltp, stop, target}] for every fresh breakout tick."""
+                  already_fired: set, arm_state: dict | None = None,
+                  now: float | None = None,
+                  hold_seconds: float = _HOLD_SECONDS) -> list[dict]:
+    """Confirmed breakouts only. Two-stage per symbol:
+
+      ARM     — price clears trigger × (1 + clearance). Timestamp recorded.
+      DISARM  — price falls back below trigger → false poke, forgotten.
+      CONFIRM — price is still cleared AND has held ≥ hold_seconds since arm.
+
+    arm_state persists across calls (like already_fired). Returns the
+    confirmed breakouts only — a wick that reverses never appears."""
+    arm_state = _arm if arm_state is None else arm_state
+    now = time.time() if now is None else now
     out = []
     for t in ticks:
         token = t.get("instrument_token")
@@ -43,10 +69,24 @@ def process_ticks(ticks: list[dict], watch: dict[int, dict],
         w = watch.get(token)
         if not w or not ltp:
             continue
-        if w["symbol"] in already_fired:
+        sym = w["symbol"]
+        if sym in already_fired:
             continue
-        if float(ltp) >= float(w["trigger"]):
-            out.append({**w, "ltp": float(ltp)})
+        ltp = float(ltp)
+        trigger = float(w["trigger"])
+        if trigger <= 0:
+            continue
+        cleared = trigger * (1 + _CLEARANCE_PCT)
+        if ltp < trigger:
+            arm_state.pop(sym, None)        # fell back below → false poke, reset
+            continue
+        if ltp < cleared:
+            continue                        # above level but not cleared yet
+        first = arm_state.get(sym)
+        if first is None:
+            arm_state[sym] = now            # armed — start the hold clock
+        elif now - first >= hold_seconds:   # held the break → CONFIRMED
+            out.append({**w, "ltp": ltp, "held_s": round(now - first)})
     return out
 
 
@@ -103,13 +143,15 @@ def _alert(hits: list[dict]) -> None:
         engine = AlertEngine()
         if not engine.is_configured():
             return
-        lines = ["🚨 <b>BREAKOUT ABHI HUA</b>"]
+        lines = ["🚨 <b>BREAKOUT CONFIRMED</b>"]
         for h in fresh[:5]:
             plan = ""
             if h.get("stop") and h.get("target"):
                 plan = f"\n   plan: stop ₹{h['stop']:,.0f} / target ₹{h['target']:,.0f}"
+            held = h.get("held_s")
+            hold_bit = f", {held}s tak upar ruka" if held else ""
             lines.append(f"\n<b>{h['symbol']}</b> ne ₹{h['trigger']:,.0f} toda "
-                         f"(₹{h['ltp']:,.1f}){plan}")
+                         f"(₹{h['ltp']:,.1f}{hold_bit}){plan}")
         engine.send("\n".join(lines))
         log.info("sniper_fired", symbols=[h["symbol"] for h in fresh])
         # 🤖 Autopilot hook — off-thread, tick stream kabhi block nahi hota
@@ -133,6 +175,10 @@ def refresh_watch(results: list[dict]) -> int:
     new_map = build_watch_map(results)
     with _lock:
         _watch = new_map
+        # prune arm-state for symbols no longer watched
+        _watched_syms = {v["symbol"] for v in new_map.values()}
+        for _s in [s for s in _arm if s not in _watched_syms]:
+            _arm.pop(_s, None)
     if _ticker is not None and new_map:
         try:
             _ticker.subscribe(list(new_map))

@@ -1119,6 +1119,53 @@ class TestStrictLiveDisplay:
         assert sc._pick_best_trade(rows)["symbol"] == "STALE"
 
 
+class TestSniperConfirmation:
+    """The BAJEL bug: a wick that pokes the level then keeps falling must
+    NEVER fire 'BREAKOUT CONFIRMED'."""
+    WATCH = {101: {"symbol": "BAJEL", "trigger": 182.0,
+                   "stop": 169.0, "target": 210.0}}
+
+    def _tick(self, ltp):
+        return [{"instrument_token": 101, "last_price": ltp}]
+
+    def test_wick_then_reverse_never_fires(self):
+        from scan.breakout_sniper import process_ticks
+        arm, fired = {}, set()
+        # t0: wick to 182.5 clears the level → armed, but NOT fired
+        assert process_ticks(self._tick(182.5), self.WATCH, fired, arm,
+                             now=0, hold_seconds=45) == []
+        assert "BAJEL" in arm
+        # t+10s: still up but hold window not met → no fire
+        assert process_ticks(self._tick(182.6), self.WATCH, fired, arm,
+                             now=10, hold_seconds=45) == []
+        # t+20s: reverses below trigger → DISARM (false poke forgotten)
+        assert process_ticks(self._tick(178.0), self.WATCH, fired, arm,
+                             now=20, hold_seconds=45) == []
+        assert "BAJEL" not in arm
+        # t+120s: keeps falling → still nothing, ever
+        assert process_ticks(self._tick(170.0), self.WATCH, fired, arm,
+                             now=120, hold_seconds=45) == []
+
+    def test_genuine_hold_confirms(self):
+        from scan.breakout_sniper import process_ticks
+        arm, fired = {}, set()
+        # clears and holds above for the full window → CONFIRMED
+        assert process_ticks(self._tick(183.0), self.WATCH, fired, arm,
+                             now=0, hold_seconds=45) == []
+        hits = process_ticks(self._tick(184.0), self.WATCH, fired, arm,
+                             now=50, hold_seconds=45)
+        assert len(hits) == 1
+        assert hits[0]["symbol"] == "BAJEL" and hits[0]["held_s"] == 50
+
+    def test_touch_without_clearance_does_not_arm(self):
+        from scan.breakout_sniper import process_ticks
+        arm, fired = {}, set()
+        # exactly at trigger (no clearance buffer) → not armed
+        process_ticks(self._tick(182.0), self.WATCH, fired, arm,
+                      now=0, hold_seconds=45)
+        assert "BAJEL" not in arm
+
+
 class TestBreakoutConfirmation:
     def test_grade_breakout_rules(self):
         from scan.unified_scanner import grade_breakout as g
