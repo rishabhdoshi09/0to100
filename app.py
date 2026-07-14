@@ -994,6 +994,70 @@ with st.sidebar:
         else:
             st.sidebar.caption("Data unavailable")
 
+        # ── Same conviction rule — search par bhi setup verdict ─────────────
+        @st.cache_data(ttl=300, show_spinner=False)
+        def _qs_setup(sym: str, is_us: bool) -> dict:
+            try:
+                from scan.unified_scanner import UnifiedScanner
+                if is_us:
+                    from data.us_data import get_us_daily, sp500_return_30d
+                    df = get_us_daily(sym)
+                    bench = sp500_return_30d()
+                else:
+                    from data.bhavcopy_store import get_ohlcv
+                    df = get_ohlcv(sym)
+                    try:
+                        from scan.unified_scanner import _nifty_return_30d
+                        bench = _nifty_return_30d()
+                    except Exception:
+                        bench = 0.0
+                if df is None or len(df) < 60:
+                    return {}
+                sc = UnifiedScanner()
+                sc._nifty_ret30 = bench
+                r = sc._analyze(sym, df)
+                if r is None:
+                    return {"verdict": "NO SETUP"}
+                return {
+                    "verdict": r.verdict, "score": r.score,
+                    "conviction": getattr(r, "breakout_conviction", 0.0),
+                    "signals": r.signal_labels[:2],
+                    "reason": (r.reasons or [""])[0],
+                    "entry": r.entry, "stop": r.stop, "target": r.target,
+                    "cur": "$" if is_us else "₹",
+                }
+            except Exception:
+                return {}
+
+        _setup = {}
+        try:
+            _setup = _qs_setup(_qs, _is_us)
+        except Exception:
+            pass
+        if _setup:
+            _v = _setup.get("verdict", "")
+            _v_col = {"STRONG BUY": "#22d3ee", "BUY": "#00d4a0"}.get(_v, "#8892a4")
+            _conv = _setup.get("conviction") or 0
+            _cur2 = _setup.get("cur", "₹")
+            if _v in ("STRONG BUY", "BUY"):
+                _conv_bit = (f" · conviction {_conv:.0f}" if _conv else "")
+                _sig = " · ".join(_setup.get("signals", []))
+                st.sidebar.markdown(
+                    f"<div style='background:#0d1421;border:1px solid "
+                    f"{_v_col}55;border-left:3px solid {_v_col};border-radius:8px;"
+                    f"padding:7px 12px;margin-bottom:4px;font-size:.72rem'>"
+                    f"<b style='color:{_v_col}'>{_v}</b> "
+                    f"<span style='color:#8892a4'>score "
+                    f"{_setup.get('score', 0):.0f}{_conv_bit}</span><br>"
+                    f"<span style='color:#94a3b8'>{_sig}</span><br>"
+                    f"<span style='color:#64748b'>E {_cur2}{_setup.get('entry', 0):,.1f} · "
+                    f"S {_cur2}{_setup.get('stop', 0):,.1f} · "
+                    f"T {_cur2}{_setup.get('target', 0):,.1f}</span></div>",
+                    unsafe_allow_html=True)
+            else:
+                st.sidebar.caption(
+                    "📊 Abhi koi valid setup nahi (conviction rule ke hisaab se)")
+
         if st.sidebar.button(
             "→ Open in Terminal",
             key="qs_open_terminal",
