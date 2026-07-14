@@ -43,6 +43,54 @@ from logger import get_logger
 
 log = get_logger(__name__)
 
+# ── Falling-knife filter (system-wide) ────────────────────────────────────────
+# Stocks down more than this from their 52-week (250-session) high are
+# ignored EVERYWHERE — scanner signals, pulse, movers, autopilot, all of
+# it. A −60% name is a delisting/insolvency risk or a knife still falling;
+# the system does not chase it. Tunable via .env, never below 40%.
+import os as _os
+_MAX_DROP = max(0.40, float(_os.getenv("QT_MAX_DROP_FROM_HIGH", "0.60") or 0.60))
+_DROP_LOOKBACK = 250
+
+
+def is_beaten_down_arr(highs, close: float, max_drop: float = _MAX_DROP) -> bool:
+    """Array fast-path for the scan hot loop: close vs 52-week peak high."""
+    try:
+        import numpy as _np
+        h = _np.asarray(highs, dtype=float)
+        if len(h) < 30 or close <= 0:
+            return False
+        peak = float(_np.nanmax(h))
+        return peak > 0 and close <= peak * (1.0 - max_drop)
+    except Exception:
+        return False
+
+
+def is_beaten_down(df, max_drop: float = _MAX_DROP) -> bool:
+    """True if the latest close is more than max_drop below the 52-week
+    high — i.e. price <= (1-max_drop) × high. Needs some history; too
+    little data → not flagged (never guess). Accepts a DataFrame with a
+    'close'/'high' column or a close array."""
+    try:
+        import numpy as _np
+        if hasattr(df, "columns"):
+            hi_src = df["high"] if "high" in df.columns else df["close"]
+            close = float(df["close"].values[-1])
+            highs = _np.asarray(hi_src.values[-_DROP_LOOKBACK:], dtype=float)
+        else:
+            arr = _np.asarray(df, dtype=float)
+            close = float(arr[-1])
+            highs = arr[-_DROP_LOOKBACK:]
+        if len(highs) < 30 or close <= 0:
+            return False
+        peak = float(_np.nanmax(highs))
+        if peak <= 0:
+            return False
+        return close <= peak * (1.0 - max_drop)
+    except Exception:
+        return False
+
+
 # Signal metadata: label shown to user, category for filtering, base score
 SIGNAL_META = {
     "BREAKOUT_52W":    ("52-week high breakout",       "Breakout",    30),
@@ -173,6 +221,10 @@ class UnifiedScanner:
             return None
         if vol is not None and np.nanmean(vol[-20:]) * price < 1e7:
             return None              # < ₹1 cr avg daily turnover — illiquid
+        # Falling-knife guard: down >60% from 52-week high → ignore entirely
+        hi = high if high is not None else close
+        if is_beaten_down_arr(hi[-_DROP_LOOKBACK:], price):
+            return None
 
         # Honest dating — signals are computed on the latest EOD session
         try:

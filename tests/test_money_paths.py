@@ -1119,6 +1119,48 @@ class TestStrictLiveDisplay:
         assert sc._pick_best_trade(rows)["symbol"] == "STALE"
 
 
+class TestFallingKnifeFilter:
+    def test_beaten_down_arr_threshold(self):
+        from scan.unified_scanner import is_beaten_down_arr
+        highs = [100.0] * 250
+        assert is_beaten_down_arr(highs, 39.0) is True      # −61% → knife
+        assert is_beaten_down_arr(highs, 41.0) is False     # −59% → ok
+        assert is_beaten_down_arr(highs, 40.0) is True      # exactly −60%
+        # too little history → never flagged (no guessing)
+        assert is_beaten_down_arr([100.0] * 10, 5.0) is False
+        assert is_beaten_down_arr(highs, 0.0) is False
+
+    def test_beaten_down_dataframe(self):
+        import pandas as pd
+        from scan.unified_scanner import is_beaten_down
+        idx = pd.date_range("2025-01-01", periods=250, freq="D")
+        # peaked at 500, now 150 → −70%
+        highs = [500.0] * 125 + [150.0] * 125
+        df = pd.DataFrame({"high": highs, "close": [h - 1 for h in highs]},
+                          index=idx)
+        assert is_beaten_down(df) is True
+        # recovered name: peaked 500, now 480 → −4%
+        df2 = pd.DataFrame({"high": [500.0] * 250, "close": [480.0] * 250},
+                           index=idx)
+        assert is_beaten_down(df2) is False
+
+    def test_scanner_skips_beaten_down_stock(self):
+        import numpy as np
+        import pandas as pd
+        from scan.unified_scanner import UnifiedScanner
+        # a stock that peaked near 500 and now trades ~150 (−70%), liquid,
+        # with an up day — would otherwise trip momentum, but must be skipped
+        n = 260
+        close = np.concatenate([np.linspace(480, 500, 130),
+                                np.linspace(500, 150, 130)])
+        df = pd.DataFrame({
+            "open": close * 0.99, "high": close * 1.01,
+            "low": close * 0.98, "close": close,
+            "volume": [1_000_000] * n},
+            index=pd.date_range("2025-01-01", periods=n, freq="D"))
+        assert UnifiedScanner()._analyze("FALLEN", df) is None
+
+
 class TestDailyPulseChart:
     def test_daily_ohlcv_is_1d_and_latest(self, monkeypatch):
         """Pulse chart data must be DAILY candles from the bhav store

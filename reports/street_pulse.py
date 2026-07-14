@@ -76,6 +76,13 @@ def _movers_from_bhav(top_n: int = 5) -> tuple[list[dict], list[dict]]:
             turnover = float(np.nanmean(vol[-20:])) * price
             if turnover < 5e7:          # ₹5 cr — keep it to liquid names
                 continue
+            # Falling-knife filter — down >60% from 52W high: na gainer
+            # list mein (dead-cat bounce chase nahi), na loser highlight mein
+            from scan.unified_scanner import is_beaten_down_arr
+            if is_beaten_down_arr(df["high"].values[-250:]
+                                  if "high" in df.columns else close[-250:],
+                                  price):
+                continue
             chg = (close[-1] / close[-2] - 1) * 100
             rows.append({"symbol": sym, "price": round(price, 1),
                          "chg_pct": round(chg, 2)})
@@ -99,6 +106,12 @@ def _losing_momentum() -> dict | None:
             vol = df["volume"].values
             price = float(close[-1])
             if float(np.nanmean(vol[-20:])) * price < 2e8:   # big names only
+                continue
+            # Already down >60% = already gone, not "losing momentum today"
+            from scan.unified_scanner import is_beaten_down_arr
+            if is_beaten_down_arr(df["high"].values[-250:]
+                                  if "high" in df.columns else close[-250:],
+                                  price):
                 continue
             sma50 = float(close[-50:].mean())
             chg5 = (close[-1] / close[-6] - 1) * 100

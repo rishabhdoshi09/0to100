@@ -443,8 +443,19 @@ def fetch_and_test(symbol, test_func, days=150):
     return symbol, False
 
 
+def _beaten_down(df):
+    """System-wide falling-knife guard — down >60% from 52W high."""
+    try:
+        from scan.unified_scanner import is_beaten_down
+        return is_beaten_down(df)
+    except Exception:
+        return False
+
+
 def is_breakout_candidate(df):
     if df is None or len(df) < 120:
+        return False
+    if _beaten_down(df):
         return False
     close     = df["close"]
     base_high = close.rolling(90).max().iloc[-1]
@@ -468,6 +479,8 @@ def is_breakout_candidate(df):
 def is_momentum_breakout(df):
     if df is None or len(df) < 50:
         return False
+    if _beaten_down(df):
+        return False
     close, volume = df["close"], df["volume"]
     sma20 = close.rolling(20).mean()
     sma50 = close.rolling(50).mean()
@@ -488,6 +501,8 @@ def is_momentum_breakout(df):
 
 def is_buzzing(df):
     if df is None or len(df) < 20:
+        return False
+    if _beaten_down(df):
         return False
     latest        = df.iloc[-1]
     close, open_  = latest["close"], latest["open"]

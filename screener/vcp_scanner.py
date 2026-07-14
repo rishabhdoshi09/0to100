@@ -96,6 +96,13 @@ class VCPScanner:
             df = self._fetch_data(symbol, days=520)
             if df is None or len(df) < 100:
                 return None
+            # Falling-knife guard (system-wide): down >60% from 52W high
+            try:
+                from scan.unified_scanner import is_beaten_down
+                if is_beaten_down(df):
+                    return None
+            except Exception:
+                pass
 
             close = df["close"].values
             price = float(close[-1])
