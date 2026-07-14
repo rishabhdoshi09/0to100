@@ -58,6 +58,49 @@ def get_us_daily(symbol: str, lookback_days: int = 400):
         return None
 
 
+def get_us_daily_batch(symbols: list[str], lookback_days: int = 400) -> dict:
+    """{symbol: DataFrame} for many tickers in ONE yfinance call — 100
+    symbols/request instead of 100 requests, so the full US listing is
+    actually fetchable without hammering Yahoo. Per-symbol cached; only
+    the cache-misses hit the network. Falls back to per-symbol on error."""
+    now = time.time()
+    out: dict = {}
+    misses: list[str] = []
+    with _lock:
+        for s in symbols:
+            hit = _cache.get(s)
+            if hit and now - hit[0] < _TTL:
+                out[s] = hit[1]
+            else:
+                misses.append(s)
+    if not misses:
+        return out
+    try:
+        import yfinance as yf
+        import pandas as pd
+        raw = yf.download(misses, period=f"{lookback_days}d", interval="1d",
+                          progress=False, auto_adjust=True, threads=True,
+                          group_by="ticker")
+        for s in misses:
+            try:
+                df = raw[s] if isinstance(raw.columns, pd.MultiIndex) else raw
+                df = df.rename(columns={c: str(c).lower() for c in df.columns})
+                df = df[["open", "high", "low", "close", "volume"]].dropna()
+                if len(df) >= 60:
+                    out[s] = df
+                    with _lock:
+                        _cache[s] = (now, df)
+            except Exception:
+                continue
+    except Exception as exc:
+        log.debug("us_batch_failed", n=len(misses), error=str(exc)[:80])
+        for s in misses:                     # fallback: per-symbol
+            df = get_us_daily(s, lookback_days)
+            if df is not None:
+                out[s] = df
+    return out
+
+
 def sp500_return_30d() -> float:
     """S&P 500 30-session return (%) — the US relative-strength benchmark
     (the role Nifty plays for the NSE scanner)."""

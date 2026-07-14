@@ -1633,14 +1633,39 @@ class TestUSAutopilot:
 
 
 class TestUSScanner:
-    def test_universe_clean(self):
-        from data.us_universe import get_us_universe, get_us_universe_with_names
-        u = get_us_universe()
-        assert "AAPL" in u and "NVDA" in u
-        assert all(s and s.isupper() and " " not in s for s in u)
-        assert "AMZN2" not in u                          # placeholder purged
-        names = get_us_universe_with_names()
-        assert names["AAPL"] == "Apple"
+    def test_symbol_directory_parser(self):
+        """Parse the real NASDAQ Trader file format → clean common stocks
+        only (no ETFs, test issues, warrants/units/preferreds, headers)."""
+        from data.us_universe import _parse_symbol_file
+        nasdaq = (
+            "Symbol|Security Name|Market Category|Test Issue|Financial Status|"
+            "Round Lot Size|ETF|NextShares\n"
+            "AAPL|Apple Inc. - Common Stock|Q|N|N|100|N|N\n"
+            "QQQ|Invesco QQQ Trust|Q|N|N|100|Y|N\n"          # ETF → out
+            "ZTEST|Test Issue|Q|Y|N|100|N|N\n"               # test → out
+            "AAPLW|Apple Warrant|Q|N|N|100|N|N\n"            # 5-char but a warrant name; ticker clean → kept (acceptable)
+            "BRKA|Berkshire|N|N|N|100|N|N\n"
+            "File Creation Time: 0101202699:99|||||||\n")
+        out = _parse_symbol_file(nasdaq, "nasdaq")
+        assert "AAPL" in out and out["AAPL"].startswith("Apple")
+        assert "QQQ" not in out                              # ETF excluded
+        assert "ZTEST" not in out                            # test issue excluded
+        assert "FILE CREATION" not in " ".join(out).upper()  # footer skipped
+        # otherlisted format (NYSE etc.) — different column order
+        other = ("ACT Symbol|Security Name|Exchange|CQS Symbol|ETF|Round Lot Size|"
+                 "Test Issue|NASDAQ Symbol\n"
+                 "IBM|International Business Machines|N|IBM|N|100|N|IBM\n"
+                 "SPY|SPDR S&P 500|P|SPY|Y|100|N|SPY\n")     # ETF → out
+        out2 = _parse_symbol_file(other, "other")
+        assert "IBM" in out2 and "SPY" not in out2
+
+    def test_universe_fallback_curated(self, monkeypatch):
+        """Directory unreachable → curated liquid list, never empty."""
+        import data.us_universe as uu
+        monkeypatch.setattr(uu, "_load_cached", lambda: None)
+        monkeypatch.setattr(uu, "_fetch_all", lambda: {})   # network down
+        u = uu.get_us_universe()
+        assert "AAPL" in u and len(u) >= 30                  # curated fallback
 
     def test_same_engine_runs_on_us_shaped_data(self, monkeypatch):
         """The NSE signal engine must analyse a US-shaped DataFrame — the

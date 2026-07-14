@@ -59,18 +59,17 @@ def scan_us(max_workers: int = 8) -> list[dict]:
         sc = UnifiedScanner(max_workers=max_workers)
         sc._nifty_ret30 = sp500_return_30d()      # RS benchmark = S&P 500
 
-        raw = []
-        with ThreadPoolExecutor(max_workers=max_workers) as pool:
-            futs = {pool.submit(get_us_daily, s): s for s in symbols}
-            dfs = {}
-            for f in as_completed(futs):
-                df = None
-                try:
-                    df = f.result()
-                except Exception:
-                    df = None
-                if df is not None and len(df) >= 60:
-                    dfs[futs[f]] = df
+        # Batch-fetch daily data (100 tickers/request) so the FULL listing is
+        # fetchable without thousands of individual calls.
+        from data.us_data import get_us_daily_batch
+        dfs: dict = {}
+        _BATCH = 100
+        for i in range(0, len(symbols), _BATCH):
+            chunk = symbols[i:i + _BATCH]
+            try:
+                dfs.update(get_us_daily_batch(chunk))
+            except Exception as exc:
+                log.debug("us_batch_chunk_failed", error=str(exc)[:80])
         for sym, df in dfs.items():
             try:
                 r = sc._analyze(sym, df)
