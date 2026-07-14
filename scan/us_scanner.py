@@ -27,6 +27,9 @@ _lock = threading.Lock()
 _results: list[dict] = []
 _last_ts: float = 0.0
 _status: str = "idle"        # idle | scanning | ready | error
+_progress: int = 0           # symbols processed so far (live)
+_total: int = 0              # universe size for this run
+_scan_running: bool = False  # only one scan at a time
 _pushed: dict[str, set] = {}  # {YYYY-MM-DD: symbols alerted} — one/stock/day
 
 
@@ -46,16 +49,23 @@ def _serialize(r) -> dict:
 
 def scan_us(max_workers: int = 8) -> list[dict]:
     """Run the unified engine over the US universe. Returns serialized,
-    conviction-ranked results and caches them."""
-    global _results, _last_ts, _status
+    conviction-ranked results and caches them. HEAVY (full listing) — run
+    it via start_us_scan() so it never blocks the UI thread."""
+    global _results, _last_ts, _status, _progress, _total, _scan_running
     from data.us_universe import get_us_universe
     from data.us_data import get_us_daily, sp500_return_30d
     from scan.unified_scanner import UnifiedScanner
 
     with _lock:
+        if _scan_running:               # already scanning — don't double-run
+            return list(_results)
+        _scan_running = True
         _status = "scanning"
+        _progress = 0
     try:
         symbols = get_us_universe()
+        with _lock:
+            _total = len(symbols)
         sc = UnifiedScanner(max_workers=max_workers)
         sc._nifty_ret30 = sp500_return_30d()      # RS benchmark = S&P 500
 
@@ -63,21 +73,23 @@ def scan_us(max_workers: int = 8) -> list[dict]:
         # fetchable without thousands of individual calls.
         from data.us_data import get_us_daily_batch
         raw = []
-        dfs: dict = {}
         _BATCH = 100
         for i in range(0, len(symbols), _BATCH):
             chunk = symbols[i:i + _BATCH]
             try:
-                dfs.update(get_us_daily_batch(chunk))
+                dfs = get_us_daily_batch(chunk)
+                for sym, df in dfs.items():
+                    try:
+                        r = sc._analyze(sym, df)
+                        if r and r.signals:
+                            raw.append(r)
+                    except Exception as exc:
+                        log.debug("us_analyze_failed", symbol=sym,
+                                  error=str(exc)[:80])
             except Exception as exc:
                 log.debug("us_batch_chunk_failed", error=str(exc)[:80])
-        for sym, df in dfs.items():
-            try:
-                r = sc._analyze(sym, df)
-                if r and r.signals:
-                    raw.append(r)
-            except Exception as exc:
-                log.debug("us_analyze_failed", symbol=sym, error=str(exc)[:80])
+            with _lock:                       # live progress for the UI
+                _progress = min(i + _BATCH, len(symbols))
 
         serialized = [_serialize(r) for r in raw]
         try:
@@ -105,13 +117,36 @@ def scan_us(max_workers: int = 8) -> list[dict]:
             on_setups(serialized)
         except Exception as exc:
             log.debug("us_autopilot_feed_skip", error=str(exc))
-        log.info("us_scan_done", scanned=len(dfs), with_signals=len(serialized))
+        log.info("us_scan_done", scanned=len(symbols),
+                 with_signals=len(serialized))
         return serialized
     except Exception as exc:
         log.warning("us_scan_failed", error=str(exc))
         with _lock:
             _status = "error"
         return []
+    finally:
+        with _lock:
+            _scan_running = False
+
+
+def start_us_scan() -> bool:
+    """Kick off scan_us in a BACKGROUND daemon thread and return
+    immediately. The UI polls get_us_results()/get_us_progress() — the
+    heavy full-universe scan never blocks the Streamlit thread (which is
+    why Ctrl+C works and the page stays responsive). No-op if already
+    running."""
+    with _lock:
+        if _scan_running:
+            return False
+    threading.Thread(target=scan_us, name="us-scan", daemon=True).start()
+    return True
+
+
+def get_us_progress() -> dict:
+    with _lock:
+        return {"status": _status, "progress": _progress, "total": _total,
+                "running": _scan_running, "have": len(_results)}
 
 
 def _push_us_setups(results: list[dict]) -> None:

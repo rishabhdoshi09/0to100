@@ -18,10 +18,6 @@ _CAT_COLOR = {"Momentum": "#38bdf8", "Breakout": "#a78bfa",
               "Pullback": "#34d399"}
 
 
-@st.cache_data(ttl=900, show_spinner=False)
-def _cached_scan() -> list:
-    from scan.us_scanner import scan_us
-    return scan_us()
 
 
 def render_us_scanner() -> None:
@@ -40,25 +36,40 @@ def render_us_scanner() -> None:
         f"yfinance data (delivery% US mein nahi hota → neutral)</div>",
         unsafe_allow_html=True)
 
+    from scan.us_scanner import start_us_scan, get_us_results, get_us_progress
+    prog = get_us_progress()
+
     c1, c2 = st.columns([1, 4])
     with c1:
-        if st.button("🔍 Scan US", key="us_scan_btn", width="stretch"):
-            _cached_scan.clear()
-            st.session_state["_us_scan_go"] = True
+        if st.button("🔍 Scan US", key="us_scan_btn", width="stretch",
+                     disabled=prog["running"]):
+            start_us_scan()                 # BACKGROUND — never blocks the UI
             st.rerun()
 
-    if not st.session_state.get("_us_scan_go") and not _has_cached():
-        st.caption("**Scan US** dabao — pehli baar ~1-2 min (yfinance se "
-                   "daily data), phir cached. Indian market band ho toh yahan "
-                   "US setups dekho.")
-        return
+    # Live progress while the background scan runs (UI stays responsive)
+    if prog["running"]:
+        pct = (prog["progress"] / prog["total"]) if prog["total"] else 0.0
+        with c2:
+            st.progress(pct, text=f"⏳ US universe scan… "
+                                  f"{prog['progress']}/{prog['total']} stocks")
+        try:
+            from streamlit_autorefresh import st_autorefresh
+            st_autorefresh(interval=2500, limit=600, key="us_scan_poll")
+        except Exception:
+            if st.button("⟳ Progress dekho", key="us_poll_btn"):
+                st.rerun()
 
-    with st.spinner("US universe scan ho raha hai…"):
-        results = _cached_scan()
+    results, _ts, _status = get_us_results()
 
     if not results:
-        st.warning("Koi US setup nahi mila (ya data fetch fail — dobara try "
-                   "karo). Market band ho toh signals EOD pe bante hain.")
+        if prog["running"]:
+            st.caption("Pehla scan chal raha hai (full US listing — thoda "
+                       "time). Yeh background mein hai, terminal responsive "
+                       "rahega. Results milte hi yahan aa jayenge.")
+        else:
+            st.caption("**Scan US** dabao — background scan chalega (terminal "
+                       "block nahi hoga). Full US listing, pehli baar bhaari, "
+                       "phir cached.")
         return
 
     n_buy = sum(1 for r in results if r["verdict"] in ("STRONG BUY", "BUY"))
@@ -109,11 +120,3 @@ def render_us_scanner() -> None:
             f"stop ${float(r.get('stop') or 0):,.2f} · "
             f"target ${float(r.get('target') or 0):,.2f}</div>"
             f"</div>", unsafe_allow_html=True)
-
-
-def _has_cached() -> bool:
-    try:
-        from scan.us_scanner import get_us_results
-        return bool(get_us_results()[0])
-    except Exception:
-        return False
