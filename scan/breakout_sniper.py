@@ -44,6 +44,37 @@ _started = False
 # and never alerts. Both tunable via .env.
 _CLEARANCE_PCT = float(os.getenv("QT_SNIPER_CLEARANCE_PCT", "0.0015") or 0.0015)
 _HOLD_SECONDS = float(os.getenv("QT_SNIPER_HOLD_SECONDS", "45") or 45)
+# Volume pacing — a break on dead volume is a trap even if it holds. We
+# require the day's cumulative volume to run AHEAD of its normal pace for
+# the time of day. Fail-open: unknown avg volume or very early session →
+# lean on the hold alone (never block for missing data).
+_VOL_SURGE = float(os.getenv("QT_SNIPER_VOL_SURGE", "1.2") or 1.2)
+_MKT_OPEN_MIN = 9 * 60 + 15
+_MKT_CLOSE_MIN = 15 * 60 + 30
+_MKT_MINUTES = _MKT_CLOSE_MIN - _MKT_OPEN_MIN
+
+
+def day_fraction(now_dt=None) -> float:
+    """Fraction of the trading session elapsed (0..1), IST."""
+    try:
+        import pytz
+        ist = pytz.timezone("Asia/Kolkata")
+        now_dt = now_dt or datetime.now(ist)
+        mins = now_dt.hour * 60 + now_dt.minute
+        return max(0.0, min(1.0, (mins - _MKT_OPEN_MIN) / _MKT_MINUTES))
+    except Exception:
+        return 1.0                    # unknown → don't gate on volume pace
+
+
+def volume_confirms(cum_vol: float, avg_daily_vol: float, frac: float,
+                    surge: float = _VOL_SURGE) -> bool:
+    """Is today's volume running hot enough for a real breakout? Compares
+    cumulative volume to the pace expected by this point in the day.
+    Fail-open when data is missing or it's too early to judge."""
+    if not avg_daily_vol or avg_daily_vol <= 0 or frac < 0.05:
+        return True                   # not enough info → don't block
+    expected_by_now = avg_daily_vol * frac
+    return cum_vol >= surge * expected_by_now
 
 
 # ── Pure, testable core ───────────────────────────────────────────────────────
@@ -51,17 +82,21 @@ _HOLD_SECONDS = float(os.getenv("QT_SNIPER_HOLD_SECONDS", "45") or 45)
 def process_ticks(ticks: list[dict], watch: dict[int, dict],
                   already_fired: set, arm_state: dict | None = None,
                   now: float | None = None,
-                  hold_seconds: float = _HOLD_SECONDS) -> list[dict]:
-    """Confirmed breakouts only. Two-stage per symbol:
+                  hold_seconds: float = _HOLD_SECONDS,
+                  frac: float | None = None) -> list[dict]:
+    """Confirmed breakouts only. Three checks per symbol:
 
       ARM     — price clears trigger × (1 + clearance). Timestamp recorded.
       DISARM  — price falls back below trigger → false poke, forgotten.
-      CONFIRM — price is still cleared AND has held ≥ hold_seconds since arm.
+      CONFIRM — still cleared AND held ≥ hold_seconds AND volume running
+                ahead of pace (dead-volume breaks rejected; fail-open when
+                avg volume unknown).
 
     arm_state persists across calls (like already_fired). Returns the
-    confirmed breakouts only — a wick that reverses never appears."""
+    confirmed breakouts only — a wick or a low-volume poke never appears."""
     arm_state = _arm if arm_state is None else arm_state
     now = time.time() if now is None else now
+    frac = day_fraction() if frac is None else frac
     out = []
     for t in ticks:
         token = t.get("instrument_token")
@@ -85,8 +120,14 @@ def process_ticks(ticks: list[dict], watch: dict[int, dict],
         first = arm_state.get(sym)
         if first is None:
             arm_state[sym] = now            # armed — start the hold clock
-        elif now - first >= hold_seconds:   # held the break → CONFIRMED
-            out.append({**w, "ltp": ltp, "held_s": round(now - first)})
+            continue
+        if now - first < hold_seconds:      # not held long enough yet
+            continue
+        cum_vol = float(t.get("volume_traded") or t.get("volume") or 0)
+        if not volume_confirms(cum_vol, float(w.get("avg_vol") or 0), frac):
+            continue                        # break on dead volume → skip
+        out.append({**w, "ltp": ltp, "held_s": round(now - first),
+                    "cum_vol": cum_vol})
     return out
 
 
@@ -98,7 +139,8 @@ def build_watch_map(results: list[dict]) -> dict[int, dict]:
                 and 0 < (r.get("pivot_distance_pct") or 99) <= 2.5:
             targets[r["symbol"]] = {"trigger": float(r.get("entry") or 0),
                                     "stop": float(r.get("stop") or 0),
-                                    "target": float(r.get("target") or 0)}
+                                    "target": float(r.get("target") or 0),
+                                    "avg_vol": float(r.get("avg_vol20") or 0)}
     try:
         import sqlite3
         from pathlib import Path
@@ -150,8 +192,12 @@ def _alert(hits: list[dict]) -> None:
                 plan = f"\n   plan: stop ₹{h['stop']:,.0f} / target ₹{h['target']:,.0f}"
             held = h.get("held_s")
             hold_bit = f", {held}s tak upar ruka" if held else ""
+            vol_bit = ""
+            if h.get("cum_vol") and h.get("avg_vol"):
+                vr = h["cum_vol"] / h["avg_vol"]
+                vol_bit = f", volume {vr:.1f}× (pace se aage)"
             lines.append(f"\n<b>{h['symbol']}</b> ne ₹{h['trigger']:,.0f} toda "
-                         f"(₹{h['ltp']:,.1f}{hold_bit}){plan}")
+                         f"(₹{h['ltp']:,.1f}{hold_bit}{vol_bit}){plan}")
         engine.send("\n".join(lines))
         log.info("sniper_fired", symbols=[h["symbol"] for h in fresh])
         # 🤖 Autopilot hook — off-thread, tick stream kabhi block nahi hota
@@ -182,7 +228,7 @@ def refresh_watch(results: list[dict]) -> int:
     if _ticker is not None and new_map:
         try:
             _ticker.subscribe(list(new_map))
-            _ticker.set_mode(_ticker.MODE_LTP, list(new_map))
+            _ticker.set_mode(_ticker.MODE_QUOTE, list(new_map))
         except Exception:
             pass
     if new_map:
@@ -221,7 +267,7 @@ def start_sniper() -> bool:
                 tokens = list(_watch)
             if tokens:
                 ws.subscribe(tokens)
-                ws.set_mode(ws.MODE_LTP, tokens)
+                ws.set_mode(ws.MODE_QUOTE, tokens)
             log.info("sniper_connected", watching=len(tokens))
 
         def on_close(ws, code, reason):

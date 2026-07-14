@@ -221,6 +221,7 @@ class StockSignal:
     pivot_distance_pct: float = 0.0        # how far below the pivot (0 = at/above)
     breakout_grade: str = ""               # A | B | "" — confirmed-breakout quality
     breakout_conviction: float = 0.0       # 0-100 — force behind the break
+    avg_vol20: float = 0.0                  # 20-day avg volume — sniper vol pacing
 
     @property
     def categories(self) -> set[str]:
@@ -332,9 +333,11 @@ class UnifiedScanner:
         mom5 = (close[-1] / close[-6] - 1) * 100 if len(close) > 5 else 0.0
         rsi = _rsi(close)
         vratio = 1.0
+        avg_vol20 = 0.0
         if vol is not None and len(vol) > 21:
             avg = np.nanmean(vol[-21:-1])
             vratio = float(vol[-1] / avg) if avg > 0 else 1.0
+            avg_vol20 = float(np.nanmean(vol[-20:]))    # sniper vol pacing
         atr = _atr(high, low, close)
         sma50 = close[-50:].mean() if len(close) >= 50 else price
 
@@ -499,6 +502,7 @@ class UnifiedScanner:
             pivot_distance_pct=round(pivot_dist, 2),
             breakout_grade=breakout_grade,
             breakout_conviction=breakout_conv,
+            avg_vol20=round(avg_vol20, 0),
         )
 
 

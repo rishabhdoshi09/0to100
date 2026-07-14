@@ -1292,6 +1292,47 @@ class TestSniperConfirmation:
         assert len(hits) == 1
         assert hits[0]["symbol"] == "BAJEL" and hits[0]["held_s"] == 50
 
+    def test_volume_confirms_pacing(self):
+        from scan.breakout_sniper import volume_confirms
+        # halfway through the day, avg daily 1M → expect 500k by now,
+        # need 1.2× = 600k
+        assert volume_confirms(700_000, 1_000_000, 0.5) is True   # hot
+        assert volume_confirms(400_000, 1_000_000, 0.5) is False  # dead
+        # fail-open: unknown avg volume never blocks
+        assert volume_confirms(0, 0, 0.5) is True
+        # fail-open: too early to judge (< 5% of day)
+        assert volume_confirms(1, 1_000_000, 0.01) is True
+
+    def test_day_fraction_bounds(self):
+        import pytz
+        from datetime import datetime as dt
+        from scan.breakout_sniper import day_fraction
+        ist = pytz.timezone("Asia/Kolkata")
+        assert day_fraction(ist.localize(dt(2026, 7, 14, 9, 15))) == 0.0
+        assert day_fraction(ist.localize(dt(2026, 7, 14, 15, 30))) == 1.0
+        mid = day_fraction(ist.localize(dt(2026, 7, 14, 12, 22)))
+        assert 0.45 <= mid <= 0.55
+
+    def test_dead_volume_break_does_not_fire(self):
+        from scan.breakout_sniper import process_ticks
+        watch = {101: {"symbol": "DEAD", "trigger": 182.0, "stop": 169.0,
+                       "target": 210.0, "avg_vol": 1_000_000}}
+        arm, fired = {}, set()
+        # arm at t0, cleared + will hold, but volume dead
+        process_ticks([{"instrument_token": 101, "last_price": 183.0,
+                        "volume_traded": 100_000}], watch, fired, arm,
+                      now=0, hold_seconds=45, frac=0.5)
+        # held long enough BUT volume way below pace → still no fire
+        hits = process_ticks([{"instrument_token": 101, "last_price": 184.0,
+                               "volume_traded": 150_000}], watch, fired, arm,
+                             now=50, hold_seconds=45, frac=0.5)
+        assert hits == []
+        # same break but volume running hot → confirms
+        hits2 = process_ticks([{"instrument_token": 101, "last_price": 184.0,
+                                "volume_traded": 800_000}], watch, fired, arm,
+                              now=60, hold_seconds=45, frac=0.5)
+        assert len(hits2) == 1 and hits2[0]["symbol"] == "DEAD"
+
     def test_touch_without_clearance_does_not_arm(self):
         from scan.breakout_sniper import process_ticks
         arm, fired = {}, set()
