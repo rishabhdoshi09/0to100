@@ -92,6 +92,13 @@ def scan_us(max_workers: int = 8) -> list[dict]:
             _results = serialized
             _last_ts = time.time()
             _status = "ready"
+        # 🇺🇸🤖 US autopilot — same signals, paper-only, additive
+        try:
+            from execution.us_autopilot import on_setups, review_cycle
+            review_cycle()
+            on_setups(serialized)
+        except Exception as exc:
+            log.debug("us_autopilot_feed_skip", error=str(exc))
         log.info("us_scan_done", scanned=len(dfs), with_signals=len(serialized))
         return serialized
     except Exception as exc:
@@ -104,3 +111,33 @@ def scan_us(max_workers: int = 8) -> list[dict]:
 def get_us_results() -> tuple[list[dict], float, str]:
     with _lock:
         return list(_results), _last_ts, _status
+
+
+_loop_started = False
+
+
+def start_us_loop() -> None:
+    """Background daemon: during US market hours, scan every 15 min so the
+    US autopilot gets a live signal feed. Idle (5-min re-check) otherwise.
+    Started once from app.py alongside the other daemons."""
+    global _loop_started
+    with _lock:
+        if _loop_started:
+            return
+        _loop_started = True
+
+    def _worker():
+        while True:
+            try:
+                from data.us_data import us_market_open
+                if us_market_open():
+                    scan_us()
+                    time.sleep(900)          # 15 min during US hours
+                else:
+                    time.sleep(300)          # 5 min re-check off-hours
+            except Exception as exc:
+                log.debug("us_loop_error", error=str(exc))
+                time.sleep(300)
+
+    threading.Thread(target=_worker, name="us-scan-loop", daemon=True).start()
+    log.info("us_scan_loop_started")

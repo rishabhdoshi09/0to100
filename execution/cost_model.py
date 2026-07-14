@@ -75,6 +75,25 @@ def zerodha_charges(buy_price: float, sell_price: float, qty: int,
             "total": round(total, 2)}
 
 
+# ── US charges (Alpaca-style: $0 commission + tiny statutory sell fees) ────────
+_US_SEC_RATE = float(os.getenv("QT_US_SEC_RATE", "0.0000278") or 0.0000278)  # per $ sold
+_US_TAF_PER_SHARE = float(os.getenv("QT_US_TAF_PER_SHARE", "0.000166") or 0.000166)
+_US_TAF_CAP = float(os.getenv("QT_US_TAF_CAP", "8.30") or 8.30)
+
+
+def us_charges(buy_price: float, sell_price: float, qty: int) -> dict:
+    """US equity round trip: commission-free (Alpaca), only the small SEC
+    fee + FINRA TAF on the sell side. Cents, but honest cents."""
+    if qty <= 0 or buy_price <= 0 or sell_price <= 0:
+        return {"commission": 0.0, "sec": 0.0, "taf": 0.0, "total": 0.0}
+    sell_val = sell_price * qty
+    sec = sell_val * _US_SEC_RATE
+    taf = min(qty * _US_TAF_PER_SHARE, _US_TAF_CAP)
+    total = sec + taf
+    return {"commission": 0.0, "sec": round(sec, 4), "taf": round(taf, 4),
+            "total": round(total, 2)}
+
+
 def simulate_fill(price: float, side: str, is_stop: bool = False) -> float:
     """Realistic fill for a PAPER order. Buys slip up, sells slip down;
     stop-loss sells slip the most (they gap through the trigger)."""
@@ -88,13 +107,14 @@ def simulate_fill(price: float, side: str, is_stop: bool = False) -> float:
 
 def net_result(entry: float, exit_price: float, qty: int,
                product: str = "CNC", exit_is_stop: bool = False,
-               paper: bool = True) -> dict:
+               paper: bool = True, market: str = "IN") -> dict:
     """The honest bottom line for a closed trade.
 
     PAPER → slippage simulated on both fills (buy up, sell/stop down).
     LIVE  → entry/exit are already the real reconciled fills, so only
-            charges are applied. Returns
-    {gross, slippage, charges, net, net_pct} in ₹ (net_pct on entry value)."""
+            charges are applied. market 'IN' → Zerodha charges; 'US' →
+            Alpaca-style (commission-free + SEC/TAF). Returns
+    {gross, slippage, charges, net, net_pct} (net_pct on entry value)."""
     if qty <= 0 or entry <= 0 or exit_price <= 0:
         return {"gross": 0.0, "slippage": 0.0, "charges": 0.0,
                 "net": 0.0, "net_pct": 0.0}
@@ -106,7 +126,10 @@ def net_result(entry: float, exit_price: float, qty: int,
     ideal_gross = (exit_price - entry) * qty
     real_gross = (fill_exit - fill_entry) * qty
     slippage = round(ideal_gross - real_gross, 2)      # what slippage cost
-    ch = zerodha_charges(fill_entry, fill_exit, qty, product)["total"]
+    if market.upper() == "US":
+        ch = us_charges(fill_entry, fill_exit, qty)["total"]
+    else:
+        ch = zerodha_charges(fill_entry, fill_exit, qty, product)["total"]
     net = round(real_gross - ch, 2)
     net_pct = round(net / (entry * qty) * 100, 2) if entry * qty else 0.0
     return {"gross": round(ideal_gross, 2), "slippage": slippage,

@@ -11,10 +11,18 @@ _CARD = ("background:#0d1421;border:1px solid #1e293b;border-radius:10px;"
 
 
 def render_autopilot() -> None:
+    st.markdown("### 🤖 Autopilot")
+    _tab_in, _tab_us = st.tabs(["🇮🇳 India (Zerodha)", "🇺🇸 US (paper)"])
+    with _tab_in:
+        _render_india_autopilot()
+    with _tab_us:
+        _render_us_autopilot()
+
+
+def _render_india_autopilot() -> None:
     from execution.autopilot import (get_status, set_config, arm, disarm,
                                      ARM_PHRASE)
 
-    st.markdown("### 🤖 Autopilot")
     st.caption("System khud trade karega — tumhare set kiye limits ke andar, "
                "sniper/scanner ke signals pe, sirf strong sectors mein, "
                "har trade GTT-protected, +3% target. "
@@ -392,3 +400,120 @@ def _render_report_card() -> None:
                 f"· {t['qty']} sh ₹{t['entry']:,.1f}→₹{t['exit']:,.1f} · "
                 f"<span style='color:{p_col}'>₹{t['pnl']:+,.0f} "
                 f"({t['r']:+.1f}R)</span></div>", unsafe_allow_html=True)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 🇺🇸 US Autopilot — paper-only
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _render_us_autopilot() -> None:
+    from execution.us_autopilot import (get_status, set_config, arm, disarm,
+                                        report_card)
+
+    st.caption("US equities pe wahi engine + discipline (confirmed breakouts, "
+               "conviction, base quality), **PAPER only** — koi US broker nahi "
+               "chahiye. Entries US market hours (ET) mein, S&P benchmark, "
+               "+4% target. US LIVE ke liye aage Alpaca chahiye hoga.")
+    s = get_status()
+
+    armed = s["armed"]
+    a_col = "#00d4a0" if armed else "#8892a4"
+    a_txt = (f"ARMED — PAPER" if armed else
+             f"OFF{(' · ' + s['disarmed_reason']) if s['disarmed_reason'] else ''}")
+    st.markdown(
+        f"<div style='{_CARD};border-left:4px solid {a_col}'>"
+        f"<span style='font-size:1.05rem;font-weight:800;color:{a_col}'>"
+        f"● {a_txt}</span> <span style='font-size:.8rem;color:#8892a4'>· "
+        f"entries {s['start_time']}–{s['end_time']} ET · target "
+        f"+{s['target_pct']}%</span></div>", unsafe_allow_html=True)
+
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Pool (USD)", f"${s['pool']:,.0f}",
+              delta=f"${s['realized_pnl']:+,.0f}" if s["realized_pnl"] else None)
+    m2.metric("Deployed", f"${s['deployed']:,.0f}")
+    m3.metric("Available", f"${s['available']:,.0f}")
+    m4.metric("Trades today", f"{s['trades_today_count']}/{s['max_trades_per_day']}")
+
+    c1, c2 = st.columns([1.2, 2.8])
+    with c1:
+        if armed:
+            if st.button("⛔ DISARM", type="primary", width="stretch",
+                         key="us_disarm"):
+                disarm("user"); st.rerun()
+        else:
+            if st.button("🟢 ARM — US Paper", type="primary", width="stretch",
+                         key="us_arm"):
+                ok, msg = arm()
+                (st.success if ok else st.error)(msg)
+                if ok:
+                    st.rerun()
+    with c2:
+        st.caption("Same gates: armed → US window (settle ke baad) → daily/"
+                   "position limits → symbol once/day → score+conviction → "
+                   "live anchor (chase nahi) → capital+reserve. Din ka loss "
+                   "limit → khud DISARM. Costs: Alpaca-style (~$0 commission).")
+
+    with st.expander("⚙️ US limits", expanded=not s["allocation"]):
+        l1, l2, l3 = st.columns(3)
+        with l1:
+            alloc = st.number_input("Allocation ($)", 0.0,
+                                    value=float(s["allocation"]), step=1000.0,
+                                    key="us_alloc")
+            target = st.slider("Target %", 1.0, 15.0,
+                               float(s["target_pct"]), 0.5, key="us_tgt")
+        with l2:
+            max_pos = st.number_input("Max open positions", 1, 10,
+                                      int(s["max_open_positions"]), key="us_pos")
+            max_day = st.number_input("Max trades / day", 1, 15,
+                                      int(s["max_trades_per_day"]), key="us_day")
+        with l3:
+            min_sc = st.slider("Min score", 40, 95, int(s["min_score"]),
+                               key="us_score")
+            min_cv = st.slider("Min conviction", 0, 90, int(s["min_conviction"]),
+                               key="us_conv")
+        if st.button("💾 Save US limits", key="us_save", width="stretch"):
+            set_config(allocation=alloc, target_pct=float(target),
+                       max_open_positions=int(max_pos),
+                       max_trades_per_day=int(max_day),
+                       min_score=float(min_sc), min_conviction=float(min_cv))
+            st.success("US limits saved."); st.rerun()
+
+    if s["open_trades"]:
+        st.markdown("#### 📍 US positions")
+        for t in s["open_trades"]:
+            st.markdown(
+                f"<div style='{_CARD}'>"
+                f"<span style='color:#e2e8f0;font-weight:700;"
+                f"font-family:JetBrains Mono,monospace'>{t['symbol']}</span>"
+                f"<span style='font-size:.75rem;color:#8892a4'> (PAPER) · "
+                f"{t['qty']} sh @ ${float(t['entry_price'] or 0):,.2f} · "
+                f"stop ${float(t['stop_price'] or 0):,.2f} · "
+                f"target ${float(t['target_price'] or 0):,.2f}</span></div>",
+                unsafe_allow_html=True)
+
+    rc = report_card()
+    v_style = {"COLLECTING_EVIDENCE": "#f59e0b", "READY_CANDIDATE": "#00d4a0",
+               "NOT_READY": "#ff4b4b"}
+    st.markdown(
+        f"<div style='{_CARD};border-left:4px solid "
+        f"{v_style.get(rc['verdict'], '#8892a4')}'>"
+        f"<b style='color:{v_style.get(rc['verdict'], '#8892a4')}'>"
+        f"{rc['verdict']}</b> · <span style='font-size:.82rem;color:#c9d1d9'>"
+        f"{rc['verdict_reason']}</span></div>", unsafe_allow_html=True)
+    if rc["trades"]:
+        stt = rc["stats"]
+        r1, r2, r3, r4 = st.columns(4)
+        r1.metric("Closed", stt["n"])
+        r2.metric("Win rate", f"{stt['win_rate']:.0f}%")
+        r3.metric("Net P&L", f"${stt['total_pnl']:+,.2f}")
+        r4.metric("Expectancy", f"{stt['expectancy_r']:+.2f}R")
+
+    st.markdown("#### 📜 Activity")
+    acts = s.get("activity", [])
+    if acts:
+        st.markdown(f"<div style='{_CARD};font-size:.78rem;color:#c9d1d9;"
+                    f"font-family:JetBrains Mono,monospace'>"
+                    + "<br>".join(acts[:20]) + "</div>", unsafe_allow_html=True)
+    else:
+        st.caption("Allocation set karke ARM karo — US market hours mein "
+                   "decisions yahan aayenge.")

@@ -63,6 +63,28 @@ def sp500_return_30d() -> float:
         return 0.0
 
 
+def us_live_prices(symbols: list[str]) -> dict[str, dict]:
+    """{symbol: {price}} via yfinance fast_info. Near-real-time for
+    indices, can be delayed for individual stocks (free-feed limit).
+    Missing symbol simply absent — never a fake zero."""
+    out: dict[str, dict] = {}
+    if not symbols:
+        return out
+    try:
+        import yfinance as yf
+        for sym in symbols:
+            try:
+                fi = yf.Ticker(sym).fast_info
+                px = float(getattr(fi, "last_price", 0) or 0)
+                if px > 0:
+                    out[sym] = {"price": px}
+            except Exception:
+                continue
+    except Exception:
+        pass
+    return out
+
+
 def us_market_open(now=None) -> bool:
     """NYSE/Nasdaq regular session — 09:30–16:00 America/New_York."""
     try:

@@ -158,6 +158,12 @@ if "monitor_started" not in st.session_state:
         start_telegram_listener()
     except Exception:
         pass
+    # 🇺🇸 US scan loop — during US market hours, feeds the US paper autopilot
+    try:
+        from scan.us_scanner import start_us_loop
+        start_us_loop()
+    except Exception:
+        pass
 
 # ── Cached client initialisation ─────────────────────────────────────────────
 @st.cache_resource

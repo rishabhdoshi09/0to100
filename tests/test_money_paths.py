@@ -1466,6 +1466,73 @@ class TestDailyPulseChart:
         assert sp._daily_ohlcv("THIN") is None
 
 
+class TestUSCostModel:
+    def test_us_charges_commission_free(self):
+        from execution.cost_model import us_charges, net_result
+        c = us_charges(100, 105, 100)
+        assert c["commission"] == 0.0                    # Alpaca-style
+        assert c["total"] < 1.0                          # only tiny SEC + TAF
+        # net_result routes US market correctly
+        us = net_result(100, 105, 100, exit_is_stop=False, paper=True, market="US")
+        india = net_result(100, 105, 100, exit_is_stop=False, paper=True)
+        assert us["net"] > india["net"]                  # US far cheaper
+        assert us["net"] < us["gross"]                   # still slippage+fees
+
+
+class TestUSAutopilot:
+    def _setup(self, tmp_path, monkeypatch):
+        import execution.us_autopilot as ua
+        import execution.trade_executor as te
+        import data.us_data as ud
+        monkeypatch.setattr(ua, "_STATE_FILE", tmp_path / "us_ap.json")
+        monkeypatch.setattr(te, "_DB", tmp_path / "trades.db")
+        ua._state = {}
+        monkeypatch.setattr(ua, "_notify", lambda m: None)
+        monkeypatch.setattr(ua, "_in_window", lambda now_et=None: True)
+        monkeypatch.setattr(ud, "us_live_prices",
+                            lambda syms: {s: {"price": 100.0} for s in syms})
+        # anchor uses us_live_prices too; entry passed = 100 so no chase
+        ua.set_config(allocation=50000)
+        return ua, te
+
+    def test_paper_only_and_gates(self, tmp_path, monkeypatch):
+        ua, te = self._setup(tmp_path, monkeypatch)
+        # not armed → no trade
+        assert ua.consider("AAPL", 100, 95, 80, 60) is False
+        ua.arm()
+        # invalid stop → no trade
+        assert ua.consider("AAPL", 100, 105, 80, 60) is False
+        # low conviction → blocked
+        assert ua.consider("AAPL", 100, 95, 80, 40) is False
+        # valid → paper trade, tagged US_AUTOPILOT, +4% target
+        assert ua.consider("AAPL", 100, 95, 80, 70) is True
+        t = te.recent_trades(1)[0]
+        assert "US_AUTOPILOT" in t["note"] and t["mode"] == "PAPER"
+        assert abs(float(t["target_price"]) - 104.0) < 0.5
+        # once per day
+        assert ua.consider("AAPL", 100, 95, 80, 70) is False
+
+    def test_us_report_card_net_and_evidence_gate(self, tmp_path, monkeypatch):
+        import sqlite3
+        from datetime import datetime as dt
+        ua, te = self._setup(tmp_path, monkeypatch)
+        conn = sqlite3.connect(te._DB)
+        conn.execute(te._DDL)
+        conn.execute(
+            "INSERT INTO trades (placed_at, mode, symbol, qty, entry_type, "
+            "entry_price, stop_price, target_price, product, status, note) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+            (dt.now().isoformat(timespec='seconds'), "PAPER", "AAPL", 100,
+             "MARKET", 100, 95, 104, "CNC", "PAPER_WIN", "US_AUTOPILOT:t"))
+        conn.commit(); conn.close()
+        rc = ua.report_card()
+        assert rc["stats"]["n"] == 1
+        assert 0 < rc["stats"]["total_pnl"] < 400          # net < gross 400
+        assert rc["verdict"] == "COLLECTING_EVIDENCE"      # <30 trades
+        ua._account_closed()
+        assert ua.get_status()["realized_pnl"] > 0
+
+
 class TestUSScanner:
     def test_universe_clean(self):
         from data.us_universe import get_us_universe, get_us_universe_with_names
