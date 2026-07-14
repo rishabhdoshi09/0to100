@@ -92,40 +92,68 @@ _MIN_BREAKOUT_CONVICTION = float(
     _os.getenv("QT_BREAKOUT_MIN_CONVICTION", "50") or 50)
 
 
+def base_tightness(high, low, price: float, sma50: float) -> tuple[float, str]:
+    """0-1 base quality. Traders prize BASE breakouts — a spring-loaded
+    move out of tight consolidation, not a late break after a vertical
+    run. Rewards a tight 6-week base; penalises extension above the
+    50-DMA (already extended = late, wide stop, trap-prone)."""
+    try:
+        import numpy as _np
+        if len(high) < 32:
+            return 0.5, ""
+        base_hi = float(_np.max(high[-31:-1]))      # base BEFORE today's bar
+        base_lo = float(_np.min(low[-31:-1]))
+        rng = (base_hi - base_lo) / base_hi if base_hi > 0 else 1.0
+        tight = 1.0 - _norm(rng, 0.06, 0.25)        # 6% range→1.0, 25%+→0
+        ext = (price / sma50 - 1) if sma50 > 0 else 0.0
+        ext_ok = 1.0 - _norm(ext, 0.05, 0.20)       # ≤5% above→ok, ≥20%→extended
+        q = 0.6 * tight + 0.4 * ext_ok
+        note = ""
+        if tight >= 0.7 and ext_ok >= 0.6:
+            note = f"tight {rng*100:.0f}% base se nikla (spring-loaded)"
+        elif ext_ok < 0.4:
+            note = f"50-DMA se {ext*100:.0f}% upar — extended, late break"
+        return round(q, 2), note
+    except Exception:
+        return 0.5, ""
+
+
 def breakout_conviction(vratio: float, deliv_now, deliv_base,
                         rs_outperf: float, above_50: bool,
-                        above_200: bool) -> tuple[float, list[str]]:
+                        above_200: bool, base_q: float = 0.5
+                        ) -> tuple[float, list[str]]:
     """0-100 conviction behind a confirmed breakout + plain-English factors.
-      Volume 30 · Delivery 25 · Relative strength 25 · Trend stage 20."""
+      Volume 25 · Delivery 20 · Relative strength 20 · Trend stage 15 ·
+      Base quality 20 (base breakouts > extended breakouts)."""
     factors: list[str] = []
     score = 0.0
     # Volume — is there force behind the break?
-    v = _norm(vratio, 1.5, 3.0) * 30
-    score += v
+    score += _norm(vratio, 1.5, 3.0) * 25
     if vratio >= 2.0:
         factors.append(f"{vratio:.1f}× volume")
     # Delivery % — institutional ownership vs intraday punting (India edge)
     if deliv_now is not None:
-        d = _norm(float(deliv_now), 35, 70) * 15
+        d = _norm(float(deliv_now), 35, 70) * 12
         if deliv_base is not None and deliv_now > deliv_base * 1.1:
-            d += 10
+            d += 8
             factors.append(f"delivery {deliv_now:.0f}% & rising (real buying)")
         elif deliv_now >= 55:
             factors.append(f"delivery {deliv_now:.0f}% (strong ownership)")
-        score += min(25, d)
+        score += min(20, d)
     else:
-        score += 12                     # unknown → neutral, not penalised
+        score += 10                     # unknown → neutral, not penalised
     # Relative strength — leading the index or lagging it?
-    rs = _norm(rs_outperf, -3, 12) * 25
-    score += rs
+    score += _norm(rs_outperf, -3, 12) * 20
     if rs_outperf >= 3:
         factors.append(f"Nifty se {rs_outperf:+.0f}% aage (RS leader)")
     # Trend stage — a breakout in a Stage-2 uptrend, not a dead-cat bounce
     if above_50:
-        score += 10
+        score += 7.5
     if above_200:
-        score += 10
+        score += 7.5
         factors.append("200-DMA ke upar (Stage 2)")
+    # Base quality — the trader's edge: base breakout > extended breakout
+    score += max(0.0, min(1.0, base_q)) * 20
     return round(min(100.0, score), 0), factors
 
 
@@ -372,10 +400,13 @@ class UnifiedScanner:
                              if len(close) > 31 else 0.0)
                 rs_outperf = stk_ret30 - self._nifty_ret30
                 above_200 = len(close) >= 200 and price > close[-200:].mean()
+                base_q, base_note = base_tightness(high, low, price, sma50)
                 conv, conv_factors = breakout_conviction(
                     vratio=vratio, deliv_now=d_now, deliv_base=d_base,
                     rs_outperf=rs_outperf, above_50=price > sma50,
-                    above_200=above_200)
+                    above_200=above_200, base_q=base_q)
+                if base_note:
+                    conv_factors.append(base_note)
                 if conv >= _MIN_BREAKOUT_CONVICTION:
                     breakout_grade = grade
                     breakout_conv = conv

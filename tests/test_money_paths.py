@@ -1230,6 +1230,20 @@ class TestBreakoutConviction:
                     rs_outperf=5, above_50=True, above_200=True)
         assert 40 <= mid <= 75
 
+    def test_base_tightness_rewards_tight_penalises_extended(self):
+        import numpy as np
+        from scan.unified_scanner import base_tightness
+        # tight base: 40 sessions in a ~4% range, price just above, near 50-DMA
+        hi = np.array([102.0] * 40); lo = np.array([98.0] * 40)
+        q_tight, note = base_tightness(hi, lo, price=103, sma50=101)
+        assert q_tight >= 0.75 and "tight" in note
+        # extended: wide swing base + price 25% above 50-DMA
+        hi2 = np.linspace(80, 130, 40)
+        lo2 = hi2 - 20
+        q_ext, note2 = base_tightness(hi2, lo2, price=130, sma50=104)
+        assert q_ext < q_tight
+        assert "extended" in note2
+
     def test_low_conviction_break_is_watch_not_buy(self):
         import numpy as np
         import pandas as pd
