@@ -111,19 +111,25 @@ def _notify(msg: str) -> None:
 # ── Journal (shared DB, US_AUTOPILOT tag) ─────────────────────────────────────
 
 def _trades(statuses: tuple) -> list[dict]:
+    conn = None
     try:
-        from execution.trade_executor import _DB
+        from execution.trade_executor import _DB, connect as _te_connect
         if not _DB.exists():
             return []
-        conn = sqlite3.connect(_DB)
+        conn = _te_connect()
         conn.row_factory = sqlite3.Row
         q = ("SELECT * FROM trades WHERE note LIKE ? AND status IN (%s) "
              "ORDER BY id DESC" % ",".join("?" * len(statuses)))
         rows = conn.execute(q, (f"%{TAG}%", *statuses)).fetchall()
-        conn.close()
         return [dict(r) for r in rows]
     except Exception:
         return []
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
 
 
 def _open_trades() -> list[dict]:
@@ -131,14 +137,20 @@ def _open_trades() -> list[dict]:
 
 
 def _update(trade_id: int, sets: str, params: tuple) -> None:
+    conn = None
     try:
-        from execution.trade_executor import _DB
-        conn = sqlite3.connect(_DB)
+        from execution.trade_executor import connect as _te_connect
+        conn = _te_connect()
         conn.execute(f"UPDATE trades SET {sets} WHERE id=?", (*params, trade_id))
         conn.commit()
-        conn.close()
     except Exception as exc:
         log.debug("us_autopilot_update_failed", error=str(exc))
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
 
 
 # ── Public config / status ────────────────────────────────────────────────────
@@ -464,8 +476,22 @@ def _circuit_breaker() -> None:
     today = date.today().isoformat()
     day = sum(_net_pnl(t) for t in _trades(_WIN + _LOSS)
               if str(t["placed_at"])[:10] == today)
+    # Include UNREALIZED on open positions — else three open trades could
+    # bleed −8% and never trip the breaker until they close (NSE-parity).
+    opens = _open_trades()
+    if opens:
+        try:
+            from data.us_data import us_live_prices
+            live = us_live_prices(sorted({t["symbol"] for t in opens}))
+            for t in opens:
+                q = live.get(t["symbol"])
+                if q and q.get("price"):
+                    day += ((float(q["price"]) - float(t["entry_price"] or 0))
+                            * int(t["qty"] or 0))
+        except Exception:
+            pass
     if day <= -pool * s["daily_loss_limit_pct"]:
-        disarm(f"circuit breaker: day P&L ${day:,.0f}")
+        disarm(f"circuit breaker: day P&L ${day:,.0f} (realized+open)")
 
 
 # ── Report Card ───────────────────────────────────────────────────────────────

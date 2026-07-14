@@ -31,11 +31,11 @@ _alerted: dict[str, set] = {}      # {YYYY-MM-DD: {"SYM:TYPE", ...}}
 
 
 def _open_trades() -> list[dict]:
-    from execution.trade_executor import _DB
+    from execution.trade_executor import _DB, connect as _te_connect
     try:
         if not _DB.exists():
             return []
-        conn = sqlite3.connect(_DB)
+        conn = _te_connect()
         conn.row_factory = sqlite3.Row
         rows = conn.execute(
             "SELECT * FROM trades WHERE status IN "
@@ -49,9 +49,9 @@ def _open_trades() -> list[dict]:
 
 
 def _close_paper(trade_id: int, outcome: str, exit_price: float) -> None:
-    from execution.trade_executor import _DB
+    from execution.trade_executor import _DB, connect as _te_connect
     try:
-        conn = sqlite3.connect(_DB)
+        conn = _te_connect()
         conn.execute(
             "UPDATE trades SET status=?, note=? WHERE id=?",
             (f"PAPER_{outcome}",

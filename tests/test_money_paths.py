@@ -1555,6 +1555,62 @@ class TestUSAutopilot:
         # once per day
         assert ua.consider("AAPL", 100, 95, 80, 70) is False
 
+    def test_concurrent_writes_no_lock_error(self, tmp_path, monkeypatch):
+        """Both autopilots + position manager write the SAME db from
+        threads. The WAL + busy-timeout connect() must survive concurrent
+        writers without 'database is locked' losing a journal row."""
+        import threading
+        import execution.trade_executor as te
+        monkeypatch.setattr(te, "_DB", tmp_path / "trades.db")
+        te._journal({"mode": "PAPER", "symbol": "SEED", "qty": 1,
+                     "entry_type": "MARKET", "entry_price": 100, "stop_price": 95,
+                     "target_price": 104, "product": "CNC",
+                     "status": "PAPER_OPEN", "note": "seed"})
+        errors = []
+
+        def _writer(i):
+            try:
+                for j in range(10):
+                    te._journal({"mode": "PAPER", "symbol": f"T{i}_{j}", "qty": 1,
+                                 "entry_type": "MARKET", "entry_price": 100,
+                                 "stop_price": 95, "target_price": 104,
+                                 "product": "CNC", "status": "PAPER_OPEN",
+                                 "note": "concurrent"})
+            except Exception as exc:
+                errors.append(str(exc))
+        threads = [threading.Thread(target=_writer, args=(i,)) for i in range(6)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        assert not errors, errors
+        assert len(te.recent_trades(200)) == 61        # 1 seed + 60, none lost
+
+    def test_us_breaker_trips_on_open_drawdown(self, tmp_path, monkeypatch):
+        """US circuit breaker must fire on UNREALIZED loss of open
+        positions, not only realized (NSE-parity)."""
+        import sqlite3
+        import data.us_data as ud
+        from datetime import datetime as dt
+        ua, te = self._setup(tmp_path, monkeypatch)
+        ua.set_config(daily_loss_limit_pct=0.03)      # -3% of pool
+        ua.arm()
+        conn = sqlite3.connect(te._DB)
+        conn.execute(te._DDL)
+        # open position: 200 sh @ $100 = $20k; pool 50k → 3% = $1,500
+        conn.execute(
+            "INSERT INTO trades (placed_at, mode, symbol, qty, entry_type, "
+            "entry_price, stop_price, target_price, product, status, note) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+            (dt.now().isoformat(timespec='seconds'), "PAPER", "TSLA", 200,
+             "MARKET", 100, 90, 104, "CNC", "PAPER_OPEN", "US_AUTOPILOT:t"))
+        conn.commit(); conn.close()
+        # live $90 → open loss (90-100)*200 = -$2,000 < -$1,500 → trip
+        monkeypatch.setattr(ud, "us_live_prices",
+                            lambda syms: {"TSLA": {"price": 90.0}})
+        ua._circuit_breaker()
+        assert ua.get_status()["armed"] is False
+
     def test_us_report_card_net_and_evidence_gate(self, tmp_path, monkeypatch):
         import sqlite3
         from datetime import datetime as dt

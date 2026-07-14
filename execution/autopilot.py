@@ -266,10 +266,10 @@ _CLOSED_LOSS = ("PAPER_LOSS", "AUTO_LOSS")
 def _autopilot_trades(statuses: tuple) -> list[dict]:
     import sqlite3
     try:
-        from execution.trade_executor import _DB
+        from execution.trade_executor import _DB, connect as _te_connect
         if not _DB.exists():
             return []
-        conn = sqlite3.connect(_DB)
+        conn = _te_connect()
         conn.row_factory = sqlite3.Row
         q = ("SELECT * FROM trades WHERE note LIKE ? AND status IN (%s) "
              "ORDER BY id DESC" % ",".join("?" * len(statuses)))
@@ -288,8 +288,8 @@ def _open_autopilot_trades() -> list[dict]:
 def _set_status(trade_id: int, status: str, note_suffix: str) -> None:
     import sqlite3
     try:
-        from execution.trade_executor import _DB
-        conn = sqlite3.connect(_DB)
+        from execution.trade_executor import _DB, connect as _te_connect
+        conn = _te_connect()
         conn.execute("UPDATE trades SET status=?, note=note||? WHERE id=?",
                      (status, f" | {note_suffix}", trade_id))
         conn.commit()
@@ -303,8 +303,8 @@ def _ensure_exit_col() -> None:
     existing rows/readers are untouched (NULL = fall back to planned exit)."""
     import sqlite3
     try:
-        from execution.trade_executor import _DB
-        conn = sqlite3.connect(_DB)
+        from execution.trade_executor import _DB, connect as _te_connect
+        conn = _te_connect()
         for col in ("exit_price REAL", "orig_stop REAL", "signal_price REAL"):
             try:
                 conn.execute(f"ALTER TABLE trades ADD COLUMN {col}")
@@ -319,8 +319,8 @@ def _ensure_exit_col() -> None:
 def _update_trade(trade_id: int, sets: str, params: tuple) -> None:
     import sqlite3
     try:
-        from execution.trade_executor import _DB
-        conn = sqlite3.connect(_DB)
+        from execution.trade_executor import _DB, connect as _te_connect
+        conn = _te_connect()
         conn.execute(f"UPDATE trades SET {sets} WHERE id=?", (*params, trade_id))
         conn.commit()
         conn.close()
@@ -333,8 +333,8 @@ def _apply_entry_fill(trade_id: int, avg_fill: float) -> None:
     (COALESCE: sirf pehli baar), warna slippage kabhi measure nahi hogi."""
     import sqlite3
     try:
-        from execution.trade_executor import _DB
-        conn = sqlite3.connect(_DB)
+        from execution.trade_executor import _DB, connect as _te_connect
+        conn = _te_connect()
         conn.execute(
             "UPDATE trades SET signal_price=COALESCE(signal_price, entry_price), "
             "entry_price=?, note=note||? WHERE id=?",

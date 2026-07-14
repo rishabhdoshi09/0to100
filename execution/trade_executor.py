@@ -50,11 +50,27 @@ CREATE TABLE IF NOT EXISTS trades (
 """
 
 
+def connect():
+    """Concurrency-safe SQLite connection for the shared trades DB.
+
+    Two autopilots (NSE + US) and the position manager write this DB from
+    separate daemon threads. WAL lets readers not block the writer, and a
+    10s busy timeout makes a second writer WAIT for the lock instead of
+    instantly raising 'database is locked'. Every writer must use this."""
+    conn = sqlite3.connect(_DB, timeout=10.0)
+    try:
+        conn.execute("PRAGMA busy_timeout=10000")
+        conn.execute("PRAGMA journal_mode=WAL")
+    except Exception:
+        pass
+    return conn
+
+
 def _journal(row: dict) -> None:
     try:
         with _db_lock:
             _DB.parent.mkdir(parents=True, exist_ok=True)
-            conn = sqlite3.connect(_DB)
+            conn = connect()
             conn.execute(_DDL)
             conn.execute(
                 """INSERT INTO trades (placed_at, mode, symbol, qty, entry_type,
