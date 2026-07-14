@@ -17,6 +17,14 @@ from logger import get_logger
 
 log = get_logger(__name__)
 
+# yfinance prints its own '401 Invalid Crumb / possibly delisted' spam via
+# stdout + its logger — muzzle the logger so the console stays clean.
+try:
+    import logging as _logging
+    _logging.getLogger("yfinance").setLevel(_logging.CRITICAL)
+except Exception:
+    pass
+
 _cache: dict[str, tuple[float, object]] = {}       # symbol -> (ts, DataFrame)
 _lock = threading.Lock()
 _TTL = 3600.0                                       # 1h — daily data barely moves

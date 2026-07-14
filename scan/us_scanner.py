@@ -27,6 +27,7 @@ _lock = threading.Lock()
 _results: list[dict] = []
 _last_ts: float = 0.0
 _status: str = "idle"        # idle | scanning | ready | error
+_pushed: dict[str, set] = {}  # {YYYY-MM-DD: symbols alerted} — one/stock/day
 
 
 def _serialize(r) -> dict:
@@ -92,6 +93,11 @@ def scan_us(max_workers: int = 8) -> list[dict]:
             _results = serialized
             _last_ts = time.time()
             _status = "ready"
+        # 📲 Telegram push — US setups bhi phone pe (NSE push untouched)
+        try:
+            _push_us_setups(serialized)
+        except Exception as exc:
+            log.debug("us_push_skip", error=str(exc))
         # 🇺🇸🤖 US autopilot — same signals, paper-only, additive
         try:
             from execution.us_autopilot import on_setups, review_cycle
@@ -106,6 +112,56 @@ def scan_us(max_workers: int = 8) -> list[dict]:
         with _lock:
             _status = "error"
         return []
+
+
+def _push_us_setups(results: list[dict]) -> None:
+    """Fresh US BUY/STRONG-BUY setups → Telegram, highest conviction first.
+    One alert per stock per day. Silent if Telegram not configured."""
+    from datetime import datetime
+    try:
+        from alerts.telegram_alerts import AlertEngine
+        engine = AlertEngine()
+        if not engine.is_configured():
+            return
+    except Exception:
+        return
+    today = datetime.now().strftime("%Y-%m-%d")
+    with _lock:
+        _pushed.setdefault(today, set())
+        for k in list(_pushed):
+            if k != today:
+                del _pushed[k]
+        seen = _pushed[today]
+    ranked = sorted(
+        [r for r in results if r.get("verdict") in ("STRONG BUY", "BUY")
+         and r["symbol"] not in seen],
+        key=lambda r: float(r.get("conviction_rank") or r.get("score", 0) or 0),
+        reverse=True)[:5]
+    if not ranked:
+        return
+    lines = ["🇺🇸 <b>US setups mile</b>"]
+    for r in ranked:
+        emoji = "🔥" if r["verdict"] == "STRONG BUY" else "⚡"
+        hc = "🎯 " if r.get("high_conviction") else ""
+        conv = r.get("breakout_conviction") or 0
+        conv_bit = f" · conviction {conv:.0f}" if conv else ""
+        why = (r.get("reasons") or [""])[0]
+        lines.append(
+            f"\n{emoji} {hc}<b>{r['symbol']}</b> ${float(r.get('price') or 0):,.2f}"
+            f" — {r['verdict']}{conv_bit}\n"
+            f"   {why[:120]}\n"
+            f"   Entry ${float(r.get('entry') or 0):,.2f} · "
+            f"Stop ${float(r.get('stop') or 0):,.2f} · "
+            f"Target ${float(r.get('target') or 0):,.2f}")
+    lines.append("\n<i>US market · paper autopilot in 🇺🇸 tab · "
+                 "live ke liye US broker chahiye</i>")
+    try:
+        engine.send("\n".join(lines))
+        with _lock:
+            _pushed[today].update(r["symbol"] for r in ranked)
+        log.info("us_setups_pushed", count=len(ranked))
+    except Exception as exc:
+        log.debug("us_push_send_failed", error=str(exc))
 
 
 def get_us_results() -> tuple[list[dict], float, str]:

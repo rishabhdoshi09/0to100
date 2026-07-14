@@ -1569,6 +1569,33 @@ class TestUSScanner:
                               for s in r.signals}
         assert r.breakout_conviction > 0                 # engine graded it
 
+    def test_us_telegram_push_dedup(self, monkeypatch):
+        """US setups push to Telegram, highest-conviction first, once/stock/day."""
+        import scan.us_scanner as us
+        sent = []
+
+        class _Eng:
+            def is_configured(self): return True
+            def send(self, msg): sent.append(msg)
+        monkeypatch.setattr("alerts.telegram_alerts.AlertEngine", _Eng)
+        monkeypatch.setattr(us, "_pushed", {}, raising=False)
+        rows = [
+            {"symbol": "NVDA", "verdict": "STRONG BUY", "price": 900,
+             "entry": 900, "stop": 860, "target": 940, "score": 88,
+             "conviction_rank": 290, "breakout_conviction": 82,
+             "high_conviction": True, "reasons": ["clean base break"]},
+            {"symbol": "AAPL", "verdict": "BUY", "price": 200, "entry": 200,
+             "stop": 190, "target": 208, "score": 70, "conviction_rank": 160,
+             "reasons": ["momentum"]},
+        ]
+        us._push_us_setups(rows)
+        assert len(sent) == 1
+        assert "NVDA" in sent[0] and "AAPL" in sent[0]
+        assert sent[0].index("NVDA") < sent[0].index("AAPL")   # conviction order
+        # second call same day → nothing new (dedup)
+        us._push_us_setups(rows)
+        assert len(sent) == 1
+
     def test_us_scan_serialize_shape(self, monkeypatch):
         """scan_us serializes results like the NSE store (cards reuse)."""
         import scan.us_scanner as us

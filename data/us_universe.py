@@ -27,7 +27,7 @@ _US = {
     "NFLX": "Netflix", "DIS": "Disney", "CMCSA": "Comcast",
     "T": "AT&T", "VZ": "Verizon", "TMUS": "T-Mobile",
     "UBER": "Uber", "ABNB": "Airbnb", "SHOP": "Shopify",
-    "SPOT": "Spotify", "PYPL": "PayPal", "SQ": "Block",
+    "SPOT": "Spotify", "PYPL": "PayPal", "XYZ": "Block",
     "COIN": "Coinbase", "HOOD": "Robinhood",
     # Consumer
     "COST": "Costco", "WMT": "Walmart", "HD": "Home Depot",
