@@ -1067,6 +1067,24 @@ with st.sidebar:
             st.session_state["terminal_symbol"] = _qs
             st.rerun()
 
+    # ── Market selector — Auto (by hours) / India / US ───────────────────
+    try:
+        from core.market_session import resolve_market, status_line, market_meta
+        _mkt_pref = st.radio(
+            "Market", ["Auto", "🇮🇳 India", "🇺🇸 US"], horizontal=True,
+            index=0, key="market_pref_radio", label_visibility="collapsed")
+        _pref_map = {"Auto": "AUTO", "🇮🇳 India": "IN", "🇺🇸 US": "US"}
+        _active_market = resolve_market(_pref_map.get(_mkt_pref, "AUTO"))
+        st.session_state["active_market"] = _active_market
+        _mm = market_meta(_active_market)
+        st.markdown(
+            f"<div style='font-size:.66rem;color:#8892a4;margin:-4px 0 6px;"
+            f"font-family:JetBrains Mono,monospace'>{status_line()} · "
+            f"dikha raha: <b style='color:#00d4ff'>{_mm['flag']} {_mm['name']}"
+            f"</b></div>", unsafe_allow_html=True)
+    except Exception:
+        st.session_state["active_market"] = "IN"
+
     # ── Main Navigation — exactly 5 items (Moneycontrol-style) ───────────
     if "_nav_pending" in st.session_state:
         st.session_state["sidebar_nav"] = st.session_state.pop("_nav_pending")
@@ -1370,15 +1388,19 @@ elif _page == "Daily Pulse":
 # PAGE: INSTITUTIONAL TERMINAL
 # ══════════════════════════════════════════════════════════════════════════════
 elif _page in ("Institutional", "Find Setups"):
-    # Use full NSE list so scanner finds setups from all listed stocks
     from core.error_guard import guard as _guard
     with _guard("Smart Scanner"):
-        try:
-            from data.nse_universe import get_nse_universe as _get_nse
-            _all_syms = _get_nse() or symbol_list
-        except Exception:
-            _all_syms = symbol_list
-        render_scanner(_all_syms)
+        # Market-aware: US hours (ya manual US) → US scanner; warna NSE
+        if st.session_state.get("active_market") == "US":
+            from ui.us_scanner import render_us_scanner
+            render_us_scanner()
+        else:
+            try:
+                from data.nse_universe import get_nse_universe as _get_nse
+                _all_syms = _get_nse() or symbol_list
+            except Exception:
+                _all_syms = symbol_list
+            render_scanner(_all_syms)
 
 
 # ══════════════════════════════════════════════════════════════════════════════

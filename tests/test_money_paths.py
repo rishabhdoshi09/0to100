@@ -1619,6 +1619,32 @@ class TestUSScanner:
                     "target"} <= set(r)
 
 
+class TestMarketSession:
+    def test_active_market_by_hours(self):
+        import pytz
+        from datetime import datetime as dt
+        from core.market_session import auto_market, resolve_market
+        ist = pytz.timezone("Asia/Kolkata")
+        # Tue 11:00 IST → NSE open → IN
+        assert auto_market(ist.localize(dt(2026, 7, 14, 11, 0))) == "IN"
+        # Tue 21:00 IST = 11:30 ET → US open, NSE closed → US
+        assert auto_market(ist.localize(dt(2026, 7, 14, 21, 0))) == "US"
+        # Tue 05:00 IST → both closed → home default IN
+        assert auto_market(ist.localize(dt(2026, 7, 14, 5, 0))) == "IN"
+        # weekend → IN default
+        assert auto_market(ist.localize(dt(2026, 7, 11, 21, 0))) == "IN"
+
+    def test_manual_override_wins(self):
+        import pytz
+        from datetime import datetime as dt
+        from core.market_session import resolve_market
+        ist = pytz.timezone("Asia/Kolkata")
+        now = ist.localize(dt(2026, 7, 14, 11, 0))     # NSE open
+        assert resolve_market("US", now) == "US"        # override to US
+        assert resolve_market("IN", now) == "IN"
+        assert resolve_market("AUTO", now) == "IN"      # auto → NSE (open)
+
+
 class TestUSMarketClock:
     def test_us_session_boundaries(self):
         import pytz

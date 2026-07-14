@@ -134,6 +134,14 @@ def _stock_line(r: dict) -> str:
 
 
 def render_street_pulse() -> None:
+    # Market-aware: US hours (ya manual US) → US pulse
+    try:
+        if st.session_state.get("active_market") == "US":
+            _render_us_pulse()
+            return
+    except Exception:
+        pass
+
     with st.spinner("Aaj ka pulse ban raha hai…"):
         p = _pulse()
 
@@ -345,3 +353,95 @@ def render_street_pulse() -> None:
         if st.button("⟳ Refresh pulse", key="pulse_refresh", width="stretch"):
             _pulse.clear()
             st.rerun()
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 🇺🇸 US Pulse — same layout, US setups (built from the US scanner)
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _render_us_pulse() -> None:
+    from data.us_data import us_market_open
+    try:
+        from scan.us_scanner import get_us_results, scan_us
+        results, ts, status = get_us_results()
+        if not results:
+            with st.spinner("US setups scan ho rahe hain…"):
+                results = scan_us()
+    except Exception:
+        results = []
+
+    is_open = us_market_open()
+    chip = ("🟢 US OPEN" if is_open else "🔴 US CLOSED")
+    st.markdown(
+        f"<div style='{_CARD};border-left:3px solid #60a5fa'>"
+        f"<div style='font-size:1.25rem;font-weight:800;color:#e6edf3'>"
+        f"🇺🇸 US Street Pulse</div>"
+        f"<div style='font-size:.8rem;color:#8892a4'>{chip} · "
+        f"{len(results)} setups · same conviction engine · S&P benchmark</div>"
+        f"</div>", unsafe_allow_html=True)
+
+    if not results:
+        st.caption("Abhi US setups nahi mile — US market hours (7pm–1:30am IST) "
+                   "mein ya **US Scanner** page se scan karo.")
+        return
+
+    buys = [r for r in results if r.get("verdict") in ("STRONG BUY", "BUY")]
+    pre = [r for r in results if "PreBreakout" in r.get("categories", [])]
+
+    c1, c2 = st.columns(2)
+    with c1:
+        _section_title("🔥 Buzzing / Strongest US Setup")
+        if buys:
+            b = buys[0]
+            _us_setup_card(b, accent="#f59e0b")
+        else:
+            st.caption("Koi strong US setup nahi abhi.")
+
+        _section_title("💪 Gaining Strength (pre-breakout)")
+        if pre:
+            _us_setup_card(min(pre, key=lambda r: r.get("pivot_distance_pct") or 99),
+                           accent="#00d4a0")
+        else:
+            st.caption("Koi US accumulation candidate nahi.")
+    with c2:
+        _section_title("💥 US Breakouts")
+        brk = [r for r in results
+               if any("breakout" in s.lower() for s in r.get("signals", []))][:5]
+        if brk:
+            st.markdown(f"<div style='{_CARD}'>" + "".join(
+                f"<div style='font-size:.82rem;color:#c9d1d9;margin:3px 0'>"
+                f"<b>{r['symbol']}</b> ${float(r.get('price') or 0):,.2f} · "
+                f"{r.get('verdict')} · conv {float(r.get('breakout_conviction') or 0):.0f}"
+                f"</div>" for r in brk) + "</div>", unsafe_allow_html=True)
+        else:
+            st.caption("Aaj koi confirmed US breakout nahi.")
+
+    _section_title("🎯 High Conviction US")
+    hc = [r for r in results if r.get("high_conviction")][:5]
+    if hc:
+        st.markdown(f"<div style='{_CARD}'>" + "".join(
+            f"<div style='font-size:.82rem;color:#fbbf24;margin:3px 0'>"
+            f"🎯 <b>{r['symbol']}</b> ${float(r.get('price') or 0):,.2f} · "
+            f"score {float(r.get('score') or 0):.0f} · "
+            f"conviction {float(r.get('breakout_conviction') or 0):.0f} · "
+            f"{(r.get('reasons') or [''])[0][:70]}</div>" for r in hc)
+            + "</div>", unsafe_allow_html=True)
+    else:
+        st.caption("Abhi koi US high-conviction setup nahi (conviction rule).")
+
+
+def _us_setup_card(r: dict, accent: str) -> None:
+    st.markdown(
+        f"<div style='{_CARD};border-left:3px solid {accent}'>"
+        f"<span style='font-size:1.05rem;font-weight:800;color:#e6edf3;"
+        f"font-family:JetBrains Mono,monospace'>{r['symbol']}</span> "
+        f"<span style='color:#e2e8f0'>${float(r.get('price') or 0):,.2f}</span> "
+        f"<span style='font-size:.72rem;color:{accent}'>{r.get('verdict')} · "
+        f"conv {float(r.get('breakout_conviction') or 0):.0f}</span>"
+        f"<div style='font-size:.82rem;color:#c9d1d9;margin-top:6px'>"
+        f"{(r.get('reasons') or [''])[0]}</div>"
+        f"<div style='font-size:.76rem;color:#94a3b8;margin-top:4px'>"
+        f"Entry ${float(r.get('entry') or 0):,.2f} · "
+        f"Stop ${float(r.get('stop') or 0):,.2f} · "
+        f"Target ${float(r.get('target') or 0):,.2f}</div></div>",
+        unsafe_allow_html=True)

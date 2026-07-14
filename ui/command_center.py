@@ -231,6 +231,7 @@ def _render_setup_card(setup: dict) -> None:
     price     = float(setup.get("price") or 0)
     pivot     = float(setup.get("pivot_level") or 0)
     stop      = float(setup.get("stop_level") or 0)
+    cur       = setup.get("cur", "₹")
 
     # % change from prev_close if available
     prev_close = float(setup.get("prev_close") or 0)
@@ -250,12 +251,12 @@ def _render_setup_card(setup: dict) -> None:
     badge_label, badge_col = _signal_badge(archetype, tier)
 
     price_html = (
-        f"<span style='font-size:.9rem;color:#e8eaf0;font-weight:600'>₹{price:,.2f}</span>"
+        f"<span style='font-size:.9rem;color:#e8eaf0;font-weight:600'>{cur}{price:,.2f}</span>"
         + (f"  <span style='font-size:.82rem;color:{chg_col}'>{chg_str}</span>" if chg_str else "")
     )
     levels_html = (
-        f"Entry ₹{pivot:,.0f} &nbsp;·&nbsp; Stop ₹{stop:,.0f} &nbsp;·&nbsp; "
-        f"Target ₹{target:,.0f} &nbsp;·&nbsp; {rr:.1f}×"
+        f"Entry {cur}{pivot:,.0f} &nbsp;·&nbsp; Stop {cur}{stop:,.0f} &nbsp;·&nbsp; "
+        f"Target {cur}{target:,.0f} &nbsp;·&nbsp; {rr:.1f}×"
         if pivot and stop else archetype
     )
 
@@ -346,11 +347,23 @@ def _render_setups_section(universe: list[str]) -> None:
                 pass
             st.rerun()
 
-    # Read from the background auto-scan store — zero wait
+    # Read from the background store — market-aware (US hours → US setups)
+    _us_active = False
     try:
-        from scan.auto_scan import start_background_scan, get_results
-        start_background_scan()
-        results, _, _, status = get_results()
+        import streamlit as _st
+        _us_active = _st.session_state.get("active_market") == "US"
+    except Exception:
+        pass
+    try:
+        if _us_active:
+            from scan.us_scanner import get_us_results, scan_us
+            results, _, status = get_us_results()
+            if not results:
+                results, status = scan_us(), "ready"
+        else:
+            from scan.auto_scan import start_background_scan, get_results
+            start_background_scan()
+            results, _, _, status = get_results()
     except Exception:
         results, status = [], "error"
 
@@ -401,6 +414,7 @@ def _render_setups_section(universe: list[str]) -> None:
             "price": s.get("price"),
             "pivot_level": s.get("entry"),
             "stop_level": s.get("stop"),
+            "cur": "$" if _us_active else "₹",
         })
 
 
