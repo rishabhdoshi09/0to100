@@ -62,6 +62,7 @@ def scan_us(max_workers: int = 8) -> list[dict]:
         # Batch-fetch daily data (100 tickers/request) so the FULL listing is
         # fetchable without thousands of individual calls.
         from data.us_data import get_us_daily_batch
+        raw = []
         dfs: dict = {}
         _BATCH = 100
         for i in range(0, len(symbols), _BATCH):

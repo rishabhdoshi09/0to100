@@ -1734,13 +1734,16 @@ class TestUSScanner:
         monkeypatch.setattr("data.us_universe.get_us_universe",
                             lambda: ["AAPL"])
         monkeypatch.setattr("data.us_data.get_us_daily", lambda s, **k: df)
+        monkeypatch.setattr("data.us_data.get_us_daily_batch",
+                            lambda syms, **k: {s: df for s in syms})
         monkeypatch.setattr("data.us_data.sp500_return_30d", lambda: 0.5)
         out = us.scan_us(max_workers=1)
-        assert isinstance(out, list)
-        if out:
-            r = out[0]
-            assert {"symbol", "verdict", "score", "entry", "stop",
-                    "target"} <= set(r)
+        # MUST produce results — an internal crash returning [] would hide
+        # exactly the 'nothing shows on the terminal' bug
+        assert isinstance(out, list) and len(out) >= 1
+        r = out[0]
+        assert {"symbol", "verdict", "score", "entry", "stop",
+                "target"} <= set(r)
 
 
 class TestMarketSession:
