@@ -1119,6 +1119,49 @@ class TestStrictLiveDisplay:
         assert sc._pick_best_trade(rows)["symbol"] == "STALE"
 
 
+class TestBreakoutConviction:
+    def test_conviction_rewards_delivery_and_rs(self):
+        from scan.unified_scanner import breakout_conviction as bc
+        # weak: min volume, no delivery data, lagging index, below 200-DMA
+        low, _ = bc(vratio=1.5, deliv_now=None, deliv_base=None,
+                    rs_outperf=-5, above_50=False, above_200=False)
+        # strong: heavy volume, rising delivery, RS leader, Stage-2 uptrend
+        high, factors = bc(vratio=3.0, deliv_now=68, deliv_base=45,
+                           rs_outperf=12, above_50=True, above_200=True)
+        assert high > low
+        assert high >= 85
+        assert any("delivery" in f for f in factors)
+        assert any("RS leader" in f for f in factors)
+        assert any("Stage 2" in f for f in factors)
+        # delivery unknown is neutral, not zeroed
+        mid, _ = bc(vratio=2.0, deliv_now=None, deliv_base=None,
+                    rs_outperf=5, above_50=True, above_200=True)
+        assert 40 <= mid <= 75
+
+    def test_low_conviction_break_is_watch_not_buy(self):
+        import numpy as np
+        import pandas as pd
+        from scan.unified_scanner import UnifiedScanner
+        # clean confirmed break (volume + ATR) BUT lagging + below 200-DMA +
+        # low delivery → conviction below threshold → must NOT be a BUY breakout
+        n = 90
+        close = np.concatenate([np.full(70, 100.0), np.linspace(100, 96, 20)])
+        close[-1] = 103.0                         # breaks the 20-day high
+        high = close + 0.5
+        high[:70] = 102.0
+        df = pd.DataFrame({
+            "open": close - 0.3, "high": high, "low": close - 1.0,
+            "close": close, "volume": [1_000_000] * 68 + [2_500_000] * 22,
+            "deliv_per": [30.0] * n},               # weak delivery
+            index=pd.date_range("2025-04-01", periods=n, freq="D"))
+        sc = UnifiedScanner()
+        sc._nifty_ret30 = 15.0                     # index roaring, stock lags
+        r = sc._analyze("LAGGARD", df)
+        if r is not None:
+            assert "BREAKOUT_52W" not in r.signals
+            assert "BREAKOUT_RES" not in r.signals
+
+
 class TestSniperConfirmation:
     """The BAJEL bug: a wick that pokes the level then keeps falling must
     NEVER fire 'BREAKOUT CONFIRMED'."""

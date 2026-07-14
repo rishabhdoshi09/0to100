@@ -83,6 +83,67 @@ def grade_breakout(price: float, level: float, atr: float, vratio: float,
     return True, "B", f"confirmed: {atr_mult:.2f}×ATR clear, {vratio:.1f}× volume"
 
 
+# ── Breakout conviction (the full vault) ──────────────────────────────────────
+# A confirmed break clears the level; CONVICTION asks who is behind it. We
+# aggregate the signals retail ignores and pros live by, especially DELIVERY %
+# (NSE bhavcopy tells us whether buyers took delivery — real ownership — or
+# just punted intraday). Below the threshold a breakout is a WATCH, not a buy.
+_MIN_BREAKOUT_CONVICTION = float(
+    _os.getenv("QT_BREAKOUT_MIN_CONVICTION", "50") or 50)
+
+
+def breakout_conviction(vratio: float, deliv_now, deliv_base,
+                        rs_outperf: float, above_50: bool,
+                        above_200: bool) -> tuple[float, list[str]]:
+    """0-100 conviction behind a confirmed breakout + plain-English factors.
+      Volume 30 · Delivery 25 · Relative strength 25 · Trend stage 20."""
+    factors: list[str] = []
+    score = 0.0
+    # Volume — is there force behind the break?
+    v = _norm(vratio, 1.5, 3.0) * 30
+    score += v
+    if vratio >= 2.0:
+        factors.append(f"{vratio:.1f}× volume")
+    # Delivery % — institutional ownership vs intraday punting (India edge)
+    if deliv_now is not None:
+        d = _norm(float(deliv_now), 35, 70) * 15
+        if deliv_base is not None and deliv_now > deliv_base * 1.1:
+            d += 10
+            factors.append(f"delivery {deliv_now:.0f}% & rising (real buying)")
+        elif deliv_now >= 55:
+            factors.append(f"delivery {deliv_now:.0f}% (strong ownership)")
+        score += min(25, d)
+    else:
+        score += 12                     # unknown → neutral, not penalised
+    # Relative strength — leading the index or lagging it?
+    rs = _norm(rs_outperf, -3, 12) * 25
+    score += rs
+    if rs_outperf >= 3:
+        factors.append(f"Nifty se {rs_outperf:+.0f}% aage (RS leader)")
+    # Trend stage — a breakout in a Stage-2 uptrend, not a dead-cat bounce
+    if above_50:
+        score += 10
+    if above_200:
+        score += 10
+        factors.append("200-DMA ke upar (Stage 2)")
+    return round(min(100.0, score), 0), factors
+
+
+def _nifty_return_30d() -> float:
+    try:
+        from data.index_store import get_index_ohlcv
+        df = get_index_ohlcv("^NSEI")
+        if df is None or len(df) < 31:
+            return 0.0
+        col = next((c for c in df.columns if c.lower() == "close"), None)
+        if not col:
+            return 0.0
+        c = df[col].values
+        return float((c[-1] / c[-31] - 1) * 100)
+    except Exception:
+        return 0.0
+
+
 def is_beaten_down_arr(highs, close: float, max_drop: float = _MAX_DROP) -> bool:
     """Array fast-path for the scan hot loop: close vs 52-week peak high."""
     try:
@@ -159,6 +220,7 @@ class StockSignal:
     verdict: str = "WATCH"                 # BUY | WATCH
     pivot_distance_pct: float = 0.0        # how far below the pivot (0 = at/above)
     breakout_grade: str = ""               # A | B | "" — confirmed-breakout quality
+    breakout_conviction: float = 0.0       # 0-100 — force behind the break
 
     @property
     def categories(self) -> set[str]:
@@ -209,6 +271,7 @@ class UnifiedScanner:
     def __init__(self, max_workers: int = 8):
         self._max_workers = max_workers
         self._calib = _load_calibration()
+        self._nifty_ret30 = 0.0        # index benchmark for relative strength
         if self._calib:
             log.info("scanner_calibrated", signals=len(self._calib))
 
@@ -217,6 +280,7 @@ class UnifiedScanner:
 
         prefetch(symbols, progress=progress)
         available = [s for s in symbols if s in set(cached_symbols())]
+        self._nifty_ret30 = _nifty_return_30d()      # RS benchmark, once/scan
         log.info("unified_scan_start", requested=len(symbols), with_data=len(available))
 
         results: list[StockSignal] = []
@@ -288,6 +352,7 @@ class UnifiedScanner:
         # A marginal poke is not a buy; it becomes a PRE_BREAKOUT watch so the
         # trader waits for the close to confirm instead of chasing a false break.
         breakout_grade = ""
+        breakout_conv = 0.0
         if len(high) > 60:
             hi52 = float(np.max(high[:-1]))
             res20 = float(np.max(high[-21:-1]))
@@ -295,11 +360,33 @@ class UnifiedScanner:
             ok, grade, note = grade_breakout(level=level, price=price, atr=atr,
                                              vratio=vratio, day_change=chg)
             if ok:
-                breakout_grade = grade
-                key = "BREAKOUT_52W" if level == hi52 else "BREAKOUT_RES"
-                signals.append(key)
-                reasons.append(f"[{grade}] Broke ₹{level:,.0f} {tag} — "
-                               f"{note}{sess_tag}")
+                # Conviction — who is behind the break? (the full vault)
+                d_now = float(np.nanmean(deliv[-5:])) if (
+                    deliv is not None and len(deliv) >= 5) else None
+                d_base = float(np.nanmean(deliv[-30:-5])) if (
+                    deliv is not None and len(deliv) >= 30) else None
+                stk_ret30 = ((close[-1] / close[-31] - 1) * 100
+                             if len(close) > 31 else 0.0)
+                rs_outperf = stk_ret30 - self._nifty_ret30
+                above_200 = len(close) >= 200 and price > close[-200:].mean()
+                conv, conv_factors = breakout_conviction(
+                    vratio=vratio, deliv_now=d_now, deliv_base=d_base,
+                    rs_outperf=rs_outperf, above_50=price > sma50,
+                    above_200=above_200)
+                if conv >= _MIN_BREAKOUT_CONVICTION:
+                    breakout_grade = grade
+                    breakout_conv = conv
+                    key = "BREAKOUT_52W" if level == hi52 else "BREAKOUT_RES"
+                    signals.append(key)
+                    fac = (" · " + ", ".join(conv_factors)) if conv_factors else ""
+                    reasons.append(f"[{grade} · conviction {conv:.0f}] Broke "
+                                   f"₹{level:,.0f} {tag} — {note}{fac}{sess_tag}")
+                else:
+                    # Confirmed break but weak conviction → watch, not buy
+                    if "PRE_BREAKOUT" not in signals:
+                        signals.append("PRE_BREAKOUT")
+                        reasons.append(f"₹{level:,.0f} {tag} toda par conviction "
+                                       f"kam ({conv:.0f}/100) — pack ka wait{sess_tag}")
             elif price > level and note:
                 # Cleared the level but not cleanly → watch, not buy
                 if "PRE_BREAKOUT" not in signals:
@@ -411,6 +498,7 @@ class UnifiedScanner:
             target=target, verdict=verdict,
             pivot_distance_pct=round(pivot_dist, 2),
             breakout_grade=breakout_grade,
+            breakout_conviction=breakout_conv,
         )
 
 

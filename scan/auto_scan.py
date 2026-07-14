@@ -75,6 +75,7 @@ def _serialize(r) -> dict:
         "rr": round(r.risk_reward, 1),
         "pivot_distance_pct": getattr(r, "pivot_distance_pct", 0.0),
         "breakout_grade": getattr(r, "breakout_grade", ""),
+        "breakout_conviction": getattr(r, "breakout_conviction", 0.0),
     }
 
 
