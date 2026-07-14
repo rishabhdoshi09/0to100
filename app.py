@@ -904,14 +904,36 @@ with st.sidebar:
         unsafe_allow_html=True,
     )
 
-    # ── Search bar (Moneycontrol-style) ──────────────────────────────────
-    _search = st.text_input("Search", placeholder="🔍 Search any NSE stock…", key="qs", label_visibility="collapsed")
+    # ── Search bar (NSE + US) ────────────────────────────────────────────
+    _search = st.text_input("Search", placeholder="🔍 NSE ya US stock (AAPL, RELIANCE)…", key="qs", label_visibility="collapsed")
     if _search and _search.strip():
         _qs = _search.strip().upper()
 
+        # Market detect: US ticker (in the US universe) → $ path, else NSE ₹
+        @st.cache_data(ttl=3600, show_spinner=False)
+        def _is_us_ticker(sym: str) -> bool:
+            try:
+                from data.us_universe import get_us_universe
+                return sym in set(get_us_universe())
+            except Exception:
+                return False
+
+        _is_us = _is_us_ticker(_qs)
+
         @st.cache_data(ttl=120, show_spinner=False)
-        def _qs_fetch(sym: str) -> dict:
+        def _qs_fetch(sym: str, is_us: bool) -> dict:
             out: dict = {}
+            import yfinance as yf
+            if is_us:
+                try:
+                    fi = yf.Ticker(sym).fast_info
+                    out["price"] = float(getattr(fi, "last_price", 0) or 0)
+                    out["prev"]  = float(getattr(fi, "previous_close", 0) or 0)
+                    out["week52_high"] = float(getattr(fi, "year_high", 0) or 0)
+                    out["week52_low"]  = float(getattr(fi, "year_low",  0) or 0)
+                except Exception:
+                    pass
+                return out
             try:
                 from data.market_data import get_provider
                 mdp = get_provider()
@@ -921,7 +943,6 @@ with st.sidebar:
             except Exception:
                 pass
             try:
-                import yfinance as yf
                 fi = yf.Ticker(sym + ".NS").fast_info
                 if not out.get("price"):
                     out["price"] = float(getattr(fi, "last_price", 0) or 0)
@@ -935,10 +956,14 @@ with st.sidebar:
 
         _qd = {}
         try:
-            _qd = _qs_fetch(_qs)
+            _qd = _qs_fetch(_qs, _is_us)
         except Exception:
             pass
 
+        _cur = "$" if _is_us else "₹"
+        _mkt_tag = ("<span style='font-size:.6rem;color:#60a5fa'>🇺🇸 US</span>"
+                    if _is_us else
+                    "<span style='font-size:.6rem;color:#f59e0b'>🇮🇳 NSE</span>")
         _qpx   = _qd.get("price", 0.0)
         _qprev = _qd.get("prev", 0.0)
         _qchg  = ((_qpx - _qprev) / _qprev * 100) if _qprev else 0.0
@@ -951,15 +976,15 @@ with st.sidebar:
         if _q52h and _q52l:
             _q52_html = (
                 f"<div style='font-size:.65rem;color:#6b7280;margin-top:2px'>"
-                f"52W: ₹{_q52l:,.0f} – ₹{_q52h:,.0f}</div>"
+                f"52W: {_cur}{_q52l:,.0f} – {_cur}{_q52h:,.0f}</div>"
             )
 
         if _qpx:
             st.sidebar.markdown(
                 f"<div style='background:#0d1421;border:1px solid #1e293b;border-radius:8px;"
                 f"padding:8px 12px;font-family:JetBrains Mono,monospace;margin-bottom:4px'>"
-                f"<div style='color:#e8eaf0;font-weight:700;font-size:.9rem'>{_qs}</div>"
-                f"<div style='color:#e8eaf0;font-size:1.05rem;font-weight:700'>₹{_qpx:,.2f}</div>"
+                f"<div style='color:#e8eaf0;font-weight:700;font-size:.9rem'>{_qs} {_mkt_tag}</div>"
+                f"<div style='color:#e8eaf0;font-size:1.05rem;font-weight:700'>{_cur}{_qpx:,.2f}</div>"
                 f"<div style='color:{_qchg_col};font-size:.8rem;font-weight:700'>"
                 f"{_qchg_arrow} {_qchg:+.2f}%</div>"
                 f"{_q52_html}"
