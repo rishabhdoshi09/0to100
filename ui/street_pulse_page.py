@@ -13,6 +13,72 @@ import streamlit as st
 _CARD = ("background:#0d1421;border:1px solid #1e293b;border-radius:10px;"
          "padding:14px 18px;margin-bottom:10px")
 
+# EMA overlay colours mirror the newsletter: 10 green · 20 yellow ·
+# 50 purple · 200 red
+_EMA_SPANS = ((10, "#22c55e"), (20, "#eab308"), (50, "#a78bfa"),
+              (200, "#ef4444"))
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def _daily_ohlcv(symbol: str, sessions: int = 90):
+    """DAILY (1D) candles, latest up to date — bhav store is official NSE
+    EOD and carries today's live-overlaid bar during market hours. Returns
+    a records list (cache-friendly) or None."""
+    try:
+        from data.bhavcopy_store import get_ohlcv
+        df = get_ohlcv(symbol)
+        if df is None or len(df) < 20:
+            return None
+        df = df.tail(sessions)
+        return {
+            "idx": [str(i)[:10] for i in df.index],
+            "o": df["open"].tolist(), "h": df["high"].tolist(),
+            "l": df["low"].tolist(), "c": df["close"].tolist(),
+        }
+    except Exception:
+        return None
+
+
+def _daily_candle_chart(symbol: str, accent: str = "#00d4a0"):
+    """Compact daily candlestick + EMA(10/20/50/200) — the newsletter's
+    chart, rendered live. None if no data (caller just shows the text)."""
+    d = _daily_ohlcv(symbol)
+    if not d:
+        return None
+    try:
+        import pandas as pd
+        import plotly.graph_objects as go
+        close = pd.Series(d["c"])
+        fig = go.Figure(go.Candlestick(
+            x=d["idx"], open=d["o"], high=d["h"], low=d["l"], close=d["c"],
+            increasing_line_color="#00d4a0", decreasing_line_color="#ff4b4b",
+            name=symbol, showlegend=False))
+        for span, col in _EMA_SPANS:
+            if len(close) >= span // 2:
+                ema = close.ewm(span=span, adjust=False).mean()
+                fig.add_trace(go.Scatter(
+                    x=d["idx"], y=ema.tolist(), mode="lines",
+                    line=dict(color=col, width=1), name=f"EMA{span}",
+                    hoverinfo="skip", showlegend=False))
+        fig.update_layout(
+            height=240, margin=dict(l=6, r=6, t=6, b=6),
+            paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+            xaxis_rangeslider_visible=False,
+            xaxis=dict(gridcolor="#161f2e", color="#8892a4",
+                       showticklabels=False),
+            yaxis=dict(gridcolor="#161f2e", color="#8892a4"))
+        return fig
+    except Exception:
+        return None
+
+
+def _render_daily_chart(symbol: str) -> None:
+    fig = _daily_candle_chart(symbol)
+    if fig is not None:
+        st.plotly_chart(fig, width="stretch", config={"displayModeBar": False})
+        st.caption("Daily (1D) candles · EMA 10🟢 20🟡 50🟣 200🔴 · "
+                   "market hours mein aaj ka bar live")
+
 
 @st.cache_data(ttl=600, show_spinner=False)
 def _pulse() -> dict:
@@ -98,6 +164,7 @@ def render_street_pulse() -> None:
                 f"{_chg_span(b.get('change_pct', 0))}"
                 f"<div style='font-size:.82rem;color:#c9d1d9;margin-top:6px'>{b['note']}</div>"
                 f"</div>", unsafe_allow_html=True)
+            _render_daily_chart(b["symbol"])
         else:
             st.caption("Aaj koi bada buzz nahi.")
 
@@ -117,6 +184,7 @@ def render_street_pulse() -> None:
                 f"Pivot ₹{s['entry']:,.0f} se {dist:.1f}% neeche · "
                 f"Stop ₹{s['stop']:,.0f} · Target ₹{s['target']:,.0f}</div>"
                 f"</div>", unsafe_allow_html=True)
+            _render_daily_chart(s["symbol"])
         else:
             st.caption("Koi strong accumulation candidate nahi mila.")
 
@@ -133,6 +201,7 @@ def render_street_pulse() -> None:
                 f"color:#8892a4'> (5 din)</span>"
                 f"<div style='font-size:.82rem;color:#c9d1d9;margin-top:6px'>{w['note']}</div>"
                 f"</div>", unsafe_allow_html=True)
+            _render_daily_chart(w["symbol"])
         else:
             st.caption("Koi bada breakdown nahi aaj.")
 

@@ -1119,6 +1119,32 @@ class TestStrictLiveDisplay:
         assert sc._pick_best_trade(rows)["symbol"] == "STALE"
 
 
+class TestDailyPulseChart:
+    def test_daily_ohlcv_is_1d_and_latest(self, monkeypatch):
+        """Pulse chart data must be DAILY candles from the bhav store
+        (which carries today's live-overlaid bar), not 15-min."""
+        import pandas as pd
+        import data.bhavcopy_store as bs
+        import ui.street_pulse_page as sp
+        idx = pd.date_range("2026-04-01", periods=120, freq="D")
+        df = pd.DataFrame({
+            "open": range(100, 220), "high": range(101, 221),
+            "low": range(99, 219), "close": range(100, 220),
+            "volume": [1000] * 120}, index=idx)
+        monkeypatch.setattr(bs, "get_ohlcv", lambda s: df)
+        sp._daily_ohlcv.clear()
+        d = sp._daily_ohlcv("HAL")
+        assert d is not None
+        assert len(d["c"]) == 90                      # last 90 sessions
+        assert d["idx"][-1] == "2026-07-29"           # latest bar last
+        assert d["c"][-1] == 219                       # up-to-date close
+        # too little data → None (caller falls back to text)
+        monkeypatch.setattr(bs, "get_ohlcv",
+                            lambda s: df.head(10))
+        sp._daily_ohlcv.clear()
+        assert sp._daily_ohlcv("THIN") is None
+
+
 class TestUSMarketClock:
     def test_us_session_boundaries(self):
         import pytz
