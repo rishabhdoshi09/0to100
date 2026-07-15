@@ -1199,6 +1199,20 @@ with st.sidebar:
     _ms, _mc = market_status()
     _paper = getattr(_settings, "sq_paper_trading", True)
     _ds_key_ok = bool(_settings.deepseek_api_key)
+    # DeepSeek chip: key? → cooldown? → live. Honest reason, not silent.
+    if not _ds_key_ok:
+        _ds_chip, _ds_col = "🔴 No API Key", "#ff4466"
+    else:
+        try:
+            from ai.llm_health import status as _llm_status
+            _ls = _llm_status()
+            if not _ls["available"]:
+                _ds_chip = f"🟡 DeepSeek cooldown ({_ls['cooldown_min']:.0f}m)"
+                _ds_col = "#f59e0b"
+            else:
+                _ds_chip, _ds_col = "🟢 DeepSeek", "#00d4a0"
+        except Exception:
+            _ds_chip, _ds_col = "🟢 DeepSeek", "#00d4a0"
     st.markdown(
         f"<div style='background:{_mc}22;border:1px solid {_mc}55;border-radius:8px;"
         f"padding:.35rem .75rem;font-size:.78rem;font-weight:600;"
@@ -1209,7 +1223,7 @@ with st.sidebar:
         f"<div style='display:flex;gap:.5rem;margin-top:.4rem;flex-wrap:wrap'>"
         f"<span style='font-size:.65rem;color:#8892a4'>🕐 {datetime.now().strftime('%H:%M')}</span>"
         f"<span style='font-size:.65rem;color:{'#4a5568' if _paper else '#00d4a0'}'>{'📄 Paper' if _paper else '💸 Live'}</span>"
-        f"<span style='font-size:.65rem;color:{'#00d4a0' if _ds_key_ok else '#ff4466'}'>{'🟢 DeepSeek' if _ds_key_ok else '🔴 No API Key'}</span>"
+        f"<span style='font-size:.65rem;color:{_ds_col}'>{_ds_chip}</span>"
         f"</div>",
         unsafe_allow_html=True,
     )

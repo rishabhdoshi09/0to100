@@ -91,9 +91,11 @@ def review_positions() -> list[dict]:
         px = float(q["price"]) if q and q.get("price") else None
         is_paper = str(t["mode"]) == "PAPER"
 
+        _note = str(t["note"] or "")
         row = {"symbol": sym, "qty": qty, "entry": entry, "stop": stop,
                "target": target, "live": px, "mode": t["mode"],
-               "autopilot": "AUTOPILOT" in str(t["note"] or ""),
+               "autopilot": "AUTOPILOT" in _note,
+               "cur": "$" if "US_AUTOPILOT" in _note else "₹",
                "r_progress": None, "pnl": None, "alert": "", "advice": ""}
 
         if px is None or risk <= 0:

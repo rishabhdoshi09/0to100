@@ -428,6 +428,12 @@ def _gen_brief(regime_json: str) -> str:
     api_key = os.getenv("DEEPSEEK_API_KEY", "")
     if not api_key:
         return ""
+    try:                                    # skip if the LLM is in cooldown
+        from ai.llm_health import available
+        if not available():
+            return ""
+    except Exception:
+        pass
     try:
         from openai import OpenAI
         client = OpenAI(
@@ -456,13 +462,18 @@ def _gen_brief(regime_json: str) -> str:
             return resp.choices[0].message.content or ""
         return ""
     except Exception as exc:
-        err = str(exc)
-        if "402" in err or "Insufficient Balance" in err:
+        raw = str(exc)
+        try:
+            from ai.llm_health import note_failure
+            note_failure(raw)               # back off — no retry every cycle
+        except Exception:
+            pass
+        if "402" in raw or "Insufficient Balance" in raw:
             err = "DeepSeek balance khatam — recharge karo (brief tab tak skip)"
-        elif "<" in err:
+        elif "<" in raw:
             err = "DeepSeek API unavailable (gateway timeout)"
-        elif len(err) > 120:
-            err = err[:120] + "…"
+        else:
+            err = raw[:120]
         logger.warning("brief gen failed: %s", err)
         return ""
 

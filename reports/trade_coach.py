@@ -126,7 +126,12 @@ def build_coach_review(days: int = 28) -> str:
     try:
         import os
         api_key = os.getenv("DEEPSEEK_API_KEY", "")
-        if api_key and stats["n_trades"] >= 3:
+        try:
+            from ai.llm_health import available
+            _llm_ok = available()
+        except Exception:
+            _llm_ok = True
+        if api_key and _llm_ok and stats["n_trades"] >= 3:
             from openai import OpenAI
             client = OpenAI(api_key=api_key,
                             base_url=os.getenv("DEEPSEEK_BASE_URL",
@@ -144,5 +149,10 @@ def build_coach_review(days: int = 28) -> str:
                 if text:
                     return header + text
     except Exception as exc:
+        try:
+            from ai.llm_health import note_failure
+            note_failure(str(exc))
+        except Exception:
+            pass
         log.debug("coach_llm_skip", error=str(exc))
     return header + bullets

@@ -1783,6 +1783,48 @@ class TestUSScanner:
                 "target"} <= set(r)
 
 
+class TestLLMHealth:
+    def test_balance_error_long_cooldown(self, monkeypatch):
+        import ai.llm_health as h
+        monkeypatch.setattr(h, "_down_until", 0.0, raising=False)
+        assert h.available() is True
+        h.note_failure("Error code: 402 - Insufficient Balance")
+        assert h.available() is False                 # backed off
+        st = h.status()
+        assert st["available"] is False and st["cooldown_min"] > 60  # hard
+        h.note_success()
+        assert h.available() is True
+
+    def test_transient_error_short_cooldown(self, monkeypatch):
+        import ai.llm_health as h
+        monkeypatch.setattr(h, "_down_until", 0.0, raising=False)
+        h.note_failure("read timeout")
+        st = h.status()
+        assert not st["available"] and st["cooldown_min"] <= 10  # soft
+
+
+class TestPositionCurrency:
+    def test_us_position_shows_dollars(self, tmp_path, monkeypatch):
+        import risk.position_manager as pm
+        import execution.trade_executor as te
+        import data.live_quotes as lq
+        monkeypatch.setattr(te, "_DB", tmp_path / "trades.db")
+        te._journal({"mode": "PAPER", "symbol": "AAPL", "qty": 10,
+                     "entry_type": "MARKET", "entry_price": 100, "stop_price": 95,
+                     "target_price": 104, "product": "CNC",
+                     "status": "PAPER_OPEN", "note": "US_AUTOPILOT:t"})
+        te._journal({"mode": "PAPER", "symbol": "HAL", "qty": 5,
+                     "entry_type": "MARKET", "entry_price": 4500, "stop_price": 4300,
+                     "target_price": 4600, "product": "CNC",
+                     "status": "PAPER_OPEN", "note": "AUTOPILOT:t"})
+        monkeypatch.setattr(lq, "get_live_quotes",
+                            lambda syms, ttl=8.0: {"AAPL": {"price": 101.0},
+                                                   "HAL": {"price": 4550.0}})
+        rows = {r["symbol"]: r for r in pm.review_positions()}
+        assert rows["AAPL"]["cur"] == "$"             # US trade → dollars
+        assert rows["HAL"]["cur"] == "₹"              # NSE trade → rupees
+
+
 class TestMarketSession:
     def test_active_market_by_hours(self):
         import pytz

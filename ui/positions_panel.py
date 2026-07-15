@@ -48,8 +48,9 @@ def render_open_positions() -> int:
     for p in pos:
         r = p.get("r_progress")
         pnl = p.get("pnl")
+        cur = p.get("cur", "₹")
         pnl_col = "#00d4a0" if (pnl or 0) >= 0 else "#ff4b4b"
-        live_txt = f"₹{p['live']:,.1f}" if p["live"] else "—"
+        live_txt = f"{cur}{p['live']:,.1f}" if p["live"] else "—"
         st.markdown(
             f"<div style='background:#0d1421;border:1px solid #1e293b;"
             f"border-radius:10px;padding:10px 14px;margin-bottom:6px'>"
@@ -57,9 +58,9 @@ def render_open_positions() -> int:
             f"font-family:JetBrains Mono,monospace'>{p['symbol']}</span>"
             f"<span style='font-size:.72rem;color:#8892a4'> "
             f"({p['mode']}{' · 🤖' if p.get('autopilot') else ''}) · "
-            f"{p['qty']} sh @ ₹{p['entry']:,.1f}</span>"
+            f"{p['qty']} sh @ {cur}{p['entry']:,.1f}</span>"
             f" &nbsp; live <b style='color:#e2e8f0'>{live_txt}</b>"
-            + (f" &nbsp; <b style='color:{pnl_col}'>₹{pnl:+,.0f}</b>"
+            + (f" &nbsp; <b style='color:{pnl_col}'>{cur}{pnl:+,.0f}</b>"
                if pnl is not None else "")
             + (f" &nbsp; <span style='font-size:.75rem;color:#7dd3fc'>"
                f"{r:+.1f}R</span>" if r is not None else "")
