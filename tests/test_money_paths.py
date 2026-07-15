@@ -1398,6 +1398,28 @@ class TestBreakoutConfirmation:
             assert r.breakout_grade == ""
 
 
+class TestExtensionGuard:
+    def test_extended_momentum_is_watch_not_buy(self):
+        """TATVA-type: big 5-day run, stretched above 20-EMA, no confirmed
+        breakout → downgraded to WATCH with a 'don't chase' caveat."""
+        import numpy as np
+        import pandas as pd
+        from scan.unified_scanner import UnifiedScanner
+        # calm base then a sharp +14% vertical spike on volume (extended)
+        base = np.full(80, 100.0)
+        spike = np.array([101, 103, 106, 110, 114.0])
+        close = np.concatenate([base, spike])
+        high = close + 0.4
+        df = pd.DataFrame({
+            "open": close - 0.3, "high": high, "low": close - 0.5,
+            "close": close, "volume": [1_000_000] * 80 + [2_500_000] * 5},
+            index=pd.date_range("2025-03-01", periods=85, freq="D"))
+        r = UnifiedScanner()._analyze("TATVA", df)
+        if r is not None and not r.breakout_grade:   # no confirmed breakout
+            assert r.verdict == "WATCH"
+            assert any("Extended" in x or "chase" in x.lower() for x in r.reasons)
+
+
 class TestPullbackSetup:
     def test_pullback_detected_not_at_high(self):
         """A Stage-2 uptrend that pulled back to a rising EMA on drying

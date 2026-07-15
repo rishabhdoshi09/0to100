@@ -47,6 +47,32 @@ def _serialize(r) -> dict:
     }
 
 
+def _liquid_first(symbols: list[str]) -> list[str]:
+    """Put the mega/large-cap liquid names at the FRONT so the first
+    batches surface real, tradeable setups within seconds — the long
+    illiquid tail streams in behind them."""
+    try:
+        from data.us_universe import _CURATED
+        liquid = [s for s in _CURATED if s in symbols]
+        seen = set(liquid)
+        return liquid + [s for s in symbols if s not in seen]
+    except Exception:
+        return symbols
+
+
+def _rank(raw: list) -> list[dict]:
+    serialized = [_serialize(r) for r in raw]
+    try:
+        from scan.auto_scan import tag_conviction
+        tag_conviction(serialized)
+    except Exception:
+        pass
+    _vr = {"STRONG BUY": 2, "BUY": 1}
+    serialized.sort(key=lambda r: (_vr.get(r.get("verdict"), 0),
+                                   float(r.get("score", 0))), reverse=True)
+    return serialized
+
+
 def scan_us(max_workers: int = 8) -> list[dict]:
     """Run the unified engine over the US universe. Returns serialized,
     conviction-ranked results and caches them. HEAVY (full listing) — run
@@ -63,44 +89,47 @@ def scan_us(max_workers: int = 8) -> list[dict]:
         _status = "scanning"
         _progress = 0
     try:
-        symbols = get_us_universe()
+        symbols = _liquid_first(get_us_universe())
         with _lock:
             _total = len(symbols)
         sc = UnifiedScanner(max_workers=max_workers)
         sc._nifty_ret30 = sp500_return_30d()      # RS benchmark = S&P 500
 
-        # Batch-fetch daily data (100 tickers/request) so the FULL listing is
-        # fetchable without thousands of individual calls.
         from data.us_data import get_us_daily_batch
-        raw = []
-        _BATCH = 100
-        for i in range(0, len(symbols), _BATCH):
-            chunk = symbols[i:i + _BATCH]
+
+        def _run_batch(chunk: list[str]) -> list:
+            out = []
             try:
-                dfs = get_us_daily_batch(chunk)
-                for sym, df in dfs.items():
+                for sym, df in get_us_daily_batch(chunk).items():
                     try:
                         r = sc._analyze(sym, df)
                         if r and r.signals:
-                            raw.append(r)
-                    except Exception as exc:
-                        log.debug("us_analyze_failed", symbol=sym,
-                                  error=str(exc)[:80])
+                            out.append(r)
+                    except Exception:
+                        pass
             except Exception as exc:
                 log.debug("us_batch_chunk_failed", error=str(exc)[:80])
-            with _lock:                       # live progress for the UI
-                _progress = min(i + _BATCH, len(symbols))
+            return out
 
-        serialized = [_serialize(r) for r in raw]
-        try:
-            from scan.auto_scan import tag_conviction
-            tag_conviction(serialized)
-        except Exception:
-            pass
-        _vrank = {"STRONG BUY": 2, "BUY": 1}
-        serialized.sort(
-            key=lambda r: (_vrank.get(r.get("verdict"), 0),
-                           float(r.get("score", 0))), reverse=True)
+        # PARALLEL batches (not one-by-one), liquid names first, and results
+        # STREAM into the store as each batch lands — good setups show in
+        # seconds instead of waiting for all ~5,000 names.
+        _BATCH = 100
+        chunks = [symbols[i:i + _BATCH] for i in range(0, len(symbols), _BATCH)]
+        raw: list = []
+        done = 0
+        with ThreadPoolExecutor(max_workers=6) as pool:
+            futs = {pool.submit(_run_batch, c): c for c in chunks}
+            for fut in as_completed(futs):
+                raw.extend(fut.result() or [])
+                done += len(futs[fut])
+                serialized = _rank(raw)          # progressive: publish as we go
+                with _lock:
+                    _results = serialized
+                    _progress = min(done, len(symbols))
+                    _last_ts = time.time()
+
+        serialized = _rank(raw)
         with _lock:
             _results = serialized
             _last_ts = time.time()

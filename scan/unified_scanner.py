@@ -534,6 +534,21 @@ class UnifiedScanner:
         verdict = "BUY" if (score >= 55 and len(signals) >= 2) or any(
             s in ("BREAKOUT_52W", "HIGH_TIGHT_FLAG") for s in signals) else "WATCH"
 
+        # ── Extension guard — DON'T CHASE ─────────────────────────────────────
+        # A stock already up big in 5 days and stretched far above its 20-EMA,
+        # WITHOUT a confirmed breakout, is a chase (wide stop, poor entry) —
+        # exactly TATVA-type: +14% in 5d, only a marginal break. Downgrade it
+        # to a WATCH and say wait for the pullback (which PULLBACK_SUPPORT then
+        # catches). A CONFIRMED breakout is exempt — that's a real trigger.
+        ema20_now = _ema_np(close, 20)
+        ext_pct = (price / ema20_now - 1) * 100 if ema20_now else 0.0
+        if ext_pct > 10 and mom5 > 10 and not breakout_grade:
+            reasons.insert(
+                0, f"⚠ Extended ({ext_pct:.0f}% above 20-EMA, +{mom5:.0f}% in "
+                   f"5 din) — pullback ka wait, abhi chase mat karo")
+            if verdict == "BUY":
+                verdict = "WATCH"
+
         return StockSignal(
             symbol=symbol, price=round(price, 2), change_pct=round(chg, 2),
             momentum_5d=round(mom5, 2), rsi=round(rsi, 1),
