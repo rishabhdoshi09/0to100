@@ -1783,6 +1783,28 @@ class TestUSScanner:
                 "target"} <= set(r)
 
 
+class TestMorningBrief:
+    def test_conversational_brief_style(self, monkeypatch):
+        import ui.command_center as cc
+        monkeypatch.setattr(cc, "_brief_cues", lambda: {
+            "sp500": {"price": 5600, "chg": 0.20}, "nasdaq": {"price": 18000, "chg": 0.3},
+            "kospi": {"price": 2800, "chg": 7.64}, "crude": {"price": 80.05, "chg": 0.29},
+            "gold": {"price": 4031, "chg": -0.55}, "btc": {"price": 64564, "chg": -0.63},
+        })
+        # cache_data wrapper — call the underlying fn
+        brief = cc._conversational_brief.__wrapped__(
+            {"nifty_price": 24052, "nifty_change_1d": -0.66}) \
+            if hasattr(cc._conversational_brief, "__wrapped__") \
+            else cc._conversational_brief({"nifty_price": 24052,
+                                           "nifty_change_1d": -0.66})
+        assert "Good Morning" in brief
+        assert "S&P" in brief and "Kospi" in brief.replace("KOSPI", "Kospi")
+        assert "reversal" in brief.lower()           # KOSPI +7.6% → reversal
+        assert "consolidation" in brief.lower()      # Nifty down → consolidation
+        assert "80" in brief                          # crude level
+        assert "good day" in brief.lower()
+
+
 class TestLLMHealth:
     def test_balance_error_long_cooldown(self, monkeypatch):
         import ai.llm_health as h

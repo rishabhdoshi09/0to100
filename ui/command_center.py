@@ -440,16 +440,19 @@ def _gen_brief(regime_json: str) -> str:
             api_key=api_key,
             base_url=os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com"),
         )
+        cues = _brief_cues()
         prompt = (
-            "You are a senior institutional trader reviewing the market at open.\n"
-            f"Market data: {regime_json}\n\n"
-            "Write a concise 5-bullet morning brief for an Indian equity trader:\n"
-            "• Regime & Score: [1 line]\n"
-            "• Key Levels: [Nifty vs SMA50/SMA200, what it means]\n"
-            "• Sector Rotation: [who's leading, who's lagging]\n"
-            "• Playbooks for Today: [top 2 with brief why]\n"
-            "• Risk to Watch: [1 specific risk]\n\n"
-            "Be direct, institutional tone, no fluff. Each bullet max 25 words."
+            "You write a warm, friendly morning brief for an Indian trading "
+            "group — conversational, like a smart friend, NOT a formal report.\n"
+            f"Live data: regime={regime_json}\nglobal_cues={json.dumps(cues, default=str)}\n\n"
+            "Structure (short paragraphs, NOT bullets):\n"
+            "1. Greeting: 'Good Morning Guys!'\n"
+            "2. US markets last night (S&P/Nasdaq) — a line with a why if you know it.\n"
+            "3. Asia (Kospi/Nikkei) — note any sharp reversal.\n"
+            "4. Nifty's tone — if down, suggest consolidation + breakout would be ideal.\n"
+            "5. Crude oil level (above/below $80).\n"
+            "6. Sign off: 'Let's have a good day! 🙌'\n\n"
+            "Keep it warm and human, ~5-6 short lines. Use the real numbers."
         )
         resp = client.chat.completions.create(
             model="deepseek-chat",
@@ -476,6 +479,91 @@ def _gen_brief(regime_json: str) -> str:
             err = raw[:120]
         logger.warning("brief gen failed: %s", err)
         return ""
+
+
+@st.cache_data(ttl=900, show_spinner=False)
+def _brief_cues() -> dict:
+    """Global cues for the morning brief — US, Asia, commodities, crypto."""
+    out: dict = {}
+    try:
+        import yfinance as yf
+        for key, tk in (("sp500", "^GSPC"), ("nasdaq", "^IXIC"),
+                        ("kospi", "^KS11"), ("nikkei", "^N225"),
+                        ("crude", "CL=F"), ("gold", "GC=F"), ("btc", "BTC-USD")):
+            try:
+                fi = yf.Ticker(tk).fast_info
+                last = float(getattr(fi, "last_price", 0) or 0)
+                prev = float(getattr(fi, "previous_close", 0) or 0)
+                if last:
+                    out[key] = {"price": last,
+                                "chg": ((last - prev) / prev * 100) if prev else 0.0}
+            except Exception:
+                continue
+    except Exception:
+        pass
+    return out
+
+
+def _conversational_brief(regime: dict) -> str:
+    """A warm, human 'Good Morning' brief driven by real data — US action
+    last night, Asia, Nifty's tone, crude/gold. No LLM needed."""
+    c = _brief_cues()
+    hour = datetime.now().hour
+    greet = ("Good Morning Guys! 👋" if hour < 12
+             else "Afternoon check-in! 👋" if hour < 16
+             else "Evening wrap, team! 👋")
+    lines = [greet, ""]
+
+    def _dir(x):     # narrative direction word
+        return ("nice green" if x > 0.6 else "up" if x > 0.05
+                else "flat-ish" if x >= -0.05 else "down" if x > -0.6 else "sharp red")
+
+    sp = c.get("sp500")
+    if sp:
+        nq = c.get("nasdaq", {}).get("chg", 0)
+        mood = ("Nice action last night from the US markets"
+                if sp["chg"] > 0.2 else
+                "US markets had a soft session last night"
+                if sp["chg"] < -0.2 else
+                "US markets were quiet last night")
+        lines.append(f"{mood} — S&P {_dir(sp['chg'])} {sp['chg']:+.2f}%"
+                     + (f", Nasdaq {nq:+.2f}%" if nq else "") + ".")
+
+    kospi = c.get("kospi")
+    if kospi:
+        if kospi["chg"] > 1:
+            lines.append(f"Kospi is showing a sharp reversal ({kospi['chg']:+.1f}%) "
+                         f"— let's see if that holds till the day's end.")
+        else:
+            nk = c.get("nikkei", {}).get("chg", 0)
+            lines.append(f"Asia mixed — Kospi {kospi['chg']:+.1f}%"
+                         + (f", Nikkei {nk:+.1f}%" if nk else "") + ".")
+
+    nifty = regime.get("nifty_price", 0) or 0
+    n_chg = regime.get("nifty_change_1d", regime.get("nifty_change_pct", 0)) or 0
+    if nifty:
+        if n_chg < -0.2:
+            lines.append(f"Nifty had a down day ({n_chg:+.2f}%, {nifty:,.0f}) — "
+                         f"some consolidation and a breakout would be ideal here!")
+        elif n_chg > 0.2:
+            lines.append(f"Nifty closed strong ({n_chg:+.2f}%, {nifty:,.0f}) — "
+                         f"momentum on our side, don't chase, wait for setups.")
+        else:
+            lines.append(f"Nifty flat ({nifty:,.0f}) — range-bound, patience pays.")
+
+    crude = c.get("crude")
+    if crude:
+        lvl = "above" if crude["price"] >= 80 else "below"
+        lines.append(f"Crude oil is {'still ' if lvl=='above' else ''}"
+                     f"{lvl} $80 (${crude['price']:.1f}).")
+    gold = c.get("gold")
+    if gold:
+        lines.append(f"Gold ${gold['price']:,.0f} ({gold['chg']:+.1f}%)"
+                     + (f", BTC ${c['btc']['price']:,.0f}" if c.get("btc") else "")
+                     + ".")
+
+    lines += ["", "Let's have a good day! 🙌"]
+    return "\n\n".join(lines)
 
 
 def _fallback_brief(regime: dict) -> str:
@@ -532,8 +620,12 @@ def _render_brief_expander(regime: dict) -> None:
         with st.spinner("Fetching brief…"):
             brief = _gen_brief(regime_json) if market_open else ""
 
+        # Warm, human, data-driven brief — the default (works without any LLM)
         if not brief:
-            brief = _fallback_brief(regime)
+            try:
+                brief = _conversational_brief(regime)
+            except Exception:
+                brief = _fallback_brief(regime)
 
         st.markdown(brief)
 
