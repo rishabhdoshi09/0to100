@@ -2,8 +2,9 @@
 🇺🇸 US Scanner — the same setup engine, on US equities.
 
 Confirmed breakouts, conviction, base quality and chart patterns, run
-over a curated liquid US universe with the S&P 500 as the relative-
-strength benchmark. Daily-signal driven; live prices via yfinance with
+index-wise (S&P 500 / NASDAQ-100 / Dow 30 — fast — or the full listing)
+with the S&P 500 as the relative-strength benchmark. Daily-signal driven;
+live prices via yfinance with
 an honest freshness label (Kite serves no US data; true tick-level US
 needs a paid feed).
 """
@@ -39,18 +40,33 @@ def render_us_scanner() -> None:
     from scan.us_scanner import start_us_scan, get_us_results, get_us_progress
     prog = get_us_progress()
 
-    c1, c2 = st.columns([1, 4])
+    # ── Index-wise scope — default ek liquid index (FAST), poori 6,900+ listing
+    # optional. Trader indices mein sochta hai; whole-market grind sirf jab chaaho.
+    try:
+        from data.us_indices import us_indices
+        _scopes = us_indices() + ["All (full 6,900+ listing)"]   # index first = default
+    except Exception:
+        _scopes = ["All (full 6,900+ listing)"]
+    c0, c1, c2 = st.columns([1.6, 1, 3])
+    with c0:
+        _scope_pick = st.selectbox(
+            "Scope", _scopes, index=0, key="us_scan_scope",
+            label_visibility="collapsed", disabled=prog["running"])
+    _scope_arg = None if _scope_pick.startswith("All") else _scope_pick
+    st.caption("💡 Index chuno = fast (S&P 500 ~500, NASDAQ-100 ~100, Dow 30 = "
+               "seconds). Full listing sirf jab poora market chhaanna ho.")
     with c1:
-        if st.button("🔍 Scan US", key="us_scan_btn", width="stretch",
+        if st.button("🔍 Scan", key="us_scan_btn", width="stretch",
                      disabled=prog["running"]):
-            start_us_scan()                 # BACKGROUND — never blocks the UI
+            start_us_scan(index=_scope_arg)   # BACKGROUND — never blocks the UI
             st.rerun()
 
     # Live progress while the background scan runs (UI stays responsive)
     if prog["running"]:
         pct = (prog["progress"] / prog["total"]) if prog["total"] else 0.0
+        _scope_txt = prog.get("scope", "All")
         with c2:
-            st.progress(pct, text=f"⏳ US universe scan… "
+            st.progress(pct, text=f"⏳ {_scope_txt} scan… "
                                   f"{prog['progress']}/{prog['total']} stocks")
         try:
             from streamlit_autorefresh import st_autorefresh
@@ -74,9 +90,12 @@ def render_us_scanner() -> None:
 
     n_buy = sum(1 for r in results if r["verdict"] in ("STRONG BUY", "BUY"))
     n_hc = sum(1 for r in results if r.get("high_conviction"))
+    _cur_scope = prog.get("scope", "All")
+    _scope_chip = ("" if _cur_scope == "All" else
+                   f"<span style='color:#60a5fa'>· {_cur_scope}</span> ")
     st.markdown(
         f"<div style='{_CARD};font-size:.82rem;color:#c9d1d9'>"
-        f"<b>{len(results)}</b> setups · "
+        f"{_scope_chip}<b>{len(results)}</b> setups · "
         f"<span style='color:#00d4a0'>⚡ {n_buy} buy</span> · "
         f"<span style='color:#fbbf24'>🎯 {n_hc} high-conviction</span></div>",
         unsafe_allow_html=True)

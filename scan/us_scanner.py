@@ -30,6 +30,7 @@ _status: str = "idle"        # idle | scanning | ready | error
 _progress: int = 0           # symbols processed so far (live)
 _total: int = 0              # universe size for this run
 _scan_running: bool = False  # only one scan at a time
+_scope: str = "All"          # "All" | "S&P 500" | "NASDAQ-100" | "Dow 30"
 _pushed: dict[str, set] = {}  # {YYYY-MM-DD: symbols alerted} — one/stock/day
 
 
@@ -73,12 +74,30 @@ def _rank(raw: list) -> list[dict]:
     return serialized
 
 
-def scan_us(max_workers: int = 8) -> list[dict]:
-    """Run the unified engine over the US universe. Returns serialized,
-    conviction-ranked results and caches them. HEAVY (full listing) — run
-    it via start_us_scan() so it never blocks the UI thread."""
-    global _results, _last_ts, _status, _progress, _total, _scan_running
+def _index_universe(index: str | None) -> tuple[list[str], str]:
+    """Symbols to scan for a requested scope. index=None → full US listing;
+    an index name → just that index's members (S&P 500 / NASDAQ-100 / Dow 30).
+    Returns (symbols, scope_label)."""
     from data.us_universe import get_us_universe
+    if not index or index in ("All", "all"):
+        return get_us_universe(), "All"
+    try:
+        from data.us_indices import get_index_members
+        members, _src = get_index_members(index)
+        if members:
+            return sorted(members), index
+    except Exception as exc:
+        log.debug("us_index_scope_failed", index=index, error=str(exc)[:80])
+    # unknown/empty index → fail safe to the full universe (never scan nothing)
+    return get_us_universe(), "All"
+
+
+def scan_us(max_workers: int = 8, index: str | None = None) -> list[dict]:
+    """Run the unified engine over the US universe. Returns serialized,
+    conviction-ranked results and caches them. HEAVY when scanning the full
+    listing — run it via start_us_scan() so it never blocks the UI thread.
+    `index` scopes the scan to one index (S&P 500 / NASDAQ-100 / Dow 30)."""
+    global _results, _last_ts, _status, _progress, _total, _scan_running, _scope
     from data.us_data import get_us_daily, sp500_return_30d
     from scan.unified_scanner import UnifiedScanner
 
@@ -89,9 +108,11 @@ def scan_us(max_workers: int = 8) -> list[dict]:
         _status = "scanning"
         _progress = 0
     try:
-        symbols = _liquid_first(get_us_universe())
+        _syms, scope = _index_universe(index)
+        symbols = _liquid_first(_syms)
         with _lock:
             _total = len(symbols)
+            _scope = scope
         sc = UnifiedScanner(max_workers=max_workers)
         sc._nifty_ret30 = sp500_return_30d()      # RS benchmark = S&P 500
 
@@ -159,23 +180,30 @@ def scan_us(max_workers: int = 8) -> list[dict]:
             _scan_running = False
 
 
-def start_us_scan() -> bool:
+def start_us_scan(index: str | None = None) -> bool:
     """Kick off scan_us in a BACKGROUND daemon thread and return
     immediately. The UI polls get_us_results()/get_us_progress() — the
     heavy full-universe scan never blocks the Streamlit thread (which is
     why Ctrl+C works and the page stays responsive). No-op if already
-    running."""
+    running. `index` scopes the scan (None = full listing)."""
     with _lock:
         if _scan_running:
             return False
-    threading.Thread(target=scan_us, name="us-scan", daemon=True).start()
+    threading.Thread(target=scan_us, kwargs={"index": index},
+                     name="us-scan", daemon=True).start()
     return True
 
 
 def get_us_progress() -> dict:
     with _lock:
         return {"status": _status, "progress": _progress, "total": _total,
-                "running": _scan_running, "have": len(_results)}
+                "running": _scan_running, "have": len(_results), "scope": _scope}
+
+
+def get_us_scope() -> str:
+    """Which universe the current results cover: 'All' or an index name."""
+    with _lock:
+        return _scope
 
 
 def _push_us_setups(results: list[dict]) -> None:
@@ -246,12 +274,20 @@ def start_us_loop() -> None:
             return
         _loop_started = True
 
+    # Autopilot feed scope: a liquid index by default (fast + tradeable) —
+    # 6,900+ names every 15 min is slow and rate-limit-prone, and the paper
+    # autopilot trades liquid names anyway. Override with QT_US_SCAN_SCOPE
+    # (e.g. "NASDAQ-100", "Dow 30", or "All" to scan the whole listing).
+    import os
+    _feed_scope = os.getenv("QT_US_SCAN_SCOPE", "S&P 500").strip()
+    _feed_index = None if _feed_scope.lower() in ("all", "") else _feed_scope
+
     def _worker():
         while True:
             try:
                 from data.us_data import us_market_open
                 if us_market_open():
-                    scan_us()
+                    scan_us(index=_feed_index)
                     time.sleep(900)          # 15 min during US hours
                 else:
                     time.sleep(300)          # 5 min re-check off-hours

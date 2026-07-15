@@ -1813,6 +1813,24 @@ class TestUSScanner:
         m, src = ui.get_index_members("S&P 500")
         assert src == "live" and len(m) == 90
 
+    def test_scan_scope_by_index(self, monkeypatch):
+        """Scanner can scope to one index; unknown/None → full listing, and
+        it NEVER scans nothing (fail-safe)."""
+        import scan.us_scanner as us
+        monkeypatch.setattr("data.us_universe.get_us_universe",
+                            lambda: ["AAA", "BBB", "CCC"])
+        monkeypatch.setattr("data.us_indices.get_index_members",
+                            lambda idx: ({"AAPL": "Apple", "MSFT": "Microsoft"}, "live"))
+        syms, scope = us._index_universe("Dow 30")
+        assert scope == "Dow 30" and set(syms) == {"AAPL", "MSFT"}
+        syms2, scope2 = us._index_universe(None)                 # full listing
+        assert scope2 == "All" and set(syms2) == {"AAA", "BBB", "CCC"}
+        # empty index members → fail safe to full listing, not an empty scan
+        monkeypatch.setattr("data.us_indices.get_index_members",
+                            lambda idx: ({}, "curated (subset)"))
+        syms3, scope3 = us._index_universe("NASDAQ-100")
+        assert scope3 == "All" and syms3 == ["AAA", "BBB", "CCC"]
+
     def test_same_engine_runs_on_us_shaped_data(self, monkeypatch):
         """The NSE signal engine must analyse a US-shaped DataFrame — the
         whole point of the reuse. Delivery absent → conviction neutral,
