@@ -315,6 +315,18 @@ class UnifiedScanner:
     def __init__(self, max_workers: int = 8):
         self._max_workers = max_workers
         self._calib = _load_calibration()
+        # Live edge — blend our OWN forward-tested outcomes into the backtest
+        # calibration. CONSERVATIVE: take the lower multiplier of the two, so
+        # live data can DEMOTE a signal that's leaking money but never inflate
+        # one the backtest already distrusts. Evidence-gated (≥30 outcomes);
+        # no tracked data → no change. This is what actually lifts expectancy:
+        # proven-negative signals stop earning BUY weight.
+        try:
+            from scan.live_edge import live_calibration
+            for sig, m in live_calibration().items():
+                self._calib[sig] = min(self._calib.get(sig, 1.0), m)
+        except Exception as exc:
+            log.debug("live_calibration_skip", error=str(exc))
         self._nifty_ret30 = 0.0        # index benchmark for relative strength
         if self._calib:
             log.info("scanner_calibrated", signals=len(self._calib))

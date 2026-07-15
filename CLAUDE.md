@@ -32,6 +32,10 @@ app.py                    # Streamlit shell: nav (Today|Pulse|Stocks|Options|
 │   ├── bulk_fetcher.py   # prefetch(): bhav store first, yfinance last resort
 │   ├── signal_backtest.py# Walk-forward per-signal accuracy → JSON report →
 │   │                     #   score calibration + per-card combo_edge
+│   ├── live_edge.py      # LIVE feedback loop: mines signal_log's real tracked
+│   │                     #   outcomes → per-signal expectancy (R). Blended
+│   │                     #   CONSERVATIVELY into scorer calibration (≥30 = demote
+│   │                     #   proven losers, never inflate). Raises expectancy.
 │   ├── conviction.py     # Top-40 enrichment: news buzz + earnings + verdicts
 │   ├── sector_heat.py    # Sector map (parsed from nse_universe groups),
 │   │                     #   pack-boost + sector_performance()

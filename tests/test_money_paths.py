@@ -1177,6 +1177,71 @@ class TestVerdictDashboard:
         assert s["edge_trend"] == "decaying"
 
 
+class TestLiveEdge:
+    """The feedback loop that raises expectancy: learn from real tracked
+    outcomes, demote proven-negative signals in the scanner."""
+    def _seed(self, tmp_path, monkeypatch, rows):
+        """rows = list of (archetype, outcome_pct, worked). entry 100/stop 97."""
+        import core.signal_outcome_tracker as tk
+        monkeypatch.setattr(tk, "_DB_PATH", str(tmp_path / "sig.db"))
+        conn = tk._get_conn()
+        from datetime import datetime, timedelta
+        base = datetime(2026, 1, 1)
+        for i, (arche, pct, worked) in enumerate(rows):
+            la = (base + timedelta(hours=i)).isoformat(timespec="seconds")
+            conn.execute(
+                "INSERT INTO signal_log (symbol,logged_at,signal_type,archetype,"
+                "entry_price,stop_price,quality_score,outcome_pct,worked,"
+                "outcome_checked_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
+                (f"S{i}", la, "UNIFIED_BUY", arche, 100.0, 97.0, 70.0, pct,
+                 worked, la))
+        conn.commit(); conn.close()
+
+    def test_attributes_r_to_each_constituent_signal(self, tmp_path, monkeypatch):
+        from scan.live_edge import profile_edge
+        # a combo trade credits BOTH signals; +6% on 3% risk = +2R
+        self._seed(tmp_path, monkeypatch, [("BREAKOUT_52W|POCKET_PIVOT", 6.0, 1)])
+        p = profile_edge()
+        assert p["signals"]["BREAKOUT_52W"]["expectancy_r"] == 2.0
+        assert p["signals"]["POCKET_PIVOT"]["expectancy_r"] == 2.0
+        assert p["overall"]["n"] == 1
+
+    def test_calibration_gates_on_sample_and_bands(self, tmp_path, monkeypatch):
+        from scan.live_edge import live_calibration
+        # GOOD: 40 winners (+2R) → boost 1.25; BAD: 40 losers (-1R) → 0.45;
+        # THIN: 5 outcomes → no claim (absent)
+        rows = ([("GOOD", 6.0, 1)] * 40 + [("BAD", -3.0, 0)] * 40
+                + [("THIN", 6.0, 1)] * 5)
+        self._seed(tmp_path, monkeypatch, rows)
+        calib = live_calibration()
+        assert calib["GOOD"] == 1.25
+        assert calib["BAD"] == 0.45                    # proven loser demoted
+        assert "THIN" not in calib                     # <30 = no claim
+
+    def test_scanner_blend_is_conservative(self, tmp_path, monkeypatch):
+        """Live data may DEMOTE but never inflate past the backtest's view."""
+        import scan.unified_scanner as us
+        # backtest already distrusts SIG (0.75); live is euphoric (would be 1.25)
+        monkeypatch.setattr(us, "_load_calibration", lambda: {"SIG": 0.75})
+        self._seed(tmp_path, monkeypatch, [("SIG", 6.0, 1)] * 40)   # live → 1.25
+        sc = us.UnifiedScanner()
+        assert sc._calib["SIG"] == 0.75                # min(0.75, 1.25) — no inflation
+        # and a live-proven loser pulls a trusted signal DOWN
+        monkeypatch.setattr(us, "_load_calibration", lambda: {"SIG2": 1.0})
+        self._seed(tmp_path, monkeypatch, [("SIG2", -3.0, 0)] * 40)  # live → 0.45
+        sc2 = us.UnifiedScanner()
+        assert sc2._calib["SIG2"] == 0.45              # demoted by live evidence
+
+    def test_no_data_no_change(self, tmp_path, monkeypatch):
+        """Fresh install (no outcomes) → calibration untouched, nothing breaks."""
+        import scan.unified_scanner as us
+        monkeypatch.setattr(us, "_load_calibration", lambda: {"SIG": 1.1})
+        import core.signal_outcome_tracker as tk
+        monkeypatch.setattr(tk, "_DB_PATH", str(tmp_path / "empty.db"))
+        sc = us.UnifiedScanner()
+        assert sc._calib.get("SIG") == 1.1
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # 16. Conviction tier — highest conviction first, everywhere
 # ══════════════════════════════════════════════════════════════════════════════

@@ -370,6 +370,45 @@ def render_street_pulse() -> None:
         st.markdown(
             f"<div style='{_CARD};font-size:.85rem;color:#c9d1d9'>{vd['verdict']}</div>",
             unsafe_allow_html=True)
+
+        # ── Edge by signal — kahan se edge aata hai, kahan LEAK hota hai ──────
+        # System ab in live results se seekhta hai: proven-negative signals ko
+        # scanner khud demote karta hai (≥30 outcomes pe), isliye expectancy
+        # upar jaati hai. Yeh woh feedback loop hai jo edge badhata hai.
+        try:
+            from scan.live_edge import profile_edge
+            prof = profile_edge()
+            sigs = [(s, a) for s, a in prof["signals"].items() if a["n"] >= 10]
+            if sigs:
+                sigs.sort(key=lambda x: x[1]["expectancy_r"], reverse=True)
+                with st.expander("🔬 Edge by signal — kahan kamai, kahan leak"):
+                    st.caption("Har signal ka LIVE record (real tracked "
+                               "outcomes). ≥30 outcomes waale proven-negative "
+                               "signals ko scanner khud demote kar deta hai — "
+                               "isi se expectancy upar jaati hai.")
+                    for s, a in sigs:
+                        er = a["expectancy_r"]
+                        col = ("#00d4a0" if er >= 0.10 else
+                               "#f59e0b" if er >= -0.10 else "#ff4b4b")
+                        demoted = (" · <span style='color:#ff4b4b'>demoted</span>"
+                                   if a["n"] >= 30 and er < -0.10 else
+                                   " · <span style='color:#00d4a0'>boosted</span>"
+                                   if a["n"] >= 30 and er >= 0.30 else "")
+                        st.markdown(
+                            f"<div style='font-size:.78rem;color:#c9d1d9;"
+                            f"font-family:JetBrains Mono,monospace;padding:2px 0'>"
+                            f"<b>{s}</b> · <span style='color:{col}'>"
+                            f"{er:+.2f}R</span> · {a['win_rate']:.0f}% WR · "
+                            f"n={a['n']}{demoted}</div>", unsafe_allow_html=True)
+                    # quality-bucket sanity: does a higher score mean more edge?
+                    q = prof["quality"]
+                    qbits = [f"{k}: {q[k]['expectancy_r']:+.2f}R (n={q[k]['n']})"
+                             for k in ("70+", "50-70", "score<50") if q[k]["n"]]
+                    if qbits:
+                        st.caption("Quality check — " + " · ".join(qbits)
+                                   + ". Higher score = zyada edge hona chahiye.")
+        except Exception:
+            pass
     except Exception as _vd_exc:
         st.caption(f"Report card unavailable: {_vd_exc}")
 
