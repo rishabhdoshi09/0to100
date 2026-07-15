@@ -441,18 +441,22 @@ def _gen_brief(regime_json: str) -> str:
             base_url=os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com"),
         )
         cues = _brief_cues()
+        news = _top_market_news(3)
         prompt = (
             "You write a warm, friendly morning brief for an Indian trading "
             "group — conversational, like a smart friend, NOT a formal report.\n"
-            f"Live data: regime={regime_json}\nglobal_cues={json.dumps(cues, default=str)}\n\n"
+            f"Live data: regime={regime_json}\nglobal_cues={json.dumps(cues, default=str)}\n"
+            f"top_market_moving_news={json.dumps(news)}\n\n"
             "Structure (short paragraphs, NOT bullets):\n"
             "1. Greeting: 'Good Morning Guys!'\n"
-            "2. US markets last night (S&P/Nasdaq) — a line with a why if you know it.\n"
+            "2. US markets last night (S&P/Nasdaq) — and WEAVE IN the big news "
+            "that moved them (e.g. policy/Trump/Fed/oil), explaining the 'why'.\n"
             "3. Asia (Kospi/Nikkei) — note any sharp reversal.\n"
             "4. Nifty's tone — if down, suggest consolidation + breakout would be ideal.\n"
             "5. Crude oil level (above/below $80).\n"
             "6. Sign off: 'Let's have a good day! 🙌'\n\n"
-            "Keep it warm and human, ~5-6 short lines. Use the real numbers."
+            "Keep it warm and human, ~6-7 short lines. Use the real numbers and "
+            "the news to explain the moves."
         )
         resp = client.chat.completions.create(
             model="deepseek-chat",
@@ -504,9 +508,56 @@ def _brief_cues() -> dict:
     return out
 
 
+# Words that flag a headline as genuinely MARKET-MOVING (macro/geopolitics/
+# policy/commodities) — not routine corporate filler.
+_BIG_NEWS = (
+    "trump", "fed", "rate", "rate cut", "rate hike", "inflation", "cpi",
+    "tariff", "trade war", "sanction", "war", "ceasefire", "opec", "crude",
+    "oil", "gulf", "china", "yuan", "dollar", "rbi", "gdp", "recession",
+    "stimulus", "jobs", "payroll", "yield", "bond", "geopolit", "election",
+    "budget", "fii", "dii", "downgrade", "upgrade", "default", "banking crisis",
+)
+
+
+def _rank_news(headlines: list[str], n: int = 2) -> list[str]:
+    """Pure ranker: keep headlines with macro/geopolitics keywords, most
+    keyword hits first, deduped. Routine corporate filler is dropped."""
+    scored = []
+    for h in headlines:
+        h = (h or "").strip()
+        if len(h) < 25:
+            continue
+        hits = sum(1 for k in _BIG_NEWS if k in h.lower())
+        if hits:
+            scored.append((hits, h))
+    scored.sort(key=lambda x: -x[0])
+    seen, out = set(), []
+    for _, h in scored:
+        key = h.lower()[:40]
+        if key not in seen:
+            seen.add(key)
+            out.append(h if len(h) <= 140 else h[:137] + "…")
+        if len(out) >= n:
+            break
+    return out
+
+
+@st.cache_data(ttl=900, show_spinner=False)
+def _top_market_news(n: int = 2) -> list[str]:
+    """Recent headlines that actually move markets — ranked by macro/
+    geopolitics keywords, freshest first. Empty if the feed is quiet."""
+    try:
+        from news.fetcher import NewsFetcher
+        arts = NewsFetcher().fetch_all(max_age_hours=18)
+    except Exception:
+        return []
+    return _rank_news([a.headline for a in arts], n)
+
+
 def _conversational_brief(regime: dict) -> str:
     """A warm, human 'Good Morning' brief driven by real data — US action
-    last night, Asia, Nifty's tone, crude/gold. No LLM needed."""
+    last night, Asia, Nifty's tone, crude/gold, PLUS the big market-moving
+    headline of the moment. No LLM needed."""
     c = _brief_cues()
     hour = datetime.now().hour
     greet = ("Good Morning Guys! 👋" if hour < 12
@@ -528,6 +579,11 @@ def _conversational_brief(regime: dict) -> str:
                 "US markets were quiet last night")
         lines.append(f"{mood} — S&P {_dir(sp['chg'])} {sp['chg']:+.2f}%"
                      + (f", Nasdaq {nq:+.2f}%" if nq else "") + ".")
+
+    # 📰 The big news that's moving markets — right after the US action
+    news = _top_market_news(2)
+    for h in news:
+        lines.append(f"📰 {h}")
 
     kospi = c.get("kospi")
     if kospi:

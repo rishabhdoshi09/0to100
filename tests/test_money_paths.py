@@ -1791,6 +1791,8 @@ class TestMorningBrief:
             "kospi": {"price": 2800, "chg": 7.64}, "crude": {"price": 80.05, "chg": 0.29},
             "gold": {"price": 4031, "chg": -0.55}, "btc": {"price": 64564, "chg": -0.63},
         })
+        monkeypatch.setattr(cc, "_top_market_news",
+                            lambda n=2: ["Trump signals Gulf nations to invest big in the US"])
         # cache_data wrapper — call the underlying fn
         brief = cc._conversational_brief.__wrapped__(
             {"nifty_price": 24052, "nifty_change_1d": -0.66}) \
@@ -1802,7 +1804,21 @@ class TestMorningBrief:
         assert "reversal" in brief.lower()           # KOSPI +7.6% → reversal
         assert "consolidation" in brief.lower()      # Nifty down → consolidation
         assert "80" in brief                          # crude level
+        assert "Trump" in brief                        # market-moving news woven in
         assert "good day" in brief.lower()
+
+    def test_news_ranker_prefers_macro(self):
+        from ui.command_center import _rank_news
+        headlines = [
+            "Company XYZ appoints new marketing head for the region",
+            "Trump signals Gulf nations to invest big in the US economy",
+            "Fed hints at a rate cut as inflation cools sharply",
+            "Local bakery opens third outlet in the suburb",
+        ]
+        out = _rank_news(headlines, 2)
+        assert len(out) == 2
+        assert any("Trump" in h or "Fed" in h for h in out)
+        assert not any("marketing head" in h or "bakery" in h for h in out)
 
 
 class TestLLMHealth:
