@@ -906,9 +906,33 @@ with st.sidebar:
 
     # ── Search bar (NSE + US) ────────────────────────────────────────────
     _search = st.text_input("Search", placeholder="🔍 NSE ya US stock (AAPL, RELIANCE)…", key="qs", label_visibility="collapsed")
-    if _search and _search.strip():
-        _qs = _search.strip().upper()
 
+    # ── Index-wise US search — S&P 500 · NASDAQ-100 · Dow 30 ─────────────
+    # Flat ~5,000-name listing ki jagah wahi index jismein trader sochta hai.
+    _idx_sym: str | None = None
+    with st.expander("🇺🇸 Index-wise US search", expanded=False):
+        try:
+            from data.us_indices import us_indices, get_index_members
+            _ix = st.selectbox("Index", ["—"] + us_indices(),
+                               key="us_idx_sel", label_visibility="collapsed")
+            if _ix != "—":
+                _members, _src = get_index_members(_ix)
+                _opts = [f"{s} — {n}" for s, n in _members.items()]
+                _pick = st.selectbox(
+                    f"{_ix} · {len(_members)} stocks", ["—"] + _opts,
+                    key="us_idx_stock_sel")
+                st.caption(f"Source: :{'green' if _src=='live' else 'orange'}[{_src}]"
+                           + ("" if _src == "live"
+                              else " — live list network aane par khud complete ho jayegi"))
+                if _pick != "—":
+                    _idx_sym = _pick.split(" — ")[0]
+        except Exception:
+            st.caption("Index list abhi load nahi ho payi.")
+
+    # Query source: index-picker selection wins, warna typed search.
+    _typed = (_search or "").strip().upper()
+    _qs = _idx_sym or _typed
+    if _qs:
         # Market detect: US ticker (in the US universe) → $ path, else NSE ₹
         @st.cache_data(ttl=3600, show_spinner=False)
         def _is_us_ticker(sym: str) -> bool:
@@ -918,7 +942,8 @@ with st.sidebar:
             except Exception:
                 return False
 
-        _is_us = _is_us_ticker(_qs)
+        # index-picked stocks are US by definition; typed queries get detected
+        _is_us = True if _idx_sym else _is_us_ticker(_qs)
 
         @st.cache_data(ttl=120, show_spinner=False)
         def _qs_fetch(sym: str, is_us: bool) -> dict:

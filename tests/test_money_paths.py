@@ -1773,6 +1773,46 @@ class TestUSScanner:
         u = uu.get_us_universe()
         assert "AAPL" in u and len(u) >= 30                  # curated fallback
 
+    def test_index_constituents_parser(self):
+        """Scope to the constituents table + keep only ticker-shaped tokens."""
+        from data.us_indices import _extract_symbols
+        html = (
+            'junk <a>NOPE</a> <table id="other"><td>ZZZZ</td></table>'
+            '<table id="constituents">'
+            '<tr><td><a href="/q/MMM">MMM</a></td><td>3M</td></tr>'
+            '<tr><td><a href="/q/AAPL">AAPL</a></td><td>Apple</td></tr>'
+            '<tr><td>lowercase</td><td>TOOLONGTICKER</td></tr>'
+            '</table>'
+            '<table><td>AFTER</td></table>')          # outside → ignored
+        syms = _extract_symbols(html, "constituents")
+        assert "MMM" in syms and "AAPL" in syms
+        assert "ZZZZ" not in syms                      # before the table
+        assert "AFTER" not in syms                     # after </table>
+        assert "TOOLONGTICKER" not in syms             # >5 chars
+
+    def test_index_members_fallback_and_source(self, tmp_path, monkeypatch):
+        """Live fetch down → curated members with an HONEST source label
+        (stale must look stale). Dow 30 curated is complete."""
+        import data.us_indices as ui
+        monkeypatch.setattr(ui, "_CACHE_FILE", tmp_path / "us_indices.json")
+        monkeypatch.setattr(ui, "_fetch_index", lambda index: {})   # network down
+        dow, src = ui.get_index_members("Dow 30")
+        assert "AAPL" in dow and "NVDA" in dow and len(dow) == 30
+        assert "complete" in src
+        ndx, src2 = ui.get_index_members("NASDAQ-100")
+        assert "MSFT" in ndx and len(ndx) >= 50
+        assert "subset" in src2                          # labeled honestly
+        assert ui.get_index_members("Bogus")[0] == {}    # unknown index safe
+
+    def test_index_members_prefers_live(self, tmp_path, monkeypatch):
+        """A healthy live fetch is used verbatim and marked 'live'."""
+        import data.us_indices as ui
+        monkeypatch.setattr(ui, "_CACHE_FILE", tmp_path / "us_indices.json")
+        fake = {f"S{i:03d}"[:5]: f"Co {i}" for i in range(90)}
+        monkeypatch.setattr(ui, "_fetch_index", lambda index: fake)
+        m, src = ui.get_index_members("S&P 500")
+        assert src == "live" and len(m) == 90
+
     def test_same_engine_runs_on_us_shaped_data(self, monkeypatch):
         """The NSE signal engine must analyse a US-shaped DataFrame — the
         whole point of the reuse. Delivery absent → conviction neutral,
