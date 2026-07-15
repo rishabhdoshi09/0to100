@@ -86,7 +86,62 @@ _DEFAULTS = {
     "disarmed_reason": "",
     "accounted_ids": [],           # journal ids already added to realized_pnl
     "activity": [],                # last N activity lines for the UI
+    "reject_stats": {},            # {YYYY-MM-DD: {category: count}} — the funnel
+    "considered": {},              # {YYYY-MM-DD: candidates seen}
+    "preset": "Balanced",          # aggressiveness dial (frequency, not safety)
 }
+
+
+# ── Rejection funnel — WHY so few trades (transparency, not blind loosening) ──
+
+def _reject_category(reason: str) -> str:
+    r = (reason or "").lower()
+    if "time window" in r:        return "time window (market band/settle)"
+    if "daily trade limit" in r:  return "daily limit hit (max/day)"
+    if "max open positions" in r: return "position limit full"
+    if "already traded" in r:     return "symbol already traded today"
+    if "concentration" in r:      return "sector concentration cap"
+    if "score" in r or "conviction" in r: return "score/conviction kam"
+    if "edge" in r:               return "negative measured edge"
+    if "regime" in r:             return "market regime kharab"
+    if "sector" in r:             return "sector strong nahi"
+    if "quote" in r:              return "live quote nahi mila"
+    if "stop" in r and "neeche" in r: return "setup toot gaya (live < stop)"
+    if "chase" in r:              return "chase (live entry se upar)"
+    if "share" in r or "pool" in r:   return "capital/1-share nahi aata"
+    if "source" in r:             return "source apne record se paused"
+    if "stop" in r:               return "invalid stop (data)"
+    return "other"
+
+
+def _note_reject(reason: str) -> None:
+    today = date.today().isoformat()
+    with _lock:
+        s = _load()
+        # copy (not setdefault-in-place) — _DEFAULTS' nested dict is shared via
+        # the shallow dict(_DEFAULTS) load, so never mutate it directly
+        rs = dict(s.get("reject_stats", {}).get(today, {}))
+        cat = _reject_category(reason)
+        rs[cat] = rs.get(cat, 0) + 1
+        s["reject_stats"] = {today: rs}     # keep only today (state stays small)
+    _save()
+
+
+def _note_considered() -> None:
+    """One candidate reached the gate funnel today (denominator)."""
+    today = date.today().isoformat()
+    with _lock:
+        s = _load()
+        n = int(s.get("considered", {}).get(today, 0)) + 1
+        s["considered"] = {today: n}          # keep only today (state stays small)
+    _save()
+
+
+def reject_funnel() -> dict:
+    today = date.today().isoformat()
+    s = _load()
+    return {"considered": int(s.get("considered", {}).get(today, 0)),
+            "rejects": dict(s.get("reject_stats", {}).get(today, {}))}
 
 _state: dict = {}
 
@@ -196,6 +251,46 @@ def set_config(**kwargs) -> None:
                     s["armed"] = False      # mode change always disarms
                 s["mode"] = v
     _save()
+
+
+# ── Aggressiveness presets — how OFTEN it trades, never how SAFE it is ───────
+# These dials widen/narrow BREADTH only: score bar, daily slots, open-position
+# and sector caps, sector_top_n, chase room. The non-negotiables — exchange-side
+# GTT exit, 1% risk sizing, regime gate, live-price anchor, circuit breaker —
+# are NOT touched by any preset. Aggressive = more shots at good setups, not
+# looser discipline on each shot.
+_PRESETS = {
+    "Conservative": {          # fewer, only the A+ setups
+        "min_score": 70.0, "max_trades_per_day": 2, "max_open_positions": 2,
+        "max_per_sector": 1, "sector_top_n": 2, "max_chase_pct": 0.5},
+    "Balanced": {              # the default — evidence-first, steady
+        "min_score": 60.0, "max_trades_per_day": 4, "max_open_positions": 3,
+        "max_per_sector": 2, "sector_top_n": 3, "max_chase_pct": 1.0},
+    "Aggressive": {            # more shots — wider net, still gated
+        "min_score": 52.0, "max_trades_per_day": 8, "max_open_positions": 5,
+        "max_per_sector": 3, "sector_top_n": 5, "max_chase_pct": 2.0},
+}
+
+
+def presets() -> list[str]:
+    return list(_PRESETS)
+
+
+def apply_preset(name: str) -> tuple[bool, str]:
+    """Set the aggressiveness dial. Only breadth knobs move — every money-safety
+    invariant stays put. Returns (ok, message)."""
+    cfg = _PRESETS.get(name)
+    if not cfg:
+        return False, f"unknown preset '{name}'"
+    set_config(**cfg)
+    with _lock:
+        s = _load()
+        s["preset"] = name
+    _save()
+    _log_activity(f"PRESET → {name} (min_score {cfg['min_score']:.0f}, "
+                  f"{cfg['max_trades_per_day']}/day, "
+                  f"{cfg['max_open_positions']} open, chase {cfg['max_chase_pct']}%)")
+    return True, f"{name} preset applied"
 
 
 def arm(confirm_phrase: str = "") -> tuple[bool, str]:
@@ -621,17 +716,22 @@ def _consider_locked(symbol: str, entry: float, stop: float, score: float,
                 sector = ""
         entry = float(entry)
         stop = float(stop)
+        # This candidate reached the funnel — count it, so "kitne dekhe vs kitne
+        # liye" (considered vs taken) is honest and visible on the page.
+        _note_considered()
         # Invariant #3: har trade exchange-side exit ke saath. Bina real stop
         # (sniper hits from watchlist rows can carry stop=0) koi trade nahi —
         # stop invent karna fake data hai.
         if entry <= 0 or stop <= 0 or stop >= entry:
             log.debug("autopilot_reject", symbol=symbol,
                       reason=f"invalid stop {stop} for entry {entry}")
+            _note_reject("invalid stop")
             return False
 
         reject = _passes_gates(symbol, score, edge, sector)
         if reject:
             log.debug("autopilot_reject", symbol=symbol, reason=reject)
+            _note_reject(reject)
             return False
 
         # Gate 12: source's OWN measured record — a feed that has proven
@@ -640,6 +740,7 @@ def _consider_locked(symbol: str, entry: float, stop: float, score: float,
             paused = _source_paused(source)
             if paused:
                 _log_activity(f"SKIP {symbol}: {paused}")
+                _note_reject("source paused")
                 return False
 
         # Gate 13: LIVE price anchor — order, target, sizing sab order ke
@@ -648,6 +749,7 @@ def _consider_locked(symbol: str, entry: float, stop: float, score: float,
                                        s.get("max_chase_pct", 1.0))
         if live_entry is None:
             _log_activity(f"SKIP {symbol}: {why}")
+            _note_reject(why or "live quote")
             return False
         entry = live_entry
 
@@ -658,6 +760,7 @@ def _consider_locked(symbol: str, entry: float, stop: float, score: float,
         if qty < 1:
             _log_activity(f"SKIP {symbol}: pool/limits ke andar 1 share bhi "
                           f"nahi aata (entry ₹{entry:,.0f})")
+            _note_reject("pool/1-share")
             return False
 
         # LIVE: broker margin double-check — allocation par bharosa nahi,
@@ -667,6 +770,7 @@ def _consider_locked(symbol: str, entry: float, stop: float, score: float,
             if cash is not None and qty * entry > cash:
                 _log_activity(f"SKIP {symbol}: broker cash ₹{cash:,.0f} < "
                               f"required ₹{qty*entry:,.0f}")
+                _note_reject("pool/1-share")
                 return False
 
         from execution.trade_executor import place_trade

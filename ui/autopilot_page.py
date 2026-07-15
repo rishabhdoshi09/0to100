@@ -9,6 +9,71 @@ import streamlit as st
 _CARD = ("background:#0d1421;border:1px solid #1e293b;border-radius:10px;"
          "padding:14px 18px;margin-bottom:10px")
 
+_PRESET_HELP = {
+    "Conservative": "Sirf A+ setups — kam trades, sabse saaf. Capital safety pehle.",
+    "Balanced":     "Default — evidence-first, steady. Zyada logon ke liye sahi.",
+    "Aggressive":   "Wider net — zyada shots, lekin har trade pe wahi discipline "
+                    "(stop, 1% risk, regime gate). Frequency badhti hai, safety nahi girti.",
+}
+
+
+def _render_funnel_and_preset(mod, key_prefix: str) -> None:
+    """Shared: aggressiveness dial + 'aaj kitne dekhe vs liye' funnel.
+    `mod` is the autopilot module (execution.autopilot or execution.us_autopilot).
+    Answers the real question — 'itne kam trades kyun?' — with data, not a shrug."""
+    try:
+        s = mod.get_status()
+        cur_preset = s.get("preset", "Balanced")
+        names = mod.presets()
+        st.markdown("#### 🎛️ Aggressiveness")
+        st.caption("Kitni **baar** trade le — safety rails (exchange-side stop, "
+                   "1% risk, regime gate, live-price anchor) kabhi nahi badalte. "
+                   "Ye sirf breadth hai: score bar, roz ke slots, chase room.")
+        pick = st.radio(
+            "Preset", names, index=names.index(cur_preset)
+            if cur_preset in names else 1, horizontal=True,
+            key=f"{key_prefix}_preset",
+            label_visibility="collapsed")
+        st.caption(_PRESET_HELP.get(pick, ""))
+        if pick != cur_preset:
+            if st.button(f"✅ Apply {pick}", key=f"{key_prefix}_preset_apply",
+                         width="stretch"):
+                ok, msg = mod.apply_preset(pick)
+                (st.success if ok else st.error)(msg)
+                if ok:
+                    st.rerun()
+    except Exception:
+        pass
+
+    # ── The funnel — WHY so few trades today ──────────────────────────────────
+    try:
+        f = mod.reject_funnel()
+        considered = f.get("considered", 0)
+        rejects = f.get("rejects", {})
+        taken = max(0, considered - sum(rejects.values()))
+        if not considered:
+            st.caption("📊 Aaj abhi koi candidate evaluate nahi hua — scanner ke "
+                       "setups aane par funnel yahan bharega.")
+            return
+        st.markdown("#### 📊 Aaj ka funnel — itne kam trades kyun?")
+        st.markdown(
+            f"<div style='{_CARD};font-size:.82rem;color:#c9d1d9'>"
+            f"<b style='color:#e2e8f0'>{considered}</b> candidates dekhe → "
+            f"<b style='color:#00d4a0'>{taken}</b> liye · "
+            f"<b style='color:#f59e0b'>{sum(rejects.values())}</b> reject."
+            + (("<div style='margin-top:6px'>" + "".join(
+                f"<div>• {cat} — <b>{n}</b></div>"
+                for cat, n in sorted(rejects.items(),
+                                     key=lambda x: -x[1])) + "</div>")
+               if rejects else "")
+            + "</div>", unsafe_allow_html=True)
+        st.caption("Ye discipline hai, bug nahi. Kam-lekin-accha (positive "
+                   "expectancy) > zyada-lekin-kachra. Agar reasons mostly "
+                   "'sector/score' hain aur aap zyada trades chahte ho → "
+                   "Aggressive preset breadth badha dega, bina safety chhode.")
+    except Exception:
+        pass
+
 
 def render_autopilot() -> None:
     st.markdown("### 🤖 Autopilot")
@@ -277,6 +342,10 @@ def _render_india_autopilot() -> None:
                 f"stop ₹{p['stop']:,.1f} · target ₹{p['target']:,.1f} · "
                 f"{p['status']}</div></div>", unsafe_allow_html=True)
 
+    # ── Aggressiveness dial + rejection funnel ────────────────────────────────
+    import execution.autopilot as _ap_in
+    _render_funnel_and_preset(_ap_in, "ap_in")
+
     # ── Report Card — autopilot ka apna track record ──────────────────────────
     _render_report_card()
 
@@ -490,6 +559,10 @@ def _render_us_autopilot() -> None:
                 f"stop ${float(t['stop_price'] or 0):,.2f} · "
                 f"target ${float(t['target_price'] or 0):,.2f}</span></div>",
                 unsafe_allow_html=True)
+
+    # ── Aggressiveness dial + rejection funnel ────────────────────────────────
+    import execution.us_autopilot as _ap_us
+    _render_funnel_and_preset(_ap_us, "ap_us")
 
     rc = report_card()
     v_style = {"COLLECTING_EVIDENCE": "#f59e0b", "READY_CANDIDATE": "#00d4a0",

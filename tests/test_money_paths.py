@@ -1058,6 +1058,56 @@ class TestAutopilot:
         ap._time_stop()
         assert len([n for n in nudges if "BEL" in n]) == 1
 
+    def test_reject_funnel_records_why_and_considered(self, tmp_path, monkeypatch):
+        """Transparency: har reject ka reason category funnel mein girta hai,
+        aur considered (denominator) sach bolta hai — 'itne kam trades kyun'."""
+        ap, te = self._setup(tmp_path, monkeypatch)
+        ap.arm()
+        monkeypatch.setattr(ap, "_in_window", lambda now=None: True)
+        # weak sector → reject; low score → reject; then a valid BUY
+        assert ap.consider("X", 500, 480, 80, 0.2, "Cement", "t") is False
+        assert ap.consider("HAL", 4500, 4300, 45, 0.2, "Defence", "t") is False
+        assert ap.consider("HAL", 4500, 4300, 80, 0.2, "Defence", "t") is True
+        f = ap.reject_funnel()
+        assert f["considered"] == 3                       # all three seen
+        assert sum(f["rejects"].values()) == 2            # two rejected
+        # reasons are categorised, not raw strings
+        assert "sector strong nahi" in f["rejects"]
+        assert "score/conviction kam" in f["rejects"]
+
+    def test_invalid_stop_is_categorised(self, tmp_path, monkeypatch):
+        ap, te = self._setup(tmp_path, monkeypatch)
+        ap.arm()
+        monkeypatch.setattr(ap, "_in_window", lambda now=None: True)
+        assert ap.consider("HAL", 4500, 4600, 80, 0.2, "Defence", "t") is False
+        f = ap.reject_funnel()
+        assert f["rejects"].get("invalid stop (data)") == 1
+
+    def test_apply_preset_moves_breadth_not_safety(self, tmp_path, monkeypatch):
+        """Presets sirf frequency knobs badalte hain — regime gate, conviction
+        sizing, risk-per-trade jaise safety rails untouched."""
+        ap, te = self._setup(tmp_path, monkeypatch)
+        base = ap.get_status()
+        ok, _ = ap.apply_preset("Aggressive")
+        assert ok
+        aggr = ap.get_status()
+        assert aggr["preset"] == "Aggressive"
+        assert aggr["min_score"] < base["min_score"]      # lower bar
+        assert aggr["max_trades_per_day"] > base["max_trades_per_day"]
+        assert aggr["max_open_positions"] >= base["max_open_positions"]
+        # safety rails NOT touched by any preset
+        assert aggr["risk_per_trade_pct"] == base["risk_per_trade_pct"]
+        assert aggr["regime_gate"] == base["regime_gate"]
+        assert aggr["daily_loss_limit_pct"] == base["daily_loss_limit_pct"]
+        # Conservative tightens back
+        ap.apply_preset("Conservative")
+        cons = ap.get_status()
+        assert cons["min_score"] > aggr["min_score"]
+        assert cons["max_trades_per_day"] < aggr["max_trades_per_day"]
+        # unknown preset is a no-op with a clear message
+        ok2, msg2 = ap.apply_preset("Yolo")
+        assert ok2 is False and "unknown" in msg2.lower()
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 # 16. Conviction tier — highest conviction first, everywhere
@@ -1592,6 +1642,25 @@ class TestUSAutopilot:
         # once per day
         assert ua.consider("AAPL", 100, 95, 80, 70) is False
 
+    def test_funnel_and_preset_us(self, tmp_path, monkeypatch):
+        ua, te = self._setup(tmp_path, monkeypatch)
+        ua.arm()
+        assert ua.consider("AAPL", 100, 105, 80, 60) is False   # invalid stop
+        assert ua.consider("MSFT", 100, 95, 80, 30) is False    # low conviction
+        assert ua.consider("NVDA", 100, 95, 80, 70) is True     # valid
+        f = ua.reject_funnel()
+        assert f["considered"] == 3 and sum(f["rejects"].values()) == 2
+        assert f["rejects"].get("invalid stop") == 1
+        assert f["rejects"].get("conviction kam") == 1
+        # preset moves breadth, not safety
+        base = ua.get_status()
+        ua.apply_preset("Aggressive")
+        aggr = ua.get_status()
+        assert aggr["preset"] == "Aggressive"
+        assert aggr["min_score"] < base["min_score"]
+        assert aggr["risk_per_trade_pct"] == base["risk_per_trade_pct"]
+        assert ua.apply_preset("Nope")[0] is False
+
     def test_concurrent_writes_no_lock_error(self, tmp_path, monkeypatch):
         """Both autopilots + position manager write the SAME db from
         threads. The WAL + busy-timeout connect() must survive concurrent
@@ -1786,6 +1855,14 @@ class TestUSScanner:
 class TestMorningBrief:
     def test_conversational_brief_style(self, monkeypatch):
         import ui.command_center as cc
+        import datetime as _dt
+        # freeze to morning so the greeting is deterministic (suite runs at
+        # any hour in CI; the brief's greeting is clock-driven)
+        class _MorningDT(_dt.datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return _dt.datetime(2026, 7, 15, 8, 30)
+        monkeypatch.setattr(cc, "datetime", _MorningDT)
         monkeypatch.setattr(cc, "_brief_cues", lambda: {
             "sp500": {"price": 5600, "chg": 0.20}, "nasdaq": {"price": 18000, "chg": 0.3},
             "kospi": {"price": 2800, "chg": 7.64}, "crude": {"price": 80.05, "chg": 0.29},

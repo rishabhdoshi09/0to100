@@ -57,6 +57,9 @@ _DEFAULTS = {
     "accounted_ids": [],
     "activity": [],
     "disarmed_reason": "",
+    "reject_stats": {},            # {YYYY-MM-DD: {category: count}} — the funnel
+    "considered": {},              # {YYYY-MM-DD: candidates seen}
+    "preset": "Balanced",          # aggressiveness dial (frequency, not safety)
 }
 
 _state: dict = {}
@@ -106,6 +109,51 @@ def _notify(msg: str) -> None:
         AlertEngine().send(f"🇺🇸🤖 <b>US Autopilot</b>\n{msg}")
     except Exception:
         pass
+
+
+# ── Rejection funnel — WHY so few US trades (transparency) ─────────────────────
+
+def _reject_category(reason: str) -> str:
+    r = (reason or "").lower()
+    if "window" in r:             return "time window (US band)"
+    if "daily trade limit" in r:  return "daily limit hit (max/day)"
+    if "max open positions" in r: return "position limit full"
+    if "already traded" in r:     return "symbol already traded today"
+    if "conviction" in r:         return "conviction kam"
+    if "score" in r:              return "score kam"
+    if "quote" in r:              return "live quote nahi mila"
+    if "neeche" in r:             return "setup toot gaya (live < stop)"
+    if "chase" in r:              return "chase (live entry se upar)"
+    if "share" in r or "pool" in r:   return "capital/1-share nahi aata"
+    if "stop" in r:               return "invalid stop"
+    return "other"
+
+
+def _note_reject(reason: str) -> None:
+    today = date.today().isoformat()
+    with _lock:
+        s = _load()
+        rs = dict(s.get("reject_stats", {}).get(today, {}))   # copy, not in-place
+        cat = _reject_category(reason)
+        rs[cat] = rs.get(cat, 0) + 1
+        s["reject_stats"] = {today: rs}
+    _save()
+
+
+def _note_considered() -> None:
+    today = date.today().isoformat()
+    with _lock:
+        s = _load()
+        n = int(s.get("considered", {}).get(today, 0)) + 1
+        s["considered"] = {today: n}
+    _save()
+
+
+def reject_funnel() -> dict:
+    today = date.today().isoformat()
+    s = _load()
+    return {"considered": int(s.get("considered", {}).get(today, 0)),
+            "rejects": dict(s.get("reject_stats", {}).get(today, {}))}
 
 
 # ── Journal (shared DB, US_AUTOPILOT tag) ─────────────────────────────────────
@@ -195,6 +243,39 @@ def set_config(**kwargs) -> None:
                 lo, hi = clamps[k]
                 s[k] = type(_DEFAULTS[k])(min(hi, max(lo, v)))
     _save()
+
+
+# ── Aggressiveness presets — breadth only, never the safety rails ─────────────
+_PRESETS = {
+    "Conservative": {
+        "min_score": 70.0, "min_conviction": 60.0, "max_trades_per_day": 2,
+        "max_open_positions": 2, "max_chase_pct": 0.75},
+    "Balanced": {
+        "min_score": 60.0, "min_conviction": 50.0, "max_trades_per_day": 4,
+        "max_open_positions": 3, "max_chase_pct": 1.5},
+    "Aggressive": {
+        "min_score": 52.0, "min_conviction": 40.0, "max_trades_per_day": 8,
+        "max_open_positions": 5, "max_chase_pct": 2.5},
+}
+
+
+def presets() -> list[str]:
+    return list(_PRESETS)
+
+
+def apply_preset(name: str) -> tuple[bool, str]:
+    cfg = _PRESETS.get(name)
+    if not cfg:
+        return False, f"unknown preset '{name}'"
+    set_config(**cfg)
+    with _lock:
+        s = _load()
+        s["preset"] = name
+    _save()
+    _log_activity(f"PRESET → {name} (min_score {cfg['min_score']:.0f}, "
+                  f"{cfg['max_trades_per_day']}/day, "
+                  f"{cfg['max_open_positions']} open)")
+    return True, f"{name} preset applied"
 
 
 def arm() -> tuple[bool, str]:
@@ -312,21 +393,26 @@ def _consider_locked(symbol, entry, stop, score, conviction, source) -> bool:
     try:
         s = _load()
         entry, stop = float(entry), float(stop)
+        _note_considered()
         if entry <= 0 or stop <= 0 or stop >= entry:
+            _note_reject("invalid stop")
             return False
         reject = _passes_gates(symbol, score, conviction)
         if reject:
             log.debug("us_autopilot_reject", symbol=symbol, reason=reject)
+            _note_reject(reject)
             return False
         live_entry, why = _anchor_live(symbol, entry, stop, s["max_chase_pct"])
         if live_entry is None:
             _log_activity(f"SKIP {symbol}: {why}")
+            _note_reject(why or "live quote")
             return False
         entry = live_entry
         target = round(entry * (1 + s["target_pct"] / 100), 2)
         qty = _size(entry, stop, _conviction_mult(score, conviction))
         if qty < 1:
             _log_activity(f"SKIP {symbol}: pool/limits mein 1 share nahi aata")
+            _note_reject("pool/1-share")
             return False
 
         from execution.trade_executor import place_trade
