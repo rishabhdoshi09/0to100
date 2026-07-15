@@ -63,6 +63,16 @@ _BREAKOUT_MIN_VOL = float(_os.getenv("QT_BREAKOUT_MIN_VOL", "1.5") or 1.5)
 _BREAKOUT_MAX_GAP = 8.0        # >8% gap up = exhaustion risk, not a clean break
 
 
+def _market_is_live() -> bool:
+    """Kya abhi koi market (NSE ya US) OPEN hai? Off-hours = aaj ka close
+    aa chuka hai, toh 'wait' nahi bolna — data humare paas hai."""
+    try:
+        from core.market_session import in_market_open, us_market_open
+        return in_market_open() or us_market_open()
+    except Exception:
+        return False
+
+
 def grade_breakout(price: float, level: float, atr: float, vratio: float,
                    day_change: float) -> tuple[bool, str, str]:
     """(confirmed, grade, note). Grade A = clears by ≥1×ATR on ≥2× volume;
@@ -77,7 +87,11 @@ def grade_breakout(price: float, level: float, atr: float, vratio: float,
     room_ok = atr_mult >= _BREAKOUT_ATR_BUFFER
     if not (vol_ok and room_ok):
         why = ("volume kam" if not vol_ok else f"clearance sirf {atr_mult:.2f}×ATR")
-        return False, "", f"marginal break ({why}) — close confirm ka wait"
+        # Time-aware: market LIVE hai toh close ka wait; band ho chuka hai toh
+        # close aa gaya aur us par bhi confirm nahi hua (data humare paas hai).
+        tail = ("close confirm ka wait" if _market_is_live()
+                else "close pe bhi confirm nahi hua")
+        return False, "", f"marginal break ({why}) — {tail}"
     if atr_mult >= 1.0 and vratio >= 2.0:
         return True, "A", f"clean break: {atr_mult:.1f}×ATR upar, {vratio:.1f}× volume"
     return True, "B", f"confirmed: {atr_mult:.2f}×ATR clear, {vratio:.1f}× volume"

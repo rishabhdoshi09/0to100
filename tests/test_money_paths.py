@@ -1377,6 +1377,21 @@ class TestBreakoutConfirmation:
         # price below level → nothing
         assert g(price=99, level=100, atr=5, vratio=3, day_change=1)[0] is False
 
+    def test_marginal_note_is_time_aware(self, monkeypatch):
+        """Off-hours the close is IN — a marginal break must say 'close pe
+        bhi confirm nahi hua', NOT 'close ka wait' (data humare paas hai)."""
+        import scan.unified_scanner as us
+        # market LIVE → 'wait'
+        monkeypatch.setattr(us, "_market_is_live", lambda: True)
+        _, _, note_live = us.grade_breakout(price=100.2, level=100, atr=5,
+                                            vratio=1.0, day_change=2)
+        assert "wait" in note_live
+        # market CLOSED → definitive, no 'wait'
+        monkeypatch.setattr(us, "_market_is_live", lambda: False)
+        _, _, note_eod = us.grade_breakout(price=100.2, level=100, atr=5,
+                                           vratio=1.0, day_change=2)
+        assert "confirm nahi hua" in note_eod and "wait" not in note_eod
+
     def test_marginal_break_is_watch_not_buy(self):
         import numpy as np
         import pandas as pd
