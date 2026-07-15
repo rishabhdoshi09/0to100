@@ -215,6 +215,16 @@ def _log_buys_for_tracking(results) -> None:
     """Feed BUY signals into the outcome tracker (dedupes per day itself)."""
     try:
         from core.signal_outcome_tracker import log_signal
+        # Capture the CURRENT market tape ONCE (cached 15 min) — so we can
+        # later measure which signals earn in which regime. Was logged empty;
+        # that blinded the edge profiler to regime, the biggest context an
+        # entry has. compute_regime is streamlit-free + cached → cheap here.
+        regime = ""
+        try:
+            from core.regime_engine import compute_regime
+            regime = str(getattr(compute_regime(), "market_regime", "") or "")
+        except Exception:
+            regime = ""
         for r in results:
             if r.verdict != "BUY":
                 continue
@@ -223,7 +233,7 @@ def _log_buys_for_tracking(results) -> None:
                 entry_price=r.entry, pivot_price=r.entry,
                 stop_price=r.stop, target_price=r.target,
                 quality_score=r.score, accum_score=0.0,
-                archetype="|".join(r.signals), regime="",
+                archetype="|".join(r.signals), regime=regime,
             )
     except Exception as exc:
         log.debug("auto_scan_tracking_skip", error=str(exc))

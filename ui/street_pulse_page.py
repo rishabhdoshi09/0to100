@@ -407,6 +407,15 @@ def render_street_pulse() -> None:
                     if qbits:
                         st.caption("Quality check — " + " · ".join(qbits)
                                    + ". Higher score = zyada edge hona chahiye.")
+                    # edge by market tape — kaunse regime mein signals chalte hain
+                    regs = [(rg, a) for rg, a in prof.get("regimes", {}).items()
+                            if a["n"] >= 10]
+                    if regs:
+                        regs.sort(key=lambda x: x[1]["expectancy_r"], reverse=True)
+                        rbits = [f"{rg}: {a['expectancy_r']:+.2f}R (n={a['n']})"
+                                 for rg, a in regs]
+                        st.caption("Edge by tape — " + " · ".join(rbits)
+                                   + ". Bad-tape signals se door raho.")
         except Exception:
             pass
     except Exception as _vd_exc:

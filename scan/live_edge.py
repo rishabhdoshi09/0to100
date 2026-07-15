@@ -32,7 +32,7 @@ def _closed_rows() -> list[dict]:
         from core.signal_outcome_tracker import _get_conn
         conn = _get_conn()
         rows = conn.execute(
-            """SELECT archetype, entry_price, stop_price, quality_score,
+            """SELECT archetype, regime, entry_price, stop_price, quality_score,
                       outcome_pct, worked
                FROM signal_log
                WHERE worked IS NOT NULL AND outcome_pct IS NOT NULL
@@ -76,6 +76,8 @@ def profile_edge() -> dict:
     """
     rows = _closed_rows()
     per_sig: dict[str, list[tuple[float, int]]] = {}
+    per_combo: dict[str, list[tuple[float, int]]] = {}
+    per_regime: dict[str, list[tuple[float, int]]] = {}
     quality: dict[str, list[tuple[float, int]]] = {
         "score<50": [], "50-70": [], "70+": []}
     all_r: list[tuple[float, int]] = []
@@ -86,10 +88,16 @@ def profile_edge() -> dict:
         worked = int(row["worked"])
         all_r.append((r, worked))
         # credit each constituent signal that fired in this trade
-        for sig in str(row.get("archetype") or "").split("|"):
+        combo = str(row.get("archetype") or "").strip()
+        for sig in combo.split("|"):
             sig = sig.strip()
             if sig:
                 per_sig.setdefault(sig, []).append((r, worked))
+        if combo:                              # the full combination, as fired
+            per_combo.setdefault(combo, []).append((r, worked))
+        reg = str(row.get("regime") or "").strip()
+        if reg:                                # only rows that recorded a tape
+            per_regime.setdefault(reg, []).append((r, worked))
         q = float(row.get("quality_score") or 0)
         key = "score<50" if q < 50 else ("50-70" if q < 70 else "70+")
         quality[key].append((r, worked))
@@ -104,6 +112,8 @@ def profile_edge() -> dict:
 
     return {
         "signals": {s: _agg(v) for s, v in per_sig.items()},
+        "combos": {c: _agg(v) for c, v in per_combo.items()},
+        "regimes": {reg: _agg(v) for reg, v in per_regime.items()},
         "quality": {k: _agg(v) for k, v in quality.items()},
         "overall": _agg(all_r),
     }

@@ -1181,19 +1181,22 @@ class TestLiveEdge:
     """The feedback loop that raises expectancy: learn from real tracked
     outcomes, demote proven-negative signals in the scanner."""
     def _seed(self, tmp_path, monkeypatch, rows):
-        """rows = list of (archetype, outcome_pct, worked). entry 100/stop 97."""
+        """rows = (archetype, outcome_pct, worked) or (archetype, regime,
+        outcome_pct, worked). entry 100 / stop 97."""
         import core.signal_outcome_tracker as tk
         monkeypatch.setattr(tk, "_DB_PATH", str(tmp_path / "sig.db"))
         conn = tk._get_conn()
         from datetime import datetime, timedelta
         base = datetime(2026, 1, 1)
-        for i, (arche, pct, worked) in enumerate(rows):
+        for i, row in enumerate(rows):
+            arche, reg, pct, worked = (
+                (row[0], "", row[1], row[2]) if len(row) == 3 else row)
             la = (base + timedelta(hours=i)).isoformat(timespec="seconds")
             conn.execute(
                 "INSERT INTO signal_log (symbol,logged_at,signal_type,archetype,"
-                "entry_price,stop_price,quality_score,outcome_pct,worked,"
-                "outcome_checked_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
-                (f"S{i}", la, "UNIFIED_BUY", arche, 100.0, 97.0, 70.0, pct,
+                "regime,entry_price,stop_price,quality_score,outcome_pct,worked,"
+                "outcome_checked_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                (f"S{i}", la, "UNIFIED_BUY", arche, reg, 100.0, 97.0, 70.0, pct,
                  worked, la))
         conn.commit(); conn.close()
 
@@ -1240,6 +1243,25 @@ class TestLiveEdge:
         monkeypatch.setattr(tk, "_DB_PATH", str(tmp_path / "empty.db"))
         sc = us.UnifiedScanner()
         assert sc._calib.get("SIG") == 1.1
+
+    def test_edge_split_by_regime(self, tmp_path, monkeypatch):
+        """Same signal can be gold in one tape, poison in another — the
+        per-signal average hides it, the regime split reveals it."""
+        from scan.live_edge import profile_edge
+        rows = ([("BREAKOUT_52W", "TRENDING_BULL", 6.0, 1)] * 20
+                + [("BREAKOUT_52W", "DISTRIBUTION", -3.0, 0)] * 20)
+        self._seed(tmp_path, monkeypatch, rows)
+        p = profile_edge()
+        assert p["regimes"]["TRENDING_BULL"]["expectancy_r"] == 2.0
+        assert p["regimes"]["DISTRIBUTION"]["expectancy_r"] == -1.0
+        assert p["signals"]["BREAKOUT_52W"]["expectancy_r"] == 0.5   # avg hides it
+        assert p["combos"]["BREAKOUT_52W"]["n"] == 40
+
+    def test_regime_absent_when_unrecorded(self, tmp_path, monkeypatch):
+        """Old rows logged with empty regime don't pollute the regime table."""
+        from scan.live_edge import profile_edge
+        self._seed(tmp_path, monkeypatch, [("BREAKOUT_52W", 6.0, 1)] * 5)
+        assert profile_edge()["regimes"] == {}
 
 
 # ══════════════════════════════════════════════════════════════════════════════
