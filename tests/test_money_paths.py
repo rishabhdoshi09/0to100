@@ -1110,6 +1110,74 @@ class TestAutopilot:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# 15b. Verdict dashboard — the honest "real paisa laayak?" report card
+# ══════════════════════════════════════════════════════════════════════════════
+
+class TestVerdictDashboard:
+    def _seed(self, tmp_path, monkeypatch, rows):
+        """rows = list of (outcome_pct, worked). entry 100 / stop 97 (3% risk)."""
+        import core.signal_outcome_tracker as tk
+        monkeypatch.setattr(tk, "_DB_PATH", str(tmp_path / "sig.db"))
+        conn = tk._get_conn()
+        from datetime import datetime, timedelta
+        base = datetime(2026, 1, 10)
+        for i, (pct, worked) in enumerate(rows):
+            la = (base + timedelta(hours=i * 4)).isoformat(timespec="seconds")
+            conn.execute(
+                "INSERT INTO signal_log (symbol,logged_at,signal_type,"
+                "entry_price,stop_price,outcome_pct,worked,outcome_checked_at,"
+                "outcome_price) VALUES (?,?,?,?,?,?,?,?,?)",
+                (f"S{i}", la, "breakout", 100.0, 97.0, pct, worked, la,
+                 100 * (1 + pct / 100)))
+        conn.commit(); conn.close()
+
+    def test_needs_five_signals(self, tmp_path, monkeypatch):
+        from reports.verdict_dashboard import build_equity_curve
+        self._seed(tmp_path, monkeypatch, [(4.0, 1), (-2.0, 0)])
+        vd = build_equity_curve(100000.0)
+        assert vd["points"] == [] and vd["stats"]["closed"] == 2
+        assert "kam se kam 5" in vd["verdict"]
+
+    def test_edge_metrics_and_curve_sequence(self, tmp_path, monkeypatch):
+        """Enriched metrics compute; curve has one point per signal (plotted by
+        SEQUENCE, so clustered dates can't flatten it)."""
+        from reports.verdict_dashboard import build_equity_curve
+        # 6 wins @ +6% (2R), 4 losses @ -3% (-1R) → PF = (6*2)/(4*1) = 3.0
+        rows = [(6.0, 1)] * 6 + [(-3.0, 0)] * 4
+        self._seed(tmp_path, monkeypatch, rows)
+        s = build_equity_curve(100000.0)["stats"]
+        assert s["closed"] == 10 and s["wins"] == 6
+        assert s["win_rate"] == 60.0
+        assert s["profit_factor"] == 3.0                 # (6*2R)/(4*1R)
+        assert s["avg_win_r"] == 2.0 and s["avg_loss_r"] == 1.0
+        assert s["payoff_ratio"] == 2.0
+        assert s["expectancy_r"] == round((6 * 2 - 4 * 1) / 10, 2)  # +0.80R
+        assert s["expectancy_rupees"] == round(0.8 * 0.01 * 100000, 0)
+        assert s["max_loss_streak"] == 4                 # the 4 losers are last
+        # one curve point per signal + the seed point → plotted by index
+        vd = build_equity_curve(100000.0)
+        assert len(vd["points"]) == 11
+
+    def test_negative_edge_is_flagged_red(self, tmp_path, monkeypatch):
+        from reports.verdict_dashboard import build_equity_curve
+        rows = [(3.0, 1)] * 2 + [(-3.0, 0)] * 8       # mostly losers → neg edge
+        self._seed(tmp_path, monkeypatch, rows)
+        vd = build_equity_curve(100000.0)
+        assert vd["stats"]["expectancy_r"] < 0
+        assert vd["verdict"].startswith("🔴")
+
+    def test_edge_trend_detects_decay(self, tmp_path, monkeypatch):
+        """Strong early, weak lately → 'decaying' (size mat badhao)."""
+        from reports.verdict_dashboard import build_equity_curve
+        early = [(6.0, 1)] * 40                         # great first block
+        recent = [(-3.0, 0)] * 40                       # rotten recent block
+        self._seed(tmp_path, monkeypatch, early + recent)
+        s = build_equity_curve(100000.0)["stats"]
+        assert s["recent_avg_r"] < s["expectancy_r"]
+        assert s["edge_trend"] == "decaying"
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # 16. Conviction tier — highest conviction first, everywhere
 # ══════════════════════════════════════════════════════════════════════════════
 

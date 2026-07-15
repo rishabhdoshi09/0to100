@@ -294,24 +294,75 @@ def render_street_pulse() -> None:
         vd = build_equity_curve(start_capital=float(cap))
         if vd["points"]:
             s = vd["stats"]
+            st.caption("“Agar tum har tracked signal follow karte toh” — yeh "
+                       f"**hypothetical** curve hai ({s['closed']} signals, 1% "
+                       "rule). Jo trades tumne actually liye woh alag (neeche "
+                       "Coach + Autopilot Report Card mein).")
             m1, m2, m3, m4 = st.columns(4)
             m1.metric("Signals tracked", s["closed"])
-            m2.metric("Win rate", f"{s['win_rate']:.0f}%")
+            m2.metric("Win rate", f"{s['win_rate']:.0f}%",
+                      delta=f"{s['wins']}W / {s['closed'] - s['wins']}L",
+                      delta_color="off")
             m3.metric("Return (1% rule)", f"{s['total_return_pct']:+.1f}%")
-            m4.metric("Max drawdown", f"{s['max_drawdown_pct']:.1f}%")
+            m4.metric("Max drawdown", f"{s['max_drawdown_pct']:.1f}%",
+                      delta=f"MAR {s.get('mar_ratio', 0):.2f}", delta_color="off",
+                      help="MAR = return ÷ worst drawdown. >0.5 achha, "
+                           "<0.3 matlab risk zyada, reward kam.")
+            # ── Edge metrics — yeh numbers decide 'real paisa laayak?' ────────
+            n1, n2, n3, n4 = st.columns(4)
+            _er = s.get("expectancy_r", 0.0)
+            n1.metric("Expectancy", f"{_er:+.2f}R",
+                      delta=f"₹{s.get('expectancy_rupees', 0):+,.0f}/trade",
+                      delta_color="normal" if _er >= 0 else "inverse",
+                      help="Har trade se average kitna banta/jaata (R-multiple). "
+                           "Yahi asli edge hai — positive hona chahiye.")
+            _pf = s.get("profit_factor", 0.0)
+            n2.metric("Profit factor", f"{_pf:.2f}",
+                      help="Gross jeet ÷ gross haar. >1.3 healthy, <1 ghaata.")
+            n3.metric("Payoff (win:loss)",
+                      f"{s.get('avg_win_r', 0):.2f} : {s.get('avg_loss_r', 0):.2f}",
+                      help="Average jeet vs average haar R mein. Low win-rate "
+                           "tabhi chalti hai jab jeet badi ho.")
+            n4.metric("Max losing streak", f"{s.get('max_loss_streak', 0)}",
+                      help="Lagataar sabse lambi haar — isi streak pe log system "
+                           "chhod dete hain. Isliye size chhota rakho.")
+            # edge-trend chip
+            _tr = s.get("edge_trend", "stable")
+            _tr_c = {"improving": ("#00d4a0", "📈 Edge improving"),
+                     "decaying": ("#ff4b4b", "📉 Edge decaying"),
+                     "stable": ("#8892a4", "➖ Edge stable")}[_tr]
+            st.markdown(
+                f"<span style='background:{_tr_c[0]}18;border:1px solid "
+                f"{_tr_c[0]}55;border-radius:6px;padding:2px 10px;font-size:.72rem;"
+                f"color:{_tr_c[0]}'>{_tr_c[1]} · recent {s.get('recent_n', 0)} "
+                f"signals {s.get('recent_avg_r', 0):+.2f}R vs lifetime "
+                f"{_er:+.2f}R</span>", unsafe_allow_html=True)
             try:
                 import plotly.graph_objects as go
-                xs = [p[0] for p in vd["points"]]
                 ys = [p[1] for p in vd["points"]]
+                dates = [p[0] for p in vd["points"]]
+                xs = list(range(len(ys)))           # signal SEQUENCE, not clustered dates
                 up = ys[-1] >= ys[0]
+                base = ys[0]                          # start-capital baseline
+                col = "#00d4a0" if up else "#ff4b4b"
                 fig = go.Figure(go.Scatter(
-                    x=xs, y=ys, mode="lines", fill="tozeroy",
-                    line=dict(color="#00d4a0" if up else "#ff4b4b", width=2)))
-                fig.update_layout(height=220, margin=dict(l=10, r=10, t=10, b=10),
-                                  paper_bgcolor="rgba(0,0,0,0)",
-                                  plot_bgcolor="rgba(0,0,0,0)",
-                                  yaxis=dict(gridcolor="#1e293b"),
-                                  xaxis=dict(gridcolor="#1e293b"))
+                    x=xs, y=ys, mode="lines", line=dict(color=col, width=2),
+                    customdata=dates,
+                    hovertemplate="Signal %{x}<br>%{customdata}"
+                                  "<br>₹%{y:,.0f}<extra></extra>"))
+                # dotted line at starting capital — upar = profit, neeche = loss
+                fig.add_hline(y=base, line=dict(color="#475569", width=1,
+                                                dash="dot"))
+                # y-range hugs the ACTUAL equity band so real ups/downs +
+                # drawdown dikhein (pehle 0→100k fill sab flat kar deta tha)
+                _lo, _hi = min(ys), max(ys)
+                _pad = max((_hi - _lo) * 0.15, base * 0.005)
+                fig.update_layout(
+                    height=240, margin=dict(l=10, r=10, t=10, b=10),
+                    paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                    yaxis=dict(title="Equity ₹", gridcolor="#1e293b",
+                               range=[_lo - _pad, _hi + _pad]),
+                    xaxis=dict(title="Signal #", gridcolor="#1e293b"))
                 st.plotly_chart(fig, width="stretch",
                                 config={"displayModeBar": False})
             except Exception:
