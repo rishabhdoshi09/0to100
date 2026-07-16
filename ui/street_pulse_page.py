@@ -167,9 +167,15 @@ def _render_brain(market: str = "IN") -> None:
     reg = v.get("regime", "UNKNOWN")
     _tr = {"improving": "📈", "decaying": "📉", "stable": "➖"}.get(
         v.get("edge_trend"), "")
-    ap_bit = ("🤖 ARMED" if v.get("autopilot_armed") else "🤖 off")
+    armed = v.get("autopilot_armed")
     day = v.get("day_pnl")
-    day_bit = (f" {cur}{day:+,.0f}" if day is not None else "")
+    # autopilot summary lives ONLY here (no separate glance card) — trades +
+    # day P&L folded in so the one strip is the complete at-a-glance
+    ap_bit = "🤖 ARMED" if armed else "🤖 off"
+    if armed:
+        ap_bit += f" · {v.get('trades_today', 0)} trades"
+        if day is not None:
+            ap_bit += f" · {cur}{day:+,.0f}"
     st.markdown(
         f"<div style='{_CARD};padding:8px 14px;font-size:.76rem;color:#94a3b8;"
         f"font-family:JetBrains Mono,monospace'>"
@@ -179,7 +185,7 @@ def _render_brain(market: str = "IN") -> None:
         f"<b style='color:#e2e8f0'>{v.get('n_buys', 0)}</b> "
         f"({v.get('n_high_conviction', 0)} 🎯) · book "
         f"<b style='color:#e2e8f0'>{v.get('book_verdict', 'OK')}</b> "
-        f"({v.get('open_risk_pct', 0):.1f}% risk) · {ap_bit}{day_bit}</div>",
+        f"({v.get('open_risk_pct', 0):.1f}% risk) · {ap_bit}</div>",
         unsafe_allow_html=True)
     # directives — prioritised to-do
     _sev = {"critical": "#ff4b4b", "warn": "#f59e0b", "info": "#38bdf8",
@@ -189,6 +195,10 @@ def _render_brain(market: str = "IN") -> None:
         f"padding-left:8px;border-left:2px solid {_sev.get(d['severity'],'#8892a4')}'>"
         f"{d['text']}</div>" for d in a["directives"])
     st.markdown(f"<div style='{_CARD}'>{rows}</div>", unsafe_allow_html=True)
+    # orient the layers below — each ADDS detail, nothing repeats the summary
+    st.caption("↓ Summary upar hai. Neeche: actionable setups → tumhara book → "
+               "market context → edge ka saboot → coach — har layer detail "
+               "jodti hai, dohraati nahi.")
 
 
 def _render_autopilot_glance(market: str = "IN") -> None:
@@ -342,11 +352,10 @@ def render_street_pulse() -> None:
         f"{take_html}</div>",
         unsafe_allow_html=True)
 
-    # ── 🧠 Brain — sabse pehle, poore board ka ek faisla ─────────────────────
+    # ── 🧠 Brain — sabse pehle, poore board ka ek faisla (autopilot yahin) ────
     _render_brain("IN")
 
-    # ── 🎛️ Daily cockpit — setups + book + autopilot, sab yahin ──────────────
-    _render_autopilot_glance("IN")
+    # ── 🎛️ Cockpit — ACTION layer: aaj ke setups + tumhara book ──────────────
     _render_today_best_setups()
     _render_your_book()
 
@@ -452,16 +461,18 @@ def render_street_pulse() -> None:
     # ── Breakouts today / tomorrow ────────────────────────────────────────────
     bc1, bc2 = st.columns(2)
     with bc1:
-        _section_title("💥 Breakout Stocks — Today")
+        _section_title("💥 Breakouts — poori market (browse)")
         today = p.get("breakouts_today", [])
         if today:
+            st.caption("Top actionable + paper-trade upar cockpit mein — yeh "
+                       "poore market ki breakout list (context).")
             st.markdown(f"<div style='{_CARD}'>"
                         + "".join(_stock_line(r) for r in today)
                         + "</div>", unsafe_allow_html=True)
         else:
             st.caption("Aaj koi confirmed breakout nahi.")
     with bc2:
-        _section_title("⏳ Breakout Stocks — Tomorrow?")
+        _section_title("⏳ Kal ke liye watch (pre-breakout)")
         tom = p.get("breakouts_tomorrow", [])
         if tom:
             st.markdown(f"<div style='{_CARD}'>"
@@ -480,15 +491,18 @@ def render_street_pulse() -> None:
                     + "</div>", unsafe_allow_html=True)
 
     # ── 📈 System Report Card — kya yeh system real paise ke laayak hai? ──────
-    _section_title("📈 System Report Card — signals follow karte toh?")
+    _section_title("📈 System Report Card — Brain ke edge number ka saboot")
     try:
         from reports.verdict_dashboard import build_equity_curve
         cap = st.session_state.get("user_capital") or 100_000.0
         vd = build_equity_curve(start_capital=float(cap))
         if vd["points"]:
             s = vd["stats"]
-            st.caption("“Agar tum har tracked signal follow karte toh” — yeh "
-                       f"**hypothetical** curve hai ({s['closed']} signals, 1% "
+            st.caption("Brain ne upar edge ek number mein bola — yeh raha uska "
+                       "**poora saboot**: win-rate, profit factor, payoff, "
+                       "streak, per-signal aur per-tape breakdown. "
+                       f"“Agar tum har tracked signal follow karte toh” — "
+                       f"**hypothetical** ({s['closed']} signals, 1% "
                        "rule). Jo trades tumne actually liye woh alag (neeche "
                        "Coach + Autopilot Report Card mein).")
             m1, m2, m3, m4 = st.columns(4)
@@ -742,8 +756,7 @@ def _render_us_pulse() -> None:
     else:
         st.caption("Abhi koi US high-conviction setup nahi (conviction rule).")
 
-    # ── Cockpit tail — US autopilot glance + shared book (paper) ──────────────
-    _render_autopilot_glance("US")
+    # ── Cockpit tail — shared book (autopilot state Brain hero mein hai) ──────
     _render_your_book()
 
 
