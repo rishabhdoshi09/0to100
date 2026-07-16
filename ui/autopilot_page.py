@@ -112,6 +112,24 @@ def _render_india_autopilot() -> None:
         f"target +{s['target_pct']}%</span></div>"
         f"</div>", unsafe_allow_html=True)
 
+    # ── Brain survival gate — abhi naye entries ruke hue hain? ────────────────
+    if s.get("brain_gate", True):
+        try:
+            from execution.autopilot import _brain_posture
+            _bp, _br = _brain_posture()
+            if _bp == "STAND_ASIDE":
+                st.markdown(
+                    f"<div style='{_CARD};border-left:4px solid #ff4b4b;"
+                    f"background:#ff4b4b12'>"
+                    f"<b style='color:#ff4b4b'>🧠 Brain: STAND ASIDE</b> "
+                    f"<span style='font-size:.82rem;color:#c9d1d9'>— naye "
+                    f"entries abhi pause. {_br}</span><br>"
+                    f"<span style='font-size:.72rem;color:#8892a4'>Purani "
+                    f"positions + GTT exits chalte rahenge. Survival-first.</span>"
+                    f"</div>", unsafe_allow_html=True)
+        except Exception:
+            pass
+
     # ── Money ledger ─────────────────────────────────────────────────────────
     m1, m2, m3, m4 = st.columns(4)
     m1.metric("Pool (compounded)", f"₹{s['pool']:,.0f}",
@@ -237,6 +255,12 @@ def _render_india_autopilot() -> None:
                 key="ap_regime",
                 help="DISTRIBUTION / BEAR tape mein naye entries band — "
                      "breakouts wahan sabse zyada fail hote hain")
+            brain_on = st.toggle(
+                "🧠 Brain survival gate",
+                value=bool(s.get("brain_gate", True)), key="ap_brain",
+                help="Brain STAND_ASIDE (book DANGER, ya bad tape + negative "
+                     "edge) → naye entries khud pause. Purani positions chalti "
+                     "rahengi, sirf naye trade rukte hain.")
         u1, u2, u3 = st.columns(3)
         with u1:
             conv_on = st.toggle(
@@ -301,6 +325,7 @@ def _render_india_autopilot() -> None:
                        trailing_enabled=trail_on,
                        breakeven_trigger_pct=float(trail_trig),
                        regime_gate=regime_on,
+                       brain_gate=brain_on,
                        conviction_sizing=conv_on,
                        adaptive_source_gate=adapt_on,
                        max_hold_days=int(hold_days),

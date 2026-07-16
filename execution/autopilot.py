@@ -89,6 +89,7 @@ _DEFAULTS = {
     "reject_stats": {},            # {YYYY-MM-DD: {category: count}} — the funnel
     "considered": {},              # {YYYY-MM-DD: candidates seen}
     "preset": "Balanced",          # aggressiveness dial (frequency, not safety)
+    "brain_gate": True,            # Brain STAND_ASIDE → pause new entries (survival)
 }
 
 
@@ -96,6 +97,7 @@ _DEFAULTS = {
 
 def _reject_category(reason: str) -> str:
     r = (reason or "").lower()
+    if "brain" in r or "stand_aside" in r: return "Brain STAND_ASIDE (survival)"
     if "time window" in r:        return "time window (market band/settle)"
     if "daily trade limit" in r:  return "daily limit hit (max/day)"
     if "max open positions" in r: return "position limit full"
@@ -229,7 +231,7 @@ def set_config(**kwargs) -> None:
         "max_chase_pct": (0.25, 5.0),
     }
     bools = ("trailing_enabled", "regime_gate", "conviction_sizing",
-             "adaptive_source_gate")
+             "adaptive_source_gate", "brain_gate")
     with _lock:
         s = _load()
         for k, v in kwargs.items():
@@ -560,6 +562,13 @@ def _passes_gates(symbol: str, score: float, edge, sector: str) -> str | None:
         return "not armed"
     if not _in_window():
         return f"time window ({s['start_time']}-{s['end_time']}) ke bahar"
+    # Whole-board survival veto: if the Brain reads STAND_ASIDE (over-risked
+    # book, or hostile tape + negative edge) no new entry today — regardless of
+    # how good this one setup looks. Cached (~5 min); demote-only, never loosens.
+    if s.get("brain_gate", True):
+        posture, why = _brain_posture()
+        if posture == "STAND_ASIDE":
+            return f"Brain STAND_ASIDE — {why or 'survival-first, naye entries off'}"
     today = date.today().isoformat()
     if int(s.get("trades_today", {}).get(today, 0)) >= s["max_trades_per_day"]:
         return "daily trade limit reached"
@@ -597,6 +606,29 @@ _BAD_REGIMES = ("DISTRIBUTION", "TRENDING_BEAR", "BEAR")
 # NO-OP in the scan/sniper daemon threads (no Streamlit context) — without
 # this, every candidate would recompute the full regime and slow the scan.
 _regime_cache = {"ts": 0.0, "value": "UNKNOWN"}
+
+# Brain posture cache — assess() composes many subsystems, so compute it ONCE
+# per few minutes, not per candidate. The Brain is READ-ONLY; here it only ever
+# adds a survival veto (STAND_ASIDE), never loosens a gate.
+_brain_cache = {"ts": 0.0, "posture": "NORMAL", "reason": ""}
+
+
+def _brain_posture() -> tuple[str, str]:
+    import time as _t
+    now = _t.time()
+    if now - _brain_cache["ts"] < 300:
+        return _brain_cache["posture"], _brain_cache["reason"]
+    posture, reason = "NORMAL", ""
+    try:
+        from core.brain import assess
+        a = assess(market="IN", capital=float(_load().get("allocation") or 0)
+                   or 100_000.0)
+        posture = a.get("posture", "NORMAL")
+        reason = a.get("posture_reason", "")
+    except Exception as exc:
+        log.debug("brain_posture_skip", error=str(exc))
+    _brain_cache.update(ts=now, posture=posture, reason=reason)
+    return posture, reason
 
 
 def _market_regime() -> str:

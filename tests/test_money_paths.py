@@ -566,6 +566,9 @@ class TestAutopilot:
         monkeypatch.setattr(ap, "_notify", lambda msg: None)
         monkeypatch.setattr(ap, "_broker_cash", lambda: 500000.0)
         monkeypatch.setattr(ap, "_market_regime", lambda: "TRENDING_BULL")
+        # Brain gate is real + on by default; stub the posture so the money-path
+        # tests stay fast + deterministic (its own test drives it explicitly).
+        monkeypatch.setattr(ap, "_brain_posture", lambda: ("NORMAL", ""))
         # tests signal price ko hi live maanein — real anchor apne dedicated
         # tests mein alag se verify hota hai
         self._real_anchor = ap._anchor_live
@@ -1107,6 +1110,28 @@ class TestAutopilot:
         # unknown preset is a no-op with a clear message
         ok2, msg2 = ap.apply_preset("Yolo")
         assert ok2 is False and "unknown" in msg2.lower()
+
+    def test_brain_gate_pauses_new_entries_on_stand_aside(self, tmp_path,
+                                                          monkeypatch):
+        """Brain STAND_ASIDE (survival) blocks NEW entries; the funnel logs it;
+        toggling brain_gate off restores trading. Existing positions untouched."""
+        ap, te = self._setup(tmp_path, monkeypatch)
+        ap.arm()
+        monkeypatch.setattr(ap, "_in_window", lambda now=None: True)
+        # Brain says stand aside → a normally-valid setup is rejected
+        monkeypatch.setattr(ap, "_brain_posture",
+                            lambda: ("STAND_ASIDE", "book DANGER"))
+        assert ap.consider("HAL", 4500, 4300, 80, 0.2, "Defence", "t") is False
+        assert te.recent_trades(1) == []
+        f = ap.reject_funnel()
+        assert f["rejects"].get("Brain STAND_ASIDE (survival)") == 1
+        # same board, gate turned OFF → the trade goes through
+        ap.set_config(brain_gate=False)
+        assert ap.consider("HAL", 4500, 4300, 80, 0.2, "Defence", "t") is True
+        # gate back ON but Brain NORMAL → trades normally
+        ap.set_config(brain_gate=True)
+        monkeypatch.setattr(ap, "_brain_posture", lambda: ("NORMAL", ""))
+        assert ap.consider("BEL", 300, 285, 80, 0.2, "Defence", "t") is True
 
 
 # ══════════════════════════════════════════════════════════════════════════════
