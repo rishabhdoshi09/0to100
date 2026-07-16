@@ -413,6 +413,33 @@ def _maybe_push_morning_pulse() -> None:
         log.debug("morning_pulse_skip", error=str(exc))
 
 
+_brain_briefing_date: str = ""
+
+
+def _maybe_push_brain_briefing() -> None:
+    """Once per weekday, market-open window: the Brain's one-verdict briefing
+    to Telegram — posture + directives + top pick. Additive; leads the morning
+    ahead of the full pulse newsletter. Existing pulse push is untouched."""
+    global _brain_briefing_date
+    now = datetime.now()
+    today = now.strftime("%Y-%m-%d")
+    if now.weekday() >= 5 or _brain_briefing_date == today:
+        return
+    if not (8 * 60 + 30 <= now.hour * 60 + now.minute <= 10 * 60):
+        return
+    try:
+        from alerts.telegram_alerts import AlertEngine
+        engine = AlertEngine()
+        if not engine.is_configured():
+            return
+        from core.brain import briefing_telegram
+        if engine.send(briefing_telegram("IN")):
+            _brain_briefing_date = today
+            log.info("brain_briefing_pushed")
+    except Exception as exc:
+        log.debug("brain_briefing_skip", error=str(exc))
+
+
 _bt_done_date: str = ""
 
 
@@ -529,6 +556,7 @@ def _worker() -> None:
             with _cycle_timer:
                 _scan_once()
             _maybe_remind_kite_login()
+            _maybe_push_brain_briefing()      # Brain verdict leads the morning
             _maybe_push_morning_pulse()
             _maybe_update_outcomes()
             _maybe_run_nightly_backtest()

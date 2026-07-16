@@ -263,3 +263,33 @@ def assess(market: str = "IN", capital: float = 100_000.0) -> dict:
         "vitals": vitals,
         "directives": directives,
     }
+
+
+def briefing_telegram(market: str = "IN", capital: float = 100_000.0) -> str:
+    """The Brain's verdict as a compact Telegram briefing (HTML). This is the
+    one message that lets the user skip opening the app: posture, why, vitals,
+    and the prioritised to-do — the whole board in a phone-sized read."""
+    from datetime import datetime
+    a = assess(market=market, capital=capital)
+    v = a["vitals"]
+    _, label = posture_meta(a["posture"])
+    cur = v.get("cur", "₹")
+    _tr = {"improving": "📈", "decaying": "📉", "stable": "➖"}.get(
+        v.get("edge_trend"), "")
+    ap_bit = "🤖 ARMED" if v.get("autopilot_armed") else "🤖 off"
+    day = v.get("day_pnl")
+    day_bit = f" ({cur}{day:+,.0f})" if day is not None else ""
+    lines = [
+        f"🧠 <b>QuantTerm Brain</b> · {datetime.now().strftime('%d %b')}",
+        f"<b>{label}</b>",
+        a["posture_reason"], "",
+        (f"tape <b>{v.get('regime', '?')}</b> · edge "
+         f"<b>{v.get('expectancy_r', 0):+.2f}R</b> {_tr} · book "
+         f"<b>{v.get('book_verdict', 'OK')}</b> ({v.get('open_risk_pct', 0):.1f}%) "
+         f"· setups <b>{v.get('n_buys', 0)}</b> ({v.get('n_high_conviction', 0)} 🎯) "
+         f"· {ap_bit}{day_bit}"), "",
+        "<b>Aaj:</b>",
+    ]
+    lines += [f"• {d['text']}" for d in a["directives"]]
+    lines.append("\n<i>Detail app ke Pulse tab par · ye read-only verdict hai</i>")
+    return "\n".join(lines)

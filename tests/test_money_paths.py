@@ -1188,6 +1188,59 @@ class TestBrain:
         assert a["directives"]                            # never empty
         assert a["vitals"]["regime"] == "UNKNOWN"
 
+    def test_briefing_telegram_content(self, monkeypatch):
+        import core.brain as brain
+        monkeypatch.setattr(brain, "_probe_regime", lambda: "TRENDING_BULL")
+        monkeypatch.setattr(brain, "_probe_edge", lambda cap: {
+            "expectancy_r": 0.3, "edge_trend": "improving", "closed": 60,
+            "max_drawdown_pct": 8.0, "recent_avg_r": 0.35})
+        monkeypatch.setattr(brain, "_probe_setups", lambda m: (
+            [{"symbol": "TATA", "verdict": "STRONG BUY", "score": 88,
+              "conviction_rank": 290, "high_conviction": True,
+              "entry": 1010, "stop": 980, "target": 1040}], 0.0))
+        monkeypatch.setattr(brain, "_probe_book", lambda: {
+            "verdict": "OK", "open_risk_pct": 1.2, "n_positions": 1})
+        monkeypatch.setattr(brain, "_probe_autopilot", lambda m: {
+            "armed": True, "trades_today": 2, "day_pnl": 450.0})
+        monkeypatch.setattr(brain, "_probe_dead_daemons", lambda: [])
+        msg = brain.briefing_telegram("IN")
+        assert "QuantTerm Brain" in msg and "GREEN LIGHT" in msg
+        assert "TATA" in msg and "TRENDING_BULL" in msg
+        assert "read-only" in msg                          # never implies it trades
+
+    def test_briefing_pusher_window_dedupe_weekend(self, monkeypatch):
+        import scan.auto_scan as a
+        import datetime as _dt
+        sent = []
+
+        class _Eng:
+            def is_configured(self): return True
+            def send(self, msg, **k): sent.append(msg); return True
+        monkeypatch.setattr("alerts.telegram_alerts.AlertEngine", lambda: _Eng())
+        monkeypatch.setattr("core.brain.briefing_telegram",
+                            lambda market="IN": "BRIEF")
+
+        def _clock(dtobj):
+            class _DT(_dt.datetime):
+                @classmethod
+                def now(cls, tz=None): return dtobj
+            monkeypatch.setattr(a, "datetime", _DT)
+
+        a._brain_briefing_date = ""
+        _clock(_dt.datetime(2026, 7, 13, 9, 0))            # Monday 09:00 → send
+        a._maybe_push_brain_briefing()
+        assert sent == ["BRIEF"]
+        a._maybe_push_brain_briefing()                     # same day → deduped
+        assert len(sent) == 1
+        a._brain_briefing_date = ""; sent.clear()
+        _clock(_dt.datetime(2026, 7, 18, 9, 0))            # Saturday → skip
+        a._maybe_push_brain_briefing()
+        assert sent == []
+        a._brain_briefing_date = ""
+        _clock(_dt.datetime(2026, 7, 13, 11, 0))           # outside window → skip
+        a._maybe_push_brain_briefing()
+        assert sent == []
+
 
 class TestPulseCockpit:
     """The Daily Pulse cockpit surfaces setups + book + autopilot so the user
