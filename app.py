@@ -892,6 +892,39 @@ def _render_playbooks_tab():
 # ══════════════════════════════════════════════════════════════════════════════
 # SIDEBAR
 # ══════════════════════════════════════════════════════════════════════════════
+
+def _nav_intent(top: str):
+    """Map the primary-nav selection to a routing key. 'Markets' fans out to
+    Stocks / Options / US via a lazy sub-selector (only the chosen page's
+    dispatch branch runs below → nothing heavy loads until opened). Returns
+    (routing_key, markets_sub_value|None)."""
+    if top == "Markets":
+        _sub = st.radio(
+            "Markets section", ["📈 Stocks", "🎯 Options", "🇺🇸 US"],
+            horizontal=True, label_visibility="collapsed", key="markets_sub")
+        return ({"📈 Stocks": "Institutional", "🎯 Options": "Options Flow",
+                 "🇺🇸 US": "US Scanner"}.get(_sub, "Institutional"), _sub)
+    return ({"Pulse": "Daily Pulse", "Autopilot": "Autopilot",
+             "JARVIS": "JARVIS"}.get(top, top), None)
+
+
+def _apply_nav(top: str) -> str:
+    """Set the active page from the primary nav, BUT only when the user
+    actually interacted with it (top item or Markets sub-tab changed). If
+    neither changed, honour whatever a deep-link / More Tools button already
+    put in sidebar_nav — so those pages don't get clobbered by the menu each
+    rerun. Today's picks + the book already live in the Pulse cockpit."""
+    intent, sub = _nav_intent(top)
+    top_changed = top != st.session_state.get("_nav_top_prev")
+    sub_changed = sub is not None and sub != st.session_state.get("_nav_sub_prev")
+    st.session_state["_nav_top_prev"] = top
+    if sub is not None:
+        st.session_state["_nav_sub_prev"] = sub
+    if top_changed or sub_changed or not st.session_state.get("sidebar_nav"):
+        st.session_state["sidebar_nav"] = intent
+    return st.session_state["sidebar_nav"]
+
+
 with st.sidebar:
     # ── Logo ───────────────────────────────────────────────────────────────
     st.markdown(
@@ -1110,7 +1143,7 @@ with st.sidebar:
     except Exception:
         st.session_state["active_market"] = "IN"
 
-    # ── Main Navigation — exactly 5 items (Moneycontrol-style) ───────────
+    # ── Main Navigation — 4 merged tabs; Markets lazy-fans to Stocks/Options/US
     if "_nav_pending" in st.session_state:
         st.session_state["sidebar_nav"] = st.session_state.pop("_nav_pending")
 
@@ -1119,8 +1152,8 @@ with st.sidebar:
 
         _nav_page_raw = _option_menu(
             menu_title=None,
-            options=["Today", "Pulse", "Stocks", "Options", "Autopilot", "My Portfolio", "JARVIS"],
-            icons=["house-fill", "newspaper", "graph-up", "bar-chart-fill", "cpu", "briefcase-fill", "robot"],
+            options=["Pulse", "Markets", "Autopilot", "JARVIS"],
+            icons=["newspaper", "graph-up", "cpu", "robot"],
             menu_icon=None,
             default_index=0,
             styles={
@@ -1133,47 +1166,25 @@ with st.sidebar:
             },
             key="sidebar_nav_menu",
         )
-
-        # Map 5-item nav → page routing keys
-        _5NAV_MAP = {
-            "Today":        "Dashboard",
-            "Pulse":        "Daily Pulse",
-            "Stocks":       "Institutional",
-            "Options":      "Options Flow",
-            "Autopilot":    "Autopilot",
-            "My Portfolio": "My Holdings",
-            "JARVIS":       "JARVIS",
-        }
-        _nav_page = _5NAV_MAP.get(_nav_page_raw, _nav_page_raw)
-        st.session_state["sidebar_nav"] = _nav_page
+        _nav_page = _apply_nav(_nav_page_raw)
 
     except Exception:
         # Fallback radio if option_menu unavailable
-        _5_options = ["Today", "Pulse", "Stocks", "Options", "Autopilot", "My Portfolio", "JARVIS"]
-        _5_map = {
-            "Today":        "Dashboard",
-            "Pulse":        "Daily Pulse",
-            "Stocks":       "Institutional",
-            "Options":      "Options Flow",
-            "Autopilot":    "Autopilot",
-            "My Portfolio": "My Holdings",
-            "JARVIS":       "JARVIS",
-        }
         _nav_raw = st.radio(
-            "Navigate", _5_options, index=0,
+            "Navigate", ["Pulse", "Markets", "Autopilot", "JARVIS"], index=0,
             label_visibility="collapsed", key="sidebar_nav_radio",
         )
-        _nav_page = _5_map.get(_nav_raw, _nav_raw)
-        st.session_state["sidebar_nav"] = _nav_page
+        _nav_page = _apply_nav(_nav_raw)
 
     # ── More Tools expander (all non-primary pages) ────────────────────────
     with st.expander("⚙️ More Tools"):
         # Trimmed to what a trader actually opens — AlgoLab / Edge Tracker /
         # Trade Replay / Market Breadth removed (user request: advanced clutter)
         _more_tools = [
+            ("Dashboard",         "🏠 Today"),
+            ("My Holdings",       "💼 My Portfolio"),
             ("Terminal",          "⚡ Terminal"),
             ("Live Watch",        "📡 Live Watch"),
-            ("US Scanner",        "🇺🇸 US Scanner"),
             ("My Watchlist",      "👁 My Watchlist"),
             ("Journal",           "📋 Journal"),
             ("Smart Alerts",      "🔔 Smart Alerts"),

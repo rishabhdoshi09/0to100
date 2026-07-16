@@ -254,6 +254,36 @@ def render_options_page() -> None:
     total_oi  = int(df["ce_oi"].sum() + df["pe_oi"].sum())
     oi_levels = get_oi_buildup(df, spot)
 
+    # ── 🧭 Verdict hero — raw numbers ka ek saaf structural read ──────────────
+    try:
+        from options.verdict import options_verdict
+        _sup = (oi_levels.get("support_levels") or [{}])[0].get("strike") or 0
+        _res = (oi_levels.get("resistance_levels") or [{}])[0].get("strike") or 0
+        vd = options_verdict(spot=spot, pcr=pcr, max_pain=max_pain,
+                             support=float(_sup), resistance=float(_res),
+                             iv_pct=iv_pct)
+        _bcol = {"BULLISH": "#00c896", "BEARISH": "#ff4466",
+                 "RANGE": "#eab308", "NEUTRAL": "#8892a4"}.get(vd["bias"], "#8892a4")
+        _notes = "".join(
+            f"<div style='font-size:.78rem;color:#c9d1d9;margin:3px 0;"
+            f"padding-left:8px;border-left:2px solid {_bcol}55'>{n}</div>"
+            for n in vd["notes"])
+        st.markdown(
+            f"<div style='background:linear-gradient(135deg,{_bcol}18,#0d1421);"
+            f"border:1px solid {_bcol}55;border-left:4px solid {_bcol};"
+            f"border-radius:12px;padding:14px 18px;margin-bottom:12px'>"
+            f"<div style='font-size:.62rem;color:#8892a4;text-transform:uppercase;"
+            f"letter-spacing:.14em'>🧭 Options read · {symbol}</div>"
+            f"<div style='font-size:1.1rem;font-weight:800;color:{_bcol};"
+            f"margin:2px 0'>{vd['bias']}</div>"
+            f"<div style='font-size:.82rem;color:#c9d1d9;margin-bottom:6px'>"
+            f"{vd['reason']}</div>{_notes}"
+            f"<div style='font-size:.66rem;color:#64748b;margin-top:6px'>"
+            f"Structural context hai, trade signal nahi — options orders yahan "
+            f"execute nahi hote.</div></div>", unsafe_allow_html=True)
+    except Exception:
+        pass
+
     # ── Metrics row ───────────────────────────────────────────────────────────
     m1, m2, m3, m4 = st.columns(4)
     pcr_color = _pcr_metric_color(pcr)

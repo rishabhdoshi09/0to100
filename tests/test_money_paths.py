@@ -1267,6 +1267,46 @@ class TestBrain:
         assert sent == []
 
 
+class TestOptionsVerdict:
+    """Raw chain metrics → one clear structural read (bias + range + IV)."""
+
+    def test_bullish_bearish_range(self):
+        from options.verdict import options_verdict
+        # high PCR + spot below max pain → bullish
+        b = options_verdict(spot=24180, pcr=1.4, max_pain=24400,
+                            support=24000, resistance=24500, iv_pct=25)
+        assert b["bias"] == "BULLISH"
+        assert b["max_pain"]["pull"] == "up"
+        assert b["iv"]["stance"] == "cheap"
+        # low PCR + spot above max pain → bearish
+        r = options_verdict(spot=24600, pcr=0.6, max_pain=24300,
+                            support=24000, resistance=24500, iv_pct=82)
+        assert r["bias"] == "BEARISH"
+        assert r["iv"]["stance"] == "expensive"
+        # neutral PCR + tight walls + spot at max pain → range
+        g = options_verdict(spot=24250, pcr=1.0, max_pain=24250,
+                            support=24200, resistance=24400, iv_pct=55)
+        assert g["bias"] == "RANGE"
+
+    def test_range_geometry_and_position(self):
+        from options.verdict import options_verdict
+        v = options_verdict(spot=24050, pcr=1.0, max_pain=24250,
+                            support=24000, resistance=24500, iv_pct=50)
+        assert v["range"]["support"] == 24000 and v["range"]["resistance"] == 24500
+        assert 0.0 <= v["range"]["position"] <= 0.2   # spot near support
+        assert any("support wall" in n for n in v["notes"])
+
+    def test_insufficient_data_is_safe(self):
+        from options.verdict import options_verdict
+        v = options_verdict(spot=0, pcr=1.0, max_pain=0, support=0,
+                            resistance=0, iv_pct=0)
+        assert v["bias"] == "NEUTRAL" and "adhoori" in v["verdict_line"]
+        # inverted walls (bad data) also degrade safely
+        v2 = options_verdict(spot=100, pcr=1.0, max_pain=100, support=110,
+                             resistance=90, iv_pct=50)
+        assert v2["bias"] == "NEUTRAL"
+
+
 class TestPulseCockpit:
     """The Daily Pulse cockpit surfaces setups + book + autopilot so the user
     lives on three tabs. These render helpers must not crash on the real store
