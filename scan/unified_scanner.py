@@ -328,6 +328,11 @@ class UnifiedScanner:
         except Exception as exc:
             log.debug("live_calibration_skip", error=str(exc))
         self._nifty_ret30 = 0.0        # index benchmark for relative strength
+        # Regime-conditional calibration is set per-scan in scan() (NSE tape) —
+        # left empty here so US/search paths (which call _analyze directly)
+        # never inherit an NSE regime or pay for computing one.
+        self._regime = ""
+        self._regime_calib: dict[str, float] = {}
         if self._calib:
             log.info("scanner_calibrated", signals=len(self._calib))
 
@@ -337,6 +342,20 @@ class UnifiedScanner:
         prefetch(symbols, progress=progress)
         available = [s for s in symbols if s in set(cached_symbols())]
         self._nifty_ret30 = _nifty_return_30d()      # RS benchmark, once/scan
+        # Current market tape → regime-conditional demotion for this scan only.
+        # compute_regime is cached (15 min) + streamlit-free; one call/scan.
+        try:
+            from core.regime_engine import compute_regime
+            self._regime = str(getattr(compute_regime(), "market_regime", "")
+                               or "")
+            from scan.live_edge import regime_calibration
+            self._regime_calib = regime_calibration(self._regime)
+            if self._regime_calib:
+                log.info("scanner_regime_calibrated", regime=self._regime,
+                         signals=len(self._regime_calib))
+        except Exception as exc:
+            log.debug("regime_calib_skip", error=str(exc))
+            self._regime, self._regime_calib = "", {}
         log.info("unified_scan_start", requested=len(symbols), with_data=len(available))
 
         results: list[StockSignal] = []
@@ -552,8 +571,13 @@ class UnifiedScanner:
         stop = round(entry - 2 * atr, 1) if atr > 0 else round(entry * 0.95, 1)
         target = round(entry + 4 * atr, 1) if atr > 0 else round(entry * 1.10, 1)
 
-        # ── Composite score (backtest-calibrated weights) ─────────────────────
-        base = sum(SIGNAL_META[s][2] * self._calib.get(s, 1.0) for s in signals)
+        # ── Composite score (backtest + live + regime-conditional weights) ────
+        # Each signal weight is scaled by (a) global calibration (backtest∧live)
+        # and (b) a DEMOTE-ONLY regime factor: if this signal leaks in the
+        # current tape, cut it — but never let the regime factor inflate a
+        # weight (min 1.0), so it can only add caution, never chase.
+        base = sum(SIGNAL_META[s][2] * self._calib.get(s, 1.0)
+                   * min(1.0, self._regime_calib.get(s, 1.0)) for s in signals)
         trend_bonus = 10 if (len(close) >= 200 and price > close[-200:].mean()) else 0
         score = min(100.0, base + trend_bonus + mom_score * 0.2)
 

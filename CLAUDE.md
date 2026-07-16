@@ -33,9 +33,11 @@ app.py                    # Streamlit shell: nav (Today|Pulse|Stocks|Options|
 │   ├── signal_backtest.py# Walk-forward per-signal accuracy → JSON report →
 │   │                     #   score calibration + per-card combo_edge
 │   ├── live_edge.py      # LIVE feedback loop: mines signal_log's real tracked
-│   │                     #   outcomes → per-signal expectancy (R). Blended
-│   │                     #   CONSERVATIVELY into scorer calibration (≥30 = demote
-│   │                     #   proven losers, never inflate). Raises expectancy.
+│   │                     #   outcomes → per-signal / per-regime / per-combo
+│   │                     #   expectancy (R). Blended CONSERVATIVELY into scorer
+│   │                     #   calibration (≥30 = demote proven losers, never
+│   │                     #   inflate); regime_calibration() demotes a signal in
+│   │                     #   the CURRENT tape where it leaks. Raises expectancy.
 │   ├── conviction.py     # Top-40 enrichment: news buzz + earnings + verdicts
 │   ├── sector_heat.py    # Sector map (parsed from nse_universe groups),
 │   │                     #   pack-boost + sector_performance()

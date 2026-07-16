@@ -119,6 +119,37 @@ def profile_edge() -> dict:
     }
 
 
+def regime_calibration(regime: str, min_n: int = _MIN_N) -> dict[str, float]:
+    """{signal: multiplier} learned ONLY from outcomes logged in `regime`.
+
+    A signal can be gold in a trending tape and poison in distribution — the
+    lifetime average blends the two. This conditions the calibration on the
+    CURRENT tape so the scorer can demote a signal that leaks *in this regime*
+    even when it looks fine overall. Gated at min_n same-regime outcomes; empty
+    (no claim) for an unknown regime or thin data."""
+    if not regime or str(regime).strip().upper() in ("", "UNKNOWN"):
+        return {}
+    reg = str(regime).strip()
+    per_sig: dict[str, list[float]] = {}
+    for row in _closed_rows():
+        if str(row.get("regime") or "").strip() != reg:
+            continue
+        r = _row_r(row)
+        if r is None:
+            continue
+        for sig in str(row.get("archetype") or "").split("|"):
+            sig = sig.strip()
+            if sig:
+                per_sig.setdefault(sig, []).append(r)
+    out: dict[str, float] = {}
+    for sig, rs in per_sig.items():
+        if len(rs) >= min_n:
+            out[sig] = _bucket(sum(rs) / len(rs))
+    if out:
+        log.info("regime_calibration_ready", regime=reg, signals=len(out))
+    return out
+
+
 def live_calibration(min_n: int = _MIN_N) -> dict[str, float]:
     """{signal: score_multiplier} from live outcomes, gated at min_n.
 

@@ -416,6 +416,25 @@ def render_street_pulse() -> None:
                                  for rg, a in regs]
                         st.caption("Edge by tape — " + " · ".join(rbits)
                                    + ". Bad-tape signals se door raho.")
+                    # LIVE: what today's tape is demoting in the scorer right now
+                    try:
+                        from core.regime_engine import compute_regime
+                        from scan.live_edge import regime_calibration
+                        _reg = str(getattr(compute_regime(), "market_regime", "")
+                                   or "")
+                        if _reg and _reg.upper() != "UNKNOWN":
+                            _rc = regime_calibration(_reg)
+                            _dem = [s for s, m in _rc.items() if m < 1.0]
+                            if _dem:
+                                st.caption(f"🌡️ Aaj ka tape **{_reg}** — scanner "
+                                           f"is regime mein ye demote kar raha: "
+                                           f"{', '.join(_dem)}.")
+                            else:
+                                st.caption(f"🌡️ Aaj ka tape **{_reg}** — koi "
+                                           f"signal is tape mein proven-negative "
+                                           f"nahi, full weight.")
+                    except Exception:
+                        pass
         except Exception:
             pass
     except Exception as _vd_exc:

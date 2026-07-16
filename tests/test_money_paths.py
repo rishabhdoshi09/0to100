@@ -1263,6 +1263,42 @@ class TestLiveEdge:
         self._seed(tmp_path, monkeypatch, [("BREAKOUT_52W", 6.0, 1)] * 5)
         assert profile_edge()["regimes"] == {}
 
+    def test_regime_calibration_bands_and_gates(self, tmp_path, monkeypatch):
+        from scan.live_edge import regime_calibration
+        rows = ([("BREAKOUT_52W", "TRENDING_BULL", 6.0, 1)] * 35
+                + [("BREAKOUT_52W", "DISTRIBUTION", -3.0, 0)] * 35
+                + [("VCP", "DISTRIBUTION", 6.0, 1)] * 5)      # thin → no claim
+        self._seed(tmp_path, monkeypatch, rows)
+        assert regime_calibration("TRENDING_BULL") == {"BREAKOUT_52W": 1.25}
+        assert regime_calibration("DISTRIBUTION") == {"BREAKOUT_52W": 0.45}
+        assert regime_calibration("UNKNOWN") == {}           # unknown tape
+        assert "VCP" not in regime_calibration("DISTRIBUTION")  # <30 gated
+
+    def test_scanner_regime_factor_is_demote_only(self, tmp_path, monkeypatch):
+        """A regime demotion cuts the score; a regime 'boost' can't raise it
+        (min 1.0) — regime can only add caution, never chase."""
+        import numpy as np, pandas as pd
+        import scan.unified_scanner as us
+        monkeypatch.setattr(us, "_load_calibration", lambda: {})
+        import core.signal_outcome_tracker as tk
+        monkeypatch.setattr(tk, "_DB_PATH", str(tmp_path / "empty.db"))
+        # a clean confirmed breakout out of a tight base
+        n = 120
+        close = np.concatenate([np.full(90, 100.0), np.full(29, 101.0), [106.0]])
+        high = close + 0.5; high[-1] = 106.5
+        df = pd.DataFrame({"open": close - 0.3, "high": high, "low": close - 0.6,
+                           "close": close, "volume": [1_000_000] * 119 + [3_000_000]},
+                          index=pd.date_range("2025-01-01", periods=n, freq="D"))
+        sc = us.UnifiedScanner(); sc._nifty_ret30 = 1.0
+        base = sc._analyze("X", df)
+        assert base is not None and base.signals
+        # demote EVERY signal that fired → score must drop
+        sc._regime_calib = {s: 0.45 for s in base.signals}
+        assert sc._analyze("X", df).score < base.score
+        # a regime 'boost' is clamped to 1.0 → score unchanged
+        sc._regime_calib = {s: 1.25 for s in base.signals}
+        assert sc._analyze("X", df).score == base.score
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 # 16. Conviction tier — highest conviction first, everywhere
