@@ -1113,6 +1113,90 @@ class TestAutopilot:
 # 15b. Verdict dashboard — the honest "real paisa laayak?" report card
 # ══════════════════════════════════════════════════════════════════════════════
 
+class TestPulseCockpit:
+    """The Daily Pulse cockpit surfaces setups + book + autopilot so the user
+    lives on three tabs. These render helpers must not crash on the real store
+    shape (wrong keys = a blank/So broken daily page)."""
+
+    class _FakeCol:
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+
+    class _FakeSt:
+        def __init__(self): self.session_state = {}
+        def markdown(self, *a, **k): pass
+        def caption(self, *a, **k): pass
+        def success(self, *a, **k): pass
+        def warning(self, *a, **k): pass
+        def button(self, *a, **k): return False        # never auto-fires paper
+        def columns(self, spec):
+            n = spec if isinstance(spec, int) else len(spec)
+            return [TestPulseCockpit._FakeCol() for _ in range(n)]
+
+    def test_today_setups_picks_buys_conviction_ranked(self, monkeypatch):
+        import ui.street_pulse_page as sp
+        fake = self._FakeSt()
+        monkeypatch.setattr(sp, "st", fake)
+        captured = {}
+        # capture which symbols get a paper button (i.e. are rendered as setups)
+        orig_button = fake.button
+        def _btn(label, *a, **k):
+            key = k.get("key", "")
+            if key.startswith("pulse_paper_"):
+                captured.setdefault("syms", []).append(key.split("_")[-1])
+            return orig_button(label, *a, **k)
+        fake.button = _btn
+        results = [
+            {"symbol": "AAA", "verdict": "WATCH", "score": 90, "price": 100,
+             "entry": 101, "stop": 98, "target": 104},
+            {"symbol": "BBB", "verdict": "BUY", "score": 70, "price": 100,
+             "conviction_rank": 170, "entry": 101, "stop": 98, "target": 104},
+            {"symbol": "CCC", "verdict": "STRONG BUY", "score": 80, "price": 100,
+             "conviction_rank": 280, "entry": 101, "stop": 98, "target": 104},
+        ]
+        monkeypatch.setattr("scan.auto_scan.get_results",
+                            lambda: (results, 100, 0.0, "ready"))
+        sp._render_today_best_setups()               # must not raise
+        # WATCH excluded; STRONG BUY ranked above BUY
+        assert captured.get("syms") == ["CCC", "BBB"]
+
+    def test_glance_and_book_do_not_crash(self, monkeypatch):
+        import ui.street_pulse_page as sp
+        monkeypatch.setattr(sp, "st", self._FakeSt())
+        monkeypatch.setattr("execution.autopilot.get_status",
+                            lambda: {"armed": True, "mode": "PAPER",
+                                     "trades_today_count": 1,
+                                     "max_trades_per_day": 4})
+        monkeypatch.setattr("execution.autopilot.pnl_snapshot",
+                            lambda: {"day_pnl": 250.0, "positions": [{}]})
+        sp._render_autopilot_glance("IN")            # must not raise
+        # US path: no pnl_snapshot exposed → glance still renders
+        monkeypatch.setattr("execution.us_autopilot.get_status",
+                            lambda: {"armed": False, "trades_today_count": 0,
+                                     "max_trades_per_day": 4, "open_trades": []})
+        sp._render_autopilot_glance("US")
+        monkeypatch.setattr("risk.position_manager.review_positions", lambda: [])
+        monkeypatch.setattr("execution.trade_executor.recent_trades",
+                            lambda n: [])
+        sp._render_your_book()
+
+    def test_cockpit_paper_trade_is_paper_only(self, monkeypatch):
+        """The one-tap action must place PAPER, never live."""
+        import ui.street_pulse_page as sp
+        monkeypatch.setattr(sp, "st", self._FakeSt())
+        monkeypatch.setattr("risk.position_sizer.size_position",
+                            lambda e, s: {"qty": 10})
+        seen = {}
+        def _pt(**kw):
+            seen.update(kw)
+            return {"ok": True, "mode": "PAPER"}
+        monkeypatch.setattr("execution.trade_executor.place_trade", _pt)
+        sp._paper_trade_from_setup(
+            {"symbol": "ZZ", "entry": 101, "stop": 98, "target": 104})
+        assert seen["paper"] is True and seen["symbol"] == "ZZ"
+        assert seen["qty"] == 10
+
+
 class TestVerdictDashboard:
     def _seed(self, tmp_path, monkeypatch, rows):
         """rows = list of (outcome_pct, worked). entry 100 / stop 97 (3% risk)."""

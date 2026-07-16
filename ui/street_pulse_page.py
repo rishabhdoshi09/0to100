@@ -133,6 +133,139 @@ def _stock_line(r: dict) -> str:
             f"</div>")
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+# 🎛️ Daily cockpit — Pulse par hi sab kuch: aaj ke setups + book + autopilot.
+# Taaki har din alag tabs kholne ki zaroorat na pade (Smart Search · Pulse ·
+# Autopilot — bas yahi teen).
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _render_autopilot_glance(market: str = "IN") -> None:
+    """One compact chip: armed/off · trades today · aaj ka P&L. Read-only —
+    arming/limits Autopilot tab par hi (safety)."""
+    try:
+        if market == "US":
+            import execution.us_autopilot as _ap
+            cur, flag = "$", "🇺🇸"
+        else:
+            import execution.autopilot as _ap
+            cur, flag = "₹", "🇮🇳"
+        s = _ap.get_status()
+    except Exception:
+        return
+    # P&L snapshot is optional (US autopilot may not expose it) — glance still
+    # renders the armed state + trade count without it.
+    pnl: dict = {}
+    try:
+        pnl = _ap.pnl_snapshot()
+    except Exception:
+        pnl = {}
+    armed = s.get("armed")
+    a_col = "#00d4a0" if armed else "#8892a4"
+    a_txt = (f"ARMED · {s.get('mode', 'PAPER')}" if armed else "off")
+    day = pnl.get("day_pnl")
+    day_col = "#00d4a0" if (day or 0) >= 0 else "#ff4b4b"
+    day_bit = (f" · aaj <b style='color:{day_col}'>{cur}{day:+,.0f}</b>"
+               if day is not None else "")
+    nopen = len(pnl.get("positions", s.get("open_trades", [])))
+    st.markdown(
+        f"<div style='{_CARD};padding:8px 14px;font-size:.8rem;color:#c9d1d9'>"
+        f"<b>{flag} 🤖 Autopilot</b> <span style='color:{a_col};font-weight:700'>"
+        f"● {a_txt}</span> · {s.get('trades_today_count', 0)}/"
+        f"{s.get('max_trades_per_day', 0)} trades today · {nopen} open{day_bit}"
+        f" <span style='color:#64748b'>· manage → Autopilot tab</span></div>",
+        unsafe_allow_html=True)
+
+
+def _render_today_best_setups(limit: int = 5) -> None:
+    """Aaj ke actionable BUY setups (shared scanner store se, conviction-ranked)
+    + ek-tap PAPER trade. Live hamesha ticket se — yahan se sirf paper."""
+    try:
+        from scan.auto_scan import get_results
+        results, _size, ts, _status = get_results()
+    except Exception:
+        results, ts = [], 0.0
+    buys = [r for r in results if r.get("verdict") in ("STRONG BUY", "BUY")]
+    buys.sort(key=lambda r: float(r.get("conviction_rank")
+                                  or r.get("score") or 0), reverse=True)
+    buys = buys[:limit]
+    _section_title("🎯 Aaj ke Best Setups")
+    if not buys:
+        st.caption("Abhi koi high-conviction BUY nahi — scanner chalu hai, "
+                   "milte hi yahan aayenge (ya market band / regime kamzor).")
+        return
+    import time as _t
+    age = f" · {int((_t.time() - ts) / 60)} min pehle" if ts else ""
+    st.caption(f"Top {len(buys)} conviction-ranked · exchange-side stop ke "
+               f"saath{age}. Ek-tap paper trade neeche.")
+    for r in buys:
+        v = r.get("verdict", "WATCH")
+        v_col = "#22d3ee" if v == "STRONG BUY" else "#00d4a0"
+        hc = "🎯 " if r.get("high_conviction") else ""
+        conv = r.get("breakout_conviction") or 0
+        conv_bit = f" · conviction {conv:.0f}" if conv else ""
+        why = (r.get("reasons") or [""])[0]
+        entry, stop = float(r.get("entry") or 0), float(r.get("stop") or 0)
+        target = float(r.get("target") or 0)
+        c_card, c_btn = st.columns([4.2, 1])
+        with c_card:
+            st.markdown(
+                f"<div style='{_CARD};margin-bottom:4px'>"
+                f"<span style='font-weight:800;font-family:JetBrains Mono,"
+                f"monospace;color:#e6edf3'>{hc}{r['symbol']}</span> "
+                f"<span style='color:#e2e8f0'>₹{float(r.get('price') or 0):,.1f}</span> "
+                f"<span style='color:{v_col};font-weight:700;font-size:.8rem'>{v}</span>"
+                f"<span style='font-size:.72rem;color:#8892a4'> · score "
+                f"{float(r.get('score') or 0):.0f}{conv_bit}</span>"
+                f"<div style='font-size:.76rem;color:#c9d1d9;margin-top:3px'>{why}</div>"
+                f"<div style='font-size:.72rem;color:#64748b;margin-top:2px'>"
+                f"entry ₹{entry:,.1f} · stop ₹{stop:,.1f} · target ₹{target:,.1f}</div>"
+                f"</div>", unsafe_allow_html=True)
+        with c_btn:
+            if st.button("📝 Paper", key=f"pulse_paper_{r['symbol']}",
+                         width="stretch", disabled=not (entry > stop > 0)):
+                _paper_trade_from_setup(r)
+
+
+def _paper_trade_from_setup(r: dict) -> None:
+    """Size at the 1% rule and place a PAPER trade (GTT-protected) from a
+    cockpit setup. Never live — live stays on the app ticket by design."""
+    try:
+        from risk.position_sizer import size_position
+        from execution.trade_executor import place_trade
+        entry, stop = float(r.get("entry") or 0), float(r.get("stop") or 0)
+        target = float(r.get("target") or round(entry * 1.03, 1))
+        ps = size_position(entry, stop)
+        qty = int(ps.get("qty") or 0)
+        if qty < 1:
+            st.warning(f"{r['symbol']}: 1% rule mein 1 share bhi nahi aata "
+                       f"(entry ₹{entry:,.0f}).")
+            return
+        res = place_trade(symbol=r["symbol"], qty=qty, entry_type="MARKET",
+                          entry_price=entry, stop=stop, target=target,
+                          product="CNC", paper=True, note="PULSE_COCKPIT")
+        if res.get("ok"):
+            st.success(f"📝 Paper: {qty} × {r['symbol']} @ ₹{entry:,.1f} "
+                       f"(stop ₹{stop:,.1f} · target ₹{target:,.1f})")
+        else:
+            st.warning(f"Nahi laga: {res.get('message', '')[:80]}")
+    except Exception as exc:
+        st.warning(f"Paper trade fail: {exc}")
+
+
+def _render_your_book() -> None:
+    """Open positions + risk meter + recent journal — Portfolio tab kholе bina."""
+    _section_title("💼 Mera Book")
+    try:
+        from ui.positions_panel import render_open_positions, render_trade_journal
+        n = render_open_positions()
+        if not n:
+            st.caption("Koi open position nahi. Autopilot ya paper trade lagते "
+                       "hi yahan dikhega.")
+        render_trade_journal(8)
+    except Exception as exc:
+        st.caption(f"Book abhi load nahi hua: {exc}")
+
+
 def render_street_pulse() -> None:
     # Market-aware: US hours (ya manual US) → US pulse
     try:
@@ -156,6 +289,11 @@ def render_street_pulse() -> None:
         f"{p.get('scanned', 0)} stocks scanned</div>"
         f"{take_html}</div>",
         unsafe_allow_html=True)
+
+    # ── 🎛️ Daily cockpit — setups + book + autopilot, sab yahin ──────────────
+    _render_autopilot_glance("IN")
+    _render_today_best_setups()
+    _render_your_book()
 
     c1, c2 = st.columns(2)
 
@@ -546,6 +684,10 @@ def _render_us_pulse() -> None:
             + "</div>", unsafe_allow_html=True)
     else:
         st.caption("Abhi koi US high-conviction setup nahi (conviction rule).")
+
+    # ── Cockpit tail — US autopilot glance + shared book (paper) ──────────────
+    _render_autopilot_glance("US")
+    _render_your_book()
 
 
 def _us_setup_card(r: dict, accent: str) -> None:
