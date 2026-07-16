@@ -1113,6 +1113,82 @@ class TestAutopilot:
 # 15b. Verdict dashboard — the honest "real paisa laayak?" report card
 # ══════════════════════════════════════════════════════════════════════════════
 
+class TestBrain:
+    """The conductor: composes every subsystem into one posture + directives.
+    Survival-first, evidence-gated, read-only."""
+
+    def test_posture_matrix(self):
+        from core.brain import decide_posture as d
+        # survival first: over-risked book stands us aside despite a great tape
+        assert d("TRENDING_BULL", "improving", 0.5, "DANGER", 100)[0] == "STAND_ASIDE"
+        # hostile tape + negative edge → aside
+        assert d("DISTRIBUTION", "stable", -0.2, "OK", 100)[0] == "STAND_ASIDE"
+        # any single caution → defensive
+        assert d("TRENDING_BULL", "decaying", 0.3, "OK", 100)[0] == "DEFENSIVE"
+        assert d("CHOPPY", "stable", -0.05, "OK", 100)[0] == "DEFENSIVE"
+        assert d("TRENDING_BULL", "improving", 0.3, "CAUTION", 100)[0] == "DEFENSIVE"
+        # everything aligned AND enough evidence → lean in
+        assert d("TRENDING_BULL", "improving", 0.3, "OK", 50)[0] == "AGGRESSIVE"
+        # aligned but thin sample → NOT aggressive (evidence gate)
+        assert d("TRENDING_BULL", "improving", 0.3, "OK", 10)[0] == "NORMAL"
+        # unremarkable but fine → normal
+        assert d("CHOPPY", "stable", 0.12, "OK", 50)[0] == "NORMAL"
+
+    def test_directives_priority_and_dedup(self):
+        from core.brain import build_directives
+        ds = build_directives({
+            "book_verdict": "DANGER", "open_risk_pct": 6.1,
+            "dead_daemons": ["auto_scan"], "edge_trend": "decaying",
+            "recent_r": -0.1, "expectancy_r": 0.01, "regime": "DISTRIBUTION",
+            "posture": "STAND_ASIDE"})
+        assert ds[0]["severity"] == "critical"          # book risk first
+        assert any("auto_scan" in x["text"] for x in ds)
+        assert len(ds) <= 6
+        # quiet board → a single reassuring info line
+        calm = build_directives({"book_verdict": "OK", "regime": "CHOPPY",
+                                 "edge_trend": "stable", "expectancy_r": 0.1,
+                                 "posture": "NORMAL", "closed": 50})
+        assert len(calm) == 1 and calm[0]["severity"] == "info"
+
+    def test_assess_composes_probes(self, monkeypatch):
+        import core.brain as brain
+        monkeypatch.setattr(brain, "_probe_regime", lambda: "TRENDING_BULL")
+        monkeypatch.setattr(brain, "_probe_edge", lambda cap: {
+            "expectancy_r": 0.3, "edge_trend": "improving", "closed": 60,
+            "max_drawdown_pct": 8.0, "recent_avg_r": 0.35})
+        monkeypatch.setattr(brain, "_probe_setups", lambda m: (
+            [{"symbol": "TOP", "verdict": "STRONG BUY", "score": 88,
+              "conviction_rank": 290, "high_conviction": True,
+              "entry": 101, "stop": 98, "target": 104},
+             {"symbol": "MID", "verdict": "BUY", "score": 70,
+              "conviction_rank": 170}], 0.0))
+        monkeypatch.setattr(brain, "_probe_book", lambda: {
+            "verdict": "OK", "open_risk_pct": 1.2, "n_positions": 1})
+        monkeypatch.setattr(brain, "_probe_autopilot", lambda m: {
+            "armed": True, "trades_today": 2, "day_pnl": 450.0})
+        monkeypatch.setattr(brain, "_probe_dead_daemons", lambda: [])
+        a = brain.assess("IN", 100000.0)
+        assert a["posture"] == "AGGRESSIVE"              # all aligned + evidence
+        assert a["vitals"]["top_pick"]["symbol"] == "TOP"   # conviction-ranked
+        assert a["vitals"]["n_buys"] == 2
+        assert any(d["severity"] == "good" for d in a["directives"])
+
+    def test_assess_degrades_when_subsystems_down(self, monkeypatch):
+        """Every subsystem down (probes return their safe defaults) must NOT
+        crash the brain — it returns a safe read, never a blank page."""
+        import core.brain as brain
+        monkeypatch.setattr(brain, "_probe_regime", lambda: "")
+        monkeypatch.setattr(brain, "_probe_edge", lambda cap: {})
+        monkeypatch.setattr(brain, "_probe_setups", lambda m: ([], 0.0))
+        monkeypatch.setattr(brain, "_probe_book", lambda: {})
+        monkeypatch.setattr(brain, "_probe_autopilot", lambda m: {})
+        monkeypatch.setattr(brain, "_probe_dead_daemons", lambda: [])
+        a = brain.assess("IN", 100000.0)
+        assert a["posture"] in ("NORMAL", "DEFENSIVE", "STAND_ASIDE")
+        assert a["directives"]                            # never empty
+        assert a["vitals"]["regime"] == "UNKNOWN"
+
+
 class TestPulseCockpit:
     """The Daily Pulse cockpit surfaces setups + book + autopilot so the user
     lives on three tabs. These render helpers must not crash on the real store
@@ -1159,6 +1235,20 @@ class TestPulseCockpit:
         sp._render_today_best_setups()               # must not raise
         # WATCH excluded; STRONG BUY ranked above BUY
         assert captured.get("syms") == ["CCC", "BBB"]
+
+    def test_brain_hero_renders(self, monkeypatch):
+        import ui.street_pulse_page as sp
+        monkeypatch.setattr(sp, "st", self._FakeSt())
+        monkeypatch.setattr("core.brain.assess", lambda market, capital: {
+            "posture": "AGGRESSIVE", "posture_reason": "all good",
+            "verdict_line": "green", "directives": [
+                {"severity": "good", "text": "go"}],
+            "vitals": {"cur": "₹", "regime": "TRENDING_BULL", "expectancy_r": 0.3,
+                       "edge_trend": "improving", "drawdown_pct": 8.0,
+                       "n_buys": 3, "n_high_conviction": 1, "book_verdict": "OK",
+                       "open_risk_pct": 1.2, "autopilot_armed": True,
+                       "day_pnl": 400.0}})
+        sp._render_brain("IN")                           # must not raise
 
     def test_glance_and_book_do_not_crash(self, monkeypatch):
         import ui.street_pulse_page as sp

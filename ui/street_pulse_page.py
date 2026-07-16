@@ -139,6 +139,58 @@ def _stock_line(r: dict) -> str:
 # Autopilot — bas yahi teen).
 # ══════════════════════════════════════════════════════════════════════════════
 
+def _render_brain(market: str = "IN") -> None:
+    """🧠 The Brain hero — one authoritative read of the whole board: posture,
+    verdict, prioritised directives, vitals. Composes every subsystem; the
+    first thing the user sees each day."""
+    try:
+        from core.brain import assess, posture_meta
+        cap = float(st.session_state.get("user_capital") or 100_000.0)
+        a = assess(market=market, capital=cap)
+    except Exception:
+        return
+    v = a["vitals"]
+    p_col, p_label = posture_meta(a["posture"])
+    cur = v.get("cur", "₹")
+    # hero: posture + verdict
+    st.markdown(
+        f"<div style='background:linear-gradient(135deg,{p_col}18,#0d1421);"
+        f"border:1px solid {p_col}55;border-left:4px solid {p_col};"
+        f"border-radius:12px;padding:14px 18px;margin-bottom:10px'>"
+        f"<div style='font-size:.62rem;color:#8892a4;text-transform:uppercase;"
+        f"letter-spacing:.14em'>🧠 QuantTerm Brain · aaj ka faisla</div>"
+        f"<div style='font-size:1.15rem;font-weight:800;color:{p_col};"
+        f"margin:3px 0'>{p_label}</div>"
+        f"<div style='font-size:.85rem;color:#c9d1d9'>{a['posture_reason']}</div>"
+        f"</div>", unsafe_allow_html=True)
+    # vitals strip
+    reg = v.get("regime", "UNKNOWN")
+    _tr = {"improving": "📈", "decaying": "📉", "stable": "➖"}.get(
+        v.get("edge_trend"), "")
+    ap_bit = ("🤖 ARMED" if v.get("autopilot_armed") else "🤖 off")
+    day = v.get("day_pnl")
+    day_bit = (f" {cur}{day:+,.0f}" if day is not None else "")
+    st.markdown(
+        f"<div style='{_CARD};padding:8px 14px;font-size:.76rem;color:#94a3b8;"
+        f"font-family:JetBrains Mono,monospace'>"
+        f"tape <b style='color:#e2e8f0'>{reg}</b> · edge "
+        f"<b style='color:#e2e8f0'>{v.get('expectancy_r', 0):+.2f}R</b> {_tr} · "
+        f"DD {v.get('drawdown_pct', 0):.0f}% · setups "
+        f"<b style='color:#e2e8f0'>{v.get('n_buys', 0)}</b> "
+        f"({v.get('n_high_conviction', 0)} 🎯) · book "
+        f"<b style='color:#e2e8f0'>{v.get('book_verdict', 'OK')}</b> "
+        f"({v.get('open_risk_pct', 0):.1f}% risk) · {ap_bit}{day_bit}</div>",
+        unsafe_allow_html=True)
+    # directives — prioritised to-do
+    _sev = {"critical": "#ff4b4b", "warn": "#f59e0b", "info": "#38bdf8",
+            "good": "#00d4a0"}
+    rows = "".join(
+        f"<div style='font-size:.82rem;color:#c9d1d9;margin:4px 0;"
+        f"padding-left:8px;border-left:2px solid {_sev.get(d['severity'],'#8892a4')}'>"
+        f"{d['text']}</div>" for d in a["directives"])
+    st.markdown(f"<div style='{_CARD}'>{rows}</div>", unsafe_allow_html=True)
+
+
 def _render_autopilot_glance(market: str = "IN") -> None:
     """One compact chip: armed/off · trades today · aaj ka P&L. Read-only —
     arming/limits Autopilot tab par hi (safety)."""
@@ -289,6 +341,9 @@ def render_street_pulse() -> None:
         f"{p.get('scanned', 0)} stocks scanned</div>"
         f"{take_html}</div>",
         unsafe_allow_html=True)
+
+    # ── 🧠 Brain — sabse pehle, poore board ka ek faisla ─────────────────────
+    _render_brain("IN")
 
     # ── 🎛️ Daily cockpit — setups + book + autopilot, sab yahin ──────────────
     _render_autopilot_glance("IN")
@@ -635,6 +690,8 @@ def _render_us_pulse() -> None:
         f"<div style='font-size:.8rem;color:#8892a4'>{chip} · "
         f"{len(results)} setups · same conviction engine · S&P benchmark</div>"
         f"</div>", unsafe_allow_html=True)
+
+    _render_brain("US")
 
     if not results:
         st.caption("Abhi US setups nahi mile — US market hours (7pm–1:30am IST) "

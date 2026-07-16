@@ -78,6 +78,12 @@ app.py                    # Streamlit shell: nav (Today|Pulse|Stocks|Options|
 ├── ai/jarvis_orchestrator.py # JARVIS: DeepSeek chat with FULL live context
 │                         #   (setups, sectors, backtest, positions, portfolio)
 ├── core/
+│   ├── brain.py          # 🧠 THE CONDUCTOR: composes regime × live-edge ×
+│   │                     #   setups × portfolio-risk × autopilot × health into
+│   │                     #   ONE read → posture (AGGRESSIVE/NORMAL/DEFENSIVE/
+│   │                     #   STAND_ASIDE) + prioritised directives. READ-ONLY
+│   │                     #   (survival-first, evidence-gated); surfaced as the
+│   │                     #   Brain hero atop Daily Pulse. assess()/decide_posture()
 │   ├── signal_outcome_tracker.py # every BUY logged → outcome after 5 days
 │   └── error_guard.py    # page error boundaries + logs/errors.log + config check
 └── tests/                # pytest; test_money_paths.py = 30 money-critical tests
