@@ -1323,6 +1323,59 @@ class TestEVEngine:
         assert [r["symbol"] for r in rows] == ["EV", "PTS"]   # measured first
 
 
+class TestMarketClock:
+    """Exchange time is truth: NSE gates must be IST-explicit so a UTC
+    server can never shift market hours / daily limits by 5.5 hours."""
+
+    def test_now_ist_is_aware_and_offset_correct(self):
+        from core.market_clock import now_ist, today_ist, IST
+        from datetime import timedelta
+        n = now_ist()
+        assert n.tzinfo is not None
+        assert n.utcoffset() == timedelta(hours=5, minutes=30)
+        assert today_ist() == n.date()
+        assert IST is not None
+
+    def test_market_hours_gate_uses_ist_not_local(self, monkeypatch):
+        """Machine ka TZ kuch bhi ho — gate IST poochhta hai."""
+        import scan.auto_scan as a
+        import datetime as _dt
+        from core.market_clock import IST
+
+        def _fix(y, mo, d, h, mi):
+            class _DT(_dt.datetime):
+                @classmethod
+                def now(cls, tz=None):
+                    assert tz is not None          # naive now() is the BUG
+                    return _dt.datetime(y, mo, d, h, mi, tzinfo=IST)
+            monkeypatch.setattr(a, "datetime", _DT)
+
+        _fix(2026, 7, 14, 10, 30)                  # Tue 10:30 IST
+        assert a._is_market_hours() is True
+        _fix(2026, 7, 14, 8, 0)                    # Tue 08:00 IST — pre-open
+        assert a._is_market_hours() is False
+        _fix(2026, 7, 18, 10, 30)                  # Saturday
+        assert a._is_market_hours() is False
+
+    def test_autopilot_window_accepts_aware_ist(self, tmp_path, monkeypatch):
+        import execution.autopilot as ap
+        from core.market_clock import IST
+        from datetime import datetime as dt
+        monkeypatch.setattr(ap, "_STATE_FILE", tmp_path / "ap.json")
+        ap._state = {}
+        ap.set_config(allocation=100000, mode="PAPER")   # window 09:30-14:45
+        assert ap._in_window(dt(2026, 7, 14, 10, 0, tzinfo=IST)) is True
+        assert ap._in_window(dt(2026, 7, 14, 9, 0, tzinfo=IST)) is False
+        assert ap._in_window(dt(2026, 7, 18, 10, 0, tzinfo=IST)) is False  # Sat
+
+    def test_daily_keys_use_ist_calendar(self, monkeypatch):
+        """trades_today / funnel keys IST date se banti hain — UTC date se
+        subah 5:30 pe limits reset ka bug ab impossible."""
+        import execution.autopilot as ap
+        from core.market_clock import today_ist
+        assert ap._ist_today() == today_ist()
+
+
 class TestEcoMode:
     """Shared-machine thermal relief: less CPU, identical trading logic."""
 

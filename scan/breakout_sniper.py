@@ -24,6 +24,7 @@ import os
 import threading
 import time
 from datetime import datetime
+from core.market_clock import IST
 
 from logger import get_logger
 
@@ -170,7 +171,7 @@ def build_watch_map(results: list[dict]) -> dict[int, dict]:
 
 
 def _alert(hits: list[dict]) -> None:
-    today = datetime.now().strftime("%Y-%m-%d")
+    today = datetime.now(IST).strftime("%Y-%m-%d")
     with _lock:
         _fired.setdefault(today, set())
         for k in list(_fired):
@@ -256,7 +257,7 @@ def start_sniper() -> bool:
                 pass
             with _lock:
                 watch = dict(_watch)
-                today = datetime.now().strftime("%Y-%m-%d")
+                today = datetime.now(IST).strftime("%Y-%m-%d")
                 fired = set(_fired.get(today, set()))
             hits = process_ticks(ticks, watch, fired)
             if hits:

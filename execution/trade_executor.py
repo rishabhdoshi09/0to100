@@ -20,6 +20,7 @@ from __future__ import annotations
 import sqlite3
 import threading
 from datetime import datetime
+from core.market_clock import IST
 from pathlib import Path
 from typing import Optional
 
@@ -77,7 +78,7 @@ def _journal(row: dict) -> None:
                    entry_price, stop_price, target_price, product,
                    entry_order_id, gtt_id, status, note)
                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-                (datetime.now().isoformat(timespec="seconds"), row.get("mode"),
+                (datetime.now(IST).replace(tzinfo=None).isoformat(timespec="seconds"), row.get("mode"),
                  row.get("symbol"), row.get("qty"), row.get("entry_type"),
                  row.get("entry_price"), row.get("stop_price"),
                  row.get("target_price"), row.get("product"),

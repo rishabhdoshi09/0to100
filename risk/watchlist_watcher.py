@@ -16,6 +16,7 @@ from __future__ import annotations
 import sqlite3
 import threading
 from datetime import datetime
+from core.market_clock import IST
 from pathlib import Path
 
 from logger import get_logger
@@ -97,7 +98,7 @@ def push_watchlist_alerts() -> int:
         events = check_watchlist()
         if not events:
             return 0
-        today = datetime.now().strftime("%Y-%m-%d")
+        today = datetime.now(IST).strftime("%Y-%m-%d")
         with _lock:
             _alerted.setdefault(today, set())
             for k in list(_alerted):

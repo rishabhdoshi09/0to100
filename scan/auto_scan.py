@@ -14,6 +14,8 @@ from __future__ import annotations
 import threading
 import time
 from datetime import datetime
+
+from core.market_clock import IST
 from typing import Optional
 
 from logger import get_logger
@@ -39,7 +41,7 @@ _OFFHOURS_REFRESH_S = 3600     # hourly otherwise
 
 
 def _is_market_hours() -> bool:
-    now = datetime.now()
+    now = datetime.now(IST)
     if now.weekday() >= 5:
         return False
     minutes = now.hour * 60 + now.minute
@@ -142,7 +144,7 @@ def _push_new_setups(picks: list[dict]) -> None:
         engine = AlertEngine()
         if not engine.is_configured():
             return
-        today = datetime.now().strftime("%Y-%m-%d")
+        today = datetime.now(IST).strftime("%Y-%m-%d")
         _pushed.setdefault(today, set())
         # Drop stale day keys
         for k in list(_pushed):
@@ -404,7 +406,7 @@ _pulse_pushed_date: str = ""
 def _maybe_push_morning_pulse() -> None:
     """Once per weekday, 8:30-10:00 window: full Daily Pulse to Telegram."""
     global _pulse_pushed_date
-    now = datetime.now()
+    now = datetime.now(IST)
     today = now.strftime("%Y-%m-%d")
     if now.weekday() >= 5 or _pulse_pushed_date == today:
         return
@@ -431,7 +433,7 @@ def _maybe_push_brain_briefing() -> None:
     to Telegram — posture + directives + top pick. Additive; leads the morning
     ahead of the full pulse newsletter. Existing pulse push is untouched."""
     global _brain_briefing_date
-    now = datetime.now()
+    now = datetime.now(IST)
     today = now.strftime("%Y-%m-%d")
     if now.weekday() >= 5 or _brain_briefing_date == today:
         return
@@ -457,7 +459,7 @@ def _maybe_run_nightly_backtest() -> None:
     """Auto-refresh the signal backtest once per day, off-market hours —
     the calibration stays current without the user pressing anything."""
     global _bt_done_date
-    today = datetime.now().strftime("%Y-%m-%d")
+    today = datetime.now(IST).strftime("%Y-%m-%d")
     if _bt_done_date == today or _is_market_hours():
         return
     try:
@@ -485,7 +487,7 @@ def _maybe_remind_kite_login() -> None:
     """8:30-9:15 weekday window: if Kite isn't usable, one Telegram nudge —
     warna poora din live data ke bina chalta hai aur pata bhi nahi chalta."""
     global _kite_reminder_date
-    now = datetime.now()
+    now = datetime.now(IST)
     today = now.strftime("%Y-%m-%d")
     if now.weekday() >= 5 or _kite_reminder_date == today:
         return
@@ -518,7 +520,7 @@ def _maybe_update_outcomes() -> None:
     """Daily: resolve pending signal outcomes so the Report Card and
     accuracy calibration keep learning WITHOUT anyone opening JARVIS."""
     global _outcomes_checked_date
-    today = datetime.now().strftime("%Y-%m-%d")
+    today = datetime.now(IST).strftime("%Y-%m-%d")
     if _outcomes_checked_date == today:
         return
     try:
@@ -543,7 +545,7 @@ _coach_pushed_week: str = ""
 def _maybe_push_weekly_coach() -> None:
     """Sunday evening: coach review to Telegram, once per week."""
     global _coach_pushed_week
-    now = datetime.now()
+    now = datetime.now(IST)
     week = now.strftime("%Y-W%W")
     if now.weekday() != 6 or now.hour < 17 or _coach_pushed_week == week:
         return

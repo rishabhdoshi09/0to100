@@ -18,6 +18,7 @@ from __future__ import annotations
 import sqlite3
 from dataclasses import dataclass
 from datetime import datetime
+from core.market_clock import IST
 from pathlib import Path
 from typing import Optional
 
@@ -134,7 +135,7 @@ def _record_hunt(symbol: str, stop: float, low: float, close: float, pct: float)
             con.execute(
                 "INSERT INTO stop_hunts (symbol, hunt_date, stop_level, dip_low, recovery, hunt_pct) "
                 "VALUES (?,?,?,?,?,?)",
-                (symbol, datetime.now().date().isoformat(), stop, low, close, round(pct, 2)),
+                (symbol, datetime.now(IST).date().isoformat(), stop, low, close, round(pct, 2)),
             )
             con.commit()
     except Exception:

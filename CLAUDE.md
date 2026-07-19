@@ -107,7 +107,11 @@ app.py                    # Streamlit shell: nav (Today|Pulse|Stocks|Options|
 │   │                     #   live slider moves; scaling_advice(): capital is
 │   │                     #   EARNED (PF/DD/n thresholds). Advice-only, seeded
 │   ├── signal_outcome_tracker.py # every BUY logged → outcome after 5 days
+│   ├── market_clock.py   # ⏰ IST-explicit clock — SAB NSE gates (market hours,
+│   │                     #   entry windows, daily-limit dates) yahin se. UTC
+│   │                     #   server pe bhi gates kabhi shift nahi hote
 │   └── error_guard.py    # page error boundaries + logs/errors.log + config check
+│                         #   (+ IST-clock check + build version)
 └── tests/                # pytest; test_money_paths.py = 30 money-critical tests
 ```
 

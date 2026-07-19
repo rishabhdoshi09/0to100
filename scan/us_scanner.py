@@ -220,6 +220,8 @@ def _push_us_setups(results: list[dict]) -> None:
     """Fresh US BUY/STRONG-BUY setups → Telegram, highest conviction first.
     One alert per stock per day. Silent if Telegram not configured."""
     from datetime import datetime
+
+    from core.market_clock import IST
     try:
         from alerts.telegram_alerts import AlertEngine
         engine = AlertEngine()
@@ -227,7 +229,7 @@ def _push_us_setups(results: list[dict]) -> None:
             return
     except Exception:
         return
-    today = datetime.now().strftime("%Y-%m-%d")
+    today = datetime.now(IST).strftime("%Y-%m-%d")
     with _lock:
         _pushed.setdefault(today, set())
         for k in list(_pushed):

@@ -79,6 +79,22 @@ def check_config() -> list[tuple[str, bool, str]]:
         out.append(("Telegram alerts",
                     bool(os.getenv("TELEGRAM_BOT_TOKEN") and os.getenv("TELEGRAM_CHAT_ID")),
                     "TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID in .env"))
+        # Market gates IST-explicit hain (galat TZ pe bhi SAHI chalte hain),
+        # par non-IST machine pe logs/cron timestamps shift dikhte hain.
+        try:
+            from core.market_clock import system_tz_is_ist
+            out.append(("System clock (IST)", system_tz_is_ist(),
+                        "server: timedatectl set-timezone Asia/Kolkata "
+                        "(gates phir bhi IST pe hi chalte hain)"))
+        except Exception:
+            pass
+        try:
+            from pathlib import Path
+            _v = (Path(__file__).resolve().parent.parent / "VERSION") \
+                .read_text().strip()
+            out.append((f"Build v{_v}", True, ""))
+        except Exception:
+            pass
     except Exception as exc:
         out.append(("config load", False, str(exc)[:80]))
     return out

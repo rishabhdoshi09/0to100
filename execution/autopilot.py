@@ -39,6 +39,14 @@ from __future__ import annotations
 import json
 import threading
 from datetime import datetime, date
+
+from core.market_clock import IST, today_ist as _ist_today
+
+
+def _now_ist_naive() -> datetime:
+    """IST wall-clock as naive datetime — journal timestamps naive hain,
+    unse subtraction ke liye aware/naive mix crash na ho."""
+    return datetime.now(IST).replace(tzinfo=None)
 from pathlib import Path
 
 from logger import get_logger
@@ -117,7 +125,7 @@ def _reject_category(reason: str) -> str:
 
 
 def _note_reject(reason: str) -> None:
-    today = date.today().isoformat()
+    today = _ist_today().isoformat()
     with _lock:
         s = _load()
         # copy (not setdefault-in-place) — _DEFAULTS' nested dict is shared via
@@ -131,7 +139,7 @@ def _note_reject(reason: str) -> None:
 
 def _note_considered() -> None:
     """One candidate reached the gate funnel today (denominator)."""
-    today = date.today().isoformat()
+    today = _ist_today().isoformat()
     with _lock:
         s = _load()
         n = int(s.get("considered", {}).get(today, 0)) + 1
@@ -140,7 +148,7 @@ def _note_considered() -> None:
 
 
 def reject_funnel() -> dict:
-    today = date.today().isoformat()
+    today = _ist_today().isoformat()
     s = _load()
     return {"considered": int(s.get("considered", {}).get(today, 0)),
             "rejects": dict(s.get("reject_stats", {}).get(today, {}))}
@@ -181,7 +189,7 @@ def _save() -> None:
 def _log_activity(msg: str) -> None:
     with _lock:
         s = _load()
-        s["activity"] = ([f"{datetime.now().strftime('%d %b %H:%M')} · {msg}"]
+        s["activity"] = ([f"{datetime.now(IST).strftime('%d %b %H:%M')} · {msg}"]
                          + s.get("activity", []))[:40]
     _save()
     log.info("autopilot", msg=msg)
@@ -207,7 +215,7 @@ def get_status() -> dict:
     s["pool"] = round(s["allocation"] + s["realized_pnl"], 0)
     s["available"] = round(
         max(0.0, s["pool"] * (1 - s["cash_reserve_pct"]) - s["deployed"]), 0)
-    today = date.today().isoformat()
+    today = _ist_today().isoformat()
     s["trades_today_count"] = int(s.get("trades_today", {}).get(today, 0))
     return s
 
@@ -525,7 +533,7 @@ def _net_pnl(t: dict) -> float:
 
 def _in_window(now: datetime | None = None) -> bool:
     s = _load()
-    now = now or datetime.now()
+    now = now or datetime.now(IST)
     if now.weekday() >= 5:
         return False
     hm = now.strftime("%H:%M")
@@ -569,7 +577,7 @@ def _passes_gates(symbol: str, score: float, edge, sector: str) -> str | None:
         posture, why = _brain_posture()
         if posture == "STAND_ASIDE":
             return f"Brain STAND_ASIDE — {why or 'survival-first, naye entries off'}"
-    today = date.today().isoformat()
+    today = _ist_today().isoformat()
     if int(s.get("trades_today", {}).get(today, 0)) >= s["max_trades_per_day"]:
         return "daily trade limit reached"
     if len(_open_autopilot_trades()) >= s["max_open_positions"]:
@@ -839,7 +847,7 @@ def _consider_locked(symbol: str, entry: float, stop: float, score: float,
             _log_activity(f"FAIL {symbol}: {res.get('message', '')[:80]}")
             return False
 
-        today = date.today().isoformat()
+        today = _ist_today().isoformat()
         with _lock:
             s = _load()
             s.setdefault("trades_today", {})
@@ -941,7 +949,7 @@ def pnl_snapshot() -> dict:
             "target": float(t["target_price"] or 0),
             "status": t["status"],
         })
-    today = date.today().isoformat()
+    today = _ist_today().isoformat()
     day_realized = 0.0
     day_closed = 0
     for t in _autopilot_trades(_CLOSED_WIN + _CLOSED_LOSS):
@@ -1014,7 +1022,7 @@ def _time_stop() -> None:
             placed = datetime.fromisoformat(str(t["placed_at"]))
         except Exception:
             continue
-        if (datetime.now() - placed).days >= max_days:
+        if (_now_ist_naive() - placed).days >= max_days:
             stale.append(t)
     if not stale:
         return
@@ -1023,7 +1031,7 @@ def _time_stop() -> None:
         live = get_live_quotes(sorted({t["symbol"] for t in stale}))
     except Exception:
         return
-    today = date.today().isoformat()
+    today = _ist_today().isoformat()
     for t in stale:
         q = live.get(t["symbol"])
         if not (q and q.get("price")):
@@ -1310,10 +1318,10 @@ def eod_digest(now: datetime | None = None) -> bool:
     s = _load()
     if s["allocation"] <= 0:
         return False
-    now = now or datetime.now()
+    now = now or datetime.now(IST)
     if now.weekday() >= 5 or now.strftime("%H:%M") < "15:31":
         return False
-    today = date.today().isoformat()
+    today = _ist_today().isoformat()
     if s.get("digest_date") == today:
         return False
 
@@ -1419,7 +1427,7 @@ def _circuit_breaker() -> None:
     pool = s["allocation"] + s["realized_pnl"]
     if pool <= 0:
         return
-    today = date.today().isoformat()
+    today = _ist_today().isoformat()
 
     day_realized = 0.0
     for t in _autopilot_trades(_CLOSED_WIN + _CLOSED_LOSS):

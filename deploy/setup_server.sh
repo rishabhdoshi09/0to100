@@ -13,6 +13,11 @@ BRANCH="${QT_BRANCH:-claude/deepseek-multi-agent-system-nrO7n}"
 APP_DIR="${QT_DIR:-$HOME/0to100}"
 RUN_USER="$(whoami)"
 
+echo "== [0/6] Timezone → IST (market ka time hi sach hai) =="
+sudo timedatectl set-timezone Asia/Kolkata 2>/dev/null \
+    && echo "   Asia/Kolkata set." \
+    || echo "   ⚠️  timezone set nahi hua (container?) — koi baat nahi, gates IST-explicit hain."
+
 echo "== [1/6] System packages =="
 sudo apt-get update -y
 sudo apt-get install -y git python3 python3-venv python3-pip \
@@ -73,6 +78,7 @@ WorkingDirectory=$APP_DIR
 ExecStart=$APP_DIR/venv/bin/streamlit run app.py --server.port 8501 --server.address 0.0.0.0 --server.headless true
 Restart=always
 RestartSec=10
+Environment=TZ=Asia/Kolkata
 OOMScoreAdjust=-100
 
 [Install]

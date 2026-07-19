@@ -21,6 +21,7 @@ from __future__ import annotations
 import sqlite3
 import threading
 from datetime import datetime
+from core.market_clock import IST
 
 from logger import get_logger
 
@@ -56,7 +57,7 @@ def _close_paper(trade_id: int, outcome: str, exit_price: float) -> None:
             "UPDATE trades SET status=?, note=? WHERE id=?",
             (f"PAPER_{outcome}",
              f"closed @ ₹{exit_price:,.1f} on "
-             f"{datetime.now().strftime('%d %b %H:%M')}", trade_id))
+             f"{datetime.now(IST).strftime('%d %b %H:%M')}", trade_id))
         conn.commit()
         conn.close()
     except Exception as exc:
@@ -153,7 +154,7 @@ def push_position_alerts() -> int:
         rows = [r for r in review_positions() if r["alert"]]
         if not rows:
             return 0
-        today = datetime.now().strftime("%Y-%m-%d")
+        today = datetime.now(IST).strftime("%Y-%m-%d")
         with _lock:
             _alerted.setdefault(today, set())
             for k in list(_alerted):
