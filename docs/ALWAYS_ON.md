@@ -63,13 +63,27 @@ curl -fsSL https://tailscale.com/install.sh | sh && tailscale up
 
 ---
 
-## Option B: Ghar ka Raspberry Pi / purana laptop
+## Option B: Apna Mac hi 24/7 (₹0, koi credit card nahi)
 
-Wahi steps — bas machine ghar pe. Bijli + internet stable ho toh
-kaafi hai. Mac pe hi chalana ho toh kam se kam sleep band karo:
+> Oracle/AWS/GCP sab **credit card maangte hain** — card nahi hai toh
+> yeh sabse practical rasta hai. Ek command:
 ```bash
-sudo pmset -a sleep 0 displaysleep 10
+cd ~/0to100 && bash deploy/setup_mac.sh
 ```
+Script karta hai: Mac ki sleep band + **launchd service** (login/boot pe
+khud start, crash pe 10s mein khud restart — systemd jaisa hi). Phone se
+bahar se dekhna ho toh Tailscale (free) laga lo.
+- MacBook: charger + dhakkan khula, ya `sudo pmset -a disablesleep 1`
+- Kharcha: ~₹100-150/month bijli. Limitation: bijli/net gaya = system gaya.
+
+**Baad mein card ke bina VPS chahiye ho toh:** Hostinger VPS (~₹350/mo)
+**UPI accept karta hai** — phir `deploy/setup_server.sh` wahi ek-command
+setup wahan chala dena.
+
+## Option C: Ghar ka Raspberry Pi / purana laptop
+
+Wahi Linux steps (`deploy/setup_server.sh`) — bas machine ghar pe.
+Bijli + internet stable ho toh kaafi hai.
 
 ---
 

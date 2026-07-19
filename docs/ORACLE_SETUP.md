@@ -1,5 +1,10 @@
 # Oracle Cloud Free Tier pe QuantTerm 24/7 (₹0/month)
 
+> ⚠️ **Oracle signup ke liye credit card zaroori hai** (verification —
+> charge nahi hota, par card ke bina account banta hi nahi). Card nahi
+> hai? **[ALWAYS_ON.md](ALWAYS_ON.md) → Option B**: apna Mac ek command
+> mein 24/7 (`deploy/setup_mac.sh`, ₹0) — ya UPI-waala VPS (Hostinger).
+
 Oracle ka **Always Free** tier hamesha free hai (trial nahi):
 **Ampere A1 (ARM): 4 OCPU + 24GB RAM tak** — QuantTerm ke liye kaafi se zyada.
 Mumbai region NSE ke liye best latency deta hai.
