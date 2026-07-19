@@ -38,6 +38,10 @@ app.py                    # Streamlit shell: nav (Today|Pulse|Stocks|Options|
 │   │                     #   calibration (≥30 = demote proven losers, never
 │   │                     #   inflate); regime_calibration() demotes a signal in
 │   │                     #   the CURRENT tape where it leaks. Raises expectancy.
+│   ├── ev_engine.py      # 💰 NORTH STAR: Expected Value per setup from live
+│   │                     #   outcomes — EV% = [P(win)×avgWin − P(loss)×avgLoss]
+│   │                     #   × setup risk. ≥30 outcomes gate; EV-first ranking
+│   │                     #   (ev_rank_key), conviction fallback for thin data
 │   ├── conviction.py     # Top-40 enrichment: news buzz + earnings + verdicts
 │   ├── sector_heat.py    # Sector map (parsed from nse_universe groups),
 │   │                     #   pack-boost + sector_performance()
@@ -84,6 +88,10 @@ app.py                    # Streamlit shell: nav (Today|Pulse|Stocks|Options|
 │   │                     #   STAND_ASIDE) + prioritised directives. READ-ONLY
 │   │                     #   (survival-first, evidence-gated); surfaced as the
 │   │                     #   Brain hero atop Daily Pulse. assess()/decide_posture()
+│   ├── portfolio_intel.py# 💼 Portfolio Intelligence: capital as a PORTFOLIO —
+│   │                     #   per-holding EV, weakest holding, opportunity-cost
+│   │                     #   rotation advice (EV-gap ≥2.5pp after costs).
+│   │                     #   ADVICE-ONLY (never rotates); feeds Brain directives
 │   ├── signal_outcome_tracker.py # every BUY logged → outcome after 5 days
 │   └── error_guard.py    # page error boundaries + logs/errors.log + config check
 └── tests/                # pytest; test_money_paths.py = 30 money-critical tests

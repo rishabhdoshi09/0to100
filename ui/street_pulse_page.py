@@ -247,8 +247,14 @@ def _render_today_best_setups(limit: int = 5) -> None:
     except Exception:
         results, ts = [], 0.0
     buys = [r for r in results if r.get("verdict") in ("STRONG BUY", "BUY")]
-    buys.sort(key=lambda r: float(r.get("conviction_rank")
-                                  or r.get("score") or 0), reverse=True)
+    # EV-first (expected return per unit risk); conviction fallback for
+    # thin-evidence setups — north star: rank by money, not points
+    try:
+        from scan.ev_engine import ev_rank_key
+        buys.sort(key=ev_rank_key, reverse=True)
+    except Exception:
+        buys.sort(key=lambda r: float(r.get("conviction_rank")
+                                      or r.get("score") or 0), reverse=True)
     buys = buys[:limit]
     _section_title("🎯 Aaj ke Best Setups")
     if not buys:
@@ -265,6 +271,10 @@ def _render_today_best_setups(limit: int = 5) -> None:
         hc = "🎯 " if r.get("high_conviction") else ""
         conv = r.get("breakout_conviction") or 0
         conv_bit = f" · conviction {conv:.0f}" if conv else ""
+        # EV chip — the number that actually ranks it (measured, not vibes)
+        if r.get("ev_pct") is not None:
+            conv_bit += (f" · <b style='color:#00d4a0'>EV {r['ev_pct']:+.1f}%</b>"
+                         f" ({r.get('p_win', 0):.0f}% win, n={r.get('ev_n', 0)})")
         why = (r.get("reasons") or [""])[0]
         entry, stop = float(r.get("entry") or 0), float(r.get("stop") or 0)
         target = float(r.get("target") or 0)

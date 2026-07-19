@@ -110,6 +110,9 @@ def build_directives(v: dict) -> list[dict]:
                     f"({v['expectancy_r']:+.2f}R) — real size mat badhao.")
 
     # info — opportunity / nudges
+    swap = v.get("rotation_swap")
+    if swap:
+        add("info", f"🔄 Opportunity cost: {swap['note']}")
     if not v.get("autopilot_armed") and v.get("n_high_conviction", 0) > 0:
         add("info", f"🤖 Autopilot off, par {v['n_high_conviction']} high-"
                     f"conviction setups. Arm karo (paper) ya manually dekho.")
@@ -121,10 +124,13 @@ def build_directives(v: dict) -> list[dict]:
     # good — green light
     if v.get("posture") == "AGGRESSIVE" and v.get("top_pick"):
         tp = v["top_pick"]
+        _ev_bit = (f" · EV {tp['ev_pct']:+.1f}% ({tp.get('p_win', 0):.0f}% win)"
+                   if tp.get("ev_pct") is not None else "")
         add("good", f"✅ Green light. Aaj ka top pick: {tp['symbol']} — "
                     f"entry {v.get('cur', '₹')}{tp.get('entry', 0):,.1f} · "
                     f"stop {v.get('cur', '₹')}{tp.get('stop', 0):,.1f} · "
-                    f"target {v.get('cur', '₹')}{tp.get('target', 0):,.1f}.")
+                    f"target {v.get('cur', '₹')}{tp.get('target', 0):,.1f}"
+                    f"{_ev_bit}.")
 
     if not out:
         add("info", "Sab shaant — koi urgent action nahi. Normal routine.")
@@ -192,6 +198,17 @@ def _probe_autopilot(market: str) -> dict:
         return {}
 
 
+def _probe_rotation(market: str) -> dict:
+    """Portfolio intelligence (NSE book only) — opportunity-cost advice."""
+    if market == "US":
+        return {}
+    try:
+        from core.portfolio_intel import daily_review
+        return daily_review() or {}
+    except Exception:
+        return {}
+
+
 def _probe_dead_daemons() -> list[str]:
     try:
         from core.health import pulse
@@ -215,10 +232,17 @@ def assess(market: str = "IN", capital: float = 100_000.0) -> dict:
     book = _probe_book() if market != "US" else {}
     ap = _probe_autopilot(market)
     dead = _probe_dead_daemons()
+    rot = _probe_rotation(market)
 
     buys = [r for r in setups if r.get("verdict") in ("STRONG BUY", "BUY")]
-    buys.sort(key=lambda r: float(r.get("conviction_rank")
-                                  or r.get("score") or 0), reverse=True)
+    # EV-first cross-sectional ranking (north star): setups with a measured
+    # expected value outrank point-scores; conviction stays the fallback.
+    try:
+        from scan.ev_engine import ev_rank_key
+        buys.sort(key=ev_rank_key, reverse=True)
+    except Exception:
+        buys.sort(key=lambda r: float(r.get("conviction_rank")
+                                      or r.get("score") or 0), reverse=True)
     top = buys[0] if buys else None
     n_hc = sum(1 for r in setups if r.get("high_conviction"))
     stale_min = int((_t.time() - ts) / 60) if ts else None
@@ -244,7 +268,9 @@ def assess(market: str = "IN", capital: float = 100_000.0) -> dict:
         "top_pick": ({"symbol": top["symbol"],
                       "entry": float(top.get("entry") or 0),
                       "stop": float(top.get("stop") or 0),
-                      "target": float(top.get("target") or 0)} if top else None),
+                      "target": float(top.get("target") or 0),
+                      "ev_pct": top.get("ev_pct"),
+                      "p_win": top.get("p_win")} if top else None),
         "stale_min": stale_min,
         "book_verdict": book_verdict,
         "open_risk_pct": float(book.get("open_risk_pct", 0.0) or 0.0),
@@ -253,6 +279,8 @@ def assess(market: str = "IN", capital: float = 100_000.0) -> dict:
         "trades_today": ap.get("trades_today", 0),
         "day_pnl": ap.get("day_pnl"),
         "dead_daemons": dead,
+        "portfolio_ev_pct": rot.get("portfolio_ev_pct"),
+        "rotation_swap": rot.get("swap"),
         "posture": posture,
     }
     directives = build_directives(vitals)

@@ -1267,6 +1267,107 @@ class TestBrain:
         assert sent == []
 
 
+class TestEVEngine:
+    """North star: rank by expected value (measured), not points."""
+
+    def _seed(self, tmp_path, monkeypatch, rows):
+        import core.signal_outcome_tracker as tk
+        monkeypatch.setattr(tk, "_DB_PATH", str(tmp_path / "sig.db"))
+        conn = tk._get_conn()
+        from datetime import datetime, timedelta
+        base = datetime(2026, 1, 1)
+        for i, (arche, pct, worked) in enumerate(rows):
+            la = (base + timedelta(hours=i)).isoformat(timespec="seconds")
+            conn.execute(
+                "INSERT INTO signal_log (symbol,logged_at,signal_type,archetype,"
+                "entry_price,stop_price,quality_score,outcome_pct,worked,"
+                "outcome_checked_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
+                (f"S{i}", la, "UNIFIED_BUY", arche, 100.0, 97.0, 70.0, pct,
+                 worked, la))
+        conn.commit(); conn.close()
+
+    def test_ev_math_and_components(self, tmp_path, monkeypatch):
+        from scan.ev_engine import signal_stats, estimate_ev
+        # 30 wins @ +6% (2R), 20 losses @ -3% (1R) on a 3%-risk setup
+        rows = [("SIG", 6.0, 1)] * 30 + [("SIG", -3.0, 0)] * 20
+        self._seed(tmp_path, monkeypatch, rows)
+        st = signal_stats()
+        assert st["SIG"]["n"] == 50 and st["SIG"]["p_win"] == 0.6
+        assert st["SIG"]["avg_win_r"] == 2.0 and st["SIG"]["avg_loss_r"] == 1.0
+        ev = estimate_ev(["SIG"], entry=100, stop=97)
+        # EV = 0.6*2R - 0.4*1R = 0.8R on 3% risk → +2.4%
+        assert ev["ev_pct"] == 2.4 and ev["p_win"] == 60.0 and ev["n"] == 50
+
+    def test_ev_gated_and_invalid_stop(self, tmp_path, monkeypatch):
+        from scan.ev_engine import estimate_ev
+        self._seed(tmp_path, monkeypatch, [("THIN", 6.0, 1)] * 10)   # n<30
+        assert estimate_ev(["THIN"], 100, 97) is None                # no claim
+        rows = [("OK", 6.0, 1)] * 40
+        self._seed(tmp_path, monkeypatch, rows)
+        assert estimate_ev(["OK"], 100, 105) is None                 # bad stop
+        assert estimate_ev(["MISSING"], 100, 97) is None             # unknown sig
+
+    def test_ev_rank_prefers_measured_over_points(self, tmp_path, monkeypatch):
+        from scan.ev_engine import tag_ev, ev_rank_key
+        self._seed(tmp_path, monkeypatch,
+                   [("BREAKOUT_52W", 6.0, 1)] * 35 + [("BREAKOUT_52W", -3.0, 0)] * 15)
+        rows = [
+            {"symbol": "PTS", "signals": ["Unknown"], "entry": 100, "stop": 97,
+             "verdict": "STRONG BUY", "conviction_rank": 290},
+            {"symbol": "EV", "signals": ["52-week high breakout"], "entry": 100,
+             "stop": 97, "verdict": "BUY", "conviction_rank": 150},
+        ]
+        tag_ev(rows)
+        assert rows[1]["ev_pct"] is not None and rows[0].get("ev_pct") is None
+        rows.sort(key=ev_rank_key, reverse=True)
+        assert [r["symbol"] for r in rows] == ["EV", "PTS"]   # measured first
+
+
+class TestPortfolioIntel:
+    """Capital as a portfolio: every holding competes daily vs best ideas."""
+
+    def test_rotation_advice_and_churn_gate(self):
+        from core.portfolio_intel import rotation_advice
+        h = [{"symbol": "HAL", "ev_pct": 1.2}, {"symbol": "BEL", "ev_pct": 4.0}]
+        c = [{"symbol": "TATVA", "ev_pct": 5.4, "verdict": "STRONG BUY"},
+             {"symbol": "JUNK", "ev_pct": 9.0, "verdict": "WATCH"}]
+        out = rotation_advice(h, c)
+        assert out["portfolio_ev_pct"] == 2.6
+        assert out["weakest"]["symbol"] == "HAL"
+        assert out["swap"]["out"] == "HAL" and out["swap"]["in"] == "TATVA"
+        assert out["swap"]["gap_pct"] == 4.2               # WATCH junk excluded
+        assert "advice hai, order nahi" in out["swap"]["note"]
+        # below the churn threshold → no swap advice
+        assert rotation_advice(
+            h, [{"symbol": "X", "ev_pct": 2.0, "verdict": "BUY"}])["swap"] is None
+
+    def test_empty_book_or_candidates_safe(self):
+        from core.portfolio_intel import rotation_advice
+        c = [{"symbol": "T", "ev_pct": 5.0, "verdict": "BUY"}]
+        assert rotation_advice([], c)["swap"] is None
+        assert rotation_advice([], [])["portfolio_ev_pct"] is None
+        # holdings without EV claims: no punishment swap invented
+        h = [{"symbol": "A", "ev_pct": None}]
+        assert rotation_advice(h, c)["swap"] is None
+
+    def test_brain_carries_rotation_directive(self, monkeypatch):
+        import core.brain as brain
+        monkeypatch.setattr(brain, "_probe_regime", lambda: "CHOPPY")
+        monkeypatch.setattr(brain, "_probe_edge", lambda cap: {
+            "expectancy_r": 0.12, "edge_trend": "stable", "closed": 60})
+        monkeypatch.setattr(brain, "_probe_setups", lambda m: ([], 0.0))
+        monkeypatch.setattr(brain, "_probe_book", lambda: {"verdict": "OK"})
+        monkeypatch.setattr(brain, "_probe_autopilot", lambda m: {})
+        monkeypatch.setattr(brain, "_probe_dead_daemons", lambda: [])
+        monkeypatch.setattr(brain, "_probe_rotation", lambda m: {
+            "portfolio_ev_pct": 2.1,
+            "swap": {"out": "HAL", "out_ev": 1.2, "in": "TATVA", "in_ev": 5.4,
+                     "gap_pct": 4.2, "note": "HAL vs TATVA — advice hai, order nahi."}})
+        a = brain.assess("IN", 100000.0)
+        assert any("Opportunity cost" in d["text"] for d in a["directives"])
+        assert a["vitals"]["portfolio_ev_pct"] == 2.1
+
+
 class TestOptionsVerdict:
     """Raw chain metrics → one clear structural read (bias + range + IV)."""
 

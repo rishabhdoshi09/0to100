@@ -345,6 +345,14 @@ def _scan_once_locked(universe: Optional[list[str]] = None, progress=None) -> No
             log.debug("edge_apply_skip", error=str(exc))
         # 🎯 Conviction tier — highest conviction sabse pehle, har surface pe
         tag_conviction(serialized)
+        # 💰 EV tier — expected value from OUR outcomes (north star: rank by
+        # expected return per unit risk, not points). Additive fields only;
+        # conviction_rank stays the fallback when evidence is thin.
+        try:
+            from scan.ev_engine import tag_ev
+            tag_ev(serialized)
+        except Exception as exc:
+            log.debug("ev_tag_skip", error=str(exc))
         # Proactive delivery — user ko dhundhna na pade, setups khud pahunchein
         _push_new_setups(serialized[:15])
         # 🤖 Autopilot hook — same signals, alert logic untouched
