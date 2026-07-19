@@ -108,6 +108,14 @@ def build_directives(v: dict) -> list[dict]:
     if v.get("expectancy_r", 0) < 0 and v.get("closed", 0) >= 30:
         add("warn", f"⚠️ System expectancy abhi negative "
                     f"({v['expectancy_r']:+.2f}R) — real size mat badhao.")
+    # correlation lens: N positions that move together = fewer real bets
+    if (v.get("corr_positions", 0) >= 2
+            and v.get("corr_bets", 0) < v["corr_positions"]):
+        big = v.get("corr_biggest") or []
+        add("warn", f"🧩 {v['corr_positions']} positions, par correlation ke "
+                    f"hisaab se sirf {v['corr_bets']} asli bets — "
+                    f"{'/'.join(big)} ek saath move karte hain. Ek girega toh "
+                    f"sab girenge; naya trade isi cluster mein mat jodo.")
 
     # info — opportunity / nudges
     swap = v.get("rotation_swap")
@@ -209,6 +217,17 @@ def _probe_rotation(market: str) -> dict:
         return {}
 
 
+def _probe_correlation(market: str) -> dict:
+    """Book through the correlation lens — positions vs real bets."""
+    if market == "US":
+        return {}
+    try:
+        from risk.correlation import book_correlation_report
+        return book_correlation_report() or {}
+    except Exception:
+        return {}
+
+
 def _probe_dead_daemons() -> list[str]:
     try:
         from core.health import pulse
@@ -233,6 +252,7 @@ def assess(market: str = "IN", capital: float = 100_000.0) -> dict:
     ap = _probe_autopilot(market)
     dead = _probe_dead_daemons()
     rot = _probe_rotation(market)
+    corr = _probe_correlation(market)
 
     buys = [r for r in setups if r.get("verdict") in ("STRONG BUY", "BUY")]
     # EV-first cross-sectional ranking (north star): setups with a measured
@@ -281,6 +301,9 @@ def assess(market: str = "IN", capital: float = 100_000.0) -> dict:
         "dead_daemons": dead,
         "portfolio_ev_pct": rot.get("portfolio_ev_pct"),
         "rotation_swap": rot.get("swap"),
+        "corr_positions": corr.get("n_positions", 0),
+        "corr_bets": corr.get("n_bets", 0),
+        "corr_biggest": corr.get("biggest"),
         "posture": posture,
     }
     directives = build_directives(vitals)

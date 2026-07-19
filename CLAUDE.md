@@ -40,8 +40,10 @@ app.py                    # Streamlit shell: nav (Today|Pulse|Stocks|Options|
 │   │                     #   the CURRENT tape where it leaks. Raises expectancy.
 │   ├── ev_engine.py      # 💰 NORTH STAR: Expected Value per setup from live
 │   │                     #   outcomes — EV% = [P(win)×avgWin − P(loss)×avgLoss]
-│   │                     #   × setup risk. ≥30 outcomes gate; EV-first ranking
-│   │                     #   (ev_rank_key), conviction fallback for thin data
+│   │                     #   × setup risk. ≥30 outcomes gate; ranking uses the
+│   │                     #   CONSERVATIVE EV (Wilson lower-bound p_win → big
+│   │                     #   samples trusted, small shrunk) + HIGH/MED/LOW
+│   │                     #   confidence tier; conviction fallback for thin data
 │   ├── conviction.py     # Top-40 enrichment: news buzz + earnings + verdicts
 │   ├── sector_heat.py    # Sector map (parsed from nse_universe groups),
 │   │                     #   pack-boost + sector_performance()
@@ -53,6 +55,10 @@ app.py                    # Streamlit shell: nav (Today|Pulse|Stocks|Options|
 │   │                     #   advice, paper auto-close on stop/target
 │   ├── portfolio_risk.py # Account-level: total open risk %, sector packs,
 │   │                     #   OK/CAUTION/DANGER verdict; check_new_trade()
+│   ├── correlation.py    # 🧩 Positions vs asli BETS: 60-day return correlation
+│   │                     #   → union-find clusters (ρ≥0.70 = same macro bet).
+│   │                     #   Catches cross-sector co-movement the sector cap
+│   │                     #   misses. READ-ONLY lens → Brain warn directive
 │   └── watchlist_watcher.py# Buy-zone entered / setup broken / ran-away alerts
 │
 ├── execution/

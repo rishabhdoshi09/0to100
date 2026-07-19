@@ -271,10 +271,16 @@ def _render_today_best_setups(limit: int = 5) -> None:
         hc = "🎯 " if r.get("high_conviction") else ""
         conv = r.get("breakout_conviction") or 0
         conv_bit = f" · conviction {conv:.0f}" if conv else ""
-        # EV chip — the number that actually ranks it (measured, not vibes)
+        # EV chip — the number that actually ranks it (measured, not vibes);
+        # confidence = Bayesian trust in the sample (HIGH ≫ LOW)
         if r.get("ev_pct") is not None:
+            _cf = r.get("ev_conf", "")
+            _cf_col = {"HIGH": "#00d4a0", "MEDIUM": "#eab308",
+                       "LOW": "#f59e0b"}.get(_cf, "#8892a4")
             conv_bit += (f" · <b style='color:#00d4a0'>EV {r['ev_pct']:+.1f}%</b>"
-                         f" ({r.get('p_win', 0):.0f}% win, n={r.get('ev_n', 0)})")
+                         f" ({r.get('p_win', 0):.0f}% win, n={r.get('ev_n', 0)}"
+                         + (f", <span style='color:{_cf_col}'>{_cf}</span>"
+                            if _cf else "") + ")")
         why = (r.get("reasons") or [""])[0]
         entry, stop = float(r.get("entry") or 0), float(r.get("stop") or 0)
         target = float(r.get("target") or 0)

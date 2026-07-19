@@ -1323,6 +1323,93 @@ class TestEVEngine:
         assert [r["symbol"] for r in rows] == ["EV", "PTS"]   # measured first
 
 
+class TestBayesianConfidence:
+    """Trust 520 trades @67% more than 52 @68% — shrink small samples."""
+
+    def test_wilson_bound_trusts_large_samples(self):
+        from scan.ev_engine import wilson_lb, confidence_tier
+        small = wilson_lb(0.68, 52)
+        large = wilson_lb(0.67, 520)
+        assert large > small                     # the CTO's exact example
+        assert confidence_tier(0.67, 520) == "HIGH"
+        assert confidence_tier(0.68, 52) == "MEDIUM"
+        assert confidence_tier(0.5, 0) == "LOW"
+        assert wilson_lb(0.9, 0) == 0.0          # degenerate-safe
+
+    def test_ranking_uses_conservative_ev(self):
+        """A lucky thin sample must NOT outrank a deep workhorse."""
+        from scan.ev_engine import ev_rank_key
+        lucky = {"ev_pct": 4.2, "ev_lb_pct": 1.1, "conviction_rank": 200}
+        work = {"ev_pct": 3.5, "ev_lb_pct": 3.1, "conviction_rank": 150}
+        rows = [lucky, work]
+        rows.sort(key=ev_rank_key, reverse=True)
+        assert rows[0] is work                   # shrunk EV decides
+
+    def test_estimate_ev_carries_lb_and_confidence(self, tmp_path, monkeypatch):
+        import core.signal_outcome_tracker as tk
+        monkeypatch.setattr(tk, "_DB_PATH", str(tmp_path / "sig.db"))
+        conn = tk._get_conn()
+        from datetime import datetime, timedelta
+        base = datetime(2026, 1, 1)
+        rows = [("SIG", 6.0, 1)] * 30 + [("SIG", -3.0, 0)] * 20
+        for i, (arche, pct, worked) in enumerate(rows):
+            la = (base + timedelta(hours=i)).isoformat(timespec="seconds")
+            conn.execute(
+                "INSERT INTO signal_log (symbol,logged_at,signal_type,archetype,"
+                "entry_price,stop_price,quality_score,outcome_pct,worked,"
+                "outcome_checked_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
+                (f"S{i}", la, "UNIFIED_BUY", arche, 100.0, 97.0, 70.0, pct,
+                 worked, la))
+        conn.commit(); conn.close()
+        from scan.ev_engine import estimate_ev
+        ev = estimate_ev(["SIG"], 100, 97)
+        assert ev["ev_lb_pct"] < ev["ev_pct"]    # conservative < point estimate
+        assert ev["confidence"] in ("HIGH", "MEDIUM", "LOW")
+
+
+class TestCorrelationEngine:
+    """4 correlated positions = 1 real bet — the risk the sector cap misses."""
+
+    def test_clusters_union_find_transitive(self):
+        from risk.correlation import clusters_from_corr
+        syms = ["HAL", "BEL", "BHEL", "LT", "INFY"]
+        corr = {("BEL", "HAL"): 0.82, ("BHEL", "HAL"): 0.75,
+                ("BHEL", "LT"): 0.71, ("BEL", "INFY"): 0.20}
+        cl = clusters_from_corr(syms, corr)
+        # HAL-BEL-BHEL-LT chain-merge (transitively) into one macro bet
+        assert cl[0] == ["BEL", "BHEL", "HAL", "LT"]
+        assert ["INFY"] in cl and len(cl) == 2
+
+    def test_threshold_respected_and_empty_safe(self):
+        from risk.correlation import clusters_from_corr
+        # below threshold → everyone independent
+        cl = clusters_from_corr(["A", "B"], {("A", "B"): 0.5})
+        assert len(cl) == 2
+        assert clusters_from_corr([], {}) == []
+        # unknown symbols in corr ignored, no KeyError
+        cl2 = clusters_from_corr(["A"], {("X", "Y"): 0.9})
+        assert cl2 == [["A"]]
+
+    def test_brain_warns_on_hidden_concentration(self, monkeypatch):
+        import core.brain as brain
+        monkeypatch.setattr(brain, "_probe_regime", lambda: "CHOPPY")
+        monkeypatch.setattr(brain, "_probe_edge", lambda cap: {
+            "expectancy_r": 0.12, "edge_trend": "stable", "closed": 60})
+        monkeypatch.setattr(brain, "_probe_setups", lambda m: ([], 0.0))
+        monkeypatch.setattr(brain, "_probe_book", lambda: {"verdict": "OK"})
+        monkeypatch.setattr(brain, "_probe_autopilot", lambda m: {})
+        monkeypatch.setattr(brain, "_probe_dead_daemons", lambda: [])
+        monkeypatch.setattr(brain, "_probe_rotation", lambda m: {})
+        monkeypatch.setattr(brain, "_probe_correlation", lambda m: {
+            "n_positions": 4, "n_bets": 1,
+            "clusters": [["BEL", "BHEL", "HAL", "LT"]],
+            "biggest": ["BEL", "BHEL", "HAL", "LT"]})
+        a = brain.assess("IN", 100000.0)
+        warn = [d for d in a["directives"] if "asli bets" in d["text"]]
+        assert warn and warn[0]["severity"] == "warn"
+        assert "BEL/BHEL/HAL/LT" in warn[0]["text"]
+
+
 class TestPortfolioIntel:
     """Capital as a portfolio: every holding competes daily vs best ideas."""
 
