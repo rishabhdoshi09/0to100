@@ -19,13 +19,19 @@ sudo apt-get install -y git python3 python3-venv python3-pip \
     build-essential cmake curl
 
 echo "== [2/6] Swap (2G) — chhote instances OOM na hon =="
+# OpenVZ/LXC container-VPS swap banane nahi dete — wahan fail hona OK hai
+# (4GB RAM ho toh swap optional hai); script rukna nahi chahiye.
 if ! swapon --show | grep -q .; then
-    sudo fallocate -l 2G /swapfile
-    sudo chmod 600 /swapfile
-    sudo mkswap /swapfile
-    sudo swapon /swapfile
-    echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab >/dev/null
-    echo "   swap on."
+    if sudo fallocate -l 2G /swapfile 2>/dev/null \
+        && sudo chmod 600 /swapfile \
+        && sudo mkswap /swapfile >/dev/null \
+        && sudo swapon /swapfile 2>/dev/null; then
+        echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab >/dev/null
+        echo "   swap on."
+    else
+        sudo rm -f /swapfile
+        echo "   ⚠️  swap nahi ban paya (container VPS?) — 4GB RAM pe theek hai, aage badh rahe."
+    fi
 else
     echo "   swap already on — skip."
 fi
