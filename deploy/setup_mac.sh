@@ -13,6 +13,15 @@ set -euo pipefail
 APP_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 PLIST="$HOME/Library/LaunchAgents/com.quantterm.app.plist"
 LABEL="com.quantterm.app"
+# 🍃 Eco mode — business software ke saath share ho raha Mac? Garmi kam:
+#   QT_ECO=1 bash deploy/setup_mac.sh
+# (off-hours scan band, threads aadhe, cadence 30 min — logic same rehti hai)
+ECO="${QT_ECO:-0}"
+ECO_BLOCK=""
+if [ "$ECO" = "1" ]; then
+    ECO_BLOCK='<key>EnvironmentVariables</key><dict><key>QT_ECO</key><string>1</string></dict>'
+    echo "🍃 ECO MODE ON — off-hours scans band, threads clamped."
+fi
 
 echo "== [1/3] Sleep band (sudo maangega) =="
 sudo pmset -a sleep 0 displaysleep 10
@@ -35,6 +44,7 @@ cat > "$PLIST" <<PL
         <string>-lc</string>
         <string>cd "$APP_DIR" &amp;&amp; exec python3 -m streamlit run app.py --server.port 8501 --server.headless true</string>
     </array>
+    $ECO_BLOCK
     <key>RunAtLoad</key><true/>
     <key>KeepAlive</key><true/>
     <key>ThrottleInterval</key><integer>10</integer>

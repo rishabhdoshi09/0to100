@@ -266,7 +266,9 @@ def _scan_once_locked(universe: Optional[list[str]] = None, progress=None) -> No
         if universe is None:
             from data.nse_universe import get_nse_universe
             universe = get_nse_universe()
-        raw = UnifiedScanner(max_workers=8).scan(universe, progress=progress)
+        from core.eco import workers as _eco_workers
+        raw = UnifiedScanner(max_workers=_eco_workers(8)).scan(
+            universe, progress=progress)
         _log_buys_for_tracking(raw)
         serialized = [_serialize(r) for r in raw]
         # Sector heat — packs of 3+ signals in one sector boost each other
@@ -569,7 +571,16 @@ def _worker() -> None:
                 import contextlib
                 _cycle_timer = contextlib.nullcontext()
             with _cycle_timer:
-                _scan_once()
+                # 🍃 Eco: off-hours full-market scan pure heat hai (EOD data
+                # badalta nahi) — shared machine pe skip; housekeeping chalti
+                # rehti hai (briefing, outcomes, backtest sab neeche hain).
+                try:
+                    from core.eco import should_scan_now
+                    _do_scan = should_scan_now(_is_market_hours())
+                except Exception:
+                    _do_scan = True
+                if _do_scan:
+                    _scan_once()
             _maybe_remind_kite_login()
             _maybe_push_brain_briefing()      # Brain verdict leads the morning
             _maybe_push_morning_pulse()
@@ -617,7 +628,12 @@ def _worker() -> None:
                 eod_digest()
             except Exception as exc:
                 log.debug("autopilot_digest_skip", error=str(exc))
-            time.sleep(_MARKET_REFRESH_S if _is_market_hours() else _OFFHOURS_REFRESH_S)
+            try:
+                from core.eco import scan_interval as _eco_interval
+                _mkt_sleep = _eco_interval(_MARKET_REFRESH_S)
+            except Exception:
+                _mkt_sleep = _MARKET_REFRESH_S
+            time.sleep(_mkt_sleep if _is_market_hours() else _OFFHOURS_REFRESH_S)
         else:
             time.sleep(30)   # paused by user — just idle and re-check
 

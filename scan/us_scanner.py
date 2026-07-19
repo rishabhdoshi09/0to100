@@ -113,6 +113,11 @@ def scan_us(max_workers: int = 8, index: str | None = None) -> list[dict]:
         with _lock:
             _total = len(symbols)
             _scope = scope
+        try:
+            from core.eco import workers as _eco_workers
+            max_workers = _eco_workers(max_workers)
+        except Exception:
+            pass
         sc = UnifiedScanner(max_workers=max_workers)
         sc._nifty_ret30 = sp500_return_30d()      # RS benchmark = S&P 500
 
@@ -139,7 +144,12 @@ def scan_us(max_workers: int = 8, index: str | None = None) -> list[dict]:
         chunks = [symbols[i:i + _BATCH] for i in range(0, len(symbols), _BATCH)]
         raw: list = []
         done = 0
-        with ThreadPoolExecutor(max_workers=6) as pool:
+        try:
+            from core.eco import workers as _eco_pool
+            _n_pool = _eco_pool(6)
+        except Exception:
+            _n_pool = 6
+        with ThreadPoolExecutor(max_workers=_n_pool) as pool:
             futs = {pool.submit(_run_batch, c): c for c in chunks}
             for fut in as_completed(futs):
                 raw.extend(fut.result() or [])

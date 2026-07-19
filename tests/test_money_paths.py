@@ -1323,6 +1323,29 @@ class TestEVEngine:
         assert [r["symbol"] for r in rows] == ["EV", "PTS"]   # measured first
 
 
+class TestEcoMode:
+    """Shared-machine thermal relief: less CPU, identical trading logic."""
+
+    def test_defaults_off_full_power(self, monkeypatch):
+        import core.eco as eco
+        monkeypatch.delenv("QT_ECO", raising=False)
+        assert eco.eco_on() is False
+        assert eco.workers(8) == 8                      # untouched
+        assert eco.scan_interval(900) == 900
+        assert eco.should_scan_now(False) is True       # old behaviour
+
+    def test_eco_clamps_and_skips_offhours(self, monkeypatch):
+        import core.eco as eco
+        monkeypatch.setenv("QT_ECO", "1")
+        assert eco.eco_on() is True
+        assert eco.workers(8) == 2 and eco.workers(6) == 2
+        assert eco.workers(1) == 1                      # never raises
+        assert eco.scan_interval(900) == 1800           # 30-min floor
+        assert eco.scan_interval(3600) == 3600          # floor, not cap
+        assert eco.should_scan_now(True) is True        # market open → scan
+        assert eco.should_scan_now(False) is False      # off-hours → thanda
+
+
 class TestDecisionJournal:
     """Evidence infrastructure: every decision — even rejections — becomes a
     resolved prediction, so gates and probabilities get audited."""

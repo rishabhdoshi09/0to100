@@ -76,6 +76,22 @@ bahar se dekhna ho toh Tailscale (free) laga lo.
 - MacBook: charger + dhakkan khula, ya `sudo pmset -a disablesleep 1`
 - Kharcha: ~₹100-150/month bijli. Limitation: bijli/net gaya = system gaya.
 
+### 🍃 Mac garam ho raha hai? (business software saath chal raha?)
+
+Eco mode chalao — **wahi signals, wahi gates, bas thandi machine**:
+```bash
+QT_ECO=1 bash deploy/setup_mac.sh     # service eco mein reinstall
+```
+Eco kya karta hai: **off-hours full-market scan bilkul band** (raat ko
+scan pure heat tha — EOD data badalta hi nahi), scan threads 8→2,
+market-hours cadence 30 min. Sniper (instant breakouts) websocket hai —
+woh waise hi chalta rehta hai. Briefing/outcomes/backtest sab normal.
+
+MacBook **Air** (fanless) + doosra software 24/7 = long-term sahi nahi.
+Sasta permanent fix: **Raspberry Pi 4/5 (₹5-8k one-time, UPI se milta
+hai, 5W, silent)** — usi pe `deploy/setup_server.sh` chala do, Mac
+business ke liye free.
+
 **Baad mein card ke bina VPS chahiye ho toh:** Hostinger VPS (~₹350/mo)
 **UPI accept karta hai** — phir `deploy/setup_server.sh` wahi ek-command
 setup wahan chala dena.
