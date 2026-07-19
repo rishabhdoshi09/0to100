@@ -150,6 +150,25 @@ def regime_calibration(regime: str, min_n: int = _MIN_N) -> dict[str, float]:
     return out
 
 
+def rolling_expectancy(windows: tuple = (50, 100, 250)) -> dict[int, float]:
+    """Edge-decay lens: expectancy over the LAST 50/100/250 outcomes
+    (chronological). A 250-window healthy but 50-window sinking = edge dying
+    NOW — funds kill strategies, retail marries them. Windows without enough
+    data are omitted (no claim)."""
+    rows = _closed_rows()
+    rs: list[float] = []
+    for row in rows:                      # insertion order = logged order
+        r = _row_r(row)
+        if r is not None:
+            rs.append(r)
+    out: dict[int, float] = {}
+    for w in windows:
+        if len(rs) >= w:
+            tail = rs[-w:]
+            out[w] = round(sum(tail) / w, 3)
+    return out
+
+
 def live_calibration(min_n: int = _MIN_N) -> dict[str, float]:
     """{signal: score_multiplier} from live outcomes, gated at min_n.
 

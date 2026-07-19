@@ -526,6 +526,13 @@ def _maybe_update_outcomes() -> None:
         log.info("signal_outcomes_updated")
     except Exception as exc:
         log.debug("outcomes_update_skip", error=str(exc))
+    # Decision journal outcomes too — accepted AND rejected candidates get
+    # resolved, so we later learn from decisions we DIDN'T take.
+    try:
+        from core.decision_journal import update_outcomes as _dec_update
+        _dec_update()
+    except Exception as exc:
+        log.debug("decision_outcomes_skip", error=str(exc))
 
 
 _coach_pushed_week: str = ""

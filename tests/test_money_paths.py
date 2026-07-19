@@ -1323,6 +1323,143 @@ class TestEVEngine:
         assert [r["symbol"] for r in rows] == ["EV", "PTS"]   # measured first
 
 
+class TestDecisionJournal:
+    """Evidence infrastructure: every decision — even rejections — becomes a
+    resolved prediction, so gates and probabilities get audited."""
+
+    def _setup(self, tmp_path, monkeypatch):
+        import core.decision_journal as dj
+        monkeypatch.setattr(dj, "_DB_PATH", str(tmp_path / "dec.db"))
+        return dj
+
+    def test_log_dedupe_and_no_fake_reference(self, tmp_path, monkeypatch):
+        dj = self._setup(tmp_path, monkeypatch)
+        dj.log_decision("HAL", "TAKEN", "", "scanner", 4500, 4300, 80,
+                        ev_pct=3.2, p_win=65.0, confidence="MEDIUM")
+        dj.log_decision("HAL", "TAKEN", "", "scanner", 4500, 4300, 80)
+        dj.log_decision("HAL", "REJECTED", "sector", "scanner", 4500, 4300, 80)
+        dj.log_decision("ZERO", "TAKEN", "", "scanner", 0, 0, 80)   # no price
+        c = dj._conn()
+        n = c.execute("SELECT COUNT(*) FROM decisions").fetchone()[0]
+        c.close()
+        assert n == 2            # dedup per symbol×day×decision; ZERO skipped
+
+    def test_outcomes_and_gate_audit(self, tmp_path, monkeypatch):
+        dj = self._setup(tmp_path, monkeypatch)
+        dj.log_decision("HAL", "TAKEN", "", "scanner", 4500, 4300, 80,
+                        ev_pct=3.2, p_win=65.0)
+        dj.log_decision("X", "REJECTED", "sector strong nahi", "scanner",
+                        500, 480, 70, ev_pct=2.0, p_win=62.0)
+        c = dj._conn()
+        c.execute("UPDATE decisions SET decided_at='2026-07-01T10:00:00'")
+        c.commit(); c.close()
+        monkeypatch.setattr("data.live_quotes.get_live_quotes",
+                            lambda syms: {"HAL": {"price": 4700.0},
+                                          "X": {"price": 490.0}})
+        assert dj.update_outcomes() == 2
+        rep = dj.decision_report(min_n=1)
+        assert rep["taken"]["n"] == 1 and rep["taken"]["win_rate"] == 100.0
+        assert rep["rejected"]["avg_outcome_pct"] == -2.0
+        assert "Gates kaam kar rahe" in rep["verdict"]     # gates earned money
+        assert "sector strong nahi" in rep["by_reason"]
+        cal = dj.calibration_report(min_n=1)
+        scored = [b for b in cal["buckets"] if b["predicted"] is not None]
+        assert scored and scored[0]["n"] == 2              # both predicted 60s
+
+    def test_missing_quote_stays_pending(self, tmp_path, monkeypatch):
+        """No price → no outcome written (no fake data), row stays pending."""
+        dj = self._setup(tmp_path, monkeypatch)
+        dj.log_decision("HAL", "TAKEN", "", "scanner", 4500, 4300, 80)
+        c = dj._conn()
+        c.execute("UPDATE decisions SET decided_at='2026-07-01T10:00:00'")
+        c.commit(); c.close()
+        monkeypatch.setattr("data.live_quotes.get_live_quotes",
+                            lambda syms: {})
+        assert dj.update_outcomes() == 0
+        assert dj.decision_report()["taken"]["n"] == 0     # still unresolved
+
+    def test_autopilot_journals_rejections_with_prediction(self, tmp_path,
+                                                           monkeypatch):
+        """A gate rejection lands in the journal with the EV prediction."""
+        import execution.autopilot as ap
+        import execution.trade_executor as te
+        import scan.sector_heat as sh
+        import core.decision_journal as dj
+        monkeypatch.setattr(dj, "_DB_PATH", str(tmp_path / "dec.db"))
+        monkeypatch.setattr(ap, "_STATE_FILE", tmp_path / "ap.json")
+        monkeypatch.setattr(te, "_DB", tmp_path / "t.db")
+        ap._state = {}
+        monkeypatch.setattr(ap, "_notify", lambda m: None)
+        monkeypatch.setattr(ap, "_brain_posture", lambda: ("NORMAL", ""))
+        monkeypatch.setattr(ap, "_market_regime", lambda: "TRENDING_BULL")
+        monkeypatch.setattr(sh, "sector_performance", lambda min_members=3: [
+            {"sector": "Defence", "chg_1d": 1.5, "chg_5d": 3.0, "members": 4}])
+        ap.set_config(allocation=100000, mode="PAPER")
+        ap.arm()
+        monkeypatch.setattr(ap, "_in_window", lambda now=None: True)
+        # weak sector → rejected, with its prediction journaled
+        ap.consider("X", 500, 480, 80, 0.2, "Cement", "scanner",
+                    ev_pct=2.5, p_win=61.0, ev_conf="MEDIUM")
+        c = dj._conn()
+        row = c.execute("SELECT * FROM decisions").fetchone()
+        c.close()
+        assert row["decision"] == "REJECTED"
+        assert row["reason"] == "sector strong nahi"       # categorised
+        assert row["p_win"] == 61.0 and row["ev_pct"] == 2.5
+
+
+class TestSimLab:
+    """Thousands of futures before one live change — and earned capital."""
+
+    def test_simulation_math_and_risk_tradeoff(self):
+        from core.sim_lab import simulate
+        rs = [2.0] * 40 + [-1.0] * 60                     # +0.2R edge
+        lo = simulate(rs, 0.01, seed=7)
+        hi = simulate(rs, 0.02, seed=7)
+        assert lo["median_growth_pct"] > 0                 # edge compounds
+        assert hi["median_growth_pct"] > lo["median_growth_pct"]
+        assert hi["p95_max_dd_pct"] > lo["p95_max_dd_pct"]  # risk shows up
+        assert hi["prob_dd20_pct"] > lo["prob_dd20_pct"]
+        # deterministic under a seed
+        assert simulate(rs, 0.01, seed=7) == lo
+
+    def test_thin_evidence_refused(self):
+        from core.sim_lab import simulate, compare
+        assert simulate([1.0] * 10, 0.01) is None          # <30 = fiction
+        assert compare([1.0] * 10, 0.01, 0.02) is None
+
+    def test_scaling_advice_thresholds(self):
+        from core.sim_lab import scaling_advice
+        assert scaling_advice(1.9, 4.0, 250)["action"] == "INCREASE"
+        assert scaling_advice(1.1, 8.0, 120)["action"] == "REDUCE"
+        assert scaling_advice(1.5, 6.0, 120)["action"] == "HOLD"
+        # evidence gate: great numbers on a thin sample still HOLD
+        assert scaling_advice(2.5, 1.0, 30)["action"] == "HOLD"
+
+    def test_rolling_expectancy_windows(self, tmp_path, monkeypatch):
+        import core.signal_outcome_tracker as tk
+        monkeypatch.setattr(tk, "_DB_PATH", str(tmp_path / "sig.db"))
+        conn = tk._get_conn()
+        from datetime import datetime, timedelta
+        base = datetime(2026, 1, 1)
+        # first 50 winners (+2R), then 50 losers (-1R): last-50 window sinks
+        rows = [("SIG", 6.0, 1)] * 50 + [("SIG", -3.0, 0)] * 50
+        for i, (arche, pct, worked) in enumerate(rows):
+            la = (base + timedelta(hours=i)).isoformat(timespec="seconds")
+            conn.execute(
+                "INSERT INTO signal_log (symbol,logged_at,signal_type,archetype,"
+                "entry_price,stop_price,quality_score,outcome_pct,worked,"
+                "outcome_checked_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
+                (f"S{i}", la, "UNIFIED_BUY", arche, 100.0, 97.0, 70.0, pct,
+                 worked, la))
+        conn.commit(); conn.close()
+        from scan.live_edge import rolling_expectancy
+        roll = rolling_expectancy()
+        assert roll[50] == -1.0                            # recent window dead
+        assert roll[100] == 0.5                            # lifetime still ok
+        assert 250 not in roll                             # not enough data
+
+
 class TestBayesianConfidence:
     """Trust 520 trades @67% more than 52 @68% — shrink small samples."""
 

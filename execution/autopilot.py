@@ -723,18 +723,38 @@ def _size(entry: float, stop: float, mult: float = 1.0) -> int:
 # ── Entry paths (hooked from scanner + sniper, additive) ─────────────────────
 
 def consider(symbol: str, entry: float, stop: float, score: float,
-             edge, sector: str, source: str) -> bool:
+             edge, sector: str, source: str, ev_pct=None, p_win=None,
+             ev_conf=None) -> bool:
     """Full gate → size → execute path. Returns True if a trade was placed.
 
     Thread-safe: scanner + sniper hooks may call this concurrently; the
     lock guarantees the count-gates see every prior trade before passing.
+    ev_pct/p_win/ev_conf: the prediction held at decision time — journaled
+    with the decision so calibration can later audit our probabilities.
     """
     with _consider_lock:
-        return _consider_locked(symbol, entry, stop, score, edge, sector, source)
+        return _consider_locked(symbol, entry, stop, score, edge, sector,
+                                source, ev_pct, p_win, ev_conf)
 
 
 def _consider_locked(symbol: str, entry: float, stop: float, score: float,
-                     edge, sector: str, source: str) -> bool:
+                     edge, sector: str, source: str, ev_pct=None, p_win=None,
+                     ev_conf=None) -> bool:
+    def _jlog(decision: str, reason: str = "") -> None:
+        # Evidence infrastructure: EVERY decision journaled with its
+        # prediction — even rejections. "not armed" skipped (pure noise).
+        if reason == "not armed":
+            return
+        try:
+            from core.decision_journal import log_decision
+            log_decision(symbol, decision, reason=_reject_category(reason)
+                         if reason else "", source=source,
+                         entry_ref=float(entry or 0), stop_ref=float(stop or 0),
+                         score=float(score or 0), ev_pct=ev_pct, p_win=p_win,
+                         confidence=ev_conf)
+        except Exception:
+            pass
+
     try:
         s = _load()
         # Scan results sirf "pack" (≥3 setups ek sector se) hone par sector
@@ -758,12 +778,14 @@ def _consider_locked(symbol: str, entry: float, stop: float, score: float,
             log.debug("autopilot_reject", symbol=symbol,
                       reason=f"invalid stop {stop} for entry {entry}")
             _note_reject("invalid stop")
+            _jlog("REJECTED", "invalid stop")
             return False
 
         reject = _passes_gates(symbol, score, edge, sector)
         if reject:
             log.debug("autopilot_reject", symbol=symbol, reason=reject)
             _note_reject(reject)
+            _jlog("REJECTED", reject)
             return False
 
         # Gate 12: source's OWN measured record — a feed that has proven
@@ -773,6 +795,7 @@ def _consider_locked(symbol: str, entry: float, stop: float, score: float,
             if paused:
                 _log_activity(f"SKIP {symbol}: {paused}")
                 _note_reject("source paused")
+                _jlog("REJECTED", "source paused")
                 return False
 
         # Gate 13: LIVE price anchor — order, target, sizing sab order ke
@@ -782,6 +805,7 @@ def _consider_locked(symbol: str, entry: float, stop: float, score: float,
         if live_entry is None:
             _log_activity(f"SKIP {symbol}: {why}")
             _note_reject(why or "live quote")
+            _jlog("REJECTED", why or "live quote")
             return False
         entry = live_entry
 
@@ -793,6 +817,7 @@ def _consider_locked(symbol: str, entry: float, stop: float, score: float,
             _log_activity(f"SKIP {symbol}: pool/limits ke andar 1 share bhi "
                           f"nahi aata (entry ₹{entry:,.0f})")
             _note_reject("pool/1-share")
+            _jlog("REJECTED", "pool/1-share")
             return False
 
         # LIVE: broker margin double-check — allocation par bharosa nahi,
@@ -829,6 +854,7 @@ def _consider_locked(symbol: str, entry: float, stop: float, score: float,
         _notify(f"BUY <b>{qty} × {symbol}</b> @ ₹{entry:,.1f} ({s['mode']})\n"
                 f"stop ₹{stop:,.1f} · target ₹{target:,.1f} (+{s['target_pct']}%) "
                 f"· via {source}")
+        _jlog("TAKEN")
         return True
     except Exception as exc:
         log.warning("autopilot_consider_failed", symbol=symbol, error=str(exc))
@@ -856,7 +882,8 @@ def on_setups(results: list[dict]) -> None:
         consider(symbol=r["symbol"], entry=float(r.get("entry") or r.get("price") or 0),
                  stop=float(r.get("stop") or 0), score=float(r.get("score") or 0),
                  edge=r.get("edge_r"), sector=r.get("sector") or "",
-                 source="scanner")
+                 source="scanner", ev_pct=r.get("ev_pct"),
+                 p_win=r.get("p_win"), ev_conf=r.get("ev_conf"))
 
 
 def on_breakout(hit: dict) -> None:

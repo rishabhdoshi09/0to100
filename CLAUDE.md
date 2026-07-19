@@ -98,6 +98,14 @@ app.py                    # Streamlit shell: nav (Today|Pulse|Stocks|Options|
 │   │                     #   per-holding EV, weakest holding, opportunity-cost
 │   │                     #   rotation advice (EV-gap ≥2.5pp after costs).
 │   │                     #   ADVICE-ONLY (never rotates); feeds Brain directives
+│   ├── decision_journal.py# 🗳️ EVERY decision logged (TAKEN + REJECTED) with
+│   │                     #   its prediction (EV/p_win/conf) → outcomes 5d later.
+│   │                     #   decision_report(): kaunse gates EARN vs COST;
+│   │                     #   calibration_report(): "70% bola toh 70% nikla?"
+│   ├── sim_lab.py        # 🧪 Monte Carlo bootstrap of OWN closed-trade Rs —
+│   │                     #   compare risk settings over 500 futures BEFORE the
+│   │                     #   live slider moves; scaling_advice(): capital is
+│   │                     #   EARNED (PF/DD/n thresholds). Advice-only, seeded
 │   ├── signal_outcome_tracker.py # every BUY logged → outcome after 5 days
 │   └── error_guard.py    # page error boundaries + logs/errors.log + config check
 └── tests/                # pytest; test_money_paths.py = 30 money-critical tests

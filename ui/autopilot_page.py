@@ -374,6 +374,9 @@ def _render_india_autopilot() -> None:
     # ── Report Card — autopilot ka apna track record ──────────────────────────
     _render_report_card()
 
+    # ── 🧪 Simulation Lab + capital scaling — change se PEHLE futures dekho ───
+    _render_sim_lab()
+
     # ── Activity log ──────────────────────────────────────────────────────────
     st.markdown("#### 📜 Activity")
     acts = s.get("activity", [])
@@ -494,6 +497,72 @@ def _render_report_card() -> None:
                 f"· {t['qty']} sh ₹{t['entry']:,.1f}→₹{t['exit']:,.1f} · "
                 f"<span style='color:{p_col}'>₹{t['pnl']:+,.0f} "
                 f"({t['r']:+.1f}R)</span></div>", unsafe_allow_html=True)
+
+
+def _render_sim_lab() -> None:
+    """🧪 Monte Carlo pre-flight: risk slider badalne se pehle hazaaron
+    plausible futures + capital-scaling advice — sab apne REAL closed trades
+    ke R-distribution se. Evidence-gated (≥30 closed); advice-only."""
+    try:
+        from execution.autopilot import report_card, get_status
+        from core.sim_lab import compare, scaling_advice, MIN_TRADES
+        rc = report_card()
+        trades = rc.get("trades") or []
+        stats = rc.get("stats") or {}
+        rs = [float(t.get("r") or 0) for t in trades if t.get("r") is not None]
+    except Exception:
+        return
+    with st.expander("🧪 Simulation Lab — parameter badalne se pehle"):
+        if len(rs) < MIN_TRADES:
+            st.caption(f"Monte Carlo ke liye {MIN_TRADES}+ closed trades "
+                       f"chahiye (abhi {len(rs)}). System chalta rahe — Lab "
+                       f"khud khul jayega.")
+            return
+        s = get_status()
+        cur_risk = float(s.get("risk_per_trade_pct", 0.01))
+        alt = st.slider("Compare risk/trade (%)", 0.25, 2.0,
+                        round(min(2.0, max(0.25, cur_risk * 100 * 1.5)), 2),
+                        0.25, key="sim_alt_risk",
+                        help="Current risk vs yeh alternative — same 500 "
+                             "simulated futures, sirf sizing alag")
+        cmp = compare(rs, cur_risk, alt / 100)
+        if cmp:
+            a, b = cmp["a"], cmp["b"]
+            c1, c2 = st.columns(2)
+            for col, lab, d in ((c1, f"Current {cur_risk*100:.2f}%", a),
+                                (c2, f"Alt {alt:.2f}%", b)):
+                col.markdown(
+                    f"<div style='{_CARD};font-size:.78rem;color:#c9d1d9'>"
+                    f"<b style='color:#e2e8f0'>{lab}</b><br>"
+                    f"median growth <b>{d['median_growth_pct']:+.1f}%</b> "
+                    f"(p5 {d['p05_growth_pct']:+.1f} / p95 "
+                    f"{d['p95_growth_pct']:+.1f})<br>"
+                    f"max DD median {d['median_max_dd_pct']:.1f}% · worst-case "
+                    f"(p95) {d['p95_max_dd_pct']:.1f}%<br>"
+                    f"P(loss) {d['prob_loss_pct']:.0f}% · P(DD≥20%) "
+                    f"{d['prob_dd20_pct']:.0f}%</div>", unsafe_allow_html=True)
+            st.caption(f"🎲 {a['n_paths']} paths × {a['horizon']} trades, apne "
+                       f"{a['n_trades_evidence']} real outcomes se bootstrap. "
+                       f"**{cmp['verdict']}**")
+        # capital scaling — earn it, don't wish it
+        try:
+            pool = float(s.get("pool") or s.get("allocation") or 1)
+            dd_pct = (float(stats.get("max_drawdown", 0)) / pool * 100
+                      if pool > 0 else 0.0)
+            adv = scaling_advice(float(stats.get("profit_factor", 0)),
+                                 dd_pct, int(stats.get("n", 0)))
+            _ac = {"INCREASE": "#00d4a0", "REDUCE": "#ff4b4b",
+                   "HOLD": "#8892a4"}[adv["action"]]
+            _chg = (f" {adv['change_pct']:+d}%" if adv["change_pct"] else "")
+            st.markdown(
+                f"<div style='{_CARD};border-left:3px solid {_ac}'>"
+                f"<b style='color:{_ac}'>💰 Capital scaling: {adv['action']}"
+                f"{_chg}</b>"
+                f" <span style='font-size:.8rem;color:#c9d1d9'>— "
+                f"{adv['reason']} (Advice — allocation tum badloge.)</span>"
+                f"</div>", unsafe_allow_html=True)
+        except Exception:
+            pass
 
 
 # ══════════════════════════════════════════════════════════════════════════════

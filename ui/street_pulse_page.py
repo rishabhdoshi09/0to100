@@ -658,6 +658,36 @@ def render_street_pulse() -> None:
                                            f"nahi, full weight.")
                     except Exception:
                         pass
+                    # edge decay: rolling 50/100/250 — mar raha hai ya zinda?
+                    try:
+                        from scan.live_edge import rolling_expectancy
+                        roll = rolling_expectancy()
+                        if roll:
+                            rbits = [f"last {w}: {r:+.2f}R"
+                                     for w, r in sorted(roll.items())]
+                            st.caption("⏳ Edge decay check — "
+                                       + " · ".join(rbits)
+                                       + ". Chhota window doob raha aur bada "
+                                         "theek = edge ABHI mar raha hai.")
+                    except Exception:
+                        pass
+                    # decision journal: rejected vs taken + calibration audit
+                    try:
+                        from core.decision_journal import (decision_report,
+                                                           calibration_report)
+                        dr = decision_report()
+                        if dr.get("verdict"):
+                            st.caption(f"🗳️ Decision audit — {dr['verdict']}")
+                        cal = calibration_report()
+                        _cb = [f"{b['range']}: bola {b['predicted']:.0f}% → "
+                               f"nikla {b['actual']:.0f}% (n={b['n']})"
+                               for b in cal.get("buckets", [])
+                               if b.get("predicted") is not None]
+                        if _cb:
+                            st.caption("🎯 Calibration — " + " · ".join(_cb)
+                                       + f". {cal['verdict']}")
+                    except Exception:
+                        pass
         except Exception:
             pass
     except Exception as _vd_exc:
