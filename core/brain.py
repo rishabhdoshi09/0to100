@@ -44,14 +44,18 @@ def posture_meta(posture: str) -> tuple[str, str]:
 # ── Pure decision core (fully testable, no I/O) ───────────────────────────────
 
 def decide_posture(regime: str, edge_trend: str, expectancy_r: float,
-                   book_verdict: str, closed: int) -> tuple[str, str]:
+                   book_verdict: str, closed: int,
+                   breadth: str = "") -> tuple[str, str]:
     """The whole board → one posture + one-line reason.
 
     Precedence is SURVIVAL-FIRST: an over-risked book stands us aside no matter
     how good the tape looks; a bad tape or rotting edge keeps us defensive; only
-    when tape, edge and book all align do we lean in.
+    when tape, edge and book all align do we lean in. Breadth is DEMOTE-ONLY
+    extra evidence: a NARROW market can hold us back from AGGRESSIVE (index
+    strong par andar se khokla = breakout graveyard), never push us forward.
     """
     reg = (regime or "").upper()
+    br = (breadth or "").upper()
     # 1) Book risk overrides everything — protect capital before opportunity.
     if book_verdict == "DANGER":
         return "STAND_ASIDE", ("Portfolio open-risk DANGER — capital pehle. "
@@ -68,9 +72,15 @@ def decide_posture(regime: str, edge_trend: str, expectancy_r: float,
                "edge negative" if expectancy_r < 0 else "book caution")
         return "DEFENSIVE", (f"{why} — chhota size, sirf A+ setups, "
                              f"stops tight.")
-    # 4) Everything aligned AND enough evidence → lean in.
+    # 4) Everything aligned AND enough evidence → lean in. Breadth veto:
+    # NARROW internals mein lean-in nahi (demote to NORMAL, not DEFENSIVE —
+    # baaki board healthy hai, bas extra size ka license nahi).
     if (reg in _GOOD_REGIMES and edge_trend != "decaying"
             and expectancy_r >= 0.15 and book_verdict == "OK" and closed >= 30):
+        if br == "NARROW":
+            return "NORMAL", ("Tape/edge/book strong PAR market andar se "
+                              "narrow — index ke peechhe kamzori. Normal size, "
+                              "lean-in nahi.")
         return "AGGRESSIVE", ("Tape + edge + book teeno strong — normal-plus "
                               "size, winners ko chalne do.")
     # 5) Otherwise steady state.
@@ -108,6 +118,15 @@ def build_directives(v: dict) -> list[dict]:
     if v.get("expectancy_r", 0) < 0 and v.get("closed", 0) >= 30:
         add("warn", f"⚠️ System expectancy abhi negative "
                     f"({v['expectancy_r']:+.2f}R) — real size mat badhao.")
+    # breadth: index ke peechhe ki kamzori — narrow tape = breakout graveyard
+    if v.get("breadth") == "NARROW":
+        _bl = (v.get("breadth_line")
+               or "Market andar se narrow hai — breakouts ko hawa nahi milegi.")
+        add("warn", f"📊 {_bl}")
+    # options market ka vote — context, order nahi
+    if v.get("options_bias") in ("BULLISH", "BEARISH"):
+        add("info", f"🎯 Options positioning: {v.get('options_note', '')} · "
+                    f"max-pain ₹{v.get('max_pain', 0):,.0f}.")
     # correlation lens: N positions that move together = fewer real bets
     if (v.get("corr_positions", 0) >= 2
             and v.get("corr_bets", 0) < v["corr_positions"]):
@@ -217,6 +236,30 @@ def _probe_rotation(market: str) -> dict:
         return {}
 
 
+def _probe_breadth(market: str) -> dict:
+    """Full-market internals (advance/decline, % above DMAs) — index ke
+    peechhe ki sachchai, apne hi scan cache se muft."""
+    if market == "US":
+        return {}
+    try:
+        from scan.auto_scan import get_breadth
+        return get_breadth() or {}
+    except Exception:
+        return {}
+
+
+def _probe_options(market: str) -> dict:
+    """Index options positioning (PCR / max-pain) — options market ka vote.
+    Off-hours/chain-fail → empty, koi claim nahi."""
+    if market == "US":
+        return {}
+    try:
+        from options.analytics import nifty_options_summary
+        return nifty_options_summary() or {}
+    except Exception:
+        return {}
+
+
 def _probe_correlation(market: str) -> dict:
     """Book through the correlation lens — positions vs real bets."""
     if market == "US":
@@ -253,6 +296,8 @@ def assess(market: str = "IN", capital: float = 100_000.0) -> dict:
     dead = _probe_dead_daemons()
     rot = _probe_rotation(market)
     corr = _probe_correlation(market)
+    breadth = _probe_breadth(market)
+    opts = _probe_options(market)
 
     buys = [r for r in setups if r.get("verdict") in ("STRONG BUY", "BUY")]
     # EV-first cross-sectional ranking (north star): setups with a measured
@@ -273,7 +318,8 @@ def assess(market: str = "IN", capital: float = 100_000.0) -> dict:
     book_verdict = book.get("verdict", "OK")
 
     posture, reason = decide_posture(regime, edge_trend, expectancy_r,
-                                     book_verdict, closed)
+                                     book_verdict, closed,
+                                     breadth=breadth.get("verdict", ""))
 
     vitals = {
         "market": market, "cur": cur,
@@ -304,6 +350,12 @@ def assess(market: str = "IN", capital: float = 100_000.0) -> dict:
         "corr_positions": corr.get("n_positions", 0),
         "corr_bets": corr.get("n_bets", 0),
         "corr_biggest": corr.get("biggest"),
+        "breadth": breadth.get("verdict", ""),
+        "breadth_line": breadth.get("line", ""),
+        "pct_above_50": breadth.get("pct_above_50", 0.0),
+        "options_bias": opts.get("bias", ""),
+        "options_note": opts.get("note", ""),
+        "max_pain": opts.get("max_pain", 0.0),
         "posture": posture,
     }
     directives = build_directives(vitals)

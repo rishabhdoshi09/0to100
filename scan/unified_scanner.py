@@ -265,6 +265,8 @@ class StockSignal:
     breakout_grade: str = ""               # A | B | "" — confirmed-breakout quality
     breakout_conviction: float = 0.0       # 0-100 — force behind the break
     avg_vol20: float = 0.0                  # 20-day avg volume — sniper vol pacing
+    above_sma50: bool = False              # trend flags — breadth ka raw data
+    above_sma200: bool = False
 
     @property
     def categories(self) -> set[str]:
@@ -578,7 +580,9 @@ class UnifiedScanner:
         # weight (min 1.0), so it can only add caution, never chase.
         base = sum(SIGNAL_META[s][2] * self._calib.get(s, 1.0)
                    * min(1.0, self._regime_calib.get(s, 1.0)) for s in signals)
-        trend_bonus = 10 if (len(close) >= 200 and price > close[-200:].mean()) else 0
+        _above50 = price > sma50
+        _above200 = len(close) >= 200 and price > close[-200:].mean()
+        trend_bonus = 10 if _above200 else 0
         score = min(100.0, base + trend_bonus + mom_score * 0.2)
 
         verdict = "BUY" if (score >= 55 and len(signals) >= 2) or any(
@@ -609,6 +613,7 @@ class UnifiedScanner:
             breakout_grade=breakout_grade,
             breakout_conviction=breakout_conv,
             avg_vol20=round(avg_vol20, 0),
+            above_sma50=bool(_above50), above_sma200=bool(_above200),
         )
 
 

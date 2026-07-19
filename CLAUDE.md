@@ -45,6 +45,9 @@ app.py                    # Streamlit shell: nav (Today|Pulse|Stocks|Options|
 │   │                     #   samples trusted, small shrunk) + HIGH/MED/LOW
 │   │                     #   confidence tier; conviction fallback for thin data
 │   ├── conviction.py     # Top-40 enrichment: news buzz + earnings + verdicts
+│   ├── breadth.py        # 📊 Market breadth from the FULL bulk cache (zero
+│   │                     #   fetch): adv/decl, % above 50/200-DMA → HEALTHY/
+│   │                     #   MIXED/NARROW. NARROW = Brain ka lean-in veto
 │   ├── sector_heat.py    # Sector map (parsed from nse_universe groups),
 │   │                     #   pack-boost + sector_performance()
 │   └── breakout_sniper.py# Kite WebSocket ticks → instant pivot-break alerts

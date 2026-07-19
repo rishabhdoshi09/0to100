@@ -176,12 +176,19 @@ def _render_brain(market: str = "IN") -> None:
         ap_bit += f" · {v.get('trades_today', 0)} trades"
         if day is not None:
             ap_bit += f" · {cur}{day:+,.0f}"
+    _br = v.get("breadth", "")
+    _br_col = {"HEALTHY": "#00d4a0", "MIXED": "#eab308",
+               "NARROW": "#ff4b4b"}.get(_br, "#8892a4")
+    _br_bit = (f" · breadth <b style='color:{_br_col}'>{_br}</b> "
+               f"({v.get('pct_above_50', 0):.0f}%>50DMA)" if _br else "")
+    _op = v.get("options_bias", "")
+    _op_bit = f" · options {_op}" if _op and _op != "NEUTRAL" else ""
     st.markdown(
         f"<div style='{_CARD};padding:8px 14px;font-size:.76rem;color:#94a3b8;"
         f"font-family:JetBrains Mono,monospace'>"
         f"tape <b style='color:#e2e8f0'>{reg}</b> · edge "
-        f"<b style='color:#e2e8f0'>{v.get('expectancy_r', 0):+.2f}R</b> {_tr} · "
-        f"DD {v.get('drawdown_pct', 0):.0f}% · setups "
+        f"<b style='color:#e2e8f0'>{v.get('expectancy_r', 0):+.2f}R</b> {_tr}"
+        f"{_br_bit}{_op_bit} · DD {v.get('drawdown_pct', 0):.0f}% · setups "
         f"<b style='color:#e2e8f0'>{v.get('n_buys', 0)}</b> "
         f"({v.get('n_high_conviction', 0)} 🎯) · book "
         f"<b style='color:#e2e8f0'>{v.get('book_verdict', 'OK')}</b> "

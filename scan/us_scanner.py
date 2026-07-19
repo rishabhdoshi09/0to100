@@ -45,6 +45,8 @@ def _serialize(r) -> dict:
         "pivot_distance_pct": getattr(r, "pivot_distance_pct", 0.0),
         "breakout_grade": getattr(r, "breakout_grade", ""),
         "breakout_conviction": getattr(r, "breakout_conviction", 0.0),
+        "above_sma50": bool(getattr(r, "above_sma50", False)),
+        "above_sma200": bool(getattr(r, "above_sma200", False)),
     }
 
 

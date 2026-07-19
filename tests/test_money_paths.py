@@ -1323,6 +1323,73 @@ class TestEVEngine:
         assert [r["symbol"] for r in rows] == ["EV", "PTS"]   # measured first
 
 
+class TestBreadth:
+    """Data is gold: full-market internals from data we already compute —
+    the truth BEHIND the index, at zero extra fetch."""
+
+    def _rows(self, up, down, up50=None):
+        up50 = up if up50 is None else up50
+        rows = []
+        for i in range(up):
+            rows.append({"change_pct": 1.0, "above_sma50": i < up50,
+                         "above_sma200": True})
+        rows += [{"change_pct": -0.8, "above_sma50": False,
+                  "above_sma200": False}] * down
+        return rows
+
+    def test_verdicts_and_math(self):
+        from scan.breadth import breadth_from_results
+        b = breadth_from_results(self._rows(250, 150))
+        assert b["verdict"] == "HEALTHY"
+        assert b["advancers"] == 250 and b["decliners"] == 150
+        assert b["adv_ratio"] == round(250 / 150, 2)
+        assert b["pct_above_50"] == round(250 / 400 * 100, 1)
+        assert breadth_from_results(self._rows(100, 300))["verdict"] == "NARROW"
+        # index-strong-but-hollow: advancers OK par 50-DMA ke neeche sab
+        hollow = breadth_from_results(self._rows(250, 150, up50=50))
+        assert hollow["verdict"] == "NARROW"           # p50 ~12% → kamzor
+
+    def test_thin_sample_no_claim(self):
+        from scan.breadth import breadth_from_results
+        b = breadth_from_results(self._rows(100, 50))   # n=150 < 300
+        assert b["verdict"] == "" and b["line"] == ""
+
+    def test_posture_breadth_veto_demote_only(self):
+        """NARROW breadth blocks AGGRESSIVE (→NORMAL); it never pushes a
+        weak board up, and old callers without breadth are unchanged."""
+        from core.brain import decide_posture as d
+        aligned = ("TRENDING_BULL", "improving", 0.3, "OK", 50)
+        assert d(*aligned, breadth="NARROW")[0] == "NORMAL"
+        assert d(*aligned, breadth="HEALTHY")[0] == "AGGRESSIVE"
+        assert d(*aligned)[0] == "AGGRESSIVE"          # backward compatible
+        # breadth can't rescue a defensive board (demote-only)
+        assert d("DISTRIBUTION", "stable", 0.1, "OK", 50,
+                 breadth="HEALTHY")[0] == "DEFENSIVE"
+
+    def test_brain_carries_breadth_and_options(self, monkeypatch):
+        import core.brain as brain
+        monkeypatch.setattr(brain, "_probe_regime", lambda: "TRENDING_BULL")
+        monkeypatch.setattr(brain, "_probe_edge", lambda cap: {
+            "expectancy_r": 0.3, "edge_trend": "improving", "closed": 60})
+        monkeypatch.setattr(brain, "_probe_setups", lambda m: ([], 0.0))
+        monkeypatch.setattr(brain, "_probe_book", lambda: {"verdict": "OK"})
+        monkeypatch.setattr(brain, "_probe_autopilot", lambda m: {})
+        monkeypatch.setattr(brain, "_probe_dead_daemons", lambda: [])
+        monkeypatch.setattr(brain, "_probe_rotation", lambda m: {})
+        monkeypatch.setattr(brain, "_probe_correlation", lambda m: {})
+        monkeypatch.setattr(brain, "_probe_breadth", lambda m: {
+            "verdict": "NARROW", "line": "sirf 30% above 50-DMA",
+            "pct_above_50": 30.0})
+        monkeypatch.setattr(brain, "_probe_options", lambda m: {
+            "bias": "BEARISH", "note": "PCR 0.65 — call writers haavi",
+            "max_pain": 24300.0})
+        a = brain.assess("IN", 100000.0)
+        assert a["posture"] == "NORMAL"                # breadth veto on lean-in
+        assert a["vitals"]["breadth"] == "NARROW"
+        assert any("📊" in x["text"] for x in a["directives"])
+        assert any("Options positioning" in x["text"] for x in a["directives"])
+
+
 class TestMarketClock:
     """Exchange time is truth: NSE gates must be IST-explicit so a UTC
     server can never shift market hours / daily limits by 5.5 hours."""

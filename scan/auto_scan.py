@@ -79,6 +79,8 @@ def _serialize(r) -> dict:
         "breakout_grade": getattr(r, "breakout_grade", ""),
         "breakout_conviction": getattr(r, "breakout_conviction", 0.0),
         "avg_vol20": getattr(r, "avg_vol20", 0.0),
+        "above_sma50": bool(getattr(r, "above_sma50", False)),
+        "above_sma200": bool(getattr(r, "above_sma200", False)),
     }
 
 
@@ -357,6 +359,17 @@ def _scan_once_locked(universe: Optional[list[str]] = None, progress=None) -> No
             tag_ev(serialized)
         except Exception as exc:
             log.debug("ev_tag_skip", error=str(exc))
+        # 📊 Breadth — poore bulk cache se (data is gold: already computed).
+        # Index ke peechhe ki sachchai — Brain iska evidence stream padhta hai.
+        try:
+            from scan.breadth import breadth_from_cache
+            global _breadth
+            _breadth = breadth_from_cache()
+            if _breadth.get("verdict"):
+                log.info("breadth", verdict=_breadth["verdict"],
+                         n=_breadth["n"], adv_ratio=_breadth["adv_ratio"])
+        except Exception as exc:
+            log.debug("breadth_skip", error=str(exc))
         # Proactive delivery — user ko dhundhna na pade, setups khud pahunchein
         _push_new_setups(serialized[:15])
         # 🤖 Autopilot hook — same signals, alert logic untouched
@@ -673,3 +686,12 @@ def get_results() -> tuple[list[dict], int, float, str]:
     """Returns (results, universe_size, last_scan_unix_ts, status)."""
     with _lock:
         return list(_results), _scanned_count, _last_scan_ts, _status
+
+
+_breadth: dict = {}
+
+
+def get_breadth() -> dict:
+    """Latest full-market breadth (computed once per scan, zero fetch)."""
+    with _lock:
+        return dict(_breadth)
