@@ -1,0 +1,21 @@
+# QuantTerm systemd unit — crash ho toh 10s mein khud restart.
+# setup_server.sh isse /etc/systemd/system/quantterm.service pe install
+# karta hai (paths/user apne aap bhar ke). Manual install:
+#   sudo cp deploy/quantterm.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now quantterm
+[Unit]
+Description=QuantTerm Trading Terminal
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=ubuntu
+WorkingDirectory=/home/ubuntu/0to100
+ExecStart=/home/ubuntu/0to100/venv/bin/streamlit run app.py --server.port 8501 --server.address 0.0.0.0 --server.headless true
+Restart=always
+RestartSec=10
+# Streamlit + daemons ko thoda saans — OOM se pehle logs mil jayein
+OOMScoreAdjust=-100
+
+[Install]
+WantedBy=multi-user.target

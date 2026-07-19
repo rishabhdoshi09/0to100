@@ -11,6 +11,11 @@ chahiye. Do raste:
 Koi bhi 2GB-RAM Ubuntu VPS chalega (Hetzner/DigitalOcean/Oracle
 free-tier bhi).
 
+> **Oracle Always Free (₹0) chuna hai?** Poora step-by-step —
+> account → Ampere A1 VM → ek-command setup script → Tailscale —
+> **[docs/ORACLE_SETUP.md](ORACLE_SETUP.md)** mein hai.
+> Server-side sab kuch `deploy/setup_server.sh` automate karta hai.
+
 ### 1. Server taiyaar karo
 ```bash
 ssh root@YOUR_SERVER_IP
