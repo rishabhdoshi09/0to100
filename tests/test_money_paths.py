@@ -1228,9 +1228,15 @@ class TestBrain:
         monkeypatch.setattr(brain, "_probe_autopilot", lambda m: {
             "armed": True, "trades_today": 2, "day_pnl": 450.0})
         monkeypatch.setattr(brain, "_probe_dead_daemons", lambda: [])
+        monkeypatch.setattr(brain, "_probe_breadth", lambda m: {
+            "verdict": "HEALTHY", "pct_above_50": 62.0, "line": "sehatmand"})
+        monkeypatch.setattr(brain, "_probe_options", lambda m: {
+            "bias": "BULLISH", "note": "PCR 1.4", "max_pain": 24400.0})
         msg = brain.briefing_telegram("IN")
         assert "QuantTerm Brain" in msg and "GREEN LIGHT" in msg
         assert "TATA" in msg and "TRENDING_BULL" in msg
+        assert "HEALTHY" in msg and "62%>50DMA" in msg     # breadth on the phone
+        assert "BULLISH" in msg                            # options vote on the phone
         assert "read-only" in msg                          # never implies it trades
 
     def test_briefing_pusher_window_dedupe_weekend(self, monkeypatch):

@@ -115,7 +115,7 @@ app.py                    # Streamlit shell: nav (Today|Pulse|Stocks|Options|
 │   │                     #   server pe bhi gates kabhi shift nahi hote
 │   └── error_guard.py    # page error boundaries + logs/errors.log + config check
 │                         #   (+ IST-clock check + build version)
-└── tests/                # pytest; test_money_paths.py = 30 money-critical tests
+└── tests/                # pytest; test_money_paths.py = 180+ money-critical tests
 ```
 
 ## Key Invariants (violate these and lose money)

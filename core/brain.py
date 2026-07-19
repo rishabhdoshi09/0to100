@@ -373,6 +373,8 @@ def briefing_telegram(market: str = "IN", capital: float = 100_000.0) -> str:
     one message that lets the user skip opening the app: posture, why, vitals,
     and the prioritised to-do — the whole board in a phone-sized read."""
     from datetime import datetime
+
+    from core.market_clock import IST
     a = assess(market=market, capital=capital)
     v = a["vitals"]
     _, label = posture_meta(a["posture"])
@@ -382,12 +384,17 @@ def briefing_telegram(market: str = "IN", capital: float = 100_000.0) -> str:
     ap_bit = "🤖 ARMED" if v.get("autopilot_armed") else "🤖 off"
     day = v.get("day_pnl")
     day_bit = f" ({cur}{day:+,.0f})" if day is not None else ""
+    _br = v.get("breadth", "")
+    br_bit = (f" · breadth <b>{_br}</b> ({v.get('pct_above_50', 0):.0f}%>50DMA)"
+              if _br else "")
+    _op = v.get("options_bias", "")
+    op_bit = f" · options <b>{_op}</b>" if _op and _op != "NEUTRAL" else ""
     lines = [
-        f"🧠 <b>QuantTerm Brain</b> · {datetime.now().strftime('%d %b')}",
+        f"🧠 <b>QuantTerm Brain</b> · {datetime.now(IST).strftime('%d %b')}",
         f"<b>{label}</b>",
         a["posture_reason"], "",
         (f"tape <b>{v.get('regime', '?')}</b> · edge "
-         f"<b>{v.get('expectancy_r', 0):+.2f}R</b> {_tr} · book "
+         f"<b>{v.get('expectancy_r', 0):+.2f}R</b> {_tr}{br_bit}{op_bit} · book "
          f"<b>{v.get('book_verdict', 'OK')}</b> ({v.get('open_risk_pct', 0):.1f}%) "
          f"· setups <b>{v.get('n_buys', 0)}</b> ({v.get('n_high_conviction', 0)} 🎯) "
          f"· {ap_bit}{day_bit}"), "",
