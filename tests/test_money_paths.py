@@ -1418,6 +1418,43 @@ class TestProfitBooking:
         # LIVE kabhi auto-close nahi hota
         assert te.recent_trades(1)[0]["status"] == "PLACED"
 
+    def test_fast_book_stop_geometry(self, tmp_path, monkeypatch):
+        """Speed lever is GEOMETRY, not risk: confirmed A/B break + booking
+        on → tight structural stop + bounded cap-relax → 2× qty, needed
+        move halves-plus, and rupee-risk actually FALLS (tight stop)."""
+        ta = TestAutopilot()
+        ap, te = ta._setup(tmp_path, monkeypatch)
+        ap.set_config(max_per_sector=5)
+        ap.arm()
+        monkeypatch.setattr(ap, "_in_window", lambda now=None: True)
+        # booking OFF — old wide 2×ATR stop, normal cap
+        ap.consider("HAL", 1000, 960, 80, 0.2, "Defence", "t", grade="A")
+        t1 = te.recent_trades(1)[0]
+        # booking ON + confirmed grade — tight stop, relaxed (bounded) cap
+        ap.set_config(profit_book_rupees=1500.0)
+        ap.consider("BEL", 1000, 960, 80, 0.2, "Defence", "t", grade="A")
+        t2 = te.recent_trades(1)[0]
+        assert t2["stop_price"] > t1["stop_price"]          # tightened
+        assert t2["qty"] > t1["qty"]                        # bigger qty
+        mv1 = 1500 / (t1["qty"] * 1000); mv2 = 1500 / (t2["qty"] * 1000)
+        assert mv2 < mv1 / 1.8                              # ≥1.8× faster
+        # rupee risk still inside the 1%-rule budget (tight stop pays for qty)
+        assert (1000 - t2["stop_price"]) * t2["qty"] <= 100000 * 0.015 * 1.51
+        # unconfirmed setup: wide stop + normal cap — discipline unchanged
+        ap.consider("BHEL", 1000, 960, 80, 0.2, "Defence", "t")
+        t3 = te.recent_trades(1)[0]
+        assert t3["stop_price"] == 960.0 and t3["qty"] == t1["qty"]
+
+    def test_fast_book_floor_never_overtightens(self, tmp_path, monkeypatch):
+        """Already-tight stop (< 0.8% floor) is kept — noise-death guard."""
+        ta = TestAutopilot()
+        ap, te = ta._setup(tmp_path, monkeypatch)
+        ap.arm()
+        monkeypatch.setattr(ap, "_in_window", lambda now=None: True)
+        ap.set_config(profit_book_rupees=1500.0)
+        ap.consider("HAL", 100, 99.5, 80, 0.2, "Defence", "t", grade="A")
+        assert te.recent_trades(1)[0]["stop_price"] == 99.5
+
     def test_high_confidence_ev_multiplier(self):
         from execution.autopilot import _conviction_multiplier as m
         assert m(80, 0.25) == 1.5                    # old behaviour unchanged

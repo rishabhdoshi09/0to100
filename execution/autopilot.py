@@ -728,15 +728,26 @@ def _conviction_multiplier(score: float, edge, ev_conf=None) -> float:
     return min(2.0 if ev_conf == "HIGH" else 1.5, max(0.5, m))
 
 
-def _size(entry: float, stop: float, mult: float = 1.0) -> int:
+def _size(entry: float, stop: float, mult: float = 1.0,
+          cap_mult: float = 1.0) -> int:
     """Qty from 1%-of-pool risk (× conviction multiplier), capped by
-    per-trade % and available cash — the caps always win over conviction."""
+    per-trade % and available cash — the caps always win over conviction.
+
+    cap_mult > 1 sirf FAST-BOOK confirmed entries ke liye: tight structural
+    stop ke saath rupee-risk waise hi 1% budget mein bandha hai, par 20%
+    concentration cap ₹-booking ki speed ko clip kar deta tha. Relax bounded
+    hai — user cap × cap_mult, HARD ceiling 40% of pool — aur exit exchange-
+    side GTT + 60s monitor pe hai (exposure minutes-hours, overnight swing
+    nahi)."""
     st = get_status()
     pool, available = st["pool"], st["available"]
     if pool <= 0 or available <= 0 or entry <= stop or entry <= 0:
         return 0
     risk_qty = int((pool * _load()["risk_per_trade_pct"] * mult) / (entry - stop))
-    cap_qty = int((pool * _load()["per_trade_cap_pct"]) / entry)
+    cap_pct = _load()["per_trade_cap_pct"]
+    if cap_mult > 1.0:
+        cap_pct = min(0.40, cap_pct * cap_mult)
+    cap_qty = int((pool * cap_pct) / entry)
     avail_qty = int(available / entry)
     return max(0, min(risk_qty, cap_qty, avail_qty))
 
@@ -745,7 +756,7 @@ def _size(entry: float, stop: float, mult: float = 1.0) -> int:
 
 def consider(symbol: str, entry: float, stop: float, score: float,
              edge, sector: str, source: str, ev_pct=None, p_win=None,
-             ev_conf=None) -> bool:
+             ev_conf=None, grade: str = "") -> bool:
     """Full gate → size → execute path. Returns True if a trade was placed.
 
     Thread-safe: scanner + sniper hooks may call this concurrently; the
@@ -755,12 +766,12 @@ def consider(symbol: str, entry: float, stop: float, score: float,
     """
     with _consider_lock:
         return _consider_locked(symbol, entry, stop, score, edge, sector,
-                                source, ev_pct, p_win, ev_conf)
+                                source, ev_pct, p_win, ev_conf, grade)
 
 
 def _consider_locked(symbol: str, entry: float, stop: float, score: float,
                      edge, sector: str, source: str, ev_pct=None, p_win=None,
-                     ev_conf=None) -> bool:
+                     ev_conf=None, grade: str = "") -> bool:
     def _jlog(decision: str, reason: str = "") -> None:
         # Evidence infrastructure: EVERY decision journaled with its
         # prediction — even rejections. "not armed" skipped (pure noise).
@@ -830,10 +841,27 @@ def _consider_locked(symbol: str, entry: float, stop: float, score: float,
             return False
         entry = live_entry
 
+        # ⚡ Fast-book stop GEOMETRY — ₹-booking ka speed lever, risk nahi:
+        # needed-move% = (book ÷ risk-budget) × stop-width%. Scanner ka 2×ATR
+        # swing-stop wide hai → chhoti qty → bada move chahiye (slow). Ek
+        # CONFIRMED A/B break (ya sniper confirm) ka structure pivot ke paas
+        # tight stop deta hai → SAME rupee risk pe ~2.5× qty → ₹1,500 ke
+        # liye ~2.5× chhota move. Floor 0.8% (tick-noise se neeche kabhi
+        # nahi), aur original se LOOSE kabhi nahi. Unconfirmed setups apna
+        # wide swing-stop rakhte hain — structure nahi toh tightening nahi.
+        _fast_book = False
+        if (float(s.get("profit_book_rupees") or 0) > 0
+                and (grade in ("A", "B") or source == "sniper")):
+            atr_proxy = (entry - stop) / 2.0          # scanner stop = 2×ATR
+            tight = entry - max(0.75 * atr_proxy, entry * 0.008)
+            if tight > stop:
+                stop = round(tight, 1)
+                _fast_book = True
+
         target = round(entry * (1 + s["target_pct"] / 100), 1)
         mult = (_conviction_multiplier(score, edge, ev_conf)
                 if s.get("conviction_sizing", True) else 1.0)
-        qty = _size(entry, stop, mult)
+        qty = _size(entry, stop, mult, cap_mult=2.0 if _fast_book else 1.0)
         if qty < 1:
             _log_activity(f"SKIP {symbol}: pool/limits ke andar 1 share bhi "
                           f"nahi aata (entry ₹{entry:,.0f})")
@@ -869,9 +897,15 @@ def _consider_locked(symbol: str, entry: float, stop: float, score: float,
             s["traded_symbols"] = {
                 today: s["traded_symbols"].get(today, []) + [symbol]}
         _save()
+        _book_amt = float(s.get("profit_book_rupees") or 0)
+        _book_bit = ""
+        if _book_amt > 0 and qty > 0:
+            _mv = _book_amt / (qty * entry) * 100
+            _book_bit = f" [₹{_book_amt:,.0f} book @ +{_mv:.1f}%]"
         _log_activity(f"BUY {qty}×{symbol} @ ₹{entry:,.1f} "
                       f"(stop ₹{stop:,.1f} / target ₹{target:,.1f}) "
-                      f"[{source}] [{s['mode']}] [conviction {mult:.2f}×]")
+                      f"[{source}] [{s['mode']}] [conviction {mult:.2f}×]"
+                      f"{_book_bit}")
         _notify(f"BUY <b>{qty} × {symbol}</b> @ ₹{entry:,.1f} ({s['mode']})\n"
                 f"stop ₹{stop:,.1f} · target ₹{target:,.1f} (+{s['target_pct']}%) "
                 f"· via {source}")
@@ -904,7 +938,8 @@ def on_setups(results: list[dict]) -> None:
                  stop=float(r.get("stop") or 0), score=float(r.get("score") or 0),
                  edge=r.get("edge_r"), sector=r.get("sector") or "",
                  source="scanner", ev_pct=r.get("ev_pct"),
-                 p_win=r.get("p_win"), ev_conf=r.get("ev_conf"))
+                 p_win=r.get("p_win"), ev_conf=r.get("ev_conf"),
+                 grade=str(r.get("breakout_grade") or ""))
 
 
 def on_breakout(hit: dict) -> None:
