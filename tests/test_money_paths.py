@@ -569,6 +569,9 @@ class TestAutopilot:
         # Brain gate is real + on by default; stub the posture so the money-path
         # tests stay fast + deterministic (its own test drives it explicitly).
         monkeypatch.setattr(ap, "_brain_posture", lambda: ("NORMAL", ""))
+        # fast-exit monitor spawns a real daemon thread on arm() — tests must
+        # stay network-free/deterministic; its own test drives _book_tick.
+        monkeypatch.setattr(ap, "start_book_monitor", lambda: None)
         # tests signal price ko hi live maanein — real anchor apne dedicated
         # tests mein alag se verify hota hai
         self._real_anchor = ap._anchor_live
@@ -1423,6 +1426,70 @@ class TestProfitBooking:
         assert m(80, 0.25, "MEDIUM") == 1.5          # only HIGH stretches
 
 
+class TestFastExit:
+    """⚡ Booking/exits must not wait for the 15-min scan cycle."""
+
+    def test_tick_matrix(self, tmp_path, monkeypatch):
+        import execution.autopilot as ap
+        monkeypatch.setattr(ap, "_STATE_FILE", tmp_path / "ap.json")
+        ap._state = {}
+        monkeypatch.setattr(ap, "_notify", lambda m: None)
+        monkeypatch.setattr(ap, "start_book_monitor", lambda: None)
+        calls = {"book": 0, "review": 0}
+        monkeypatch.setattr(ap, "_profit_book",
+                            lambda: calls.__setitem__("book", calls["book"] + 1))
+        monkeypatch.setattr("risk.position_manager.review_positions",
+                            lambda: calls.__setitem__("review",
+                                                      calls["review"] + 1))
+        monkeypatch.setattr(ap, "_market_open_ist", lambda: True)
+        ap.set_config(allocation=100000, mode="PAPER",
+                      profit_book_rupees=1500.0)
+        # not armed → idle, koi action nahi
+        assert ap._book_tick() == 60 and calls == {"book": 0, "review": 0}
+        ap.arm()
+        # armed + market open → fast paper exits + booking dono
+        ap._book_tick()
+        assert calls == {"book": 1, "review": 1}
+        # booking off → exits phir bhi fast (review chalta hai)
+        ap.set_config(profit_book_rupees=0.0)
+        ap._book_tick()
+        assert calls == {"book": 1, "review": 2}
+        # market closed → kuch nahi
+        monkeypatch.setattr(ap, "_market_open_ist", lambda: False)
+        ap._book_tick()
+        assert calls == {"book": 1, "review": 2}
+
+    def test_market_open_ist_window(self, monkeypatch):
+        import execution.autopilot as ap
+        import datetime as _dt
+        from core.market_clock import IST
+
+        def _fix(y, mo, d, h, mi):
+            class _DT(_dt.datetime):
+                @classmethod
+                def now(cls, tz=None):
+                    return _dt.datetime(y, mo, d, h, mi, tzinfo=IST)
+            monkeypatch.setattr(ap, "datetime", _DT)
+
+        _fix(2026, 7, 14, 10, 0)                    # Tue 10:00 IST
+        assert ap._market_open_ist() is True
+        _fix(2026, 7, 14, 16, 0)                    # post-close
+        assert ap._market_open_ist() is False
+        _fix(2026, 7, 18, 10, 0)                    # Saturday
+        assert ap._market_open_ist() is False
+
+    def test_aggressive_preset_matches_goal(self, tmp_path, monkeypatch):
+        """Goal: 5-10 trades/day — Aggressive preset ka ceiling ab 10."""
+        import execution.autopilot as ap
+        monkeypatch.setattr(ap, "_STATE_FILE", tmp_path / "ap.json")
+        ap._state = {}
+        monkeypatch.setattr(ap, "_notify", lambda m: None)
+        ap.apply_preset("Aggressive")
+        s = ap.get_status()
+        assert s["max_trades_per_day"] == 10
+        assert s["max_open_positions"] == 5
+
+
 class TestBreadth:
     """Data is gold: full-market internals from data we already compute —
     the truth BEHIND the index, at zero extra fetch."""
@@ -1638,6 +1705,7 @@ class TestDecisionJournal:
         monkeypatch.setattr(sh, "sector_performance", lambda min_members=3: [
             {"sector": "Defence", "chg_1d": 1.5, "chg_5d": 3.0, "members": 4}])
         ap.set_config(allocation=100000, mode="PAPER")
+        monkeypatch.setattr(ap, "start_book_monitor", lambda: None)
         ap.arm()
         monkeypatch.setattr(ap, "_in_window", lambda now=None: True)
         # weak sector → rejected, with its prediction journaled
@@ -2192,6 +2260,7 @@ class TestConvictionTier:
         ap._state = {}
         ap.set_config(allocation=100000, mode="PAPER")
         monkeypatch.setattr(ap, "_notify", lambda m: None)
+        monkeypatch.setattr(ap, "start_book_monitor", lambda: None)
         ap.arm()
         taken = []
         monkeypatch.setattr(

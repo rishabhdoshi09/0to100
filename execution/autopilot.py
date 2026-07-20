@@ -280,7 +280,7 @@ _PRESETS = {
         "min_score": 60.0, "max_trades_per_day": 4, "max_open_positions": 3,
         "max_per_sector": 2, "sector_top_n": 3, "max_chase_pct": 1.0},
     "Aggressive": {            # more shots — wider net, still gated
-        "min_score": 52.0, "max_trades_per_day": 8, "max_open_positions": 5,
+        "min_score": 52.0, "max_trades_per_day": 10, "max_open_positions": 5,
         "max_per_sector": 3, "sector_top_n": 5, "max_chase_pct": 2.0},
 }
 
@@ -338,6 +338,10 @@ def arm(confirm_phrase: str = "") -> tuple[bool, str]:
             f"(reserve {s['cash_reserve_pct']*100:.0f}% untouched)\n"
             f"Entries {s['start_time']}–{s['end_time']} · target +{s['target_pct']}% · "
             f"max {s['max_trades_per_day']} trades/day")
+    try:
+        start_book_monitor()               # ⚡ fast exits armed hote hi zinda
+    except Exception:
+        pass
     return True, f"Armed ({s['mode']})"
 
 
@@ -1078,6 +1082,70 @@ def _profit_book() -> None:
                     f"paisa.)")
 
 
+# ── ⚡ Fast-exit monitor — booking/exits scan-cycle ka wait nahi karte ─────────
+# Problem: review_cycle 15-30 min pe chalta hai — ₹1,500 ka momentum pop beech
+# mein aake nikal sakta hai. Ye halka daemon sirf OPEN positions ke quotes
+# har ~60s dekhta hai (5-6 symbols ka ek bulk call — sasta) aur:
+#   • ₹-profit booking turant (PAPER close / LIVE nudge)
+#   • paper stop/target crosses turant close (risk bhi fast)
+# LIVE stop/target already exchange-side GTT hai — woh pehle se instant.
+
+_monitor_started = False
+
+
+def _market_open_ist() -> bool:
+    now = datetime.now(IST)
+    if now.weekday() >= 5:
+        return False
+    minutes = now.hour * 60 + now.minute
+    return 9 * 60 + 15 <= minutes <= 15 * 60 + 30
+
+
+def _book_tick() -> int:
+    """One fast-monitor tick. Returns seconds until the next tick.
+    Active sirf jab armed + market open; warna halki neend (idle poll)."""
+    try:
+        s = _load()
+        if not (s.get("armed") and _market_open_ist()):
+            return 60                              # idle — sasta re-check
+        # fast paper exits: stop/target crosses turant close hote hain
+        try:
+            from risk.position_manager import review_positions
+            review_positions()
+        except Exception:
+            pass
+        # ₹-booking turant
+        if float(s.get("profit_book_rupees") or 0) > 0:
+            _profit_book()
+        try:
+            from core.eco import eco_on
+            return 90 if eco_on() else 60
+        except Exception:
+            return 60
+    except Exception as exc:
+        log.debug("book_tick_failed", error=str(exc))
+        return 60
+
+
+def start_book_monitor() -> None:
+    """Idempotent: fast-exit daemon ek hi baar. arm() + review_cycle dono
+    bulate hain — restart ke baad armed state wapas aate hi khud zinda."""
+    global _monitor_started
+    with _lock:
+        if _monitor_started:
+            return
+        _monitor_started = True
+
+    def _loop() -> None:
+        import time as _t
+        while True:
+            _t.sleep(max(15, _book_tick()))
+
+    threading.Thread(target=_loop, name="fast-exit-monitor",
+                     daemon=True).start()
+    log.info("fast_exit_monitor_started")
+
+
 def _time_stop() -> None:
     """Positions older than max_hold_days that hit neither stop nor target:
     PAPER → close at market (capital recycles, outcome recorded honestly).
@@ -1238,6 +1306,11 @@ def review_cycle() -> None:
         pass
     if s["allocation"] <= 0:
         return
+    try:
+        if s.get("armed"):
+            start_book_monitor()     # self-heal: restart ke baad bhi zinda
+    except Exception:
+        pass
     try:
         _reconcile_live_fills()      # exchange truth first…
         _account_closed_trades()

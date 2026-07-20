@@ -313,7 +313,9 @@ def _render_india_autopilot() -> None:
             float(s.get("profit_book_rupees", 0.0)), 250.0, key="ap_book",
             help="Kisi bhi open trade ka profit isse upar → PAPER turant "
                  "book+close (capital recycle); LIVE pe turant 'book now' "
-                 "Telegram alert. GTT target phir bhi safety net rehta hai.")
+                 "Telegram alert. ⚡ Fast-exit monitor har ~60s check karta "
+                 "hai (scan ka wait nahi) — paper stop/target bhi turant. "
+                 "GTT exchange-side safety net waise hi rehta hai.")
         if _rec_txt:
             st.caption(f"📊 {_rec_txt} — slider tumhara hai, evidence humara.")
         if st.button("💾 Save limits", key="ap_save", width="stretch"):
