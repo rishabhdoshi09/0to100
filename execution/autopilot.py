@@ -98,6 +98,8 @@ _DEFAULTS = {
     "considered": {},              # {YYYY-MM-DD: candidates seen}
     "preset": "Balanced",          # aggressiveness dial (frequency, not safety)
     "brain_gate": True,            # Brain STAND_ASIDE → pause new entries (survival)
+    "profit_book_rupees": 0.0,     # >0 → ₹X profit par book & close (0 = off)
+    "book_nudges": {},             # {date: [symbols]} LIVE book-alert dedupe
 }
 
 
@@ -237,6 +239,7 @@ def set_config(**kwargs) -> None:
         "breakeven_trigger_pct": (0.5, 8.0),
         "max_hold_days": (2, 15),
         "max_chase_pct": (0.25, 5.0),
+        "profit_book_rupees": (0.0, 100000.0),
     }
     bools = ("trailing_enabled", "regime_gate", "conviction_sizing",
              "adaptive_source_gate", "brain_gate")
@@ -692,7 +695,7 @@ def _anchor_live(symbol: str, entry: float, stop: float,
 
 # ── Sizing ────────────────────────────────────────────────────────────────────
 
-def _conviction_multiplier(score: float, edge) -> float:
+def _conviction_multiplier(score: float, edge, ev_conf=None) -> float:
     """Kelly-lite: risk scales with MEASURED conviction, never with vibes.
 
     Base 1.0. Only evidence moves it:
@@ -712,7 +715,13 @@ def _conviction_multiplier(score: float, edge) -> float:
         m += 0.25
     elif edge < 0.05:
         m -= 0.25
-    return min(1.5, max(0.5, m))
+    # EV-confidence extension: jab apne LIVE outcomes ka Wilson-shrunk EV
+    # HIGH-confidence ho aur score strong, risk 2.0x tak stretch — "large
+    # qty jab conviction bole", par sirf MEASURED conviction pe. Rails
+    # (per-trade cap, reserve, available pool) upar se laagu rehte hain.
+    if ev_conf == "HIGH" and score >= 75:
+        m += 0.5
+    return min(2.0 if ev_conf == "HIGH" else 1.5, max(0.5, m))
 
 
 def _size(entry: float, stop: float, mult: float = 1.0) -> int:
@@ -818,7 +827,7 @@ def _consider_locked(symbol: str, entry: float, stop: float, score: float,
         entry = live_entry
 
         target = round(entry * (1 + s["target_pct"] / 100), 1)
-        mult = (_conviction_multiplier(score, edge)
+        mult = (_conviction_multiplier(score, edge, ev_conf)
                 if s.get("conviction_sizing", True) else 1.0)
         qty = _size(entry, stop, mult)
         if qty < 1:
@@ -1009,6 +1018,66 @@ def _source_paused(source: str) -> str | None:
 
 # ── Time-stop: dead money is a cost ──────────────────────────────────────────
 
+def _profit_book() -> None:
+    """💰 ₹-profit booking: profit_book_rupees > 0 aur kisi open trade ka
+    unrealized ≥ us threshold → book it, close it. User ka mandate: 'har
+    trade se ₹1,500 nikaalo aur band karo.'
+
+    PAPER → turant close (PAPER_WIN, live price pe) — capital recycle,
+    agla setup. LIVE → GTT exchange pe baitha hai isliye auto-sell nahi;
+    turant Telegram nudge (ek baar per symbol per day): 'book now'.
+    Trader math note: booking chhoti aur stop ATR-wala bada — isliye ye
+    sirf conviction-gated entries ke saath hi +EV hai; entry filter (prime/
+    gates) hi asli edge hai, booking sirf uska cashier."""
+    s = _load()
+    threshold = float(s.get("profit_book_rupees") or 0)
+    if threshold <= 0:
+        return
+    opens = _open_autopilot_trades()
+    if not opens:
+        return
+    try:
+        from data.live_quotes import get_live_quotes
+        live = get_live_quotes(sorted({t["symbol"] for t in opens}))
+    except Exception:
+        return
+    today = _ist_today().isoformat()
+    for t in opens:
+        q = live.get(t["symbol"])
+        if not (q and q.get("price")):
+            continue                       # no quote → no claim, no action
+        px = float(q["price"])
+        entry = float(t["entry_price"] or 0)
+        qty = int(t["qty"] or 0)
+        pnl = (px - entry) * qty
+        if pnl < threshold or entry <= 0 or qty <= 0:
+            continue
+        if t["mode"] == "PAPER":
+            _ensure_exit_col()
+            _update_trade(t["id"], "exit_price=?, status=?, note=note||?",
+                          (px, "PAPER_WIN",
+                           f" | profit-book ₹{pnl:,.0f} @ ₹{px:,.1f}"))
+            _log_activity(f"💰 BOOKED {t['symbol']} ₹{pnl:+,.0f} @ ₹{px:,.1f} "
+                          f"(target ₹{threshold:,.0f}) — capital recycle")
+            _notify(f"💰 <b>₹{pnl:,.0f} BOOKED</b> — {t['symbol']} "
+                    f"@ ₹{px:,.1f} ({qty} sh). Trade band, capital wapas "
+                    f"pool mein.")
+        else:
+            with _lock:
+                st = _load()
+                nudged = dict(st.get("book_nudges") or {})
+                done = list(nudged.get(today, []))
+                if t["symbol"] in done:
+                    continue
+                st["book_nudges"] = {today: done + [t["symbol"]]}
+            _save()
+            _notify(f"💰 <b>{t['symbol']} ₹{pnl:,.0f} profit mein hai</b> "
+                    f"(LTP ₹{px:,.1f}) — ₹{threshold:,.0f} book karne ka "
+                    f"level aa gaya. GTT cancel karke ticket se sell karo. "
+                    f"(LIVE auto-sell nahi hota — tumhara click, tumhara "
+                    f"paisa.)")
+
+
 def _time_stop() -> None:
     """Positions older than max_hold_days that hit neither stop nor target:
     PAPER → close at market (capital recycles, outcome recorded honestly).
@@ -1174,6 +1243,7 @@ def review_cycle() -> None:
         _account_closed_trades()
         _close_crossed_live_trades() # …price-cross estimate as fallback
         _trail_stops()
+        _profit_book()
         _time_stop()
         _circuit_breaker()
     except Exception as exc:

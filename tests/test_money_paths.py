@@ -1329,6 +1329,100 @@ class TestEVEngine:
         assert [r["symbol"] for r in rows] == ["EV", "PTS"]   # measured first
 
 
+class TestPrimeFilter:
+    """💎 Every data layer must pass before a setup earns the Telegram top
+    slot — conviction, EV, liquidity, breadth, regime. Demote-only."""
+
+    def _base(self):
+        return {"verdict": "STRONG BUY", "categories": ["Breakout"],
+                "high_conviction": True, "breakout_conviction": 72.0,
+                "ev_pct": 3.1, "ev_lb_pct": 2.2, "ev_conf": "HIGH",
+                "price": 500.0, "avg_vol20": 300000,
+                "signals": ["52-week high breakout"]}
+
+    def test_all_layers_pass_and_each_layer_blocks(self):
+        from scan.prime_filter import prime_check
+        ok, why, fail = prime_check(self._base())
+        assert ok and fail == "" and any("liquid" in w for w in why)
+        # each layer individually blocks
+        assert not prime_check(dict(self._base(), verdict="WATCH"))[0]
+        assert not prime_check(dict(self._base(), categories=["Pattern"]))[0]
+        assert not prime_check(dict(self._base(), high_conviction=False,
+                                    breakout_conviction=40))[0]
+        assert "EV negative" in prime_check(
+            dict(self._base(), ev_lb_pct=-0.5))[2]
+        assert "illiquid" in prime_check(
+            dict(self._base(), avg_vol20=5000))[2]
+        assert "NARROW" in prime_check(
+            self._base(), breadth_verdict="NARROW")[2]
+        assert "leaky" in prime_check(
+            self._base(), demoted_labels={"52-week high breakout"})[2]
+        # no EV data + high conviction is still allowed (evidence pending)
+        r = dict(self._base()); r.pop("ev_lb_pct")
+        assert prime_check(r)[0]
+
+    def test_tag_prime_counts_and_marks(self):
+        from scan.prime_filter import tag_prime
+        rows = [self._base(), dict(self._base(), verdict="WATCH")]
+        n = tag_prime(rows)
+        assert n == 1 and rows[0].get("prime") and "prime" not in rows[1]
+
+
+class TestProfitBooking:
+    """₹X book-and-close: PAPER auto-books at threshold; LIVE nudges once."""
+
+    def test_paper_books_at_threshold(self, tmp_path, monkeypatch):
+        ta = TestAutopilot()
+        ap, te = ta._setup(tmp_path, monkeypatch)
+        ap.arm()
+        monkeypatch.setattr(ap, "_in_window", lambda now=None: True)
+        assert ap.consider("HAL", 4500, 4300, 80, 0.2, "Defence", "t") is True
+        ap.set_config(profit_book_rupees=1500.0)
+        qty = int(te.recent_trades(1)[0]["qty"])
+        # price such that pnl just below threshold → no booking
+        below = 4500 + (1400 / qty)
+        monkeypatch.setattr("data.live_quotes.get_live_quotes",
+                            lambda syms: {"HAL": {"price": below}})
+        ap._profit_book()
+        assert te.recent_trades(1)[0]["status"] == "PAPER_OPEN"
+        # price above threshold → booked and closed as WIN
+        above = 4500 + (1600 / qty)
+        monkeypatch.setattr("data.live_quotes.get_live_quotes",
+                            lambda syms: {"HAL": {"price": above}})
+        ap._profit_book()
+        t = te.recent_trades(1)[0]
+        assert t["status"] == "PAPER_WIN" and "profit-book" in t["note"]
+
+    def test_off_by_default_and_live_nudges_once(self, tmp_path, monkeypatch):
+        ta = TestAutopilot()
+        ap, te = ta._setup(tmp_path, monkeypatch)
+        # LIVE-mode trade in the journal (autopilot-tagged, open)
+        te._journal({"mode": "LIVE", "symbol": "BEL", "qty": 100,
+                     "entry_type": "MARKET", "entry_price": 300,
+                     "stop_price": 290, "target_price": 315, "product": "CNC",
+                     "status": "PLACED", "note": "AUTOPILOT:t"})
+        monkeypatch.setattr("data.live_quotes.get_live_quotes",
+                            lambda syms: {"BEL": {"price": 320.0}})  # +₹2000
+        notes = []
+        monkeypatch.setattr(ap, "_notify", lambda m: notes.append(m))
+        ap._profit_book()                       # default 0 → OFF, no action
+        assert notes == []
+        ap.set_config(profit_book_rupees=1500.0)
+        ap._profit_book()
+        ap._profit_book()                       # same day → single nudge
+        assert len([n for n in notes if "BEL" in n]) == 1
+        assert "book" in notes[0].lower()
+        # LIVE kabhi auto-close nahi hota
+        assert te.recent_trades(1)[0]["status"] == "PLACED"
+
+    def test_high_confidence_ev_multiplier(self):
+        from execution.autopilot import _conviction_multiplier as m
+        assert m(80, 0.25) == 1.5                    # old behaviour unchanged
+        assert m(80, 0.25, "HIGH") == 2.0            # measured conviction → 2×
+        assert m(60, 0.25, "HIGH") == 1.25           # weak score → no stretch
+        assert m(80, 0.25, "MEDIUM") == 1.5          # only HIGH stretches
+
+
 class TestBreadth:
     """Data is gold: full-market internals from data we already compute —
     the truth BEHIND the index, at zero extra fetch."""

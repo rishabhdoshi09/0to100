@@ -153,9 +153,15 @@ def _push_new_setups(picks: list[dict]) -> None:
             if k != today:
                 del _pushed[k]
 
-        fresh = [p for p in picks
-                 if p["verdict"] in ("STRONG BUY", "BUY")
-                 and p["symbol"] not in _pushed[today]][:5]
+        _cands = [p for p in picks
+                  if p["verdict"] in ("STRONG BUY", "BUY")
+                  and p["symbol"] not in _pushed[today]]
+        # 💎 PRIME first — har data-layer ke survivors sabse upar
+        _cands.sort(key=lambda p: (bool(p.get("prime")),
+                                   float(p.get("conviction_rank")
+                                         or p.get("score") or 0)),
+                    reverse=True)
+        fresh = _cands[:5]
 
         # Pre-breakout watch: stock pivot ke 2.5% andar, breakout abhi hua nahi
         pre = [p for p in picks
@@ -167,11 +173,23 @@ def _push_new_setups(picks: list[dict]) -> None:
         if not fresh and not pre:
             return
 
+        # ₹-book plan context (autopilot ka profit_book_rupees, agar set hai)
+        _book_amt = 0.0
+        try:
+            from execution.autopilot import get_status as _ap_status
+            _book_amt = float(_ap_status().get("profit_book_rupees") or 0)
+        except Exception:
+            _book_amt = 0.0
+
         lines = []
         if fresh:
             lines.append("🎯 <b>QuantTerm — naye setups mile</b>")
             for p in fresh:
                 emoji = "🔥" if p["verdict"] == "STRONG BUY" else "⚡"
+                prime_bit = ""
+                if p.get("prime"):
+                    emoji = "💎"
+                    prime_bit = (f"\n   💎 PRIME — {p.get('prime_why', '')}")
                 why = p.get("checks") or [f"✓ {r}" for r in p.get("reasons", [])]
                 why_txt = "\n".join(f"   {w}" for w in why[:3])
                 size_line = ""
@@ -181,10 +199,17 @@ def _push_new_setups(picks: list[dict]) -> None:
                     if ps["qty"] >= 1:
                         size_line = (f"\n   📏 {ps['qty']} shares · max loss "
                                      f"₹{ps['max_loss']:,.0f} (1% rule)")
+                        # 💰 book-plan: is qty pe ₹X book karne ko kitna move?
+                        if _book_amt > 0:
+                            _mv = _book_amt / (ps["qty"] * float(p["entry"])) * 100
+                            _lvl = float(p["entry"]) * (1 + _mv / 100)
+                            size_line += (f"\n   💰 ₹{_book_amt:,.0f} book "
+                                          f"@ ₹{_lvl:,.1f} (+{_mv:.1f}% move)")
                 except Exception:
                     pass
                 lines.append(
-                    f"\n{emoji} <b>{p['symbol']}</b> ₹{p['price']:,.1f} — {p['verdict']}\n"
+                    f"\n{emoji} <b>{p['symbol']}</b> ₹{p['price']:,.1f} — {p['verdict']}"
+                    f"{prime_bit}\n"
                     f"{why_txt}\n"
                     f"   Entry ₹{p['entry']:,.0f} · Stop ₹{p['stop']:,.0f} · Target ₹{p['target']:,.0f}"
                     f"{size_line}"
@@ -370,6 +395,28 @@ def _scan_once_locked(universe: Optional[list[str]] = None, progress=None) -> No
                          n=_breadth["n"], adv_ratio=_breadth["adv_ratio"])
         except Exception as exc:
             log.debug("breadth_skip", error=str(exc))
+        # 💎 Prime tier — momentum/breakout survivors of EVERY data layer
+        # (conviction + EV + liquidity + breadth + regime). Telegram pushes
+        # these first; sabse sophisticated chhalni sabse upar.
+        try:
+            from scan.prime_filter import tag_prime
+            demoted: set = set()
+            try:
+                from core.regime_engine import compute_regime
+                from scan.live_edge import regime_calibration
+                from scan.unified_scanner import SIGNAL_META
+                _reg = str(getattr(compute_regime(), "market_regime", "") or "")
+                _rc = regime_calibration(_reg)
+                demoted = {SIGNAL_META[k][0] for k, m in _rc.items()
+                           if m < 1.0 and k in SIGNAL_META}
+            except Exception:
+                demoted = set()
+            n_prime = tag_prime(serialized,
+                                (_breadth or {}).get("verdict", ""), demoted)
+            if n_prime:
+                log.info("prime_tagged", n=n_prime)
+        except Exception as exc:
+            log.debug("prime_skip", error=str(exc))
         # Proactive delivery — user ko dhundhna na pade, setups khud pahunchein
         _push_new_setups(serialized[:15])
         # 🤖 Autopilot hook — same signals, alert logic untouched

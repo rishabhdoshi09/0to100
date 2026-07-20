@@ -308,6 +308,12 @@ def _render_india_autopilot() -> None:
                 help="Live price signal-entry se isse zyada upar → trade "
                      "SKIP. Bhaagti train ka peecha nahi — extension pe "
                      "buy karna edge kha jata hai")
+        book_rs = st.number_input(
+            "💰 Profit-book (₹ per trade, 0 = off)", 0.0, 100000.0,
+            float(s.get("profit_book_rupees", 0.0)), 250.0, key="ap_book",
+            help="Kisi bhi open trade ka profit isse upar → PAPER turant "
+                 "book+close (capital recycle); LIVE pe turant 'book now' "
+                 "Telegram alert. GTT target phir bhi safety net rehta hai.")
         if _rec_txt:
             st.caption(f"📊 {_rec_txt} — slider tumhara hai, evidence humara.")
         if st.button("💾 Save limits", key="ap_save", width="stretch"):
@@ -330,7 +336,8 @@ def _render_india_autopilot() -> None:
                        adaptive_source_gate=adapt_on,
                        max_hold_days=int(hold_days),
                        target_pct=float(target_pct),
-                       max_chase_pct=float(chase_pct))
+                       max_chase_pct=float(chase_pct),
+                       profit_book_rupees=float(book_rs))
             st.success("Limits saved. (Mode change hua ho toh dobara ARM karna hoga.)")
             st.rerun()
 

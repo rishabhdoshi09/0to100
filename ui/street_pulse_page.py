@@ -275,7 +275,8 @@ def _render_today_best_setups(limit: int = 5) -> None:
     for r in buys:
         v = r.get("verdict", "WATCH")
         v_col = "#22d3ee" if v == "STRONG BUY" else "#00d4a0"
-        hc = "🎯 " if r.get("high_conviction") else ""
+        hc = ("💎 " if r.get("prime") else
+              "🎯 " if r.get("high_conviction") else "")
         conv = r.get("breakout_conviction") or 0
         conv_bit = f" · conviction {conv:.0f}" if conv else ""
         # EV chip — the number that actually ranks it (measured, not vibes);
