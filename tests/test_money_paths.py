@@ -1463,6 +1463,61 @@ class TestProfitBooking:
         assert m(80, 0.25, "MEDIUM") == 1.5          # only HIGH stretches
 
 
+class TestWatchdogAndBackup:
+    """Operational trust: silence is suspicious; evidence is insured."""
+
+    def test_watchdog_alerts_dead_once_per_day(self, monkeypatch):
+        import core.watchdog as wd
+        monkeypatch.setattr(wd, "_last_check", 0.0)
+        monkeypatch.setattr(wd, "_alerted", {}, raising=False)
+        wd._alerted = {}
+        monkeypatch.setattr("core.health.pulse", lambda: {"daemons": {
+            "auto_scan": {"status": "DEAD", "age_s": 5000, "note": ""},
+            "autopilot": {"status": "OK", "age_s": 10, "note": ""}}})
+        sent = []
+
+        class _Eng:
+            def is_configured(self): return True
+            def send(self, m, **k): sent.append(m); return True
+        monkeypatch.setattr("alerts.telegram_alerts.AlertEngine", lambda: _Eng())
+        fired = wd.check(force=True)
+        assert fired == ["auto_scan"]                  # only the DEAD one
+        assert len(sent) == 1 and "auto_scan" in sent[0]
+        assert wd.check(force=True) == []              # same day → dedup
+        # throttle: non-forced call inside window is a no-op
+        wd._alerted = {}
+        assert wd.check() == []
+
+    def test_backup_snapshot_and_rotation(self, tmp_path, monkeypatch):
+        import sqlite3
+        import core.backup as bk
+        monkeypatch.setattr(bk, "_LOGS", tmp_path)
+        monkeypatch.setattr(bk, "_BACKUP_ROOT", tmp_path / "backup")
+        conn = sqlite3.connect(tmp_path / "trades.db")
+        conn.execute("CREATE TABLE t(x)"); conn.execute("INSERT INTO t VALUES (42)")
+        conn.commit(); conn.close()
+        (tmp_path / "autopilot.json").write_text('{"armed": true}')
+        out = bk.snapshot("2026-07-20")
+        assert set(out["copied"]) == {"trades.db", "autopilot.json"}
+        # WAL-safe copy restores with data intact
+        c2 = sqlite3.connect(tmp_path / "backup" / "2026-07-20" / "trades.db")
+        assert c2.execute("SELECT x FROM t").fetchone() == (42,)
+        c2.close()
+        # rotation keeps only the newest KEEP_DAYS
+        for i in range(1, 10):
+            bk.snapshot(f"2026-07-{i:02d}")
+        days = sorted(p.name for p in (tmp_path / "backup").iterdir())
+        assert len(days) == bk.KEEP_DAYS
+        assert days[-1] == "2026-07-20"                # newest survives
+
+    def test_backup_never_raises_on_missing(self, tmp_path, monkeypatch):
+        import core.backup as bk
+        monkeypatch.setattr(bk, "_LOGS", tmp_path / "nowhere")
+        monkeypatch.setattr(bk, "_BACKUP_ROOT", tmp_path / "b")
+        out = bk.snapshot("2026-07-20")                # fresh install → no crash
+        assert out["copied"] == []
+
+
 class TestFastExit:
     """⚡ Booking/exits must not wait for the 15-min scan cycle."""
 

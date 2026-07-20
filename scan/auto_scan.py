@@ -512,6 +512,24 @@ def _maybe_push_brain_briefing() -> None:
         log.debug("brain_briefing_skip", error=str(exc))
 
 
+_backup_done_date: str = ""
+
+
+def _maybe_backup_evidence() -> None:
+    """Roz ek baar, off-hours: evidence DBs + autopilot state ka snapshot
+    (7-din rotation). Poonji ka bima — core/backup.py."""
+    global _backup_done_date
+    today = datetime.now(IST).strftime("%Y-%m-%d")
+    if _backup_done_date == today or _is_market_hours():
+        return
+    try:
+        from core.backup import snapshot
+        snapshot()
+        _backup_done_date = today
+    except Exception as exc:
+        log.debug("evidence_backup_skip", error=str(exc))
+
+
 _bt_done_date: str = ""
 
 
@@ -649,6 +667,13 @@ def _worker() -> None:
             _maybe_update_outcomes()
             _maybe_run_nightly_backtest()
             _maybe_push_weekly_coach()
+            # 🐕 dead-daemon sweep (throttled) + 🗄️ nightly evidence backup
+            try:
+                from core.watchdog import check as _wd_check
+                _wd_check()
+            except Exception:
+                pass
+            _maybe_backup_evidence()
             # Breakout sniper — tick-stream instant alerts on the hottest names
             if _is_market_hours():
                 try:

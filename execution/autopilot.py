@@ -1152,6 +1152,13 @@ def _book_tick() -> int:
         # ₹-booking turant
         if float(s.get("profit_book_rupees") or 0) > 0:
             _profit_book()
+        # 🐕 cross-watch: scan worker mar jaye toh yahan se khabar jaye
+        # (watchdog ka apna 5-min throttle hai — yahan sasta hai)
+        try:
+            from core.watchdog import check as _wd_check
+            _wd_check()
+        except Exception:
+            pass
         try:
             from core.eco import eco_on
             return 90 if eco_on() else 60
