@@ -2989,6 +2989,67 @@ class TestBreakoutConfirmation:
         # price below level → nothing
         assert g(price=99, level=100, atr=5, vratio=3, day_change=1)[0] is False
 
+    def test_close_location_value_math(self):
+        """CLV pure function: Wyckoff close-of-range strength."""
+        from scan.unified_scanner import close_location_value as clv
+        assert clv(close=100, high=100, low=95) == 1.0     # closed at high
+        assert clv(close=95, high=100, low=95) == 0.0       # closed at low
+        assert clv(close=97.5, high=100, low=95) == 0.5     # mid-range
+        assert clv(close=100, high=100, low=100) == 0.5     # flat day → neutral
+        assert clv(close=200, high=100, low=95) == 1.0      # clamped, never >1
+
+    def test_weak_close_demotes_grade_a_to_b(self):
+        """ATR+volume clear cleanly (would be grade A), but the stock closed
+        near the day's LOW (sellers took the day back) — demote A→B. ATR/
+        volume alone can't see this; CLV can."""
+        from scan.unified_scanner import grade_breakout as g
+        strong = g(price=105, level=100, atr=3.33, vratio=3.0, day_change=2,
+                  clv=0.8)
+        assert strong == (True, "A", strong[2])             # strong close → A stays
+        weak = g(price=105, level=100, atr=3.33, vratio=3.0, day_change=2,
+                 clv=0.15)
+        assert weak[0] is True and weak[1] == "B"            # demoted, still confirmed
+        assert "demote" in weak[2] and "0.15" in weak[2]
+
+    def test_weak_close_demotes_marginal_b_to_rejected(self):
+        """A grade-B-level clearance WITH a weak close is a bull-trap
+        pattern — rejected outright, not just downgraded."""
+        from scan.unified_scanner import grade_breakout as g
+        ok_strong, grade, _ = g(price=103, level=100, atr=5, vratio=1.7,
+                               day_change=3, clv=0.8)
+        assert ok_strong and grade == "B"                    # unaffected baseline
+        ok_weak, grade_weak, note = g(price=103, level=100, atr=5, vratio=1.7,
+                                      day_change=3, clv=0.15)
+        assert ok_weak is False and grade_weak == ""
+        assert "bull-trap" in note
+
+    def test_clv_default_is_backward_compatible(self):
+        """Callers that don't pass clv (default 1.0) behave exactly as
+        before this feature — no silent behaviour change for old call sites."""
+        from scan.unified_scanner import grade_breakout as g
+        with_default = g(price=105, level=100, atr=5, vratio=2.5, day_change=3)
+        explicit_strong = g(price=105, level=100, atr=5, vratio=2.5,
+                            day_change=3, clv=1.0)
+        assert with_default == explicit_strong
+
+    def test_breakout_conviction_clv_demotion_and_floor(self):
+        """Weak close cuts breakout_conviction (post weight-budget, demote-
+        only) — enough to push a real setup below the BUY threshold, which
+        A/B grade labelling alone would not have done."""
+        from scan.unified_scanner import breakout_conviction as bc
+        kwargs = dict(vratio=2.5, deliv_now=60, deliv_base=50, rs_outperf=5,
+                      above_50=True, above_200=True, base_q=0.8)
+        strong, _ = bc(**kwargs, clv=0.9)
+        default, _ = bc(**kwargs)                    # clv=1.0 default
+        threshold, _ = bc(**kwargs, clv=0.5)          # boundary — no cliff
+        weak, factors = bc(**kwargs, clv=0.15)
+        assert strong == default == threshold         # >=0.5 → identical, no penalty
+        assert weak < strong                          # demoted
+        assert weak == round(strong * (0.6 + 0.8 * 0.15), 0)
+        assert any("weak close" in f for f in factors)
+        worst, _ = bc(**kwargs, clv=0.0)               # closed at the day's low
+        assert worst == round(strong * 0.6, 0)         # worst-case: 40% cut, floored
+
     def test_marginal_note_is_time_aware(self, monkeypatch):
         """Off-hours the close is IN — a marginal break must say 'close pe
         bhi confirm nahi hua', NOT 'close ka wait' (data humare paas hai)."""

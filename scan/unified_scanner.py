@@ -73,10 +73,34 @@ def _market_is_live() -> bool:
         return False
 
 
+# Close Location Value (Wyckoff): kis end pe close hua din ki range mein.
+# 1.0 = din ki high pe band (buyers ne close tak control rakha) · 0.0 = din
+# ki low pe band (sellers ne breakout ke din hi vaapas le liya — bada upper
+# wick, bull-trap ka classic pehla sanket). ATR/volume clear kar sakte hain
+# aur phir bhi din khatam hote-hote seller le jaye — yehi cheez ATR+volume
+# akele nahi pakadte, isliye alag check zaroori.
+_CLV_WEAK = 0.40
+
+
+def close_location_value(close: float, high: float, low: float) -> float:
+    """(close-low)/(high-low), [0,1] mein clamp. Flat/no-range din → 0.5
+    neutral (koi wick-info nahi, na positive na negative)."""
+    rng = high - low
+    if rng <= 0:
+        return 0.5
+    return max(0.0, min(1.0, (close - low) / rng))
+
+
 def grade_breakout(price: float, level: float, atr: float, vratio: float,
-                   day_change: float) -> tuple[bool, str, str]:
+                   day_change: float, clv: float = 1.0) -> tuple[bool, str, str]:
     """(confirmed, grade, note). Grade A = clears by ≥1×ATR on ≥2× volume;
-    B = clears by buffer on ≥min volume; not confirmed = marginal poke."""
+    B = clears by buffer on ≥min volume; not confirmed = marginal poke.
+
+    clv (Close Location Value, default 1.0 = no penalty for callers that
+    don't pass it): weak close (<0.40 — closed in bottom 40% of the day's
+    range) DEMOTES the grade — A→B, B→unconfirmed. ATR-clearance + volume
+    alone can't see that sellers took the day back by the close; this can.
+    Demote-only, never upgrades a grade."""
     if level <= 0 or price <= level:
         return False, "", ""
     clearance = price - level
@@ -92,8 +116,18 @@ def grade_breakout(price: float, level: float, atr: float, vratio: float,
         tail = ("close confirm ka wait" if _market_is_live()
                 else "close pe bhi confirm nahi hua")
         return False, "", f"marginal break ({why}) — {tail}"
+    weak_close = clv < _CLV_WEAK
     if atr_mult >= 1.0 and vratio >= 2.0:
+        if weak_close:
+            return (True, "B", f"clean clearance ({atr_mult:.1f}×ATR, "
+                    f"{vratio:.1f}×vol) PAR din ki low ke paas band hua "
+                    f"(CLV {clv:.2f}) — sellers ne din wapas le liya, "
+                    f"A se B demote")
         return True, "A", f"clean break: {atr_mult:.1f}×ATR upar, {vratio:.1f}× volume"
+    if weak_close:
+        return (False, "", f"confirmed clearance PAR weak close (CLV "
+                f"{clv:.2f}, din ki low ke paas) — bull-trap ka risk, "
+                f"chase nahi")
     return True, "B", f"confirmed: {atr_mult:.2f}×ATR clear, {vratio:.1f}× volume"
 
 
@@ -134,11 +168,18 @@ def base_tightness(high, low, price: float, sma50: float) -> tuple[float, str]:
 
 def breakout_conviction(vratio: float, deliv_now, deliv_base,
                         rs_outperf: float, above_50: bool,
-                        above_200: bool, base_q: float = 0.5
-                        ) -> tuple[float, list[str]]:
+                        above_200: bool, base_q: float = 0.5,
+                        clv: float = 1.0) -> tuple[float, list[str]]:
     """0-100 conviction behind a confirmed breakout + plain-English factors.
       Volume 25 · Delivery 20 · Relative strength 20 · Trend stage 15 ·
-      Base quality 20 (base breakouts > extended breakouts)."""
+      Base quality 20 (base breakouts > extended breakouts).
+
+    clv (Close Location Value, default 1.0 = no penalty for callers that
+    don't pass it): after the weighted sum, a WEAK close (<0.5 — closed in
+    the bottom half of the day's range despite the break) DEMOTES the
+    score up to 40% at the worst (closed at the day's low). A strong close
+    never inflates the score — evidence over vibes, this is a filter until
+    measured, not a bonus."""
     factors: list[str] = []
     score = 0.0
     # Volume — is there force behind the break?
@@ -168,7 +209,14 @@ def breakout_conviction(vratio: float, deliv_now, deliv_base,
         factors.append("200-DMA ke upar (Stage 2)")
     # Base quality — the trader's edge: base breakout > extended breakout
     score += max(0.0, min(1.0, base_q)) * 20
-    return round(min(100.0, score), 0), factors
+    score = min(100.0, score)
+    # Close Location Value — demote-only, applied AFTER the weight budget
+    # (keeps Volume/Delivery/RS/Trend/Base weights untouched at 100).
+    if clv < 0.5:
+        score *= 0.6 + 0.8 * clv           # clv 0.5→no cut · clv 0.0→40% cut
+        factors.append(f"weak close (CLV {clv:.2f}) — sellers ne din "
+                       f"wapas liya, conviction demote")
+    return round(score, 0), factors
 
 
 def _nifty_return_30d() -> float:
@@ -436,8 +484,10 @@ class UnifiedScanner:
             hi52 = float(np.max(high[:-1]))
             res20 = float(np.max(high[-21:-1]))
             level, tag = (hi52, "52-week high") if price > hi52 else (res20, "resistance")
+            clv = close_location_value(close[-1], high[-1], low[-1])
             ok, grade, note = grade_breakout(level=level, price=price, atr=atr,
-                                             vratio=vratio, day_change=chg)
+                                             vratio=vratio, day_change=chg,
+                                             clv=clv)
             if ok:
                 # Conviction — who is behind the break? (the full vault)
                 d_now = float(np.nanmean(deliv[-5:])) if (
@@ -452,7 +502,7 @@ class UnifiedScanner:
                 conv, conv_factors = breakout_conviction(
                     vratio=vratio, deliv_now=d_now, deliv_base=d_base,
                     rs_outperf=rs_outperf, above_50=price > sma50,
-                    above_200=above_200, base_q=base_q)
+                    above_200=above_200, base_q=base_q, clv=clv)
                 if base_note:
                     conv_factors.append(base_note)
                 if conv >= _MIN_BREAKOUT_CONVICTION:

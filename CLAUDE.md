@@ -31,7 +31,11 @@ app.py                    # Streamlit shell: nav (Today|Pulse|Stocks|Options|
 │   ├── unified_scanner.py# 16 signals: breakouts, patterns (VCP/cup/triangle/
 │   │                     #   double-bottom/HTF), pre-breakout (accumulation,
 │   │                     #   delivery spike, NR7, pocket pivot), momentum.
-│   │                     #   Scores calibrated by backtest (_load_calibration)
+│   │                     #   Scores calibrated by backtest (_load_calibration).
+│   │                     #   Close Location Value (Wyckoff): weak close (<0.5,
+│   │                     #   din ki low ke paas) demotes grade A→B / rejects
+│   │                     #   marginal breaks — ATR+volume alone miss bull-traps
+│   │                     #   where sellers take the day back by the close
 │   ├── bulk_fetcher.py   # prefetch(): bhav store first, yfinance last resort
 │   ├── signal_backtest.py# Walk-forward per-signal accuracy → JSON report →
 │   │                     #   score calibration + per-card combo_edge
