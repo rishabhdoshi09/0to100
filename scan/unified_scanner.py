@@ -193,12 +193,17 @@ def breakout_conviction(vratio: float, deliv_now, deliv_base,
       cuts up to 40% at the worst (closed at the day's low).
     pct_below_high (default 0.0 — exempt by construction for a fresh
       52-week-high breakout): how far below the 52-week high this break
-      is happening. >25% below = 'laggard, not leader' zone — a genuine
+      is happening. >30% below = 'laggard, not leader' zone — a genuine
       Minervini/institutional selectivity criterion (jyada gira hua stock
       ek genuine leader nahi hota, chahe aaj resistance clear kar de).
-      Cuts linearly past 25%, floors at 50% cut by the time it's 50%+
-      below the high (never a full block — other factors can still carry
-      an exceptional setup)."""
+      Deliberately gentle (protection gear, not a brake): a strong break
+      (raw conviction ~70+) still clears the BUY conviction floor even
+      deep in laggard territory — this should thin out mediocre laggard
+      setups, never blanket-veto the category. Cuts linearly past 30%,
+      floors at a 30% cut (mult 0.70) by 60%+ below the high — a harsher
+      floor would combine with the BUY conviction gate to make DEEP
+      laggards un-BUYable regardless of quality, which is a brake, not a
+      filter."""
     factors: list[str] = []
     score = 0.0
     # Volume — is there force behind the break?
@@ -235,8 +240,8 @@ def breakout_conviction(vratio: float, deliv_now, deliv_base,
         score *= 0.6 + 0.8 * clv           # clv 0.5→no cut · clv 0.0→40% cut
         factors.append(f"weak close (CLV {clv:.2f}) — sellers ne din "
                        f"wapas liya, conviction demote")
-    if pct_below_high > 25:
-        mult = max(0.5, 1.0 - 0.02 * (pct_below_high - 25))  # →50%→floor 0.5
+    if pct_below_high > 30:
+        mult = max(0.70, 1.0 - 0.01 * (pct_below_high - 30))  # →60%→floor 0.70
         score *= mult
         factors.append(f"52-week high se {pct_below_high:.0f}% neeche — "
                        f"laggard zone, genuine leader nahi")

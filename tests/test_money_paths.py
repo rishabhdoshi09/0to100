@@ -3107,15 +3107,19 @@ class TestBreakoutConfirmation:
                       above_50=True, above_200=True, base_q=0.8)
         near, _ = bc(**kwargs, pct_below_high=5)
         default, _ = bc(**kwargs)                       # 0.0 default
-        threshold, _ = bc(**kwargs, pct_below_high=25)   # boundary — no cliff
+        threshold, _ = bc(**kwargs, pct_below_high=30)   # boundary — no cliff
         assert near == default == threshold
-        laggard, factors = bc(**kwargs, pct_below_high=40)
+        laggard, factors = bc(**kwargs, pct_below_high=45)
         assert laggard < near
         assert any("laggard zone" in f for f in factors)
         floor, _ = bc(**kwargs, pct_below_high=60)
         floor2, _ = bc(**kwargs, pct_below_high=90)      # deep past floor
-        assert floor == floor2                            # floors at 50% cut, no further
-        assert abs(floor - near * 0.5) <= 1               # ~50% cut (rounding tolerance)
+        assert floor == floor2                            # floors at 30% cut, no further
+        assert abs(floor - near * 0.70) <= 1              # ~30% cut (rounding tolerance)
+        # even a DEEP laggard with a genuinely strong break must still be
+        # able to clear the BUY conviction gate (>=50) — the filter should
+        # thin out mediocre laggards, never blanket-veto the category
+        assert floor >= 50
 
     def test_pct_below_high_default_is_backward_compatible(self):
         """Callers that don't pass pct_below_high (default 0.0, exempt by

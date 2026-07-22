@@ -39,10 +39,12 @@ app.py                    # Streamlit shell: nav (Today|Pulse|Stocks|Options|
 │   │                     #   Stock-quality gates (demote-only, evidence over
 │   │                     #   vibes): RSI ceiling (72 soft demote, 82 hard
 │   │                     #   reject — blow-off-top, no room to run) + distance
-│   │                     #   from 52-week high (>25% below = laggard zone,
-│   │                     #   linear conviction cut, floors at 50% — never a
-│   │                     #   hard block, so a genuine strong setup can still
-│   │                     #   clear)
+│   │                     #   from 52-week high (>30% below = laggard zone,
+│   │                     #   gentle linear conviction cut, floors at 30% —
+│   │                     #   deliberately soft so a strong setup (~70+ raw
+│   │                     #   conviction) still clears the BUY gate even
+│   │                     #   deep in laggard territory; thins mediocre
+│   │                     #   laggards, never blanket-vetoes the category)
 │   ├── bulk_fetcher.py   # prefetch(): bhav store first, yfinance last resort
 │   ├── signal_backtest.py# Walk-forward per-signal accuracy → JSON report →
 │   │                     #   score calibration + per-card combo_edge
