@@ -1463,6 +1463,67 @@ class TestProfitBooking:
         assert m(80, 0.25, "MEDIUM") == 1.5          # only HIGH stretches
 
 
+class TestTelegramCommands:
+    """📱 Phone commands: control anywhere, LIVE-arming never, chat-guarded."""
+
+    def _setup(self, tmp_path, monkeypatch):
+        import execution.autopilot as ap
+        import execution.trade_executor as te
+        monkeypatch.setattr(ap, "_STATE_FILE", tmp_path / "ap.json")
+        monkeypatch.setattr(te, "_DB", tmp_path / "t.db")
+        ap._state = {}
+        monkeypatch.setattr(ap, "_notify", lambda m: None)
+        monkeypatch.setattr(ap, "start_book_monitor", lambda: None)
+        monkeypatch.setattr(ap, "_brain_posture", lambda: ("NORMAL", ""))
+        ap.set_config(allocation=100000, mode="PAPER")
+        return ap
+
+    def test_pause_resume_preset_book(self, tmp_path, monkeypatch):
+        ap = self._setup(tmp_path, monkeypatch)
+        from alerts.telegram_commands import handle_command as h
+        assert "ARMED — PAPER" in h("/resume")
+        assert ap.get_status()["armed"] is True
+        assert "Aggressive" in h("/aggressive")
+        assert ap.get_status()["max_trades_per_day"] == 10
+        assert "1,500" in h("/book 1500")
+        assert ap.get_status()["profit_book_rupees"] == 1500.0
+        assert "PAUSED" in h("/pause")
+        assert ap.get_status()["armed"] is False
+        assert "Already OFF" in h("/pause")          # idempotent
+        assert "OFF" in h("/status")
+
+    def test_live_arming_always_refused(self, tmp_path, monkeypatch):
+        ap = self._setup(tmp_path, monkeypatch)
+        ap.set_config(mode="LIVE")
+        from alerts.telegram_commands import handle_command as h
+        assert "KABHI" in h("/resume")               # invariant #4 holds
+        assert ap.get_status()["armed"] is False
+
+    def test_non_commands_ignored_and_never_crash(self, tmp_path, monkeypatch):
+        self._setup(tmp_path, monkeypatch)
+        from alerts.telegram_commands import handle_command as h
+        assert h("hello kya haal") is None           # normal chat → silent
+        assert h("") is None
+        assert "Commands" in h("/help")
+        assert "Commands" in h("/nonsense")          # unknown → help
+        assert "/book 1500" in h("/book abc")        # bad arg → usage hint
+
+    def test_chat_guard_blocks_strangers(self, monkeypatch):
+        """Sirf configured chat-id se commands — baaki silently ignored."""
+        import alerts.telegram_actions as ta
+        sent = []
+        monkeypatch.setattr("alerts.telegram_commands.handle_command",
+                            lambda t: sent.append(t) or "ok")
+        import requests
+        monkeypatch.setattr(requests, "post", lambda *a, **k: None)
+        ta._handle_message({"chat": {"id": 999}, "text": "/pause"},
+                           "tok", "12345")           # stranger
+        assert sent == []
+        ta._handle_message({"chat": {"id": 12345}, "text": "/pause"},
+                           "tok", "12345")           # owner
+        assert sent == ["/pause"]
+
+
 class TestWatchdogAndBackup:
     """Operational trust: silence is suspicious; evidence is insured."""
 

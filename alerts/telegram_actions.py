@@ -128,6 +128,30 @@ def _handle_callback(cb: dict, token: str, allowed_chat: str) -> None:
     log.info("telegram_action_done", action=action, symbol=sym)
 
 
+def _handle_message(msg: dict, token: str, allowed_chat: str) -> None:
+    """📱 Text commands (/status, /pause, /aggressive …) — ADDITIVE layer,
+    button-tap/alerts logic untouched. Wahi chat-id guard jo taps par hai:
+    kisi aur ka message = silently ignore + log."""
+    import requests
+    chat_id = str(((msg.get("chat") or {}).get("id", "")))
+    text = str(msg.get("text") or "")
+    if not text.startswith("/"):
+        return
+    if chat_id != str(allowed_chat):
+        log.warning("telegram_unauthorised_command", chat=chat_id)
+        return
+    try:
+        from alerts.telegram_commands import handle_command
+        reply = handle_command(text)
+        if reply:
+            requests.post(f"https://api.telegram.org/bot{token}/sendMessage",
+                          json={"chat_id": allowed_chat, "text": reply,
+                                "parse_mode": "HTML"}, timeout=8)
+            log.info("telegram_command", cmd=text.split()[0])
+    except Exception as exc:
+        log.debug("telegram_command_error", error=str(exc)[:100])
+
+
 def _listener() -> None:
     import requests
     token = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
@@ -145,12 +169,15 @@ def _listener() -> None:
             r = requests.get(
                 f"https://api.telegram.org/bot{token}/getUpdates",
                 params={"offset": offset, "timeout": 25,
-                        "allowed_updates": json.dumps(["callback_query"])},
+                        "allowed_updates": json.dumps(
+                            ["callback_query", "message"])},
                 timeout=35)
             for upd in (r.json().get("result") or []):
                 offset = max(offset, int(upd.get("update_id", 0)) + 1)
                 if "callback_query" in upd:
                     _handle_callback(upd["callback_query"], token, chat)
+                elif "message" in upd:
+                    _handle_message(upd["message"], token, chat)
             if fails >= 3:
                 log.info("telegram_listener_recovered")
             fails = 0
