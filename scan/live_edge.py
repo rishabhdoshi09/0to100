@@ -32,7 +32,7 @@ def _closed_rows() -> list[dict]:
         from core.signal_outcome_tracker import _get_conn
         conn = _get_conn()
         rows = conn.execute(
-            """SELECT archetype, regime, entry_price, stop_price, quality_score,
+            """SELECT symbol, archetype, regime, entry_price, stop_price, quality_score,
                       outcome_pct, worked
                FROM signal_log
                WHERE worked IS NOT NULL AND outcome_pct IS NOT NULL
@@ -117,6 +117,42 @@ def profile_edge() -> dict:
         "quality": {k: _agg(v) for k, v in quality.items()},
         "overall": _agg(all_r),
     }
+
+
+def symbol_edge(min_n: int = 5) -> dict[str, dict]:
+    """🧠 SYMBOL MEMORY — har stock ka apna charitra hota hai. Kuch naam
+    breakout respect karte hain; kuch SERIAL FALSE-BREAKERS hain jo har
+    baar retail ko phansaate hain. Firms per-instrument models rakhti
+    hain; retail kabhi nahi — humare paas data pehle se tha (signal_log).
+
+    {symbol: {n, win_rate, expectancy_r}} — sirf min_n+ outcomes waale
+    (per-symbol data dheere banta hai, isliye bar chhota par claims sirf
+    demote ke liye)."""
+    acc: dict[str, list] = {}
+    for row in _closed_rows():
+        r = _row_r(row)
+        if r is None:
+            continue
+        sym = str(row.get("symbol") or "").upper()
+        if sym:
+            acc.setdefault(sym, []).append((r, int(row.get("worked") or 0)))
+    out: dict[str, dict] = {}
+    for sym, pairs in acc.items():
+        n = len(pairs)
+        if n < min_n:
+            continue
+        wins = sum(w for _, w in pairs)
+        out[sym] = {"n": n, "win_rate": round(wins / n * 100, 1),
+                    "expectancy_r": round(sum(r for r, _ in pairs) / n, 3)}
+    return out
+
+
+def serial_losers(min_n: int = 5, max_expectancy: float = -0.30) -> set[str]:
+    """Stocks jinhone humein baar-baar kata — is naam pe measured expectancy
+    strongly negative hai. DEMOTE-ONLY consumer ke liye (gate/filter);
+    kisi symbol ko kabhi PROMOTE nahi karta."""
+    return {sym for sym, d in symbol_edge(min_n).items()
+            if d["expectancy_r"] <= max_expectancy}
 
 
 def regime_calibration(regime: str, min_n: int = _MIN_N) -> dict[str, float]:

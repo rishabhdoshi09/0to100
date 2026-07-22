@@ -100,6 +100,7 @@ _DEFAULTS = {
     "brain_gate": True,            # Brain STAND_ASIDE → pause new entries (survival)
     "profit_book_rupees": 0.0,     # >0 → ₹X profit par book & close (0 = off)
     "book_nudges": {},             # {date: [symbols]} LIVE book-alert dedupe
+    "symbol_memory_gate": True,    # 🧠 serial false-breaker naam dobara nahi
 }
 
 
@@ -108,6 +109,7 @@ _DEFAULTS = {
 def _reject_category(reason: str) -> str:
     r = (reason or "").lower()
     if "brain" in r or "stand_aside" in r: return "Brain STAND_ASIDE (survival)"
+    if "symbol memory" in r:      return "symbol memory (serial false-breaker)"
     if "time window" in r:        return "time window (market band/settle)"
     if "daily trade limit" in r:  return "daily limit hit (max/day)"
     if "max open positions" in r: return "position limit full"
@@ -242,7 +244,7 @@ def set_config(**kwargs) -> None:
         "profit_book_rupees": (0.0, 100000.0),
     }
     bools = ("trailing_enabled", "regime_gate", "conviction_sizing",
-             "adaptive_source_gate", "brain_gate")
+             "adaptive_source_gate", "brain_gate", "symbol_memory_gate")
     with _lock:
         s = _load()
         for k, v in kwargs.items():
@@ -591,6 +593,11 @@ def _passes_gates(symbol: str, score: float, edge, sector: str) -> str | None:
         return "max open positions reached"
     if symbol in s.get("traded_symbols", {}).get(today, []):
         return "symbol already traded today"
+    # 🧠 Symbol memory — is naam ne humein baar-baar kata hai (measured
+    # negative expectancy on THIS stock). Serial false-breaker dobara nahi.
+    if s.get("symbol_memory_gate", True) and symbol in _serial_losers_cached():
+        return (f"symbol memory: {symbol} ka apna record negative hai "
+                f"(serial false-breaker) — is naam se door")
     # Gate 14: sector concentration — ek sector ki N positions ek hi bet hai,
     # woh sector bika toh sab saath stop out. Survival > extra exposure.
     if sector and _open_in_sector(sector) >= s.get("max_per_sector", 2):
@@ -621,6 +628,26 @@ _BAD_REGIMES = ("DISTRIBUTION", "TRENDING_BEAR", "BEAR")
 # NO-OP in the scan/sniper daemon threads (no Streamlit context) — without
 # this, every candidate would recompute the full regime and slow the scan.
 _regime_cache = {"ts": 0.0, "value": "UNKNOWN"}
+
+# 🧠 Symbol-memory cache — serial false-breakers (DB hit once per ~15 min,
+# per candidate nahi). Demote-only: naam sirf BLOCK ho sakta hai, promote kabhi.
+_symmem_cache = {"ts": 0.0, "losers": set()}
+
+
+def _serial_losers_cached() -> set:
+    import time as _t
+    now = _t.time()
+    if now - _symmem_cache["ts"] < 900:
+        return _symmem_cache["losers"]
+    losers: set = set()
+    try:
+        from scan.live_edge import serial_losers
+        losers = serial_losers()
+    except Exception as exc:
+        log.debug("symbol_memory_skip", error=str(exc))
+    _symmem_cache.update(ts=now, losers=losers)
+    return losers
+
 
 # Brain posture cache — assess() composes many subsystems, so compute it ONCE
 # per few minutes, not per candidate. The Brain is READ-ONLY; here it only ever

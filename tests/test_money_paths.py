@@ -572,6 +572,7 @@ class TestAutopilot:
         # fast-exit monitor spawns a real daemon thread on arm() — tests must
         # stay network-free/deterministic; its own test drives _book_tick.
         monkeypatch.setattr(ap, "start_book_monitor", lambda: None)
+        monkeypatch.setattr(ap, "_serial_losers_cached", lambda: set())
         # tests signal price ko hi live maanein — real anchor apne dedicated
         # tests mein alag se verify hota hai
         self._real_anchor = ap._anchor_live
@@ -1514,6 +1515,7 @@ class TestTelegramCommands:
         ap._state = {}
         monkeypatch.setattr(ap, "_notify", lambda m: None)
         monkeypatch.setattr(ap, "start_book_monitor", lambda: None)
+        monkeypatch.setattr(ap, "_serial_losers_cached", lambda: set())
         monkeypatch.setattr(ap, "_brain_posture", lambda: ("NORMAL", ""))
         ap.set_config(allocation=100000, mode="PAPER")
         return ap
@@ -1663,6 +1665,7 @@ class TestFastExit:
         ap._state = {}
         monkeypatch.setattr(ap, "_notify", lambda m: None)
         monkeypatch.setattr(ap, "start_book_monitor", lambda: None)
+        monkeypatch.setattr(ap, "_serial_losers_cached", lambda: set())
         calls = {"book": 0, "review": 0}
         monkeypatch.setattr(ap, "_profit_book",
                             lambda: calls.__setitem__("book", calls["book"] + 1))
@@ -1934,6 +1937,7 @@ class TestDecisionJournal:
             {"sector": "Defence", "chg_1d": 1.5, "chg_5d": 3.0, "members": 4}])
         ap.set_config(allocation=100000, mode="PAPER")
         monkeypatch.setattr(ap, "start_book_monitor", lambda: None)
+        monkeypatch.setattr(ap, "_serial_losers_cached", lambda: set())
         ap.arm()
         monkeypatch.setattr(ap, "_in_window", lambda now=None: True)
         # weak sector → rejected, with its prediction journaled
@@ -1997,6 +2001,58 @@ class TestSimLab:
         assert roll[50] == -1.0                            # recent window dead
         assert roll[100] == 0.5                            # lifetime still ok
         assert 250 not in roll                             # not enough data
+
+
+class TestSymbolMemory:
+    """🧠 MOAT piece: har stock ka charitra yaad — serial false-breakers
+    dobara entry nahi paate. Firms per-instrument models rakhti hain;
+    retail nahi — ab hum rakhte hain, apne hi outcomes se."""
+
+    def _seed(self, tmp_path, monkeypatch, rows):
+        """rows = (symbol, outcome_pct, worked); entry 100 / stop 97."""
+        import core.signal_outcome_tracker as tk
+        monkeypatch.setattr(tk, "_DB_PATH", str(tmp_path / "sig.db"))
+        conn = tk._get_conn()
+        from datetime import datetime, timedelta
+        base = datetime(2026, 1, 1)
+        for i, (sym, pct, worked) in enumerate(rows):
+            la = (base + timedelta(hours=i)).isoformat(timespec="seconds")
+            conn.execute(
+                "INSERT INTO signal_log (symbol,logged_at,signal_type,archetype,"
+                "entry_price,stop_price,quality_score,outcome_pct,worked,"
+                "outcome_checked_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
+                (sym, la, "UNIFIED_BUY", "BREAKOUT_52W", 100.0, 97.0, 70.0,
+                 pct, worked, la))
+        conn.commit(); conn.close()
+
+    def test_symbol_edge_and_serial_losers(self, tmp_path, monkeypatch):
+        from scan.live_edge import symbol_edge, serial_losers
+        rows = ([("TRAP", -3.0, 0)] * 6            # 6 baar kata → -1R each
+                + [("GOOD", 6.0, 1)] * 6           # respectful breakouts
+                + [("THIN", -3.0, 0)] * 3)         # sirf 3 outcomes → no claim
+        self._seed(tmp_path, monkeypatch, rows)
+        se = symbol_edge()
+        assert se["TRAP"]["expectancy_r"] == -1.0 and se["TRAP"]["n"] == 6
+        assert se["GOOD"]["expectancy_r"] == 2.0
+        assert "THIN" not in se                    # min_n gate
+        losers = serial_losers()
+        assert losers == {"TRAP"}                  # sirf proven repeat-offender
+
+    def test_autopilot_blocks_serial_loser(self, tmp_path, monkeypatch):
+        ta = TestAutopilot()
+        ap, te = ta._setup(tmp_path, monkeypatch)
+        ap.arm()
+        monkeypatch.setattr(ap, "_in_window", lambda now=None: True)
+        # is test mein asli memory chahiye — setup-stub ko override karo
+        monkeypatch.setattr(ap, "_serial_losers_cached", lambda: {"TRAP"})
+        assert ap.consider("TRAP", 500, 480, 90, 0.3, "Defence", "t") is False
+        f = ap.reject_funnel()
+        assert f["rejects"].get("symbol memory (serial false-breaker)") == 1
+        # doosra naam waise hi chalta hai
+        assert ap.consider("HAL", 4500, 4300, 80, 0.2, "Defence", "t") is True
+        # toggle off → memory bhoolo (user ka akhri faisla)
+        ap.set_config(symbol_memory_gate=False)
+        assert ap.consider("TRAP", 500, 480, 90, 0.3, "Defence", "t") is True
 
 
 class TestBayesianConfidence:
@@ -2489,6 +2545,7 @@ class TestConvictionTier:
         ap.set_config(allocation=100000, mode="PAPER")
         monkeypatch.setattr(ap, "_notify", lambda m: None)
         monkeypatch.setattr(ap, "start_book_monitor", lambda: None)
+        monkeypatch.setattr(ap, "_serial_losers_cached", lambda: set())
         ap.arm()
         taken = []
         monkeypatch.setattr(
