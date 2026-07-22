@@ -109,10 +109,15 @@ def _book(arg: str) -> str:
         return "Aise: /book 1500  (ya /book 0 = off)"
     from execution.autopilot import set_config, get_status
     set_config(profit_book_rupees=amt)
-    val = get_status().get("profit_book_rupees", 0)
-    return (f"💰 Profit-book: <b>₹{val:,.0f}</b>/trade"
+    s = get_status()
+    val = s.get("profit_book_rupees", 0)
+    floor = s.get("profit_book_min_rupees", 1000)
+    give = s.get("profit_trail_giveback_rupees", 300)
+    return (f"💰 Profit-book AIM: <b>₹{val:,.0f}</b>/trade"
             + (" — OFF" if val <= 0 else
-               " — is level pe PAPER khud book, LIVE pe turant alert."))
+               f" — isse pehle book nahi. Aim cross → trail arm (peak se "
+               f"₹{give:,.0f} giveback pe lock, floor ₹{floor:,.0f} — isse "
+               f"kam kabhi nahi). App mein floor/give-back tune kar sakte ho."))
 
 
 def _trade_now() -> str:
@@ -180,7 +185,8 @@ _HELP = ("📱 <b>Commands</b>\n"
          "/pause — 🛑 naye trades band\n"
          "/resume — 🟢 wapas chalu (paper)\n"
          "/aggressive · /balanced · /conservative — kitne trades\n"
-         "/book 1500 — NET ₹ profit pe auto-book (charges ke baad)\n"
+         "/book 1500 — NET ₹ aim (charges ke baad); floor 1000, trail "
+         "give-back 300 default — app mein tune karo\n"
          "/funnel — aaj ka hisaab (kyun kam trades)\n"
          "/brain — abhi ka verdict")
 

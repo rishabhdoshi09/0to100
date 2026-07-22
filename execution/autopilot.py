@@ -98,8 +98,11 @@ _DEFAULTS = {
     "considered": {},              # {YYYY-MM-DD: candidates seen}
     "preset": "Balanced",          # aggressiveness dial (frequency, not safety)
     "brain_gate": True,            # Brain STAND_ASIDE → pause new entries (survival)
-    "profit_book_rupees": 0.0,     # >0 → ₹X profit par book & close (0 = off)
+    "profit_book_rupees": 0.0,     # >0 → ₹X AIM: is se pehle book NAHI hota
+    "profit_book_min_rupees": 1000.0,  # hard floor — isse KAM pe kabhi book nahi
+    "profit_trail_giveback_rupees": 300.0,  # aim cross → peak se itna neeche book
     "book_nudges": {},             # {date: [symbols]} LIVE book-alert dedupe
+    "trail_peaks": {},             # {trade_id: peak NET ₹} — trailing state
     "symbol_memory_gate": True,    # 🧠 serial false-breaker naam dobara nahi
 }
 
@@ -242,6 +245,8 @@ def set_config(**kwargs) -> None:
         "max_hold_days": (2, 15),
         "max_chase_pct": (0.25, 5.0),
         "profit_book_rupees": (0.0, 100000.0),
+        "profit_book_min_rupees": (0.0, 100000.0),
+        "profit_trail_giveback_rupees": (50.0, 50000.0),
     }
     bools = ("trailing_enabled", "regime_gate", "conviction_sizing",
              "adaptive_source_gate", "brain_gate", "symbol_memory_gate")
@@ -934,8 +939,10 @@ def _consider_locked(symbol: str, entry: float, stop: float, score: float,
             except Exception:
                 _need_gross = _book_amt
             _mv = _need_gross / (qty * entry) * 100
-            _book_bit = (f" [NET ₹{_book_amt:,.0f} book @ +{_mv:.1f}% "
-                         f"(gross ₹{_need_gross:,.0f})]")
+            _floor = float(s.get("profit_book_min_rupees") or 0)
+            _book_bit = (f" [NET ₹{_book_amt:,.0f} aim @ +{_mv:.1f}% "
+                         f"(gross ₹{_need_gross:,.0f}), phir TRAIL, floor "
+                         f"₹{_floor:,.0f}]")
         _log_activity(f"BUY {qty}×{symbol} @ ₹{entry:,.1f} "
                       f"(stop ₹{stop:,.1f} / target ₹{target:,.1f}) "
                       f"[{source}] [{s['mode']}] [conviction {mult:.2f}×]"
@@ -1091,21 +1098,42 @@ def _source_paused(source: str) -> str | None:
 
 # ── Time-stop: dead money is a cost ──────────────────────────────────────────
 
-def _profit_book() -> None:
-    """💰 ₹-profit booking: profit_book_rupees > 0 aur kisi open trade ka
-    unrealized ≥ us threshold → book it, close it. User ka mandate: 'har
-    trade se ₹1,500 nikaalo aur band karo.'
+def _trail_stop(peak: float, floor: float, giveback: float) -> float:
+    """Pure formula (testable without DB/quotes): peak NET se `giveback`
+    neeche, par `floor` se kabhi neeche nahi."""
+    return max(floor, peak - giveback)
 
-    PAPER → turant close (PAPER_WIN, live price pe) — capital recycle,
-    agla setup. LIVE → GTT exchange pe baitha hai isliye auto-sell nahi;
-    turant Telegram nudge (ek baar per symbol per day): 'book now'.
-    Trader math note: booking chhoti aur stop ATR-wala bada — isliye ye
-    sirf conviction-gated entries ke saath hi +EV hai; entry filter (prime/
-    gates) hi asli edge hai, booking sirf uska cashier."""
+
+def _profit_book() -> None:
+    """💰⛓️ NET-aware profit booking WITH A TRAIL.
+
+    Teen level, saaf:
+      AIM (profit_book_rupees)        — isse pehle book NAHI hota, chalne do
+      FLOOR (profit_book_min_rupees)  — isse KAM pe kabhi book nahi hota
+                                         (armed hone ke baad ka worst-case)
+      GIVEBACK (profit_trail_giveback_rupees) — AIM cross hote hi trailing
+                                         ARM; peak NET se itna neeche aane
+                                         par lock — runner ko chalne do,
+                                         par jo mila usse pakad lo
+
+    trail_stop = max(FLOOR, peak_net − GIVEBACK). Matlab: agar stock ₹1,500
+    ke baad ₹3,000 tak bhaage, hum turant nahi bechte — peak track karte
+    hain aur sirf pullback pe (kam se kam FLOOR guarantee ke saath) book
+    karte hain. 'Chhota profit pe kaat dena' ab structurally possible nahi:
+    AIM se neeche kabhi book hi nahi hota.
+
+    PAPER → turant close (PAPER_WIN, live price pe) — capital recycle.
+    LIVE → GTT exchange pe baitha hai isliye auto-sell nahi; trail-stop hit
+    hote hi Telegram nudge (ek baar per symbol per day): 'book now'.
+    Trader math note: entry filter (prime/gates) hi asli edge hai, ye
+    sirf uska disciplined cashier."""
     s = _load()
-    threshold = float(s.get("profit_book_rupees") or 0)
-    if threshold <= 0:
+    aim = float(s.get("profit_book_rupees") or 0)
+    if aim <= 0:
         return
+    floor = float(s.get("profit_book_min_rupees") or 0)
+    floor = min(floor, aim)                    # floor kabhi aim se upar nahi
+    giveback = max(1.0, float(s.get("profit_trail_giveback_rupees") or 300))
     opens = _open_autopilot_trades()
     if not opens:
         return
@@ -1115,6 +1143,11 @@ def _profit_book() -> None:
     except Exception:
         return
     today = _ist_today().isoformat()
+    open_ids = {str(t["id"]) for t in opens}
+    with _lock:
+        trail = {k: v for k, v in dict(_load().get("trail_peaks") or {}).items()
+                 if k in open_ids}              # stale entries prune (already closed)
+
     for t in opens:
         q = live.get(t["symbol"])
         if not (q and q.get("price")):
@@ -1125,31 +1158,40 @@ def _profit_book() -> None:
         if entry <= 0 or qty <= 0:
             continue
         pnl = (px - entry) * qty
-        # 💸 NET-aware trigger: "₹1,500 kamana" = charges (STT/stamp/GST/DP)
-        # ke BAAD ₹1,500. Gross pe book karte toh haath mein ~₹1,300 aata —
-        # woh jhooth hota. exit_price RAW px hi store hota hai (report-card
-        # pipeline apne costs khud lagata hai — double-count nahi).
+        # 💸 NET: charges (STT/stamp/GST/DP) ke BAAD ka asli paisa. exit_price
+        # RAW px hi store hota hai (report-card apne costs khud lagata hai —
+        # double-count nahi).
         try:
             from execution.cost_model import zerodha_charges
             ch = float(zerodha_charges(entry, px, qty)["total"])
         except Exception:
             ch = 0.0
         net = pnl - ch
-        if net < threshold:
-            continue
+        tid = str(t["id"])
+        peak = max(trail.get(tid, 0.0), net)
+        trail[tid] = peak
+
+        if peak < aim:
+            continue                       # abhi AIM tak nahi pahuncha — chalne do
+        trail_stop = _trail_stop(peak, floor, giveback)
+        if net > trail_stop:
+            continue                       # trailing armed, abhi upar hi hai
+
         if t["mode"] == "PAPER":
             _ensure_exit_col()
             _update_trade(t["id"], "exit_price=?, status=?, note=note||?",
                           (px, "PAPER_WIN",
-                           f" | profit-book NET ₹{net:,.0f} "
-                           f"(gross ₹{pnl:,.0f} − charges ₹{ch:,.0f}) "
+                           f" | trail-book NET ₹{net:,.0f} (peak ₹{peak:,.0f} "
+                           f"se trail, gross ₹{pnl:,.0f} − charges ₹{ch:,.0f}) "
                            f"@ ₹{px:,.1f}"))
             _log_activity(f"💰 BOOKED {t['symbol']} NET ₹{net:+,.0f} "
-                          f"(charges ₹{ch:,.0f} kat ke) @ ₹{px:,.1f} — "
-                          f"capital recycle")
+                          f"(peak ₹{peak:,.0f} se trail-lock, charges "
+                          f"₹{ch:,.0f} kat ke) @ ₹{px:,.1f} — capital recycle")
             _notify(f"💰 <b>NET ₹{net:,.0f} BOOKED</b> — {t['symbol']} "
-                    f"@ ₹{px:,.1f} ({qty} sh, charges ₹{ch:,.0f} minus). "
-                    f"Trade band, capital wapas pool mein.")
+                    f"@ ₹{px:,.1f} ({qty} sh, peak tha ₹{peak:,.0f}, "
+                    f"charges ₹{ch:,.0f} minus). Trade band, capital wapas "
+                    f"pool mein.")
+            trail.pop(tid, None)
         else:
             with _lock:
                 st = _load()
@@ -1160,11 +1202,15 @@ def _profit_book() -> None:
                 st["book_nudges"] = {today: done + [t["symbol"]]}
             _save()
             _notify(f"💰 <b>{t['symbol']} NET ₹{net:,.0f} book-ready</b> "
-                    f"(LTP ₹{px:,.1f}, gross ₹{pnl:,.0f} − charges "
-                    f"₹{ch:,.0f}). ₹{threshold:,.0f} net ka level aa gaya — "
+                    f"(LTP ₹{px:,.1f}, peak tha ₹{peak:,.0f}, gross "
+                    f"₹{pnl:,.0f} − charges ₹{ch:,.0f}). Trail-stop hit — "
                     f"GTT cancel karke ticket se sell karo. "
                     f"(LIVE auto-sell nahi hota — tumhara click, tumhara "
                     f"paisa.)")
+    with _lock:
+        st = _load()
+        st["trail_peaks"] = trail
+    _save()
 
 
 def daily_scoreboard() -> dict:

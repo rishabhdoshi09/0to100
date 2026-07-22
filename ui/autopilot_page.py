@@ -309,13 +309,29 @@ def _render_india_autopilot() -> None:
                      "SKIP. Bhaagti train ka peecha nahi — extension pe "
                      "buy karna edge kha jata hai")
         book_rs = st.number_input(
-            "💰 Profit-book (₹ per trade, 0 = off)", 0.0, 100000.0,
+            "💰 Profit-book AIM (₹ per trade, 0 = off)", 0.0, 100000.0,
             float(s.get("profit_book_rupees", 0.0)), 250.0, key="ap_book",
-            help="Kisi bhi open trade ka profit isse upar → PAPER turant "
-                 "book+close (capital recycle); LIVE pe turant 'book now' "
-                 "Telegram alert. ⚡ Fast-exit monitor har ~60s check karta "
-                 "hai (scan ka wait nahi) — paper stop/target bhi turant. "
-                 "GTT exchange-side safety net waise hi rehta hai.")
+            help="Isse PEHLE book NAHI hota — pehle chalne do. Aim cross "
+                 "hote hi trailing ARM ho jaati hai (neeche floor/give-back "
+                 "dekho). ⚡ Fast-exit monitor har ~60s check karta hai (scan "
+                 "ka wait nahi). GTT exchange-side safety net alag se rehta hai.")
+        bf1, bf2 = st.columns(2)
+        with bf1:
+            book_floor = st.number_input(
+                "🛡️ Min floor (₹, isse KAM pe kabhi book nahi)", 0.0, 100000.0,
+                float(s.get("profit_book_min_rupees", 1000.0)), 100.0,
+                key="ap_book_floor",
+                help="Trailing ARM hone ke baad ka WORST-CASE guarantee — "
+                     "peak se pullback ho bhi jaye, isse neeche kabhi book "
+                     "nahi hota.")
+        with bf2:
+            book_give = st.number_input(
+                "📉 Trail give-back (₹ peak se)", 50.0, 50000.0,
+                float(s.get("profit_trail_giveback_rupees", 300.0)), 50.0,
+                key="ap_book_give",
+                help="Aim cross karte hi trailing arm — peak NET se itna "
+                     "neeche aane par lock (floor se kam kabhi nahi). Runner "
+                     "ko chalne do, jo mila usse pakdo.")
         if _rec_txt:
             st.caption(f"📊 {_rec_txt} — slider tumhara hai, evidence humara.")
         if st.button("💾 Save limits", key="ap_save", width="stretch"):
@@ -339,7 +355,9 @@ def _render_india_autopilot() -> None:
                        max_hold_days=int(hold_days),
                        target_pct=float(target_pct),
                        max_chase_pct=float(chase_pct),
-                       profit_book_rupees=float(book_rs))
+                       profit_book_rupees=float(book_rs),
+                       profit_book_min_rupees=float(book_floor),
+                       profit_trail_giveback_rupees=float(book_give))
             st.success("Limits saved. (Mode change hua ho toh dobara ARM karna hoga.)")
             st.rerun()
 

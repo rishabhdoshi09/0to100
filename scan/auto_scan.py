@@ -210,9 +210,9 @@ def _push_new_setups(picks: list[dict]) -> None:
                                 _need = _book_amt
                             _mv = _need / (ps["qty"] * float(p["entry"])) * 100
                             _lvl = float(p["entry"]) * (1 + _mv / 100)
-                            size_line += (f"\n   💰 NET ₹{_book_amt:,.0f} "
-                                          f"book @ ₹{_lvl:,.1f} (+{_mv:.1f}%, "
-                                          f"charges included)")
+                            size_line += (f"\n   💰 NET ₹{_book_amt:,.0f} aim "
+                                          f"@ ₹{_lvl:,.1f} (+{_mv:.1f}%), "
+                                          f"phir TRAIL — floor se kam kabhi nahi")
                 except Exception:
                     pass
                 lines.append(

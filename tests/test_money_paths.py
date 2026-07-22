@@ -1373,60 +1373,18 @@ class TestPrimeFilter:
 
 
 class TestProfitBooking:
-    """₹X book-and-close: PAPER auto-books at threshold; LIVE nudges once."""
+    """₹X aim + hard floor + trailing lock: PAPER auto-books, LIVE nudges
+    once. 'Chhota profit pe kaat dena' structurally impossible — aim se
+    neeche kabhi book nahi hota; aim cross → trail arm → peak se pullback
+    pe lock (floor se kam kabhi nahi)."""
 
-    def test_paper_books_at_threshold(self, tmp_path, monkeypatch):
-        ta = TestAutopilot()
-        ap, te = ta._setup(tmp_path, monkeypatch)
-        ta._zero_costs(monkeypatch)          # boundary math exact (charges=0)
-        ap.arm()
-        monkeypatch.setattr(ap, "_in_window", lambda now=None: True)
-        assert ap.consider("HAL", 4500, 4300, 80, 0.2, "Defence", "t") is True
-        ap.set_config(profit_book_rupees=1500.0)
-        qty = int(te.recent_trades(1)[0]["qty"])
-        # price such that pnl just below threshold → no booking
-        below = 4500 + (1400 / qty)
-        monkeypatch.setattr("data.live_quotes.get_live_quotes",
-                            lambda syms: {"HAL": {"price": below}})
-        ap._profit_book()
-        assert te.recent_trades(1)[0]["status"] == "PAPER_OPEN"
-        # price above threshold → booked and closed as WIN
-        above = 4500 + (1600 / qty)
-        monkeypatch.setattr("data.live_quotes.get_live_quotes",
-                            lambda syms: {"HAL": {"price": above}})
-        ap._profit_book()
-        t = te.recent_trades(1)[0]
-        assert t["status"] == "PAPER_WIN" and "profit-book" in t["note"]
-
-    def test_booking_is_net_of_charges(self, tmp_path, monkeypatch):
-        """'₹1,500 kamana' = charges ke BAAD ₹1,500. Gross 1,600 (net ~1,380)
-        par book NAHI hota; gross_for_net level par hota hai — NET note ke
-        saath."""
-        from execution.cost_model import gross_for_net
-        ta = TestAutopilot()
-        ap, te = ta._setup(tmp_path, monkeypatch)   # REAL charges — no zeroing
-        ap.arm()
-        monkeypatch.setattr(ap, "_in_window", lambda now=None: True)
-        assert ap.consider("HAL", 4500, 4300, 80, 0.2, "Defence", "t") is True
-        ap.set_config(profit_book_rupees=1500.0)
-        qty = int(te.recent_trades(1)[0]["qty"])
-        need = gross_for_net(1500, 4500, qty)
-        # gross threshold ke UPAR par NET level ke NEECHE — purana (jhootha)
-        # gross-trigger yahan book kar deta; net-aware ruk jata hai
-        low = (1500 + need) / 2
-        assert 1500 < low < need                     # boundary sanity
-        monkeypatch.setattr("data.live_quotes.get_live_quotes",
-                            lambda syms: {"HAL": {"price": 4500 + low / qty}})
-        ap._profit_book()
-        assert te.recent_trades(1)[0]["status"] == "PAPER_OPEN"   # ruka raha
-        # NET level (+ chhota buffer) → ab book
-        need += 20
-        monkeypatch.setattr("data.live_quotes.get_live_quotes",
-                            lambda syms: {"HAL": {"price": 4500 + need / qty}})
-        ap._profit_book()
-        t = te.recent_trades(1)[0]
-        assert t["status"] == "PAPER_WIN"
-        assert "NET" in t["note"] and "charges" in t["note"]
+    def test_trail_stop_formula(self):
+        from execution.autopilot import _trail_stop
+        assert _trail_stop(peak=2000, floor=1000, giveback=300) == 1700
+        assert _trail_stop(peak=1500, floor=1000, giveback=300) == 1200
+        # giveback itna bada ki floor bind ho jaye (clamp up)
+        assert _trail_stop(peak=1500, floor=1000, giveback=700) == 1000
+        assert _trail_stop(peak=10000, floor=1000, giveback=300) == 9700
 
     def test_gross_for_net_math(self):
         from execution.cost_model import gross_for_net, zerodha_charges
@@ -1437,6 +1395,56 @@ class TestProfitBooking:
         assert gross_for_net(0, 1000, 40) == 0.0     # off → no-op
         assert gross_for_net(1500, 0, 0) == 1500     # degenerate-safe
 
+    def test_below_aim_never_books_regardless_of_time(self, tmp_path, monkeypatch):
+        """AIM se neeche — kitni bhi der chale — kabhi book nahi hota. Yahi
+        'chhote profit pe kaat dena' ka structural fix hai."""
+        ta = TestAutopilot()
+        ap, te = ta._setup(tmp_path, monkeypatch)
+        ta._zero_costs(monkeypatch)
+        ap.arm()
+        monkeypatch.setattr(ap, "_in_window", lambda now=None: True)
+        assert ap.consider("HAL", 4500, 4300, 80, 0.2, "Defence", "t") is True
+        ap.set_config(profit_book_rupees=1500.0)
+        qty = int(te.recent_trades(1)[0]["qty"])
+        for pct_net in (500, 900, 1200, 1450):    # sab AIM (1500) se neeche
+            px = 4500 + pct_net / qty
+            monkeypatch.setattr("data.live_quotes.get_live_quotes",
+                                lambda syms, px=px: {"HAL": {"price": px}})
+            ap._profit_book()
+            assert te.recent_trades(1)[0]["status"] == "PAPER_OPEN"
+
+    def test_arms_then_locks_on_pullback(self, tmp_path, monkeypatch):
+        """AIM cross → arm (turant book nahi). Peak se giveback jitna pullback
+        → lock. Runner ko chalne diya, phir bhi pakda."""
+        ta = TestAutopilot()
+        ap, te = ta._setup(tmp_path, monkeypatch)
+        ta._zero_costs(monkeypatch)          # exact math ke liye
+        ap.arm()
+        monkeypatch.setattr(ap, "_in_window", lambda now=None: True)
+        assert ap.consider("HAL", 4500, 4300, 80, 0.2, "Defence", "t") is True
+        ap.set_config(profit_book_rupees=1500.0, profit_book_min_rupees=1000.0,
+                      profit_trail_giveback_rupees=300.0)
+        qty = int(te.recent_trades(1)[0]["qty"])
+
+        def _tick(net):
+            px = 4500 + net / qty
+            monkeypatch.setattr("data.live_quotes.get_live_quotes",
+                                lambda syms, px=px: {"HAL": {"price": px}})
+            ap._profit_book()
+
+        _tick(1200)                          # AIM se neeche — chalne do
+        assert te.recent_trades(1)[0]["status"] == "PAPER_OPEN"
+        _tick(2000)                          # AIM cross, peak=2000, armed —
+        assert te.recent_trades(1)[0]["status"] == "PAPER_OPEN"  # abhi book nahi (trail_stop=1700)
+        _tick(1800)                          # neeche aaya par trail_stop(1700) se upar
+        assert te.recent_trades(1)[0]["status"] == "PAPER_OPEN"
+        _tick(1650)                          # trail_stop(1700) ke neeche → LOCK
+        t = te.recent_trades(1)[0]
+        assert t["status"] == "PAPER_WIN"
+        assert "trail-book" in t["note"] and "peak" in t["note"]
+        # ye 1650 hai — AIM(1500) se zyada, floor(1000) se zyada, purane
+        # exact-threshold model se behtar (peak 2000 tak chalne diya)
+
     def test_off_by_default_and_live_nudges_once(self, tmp_path, monkeypatch):
         ta = TestAutopilot()
         ap, te = ta._setup(tmp_path, monkeypatch)
@@ -1445,19 +1453,50 @@ class TestProfitBooking:
                      "entry_type": "MARKET", "entry_price": 300,
                      "stop_price": 290, "target_price": 315, "product": "CNC",
                      "status": "PLACED", "note": "AUTOPILOT:t"})
-        monkeypatch.setattr("data.live_quotes.get_live_quotes",
-                            lambda syms: {"BEL": {"price": 320.0}})  # +₹2000
         notes = []
         monkeypatch.setattr(ap, "_notify", lambda m: notes.append(m))
-        ap._profit_book()                       # default 0 → OFF, no action
+        # AIM se neeche → koi notify nahi
+        monkeypatch.setattr("data.live_quotes.get_live_quotes",
+                            lambda syms: {"BEL": {"price": 310.0}})  # +₹1000
+        ap._profit_book()                       # default 0 → OFF
         assert notes == []
         ap.set_config(profit_book_rupees=1500.0)
+        ap._profit_book()                       # peak=1000, armed nahi (< aim)
+        assert notes == []
+        # AIM cross (peak=2200) — armed, par abhi upar hi hai → notify nahi
+        monkeypatch.setattr("data.live_quotes.get_live_quotes",
+                            lambda syms: {"BEL": {"price": 322.0}})  # +₹2200
+        ap._profit_book()
+        assert notes == []
+        # pullback trail_stop(1900) se neeche → NOW notify
+        monkeypatch.setattr("data.live_quotes.get_live_quotes",
+                            lambda syms: {"BEL": {"price": 318.5}})  # +₹1850
         ap._profit_book()
         ap._profit_book()                       # same day → single nudge
         assert len([n for n in notes if "BEL" in n]) == 1
         assert "book" in notes[0].lower()
         # LIVE kabhi auto-close nahi hota
         assert te.recent_trades(1)[0]["status"] == "PLACED"
+
+    def test_stale_trail_state_pruned_on_close(self, tmp_path, monkeypatch):
+        """Trade kisi aur raaste (stop/target) se band ho jaye toh uska
+        trail_peaks entry agli tick pe khud saaf ho jaata hai."""
+        ta = TestAutopilot()
+        ap, te = ta._setup(tmp_path, monkeypatch)
+        ta._zero_costs(monkeypatch)
+        ap.arm()
+        ap.set_config(profit_book_rupees=1500.0)
+        # fake stale entry jiska koi open trade nahi
+        ap._state.setdefault("trail_peaks", {})["99999"] = 5000.0
+        # koi open trades nahi → function turant return, state untouched
+        # (prune sirf tab hota hai jab opens non-empty ho) — isliye ek asli
+        # open trade bhi rakho taaki prune-path chale
+        monkeypatch.setattr(ap, "_in_window", lambda now=None: True)
+        assert ap.consider("HAL", 4500, 4300, 80, 0.2, "Defence", "t") is True
+        monkeypatch.setattr("data.live_quotes.get_live_quotes",
+                            lambda syms: {"HAL": {"price": 4500.5}})
+        ap._profit_book()
+        assert "99999" not in ap.get_status().get("trail_peaks", {})
 
     def test_fast_book_stop_geometry(self, tmp_path, monkeypatch):
         """Speed lever is GEOMETRY, not risk: confirmed A/B break + booking
@@ -1675,13 +1714,17 @@ class TestDailyScoreboard:
         ap.set_config(profit_book_rupees=1500.0)
         sb = ap.daily_scoreboard()
         assert sb["slots"] == 10 and "ready" in sb["line"]
-        # ek trade lo, book karo → booked_net + progress
+        # ek trade lo — AIM cross (arm) phir pullback (trail-lock) → booked_net
         monkeypatch.setattr(ap, "_in_window", lambda now=None: True)
         assert ap.consider("HAL", 4500, 4300, 80, 0.2, "Defence", "t") is True
         qty = int(te.recent_trades(1)[0]["qty"])
         monkeypatch.setattr("data.live_quotes.get_live_quotes",
-                            lambda syms: {"HAL": {"price": 4500 + 1600 / qty}})
-        ap._profit_book()
+                            lambda syms: {"HAL": {"price": 4500 + 2000 / qty}})
+        ap._profit_book()                    # peak=2000, armed, trail_stop=1700
+        assert ap.daily_scoreboard()["booked_n"] == 0   # abhi book nahi hua
+        monkeypatch.setattr("data.live_quotes.get_live_quotes",
+                            lambda syms: {"HAL": {"price": 4500 + 1650 / qty}})
+        ap._profit_book()                    # trail_stop se neeche → lock
         sb = ap.daily_scoreboard()
         assert sb["booked_n"] == 1
         assert 1500 <= sb["booked_net"] <= 1700       # NET (zero-cost stub)
