@@ -425,6 +425,17 @@ def _scan_once_locked(universe: Optional[list[str]] = None, progress=None) -> No
                 log.info("prime_tagged", n=n_prime)
         except Exception as exc:
             log.debug("prime_skip", error=str(exc))
+        # 🏦 Institutional footprint tag — bulk-deal buying wale naam
+        # (context-tag, score nahi badalta — edge measure hone tak)
+        try:
+            from data.institutional_flows import get_flows
+            _bulk = set(get_flows().get("bulk_buys") or [])
+            if _bulk:
+                for r in serialized:
+                    if r["symbol"] in _bulk:
+                        r["bulk_deal"] = True
+        except Exception as exc:
+            log.debug("bulk_tag_skip", error=str(exc))
         # Proactive delivery — user ko dhundhna na pade, setups khud pahunchein
         _push_new_setups(serialized[:15])
         # 🤖 Autopilot hook — same signals, alert logic untouched

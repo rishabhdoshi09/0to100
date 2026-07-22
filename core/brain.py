@@ -127,6 +127,17 @@ def build_directives(v: dict) -> list[dict]:
     if v.get("options_bias") in ("BULLISH", "BEARISH"):
         add("info", f"🎯 Options positioning: {v.get('options_note', '')} · "
                     f"max-pain ₹{v.get('max_pain', 0):,.0f}.")
+    # 🏦 institutional flows — bade paise ka footprint
+    _fb = v.get("flows_bias", "")
+    if _fb == "DISTRIBUTION":
+        add("warn", f"🏦 {v.get('flows_note', '')} ")
+    elif _fb in ("SUPPORTIVE", "FII_SELLING_DII_ABSORBING"):
+        add("info", f"🏦 {v.get('flows_note', '')}")
+    _bulk = v.get("bulk_buys") or []
+    if _bulk:
+        add("info", f"🏦 Bulk-deal buying aaj: {', '.join(_bulk[:5])}"
+                    + (f" +{len(_bulk) - 5} aur" if len(_bulk) > 5 else "")
+                    + " — bade paise in naamon mein ghuse.")
     # correlation lens: N positions that move together = fewer real bets
     if (v.get("corr_positions", 0) >= 2
             and v.get("corr_bets", 0) < v["corr_positions"]):
@@ -260,6 +271,19 @@ def _probe_options(market: str) -> dict:
         return {}
 
 
+def _probe_flows(market: str) -> dict:
+    """🏦 Institutional footprint: FII/DII net + bulk-deal buys (NSE, free).
+    Bade paise ka context — evidence stream, gate nahi (jab tak edge
+    measure na ho)."""
+    if market == "US":
+        return {}
+    try:
+        from data.institutional_flows import get_flows
+        return get_flows() or {}
+    except Exception:
+        return {}
+
+
 def _probe_correlation(market: str) -> dict:
     """Book through the correlation lens — positions vs real bets."""
     if market == "US":
@@ -298,6 +322,7 @@ def assess(market: str = "IN", capital: float = 100_000.0) -> dict:
     corr = _probe_correlation(market)
     breadth = _probe_breadth(market)
     opts = _probe_options(market)
+    flows = _probe_flows(market)
 
     buys = [r for r in setups if r.get("verdict") in ("STRONG BUY", "BUY")]
     # EV-first cross-sectional ranking (north star): setups with a measured
@@ -356,6 +381,9 @@ def assess(market: str = "IN", capital: float = 100_000.0) -> dict:
         "options_bias": opts.get("bias", ""),
         "options_note": opts.get("note", ""),
         "max_pain": opts.get("max_pain", 0.0),
+        "flows_bias": (flows.get("fii_dii") or {}).get("bias", ""),
+        "flows_note": (flows.get("fii_dii") or {}).get("note", ""),
+        "bulk_buys": flows.get("bulk_buys") or [],
         "posture": posture,
     }
     directives = build_directives(vitals)

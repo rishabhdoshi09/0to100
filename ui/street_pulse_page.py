@@ -281,6 +281,8 @@ def _render_today_best_setups(limit: int = 5) -> None:
         conv_bit = f" · conviction {conv:.0f}" if conv else ""
         # EV chip — the number that actually ranks it (measured, not vibes);
         # confidence = Bayesian trust in the sample (HIGH ≫ LOW)
+        if r.get("bulk_deal"):
+            conv_bit += " · 🏦 bulk-deal buying"   # bade paise ka footprint
         if r.get("ev_pct") is not None:
             _cf = r.get("ev_conf", "")
             _cf_col = {"HIGH": "#00d4a0", "MEDIUM": "#eab308",

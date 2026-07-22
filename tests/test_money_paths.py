@@ -2003,6 +2003,70 @@ class TestSimLab:
         assert 250 not in roll                             # not enough data
 
 
+class TestInstitutionalFlows:
+    """🏦 FII/DII + bulk deals — bade paise ka footprint, NSE se free.
+    Parsers pure; fetch-fail = no claim; context-only (gate nahi)."""
+
+    def test_fii_dii_bias_matrix(self):
+        from data.institutional_flows import parse_fii_dii
+        def rows(fii, dii):
+            return [{"category": "FII/FPI *", "netValue": str(fii),
+                     "date": "22-Jul-2026"},
+                    {"category": "DII **", "netValue": str(dii)}]
+        assert parse_fii_dii(rows(2400, 1100))["bias"] == "SUPPORTIVE"
+        r = parse_fii_dii(rows(-3200, 2100))
+        assert r["bias"] == "FII_SELLING_DII_ABSORBING"
+        assert "absorb" in r["note"]
+        assert parse_fii_dii(rows(-1500, -900))["bias"] == "DISTRIBUTION"
+        assert parse_fii_dii(rows(1500, -900))["bias"] == "MIXED"
+        # comma-formatted NSE numbers parse hote hain
+        assert parse_fii_dii([
+            {"category": "FII/FPI", "netValue": "-2,412.35"},
+            {"category": "DII", "netValue": "1,987.10"},
+        ])["fii_net_cr"] == -2412.0
+        assert parse_fii_dii([]) is None                 # no claim
+        assert parse_fii_dii([{"category": "FII", "netValue": "5"}]) is None
+
+    def test_bulk_deals_and_net_buys(self):
+        from data.institutional_flows import parse_bulk_deals, bulk_buy_symbols
+        deals = parse_bulk_deals({"data": [
+            {"BD_SYMBOL": "HAL", "BD_BUY_SELL": "BUY",
+             "BD_QTY_TRD": "5,00,000".replace(",", ""), "BD_TP_WATP": "4500",
+             "BD_CLIENT_NAME": "BIG FUND LLP"},
+            {"BD_SYMBOL": "HAL", "BD_BUY_SELL": "SELL", "BD_QTY_TRD": "100000",
+             "BD_TP_WATP": "4501"},
+            {"BD_SYMBOL": "TRAP", "BD_BUY_SELL": "SELL", "BD_QTY_TRD": "900000",
+             "BD_TP_WATP": "50"},
+            {"BD_SYMBOL": "", "BD_BUY_SELL": "BUY", "BD_QTY_TRD": "1"},  # junk
+        ]})
+        assert len(deals) == 3
+        buys = bulk_buy_symbols(deals)
+        assert buys == {"HAL"}               # net buy sirf HAL; TRAP net sell
+
+    def test_brain_carries_flows(self, monkeypatch):
+        import core.brain as brain
+        for p in ("_probe_regime",):
+            monkeypatch.setattr(brain, p, lambda: "CHOPPY")
+        monkeypatch.setattr(brain, "_probe_edge", lambda cap: {
+            "expectancy_r": 0.1, "edge_trend": "stable", "closed": 60})
+        monkeypatch.setattr(brain, "_probe_setups", lambda m: ([], 0.0))
+        monkeypatch.setattr(brain, "_probe_book", lambda: {"verdict": "OK"})
+        monkeypatch.setattr(brain, "_probe_autopilot", lambda m: {})
+        monkeypatch.setattr(brain, "_probe_dead_daemons", lambda: [])
+        monkeypatch.setattr(brain, "_probe_rotation", lambda m: {})
+        monkeypatch.setattr(brain, "_probe_correlation", lambda m: {})
+        monkeypatch.setattr(brain, "_probe_breadth", lambda m: {})
+        monkeypatch.setattr(brain, "_probe_options", lambda m: {})
+        monkeypatch.setattr(brain, "_probe_flows", lambda m: {
+            "fii_dii": {"bias": "DISTRIBUTION",
+                        "note": "FII -2400cr AUR DII -900cr dono bech rahe"},
+            "bulk_buys": ["HAL", "BEL"]})
+        a = brain.assess("IN", 100000.0)
+        warns = [d for d in a["directives"] if d["severity"] == "warn"]
+        assert any("dono bech" in d["text"] for d in warns)     # distribution=warn
+        assert any("HAL, BEL" in d["text"] for d in a["directives"])
+
+
 class TestSymbolMemory:
     """🧠 MOAT piece: har stock ka charitra yaad — serial false-breakers
     dobara entry nahi paate. Firms per-instrument models rakhti hain;

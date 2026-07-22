@@ -18,6 +18,9 @@ app.py                    # Streamlit shell: nav (Today|Pulse|Stocks|Options|
 │   ├── live_quotes.py    # Unified quotes: Kite → NSE → Google (in that order)
 │   ├── google_finance.py # Scrape fallback only (fragile — never primary)
 │   ├── kite_client.py    # KiteConnect wrapper (orders, quotes, ticker)
+│   ├── institutional_flows.py # 🏦 FII/DII net + bulk deals (NSE free API,
+│   │                     #   3h cache) → Brain evidence stream + 🏦 card tag.
+│   │                     #   Context-only (gate nahi) jab tak edge measure na ho
 │   ├── instruments.py    # symbol → instrument_token map
 │   └── nse_universe.py   # ~2000 clean EQ symbols; _is_valid_symbol junk filter
 │
