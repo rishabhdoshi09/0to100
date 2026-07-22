@@ -829,11 +829,16 @@ def _render_us_pulse() -> None:
             st.caption("Koi US accumulation candidate nahi.")
     with c2:
         _section_title("💥 US Breakouts")
-        # CONFIRMED breaks only — "breakout" substring also matches the
-        # PRE_BREAKOUT watch signal (unconfirmed, conviction never computed
-        # for it), which leaked in here showing a misleading "conv 0"
+        # CONFIRMED breaks only. r["signals"] holds signal_labels (plain-
+        # English strings), not the raw SIGNAL_META keys — match the exact
+        # labels, same as reports/street_pulse.py's NSE equivalent. A loose
+        # "breakout" substring also matches the PRE_BREAKOUT watch label
+        # ("Breakout ke kareeb", unconfirmed — conviction never computed
+        # for it), which used to leak in here showing a misleading "conv 0".
+        _CONFIRMED_BRK_LABELS = ("52-week high breakout",
+                                 "Resistance break on volume")
         brk = [r for r in results
-               if {"BREAKOUT_52W", "BREAKOUT_RES"} & set(r.get("signals", []))][:5]
+               if any(s in _CONFIRMED_BRK_LABELS for s in r.get("signals", []))][:5]
         if brk:
             st.markdown(f"<div style='{_CARD}'>" + "".join(
                 f"<div style='font-size:.82rem;color:#c9d1d9;margin:3px 0'>"
