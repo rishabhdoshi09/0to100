@@ -829,8 +829,11 @@ def _render_us_pulse() -> None:
             st.caption("Koi US accumulation candidate nahi.")
     with c2:
         _section_title("💥 US Breakouts")
+        # CONFIRMED breaks only — "breakout" substring also matches the
+        # PRE_BREAKOUT watch signal (unconfirmed, conviction never computed
+        # for it), which leaked in here showing a misleading "conv 0"
         brk = [r for r in results
-               if any("breakout" in s.lower() for s in r.get("signals", []))][:5]
+               if {"BREAKOUT_52W", "BREAKOUT_RES"} & set(r.get("signals", []))][:5]
         if brk:
             st.markdown(f"<div style='{_CARD}'>" + "".join(
                 f"<div style='font-size:.82rem;color:#c9d1d9;margin:3px 0'>"
