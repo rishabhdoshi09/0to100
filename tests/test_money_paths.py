@@ -284,6 +284,12 @@ class TestUnifiedScanner:
     def test_breakout_detected_with_dated_reason(self):
         from scan.unified_scanner import UnifiedScanner
         close = np.linspace(100, 200, 260)
+        # a few small pullback days so RSI isn't pinned at the theoretical
+        # 100 ceiling (a pure straight-line ramp never happens in real
+        # data) — keeps this test clear of the RSI hard-reject band
+        close[-3] = close[-4] - 2.0
+        close[-8] = close[-9] - 2.0
+        close[-12] = close[-13] - 2.0
         close[-1] = 212
         vol = np.full(260, 2e6); vol[-1] = 5e6
         r = UnifiedScanner()._analyze("X", self._df(close, vol))
@@ -3050,6 +3056,78 @@ class TestBreakoutConfirmation:
         worst, _ = bc(**kwargs, clv=0.0)               # closed at the day's low
         assert worst == round(strong * 0.6, 0)         # worst-case: 40% cut, floored
 
+    def test_rsi_overbought_soft_demotes_grade_a_to_b(self):
+        """Clean clearance that would grade A, but RSI is already extended
+        (soft ceiling) — demote A→B. No room left to run is a real risk
+        ATR/volume alone can't see."""
+        from scan.unified_scanner import grade_breakout as g
+        strong = g(price=105, level=100, atr=3.33, vratio=3.0, day_change=2,
+                  rsi=55)
+        assert strong == (True, "A", strong[2])              # normal RSI → A stays
+        extended = g(price=105, level=100, atr=3.33, vratio=3.0, day_change=2,
+                     rsi=75)
+        assert extended[0] is True and extended[1] == "B"    # demoted, still confirmed
+        assert "demote" in extended[2] and "75" in extended[2]
+
+    def test_rsi_overbought_hard_rejects_outright(self):
+        """RSI >=82 is a blow-off-top — rejected outright, same tier as the
+        gap-exhaustion check, regardless of otherwise-clean clearance."""
+        from scan.unified_scanner import grade_breakout as g
+        ok, grade, note = g(price=105, level=100, atr=3.33, vratio=3.0,
+                            day_change=2, rsi=85)
+        assert ok is False and grade == ""
+        assert "blow-off-top" in note
+
+    def test_rsi_default_is_backward_compatible(self):
+        """Callers that don't pass rsi (default 0.0) behave exactly as
+        before this feature — no silent behaviour change for old call sites."""
+        from scan.unified_scanner import grade_breakout as g
+        with_default = g(price=105, level=100, atr=5, vratio=2.5, day_change=3)
+        explicit = g(price=105, level=100, atr=5, vratio=2.5, day_change=3,
+                     rsi=0.0)
+        assert with_default == explicit
+
+    def test_rsi_and_clv_combined_flags(self):
+        """Weak close AND extended RSI can fire together — both flags land
+        in one note, still just a demote (not a double-penalty reject)
+        as long as the underlying clearance is clean."""
+        from scan.unified_scanner import grade_breakout as g
+        ok, grade, note = g(price=105, level=100, atr=3.33, vratio=3.0,
+                            day_change=2, clv=0.2, rsi=75)
+        assert ok is True and grade == "B"
+        assert "CLV" in note and "RSI" in note and "75" in note
+
+    def test_breakout_conviction_pct_below_high_demotion_and_floor(self):
+        """A break happening well below the 52-week high is a laggard, not
+        a leader — demote conviction (never a hard block; other factors can
+        still carry an exceptional setup). Fresh 52-week-high breaks pass
+        pct_below_high=0.0 by construction, so they're exempt."""
+        from scan.unified_scanner import breakout_conviction as bc
+        kwargs = dict(vratio=2.5, deliv_now=60, deliv_base=50, rs_outperf=5,
+                      above_50=True, above_200=True, base_q=0.8)
+        near, _ = bc(**kwargs, pct_below_high=5)
+        default, _ = bc(**kwargs)                       # 0.0 default
+        threshold, _ = bc(**kwargs, pct_below_high=25)   # boundary — no cliff
+        assert near == default == threshold
+        laggard, factors = bc(**kwargs, pct_below_high=40)
+        assert laggard < near
+        assert any("laggard zone" in f for f in factors)
+        floor, _ = bc(**kwargs, pct_below_high=60)
+        floor2, _ = bc(**kwargs, pct_below_high=90)      # deep past floor
+        assert floor == floor2                            # floors at 50% cut, no further
+        assert abs(floor - near * 0.5) <= 1               # ~50% cut (rounding tolerance)
+
+    def test_pct_below_high_default_is_backward_compatible(self):
+        """Callers that don't pass pct_below_high (default 0.0, exempt by
+        construction for fresh 52-week-high breaks) behave exactly as
+        before this feature."""
+        from scan.unified_scanner import breakout_conviction as bc
+        kwargs = dict(vratio=2.5, deliv_now=60, deliv_base=50, rs_outperf=5,
+                      above_50=True, above_200=True, base_q=0.8)
+        with_default, _ = bc(**kwargs)
+        explicit, _ = bc(**kwargs, pct_below_high=0.0)
+        assert with_default == explicit
+
     def test_marginal_note_is_time_aware(self, monkeypatch):
         """Off-hours the close is IN — a marginal break must say 'close pe
         bhi confirm nahi hua', NOT 'close ka wait' (data humare paas hai)."""
@@ -3485,6 +3563,10 @@ class TestUSScanner:
         n = 120
         close = np.concatenate([np.full(90, 100.0), np.full(29, 101.0),
                                 [106.0]])
+        # one small pullback day so RSI isn't pinned at the theoretical 100
+        # ceiling (a pure flat-then-flat-then-up series never happens in
+        # real data) — keeps this test clear of the RSI hard-reject band
+        close[-8] -= 1.5
         high = close + 0.5
         high[-1] = 106.5
         df = pd.DataFrame({

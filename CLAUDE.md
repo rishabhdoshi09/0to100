@@ -35,7 +35,14 @@ app.py                    # Streamlit shell: nav (Today|Pulse|Stocks|Options|
 │   │                     #   Close Location Value (Wyckoff): weak close (<0.5,
 │   │                     #   din ki low ke paas) demotes grade A→B / rejects
 │   │                     #   marginal breaks — ATR+volume alone miss bull-traps
-│   │                     #   where sellers take the day back by the close
+│   │                     #   where sellers take the day back by the close.
+│   │                     #   Stock-quality gates (demote-only, evidence over
+│   │                     #   vibes): RSI ceiling (72 soft demote, 82 hard
+│   │                     #   reject — blow-off-top, no room to run) + distance
+│   │                     #   from 52-week high (>25% below = laggard zone,
+│   │                     #   linear conviction cut, floors at 50% — never a
+│   │                     #   hard block, so a genuine strong setup can still
+│   │                     #   clear)
 │   ├── bulk_fetcher.py   # prefetch(): bhav store first, yfinance last resort
 │   ├── signal_backtest.py# Walk-forward per-signal accuracy → JSON report →
 │   │                     #   score calibration + per-card combo_edge
