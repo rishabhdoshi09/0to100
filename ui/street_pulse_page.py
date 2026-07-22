@@ -139,6 +139,44 @@ def _stock_line(r: dict) -> str:
 # Autopilot — bas yahi teen).
 # ══════════════════════════════════════════════════════════════════════════════
 
+def _render_scoreboard() -> None:
+    """🎯 MACHINE KA HISAAB — page ki pehli cheez. Target vs booked, bas.
+    1+1=2: yahi number batata hai ki system aaj productive hai ya nahi."""
+    try:
+        from execution.autopilot import daily_scoreboard
+        sb = daily_scoreboard()
+    except Exception:
+        return
+    if sb["target"] > 0:
+        pct = min(100.0, max(0.0, sb["pct"]))
+        bar_col = ("#00d4a0" if pct >= 100 else
+                   "#22d3ee" if sb["booked_n"] > 0 else "#334155")
+        st.markdown(
+            f"<div style='background:linear-gradient(135deg,#0d1421,#111827);"
+            f"border:1px solid #1e3a5f;border-radius:12px;"
+            f"padding:14px 18px;margin-bottom:10px'>"
+            f"<div style='display:flex;justify-content:space-between;"
+            f"flex-wrap:wrap;align-items:baseline'>"
+            f"<span style='font-size:.62rem;color:#8892a4;text-transform:"
+            f"uppercase;letter-spacing:.14em'>🎯 Aaj ki machine</span>"
+            f"<span style='font-family:JetBrains Mono,monospace;font-size:1.15rem;"
+            f"font-weight:800;color:#e6edf3'>₹{sb['booked_net']:,.0f}"
+            f"<span style='color:#64748b;font-size:.85rem'> / "
+            f"₹{sb['target']:,.0f} NET</span></span></div>"
+            f"<div style='background:#1e293b;border-radius:6px;height:8px;"
+            f"margin:8px 0 6px'><div style='background:{bar_col};height:8px;"
+            f"border-radius:6px;width:{pct:.0f}%'></div></div>"
+            f"<div style='font-size:.8rem;color:#c9d1d9'>{sb['line']} "
+            f"<span style='color:#64748b'>· {sb['booked_n']} booked · "
+            f"{sb['taken']} taken · {sb['slots']} slots</span></div>"
+            f"</div>", unsafe_allow_html=True)
+    else:
+        st.markdown(
+            f"<div style='{_CARD};border-left:3px solid #64748b;"
+            f"font-size:.82rem;color:#c9d1d9'>🎯 {sb['line']}</div>",
+            unsafe_allow_html=True)
+
+
 def _render_brain(market: str = "IN") -> None:
     """🧠 The Brain hero — one authoritative read of the whole board: posture,
     verdict, prioritised directives, vitals. Composes every subsystem; the
@@ -378,7 +416,10 @@ def render_street_pulse() -> None:
         f"{take_html}</div>",
         unsafe_allow_html=True)
 
-    # ── 🧠 Brain — sabse pehle, poore board ka ek faisla (autopilot yahin) ────
+    # ── 🎯 Scoreboard — machine ka purpose: target vs booked, pehli nazar ────
+    _render_scoreboard()
+
+    # ── 🧠 Brain — poore board ka ek faisla (autopilot yahin) ────────────────
     _render_brain("IN")
 
     # ── 🎛️ Cockpit — ACTION layer: aaj ke setups + tumhara book ──────────────

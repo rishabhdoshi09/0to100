@@ -37,6 +37,17 @@ def _status() -> str:
     except Exception:
         pass
     day_bit = f"\nAaj ka P&L: ₹{day:+,.0f}" if day is not None else ""
+    # 🎯 machine ka hisaab — target vs booked (1+1=2)
+    try:
+        from execution.autopilot import daily_scoreboard
+        sb = daily_scoreboard()
+        if sb["target"] > 0:
+            day_bit += (f"\n🎯 <b>₹{sb['booked_net']:,.0f} / "
+                        f"₹{sb['target']:,.0f}</b> booked ({sb['booked_n']} "
+                        f"trades, {sb['slots']} slots baaki)")
+        day_bit += f"\n{sb['line']}"
+    except Exception:
+        pass
     posture = ""
     try:
         # cached posture (5-min) — /status hamesha turant jawab de; fresh

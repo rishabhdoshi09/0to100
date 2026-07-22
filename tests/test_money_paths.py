@@ -1656,6 +1656,56 @@ class TestWatchdogAndBackup:
         assert out["copied"] == []
 
 
+class TestDailyScoreboard:
+    """🎯 Machine ka purpose ek number mein: target vs NET booked. 1+1=2."""
+
+    def test_states_and_math(self, tmp_path, monkeypatch):
+        ta = TestAutopilot()
+        ap, te = ta._setup(tmp_path, monkeypatch)
+        ta._zero_costs(monkeypatch)
+        # OFF → target present par line bole machine band
+        ap.set_config(profit_book_rupees=1500.0, max_trades_per_day=10)
+        sb = ap.daily_scoreboard()
+        assert sb["target"] == 15000.0 and "OFF" in sb["line"]
+        # armed + booking off → purpose maango
+        ap.set_config(profit_book_rupees=0.0)
+        ap.arm()
+        assert "/book" in ap.daily_scoreboard()["line"]
+        # armed + booking on, koi trade nahi → slots ready
+        ap.set_config(profit_book_rupees=1500.0)
+        sb = ap.daily_scoreboard()
+        assert sb["slots"] == 10 and "ready" in sb["line"]
+        # ek trade lo, book karo → booked_net + progress
+        monkeypatch.setattr(ap, "_in_window", lambda now=None: True)
+        assert ap.consider("HAL", 4500, 4300, 80, 0.2, "Defence", "t") is True
+        qty = int(te.recent_trades(1)[0]["qty"])
+        monkeypatch.setattr("data.live_quotes.get_live_quotes",
+                            lambda syms: {"HAL": {"price": 4500 + 1600 / qty}})
+        ap._profit_book()
+        sb = ap.daily_scoreboard()
+        assert sb["booked_n"] == 1
+        assert 1500 <= sb["booked_net"] <= 1700       # NET (zero-cost stub)
+        assert sb["taken"] == 1 and sb["slots"] == 9
+        assert "Chal rahi hai" in sb["line"]
+        assert 0 < sb["pct"] < 100
+
+    def test_status_command_carries_scoreboard(self, tmp_path, monkeypatch):
+        import execution.autopilot as ap
+        import execution.trade_executor as te
+        monkeypatch.setattr(ap, "_STATE_FILE", tmp_path / "ap.json")
+        monkeypatch.setattr(te, "_DB", tmp_path / "t.db")
+        ap._state = {}
+        monkeypatch.setattr(ap, "_notify", lambda m: None)
+        monkeypatch.setattr(ap, "start_book_monitor", lambda: None)
+        monkeypatch.setattr(ap, "_serial_losers_cached", lambda: set())
+        monkeypatch.setattr(ap, "_brain_posture", lambda: ("NORMAL", ""))
+        ap.set_config(allocation=100000, mode="PAPER",
+                      profit_book_rupees=1500.0, max_trades_per_day=10)
+        from alerts.telegram_commands import handle_command as h
+        out = h("/status")
+        assert "🎯" in out and "₹15,000" in out       # target visible on phone
+
+
 class TestFastExit:
     """⚡ Booking/exits must not wait for the 15-min scan cycle."""
 

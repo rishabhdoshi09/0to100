@@ -1167,6 +1167,48 @@ def _profit_book() -> None:
                     f"paisa.)")
 
 
+def daily_scoreboard() -> dict:
+    """🎯 MACHINE KA PURPOSE, ek number mein: aaj ka target vs aaj ki NET
+    booking. 1+1=2 — koi kahani nahi, sirf hisaab:
+
+      target  = max_trades_per_day × profit_book_rupees   (full-house goal)
+      booked  = aaj ke CLOSED trades ka NET (charges ke baad — pnl_snapshot)
+      slots   = kitne trades abhi baaki
+
+    line: ek vaakya jo bataye machine aaj apna kaam kar rahi hai ya nahi.
+    """
+    s = _load()
+    pnl = pnl_snapshot()
+    book = float(s.get("profit_book_rupees") or 0)
+    max_day = int(s.get("max_trades_per_day") or 0)
+    today = _ist_today().isoformat()
+    taken = int(s.get("trades_today", {}).get(today, 0))
+    booked_net = float(pnl.get("day_realized") or 0)
+    booked_n = int(pnl.get("day_closed") or 0)
+    target = round(book * max_day, 0) if book > 0 else 0.0
+    slots = max(0, max_day - taken)
+    pct = round(booked_net / target * 100, 1) if target > 0 else 0.0
+
+    if not s.get("armed"):
+        line = "🔴 Machine OFF — ARM karo (ya /resume), warna aaj ka target ₹0."
+    elif book <= 0:
+        line = "⚪ Booking OFF — /book 1500 set karo, machine ko target do."
+    elif booked_net >= target > 0:
+        line = f"🏆 FULL HOUSE — target ₹{target:,.0f} poora! Machine ne kaam kar diya."
+    elif booked_n > 0:
+        line = (f"🟢 Chal rahi hai — ₹{booked_net:,.0f} booked "
+                f"({booked_n} trade), {slots} slots baaki.")
+    elif taken > 0:
+        line = (f"🟡 {taken} trade(s) khule/chal rahe — booking ka intezaar, "
+                f"{slots} slots baaki.")
+    else:
+        line = f"⏳ Abhi koi trade nahi — {slots} slots ready, scan/sniper dhundh rahe."
+    return {"armed": bool(s.get("armed")), "book": book, "max_day": max_day,
+            "target": target, "booked_net": round(booked_net, 0),
+            "booked_n": booked_n, "taken": taken, "slots": slots,
+            "pct": pct, "line": line}
+
+
 # ── ⚡ Fast-exit monitor — booking/exits scan-cycle ka wait nahi karte ─────────
 # Problem: review_cycle 15-30 min pe chalta hai — ₹1,500 ka momentum pop beech
 # mein aake nikal sakta hai. Ye halka daemon sirf OPEN positions ke quotes
