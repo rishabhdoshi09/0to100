@@ -54,7 +54,9 @@ def render_us_scanner() -> None:
             label_visibility="collapsed", disabled=prog["running"])
     _scope_arg = None if _scope_pick.startswith("All") else _scope_pick
     st.caption("💡 Index chuno = fast (S&P 500 ~500, NASDAQ-100 ~100, Dow 30 = "
-               "seconds). Full listing sirf jab poora market chhaanna ho.")
+               "seconds). Full listing sirf jab poora market chhaanna ho. "
+               "🏦 Quality floor: $5+ price aur $10M+/day turnover — "
+               "micro-cap junk auto-filtered, sirf jaane-pehchaane naam.")
     with c1:
         if st.button("🔍 Scan", key="us_scan_btn", width="stretch",
                      disabled=prog["running"]):
@@ -122,6 +124,9 @@ def render_us_scanner() -> None:
         hc = "🎯 " if r.get("high_conviction") else ""
         conv = r.get("breakout_conviction") or 0
         conv_bit = (f" · conviction {conv:.0f}" if conv else "")
+        _tv = r.get("turnover_m")
+        if _tv:
+            conv_bit += f" · ${_tv:,.0f}M/day"   # size ka saboot — junk nahi
         sigs = " · ".join((r.get("signals") or [])[:3])
         reason = (r.get("reasons") or [""])[0]
         st.markdown(

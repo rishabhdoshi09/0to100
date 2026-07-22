@@ -47,7 +47,41 @@ def _serialize(r) -> dict:
         "breakout_conviction": getattr(r, "breakout_conviction", 0.0),
         "above_sma50": bool(getattr(r, "above_sma50", False)),
         "above_sma200": bool(getattr(r, "above_sma200", False)),
+        "avg_vol20": float(getattr(r, "avg_vol20", 0.0)),
     }
+
+
+# ── 🏦 US quality floor — "naam jaana-pehchana ho" ka quant proxy ─────────────
+# Market cap directly listing file mein nahi aata, par uska sabse imaandaar
+# proxy humare paas FREE hai: dollar turnover (price × 20-day avg volume).
+# Unknown micro-caps $10M/day kabhi nahi chhoote; har naam jo tum jaante ho
+# (AAPL se PLTR tak) isse 100× upar hai. Penny floor alag se ($5 — SEC ki
+# penny-stock line). .env se tunable; 0 = off.
+import os as _os
+_US_MIN_TURNOVER_M = float(_os.getenv("QT_US_MIN_TURNOVER_M", "10") or 10)
+_US_MIN_PRICE = float(_os.getenv("QT_US_MIN_PRICE", "5") or 5)
+
+
+def _quality_floor(rows: list[dict]) -> list[dict]:
+    """Drop penny/micro-cap junk: price < $5 ya turnover < $10M/day.
+    Institutional-grade names hi bache — breakout list ab pehchaane huye
+    naamon ki hogi."""
+    if _US_MIN_TURNOVER_M <= 0 and _US_MIN_PRICE <= 0:
+        return rows
+    kept = []
+    for r in rows:
+        px = float(r.get("price") or 0)
+        turnover = px * float(r.get("avg_vol20") or 0)
+        if px < _US_MIN_PRICE:
+            continue
+        if _US_MIN_TURNOVER_M > 0 and turnover < _US_MIN_TURNOVER_M * 1e6:
+            continue
+        r["turnover_m"] = round(turnover / 1e6, 1)   # card display ke liye
+        kept.append(r)
+    if len(kept) < len(rows):
+        log.info("us_quality_floor", dropped=len(rows) - len(kept),
+                 kept=len(kept))
+    return kept
 
 
 def _liquid_first(symbols: list[str]) -> list[str]:
@@ -64,7 +98,7 @@ def _liquid_first(symbols: list[str]) -> list[str]:
 
 
 def _rank(raw: list) -> list[dict]:
-    serialized = [_serialize(r) for r in raw]
+    serialized = _quality_floor([_serialize(r) for r in raw])
     try:
         from scan.auto_scan import tag_conviction
         tag_conviction(serialized)

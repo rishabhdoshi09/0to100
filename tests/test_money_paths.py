@@ -3161,6 +3161,26 @@ class TestUSScanner:
         m, src = ui.get_index_members("S&P 500")
         assert src == "live" and len(m) == 90
 
+    def test_us_quality_floor_kills_microcaps(self, monkeypatch):
+        """'Naam jaanta bhi nahi' fix: $5 price + $10M/day turnover floor —
+        micro-cap junk breakout list mein kabhi nahi aata."""
+        import scan.us_scanner as us
+        monkeypatch.setattr(us, "_US_MIN_TURNOVER_M", 10.0)
+        monkeypatch.setattr(us, "_US_MIN_PRICE", 5.0)
+        rows = [
+            {"symbol": "AAPL", "price": 200.0, "avg_vol20": 50_000_000},  # $10B/d
+            {"symbol": "PENY", "price": 2.5, "avg_vol20": 90_000_000},    # penny
+            {"symbol": "GHST", "price": 40.0, "avg_vol20": 20_000},       # $0.8M/d
+            {"symbol": "MIDC", "price": 25.0, "avg_vol20": 800_000},      # $20M/d
+        ]
+        kept = us._quality_floor(rows)
+        assert [r["symbol"] for r in kept] == ["AAPL", "MIDC"]
+        assert kept[0]["turnover_m"] == 10000.0        # card chip data
+        # env off-switch: 0 = koi filter nahi
+        monkeypatch.setattr(us, "_US_MIN_TURNOVER_M", 0.0)
+        monkeypatch.setattr(us, "_US_MIN_PRICE", 0.0)
+        assert len(us._quality_floor(rows)) == 4
+
     def test_scan_scope_by_index(self, monkeypatch):
         """Scanner can scope to one index; unknown/None → full listing, and
         it NEVER scans nothing (fail-safe)."""
