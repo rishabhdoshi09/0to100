@@ -104,6 +104,46 @@ def _book(arg: str) -> str:
                " — is level pe PAPER khud book, LIVE pe turant alert."))
 
 
+def _trade_now() -> str:
+    """📈 'Abhi ek trade lo' — next 15-min scan ka wait nahi. Store ka
+    best untraded BUY (prime/EV-ranked) autopilot ke SAARE gates se guzaar
+    ke place karne ki koshish. Gates fail hue toh imaandaar wajah batata
+    hai — force nahi, sirf timing manual."""
+    from execution.autopilot import get_status, consider
+    s = get_status()
+    if not s.get("armed"):
+        return ("🔴 Autopilot OFF hai — pehle /resume karo, phir /trade.")
+    if s.get("mode") == "LIVE":
+        return ("⛔ /trade sirf PAPER mein. LIVE trades app ke ticket se "
+                "(safety invariant).")
+    try:
+        from scan.auto_scan import get_results
+        from scan.ev_engine import ev_rank_key
+        results, _n, _ts, _st = get_results()
+    except Exception:
+        return "Scan store abhi khali — thodi der mein /trade dobara."
+    buys = [r for r in results if r.get("verdict") in ("STRONG BUY", "BUY")]
+    if not buys:
+        return "Abhi koi BUY setup store mein nahi. /status se dekho."
+    # prime first, phir conservative-EV/conviction
+    buys.sort(key=lambda r: (bool(r.get("prime")), ev_rank_key(r)),
+              reverse=True)
+    for r in buys[:8]:                          # top few try — pehla jo pass ho
+        placed = consider(
+            symbol=r["symbol"],
+            entry=float(r.get("entry") or r.get("price") or 0),
+            stop=float(r.get("stop") or 0), score=float(r.get("score") or 0),
+            edge=r.get("edge_r"), sector=r.get("sector") or "",
+            source="manual", ev_pct=r.get("ev_pct"), p_win=r.get("p_win"),
+            ev_conf=r.get("ev_conf"), grade=str(r.get("breakout_grade") or ""))
+        if placed:
+            return (f"✅ Trade liya: <b>{r['symbol']}</b> — gates paar, order "
+                    f"lag gaya. /status se dekho.")
+    # koi pass nahi hua → funnel se wajah
+    return ("⚠️ Best setups gates pe atke (limit/sector/regime/breadth). "
+            "Wajah: /funnel · zyada trades chahiye toh /aggressive.")
+
+
 def _funnel() -> str:
     from execution.autopilot import reject_funnel
     f = reject_funnel()
@@ -125,10 +165,11 @@ def _brain() -> str:
 
 _HELP = ("📱 <b>Commands</b>\n"
          "/status — ek nazar sab\n"
+         "/trade — 📈 ABHI ek trade lo (best setup, gates ke saath)\n"
          "/pause — 🛑 naye trades band\n"
          "/resume — 🟢 wapas chalu (paper)\n"
          "/aggressive · /balanced · /conservative — kitne trades\n"
-         "/book 1500 — ₹ profit pe auto-book\n"
+         "/book 1500 — NET ₹ profit pe auto-book (charges ke baad)\n"
          "/funnel — aaj ka hisaab (kyun kam trades)\n"
          "/brain — abhi ka verdict")
 
@@ -148,6 +189,8 @@ def handle_command(text: str) -> str | None:
             return _pause()
         if cmd in ("/resume", "/start_trading"):
             return _resume()
+        if cmd in ("/trade", "/buy"):
+            return _trade_now()
         if cmd == "/aggressive":
             return _preset("Aggressive")
         if cmd == "/balanced":

@@ -900,8 +900,15 @@ def _consider_locked(symbol: str, entry: float, stop: float, score: float,
         _book_amt = float(s.get("profit_book_rupees") or 0)
         _book_bit = ""
         if _book_amt > 0 and qty > 0:
-            _mv = _book_amt / (qty * entry) * 100
-            _book_bit = f" [₹{_book_amt:,.0f} book @ +{_mv:.1f}%]"
+            # NET-honest: charges ke baad ₹X bachane ke liye kitna GROSS move
+            try:
+                from execution.cost_model import gross_for_net
+                _need_gross = gross_for_net(_book_amt, entry, qty)
+            except Exception:
+                _need_gross = _book_amt
+            _mv = _need_gross / (qty * entry) * 100
+            _book_bit = (f" [NET ₹{_book_amt:,.0f} book @ +{_mv:.1f}% "
+                         f"(gross ₹{_need_gross:,.0f})]")
         _log_activity(f"BUY {qty}×{symbol} @ ₹{entry:,.1f} "
                       f"(stop ₹{stop:,.1f} / target ₹{target:,.1f}) "
                       f"[{source}] [{s['mode']}] [conviction {mult:.2f}×]"
@@ -1088,19 +1095,34 @@ def _profit_book() -> None:
         px = float(q["price"])
         entry = float(t["entry_price"] or 0)
         qty = int(t["qty"] or 0)
+        if entry <= 0 or qty <= 0:
+            continue
         pnl = (px - entry) * qty
-        if pnl < threshold or entry <= 0 or qty <= 0:
+        # 💸 NET-aware trigger: "₹1,500 kamana" = charges (STT/stamp/GST/DP)
+        # ke BAAD ₹1,500. Gross pe book karte toh haath mein ~₹1,300 aata —
+        # woh jhooth hota. exit_price RAW px hi store hota hai (report-card
+        # pipeline apne costs khud lagata hai — double-count nahi).
+        try:
+            from execution.cost_model import zerodha_charges
+            ch = float(zerodha_charges(entry, px, qty)["total"])
+        except Exception:
+            ch = 0.0
+        net = pnl - ch
+        if net < threshold:
             continue
         if t["mode"] == "PAPER":
             _ensure_exit_col()
             _update_trade(t["id"], "exit_price=?, status=?, note=note||?",
                           (px, "PAPER_WIN",
-                           f" | profit-book ₹{pnl:,.0f} @ ₹{px:,.1f}"))
-            _log_activity(f"💰 BOOKED {t['symbol']} ₹{pnl:+,.0f} @ ₹{px:,.1f} "
-                          f"(target ₹{threshold:,.0f}) — capital recycle")
-            _notify(f"💰 <b>₹{pnl:,.0f} BOOKED</b> — {t['symbol']} "
-                    f"@ ₹{px:,.1f} ({qty} sh). Trade band, capital wapas "
-                    f"pool mein.")
+                           f" | profit-book NET ₹{net:,.0f} "
+                           f"(gross ₹{pnl:,.0f} − charges ₹{ch:,.0f}) "
+                           f"@ ₹{px:,.1f}"))
+            _log_activity(f"💰 BOOKED {t['symbol']} NET ₹{net:+,.0f} "
+                          f"(charges ₹{ch:,.0f} kat ke) @ ₹{px:,.1f} — "
+                          f"capital recycle")
+            _notify(f"💰 <b>NET ₹{net:,.0f} BOOKED</b> — {t['symbol']} "
+                    f"@ ₹{px:,.1f} ({qty} sh, charges ₹{ch:,.0f} minus). "
+                    f"Trade band, capital wapas pool mein.")
         else:
             with _lock:
                 st = _load()
@@ -1110,9 +1132,10 @@ def _profit_book() -> None:
                     continue
                 st["book_nudges"] = {today: done + [t["symbol"]]}
             _save()
-            _notify(f"💰 <b>{t['symbol']} ₹{pnl:,.0f} profit mein hai</b> "
-                    f"(LTP ₹{px:,.1f}) — ₹{threshold:,.0f} book karne ka "
-                    f"level aa gaya. GTT cancel karke ticket se sell karo. "
+            _notify(f"💰 <b>{t['symbol']} NET ₹{net:,.0f} book-ready</b> "
+                    f"(LTP ₹{px:,.1f}, gross ₹{pnl:,.0f} − charges "
+                    f"₹{ch:,.0f}). ₹{threshold:,.0f} net ka level aa gaya — "
+                    f"GTT cancel karke ticket se sell karo. "
                     f"(LIVE auto-sell nahi hota — tumhara click, tumhara "
                     f"paisa.)")
 

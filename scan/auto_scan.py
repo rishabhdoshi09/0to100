@@ -199,12 +199,20 @@ def _push_new_setups(picks: list[dict]) -> None:
                     if ps["qty"] >= 1:
                         size_line = (f"\n   📏 {ps['qty']} shares · max loss "
                                      f"₹{ps['max_loss']:,.0f} (1% rule)")
-                        # 💰 book-plan: is qty pe ₹X book karne ko kitna move?
+                        # 💰 book-plan: NET ₹X (charges ke BAAD) ke liye level
                         if _book_amt > 0:
-                            _mv = _book_amt / (ps["qty"] * float(p["entry"])) * 100
+                            try:
+                                from execution.cost_model import gross_for_net
+                                _need = gross_for_net(_book_amt,
+                                                      float(p["entry"]),
+                                                      int(ps["qty"]))
+                            except Exception:
+                                _need = _book_amt
+                            _mv = _need / (ps["qty"] * float(p["entry"])) * 100
                             _lvl = float(p["entry"]) * (1 + _mv / 100)
-                            size_line += (f"\n   💰 ₹{_book_amt:,.0f} book "
-                                          f"@ ₹{_lvl:,.1f} (+{_mv:.1f}% move)")
+                            size_line += (f"\n   💰 NET ₹{_book_amt:,.0f} "
+                                          f"book @ ₹{_lvl:,.1f} (+{_mv:.1f}%, "
+                                          f"charges included)")
                 except Exception:
                     pass
                 lines.append(

@@ -1377,6 +1377,7 @@ class TestProfitBooking:
     def test_paper_books_at_threshold(self, tmp_path, monkeypatch):
         ta = TestAutopilot()
         ap, te = ta._setup(tmp_path, monkeypatch)
+        ta._zero_costs(monkeypatch)          # boundary math exact (charges=0)
         ap.arm()
         monkeypatch.setattr(ap, "_in_window", lambda now=None: True)
         assert ap.consider("HAL", 4500, 4300, 80, 0.2, "Defence", "t") is True
@@ -1395,6 +1396,45 @@ class TestProfitBooking:
         ap._profit_book()
         t = te.recent_trades(1)[0]
         assert t["status"] == "PAPER_WIN" and "profit-book" in t["note"]
+
+    def test_booking_is_net_of_charges(self, tmp_path, monkeypatch):
+        """'₹1,500 kamana' = charges ke BAAD ₹1,500. Gross 1,600 (net ~1,380)
+        par book NAHI hota; gross_for_net level par hota hai — NET note ke
+        saath."""
+        from execution.cost_model import gross_for_net
+        ta = TestAutopilot()
+        ap, te = ta._setup(tmp_path, monkeypatch)   # REAL charges — no zeroing
+        ap.arm()
+        monkeypatch.setattr(ap, "_in_window", lambda now=None: True)
+        assert ap.consider("HAL", 4500, 4300, 80, 0.2, "Defence", "t") is True
+        ap.set_config(profit_book_rupees=1500.0)
+        qty = int(te.recent_trades(1)[0]["qty"])
+        need = gross_for_net(1500, 4500, qty)
+        # gross threshold ke UPAR par NET level ke NEECHE — purana (jhootha)
+        # gross-trigger yahan book kar deta; net-aware ruk jata hai
+        low = (1500 + need) / 2
+        assert 1500 < low < need                     # boundary sanity
+        monkeypatch.setattr("data.live_quotes.get_live_quotes",
+                            lambda syms: {"HAL": {"price": 4500 + low / qty}})
+        ap._profit_book()
+        assert te.recent_trades(1)[0]["status"] == "PAPER_OPEN"   # ruka raha
+        # NET level (+ chhota buffer) → ab book
+        need += 20
+        monkeypatch.setattr("data.live_quotes.get_live_quotes",
+                            lambda syms: {"HAL": {"price": 4500 + need / qty}})
+        ap._profit_book()
+        t = te.recent_trades(1)[0]
+        assert t["status"] == "PAPER_WIN"
+        assert "NET" in t["note"] and "charges" in t["note"]
+
+    def test_gross_for_net_math(self):
+        from execution.cost_model import gross_for_net, zerodha_charges
+        g = gross_for_net(1500, 1000, 40)
+        ch = zerodha_charges(1000, 1000 + g / 40, 40)["total"]
+        assert abs((g - ch) - 1500) < 5              # net lands on target
+        assert g > 1500                              # charges ke upar
+        assert gross_for_net(0, 1000, 40) == 0.0     # off → no-op
+        assert gross_for_net(1500, 0, 0) == 1500     # degenerate-safe
 
     def test_off_by_default_and_live_nudges_once(self, tmp_path, monkeypatch):
         ta = TestAutopilot()
@@ -1491,6 +1531,41 @@ class TestTelegramCommands:
         assert ap.get_status()["armed"] is False
         assert "Already OFF" in h("/pause")          # idempotent
         assert "OFF" in h("/status")
+
+    def test_trade_now_command(self, tmp_path, monkeypatch):
+        """📈 /trade: best store setup ko GATES KE SAATH place karta hai —
+        force nahi. OFF → resume hint; LIVE → refuse; gates-fail → funnel."""
+        ap = self._setup(tmp_path, monkeypatch)
+        from alerts.telegram_commands import handle_command as h
+        # OFF → pehle resume bolo
+        assert "/resume" in h("/trade")
+        ap.arm()
+        store = [
+            {"symbol": "MID", "verdict": "BUY", "score": 70, "entry": 500,
+             "stop": 480, "conviction_rank": 170},
+            {"symbol": "TOP", "verdict": "STRONG BUY", "score": 88,
+             "entry": 1000, "stop": 960, "conviction_rank": 290,
+             "prime": True, "ev_pct": 3.0, "ev_lb_pct": 2.1},
+            {"symbol": "W", "verdict": "WATCH", "score": 95},
+        ]
+        monkeypatch.setattr("scan.auto_scan.get_results",
+                            lambda: (store, 100, 0.0, "ready"))
+        taken = []
+        monkeypatch.setattr(ap, "consider",
+                            lambda symbol, **kw: taken.append(symbol) or True)
+        out = h("/trade")
+        assert "TOP" in out and taken == ["TOP"]     # prime/EV-ranked first
+        # sab gates fail → imaandaar funnel hint, koi force nahi
+        monkeypatch.setattr(ap, "consider", lambda symbol, **kw: False)
+        assert "/funnel" in h("/trade")
+        # LIVE mode → refuse (paper-only invariant)
+        ap.set_config(mode="LIVE")
+        ap._state["armed"] = True                    # simulate armed LIVE
+        assert "PAPER" in h("/trade")
+
+    def test_help_lists_trade_command(self):
+        from alerts.telegram_commands import _HELP
+        assert "/trade" in _HELP and "NET" in _HELP
 
     def test_live_arming_always_refused(self, tmp_path, monkeypatch):
         ap = self._setup(tmp_path, monkeypatch)

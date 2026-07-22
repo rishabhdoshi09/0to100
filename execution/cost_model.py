@@ -94,6 +94,26 @@ def us_charges(buy_price: float, sell_price: float, qty: int) -> dict:
             "total": round(total, 2)}
 
 
+def gross_for_net(net_target: float, entry: float, qty: int,
+                  product: str = "CNC") -> float:
+    """Kitna GROSS profit chahiye taaki STT/stamp/GST/DP ke BAAD haath mein
+    net_target bache. Charges sell-value pe depend karte hain jo khud gross
+    pe depend hai → chhota fixed-point solve (2-3 iterations converge).
+    'Rs1,500 kamana' ka matlab NET 1,500 hona chahiye — tax ke baad wala."""
+    if net_target <= 0 or entry <= 0 or qty <= 0:
+        return max(0.0, net_target)
+    gross = net_target
+    for _ in range(4):
+        sell = entry + gross / qty
+        ch = zerodha_charges(entry, sell, qty, product)["total"]
+        new_gross = net_target + ch
+        if abs(new_gross - gross) < 1.0:
+            gross = new_gross
+            break
+        gross = new_gross
+    return round(gross, 2)
+
+
 def simulate_fill(price: float, side: str, is_stop: bool = False) -> float:
     """Realistic fill for a PAPER order. Buys slip up, sells slip down;
     stop-loss sells slip the most (they gap through the trigger)."""
