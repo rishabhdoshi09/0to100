@@ -3246,6 +3246,35 @@ class TestExtensionGuard:
             assert r.verdict == "WATCH"
             assert any("50-DMA" in x for x in r.reasons)
 
+    def test_falling_knife_is_not_a_fresh_buy(self):
+        """A stock red today / RSI rolling over is NOT breaking out — it's
+        falling. Even when NOT extended, a fresh BUY must demote to WATCH
+        ('RSI neeche girta hua stock mat recommend kar'). A pullback-to-
+        support (buys weakness by design) is the one exemption."""
+        import numpy as np
+        import pandas as pd
+        from scan.unified_scanner import UnifiedScanner, _ema_np
+        rng = np.random.default_rng(3)
+        base = np.full(150, 100.0)
+        up = np.linspace(100, 112, 25) + rng.normal(0, 0.4, 25)   # gentle, NOT extended
+        tail = np.array([111.5, 110.5, 109.2])                     # last 3 days falling
+        close = np.concatenate([base, up, tail])
+        df = pd.DataFrame({
+            "open": close * 1.002, "high": close * 1.006, "low": close * 0.99,
+            "close": close,
+            "volume": list(np.concatenate([np.full(150, 1e6),
+                            np.linspace(1e6, 1.3e6, 25), [1.2e6, 1.25e6, 1.3e6]]))},
+            index=pd.date_range("2024-11-01", periods=len(close), freq="D"))
+        price = close[-1]
+        # precondition: NOT extended (so this is the falling-knife guard's catch)
+        assert (price / _ema_np(close, 20) - 1) * 100 <= 10
+        assert (price / close[-50:].mean() - 1) * 100 <= 20
+        r = UnifiedScanner()._analyze("KNIFE", df)
+        if r is not None and "PULLBACK_SUPPORT" not in r.signals:
+            assert r.verdict == "WATCH"
+            assert r.chase_risk is True
+            assert any("falling knife" in x.lower() for x in r.reasons)
+
 
 class TestPullbackSetup:
     def test_pullback_detected_not_at_high(self):

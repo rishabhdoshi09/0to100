@@ -87,6 +87,14 @@ _CLV_WEAK = 0.40
 _RSI_OVERBOUGHT_SOFT = float(_os.getenv("QT_RSI_OVERBOUGHT_SOFT", "72") or 72)
 _RSI_OVERBOUGHT_HARD = float(_os.getenv("QT_RSI_OVERBOUGHT_HARD", "82") or 82)
 
+# Falling-knife / momentum-rollover — the OPPOSITE failure mode from
+# extension. A fresh breakout/momentum BUY is a STRENGTH signal; a stock that
+# is red today or whose RSI has rolled over (momentum turning down) is not
+# breaking out — it's falling. Recommending it is catching a knife. A pullback-
+# to-support (buys weakness INTO a rising trend, by design) is exempt.
+_FALLING_DAY_PCT = float(_os.getenv("QT_FALLING_DAY_PCT", "-1.0") or -1.0)
+_RSI_ROLLOVER_DROP = float(_os.getenv("QT_RSI_ROLLOVER_DROP", "5") or 5)
+
 # Absolute extension above the 50-DMA — the chase the 20-EMA check MISSES.
 # A stock grinding steadily higher stays within ~5-10% of its (rising) 20-EMA
 # even after a big cumulative run, so the 20-EMA extension guard never fires —
@@ -722,6 +730,32 @@ class UnifiedScanner:
             # means reasons[0] is now an unpaired leading warning, so
             # zip(signals, reasons) consumers skip reasons[0] when it's set.
             chase_risk = True
+            if verdict == "BUY":
+                verdict = "WATCH"
+
+        # ── Falling-knife / momentum-rollover guard — DON'T CATCH A KNIFE ─────
+        # A breakout/momentum entry happens on strength. If the stock is red
+        # today, OR its RSI has rolled over (turning down from a few sessions
+        # ago), it is NOT breaking out — demote any BUY to WATCH and say wait
+        # for it to stabilise. A pullback-to-support setup is exempt: buying a
+        # controlled dip to a rising EMA is exactly its (evidence-backed) job.
+        rsi_prev = _rsi(close[:-3]) if len(close) > 17 else rsi
+        _falling_today = chg <= _FALLING_DAY_PCT
+        _rsi_rolling = rsi < rsi_prev - _RSI_ROLLOVER_DROP
+        _is_pullback = "PULLBACK_SUPPORT" in signals
+        if (_falling_today or _rsi_rolling) and not _is_pullback:
+            tag = (f"aaj {chg:+.1f}%" if _falling_today
+                   else f"RSI roll-over {rsi_prev:.0f}→{rsi:.0f}")
+            note = (f"⚠ Girta hua ({tag}) — falling knife, fresh BUY nahi; "
+                    f"pehle rukna/base banna dekho")
+            # Keep exactly ONE leading warning at reasons[0] so the single
+            # reasons[0]-skip in conviction.py stays aligned: if the extension
+            # guard already put a headline there, append instead of insert.
+            if chase_risk:
+                reasons.append(note)
+            else:
+                reasons.insert(0, note)
+                chase_risk = True
             if verdict == "BUY":
                 verdict = "WATCH"
 
