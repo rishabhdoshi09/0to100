@@ -73,6 +73,16 @@ app.py                    # Streamlit shell: nav (Today|Pulse|Stocks|Options|
 │                         #   blow-off-RSI names so the sniper never fires a
 │                         #   green "BREAKOUT CONFIRMED" (or auto-trades) a
 │                         #   stock the scanner would've demoted to WATCH
+│   └── short_scanner.py  # 🔻 BEARISH detection — the SAME edge pointed DOWN
+│                         #   (weak tape mein paisa short side pe). Mirror of
+│                         #   unified_scanner: grade_breakdown (support break),
+│                         #   death-cross, distribution, downside-momentum,
+│                         #   lower-highs → verdict SHORT/AVOID. Every long gate
+│                         #   mirrored (RSI FLOOR not ceiling, STRONG-close =
+│                         #   bear-trap, rising-rocket not falling-knife). PAPER-
+│                         #   FIRST: detection only, no live orders — India mein
+│                         #   equity overnight short nahi (cash=intraday, F&O=
+│                         #   positional); execution vehicle baad ka opt-in
 │
 ├── risk/                 # Risk layer (the gatekeepers)
 │   ├── position_sizer.py # 1% rule + 10% concentration cap → exact qty

@@ -2886,6 +2886,93 @@ class TestBreakoutConviction:
             assert "BREAKOUT_RES" not in r.signals
 
 
+class TestShortScanner:
+    """Bearish detection (paper-first, no live orders). The DOWNSIDE mirror
+    of the breakout engine — every long-side quality gate has a flipped
+    mirror because the risk flips (bounce, not blow-off)."""
+
+    def test_grade_breakdown_mirror_rules(self):
+        from scan.short_scanner import grade_breakdown as g
+        # clean: 1.0xATR below on 2.5x volume, weak close, healthy RSI → A
+        ok, grade, _ = g(price=95, level=100, atr=5, vratio=2.5,
+                         day_change=-3, clv=0.1, rsi=45)
+        assert ok and grade == "A"
+        # strong close (near day HIGH) on a break = bear-trap → demote A→B
+        ok, grade, note = g(price=95, level=100, atr=5, vratio=2.5,
+                           day_change=-3, clv=0.85, rsi=45)
+        assert ok and grade == "B" and "strong close" in note
+        # RSI floor: already-crushed stock → reject (bounce risk), NOT a fresh short
+        ok, _, note = g(price=95, level=100, atr=5, vratio=2.5,
+                       day_change=-3, clv=0.1, rsi=15)
+        assert not ok and "capitulation" in note
+        # capitulation gap-down → reject (don't chase)
+        ok, _, note = g(price=88, level=100, atr=5, vratio=3,
+                       day_change=-12, clv=0.1, rsi=40)
+        assert not ok and "capitulation" in note
+        # price ABOVE the level → no breakdown
+        assert g(price=101, level=100, atr=5, vratio=3, day_change=-1,
+                 rsi=50)[0] is False
+
+    def test_confirmed_breakdown_is_a_short_with_mirror_geometry(self):
+        """A fresh break below support (RSI healthy-bearish, not capitulated)
+        → verdict SHORT with stop ABOVE entry and target BELOW."""
+        import numpy as np
+        import pandas as pd
+        from scan.short_scanner import analyze_short
+        rng = np.random.default_rng(5)
+        up = np.linspace(70, 104, 150) + rng.normal(0, 0.4, 150)
+        top = 103 + np.abs(rng.normal(0, 1.0, 30))     # topping range, floor ~103
+        close = np.concatenate([up, top, [100.5]])      # fresh break below ~102
+        high = close + 1.0
+        low = close - 0.8
+        low[-1], high[-1] = 100.0, 103.2                # weak close near the low
+        vol = np.concatenate([np.full(150, 1e6), np.full(30, 1e6), [2.4e6]])
+        df = pd.DataFrame({
+            "open": close + 0.5, "high": high, "low": low, "close": close,
+            "volume": vol},
+            index=pd.date_range("2024-01-01", periods=len(close), freq="D"))
+        r = analyze_short("SHORTME", df)
+        assert r is not None
+        assert "BREAKDOWN_SUP" in r.signals
+        assert r.verdict == "SHORT" and r.breakdown_grade in ("A", "B")
+        assert r.stop > r.entry                          # short: stop is ABOVE
+        assert r.target < r.entry                        # target is BELOW
+        assert r.risk_reward > 1.5
+
+    def test_rising_rocket_demotes_short_to_avoid(self):
+        """A short is a WEAKNESS entry — bearish structure but UP big today
+        must demote SHORT→AVOID (mirror of the long-side falling-knife)."""
+        import numpy as np
+        import pandas as pd
+        from scan.short_scanner import analyze_short
+        rng = np.random.default_rng(5)
+        up = np.linspace(70, 104, 150) + rng.normal(0, 0.4, 150)
+        top = 103 + np.abs(rng.normal(0, 1.0, 30))
+        close = np.concatenate([up, top, [100.5]])
+        close[-1] = close[-2] * 1.02                     # +2% GREEN day
+        df = pd.DataFrame({
+            "open": close - 0.3, "high": close + 0.6, "low": close - 0.6,
+            "close": close,
+            "volume": np.concatenate([np.full(150, 1e6), np.full(30, 1e6),
+                                      [2.4e6]])},
+            index=pd.date_range("2024-01-01", periods=len(close), freq="D"))
+        r = analyze_short("ROCKET", df)
+        if r is not None:
+            assert r.verdict != "SHORT"                  # never short strength
+
+    def test_no_short_in_healthy_uptrend(self):
+        """A clean uptrend has no bearish setup → None (not a short)."""
+        import numpy as np
+        import pandas as pd
+        from scan.short_scanner import analyze_short
+        close = np.linspace(80, 140, 220)
+        df = pd.DataFrame({
+            "open": close - 0.3, "high": close + 0.5, "low": close - 0.5,
+            "close": close, "volume": [1_000_000] * 220},
+            index=pd.date_range("2024-01-01", periods=220, freq="D"))
+        assert analyze_short("UPONLY", df) is None
+
+
 class TestSniperConfirmation:
     """The BAJEL bug: a wick that pokes the level then keeps falling must
     NEVER fire 'BREAKOUT CONFIRMED'."""
