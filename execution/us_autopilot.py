@@ -54,7 +54,7 @@ _DEFAULTS = {
     "breakeven_trigger_pct": 2.0,
     "trades_today": {},
     "traded_symbols": {},
-    "accounted_ids": [],
+    "max_accounted_id": 0,         # high-water mark — see _account_closed()
     "activity": [],
     "disarmed_reason": "",
     "reject_stats": {},            # {YYYY-MM-DD: {category: count}} — the funnel
@@ -534,20 +534,33 @@ def _close_positions() -> None:
 
 
 def _account_closed() -> None:
+    """Fold closed trades into realized_pnl. High-water mark (max trade id
+    already folded in), not a bounded "seen ids" list — trade ids are
+    monotonic (SQLite autoincrement) so a watermark can never lose track,
+    however many trades accumulate. (A 500-id-capped list used to do this:
+    once total closed trades passed 500, the oldest ids fell out of the
+    truncated window and got re-folded into realized_pnl on every
+    subsequent cycle, forever. Migrates any existing capped list once.)"""
     with _lock:
         s = _load()
-        seen = set(s.get("accounted_ids", []))
-        changed = False
-        for t in _trades(_WIN + _LOSS):
-            if t["id"] in seen:
-                continue
+        watermark = int(s.get("max_accounted_id", 0) or 0)
+        old_ids = s.get("accounted_ids")
+        if not watermark and old_ids:
+            watermark = max(int(i) for i in old_ids)   # one-time migration
+        changed = bool(old_ids)
+        max_seen = watermark
+        for t in _trades(_WIN + _LOSS):        # ORDER BY id DESC — monotonic
+            tid = int(t["id"])
+            if tid <= watermark:
+                break
             pnl = round(_net_pnl(t), 2)
             s["realized_pnl"] = round(s.get("realized_pnl", 0.0) + pnl, 2)
-            seen.add(t["id"])
+            max_seen = max(max_seen, tid)
             changed = True
             _notify(f"CLOSED <b>{t['symbol']}</b> {'🟢' if pnl >= 0 else '🔴'} "
                     f"${pnl:+,.2f} (net)\nPool: ${s['allocation'] + s['realized_pnl']:,.0f}")
-        s["accounted_ids"] = sorted(seen)[-500:]
+        s["max_accounted_id"] = max_seen
+        s.pop("accounted_ids", None)
     if changed:
         _save()
 

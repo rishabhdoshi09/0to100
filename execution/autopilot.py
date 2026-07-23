@@ -92,7 +92,9 @@ _DEFAULTS = {
     "trades_today": {},            # {YYYY-MM-DD: count}
     "traded_symbols": {},          # {YYYY-MM-DD: [symbols]}
     "disarmed_reason": "",
-    "accounted_ids": [],           # journal ids already added to realized_pnl
+    "max_accounted_id": 0,         # high-water mark — trade ids already
+                                    # folded into realized_pnl (ids are
+                                    # monotonic, so this never needs pruning)
     "activity": [],                # last N activity lines for the UI
     "reject_stats": {},            # {YYYY-MM-DD: {category: count}} — the funnel
     "considered": {},              # {YYYY-MM-DD: candidates seen}
@@ -1513,7 +1515,16 @@ def _reconcile_live_fills() -> None:
     - a COMPLETE SELL of the same symbol+qty (a GTT leg firing) → close
       with the ACTUAL exit fill, so compounding uses exchange numbers
     Orderbook only covers today, so older exits still fall back to the
-    price-cross estimate in _close_crossed_live_trades()."""
+    price-cross estimate in _close_crossed_live_trades().
+
+    The sell match is by symbol+qty — Kite's orderbook doesn't link a
+    triggered order back to the GTT that spawned it. If TWO open trades
+    share the same symbol+qty (re-entry after a stop-out, or a coincident
+    sizing match), a single real fill can't be told apart between them —
+    guessing wrong would falsely mark a still-open position as closed and
+    drop it from all monitoring (trailing stop, profit-book, time-stop)
+    while real capital is still on the table. So that group is skipped
+    here entirely and flagged for a manual look, rather than guessed."""
     open_live = [t for t in _open_autopilot_trades() if t["mode"] == "LIVE"]
     if not open_live:
         return
@@ -1527,6 +1538,8 @@ def _reconcile_live_fills() -> None:
         log.debug("autopilot_orderbook_failed", error=str(exc))
         return
     _ensure_exit_col()
+    from collections import Counter
+    _dupe_key = Counter((t["symbol"], int(t["qty"] or 0)) for t in open_live)
     for t in open_live:
         oid = str(t.get("entry_order_id") or "")
         od = next((o for o in orders
@@ -1542,6 +1555,11 @@ def _reconcile_live_fills() -> None:
                 avg = float(od.get("average_price") or 0)
                 if avg > 0 and abs(avg - float(t["entry_price"] or 0)) >= 0.05:
                     _apply_entry_fill(t["id"], avg)
+        if _dupe_key[(t["symbol"], int(t["qty"] or 0))] > 1:
+            _log_activity(f"⚠️ {t['symbol']} — {_dupe_key[(t['symbol'], int(t['qty'] or 0))]} "
+                          f"open LIVE trades share the same symbol+qty, exit-fill "
+                          f"match ambiguous — skipping auto-reconcile, check manually")
+            continue
         sells = [o for o in orders
                  if str(o.get("tradingsymbol", "")) == t["symbol"]
                  and str(o.get("transaction_type", "")).upper() == "SELL"
@@ -1697,24 +1715,39 @@ def eod_digest(now: datetime | None = None) -> bool:
 
 
 def _account_closed_trades() -> None:
-    """Fold closed autopilot trades into realized_pnl (compounding)."""
+    """Fold closed autopilot trades into realized_pnl (compounding).
+
+    Tracked via a high-water mark (max trade id already folded in), not a
+    bounded "seen ids" list — trade ids are monotonic (SQLite autoincrement)
+    so a watermark can never lose track, however many trades accumulate.
+    (A 500-id-capped list used to do this: once total closed trades passed
+    500, the oldest ids fell out of the truncated window and got re-folded
+    into realized_pnl on every subsequent cycle, forever — silently
+    corrupting the compounding pool. Migrates any existing capped list to
+    a watermark once, below.)"""
     closed = _autopilot_trades(_CLOSED_WIN + _CLOSED_LOSS)
     with _lock:
         s = _load()
-        seen = set(s.get("accounted_ids", []))
-        changed = False
-        for t in closed:
-            if t["id"] in seen:
-                continue
+        watermark = int(s.get("max_accounted_id", 0) or 0)
+        old_ids = s.get("accounted_ids")
+        if not watermark and old_ids:
+            watermark = max(int(i) for i in old_ids)   # one-time migration
+        changed = bool(old_ids)
+        max_seen = watermark
+        for t in closed:                      # ORDER BY id DESC — monotonic
+            tid = int(t["id"])
+            if tid <= watermark:
+                break
             qty = int(t["qty"] or 0)
             pnl = round(_net_pnl(t), 0)         # net of slippage + charges
             s["realized_pnl"] = round(s.get("realized_pnl", 0.0) + pnl, 0)
-            seen.add(t["id"])
+            max_seen = max(max_seen, tid)
             changed = True
             _notify(f"CLOSED <b>{t['symbol']}</b> {'🟢 WIN' if pnl >= 0 else '🔴 LOSS'} "
                     f"₹{pnl:+,.0f} (net)\nPool ab: ₹{s['allocation'] + s['realized_pnl']:,.0f} "
                     f"(compounded)")
-        s["accounted_ids"] = sorted(seen)[-500:]
+        s["max_accounted_id"] = max_seen
+        s.pop("accounted_ids", None)
     if changed:
         _save()
 
