@@ -169,7 +169,7 @@ def _data_freshness() -> dict:
 def _render_freshness_banner(results: list[dict]) -> None:
     """
     Loud, unmissable banner separating the two data paths that confused
-    the user: displayed PRICE (live via Google Finance) vs SCAN DATA
+    the user: displayed PRICE (live via Kite/NSE/Google, unified chain) vs SCAN DATA
     (NSE bhavcopy + today's intraday overlay).
     """
     from datetime import date as _date
@@ -192,7 +192,7 @@ def _render_freshness_banner(results: list[dict]) -> None:
 
     # Displayed-price half
     if total_cards and live_cards >= total_cards * 0.6:
-        price_txt = f"🟢 Card prices: <b>LIVE</b> (Google Finance, {live_cards}/{total_cards})"
+        price_txt = f"🟢 Card prices: <b>LIVE</b> (Kite/NSE/Google, {live_cards}/{total_cards})"
         price_col = "#00d4a0"
     elif live_cards:
         price_txt = f"🟡 Card prices: <b>{live_cards}/{total_cards} live</b>, baaki EOD"
@@ -213,8 +213,8 @@ def _render_freshness_banner(results: list[dict]) -> None:
     if not fi["is_today"]:
         st.caption("💡 NSE intraday snapshot sirf market hours (9:15–4 PM, "
                    "weekday) mein milta hai. Us waqt scan chalao toh signals aaj "
-                   "ke move pe banenge. Card ke prices phir bhi Google Finance se "
-                   "live hote hain.")
+                   "ke move pe banenge. Card ke prices phir bhi Kite/NSE/Google "
+                   "(unified chain) se live hote hain.")
 
 
 def _render_health() -> None:
@@ -833,7 +833,7 @@ def render_scanner(universe: list[str]) -> None:
         st.rerun()
 
     results, universe_size, last_ts, status = get_results()
-    _apply_live_prices(results)   # Google Finance live overlay at render time
+    _apply_live_prices(results)   # Kite/NSE/Google live overlay at render time
 
     # ── Loud data-freshness banner (the two paths, explicit) ──────────────────
     if results:
@@ -841,7 +841,7 @@ def render_scanner(universe: list[str]) -> None:
         with fb2:
             if st.button("🔄 Live data", key="refresh_live",
                          width="stretch",
-                         help="Google Finance prices + NSE intraday snapshot dubara laao"):
+                         help="Live prices (Kite/NSE/Google) + NSE intraday snapshot dubara laao"):
                 _live_quotes.clear()
                 _health.clear()
                 try:

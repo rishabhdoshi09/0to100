@@ -110,14 +110,15 @@ def _sector_line(regime: dict) -> str:
 
 @st.cache_data(ttl=180, show_spinner=False)
 def _nifty_change() -> tuple[float, float]:
-    """Return (nifty_price, nifty_chg_pct). Falls back to zeros."""
+    """Return (nifty_price, nifty_chg_pct). Kite → Google (data source
+    policy — yfinance must never be primary; used to bypass this and call
+    yfinance directly). Falls back to zeros."""
     try:
-        import yfinance as yf
-        fi   = yf.Ticker("^NSEI").fast_info
-        px   = float(getattr(fi, "last_price", 0) or 0)
-        prev = float(getattr(fi, "previous_close", 0) or 0)
-        chg  = ((px - prev) / prev * 100) if prev else 0.0
-        return px, chg
+        from data.live_quotes import get_index_quotes
+        q = get_index_quotes(["NIFTY"]).get("NIFTY")
+        if q and q.get("price"):
+            return float(q["price"]), float(q.get("chg_pct") or 0.0)
+        return 0.0, 0.0
     except Exception:
         return 0.0, 0.0
 
@@ -207,12 +208,16 @@ def _run_command_scan(universe_key: str) -> list[dict]:
 
 
 def _signal_badge(archetype: str, tier: str) -> tuple[str, str]:
-    """Return (label, color) for the signal badge."""
-    arch = archetype.upper()
-    t    = tier.upper()
-    if t in ("ELITE_A_PLUS", "A") or "BUY" in arch or "BREAKOUT" in arch or "MOMENTUM" in arch:
+    """Return (label, color) for the signal badge. Gated on `tier` (which
+    reflects the scanner's own verdict) alone — a loose substring match on
+    the archetype text used to false-positive: the PRE_BREAKOUT label
+    ("Breakout ke kareeb") contains "BREAKOUT", so a WATCH-only setup
+    whose only signal was an unconfirmed pre-breakout watch got badged
+    "⚡ Buy Setup" anyway."""
+    t = tier.upper()
+    if t in ("ELITE_A_PLUS", "A"):
         return "⚡ Buy Setup", "#00d4a0"
-    if t == "AVOID" or "SHORT" in arch or "BEAR" in arch:
+    if t == "AVOID":
         return "✗ Avoid", "#ff4b4b"
     return "👁 Watch", "#f59e0b"
 
@@ -410,7 +415,8 @@ def _render_setups_section(universe: list[str]) -> None:
         _render_setup_card({
             "symbol": s["symbol"],
             "archetype": _arch,
-            "quality_tier": "A" if s.get("verdict") == "BUY" else "WATCHLIST",
+            "quality_tier": "A" if s.get("verdict") in ("BUY", "STRONG BUY")
+                            else "WATCHLIST",
             "price": s.get("price"),
             "pivot_level": s.get("entry"),
             "stop_level": s.get("stop"),
