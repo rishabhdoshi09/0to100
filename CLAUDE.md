@@ -66,7 +66,13 @@ app.py                    # Streamlit shell: nav (Today|Pulse|Stocks|Options|
 │   │                     #   MIXED/NARROW. NARROW = Brain ka lean-in veto
 │   ├── sector_heat.py    # Sector map (parsed from nse_universe groups),
 │   │                     #   pack-boost + sector_performance()
-│   └── breakout_sniper.py# Kite WebSocket ticks → instant pivot-break alerts
+│   └── breakout_sniper.py# Kite WebSocket ticks → instant pivot-break alerts.
+│                         #   SEPARATE path from unified_scanner, so it must
+│                         #   re-apply the scanner's quality demotes itself:
+│                         #   build_watch_map skips chase-risk (extended) +
+│                         #   blow-off-RSI names so the sniper never fires a
+│                         #   green "BREAKOUT CONFIRMED" (or auto-trades) a
+│                         #   stock the scanner would've demoted to WATCH
 │
 ├── risk/                 # Risk layer (the gatekeepers)
 │   ├── position_sizer.py # 1% rule + 10% concentration cap → exact qty

@@ -50,6 +50,15 @@ _HOLD_SECONDS = float(os.getenv("QT_SNIPER_HOLD_SECONDS", "45") or 45)
 # the time of day. Fail-open: unknown avg volume or very early session →
 # lean on the hold alone (never block for missing data).
 _VOL_SURGE = float(os.getenv("QT_SNIPER_VOL_SURGE", "1.2") or 1.2)
+# Quality gate — the sniper is a SEPARATE path from the main scanner, so the
+# scanner's demote-only quality filters (extension/chase guard, RSI ceiling)
+# do NOT apply automatically. Without this, a stock the scanner flagged as a
+# chase (extended, already run hard) or a blow-off-top (RSI ≥ hard ceiling)
+# could still fire a green "BREAKOUT CONFIRMED" and get auto-traded — exactly
+# the low-quality break we spent the filters rejecting. We carry the daily
+# context (chase_risk, rsi) from the scan result into the watch map and skip
+# those names here. A CLEAN pre-breakout near its pivot is still watched.
+_RSI_BLOWOFF = float(os.getenv("QT_SNIPER_RSI_BLOWOFF", "82") or 82)
 _MKT_OPEN_MIN = 9 * 60 + 15
 _MKT_CLOSE_MIN = 15 * 60 + 30
 _MKT_MINUTES = _MKT_CLOSE_MIN - _MKT_OPEN_MIN
@@ -132,12 +141,29 @@ def process_ticks(ticks: list[dict], watch: dict[int, dict],
     return out
 
 
+def _quality_skip(r: dict) -> str:
+    """Non-empty reason if this scan result is too low-quality to snipe —
+    the sniper's version of the scanner's demote gates. '' = fine to watch."""
+    if r.get("chase_risk"):
+        return "extended/chase-risk (already run hard, no clean base)"
+    rsi = float(r.get("rsi") or 0)
+    if rsi >= _RSI_BLOWOFF:
+        return f"RSI {rsi:.0f} — blow-off-top overbought"
+    return ""
+
+
 def build_watch_map(results: list[dict]) -> dict[int, dict]:
-    """Token→level map from scan results (pre-breakout ≤2.5%%) + watchlist."""
+    """Token→level map from scan results (pre-breakout ≤2.5%%) + watchlist.
+    Chase-risk / blow-off-top names are skipped — the sniper must not fire
+    a 'confirmed breakout' on a stock the scanner would demote for quality."""
     targets: dict[str, dict] = {}
     for r in results:
         if "PreBreakout" in (r.get("categories") or []) \
                 and 0 < (r.get("pivot_distance_pct") or 99) <= 2.5:
+            skip = _quality_skip(r)
+            if skip:
+                log.debug("sniper_quality_skip", symbol=r.get("symbol"), why=skip)
+                continue
             targets[r["symbol"]] = {"trigger": float(r.get("entry") or 0),
                                     "stop": float(r.get("stop") or 0),
                                     "target": float(r.get("target") or 0),

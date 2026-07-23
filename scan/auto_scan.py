@@ -71,6 +71,7 @@ def _serialize(r) -> dict:
     return {
         "symbol": r.symbol, "price": r.price, "change_pct": r.change_pct,
         "momentum_5d": r.momentum_5d, "volume_ratio": r.volume_ratio,
+        "rsi": getattr(r, "rsi", 0.0),
         "signals": r.signal_labels, "categories": sorted(r.categories),
         "reasons": r.reasons, "score": r.score, "verdict": r.verdict,
         "entry": r.entry, "stop": r.stop, "target": r.target,

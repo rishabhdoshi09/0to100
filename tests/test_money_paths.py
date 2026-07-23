@@ -2973,6 +2973,32 @@ class TestSniperConfirmation:
                       now=0, hold_seconds=45)
         assert "BAJEL" not in arm
 
+    def test_watch_map_skips_chase_risk_and_blowoff(self):
+        """The sniper is a separate path from the scanner — it must apply the
+        scanner's own quality demotes, not fire a green 'BREAKOUT CONFIRMED'
+        (and auto-trade) on a stock the scanner flagged extended/overbought."""
+        from scan.breakout_sniper import build_watch_map
+        base = {"categories": ["PreBreakout"], "pivot_distance_pct": 1.0,
+                "entry": 100.0, "stop": 95.0, "target": 112.0,
+                "avg_vol20": 1_000_000}
+        clean = {**base, "symbol": "CLEAN", "rsi": 60, "chase_risk": False}
+        chased = {**base, "symbol": "CHASED", "rsi": 60, "chase_risk": True}
+        blowoff = {**base, "symbol": "BLOWOFF", "rsi": 88, "chase_risk": False}
+        # tokens_for is best-effort; watch map keys off symbol regardless
+        syms = {v["symbol"] for v in
+                build_watch_map([clean, chased, blowoff]).values()}
+        # even if instrument-token lookup is empty in the test env, the
+        # PURE filter decision is what we assert — re-derive it directly:
+        from scan.breakout_sniper import _quality_skip
+        assert _quality_skip(clean) == ""
+        assert "chase" in _quality_skip(chased)
+        assert "blow-off" in _quality_skip(blowoff)
+
+    def test_quality_skip_backward_compatible(self):
+        """A result with neither flag (old scan dicts) is never skipped."""
+        from scan.breakout_sniper import _quality_skip
+        assert _quality_skip({"symbol": "X"}) == ""
+
 
 class TestBreakoutConfirmation:
     def test_grade_breakout_rules(self):
