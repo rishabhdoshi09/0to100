@@ -129,9 +129,15 @@ def build_conviction(results: list[dict], top_n: int = _ENRICH_TOP_N) -> list[di
     for r in head:
         sym = r["symbol"]
         checks: list[str] = []
+        chase_risk = bool(r.get("chase_risk"))
 
-        # Technical evidence (already in plain English from the scanner)
-        for sig, reason in zip(r.get("signals", []), r.get("reasons", [])):
+        # Technical evidence (already in plain English from the scanner).
+        # chase_risk stocks carry one extra LEADING reason (the "don't
+        # chase" warning, deliberately unpaired so it shows first as the
+        # card headline) — skip it here so signals[i] still pairs with
+        # its own real reason instead of shifting by one.
+        sig_reasons = r.get("reasons", [])[1:] if chase_risk else r.get("reasons", [])
+        for sig, reason in zip(r.get("signals", []), sig_reasons):
             checks.append(f"✓ {sig}: {reason}")
 
         conviction = float(r.get("score", 0))
@@ -164,7 +170,12 @@ def build_conviction(results: list[dict], top_n: int = _ENRICH_TOP_N) -> list[di
 
         conviction = max(0.0, min(100.0, conviction))
         n_pos = sum(1 for c in checks if c.startswith("✓"))
-        if conviction >= 75 and n_pos >= 4:
+        if chase_risk:
+            # scanner's own don't-chase safety demotion — a WATCH for a
+            # SPECIFIC reason (extended, no confirmed trigger), not just a
+            # score miss. Buzz/earnings evidence must never override it.
+            verdict = "WATCH"
+        elif conviction >= 75 and n_pos >= 4:
             verdict = "STRONG BUY"
         elif conviction >= 55 and n_pos >= 2:
             verdict = "BUY"

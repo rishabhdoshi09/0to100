@@ -344,6 +344,10 @@ class StockSignal:
     avg_vol20: float = 0.0                  # 20-day avg volume — sniper vol pacing
     above_sma50: bool = False              # trend flags — breadth ka raw data
     above_sma200: bool = False
+    chase_risk: bool = False               # extension guard fired — WATCH is a
+                                            # safety demotion, not a low-score
+                                            # miss; downstream enrichment (buzz/
+                                            # earnings) must never promote it back
 
     @property
     def categories(self) -> set[str]:
@@ -650,6 +654,13 @@ class UnifiedScanner:
         reasons = reasons[:6]
 
         # ── Trade plan ────────────────────────────────────────────────────────
+        # Refresh pivot_ref: the pullback-support block (above) can set a
+        # more precise swing-high `pivot` when the chart-pattern pivot came
+        # up empty, but that happens AFTER pivot_ref was first derived — so
+        # without this, a PULLBACK_SUPPORT-only setup's entry/stop/target
+        # silently fell back to the generic 41-day-high instead of the
+        # pullback's own (tighter, more relevant) pivot.
+        pivot_ref = pivot or pivot_ref
         entry = pivot_ref if pivot_ref > price else price
         stop = round(entry - 2 * atr, 1) if atr > 0 else round(entry * 0.95, 1)
         target = round(entry + 4 * atr, 1) if atr > 0 else round(entry * 1.10, 1)
@@ -677,19 +688,28 @@ class UnifiedScanner:
         # catches). A CONFIRMED breakout is exempt — that's a real trigger.
         ema20_now = _ema_np(close, 20)
         ext_pct = (price / ema20_now - 1) * 100 if ema20_now else 0.0
+        chase_risk = False
         if ext_pct > 10 and mom5 > 10 and not breakout_grade:
             reasons.insert(
                 0, f"⚠ Extended ({ext_pct:.0f}% above 20-EMA, +{mom5:.0f}% in "
                    f"5 din) — pullback ka wait, abhi chase mat karo")
             if verdict == "BUY":
                 verdict = "WATCH"
+                chase_risk = True   # WATCH is a safety demotion (don't-chase),
+                                    # not a low-score miss — downstream buzz/
+                                    # earnings enrichment must not promote it
+                                    # back to BUY. Also: reasons now has one
+                                    # extra leading entry (this warning) not
+                                    # paired with any signal — consumers that
+                                    # zip(signals, reasons) must skip reasons[0]
+                                    # when chase_risk is set.
 
         return StockSignal(
             symbol=symbol, price=round(price, 2), change_pct=round(chg, 2),
             momentum_5d=round(mom5, 2), rsi=round(rsi, 1),
             volume_ratio=round(vratio, 2), signals=signals, reasons=reasons,
             score=round(score, 1), entry=round(entry, 1), stop=stop,
-            target=target, verdict=verdict,
+            target=target, verdict=verdict, chase_risk=chase_risk,
             pivot_distance_pct=round(pivot_dist, 2),
             breakout_grade=breakout_grade,
             breakout_conviction=breakout_conv,

@@ -81,6 +81,7 @@ def _serialize(r) -> dict:
         "avg_vol20": getattr(r, "avg_vol20", 0.0),
         "above_sma50": bool(getattr(r, "above_sma50", False)),
         "above_sma200": bool(getattr(r, "above_sma200", False)),
+        "chase_risk": bool(getattr(r, "chase_risk", False)),
     }
 
 
