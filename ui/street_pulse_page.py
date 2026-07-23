@@ -326,7 +326,8 @@ def _render_today_best_setups(limit: int = 5) -> None:
             _cf_col = {"HIGH": "#00d4a0", "MEDIUM": "#eab308",
                        "LOW": "#f59e0b"}.get(_cf, "#8892a4")
             conv_bit += (f" · <b style='color:#00d4a0'>EV {r['ev_pct']:+.1f}%</b>"
-                         f" ({r.get('p_win', 0):.0f}% win, n={r.get('ev_n', 0)}"
+                         f" ({r.get('p_win', 0):.0f}% win, "
+                         f"{r.get('ev_n', 0)} past trades"
                          + (f", <span style='color:{_cf_col}'>{_cf}</span>"
                             if _cf else "") + ")")
         why = (r.get("reasons") or [""])[0]
