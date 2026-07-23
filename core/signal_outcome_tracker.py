@@ -17,6 +17,19 @@ from typing import Optional
 _DB_PATH = os.path.join(os.path.dirname(__file__), "..", "logs", "signal_outcomes.db")
 _DB_PATH = os.path.normpath(_DB_PATH)
 
+
+def _now() -> datetime:
+    """Naive IST wall-clock time — same storage format as plain
+    datetime.now() (no offset suffix, backward-compatible with existing
+    rows), but correct regardless of the host's own timezone. A UTC-hosted
+    VPS (the documented 24/7 setup — docs/ALWAYS_ON.md) running naive
+    datetime.now() here would date-bucket/window every signal 5.5 hours
+    off, same class of bug market_clock.py exists to prevent elsewhere.
+    (Only used for date-bucketing/windowing — the _error_cache cooldown
+    below is a pure elapsed-time delta and doesn't need this.)"""
+    from core.market_clock import now_ist
+    return now_ist().replace(tzinfo=None)
+
 # Error cache to skip recently-failed symbols
 _error_cache: dict[str, datetime] = {}
 _error_lock = threading.Lock()
@@ -82,8 +95,8 @@ def log_signal(
     Log a signal. Dedupes — won't log same symbol+date twice.
     """
     try:
-        today = datetime.now().strftime("%Y-%m-%d")
-        now_iso = datetime.now().isoformat(timespec="seconds")
+        today = _now().strftime("%Y-%m-%d")
+        now_iso = _now().isoformat(timespec="seconds")
         conn = _get_conn()
         try:
             # Dedupe: if the same symbol was logged today with the same signal_type, skip
@@ -125,8 +138,8 @@ def update_outcomes(lookback_days: int = 30) -> None:
     from concurrent.futures import ThreadPoolExecutor
 
     try:
-        cutoff = (datetime.now() - timedelta(days=5)).isoformat(timespec="seconds")
-        too_old = (datetime.now() - timedelta(days=lookback_days)).isoformat(timespec="seconds")
+        cutoff = (_now() - timedelta(days=5)).isoformat(timespec="seconds")
+        too_old = (_now() - timedelta(days=lookback_days)).isoformat(timespec="seconds")
 
         conn = _get_conn()
         try:
@@ -246,7 +259,7 @@ def update_outcomes(lookback_days: int = 30) -> None:
         if not results:
             return
 
-        now_iso = datetime.now().isoformat(timespec="seconds")
+        now_iso = _now().isoformat(timespec="seconds")
         conn = _get_conn()
         try:
             for (row_id, price, pct, worked) in results:
@@ -427,7 +440,7 @@ def get_recent_signals(limit: int = 20) -> list[dict]:
 def get_weekly_accuracy() -> float:
     """Quick single number: accuracy of signals from last 7 days that have closed."""
     try:
-        cutoff = (datetime.now() - timedelta(days=7)).isoformat(timespec="seconds")
+        cutoff = (_now() - timedelta(days=7)).isoformat(timespec="seconds")
         conn = _get_conn()
         try:
             row = conn.execute(

@@ -27,6 +27,17 @@ from logger import get_logger
 
 log = get_logger(__name__)
 
+
+def _now() -> datetime:
+    """Naive IST wall-clock time — same storage format as plain
+    datetime.now() (no offset suffix, backward-compatible with existing
+    rows), but correct regardless of the host's own timezone. A UTC-hosted
+    VPS (the documented 24/7 setup — docs/ALWAYS_ON.md) running naive
+    datetime.now() here would date-bucket/window every decision 5.5 hours
+    off, same class of bug market_clock.py exists to prevent elsewhere."""
+    from core.market_clock import now_ist
+    return now_ist().replace(tzinfo=None)
+
 _DB_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                         "logs", "decisions.db")
 
@@ -77,7 +88,7 @@ def log_decision(symbol: str, decision: str, reason: str = "",
     try:
         if entry_ref <= 0:
             return                              # no reference price → no claim
-        today = datetime.now().strftime("%Y-%m-%d")
+        today = _now().strftime("%Y-%m-%d")
         c = _conn()
         try:
             dup = c.execute(
@@ -91,7 +102,7 @@ def log_decision(symbol: str, decision: str, reason: str = "",
                 "source, entry_ref, stop_ref, score, ev_pct, p_win, confidence) "
                 "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
                 (symbol.upper(),
-                 datetime.now().isoformat(timespec="seconds"),
+                 _now().isoformat(timespec="seconds"),
                  decision, reason[:120], source, float(entry_ref),
                  float(stop_ref), float(score), ev_pct, p_win, confidence))
             c.commit()
@@ -106,9 +117,9 @@ def update_outcomes(check_after_days: int = 5, lookback_days: int = 40) -> int:
     signal tracker). Returns rows updated. Quote misses stay pending — a
     missing price is never written as an outcome (no fake data)."""
     try:
-        cutoff = (datetime.now() - timedelta(days=check_after_days)) \
+        cutoff = (_now() - timedelta(days=check_after_days)) \
             .isoformat(timespec="seconds")
-        too_old = (datetime.now() - timedelta(days=lookback_days)) \
+        too_old = (_now() - timedelta(days=lookback_days)) \
             .isoformat(timespec="seconds")
         c = _conn()
         try:
@@ -121,7 +132,7 @@ def update_outcomes(check_after_days: int = 5, lookback_days: int = 40) -> int:
             from data.live_quotes import get_live_quotes
             quotes = get_live_quotes(sorted({r["symbol"] for r in rows}))
             n = 0
-            now_iso = datetime.now().isoformat(timespec="seconds")
+            now_iso = _now().isoformat(timespec="seconds")
             for r in rows:
                 q = quotes.get(r["symbol"]) or {}
                 px = float(q.get("price") or 0)
