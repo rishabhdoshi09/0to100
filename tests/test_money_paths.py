@@ -3215,6 +3215,37 @@ class TestExtensionGuard:
             assert r.verdict == "WATCH"
             assert any("Extended" in x or "chase" in x.lower() for x in r.reasons)
 
+    def test_steady_grinder_far_above_50dma_is_chase(self):
+        """ADANIENSOL-type: a long base then a compressed run leaves the stock
+        glued to its 20-EMA (short-term guard stays SILENT) but far above its
+        50-DMA — a late-stage/climax entry. The 50-DMA extension view must
+        catch what the 20-EMA view misses, and flag chase_risk so the sniper
+        skips it and buzz/earnings enrichment can't promote it back to BUY."""
+        import numpy as np
+        import pandas as pd
+        from scan.unified_scanner import UnifiedScanner, _ema_np
+        base = np.full(160, 100.0)
+        run = [100.0]
+        for i in range(28):                          # ~1.4%/day with dips
+            run.append(run[-1] * (1 + (-0.010 if i % 5 == 4 else 0.017)))
+        close = np.concatenate([base, np.array(run[1:])])
+        df = pd.DataFrame({
+            "open": close * 0.999, "high": close * 1.004, "low": close * 0.996,
+            "close": close,
+            "volume": list(np.concatenate([np.full(160, 1e6),
+                            np.linspace(1e6, 1.3e6, len(run) - 1)]))},
+            index=pd.date_range("2024-11-01", periods=len(close), freq="D"))
+        price = close[-1]
+        ema20 = _ema_np(close, 20)
+        mom5 = (close[-1] / close[-6] - 1) * 100
+        # precondition: the OLD short-term guard would NOT fire here
+        assert not ((price / ema20 - 1) * 100 > 10 and mom5 > 10)
+        r = UnifiedScanner()._analyze("GRINDER", df)
+        if r is not None and not r.breakout_grade:
+            assert r.chase_risk is True
+            assert r.verdict == "WATCH"
+            assert any("50-DMA" in x for x in r.reasons)
+
 
 class TestPullbackSetup:
     def test_pullback_detected_not_at_high(self):

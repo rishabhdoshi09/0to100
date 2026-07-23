@@ -87,6 +87,15 @@ _CLV_WEAK = 0.40
 _RSI_OVERBOUGHT_SOFT = float(_os.getenv("QT_RSI_OVERBOUGHT_SOFT", "72") or 72)
 _RSI_OVERBOUGHT_HARD = float(_os.getenv("QT_RSI_OVERBOUGHT_HARD", "82") or 82)
 
+# Absolute extension above the 50-DMA — the chase the 20-EMA check MISSES.
+# A stock grinding steadily higher stays within ~5-10% of its (rising) 20-EMA
+# even after a big cumulative run, so the 20-EMA extension guard never fires —
+# yet buying a name 20%+ above its 50-DMA is a late-stage/climax entry (mean
+# reversion pending), not a base breakout (which sits ~0-10% above the 50-DMA).
+# This is the ADANIENSOL case: +18% off the base, RSI rolling over, but only
+# ~5% above the 20-EMA so chase_risk stayed False. Env-tunable; 0 = off.
+_EXT_ABOVE_SMA50 = float(_os.getenv("QT_EXT_ABOVE_SMA50_PCT", "20") or 20)
+
 
 def close_location_value(close: float, high: float, low: float) -> float:
     """(close-low)/(high-low), [0,1] mein clamp. Flat/no-range din → 0.5
@@ -686,23 +695,35 @@ class UnifiedScanner:
         # exactly TATVA-type: +14% in 5d, only a marginal break. Downgrade it
         # to a WATCH and say wait for the pullback (which PULLBACK_SUPPORT then
         # catches). A CONFIRMED breakout is exempt — that's a real trigger.
+        # Two views of "extended" — a stock only needs to fail ONE:
+        #   • 20-EMA: short-term stretched (the fast, mean-reverting view)
+        #   • 50-DMA: absolute/late-stage extension — catches the STEADY
+        #     grinder that stays glued to its 20-EMA the whole way up (the
+        #     ADANIENSOL case: +18% off the base but only ~5% above the
+        #     20-EMA, so the 20-EMA view alone said "fine").
         ema20_now = _ema_np(close, 20)
         ext_pct = (price / ema20_now - 1) * 100 if ema20_now else 0.0
+        ext50_pct = (price / sma50 - 1) * 100 if sma50 else 0.0
         chase_risk = False
-        if ext_pct > 10 and mom5 > 10 and not breakout_grade:
+        _short_stretched = ext_pct > 10 and mom5 > 10
+        _far_from_base = _EXT_ABOVE_SMA50 > 0 and ext50_pct > _EXT_ABOVE_SMA50
+        if (_short_stretched or _far_from_base) and not breakout_grade:
+            why = (f"{ext_pct:.0f}% above 20-EMA, +{mom5:.0f}% in 5 din"
+                   if _short_stretched
+                   else f"{ext50_pct:.0f}% above 50-DMA — late-stage, base se door")
             reasons.insert(
-                0, f"⚠ Extended ({ext_pct:.0f}% above 20-EMA, +{mom5:.0f}% in "
-                   f"5 din) — pullback ka wait, abhi chase mat karo")
+                0, f"⚠ Extended ({why}) — pullback ka wait, abhi chase mat karo")
+            # Flag it regardless of the current verdict — a PRE_BREAKOUT that's
+            # already WATCH still needs chase_risk set so the sniper skips it
+            # (the ADANIENSOL path: extended pre-breakout, never a "BUY" to
+            # demote, but must NOT be sniped). chase_risk is a don't-chase
+            # SAFETY flag downstream (sniper skip + conviction WATCH-floor) —
+            # buzz/earnings enrichment must never promote it back. It also
+            # means reasons[0] is now an unpaired leading warning, so
+            # zip(signals, reasons) consumers skip reasons[0] when it's set.
+            chase_risk = True
             if verdict == "BUY":
                 verdict = "WATCH"
-                chase_risk = True   # WATCH is a safety demotion (don't-chase),
-                                    # not a low-score miss — downstream buzz/
-                                    # earnings enrichment must not promote it
-                                    # back to BUY. Also: reasons now has one
-                                    # extra leading entry (this warning) not
-                                    # paired with any signal — consumers that
-                                    # zip(signals, reasons) must skip reasons[0]
-                                    # when chase_risk is set.
 
         return StockSignal(
             symbol=symbol, price=round(price, 2), change_pct=round(chg, 2),
