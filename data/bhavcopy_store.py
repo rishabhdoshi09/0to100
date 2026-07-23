@@ -266,9 +266,14 @@ def build_store(days: int = DEFAULT_DAYS, progress=None) -> int:
 
 
 def get_ohlcv(symbol: str) -> Optional[pd.DataFrame]:
+    # .copy() must happen INSIDE the lock: nse_live.apply_live_to_store()
+    # mutates today's row of this same DataFrame in place (df.loc[...] = )
+    # under this same lock during market hours. Copying after releasing the
+    # lock could race that in-place write mid-copy — a torn read of
+    # today's live-overlaid bar (e.g. new close, stale volume).
     with _lock:
         df = _store.get(symbol.upper())
-    return df.copy() if df is not None else None
+        return df.copy() if df is not None else None
 
 
 def store_symbols() -> list[str]:
