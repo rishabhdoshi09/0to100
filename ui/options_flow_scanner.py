@@ -1,14 +1,19 @@
 """
-Options Flow Scanner — institutional signal layer.
+Options Flow Scanner — "bade paise ka footprint" (institutional positioning).
 
-When large players position in options before a price move, it shows up in:
-  - OI spike (sudden 2-3x increase in call or put OI)
-  - PCR extreme (>1.5 = bearish overhang, <0.5 = bullish)
-  - IV crush or spike (implied vol moving before price)
-  - Max pain divergence (stock far from max pain = likely mean reversion)
+Bade players (mutual funds, FIIs) ek stock mein move se PEHLE options mein
+position lete hain. Wo footprint yahan padha jaata hai — but the RAW output
+is jargon (PCR, IV rank, OI walls, max pain). Retail iska matlab nahi samajhta.
 
-This is how institutions telegraph their intent before retail traders notice.
-Scans top FNO stocks and ranks by unusual activity score.
+So the UI layer (below) TRANSLATES every signal into plain baat:
+  • ek seedhi verdict  — "bade paise ka jhukaav UPAR / NEECHE / bada-move / none"
+  • teen tradeable number — CEILING (yahan ruk sakta hai), FLOOR (yahan sambhal
+    sakta hai), MAGNET (expiry tak yahan khinch sakta hai)
+  • confidence dots      — signal kitna strong hai, ek nazar mein
+
+The compute (_scan_one / analytics.*) stays jargon-native for correctness; the
+plain-English + tradeable-levels layer lives in render_* so a non-options-trader
+can actually USE this page. Scans top FNO stocks, ranks by unusual activity.
 """
 from __future__ import annotations
 
@@ -163,29 +168,108 @@ def _run_flow_scan(symbols_key: str) -> list[FlowSignal]:
     return sorted(signals, key=lambda s: s.flow_score, reverse=True)
 
 
+# ── Plain-English translation layer (jargon → seedhi baat) ────────────────────
+
+def plain_verdict(sig: FlowSignal) -> tuple[str, str, str]:
+    """(headline, matlab, color) — the ONE thing a non-options trader wants:
+    kis taraf bada paisa jhuka hua hai, aur uska matlab kya."""
+    if sig.signal == "BULLISH_FLOW":
+        return ("🟢 Bade paise ka jhukaav: UPAR",
+                "Options mein call-buying zyada — institutions upar ka bet le "
+                "rahe. Dip pe support milne ke chance.", "#00d4a0")
+    if sig.signal == "BEARISH_FLOW":
+        return ("🔴 Bade paise ka jhukaav: NEECHE",
+                "Put-buying zyada — institutions hedge/short kar rahe. Rally pe "
+                "seller aane ke chance.", "#ff4b4b")
+    if sig.signal == "IV_SPIKE":
+        return ("⚡ BADA MOVE aane wala",
+                "Options achanak mehenge ho gaye (IV spike) — market kisi event/"
+                "bade jhatke ki taiyari mein. Direction pakka nahi, par move "
+                "aayega. Option KHARIDNA mehenga, BECHNA risky.", "#a78bfa")
+    return ("⚪ Koi clear jhukaav nahi",
+            "Positioning balanced — is stock mein abhi institutional edge nahi "
+            "dikh raha.", "#8892a4")
+
+
+def tradeable_levels(sig: FlowSignal) -> tuple[float, float, float]:
+    """(ceiling, floor, magnet) — the numbers you can actually trade around.
+    Ceiling = nearest big CALL-OI wall above spot (yahan ruk sakta hai);
+    Floor = nearest big PUT-OI wall below spot (yahan sambhal sakta hai);
+    Magnet = max pain (expiry tak price idhar khinchta hai)."""
+    ks = sig.key_strikes or {}
+
+    def _pick(levels: list, above: bool) -> float:
+        strikes = [float(l.get("strike") or 0) for l in (levels or [])
+                   if l.get("strike")]
+        if not strikes:
+            return 0.0
+        side = [s for s in strikes if (s >= sig.spot) == above]
+        if side:
+            return min(side) if above else max(side)   # nearest to spot
+        return strikes[0]                                # fallback: biggest wall
+
+    ceiling = _pick(ks.get("resistance_levels"), above=True)
+    floor = _pick(ks.get("support_levels"), above=False)
+    return ceiling, floor, float(sig.max_pain or 0)
+
+
+def _confidence_dots(score: float) -> str:
+    filled = max(1, min(5, round(score / 20)))
+    return "●" * filled + "○" * (5 - filled)
+
+
+def _glossary() -> None:
+    with st.expander("🧠 Ye shabd matlab kya? (2-min me samajh lo)"):
+        st.markdown(
+            "- **Call buying / Put buying** — Call = *upar* jaane ka bet, "
+            "Put = *neeche* jaane ka bet. Bade players kis taraf zyada paisa "
+            "laga rahe, wahi asli signal.\n"
+            "- **📈 Ceiling (resistance)** — jahan bade *call-sellers* baithe "
+            "hain; price aksar wahan tak jaake ruk jaata hai.\n"
+            "- **📉 Floor (support)** — jahan bade *put-sellers* baithe hain; "
+            "price wahan tak girke sambhal jaata hai.\n"
+            "- **🎯 Magnet (max pain)** — wo price jahan sabse zyada option-"
+            "buyers ka paisa doobta hai; expiry ke paas price aksar idhar "
+            "khinchta hai.\n"
+            "- **IV rank** — options apni history ke hisaab se kitne mehenge "
+            "hain. High = market bade move ki ummeed kar raha (aur premium "
+            "mehenga).\n\n"
+            "> ⚠️ Ye **context** hai, guaranteed nahi. Bade paise ka jhukaav "
+            "batata hai — final trade tumhare apne setup + risk ke saath."
+        )
+
+
 def render_options_flow_scanner() -> None:
     st.markdown(
         "<h3 style='color:#a78bfa;font-family:JetBrains Mono,monospace;"
-        "font-size:1.1rem;letter-spacing:2px'>🌊 OPTIONS FLOW SCANNER</h3>",
+        "font-size:1.1rem;letter-spacing:2px'>🌊 BADE PAISE KA FOOTPRINT</h3>",
         unsafe_allow_html=True,
     )
     st.caption(
-        "Scans NSE FNO stocks for unusual options activity — PCR extremes, IV spikes, "
-        "OI walls, max pain divergence. These signals precede institutional moves."
+        "Bade players (funds/FIIs) stock ke move se PEHLE options mein position "
+        "lete hain. Ye page unka jhukaav padhta hai — aur seedhi baat mein "
+        "batata hai: **upar ya neeche**, aur kaunse **price levels** (ceiling / "
+        "floor) pe unka bada paisa baitha hai."
     )
+    _glossary()
 
     # Controls
     c1, c2, c3 = st.columns([2, 1, 1])
     custom_syms = c1.text_input(
-        "Symbols to scan (comma-separated, leave blank for all FNO)",
-        placeholder="RELIANCE,HDFCBANK,INFY or leave blank",
+        "Kaun se stocks? (blank = saare bade F&O stocks)",
+        placeholder="RELIANCE,HDFCBANK,INFY  ya  blank chhod do",
         key="flow_syms",
     )
-    min_score = c2.slider("Min flow score", 20, 80, 40, 5, key="flow_min_score")
-    run_btn   = c3.button("🌊 Scan Options Flow", type="primary", key="flow_run")
+    min_score = c2.slider(
+        "Sirf itne strong signal", 20, 80, 40, 5, key="flow_min_score",
+        help="Zyada = sirf sabse pakke signals. Kam = zyada stocks, halke "
+             "signals bhi.")
+    run_btn   = c3.button("🌊 Scan karo", type="primary", key="flow_run")
 
     if not run_btn:
-        st.info("Click **Scan Options Flow** to detect unusual institutional positioning.", icon="🌊")
+        st.info("**🌊 Scan karo** dabao — main bade paise ka options footprint "
+                "padh ke seedhi baat mein bataunga: kaun se stock mein upar/"
+                "neeche ka bet lag raha, aur kis level pe.", icon="👆")
         return
 
     symbols = (
@@ -194,65 +278,71 @@ def render_options_flow_scanner() -> None:
         else _FNO_UNIVERSE
     )
 
-    with st.spinner(f"Scanning options flow across {len(symbols)} FNO stocks…"):
+    with st.spinner(f"{len(symbols)} F&O stocks ka options footprint padh raha…"):
         signals = _run_flow_scan(",".join(symbols))
 
     active = [s for s in signals if s.flow_score >= min_score]
 
+    if not signals:
+        st.warning("Options chain data nahi mila — market band ho sakta hai, ya "
+                   "NSE abhi jawab nahi de raha. Market hours mein dobara try karo.")
+        return
     if not active:
-        st.info("No unusual options flow detected above the score threshold.")
+        st.info(f"{len(signals)} stocks dekhe — abhi koi strong footprint nahi "
+                f"(is threshold pe). Slider neeche laake halke signal bhi dekh sakte ho.")
         return
 
-    # ── Summary stats
+    # ── Ek nazar summary — kitne upar, kitne neeche ──────────────────────────
     bullish  = [s for s in active if s.signal == "BULLISH_FLOW"]
     bearish  = [s for s in active if s.signal == "BEARISH_FLOW"]
     iv_spike = [s for s in active if s.signal == "IV_SPIKE"]
 
     m1, m2, m3, m4 = st.columns(4)
-    m1.metric("Scanned", len(signals))
-    m2.metric("🟢 Bullish Flow", len(bullish))
-    m3.metric("🔴 Bearish Flow", len(bearish))
-    m4.metric("⚡ IV Spikes", len(iv_spike))
-
-    _SIG_CFG = {
-        "BULLISH_FLOW": ("#00d4a0", "🟢 BULLISH FLOW"),
-        "BEARISH_FLOW": ("#ff4b4b", "🔴 BEARISH FLOW"),
-        "IV_SPIKE":     ("#a78bfa", "⚡ IV SPIKE"),
-        "NEUTRAL":      ("#4a5568", "⚪ NEUTRAL"),
-    }
+    m1.metric("Stocks dekhe", len(signals))
+    m2.metric("🟢 Upar jhukaav", len(bullish))
+    m3.metric("🔴 Neeche jhukaav", len(bearish))
+    m4.metric("⚡ Bada-move alert", len(iv_spike))
 
     st.markdown("---")
     for sig in active[:20]:
-        fg, label = _SIG_CFG.get(sig.signal, ("#8892a4", sig.signal))
+        headline, matlab, col = plain_verdict(sig)
+        ceiling, floor, magnet = tradeable_levels(sig)
+        dots = _confidence_dots(sig.flow_score)
 
-        # Bias bar
-        pcr_bar = min(int(sig.pcr * 40), 100)
-        bias_color = "#00d4a0" if sig.pcr < 1.0 else "#ff4b4b"
+        # tradeable-level chips — only show the ones we actually have
+        chips = []
+        if ceiling > 0:
+            chips.append(f"<span style='font-size:.72rem;color:#94a3b8'>📈 Ceiling "
+                         f"<b style='color:#ff6b6b'>₹{ceiling:,.0f}</b></span>")
+        if floor > 0:
+            chips.append(f"<span style='font-size:.72rem;color:#94a3b8'>📉 Floor "
+                         f"<b style='color:#00d4a0'>₹{floor:,.0f}</b></span>")
+        if magnet > 0:
+            chips.append(f"<span style='font-size:.72rem;color:#94a3b8'>🎯 Magnet "
+                         f"<b style='color:#f59e0b'>₹{magnet:,.0f}</b></span>")
+        chips_html = "&nbsp;&nbsp;·&nbsp;&nbsp;".join(chips)
 
         st.markdown(
             f"""
-            <div style='background:#0d1421;border:1px solid #1e293b;border-radius:8px;
-                        padding:10px 14px;margin-bottom:6px'>
-              <div style='display:flex;align-items:center;justify-content:space-between;margin-bottom:6px'>
+            <div style='background:#0d1421;border:1px solid #1e293b;border-left:3px solid {col};
+                        border-radius:8px;padding:11px 14px;margin-bottom:7px'>
+              <div style='display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:6px'>
                 <div>
-                  <span style='color:#e2e8f0;font-weight:700;font-size:.9rem;
+                  <span style='color:#e2e8f0;font-weight:800;font-size:.95rem;
                     font-family:JetBrains Mono,monospace'>{sig.symbol}</span>
-                  <span style='color:#4a5568;font-size:.7rem;margin-left:8px'>₹{sig.spot:,.1f}</span>
+                  <span style='color:#64748b;font-size:.72rem;margin-left:8px'>₹{sig.spot:,.1f}</span>
                 </div>
-                <div style='display:flex;align-items:center;gap:10px'>
-                  <span style='font-size:.65rem;color:#60a5fa'>Score {sig.flow_score:.0f}</span>
-                  <span style='background:{fg}18;border:1px solid {fg}44;border-radius:5px;
-                    padding:2px 8px;font-size:.62rem;font-weight:700;color:{fg}'>{label}</span>
-                </div>
+                <span style='background:{col}18;border:1px solid {col}44;border-radius:6px;
+                  padding:3px 10px;font-size:.72rem;font-weight:700;color:{col}'>{headline}</span>
               </div>
-              <div style='display:flex;gap:16px;flex-wrap:wrap;margin-bottom:6px'>
-                <span style='font-size:.7rem;color:#4a5568'>PCR <b style='color:{bias_color}'>{sig.pcr:.2f}</b></span>
-                <span style='font-size:.7rem;color:#4a5568'>ATM IV <b style='color:#e2e8f0'>{sig.atm_iv:.1f}%</b></span>
-                <span style='font-size:.7rem;color:#4a5568'>IV Rank <b style='color:#a78bfa'>{sig.iv_percentile:.0f}%</b></span>
-                <span style='font-size:.7rem;color:#4a5568'>Max Pain <b style='color:#f59e0b'>₹{sig.max_pain:,.0f}</b></span>
-                <span style='font-size:.7rem;color:#4a5568'>Pain Gap <b style='color:#e2e8f0'>{sig.max_pain_gap_pct:.1f}%</b></span>
+              <div style='font-size:.78rem;color:#cbd5e1;margin:7px 0 8px'>{matlab}</div>
+              <div style='margin-bottom:6px'>{chips_html}</div>
+              <div style='display:flex;justify-content:space-between;align-items:center'>
+                <span style='font-size:.68rem;color:#64748b'>Confidence
+                  <span style='color:{col};letter-spacing:2px'>{dots}</span></span>
+                <span style='font-size:.6rem;color:#475569'>nerd stats: PCR {sig.pcr:.2f} ·
+                  IV rank {sig.iv_percentile:.0f}% · ATM IV {sig.atm_iv:.0f}%</span>
               </div>
-              <div style='font-size:.68rem;color:#94a3b8'>{sig.note}</div>
             </div>
             """,
             unsafe_allow_html=True,
