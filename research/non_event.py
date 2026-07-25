@@ -362,6 +362,37 @@ def replay_threshold(feature: str, old: float, new: float,
             "losers": int((arr <= _LOSS_PCT).sum()) if arr.size else 0}
 
 
+def reason_trend(reason: str) -> str:
+    """Is a reason's counterfactual getting BETTER or WORSE lately? Split its
+    settled rejections chronologically (recent third vs the rest) and compare the
+    avg forward return the reason let slip. ↑ = the names it passes are rising
+    more (getting more conservative), ↓ = falling more (earning more), → = flat /
+    too few. Fail-open → '→'."""
+    import numpy as np
+    r = _norm_reason(reason)
+    try:
+        c = _FS._conn()
+        try:
+            rows = c.execute(
+                "SELECT outcome FROM observations WHERE kind='REJECTION' AND "
+                "reason=? AND outcome IS NOT NULL ORDER BY ts ASC", (r,)).fetchall()
+        finally:
+            c.close()
+    except Exception:
+        return "→"
+    vals = [float(x["outcome"]) for x in rows]
+    if len(vals) < 12:
+        return "→"
+    k = max(4, len(vals) // 3)
+    recent = float(np.mean(vals[-k:]))
+    prior = float(np.mean(vals[:-k]))
+    if recent > prior + 0.75:
+        return "↑"
+    if recent < prior - 0.75:
+        return "↓"
+    return "→"
+
+
 def rejection_directives(max_items: int = 1) -> list[dict]:
     """Brain-ready: a rejection reason the evidence now says is TOO_CONSERVATIVE
     (costing more winners than it saves) — a gate to loosen. Demote-only,

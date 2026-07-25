@@ -68,7 +68,31 @@ CREATE TABLE IF NOT EXISTS beliefs (
 );
 CREATE INDEX IF NOT EXISTS idx_beliefs_status ON beliefs(status);
 CREATE INDEX IF NOT EXISTS idx_beliefs_signal ON beliefs(signal);
+CREATE TABLE IF NOT EXISTS belief_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    belief_id TEXT NOT NULL,
+    at TEXT NOT NULL,
+    status TEXT NOT NULL,
+    evidence_n INTEGER,
+    ev_r REAL,
+    event TEXT                     -- CREATED | REVALIDATED
+);
+CREATE INDEX IF NOT EXISTS idx_belief_events_bid ON belief_events(belief_id, at);
+CREATE INDEX IF NOT EXISTS idx_belief_events_at ON belief_events(at);
 """
+
+
+def _record_event(c: sqlite3.Connection, bid: str, at: str, status: str,
+                  evidence_n, ev_r, event: str) -> None:
+    """Append a status snapshot to the belief's history — the substrate for the
+    Time Machine (reconstruct THAT day's beliefs, not today's) and for 'promoted
+    / retired this week' activity. Best-effort."""
+    try:
+        c.execute("INSERT INTO belief_events (belief_id, at, status, evidence_n, "
+                  "ev_r, event) VALUES (?,?,?,?,?,?)",
+                  (bid, at, status, evidence_n, ev_r, event))
+    except Exception:
+        pass
 
 
 def _conn() -> sqlite3.Connection:
@@ -155,6 +179,7 @@ def record_belief(statement: str, signal: str | None = None, *,
                     (bid, statement, signal, status, int(evidence_n), confidence,
                      ev_r, drift_status, schema_version, hypothesis_id, deps,
                      notes, now, now))
+                _record_event(c, bid, now, status, int(evidence_n), ev_r, "CREATED")
             else:
                 # keep a terminal status terminal on a plain re-record
                 keep = row["status"] if row["status"] in (REJECTED, RETIRED) else status
@@ -166,6 +191,9 @@ def record_belief(statement: str, signal: str | None = None, *,
                     (statement, signal, keep, int(evidence_n), confidence, ev_r,
                      drift_status, schema_version, hypothesis_id, deps, notes,
                      now, bid))
+                if keep != row["status"]:
+                    _record_event(c, bid, now, keep, int(evidence_n), ev_r,
+                                  "REVALIDATED")
             c.commit()
         finally:
             c.close()
@@ -191,15 +219,21 @@ def revalidate(belief_id_: str, *, evidence_n: int | None = None,
                 row["status"], drift_status if drift_status is not None else row["drift_status"],
                 ev_r if ev_r is not None else row["ev_r"],
                 confidence if confidence is not None else row["confidence"])
+            now = time.strftime("%Y-%m-%dT%H:%M:%S")
+            new_n = int(evidence_n) if evidence_n is not None else row["evidence_n"]
+            new_ev = ev_r if ev_r is not None else row["ev_r"]
             c.execute(
                 "UPDATE beliefs SET status=?, evidence_n=?, confidence=?, ev_r=?, "
                 "drift_status=?, last_validated_at=? WHERE belief_id=?",
-                (new_status,
-                 int(evidence_n) if evidence_n is not None else row["evidence_n"],
+                (new_status, new_n,
                  confidence if confidence is not None else row["confidence"],
-                 ev_r if ev_r is not None else row["ev_r"],
+                 new_ev,
                  drift_status if drift_status is not None else row["drift_status"],
-                 time.strftime("%Y-%m-%dT%H:%M:%S"), belief_id_))
+                 now, belief_id_))
+            # always log a revalidation event (status may or may not have moved —
+            # the history needs the check-in either way for the Time Machine).
+            _record_event(c, belief_id_, now, new_status, new_n, new_ev,
+                          "REVALIDATED")
             c.commit()
         finally:
             c.close()
@@ -327,6 +361,97 @@ def list_beliefs(status: str | None = None) -> list[dict]:
             c.close()
     except Exception:
         return []
+
+
+def belief_history(belief_id_: str) -> list[dict]:
+    """Ordered status history for one belief (oldest→newest). Fail-open → []."""
+    try:
+        c = _conn()
+        try:
+            rows = c.execute("SELECT at, status, evidence_n, ev_r, event FROM "
+                             "belief_events WHERE belief_id=? ORDER BY id ASC",
+                             (belief_id_,)).fetchall()
+            return [dict(r) for r in rows]
+        finally:
+            c.close()
+    except Exception:
+        return []
+
+
+def beliefs_as_of(iso_date: str) -> list[dict]:
+    """TIME MACHINE — reconstruct each belief's status AS OF a date (not today's).
+    For every belief created on/before the date, its status is the last recorded
+    event with at ≤ date; beliefs not yet created are omitted. This is what lets
+    the system answer 'what did we believe on 12 Jan?' years later. Fail-open."""
+    cutoff = str(iso_date)
+    try:
+        c = _conn()
+        try:
+            rows = c.execute(
+                "SELECT be.belief_id, be.status, be.evidence_n, be.ev_r, be.at, "
+                "b.statement, b.signal FROM belief_events be "
+                "JOIN beliefs b ON b.belief_id = be.belief_id "
+                "WHERE be.at <= ? ORDER BY be.belief_id, be.id",
+                (cutoff,)).fetchall()
+        finally:
+            c.close()
+    except Exception:
+        return []
+    latest: dict[str, dict] = {}
+    for r in rows:                                    # last event ≤ cutoff wins
+        latest[r["belief_id"]] = {"belief_id": r["belief_id"],
+                                  "statement": r["statement"], "signal": r["signal"],
+                                  "status": r["status"], "evidence_n": r["evidence_n"],
+                                  "ev_r": r["ev_r"], "as_of_event": r["at"]}
+    return sorted(latest.values(), key=lambda d: (d["status"], -(d["ev_r"] or 0)))
+
+
+def recent_activity(days: int = 7) -> dict:
+    """What the research org did lately — beliefs newly promoted (CREATED as
+    ACTIVE), moved to WATCH, RETIRED, or REJECTED within the window. Feeds the
+    dashboard's 'this week' line. Fail-open → zeros."""
+    from datetime import datetime, timedelta
+    cutoff = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%S")
+    tally = {"promoted": 0, "to_watch": 0, "retired": 0, "rejected": 0}
+    try:
+        c = _conn()
+        try:
+            rows = c.execute("SELECT status, event FROM belief_events WHERE at >= ?",
+                             (cutoff,)).fetchall()
+        finally:
+            c.close()
+    except Exception:
+        return tally
+    for r in rows:
+        if r["event"] == "CREATED" and r["status"] == ACTIVE:
+            tally["promoted"] += 1
+        elif r["status"] == WATCH:
+            tally["to_watch"] += 1
+        elif r["status"] == RETIRED:
+            tally["retired"] += 1
+        elif r["status"] == REJECTED:
+            tally["rejected"] += 1
+    return tally
+
+
+def overdue_for_review(max_age_days: int = 30) -> list[dict]:
+    """ACTIVE/WATCH beliefs whose last validation is older than max_age_days —
+    RESEARCH DEBT (a belief still asserted but not re-checked in a while).
+    Fail-open → []."""
+    from datetime import datetime
+    out = []
+    for b in list_beliefs():
+        if b["status"] not in (ACTIVE, WATCH):
+            continue
+        lv = b.get("last_validated_at")
+        try:
+            age = (datetime.now() - datetime.fromisoformat(str(lv)[:19])).days
+        except Exception:
+            continue
+        if age > max_age_days:
+            out.append({"belief_id": b["belief_id"], "statement": b["statement"],
+                        "status": b["status"], "age_days": age})
+    return sorted(out, key=lambda d: -d["age_days"])
 
 
 # ══════════════════════════════════════════════════════════════════════════════

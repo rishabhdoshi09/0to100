@@ -229,6 +229,32 @@ def _as_float(v) -> float:
         return float("nan")
 
 
+def observation_counts() -> dict:
+    """Counts by kind + settled/unsettled, and the distinct schema versions in
+    the store — the data-health headline. Fail-open → {}."""
+    try:
+        c = _conn()
+        try:
+            by_kind = {k: {"total": 0, "settled": 0} for k in KINDS}
+            for r in c.execute("SELECT kind, COUNT(*) n, "
+                               "SUM(CASE WHEN outcome IS NOT NULL THEN 1 ELSE 0 END) s "
+                               "FROM observations GROUP BY kind").fetchall():
+                by_kind[r["kind"]] = {"total": int(r["n"] or 0),
+                                      "settled": int(r["s"] or 0)}
+            versions = [r["schema_version"] for r in c.execute(
+                "SELECT DISTINCT schema_version FROM observations").fetchall()]
+            total = int((c.execute("SELECT COUNT(*) n FROM observations")
+                         .fetchone() or {"n": 0})["n"] or 0)
+        finally:
+            c.close()
+        return {"total": total, "by_kind": by_kind,
+                "schema_versions": versions,
+                "current_schema": _S.SCHEMA_VERSION,
+                "on_current_schema": _S.SCHEMA_VERSION in versions}
+    except Exception:
+        return {}
+
+
 def feature_coverage(kind: str | None = None) -> list[dict]:
     """Per-feature data-quality: fill-rate and count of each problem verdict
     across stored observations. A feature whose fill-rate collapses or whose

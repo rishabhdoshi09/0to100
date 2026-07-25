@@ -404,3 +404,62 @@ class TestExplainability:
         assert EX.explain_rejection("GHOST")["found"] is False
         stub = EX.explain_reason("MERCURY")                # unknown → OTHER stub
         assert "summary" in stub and stub["reason"] == "OTHER"
+
+
+from research import research_overview as RO
+
+
+class TestResearchOverview:
+    """Mission control — 'is my research organisation healthy?' composed from the
+    subsystems, JARVIS-queryable, and fail-open even with feeds down."""
+
+    @pytest.fixture(autouse=True)
+    def _tmp(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(FS, "_DB_PATH", tmp_path / "fs.db")
+        monkeypatch.setattr(K, "_DB_PATH", tmp_path / "kb.db")
+        monkeypatch.setattr(G, "_DB_PATH", tmp_path / "eg.db")
+
+    def test_overview_is_always_complete_and_fail_open(self):
+        # even with empty stores, every section renders (mission control never blanks)
+        o = RO.overview()
+        assert set(o) == {"research_health", "edge_health", "gate_scorecard",
+                          "data_health", "research_debt"}
+        assert isinstance(o["gate_scorecard"], list)
+
+    def test_gate_scorecard_ranks_and_scores(self):
+        for i in range(40):
+            NE.capture_rejection(f"E{i}", {"rsi": 70, "atr_pct": 3.0}, "EXTENSION",
+                                 ts="2026-06-20T09:00:00")
+            FS.set_outcome(f"2026-06-20:E{i}:REJ:EXTENSION", -2.4 if i >= 4 else 5.0)
+        card = RO.gate_scorecard()
+        ext = next(r for r in card if r["reason"] == "EXTENSION")
+        assert ext["gate"] == "Extension Guard"
+        assert ext["saved"] == 36 and ext["cost"] == 4
+        assert ext["net_fwd_pct"] < 0 and ext["verdict"] == "EARNING"
+        assert ext["trend"] in ("↑", "↓", "→")
+
+    def test_research_health_counts_beliefs_and_activity(self):
+        K.record_belief("A works", "a", status=K.ACTIVE, evidence_n=120,
+                        confidence="HIGH", ev_r=0.3)
+        K.record_belief("B fails", "b", status=K.REJECTED)
+        rh = RO.research_health()
+        assert rh["beliefs_active"] == 1 and rh["beliefs_rejected"] == 1
+        assert rh["promoted_this_week"] >= 1
+
+    def test_data_health_surfaces_schema_and_counts(self):
+        FS.snapshot("o1", "TCS", "SCAN", {"rsi": 60})
+        dh = RO.data_health()
+        assert dh["total_observations"] == 1
+        assert dh["by_kind"]["SCAN"]["total"] == 1
+        assert dh["on_current_schema"] is True
+
+    def test_time_machine_reconstructs_past_beliefs(self):
+        bid = K.record_belief("X works", "x", status=K.ACTIVE, evidence_n=100,
+                              confidence="HIGH", ev_r=0.3)
+        K.revalidate(bid, drift_status="DECAYING", ev_r=0.1)   # now WATCH
+        # today's view: WATCH; the past reconstruction is by event history
+        import datetime
+        now = datetime.datetime.now().isoformat()
+        tm = RO.time_machine(now)
+        assert tm["total"] == 1
+        assert RO.time_machine("2000-01-01")["total"] == 0    # before it existed
