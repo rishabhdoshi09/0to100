@@ -196,3 +196,66 @@ class TestEvaluateGate:
         for arr in (rng.normal(0.3, 1, 200), rng.normal(-0.3, 1, 200),
                     rng.normal(1, 0.5, 8)):
             assert len(H.evaluate(arr).insight) > 10          # kill-criterion: a sentence
+
+
+from research import drift as D
+
+
+class TestConceptDrift:
+    """Catch edge decay before the drawdown — a change-point located by max-|t|
+    split and CONFIRMED by permutation p-value, so noise never cries wolf."""
+
+    def test_stationary_stream_is_stable(self):
+        rng = np.random.default_rng(20)
+        assert D.assess_drift(rng.normal(0.1, 1.0, 200), seed=1).status == "STABLE"
+
+    def test_clear_decay_is_caught_and_located(self):
+        rng = np.random.default_rng(21)
+        # +0.5R for 100 trades, then -0.5R for 100 — an unmistakable decay
+        stream = np.concatenate([rng.normal(0.5, 1.0, 100),
+                                 rng.normal(-0.5, 1.0, 100)])
+        r = D.assess_drift(stream, seed=1)
+        assert r.status == "DECAYING"
+        assert r.delta_r < 0
+        assert 80 <= r.change_point <= 120                    # near the true break
+        assert "weakening" in r.insight
+
+    def test_clear_strengthening_is_caught(self):
+        rng = np.random.default_rng(22)
+        stream = np.concatenate([rng.normal(-0.4, 1.0, 100),
+                                 rng.normal(0.5, 1.0, 100)])
+        r = D.assess_drift(stream, seed=1)
+        assert r.status == "STRENGTHENING" and r.delta_r > 0
+
+    def test_too_few_outcomes_is_stable_not_a_claim(self):
+        rng = np.random.default_rng(23)
+        r = D.assess_drift(rng.normal(-0.5, 1.0, 12), seed=1)
+        assert r.status == "STABLE" and "need" in r.insight.lower()
+
+    def test_false_alarm_rate_is_controlled(self):
+        rng = np.random.default_rng(24)
+        alarms = sum(D.assess_drift(rng.normal(0.05, 1.0, 200), seed=1).status
+                     != "STABLE" for _ in range(25))
+        assert alarms <= 3                                    # ~alpha under the null
+
+    def test_deterministic_with_seed(self):
+        rng = np.random.default_rng(25)
+        s = np.concatenate([rng.normal(0.4, 1, 90), rng.normal(-0.3, 1, 90)])
+        assert D.assess_drift(s, seed=7).insight == D.assess_drift(s, seed=7).insight
+
+    def test_page_hinkley_streaming_detector(self):
+        rng = np.random.default_rng(26)
+        down = np.concatenate([rng.normal(0.6, 0.5, 80), rng.normal(-0.6, 0.5, 80)])
+        assert D.page_hinkley(down)["direction"] == "down"
+        assert D.page_hinkley(rng.normal(0.0, 0.5, 60))["detected"] is False
+
+    def test_max_split_locates_the_break(self):
+        rng = np.random.default_rng(27)
+        s = np.concatenate([rng.normal(0.6, 1, 100), rng.normal(-0.6, 1, 100)])
+        cp, t = D._max_split_t(s, min_seg=15)
+        assert 85 <= cp <= 115 and t < 0                      # located, sign = down
+
+    def test_report_and_directives_fail_open(self):
+        # no signal_log in the test env → must return empty lists, never raise
+        assert isinstance(D.drift_report(), list)
+        assert isinstance(D.drift_directives(), list)

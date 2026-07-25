@@ -153,6 +153,11 @@ def build_directives(v: dict) -> list[dict]:
         add("info", f"🏦 Bulk-deal buying aaj: {', '.join(_bulk[:5])}"
                     + (f" +{len(_bulk) - 5} aur" if len(_bulk) > 5 else "")
                     + " — bade paise in naamon mein ghuse.")
+    # 📉 concept-drift — signals whose measured edge is decaying / strengthening
+    # (change-point located + permutation-confirmed by the Research OS, so this
+    # only fires on a real shift, never noise). Decay warns, growth informs.
+    for dd in (v.get("drift_directives") or [])[:2]:
+        add(dd.get("severity", "info"), dd.get("text", ""))
     # correlation lens: N positions that move together = fewer real bets
     if (v.get("corr_positions", 0) >= 2
             and v.get("corr_bets", 0) < v["corr_positions"]):
@@ -300,6 +305,29 @@ def _probe_macro(market: str) -> dict:
     return data
 
 
+_drift_cache = {"ts": 0.0, "data": []}
+
+
+def _probe_drift(market: str) -> list:
+    """📉 Concept-drift directives — signals whose live edge is decaying or
+    strengthening (Research OS: change-point + permutation-confirmed). Cached
+    30 min (the permutation test isn't free and drift moves slowly). Fail-open:
+    no log / error → [], never blocks the Brain."""
+    if market == "US":
+        return []
+    import time as _t
+    if _drift_cache["ts"] > 0 and _t.time() - _drift_cache["ts"] < 1800:
+        return _drift_cache["data"]
+    data: list = []
+    try:
+        from research.drift import drift_directives
+        data = drift_directives()
+    except Exception:
+        data = []
+    _drift_cache.update(ts=_t.time(), data=data)
+    return data
+
+
 def _probe_options(market: str) -> dict:
     """Index options positioning (PCR / max-pain) — options market ka vote.
     Off-hours/chain-fail → empty, koi claim nahi."""
@@ -365,6 +393,7 @@ def assess(market: str = "IN", capital: float = 100_000.0) -> dict:
     opts = _probe_options(market)
     flows = _probe_flows(market)
     macro = _probe_macro(market)
+    drift = _probe_drift(market)
 
     buys = [r for r in setups if r.get("verdict") in ("STRONG BUY", "BUY")]
     # EV-first cross-sectional ranking (north star): setups with a measured
@@ -431,6 +460,7 @@ def assess(market: str = "IN", capital: float = 100_000.0) -> dict:
         "macro_heat": macro.get("heat", 0),
         "macro_note": macro.get("note", ""),
         "macro_themes": macro.get("themes", []),
+        "drift_directives": drift,
         "posture": posture,
     }
     directives = build_directives(vitals)
