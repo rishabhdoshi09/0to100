@@ -162,3 +162,108 @@ class TestKnowledgeBase:
         assert K.list_beliefs() == [] or isinstance(K.list_beliefs(), list)
         assert K.get_belief("nope") is None
         assert isinstance(K.belief_directives(), list)
+
+
+from research import non_event as NE
+
+
+class _FakeSignal:
+    """Minimal stand-in for a scanner StockSignal (only the fields the mapper
+    reads)."""
+    def __init__(self, symbol, verdict="WATCH", score=40.0, rsi=60.0,
+                 chase_risk=False, pivot_distance_pct=0.0):
+        self.symbol = symbol
+        self.verdict = verdict
+        self.score = score
+        self.rsi = rsi
+        self.chase_risk = chase_risk
+        self.pivot_distance_pct = pivot_distance_pct
+
+
+class TestNonEvent:
+    """The 1,900 stocks you didn't trade are the control group — structured
+    causes + two near-miss types + counterfactual verdicts + boundary replay."""
+
+    @pytest.fixture(autouse=True)
+    def _tmp(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(FS, "_DB_PATH", tmp_path / "fs.db")
+
+    def test_rejection_carries_structured_cause_and_dedupes(self):
+        r = NE.capture_rejection("TCS", {"rsi": 85}, "BLOWOFF_RSI",
+                                 ts="2026-06-01T09:00:00")
+        assert r["status"] == "frozen"
+        # same day + symbol + reason → stored once (write-once)
+        r2 = NE.capture_rejection("TCS", {"rsi": 84}, "BLOWOFF_RSI",
+                                  ts="2026-06-01T12:00:00")
+        assert r2["status"] == "exists"
+        obs = FS.get_observation("2026-06-01:TCS:REJ:BLOWOFF_RSI")
+        assert obs["reason"] == "BLOWOFF_RSI" and obs["kind"] == "REJECTION"
+
+    def test_unknown_reason_falls_back_to_other(self):
+        NE.capture_rejection("X", {"rsi": 50}, "MERCURY_RETROGRADE",
+                             ts="2026-06-01T09:00:00")
+        assert FS.get_observation("2026-06-01:X:REJ:OTHER")["reason"] == "OTHER"
+
+    def test_two_near_miss_types_stored_separately_with_gap(self):
+        NE.capture_near_miss("A", {"rsi": 60}, NE.ALMOST,
+                             gap={"feature": "rsi", "needed": 72, "observed": 71.6},
+                             ts="2026-06-01T09:00:00")
+        NE.capture_near_miss("A", {"rsi": 60}, NE.FADED, ts="2026-06-01T09:00:00")
+        a = FS.get_observation("2026-06-01:A:NM:ALMOST")
+        f = FS.get_observation("2026-06-01:A:NM:FADED")
+        assert a["subtype"] == "ALMOST" and a["meta"]["gap"]["observed"] == 71.6
+        assert f["subtype"] == "FADED"                       # distinct rows
+
+    def test_reason_verdicts_earning_vs_too_conservative(self):
+        # a reason that rejected names which then FELL → EARNING
+        for i in range(34):
+            NE.capture_rejection(f"D{i}", {"rsi": 85}, "BLOWOFF_RSI",
+                                 ts="2026-06-01T09:00:00")
+            FS.set_outcome(f"2026-06-01:D{i}:REJ:BLOWOFF_RSI", -3.0 + (i % 3))
+        # a reason that rejected names which then ROSE → TOO_CONSERVATIVE
+        for i in range(34):
+            NE.capture_rejection(f"U{i}", {"rsi": 55}, "LAGGARD",
+                                 ts="2026-06-01T09:00:00")
+            FS.set_outcome(f"2026-06-01:U{i}:REJ:LAGGARD", 6.0 + (i % 4))
+        verdicts = {a["reason"]: a["verdict"] for a in NE.rejection_analysis()}
+        assert verdicts["BLOWOFF_RSI"] == "EARNING"
+        assert verdicts["LAGGARD"] == "TOO_CONSERVATIVE"
+        assert any("too strict" in d["text"] for d in NE.rejection_directives())
+
+    def test_thin_evidence_makes_no_claim(self):
+        for i in range(5):                                   # below the 30 floor
+            NE.capture_rejection(f"T{i}", {"rsi": 80}, "MACRO",
+                                 ts="2026-06-01T09:00:00")
+            FS.set_outcome(f"2026-06-01:T{i}:REJ:MACRO", -5.0)
+        assert NE.rejection_analysis()[0]["verdict"] == "INSUFFICIENT"
+
+    def test_decision_boundary_replay_no_rescan(self):
+        # RSI-cap near-misses just above 72; relaxing the cap 72→74 should flip
+        # exactly those whose observed RSI is in (72, 74]
+        NE.capture_near_miss("P", {"rsi": 73}, NE.ALMOST,
+                             gap={"feature": "rsi", "needed": 72, "observed": 73.0},
+                             ts="2026-06-01T09:00:00")
+        NE.capture_near_miss("Q", {"rsi": 78}, NE.ALMOST,
+                             gap={"feature": "rsi", "needed": 72, "observed": 78.0},
+                             ts="2026-06-01T09:00:00")
+        FS.set_outcome("2026-06-01:P:NM:ALMOST", 4.0)         # would've been a winner
+        rp = NE.replay_threshold("rsi", 72, 74, "ceiling")
+        assert rp["would_qualify"] == 1 and "P" in rp["symbols"]
+        assert rp["winners"] == 1                            # and it rose
+
+    def test_scan_batch_maps_causes(self):
+        results = [
+            _FakeSignal("BUYME", verdict="BUY"),             # skipped (executed)
+            _FakeSignal("EXT", chase_risk=True),             # → EXTENSION
+            _FakeSignal("NEAR", pivot_distance_pct=0.8),     # → ALMOST
+            _FakeSignal("MEH", score=20.0),                  # → LOW_CONVICTION
+        ]
+        counts = NE.record_scan_batch(results, regime="MIXED")
+        assert counts == {"extension": 1, "almost": 1, "low_conviction": 1}
+        assert FS.get_observation(f"{NE._today()}:EXT:REJ:EXTENSION") is not None
+        assert FS.get_observation(f"{NE._today()}:NEAR:NM:ALMOST") is not None
+
+    def test_settle_and_directives_fail_open(self):
+        assert NE.settle_outcomes() == 0                     # no bhavcopy in test env
+        assert isinstance(NE.rejection_analysis(), list)
+        assert isinstance(NE.rejection_directives(), list)

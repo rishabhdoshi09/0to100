@@ -53,11 +53,19 @@ CREATE TABLE IF NOT EXISTS observations (
     schema_version TEXT NOT NULL,   -- which schema froze this vector
     features TEXT NOT NULL,         -- json canonical vector
     validation TEXT,                -- json problems list
+    reason TEXT,                    -- REJECTION cause code (structured)
+    subtype TEXT,                   -- NEAR_MISS kind: ALMOST | FADED
+    meta TEXT,                      -- json: gap detail, extra structured context
     created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_obs_kind ON observations(kind, ts);
 CREATE INDEX IF NOT EXISTS idx_obs_symbol ON observations(symbol);
+CREATE INDEX IF NOT EXISTS idx_obs_reason ON observations(kind, reason);
 """
+
+# Columns added after the table's first release — migrated in on connect so an
+# existing store keeps working without a manual step.
+_MIGRATIONS = (("reason", "TEXT"), ("subtype", "TEXT"), ("meta", "TEXT"))
 
 
 def _conn() -> sqlite3.Connection:
@@ -67,6 +75,10 @@ def _conn() -> sqlite3.Connection:
     for stmt in _DDL.strip().split(";"):
         if stmt.strip():
             c.execute(stmt)
+    have = {r["name"] for r in c.execute("PRAGMA table_info(observations)")}
+    for col, decl in _MIGRATIONS:
+        if col not in have:
+            c.execute(f"ALTER TABLE observations ADD COLUMN {col} {decl}")
     c.commit()
     return c
 
@@ -77,9 +89,12 @@ def _conn() -> sqlite3.Connection:
 
 def snapshot(observation_id: str, symbol: str, kind: str, raw_features: dict,
              ts: str | None = None, outcome: float | None = None,
-             ages: dict | None = None) -> dict:
+             ages: dict | None = None, reason: str | None = None,
+             subtype: str | None = None, meta: dict | None = None) -> dict:
     """Freeze one observation. Canonicalises + validates the raw features, then
-    writes them WRITE-ONCE under the current schema version. Returns
+    writes them WRITE-ONCE under the current schema version. `reason` (a
+    structured REJECTION cause), `subtype` (a NEAR_MISS kind), and `meta` (json
+    context such as a threshold gap) are frozen alongside. Returns
     {status, schema_version, problems}:
       • 'frozen' — newly stored.
       • 'exists' — id already frozen; nothing changed (immutability enforced).
@@ -101,13 +116,14 @@ def snapshot(observation_id: str, symbol: str, kind: str, raw_features: dict,
                         "problems": report.problems}
             c.execute(
                 "INSERT INTO observations (observation_id, ts, symbol, kind, "
-                "outcome, schema_version, features, validation, created_at) "
-                "VALUES (?,?,?,?,?,?,?,?,?)",
+                "outcome, schema_version, features, validation, reason, subtype, "
+                "meta, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
                 (observation_id, ts or time.strftime("%Y-%m-%dT%H:%M:%S"),
                  (symbol or "").upper(), kind,
                  float(outcome) if outcome is not None else None,
                  _S.SCHEMA_VERSION, json.dumps(canonical),
-                 json.dumps(report.problems),
+                 json.dumps(report.problems), reason, subtype,
+                 json.dumps(meta) if meta is not None else None,
                  time.strftime("%Y-%m-%dT%H:%M:%S")))
             c.commit()
         finally:
@@ -155,6 +171,7 @@ def get_observation(observation_id: str) -> dict | None:
             d = dict(row)
             d["features"] = json.loads(d["features"] or "{}")
             d["validation"] = json.loads(d["validation"] or "[]")
+            d["meta"] = json.loads(d["meta"]) if d.get("meta") else None
             return d
         finally:
             c.close()

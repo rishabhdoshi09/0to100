@@ -173,6 +173,10 @@ def build_directives(v: dict) -> list[dict]:
     # WATCH) or one just retired. The institution questioning its own knowledge.
     for bd in (v.get("belief_directives") or [])[:1]:
         add(bd.get("severity", "info"), bd.get("text", ""))
+    # 🕳️ Non-event learning — a rejection reason the control group says is too
+    # conservative (costing winners). A gate to loosen, from what we DIDN'T trade.
+    for rd in (v.get("rejection_directives") or [])[:1]:
+        add(rd.get("severity", "info"), rd.get("text", ""))
     # correlation lens: N positions that move together = fewer real bets
     if (v.get("corr_positions", 0) >= 2
             and v.get("corr_bets", 0) < v["corr_positions"]):
@@ -433,6 +437,28 @@ def _probe_beliefs(market: str) -> list:
     return data
 
 
+_rejection_cache = {"ts": 0.0, "data": []}
+
+
+def _probe_rejections(market: str) -> list:
+    """🕳️ Non-event directives — a rejection REASON the counterfactual control
+    group now says is TOO CONSERVATIVE (passing more winners than it saves), so a
+    gate to loosen. Harness-gated, demote-only. Cached 1h. Fail-open."""
+    if market == "US":
+        return []
+    import time as _t
+    if _rejection_cache["ts"] > 0 and _t.time() - _rejection_cache["ts"] < 3600:
+        return _rejection_cache["data"]
+    data: list = []
+    try:
+        from research.non_event import rejection_directives
+        data = rejection_directives()
+    except Exception:
+        data = []
+    _rejection_cache.update(ts=_t.time(), data=data)
+    return data
+
+
 def _probe_options(market: str) -> dict:
     """Index options positioning (PCR / max-pain) — options market ka vote.
     Off-hours/chain-fail → empty, koi claim nahi."""
@@ -503,6 +529,7 @@ def assess(market: str = "IN", capital: float = 100_000.0) -> dict:
     gates = _probe_gates(market)
     timeline = _probe_timeline(market)
     beliefs = _probe_beliefs(market)
+    rejections = _probe_rejections(market)
 
     buys = [r for r in setups if r.get("verdict") in ("STRONG BUY", "BUY")]
     # EV-first cross-sectional ranking (north star): setups with a measured
@@ -574,6 +601,7 @@ def assess(market: str = "IN", capital: float = 100_000.0) -> dict:
         "gate_directives": gates,
         "timeline_directives": timeline,
         "belief_directives": beliefs,
+        "rejection_directives": rejections,
         "posture": posture,
     }
     directives = build_directives(vitals)

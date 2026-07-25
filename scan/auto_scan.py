@@ -298,6 +298,29 @@ def _log_buys_for_tracking(results) -> None:
         log.debug("auto_scan_tracking_skip", error=str(exc))
 
 
+def _log_non_events_for_learning(results) -> None:
+    """🕳️ Freeze the WATCH / rejected names as structured non-event observations
+    in the Feature Platform — the control group that turns the P&L into a
+    controlled experiment (which rejection reasons SAVE money vs are too
+    conservative). Deduped per day by the store; fully fail-open."""
+    try:
+        from research.non_event import record_scan_batch
+        regime = ""
+        try:
+            from core.regime_engine import compute_regime
+            regime = str(getattr(compute_regime(), "market_regime", "") or "")
+        except Exception:
+            regime = ""
+        breadth_pct = None
+        try:
+            breadth_pct = (_breadth or {}).get("pct_above_50")
+        except Exception:
+            breadth_pct = None
+        record_scan_batch(results, regime=regime, breadth_pct=breadth_pct)
+    except Exception as exc:
+        log.debug("auto_scan_nonevent_skip", error=str(exc))
+
+
 _scan_gate = threading.Lock()   # one scan at a time — no duplicate work
 
 
@@ -329,6 +352,7 @@ def _scan_once_locked(universe: Optional[list[str]] = None, progress=None) -> No
         raw = UnifiedScanner(max_workers=_eco_workers(8)).scan(
             universe, progress=progress)
         _log_buys_for_tracking(raw)
+        _log_non_events_for_learning(raw)
         serialized = [_serialize(r) for r in raw]
         # Sector heat — packs of 3+ signals in one sector boost each other
         try:
@@ -610,6 +634,16 @@ def _maybe_run_nightly_backtest() -> None:
                 log.info("edge_timeline_transitions", n=len(moved))
         except Exception as exc:
             log.debug("edge_timeline_skip", error=str(exc))
+        # 🕳️ Non-event settlement — fill forward-return outcomes on the day's
+        # matured REJECTION / NEAR_MISS observations (the counterfactual control
+        # group), from official bhavcopy. Fail-open.
+        try:
+            from research.non_event import settle_outcomes
+            n_settled = settle_outcomes()
+            if n_settled:
+                log.info("non_event_settled", n=n_settled)
+        except Exception as exc:
+            log.debug("non_event_settle_skip", error=str(exc))
     except Exception as exc:
         log.debug("nightly_backtest_skip", error=str(exc))
 
