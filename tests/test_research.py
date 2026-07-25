@@ -355,3 +355,60 @@ class TestCounterfactualGates:
     def test_fail_open_io(self):
         assert CF.gate_attribution_report() == []
         assert CF.gate_directives() == []
+
+
+from research import market_memory as M
+
+
+class TestMarketMemory:
+    """Trade-level analogs — win rate + MAE/MFE from similar historical setups.
+    A decision engine (informs stop/target), not just a similarity toy."""
+
+    def test_forward_outcome_win_with_excursions(self):
+        # entry 100, stop 94 (risk 6), target 112; dips to 97 then runs to 113
+        oc = M.forward_outcome(100, 94, 112, [101, 99, 105, 113],
+                               [98, 97, 103, 109], [100, 98, 104, 112])
+        assert oc["won"] is True and oc["r"] == pytest.approx(2.0)
+        assert oc["mae"] == pytest.approx((100 - 97) / 6)     # worst dip, in R
+        assert oc["mfe"] == pytest.approx((113 - 100) / 6)    # best run, in R
+
+    def test_forward_outcome_loss_and_invalid(self):
+        loss = M.forward_outcome(100, 94, 112, [101, 99], [98, 93], [100, 95])
+        assert loss["won"] is False and loss["r"] == -1.0
+        assert M.forward_outcome(100, 100, 112, [1], [1], [1]) is None  # zero risk
+
+    def test_retrieval_pulls_the_near_cluster(self):
+        rng = np.random.default_rng(50)
+        near = rng.normal([60, 5, 3, 2, 10, 4, 1], 0.3, (60, 7))
+        far = rng.normal([85, 20, 8, 5, 40, 25, 0], 0.3, (60, 7))
+        corpus = np.vstack([near, far])
+        outcomes = ([{"r": 0.8, "mae": 0.4, "mfe": 1.5, "hold": 6, "won": True}] * 60
+                    + [{"r": -0.6, "mae": 1.2, "mfe": 0.3, "hold": 4, "won": False}] * 60)
+        q = np.array([60, 5, 3, 2, 10, 4, 1], float)
+        s = M.analog_summary(q, corpus, outcomes, k=30)
+        assert s["win_rate"] > 0.9                             # pulled the good near-cluster
+        assert s["avg_mae"] == pytest.approx(0.4, abs=0.01)
+
+    def test_below_min_analogs_is_silent(self):
+        corpus = np.random.default_rng(51).normal(0, 1, (5, 7))
+        outcomes = [{"r": 1.0, "mae": 0.2, "mfe": 1.0, "hold": 3, "won": True}] * 5
+        assert M.analog_summary(np.zeros(7), corpus, outcomes, min_analogs=20) == {}
+
+    def test_mahalanobis_finds_actual_nearest(self):
+        corpus = np.array([[0.0, 0.0], [10.0, 10.0], [0.1, 0.1], [20.0, 20.0]])
+        inv = M.robust_inv_cov(corpus)
+        idx, _ = M.mahalanobis_knn(np.array([0.0, 0.0]), corpus, inv, k=2)
+        assert set(idx.tolist()) == {0, 2}                    # the two near origin
+
+    def test_extract_features_shape_and_short_window(self):
+        close = np.linspace(80, 120, 220)
+        f = M.extract_features(close, close + 1, close - 1, np.full(220, 1e6))
+        assert f is not None and f.size == len(M.FEATURE_NAMES)
+        assert M.extract_features(close[:30], close[:30], close[:30], None) is None
+
+    def test_find_analogs_fail_open(self):
+        import pandas as pd
+        close = np.linspace(80, 120, 220)
+        df = pd.DataFrame({"close": close, "high": close + 1, "low": close - 1,
+                           "volume": [1e6] * 220})
+        assert M.find_analogs("X", df) == {}                  # no corpus in test env
