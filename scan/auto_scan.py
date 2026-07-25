@@ -11,9 +11,29 @@ outcomes, not opinions.
 """
 from __future__ import annotations
 
+import os
 import threading
 import time
 from datetime import datetime
+
+# Edge VETO threshold — only demote a BUY→WATCH when the backtest says the
+# combo is a genuine LOSER, not merely NEUTRAL. The old -0.02 cutoff sat INSIDE
+# the backtest's own NEUTRAL band (signal_verdict: -0.05..+0.05 = NEUTRAL, only
+# ≤-0.05 = LOSER), so it vetoed noise-level-negative combos — and since most
+# breakout/momentum combos measure in that band, nearly EVERY setup got
+# stamped "negative edge — skip". A point estimate of -0.04R over ~30-100
+# trades is within one standard error of zero — indistinguishable from
+# breakeven. So veto only a PROVEN loser (≤ LOSER line). Env-tunable.
+_EDGE_VETO_R = float(os.getenv("QT_EDGE_VETO_R", "-0.05") or -0.05)
+
+
+def _edge_vetoes(edge, verdict: str, threshold: float = _EDGE_VETO_R) -> bool:
+    """True iff a measured combo edge is a PROVEN loser that should demote a
+    BUY→WATCH. A NEUTRAL/breakeven edge (within measurement noise of zero, i.e.
+    above the LOSER line) never vetoes — it just doesn't earn a BUY on its own.
+    None edge (no evidence) never vetoes either."""
+    return (edge is not None and float(edge) <= threshold
+            and verdict in ("STRONG BUY", "BUY"))
 
 from core.market_clock import IST
 from typing import Optional
@@ -370,11 +390,16 @@ def _scan_once_locked(universe: Optional[list[str]] = None, progress=None) -> No
                 if edge is None:
                     continue
                 r["edge_r"] = edge
-                if edge < -0.02 and r.get("verdict") in ("STRONG BUY", "BUY"):
+                # Veto ONLY a proven loser (≤ LOSER line), not a NEUTRAL/
+                # breakeven combo whose slightly-negative point estimate is
+                # within measurement noise. A NEUTRAL edge doesn't earn a BUY
+                # on its own — but it must not BLOCK one; conviction / EV /
+                # breadth / regime gates rank it from here.
+                if _edge_vetoes(edge, r.get("verdict")):
                     r["verdict"] = "WATCH"
                     r.setdefault("reasons", []).insert(
-                        0, f"⚠ Backtest verdict: is pattern-combo ki measured edge "
-                           f"{edge:+.2f}R hai (800 stocks pe test) — Buy nahi banta")
+                        0, f"⚠ Backtest LOSER: is pattern-combo ki measured edge "
+                           f"{edge:+.2f}R hai (800 stocks pe test) — proven negative, skip")
             # Proven edge floats to the top; demoted setups sink below every
             # buy — in cards, Telegram, Dashboard and JARVIS alike.
             _vrank = {"STRONG BUY": 2, "BUY": 1}

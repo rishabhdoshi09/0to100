@@ -200,6 +200,24 @@ class TestBacktestSimulate:
         assert sb.combo_edge(["THIN"]) is None          # <30 trades excluded
         assert sb.combo_edge(["GOOD", "THIN"]) == 0.30  # thin one ignored
 
+    def test_edge_veto_only_demotes_proven_losers(self):
+        """The edge gate must VETO a BUY only when the backtest calls the combo
+        a LOSER (≤ -0.05, the system's own signal_verdict line) — NOT a
+        NEUTRAL/breakeven combo whose slightly-negative point estimate is
+        within measurement noise. The old -0.02 cutoff sat inside the NEUTRAL
+        band and vetoed nearly everything."""
+        from scan.auto_scan import _edge_vetoes
+        # NEUTRAL band (the screenshot's -0.04R) must NOT veto
+        assert _edge_vetoes(-0.04, "BUY") is False
+        assert _edge_vetoes(-0.02, "BUY") is False
+        # proven LOSER must veto
+        assert _edge_vetoes(-0.05, "BUY") is True
+        assert _edge_vetoes(-0.07, "BUY") is True         # UNITDSPR case
+        # positive edge, no-evidence None, and already-WATCH never veto
+        assert _edge_vetoes(0.10, "BUY") is False
+        assert _edge_vetoes(None, "BUY") is False
+        assert _edge_vetoes(-0.20, "WATCH") is False
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 # 4. Symbol filter — junk must not enter the universe
