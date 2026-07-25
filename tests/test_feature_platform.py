@@ -281,3 +281,54 @@ class TestNonEvent:
         assert NE.settle_outcomes() == 0                     # no bhavcopy in test env
         assert isinstance(NE.rejection_analysis(), list)
         assert isinstance(NE.rejection_directives(), list)
+
+
+from research import evidence_graph as G
+
+
+class TestEvidenceGraph:
+    """Provenance for every belief — the audit trail behind 'why is this active?'"""
+
+    @pytest.fixture(autouse=True)
+    def _tmp(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(G, "_DB_PATH", tmp_path / "eg.db")
+
+    def test_pure_walk_is_cycle_safe_and_ordered(self):
+        adj = {"a": [("b", "R1")], "b": [("c", "R2")], "c": [("a", "R3")]}  # cycle
+        steps = G._walk(adj, "a", max_depth=8)
+        assert [s["node"] for s in steps] == ["b", "c"]      # each once, no loop
+        assert steps[0]["depth"] == 1 and steps[1]["depth"] == 2
+
+    def test_promotion_spine_and_gate_provenance(self):
+        G.record_promotion("breadth conditions breakout", "hyp19", "belief81",
+                            hypothesis_label="breadth conditions breakout edge",
+                            belief_label="breakouts work in healthy breadth",
+                            schema_version="fs_abc", evidence_n=184)
+        gate = G.record_gate("extension_guard", "belief81",
+                             gate_label="Extension Guard")
+        kinds = {(s.get("detail") or {}).get("kind") for s in G.ancestry(gate)}
+        # the full chain gate ← belief ← experiment ← hypothesis, + schema dep
+        assert {"BELIEF", "EXPERIMENT", "HYPOTHESIS", "SCHEMA"} <= kinds
+        text = G.explain(gate)
+        assert "Extension Guard" in text and "healthy breadth" in text
+        assert "HYPOTHESIS" in text and "SCHEMA" in text
+
+    def test_descendants_show_what_a_belief_led_to(self):
+        G.record_promotion("h", "e1", "b1")
+        G.record_gate("g1", "b1")
+        G.record_drift("b1", "d1", status="DECAYING")
+        refs = {(s.get("detail") or {}).get("kind") for s in
+                G.descendants(G.node_id("BELIEF", "b1"))}
+        assert "GATE" in refs and "DRIFT_EVENT" in refs
+
+    def test_nodes_and_links_are_idempotent(self):
+        a = G.add_node("BELIEF", "x", "first")
+        b = G.add_node("BELIEF", "x", "second")             # same id, updated label
+        assert a == b == G.node_id("BELIEF", "x")
+        assert G.get_node(a)["label"] == "second"
+        assert G.link(a, G.add_node("GATE", "gg"), "GATES") is True
+        assert G.link(a, G.node_id("GATE", "gg"), "GATES") is True   # no dup, no raise
+
+    def test_invalid_kinds_relations_are_safe(self):
+        assert G.link("BELIEF:z", "GATE:z", "NONSENSE") is False
+        assert G.explain("GATE:missing").endswith("no provenance recorded.")
