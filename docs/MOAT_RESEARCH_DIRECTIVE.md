@@ -22,6 +22,9 @@ market-wide):
 | `research/calibration.py` | Forecast reliability + Confidence Ledger (3-adj/6) | ✅ done — Brier/ECE + FDR-gated conditional over-confidence → Brain 🎯 |
 | `research/counterfactual.py` | Gate attribution (7) | ✅ done — which gates earn vs cost → Brain ⚖️ |
 | `research/market_memory.py` | Trade-level Market Memory (5) | ✅ core done — analogs + MAE/MFE (UI/corpus on-machine) |
+| `research/feature_schema.py` | Feature Platform — canonical + versioned + validated (2A) | ✅ done — one definition/feature, SCHEMA_VERSION hash, MISSING/IMPOSSIBLE/OUTLIER/STALE self-validation |
+| `research/feature_store.py` | Feature Platform — immutable snapshots (2A) | ✅ done — write-once frozen vectors, schema-stamped, load_matrix() reproducible read, coverage/data-quality lens |
+| `research/knowledge.py` | Knowledge Base — beliefs + negative knowledge (2B) | ✅ done — promoted hypothesis → durable belief, mechanical ACTIVE/WATCH/RETIRED/REJECTED lifecycle → Brain 📚 |
 
 **Phase 1 (scientific foundation): COMPLETE**, and hardened to a higher
 scientific bar — the drift subsystem now carries a RECOVERING state (a dedicated
@@ -31,13 +34,34 @@ monitoring beyond the mean, a permanent per-signal **Edge Timeline** (cyclical v
 dead vs durable character), and **"what changed?"** attribution (regime rotation
 / quality drop) that makes every decay alert self-explaining. The harness gained
 a research-only min-sample knob (`QT_RESEARCH_MIN_SAMPLE`) that never lowers the
-production 30-trade floor. Phase 2 (data moat): gate
-attribution + Market Memory done; remaining — non-event/near-miss learning
-(needs a new near-miss logging hook), the free-half retail microstructure. Phase
-3 (research scientist, Trader DNA, causal cross-asset, dynamic regimes) unbuilt —
-it depends on the feature store + everything above.
+production 30-trade floor.
 
-~60 research unit-tests, all green; full money-path suite unaffected.
+**Phase 2A (Data Foundation): COMPLETE.** The **Feature Platform** is the
+transition from thinking in *trades* to thinking in *observations*: one canonical,
+versioned, self-validating, immutably-frozen feature vector per observation, so
+research is reproducible forever (an experiment reads the numbers that existed
+then, stamped with the schema that made them) and a broken feed is caught as a
+DATA problem instead of misread as a decaying edge.
+
+**Phase 2B (Knowledge Foundation): STARTED.** The **Knowledge Base** turns a
+survived hypothesis into a durable BELIEF with a mechanical lifecycle (a decaying
+belief demotes itself; a dead one retires; negative knowledge is permanent) — the
+system now stores *science*, not models. Remaining 2B: full hypothesis-lifecycle
+wiring (registry auto-sync) and near-miss/non-event capture (the feature store
+already accepts REJECTION/NEAR_MISS observations; needs the logging hook).
+
+**Phase 2C / 3 (Intelligence): UNBUILT — and now correctly SEQUENCED behind the
+foundations.** The Autonomous Research Scientist is deliberately postponed: without
+the Feature Platform + Knowledge Base it would be *Idea → Experiment → Report →
+Forgotten*; with them it becomes *Idea → Experiment → Validated → Knowledge Base →
+Brain → Production*. Regime discovery, Trader DNA, causal inference build on the
+same rails. Free-half retail microstructure remains a separate, lower-priority track.
+
+Architectural note (holding the line): the Brain stays a THIN renderer — every
+subsystem emits *evidence objects* (severity + text) and the Brain composes them
+into a natural-language posture. No statistical logic lives in the Brain.
+
+~80 research/platform unit-tests, all green; full money-path suite unaffected.
 
 ---
 
