@@ -124,6 +124,40 @@ class TestBacktestSimulate:
         out, r = self._sim(110, 100, 130, bars)
         assert out == "LOSS"
 
+    def test_breakeven_trail_scratches_a_faded_pop(self):
+        """The realism fix: a trade that pops past the breakeven trigger then
+        fades back must exit at ~0R (SCRATCH) — modelling the live breakeven
+        trail — NOT bleed to a FLAT loss like a naked-stop strawman would.
+        This is the exact population that was dragging every expectancy
+        mildly negative."""
+        from scan.signal_backtest import _simulate
+        entry, stop, target = 100.0, 94.0, 112.0        # risk 6, be at +2% = 102
+        # pops to 102 (arms breakeven), then fades to tag entry
+        hi = np.array([101, 102, 101, 100.5, 99.5])
+        lo = np.array([99, 100.5, 99.5, 99, 98.5])
+        cl = np.array([100.5, 101.5, 100, 99.8, 99.0])
+        # naked stop (be off) → FLAT loss
+        o_old, r_old = _simulate(entry, stop, target, hi, lo, cl, be_pct=0.0)
+        assert o_old == "FLAT" and r_old < 0
+        # breakeven trail on → SCRATCH at 0R (not a loss)
+        o_new, r_new = _simulate(entry, stop, target, hi, lo, cl, be_pct=2.0)
+        assert o_new == "SCRATCH" and r_new == 0.0
+        assert r_new > r_old                              # strictly less pessimistic
+
+    def test_breakeven_trail_leaves_clean_winners_and_quick_losers(self):
+        """The trail must not distort the unambiguous cases: a clean run to
+        target is still +2R, a fast stop-out before any pop is still -1R."""
+        from scan.signal_backtest import _simulate
+        entry, stop, target = 100.0, 94.0, 112.0
+        win = _simulate(entry, stop, target,
+                        np.array([101, 104, 108, 113]), np.array([99.5, 101, 104, 108]),
+                        np.array([100.5, 103, 107, 112]), be_pct=2.0)
+        assert win[0] == "WIN" and win[1] == pytest.approx(2.0)
+        loss = _simulate(entry, stop, target,
+                         np.array([100.5, 99, 96, 93]), np.array([99, 96, 93, 90]),
+                         np.array([99.5, 97, 94, 91]), be_pct=2.0)
+        assert loss[0] == "LOSS" and loss[1] == -1.0
+
     def test_regime_classifier_same_rule_history_and_today(self):
         from scan.signal_backtest import classify_regime
         rising = pd.Series(np.linspace(100, 200, 100))

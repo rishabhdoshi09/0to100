@@ -17,6 +17,7 @@ Run from the UI (background thread) or:  python -m scan.signal_backtest
 from __future__ import annotations
 
 import json
+import os as _os
 import threading
 import time
 from pathlib import Path
@@ -29,31 +30,54 @@ log = get_logger(__name__)
 
 _OUT = Path(__file__).resolve().parent.parent / "logs" / "signal_backtest.json"
 
+# Breakeven-trail level for the per-signal expectancy sim — mirrors the live
+# autopilot's breakeven_trigger_pct (default 2.0). Backtesting WITH the trail
+# measures the strategy the system actually trades, not a naked-stop strawman.
+# Env-tunable so it can track a changed autopilot setting.
+_BT_BREAKEVEN_PCT = float(_os.getenv("QT_BT_BREAKEVEN_PCT", "2.0") or 2.0)
+
 _state = {"running": False, "progress": 0, "total": 0}
 _state_lock = threading.Lock()
 
 
 def _simulate(entry: float, stop: float, target: float,
               fwd_high: np.ndarray, fwd_low: np.ndarray,
-              fwd_close: np.ndarray) -> tuple[str, float]:
+              fwd_close: np.ndarray, be_pct: float = 0.0) -> tuple[str, float]:
     """
     Realistic first-touch simulation: the trade only exists once price
     actually reaches the entry (breakout orders sit above the market).
     Returns (outcome, r_multiple). FLAT trades are marked-to-market at
     the horizon close so expectancy is honest, not survivorship-biased.
-    """
+
+    be_pct > 0 arms a BREAKEVEN TRAIL — once a day's high reaches
+    entry × (1 + be_pct/100), the stop moves up to entry. This models the
+    live system's actual risk discipline (trailing_enabled +
+    breakeven_trigger_pct): a trade that pops in profit then fades exits at
+    ~breakeven (SCRATCH, 0R) instead of being logged as a FLAT loss. Without
+    it the backtest tests a strategy the system doesn't trade (naked 2×ATR
+    stop, no trail) and systematically understates expectancy — full losses
+    are captured while faded winners bleed to a FLAT loss. be_pct=0 keeps the
+    original behaviour (used by the target-geometry sweep)."""
     risk = entry - stop
+    if risk <= 0:
+        return "NO_FILL", 0.0
     filled = False
+    cur_stop = stop
+    be_level = entry * (1 + be_pct / 100) if be_pct > 0 else None
     for h, l, c in zip(fwd_high, fwd_low, fwd_close):
         if not filled:
             if h >= entry:
                 filled = True
             else:
                 continue
-        if l <= stop:
-            return "LOSS", -1.0
+        if l <= cur_stop:                         # stop first (gap-conservative)
+            # LOSS only if the stop is still below entry; a trailed-to-entry
+            # stop that gets tagged is a SCRATCH (0R), not a loss.
+            return ("LOSS", -1.0) if cur_stop < entry else ("SCRATCH", 0.0)
         if h >= target:
             return "WIN", (target - entry) / risk
+        if be_level is not None and cur_stop < entry and h >= be_level:
+            cur_stop = entry                      # arm the breakeven trail
     if filled:
         return "FLAT", (float(fwd_close[-1]) - entry) / risk
     return "NO_FILL", 0.0
@@ -186,7 +210,8 @@ def _run_backtest_inner(sc, stats, symbols, sample_step, lookback_sessions,
             fwd = df.iloc[t:t + horizon]
             outcome, r_mult = _simulate(r.entry, r.stop, r.target,
                                         fwd["high"].values, fwd["low"].values,
-                                        fwd["close"].values)
+                                        fwd["close"].values,
+                                        be_pct=_BT_BREAKEVEN_PCT)
             if outcome == "NO_FILL":
                 continue          # order never triggered — not a trade
 
