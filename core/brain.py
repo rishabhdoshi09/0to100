@@ -158,6 +158,9 @@ def build_directives(v: dict) -> list[dict]:
     # only fires on a real shift, never noise). Decay warns, growth informs.
     for dd in (v.get("drift_directives") or [])[:2]:
         add(dd.get("severity", "info"), dd.get("text", ""))
+    # 🎯 Confidence Ledger — buckets where our own probabilities are miscalibrated
+    for cd in (v.get("calibration_directives") or [])[:1]:
+        add(cd.get("severity", "info"), cd.get("text", ""))
     # correlation lens: N positions that move together = fewer real bets
     if (v.get("corr_positions", 0) >= 2
             and v.get("corr_bets", 0) < v["corr_positions"]):
@@ -328,6 +331,28 @@ def _probe_drift(market: str) -> list:
     return data
 
 
+_calib_cache = {"ts": 0.0, "data": []}
+
+
+def _probe_calibration(market: str) -> list:
+    """🎯 Confidence-Ledger directives — buckets where the system's own win-
+    probabilities are systematically over/under-confident (harness FDR-gated).
+    Cached 1h (calibration moves slowly). Fail-open."""
+    if market == "US":
+        return []
+    import time as _t
+    if _calib_cache["ts"] > 0 and _t.time() - _calib_cache["ts"] < 3600:
+        return _calib_cache["data"]
+    data: list = []
+    try:
+        from research.calibration import calibration_directives
+        data = calibration_directives()
+    except Exception:
+        data = []
+    _calib_cache.update(ts=_t.time(), data=data)
+    return data
+
+
 def _probe_options(market: str) -> dict:
     """Index options positioning (PCR / max-pain) — options market ka vote.
     Off-hours/chain-fail → empty, koi claim nahi."""
@@ -394,6 +419,7 @@ def assess(market: str = "IN", capital: float = 100_000.0) -> dict:
     flows = _probe_flows(market)
     macro = _probe_macro(market)
     drift = _probe_drift(market)
+    calib = _probe_calibration(market)
 
     buys = [r for r in setups if r.get("verdict") in ("STRONG BUY", "BUY")]
     # EV-first cross-sectional ranking (north star): setups with a measured
@@ -461,6 +487,7 @@ def assess(market: str = "IN", capital: float = 100_000.0) -> dict:
         "macro_note": macro.get("note", ""),
         "macro_themes": macro.get("themes", []),
         "drift_directives": drift,
+        "calibration_directives": calib,
         "posture": posture,
     }
     directives = build_directives(vitals)

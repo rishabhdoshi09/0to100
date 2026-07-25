@@ -259,3 +259,57 @@ class TestConceptDrift:
         # no signal_log in the test env → must return empty lists, never raise
         assert isinstance(D.drift_report(), list)
         assert isinstance(D.drift_directives(), list)
+
+
+from research import calibration as C
+
+
+class TestCalibration:
+    """Forecast reliability + the Confidence Ledger — do our probabilities mean
+    anything, and WHEN are they trustworthy?"""
+
+    def test_perfectly_calibrated_scores_well(self):
+        rng = np.random.default_rng(30)
+        p = rng.uniform(0.3, 0.9, 3000)
+        y = (rng.uniform(size=3000) < p).astype(float)      # outcomes match the odds
+        s = C.calibration_summary(p, y)
+        assert s["ece"] < 0.05                                # low calibration error
+        assert s["brier_skill"] > 0                           # beats a base-rate guess
+        assert "calibrated" in s["insight"]
+
+    def test_overconfidence_is_detected(self):
+        rng = np.random.default_rng(31)
+        p = np.full(500, 0.8)                                 # promises 80%
+        y = (rng.uniform(size=500) < 0.5).astype(float)       # delivers 50%
+        mt = C.miscalibration_test(p, y)
+        assert mt["direction"] == "overconfident"
+        assert mt["z"] < 0 and mt["p_value"] < 0.01
+        assert C.calibration_summary(p, y)["ece"] > 0.2
+
+    def test_brier_perfect_and_bins(self):
+        assert C.brier_score([1.0, 0.0, 1.0], [1.0, 0.0, 1.0])["brier"] == 0.0
+        bins = C.reliability_bins([0.15, 0.16, 0.85, 0.88], [0, 0, 1, 1], n_bins=10)
+        assert len(bins) == 2 and all(b["count"] == 2 for b in bins)   # 0.1-0.2 & 0.8-0.9
+
+    def test_conditional_gate_flags_only_the_bad_slice(self):
+        rng = np.random.default_rng(32)
+        # group A calibrated, group B overconfident → only B survives FDR
+        pa = rng.uniform(0.4, 0.7, 300); ya = (rng.uniform(size=300) < pa).astype(float)
+        pb = np.full(300, 0.75); yb = (rng.uniform(size=300) < 0.45).astype(float)
+        probs = np.concatenate([pa, pb]); succ = np.concatenate([ya, yb])
+        groups = ["A"] * 300 + ["B"] * 300
+        found = C.conditional_overconfidence(probs, succ, groups)
+        assert [f["group"] for f in found] == ["B"]
+        assert found[0]["direction"] == "overconfident"
+
+    def test_conditional_ignores_thin_slices(self):
+        rng = np.random.default_rng(33)
+        p = rng.uniform(0.4, 0.7, 100); y = (rng.uniform(size=100) < 0.2).astype(float)
+        groups = ["tiny"] * 100                               # < min_slice? use big min_n
+        assert C.conditional_overconfidence(p, y, groups, min_n=500) == []
+
+    def test_fail_open_io(self):
+        # no decisions.db in the test env → sane empties, never raises
+        assert C.calibration_report()["n"] == 0
+        assert C.confidence_ledger_findings() == []
+        assert C.calibration_directives() == []
