@@ -597,3 +597,48 @@ class TestEdgeTimeline:
         c.commit(); c.close()
         prof = ET.signal_profile("breakout", streams={"breakout": [0.0] * 120})
         assert prof["profile"] == "DEAD"
+
+
+from research import drift_attribution as A
+
+
+class TestDriftAttribution:
+    """When an edge moves, explain WHY — regime rotation or a quality drop —
+    evidence-gated so we never narrate noise."""
+
+    def test_regime_rotation_and_quality_drop_are_named(self):
+        pre = [{"regime": "TRENDING_BULL", "quality": 82.0} for _ in range(40)]
+        post = [{"regime": "DISTRIBUTION", "quality": 69.0} for _ in range(40)]
+        # add spread so the quality test is well-formed, not degenerate
+        rng = np.random.default_rng(50)
+        for r in pre:
+            r["quality"] += rng.normal(0, 3)
+        for r in post:
+            r["quality"] += rng.normal(0, 3)
+        d = A._population_diff(pre, post)
+        assert any("DISTRIBUTION" in x for x in d["drivers"])   # regime rotation
+        assert any("quality" in x for x in d["drivers"])        # quality fell
+        assert d["quality_delta"] < 0
+        assert "What changed" in d["summary"]
+
+    def test_identical_populations_claim_nothing(self):
+        rng = np.random.default_rng(51)
+        pre = [{"regime": "TRENDING_BULL", "quality": float(70 + rng.normal(0, 4))}
+               for _ in range(40)]
+        post = [{"regime": "TRENDING_BULL", "quality": float(70 + rng.normal(0, 4))}
+                for _ in range(40)]
+        d = A._population_diff(pre, post)
+        assert d["drivers"] == []                               # no false driver
+        assert "no clear shift" in d["summary"]
+
+    def test_near_constant_quality_is_quiet_and_safe(self):
+        # zero-variance inputs must not raise or claim significance
+        pre = [{"regime": "R", "quality": 75.0} for _ in range(30)]
+        post = [{"regime": "R", "quality": 74.0} for _ in range(30)]
+        d = A._population_diff(pre, post)
+        assert d["quality_p"] == 1.0 and d["drivers"] == []
+
+    def test_attribution_and_report_fail_open(self):
+        # no signal_log in the test env → graceful, never raises
+        assert A.attribution("breakout").get("drift") is False
+        assert isinstance(A.attribution_report(), list)

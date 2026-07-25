@@ -408,8 +408,19 @@ def drift_directives(max_items: int = 3) -> list[dict]:
         label = SIGNAL_META.get(r["signal"], (r["signal"],))[0]
         st = r["status"]
         if st == "DECAYING":
+            # enrich the warning with WHAT changed (regime rotation / quality) so
+            # it's actionable, not just "it decayed". Lazy import breaks the
+            # drift↔attribution cycle; fail-open to no enrichment.
+            why = ""
+            try:
+                from research.drift_attribution import attribution
+                a = attribution(r["signal"])
+                if a.get("drift") and a.get("drivers"):
+                    why = " " + a["summary"]
+            except Exception:
+                why = ""
             dirs.append({"severity": "warn",
-                         "text": f"📉 {label} — {r['insight']} Size down / demote it."})
+                         "text": f"📉 {label} — {r['insight']} Size down / demote it.{why}"})
         elif st == "RECOVERING":
             dirs.append({"severity": "info",
                          "text": f"📈 {label} — {r['insight']}"})
