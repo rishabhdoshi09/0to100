@@ -420,6 +420,39 @@ class TestExplainability:
         c = EX.confidence_change("breakout")
         assert c["changed"] is False and "stable" in c["summary"].lower()
 
+    def test_row_intelligence_bundles_the_four_windows(self):
+        K.record_belief("breakouts work in healthy breadth", "breakout",
+                        status=K.ACTIVE, evidence_n=184, confidence="HIGH", ev_r=0.35)
+        ri = EX.row_intelligence("RELIANCE", verdict="WATCH", signal="breakout",
+                                 signals=["Breakout 52W"], features={"rsi": 60})
+        assert set(("why_buy", "why_not", "evidence", "trust",
+                    "similar_history")) <= set(ri)
+        assert "Breakout 52W" in ri["why_buy"]["summary"]
+        assert "breakouts work" in ri["evidence"]["summary"]
+
+    def test_similar_history_retrieves_and_summarises(self):
+        import numpy as np
+        rng = np.random.default_rng(1)
+        for i in range(40):
+            FS.snapshot(f"t{i}", "SYM", "TRADE",
+                        {"rsi": float(55 + rng.normal(0, 8)),
+                         "atr_pct": float(3 + rng.normal(0, 1)), "clv": 0.6,
+                         "regime": "TRENDING_BULL",
+                         "breadth_pct_above_50dma": 60, "vix": 13},
+                        outcome=float(rng.normal(2, 4)))
+        from research.similar_history import similar
+        s = similar({"rsi": 56, "atr_pct": 3.0, "clv": 0.6,
+                     "regime": "TRENDING_BULL", "breadth_pct_above_50dma": 60,
+                     "vix": 13, "liquidity_cr": 30})
+        assert s["found"] is True and s["n_similar"] == 40
+        assert s["worst_pct"] <= s["median_outcome_pct"] <= s["best_pct"]
+        assert "Healthy Breadth" in s["environment"]
+
+    def test_similar_history_needs_enough_corpus(self):
+        from research.similar_history import similar
+        FS.snapshot("only1", "X", "TRADE", {"rsi": 60}, outcome=1.0)
+        assert similar({"rsi": 60})["found"] is False   # < min corpus
+
 
 from research import research_overview as RO
 

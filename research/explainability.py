@@ -228,6 +228,95 @@ def confidence_change(signal: str) -> dict:
             "n_recent": n, "recommendation": rec, "summary": text}
 
 
+def why_buy(signal: str | None = None, signals: list | None = None,
+            statement: str | None = None) -> dict:
+    """"Why buy?" — the positive case for a recommendation: the setups that
+    fired, the belief that backs it, its current edge state and evidence. The
+    mirror of explain_rejection, drawn from the same evidence. Fail-open."""
+    out: dict = {"signal": signal, "signals": list(signals or [])}
+    t = trust_recommendation(signal, statement)
+    for key in ("evidence_n", "confidence", "belief", "belief_status",
+                "last_validated_days", "edge", "calibration"):
+        if key in t:
+            out[key] = t[key]
+    fired = ", ".join(signals) if signals else (signal or "the setup")
+    bits = [f"Setups fired: {fired}"]
+    if out.get("belief"):
+        bits.append(f"backed by belief “{out['belief']}” "
+                    f"({out.get('confidence', '—')} confidence)")
+    if out.get("evidence_n"):
+        bits.append(f"{out['evidence_n']} observations of evidence")
+    if out.get("edge") and out["edge"] != "Unknown":
+        bits.append(f"edge currently {out['edge'].lower()}")
+    out["summary"] = "Why buy: " + "; ".join(bits) + "."
+    return out
+
+
+def evidence(signal: str | None = None, statement: str | None = None) -> dict:
+    """📚 The evidence + provenance behind a recommendation/gate: the backing
+    belief and its Evidence-Graph audit trail (feature→hypothesis→experiment→
+    belief→gate). Fail-open → a stub."""
+    out: dict = {"signal": signal}
+    bid = None
+    try:
+        from research.scientific_memory import list_beliefs, belief_id
+        sig = (signal or "").upper()
+        b = next((x for x in list_beliefs()
+                  if (x.get("signal") or "").upper() == sig
+                  or (statement and statement.lower() in (x.get("statement") or "").lower())),
+                 None)
+        if b:
+            bid = b["belief_id"]
+            out.update({"belief": b.get("statement"), "confidence": b.get("confidence"),
+                        "evidence_n": b.get("evidence_n"), "status": b.get("status"),
+                        "schema_version": b.get("schema_version"),
+                        "last_validated_days": _days_since(b.get("last_validated_at"))})
+    except Exception:
+        pass
+    if bid:
+        try:
+            from research.evidence_graph import node_id, explain as _explain
+            out["provenance"] = _explain(node_id("BELIEF", bid))
+        except Exception:
+            pass
+    out["summary"] = (f"Evidence: “{out['belief']}” — {out.get('evidence_n', '?')} "
+                      f"observations, {out.get('confidence', '—')} confidence."
+                      if out.get("belief") else
+                      "No belief recorded for this yet — still gathering evidence.")
+    return out
+
+
+def row_intelligence(symbol: str, verdict: str = "", signal: str | None = None,
+                     signals: list | None = None, features: dict | None = None) -> dict:
+    """The full per-row scanner bundle — the four windows behind a scanner row,
+    each just QUERYING the Research OS (nothing recomputed here):
+      ✓ why_buy · ✗ why_not · 📚 evidence · 🕒 similar_history (+ trust).
+    Fail-open in every field."""
+    out = {"symbol": (symbol or "").upper(), "verdict": verdict}
+    try:
+        out["why_buy"] = why_buy(signal, signals)
+    except Exception:
+        out["why_buy"] = {}
+    try:
+        out["why_not"] = explain_rejection(symbol)
+    except Exception:
+        out["why_not"] = {"found": False}
+    try:
+        out["evidence"] = evidence(signal)
+    except Exception:
+        out["evidence"] = {}
+    try:
+        out["trust"] = trust_recommendation(signal)
+    except Exception:
+        out["trust"] = {}
+    try:
+        from research.similar_history import similar
+        out["similar_history"] = similar(features or {})
+    except Exception:
+        out["similar_history"] = {"found": False}
+    return out
+
+
 def explain_rejection(symbol: str) -> dict:
     """"Why wasn't <symbol> recommended?" — find its most recent REJECTION
     observation, and explain the reason with the evidence behind it. Fail-open →

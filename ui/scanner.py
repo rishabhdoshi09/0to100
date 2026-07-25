@@ -528,6 +528,64 @@ def _render_best_trade(results: list[dict]) -> None:
 
 # ── Card renderer ─────────────────────────────────────────────────────────────
 
+def _render_intelligence(s: dict) -> None:
+    """The four Research-OS windows behind a scanner row — ✓ Why buy · ✗ Why not
+    · 📚 Evidence · 🕒 Similar history · 🛡️ Trust. Each just QUERIES the Research
+    OS (nothing recomputed here). Fully fail-open — a missing piece is omitted."""
+    try:
+        from research.explainability import row_intelligence
+    except Exception:
+        st.caption("Research OS unavailable.")
+        return
+    sig_labels = s.get("signals") or []
+    primary = sig_labels[0] if sig_labels else ""
+    feats = {"rsi": s.get("rsi"), "quality_score": s.get("score")}
+    ri = row_intelligence(s["symbol"], verdict=s.get("verdict", ""),
+                          signal=primary, signals=sig_labels, features=feats)
+    verdict = s.get("verdict", "")
+
+    if verdict in ("STRONG BUY", "BUY"):
+        wb = ri.get("why_buy") or {}
+        if wb.get("summary"):
+            st.markdown(f"**✓ Why buy** — {wb['summary']}")
+    else:
+        wn = ri.get("why_not") or {}
+        if wn.get("found"):
+            st.markdown(f"**✗ Why not** — {wn.get('summary', '')}")
+            cols = st.columns(4)
+            cols[0].metric("Evidence", wn.get("n_observations", "—"))
+            frr = wn.get("false_rejection_rate")
+            cols[1].metric("False-reject", f"{frr*100:.1f}%" if frr is not None else "—")
+            cols[2].metric("Avg fwd", f"{wn.get('avg_fwd_pct', '—')}%")
+            cols[3].metric("Verdict", (wn.get("verdict") or "—").title())
+        else:
+            st.caption("✗ Why not — no recorded rejection reason for this name yet.")
+
+    ev = ri.get("evidence") or {}
+    if ev.get("belief"):
+        st.markdown(f"**📚 Evidence** — {ev['summary']}")
+        if ev.get("provenance"):
+            with st.expander("provenance trail"):
+                st.code(ev["provenance"])
+
+    sh = ri.get("similar_history") or {}
+    if sh.get("found"):
+        st.markdown(f"**🕒 Similar history** — {sh['summary']}")
+        cols = st.columns(4)
+        cols[0].metric("Similar", sh.get("n_similar"))
+        cols[1].metric("Median", f"{sh.get('median_outcome_pct')}%")
+        cols[2].metric("Worst", f"{sh.get('worst_pct')}%")
+        cols[3].metric("Win rate", f"{(sh.get('win_rate') or 0)*100:.0f}%")
+        if sh.get("environment"):
+            st.caption("Environment: " + " · ".join(sh["environment"]))
+    else:
+        st.caption(f"🕒 Similar history — {sh.get('note', 'gathering history')}")
+
+    tr = ri.get("trust") or {}
+    if tr.get("summary") and tr["summary"].startswith("Trust basis"):
+        st.markdown(f"**🛡️ Trust** — {tr['summary']}")
+
+
 def _render_card(s: dict, key_prefix: str = "") -> None:
     label, vcolor = _VERDICT_STYLE.get(s["verdict"], _VERDICT_STYLE["WATCH"])
     chg = s["change_pct"]
@@ -627,6 +685,15 @@ def _render_card(s: dict, key_prefix: str = "") -> None:
             st.session_state["sidebar_nav"] = "Terminal"
             st.session_state["terminal_symbol"] = s["symbol"]
             st.rerun()
+        _why_key = f"why_{key_prefix}_{s['symbol']}"
+        if st.button("🔎 Why?", key=f"btn_{_why_key}", width="stretch",
+                     help="Why this verdict — evidence, similar history, trust "
+                          "(queries the Research OS)"):
+            st.session_state[_why_key] = not st.session_state.get(_why_key, False)
+    # lazy: the Research-OS windows are computed only when the user opens them
+    if st.session_state.get(f"why_{key_prefix}_{s['symbol']}"):
+        with st.container(border=True):
+            _render_intelligence(s)
 
 
 # ── Main render ───────────────────────────────────────────────────────────────
