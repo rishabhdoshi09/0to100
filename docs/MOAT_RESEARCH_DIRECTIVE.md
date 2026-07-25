@@ -541,6 +541,147 @@ Every proposed subsystem must clear these before it ships, or it dies:
 
 ---
 
+---
+
+## 6. Peer review — refinements (v2)
+
+A second reviewer (product/quant) largely agreed and added real value. The strong
+additions are integrated below, each with the rigor caveat that makes it *safe*
+to build. Where I hold a line, it's on data-honesty.
+
+### 6.1 Harness → **Research Operating System** (accepted, expanded)
+
+The harness is not just a statistics library; it's an MLOps discipline. Add:
+- **White's Reality Check / Hansen's SPA test** alongside FDR + Deflated Sharpe
+  — the correct test for "is the *best* of N strategies genuinely good, or the
+  luckiest?" (data-snooping across a whole batch, not just per-hypothesis).
+- **Experiment registry** — every hypothesis pre-registered with a hash, its
+  data window, and its pre-committed success criteria *before* it sees the
+  holdout. Kills p-hacking by construction.
+- **Reproducible snapshots** — an experiment pins its exact data + code + seed so
+  any result can be re-run and audited. Non-reproducible = not a result.
+- **Champion vs. challenger** — a new weight-set/model runs in *shadow* against
+  the incumbent on live data and only gets promoted after it beats the champion
+  out-of-sample by a pre-set margin. This is *the* safe rollout mechanism; it
+  should gate every calibration change. Nothing touches live sizing without
+  winning a shadow run first.
+
+### 6.2 Retail-accessible microstructure (accepted **with a data-honesty split**)
+
+Fair pushback: don't discard the whole category, only the part the data can't
+support. But be precise — half of it is free today and half needs a new data
+layer, and conflating them is exactly the mistake to avoid:
+
+- **Free with current data (build now):** opening-**gap** statistics (today's
+  open vs prior close — already available), **time-of-day** tendencies from the
+  session, **options OI shifts** (options data already fetched), and
+  **cross-asset reactions** (crude→OMCs, USDINR→IT, US-overnight→open) via
+  `index_store` + `macro_pulse`. These are genuine, retail-ignored edges.
+- **Needs an intraday-capture prerequisite (not free):** **opening-range
+  breakout** stats, **intraday VWAP** behaviour, and **volume profile** all
+  require persisted **intraday bars** (1–5 min), which the system does NOT store
+  today (it keeps EOD bars; the sniper's Kite ticks are consumed, not archived).
+  So the honest sequence is: **first build an intraday data-capture layer**
+  (record the tick stream / pull Kite historical-intraday for the watchlist),
+  *then* these become possible. Treat this as a real, costed prerequisite — not
+  a weekend add.
+
+**Verdict:** a **Tier-2 "retail microstructure" track** — ship the free half now
+as conditional edges through the research scientist; schedule the intraday-data
+layer as the gate for the rest.
+
+### 6.3 Forecast Reliability + the **Confidence Ledger** (accepted — one spine)
+
+The reviewer's "calibration as a first-class, user-facing subsystem" and their
+"Confidence Ledger" are the **same backbone**, and it's a genuine moat: a
+platform that *publicly and honestly* shows "predicted 70%, actual 68%,
+calibration error 2%" is trustworthy in a market full of curve-fit hype. Almost
+no retail platform can show a calibrated track record because none of them
+tracked outcomes to begin with.
+
+Make it first-class (`research/calibration.py` + a headline UI). Methods:
+reliability diagrams, **Brier score**, **Expected Calibration Error (ECE)**,
+and optional **isotonic/Platt recalibration** that maps the system's raw scores
+to *calibrated* probabilities. The Confidence Ledger extends the decision journal
+to store, per prediction: the probability, the outcome, **the decomposed drivers
+of that confidence** (which conviction factors / EV components / macro-breadth
+context drove it), and — post-hoc — which of those drivers failed.
+
+**Two caveats that make it actually work (my additions):**
+1. **The "why it was wrong" must be structured, not free text.** For the AI to
+   *learn* "delivery-spikes-in-weak-breadth = overconfident," it needs a driver
+   *vector* per prediction, not a prose note. Capture the drivers as data; the
+   pattern is then discoverable by machine.
+2. **Conditional calibration is a multiple-testing minefield.** Slicing "am I
+   overconfident when X and Y and Z?" across many conditions will *manufacture*
+   spurious overconfidence findings. Every conditional-calibration claim routes
+   through the **Research OS** (FDR + min-sample) before it becomes a belief.
+   Without this, the Confidence Ledger becomes a very sophisticated way to
+   overfit your own psychology.
+
+### 6.4 Market Memory → **trade-level** analog retrieval (accepted — strictly better)
+
+My framing (similar *days*) is the weaker version. The stronger version retrieves
+similar **setups**: "this breakout resembles 143 prior setups matched on
+volatility, breadth, sector strength, delivery, ATR expansion → win rate, avg R,
+median hold, **MAE (max adverse excursion), MFE (max favorable excursion)**."
+That's a *decision* engine, and MAE/MFE distributions directly inform stop and
+target placement (where did analogous winners dip to before running? where did
+losers peak before failing?). Same feature store, keyed on setups instead of
+days. Overfit guard: require enough matched analogs and purge look-ahead; show a
+distribution, never a point estimate.
+
+### 6.5 **Non-event learning** (accepted — the free dataset nobody mines)
+
+Sharp addition. The system logs rejected *decisions*, but the reviewer points at
+a bigger free corpus: stocks scanned-and-ignored, signals that *almost*
+triggered, breakouts that failed by ₹0.50, setups invalidated at the last bar.
+The market produces far more near-trades than trades. Mining them sharpens the
+counterfactual attribution (7) and feeds the research scientist. **Caveats:**
+define the near-miss population carefully (it has selection structure — "almost
+triggered" is not a random sample), and the volume is large (storage/compute
+budget matters). Belongs in: an extended `decision_journal` + `research/`.
+
+### 6.6 The commercial translation layer (accepted → promoted to a kill criterion)
+
+Correct and important: the customer buys *better decisions, consistency,
+discipline, trust* — not "Page-Hinkley." **New hard kill criterion:** every
+sophisticated subsystem must emit at least one **plain-English, user-facing
+insight**, or it does not ship. "Your breakout edge has weakened 3 weeks running
+— size down." "You're 71% accurate when you *wait for the close*, 52% when you
+chase." The math lives in the basement; the user sees a sentence.
+
+### 6.7 Refined phased roadmap (adopted, with the data-honesty edits)
+
+```
+PHASE 1 — Scientific foundation (de-risks everything)
+  • Research Operating System  (harness + registry + reproducibility +
+    champion/challenger + Reality Check/SPA)
+  • Confidence calibration + the Confidence Ledger (driver-decomposed,
+    harness-gated conditional calibration)
+  • Concept-drift detection
+
+PHASE 2 — Proprietary data moat (exploit the ledger nobody else has)
+  • Counterfactual gate attribution
+  • Trade-level Market Memory (feature store + MAE/MFE analogs)
+  • Non-event / near-miss learning
+  • Retail-microstructure: the FREE half (gap, time-of-day, OI, cross-asset)
+    — plus scope the intraday-capture layer that unlocks the rest
+
+PHASE 3 — Self-improving intelligence (compounding, only on Phase 1's rails)
+  • Autonomous research scientist
+  • Personalized Quant DNA
+  • Cross-asset causal inference (beyond correlation → lead-lag / causality)
+  • Dynamic regime discovery (context-only)
+```
+
+**The one-line synthesis both reviewers converged on:** the product is not "an AI
+that picks stocks." It is **an evidence engine that continuously measures,
+challenges, and improves its own decision-making** — and honestly publishes how
+well-calibrated it is while doing so. That is the defensible position.
+
+---
+
 *The objective is not a feature-rich product. It is a product that gets
 measurably, defensibly smarter every day — while being ruthlessly honest about
 what its data can and cannot prove.*
