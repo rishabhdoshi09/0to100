@@ -405,6 +405,21 @@ class TestExplainability:
         stub = EX.explain_reason("MERCURY")                # unknown → OTHER stub
         assert "summary" in stub and stub["reason"] == "OTHER"
 
+    def test_trust_window_is_concise_and_jargon_free(self):
+        K.record_belief("breakouts work in healthy breadth", "breakout",
+                        status=K.ACTIVE, evidence_n=184, confidence="HIGH", ev_r=0.35)
+        t = EX.trust_recommendation("breakout")
+        assert t["evidence_n"] == 184 and t["confidence"] == "HIGH"
+        assert "184 similar observations" in t["summary"]
+        # no statistical jargon leaks into the customer sentence
+        for jargon in ("p_value", "Welch", "permutation", "Sharpe", "DSR"):
+            assert jargon not in t["summary"]
+
+    def test_confidence_change_window_gives_a_size_recommendation(self):
+        # no drift record → stable, unchanged
+        c = EX.confidence_change("breakout")
+        assert c["changed"] is False and "stable" in c["summary"].lower()
+
 
 from research import research_overview as RO
 

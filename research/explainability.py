@@ -122,6 +122,112 @@ def _summarise(o: dict) -> str:
     return "; ".join(bits) + "."
 
 
+def trust_recommendation(signal: str | None = None,
+                         statement: str | None = None) -> dict:
+    """"Why should I trust this?" — the concise, jargon-free case FOR a live
+    recommendation: how much evidence backs it, whether its edge is currently
+    stable, whether our probabilities are well-calibrated, and how fresh the
+    validation is. Composes Scientific Memory + drift + calibration. Fail-open."""
+    out: dict = {"signal": signal}
+    # backing belief (evidence + confidence + freshness)
+    try:
+        from research.scientific_memory import list_beliefs
+        sig = (signal or "").upper()
+        b = next((x for x in list_beliefs()
+                  if (x.get("signal") or "").upper() == sig
+                  or (statement and statement.lower() in (x.get("statement") or "").lower())),
+                 None)
+        if b:
+            out["evidence_n"] = b.get("evidence_n")
+            out["confidence"] = b.get("confidence")
+            out["belief"] = b.get("statement")
+            out["belief_status"] = b.get("status")
+            out["last_validated_days"] = _days_since(b.get("last_validated_at"))
+    except Exception:
+        pass
+    # current edge state (drift)
+    out["edge"] = _edge_state(signal)
+    # calibration (are our probabilities honest?)
+    try:
+        from research.calibration import calibration_report
+        rep = calibration_report()
+        if rep.get("n"):
+            ece = rep.get("ece")
+            out["calibration"] = ("Well calibrated" if ece is not None and ece < 0.1
+                                  else "Roughly calibrated" if ece is not None and ece < 0.2
+                                  else "Miscalibrated")
+    except Exception:
+        pass
+    out["summary"] = _trust_summary(out)
+    return out
+
+
+def _edge_state(signal: str | None) -> str:
+    if not signal:
+        return "Unknown"
+    try:
+        from research.drift import drift_report
+        d = next((r for r in drift_report()
+                  if r.get("signal", "").upper() == signal.upper()), None)
+        if d is None:
+            return "Stable"
+        return {"DECAYING": "Weakening", "RECOVERING": "Recovering",
+                "STRENGTHENING": "Strengthening"}.get(d.get("status"), "Stable")
+    except Exception:
+        return "Stable"
+
+
+def _trust_summary(o: dict) -> str:
+    bits = []
+    if o.get("evidence_n"):
+        bits.append(f"{o['evidence_n']} similar observations back it")
+    edge = o.get("edge")
+    if edge and edge != "Unknown":
+        bits.append(f"current edge {edge.lower()}")
+    if o.get("calibration"):
+        bits.append(o["calibration"].lower())
+    if o.get("last_validated_days") is not None:
+        bits.append(f"last validated {o['last_validated_days']}d ago")
+    if o.get("confidence"):
+        bits.append(f"{o['confidence']} confidence")
+    return ("Trust basis: " + "; ".join(bits) + ".") if bits else \
+        "Not enough tracked evidence to state a trust basis yet."
+
+
+def confidence_change(signal: str) -> dict:
+    """"Why did confidence change?" — a plain-English read of a signal's recent
+    edge move (from the drift subsystem) with a size recommendation, no
+    statistical jargon. Fail-open → a neutral 'stable' answer."""
+    try:
+        from research.drift import drift_report
+        d = next((r for r in drift_report()
+                  if r.get("signal", "").upper() == (signal or "").upper()), None)
+    except Exception:
+        d = None
+    if d is None:
+        return {"signal": signal, "changed": False,
+                "summary": f"{signal}: edge stable — confidence unchanged."}
+    status = d.get("status")
+    n = d.get("n_since_change") or 0
+    label = signal
+    if status == "DECAYING":
+        rec = "Reduce size"
+        text = (f"{label}: edge weakened, observed over {n} recent trades. "
+                f"Recommendation: {rec.lower()}.")
+    elif status == "RECOVERING":
+        rec = "Restore size gradually"
+        text = (f"{label}: edge recovered over {n} recent trades. "
+                f"Recommendation: {rec.lower()}.")
+    elif status == "STRENGTHENING":
+        rec = "Edge improving"
+        text = f"{label}: edge strengthened over {n} recent trades."
+    else:
+        rec = "Hold"
+        text = f"{label}: risk profile shifted — same size, more variance."
+    return {"signal": signal, "changed": True, "status": status,
+            "n_recent": n, "recommendation": rec, "summary": text}
+
+
 def explain_rejection(symbol: str) -> dict:
     """"Why wasn't <symbol> recommended?" — find its most recent REJECTION
     observation, and explain the reason with the evidence behind it. Fail-open →

@@ -1683,7 +1683,8 @@ elif _page in ("Terminal", "Analyse"):
 # PAGE: RESEARCH
 # ══════════════════════════════════════════════════════════════════════════════
 elif _page == "Research":
-    _r0, _r1, _r2, _r3, _r4, _r5, _r6, _r7, _r8, _r9, _r10, _r11, _r12, _r13 = st.tabs([
+    (_r0, _r1, _r2, _r3, _r4, _r5, _r6, _r7, _r8, _r9, _r10, _r11, _r12, _r13,
+     _r14) = st.tabs([
         "📰 Market Brief",
         "📈 Charts",
         "📊 Fundamentals",
@@ -1698,7 +1699,16 @@ elif _page == "Research":
         "🌅 Session Debrief",
         "🎯 Conviction Tracker",
         "📰 Patterns & News",
+        "🛰️ Research OS",
     ])
+
+    # ── 🛰️ Research OS — internal mission control ──────────────────────────
+    with _r14:
+        try:
+            from ui.research_dashboard import render_research_dashboard
+            render_research_dashboard()
+        except Exception as _exc:
+            st.error(f"Research OS unavailable: {_exc}")
 
     # ── Market Brief ──────────────────────────────────────────────────────
     with _r0:
