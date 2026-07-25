@@ -6,6 +6,31 @@
 
 ---
 
+## Build status (live)
+
+The `research/` subsystem is being built along this roadmap. Shipped so far
+(all pure-core unit-tested, harness-gated, fail-open, wired into the Brain where
+market-wide):
+
+| Module | Roadmap item | State |
+|---|---|---|
+| `research/harness.py` | Research Governance Harness (F) | ✅ done — DSR · Reality Check · BH-FDR · PSR · power · purged-CV · `evaluate()` gate |
+| `research/registry.py` | Experiment registry + champion/challenger | ✅ done — pre-registration + shadow bake-off |
+| `research/drift.py` | Concept-drift detection (3) | ✅ done — change-point + permutation → Brain 📉 |
+| `research/calibration.py` | Forecast reliability + Confidence Ledger (3-adj/6) | ✅ done — Brier/ECE + FDR-gated conditional over-confidence → Brain 🎯 |
+| `research/counterfactual.py` | Gate attribution (7) | ✅ done — which gates earn vs cost → Brain ⚖️ |
+| `research/market_memory.py` | Trade-level Market Memory (5) | ✅ core done — analogs + MAE/MFE (UI/corpus on-machine) |
+
+**Phase 1 (scientific foundation): COMPLETE.** Phase 2 (data moat): gate
+attribution + Market Memory done; remaining — non-event/near-miss learning
+(needs a new near-miss logging hook), the free-half retail microstructure. Phase
+3 (research scientist, Trader DNA, causal cross-asset, dynamic regimes) unbuilt —
+it depends on the feature store + everything above.
+
+~60 research unit-tests, all green; full money-path suite unaffected.
+
+---
+
 ## 0. The uncomfortable thesis (read this before anything else)
 
 **You cannot out-alpha Citadel, and you should stop trying.** The directive asks
