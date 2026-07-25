@@ -169,6 +169,10 @@ def build_directives(v: dict) -> list[dict]:
     # back). Complements the momentary drift read above.
     for td in (v.get("timeline_directives") or [])[:1]:
         add(td.get("severity", "info"), td.get("text", ""))
+    # 📚 Knowledge Base — a validated belief whose edge is now decaying (ACTIVE→
+    # WATCH) or one just retired. The institution questioning its own knowledge.
+    for bd in (v.get("belief_directives") or [])[:1]:
+        add(bd.get("severity", "info"), bd.get("text", ""))
     # correlation lens: N positions that move together = fewer real bets
     if (v.get("corr_positions", 0) >= 2
             and v.get("corr_bets", 0) < v["corr_positions"]):
@@ -406,6 +410,29 @@ def _probe_timeline(market: str) -> list:
     return data
 
 
+_beliefs_cache = {"ts": 0.0, "data": []}
+
+
+def _probe_beliefs(market: str) -> list:
+    """📚 Knowledge-Base directives — the institution's own validated beliefs
+    that just changed character: an ACTIVE belief now on WATCH (its edge is
+    decaying) or a freshly RETIRED one. The KB owns the science; the Brain only
+    renders it. Cached 1h. Fail-open."""
+    if market == "US":
+        return []
+    import time as _t
+    if _beliefs_cache["ts"] > 0 and _t.time() - _beliefs_cache["ts"] < 3600:
+        return _beliefs_cache["data"]
+    data: list = []
+    try:
+        from research.knowledge import belief_directives
+        data = belief_directives()
+    except Exception:
+        data = []
+    _beliefs_cache.update(ts=_t.time(), data=data)
+    return data
+
+
 def _probe_options(market: str) -> dict:
     """Index options positioning (PCR / max-pain) — options market ka vote.
     Off-hours/chain-fail → empty, koi claim nahi."""
@@ -475,6 +502,7 @@ def assess(market: str = "IN", capital: float = 100_000.0) -> dict:
     calib = _probe_calibration(market)
     gates = _probe_gates(market)
     timeline = _probe_timeline(market)
+    beliefs = _probe_beliefs(market)
 
     buys = [r for r in setups if r.get("verdict") in ("STRONG BUY", "BUY")]
     # EV-first cross-sectional ranking (north star): setups with a measured
@@ -545,6 +573,7 @@ def assess(market: str = "IN", capital: float = 100_000.0) -> dict:
         "calibration_directives": calib,
         "gate_directives": gates,
         "timeline_directives": timeline,
+        "belief_directives": beliefs,
         "posture": posture,
     }
     directives = build_directives(vitals)
