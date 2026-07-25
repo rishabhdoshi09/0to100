@@ -29,7 +29,9 @@ market-wide):
 | `research/evidence_graph.py` | Evidence Graph — provenance layer (2B) | ✅ done — nodes+edges linking feature→hypothesis→experiment→belief→gate→drift; ancestry/explain() audit trail ("why is this gate active?") |
 | `research/explainability.py` | Explainability — customer windows (2B) | ✅ done — "why not?" / "why trust this?" / "why did confidence change?" from the same evidence, jargon-free |
 | `research/research_overview.py` | Research Overview — mission-control query layer | ✅ done — research/edge/data health, gate scorecard, research debt, Time Machine; queried by dashboard + JARVIS |
-| `ui/research_dashboard.py` | Research Dashboard (Layer 1, internal) | ✅ done — dense mission-control page ("🛰️ Research OS" tab) + Evidence Explorer |
+| `ui/research_dashboard.py` | Research Dashboard (Layer 1, internal) | ✅ done — dense mission-control page ("🛰️ Research OS" tab) + Knowledge Growth headline + Evidence Explorer |
+| `research/similar_history.py` | Similar History — analogs over the Feature Store | ✅ done — Mahalanobis k-NN on the accumulating corpus → median/worst/win + environment |
+| scanner "🔎 Why?" (ui/scanner.py) | The four windows on every row | ✅ done — ✓why-buy · ✗why-not · 📚evidence · 🕒similar-history · 🛡️trust, each QUERYING the OS |
 
 **Phase 1 (scientific foundation): COMPLETE**, and hardened to a higher
 scientific bar — the drift subsystem now carries a RECOVERING state (a dedicated
@@ -86,12 +88,33 @@ why did confidence change) — concise, jargon-free, drawn from the SAME evidenc
 Critically, the dashboard and JARVIS both **query** this layer; neither computes
 statistics itself (JARVIS reads the Research OS snapshot in its context).
 
-**Sequenced remainder (why this order):** (1) **let it run for weeks/months** to
-accumulate high-quality observation history; (2) the **Autonomous Research
-Scientist** — deliberately last, because only now does a discovery have a rich,
-versioned, evidence-backed memory to be written into (feature snapshots →
-experiment → belief → graph → Brain) instead of being generated and forgotten.
-Regime discovery / Trader DNA stay behind that: they need the accumulated data.
+**The loop is closed.** The scanner — the last application still speaking the old
+BUY/WATCH/REJECT language — now exposes the intelligence underneath: a "🔎 Why?"
+on every row surfaces ✓why-buy · ✗why-not · 📚evidence (with provenance) ·
+🕒similar-history · 🛡️trust, each just QUERYING the Research OS. The system now
+explains itself, row by row.
+
+### ⛔ FEATURE FREEZE on research architecture (declared)
+
+The bottleneck is no longer software — it is **sample size**. Observations,
+rejected trades, near-misses, drift events, recovered edges, retired beliefs
+cannot be coded into existence; time has to create them. So the operating rule
+from here:
+
+> **No new subsystem enters the Research OS until an existing subsystem
+> demonstrates a limitation that real observation data exposes.**
+
+The plan is therefore not to build, but to run:
+1. ✅ Deploy · use the dashboard daily · let the OS observe and accumulate.
+2. 📈 Watch **Knowledge Growth** (built: `research_overview.knowledge_growth`) —
+   net validated beliefs/month, not profit or Sharpe — to see whether the
+   flywheel is actually learning.
+3. ❌ Resist adding major research modules until the evidence says what's missing.
+
+**Deferred until the data justifies them:** the Autonomous Research Scientist
+(now it would have a rich, versioned, evidence-backed memory to write into rather
+than inventing its own — but it waits on history), evidence aging / time-weighted
+half-life, regime discovery, Trader DNA.
 
 **Deferred by design — evidence aging.** As evidence accumulates, a 2018 trade
 should not count the same as last month's. Time-weighted evidence / evidence
@@ -113,10 +136,15 @@ generate, validate, preserve, and explain trading knowledge (features → hypoth
 separated is what makes the system auditable, evolvable, and hard to replicate —
 the core asset is no longer the code, it's the accumulating, versioned evidence.
 
-**Deferred, tracked:** evidence aging / time-weighted half-life (add once there's
-enough history to calibrate it); regime discovery and Trader DNA (need the data).
+**Identity (settled).** QuantTerm is best described not as "an AI trading
+platform" but as an **evidence-driven trading research platform that happens to
+execute trades**. The long-term value comes from the quality and evolution of the
+evidence — versioned feature snapshots, frozen observations, the experiment
+registry, the belief lifecycle, drift history, counterfactual outcomes, negative
+knowledge, provenance — not from the number of indicators or AI features. That
+asset compounds every day the system runs, even with the feature freeze in place.
 
-~110 research/platform unit-tests, all green; full money-path suite unaffected.
+~115 research/platform unit-tests, all green; full money-path suite unaffected.
 
 ---
 
