@@ -218,6 +218,34 @@ class TestSymbolFilter:
         for sym in junk:
             assert not _is_valid_symbol(sym), sym
 
+    def test_instrument_cross_check_drops_stale_listings(self):
+        """A symbol that LOOKS clean (passes _is_valid_symbol) but isn't a real
+        Kite instrument — e.g. AMIRCHAND, a stale NSE listing — must be dropped
+        so it stops missing on every fetch cycle. Pattern rules can't catch
+        this; only the instrument map can."""
+        from data.nse_universe import _filter_to_instruments
+        tok = {f"SYM{i}": i for i in range(2000)}
+        tok.update({"RELIANCE": 1, "INFY": 2, "TCS": 3})
+        uni = ["RELIANCE", "INFY", "TCS"] + [f"SYM{i}" for i in range(97)] \
+            + ["AMIRCHAND", "FAKESTK"]
+        out = _filter_to_instruments(uni, tok)
+        assert "AMIRCHAND" not in out and "FAKESTK" not in out
+        assert all(s in out for s in ("RELIANCE", "INFY", "TCS"))
+
+    def test_instrument_cross_check_is_fail_safe(self):
+        """Guards: an unloaded/tiny map or an implausibly-large drop must be a
+        no-op — a bad instrument load can never nuke the scanning universe."""
+        from data.nse_universe import _filter_to_instruments
+        uni = ["RELIANCE", "INFY", "TCS", "AMIRCHAND"]
+        # tiny/unloaded map → unchanged
+        assert _filter_to_instruments(uni, {"RELIANCE": 1}) == uni
+        assert _filter_to_instruments(uni, {}) == uni
+        # would drop >15% (map incomplete) → unchanged
+        big_map = {f"SYM{i}": i for i in range(2000)}
+        big_map["RELIANCE"] = 1
+        junky = ["RELIANCE"] + [f"X{i}" for i in range(50)]   # only 1 in map
+        assert _filter_to_instruments(junky, big_map) == junky
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 # 5. Bhavcopy parsing — official data in, junk series out

@@ -230,6 +230,35 @@ def _dedupe_sorted(symbols: List[str]) -> List[str]:
     return sorted(set(s.strip().upper() for s in symbols if _is_valid_symbol(s.strip().upper())))
 
 
+def _filter_to_instruments(symbols: List[str], token_map: dict) -> List[str]:
+    """Drop symbols not in the Kite instrument token map — the AUTHORITY on
+    what's actually tradeable/quotable on NSE. The pattern-based junk filter
+    (_is_valid_symbol) can't catch a symbol that LOOKS clean but doesn't exist
+    as a Kite instrument (e.g. AMIRCHAND — a stale NSE listing); such a symbol
+    fails a Kite fetch + a Yahoo 404 every single scan cycle, forever.
+
+    Two guards make this fail-SAFE (dropping a real stock only means it isn't
+    scanned — never a wrong trade — but we still avoid it):
+      • no-op if the map isn't substantially loaded (≤1000) — a failed/absent
+        instrument load must never nuke the universe.
+      • no-op if it would drop an implausibly large chunk (>15%) — that means
+        the map is incomplete, not that 15% of NSE is junk."""
+    if not token_map or len(token_map) <= 1000:
+        return symbols
+    kept = [s for s in symbols if s.upper() in token_map]
+    dropped = len(symbols) - len(kept)
+    if dropped == 0:
+        return symbols
+    if dropped > len(symbols) * 0.15:
+        logger.warning("universe: instrument cross-check would drop %d/%d (>15%%) "
+                       "— skipping (instrument map likely incomplete)",
+                       dropped, len(symbols))
+        return symbols
+    logger.info("universe: dropped %d stale/junk symbols not in Kite instruments "
+                "(e.g. AMIRCHAND) — no more per-cycle fetch misses", dropped)
+    return kept
+
+
 # ── Tier 1: Kite instruments cache ────────────────────────────────────────────
 
 def _load_from_kite_cache() -> tuple:
@@ -365,6 +394,15 @@ def _load_universe() -> tuple:
     if not symbols:
         logger.warning("All tiers failed — using built-in NIFTY500 list")
         symbols = list(NIFTY500)
+
+    # Cross-check against the live Kite instrument map — removes stale NSE
+    # listings (Tier-2 EQUITY_L.csv is broader than what Kite actually carries)
+    # that would otherwise miss on every fetch. Guarded + fail-safe (see fn).
+    try:
+        from data.instruments import InstrumentManager
+        symbols = _filter_to_instruments(symbols, InstrumentManager()._token_map)
+    except Exception as exc:
+        logger.debug("universe instrument cross-check skipped: %s", exc)
 
     _cached_universe = _dedupe_sorted(symbols)
     _cached_names = {k: v for k, v in names.items() if _is_valid_symbol(k)}
