@@ -1,5 +1,11 @@
 """
-📚 Knowledge Base — the system stops storing models and starts storing SCIENCE.
+📚 Scientific Memory — the system stops storing models and starts storing SCIENCE.
+
+Not a Knowledge Base (a wiki of facts) but a research lab's memory: it holds
+hypotheses AND failed hypotheses, evidence, drift, retirements, recoveries,
+confidence, and historical context — the difference between a fact store and an
+institution that remembers what it tried, what worked, and what it has since
+stopped believing.
 
 An edge that survives the harness is not a number to tuck into a config; it is a
 BELIEF the institution now holds — with the evidence behind it, how confident it
@@ -16,11 +22,11 @@ NEGATIVE knowledge so they are never blindly re-tried.
 
 A belief is not static: `revalidate()` re-checks it against fresh evidence and
 drift, and the lifecycle transitions are MECHANICAL (a decaying ACTIVE belief
-demotes itself to WATCH; a dead one RETIREs) so the knowledge base can never
-quietly keep asserting something the tape has stopped supporting.
+demotes itself to WATCH; a dead one RETIREs) so the memory can never quietly keep
+asserting something the tape has stopped supporting.
 
 Pure lifecycle logic (`_next_status`) is unit-tested; the SQLite layer uses a
-monkeypatchable path and fails safe (a broken KB degrades to "no directives",
+monkeypatchable path and fails safe (a broken store degrades to "no directives",
 never to a false claim). It owns NO statistical logic — it records what the
 harness/drift decided. The Brain only renders these evidence objects.
 """
@@ -33,7 +39,7 @@ import sqlite3
 import time
 from pathlib import Path
 
-_DB_PATH = Path(__file__).resolve().parent.parent / "logs" / "knowledge.db"
+_DB_PATH = Path(__file__).resolve().parent.parent / "logs" / "scientific_memory.db"
 
 # Lifecycle states. REJECTED is first-class NEGATIVE knowledge ("what doesn't
 # work") — preserved so a hypothesis generator never wastes a cycle re-testing it.
@@ -212,11 +218,60 @@ def promote_from_experiment(hypothesis_id: str, statement: str,
     ACTIVE belief, carrying its evidence and the schema version it was validated
     under. This is the seam that turns a passed experiment into retained
     knowledge (Idea → Experiment → Validated → Knowledge Base → Brain)."""
-    return record_belief(statement, signal, status=ACTIVE, evidence_n=evidence_n,
-                         confidence=confidence, ev_r=ev_r, drift_status="STABLE",
-                         schema_version=schema_version, hypothesis_id=hypothesis_id,
-                         dependencies=dependencies,
-                         notes="promoted from experiment " + hypothesis_id)
+    bid = record_belief(statement, signal, status=ACTIVE, evidence_n=evidence_n,
+                        confidence=confidence, ev_r=ev_r, drift_status="STABLE",
+                        schema_version=schema_version, hypothesis_id=hypothesis_id,
+                        dependencies=dependencies,
+                        notes="promoted from experiment " + hypothesis_id)
+    # record the provenance spine in the Evidence Graph (fail-open — the belief
+    # stands on its own even if the graph write fails).
+    try:
+        from research import evidence_graph as _eg
+        _eg.record_promotion(statement, hypothesis_id, bid,
+                             hypothesis_label=statement, belief_label=statement,
+                             schema_version=schema_version, evidence_n=evidence_n)
+    except Exception:
+        pass
+    return bid
+
+
+def sync_from_registry(min_n: int = 30) -> dict:
+    """Auto-sync: every PROMOTED experiment in the registry becomes an ACTIVE
+    belief here (with its Evidence-Graph provenance), closing the loop Idea →
+    Experiment → Validated → Scientific Memory → Brain WITHOUT a manual bridge.
+    Idempotent and lifecycle-safe: a belief that already exists is left ALONE
+    (never clobbered back to ACTIVE — its drift lifecycle is authoritative).
+    Returns {'synced': n}. Fail-open."""
+    try:
+        from research import registry as _reg
+    except Exception:
+        return {"synced": 0}
+    synced = 0
+    try:
+        for exp in _reg.list_experiments(status="PROMOTED"):
+            hid = exp.get("hypothesis_id") or ""
+            name = exp.get("name") or hid
+            try:
+                result = json.loads(exp.get("result") or "{}")
+            except Exception:
+                result = {}
+            signal = result.get("signal")
+            # idempotency + lifecycle safety: skip anything already remembered
+            if get_belief(belief_id(name, signal)) is not None:
+                continue
+            evidence_n = int(result.get("n") or result.get("evidence_n") or 0)
+            if evidence_n < min_n:
+                continue                       # below the harness floor — no belief
+            ev_r = float(result.get("ev_r") or result.get("mean_r") or 0.0)
+            conf = result.get("confidence") or (
+                "HIGH" if evidence_n >= 100 else "MEDIUM")
+            promote_from_experiment(
+                hid, name, signal, evidence_n=evidence_n, confidence=conf,
+                ev_r=ev_r, schema_version=result.get("schema_version"))
+            synced += 1
+    except Exception:
+        return {"synced": synced}
+    return {"synced": synced}
 
 
 def record_negative(statement: str, signal: str | None = None, *,

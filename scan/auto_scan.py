@@ -644,6 +644,15 @@ def _maybe_run_nightly_backtest() -> None:
                 log.info("non_event_settled", n=n_settled)
         except Exception as exc:
             log.debug("non_event_settle_skip", error=str(exc))
+        # 📚 Scientific Memory — promote any newly-validated experiments into
+        # durable beliefs (with Evidence-Graph provenance). Idempotent, fail-open.
+        try:
+            from research.scientific_memory import sync_from_registry
+            synced = sync_from_registry()
+            if synced.get("synced"):
+                log.info("scientific_memory_synced", n=synced["synced"])
+        except Exception as exc:
+            log.debug("scientific_memory_sync_skip", error=str(exc))
     except Exception as exc:
         log.debug("nightly_backtest_skip", error=str(exc))
 

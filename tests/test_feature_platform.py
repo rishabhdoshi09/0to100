@@ -15,7 +15,7 @@ import pytest
 
 from research import feature_schema as S
 from research import feature_store as FS
-from research import knowledge as K
+from research import scientific_memory as K
 
 
 class TestFeatureSchema:
@@ -115,10 +115,12 @@ class TestFeatureStore:
         assert cov["crude_usd"]["fill_rate"] == 0.0         # never provided
 
 
-class TestKnowledgeBase:
+class TestScientificMemory:
     @pytest.fixture(autouse=True)
     def _tmp(self, tmp_path, monkeypatch):
         monkeypatch.setattr(K, "_DB_PATH", tmp_path / "kb.db")
+        # promote_from_experiment writes provenance — keep it off the real graph
+        monkeypatch.setattr(G, "_DB_PATH", tmp_path / "eg.db")
 
     def test_lifecycle_transitions_are_mechanical(self):
         assert K._next_status("ACTIVE", "DECAYING", 0.3, "HIGH") == K.WATCH
@@ -162,6 +164,34 @@ class TestKnowledgeBase:
         assert K.list_beliefs() == [] or isinstance(K.list_beliefs(), list)
         assert K.get_belief("nope") is None
         assert isinstance(K.belief_directives(), list)
+
+    def test_registry_autosync_is_idempotent_and_lifecycle_safe(self, tmp_path,
+                                                                monkeypatch):
+        from research import registry as REG
+        monkeypatch.setattr(REG, "_DB_PATH", tmp_path / "exp.db")
+        # a promoted experiment with enough evidence
+        hid = REG.register_hypothesis("breakout in breadth",
+                                      {"n": {"gte": 30}}, {"w": 1})
+        REG.record_result(hid, {"n": 150, "mean_r": 0.4, "signal": "breakout",
+                                "confidence": "HIGH", "schema_version": "fs_x"})
+        assert REG.get_experiment(hid)["status"] == "PROMOTED"
+        out = K.sync_from_registry()
+        assert out["synced"] == 1
+        b = K.get_belief(K.belief_id("breakout in breadth", "breakout"))
+        assert b and b["status"] == K.ACTIVE and b["evidence_n"] == 150
+        # now the belief decays but still has positive EV → WATCH (not retired);
+        # a re-sync must NOT clobber it back to ACTIVE
+        K.revalidate(b["belief_id"], drift_status="DECAYING", ev_r=0.1)
+        assert K.get_belief(b["belief_id"])["status"] == K.WATCH
+        assert K.sync_from_registry()["synced"] == 0        # idempotent
+        assert K.get_belief(b["belief_id"])["status"] == K.WATCH   # lifecycle kept
+
+    def test_autosync_skips_underpowered_experiments(self, tmp_path, monkeypatch):
+        from research import registry as REG
+        monkeypatch.setattr(REG, "_DB_PATH", tmp_path / "exp.db")
+        hid = REG.register_hypothesis("thin idea", {"n": {"gte": 1}}, {"w": 1})
+        REG.record_result(hid, {"n": 8, "mean_r": 1.0, "signal": "x"})   # n < 30
+        assert K.sync_from_registry()["synced"] == 0        # below the floor
 
 
 from research import non_event as NE

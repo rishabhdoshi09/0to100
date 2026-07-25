@@ -429,7 +429,7 @@ def _probe_beliefs(market: str) -> list:
         return _beliefs_cache["data"]
     data: list = []
     try:
-        from research.knowledge import belief_directives
+        from research.scientific_memory import belief_directives
         data = belief_directives()
     except Exception:
         data = []
