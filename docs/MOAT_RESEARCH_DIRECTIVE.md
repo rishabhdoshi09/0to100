@@ -16,12 +16,22 @@ market-wide):
 |---|---|---|
 | `research/harness.py` | Research Governance Harness (F) | ✅ done — DSR · Reality Check · BH-FDR · PSR · power · purged-CV · `evaluate()` gate |
 | `research/registry.py` | Experiment registry + champion/challenger | ✅ done — pre-registration + shadow bake-off |
-| `research/drift.py` | Concept-drift detection (3) | ✅ done — change-point + permutation → Brain 📉 |
+| `research/drift.py` | Concept-drift detection (3) | ✅ done — change-point + permutation → Brain 📉; RECOVERING state, confidence tiers, multi-metric (variance/win-rate risk-profile) |
+| `research/edge_timeline.py` | Edge Timeline — drift HISTORY (3-ext) | ✅ done — persistent per-signal transition ledger → CYCLICAL / DEAD / DURABLE character → Brain 🗂️ |
+| `research/drift_attribution.py` | "What changed?" attribution (3-ext/7) | ✅ done — regime-rotation + quality Welch test → self-explaining decay directive |
 | `research/calibration.py` | Forecast reliability + Confidence Ledger (3-adj/6) | ✅ done — Brier/ECE + FDR-gated conditional over-confidence → Brain 🎯 |
 | `research/counterfactual.py` | Gate attribution (7) | ✅ done — which gates earn vs cost → Brain ⚖️ |
 | `research/market_memory.py` | Trade-level Market Memory (5) | ✅ core done — analogs + MAE/MFE (UI/corpus on-machine) |
 
-**Phase 1 (scientific foundation): COMPLETE.** Phase 2 (data moat): gate
+**Phase 1 (scientific foundation): COMPLETE**, and hardened to a higher
+scientific bar — the drift subsystem now carries a RECOVERING state (a dedicated
+permutation-gated dip-and-recover test, so a V-shape a single split can't see is
+still caught), HIGH/MEDIUM/LOW confidence tiers, risk-profile (variance/win-rate)
+monitoring beyond the mean, a permanent per-signal **Edge Timeline** (cyclical vs
+dead vs durable character), and **"what changed?"** attribution (regime rotation
+/ quality drop) that makes every decay alert self-explaining. The harness gained
+a research-only min-sample knob (`QT_RESEARCH_MIN_SAMPLE`) that never lowers the
+production 30-trade floor. Phase 2 (data moat): gate
 attribution + Market Memory done; remaining — non-event/near-miss learning
 (needs a new near-miss logging hook), the free-half retail microstructure. Phase
 3 (research scientist, Trader DNA, causal cross-asset, dynamic regimes) unbuilt —
