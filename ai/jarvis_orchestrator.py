@@ -554,10 +554,53 @@ class JarvisOrchestrator:
             except Exception:
                 pass
 
+            # ── Research OS health (JARVIS QUERIES the research layer, never
+            #    computes it) — so "which gates got less profitable?", "is our
+            #    research healthy?", "what do we believe?" are answered from the
+            #    Research Overview, not re-derived. ────────────────────────────
+            try:
+                lines.append(self._build_research_os_block())
+            except Exception:
+                pass
+
         except Exception:
             pass
 
-        return "\n".join(lines) if len(lines) > 1 else ""
+        return "\n".join([ln for ln in lines if ln]) if len(lines) > 1 else ""
+
+    def _build_research_os_block(self) -> str:
+        """A compact snapshot of the Research OS mission-control read, injected so
+        JARVIS answers research-health questions by READING this layer rather than
+        computing anything itself. Fail-open → ''."""
+        try:
+            from research.research_overview import overview
+        except Exception:
+            return ""
+        o = overview()
+        rh, eh, debt = (o.get("research_health", {}), o.get("edge_health", {}),
+                        o.get("research_debt", {}))
+        parts = [
+            f"Research OS — beliefs: {rh.get('beliefs_active', 0)} active / "
+            f"{rh.get('beliefs_watch', 0)} watch / {rh.get('beliefs_retired', 0)} "
+            f"retired; promoted this week: {rh.get('promoted_this_week', 0)}.",
+            f"Edge health: {eh.get('durable', 0)} durable, {eh.get('decaying', 0)} "
+            f"decaying, {eh.get('recovering', 0)} recovering, {eh.get('dead', 0)} dead.",
+        ]
+        card = o.get("gate_scorecard", [])
+        too_cons = [g for g in card if g.get("verdict") == "TOO_CONSERVATIVE"]
+        if too_cons:
+            parts.append("Gates flagged too conservative: " + ", ".join(
+                f"{g['gate']} (trend {g['trend']})" for g in too_cons[:3]) + ".")
+        _debt = (debt.get("experiments_awaiting_validation", 0)
+                 + debt.get("beliefs_overdue_review", 0)
+                 + debt.get("drift_alerts_unresolved", 0))
+        if _debt:
+            parts.append(
+                f"Research debt: {debt.get('experiments_awaiting_validation', 0)} "
+                f"experiments awaiting validation, {debt.get('beliefs_overdue_review', 0)} "
+                f"beliefs overdue, {debt.get('drift_alerts_unresolved', 0)} drift "
+                f"alerts unresolved.")
+        return " ".join(parts)
 
     def _extract_and_store_facts(self, query: str, mem) -> None:
         """Auto-detect price alerts and capital mentions from the user's message."""
