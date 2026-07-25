@@ -34,9 +34,23 @@ def render_research_dashboard() -> None:
 
     o = RO.overview()
     rh = o.get("research_health", {})
+    kg = o.get("knowledge_growth", {})
     eh = o.get("edge_health", {})
     dh = o.get("data_health", {})
     debt = o.get("research_debt", {})
+
+    # ── 📈 Knowledge Growth (the metric that matters most: is it LEARNING?) ────
+    st.markdown("#### 📈 Knowledge Growth — *is the Research OS learning?*")
+    _kpi_row(st, [
+        ("Net knowledge / mo", f"{kg.get('net_per_month', 0):+.1f}"),
+        ("Validated / mo", kg.get("validated_per_month", 0)),
+        ("Retired / mo", kg.get("retired_per_month", 0)),
+        ("Avg evidence / belief", kg.get("avg_evidence_per_belief", 0)),
+    ])
+    st.caption("📈 Learning — net validated knowledge is growing."
+               if kg.get("learning") else
+               "⚠️ Not yet compounding — validated ≤ retired this window (early, or "
+               "the flywheel needs more observation history).")
 
     # ── 🧪 Research Health ────────────────────────────────────────────────────
     st.markdown("#### 🧪 Research Health")

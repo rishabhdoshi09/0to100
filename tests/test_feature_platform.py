@@ -470,8 +470,8 @@ class TestResearchOverview:
     def test_overview_is_always_complete_and_fail_open(self):
         # even with empty stores, every section renders (mission control never blanks)
         o = RO.overview()
-        assert set(o) == {"research_health", "edge_health", "gate_scorecard",
-                          "data_health", "research_debt"}
+        assert set(o) == {"research_health", "knowledge_growth", "edge_health",
+                          "gate_scorecard", "data_health", "research_debt"}
         assert isinstance(o["gate_scorecard"], list)
 
     def test_gate_scorecard_ranks_and_scores(self):
@@ -500,6 +500,17 @@ class TestResearchOverview:
         assert dh["total_observations"] == 1
         assert dh["by_kind"]["SCAN"]["total"] == 1
         assert dh["on_current_schema"] is True
+
+    def test_knowledge_growth_tracks_net_learning(self):
+        K.record_belief("A", "a", status=K.ACTIVE, evidence_n=120,
+                        confidence="HIGH", ev_r=0.3)
+        K.record_belief("B", "b", status=K.ACTIVE, evidence_n=80,
+                        confidence="HIGH", ev_r=0.2)
+        kg = RO.knowledge_growth()
+        assert kg["beliefs_active"] == 2
+        assert kg["validated_in_window"] >= 2 and kg["net_knowledge_gain"] >= 2
+        assert kg["avg_evidence_per_belief"] == 100.0
+        assert kg["learning"] is True
 
     def test_time_machine_reconstructs_past_beliefs(self):
         bid = K.record_belief("X works", "x", status=K.ACTIVE, evidence_n=100,

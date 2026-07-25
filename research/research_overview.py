@@ -223,11 +223,41 @@ def time_machine(iso_date: str) -> dict:
 # Top-level composition
 # ══════════════════════════════════════════════════════════════════════════════
 
+def knowledge_growth(days: int = 30) -> dict:
+    """📈 The metric that matters most now — is the Research OS actually LEARNING?
+    Not profit, not Sharpe: net validated knowledge gained. Beliefs validated vs
+    retired over the window (normalised per-30-days), plus the average evidence
+    behind an active belief. This is the health of the flywheel itself. Fail-open."""
+    from research import scientific_memory as SM
+    beliefs = _safe(SM.list_beliefs, [])
+    active = [b for b in beliefs if b["status"] == SM.ACTIVE]
+    avg_ev = round(sum((b.get("evidence_n") or 0) for b in active) / len(active), 1) \
+        if active else 0.0
+    act = _safe(lambda: SM.recent_activity(days), {})
+    promoted, retired = act.get("promoted", 0), act.get("retired", 0)
+    scale = 30.0 / days if days else 1.0
+    net = promoted - retired
+    return {
+        "window_days": days,
+        "beliefs_total": len(beliefs),
+        "beliefs_active": len(active),
+        "avg_evidence_per_belief": avg_ev,
+        "validated_in_window": promoted,
+        "retired_in_window": retired,
+        "net_knowledge_gain": net,
+        "validated_per_month": round(promoted * scale, 1),
+        "retired_per_month": round(retired * scale, 1),
+        "net_per_month": round(net * scale, 1),
+        "learning": net > 0,
+    }
+
+
 def overview() -> dict:
     """The whole mission-control read in one call — for the dashboard and for
     JARVIS to query. Every section fail-open."""
     return {
         "research_health": _safe(research_health, {}),
+        "knowledge_growth": _safe(knowledge_growth, {}),
         "edge_health": _safe(edge_health, {}),
         "gate_scorecard": _safe(gate_scorecard, []),
         "data_health": _safe(data_health, {}),
