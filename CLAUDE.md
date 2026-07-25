@@ -129,6 +129,14 @@ app.py                    # Streamlit shell: nav (Today|Pulse|Stocks|Options|
 │   │                     #   STAND_ASIDE) + prioritised directives. READ-ONLY
 │   │                     #   (survival-first, evidence-gated); surfaced as the
 │   │                     #   Brain hero atop Daily Pulse. assess()/decide_posture()
+│   ├── macro_pulse.py    # 🌍 News radar the technical stack was blind to:
+│   │                     #   reads the news stream (news.fetcher) for market-
+│   │                     #   MOVING themes (tariffs, crude, rates, geopolitics)
+│   │                     #   with direction. Corroboration-gated keyword radar
+│   │                     #   (≥2 fresh articles = a driver, not noise), NOT a
+│   │                     #   predictive signal. Feeds Brain posture as DEMOTE-
+│   │                     #   ONLY caution: RISK_OFF tape holds back AGGRESSIVE→
+│   │                     #   NORMAL (like breadth NARROW), never forces a trade
 │   ├── portfolio_intel.py# 💼 Portfolio Intelligence: capital as a PORTFOLIO —
 │   │                     #   per-holding EV, weakest holding, opportunity-cost
 │   │                     #   rotation advice (EV-gap ≥2.5pp after costs).

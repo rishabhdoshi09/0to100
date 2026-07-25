@@ -45,14 +45,15 @@ def posture_meta(posture: str) -> tuple[str, str]:
 
 def decide_posture(regime: str, edge_trend: str, expectancy_r: float,
                    book_verdict: str, closed: int,
-                   breadth: str = "") -> tuple[str, str]:
+                   breadth: str = "", macro_risk_off: bool = False) -> tuple[str, str]:
     """The whole board → one posture + one-line reason.
 
     Precedence is SURVIVAL-FIRST: an over-risked book stands us aside no matter
     how good the tape looks; a bad tape or rotting edge keeps us defensive; only
-    when tape, edge and book all align do we lean in. Breadth is DEMOTE-ONLY
-    extra evidence: a NARROW market can hold us back from AGGRESSIVE (index
-    strong par andar se khokla = breakout graveyard), never push us forward.
+    when tape, edge and book all align do we lean in. Breadth AND macro-news
+    risk are DEMOTE-ONLY extra evidence: a NARROW market or a RISK_OFF news tape
+    (tariffs/crude/geopolitics driving the day) can hold us back from AGGRESSIVE
+    (chase mat karo jab macro haawi ho), never push us forward.
     """
     reg = (regime or "").upper()
     br = (breadth or "").upper()
@@ -81,6 +82,10 @@ def decide_posture(regime: str, edge_trend: str, expectancy_r: float,
             return "NORMAL", ("Tape/edge/book strong PAR market andar se "
                               "narrow — index ke peechhe kamzori. Normal size, "
                               "lean-in nahi.")
+        if macro_risk_off:
+            return "NORMAL", ("Tape/edge/book strong PAR macro news risk-off "
+                              "(tariff/crude/geopolitics haawi) — normal size, "
+                              "aaj extra aggression nahi.")
         return "AGGRESSIVE", ("Tape + edge + book teeno strong — normal-plus "
                               "size, winners ko chalne do.")
     # 5) Otherwise steady state.
@@ -123,6 +128,16 @@ def build_directives(v: dict) -> list[dict]:
         _bl = (v.get("breadth_line")
                or "Market andar se narrow hai — breakouts ko hawa nahi milegi.")
         add("warn", f"📊 {_bl}")
+    # 🌍 macro news radar — tape aaj news ke haath mein hai kya?
+    if v.get("macro_mood") == "RISK_OFF":
+        _mt = v.get("macro_themes") or []
+        _hit = ", ".join((_mt[0].get("sectors_hit") or [])[:3]) if _mt else ""
+        add("warn", f"🌍 Macro RISK-OFF: {v.get('macro_note', '')}."
+                    + (f" Sabse zyada asar: {_hit}." if _hit else "")
+                    + " Fresh longs pe careful, size mat badhao.")
+    elif v.get("macro_mood") == "CAUTIOUS":
+        add("info", f"🌍 Macro watch: {v.get('macro_note', '')} — news-driven "
+                    f"tape, setups ke saath macro bhi dekho.")
     # options market ka vote — context, order nahi
     if v.get("options_bias") in ("BULLISH", "BEARISH"):
         add("info", f"🎯 Options positioning: {v.get('options_note', '')} · "
@@ -259,6 +274,32 @@ def _probe_breadth(market: str) -> dict:
         return {}
 
 
+_macro_cache = {"ts": 0.0, "data": {}}
+
+
+def _probe_macro(market: str) -> dict:
+    """🌍 Macro news radar — the market-MOVING themes (tariffs, crude, rates,
+    geopolitics) from the news stream the system already pulls. Cached ~10 min
+    (RSS calls aren't free). Fail-open: news down → empty, never blocks the
+    Brain. A RISK_OFF read leans the posture careful — demote-only, like
+    breadth NARROW — it never forces a trade, only holds back aggression."""
+    if market == "US":
+        return {}
+    import time as _t
+    if _t.time() - _macro_cache["ts"] < 600 and _macro_cache["data"]:
+        return _macro_cache["data"]
+    data: dict = {}
+    try:
+        from news.fetcher import NewsFetcher
+        from core.macro_pulse import macro_pulse
+        arts = [a.to_dict() for a in NewsFetcher().fetch_all(max_age_hours=12)]
+        data = macro_pulse(arts)
+    except Exception:
+        data = {}
+    _macro_cache.update(ts=_t.time(), data=data)
+    return data
+
+
 def _probe_options(market: str) -> dict:
     """Index options positioning (PCR / max-pain) — options market ka vote.
     Off-hours/chain-fail → empty, koi claim nahi."""
@@ -323,6 +364,7 @@ def assess(market: str = "IN", capital: float = 100_000.0) -> dict:
     breadth = _probe_breadth(market)
     opts = _probe_options(market)
     flows = _probe_flows(market)
+    macro = _probe_macro(market)
 
     buys = [r for r in setups if r.get("verdict") in ("STRONG BUY", "BUY")]
     # EV-first cross-sectional ranking (north star): setups with a measured
@@ -344,7 +386,8 @@ def assess(market: str = "IN", capital: float = 100_000.0) -> dict:
 
     posture, reason = decide_posture(regime, edge_trend, expectancy_r,
                                      book_verdict, closed,
-                                     breadth=breadth.get("verdict", ""))
+                                     breadth=breadth.get("verdict", ""),
+                                     macro_risk_off=bool(macro.get("risk_off")))
 
     vitals = {
         "market": market, "cur": cur,
@@ -384,6 +427,10 @@ def assess(market: str = "IN", capital: float = 100_000.0) -> dict:
         "flows_bias": (flows.get("fii_dii") or {}).get("bias", ""),
         "flows_note": (flows.get("fii_dii") or {}).get("note", ""),
         "bulk_buys": flows.get("bulk_buys") or [],
+        "macro_mood": macro.get("mood", ""),
+        "macro_heat": macro.get("heat", 0),
+        "macro_note": macro.get("note", ""),
+        "macro_themes": macro.get("themes", []),
         "posture": posture,
     }
     directives = build_directives(vitals)
@@ -417,12 +464,15 @@ def briefing_telegram(market: str = "IN", capital: float = 100_000.0) -> str:
               if _br else "")
     _op = v.get("options_bias", "")
     op_bit = f" · options <b>{_op}</b>" if _op and _op != "NEUTRAL" else ""
+    _mm = v.get("macro_mood", "")
+    macro_bit = (f" · macro <b>{_mm}</b>" if _mm in ("RISK_OFF", "CAUTIOUS")
+                 else "")
     lines = [
         f"🧠 <b>QuantTerm Brain</b> · {datetime.now(IST).strftime('%d %b')}",
         f"<b>{label}</b>",
         a["posture_reason"], "",
         (f"tape <b>{v.get('regime', '?')}</b> · edge "
-         f"<b>{v.get('expectancy_r', 0):+.2f}R</b> {_tr}{br_bit}{op_bit} · book "
+         f"<b>{v.get('expectancy_r', 0):+.2f}R</b> {_tr}{br_bit}{op_bit}{macro_bit} · book "
          f"<b>{v.get('book_verdict', 'OK')}</b> ({v.get('open_risk_pct', 0):.1f}%) "
          f"· setups <b>{v.get('n_buys', 0)}</b> ({v.get('n_high_conviction', 0)} 🎯) "
          f"· {ap_bit}{day_bit}"), "",

@@ -1228,6 +1228,53 @@ class TestAutopilot:
 # 15b. Verdict dashboard — the honest "real paisa laayak?" report card
 # ══════════════════════════════════════════════════════════════════════════════
 
+class TestMacroPulse:
+    """The news radar: reads the stream for market-MOVING macro themes so the
+    Brain isn't blind when the tape is news-driven. Keyword context radar,
+    corroboration-gated, no trade calls."""
+
+    def test_tariff_and_crude_spike_reads_risk_off(self):
+        from core.macro_pulse import macro_pulse
+        news = [
+            {"headline": "US slaps fresh tariffs on Indian exports, trade war fears", "summary": ""},
+            {"headline": "Tariff threat spooks IT and pharma stocks", "summary": "export duty"},
+            {"headline": "Brent crude surges past $90 as OPEC cuts supply", "summary": ""},
+            {"headline": "Crude oil jumps, OMCs under pressure", "summary": ""},
+        ]
+        p = macro_pulse(news)
+        assert p["mood"] == "RISK_OFF" and p["risk_off"] is True
+        names = {t["name"] for t in p["themes"]}
+        assert "TARIFF" in names and "CRUDE" in names
+        assert all(t["direction"] == "bearish" for t in p["themes"])
+
+    def test_corroboration_gate_drops_single_headlines(self):
+        """One headline is noise, not a market driver — a theme needs ≥2 fresh
+        articles to count."""
+        from core.macro_pulse import detect_macro_themes
+        one = [{"headline": "Rupee falls to record low against dollar", "summary": ""},
+               {"headline": "Reliance Q2 profit up 18%", "summary": "earnings"}]
+        assert detect_macro_themes(one) == []      # rupee mentioned once → dropped
+
+    def test_direction_flips_on_motion_and_de_escalation(self):
+        from core.macro_pulse import macro_pulse
+        # crude FALLING is bullish for India (import bill eases)
+        soft = [{"headline": "Brent crude falls below $70 as demand eases", "summary": "oil drops"},
+                {"headline": "Crude oil slumps on margin relief", "summary": "oil price plunge"}]
+        assert macro_pulse(soft)["themes"][0]["direction"] == "bullish"
+        # a trade DEAL (de-escalation) must not read bearish
+        deal = [{"headline": "India US reach trade deal, tariff rollback agreed", "summary": "truce"},
+                {"headline": "Tariff truce lifts export stocks", "summary": "agreement resolved"}]
+        d = macro_pulse(deal)
+        assert d["themes"][0]["direction"] == "bullish" and d["risk_off"] is False
+
+    def test_calm_tape_is_neutral(self):
+        from core.macro_pulse import macro_pulse
+        calm = [{"headline": "TCS wins large deal", "summary": ""},
+                {"headline": "HDFC Bank Q2 profit up 18%", "summary": ""}]
+        p = macro_pulse(calm)
+        assert p["mood"] == "NEUTRAL" and p["risk_off"] is False and p["heat"] == 0
+
+
 class TestBrain:
     """The conductor: composes every subsystem into one posture + directives.
     Survival-first, evidence-gated, read-only."""
@@ -1248,6 +1295,12 @@ class TestBrain:
         assert d("TRENDING_BULL", "improving", 0.3, "OK", 10)[0] == "NORMAL"
         # unremarkable but fine → normal
         assert d("CHOPPY", "stable", 0.12, "OK", 50)[0] == "NORMAL"
+        # macro news RISK_OFF is DEMOTE-ONLY: holds back AGGRESSIVE→NORMAL
+        # (like breadth NARROW), never rescues a weak board, never forces a trade
+        assert d("TRENDING_BULL", "improving", 0.3, "OK", 50,
+                 macro_risk_off=True)[0] == "NORMAL"
+        assert d("DISTRIBUTION", "stable", -0.2, "OK", 100,
+                 macro_risk_off=True)[0] == "STAND_ASIDE"   # survival still wins
 
     def test_directives_priority_and_dedup(self):
         from core.brain import build_directives
