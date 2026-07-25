@@ -362,3 +362,45 @@ class TestEvidenceGraph:
     def test_invalid_kinds_relations_are_safe(self):
         assert G.link("BELIEF:z", "GATE:z", "NONSENSE") is False
         assert G.explain("GATE:missing").endswith("no provenance recorded.")
+
+
+from research import explainability as EX
+
+
+class TestExplainability:
+    """'Why wasn't this recommended?' answered with sourced evidence, observed
+    and modeled figures kept visibly separate."""
+
+    @pytest.fixture(autouse=True)
+    def _tmp(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(FS, "_DB_PATH", tmp_path / "fs.db")
+        monkeypatch.setattr(K, "_DB_PATH", tmp_path / "kb.db")
+        monkeypatch.setattr(G, "_DB_PATH", tmp_path / "eg.db")
+
+    def _seed(self):
+        for i in range(40):
+            NE.capture_rejection(f"S{i}", {"rsi": 70, "atr_pct": 3.0}, "EXTENSION",
+                                 ts="2026-06-20T09:00:00")
+            FS.set_outcome(f"2026-06-20:S{i}:REJ:EXTENSION",
+                           -2.4 if i >= 4 else 5.0)   # 36 fell, 4 rose
+
+    def test_explain_rejection_is_sourced_and_separates_observed_from_modeled(self):
+        self._seed()
+        K.record_belief("breakouts fail when extended", "EXTENSION",
+                        status=K.ACTIVE, evidence_n=417, confidence="HIGH", ev_r=0.2)
+        r = EX.explain_rejection("S10")
+        assert r["found"] is True and r["reason"] == "EXTENSION"
+        assert r["label"] == "Extension Guard"
+        assert r["n_observations"] == 40
+        assert r["false_rejection_rate"] == 0.1           # 4 / 40
+        assert r["avg_fwd_pct"] < 0                        # observed: saved money
+        assert r["modeled_avg_r"] is not None              # modeled, present
+        assert "counterfactual" in r["modeled_assumption"] # and clearly labelled
+        assert r["verdict"] == "EARNING"
+        assert "breakouts fail when extended" in r["summary"]
+        assert "HIGH confidence" in r["summary"]
+
+    def test_unknown_symbol_and_reason_fail_open(self):
+        assert EX.explain_rejection("GHOST")["found"] is False
+        stub = EX.explain_reason("MERCURY")                # unknown → OTHER stub
+        assert "summary" in stub and stub["reason"] == "OTHER"
