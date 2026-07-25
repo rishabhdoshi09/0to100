@@ -25,6 +25,7 @@ market-wide):
 | `research/feature_schema.py` | Feature Platform — canonical + versioned + validated (2A) | ✅ done — one definition/feature, SCHEMA_VERSION hash, MISSING/IMPOSSIBLE/OUTLIER/STALE self-validation |
 | `research/feature_store.py` | Feature Platform — immutable snapshots (2A) | ✅ done — write-once frozen vectors, schema-stamped, load_matrix() reproducible read, coverage/data-quality lens |
 | `research/knowledge.py` | Knowledge Base — beliefs + negative knowledge (2B) | ✅ done — promoted hypothesis → durable belief, mechanical ACTIVE/WATCH/RETIRED/REJECTED lifecycle → Brain 📚 |
+| `research/non_event.py` | Non-event learning — the rejected control group (2B) | ✅ done — structured rejection causes + ALMOST/FADED near-misses, counterfactual per-reason verdict, decision-boundary replay → Brain 🕳️ |
 
 **Phase 1 (scientific foundation): COMPLETE**, and hardened to a higher
 scientific bar — the drift subsystem now carries a RECOVERING state (a dedicated
@@ -43,12 +44,18 @@ research is reproducible forever (an experiment reads the numbers that existed
 then, stamped with the schema that made them) and a broken feed is caught as a
 DATA problem instead of misread as a decaying edge.
 
-**Phase 2B (Knowledge Foundation): STARTED.** The **Knowledge Base** turns a
+**Phase 2B (Knowledge Foundation): mostly built.** The **Knowledge Base** turns a
 survived hypothesis into a durable BELIEF with a mechanical lifecycle (a decaying
 belief demotes itself; a dead one retires; negative knowledge is permanent) — the
-system now stores *science*, not models. Remaining 2B: full hypothesis-lifecycle
-wiring (registry auto-sync) and near-miss/non-event capture (the feature store
-already accepts REJECTION/NEAR_MISS observations; needs the logging hook).
+system now stores *science*, not models. **Non-event learning is now live**: every
+scan freezes the WATCH/rejected majority as structured observations (a canonical
+rejection cause per name; ALMOST vs FADED near-misses kept separate), settled from
+real bhavcopy forward returns — so `rejection_analysis()` can say which reasons
+EARN their keep vs are TOO CONSERVATIVE, and `replay_threshold()` can answer "if
+the RSI cap moved 72→74, how many rejects flip?" with **no historical rescan**.
+Remaining 2B: registry→belief auto-sync (a PROMOTED experiment auto-records its
+belief), so the loop Idea → Experiment → Validated → Knowledge Base closes without
+a manual bridge.
 
 **Phase 2C / 3 (Intelligence): UNBUILT — and now correctly SEQUENCED behind the
 foundations.** The Autonomous Research Scientist is deliberately postponed: without
@@ -57,11 +64,20 @@ Forgotten*; with them it becomes *Idea → Experiment → Validated → Knowledg
 Brain → Production*. Regime discovery, Trader DNA, causal inference build on the
 same rails. Free-half retail microstructure remains a separate, lower-priority track.
 
+**Sequenced remainder (why this order):** (1) registry→Knowledge Base auto-sync —
+promote experiments into beliefs automatically, now that richer evidence (trades +
+rejections + near-misses + counterfactuals) feeds them; (2) a Research Dashboard
+(internal observability over the accumulating evidence); (3) the Autonomous
+Research Scientist — deliberately last, because only now does a discovery have a
+structured place to be written (feature snapshots → experiment → belief → Brain)
+instead of being generated and forgotten. Regime discovery / Trader DNA stay
+behind that: they need months of high-quality observation data first.
+
 Architectural note (holding the line): the Brain stays a THIN renderer — every
 subsystem emits *evidence objects* (severity + text) and the Brain composes them
 into a natural-language posture. No statistical logic lives in the Brain.
 
-~80 research/platform unit-tests, all green; full money-path suite unaffected.
+~90 research/platform unit-tests, all green; full money-path suite unaffected.
 
 ---
 
