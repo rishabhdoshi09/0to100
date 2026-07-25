@@ -24,8 +24,10 @@ market-wide):
 | `research/market_memory.py` | Trade-level Market Memory (5) | ✅ core done — analogs + MAE/MFE (UI/corpus on-machine) |
 | `research/feature_schema.py` | Feature Platform — canonical + versioned + validated (2A) | ✅ done — one definition/feature, SCHEMA_VERSION hash, MISSING/IMPOSSIBLE/OUTLIER/STALE self-validation |
 | `research/feature_store.py` | Feature Platform — immutable snapshots (2A) | ✅ done — write-once frozen vectors, schema-stamped, load_matrix() reproducible read, coverage/data-quality lens |
-| `research/knowledge.py` | Knowledge Base — beliefs + negative knowledge (2B) | ✅ done — promoted hypothesis → durable belief, mechanical ACTIVE/WATCH/RETIRED/REJECTED lifecycle → Brain 📚 |
-| `research/non_event.py` | Non-event learning — the rejected control group (2B) | ✅ done — structured rejection causes + ALMOST/FADED near-misses, counterfactual per-reason verdict, decision-boundary replay → Brain 🕳️ |
+| `research/scientific_memory.py` | Scientific Memory — beliefs + negative knowledge (2B) | ✅ done — registry auto-sync → durable belief, mechanical ACTIVE/WATCH/RETIRED/REJECTED lifecycle, Evidence-Graph provenance → Brain 📚 |
+| `research/non_event.py` | Non-event learning — the rejected control group (2B) | ✅ done — structured rejection causes + ALMOST/FADED near-misses, counterfactual per-reason verdict (observed % + labelled modeled R), decision-boundary replay → Brain 🕳️ |
+| `research/evidence_graph.py` | Evidence Graph — provenance layer (2B) | ✅ done — nodes+edges linking feature→hypothesis→experiment→belief→gate→drift; ancestry/explain() audit trail ("why is this gate active?") |
+| `research/explainability.py` | Explainability — customer-facing "why not?" (2B) | ✅ done — sourced rejection evidence (track record, false-rejection rate, backing belief + freshness) |
 
 **Phase 1 (scientific foundation): COMPLETE**, and hardened to a higher
 scientific bar — the drift subsystem now carries a RECOVERING state (a dedicated
@@ -64,20 +66,34 @@ Forgotten*; with them it becomes *Idea → Experiment → Validated → Knowledg
 Brain → Production*. Regime discovery, Trader DNA, causal inference build on the
 same rails. Free-half retail microstructure remains a separate, lower-priority track.
 
-**Sequenced remainder (why this order):** (1) registry→Knowledge Base auto-sync —
-promote experiments into beliefs automatically, now that richer evidence (trades +
-rejections + near-misses + counterfactuals) feeds them; (2) a Research Dashboard
-(internal observability over the accumulating evidence); (3) the Autonomous
-Research Scientist — deliberately last, because only now does a discovery have a
-structured place to be written (feature snapshots → experiment → belief → Brain)
-instead of being generated and forgotten. Regime discovery / Trader DNA stay
-behind that: they need months of high-quality observation data first.
+**Provenance + explainability now exist.** The **Evidence Graph** links every
+object (feature → hypothesis → experiment → belief → gate → drift → retirement) so
+the system can answer "why is this gate active?" as an audit trail, and
+**explainability** turns that into a customer-facing "why wasn't this recommended?"
+backed by the counterfactual track record and the belief behind the gate. The
+registry→Scientific Memory auto-sync is live (a PROMOTED experiment becomes a
+belief automatically, with its provenance recorded).
+
+**Sequenced remainder (why this order):** (1) a **Research Dashboard** — internal
+observability over the accumulating evidence (beliefs, drift, gate track records,
+data-quality coverage); (2) **let it run for weeks/months** to accumulate
+high-quality observation history; (3) the **Autonomous Research Scientist** —
+deliberately last, because only now does a discovery have a rich, versioned,
+evidence-backed memory to be written into (feature snapshots → experiment → belief
+→ graph → Brain) instead of being generated and forgotten. Regime discovery /
+Trader DNA stay behind that: they need the accumulated data first.
+
+**Deferred by design — evidence aging.** As evidence accumulates, a 2018 trade
+should not count the same as last month's. Time-weighted evidence / evidence
+half-life is a first-class concept to add — but *only* once there is enough
+history to justify (and calibrate) it. Noted here so it isn't forgotten, and so it
+isn't built prematurely.
 
 Architectural note (holding the line): the Brain stays a THIN renderer — every
 subsystem emits *evidence objects* (severity + text) and the Brain composes them
 into a natural-language posture. No statistical logic lives in the Brain.
 
-~90 research/platform unit-tests, all green; full money-path suite unaffected.
+~100 research/platform unit-tests, all green; full money-path suite unaffected.
 
 ---
 
