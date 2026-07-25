@@ -183,6 +183,25 @@ class TestEvaluateGate:
         rng = np.random.default_rng(11)
         assert H.evaluate(rng.normal(-0.25, 1.0, 200)).verdict == "REJECT"
 
+    def test_hard_floor_is_the_default_not_the_power_need(self):
+        # regression: the production floor (min_n) must stay 30 and must NOT be
+        # collapsed into the power-based sample need. A clean loser over 200
+        # trades REJECTs even when the power-need for a tiny edge exceeds 200.
+        rng = np.random.default_rng(14)
+        r = H.evaluate(rng.normal(-0.25, 1.0, 200))
+        assert r.verdict == "REJECT"
+        assert r.min_n_needed != 30                           # power need, not floor
+
+    def test_research_floor_is_opt_in_only(self):
+        # a research caller may explore below the 30 floor by passing min_n; the
+        # production default (no arg) still enforces the mechanical floor.
+        rng = np.random.default_rng(15)
+        edge = rng.normal(0.8, 1.0, 20)                       # strong, but n<30
+        assert H.evaluate(edge).verdict == "UNDERPOWERED"     # floored by default
+        assert "floor" in H.evaluate(edge).insight.lower()
+        # opt in to a lower research floor → the sample is now judged on merit
+        assert H.evaluate(edge, min_n=15).verdict != "UNDERPOWERED"
+
     def test_search_winner_is_deflated_not_promoted(self):
         rng = np.random.default_rng(12)
         # a marginal positive edge, selected as the best of 400 trials → must not
@@ -218,7 +237,8 @@ class TestConceptDrift:
         assert r.status == "DECAYING"
         assert r.delta_r < 0
         assert 80 <= r.change_point <= 120                    # near the true break
-        assert "weakening" in r.insight
+        assert "deterioration" in r.insight
+        assert r.confidence == "HIGH"                          # big, clear shift
 
     def test_clear_strengthening_is_caught(self):
         rng = np.random.default_rng(22)
@@ -226,6 +246,41 @@ class TestConceptDrift:
                                  rng.normal(0.5, 1.0, 100)])
         r = D.assess_drift(stream, seed=1)
         assert r.status == "STRENGTHENING" and r.delta_r > 0
+
+    def test_recovery_after_a_decay_is_labelled(self):
+        rng = np.random.default_rng(28)
+        # good → bad → good again: a decay that has since rebounded. The trader
+        # question is "abandon it?" — answer: no, it RECOVERED.
+        stream = np.concatenate([rng.normal(0.4, 1.0, 50),
+                                 rng.normal(-0.5, 1.0, 50),
+                                 rng.normal(0.45, 1.0, 50)])
+        r = D.assess_drift(stream, seed=1)
+        assert r.status == "RECOVERING"
+        assert "RECOVERED" in r.insight
+
+    def test_risk_profile_shift_under_a_flat_mean(self):
+        rng = np.random.default_rng(29)
+        # mean holds ~0.1R but outcome volatility ~triples — same size, more risk
+        stream = np.concatenate([rng.normal(0.1, 0.7, 70),
+                                 rng.normal(0.1, 2.2, 70)])
+        r = D.assess_drift(stream, seed=1)
+        assert r.status == "STABLE"                            # the AVERAGE held
+        assert r.risk_profile_changed is True                  # but the risk moved
+        assert r.variance_ratio >= 2.0
+        assert "risk profile" in r.insight.lower()
+
+    def test_stationary_stream_no_false_risk_flag(self):
+        # a plain N(0.1,1) stream must not be flagged as a risk-profile change
+        # just because a permutation split happened to look big (alpha control)
+        flags = sum(D.assess_drift(np.random.default_rng(s).normal(0.1, 1.0, 140),
+                                   seed=1).risk_profile_changed for s in range(12))
+        assert flags <= 1                                      # ~1% alpha, not 5%
+
+    def test_confidence_tier_scales_with_evidence(self):
+        assert D._confidence_tier(0.001, 50) == "HIGH"
+        assert D._confidence_tier(0.02, 20) == "MEDIUM"
+        assert D._confidence_tier(0.04, 8) == "LOW"            # weak p, few trades
+        assert D._confidence_tier(0.001, 5) == "LOW"           # strong p, too few
 
     def test_too_few_outcomes_is_stable_not_a_claim(self):
         rng = np.random.default_rng(23)

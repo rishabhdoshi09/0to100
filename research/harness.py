@@ -68,6 +68,12 @@ _ALPHA = float(_os.getenv("QT_HARNESS_ALPHA", "0.05") or 0.05)
 # (which PSR leans on) are meaningless. This is the system's invariant #6
 # ("<30 trades = no claim") made mechanical.
 _HARD_MIN_N = int(_os.getenv("QT_HARNESS_MIN_N", "30") or 30)
+# A SEPARATE, lower floor that RESEARCH contexts may pass to evaluate(min_n=...)
+# so experiments can explore small samples WITHOUT ever lowering the production
+# default (which stays a mechanical 30, invariant #6). Production callers must
+# never pass this; it exists so a research sweep doesn't silently change live
+# behaviour to justify itself.
+RESEARCH_MIN_N = int(_os.getenv("QT_RESEARCH_MIN_SAMPLE", str(_HARD_MIN_N)) or _HARD_MIN_N)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -335,7 +341,8 @@ class HypothesisResult:
 
 def evaluate(returns, n_trials: int = 1, sharpe_estimates=None,
              min_detectable_r: float = _MIN_DETECTABLE_R,
-             promote_p: float = _PROMOTE_P) -> HypothesisResult:
+             promote_p: float = _PROMOTE_P,
+             min_n: int = _HARD_MIN_N) -> HypothesisResult:
     """The single gate. Feed a stream of realised R-multiples for one strategy/
     signal/combo (and, if it was selected from a search, the number of trials or
     the Sharpes of every trial). Returns a verdict + a plain-English insight.
@@ -362,7 +369,11 @@ def evaluate(returns, n_trials: int = 1, sharpe_estimates=None,
                               n_trials=n_trials, sharpe_estimates=sharpe_estimates)
     dsr = d["dsr"]
     eff_trials = d["n_trials"]
-    min_n = min_samples_for_edge(min_detectable_r, std if std > 0 else 1.0)
+    # `need_n` = power-based sample needed to DETECT a min_detectable_r edge;
+    # `min_n` = the hard floor below which no claim is made at all (production
+    # default 30, tunable for research via QT_RESEARCH_MIN_SAMPLE). Two distinct
+    # thresholds — never collapse them into one variable.
+    need_n = min_samples_for_edge(min_detectable_r, std if std > 0 else 1.0)
     # multi-trial → judge on the DEFLATED probability; single trial → PSR.
     prob = dsr if eff_trials > 1 else psr
 
@@ -370,12 +381,12 @@ def evaluate(returns, n_trials: int = 1, sharpe_estimates=None,
         return HypothesisResult(verdict=verdict, n=n, mean_r=round(mean, 4),
                                 sharpe=round(sharpe, 4), p_value=s["p_value"],
                                 psr=round(psr, 4), dsr=round(dsr, 4),
-                                n_trials=eff_trials, min_n_needed=min_n,
+                                n_trials=eff_trials, min_n_needed=need_n,
                                 insight=insight, stats=s)
 
-    if n < _HARD_MIN_N:
+    if n < min_n:
         return _pack("UNDERPOWERED",
-                     f"Only {n} trades — below the {_HARD_MIN_N}-trade floor for "
+                     f"Only {n} trades — below the {min_n}-trade floor for "
                      f"any claim (a great-looking edge on a handful of trades is "
                      f"usually luck). Keep tracking.")
     if mean > 0 and prob >= promote_p:
@@ -386,10 +397,10 @@ def evaluate(returns, n_trials: int = 1, sharpe_estimates=None,
     if mean <= 0:
         return _pack("REJECT",
                      f"No edge — {mean:+.2f}R over {n} trades. Not worth acting on.")
-    if n < min_n:
+    if n < need_n:
         return _pack("UNDERPOWERED",
                      f"Promising ({mean:+.2f}R) but not enough evidence yet — "
-                     f"{n} trades, need ~{min_n} to trust a {min_detectable_r:+.2f}R "
+                     f"{n} trades, need ~{need_n} to trust a {min_detectable_r:+.2f}R "
                      f"edge. Holding the claim.")
     return _pack("INCONCLUSIVE",
                  f"Positive ({mean:+.2f}R over {n} trades) but only "
