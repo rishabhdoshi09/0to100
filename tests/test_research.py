@@ -412,3 +412,64 @@ class TestMarketMemory:
         df = pd.DataFrame({"close": close, "high": close + 1, "low": close - 1,
                            "volume": [1e6] * 220})
         assert M.find_analogs("X", df) == {}                  # no corpus in test env
+
+
+from research import registry as REG
+
+
+class TestExperimentRegistry:
+    """Pre-registration (can't move the goalposts) + champion/challenger (no
+    live change without winning a bake-off) — the Research OS's discipline."""
+
+    def _tmp(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(REG, "_DB_PATH", tmp_path / "exp.db")
+
+    def test_hypothesis_id_is_deterministic(self):
+        a = REG.hypothesis_id("h", {"dsr": {"gte": 0.95}}, {"w": 1})
+        b = REG.hypothesis_id("h", {"dsr": {"gte": 0.95}}, {"w": 1})
+        c = REG.hypothesis_id("h", {"dsr": {"gte": 0.90}}, {"w": 1})
+        assert a == b and a != c                              # same def → same id
+
+    def test_meets_criteria(self):
+        crit = {"dsr": {"gte": 0.95}, "n": {"gte": 50}}
+        assert REG.meets_criteria({"dsr": 0.97, "n": 120}, crit) is True
+        assert REG.meets_criteria({"dsr": 0.90, "n": 120}, crit) is False
+        assert REG.meets_criteria({"dsr": 0.97}, crit) is False   # missing metric fails
+
+    def test_preregistration_freezes_the_verdict(self, tmp_path, monkeypatch):
+        self._tmp(tmp_path, monkeypatch)
+        hid = REG.register_hypothesis("idea", {"dsr": {"gte": 0.95}}, {"w": 1})
+        assert REG.register_hypothesis("idea", {"dsr": {"gte": 0.95}}, {"w": 1}) == hid
+        assert REG.record_result(hid, {"dsr": 0.97})["status"] == "PROMOTED"
+        hid2 = REG.register_hypothesis("bad", {"dsr": {"gte": 0.95}}, {"w": 2})
+        assert REG.record_result(hid2, {"dsr": 0.60})["status"] == "REJECTED"
+
+    def test_unregistered_result_is_refused(self, tmp_path, monkeypatch):
+        self._tmp(tmp_path, monkeypatch)
+        assert REG.record_result("nope", {"dsr": 0.99}).get("error") == "not_registered"
+
+    def test_should_promote_needs_margin_and_significance(self):
+        # clear, significant win → promote
+        ch = [0.30, 0.32, 0.28, 0.35, 0.31]
+        cp = [0.20, 0.19, 0.22, 0.18, 0.21]
+        assert REG.should_promote(0.312, 0.20, margin=0.02,
+                                  challenger_scores=ch, champion_scores=cp)["promote"]
+        # marginal + not significant → hold
+        d = REG.should_promote(0.20, 0.20, margin=0.0,
+                               challenger_scores=[0.21, 0.19, 0.20, 0.22, 0.18],
+                               champion_scores=[0.20] * 5)
+        assert d["promote"] is False
+
+    def test_champion_challenger_flow(self, tmp_path, monkeypatch):
+        self._tmp(tmp_path, monkeypatch)
+        assert REG.evaluate_challenger("scorer", "v1", 0.20)["promote"] is True
+        # a significant winner takes the crown
+        REG.evaluate_challenger("scorer", "v2", 0.31, margin=0.02,
+                                challenger_scores=[0.30, 0.32, 0.28, 0.35, 0.31],
+                                champion_scores=[0.20, 0.19, 0.22, 0.18, 0.21])
+        assert REG.current_champion("scorer")["model_id"] == "v2"
+        # a marginal challenger is held — champion unchanged
+        REG.evaluate_challenger("scorer", "v3", 0.315, margin=0.0,
+                                challenger_scores=[0.32, 0.31, 0.30],
+                                champion_scores=[0.31, 0.31, 0.31])
+        assert REG.current_champion("scorer")["model_id"] == "v2"
