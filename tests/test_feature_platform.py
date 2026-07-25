@@ -263,6 +263,20 @@ class TestNonEvent:
         assert FS.get_observation(f"{NE._today()}:EXT:REJ:EXTENSION") is not None
         assert FS.get_observation(f"{NE._today()}:NEAR:NM:ALMOST") is not None
 
+    def test_modeled_r_is_separate_labelled_and_never_canonical(self):
+        # observed forward-return % is canonical; modeled R is a labelled add-on
+        for i in range(34):
+            NE.capture_rejection(f"M{i}", {"rsi": 55, "atr_pct": 3.0}, "LAGGARD",
+                                 ts="2026-06-01T09:00:00")
+            FS.set_outcome(f"2026-06-01:M{i}:REJ:LAGGARD", 6.0)   # +6% obs
+        a = [x for x in NE.rejection_analysis() if x["reason"] == "LAGGARD"][0]
+        assert a["avg_fwd_pct"] == 6.0                       # observed, canonical
+        assert a["modeled_avg_r"] == 1.0                     # 6 / (2 × 3) — modeled
+        assert "counterfactual" in a["modeled_assumption"]   # never unlabelled
+        # a rejection with NO ATR yields no modeled R (no model → no claim)
+        assert NE.modeled_r(6.0, None) is None
+        assert NE.modeled_r(6.0, 0.0) is None
+
     def test_settle_and_directives_fail_open(self):
         assert NE.settle_outcomes() == 0                     # no bhavcopy in test env
         assert isinstance(NE.rejection_analysis(), list)

@@ -222,13 +222,39 @@ def _mean_vs_zero_p(arr) -> float | None:
         return None
 
 
+# Modeling assumption for the OPTIONAL hypothetical-R view. A rejected trade had
+# no real stop, so any R is MODELED, never observed — this constant is the stated
+# assumption, surfaced alongside every modeled number so it can never masquerade
+# as an observed one.
+_ATR_STOP_MULT = float(__import__("os").getenv("QT_CF_ATR_STOP_MULT", "2.0") or 2.0)
+_MODELED_ASSUMPTION = f"ATR-{_ATR_STOP_MULT:g}x stop (counterfactual — no real stop existed)"
+
+
+def modeled_r(fwd_pct, atr_pct, atr_mult: float = _ATR_STOP_MULT):
+    """MODELED (not observed) R-multiple for a counterfactual trade: forward
+    return ÷ a hypothetical ATR-based stop distance. Explicitly an assumption —
+    the observed world uses observed metrics (forward return %); the hypothetical
+    world uses modeled ones (R). None when ATR is missing/zero (no model → no
+    claim)."""
+    try:
+        atr = float(atr_pct)
+        fwd = float(fwd_pct)
+    except (TypeError, ValueError):
+        return None
+    stop_dist = atr_mult * atr
+    if stop_dist <= 0:
+        return None
+    return fwd / stop_dist
+
+
 def _load_settled(kind: str) -> list[dict]:
     try:
         c = _FS._conn()
         try:
             rows = c.execute(
-                "SELECT symbol, reason, subtype, outcome, meta FROM observations "
-                "WHERE kind=? AND outcome IS NOT NULL", (kind,)).fetchall()
+                "SELECT symbol, reason, subtype, outcome, meta, features FROM "
+                "observations WHERE kind=? AND outcome IS NOT NULL",
+                (kind,)).fetchall()
             return [dict(r) for r in rows]
         finally:
             c.close()
@@ -242,11 +268,22 @@ def rejection_analysis() -> list[dict]:
     a harness-gated verdict. avg_fwd < 0 ⇒ the reason EARNS its keep (it avoids
     losers); avg_fwd clearly > 0 over many names ⇒ TOO_CONSERVATIVE (it's costing
     winners). Below the evidence floor ⇒ INSUFFICIENT. Fail-open → []."""
+    import json
     import numpy as np
     rows = _load_settled("REJECTION")
     by_reason: dict[str, list[float]] = {}
+    modeled_by_reason: dict[str, list[float]] = {}
     for r in rows:
-        by_reason.setdefault(_norm_reason(r["reason"]), []).append(float(r["outcome"]))
+        reason = _norm_reason(r["reason"])
+        by_reason.setdefault(reason, []).append(float(r["outcome"]))
+        # OPTIONAL modeled R — only when ATR is present; kept in a SEPARATE stream
+        try:
+            atr = (json.loads(r.get("features") or "{}") or {}).get("atr_pct")
+        except Exception:
+            atr = None
+        mr = modeled_r(r["outcome"], atr) if atr is not None else None
+        if mr is not None:
+            modeled_by_reason.setdefault(reason, []).append(mr)
     out = []
     for reason, fwds in by_reason.items():
         arr = np.array(fwds, float)
@@ -258,6 +295,7 @@ def rejection_analysis() -> list[dict]:
         # reason EARNS if the names it passed fell SIGNIFICANTLY; it's too
         # conservative if they ROSE significantly). expectancy_stats' p is
         # one-sided-for-positive, so it can't judge the negative case — test here.
+        # The VERDICT is driven ONLY by observed forward return, never the model.
         p = _mean_vs_zero_p(arr)
         if n < _MIN_FOR_CLAIM:
             verdict = "INSUFFICIENT"
@@ -267,10 +305,17 @@ def rejection_analysis() -> list[dict]:
             verdict = "TOO_CONSERVATIVE"  # these rose after we passed
         else:
             verdict = "NEUTRAL"
-        out.append({"reason": reason, "n": n, "missed_winners": rose,
-                    "correctly_avoided": fell, "avg_fwd_pct": round(avg, 2),
-                    "p_value": round(p, 4) if p is not None else None,
-                    "verdict": verdict})
+        mrs = modeled_by_reason.get(reason, [])
+        row = {"reason": reason, "n": n, "missed_winners": rose,
+               "correctly_avoided": fell, "avg_fwd_pct": round(avg, 2),
+               "p_value": round(p, 4) if p is not None else None,
+               "verdict": verdict,
+               # modeled view — clearly namespaced + assumption stated so it can
+               # never be mistaken for the observed metric.
+               "modeled_avg_r": round(float(np.mean(mrs)), 2) if mrs else None,
+               "modeled_n": len(mrs),
+               "modeled_assumption": _MODELED_ASSUMPTION if mrs else None}
+        out.append(row)
     order = {"TOO_CONSERVATIVE": 0, "EARNING": 1, "NEUTRAL": 2, "INSUFFICIENT": 3}
     return sorted(out, key=lambda d: (order.get(d["verdict"], 9), -d["n"]))
 
