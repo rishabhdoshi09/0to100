@@ -313,3 +313,45 @@ class TestCalibration:
         assert C.calibration_report()["n"] == 0
         assert C.confidence_ledger_findings() == []
         assert C.calibration_directives() == []
+
+
+from research import counterfactual as CF
+
+
+class TestCounterfactualGates:
+    """Which filters EARN vs COST money — the rejected-trade ledger nobody else
+    has. FDR-gated so a 'costly gate' is real, not one of fourteen coin-flips."""
+
+    def test_costing_and_earning_gates_are_classified(self):
+        rng = np.random.default_rng(40)
+        rejected = {
+            "good_gate": rng.normal(-0.45, 1.0, 150),    # rejected losers → EARNING
+            "bad_gate":  rng.normal(0.40, 1.0, 150),     # rejected winners → COSTING
+            "noise_gate": rng.normal(0.0, 1.0, 150),     # breakeven → not significant
+        }
+        taken = rng.normal(0.15, 1.0, 300)
+        found = {f["gate"]: f["verdict"] for f in CF.gate_attribution(rejected, taken)}
+        assert found.get("bad_gate") == "COSTING"
+        assert found.get("good_gate") == "EARNING"
+        assert "noise_gate" not in found                 # correctly not flagged
+
+    def test_thin_gate_is_ignored(self):
+        rng = np.random.default_rng(41)
+        rejected = {"thin": rng.normal(0.6, 1.0, 12)}    # < min_n
+        assert CF.gate_attribution(rejected) == []
+
+    def test_many_noise_gates_survive_fdr(self):
+        rng = np.random.default_rng(42)
+        rejected = {f"g{i}": rng.normal(0.0, 1.0, 80) for i in range(15)}
+        found = CF.gate_attribution(rejected)
+        assert len(found) <= 2                            # FDR controls false gates
+
+    def test_decision_r_math_and_guards(self):
+        # +6% outcome on a 3% risk (entry 100, stop 97) → +2R
+        assert CF._decision_r(100.0, 97.0, 6.0) == pytest.approx(2.0)
+        assert CF._decision_r(100.0, 100.0, 5.0) is None  # zero risk → invalid
+        assert CF._decision_r(100.0, 105.0, 5.0) is None  # stop above entry → invalid
+
+    def test_fail_open_io(self):
+        assert CF.gate_attribution_report() == []
+        assert CF.gate_directives() == []

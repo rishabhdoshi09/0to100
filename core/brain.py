@@ -161,6 +161,9 @@ def build_directives(v: dict) -> list[dict]:
     # 🎯 Confidence Ledger — buckets where our own probabilities are miscalibrated
     for cd in (v.get("calibration_directives") or [])[:1]:
         add(cd.get("severity", "info"), cd.get("text", ""))
+    # ⚖️ Counterfactual gate attribution — a filter that's leaking money
+    for gd in (v.get("gate_directives") or [])[:1]:
+        add(gd.get("severity", "info"), gd.get("text", ""))
     # correlation lens: N positions that move together = fewer real bets
     if (v.get("corr_positions", 0) >= 2
             and v.get("corr_bets", 0) < v["corr_positions"]):
@@ -353,6 +356,28 @@ def _probe_calibration(market: str) -> list:
     return data
 
 
+_gates_cache = {"ts": 0.0, "data": []}
+
+
+def _probe_gates(market: str) -> list:
+    """⚖️ Counterfactual gate-attribution directives — filters that are COSTING
+    money (rejecting winners) surfaced from the rejected-trade ledger, FDR-gated.
+    Cached 1h (moves slowly). Fail-open."""
+    if market == "US":
+        return []
+    import time as _t
+    if _gates_cache["ts"] > 0 and _t.time() - _gates_cache["ts"] < 3600:
+        return _gates_cache["data"]
+    data: list = []
+    try:
+        from research.counterfactual import gate_directives
+        data = gate_directives()
+    except Exception:
+        data = []
+    _gates_cache.update(ts=_t.time(), data=data)
+    return data
+
+
 def _probe_options(market: str) -> dict:
     """Index options positioning (PCR / max-pain) — options market ka vote.
     Off-hours/chain-fail → empty, koi claim nahi."""
@@ -420,6 +445,7 @@ def assess(market: str = "IN", capital: float = 100_000.0) -> dict:
     macro = _probe_macro(market)
     drift = _probe_drift(market)
     calib = _probe_calibration(market)
+    gates = _probe_gates(market)
 
     buys = [r for r in setups if r.get("verdict") in ("STRONG BUY", "BUY")]
     # EV-first cross-sectional ranking (north star): setups with a measured
@@ -488,6 +514,7 @@ def assess(market: str = "IN", capital: float = 100_000.0) -> dict:
         "macro_themes": macro.get("themes", []),
         "drift_directives": drift,
         "calibration_directives": calib,
+        "gate_directives": gates,
         "posture": posture,
     }
     directives = build_directives(vitals)
