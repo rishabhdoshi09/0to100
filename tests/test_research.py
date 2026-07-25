@@ -528,3 +528,72 @@ class TestExperimentRegistry:
                                 challenger_scores=[0.32, 0.31, 0.30],
                                 champion_scores=[0.31, 0.31, 0.31])
         assert REG.current_champion("scorer")["model_id"] == "v2"
+
+
+from research import edge_timeline as ET
+
+
+class TestEdgeTimeline:
+    """A signal's drift HISTORY is evidence — one snapshot can't tell a cyclical
+    edge (recovers every time) from a dead one (never came back)."""
+
+    def _tmp(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(ET, "_DB_PATH", tmp_path / "edge.db")
+
+    # ── pure classifier ──
+    def test_cyclical_needs_repeat_decay_and_recovery(self):
+        events = [{"status": "DECAYING", "n": 60}, {"status": "RECOVERING", "n": 92},
+                  {"status": "DECAYING", "n": 150}, {"status": "RECOVERING", "n": 178}]
+        p = ET._classify_profile(events, 190)
+        assert p["profile"] == "CYCLICAL"
+        assert p["n_decays"] == 2 and p["n_recoveries"] == 2
+        assert p["median_recovery_trades"] == 30.0            # (32 + 28) / 2
+
+    def test_unrecovered_decay_is_dead(self):
+        # decayed and never recovered across many trades
+        p = ET._classify_profile([{"status": "DECAYING", "n": 50}], current_n=120)
+        assert p["profile"] == "DEAD"
+
+    def test_recent_decay_is_not_yet_dead(self):
+        p = ET._classify_profile([{"status": "DECAYING", "n": 100}], current_n=115)
+        assert p["profile"] == "DECAYING"                     # too soon to retire
+
+    def test_long_uninterrupted_stable_is_durable(self):
+        p = ET._classify_profile([{"status": "STABLE", "n": 40}], current_n=140)
+        assert p["profile"] == "DURABLE"
+
+    def test_no_history_is_emerging(self):
+        assert ET._classify_profile([], current_n=20)["profile"] == "EMERGING"
+        assert ET._classify_profile([], current_n=0)["profile"] == "UNKNOWN"
+
+    # ── I/O: transition ledger, not a sample log ──
+    def test_records_only_transitions(self, tmp_path, monkeypatch):
+        self._tmp(tmp_path, monkeypatch)
+        rng = np.random.default_rng(40)
+        decaying = list(np.concatenate([rng.normal(0.5, 1, 60),
+                                        rng.normal(-0.4, 1, 60)]))
+        streams = {"breakout": decaying}
+        first = ET.record_snapshot(streams=streams, now="2026-01-01T00:00:00")
+        assert first and first[0]["signal"] == "breakout"
+        assert first[0]["status"] == "DECAYING"
+        # same state again → NO new row (transition ledger)
+        again = ET.record_snapshot(streams=streams, now="2026-01-02T00:00:00")
+        assert again == []
+        assert len(ET.signal_history("breakout")) == 1
+
+    def test_profile_and_report_fail_open(self):
+        # no DB rows in a fresh env → never raises
+        assert isinstance(ET.timeline_report(), list)
+        assert isinstance(ET.timeline_directives(), list)
+        assert ET.signal_profile("nonexistent", streams={})["profile"] in (
+            "EMERGING", "UNKNOWN")
+
+    def test_dead_signal_becomes_a_retire_directive(self, tmp_path, monkeypatch):
+        self._tmp(tmp_path, monkeypatch)
+        # seed a signal whose latest transition is a long-unrecovered decay
+        c = ET._conn()
+        c.execute("INSERT INTO edge_events (signal, observed_at, status, n) "
+                  "VALUES ('breakout','2026-01-01T00:00:00','DECAYING',40)")
+        c.commit(); c.close()
+        prof = ET.signal_profile("breakout", streams={"breakout": [0.0] * 120})
+        assert prof["profile"] == "DEAD"

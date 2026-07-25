@@ -600,6 +600,16 @@ def _maybe_run_nightly_backtest() -> None:
         log.info("nightly_backtest_start")
         run_backtest(max_symbols=800)
         _bt_done_date = today
+        # 🗂️ Edge Timeline — once the day's outcomes are settled, record any
+        # per-signal drift STATE TRANSITION so the system builds a permanent
+        # history (cyclical vs dead vs durable). Fail-open, transition-only.
+        try:
+            from research.edge_timeline import record_snapshot
+            moved = record_snapshot()
+            if moved:
+                log.info("edge_timeline_transitions", n=len(moved))
+        except Exception as exc:
+            log.debug("edge_timeline_skip", error=str(exc))
     except Exception as exc:
         log.debug("nightly_backtest_skip", error=str(exc))
 

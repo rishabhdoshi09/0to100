@@ -164,6 +164,11 @@ def build_directives(v: dict) -> list[dict]:
     # ⚖️ Counterfactual gate attribution — a filter that's leaking money
     for gd in (v.get("gate_directives") or [])[:1]:
         add(gd.get("severity", "info"), gd.get("text", ""))
+    # 🗂️ Edge Timeline — durable signal character from its drift HISTORY: retire
+    # the dead, respect the cyclical (don't panic-kill an edge that always comes
+    # back). Complements the momentary drift read above.
+    for td in (v.get("timeline_directives") or [])[:1]:
+        add(td.get("severity", "info"), td.get("text", ""))
     # correlation lens: N positions that move together = fewer real bets
     if (v.get("corr_positions", 0) >= 2
             and v.get("corr_bets", 0) < v["corr_positions"]):
@@ -378,6 +383,29 @@ def _probe_gates(market: str) -> list:
     return data
 
 
+_timeline_cache = {"ts": 0.0, "data": []}
+
+
+def _probe_timeline(market: str) -> list:
+    """🗂️ Edge-Timeline directives — the durable CHARACTER of a signal from its
+    recorded drift history (distinct from the momentary drift read): retire the
+    dead, respect the cyclical (recovers every dip — don't kill it). Cached 1h.
+    Fail-open."""
+    if market == "US":
+        return []
+    import time as _t
+    if _timeline_cache["ts"] > 0 and _t.time() - _timeline_cache["ts"] < 3600:
+        return _timeline_cache["data"]
+    data: list = []
+    try:
+        from research.edge_timeline import timeline_directives
+        data = timeline_directives()
+    except Exception:
+        data = []
+    _timeline_cache.update(ts=_t.time(), data=data)
+    return data
+
+
 def _probe_options(market: str) -> dict:
     """Index options positioning (PCR / max-pain) — options market ka vote.
     Off-hours/chain-fail → empty, koi claim nahi."""
@@ -446,6 +474,7 @@ def assess(market: str = "IN", capital: float = 100_000.0) -> dict:
     drift = _probe_drift(market)
     calib = _probe_calibration(market)
     gates = _probe_gates(market)
+    timeline = _probe_timeline(market)
 
     buys = [r for r in setups if r.get("verdict") in ("STRONG BUY", "BUY")]
     # EV-first cross-sectional ranking (north star): setups with a measured
@@ -515,6 +544,7 @@ def assess(market: str = "IN", capital: float = 100_000.0) -> dict:
         "drift_directives": drift,
         "calibration_directives": calib,
         "gate_directives": gates,
+        "timeline_directives": timeline,
         "posture": posture,
     }
     directives = build_directives(vitals)
