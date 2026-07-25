@@ -27,7 +27,9 @@ market-wide):
 | `research/scientific_memory.py` | Scientific Memory — beliefs + negative knowledge (2B) | ✅ done — registry auto-sync → durable belief, mechanical ACTIVE/WATCH/RETIRED/REJECTED lifecycle, Evidence-Graph provenance → Brain 📚 |
 | `research/non_event.py` | Non-event learning — the rejected control group (2B) | ✅ done — structured rejection causes + ALMOST/FADED near-misses, counterfactual per-reason verdict (observed % + labelled modeled R), decision-boundary replay → Brain 🕳️ |
 | `research/evidence_graph.py` | Evidence Graph — provenance layer (2B) | ✅ done — nodes+edges linking feature→hypothesis→experiment→belief→gate→drift; ancestry/explain() audit trail ("why is this gate active?") |
-| `research/explainability.py` | Explainability — customer-facing "why not?" (2B) | ✅ done — sourced rejection evidence (track record, false-rejection rate, backing belief + freshness) |
+| `research/explainability.py` | Explainability — customer windows (2B) | ✅ done — "why not?" / "why trust this?" / "why did confidence change?" from the same evidence, jargon-free |
+| `research/research_overview.py` | Research Overview — mission-control query layer | ✅ done — research/edge/data health, gate scorecard, research debt, Time Machine; queried by dashboard + JARVIS |
+| `ui/research_dashboard.py` | Research Dashboard (Layer 1, internal) | ✅ done — dense mission-control page ("🛰️ Research OS" tab) + Evidence Explorer |
 
 **Phase 1 (scientific foundation): COMPLETE**, and hardened to a higher
 scientific bar — the drift subsystem now carries a RECOVERING state (a dedicated
@@ -74,14 +76,22 @@ backed by the counterfactual track record and the belief behind the gate. The
 registry→Scientific Memory auto-sync is live (a PROMOTED experiment becomes a
 belief automatically, with its provenance recorded).
 
-**Sequenced remainder (why this order):** (1) a **Research Dashboard** — internal
-observability over the accumulating evidence (beliefs, drift, gate track records,
-data-quality coverage); (2) **let it run for weeks/months** to accumulate
-high-quality observation history; (3) the **Autonomous Research Scientist** —
-deliberately last, because only now does a discovery have a rich, versioned,
-evidence-backed memory to be written into (feature snapshots → experiment → belief
-→ graph → Brain) instead of being generated and forgotten. Regime discovery /
-Trader DNA stay behind that: they need the accumulated data first.
+**Research Dashboard is built, in two layers (as it should be).** Layer 1 is
+internal mission control ("🛰️ Research OS" tab): dense-over-pretty, it answers
+"is the *research* healthy?" from the `research_overview` query layer — beliefs,
+edge health, gate scorecard, data health, research debt, a Time Machine (what did
+we believe on any past date, reconstructed from frozen features + belief history),
+and an Evidence Explorer. Layer 2 is customer windows (why not / why trust this /
+why did confidence change) — concise, jargon-free, drawn from the SAME evidence.
+Critically, the dashboard and JARVIS both **query** this layer; neither computes
+statistics itself (JARVIS reads the Research OS snapshot in its context).
+
+**Sequenced remainder (why this order):** (1) **let it run for weeks/months** to
+accumulate high-quality observation history; (2) the **Autonomous Research
+Scientist** — deliberately last, because only now does a discovery have a rich,
+versioned, evidence-backed memory to be written into (feature snapshots →
+experiment → belief → graph → Brain) instead of being generated and forgotten.
+Regime discovery / Trader DNA stay behind that: they need the accumulated data.
 
 **Deferred by design — evidence aging.** As evidence accumulates, a 2018 trade
 should not count the same as last month's. Time-weighted evidence / evidence
@@ -91,9 +101,22 @@ isn't built prematurely.
 
 Architectural note (holding the line): the Brain stays a THIN renderer — every
 subsystem emits *evidence objects* (severity + text) and the Brain composes them
-into a natural-language posture. No statistical logic lives in the Brain.
+into a natural-language posture. No statistical logic lives in the Brain. The same
+discipline now applies to the dashboard and JARVIS: both are *applications* that
+query the Research OS layer; the science lives in one place.
 
-~100 research/platform unit-tests, all green; full money-path suite unaffected.
+**Identity.** QuantTerm has crossed from "AI trading terminal" → "evidence-driven
+platform" → what it now actually is: a **Trading Research Operating System**. The
+scanner and Brain are applications running on a deeper layer whose job is to
+generate, validate, preserve, and explain trading knowledge (features → hypotheses
+→ experiments → beliefs → provenance → explanation). Keeping those layers cleanly
+separated is what makes the system auditable, evolvable, and hard to replicate —
+the core asset is no longer the code, it's the accumulating, versioned evidence.
+
+**Deferred, tracked:** evidence aging / time-weighted half-life (add once there's
+enough history to calibrate it); regime discovery and Trader DNA (need the data).
+
+~110 research/platform unit-tests, all green; full money-path suite unaffected.
 
 ---
 
