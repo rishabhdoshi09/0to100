@@ -1402,6 +1402,26 @@ class TestMacroPulse:
         assert p["mood"] == "NEUTRAL" and p["risk_off"] is False and p["heat"] == 0
 
 
+def _isolate_brain_probes(monkeypatch):
+    """Neutralize EVERY Brain probe to its fail-open default so a test machine
+    with real internet (live news, bulk-deal flows, etc.) can't inject live
+    directives that reorder/crowd the severity-sorted, capped-at-6 directive list.
+    A test calls this first, then overrides only the probes it exercises."""
+    import core.brain as brain
+    for name, val in (
+        ("_probe_regime", lambda: ""), ("_probe_edge", lambda cap: {}),
+        ("_probe_setups", lambda m: ([], 0.0)), ("_probe_book", lambda: {}),
+        ("_probe_autopilot", lambda m: {}), ("_probe_dead_daemons", lambda: []),
+        ("_probe_rotation", lambda m: {}), ("_probe_correlation", lambda m: {}),
+        ("_probe_breadth", lambda m: {}), ("_probe_options", lambda m: {}),
+        ("_probe_flows", lambda m: {}), ("_probe_macro", lambda m: {}),
+        ("_probe_drift", lambda m: []), ("_probe_calibration", lambda m: []),
+        ("_probe_gates", lambda m: []), ("_probe_timeline", lambda m: []),
+        ("_probe_beliefs", lambda m: []), ("_probe_rejections", lambda m: []),
+    ):
+        monkeypatch.setattr(brain, name, val)
+
+
 class TestBrain:
     """The conductor: composes every subsystem into one posture + directives.
     Survival-first, evidence-gated, read-only."""
@@ -1447,6 +1467,7 @@ class TestBrain:
 
     def test_assess_composes_probes(self, monkeypatch):
         import core.brain as brain
+        _isolate_brain_probes(monkeypatch)          # no live feeds inject directives
         monkeypatch.setattr(brain, "_probe_regime", lambda: "TRENDING_BULL")
         monkeypatch.setattr(brain, "_probe_edge", lambda cap: {
             "expectancy_r": 0.3, "edge_trend": "improving", "closed": 60,
@@ -1462,9 +1483,6 @@ class TestBrain:
         monkeypatch.setattr(brain, "_probe_autopilot", lambda m: {
             "armed": True, "trades_today": 2, "day_pnl": 450.0})
         monkeypatch.setattr(brain, "_probe_dead_daemons", lambda: [])
-        # isolate from LIVE news/breadth feeds — both are demote-only and would
-        # otherwise pull AGGRESSIVE→NORMAL on a machine with real internet.
-        monkeypatch.setattr(brain, "_probe_macro", lambda m: {})
         monkeypatch.setattr(brain, "_probe_breadth", lambda m: {"verdict": "HEALTHY"})
         a = brain.assess("IN", 100000.0)
         assert a["posture"] == "AGGRESSIVE"              # all aligned + evidence
@@ -1489,6 +1507,7 @@ class TestBrain:
 
     def test_briefing_telegram_content(self, monkeypatch):
         import core.brain as brain
+        _isolate_brain_probes(monkeypatch)          # no live feeds inject directives
         monkeypatch.setattr(brain, "_probe_regime", lambda: "TRENDING_BULL")
         monkeypatch.setattr(brain, "_probe_edge", lambda cap: {
             "expectancy_r": 0.3, "edge_trend": "improving", "closed": 60,
@@ -2621,6 +2640,7 @@ class TestPortfolioIntel:
 
     def test_brain_carries_rotation_directive(self, monkeypatch):
         import core.brain as brain
+        _isolate_brain_probes(monkeypatch)          # no live feeds crowd the list
         monkeypatch.setattr(brain, "_probe_regime", lambda: "CHOPPY")
         monkeypatch.setattr(brain, "_probe_edge", lambda cap: {
             "expectancy_r": 0.12, "edge_trend": "stable", "closed": 60})
@@ -2632,8 +2652,6 @@ class TestPortfolioIntel:
             "portfolio_ev_pct": 2.1,
             "swap": {"out": "HAL", "out_ev": 1.2, "in": "TATVA", "in_ev": 5.4,
                      "gap_pct": 4.2, "note": "HAL vs TATVA — advice hai, order nahi."}})
-        # no live macro → its RISK-OFF directive can't crowd the rotation one out
-        monkeypatch.setattr(brain, "_probe_macro", lambda m: {})
         a = brain.assess("IN", 100000.0)
         assert any("Opportunity cost" in d["text"] for d in a["directives"])
         assert a["vitals"]["portfolio_ev_pct"] == 2.1
