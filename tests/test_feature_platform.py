@@ -283,13 +283,16 @@ class TestNonEvent:
 
     def test_scan_batch_maps_causes(self):
         results = [
-            _FakeSignal("BUYME", verdict="BUY"),             # skipped (executed)
+            _FakeSignal("BUYME", verdict="BUY"),             # → TRADE (the corpus)
             _FakeSignal("EXT", chase_risk=True),             # → EXTENSION
             _FakeSignal("NEAR", pivot_distance_pct=0.8),     # → ALMOST
             _FakeSignal("MEH", score=20.0),                  # → LOW_CONVICTION
         ]
         counts = NE.record_scan_batch(results, regime="MIXED")
-        assert counts == {"extension": 1, "almost": 1, "low_conviction": 1}
+        assert counts == {"extension": 1, "almost": 1, "low_conviction": 1, "trade": 1}
+        # the BUY is now frozen as a TRADE observation — the Similar‑history corpus
+        buy = FS.get_observation(f"{NE._today()}:BUYME:TRADE")
+        assert buy is not None and buy["kind"] == "TRADE"
         assert FS.get_observation(f"{NE._today()}:EXT:REJ:EXTENSION") is not None
         assert FS.get_observation(f"{NE._today()}:NEAR:NM:ALMOST") is not None
 

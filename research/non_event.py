@@ -106,13 +106,17 @@ def record_scan_batch(results, regime: str = "", breadth_pct=None,
     try:
         for r in results:
             verdict = getattr(r, "verdict", "")
-            if verdict == "BUY":
-                continue
             feats = {"rsi": getattr(r, "rsi", None),
                      "quality_score": getattr(r, "score", None),
                      "regime": regime or None,
                      "breadth_pct_above_50dma": breadth_pct}
             sym = getattr(r, "symbol", "")
+            if verdict in ("BUY", "STRONG BUY"):
+                # the acted‑upon setups ARE the corpus "Similar history" draws
+                # from — freeze them as TRADE observations (outcome settled later)
+                capture_trade_setup(sym, feats)
+                counts["trade"] = counts.get("trade", 0) + 1
+                continue
             if getattr(r, "chase_risk", False):
                 capture_rejection(sym, feats, "EXTENSION")
                 counts["extension"] += 1
@@ -130,6 +134,16 @@ def record_scan_batch(results, regime: str = "", breadth_pct=None,
     except Exception:
         pass
     return counts
+
+
+def capture_trade_setup(symbol: str, features: dict,
+                        ts: str | None = None) -> dict:
+    """Freeze a TRADE observation for a BUY setup — the corpus the scanner's
+    "Similar history" window retrieves analogs from. Deterministic per‑day id
+    dedupes; the outcome is settled later from real bhavcopy forward returns.
+    Fail‑open."""
+    oid = f"{(ts or _today())[:10]}:{(symbol or '').upper()}:TRADE"
+    return _FS.snapshot(oid, symbol, "TRADE", features, ts=ts)
 
 
 def capture_near_miss(symbol: str, features: dict, subtype: str,
@@ -182,7 +196,7 @@ def settle_outcomes(lookback_days: int = 45, limit: int = 4000) -> int:
         try:
             rows = c.execute(
                 "SELECT observation_id, symbol, ts FROM observations "
-                "WHERE kind IN ('REJECTION','NEAR_MISS') AND outcome IS NULL "
+                "WHERE kind IN ('TRADE','REJECTION','NEAR_MISS') AND outcome IS NULL "
                 "AND ts <= ? AND ts >= ? LIMIT ?",
                 (cutoff_new, cutoff_old, limit)).fetchall()
         finally:
