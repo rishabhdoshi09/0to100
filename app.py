@@ -29,6 +29,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 import requests
 import streamlit as st
+import streamlit.components.v1 as components   # canonical inline-HTML renderer
 import yfinance as yf
 from bs4 import BeautifulSoup
 from dotenv import load_dotenv
@@ -2391,10 +2392,7 @@ elif _page == "Tools":
 
                     # Preview in app
                     with st.expander("👁 Preview Report", expanded=True):
-                        try:
-                            st.iframe(render_html(_rdata), height=900, scrolling=True)
-                        except Exception:
-                            st.components.v1.html(render_html(_rdata), height=900, scrolling=True)
+                        components.html(render_html(_rdata), height=900, scrolling=True)
 
                 except Exception as _re:
                     st.error(f"Report generation failed: {_re}")
