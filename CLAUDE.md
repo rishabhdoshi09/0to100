@@ -22,7 +22,17 @@ app.py                    # Streamlit shell: nav (Today|Pulse|Stocks|Options|
 │   │                     #   3h cache) → Brain evidence stream + 🏦 card tag.
 │   │                     #   Context-only (gate nahi) jab tak edge measure na ho
 │   ├── instruments.py    # symbol → instrument_token map
-│   └── nse_universe.py   # ~2000 clean EQ symbols; _is_valid_symbol junk filter
+│   ├── nse_universe.py   # ~2000 clean EQ symbols; _is_valid_symbol junk filter.
+│   │                     #   point_in_time_universe(as_of): survivorship-aware
+│   │                     #   membership (incl. then-delisted) from a history file;
+│   │                     #   flags survivorship_complete=False when none on disk
+│   ├── corporate_actions.py # 🔧 CA back-adjustment: adjust_frame() removes phantom
+│   │                     #   split/bonus gaps (pre-ex prices ÷ factor, vol ×).
+│   │                     #   load_events() reads logs/ca_events.json → {} if absent
+│   │                     #   (no-file ⇒ unchanged, never fabricated). Applied
+│   │                     #   ON READ in bhavcopy_store.get_ohlcv (store stays raw)
+│   └── index_store.py    # NSE index OHLC (Nifty 50 / India VIX / sectors) —
+│                         #   regime series + gauntlet benchmark
 │
 ├── scan/                 # Signal layer
 │   ├── auto_scan.py      # BACKGROUND BRAIN: daemon scans whole market every
@@ -153,9 +163,37 @@ app.py                    # Streamlit shell: nav (Today|Pulse|Stocks|Options|
 │   ├── market_clock.py   # ⏰ IST-explicit clock — SAB NSE gates (market hours,
 │   │                     #   entry windows, daily-limit dates) yahin se. UTC
 │   │                     #   server pe bhi gates kabhi shift nahi hote
-│   └── error_guard.py    # page error boundaries + logs/errors.log + config check
-│                         #   (+ IST-clock check + build version)
-└── tests/                # pytest; test_money_paths.py = 180+ money-critical tests
+│   ├── error_guard.py    # page error boundaries + logs/errors.log + config check
+│   │                     #   (+ IST-clock check + build version)
+│   ├── data_integrity.py # 🧪 phantom_gaps() detects un-adjusted CA gaps;
+│   │                     #   verify_ca_adjustment() = the acceptance test (PASS
+│   │                     #   only when a CA table is loaded AND gap-rate ≈ 0)
+│   └── evidence_levels.py# 🎚️ E0–E6 maturity; promote() rises ONE step only through
+│                         #   an OBJECTIVE gate (E3 needs DSR/RealityCheck/FDR +
+│                         #   beats-benchmark + correlation-adjusted CI), never belief
+│
+├── research/             # 🔬 Anti-overfitting harness (pure stats over R-streams)
+│   └── harness.py        # DSR · PSR · White's Reality Check · Benjamini-Hochberg
+│                         #   FDR · purged/embargoed CV · power analysis · effective
+│                         #   sample size + block-bootstrap CI (trades aren't i.i.d.)
+│                         #   · alpha_beta / factor_attribution (alpha vs beta) ·
+│                         #   evaluate() → PROMOTE/REJECT/UNDERPOWERED/INCONCLUSIVE
+│
+├── gauntlet/             # 🏛️ The Historical Gauntlet — one command, one verdict.
+│   │                     #   `python -m gauntlet`: validate→freeze→ledger→battery→
+│   │                     #   verdict. NO features; only what the stats require.
+│   ├── validator.py      # E4 abort-on-fail dataset gate (CA/survivorship/index/
+│   │                     #   VIX/dup/future/order/mismatch) — aborts without data
+│   ├── ledger.py         # E1 immutable TradeRecord + per-trade benchmark/factor
+│   │                     #   window-returns (nothing recomputed downstream)
+│   ├── runner.py         # E2 per-strategy battery + FDR → PASS/FAIL/INCONCLUSIVE
+│   ├── report.py         # E3 committee report (all stats + assumptions + limits)
+│   ├── registry.py       # E5 experiment id + git/dataset/config hash + seed
+│   └── freeze.py         # E6 lock result-determining config; verify_unchanged()
+│
+└── tests/                # pytest; test_money_paths.py = 180+ money-critical tests.
+                          #   test_gauntlet.py = the gauntlet pipeline (synthetic,
+                          #   network-free); docs/RESEARCH_LOG.md = the lab notebook
 ```
 
 ## Key Invariants (violate these and lose money)
