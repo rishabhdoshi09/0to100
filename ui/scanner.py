@@ -303,25 +303,44 @@ def _trade_ticket_body(s: dict) -> None:
     c1, c2 = st.columns(2)
     with c1:
         entry_type = st.radio("Order type", ["LIMIT", "MARKET"], horizontal=True,
-                              key=f"tt_type_{sym}")
+                              key=f"tt_type_{sym}",
+                              help="LIMIT = tumhare bataye price par ya usse behtar "
+                                   "hi khareedega (control). MARKET = abhi ke "
+                                   "chalu price par turant khareed lega (guarantee "
+                                   "fill, price thoda idhar-udhar ho sakta).")
         entry_price = st.number_input("Entry price (₹)", min_value=1.0,
                                       value=float(d_entry), step=0.5,
                                       key=f"tt_entry_{sym}",
-                                      disabled=(entry_type == "MARKET"))
+                                      disabled=(entry_type == "MARKET"),
+                                      help="Jis price par khareedna hai. MARKET "
+                                           "order mein yeh apne aap live price le leta hai.")
         product = st.radio("Product", ["CNC (delivery)", "MIS (intraday)"],
-                           horizontal=True, key=f"tt_prod_{sym}")
+                           horizontal=True, key=f"tt_prod_{sym}",
+                           help="CNC (delivery) = share tumhare demat mein aa jaate "
+                                "hain, jitne din chaaho rakho. MIS (intraday) = "
+                                "usi din market band hone se pehle apne aap bik "
+                                "jaata hai (sirf ek din ke liye). Naye ho toh CNC "
+                                "safe hai.")
     with c2:
         cap = st.session_state.get("user_capital")
         ps = size_position(d_entry, d_stop, capital=cap)
-        qty = st.number_input("Quantity (1% rule suggest karta hai: "
-                              f"{ps['qty']})", min_value=1,
+        qty = st.number_input("Kitne shares (quantity)? 1% rule kehta hai: "
+                              f"{ps['qty']}", min_value=1,
                               value=max(1, int(ps["qty"] or 1)), step=1,
-                              key=f"tt_qty_{sym}")
-        stop = st.number_input("Stop loss (₹)", min_value=0.1,
-                               value=float(d_stop), step=0.5, key=f"tt_stop_{sym}")
-        target = st.number_input("Target (₹)", min_value=0.1,
+                              key=f"tt_qty_{sym}",
+                              help="Kitne shares khareedne hain. Humara suggest "
+                                   "'1% rule' se aata hai: ek trade mein tumhare "
+                                   "poore paise ka sirf 1% risk pe lagta hai.")
+        stop = st.number_input("Stop-loss (₹) — yahan nikal jao", min_value=0.1,
+                               value=float(d_stop), step=0.5, key=f"tt_stop_{sym}",
+                               help="Safety net: price yahan tak GIRA toh trade "
+                                    "apne aap band, nuksaan yahin ruk jayega. "
+                                    "Entry se neeche hona chahiye.")
+        target = st.number_input("Target (₹) — yahan profit book", min_value=0.1,
                                  value=float(d_target), step=0.5,
-                                 key=f"tt_tgt_{sym}")
+                                 key=f"tt_tgt_{sym}",
+                                 help="Price yahan tak CHADHA toh profit book ho "
+                                      "jayega. Entry se upar hona chahiye.")
 
     eff_entry = px if entry_type == "MARKET" else entry_price
     deploy = qty * eff_entry
@@ -337,6 +356,15 @@ def _trade_ticket_body(s: dict) -> None:
         f"<span style='color:#00d4a0'>Reward: <b>₹{reward:,.0f}</b></span> &nbsp;·&nbsp; "
         f"R:R <b>{rr:.1f}×</b>"
         f"</div>", unsafe_allow_html=True)
+    st.caption(
+        f"Seedhi baat: is trade mein zyada se zyada **₹{max_loss:,.0f}** ja "
+        f"sakta hai, aur sahi chala toh **₹{reward:,.0f}** ban sakta hai. "
+        f"R:R {rr:.1f}× ka matlab — jitna risk, uska {rr:.1f} guna reward. "
+        + ("₹1 risk pe ₹1 se zyada reward — theek hai. " if rr >= 1
+           else "Reward risk se kam hai — soch lo. ")
+        + "Entry ke saath tumhara stop-loss + target dono exchange par apne aap "
+          "lag jaate hain (Auto Safety Net), toh laptop band ho ya net jaaye, "
+          "tumhari exit fir bhi lagi rehti hai.")
 
     # Portfolio impact — is trade ke BAAD account kaisa dikhega
     try:
