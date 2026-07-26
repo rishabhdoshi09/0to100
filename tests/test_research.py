@@ -217,6 +217,87 @@ class TestEvaluateGate:
             assert len(H.evaluate(arr).insight) > 10          # kill-criterion: a sentence
 
 
+class TestBenchmarkRelative:
+    """Alpha-vs-beta: a strategy that only rides the market must be exposed as
+    long-beta, not credited with skill. The committee's #1 objection."""
+
+    def test_pure_beta_has_no_alpha(self):
+        rng = np.random.default_rng(30)
+        bench = rng.normal(0.05, 1.0, 400)
+        # strategy = 1.2× the benchmark + noise, NO independent edge → α≈0, β≈1.2
+        strat = 1.2 * bench + rng.normal(0.0, 0.3, 400)
+        ab = H.alpha_beta(strat, bench)
+        assert abs(ab["beta"] - 1.2) < 0.15
+        assert ab["beats_benchmark"] is False                 # no real skill
+        assert ab["p_alpha"] > 0.05
+
+    def test_genuine_alpha_is_detected(self):
+        rng = np.random.default_rng(31)
+        bench = rng.normal(0.05, 1.0, 400)
+        strat = 0.30 + 0.5 * bench + rng.normal(0.0, 0.3, 400)  # +0.30R independent α
+        ab = H.alpha_beta(strat, bench)
+        assert ab["alpha"] > 0.15 and ab["beats_benchmark"] is True
+        assert ab["p_alpha"] < 0.05
+
+    def test_degenerate_inputs_never_pass(self):
+        assert H.alpha_beta([1.0, 2.0], [0.1, 0.2])["beats_benchmark"] is False
+        assert H.alpha_beta([1.0, 1.0, 1.0], [0.0, 0.0, 0.0])["beats_benchmark"] is False
+
+    def test_evaluate_demotes_long_beta_to_reject(self):
+        rng = np.random.default_rng(32)
+        bench = rng.normal(0.10, 1.0, 300)
+        strat = 1.3 * bench + rng.normal(0.0, 0.2, 300)        # profitable but ALL beta
+        r = H.evaluate(strat, benchmark_returns=bench)
+        assert r.verdict == "REJECT" and "beta" in r.insight.lower()
+
+    def test_evaluate_keeps_genuine_alpha(self):
+        rng = np.random.default_rng(33)
+        bench = rng.normal(0.05, 1.0, 300)
+        strat = 0.35 + 0.4 * bench + rng.normal(0.0, 0.3, 300)
+        assert H.evaluate(strat, benchmark_returns=bench).verdict == "PROMOTE"
+
+
+class TestCorrelationAdjusted:
+    """Trades are not i.i.d.; effective-N deflates the sample and the block
+    bootstrap widens the CI so significance is judged honestly."""
+
+    def test_iid_effective_n_is_near_n(self):
+        rng = np.random.default_rng(40)
+        r = rng.normal(0.1, 1.0, 500)                          # independent draws
+        assert H.effective_sample_size(r) > 400                # ≈ n
+
+    def test_autocorrelated_effective_n_is_smaller(self):
+        rng = np.random.default_rng(41)
+        # a persistent AR(1) stream co-moves → far fewer independent observations
+        x = np.zeros(500)
+        for i in range(1, 500):
+            x[i] = 0.8 * x[i - 1] + rng.normal(0, 1)
+        assert H.effective_sample_size(x) < 250                # heavily deflated
+
+    def test_block_ci_brackets_the_mean(self):
+        rng = np.random.default_rng(42)
+        r = rng.normal(0.3, 1.0, 400)
+        ci = H.block_bootstrap_mean_ci(r, n_boot=1000, seed=1)
+        assert ci["ci_lower"] < ci["mean_r"] < ci["ci_upper"]
+        assert ci["excludes_zero"] is True                     # a real edge clears 0
+
+    def test_block_ci_on_noise_includes_zero(self):
+        rng = np.random.default_rng(43)
+        r = rng.normal(0.0, 1.0, 400)
+        assert H.block_bootstrap_mean_ci(r, n_boot=1000, seed=2)["excludes_zero"] is False
+
+    def test_evaluate_block_ci_gate_can_hold_a_marginal_edge(self):
+        rng = np.random.default_rng(44)
+        # a marginal edge that clears PSR but whose correlation-aware CI may not
+        marginal = rng.normal(0.12, 1.0, 200)
+        strict = H.evaluate(marginal, require_block_ci=True, block_ci_seed=1)
+        assert strict.verdict in ("PROMOTE", "INCONCLUSIVE")
+        # a strong edge still promotes under the stricter gate
+        strong = H.evaluate(rng.normal(0.4, 1.0, 250), require_block_ci=True,
+                            block_ci_seed=1)
+        assert strong.verdict == "PROMOTE"
+
+
 from research import drift as D
 
 

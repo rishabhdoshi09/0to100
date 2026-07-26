@@ -37,7 +37,8 @@ _LEVELS: dict[str, tuple[int, str]] = {
     "Cost model (mechanism)": (E2, "applied consistently, tested"),
     "Cost model (values)": (E0, "0.32%/slippage are assumed, not measured"),
     "Backtest engine": (E2, "walk-forward, no-lookahead — never run on real data"),
-    "Anti-overfit harness": (E2, "coded + tested; zero experiments on real data"),
+    "Anti-overfit harness": (E2, "DSR/RealityCheck/FDR + alpha-vs-beta + "
+                             "correlation-adjusted CI, tested; zero real-data runs"),
     "Strategy alpha (the edge)": (E0, "designed only — no historical/paper/live evidence"),
     "Signal scoring calibration": (E0, "defaults to 1.0 with an empty store"),
     "Confidence calibration": (E2, "math tested; no real forecasts scored → E0 evidence"),
@@ -81,6 +82,12 @@ def _gate_e3(a: dict) -> tuple[bool, list[str]]:
         ("power ≥ 0.8", float(a.get("power") or 0) >= 0.8),
         ("net expectancy ≥ +0.15R after costs", float(a.get("net_expectancy_r") or -9) >= 0.15),
         ("profit factor ≥ 1.3", float(a.get("profit_factor") or 0) >= 1.3),
+        # is it ALPHA, not just market beta? (harness.alpha_beta)
+        ("beats benchmark (α>0, p<0.05 — not long-beta)", bool(a.get("beats_benchmark"))),
+        # trades are NOT i.i.d. → the correlation-aware CI must clear zero, not
+        # the optimistic naive t-test (harness.block_bootstrap_mean_ci)
+        ("correlation-adjusted CI lower > 0 (block bootstrap)",
+         float(a.get("block_ci_lower") or -9) > 0),
         ("positive in ≥2 regimes", int(a.get("regimes_positive") or 0) >= 2)])
     return not fails, fails
 
@@ -89,7 +96,11 @@ def _gate_e4(a: dict) -> tuple[bool, list[str]]:
     # FORWARD PAPER validation (Charter Phase 2)
     fails = _missing(a, [
         ("≥300 forward paper trades", int(a.get("paper_trades") or 0) >= 300),
-        ("expectancy 95% CI lower bound > 0", float(a.get("expectancy_ci_lower") or -9) > 0),
+        # correlation-adjusted (effective-N / block-bootstrap) CI, not the naive one
+        ("expectancy CI lower bound > 0 (correlation-adjusted)",
+         float(a.get("block_ci_lower") or -9) > 0),
+        ("beats benchmark (α>0 vs index over the SAME window)",
+         bool(a.get("beats_benchmark"))),
         ("calibration ECE < 0.05", float(a.get("ece") or 1) < 0.05),
         ("Brier skill > 0", float(a.get("brier_skill") or -1) > 0),
         ("slippage ≤ 1.5× model", float(a.get("slippage_ratio") or 9) <= 1.5),

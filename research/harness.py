@@ -319,6 +319,122 @@ def purged_kfold_indices(n: int, k: int = 5, embargo=0,
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# Benchmark-relative inference — is it ALPHA, or just BETA (market exposure)?
+# ══════════════════════════════════════════════════════════════════════════════
+
+def alpha_beta(strategy_returns, benchmark_returns) -> dict:
+    """Decompose a strategy's per-trade returns into ALPHA (skill) and BETA
+    (market exposure) via OLS: r_strat = α + β·r_bench + ε, where the two arrays
+    are PAIRED — benchmark_returns[i] is the benchmark's return over trade i's
+    holding window (same units as the strategy's, e.g. R or %).
+
+    A strategy that only rides the market has α ≈ 0 and β ≈ 1: it looks profitable
+    in a bull tape but has no edge. The committee's #1 objection ("is this alpha or
+    long-beta?") is answered by the ONE-SIDED test of H0: α ≤ 0. Returns α, β,
+    α's standard error / t-stat / one-sided p-value, the benchmark correlation,
+    and the information ratio (α ÷ residual σ — active return per unit active
+    risk). Degenerate inputs (n<3, zero benchmark variance) return a null result
+    that will never pass the gate."""
+    x = np.asarray(benchmark_returns, dtype=float)
+    y = np.asarray(strategy_returns, dtype=float)
+    m = min(x.size, y.size)
+    x, y = x[:m], y[:m]
+    mask = ~(np.isnan(x) | np.isnan(y))
+    x, y = x[mask], y[mask]
+    n = int(x.size)
+    null = {"n": n, "alpha": 0.0, "beta": 0.0, "se_alpha": 0.0, "t_alpha": 0.0,
+            "p_alpha": 1.0, "corr": 0.0, "info_ratio": 0.0, "beats_benchmark": False}
+    if n < 3:
+        return null
+    sxx = float(np.sum((x - x.mean()) ** 2))
+    if sxx <= 0:                                   # benchmark is constant → no fit
+        return null
+    beta, alpha = np.polyfit(x, y, 1)              # [slope, intercept]
+    resid = y - (alpha + beta * x)
+    dof = n - 2
+    sse = float(np.sum(resid ** 2))
+    s_err = math.sqrt(sse / dof) if dof > 0 else 0.0
+    se_alpha = s_err * math.sqrt(1.0 / n + (x.mean() ** 2) / sxx) if s_err > 0 else 0.0
+    if se_alpha > 0:
+        t_alpha = float(alpha) / se_alpha
+        p_alpha = float(_student_t.sf(t_alpha, df=dof))     # one-sided H0: α ≤ 0
+    else:
+        t_alpha, p_alpha = 0.0, (0.0 if alpha > 0 else 1.0)
+    resid_sd = float(resid.std(ddof=1)) if n > 1 else 0.0
+    info_ratio = float(alpha) / resid_sd if resid_sd > 0 else 0.0
+    corr = float(np.corrcoef(x, y)[0, 1]) if x.std() > 0 and y.std() > 0 else 0.0
+    return {"n": n, "alpha": float(alpha), "beta": float(beta),
+            "se_alpha": float(se_alpha), "t_alpha": float(t_alpha),
+            "p_alpha": p_alpha, "corr": corr, "info_ratio": info_ratio,
+            "beats_benchmark": bool(alpha > 0 and p_alpha < _ALPHA)}
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Correlation-adjusted inference — trades are NOT i.i.d.
+# ══════════════════════════════════════════════════════════════════════════════
+
+def effective_sample_size(returns, max_lag: int | None = None) -> float:
+    """The AUTOCORRELATION-ADJUSTED sample size. Trades taken in the same tape,
+    the same sector, the same week co-move — they are not independent draws, so a
+    naive `n` overstates the evidence and every t-test / CI / power calc built on
+    it is optimistic. N_eff = n / (1 + 2·Σ ρ_k), summing the INITIAL positive
+    autocorrelation sequence (truncated at the first non-positive lag — the
+    standard initial-positive-sequence estimator). Clamped to [1, n]. For an
+    i.i.d. stream N_eff ≈ n; for a strongly serially-correlated one it can be far
+    smaller — which is the honest denominator."""
+    r = np.asarray(returns, dtype=float)
+    r = r[~np.isnan(r)]
+    n = int(r.size)
+    if n < 4:
+        return float(n)
+    r = r - r.mean()
+    var = float(np.mean(r ** 2))
+    if var <= 0:
+        return float(n)
+    if max_lag is None:
+        max_lag = min(n - 1, max(1, int(10 * math.log10(n))))
+    rho_sum = 0.0
+    for k in range(1, max_lag + 1):
+        rho_k = float(np.mean(r[:-k] * r[k:])) / var       # biased (÷n) estimator
+        if rho_k <= 0:                                      # initial positive seq.
+            break
+        rho_sum += (1.0 - k / n) * rho_k
+    n_eff = n / (1.0 + 2.0 * rho_sum)
+    return float(min(float(n), max(1.0, n_eff)))
+
+
+def block_bootstrap_mean_ci(returns, n_boot: int = 2000, block: float | None = None,
+                            alpha: float = _ALPHA, seed: int | None = None) -> dict:
+    """A confidence interval for mean per-trade R that RESPECTS serial dependence.
+    A textbook i.i.d. CI (±1.96·σ/√n) is too tight when trades co-move; the
+    stationary bootstrap (Politis–Romano) resamples geometric BLOCKS, preserving
+    short-range dependence, so the interval widens honestly. Returns the mean, the
+    (1−alpha) CI bounds, whether the lower bound clears zero, the block length and
+    the effective sample size. `ci_lower > 0` is the correlation-aware analogue of
+    'significantly positive' — the criterion the evidence gate should use, not the
+    naive t-test."""
+    r = np.asarray(returns, dtype=float)
+    r = r[~np.isnan(r)]
+    T = int(r.size)
+    if T < 2:
+        return {"mean_r": float(r.mean()) if T else 0.0, "ci_lower": 0.0,
+                "ci_upper": 0.0, "excludes_zero": False, "block": 1.0,
+                "n_eff": float(T), "n_boot": 0}
+    if block is None:
+        block = max(1.0, round(T ** (1.0 / 3.0)))
+    rng = np.random.default_rng(seed)
+    boot = np.empty(n_boot, dtype=float)
+    for i in range(n_boot):
+        idx = _stationary_bootstrap_indices(T, block, rng)
+        boot[i] = r[idx].mean()
+    lo = float(np.percentile(boot, 100.0 * (alpha / 2.0)))
+    hi = float(np.percentile(boot, 100.0 * (1.0 - alpha / 2.0)))
+    return {"mean_r": float(r.mean()), "ci_lower": lo, "ci_upper": hi,
+            "excludes_zero": bool(lo > 0.0), "block": float(block),
+            "n_eff": effective_sample_size(r), "n_boot": n_boot}
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # The gate — every claim passes through here
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -342,7 +458,10 @@ class HypothesisResult:
 def evaluate(returns, n_trials: int = 1, sharpe_estimates=None,
              min_detectable_r: float = _MIN_DETECTABLE_R,
              promote_p: float = _PROMOTE_P,
-             min_n: int = _HARD_MIN_N) -> HypothesisResult:
+             min_n: int = _HARD_MIN_N,
+             benchmark_returns=None,
+             require_block_ci: bool = False,
+             block_ci_seed: int | None = None) -> HypothesisResult:
     """The single gate. Feed a stream of realised R-multiples for one strategy/
     signal/combo (and, if it was selected from a search, the number of trials or
     the Sharpes of every trial). Returns a verdict + a plain-English insight.
@@ -361,6 +480,15 @@ def evaluate(returns, n_trials: int = 1, sharpe_estimates=None,
          (This is the ≥30 rule, generalised and made principled.)
       4. INCONCLUSIVE — a positive-but-not-significant edge on a sample that WAS
          large enough to detect a meaningful edge → probably not a real one.
+
+    Two OPTIONAL, harder gates a would-be PROMOTE must ALSO clear (both off by
+    default so existing callers are unchanged):
+      • `benchmark_returns` (paired per-trade benchmark R) → the edge must carry
+        significant ALPHA vs the benchmark, else it is demoted to REJECT as
+        long-beta (rides the market, no skill). Answers "alpha or beta?".
+      • `require_block_ci` → the correlation-aware block-bootstrap CI lower bound
+        for mean R must exceed zero, else demoted to INCONCLUSIVE. Because trades
+        are not i.i.d., this is the honest significance test, stricter than PSR.
     """
     s = expectancy_stats(returns)
     n, mean, std, sharpe = s["n"], s["mean_r"], s["std_r"], s["sharpe"]
@@ -376,13 +504,15 @@ def evaluate(returns, n_trials: int = 1, sharpe_estimates=None,
     need_n = min_samples_for_edge(min_detectable_r, std if std > 0 else 1.0)
     # multi-trial → judge on the DEFLATED probability; single trial → PSR.
     prob = dsr if eff_trials > 1 else psr
+    n_eff = effective_sample_size(returns)
 
     def _pack(verdict: str, insight: str) -> HypothesisResult:
+        st = dict(s); st["n_eff"] = round(n_eff, 2)
         return HypothesisResult(verdict=verdict, n=n, mean_r=round(mean, 4),
                                 sharpe=round(sharpe, 4), p_value=s["p_value"],
                                 psr=round(psr, 4), dsr=round(dsr, 4),
                                 n_trials=eff_trials, min_n_needed=need_n,
-                                insight=insight, stats=s)
+                                insight=insight, stats=st)
 
     if n < min_n:
         return _pack("UNDERPOWERED",
@@ -390,6 +520,21 @@ def evaluate(returns, n_trials: int = 1, sharpe_estimates=None,
                      f"any claim (a great-looking edge on a handful of trades is "
                      f"usually luck). Keep tracking.")
     if mean > 0 and prob >= promote_p:
+        # ── the two optional institutional gates, applied only at the PROMOTE edge
+        if benchmark_returns is not None:
+            ab = alpha_beta(returns, benchmark_returns)
+            if not ab["beats_benchmark"]:
+                return _pack("REJECT",
+                             f"Looks profitable ({mean:+.2f}R) but it's BETA, not "
+                             f"alpha: α={ab['alpha']:+.2f} (p={ab['p_alpha']:.2f}), "
+                             f"β={ab['beta']:.2f}. No skill vs the benchmark.")
+        if require_block_ci:
+            ci = block_bootstrap_mean_ci(returns, seed=block_ci_seed)
+            if not ci["excludes_zero"]:
+                return _pack("INCONCLUSIVE",
+                             f"Positive ({mean:+.2f}R) but once trade correlation is "
+                             f"accounted for (N_eff≈{n_eff:.0f} of {n}) the CI lower "
+                             f"bound is {ci['ci_lower']:+.2f}R — not clear of zero.")
         tail = (f" (deflated for {eff_trials} trials)" if eff_trials > 1 else "")
         return _pack("PROMOTE",
                      f"Real edge: {mean:+.2f}R over {n} trades, "

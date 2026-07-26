@@ -135,7 +135,9 @@ class TestEvidenceLevels:
         assert EL.promote(cap, weak)["promoted"] is False
         strong = {"data_clean": True, "dsr": 0.97, "reality_check_p": 0.01,
                   "fdr_corrected": True, "power": 0.85, "net_expectancy_r": 0.22,
-                  "profit_factor": 1.5, "regimes_positive": 2, "source": "harness"}
+                  "profit_factor": 1.5, "regimes_positive": 2,
+                  "beats_benchmark": True, "block_ci_lower": 0.08,
+                  "source": "harness"}
         assert EL.promote(cap, strong)["promoted"] is True
         assert EL.level_of(cap)[0] == EL.E3
         EL.demote(cap, EL.E0, "reset for other tests")       # withdraw is always allowed
