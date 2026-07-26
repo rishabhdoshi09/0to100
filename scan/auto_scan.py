@@ -779,6 +779,53 @@ def _maybe_push_weekly_coach() -> None:
         log.debug("weekly_coach_skip", error=str(exc))
 
 
+_lt_run_week: str = ""
+
+
+def _maybe_run_long_term() -> None:
+    """💎 Weekly (Sat off-hours): screen the market for LONG-TERM picks, alert new
+    ones on Telegram, and REVISE (exit-alert) any held pick whose thesis broke.
+    Long-term calls move slowly — once a week is right. Needs the bhavcopy store.
+    Fail-open."""
+    global _lt_run_week
+    now = datetime.now(IST)
+    week = now.strftime("%Y-W%W")
+    if now.weekday() != 5 or _lt_run_week == week:      # Saturday, once/week
+        return
+    try:
+        from data.bhavcopy_store import is_ready
+        if not is_ready() or _is_market_hours():
+            return
+        from scan.long_term import scan_long_term
+        from core.long_term_tracker import record_picks, review_picks
+        from alerts.telegram_alerts import AlertEngine
+        engine = AlertEngine()
+        # 1) revise held picks first (exit-alerts matter most)
+        revisions = review_picks()
+        # 2) fresh picks
+        picks = scan_long_term(top=12)
+        added = record_picks(picks)
+        _lt_run_week = week
+        if not engine.is_configured():
+            return
+        if revisions:
+            lines = ["🔄 <b>Long-term picks — REVISED (exit)</b>", ""]
+            for r in revisions[:8]:
+                lines.append(f"• <b>{r['symbol']}</b> — {r['reason']} "
+                             f"(return {r['return_pct']:+.1f}%)")
+            engine.send("\n".join(lines))
+        if added:
+            lines = ["💎 <b>New Long-Term Picks</b> (hold for months, not days)", ""]
+            for p in added[:10]:
+                lines.append(f"• <b>{p['symbol']}</b> @ ₹{(p.get('price') or 0):,.0f} "
+                             f"· score {p.get('score', 0):.0f}\n  {p.get('thesis', '')}")
+            lines.append("\nInhe hum track karenge — thesis toote toh exit-alert milega.")
+            engine.send("\n".join(lines))
+        log.info("long_term_run", new=len(added), revised=len(revisions))
+    except Exception as exc:
+        log.debug("long_term_skip", error=str(exc))
+
+
 def _worker() -> None:
     while True:
         if is_auto_enabled():
@@ -806,6 +853,7 @@ def _worker() -> None:
             _maybe_update_outcomes()
             _maybe_run_nightly_backtest()
             _maybe_push_weekly_coach()
+            _maybe_run_long_term()            # 💎 weekly long-term picks + revision
             # 🐕 dead-daemon sweep (throttled) + 🗄️ nightly evidence backup
             try:
                 from core.watchdog import check as _wd_check

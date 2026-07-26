@@ -937,8 +937,30 @@ with st.sidebar:
         unsafe_allow_html=True,
     )
 
-    # ── Search bar (NSE + US) ────────────────────────────────────────────
-    _search = st.text_input("Search", placeholder="🔍 NSE ya US stock (AAPL, RELIANCE)…", key="qs", label_visibility="collapsed")
+    # ── Search bar (NSE + US) — Kite-style type-to-suggest ───────────────
+    @st.cache_data(ttl=3600, show_spinner=False)
+    def _search_suggestions() -> list[str]:
+        """Symbol — Company Name options for the search dropdown (NSE + US)."""
+        opts: list[str] = []
+        try:
+            from data.nse_universe import get_nse_universe_with_names
+            opts += [f"{s} — {n}" for s, n in
+                     sorted(get_nse_universe_with_names().items())]
+        except Exception:
+            pass
+        try:
+            from data.us_universe import get_us_universe
+            opts += [f"{s} — US" for s in sorted(get_us_universe())]
+        except Exception:
+            pass
+        return opts
+
+    _pick = st.selectbox(
+        "Search", options=[""] + _search_suggestions(), index=0,
+        format_func=lambda x: x if x else "🔍 Stock dhundo (RELIANCE, TCS, AAPL…)",
+        key="qs_pick", label_visibility="collapsed",
+        help="Type karo — naam ya symbol se stock suggest honge, Zerodha Kite jaisa.")
+    _search = _pick.split(" — ")[0].strip() if _pick else ""
 
     # ── Index-wise US search — S&P 500 · NASDAQ-100 · Dow 30 ─────────────
     # Flat ~5,000-name listing ki jagah wahi index jismein trader sochta hai.
@@ -1699,7 +1721,7 @@ elif _page in ("Terminal", "Analyse"):
 # ══════════════════════════════════════════════════════════════════════════════
 elif _page == "Research":
     (_r0, _r1, _r2, _r3, _r4, _r5, _r6, _r7, _r8, _r9, _r10, _r11, _r12, _r13,
-     _r14) = st.tabs([
+     _r14, _r15) = st.tabs([
         "📰 Market Brief",
         "📈 Charts",
         "📊 Fundamentals",
@@ -1715,6 +1737,7 @@ elif _page == "Research":
         "🎯 Conviction Tracker",
         "📰 Patterns & News",
         "🛰️ Research OS",
+        "💎 Long-Term",
     ])
 
     # ── 🛰️ Research OS — internal mission control ──────────────────────────
@@ -1724,6 +1747,14 @@ elif _page == "Research":
             render_research_dashboard()
         except Exception as _exc:
             st.error(f"Research OS unavailable: {_exc}")
+
+    # ── 💎 Long-Term Picks — durable compounders + weekly Telegram alerts ──
+    with _r15:
+        try:
+            from ui.long_term_page import render_long_term
+            render_long_term()
+        except Exception as _exc:
+            st.error(f"Long-Term Picks unavailable: {_exc}")
 
     # ── Market Brief ──────────────────────────────────────────────────────
     with _r0:
