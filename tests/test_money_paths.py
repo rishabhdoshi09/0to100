@@ -2161,6 +2161,28 @@ class TestDecisionJournal:
         c.close()
         assert n == 2            # dedup per symbol×day×decision; ZERO skipped
 
+    def test_scanner_logs_decisions_for_calibration(self, tmp_path, monkeypatch):
+        # the scan path must journal verdicts + predictions so calibration works
+        # for MANUAL users too (not only when autopilot is armed)
+        dj = self._setup(tmp_path, monkeypatch)
+        import scan.auto_scan as a
+        serialized = [
+            {"symbol": "AAA", "verdict": "BUY", "entry": 100, "stop": 96,
+             "score": 80, "ev_pct": 1.2, "p_win": 64.0, "confidence": "HIGH",
+             "reasons": ["breakout"]},
+            {"symbol": "BBB", "verdict": "WATCH", "entry": 50, "stop": 48,
+             "score": 40, "reasons": ["too extended"]},
+            {"symbol": "CCC", "verdict": "WATCH", "entry": 0, "reasons": []},
+        ]
+        a._log_decisions_for_calibration(serialized)
+        c = dj._conn()
+        got = {r["symbol"]: (r["decision"], r["p_win"]) for r in
+               c.execute("SELECT symbol, decision, p_win FROM decisions")}
+        c.close()
+        assert got["AAA"] == ("TAKEN", 64.0)        # buy, with its prediction
+        assert got["BBB"][0] == "REJECTED"          # watch → rejected decision
+        assert "CCC" not in got                     # no entry price → no claim
+
     def test_outcomes_and_gate_audit(self, tmp_path, monkeypatch):
         dj = self._setup(tmp_path, monkeypatch)
         dj.log_decision("HAL", "TAKEN", "", "scanner", 4500, 4300, 80,

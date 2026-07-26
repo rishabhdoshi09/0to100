@@ -298,6 +298,30 @@ def _log_buys_for_tracking(results) -> None:
         log.debug("auto_scan_tracking_skip", error=str(exc))
 
 
+def _log_decisions_for_calibration(serialized) -> None:
+    """📓 Journal EVERY scan verdict with its prediction — TAKEN (a buy) or
+    REJECTED (a watch) — so Confidence Accuracy (calibration) and gate attribution
+    get data for MANUAL users too, not only when autopilot is running. Deduped per
+    symbol×day×decision by the journal; outcomes settle 5 days later. Fail-open."""
+    try:
+        from core.decision_journal import log_decision
+        for r in serialized:
+            entry = float(r.get("entry") or 0)
+            if entry <= 0:
+                continue                         # no reference price → no claim
+            verdict = r.get("verdict", "")
+            decision = "TAKEN" if verdict in ("BUY", "STRONG BUY") else "REJECTED"
+            reason = "" if decision == "TAKEN" else (
+                (r.get("reasons") or [""])[0][:120])
+            log_decision(r["symbol"], decision, reason=reason, source="scanner",
+                         entry_ref=entry, stop_ref=float(r.get("stop") or 0),
+                         score=float(r.get("score") or 0),
+                         ev_pct=r.get("ev_pct"), p_win=r.get("p_win"),
+                         confidence=r.get("confidence"))
+    except Exception as exc:
+        log.debug("decision_log_skip", error=str(exc))
+
+
 def _log_non_events_for_learning(results) -> None:
     """🕳️ Freeze the WATCH / rejected names as structured non-event observations
     in the Feature Platform — the control group that turns the P&L into a
@@ -443,6 +467,9 @@ def _scan_once_locked(universe: Optional[list[str]] = None, progress=None) -> No
             tag_ev(serialized)
         except Exception as exc:
             log.debug("ev_tag_skip", error=str(exc))
+        # 📓 Journal each verdict + its prediction (now that p_win/ev are on the
+        # results) so calibration & gate-attribution learn from manual use too.
+        _log_decisions_for_calibration(serialized)
         # 📊 Breadth — poore bulk cache se (data is gold: already computed).
         # Index ke peechhe ki sachchai — Brain iska evidence stream padhta hai.
         try:
