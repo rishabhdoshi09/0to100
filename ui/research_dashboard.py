@@ -39,6 +39,42 @@ def render_research_dashboard() -> None:
     dh = o.get("data_health", {})
     debt = o.get("research_debt", {})
 
+    # ── 🛡️ Governance Sentinel — the safety authority + human kill-switch ──────
+    try:
+        from core import governance as _G
+        g = _G.assess(force=True)
+        _c = {"NORMAL": "#00d4a0", "DE_RISK": "#f59e0b", "HALT": "#ff4b4b"}[g["state"]]
+        gc1, gc2 = st.columns([3, 1])
+        with gc1:
+            st.markdown(
+                f"#### 🛡️ Governance: <span style='color:{_c}'>{g['state']}</span>",
+                unsafe_allow_html=True)
+            if g["reasons"]:
+                for r in g["reasons"]:
+                    st.caption(f"• {r}")
+            else:
+                st.caption("All clear — no kill conditions or rollback triggers active.")
+        with gc2:
+            _halted = bool(_G._read_state().get("manual_halt"))
+            if _halted:
+                if st.button("▶️ Resume trading", key="gov_resume", width="stretch"):
+                    _G.set_manual_halt(False); _G._cache.update(ts=0.0, data=None)
+                    st.rerun()
+            else:
+                if st.button("🛑 KILL SWITCH", key="gov_kill", type="primary",
+                             width="stretch", help="Halt all new LIVE orders now."):
+                    _G.set_manual_halt(True); _G._cache.update(ts=0.0, data=None)
+                    st.rerun()
+        with st.expander("🎚️ Evidence levels — what the market has actually PROVEN"):
+            from core.evidence_levels import report as _elr, headline as _elh
+            st.caption(_elh())
+            st.dataframe([{"Capability": r["capability"], "Level": r["label"],
+                           "Basis": r["basis"]} for r in _elr()],
+                        use_container_width=True, hide_index=True)
+        st.divider()
+    except Exception as _exc:
+        st.caption(f"Governance panel unavailable: {_exc}")
+
     # ── 📈 Knowledge Growth (the metric that matters most: is it LEARNING?) ────
     st.markdown("#### 📈 Knowledge Growth — *is the Research OS learning?*")
     _kpi_row(st, [
