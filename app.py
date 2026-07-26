@@ -1117,9 +1117,12 @@ with st.sidebar:
                     "📊 Abhi koi valid setup nahi (conviction rule ke hisaab se)")
 
         if st.sidebar.button(
-            "→ Open in Terminal",
+            f"🔎 Research {_qs} →",
             key="qs_open_terminal",
+            type="primary",
             width="stretch",
+            help="Poori research kholo — setup, why, similar history, strategy "
+                 "health, technicals, fundamentals, market context — sab ek jagah.",
         ):
             st.session_state["sidebar_nav"] = "Terminal"
             st.session_state["terminal_symbol"] = _qs
@@ -1492,6 +1495,18 @@ elif _page in ("Terminal", "Analyse"):
     with _tb_c4:
         _run_analysis = st.button("🤖 Analyse", key="terminal_run_analysis",
                                   width='stretch')
+
+    # ── 🔎 Full Research Report — everything the system knows about this stock,
+    #    pulled from every resource (setup · why · similar history · strategy
+    #    health · technicals · fundamentals · context) in one place. ─────────
+    _from_search = st.session_state.get("terminal_symbol") == _chart_sym
+    with st.expander(f"🔎 Full Research Report — {_chart_sym}",
+                     expanded=bool(_from_search)):
+        try:
+            from ui.stock_research import render_stock_research
+            render_stock_research(_chart_sym, is_us=False)
+        except Exception as _exc:
+            st.caption(f"Research report unavailable: {_exc}")
 
     # ── Two-panel layout: chart (65%) + signal panel (35%) ───────────────
     col_chart, col_signal = st.columns([65, 35])
