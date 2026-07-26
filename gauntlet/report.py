@@ -17,9 +17,23 @@ _DIR = Path(__file__).resolve().parent.parent / "logs" / "gauntlet"
 
 # The honest caveats that apply to EVERY historical gauntlet result. These are not
 # boilerplate — each is a real reason a committee should discount the number.
+def _cost_assumption() -> str:
+    """State the cost assumption from the LIVE cost model, so an env-override of
+    the (tunable) cost constants can never make the report misstate them."""
+    try:
+        from core import costs as _c
+        cnc = _c._BASE_PCT.get("CNC", 0.22)
+        return (f"Costs are MODELED, not measured: ~{cnc:.2f}% delivery + "
+                f"{_c._SLIPPAGE_PCT:.2f}% slippage round-trip "
+                f"({_c.round_trip_cost_pct('CNC'):.2f}% total). Slippage is an "
+                f"assumption (E0 evidence) until reconciled against real fills.")
+    except Exception:
+        return ("Costs are MODELED, not measured; slippage is an assumption "
+                "(E0 evidence) until reconciled against real fills.")
+
+
 ASSUMPTIONS = [
-    "Costs are MODELED, not measured: ~0.22% delivery + 0.10% slippage round-trip. "
-    "Slippage is an assumption (E0 evidence) until reconciled against real fills.",
+    _cost_assumption(),
     "Breakout fills are simulated AT the pivot; real breakouts can gap through it, "
     "so realised entries may be worse than modeled (optimistic bias).",
     "Benchmark alpha is measured vs a single index (Nifty). Factor-neutral alpha "

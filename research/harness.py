@@ -322,6 +322,18 @@ def purged_kfold_indices(n: int, k: int = 5, embargo=0,
 # Benchmark-relative inference — is it ALPHA, or just BETA (market exposure)?
 # ══════════════════════════════════════════════════════════════════════════════
 
+def _alpha_t_p(alpha: float, se_alpha: float, dof: int) -> tuple:
+    """One-sided inference on a regression intercept α (H0: α ≤ 0). Shared by the
+    single-factor and multi-factor attributions so the t/p/`beats_benchmark`
+    convention lives in exactly one place. Returns (t, p, beats)."""
+    if se_alpha > 0:
+        t = alpha / se_alpha
+        p = float(_student_t.sf(t, df=dof))
+    else:
+        t, p = 0.0, (0.0 if alpha > 0 else 1.0)
+    return t, p, bool(alpha > 0 and p < _ALPHA)
+
+
 def alpha_beta(strategy_returns, benchmark_returns) -> dict:
     """Decompose a strategy's per-trade returns into ALPHA (skill) and BETA
     (market exposure) via OLS: r_strat = α + β·r_bench + ε, where the two arrays
@@ -355,18 +367,14 @@ def alpha_beta(strategy_returns, benchmark_returns) -> dict:
     sse = float(np.sum(resid ** 2))
     s_err = math.sqrt(sse / dof) if dof > 0 else 0.0
     se_alpha = s_err * math.sqrt(1.0 / n + (x.mean() ** 2) / sxx) if s_err > 0 else 0.0
-    if se_alpha > 0:
-        t_alpha = float(alpha) / se_alpha
-        p_alpha = float(_student_t.sf(t_alpha, df=dof))     # one-sided H0: α ≤ 0
-    else:
-        t_alpha, p_alpha = 0.0, (0.0 if alpha > 0 else 1.0)
+    t_alpha, p_alpha, beats = _alpha_t_p(float(alpha), se_alpha, dof)
     resid_sd = float(resid.std(ddof=1)) if n > 1 else 0.0
     info_ratio = float(alpha) / resid_sd if resid_sd > 0 else 0.0
     corr = float(np.corrcoef(x, y)[0, 1]) if x.std() > 0 and y.std() > 0 else 0.0
     return {"n": n, "alpha": float(alpha), "beta": float(beta),
             "se_alpha": float(se_alpha), "t_alpha": float(t_alpha),
             "p_alpha": p_alpha, "corr": corr, "info_ratio": info_ratio,
-            "beats_benchmark": bool(alpha > 0 and p_alpha < _ALPHA)}
+            "beats_benchmark": beats}
 
 
 def factor_attribution(strategy_returns, factors) -> dict:
@@ -424,17 +432,12 @@ def factor_attribution(strategy_returns, factors) -> dict:
     se_alpha = math.sqrt(sigma2 * diag[0]) if sigma2 * diag[0] > 0 else 0.0
     alpha = float(coef[0])
     betas = {names[i]: float(coef[i + 1]) for i in range(k)}
-    if se_alpha > 0:
-        t_alpha = alpha / se_alpha
-        p_alpha = float(_student_t.sf(t_alpha, df=dof))
-    else:
-        t_alpha, p_alpha = 0.0, (0.0 if alpha > 0 else 1.0)
+    t_alpha, p_alpha, beats = _alpha_t_p(alpha, se_alpha, dof)
     ss_tot = float(np.sum((y - y.mean()) ** 2))
     r2 = 1.0 - sse / ss_tot if ss_tot > 0 else 0.0
     return {"n": n, "alpha": alpha, "betas": betas, "se_alpha": float(se_alpha),
             "t_alpha": float(t_alpha), "p_alpha": p_alpha,
-            "r_squared": float(r2),
-            "beats_benchmark": bool(alpha > 0 and p_alpha < _ALPHA)}
+            "r_squared": float(r2), "beats_benchmark": beats}
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -573,9 +576,24 @@ def evaluate(returns, n_trials: int = 1, sharpe_estimates=None,
     # multi-trial → judge on the DEFLATED probability; single trial → PSR.
     prob = dsr if eff_trials > 1 else psr
     n_eff = effective_sample_size(returns)
+    # Compute the optional-gate artifacts ONCE (a dict/2-D of factors → factor-
+    # neutral alpha; a 1-D array → the single-index case). They are BOTH the gate
+    # inputs and exposed in `stats`, so a caller never recomputes them and the
+    # reported CI is exactly the one the gate used (no independent RNG draw).
+    _multi = benchmark_returns is not None and (
+        isinstance(benchmark_returns, dict) or np.asarray(benchmark_returns).ndim == 2)
+    _ab = None if benchmark_returns is None else (
+        factor_attribution(returns, benchmark_returns) if _multi
+        else alpha_beta(returns, benchmark_returns))
+    _ci = block_bootstrap_mean_ci(returns, seed=block_ci_seed) \
+        if (require_block_ci and n >= 2) else None
 
     def _pack(verdict: str, insight: str) -> HypothesisResult:
         st = dict(s); st["n_eff"] = round(n_eff, 2)
+        if _ab is not None:
+            st["alpha_beta"] = _ab
+        if _ci is not None:
+            st["block_ci"] = _ci
         return HypothesisResult(verdict=verdict, n=n, mean_r=round(mean, 4),
                                 sharpe=round(sharpe, 4), p_value=s["p_value"],
                                 psr=round(psr, 4), dsr=round(dsr, 4),
@@ -589,27 +607,19 @@ def evaluate(returns, n_trials: int = 1, sharpe_estimates=None,
                      f"usually luck). Keep tracking.")
     if mean > 0 and prob >= promote_p:
         # ── the two optional institutional gates, applied only at the PROMOTE edge
-        if benchmark_returns is not None:
-            # a dict/2-D of factors → factor-neutral alpha; a 1-D array → the
-            # single-index special case.
-            multi = isinstance(benchmark_returns, dict) or (
-                np.asarray(benchmark_returns).ndim == 2)
-            ab = (factor_attribution(returns, benchmark_returns) if multi
-                  else alpha_beta(returns, benchmark_returns))
-            if not ab["beats_benchmark"]:
-                what = ("known factor exposures" if multi else "the benchmark")
-                return _pack("REJECT",
-                             f"Looks profitable ({mean:+.2f}R) but it's exposure, "
-                             f"not alpha: α={ab['alpha']:+.2f} "
-                             f"(p={ab['p_alpha']:.2f}) after controlling for "
-                             f"{what}. No skill beyond known exposures.")
-        if require_block_ci:
-            ci = block_bootstrap_mean_ci(returns, seed=block_ci_seed)
-            if not ci["excludes_zero"]:
-                return _pack("INCONCLUSIVE",
-                             f"Positive ({mean:+.2f}R) but once trade correlation is "
-                             f"accounted for (N_eff≈{n_eff:.0f} of {n}) the CI lower "
-                             f"bound is {ci['ci_lower']:+.2f}R — not clear of zero.")
+        if _ab is not None and not _ab["beats_benchmark"]:
+            what = ("known factor exposures" if _multi else "the benchmark")
+            return _pack("REJECT",
+                         f"Looks profitable ({mean:+.2f}R) but it's exposure, "
+                         f"not alpha: α={_ab['alpha']:+.2f} "
+                         f"(p={_ab['p_alpha']:.2f}) after controlling for "
+                         f"{what}. No skill beyond known exposures.")
+        if require_block_ci and (_ci is None or not _ci["excludes_zero"]):
+            _lo = _ci["ci_lower"] if _ci else 0.0
+            return _pack("INCONCLUSIVE",
+                         f"Positive ({mean:+.2f}R) but once trade correlation is "
+                         f"accounted for (N_eff≈{n_eff:.0f} of {n}) the CI lower "
+                         f"bound is {_lo:+.2f}R — not clear of zero.")
         tail = (f" (deflated for {eff_trials} trials)" if eff_trials > 1 else "")
         return _pack("PROMOTE",
                      f"Real edge: {mean:+.2f}R over {n} trades, "

@@ -113,11 +113,12 @@ def _simulate_timed(entry: float, stop: float, target: float,
 
 
 def _emit_trade_record(on_trade, df, t, sym, r, outcome, gross_r, net_r,
-                       cost_r, e_off, x_off, regime, horizon):
+                       cost_r, e_off, x_off, regime, calib_version):
     """Assemble the immutable core of one ledger row and hand it to the sink. Only
     the fields KNOWN at the trade level are set here (dates, prices, R, cost,
     regime, signals); the gauntlet's sink enriches with benchmark/factor returns
-    over [entry_dt, exit_dt] so nothing is recomputed downstream."""
+    over [entry_dt, exit_dt] so nothing is recomputed downstream. `calib_version`
+    is hashed once per run and passed in (not recomputed per trade)."""
     risk = r.entry - r.stop
     entry_dt = df.index[t + e_off] if e_off >= 0 else df.index[min(t, len(df) - 1)]
     exit_dt = df.index[t + x_off] if x_off >= 0 else entry_dt
@@ -141,7 +142,7 @@ def _emit_trade_record(on_trade, df, t, sym, r, outcome, gross_r, net_r,
         "exit_reason": outcome,
         "regime": regime or "UNKNOWN",
         "confidence": float(getattr(r, "confidence", 0.0) or 0.0),
-        "calibration_version": _calibration_version(),
+        "calibration_version": calib_version,
     })
 
 
@@ -267,6 +268,8 @@ def _run_backtest_inner(sc, stats, symbols, sample_step, lookback_sessions,
     from data.bhavcopy_store import get_ohlcv
 
     regime_series = _nifty_regime_series()      # None → regime split skipped
+    # the calibration is frozen for the whole run — hash it ONCE, not per trade
+    _calib_version = _calibration_version() if on_trade is not None else ""
     tgt_stats: dict[str, dict] = {}             # target label → aggregate
 
     for si, sym in enumerate(symbols):
@@ -315,7 +318,7 @@ def _run_backtest_inner(sc, stats, symbols, sample_step, lookback_sessions,
                 try:
                     _emit_trade_record(on_trade, df, t, sym, r, outcome,
                                        gross_r, r_mult, _cost_r, _e_off, _x_off,
-                                       regime, horizon)
+                                       regime, _calib_version)
                 except Exception:
                     pass          # ledger emission must never break the backtest
 

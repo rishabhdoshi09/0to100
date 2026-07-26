@@ -312,7 +312,8 @@ def get_ohlcv(symbol: str) -> Optional[pd.DataFrame]:
     if events:
         try:
             from data.corporate_actions import adjust_frame
-            return adjust_frame(df, events)
+            # get_ohlcv already owns a private copy → adjust in place, no re-copy
+            return adjust_frame(df, events, copy=False)
         except Exception:
             return df               # fail-open: raw beats a crash
     return df

@@ -21,7 +21,6 @@ from dataclasses import dataclass, field, asdict
 @dataclass(frozen=True)
 class TradeRecord:
     symbol: str
-    strategy: str
     signal_id: str
     signals: tuple
     entry_datetime: str
@@ -99,7 +98,7 @@ class LedgerBuilder:
             facs = {name: _window_return(s, e_dt, x_dt)
                     for name, s in factor_closes.items()}
             out.append(TradeRecord(
-                symbol=r["symbol"], strategy=r.get("signal_id", ""),
+                symbol=r["symbol"],
                 signal_id=r.get("signal_id", ""), signals=tuple(r.get("signals", ())),
                 entry_datetime=str(e_dt), exit_datetime=str(x_dt),
                 entry_price=r["entry_price"], exit_price=r["exit_price"],

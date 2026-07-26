@@ -48,7 +48,7 @@ def _rec(strategy, net_R, bench_pct, regime="BULL", i=0):
     import pandas as pd
     dt = pd.Timestamp("2023-01-01") + pd.Timedelta(days=3 * i)
     return L.TradeRecord(
-        symbol=f"S{i%20}", strategy=strategy, signal_id=strategy, signals=(strategy,),
+        symbol=f"S{i%20}", signal_id=strategy, signals=(strategy,),
         entry_datetime=str(dt), exit_datetime=str(dt + pd.Timedelta(days=5)),
         entry_price=100.0, exit_price=100.0 + net_R * 4.0, holding_period=5,
         stop_price=96.0, target_price=108.0, gross_R=net_R + 0.02, net_R=net_R,

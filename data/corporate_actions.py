@@ -73,26 +73,29 @@ def load_events(path=None) -> dict:
     return out
 
 
-def adjust_frame(df, events):
-    """Back-adjust one symbol's OHLCV frame for its corporate actions. PURE.
+def adjust_frame(df, events, copy: bool = True):
+    """Back-adjust one symbol's OHLCV frame for its corporate actions. PURE by
+    default.
 
     `df` is datetime-indexed with any of open/high/low/close/volume (deliv_per, a
     percentage, is left untouched). `events` is that symbol's event list. Bars
     STRICTLY BEFORE an ex-date have prices divided by the event's factor and
     volume multiplied by it, applied cumulatively across all events. Returns a new
     frame; the input is not mutated. Empty/absent events → the frame is returned
-    unchanged (a copy)."""
+    unchanged (a copy). `copy=False` mutates `df` in place — for callers that
+    already own a private copy (e.g. bhavcopy_store.get_ohlcv) and want to skip a
+    redundant second copy."""
     if df is None or getattr(df, "empty", True) or not events:
-        return df.copy() if df is not None else df
+        return (df.copy() if copy else df) if df is not None else df
     import numpy as np
     import pandas as pd
-    out = df.copy()
+    out = df.copy() if copy else df
     idx = pd.DatetimeIndex(out.index)
-    # divisor[i] = product of factors of every event whose ex_date is AFTER bar i
+    # divisor[i] = product of factors of every event whose ex_date is AFTER bar i.
+    # A DatetimeIndex comparison already yields a plain ndarray mask.
     divisor = np.ones(len(out), dtype=float)
     for e in events:
-        before = idx < e["ex_date"]
-        divisor[before.to_numpy() if hasattr(before, "to_numpy") else before] *= e["factor"]
+        divisor[idx < e["ex_date"]] *= e["factor"]
     price_cols = [c for c in ("open", "high", "low", "close") if c in out.columns]
     for c in price_cols:
         out[c] = out[c].to_numpy(dtype=float) / divisor
