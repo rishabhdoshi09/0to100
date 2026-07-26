@@ -359,8 +359,16 @@ def _trade_ticket_body(s: dict) -> None:
     if pr["verdict"] == "DANGER":
         st.error("🔴 Portfolio DANGER zone mein hai — yeh trade lene se pehle "
                  "warnings padho. Button phir bhi neeche hai, decision tumhara.")
+    # Real-money orders need an explicit confirm — a single mis-click should never
+    # send real capital to the exchange. Paper trades stay one click.
+    confirmed = True
+    if live_mode:
+        confirmed = st.checkbox(
+            f"✅ Confirm: yeh ASLI paisa hai — {int(qty)} × {sym}, "
+            f"max loss ₹{max_loss:,.0f}. Real order Zerodha jayega.",
+            key=f"tt_confirm_{sym}")
     if st.button(label, key=f"tt_go_{sym}", type="primary",
-                 width="stretch"):
+                 width="stretch", disabled=(live_mode and not confirmed)):
         res = place_trade(symbol=sym, qty=int(qty), entry_type=entry_type,
                           entry_price=float(eff_entry), stop=float(stop),
                           target=float(target),
@@ -372,6 +380,9 @@ def _trade_ticket_body(s: dict) -> None:
                            + (f" · GTT ID: `{res['gtt_id']}`" if res.get("gtt_id") else ""))
         else:
             st.error(res["message"])
+    if live_mode and not confirmed:
+        st.caption("⬆️ Real order ke liye confirm box tick karo (paper trade "
+                   "hamesha bina confirm ke chalega).")
 
 
 def _open_trade_ticket(s: dict) -> None:
