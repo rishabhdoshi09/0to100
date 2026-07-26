@@ -265,15 +265,57 @@ def build_store(days: int = DEFAULT_DAYS, progress=None) -> int:
     return _full_build(available)
 
 
+# ── Corporate-action adjustment, applied ON READ ─────────────────────────────
+# The on-disk store stays RAW; adjustment happens here so there is no double-
+# adjustment across rebuilds and an updated CA table needs no re-download. When
+# no CA table exists (logs/ca_events.json absent) `_CA_EVENTS` is {} and
+# get_ohlcv returns the raw frame — behaviour is byte-for-byte unchanged.
+_CA_EVENTS: Optional[dict] = None      # None = not yet loaded; {} = none on file
+
+
+def _ca_events() -> dict:
+    global _CA_EVENTS
+    if _CA_EVENTS is None:
+        try:
+            from data.corporate_actions import load_events
+            _CA_EVENTS = load_events()
+        except Exception:
+            _CA_EVENTS = {}
+    return _CA_EVENTS
+
+
+def reload_corporate_actions() -> int:
+    """Re-read the CA table from disk (after it is updated). Returns the number of
+    symbols with at least one event. Cheap — adjustment is on read."""
+    global _CA_EVENTS
+    try:
+        from data.corporate_actions import load_events
+        _CA_EVENTS = load_events()
+    except Exception:
+        _CA_EVENTS = {}
+    return len(_CA_EVENTS)
+
+
 def get_ohlcv(symbol: str) -> Optional[pd.DataFrame]:
     # .copy() must happen INSIDE the lock: nse_live.apply_live_to_store()
     # mutates today's row of this same DataFrame in place (df.loc[...] = )
     # under this same lock during market hours. Copying after releasing the
     # lock could race that in-place write mid-copy — a torn read of
     # today's live-overlaid bar (e.g. new close, stale volume).
+    sym = symbol.upper()
     with _lock:
-        df = _store.get(symbol.upper())
-        return df.copy() if df is not None else None
+        df = _store.get(sym)
+        df = df.copy() if df is not None else None
+    if df is None:
+        return None
+    events = _ca_events().get(sym)
+    if events:
+        try:
+            from data.corporate_actions import adjust_frame
+            return adjust_frame(df, events)
+        except Exception:
+            return df               # fail-open: raw beats a crash
+    return df
 
 
 def store_symbols() -> list[str]:

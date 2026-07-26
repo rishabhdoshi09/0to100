@@ -106,6 +106,114 @@ class TestDataIntegrity:
         assert r["checked"] == 0 and r["ca_mismatch"] is False
 
 
+class TestCorporateActions:
+    """Phase-1 data integrity: back-adjustment must turn a phantom split-gap into
+    a continuous series, and must NEVER invent an adjustment when no table exists."""
+
+    def _bonus_frame(self):
+        import pandas as pd
+        idx = pd.to_datetime(["2024-01-01", "2024-01-02", "2024-01-03",
+                              "2024-01-04", "2024-01-05", "2024-01-06"])
+        # 1:1 bonus ex-date 2024-01-04 → price halves overnight (a phantom −50%)
+        return pd.DataFrame({"open": [100, 101, 102, 51, 52, 53],
+                             "high": [101, 102, 103, 52, 53, 54],
+                             "low":  [99, 100, 101, 50, 51, 52],
+                             "close": [100, 101, 102, 51, 52, 53],
+                             "volume": [1000, 1000, 1000, 2000, 2000, 2000]},
+                            index=idx)
+
+    def test_raw_frame_has_a_phantom_gap(self):
+        from core import data_integrity as DI
+        df = self._bonus_frame()
+        assert len(DI.phantom_gaps(df["close"].to_numpy(dtype=float))) == 1
+
+    def test_adjustment_makes_it_continuous(self):
+        import pandas as pd
+        from data import corporate_actions as CA
+        df = self._bonus_frame()
+        events = [{"ex_date": pd.Timestamp("2024-01-04"), "factor": 2.0,
+                   "type": "bonus"}]
+        adj = CA.adjust_frame(df, events)
+        assert CA.is_continuous(adj) is True                 # gap removed
+        # pre-ex prices halved, volume doubled; post-ex bars untouched
+        assert adj["close"].iloc[2] == pytest.approx(51.0)
+        assert adj["close"].iloc[3] == pytest.approx(51.0)
+        assert adj["volume"].iloc[0] == pytest.approx(2000.0)
+        assert adj["volume"].iloc[5] == pytest.approx(2000.0)
+
+    def test_no_events_is_a_noop_not_a_guess(self):
+        from data import corporate_actions as CA
+        df = self._bonus_frame()
+        same = CA.adjust_frame(df, [])
+        assert same["close"].tolist() == df["close"].tolist()   # unchanged
+
+    def test_load_events_absent_file_is_empty(self, tmp_path):
+        from data import corporate_actions as CA
+        assert CA.load_events(tmp_path / "nope.json") == {}     # no fake table
+
+    def test_load_events_parses_and_drops_junk(self, tmp_path):
+        import json
+        from data import corporate_actions as CA
+        f = tmp_path / "ca.json"
+        f.write_text(json.dumps([
+            {"symbol": "reliance", "ex_date": "2024-01-04", "factor": 2.0, "type": "bonus"},
+            {"symbol": "BADFACTOR", "ex_date": "2024-01-04", "factor": 1.0},   # no-op → dropped
+            {"symbol": "NODATE", "factor": 3.0},                                # junk → dropped
+        ]))
+        ev = CA.load_events(f)
+        assert set(ev) == {"RELIANCE"} and ev["RELIANCE"][0]["factor"] == 2.0
+
+    def test_get_ohlcv_applies_adjustment_end_to_end(self, tmp_path, monkeypatch):
+        import json
+        import pandas as pd
+        from data import bhavcopy_store as BS
+        from data import corporate_actions as CA
+        f = tmp_path / "ca.json"
+        f.write_text(json.dumps([{"symbol": "TESTCO", "ex_date": "2024-01-04",
+                                  "factor": 2.0, "type": "bonus"}]))
+        monkeypatch.setenv("QT_CA_EVENTS_FILE", str(f))
+        monkeypatch.setattr(BS, "_store", {"TESTCO": self._bonus_frame()}, raising=False)
+        BS.reload_corporate_actions()
+        out = BS.get_ohlcv("TESTCO")
+        assert CA.is_continuous(out) is True                 # adjust-on-read worked
+
+    def test_verify_ca_adjustment_fails_closed_without_a_table(self, monkeypatch):
+        from core import data_integrity as DI
+        from data import corporate_actions as CA
+        monkeypatch.setattr(CA, "load_events", lambda *a, **k: {})
+        assert DI.verify_ca_adjustment()["passed"] is False   # no table ⇒ never PASS
+
+
+class TestSurvivorship:
+    """A historical study must see stocks that later delisted; today's survivors
+    alone are biased. And with no history on file, the code must SAY so, not fake."""
+
+    def test_point_in_time_includes_then_delisted_names(self, tmp_path):
+        import json
+        from data import nse_universe as U
+        f = tmp_path / "hist.json"
+        f.write_text(json.dumps([
+            {"symbol": "SURVIVOR", "listed": "2010-01-01"},
+            {"symbol": "DELISTED", "listed": "2010-01-01", "delisted": "2020-06-01"},
+            {"symbol": "FUTURE", "listed": "2023-01-01"},
+        ]))
+        # as of 2018 both SURVIVOR and DELISTED traded; FUTURE not yet listed
+        r = U.point_in_time_universe("2018-01-01", path=f)
+        assert r["survivorship_complete"] is True
+        assert set(r["symbols"]) == {"SURVIVOR", "DELISTED"}
+        # as of 2021 the delisted name is gone and FUTURE (lists 2023) not yet in
+        r2 = U.point_in_time_universe("2021-01-01", path=f)
+        assert set(r2["symbols"]) == {"SURVIVOR"}
+        # as of 2024 SURVIVOR + FUTURE trade, DELISTED stays gone
+        r3 = U.point_in_time_universe("2024-01-01", path=f)
+        assert set(r3["symbols"]) == {"SURVIVOR", "FUTURE"}
+
+    def test_no_history_flags_bias_not_fakes_it(self, tmp_path):
+        from data import nse_universe as U
+        r = U.point_in_time_universe("2020-01-01", path=tmp_path / "nope.json")
+        assert r["survivorship_complete"] is False and "biased" in r["note"]
+
+
 class TestEvidenceLevels:
     def test_alpha_is_e0_infra_is_e2(self):
         assert EL.level_of("Strategy alpha (the edge)")[0] == EL.E0

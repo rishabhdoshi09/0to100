@@ -8,6 +8,7 @@ Returns all actively traded NSE equity stocks from the best available source:
 """
 from __future__ import annotations
 
+import json
 import logging
 from pathlib import Path
 from typing import Dict, List
@@ -430,6 +431,52 @@ def get_nse_universe_with_names() -> Dict[str, str]:
     """Returns {symbol: company_name} dict for all NSE equities."""
     _, names = _load_universe()
     return dict(names)
+
+
+def point_in_time_universe(as_of, path=None) -> dict:
+    """Survivorship-aware membership: the symbols that were TRADEABLE on `as_of`,
+    read from a point-in-time membership table (`logs/universe_history.json`, or
+    QT_UNIVERSE_HISTORY_FILE / `path`). Each row: {symbol, listed, delisted?}.
+
+    A symbol counts if listed ≤ as_of AND (no delisting OR delisted > as_of) — so
+    a stock that was live then delisted is INCLUDED for the dates it traded, which
+    is exactly what removes survivorship bias from a historical study.
+
+    HONEST FALLBACK (invariant #1 — no fake data): when no history file exists we
+    CANNOT reconstruct the past membership, so we return today's survivors with
+    `survivorship_complete=False` and a note. The caller MUST treat that result as
+    biased. The delisted-symbol history has to come from NSE archives / a vendor;
+    this function will not invent it."""
+    import pandas as pd
+    base = Path(__file__).resolve().parent.parent
+    import os as _os
+    p = Path(path) if path else Path(
+        _os.getenv("QT_UNIVERSE_HISTORY_FILE", str(base / "logs" / "universe_history.json")))
+    asof = pd.Timestamp(as_of)
+    if not p.exists():
+        return {"as_of": str(asof.date()), "symbols": get_nse_universe(),
+                "survivorship_complete": False,
+                "note": ("no membership history on file — returning TODAY's "
+                         "survivors; results built on this are survivorship-biased. "
+                         "Supply logs/universe_history.json from NSE archives.")}
+    try:
+        rows = json.loads(p.read_text())
+    except Exception as exc:
+        return {"as_of": str(asof.date()), "symbols": get_nse_universe(),
+                "survivorship_complete": False,
+                "note": f"membership history unreadable ({exc}); using survivors."}
+    live: List[str] = []
+    for r in rows if isinstance(rows, list) else []:
+        try:
+            sym = str(r["symbol"]).strip().upper()
+            listed = pd.Timestamp(r["listed"])
+            delisted = pd.Timestamp(r["delisted"]) if r.get("delisted") else None
+            if listed <= asof and (delisted is None or delisted > asof):
+                live.append(sym)
+        except Exception:
+            continue
+    return {"as_of": str(asof.date()), "symbols": sorted(set(live)),
+            "survivorship_complete": True, "note": ""}
 
 
 def get_nse_universe_by_sector() -> Dict[str, List[str]]:

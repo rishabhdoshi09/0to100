@@ -13,9 +13,11 @@ gap that fabricates stop-hits and signals. This module is the guard:
     scan + a freshness check over the store and hands a verdict to the Governance
     Sentinel (a corporate-action mismatch is a HALT condition).
 
-This does not *fix* corporate actions (that needs an adjusted feed); it *detects*
-the corruption so the system can refuse to trust it — which is the honest first
-step. Fail-open: an error yields "unknown", never a false all-clear.
+Detection lives here; the FIX lives in `data.corporate_actions` (back-adjust from
+a real NSE CA table, applied on read). `verify_ca_adjustment()` closes the loop —
+it re-scans through the adjusted read path and only PASSES when a table is loaded
+and the phantom-gap rate has collapsed to ~0. Fail-open: an error yields
+"unknown", never a false all-clear.
 """
 from __future__ import annotations
 
@@ -75,6 +77,31 @@ def check_symbol(symbol: str) -> dict:
         pass
     return {"symbol": symbol, "ok": len(issues) == 0, "gaps": gaps,
             "stale_days": stale_days, "issues": issues}
+
+
+def verify_ca_adjustment(sample: int = 200) -> dict:
+    """Acceptance test for Phase-1 corporate-action adjustment: read the store
+    THROUGH the adjust-on-read path and confirm the phantom-gap rate has collapsed
+    to ~0. This is what turns 'we applied a CA table' into 'the data is now
+    trustworthy'. Returns {checked, still_flagged, gap_rate, ca_events_loaded,
+    passed}. `passed` requires an events table to actually be loaded AND a
+    post-adjustment gap_rate ≤ 0.2% — an empty table that leaves gaps must FAIL,
+    never green-light un-adjusted data. Fail-open → passed=False."""
+    try:
+        from data.corporate_actions import load_events
+        n_events = len(load_events())
+    except Exception:
+        n_events = 0
+    rep = integrity_report(sample=sample)
+    checked = rep.get("checked", 0)
+    gap_rate = rep.get("gap_rate", 1.0)
+    passed = bool(n_events > 0 and checked > 0 and gap_rate <= 0.002)
+    return {"checked": checked, "still_flagged": rep.get("with_phantom_gaps", 0),
+            "gap_rate": gap_rate, "ca_events_loaded": n_events,
+            "flagged": rep.get("flagged", []), "passed": passed,
+            "note": ("PASS — data continuous after adjustment" if passed else
+                     "FAIL — supply/complete logs/ca_events.json until gap_rate≈0"
+                     if n_events == 0 or gap_rate > 0.002 else "no data to check")}
 
 
 def integrity_report(sample: int = 120) -> dict:
