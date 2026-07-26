@@ -70,7 +70,7 @@ def render_research_dashboard() -> None:
             st.caption(_elh())
             st.dataframe([{"Capability": r["capability"], "Level": r["label"],
                            "Basis": r["basis"]} for r in _elr()],
-                        use_container_width=True, hide_index=True)
+                        width="stretch", hide_index=True)
         st.divider()
     except Exception as _exc:
         st.caption(f"Governance panel unavailable: {_exc}")
@@ -134,7 +134,7 @@ def render_research_dashboard() -> None:
               "Modeled R*": r.get("modeled_avg_r"),
               "Confidence": r["confidence"], "Trend": r["trend"], "n": r["n"]}
              for r in card],
-            use_container_width=True, hide_index=True)
+            width="stretch", hide_index=True)
         st.caption("*Modeled R is counterfactual (hypothetical ATR-stop) — the "
                    "observed Net fwd % is the canonical metric.")
     else:
@@ -159,7 +159,7 @@ def render_research_dashboard() -> None:
     thin = dh.get("thin_features") or []
     if thin:
         st.dataframe([{"Feature": t["feature"], "Fill rate": t["fill_rate"]}
-                      for t in thin], use_container_width=True, hide_index=True)
+                      for t in thin], width="stretch", hide_index=True)
 
     # ── 🧾 Research Debt ──────────────────────────────────────────────────────
     st.markdown("#### 🧾 Research Debt")
@@ -185,7 +185,7 @@ def render_research_dashboard() -> None:
             st.dataframe([{"Belief": b["statement"], "Status": b["status"],
                            "Evidence": b.get("evidence_n"), "EV(R)": b.get("ev_r")}
                           for b in tm["beliefs"]],
-                         use_container_width=True, hide_index=True)
+                         width="stretch", hide_index=True)
 
     # ── 🔬 Evidence Explorer ──────────────────────────────────────────────────
     with st.expander("🔬 Evidence Explorer — trace any object's provenance"):

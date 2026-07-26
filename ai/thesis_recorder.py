@@ -283,7 +283,7 @@ def render_thesis_history(symbol: Optional[str] = None) -> None:
 
     df["Correct?"] = df["Correct?"].apply(_correct_label)
 
-    st.dataframe(df, use_container_width=True, hide_index=True)
+    st.dataframe(df, width="stretch", hide_index=True)
 
     # Show metacognition stats
     stats = get_thesis_accuracy()
