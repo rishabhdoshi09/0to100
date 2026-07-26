@@ -117,7 +117,37 @@ class TestEvidenceLevels:
         assert any("alpha" in r["capability"].lower() for r in rows)
         assert "unproven" in EL.headline()
 
-    def test_promote_raises_level(self):
-        EL.promote("Strategy alpha (the edge)", EL.E3, "survived harness on real data")
-        assert EL.level_of("Strategy alpha (the edge)")[0] == EL.E3
-        EL.promote("Strategy alpha (the edge)", EL.E0, "reset")   # restore for other tests
+    def test_promotion_requires_objective_evidence_no_belief(self):
+        # a capability at E0 cannot jump to E3 on developer say-so; each step is
+        # gated by an OBJECTIVE artifact and only ONE level at a time.
+        cap = "Strategy alpha (the edge)"
+        assert EL.level_of(cap)[0] == EL.E0
+        # empty / hand-wave artifact → refused, with the exact unmet criteria
+        r = EL.promote(cap, {})
+        assert r["promoted"] is False and r["unmet"]         # E0→E1 needs review
+        # E0→E1 only with a review record
+        assert EL.promote(cap, {"reviewed": True})["promoted"] is True
+        # E1→E2 only with passing tests
+        assert EL.promote(cap, {"reviewed": True})["promoted"] is False   # wrong gate
+        assert EL.promote(cap, {"tests_passed": 5, "all_pass": True})["promoted"] is True
+        # E2→E3 needs the FULL historical gauntlet — a partial artifact is refused
+        weak = {"dsr": 0.99, "reality_check_p": 0.01}         # missing power, regimes…
+        assert EL.promote(cap, weak)["promoted"] is False
+        strong = {"data_clean": True, "dsr": 0.97, "reality_check_p": 0.01,
+                  "fdr_corrected": True, "power": 0.85, "net_expectancy_r": 0.22,
+                  "profit_factor": 1.5, "regimes_positive": 2, "source": "harness"}
+        assert EL.promote(cap, strong)["promoted"] is True
+        assert EL.level_of(cap)[0] == EL.E3
+        EL.demote(cap, EL.E0, "reset for other tests")       # withdraw is always allowed
+
+    def test_next_gate_is_transparent(self):
+        g = EL.next_gate("Cost model (values)")              # at E0
+        assert g["next"] == "E1 code-reviewed" and g["requires"]
+
+    def test_demote_is_always_allowed(self):
+        cap = "Execution engine"                             # E2
+        assert EL.level_of(cap)[0] == EL.E2
+        EL.demote(cap, EL.E1, "regression found")
+        assert EL.level_of(cap)[0] == EL.E1
+        EL.promote(cap, {"tests_passed": 1, "all_pass": True})   # restore E2
+        assert EL.level_of(cap)[0] == EL.E2
