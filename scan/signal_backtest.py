@@ -36,6 +36,14 @@ _OUT = Path(__file__).resolve().parent.parent / "logs" / "signal_backtest.json"
 # Env-tunable so it can track a changed autopilot setting.
 _BT_BREAKEVEN_PCT = float(_os.getenv("QT_BT_BREAKEVEN_PCT", "2.0") or 2.0)
 
+# The slippage assumption baked into every ledger row (a MODELED cost, not a
+# measured one — an E0-evidence value, reconciled against real fills once paper
+# trading runs). Recorded per trade so the report can state its assumptions.
+try:
+    from core.costs import _SLIPPAGE_PCT as _SLIPPAGE_NOTE
+except Exception:
+    _SLIPPAGE_NOTE = 0.10
+
 _state = {"running": False, "progress": 0, "total": 0}
 _state_lock = threading.Lock()
 
@@ -58,29 +66,96 @@ def _simulate(entry: float, stop: float, target: float,
     stop, no trail) and systematically understates expectancy — full losses
     are captured while faded winners bleed to a FLAT loss. be_pct=0 keeps the
     original behaviour (used by the target-geometry sweep)."""
+    o, r, _, _ = _simulate_timed(entry, stop, target, fwd_high, fwd_low,
+                                 fwd_close, be_pct)
+    return o, r
+
+
+def _simulate_timed(entry: float, stop: float, target: float,
+                    fwd_high: np.ndarray, fwd_low: np.ndarray,
+                    fwd_close: np.ndarray, be_pct: float = 0.0):
+    """The simulation core, also returning (entry_offset, exit_offset) — the bar
+    indices into the forward window where the trade FILLED and EXITED (exit = the
+    bar of the stop/target/scratch touch, or the last bar for FLAT). `_simulate`
+    delegates here and drops the offsets, so its (outcome, r) contract is
+    byte-identical. The offsets are what the Historical Trade Ledger needs to date
+    each trade and pair a benchmark/factor return over its exact holding window —
+    without them the alpha-vs-beta gate cannot be computed. Offsets are -1 on
+    NO_FILL."""
     risk = entry - stop
     if risk <= 0:
-        return "NO_FILL", 0.0
+        return "NO_FILL", 0.0, -1, -1
     filled = False
+    entry_off = -1
     cur_stop = stop
     be_level = entry * (1 + be_pct / 100) if be_pct > 0 else None
-    for h, l, c in zip(fwd_high, fwd_low, fwd_close):
+    for i, (h, l, c) in enumerate(zip(fwd_high, fwd_low, fwd_close)):
         if not filled:
             if h >= entry:
                 filled = True
+                entry_off = i
             else:
                 continue
         if l <= cur_stop:                         # stop first (gap-conservative)
             # LOSS only if the stop is still below entry; a trailed-to-entry
             # stop that gets tagged is a SCRATCH (0R), not a loss.
-            return ("LOSS", -1.0) if cur_stop < entry else ("SCRATCH", 0.0)
+            if cur_stop < entry:
+                return "LOSS", -1.0, entry_off, i
+            return "SCRATCH", 0.0, entry_off, i
         if h >= target:
-            return "WIN", (target - entry) / risk
+            return "WIN", (target - entry) / risk, entry_off, i
         if be_level is not None and cur_stop < entry and h >= be_level:
             cur_stop = entry                      # arm the breakeven trail
     if filled:
-        return "FLAT", (float(fwd_close[-1]) - entry) / risk
-    return "NO_FILL", 0.0
+        return ("FLAT", (float(fwd_close[-1]) - entry) / risk,
+                entry_off, len(fwd_close) - 1)
+    return "NO_FILL", 0.0, -1, -1
+
+
+def _emit_trade_record(on_trade, df, t, sym, r, outcome, gross_r, net_r,
+                       cost_r, e_off, x_off, regime, horizon):
+    """Assemble the immutable core of one ledger row and hand it to the sink. Only
+    the fields KNOWN at the trade level are set here (dates, prices, R, cost,
+    regime, signals); the gauntlet's sink enriches with benchmark/factor returns
+    over [entry_dt, exit_dt] so nothing is recomputed downstream."""
+    risk = r.entry - r.stop
+    entry_dt = df.index[t + e_off] if e_off >= 0 else df.index[min(t, len(df) - 1)]
+    exit_dt = df.index[t + x_off] if x_off >= 0 else entry_dt
+    exit_price = r.entry + gross_r * risk            # exact for WIN/LOSS/SCRATCH/FLAT
+    sigs = tuple(r.signals) if getattr(r, "signals", None) else ()
+    on_trade({
+        "symbol": sym,
+        "signals": sigs,
+        "signal_id": sigs[0] if sigs else "",
+        "entry_datetime": entry_dt,
+        "exit_datetime": exit_dt,
+        "entry_price": float(r.entry),
+        "exit_price": float(exit_price),
+        "holding_period": int(x_off - e_off + 1) if x_off >= e_off >= 0 else 0,
+        "stop_price": float(r.stop),
+        "target_price": float(r.target),
+        "gross_R": round(float(gross_r), 4),
+        "net_R": round(float(net_r), 4),
+        "costs": round(float(cost_r), 4),
+        "slippage_used": _SLIPPAGE_NOTE,
+        "exit_reason": outcome,
+        "regime": regime or "UNKNOWN",
+        "confidence": float(getattr(r, "confidence", 0.0) or 0.0),
+        "calibration_version": _calibration_version(),
+    })
+
+
+def _calibration_version() -> str:
+    """A short fingerprint of the score-calibration in force — pinned into every
+    ledger row so a result is tied to the exact weights that produced it."""
+    try:
+        from scan.unified_scanner import _load_calibration
+        import hashlib
+        cal = _load_calibration() or {}
+        return hashlib.sha1(json.dumps(cal, sort_keys=True,
+                                       default=str).encode()).hexdigest()[:12]
+    except Exception:
+        return "none"
 
 
 # ── Regime classification — SAME rule for history and today ──────────────────
@@ -158,10 +233,14 @@ def sweep_targets(entry: float, stop: float, fwd_high, fwd_low, fwd_close,
 
 
 def run_backtest(sample_step: int = 5, lookback_sessions: int = 250,
-                 horizon: int = 10, max_symbols: int = 800) -> dict:
+                 horizon: int = 10, max_symbols: int = 800, on_trade=None) -> dict:
     """
     Walk-forward backtest across the bhav store. Returns and persists
     per-signal stats. Needs ≥ (60 + lookback + horizon) sessions of data.
+
+    `on_trade`, when given, is called with a full per-trade record dict for every
+    FILLED trade (the Historical Trade Ledger hook). Default None → the aggregate
+    path is byte-for-byte unchanged; the ledger is opt-in for the gauntlet.
     """
     from data.bhavcopy_store import store_symbols, get_ohlcv
     from scan.unified_scanner import UnifiedScanner
@@ -176,7 +255,7 @@ def run_backtest(sample_step: int = 5, lookback_sessions: int = 250,
     t0 = time.time()
     try:
         return _run_backtest_inner(sc, stats, symbols, sample_step,
-                                   lookback_sessions, horizon, t0)
+                                   lookback_sessions, horizon, t0, on_trade)
     finally:
         # Crash-proof: 'running' can never stick True and freeze the UI button
         with _state_lock:
@@ -184,7 +263,7 @@ def run_backtest(sample_step: int = 5, lookback_sessions: int = 250,
 
 
 def _run_backtest_inner(sc, stats, symbols, sample_step, lookback_sessions,
-                        horizon, t0):
+                        horizon, t0, on_trade=None):
     from data.bhavcopy_store import get_ohlcv
 
     regime_series = _nifty_regime_series()      # None → regime split skipped
@@ -208,12 +287,13 @@ def _run_backtest_inner(sc, stats, symbols, sample_step, lookback_sessions,
             if risk <= 0:
                 continue
             fwd = df.iloc[t:t + horizon]
-            outcome, r_mult = _simulate(r.entry, r.stop, r.target,
-                                        fwd["high"].values, fwd["low"].values,
-                                        fwd["close"].values,
-                                        be_pct=_BT_BREAKEVEN_PCT)
+            outcome, r_mult, _e_off, _x_off = _simulate_timed(
+                r.entry, r.stop, r.target,
+                fwd["high"].values, fwd["low"].values, fwd["close"].values,
+                be_pct=_BT_BREAKEVEN_PCT)
             if outcome == "NO_FILL":
                 continue          # order never triggered — not a trade
+            gross_r = r_mult      # before costs — the ledger keeps both
             # NET of round-trip trading costs — the edge you'd actually keep, not
             # the gross move. Same cost hits the target-geometry sweep below.
             try:
@@ -230,6 +310,14 @@ def _run_backtest_inner(sc, stats, symbols, sample_step, lookback_sessions,
                     regime = str(reg) if isinstance(reg, str) else ""
                 except Exception:
                     regime = ""
+
+            if on_trade is not None:
+                try:
+                    _emit_trade_record(on_trade, df, t, sym, r, outcome,
+                                       gross_r, r_mult, _cost_r, _e_off, _x_off,
+                                       regime, horizon)
+                except Exception:
+                    pass          # ledger emission must never break the backtest
 
             # Target geometry sweep — same fill, +2/+3/+4% targets
             for label, (o2, r2) in sweep_targets(
