@@ -369,6 +369,74 @@ def alpha_beta(strategy_returns, benchmark_returns) -> dict:
             "beats_benchmark": bool(alpha > 0 and p_alpha < _ALPHA)}
 
 
+def factor_attribution(strategy_returns, factors) -> dict:
+    """Multi-factor generalisation of `alpha_beta`. A single index regression can
+    still credit as "alpha" a return that is really a KNOWN systematic tilt —
+    size, value, momentum, low-vol, sector, liquidity. Factor-neutral alpha is a
+    strictly stronger claim: the return that survives AFTER controlling for every
+    supplied exposure.
+
+    `factors` is a dict {name: per-trade factor return} (or a 2-D array, shape
+    (n, k)), each paired with the strategy's per-trade returns. Fits
+    r_strat = α + Σ βᵢ·fᵢ + ε by OLS and one-sided-tests H0: α ≤ 0. Returns α, the
+    per-factor βs, α's se/t/p, R² (how much of the strategy is explained by the
+    factors), and `beats_benchmark` = α>0 & p<α. Degenerate inputs (n < k+2,
+    singular design) return a null result that never passes the gate."""
+    y = np.asarray(strategy_returns, dtype=float)
+    if isinstance(factors, dict):
+        names = list(factors.keys())
+        cols = [np.asarray(factors[k], dtype=float) for k in names]
+    else:
+        F = np.asarray(factors, dtype=float)
+        if F.ndim == 1:
+            F = F.reshape(-1, 1)
+        names = [f"f{i}" for i in range(F.shape[1])]
+        cols = [F[:, i] for i in range(F.shape[1])]
+    m = min([y.size] + [c.size for c in cols]) if cols else y.size
+    y = y[:m]
+    cols = [c[:m] for c in cols]
+    k = len(cols)
+    null = {"n": int(y.size), "alpha": 0.0, "betas": {}, "se_alpha": 0.0,
+            "t_alpha": 0.0, "p_alpha": 1.0, "r_squared": 0.0,
+            "beats_benchmark": False}
+    if k == 0:
+        return null
+    X_raw = np.column_stack(cols)
+    mask = ~(np.isnan(y) | np.isnan(X_raw).any(axis=1))
+    y, X_raw = y[mask], X_raw[mask]
+    n = int(y.size)
+    if n < k + 2:
+        return null
+    X = np.column_stack([np.ones(n), X_raw])          # intercept first
+    xtx = X.T @ X
+    try:
+        xtx_inv = np.linalg.inv(xtx)
+    except np.linalg.LinAlgError:
+        return null                                    # collinear factors
+    coef = xtx_inv @ (X.T @ y)
+    resid = y - X @ coef
+    dof = n - (k + 1)
+    if dof <= 0:
+        return null
+    sse = float(resid @ resid)
+    sigma2 = sse / dof
+    diag = np.diag(xtx_inv)
+    se_alpha = math.sqrt(sigma2 * diag[0]) if sigma2 * diag[0] > 0 else 0.0
+    alpha = float(coef[0])
+    betas = {names[i]: float(coef[i + 1]) for i in range(k)}
+    if se_alpha > 0:
+        t_alpha = alpha / se_alpha
+        p_alpha = float(_student_t.sf(t_alpha, df=dof))
+    else:
+        t_alpha, p_alpha = 0.0, (0.0 if alpha > 0 else 1.0)
+    ss_tot = float(np.sum((y - y.mean()) ** 2))
+    r2 = 1.0 - sse / ss_tot if ss_tot > 0 else 0.0
+    return {"n": n, "alpha": alpha, "betas": betas, "se_alpha": float(se_alpha),
+            "t_alpha": float(t_alpha), "p_alpha": p_alpha,
+            "r_squared": float(r2),
+            "beats_benchmark": bool(alpha > 0 and p_alpha < _ALPHA)}
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # Correlation-adjusted inference — trades are NOT i.i.d.
 # ══════════════════════════════════════════════════════════════════════════════
@@ -522,12 +590,19 @@ def evaluate(returns, n_trials: int = 1, sharpe_estimates=None,
     if mean > 0 and prob >= promote_p:
         # ── the two optional institutional gates, applied only at the PROMOTE edge
         if benchmark_returns is not None:
-            ab = alpha_beta(returns, benchmark_returns)
+            # a dict/2-D of factors → factor-neutral alpha; a 1-D array → the
+            # single-index special case.
+            multi = isinstance(benchmark_returns, dict) or (
+                np.asarray(benchmark_returns).ndim == 2)
+            ab = (factor_attribution(returns, benchmark_returns) if multi
+                  else alpha_beta(returns, benchmark_returns))
             if not ab["beats_benchmark"]:
+                what = ("known factor exposures" if multi else "the benchmark")
                 return _pack("REJECT",
-                             f"Looks profitable ({mean:+.2f}R) but it's BETA, not "
-                             f"alpha: α={ab['alpha']:+.2f} (p={ab['p_alpha']:.2f}), "
-                             f"β={ab['beta']:.2f}. No skill vs the benchmark.")
+                             f"Looks profitable ({mean:+.2f}R) but it's exposure, "
+                             f"not alpha: α={ab['alpha']:+.2f} "
+                             f"(p={ab['p_alpha']:.2f}) after controlling for "
+                             f"{what}. No skill beyond known exposures.")
         if require_block_ci:
             ci = block_bootstrap_mean_ci(returns, seed=block_ci_seed)
             if not ci["excludes_zero"]:

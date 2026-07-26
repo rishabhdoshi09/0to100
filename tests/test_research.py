@@ -248,13 +248,55 @@ class TestBenchmarkRelative:
         bench = rng.normal(0.10, 1.0, 300)
         strat = 1.3 * bench + rng.normal(0.0, 0.2, 300)        # profitable but ALL beta
         r = H.evaluate(strat, benchmark_returns=bench)
-        assert r.verdict == "REJECT" and "beta" in r.insight.lower()
+        assert r.verdict == "REJECT" and "not alpha" in r.insight.lower()
 
     def test_evaluate_keeps_genuine_alpha(self):
         rng = np.random.default_rng(33)
         bench = rng.normal(0.05, 1.0, 300)
         strat = 0.35 + 0.4 * bench + rng.normal(0.0, 0.3, 300)
         assert H.evaluate(strat, benchmark_returns=bench).verdict == "PROMOTE"
+
+
+class TestFactorAttribution:
+    """Factor-neutral alpha is stronger than index-relative alpha: a return fully
+    explained by a KNOWN tilt (momentum, size…) is not skill, even if it beats the
+    index. This is the multi-factor generalisation the committee asked for."""
+
+    def test_single_factor_false_positive_is_caught_by_multifactor(self):
+        rng = np.random.default_rng(50)
+        mkt = rng.normal(0.05, 1.0, 500)
+        mom = rng.normal(0.12, 1.0, 500)                       # a real, separate tilt
+        strat = 1.0 * mom + rng.normal(0.0, 0.3, 500)          # ALL momentum, no skill
+        # vs the index ALONE momentum's positive mean masquerades as alpha…
+        assert H.alpha_beta(strat, mkt)["beats_benchmark"] is True
+        # …but controlling for momentum too, the alpha vanishes.
+        fa = H.factor_attribution(strat, {"mkt": mkt, "mom": mom})
+        assert fa["beats_benchmark"] is False
+        assert abs(fa["alpha"]) < 0.1 and fa["r_squared"] > 0.8
+
+    def test_genuine_factor_neutral_alpha_survives(self):
+        rng = np.random.default_rng(51)
+        mkt = rng.normal(0.05, 1.0, 500)
+        mom = rng.normal(0.10, 1.0, 500)
+        strat = 0.30 + 0.5 * mkt + 0.3 * mom + rng.normal(0.0, 0.3, 500)
+        fa = H.factor_attribution(strat, {"mkt": mkt, "mom": mom})
+        assert fa["beats_benchmark"] is True and fa["alpha"] > 0.15
+        assert set(fa["betas"]) == {"mkt", "mom"}
+
+    def test_collinear_or_tiny_never_passes(self):
+        rng = np.random.default_rng(52)
+        f = rng.normal(0, 1, 40)
+        # perfectly collinear factors → singular design → null, never a pass
+        assert H.factor_attribution(f, {"a": f, "b": 2 * f})["beats_benchmark"] is False
+        assert H.factor_attribution([1.0, 2.0], {"a": [0.1, 0.2]})["beats_benchmark"] is False
+
+    def test_evaluate_rejects_factor_explained_edge(self):
+        rng = np.random.default_rng(53)
+        mkt = rng.normal(0.05, 1.0, 500)
+        mom = rng.normal(0.30, 1.0, 500)                       # strong tilt → base edge
+        strat = 1.0 * mom + rng.normal(0.0, 0.3, 500)          # promotes, but all factor
+        r = H.evaluate(strat, benchmark_returns={"mkt": mkt, "mom": mom})
+        assert r.verdict == "REJECT" and "exposure" in r.insight.lower()
 
 
 class TestCorrelationAdjusted:
