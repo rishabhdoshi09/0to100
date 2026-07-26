@@ -127,6 +127,68 @@ def log_signal(
         pass  # never crash on tracker errors
 
 
+# ── True target-vs-stop first-touch resolution (matches the backtest) ─────────
+# The point-in-time quote method below marks a signal win/loss by ±band at check
+# time — a noisy proxy that over-counts losses (a −1% wiggle looks like a loss
+# even when the real stop is −6%) and caps wins near +2%. When we have a valid
+# target/stop and official bhavcopy bars, we instead judge the outcome the way
+# the trade was actually set up and the way the backtest measures it: did the
+# target hit before the stop? Everything downstream (live-edge, EV, drift,
+# beliefs, calibration) inherits this accuracy.
+_OPEN = object()                         # sentinel: trade still live, leave NULL
+_HORIZON_SESSIONS = int(os.getenv("QT_OUTCOME_HORIZON", "15") or 15)
+
+
+def _resolve_via_path(row) -> object | None:
+    """First-touch outcome from bhavcopy OHLC. Returns (id, price, pct, worked),
+    the _OPEN sentinel (still live within horizon), or None (no target/path data
+    → caller falls back to the point-in-time quote method). Conservative within a
+    bar: the stop is checked before the target (never overstates a win)."""
+    try:
+        entry = float(row["entry_price"] or 0)
+        stop = float(row["stop_price"] or 0)
+        target = float(row["target_price"] or 0)
+    except Exception:
+        return None
+    if entry <= 0 or stop <= 0 or target <= entry or stop >= entry:
+        return None                      # need real geometry to path-resolve
+    try:
+        import pandas as pd
+        from data.bhavcopy_store import get_ohlcv
+        df = get_ohlcv(row["symbol"])
+    except Exception:
+        return None
+    if df is None or df.empty or not {"high", "low", "close"} <= set(df.columns):
+        return None
+    since = df[df.index >= pd.Timestamp(str(row["logged_at"])[:10])]
+    if since.empty:
+        return None
+    highs = since["high"].to_numpy(dtype=float)
+    lows = since["low"].to_numpy(dtype=float)
+    closes = since["close"].to_numpy(dtype=float)
+    n = len(highs)
+    horizon = min(n, _HORIZON_SESSIONS)
+    filled = False
+    for i in range(horizon):
+        if not filled:                   # breakout entries sit above the market
+            if highs[i] >= entry:
+                filled = True
+            else:
+                continue
+        if lows[i] <= stop:              # stop first (pessimistic)
+            return (row["id"], stop, (stop - entry) / entry * 100.0, 0)
+        if highs[i] >= target:
+            return (row["id"], target, (target - entry) / entry * 100.0, 1)
+    if not filled:
+        # never triggered — NO_FILL only once the horizon has fully elapsed
+        return (row["id"], 0.0, 0.0, -1) if n >= _HORIZON_SESSIONS else _OPEN
+    if n >= _HORIZON_SESSIONS:           # filled, no touch → mark to market
+        last = float(closes[horizon - 1])
+        return (row["id"], last, (last - entry) / entry * 100.0,
+                1 if last >= entry else 0)
+    return _OPEN                         # still live, leave it open
+
+
 def update_outcomes(lookback_days: int = 30) -> None:
     """
     Check outcomes for signals logged > 5 days ago that are still OPEN (worked=NULL).
@@ -145,7 +207,7 @@ def update_outcomes(lookback_days: int = 30) -> None:
         try:
             rows = conn.execute(
                 """
-                SELECT id, symbol, entry_price, logged_at
+                SELECT id, symbol, entry_price, stop_price, target_price, logged_at
                 FROM signal_log
                 WHERE worked IS NULL
                   AND logged_at <= ?
@@ -209,6 +271,14 @@ def update_outcomes(lookback_days: int = 30) -> None:
                     return (row["id"], 0.0, 0.0, -1)
             except Exception:
                 pass
+            # PREFERRED: true target-vs-stop first-touch from official bhavcopy
+            # (accurate, matches the backtest). Falls through to the point-in-time
+            # quote method only when there's no target / no path data.
+            pv = _resolve_via_path(row)
+            if pv is _OPEN:
+                return None              # still live — leave the row open (NULL)
+            if pv is not None:
+                return pv                # definitive first-touch resolution
             # No-fill check first: order never triggered = not a trade.
             # worked=-1 marks NO_FILL (excluded from all accuracy math).
             if entry and not _entry_was_triggered(symbol, float(entry),

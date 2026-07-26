@@ -588,6 +588,50 @@ class TestOutcomeTracker:
         assert d["LOSESYM"] == 0
         assert d["FLATSYM"] is None   # ±band → stays open
 
+    def test_outcomes_resolve_via_true_first_touch(self, tmp_path, monkeypatch):
+        # PREFERRED path: when a target + bhavcopy bars exist, the outcome is
+        # judged by target-vs-stop first-touch (like the backtest), NOT the
+        # crude ±band point-in-time mark.
+        from datetime import datetime, timedelta
+        import pandas as pd
+        import core.signal_outcome_tracker as tr
+        import data.live_quotes as lq
+        import data.bhavcopy_store as bs
+        monkeypatch.setattr(tr, "_DB_PATH", str(tmp_path / "ft.db"))
+        six_days = (datetime.now() - timedelta(days=6)).isoformat(timespec="seconds")
+        conn = tr._get_conn()
+        # entry 100 / stop 96 / target 106 for each; the PATH decides the outcome
+        for sym in ("WIN", "LOSS", "OPEN"):
+            conn.execute(
+                "INSERT INTO signal_log (symbol, logged_at, signal_type, "
+                "entry_price, stop_price, target_price) VALUES (?,?,?,?,?,?)",
+                (sym, six_days, "UNIFIED_BUY", 100.0, 96.0, 106.0))
+        conn.commit(); conn.close()
+        idx = pd.date_range(datetime.now() - timedelta(days=6), periods=16, freq="D")
+
+        def _df(highs, lows, closes):
+            n = len(highs)
+            return pd.DataFrame({"high": highs, "low": lows, "close": closes},
+                                index=idx[:n])
+        paths = {
+            # fills day0, target 106 hit day1 before any stop → WIN
+            "WIN":  _df([101, 107, 108], [99, 100, 101], [100, 106, 107]),
+            # fills day0, stop 96 hit day1 before target → LOSS
+            "LOSS": _df([101, 104, 105], [99, 95, 94], [100, 96, 95]),
+            # filled, drifts sideways, only 3 bars < horizon → still OPEN
+            "OPEN": _df([101, 102, 103], [99, 100, 101], [100, 101, 102]),
+        }
+        monkeypatch.setattr(bs, "get_ohlcv", lambda s: paths.get(s.upper()))
+        monkeypatch.setattr(lq, "get_live_quotes", lambda syms: {})   # no network
+        tr.update_outcomes()
+        conn = tr._get_conn()
+        d = {r["symbol"]: (r["worked"], r["outcome_pct"]) for r in conn.execute(
+            "SELECT symbol, worked, outcome_pct FROM signal_log").fetchall()}
+        conn.close()
+        assert d["WIN"][0] == 1 and abs(d["WIN"][1] - 6.0) < 1e-6      # exited AT target
+        assert d["LOSS"][0] == 0 and abs(d["LOSS"][1] - (-4.0)) < 1e-6  # exited AT stop
+        assert d["OPEN"][0] is None                                    # still live
+
     def test_fresh_signals_not_judged_early(self, tmp_path, monkeypatch):
         from datetime import datetime
         import core.signal_outcome_tracker as tr
