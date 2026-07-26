@@ -142,6 +142,20 @@ def place_trade(symbol: str, qty: int, entry_type: str, entry_price: float,
                            f"₹{target:,.1f}). Kite login karke real trade kar "
                            f"sakte ho."}
 
+    # ── Governance Sentinel — the kill-switch every LIVE order obeys ─────────
+    try:
+        from core.governance import can_place_order
+        _allowed, _size_mult, _gov_reason = can_place_order()
+        if not _allowed:
+            _journal({"mode": "LIVE", "symbol": symbol, "qty": qty,
+                      "entry_type": entry_type, "entry_price": entry_price,
+                      "stop_price": stop, "target_price": target,
+                      "product": product, "status": "BLOCKED_GOVERNANCE",
+                      "note": _gov_reason[:200]})
+            return {"ok": False, "mode": "LIVE", "message": _gov_reason}
+    except Exception:
+        pass  # a broken sentinel must not block trading (fail-open mechanism)
+
     # ── LIVE mode ─────────────────────────────────────────────────────────
     from data.kite_client import KiteClient
     kite = KiteClient()
@@ -163,6 +177,11 @@ def place_trade(symbol: str, qty: int, entry_type: str, entry_price: float,
                   "stop_price": stop, "target_price": target,
                   "product": product, "status": "ENTRY_FAILED",
                   "note": str(exc)[:200]})
+        try:                                   # feed the kill-switch counters
+            from core.governance import record_order_result
+            record_order_result(ok=False)
+        except Exception:
+            pass
         return result
 
     # 2. Wait briefly for the fill. GTT before fill is DANGEROUS: a stop
@@ -194,6 +213,11 @@ def place_trade(symbol: str, qty: int, entry_type: str, entry_price: float,
     log.info("live_trade_placed", symbol=symbol, qty=qty,
              order_id=result["entry_order_id"], gtt=result["gtt_id"],
              status=status)
+    try:                                       # entry ok; GTT ok only if placed
+        from core.governance import record_order_result
+        record_order_result(ok=True, gtt_ok=bool(result["gtt_id"]) if filled else None)
+    except Exception:
+        pass
     return result
 
 

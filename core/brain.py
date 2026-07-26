@@ -100,6 +100,10 @@ def build_directives(v: dict) -> list[dict]:
     def add(sev: str, text: str) -> None:
         out.append({"severity": sev, "text": text})
 
+    # critical — GOVERNANCE first (the kill-switch overrides every other read)
+    for gd in (v.get("governance_directives") or []):
+        add("critical", gd.get("text", ""))
+
     # critical — survival + plumbing
     if v.get("book_verdict") == "DANGER":
         add("critical", f"🛑 Portfolio open-risk {v.get('open_risk_pct', 0):.1f}% "
@@ -530,6 +534,11 @@ def assess(market: str = "IN", capital: float = 100_000.0) -> dict:
     timeline = _probe_timeline(market)
     beliefs = _probe_beliefs(market)
     rejections = _probe_rejections(market)
+    try:
+        from core.governance import governance_directive
+        governance = governance_directive()
+    except Exception:
+        governance = []
 
     buys = [r for r in setups if r.get("verdict") in ("STRONG BUY", "BUY")]
     # EV-first cross-sectional ranking (north star): setups with a measured
@@ -602,6 +611,7 @@ def assess(market: str = "IN", capital: float = 100_000.0) -> dict:
         "timeline_directives": timeline,
         "belief_directives": beliefs,
         "rejection_directives": rejections,
+        "governance_directives": governance,
         "posture": posture,
     }
     directives = build_directives(vitals)
