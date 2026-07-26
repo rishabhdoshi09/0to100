@@ -2712,6 +2712,42 @@ class TestVerdictDashboard:
         assert vd["points"] == [] and vd["stats"]["closed"] == 2
         assert "kam se kam 5" in vd["verdict"]
 
+    def test_real_trade_curve_uses_actual_trades_not_signals(self, tmp_path,
+                                                             monkeypatch):
+        # the REAL curve reflects trades.db (actual placed trades) in rupees,
+        # resolved by target-vs-stop first-touch — not the signal_log curve.
+        import pandas as pd
+        from datetime import datetime, timedelta
+        import execution.trade_executor as te
+        import data.bhavcopy_store as bs
+        import reports.verdict_dashboard as vd
+        monkeypatch.setattr(te, "_DB", tmp_path / "trades.db")
+        conn = te.connect(); conn.execute(te._DDL)
+        pa = (datetime.now() - timedelta(days=20)).strftime("%Y-%m-%dT09:00:00")
+        for sym, qty, e, s, t, status in [
+            ("WIN", 10, 100, 96, 106, "PAPER_OPEN"),   # +₹60 at target
+            ("LOSS", 10, 200, 190, 220, "PAPER_OPEN"),  # −₹100 at stop
+            ("OPEN", 10, 50, 48, 55, "PLACED"),         # still live
+            ("FAIL", 10, 30, 28, 33, "ENTRY_FAILED")]:  # never filled → excluded
+            conn.execute(
+                "INSERT INTO trades (placed_at,mode,symbol,qty,entry_type,"
+                "entry_price,stop_price,target_price,status) VALUES (?,?,?,?,?,?,?,?,?)",
+                (pa, "PAPER", sym, qty, "LIMIT", e, s, t, status))
+        conn.commit(); conn.close()
+        idx = pd.date_range(datetime.now() - timedelta(days=20), periods=16, freq="D")
+
+        def mk(h, l, c):
+            return pd.DataFrame({"high": h, "low": l, "close": c}, index=idx[:len(h)])
+        paths = {
+            "WIN": mk([101, 107, 108], [99, 100, 101], [100, 106, 107]),
+            "LOSS": mk([201, 195, 193], [199, 189, 188], [200, 192, 190]),
+            "OPEN": mk([51, 52, 53], [49, 50, 51], [50, 51, 52])}
+        monkeypatch.setattr(bs, "get_ohlcv", lambda s: paths.get(s.upper()))
+        r = vd.build_trade_equity_curve(100000.0)
+        assert r["stats"]["closed"] == 2 and r["stats"]["open"] == 1   # FAIL excluded
+        assert r["stats"]["realized_pnl"] == -40.0                     # +60 − 100
+        assert r["stats"]["wins"] == 1 and r["stats"]["win_rate"] == 50.0
+
     def test_edge_metrics_and_curve_sequence(self, tmp_path, monkeypatch):
         """Enriched metrics compute; curve has one point per signal (plotted by
         SEQUENCE, so clustered dates can't flatten it)."""

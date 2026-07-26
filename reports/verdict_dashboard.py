@@ -162,3 +162,139 @@ def build_equity_curve(start_capital: float = 100_000.0,
                    f"{profit_factor:.2f}). Real paisa NAHI — filters ko aur data "
                    f"chahiye. Yeh imaandaar jawab hai, marketing nahi.{trend_bit}")
     return {"points": points, "stats": stats, "verdict": verdict}
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# YOUR ACTUAL TRADES — real account P&L from the trade journal (not signals).
+# The curve above answers "if you took EVERY signal?"; this answers "how did the
+# trades you ACTUALLY placed do?" — in real rupees, at real position sizes.
+# ══════════════════════════════════════════════════════════════════════════════
+
+# Statuses that mean an entry actually existed (filled). PENDING_GTT (fill
+# unknown) and ENTRY_FAILED/VOID are excluded — you can't book what didn't fill.
+_FILLED_STATUSES = ("PLACED", "PLACED_NO_GTT", "PAPER_OPEN")
+
+
+def _resolve_trade_outcome(entry: float, stop: float, target: float,
+                           symbol: str, placed_at: str, horizon: int = 15) -> dict:
+    """First-touch outcome for an ALREADY-FILLED trade. Unlike the signal
+    resolver there is NO fill gate — the position exists at `entry`. Conservative
+    within a bar (stop before target), marks to market at the horizon, leaves
+    OPEN while still live. Real bhavcopy bars only; fail-open → OPEN."""
+    open_ = {"closed": False, "status": "OPEN", "exit_price": None, "pnl_pct": 0.0}
+    try:
+        import pandas as pd
+        from data.bhavcopy_store import get_ohlcv
+        entry = float(entry or 0); stop = float(stop or 0); target = float(target or 0)
+        if entry <= 0:
+            return open_
+        df = get_ohlcv(symbol)
+        if df is None or df.empty or not {"high", "low", "close"} <= set(df.columns):
+            return open_
+        since = df[df.index >= pd.Timestamp(str(placed_at)[:10])]
+        if since.empty:
+            return open_
+        highs = since["high"].to_numpy(dtype=float)
+        lows = since["low"].to_numpy(dtype=float)
+        closes = since["close"].to_numpy(dtype=float)
+        n = len(highs); h = min(n, horizon)
+        for i in range(h):
+            if stop > 0 and lows[i] <= stop:
+                return {"closed": True, "status": "LOSS", "exit_price": stop,
+                        "pnl_pct": (stop - entry) / entry * 100}
+            if target > 0 and highs[i] >= target:
+                return {"closed": True, "status": "WIN", "exit_price": target,
+                        "pnl_pct": (target - entry) / entry * 100}
+        if n >= horizon:
+            last = float(closes[h - 1])
+            return {"closed": True, "status": "FLAT", "exit_price": last,
+                    "pnl_pct": (last - entry) / entry * 100}
+        return open_
+    except Exception:
+        return open_
+
+
+def _journal_trades() -> list[dict]:
+    try:
+        from execution.trade_executor import connect, _DB
+        if not _DB.exists():
+            return []
+        conn = connect()
+        conn.row_factory = __import__("sqlite3").Row
+        rows = conn.execute(
+            "SELECT placed_at, mode, symbol, qty, entry_price, stop_price, "
+            "target_price, status FROM trades WHERE status IN "
+            "('PLACED','PLACED_NO_GTT','PAPER_OPEN') ORDER BY placed_at ASC"
+        ).fetchall()
+        conn.close()
+        return [dict(r) for r in rows]
+    except Exception as exc:
+        log.debug("journal_trades_read_failed", error=str(exc))
+        return []
+
+
+def build_trade_equity_curve(start_capital: float = 100_000.0,
+                             mode: str | None = None) -> dict:
+    """Your REAL account curve from the trade journal, in rupees at your actual
+    position sizes. `mode` filters to 'PAPER' or 'LIVE' (None = both). Each filled
+    trade is resolved by target-vs-stop first-touch; open trades are counted but
+    excluded from realised P&L. Fail-open → an empty, honest stub."""
+    trades = [t for t in _journal_trades()
+              if mode is None or (t.get("mode") == mode)]
+    equity = start_capital
+    peak = start_capital
+    max_dd = 0.0
+    points = [("start", round(equity, 0))]
+    closed = wins = open_n = 0
+    realized = 0.0
+    per_mode: dict[str, dict] = {}
+    best = worst = 0.0
+    for t in trades:
+        qty = int(t.get("qty") or 0)
+        entry = float(t.get("entry_price") or 0)
+        o = _resolve_trade_outcome(entry, t.get("stop_price"),
+                                   t.get("target_price"), t.get("symbol"),
+                                   t.get("placed_at"))
+        m = per_mode.setdefault(t.get("mode") or "?",
+                                {"closed": 0, "wins": 0, "pnl": 0.0})
+        if not o["closed"]:
+            open_n += 1
+            continue
+        pnl = qty * entry * o["pnl_pct"] / 100.0        # real ₹ P&L at real size
+        realized += pnl
+        equity += pnl
+        peak = max(peak, equity)
+        max_dd = max(max_dd, (peak - equity) / peak * 100 if peak > 0 else 0.0)
+        points.append((str(t.get("placed_at"))[:10], round(equity, 0)))
+        closed += 1
+        if o["status"] == "WIN" or (o["status"] == "FLAT" and pnl > 0):
+            wins += 1
+        best = max(best, pnl); worst = min(worst, pnl)
+        m["closed"] += 1; m["pnl"] += pnl
+        m["wins"] += 1 if pnl > 0 else 0
+
+    stats = {
+        "closed": closed, "open": open_n,
+        "wins": wins, "win_rate": round(wins / closed * 100, 1) if closed else 0.0,
+        "realized_pnl": round(realized, 0),
+        "realized_pnl_pct": round(realized / start_capital * 100, 2),
+        "best_trade": round(best, 0), "worst_trade": round(worst, 0),
+        "max_drawdown_pct": round(max_dd, 2),
+        "final_equity": round(equity, 0),
+        "by_mode": {k: {"closed": v["closed"], "pnl": round(v["pnl"], 0),
+                        "win_rate": round(v["wins"] / v["closed"] * 100, 1)
+                        if v["closed"] else 0.0} for k, v in per_mode.items()},
+    }
+    if closed == 0:
+        verdict = (f"Abhi tak koi trade close nahi hua ({open_n} open). Jaise "
+                   f"trades band honge, tumhara ASLI performance yahan banega.")
+    elif realized >= 0:
+        verdict = (f"🟢 Tumhare {closed} closed trades: net ₹{realized:,.0f} "
+                   f"({stats['realized_pnl_pct']:+.1f}%), win rate "
+                   f"{stats['win_rate']:.0f}%. Yeh tumhare ASLI trades hain, "
+                   f"signals nahi.")
+    else:
+        verdict = (f"🔴 Tumhare {closed} closed trades: net ₹{realized:,.0f} "
+                   f"({stats['realized_pnl_pct']:+.1f}%). Imaandaar aaina — "
+                   f"discipline aur size review karo.")
+    return {"points": points, "stats": stats, "verdict": verdict}

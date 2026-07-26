@@ -646,6 +646,38 @@ def render_street_pulse() -> None:
             f"<div style='{_CARD};font-size:.85rem;color:#c9d1d9'>{vd['verdict']}</div>",
             unsafe_allow_html=True)
 
+        # ── 💼 YOUR ACTUAL TRADES — asli account P&L (signals nahi) ───────────
+        try:
+            from reports.verdict_dashboard import build_trade_equity_curve
+            tv = build_trade_equity_curve(start_capital=float(cap))
+            ts = tv["stats"]
+            st.markdown("##### 💼 Tumhare ASLI trades (jo tumne actually liye)")
+            if ts["closed"] or ts["open"]:
+                a1, a2, a3, a4 = st.columns(4)
+                a1.metric("Closed trades", ts["closed"],
+                          delta=f"{ts['open']} open", delta_color="off")
+                a2.metric("Net P&L", f"₹{ts['realized_pnl']:+,.0f}",
+                          delta=f"{ts['realized_pnl_pct']:+.1f}%", delta_color="off")
+                a3.metric("Win rate", f"{ts['win_rate']:.0f}%")
+                a4.metric("Best / Worst",
+                          f"₹{ts['best_trade']:+,.0f}",
+                          delta=f"₹{ts['worst_trade']:+,.0f}", delta_color="off")
+                _bm = ts.get("by_mode", {})
+                if _bm:
+                    _parts = " · ".join(
+                        f"{k}: ₹{v['pnl']:+,.0f} ({v['closed']} trades)"
+                        for k, v in _bm.items() if v["closed"])
+                    if _parts:
+                        st.caption("Breakdown — " + _parts)
+                st.markdown(
+                    f"<div style='{_CARD};font-size:.85rem;color:#c9d1d9'>"
+                    f"{tv['verdict']}</div>", unsafe_allow_html=True)
+            else:
+                st.caption("Abhi tak koi trade place nahi kiya. Jaise trades "
+                           "loge (paper ya real), tumhara asli record yahan banega.")
+        except Exception:
+            pass
+
         # ── Edge by signal — kahan se edge aata hai, kahan LEAK hota hai ──────
         # System ab in live results se seekhta hai: proven-negative signals ko
         # scanner khud demote karta hai (≥30 outcomes pe), isliye expectancy
