@@ -486,8 +486,11 @@ class TestCalibration:
         groups = ["tiny"] * 100                               # < min_slice? use big min_n
         assert C.conditional_overconfidence(p, y, groups, min_n=500) == []
 
-    def test_fail_open_io(self):
-        # no decisions.db in the test env → sane empties, never raises
+    def test_fail_open_io(self, tmp_path, monkeypatch):
+        # point the journal at an empty DB (the repo may ship a populated
+        # logs/decisions.db) → the fail-open path must return sane empties
+        monkeypatch.setattr("core.decision_journal._DB_PATH",
+                            str(tmp_path / "empty.db"))
         assert C.calibration_report()["n"] == 0
         assert C.confidence_ledger_findings() == []
         assert C.calibration_directives() == []

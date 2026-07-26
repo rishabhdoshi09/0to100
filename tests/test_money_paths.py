@@ -1462,6 +1462,10 @@ class TestBrain:
         monkeypatch.setattr(brain, "_probe_autopilot", lambda m: {
             "armed": True, "trades_today": 2, "day_pnl": 450.0})
         monkeypatch.setattr(brain, "_probe_dead_daemons", lambda: [])
+        # isolate from LIVE news/breadth feeds — both are demote-only and would
+        # otherwise pull AGGRESSIVE→NORMAL on a machine with real internet.
+        monkeypatch.setattr(brain, "_probe_macro", lambda m: {})
+        monkeypatch.setattr(brain, "_probe_breadth", lambda m: {"verdict": "HEALTHY"})
         a = brain.assess("IN", 100000.0)
         assert a["posture"] == "AGGRESSIVE"              # all aligned + evidence
         assert a["vitals"]["top_pick"]["symbol"] == "TOP"   # conviction-ranked
@@ -1502,6 +1506,7 @@ class TestBrain:
             "verdict": "HEALTHY", "pct_above_50": 62.0, "line": "sehatmand"})
         monkeypatch.setattr(brain, "_probe_options", lambda m: {
             "bias": "BULLISH", "note": "PCR 1.4", "max_pain": 24400.0})
+        monkeypatch.setattr(brain, "_probe_macro", lambda m: {})   # no live news
         msg = brain.briefing_telegram("IN")
         assert "QuantTerm Brain" in msg and "GREEN LIGHT" in msg
         assert "TATA" in msg and "TRENDING_BULL" in msg
@@ -2627,6 +2632,8 @@ class TestPortfolioIntel:
             "portfolio_ev_pct": 2.1,
             "swap": {"out": "HAL", "out_ev": 1.2, "in": "TATVA", "in_ev": 5.4,
                      "gap_pct": 4.2, "note": "HAL vs TATVA — advice hai, order nahi."}})
+        # no live macro → its RISK-OFF directive can't crowd the rotation one out
+        monkeypatch.setattr(brain, "_probe_macro", lambda m: {})
         a = brain.assess("IN", 100000.0)
         assert any("Opportunity cost" in d["text"] for d in a["directives"])
         assert a["vitals"]["portfolio_ev_pct"] == 2.1
