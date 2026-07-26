@@ -632,6 +632,35 @@ class TestOutcomeTracker:
         assert d["LOSS"][0] == 0 and abs(d["LOSS"][1] - (-4.0)) < 1e-6  # exited AT stop
         assert d["OPEN"][0] is None                                    # still live
 
+    def test_reresolve_history_corrects_old_crude_labels(self, tmp_path, monkeypatch):
+        # back-data cleanup: a row the OLD ±band method mislabeled a LOSS is
+        # re-judged by true first-touch and corrected to the WIN it actually was.
+        from datetime import datetime, timedelta
+        import pandas as pd
+        import core.signal_outcome_tracker as tr
+        import data.bhavcopy_store as bs
+        monkeypatch.setattr(tr, "_DB_PATH", str(tmp_path / "rr.db"))
+        old = (datetime.now() - timedelta(days=20)).isoformat(timespec="seconds")
+        conn = tr._get_conn()
+        # crude method stored worked=0 / outcome_pct=-1 (a −1% wiggle looked like a loss)
+        conn.execute(
+            "INSERT INTO signal_log (symbol, logged_at, signal_type, entry_price, "
+            "stop_price, target_price, outcome_pct, worked) VALUES (?,?,?,?,?,?,?,?)",
+            ("MIS", old, "UNIFIED_BUY", 100.0, 96.0, 106.0, -1.0, 0))
+        conn.commit(); conn.close()
+        idx = pd.date_range(datetime.now() - timedelta(days=20), periods=16, freq="D")
+        # true path: fills day0, hits target 106 on day1 → WIN
+        df = pd.DataFrame({"high": [101, 107, 108], "low": [99, 100, 101],
+                           "close": [100, 106, 107]}, index=idx[:3])
+        monkeypatch.setattr(bs, "get_ohlcv", lambda s: df)
+        assert tr.reresolve_history() == 1
+        conn = tr._get_conn()
+        row = conn.execute("SELECT worked, outcome_pct FROM signal_log").fetchone()
+        conn.close()
+        assert row["worked"] == 1 and abs(row["outcome_pct"] - 6.0) < 1e-6
+        # idempotent — a second pass changes nothing
+        assert tr.reresolve_history() == 0
+
     def test_fresh_signals_not_judged_early(self, tmp_path, monkeypatch):
         from datetime import datetime
         import core.signal_outcome_tracker as tr

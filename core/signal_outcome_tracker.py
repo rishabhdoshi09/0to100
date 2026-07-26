@@ -353,6 +353,54 @@ def update_outcomes(lookback_days: int = 30) -> None:
         pass  # never crash
 
 
+def reresolve_history(max_rows: int = 8000) -> int:
+    """One-time back-data correction. Rows closed by the OLD crude ±band method
+    (win = +2% now / loss = −1% now) are re-judged by TRUE target-vs-stop
+    first-touch from official bhavcopy, so the whole learning stack (live-edge,
+    EV, drift, beliefs, calibration, equity curve) reflects how the trades
+    actually resolved — not a noisy proxy. Only rows the path can resolve
+    definitively are rewritten; anything the path can't judge, or that is still
+    live within its horizon, keeps its existing value. Returns rows corrected.
+    Fail-open → 0."""
+    try:
+        conn = _get_conn()
+        try:
+            rows = conn.execute(
+                """SELECT id, symbol, entry_price, stop_price, target_price,
+                          logged_at, worked, outcome_pct
+                   FROM signal_log
+                   WHERE worked IS NOT NULL AND entry_price > 0
+                     AND stop_price > 0 AND target_price > 0
+                   ORDER BY id DESC LIMIT ?""", (max_rows,)).fetchall()
+            updates = []
+            now_iso = _now().isoformat(timespec="seconds")
+            for row in rows:
+                pv = _resolve_via_path(dict(row))
+                if pv is _OPEN or pv is None:
+                    continue                       # can't/shouldn't re-judge
+                _id, price, pct, worked = pv
+                new_price = None if worked == -1 else price
+                new_pct = None if worked == -1 else pct
+                # write only on a real change (avoid pointless churn)
+                changed = worked != row["worked"]
+                if not changed and new_pct is not None and row["outcome_pct"] is not None:
+                    changed = abs(float(new_pct) - float(row["outcome_pct"])) > 0.05
+                if not changed and (new_pct is None) != (row["outcome_pct"] is None):
+                    changed = True
+                if changed:
+                    updates.append((now_iso, new_price, new_pct, worked, _id))
+            for u in updates:
+                conn.execute(
+                    "UPDATE signal_log SET outcome_checked_at=?, outcome_price=?, "
+                    "outcome_pct=?, worked=? WHERE id=?", u)
+            conn.commit()
+            return len(updates)
+        finally:
+            conn.close()
+    except Exception:
+        return 0
+
+
 def get_accuracy_report() -> dict:
     """
     Returns a dict with overall accuracy, accuracy by archetype, regime, and weekly.

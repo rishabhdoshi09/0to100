@@ -734,6 +734,19 @@ def _maybe_update_outcomes() -> None:
         log.info("signal_outcomes_updated")
     except Exception as exc:
         log.debug("outcomes_update_skip", error=str(exc))
+    # ONE-TIME back-data correction: re-judge old crude-labelled outcomes by true
+    # target-vs-stop first-touch so the learning stack stops inheriting the proxy.
+    # Guarded by a marker file → runs exactly once, then never again.
+    try:
+        _marker = _Path(__file__).resolve().parent.parent / "logs" / ".outcomes_reresolved_v1"
+        if not _marker.exists():
+            from core.signal_outcome_tracker import reresolve_history
+            n = reresolve_history()
+            _marker.parent.mkdir(parents=True, exist_ok=True)
+            _marker.write_text(str(n))
+            log.info("outcome_history_reresolved", corrected=n)
+    except Exception as exc:
+        log.debug("reresolve_skip", error=str(exc))
     # Decision journal outcomes too — accepted AND rejected candidates get
     # resolved, so we later learn from decisions we DIDN'T take.
     try:
