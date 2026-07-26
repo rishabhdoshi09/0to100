@@ -214,6 +214,14 @@ def _run_backtest_inner(sc, stats, symbols, sample_step, lookback_sessions,
                                         be_pct=_BT_BREAKEVEN_PCT)
             if outcome == "NO_FILL":
                 continue          # order never triggered — not a trade
+            # NET of round-trip trading costs — the edge you'd actually keep, not
+            # the gross move. Same cost hits the target-geometry sweep below.
+            try:
+                from core.costs import cost_in_r
+                _cost_r = cost_in_r(risk / r.entry, "CNC")
+            except Exception:
+                _cost_r = 0.0
+            r_mult -= _cost_r
 
             regime = ""
             if regime_series is not None:
@@ -230,7 +238,7 @@ def _run_backtest_inner(sc, stats, symbols, sample_step, lookback_sessions,
                 ts = tgt_stats.setdefault(label, {"trades": 0, "wins": 0,
                                                   "closed": 0, "r_sum": 0.0})
                 ts["trades"] += 1
-                ts["r_sum"] += r2
+                ts["r_sum"] += r2 - _cost_r          # net of costs, same as above
                 if o2 == "WIN":
                     ts["wins"] += 1
                     ts["closed"] += 1

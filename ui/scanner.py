@@ -365,6 +365,22 @@ def _trade_ticket_body(s: dict) -> None:
         + "Entry ke saath tumhara stop-loss + target dono exchange par apne aap "
           "lag jaate hain (Auto Safety Net), toh laptop band ho ya net jaaye, "
           "tumhari exit fir bhi lagi rehti hai.")
+    # Estimated round-trip cost — the honest deduction most tools hide.
+    try:
+        from core.costs import cost_rupees, round_trip_cost_pct
+        _prod = "MIS" if product.startswith("MIS") else "CNC"
+        _c = cost_rupees(int(qty), float(eff_entry), _prod)
+        st.caption(f"💸 Estimated cost is trade par ~**₹{_c:,.0f}** "
+                   f"(brokerage + STT + fees + slippage, ~{round_trip_cost_pct(_prod):.2f}% "
+                   f"round-trip). Yeh profit/loss mein se katega — humare accuracy "
+                   f"numbers already isko count karte hain.")
+    except Exception:
+        pass
+    # ⚠️ Gap-risk — the LIMIT stop is NOT a guaranteed exit in a crash/gap.
+    st.warning("⚠️ Dhyaan: stop-loss ek LIMIT order hai. Agar stock gap-down khula "
+               "(news/circuit) toh price stop ke neeche se seedha nikal sakta hai "
+               "aur stop us bhaav pe fill na ho — nuksaan stop se zyada ho sakta "
+               "hai. Yeh har stop-loss ki seemā hai, sirf humari nahi.")
 
     # Portfolio impact — is trade ke BAAD account kaisa dikhega
     try:

@@ -16,6 +16,18 @@ from pathlib import Path
 sys.path.insert(0, ".")
 
 
+@pytest.fixture(autouse=True)
+def _costs_off(monkeypatch):
+    """Existing money-path tests assert GROSS R-math and rupee P&L; trading costs
+    are an orthogonal layer tested on their own (TestTradingCosts). Zero them by
+    default so an R-attribution test isn't coupled to the cost model — a cost
+    test re-enables them explicitly."""
+    try:
+        monkeypatch.setattr("core.costs._ENABLED", False)
+    except Exception:
+        pass
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # 1. Position sizer — the 1% rule
 # ══════════════════════════════════════════════════════════════════════════════
@@ -85,6 +97,48 @@ class TestTradeExecutor:
                              entry_price=4500, stop=4600, target=4900)
         assert not res["ok"]
         assert te.recent_trades(5) == []   # nothing journaled
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 2b. Trading costs — the honesty layer: net R < gross R
+# ══════════════════════════════════════════════════════════════════════════════
+
+class TestTradingCosts:
+    def test_cost_model_values(self, monkeypatch):
+        monkeypatch.setattr("core.costs._ENABLED", True)          # costs ON
+        from core.costs import round_trip_cost_pct, cost_in_r, cost_rupees, net_r
+        assert round_trip_cost_pct("CNC") == pytest.approx(0.32)   # 0.22 + 0.10 slip
+        assert round_trip_cost_pct("MIS") == pytest.approx(0.20)   # 0.10 + 0.10
+        # a 4% stop giving up 0.32% round-trip = 0.08R to costs
+        assert cost_in_r(0.04, "CNC") == pytest.approx(0.08)
+        assert net_r(2.0, 0.04, "CNC") == pytest.approx(1.92)
+        assert cost_rupees(10, 100, "CNC") == pytest.approx(3.2)   # 1000 × 0.32%
+        assert cost_in_r(0.0) == 0.0 and cost_in_r(-1) == 0.0      # safe
+
+    def test_equity_curve_is_net_of_costs(self, tmp_path, monkeypatch):
+        # re-enable real costs (override the module autouse) and check the Report
+        # Card expectancy is NET, not gross.
+        monkeypatch.setattr("core.costs._ENABLED", True)
+        import core.signal_outcome_tracker as tk
+        monkeypatch.setattr(tk, "_DB_PATH", str(tmp_path / "c.db"))
+        conn = tk._get_conn()
+        from datetime import datetime, timedelta
+        base = datetime(2026, 1, 10)
+        # 6 wins @ +8% and 4 losses @ -4%, entry 100 / stop 96 (4% risk)
+        rows = [(8.0, 1)] * 6 + [(-4.0, 0)] * 4
+        for i, (pct, worked) in enumerate(rows):
+            la = (base + timedelta(hours=i * 4)).isoformat(timespec="seconds")
+            conn.execute(
+                "INSERT INTO signal_log (symbol,logged_at,signal_type,entry_price,"
+                "stop_price,outcome_pct,worked,outcome_checked_at,outcome_price) "
+                "VALUES (?,?,?,?,?,?,?,?,?)",
+                (f"S{i}", la, "breakout", 100.0, 96.0, pct, worked, la, 100 * (1 + pct / 100)))
+        conn.commit(); conn.close()
+        from reports.verdict_dashboard import build_equity_curve
+        s = build_equity_curve(100000.0)["stats"]
+        # gross expectancy = (6·2 − 4·1)/10 = +0.80R; net subtracts 0.08R/trade
+        assert s["expectancy_r"] == pytest.approx(0.72, abs=0.01)
+        assert s["expectancy_r"] < 0.80                    # strictly worse than gross
 
 
 # ══════════════════════════════════════════════════════════════════════════════

@@ -51,6 +51,13 @@ def _row_r(row: dict) -> float | None:
         return None
     risk_frac = (entry - stop) / entry
     r = (float(row["outcome_pct"]) / 100) / risk_frac
+    # NET of round-trip trading costs — the edge that survives brokerage/STT/
+    # slippage, which is what live_edge / EV / drift / beliefs should learn from.
+    try:
+        from core.costs import cost_in_r
+        r -= cost_in_r(risk_frac, "CNC")
+    except Exception:
+        pass
     return max(_R_CLIP[0], min(_R_CLIP[1], r))
 
 

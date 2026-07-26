@@ -56,6 +56,11 @@ def build_equity_curve(start_capital: float = 100_000.0,
             continue
         risk_frac = (entry - stop) / entry           # per-share risk %
         r_mult = (float(s["outcome_pct"]) / 100) / risk_frac
+        try:                                          # net of round-trip costs
+            from core.costs import cost_in_r
+            r_mult -= cost_in_r(risk_frac, "CNC")
+        except Exception:
+            pass
         r_mult = max(-1.5, min(4.0, r_mult))         # clip outliers/gaps
         usable.append({"date": str(s["logged_at"])[:10], "symbol": s["symbol"],
                        "r": r_mult, "worked": int(s["worked"])})
@@ -261,6 +266,11 @@ def build_trade_equity_curve(start_capital: float = 100_000.0,
             open_n += 1
             continue
         pnl = qty * entry * o["pnl_pct"] / 100.0        # real ₹ P&L at real size
+        try:                                            # minus real round-trip costs
+            from core.costs import cost_rupees
+            pnl -= cost_rupees(qty, entry, "CNC")
+        except Exception:
+            pass
         realized += pnl
         equity += pnl
         peak = max(peak, equity)
