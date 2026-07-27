@@ -50,6 +50,19 @@ def get_us_daily(symbol: str, lookback_days: int = 400):
         else:
             raw.columns = [str(c).lower() for c in raw.columns]
         df = raw[["open", "high", "low", "close", "volume"]].dropna()
+        # Drop the CURRENT US session's still-forming daily bar: intraday its
+        # volume is only partially accumulated, so vol[-1]/20d-avg reads a false
+        # ~0.0× and every breakout looks volume-unconfirmed. After the 16:00 ET
+        # close the bar is final and kept. Daily swing signals want complete bars.
+        try:
+            from datetime import datetime
+            from zoneinfo import ZoneInfo
+            now_et = datetime.now(ZoneInfo("America/New_York"))
+            if (len(df) and df.index[-1].date() == now_et.date()
+                    and now_et.hour < 16):
+                df = df.iloc[:-1]
+        except Exception:
+            pass
         with _lock:
             _cache[symbol] = (now, df)
         return df
