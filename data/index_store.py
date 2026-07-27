@@ -158,7 +158,13 @@ def _build_index_store_locked(days: int = 400) -> int:
         return 0
     newest = max(available)
     with _lock:
-        if _store and _last_day == newest:
+        # Only short-circuit if the cache is BOTH current AND deep enough for the
+        # requested `days`. Without the depth check, build_index_store(days=2500)
+        # on a shallow (~400-session) cache returns immediately and never extends
+        # backward — which silently caps the momentum test's history.
+        cur_sessions = max((len(df) for df in _store.values()), default=0) if _store else 0
+        deep_enough = cur_sessions >= min(days, len(available)) * 0.9
+        if _store and _last_day == newest and deep_enough:
             return len(_store)
 
     frames = [f for x in sorted(available) if (f := _read_day(x)) is not None]
