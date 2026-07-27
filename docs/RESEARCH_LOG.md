@@ -182,3 +182,35 @@ guarantee.
   as the benchmark that active strategies have not yet beaten.
 - **Supersedes / references:** motivated by EXP-002's post-mortem (cost drag +
   negative alpha on high-turnover short-term signals).
+
+### EXP-003 RE-RUN (powered) — 2026-07-27, after fixing the index-history depth bug
+
+- **What changed:** the first run was capped at 14 months because
+  `build_index_store` ignored a deeper `days` request (fixed, commit e300a1e).
+  Re-ran the IDENTICAL config on ~9 years of index history + ~7 years of bhav →
+  **66 monthly rebalances.** Experiment id `467beaf4835e`.
+- **Result — the sign FLIPPED positive** (the 14-month window had been a momentum-
+  crash stretch): mean monthly **+1.66%**, **alpha vs Nifty +0.31%/mo**, positive in
+  ALL regimes (BULL +1.93, BEAR +2.17, CHOP +1.14). Strategy **CAGR 17.2% vs Nifty
+  11.8%** — momentum beat the index on absolute return. Deflated Sharpe 0.95,
+  p=0.0525.
+- **Status:** **INCONCLUSIVE — promising, NOT proven.** Three honest brakes: (1) the
+  alpha is NOT significant — correlation-aware CI [−0.6, +4.0]%/mo includes zero,
+  `beats_benchmark` False, p just misses 0.05; (2) **risk-adjusted it LOSES to
+  Nifty** — Sharpe 0.70 vs 0.97, because vol is 28% vs 12% and max drawdown **44.6%
+  vs 12.3%**; you took ~2.3× the risk for ~1.45× the return; (3) still
+  survivorship-biased (inflates).
+- **Reading:** Unlike EXP-002 (dead) and the 14-month crash window (−21%), 5.5 years
+  of momentum shows a REAL, regime-consistent positive edge that beats the index on
+  return. But the RAW strategy is not clearly better than just holding Nifty once
+  risk is accounted for — the weakness is excess volatility / a 44% drawdown, not the
+  signal itself.
+- **Evidence Level:** still **E0** (promising ≠ proven; alpha not significant, data
+  biased).
+- **Decision / next (two legitimate, non-fishing paths):** (A) **EXP-004 — risk-
+  managed momentum**: a genuinely NEW hypothesis that targets the specific weakness
+  the data exposed (the 44% drawdown / 28% vol) — e.g. a trend filter (hold only
+  while Nifty > 200-DMA, else cash) or volatility scaling. NOT a parameter tweak of
+  EXP-003; a new pre-registration. (B) acquire survivorship-free + CA-adjusted data
+  to PROVE the current momentum, now that it shows promise and the data work is
+  finally worth it.
