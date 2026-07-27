@@ -183,6 +183,15 @@ def run_gauntlet(ledger=None, trade_source=None, n_trials: int | None = None,
             for rec in trade_source:
                 builder(rec)
         else:                                   # drive the real backtest
+            # `python -m gauntlet` is a FRESH process — the bhav store isn't in
+            # memory yet (build_store ran in a different process). Load it (from
+            # the pickle cache if present) or the backtest sees 0 symbols.
+            try:
+                from data.bhavcopy_store import is_ready, build_store
+                if not is_ready():
+                    build_store()
+            except Exception:
+                pass
             from scan.signal_backtest import run_backtest
             run_backtest(on_trade=builder)
         if index_close is None:
