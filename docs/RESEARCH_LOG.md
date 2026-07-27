@@ -214,3 +214,39 @@ guarantee.
   EXP-003; a new pre-registration. (B) acquire survivorship-free + CA-adjusted data
   to PROVE the current momentum, now that it shows promise and the data work is
   finally worth it.
+
+## EXP-004 — Risk-Managed Momentum (200-DMA trend filter) (PRE-REGISTERED)
+
+- **Hypothesis:** Adding a market trend filter to EXP-003's momentum — hold the
+  top-20 book only while Nifty is AT/ABOVE its 200-day SMA, else sit in CASH — cuts
+  the drawdown and RAISES the risk-adjusted return (Sharpe) above Nifty's, WITHOUT
+  needing the raw alpha to be larger. Directly targets the specific weakness EXP-003
+  exposed (44.6% drawdown, 28% vol, Sharpe 0.70 < Nifty 0.97), not its parameters.
+- **Why this is a NEW hypothesis, not a tweak:** it adds a distinct mechanism (a
+  regime/trend overlay) motivated by a measured weakness, and it is judged on a
+  DIFFERENT success metric (risk-adjusted return / drawdown), not on nudging
+  EXP-003's alpha across a significance line.
+- **Null hypothesis:** the filter does NOT improve risk-adjusted return — Sharpe ≤
+  EXP-003's and ≤ Nifty's, or drawdown not materially reduced.
+- **Pre-registered rule (ONE config — NO sweep):** everything in EXP-003 (12-1,
+  monthly, top-20, liquid, 0.32% cost) PLUS: at each rebalance, if Nifty close <
+  its 200-day SMA → hold cash (0% that month, conservative — real cash would earn
+  ~0.5%/mo), else hold the momentum book. Implemented via
+  `scan.momentum.trend_gate_from` + `build_momentum_series(trend_gate=…)`;
+  `python -m gauntlet.momentum --trend`.
+- **Success criteria:** Sharpe > Nifty's (0.97) AND max drawdown materially below
+  EXP-003's 44.6% (target ≤ ~25%), with mean return still clearly positive — i.e.
+  the risk-managed version is a better risk/reward than simply holding the index.
+  A harness PROMOTE (significant positive alpha) is a bonus, not required for this
+  hypothesis (which is about risk-adjusted improvement).
+- **Failure criteria:** Sharpe not above Nifty's, or drawdown not materially cut →
+  the filter adds nothing; momentum's risk problem stands.
+- **Data note:** same ~9-year index / ~7-year bhav history, still survivorship-
+  biased. A good result is promising, not proof.
+- **Status:** PRE-REGISTERED — awaiting run (`python -m gauntlet.momentum --trend`).
+- **Anti-fishing commitment:** the 200-DMA window and the single config are fixed
+  before the run. If it fails, it is recorded as-is; the window is NOT swept
+  (150/100/50-DMA …) to find a passing variant — that would be a new pre-registration
+  with its own justification.
+- **Supersedes / references:** builds on EXP-003's powered re-run (promising but
+  risk-heavy); this is the disciplined attempt to fix the risk, not the signal.

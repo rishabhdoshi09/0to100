@@ -37,6 +37,7 @@ def _regime_split(strat, dates_idx, regime_series, bench_index_dates):
 def run_momentum_gauntlet(top_n: int = 20, lookback: int = 252, skip: int = 21,
                           rebalance: int = 21, min_turnover_cr: float = 5.0,
                           cost_pct: float = 0.32, seed: int = 1,
+                          trend_filter: bool = False, trend_window: int = 200,
                           skip_validation: bool = True) -> dict:
     """Build the momentum return series from the bhav store + Nifty, then judge it.
     Returns a report dict (report.build_report-compatible shape is not required —
@@ -80,9 +81,11 @@ def run_momentum_gauntlet(top_n: int = 20, lookback: int = 252, skip: int = 21,
         closes[s] = c.to_numpy(dtype=float)
         volumes[s] = v.to_numpy(dtype=float)
 
+    gate = MOM.trend_gate_from(bench, window=trend_window) if trend_filter else None
     series = MOM.build_momentum_series(
         closes, volumes, bench, top_n=top_n, lookback=lookback, skip=skip,
-        rebalance=rebalance, min_turnover_cr=min_turnover_cr, cost_pct=cost_pct)
+        rebalance=rebalance, min_turnover_cr=min_turnover_cr, cost_pct=cost_pct,
+        trend_gate=gate)
 
     strat = series["strat_returns"]
     benchr = series["bench_returns"]
@@ -109,12 +112,16 @@ def run_momentum_gauntlet(top_n: int = 20, lookback: int = 252, skip: int = 21,
     verdict_word = ("PASS" if verdict.verdict == "PROMOTE"
                     else "FAIL" if verdict.verdict == "REJECT" else "INCONCLUSIVE")
 
+    strat_name = "momentum_12_1_trend200" if trend_filter else "momentum_12_1"
     exp = REG.register(frozen["hash"],
-                       {"strategy": "momentum_12_1", "rebalances": int(strat.size),
-                        "top_n": top_n, "symbols": series["n_symbols"]},
+                       {"strategy": strat_name, "rebalances": int(strat.size),
+                        "top_n": top_n, "symbols": series["n_symbols"],
+                        "trend_filter": trend_filter},
                        seed, extra={"verdict": verdict_word})
 
     return {"aborted": False, "experiment": exp, "freeze_hash": frozen["hash"],
+            "strategy_name": strat_name, "trend_filter": trend_filter,
+            "pct_invested": series.get("pct_invested", 100.0),
             "verdict": verdict_word, "harness_verdict": verdict.verdict,
             "n_rebalances": int(strat.size), "n_symbols": series["n_symbols"],
             "avg_names": round(series["avg_names"], 1),
@@ -134,10 +141,16 @@ def to_markdown(r: dict) -> str:
     if r.get("aborted"):
         return f"# Momentum Gauntlet — ABORTED\n\n**Reason:** {r.get('reason')}"
     s, b = r["strategy"], r["benchmark"]
+    is_trend = r.get("trend_filter")
+    title = ("# Momentum Gauntlet (EXP-004) — Risk-Managed Momentum (200-DMA trend filter)"
+             if is_trend else
+             "# Momentum Gauntlet (EXP-003) — Cross-Sectional 12-1 Momentum")
+    invested = (f" · **{r.get('pct_invested')}% of months invested** "
+                f"(rest in cash)" if is_trend else "")
     return "\n".join([
-        "# Momentum Gauntlet (EXP-003) — Cross-Sectional 12-1 Momentum",
+        title,
         f"_experiment `{r['experiment'].get('experiment_id','?')}` · "
-        f"freeze `{r['freeze_hash']}`_", "",
+        f"freeze `{r['freeze_hash']}`{invested}_", "",
         f"## Verdict: **{r['verdict']}**   _({r['insight']})_", "",
         f"- Rebalances: {r['n_rebalances']} (monthly) · liquid universe "
         f"{r['n_symbols']} names · avg {r['avg_names']} held · "
@@ -163,9 +176,12 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(prog="python -m gauntlet.momentum")
     ap.add_argument("--top", type=int, default=20)
     ap.add_argument("--seed", type=int, default=1)
+    ap.add_argument("--trend", action="store_true",
+                    help="EXP-004: hold cash when Nifty is below its 200-DMA")
     ap.add_argument("--json", action="store_true")
     args = ap.parse_args(argv)
-    rep = run_momentum_gauntlet(top_n=args.top, seed=args.seed)
+    rep = run_momentum_gauntlet(top_n=args.top, seed=args.seed,
+                                trend_filter=args.trend)
     if args.json:
         import json
         print(json.dumps(rep, indent=2, default=str))

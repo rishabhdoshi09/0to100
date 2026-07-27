@@ -64,6 +64,37 @@ class TestMomentumEngine:
         assert 12.0 < a["cagr_pct"] < 13.5
         assert a["max_dd_pct"] == 0.0 and a["sharpe"] > 0
 
+    def test_trend_gate_marks_downtrend_risk_off(self):
+        # rising then falling benchmark → gate True on the way up, False once it
+        # breaks below its SMA on the way down
+        up = np.linspace(100, 200, 250)
+        down = np.linspace(200, 100, 250)
+        gate = MOM.trend_gate_from(np.concatenate([up, down]), window=50)
+        assert gate[240] and not gate[-1]      # risk-on near the top, risk-off at the bottom
+
+    def test_trend_filter_cuts_the_bear_drawdown(self):
+        # a synthetic crash in the second half: the trend filter should sit in cash
+        # through it → strictly smaller drawdown than the always-invested version.
+        T = 600
+        closes, volumes = {}, {}
+        for i in range(30):
+            up = 100.0 * (1.004 ** np.arange(300))                 # rally
+            crash = up[-1] * (0.985 ** np.arange(300))             # sustained decline
+            closes[f"S{i}"] = np.concatenate([up, crash])
+            volumes[f"S{i}"] = np.full(T, 2_000_000.0)
+        bench = np.concatenate([100.0 * (1.002 ** np.arange(300)),
+                                100.0 * (1.002 ** 299) * (0.99 ** np.arange(300))])
+        gate = MOM.trend_gate_from(bench, window=200)
+        base = MOM.build_momentum_series(closes, volumes, bench, top_n=10,
+                                         lookback=100, skip=5, rebalance=10)
+        managed = MOM.build_momentum_series(closes, volumes, bench, top_n=10,
+                                            lookback=100, skip=5, rebalance=10,
+                                            trend_gate=gate)
+        base_dd = MOM.annualise(base["strat_returns"])["max_dd_pct"]
+        managed_dd = MOM.annualise(managed["strat_returns"])["max_dd_pct"]
+        assert managed_dd < base_dd                 # filter dodges the crash
+        assert managed["pct_invested"] < 100.0      # it actually went to cash
+
     def test_too_little_history_is_empty(self):
         closes = {"A": np.full(50, 100.0)}
         volumes = {"A": np.full(50, 2_000_000.0)}
