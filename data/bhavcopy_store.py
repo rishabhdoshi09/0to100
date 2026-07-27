@@ -83,7 +83,13 @@ def _read_day(d: date) -> Optional[pd.DataFrame]:
     if not path.exists():
         return None
     try:
-        df = pd.read_csv(path, dtype=str)
+        # Some NSE archives aren't valid UTF-8 (stray high bytes) — a plain read
+        # throws and we silently LOSE that trading day. latin-1 decodes every byte,
+        # so retry with it before giving up (the columns we need are ASCII).
+        try:
+            df = pd.read_csv(path, dtype=str)
+        except Exception:
+            df = pd.read_csv(path, dtype=str, encoding="latin-1")
         df.columns = [c.strip().upper() for c in df.columns]
         df = df[df["SERIES"].str.strip() == "EQ"]
         out = pd.DataFrame({
