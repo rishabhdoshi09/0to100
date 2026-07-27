@@ -73,7 +73,7 @@ def _load_from_yfinance(years: int, lookback: int, max_symbols: int = 600):
     from data.nse_universe import get_nifty500_universe
     universe = get_nifty500_universe()[:max_symbols]
     nifty = yf.download("^NSEI", period=f"{years}y", interval="1d",
-                        auto_adjust=True, progress=False, threads=True)
+                        auto_adjust=True, progress=False, threads=False)
     if nifty is None or nifty.empty:
         return None
     ncol = "Close" if "Close" in nifty.columns else nifty.columns[0]
@@ -83,7 +83,7 @@ def _load_from_yfinance(years: int, lookback: int, max_symbols: int = 600):
     bench = np.asarray(nifty_close, dtype=float)
     tickers = [f"{s}.NS" for s in universe]
     raw = yf.download(tickers, period=f"{years}y", interval="1d",
-                      auto_adjust=True, progress=False, threads=True, group_by="ticker")
+                      auto_adjust=True, progress=False, threads=False, group_by="ticker")
     closes, volumes = {}, {}
     for s, t in zip(universe, tickers):
         try:

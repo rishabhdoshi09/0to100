@@ -277,3 +277,40 @@ guarantee.
   window is index-favourable and biased, so the conclusion is provisional; (ii)
   otherwise, accept the passive conclusion.
 - **Supersedes / references:** builds on EXP-003's powered re-run.
+
+## EXP-005 — Momentum on ~15y yfinance data → "PASS" but REJECTED AS INVALID
+
+- **Setup:** same 12-1 momentum config, `--source yf --years 15` (162 monthly
+  rebalances, ~14.6y). Experiment id `14fecc41e59f`.
+- **Headline (looks spectacular):** Verdict **PASS** — CAGR **37.4%** vs Nifty
+  11.6%, Sharpe **1.48** vs 0.80, alpha **+1.70%/mo**, Deflated Sharpe 1.0,
+  p≈1e-7, block-CI excludes zero, beats_benchmark True.
+- **VERDICT: INVALID — this PASS is a survivorship-bias artifact, NOT an edge.**
+  Rejected on multiple independent grounds:
+  1. **Severe survivorship bias.** The universe is the CURRENT Nifty-500, and yf
+     only returns the names that survived ~15 years — a pre-selected winners club.
+     The 44% drawdowns and blow-ups (delisted names) that a real 2010-2025 momentum
+     book would have taken are simply ABSENT from the data. The bias inflates the
+     result — exactly as pre-registered ("a longer-window PASS is still not proof").
+  2. **Broken/partial download.** 88 tickers failed — including large, clearly-NOT-
+     delisted names (AXISBANK, SIEMENS, MRF, NTPC, TITAN, IOC, GRASIM, BAJAJ-AUTO…)
+     via `OperationalError('unable to open database file')` (yfinance SQLite cache
+     under threads). So only 236 of 500 names loaded — a noisy, non-representative
+     subset of the survivors. (threads=False fix applied; but even a complete
+     survivor set is still biased.)
+  3. **Broken regime split.** 51 of 162 months bucket to a `nan` regime — the
+     index regime series doesn't cover the older yf dates, so the regime evidence
+     is unusable.
+- **What it actually PROVES (the real lesson):** put EXP-003 (clean 7y bhav:
+  momentum ≈ Nifty, no clear edge) next to EXP-005 (biased 15y yf: momentum
+  "returns 37%/yr"). The enormous gap between them IS the survivorship bias, shown
+  live. The stronger the "edge" on biased data, the more the bias — not the alpha.
+- **Evidence Level:** stays **E0.** A contaminated PASS raises nothing.
+- **Decision:** REJECT this result; do NOT trade on it; do NOT let a 37%-CAGR
+  number tempt a real allocation. Free data cannot answer this question:
+  bhav is clean but too short (7y); yfinance is long but survivorship-biased. A
+  genuine 15-year verdict needs **survivorship-free (delisted-inclusive), CA-
+  adjusted data — a paid vendor.** Absent that, the honest standing conclusion is
+  EXP-004's: on clean data nothing has beaten low-cost Nifty risk-adjusted.
+- **Supersedes / references:** long-window robustness attempt on EXP-003's config;
+  demonstrates why survivorship-free data is non-negotiable for a real claim.
