@@ -25,8 +25,11 @@ def get_option_chain(symbol: str = "NIFTY") -> tuple[Optional[pd.DataFrame], Opt
             "Accept-Encoding": "gzip, deflate, br",
             "Referer": "https://www.nseindia.com/option-chain",
         }
+        import time as _time
+
         session = requests.Session()
-        # Seed cookies first
+        # Seed cookies first (NSE rejects cookieless API hits), then let them
+        # settle — a hit immediately after priming often still 401s.
         session.get("https://www.nseindia.com", headers=headers, timeout=8)
         session.get(
             "https://www.nseindia.com/option-chain", headers=headers, timeout=8
@@ -38,9 +41,22 @@ def get_option_chain(symbol: str = "NIFTY") -> tuple[Optional[pd.DataFrame], Opt
         else:
             url = f"https://www.nseindia.com/api/option-chain-equities?symbol={symbol}"
 
-        resp = session.get(url, headers=headers, timeout=12)
-        resp.raise_for_status()
-        data = resp.json()
+        # NSE frequently blocks the first hit and yields on a retry — try a few
+        # times with backoff, re-priming cookies if the session gets rejected.
+        data = None
+        for _attempt in range(3):
+            _time.sleep(0.6 * (_attempt + 1))
+            resp = session.get(url, headers=headers, timeout=12)
+            if resp.status_code == 200 and resp.content:
+                try:
+                    data = resp.json()
+                    break
+                except Exception:
+                    data = None
+            if resp.status_code in (401, 403):        # cookies stale → re-prime
+                session.get("https://www.nseindia.com", headers=headers, timeout=8)
+        if data is None:
+            raise RuntimeError("NSE option-chain API unavailable after retries")
 
         records = data["records"]["data"]
         expiry = data["records"]["expiryDates"][0]  # nearest expiry
