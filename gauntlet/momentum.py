@@ -34,52 +34,93 @@ def _regime_split(strat, dates_idx, regime_series, bench_index_dates):
             for k, v in out.items()}
 
 
+def _load_from_bhav(cal_out, lookback):
+    """(cal, bench, closes, volumes) from the NSE bhav store + index store — the
+    clean official EOD source, but only ~7 years deep."""
+    import pandas as pd
+    from data.bhavcopy_store import is_ready, build_store, store_symbols, get_ohlcv
+    from data.index_store import get_index_ohlcv
+    if not is_ready():
+        build_store()
+    nifty_df = get_index_ohlcv("^NSEI")
+    col = next((c for c in ("Close", "close") if nifty_df is not None
+                and c in nifty_df.columns), None)
+    if col is None:
+        return None
+    nifty_close = nifty_df[col]
+    cal = pd.DatetimeIndex(nifty_close.index)
+    bench = nifty_close.to_numpy(dtype=float)
+    closes, volumes = {}, {}
+    for s in store_symbols():
+        df = get_ohlcv(s)
+        if df is None or "close" not in df.columns or len(df) < lookback:
+            continue
+        closes[s] = df["close"].reindex(cal).to_numpy(dtype=float)
+        volumes[s] = (df["volume"].reindex(cal).to_numpy(dtype=float)
+                      if "volume" in df.columns else np.full(len(cal), np.nan))
+    return cal, bench, closes, volumes
+
+
+def _load_from_yfinance(years: int, lookback: int, max_symbols: int = 600):
+    """(cal, bench, closes, volumes) from yfinance — the ONLY free source that
+    reaches ~15+ years of Indian history. Caveats, stated plainly: (1) it is
+    SURVIVORSHIP-BIASED (delisted names absent → results inflated, same bias as
+    the bhav run, just longer); (2) yfinance .NS data is flaky and split-adjusted
+    differently. So a longer-window PASS is still not proof; a FAIL is meaningful.
+    Universe = the current liquid NSE names (capped for a feasible download)."""
+    import pandas as pd
+    import yfinance as yf
+    from data.nse_universe import get_nifty500_universe
+    universe = get_nifty500_universe()[:max_symbols]
+    nifty = yf.download("^NSEI", period=f"{years}y", interval="1d",
+                        auto_adjust=True, progress=False, threads=True)
+    if nifty is None or nifty.empty:
+        return None
+    ncol = "Close" if "Close" in nifty.columns else nifty.columns[0]
+    nifty_close = (nifty[ncol] if not isinstance(nifty.columns, pd.MultiIndex)
+                   else nifty[("Close", "^NSEI")])
+    cal = pd.DatetimeIndex(nifty_close.index)
+    bench = np.asarray(nifty_close, dtype=float)
+    tickers = [f"{s}.NS" for s in universe]
+    raw = yf.download(tickers, period=f"{years}y", interval="1d",
+                      auto_adjust=True, progress=False, threads=True, group_by="ticker")
+    closes, volumes = {}, {}
+    for s, t in zip(universe, tickers):
+        try:
+            sub = raw[t] if isinstance(raw.columns, pd.MultiIndex) else raw
+            c = sub["Close"].reindex(cal)
+            v = sub["Volume"].reindex(cal)
+            if c.notna().sum() < lookback:
+                continue
+            closes[s] = c.to_numpy(dtype=float)
+            volumes[s] = v.to_numpy(dtype=float)
+        except Exception:
+            continue
+    return cal, bench, closes, volumes
+
+
 def run_momentum_gauntlet(top_n: int = 20, lookback: int = 252, skip: int = 21,
                           rebalance: int = 21, min_turnover_cr: float = 5.0,
                           cost_pct: float = 0.32, seed: int = 1,
                           trend_filter: bool = False, trend_window: int = 200,
+                          source: str = "bhav", years: int = 15,
                           skip_validation: bool = True) -> dict:
-    """Build the momentum return series from the bhav store + Nifty, then judge it.
-    Returns a report dict (report.build_report-compatible shape is not required —
-    this has its own renderer)."""
+    """Build the momentum return series from `source` (bhav store, ~7y clean; or
+    yfinance, ~15y+ but survivorship-biased) + Nifty, then judge it with the same
+    battery. Returns a report dict."""
     from gauntlet import freeze as FZ, registry as REG
-
-    # load the store into THIS process (fresh CLI process)
-    try:
-        from data.bhavcopy_store import is_ready, build_store, store_symbols, get_ohlcv
-        if not is_ready():
-            build_store()
-        syms = store_symbols()
-    except Exception as e:
-        return {"aborted": True, "reason": f"store unavailable: {e}"}
-
-    # Nifty benchmark (daily close) as the master calendar
-    try:
-        from data.index_store import get_index_ohlcv
-        nifty_df = get_index_ohlcv("^NSEI")
-        col = next((c for c in ("Close", "close") if nifty_df is not None
-                    and c in nifty_df.columns), None)
-        nifty_close = nifty_df[col] if col else None
-    except Exception:
-        nifty_close = None
-    if nifty_close is None or len(nifty_close) < lookback + skip + rebalance + 2:
-        return {"aborted": True, "reason": "Nifty index history unavailable/too short"}
-
     import pandas as pd
-    cal = pd.DatetimeIndex(nifty_close.index)
-    bench = nifty_close.to_numpy(dtype=float)
 
-    # align every symbol's close/volume to the Nifty calendar
-    closes, volumes = {}, {}
-    for s in syms:
-        df = get_ohlcv(s)
-        if df is None or "close" not in df.columns or len(df) < lookback:
-            continue
-        c = df["close"].reindex(cal)
-        v = (df["volume"].reindex(cal) if "volume" in df.columns
-             else pd.Series(np.nan, index=cal))
-        closes[s] = c.to_numpy(dtype=float)
-        volumes[s] = v.to_numpy(dtype=float)
+    try:
+        loaded = (_load_from_yfinance(years, lookback) if source == "yf"
+                  else _load_from_bhav(None, lookback))
+    except Exception as e:
+        return {"aborted": True, "reason": f"{source} data load failed: {e}"}
+    if not loaded:
+        return {"aborted": True, "reason": f"{source} data unavailable"}
+    cal, bench, closes, volumes = loaded
+    if bench is None or len(bench) < lookback + skip + rebalance + 2:
+        return {"aborted": True, "reason": "benchmark history unavailable/too short"}
 
     gate = MOM.trend_gate_from(bench, window=trend_window) if trend_filter else None
     series = MOM.build_momentum_series(
@@ -113,14 +154,17 @@ def run_momentum_gauntlet(top_n: int = 20, lookback: int = 252, skip: int = 21,
                     else "FAIL" if verdict.verdict == "REJECT" else "INCONCLUSIVE")
 
     strat_name = "momentum_12_1_trend200" if trend_filter else "momentum_12_1"
+    span_yrs = round(len(cal) / 252.0, 1)
     exp = REG.register(frozen["hash"],
                        {"strategy": strat_name, "rebalances": int(strat.size),
                         "top_n": top_n, "symbols": series["n_symbols"],
-                        "trend_filter": trend_filter},
+                        "trend_filter": trend_filter, "source": source,
+                        "span_years": span_yrs},
                        seed, extra={"verdict": verdict_word})
 
     return {"aborted": False, "experiment": exp, "freeze_hash": frozen["hash"],
             "strategy_name": strat_name, "trend_filter": trend_filter,
+            "source": source, "span_years": span_yrs,
             "pct_invested": series.get("pct_invested", 100.0),
             "verdict": verdict_word, "harness_verdict": verdict.verdict,
             "n_rebalances": int(strat.size), "n_symbols": series["n_symbols"],
@@ -147,10 +191,13 @@ def to_markdown(r: dict) -> str:
              "# Momentum Gauntlet (EXP-003) — Cross-Sectional 12-1 Momentum")
     invested = (f" · **{r.get('pct_invested')}% of months invested** "
                 f"(rest in cash)" if is_trend else "")
+    src = r.get("source", "bhav")
+    src_note = (f" · source **{src}** (~{r.get('span_years')}y"
+                + (", ⚠️ SURVIVORSHIP-BIASED" if src == "yf" else ", clean EOD") + ")")
     return "\n".join([
         title,
         f"_experiment `{r['experiment'].get('experiment_id','?')}` · "
-        f"freeze `{r['freeze_hash']}`{invested}_", "",
+        f"freeze `{r['freeze_hash']}`{invested}{src_note}_", "",
         f"## Verdict: **{r['verdict']}**   _({r['insight']})_", "",
         f"- Rebalances: {r['n_rebalances']} (monthly) · liquid universe "
         f"{r['n_symbols']} names · avg {r['avg_names']} held · "
@@ -178,10 +225,16 @@ def main(argv=None) -> int:
     ap.add_argument("--seed", type=int, default=1)
     ap.add_argument("--trend", action="store_true",
                     help="EXP-004: hold cash when Nifty is below its 200-DMA")
+    ap.add_argument("--source", choices=["bhav", "yf"], default="bhav",
+                    help="bhav = clean NSE EOD (~7y); yf = yfinance (~15y+, "
+                         "survivorship-biased)")
+    ap.add_argument("--years", type=int, default=15,
+                    help="history to request when --source yf")
     ap.add_argument("--json", action="store_true")
     args = ap.parse_args(argv)
     rep = run_momentum_gauntlet(top_n=args.top, seed=args.seed,
-                                trend_filter=args.trend)
+                                trend_filter=args.trend, source=args.source,
+                                years=args.years)
     if args.json:
         import json
         print(json.dumps(rep, indent=2, default=str))
