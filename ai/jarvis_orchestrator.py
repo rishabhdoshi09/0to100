@@ -31,6 +31,29 @@ from ai.jarvis_agents import (
 )
 
 
+# ── LLM-availability guard ────────────────────────────────────────────────────
+# JARVIS is a conversational LLM at heart, so it can't fully work without one —
+# but it must NEVER show a raw "DeepSeek API error: Insufficient Balance". When the
+# LLM is down (no key / no balance / network), it degrades to serving the live
+# CONTEXT (the same facts it would reason over) so the user still gets the data.
+_LLM_FAIL_MARKERS = ("DeepSeek API error", "LLM error", "DEEPSEEK_API_KEY not set",
+                     "Insufficient Balance", "insufficient balance")
+
+
+def _is_llm_failure(text: str) -> bool:
+    return bool(text) and any(m in text for m in _LLM_FAIL_MARKERS)
+
+
+def _offline_answer(live_state: str) -> str:
+    """What JARVIS shows when the LLM is unavailable: the live facts, no error."""
+    note = ("🔌 **AI chat offline** — DeepSeek key/balance unavailable, so I can't "
+            "converse right now. Here's the live market context I have (the same "
+            "facts I'd reason over). Top up the DeepSeek balance to re-enable chat.")
+    body = live_state.strip() if live_state and live_state.strip() else \
+        "No live context available at the moment."
+    return note + "\n\n" + body
+
+
 # ── Result dataclass ──────────────────────────────────────────────────────────
 
 @dataclass
@@ -264,6 +287,8 @@ class JarvisOrchestrator:
                 messages.append({"role": m["role"], "content": m["content"]})
             messages.append({"role": "user", "content": query})
             answer = _llm(messages, temperature=0.2, max_tokens=700)
+            if _is_llm_failure(answer):
+                answer = _offline_answer(live_state)      # facts, never a raw API error
             return OrchestratorResult(
                 query=query,
                 answer=answer,
@@ -299,6 +324,8 @@ class JarvisOrchestrator:
 
         # Synthesise
         answer = self._synthesise(query, agent_results, plan.get("synthesis_prompt", ""))
+        if _is_llm_failure(answer):
+            answer = _offline_answer(live_state)          # facts, never a raw API error
 
         activity = [
             {
