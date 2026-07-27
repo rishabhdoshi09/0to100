@@ -243,10 +243,37 @@ guarantee.
   the filter adds nothing; momentum's risk problem stands.
 - **Data note:** same ~9-year index / ~7-year bhav history, still survivorship-
   biased. A good result is promising, not proof.
-- **Status:** PRE-REGISTERED — awaiting run (`python -m gauntlet.momentum --trend`).
-- **Anti-fishing commitment:** the 200-DMA window and the single config are fixed
-  before the run. If it fails, it is recorded as-is; the window is NOT swept
-  (150/100/50-DMA …) to find a passing variant — that would be a new pre-registration
-  with its own justification.
-- **Supersedes / references:** builds on EXP-003's powered re-run (promising but
-  risk-heavy); this is the disciplined attempt to fix the risk, not the signal.
+- **Status:** **RUN 2026-07-27 → FAIL (per pre-registered criteria).** Experiment id
+  `f1640867338e`. 76 monthly rebalances, 71.1% of months invested / 28.9% in cash.
+- **Result — the filter helped on RISK, but not enough to beat the index:**
+  - Directional wins vs EXP-003: max DD **44.6% → 32.7%**, vol **28% → 22%**, beta
+    **1.35 → 0.58**, alpha **+0.31% → +0.71%/mo**, Sharpe **0.70 → 0.83**. The trend
+    overlay did exactly what it should.
+  - But the **pre-registered success bar was NOT met:** strategy Sharpe 0.83 is
+    still BELOW Nifty's (Nifty Sharpe over this window = **1.33**), and drawdown
+    32.7% is well above the ~25% target and 2.6× Nifty's 12.3%. Same CAGR (17.2 vs
+    17.3) at ~1.7× the vol.
+  - Harness verdict FAIL: alpha +0.71%/mo is economically meaningful but NOT
+    statistically significant (t-test p=0.17, block-CI includes 0), so it does not
+    clear the benchmark gate.
+- **Reading:** The hypothesis "a trend filter cuts the risk" was CONFIRMED
+  directionally — but even risk-managed, momentum does not beat a Nifty that has run
+  at a Sharpe of ~1.3 over this post-2020 window. Note the window is strongly
+  benchmark-FAVOURABLE: Nifty's long-run Sharpe is nearer 0.7-0.9, so a 1.33 here is
+  an exceptionally high bar.
+- **Evidence Level:** still **E0**.
+- **Converging conclusion across EXP-002/003/004:** on this ~6-9 year (survivorship-
+  biased) NSE data, NOTHING tested — breakout signals, raw momentum, or risk-managed
+  momentum — beats low-cost Nifty buy-and-hold on a RISK-ADJUSTED basis after costs.
+  The strategies keep matching Nifty's return but with more risk. That is strong
+  (though window-limited) evidence for the passive conclusion.
+- **Decision:** Do NOT trade these. **Do NOT sweep the 200-DMA window** or try
+  top-30 / dual-momentum / etc. to manufacture a pass — four experiments in, that
+  would be textbook fishing, and the anti-fishing commitment holds. The honest,
+  money-relevant read is: for this period, a low-cost Nifty index fund/ETF is the
+  best risk/reward found, and no active variant has beaten it.
+- **Legitimate remaining moves (NOT more tweaks):** (i) test on a LONGER / different
+  window (pre-2020, or 15+ years) with clean survivorship-free data — the current
+  window is index-favourable and biased, so the conclusion is provisional; (ii)
+  otherwise, accept the passive conclusion.
+- **Supersedes / references:** builds on EXP-003's powered re-run.
