@@ -156,10 +156,29 @@ guarantee.
   still survivorship-BIASED (current universe). So a PASS is not proof (bias
   inflates); a FAIL is a strong kill. With only ~36 monthly points the honest
   likely outcome is INCONCLUSIVE.
-- **Status:** PRE-REGISTERED — awaiting run (`python -m gauntlet.momentum`).
-- **Anti-fishing commitment:** the config above is fixed. If it fails, it is
-  recorded as a FAIL/INCONCLUSIVE; parameters are NOT swept to find a passing
-  variant. A genuinely different momentum idea (e.g. risk-managed / dual-momentum)
-  would be a NEW pre-registration, not an edit of this one.
+- **Status:** **RUN 2026-07-27 → INCONCLUSIVE (underpowered), point estimate
+  NEGATIVE.** Experiment id `379b22314843`.
+- **Result:** Only **14 monthly rebalances** (below the 30 floor → no statistical
+  claim). But the evidence we have is clearly bad, not neutral: mean monthly
+  **−1.61%**, **alpha vs Nifty −1.77%/mo**, beta 1.46, block-CI [−5.18, +3.01]%
+  (includes 0). Strategy CAGR **−21.4%** / Sharpe −0.61 / maxDD 41% vs **Nifty
+  CAGR +0.09% / Sharpe +0.08 / maxDD 15%**. Regimes: BULL +1.2% (n=4), CHOP −6.4%
+  (n=7), BEAR +5.8% (n=3) — the choppy stretch wrecked it. `beats_benchmark`:
+  False.
+- **Reading:** The verdict is INCONCLUSIVE only because 14 months is too few for a
+  claim — momentum is a multi-YEAR anomaly with occasional crash periods, and this
+  ~3-year window (survivorship-biased) is both short and momentum-hostile (high-beta
+  midcap winners crashed in the chop). So this is NOT evidence momentum works; it is
+  an UNDERPOWERED test whose point estimate is decidedly negative.
+- **Evidence Level:** stays **E0**.
+- **Decision:** Do NOT trade this. Do NOT sweep parameters to find a passing variant
+  (anti-fishing commitment holds). The real limitation surfaced is **history length**
+  — 14–36 monthly points cannot test a factor. The disciplined fix is MORE DATA
+  (5–10+ years), NOT a different config. Combined signal from EXP-002 + EXP-003:
+  nothing tested so far beats buy-and-hold Nifty after costs on this window.
+- **Next action (two honest paths):** (A) extend the bhav/index history to 5–10
+  years and RE-RUN the SAME EXP-003 config — a fair, powered test of momentum; or
+  (B) accept the converging evidence and treat low-cost index / factor-ETF exposure
+  as the benchmark that active strategies have not yet beaten.
 - **Supersedes / references:** motivated by EXP-002's post-mortem (cost drag +
   negative alpha on high-turnover short-term signals).
