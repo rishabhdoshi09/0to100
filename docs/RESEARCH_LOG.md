@@ -91,3 +91,42 @@ guarantee.
   supply the files into `logs/`), confirm `core.data_integrity.verify_ca_adjustment().passed`,
   then rerun the pre-registered experiment exactly as specified.
 - **Supersedes / references:** —
+
+## EXP-002 — Historical Gauntlet (EXPLORATORY, biased data)
+
+- **Hypothesis:** Same as EXP-001 — the QuantTerm signal set has a significant,
+  durable, benchmark-beating edge after costs.
+- **Pre-registered success criteria:** as EXP-001 (harness PROMOTE + FDR).
+- **Execution date:** 2026-07-27. Experiment id `614670961b1e`.
+- **Data:** ~765 sessions / 2886 symbols of NSE bhav (real) + index/VIX. Run with
+  `--skip-validation`: **CURRENT-universe (survivorship-BIASED) and NOT
+  CA-adjusted**. This is an OPTIMISTIC data set — the biases inflate results.
+- **Status:** **FAIL.** 5054 trades, 17 signals → **PASS 0 · FAIL 14 ·
+  INCONCLUSIVE 3.**
+- **Reason for outcome:** Nearly every signal is NEGATIVE expectancy after costs
+  (VCP −0.66R, FLAT_BASE −0.55R, NR7_COIL −0.45R, ASC_TRIANGLE −0.32R, PRE_BREAKOUT
+  −0.16R, DOUBLE_BOTTOM −0.13R, MOMENTUM/POCKET_PIVOT/CUP_HANDLE all slightly neg).
+  Every signal has NEGATIVE alpha vs Nifty. White's Reality-Check p = 0.62 → the
+  BEST of 17 is indistinguishable from luck. The 3 INCONCLUSIVE are two tiny-sample
+  (n=13, n=15) and one breakeven (DELIVERY_SPIKE +0.007R, n=295). No FDR survivors.
+- **Evidence generated:** The current signal set, as implemented, has **no
+  tradeable edge after costs** — and this held on FAVOURABLE (biased) data, so
+  clean CA-adjusted / survivorship-complete data would be WORSE, not better. A FAIL
+  here is a strong, cheap kill.
+- **Evidence Level change:** **None — stays E0.** (A biased-data FAIL cannot lower
+  a level that is already at the floor, and cannot raise anything.)
+- **Decision made:** Do NOT trade real capital on the current signal set. Do NOT
+  loosen gates to manufacture a pass (that is the overfitting trap). Autopilot stays
+  conservative/paper.
+- **Next action:** Post-mortem (below), then EITHER pre-register a genuinely NEW
+  hypothesis (different exits / holding period / a single most-promising signal) OR
+  accept that a pure technical-breakout system on NSE after costs lacks edge and
+  pivot. The clean-data run is now LOW priority — an optimistic FAIL rarely flips.
+- **Post-mortem notes:** (a) Costs are decisive for the near-breakeven signals —
+  several are ~0 gross but −0.03 to −0.10R net. (b) US-origin chart patterns (VCP,
+  CUP_HANDLE, FLAT_BASE, HIGH_TIGHT_FLAG) transfer poorly / are mis-parameterised on
+  NSE. (c) Fills are modeled AT the pivot (optimistic) — real fills make this worse.
+  (d) Exit logic (2×ATR stop + breakeven trail + fixed target) is a candidate to
+  re-examine as a NEW hypothesis, not a tweak to force EXP-002 to pass.
+- **Supersedes / references:** extends EXP-001 (which was BLOCKED); this is the
+  first run that actually produced trades and a verdict.
