@@ -336,15 +336,59 @@ def _render_deepseek_narrative(r: dict | None, bh: dict | None) -> None:
         )
 
 
+def _rule_based_brief(r: dict, bh: dict | None) -> str:
+    """A complete Market Brief composed DIRECTLY from the regime + breakout-health
+    data — needs NO LLM. This is the source of truth; DeepSeek only polishes its
+    wording when a key + balance are available. Independent by design: no API, no
+    balance, no network can break it."""
+    def g(k, d=""):
+        v = r.get(k, d)
+        return v if v not in (None, "") else d
+    L = ["MARKET STATE",
+         f"• Nifty {g('nifty', 0):,.0f} ({g('nifty_1d', 0):+.2f}% today, "
+         f"{g('nifty_5d', 0):+.2f}% 5d) — {g('market', 'n/a')}",
+         f"• Volatility {g('vix_state', 'n/a')} (VIX {g('vix', 0):.1f}) · "
+         f"Risk mode {g('risk_mode', 'n/a')}",
+         f"• Breadth {g('breadth', 'n/a')} ({g('breadth_score', 0):.0f}/100) · "
+         f"Institutional {g('inst_activity', 'n/a')}",
+         f"• Rotation: {g('rotation', 'n/a')}"]
+    if bh:
+        L.append(f"• Breakout health: {bh.get('environment', 'n/a')} "
+                 f"({bh.get('success_rate', 0)*100:.0f}% work, "
+                 f"n={bh.get('sample_size', 0)})")
+    L += ["", "BEST SETUPS TODAY"]
+    pbs = g("playbooks", []) or []
+    L += [f"• {p}" for p in pbs[:3]] or ["• No high-conviction playbook — stay light."]
+    if g("leaders", []):
+        L.append(f"Leaders: {', '.join((g('leaders', []) or [])[:5])}")
+    L += ["", "AVOID"]
+    av = g("avoid", []) or []
+    L += [f"• {a}" for a in av[:3]] or ["• Nothing flagged — normal caution."]
+    if g("laggards", []):
+        L.append(f"Laggards: {', '.join((g('laggards', []) or [])[:5])}")
+    L += ["", "REGIME RISK"]
+    risk = []
+    if str(g("vix_state")).upper() in ("ELEVATED", "HIGH", "EXTREME"):
+        risk.append("elevated VIX can whip stops")
+    if str(g("breadth")).upper() in ("NARROW", "WEAK"):
+        risk.append("narrow breadth makes rallies fragile")
+    if not risk:
+        risk.append("a VIX spike or breadth rollover would invalidate the setup")
+    L.append("• " + "; ".join(risk) + ".")
+    return "\n".join(L)
+
+
 @st.cache_data(ttl=3600, show_spinner=False)
 def _generate_brief(regime_dict, bh_dict) -> str:
     import os, requests
+    if not regime_dict:
+        return "⚠️ Regime data unavailable. Check data connectivity."
+
+    # The data-driven brief ALWAYS works — LLM is optional polish on top.
+    fallback = _rule_based_brief(regime_dict, bh_dict)
     key = os.getenv("DEEPSEEK_API_KEY")
     if not key:
-        return "⚠️ DeepSeek API key not configured."
-
-    if not regime_dict:
-        return "⚠️ Regime data unavailable. Check yfinance connectivity."
+        return fallback
 
     r = regime_dict
     bh_line = ""
@@ -394,7 +438,7 @@ def _generate_brief(regime_dict, bh_dict) -> str:
         )
         data = resp.json()
         if "choices" not in data:
-            return f"API error: {data.get('error', {}).get('message', 'Unknown')}"
+            return fallback        # e.g. Insufficient Balance → data brief, not an error
         return data["choices"][0]["message"]["content"]
-    except Exception as e:
-        return f"Brief unavailable: {e}"
+    except Exception:
+        return fallback            # network/timeout → data brief, never a dead page
