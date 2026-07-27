@@ -314,3 +314,31 @@ guarantee.
   EXP-004's: on clean data nothing has beaten low-cost Nifty risk-adjusted.
 - **Supersedes / references:** long-window robustness attempt on EXP-003's config;
   demonstrates why survivorship-free data is non-negotiable for a real claim.
+
+## META-001 — Architectural discovery: per-trade R cannot back a portfolio-alpha claim
+
+- **Type:** methodology correction (append-only; erases nothing above).
+- **Date:** 2026-07-27. Context: start of the Evidence Lab overhaul (`overhaul/evidence-lab`).
+- **Discovery:** EXP-002…005 derived CAGR/Sharpe/drawdown from a stream of
+  INDEPENDENTLY-compounded per-trade R-multiples (`gauntlet/runner.py` modelled a fixed
+  1%-risk-per-trade account). That is not a portfolio: it ignores cash constraints,
+  overlapping positions, concurrency limits, turnover and idle capital. No CAGR, Sharpe,
+  alpha or benchmark-outperformance claim may rest on independently compounded trades.
+- **Which prior results remain informative (NOT erased):**
+  - EXP-002 (breakout signals net-negative after costs) — the sign and the cost lesson
+    stand; per-signal expectancy is valid *attribution*.
+  - EXP-003/004 (momentum real but risk-heavy; trend filter cuts risk, doesn't beat
+    the index risk-adjusted) — these ALREADY used monthly *portfolio* returns
+    (`gauntlet/momentum.py`), so they are closer to correct and remain the standing
+    evidence.
+  - EXP-005 (survivorship-biased yfinance "PASS") — remains a permanent example of an
+    INVALID result the system correctly rejected.
+- **What must be recomputed under the new standard:** any CAGR/Sharpe/drawdown/alpha
+  that came from the per-trade path (the non-momentum gauntlet) — once the chronological
+  portfolio simulator + daily NAV ledger (Phase 4) exists.
+- **Why we do NOT erase the earlier experiments:** negative and cautionary evidence is
+  permanent; the log records how our understanding improved, not a cleaned-up story.
+- **New standard:** portfolio metrics come only from an immutable daily NAV ledger
+  produced by a chronological, point-in-time simulator (see ADR-001 / IMPLEMENTATION_PLAN).
+- **Supersedes / references:** governs the interpretation of EXP-002…005; does not
+  invalidate their qualitative conclusions.
