@@ -130,3 +130,36 @@ guarantee.
   re-examine as a NEW hypothesis, not a tweak to force EXP-002 to pass.
 - **Supersedes / references:** extends EXP-001 (which was BLOCKED); this is the
   first run that actually produced trades and a verdict.
+
+## EXP-003 — Cross-Sectional Momentum factor (PRE-REGISTERED)
+
+- **Hypothesis:** A low-turnover cross-sectional momentum strategy has POSITIVE
+  net-of-cost expectancy AND positive alpha vs Nifty on NSE — because (a) monthly
+  rebalancing amortises the trading costs that sank EXP-002's short-term signals,
+  and (b) momentum is a globally-replicated anomaly (strong prior → less likely to
+  be data-mining than a bespoke pattern).
+- **Null hypothesis:** net monthly return ≤ 0, OR alpha vs Nifty ≤ 0 (i.e. it's
+  just beta / no skill over the index).
+- **Pre-registered rule (ONE config — NO sweep):** universe = liquid names (median
+  daily turnover ≥ ₹5 cr); rank by 12-1 momentum (return from ~12 months ago to ~1
+  month ago, i.e. lookback 252d, skip 21d); buy the top 20 equal-weight; rebalance
+  monthly (21 trading days); 0.32% round-trip cost charged on the fraction of the
+  book that turns over. Implemented in `scan/momentum.py`, judged by the SAME
+  harness battery (alpha, block-bootstrap CI, Deflated Sharpe, regimes).
+- **Success criteria (→ investigate further):** harness PROMOTE — mean monthly > 0
+  with block-CI lower > 0, `beats_benchmark` True (alpha>0, p<0.05), and the
+  strategy's Sharpe/CAGR beats Nifty's.
+- **Failure criteria:** non-positive mean or no alpha → FAIL (momentum adds nothing
+  over the index after costs). Positive-but-underpowered (few months of data) →
+  INCONCLUSIVE, meaning "need a longer history", NOT a pass.
+- **Data note:** first pass runs on the same ~3-year (~36-month) window as EXP-002,
+  still survivorship-BIASED (current universe). So a PASS is not proof (bias
+  inflates); a FAIL is a strong kill. With only ~36 monthly points the honest
+  likely outcome is INCONCLUSIVE.
+- **Status:** PRE-REGISTERED — awaiting run (`python -m gauntlet.momentum`).
+- **Anti-fishing commitment:** the config above is fixed. If it fails, it is
+  recorded as a FAIL/INCONCLUSIVE; parameters are NOT swept to find a passing
+  variant. A genuinely different momentum idea (e.g. risk-managed / dual-momentum)
+  would be a NEW pre-registration, not an edit of this one.
+- **Supersedes / references:** motivated by EXP-002's post-mortem (cost drag +
+  negative alpha on high-turnover short-term signals).
