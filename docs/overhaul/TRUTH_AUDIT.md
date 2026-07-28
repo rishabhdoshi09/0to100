@@ -232,6 +232,23 @@ or NSE live-order path.** Bounded to US-paper / F&O-paper / display.
 the US path; explicit tz for F&O expiry; format Telegram strings from `now_ist()`).
 Addressed in the owning phase, not in this focused money-safety milestone.
 
+## C-15 · Valuation & sector data are not point-in-time (surfaced, fail-closed)
+**Class:** EVIDENCE_CRITICAL · **Status:** SURFACED + FAIL-CLOSED for the momentum
+framework (2026-07-28); full fix deferred to the data-platform phase.
+**Reality:** `data/fundamentals_cache.db` is `(symbol, data_json, fetched_at)` — one
+CURRENT row per symbol with NO publication-date history, so historical valuation
+cannot be reconstructed. Sector membership (`scan/sector_heat.py`) is likewise not
+historically dated. Using either as-of a past bar would leak the future.
+**Handling (EXP-006, ADR-002):** the Institutional Momentum Breakout framework treats
+valuation as `VALUATION_DATA_UNAVAILABLE` unless a record carries a real `available_ts`
+proving it pre-dates the observation (never forward-filled); valuation is CONTEXT only
+(flags `EXTREME_PE`/`HIGH_EXPECTATION_RISK`, never rejects the primary momentum
+candidate). Sector membership carries `SECTOR_MEMBERSHIP_NOT_PIT`. Both are recorded on
+every observation as explicit limitations rather than silently assumed.
+**Fix direction:** a bitemporal fundamentals ledger with publication dates and a dated
+sector-membership history (the point-in-time data platform, ADR-001 §8). Until then the
+framework fails closed on these inputs.
+
 ---
 
 ## Money- and evidence-critical fix order (mandatory first)

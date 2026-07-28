@@ -342,3 +342,65 @@ guarantee.
   produced by a chronological, point-in-time simulator (see ADR-001 / IMPLEMENTATION_PLAN).
 - **Supersedes / references:** governs the interpretation of EXP-002…005; does not
   invalidate their qualitative conclusions.
+
+---
+
+## EXP-006 — Institutional Momentum Breakout v1 (PRE-REGISTERED — not yet run)
+- **Status:** PRE-REGISTERED. Framework implemented + unit-tested (synthetic,
+  network-free); NOT yet run on `RESEARCH_GRADE` NSE data. No verdict claimed.
+- **Date:** 2026-07-28. Branch `overhaul/evidence-lab`. Framework:
+  `research/momentum_breakout/` (see ADR-002). Next unused id after EXP-005/META-001.
+- **Primary hypothesis:** Stocks with (1) meaningful prior leadership, (2) a long
+  contracting base, (3) a confirmed breakout above a pre-existing pivot, (4) small,
+  structurally-justified initial risk and (5) strong sector participation have
+  **positive forward expectancy after realistic Indian cash-equity costs**. The
+  hypothesis is NOT assumed valid — the correct result may be PASS, FAIL or
+  INCONCLUSIVE, decided by the existing `research/harness.py` evidence gate.
+- **Momentum principle (pre-registered tension):** valuation is NOT a mandatory
+  reject in the primary hypothesis — price action governs whether a position stays
+  valid, and a name can keep rising despite extreme valuation. Valuation is captured
+  as a point-in-time explanatory/risk feature; the experiment SEPARATELY tests
+  whether extreme valuation changes forward returns, drawdowns, failure rates or gap
+  risk. Fundamentals are never used before their real availability timestamp.
+- **Entry convention (frozen):** signal known only AFTER the breakout bar closes;
+  entry no earlier than the NEXT tradable bar's open; explicit slippage; gap-through
+  the stop fills at the (worse) open, never at the stop price; same-bar ordering is
+  pessimistic (stop before target); no fill when it could not realistically execute.
+- **Structural stop (frozen):** the primary stop is the highest point-in-time stop
+  candidate below entry (swing low / tight-range low / breakout-bar low / pivot−ATR /
+  base support); initial risk in % and ATR units; setups over the configurable
+  maximum structural risk (~2–8% research range; primary value versioned in
+  `config.py`) are rejected. Thresholds are NOT to be optimised against the result.
+- **Primary comparisons:** vs (a) Nifty over equal holding windows, (b) all eligible
+  liquid stocks, (c) cross-sectional momentum WITHOUT the base+sector conditions,
+  (d) breakout candidates WITHOUT the strong-sector requirement.
+- **Primary exit (frozen):** initial structural stop + trend-following exit
+  (`structural_trend`). Secondary (labelled) variants: `structural_ema_trail`,
+  `structural_maxhold`. The best variant will NOT be swapped in post-hoc.
+- **Decision metrics:** n_candidates, n_trades, expectancy R + CI, profit factor,
+  win rate, avg win/loss, MAE, MFE, max drawdown, turnover, cost drag, Sharpe,
+  benchmark-relative, regime breakdown, sector concentration, and the harness's
+  DSR / block-bootstrap / BH-FDR multiple-testing controls.
+- **Pre-registered ablations (FDR-controlled):** prior-only → +breakout → +long base
+  → +small risk → +strong sector → +participation; plus diagnostic splits
+  (valuation-extreme vs not, ATH vs non-ATH, strong vs weak sector, low vs high
+  structural risk, shorter vs longer bases). Diagnostic only; no component is
+  promoted on one favourable slice.
+- **Point-in-time safety (fail closed):** six clocks separated (market / signal /
+  data-availability / ingestion / entry / fundamental). Guards refuse future bars in
+  base/pivot construction, same-day-close entry, future sector membership, future or
+  forward-filled fundamentals, and target/exit leakage into entry features. Known
+  limitations recorded, not papered over: valuation has no PIT publication dates in
+  the repo (fails closed to UNAVAILABLE); sector membership is not historically
+  dated (`SECTOR_MEMBERSHIP_NOT_PIT`); universe survivorship is incomplete until
+  `logs/universe_history.json` is supplied.
+- **Reproducibility:** every observation stamps experiment id, config hash
+  (thresholds + primitive/detector/feature/scoring versions), dataset snapshot id,
+  and code commit; identical data+config+code reproduce identical observations and
+  event ids (unit-tested).
+- **No post-result optimisation:** a material threshold change after seeing the
+  primary result requires a NEW experiment id (new config hash), per the standing
+  research principles above.
+- **Supersedes / references:** builds on the momentum evidence (EXP-003/004) and the
+  portfolio-metric standard (META-001); introduces the breakout-structure hypothesis
+  those did not test. Awaits a run on point-in-time data before any verdict.

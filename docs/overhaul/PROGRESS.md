@@ -76,6 +76,59 @@ claim without evidence.
 - Phase 1 continued: transactional fail-closed evidence writes (C-06); `TrustClass`
   boundary stub (C-01/E). Then Phase 2 service extraction.
 
+## Milestone 2 — Institutional Momentum Breakout research framework (EXP-006) · 2026-07-28 · status: implemented + unit-tested (NOT yet run on real data)
+
+Research-only milestone. **No service extraction, no portfolio-simulator, no live/
+paper/Telegram/GTT wiring, no UI redesign, no broad Phase-1 refactor.**
+
+**Completed work**
+- New package `research/momentum_breakout/`: `pit.py` (canonical point-in-time-safe
+  primitives — ATR/MA/EMA/returns/drawdown/CLV/volume/rel-strength with a
+  `FutureLeak` fail-closed contract), `config.py` (versioned thresholds + config
+  hash), `observation.py` (`MomentumBreakoutObservation` + canonical `event_id`),
+  `features.py` (six feature groups + trend-extension + weakening + transparent
+  component scores), `pit_safety.py` (six-clock temporal firewall + `EventRegistry`
+  dedup), `detector.py` (base detection, eligibility contract, scoring, dedup),
+  `experiment.py` (EXP-006 pre-registration, PIT gap-aware trade simulator,
+  ablations, wiring to the existing `research.harness` evidence gate).
+- Reused existing Evidence-Lab contracts (harness, gauntlet ledger/registry/freeze,
+  feature store, point-in-time universe, CA-adjusted bhav store). Did NOT reuse the
+  live, non-PIT ATR/RS/breakout code (`scan/relative_strength.py`, unified_scanner) —
+  documented in ADR-002.
+- Docs: `ADR-002-MOMENTUM-BREAKOUT-RESEARCH.md`, `MOMENTUM_BREAKOUT_FEATURES.md`,
+  `RESEARCH_LOG.md` EXP-006 pre-registration, TRUTH_AUDIT `C-15` (valuation/sector
+  not PIT → surfaced + fail-closed).
+
+**Tests run**
+- `tests/test_momentum_breakout.py` — 39 passed (deterministic, synthetic,
+  network-free; no wall-clock/timezone dependence): PIT primitives, prior-upmove,
+  base detection (long contracting detected / deep rejected / future bars don't alter
+  an earlier base / reproducible ids), breakout (confirmed vs intraday-only,
+  next-bar entry, overextension), structural stop (signal-time only, deterministic
+  risk, excessive-risk reject, gap-through-stop not filled at stop), sector
+  (strong qualifies / weak rejected / missing membership surfaced), valuation
+  (extreme flags but does NOT reject; stale flagged; future rejected; missing ≠ zero),
+  deduplication (one event one obs / consecutive closes no dup / new base new event /
+  equivalent detectors no double-count), reproducibility + config-hash, experiment
+  plumbing, and execution isolation.
+- Regression: `test_money_paths.py` + `test_research.py` + `test_gauntlet.py` +
+  `test_momentum.py` — all green; PAPER autopilot, Telegram paper-only and the LIVE
+  migration lock unchanged.
+
+**Evidence generated**
+- NONE yet on real data — the framework is pre-registered and unit-tested only. No
+  PASS/FAIL/INCONCLUSIVE verdict is claimed; that awaits a run on `RESEARCH_GRADE`
+  point-in-time NSE data (operator step, like the gauntlet).
+
+**Unresolved risks / limitations (surfaced, not hidden)**
+- Valuation has no PIT publication dates in the repo → fails closed to UNAVAILABLE.
+- Sector membership not historically dated → `SECTOR_MEMBERSHIP_NOT_PIT`.
+- Universe survivorship incomplete until `logs/universe_history.json` supplied.
+
+**Next milestone**
+- Unchanged: Phase 1 continued (C-06 fail-closed evidence writes; TrustClass stub),
+  then Phase 2 service extraction. EXP-006 is run when point-in-time data is available.
+
 ## Milestone 1b — C-13 day-boundary money-safety · 2026-07-28 · status: DONE
 
 Focused money-safety milestone. **No service extraction, no portfolio-simulator work.**
