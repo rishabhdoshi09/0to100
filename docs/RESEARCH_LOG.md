@@ -464,3 +464,43 @@ guarantee.
   EXP-005 anti-survivorship-mirage discipline (META/EXP-005) as the research-grade gate.
   No verdict on the hypothesis's economic validity is claimed — that awaits a run on
   research-grade point-in-time NSE data.
+
+---
+
+## EXP-006 — Evidence run EXECUTED + artifacts COMMITTED · RESULT: INCONCLUSIVE (DATA_UNAVAILABLE)
+- **Type:** execution of the frozen EXP-006 runner (commit `a634be3`) with the
+  resulting auditable artifact set persisted into version control. Append-only; does
+  not alter the EXP-006 pre-registration or the earlier EXP-006 RESULT entry above.
+- **Date:** 2026-07-28. Branch `overhaul/evidence-lab`.
+- **What is new vs the prior EXP-006 RESULT entry:** the earlier entry recorded that
+  the runner existed and returned INCONCLUSIVE, but its artifacts were transient
+  (scratchpad/tmp) and `logs/` is git-ignored. This entry records that the runner was
+  **run** and its machine-readable artifacts were **committed** to
+  `docs/overhaul/exp006_run/` (force-added past the repo's global `*.json` ignore, on
+  purpose, so the evidence record is auditable from the repo).
+- **Verdict:** **INCONCLUSIVE — DATA_UNAVAILABLE** (unchanged; the data reality is
+  unchanged). Confirmed freshly: `logs/bhav/` = 0 files, `is_ready()` = False, NSE
+  `HTTP 000`; a bounded 45s `BhavDataProvider` build attempt **timed out** (no network);
+  no universe/CA/fundamental history. The data-quality gate failed closed. **Not
+  strategy evidence.**
+- **Reproducibility identities (in the committed manifest):** snapshot_id
+  `ad652107580ddae1`; EXP-006 config hash `4f638f99e13bf939` (identical to the frozen
+  framework — no config drift); code commit `a634be3`; cost model 0.22% round-trip +
+  0.10% slippage (modelled aggregate, NOT a broker contract-note replication);
+  universe survivorship_complete = false; corporate actions RAW; benchmark/sector/
+  fundamental identities unavailable.
+- **Artifacts committed:** `data_quality.json`, `snapshot_manifest.json`,
+  `experiment_spec.json`, `config_snapshot.json`, `limitations.json`, `verdict.json`,
+  `artifact_index.json`, `README.md` (index + reproduce guide). The full observation/
+  ledger/ablation/benchmark set is produced only when real data is present.
+- **Guarded by tests:** `TestCommittedRunRecord` asserts the persisted verdict stays
+  INCONCLUSIVE/DATA_UNAVAILABLE, the manifest matches the frozen config hash, and the
+  data-quality gate is failed-closed — so the committed record cannot be edited into a
+  false verdict without failing CI.
+- **No PASS is attainable on the current data policy:** the runner's research-grade
+  gate downgrades a would-be PASS on survivorship-incomplete / CA-unadjusted data to
+  INCONCLUSIVE; a FAIL would remain meaningful. A verdict on the hypothesis's economic
+  validity still awaits a run on research-grade point-in-time NSE data (operator step;
+  `python -m research.momentum_breakout.runner --out logs/experiments/EXP-006`).
+- **Supersedes / references:** executes EXP-006 (pre-registered); records the committed
+  artifact set for the prior EXP-006 RESULT; inherits the EXP-005 anti-mirage discipline.

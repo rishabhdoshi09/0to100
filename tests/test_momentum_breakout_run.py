@@ -359,3 +359,50 @@ class TestRunnerExecutionIsolation:
             for pat in ("import execution", "from execution", "import alerts",
                         "from alerts", ".place_trade(", "kite_client", "GTT_"):
                 assert pat not in code, f"{mod.__name__} references {pat}"
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 8. Committed evidence-run record (the persisted artifacts must stay honest)
+# ══════════════════════════════════════════════════════════════════════════════
+
+class TestCommittedRunRecord:
+    """Guards the committed EXP-006 run under docs/overhaul/exp006_run/ so the
+    persisted, auditable record cannot silently rot or be edited into a false verdict.
+    The run itself is data-unavailable in this environment → INCONCLUSIVE."""
+
+    import os
+    _DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)),
+                        "docs", "overhaul", "exp006_run")
+
+    def _load(self, name):
+        import os
+        with open(os.path.join(self._DIR, name)) as f:
+            return json.load(f)
+
+    def test_full_artifact_set_is_committed(self):
+        import os
+        for name in ("data_quality.json", "snapshot_manifest.json",
+                     "experiment_spec.json", "config_snapshot.json",
+                     "limitations.json", "verdict.json", "artifact_index.json"):
+            assert os.path.exists(os.path.join(self._DIR, name)), f"missing {name}"
+        assert os.path.exists(os.path.join(self._DIR, "README.md"))
+
+    def test_committed_verdict_is_honest_inconclusive(self):
+        v = self._load("verdict.json")
+        assert v["experiment_id"] == "EXP-006"
+        assert v["verdict"] == "INCONCLUSIVE"
+        assert "DATA_UNAVAILABLE" in v["reason"]
+        assert v["primary_exit"] == RUN.EXP.PRIMARY_EXIT
+        # never claims strategy evidence
+        assert "NOT strategy evidence" in v["note"]
+
+    def test_committed_manifest_matches_frozen_config(self):
+        m = self._load("snapshot_manifest.json")
+        # the persisted run is bound to the FROZEN EXP-006 config hash (no drift)
+        assert m["experiment_config_hash"] == primary_config().config_hash()
+        assert m["universe_policy"]["survivorship_complete"] is False
+
+    def test_committed_data_quality_failed_closed(self):
+        q = self._load("data_quality.json")
+        assert q["ok"] is False
+        assert any("DATA_UNAVAILABLE" in r for r in q["fatal_reasons"])

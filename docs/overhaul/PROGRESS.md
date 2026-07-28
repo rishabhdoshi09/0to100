@@ -262,3 +262,34 @@ Focused money-safety milestone. **No service extraction, no portfolio-simulator 
 **Next milestone**
 - Phase 1 continued: transactional fail-closed evidence writes (C-06); `TrustClass`
   boundary stub (C-01/E). Then Phase 2 service extraction.
+
+## Milestone 3b — EXP-006 evidence run EXECUTED + artifacts committed · 2026-07-28 · status: DONE (verdict INCONCLUSIVE — DATA_UNAVAILABLE)
+
+Executes the FROZEN EXP-006 runner (commit `a634be3`) and persists its auditable
+artifact set into version control. No framework/hypothesis/detector/evidence/execution
+change; no service extraction, portfolio simulator, UI or new strategy.
+
+**What this adds over Milestone 3:** Milestone 3 built + tested the runner but its
+artifacts were transient (`logs/` is git-ignored). This milestone RUNS it and COMMITS
+the machine-readable artifact record under `docs/overhaul/exp006_run/` (force-added past
+the repo's global `*.json` ignore, on purpose, so the evidence is auditable from the repo).
+
+**Verdict: INCONCLUSIVE — DATA_UNAVAILABLE.** Data reality re-confirmed fresh: 0 bhav
+files, `is_ready()` False, NSE HTTP 000; a bounded 45s `BhavDataProvider` build attempt
+timed out (no network). The data-quality gate failed closed. Not strategy evidence.
+
+**Committed artifacts** (`docs/overhaul/exp006_run/`): data_quality.json,
+snapshot_manifest.json, experiment_spec.json, config_snapshot.json, limitations.json,
+verdict.json, artifact_index.json, README.md (index + reproduce guide). Reproducibility
+identities: snapshot_id `ad652107580ddae1`, config hash `4f638f99e13bf939` (== frozen
+framework, no drift), code commit `a634be3`.
+
+**Tests run**
+- `tests/test_momentum_breakout_run.py` — 31 passed (27 runner + new `TestCommittedRunRecord`
+  guarding the persisted verdict/manifest/gate against silent corruption).
+- Full network-free suite green (regression). Execution isolation, Telegram paper-only,
+  LIVE migration lock all re-asserted.
+
+**Limitations bounding any future real-data verdict:** survivorship incomplete; CA raw;
+sector membership not dated; no PIT fundamentals; no PIT delivery. Under the research-grade
+gate a PASS needs ≥ survivorship + CA research-grade; a FAIL is attainable now.

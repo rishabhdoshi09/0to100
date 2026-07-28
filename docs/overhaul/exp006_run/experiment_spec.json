@@ -1,0 +1,47 @@
+{
+  "config_hash": "4f638f99e13bf939",
+  "decision_metrics": [
+    "n_candidates",
+    "n_trades",
+    "expectancy_R",
+    "expectancy_CI",
+    "profit_factor",
+    "win_rate",
+    "avg_win",
+    "avg_loss",
+    "MAE",
+    "MFE",
+    "max_drawdown",
+    "turnover",
+    "cost_drag",
+    "sharpe",
+    "benchmark_relative",
+    "regime_breakdown",
+    "sector_concentration",
+    "reality_check_multiple_testing"
+  ],
+  "entry_convention": {
+    "entry": "next tradable bar open",
+    "gap_through_stop": "fills at open, not at the stop price",
+    "roundtrip_cost_pct": 0.22,
+    "same_bar_ordering": "stop checked before target (pessimistic)",
+    "signal_known": "after confirmed breakout close",
+    "slippage_pct_per_side": 0.1
+  },
+  "exit_variants": [
+    "structural_trend",
+    "structural_ema_trail",
+    "structural_maxhold"
+  ],
+  "experiment_id": "EXP-006",
+  "hypothesis": "Stocks with prior leadership, a long contracting base, a confirmed breakout, small structural risk and strong sector support have positive forward expectancy after realistic Indian cash-equity costs.",
+  "no_post_result_optimisation": true,
+  "primary_comparisons": [
+    "Nifty benchmark over equivalent holding periods",
+    "all eligible liquid stocks",
+    "cross-sectional momentum without base+sector conditions",
+    "breakout candidates without the strong-sector requirement"
+  ],
+  "primary_exit": "structural_trend",
+  "title": "Institutional Momentum Breakout v1"
+}

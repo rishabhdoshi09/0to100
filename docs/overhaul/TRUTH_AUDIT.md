@@ -255,6 +255,11 @@ INCONCLUSIVE. In this environment the run returned INCONCLUSIVE(DATA_UNAVAILABLE
 point-in-time NSE dataset exists here (empty bhav/index stores, no network, no
 universe/CA/fundamental history). A defensible PASS is not attainable until at least
 survivorship + CA reach research grade; a FAIL is attainable now.
+**Update (2026-07-28, run executed + committed):** the frozen runner was executed and
+its auditable artifact set committed to `docs/overhaul/exp006_run/` (verdict
+INCONCLUSIVE — DATA_UNAVAILABLE; snapshot `ad652107580ddae1`; config hash
+`4f638f99e13bf939` == frozen framework). `TestCommittedRunRecord` guards the persisted
+record so it cannot be edited into a false verdict without failing CI.
 
 ## C-16 · Detector NaN-safety + O(n²) base scan (fixed during EXP-006 run)
 **Class:** RELIABILITY · **Status:** FIXED · 2026-07-28
