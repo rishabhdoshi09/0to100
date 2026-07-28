@@ -271,6 +271,31 @@ def build_store(days: int = DEFAULT_DAYS, progress=None) -> int:
     return _full_build(available)
 
 
+def _dates_on_disk() -> list[date]:
+    """Trading dates for every bhavcopy CSV already present in the store dir."""
+    from datetime import datetime as _dt
+    out: list[date] = []
+    if not _BHAV_DIR.exists():
+        return out
+    for p in _BHAV_DIR.glob("*.csv"):
+        try:
+            out.append(_dt.strptime(p.stem, "%d%m%Y").date())
+        except Exception:
+            continue
+    return sorted(out)
+
+
+def build_from_local() -> int:
+    """Build the store from bhavcopy CSVs ALREADY on disk (user-supplied via the
+    Historical Data Setup page), with NO network. Reuses the canonical parser/builder
+    (`_full_build`) — this is a local-load entry point for the SAME store, not a parallel
+    database. Returns the symbol count (0 if no usable files on disk)."""
+    available = _dates_on_disk()
+    if not available:
+        return 0
+    return _full_build(available)
+
+
 # ── Corporate-action adjustment, applied ON READ ─────────────────────────────
 # The on-disk store stays RAW; adjustment happens here so there is no double-
 # adjustment across rebuilds and an updated CA table needs no re-download. When

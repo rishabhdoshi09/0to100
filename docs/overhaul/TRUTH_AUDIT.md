@@ -272,6 +272,20 @@ data limitations are one-directional favourable (survivorship); a CA-raw (either
 limitation downgrades a FAIL to INCONCLUSIVE. No EXP-006 threshold/feature/config-hash
 changed.
 
+## C-19 · Historical Data Setup frontend (data management; presentation + ingestion only)
+**Class:** DOCUMENTATION / usability · **Status:** ADDED · 2026-07-28
+**Reality:** materialising real data required operator shell commands; a local layman
+had no guided way to provide data, validate it, and run EXP-006.
+**Fix (data-management only):** `research/momentum_breakout/data_setup.py` (pure engine:
+safe ZIP extraction, content validation, readiness green/amber/red, deterministic
+snapshot, overwrite-protected save into the CANONICAL stores via new
+`bhavcopy_store.build_from_local` / `index_store.build_from_local` — no parallel DB) +
+`ui/data_setup_page.py` (thin Streamlit page under More Tools) + guide
+`docs/user-guide/HISTORICAL_DATA_SETUP.md`. The page runs the UNCHANGED frozen EXP-006
+runner into a NEW immutable run dir (never overwrites `0001-blocked`), refuses a red
+readiness gate, and contains NO order actions. EXP-006 thresholds/config-hash/detector/
+entry/stop/exits/ablations are unchanged; research stays isolated from execution.
+
 ## C-18 · Test-suite completeness: test_scan_core reclassified as integration
 **Class:** RELIABILITY / DOCUMENTATION · **Status:** RESOLVED · 2026-07-28
 **Reality:** `tests/test_scan_core.py` uses synthetic data + mocks but its import chain

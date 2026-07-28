@@ -192,6 +192,35 @@ def _build_index_store_locked(days: int = 400) -> int:
     return len(new_store)
 
 
+def build_from_local() -> int:
+    """Build the index store from NSE index CSVs ALREADY on disk (user-supplied), with
+    NO network. Local-load entry point for the SAME store, not a parallel database.
+    Returns the index count (0 if none usable)."""
+    from datetime import datetime as _dt
+    global _store, _last_day
+    if not _DIR.exists():
+        return 0
+    available = []
+    for p in _DIR.glob("*.csv"):
+        try:
+            available.append(_dt.strptime(p.stem, "%d%m%Y").date())
+        except Exception:
+            continue
+    frames = [f for x in sorted(available) if (f := _read_day(x)) is not None]
+    if not frames:
+        return 0
+    allday = pd.concat(frames, ignore_index=True)
+    new_store: dict[str, pd.DataFrame] = {}
+    for name, g in allday.groupby("name"):
+        g = g.sort_values("date").set_index("date")
+        new_store[str(name)] = g[[c for c in ("Open", "High", "Low", "Close", "Volume")
+                                  if c in g.columns]]
+    with _lock:
+        _store = new_store
+        _last_day = max(sorted(available))
+    return len(new_store)
+
+
 def get_index_ohlcv(ticker: str) -> Optional[pd.DataFrame]:
     """yfinance-shaped OHLC for a ^TICKER. Builds the store on first use."""
     name = TICKER_MAP.get(ticker.upper())

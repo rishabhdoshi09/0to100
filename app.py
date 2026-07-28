@@ -1216,6 +1216,7 @@ with st.sidebar:
             ("Smart Alerts",      "🔔 Smart Alerts"),
             ("IPO Calendar",      "🚀 IPO Calendar"),
             ("Research",          "🔬 Research"),
+            ("Historical Data Setup", "🗂️ Historical Data Setup"),
             ("Tools",             "🛠️ Tools"),
         ]
         for _mt_key, _mt_label in _more_tools:
@@ -1719,6 +1720,18 @@ elif _page in ("Terminal", "Analyse"):
 
 # ══════════════════════════════════════════════════════════════════════════════
 # PAGE: RESEARCH
+# ══════════════════════════════════════════════════════════════════════════════
+elif _page == "Historical Data Setup":
+    # Data-management page: load/validate real NSE history, save into the canonical
+    # stores, show research readiness, run the FROZEN EXP-006 test when allowed.
+    # Contains NO order actions; historical research cannot place broker orders.
+    try:
+        from ui.data_setup_page import render_data_setup
+        render_data_setup()
+    except Exception as _hds_exc:
+        st.error(f"Historical Data Setup unavailable: {_hds_exc}")
+        st.caption("See docs/user-guide/HISTORICAL_DATA_SETUP.md for the manual.")
+
 # ══════════════════════════════════════════════════════════════════════════════
 elif _page == "Research":
     (_r0, _r1, _r2, _r3, _r4, _r5, _r6, _r7, _r8, _r9, _r10, _r11, _r12, _r13,

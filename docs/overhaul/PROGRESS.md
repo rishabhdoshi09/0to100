@@ -365,3 +365,41 @@ substituted. `runs/0001-blocked` untouched; no new run directory (no run occurre
 **Tests:** no code changed; canonical network-free suite `python -m pytest` remains green
 (545). Regression guarantees (C-13, PAPER autopilot, Telegram paper-only, LIVE lock,
 EXP-006 isolation) unchanged.
+
+## Milestone 6 — Historical Data Setup frontend · 2026-07-28 · status: DONE (data-management UI + ingestion)
+
+Layman workflow to provide/validate real NSE data, save it into the canonical stores,
+view readiness, and run the FROZEN EXP-006 test when the gate allows. No EXP-006 change,
+no research→execution link, no order actions, no LIVE unlock.
+
+**Completed work**
+- `research/momentum_breakout/data_setup.py` (pure, tested): safe ZIP extraction
+  (path-traversal / symlink / decompression-bomb / unsupported-file guards; validated by
+  content, not name), dataset validation + coverage/quality, readiness (green/amber/red;
+  red cannot be bypassed), deterministic content-addressed snapshot, overwrite-protected
+  save (new/replace/cancel), and `run_exp006()` into a NEW immutable run dir (never
+  overwrites a prior run; refuses a red gate).
+- `data/bhavcopy_store.build_from_local()` + `data/index_store.build_from_local()` —
+  local-load entry points feeding the SAME canonical stores (no parallel database).
+- `ui/data_setup_page.py` — thin Streamlit page (simple language, Technical-details
+  expanders, live-safety note "historical research cannot place broker orders"; NO order
+  buttons); wired into app.py More Tools + a standalone dispatch branch.
+- `docs/user-guide/HISTORICAL_DATA_SETUP.md` — plain-language guide.
+
+**Tests run**
+- `tests/test_data_setup.py` — 27 passed (deterministic, network-free, no wall-clock/
+  Streamlit): valid/unsafe/unsupported/not-a-zip; malformed CSV/JSON, invalid OHLC,
+  duplicate detection, insufficient history; readiness green/amber/red; stable + content-
+  addressed snapshot; overwrite protection (new refuses / replace / cancel); materialise
+  the canonical store from local files (no network); red-gate run prevention; new
+  immutable run dir + prior-run preservation; EXP-006 config unchanged after a run;
+  execution isolation (engine + UI page import no order path).
+- Canonical network-free suite `python -m pytest` — green.
+
+**Guarantees preserved (re-asserted):** PAPER autopilot, Telegram paper-only, LIVE
+migration lock, C-13 timezone protections, research/execution isolation, no broker/GTT
+import. EXP-006 thresholds/config-hash/detector/entry/stop/exits/ablations UNCHANGED.
+
+**Known limitation:** Streamlit *rendering* is verified by source inspection + the pure-
+engine tests (no live UI harness in CI). Real materialisation still needs real NSE files
+(or network on a data-capable host).
