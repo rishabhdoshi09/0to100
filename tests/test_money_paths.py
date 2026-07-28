@@ -868,19 +868,12 @@ class TestAutopilot:
         assert st2["realized_pnl"] > 0 and st2["pool"] > 100000
 
     def test_circuit_breaker_disarms(self, tmp_path, monkeypatch):
-        import sqlite3
-        from datetime import datetime
         ap, te = self._setup(tmp_path, monkeypatch)
         ap.arm()
-        conn = sqlite3.connect(te._DB)
-        conn.execute(te._DDL)
-        conn.execute(
-            "INSERT INTO trades (placed_at, mode, symbol, qty, entry_type, "
-            "entry_price, stop_price, target_price, product, status, note) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-            (datetime.now().isoformat(timespec='seconds'), "PAPER", "CRASH",
-             100, "MARKET", 500, 450, 515, "CNC", "PAPER_LOSS", "AUTOPILOT:t"))
-        conn.commit(); conn.close()
+        # placed_at defaults to now_ist_naive() — same IST clock the breaker's
+        # day-filter uses, so this is machine-TZ-independent (C-13).
+        self._insert_closed(te, "CRASH", 500, 450, 515, 100, win=False,
+                            source="t")
         ap._circuit_breaker()
         st = ap.get_status()
         assert not st["armed"] and "circuit breaker" in st["disarmed_reason"]
@@ -929,18 +922,25 @@ class TestAutopilot:
         assert st["start_time"] == "09:30" and st["end_time"] == "14:45"
 
     def _insert_closed(self, te, symbol, entry, stop, target, qty, win,
-                       source="scanner"):
+                       source="scanner", placed_at=None, mode="PAPER"):
+        """Insert a CLOSED trade. `placed_at` defaults to the IST storage clock
+        (`now_ist_naive()`) so the write and the autopilot's IST day-filter share
+        one clock — this is what keeps the day tests machine-TZ-independent (the
+        C-13 fix). Boundary tests pass an explicit naive-IST timestamp instead."""
         import sqlite3
-        from datetime import datetime
+        from core.market_clock import now_ist_naive
+        win_status = "PAPER_WIN" if win else "PAPER_LOSS"
+        if mode == "LIVE":
+            win_status = "AUTO_WIN" if win else "AUTO_LOSS"
+        ts = placed_at or now_ist_naive().isoformat(timespec="seconds")
         conn = sqlite3.connect(te._DB)
         conn.execute(te._DDL)
         conn.execute(
             "INSERT INTO trades (placed_at, mode, symbol, qty, entry_type, "
             "entry_price, stop_price, target_price, product, status, note) "
             "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-            (datetime.now().isoformat(timespec='seconds'), "PAPER", symbol,
-             qty, "MARKET", entry, stop, target, "CNC",
-             "PAPER_WIN" if win else "PAPER_LOSS", f"AUTOPILOT:{source}"))
+            (ts, mode, symbol, qty, "MARKET", entry, stop, target, "CNC",
+             win_status, f"AUTOPILOT:{source}"))
         conn.commit(); conn.close()
 
     def test_report_card_math_and_evidence_gate(self, tmp_path, monkeypatch):
@@ -1366,6 +1366,122 @@ class TestAutopilot:
         # gate back ON but Brain NORMAL → trades normally
         ap.set_config(brain_gate=True)
         monkeypatch.setattr(ap, "_brain_posture", lambda: ("NORMAL", ""))
+        assert ap.consider("BEL", 300, 285, 80, 0.2, "Defence", "t") is True
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 15a. Autopilot day-boundary safety (C-13) — UTC↔IST must never miscount a
+#      trading day. These tests PIN the IST "today" (monkeypatching `_ist_today`)
+#      so they are fully deterministic — independent of the machine timezone AND
+#      of the wall-clock instant pytest runs. A trade's IST trading-day is decided
+#      by `core.market_clock` alone; the circuit breaker, day-P&L and per-day
+#      limits all read through it.
+# ══════════════════════════════════════════════════════════════════════════════
+
+class TestAutopilotDayBoundary:
+    # naive-IST storage timestamps straddling the IST midnight of 2026-07-28
+    JUST_AFTER_MIDNIGHT = "2026-07-28T00:01:00"     # IST 28th (today)
+    JUST_BEFORE_MIDNIGHT = "2026-07-27T23:59:00"    # IST 27th (yesterday)
+
+    def _pin_today(self, ap, monkeypatch, y=2026, m=7, d=28):
+        """Freeze the autopilot's notion of 'today IST' — the ONLY input that
+        must decide the trading day. Machine TZ / real date become irrelevant."""
+        from datetime import date
+        monkeypatch.setattr(ap, "_ist_today", lambda: date(y, m, d))
+
+    # ── market_clock contract (the single source of the IST trading day) ──────
+    def test_ist_day_of_contract(self):
+        from core.market_clock import ist_day_of, is_ist_today
+        from datetime import datetime, timezone, timedelta
+        # naive-IST storage strings resolve to their own date (storage convention)
+        assert ist_day_of(self.JUST_AFTER_MIDNIGHT) == "2026-07-28"
+        assert ist_day_of(self.JUST_BEFORE_MIDNIGHT) == "2026-07-27"
+        # a tz-aware UTC value is converted INTO IST before bucketing:
+        # 2026-07-27 23:00 UTC == 2026-07-28 04:30 IST → the 28th
+        utc = timezone.utc
+        assert ist_day_of(datetime(2026, 7, 27, 23, 0, tzinfo=utc)) == "2026-07-28"
+        # 2026-07-27 18:00 UTC == 2026-07-27 23:30 IST → still the 27th
+        assert ist_day_of(datetime(2026, 7, 27, 18, 0, tzinfo=utc)) == "2026-07-27"
+        # a tz-aware IST value round-trips
+        ist = timezone(timedelta(hours=5, minutes=30))
+        assert ist_day_of(datetime(2026, 7, 28, 0, 1, tzinfo=ist)) == "2026-07-28"
+        # explicit `today` makes the comparison deterministic
+        assert is_ist_today(self.JUST_AFTER_MIDNIGHT, "2026-07-28") is True
+        assert is_ist_today(self.JUST_BEFORE_MIDNIGHT, "2026-07-28") is False
+
+    # ── circuit breaker across the boundary (the money-critical control) ──────
+    def test_breaker_counts_ist_today_even_when_utc_is_yesterday(
+            self, tmp_path, monkeypatch):
+        """A loss stamped 00:01 IST (28th) is TODAY even though its UTC instant
+        is the 27th — the breaker MUST count it and fire."""
+        ap, te = TestAutopilot()._setup(tmp_path, monkeypatch)
+        self._pin_today(ap, monkeypatch)          # today = IST 2026-07-28
+        ap.arm()
+        # -5000 on a 100k pool = -5% < -3% limit
+        TestAutopilot()._insert_closed(
+            te, "CRASH", 500, 450, 515, 100, win=False,
+            placed_at=self.JUST_AFTER_MIDNIGHT)
+        ap._circuit_breaker()
+        st = ap.get_status()
+        assert not st["armed"] and "circuit breaker" in st["disarmed_reason"]
+
+    def test_breaker_ignores_previous_ist_day_loss(self, tmp_path, monkeypatch):
+        """Yesterday's loss (23:59 IST, 27th) must NOT bleed into today's
+        breaker — a fresh IST day starts the day-loss count at zero."""
+        ap, te = TestAutopilot()._setup(tmp_path, monkeypatch)
+        self._pin_today(ap, monkeypatch)          # today = IST 2026-07-28
+        ap.arm()
+        TestAutopilot()._insert_closed(
+            te, "CRASH", 500, 450, 515, 100, win=False,
+            placed_at=self.JUST_BEFORE_MIDNIGHT)  # 27th, not today
+        ap._circuit_breaker()
+        st = ap.get_status()
+        assert st["armed"] and not st["disarmed_reason"]
+
+    # ── day-realised P&L: exactly today's closes, no double-count ─────────────
+    def test_day_realized_only_ist_today_no_double_count(
+            self, tmp_path, monkeypatch):
+        helper = TestAutopilot()
+        ap, te = helper._setup(tmp_path, monkeypatch)
+        helper._zero_costs(monkeypatch)
+        self._pin_today(ap, monkeypatch)
+        # +150 today (00:01 IST) and +999 yesterday (23:59 IST)
+        helper._insert_closed(te, "TODAY", 500, 450, 515, 10, win=True,
+                              placed_at=self.JUST_AFTER_MIDNIGHT)
+        helper._insert_closed(te, "YDAY", 100, 50, 1099, 1, win=True,
+                              placed_at=self.JUST_BEFORE_MIDNIGHT)
+        pnl = ap.pnl_snapshot()
+        assert pnl["day_realized"] == 150 and pnl["day_closed"] == 1
+
+    def test_day_realized_counts_paper_and_live_today(
+            self, tmp_path, monkeypatch):
+        """Both PAPER and LIVE closes on the IST day are day-realised; neither
+        is double-counted and a prior-day row is excluded."""
+        helper = TestAutopilot()
+        ap, te = helper._setup(tmp_path, monkeypatch)
+        helper._zero_costs(monkeypatch)
+        self._pin_today(ap, monkeypatch)
+        helper._insert_closed(te, "PAP", 500, 450, 515, 10, win=True,   # +150
+                              placed_at=self.JUST_AFTER_MIDNIGHT, mode="PAPER")
+        helper._insert_closed(te, "LIV", 100, 90, 110, 10, win=True,    # +100
+                              placed_at="2026-07-28T09:30:00", mode="LIVE")
+        helper._insert_closed(te, "OLD", 100, 50, 600, 1, win=True,     # y'day
+                              placed_at=self.JUST_BEFORE_MIDNIGHT, mode="LIVE")
+        pnl = ap.pnl_snapshot()
+        assert pnl["day_realized"] == 250 and pnl["day_closed"] == 2
+
+    # ── per-day trade limit resets on the IST day, not the machine day ────────
+    def test_trades_per_day_limit_resets_on_ist_day(self, tmp_path, monkeypatch):
+        ap, te = TestAutopilot()._setup(tmp_path, monkeypatch)
+        ap.set_config(max_trades_per_day=1, max_open_positions=5, max_per_sector=5)
+        ap.arm()
+        monkeypatch.setattr(ap, "_in_window", lambda now=None: True)
+        self._pin_today(ap, monkeypatch, d=28)           # IST 28th
+        assert ap.consider("HAL", 4500, 4300, 80, 0.2, "Defence", "t") is True
+        # second trade same IST day → blocked by the daily limit
+        assert ap.consider("BEL", 300, 285, 80, 0.2, "Defence", "t") is False
+        # advance to the next IST day → the daily counter resets, trading resumes
+        self._pin_today(ap, monkeypatch, d=29)           # IST 29th
         assert ap.consider("BEL", 300, 285, 80, 0.2, "Defence", "t") is True
 
 
@@ -1946,6 +2062,33 @@ class TestTelegramCommands:
         ta._handle_message({"chat": {"id": 12345}, "text": "/pause"},
                            "tok", "12345")           # owner
         assert sent == ["/pause"]
+
+    def test_telegram_order_path_is_always_paper(self, monkeypatch):
+        """Invariant #4 (C-04b verification): EVERY Telegram order path must
+        force paper mode — a tap can NEVER place a live order, regardless of the
+        app's configured mode or whether Kite is connected. This asserts the ONE
+        order call in telegram_actions passes paper=True."""
+        import alerts.telegram_actions as ta
+        captured = {}
+
+        def _spy(*a, **k):
+            captured.update(k)
+            return {"ok": True, "status": "PAPER", "id": 1,
+                    "symbol": k.get("symbol")}
+
+        monkeypatch.setattr("execution.trade_executor.place_trade", _spy)
+        # even if the app is armed LIVE, the Telegram tap must stay paper
+        import execution.autopilot as ap
+        monkeypatch.setattr(ap, "set_config", lambda **kw: None, raising=False)
+        msg = ta._do_paper_trade("HAL", 4500, 4300, 4600)
+        assert captured.get("paper") is True
+        assert "paper" in msg.lower() or "📝" in msg
+        # guard against a second, un-audited order path sneaking in: the module
+        # must import place_trade in exactly one place and always as paper.
+        import inspect
+        src = inspect.getsource(ta)
+        assert src.count("place_trade(") == 1
+        assert "paper=True" in src
 
 
 class TestWatchdogAndBackup:

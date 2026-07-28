@@ -75,3 +75,75 @@ claim without evidence.
 **Next milestone**
 - Phase 1 continued: transactional fail-closed evidence writes (C-06); `TrustClass`
   boundary stub (C-01/E). Then Phase 2 service extraction.
+
+## Milestone 1b — C-13 day-boundary money-safety · 2026-07-28 · status: DONE
+
+Focused money-safety milestone. **No service extraction, no portfolio-simulator work.**
+
+**Root cause**
+- The NSE India money-path was already IST-*correct* (naive-IST storage +
+  `today_ist()` day-filter), but the "naive-IST storage / IST-only bucketing" convention
+  was **implicit and un-single-sourced**. A naive machine `datetime.now()` (= UTC on a
+  VPS/CI box) could therefore be compared against an IST date and silently mis-bucket a
+  trade across the UTC↔IST midnight — under which the **daily-loss circuit breaker could
+  fail to fire**. The two flaky tests wrote machine-local timestamps and depended on the
+  wall-clock instant pytest ran.
+
+**Timestamp-storage contract (now single-sourced in `core/market_clock.py`)**
+1. Persist trade/journal timestamps as **naive IST** wall-clock via `now_ist_naive()`
+   (documented legacy convention; a tz-aware-UTC migration is deferred).
+2. Convert to IST only for NSE trading-day boundaries / display.
+3. Never compare a naive machine timestamp against an IST date.
+4. Every "today" query resolves the IST trading day via `ist_day_of()` /
+   `is_ist_today(ts, today)` — which accept naive-IST *or* tz-aware inputs, so the
+   query layer already tolerates a future UTC-storage migration.
+5. Tests pin the IST "today" (monkeypatch `_ist_today`) → independent of machine TZ and
+   of the instant pytest runs.
+
+**Completed work**
+- `core/market_clock.py`: canonical `now_ist_naive()`, `ist_day_of()`, `is_ist_today()`
+  + documented storage contract.
+- `execution/trade_executor.py`: `placed_at` stamped via `now_ist_naive()`.
+- `execution/autopilot.py`: day-P&L snapshot, EOD digest, and circuit-breaker
+  `day_realized` all route through `is_ist_today(placed_at, today)`.
+- `docs/architecture/EXECUTION_SAFETY.md`: `QT_LIVE_ENABLED` reframed as a **temporary
+  migration interlock** (not graduation); future **deployment-manifest** gate described
+  (strategy ID, promoted experiment ID, config hash, dataset snapshot, allowed mode,
+  evidence status, broker-reconciliation status) — *not implemented this milestone*.
+- `docs/overhaul/TRUTH_AUDIT.md`: C-13 marked RESOLVED; C-04b clarified (temporary
+  interlock; Telegram paper ordering is intended); new **C-04c** (Telegram paper-only
+  verification) and **C-14** (deferred non-NSE tz sites) added.
+
+**Tests run**
+- `tests/test_money_paths.py` — 259 passed (incl. the new boundary + Telegram suites).
+- **Full network-free suite `python -m pytest tests/` — GREEN (exit 0), all edits.**
+- New: `TestAutopilotDayBoundary` (market_clock contract; breaker counts a 00:01-IST
+  loss when UTC is the prior day; breaker ignores a 23:59-IST prior-day loss;
+  day-realised IST-only + no double-count; PAPER **and** LIVE both IST-filtered;
+  per-day limit resets on the IST day) and
+  `TestTelegramCommands::test_telegram_order_path_is_always_paper`.
+
+**Evidence generated**
+- The daily-loss circuit breaker now counts exactly the IST trading day at the
+  UTC↔IST boundary; verified deterministically (machine-TZ- and wall-clock-independent).
+- Telegram order path proven paper-only and guarded against regression.
+
+**Evidence: paper autopilot + Telegram paper actions still work**
+- `TestAutopilot` (43 tests) green — paper arming, gates, +3% target, sizing,
+  compounding, report card, trailing, circuit breaker, P&L snapshot.
+- `test_live_disabled_during_overhaul` green — LIVE still migration-locked; paper arms.
+- `test_telegram_order_path_is_always_paper` green — Telegram tap places paper even
+  when the app is armed LIVE.
+
+**Data migration implication**
+- **None.** Existing journals are already naive-IST; `ist_day_of()`/`is_ist_today()`
+  read them unchanged. No backfill, no schema change. A future tz-aware-UTC storage
+  migration is optional and already tolerated by the query layer.
+
+**Unresolved risks**
+- C-14 (deferred): US-paper / F&O-paper / Telegram-display timezone sites still
+  machine-local — bounded, cannot affect the NSE circuit breaker or live-order path.
+
+**Next milestone**
+- Phase 1 continued: transactional fail-closed evidence writes (C-06); `TrustClass`
+  boundary stub (C-01/E). Then Phase 2 service extraction.

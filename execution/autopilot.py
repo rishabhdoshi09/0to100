@@ -41,13 +41,9 @@ import os
 import threading
 from datetime import datetime, date
 
-from core.market_clock import IST, today_ist as _ist_today
-
-
-def _now_ist_naive() -> datetime:
-    """IST wall-clock as naive datetime — journal timestamps naive hain,
-    unse subtraction ke liye aware/naive mix crash na ho."""
-    return datetime.now(IST).replace(tzinfo=None)
+from core.market_clock import (IST, today_ist as _ist_today,
+                                now_ist_naive as _now_ist_naive,
+                                is_ist_today as _is_ist_today)
 from pathlib import Path
 
 from logger import get_logger
@@ -66,9 +62,11 @@ ARM_PHRASE = "ARM LIVE"        # must be typed exactly to arm LIVE mode
 
 
 def _live_enabled() -> bool:
-    """LIVE execution is HARD-DISABLED during the Evidence Lab overhaul
-    (ADR-001, directive §15). It re-enables ONLY via an explicit env flag set
-    AFTER the graduation criteria in docs/architecture/EXECUTION_SAFETY.md are met.
+    """`QT_LIVE_ENABLED` is a TEMPORARY MIGRATION INTERLOCK, not a graduation switch.
+    LIVE arming fails closed while the Evidence Lab overhaul is in progress (ADR-001,
+    directive §15). The flag removes ONLY this migration lock — it does NOT assert any
+    strategy has earned live capital; the graduation criteria (and a future deployment
+    manifest) in docs/architecture/EXECUTION_SAFETY.md are a separate, mandatory gate.
     Paper mode is unaffected. Fail closed: anything but an explicit truthy flag =
     disabled."""
     return os.getenv("QT_LIVE_ENABLED", "").strip().lower() in ("1", "true", "yes", "on")
@@ -236,6 +234,11 @@ def get_status() -> dict:
         max(0.0, s["pool"] * (1 - s["cash_reserve_pct"]) - s["deployed"]), 0)
     today = _ist_today().isoformat()
     s["trades_today_count"] = int(s.get("trades_today", {}).get(today, 0))
+    # LIVE arming is migration-locked by default (C-04b). This is a TEMPORARY
+    # interlock, not strategy graduation — surfaced explicitly in status.
+    s["live_enabled"] = _live_enabled()
+    s["live_interlock"] = ("temporary migration interlock (QT_LIVE_ENABLED) — "
+                           "NOT strategy graduation")
     return s
 
 
@@ -334,9 +337,10 @@ def arm(confirm_phrase: str = "") -> tuple[bool, str]:
     if s["mode"] == "LIVE":
         if not _live_enabled():
             return False, ("LIVE execution is DISABLED during the Evidence Lab "
-                           "overhaul (paper only). It re-enables via QT_LIVE_ENABLED "
-                           "once the graduation criteria in "
-                           "docs/architecture/EXECUTION_SAFETY.md are met.")
+                           "overhaul (paper only). QT_LIVE_ENABLED is only a temporary "
+                           "migration interlock — lifting it does NOT graduate a "
+                           "strategy; the criteria in "
+                           "docs/architecture/EXECUTION_SAFETY.md are a separate gate.")
         if confirm_phrase.strip() != ARM_PHRASE:
             return False, f"LIVE arm karne ke liye exactly '{ARM_PHRASE}' type karo"
         try:
@@ -1059,7 +1063,7 @@ def pnl_snapshot() -> dict:
     day_realized = 0.0
     day_closed = 0
     for t in _autopilot_trades(_CLOSED_WIN + _CLOSED_LOSS):
-        if str(t["placed_at"])[:10] == today:
+        if _is_ist_today(t["placed_at"], today):    # IST-boundary safe
             day_realized += _net_pnl(t)         # net of costs
             day_closed += 1
     return {
@@ -1692,7 +1696,7 @@ def eod_digest(now: datetime | None = None) -> bool:
     placed = int(s.get("trades_today", {}).get(today, 0))
     open_trades = _open_autopilot_trades()
     closed_today = [t for t in _autopilot_trades(_CLOSED_WIN + _CLOSED_LOSS)
-                    if str(t["placed_at"])[:10] == today]
+                    if _is_ist_today(t["placed_at"], today)]
     if not (placed or open_trades or closed_today or s["armed"]):
         return False                       # boring day, koi spam nahi
 
@@ -1802,7 +1806,7 @@ def _circuit_breaker() -> None:
 
     day_realized = 0.0
     for t in _autopilot_trades(_CLOSED_WIN + _CLOSED_LOSS):
-        if str(t["placed_at"])[:10] == today:
+        if _is_ist_today(t["placed_at"], today):    # IST-boundary safe breaker
             day_realized += _net_pnl(t)         # net of costs — breaker on truth
 
     unrealized = 0.0

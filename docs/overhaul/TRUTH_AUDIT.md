@@ -70,15 +70,32 @@ gaps; in research-grade mode a CA must be event-backed, never inferred from a ga
 **Fix direction:** corporate-action ledger (§8) sourced from real CA events; research
 grade fails closed if `verify_ca_adjustment()` is not PASS.
 
-## C-04b · Live autopilot is enabled and Telegram taps can reach paper orders
-**Class:** MONEY_CRITICAL
+## C-04b · Live autopilot must be migration-locked during the overhaul
+**Class:** MONEY_CRITICAL · **Status:** live-lock FIXED (2026-07-27); Telegram
+paper-only VERIFIED (2026-07-28)
 **Claim:** directive §15 requires live autopilot disabled during the overhaul.
-**Reality:** `execution/autopilot.py` supports live arming; `alerts/telegram_actions.py`
-provides button-tap actions. Invariant #4 restricts Telegram to paper-only, but the
-path exists and must be hard-isolated during the overhaul.
-**Impact:** an un-graduated strategy could place live orders.
-**Fix direction:** disable live arming behind an explicit feature flag; document
-graduation criteria (`EXECUTION_SAFETY.md`); no live path until forward-paper evidence.
+**Reality (original):** `execution/autopilot.py` supported live arming.
+**Clarification (important):** Telegram *paper* ordering is **intended behaviour**
+(invariant #4), not itself a contradiction. The contradiction was solely that LIVE
+autopilot arming was reachable during the overhaul.
+**Fix applied:** `_live_enabled()` gates LIVE arming behind `QT_LIVE_ENABLED`, fail
+closed / default off (Milestone 1a). **`QT_LIVE_ENABLED` is a TEMPORARY migration
+interlock, not strategy graduation** — setting it does not assert any strategy earned
+live capital; it removes exactly one of many blocks. Full graduation (and a future
+deployment-manifest gate) is documented in `EXECUTION_SAFETY.md`. PAPER autopilot and
+Telegram paper actions remain fully operational; LIVE stays locked by default.
+**Verification (Telegram paper-only) — see C-04c below.**
+
+## C-04c · VERIFICATION: every Telegram order path is paper-only
+**Class:** MONEY_CRITICAL (safety proof) · **Status:** VERIFIED · 2026-07-28
+**Assertion:** no Telegram tap or command can ever place a LIVE order (invariant #4).
+**Evidence:** `alerts/telegram_actions.py` has exactly **one** order path,
+`_do_paper_trade()`, which calls `execution.trade_executor.place_trade(..., paper=True)`
+— and `place_trade` forces paper whenever `paper=True` (`if paper or not kite_ready()`).
+No other `place_trade(` call exists in the module. Locked by test
+`TestTelegramCommands::test_telegram_order_path_is_always_paper`, which (a) asserts the
+tap passes `paper=True` even with the app armed LIVE, and (b) fails if a second,
+un-audited `place_trade(` call is ever added or the `paper=True` is dropped.
 
 ## C-05 · Streamlit owns the lifecycle of every background service
 **Class:** RELIABILITY
@@ -155,24 +172,73 @@ reconciliation against realised fills. Fills are simulated *at the pivot* (optim
 **Fix direction:** cost model stays modelled and *labelled*; slippage graduates to
 `OBSERVED` only after forward-paper reconciliation (§15/§16).
 
-## C-13 · Day-P&L / circuit-breaker logic is not UTC↔IST-boundary safe
-**Class:** RELIABILITY
-**Reality:** discovered during Phase-1 work at a UTC/IST date boundary
-(UTC 2026-07-27 23:58 = IST 2026-07-28). `test_circuit_breaker_disarms` and
-`test_pnl_snapshot_live_and_day` insert trades with naive `datetime.now()` while the
-autopilot filters the trading day by IST `today_ist()` — so a "today" trade is
-excluded and day-realised P&L reads 0, i.e. the **circuit breaker can fail to fire**
-across the boundary. The tests are naive; whether the production day-filter is fully
-IST-consistent needs a dedicated check.
-**Impact:** a safety control (daily-loss circuit breaker) may under-count near
-midnight IST. MONEY-adjacent.
-**Fix direction:** IST-consistent day boundaries everywhere in P&L/limits; the §16
-timezone + announcement-release-time test suite. Tracked as a Phase-5/8 item.
+## C-13 · Day-P&L / circuit-breaker day boundary — RESOLVED (money-safety milestone)
+**Class:** RELIABILITY (money-adjacent) · **Status:** FIXED · 2026-07-28
+**Original finding:** surfaced at a UTC/IST date boundary (UTC 2026-07-27 23:58 =
+IST 2026-07-28). `test_circuit_breaker_disarms` and `test_pnl_snapshot_live_and_day`
+inserted trades with naive `datetime.now()` (the machine clock = **UTC** on the CI
+box / a VPS) while the autopilot filters the trading day by IST `today_ist()`. Across
+the boundary a genuine "today" trade was excluded, day-realised P&L read 0, and the
+**daily-loss circuit breaker could fail to fire**. MONEY-adjacent.
+
+**Root cause (confirmed):** the production India money-path was in fact IST-*correct*
+already — `execution/trade_executor.py` persists `placed_at` as naive **IST**
+wall-clock, and every autopilot day-query resolves "today" via IST `today_ist()`. The
+defect was an **implicit, undocumented convention**: nothing single-sourced "storage =
+naive IST" or "compare only via the IST trading day," so (a) a naive machine
+`datetime.now()` could be compared against an IST date and silently mis-bucket, and
+(b) the tests wrote machine-local timestamps and depended on the wall-clock instant
+pytest ran.
+
+**Fix applied (this milestone):**
+- Canonical contract single-sourced in `core/market_clock.py`:
+  `now_ist_naive()` (the STORAGE clock), `ist_day_of(ts)` and `is_ist_today(ts, today)`
+  (the only sanctioned day-bucketing — accepts naive-IST *or* tz-aware and converts).
+  The storage convention is documented inline (naive-IST legacy; tz-aware-UTC migration
+  deferred but the query layer already tolerates it).
+- `execution/trade_executor.py` now stamps `placed_at` via `now_ist_naive()`.
+- `execution/autopilot.py` routes all three money-critical day-queries — day-P&L
+  snapshot, EOD digest, and the **circuit breaker** `day_realized` — through
+  `is_ist_today(placed_at, today)` (was a raw `str(placed_at)[:10] == today`). The
+  per-day trade limit / traded-symbol dedup / daily-disarm keys already keyed off IST
+  `today_ist()`; they are now covered by boundary tests.
+- Tests corrected to write via the IST storage clock and made **deterministic** — a
+  new `TestAutopilotDayBoundary` pins the IST "today" (monkeypatches `_ist_today`) so
+  results are independent of both the machine timezone and the instant pytest runs.
+
+**Tests added (all deterministic, network-free):** `market_clock` contract
+(23:59 IST / 00:01 IST / UTC-date≠IST-date / tz-aware round-trip); circuit breaker
+counts a 00:01-IST loss even when the UTC instant is the prior day; breaker ignores a
+23:59-IST prior-day loss; day-realised counts only the IST day with no double-count;
+PAPER **and** LIVE closes both IST-filtered; per-day trade limit resets on the IST day.
+
+**Residual (deferred, tracked as C-14):** other `datetime.now()`/`date.today()` sites
+outside the NSE money-path (US-paper autopilot, F&O expiry, Telegram display strings)
+are not yet IST/ET-explicit. They cannot affect the NSE circuit breaker.
+
+## C-14 · Non-NSE day/time sites are not timezone-explicit (scoped follow-up)
+**Class:** RELIABILITY · **Status:** OPEN (scoped, out of the C-13 money-milestone)
+**Reality:** the C-13 fix hardened the NSE India money-path (circuit breaker, day-P&L,
+per-day limits). Remaining naive `datetime.now()` / `date.today()` calls persist in:
+`execution/us_autopilot.py` (US-paper day keys + `datetime.now()` age math — the US
+path is otherwise ET-explicit via pytz), `execution/fo_executor.py` (F&O expiry via
+`date.today()` — F&O is paper-first/opt-in), and display strings in
+`alerts/telegram_alerts.py` / `alerts/telegram_actions.py` (labelled "IST" but computed
+from machine-local time → wrong text on a non-IST server).
+**Impact:** on a non-IST/non-ET server the US-paper day boundary and F&O expiry can
+shift; Telegram timestamps can misread. **None of these touch the NSE circuit breaker
+or NSE live-order path.** Bounded to US-paper / F&O-paper / display.
+**Fix direction:** extend the `market_clock` discipline (an ET-explicit analogue for
+the US path; explicit tz for F&O expiry; format Telegram strings from `now_ist()`).
+Addressed in the owning phase, not in this focused money-safety milestone.
 
 ---
 
 ## Money- and evidence-critical fix order (mandatory first)
-1. **C-04b** disable live autopilot + hard-isolate the Telegram order path.
+0. **C-13** ✅ DONE — IST-consistent day boundaries across the NSE money-path
+   (circuit breaker / day-P&L / per-day limits) + deterministic boundary tests.
+1. **C-04b** ✅ DONE (arming) — live autopilot migration-locked behind
+   `QT_LIVE_ENABLED`; **C-04c** ✅ Telegram order path verified paper-only.
 2. **C-06** make evidence capture + execution fail closed.
 3. **C-01 / C-05 (DATA_CLASSIFICATION)** trust classes; research grade refuses
    non-`RESEARCH_GRADE` sources.

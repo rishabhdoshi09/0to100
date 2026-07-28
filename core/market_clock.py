@@ -35,6 +35,44 @@ def today_ist() -> date:
     return now_ist().date()
 
 
+# ── Persisted-timestamp contract (canonical, see docs/architecture) ────────────
+# STORAGE CONVENTION (legacy, documented): trade/journal timestamps are persisted
+# as NAIVE IST wall-clock (`now_ist_naive().isoformat()`). Every "today" query must
+# resolve the IST trading day via `ist_day_of()` / `is_ist_today()` — NEVER compare
+# a naive machine `datetime.now()` against an IST date. A future migration to
+# tz-aware UTC storage is deferred; until then this convention is single-sourced
+# here so no writer/query can drift off it (root cause of audit item C-13).
+
+def now_ist_naive() -> datetime:
+    """The STORAGE clock: current IST wall-clock as a naive datetime. This is the
+    canonical value to persist for trade/journal timestamps."""
+    return now_ist().replace(tzinfo=None)
+
+
+def ist_day_of(ts) -> str:
+    """The IST trading-day (YYYY-MM-DD) of a stored timestamp. Accepts a naive-IST
+    datetime/ISO string (the storage convention → its own date) OR a tz-aware value
+    (converted into IST first). Robust to either so a query can never mis-bucket a
+    trade across the UTC↔IST midnight boundary."""
+    if isinstance(ts, str):
+        try:
+            dt = datetime.fromisoformat(ts)
+        except Exception:
+            return ts[:10]                     # already a date-prefixed string
+    else:
+        dt = ts
+    if getattr(dt, "tzinfo", None) is not None:
+        dt = dt.astimezone(IST)
+    return dt.date().isoformat()
+
+
+def is_ist_today(ts, today: str | None = None) -> bool:
+    """True when `ts` falls on the IST trading day `today` (default: today IST).
+    Pass an explicit `today` (from a single `today_ist()` read) so a batch of
+    queries is internally consistent and deterministically testable."""
+    return ist_day_of(ts) == (today or today_ist().isoformat())
+
+
 def system_tz_is_ist() -> bool:
     """Diagnostics: kya machine ka local clock IST hai? Gates ab IST-explicit
     hain isliye galat TZ par bhi SAHI chalenge — par logs/cron timestamps

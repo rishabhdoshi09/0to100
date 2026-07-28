@@ -13,8 +13,29 @@ the exact gate that must be cleared before live trading is restored.
   working Kite session, and allocation ≤ broker margin.
 - Telegram taps remain paper-only (invariant #4); no live-order path from Telegram.
 
-Setting `QT_LIVE_ENABLED` is **necessary but not sufficient** — it is the operator's
-explicit acknowledgement that every criterion below has been met and documented.
+### `QT_LIVE_ENABLED` is a TEMPORARY migration interlock — NOT graduation
+
+`QT_LIVE_ENABLED` is **only** a temporary safety interlock for the duration of the
+Evidence-Lab migration. It exists so live arming fails closed by default while the
+codebase is being restructured. It is **not** a strategy-graduation switch, and setting
+it does **not** assert that any strategy has earned live capital. It removes exactly one
+of many blocks; every graduation criterion below still applies independently.
+
+When live trading is eventually restored, eligibility will be decided by an explicit
+**deployment manifest** (design pending — *not implemented in this milestone*) that must
+pin, at minimum:
+
+- strategy ID,
+- the promoted experiment ID (from the trial ledger / registry),
+- the result-determining config hash (frozen),
+- the dataset snapshot ID it was validated on,
+- the allowed execution mode,
+- the evidence status / Evidence Level,
+- the broker-reconciliation status.
+
+Until that manifest exists and is satisfied, `QT_LIVE_ENABLED` alone must never be read
+as permission to trade live capital — it is the operator's temporary migration lock, and
+nothing more.
 
 ## Graduation criteria (all mandatory before live capital)
 
