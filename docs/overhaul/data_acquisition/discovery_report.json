@@ -1,0 +1,87 @@
+{
+  "answer": "NO \u2014 no NSE market data found in any inspected location; no network to NSE archives.",
+  "conclusion": "No existing research dataset. Acquisition requires network access to NSE archives (or an operator-supplied bhav store + universe_history.json + ca_events.json). Blocked in this environment; the decision + contracts below define exactly what to acquire and how it becomes research-grade.",
+  "documented_rebuild_path": "data/bhavcopy_store.build_store() + data/index_store.build_index_store() (official NSE archives; requires network)",
+  "found": {
+    "corporate_actions": null,
+    "dated_sector_membership": null,
+    "delivery_data": "field exists in bhavcopy (DELIV_PER) but no bhav files present",
+    "historical_fundamentals": "data/fundamentals_cache.db present but CURRENT snapshot only, no publication dates",
+    "index_history": null,
+    "ipo_delisting": null,
+    "nse_daily_ohlcv": null,
+    "symbol_changes": null,
+    "symbol_master": null
+  },
+  "generated_for_commit": "6a865c899d3f141f97e3c61f507249046866ab9f",
+  "locations_inspected": [
+    {
+      "path": "logs/bhav",
+      "status": "absent"
+    },
+    {
+      "path": "logs/index",
+      "status": "absent"
+    },
+    {
+      "path": "logs/universe_history.json",
+      "status": "absent"
+    },
+    {
+      "path": "logs/ca_events.json",
+      "status": "absent"
+    },
+    {
+      "bytes": 12288,
+      "path": "data/fundamentals_cache.db",
+      "status": "present"
+    },
+    {
+      "path": "/mnt/user-data",
+      "status": "absent"
+    },
+    {
+      "files": 2,
+      "path": "models",
+      "status": "present"
+    },
+    {
+      "path": "/opt/rclone (mount)",
+      "remotes_configured": false,
+      "status": "present_readonly_tool"
+    },
+    {
+      "path": "env vars (QT_*/BHAV/NSE/DATASET/*DIR)",
+      "status": "none point to external market data"
+    },
+    {
+      "path": "CI artifacts (.github/workflows)",
+      "status": "none \u2014 CI only runs pytest, stores no data"
+    },
+    {
+      "path": "broker-export / cloud object-storage config",
+      "status": "none configured"
+    },
+    {
+      "path": "filesystem-wide search (bhav/ohlcv/nifty/universe_history/ca_events)",
+      "status": "no matches except pytest temp fixtures (synthetic)"
+    }
+  ],
+  "milestone": "NSE Historical Data Acquisition Decision",
+  "network": {
+    "build_store_attempt": "timed out at 45s (blocks on NSE fetch)",
+    "nseindia_archives": "HTTP 000 (unreachable; not in proxy allowlist)"
+  },
+  "question": "Does a usable point-in-time NSE research dataset already exist anywhere reachable?",
+  "searched_for": [
+    "NSE daily OHLCV / bhavcopy",
+    "index history",
+    "historical symbol masters",
+    "IPO / delisting info",
+    "corporate-action records",
+    "symbol-change mappings",
+    "sector classifications (dated)",
+    "delivery data",
+    "historical fundamentals (dated)"
+  ]
+}

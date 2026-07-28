@@ -293,3 +293,56 @@ framework, no drift), code commit `a634be3`.
 **Limitations bounding any future real-data verdict:** survivorship incomplete; CA raw;
 sector membership not dated; no PIT fundamentals; no PIT delivery. Under the research-grade
 gate a PASS needs ≥ survivorship + CA research-grade; a FAIL is attainable now.
+
+## Milestone 4 — NSE data acquisition decision & minimum research dataset · 2026-07-28 · status: DONE (data BLOCKED; decision + contracts + infra delivered)
+
+Data-availability/provenance milestone (not strategy results). No new strategy, no
+EXP-006 redesign, no threshold change, no service extraction, no portfolio simulator,
+no UI, no research→execution link.
+
+**Corrected status of the prior run (commit `6a865c8`):** run attempt completed but
+**BLOCKED before candidate generation** → INCONCLUSIVE — DATA_UNAVAILABLE; economic
+hypothesis **UNEVALUATED**; **not a historical evidence verdict**.
+
+**Existing-data discovery:** no usable NSE dataset exists anywhere reachable — inspected
+`logs/bhav` (0 files), `logs/index`, `universe_history.json`/`ca_events.json` (absent),
+`data/fundamentals_cache.db` (current only), `/mnt/user-data` (empty), `/opt/rclone` (no
+remotes), env vars, CI artifacts, broker/cloud config, and a filesystem-wide search.
+Machine-readable: `docs/overhaul/data_acquisition/discovery_report.json`.
+
+**Source decision:** **NSE official archives** (existing `data/bhavcopy_store` +
+`data/index_store`; includes delivery `DELIV_PER`) — official, reproducible, already the
+canonical path (no competing ingestion). yfinance rejected for research (DISPLAY_ONLY;
+EXP-005 survivorship lesson). Licensing: raw NSE files not redistributed (git-ignored);
+only derived provenance committed.
+
+**Delivered contracts/policies** (`docs/overhaul/data_acquisition/`): minimum dataset
+contract, corporate-action & price-integrity policy (with limitation-direction
+classification), universe-history/sector policy, storage & snapshot design, source
+decision + licensing/reproducibility.
+
+**Infra changes**
+- Immutable run tree `docs/overhaul/experiments/EXP-006/runs/`; the no-data record moved
+  to `0001-blocked/` (content unchanged) + `run_manifest.json` (artifact SHA-256s) +
+  runs index. Nothing overwritten.
+- `runner._decide`: FAIL-direction verdict gate (economic FAIL retained only under
+  one-directional-favourable limitations; CA-raw → INCONCLUSIVE). No EXP-006 threshold/
+  config-hash change.
+- `tests/test_scan_core.py` → `tests/integration/` (marked `integration`);
+  `tests/conftest.py` excludes it from the default run by classification. **Canonical
+  network-free suite: `python -m pytest`** (no ad-hoc `--ignore`). Integration:
+  `QT_INTEGRATION=1 python -m pytest tests/integration`. CI updated accordingly.
+
+**Tests run**
+- `tests/test_momentum_breakout_run.py` — 33 passed (incl. new FAIL-direction gate cases
+  + committed-record guard at the new path).
+- Canonical network-free suite `python -m pytest` — green (no ad-hoc ignore; integration
+  excluded by classification). Integration (`test_scan_core`) passes separately (slow).
+
+**Regression (re-verified):** C-13 timezone protections; PAPER autopilot; Telegram
+paper-only; LIVE migration lock; research/execution isolation; no broker/GTT import from
+EXP-006.
+
+**EXP-006 readiness gate: NOT satisfied here** (no NSE network / no data). The economic
+run was NOT executed (and must not be, against an empty environment). Precise blocker
+recorded. When the gate passes on a data host, run the UNCHANGED frozen runner.

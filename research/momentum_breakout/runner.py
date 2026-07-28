@@ -307,6 +307,7 @@ def _decide(primary: dict, quality, manifest: dict, provider, spec: dict) -> dic
     survivorship_ok = provider.universe_policy().get("survivorship_complete")
     ca_raw = "RAW" in json.dumps(provider.adjustment_policy())
     research_grade = bool(survivorship_ok) and not ca_raw
+    directions = _limitation_directions(survivorship_ok, ca_raw)
     if hv == "PROMOTE":
         if not research_grade:
             reasons.append("would-be PASS DOWNGRADED: dataset not research-grade "
@@ -316,16 +317,45 @@ def _decide(primary: dict, quality, manifest: dict, provider, spec: dict) -> dic
         else:
             verdict = "PASS"; reasons.append(primary.get("insight", ""))
     elif hv == "REJECT":
-        verdict = "FAIL"; reasons.append(primary.get("insight", ""))
+        # A FAIL is only trustworthy when the data limitations are demonstrably
+        # ONE-DIRECTIONAL and FAVOURABLE to the hypothesis (biased toward MORE apparent
+        # edge). If any active limitation can bias either way / against the hypothesis /
+        # is unknown, a FAIL might be an artefact of bad data → INCONCLUSIVE.
+        bad = [f"{k}={v}" for k, v in directions.items()
+               if v not in ("FAVOURABLE", "NEUTRAL", "NONE")]
+        if bad:
+            reasons.append("FAIL DOWNGRADED: data limitations are not one-directional "
+                           f"favourable ({'; '.join(bad)}) — a FAIL could be a data "
+                           "artefact, not a real absence of edge")
+            verdict = "INCONCLUSIVE"
+        else:
+            verdict = "FAIL"; reasons.append(primary.get("insight", ""))
     else:                                       # UNDERPOWERED / INCONCLUSIVE
         verdict = "INCONCLUSIVE"; reasons.append(primary.get("insight", ""))
     return {"experiment_id": EXP.EXPERIMENT_ID, "verdict": verdict,
             "harness_verdict": hv, "primary_exit": EXP.PRIMARY_EXIT,
             "expectancy_R": primary.get("expectancy_R"), "n_trades": primary.get("n_trades"),
-            "research_grade_data": research_grade, "reasons": reasons,
+            "research_grade_data": research_grade,
+            "limitation_directions": directions, "reasons": reasons,
             "limitations": quality.limitations, "snapshot_id": manifest["snapshot_id"],
             "config_hash": manifest["experiment_config_hash"],
             "note": "Secondary exits / ablations / slices NEVER override the primary verdict."}
+
+
+def _limitation_directions(survivorship_ok, ca_raw) -> dict:
+    """Classify each active data limitation by the direction it biases the primary
+    hypothesis (FAVOURABLE = makes the edge look better; UNFAVOURABLE = worse; EITHER =
+    can go both ways; NEUTRAL = does not affect the primary momentum result; NONE = not
+    active). Used to decide whether a FAIL is trustworthy under incomplete data."""
+    d = {}
+    # survivorship: today's survivors inflate returns → the edge looks BETTER than real
+    d["survivorship"] = "NONE" if survivorship_ok else "FAVOURABLE"
+    # unadjusted corporate actions: phantom split/bonus gaps fabricate BOTH fake
+    # breakouts (favourable) and fake stop-hits/breakdowns (unfavourable) → EITHER
+    d["corporate_actions"] = "EITHER" if ca_raw else "NONE"
+    # valuation is context only and never a primary input → NEUTRAL
+    d["valuation"] = "NEUTRAL"
+    return d
 
 
 # ── operator CLI ────────────────────────────────────────────────────────────────

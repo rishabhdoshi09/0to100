@@ -8,6 +8,10 @@ Groups:
   4. TradingRules from intelligence_hub
 """
 
+import pytest
+pytestmark = pytest.mark.integration  # heavy scan-module import chain; environment-dependent, not part of the network-free unit suite
+
+
 import sys
 import numpy as np
 import pandas as pd

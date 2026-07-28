@@ -256,10 +256,33 @@ point-in-time NSE dataset exists here (empty bhav/index stores, no network, no
 universe/CA/fundamental history). A defensible PASS is not attainable until at least
 survivorship + CA reach research grade; a FAIL is attainable now.
 **Update (2026-07-28, run executed + committed):** the frozen runner was executed and
-its auditable artifact set committed to `docs/overhaul/exp006_run/` (verdict
-INCONCLUSIVE — DATA_UNAVAILABLE; snapshot `ad652107580ddae1`; config hash
-`4f638f99e13bf939` == frozen framework). `TestCommittedRunRecord` guards the persisted
-record so it cannot be edited into a false verdict without failing CI.
+its auditable artifact set committed (originally `docs/overhaul/exp006_run/`, commit
+`6a865c8`). **Corrected status language:** that run was a **run attempt completed but
+BLOCKED before candidate generation** → **INCONCLUSIVE — DATA_UNAVAILABLE**; the
+economic hypothesis is **UNEVALUATED**; it is **NOT a historical evidence verdict**.
+`TestCommittedRunRecord` guards the persisted record against a false verdict.
+
+**Update (2026-07-28, data-acquisition milestone):** the blocked record was relocated
+into an append-only run tree `docs/overhaul/experiments/EXP-006/runs/0001-blocked/`
+(content unchanged) with a `run_manifest.json` (artifact SHA-256s). The
+data-acquisition decision + contracts live in `docs/overhaul/data_acquisition/`
+(source = NSE official archives; yfinance stays DISPLAY_ONLY). A **FAIL-direction
+verdict gate** was added to `runner._decide`: an economic FAIL is retained only when
+data limitations are one-directional favourable (survivorship); a CA-raw (either-way)
+limitation downgrades a FAIL to INCONCLUSIVE. No EXP-006 threshold/feature/config-hash
+changed.
+
+## C-18 · Test-suite completeness: test_scan_core reclassified as integration
+**Class:** RELIABILITY / DOCUMENTATION · **Status:** RESOLVED · 2026-07-28
+**Reality:** `tests/test_scan_core.py` uses synthetic data + mocks but its import chain
+reaches heavy operational `scan/*` modules that make lazy data/network calls and stall
+without network. Earlier runs called the suite "green" only by ad-hoc `--ignore`.
+**Fix:** moved to `tests/integration/test_scan_core.py` and marked
+`pytest.mark.integration`; `tests/conftest.py` excludes `tests/integration` from the
+default run by classification (env-gated `QT_INTEGRATION`), so the **canonical
+network-free suite is simply `python -m pytest`** (no ad-hoc `--ignore`). Integration
+runs separately: `QT_INTEGRATION=1 python -m pytest tests/integration`. CI runs the
+canonical suite (blocking) + integration (non-blocking).
 
 ## C-16 · Detector NaN-safety + O(n²) base scan (fixed during EXP-006 run)
 **Class:** RELIABILITY · **Status:** FIXED · 2026-07-28

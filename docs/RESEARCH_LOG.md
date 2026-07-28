@@ -504,3 +504,32 @@ guarantee.
   `python -m research.momentum_breakout.runner --out logs/experiments/EXP-006`).
 - **Supersedes / references:** executes EXP-006 (pre-registered); records the committed
   artifact set for the prior EXP-006 RESULT; inherits the EXP-005 anti-mirage discipline.
+
+---
+
+## EXP-006 — Data-acquisition decision (dataset still BLOCKED; hypothesis UNEVALUATED)
+- **Type:** data-availability/provenance milestone. Append-only; alters no prior entry.
+- **Date:** 2026-07-28. Branch `overhaul/evidence-lab`.
+- **Status correction (commit `6a865c8`):** that record is a **run attempt completed,
+  BLOCKED before candidate generation → INCONCLUSIVE — DATA_UNAVAILABLE**; the economic
+  hypothesis is **UNEVALUATED**; it is **NOT a historical evidence verdict**. The record
+  is now the immutable `0001-blocked` run under
+  `docs/overhaul/experiments/EXP-006/runs/` (content unchanged, relocated).
+- **Existing data?** No — a usable point-in-time NSE dataset does not exist in any
+  reachable location (full discovery in `docs/overhaul/data_acquisition/`). No NSE
+  network here (HTTP 000); a bounded build attempt timed out.
+- **Source selected:** NSE official archives (bhavcopy EOD incl. delivery + index store),
+  reusing the existing ingestion. yfinance stays DISPLAY_ONLY (EXP-005 lesson).
+- **Minimum dataset contract, CA policy, universe policy, storage/snapshot design:**
+  written and committed. Blocking dependencies to reach RESEARCH_GRADE remain
+  `ca_events.json` (corporate actions) and `universe_history.json` (survivorship).
+- **Verdict-safety strengthened (verdict interpretation only, not the frozen experiment):**
+  an economic FAIL under incomplete data is retained ONLY when limitations are
+  one-directional favourable (survivorship inflation); a CA-raw (either-direction)
+  limitation downgrades a FAIL to INCONCLUSIVE. PASS still downgraded on any non-research
+  grade data.
+- **No real run occurred** (readiness gate not satisfied; must not run against an empty
+  environment). The economic hypothesis remains open, awaiting research-grade
+  point-in-time NSE data on a data host, then the UNCHANGED frozen runner.
+- **Supersedes / references:** corrects the status language of the prior EXP-006 run
+  entries; does not evaluate the hypothesis.

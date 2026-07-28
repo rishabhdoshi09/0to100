@@ -300,11 +300,30 @@ class TestVerdictMapping:
         assert v["verdict"] == "INCONCLUSIVE"
         assert any("DOWNGRADED" in r for r in v["reasons"])
 
-    def test_reject_is_fail_even_on_biased_data(self):
+    def test_reject_retained_as_fail_only_when_limitations_are_favourable(self):
+        # survivorship incomplete (FAVOURABLE) + CA adjusted → a FAIL is trustworthy
         v = RUN._decide({"verdict": "REJECT", "insight": "no edge", "expectancy_R": -0.1,
                          "n_trades": 40}, self._quality(),
                         {"snapshot_id": "s", "experiment_config_hash": "h"},
-                        self._stub_provider(False, True), {})
+                        self._stub_provider(False, False), {})  # ca adjusted
+        assert v["verdict"] == "FAIL"
+
+    def test_reject_downgraded_when_ca_raw_biases_either_way(self):
+        # CA-raw fabricates both fake breakouts and fake stop-hits → EITHER direction →
+        # a FAIL could be a data artefact → INCONCLUSIVE (the stricter CA-safety rule)
+        v = RUN._decide({"verdict": "REJECT", "insight": "no edge", "expectancy_R": -0.1,
+                         "n_trades": 40}, self._quality(),
+                        {"snapshot_id": "s", "experiment_config_hash": "h"},
+                        self._stub_provider(False, True), {})   # ca_raw True
+        assert v["verdict"] == "INCONCLUSIVE"
+        assert any("FAIL DOWNGRADED" in r for r in v["reasons"])
+        assert v["limitation_directions"]["corporate_actions"] == "EITHER"
+
+    def test_reject_is_fail_on_fully_research_grade_data(self):
+        v = RUN._decide({"verdict": "REJECT", "insight": "no edge", "expectancy_R": -0.1,
+                         "n_trades": 40}, self._quality(),
+                        {"snapshot_id": "s", "experiment_config_hash": "h"},
+                        self._stub_provider(True, False), {})   # survivorship ok + adjusted
         assert v["verdict"] == "FAIL"
 
     def test_underpowered_is_inconclusive(self):
@@ -372,7 +391,8 @@ class TestCommittedRunRecord:
 
     import os
     _DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)),
-                        "docs", "overhaul", "exp006_run")
+                        "docs", "overhaul", "experiments", "EXP-006", "runs",
+                        "0001-blocked")
 
     def _load(self, name):
         import os

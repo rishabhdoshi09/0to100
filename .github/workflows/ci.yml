@@ -22,11 +22,22 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Run test suite (network-free)
+      - name: Run test suite (canonical network-free)
+        # Canonical complete network-free suite. tests/integration is excluded BY
+        # CLASSIFICATION via tests/conftest.py (not an ad-hoc --ignore).
         run: |
-          python -m pytest tests/ -q --tb=short
+          python -m pytest
         env:
           # Tests must never touch real accounts even if secrets leak into env
+          KITE_ACCESS_TOKEN: ""
+          TELEGRAM_BOT_TOKEN: ""
+          DEEPSEEK_API_KEY: ""
+
+      - name: Run integration tests (environment-dependent; non-blocking)
+        continue-on-error: true
+        run: |
+          QT_INTEGRATION=1 python -m pytest tests/integration -q --tb=short
+        env:
           KITE_ACCESS_TOKEN: ""
           TELEGRAM_BOT_TOKEN: ""
           DEEPSEEK_API_KEY: ""
