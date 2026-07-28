@@ -346,3 +346,22 @@ EXP-006.
 **EXP-006 readiness gate: NOT satisfied here** (no NSE network / no data). The economic
 run was NOT executed (and must not be, against an empty environment). Precise blocker
 recorded. When the gate passes on a data host, run the UNCHANGED frozen runner.
+
+## Milestone 5 — Real-data materialisation attempt · 2026-07-28 · status: BLOCKED (host not data-capable)
+
+Attempted to materialise the real NSE dataset for EXP-006 on this host. No new
+infrastructure, no strategy, no EXP-006 change.
+
+**Result: BLOCKED.** This environment is not data-capable — the outbound proxy denies
+NSE archive hosts with `Tunnel connection failed: 403 Forbidden` (nseindia.com not in
+the allowlist). Canonical ingestion `build_store` → 0 sessions / 0 files / `is_ready()`
+False; readiness gate **RED — DATA_UNAVAILABLE**. Per the verdict restriction the frozen
+runner was NOT executed, no economic PASS/FAIL issued, and no synthetic/display-only data
+substituted. `runs/0001-blocked` untouched; no new run directory (no run occurred).
+
+**Auditable record:** `docs/overhaul/experiments/EXP-006/acquisition_attempts/acq-0001.json`
+(+ README). Unblock steps are documented there and in `docs/overhaul/data_acquisition/`.
+
+**Tests:** no code changed; canonical network-free suite `python -m pytest` remains green
+(545). Regression guarantees (C-13, PAPER autopilot, Telegram paper-only, LIVE lock,
+EXP-006 isolation) unchanged.

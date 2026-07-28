@@ -21,3 +21,7 @@ provenance + verdicts are committed.
    `python -m research.momentum_breakout.runner --out logs/experiments/EXP-006`.
 3. Copy the produced artifact set into a NEW `runs/<next-id>/`, write its
    `run_manifest.json`, and add a row above. Never edit an existing run.
+
+## Acquisition attempts
+
+See `acquisition_attempts/` (append-only). Latest: **acq-0001** — host not data-capable (NSE proxy `403 Forbidden`); readiness RED; no run executed.

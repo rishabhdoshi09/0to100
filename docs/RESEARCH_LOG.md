@@ -533,3 +533,24 @@ guarantee.
   point-in-time NSE data on a data host, then the UNCHANGED frozen runner.
 - **Supersedes / references:** corrects the status language of the prior EXP-006 run
   entries; does not evaluate the hypothesis.
+
+---
+
+## EXP-006 — Real-data materialisation ATTEMPTED on this host: BLOCKED (proxy denies NSE)
+- **Type:** data-acquisition attempt. Append-only; evaluates no hypothesis.
+- **Date:** 2026-07-28. Branch `overhaul/evidence-lab`.
+- **Host:** not data-capable. The outbound proxy denies NSE archive hosts with
+  `Tunnel connection failed: 403 Forbidden` (nseindia.com not in the allowlist; only
+  package registries + Anthropic permitted). All NSE URLs → HTTP 000.
+- **Sequence performed:** pulled latest (`63e91d6`); confirmed writable empty storage
+  (`logs/bhav`, `logs/index`); probed the exact canonical NSE archive URLs (denied);
+  ran the canonical ingestion `build_store` (→ 0 sessions, 0 files, `is_ready()`=False);
+  ran the data-quality/readiness gate (**RED — DATA_UNAVAILABLE**).
+- **Verdict restriction honoured:** no economic PASS/FAIL (readiness red; benchmark
+  unavailable; no reproducible snapshot). The frozen runner was NOT executed. No
+  synthetic or display-only data substituted. `runs/0001-blocked` NOT overwritten; no
+  new run directory created (no run occurred).
+- **Auditable record:** `docs/overhaul/experiments/EXP-006/acquisition_attempts/acq-0001.json`.
+- **Precise blocker:** environment lacks outbound access to NSE sources; materialisation
+  requires a data-capable host (or an operator-supplied bhav store + `ca_events.json` +
+  `universe_history.json`). The economic hypothesis remains UNEVALUATED.
