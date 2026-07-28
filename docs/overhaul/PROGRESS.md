@@ -129,6 +129,56 @@ paper/Telegram/GTT wiring, no UI redesign, no broad Phase-1 refactor.**
 - Unchanged: Phase 1 continued (C-06 fail-closed evidence writes; TrustClass stub),
   then Phase 2 service extraction. EXP-006 is run when point-in-time data is available.
 
+## Milestone 4 — Simple Mode & common-man manual · 2026-07-28 · status: DONE (presentation only)
+
+Branch `overhaul/simple-mode`. PRESENTATION ONLY — no business logic, execution rule,
+risk calculation, evidence standard or EXP-006 detail changed. No LIVE enablement, no
+research→execution link.
+
+**Completed work**
+- `core/simple_language.py` — the ONE pure (no streamlit/network/clock/order) source of
+  plain-language content + logic: glossary, three-mode meanings, colour-independent
+  status labels, five-question page help, decision explanations (mapped from detector /
+  autopilot / verdict codes), research-verdict meanings, `home_status()` (a green
+  "Ready" is refused on missing/stale data), `next_best_action()`, machine-readable
+  `BEHAVIOUR_MATRIX`, onboarding (7 steps), fictional PAPER walkthrough, "what not to
+  do", success checklist, daily checklist, learning cards, user-action guide,
+  data-unavailable panel, specific safety confirmations.
+- `ui/simple_mode.py` — thin Streamlit layer: Advanced-Mode toggle (Simple default),
+  read-only state gather (`autopilot.get_status()` only), Home / onboarding / walkthrough
+  / decision / data-unavailable / page-help / glossary / safety-confirmation renders.
+  Imports NO order path.
+- `app.py` — additive integration: Simple sidebar controls, first-run redirect to
+  Getting Started, dispatch for Simple Home / Getting Started / Practice Walkthrough /
+  User Guide (render + `st.stop()`). Existing routes untouched.
+- Docs: `docs/overhaul/UX_AUDIT.md`, `docs/overhaul/BEHAVIOUR_MATRIX.md` (generated),
+  full `docs/user-guide/` set (START_HERE, DAILY_ROUTINE, NAVIGATION, PAPER_MODE,
+  RESEARCH_LAB, SAFETY_AND_LIMITS, TELEGRAM, DATA_HEALTH, TROUBLESHOOTING, GLOSSARY,
+  PARENT_AND_LEARNING_MODE) + printable `QUANTTERM_SIMPLE_MANUAL.md`, README nav.
+
+**Tests run**
+- `tests/test_simple_mode.py` — 42 passed (deterministic, network-free, no streamlit
+  runtime needed): Simple-is-default, depth = presentation only, home never green on
+  missing/stale data, safety-stop + trade-limit visible, decisions always give a reason,
+  verdicts explained without over-claiming, data-unavailable honesty, behaviour matrix
+  has no real-order path, specific (non-generic) safety confirmations, page help
+  completeness, fictional walkthrough, execution isolation (Simple layer + EXP-006 +
+  Telegram paper-only + LIVE lock), app wiring.
+- Regression: money-paths + momentum-breakout suites green; no safety control changed.
+
+**Unchanged guarantees (re-asserted by tests):** PAPER autopilot operational; Telegram
+paper-only; LIVE migration-locked; daily-loss circuit breaker + trades-per-day + risk
+limits; strategy evidence gates; historical gauntlet; append-only research log; EXP-006
+execution isolation; network-free suite.
+
+**Known usability limitations:** Streamlit *rendering* is verified by source-inspection
++ the pure-logic tests, not by a live UI harness (no Streamlit runtime in CI). Bilingual
+(Hindi/Hinglish) content is centralised for future translation but not translated here.
+
+**Next milestone**
+- Unchanged research/architecture track: Phase 1 continued (C-06; TrustClass), then
+  Phase 2 service extraction; run EXP-006 on research-grade data (operator).
+
 ## Milestone 3 — EXP-006 Historical Evidence Run · 2026-07-28 · status: runner implemented + tested; verdict INCONCLUSIVE (data unavailable here)
 
 Evidence run of the FROZEN EXP-006 framework (commit 6e7968e). No redesign, no new

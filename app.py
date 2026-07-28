@@ -1253,6 +1253,20 @@ with st.sidebar:
         render_mode_toggle()
     except Exception:
         pass
+    # ── Simple Mode (beginner) controls — presentation only, no trading change ──
+    try:
+        from ui import simple_mode as _simple
+        _simple.render_depth_toggle()
+        if st.button("🧒 Simple Home", key="go_simple_home", width="stretch"):
+            st.session_state["sidebar_nav"] = "Simple Home"; st.rerun()
+        with st.expander("🧭 Start here (beginners)"):
+            for _lbl, _dest in (("👋 Getting started", "Getting Started"),
+                                ("🎓 Practice walkthrough", "Practice Walkthrough"),
+                                ("📖 User guide & glossary", "User Guide")):
+                if st.button(_lbl, key=f"go_{_dest}", width="stretch"):
+                    st.session_state["sidebar_nav"] = _dest; st.rerun()
+    except Exception:
+        pass
     _page = _nav_page.split("  ", 1)[-1].strip()  # "Dashboard", "Terminal", …
 
     st.divider()
@@ -1368,6 +1382,36 @@ _page = st.session_state.get("sidebar_nav", "Dashboard")
 # Normalise legacy emoji-prefixed values that may still be in session state
 if "  " in _page:
     _page = _page.split("  ", 1)[-1].strip()
+
+# ── First run → beginners land on Getting Started (presentation only; changes no
+#    trading behaviour, config or permission). Skippable via the sidebar nav. ──
+if "_qt_onboarded" not in st.session_state:
+    st.session_state["_qt_onboarded"] = True
+    if _page in ("", "Daily Pulse", "Dashboard"):
+        _page = "Getting Started"
+        st.session_state["sidebar_nav"] = "Getting Started"
+
+# ── Simple Mode beginner pages — render a clean, plain page and stop. These are
+#    presentation only: they read status but can place no order (see ui/simple_mode). ─
+if _page in ("Simple Home", "Getting Started", "Practice Walkthrough", "User Guide"):
+    try:
+        from ui import simple_mode as _simple
+        if _page == "Simple Home":
+            _simple.render_page_help("home")
+            _simple.render_home()
+        elif _page == "Getting Started":
+            _simple.render_onboarding()
+        elif _page == "Practice Walkthrough":
+            _simple.render_walkthrough()
+        elif _page == "User Guide":
+            _simple.render_mode_explainer()
+            st.divider()
+            _q = st.text_input("Search the glossary", key="glossary_search")
+            _simple.render_glossary(_q)
+    except Exception as _simple_err:
+        st.error("Simple Mode page could not load. See docs/user-guide/ for the manual.")
+        st.caption(str(_simple_err)[:200])
+    st.stop()
 
 # Handle session-state navigation from watchlist / homepage buttons
 if st.session_state.get("active_tab") == "terminal":

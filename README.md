@@ -5,6 +5,16 @@ Zerodha) and US equities (paper)** — whole-market scanning, expected-value
 ranking, a gated autopilot, and a Brain that reads every subsystem and
 delivers one verdict a day to your phone.
 
+> **New here? Start with Simple Mode.** New users land on a plain-language
+> **Getting Started** tour, a **Simple Home** ("is it ready and safe? what
+> next?"), and a safe **Practice Walkthrough** — no jargon, no real money.
+> The full common-man manual is in [`docs/user-guide/`](docs/user-guide/)
+> (start at [`START_HERE.md`](docs/user-guide/START_HERE.md); one printable
+> file: [`QUANTTERM_SIMPLE_MANUAL.md`](docs/user-guide/QUANTTERM_SIMPLE_MANUAL.md)).
+> **Advanced Mode** (a toggle) restores every technical view — it changes what
+> you *see*, never what the system may *do*. Real-money LIVE trading stays
+> locked; Telegram is paper-only.
+
 > The edge is not a better breakout pattern. The edge is a system that
 > **measures, allocates, and retires** its own strategies faster and more
 > honestly than its operator's emotions would.

@@ -256,6 +256,21 @@ point-in-time NSE dataset exists here (empty bhav/index stores, no network, no
 universe/CA/fundamental history). A defensible PASS is not attainable until at least
 survivorship + CA reach research grade; a FAIL is attainable now.
 
+## C-17 · The product spoke to experts, not beginners (Simple Mode)
+**Class:** DOCUMENTATION / usability · **Status:** ADDRESSED · 2026-07-28
+**Reality (UX audit):** the UI led with jargon (point-in-time, provenance, config hash,
+expectancy, drawdown, circuit breaker, migration interlock), had no single "is it ready
+and safe?" screen, no plain "why" on decisions, no onboarding or safe walkthrough, and
+could show technical/empty states. An ordinary person could not safely form a mental
+model of research vs PAPER vs LIVE, or of why "no trade" is correct.
+**Fix (PRESENTATION ONLY):** Simple Mode (default) via one pure content+logic module
+(`core/simple_language.py`) + a thin Streamlit layer (`ui/simple_mode.py`) + the
+common-man manual (`docs/user-guide/`). A green "Ready" is refused on missing/stale data;
+every decision exposes a plain reason; the behaviour matrix is single-sourced so
+messaging cannot contradict permissions. **No business logic, execution rule, risk
+calculation or evidence standard changed; LIVE stays locked; Telegram stays paper-only;
+EXP-006 stays execution-isolated** (all re-asserted by `tests/test_simple_mode.py`).
+
 ## C-16 · Detector NaN-safety + O(n²) base scan (fixed during EXP-006 run)
 **Class:** RELIABILITY · **Status:** FIXED · 2026-07-28
 **Reality:** the frozen detector (`_detect_base`) and the simulator did not guard
