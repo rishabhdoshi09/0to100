@@ -65,6 +65,9 @@ def _classify_entry(name: str) -> str | None:
         return f"index/{parts[1]}"
     if len(parts) == 1 and parts[0] in ("ca_events.json", "universe_history.json"):
         return parts[0]
+    # ANY other CSV / markdown → classify later by CONTENT (folder name is ignored)
+    if name.lower().endswith((".csv", ".md")):
+        return "LOOSE"
     return None
 
 
@@ -86,6 +89,7 @@ def safe_extract_zip(zip_source, dest_dir) -> ExtractReport:
             return ExtractReport(ok=False,
                                  rejected=[("<archive>", f"too many entries ({len(infos)})")])
         total = 0
+        loose: list[tuple] = []                              # (name, bytes) → content-classified
         for info in infos:
             name = info.filename
             if name.endswith("/"):
@@ -107,6 +111,10 @@ def safe_extract_zip(zip_source, dest_dir) -> ExtractReport:
                 return ExtractReport(ok=False, extracted=rep.extracted,
                                      rejected=rep.rejected + [(name, "total size cap exceeded")],
                                      total_bytes=total)
+            if sub == "LOOSE":                               # unknown folder/name → by content
+                with zf.open(info) as src:
+                    loose.append((Path(name).name, src.read()))
+                continue
             target = (dest / sub).resolve()
             if not str(target).startswith(str(dest.resolve())):
                 rep.rejected.append((name, "escapes destination")); continue
@@ -115,6 +123,10 @@ def safe_extract_zip(zip_source, dest_dir) -> ExtractReport:
                 shutil.copyfileobj(src, out, length=1024 * 256)
             rep.extracted.append(sub)
         rep.total_bytes = total
+    if loose:                                                # content-classify everything else
+        ing = ingest_files(loose, dest)
+        rep.extracted += ing.extracted
+        rep.rejected += ing.rejected
     rep.ok = bool(rep.extracted)
     return rep
 
@@ -136,8 +148,10 @@ from pathlib import Path as _P
 
 def _date_stem(val) -> str | None:
     import pandas as pd
+    s = str(val).strip()
+    iso = bool(_re.match(r"^\d{4}-\d{2}-\d{2}", s))     # ISO dates aren't day-first
     try:
-        ts = pd.to_datetime(str(val).strip(), dayfirst=True, errors="coerce")
+        ts = pd.to_datetime(s, dayfirst=not iso, errors="coerce")
         return None if pd.isna(ts) else ts.strftime("%d%m%Y")
     except Exception:
         return None
@@ -224,21 +238,112 @@ def _pdf_tables(raw: bytes):
     return out or None
 
 
+# flexible column aliases → common OHLCV schemas are accepted, not just NSE's exact
+# sec_bhavdata_full columns (Date/Symbol/Open/High/Low/Close/Volume in many namings).
+def _nk(c) -> str:
+    return _re.sub(r"[^A-Z0-9]", "", str(c).upper())
+
+
+_ALIAS = {
+    "SYMBOL": {"SYMBOL", "TICKER", "TCKRSYMB", "SCRIP", "SECURITY", "STOCK"},
+    "SERIES": {"SERIES", "SCTYSRS"},
+    "DATE": {"DATE", "DATE1", "TIMESTAMP", "TRADEDATE", "TRADDT", "TRDDT", "DT"},
+    "OPEN": {"OPEN", "OPENPRICE", "OPNPRIC", "OPENINDEXVALUE"},
+    "HIGH": {"HIGH", "HIGHPRICE", "HGHPRIC", "HIGHINDEXVALUE"},
+    "LOW": {"LOW", "LOWPRICE", "LWPRIC", "LOWINDEXVALUE"},
+    "CLOSE": {"CLOSE", "CLOSEPRICE", "CLSPRIC", "LAST", "LASTPRICE", "LTP",
+              "CLOSINGINDEXVALUE"},
+    "VOLUME": {"VOLUME", "TTLTRDQNTY", "TTLTRADGVOL", "TOTALTRADEDQUANTITY", "QTY",
+               "NOOFSHARES", "VOL", "SHARESTRADED"},
+    "DELIV": {"DELIVPER", "PERCENTDELIVERBLE", "DELIVERBLE", "PERDELIVERBLE",
+              "DELIVERYPERCENTAGE"},
+}
+
+
+def _colmap(df) -> dict:
+    m = {}
+    for c in df.columns:
+        k = _nk(c)
+        for canon, al in _ALIAS.items():
+            if k in al:
+                m.setdefault(canon, c)
+    return m
+
+
+def _normalize_to_bhav(df):
+    """Map a flexible stock-OHLCV table onto the canonical bhavcopy columns the store
+    reads (SYMBOL, SERIES, DATE1, OPEN/HIGH/LOW/CLOSE_PRICE, TTL_TRD_QNTY, DELIV_PER)."""
+    import pandas as pd
+    m = _colmap(df)
+    if not all(x in m for x in ("SYMBOL", "DATE", "OPEN", "HIGH", "LOW", "CLOSE")):
+        return None
+    out = pd.DataFrame({
+        "SYMBOL": df[m["SYMBOL"]].astype(str).str.strip().str.upper(),
+        "SERIES": (df[m["SERIES"]].astype(str).str.strip() if "SERIES" in m else "EQ"),
+        "DATE1": df[m["DATE"]],
+        "OPEN_PRICE": df[m["OPEN"]], "HIGH_PRICE": df[m["HIGH"]],
+        "LOW_PRICE": df[m["LOW"]], "CLOSE_PRICE": df[m["CLOSE"]],
+        "TTL_TRD_QNTY": (df[m["VOLUME"]] if "VOLUME" in m else 0),
+    })
+    if "DELIV" in m:
+        out["DELIV_PER"] = df[m["DELIV"]]
+    return out
+
+
+def _normalize_to_index(df, name: str):
+    """Map a flexible benchmark table onto the canonical index columns — ONLY when it is
+    clearly the Nifty 50 (^NSEI) benchmark, so a stock file is never mislabelled."""
+    import pandas as pd
+    m = _colmap(df)
+    if not all(x in m for x in ("DATE", "CLOSE")):
+        return None
+    hint = _nk(_P(name).stem)                            # stem only (drop the .csv)
+    is_nifty = ("NIFTY50" in hint) or ("NSEI" in hint)
+    for c in df.columns:
+        if _nk(c) in ("INDEXNAME", "INDEX", "NAME"):
+            vals = {_nk(v) for v in df[c].astype(str).unique()[:5]}
+            if vals & {"NIFTY50", "NSEI"}:
+                is_nifty = True
+    if not is_nifty:
+        return None
+    return pd.DataFrame({
+        "Index Name": "Nifty 50", "Index Date": df[m["DATE"]],
+        "Open Index Value": df[m["OPEN"]] if "OPEN" in m else df[m["CLOSE"]],
+        "High Index Value": df[m["HIGH"]] if "HIGH" in m else df[m["CLOSE"]],
+        "Low Index Value": df[m["LOW"]] if "LOW" in m else df[m["CLOSE"]],
+        "Closing Index Value": df[m["CLOSE"]]})
+
+
 def _classify_and_write(df, name: str, dest, rep) -> None:
-    """Classify one table as bhavcopy or index by columns, split by date, write per-day
-    files. Rejects (with a reason) anything it can't validate."""
+    """Classify one table as bhavcopy or index (by exact columns, then flexible OHLCV
+    aliases), split by date, write per-day files. Rejects (with a reason) anything it
+    cannot validate — never silently accepted."""
     df = df.rename(columns=lambda c: str(c).strip())
     upper = {c.upper() for c in df.columns}
     if _BHAV_COLS.issubset(upper):
         n = _write_by_date(df, name, _P(dest) / "bhav", _BHAV_DATE_COLS)
         (rep.extracted.append(f"bhav/ ({n} day(s)) ← {name}") if n
          else rep.rejected.append((name, "bhavcopy CSV but no readable trading date")))
-    elif any(h.lower() in {c.lower() for c in df.columns} for h in _INDEX_COL_HINTS):
+        return
+    if any(h.lower() in {c.lower() for c in df.columns} for h in _INDEX_COL_HINTS):
         n = _write_by_date(df, name, _P(dest) / "index", _INDEX_DATE_COLS)
         (rep.extracted.append(f"index/ ({n} day(s)) ← {name}") if n
          else rep.rejected.append((name, "index CSV but no readable date")))
-    else:
-        rep.rejected.append((name, "unrecognised table (not bhavcopy or index columns)"))
+        return
+    nb = _normalize_to_bhav(df)
+    if nb is not None:
+        n = _write_by_date(nb, name, _P(dest) / "bhav", _BHAV_DATE_COLS)
+        (rep.extracted.append(f"bhav/ ({n} day(s)) ← {name}") if n
+         else rep.rejected.append((name, "stock columns recognised but no readable date")))
+        return
+    ni = _normalize_to_index(df, name)
+    if ni is not None:
+        n = _write_by_date(ni, name, _P(dest) / "index", _INDEX_DATE_COLS)
+        (rep.extracted.append(f"index/ ({n} day(s)) ← {name}") if n
+         else rep.rejected.append((name, "benchmark recognised but no readable date")))
+        return
+    rep.rejected.append((name, "unrecognised table — need columns like Date, Symbol, "
+                               "Open, High, Low, Close (a stock file) or a Nifty 50 index"))
 
 
 def _write_by_date(df, name, out_dir, date_cols) -> int:

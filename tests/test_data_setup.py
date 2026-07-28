@@ -373,3 +373,56 @@ class TestFileIngestion:
         v = D.validate_dataset(tmp_path)
         assert v.status in (D.READY, D.READY_WITH_LIMITATIONS)
         assert v.benchmark and v.price_data
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 9. Flexible schemas + arbitrary ZIP folders (content-classified, not by name)
+# ══════════════════════════════════════════════════════════════════════════════
+
+class TestFlexibleSchemas:
+    def _flex_stock(self, days):
+        rows = ["Date,Symbol,Series,Open,High,Low,Close,Volume,%Deliverble"]
+        for dd in days:
+            for s, base in (("TCS", 3000), ("INFY", 1500), ("HAL", 4000)):
+                rows.append(f"{dd},{s},EQ,{base},{base+10},{base-10},{base+5},1e5,55")
+        return "\n".join(rows) + "\n"
+
+    def _days(self, n):
+        d = dt.date(2020, 1, 1); out = []
+        while len(out) < n:
+            if d.weekday() < 5:
+                out.append(d.strftime("%Y-%m-%d"))
+            d += dt.timedelta(days=1)
+        return out
+
+    def test_flexible_ohlcv_csv_ingested_as_bhav(self, tmp_path):
+        rep = D.ingest_files([("2020.csv", self._flex_stock(self._days(3)).encode())],
+                             tmp_path)
+        assert rep.ok
+        # 3 trading days -> 3 per-day files, canonical bhav columns readable by validate
+        assert len(list((tmp_path / "bhav").glob("*.csv"))) == 3
+
+    def test_zip_arbitrary_folder_classified_by_content(self, tmp_path):
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w") as z:
+            z.writestr("NIFTY 500/2020-2021.csv", self._flex_stock(self._days(65)))
+            z.writestr("nifty50.csv", "Date,Open,High,Low,Close\n" +
+                       "".join(f"{dd},15000,15100,14900,15050\n" for dd in self._days(65)))
+        buf.seek(0)
+        rep = D.safe_extract_zip(buf, tmp_path)
+        assert rep.ok and not rep.rejected
+        v = D.validate_dataset(tmp_path)
+        assert v.price_data and v.benchmark
+        assert v.status in (D.READY, D.READY_WITH_LIMITATIONS)
+
+    def test_nifty_benchmark_detected_by_filename_stem(self, tmp_path):
+        rep = D.ingest_files([("nifty50.csv",
+                               ("Date,Open,High,Low,Close\n2020-01-01,15000,15100,14900,15050\n"
+                                ).encode())], tmp_path)
+        assert (tmp_path / "index" / "01012020.csv").exists()
+
+    def test_stock_file_not_mislabelled_as_index(self, tmp_path):
+        # a stock file whose name mentions nifty500 must NOT become the Nifty-50 benchmark
+        rep = D.ingest_files([("nifty500_2020.csv", self._flex_stock(self._days(2)).encode())],
+                             tmp_path)
+        assert (tmp_path / "bhav").exists() and not (tmp_path / "index").exists()
