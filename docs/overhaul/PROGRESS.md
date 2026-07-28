@@ -403,3 +403,40 @@ import. EXP-006 thresholds/config-hash/detector/entry/stop/exits/ablations UNCHA
 **Known limitation:** Streamlit *rendering* is verified by source inspection + the pure-
 engine tests (no live UI harness in CI). Real materialisation still needs real NSE files
 (or network on a data-capable host).
+
+## Milestone 7 — Autonomous discovery + Strategy Studio (human-in-the-loop) · 2026-07-28 · status: DONE (workflow built + tested; no market evidence without real data)
+
+Research + user-approval workflow. No LIVE unlock, no research→execution link, no silent
+paper deploy, no app redesign, no evidence-framework replacement, no synthetic evidence,
+no self-rewriting strategies, no unrestricted RL, no service extraction/portfolio sim.
+
+**Completed work** (`research/strategy_studio/`, all pure + tested)
+- `spec.py` canonical versioned StrategySpec + user-only lifecycle; `grammar.py` approved
+  PIT-safe building blocks; `discovery.py` constrained seeded/budgeted generation +
+  append-only attempt registry + validity stages + overfitting controls (multiple-testing
+  burden, untouched-test isolation, simpler-baseline, complexity) + data-readiness gate;
+  `review.py` five SEPARATE confidences + Convince Me (defence + prosecution, labelled
+  evidence/plausible/speculation, careful recommendations, non-cherry-picked trades) +
+  comparison; `tweak.py` guided + NL→explicit-diff (no code exec) + impact preview +
+  material-change versioning; `approval.py` user-only immutable PAPER-only record +
+  separate paper activation (no live); `wizard.py` guided manual creation.
+- `ui/strategy_studio_page.py` (thin, 5 sections; NO order actions) wired into app.py
+  More Tools + dispatch. Guides: `docs/user-guide/STRATEGY_STUDIO.md`,
+  `docs/overhaul/STRATEGY_STUDIO.md`.
+
+**Tests**
+- `tests/test_strategy_studio.py` — 42 passed (deterministic, network-free, wall-clock-
+  independent): reproducible generation, budget, attempt logging, family diversity,
+  leakage/impossible-entry/unsupported-PIT/cost/min-sample/concentration rejection,
+  untouched-test isolation, multiple-testing burden, simpler-baseline, data-unavailable
+  gate; material tweak → new version + hash, display change preserves identity, NL→diff,
+  unsafe/ambiguous handling, evidence invalidation, approval not transferring; user-only
+  approval, immutable PAPER-only record, red-gate + synthetic + non-survivor refusal,
+  separate paper-activation, no-live; explainability (defence+prosecution, wins+losses,
+  attempts disclosed, limitations, five confidences, synthetic labelled); comparison never
+  auto-picks; wizard same standards; execution isolation (package + UI import no order
+  path); PAPER autopilot / Telegram paper-only / LIVE lock unchanged.
+- Canonical network-free suite `python -m pytest` — green.
+
+**Limitation (honest):** without a research-grade dataset the Studio shows labelled
+DEMONSTRATION fixtures only — never market evidence; a strategy cannot be approved on them.

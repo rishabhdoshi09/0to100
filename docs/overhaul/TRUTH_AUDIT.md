@@ -272,6 +272,21 @@ data limitations are one-directional favourable (survivorship); a CA-raw (either
 limitation downgrades a FAIL to INCONCLUSIVE. No EXP-006 threshold/feature/config-hash
 changed.
 
+## C-20 · Strategy Studio: autonomous discovery is research-only, user-gated
+**Class:** ARCHITECTURE / safety · **Status:** ADDED · 2026-07-28
+**Risk:** an autonomous strategy generator could silently implement / paper-deploy /
+promote an idea, or sell it to the user with a single score.
+**Mitigation (built + tested, `research/strategy_studio/`):** the system may generate and
+REJECT strategies but a **USER-only lifecycle transition** is required to approve one for
+PAPER (research code raises `LifecycleError`); approval is **immutable + PAPER-only**,
+bound to one config hash (a tweak invalidates it); paper activation is a **separate
+confirmation**; every material tweak makes a **new version + config hash** and must be
+re-tested; discovery records **every attempt** (incl. rejects), applies multiple-testing
+burden + untouched-test isolation + simpler-baseline + complexity penalty; confidence is
+shown as **five separate** measures; and **synthetic fixtures are labelled non-evidence**.
+No module imports an order path; PAPER autopilot, Telegram paper-only and the LIVE
+migration lock are unchanged. Real market evidence still requires a research-grade dataset.
+
 ## C-19 · Historical Data Setup frontend (data management; presentation + ingestion only)
 **Class:** DOCUMENTATION / usability · **Status:** ADDED · 2026-07-28
 **Reality:** materialising real data required operator shell commands; a local layman

@@ -1217,6 +1217,7 @@ with st.sidebar:
             ("IPO Calendar",      "🚀 IPO Calendar"),
             ("Research",          "🔬 Research"),
             ("Historical Data Setup", "🗂️ Historical Data Setup"),
+            ("Strategy Studio",   "🧪 Strategy Studio"),
             ("Tools",             "🛠️ Tools"),
         ]
         for _mt_key, _mt_label in _more_tools:
@@ -1731,6 +1732,18 @@ elif _page == "Historical Data Setup":
     except Exception as _hds_exc:
         st.error(f"Historical Data Setup unavailable: {_hds_exc}")
         st.caption("See docs/user-guide/HISTORICAL_DATA_SETUP.md for the manual.")
+
+# ══════════════════════════════════════════════════════════════════════════════
+elif _page == "Strategy Studio":
+    # Autonomous strategy discovery + human-in-the-loop approval. RESEARCH ONLY:
+    # generates & rejects ideas, presents the case for/against, and lets the USER
+    # approve for PAPER only. NO order actions; LIVE stays migration-locked.
+    try:
+        from ui.strategy_studio_page import render_strategy_studio
+        render_strategy_studio()
+    except Exception as _ss_exc:
+        st.error(f"Strategy Studio unavailable: {_ss_exc}")
+        st.caption("See docs/user-guide/STRATEGY_STUDIO.md for the guide.")
 
 # ══════════════════════════════════════════════════════════════════════════════
 elif _page == "Research":
