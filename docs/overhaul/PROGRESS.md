@@ -45,3 +45,33 @@ claim without evidence.
 - Phase 1 (Safety & fail-closed): `QT_LIVE_ENABLED` flag disabling live arming (C-04b);
   transactional fail-closed evidence writes (C-06); `TrustClass` boundary stub. Plus
   the `RESEARCH_LOG.md` entry recording the per-trade-vs-portfolio discovery (§11).
+
+## Milestone 1a — C-04b live-disable (Phase 1) · 2026-07-27 · status: DONE
+
+**Completed work**
+- `execution/autopilot.py`: `_live_enabled()` (env flag `QT_LIVE_ENABLED`, fail
+  closed / default off) + a hard gate at the top of the LIVE-arm path. Paper
+  unaffected. LIVE now refuses regardless of the phrase until the flag is set.
+- `docs/architecture/EXECUTION_SAFETY.md`: the live-trading graduation criteria the
+  flag stands in front of.
+- Test `TestAutopilot::test_live_disabled_during_overhaul` (LIVE refused when flag
+  unset even with the correct phrase; paper still arms; flag-on falls through to the
+  phrase check).
+
+**Tests run**
+- `TestAutopilot::test_live_disabled_during_overhaul` — PASS.
+- `TestAutopilot::test_live_arm_needs_exact_phrase` — PASS.
+- Two PRE-EXISTING failures surfaced (NOT caused by this change; both arm in PAPER):
+  `test_circuit_breaker_disarms`, `test_pnl_snapshot_live_and_day` — UTC↔IST date-
+  boundary flakes (run at UTC 23:58 = IST next day). Logged as **C-13** (RELIABILITY,
+  money-adjacent). Deferred to the §16 timezone milestone; not fabricating green.
+
+**Evidence generated**
+- Live autopilot is now fail-closed disabled (C-04b MONEY_CRITICAL closed for arming).
+
+**Unresolved risks**
+- C-13 timezone boundary in day-P&L / circuit breaker (new).
+
+**Next milestone**
+- Phase 1 continued: transactional fail-closed evidence writes (C-06); `TrustClass`
+  boundary stub (C-01/E). Then Phase 2 service extraction.

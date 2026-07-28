@@ -155,6 +155,20 @@ reconciliation against realised fills. Fills are simulated *at the pivot* (optim
 **Fix direction:** cost model stays modelled and *labelled*; slippage graduates to
 `OBSERVED` only after forward-paper reconciliation (§15/§16).
 
+## C-13 · Day-P&L / circuit-breaker logic is not UTC↔IST-boundary safe
+**Class:** RELIABILITY
+**Reality:** discovered during Phase-1 work at a UTC/IST date boundary
+(UTC 2026-07-27 23:58 = IST 2026-07-28). `test_circuit_breaker_disarms` and
+`test_pnl_snapshot_live_and_day` insert trades with naive `datetime.now()` while the
+autopilot filters the trading day by IST `today_ist()` — so a "today" trade is
+excluded and day-realised P&L reads 0, i.e. the **circuit breaker can fail to fire**
+across the boundary. The tests are naive; whether the production day-filter is fully
+IST-consistent needs a dedicated check.
+**Impact:** a safety control (daily-loss circuit breaker) may under-count near
+midnight IST. MONEY-adjacent.
+**Fix direction:** IST-consistent day boundaries everywhere in P&L/limits; the §16
+timezone + announcement-release-time test suite. Tracked as a Phase-5/8 item.
+
 ---
 
 ## Money- and evidence-critical fix order (mandatory first)

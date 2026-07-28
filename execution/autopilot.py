@@ -37,6 +37,7 @@ State persists atomically to logs/autopilot.json.
 from __future__ import annotations
 
 import json
+import os
 import threading
 from datetime import datetime, date
 
@@ -62,6 +63,15 @@ _consider_lock = threading.Lock()
 
 TAG = "AUTOPILOT"
 ARM_PHRASE = "ARM LIVE"        # must be typed exactly to arm LIVE mode
+
+
+def _live_enabled() -> bool:
+    """LIVE execution is HARD-DISABLED during the Evidence Lab overhaul
+    (ADR-001, directive §15). It re-enables ONLY via an explicit env flag set
+    AFTER the graduation criteria in docs/architecture/EXECUTION_SAFETY.md are met.
+    Paper mode is unaffected. Fail closed: anything but an explicit truthy flag =
+    disabled."""
+    return os.getenv("QT_LIVE_ENABLED", "").strip().lower() in ("1", "true", "yes", "on")
 
 _DEFAULTS = {
     "armed": False,
@@ -322,6 +332,11 @@ def arm(confirm_phrase: str = "") -> tuple[bool, str]:
     if s["allocation"] < 5000:
         return False, "Pehle allocation set karo (min ₹5,000)"
     if s["mode"] == "LIVE":
+        if not _live_enabled():
+            return False, ("LIVE execution is DISABLED during the Evidence Lab "
+                           "overhaul (paper only). It re-enables via QT_LIVE_ENABLED "
+                           "once the graduation criteria in "
+                           "docs/architecture/EXECUTION_SAFETY.md are met.")
         if confirm_phrase.strip() != ARM_PHRASE:
             return False, f"LIVE arm karne ke liye exactly '{ARM_PHRASE}' type karo"
         try:

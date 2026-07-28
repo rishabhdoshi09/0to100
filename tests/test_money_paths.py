@@ -891,6 +891,24 @@ class TestAutopilot:
         ok, _ = ap.arm("wrong phrase")
         assert not ok
 
+    def test_live_disabled_during_overhaul(self, tmp_path, monkeypatch):
+        # C-04b: LIVE arming fails closed while QT_LIVE_ENABLED is unset — even with
+        # the correct phrase — but PAPER arming is unaffected.
+        ap, _ = self._setup(tmp_path, monkeypatch)
+        monkeypatch.delenv("QT_LIVE_ENABLED", raising=False)
+        ap.set_config(mode="LIVE")
+        ok, msg = ap.arm(ap.ARM_PHRASE)
+        assert not ok and "DISABLED" in msg.upper()
+        # paper still works
+        ap.set_config(mode="PAPER")
+        assert ap.arm()[0] is True
+        # with the flag explicitly on, the gate opens (falls through to the phrase
+        # check → a DIFFERENT refusal, proving the flag is what blocked it)
+        ap.set_config(mode="LIVE")
+        monkeypatch.setenv("QT_LIVE_ENABLED", "1")
+        ok2, msg2 = ap.arm("wrong phrase")
+        assert not ok2 and "DISABLED" not in msg2.upper()
+
     def test_sector_fallback_lookup(self, tmp_path, monkeypatch):
         """Signal without a sector tag must be judged by sector_of(), not
         auto-rejected — a lone strong stock in a top sector still trades."""
