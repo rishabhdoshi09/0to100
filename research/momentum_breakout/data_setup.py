@@ -120,6 +120,180 @@ def safe_extract_zip(zip_source, dest_dir) -> ExtractReport:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# A2. Direct file ingestion — .csv / .json / .md / .pdf (no ZIP required)
+# ══════════════════════════════════════════════════════════════════════════════
+# Files are classified by CONTENT (bhavcopy vs index), split by their own date column
+# (or a DDMMYYYY in the name) into the per-day files the canonical store expects.
+# Unreliable extraction is REJECTED with a clear message — never silently accepted as
+# research data.
+
+_BHAV_DATE_COLS = ("DATE1", "DATE", "TIMESTAMP", "TRADE_DATE")
+_INDEX_DATE_COLS = ("INDEX DATE", "DATE")
+import io as _io
+import re as _re
+from pathlib import Path as _P
+
+
+def _date_stem(val) -> str | None:
+    import pandas as pd
+    try:
+        ts = pd.to_datetime(str(val).strip(), dayfirst=True, errors="coerce")
+        return None if pd.isna(ts) else ts.strftime("%d%m%Y")
+    except Exception:
+        return None
+
+
+def _stem_from_name(name: str) -> str | None:
+    m = _re.search(r"(\d{8})", _P(name).stem)      # DDMMYYYY anywhere in the name
+    return m.group(1) if (m and _date_stem_valid(m.group(1))) else None
+
+
+def _date_stem_valid(stem: str) -> bool:
+    import pandas as pd
+    try:
+        return not pd.isna(pd.to_datetime(stem, format="%d%m%Y", errors="coerce"))
+    except Exception:
+        return False
+
+
+def _read_any_table(name: str, raw: bytes):
+    """Return a list of DataFrames from a .csv / .md / .pdf file, or None if unreadable."""
+    import pandas as pd
+    low = name.lower()
+    if low.endswith(".csv"):
+        for enc in ("utf-8", "latin-1"):
+            try:
+                return [pd.read_csv(_io.BytesIO(raw), dtype=str, encoding=enc)]
+            except Exception:
+                continue
+        return None
+    if low.endswith(".md"):
+        return _markdown_tables(raw.decode("utf-8", "ignore"))
+    if low.endswith(".pdf"):
+        return _pdf_tables(raw)
+    return None
+
+
+def _markdown_tables(text: str):
+    """Parse GitHub-flavoured markdown tables → DataFrames. Deterministic, no deps."""
+    import pandas as pd
+    tables, rows = [], []
+
+    def _flush():
+        nonlocal rows
+        if len(rows) >= 2:
+            hdr = [c.strip() for c in rows[0]]
+            body = [r for r in rows[2:]] if _is_sep(rows[1]) else [r for r in rows[1:]]
+            data = [r for r in body if len(r) == len(hdr)]
+            if data:
+                tables.append(pd.DataFrame(data, columns=hdr).astype(str))
+        rows = []
+
+    for line in text.splitlines():
+        if "|" in line:
+            cells = [c.strip() for c in line.strip().strip("|").split("|")]
+            rows.append(cells)
+        else:
+            _flush()
+    _flush()
+    return tables or None
+
+
+def _is_sep(cells) -> bool:
+    return all(set(c.strip()) <= set("-: ") and "-" in c for c in cells if c.strip())
+
+
+def _pdf_tables(raw: bytes):
+    """Best-effort PDF table extraction — ONLY if pdfplumber is installed. If not, return
+    None so the caller rejects honestly (PDF price data can't be validated reliably)."""
+    try:
+        import pdfplumber
+    except Exception:
+        return None
+    import pandas as pd
+    out = []
+    try:
+        with pdfplumber.open(_io.BytesIO(raw)) as pdf:
+            for page in pdf.pages:
+                for tbl in (page.extract_tables() or []):
+                    if len(tbl) >= 2:
+                        out.append(pd.DataFrame(tbl[1:], columns=[str(c).strip()
+                                                                  for c in tbl[0]]).astype(str))
+    except Exception:
+        return None
+    return out or None
+
+
+def _classify_and_write(df, name: str, dest, rep) -> None:
+    """Classify one table as bhavcopy or index by columns, split by date, write per-day
+    files. Rejects (with a reason) anything it can't validate."""
+    df = df.rename(columns=lambda c: str(c).strip())
+    upper = {c.upper() for c in df.columns}
+    if _BHAV_COLS.issubset(upper):
+        n = _write_by_date(df, name, _P(dest) / "bhav", _BHAV_DATE_COLS)
+        (rep.extracted.append(f"bhav/ ({n} day(s)) ← {name}") if n
+         else rep.rejected.append((name, "bhavcopy CSV but no readable trading date")))
+    elif any(h.lower() in {c.lower() for c in df.columns} for h in _INDEX_COL_HINTS):
+        n = _write_by_date(df, name, _P(dest) / "index", _INDEX_DATE_COLS)
+        (rep.extracted.append(f"index/ ({n} day(s)) ← {name}") if n
+         else rep.rejected.append((name, "index CSV but no readable date")))
+    else:
+        rep.rejected.append((name, "unrecognised table (not bhavcopy or index columns)"))
+
+
+def _write_by_date(df, name, out_dir, date_cols) -> int:
+    out_dir = _P(out_dir); out_dir.mkdir(parents=True, exist_ok=True)
+    dcol = next((c for c in df.columns if c.strip().upper() in date_cols), None)
+    written = 0
+    if dcol is not None:
+        for val, g in df.groupby(dcol):
+            stem = _date_stem(val)
+            if stem:
+                g.drop(columns=[]).to_csv(out_dir / f"{stem}.csv", index=False)
+                written += 1
+    if written == 0:                                # fall back to a date in the filename
+        stem = _stem_from_name(name)
+        if stem:
+            df.to_csv(out_dir / f"{stem}.csv", index=False); written = 1
+    return written
+
+
+def ingest_files(files, dest_dir) -> ExtractReport:
+    """Accept a list of (filename, bytes) uploads of type .csv / .json / .md / .pdf and
+    stage them into `dest_dir` as the canonical `bhav/` `index/` `*.json` layout. Files
+    are validated by CONTENT; unrecognised or unreadable files are rejected with a reason
+    (never silently accepted). Returns an ExtractReport."""
+    dest = _P(dest_dir); dest.mkdir(parents=True, exist_ok=True)
+    rep = ExtractReport(ok=True)
+    for name, data in files:
+        raw = data if isinstance(data, bytes) else bytes(data)
+        low = name.lower()
+        if low.endswith(".json"):
+            base = _P(name).name
+            if base in ("ca_events.json", "universe_history.json"):
+                try:
+                    json.loads(raw.decode("utf-8", "ignore"))
+                    (dest / base).write_bytes(raw); rep.extracted.append(base)
+                except Exception:
+                    rep.rejected.append((name, "invalid JSON"))
+            else:
+                rep.rejected.append((name, "unsupported JSON (need ca_events.json / "
+                                            "universe_history.json)"))
+            continue
+        if not low.endswith((".csv", ".md", ".pdf")):
+            rep.rejected.append((name, "unsupported file type")); continue
+        tables = _read_any_table(name, raw)
+        if not tables:
+            hint = ("PDF price data can't be validated reliably here — please export to CSV"
+                    if low.endswith(".pdf") else "could not read a table from this file")
+            rep.rejected.append((name, hint)); continue
+        for df in tables:
+            _classify_and_write(df, name, dest, rep)
+    rep.ok = bool(rep.extracted)
+    return rep
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # B. Validation + coverage/quality
 # ══════════════════════════════════════════════════════════════════════════════
 

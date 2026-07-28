@@ -303,3 +303,73 @@ class TestExecutionIsolation:
         for pat in ("place_trade", "arm(", "GTT", "zerodha", "kite_client",
                     "telegram_actions", "consider("):
             assert pat not in code, f"ui.data_setup_page references {pat}"
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 8. Direct file ingestion (.csv / .json / .md / .pdf) — no ZIP required
+# ══════════════════════════════════════════════════════════════════════════════
+
+class TestFileIngestion:
+    _BHAV_HDR = ("SYMBOL,SERIES,DATE1,OPEN_PRICE,HIGH_PRICE,LOW_PRICE,CLOSE_PRICE,"
+                 "TTL_TRD_QNTY,DELIV_PER")
+
+    def test_single_csv_multiday_splits_into_per_day_files(self, tmp_path):
+        csv = (self._BHAV_HDR + "\n"
+               "TCS,EQ,27-Jul-2026,3000,3010,2990,3005,100000,55\n"
+               "TCS,EQ,28-Jul-2026,3005,3020,3000,3015,100000,58\n")
+        rep = D.ingest_files([("sec_bhavdata.csv", csv.encode())], tmp_path)
+        assert rep.ok
+        assert {p.name for p in (tmp_path / "bhav").glob("*.csv")} == {"27072026.csv",
+                                                                       "28072026.csv"}
+
+    def test_markdown_index_table_ingested(self, tmp_path):
+        md = ("| Index Name | Index Date | Open Index Value | High Index Value | "
+              "Low Index Value | Closing Index Value |\n"
+              "|---|---|---|---|---|---|\n"
+              "| Nifty 50 | 27-07-2026 | 24000 | 24100 | 23950 | 24050 |\n")
+        rep = D.ingest_files([("nifty.md", md.encode())], tmp_path)
+        assert rep.ok and (tmp_path / "index" / "27072026.csv").exists()
+
+    def test_json_families_ingested_and_others_rejected(self, tmp_path):
+        rep = D.ingest_files([("ca_events.json", b"{}"),
+                              ("random.json", b"{}")], tmp_path)
+        assert "ca_events.json" in rep.extracted
+        assert any("random.json" == n for n, _ in rep.rejected)
+
+    def test_unsupported_type_rejected(self, tmp_path):
+        rep = D.ingest_files([("notes.txt", b"hello")], tmp_path)
+        assert rep.ok is False and rep.rejected
+
+    def test_unrecognised_csv_rejected(self, tmp_path):
+        rep = D.ingest_files([("junk.csv", b"a,b,c\n1,2,3\n")], tmp_path)
+        assert any("unrecognised" in why for _, why in rep.rejected)
+
+    def test_pdf_without_extractor_is_honestly_rejected(self, tmp_path):
+        rep = D.ingest_files([("report.pdf", b"%PDF-1.4 not a real table")], tmp_path)
+        assert rep.ok is False
+        assert any("pdf" in n.lower() and "csv" in why.lower() for n, why in rep.rejected)
+
+    def test_ingested_csvs_then_validate_ready(self, tmp_path):
+        # ingest enough per-day CSVs + an index file → dataset validates (limitations ok)
+        lines = [self._BHAV_HDR]
+        import datetime as dt
+        d = dt.date(2024, 1, 1); made = 0
+        files = []
+        while made < 65:
+            if d.weekday() < 5:
+                body = (f"TCS,EQ,{d.strftime('%d-%b-%Y')},3000,3010,2990,3005,1e5,55\n"
+                        f"INFY,EQ,{d.strftime('%d-%b-%Y')},1500,1510,1490,1505,9e4,60\n"
+                        f"HAL,EQ,{d.strftime('%d-%b-%Y')},4000,4010,3990,4005,8e4,50\n")
+                files.append((f"bhav_{d.strftime('%d%m%Y')}.csv",
+                              (self._BHAV_HDR + "\n" + body).encode()))
+                idx = ("Index Name,Index Date,Open Index Value,High Index Value,"
+                       "Low Index Value,Closing Index Value\n"
+                       f"Nifty 50,{d.strftime('%d-%m-%Y')},24000,24100,23950,24050\n")
+                files.append((f"idx_{d.strftime('%d%m%Y')}.csv", idx.encode()))
+                made += 1
+            d += dt.timedelta(days=1)
+        rep = D.ingest_files(files, tmp_path)
+        assert rep.ok
+        v = D.validate_dataset(tmp_path)
+        assert v.status in (D.READY, D.READY_WITH_LIMITATIONS)
+        assert v.benchmark and v.price_data

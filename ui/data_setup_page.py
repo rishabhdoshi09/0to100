@@ -65,27 +65,41 @@ def render_data_setup() -> None:
 
     stg_key = "_hds_staging"
     method = st.radio("How do you want to provide the data?",
-                      ["Upload a ZIP package", "Use an existing folder on this computer"],
+                      ["Upload files", "Use an existing folder on this computer"],
                       key="hds_method")
 
     # ── 1. input ──
-    if method == "Upload a ZIP package":
-        st.markdown("Your ZIP can contain any of: a `bhav/` folder (daily price CSVs), an "
-                    "`index/` folder (Nifty CSVs), `ca_events.json`, `universe_history.json`.")
-        up = st.file_uploader("Choose a .zip", type=["zip"], key="hds_zip")
-        if up is not None and st.button("Check this ZIP", key="hds_check_zip"):
+    if method == "Upload files":
+        st.markdown("Upload a **ZIP package** *or* individual files: daily price files "
+                    "(`.csv`), Nifty index files (`.csv`), `ca_events.json`, "
+                    "`universe_history.json`. Tables in `.md` are read too; `.pdf` is "
+                    "best-effort and rejected if it can't be validated (export to CSV).")
+        ups = st.file_uploader("Choose file(s)", type=["zip", "csv", "json", "md", "pdf"],
+                               accept_multiple_files=True, key="hds_files")
+        if ups and st.button("Check these files", key="hds_check_files"):
             dest = Path(tempfile.mkdtemp(prefix="hds_"))
-            rep = D.safe_extract_zip(up, dest)
-            if not rep.ok:
-                st.error("Could not read a usable dataset from that ZIP.")
-                if rep.rejected:
-                    with st.expander("Files that were skipped"):
-                        for n, why in rep.rejected:
-                            st.markdown(f"- `{n}` — {why}")
+            extracted, rejected = [], []
+            loose = []
+            for f in ups:
+                if f.name.lower().endswith(".zip"):
+                    r = D.safe_extract_zip(f, dest)
+                    extracted += r.extracted; rejected += r.rejected
+                else:
+                    loose.append((f.name, f.getvalue()))
+            if loose:
+                r = D.ingest_files(loose, dest)
+                extracted += r.extracted; rejected += r.rejected
+            if not extracted:
+                st.error("Could not read a usable dataset from those files.")
+                for n, why in rejected:
+                    st.markdown(f"- `{n}` — {why}")
             else:
                 st.session_state[stg_key] = str(dest)
-                if rep.rejected:
-                    st.warning(f"{len(rep.rejected)} file(s) were skipped for safety.")
+                st.success(f"Read {len(extracted)} data part(s).")
+                if rejected:
+                    with st.expander(f"{len(rejected)} file(s) skipped"):
+                        for n, why in rejected:
+                            st.markdown(f"- `{n}` — {why}")
     else:
         folder = st.text_input("Full path to your data folder", key="hds_folder")
         if folder and st.button("Check this folder", key="hds_check_folder"):
