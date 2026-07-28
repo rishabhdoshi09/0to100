@@ -102,6 +102,9 @@ def simulate_trade(s: BarSeries, signal_i: int, initial_stop: float,
     entry_i = signal_i + 1
     if entry_i >= n:
         return None
+    if not (np.isfinite(s.open[entry_i]) and initial_stop is not None
+            and np.isfinite(initial_stop)):
+        return None                                        # no tradable next bar (gap/delisted)
     slp = cfg.slippage_pct / 100.0
     entry_fill = float(s.open[entry_i]) * (1.0 + slp)     # buy → pay up
     if entry_fill <= initial_stop:
@@ -113,6 +116,8 @@ def simulate_trade(s: BarSeries, signal_i: int, initial_stop: float,
     mae = 0.0; mfe = 0.0
     for j in range(entry_i, n):
         lo = float(s.low[j]); hi = float(s.high[j]); op = float(s.open[j]); cl = float(s.close[j])
+        if not (np.isfinite(lo) and np.isfinite(hi) and np.isfinite(op) and np.isfinite(cl)):
+            continue                                       # missing session during hold — skip
         # running MAE/MFE in R
         mae = min(mae, (lo - entry_fill) / risk)
         mfe = max(mfe, (hi - entry_fill) / risk)

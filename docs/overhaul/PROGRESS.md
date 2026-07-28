@@ -129,6 +129,68 @@ paper/Telegram/GTT wiring, no UI redesign, no broad Phase-1 refactor.**
 - Unchanged: Phase 1 continued (C-06 fail-closed evidence writes; TrustClass stub),
   then Phase 2 service extraction. EXP-006 is run when point-in-time data is available.
 
+## Milestone 3 — EXP-006 Historical Evidence Run · 2026-07-28 · status: runner implemented + tested; verdict INCONCLUSIVE (data unavailable here)
+
+Evidence run of the FROZEN EXP-006 framework (commit 6e7968e). No redesign, no new
+strategy, no execution wiring, no service extraction, no portfolio simulator, no UI.
+
+**Primary verdict: INCONCLUSIVE — DATA_UNAVAILABLE.** No point-in-time NSE dataset
+exists in this environment (empty bhav/index stores; no network; no universe/CA/
+fundamental history). The data-quality gate failed CLOSED; the runner emitted
+INCONCLUSIVE rather than fabricating a PASS/FAIL. This is honest process, NOT strategy
+evidence about the hypothesis.
+
+**Completed work (implementation, tested — distinct from evidence)**
+- `research/momentum_breakout/dataset.py`: `DataProvider` abstraction, real
+  `BhavDataProvider` (fails closed if the store can't be built), machine-readable
+  `data_quality_report` (fails closed on non-positive prices / HLOC inconsistency /
+  duplicate dates / absent data; records every limitation), reproducible
+  `snapshot_manifest`.
+- `research/momentum_breakout/runner.py`: `run_evidence()` — chronological candidate
+  generation (one event per breakout), primary + two secondary exits, six frozen
+  ablations, benchmark comparisons, regime/sector/valuation breakdowns, existing
+  harness + BH-FDR multiple-testing, machine-readable artifacts, and the
+  PASS/FAIL/INCONCLUSIVE verdict with a **research-grade downgrade** (a would-be PASS
+  on survivorship-incomplete / CA-unadjusted data → INCONCLUSIVE; a FAIL is retained).
+  Operator CLI: `python -m research.momentum_breakout.runner`.
+- Bug fixes (implementation contradicted robustness; demonstrated by tests; hypothesis
+  unchanged, no new experiment id): NaN/missing-bar fail-closed in `_detect_base` +
+  simulator; `_detect_base` O(base_max²)→O(base_max) with identical output (audit C-16).
+
+**Tests run**
+- `tests/test_momentum_breakout_run.py` — 27 passed (deterministic, synthetic,
+  network-free): data-quality gate + fail-closed corruption, snapshot stability,
+  chronological generation + stable replay + unique event ids, no-same-bar entry,
+  missing-session / IPO / delisting, benchmark alignment, cost application, no-fill +
+  gap-through-stop, exit-variant separation, ablation isolation, multiple-testing,
+  verdict mapping (PASS / research-grade downgrade / FAIL / UNDERPOWERED /
+  DATA_UNAVAILABLE), artifact reproducibility, valuation-unavailable honesty, execution
+  isolation.
+- `tests/test_momentum_breakout.py` — 39 still pass (detector optimization is
+  behaviour-preserving).
+- Regression: money-paths / research / gauntlet suites green; PAPER autopilot,
+  Telegram paper-only, LIVE migration lock unchanged; the runner imports nothing from
+  execution/alerts/broker (enforced by test).
+
+**Evidence generated**
+- On real data: NONE (data unavailable → INCONCLUSIVE). On synthetic research-grade
+  data the runner is verified to produce trades and a coherent verdict, and to REFUSE
+  a PASS on a small sample (8 trades → UNDERPOWERED → INCONCLUSIVE).
+
+**Artifacts (this run, fail-closed set):** `logs/experiments/EXP-006/<snapshot>/`
+data_quality.json, snapshot_manifest.json, experiment_spec.json, config_snapshot.json,
+limitations.json, verdict.json (+ the full observation/ledger/ablation/benchmark set
+when real data is present).
+
+**Limitations bounding any future real-data verdict:** survivorship incomplete; CA raw
+unless ca_events.json present; sector membership not dated; no PIT fundamentals; no PIT
+delivery. Under the research-grade gate, PASS needs ≥ survivorship + CA research-grade.
+
+**Next milestone**
+- Unchanged: Phase 1 continued (C-06; TrustClass), then Phase 2 service extraction.
+  Run EXP-006 on research-grade point-in-time NSE data (operator step) for a verdict on
+  the hypothesis itself.
+
 ## Milestone 1b — C-13 day-boundary money-safety · 2026-07-28 · status: DONE
 
 Focused money-safety milestone. **No service extraction, no portfolio-simulator work.**

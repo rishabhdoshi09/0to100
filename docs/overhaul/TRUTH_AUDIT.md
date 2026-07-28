@@ -248,6 +248,25 @@ every observation as explicit limitations rather than silently assumed.
 **Fix direction:** a bitemporal fundamentals ledger with publication dates and a dated
 sector-membership history (the point-in-time data platform, ADR-001 §8). Until then the
 framework fails closed on these inputs.
+**Update (2026-07-28, EXP-006 evidence run):** the EXP-006 runner enforces this — its
+data-quality gate fails closed on absent/corrupt data, and its **research-grade verdict
+gate** downgrades any would-be PASS on survivorship-incomplete / CA-unadjusted data to
+INCONCLUSIVE. In this environment the run returned INCONCLUSIVE(DATA_UNAVAILABLE): no
+point-in-time NSE dataset exists here (empty bhav/index stores, no network, no
+universe/CA/fundamental history). A defensible PASS is not attainable until at least
+survivorship + CA reach research grade; a FAIL is attainable now.
+
+## C-16 · Detector NaN-safety + O(n²) base scan (fixed during EXP-006 run)
+**Class:** RELIABILITY · **Status:** FIXED · 2026-07-28
+**Reality:** the frozen detector (`_detect_base`) and the simulator did not guard
+against NaN/missing bars, so on real gappy data a missing session could fabricate a
+spurious pivot/candidate or an unrealistic fill; and `_detect_base` rescanned every
+base length at every bar (O(base_max²)), making a whole-market historical run
+intractable.
+**Fix:** both now fail closed on NaN/missing bars; `_detect_base` rewritten to an
+O(base_max) incremental scan with **identical output** (all 39 pre-existing detector
+tests unchanged). Pure robustness + performance — the tested hypothesis, thresholds,
+pivot/base definition and config-hash semantics are unchanged (no new experiment id).
 
 ---
 

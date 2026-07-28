@@ -69,29 +69,35 @@ def _detect_base(s: BarSeries, i: int, cfg: MomentumBreakoutConfig):
     the bar-`i` close is the FIRST to confirm-break. Returns (base_start_i, pivot)
     or None. Uses only bars ≤ i (no future decides the base)."""
     c_i = float(s.close[i])
+    if not np.isfinite(c_i):
+        return None                         # missing session — never a candidate
     buffer = 1.0 + cfg.breakout_buffer_pct / 100.0
-    for L in range(cfg.base_max_len, cfg.base_min_len - 1, -1):
-        start = i - L
-        if start < 0:
+    # Incremental leftward scan: extend the window one bar at a time (L = 1..max),
+    # maintaining running max(high)/max(close)/min(low) in O(1). Track the LARGEST
+    # valid base — identical semantics to a max→min rescan, but O(base_max) not
+    # O(base_max²), which is what makes a whole-market historical run tractable.
+    run_hi = -np.inf; run_lo = np.inf; run_maxclose = -np.inf
+    best = None
+    lo_bound = max(0, i - cfg.base_max_len)
+    for start in range(i - 1, lo_bound - 1, -1):
+        h = float(s.high[start]); c = float(s.close[start]); l = float(s.low[start])
+        if not (np.isfinite(h) and np.isfinite(c) and np.isfinite(l)):
+            break                            # a gap → no clean base extends past it
+        run_hi = max(run_hi, h); run_lo = min(run_lo, l); run_maxclose = max(run_maxclose, c)
+        L = i - start
+        if L < cfg.base_min_len:
             continue
-        h = s.high[start:i]                 # base bars, strictly before breakout
-        c = s.close[start:i]
-        if h.size < cfg.base_min_len:
-            continue
-        pivot = float(np.max(h))
+        pivot = run_hi
         if pivot <= 0:
             continue
-        # first confirmed close-through: no close inside the base cleared the pivot
-        if float(np.max(c)) >= pivot * buffer:
+        if run_maxclose >= pivot * buffer:   # a confirmed close already cleared the pivot
             continue
-        # bar i must be the confirming close
-        if c_i < pivot * buffer:
+        if c_i < pivot * buffer:             # bar i is not the confirming close vs this pivot
             continue
-        depth = (pivot - float(np.min(s.low[start:i]))) / pivot * 100.0
-        if depth > cfg.max_base_depth_pct:
+        if (pivot - run_lo) / pivot * 100.0 > cfg.max_base_depth_pct:
             continue
-        return start, pivot
-    return None
+        best = (start, float(pivot))         # larger L overwrites → keeps the LONGEST base
+    return best
 
 
 def consider(s: BarSeries, i: int, cfg: MomentumBreakoutConfig,

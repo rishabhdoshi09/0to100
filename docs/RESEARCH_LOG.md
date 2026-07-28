@@ -404,3 +404,63 @@ guarantee.
 - **Supersedes / references:** builds on the momentum evidence (EXP-003/004) and the
   portfolio-metric standard (META-001); introduces the breakout-structure hypothesis
   those did not test. Awaits a run on point-in-time data before any verdict.
+
+---
+
+## EXP-006 — Historical Evidence Run · RESULT: INCONCLUSIVE (data unavailable in run environment)
+- **Type:** evidence run of the pre-registered EXP-006 framework (commit `6e7968e`).
+  Append-only; does not edit the EXP-006 pre-registration above.
+- **Date:** 2026-07-28. Branch `overhaul/evidence-lab`. Runner:
+  `research/momentum_breakout/runner.py` + `dataset.py`.
+- **Primary verdict:** **INCONCLUSIVE**. Reason: `DATA_UNAVAILABLE`. The point-in-time
+  NSE dataset does not exist in this execution environment — the bhavcopy store is
+  empty (`logs/bhav/` = 0 files), the NSE index store is empty, there is no network
+  to NSE (HTTP 000), and no `universe_history.json` / `ca_events.json` / PIT
+  fundamentals. The data-quality gate therefore **failed closed** and the runner
+  emitted INCONCLUSIVE(DATA_UNAVAILABLE) rather than fabricating a PASS/FAIL. This is
+  the correct, honest outcome — **not** strategy evidence.
+- **What WAS delivered (implementation, tested — NOT evidence):** a complete,
+  deterministic, network-free historical runner that, given a real point-in-time
+  dataset, executes the frozen EXP-006 spec end to end: data-quality gate (fails
+  closed on non-positive prices / HLOC inconsistency / duplicate dates / absent
+  data), dataset snapshot manifest (reproducible `snapshot_id`), chronological
+  candidate generation (one event per breakout, structural dedup), the pre-registered
+  gap-aware next-bar-entry simulator (primary + two secondary exits), the six frozen
+  ablations, benchmark comparisons, regime / sector / valuation breakdowns, the
+  existing harness (DSR / alpha / block-CI) and BH-FDR multiple-testing control, and
+  machine-readable artifacts. Verified on a synthetic research-grade dataset: the
+  runner produces trades and a coherent verdict, and — critically — **refuses to
+  claim a PASS on a small sample** (8 synthetic trades → UNDERPOWERED → INCONCLUSIVE),
+  exactly as the evidence standard requires.
+- **Verdict-mapping discipline (frozen in the runner):** harness PROMOTE → PASS,
+  REJECT → FAIL, UNDERPOWERED/INCONCLUSIVE → INCONCLUSIVE. **Research-grade gate:** a
+  would-be PASS on a dataset that is survivorship-incomplete or CA-unadjusted is
+  DOWNGRADED to INCONCLUSIVE (a biased PASS is not defensible — the EXP-005 lesson);
+  a FAIL is retained (meaningful even on optimistically-biased data). Secondary exits,
+  ablations and slices NEVER override the primary verdict.
+- **Bug fixes during the run (implementation contradicted robustness, demonstrated by
+  tests; hypothesis unchanged, no new experiment id needed):** (1) `_detect_base` and
+  the simulator now fail closed on NaN/missing bars so a data gap can never fabricate a
+  candidate or an unrealistic fill (previously NaN could slip through on real gappy
+  data); (2) `_detect_base` rewritten from an O(base_max²) rescan to an O(base_max)
+  incremental scan with **identical output** (verified: all 39 pre-existing detector
+  tests still pass) — a pure performance fix that makes a whole-market historical run
+  tractable. Both documented; neither changes the tested hypothesis, thresholds,
+  pivot/base definition, or config hash semantics.
+- **Operator reproduction (where the data lives — e.g. the Mac with a built bhav
+  store):** `python -m research.momentum_breakout.runner --out logs/experiments/EXP-006`.
+  It builds the store if needed, freezes the snapshot, runs the frozen spec, writes
+  the full artifact set, and prints the verdict JSON. The result is reproducible from
+  the snapshot manifest (source identities, date range, symbol/row counts, adjustment
+  + universe policy, benchmark identity, cost model, code commit, config hash).
+- **Material limitations that will bound any real-data verdict (recorded, not hidden):**
+  universe survivorship incomplete until `universe_history.json` is supplied; corporate
+  actions applied only if `ca_events.json` present (else raw → phantom-gap risk); sector
+  membership not historically dated (`SECTOR_MEMBERSHIP_NOT_PIT`); no point-in-time
+  fundamentals (`VALUATION_DATA_UNAVAILABLE`, never substituted with current values);
+  no delivery-volume PIT data. Under the research-grade gate, a PASS is not attainable
+  until at least survivorship + CA are research-grade; a FAIL remains attainable now.
+- **Supersedes / references:** executes EXP-006 (pre-registered above); inherits the
+  EXP-005 anti-survivorship-mirage discipline (META/EXP-005) as the research-grade gate.
+  No verdict on the hypothesis's economic validity is claimed — that awaits a run on
+  research-grade point-in-time NSE data.
