@@ -64,13 +64,17 @@ class CycleReport:
     proposals: list = field(default_factory=list)   # list[Proposal]
     conclusion: str = ""
     required_confidence: float = 0.0
-    acted_on_market: bool = False                    # ALWAYS False — proof no order path
-    approved_anything: bool = False                  # ALWAYS False — human gate intact
+    acted_on_market: bool = False                    # ALWAYS False — no LIVE order path
+    approved_anything: bool = False                  # ALWAYS False — no human gate crossed
+    # market-evidence survivor (spec, EvidenceReport) pairs — consumed by paper autonomy
+    # when the user has engaged it. Not part of as_dict (not JSON-serialisable).
+    survivors_for_paper: list = field(default_factory=list)
 
     def as_dict(self) -> dict:
         d = asdict(self)
         d["proposals"] = [p.as_dict() if isinstance(p, Proposal) else p
                           for p in self.proposals]
+        d.pop("survivors_for_paper", None)
         return d
 
 
@@ -202,6 +206,7 @@ def run_cycle(cycle_no: int, thread: ResearchThread, *,
                         reasons=(f"{ev.net_expectancy_R:+.2f}R/trade over {ev.n_trades} "
                                  f"trades after costs on {budget.test_period}.",))
         report.proposals.append(prop)
+        report.survivors_for_paper.append((spec, ev))
         thread.propose(cycle_no,
                        f"PROPOSE {spec.strategy_id} ({spec.family}) to the human gate: "
                        f"{reco}. It is now {state}. I will NOT approve it — a person must.",

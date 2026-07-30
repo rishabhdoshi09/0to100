@@ -72,6 +72,8 @@ def render_auto_research() -> None:
     if brain.state.last_error:
         st.warning(f"Last cycle note: {brain.state.last_error}")
 
+    _paper_autonomy_panel(brain)
+
     # ── proposals parked at the human gate ───────────────────────────────────────
     rep = brain.state.last_report
     st.markdown("### 📌 Proposals waiting for you")
@@ -114,6 +116,42 @@ def render_auto_research() -> None:
                     f"({trend}, {t.observations} looks)")
 
     st.divider()
-    st.caption("Autonomy with a seatbelt: the brain does the whole research loop by itself "
-               "and stops before risking money. By design, only a person can approve a "
-               "strategy for paper — and live remains locked.")
+    st.caption("Full PAPER autonomy trades only SIMULATED money and can never reach live — "
+               "the paper autopilot is structurally barred from the live-review step. "
+               "Moving a strategy toward LIVE still requires a person, and live remains "
+               "migration-locked.")
+
+
+def _paper_autonomy_panel(brain) -> None:
+    st.markdown("### 🤖 Full paper autonomy")
+    engaged = brain.state.paper_autonomy
+    if engaged:
+        st.success("ENGAGED — the brain deploys survivors to paper, trades them, and retires "
+                   "proven losers on its own. Only simulated money is at risk.")
+        if st.button("⏹️ Disengage paper autonomy"):
+            brain.disengage_paper_autonomy(); st.rerun()
+    else:
+        st.caption("Off. When on, the brain auto-approves real-data survivors for PAPER, "
+                   "places simulated trades, learns from the outcomes, and retires losers — "
+                   "no human in the loop. It can 'blow up' paper money; it can never touch "
+                   "live (that step stays user-only).")
+        if st.button("▶️ Engage full paper autonomy", type="primary"):
+            brain.engage_paper_autonomy(); st.rerun()
+
+    if not (engaged or brain.paper.strategies):
+        return
+    rep = brain.paper.performance_report()
+    book = rep["book"]
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Paper equity", f"₹{book['equity']:,.0f}",
+              f"{book['equity'] - book['capital']:+,.0f}")
+    c2.metric("Deployed", rep["deployed"])
+    c3.metric("Active", rep["active"])
+    c4.metric("Retired (losers)", len(rep["retired"]))
+    if rep["per_strategy"]:
+        st.markdown("**Per-strategy paper performance**")
+        for sid, s in rep["per_strategy"].items():
+            st.markdown(f"- `{sid}` — {s['n_trades']} trades · {s['expectancy_R']:+.2f}R · "
+                        f"win {s['win_rate']:.0%} · net ₹{s['net_pnl']:,.0f}")
+    with st.expander("Technical — paper book"):
+        st.json(rep)

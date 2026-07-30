@@ -480,3 +480,38 @@ autonomous reasoning/reject/propose + determinism + no-evaluator survival; safet
 raises); learning improvement→decay + synthetic-ignored + re-tested child never mutates
 parent; scheduler accumulation + red-data + learning-note-to-thread; canonical readiness
 fails closed. Canonical `python -m pytest` — **646 passed**.
+
+---
+
+## Milestone — Full PAPER autonomy (deploy → trade → learn → retire, hands-off)
+
+**Ask (user):** "a paper money mei I want to give full autonomy. Blow up paper money, I
+don't care but it needs to learn and become smarter by the day." — a deliberate override of
+the earlier human-approval-before-paper gate, **for PAPER only**.
+
+**Built (`research/auto_research/` + lifecycle):**
+- `spec.py` — new `paper_autopilot` actor; multi-actor transitions. It may cross the PAPER
+  gates (AWAITING→APPROVED→PAPER_EVALUATION, and DECAYED/RETIRED) but is **structurally
+  barred** from `PAPER_EVALUATION → ELIGIBLE_FOR_LIVE_REVIEW` (user-only). LIVE boundary
+  unchanged; studio `system`-can't-approve guarantee intact.
+- `approval.py` — `autonomous_paper_approve()` (paper-autopilot, PAPER-only, refuses
+  synthetic/red/non-survivor); `activate_paper` now also accepts the engaged paper autopilot.
+- `paper_book.py` — self-contained simulated ledger; 1%/10%/5%/max-positions caps; stop-first
+  marking; realized-R + equity curve + per-strategy stats. Imports no real-order path.
+- `paper_autonomy.py` — `PaperAutonomyManager`: deploy survivors → trade day by day →
+  autonomously retire proven losers (negative real paper expectancy over ≥20 trades) → keep
+  winners. Per-strategy daily trade cap.
+- `scheduler.py` — `engage_paper_autonomy()` / `disengage`; `run_once` now (when engaged)
+  deploys `survivors_for_paper`, runs a paper day via injected signal/price providers, and
+  reviews-and-adapts. New `BrainState` fields (paper_autonomy/deployed/retired).
+- `ui/auto_research_page.py` — engage/disengage toggle + paper equity, deployed/active/retired
+  metrics, per-strategy paper performance.
+
+**Boundary kept (unchanged):** full paper autonomy trades ONLY simulated money and can NEVER
+reach live — moving a strategy toward LIVE stays a person's action; LIVE migration-locked;
+Telegram paper-only; no order/broker import in the package (test-guarded). Synthetic evidence
+and a red data gate are still refused, so with no research-grade data the brain honestly
+deploys nothing.
+
+**Tests:** `tests/test_paper_autonomy.py` — 23 passed. Canonical `python -m pytest` — **669
+passed**.

@@ -272,6 +272,29 @@ data limitations are one-directional favourable (survivorship); a CA-raw (either
 limitation downgrades a FAIL to INCONCLUSIVE. No EXP-006 threshold/feature/config-hash
 changed.
 
+## C-22 · Full PAPER autonomy: brain trades + learns on its own, LIVE stays locked
+**Class:** ARCHITECTURE / safety · **Status:** ADDED · 2026-07-30
+**Reality (user directive):** the user explicitly granted full autonomy **in paper** — "blow
+up paper money, I don't care, but it needs to learn and get smarter by the day" — deliberately
+overriding the earlier human-approval-before-paper gate FOR PAPER ONLY.
+**Mitigation (built + tested, `research/auto_research/`):** an OPT-IN paper autopilot the user
+engages (`engage_paper_autonomy()` / UI toggle / `QT_PAPER_AUTONOMY`). Once on, the brain
+auto-approves real-data survivors for PAPER (`approval.autonomous_paper_approve`, actor
+`paper_autopilot`), activates them, places SIMULATED trades in a self-contained `PaperBook`
+(1% risk/trade, 10% per name, 5% total open risk, max positions enforced; stop-first marking;
+realized-R ledger), books outcomes, and **autonomously retires** any strategy whose real paper
+expectancy proves negative — the daily "get smarter". **The LIVE boundary is unchanged and
+structural:** the lifecycle lets `paper_autopilot` cross only the PAPER gates and **forbids**
+it (and `system`) from `PAPER_EVALUATION → ELIGIBLE_FOR_LIVE_REVIEW`, which stays **user-only**;
+`allowed_mode` is always PAPER; `_live_enabled()` unchanged; the studio's `system`-can't-approve
+guarantee is intact; and NO module in the package imports an order/broker/kite/Telegram path
+(test-guarded). It still refuses SYNTHETIC evidence and a red data gate — full autonomy trades
+real-data strategies, it never fabricates results (so with no data it deploys nothing, honestly).
+**Tests:** `tests/test_paper_autonomy.py` — 23 (live boundary holds, no-order-import guard,
+deployment gate refuses synthetic/red, risk caps, stop/target/max-hold + realized R, bounded
+blow-up, deploy→trade→retire-loser end-to-end, winner kept, brain self-drives paper hands-off,
+gets smarter over 30 days).
+
 ## C-21 · Autonomous Research Brain: full self-driving research loop, one human gate
 **Class:** ARCHITECTURE / safety · **Status:** ADDED · 2026-07-30
 **Reality (user ask):** the system had no self-running automation — a human had to press

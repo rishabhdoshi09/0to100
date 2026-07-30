@@ -42,16 +42,28 @@ LIFECYCLE = (GENERATED, INVALID, REJECTED, UNDER_REVIEW, PROMISING,
              AWAITING_USER_APPROVAL, APPROVED_FOR_PAPER, PAPER_EVALUATION,
              ELIGIBLE_FOR_LIVE_REVIEW, RETIRED, DECAYED)
 
-# who may drive each transition. "system" = research code; "user" = a human only.
-_TRANSITIONS: dict[str, dict[str, str]] = {
+# who may drive each transition. "system" = research code; "user" = a human only;
+# "paper_autopilot" = the OPT-IN autonomous PAPER driver — it may cross the PAPER gates on
+# its own BUT is structurally forbidden from the only transition that leads toward live
+# (PAPER_EVALUATION -> ELIGIBLE_FOR_LIVE_REVIEW stays user-only). A transition's value may
+# be a single actor or a tuple of allowed actors.
+PAPER_AUTOPILOT = "paper_autopilot"
+
+_TRANSITIONS: dict[str, dict] = {
     GENERATED: {INVALID: "system", UNDER_REVIEW: "system", REJECTED: "system"},
     UNDER_REVIEW: {REJECTED: "system", PROMISING: "system", INVALID: "system"},
     PROMISING: {REJECTED: "system", AWAITING_USER_APPROVAL: "system"},
-    # ONLY a user may approve for paper — research code cannot:
-    AWAITING_USER_APPROVAL: {APPROVED_FOR_PAPER: "user", REJECTED: "user"},
-    APPROVED_FOR_PAPER: {PAPER_EVALUATION: "user", RETIRED: "user"},
-    PAPER_EVALUATION: {ELIGIBLE_FOR_LIVE_REVIEW: "user", DECAYED: "system",
-                       RETIRED: "user"},
+    # a USER may always approve for paper; the opt-in paper autopilot may ALSO approve for
+    # paper (never live) once a human has engaged full paper autonomy:
+    AWAITING_USER_APPROVAL: {APPROVED_FOR_PAPER: ("user", PAPER_AUTOPILOT),
+                             REJECTED: ("user", PAPER_AUTOPILOT)},
+    APPROVED_FOR_PAPER: {PAPER_EVALUATION: ("user", PAPER_AUTOPILOT),
+                         RETIRED: ("user", PAPER_AUTOPILOT)},
+    # the paper autopilot may retire/decay its own paper strategies, but ONLY a user may
+    # move anything toward LIVE review — this is the hard money boundary:
+    PAPER_EVALUATION: {ELIGIBLE_FOR_LIVE_REVIEW: "user",
+                       DECAYED: ("system", PAPER_AUTOPILOT),
+                       RETIRED: ("user", PAPER_AUTOPILOT)},
 }
 
 
@@ -59,17 +71,24 @@ class LifecycleError(Exception):
     """An illegal or unauthorised lifecycle transition was attempted."""
 
 
+def _allowed_actors(src: str, dst: str) -> tuple:
+    who = _TRANSITIONS.get(src, {}).get(dst)
+    if who is None:
+        return ()
+    return who if isinstance(who, tuple) else (who,)
+
+
 def can_transition(src: str, dst: str, actor: str) -> bool:
-    allowed = _TRANSITIONS.get(src, {})
-    return dst in allowed and allowed[dst] == actor
+    return actor in _allowed_actors(src, dst)
 
 
 def require_transition(src: str, dst: str, actor: str) -> None:
     if not can_transition(src, dst, actor):
-        who = _TRANSITIONS.get(src, {}).get(dst)
-        if who and who != actor:
-            raise LifecycleError(f"{src}->{dst} requires actor '{who}', not '{actor}' "
-                                 "(research code may not perform user approval)")
+        who = _allowed_actors(src, dst)
+        if who:
+            raise LifecycleError(
+                f"{src}->{dst} requires actor {' or '.join(who)!r}, not {actor!r} "
+                "(research code may not perform user approval)")
         raise LifecycleError(f"illegal transition {src}->{dst}")
 
 

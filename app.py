@@ -171,7 +171,13 @@ if "monitor_started" not in st.session_state:
     # concludes "unavailable". Safe to run hands-off.
     try:
         from research.auto_research.scheduler import get_brain
-        get_brain().start()
+        _brain = get_brain()
+        # Opt-in FULL PAPER autonomy: set QT_PAPER_AUTONOMY=1 to let the brain deploy,
+        # trade, and retire its own strategies in PAPER hands-off. Simulated money only —
+        # it can never reach live (that transition stays user-only).
+        if os.getenv("QT_PAPER_AUTONOMY", "").strip().lower() in ("1", "true", "yes", "on"):
+            _brain.engage_paper_autonomy()
+        _brain.start()
     except Exception:
         pass
 
