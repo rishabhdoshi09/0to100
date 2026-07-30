@@ -52,7 +52,8 @@ class AutoResearchBrain:
                  paper=None, signal_fn=None, bars_fn=None, knowledge=None,
                  regime_fn=None, paper_state_path=None,
                  intel_registry_fn=None, event_store_path=None,
-                 runtime_state_path=None, mode="PAPER_AUTO"):
+                 runtime_state_path=None, mode="PAPER_AUTO",
+                 intel_book_path=None, paper_config_path=None):
         self.thread = (ResearchThread(thread_path, clock=clock) if clock
                        else ResearchThread(thread_path))
         self.ledger = LearningLedger()
@@ -88,7 +89,25 @@ class AutoResearchBrain:
         self.event_store = _ES(event_store_path)
         self.runtime_state = _RS(runtime_state_path)
         self.intel_book = _PB(slippage_bps=3.0, cost_model=_costs)
+        self.intel_book_path = intel_book_path
+        self.paper_config_path = paper_config_path
+        # persistent PAPER_AUTO enablement: survives restart, so ordinary restart never
+        # reverts it or asks for a new click. Paper config is NOT real-money authorization.
+        self.paper_auto_enabled = self._load_paper_config()
+        # RECOVERY-FIRST: restore the paper book (open positions) then reconcile, so a restart
+        # resumes management/exits of existing positions before opening any new ones.
+        if intel_book_path:
+            try:
+                import json as _json
+                from pathlib import Path as _P
+                p = _P(intel_book_path)
+                if p.exists():
+                    self.intel_book.restore(_json.loads(p.read_text()))
+                    self.runtime_state.reconcile(self.intel_book)
+            except Exception:
+                pass
         self._intel_lock = _th.Lock()                # prevents overlapping mutation jobs
+        self._insample_cache: dict = {}              # (snapshot_id, strategy_id) -> (R, n)
         self.state = BrainState()
         self._specs_by_family: dict = {}
         self._thread_obj: threading.Thread | None = None
@@ -105,6 +124,60 @@ class AutoResearchBrain:
 
     def disengage_paper_autonomy(self) -> None:
         self.paper.disengage(); self.state.paper_autonomy = False
+
+    # ── persistent PAPER_AUTO enable/disable (survives restart, no re-click) ──────
+    def enable_paper_auto(self) -> None:
+        self.paper_auto_enabled = True
+        self._save_paper_config()
+
+    def disable_paper_auto(self) -> None:
+        """The user's explicit opt-out. Persisted, so a restart honours it."""
+        self.paper_auto_enabled = False
+        self._save_paper_config()
+
+    def is_paper_auto_enabled(self) -> bool:
+        return bool(self.paper_auto_enabled) and self.mode == "PAPER_AUTO"
+
+    def _load_paper_config(self) -> bool:
+        if not self.paper_config_path:
+            return True                              # default ON (paper only; not real money)
+        try:
+            import json as _json
+            from pathlib import Path as _P
+            p = _P(self.paper_config_path)
+            if p.exists():
+                return bool(_json.loads(p.read_text()).get("enabled", True))
+        except Exception:
+            pass
+        return True
+
+    def _save_paper_config(self) -> None:
+        if not self.paper_config_path:
+            return
+        try:
+            import json as _json, os as _os
+            from pathlib import Path as _P
+            p = _P(self.paper_config_path); p.parent.mkdir(parents=True, exist_ok=True)
+            tmp = p.with_suffix(".tmp")
+            tmp.write_text(_json.dumps({"enabled": self.paper_auto_enabled,
+                                        "starting_capital": self.intel_book.capital}))
+            _os.replace(tmp, p)                       # atomic
+        except Exception:
+            pass
+
+    def _save_intel_book(self) -> None:
+        """Persist the paper book (open positions + trade history) so it survives restart."""
+        if not self.intel_book_path:
+            return
+        try:
+            import json as _json, os as _os
+            from pathlib import Path as _P
+            p = _P(self.intel_book_path); p.parent.mkdir(parents=True, exist_ok=True)
+            tmp = p.with_suffix(".tmp")
+            tmp.write_text(_json.dumps(self.intel_book.snapshot(), default=str))
+            _os.replace(tmp, p)                       # atomic (crash-safe)
+        except Exception:
+            pass
 
     # ── one synchronous cycle (deterministic; safe for tests + UI button) ────────
     def run_once(self, dataset_status=None, date=None, family_weights=None,
@@ -226,12 +299,23 @@ class AutoResearchBrain:
             return {"status": "SKIPPED_LOCKED"}
         try:
             day = date or _today_str()
+            provider = None
             if ctx is None:
-                ctx = self._build_intel_ctx(day)
+                ctx, provider = self._build_intel_ctx(day)
+            # establish IN-SAMPLE evidence per strategy from its OWN rules on the snapshot
+            # history (real backtest, reusing the runtime + book — never fabricated). Brain 1
+            # needs this to promote a fresh strategy to PROMISING for exploratory paper.
+            bt_R, bt_n = {}, {}
+            if provider is not None:
+                for spec in ctx.strategies:
+                    r, n = self._insample_evidence(spec, provider, ctx.as_of_date)
+                    bt_R[spec.strategy_id] = r; bt_n[spec.strategy_id] = n
             res = run_intelligence_cycle(ctx, store=self.event_store, book=self.intel_book,
                                          runtime_state=self.runtime_state,
-                                         knowledge=self.knowledge)
+                                         knowledge=self.knowledge,
+                                         backtest_R=bt_R, backtest_trades=bt_n)
             self.state.last_intel_cycle = res.as_dict()
+            self._save_intel_book()                  # open positions survive restart
             return res.as_dict()
         finally:
             self._intel_lock.release()
@@ -263,7 +347,7 @@ class AutoResearchBrain:
                     ctx, _readiness = build_context_from_snapshot(
                         prov, self.strategy_registry, as_of=as_of, mode=self.mode,
                         market_regime=regime)
-                    return ctx
+                    return ctx, prov
             except Exception as _se:
                 self.state.last_error = f"snapshot ctx: {_se}"
         # 2 — injected registry provider
@@ -274,7 +358,7 @@ class AutoResearchBrain:
                 built = {}
         else:
             built = {}
-        return CycleContext(
+        ctx = CycleContext(
             as_of_date=day, cycle_type="paper_session", mode=self.mode,
             data_ok=bool(built.get("data_ok", False)),
             data_snapshot_id=str(built.get("data_snapshot_id", "")),
@@ -283,6 +367,44 @@ class AutoResearchBrain:
             registry_version=str(built.get("registry_version", "reg0")),
             strategies=list(built.get("strategies", [])),
             data=dict(built.get("data", {})), clusters=dict(built.get("clusters", {})))
+        return ctx, None
+
+    def _insample_evidence(self, spec, provider, as_of: str):
+        """Real in-sample backtest of a strategy's OWN frozen rules over the snapshot history
+        up to (but excluding) `as_of`, simulated in a scratch realistic PaperBook. Returns
+        (expectancy_R, n_trades). Cached per (snapshot, strategy). Reuses the runtime + book —
+        no new research system, no fabricated evidence."""
+        key = (provider.snapshot_id, spec.strategy_id)
+        if key in self._insample_cache:
+            return self._insample_cache[key]
+        from research.intelligence import strategy_runtime as RT
+        from research.auto_research.paper_book import PaperBook
+        from research.auto_research.costs import india_cash_costs
+        syms = provider.snapshot.symbols()
+        all_dates = sorted({b.date for s in syms for b in provider.universe_history(s, as_of)})
+        all_dates = [d for d in all_dates if d < as_of]      # strictly in-sample (no look-ahead)
+        warm = 121 if RT.is_cross_sectional(spec.family) else 51
+        book = PaperBook(slippage_bps=3.0, cost_model=india_cash_costs)
+        for d in all_dates[warm:]:
+            bars = {}
+            for (_sid, sym) in list(book.open.keys()):
+                h = provider.bars(sym, d)
+                if h and h[-1].date == d:
+                    b = h[-1]; bars[sym] = (b.open, b.high, b.low, b.close)
+            if bars:
+                book.mark(bars, d)
+            uni = {sym: provider.bars(sym, d) for sym in syms}
+            try:
+                sigs = RT.signals(spec, d, uni, benchmark=provider.benchmark(d))
+            except Exception:
+                sigs = []
+            for sig in sigs[:1]:                              # one entry/day in-sample
+                book.open_position(spec.strategy_id, sig["symbol"], sig["entry"], sig["stop"],
+                                   sig["target"], d, int(sig.get("max_hold", 10)))
+        st = book.stats()
+        res = (float(st["expectancy_R"]), int(st["n_trades"]))
+        self._insample_cache[key] = res
+        return res
 
     def _run_paper_day(self, cyc: int, date=None) -> None:
         """Advance one paper trading day using the injected signal/price providers. Without
@@ -320,9 +442,9 @@ class AutoResearchBrain:
                 # test → calibrate → remember); otherwise just keep researching each cycle.
                 if self.paper.engaged:
                     self.maybe_grow_today()
-                # the authoritative two-brain paper cycle runs each tick in PAPER_AUTO;
-                # honest no-op until a real strategy registry + data are wired.
-                if self.mode == "PAPER_AUTO":
+                # the authoritative two-brain paper cycle runs each tick in PAPER_AUTO when
+                # persistently enabled; honest no-op until a real registry + data are wired.
+                if self.is_paper_auto_enabled():
                     try:
                         self.run_intelligence_cycle_day()
                     except Exception as _ie:
@@ -367,6 +489,9 @@ def get_brain(**kwargs) -> AutoResearchBrain:
             # the two-brain runtime persists to logs/intelligence/ (what Brain Observatory reads)
             kwargs.setdefault("event_store_path", _logs / "intelligence" / "events.jsonl")
             kwargs.setdefault("runtime_state_path", _logs / "intelligence" / "runtime_state.json")
+            # PAPER_AUTO operational persistence: the paper book + the enable flag survive restart
+            kwargs.setdefault("intel_book_path", _logs / "intelligence" / "intel_book.json")
+            kwargs.setdefault("paper_config_path", _logs / "intelligence" / "paper_config.json")
         except Exception:
             pass
         _BRAIN = AutoResearchBrain(**kwargs)

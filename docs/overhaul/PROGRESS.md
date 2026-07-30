@@ -816,3 +816,44 @@ partial fill; broker-verified protection; independent risk governor caps + daily
 governor-failure + brain-can't-override; envelope bounds; reconciliation incl. manual positions;
 restart recovery no-duplicate; preflight + readiness; end-to-end certification with full provenance
 + governor independent stop + idempotent re-run). Canonical suite: **809 passed**.
+
+---
+
+## Milestone — Autonomous PAPER_AUTO operational activation & certification
+
+**Ask (user):** certify fully autonomous PAPER_AUTO — QuantTerm independently takes, manages,
+closes and learns from paper trades on snapshot-backed data; the user is an optional supervisor,
+not a mandatory participant. No new architecture/strategies/dashboards.
+
+**Verified existing chain (traced to code):** market data → `SnapshotStore` (immutable active
+pointer) → `build_context_from_snapshot` (forward-eligibility + PIT) → `strategy_runtime.signals`
+→ `evidence_brain.build_card` (Brain 1) → `allocation_brain.decide` (Brain 2) → `TradeIntent` →
+`portfolio_gate` → `paper_book.open_position` → `_manage_positions` (stop/target/gap exits) →
+`OutcomeObservation` decode → Brain 1 card update → Brain 2 allocation. Orchestrated by
+`AutoResearchBrain.run_intelligence_cycle_day` (one lock, cycle-id idempotent), driven headless by
+`_worker`. No Streamlit/Telegram/broker/EMS import in the loop (test-scanned).
+
+**Operational gaps closed (no new architecture):**
+- **In-sample bootstrap evidence** — `AutoResearchBrain._insample_evidence` runs a REAL in-sample
+  backtest of each strategy's OWN frozen rules over the snapshot history (reusing the runtime +
+  paper book), so Brain 1 can promote a fresh strategy to PROMISING for exploratory paper — never
+  fabricated. This is what makes the scheduler actually trade.
+- **Paper-book persistence** — `intel_book` snapshot/restore to `logs/intelligence/intel_book.json`
+  (atomic); open positions + stops/targets survive restart; recovery-first (restore → reconcile
+  before new entries).
+- **Persistent PAPER_AUTO enable flag** — `enable_paper_auto`/`disable_paper_auto` persisted to
+  `logs/intelligence/paper_config.json`; ordinary restart never reverts or re-prompts; explicit
+  user disable is honoured. Paper config is NOT real-money authorization.
+- Worker gates on `is_paper_auto_enabled()`; `run_intelligence_cycle_day` saves the book each cycle.
+
+**Human intervention:** none required for routine paper trading — no per-trade entry/exit approval,
+no envelope, no broker, no credentials, no Telegram ack, Streamlit need not be open, restart needs
+no re-click. Optional overrides remain: `disable_paper_auto`, regime stand-down, snapshot
+deactivation, manual book close.
+
+**Tests:** `tests/test_paper_auto.py` — 14 (opens without a click; no envelope/broker/creds; no
+ems/broker/streamlit import; auto risk-rejection under RISK_OFF; scheduler lock; duplicate cycle no
+dup; missing snapshot blocks safely; enable flag survives restart; open positions + stops survive
+restart; management resumes + auto-exit after restart; outcome→Brain 1, paper-labelled `forward`
+never `live`; manual disable override; full end-to-end certification with restart, no duplication).
+Canonical suite: **823 passed**.
