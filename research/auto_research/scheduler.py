@@ -40,6 +40,7 @@ class BrainState:
     paper_autonomy: bool = False
     paper_deployed: int = 0
     paper_retired: int = 0
+    last_intel_cycle: dict | None = None
 
 
 class AutoResearchBrain:
@@ -49,7 +50,9 @@ class AutoResearchBrain:
                  interval_s: float = 3600.0, clock=None,
                  dataset_status_fn=canonical_readiness,
                  paper=None, signal_fn=None, bars_fn=None, knowledge=None,
-                 regime_fn=None, paper_state_path=None):
+                 regime_fn=None, paper_state_path=None,
+                 intel_registry_fn=None, event_store_path=None,
+                 runtime_state_path=None, mode="PAPER_AUTO"):
         self.thread = (ResearchThread(thread_path, clock=clock) if clock
                        else ResearchThread(thread_path))
         self.ledger = LearningLedger()
@@ -70,6 +73,20 @@ class AutoResearchBrain:
                 self.paper.load(paper_state_path)
             except Exception:
                 pass
+        # ── two-brain intelligence runtime (Phase O) — its OWN book + event store so it
+        # never fights the legacy growth path. In-memory by default (tests); production
+        # wires disk paths via get_brain(). Honest no-op until a real registry is provided.
+        import threading as _th
+        from research.intelligence.event_store import EventStore as _ES
+        from research.intelligence.runtime.runtime_state import RuntimeState as _RS
+        from research.auto_research.paper_book import PaperBook as _PB
+        from research.auto_research.costs import india_cash_costs as _costs
+        self.mode = mode
+        self.intel_registry_fn = intel_registry_fn   # (as_of) -> ctx-building dict, or None
+        self.event_store = _ES(event_store_path)
+        self.runtime_state = _RS(runtime_state_path)
+        self.intel_book = _PB(slippage_bps=3.0, cost_model=_costs)
+        self._intel_lock = _th.Lock()                # prevents overlapping mutation jobs
         self.state = BrainState()
         self._specs_by_family: dict = {}
         self._thread_obj: threading.Thread | None = None
@@ -196,6 +213,54 @@ class AutoResearchBrain:
             return None
         return self.grow_one_day(date=day)
 
+    # ── the authoritative two-brain paper cycle (Phase O job) ────────────────────
+    def run_intelligence_cycle_day(self, date=None, *, ctx=None) -> dict:
+        """Run ONE end-to-end intelligence cycle (data→signals→Brain1→Brain2→intents→gate→
+        paper→exits→outcomes). One job, one lock (no overlapping mutation). Honest no-op when
+        no strategy registry/data is available. Never touches live."""
+        from research.intelligence.runtime import run_intelligence_cycle
+        from research.intelligence.runtime.cycle_context import CycleContext
+        if not self._intel_lock.acquire(blocking=False):
+            return {"status": "SKIPPED_LOCKED"}
+        try:
+            day = date or _today_str()
+            if ctx is None:
+                ctx = self._build_intel_ctx(day)
+            res = run_intelligence_cycle(ctx, store=self.event_store, book=self.intel_book,
+                                         runtime_state=self.runtime_state,
+                                         knowledge=self.knowledge)
+            self.state.last_intel_cycle = res.as_dict()
+            return res.as_dict()
+        finally:
+            self._intel_lock.release()
+
+    def _build_intel_ctx(self, day):
+        """Build a CycleContext from the injected registry provider, or an honest empty ctx
+        (data_ok=False) when none is wired / no data exists — so production degrades safely."""
+        from research.intelligence.runtime.cycle_context import CycleContext
+        regime = "RISK_ON"
+        if self.regime_fn:
+            try:
+                regime = self.regime_fn() or "RISK_ON"
+            except Exception:
+                regime = "RISK_ON"
+        if self.intel_registry_fn:
+            try:
+                built = self.intel_registry_fn(day) or {}
+            except Exception:
+                built = {}
+        else:
+            built = {}
+        return CycleContext(
+            as_of_date=day, cycle_type="paper_session", mode=self.mode,
+            data_ok=bool(built.get("data_ok", False)),
+            data_snapshot_id=str(built.get("data_snapshot_id", "")),
+            market_regime=built.get("regime", regime),
+            config_hash=str(built.get("config_hash", "cfg0")),
+            registry_version=str(built.get("registry_version", "reg0")),
+            strategies=list(built.get("strategies", [])),
+            data=dict(built.get("data", {})), clusters=dict(built.get("clusters", {})))
+
     def _run_paper_day(self, cyc: int, date=None) -> None:
         """Advance one paper trading day using the injected signal/price providers. Without
         them the brain can deploy but has no live bars to trade — it says so honestly and
@@ -232,9 +297,16 @@ class AutoResearchBrain:
                 # test → calibrate → remember); otherwise just keep researching each cycle.
                 if self.paper.engaged:
                     self.maybe_grow_today()
-                else:
+                # the authoritative two-brain paper cycle runs each tick in PAPER_AUTO;
+                # honest no-op until a real strategy registry + data are wired.
+                if self.mode == "PAPER_AUTO":
+                    try:
+                        self.run_intelligence_cycle_day()
+                    except Exception as _ie:
+                        self.state.last_error = f"intel cycle: {_ie}"
+                if not self.paper.engaged and self.mode != "PAPER_AUTO":
                     self.run_once()
-                self.state.last_error = ""
+                self.state.last_error = self.state.last_error or ""
             except Exception as e:                     # a bad cycle never kills the brain
                 self.state.last_error = str(e)
             # interruptible sleep so stop() is prompt
@@ -267,9 +339,11 @@ def get_brain(**kwargs) -> AutoResearchBrain:
             kwargs.setdefault("signal_fn", P.signals_for)
             kwargs.setdefault("bars_fn", P.daily_bars)
             kwargs.setdefault("regime_fn", P.current_regime)
-            kwargs.setdefault("paper_state_path",
-                              Path(__file__).resolve().parent.parent.parent /
-                              "logs" / "auto_research" / "paper_book.json")
+            _logs = Path(__file__).resolve().parent.parent.parent / "logs"
+            kwargs.setdefault("paper_state_path", _logs / "auto_research" / "paper_book.json")
+            # the two-brain runtime persists to logs/intelligence/ (what Brain Observatory reads)
+            kwargs.setdefault("event_store_path", _logs / "intelligence" / "events.jsonl")
+            kwargs.setdefault("runtime_state_path", _logs / "intelligence" / "runtime_state.json")
         except Exception:
             pass
         _BRAIN = AutoResearchBrain(**kwargs)

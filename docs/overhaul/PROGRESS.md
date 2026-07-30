@@ -632,3 +632,49 @@ reconstruction; brain separation; card immutability; deployment gated on evidenc
 negative-lower-bound penalised; forward deterioration; correlation-cluster cap; regime & no-data
 no-op; PIT per-strategy eval + gap-through-stop; holdout single-use; user-only live gate; no
 order imports). Canonical suite: **727 passed**.
+
+---
+
+## Milestone — Autonomous Intelligence Runtime (end-to-end paper loop)
+
+**Ask (user):** activate the two-brain foundation into a continuously running paper loop —
+data → frozen runtime signals → decoders → event store → Brain 1 card → Brain 2 allocation →
+portfolio/risk gate → paper execution → position management → exits → outcome decode → evidence
+& allocation update → repeat. Headless, restartable, honest with no data, live still locked.
+
+**Built (`research/intelligence/runtime/`, integration map in INTELLIGENCE_RUNTIME_INTEGRATION.md):**
+- `autonomous_loop.run_intelligence_cycle(ctx, store, book, runtime_state)` — the ONE
+  orchestrator (Streamlit-free, broker-free): data gate → per-strategy PIT runtime signals →
+  canonical decode → manage/exit open positions → outcome decode → Brain 1 cards → Brain 2
+  decisions → TradeIntents → portfolio/risk gate → paper open → persist. Deterministic,
+  idempotent per `cycle_id`, fail-safe.
+- `cycle_context.py` (deterministic cycle id over date/type/phase/snapshot/registry/config),
+  `cycle_result.py` (full typed result), `events.py` (24 canonical event types + `emit`),
+  `runtime_state.py` (persistent per-strategy state + completed-cycle idempotency + reconcile),
+  `portfolio_gate.py` (family/cluster/duplicate/regime/position caps → block events with reason
+  codes), `preflight.py` (Phase Q operational-safety checks), `controls.py` (Phase P owner
+  actions — pause/resume/retire/block/close-all — each an audited canonical event), `modes.py`
+  (Phase P mode ladder; PAPER_AUTO end-to-end, all live modes hard-disabled).
+- Allocation bootstrap: a PROMISING card (strong backtest, 0 forward) earns a small EXPLORATORY
+  allocation to start forward evidence; FORWARD_PENDING is held (thin samples never scaled).
+- Schema additions: `CanonicalEvent`, `TradeIntent` (broker-independent).
+- Scheduler (Phase O): `AutoResearchBrain.run_intelligence_cycle_day()` — one authoritative job,
+  one lock (no overlapping mutation), its OWN intel book + event store (no conflict with the
+  legacy growth path); the daemon runs it each tick in PAPER_AUTO. `get_brain()` persists to
+  `logs/intelligence/{events.jsonl,runtime_state.json}` (what Brain Observatory reads).
+- UI: Brain Observatory now shows the REAL loop — operating mode, last cycle summary, and recent
+  canonical events — not fixtures.
+
+**Honest scope / not done:** Phase E extra strategy adapters (only breakout + volatility-
+contraction evaluate bar-by-bar; others fail loud) and a fully-populated production strategy
+registry + bar provider are the next increment — they need a validated NSE dataset, which isn't
+loaded, so the production loop is a safe no-op today. Multi-job scheduler (research/growth/
+session/recovery as distinct locked jobs) is represented by one job + cycle types; splitting is
+follow-up. No live path exists; USER_APPROVED remains user-only.
+
+**Tests:** `tests/test_intelligence_runtime.py` — 15 (end-to-end signal→position; exit→outcome
+feedback; idempotent re-run; deterministic cycle id; no-data no-op; live-mode refused; paper-
+paused opens nothing; unsupported-family event; duplicate-symbol block; restart persistence +
+completed-cycle no-op; unreconciled refuses new risk; owner close-all audit event; set-mode
+rejects live; scheduler no-op without registry; intel book separate from legacy). Canonical
+suite: **742 passed**.

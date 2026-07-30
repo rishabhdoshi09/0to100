@@ -44,9 +44,12 @@ class AllocationConfig:
     min_sample_for_promising: int = 25
 
 
-# states a card must be in to earn (or keep) paper risk
-_DEPLOYABLE = {EB.CONFIRMED, EB.WEAKER_THAN_EXPECTED}
-_HOLD_STATES = {EB.FORWARD_PENDING, EB.PROMISING, EB.REGIME_DEPENDENT}
+# states a card must be in to earn (or keep) paper risk. PROMISING (strong backtest, no
+# forward trades yet) earns a small EXPLORATORY allocation to BOOTSTRAP forward evidence —
+# an explicit exploration budget, never full size. FORWARD_PENDING (a few forward trades,
+# too thin to judge) is held, not scaled — so lucky small samples are never overweighted.
+_DEPLOYABLE = {EB.CONFIRMED, EB.WEAKER_THAN_EXPECTED, EB.PROMISING}
+_HOLD_STATES = {EB.FORWARD_PENDING, EB.REGIME_DEPENDENT}
 _KILL_STATES = {EB.OVERFIT, EB.DECAYING, EB.RETIRED, EB.INSUFFICIENT_EVIDENCE}
 
 

@@ -47,6 +47,7 @@ def render_brain_observatory() -> None:
     st.caption("Two brains, separated: Brain 1 interprets evidence, Brain 2 allocates paper "
                "risk. They talk only through immutable evidence records. **Paper-only — the "
                "live door is user-owned.**")
+    _loop_status()
     t1, t2, t3 = st.tabs(["🤖 Automatic Strategies", "🧠 The Two Brains",
                           "🎓 Live Review Candidates"])
     with t1:
@@ -55,6 +56,42 @@ def render_brain_observatory() -> None:
         _two_brains()
     with t3:
         _live_review()
+
+
+def _loop_status() -> None:
+    """The REAL running loop: operating mode + last cycle summary + recent canonical events."""
+    brain = _brain()
+    mode = getattr(brain, "mode", "—") if brain else "—"
+    last = getattr(brain.state, "last_intel_cycle", None) if brain else None
+    mstatus = "ok" if mode == "PAPER_AUTO" else "warn" if mode in ("PAPER_PAUSED", "SHADOW") else "off"
+    pills = [T.pill(f"Mode: {mode}", mstatus)]
+    if last:
+        pills.append(T.pill(f"Last cycle: {last.get('status', '—')}", "off"))
+        pills.append(T.pill(f"{len(last.get('positions_opened', []))} opened · "
+                            f"{len(last.get('positions_closed', []))} closed", "off"))
+    T.pill_row(pills)
+    # recent canonical loop events straight from the append-only store
+    try:
+        from pathlib import Path
+        from research.intelligence.event_store import EventStore
+        p = Path(__file__).resolve().parent.parent / "logs" / "intelligence" / "events.jsonl"
+        evs = EventStore(p).of_type("CanonicalEvent") if p.exists() else []
+    except Exception:
+        evs = []
+    if evs:
+        rows = []
+        for e in evs[-8:]:
+            rows.append(f"<div style='display:flex;gap:.5rem;padding:.22rem 0;font-size:.78rem;"
+                        f"font-family:JetBrains Mono,monospace'>"
+                        f"<span style='color:var(--qt-accent);min-width:180px'>{e.event_type}</span>"
+                        f"<span style='color:var(--qt-muted)'>{e.strategy_id} {e.symbol} "
+                        f"{e.reason or e.decision}</span></div>")
+        st.markdown("<div class='qt-card tight'><div class='qt-eyebrow' style='margin-bottom:.3rem'>"
+                    "Live loop — recent canonical events</div>" + "".join(rows) + "</div>",
+                    unsafe_allow_html=True)
+    else:
+        st.caption("No loop events yet. With no validated NSE data, the daily cycle runs but "
+                   "takes no action — an honest no-op.")
 
 
 def _automatic_strategies() -> None:

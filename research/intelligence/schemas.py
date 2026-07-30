@@ -163,6 +163,48 @@ class PaperAllocationDecision(_Base):
 
 
 @dataclass(frozen=True)
+class CanonicalEvent(_Base):
+    """A compact, typed audit event for the running loop (Phase F). No large blobs — a typed
+    `summary` dict of references/reasons only. Causation/correlation ids thread a cycle."""
+    event_type: str = ""
+    cycle_id: str = ""
+    causation_id: str = ""
+    correlation_id: str = ""
+    actor: str = "system"
+    config_hash: str = ""
+    symbol: str = ""
+    decision: str = ""
+    reason: str = ""
+    result: str = ""
+    summary: dict = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class TradeIntent(_Base):
+    """A broker-INDEPENDENT instruction produced by Brain 2 (via the loop). The same object
+    can later feed a live EMS after stronger gates — so NO broker-specific fields here."""
+    cycle_id: str = ""
+    symbol: str = ""
+    direction: str = "LONG"
+    entry_rule: str = ""
+    intended_entry: float = 0.0
+    intended_risk_pct: float = 0.0
+    max_capital: float = 0.0
+    stop_rule: str = ""
+    stop_price: float = 0.0
+    exit_rule: str = ""
+    target_price: float = 0.0
+    holding_horizon_days: int = 0
+    card_id: str = ""
+    allocation_id: str = ""
+    market_context_id: str = ""
+    expiry: str = ""
+    priority: int = 0
+    reasons: tuple = ()
+    invalidation: tuple = ()
+
+
+@dataclass(frozen=True)
 class LifecycleDecision(_Base):
     """A recommended lifecycle transition. USER_APPROVED is never emitted by a brain."""
     family: str = ""
@@ -178,7 +220,7 @@ class LifecycleDecision(_Base):
 RECORD_TYPES = {c.__name__: c for c in (
     CanonicalSignal, MarketContext, StrategyDefinition, ExecutionAssessment,
     OutcomeObservation, ResearchRationale, StrategyEvidenceCard,
-    PaperAllocationDecision, LifecycleDecision)}
+    PaperAllocationDecision, LifecycleDecision, CanonicalEvent, TradeIntent)}
 
 
 def from_dict(kind: str, d: dict):
