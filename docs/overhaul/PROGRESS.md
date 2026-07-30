@@ -768,3 +768,51 @@ missing-file verify; atomic activate + audit + invalid-can't-activate + missing-
 PIT provider + refuses-invalid + contemporaneous universe; snapshot-driven cycle → paper position;
 not-forward-eligible runs research but blocks entries; missing-benchmark blocks sector rotation;
 scheduler no-op without snapshot + drives cycle with active snapshot). Canonical suite: **774 passed**.
+
+---
+
+## Milestone — Production Execution System + LIMITED_LIVE (simulator-certified)
+
+**Ask (user):** build the broker-neutral Execution Management System, independent Risk Governor,
+reconciliation and recovery required for genuinely automatic trading; make QuantTerm
+LIMITED_LIVE-capable — simulator-certified, no real broker, live impossible without explicit
+user approval + full preflight.
+
+**Delivered (tested, `ems/`):** audit `docs/overhaul/PRODUCTION_EXECUTION_ARCHITECTURE.md` +
+- `schemas.py` — broker-neutral immutable records with full provenance (idempotency key + whole
+  decision chain): OperatingEnvelope (user-owned, checksummed, `approve_envelope` USER-only),
+  RiskDecision, ExecutionPlan, OrderStateRecord, FillRecord, PositionRecord, ProtectionPlan/Status,
+  ReconciliationReport, ExecutionIncident; operating modes + readiness states.
+- `state_machine.py` — explicit order lifecycle (24 states) + legal transitions; illegal → raise.
+- `broker.py` (BrokerAdapter contract) + `simulator.py` (deterministic SimBroker: ack/partial/
+  reject/timeout/idempotent-by-key/protection/manual positions).
+- `risk_governor.py` — INDEPENDENT governor (separate from Brain 2 + EMS): full risk hierarchy
+  (per-trade/symbol/strategy/family/sector/cluster/total/positions) + capital-protection state
+  machine (daily-loss/drawdown → NORMAL…HALTED). Reduces or denies; nobody overrides it.
+- `ledger.py` — persistent journaled execution ledger (atomic write; survives restart).
+- `ems.py` — the ONE order-lifecycle owner: intent → envelope check → Risk Governor → frozen
+  plan → JOURNALED submit (persist-before-broker) → idempotent broker call (timeout ⇒ reconcile,
+  never blind resubmit) → partial-fill on ACTUAL qty → BROKER-VERIFIED protection (local flag is
+  not proof; failure → exit + critical incident + block) → position. `reconcile()` (broker is
+  authority; manual positions never assigned to a strategy; critical mismatch blocks new risk).
+  `recover()` (restart: adopt broker state, no duplicate submission, block entries until clean).
+- `preflight.py` — live preflight (all hard gates) + explicit readiness states.
+
+**Boundaries proven:** strategies/brains cannot submit (only the EMS, only in a live mode with a
+user-approved envelope); PAPER_AUTO/SHADOW/HALTED cannot submit live; Brain 2 cannot override the
+Risk Governor; broker adapter cannot increase risk; duplicate submission prevented; ambiguous
+submission reconciled; protection broker-verified; restart cannot duplicate; daily-loss/drawdown
+act automatically; the owner ceiling cannot be raised automatically; live cannot activate via UI/
+env alone (only `approve_envelope(actor="user")`); the intelligence package still imports no
+broker code (test-scanned). `USER_APPROVED` unchanged.
+
+**Readiness state: `LIMITED_LIVE_SIMULATOR_CERTIFIED`** — NOT broker-connected, NOT user-activated.
+No real broker adapter, credentials, or order path exists. Deferred (documented): real Kite
+adapter; full health/alerts/UI; shadow certification; scaling ladder; secrets vault; calendar-
+accurate freshness; and the remainder of the 75/35 test matrices (a strong subset is delivered).
+
+**Tests:** `tests/test_ems.py` — 35 (boundaries; lifecycle + idempotency + timeout-reconcile +
+partial fill; broker-verified protection; independent risk governor caps + daily-loss + drawdown +
+governor-failure + brain-can't-override; envelope bounds; reconciliation incl. manual positions;
+restart recovery no-duplicate; preflight + readiness; end-to-end certification with full provenance
++ governor independent stop + idempotent re-run). Canonical suite: **809 passed**.
