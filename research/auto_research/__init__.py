@@ -14,6 +14,8 @@ real-money autonomy requires a person's approval.
 from research.auto_research.thread import ResearchThread, ThreadEntry
 from research.auto_research.loop import run_cycle, CycleReport, Proposal, canonical_readiness
 from research.auto_research.learning import LearningLedger, LearningEvent
+from research.auto_research.knowledge import Knowledge, FamilyKnowledge
+from research.auto_research.growth import calibrate, Calibration
 from research.auto_research.paper_book import PaperBook, PaperPosition, ClosedTrade
 from research.auto_research.paper_autonomy import PaperAutonomyManager, PaperStrategy
 from research.auto_research.scheduler import AutoResearchBrain, BrainState, get_brain
@@ -21,6 +23,7 @@ from research.auto_research.scheduler import AutoResearchBrain, BrainState, get_
 __all__ = [
     "ResearchThread", "ThreadEntry", "run_cycle", "CycleReport", "Proposal",
     "canonical_readiness", "LearningLedger", "LearningEvent",
+    "Knowledge", "FamilyKnowledge", "calibrate", "Calibration",
     "PaperBook", "PaperPosition", "ClosedTrade",
     "PaperAutonomyManager", "PaperStrategy",
     "AutoResearchBrain", "BrainState", "get_brain",

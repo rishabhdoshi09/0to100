@@ -79,6 +79,7 @@ def render_control_room() -> None:
     _hero()
     _vitals()
     _brain_panel()
+    _knowledge_panel()
     _daemons_panel()
 
 
@@ -146,6 +147,7 @@ def _brain_panel() -> None:
     pa = "ok" if st_.paper_autonomy else "off"
     T.pill_row([
         T.pill(f"{st_.cycles_run} cycles", "ok" if st_.cycles_run else "off"),
+        T.pill(f"{getattr(st_,'days_grown',0)} days grown", "ok" if getattr(st_,'days_grown',0) else "off"),
         T.pill(f"{st_.total_proposals} parked", "ok" if st_.total_proposals else "off"),
         T.pill("Loop running" if st_.running else "Loop idle", "ok" if st_.running else "off"),
         T.pill(f"Paper autonomy {'ON' if st_.paper_autonomy else 'off'}", pa),
@@ -201,6 +203,40 @@ def _brain_panel() -> None:
                     f"₹{s2['net_pnl']:,.0f}</span></div>")
             st.markdown("<div class='qt-card tight'>" + "".join(lines) + "</div>",
                         unsafe_allow_html=True)
+
+
+def _knowledge_panel() -> None:
+    """What the system has learned holds up out-of-sample — trust per strategy family."""
+    try:
+        from research.auto_research import get_brain
+        summary = get_brain().knowledge.summary()
+    except Exception:
+        return
+    if not summary:
+        return
+    T.section("What it has learned", eyebrow="Backtest → forward test",
+              sub="Trust rises when a family's edge survives forward testing on unseen days.")
+    rows = []
+    for fk in summary[:8]:
+        trust = fk["trust"]
+        col = T.GREEN if trust >= 0.6 else T.AMBER if trust >= 0.4 else T.RED
+        bar = int(round(trust * 100))
+        rows.append(
+            f"<div style='display:flex;align-items:center;gap:.7rem;padding:.4rem 0;"
+            f"border-bottom:1px solid var(--qt-border)'>"
+            f"<span style='flex:1;font-size:.86rem'>{_fam(fk['family'])}</span>"
+            f"<span style='font-size:.74rem;color:var(--qt-muted);font-family:JetBrains Mono,monospace'>"
+            f"bt {fk['backtest_R']:+.2f}R · fwd {fk['forward_R']:+.2f}R</span>"
+            f"<div style='width:88px;height:6px;border-radius:3px;background:rgba(255,255,255,.06)'>"
+            f"<div style='width:{bar}%;height:6px;border-radius:3px;background:{col}'></div></div>"
+            f"<span style='font-size:.74rem;color:{col};font-weight:700;width:34px;text-align:right'>{bar}%</span>"
+            f"</div>")
+    st.markdown("<div class='qt-card tight'>" + "".join(rows) + "</div>",
+                unsafe_allow_html=True)
+
+
+def _fam(s: str) -> str:
+    return str(s).replace("_", " ").title()
 
 
 def _daemons_panel() -> None:

@@ -86,7 +86,7 @@ def run_cycle(cycle_no: int, thread: ResearchThread, *,
               budget: DISC.DiscoveryBudget | None = None,
               registry: DISC.AttemptRegistry | None = None,
               has_delivery: bool = False, has_fundamentals_pit: bool = False,
-              max_candidates: int = 12) -> CycleReport:
+              max_candidates: int = 12, family_weights: dict | None = None) -> CycleReport:
     """Run ONE autonomous research cycle and record the reasoning to `thread`.
 
     `dataset_status` is the data-setup readiness dict; when None it is computed from the
@@ -117,7 +117,8 @@ def run_cycle(cycle_no: int, thread: ResearchThread, *,
 
     # 2 ── GENERATE ideas ----------------------------------------------------------
     cands = DISC.generate(budget, has_delivery=has_delivery,
-                          has_fundamentals_pit=has_fundamentals_pit)[:max_candidates]
+                          has_fundamentals_pit=has_fundamentals_pit,
+                          family_weights=family_weights)[:max_candidates]
     report.generated = len(cands)
     thread.observe(cycle_no,
                    f"Generated {len(cands)} readable candidate(s) from the approved "

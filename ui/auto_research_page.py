@@ -128,8 +128,22 @@ def _paper_autonomy_panel(brain) -> None:
     if engaged:
         st.success("ENGAGED — the brain deploys survivors to paper, trades them, and retires "
                    "proven losers on its own. Only simulated money is at risk.")
-        if st.button("⏹️ Disengage paper autonomy"):
-            brain.disengage_paper_autonomy(); st.rerun()
+        gc1, gc2 = st.columns(2)
+        with gc1:
+            if st.button("🌱 Grow one day now", type="primary"):
+                with st.spinner("Backtest → forward test → calibrate → remember…"):
+                    try:
+                        brain.grow_one_day()
+                    except Exception as e:
+                        st.error(f"Grew safely (nothing traded live): {e}")
+                st.rerun()
+        with gc2:
+            if st.button("⏹️ Disengage paper autonomy"):
+                brain.disengage_paper_autonomy(); st.rerun()
+        st.caption(f"Days grown: **{getattr(brain.state,'days_grown',0)}** · last: "
+                   f"`{getattr(brain.state,'last_grow_date','—') or '—'}`. Each day it "
+                   "backtests fresh ideas, forward-tests survivors in paper, and keeps only "
+                   "what holds up out-of-sample.")
     else:
         st.caption("Off. When on, the brain auto-approves real-data survivors for PAPER, "
                    "places simulated trades, learns from the outcomes, and retires losers — "

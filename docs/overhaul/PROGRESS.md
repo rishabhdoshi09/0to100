@@ -515,3 +515,42 @@ deploys nothing.
 
 **Tests:** `tests/test_paper_autonomy.py` — 23 passed. Canonical `python -m pytest` — **669
 passed**.
+
+---
+
+## Milestone — Growth engine: backtest → forward test → calibrate → remember (daily)
+
+**Ask (user):** "take advantage of paper trading. Make it trade each day… Backtest →
+forward test all automatic. How will it get smarter? Strategize, observe and improve. It is
+an infant growing up each day."
+
+**Answer + code (`research/auto_research/` + `research/strategy_studio/discovery.py`):**
+- `growth.py` — `calibrate()`: compares a strategy's forward (paper) edge to its backtest
+  edge → CONFIRMED / WEAKER_POSITIVE / DECAYED / OVERFIT / FORWARD_PENDING. Catching overfits
+  (great backtest, dead forward) is the core "getting smarter" signal.
+- `knowledge.py` — `Knowledge`: persistent per-family memory (backtest R, forward R, trust
+  in [0,1]). Trust rises on forward-confirmation, falls on overfit; saved to
+  `logs/auto_research/knowledge.json` so learning compounds across restarts. `search_weights()`
+  floors every family (keeps exploring).
+- `discovery.generate(family_weights=…)` + `_family_sequence` — adaptive search: draws the
+  family visit sequence proportional to learned trust (never starving a family). The search
+  itself concentrates on what forward-tests well.
+- `providers.py` — production wiring (backtest_evaluator over bhavcopy history, daily_bars,
+  signals_for from the audited scanner). Degrades honestly to empty/invalid with no data —
+  never synthetic-as-real. `get_brain()` wires these by default.
+- `scheduler.py` — `AutoResearchBrain.grow_one_day()` runs the full daily loop (biased
+  discovery → backtest → deploy → forward-test paper day → calibrate → retire overfits →
+  remember → daily thread report). `maybe_grow_today()` = once-per-day guard; the daemon
+  grows daily when paper autonomy is engaged. Calibration is the retirement authority during
+  growth (run_once(adapt=False)).
+- UI: Control Room "What it has learned" (trust bars, backtest R vs forward R) + days-grown
+  pill; Research Brain "🌱 Grow one day now" button.
+- Doc: `docs/overhaul/HOW_IT_GETS_SMARTER.md` (plain-language answer).
+
+**Boundary unchanged:** paper-only, live-locked (paper_autopilot barred from the live-review
+transition), synthetic + red gate refused. With no real data it grows nothing, honestly.
+
+**Tests:** `tests/test_growth.py` — 17 (calibration verdicts; trust rise/fall + persistence +
+corrupt-safe; adaptive search weighting + never-starve + determinism; grow_one_day end-to-end
+confirms a real edge and catches+retires an overfit; paper-only/live-locked mid-growth;
+once-per-day idempotence; knowledge persists between brains). Canonical suite: **686 passed**.

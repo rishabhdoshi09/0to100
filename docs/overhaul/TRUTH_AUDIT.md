@@ -272,6 +272,29 @@ data limitations are one-directional favourable (survivorship); a CA-raw (either
 limitation downgrades a FAIL to INCONCLUSIVE. No EXP-006 threshold/feature/config-hash
 changed.
 
+## C-23 · Growth engine: backtest → forward-test → calibrate → remember (daily, paper-only)
+**Class:** ARCHITECTURE / research-quality · **Status:** ADDED · 2026-07-30
+**Reality (user directive):** make the paper autopilot trade each day and actually get
+smarter over time — strategize, observe, improve — "an infant growing up each day".
+**Mitigation (built + tested, `research/auto_research/` + `discovery.py`):** a daily learning
+loop (`AutoResearchBrain.grow_one_day`) that (1) biases discovery by learned trust, (2)
+BACKTESTS candidates on real history, (3) auto-deploys survivors to PAPER and FORWARD-TESTS
+them on unseen days, (4) CALIBRATES forward-vs-backtest (`growth.calibrate` → CONFIRMED/
+DECAYED/OVERFIT) to catch overfits, (5) retires decayers/overfits and folds every verdict
+into persistent `Knowledge` (trust in [0,1], saved to disk so learning compounds across
+restarts), (6) shifts tomorrow's search toward what forward-tests well via
+`discovery.generate(family_weights=…)` — never starving a family (keeps exploring). Production
+data is wired through `providers.py` (bhavcopy backtest, daily bars, audited-scanner signals)
+which **degrades honestly** to empty/invalid with no data — never synthetic-as-real. **The
+LIVE boundary is unchanged:** growth is paper-only; the `paper_autopilot` actor remains barred
+from `PAPER_EVALUATION → ELIGIBLE_FOR_LIVE_REVIEW` (user-only); synthetic evidence + red data
+gate still refused (so with no data it grows nothing, honestly). Answer documented in
+`docs/overhaul/HOW_IT_GETS_SMARTER.md`.
+**Tests:** `tests/test_growth.py` — 17 (calibration verdicts; trust rise/fall + persistence +
+corrupt-safe; adaptive-search weighting/never-starve/determinism; grow_one_day confirms a real
+edge and catches+retires an overfit; paper-only/live-locked mid-growth; once-per-day
+idempotence; knowledge persists between brains).
+
 ## C-22 · Full PAPER autonomy: brain trades + learns on its own, LIVE stays locked
 **Class:** ARCHITECTURE / safety · **Status:** ADDED · 2026-07-30
 **Reality (user directive):** the user explicitly granted full autonomy **in paper** — "blow

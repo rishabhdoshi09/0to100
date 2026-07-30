@@ -37,13 +37,15 @@ class PaperStrategy:
     activation: A.PaperActivation
     state: str
     deployed_cycle: int
+    backtest_R: float = 0.0        # in-sample edge at deploy — compared to forward later
     trades_today: int = 0
 
     def as_dict(self):
         return {"strategy_id": self.spec.strategy_id, "version": self.spec.version,
                 "family": self.spec.family, "state": self.state,
                 "config_hash": self.spec.config_hash(),
-                "deployed_cycle": self.deployed_cycle}
+                "deployed_cycle": self.deployed_cycle,
+                "backtest_R": self.backtest_R}
 
 
 class PaperAutonomyManager:
@@ -82,7 +84,8 @@ class PaperAutonomyManager:
             # move APPROVED_FOR_PAPER -> PAPER_EVALUATION autonomously (paper autopilot)
             S.require_transition(state, S.PAPER_EVALUATION, S.PAPER_AUTOPILOT)
             ps = PaperStrategy(spec=spec, approval=rec, activation=act,
-                               state=S.PAPER_EVALUATION, deployed_cycle=cycle)
+                               state=S.PAPER_EVALUATION, deployed_cycle=cycle,
+                               backtest_R=round(float(ev.net_expectancy_R), 4))
             self.strategies[spec.strategy_id] = ps
             if thread is not None:
                 thread.decide(cycle, f"PAPER-DEPLOY {spec.strategy_id} ({spec.family}) "
@@ -149,6 +152,25 @@ class PaperAutonomyManager:
                                   f"({st['expectancy_R']:+.2f}R over {st['n_trades']} "
                                   "trades). Autonomously stopping it.", st)
         return retired_now
+
+    def retire(self, strategy_id: str, reason: str, *, cycle: int = 0, thread=None) -> bool:
+        """Stand a paper strategy down (e.g. because forward-test calibration says OVERFIT).
+        Idempotent; returns True if it was active and is now retired."""
+        ps = self.strategies.get(strategy_id)
+        if ps is None or ps.state != S.PAPER_EVALUATION:
+            return False
+        S.require_transition(ps.state, S.DECAYED, S.PAPER_AUTOPILOT)
+        ps.state = S.DECAYED
+        self.retired.append(strategy_id)
+        if thread is not None:
+            thread.decide(cycle, f"RETIRE {strategy_id}: {reason}",
+                          {"strategy_id": strategy_id, "reason": reason})
+        return True
+
+    def forward_R(self, strategy_id: str) -> tuple[float, int]:
+        """(expectancy_R, n_trades) of a strategy's REAL paper (out-of-sample) trades."""
+        st = self.book.stats(strategy_id)
+        return st["expectancy_R"], st["n_trades"]
 
     # ── reporting ────────────────────────────────────────────────────────────────
     def active(self) -> list[PaperStrategy]:

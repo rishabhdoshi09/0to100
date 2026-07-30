@@ -20,14 +20,19 @@ from dataclasses import dataclass, field
 
 from research.auto_research.loop import run_cycle, CycleReport, canonical_readiness
 from research.auto_research.learning import LearningLedger
+from research.auto_research.knowledge import Knowledge
+from research.auto_research.growth import calibrate, FORWARD_PENDING
 from research.auto_research.paper_autonomy import PaperAutonomyManager
 from research.auto_research.thread import ResearchThread
 from research.strategy_studio import discovery as DISC
+from research.strategy_studio import spec as S
 
 
 @dataclass
 class BrainState:
     cycles_run: int = 0
+    days_grown: int = 0
+    last_grow_date: str = ""
     last_report: dict | None = None
     running: bool = False
     last_error: str = ""
@@ -43,10 +48,11 @@ class AutoResearchBrain:
     def __init__(self, thread_path=None, *, evaluate_fn=None, budget=None,
                  interval_s: float = 3600.0, clock=None,
                  dataset_status_fn=canonical_readiness,
-                 paper=None, signal_fn=None, bars_fn=None):
+                 paper=None, signal_fn=None, bars_fn=None, knowledge=None):
         self.thread = (ResearchThread(thread_path, clock=clock) if clock
                        else ResearchThread(thread_path))
         self.ledger = LearningLedger()
+        self.knowledge = knowledge if knowledge is not None else Knowledge()
         self.registry = DISC.AttemptRegistry()
         self.evaluate_fn = evaluate_fn
         self.budget = budget
@@ -74,13 +80,14 @@ class AutoResearchBrain:
         self.paper.disengage(); self.state.paper_autonomy = False
 
     # ── one synchronous cycle (deterministic; safe for tests + UI button) ────────
-    def run_once(self, dataset_status=None, date=None) -> CycleReport:
+    def run_once(self, dataset_status=None, date=None, family_weights=None,
+                 adapt=True) -> CycleReport:
         self.state.cycles_run += 1
         cyc = self.state.cycles_run
         status = dataset_status if dataset_status is not None else self.dataset_status_fn()
         report = run_cycle(cyc, self.thread, dataset_status=status,
                            evaluate_fn=self.evaluate_fn, budget=self.budget,
-                           registry=self.registry)
+                           registry=self.registry, family_weights=family_weights)
         # feed the learning memory (market-evidence proposals only) and record decay/gain
         events = self.ledger.observe_cycle(cyc, report.proposals)
         for e in events:
@@ -94,13 +101,70 @@ class AutoResearchBrain:
             for spec, ev in report.survivors_for_paper:
                 self.paper.deploy(spec, ev, status, cycle=cyc, thread=self.thread)
             self._run_paper_day(cyc, date)
-            self.paper.review_and_adapt(cycle=cyc, thread=self.thread)
+            if adapt:                                  # calibration is the authority in growth
+                self.paper.review_and_adapt(cycle=cyc, thread=self.thread)
             self.state.paper_deployed = len(self.paper.strategies)
             self.state.paper_retired = len(self.paper.retired)
 
         self.state.last_report = report.as_dict()
         self.state.total_proposals += len(report.proposals)
         return report
+
+    # ── one DAY of growing up: backtest → forward test → calibrate → remember ────
+    def grow_one_day(self, date=None, dataset_status=None) -> dict:
+        """The daily learning step that makes the system smarter. It:
+          1. biases discovery by what has forward-tested well (learned search weights),
+          2. runs a research cycle (BACKTEST) + auto-deploys survivors to PAPER,
+          3. trades one paper day (FORWARD TEST on unseen data),
+          4. CALIBRATES each strategy's forward edge against its backtest edge,
+          5. retires overfits/decayers, folds every verdict into persistent Knowledge.
+        Paper-only, live-locked. Honest no-op shape when data isn't ready."""
+        day = date or _today_str()
+        weights = self.knowledge.search_weights(list(self.budget.families) if self.budget
+                                                else list(DISC.DiscoveryBudget().families))
+        report = self.run_once(dataset_status=dataset_status, date=day,
+                               family_weights=weights, adapt=False)
+
+        # remember today's BACKTEST edges (in-sample)
+        for spec, ev in report.survivors_for_paper:
+            self.knowledge.remember_backtest(spec.family, ev.net_expectancy_R)
+
+        # CALIBRATE every actively-trading strategy: forward (paper) vs backtest
+        calibrations = []
+        if self.paper.engaged:
+            for ps in list(self.paper.strategies.values()):
+                if ps.state != S.PAPER_EVALUATION:
+                    continue
+                fR, n = self.paper.forward_R(ps.spec.strategy_id)
+                cal = calibrate(ps.spec.strategy_id, ps.spec.family, ps.backtest_R, fR, n)
+                calibrations.append(cal.as_dict())
+                if cal.verdict != FORWARD_PENDING:
+                    self.knowledge.remember_forward(ps.spec.family, fR, cal.verdict)
+                    self.thread.reason(self.state.cycles_run, cal.note, cal.as_dict())
+                if not cal.keep:
+                    self.paper.retire(ps.spec.strategy_id, cal.note,
+                                      cycle=self.state.cycles_run, thread=self.thread)
+            self.state.paper_retired = len(self.paper.retired)
+
+        self.knowledge.save()
+        self.state.days_grown += 1
+        self.state.last_grow_date = day
+        self.thread.conclude(self.state.cycles_run,
+                             f"Grew one day ({day}): {len(report.survivors_for_paper)} "
+                             f"backtested survivor(s), {len(calibrations)} forward-calibrated, "
+                             f"{self.state.paper_retired} retired. Search now favours what "
+                             "forward-tests best. Live stays locked.",
+                             {"day": day, "calibrations": calibrations,
+                              "knowledge": self.knowledge.summary()})
+        return {"day": day, "report": report.as_dict(), "calibrations": calibrations,
+                "knowledge": self.knowledge.summary()}
+
+    def maybe_grow_today(self, date=None) -> dict | None:
+        """Grow at most once per calendar day (idempotent for the daemon loop)."""
+        day = date or _today_str()
+        if self.state.last_grow_date == day:
+            return None
+        return self.grow_one_day(date=day)
 
     def _run_paper_day(self, cyc: int, date=None) -> None:
         """Advance one paper trading day using the injected signal/price providers. Without
@@ -134,7 +198,12 @@ class AutoResearchBrain:
     def _worker(self) -> None:
         while not self._stop.is_set():
             try:
-                self.run_once()
+                # when paper autonomy is engaged, grow up once per day (backtest → forward
+                # test → calibrate → remember); otherwise just keep researching each cycle.
+                if self.paper.engaged:
+                    self.maybe_grow_today()
+                else:
+                    self.run_once()
                 self.state.last_error = ""
             except Exception as e:                     # a bad cycle never kills the brain
                 self.state.last_error = str(e)
@@ -156,7 +225,17 @@ _BRAIN: AutoResearchBrain | None = None
 
 
 def get_brain(**kwargs) -> AutoResearchBrain:
+    """Shared production brain. Wires the REAL data providers (backtest / bars / signals)
+    by default so, once engaged, it backtests and forward-tests on live market data with no
+    human in the loop. Tests construct AutoResearchBrain directly with injected providers."""
     global _BRAIN
     if _BRAIN is None:
+        try:
+            from research.auto_research import providers as P
+            kwargs.setdefault("evaluate_fn", P.backtest_evaluator)
+            kwargs.setdefault("signal_fn", P.signals_for)
+            kwargs.setdefault("bars_fn", P.daily_bars)
+        except Exception:
+            pass
         _BRAIN = AutoResearchBrain(**kwargs)
     return _BRAIN

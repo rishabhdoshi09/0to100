@@ -133,17 +133,23 @@ def data_ready(dataset_status: dict | None) -> bool:
 
 # ── generation (Stage A) — seeded, family-diverse, budgeted ─────────────────────
 
-def generate(budget: DiscoveryBudget, has_delivery=False, has_fundamentals_pit=False
-             ) -> list[S.StrategySpec]:
+def generate(budget: DiscoveryBudget, has_delivery=False, has_fundamentals_pit=False,
+             family_weights: dict | None = None) -> list[S.StrategySpec]:
     """Create readable candidates from the grammar. Deterministic for a given seed.
-    Diversity: cycles through the allowed families so discovery does not merely re-optimise
-    one family. Respects max_search_attempts and max_complexity."""
+
+    Diversity vs focus: by default families are visited round-robin (guaranteed diversity).
+    When `family_weights` is given (a learned bias, e.g. from forward-test trust), the visit
+    sequence is drawn proportional to those weights — so the search spends more attempts on
+    families that have proven themselves out-of-sample and fewer on chronic decayers, WITHOUT
+    ever fully starving a family (it keeps exploring). This is how the search itself gets
+    smarter over time. Respects max_search_attempts and max_complexity."""
     rng = random.Random(budget.seed)
     out: list[S.StrategySpec] = []
     families = [f for f in budget.families if f in G.FAMILY_BLOCKS]
     n = min(budget.max_search_attempts, len(families) * 8)
+    visit = _family_sequence(families, family_weights, n, rng)
     for i in range(n):
-        fam = families[i % len(families)]           # round-robin → guaranteed diversity
+        fam = visit[i]
         blocks = [b for b in G.FAMILY_BLOCKS[fam]
                   if G.is_pit_available(b, has_fundamentals_pit, has_delivery)]
         if not blocks:
@@ -166,6 +172,35 @@ def generate(budget: DiscoveryBudget, has_delivery=False, has_fundamentals_pit=F
         if S.complexity_of(spec) <= budget.max_complexity:
             out.append(spec)
     return out
+
+
+def _family_sequence(families: list[str], weights: dict | None, n: int,
+                     rng: random.Random) -> list[str]:
+    """The order in which families are visited across `n` attempts. No weights ⇒ round-robin.
+    With weights ⇒ a deterministic weighted draw with a floor, so strong families get more
+    attempts but weak ones are still explored (never a weight of exactly zero)."""
+    if not weights:
+        return [families[i % len(families)] for i in range(n)]
+    floor = 0.10                                    # every family keeps at least this share
+    w = {f: max(floor, float(weights.get(f, 1.0))) for f in families}
+    total = sum(w.values()) or 1.0
+    # allocate integer counts proportional to weight, remainder by largest fractional part
+    raw = {f: (w[f] / total) * n for f in families}
+    counts = {f: int(raw[f]) for f in families}
+    rem = n - sum(counts.values())
+    for f in sorted(families, key=lambda x: raw[x] - counts[x], reverse=True)[:max(0, rem)]:
+        counts[f] += 1
+    # interleave deterministically so diversity is preserved within the weighting
+    pools = {f: counts[f] for f in families}
+    seq: list[str] = []
+    order = sorted(families, key=lambda f: -counts[f])
+    while len(seq) < n:
+        for f in order:
+            if pools[f] > 0:
+                seq.append(f); pools[f] -= 1
+                if len(seq) >= n:
+                    break
+    return seq
 
 
 def _hypothesis(fam: str, blocks) -> str:
