@@ -30,6 +30,7 @@ class CycleContext:
     data: dict = field(default_factory=dict)
     clusters: dict = field(default_factory=dict)         # {strategy_id: cluster_id}
     benchmark: list = field(default_factory=list)        # [Bar,...] PIT benchmark (rel-strength)
+    forward_eligible: bool = True                        # may OPEN new entries (Part 14 gate)
     session_phase: str = "eod"                           # open / intraday / eod
 
     def cycle_id(self) -> str:

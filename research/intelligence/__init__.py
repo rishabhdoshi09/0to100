@@ -15,7 +15,9 @@ from research.intelligence import graduation
 from research.intelligence import strategy_runtime
 from research.intelligence import data_state
 from research.intelligence.registry import StrategyRegistry, RegisteredStrategy
+from research.intelligence.data import SnapshotStore, Snapshot, SnapshotBarProvider
 
 __all__ = ["schemas", "EventStore", "decoder_registry", "evidence_brain",
            "allocation_brain", "graduation", "strategy_runtime", "data_state",
-           "StrategyRegistry", "RegisteredStrategy"]
+           "StrategyRegistry", "RegisteredStrategy",
+           "SnapshotStore", "Snapshot", "SnapshotBarProvider"]

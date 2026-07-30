@@ -83,6 +83,8 @@ class AutoResearchBrain:
         from research.auto_research.costs import india_cash_costs as _costs
         self.mode = mode
         self.intel_registry_fn = intel_registry_fn   # (as_of) -> ctx-building dict, or None
+        self.snapshot_store = None                   # set by get_active_snapshot wiring / prod
+        self.strategy_registry = None                # populated from frozen specs in production
         self.event_store = _ES(event_store_path)
         self.runtime_state = _RS(runtime_state_path)
         self.intel_book = _PB(slippage_bps=3.0, cost_model=_costs)
@@ -235,8 +237,11 @@ class AutoResearchBrain:
             self._intel_lock.release()
 
     def _build_intel_ctx(self, day):
-        """Build a CycleContext from the injected registry provider, or an honest empty ctx
-        (data_ok=False) when none is wired / no data exists — so production degrades safely."""
+        """Build a CycleContext for the cycle. Preference order:
+          1. an ACTIVE, VERIFIED snapshot (real NSE data) → snapshot-pinned production context;
+          2. an injected `intel_registry_fn` (tests / custom wiring);
+          3. an honest empty context (data_ok=False) → safe no-op.
+        """
         from research.intelligence.runtime.cycle_context import CycleContext
         regime = "RISK_ON"
         if self.regime_fn:
@@ -244,6 +249,24 @@ class AutoResearchBrain:
                 regime = self.regime_fn() or "RISK_ON"
             except Exception:
                 regime = "RISK_ON"
+        # 1 — real data: pin the active snapshot and build the production context
+        if self.snapshot_store is not None and self.strategy_registry is not None:
+            try:
+                snap = self.snapshot_store.open_active()   # verifies before opening
+                if snap is not None:
+                    from research.intelligence.data.provider import SnapshotBarProvider
+                    from research.intelligence.runtime.context_builder import (
+                        build_context_from_snapshot)
+                    prov = SnapshotBarProvider(snap)
+                    as_of = day if day <= (prov.latest_available_date() or day) \
+                        else prov.latest_available_date()
+                    ctx, _readiness = build_context_from_snapshot(
+                        prov, self.strategy_registry, as_of=as_of, mode=self.mode,
+                        market_regime=regime)
+                    return ctx
+            except Exception as _se:
+                self.state.last_error = f"snapshot ctx: {_se}"
+        # 2 — injected registry provider
         if self.intel_registry_fn:
             try:
                 built = self.intel_registry_fn(day) or {}
@@ -347,4 +370,17 @@ def get_brain(**kwargs) -> AutoResearchBrain:
         except Exception:
             pass
         _BRAIN = AutoResearchBrain(**kwargs)
+        # wire the immutable snapshot store + a validated registry so the loop flips from
+        # no-op to real-data-driven the moment a snapshot is activated (none in this sandbox).
+        try:
+            from pathlib import Path as _P
+            from research.intelligence.data.snapshot_store import SnapshotStore
+            from research.intelligence.registry import StrategyRegistry
+            from research.strategy_studio import discovery as _D
+            _BRAIN.snapshot_store = SnapshotStore(
+                _P(__file__).resolve().parent.parent.parent / "logs" / "snapshots")
+            _BRAIN.strategy_registry = StrategyRegistry().build(
+                _D.generate(_D.DiscoveryBudget()))
+        except Exception:
+            pass
     return _BRAIN

@@ -721,3 +721,50 @@ next increment and are documented so nothing over-claims.
 **Tests:** `tests/test_production_data.py` — 17 (new adapters PIT/deterministic/loud-unsupported;
 registry validation; data-state/tier classification + card tier flag; nested `.csv.zip`/`.gz`/
 zip-of-zips ingestion; fixture end-to-end momentum→paper position). Canonical suite: **759 passed**.
+
+---
+
+## Milestone — Real-Data Runtime Activation (immutable snapshot → provider → pinned cycle)
+
+**Ask (user):** complete the blocked chain — imported NSE files → validated immutable snapshot →
+active pointer → snapshot-reading production provider → pinned cycle context → run_intelligence_cycle
+— so automation flips from fixture-driven to real-data-driven. No broker work.
+
+**Delivered (tested):** implementation note `docs/overhaul/REAL_DATA_RUNTIME_ACTIVATION.md`, plus
+`research/intelligence/data/`:
+- `snapshot_store.py` — `SnapshotStore`: **immutable, content-addressed** commit (deterministic id
+  from normalized content + schema/parser versions; idempotent; successor on change), manifest +
+  checksum, `verify_snapshot` (checksum + data-file hash + schema), **atomic activation**
+  (`os.replace` pointer swap + audit line; crash → old OR new, never partial), `get_active`/`open`/
+  `list`. A pointer to a missing snapshot resolves to None (fail-safe).
+- `snapshot.py` — `Snapshot`: read-only **point-in-time** accessor (`bars(through)` never returns a
+  later bar; `universe(on_date)` is contemporaneous; `benchmark`, `health`, `coverage_for`).
+- `provider.py` — `SnapshotBarProvider`: pinned-snapshot-only; no internet/synthetic fallback.
+- `runtime/context_builder.py` — `build_context_from_snapshot`: assembles a real `CycleContext`
+  pinned to ONE snapshot id, with **data-aware per-strategy readiness** (READY / UNSUPPORTED_RUNTIME
+  / MISSING_BENCHMARK / INSUFFICIENT_HISTORY) and a **forward-eligibility gate** (Part 14): a
+  research-eligible-but-not-forward snapshot still runs the cycle + updates evidence but opens NO new
+  entries.
+- Loop: `forward_eligible` added to `CycleContext`; the loop gates new entries on it. Scheduler
+  `_build_intel_ctx` now prefers an **active verified snapshot** (real data) → production context,
+  else injected fn, else honest no-op. `get_brain()` wires a `SnapshotStore` + a validated registry
+  so the loop flips to real-data the moment a snapshot is activated. UI shows the active snapshot +
+  "no snapshot → no action" reason.
+
+**The flip (proven):** `tests/test_snapshot_runtime.py::TestSnapshotDrivenCycle` builds a snapshot,
+activates it, and runs the cycle with **no fixture ctx** → cross-sectional momentum ranks the real
+snapshot universe → opens a paper position on the top name; every canonical event carries the pinned
+snapshot id.
+
+**Honest deferrals (documented):** full validation/quarantine severity engine + import
+classification report persistence; incremental successor reconcile depth (Parts 5–7); the full
+recovery matrix (Part 20) beyond verify/fail-safe; scalability benchmarks + columnar storage
+(Parts 21–22); the full Historical Data Setup UI overhaul (Part 18); trading-calendar-accurate
+freshness (currently latest≥as_of). No NSE dataset exists in this environment, so production stays a
+safe no-op until a user imports + activates a real snapshot — the machinery is ready and tested.
+
+**Tests:** `tests/test_snapshot_runtime.py` — 15 (immutable/idempotent commit + successor + tamper/
+missing-file verify; atomic activate + audit + invalid-can't-activate + missing-pointer fail-safe;
+PIT provider + refuses-invalid + contemporaneous universe; snapshot-driven cycle → paper position;
+not-forward-eligible runs research but blocks entries; missing-benchmark blocks sector rotation;
+scheduler no-op without snapshot + drives cycle with active snapshot). Canonical suite: **774 passed**.

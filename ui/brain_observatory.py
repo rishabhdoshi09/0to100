@@ -75,7 +75,27 @@ def _loop_status() -> None:
         pills.append(T.pill(f"Last cycle: {last.get('status', '—')}", "off"))
         pills.append(T.pill(f"{len(last.get('positions_opened', []))} opened · "
                             f"{len(last.get('positions_closed', []))} closed", "off"))
+    # active snapshot (real-data runtime status)
+    try:
+        from research.intelligence.data.snapshot_store import SnapshotStore
+        from pathlib import Path
+        store = SnapshotStore(Path(__file__).resolve().parent.parent / "logs" / "snapshots")
+        sid = store.get_active_snapshot()
+        if sid:
+            snap = store.open_snapshot(sid)
+            m = snap.manifest
+            pills.append(T.pill(f"Snapshot {sid[:8]} · {m.get('instrument_count', 0)} instruments",
+                                "ok"))
+            pills.append(T.pill(f"through {m.get('last_trading_date', '—')}", "off"))
+        else:
+            pills.append(T.pill("No active snapshot", "off"))
+    except Exception:
+        pass
     T.pill_row(pills)
+    if brain and getattr(brain, "snapshot_store", None) and not \
+            brain.snapshot_store.get_active_snapshot():
+        st.caption("No validated NSE snapshot is active — the loop runs but takes no action. "
+                   "Import & activate a snapshot in 🗂️ Historical Data Setup to go live-data.")
     # recent canonical loop events straight from the append-only store
     try:
         from pathlib import Path

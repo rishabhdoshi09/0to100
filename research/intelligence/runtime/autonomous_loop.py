@@ -75,7 +75,11 @@ def run_intelligence_cycle(ctx, *, store, book, runtime_state, knowledge=None,
         # operational-safety preflight (Phase Q): a failed critical check ⇒ no NEW risk
         from research.intelligence.runtime import preflight as PF
         pf = PF.preflight(ctx, store=store, book=book, runtime_state=runtime_state)
-        safe_to_enter = pf.ok and reconciled
+        # forward eligibility (Part 14): only FORWARD_ELIGIBLE data may open NEW entries; a
+        # research-eligible-but-not-forward snapshot still runs the cycle and updates evidence.
+        safe_to_enter = pf.ok and reconciled and getattr(ctx, "forward_eligible", True)
+        if not getattr(ctx, "forward_eligible", True):
+            res.no_action_reasons.append("dataset not forward-eligible — no new entries")
         for name, reason in pf.failed:
             res.warnings.append(f"preflight {name}: {reason}")
 
