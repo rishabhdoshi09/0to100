@@ -3,12 +3,18 @@ from __future__ import annotations
 
 
 def ensure_runtime_started() -> dict:
-    """Start the existing PAPER_AUTO worker when its persisted switch is on.
+    """Start persisted PAPER_AUTO and the read-only news-curator worker.
 
-    No data download and no order operation occurs here. The existing brain is
-    the sole owner of runtime state; repeated calls are safe.
+    Repeated calls are safe. The news worker only fetches and stores context; it
+    cannot place or modify broker orders.
     """
-    state = {"paper_auto_enabled": False, "worker_running": False, "error": ""}
+    state = {
+        "paper_auto_enabled": False,
+        "worker_running": False,
+        "news_curator_running": False,
+        "error": "",
+        "news_error": "",
+    }
     try:
         from research.auto_research.scheduler import get_brain
         brain = get_brain()
@@ -19,4 +25,13 @@ def ensure_runtime_started() -> dict:
         state["error"] = str(brain.state.last_error or "")
     except Exception as exc:
         state["error"] = str(exc)
+
+    try:
+        from news.curator_service import get_news_curator_service
+        service = get_news_curator_service()
+        service.start()
+        state["news_curator_running"] = service.running
+        state["news_error"] = service.last_error
+    except Exception as exc:
+        state["news_error"] = str(exc)
     return state

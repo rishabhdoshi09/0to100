@@ -18,6 +18,7 @@ from ui.retail_pages_v2 import (
     render_learned,
     render_market,
     render_momentum,
+    render_news,
     render_paper_trading,
     render_portfolio,
     render_reports,
@@ -31,6 +32,7 @@ pages = {
     "Everyday": [
         st.Page(render_home, title="Home", icon="🏠", default=True),
         st.Page(render_momentum, title="Momentum Stocks", icon="📈"),
+        st.Page(render_news, title="Market News", icon="📰"),
         st.Page(render_paper_trading, title="Automatic Paper Trading", icon="🤖"),
         st.Page(render_portfolio, title="Portfolio", icon="💼"),
         st.Page(render_market, title="Market", icon="🌐"),

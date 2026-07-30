@@ -1,10 +1,9 @@
 """
-News fetcher: pulls articles from RSS feeds (configurable) and
-optionally a REST news API endpoint.
+News fetcher: pulls articles from RSS feeds (configurable), optionally Marketaux,
+and the durable retail news-curator cache.
 
 ⚠️  News is context for the LLM — NOT ground truth for trade decisions.
 """
-
 from __future__ import annotations
 
 import hashlib
@@ -19,8 +18,8 @@ from logger import get_logger
 
 log = get_logger(__name__)
 
-_FETCH_TIMEOUT = 15  # seconds per RSS request
-_MAX_AGE_HOURS = 6   # ignore articles older than this
+_FETCH_TIMEOUT = 15
+_MAX_AGE_HOURS = 6
 
 
 class RawArticle:
@@ -39,7 +38,6 @@ class RawArticle:
         self.source = source
         self.url = url
         self.published_at = published_at
-        # Stable dedup key — based on headline text
         self.id = hashlib.sha1(headline.lower().encode()).hexdigest()[:16]
 
     def to_dict(self) -> dict:
@@ -55,25 +53,19 @@ class RawArticle:
 
 class NewsFetcher:
     def __init__(self) -> None:
-        self._seen_ids: set[str] = set()   # dedup across cycles
+        self._seen_ids: set[str] = set()
 
     def fetch_all(self, max_age_hours: int = _MAX_AGE_HOURS) -> List[RawArticle]:
-        """Pull news from RSS feeds + Marketaux (if key is set). Returns deduplicated list."""
+        """Pull configured feeds, paid enrichment, and curator cache; deduplicate."""
         articles: List[RawArticle] = []
         for url in settings.rss_feed_list:
             try:
                 new = self._fetch_rss(url, max_age_hours)
                 articles.extend(new)
-                # Per-feed visibility — a dead feed must show in logs,
-                # never hide inside a silent zero
-                log.info("rss_feed_result", feed=url.split("/")[2],
-                         articles=len(new))
+                log.info("rss_feed_result", feed=url.split("/")[2], articles=len(new))
             except Exception as exc:
                 log.warning("rss_fetch_failed", url=url, error=str(exc))
 
-        # Marketaux enrichment — one API call for the full universe.
-        # After 3 failures/empties in a day, stop burning a 10s timeout
-        # on every scan cycle for an API that isn't answering.
         from datetime import date as _date
         _mx_day = str(_date.today())
         if getattr(self, "_mx_fail_day", "") != _mx_day:
@@ -92,17 +84,28 @@ class NewsFetcher:
                     self._mx_fails = self._mx_fails + 1 if not mx_articles else 0
             except Exception as exc:
                 self._mx_fails += 1
-                log.warning("marketaux_fetch_failed", error=str(exc),
-                            fails_today=self._mx_fails)
+                log.warning("marketaux_fetch_failed", error=str(exc), fails_today=self._mx_fails)
 
-        # Deduplicate
+        # The automated curator has much broader official/media coverage and a
+        # durable deduplicated cache. This bridge enriches existing LLM/JARVIS
+        # contexts without making the curator a trading authority.
+        try:
+            from news.curator_service import get_news_curator_service
+            curated = get_news_curator_service().curator.raw_articles(
+                hours=max_age_hours,
+                limit=500,
+            )
+            articles.extend(curated)
+            log.info("curated_news_context_merged", count=len(curated))
+        except Exception as exc:
+            log.debug("curated_news_context_unavailable", error=str(exc))
+
         fresh: List[RawArticle] = []
-        for a in articles:
-            if a.id not in self._seen_ids:
-                self._seen_ids.add(a.id)
-                fresh.append(a)
+        for article in articles:
+            if article.id not in self._seen_ids:
+                self._seen_ids.add(article.id)
+                fresh.append(article)
 
-        # Cap seen_ids memory growth
         if len(self._seen_ids) > 5000:
             self._seen_ids.clear()
 
@@ -110,13 +113,11 @@ class NewsFetcher:
         return sorted(fresh, key=lambda x: x.published_at, reverse=True)
 
     def _fetch_rss(self, feed_url: str, max_age_hours: int) -> List[RawArticle]:
-        # Fetch with a BROWSER UA via requests — ET/Moneycontrol/Mint block
-        # bot UAs and feedparser then silently parses the block page to
-        # zero entries. Fall back to feedparser's own fetch on error.
         _browser_headers = {
-            "User-Agent": ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-                           "AppleWebKit/537.36 (KHTML, like Gecko) "
-                           "Chrome/124.0 Safari/537.36"),
+            "User-Agent": (
+                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
+            ),
             "Accept": "application/rss+xml, application/xml;q=0.9, */*;q=0.8",
         }
         try:
@@ -124,12 +125,14 @@ class NewsFetcher:
             resp = requests.get(feed_url, headers=_browser_headers, timeout=10)
             feed = feedparser.parse(resp.content)
             if not feed.entries:
-                log.warning("rss_feed_empty", url=feed_url,
-                            http_status=resp.status_code,
-                            bozo=bool(getattr(feed, "bozo", False)))
+                log.warning(
+                    "rss_feed_empty",
+                    url=feed_url,
+                    http_status=resp.status_code,
+                    bozo=bool(getattr(feed, "bozo", False)),
+                )
         except Exception:
-            feed = feedparser.parse(
-                feed_url, request_headers=_browser_headers)
+            feed = feedparser.parse(feed_url, request_headers=_browser_headers)
         now = datetime.now(timezone.utc)
         cutoff_ts = now.timestamp() - max_age_hours * 3600
         articles: List[RawArticle] = []
@@ -140,14 +143,11 @@ class NewsFetcher:
                 continue
             headline = entry.get("title", "")
             summary = entry.get("summary", entry.get("description", ""))
-            # Strip HTML tags naively (no external dep)
             summary = self._strip_tags(summary)[:600]
             source = feed.feed.get("title", feed_url)
             url = entry.get("link", "")
             if headline:
-                articles.append(
-                    RawArticle(headline, summary, source, url, published_at)
-                )
+                articles.append(RawArticle(headline, summary, source, url, published_at))
         return articles
 
     @staticmethod
