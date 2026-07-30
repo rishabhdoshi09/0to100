@@ -44,10 +44,19 @@ def strategy_readiness(spec, provider, as_of: str) -> str:
 
 
 def _freshness_days(provider, as_of: str) -> float:
+    """0 ⇒ fresh, 999 ⇒ stale (blocks new entries via the FORWARD_ELIGIBLE tier). Real ISO
+    dates use production NSE session freshness (weekends/holidays/publication delay); synthetic
+    fixture dates (e.g. 'd298') fall back to a plain comparison so tests stay deterministic."""
     latest = provider.latest_available_date()
     if not latest:
         return 999.0
-    return 0.0 if latest >= as_of else 999.0        # calendar-accurate freshness is deferred
+    try:
+        from datetime import date as _date
+        _date.fromisoformat(latest)                 # real ISO date? → calendar-accurate path
+        from research.intelligence.data import nse_calendar as CAL
+        return 0.0 if CAL.snapshot_freshness(latest)["fresh"] else 999.0
+    except ValueError:
+        return 0.0 if latest >= as_of else 999.0    # synthetic fixture date → simple compare
 
 
 def build_context_from_snapshot(provider, registry, *, as_of: str, mode: str,

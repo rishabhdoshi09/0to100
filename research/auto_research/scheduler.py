@@ -316,7 +316,16 @@ class AutoResearchBrain:
                                          backtest_R=bt_R, backtest_trades=bt_n)
             self.state.last_intel_cycle = res.as_dict()
             self._save_intel_book()                  # open positions survive restart
-            return res.as_dict()
+            out = res.as_dict()
+            # a healthy cycle that ran on real data but opened nothing is a VALID outcome,
+            # reported clearly — never a forced/random trade.
+            if res.data_ok and not res.positions_opened and not res.positions_closed:
+                out["eligibility"] = "NO_ELIGIBLE_TRADE"
+            elif res.data_ok:
+                out["eligibility"] = "TRADED"
+            else:
+                out["eligibility"] = "NO_DATA"
+            return out
         finally:
             self._intel_lock.release()
 

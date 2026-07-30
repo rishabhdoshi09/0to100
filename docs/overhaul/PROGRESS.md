@@ -857,3 +857,40 @@ dup; missing snapshot blocks safely; enable flag survives restart; open position
 restart; management resumes + auto-exit after restart; outcome→Brain 1, paper-labelled `forward`
 never `live`; manual disable override; full end-to-end certification with restart, no duplication).
 Canonical suite: **823 passed**.
+
+---
+
+## Milestone — PAPER_AUTO activation closeout (freshness · PIT · no-trade · ingestion · runbook)
+
+**Ask (user):** final activation closeout only — real NSE session freshness, prove in-sample PIT
+separation, preserve no-trade as valid, complete the genuine-data ingestion path, a headless
+smoke test, and an operator runbook. No new architecture.
+
+**Delivered (tested):**
+- **Real freshness** — `research/intelligence/data/nse_calendar.py` (IST-aware NSE session
+  freshness: weekends, holidays from an optional file, pre-close/post-cutoff publication window,
+  publication allowance, missing/future/duplicate sessions). Wired into `context_builder`
+  freshness gate for real ISO dates (synthetic fixture dates keep the simple fallback).
+- **In-sample PIT proof** — audited `_insample_evidence`: evidence uses only sessions strictly
+  before the decision date; the signal bar and later bars are excluded; leakage test (appending
+  future profitable bars leaves the earlier card byte-for-byte identical) and same-session test
+  (spiking the decision bar doesn't change its own evidence). In-sample is never FORWARD/CONFIRMED.
+- **No-trade valid** — scheduler reports `eligibility: NO_ELIGIBLE_TRADE`; insufficient/negative
+  evidence opens nothing; a strategy can stay inactive across cycles with no error; no
+  forced/random trade.
+- **Ingestion bridge** — `research/intelligence/data/from_bhav.py`: canonical bhav files (from the
+  existing Historical Data Setup, incl. nested `.csv.zip`) → validated (OHLC/positive/dup/future)
+  → immutable snapshot commit → verify → active pointer. No new ingestion system.
+- **Headless smoke** — bounded test starts the background worker, loads the persisted flag, opens
+  the active snapshot, runs a scheduled cycle unattended, survives a worker exception, and a
+  restart restores state without re-approval.
+- **Runbook** — `docs/overhaul/PAPER_AUTO_OPERATIONS.md` (required files, import/activate,
+  enable/verify/inspect/stop/disable, restart, stale-data + corrupt-persistence responses, and the
+  exact paper vs simulator vs in-sample vs live evidence distinction).
+
+**Tests:** `tests/test_paper_auto_closeout.py` — 18 (freshness: Fri-weekend/pre-close/post-close/
+allowance/delayed/holiday/missing/future/duplicate; PIT: no-future-leak/same-session/in-sample-
+not-forward; no-trade: insufficient → NO_ELIGIBLE_TRADE + inactive-no-error; ingestion: nested
+bhav-zip → active snapshot + quarantine/dedup; headless: worker-cycle-survives-errors + restart-
+no-reapproval). Canonical suite: **841 passed**. Genuine NSE data still absent ⇒ status
+`OPERATIONAL_DATA_REQUIRED` (machinery complete; awaits a user-supplied snapshot).
