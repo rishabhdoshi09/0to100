@@ -48,7 +48,8 @@ class AutoResearchBrain:
     def __init__(self, thread_path=None, *, evaluate_fn=None, budget=None,
                  interval_s: float = 3600.0, clock=None,
                  dataset_status_fn=canonical_readiness,
-                 paper=None, signal_fn=None, bars_fn=None, knowledge=None):
+                 paper=None, signal_fn=None, bars_fn=None, knowledge=None,
+                 regime_fn=None, paper_state_path=None):
         self.thread = (ResearchThread(thread_path, clock=clock) if clock
                        else ResearchThread(thread_path))
         self.ledger = LearningLedger()
@@ -62,6 +63,13 @@ class AutoResearchBrain:
         self.paper = paper if paper is not None else PaperAutonomyManager()
         self.signal_fn = signal_fn        # (PaperStrategy, date) -> list[signal dict]
         self.bars_fn = bars_fn            # (date) -> {symbol: (high, low, close)}
+        self.regime_fn = regime_fn        # () -> "RISK_ON"/"RISK_OFF" (deployment gate)
+        self.paper_state_path = paper_state_path
+        if paper_state_path:              # resume the book + journal across restarts
+            try:
+                self.paper.load(paper_state_path)
+            except Exception:
+                pass
         self.state = BrainState()
         self._specs_by_family: dict = {}
         self._thread_obj: threading.Thread | None = None
@@ -81,7 +89,7 @@ class AutoResearchBrain:
 
     # ── one synchronous cycle (deterministic; safe for tests + UI button) ────────
     def run_once(self, dataset_status=None, date=None, family_weights=None,
-                 adapt=True) -> CycleReport:
+                 adapt=True, allow_deploy=True) -> CycleReport:
         self.state.cycles_run += 1
         cyc = self.state.cycles_run
         status = dataset_status if dataset_status is not None else self.dataset_status_fn()
@@ -98,8 +106,9 @@ class AutoResearchBrain:
 
         # ── full PAPER autonomy: deploy → trade → learn (only if the user engaged) ──
         if self.paper.engaged:
-            for spec, ev in report.survivors_for_paper:
-                self.paper.deploy(spec, ev, status, cycle=cyc, thread=self.thread)
+            if allow_deploy:
+                for spec, ev in report.survivors_for_paper:
+                    self.paper.deploy(spec, ev, status, cycle=cyc, thread=self.thread)
             self._run_paper_day(cyc, date)
             if adapt:                                  # calibration is the authority in growth
                 self.paper.review_and_adapt(cycle=cyc, thread=self.thread)
@@ -122,8 +131,22 @@ class AutoResearchBrain:
         day = date or _today_str()
         weights = self.knowledge.search_weights(list(self.budget.families) if self.budget
                                                 else list(DISC.DiscoveryBudget().families))
+        # regime gate (connectivity): don't open NEW paper bets in RISK_OFF tape; existing
+        # positions are still managed and calibrated. A conservative, demote-only guard.
+        regime = "RISK_ON"
+        if self.regime_fn:
+            try:
+                regime = self.regime_fn() or "RISK_ON"
+            except Exception:
+                regime = "RISK_ON"
+        allow_deploy = regime != "RISK_OFF"
+        if not allow_deploy:
+            self.thread.observe(self.state.cycles_run + 1,
+                                f"Regime is {regime}: standing down NEW paper deployments "
+                                "today; existing strategies keep trading and being judged.",
+                                {"regime": regime})
         report = self.run_once(dataset_status=dataset_status, date=day,
-                               family_weights=weights, adapt=False)
+                               family_weights=weights, adapt=False, allow_deploy=allow_deploy)
 
         # remember today's BACKTEST edges (in-sample)
         for spec, ev in report.survivors_for_paper:
@@ -136,7 +159,9 @@ class AutoResearchBrain:
                 if ps.state != S.PAPER_EVALUATION:
                     continue
                 fR, n = self.paper.forward_R(ps.spec.strategy_id)
-                cal = calibrate(ps.spec.strategy_id, ps.spec.family, ps.backtest_R, fR, n)
+                rs = self.paper.book.r_stats(ps.spec.strategy_id)
+                cal = calibrate(ps.spec.strategy_id, ps.spec.family, ps.backtest_R, fR, n,
+                                forward_lower_R=rs["lower_R"])   # noise-aware
                 calibrations.append(cal.as_dict())
                 if cal.verdict != FORWARD_PENDING:
                     self.knowledge.remember_forward(ps.spec.family, fR, cal.verdict)
@@ -147,6 +172,11 @@ class AutoResearchBrain:
             self.state.paper_retired = len(self.paper.retired)
 
         self.knowledge.save()
+        if self.paper_state_path:                       # the book + journal survive restarts
+            try:
+                self.paper.save(self.paper_state_path)
+            except Exception:
+                pass
         self.state.days_grown += 1
         self.state.last_grow_date = day
         self.thread.conclude(self.state.cycles_run,
@@ -231,10 +261,15 @@ def get_brain(**kwargs) -> AutoResearchBrain:
     global _BRAIN
     if _BRAIN is None:
         try:
+            from pathlib import Path
             from research.auto_research import providers as P
             kwargs.setdefault("evaluate_fn", P.backtest_evaluator)
             kwargs.setdefault("signal_fn", P.signals_for)
             kwargs.setdefault("bars_fn", P.daily_bars)
+            kwargs.setdefault("regime_fn", P.current_regime)
+            kwargs.setdefault("paper_state_path",
+                              Path(__file__).resolve().parent.parent.parent /
+                              "logs" / "auto_research" / "paper_book.json")
         except Exception:
             pass
         _BRAIN = AutoResearchBrain(**kwargs)

@@ -53,14 +53,23 @@ class PaperAutonomyManager:
 
     def __init__(self, book: PaperBook | None = None, *, engaged: bool = False,
                  max_allocation: float = 100_000.0, max_open_risk_pct: float = 5.0,
-                 max_trades_per_day: int = 3):
-        self.book = book or PaperBook()
+                 max_trades_per_day: int = 3, realistic: bool = True):
+        # a realistic book by default: India cash-equity costs + slippage, so the forward
+        # test can't flatter itself. Tests that need exact R pass a frictionless book.
+        if book is not None:
+            self.book = book
+        elif realistic:
+            from research.auto_research.costs import india_cash_costs
+            self.book = PaperBook(slippage_bps=3.0, cost_model=india_cash_costs)
+        else:
+            self.book = PaperBook()
         self.engaged = engaged
         self.max_allocation = max_allocation
         self.max_open_risk_pct = max_open_risk_pct
         self.max_trades_per_day = max_trades_per_day
         self.strategies: dict[str, PaperStrategy] = {}
         self.retired: list[str] = []
+        self.journal: list[dict] = []            # append-only audit of deploy/retire actions
 
     def engage(self):  self.engaged = True
     def disengage(self): self.engaged = False
@@ -87,6 +96,9 @@ class PaperAutonomyManager:
                                state=S.PAPER_EVALUATION, deployed_cycle=cycle,
                                backtest_R=round(float(ev.net_expectancy_R), 4))
             self.strategies[spec.strategy_id] = ps
+            self.journal.append({"action": "DEPLOY", "strategy_id": spec.strategy_id,
+                                 "family": spec.family, "cycle": cycle,
+                                 "backtest_R": ps.backtest_R})
             if thread is not None:
                 thread.decide(cycle, f"PAPER-DEPLOY {spec.strategy_id} ({spec.family}) "
                               "autonomously — trading it in paper now. Live stays locked.",
@@ -144,13 +156,9 @@ class PaperAutonomyManager:
             if st["n_trades"] < min_trades:
                 continue
             if st["expectancy_R"] < 0:
-                S.require_transition(ps.state, S.DECAYED, S.PAPER_AUTOPILOT)
-                ps.state = S.DECAYED
-                self.retired.append(sid); retired_now.append(sid)
-                if thread is not None:
-                    thread.decide(cycle, f"RETIRE {sid}: proven paper loser "
-                                  f"({st['expectancy_R']:+.2f}R over {st['n_trades']} "
-                                  "trades). Autonomously stopping it.", st)
+                if self.retire(sid, f"proven paper loser ({st['expectancy_R']:+.2f}R over "
+                               f"{st['n_trades']} trades)", cycle=cycle, thread=thread):
+                    retired_now.append(sid)
         return retired_now
 
     def retire(self, strategy_id: str, reason: str, *, cycle: int = 0, thread=None) -> bool:
@@ -162,6 +170,8 @@ class PaperAutonomyManager:
         S.require_transition(ps.state, S.DECAYED, S.PAPER_AUTOPILOT)
         ps.state = S.DECAYED
         self.retired.append(strategy_id)
+        self.journal.append({"action": "RETIRE", "strategy_id": strategy_id,
+                             "family": ps.spec.family, "cycle": cycle, "reason": reason})
         if thread is not None:
             thread.decide(cycle, f"RETIRE {strategy_id}: {reason}",
                           {"strategy_id": strategy_id, "reason": reason})
@@ -180,5 +190,28 @@ class PaperAutonomyManager:
         return {"engaged": self.engaged, "book": self.book.as_dict(),
                 "deployed": len(self.strategies), "active": len(self.active()),
                 "retired": list(self.retired),
+                "journal": list(self.journal[-20:]),
                 "per_strategy": {sid: self.book.stats(sid)
                                  for sid in self.strategies}}
+
+    # ── persistence (book + journal survive restarts) ────────────────────────────
+    def save(self, path) -> None:
+        import json
+        from pathlib import Path
+        p = Path(path); p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps({"book": self.book.snapshot(), "journal": self.journal},
+                                ensure_ascii=False))
+
+    def load(self, path) -> bool:
+        import json
+        from pathlib import Path
+        p = Path(path)
+        if not p.exists():
+            return False
+        try:
+            data = json.loads(p.read_text())
+            self.book.restore(data.get("book", {}))
+            self.journal = list(data.get("journal", []))
+            return True
+        except Exception:
+            return False

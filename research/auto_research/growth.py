@@ -50,22 +50,30 @@ class Calibration:
 
 def calibrate(strategy_id: str, family: str, backtest_R: float, forward_R: float,
               n_forward: int, *, min_forward: int = MIN_FORWARD_TRADES,
-              confirm_frac: float = 0.7, decay_frac: float = 0.3) -> Calibration:
+              confirm_frac: float = 0.7, decay_frac: float = 0.3,
+              forward_lower_R: float | None = None) -> Calibration:
     """Compare a strategy's forward (paper) edge to its backtest edge and return a verdict.
 
     Thresholds are expressed as fractions of the backtested edge, so a strategy that keeps
     ≥70% of its backtested R forward is CONFIRMED, one that keeps <30% has DECAYED, and one
     whose forward edge is non-positive is OVERFIT (the backtest did not generalise).
+
+    Noise-awareness: when `forward_lower_R` (a conservative lower estimate, e.g. mean − 1 SE)
+    is supplied, the OVERFIT test uses IT rather than the point mean — so a couple of lucky
+    trades can't rescue a strategy whose edge isn't statistically distinguishable from zero.
     """
     if n_forward < min_forward:
         return Calibration(strategy_id, family, backtest_R, forward_R, n_forward,
                            FORWARD_PENDING, keep=True,
                            note=f"forward test still running ({n_forward}/{min_forward} trades)")
-    if forward_R <= 0:
+    edge_floor = forward_lower_R if forward_lower_R is not None else forward_R
+    if edge_floor <= 0:
+        lb = "" if forward_lower_R is None else f" (lower est. {forward_lower_R:+.2f}R)"
         return Calibration(strategy_id, family, backtest_R, forward_R, n_forward, OVERFIT,
                            keep=False,
                            note=f"backtest said {backtest_R:+.2f}R but forward is "
-                                f"{forward_R:+.2f}R — the edge did not generalise (overfit).")
+                                f"{forward_R:+.2f}R{lb} — not distinguishable from zero "
+                                "out-of-sample (overfit).")
     # positive forward edge — how much of the backtest did it keep?
     kept = (forward_R / backtest_R) if backtest_R > 0 else 1.0
     if kept >= confirm_frac:

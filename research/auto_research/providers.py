@@ -85,6 +85,27 @@ def daily_bars(date: str) -> dict:
 
 # ── forward-test signals (entries from a strategy's rules) ───────────────────────
 
+def current_regime() -> str:
+    """"RISK_ON" / "RISK_OFF" from the macro + breadth read, so the autopilot stands down new
+    deployments in a hostile tape. Fails OPEN to RISK_ON only when it truly can't tell — a
+    missing signal shouldn't freeze the whole system, but a clear RISK_OFF must bite."""
+    try:
+        from core import macro_pulse
+        mp = macro_pulse.assess() if hasattr(macro_pulse, "assess") else {}
+        if str(mp.get("stance", "")).upper() in ("RISK_OFF", "DEFENSIVE"):
+            return "RISK_OFF"
+    except Exception:
+        pass
+    try:
+        from scan import breadth as B
+        b = B.compute() if hasattr(B, "compute") else {}
+        if str(b.get("state", "")).upper() == "NARROW":
+            return "RISK_OFF"
+    except Exception:
+        pass
+    return "RISK_ON"
+
+
 def signals_for(paper_strategy, date: str) -> list:
     """Entry signals a deployed strategy would fire on `date`, from real data up to (not
     including) that day — point-in-time, no look-ahead. Returns [] when data is unavailable

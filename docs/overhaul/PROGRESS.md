@@ -554,3 +554,34 @@ transition), synthetic + red gate refused. With no real data it grows nothing, h
 corrupt-safe; adaptive search weighting + never-starve + determinism; grow_one_day end-to-end
 confirms a real edge and catches+retires an overfit; paper-only/live-locked mid-growth;
 once-per-day idempotence; knowledge persists between brains). Canonical suite: **686 passed**.
+
+---
+
+## Milestone — Trustworthiness layer (frictions · noise-aware calibration · regime · memory)
+
+**Ask (user):** take autonomy toward the apex of intelligence, coherence, connectivity,
+productivity and actionability — smoothly and transparently.
+
+**Built (non-breaking; realistic paths default-on only through the autonomy manager):**
+- `costs.py` — India cash-equity round-trip cost estimate (STT/exchange/SEBI/stamp/GST) +
+  `cost_in_R`.
+- `paper_book.py` — entry/exit slippage, **gap-through-stop / gap-through-target** (4-tuple
+  bars), NET-of-cost realized R; `r_stats()` (mean/stderr/lower R) for noise-aware judging;
+  `snapshot()/restore()` + equity_curve in `as_dict()`. Frictionless by default (exact tests);
+  the manager builds a realistic book (`slippage_bps=3`, India costs) by default.
+- `growth.calibrate(forward_lower_R=…)` — OVERFIT judged on the conservative lower estimate,
+  so luck can't fake an edge.
+- `paper_autonomy.py` — realistic book default, append-only **decision journal** (deploy/retire),
+  `save()/load()`; `review_and_adapt` reuses `retire` (journaled).
+- `scheduler.py` — **regime gate** (`regime_fn` → stand down NEW deploys in RISK_OFF; existing
+  managed), `run_once(allow_deploy=…)`, noise-aware calibration in `grow_one_day`, book/journal
+  persistence via `paper_state_path`; `get_brain()` wires `providers.current_regime` +
+  `logs/auto_research/paper_book.json`.
+- `providers.current_regime()` — macro_pulse/breadth read, fails open to RISK_ON.
+- UI: Control Room paper **equity-curve sparkline** + **recent autonomy actions** journal.
+- Doc: `HOW_IT_GETS_SMARTER.md` "trustworthiness layer" section.
+
+**Boundary unchanged:** paper-only, live-locked; synthetic + red gate refused; honest no-op
+with no data.
+
+**Tests:** `tests/test_autonomy_enhancements.py` — 14. Canonical suite: **700 passed**.

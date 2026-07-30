@@ -272,6 +272,27 @@ data limitations are one-directional favourable (survivorship); a CA-raw (either
 limitation downgrades a FAIL to INCONCLUSIVE. No EXP-006 threshold/feature/config-hash
 changed.
 
+## C-24 · Trustworthiness layer: realistic frictions, noise-aware calibration, regime gate, memory
+**Class:** RESEARCH-QUALITY / safety · **Status:** ADDED · 2026-07-30
+**Reality:** the growth loop could confidently promote OVERFITS if the forward test flattered
+itself — gross/exact fills, point-estimate calibration, regime-blind deployment, amnesiac book.
+**Mitigation (built + tested):** (a) **realistic frictions** — `costs.py` (India cash-equity
+STT/exchange/SEBI/stamp/GST estimate) + `paper_book` entry/exit slippage + **gap-through-stop**
+(4-tuple bars fill at the gap, worse than the stop); net-of-cost R is what calibration judges.
+Frictionless by default for exact unit tests; the autonomy manager runs realistic by default.
+(b) **noise-aware calibration** — `calibrate(forward_lower_R=…)` judges a conservative lower
+estimate (mean − 1 SE from `PaperBook.r_stats`), so luck can't fake an edge. (c) **regime gate**
+— `providers.current_regime` (macro_pulse/breadth) makes `grow_one_day` stand down NEW paper
+deployments in RISK_OFF/NARROW tape (existing positions still managed); demote-only, fails open
+to RISK_ON only when truly unknown. (d) **persistence** — `PaperBook.snapshot/restore` + an
+append-only deploy/retire **decision journal**; the brain resumes the book from
+`logs/auto_research/paper_book.json`. UI: Control Room equity-curve sparkline + recent-actions
+journal. **LIVE boundary unchanged** (paper_autopilot still barred from the live-review step).
+**Tests:** `tests/test_autonomy_enhancements.py` — 14 (cost scaling; frictionless-exact vs
+cost/slippage-reduced R; gap-through-stop worse / gap-through-target better; noise-aware flip to
+OVERFIT + r_stats lower<mean; regime RISK_OFF blocks deploy / RISK_ON allows; book snapshot +
+manager save/load journal + brain resumes book; live boundary holds).
+
 ## C-23 · Growth engine: backtest → forward-test → calibrate → remember (daily, paper-only)
 **Class:** ARCHITECTURE / research-quality · **Status:** ADDED · 2026-07-30
 **Reality (user directive):** make the paper autopilot trade each day and actually get

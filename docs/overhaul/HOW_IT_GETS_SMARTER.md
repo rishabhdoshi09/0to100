@@ -68,8 +68,28 @@ live review (`PAPER_EVALUATION → ELIGIBLE_FOR_LIVE_REVIEW` stays user-only). I
 SYNTHETIC evidence and a red data gate, so with no real market data it grows *nothing* and
 says so honestly — it never fabricates a backtest or a price to look busy.
 
+## What keeps the learning HONEST (trustworthiness layer)
+
+Smart is worthless if the forward test flatters itself — you'd just promote overfits with
+confidence. So the forward test is deliberately pessimistic:
+
+- **Realistic frictions** (`costs.py` + `paper_book.py`) — every paper trade pays an estimated
+  India cash-equity round trip (STT, exchange, SEBI, stamp, GST) plus entry/exit slippage, and
+  a stock that **gaps through the stop** fills at the gap, not the stop. Net-of-cost R is what
+  calibration judges, so a strategy can't look good on gross fills it would never get live.
+- **Noise-aware calibration** — the OVERFIT test uses a **conservative lower estimate** of the
+  forward edge (mean − 1 standard error), so a couple of lucky trades can't rescue an edge that
+  isn't statistically distinguishable from zero.
+- **Regime gate** (`providers.current_regime`) — in a RISK_OFF / NARROW tape the autopilot
+  **stands down new deployments** (existing strategies keep being judged). A momentum idea
+  shouldn't be born into a hostile regime and then blamed for failing.
+- **Persistent memory** (`paper_book` snapshot + decision journal) — the equity curve, every
+  paper trade, and every deploy/retire decision survive a restart, so the child's track record
+  and its *reasons* are auditable, not a black box.
+
 ## Where to watch it
 
-- **🛰️ Control Room** → "What it has learned" shows trust per family (backtest R vs forward R).
+- **🛰️ Control Room** → "What it has learned" (trust per family, backtest R vs forward R),
+  the **paper equity curve**, and **recent autonomy actions** (the decision journal).
 - **🧠 Research Brain** → "Grow one day now" runs a full day on demand; the thread shows every
   calibration verdict as it happens.

@@ -16,6 +16,7 @@ from research.auto_research.loop import run_cycle, CycleReport, Proposal, canoni
 from research.auto_research.learning import LearningLedger, LearningEvent
 from research.auto_research.knowledge import Knowledge, FamilyKnowledge
 from research.auto_research.growth import calibrate, Calibration
+from research.auto_research import costs
 from research.auto_research.paper_book import PaperBook, PaperPosition, ClosedTrade
 from research.auto_research.paper_autonomy import PaperAutonomyManager, PaperStrategy
 from research.auto_research.scheduler import AutoResearchBrain, BrainState, get_brain

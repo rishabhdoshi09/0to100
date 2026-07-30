@@ -189,6 +189,28 @@ def _brain_panel() -> None:
             {"k": "Active", "v": rep["active"], "d": "currently trading"},
             {"k": "Retired", "v": len(rep["retired"]), "d": "auto-dropped losers"},
         ], cols=4)
+        # equity curve — real chart, not just a number
+        curve = book.get("equity_curve") or []
+        if len(curve) >= 2:
+            st.markdown(_equity_svg(curve, book["capital"]), unsafe_allow_html=True)
+        # recent autonomy actions (the decision journal — transparent + auditable)
+        jrnl = rep.get("journal", [])
+        if jrnl:
+            items = []
+            for j in reversed(jrnl[-6:]):
+                act = j.get("action")
+                col = T.GREEN if act == "DEPLOY" else T.RED
+                extra = (f"bt {j.get('backtest_R', 0):+.2f}R" if act == "DEPLOY"
+                         else str(j.get("reason", ""))[:52])
+                items.append(
+                    f"<div style='display:flex;gap:.5rem;padding:.28rem 0;font-size:.8rem'>"
+                    f"<span style='color:{col};font-weight:700;font-family:JetBrains Mono,monospace;"
+                    f"min-width:64px'>{act}</span>"
+                    f"<span style='font-family:JetBrains Mono,monospace'>{j.get('strategy_id','')}</span>"
+                    f"<span style='color:var(--qt-muted);flex:1;text-align:right'>{extra}</span></div>")
+            st.markdown("<div class='qt-card tight'><div class='qt-eyebrow' "
+                        "style='margin-bottom:.3rem'>Recent autonomy actions</div>"
+                        + "".join(items) + "</div>", unsafe_allow_html=True)
         per = rep.get("per_strategy", {})
         if per:
             lines = []
@@ -265,3 +287,28 @@ def _daemons_panel() -> None:
 
 def _esc(s: str) -> str:
     return (str(s).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"))
+
+
+def _equity_svg(curve: list, capital: float, w: int = 640, h: int = 60) -> str:
+    """A compact inline equity sparkline with an area fill and an emphasised endpoint."""
+    lo, hi = min(curve), max(curve)
+    rng = (hi - lo) or 1.0
+    n = len(curve)
+    up = curve[-1] >= curve[0]
+    col = T.GREEN if up else T.RED
+    pts = [(i / (n - 1) * w, h - 4 - (v - lo) / rng * (h - 12)) for i, v in enumerate(curve)]
+    line = " ".join(f"{x:.1f},{y:.1f}" for x, y in pts)
+    area = f"0,{h} " + line + f" {w},{h}"
+    last = pts[-1]
+    pnl = curve[-1] - capital
+    return (
+        f"<div class='qt-card tight' style='margin-bottom:.6rem'>"
+        f"<div style='display:flex;justify-content:space-between;align-items:baseline'>"
+        f"<span class='qt-eyebrow'>Paper equity curve</span>"
+        f"<span style='font-family:JetBrains Mono,monospace;font-size:.8rem;color:{col}'>"
+        f"{pnl:+,.0f}</span></div>"
+        f"<svg viewBox='0 0 {w} {h}' preserveAspectRatio='none' "
+        f"style='width:100%;height:{h}px;display:block;margin-top:.3rem'>"
+        f"<polygon points='{area}' fill='{col}' fill-opacity='0.12'/>"
+        f"<polyline points='{line}' fill='none' stroke='{col}' stroke-width='1.6'/>"
+        f"<circle cx='{last[0]:.1f}' cy='{last[1]:.1f}' r='2.6' fill='{col}'/></svg></div>")

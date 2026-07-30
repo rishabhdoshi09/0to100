@@ -63,12 +63,16 @@ class PaperBook:
 
     def __init__(self, capital: float = 100_000.0, *, risk_per_trade_pct: float = 0.01,
                  max_position_pct: float = 0.10, max_total_risk_pct: float = 0.05,
-                 max_positions: int = 5):
+                 max_positions: int = 5, slippage_bps: float = 0.0, cost_model=None):
         self.capital = float(capital)
         self.risk_per_trade_pct = risk_per_trade_pct
         self.max_position_pct = max_position_pct
         self.max_total_risk_pct = max_total_risk_pct
         self.max_positions = max_positions
+        # frictions — default OFF (frictionless) so direct unit tests stay exact; the paper
+        # autonomy manager turns them on with realistic India cash-equity values.
+        self.slippage_bps = float(slippage_bps)      # entry+exit slippage, basis points
+        self.cost_model = cost_model                 # callable(entry, exit, qty) -> ₹
         self.open: dict[tuple, PaperPosition] = {}
         self.closed: list[ClosedTrade] = []
         self.realized_pnl = 0.0
@@ -87,6 +91,8 @@ class PaperBook:
         if not (entry > 0 and stop > 0 and entry > stop):
             self.refusals.append((symbol, "invalid entry/stop (need entry>stop>0)")); return None
 
+        # entry slippage — a buyer pays up; the fill is worse than the signal price
+        entry = entry * (1.0 + self.slippage_bps / 1e4)
         risk_amount = self.capital * self.risk_per_trade_pct
         r_unit = entry - stop
         qty = int(math.floor(risk_amount / r_unit))
@@ -113,18 +119,27 @@ class PaperBook:
 
     # ── mark-to-market: advance one bar for every open position ──────────────────
     def mark(self, bars: dict, date: str) -> list[ClosedTrade]:
-        """Advance one trading day. `bars` maps symbol -> (high, low, close). A position
-        closes STOP-first (conservative: assume the adverse level trades first), then TARGET,
-        then MAX_HOLD. Returns the trades closed on this bar."""
+        """Advance one trading day. `bars` maps symbol -> (high, low, close) OR
+        (open, high, low, close). When an open is given, a GAP THROUGH the stop fills at the
+        gap price (worse than the stop) and a gap through the target fills at the gap (better)
+        — honest to how NSE actually opens. Otherwise closes STOP-first (conservative), then
+        TARGET, then MAX_HOLD. Returns the trades closed on this bar."""
         closed_now: list[ClosedTrade] = []
         for key, pos in list(self.open.items()):
             bar = bars.get(pos.symbol)
             if bar is None:
                 continue
-            high, low, close = float(bar[0]), float(bar[1]), float(bar[2])
+            if len(bar) >= 4:
+                op, high, low, close = (float(bar[0]), float(bar[1]), float(bar[2]), float(bar[3]))
+            else:
+                op, high, low, close = (None, float(bar[0]), float(bar[1]), float(bar[2]))
             pos.bars_held += 1
             exit_price = exit_reason = None
-            if low <= pos.stop_price:                       # stop-first (conservative)
+            if op is not None and op <= pos.stop_price:      # gap DOWN through stop → worse fill
+                exit_price, exit_reason = op, "GAP_STOP"
+            elif op is not None and op >= pos.target_price:  # gap UP through target → better fill
+                exit_price, exit_reason = op, "GAP_TARGET"
+            elif low <= pos.stop_price:                      # stop-first (conservative)
                 exit_price, exit_reason = pos.stop_price, "STOP"
             elif high >= pos.target_price:
                 exit_price, exit_reason = pos.target_price, "TARGET"
@@ -137,11 +152,20 @@ class PaperBook:
 
     def _close(self, key, pos: PaperPosition, exit_price: float, reason: str,
                date: str) -> ClosedTrade:
-        pnl = (exit_price - pos.entry_price) * pos.qty
-        realized_R = (exit_price - pos.entry_price) / pos.r_unit
+        # exit slippage — a seller gets hit down
+        exit_fill = exit_price * (1.0 - self.slippage_bps / 1e4)
+        gross = (exit_fill - pos.entry_price) * pos.qty
+        cost = 0.0
+        if self.cost_model is not None:
+            try:
+                cost = float(self.cost_model(pos.entry_price, exit_fill, pos.qty))
+            except Exception:
+                cost = 0.0
+        pnl = gross - cost                                   # NET of frictions — honest
+        realized_R = pnl / (pos.qty * pos.r_unit)            # net R, comparable to expectancy
         self.realized_pnl += pnl
         t = ClosedTrade(strategy_id=pos.strategy_id, symbol=pos.symbol,
-                        entry_price=pos.entry_price, exit_price=exit_price,
+                        entry_price=pos.entry_price, exit_price=exit_fill,
                         stop_price=pos.stop_price, qty=pos.qty, entry_date=pos.entry_date,
                         exit_date=date, exit_reason=reason, realized_R=realized_R, pnl=pnl)
         self.closed.append(t)
@@ -181,6 +205,24 @@ class PaperBook:
                                    if strategy_id is None or p.strategy_id == strategy_id]),
         }
 
+    def r_stats(self, strategy_id: str | None = None) -> dict:
+        """Mean R, standard error of the mean, and a conservative lower estimate
+        (mean − 1·SE) of a strategy's realized R. The lower estimate is what noise-aware
+        calibration judges, so a couple of lucky trades can't fake an edge."""
+        rs = [t.realized_R for t in self.closed
+              if strategy_id is None or t.strategy_id == strategy_id]
+        n = len(rs)
+        if n == 0:
+            return {"n": 0, "mean_R": 0.0, "stderr_R": 0.0, "lower_R": 0.0}
+        mean = sum(rs) / n
+        if n > 1:
+            var = sum((r - mean) ** 2 for r in rs) / (n - 1)
+            se = (var ** 0.5) / (n ** 0.5)
+        else:
+            se = 0.0
+        return {"n": n, "mean_R": round(mean, 4), "stderr_R": round(se, 4),
+                "lower_R": round(mean - se, 4)}
+
     def _max_dd(self) -> float:
         peak = self.equity_curve[0] if self.equity_curve else self.capital
         mdd = 0.0
@@ -193,4 +235,25 @@ class PaperBook:
     def as_dict(self) -> dict:
         return {"capital": self.capital, "realized_pnl": round(self.realized_pnl, 2),
                 "equity": round(self.equity(), 2), "n_closed": len(self.closed),
-                "n_open": len(self.open), "stats": self.stats()}
+                "n_open": len(self.open), "stats": self.stats(),
+                "equity_curve": [round(v, 2) for v in self.equity_curve[-120:]]}
+
+    # ── persistence (the book remembers its trades across restarts) ──────────────
+    def snapshot(self) -> dict:
+        return {"capital": self.capital, "realized_pnl": self.realized_pnl,
+                "equity_curve": self.equity_curve,
+                "closed": [t.as_dict() for t in self.closed],
+                "open": [p.as_dict() for p in self.open.values()]}
+
+    def restore(self, snap: dict) -> None:
+        try:
+            self.capital = float(snap.get("capital", self.capital))
+            self.realized_pnl = float(snap.get("realized_pnl", 0.0))
+            self.equity_curve = list(snap.get("equity_curve", [self.capital])) or [self.capital]
+            self.closed = [ClosedTrade(**t) for t in snap.get("closed", [])]
+            self.open = {}
+            for p in snap.get("open", []):
+                pos = PaperPosition(**p)
+                self.open[(pos.strategy_id, pos.symbol)] = pos
+        except Exception:
+            pass                                    # corrupt snapshot ⇒ keep fresh book
