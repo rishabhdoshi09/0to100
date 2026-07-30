@@ -894,3 +894,62 @@ not-forward; no-trade: insufficient → NO_ELIGIBLE_TRADE + inactive-no-error; i
 bhav-zip → active snapshot + quarantine/dedup; headless: worker-cycle-survives-errors + restart-
 no-reapproval). Canonical suite: **841 passed**. Genuine NSE data still absent ⇒ status
 `OPERATIONAL_DATA_REQUIRED` (machinery complete; awaits a user-supplied snapshot).
+
+---
+
+## Milestone — Zerodha Kite as the primary automatic DATA provider (PAPER_AUTO)
+
+**Ask (user):** make Kite the automatic data source so routine PAPER_AUTO needs no manual bhavcopy
+uploads (file-import kept only as offline fallback + independent verification). Kite is **DATA
+ONLY** — no order/GTT/modify/cancel from the PAPER_AUTO path. Feed the EXISTING canonical provider
++ `SnapshotStore`; no new architecture. Report 5 separate states; do **not** claim
+PAPER_AUTO_OPERATIONAL on mocks; do **not** build real-money execution.
+
+**Delivered (tested):**
+- **`research/intelligence/data/kite_source.py`** — `KiteDataSource` over an INJECTED, duck-typed
+  data client (`profile` / `instruments("NSE")` / `historical(token, frm, to, "day")` only).
+  - **Session** — `session_valid()` / `require_session()` (`KiteSessionInvalid`); an invalid/expired
+    session BLOCKS refresh and leaves the last active snapshot untouched. Daily Zerodha login is the
+    only human step; no credentials stored, no auth bypassed.
+  - **Instrument master** — `refresh_instruments()` filters EQ/INDEX, reconciles vs the prior master
+    by **canonical identity** (`canonical_id`: ISIN → `exchange:tradingsymbol`, **never the token**),
+    and records added / removed / symbol_changed / token_changed. Corporate identity survives symbol
+    & token rotation.
+  - **Historical bootstrap** — `bootstrap_symbol()` fetches ONLY the missing date range per security,
+    dedups, quarantines malformed candles, and is **resumable + idempotent** via persisted per-symbol
+    history + progress (`progress_path`). Fetch is rate-limited (`RateLimiter`) with retry +
+    exponential backoff + jitter (`_fetch`, injectable sleep/clock/rng ⇒ deterministic offline).
+  - **Daily refresh** — `daily_refresh()` computes the required NSE session from the trading calendar,
+    fetches incrementally, validates, commits an **immutable snapshot**, verifies it, and activates
+    **only when FORWARD_ELIGIBLE** (`data_state.classify_tier` + freshness). Not fresh / missing
+    benchmark / verify-fail ⇒ `COMMITTED_NOT_ACTIVATED`, previous active snapshot preserved.
+- **`research/intelligence/data/kite_live.py`** — `KiteLiveOverlay` (injected feed): bounded-backoff
+  reconnect that RESTORES subscriptions, rejects out-of-order and future-dated ticks, tracks
+  per-symbol staleness (stale ⇒ block new entries, still manage exits), and **never** finalizes an
+  intraday bar as daily evidence. No order methods, no snapshot commit.
+- **Data-only boundary** — no `kite_client` / `KiteConnect` / order symbols in the intelligence
+  package code (the `TestNoOrderImports` guard now scans code only, ignoring docstrings that merely
+  name the boundary). A dedicated test asserts an order-capable client's order methods are never
+  touched on the PAPER_AUTO path.
+- **Fallback preserved** — the offline bhav file-import bridge (`from_bhav`) still works as an
+  independent verification source; Kite refresh needs no manual upload.
+
+**Tests:** `tests/test_kite_data.py` — 22 deterministic, network-free (FakeKite / FakeFeed):
+session valid/invalid; instrument reconciliation; canonical-id≠token; incremental-only download;
+rate-limiter used; retry-backs-off-then-succeeds; restart-resumes-from-progress; invalid-OHLC
+quarantined; valid-refresh-activates; missing-benchmark-blocks-eligibility; failed-refresh-preserves-
+active; reconnect-restores-subs; stale-ticks-block-entries; out-of-order/future-ticks-rejected;
+overlay-never-finalizes-daily; PAPER_AUTO-trades-from-Kite-data; no-order-API-on-path;
+data-source-uses-only-data-APIs; restart-restores-downloader-state; no-manual-upload-needed;
+manual-import-still-available. Canonical suite: **863 passed**.
+
+**Final states (honest):**
+- `KITE_DATA_CONNECTED` — **NOT connected in this environment** (no live Zerodha session / outbound
+  market network in the sandbox). Adapter + injected-client contract complete and proven offline.
+- `HISTORICAL_BOOTSTRAP_COMPLETE` — machinery complete & tested (resumable, deduped, rate-limited);
+  awaits a live session to fetch real candles.
+- `DAILY_REFRESH_OPERATIONAL` — machinery complete & tested (calendar-driven incremental → verified
+  immutable snapshot → tier-gated activation); awaits a live session.
+- `LIVE_FEED_OPERATIONAL` — overlay logic complete & tested; awaits a live KiteTicker feed.
+- `PAPER_AUTO_OPERATIONAL` — **NOT claimed on mocks.** The loop trades automatically from valid
+  Kite-fed data in tests; genuine PAPER_AUTO requires a real activated Kite snapshot.
