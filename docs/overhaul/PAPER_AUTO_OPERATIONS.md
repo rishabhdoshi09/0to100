@@ -3,7 +3,33 @@
 How to run QuantTerm's autonomous paper-trading loop on genuine NSE data. Documents only the
 existing system. Routine trades are automatic — you never approve individual paper trades.
 
-## 1. Required genuine NSE files
+## 0. Automatic data via Zerodha Kite (the normal path)
+
+Once you complete your **normal daily Zerodha login**, QuantTerm fetches and maintains its own
+genuine market data — no manual bhavcopy upload is needed. One call runs the whole activation:
+
+```python
+from research.intelligence.data.kite_activation import activate
+report = activate()                 # data-only view of your session → snapshot → live overlay → worker
+print(report.render())              # 8 separate PASS / FAIL / PENDING_MARKET_SESSION / PARTIAL states
+```
+
+What it does, end to end: builds a **data-only** view of your authenticated session (profile /
+instruments / historical only — no order/GTT/modify/cancel is reachable), reconciles the NSE
+instrument master by canonical identity, fetches only the missing daily ranges (rate-limited, with
+retry/backoff/jitter, resumable), commits an **immutable snapshot**, verifies it, and **activates it
+only when FORWARD_ELIGIBLE**. It then wires the `KiteLiveOverlay` to KiteTicker and starts the
+existing background worker. Nothing is logged that could leak a secret, token or auth header.
+
+- **Market closed at activation?** History bootstrap + snapshot activation + a genuine daily-data
+  cycle still run; `LIVE_FEED_CONNECTED` reports `PENDING_MARKET_SESSION` (live tick observation
+  resumes next session). Fake ticks are never substituted.
+- **Session expired / not logged in?** `KITE_SESSION_CONNECTED` is `FAIL`, the previous active
+  snapshot is preserved, and no unsafe new entries are opened — re-run the daily login.
+- The **file-import path (§1–§3 below) remains** as an offline fallback and an independent
+  verification source; it is not needed for routine operation.
+
+## 1. Required genuine NSE files (offline fallback only)
 - **Daily equity bhavcopy** (one file per session), any of the supported forms: `.csv`,
   `.csv.gz`, `.csv.zip`, a `.zip` of CSVs, or a **zip-of-zips** (e.g. NSE's
   `BhavCopy_NSE_CM_0_0_0_YYYYMMDD_F_0000.csv.zip` inside a daily package). Nested archives are

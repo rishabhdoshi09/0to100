@@ -953,3 +953,50 @@ manual-import-still-available. Canonical suite: **863 passed**.
 - `LIVE_FEED_OPERATIONAL` — overlay logic complete & tested; awaits a live KiteTicker feed.
 - `PAPER_AUTO_OPERATIONAL` — **NOT claimed on mocks.** The loop trades automatically from valid
   Kite-fed data in tests; genuine PAPER_AUTO requires a real activated Kite snapshot.
+
+---
+
+## Milestone — Real Zerodha data activation (offline-certified machinery → connected runtime)
+
+**Ask (user):** turn the certified Kite data machinery (commit `38d4d0c`) into a genuinely
+connected, unattended PAPER_AUTO runtime driven by the user's normal daily Zerodha login. No new
+architecture/providers/strategies/indicators/broker-execution/dashboards/research subsystems — pure
+wiring. Data-only boundary preserved (no order API reachable). Report 8 separate states; do **not**
+claim `PAPER_AUTO_REAL_DATA_OPERATIONAL` on fake clients.
+
+**Delivered (tested):**
+- **`research/intelligence/data/kite_activation.py`** — the activation wiring (no new subsystem):
+  - **`KiteDataClient`** — a DATA-ONLY facade over the existing authenticated session, exposing
+    exactly `profile` / `instruments` / `historical`. Order/GTT/modify/cancel are physically absent;
+    `from_config()` loads the app's order-capable client **by string** (never importing an order
+    symbol into the intelligence package) and wraps only its raw data surface. Nothing logged.
+  - **`KiteTickerFeed`** — bridges a live KiteTicker to `KiteLiveOverlay`'s duck-typed feed
+    contract; translates ticks to `on_tick` with **Asia/Kolkata-correct epoch** timestamps; restores
+    approved subscriptions on (re)connect. No order surface.
+  - **`activate(...)`** — runs the sequence *session → instrument master → bounded historical
+    bootstrap/refresh → verified immutable snapshot → tier-gated atomic activation → live overlay
+    handshake → headless worker → genuine-data cycle* and reports 8 states, each
+    `PASS/FAIL/PENDING_MARKET_SESSION/PARTIAL` with a concrete reason. Explicit cycle runs before the
+    background worker starts (no intel-lock race). On any hard failure the previous active snapshot
+    is preserved and unsafe new entries stay blocked; nothing is fabricated. Market-closed →
+    `LIVE_FEED_CONNECTED = PENDING_MARKET_SESSION`. `PAPER_AUTO_REAL_DATA_OPERATIONAL` is asserted
+    ONLY from a genuinely active, FORWARD_ELIGIBLE, Kite-sourced snapshot with the worker running and
+    a real cycle decided on it.
+- **`kite_source.py`** (additive, signatures unchanged) — per-refresh quality counters
+  (invalid-OHLC, future-bars, token/symbol changes, unresolved, date range, tier) surfaced on
+  `RefreshReport` so activation reports genuine data-identity/quality faithfully.
+- **Runbook** — `docs/overhaul/PAPER_AUTO_OPERATIONS.md` §0: the one-call automatic-data path,
+  market-closed and expired-session behavior, and the file-import path demoted to offline fallback.
+
+**Tests:** `tests/test_kite_activation.py` — 10 deterministic, network-free (FakeKite/FakeTicker/
+FakeSession + a real brain on the same store): full activation → all 8 PASS; invalid session → all
+FAIL + previous active preserved; market-closed → live feed PENDING; no-feed → PENDING; not-eligible
+(no benchmark) → snapshot not activated + active preserved + real-data FAIL; headless worker starts +
+persistent enable; data-only client hides order methods; KiteTicker feed maps symbols + restores on
+reconnect + IST timestamps + rejects future/out-of-order ticks. Canonical suite: **873 passed**.
+
+**Final states (this environment has no live Zerodha token → connection states cannot PASS here):**
+`KITE_SESSION_CONNECTED` FAIL (no token) → all downstream FAIL, previous active preserved, nothing
+fabricated. The PASS path for all 8 states is exercised only by the fake-client unit tests, which are
+**not** counted as real-data operation. On the user's deployment, one normal daily login flips these
+to PASS automatically.

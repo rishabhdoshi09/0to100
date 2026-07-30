@@ -112,10 +112,17 @@ class RefreshReport:
     snapshot_id: str | None = None
     activated: bool = False
     symbols: int = 0
+    unresolved: int = 0
     candles_fetched: int = 0
-    quarantined: int = 0
+    quarantined: int = 0            # malformed candles dropped during fetch
+    invalid_ohlc: int = 0           # subset: OHLC-consistency failures
+    future_bars: int = 0            # candles beyond the required session, dropped
     duplicates: int = 0
     benchmark_ok: bool = False
+    token_changes: int = 0
+    symbol_changes: int = 0
+    tier: str = ""
+    date_range: tuple | None = None
     incidents: list = field(default_factory=list)
     reason: str = ""
 
@@ -143,6 +150,9 @@ class KiteDataSource:
         self.rng = rng or _r.Random(0)
         self.max_retries = max_retries
         self.master: dict = {}
+        self.last_changes: dict = {}                    # instrument reconciliation deltas
+        self._q_invalid = 0                             # malformed candles this refresh
+        self._q_future = 0                              # future-dated candles this refresh
         self._progress: dict = self._load_progress()
 
     # ── session ────────────────────────────────────────────────────────────────────
@@ -165,6 +175,7 @@ class KiteDataSource:
                    or str(i.get("name", "")).upper() == self.benchmark_name.upper())]
         prev = {r["canonical_id"]: r for r in self.master.values()} if self.master else {}
         self.master, changes = reconcile_instruments(eq, prev)
+        self.last_changes = changes
         return {"n": len(self.master), "changes": changes,
                 "benchmark_resolvable": self._benchmark_token() is not None}
 
@@ -202,10 +213,12 @@ class KiteDataSource:
         added = 0
         for c in candles:
             d = _iso(c.get("date"))
-            if d in hist or d < frm or d > want_to:
+            if d > want_to:
+                self._q_future += 1; continue            # future-dated: never stored
+            if d in hist or d < frm:
                 continue                                 # dedup + range guard
             if not _valid_candle(c):
-                continue                                 # quarantine malformed
+                self._q_invalid += 1; continue           # quarantine malformed
             hist[d] = [float(c["open"]), float(c["high"]), float(c["low"]),
                        float(c["close"]), int(float(c.get("volume", 0)))]
             added += 1
@@ -223,7 +236,10 @@ class KiteDataSource:
             rep.status = "BLOCKED"; rep.reason = "kite session invalid"
             rep.incidents.append({"severity": "CRITICAL", "code": "AUTH_INVALID"})
             return rep                                   # last active snapshot preserved untouched
+        self._q_invalid = 0; self._q_future = 0          # per-refresh quality counters
         self.refresh_instruments()
+        rep.token_changes = len(self.last_changes.get("token_changed", []))
+        rep.symbol_changes = len(self.last_changes.get("symbol_changed", []))
         required = CAL.latest_required_session(now or CAL._now_ist(), CAL.load_holidays())
         want_to = required.isoformat()
         want_from = (required - timedelta(days=400)).isoformat()
@@ -245,7 +261,14 @@ class KiteDataSource:
                 else:
                     equity_rows.append((rec["tradingsymbol"], d, o, h, l, c, v, "EQ"))
         rep.symbols = len({r[0] for r in equity_rows})
+        rep.unresolved = max(0, len(self.master) - rep.symbols - (1 if index_rows else 0))
+        rep.invalid_ohlc = self._q_invalid
+        rep.future_bars = self._q_future
+        rep.quarantined = self._q_invalid
         rep.benchmark_ok = bool(index_rows)
+        if equity_rows:
+            _ds = [r[1] for r in equity_rows]
+            rep.date_range = (min(_ds), max(_ds))
         if CAL.has_duplicate_sessions(equity_rows):
             rep.status = "BLOCKED"; rep.reason = "duplicate sessions detected"; return rep
         if not equity_rows:
@@ -265,6 +288,7 @@ class KiteDataSource:
         health = dict(self.store.open_snapshot(sid).health()) if ok else {}
         health["freshness_days"] = 0.0 if CAL.snapshot_freshness(want_to, now=now)["fresh"] else 999.0
         tier, tier_reasons = DS.classify_tier(health)
+        rep.tier = tier
         if ok and DS.forward_eligible(tier):
             self.store.activate_snapshot(sid, actor="system", reason="kite daily refresh")
             rep.activated = True
