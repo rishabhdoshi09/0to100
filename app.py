@@ -920,8 +920,8 @@ def _nav_intent(top: str):
             horizontal=True, label_visibility="collapsed", key="markets_sub")
         return ({"📈 Stocks": "Institutional", "🎯 Options": "Options Flow",
                  "🇺🇸 US": "US Scanner"}.get(_sub, "Institutional"), _sub)
-    return ({"Pulse": "Daily Pulse", "Autopilot": "Autopilot",
-             "JARVIS": "JARVIS"}.get(top, top), None)
+    return ({"Control": "Control Room", "Pulse": "Daily Pulse",
+             "Autopilot": "Autopilot", "JARVIS": "JARVIS"}.get(top, top), None)
 
 
 def _apply_nav(top: str) -> str:
@@ -1193,8 +1193,8 @@ with st.sidebar:
 
         _nav_page_raw = _option_menu(
             menu_title=None,
-            options=["Pulse", "Markets", "Autopilot", "JARVIS"],
-            icons=["newspaper", "graph-up", "cpu", "robot"],
+            options=["Control", "Pulse", "Markets", "Autopilot", "JARVIS"],
+            icons=["broadcast-pin", "newspaper", "graph-up", "cpu", "robot"],
             menu_icon=None,
             default_index=0,
             styles={
@@ -1212,7 +1212,7 @@ with st.sidebar:
     except Exception:
         # Fallback radio if option_menu unavailable
         _nav_raw = st.radio(
-            "Navigate", ["Pulse", "Markets", "Autopilot", "JARVIS"], index=0,
+            "Navigate", ["Control", "Pulse", "Markets", "Autopilot", "JARVIS"], index=0,
             label_visibility="collapsed", key="sidebar_nav_radio",
         )
         _nav_page = _apply_nav(_nav_raw)
@@ -1737,6 +1737,16 @@ elif _page in ("Terminal", "Analyse"):
 
 # ══════════════════════════════════════════════════════════════════════════════
 # PAGE: RESEARCH
+# ══════════════════════════════════════════════════════════════════════════════
+elif _page == "Control Room":
+    # 🛰️ One screen: what the system is doing right now — vitals, the brain's live
+    # reasoning, paper-autonomy book, daemon health. Read-only, places no orders.
+    try:
+        from ui.control_room import render_control_room
+        render_control_room()
+    except Exception as _cr_exc:
+        st.error(f"Control Room unavailable: {_cr_exc}")
+
 # ══════════════════════════════════════════════════════════════════════════════
 elif _page == "Historical Data Setup":
     # Data-management page: load/validate real NSE history, save into the canonical
