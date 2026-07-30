@@ -440,3 +440,43 @@ no self-rewriting strategies, no unrestricted RL, no service extraction/portfoli
 
 **Limitation (honest):** without a research-grade dataset the Studio shows labelled
 DEMONSTRATION fixtures only — never market evidence; a strategy cannot be approved on them.
+
+---
+
+## Milestone — Autonomous Research Brain (self-driving research loop)
+
+**Ask (user):** "no proper automation… market ko khud hi data lekar uska chain of thoughts/
+analysis karke ek data thread banakar uske hisab se trade improve karna chahiye. System ko
+khud hi smart banna padega apne-aap se without any human intervention."
+
+**Built (`research/auto_research/`, pure + tested):**
+- `thread.py` — append-only `ResearchThread` (chain-of-thought log; OBSERVE/REASON/DECIDE/
+  PROPOSE/CONCLUDE), deterministic content, JSONL persistence, torn-line-safe, wall-clock
+  only as provenance.
+- `loop.py` — `run_cycle()`: observe readiness → generate → reason (structural + evidence)
+  → reject weak → shortlist → auto-advance lifecycle (SYSTEM hops) to the ONE gate
+  `AWAITING_USER_APPROVAL` and STOP. Honest `Discovery unavailable …` when data isn't
+  research-grade; synthetic evidence never becomes a proposal. `canonical_readiness()`
+  fails closed to red. Report carries `acted_on_market=False` / `approved_anything=False`.
+- `learning.py` — `LearningLedger`: per-family decay/improvement across cycles; proposes
+  re-tested child versions (`bump_version` → new hash) for decayed families; advice only,
+  never mutates an active strategy, ignores synthetic.
+- `scheduler.py` — `AutoResearchBrain`: headless daemon running cycles on an interval,
+  threading thread+ledger+registry across cycles, surviving errors; `run_once()` is
+  synchronous/deterministic for tests + the UI button.
+- `ui/auto_research_page.py` — read-only "watch it think" panel (thread, parked proposals,
+  learning), think-once / start / pause; NO order actions, cannot approve. Wired into
+  app.py More Tools + dispatch as "🧠 Research Brain".
+
+**The one deliberate boundary (by the project's own safety directives):** the brain does the
+entire research loop autonomously and parks its best ideas at `AWAITING_USER_APPROVAL`.
+Approving for PAPER is a **person's** action in Strategy Studio; LIVE stays migration-locked.
+Real-money autonomy is intentionally NOT granted.
+
+**Tests:** `tests/test_auto_research.py` — 21 passed (deterministic, network-free): thread
+append-only/kinds/reload/torn-line/stamp-not-identity; no-data honesty + canonical fallback;
+autonomous reasoning/reject/propose + determinism + no-evaluator survival; safety boundary
+(never acts/approves, synthetic never proposed, system-only gate walk, user-only step
+raises); learning improvement→decay + synthetic-ignored + re-tested child never mutates
+parent; scheduler accumulation + red-data + learning-note-to-thread; canonical readiness
+fails closed. Canonical `python -m pytest` — **646 passed**.

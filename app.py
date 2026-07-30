@@ -165,6 +165,15 @@ if "monitor_started" not in st.session_state:
         start_us_loop()
     except Exception:
         pass
+    # 🧠 Autonomous Research Brain — studies the market on its own, reasons in the
+    # open, rejects weak ideas, and PARKS proposals at the human-approval gate. It
+    # never approves, activates, or trades; with no research-grade data it honestly
+    # concludes "unavailable". Safe to run hands-off.
+    try:
+        from research.auto_research.scheduler import get_brain
+        get_brain().start()
+    except Exception:
+        pass
 
 # ── Cached client initialisation ─────────────────────────────────────────────
 @st.cache_resource
@@ -1218,6 +1227,7 @@ with st.sidebar:
             ("Research",          "🔬 Research"),
             ("Historical Data Setup", "🗂️ Historical Data Setup"),
             ("Strategy Studio",   "🧪 Strategy Studio"),
+            ("Research Brain",    "🧠 Research Brain"),
             ("Tools",             "🛠️ Tools"),
         ]
         for _mt_key, _mt_label in _more_tools:
@@ -1744,6 +1754,18 @@ elif _page == "Strategy Studio":
     except Exception as _ss_exc:
         st.error(f"Strategy Studio unavailable: {_ss_exc}")
         st.caption("See docs/user-guide/STRATEGY_STUDIO.md for the guide.")
+
+# ══════════════════════════════════════════════════════════════════════════════
+elif _page == "Research Brain":
+    # Autonomous Research Brain: runs the whole research loop by itself (generate →
+    # reason → reject → propose) and parks its best ideas at the human gate. RESEARCH
+    # ONLY: no order actions, cannot approve anything, LIVE stays migration-locked.
+    try:
+        from ui.auto_research_page import render_auto_research
+        render_auto_research()
+    except Exception as _arb_exc:
+        st.error(f"Research Brain unavailable: {_arb_exc}")
+        st.caption("See docs/overhaul/AUTO_RESEARCH_BRAIN.md for details.")
 
 # ══════════════════════════════════════════════════════════════════════════════
 elif _page == "Research":

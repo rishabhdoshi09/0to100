@@ -272,6 +272,30 @@ data limitations are one-directional favourable (survivorship); a CA-raw (either
 limitation downgrades a FAIL to INCONCLUSIVE. No EXP-006 threshold/feature/config-hash
 changed.
 
+## C-21 · Autonomous Research Brain: full self-driving research loop, one human gate
+**Class:** ARCHITECTURE / safety · **Status:** ADDED · 2026-07-30
+**Reality (user ask):** the system had no self-running automation — a human had to press
+every button. Request: it should study the market on its own, reason in the open, build a
+"data thread", reject weak ideas, and improve trades WITHOUT human intervention.
+**Mitigation (built + tested, `research/auto_research/`):** a headless brain runs the whole
+loop by itself — `loop.run_cycle()` observes data readiness → generates grammar candidates
+→ reasons through each (structural leakage/complexity/PIT + evidence sample/concentration/
+cost/drawdown) → REJECTS the weak ones → shortlists survivors → auto-advances the lifecycle
+using **SYSTEM-only** transitions up to exactly **one** gate, `AWAITING_USER_APPROVAL`, and
+**stops**. Every step is written to an **append-only** `ResearchThread` (JSONL, deterministic
+content, wall-clock only as provenance) so a human can watch it think. `LearningLedger`
+tracks per-family **decay vs improvement** across cycles and PROPOSES re-tested child
+versions (`bump_version` → new config hash, old evidence never transfers) — proposals only,
+never mutations of an active strategy. `scheduler.AutoResearchBrain` runs cycles on an
+interval, surviving errors, sharing memory across cycles. **Safety proven by tests:** the
+cycle report carries `acted_on_market=False` / `approved_anything=False` always; `_advance_
+to_gate` uses only actor="system" hops and the step beyond the gate raises `LifecycleError`
+for system (user-only); **synthetic** evidence is never presented as market evidence and
+never becomes a proposal; **no research-grade data ⇒ honest `Discovery unavailable …`** and
+zero proposals (fails closed to red). No module imports an order path; `ui/auto_research_
+page.py` is read-only (approval still happens by a person in Strategy Studio); PAPER
+autopilot, Telegram paper-only and the LIVE migration lock are unchanged.
+
 ## C-20 · Strategy Studio: autonomous discovery is research-only, user-gated
 **Class:** ARCHITECTURE / safety · **Status:** ADDED · 2026-07-28
 **Risk:** an autonomous strategy generator could silently implement / paper-deploy /
