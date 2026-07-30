@@ -37,6 +37,10 @@ def _cards():
         return []
 
 
+def _fam(s: str) -> str:
+    return str(s).replace("_", " ").title()
+
+
 def _empty(msg: str) -> None:
     st.markdown(f"<div class='qt-card' style='color:var(--qt-muted);text-align:center;"
                 f"padding:1.6rem'>{msg}</div>", unsafe_allow_html=True)
@@ -48,13 +52,15 @@ def render_brain_observatory() -> None:
                "risk. They talk only through immutable evidence records. **Paper-only — the "
                "live door is user-owned.**")
     _loop_status()
-    t1, t2, t3 = st.tabs(["🤖 Automatic Strategies", "🧠 The Two Brains",
-                          "🎓 Live Review Candidates"])
+    t1, t2, t3, t4 = st.tabs(["🤖 Automatic Strategies", "🧠 The Two Brains",
+                              "📋 Strategy Coverage", "🎓 Live Review Candidates"])
     with t1:
         _automatic_strategies()
     with t2:
         _two_brains()
     with t3:
+        _strategy_coverage()
+    with t4:
         _live_review()
 
 
@@ -156,6 +162,42 @@ def _two_brains() -> None:
                 st.markdown(f"- <b style='color:{col}'>{j.get('action')}</b> "
                             f"`{j.get('strategy_id','')}` ({j.get('family','')})",
                             unsafe_allow_html=True)
+
+
+def _strategy_coverage() -> None:
+    """Which registered strategies the runtime supports, and the exact missing component when
+    not — so a strategy is never silently inactive (Phase 18)."""
+    T.section("Strategy coverage", eyebrow="Registry",
+              sub="Registered · runtime-supported · why unsupported. No silent inactivity.")
+    try:
+        from research.intelligence import strategy_runtime as RT
+        supported = set(RT.supported_families())
+    except Exception:
+        supported = set()
+    st.markdown("**Runtime-supported families:** "
+                + (", ".join(f"`{f}`" for f in sorted(supported)) or "_none_"))
+    # the production registry is populated once real frozen specs + data exist; until then we
+    # show family-level coverage honestly.
+    try:
+        from research.strategy_studio import grammar as G
+        families = sorted(G.FAMILY_BLOCKS)
+    except Exception:
+        families = []
+    rows = []
+    for fam in families:
+        ok = fam in supported
+        dot = "ok" if ok else "off"
+        why = "" if ok else "runtime adapter missing"
+        rows.append(f"<div style='display:flex;align-items:center;gap:.6rem;padding:.38rem 0;"
+                    f"border-bottom:1px solid var(--qt-border)'>"
+                    f"<span class='qt-dot {dot}'></span>"
+                    f"<span style='flex:1;font-size:.86rem'>{_fam(fam)}</span>"
+                    f"<span style='font-size:.74rem;color:var(--qt-muted)'>"
+                    f"{'bar-by-bar supported' if ok else why}</span></div>")
+    st.markdown("<div class='qt-card tight'>" + "".join(rows) + "</div>",
+                unsafe_allow_html=True)
+    st.caption("Unsupported families fail loudly in the runtime and never fall back to scanner "
+               "signals. Adding an adapter makes a family paper-eligible once data is loaded.")
 
 
 def _live_review() -> None:

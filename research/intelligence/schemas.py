@@ -142,6 +142,7 @@ class StrategyEvidenceCard(_Base):
     evidence_freshness_days: float = 0.0
     decay_detected: bool = False
     overfit: bool = False
+    dataset_tier: str = ""              # OPERATIONAL_ONLY … FORWARD_ELIGIBLE (Phase 19)
     lifecycle_recommendation: str = ""
     supporting_reasons: tuple = ()
     conflicting_reasons: tuple = ()

@@ -171,25 +171,24 @@ def _evaluate_strategies(ctx, store, book, state, res) -> dict:
         ctx_prov = {"strategy_id": sid, "strategy_version": spec.version,
                     "rules_hash": spec.config_hash(), "data_snapshot_id": ctx.data_snapshot_id,
                     "event_ts": ctx.as_of_date}
-        for symbol, history in sym_hist.items():
-            try:
-                sigs = RT.entries_for(spec, symbol, history)     # point-in-time, chronological
-            except RT.UnsupportedStrategy:
-                continue
-            fired = [s for s in sigs if s.get("date") == ctx.as_of_date]  # only TODAY's entry
-            if not fired:
-                EV.emit(store, ctx.cycle_id(), EV.SIGNAL_REJECTED, strategy_id=sid,
-                        symbol=symbol, reason="no qualifying setup today",
-                        event_ts=ctx.as_of_date)
-                continue
-            sig = fired[0]
+        # unified interface: single-symbol adapters loop the universe, cross-sectional rank it
+        try:
+            fired = RT.signals(spec, ctx.as_of_date, sym_hist,
+                               benchmark=getattr(ctx, "benchmark", None))
+        except RT.UnsupportedStrategy:
+            fired = []
+        if not fired:
+            EV.emit(store, ctx.cycle_id(), EV.SIGNAL_REJECTED, strategy_id=sid,
+                    reason="no qualifying setup today", event_ts=ctx.as_of_date)
+            continue
+        for sig in fired:
             for rec in REG.decode("signal", sig, ctx=ctx_prov):
                 store.append(rec)
-            EV.emit(store, ctx.cycle_id(), EV.SIGNAL_GENERATED, strategy_id=sid, symbol=symbol,
-                    event_ts=ctx.as_of_date,
+            EV.emit(store, ctx.cycle_id(), EV.SIGNAL_GENERATED, strategy_id=sid,
+                    symbol=sig["symbol"], event_ts=ctx.as_of_date,
                     summary={"entry": sig["entry"], "stop": sig["stop"], "target": sig["target"]})
-            res.signals_generated.append((sid, symbol))
-            today.setdefault(sid, sig)
+            res.signals_generated.append((sid, sig["symbol"]))
+        today[sid] = fired                          # ranked; the loop opens the top pick
     return today
 
 
@@ -205,7 +204,8 @@ def _run_brain1(ctx, store, book, res, backtest_R, backtest_trades) -> list:
         fwd = [t.realized_R for t in book.closed if t.strategy_id == sid]
         card = EB.build_card(sdef, backtest_R=float(backtest_R.get(sid, 0.0)),
                              forward_returns=fwd, out_of_sample_trades=len(fwd),
-                             in_sample_trades=int(backtest_trades.get(sid, 0)))
+                             in_sample_trades=int(backtest_trades.get(sid, 0)),
+                             dataset_tier=getattr(ctx, "dataset_tier", ""))
         new = store.append(card)                          # idempotent: same evidence ⇒ same id
         EV.emit(store, ctx.cycle_id(),
                 EV.EVIDENCE_CARD_CREATED if new else EV.EVIDENCE_CARD_UPDATED,
@@ -244,7 +244,8 @@ def _open_new_positions(ctx, store, book, state, res, decisions, today_signals, 
                    and d.target_risk_pct > 0]
     deployables.sort(key=lambda d: d.score, reverse=True)
     for d in deployables:
-        sig = today_signals.get(d.strategy_id)
+        sigs = today_signals.get(d.strategy_id) or []
+        sig = sigs[0] if sigs else None                  # top-ranked entry (one/strategy/cycle)
         if sig is None:
             continue                                     # no live entry today → nothing to open
         spec = next((s for s in ctx.strategies if s.strategy_id == d.strategy_id), None)

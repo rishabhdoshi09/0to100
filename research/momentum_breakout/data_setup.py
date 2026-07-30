@@ -25,6 +25,7 @@ from pathlib import Path
 MAX_ZIP_ENTRIES = 20000
 MAX_TOTAL_UNCOMPRESSED = 4 * 1024 * 1024 * 1024      # 4 GiB hard cap
 MAX_COMPRESSION_RATIO = 200                          # per-entry bomb guard
+MAX_ARCHIVE_DEPTH = 4                                # recursive nesting limit (zip-of-zips)
 # Only these content families are accepted (validated by content, not name alone).
 _BHAV_COLS = {"SYMBOL", "SERIES", "OPEN_PRICE", "HIGH_PRICE", "LOW_PRICE",
               "CLOSE_PRICE", "TTL_TRD_QNTY"}
@@ -71,11 +72,13 @@ def _classify_entry(name: str) -> str | None:
     return None
 
 
-def safe_extract_zip(zip_source, dest_dir) -> ExtractReport:
+def safe_extract_zip(zip_source, dest_dir, _depth: int = 0) -> ExtractReport:
     """Extract a data package into `dest_dir`, defending against path traversal,
     symlinks, decompression bombs and unsupported files. Validates by CONTENT family
     (see `_classify_entry`), never by trusting the raw name. `zip_source` is a path or
-    a bytes/file-like object."""
+    a bytes/file-like object. RECURSES into nested archives (`.zip`, `.gz`, and the common
+    NSE `BhavCopy_*.csv.zip` / `.csv.gz` members) up to `MAX_ARCHIVE_DEPTH`."""
+    import gzip as _gzip
     dest = Path(dest_dir)
     dest.mkdir(parents=True, exist_ok=True)
     rep = ExtractReport(ok=True)
@@ -99,6 +102,29 @@ def safe_extract_zip(zip_source, dest_dir) -> ExtractReport:
                 rep.rejected.append((name, "unsafe path (traversal/absolute)")); continue
             if (info.external_attr >> 16) & 0o170000 == 0o120000:
                 rep.rejected.append((name, "symlink not allowed")); continue
+            low = name.lower()
+            # ── nested archives: recurse (the BhavCopy_*.csv.zip real-world case) ──
+            if low.endswith(".zip"):
+                if _depth >= MAX_ARCHIVE_DEPTH:
+                    rep.rejected.append((name, "archive nesting too deep")); continue
+                try:
+                    inner_bytes = zf.read(info)              # RuntimeError if encrypted
+                except RuntimeError:
+                    rep.rejected.append((name, "password-protected archive not supported")); continue
+                except Exception as exc:
+                    rep.rejected.append((name, f"corrupt member: {exc}")); continue
+                sub_rep = safe_extract_zip(_io.BytesIO(inner_bytes), dest, _depth=_depth + 1)
+                rep.extracted += sub_rep.extracted; rep.rejected += sub_rep.rejected
+                continue
+            if low.endswith(".gz"):                          # incl. .csv.gz
+                try:
+                    dec = _gzip.decompress(zf.read(info))
+                except RuntimeError:
+                    rep.rejected.append((name, "password-protected archive not supported")); continue
+                except Exception as exc:
+                    rep.rejected.append((name, f"bad gzip member: {exc}")); continue
+                loose.append((Path(name).name[:-3], dec))    # strip .gz → content-classify
+                continue
             sub = _classify_entry(name)
             if sub is None:
                 rep.rejected.append((name, "unsupported file")); continue

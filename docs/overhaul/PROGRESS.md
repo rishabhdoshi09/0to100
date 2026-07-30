@@ -678,3 +678,46 @@ paused opens nothing; unsupported-family event; duplicate-symbol block; restart 
 completed-cycle no-op; unreconciled refuses new risk; owner close-all audit event; set-mode
 rejects live; scheduler no-op without registry; intel book separate from legacy). Canonical
 suite: **742 passed**.
+
+---
+
+## Milestone — Production Data Activation & Strategy Runtime Expansion (partial, honest)
+
+**Ask (user):** unblock the loop with production NSE data ingestion, a populated strategy
+registry, more genuine bar-by-bar strategy families, evidence tiers/data states, and real
+forward evidence. Audit first (PRODUCTION_DATA_ACTIVATION.md), reuse existing infra.
+
+**Delivered (tested):**
+- **Phase 0** audit: `docs/overhaul/PRODUCTION_DATA_ACTIVATION.md` (reuse map + exact NSE-package
+  failure reasons + implementation order).
+- **Phase 12** four new genuine adapters in `research/intelligence/strategy_runtime.py`:
+  `trend_following`, `pullback` (single-symbol) + `cross_sectional_momentum`, `relative_strength`/
+  `sector_rotation` (cross-sectional ranking), plus PIT feature helpers (SMA/EMA/ATR/return) and a
+  unified `signals(spec, as_of, universe, benchmark)` dispatch. Unsupported families still fail loud;
+  no scanner fallback. Runtime supports 7 families now (was 2).
+- **Phase 11** `registry.py` — production strategy registry with startup validation (unknown family,
+  missing adapter, duplicate id/hash, bad params) → disable-with-reason, never crash; `deployable_specs()`.
+- **Phases 16/19** `data_state.py` — data operating states (NO_DATA…FAILED, partial-degradation
+  isolation) + evidence tiers (OPERATIONAL_ONLY…FORWARD_ELIGIBLE); tier stamped on Evidence Cards and
+  flagged as a limitation when not forward-eligible.
+- **Phase 21 (nested archives)** `data_setup.safe_extract_zip` now RECURSES into `.zip`/`.csv.zip`/
+  `.gz`/`.csv.gz` members up to a depth limit, with password-protected rejection and corrupt-member
+  quarantine — fixes the real `BhavCopy_*_F_0000.csv.zip` failure.
+- **Loop wiring** — the cycle now calls `RT.signals` (cross-sectional-capable) and stamps the dataset
+  tier on cards; a fixture end-to-end (registry → momentum signal → Brain 1 → Brain 2 → intent → gate →
+  paper position) is proven.
+- **Phase 18 UI** — Brain Observatory "Strategy Coverage" tab (runtime-supported vs why-unsupported).
+
+**Not done — honest, and safe (production stays no-op until these land, by design):** full
+ingestion breadth + per-file classification report + row-level quarantine severity engine (Phases 2–4);
+immutable snapshot store / incremental successors / snapshot pinning (Phases 8–9) — the existing
+`snapshot_manifest` is reused but the immutable versioned store is next; deeper CA-leakage/survivorship
+protections beyond existing `corporate_actions` + `point_in_time_universe`; production bar provider
+reading a validated snapshot + `intel_registry_fn` wiring (Phase 10 — the loop runs on a fixture ctx
+today, not a live snapshot); scheduler job split (Phase 15); performance/scale (Phase 22); the full
+Historical Data Setup UI overhaul (Phase 17); and the remaining Phase-21 weakness matrix. These are the
+next increment and are documented so nothing over-claims.
+
+**Tests:** `tests/test_production_data.py` — 17 (new adapters PIT/deterministic/loud-unsupported;
+registry validation; data-state/tier classification + card tier flag; nested `.csv.zip`/`.gz`/
+zip-of-zips ingestion; fixture end-to-end momentum→paper position). Canonical suite: **759 passed**.

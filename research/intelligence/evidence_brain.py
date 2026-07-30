@@ -62,13 +62,18 @@ def build_card(strategy_def: SC.StrategyDefinition, *, backtest_R: float,
                sector_shares: dict | None = None, correlation_cluster: str = "",
                evidence_freshness_days: float = 0.0, data_quality_warnings=(),
                benchmark_returns: list | None = None,
-               n_search_attempts: int = 1) -> SC.StrategyEvidenceCard:
+               n_search_attempts: int = 1, dataset_tier: str = "") -> SC.StrategyEvidenceCard:
     """Produce the immutable evidence card. `forward_returns` are realized R multiples from
     out-of-sample PAPER trades (never synthetic)."""
     fs = _r_stats(list(forward_returns or []))
     n_fwd = fs["n"]
     regime_returns = regime_returns or {}
-    warns = tuple(data_quality_warnings or ())
+    warns = list(data_quality_warnings or ())
+    # forward claims require FORWARD_ELIGIBLE data — otherwise flag the limitation on the card
+    from research.intelligence import data_state as DSt
+    if dataset_tier and not DSt.forward_eligible(dataset_tier):
+        warns.append(f"dataset tier {dataset_tier} — not forward-eligible")
+    warns = tuple(warns)
 
     support, conflict = [], []
     # deflated sharpe (accounts for the number of strategies searched) — reuse the harness
@@ -152,6 +157,7 @@ def build_card(strategy_def: SC.StrategyDefinition, *, backtest_R: float,
         sector_concentration=round(sector_conc, 4), correlation_cluster=correlation_cluster,
         evidence_freshness_days=round(evidence_freshness_days, 2),
         decay_detected=(state in (DECAYING, OVERFIT)), overfit=overfit,
+        dataset_tier=dataset_tier,
         lifecycle_recommendation=reco, supporting_reasons=tuple(support),
         conflicting_reasons=tuple(conflict), data_quality_warnings=warns)
 

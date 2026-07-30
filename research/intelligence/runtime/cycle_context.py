@@ -21,6 +21,7 @@ class CycleContext:
     data_ok: bool = False                      # honest default: no data ⇒ no action
     data_snapshot_id: str = ""
     market_regime: str = "RISK_ON"
+    dataset_tier: str = ""                      # evidence tier stamped on cards (Phase 19)
     config_hash: str = "cfg0"
     registry_version: str = "reg0"
     strategies: list = field(default_factory=list)      # frozen StrategySpec objects
@@ -28,6 +29,7 @@ class CycleContext:
     # bar is as_of_date (adapters only look at bars strictly before each index — no look-ahead)
     data: dict = field(default_factory=dict)
     clusters: dict = field(default_factory=dict)         # {strategy_id: cluster_id}
+    benchmark: list = field(default_factory=list)        # [Bar,...] PIT benchmark (rel-strength)
     session_phase: str = "eod"                           # open / intraday / eod
 
     def cycle_id(self) -> str:

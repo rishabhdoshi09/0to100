@@ -13,6 +13,9 @@ from research.intelligence import evidence_brain
 from research.intelligence import allocation_brain
 from research.intelligence import graduation
 from research.intelligence import strategy_runtime
+from research.intelligence import data_state
+from research.intelligence.registry import StrategyRegistry, RegisteredStrategy
 
 __all__ = ["schemas", "EventStore", "decoder_registry", "evidence_brain",
-           "allocation_brain", "graduation", "strategy_runtime"]
+           "allocation_brain", "graduation", "strategy_runtime", "data_state",
+           "StrategyRegistry", "RegisteredStrategy"]
