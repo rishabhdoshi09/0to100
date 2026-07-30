@@ -585,3 +585,50 @@ productivity and actionability — smoothly and transparently.
 with no data.
 
 **Tests:** `tests/test_autonomy_enhancements.py` — 14. Canonical suite: **700 passed**.
+
+---
+
+## Milestone — Two-Brain Intelligence architecture (Phase 1/2/3/4/7/8 slice)
+
+**Ask (user, from a ChatGPT-drafted spec):** split the autonomous system into Brain 1
+(Evidence) + Brain 2 (Strategy/Allocation), connected by immutable typed records in an
+append-only event store; add a per-strategy rule→signal evaluator, evidence cards, uncertainty-
+adjusted paper allocation, a graduation protocol, and honest UI — LIVE structurally locked.
+
+**Built (`research/intelligence/`, reusing existing infra, tested):**
+- **Phase 1** — `schemas.py` (immutable frozen records with deterministic ids + full PIT
+  provenance: rules hash, snapshot id, version, schema version), `event_store.py` (append-only,
+  single-writer, idempotent, deterministic reconstruction), `decoder_registry.py` +
+  `decoders/` (signal/market/strategy/execution/outcome/explanation — deterministic + idempotent;
+  `ResearchRationale` is STRUCTURED only, never raw chain-of-thought).
+- **Phase 3** — `evidence_brain.py` (Brain 1): consumes canonical events → immutable
+  `StrategyEvidenceCard` with rich states (INSUFFICIENT/PROMISING/FORWARD_PENDING/CONFIRMED/
+  REGIME_DEPENDENT/WEAKER/DECAYING/OVERFIT/RETIRED); reuses `research.harness` (deflated Sharpe,
+  alpha/beta) + `growth.calibrate`. Pure — never trades.
+- **Phase 4** — `allocation_brain.py` (Brain 2): consumes ONLY cards → immutable
+  `PaperAllocationDecision` via a transparent weighted score (anchored on the uncertainty-adjusted
+  lower-bound edge, not recent returns); risk buckets (established/promising/exploratory);
+  family + correlation-cluster caps. Cannot mutate cards; cannot cross the live gate.
+- **Phase 7** — lifecycle extended with `PAPER_CONFIRMED → ELIGIBLE_FOR_HUMAN_LIVE_REVIEW →
+  USER_APPROVED`; `graduation.py` nominates on explicit criteria but **only a user** can perform
+  USER_APPROVED (enforced by `spec._TRANSITIONS`; no brain/autopilot can).
+- **Phase 2 (minimal)** — `strategy_runtime.py`: per-strategy, bar-by-bar, point-in-time
+  entries (breakout/vol-contraction adapters); unsupported families FAIL LOUD (no scanner
+  fallback); fills reuse the realistic PaperBook.
+- **Phase 8** — `ui/brain_observatory.py`: Automatic Strategies · Two Brains · Live Review
+  Candidates (human-only queue) with honest empty states; wired into app nav.
+
+**Conflicts flagged (see TWO_BRAIN_ARCHITECTURE.md):** spec path drift (modules live in
+`strategy_studio/`, reused there); kept the single user-owned live gate rather than a parallel one.
+
+**Not yet complete (honest):** Phases 5 & 6 depth (experiment-lineage store, expiry, full
+portfolio wiring into the live loop) — partially covered by reusing discovery's multiple-testing/
+untouched-test isolation + `risk/correlation`; the two brains are not yet driven by the live
+daily scheduler (they're exercised by fixtures + the event store). With no NSE data, decoders emit
+nothing, Brain 1 says INSUFFICIENT_EVIDENCE, Brain 2 deploys nothing — by design.
+
+**Tests:** `tests/test_intelligence.py` — 27 (decoder determinism/idempotence; event-store
+reconstruction; brain separation; card immutability; deployment gated on evidence; tiny-sample &
+negative-lower-bound penalised; forward deterioration; correlation-cluster cap; regime & no-data
+no-op; PIT per-strategy eval + gap-through-stop; holdout single-use; user-only live gate; no
+order imports). Canonical suite: **727 passed**.

@@ -37,10 +37,17 @@ PAPER_EVALUATION = "PAPER_EVALUATION"
 ELIGIBLE_FOR_LIVE_REVIEW = "ELIGIBLE_FOR_LIVE_REVIEW"
 RETIRED = "RETIRED"
 DECAYED = "DECAYED"
+# graduation boundary (two-brain milestone): a strategy whose forward evidence is confirmed
+# may be NOMINATED for human review by the system, but only a USER may approve it. This is
+# the single, hard, user-owned live door — no brain and no autopilot can cross it.
+PAPER_CONFIRMED = "PAPER_CONFIRMED"
+ELIGIBLE_FOR_HUMAN_LIVE_REVIEW = "ELIGIBLE_FOR_HUMAN_LIVE_REVIEW"
+USER_APPROVED = "USER_APPROVED"
 
 LIFECYCLE = (GENERATED, INVALID, REJECTED, UNDER_REVIEW, PROMISING,
              AWAITING_USER_APPROVAL, APPROVED_FOR_PAPER, PAPER_EVALUATION,
-             ELIGIBLE_FOR_LIVE_REVIEW, RETIRED, DECAYED)
+             ELIGIBLE_FOR_LIVE_REVIEW, PAPER_CONFIRMED, ELIGIBLE_FOR_HUMAN_LIVE_REVIEW,
+             USER_APPROVED, RETIRED, DECAYED)
 
 # who may drive each transition. "system" = research code; "user" = a human only;
 # "paper_autopilot" = the OPT-IN autonomous PAPER driver — it may cross the PAPER gates on
@@ -62,8 +69,16 @@ _TRANSITIONS: dict[str, dict] = {
     # the paper autopilot may retire/decay its own paper strategies, but ONLY a user may
     # move anything toward LIVE review — this is the hard money boundary:
     PAPER_EVALUATION: {ELIGIBLE_FOR_LIVE_REVIEW: "user",
+                       PAPER_CONFIRMED: ("system", PAPER_AUTOPILOT),
                        DECAYED: ("system", PAPER_AUTOPILOT),
                        RETIRED: ("user", PAPER_AUTOPILOT)},
+    # a brain may CONFIRM forward evidence and NOMINATE for human review …
+    PAPER_CONFIRMED: {ELIGIBLE_FOR_HUMAN_LIVE_REVIEW: ("system", PAPER_AUTOPILOT),
+                      DECAYED: ("system", PAPER_AUTOPILOT),
+                      RETIRED: ("user", PAPER_AUTOPILOT)},
+    # … but ONLY a user may approve for live. Neither brain nor the autopilot can:
+    ELIGIBLE_FOR_HUMAN_LIVE_REVIEW: {USER_APPROVED: "user",
+                                     RETIRED: ("user", PAPER_AUTOPILOT)},
 }
 
 

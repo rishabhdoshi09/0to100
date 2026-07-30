@@ -1234,6 +1234,7 @@ with st.sidebar:
             ("Historical Data Setup", "🗂️ Historical Data Setup"),
             ("Strategy Studio",   "🧪 Strategy Studio"),
             ("Research Brain",    "🧠 Research Brain"),
+            ("Brain Observatory", "🔭 Brain Observatory"),
             ("Tools",             "🛠️ Tools"),
         ]
         for _mt_key, _mt_label in _more_tools:
@@ -1782,6 +1783,17 @@ elif _page == "Research Brain":
     except Exception as _arb_exc:
         st.error(f"Research Brain unavailable: {_arb_exc}")
         st.caption("See docs/overhaul/AUTO_RESEARCH_BRAIN.md for details.")
+
+# ══════════════════════════════════════════════════════════════════════════════
+elif _page == "Brain Observatory":
+    # Two-brain intelligence view: Automatic Strategies · Brain 1 vs Brain 2 · Live Review
+    # Candidates (human-only queue). Read-only; paper-only; honest empty states with no data.
+    try:
+        from ui.brain_observatory import render_brain_observatory
+        render_brain_observatory()
+    except Exception as _bo_exc:
+        st.error(f"Brain Observatory unavailable: {_bo_exc}")
+        st.caption("See docs/overhaul/TWO_BRAIN_ARCHITECTURE.md for details.")
 
 # ══════════════════════════════════════════════════════════════════════════════
 elif _page == "Research":
