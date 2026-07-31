@@ -13,6 +13,8 @@ The access_token must be stored in the .env file as KITE_ACCESS_TOKEN
 from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
+import os
+from pathlib import Path
 
 import pandas as pd
 from kiteconnect import KiteConnect, KiteTicker
@@ -23,13 +25,48 @@ from logger import get_logger
 log = get_logger(__name__)
 
 
+def _fresh_env(name: str, default: str = "") -> str:
+    """Read current credentials without relying on the process-lifetime Settings object.
+
+    The daily access token intentionally prefers the current ``.env`` value so a running autonomy
+    service sees a newly completed login even when its original process environment was stale.
+    Static credentials retain the conventional process-environment override.
+    """
+    path = Path(__file__).resolve().parent.parent / ".env"
+    file_value = ""
+    try:
+        for raw in path.read_text(encoding="utf-8").splitlines():
+            line = raw.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, val = line.split("=", 1)
+            if key.strip() == name:
+                file_value = val.strip().strip('"').strip("'")
+                break
+    except Exception:
+        pass
+    if name == "KITE_ACCESS_TOKEN" and file_value:
+        return file_value
+    value = os.getenv(name)
+    if value is not None:
+        return value.strip()
+    return file_value or default
+
+
+
 class KiteClient:
     """Thin, opinionated wrapper around KiteConnect SDK."""
 
-    def __init__(self) -> None:
-        self._kite = KiteConnect(api_key=settings.kite_api_key)
-        if settings.kite_access_token:
-            self._kite.set_access_token(settings.kite_access_token)
+    def __init__(self, *, api_key: str | None = None, access_token: str | None = None,
+                 api_secret: str | None = None) -> None:
+        self._api_key = api_key if api_key is not None else _fresh_env("KITE_API_KEY", settings.kite_api_key)
+        self._access_token = (access_token if access_token is not None
+                              else _fresh_env("KITE_ACCESS_TOKEN", settings.kite_access_token))
+        self._api_secret = (api_secret if api_secret is not None
+                            else _fresh_env("KITE_API_SECRET", settings.kite_api_secret))
+        self._kite = KiteConnect(api_key=self._api_key)
+        if self._access_token:
+            self._kite.set_access_token(self._access_token)
         else:
             log.warning(
                 "kite_access_token not set — run generate_session() first"
@@ -48,11 +85,12 @@ class KiteClient:
         Returns the access_token (persist to .env).
         """
         data = self._kite.generate_session(
-            request_token, api_secret=settings.kite_api_secret
+            request_token, api_secret=self._api_secret
         )
         access_token: str = data["access_token"]
         self._kite.set_access_token(access_token)
-        log.info("kite_session_created", access_token=access_token[:8] + "…")
+        self._access_token = access_token
+        log.info("kite_session_created")
         return access_token
 
     # ── Market Data ───────────────────────────────────────────────────────
@@ -203,10 +241,7 @@ class KiteClient:
         Return a configured KiteTicker (not yet connected).
         Caller is responsible for assigning tokens and calling connect().
         """
-        ticker = KiteTicker(
-            api_key=settings.kite_api_key,
-            access_token=settings.kite_access_token,
-        )
+        ticker = KiteTicker(api_key=self._api_key, access_token=self._access_token)
         ticker.on_ticks = on_ticks
         ticker.on_connect = on_connect
         ticker.on_close = on_close
@@ -218,8 +253,7 @@ class KiteClient:
 
     def is_connected(self) -> bool:
         """True if access token is configured. Lightweight check — no network call."""
-        from config import settings
-        return bool(settings.kite_access_token)
+        return bool(self._access_token)
 
     def batch_quotes(self, symbols: list[str]) -> dict[str, dict]:
         """

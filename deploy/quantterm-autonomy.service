@@ -1,24 +1,12 @@
+# Template only. deploy/setup_server.sh installs an absolute-path unit.
 [Unit]
-Description=QuantTerm autonomy supervisor (paper-only, Streamlit-independent)
+Description=QuantTerm autonomous paper supervisor
 After=network-online.target
-Wants=network-online.target
-
 [Service]
 Type=simple
-# adjust User/WorkingDirectory to your install
-User=quantterm
-WorkingDirectory=/opt/0to100
-Environment=PYTHONUNBUFFERED=1
-# secrets come from the environment / .env — never printed
-EnvironmentFile=-/opt/0to100/.env
-ExecStart=/usr/bin/env python main.py autonomy --interval 15
+WorkingDirectory=__APP_DIR__
+Environment=QT_AUTONOMY_OWNER=1
+ExecStart=__APP_DIR__/venv/bin/python main.py autonomy --interval 15
 Restart=on-failure
-RestartSec=5
-# graceful stop preserves durable job/state
-KillSignal=SIGINT
-TimeoutStopSec=30
-StandardOutput=append:/var/log/quantterm/autonomy.log
-StandardError=append:/var/log/quantterm/autonomy.err
-
 [Install]
 WantedBy=multi-user.target

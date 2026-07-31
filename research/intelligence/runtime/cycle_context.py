@@ -30,14 +30,24 @@ class CycleContext:
     data: dict = field(default_factory=dict)
     clusters: dict = field(default_factory=dict)         # {strategy_id: cluster_id}
     benchmark: list = field(default_factory=list)        # [Bar,...] PIT benchmark (rel-strength)
-    forward_eligible: bool = True                        # may OPEN new entries (Part 14 gate)
-    session_phase: str = "eod"                           # open / intraday / eod
+    forward_eligible: bool = True                        # dataset may OPEN new entries
+    session_phase: str = "eod"                           # premarket / opening_noise / intraday / eod
+    # Operational entry permission is supplied by the autonomy supervisor BEFORE the cycle runs.
+    # It is separate from data forward-eligibility: either gate can refuse new risk while the
+    # cycle still manages existing positions and updates evidence.
+    new_entries_allowed: bool = True
+    entry_block_reason: str = ""
+    capability_failures: tuple[str, ...] = ()
+    live_confirmation_required: bool = False
+    fresh_live_symbols: frozenset[str] = field(default_factory=frozenset)
 
     def cycle_id(self) -> str:
         ident = {
             "date": self.as_of_date, "type": self.cycle_type,
             "phase": self.session_phase, "snapshot": self.data_snapshot_id,
             "registry": self.registry_version, "config": self.config_hash,
+            "entry_allowed": bool(self.new_entries_allowed),
+            "entry_block": self.entry_block_reason,
         }
         blob = json.dumps(ident, sort_keys=True).encode()
         return f"cyc-{hashlib.sha256(blob).hexdigest()[:16]}"

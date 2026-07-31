@@ -109,6 +109,13 @@ class KiteTickerFeed:
         except TypeError:
             self._t.connect()
 
+    def add_mappings(self, token_to_symbol: dict) -> None:
+        """Extend the approved token/symbol map before subscribing new candidates."""
+        for token, symbol in dict(token_to_symbol or {}).items():
+            sym = str(symbol).upper()
+            self._t2s[token] = sym
+            self._s2t[sym] = token
+
     def subscribe(self, symbols) -> None:
         toks = [self._s2t[s] for s in symbols if s in self._s2t]
         if not toks:

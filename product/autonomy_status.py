@@ -55,4 +55,7 @@ def read_autonomy_status(root=None) -> dict:
         "jobs": raw.get("jobs", {}),
         "recent_transitions": raw.get("recent_transitions", []),
         "recent_dialogue": raw.get("recent_dialogue", []),
+        "owner_state": raw.get("owner_state", {}),
+        "scheduler_of_record": raw.get("scheduler_of_record", ""),
+        "last_cycle": raw.get("last_cycle", {}),
     }

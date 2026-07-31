@@ -45,9 +45,30 @@ def cmd_login(args) -> None:
         print("No token provided. Aborting.")
         sys.exit(1)
     access_token = kite.generate_session(request_token)
-    print(f"\nAccess token: {access_token}")
-    print("\nAdd this to your .env file as:")
-    print(f"  KITE_ACCESS_TOKEN={access_token}")
+    env_path = Path(__file__).resolve().parent / ".env"
+    lines = env_path.read_text(encoding="utf-8").splitlines() if env_path.exists() else []
+    output, replaced = [], False
+    for line in lines:
+        if line.strip().startswith("KITE_ACCESS_TOKEN="):
+            output.append(f"KITE_ACCESS_TOKEN={access_token}"); replaced = True
+        else:
+            output.append(line)
+    if not replaced:
+        output.append(f"KITE_ACCESS_TOKEN={access_token}")
+    tmp = env_path.with_name(".env.tmp")
+    tmp.write_text("\n".join(output).rstrip() + "\n", encoding="utf-8")
+    tmp.replace(env_path)
+    try:
+        env_path.chmod(0o600)
+    except Exception:
+        pass
+    try:
+        from research.autonomy.controls import request_control, REFRESH_DATA_NOW
+        request_control(REFRESH_DATA_NOW, reason="new Zerodha session persisted by login command")
+    except Exception:
+        pass
+    print("\nZerodha session saved securely to .env.")
+    print("The autonomy supervisor will validate it and refresh data automatically.")
 
 
 def cmd_live(args) -> None:

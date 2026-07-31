@@ -1,10 +1,8 @@
-"""
-🗂️ Durable job ledger for the autonomy supervisor.
+"""Durable, dependency-aware job ledger for the autonomy supervisor.
 
-A persisted, restart-safe job queue (SQLite) with leases and idempotency keys — the scheduler of
-record, replacing uncontrolled daemon threads. A job interrupted by process death is recoverable when
-its lease expires; re-running with the same idempotency key never duplicates work. Deterministic and
-network-free: the clock is injectable so tests control time exactly.
+SQLite is the scheduler of record.  Jobs have leases, idempotency keys and explicit BLOCKED
+dependencies.  Existing databases are migrated in place; a login or data recovery can requeue the
+same logical job rather than creating a duplicate or leaving it blocked forever.
 """
 from __future__ import annotations
 
@@ -14,7 +12,6 @@ import uuid
 from dataclasses import dataclass
 from pathlib import Path
 
-# statuses
 PENDING = "PENDING"
 RUNNING = "RUNNING"
 SUCCEEDED = "SUCCEEDED"
@@ -44,12 +41,25 @@ CREATE TABLE IF NOT EXISTS jobs (
     error_message TEXT,
     next_retry_at REAL,
     critical INTEGER NOT NULL DEFAULT 0,
-    created_at REAL NOT NULL
+    created_at REAL NOT NULL,
+    blocked_on TEXT,
+    blocked_reason TEXT,
+    blocked_at REAL,
+    unblocked_at REAL,
+    dependency_version TEXT
 );
 CREATE INDEX IF NOT EXISTS ix_jobs_status ON jobs(status);
+CREATE INDEX IF NOT EXISTS ix_jobs_blocked_on ON jobs(blocked_on, status);
 CREATE UNIQUE INDEX IF NOT EXISTS ux_jobs_idem ON jobs(idempotency_key)
     WHERE idempotency_key IS NOT NULL;
 """
+_MIGRATION_COLUMNS = {
+    "blocked_on": "TEXT",
+    "blocked_reason": "TEXT",
+    "blocked_at": "REAL",
+    "unblocked_at": "REAL",
+    "dependency_version": "TEXT",
+}
 
 
 @dataclass
@@ -71,17 +81,33 @@ class Job:
     started_at: float | None = None
     finished_at: float | None = None
     critical: bool = False
+    blocked_on: str | None = None
+    blocked_reason: str = ""
+    blocked_at: float | None = None
+    unblocked_at: float | None = None
+    dependency_version: str | None = None
+
+
+def _value(row, name, default=None):
+    try:
+        return row[name]
+    except (KeyError, IndexError):
+        return default
 
 
 def _row_to_job(r) -> Job:
-    return Job(job_id=r["job_id"], job_type=r["job_type"], scheduled_for=r["scheduled_for"],
-               status=r["status"], attempt=r["attempt"], idempotency_key=r["idempotency_key"],
-               input_snapshot_id=r["input_snapshot_id"], output_snapshot_id=r["output_snapshot_id"],
-               result_summary=r["result_summary"] or "", error_code=r["error_code"] or "",
-               error_message=r["error_message"] or "", next_retry_at=r["next_retry_at"],
-               lease_owner=r["lease_owner"], lease_expires_at=r["lease_expires_at"],
-               started_at=r["started_at"], finished_at=r["finished_at"],
-               critical=bool(r["critical"]))
+    return Job(
+        job_id=r["job_id"], job_type=r["job_type"], scheduled_for=r["scheduled_for"],
+        status=r["status"], attempt=r["attempt"], idempotency_key=r["idempotency_key"],
+        input_snapshot_id=r["input_snapshot_id"], output_snapshot_id=r["output_snapshot_id"],
+        result_summary=r["result_summary"] or "", error_code=r["error_code"] or "",
+        error_message=r["error_message"] or "", next_retry_at=r["next_retry_at"],
+        lease_owner=r["lease_owner"], lease_expires_at=r["lease_expires_at"],
+        started_at=r["started_at"], finished_at=r["finished_at"], critical=bool(r["critical"]),
+        blocked_on=_value(r, "blocked_on"), blocked_reason=_value(r, "blocked_reason", "") or "",
+        blocked_at=_value(r, "blocked_at"), unblocked_at=_value(r, "unblocked_at"),
+        dependency_version=_value(r, "dependency_version"),
+    )
 
 
 class JobStore:
@@ -95,9 +121,16 @@ class JobStore:
         self._db.row_factory = sqlite3.Row
         self._db.execute("PRAGMA journal_mode=WAL")
         self._db.executescript(_DDL)
+        self._migrate()
         self._db.commit()
 
-    # ── enqueue (idempotent) ─────────────────────────────────────────────────────
+    def _migrate(self) -> None:
+        present = {r[1] for r in self._db.execute("PRAGMA table_info(jobs)").fetchall()}
+        for name, sql_type in _MIGRATION_COLUMNS.items():
+            if name not in present:
+                self._db.execute(f"ALTER TABLE jobs ADD COLUMN {name} {sql_type}")
+        self._db.execute("CREATE INDEX IF NOT EXISTS ix_jobs_blocked_on ON jobs(blocked_on, status)")
+
     def enqueue(self, job_type: str, *, scheduled_for: float | None = None,
                 idempotency_key: str | None = None, input_snapshot_id: str | None = None,
                 critical: bool = False) -> Job:
@@ -105,10 +138,10 @@ class JobStore:
         sched = now if scheduled_for is None else scheduled_for
         with self._lock:
             if idempotency_key is not None:
-                r = self._db.execute("SELECT * FROM jobs WHERE idempotency_key=?",
-                                     (idempotency_key,)).fetchone()
-                if r is not None:
-                    return _row_to_job(r)          # already known → never duplicate
+                row = self._db.execute("SELECT * FROM jobs WHERE idempotency_key=?",
+                                       (idempotency_key,)).fetchone()
+                if row is not None:
+                    return _row_to_job(row)
             jid = uuid.uuid4().hex[:16]
             self._db.execute(
                 "INSERT INTO jobs(job_id,job_type,scheduled_for,status,attempt,idempotency_key,"
@@ -116,37 +149,34 @@ class JobStore:
                 (jid, job_type, sched, PENDING, 0, idempotency_key, input_snapshot_id,
                  1 if critical else 0, now))
             self._db.commit()
-            return _row_to_job(self._db.execute("SELECT * FROM jobs WHERE job_id=?", (jid,)).fetchone())
+            return self.get(jid, _locked=True)
 
-    # ── lease one due job (reclaims expired leases) ──────────────────────────────
     def lease_due(self, owner: str, *, lease_seconds: float = 300.0) -> Job | None:
         now = self.clock()
         with self._lock:
             self._db.execute("BEGIN IMMEDIATE")
             try:
-                # reclaim a RUNNING job whose lease died (crash recovery), oldest first
-                r = self._db.execute(
+                row = self._db.execute(
                     "SELECT * FROM jobs WHERE status=? AND lease_expires_at IS NOT NULL "
                     "AND lease_expires_at < ? ORDER BY scheduled_for LIMIT 1", (RUNNING, now)).fetchone()
-                if r is None:
-                    r = self._db.execute(
+                if row is None:
+                    row = self._db.execute(
                         "SELECT * FROM jobs WHERE status=? AND scheduled_for<=? "
-                        "ORDER BY critical DESC, scheduled_for LIMIT 1", (PENDING, now)).fetchone()
-                if r is None:
+                        "ORDER BY critical DESC, scheduled_for, created_at LIMIT 1",
+                        (PENDING, now)).fetchone()
+                if row is None:
                     self._db.execute("COMMIT")
                     return None
                 self._db.execute(
                     "UPDATE jobs SET status=?, lease_owner=?, lease_expires_at=?, started_at=?, "
                     "attempt=attempt+1 WHERE job_id=?",
-                    (RUNNING, owner, now + lease_seconds, now, r["job_id"]))
+                    (RUNNING, owner, now + lease_seconds, now, row["job_id"]))
                 self._db.execute("COMMIT")
             except Exception:
                 self._db.execute("ROLLBACK")
                 raise
-            return _row_to_job(self._db.execute("SELECT * FROM jobs WHERE job_id=?",
-                                                (r["job_id"],)).fetchone())
+            return self.get(row["job_id"], _locked=True)
 
-    # ── complete a leased job ────────────────────────────────────────────────────
     def complete(self, job_id: str, status: str, *, result_summary: str = "",
                  output_snapshot_id: str | None = None, error_code: str = "",
                  error_message: str = "", next_retry_at: float | None = None) -> None:
@@ -161,35 +191,86 @@ class JobStore:
                  next_retry_at, job_id))
             self._db.commit()
 
+    def block(self, job_id: str, *, dependency: str, reason: str,
+              dependency_version: str | None = None, result_summary: str = "") -> None:
+        now = self.clock()
+        with self._lock:
+            self._db.execute(
+                "UPDATE jobs SET status=?, finished_at=?, result_summary=?, blocked_on=?, "
+                "blocked_reason=?, blocked_at=?, dependency_version=?, lease_owner=NULL, "
+                "lease_expires_at=NULL WHERE job_id=?",
+                (BLOCKED, now, result_summary or reason, dependency, reason, now,
+                 dependency_version, job_id))
+            self._db.commit()
+
+    def unblock_dependency(self, dependency: str, *, dependency_version: str | None = None,
+                           scheduled_for: float | None = None) -> int:
+        """Requeue jobs blocked on one dependency without changing their idempotency identity."""
+        now = self.clock()
+        sched = now if scheduled_for is None else scheduled_for
+        with self._lock:
+            if dependency_version is None:
+                cur = self._db.execute(
+                    "UPDATE jobs SET status=?, scheduled_for=?, finished_at=NULL, unblocked_at=?, "
+                    "blocked_on=NULL, blocked_reason='', dependency_version=NULL WHERE status=? "
+                    "AND blocked_on=?", (PENDING, sched, now, BLOCKED, dependency))
+            else:
+                cur = self._db.execute(
+                    "UPDATE jobs SET status=?, scheduled_for=?, finished_at=NULL, unblocked_at=?, "
+                    "blocked_on=NULL, blocked_reason='', dependency_version=? WHERE status=? "
+                    "AND blocked_on=?", (PENDING, sched, now, dependency_version, BLOCKED, dependency))
+            self._db.commit()
+            return cur.rowcount
+
+    def requeue(self, job_id: str, *, scheduled_for: float | None = None) -> None:
+        now = self.clock()
+        sched = now if scheduled_for is None else scheduled_for
+        with self._lock:
+            self._db.execute(
+                "UPDATE jobs SET status=?, scheduled_for=?, finished_at=NULL, next_retry_at=NULL, "
+                "lease_owner=NULL, lease_expires_at=NULL WHERE job_id=?",
+                (PENDING, sched, job_id))
+            self._db.commit()
+
     def reschedule_retry(self, job_id: str, *, when: float, error_code: str = "",
                          error_message: str = "") -> None:
-        """A RETRYABLE_FAILED job goes back to PENDING at `when` (bounded backoff decided by caller)."""
         with self._lock:
             self._db.execute(
                 "UPDATE jobs SET status=?, scheduled_for=?, next_retry_at=?, error_code=?, "
                 "error_message=?, lease_owner=NULL, lease_expires_at=NULL, finished_at=NULL "
-                "WHERE job_id=?",
-                (PENDING, when, when, error_code, error_message, job_id))
+                "WHERE job_id=?", (PENDING, when, when, error_code, error_message, job_id))
             self._db.commit()
 
-    # ── reads ────────────────────────────────────────────────────────────────────
-    def get(self, job_id: str) -> Job | None:
-        with self._lock:
-            r = self._db.execute("SELECT * FROM jobs WHERE job_id=?", (job_id,)).fetchone()
-        return _row_to_job(r) if r else None
+    def get(self, job_id: str, _locked: bool = False) -> Job | None:
+        if _locked:
+            row = self._db.execute("SELECT * FROM jobs WHERE job_id=?", (job_id,)).fetchone()
+        else:
+            with self._lock:
+                row = self._db.execute("SELECT * FROM jobs WHERE job_id=?", (job_id,)).fetchone()
+        return _row_to_job(row) if row else None
 
-    def list(self, *, status: str | None = None, limit: int = 200) -> list:
+    def find_by_type_and_key(self, job_type: str, idempotency_key: str) -> Job | None:
         with self._lock:
-            if status:
-                rows = self._db.execute("SELECT * FROM jobs WHERE status=? ORDER BY created_at DESC "
-                                        "LIMIT ?", (status, limit)).fetchall()
-            else:
-                rows = self._db.execute("SELECT * FROM jobs ORDER BY created_at DESC LIMIT ?",
-                                        (limit,)).fetchall()
+            row = self._db.execute(
+                "SELECT * FROM jobs WHERE job_type=? AND idempotency_key=?",
+                (job_type, idempotency_key)).fetchone()
+        return _row_to_job(row) if row else None
+
+    def list(self, *, status: str | None = None, job_type: str | None = None,
+             limit: int = 200) -> list[Job]:
+        clauses, params = [], []
+        if status:
+            clauses.append("status=?"); params.append(status)
+        if job_type:
+            clauses.append("job_type=?"); params.append(job_type)
+        where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+        with self._lock:
+            rows = self._db.execute(
+                f"SELECT * FROM jobs{where} ORDER BY created_at DESC LIMIT ?",
+                (*params, limit)).fetchall()
         return [_row_to_job(r) for r in rows]
 
-    def overdue_critical(self, *, grace_seconds: float = 0.0) -> list:
-        """Critical jobs whose scheduled_for is past due beyond the grace and not yet running/done."""
+    def overdue_critical(self, *, grace_seconds: float = 0.0) -> list[Job]:
         now = self.clock()
         with self._lock:
             rows = self._db.execute(
@@ -198,12 +279,12 @@ class JobStore:
         return [_row_to_job(r) for r in rows]
 
     def reclaim_expired(self) -> int:
-        """Explicitly return crashed RUNNING jobs (dead lease) to PENDING. Returns count."""
         now = self.clock()
         with self._lock:
             cur = self._db.execute(
-                "UPDATE jobs SET status=?, lease_owner=NULL WHERE status=? AND "
-                "lease_expires_at IS NOT NULL AND lease_expires_at < ?", (PENDING, RUNNING, now))
+                "UPDATE jobs SET status=?, lease_owner=NULL, lease_expires_at=NULL WHERE status=? "
+                "AND lease_expires_at IS NOT NULL AND lease_expires_at < ?",
+                (PENDING, RUNNING, now))
             self._db.commit()
             return cur.rowcount
 

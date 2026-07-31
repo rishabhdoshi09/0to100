@@ -27,30 +27,19 @@ def _money(value: float) -> str:
 
 
 def _run_activation(*, automatic: bool = False):
-    from research.intelligence.data.kite_activation import activate
-    label = "Preparing QuantTerm automatically…" if automatic else "Updating genuine Zerodha market data…"
-    with st.spinner(label):
-        report = activate(start_worker=True, run_cycle=True)
-    st.session_state["last_activation_report"] = report.as_dict()
-    if report.status("GENUINE_SNAPSHOT_ACTIVE") == "PASS":
-        st.success("Market history is verified and ready.")
-    else:
-        st.error(report.blocker or "Market data could not be activated.")
-    with st.expander("Data update details", expanded=not automatic):
-        st.code(report.render())
-        if report.quality:
-            st.json(report.quality)
-    return report
+    """Queue a supervisor-owned data refresh; never start a worker from Streamlit."""
+    from research.autonomy.controls import request_control, REFRESH_DATA_NOW
+    control = request_control(REFRESH_DATA_NOW,
+                              reason="automatic retail readiness request" if automatic else
+                                     "owner requested data refresh from retail UI")
+    st.session_state["last_activation_control"] = control.control_id
+    st.success("Market-data refresh queued for the autonomy supervisor.")
+    return control
 
 
 def _maybe_auto_activate(inputs) -> None:
-    """One automatic attempt after the normal daily login; manual retry remains available."""
-    key = "retail_auto_activation_attempted"
-    if inputs.kite_connected and not inputs.data_ready and not st.session_state.get(key):
-        st.session_state[key] = True
-        report = _run_activation(automatic=True)
-        if report.status("GENUINE_SNAPSHOT_ACTIVE") == "PASS":
-            st.rerun()
+    """Read-only by design: page rendering never queues or starts background work."""
+    return None
 
 
 def _watchlist_frame(rows: list[dict]) -> pd.DataFrame:
@@ -100,12 +89,11 @@ def render_home() -> None:
             _run_activation()
     elif state.primary_key == "paper":
         if st.button("Enable Automatic Paper Trading", type="primary", width="stretch"):
-            from research.auto_research.scheduler import get_brain
-            brain = get_brain(); brain.enable_paper_auto(); brain.start(); st.rerun()
+            from research.autonomy.controls import request_control, ENABLE_PAPER_AUTO
+            request_control(ENABLE_PAPER_AUTO, reason="owner enabled PAPER_AUTO from Home")
+            st.success("PAPER_AUTO enable request queued."); st.rerun()
     elif state.primary_key == "start_worker":
-        if st.button("Start Paper-Trading Worker", type="primary", width="stretch"):
-            from research.auto_research.scheduler import get_brain
-            get_brain().start(); st.rerun()
+        st.warning("The autonomy service is not running. Start `python main.py autonomy` or the installed service.")
     elif state.primary_key == "backtest":
         st.success("Research mode is ready. Open Backtest or Momentum Stocks from the sidebar.")
     else:
@@ -129,29 +117,20 @@ def render_home() -> None:
 
 
 def _run_and_save_momentum() -> dict:
-    from data.nse_universe import get_nse_universe_with_names
-    from scan.bulk_fetcher import prefetch
-    from scan.unified_scanner import UnifiedScanner
+    """Foreground UI adapter over the canonical Streamlit-free scan service."""
+    from scan.market_scan_service import run_whole_market_scan
 
-    names = get_nse_universe_with_names()
-    symbols = sorted(names)
-    progress = st.progress(0.0, text=f"Loading market history for {len(symbols):,} stocks…")
+    progress = st.progress(0.0, text="Preparing whole-market scan…")
 
     def update(done, total):
-        progress.progress(min(1.0, done / max(total, 1)), text=f"Loading {done:,} of {total:,} stocks…")
+        progress.progress(min(1.0, done / max(total, 1)),
+                          text=f"Loading {done:,} of {total:,} stocks…")
 
-    prefetch(symbols, progress=update)
-    progress.progress(1.0, text="Evaluating momentum and safety checks…")
-    results = UnifiedScanner().scan(symbols)
-    try:
-        from data.fno_universe import current_fno_universe
-        fno_symbols = current_fno_universe().symbols
-    except Exception:
-        fno_symbols = []
-    payload = build_scan_payload(names, results, fno_symbols)
-    save_scan(payload)
+    report = run_whole_market_scan(progress_callback=update, save=True)
     progress.empty()
-    return payload
+    if not report.ok:
+        raise RuntimeError(report.error_message or report.error_code or "whole-market scan failed")
+    return report.payload
 
 
 def _records_frame(rows: list[dict]) -> pd.DataFrame:
@@ -184,8 +163,9 @@ def render_momentum() -> None:
     else:
         left.caption("No saved scan exists yet.")
     if right.button("Run fresh scan", type="primary", width="stretch"):
-        payload = _run_and_save_momentum()
-        st.success("Whole-market scan saved. Future page loads will open instantly.")
+        from research.autonomy.controls import request_control, RUN_SCAN_NOW
+        request_control(RUN_SCAN_NOW, reason="owner requested fresh whole-market scan")
+        st.success("Whole-market scan queued for the autonomy supervisor.")
 
     if not payload:
         st.info("Run the first scan. QuantTerm will save the results for Home and tomorrow's watchlist.")

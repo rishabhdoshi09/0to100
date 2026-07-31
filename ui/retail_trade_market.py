@@ -10,39 +10,58 @@ from product.scan_store import load_scan
 from ui.retail_home_momentum import _money
 
 def render_paper_trading() -> None:
-    from research.auto_research.scheduler import get_brain
-    brain = get_brain(); book = brain.intel_book
-    enabled = brain.is_paper_auto_enabled(); running = brain.state.running
+    from product.paper_status import read_paper_status
+    from product.autonomy_status import read_autonomy_status
+    from research.autonomy.controls import (
+        request_control, ENABLE_PAPER_AUTO, PAUSE_NEW_PAPER_ENTRIES,
+        RESUME_NEW_PAPER_ENTRIES, RUN_CYCLE_NOW,
+    )
+
+    paper = read_paper_status()
+    autonomy = read_autonomy_status()
+    owner = dict(autonomy.get("owner_state", {}))
+    paused = bool(owner.get("new_entries_paused", False))
 
     st.title("Automatic Paper Trading")
-    st.info("QuantTerm takes and manages paper trades automatically. You do not approve every trade.")
-    status = "RUNNING" if enabled and running else ("READY FOR NEXT SESSION" if enabled else "OFF")
+    st.info("The autonomy service takes and manages simulated trades. This page only reads state and queues owner controls.")
+    status = ("PAUSED" if paused else ("RUNNING" if paper.enabled and paper.supervisor_running
+              else ("READY FOR SUPERVISOR" if paper.enabled else "OFF")))
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Status", status); c2.metric("Paper capital", _money(book.capital))
-    c3.metric("Paper equity", _money(book.equity())); c4.metric("Open positions", len(book.open))
+    c1.metric("Status", status); c2.metric("Paper capital", _money(paper.capital))
+    c3.metric("Paper equity", _money(paper.equity)); c4.metric("Open positions", len(paper.open_positions))
 
     a, b = st.columns(2)
-    if enabled:
+    if not paper.enabled:
+        if a.button("Enable automatic paper trading", type="primary", width="stretch"):
+            request_control(ENABLE_PAPER_AUTO, reason="owner enabled PAPER_AUTO")
+            st.success("Enable request queued."); st.rerun()
+    elif paused:
+        if a.button("Resume new paper trades", type="primary", width="stretch"):
+            request_control(RESUME_NEW_PAPER_ENTRIES, reason="owner resumed new paper entries")
+            st.success("Resume request queued."); st.rerun()
+    else:
         if a.button("Pause new paper trades", width="stretch"):
-            brain.disable_paper_auto(); st.rerun()
-    elif a.button("Enable automatic paper trading", type="primary", width="stretch"):
-        brain.enable_paper_auto(); brain.start(); st.rerun()
-    if b.button("Start / verify worker", width="stretch"):
-        brain.start(); st.rerun()
+            request_control(PAUSE_NEW_PAPER_ENTRIES, reason="owner paused new paper entries")
+            st.success("Pause request queued. Existing positions remain manageable."); st.rerun()
+    if b.button("Request one paper cycle", width="stretch"):
+        request_control(RUN_CYCLE_NOW, reason="owner requested immediate paper cycle")
+        st.success("Cycle queued for the autonomy supervisor.")
 
-    st.caption(f"Risk per trade: {book.risk_per_trade_pct:.1%} · Maximum positions: {book.max_positions} · Open risk: {_money(book.open_risk())}")
-    if brain.state.last_error:
-        st.error(brain.state.last_error)
+    st.caption(f"Risk per trade: {paper.risk_per_trade_pct:.1%} · Maximum positions: {paper.max_positions} · Open risk: {_money(paper.open_risk)}")
+    if not paper.supervisor_running:
+        st.warning("Autonomy supervisor is not reporting a heartbeat. Start `python main.py autonomy` or the installed service.")
+    for note in autonomy.get("capability_notes", []):
+        st.warning(note)
 
     st.subheader("Open paper positions")
-    if book.open:
-        st.dataframe(pd.DataFrame([p.as_dict() for p in book.open.values()]), hide_index=True, width="stretch")
+    if paper.open_positions:
+        st.dataframe(pd.DataFrame(list(paper.open_positions)), hide_index=True, width="stretch")
     else:
         st.info("No open paper positions.")
 
     st.subheader("Why no new trade?")
     explanation = build_no_trade_explanation(
-        load_scan(), book.refusals[-200:], brain.state.last_intel_cycle or {}, len(book.open)
+        load_scan(), list(paper.refusals)[-200:], paper.last_cycle or {}, len(paper.open_positions)
     )
     st.write(explanation.headline)
     st.dataframe(pd.DataFrame([
@@ -54,8 +73,8 @@ def render_paper_trading() -> None:
         st.dataframe(pd.DataFrame(explanation.top_reasons, columns=["Reason", "Count"]), hide_index=True)
 
     with st.expander("Recent closed paper trades"):
-        if book.closed:
-            st.dataframe(pd.DataFrame([t.as_dict() for t in book.closed[-50:]]), hide_index=True, width="stretch")
+        if paper.closed_trades:
+            st.dataframe(pd.DataFrame(list(paper.closed_trades)[-50:]), hide_index=True, width="stretch")
         else:
             st.caption("No paper trades have closed yet.")
 

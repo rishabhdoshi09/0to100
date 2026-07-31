@@ -83,6 +83,24 @@ class StrategyRegistry:
                 self.by_id[spec.strategy_id] = rec
         return self
 
+
+    def replace_version(self, spec) -> RegisteredStrategy:
+        """Promote a validated successor as the current version for one strategy id.
+
+        The previous frozen version is retained in ``duplicates`` as an audit archive; callers must
+        have completed evidence/lifecycle checks before invoking this operation.
+        """
+        candidate = StrategyRegistry().build([spec])
+        rec = candidate.by_id.get(spec.strategy_id)
+        if rec is None or not rec.enabled:
+            reasons = rec.disabled_reasons if rec is not None else ("registration failed",)
+            raise ValueError("successor is not deployable: " + "; ".join(reasons))
+        previous = self.by_id.get(spec.strategy_id)
+        if previous is not None:
+            self.duplicates.append(previous)
+        self.by_id[spec.strategy_id] = rec
+        return rec
+
     # ── views ─────────────────────────────────────────────────────────────────────
     def all(self):
         return list(self.by_id.values()) + list(self.duplicates)

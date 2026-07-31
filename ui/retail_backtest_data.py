@@ -85,4 +85,4 @@ def render_data_zerodha() -> None:
     if st.button("Retry download / update", type="primary", width="stretch"):
         st.session_state["retail_auto_activation_attempted"] = True
         _run_activation()
-    st.caption("After the normal daily login, QuantTerm automatically attempts the data update once. Manual retry remains available.")
+    st.caption("The autonomy supervisor owns data refresh. This button queues an immediate owner-requested refresh.")

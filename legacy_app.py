@@ -138,8 +138,11 @@ st.markdown(DEVBLOOM_CSS, unsafe_allow_html=True)
 # ── Settings ──────────────────────────────────────────────────────────────────
 settings = Settings()
 
-# ── Market monitor (daemon thread — Telegram alerts during market hours) ──────
-if "monitor_started" not in st.session_state:
+# ── Legacy daemon compatibility ─────────────────────────────────────────────
+# The dedicated autonomy service is the scheduler of record. Legacy daemons are OFF by default
+# to prevent a second scan/research/paper owner when this institutional UI is opened manually.
+_LEGACY_DAEMONS = os.getenv("QT_ENABLE_LEGACY_DAEMONS", "").strip().lower() in ("1", "true", "yes", "on")
+if _LEGACY_DAEMONS and "monitor_started" not in st.session_state:
     st.session_state["monitor_started"] = True
     try:
         from core.market_monitor import start_if_market_hours
@@ -165,21 +168,8 @@ if "monitor_started" not in st.session_state:
         start_us_loop()
     except Exception:
         pass
-    # 🧠 Autonomous Research Brain — studies the market on its own, reasons in the
-    # open, rejects weak ideas, and PARKS proposals at the human-approval gate. It
-    # never approves, activates, or trades; with no research-grade data it honestly
-    # concludes "unavailable". Safe to run hands-off.
-    try:
-        from research.auto_research.scheduler import get_brain
-        _brain = get_brain()
-        # Opt-in FULL PAPER autonomy: set QT_PAPER_AUTONOMY=1 to let the brain deploy,
-        # trade, and retire its own strategies in PAPER hands-off. Simulated money only —
-        # it can never reach live (that transition stays user-only).
-        if os.getenv("QT_PAPER_AUTONOMY", "").strip().lower() in ("1", "true", "yes", "on"):
-            _brain.engage_paper_autonomy()
-        _brain.start()
-    except Exception:
-        pass
+    # Autonomous research/paper mutation is owned exclusively by the dedicated
+    # ``python main.py autonomy`` process.  The legacy UI deliberately starts no brain daemon.
 
 # ── Cached client initialisation ─────────────────────────────────────────────
 @st.cache_resource

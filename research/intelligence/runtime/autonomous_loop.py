@@ -77,9 +77,19 @@ def run_intelligence_cycle(ctx, *, store, book, runtime_state, knowledge=None,
         pf = PF.preflight(ctx, store=store, book=book, runtime_state=runtime_state)
         # forward eligibility (Part 14): only FORWARD_ELIGIBLE data may open NEW entries; a
         # research-eligible-but-not-forward snapshot still runs the cycle and updates evidence.
-        safe_to_enter = pf.ok and reconciled and getattr(ctx, "forward_eligible", True)
+        operational_entry_ok = bool(getattr(ctx, "new_entries_allowed", True))
+        safe_to_enter = (pf.ok and reconciled and getattr(ctx, "forward_eligible", True)
+                         and operational_entry_ok)
         if not getattr(ctx, "forward_eligible", True):
             res.no_action_reasons.append("dataset not forward-eligible — no new entries")
+        if not operational_entry_ok:
+            reason = getattr(ctx, "entry_block_reason", "") or "NEW_ENTRIES_BLOCKED"
+            res.no_action_reasons.append(reason)
+            EV.emit(store, cid, EV.NEW_ENTRIES_BLOCKED, event_ts=ctx.as_of_date,
+                    reason=reason, summary={
+                        "session_phase": getattr(ctx, "session_phase", ""),
+                        "capability_failures": list(getattr(ctx, "capability_failures", ())),
+                    })
         for name, reason in pf.failed:
             res.warnings.append(f"preflight {name}: {reason}")
 
@@ -111,7 +121,7 @@ def run_intelligence_cycle(ctx, *, store, book, runtime_state, knowledge=None,
                                 today_signals, cards, alloc_cfg)
         else:
             res.no_action_reasons.append(
-                "no new entries (mode/paused/unreconciled/preflight)")
+                "no new entries (mode/entry-window/capability/unreconciled/preflight)")
 
         EV.emit(store, cid, EV.CYCLE_COMPLETED, event_ts=ctx.as_of_date, result="ok")
         runtime_state.mark_cycle_done(cid)
@@ -253,6 +263,13 @@ def _open_new_positions(ctx, store, book, state, res, decisions, today_signals, 
         if sig is None:
             continue                                     # no live entry today → nothing to open
         spec = next((s for s in ctx.strategies if s.strategy_id == d.strategy_id), None)
+        requires_live = bool(getattr(ctx, "live_confirmation_required", False)) or (
+            spec is not None and "live_ticks" in tuple(getattr(spec, "required_data", ())))
+        if requires_live and sig["symbol"].upper() not in set(getattr(ctx, "fresh_live_symbols", ())):
+            EV.emit(store, cid, EV.TRADE_INTENT_BLOCKED, strategy_id=d.strategy_id,
+                    symbol=sig["symbol"], reason="LIVE_PRICE_STALE", event_ts=ctx.as_of_date)
+            res.intents_blocked.append((d.strategy_id, "LIVE_PRICE_STALE"))
+            continue
         card = card_by.get(d.strategy_id)
         intent = SC.TradeIntent(
             strategy_id=d.strategy_id, strategy_version=d.strategy_version,

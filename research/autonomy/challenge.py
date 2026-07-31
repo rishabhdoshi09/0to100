@@ -65,8 +65,15 @@ def sceptic(ctx) -> Verdict:
 
 
 def reality_checker(ctx) -> Verdict:
-    """Existing statistical evidence gate (deflated Sharpe / Reality-Check p / FDR)."""
+    """Existing statistical evidence gate (deflated Sharpe / Reality-Check p / FDR).
+
+    A caller must explicitly say required evidence is complete.  This prevents missing metrics from
+    inheriting optimistic defaults merely because a helper dict omitted them.
+    """
     f = []
+    if not _get(ctx, "required_evidence_complete", True):
+        return Verdict("reality_checker", passed=False,
+                       findings=("required evidence is unavailable",), blocking=False)
     n = int(_get(ctx, "n_trades", 0))
     if n < int(_get(ctx, "min_trades", 30)):
         return Verdict("reality_checker", passed=False, findings=("insufficient sample",), blocking=False)
@@ -79,7 +86,9 @@ def reality_checker(ctx) -> Verdict:
     if rc_p is not None and float(rc_p) > float(_get(ctx, "max_reality_check_p", 0.05)):
         f.append("fails White's Reality Check")
     if _get(ctx, "fdr_reject", False):
-        f.append("rejected by FDR control")
+        f.append("candidate rejected by FDR control")
+    if "fdr_significant" in ctx and not _get(ctx, "fdr_significant", False):
+        f.append("not significant after FDR control")
     dd = float(_get(ctx, "max_drawdown_pct", 0.0))
     if dd > float(_get(ctx, "max_allowed_drawdown_pct", 30.0)):
         f.append("drawdown exceeds limit")
@@ -112,9 +121,12 @@ def promotion_committee(ctx, *, producer: str, committee_actor: str = "promotion
     hard_fail = [v for v in verdicts if not v.passed and v.blocking]
     soft_fail = [v for v in verdicts if not v.passed and not v.blocking]
 
-    if any(v.role == "reality_checker" and not v.passed and not v.blocking for v in verdicts):
+    reality_soft = next((v for v in verdicts
+                         if v.role == "reality_checker" and not v.passed and not v.blocking), None)
+    if reality_soft is not None:
+        reason = "; ".join(reality_soft.findings) or "required evidence is incomplete"
         return CommitteeDecision(RETEST_WITH_MORE_DATA, verdicts,
-                                 "insufficient sample — retest when more forward data exists")
+                                 f"retest when the evidence requirement is satisfied: {reason}")
     if hard_fail:
         reasons = "; ".join(x for v in hard_fail for x in v.findings)
         return CommitteeDecision(REJECT, verdicts, f"blocked: {reasons}")

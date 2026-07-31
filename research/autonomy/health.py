@@ -9,10 +9,13 @@ the supervisor.
 from __future__ import annotations
 
 import json
+from datetime import datetime, timedelta
 from pathlib import Path
 
 # failure codes
 AUTH_MISSING = "auth_missing"
+AUTH_EXPIRED = "auth_expired"
+PROVIDER_UNAVAILABLE = "provider_unavailable"
 SNAPSHOT_STALE = "snapshot_stale"
 NEWS_UNAVAILABLE = "news_unavailable"
 CA_INCOMPLETE = "corporate_actions_incomplete"
@@ -20,6 +23,9 @@ LIVE_FEED_STALE = "live_feed_stale"
 EVENT_STORE_FAILURE = "event_store_failure"
 RISK_GOVERNOR_UNHEALTHY = "risk_governor_unhealthy"
 UNRECONCILED = "unreconciled_state"
+UNIVERSE_INCOMPLETE = "universe_history_incomplete"
+LEARNING_FAILED = "learning_failed"
+OWNER_PAUSED = "owner_paused"
 
 # capability levels
 ALLOWED = "allowed"
@@ -28,13 +34,14 @@ BLOCKED = "blocked"
 READ_ONLY = "read_only"
 
 # which failures block / limit NEW paper entries
-_ENTRY_BLOCK = {AUTH_MISSING, SNAPSHOT_STALE, EVENT_STORE_FAILURE, RISK_GOVERNOR_UNHEALTHY, UNRECONCILED}
+_ENTRY_BLOCK = {AUTH_MISSING, AUTH_EXPIRED, PROVIDER_UNAVAILABLE, SNAPSHOT_STALE,
+                EVENT_STORE_FAILURE, RISK_GOVERNOR_UNHEALTHY, UNRECONCILED, OWNER_PAUSED}
 _ENTRY_LIMIT = {CA_INCOMPLETE, LIVE_FEED_STALE}
 # which failures limit existing-position management (exits are almost never fully blocked)
 _EXIT_LIMIT = {SNAPSHOT_STALE, LIVE_FEED_STALE, RISK_GOVERNOR_UNHEALTHY, UNRECONCILED, EVENT_STORE_FAILURE}
 # which failures block / limit research
 _RESEARCH_BLOCK = {EVENT_STORE_FAILURE}
-_RESEARCH_LIMIT = {NEWS_UNAVAILABLE, CA_INCOMPLETE}
+_RESEARCH_LIMIT = {NEWS_UNAVAILABLE, CA_INCOMPLETE, UNIVERSE_INCOMPLETE, LEARNING_FAILED}
 
 
 def capabilities(active_failures) -> dict:
@@ -47,6 +54,10 @@ def capabilities(active_failures) -> dict:
     notes = []
     if AUTH_MISSING in f:
         notes.append("Zerodha login required — new entries paused; safe exits continue.")
+    if AUTH_EXPIRED in f:
+        notes.append("Zerodha session expired — re-login required; historical research remains available.")
+    if PROVIDER_UNAVAILABLE in f:
+        notes.append("Market-data provider unavailable — new entries paused until current data is trustworthy.")
     if SNAPSHOT_STALE in f:
         notes.append("Market data stale — new entries paused; positions managed if prices are trustworthy.")
     if NEWS_UNAVAILABLE in f:
@@ -61,6 +72,12 @@ def capabilities(active_failures) -> dict:
         notes.append("Safety checks unhealthy — new entries blocked; risk reduction only.")
     if UNRECONCILED in f:
         notes.append("Records need a reconciliation pass before new risk.")
+    if UNIVERSE_INCOMPLETE in f:
+        notes.append("Point-in-time universe history is incomplete — PIT-dependent research remains blocked.")
+    if LEARNING_FAILED in f:
+        notes.append("Latest learning cycle failed — existing approved paper state continues; new promotion is blocked.")
+    if OWNER_PAUSED in f:
+        notes.append("Owner paused new paper entries; position management continues.")
     return {"new_paper_entries": new_entries, "existing_exits": exits, "research": research,
             "ui": ui, "active_failures": sorted(f), "notes": notes}
 
@@ -70,7 +87,7 @@ def read_status(*, state_path, jobs_db=None, dialogue_path=None) -> dict:
     out = {"supervisor_running": False, "state": "UNKNOWN", "explanation": "", "updated_ist": "",
            "heartbeat_ist": "", "snapshot_id": "", "recent_transitions": [], "jobs": {},
            "recent_dialogue": [], "new_risk_permitted": False, "positions_manageable": True,
-           "active_failures": []}
+           "active_failures": [], "owner_state": {}, "scheduler_of_record": "", "last_cycle": {}}
     try:
         d = json.loads(Path(state_path).read_text(encoding="utf-8"))
         out.update({"state": d.get("state", "UNKNOWN"), "explanation": d.get("explanation", ""),
@@ -79,8 +96,20 @@ def read_status(*, state_path, jobs_db=None, dialogue_path=None) -> dict:
                     "new_risk_permitted": bool(d.get("new_risk_permitted", False)),
                     "positions_manageable": bool(d.get("positions_manageable", True)),
                     "active_failures": list(d.get("active_failures", [])),
+                    "owner_state": dict(d.get("owner_state", {})),
+                    "scheduler_of_record": str(d.get("scheduler_of_record", "")),
+                    "last_cycle": dict(d.get("last_cycle", {}) or {}),
                     "recent_transitions": list(d.get("history", []))[-6:]})
-        out["supervisor_running"] = bool(d.get("heartbeat_ist"))
+        heartbeat = str(d.get("heartbeat_ist") or "")
+        fresh = False
+        if heartbeat:
+            try:
+                stamped = datetime.fromisoformat(heartbeat)
+                now = datetime.now(tz=stamped.tzinfo) if stamped.tzinfo else datetime.now()
+                fresh = (now - stamped) <= timedelta(seconds=90)
+            except Exception:
+                fresh = False
+        out["supervisor_running"] = bool(d.get("process_running", True)) and fresh
     except Exception:
         pass
     if jobs_db is not None:

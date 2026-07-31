@@ -289,42 +289,61 @@ class AutoResearchBrain:
         return self.grow_one_day(date=day)
 
     # ── the authoritative two-brain paper cycle (Phase O job) ────────────────────
-    def run_intelligence_cycle_day(self, date=None, *, ctx=None) -> dict:
-        """Run ONE end-to-end intelligence cycle (data→signals→Brain1→Brain2→intents→gate→
-        paper→exits→outcomes). One job, one lock (no overlapping mutation). Honest no-op when
-        no strategy registry/data is available. Never touches live."""
+    def run_intelligence_cycle_day(self, date=None, *, ctx=None,
+                                   new_entries_allowed: bool = True,
+                                   entry_block_reason: str = "",
+                                   session_phase: str | None = None,
+                                   capability_failures=(), fresh_live_symbols=(),
+                                   live_confirmation_required: bool = False) -> dict:
+        """Run ONE end-to-end intelligence cycle.
+
+        Operational entry permission is applied to the CycleContext *before* the authoritative
+        runtime executes.  A blocked cycle may manage existing positions and update evidence, but it
+        is structurally unable to reach ``PaperBook.open_position``.  This method remains paper-only
+        and broker-free.
+        """
         from research.intelligence.runtime import run_intelligence_cycle
-        from research.intelligence.runtime.cycle_context import CycleContext
         if not self._intel_lock.acquire(blocking=False):
-            return {"status": "SKIPPED_LOCKED"}
+            return {"status": "SKIPPED_LOCKED", "eligibility": "ALREADY_DONE"}
         try:
             day = date or _today_str()
             provider = None
             if ctx is None:
                 ctx, provider = self._build_intel_ctx(day)
+            # Apply the supervisor-owned safety controls before computing cycle_id / idempotency.
+            ctx.new_entries_allowed = bool(new_entries_allowed)
+            ctx.entry_block_reason = str(entry_block_reason or "")
+            ctx.capability_failures = tuple(sorted(set(capability_failures or ())))
+            ctx.fresh_live_symbols = frozenset(str(s).upper() for s in (fresh_live_symbols or ()))
+            ctx.live_confirmation_required = bool(live_confirmation_required)
+            if session_phase:
+                ctx.session_phase = str(session_phase)
+
             # establish IN-SAMPLE evidence per strategy from its OWN rules on the snapshot
-            # history (real backtest, reusing the runtime + book — never fabricated). Brain 1
-            # needs this to promote a fresh strategy to PROMISING for exploratory paper.
             bt_R, bt_n = {}, {}
             if provider is not None:
                 for spec in ctx.strategies:
                     r, n = self._insample_evidence(spec, provider, ctx.as_of_date)
-                    bt_R[spec.strategy_id] = r; bt_n[spec.strategy_id] = n
+                    bt_R[spec.strategy_id] = r
+                    bt_n[spec.strategy_id] = n
             res = run_intelligence_cycle(ctx, store=self.event_store, book=self.intel_book,
                                          runtime_state=self.runtime_state,
                                          knowledge=self.knowledge,
                                          backtest_R=bt_R, backtest_trades=bt_n)
             self.state.last_intel_cycle = res.as_dict()
-            self._save_intel_book()                  # open positions survive restart
+            self._save_intel_book()
             out = res.as_dict()
-            # a healthy cycle that ran on real data but opened nothing is a VALID outcome,
-            # reported clearly — never a forced/random trade.
-            if res.data_ok and not res.positions_opened and not res.positions_closed:
-                out["eligibility"] = "NO_ELIGIBLE_TRADE"
-            elif res.data_ok:
-                out["eligibility"] = "TRADED"
-            else:
+            if not res.data_ok:
                 out["eligibility"] = "NO_DATA"
+            elif res.positions_opened or res.positions_closed:
+                out["eligibility"] = "TRADED"
+            elif not ctx.new_entries_allowed:
+                out["eligibility"] = "BLOCKED_SAFETY"
+            else:
+                out["eligibility"] = "NO_ELIGIBLE_TRADE"
+            out["new_entries_allowed"] = bool(ctx.new_entries_allowed)
+            out["entry_block_reason"] = ctx.entry_block_reason
+            out["session_phase"] = ctx.session_phase
             return out
         finally:
             self._intel_lock.release()

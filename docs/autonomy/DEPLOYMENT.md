@@ -40,3 +40,8 @@ launchctl load ~/Library/LaunchAgents/com.quantterm.ui.plist
   and without losing open paper positions.
 - Live execution is **disabled** in this milestone; no service can place a broker order.
 - Logs are separate per service; secrets are never printed.
+
+## Owner controls
+Retail buttons write durable requests to `logs/autonomy/controls.db`. The autonomy service processes
+those requests under its single-instance lock. Opening additional browser sessions cannot create
+additional schedulers or mutation owners.

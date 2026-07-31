@@ -53,18 +53,14 @@ def render_auto_research() -> None:
     # ── controls ─────────────────────────────────────────────────────────────────
     c1, c2, c3 = st.columns(3)
     with c1:
-        if st.button("💭 Think one cycle now"):
-            with st.spinner("Reasoning…"):
-                try:
-                    brain.run_once()
-                except Exception as e:
-                    st.error(f"Cycle failed safely (nothing traded): {e}")
+        if st.button("💭 Request one research cycle"):
+            from research.autonomy.controls import request_control, RUN_RESEARCH_NOW
+            request_control(RUN_RESEARCH_NOW, reason="owner requested bounded research cycle")
+            st.success("Research cycle queued for the autonomy supervisor.")
     with c2:
-        if not brain.state.running and st.button("▶️ Start thinking loop"):
-            brain.start(); st.success("Brain is now thinking on a schedule.")
+        st.caption("The dedicated autonomy service owns the schedule.")
     with c3:
-        if brain.state.running and st.button("⏸️ Pause loop"):
-            brain.stop(); st.info("Paused. Nothing was pending.")
+        st.caption("Pause or resume new entries from Automatic Paper Trading.")
 
     st.markdown(f"**Cycles run:** {brain.state.cycles_run} · "
                 f"**Proposals parked:** {brain.state.total_proposals} · "
@@ -130,16 +126,15 @@ def _paper_autonomy_panel(brain) -> None:
                    "proven losers on its own. Only simulated money is at risk.")
         gc1, gc2 = st.columns(2)
         with gc1:
-            if st.button("🌱 Grow one day now", type="primary"):
-                with st.spinner("Backtest → forward test → calibrate → remember…"):
-                    try:
-                        brain.grow_one_day()
-                    except Exception as e:
-                        st.error(f"Grew safely (nothing traded live): {e}")
-                st.rerun()
+            if st.button("🌱 Request one learning/research cycle", type="primary"):
+                from research.autonomy.controls import request_control, RUN_RESEARCH_NOW
+                request_control(RUN_RESEARCH_NOW, reason="owner requested bounded learning/research cycle")
+                st.success("Research cycle queued for the autonomy supervisor.")
         with gc2:
-            if st.button("⏹️ Disengage paper autonomy"):
-                brain.disengage_paper_autonomy(); st.rerun()
+            if st.button("⏹️ Pause new paper entries"):
+                from research.autonomy.controls import request_control, PAUSE_NEW_PAPER_ENTRIES
+                request_control(PAUSE_NEW_PAPER_ENTRIES, reason="owner paused paper entries from research page")
+                st.success("Pause request queued. Existing positions remain manageable.")
         st.caption(f"Days grown: **{getattr(brain.state,'days_grown',0)}** · last: "
                    f"`{getattr(brain.state,'last_grow_date','—') or '—'}`. Each day it "
                    "backtests fresh ideas, forward-tests survivors in paper, and keeps only "
@@ -150,7 +145,10 @@ def _paper_autonomy_panel(brain) -> None:
                    "no human in the loop. It can 'blow up' paper money; it can never touch "
                    "live (that step stays user-only).")
         if st.button("▶️ Engage full paper autonomy", type="primary"):
-            brain.engage_paper_autonomy(); st.rerun()
+            from research.autonomy.controls import request_control, ENABLE_PAPER_AUTO, RESUME_NEW_PAPER_ENTRIES
+            request_control(ENABLE_PAPER_AUTO, reason="owner enabled PAPER_AUTO from research page")
+            request_control(RESUME_NEW_PAPER_ENTRIES, reason="owner resumed paper entries from research page")
+            st.success("PAPER_AUTO controls queued for the autonomy supervisor.")
 
     if not (engaged or brain.paper.strategies):
         return

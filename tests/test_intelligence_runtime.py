@@ -133,6 +133,41 @@ class TestSafety:
                    for e in store.of_type("CanonicalEvent"))
 
 
+    def test_entry_gate_prevents_real_paper_mutation(self):
+        ctx = _ctx()
+        ctx.new_entries_allowed = False
+        ctx.entry_block_reason = "ENTRY_WINDOW_CLOSED"
+        before_store, before_book, before_state = EventStore(), _book(), RuntimeState()
+        before = len(before_book.open)
+        res, store, book, _ = _run(ctx, before_store, before_book, before_state)
+        assert len(book.open) == before
+        assert res.positions_opened == []
+        types = [e.event_type for e in store.of_type("CanonicalEvent")]
+        assert "NEW_ENTRIES_BLOCKED" in types
+        assert "PAPER_POSITION_OPENED" not in types
+
+    def test_entry_gate_still_manages_existing_position(self):
+        store, book, state = EventStore(), _book(), RuntimeState()
+        _run(_ctx("d25"), store, book, state)
+        assert len(book.open) == 1
+        spec = _breakout_spec()
+        hist2 = _breakout_history("d25") + [RT.Bar("d26", 100, 100, 80, 82)]
+        ctx2 = CycleContext(as_of_date="d26", mode=MODES.PAPER_AUTO, data_ok=True,
+                            data_snapshot_id="snap1", strategies=[spec],
+                            data={"STR-BO": {"AAA": hist2}},
+                            new_entries_allowed=False,
+                            entry_block_reason="ENTRY_WINDOW_CLOSED")
+        res2, *_ = _run(ctx2, store, book, state)
+        assert res2.positions_closed and len(book.open) == 0
+        assert res2.positions_opened == []
+
+    def test_blocked_and_allowed_cycles_have_distinct_identity(self):
+        blocked = _ctx(); blocked.new_entries_allowed = False
+        blocked.entry_block_reason = "ENTRY_WINDOW_CLOSED"
+        allowed = _ctx(); allowed.new_entries_allowed = True
+        assert blocked.cycle_id() != allowed.cycle_id()
+
+
 # ── portfolio gate (Phase J) ─────────────────────────────────────────────────────
 
 class TestPortfolioGate:

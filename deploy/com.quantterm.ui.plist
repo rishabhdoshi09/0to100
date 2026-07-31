@@ -1,24 +1,2 @@
-<?xml version="1.0" encoding="UTF-8"?>
-<!-- macOS launchd unit for the QuantTerm retail UI (read-only control room). -->
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>Label</key><string>com.quantterm.ui</string>
-  <key>ProgramArguments</key>
-  <array>
-    <string>/usr/bin/env</string>
-    <string>streamlit</string>
-    <string>run</string>
-    <string>app.py</string>
-    <string>--server.headless</string>
-    <string>true</string>
-    <string>--server.port</string>
-    <string>8501</string>
-  </array>
-  <key>WorkingDirectory</key><string>/opt/0to100</string>
-  <key>KeepAlive</key><true/>
-  <key>RunAtLoad</key><true/>
-  <key>StandardOutPath</key><string>/usr/local/var/log/quantterm/ui.log</string>
-  <key>StandardErrorPath</key><string>/usr/local/var/log/quantterm/ui.err</string>
-</dict>
-</plist>
+<!-- Template/documentation only; setup_mac.sh writes an absolute-path LaunchAgent. -->
+<plist version="1.0"><dict><key>Label</key><string>com.quantterm.ui</string></dict></plist>

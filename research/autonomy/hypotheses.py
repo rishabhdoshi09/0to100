@@ -100,12 +100,19 @@ def hypothesis_hash(parent_spec, changes: dict) -> str:
     return hashlib.sha256(blob).hexdigest()[:16]
 
 
-class ResearchMemory:
-    """Thin wrapper over scientific_memory + an in-process seen-set for hypothesis de-duplication."""
+_AUTO_BACKEND = object()
 
-    def __init__(self, *, backend=None):
+
+class ResearchMemory:
+    """Thin wrapper over scientific memory plus an in-process seen set.
+
+    Omitting ``backend`` enables the canonical persistent store. Passing ``backend=None`` is an
+    explicit network/disk-free test mode.
+    """
+
+    def __init__(self, *, backend=_AUTO_BACKEND):
         self._seen: set[str] = set()
-        if backend is None:
+        if backend is _AUTO_BACKEND:
             try:
                 import research.scientific_memory as backend  # type: ignore
             except Exception:
@@ -133,7 +140,7 @@ class ResearchMemory:
         self._seen.add(semantic_hash)
         if self.backend is not None:
             try:
-                self.backend.record_negative(self._statement(semantic_hash), evidence_note=reason)
+                self.backend.record_negative(self._statement(semantic_hash), notes=reason)
             except Exception:
                 pass
 
@@ -144,18 +151,24 @@ def propose_hypothesis(parent_spec, gap: EvidenceGap, changes: dict, *, memory: 
                        research_budget: int = 1) -> tuple:
     """Build a preregistered hypothesis (successor spec via bump_version) if it touches only allowed
     dimensions and is not a known-dead idea. Returns (proposal, child_spec) or (None, reason)."""
-    bad = set(changes) - ALLOWED_DIMENSIONS
+    raw_changes = dict(changes or {})
+    causal = str(raw_changes.pop("_why", ""))
+    bad = set(raw_changes) - ALLOWED_DIMENSIONS
     if bad:
         return None, f"changes touch non-grammar dimensions: {sorted(bad)}"
-    h = hypothesis_hash(parent_spec, changes)
+    h = hypothesis_hash(parent_spec, raw_changes)
     if memory.is_known(h):
         return None, "duplicate: an equivalent hypothesis was already tried"
-    child = parent_spec.bump_version(**changes)      # NEW version + hash; parent untouched
+    try:
+        child = parent_spec.bump_version(**raw_changes)  # NEW version; parent untouched
+    except (TypeError, ValueError) as exc:
+        return None, f"invalid strategy-grammar change: {exc}"
+    if child.config_hash() == parent_spec.config_hash():
+        return None, "non-material hypothesis: result identity did not change"
     memory.register(h)
     proposal = HypothesisProposal(
         hypothesis_id=h, parent_strategy_id=parent_spec.strategy_id, parent_version=parent_spec.version,
-        observed_problem=gap.diagnosis, causal_explanation=changes.get("_why", "")
-        if isinstance(changes, dict) else "", changes={k: v for k, v in changes.items() if k != "_why"},
+        observed_problem=gap.diagnosis, causal_explanation=causal, changes=raw_changes,
         expected_improvement=expected_improvement, failure_condition=failure_condition,
         target_regime=target_regime, dataset_requirements=tuple(dataset_requirements),
         research_budget=int(research_budget), semantic_hash=h,

@@ -1,19 +1,30 @@
-"""
-🔧 Job handlers — thin wiring over the EXISTING canonical components.
+"""First-class autonomy job handlers over QuantTerm's canonical subsystems.
 
-Each handler runs one operation by calling the real subsystem through an injected `deps` object, so
-the whole thing is deterministic and network-free in tests while wiring genuine components in
-production. Handlers never place a broker order, never fabricate data, and translate a genuine failure
-into a BLOCKED/FAILED job — never into a false "no trade" / "no opportunity".
+Handlers are dependency-injected for deterministic tests.  Production wiring is Streamlit-free,
+paper-only and never imports a broker execution path.  BLOCKED jobs name the dependency that can
+requeue them; provider failure is never translated into "no opportunity".
 """
 from __future__ import annotations
 
+import csv
+import json
+import os
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from research.autonomy import job_store as JS
 from research.autonomy import schedules as SCH
 from research.autonomy import supervisor_state as ST
 from research.autonomy import health as H
+from research.autonomy import auth as AUTH
+
+DEP_AUTH = "AUTH_READY"
+DEP_DATA = "DATA_READY"
+DEP_SCAN = "SCAN_READY"
+DEP_OUTCOMES = "OUTCOMES_RESOLVED"
+DEP_LEARNING = "LEARNING_READY"
+DEP_CA_SOURCE = "CORPORATE_ACTIONS_SOURCE"
+DEP_UNIVERSE_SOURCE = "UNIVERSE_HISTORY_SOURCE"
 
 
 @dataclass
@@ -23,20 +34,34 @@ class JobResult:
     output_snapshot_id: str | None = None
     error_code: str = ""
     error_message: str = ""
-    failures: set = field(default_factory=set)   # health failure codes to raise
-    clears: set = field(default_factory=set)     # health failure codes to clear
+    failures: set = field(default_factory=set)
+    clears: set = field(default_factory=set)
     state_hint: str | None = None
     new_entries_allowed: bool = True
+    blocked_on: str = ""
+    dependency_version: str = ""
+    unblocks: tuple[str, ...] = ()
+    metadata: dict = field(default_factory=dict)
 
 
 class _Ctx:
-    """Handler context — carries the injected dependency object."""
-    def __init__(self, deps):
+    def __init__(self, deps, *, active_failures=(), owner_paused=False, root=None):
         self.deps = deps
+        self.active_failures = set(active_failures or ())
+        self.owner_paused = bool(owner_paused)
+        self.root = Path(root) if root else None
 
 
 class Deps:
-    """Production dependency wiring (guarded/lazy). Tests pass a fake with the same attributes."""
+    """Production dependency wiring.  Tests inject a smaller duck-typed object."""
+
+    def __init__(self, root=None, live_feed=None):
+        from research.autonomy import default_root
+        self.root = Path(root or default_root())
+        self.live_feed = live_feed
+        self.repo_root = Path(__file__).resolve().parents[2]
+        self.logs = self.repo_root / "logs"
+        self.logs.mkdir(parents=True, exist_ok=True)
 
     def now_ist(self):
         from research.intelligence.data import nse_calendar as CAL
@@ -49,55 +74,183 @@ class Deps:
         except Exception:
             return set()
 
-    def session_valid(self) -> bool:
-        try:
-            from data.kite_client import KiteClient
-            return bool(KiteClient().is_connected())
-        except Exception:
-            return False
+    def auth_health(self):
+        return AUTH.probe_auth()
+
+    def session_valid(self) -> bool:  # compatibility for existing tests/callers
+        return self.auth_health().valid
 
     def activate(self):
         from research.intelligence.data.kite_activation import activate
-        return activate(start_worker=False, run_cycle=False)
+        from research.intelligence.data.snapshot_store import SnapshotStore
+        return activate(
+            store=SnapshotStore(self.logs / "snapshots"),
+            history_dir=self.logs / "kite_history",
+            progress_path=self.logs / "kite_history" / "progress.json",
+            start_worker=False,
+            run_cycle=False,
+        )
 
     def active_snapshot_id(self):
         try:
-            from research.auto_research.scheduler import get_brain
-            store = get_brain().snapshot_store
-            return store.get_active_snapshot() if store else None
+            from research.intelligence.data.snapshot_store import SnapshotStore
+            return SnapshotStore(self.logs / "snapshots").get_active_snapshot()
         except Exception:
             return None
 
+    def active_snapshot_info(self) -> dict:
+        try:
+            from research.intelligence.data.snapshot_store import SnapshotStore
+            store = SnapshotStore(self.logs / "snapshots")
+            sid = store.get_active_snapshot()
+            if not sid:
+                return {}
+            manifest = json.loads((Path(store.root) / sid / "manifest.json").read_text(encoding="utf-8"))
+            return {"snapshot_id": sid, "latest_date": str(manifest.get("last_trading_date") or ""),
+                    "source": str(manifest.get("source") or "")}
+        except Exception:
+            return {}
+
+    def refresh_instruments(self):
+        from research.intelligence.data.kite_activation import KiteDataClient
+        from data.fno_universe import build_fno_universe
+        client = KiteDataClient.from_config()
+        rows = [dict(r) for r in (list(client.instruments("NSE")) + list(client.instruments("NFO")))]
+        if not rows:
+            raise RuntimeError("instrument master returned no rows")
+        cache = self.logs / "instruments_cache.csv"
+        cache.parent.mkdir(parents=True, exist_ok=True)
+        fields = sorted({str(k) for row in rows for k in row})
+        tmp = cache.with_suffix(".tmp")
+        with open(tmp, "w", newline="", encoding="utf-8") as fh:
+            writer = csv.DictWriter(fh, fieldnames=fields, extrasaction="ignore")
+            writer.writeheader()
+            for row in rows:
+                writer.writerow({k: row.get(k, "") for k in fields})
+        os.replace(tmp, cache)
+        report = build_fno_universe(rows, as_of=self.now_ist().date(), source="zerodha_kite")
+        exclusions_path = self.root / "instrument_exclusions.json"
+        exclusions_path.write_text(json.dumps([
+            {"underlying": x.underlying, "stage": x.stage, "reason": x.reason,
+             "observed_at": self.now_ist().isoformat()}
+            for x in report.exclusions
+        ], indent=2), encoding="utf-8")
+        return {"rows": len(rows), "fno_underlyings": report.mapped_underlyings,
+                "exclusions": len(report.exclusions), "source": report.source}
+
+    def update_bhavcopy(self):
+        from data import bhavcopy_store as BS
+        symbols = BS.build_store()
+        return {"symbols": int(symbols), "ready": bool(BS.is_ready()), "source": "official_nse"}
+
+    def corporate_actions_status(self):
+        from data import corporate_actions as CA
+        path = CA._events_path()
+        events = CA.load_events(path)
+        return {"available": path.exists(), "symbols": len(events), "path": str(path)}
+
+    def universe_history_status(self):
+        from data.nse_universe import point_in_time_universe
+        return point_in_time_universe(self.now_ist().date())
+
+    def warm_indices(self):
+        from data.index_store import build_index_store
+        return {"indices": int(build_index_store()), "source": "official_nse"}
+
     def run_scan(self):
-        from ui.retail_home_momentum import _run_and_save_momentum  # existing whole-market scan+save
-        return _run_and_save_momentum()
+        from scan.market_scan_service import run_whole_market_scan
+        return run_whole_market_scan(snapshot_id=str(self.active_snapshot_id() or ""))
 
-    def run_paper_cycle(self, entries_allowed: bool):
+    def run_paper_cycle(self, entries_allowed: bool, entry_block_reason="",
+                        session_phase="intraday", capability_failures=()):
         from research.auto_research.scheduler import get_brain
-        return get_brain().run_intelligence_cycle_day()
+        live = self.live_feed
+        return get_brain().run_intelligence_cycle_day(
+            new_entries_allowed=entries_allowed,
+            entry_block_reason=entry_block_reason,
+            session_phase=session_phase,
+            capability_failures=capability_failures,
+            fresh_live_symbols=(live.fresh_symbols() if live is not None else ()),
+        )
 
-    def news_health(self):
+    def resolve_outcomes(self, session_date: str, capability_failures=()):
+        from research.auto_research.scheduler import get_brain
+        return get_brain().run_intelligence_cycle_day(
+            date=session_date, new_entries_allowed=False,
+            entry_block_reason="EOD_MANAGEMENT_ONLY", session_phase="eod",
+            capability_failures=capability_failures,
+        )
+
+    def run_learning(self, session_date: str, dialogue=None):
+        from research.autonomy.research_loop import run_learning
+        from research.auto_research.scheduler import get_brain
+        return run_learning(get_brain(), session_date=session_date, dialogue=dialogue)
+
+    def run_research(self, session_date: str, dialogue=None):
+        from research.autonomy.research_loop import run_research_cycle
+        from research.auto_research.scheduler import get_brain
+        return run_research_cycle(get_brain(), session_date=session_date, dialogue=dialogue)
+
+    def refresh_news(self):
+        from news.curator_service import get_news_curator_service
+        return get_news_curator_service().refresh_now()
+
+    def news_health(self):  # legacy compatibility
         try:
             from news.curator_service import get_news_curator_service
-            svc = get_news_curator_service()
-            return {"running": svc.running, "error": svc.last_error}
+            service = get_news_curator_service()
+            return {"running": service.running, "error": service.last_error}
         except Exception as exc:
             return {"running": False, "error": str(exc)}
 
 
-# ── handlers ─────────────────────────────────────────────────────────────────────
+def _auth_health(deps):
+    if hasattr(deps, "auth_health"):
+        return deps.auth_health()
+    valid = bool(deps.session_valid())
+    return AUTH.AuthHealth(AUTH.SESSION_VALID if valid else AUTH.TOKEN_MISSING, "test")
+
+
 def run_auth_health(ctx) -> JobResult:
-    if ctx.deps.session_valid():
-        return JobResult(JS.SUCCEEDED, "AUTH_READY", clears={H.AUTH_MISSING},
-                         state_hint=ST.DATA_REFRESHING)
-    return JobResult(JS.BLOCKED, "AUTH_REQUIRED — complete the daily Zerodha login",
-                     failures={H.AUTH_MISSING}, state_hint=ST.AUTH_REQUIRED, new_entries_allowed=False)
+    health = _auth_health(ctx.deps)
+    if health.status == AUTH.SESSION_VALID:
+        return JobResult(JS.SUCCEEDED, "AUTH_READY", clears={H.AUTH_MISSING, H.AUTH_EXPIRED,
+                         H.PROVIDER_UNAVAILABLE}, state_hint=ST.DATA_REFRESHING,
+                         unblocks=(DEP_AUTH,), metadata=health.as_dict())
+    if health.status == AUTH.PROVIDER_UNAVAILABLE:
+        return JobResult(JS.RETRYABLE_FAILED, "Zerodha provider temporarily unavailable",
+                         error_code=health.error_code or "PROVIDER_UNAVAILABLE",
+                         error_message=health.reason, failures={H.PROVIDER_UNAVAILABLE},
+                         state_hint=ST.DEGRADED, new_entries_allowed=False)
+    failure = H.AUTH_MISSING if health.status == AUTH.TOKEN_MISSING else H.AUTH_EXPIRED
+    return JobResult(JS.BLOCKED, health.reason or "daily Zerodha login required",
+                     error_code=health.error_code, failures={failure},
+                     clears={H.PROVIDER_UNAVAILABLE}, state_hint=ST.AUTH_REQUIRED,
+                     new_entries_allowed=False, blocked_on="CREDENTIAL_UPDATE",
+                     metadata=health.as_dict())
+
+
+def run_instrument_refresh(ctx) -> JobResult:
+    if not _auth_health(ctx.deps).valid:
+        return JobResult(JS.BLOCKED, "auth required before instrument refresh",
+                         failures={H.AUTH_MISSING}, state_hint=ST.AUTH_REQUIRED,
+                         blocked_on=DEP_AUTH, new_entries_allowed=False)
+    try:
+        info = ctx.deps.refresh_instruments()
+        return JobResult(JS.SUCCEEDED,
+                         f"instrument master current · {info.get('rows', 0)} rows · "
+                         f"{info.get('fno_underlyings', 0)} F&O underlyings",
+                         clears={H.AUTH_MISSING, H.AUTH_EXPIRED}, unblocks=(DEP_AUTH,), metadata=info)
+    except Exception as exc:
+        return JobResult(JS.RETRYABLE_FAILED, "instrument refresh failed",
+                         error_code="INSTRUMENT_REFRESH_ERROR", error_message=str(exc))
 
 
 def run_data_refresh(ctx) -> JobResult:
-    if not ctx.deps.session_valid():
-        return JobResult(JS.BLOCKED, "auth required before data refresh", failures={H.AUTH_MISSING},
-                         state_hint=ST.AUTH_REQUIRED, new_entries_allowed=False)
+    if not _auth_health(ctx.deps).valid:
+        return JobResult(JS.BLOCKED, "auth required before data refresh",
+                         failures={H.AUTH_MISSING}, state_hint=ST.AUTH_REQUIRED,
+                         blocked_on=DEP_AUTH, new_entries_allowed=False)
     try:
         report = ctx.deps.activate()
     except Exception as exc:
@@ -106,56 +259,229 @@ def run_data_refresh(ctx) -> JobResult:
     ok = report.status("GENUINE_SNAPSHOT_ACTIVE") == "PASS" if hasattr(report, "status") else False
     if ok:
         sid = getattr(report, "active_pointer", None) or getattr(report, "snapshot_id", None)
+        quality = dict(getattr(report, "quality", {}) or {})
+        latest = ""
+        date_range = quality.get("date_range")
+        if isinstance(date_range, (list, tuple)) and date_range:
+            latest = str(date_range[-1])
+        if not latest and hasattr(ctx.deps, "active_snapshot_info"):
+            latest = str((ctx.deps.active_snapshot_info() or {}).get("latest_date") or "")
+        required = str(getattr(ctx, "required_session_date", "") or "")
+        if required and latest < required:
+            return JobResult(JS.RETRYABLE_FAILED,
+                             f"EOD data pending · active snapshot latest={latest or 'unknown'} · required={required}",
+                             output_snapshot_id=sid, error_code="EOD_DATA_PENDING",
+                             error_message="the completed session is not yet present in the active snapshot",
+                             failures={H.SNAPSHOT_STALE}, state_hint=ST.DATA_REFRESHING,
+                             new_entries_allowed=False, metadata={**quality, "latest_date": latest,
+                                                                 "required_date": required})
+        unblocks = [DEP_DATA]
+        if latest:
+            unblocks.append(f"EOD_DATA_READY:{latest}")
         return JobResult(JS.SUCCEEDED, "genuine snapshot active", output_snapshot_id=sid,
-                         clears={H.SNAPSHOT_STALE, H.AUTH_MISSING}, state_hint=ST.DATA_READY)
+                         clears={H.SNAPSHOT_STALE, H.AUTH_MISSING, H.AUTH_EXPIRED,
+                                 H.PROVIDER_UNAVAILABLE}, state_hint=ST.DATA_READY,
+                         unblocks=tuple(unblocks), metadata={**quality, "latest_date": latest})
     blocker = getattr(report, "blocker", "") or "snapshot not forward-eligible"
     return JobResult(JS.BLOCKED, f"data not ready: {blocker}", failures={H.SNAPSHOT_STALE},
-                     state_hint=ST.DATA_BLOCKED, new_entries_allowed=False)
+                     state_hint=ST.DATA_BLOCKED, new_entries_allowed=False,
+                     blocked_on=DEP_AUTH if "session" in blocker.lower() else "DATA_SOURCE")
+
+
+def run_bhavcopy_update(ctx) -> JobResult:
+    try:
+        info = ctx.deps.update_bhavcopy()
+    except Exception as exc:
+        return JobResult(JS.RETRYABLE_FAILED, "official bhavcopy update failed",
+                         error_code="BHAVCOPY_ERROR", error_message=str(exc))
+    if not info.get("ready"):
+        return JobResult(JS.BLOCKED, "official bhavcopy history is not yet sufficient",
+                         blocked_on="BHAVCOPY_SOURCE", metadata=info)
+    return JobResult(JS.SUCCEEDED, f"official bhavcopy ready · {info.get('symbols', 0)} symbols",
+                     metadata=info)
+
+
+def run_corporate_actions(ctx) -> JobResult:
+    try:
+        info = ctx.deps.corporate_actions_status()
+    except Exception as exc:
+        return JobResult(JS.RETRYABLE_FAILED, "corporate-action validation failed",
+                         error_code="CA_VALIDATION_ERROR", error_message=str(exc),
+                         failures={H.CA_INCOMPLETE})
+    if not info.get("available"):
+        return JobResult(JS.BLOCKED,
+                         "official corporate-action table unavailable; affected historical research remains blocked",
+                         failures={H.CA_INCOMPLETE}, blocked_on=DEP_CA_SOURCE, metadata=info)
+    return JobResult(JS.SUCCEEDED, f"corporate actions loaded · {info.get('symbols', 0)} symbols",
+                     clears={H.CA_INCOMPLETE}, metadata=info)
+
+
+def run_universe_history(ctx) -> JobResult:
+    try:
+        info = ctx.deps.universe_history_status()
+    except Exception as exc:
+        return JobResult(JS.RETRYABLE_FAILED, "universe-history validation failed",
+                         error_code="UNIVERSE_HISTORY_ERROR", error_message=str(exc),
+                         failures={H.UNIVERSE_INCOMPLETE})
+    if not info.get("survivorship_complete"):
+        return JobResult(JS.BLOCKED, info.get("note") or "point-in-time universe unavailable",
+                         failures={H.UNIVERSE_INCOMPLETE}, blocked_on=DEP_UNIVERSE_SOURCE,
+                         metadata=info)
+    return JobResult(JS.SUCCEEDED, f"point-in-time universe ready · {len(info.get('symbols', []))} symbols",
+                     clears={H.UNIVERSE_INCOMPLETE}, metadata=info)
+
+
+def run_index_warmup(ctx) -> JobResult:
+    try:
+        info = ctx.deps.warm_indices()
+    except Exception as exc:
+        return JobResult(JS.RETRYABLE_FAILED, "index warm-up failed", error_code="INDEX_WARMUP_ERROR",
+                         error_message=str(exc))
+    if int(info.get("indices", 0)) <= 0:
+        return JobResult(JS.RETRYABLE_FAILED, "official index store unavailable",
+                         error_code="INDEX_DATA_UNAVAILABLE")
+    return JobResult(JS.SUCCEEDED, f"index store warm · {info.get('indices')} indices", metadata=info)
 
 
 def run_market_scan(ctx) -> JobResult:
+    if not ctx.deps.active_snapshot_id():
+        return JobResult(JS.BLOCKED, "verified active snapshot required before market scan",
+                         failures={H.SNAPSHOT_STALE}, blocked_on=DEP_DATA,
+                         state_hint=ST.DATA_BLOCKED, new_entries_allowed=False)
     try:
-        payload = ctx.deps.run_scan()
+        report = ctx.deps.run_scan()
     except Exception as exc:
-        # a provider/parse failure is a FAILED job, never a silent "no opportunity"
         return JobResult(JS.RETRYABLE_FAILED, "scan failed to load market data",
                          error_code="SCAN_ERROR", error_message=str(exc), state_hint=ST.OBSERVING)
-    summ = (payload or {}).get("summary", {})
-    n = summ.get("with_any_setup", 0)
-    return JobResult(JS.SUCCEEDED, f"scan complete · {n} setups · {summ.get('momentum', 0)} momentum",
-                     state_hint=ST.OBSERVING)
+    if hasattr(report, "ok"):
+        if not report.ok:
+            return JobResult(JS.RETRYABLE_FAILED, "whole-market scan failed",
+                             error_code=report.error_code or "SCAN_ERROR",
+                             error_message=report.error_message, state_hint=ST.OBSERVING)
+        payload = report.payload
+    else:
+        payload = report or {}
+    summary = dict(payload.get("summary", {}))
+    n = int(summary.get("with_any_setup", 0) or 0)
+    return JobResult(JS.SUCCEEDED,
+                     f"scan complete · {n} setups · {summary.get('momentum', 0)} momentum",
+                     state_hint=ST.OBSERVING, unblocks=(DEP_SCAN,), metadata=summary)
+
+
+def _entry_reason(now, holidays, ctx) -> tuple[bool, str, str]:
+    phase = SCH.session_phase(now, holidays)
+    if not SCH.entries_allowed_by_clock(now, holidays):
+        return False, "ENTRY_WINDOW_CLOSED", phase
+    caps = H.capabilities(ctx.active_failures | ({H.OWNER_PAUSED} if ctx.owner_paused else set()))
+    if caps["new_paper_entries"] == H.BLOCKED:
+        return False, "CAPABILITY_BLOCKED", phase
+    return True, "", phase
 
 
 def run_paper_cycle(ctx) -> JobResult:
+    if not ctx.deps.active_snapshot_id():
+        return JobResult(JS.BLOCKED, "verified active snapshot required before paper cycle",
+                         failures={H.SNAPSHOT_STALE}, blocked_on=DEP_DATA,
+                         state_hint=ST.DATA_BLOCKED, new_entries_allowed=False)
     now = ctx.deps.now_ist()
-    entries_ok = SCH.entries_allowed_by_clock(now, ctx.deps.holidays())
+    holidays = ctx.deps.holidays()
+    entries_ok, reason, phase = _entry_reason(now, holidays, ctx)
     try:
-        res = ctx.deps.run_paper_cycle(entries_ok)
+        try:
+            result = ctx.deps.run_paper_cycle(entries_ok, reason, phase, ctx.active_failures)
+        except TypeError:  # legacy injected fakes
+            result = ctx.deps.run_paper_cycle(entries_ok)
     except Exception as exc:
         return JobResult(JS.RETRYABLE_FAILED, "paper cycle error", error_code="CYCLE_ERROR",
                          error_message=str(exc))
-    elig = (res or {}).get("eligibility", "")
-    if not entries_ok and elig == "TRADED":
-        # structural guard: opening-noise / outside-window cycles must not open NEW entries
-        return JobResult(JS.BLOCKED, "outside entry window — new entries blocked (opening noise)",
-                         failures=set(), state_hint=ST.OBSERVING, new_entries_allowed=False)
+    eligibility = (result or {}).get("eligibility", "")
     hint = ST.PAPER_ACTIVE if entries_ok else ST.OBSERVING
-    return JobResult(JS.SUCCEEDED, f"paper cycle: {elig or 'no-op'}", state_hint=hint,
-                     new_entries_allowed=entries_ok)
+    return JobResult(JS.SUCCEEDED, f"paper cycle: {eligibility or 'no-op'}",
+                     state_hint=hint, new_entries_allowed=entries_ok,
+                     metadata={"eligibility": eligibility, "entry_block_reason": reason,
+                               "session_phase": phase})
 
 
-def run_news_health(ctx) -> JobResult:
-    h = ctx.deps.news_health()
-    if h.get("running"):
-        return JobResult(JS.SUCCEEDED, "news curator healthy", clears={H.NEWS_UNAVAILABLE})
-    return JobResult(JS.SUCCEEDED, f"news unavailable: {h.get('error', '')}",
-                     failures={H.NEWS_UNAVAILABLE})     # non-critical: trading unaffected
+def run_outcome_resolution(ctx) -> JobResult:
+    session_date = ctx.deps.now_ist().date().isoformat()
+    if not ctx.deps.active_snapshot_id():
+        return JobResult(JS.BLOCKED, "verified EOD data required before outcome resolution",
+                         blocked_on=DEP_DATA, failures={H.SNAPSHOT_STALE})
+    if hasattr(ctx.deps, "active_snapshot_info"):
+        latest = str((ctx.deps.active_snapshot_info() or {}).get("latest_date") or "")
+        if latest < session_date:
+            return JobResult(JS.BLOCKED,
+                             f"outcomes wait for completed-session data ({latest or 'unknown'} < {session_date})",
+                             blocked_on=f"EOD_DATA_READY:{session_date}", failures={H.SNAPSHOT_STALE})
+    try:
+        if hasattr(ctx.deps, "resolve_outcomes"):
+            result = ctx.deps.resolve_outcomes(session_date, ctx.active_failures)
+        else:
+            result = ctx.deps.run_paper_cycle(False)
+    except Exception as exc:
+        return JobResult(JS.RETRYABLE_FAILED, "outcome resolution failed",
+                         error_code="OUTCOME_ERROR", error_message=str(exc))
+    closed = len((result or {}).get("positions_closed", []))
+    recorded = len((result or {}).get("outcomes_recorded", []))
+    return JobResult(JS.SUCCEEDED, f"outcomes resolved · {closed} positions closed · {recorded} decoded",
+                     unblocks=(f"{DEP_OUTCOMES}:{session_date}",), metadata=result or {})
 
+
+def run_learning_cycle(ctx) -> JobResult:
+    session_date = ctx.deps.now_ist().date().isoformat()
+    try:
+        result = ctx.deps.run_learning(session_date, getattr(ctx, "dialogue", None))
+    except Exception as exc:
+        return JobResult(JS.RETRYABLE_FAILED, "learning cycle failed", error_code="LEARNING_ERROR",
+                         error_message=str(exc), failures={H.LEARNING_FAILED}, state_hint=ST.DEGRADED)
+    return JobResult(JS.SUCCEEDED, f"learning complete · {result.get('diagnostics', 0)} diagnostics",
+                     clears={H.LEARNING_FAILED}, state_hint=ST.RESEARCHING,
+                     unblocks=(f"{DEP_LEARNING}:{session_date}",), metadata=result)
+
+
+def run_research_cycle(ctx) -> JobResult:
+    session_date = ctx.deps.now_ist().date().isoformat()
+    try:
+        result = ctx.deps.run_research(session_date, getattr(ctx, "dialogue", None))
+    except Exception as exc:
+        return JobResult(JS.RETRYABLE_FAILED, "research cycle failed", error_code="RESEARCH_ERROR",
+                         error_message=str(exc), failures={H.LEARNING_FAILED}, state_hint=ST.DEGRADED)
+    return JobResult(JS.SUCCEEDED, f"research cycle: {result.get('decision', 'no action')}",
+                     clears={H.LEARNING_FAILED}, state_hint=ST.OBSERVING, metadata=result)
+
+
+def run_news_refresh(ctx) -> JobResult:
+    try:
+        if hasattr(ctx.deps, "refresh_news"):
+            report = ctx.deps.refresh_news() or {}
+            failed = str(report.get("status", "")).upper() == "ERROR"
+            error = report.get("error", "")
+        else:
+            health = ctx.deps.news_health()
+            failed = not health.get("running")
+            error = health.get("error", "")
+    except Exception as exc:
+        failed, error = True, str(exc)
+    if failed:
+        return JobResult(JS.SUCCEEDED, f"news unavailable: {error}", failures={H.NEWS_UNAVAILABLE})
+    return JobResult(JS.SUCCEEDED, "news refresh complete", clears={H.NEWS_UNAVAILABLE})
+
+
+# Compatibility name retained for older tests.
+run_news_health = run_news_refresh
 
 HANDLERS = {
     SCH.AUTH_HEALTH: run_auth_health,
+    SCH.INSTRUMENT_REFRESH: run_instrument_refresh,
     SCH.DATA_REFRESH: run_data_refresh,
+    SCH.BHAVCOPY_UPDATE: run_bhavcopy_update,
+    SCH.CORPORATE_ACTIONS: run_corporate_actions,
+    SCH.UNIVERSE_HISTORY: run_universe_history,
+    SCH.INDEX_WARMUP: run_index_warmup,
     SCH.MARKET_SCAN: run_market_scan,
+    SCH.NEWS_REFRESH: run_news_refresh,
     SCH.PAPER_CYCLE: run_paper_cycle,
-    SCH.NEWS_REFRESH: run_news_health,
+    SCH.OUTCOME_RESOLUTION: run_outcome_resolution,
+    SCH.LEARNING_CYCLE: run_learning_cycle,
+    SCH.RESEARCH_CYCLE: run_research_cycle,
 }

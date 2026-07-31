@@ -79,7 +79,6 @@ def _render_list(rows, empty_message: str, limit: int) -> None:
 
 def render_news_curator_page() -> None:
     service = get_news_curator_service()
-    service.start()
     curator = service.curator
 
     st.title("Market News")
@@ -102,16 +101,9 @@ def render_news_curator_page() -> None:
             st.caption("Automatic curator started. First refresh is in progress.")
     with refresh_col:
         if st.button("Refresh now", type="primary", width="stretch"):
-            with st.spinner("Collecting and organising market news…"):
-                report = service.refresh_now()
-            if report.get("status") == "ERROR":
-                st.error(report.get("error", "Refresh failed"))
-            else:
-                st.success(
-                    f"Curated {report.get('curated_articles', 0)} stories from "
-                    f"{report.get('sources_ok', 0)} working sources."
-                )
-            st.rerun()
+            from research.autonomy.controls import request_control, REFRESH_NEWS_NOW
+            request_control(REFRESH_NEWS_NOW, reason="owner requested news refresh")
+            st.success("News refresh queued for the autonomy supervisor.")
 
     stats = curator.stats(hours=24)
     c1, c2, c3, c4, c5 = st.columns(5)

@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import streamlit as st
 
-from product.runtime import ensure_runtime_started
 from ui.retail_pages_v2 import (
     render_advanced,
     render_alerts,
@@ -27,7 +26,6 @@ from ui.retail_pages_v2 import (
 )
 
 st.set_page_config(page_title="QuantTerm", page_icon="⚡", layout="wide", initial_sidebar_state="expanded")
-ensure_runtime_started()
 
 pages = {
     "Everyday": [

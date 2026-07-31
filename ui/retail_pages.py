@@ -19,18 +19,9 @@ def _money(value: float) -> str:
 
 
 def _run_activation() -> None:
-    from research.intelligence.data.kite_activation import activate
-    with st.spinner("Updating genuine Zerodha history and checking PAPER_AUTO…"):
-        report = activate(start_worker=True, run_cycle=True)
-    st.session_state["last_activation_report"] = report.as_dict()
-    if report.status("GENUINE_SNAPSHOT_ACTIVE") == "PASS":
-        st.success("Market data is verified and active.")
-    else:
-        st.error(report.blocker or "Market data could not be activated.")
-    with st.expander("Update details", expanded=True):
-        st.code(report.render())
-        if report.quality:
-            st.json(report.quality)
+    from research.autonomy.controls import request_control, REFRESH_DATA_NOW
+    request_control(REFRESH_DATA_NOW, reason="owner requested data refresh from legacy retail page")
+    st.success("Market-data refresh queued for the autonomy supervisor.")
 
 
 def render_home() -> None:
@@ -62,14 +53,14 @@ def render_home() -> None:
             _run_activation()
     elif state.primary_key == "paper":
         if st.button("Enable Automatic Paper Trading", type="primary", width="stretch"):
-            from research.auto_research.scheduler import get_brain
-            brain = get_brain(); brain.enable_paper_auto(); brain.start()
-            st.success("Automatic paper trading is enabled. No per-trade approval is required.")
-            st.rerun()
+            from research.autonomy.controls import (
+        request_control, ENABLE_PAPER_AUTO, PAUSE_NEW_PAPER_ENTRIES, RUN_CYCLE_NOW,
+    )
+            request_control(ENABLE_PAPER_AUTO, reason="owner enabled PAPER_AUTO")
+            st.success("PAPER_AUTO enable request queued."); st.rerun()
     elif state.primary_key == "start_worker":
         if st.button("Start Paper-Trading Worker", type="primary", width="stretch"):
-            from research.auto_research.scheduler import get_brain
-            get_brain().start(); st.rerun()
+            st.warning("Start the dedicated autonomy service with `python main.py autonomy`.")
     elif state.primary_key == "backtest":
         st.info("Open **Backtest** from the sidebar. Market-closed time is research time.")
     else:
@@ -179,6 +170,9 @@ def render_momentum() -> None:
 
 
 def render_paper_trading() -> None:
+    from research.autonomy.controls import (
+        request_control, ENABLE_PAPER_AUTO, PAUSE_NEW_PAPER_ENTRIES, RUN_CYCLE_NOW,
+    )
     from research.auto_research.scheduler import get_brain
     brain = get_brain()
     book = brain.intel_book
@@ -198,12 +192,14 @@ def render_paper_trading() -> None:
     a, b = st.columns(2)
     if enabled:
         if a.button("Pause new paper trades", type="secondary", width="stretch"):
-            brain.disable_paper_auto(); st.rerun()
+            request_control(PAUSE_NEW_PAPER_ENTRIES, reason="owner paused paper entries")
+            st.success("Pause request queued. Existing positions remain manageable.")
     else:
         if a.button("Enable automatic paper trading", type="primary", width="stretch"):
-            brain.enable_paper_auto(); brain.start(); st.rerun()
-    if b.button("Start / verify worker", width="stretch"):
-        brain.start(); st.rerun()
+            request_control(ENABLE_PAPER_AUTO, reason="owner enabled PAPER_AUTO"); st.rerun()
+    if b.button("Request one paper cycle", width="stretch"):
+        request_control(RUN_CYCLE_NOW, reason="owner requested immediate paper cycle")
+        st.success("Cycle queued for the autonomy supervisor.")
 
     st.caption(f"Risk per trade: {book.risk_per_trade_pct:.1%} · Maximum positions: {book.max_positions} · Current open risk: {_money(book.open_risk())}")
     if brain.state.last_error:

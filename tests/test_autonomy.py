@@ -139,7 +139,11 @@ def test_graceful_shutdown_persists_and_releases(tmp_path):
     sup.tick(_NOW)
     sup.shutdown()
     assert (tmp_path / "auto" / "status.json").exists()
-    assert _sup(tmp_path).start() is True    # lock released
+    from product.autonomy_status import read_autonomy_status
+    assert read_autonomy_status(root=tmp_path / "auto")["running"] is False
+    reopened = _sup(tmp_path)
+    assert reopened.start() is True    # lock released
+    reopened.shutdown()
 
 
 # ══ Data jobs ════════════════════════════════════════════════════════════════════
@@ -181,13 +185,21 @@ def test_scan_runs_without_streamlit(tmp_path):
     assert r.status == JS.SUCCEEDED and "scan complete" in r.summary   # no streamlit involved
 
 
-def test_opening_noise_blocks_new_entries():
+def test_opening_noise_runs_management_only():
     pre = datetime(2026, 7, 31, 9, 20)       # before 09:30 → opening noise
     assert SCH.in_opening_noise(pre) and not SCH.entries_allowed_by_clock(pre)
-    # a cycle that would TRADE before 09:30 is structurally blocked
-    r = JOBS.run_paper_cycle(JOBS._Ctx(FakeDeps(now=pre, cycle={"eligibility": "TRADED"})))
-    assert r.status == JS.BLOCKED and r.new_entries_allowed is False
-    assert SCH.entries_allowed_by_clock(datetime(2026, 7, 31, 10, 0))    # allowed mid-session
+    # The job succeeds as an observation/management cycle; the authoritative runtime receives
+    # the entry gate BEFORE mutation. BLOCKED is reserved for an unmet job dependency.
+    seen = {}
+    class GateDeps(FakeDeps):
+        def run_paper_cycle(self, entries_allowed, reason="", phase="", failures=()):
+            seen.update(allowed=entries_allowed, reason=reason, phase=phase)
+            return {"eligibility": "BLOCKED_SAFETY"}
+    r = JOBS.run_paper_cycle(JOBS._Ctx(GateDeps(now=pre)))
+    assert r.status == JS.SUCCEEDED and r.new_entries_allowed is False
+    assert seen == {"allowed": False, "reason": "ENTRY_WINDOW_CLOSED", "phase": "opening_noise"}
+    assert r.metadata["eligibility"] == "BLOCKED_SAFETY"
+    assert SCH.entries_allowed_by_clock(datetime(2026, 7, 31, 10, 0))
 
 
 def test_provider_failure_is_not_no_opportunity():
@@ -200,6 +212,78 @@ def test_scan_slot_is_deterministic():
     b = SCH.scan_slot(datetime(2026, 7, 31, 10, 14))
     assert a == b == "intraday-1000"          # same 15-min slot → one immutable scan
     assert not SCH.scan_due(datetime(2026, 7, 31, 10, 14), a)
+
+
+def test_headless_scan_service_has_no_ui_dependency():
+    import ast
+    root = Path(__file__).resolve().parents[1]
+    tree = ast.parse((root / "scan/market_scan_service.py").read_text(encoding="utf-8"))
+    imports = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            imports.extend(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            imports.append(node.module or "")
+    assert not any(name == "streamlit" or name.startswith("ui") for name in imports)
+
+
+def test_blocked_job_unblocks_without_duplicate(tmp_path):
+    store = JS.JobStore(tmp_path / "jobs.db")
+    original = store.enqueue(SCH.DATA_REFRESH, idempotency_key="data:2026-07-31")
+    store.block(original.job_id, dependency=JOBS.DEP_AUTH, reason="login required")
+    assert store.get(original.job_id).status == JS.BLOCKED
+    assert store.unblock_dependency(JOBS.DEP_AUTH) == 1
+    resumed = store.lease_due("owner")
+    assert resumed.job_id == original.job_id and resumed.attempt == 1
+    duplicate = store.enqueue(SCH.DATA_REFRESH, idempotency_key="data:2026-07-31")
+    assert duplicate.job_id == original.job_id and len(store.list()) == 1
+    store.close()
+
+
+def test_blocked_job_dependency_survives_restart(tmp_path):
+    db = tmp_path / "jobs.db"
+    first = JS.JobStore(db)
+    job = first.enqueue(SCH.DATA_REFRESH, idempotency_key="same-day")
+    first.block(job.job_id, dependency=JOBS.DEP_AUTH, reason="daily login")
+    first.close()
+    second = JS.JobStore(db)
+    restored = second.get(job.job_id)
+    assert restored.status == JS.BLOCKED and restored.blocked_on == JOBS.DEP_AUTH
+    second.unblock_dependency(JOBS.DEP_AUTH)
+    assert second.lease_due("owner").job_id == job.job_id
+    second.close()
+
+
+def test_every_declared_job_has_handler():
+    assert set(SCH.ALL_JOB_TYPES) == set(JOBS.HANDLERS)
+
+
+def test_schedule_does_not_scan_at_midnight():
+    midnight = datetime(2026, 7, 31, 0, 1)
+    assert SCH.scan_slot(midnight) is None
+    assert not SCH.scan_due(midnight, None)
+    assert SCH.scan_slot(datetime(2026, 7, 31, 9, 5)) == "premarket"
+
+
+def test_ui_source_does_not_start_workers():
+    root = Path(__file__).resolve().parents[1]
+    for rel in ("app.py", "product/runtime.py", "ui/retail_home_momentum.py",
+                "ui/retail_trade_market.py", "ui/news_curator_page.py",
+                "ui/auto_research_page.py"):
+        text = (root / rel).read_text(encoding="utf-8")
+        assert ".start()" not in text, rel
+        assert "start_worker=True" not in text, rel
+
+
+def test_deployment_installs_two_services_and_current_branch():
+    root = Path(__file__).resolve().parents[1]
+    linux = (root / "deploy/setup_server.sh").read_text(encoding="utf-8")
+    mac = (root / "deploy/setup_mac.sh").read_text(encoding="utf-8")
+    assert "overhaul/evidence-lab" in linux
+    assert "quantterm-ui.service" in linux and "quantterm-autonomy.service" in linux
+    assert "com.quantterm.ui" in mac and "com.quantterm.autonomy" in mac
+    assert "main.py autonomy" in linux
+    assert "<string>autonomy</string>" in mac
 
 
 # ══ Dialogue & research ══════════════════════════════════════════════════════════

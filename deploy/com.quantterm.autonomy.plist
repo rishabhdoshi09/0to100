@@ -1,22 +1,2 @@
-<?xml version="1.0" encoding="UTF-8"?>
-<!-- macOS launchd unit for the QuantTerm autonomy supervisor (paper-only). -->
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>Label</key><string>com.quantterm.autonomy</string>
-  <key>ProgramArguments</key>
-  <array>
-    <string>/usr/bin/env</string>
-    <string>python</string>
-    <string>main.py</string>
-    <string>autonomy</string>
-    <string>--interval</string>
-    <string>15</string>
-  </array>
-  <key>WorkingDirectory</key><string>/opt/0to100</string>
-  <key>KeepAlive</key><true/>
-  <key>RunAtLoad</key><true/>
-  <key>StandardOutPath</key><string>/usr/local/var/log/quantterm/autonomy.log</string>
-  <key>StandardErrorPath</key><string>/usr/local/var/log/quantterm/autonomy.err</string>
-</dict>
-</plist>
+<!-- Template/documentation only; setup_mac.sh writes an absolute-path LaunchAgent. -->
+<plist version="1.0"><dict><key>Label</key><string>com.quantterm.autonomy</string></dict></plist>

@@ -1,19 +1,11 @@
+# Template only. deploy/setup_server.sh installs an absolute-path unit.
 [Unit]
-Description=QuantTerm retail UI (Streamlit control room, read-only over the supervisor)
+Description=QuantTerm retail UI (read-only control room)
 After=network-online.target
-Wants=network-online.target
-
 [Service]
 Type=simple
-User=quantterm
-WorkingDirectory=/opt/0to100
-Environment=PYTHONUNBUFFERED=1
-EnvironmentFile=-/opt/0to100/.env
-ExecStart=/usr/bin/env streamlit run app.py --server.headless true --server.port 8501
+WorkingDirectory=__APP_DIR__
+ExecStart=__APP_DIR__/venv/bin/streamlit run app.py --server.port 8501 --server.headless true
 Restart=on-failure
-RestartSec=5
-StandardOutput=append:/var/log/quantterm/ui.log
-StandardError=append:/var/log/quantterm/ui.err
-
 [Install]
 WantedBy=multi-user.target
