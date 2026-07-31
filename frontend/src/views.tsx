@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import {
   ChartWorkspace,
   EvidenceList,
@@ -62,6 +62,25 @@ function EquityCurve({ values }: { values?: number[] }) {
   )
 }
 
+function DataReadinessPanel({ dashboard }: { dashboard: DashboardPayload }) {
+  const data = dashboard.data
+  const history = data.bhavcopy
+  const snapshot = data.snapshot
+  return (
+    <Panel title="DATA PIPELINE" subtitle={data.ready ? 'Canonical market data is available' : 'One or more authoritative inputs are not ready'}>
+      <div className="fact-grid">
+        <div><span>Verified snapshot</span><strong className={snapshot.ready ? 'positive' : 'negative'}>{snapshot.ready ? snapshot.latest_date || 'READY' : 'MISSING'}</strong></div>
+        <div><span>Official history</span><strong className={history.ready ? 'positive' : 'negative'}>{history.ready ? `${history.sessions} sessions` : 'NOT READY'}</strong></div>
+        <div><span>History symbols</span><strong>{history.symbols.toLocaleString('en-IN')}</strong></div>
+        <div><span>Saved scanner rows</span><strong>{data.scan_records.toLocaleString('en-IN')}</strong></div>
+        <div><span>Long-term rows</span><strong>{data.long_term_records.toLocaleString('en-IN')}</strong></div>
+        <div><span>Latest bhavcopy</span><strong>{history.latest_date || history.csv_latest_date || '—'}</strong></div>
+      </div>
+      <EvidenceList title="Current blockers" items={data.blockers} tone={data.blockers.length ? 'red' : 'green'} />
+    </Panel>
+  )
+}
+
 export function CommandCenterView(props: ViewProps) {
   const { dashboard, selected, setSelected, bars, setActive, runControl } = props
   const momentum = useMemo(() => momentumRows(dashboard), [dashboard])
@@ -81,9 +100,10 @@ export function CommandCenterView(props: ViewProps) {
 
   return (
     <>
+      {!dashboard.data.ready && <div className="api-warning">Market-data pipeline is incomplete. QuantTerm is showing only persisted facts; missing values are not simulated.</div>}
       <section className="metric-grid">
         <MetricCard label="MARKET HEALTH" value={dashboard.market.health.toUpperCase()} detail={dashboard.market.breadth} tone={dashboard.market.health.toLowerCase() === 'healthy' ? 'green' : 'amber'} />
-        <MetricCard label="NIFTY TODAY" value={pct(dashboard.market.nifty_change_1d)} detail={`5D ${pct(dashboard.market.nifty_change_5d)}`} tone="green" />
+        <MetricCard label="DATA PLANE" value={dashboard.data.ready ? 'READY' : 'BUILDING'} detail={`${dashboard.data.bhavcopy.sessions} official sessions`} tone={dashboard.data.ready ? 'green' : 'amber'} />
         <MetricCard label="ENTRY READY" value={String(summary.ready_to_trade ?? 0)} detail={`${summary.near_breakout ?? 0} near breakout`} />
         <MetricCard label="LONG-HORIZON" value={String((lt.quality_compounder ?? 0) + (lt.garp_candidate ?? 0))} detail={`${lt.coverage_pct ?? 0}% fundamental coverage`} tone="purple" />
         <MetricCard label="PAPER EQUITY" value={money(dashboard.paper.equity)} detail={`Return ${pct(paperReturn)}`} tone="purple" />
@@ -96,7 +116,7 @@ export function CommandCenterView(props: ViewProps) {
           <footer><span>{dashboard.scan.scanned_at ? `Updated ${dashboard.scan.scanned_at.slice(0, 19)}` : 'No saved scan'}</span><button type="button" onClick={() => void runControl('RUN_SCAN_NOW')}>Run scan</button></footer>
         </Panel>
 
-        <Panel title={`CHART · ${selected || 'SELECT STOCK'}`} subtitle="Daily history · saved bhavcopy source" className="chart-panel">
+        <Panel title={`CHART · ${selected || 'SELECT STOCK'}`} subtitle="Daily history · official saved bhavcopy source" className="chart-panel">
           <ChartWorkspace symbol={selected} bars={bars} row={selectedRow} />
         </Panel>
 
@@ -125,6 +145,7 @@ export function CommandCenterView(props: ViewProps) {
           <PositionsTable rows={dashboard.paper.open_positions.slice(0, 8)} />
         </Panel>
       </section>
+      {!dashboard.data.ready && <section className="workspace-view"><DataReadinessPanel dashboard={dashboard} /></section>}
     </>
   )
 }
@@ -143,6 +164,7 @@ export function ScannerView(props: ViewProps) {
 
   return (
     <section className="workspace-view">
+      {!dashboard.data.snapshot.ready && <DataReadinessPanel dashboard={dashboard} />}
       <div className="mode-tabs">
         {['Momentum', 'Conviction', 'Breakouts', 'Pre-Breakout', 'Avoid'].map((item) => <button type="button" key={item} className={mode === item ? 'active' : ''} onClick={() => setMode(item)}>{item}</button>)}
         <button className="mode-action" type="button" onClick={() => void runControl('RUN_SCAN_NOW')}>Run fresh scan</button>
@@ -152,7 +174,7 @@ export function ScannerView(props: ViewProps) {
           <SecurityTable rows={rows} selected={selected} onSelect={setSelected} />
         </Panel>
         <div className="detail-stack">
-          <Panel title={`PRICE STRUCTURE · ${selected || 'SELECT STOCK'}`} subtitle="Daily source; intraday controls are hidden until real intraday history is wired">
+          <Panel title={`PRICE STRUCTURE · ${selected || 'SELECT STOCK'}`} subtitle="Daily official history; no synthetic candles">
             <ChartWorkspace symbol={selected} bars={bars} row={selectedRow} />
           </Panel>
           <Panel title="DECISION EVIDENCE">
@@ -206,6 +228,7 @@ export function MarketInternalsView({ dashboard }: ViewProps) {
   const details = dashboard.market.technical_details || {}
   return (
     <section className="workspace-view">
+      {!dashboard.data.ready && <DataReadinessPanel dashboard={dashboard} />}
       <div className="view-metrics"><MetricCard label="REGIME" value={dashboard.market.health} detail={String(details.market_regime || dashboard.market.breadth)} tone={dashboard.market.health.toLowerCase() === 'healthy' ? 'green' : 'amber'} /><MetricCard label="NIFTY 1D" value={pct(dashboard.market.nifty_change_1d)} detail={`5D ${pct(dashboard.market.nifty_change_5d)}`} /><MetricCard label="INDIA VIX" value={Number.isFinite(dashboard.market.vix) ? Number(dashboard.market.vix).toFixed(2) : '—'} tone="purple" /><MetricCard label="SCAN COVERAGE" value={dashboard.scan.universe_size.toLocaleString('en-IN')} detail={`${dashboard.scan.summary.with_any_setup ?? 0} with setups`} /></div>
       <div className="market-grid">
         <Panel title="MARKET NARRATIVE"><p className="lead-copy">{dashboard.market.summary}</p><p className="panel-copy">{dashboard.market.trade_stance}</p></Panel>
@@ -219,7 +242,7 @@ export function MarketInternalsView({ dashboard }: ViewProps) {
 
 export function LongTermView(props: ViewProps) {
   const { dashboard, selected, setSelected, bars, runControl } = props
-  const [classification, setClassification] = useState('Quality')
+  const [classification, setClassification] = useState('All')
   const rows = useMemo(() => {
     const all = [...dashboard.long_term.records].sort((a, b) => (b.combined_score || 0) - (a.combined_score || 0))
     if (classification === 'Quality') return all.filter((row) => ['QUALITY_COMPOUNDER', 'GARP_CANDIDATE'].includes(row.classification || ''))
@@ -228,11 +251,22 @@ export function LongTermView(props: ViewProps) {
     if (classification === 'Avoid') return all.filter((row) => row.classification === 'AVOID_REVIEW')
     return all
   }, [classification, dashboard.long_term.records])
-  const row = dashboard.long_term.records.find((item) => item.symbol === selected)
+
+  useEffect(() => {
+    if (rows.length && !rows.some((item) => item.symbol === selected)) setSelected(rows[0].symbol)
+  }, [rows, selected, setSelected])
+
+  const row = rows.find((item) => item.symbol === selected)
+  const viewSymbol = row?.symbol || ''
+  const viewBars = viewSymbol === selected ? bars : []
+  const latestJob = dashboard.long_term.job || {}
+  const runLabel = dashboard.data.bhavcopy.ready ? 'Run scan' : 'Prepare history & run scan'
   return (
     <section className="workspace-view">
-      <div className="mode-tabs">{['Quality', 'All', 'Expensive', 'Needs Data', 'Avoid'].map((item) => <button type="button" key={item} className={classification === item ? 'active' : ''} onClick={() => setClassification(item)}>{item}</button>)}<button className="mode-action" type="button" onClick={() => void runControl('RUN_LONG_TERM_SCAN_NOW')}>Run scan</button><button className="mode-action" type="button" onClick={() => void runControl('REFRESH_LONG_TERM_NOW')}>Refresh fundamentals</button></div>
-      <div className="split-workspace"><Panel title={`${classification.toUpperCase()} · ${rows.length} RECORDS`} subtitle={`Coverage ${dashboard.long_term.summary.coverage_pct ?? 0}% · ${dashboard.long_term.fundamentals_source || 'current snapshot'}`}><LongTermTable rows={rows} selected={selected} onSelect={setSelected} /></Panel><div className="detail-stack"><Panel title={`LONG-TERM CHART · ${selected || 'SELECT STOCK'}`}><ChartWorkspace symbol={selected} bars={bars} row={row} /></Panel><Panel title="QUALITY & RISKS"><div className="evidence-grid"><EvidenceList title="Quality factors" items={row?.quality_factors} tone="green" /><EvidenceList title="Risk flags" items={row?.risk_flags} tone="red" /></div></Panel></div></div>
+      {(!dashboard.data.bhavcopy.ready || !dashboard.long_term.available) && <DataReadinessPanel dashboard={dashboard} />}
+      <div className="mode-tabs">{['All', 'Quality', 'Expensive', 'Needs Data', 'Avoid'].map((item) => <button type="button" key={item} className={classification === item ? 'active' : ''} onClick={() => setClassification(item)}>{item}</button>)}<button className="mode-action" type="button" onClick={() => void runControl('RUN_LONG_TERM_SCAN_NOW')}>{runLabel}</button><button className="mode-action" type="button" disabled={!dashboard.long_term.records.length} onClick={() => void runControl('REFRESH_LONG_TERM_NOW')}>Refresh fundamentals</button></div>
+      {!dashboard.long_term.available && <div className="api-warning">Latest long-term job: {String(latestJob.status || 'not run')} · {String(latestJob.blocked_reason || latestJob.error_message || latestJob.result_summary || 'waiting for the official-history pipeline')}</div>}
+      <div className="split-workspace"><Panel title={`${classification.toUpperCase()} · ${rows.length} RECORDS`} subtitle={`Coverage ${dashboard.long_term.summary.coverage_pct ?? 0}% · ${dashboard.long_term.fundamentals_source || 'current snapshot'}`}><LongTermTable rows={rows} selected={viewSymbol} onSelect={setSelected} /></Panel><div className="detail-stack"><Panel title={`LONG-TERM CHART · ${viewSymbol || 'SELECT STOCK'}`}><ChartWorkspace symbol={viewSymbol} bars={viewBars} row={row} /></Panel><Panel title="QUALITY & RISKS"><div className="evidence-grid"><EvidenceList title="Quality factors" items={row?.quality_factors} tone="green" /><EvidenceList title="Risk flags" items={row?.risk_flags} tone="red" /></div></Panel></div></div>
     </section>
   )
 }
@@ -240,15 +274,17 @@ export function LongTermView(props: ViewProps) {
 export function AutomationView({ dashboard, runControl }: ViewProps) {
   const a = dashboard.autonomy
   const owner = a.owner_state || {}
+  const activeJob = a.active_job || {}
   return (
     <section className="workspace-view">
       <div className="inline-actions"><button type="button" onClick={() => void runControl('RUN_SCAN_NOW')}>Queue market scan</button><button type="button" onClick={() => void runControl('RUN_CYCLE_NOW')}>Queue paper cycle</button><button type="button" onClick={() => void runControl('REFRESH_DATA_NOW')}>Refresh data</button><button type="button" onClick={() => void runControl(a.new_paper_entries ? 'PAUSE_NEW_PAPER_ENTRIES' : 'RESUME_NEW_PAPER_ENTRIES')}>{a.new_paper_entries ? 'Pause entries' : 'Resume entries'}</button></div>
-      <div className="view-metrics"><MetricCard label="PROCESS" value={a.running ? 'ONLINE' : 'OFFLINE'} detail={`PID ${a.scheduler_owner_pid || '—'}`} tone={a.running ? 'green' : 'amber'} /><MetricCard label="STATE" value={a.state} detail={a.plain_state} /><MetricCard label="NEW ENTRIES" value={a.new_paper_entries ? 'ALLOWED' : 'BLOCKED'} detail={`Paper auto ${boolLabel(owner.paper_auto_enabled)}`} tone={a.new_paper_entries ? 'green' : 'amber'} /><MetricCard label="FAILURES" value={String(a.active_failures?.length || 0)} detail={(a.active_failures || []).join(', ') || 'None active'} tone="purple" /></div>
+      <div className="view-metrics"><MetricCard label="PROCESS" value={a.running ? 'ONLINE' : 'OFFLINE'} detail={`PID ${a.scheduler_owner_pid || '—'}`} tone={a.running ? 'green' : 'amber'} /><MetricCard label="STATE" value={a.state} detail={a.plain_state} /><MetricCard label="ACTIVE JOB" value={String(activeJob.job_type || 'IDLE').toUpperCase()} detail={activeJob.elapsed_s ? `${activeJob.elapsed_s}s elapsed` : 'No worker job reported'} tone="cyan" /><MetricCard label="FAILURES" value={String(a.active_failures?.length || 0)} detail={(a.active_failures || []).join(', ') || 'None active'} tone="purple" /></div>
       <div className="automation-grid">
         <Panel title="DURABLE JOB LEDGER" subtitle="Newest first · refreshed every 5 seconds" className="job-panel"><JobLedger jobs={a.jobs_recent || []} /></Panel>
         <Panel title="OPERATING STATE"><div className="key-value-list"><div><span>Heartbeat</span><strong>{a.heartbeat_ist || '—'}</strong></div><div><span>Live feed</span><strong>{String(a.live_feed?.connected ?? 'Unavailable')}</strong></div><div><span>Subscriptions</span><strong>{String(a.live_feed?.subscriptions ?? '—')}</strong></div><div><span>Existing exits</span><strong>{boolLabel(a.existing_exits)}</strong></div><div><span>Research</span><strong>{boolLabel(a.research_enabled)}</strong></div></div><p className="panel-copy">{a.explanation || a.plain_state}</p></Panel>
         <Panel title="RECENT SUPERVISOR DIALOGUE"><div className="dialogue-list">{a.recent_dialogue.length === 0 && <div className="empty-row">No dialogue records.</div>}{[...a.recent_dialogue].reverse().slice(0, 20).map((record, index) => <div key={index}><strong>{words(String(record.record_type || record.decision || 'event'))}</strong><span>{String(record.claim || record.explanation || record.summary || JSON.stringify(record))}</span></div>)}</div></Panel>
         <Panel title="CAPABILITY NOTES"><EvidenceList title="Current constraints" items={[...(a.capability_notes || []), ...(a.active_failures || [])]} tone={a.active_failures?.length ? 'red' : 'cyan'} /></Panel>
+        <DataReadinessPanel dashboard={dashboard} />
       </div>
     </section>
   )
