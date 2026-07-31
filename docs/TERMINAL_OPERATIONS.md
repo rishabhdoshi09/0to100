@@ -49,6 +49,9 @@ single supervisor.
 - Local read-only/control API: `http://127.0.0.1:8765`
 - Optional Streamlit fallback: `http://127.0.0.1:8501`
 
+The React terminal is the primary professional interface. The Streamlit app remains a recovery and
+compatibility surface; its plain-language Home page stays the fallback default.
+
 ## Shutdown
 
 Press `Ctrl-C` in the stack-launcher terminal. Child API/frontend processes and a launcher-owned
