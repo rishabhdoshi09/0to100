@@ -1,21 +1,30 @@
-"""Read-only API bridge for the dedicated QuantTerm terminal frontend.
+"""Local API bridge for the dedicated QuantTerm terminal.
 
-The existing Python product, research, scanner, paper-book and autonomy stores remain authoritative.
-This module projects that state to local HTTP and forwards a small whitelist of owner controls to the
-single autonomy supervisor. It never scans, trades, or mutates broker state directly.
+Authoritative market/research stores remain in Python. User-requested market
+operations are dispatched to a dedicated worker plane; PAPER autonomy remains a
+separate execution/learning lane and is never allowed to block scans.
 """
 from __future__ import annotations
 
 from datetime import datetime, timezone
 import json
+import os
 from pathlib import Path
 import sqlite3
+import subprocess
+import sys
+import time
 from typing import Any
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
-app = FastAPI(title="QuantTerm Terminal API", version="0.3.0")
+ROOT = Path(__file__).resolve().parent
+OPS_ROOT = ROOT / "logs" / "market_ops"
+OPS_RUNTIME = OPS_ROOT / "runtime.json"
+OPS_DB = OPS_ROOT / "jobs.db"
+
+app = FastAPI(title="QuantTerm Terminal API", version="0.4.0")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://127.0.0.1:5173", "http://localhost:5173"],
@@ -23,6 +32,8 @@ app.add_middleware(
     allow_methods=["GET", "POST"],
     allow_headers=["*"],
 )
+
+_ops_process: subprocess.Popen | None = None
 
 
 def _safe_float(value: Any) -> float | None:
@@ -40,6 +51,65 @@ def _json_file(path: Path, default: Any) -> Any:
         return json.loads(path.read_text(encoding="utf-8"))
     except Exception:
         return default
+
+
+def _fresh_epoch(value: Any, max_age_s: float = 10.0) -> bool:
+    try:
+        age = time.time() - float(value)
+        return 0 <= age <= max_age_s
+    except Exception:
+        return False
+
+
+def _ops_runtime_payload() -> dict[str, Any]:
+    runtime = _json_file(OPS_RUNTIME, {})
+    running = bool(runtime.get("process_running")) and _fresh_epoch(runtime.get("heartbeat_epoch"))
+    return {
+        **runtime,
+        "running": running,
+        "process_running": bool(runtime.get("process_running")),
+    }
+
+
+def _ensure_ops_worker() -> dict[str, Any]:
+    """Start the dedicated market-operations worker when it is not healthy."""
+    global _ops_process
+    runtime = _ops_runtime_payload()
+    if runtime.get("running"):
+        return runtime
+    if _ops_process is not None and _ops_process.poll() is None:
+        return runtime
+    _ops_process = subprocess.Popen(
+        [sys.executable, "-u", "-m", "operations.market_ops"],
+        cwd=str(ROOT),
+        env=os.environ.copy(),
+    )
+    deadline = time.time() + 2.5
+    while time.time() < deadline:
+        time.sleep(0.1)
+        runtime = _ops_runtime_payload()
+        if runtime.get("running"):
+            break
+        if _ops_process.poll() is not None:
+            break
+    return runtime
+
+
+@app.on_event("startup")
+def _startup() -> None:
+    _ensure_ops_worker()
+
+
+@app.on_event("shutdown")
+def _shutdown() -> None:
+    global _ops_process
+    if _ops_process is not None and _ops_process.poll() is None:
+        _ops_process.terminate()
+        try:
+            _ops_process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            _ops_process.kill()
+    _ops_process = None
 
 
 def _market_payload() -> dict:
@@ -99,15 +169,36 @@ def _scan_payload() -> dict:
         }
 
 
-def _latest_job(job_types: set[str]) -> dict:
-    for job in _recent_jobs(limit=200):
+def _recent_autonomy_jobs(limit: int = 60) -> list[dict]:
+    try:
+        from research.autonomy import default_root
+        db_path = default_root() / "jobs.db"
+        if not db_path.exists():
+            return []
+        connection = sqlite3.connect(str(db_path), timeout=2.0)
+        connection.row_factory = sqlite3.Row
+        try:
+            rows = connection.execute(
+                "SELECT job_id,job_type,status,attempt,critical,scheduled_for,started_at,finished_at,"
+                "result_summary,error_code,error_message,blocked_on,blocked_reason "
+                "FROM jobs ORDER BY created_at DESC LIMIT ?",
+                (max(1, min(int(limit), 200)),),
+            ).fetchall()
+            return [dict(row) for row in rows]
+        finally:
+            connection.close()
+    except Exception:
+        return []
+
+
+def _latest_autonomy_job(job_types: set[str]) -> dict:
+    for job in _recent_autonomy_jobs(limit=200):
         if str(job.get("job_type", "")) in job_types:
             return job
     return {}
 
 
 def _long_term_payload() -> dict:
-    latest = _latest_job({"long_term_scan", "long_term_refresh"})
     try:
         from product.long_term_store import load_long_term_scan
         payload = load_long_term_scan() or {}
@@ -117,7 +208,7 @@ def _long_term_payload() -> dict:
             "fundamentals_source": payload.get("fundamentals_source", ""),
             "summary": dict(payload.get("summary", {}) or {}),
             "records": [dict(row) for row in (payload.get("records", []) or []) if isinstance(row, dict)],
-            "job": latest,
+            "job": _latest_autonomy_job({"long_term_scan", "long_term_refresh"}),
         }
     except Exception as exc:
         return {
@@ -126,14 +217,13 @@ def _long_term_payload() -> dict:
             "fundamentals_source": "",
             "summary": {},
             "records": [],
-            "job": latest,
+            "job": {},
             "error": str(exc),
         }
 
 
 def _paper_equity_curve() -> list[float]:
-    path = Path(__file__).resolve().parent / "logs" / "intelligence" / "intel_book.json"
-    raw = _json_file(path, {})
+    raw = _json_file(ROOT / "logs" / "intelligence" / "intel_book.json", {})
     curve: list[float] = []
     for value in raw.get("equity_curve", []) or []:
         parsed = _safe_float(value)
@@ -182,28 +272,6 @@ def _paper_payload() -> dict:
         }
 
 
-def _recent_jobs(limit: int = 60) -> list[dict]:
-    try:
-        from research.autonomy import default_root
-        db_path = default_root() / "jobs.db"
-        if not db_path.exists():
-            return []
-        connection = sqlite3.connect(str(db_path), timeout=2.0)
-        connection.row_factory = sqlite3.Row
-        try:
-            rows = connection.execute(
-                "SELECT job_id,job_type,status,attempt,critical,scheduled_for,started_at,finished_at,"
-                "result_summary,error_code,error_message,blocked_on,blocked_reason "
-                "FROM jobs ORDER BY created_at DESC LIMIT ?",
-                (max(1, min(int(limit), 200)),),
-            ).fetchall()
-            return [dict(row) for row in rows]
-        finally:
-            connection.close()
-    except Exception:
-        return []
-
-
 def _capability(value: Any) -> str:
     text = str(value or "blocked").strip().lower()
     return text if text in {"allowed", "limited", "blocked", "read_only"} else "blocked"
@@ -241,7 +309,7 @@ def _autonomy_payload() -> dict:
             "recent_dialogue": list(status.get("recent_dialogue", []) or [])[-40:],
             "recent_transitions": list(status.get("recent_transitions", []) or [])[-30:],
             "jobs": dict(status.get("jobs", {}) or {}),
-            "jobs_recent": _recent_jobs(),
+            "jobs_recent": _recent_autonomy_jobs(),
             "owner_state": dict(status.get("owner_state", {}) or {}),
             "live_feed": dict(raw.get("live_feed", {}) or {}),
             "last_cycle": dict(status.get("last_cycle", {}) or {}),
@@ -279,11 +347,17 @@ def _autonomy_payload() -> dict:
 def _snapshot_payload() -> dict:
     try:
         from research.intelligence.data.snapshot_store import SnapshotStore
-        root = Path(__file__).resolve().parent / "logs" / "snapshots"
+        root = ROOT / "logs" / "snapshots"
         store = SnapshotStore(root)
         snapshot_id = store.get_active_snapshot()
         if not snapshot_id:
-            return {"ready": False, "snapshot_id": "", "latest_date": "", "source": "", "error": "No active verified snapshot"}
+            return {
+                "ready": False,
+                "snapshot_id": "",
+                "latest_date": "",
+                "source": "",
+                "error": "No active verified snapshot",
+            }
         manifest = _json_file(root / str(snapshot_id) / "manifest.json", {})
         return {
             "ready": True,
@@ -295,7 +369,107 @@ def _snapshot_payload() -> dict:
         return {"ready": False, "snapshot_id": "", "latest_date": "", "source": "", "error": str(exc)}
 
 
-def _data_payload(scan: dict, long_term: dict) -> dict:
+def _operations_payload() -> dict[str, Any]:
+    try:
+        from operations.market_ops import LANES
+        from operations.store import OperationStore
+        store = OperationStore(OPS_DB)
+        runtime = _ops_runtime_payload()
+        recent = store.recent(100)
+        latest = {}
+        for kind in LANES:
+            item = store.latest(kind)
+            if item:
+                latest[kind] = item
+        return {
+            "available": True,
+            "running": bool(runtime.get("running")),
+            "worker_pid": runtime.get("worker_pid"),
+            "heartbeat": runtime.get("heartbeat", ""),
+            "active_lanes": dict(runtime.get("active", {}) or {}),
+            "counts": store.counts(),
+            "active": store.active(),
+            "recent": recent,
+            "latest": latest,
+        }
+    except Exception as exc:
+        return {
+            "available": False,
+            "running": False,
+            "worker_pid": None,
+            "heartbeat": "",
+            "active_lanes": {},
+            "counts": {},
+            "active": [],
+            "recent": [],
+            "latest": {},
+            "error": str(exc),
+        }
+
+
+def _news_payload() -> dict[str, Any]:
+    try:
+        from news.curator_store import NewsCuratorStore
+        store = NewsCuratorStore(ROOT / "logs" / "news_curator.sqlite3")
+        try:
+            articles = [item.as_dict() for item in store.recent(hours=168, limit=120)]
+            health = [item.as_dict() for item in store.source_health()]
+            stats = store.stats(hours=24)
+        finally:
+            store.close()
+        latest_refresh = _operations_payload().get("latest", {}).get("NEWS_REFRESH", {})
+        return {
+            "available": bool(articles or health),
+            "stats": stats,
+            "articles": articles,
+            "source_health": health,
+            "latest_refresh": latest_refresh,
+        }
+    except Exception as exc:
+        return {
+            "available": False,
+            "stats": {"total": 0, "important": 0, "fno_linked": 0, "macro": 0, "sources": 0},
+            "articles": [],
+            "source_health": [],
+            "latest_refresh": {},
+            "error": str(exc),
+        }
+
+
+def _fno_payload() -> dict[str, Any]:
+    path = ROOT / "logs" / "product" / "fno_universe.json"
+    persisted = _json_file(path, {})
+    if persisted:
+        persisted["available"] = int(persisted.get("mapped_underlyings", 0) or 0) > 0
+        persisted["cache_mtime"] = path.stat().st_mtime if path.exists() else None
+        return persisted
+    try:
+        from data.fno_universe import current_fno_universe
+        report = current_fno_universe()
+        return {
+            "available": report.mapped_underlyings > 0,
+            "generated_at": None,
+            "source": report.source,
+            "total_instrument_rows": report.total_instrument_rows,
+            "total_future_contracts": report.total_future_contracts,
+            "index_future_contracts": report.index_future_contracts,
+            "unique_stock_underlyings": report.unique_stock_underlyings,
+            "mapped_underlyings": report.mapped_underlyings,
+            "underlyings": [item.__dict__ for item in report.underlyings],
+            "exclusions": [item.__dict__ for item in report.exclusions],
+        }
+    except Exception as exc:
+        return {
+            "available": False,
+            "source": "unavailable",
+            "mapped_underlyings": 0,
+            "underlyings": [],
+            "exclusions": [],
+            "error": str(exc),
+        }
+
+
+def _data_payload(scan: dict, long_term: dict, operations: dict, fno: dict, news: dict) -> dict:
     try:
         from data.bhavcopy_runtime import status as bhavcopy_status
         bhavcopy = bhavcopy_status(load_cache=True)
@@ -311,23 +485,20 @@ def _data_payload(scan: dict, long_term: dict) -> dict:
         }
     snapshot = _snapshot_payload()
     blockers: list[str] = []
-    if not snapshot.get("ready"):
-        blockers.append("Verified active snapshot is missing; whole-market scanner cannot run.")
     if not bhavcopy.get("ready"):
-        if bhavcopy.get("csv_files", 0):
-            blockers.append("Bhavcopy CSV files exist but the canonical persisted cache is not loaded/built.")
-        else:
-            blockers.append("Official NSE bhavcopy history has not been downloaded yet.")
+        blockers.append("Official NSE bhavcopy history is not ready; direct scans will prepare it first.")
     elif int(bhavcopy.get("sessions", 0) or 0) < int(bhavcopy.get("minimum_sessions", 60) or 60):
-        blockers.append("Official bhavcopy history is shallower than the minimum technical-screen requirement.")
-    if not scan.get("available"):
-        blockers.append("No saved whole-market scan is available.")
-    if not long_term.get("available"):
-        latest = dict(long_term.get("job", {}) or {})
-        reason = latest.get("blocked_reason") or latest.get("error_message") or latest.get("result_summary")
-        blockers.append(str(reason or "No completed long-term scan is available."))
+        blockers.append("Official bhavcopy history is shallower than the minimum screen requirement.")
+    if not snapshot.get("ready"):
+        blockers.append("Verified snapshot is missing; PAPER autonomy is limited, but direct cash scans can still use official bhavcopy history.")
+    if not operations.get("running"):
+        blockers.append("Dedicated market-operations worker is not online.")
+    if not fno.get("available"):
+        blockers.append("Current F&O instrument universe is unavailable; refresh instruments after Zerodha login.")
+    if not news.get("available"):
+        blockers.append("Curated news store is empty; run a news refresh to inspect source health.")
     return {
-        "ready": bool(snapshot.get("ready") and bhavcopy.get("ready")),
+        "ready": bool(bhavcopy.get("ready") and operations.get("running")),
         "snapshot": snapshot,
         "bhavcopy": bhavcopy,
         "scan_saved": bool(scan.get("available")),
@@ -367,12 +538,14 @@ def _conviction(scan: dict, market: dict) -> list[dict]:
 @app.get("/api/health")
 def health() -> dict:
     autonomy = _autonomy_payload()
+    operations = _operations_payload()
     return {
         "ok": True,
         "service": "quantterm-terminal-api",
         "version": app.version,
         "autonomy_running": autonomy.get("running", False),
         "autonomy_state": autonomy.get("state", "UNKNOWN"),
+        "market_operations_running": operations.get("running", False),
     }
 
 
@@ -383,7 +556,10 @@ def dashboard() -> dict:
     long_term = _long_term_payload()
     paper = _paper_payload()
     autonomy = _autonomy_payload()
-    data = _data_payload(scan, long_term)
+    operations = _operations_payload()
+    news = _news_payload()
+    fno = _fno_payload()
+    data = _data_payload(scan, long_term, operations, fno, news)
     return {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "market": market,
@@ -391,16 +567,46 @@ def dashboard() -> dict:
         "long_term": long_term,
         "paper": paper,
         "autonomy": autonomy,
+        "operations": operations,
+        "news": news,
+        "fno": fno,
         "data": data,
         "conviction": _conviction(scan, market),
     }
+
+
+@app.get("/api/operations")
+def operations_status() -> dict:
+    return _operations_payload()
+
+
+@app.get("/api/operations/{operation_id}")
+def operation_status(operation_id: str) -> dict:
+    from operations.store import OperationStore
+    item = OperationStore(OPS_DB).get(operation_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="Operation not found")
+    return item
+
+
+@app.get("/api/news")
+def news_status() -> dict:
+    return _news_payload()
+
+
+@app.get("/api/fno")
+def fno_status() -> dict:
+    return _fno_payload()
 
 
 @app.get("/api/data-readiness")
 def data_readiness() -> dict:
     scan = _scan_payload()
     long_term = _long_term_payload()
-    return _data_payload(scan, long_term)
+    operations = _operations_payload()
+    news = _news_payload()
+    fno = _fno_payload()
+    return _data_payload(scan, long_term, operations, fno, news)
 
 
 @app.get("/api/chart/{symbol}")
@@ -431,15 +637,20 @@ def chart(symbol: str, limit: int = 220) -> dict:
     return {"symbol": clean_symbol, "bars": bars, "history": readiness}
 
 
-_ALLOWED_CONTROLS = {
-    "RUN_SCAN_NOW",
-    "RUN_LONG_TERM_SCAN_NOW",
-    "REFRESH_LONG_TERM_NOW",
+_OPERATION_CONTROLS = {
+    "RUN_SCAN_NOW": "MARKET_SCAN",
+    "RUN_LONG_TERM_SCAN_NOW": "LONG_TERM_SCAN",
+    "REFRESH_LONG_TERM_NOW": "LONG_TERM_REFRESH",
+    "REFRESH_NEWS_NOW": "NEWS_REFRESH",
+    "REFRESH_FNO_NOW": "FNO_REFRESH",
+    "REFRESH_DATA_NOW": "DATA_PREPARE",
+}
+_AUTONOMY_CONTROLS = {
     "RUN_CYCLE_NOW",
-    "REFRESH_DATA_NOW",
     "PAUSE_NEW_PAPER_ENTRIES",
     "RESUME_NEW_PAPER_ENTRIES",
 }
+_ALLOWED_CONTROLS = set(_OPERATION_CONTROLS) | _AUTONOMY_CONTROLS
 
 
 @app.post("/api/controls/{control_name}")
@@ -447,6 +658,27 @@ def control(control_name: str) -> dict:
     name = control_name.strip().upper()
     if name not in _ALLOWED_CONTROLS:
         raise HTTPException(status_code=400, detail="Control is not allowed through the terminal API")
+    if name in _OPERATION_CONTROLS:
+        from operations.market_ops import LANES
+        from operations.store import OperationStore
+        _ensure_ops_worker()
+        kind = _OPERATION_CONTROLS[name]
+        operation, created = OperationStore(OPS_DB).enqueue(
+            kind,
+            lane=LANES[kind],
+            requested_by="terminal",
+        )
+        return {
+            "accepted": True,
+            "control": name,
+            "operation_id": operation.get("operation_id"),
+            "operation_status": operation.get("status"),
+            "created": created,
+        }
     from research.autonomy.controls import request_control
     queued = request_control(name, reason="owner requested control from dedicated terminal frontend")
-    return {"accepted": True, "control": name, "control_id": getattr(queued, "control_id", "")}
+    return {
+        "accepted": True,
+        "control": name,
+        "control_id": getattr(queued, "control_id", ""),
+    }
