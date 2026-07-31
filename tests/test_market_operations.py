@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from operations.store import OperationStore, PENDING, RUNNING, SUCCEEDED
@@ -56,3 +57,37 @@ def test_worker_restart_requeues_orphans(tmp_path: Path):
     recovered = store.get(queued["operation_id"])
     assert recovered is not None
     assert recovered["status"] == PENDING
+
+
+def test_staleness_uses_persisted_file_age(tmp_path: Path):
+    from operations.market_ops import _stale
+
+    artifact = tmp_path / "artifact.json"
+    assert _stale(artifact, 60, now=1_000) is True
+    artifact.write_text("{}", encoding="utf-8")
+    os.utime(artifact, (970, 970))
+    assert _stale(artifact, 60, now=1_000) is False
+    os.utime(artifact, (900, 900))
+    assert _stale(artifact, 60, now=1_000) is True
+
+
+def test_bootstrap_queues_missing_product_inputs_without_network(tmp_path: Path, monkeypatch):
+    from data import bhavcopy_runtime
+    from operations import market_ops as MO
+
+    monkeypatch.setattr(MO, "ROOT", tmp_path)
+    monkeypatch.setattr(MO, "LOCK_PATH", tmp_path / "market_ops" / "worker.lock")
+    monkeypatch.setattr(
+        bhavcopy_runtime,
+        "status",
+        lambda load_cache=False: {"ready": True, "sessions": 500, "symbols": 3000},
+    )
+
+    store = OperationStore(tmp_path / "market_ops" / "jobs.db")
+    worker = MO.MarketOperationsWorker(store)
+    queued = set(worker._bootstrap())
+
+    assert queued == {MO.FNO_REFRESH, MO.NEWS_REFRESH, MO.MARKET_SCAN, MO.LONG_TERM_SCAN}
+    # A restart/click must reuse the pending work rather than duplicate it.
+    assert worker._bootstrap() == []
+    assert len(store.active()) == 4
