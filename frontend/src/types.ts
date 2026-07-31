@@ -72,6 +72,36 @@ export type AutonomyJob = {
   blocked_reason?: string
 }
 
+export type DataReadiness = {
+  ready: boolean
+  snapshot: {
+    ready: boolean
+    snapshot_id: string
+    latest_date: string
+    source: string
+    error?: string
+  }
+  bhavcopy: {
+    ready: boolean
+    symbols: number
+    sessions: number
+    latest_date: string
+    csv_files: number
+    csv_latest_date?: string
+    cache_exists: boolean
+    cache_path?: string
+    bhavcopy_dir?: string
+    minimum_sessions?: number
+    source?: string
+    error?: string
+  }
+  scan_saved: boolean
+  scan_records: number
+  long_term_saved: boolean
+  long_term_records: number
+  blockers: string[]
+}
+
 export type DashboardPayload = {
   generated_at: string
   market: {
@@ -100,6 +130,7 @@ export type DashboardPayload = {
     fundamentals_source?: string
     summary: Record<string, number>
     records: LongTermRecord[]
+    job?: Partial<AutonomyJob>
   }
   paper: {
     available?: boolean
@@ -126,6 +157,7 @@ export type DashboardPayload = {
     explanation: string
     heartbeat_ist: string
     scheduler_owner_pid?: number | string | null
+    active_job?: Record<string, unknown>
     new_entry_capability?: 'allowed' | 'limited' | 'blocked' | 'read_only'
     existing_exit_capability?: 'allowed' | 'limited' | 'blocked' | 'read_only'
     research_capability?: 'allowed' | 'limited' | 'blocked' | 'read_only'
@@ -142,6 +174,7 @@ export type DashboardPayload = {
     live_feed?: Record<string, unknown>
     last_cycle?: Record<string, unknown>
   }
+  data: DataReadiness
   conviction: ConvictionRecord[]
 }
 
