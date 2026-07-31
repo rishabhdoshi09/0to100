@@ -17,6 +17,13 @@ export type ScanRecord = {
   chase_risk?: boolean
 }
 
+export type ConvictionRecord = ScanRecord & {
+  classification?: string
+  conviction_score?: number
+  scanner_score?: number
+  risks?: string[]
+}
+
 export type LongTermRecord = {
   symbol: string
   classification?: string
@@ -27,6 +34,8 @@ export type LongTermRecord = {
   price?: number
   sector?: string
   timing?: string
+  mom_12m_pct?: number
+  from_high_pct?: number
   quality_factors?: string[]
   risk_flags?: string[]
 }
@@ -42,7 +51,25 @@ export type PaperPosition = {
   pnl_pct?: number
   strategy?: string
   days_held?: number
+  exit_reason?: string
+  result_r?: number
   [key: string]: unknown
+}
+
+export type AutonomyJob = {
+  job_id: string
+  job_type: string
+  status: string
+  attempt: number
+  critical?: number | boolean
+  scheduled_for?: number
+  started_at?: number
+  finished_at?: number
+  result_summary?: string
+  error_code?: string
+  error_message?: string
+  blocked_on?: string
+  blocked_reason?: string
 }
 
 export type DashboardPayload = {
@@ -58,6 +85,7 @@ export type DashboardPayload = {
     nifty_change_1d: number | null
     nifty_change_5d: number | null
     vix: number | null
+    technical_details?: Record<string, unknown>
   }
   scan: {
     available: boolean
@@ -69,10 +97,12 @@ export type DashboardPayload = {
   long_term: {
     available: boolean
     scanned_at?: string
+    fundamentals_source?: string
     summary: Record<string, number>
     records: LongTermRecord[]
   }
   paper: {
+    available?: boolean
     enabled: boolean
     supervisor_running: boolean
     capital: number
@@ -83,22 +113,33 @@ export type DashboardPayload = {
     max_positions: number
     open_positions: PaperPosition[]
     closed_trades: PaperPosition[]
+    refusals?: Array<Record<string, unknown> | unknown[]>
+    last_cycle?: Record<string, unknown>
+    last_error?: string
   }
   autonomy: {
+    available?: boolean
     running: boolean
+    process_running?: boolean
     state: string
     plain_state: string
     explanation: string
     heartbeat_ist: string
+    scheduler_owner_pid?: number | string | null
     new_paper_entries: boolean
+    existing_exits?: boolean
+    research_enabled?: boolean
+    capability_notes?: string[]
+    active_failures?: string[]
     recent_dialogue: Array<Record<string, unknown>>
-    jobs: Record<string, unknown>
+    recent_transitions?: Array<Record<string, unknown>>
+    jobs: Record<string, number>
+    jobs_recent?: AutonomyJob[]
+    owner_state?: Record<string, boolean>
+    live_feed?: Record<string, unknown>
+    last_cycle?: Record<string, unknown>
   }
-  conviction: Array<ScanRecord & {
-    classification?: string
-    conviction_score?: number
-    risks?: string[]
-  }>
+  conviction: ConvictionRecord[]
 }
 
 export type ChartBar = {
@@ -109,3 +150,12 @@ export type ChartBar = {
   close: number
   volume: number
 }
+
+export type ControlName =
+  | 'RUN_SCAN_NOW'
+  | 'RUN_LONG_TERM_SCAN_NOW'
+  | 'REFRESH_LONG_TERM_NOW'
+  | 'RUN_CYCLE_NOW'
+  | 'REFRESH_DATA_NOW'
+  | 'PAUSE_NEW_PAPER_ENTRIES'
+  | 'RESUME_NEW_PAPER_ENTRIES'
