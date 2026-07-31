@@ -47,6 +47,8 @@ def read_autonomy_status(root=None) -> dict:
         "plain_state": _STATE_PLAIN.get(state, state),
         "explanation": raw.get("explanation", ""),
         "heartbeat_ist": raw.get("heartbeat_ist", ""),
+        "scheduler_owner_pid": raw.get("scheduler_owner_pid"),
+        "active_job": dict(raw.get("active_job", {}) or {}),
         "snapshot_id": raw.get("snapshot_id", ""),
         "new_paper_entries": caps["new_paper_entries"],
         "existing_exits": caps["existing_exits"],
