@@ -28,7 +28,7 @@ const emptyDashboard: DashboardPayload = {
     technical_details: {},
   },
   scan: { available: false, universe_size: 0, summary: {}, records: [] },
-  long_term: { available: false, summary: {}, records: [] },
+  long_term: { available: false, summary: {}, records: [], job: {} },
   paper: {
     available: false,
     enabled: false,
@@ -53,6 +53,7 @@ const emptyDashboard: DashboardPayload = {
     explanation: '',
     heartbeat_ist: '',
     scheduler_owner_pid: null,
+    active_job: {},
     new_paper_entries: false,
     existing_exits: false,
     research_enabled: false,
@@ -65,6 +66,23 @@ const emptyDashboard: DashboardPayload = {
     owner_state: {},
     live_feed: {},
     last_cycle: {},
+  },
+  data: {
+    ready: false,
+    snapshot: { ready: false, snapshot_id: '', latest_date: '', source: '' },
+    bhavcopy: {
+      ready: false,
+      symbols: 0,
+      sessions: 0,
+      latest_date: '',
+      csv_files: 0,
+      cache_exists: false,
+    },
+    scan_saved: false,
+    scan_records: 0,
+    long_term_saved: false,
+    long_term_records: 0,
+    blockers: [],
   },
   conviction: [],
 }
@@ -94,8 +112,12 @@ function App() {
       const payload = await fetchDashboard()
       setDashboard(payload)
       setError('')
-      const first = payload.scan.records[0]?.symbol || payload.long_term.records[0]?.symbol || ''
-      setSelected((current) => current || first)
+      const allSymbols = [
+        ...payload.scan.records.map((row) => row.symbol),
+        ...payload.long_term.records.map((row) => row.symbol),
+      ]
+      const first = allSymbols[0] || ''
+      setSelected((current) => (current && allSymbols.includes(current) ? current : first))
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : 'Dashboard API unavailable')
     } finally {
@@ -117,7 +139,7 @@ function App() {
     fetchChart(selected)
       .then((result) => setBars(result.bars))
       .catch(() => setBars([]))
-  }, [selected])
+  }, [selected, dashboard.data.bhavcopy.ready, dashboard.data.bhavcopy.latest_date])
 
   const symbols = useMemo(() => {
     const values = [
