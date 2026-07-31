@@ -1,4 +1,6 @@
-"""Retail-completion page exports."""
+"""Professional retail product page exports."""
+from ui.command_center import render_command_center
+from ui.scanner_workspace import render_scanner_workspace
 from ui.news_curator_page import render_news_curator_page as render_news
 from ui.retail_home_momentum import render_home, render_momentum
 from ui.retail_trade_market import render_market, render_paper_trading
@@ -17,6 +19,7 @@ from ui.retail_pages import (
 )
 
 __all__ = [
+    "render_command_center", "render_scanner_workspace",
     "render_home", "render_momentum", "render_news", "render_paper_trading", "render_market",
     "render_backtest", "render_data_zerodha", "render_advanced", "render_alerts",
     "render_help", "render_learned", "render_portfolio", "render_reports", "render_settings",
