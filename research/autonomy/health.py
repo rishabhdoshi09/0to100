@@ -82,36 +82,71 @@ def capabilities(active_failures) -> dict:
             "ui": ui, "active_failures": sorted(f), "notes": notes}
 
 
+def _fresh(payload: dict, *, max_age_s: float = 90.0) -> bool:
+    heartbeat = str(payload.get("heartbeat_ist") or "")
+    if not heartbeat:
+        return False
+    try:
+        stamped = datetime.fromisoformat(heartbeat)
+        now = datetime.now(tz=stamped.tzinfo) if stamped.tzinfo else datetime.now()
+        age = now - stamped
+        return timedelta(0) <= age <= timedelta(seconds=max_age_s)
+    except Exception:
+        return False
+
+
 def read_status(*, state_path, jobs_db=None, dialogue_path=None) -> dict:
-    """Read-only status for the UI. Never starts the supervisor; tolerates missing files."""
+    """Read-only status for the UI. Never starts the supervisor; tolerates missing files.
+
+    ``status.json`` remains the durable state/capability snapshot. ``runtime.json`` is a deliberately
+    tiny liveness pulse written by the console driver, so a long scan or data refresh does not make a
+    healthy process look offline merely because the durable status snapshot is temporarily unchanged.
+    """
+    state_path = Path(state_path)
     out = {"supervisor_running": False, "state": "UNKNOWN", "explanation": "", "updated_ist": "",
            "heartbeat_ist": "", "snapshot_id": "", "recent_transitions": [], "jobs": {},
            "recent_dialogue": [], "new_risk_permitted": False, "positions_manageable": True,
-           "active_failures": [], "owner_state": {}, "scheduler_of_record": "", "last_cycle": {}}
+           "active_failures": [], "owner_state": {}, "scheduler_of_record": "", "last_cycle": {},
+           "scheduler_owner_pid": None, "active_job": {}}
+    durable: dict = {}
     try:
-        d = json.loads(Path(state_path).read_text(encoding="utf-8"))
-        out.update({"state": d.get("state", "UNKNOWN"), "explanation": d.get("explanation", ""),
-                    "updated_ist": d.get("updated_ist", ""), "snapshot_id": d.get("snapshot_id", ""),
-                    "heartbeat_ist": d.get("heartbeat_ist", d.get("updated_ist", "")),
-                    "new_risk_permitted": bool(d.get("new_risk_permitted", False)),
-                    "positions_manageable": bool(d.get("positions_manageable", True)),
-                    "active_failures": list(d.get("active_failures", [])),
-                    "owner_state": dict(d.get("owner_state", {})),
-                    "scheduler_of_record": str(d.get("scheduler_of_record", "")),
-                    "last_cycle": dict(d.get("last_cycle", {}) or {}),
-                    "recent_transitions": list(d.get("history", []))[-6:]})
-        heartbeat = str(d.get("heartbeat_ist") or "")
-        fresh = False
-        if heartbeat:
-            try:
-                stamped = datetime.fromisoformat(heartbeat)
-                now = datetime.now(tz=stamped.tzinfo) if stamped.tzinfo else datetime.now()
-                fresh = (now - stamped) <= timedelta(seconds=90)
-            except Exception:
-                fresh = False
-        out["supervisor_running"] = bool(d.get("process_running", True)) and fresh
+        durable = json.loads(state_path.read_text(encoding="utf-8"))
+        out.update({"state": durable.get("state", "UNKNOWN"),
+                    "explanation": durable.get("explanation", ""),
+                    "updated_ist": durable.get("updated_ist", ""),
+                    "snapshot_id": durable.get("snapshot_id", ""),
+                    "heartbeat_ist": durable.get("heartbeat_ist", durable.get("updated_ist", "")),
+                    "new_risk_permitted": bool(durable.get("new_risk_permitted", False)),
+                    "positions_manageable": bool(durable.get("positions_manageable", True)),
+                    "active_failures": list(durable.get("active_failures", [])),
+                    "owner_state": dict(durable.get("owner_state", {})),
+                    "scheduler_of_record": str(durable.get("scheduler_of_record", "")),
+                    "last_cycle": dict(durable.get("last_cycle", {}) or {}),
+                    "scheduler_owner_pid": durable.get("scheduler_owner_pid"),
+                    "recent_transitions": list(durable.get("history", []))[-6:]})
     except Exception:
-        pass
+        durable = {}
+
+    runtime_path = state_path.parent / "runtime.json"
+    runtime: dict = {}
+    try:
+        runtime = json.loads(runtime_path.read_text(encoding="utf-8"))
+    except Exception:
+        runtime = {}
+
+    # New console versions make runtime.json authoritative for process liveness. Older deployments
+    # without that file retain the previous status.json freshness behaviour.
+    if runtime:
+        runtime_fresh = _fresh(runtime)
+        out["supervisor_running"] = bool(runtime.get("process_running", False)) and runtime_fresh
+        if runtime.get("heartbeat_ist"):
+            out["heartbeat_ist"] = str(runtime.get("heartbeat_ist"))
+        if runtime.get("scheduler_owner_pid") is not None:
+            out["scheduler_owner_pid"] = runtime.get("scheduler_owner_pid")
+        out["active_job"] = dict(runtime.get("active_job", {}) or {})
+    else:
+        out["supervisor_running"] = bool(durable.get("process_running", True)) and _fresh(durable)
+
     if jobs_db is not None:
         try:
             from research.autonomy.job_store import JobStore
