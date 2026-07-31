@@ -77,6 +77,7 @@ export type DashboardPayload = {
     supervisor_running: boolean
     capital: number
     equity: number
+    equity_curve: number[]
     open_risk: number
     risk_per_trade_pct: number
     max_positions: number
