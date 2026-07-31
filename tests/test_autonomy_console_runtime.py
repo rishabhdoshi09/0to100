@@ -32,6 +32,18 @@ class _ExplodingSupervisor(Supervisor):
         return None
 
 
+class _SingleJobSupervisor(Supervisor):
+    """Execute exactly the pre-enqueued job without involving the market schedule."""
+
+    def tick(self, now_ist=None):
+        job = self.jobs.lease_due(self.owner)
+        if job is not None:
+            self._execute(job)
+        self.stop()
+        self.heartbeat()
+        return job
+
+
 def test_visible_loop_recovers_from_tick_exception(tmp_path, capsys):
     sup = _ExplodingSupervisor(tmp_path / "auto")
     assert sup.start()
@@ -53,7 +65,7 @@ def test_visible_loop_recovers_from_tick_exception(tmp_path, capsys):
 
 
 def test_visible_loop_reports_completed_job(tmp_path, capsys):
-    sup = Supervisor(tmp_path / "auto", deps=_Deps())
+    sup = _SingleJobSupervisor(tmp_path / "auto", deps=_Deps())
     assert sup.start()
     job = sup.jobs.enqueue("UNKNOWN_JOB_FOR_CONSOLE_TEST", idempotency_key="console-test")
     try:
