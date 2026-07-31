@@ -72,6 +72,78 @@ export type AutonomyJob = {
   blocked_reason?: string
 }
 
+export type OperationRecord = {
+  operation_id: string
+  kind: string
+  lane: string
+  status: 'PENDING' | 'RUNNING' | 'SUCCEEDED' | 'FAILED' | 'BLOCKED' | 'CANCELLED' | string
+  requested_by: string
+  requested_at: number
+  started_at?: number | null
+  finished_at?: number | null
+  updated_at: number
+  attempt: number
+  worker_pid?: number | null
+  stage: string
+  message: string
+  progress_current: number
+  progress_total: number
+  progress_pct?: number | null
+  payload?: Record<string, unknown>
+  result?: Record<string, unknown>
+  error_code?: string
+  error_message?: string
+}
+
+export type NewsArticle = {
+  article_id: string
+  headline: string
+  summary: string
+  source: string
+  source_key: string
+  source_tier: number
+  official: boolean
+  url: string
+  published_at: string
+  fetched_at: string
+  category: string
+  event_type: string
+  impact_score: number
+  direction: string
+  why_it_matters: string
+  mentioned_symbols: string[]
+  fno_symbols: string[]
+  sectors: string[]
+  tags: string[]
+  corroboration_count: number
+}
+
+export type NewsSourceHealth = {
+  source_key: string
+  source_name: string
+  status: string
+  fetched_at: string
+  article_count: number
+  latency_ms: number
+  error: string
+}
+
+export type FnoUnderlying = {
+  symbol: string
+  company_name: string
+  future_symbol: string
+  expiry: string
+  lot_size: number
+  instrument_token: number
+  contract_count: number
+}
+
+export type FnoExclusion = {
+  underlying: string
+  stage: string
+  reason: string
+}
+
 export type DataReadiness = {
   ready: boolean
   snapshot: {
@@ -174,6 +246,40 @@ export type DashboardPayload = {
     live_feed?: Record<string, unknown>
     last_cycle?: Record<string, unknown>
   }
+  operations: {
+    available: boolean
+    running: boolean
+    worker_pid?: number | null
+    heartbeat: string
+    active_lanes: Record<string, Record<string, unknown>>
+    counts: Record<string, number>
+    active: OperationRecord[]
+    recent: OperationRecord[]
+    latest: Record<string, OperationRecord>
+    error?: string
+  }
+  news: {
+    available: boolean
+    stats: Record<string, number>
+    articles: NewsArticle[]
+    source_health: NewsSourceHealth[]
+    latest_refresh?: Partial<OperationRecord>
+    error?: string
+  }
+  fno: {
+    available: boolean
+    generated_at?: number | null
+    source: string
+    total_instrument_rows?: number
+    total_future_contracts?: number
+    index_future_contracts?: number
+    unique_stock_underlyings?: number
+    mapped_underlyings: number
+    underlyings: FnoUnderlying[]
+    exclusions: FnoExclusion[]
+    cache_mtime?: number | null
+    error?: string
+  }
   data: DataReadiness
   conviction: ConvictionRecord[]
 }
@@ -191,6 +297,8 @@ export type ControlName =
   | 'RUN_SCAN_NOW'
   | 'RUN_LONG_TERM_SCAN_NOW'
   | 'REFRESH_LONG_TERM_NOW'
+  | 'REFRESH_NEWS_NOW'
+  | 'REFRESH_FNO_NOW'
   | 'RUN_CYCLE_NOW'
   | 'REFRESH_DATA_NOW'
   | 'PAUSE_NEW_PAPER_ENTRIES'
