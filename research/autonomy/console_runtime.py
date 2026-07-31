@@ -1,8 +1,8 @@
 """Visible, resilient console driver for the QuantTerm autonomy supervisor.
 
-The durable Supervisor remains the scheduler and mutation owner.  This module only drives its ticks,
+The durable Supervisor remains the scheduler and mutation owner. This module only drives its ticks,
 prints operator-readable activity, and prevents one unexpected tick exception from silently killing
-the process.  It is used by ``python main.py autonomy``; tests may still call ``Supervisor.run``
+the process. It is used by ``python main.py autonomy``; tests may still call ``Supervisor.run``
 directly for deterministic loop behaviour.
 """
 from __future__ import annotations
@@ -85,68 +85,89 @@ def run_visible_loop(
     consecutive_errors = 0
     last_heartbeat = _heartbeat(supervisor, force=True, last_at=0.0, every_s=heartbeat_s)
 
-    while not supervisor._stop:
-        job = None
-        try:
-            before_state = getattr(supervisor.state, "state", "UNKNOWN")
-            job = supervisor.tick()
-            consecutive_errors = 0
-            after_state = getattr(supervisor.state, "state", "UNKNOWN")
-            if after_state != before_state:
-                _emit("STATE", f"{before_state} → {after_state} · {supervisor.state.explanation}")
+    original_execute = supervisor._execute
+    elapsed_by_job: dict[str, float] = {}
 
-            if job is not None:
-                final = supervisor.jobs.get(job.job_id)
-                final = final or job
-                summary = final.result_summary or final.error_message or "no summary"
+    def visible_execute(job):
+        started = time.monotonic()
+        _emit(
+            "JOB START",
+            f"{job.job_type} · id={job.job_id} · attempt={job.attempt}"
+            + (" · critical" if getattr(job, "critical", False) else ""),
+        )
+        try:
+            return original_execute(job)
+        finally:
+            elapsed_by_job[job.job_id] = time.monotonic() - started
+
+    supervisor._execute = visible_execute
+    try:
+        while not supervisor._stop:
+            job = None
+            try:
+                before_state = getattr(supervisor.state, "state", "UNKNOWN")
+                job = supervisor.tick()
+                consecutive_errors = 0
+                after_state = getattr(supervisor.state, "state", "UNKNOWN")
+                if after_state != before_state:
+                    _emit("STATE", f"{before_state} → {after_state} · {supervisor.state.explanation}")
+
+                if job is not None:
+                    final = supervisor.jobs.get(job.job_id)
+                    final = final or job
+                    summary = final.result_summary or final.error_message or "no summary"
+                    elapsed = elapsed_by_job.pop(job.job_id, 0.0)
+                    _emit(
+                        "JOB DONE",
+                        f"{final.job_type} → {final.status} · {elapsed:.1f}s · "
+                        f"attempt={final.attempt} · {summary}",
+                    )
+                    last_heartbeat = _heartbeat(
+                        supervisor, force=True, last_at=last_heartbeat, every_s=heartbeat_s
+                    )
+                else:
+                    last_heartbeat = _heartbeat(
+                        supervisor, force=False, last_at=last_heartbeat, every_s=heartbeat_s
+                    )
+            except KeyboardInterrupt:
+                raise
+            except Exception as exc:
+                consecutive_errors += 1
                 _emit(
-                    "JOB",
-                    f"{final.job_type} → {final.status} · attempt={final.attempt} · {summary}",
+                    "LOOP ERROR",
+                    f"{type(exc).__name__}: {exc} · retrying (consecutive={consecutive_errors})",
                 )
+                traceback.print_exc()
+                try:
+                    supervisor._incident(
+                        "SUPERVISOR_TICK_EXCEPTION",
+                        f"{type(exc).__name__}: {exc}",
+                    )
+                except Exception:
+                    pass
+                try:
+                    if consecutive_errors >= 3 and getattr(supervisor.state, "state", "") != ST.HALTED:
+                        supervisor._transition(
+                            ST.DEGRADED,
+                            "tick_exception",
+                            f"Autonomy loop recovered from {consecutive_errors} consecutive tick errors.",
+                            "console_runtime",
+                        )
+                    supervisor.heartbeat()
+                except Exception:
+                    pass
                 last_heartbeat = _heartbeat(
                     supervisor, force=True, last_at=last_heartbeat, every_s=heartbeat_s
                 )
+
+            count += 1
+            if max_iterations is not None and count >= max_iterations:
+                break
+
+            if consecutive_errors:
+                delay = min(60.0, max(1.0, 2.0 ** min(consecutive_errors, 5)))
             else:
-                last_heartbeat = _heartbeat(
-                    supervisor, force=False, last_at=last_heartbeat, every_s=heartbeat_s
-                )
-        except KeyboardInterrupt:
-            raise
-        except Exception as exc:  # one bad tick must not silently kill the operating loop
-            consecutive_errors += 1
-            _emit(
-                "LOOP ERROR",
-                f"{type(exc).__name__}: {exc} · retrying (consecutive={consecutive_errors})",
-            )
-            traceback.print_exc()
-            try:
-                supervisor._incident(
-                    "SUPERVISOR_TICK_EXCEPTION",
-                    f"{type(exc).__name__}: {exc}",
-                )
-            except Exception:
-                pass
-            try:
-                if consecutive_errors >= 3 and getattr(supervisor.state, "state", "") != ST.HALTED:
-                    supervisor._transition(
-                        ST.DEGRADED,
-                        "tick_exception",
-                        f"Autonomy loop recovered from {consecutive_errors} consecutive tick errors.",
-                        "console_runtime",
-                    )
-                supervisor.heartbeat()
-            except Exception:
-                pass
-            last_heartbeat = _heartbeat(
-                supervisor, force=True, last_at=last_heartbeat, every_s=heartbeat_s
-            )
-
-        count += 1
-        if max_iterations is not None and count >= max_iterations:
-            break
-
-        if consecutive_errors:
-            delay = min(60.0, max(1.0, 2.0 ** min(consecutive_errors, 5)))
-        else:
-            delay = max(0.1, float(interval_s))
-        sleep_fn(delay)
+                delay = max(0.1, float(interval_s))
+            sleep_fn(delay)
+    finally:
+        supervisor._execute = original_execute
