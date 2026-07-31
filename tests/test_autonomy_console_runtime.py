@@ -1,7 +1,11 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
+import json
+import threading
+import time
 
+from research.autonomy import health as H
 from research.autonomy import job_store as JS
 from research.autonomy.console_runtime import run_visible_loop
 from research.autonomy.supervisor import Supervisor
@@ -44,6 +48,21 @@ class _SingleJobSupervisor(Supervisor):
         return job
 
 
+class _BlockingSupervisor(Supervisor):
+    """Hold one tick open long enough to prove runtime liveness is independent of tick completion."""
+
+    def __init__(self, root):
+        super().__init__(root, deps=_Deps())
+        self.entered = threading.Event()
+        self.release = threading.Event()
+
+    def tick(self, now_ist=None):
+        self.entered.set()
+        self.release.wait(timeout=4.0)
+        self.stop()
+        return None
+
+
 def test_visible_loop_recovers_from_tick_exception(tmp_path, capsys):
     sup = _ExplodingSupervisor(tmp_path / "auto")
     assert sup.start()
@@ -82,4 +101,54 @@ def test_visible_loop_reports_completed_job(tmp_path, capsys):
         assert "UNKNOWN_JOB_FOR_CONSOLE_TEST" in output
         assert "PERMANENT_FAILED" in output
     finally:
+        sup.shutdown()
+
+
+def test_fresh_runtime_heartbeat_overrides_stale_durable_snapshot(tmp_path):
+    root = tmp_path / "auto"
+    root.mkdir()
+    stale = (datetime.now(timezone.utc) - timedelta(minutes=10)).isoformat()
+    fresh = datetime.now(timezone.utc).isoformat()
+    (root / "status.json").write_text(json.dumps({
+        "state": "DATA_REFRESHING",
+        "process_running": True,
+        "heartbeat_ist": stale,
+    }), encoding="utf-8")
+    (root / "runtime.json").write_text(json.dumps({
+        "process_running": True,
+        "heartbeat_ist": fresh,
+        "scheduler_owner_pid": 1234,
+        "active_job": {"job_type": "data_refresh"},
+    }), encoding="utf-8")
+
+    status = H.read_status(state_path=root / "status.json")
+    assert status["supervisor_running"] is True
+    assert status["heartbeat_ist"] == fresh
+    assert status["scheduler_owner_pid"] == 1234
+    assert status["active_job"]["job_type"] == "data_refresh"
+
+
+def test_runtime_heartbeat_advances_while_tick_is_blocked(tmp_path):
+    root = tmp_path / "auto"
+    sup = _BlockingSupervisor(root)
+    assert sup.start()
+    runner = threading.Thread(
+        target=run_visible_loop,
+        kwargs={"supervisor": sup, "interval_s": 0, "heartbeat_s": 0.2},
+        daemon=True,
+    )
+    try:
+        runner.start()
+        assert sup.entered.wait(timeout=2.0)
+        runtime_path = root / "runtime.json"
+        first = json.loads(runtime_path.read_text(encoding="utf-8"))["heartbeat_ist"]
+        time.sleep(1.25)  # runtime worker minimum interval is one second
+        second_payload = json.loads(runtime_path.read_text(encoding="utf-8"))
+        assert second_payload["heartbeat_ist"] != first
+        assert second_payload["process_running"] is True
+        status = H.read_status(state_path=root / "status.json")
+        assert status["supervisor_running"] is True
+    finally:
+        sup.release.set()
+        runner.join(timeout=3.0)
         sup.shutdown()
