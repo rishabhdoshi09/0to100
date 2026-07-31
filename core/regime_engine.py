@@ -209,7 +209,8 @@ def _fetch_ohlcv(ticker: str, period: str = "1y") -> Optional[pd.DataFrame]:
         import warnings
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            df = yf.download(ticker, period=period, progress=False, auto_adjust=True)
+            # bounded: a slow/blocked feed must not hang the caller (e.g. the retail Market page)
+            df = yf.download(ticker, period=period, progress=False, auto_adjust=True, timeout=8)
         if df is None or df.empty:
             logger.debug("No yfinance data for %s (Kite may not be connected)", ticker)
             return None

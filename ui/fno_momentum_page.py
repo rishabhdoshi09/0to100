@@ -152,7 +152,8 @@ def render_fno_momentum_page() -> None:
     tabs = st.tabs(["Qualified", "All considered", "Excluded with reasons"])
 
     with tabs[0]:
-        qualified = sorted(funnel.qualified, key=lambda row: row.score, reverse=True)
+        # deterministic: score descending, symbol as the stable secondary key for ties
+        qualified = sorted(funnel.qualified, key=lambda row: (-row.score, row.symbol))
         if not qualified:
             st.info(
                 "No F&O stock currently passes the momentum rules. This is a valid result; "

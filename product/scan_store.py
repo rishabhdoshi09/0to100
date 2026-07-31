@@ -64,7 +64,8 @@ def build_scan_payload(
 ) -> dict[str, Any]:
     fno = {str(s).upper() for s in fno_symbols}
     records = [_record(row, names, fno) for row in results]
-    records.sort(key=lambda row: row["score"], reverse=True)
+    # deterministic ranking: score descending, symbol as the stable secondary key for ties
+    records.sort(key=lambda row: (-float(row["score"] or 0.0), row["symbol"]))
     momentum = [r for r in records if "MOMENTUM" in r["signals"]]
     near = [r for r in records if "PRE_BREAKOUT" in r["signals"] and "MOMENTUM" not in r["signals"]]
     ready = [r for r in records if r["status"] == "Ready to trade"]
@@ -112,7 +113,8 @@ def watchlist_rows(payload: Mapping[str, Any] | None, limit: int = 25) -> list[d
         return []
     priority = {"Ready to trade": 0, "Watch for breakout": 1, "Wait for pullback": 2, "Watch": 3}
     rows = list(payload.get("records", []))
-    rows.sort(key=lambda r: (priority.get(str(r.get("status")), 9), -float(r.get("score", 0) or 0)))
+    rows.sort(key=lambda r: (priority.get(str(r.get("status")), 9), -float(r.get("score", 0) or 0),
+                             str(r.get("symbol", ""))))       # symbol tiebreak → deterministic
     return rows[: max(0, int(limit))]
 
 

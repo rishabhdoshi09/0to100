@@ -1018,3 +1018,20 @@ Folded in / fixed on top of the canonical base:
   **894 passed**.
 - **Completion demo** — `docs/overhaul/retail_ux_demo.html` (a rendered four-scenario walkthrough,
   values taken from the canonical `product/` + `data/fno_universe` engines) + `RETAIL_WALKTHROUGH.md`.
+
+---
+
+## Milestone — Retail runtime production sign-off
+
+Final runtime acceptance + data-integrity + quant-product sign-off of the retail app (no new
+features). Launched the real Streamlit server (health 200), exercised all 14 pages via AppTest and
+three via live screenshots, ran the four journeys and the F&O reconciliation through the canonical
+`product/` + `data/fno_universe` engines.
+
+Defects fixed at source: (1) Market-page infinite hang — `data/index_store` built via `as_completed`
+with no timeout; added a whole-batch budget + cancel + re-attempt cooldown, `regime_engine` yfinance
+`timeout=8`, and a `render_market` error boundary. (2) Non-deterministic ranking on ties — symbol as
+the stable secondary sort key in `ui/fno_momentum_page` and `product/scan_store`.
+
+Added `tests/test_retail_signoff.py` (18 acceptance guarantees). Sign-off:
+`docs/overhaul/RETAIL_RUNTIME_SIGNOFF.md`. Verdict: **CONDITIONALLY READY**. Full suite: **912 passed**.

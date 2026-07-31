@@ -26,6 +26,13 @@ log = get_logger(__name__)
 
 _DIR = Path(__file__).resolve().parent.parent / "logs" / "indices"
 _PKL = _DIR / "index_store.pkl"
+# whole-batch budget for building the index store from the network; a dead feed gives up here
+# instead of blocking the caller through hundreds of per-day request timeouts
+_BUILD_BUDGET_S = 25.0
+# after a build attempt that could not reach the feed, don't re-pay the network budget for every
+# concurrent regime ticker; reuse the outcome for a short cooldown
+_BUILD_COOLDOWN_S = 120.0
+_last_build_attempt = 0.0
 _URL = "https://nsearchives.nseindia.com/content/indices/ind_close_all_{d}.csv"
 _HEADERS = {
     "User-Agent": ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
@@ -148,10 +155,25 @@ def _build_index_store_locked(days: int = 400) -> int:
         except Exception:
             pass
 
+    global _last_build_attempt
     missing = [x for x in candidates if not _day_path(x).exists()]
+    if missing and (time.time() - _last_build_attempt) < _BUILD_COOLDOWN_S:
+        missing = []                     # a recent attempt already found the feed unreachable
     if missing:
-        with ThreadPoolExecutor(max_workers=6) as pool:
-            list(as_completed([pool.submit(_download_day, x) for x in missing]))
+        _last_build_attempt = time.time()
+        # Bounded build: when the feed is down, hundreds of per-day timeouts must not block the
+        # caller (e.g. the retail Market page) for many minutes. Give the whole batch a budget,
+        # then give up gracefully — callers already handle an incomplete/empty store.
+        pool = ThreadPoolExecutor(max_workers=6)
+        futures = [pool.submit(_download_day, x) for x in missing]
+        try:
+            for _ in as_completed(futures, timeout=_BUILD_BUDGET_S):
+                pass
+        except TimeoutError:
+            log.warning("index_store_build_timeout",
+                        done=sum(1 for f in futures if f.done()), of=len(futures))
+        finally:
+            pool.shutdown(wait=False, cancel_futures=True)
 
     available = [x for x in candidates if _day_path(x).exists()]
     if len(available) < 30:

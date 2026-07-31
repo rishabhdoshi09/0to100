@@ -63,8 +63,14 @@ def render_paper_trading() -> None:
 def render_market() -> None:
     st.title("Market")
     st.caption("A plain-language market condition built from QuantTerm's existing regime engine.")
-    with st.spinner("Reading market condition…"):
-        view = current_market_view()
+    try:
+        with st.spinner("Reading market condition…"):
+            view = current_market_view()
+    except Exception as exc:                       # unavailable feed → understandable state, not a hang/crash
+        st.warning("Market condition is temporarily unavailable — the market-data feed did not respond. "
+                   "This does not affect your saved data or paper positions.")
+        st.caption(f"Details: {exc}")
+        return
     st.subheader(f"Market is {view.health.lower()}")
     st.write(view.summary)
     st.info(view.trade_stance)
