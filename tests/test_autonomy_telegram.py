@@ -148,3 +148,19 @@ def test_supervisor_telegram_notifier_has_no_execution_or_broker_imports():
     assert "execution.trade_executor" not in source
     assert "place_order" not in source
     assert "place_gtt" not in source
+
+
+def test_long_term_alerts_are_ranked_and_deduped(tmp_path):
+    engine = FakeEngine()
+    now = lambda: datetime(2026, 7, 31, 18, 30)
+    notifier = TelegramNotifier(tmp_path, engine_factory=lambda: engine, now_fn=now)
+    payload = {"records": [{
+        "symbol": "AAA", "classification": "QUALITY_COMPOUNDER",
+        "combined_score": 82, "technical_score": 78, "fundamental_score": 85,
+        "fundamental_coverage": 0.9, "timing": "TECHNICALLY_FAVORABLE",
+        "quality_factors": ["ROCE 25%", "3y profit CAGR 20%"], "risk_flags": [],
+    }]}
+    assert notifier.notify_long_term(payload) == {"sent": 1}
+    assert "current long-term shortlist" in engine.messages[-1][0]
+    restarted = TelegramNotifier(tmp_path, engine_factory=lambda: engine, now_fn=now)
+    assert restarted.notify_long_term(payload) == {"sent": 0}

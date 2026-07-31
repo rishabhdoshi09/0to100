@@ -134,10 +134,14 @@ def thesis_line(pick: dict) -> str:
 
 
 def scan_long_term(symbols=None, min_score: float | None = None,
-                   top: int = 30) -> list[dict]:
-    """Screen the market for long-term picks. Returns LONG_TERM_BUY candidates
-    ranked by score (best first), each with its score, thesis factors, and key
-    metrics. Reads official bhavcopy only — fail-open → []."""
+                   top: int = 30, *, include_watch: bool = False) -> list[dict]:
+    """Screen the market for long-term technical candidates.
+
+    The default remains backward compatible and returns only ``LONG_TERM_BUY``
+    technical candidates.  ``include_watch=True`` also returns structurally
+    valid WATCH rows so the current-fundamental layer can make the final retail
+    classification.  Reads official bhavcopy only — fail-open → [].
+    """
     try:
         from data.bhavcopy_store import get_ohlcv, store_symbols
         syms = symbols if symbols is not None else store_symbols()
@@ -151,7 +155,8 @@ def scan_long_term(symbols=None, min_score: float | None = None,
             if df is None or len(df) < _MIN_SESSIONS:
                 continue
             s = long_term_score(df)
-            if s.get("verdict") == "LONG_TERM_BUY" and s.get("score", 0) >= bar:
+            accepted = {"LONG_TERM_BUY", "WATCH"} if include_watch else {"LONG_TERM_BUY"}
+            if s.get("verdict") in accepted and s.get("score", 0) >= bar:
                 s["symbol"] = sym
                 s["thesis"] = thesis_line(s)
                 picks.append(s)

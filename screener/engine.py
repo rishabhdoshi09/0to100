@@ -43,10 +43,14 @@ def _parse_float(val: Any) -> Optional[float]:
 
 
 def _extract_fundamentals(data: Dict) -> Dict:
-    """Pull key ratios, debt, and promoter holding out of deep-fundamentals dict."""
+    """Extract current fundamental quality/valuation fields from a deep snapshot.
+
+    This is deliberately a *current snapshot* extractor.  It must not be used as
+    point-in-time historical evidence.  Missing fields remain ``None`` so callers
+    can report coverage honestly rather than substituting optimistic defaults.
+    """
     result: Dict[str, Any] = {}
 
-    # Build a lower-cased lookup from key_ratios list
     kr: Dict[str, Any] = {}
     for item in data.get("key_ratios", []):
         key = str(item.get("name", "")).lower().strip()
@@ -58,45 +62,99 @@ def _extract_fundamentals(data: Dict) -> Dict:
                 return _parse_float(kr[k])
         return None
 
-    result["pe"]             = _first("stock p/e", "p/e", "price to earning", "pe")
-    result["roe"]            = _first("roe", "return on equity")
-    result["roce"]           = _first("roce", "return on capital employed")
+    result["pe"] = _first("stock p/e", "p/e", "price to earning", "pe")
+    result["roe"] = _first("roe", "return on equity")
+    result["roce"] = _first("roce", "return on capital employed")
     result["dividend_yield"] = _first("dividend yield", "div yield")
-    result["market_cap_cr"]  = _first("market cap", "mkt cap", "market capitalization")
+    result["market_cap_cr"] = _first("market cap", "mkt cap", "market capitalization")
+    result["interest_coverage"] = _first(
+        "interest coverage ratio", "interest coverage", "int coverage")
 
-    # Debt-to-equity: try key ratios first, then derive from balance sheet
+    def _label(row: Dict) -> str:
+        return str(row.get("", row.get("row_label", "")) or "").lower().strip()
+
+    def _numeric_values(row: Dict) -> list[float]:
+        vals: list[float] = []
+        for key, value in row.items():
+            if key in ("", "row_label"):
+                continue
+            parsed = _parse_float(value)
+            if parsed is not None:
+                vals.append(parsed)
+        return vals
+
+    def _series(section: str, *needles: str) -> list[float]:
+        for row in data.get(section, []) or []:
+            label = _label(row)
+            if any(needle in label for needle in needles):
+                return _numeric_values(row)
+        return []
+
+    def _cagr(values: list[float], years: int = 3) -> Optional[float]:
+        # Screener tables are chronological left→right.  Use up to the latest
+        # three annual intervals, but refuse non-positive bases where CAGR is
+        # economically undefined.
+        clean = [float(v) for v in values if v is not None]
+        if len(clean) < 2:
+            return None
+        intervals = min(years, len(clean) - 1)
+        start, end = clean[-(intervals + 1)], clean[-1]
+        if start <= 0 or end < 0:
+            return None
+        try:
+            return ((end / start) ** (1.0 / intervals) - 1.0) * 100.0
+        except Exception:
+            return None
+
+    sales = _series("profit_loss", "sales", "revenue")
+    profit = _series("profit_loss", "net profit", "profit after tax", "pat")
+    cfo = _series("cash_flow", "cash from operating", "cash flow from operating")
+    result["sales_growth_3y"] = _cagr(sales)
+    result["profit_growth_3y"] = _cagr(profit)
+    latest_profit = profit[-1] if profit else None
+    latest_cfo = cfo[-1] if cfo else None
+    result["cfo_to_pat"] = (
+        round(latest_cfo / latest_profit, 3)
+        if latest_cfo is not None and latest_profit not in (None, 0) else None
+    )
+
     de = _first("debt to equity", "d/e ratio", "debt / equity", "debt/equity")
     if de is not None:
         result["debt_to_equity"] = de
     else:
         borrowings = equity = None
-        for row in data.get("balance_sheet", []):
-            label = str(row.get("", row.get("row_label", ""))).lower()
-            vals  = [v for k, v in row.items()
-                     if k not in ("", "row_label") and v is not None]
-            latest = _parse_float(vals[0]) if vals else None
+        for row in data.get("balance_sheet", []) or []:
+            label = _label(row)
+            vals = _numeric_values(row)
+            latest = vals[-1] if vals else None
             if "borrowing" in label and latest is not None:
                 borrowings = latest
-            if ("equity capital" in label or "total equity" in label) and latest is not None:
-                equity = latest
-        if borrowings is not None and equity and equity > 0:
-            result["debt_to_equity"] = round(borrowings / equity, 2)
-        else:
-            result["debt_to_equity"] = None
+            if ("equity capital" in label or "total equity" in label or
+                    "reserves" in label) and latest is not None:
+                equity = (equity or 0.0) + latest
+        result["debt_to_equity"] = (
+            round(borrowings / equity, 3)
+            if borrowings is not None and equity and equity > 0 else None
+        )
 
-    # Promoter holding — most recent column in shareholding table
     result["promoter_holding"] = None
-    for row in data.get("shareholding", []):
-        label = str(row.get("", row.get("row_label", ""))).lower()
+    result["promoter_pledge"] = None
+    for row in data.get("shareholding", []) or []:
+        label = _label(row)
+        vals = _numeric_values(row)
+        latest = vals[-1] if vals else None
+        if latest is None:
+            continue
         if "promoter" in label and "pledge" not in label:
-            vals = [v for k, v in row.items()
-                    if k not in ("", "row_label") and v is not None]
-            if vals:
-                result["promoter_holding"] = _parse_float(vals[0])
-            break
+            result["promoter_holding"] = latest
+        if "pledge" in label:
+            result["promoter_pledge"] = latest
 
+    result["available_fields"] = sorted(
+        key for key, value in result.items()
+        if key != "available_fields" and value is not None
+    )
     return result
-
 
 # ── Screener Engine ────────────────────────────────────────────────────────────
 

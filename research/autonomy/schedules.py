@@ -20,11 +20,13 @@ PAPER_CYCLE = "paper_cycle"
 OUTCOME_RESOLUTION = "outcome_resolution"
 LEARNING_CYCLE = "learning_cycle"
 RESEARCH_CYCLE = "research_cycle"
+LONG_TERM_SCAN = "long_term_scan"
+LONG_TERM_REFRESH = "long_term_refresh"
 
 ALL_JOB_TYPES = (
     AUTH_HEALTH, INSTRUMENT_REFRESH, DATA_REFRESH, BHAVCOPY_UPDATE, CORPORATE_ACTIONS,
     UNIVERSE_HISTORY, INDEX_WARMUP, MARKET_SCAN, NEWS_REFRESH, PAPER_CYCLE,
-    OUTCOME_RESOLUTION, LEARNING_CYCLE, RESEARCH_CYCLE,
+    OUTCOME_RESOLUTION, LEARNING_CYCLE, RESEARCH_CYCLE, LONG_TERM_SCAN, LONG_TERM_REFRESH,
 )
 CRITICAL_JOBS = {AUTH_HEALTH, DATA_REFRESH, PAPER_CYCLE, OUTCOME_RESOLUTION}
 
@@ -172,3 +174,13 @@ def outcome_key(session_date: str) -> str:
 
 def research_key(session_date: str) -> str:
     return f"research_cycle:{session_date}"
+
+
+def long_term_weekly_due(now_ist, holidays=None) -> bool:
+    """Friday EOD is the automatic long-term review window."""
+    return in_eod_window(now_ist, holidays) and now_ist.weekday() == 4
+
+
+def long_term_key(session_date: str, *, refresh: bool = False) -> str:
+    kind = "refresh" if refresh else "scan"
+    return f"long_term_{kind}:{session_date}"

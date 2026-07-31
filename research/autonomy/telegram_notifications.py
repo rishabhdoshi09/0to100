@@ -364,6 +364,46 @@ class TelegramNotifier:
             pass
         return {"confirmed": 0}
 
+    def notify_long_term(self, payload: Mapping[str, Any] | None) -> dict:
+        """Send the current weekly long-term shortlist once per symbol/day."""
+        payload = dict(payload or {})
+        records = [dict(r) for r in payload.get("records", []) if isinstance(r, Mapping)]
+        eligible = [r for r in records if str(r.get("classification", "")) in
+                    ("QUALITY_COMPOUNDER", "GARP_CANDIDATE", "QUALITY_BUT_EXPENSIVE")]
+        eligible.sort(key=lambda r: (-self._f(r.get("combined_score")),
+                                     str(r.get("symbol", ""))))
+        eligible = [r for r in eligible
+                    if not self._was_sent(f"longterm:{str(r.get('symbol', '')).upper()}")][:6]
+        if not eligible:
+            return {"sent": 0}
+        lines = ["💎 <b>QuantTerm — current long-term shortlist</b>",
+                 "<i>Current fundamentals + official price history; not a historical backtest.</i>"]
+        keys = []
+        for row in eligible:
+            sym = str(row.get("symbol", "")).upper()
+            cls = str(row.get("classification", "")).replace("_", " ").title()
+            factors = [self._esc(x) for x in (row.get("quality_factors") or []) if str(x).strip()]
+            risks = [self._esc(x) for x in (row.get("risk_flags") or []) if str(x).strip()]
+            lines.append(
+                f"\n<b>{self._esc(sym)}</b> — {self._esc(cls)} · score "
+                f"{self._f(row.get('combined_score')):.0f}\n"
+                f"   Technical {self._f(row.get('technical_score')):.0f} · "
+                f"Fundamental {self._f(row.get('fundamental_score')):.0f} · "
+                f"Coverage {self._f(row.get('fundamental_coverage'))*100:.0f}%\n"
+                f"   {self._esc(row.get('timing', '')).replace('_', ' ').title()}"
+                + (f"\n   ✓ {'; '.join(factors[:2])}" if factors else "")
+                + (f"\n   ⚠ {'; '.join(risks[:2])}" if risks else "")
+            )
+            keys.append(f"longterm:{sym}")
+        try:
+            engine = self._engine()
+            if engine.is_configured() and engine.send("\n".join(lines)):
+                self._mark_sent(keys)
+                return {"sent": len(eligible)}
+        except Exception:
+            pass
+        return {"sent": 0}
+
     def notify_incident(self, code: str, message: str) -> bool:
         important = {
             "CRITICAL_OVERDUE", "HANDLER_EXCEPTION", "AUTH_EXPIRED", "TOKEN_MISSING",

@@ -166,6 +166,13 @@ class Deps:
     def notify_scan(self, payload, *, phase=""):
         return self.telegram.notify_scan(payload, phase=phase)
 
+    def run_long_term_scan(self, *, refresh_fundamentals=False):
+        from scan.long_term_service import run_long_term_scan
+        return run_long_term_scan(refresh_fundamentals=refresh_fundamentals, save=True)
+
+    def notify_long_term(self, payload):
+        return self.telegram.notify_long_term(payload)
+
     def observe_live_breakouts(self):
         try:
             from product.scan_store import load_scan
@@ -367,6 +374,45 @@ def run_index_warmup(ctx) -> JobResult:
     return JobResult(JS.SUCCEEDED, f"index store warm · {info.get('indices')} indices", metadata=info)
 
 
+def _run_long_term(ctx, *, refresh_fundamentals: bool) -> JobResult:
+    try:
+        report = ctx.deps.run_long_term_scan(refresh_fundamentals=refresh_fundamentals)
+    except Exception as exc:
+        return JobResult(JS.RETRYABLE_FAILED, "long-term scan failed",
+                         error_code="LONG_TERM_SCAN_ERROR", error_message=str(exc))
+    if hasattr(report, "ok") and not report.ok:
+        if getattr(report, "status", "") == "NO_CANDIDATES":
+            payload = getattr(report, "payload", {}) or {}
+        else:
+            return JobResult(JS.RETRYABLE_FAILED, "long-term scan unavailable",
+                             error_code=getattr(report, "error_code", "LONG_TERM_SCAN_ERROR"),
+                             error_message=getattr(report, "error_message", ""))
+    else:
+        payload = getattr(report, "payload", report or {}) or {}
+    summary = dict(payload.get("summary", {}) or {})
+    telegram = {}
+    if hasattr(ctx.deps, "notify_long_term"):
+        try:
+            telegram = ctx.deps.notify_long_term(payload) or {}
+        except Exception:
+            telegram = {"error": "notification_failed"}
+    return JobResult(
+        JS.SUCCEEDED,
+        (f"long-term scan complete · {summary.get('quality_compounder', 0)} compounders · "
+         f"{summary.get('garp_candidate', 0)} GARP · {summary.get('coverage_pct', 0)}% covered"),
+        metadata={**summary, "telegram": telegram,
+                  "fundamentals_refreshed": bool(refresh_fundamentals)},
+    )
+
+
+def run_long_term_scan_job(ctx) -> JobResult:
+    return _run_long_term(ctx, refresh_fundamentals=False)
+
+
+def run_long_term_refresh_job(ctx) -> JobResult:
+    return _run_long_term(ctx, refresh_fundamentals=True)
+
+
 def run_market_scan(ctx) -> JobResult:
     if not ctx.deps.active_snapshot_id():
         return JobResult(JS.BLOCKED, "verified active snapshot required before market scan",
@@ -516,4 +562,6 @@ HANDLERS = {
     SCH.OUTCOME_RESOLUTION: run_outcome_resolution,
     SCH.LEARNING_CYCLE: run_learning_cycle,
     SCH.RESEARCH_CYCLE: run_research_cycle,
+    SCH.LONG_TERM_SCAN: run_long_term_scan_job,
+    SCH.LONG_TERM_REFRESH: run_long_term_refresh_job,
 }

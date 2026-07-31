@@ -226,6 +226,11 @@ class Supervisor:
                     critical=True,
                 )
             if slot == "eod" and scan_job.status == JS.SUCCEEDED:
+                if SCH.long_term_weekly_due(now_ist, holidays):
+                    self.jobs.enqueue(
+                        SCH.LONG_TERM_SCAN,
+                        idempotency_key=SCH.long_term_key(session_date),
+                    )
                 outcome = self.jobs.enqueue(SCH.OUTCOME_RESOLUTION,
                                             idempotency_key=SCH.outcome_key(session_date), critical=True)
                 if outcome.status == JS.SUCCEEDED:
@@ -272,6 +277,28 @@ class Supervisor:
                 elif ctype == CTRL.RUN_RESEARCH_NOW:
                     self.jobs.enqueue(SCH.RESEARCH_CYCLE,
                                       idempotency_key=f"manual:research:{control.control_id}")
+                elif ctype == CTRL.RUN_LONG_TERM_SCAN_NOW:
+                    self.jobs.enqueue(SCH.LONG_TERM_SCAN,
+                                      idempotency_key=f"manual:long-term:{control.control_id}")
+                elif ctype == CTRL.REFRESH_LONG_TERM_NOW:
+                    self.jobs.enqueue(SCH.LONG_TERM_REFRESH,
+                                      idempotency_key=f"manual:long-term-refresh:{control.control_id}")
+                elif ctype == CTRL.TRACK_LONG_TERM_IDEA:
+                    try:
+                        value = json.loads(control.value or "{}")
+                    except Exception:
+                        value = {}
+                    symbol = str(value.get("symbol", "") if isinstance(value, dict) else "").upper()
+                    from product.long_term_store import load_long_term_scan
+                    payload = load_long_term_scan() or {}
+                    row = next((dict(r) for r in payload.get("records", [])
+                                if str(r.get("symbol", "")).upper() == symbol), None)
+                    if not row or row.get("classification") not in (
+                            "QUALITY_COMPOUNDER", "GARP_CANDIDATE"):
+                        raise ValueError("symbol is not in the eligible current long-term shortlist")
+                    from core.long_term_tracker import record_picks
+                    record_picks([{**row, "score": row.get("combined_score"),
+                                   "thesis": "; ".join(row.get("quality_factors", [])[:3])}])
                 elif ctype == CTRL.HALT_AUTONOMY:
                     self.owner_state["halted"] = True
                     self.owner_state["new_entries_paused"] = True
