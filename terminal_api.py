@@ -15,7 +15,7 @@ from typing import Any
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
-app = FastAPI(title="QuantTerm Terminal API", version="0.2.0")
+app = FastAPI(title="QuantTerm Terminal API", version="0.2.1")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://127.0.0.1:5173", "http://localhost:5173"],
@@ -89,14 +89,7 @@ def _scan_payload() -> dict:
             "records": records,
         }
     except Exception as exc:
-        return {
-            "available": False,
-            "scanned_at": "",
-            "universe_size": 0,
-            "summary": {},
-            "records": [],
-            "error": str(exc),
-        }
+        return {"available": False, "scanned_at": "", "universe_size": 0, "summary": {}, "records": [], "error": str(exc)}
 
 
 def _long_term_payload() -> dict:
@@ -111,14 +104,7 @@ def _long_term_payload() -> dict:
             "records": [dict(row) for row in (payload.get("records", []) or []) if isinstance(row, dict)],
         }
     except Exception as exc:
-        return {
-            "available": False,
-            "scanned_at": "",
-            "fundamentals_source": "",
-            "summary": {},
-            "records": [],
-            "error": str(exc),
-        }
+        return {"available": False, "scanned_at": "", "fundamentals_source": "", "summary": {}, "records": [], "error": str(exc)}
 
 
 def _paper_equity_curve() -> list[float]:
@@ -154,20 +140,10 @@ def _paper_payload() -> dict:
         }
     except Exception as exc:
         return {
-            "available": False,
-            "enabled": False,
-            "supervisor_running": False,
-            "capital": 0.0,
-            "equity": 0.0,
-            "equity_curve": [],
-            "open_risk": 0.0,
-            "risk_per_trade_pct": 0.01,
-            "max_positions": 0,
-            "open_positions": [],
-            "closed_trades": [],
-            "refusals": [],
-            "last_cycle": {},
-            "last_error": str(exc),
+            "available": False, "enabled": False, "supervisor_running": False,
+            "capital": 0.0, "equity": 0.0, "equity_curve": [], "open_risk": 0.0,
+            "risk_per_trade_pct": 0.01, "max_positions": 0, "open_positions": [],
+            "closed_trades": [], "refusals": [], "last_cycle": {}, "last_error": str(exc),
             "error": str(exc),
         }
 
@@ -194,12 +170,20 @@ def _recent_jobs(limit: int = 60) -> list[dict]:
         return []
 
 
+def _capability(value: Any) -> str:
+    text = str(value or "blocked").strip().lower()
+    return text if text in {"allowed", "limited", "blocked", "read_only"} else "blocked"
+
+
 def _autonomy_payload() -> dict:
     try:
         from product.autonomy_status import read_autonomy_status
         from research.autonomy import default_root
         status = read_autonomy_status()
         raw = _json_file(default_root() / "status.json", {})
+        entry_capability = _capability(status.get("new_paper_entries"))
+        exit_capability = _capability(status.get("existing_exits"))
+        research_capability = _capability(status.get("research"))
         return {
             "available": True,
             "running": bool(status.get("running")),
@@ -209,9 +193,12 @@ def _autonomy_payload() -> dict:
             "explanation": str(status.get("explanation", "")),
             "heartbeat_ist": str(status.get("heartbeat_ist", "")),
             "scheduler_owner_pid": raw.get("scheduler_owner_pid"),
-            "new_paper_entries": bool(status.get("new_paper_entries")),
-            "existing_exits": bool(status.get("existing_exits")),
-            "research_enabled": bool(status.get("research")),
+            "new_entry_capability": entry_capability,
+            "existing_exit_capability": exit_capability,
+            "research_capability": research_capability,
+            "new_paper_entries": entry_capability == "allowed",
+            "existing_exits": exit_capability != "blocked",
+            "research_enabled": research_capability != "blocked",
             "capability_notes": list(status.get("capability_notes", []) or []),
             "active_failures": list(raw.get("active_failures", []) or []),
             "recent_dialogue": list(status.get("recent_dialogue", []) or [])[-40:],
@@ -224,27 +211,15 @@ def _autonomy_payload() -> dict:
         }
     except Exception as exc:
         return {
-            "available": False,
-            "running": False,
-            "process_running": False,
-            "state": "UNKNOWN",
-            "plain_state": "Autonomy status unavailable.",
-            "explanation": str(exc),
-            "heartbeat_ist": "",
-            "scheduler_owner_pid": None,
-            "new_paper_entries": False,
-            "existing_exits": False,
-            "research_enabled": False,
-            "capability_notes": [],
-            "active_failures": [],
-            "recent_dialogue": [],
-            "recent_transitions": [],
-            "jobs": {},
-            "jobs_recent": [],
-            "owner_state": {},
-            "live_feed": {},
-            "last_cycle": {},
-            "error": str(exc),
+            "available": False, "running": False, "process_running": False, "state": "UNKNOWN",
+            "plain_state": "Autonomy status unavailable.", "explanation": str(exc),
+            "heartbeat_ist": "", "scheduler_owner_pid": None,
+            "new_entry_capability": "blocked", "existing_exit_capability": "blocked",
+            "research_capability": "blocked", "new_paper_entries": False,
+            "existing_exits": False, "research_enabled": False, "capability_notes": [],
+            "active_failures": [], "recent_dialogue": [], "recent_transitions": [],
+            "jobs": {}, "jobs_recent": [], "owner_state": {}, "live_feed": {},
+            "last_cycle": {}, "error": str(exc),
         }
 
 
@@ -255,20 +230,15 @@ def _conviction(scan: dict, market: dict) -> list[dict]:
         from product.conviction import build_conviction_shortlist
         from product.market_view import RetailMarketView
         view = RetailMarketView(
-            health=str(market["health"]),
-            summary=str(market["summary"]),
-            trade_stance=str(market["trade_stance"]),
-            breadth=str(market["breadth"]),
-            leaders=tuple(market.get("leaders", [])),
-            laggards=tuple(market.get("laggards", [])),
+            health=str(market["health"]), summary=str(market["summary"]),
+            trade_stance=str(market["trade_stance"]), breadth=str(market["breadth"]),
+            leaders=tuple(market.get("leaders", [])), laggards=tuple(market.get("laggards", [])),
             nifty_change_1d=float(market.get("nifty_change_1d") or 0.0),
             nifty_change_5d=float(market.get("nifty_change_5d") or 0.0),
             vix=float(market.get("vix") or 0.0),
             technical_details=dict(market.get("technical_details", {}) or {}),
         )
-        return build_conviction_shortlist(
-            {"records": scan.get("records", []), "summary": scan.get("summary", {})}, view
-        )
+        return build_conviction_shortlist({"records": scan.get("records", []), "summary": scan.get("summary", {})}, view)
     except Exception:
         return []
 
@@ -276,31 +246,18 @@ def _conviction(scan: dict, market: dict) -> list[dict]:
 @app.get("/api/health")
 def health() -> dict:
     autonomy = _autonomy_payload()
-    return {
-        "ok": True,
-        "service": "quantterm-terminal-api",
-        "version": app.version,
-        "autonomy_running": autonomy.get("running", False),
-        "autonomy_state": autonomy.get("state", "UNKNOWN"),
-    }
+    return {"ok": True, "service": "quantterm-terminal-api", "version": app.version,
+            "autonomy_running": autonomy.get("running", False),
+            "autonomy_state": autonomy.get("state", "UNKNOWN")}
 
 
 @app.get("/api/dashboard")
 def dashboard() -> dict:
-    market = _market_payload()
-    scan = _scan_payload()
-    long_term = _long_term_payload()
-    paper = _paper_payload()
-    autonomy = _autonomy_payload()
-    return {
-        "generated_at": datetime.now(timezone.utc).isoformat(),
-        "market": market,
-        "scan": scan,
-        "long_term": long_term,
-        "paper": paper,
-        "autonomy": autonomy,
-        "conviction": _conviction(scan, market),
-    }
+    market = _market_payload(); scan = _scan_payload(); long_term = _long_term_payload()
+    paper = _paper_payload(); autonomy = _autonomy_payload()
+    return {"generated_at": datetime.now(timezone.utc).isoformat(), "market": market,
+            "scan": scan, "long_term": long_term, "paper": paper, "autonomy": autonomy,
+            "conviction": _conviction(scan, market)}
 
 
 @app.get("/api/chart/{symbol}")
@@ -319,26 +276,15 @@ def chart(symbol: str, limit: int = 220) -> dict:
     bars = []
     for index, row in frame.iterrows():
         stamp = getattr(index, "date", lambda: index)()
-        bars.append({
-            "time": str(stamp),
-            "open": float(row["open"]),
-            "high": float(row["high"]),
-            "low": float(row["low"]),
-            "close": float(row["close"]),
-            "volume": float(row.get("volume", 0.0) or 0.0),
-        })
+        bars.append({"time": str(stamp), "open": float(row["open"]), "high": float(row["high"]),
+                     "low": float(row["low"]), "close": float(row["close"]),
+                     "volume": float(row.get("volume", 0.0) or 0.0)})
     return {"symbol": clean_symbol, "bars": bars}
 
 
-_ALLOWED_CONTROLS = {
-    "RUN_SCAN_NOW",
-    "RUN_LONG_TERM_SCAN_NOW",
-    "REFRESH_LONG_TERM_NOW",
-    "RUN_CYCLE_NOW",
-    "REFRESH_DATA_NOW",
-    "PAUSE_NEW_PAPER_ENTRIES",
-    "RESUME_NEW_PAPER_ENTRIES",
-}
+_ALLOWED_CONTROLS = {"RUN_SCAN_NOW", "RUN_LONG_TERM_SCAN_NOW", "REFRESH_LONG_TERM_NOW",
+                     "RUN_CYCLE_NOW", "REFRESH_DATA_NOW", "PAUSE_NEW_PAPER_ENTRIES",
+                     "RESUME_NEW_PAPER_ENTRIES"}
 
 
 @app.post("/api/controls/{control_name}")
