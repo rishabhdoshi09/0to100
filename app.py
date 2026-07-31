@@ -38,7 +38,7 @@ apply_pro_theme()
 render_sidebar_brand()
 
 pages = {
-    "Workspace": [
+    "Everyday": [
         st.Page(render_home, title="Home", icon="🏠", default=True),
         st.Page(render_command_center, title="Command Center", icon="⚡"),
         st.Page(render_scanner_workspace, title="Scanner", icon="🎯"),
