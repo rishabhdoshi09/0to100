@@ -85,6 +85,10 @@ class LiveFeedController:
     def entry_allowed(self, symbol: str) -> bool:
         return bool(self.overlay and self.overlay.entry_allowed(symbol))
 
+    def price(self, symbol: str):
+        """Latest validated live price for alerting/read-only observation."""
+        return self.overlay.price(symbol) if self.overlay is not None else None
+
     def health(self) -> dict:
         base = self.overlay.health() if self.overlay is not None else {
             "connected": False, "subscriptions": 0, "reconnects": 0,

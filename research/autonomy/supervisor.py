@@ -124,6 +124,11 @@ class Supervisor:
         os.environ["QT_AUTONOMY_OWNER"] = "1"
         self._running = True
         self._transition(ST.STARTING, "boot", "Supervisor acquired the single mutation-owner lock.", "start")
+        if hasattr(self.deps, "notify_online"):
+            try:
+                self.deps.notify_online()
+            except Exception:
+                pass
         return True
 
     def _transition(self, to_state, reason, explanation, trigger, snapshot_id=None):
@@ -309,6 +314,11 @@ class Supervisor:
                 self.failures.add(H.LIVE_FEED_STALE)
             elif health.get("symbols_ticking", 0) > 0:
                 self.failures.discard(H.LIVE_FEED_STALE)
+            if hasattr(self.deps, "observe_live_breakouts"):
+                try:
+                    self.deps.observe_live_breakouts()
+                except Exception:
+                    pass
         elif not SCH.market_is_open(now_ist, self.deps.holidays()):
             self.live_feed.stop()
         self._save_failures()
@@ -412,6 +422,11 @@ class Supervisor:
                                     claim=message, evidence={"error_code": code,
                                     "job_type": getattr(job, "job_type", ""),
                                     "job_id": getattr(job, "job_id", "")}, decision=code))
+        if hasattr(self.deps, "notify_incident"):
+            try:
+                self.deps.notify_incident(code, message)
+            except Exception:
+                pass
 
     def run(self, *, interval_s=15.0, sleep_fn=None, max_iterations=None):
         import time

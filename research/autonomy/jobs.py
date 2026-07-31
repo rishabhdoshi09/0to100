@@ -62,6 +62,8 @@ class Deps:
         self.repo_root = Path(__file__).resolve().parents[2]
         self.logs = self.repo_root / "logs"
         self.logs.mkdir(parents=True, exist_ok=True)
+        from research.autonomy.telegram_notifications import TelegramNotifier
+        self.telegram = TelegramNotifier(self.root)
 
     def now_ist(self):
         from research.intelligence.data import nse_calendar as CAL
@@ -161,25 +163,47 @@ class Deps:
         from scan.market_scan_service import run_whole_market_scan
         return run_whole_market_scan(snapshot_id=str(self.active_snapshot_id() or ""))
 
+    def notify_scan(self, payload, *, phase=""):
+        return self.telegram.notify_scan(payload, phase=phase)
+
+    def observe_live_breakouts(self):
+        try:
+            from product.scan_store import load_scan
+            return self.telegram.observe_live_breakouts(load_scan(), self.live_feed)
+        except Exception:
+            return {"confirmed": 0}
+
+    def notify_online(self):
+        return self.telegram.notify_online()
+
+    def notify_incident(self, code, message):
+        return self.telegram.notify_incident(code, message)
+
     def run_paper_cycle(self, entries_allowed: bool, entry_block_reason="",
                         session_phase="intraday", capability_failures=()):
         from research.auto_research.scheduler import get_brain
         live = self.live_feed
-        return get_brain().run_intelligence_cycle_day(
+        brain = get_brain()
+        result = brain.run_intelligence_cycle_day(
             new_entries_allowed=entries_allowed,
             entry_block_reason=entry_block_reason,
             session_phase=session_phase,
             capability_failures=capability_failures,
             fresh_live_symbols=(live.fresh_symbols() if live is not None else ()),
         )
+        self.telegram.notify_paper_cycle(result, book=brain.intel_book)
+        return result
 
     def resolve_outcomes(self, session_date: str, capability_failures=()):
         from research.auto_research.scheduler import get_brain
-        return get_brain().run_intelligence_cycle_day(
+        brain = get_brain()
+        result = brain.run_intelligence_cycle_day(
             date=session_date, new_entries_allowed=False,
             entry_block_reason="EOD_MANAGEMENT_ONLY", session_phase="eod",
             capability_failures=capability_failures,
         )
+        self.telegram.notify_paper_cycle(result, book=brain.intel_book)
+        return result
 
     def run_learning(self, session_date: str, dialogue=None):
         from research.autonomy.research_loop import run_learning
@@ -363,9 +387,17 @@ def run_market_scan(ctx) -> JobResult:
         payload = report or {}
     summary = dict(payload.get("summary", {}))
     n = int(summary.get("with_any_setup", 0) or 0)
+    telegram = {}
+    if hasattr(ctx.deps, "notify_scan"):
+        try:
+            phase = SCH.session_phase(ctx.deps.now_ist(), ctx.deps.holidays())
+            telegram = ctx.deps.notify_scan(payload, phase=phase) or {}
+        except Exception:
+            telegram = {"error": "notification_failed"}
     return JobResult(JS.SUCCEEDED,
                      f"scan complete · {n} setups · {summary.get('momentum', 0)} momentum",
-                     state_hint=ST.OBSERVING, unblocks=(DEP_SCAN,), metadata=summary)
+                     state_hint=ST.OBSERVING, unblocks=(DEP_SCAN,),
+                     metadata={**summary, "telegram": telegram})
 
 
 def _entry_reason(now, holidays, ctx) -> tuple[bool, str, str]:
