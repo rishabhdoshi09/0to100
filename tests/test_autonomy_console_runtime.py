@@ -58,7 +58,9 @@ class _BlockingSupervisor(Supervisor):
 
     def tick(self, now_ist=None):
         self.entered.set()
-        self.release.wait(timeout=4.0)
+        # The test owns release. Keep a generous fail-safe so a slow CI runner cannot
+        # finish the synthetic tick and mark runtime offline before liveness is asserted.
+        self.release.wait(timeout=30.0)
         self.stop()
         return None
 
