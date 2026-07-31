@@ -1,0 +1,268 @@
+<title>QuantTerm — Retail Experience Walkthrough</title>
+<style>
+  :root{
+    --ground:#F7F8F7; --surface:#FFFFFF; --surface-2:#FBFCFB;
+    --ink:#14201B; --muted:#5C6B64; --hair:#E2E7E4;
+    --accent:#0E9B6E; --accent-ink:#0A6B4C;
+    --warn:#C77700; --crit:#C63D2F; --info:#2A6BB0;
+    --chip-neutral:#EEF1EF;
+    --shadow:0 1px 2px rgba(20,32,27,.06), 0 8px 24px rgba(20,32,27,.05);
+    --mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+    --sans:system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  }
+  @media (prefers-color-scheme:dark){
+    :root{
+      --ground:#0E1512; --surface:#151E1A; --surface-2:#111813;
+      --ink:#E8EFEA; --muted:#90A69B; --hair:#223029;
+      --accent:#34C08A; --accent-ink:#8FE7C4;
+      --warn:#E0A64B; --crit:#E9705F; --info:#79A8DA;
+      --chip-neutral:#1C2621;
+      --shadow:0 1px 2px rgba(0,0,0,.3), 0 10px 30px rgba(0,0,0,.35);
+    }
+  }
+  :root[data-theme="light"]{
+    --ground:#F7F8F7; --surface:#FFFFFF; --surface-2:#FBFCFB; --ink:#14201B; --muted:#5C6B64;
+    --hair:#E2E7E4; --accent:#0E9B6E; --accent-ink:#0A6B4C; --warn:#C77700; --crit:#C63D2F;
+    --info:#2A6BB0; --chip-neutral:#EEF1EF; --shadow:0 1px 2px rgba(20,32,27,.06),0 8px 24px rgba(20,32,27,.05);
+  }
+  :root[data-theme="dark"]{
+    --ground:#0E1512; --surface:#151E1A; --surface-2:#111813; --ink:#E8EFEA; --muted:#90A69B;
+    --hair:#223029; --accent:#34C08A; --accent-ink:#8FE7C4; --warn:#E0A64B; --crit:#E9705F;
+    --info:#79A8DA; --chip-neutral:#1C2621; --shadow:0 1px 2px rgba(0,0,0,.3),0 10px 30px rgba(0,0,0,.35);
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--ground);color:var(--ink);font-family:var(--sans);
+    line-height:1.5;-webkit-font-smoothing:antialiased}
+  .wrap{max-width:1120px;margin:0 auto;padding:clamp(20px,4vw,52px)}
+  .eyebrow{font-size:.68rem;letter-spacing:.16em;text-transform:uppercase;color:var(--muted);
+    font-weight:700}
+  h1{font-size:clamp(1.7rem,3.6vw,2.5rem);line-height:1.08;margin:.35rem 0 .5rem;
+    letter-spacing:-.02em;text-wrap:balance;font-weight:800}
+  .lede{color:var(--muted);max-width:64ch;font-size:1.02rem}
+  .legend{display:flex;flex-wrap:wrap;gap:.5rem;margin:1.4rem 0 .4rem}
+  .chip{display:inline-flex;align-items:center;gap:.4rem;font-size:.72rem;font-weight:700;
+    padding:.28rem .6rem;border-radius:999px;background:var(--chip-neutral);color:var(--ink);
+    border:1px solid transparent;letter-spacing:.02em}
+  .chip .dot{width:.55rem;height:.55rem;border-radius:50%}
+  .chip.ready{color:var(--accent-ink);background:color-mix(in srgb,var(--accent) 16%,var(--surface))}
+  .chip.ready .dot{background:var(--accent)}
+  .chip.research{color:var(--info);background:color-mix(in srgb,var(--info) 14%,var(--surface))}
+  .chip.research .dot{background:var(--info)}
+  .chip.warn{color:var(--warn);background:color-mix(in srgb,var(--warn) 16%,var(--surface))}
+  .chip.warn .dot{background:var(--warn)}
+  .chip.todo .dot{background:var(--muted)}
+  .grid{display:grid;grid-template-columns:1fr;gap:20px;margin-top:24px}
+  @media(min-width:760px){.grid{grid-template-columns:1fr 1fr}}
+  .card{background:var(--surface);border:1px solid var(--hair);border-radius:16px;
+    box-shadow:var(--shadow);overflow:hidden;display:flex;flex-direction:column}
+  .card__head{padding:16px 18px 12px;border-bottom:1px solid var(--hair);
+    display:flex;align-items:baseline;justify-content:space-between;gap:.75rem;flex-wrap:wrap}
+  .scn{font-size:.7rem;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);font-weight:700}
+  .card__title{font-size:1.12rem;font-weight:800;letter-spacing:-.01em;margin:.1rem 0 0}
+  .card__body{padding:16px 18px 18px;display:flex;flex-direction:column;gap:12px;flex:1}
+  .qline{display:flex;gap:.5rem;align-items:flex-start}
+  .qline .q{font-size:.72rem;font-weight:700;color:var(--muted);min-width:6.4rem;padding-top:.12rem;
+    letter-spacing:.02em}
+  .qline .a{font-weight:650}
+  .doing{color:var(--muted);font-size:.9rem}
+  .action{align-self:flex-start;background:var(--accent);color:#fff;border:none;border-radius:10px;
+    padding:.55rem .95rem;font-weight:750;font-size:.9rem;font-family:inherit;box-shadow:var(--shadow)}
+  :root[data-theme="dark"] .action, @media(prefers-color-scheme:dark){.action{color:#07130E}}
+  .action.ghost{background:transparent;color:var(--accent-ink);border:1.5px solid
+    color-mix(in srgb,var(--accent) 45%,var(--hair))}
+  .steps{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:2px}
+  .steps li{display:flex;gap:.6rem;align-items:center;padding:.34rem 0;font-size:.92rem;
+    border-bottom:1px dashed var(--hair)}
+  .steps li:last-child{border-bottom:none}
+  .steps .mark{width:1.35rem;height:1.35rem;border-radius:50%;display:grid;place-items:center;
+    font-size:.72rem;font-weight:800;flex:none;border:1.5px solid var(--hair);color:var(--muted)}
+  .steps li.current .mark{background:var(--accent);color:#fff;border-color:var(--accent)}
+  .steps li.done .mark{background:color-mix(in srgb,var(--accent) 20%,var(--surface));
+    color:var(--accent-ink);border-color:transparent}
+  .steps li.current .lbl{font-weight:750}
+  .steps .go{margin-left:auto;font-size:.72rem;font-weight:700;color:var(--accent-ink);
+    background:color-mix(in srgb,var(--accent) 12%,var(--surface));padding:.16rem .5rem;border-radius:6px}
+  .metrics{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+  .metric{background:var(--surface-2);border:1px solid var(--hair);border-radius:10px;padding:.6rem .7rem}
+  .metric .k{font-size:.68rem;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);font-weight:700}
+  .metric .v{font-size:1.18rem;font-weight:800;font-variant-numeric:tabular-nums;font-family:var(--mono);
+    margin-top:.12rem}
+  .metric .v.pos{color:var(--accent-ink)} .metric .v.neg{color:var(--crit)}
+  .metric .sub{font-size:.72rem;color:var(--muted);font-variant-numeric:tabular-nums}
+  .verdict{background:color-mix(in srgb,var(--info) 9%,var(--surface));border:1px solid
+    color-mix(in srgb,var(--info) 22%,var(--hair));border-radius:10px;padding:.6rem .75rem;font-size:.9rem}
+  .verdict b{color:var(--info)}
+  .funnel{font-family:var(--mono);font-size:.82rem;font-variant-numeric:tabular-nums;
+    background:var(--surface-2);border:1px solid var(--hair);border-radius:10px;overflow:hidden}
+  .funnel .row{display:flex;justify-content:space-between;padding:.34rem .7rem;border-bottom:1px solid var(--hair)}
+  .funnel .row:last-child{border-bottom:none}
+  .funnel .row.hit{background:color-mix(in srgb,var(--accent) 10%,var(--surface));font-weight:700}
+  .funnel .n{font-weight:800}
+  .excl{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:1px;font-size:.84rem}
+  .excl li{display:flex;gap:.5rem;padding:.3rem 0;border-bottom:1px dashed var(--hair)}
+  .excl li:last-child{border-bottom:none}
+  .excl .sym{font-family:var(--mono);font-weight:800;min-width:6.5rem}
+  .excl .why{color:var(--muted)}
+  .excl .stg{margin-left:auto;font-size:.66rem;font-weight:700;text-transform:uppercase;
+    letter-spacing:.06em;color:var(--muted);background:var(--chip-neutral);padding:.06rem .4rem;
+    border-radius:5px;align-self:center}
+  .cand{display:flex;gap:.55rem;align-items:baseline;padding:.36rem 0;border-bottom:1px dashed var(--hair);font-size:.9rem}
+  .cand:last-child{border-bottom:none}
+  .cand .sym{font-family:var(--mono);font-weight:800}
+  .cand .tag{font-size:.7rem;font-weight:700;padding:.1rem .45rem;border-radius:6px}
+  .tag.strong{color:var(--accent-ink);background:color-mix(in srgb,var(--accent) 15%,var(--surface))}
+  .tag.watch{color:var(--warn);background:color-mix(in srgb,var(--warn) 15%,var(--surface))}
+  .cand .meta{margin-left:auto;font-size:.74rem;color:var(--muted);font-family:var(--mono)}
+  .note{font-size:.82rem;color:var(--muted)}
+  .callout{background:var(--surface-2);border:1px solid var(--hair);border-left:3px solid var(--accent);
+    border-radius:8px;padding:.55rem .75rem;font-size:.88rem}
+  .foot{margin-top:34px;padding-top:18px;border-top:1px solid var(--hair);color:var(--muted);
+    font-size:.82rem;display:flex;flex-wrap:wrap;gap:.4rem 1.2rem}
+  .foot b{color:var(--ink)}
+</style>
+
+<div class="wrap">
+  <div class="eyebrow">QuantTerm · Retail product overhaul</div>
+  <h1>The same institutional engine, made obvious to a retail trader</h1>
+  <p class="lede">Four moments from the default experience. Every value below is produced by the
+    read-only product projection over the existing backend — no mockup data, no second source of
+    truth. Open after market close and you can tell, without documentation, whether your data is
+    ready, what to do next, which stocks have momentum, and which of those trade F&amp;O.</p>
+
+  <div class="legend" aria-label="state legend">
+    <span class="chip ready"><span class="dot"></span>Ready</span>
+    <span class="chip research"><span class="dot"></span>Research mode</span>
+    <span class="chip warn"><span class="dot"></span>Attention</span>
+    <span class="chip todo"><span class="dot"></span>Action needed</span>
+  </div>
+
+  <div class="grid">
+
+    <!-- SCENARIO A -->
+    <section class="card">
+      <div class="card__head">
+        <div>
+          <div class="scn">Scenario A</div>
+          <div class="card__title">New user · no data yet</div>
+        </div>
+        <span class="chip todo"><span class="dot"></span>Waiting for login</span>
+      </div>
+      <div class="card__body">
+        <div class="qline"><span class="q">Is it ready?</span><span class="a">Waiting for Zerodha login</span></div>
+        <div class="doing">What it's doing — waiting for market data</div>
+        <button class="action">Log in to Zerodha</button>
+        <div class="note">The blank screen is replaced by a guided journey:</div>
+        <ul class="steps">
+          <li class="current"><span class="mark">1</span><span class="lbl">Connect Zerodha</span><span class="go">Log in</span></li>
+          <li><span class="mark">2</span><span class="lbl">Download historical market data</span></li>
+          <li><span class="mark">3</span><span class="lbl">Verify data</span></li>
+          <li><span class="mark">4</span><span class="lbl">Run your first backtest</span></li>
+          <li><span class="mark">5</span><span class="lbl">Review the result</span></li>
+          <li><span class="mark">6</span><span class="lbl">Enable automatic paper trading</span></li>
+        </ul>
+      </div>
+    </section>
+
+    <!-- SCENARIO B -->
+    <section class="card">
+      <div class="card__head">
+        <div>
+          <div class="scn">Scenario B</div>
+          <div class="card__title">Market closed · data ready</div>
+        </div>
+        <span class="chip research"><span class="dot"></span>Research mode active</span>
+      </div>
+      <div class="card__body">
+        <div class="qline"><span class="q">Market</span><span class="a">Market closed — Research mode active</span></div>
+        <div class="qline"><span class="q">Data</span><span class="a">Data ready through 30 Jul 2026 · 1,842 stocks</span></div>
+        <div class="qline"><span class="q">Paper mode</span><span class="a">Ready for next session</span></div>
+        <button class="action">Run first backtest</button>
+        <div class="note" style="margin-top:.2rem">Backtest result — plain language first:</div>
+        <div class="metrics">
+          <div class="metric"><div class="k">₹1 lakh became</div><div class="v pos">₹1,24,500</div><div class="sub">+24.5% · 48 trades</div></div>
+          <div class="metric"><div class="k">vs Nifty</div><div class="v">+8.5%</div><div class="sub">beat the index</div></div>
+          <div class="metric"><div class="k">Win / loss</div><div class="v">29 / 19</div><div class="sub">largest fall −11.2%</div></div>
+          <div class="metric"><div class="k">Costs paid</div><div class="v">₹3,100</div><div class="sub">incl. slippage</div></div>
+        </div>
+        <div class="verdict">Trustworthy? <b>Promising but limited.</b> Let it run in paper trading
+          to collect fresh, unseen-market evidence. <span class="note">(Sharpe / deflated-Sharpe /
+          p-value live under “See scientific details”.)</span></div>
+        <div class="note">Research-mode actions: Run Backtest · Find Momentum · F&amp;O Momentum ·
+          Prepare Tomorrow's Watchlist · Review Paper Trades · What We've Learned</div>
+      </div>
+    </section>
+
+    <!-- SCENARIO C -->
+    <section class="card">
+      <div class="card__head">
+        <div>
+          <div class="scn">Scenario C</div>
+          <div class="card__title">Market open · running</div>
+        </div>
+        <span class="chip ready"><span class="dot"></span>Running</span>
+      </div>
+      <div class="card__body">
+        <div class="qline"><span class="q">Is it ready?</span><span class="a">Ready for automatic paper trading</span></div>
+        <div class="doing">What it's doing — monitoring 3 paper positions · scanning 1,842 stocks</div>
+        <div class="callout"><b>Automatic Paper Trading — RUNNING.</b> QuantTerm takes and manages
+          paper trades automatically. You do not approve every trade. You can pause or override it at
+          any time.</div>
+        <div class="metrics">
+          <div class="metric"><div class="k">Open positions</div><div class="v">3</div><div class="sub">with stops &amp; targets</div></div>
+          <div class="metric"><div class="k">New entries</div><div class="v pos">Running</div><div class="sub">safety checks green</div></div>
+        </div>
+        <div style="display:flex;gap:.5rem;flex-wrap:wrap">
+          <button class="action ghost">Pause new trades</button>
+          <button class="action ghost">Close one position</button>
+          <button class="action ghost">Close all</button>
+        </div>
+        <div class="note">A data problem or safety limit flips this to <b>PAUSED — DATA PROBLEM</b> /
+          <b>PAUSED — SAFETY LIMIT</b> automatically; the projection never shows RUNNING through a
+          failed gate.</div>
+      </div>
+    </section>
+
+    <!-- SCENARIO D -->
+    <section class="card">
+      <div class="card__head">
+        <div>
+          <div class="scn">Scenario D</div>
+          <div class="card__title">F&amp;O Momentum · full funnel</div>
+        </div>
+        <span class="chip ready"><span class="dot"></span>3 displayed</span>
+      </div>
+      <div class="card__body">
+        <div class="note">Every currently-listed F&amp;O underlying enters the funnel. Nothing
+          disappears silently — each drop is recorded with a reason.</div>
+        <div class="funnel" role="table" aria-label="F&amp;O funnel">
+          <div class="row"><span>Current listed F&amp;O underlyings</span><span class="n">6</span></div>
+          <div class="row"><span>Successfully mapped to NSE cash</span><span class="n">5</span></div>
+          <div class="row"><span>Data ready</span><span class="n">4</span></div>
+          <div class="row"><span>Momentum evaluated</span><span class="n">4</span></div>
+          <div class="row"><span>Momentum qualified</span><span class="n">3</span></div>
+          <div class="row hit"><span>Displayed</span><span class="n">3</span></div>
+        </div>
+        <div class="note" style="font-weight:700;color:var(--ink)">Excluded — with reasons</div>
+        <ul class="excl">
+          <li><span class="sym">MISSING</span><span class="why">Could not be mapped to an NSE cash equity</span><span class="stg">mapping</span></li>
+          <li><span class="sym">WEAKO</span><span class="why">Insufficient history: 20 sessions available, 60 required</span><span class="stg">history</span></li>
+          <li><span class="sym">HDFCBANK</span><span class="why">Momentum conditions not met (strongest setup weak)</span><span class="stg">momentum</span></li>
+        </ul>
+        <div class="note" style="font-weight:700;color:var(--ink)">Displayed candidates</div>
+        <div class="cand"><span class="sym">RELIANCE</span><span class="tag strong">Qualified</span><span class="meta">Aug 27 · lot 500</span></div>
+        <div class="cand"><span class="sym">INFY</span><span class="tag strong">Qualified</span><span class="meta">Aug 27 · lot 500</span></div>
+        <div class="cand"><span class="sym">TCS</span><span class="tag strong">Qualified</span><span class="meta">Aug 27 · lot 500</span></div>
+        <div class="callout">Momentum is computed on the <b>underlying equity</b>; futures (expiry,
+          lot, volume, OI direction, basis) are an added confirmation layer — the default paper trade
+          is the cash-equivalent signal.</div>
+      </div>
+    </section>
+
+  </div>
+
+  <div class="foot">
+    <span><b>Read-only:</b> the projection never duplicates momentum, F&amp;O, backtest, risk or execution logic.</span>
+    <span><b>Default view:</b> retail. The 80 engineering pages move under Advanced → Research Laboratory.</span>
+    <span><b>Verified by:</b> product &amp; F&amp;O acceptance tests · full suite 894 passed.</span>
+  </div>
+</div>

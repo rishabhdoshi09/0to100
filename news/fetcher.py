@@ -11,7 +11,10 @@ import time
 from datetime import datetime, timezone
 from typing import List
 
-import feedparser
+try:                                    # optional dep — news is context, never trade ground truth
+    import feedparser
+except ModuleNotFoundError:             # degrade gracefully when unavailable (e.g. CI/tests)
+    feedparser = None
 
 from config import settings
 from logger import get_logger
@@ -113,6 +116,9 @@ class NewsFetcher:
         return sorted(fresh, key=lambda x: x.published_at, reverse=True)
 
     def _fetch_rss(self, feed_url: str, max_age_hours: int) -> List[RawArticle]:
+        if feedparser is None:                    # optional dep absent → no RSS, never a crash
+            log.warning("feedparser_unavailable", url=feed_url)
+            return []
         _browser_headers = {
             "User-Agent": (
                 "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "

@@ -1000,3 +1000,21 @@ reconnect + IST timestamps + rejects future/out-of-order ticks. Canonical suite:
 fabricated. The PASS path for all 8 states is exercised only by the fake-client unit tests, which are
 **not** counted as real-data operation. On the user's deployment, one normal daily login flips these
 to PASS automatically.
+
+---
+
+## Milestone — Retail UX reconciliation (single source of truth)
+
+Two sessions delivered the retail overhaul in parallel. Per the user's "merge carefully" decision,
+the branch-of-record `product/` layer (`projection`, `gather`, `market_view`, `no_trade`,
+`retail_backtest`, `runtime`, `scan_store`) + `data/fno_universe.py` (dynamic underlying-first F&O
+funnel with recorded exclusions) + retail-first `app.py` (`st.navigation`, `legacy_app.py` retained)
+is the canonical implementation. The duplicate `ui/product/` layer from the other session was dropped
+to avoid a second source of truth.
+
+Folded in / fixed on top of the canonical base:
+- **Green suite** — the news curator's hard `feedparser` import is now optional; the fetcher returns
+  no RSS (never crashes) when the dep is absent, so test collection/CI stays green. Full suite:
+  **894 passed**.
+- **Completion demo** — `docs/overhaul/retail_ux_demo.html` (a rendered four-scenario walkthrough,
+  values taken from the canonical `product/` + `data/fno_universe` engines) + `RETAIL_WALKTHROUGH.md`.
