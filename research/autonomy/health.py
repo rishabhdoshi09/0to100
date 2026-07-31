@@ -48,7 +48,7 @@ def capabilities(active_failures) -> dict:
     """Most-restrictive-wins capability matrix. Returns a plain dict the UI can render."""
     f = set(active_failures or ())
     new_entries = BLOCKED if (f & _ENTRY_BLOCK) else (LIMITED if (f & _ENTRY_LIMIT) else ALLOWED)
-    exits = LIMITED if (f & _EXIT_LIMIT) else ALLOWED           # never fully blocked unless HALTED
+    exits = LIMITED if (f & _EXIT_LIMIT) else ALLOWED
     research = BLOCKED if (f & _RESEARCH_BLOCK) else (LIMITED if (f & _RESEARCH_LIMIT) else ALLOWED)
     ui = READ_ONLY if (EVENT_STORE_FAILURE in f) else ALLOWED
     notes = []
@@ -83,12 +83,31 @@ def capabilities(active_failures) -> dict:
 
 
 def _fresh(payload: dict, *, max_age_s: float = 90.0) -> bool:
+    """Return whether a heartbeat is recent in its declared clock domain.
+
+    New timestamps may be timezone-aware. Older QuantTerm state writes naive Asia/Kolkata wall-clock
+    timestamps, so comparing them with the host's local clock (UTC on CI/server deployments) creates
+    false offline states. Naive values are therefore compared against QuantTerm's canonical IST clock.
+    """
     heartbeat = str(payload.get("heartbeat_ist") or "")
     if not heartbeat:
         return False
     try:
         stamped = datetime.fromisoformat(heartbeat)
-        now = datetime.now(tz=stamped.tzinfo) if stamped.tzinfo else datetime.now()
+        if stamped.tzinfo is not None:
+            now = datetime.now(tz=stamped.tzinfo)
+        else:
+            try:
+                from core.market_clock import now_ist_naive
+                now = now_ist_naive()
+            except Exception:
+                try:
+                    from research.intelligence.data.nse_calendar import _now_ist
+                    now = _now_ist()
+                except Exception:
+                    now = datetime.now()
+            if now.tzinfo is not None:
+                now = now.replace(tzinfo=None)
         age = now - stamped
         return timedelta(0) <= age <= timedelta(seconds=max_age_s)
     except Exception:
@@ -134,8 +153,6 @@ def read_status(*, state_path, jobs_db=None, dialogue_path=None) -> dict:
     except Exception:
         runtime = {}
 
-    # New console versions make runtime.json authoritative for process liveness. Older deployments
-    # without that file retain the previous status.json freshness behaviour.
     if runtime:
         runtime_fresh = _fresh(runtime)
         out["supervisor_running"] = bool(runtime.get("process_running", False)) and runtime_fresh
