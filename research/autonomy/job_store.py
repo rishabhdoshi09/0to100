@@ -307,16 +307,17 @@ class JobStore:
         """Return current critical work, not historical recurring backlog.
 
         Only the newest pending row for each job type is considered. A job type
-        already running is not overdue. Paper cycles are opportunity/position
-        management events and are surfaced in the job ledger, but do not degrade
-        the entire organisation through the CRITICAL_OVERDUE channel.
+        already running is not overdue. Scheduled paper cycles are opportunity/
+        position-management events and remain visible in the ledger without
+        degrading the organisation as an infrastructure outage. Synthetic or
+        manually requested critical rows still exercise the generic safety path.
         """
         now = self.clock()
         with self._lock:
             rows = self._db.execute(
                 "SELECT j.* FROM jobs j "
                 "WHERE j.critical=1 AND j.status=? AND j.scheduled_for < ? "
-                "AND j.job_type != 'paper_cycle' "
+                "AND NOT (j.job_type='paper_cycle' AND j.idempotency_key LIKE 'paper_cycle:%') "
                 "AND NOT EXISTS (SELECT 1 FROM jobs r WHERE r.job_type=j.job_type AND r.status=?) "
                 "AND j.scheduled_for=(SELECT MAX(p.scheduled_for) FROM jobs p "
                 "WHERE p.job_type=j.job_type AND p.status=?)",
