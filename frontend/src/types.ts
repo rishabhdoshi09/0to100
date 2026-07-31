@@ -126,6 +126,9 @@ export type DashboardPayload = {
     explanation: string
     heartbeat_ist: string
     scheduler_owner_pid?: number | string | null
+    new_entry_capability?: 'allowed' | 'limited' | 'blocked' | 'read_only'
+    existing_exit_capability?: 'allowed' | 'limited' | 'blocked' | 'read_only'
+    research_capability?: 'allowed' | 'limited' | 'blocked' | 'read_only'
     new_paper_entries: boolean
     existing_exits?: boolean
     research_enabled?: boolean
