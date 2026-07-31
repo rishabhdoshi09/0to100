@@ -47,6 +47,9 @@ def run_supervisor(*, root=None, interval_s: float = 15.0, max_iterations=None) 
     import os
     import traceback
 
+    from research.autonomy.operational_guards import install_operational_guards
+    install_operational_guards()
+
     from research.autonomy.supervisor import Supervisor
     from research.autonomy.console_runtime import run_visible_loop
 
