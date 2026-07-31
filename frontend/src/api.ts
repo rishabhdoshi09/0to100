@@ -1,4 +1,4 @@
-import type { ChartBar, DashboardPayload } from './types'
+import type { ChartBar, ControlName, DashboardPayload } from './types'
 
 const json = async <T>(response: Response): Promise<T> => {
   if (!response.ok) {
@@ -18,7 +18,7 @@ export const fetchChart = (symbol: string): Promise<{ symbol: string; bars: Char
   }).then((response) => json<{ symbol: string; bars: ChartBar[] }>(response))
 
 export const sendControl = (
-  control: 'RUN_SCAN_NOW' | 'RUN_LONG_TERM_SCAN_NOW' | 'RUN_CYCLE_NOW',
+  control: ControlName,
 ): Promise<{ accepted: boolean; control: string; control_id?: string }> =>
   fetch(`/api/controls/${control}`, {
     method: 'POST',
