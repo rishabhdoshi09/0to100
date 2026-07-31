@@ -19,8 +19,22 @@ export const fetchChart = (symbol: string): Promise<{ symbol: string; bars: Char
 
 export const sendControl = (
   control: ControlName,
-): Promise<{ accepted: boolean; control: string; control_id?: string }> =>
+): Promise<{
+  accepted: boolean
+  control: string
+  control_id?: string
+  operation_id?: string
+  operation_status?: string
+  created?: boolean
+}> =>
   fetch(`/api/controls/${control}`, {
     method: 'POST',
     headers: { Accept: 'application/json' },
-  }).then((response) => json<{ accepted: boolean; control: string; control_id?: string }>(response))
+  }).then((response) => json<{
+    accepted: boolean
+    control: string
+    control_id?: string
+    operation_id?: string
+    operation_status?: string
+    created?: boolean
+  }>(response))
