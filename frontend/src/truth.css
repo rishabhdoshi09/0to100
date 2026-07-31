@@ -1,0 +1,17 @@
+.sparkline {
+  display: grid;
+  place-items: center;
+  border-top: 1px solid #14233a;
+  border-bottom: 1px solid #14233a;
+  margin: 8px 14px;
+  padding: 0;
+}
+
+.sparkline svg { display: none; }
+
+.sparkline::after {
+  content: "Equity history appears after recorded paper observations";
+  color: #6f809d;
+  font-size: 9px;
+  letter-spacing: .02em;
+}
