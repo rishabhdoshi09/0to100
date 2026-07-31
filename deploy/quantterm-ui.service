@@ -1,0 +1,19 @@
+[Unit]
+Description=QuantTerm retail UI (Streamlit control room, read-only over the supervisor)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=quantterm
+WorkingDirectory=/opt/0to100
+Environment=PYTHONUNBUFFERED=1
+EnvironmentFile=-/opt/0to100/.env
+ExecStart=/usr/bin/env streamlit run app.py --server.headless true --server.port 8501
+Restart=on-failure
+RestartSec=5
+StandardOutput=append:/var/log/quantterm/ui.log
+StandardError=append:/var/log/quantterm/ui.err
+
+[Install]
+WantedBy=multi-user.target

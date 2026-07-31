@@ -799,6 +799,13 @@ def cmd_kill(args) -> None:
     print("Kill switch flag written. The engine will refuse to start/continue.")
 
 
+def cmd_autonomy(args) -> None:
+    """Run the autonomous supervisor (Streamlit-independent, paper-only, live locked)."""
+    from research.autonomy import run_supervisor
+    raise SystemExit(run_supervisor(interval_s=getattr(args, "interval", 15.0),
+                                    max_iterations=getattr(args, "max_iterations", None)))
+
+
 def cmd_status(args) -> None:
     """Print live portfolio status (reads Kite positions directly)."""
     _assert_credentials()
@@ -858,6 +865,11 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("login", help="Generate Kite access token via OAuth flow")
 
     sub.add_parser("live", help="Start live trading loop")
+
+    auto = sub.add_parser("autonomy",
+                          help="Run the autonomous supervisor (Streamlit-independent; paper-only)")
+    auto.add_argument("--interval", type=float, default=15.0, help="loop interval seconds")
+    auto.add_argument("--max-iterations", type=int, default=None, help="stop after N ticks (testing)")
 
     bt = sub.add_parser("backtest", help="Run event-driven backtest")
     bt.add_argument(
@@ -1018,6 +1030,7 @@ def main() -> None:
         "explain":    cmd_explain,
         "kill":       cmd_kill,
         "status":     cmd_status,
+        "autonomy":   cmd_autonomy,
     }
     dispatch[args.command](args)
 

@@ -3,7 +3,7 @@
 NSE India trading terminal: whole-market scanning, evidence-calibrated
 signals, risk-managed execution via Zerodha, proactive Telegram delivery.
 Streamlit app (`streamlit run app.py`), branch of record:
-`claude/deepseek-multi-agent-system-nrO7n`.
+`overhaul/evidence-lab`.
 
 ## Architecture (data → signal → risk → execution → feedback)
 

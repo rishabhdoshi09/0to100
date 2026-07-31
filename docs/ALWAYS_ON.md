@@ -26,7 +26,7 @@ apt update && apt install -y python3.11 python3.11-venv git
 ```bash
 git clone https://github.com/rishabhdoshi09/0to100.git
 cd 0to100
-git checkout claude/deepseek-multi-agent-system-nrO7n
+git checkout overhaul/evidence-lab
 python3.11 -m venv venv && source venv/bin/activate
 pip install -r requirements.txt
 cp .env.example .env && nano .env    # keys bharo
@@ -116,7 +116,7 @@ bhool gaye.
 
 ## Updates lena
 ```bash
-cd 0to100 && git pull origin claude/deepseek-multi-agent-system-nrO7n
+cd 0to100 && git pull origin overhaul/evidence-lab
 systemctl restart quantterm
 ```
 

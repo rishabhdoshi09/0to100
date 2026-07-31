@@ -41,7 +41,7 @@ ssh ubuntu@YOUR_PUBLIC_IP
 # private repo hai, isliye GitHub token ke saath (Settings → Developer
 # settings → Personal access tokens → repo read):
 export QT_REPO_URL=https://YOUR_TOKEN@github.com/rishabhdoshi09/0to100.git
-curl -fsSL https://raw.githubusercontent.com/rishabhdoshi09/0to100/claude/deepseek-multi-agent-system-nrO7n/deploy/setup_server.sh -o setup.sh
+curl -fsSL https://raw.githubusercontent.com/rishabhdoshi09/0to100/overhaul/evidence-lab/deploy/setup_server.sh -o setup.sh
 bash setup.sh
 ```
 
@@ -96,7 +96,7 @@ Phone/Mac pe bhi Tailscale app → phir kahin se bhi:
 
 ```bash
 # update
-cd ~/0to100 && git pull origin claude/deepseek-multi-agent-system-nrO7n
+cd ~/0to100 && git pull origin overhaul/evidence-lab
 sudo systemctl restart quantterm
 
 # logs

@@ -1035,3 +1035,21 @@ the stable secondary sort key in `ui/fno_momentum_page` and `product/scan_store`
 
 Added `tests/test_retail_signoff.py` (18 acceptance guarantees). Sign-off:
 `docs/overhaul/RETAIL_RUNTIME_SIGNOFF.md`. Verdict: **CONDITIONALLY READY**. Full suite: **912 passed**.
+
+---
+
+## Milestone — Autonomous Quant Organisation (operating core + governed research)
+
+Built the durable, Streamlit-independent closed loop as thin orchestration over the existing canonical
+components (no second snapshot store / registry / paper book / event ledger / scanner / allocation
+brain). New package `research/autonomy/`: durable SQLite job ledger with leases + idempotency,
+explicit operational state machine, single-instance supervisor with heartbeat/incidents/bounded-retry/
+graceful-shutdown, market-calendar job schedules (09:30 opening-noise gate), job handlers wiring
+auth/data-refresh/whole-market-scan/paper-cycle/news, typed research dialogue records, constrained
+`StrategySpec`-successor hypotheses with `scientific_memory` dedupe, deterministic adversarial council
++ committee (no self-approval), promotion ladder mapped onto the existing lifecycle, allocation/
+retirement, LIMITED_LIVE readiness (never self-activatable), capability matrix, and a read-only
+product projection + `Autonomy` retail page. CLI `python main.py autonomy` runs headless. Two-process
+deployment units (systemd/launchd) added; stale branch references corrected. Live execution remains
+locked and unreachable. Docs: `docs/autonomy/`. Tests: `tests/test_autonomy.py` (36). Full suite:
+**948 passed**. Genuine connected smoke (Phase E) remains blocked — no Zerodha token in this env.

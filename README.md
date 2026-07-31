@@ -87,4 +87,4 @@ core (Brain, decision journal, sim lab, market clock), and the Streamlit UI
 (Pulse cockpit · Markets · Autopilot · JARVIS).
 
 *Build: see `VERSION` · Branch of record:
-`claude/deepseek-multi-agent-system-nrO7n`*
+`overhaul/evidence-lab`*

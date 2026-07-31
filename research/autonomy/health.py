@@ -1,0 +1,106 @@
+"""
+🩺 Capability matrix + read-only status snapshot.
+
+There is no single green/red flag. A subsystem failure reduces exactly the capabilities that depend
+on it and nothing else — a non-critical failure never halts the organisation. The status snapshot is
+strictly read-only: the retail UI calls it to see what the organisation is doing WITHOUT ever starting
+the supervisor.
+"""
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+# failure codes
+AUTH_MISSING = "auth_missing"
+SNAPSHOT_STALE = "snapshot_stale"
+NEWS_UNAVAILABLE = "news_unavailable"
+CA_INCOMPLETE = "corporate_actions_incomplete"
+LIVE_FEED_STALE = "live_feed_stale"
+EVENT_STORE_FAILURE = "event_store_failure"
+RISK_GOVERNOR_UNHEALTHY = "risk_governor_unhealthy"
+UNRECONCILED = "unreconciled_state"
+
+# capability levels
+ALLOWED = "allowed"
+LIMITED = "limited"
+BLOCKED = "blocked"
+READ_ONLY = "read_only"
+
+# which failures block / limit NEW paper entries
+_ENTRY_BLOCK = {AUTH_MISSING, SNAPSHOT_STALE, EVENT_STORE_FAILURE, RISK_GOVERNOR_UNHEALTHY, UNRECONCILED}
+_ENTRY_LIMIT = {CA_INCOMPLETE, LIVE_FEED_STALE}
+# which failures limit existing-position management (exits are almost never fully blocked)
+_EXIT_LIMIT = {SNAPSHOT_STALE, LIVE_FEED_STALE, RISK_GOVERNOR_UNHEALTHY, UNRECONCILED, EVENT_STORE_FAILURE}
+# which failures block / limit research
+_RESEARCH_BLOCK = {EVENT_STORE_FAILURE}
+_RESEARCH_LIMIT = {NEWS_UNAVAILABLE, CA_INCOMPLETE}
+
+
+def capabilities(active_failures) -> dict:
+    """Most-restrictive-wins capability matrix. Returns a plain dict the UI can render."""
+    f = set(active_failures or ())
+    new_entries = BLOCKED if (f & _ENTRY_BLOCK) else (LIMITED if (f & _ENTRY_LIMIT) else ALLOWED)
+    exits = LIMITED if (f & _EXIT_LIMIT) else ALLOWED           # never fully blocked unless HALTED
+    research = BLOCKED if (f & _RESEARCH_BLOCK) else (LIMITED if (f & _RESEARCH_LIMIT) else ALLOWED)
+    ui = READ_ONLY if (EVENT_STORE_FAILURE in f) else ALLOWED
+    notes = []
+    if AUTH_MISSING in f:
+        notes.append("Zerodha login required — new entries paused; safe exits continue.")
+    if SNAPSHOT_STALE in f:
+        notes.append("Market data stale — new entries paused; positions managed if prices are trustworthy.")
+    if NEWS_UNAVAILABLE in f:
+        notes.append("News feed down — trading unaffected; news-dependent studies paused.")
+    if CA_INCOMPLETE in f:
+        notes.append("Corporate-action coverage incomplete — affected historical strategies/tests paused.")
+    if LIVE_FEED_STALE in f:
+        notes.append("Live prices stale for some symbols — those entries blocked; risk-reducing exits continue.")
+    if EVENT_STORE_FAILURE in f:
+        notes.append("Record store unavailable — new mutations blocked; UI is read-only.")
+    if RISK_GOVERNOR_UNHEALTHY in f:
+        notes.append("Safety checks unhealthy — new entries blocked; risk reduction only.")
+    if UNRECONCILED in f:
+        notes.append("Records need a reconciliation pass before new risk.")
+    return {"new_paper_entries": new_entries, "existing_exits": exits, "research": research,
+            "ui": ui, "active_failures": sorted(f), "notes": notes}
+
+
+def read_status(*, state_path, jobs_db=None, dialogue_path=None) -> dict:
+    """Read-only status for the UI. Never starts the supervisor; tolerates missing files."""
+    out = {"supervisor_running": False, "state": "UNKNOWN", "explanation": "", "updated_ist": "",
+           "heartbeat_ist": "", "snapshot_id": "", "recent_transitions": [], "jobs": {},
+           "recent_dialogue": [], "new_risk_permitted": False, "positions_manageable": True,
+           "active_failures": []}
+    try:
+        d = json.loads(Path(state_path).read_text(encoding="utf-8"))
+        out.update({"state": d.get("state", "UNKNOWN"), "explanation": d.get("explanation", ""),
+                    "updated_ist": d.get("updated_ist", ""), "snapshot_id": d.get("snapshot_id", ""),
+                    "heartbeat_ist": d.get("heartbeat_ist", d.get("updated_ist", "")),
+                    "new_risk_permitted": bool(d.get("new_risk_permitted", False)),
+                    "positions_manageable": bool(d.get("positions_manageable", True)),
+                    "active_failures": list(d.get("active_failures", [])),
+                    "recent_transitions": list(d.get("history", []))[-6:]})
+        out["supervisor_running"] = bool(d.get("heartbeat_ist"))
+    except Exception:
+        pass
+    if jobs_db is not None:
+        try:
+            from research.autonomy.job_store import JobStore
+            js = JobStore(jobs_db)
+            counts: dict = {}
+            for j in js.list(limit=500):
+                counts[j.status] = counts.get(j.status, 0) + 1
+            out["jobs"] = counts
+            js.close()
+        except Exception:
+            pass
+    if dialogue_path is not None:
+        try:
+            from research.autonomy.dialogue import DialogueLog
+            out["recent_dialogue"] = [
+                {"type": r.get("record_type"), "producer": r.get("producer"),
+                 "claim": r.get("claim"), "decision": r.get("decision"), "id": r.get("record_id")}
+                for r in DialogueLog(dialogue_path).recent(8)]
+        except Exception:
+            pass
+    return out

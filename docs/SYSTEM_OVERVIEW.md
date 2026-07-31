@@ -23,7 +23,7 @@ app.py`) with a two-way **Telegram** bot and an LLM analyst ("JARVIS"). It runs
 24/7 as a background service. Everything is narrated in plain Hinglish
 (Hindi-English mix) because that's the primary user's language.
 
-**Branch of record:** `claude/deepseek-multi-agent-system-nrO7n`.
+**Branch of record:** `overhaul/evidence-lab`.
 
 ---
 

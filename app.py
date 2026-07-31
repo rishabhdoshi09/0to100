@@ -11,6 +11,7 @@ from product.runtime import ensure_runtime_started
 from ui.retail_pages_v2 import (
     render_advanced,
     render_alerts,
+    render_autonomy,
     render_backtest,
     render_data_zerodha,
     render_help,
@@ -34,6 +35,7 @@ pages = {
         st.Page(render_momentum, title="Momentum Stocks", icon="📈"),
         st.Page(render_news, title="Market News", icon="📰"),
         st.Page(render_paper_trading, title="Automatic Paper Trading", icon="🤖"),
+        st.Page(render_autonomy, title="Autonomy", icon="🛰️"),
         st.Page(render_portfolio, title="Portfolio", icon="💼"),
         st.Page(render_market, title="Market", icon="🌐"),
     ],
