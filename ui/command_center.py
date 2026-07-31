@@ -1,11 +1,13 @@
 """QuantTerm professional command center.
 
-This page is a read-only product projection plus durable owner controls.  It does
-not scan, trade, fetch fundamentals, start workers or mutate a portfolio itself.
+This page is a read-only product projection plus durable owner controls. It does not scan, trade,
+fetch fundamentals, start workers or mutate a portfolio itself. The small morning-brief helpers at
+the bottom are retained as pure compatibility utilities for the older fallback and test contracts.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 
 import pandas as pd
 import streamlit as st
@@ -259,3 +261,159 @@ def render_command_center() -> None:
         st.dataframe(_position_frame(state["open_positions"]), hide_index=True, width="stretch")
     else:
         st.caption("No paper position is open. That can be a valid decision when evidence is insufficient.")
+
+
+# Compatibility helpers retained for the Streamlit fallback and deterministic tests.
+_BIG_NEWS = (
+    "trump", "fed", "rate", "rate cut", "rate hike", "inflation", "cpi",
+    "tariff", "trade war", "sanction", "war", "ceasefire", "opec", "crude",
+    "oil", "gulf", "china", "yuan", "dollar", "rbi", "gdp", "recession",
+    "stimulus", "jobs", "payroll", "yield", "bond", "geopolit", "election",
+    "budget", "fii", "dii", "downgrade", "upgrade", "default", "banking crisis",
+)
+
+
+def _rank_news(headlines: list[str], n: int = 2) -> list[str]:
+    """Rank genuinely market-moving macro/geopolitical headlines and drop routine filler."""
+    scored: list[tuple[int, str]] = []
+    for headline in headlines:
+        headline = (headline or "").strip()
+        if len(headline) < 25:
+            continue
+        hits = sum(1 for keyword in _BIG_NEWS if keyword in headline.lower())
+        if hits:
+            scored.append((hits, headline))
+    scored.sort(key=lambda item: -item[0])
+    seen: set[str] = set()
+    output: list[str] = []
+    for _, headline in scored:
+        key = headline.lower()[:40]
+        if key in seen:
+            continue
+        seen.add(key)
+        output.append(headline if len(headline) <= 140 else headline[:137] + "…")
+        if len(output) >= n:
+            break
+    return output
+
+
+@st.cache_data(ttl=900, show_spinner=False)
+def _brief_cues() -> dict:
+    """Optional read-only global cues; failure returns an honest empty mapping."""
+    output: dict = {}
+    try:
+        import yfinance as yf
+        for key, ticker in (
+            ("sp500", "^GSPC"), ("nasdaq", "^IXIC"), ("kospi", "^KS11"),
+            ("nikkei", "^N225"), ("crude", "CL=F"), ("gold", "GC=F"),
+            ("btc", "BTC-USD"),
+        ):
+            try:
+                info = yf.Ticker(ticker).fast_info
+                last = float(getattr(info, "last_price", 0) or 0)
+                previous = float(getattr(info, "previous_close", 0) or 0)
+                if last:
+                    output[key] = {
+                        "price": last,
+                        "chg": ((last - previous) / previous * 100) if previous else 0.0,
+                    }
+            except Exception:
+                continue
+    except Exception:
+        pass
+    return output
+
+
+@st.cache_data(ttl=900, show_spinner=False)
+def _top_market_news(n: int = 2) -> list[str]:
+    try:
+        from news.fetcher import NewsFetcher
+        articles = NewsFetcher().fetch_all(max_age_hours=18)
+    except Exception:
+        return []
+    return _rank_news([article.headline for article in articles], n)
+
+
+def _conversational_brief(regime: dict) -> str:
+    """Build a warm, deterministic market brief from available real cues."""
+    cues = _brief_cues()
+    hour = datetime.now().hour
+    greeting = (
+        "Good Morning Guys! 👋" if hour < 12
+        else "Afternoon check-in! 👋" if hour < 16
+        else "Evening wrap, team! 👋"
+    )
+    lines = [greeting, ""]
+
+    def direction(change: float) -> str:
+        if change > 0.6:
+            return "nice green"
+        if change > 0.05:
+            return "up"
+        if change >= -0.05:
+            return "flat-ish"
+        if change > -0.6:
+            return "down"
+        return "sharp red"
+
+    sp500 = cues.get("sp500")
+    if sp500:
+        nasdaq_change = cues.get("nasdaq", {}).get("chg", 0)
+        mood = (
+            "Nice action last night from the US markets" if sp500["chg"] > 0.2
+            else "US markets had a soft session last night" if sp500["chg"] < -0.2
+            else "US markets were quiet last night"
+        )
+        line = f"{mood} — S&P {direction(sp500['chg'])} {sp500['chg']:+.2f}%"
+        if nasdaq_change:
+            line += f", Nasdaq {nasdaq_change:+.2f}%"
+        lines.append(line + ".")
+
+    for headline in _top_market_news(2):
+        lines.append(f"📰 {headline}")
+
+    kospi = cues.get("kospi")
+    if kospi:
+        if kospi["chg"] > 1:
+            lines.append(
+                f"Kospi is showing a sharp reversal ({kospi['chg']:+.1f}%) — "
+                "let's see if that holds till the day's end."
+            )
+        else:
+            nikkei_change = cues.get("nikkei", {}).get("chg", 0)
+            line = f"Asia mixed — Kospi {kospi['chg']:+.1f}%"
+            if nikkei_change:
+                line += f", Nikkei {nikkei_change:+.1f}%"
+            lines.append(line + ".")
+
+    nifty = regime.get("nifty_price", 0) or 0
+    nifty_change = regime.get("nifty_change_1d", regime.get("nifty_change_pct", 0)) or 0
+    if nifty:
+        if nifty_change < -0.2:
+            lines.append(
+                f"Nifty had a down day ({nifty_change:+.2f}%, {nifty:,.0f}) — "
+                "some consolidation and a breakout would be ideal here!"
+            )
+        elif nifty_change > 0.2:
+            lines.append(
+                f"Nifty closed strong ({nifty_change:+.2f}%, {nifty:,.0f}) — "
+                "momentum is on our side, but do not chase."
+            )
+        else:
+            lines.append(f"Nifty flat ({nifty:,.0f}) — range-bound, patience pays.")
+
+    crude = cues.get("crude")
+    if crude:
+        level = "above" if crude["price"] >= 80 else "below"
+        prefix = "still " if level == "above" else ""
+        lines.append(f"Crude oil is {prefix}{level} $80 (${crude['price']:.1f}).")
+
+    gold = cues.get("gold")
+    if gold:
+        line = f"Gold ${gold['price']:,.0f} ({gold['chg']:+.1f}%)"
+        if cues.get("btc"):
+            line += f", BTC ${cues['btc']['price']:,.0f}"
+        lines.append(line + ".")
+
+    lines.extend(["", "Let's have a good day! 🙌"])
+    return "\n\n".join(lines)
