@@ -1,8 +1,8 @@
 """QuantTerm professional retail-first Streamlit entrypoint.
 
-The default product is a compact command center and unified scanner.  Existing
-research and operations pages remain available behind a simpler navigation
-hierarchy, while legacy_app.py preserves the old institutional terminal.
+The dedicated React terminal is the primary professional surface. This Streamlit fallback keeps the
+plain-language Home route as its safe default while preserving the Command Center, unified Scanner,
+research and operations pages for compatibility and recovery.
 """
 from __future__ import annotations
 
@@ -17,6 +17,7 @@ from ui.retail_pages_v2 import (
     render_command_center,
     render_data_zerodha,
     render_help,
+    render_home,
     render_learned,
     render_market,
     render_news,
@@ -38,7 +39,8 @@ render_sidebar_brand()
 
 pages = {
     "Workspace": [
-        st.Page(render_command_center, title="Command Center", icon="⚡", default=True),
+        st.Page(render_home, title="Home", icon="🏠", default=True),
+        st.Page(render_command_center, title="Command Center", icon="⚡"),
         st.Page(render_scanner_workspace, title="Scanner", icon="🎯"),
         st.Page(render_portfolio, title="Portfolio", icon="💼"),
         st.Page(render_market, title="Market", icon="🌐"),
