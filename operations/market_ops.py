@@ -3,6 +3,10 @@
 User-requested scans and market-data jobs run here, independently of PAPER autonomy.
 The worker has isolated lanes so a news refresh or paper cycle cannot delay a market
 scan. Every operation writes durable progress to SQLite and visible console output.
+
+At startup the worker also inspects persisted product state and queues only the work
+that is missing or stale. This makes the terminal self-preparing without creating a
+second data source or hiding provider failures.
 """
 from __future__ import annotations
 
@@ -39,6 +43,12 @@ OPS_ROOT = ROOT / "logs" / "market_ops"
 RUNTIME_PATH = OPS_ROOT / "runtime.json"
 LOCK_PATH = OPS_ROOT / "worker.lock"
 
+NEWS_FRESH_S = 20 * 60
+FNO_FRESH_S = 24 * 60 * 60
+SCAN_FRESH_S = 6 * 60 * 60
+LONG_TERM_FRESH_S = 3 * 24 * 60 * 60
+HISTORY_DAYS = 500
+
 
 class OperationBlocked(RuntimeError):
     def __init__(self, message: str, *, code: str = "BLOCKED", result: dict | None = None):
@@ -56,7 +66,6 @@ class SingleWorkerLock:
     def acquire(self) -> bool:
         try:
             import fcntl
-
             self._handle = self.path.open("w")
             try:
                 fcntl.flock(self._handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -74,7 +83,6 @@ class SingleWorkerLock:
         try:
             if self._handle is not None:
                 import fcntl
-
                 fcntl.flock(self._handle, fcntl.LOCK_UN)
                 self._handle.close()
             self.path.unlink(missing_ok=True)
@@ -103,6 +111,16 @@ def _operation_result(report: Any) -> dict[str, Any]:
     if isinstance(report, dict):
         return dict(report)
     return {"value": str(report)}
+
+
+def _stale(path: Path, max_age_s: float, *, now: float | None = None) -> bool:
+    if not path.exists():
+        return True
+    try:
+        age = float(now if now is not None else time.time()) - path.stat().st_mtime
+        return age < 0 or age > float(max_age_s)
+    except Exception:
+        return True
 
 
 def _write_instrument_cache(rows: list[dict[str, Any]]) -> Path:
@@ -144,6 +162,7 @@ class MarketOperationsWorker:
         self._active_lock = threading.Lock()
         self._active: dict[str, dict[str, Any]] = {}
         self._threads: list[threading.Thread] = []
+        self._history_lock = threading.Lock()
 
     def _set_active(self, lane: str, operation: dict[str, Any] | None) -> None:
         with self._active_lock:
@@ -188,22 +207,54 @@ class MarketOperationsWorker:
         else:
             _emit("PROGRESS", f"{operation_id[:8]} · {stage} · {message}")
 
+    def _ensure_history(self, operation_id: str, *, days: int = HISTORY_DAYS) -> dict[str, Any]:
+        with self._history_lock:
+            from data.bhavcopy_runtime import status as history_status
+            current = history_status(load_cache=True)
+            if current.get("ready") and int(current.get("sessions", 0) or 0) >= 60:
+                self._progress(
+                    operation_id,
+                    "HISTORY_READY",
+                    f"Official history ready · {current.get('sessions', 0)} sessions · {current.get('symbols', 0)} symbols",
+                )
+                return current
+            self._progress(operation_id, "PREPARING_HISTORY", f"Preparing {days}-session official NSE history")
+            from data.bhavcopy_store import build_store
+
+            def progress(current_count: int, total: int) -> None:
+                self._progress(
+                    operation_id,
+                    "PREPARING_HISTORY",
+                    "Downloading/loading missing official NSE bhavcopy sessions",
+                    current_count,
+                    total,
+                )
+
+            build_store(days=days, progress=progress)
+            current = history_status(load_cache=True)
+            if not current.get("ready"):
+                raise OperationBlocked(
+                    "Official NSE bhavcopy history could not be prepared",
+                    code="BHAVCOPY_NOT_READY",
+                    result=current,
+                )
+            return current
+
     def _run_market_scan(self, operation: dict[str, Any]) -> dict[str, Any]:
         operation_id = str(operation["operation_id"])
+        history = self._ensure_history(operation_id)
         self._progress(operation_id, "LOADING_UNIVERSE", "Loading approved NSE cash universe")
         from scan.market_scan_service import run_whole_market_scan
 
-        def progress(current: int, total: int) -> None:
-            self._progress(
-                operation_id,
-                "PREPARING_HISTORY",
-                "Downloading/loading official NSE bhavcopy sessions",
-                current,
-                total,
-            )
+        def prepared_prefetch(symbols, *, progress=None):
+            return len(symbols)
 
-        self._progress(operation_id, "SCANNING", "Evaluating the cash universe across all scanner families")
-        report = run_whole_market_scan(progress_callback=progress, save=True)
+        self._progress(
+            operation_id,
+            "SCANNING",
+            f"Evaluating whole NSE universe with {history.get('sessions', 0)} official sessions",
+        )
+        report = run_whole_market_scan(prefetch_fn=prepared_prefetch, save=True)
         result = _operation_result(report)
         if not getattr(report, "ok", False):
             code = str(getattr(report, "error_code", "SCAN_FAILED") or "SCAN_FAILED")
@@ -215,36 +266,18 @@ class MarketOperationsWorker:
         summary = dict(payload.get("summary", {}) or {})
         result["summary"] = summary
         result["records"] = len(payload.get("records", []) or [])
+        result["history"] = history
         return result
 
     def _run_long_term(self, operation: dict[str, Any], *, refresh: bool) -> dict[str, Any]:
         operation_id = str(operation["operation_id"])
-        self._progress(operation_id, "PREPARING_HISTORY", "Ensuring official NSE history is ready")
-        from data.bhavcopy_store import build_store
-
-        def progress(current: int, total: int) -> None:
-            self._progress(
-                operation_id,
-                "PREPARING_HISTORY",
-                "Downloading official NSE history required by the long-term screen",
-                current,
-                total,
-            )
-
-        symbols = int(build_store(days=500, progress=progress) or 0)
-        if symbols <= 0:
-            raise OperationBlocked(
-                "Official NSE bhavcopy history is not ready",
-                code="BHAVCOPY_NOT_READY",
-                result={"history_symbols": symbols},
-            )
+        history = self._ensure_history(operation_id)
         self._progress(
             operation_id,
             "TECHNICAL_SCREEN",
-            f"Running long-term technical screen across {symbols:,} history symbols",
+            f"Running long-term screen across {history.get('symbols', 0):,} history symbols",
         )
         from scan.long_term_service import run_long_term_scan
-
         report = run_long_term_scan(refresh_fundamentals=refresh, save=True)
         result = _operation_result(report)
         status = str(getattr(report, "status", ""))
@@ -257,13 +290,13 @@ class MarketOperationsWorker:
         payload = dict(getattr(report, "payload", {}) or {})
         result["summary"] = dict(payload.get("summary", {}) or {})
         result["records"] = len(payload.get("records", []) or [])
+        result["history"] = history
         return result
 
     def _run_news(self, operation: dict[str, Any]) -> dict[str, Any]:
         operation_id = str(operation["operation_id"])
         self._progress(operation_id, "FETCHING_SOURCES", "Fetching official and editorial market-news sources")
         from news.curator import NewsCurator
-
         report = NewsCurator().refresh()
         result = report.as_dict()
         self._progress(
@@ -283,12 +316,10 @@ class MarketOperationsWorker:
         operation_id = str(operation["operation_id"])
         self._progress(operation_id, "LOADING_INSTRUMENTS", "Refreshing NSE/NFO instrument master")
         from data.fno_universe import build_fno_universe, current_fno_universe
-
         report = None
         live_error = ""
         try:
             from research.intelligence.data.kite_activation import KiteDataClient
-
             client = KiteDataClient.from_config()
             rows = [dict(row) for row in (list(client.instruments("NSE")) + list(client.instruments("NFO")))]
             if rows:
@@ -319,21 +350,9 @@ class MarketOperationsWorker:
 
     def _run_data_prepare(self, operation: dict[str, Any]) -> dict[str, Any]:
         operation_id = str(operation["operation_id"])
-        self._progress(operation_id, "BHAVCOPY", "Preparing 500-session official NSE cash-market history")
-        from data.bhavcopy_store import build_store
-
-        def progress(current: int, total: int) -> None:
-            self._progress(operation_id, "BHAVCOPY", "Downloading missing official NSE sessions", current, total)
-
-        symbols = int(build_store(days=500, progress=progress) or 0)
+        history = self._ensure_history(operation_id)
         fno = self._run_fno(operation)
-        if symbols <= 0:
-            raise OperationBlocked(
-                "Official NSE price history could not be prepared",
-                code="BHAVCOPY_NOT_READY",
-                result={"history_symbols": symbols, "fno": fno},
-            )
-        return {"history_symbols": symbols, "fno": fno}
+        return {"history": history, "fno": fno}
 
     def _execute(self, operation: dict[str, Any]) -> dict[str, Any]:
         kind = str(operation.get("kind", ""))
@@ -394,12 +413,47 @@ class MarketOperationsWorker:
                 self._set_active(lane, None)
                 _atomic_json(RUNTIME_PATH, self._runtime_payload(running=True))
 
+    def _bootstrap(self) -> list[str]:
+        queued: list[str] = []
+        try:
+            from data.bhavcopy_runtime import status as history_status
+            history = history_status(load_cache=True)
+        except Exception:
+            history = {"ready": False, "sessions": 0}
+        history_missing = not history.get("ready") or int(history.get("sessions", 0) or 0) < 60
+        if history_missing:
+            _item, created = self.store.enqueue(DATA_PREPARE, lane=LANES[DATA_PREPARE], requested_by="bootstrap")
+            if created:
+                queued.append(DATA_PREPARE)
+        elif _stale(ROOT / "logs" / "product" / "fno_universe.json", FNO_FRESH_S):
+            _item, created = self.store.enqueue(FNO_REFRESH, lane=LANES[FNO_REFRESH], requested_by="bootstrap")
+            if created:
+                queued.append(FNO_REFRESH)
+        if _stale(ROOT / "logs" / "news_curator.sqlite3", NEWS_FRESH_S):
+            _item, created = self.store.enqueue(NEWS_REFRESH, lane=LANES[NEWS_REFRESH], requested_by="bootstrap")
+            if created:
+                queued.append(NEWS_REFRESH)
+        if _stale(ROOT / "logs" / "product" / "latest_scan.json", SCAN_FRESH_S):
+            _item, created = self.store.enqueue(MARKET_SCAN, lane=LANES[MARKET_SCAN], requested_by="bootstrap")
+            if created:
+                queued.append(MARKET_SCAN)
+        if _stale(ROOT / "logs" / "product" / "latest_long_term_scan.json", LONG_TERM_FRESH_S):
+            _item, created = self.store.enqueue(LONG_TERM_SCAN, lane=LANES[LONG_TERM_SCAN], requested_by="bootstrap")
+            if created:
+                queued.append(LONG_TERM_SCAN)
+        return queued
+
     def run(self) -> int:
         if not self.lock.acquire():
             _emit("INFO", "another market-operations worker already owns the lock")
             return 1
         recovered = self.store.recover_orphans()
-        _emit("ONLINE", f"pid={os.getpid()} · lanes={','.join(sorted(set(LANES.values())))} · recovered={recovered}")
+        bootstrap = self._bootstrap()
+        _emit(
+            "ONLINE",
+            f"pid={os.getpid()} · lanes={','.join(sorted(set(LANES.values())))} · "
+            f"recovered={recovered} · bootstrap={','.join(bootstrap) or 'nothing_due'}",
+        )
         _atomic_json(RUNTIME_PATH, self._runtime_payload(running=True))
         heartbeat = threading.Thread(target=self._heartbeat_loop, name="market-ops-heartbeat", daemon=True)
         heartbeat.start()
