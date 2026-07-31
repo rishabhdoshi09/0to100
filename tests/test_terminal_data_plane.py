@@ -44,7 +44,12 @@ def test_overdue_critical_uses_latest_recurring_intent(tmp_path):
     try:
         store.enqueue("auth_health", scheduled_for=1_000.0, idempotency_key="auth:old", critical=True)
         store.enqueue("auth_health", scheduled_for=19_000.0, idempotency_key="auth:new", critical=True)
-        store.enqueue("paper_cycle", scheduled_for=1_000.0, idempotency_key="paper:old", critical=True)
+        store.enqueue(
+            "paper_cycle",
+            scheduled_for=1_000.0,
+            idempotency_key="paper_cycle:snapshot:2026-07-31:intraday-1000",
+            critical=True,
+        )
 
         assert store.overdue_critical(grace_seconds=3_600.0) == []
     finally:
