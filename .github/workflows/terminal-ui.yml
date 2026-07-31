@@ -1,0 +1,31 @@
+name: Terminal UI
+
+on:
+  push:
+    branches:
+      - agent/quantterm-terminal-ui
+  pull_request:
+    paths:
+      - 'frontend/**'
+      - 'terminal_api.py'
+      - 'requirements.txt'
+      - '.github/workflows/terminal-ui.yml'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20.20.0'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm install
+      - name: Build frontend
+        working-directory: frontend
+        run: npm run build
+      - name: Compile API bridge
+        run: python -m py_compile terminal_api.py
