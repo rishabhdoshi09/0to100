@@ -214,6 +214,18 @@ function App() {
     }
   }
 
+  const reportBase = `${window.location.protocol}//${window.location.hostname}:8766`
+  const openEquityReport = () => {
+    if (!selected) {
+      setControlState('Select a stock before generating an equity research PDF')
+      return
+    }
+    window.open(`${reportBase}/reports/equity/${encodeURIComponent(selected)}`, '_blank', 'noopener,noreferrer')
+  }
+  const openBasketReport = () => {
+    window.open(`${reportBase}/reports/basket/long-term?limit=3`, '_blank', 'noopener,noreferrer')
+  }
+
   const viewProps = {
     dashboard,
     selected,
@@ -267,6 +279,8 @@ function App() {
         <section className="page-title">
           <div><h1>{active}</h1><p>{pageSubtitles[active]}</p></div>
           <div className="page-actions">
+            <button type="button" disabled={!selected} onClick={openEquityReport}>Equity Research PDF</button>
+            <button type="button" onClick={openBasketReport}>Top-3 Basket PDF</button>
             <span>{controlState || (loading ? 'Loading real state…' : `Updated ${dashboard.generated_at ? new Date(dashboard.generated_at).toLocaleTimeString('en-IN') : '—'}`)}</span>
           </div>
         </section>
