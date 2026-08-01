@@ -1,8 +1,8 @@
 """Canonical current long-term shortlist service.
 
-The technical pre-screen uses official bhavcopy history.  Fundamentals are a
+The technical pre-screen uses official bhavcopy history. Fundamentals are a
 current Screener.in/cache snapshot and are explicitly *not* point-in-time
-historical evidence.  Missing data lowers coverage and can never be converted to
+historical evidence. Missing data lowers coverage and can never be converted to
 an optimistic pass.
 """
 from __future__ import annotations
@@ -161,6 +161,23 @@ def _default_fundamental_provider(symbol: str, refresh: bool) -> Mapping[str, An
     return FundamentalsCache().get(symbol)
 
 
+def _prepare_official_history() -> dict:
+    """Load or build the single canonical official-history store.
+
+    API and supervisor are separate processes, so an in-memory readiness check is
+    insufficient. First load the persisted cache, then rebuild from existing local
+    CSVs, and only then invoke the canonical downloader/builder.
+    """
+    from data.bhavcopy_runtime import ensure_loaded
+
+    state = ensure_loaded(rebuild_from_local=True)
+    if state.get("ready"):
+        return state
+    from data.bhavcopy_store import build_store
+    build_store()
+    return ensure_loaded(rebuild_from_local=True)
+
+
 def run_long_term_scan(
     *,
     symbols=None,
@@ -175,13 +192,20 @@ def run_long_term_scan(
     default_technical = technical_scanner is None
     technical_scanner = technical_scanner or __import__(
         "scan.long_term", fromlist=["scan_long_term"]).scan_long_term
+    history: dict = {}
     if default_technical:
         try:
-            from data.bhavcopy_store import is_ready
-            if not is_ready():
+            history = _prepare_official_history()
+            if not history.get("ready"):
                 return LongTermScanReport(
-                    DATA_UNAVAILABLE, error_code="BHAVCOPY_NOT_READY",
-                    error_message="official bhavcopy history is not ready for long-term screening",
+                    DATA_UNAVAILABLE,
+                    error_code="BHAVCOPY_NOT_READY",
+                    error_message=(
+                        "official bhavcopy history is not ready for long-term screening · "
+                        f"csv_files={history.get('csv_files', 0)} · "
+                        f"sessions={history.get('sessions', 0)} · "
+                        f"cache={history.get('cache_exists', False)}"
+                    ),
                 )
         except Exception as exc:
             return LongTermScanReport(DATA_UNAVAILABLE, error_code="BHAVCOPY_STATUS_ERROR",
@@ -204,13 +228,13 @@ def run_long_term_scan(
     try:
         technical = technical_scanner(symbols=symbols, min_score=45, top=technical_limit,
                                       include_watch=True)
-    except TypeError:  # injected/legacy scanner compatibility
+    except TypeError:
         technical = technical_scanner(symbols=symbols, min_score=45, top=technical_limit)
     except Exception as exc:
         return LongTermScanReport(FAILED, error_code="LONG_TERM_TECHNICAL_ERROR",
                                   error_message=str(exc))
     if not technical:
-        payload = _payload([], scope=scope, refresh=refresh_fundamentals)
+        payload = _payload([], scope=scope, refresh=refresh_fundamentals, history=history)
         if save:
             from product.long_term_store import save_long_term_scan
             save_long_term_scan(payload)
@@ -275,14 +299,15 @@ def run_long_term_scan(
                 "NEEDS_FUNDAMENTALS": 4, "AVOID_REVIEW": 5}
     records.sort(key=lambda r: (priority.get(r["classification"], 9),
                                 -float(r["combined_score"]), r["symbol"]))
-    payload = _payload(records[:top], scope=scope, refresh=refresh_fundamentals)
+    payload = _payload(records[:top], scope=scope, refresh=refresh_fundamentals, history=history)
     if save:
         from product.long_term_store import save_long_term_scan
         save_long_term_scan(payload)
     return LongTermScanReport(SUCCEEDED if records else NO_CANDIDATES, payload)
 
 
-def _payload(records: list[dict], *, scope: str, refresh: bool) -> dict:
+def _payload(records: list[dict], *, scope: str, refresh: bool,
+             history: Mapping[str, Any] | None = None) -> dict:
     summary = {name.lower(): sum(1 for r in records if r.get("classification") == name)
                for name in ("QUALITY_COMPOUNDER", "GARP_CANDIDATE", "QUALITY_BUT_EXPENSIVE",
                             "LONG_TERM_WATCH", "NEEDS_FUNDAMENTALS", "AVOID_REVIEW")}
@@ -293,6 +318,7 @@ def _payload(records: list[dict], *, scope: str, refresh: bool) -> dict:
     return {
         "schema_version": 1, "scanned_at": datetime.now(timezone.utc).isoformat(),
         "scope": scope, "records": records, "summary": summary,
+        "history": dict(history or {}),
         "fundamentals_source": "Screener.in current snapshot/cache",
         "fundamentals_refreshed": bool(refresh), "fundamentals_point_in_time": False,
         "disclaimer": ("Current long-term shortlist only. Fundamentals are not publication-dated "

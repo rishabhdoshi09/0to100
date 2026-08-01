@@ -8,7 +8,7 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 
@@ -33,15 +33,18 @@ jobs:
           TELEGRAM_BOT_TOKEN: ""
           DEEPSEEK_API_KEY: ""
 
-      - name: Run integration tests (environment-dependent; non-blocking)
+      - name: Compile every module (import-safety net)
+        # Compile before environment-dependent smoke so a slow provider test can
+        # never prevent the deterministic import-safety gate from running.
+        run: |
+          python -m compileall -q data scan risk execution ui reports ai core alerts news research product reporting operations fundamentals
+          python -m py_compile terminal_api.py terminal_product_api.py report_api.py
+
+      - name: Run integration tests (environment-dependent; bounded and non-blocking)
         continue-on-error: true
         run: |
-          QT_INTEGRATION=1 python -m pytest tests/integration -q --tb=short
+          timeout 120s env QT_INTEGRATION=1 python -m pytest tests/integration -q --tb=short
         env:
           KITE_ACCESS_TOKEN: ""
           TELEGRAM_BOT_TOKEN: ""
           DEEPSEEK_API_KEY: ""
-
-      - name: Compile every module (import-safety net)
-        run: |
-          python -m compileall -q data scan risk execution ui reports ai core alerts news research

@@ -5,7 +5,7 @@
 
   data gate → per-strategy frozen runtime signals → canonical events → manage/exit open
   positions → decode outcomes → Brain 1 Evidence Cards → Brain 2 allocation decisions →
-  TradeIntents → portfolio/risk gate → paper execution → persist.
+  canonical Target Portfolio → TradeIntents → paper execution → persist.
 
 Properties (by construction): deterministic for identical inputs; idempotent per cycle id
 (a completed cycle is a no-op; every mutation is deduped by the event store / book / state);
@@ -14,14 +14,13 @@ Streamlit-free; broker-free; paper-only; safe with no data. Live modes are refus
 """
 from __future__ import annotations
 
-from research.intelligence import schemas as SC
 from research.intelligence import evidence_brain as EB
 from research.intelligence import allocation_brain as AB
 from research.intelligence import strategy_runtime as RT
 from research.intelligence import decoder_registry as REG
 from research.intelligence.runtime import events as EV
 from research.intelligence.runtime import modes as MODES
-from research.intelligence.runtime import portfolio_gate as GATE
+from research.intelligence.runtime import target_portfolio as TARGET
 from research.intelligence.runtime.cycle_result import (
     IntelligenceCycleResult, STATUS_OK, STATUS_NO_ACTION, STATUS_ALREADY_DONE,
     STATUS_FAILED_SAFE)
@@ -115,7 +114,7 @@ def run_intelligence_cycle(ctx, *, store, book, runtime_state, knowledge=None,
             res.allocation_decisions.append((d.strategy_id, d.action))
             _apply_non_entry_decision(d, store, cid, runtime_state, res, ctx)
 
-        # ── 5. TradeIntents for DEPLOY/INCREASE with a live signal → gate → book ─
+        # ── 5. all proposals → one Target Portfolio → exact deltas → PAPER ───────
         if MODES.opens_new_entries(ctx.mode) and safe_to_enter:
             _open_new_positions(ctx, store, book, runtime_state, res, decisions,
                                 today_signals, cards, alloc_cfg)
@@ -166,7 +165,7 @@ def _manage_positions(ctx, store, book, state, res) -> None:
 
 
 def _evaluate_strategies(ctx, store, book, state, res) -> dict:
-    """Return {strategy_id: first-valid signal dict today}."""
+    """Return {strategy_id: ranked signal dicts today}."""
     today: dict = {}
     for spec in ctx.strategies:
         sid = spec.strategy_id
@@ -185,7 +184,6 @@ def _evaluate_strategies(ctx, store, book, state, res) -> dict:
         ctx_prov = {"strategy_id": sid, "strategy_version": spec.version,
                     "rules_hash": spec.config_hash(), "data_snapshot_id": ctx.data_snapshot_id,
                     "event_ts": ctx.as_of_date}
-        # unified interface: single-symbol adapters loop the universe, cross-sectional rank it
         try:
             fired = RT.signals(spec, ctx.as_of_date, sym_hist,
                                benchmark=getattr(ctx, "benchmark", None))
@@ -202,7 +200,7 @@ def _evaluate_strategies(ctx, store, book, state, res) -> dict:
                     symbol=sig["symbol"], event_ts=ctx.as_of_date,
                     summary={"entry": sig["entry"], "stop": sig["stop"], "target": sig["target"]})
             res.signals_generated.append((sid, sig["symbol"]))
-        today[sid] = fired                          # ranked; the loop opens the top pick
+        today[sid] = fired
     return today
 
 
@@ -220,7 +218,7 @@ def _run_brain1(ctx, store, book, res, backtest_R, backtest_trades) -> list:
                              forward_returns=fwd, out_of_sample_trades=len(fwd),
                              in_sample_trades=int(backtest_trades.get(sid, 0)),
                              dataset_tier=getattr(ctx, "dataset_tier", ""))
-        new = store.append(card)                          # idempotent: same evidence ⇒ same id
+        new = store.append(card)
         EV.emit(store, ctx.cycle_id(),
                 EV.EVIDENCE_CARD_CREATED if new else EV.EVIDENCE_CARD_UPDATED,
                 strategy_id=sid, decision=card.evidence_state, event_ts=ctx.as_of_date,
@@ -249,77 +247,139 @@ def _apply_non_entry_decision(d, store, cid, state, res, ctx) -> None:
 
 def _open_new_positions(ctx, store, book, state, res, decisions, today_signals, cards,
                         alloc_cfg) -> None:
+    """Persist one Target Portfolio and execute only its approved quantity deltas."""
     cid = ctx.cycle_id()
-    card_by = {c.strategy_id: c for c in cards}
-    family_risk: dict = {}
-    cluster_risk: dict = {}
-    # spend caps best-evidence first
-    deployables = [d for d in decisions if d.action in ("DEPLOY", "INCREASE")
-                   and d.target_risk_pct > 0]
-    deployables.sort(key=lambda d: d.score, reverse=True)
-    for d in deployables:
-        sigs = today_signals.get(d.strategy_id) or []
-        sig = sigs[0] if sigs else None                  # top-ranked entry (one/strategy/cycle)
-        if sig is None:
-            continue                                     # no live entry today → nothing to open
-        spec = next((s for s in ctx.strategies if s.strategy_id == d.strategy_id), None)
-        requires_live = bool(getattr(ctx, "live_confirmation_required", False)) or (
-            spec is not None and "live_ticks" in tuple(getattr(spec, "required_data", ())))
-        if requires_live and sig["symbol"].upper() not in set(getattr(ctx, "fresh_live_symbols", ())):
-            EV.emit(store, cid, EV.TRADE_INTENT_BLOCKED, strategy_id=d.strategy_id,
-                    symbol=sig["symbol"], reason="LIVE_PRICE_STALE", event_ts=ctx.as_of_date)
-            res.intents_blocked.append((d.strategy_id, "LIVE_PRICE_STALE"))
-            continue
-        card = card_by.get(d.strategy_id)
-        intent = SC.TradeIntent(
-            strategy_id=d.strategy_id, strategy_version=d.strategy_version,
-            rules_hash=d.rules_hash, data_snapshot_id=ctx.data_snapshot_id, source="brain2",
-            event_ts=ctx.as_of_date, cycle_id=cid, symbol=sig["symbol"], direction="LONG",
-            entry_rule="next_bar", intended_entry=float(sig["entry"]),
-            intended_risk_pct=d.target_risk_pct, stop_price=float(sig["stop"]),
-            target_price=float(sig["target"]),
-            holding_horizon_days=int(sig.get("max_hold", 0)),
-            card_id=(card.record_id if card else ""), allocation_id=d.record_id,
-            reasons=d.reasons)
-        gate = GATE.check(intent, family=d.family, book=book, family_risk=family_risk,
-                          cluster_risk=cluster_risk, cluster_of=ctx.clusters.get(d.strategy_id, ""),
-                          cfg=alloc_cfg, regime=ctx.market_regime, data_ok=ctx.data_ok,
-                          reconciled=state.reconciled)
-        if not gate.ok:
-            EV.emit(store, cid, EV.TRADE_INTENT_BLOCKED, strategy_id=d.strategy_id,
-                    symbol=sig["symbol"], reason=gate.reason_code, event_ts=ctx.as_of_date,
-                    summary={"limit": gate.limit, "current": gate.current, "requested": gate.requested})
-            res.intents_blocked.append((d.strategy_id, gate.reason_code))
-            continue
+    for name in ("target_portfolios", "target_positions", "blocked_target_positions"):
+        if not hasattr(res, name):
+            setattr(res, name, [])
+
+    build = TARGET.build_target_portfolio(
+        ctx,
+        book=book,
+        runtime_state=state,
+        decisions=decisions,
+        today_signals=today_signals,
+        cards=cards,
+        cfg=alloc_cfg,
+    )
+
+    for target in build.positions:
+        store.append(target)
+        res.target_positions.append(target.record_id)
+        if target.status == TARGET.BLOCKED:
+            reason = target.blocked_by[0] if target.blocked_by else "TARGET_BLOCKED"
+            EV.emit(store, cid, EV.TARGET_POSITION_BLOCKED,
+                    strategy_id=target.strategy_id, strategy_version=target.strategy_version,
+                    rules_hash=target.rules_hash, data_snapshot_id=target.data_snapshot_id,
+                    symbol=target.symbol, decision=target.status, reason=reason,
+                    event_ts=ctx.as_of_date,
+                    summary={
+                        "target_position_id": target.record_id,
+                        "desired_quantity": target.desired_quantity,
+                        "current_quantity": target.current_quantity,
+                        "pending_quantity": target.pending_quantity,
+                        "blocked_by": list(target.blocked_by),
+                    })
+            res.blocked_target_positions.append((target.strategy_id, target.symbol, reason))
+            res.intents_blocked.append((target.strategy_id, reason))
+        else:
+            EV.emit(store, cid, EV.TARGET_POSITION_CREATED,
+                    strategy_id=target.strategy_id, strategy_version=target.strategy_version,
+                    rules_hash=target.rules_hash, data_snapshot_id=target.data_snapshot_id,
+                    symbol=target.symbol, decision=target.status, event_ts=ctx.as_of_date,
+                    summary={
+                        "target_position_id": target.record_id,
+                        "desired_quantity": target.desired_quantity,
+                        "current_quantity": target.current_quantity,
+                        "pending_quantity": target.pending_quantity,
+                        "required_quantity": target.required_quantity,
+                        "target_risk_pct": target.target_risk_pct,
+                    })
+
+    store.append(build.portfolio)
+    res.target_portfolios.append(build.portfolio.record_id)
+    EV.emit(store, cid, EV.TARGET_PORTFOLIO_CREATED,
+            data_snapshot_id=build.portfolio.data_snapshot_id,
+            decision="TARGETED" if build.executable else "NO_CHANGE",
+            event_ts=ctx.as_of_date,
+            summary={
+                "target_portfolio_id": build.portfolio.record_id,
+                "positions": len(build.positions),
+                "executable": len(build.executable),
+                "blocked": len(build.blocked),
+                "current_open_risk_pct": build.portfolio.current_open_risk_pct,
+                "pending_open_risk_pct": build.portfolio.pending_open_risk_pct,
+                "target_open_risk_pct": build.portfolio.target_open_risk_pct,
+                "available_cash": build.portfolio.available_cash,
+            })
+
+    decision_by_strategy = {str(d.strategy_id): d for d in decisions}
+    for target in build.executable:
+        intent = TARGET.trade_intent_from_target(target, build.portfolio)
         store.append(intent)
-        EV.emit(store, cid, EV.TRADE_INTENT_CREATED, strategy_id=d.strategy_id,
-                symbol=sig["symbol"], event_ts=ctx.as_of_date, summary={"risk_pct": d.target_risk_pct})
+        EV.emit(store, cid, EV.TRADE_INTENT_CREATED,
+                strategy_id=target.strategy_id, strategy_version=target.strategy_version,
+                rules_hash=target.rules_hash, data_snapshot_id=target.data_snapshot_id,
+                symbol=target.symbol, event_ts=ctx.as_of_date,
+                causation_id=target.record_id,
+                summary={
+                    "intent_id": intent.record_id,
+                    "target_portfolio_id": build.portfolio.record_id,
+                    "target_position_id": target.record_id,
+                    "risk_pct": intent.intended_risk_pct,
+                    "required_quantity": intent.required_quantity,
+                })
         res.trade_intents.append(intent.record_id)
-        pos = book.open_position(d.strategy_id, sig["symbol"], float(sig["entry"]),
-                                 float(sig["stop"]), float(sig["target"]), ctx.as_of_date,
-                                 int(sig.get("max_hold", 0)))
+
+        if hasattr(book, "open_intent"):
+            pos = book.open_intent(intent, date=ctx.as_of_date)
+        else:
+            try:
+                pos = book.open_position(
+                    target.strategy_id, target.symbol, target.intended_entry,
+                    target.stop_price, target.target_price, ctx.as_of_date,
+                    target.holding_horizon_days,
+                    risk_pct_of_capital=target.target_risk_pct,
+                    quantity=target.required_quantity,
+                )
+            except TypeError:  # compatibility for narrow injected test doubles
+                pos = book.open_position(
+                    target.strategy_id, target.symbol, target.intended_entry,
+                    target.stop_price, target.target_price, ctx.as_of_date,
+                    target.holding_horizon_days,
+                )
         if pos is None:
-            EV.emit(store, cid, EV.TRADE_INTENT_BLOCKED, strategy_id=d.strategy_id,
-                    symbol=sig["symbol"], reason="BOOK_REFUSED",
-                    event_ts=ctx.as_of_date, summary={"refusals": book.refusals[-1:]})
-            res.intents_blocked.append((d.strategy_id, "BOOK_REFUSED"))
+            EV.emit(store, cid, EV.TRADE_INTENT_BLOCKED,
+                    strategy_id=target.strategy_id, symbol=target.symbol,
+                    reason="BOOK_REFUSED", event_ts=ctx.as_of_date,
+                    causation_id=target.record_id,
+                    summary={"refusals": getattr(book, "refusals", [])[-1:]})
+            res.intents_blocked.append((target.strategy_id, "BOOK_REFUSED"))
             continue
-        family_risk[d.family] = family_risk.get(d.family, 0.0) + d.target_risk_pct
-        cl = ctx.clusters.get(d.strategy_id, "")
-        if cl:
-            cluster_risk[cl] = cluster_risk.get(cl, 0.0) + d.target_risk_pct
-        st = state.get(d.strategy_id, d.family)
-        st.allocation_pct = d.target_risk_pct
+
+        decision = decision_by_strategy.get(target.strategy_id)
+        st = state.get(target.strategy_id, target.family)
+        st.allocation_pct = target.target_risk_pct
+        st.risk_budget_pct = target.target_risk_pct
         st.lifecycle = "PAPER_EVALUATION"
-        st.latest_card_id = intent.card_id
-        st.latest_allocation_id = d.record_id
-        EV.emit(store, cid, EV.PAPER_POSITION_OPENED, strategy_id=d.strategy_id,
-                symbol=sig["symbol"], event_ts=ctx.as_of_date,
-                summary={"qty": pos.qty, "entry": pos.entry_price})
-        if d.action == "INCREASE":
-            EV.emit(store, cid, EV.STRATEGY_ALLOCATION_INCREASED, strategy_id=d.strategy_id,
-                    event_ts=ctx.as_of_date)
-        res.positions_opened.append((d.strategy_id, sig["symbol"]))
+        st.latest_card_id = target.card_id
+        st.latest_allocation_id = target.allocation_id
+        EV.emit(store, cid, EV.PAPER_POSITION_OPENED,
+                strategy_id=target.strategy_id, symbol=target.symbol,
+                event_ts=ctx.as_of_date, causation_id=intent.record_id,
+                summary={
+                    "qty": pos.qty,
+                    "entry": pos.entry_price,
+                    "target_portfolio_id": build.portfolio.record_id,
+                    "target_position_id": target.record_id,
+                    "requested_risk_pct": intent.intended_risk_pct,
+                    "approved_risk_pct": getattr(pos, "approved_risk_pct", 0.0),
+                    "risk_amount": getattr(pos, "risk_amount", 0.0),
+                })
+        if decision is not None and decision.action == "INCREASE":
+            EV.emit(store, cid, EV.STRATEGY_ALLOCATION_INCREASED,
+                    strategy_id=target.strategy_id, event_ts=ctx.as_of_date)
+        res.positions_opened.append((target.strategy_id, target.symbol))
 
 
 def _persist(store, book, state) -> None:

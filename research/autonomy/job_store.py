@@ -1,7 +1,7 @@
 """Durable, dependency-aware job ledger for the autonomy supervisor.
 
-SQLite is the scheduler of record.  Jobs have leases, idempotency keys and explicit BLOCKED
-dependencies.  Existing databases are migrated in place; a login or data recovery can requeue the
+SQLite is the scheduler of record. Jobs have leases, idempotency keys and explicit BLOCKED
+dependencies. Existing databases are migrated in place; a login or data recovery can requeue the
 same logical job rather than creating a duplicate or leaving it blocked forever.
 """
 from __future__ import annotations
@@ -177,6 +177,17 @@ class JobStore:
                 raise
             return self.get(row["job_id"], _locked=True)
 
+    def renew_lease(self, job_id: str, owner: str, *, lease_seconds: float = 300.0) -> bool:
+        """Extend one live worker lease without changing job state or attempt count."""
+        now = self.clock()
+        with self._lock:
+            cur = self._db.execute(
+                "UPDATE jobs SET lease_expires_at=? WHERE job_id=? AND status=? AND lease_owner=?",
+                (now + lease_seconds, job_id, RUNNING, owner),
+            )
+            self._db.commit()
+            return cur.rowcount == 1
+
     def complete(self, job_id: str, status: str, *, result_summary: str = "",
                  output_snapshot_id: str | None = None, error_code: str = "",
                  error_message: str = "", next_retry_at: float | None = None) -> None:
@@ -270,12 +281,48 @@ class JobStore:
                 (*params, limit)).fetchall()
         return [_row_to_job(r) for r in rows]
 
-    def overdue_critical(self, *, grace_seconds: float = 0.0) -> list[Job]:
+    def cancel_superseded_pending(self, job_type: str, *, keep: int = 1) -> int:
+        """Retire old recurring rows while preserving the newest pending intent."""
+        keep = max(0, int(keep))
         now = self.clock()
         with self._lock:
             rows = self._db.execute(
-                "SELECT * FROM jobs WHERE critical=1 AND status=? AND scheduled_for < ?",
-                (PENDING, now - grace_seconds)).fetchall()
+                "SELECT job_id FROM jobs WHERE job_type=? AND status=? "
+                "ORDER BY scheduled_for DESC, created_at DESC",
+                (job_type, PENDING),
+            ).fetchall()
+            stale = [row["job_id"] for row in rows[keep:]]
+            if not stale:
+                return 0
+            placeholders = ",".join("?" for _ in stale)
+            cur = self._db.execute(
+                f"UPDATE jobs SET status=?, finished_at=?, result_summary=?, lease_owner=NULL, "
+                f"lease_expires_at=NULL WHERE job_id IN ({placeholders})",
+                (CANCELLED, now, "superseded by a newer recurring job", *stale),
+            )
+            self._db.commit()
+            return cur.rowcount
+
+    def overdue_critical(self, *, grace_seconds: float = 0.0) -> list[Job]:
+        """Return current critical work, not historical recurring backlog.
+
+        Only the newest pending row for each job type is considered. A job type
+        already running is not overdue. Scheduled paper cycles are opportunity/
+        position-management events and remain visible in the ledger without
+        degrading the organisation as an infrastructure outage. Synthetic or
+        manually requested critical rows still exercise the generic safety path.
+        """
+        now = self.clock()
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT j.* FROM jobs j "
+                "WHERE j.critical=1 AND j.status=? AND j.scheduled_for < ? "
+                "AND NOT (j.job_type='paper_cycle' AND j.idempotency_key LIKE 'paper_cycle:%') "
+                "AND NOT EXISTS (SELECT 1 FROM jobs r WHERE r.job_type=j.job_type AND r.status=?) "
+                "AND j.scheduled_for=(SELECT MAX(p.scheduled_for) FROM jobs p "
+                "WHERE p.job_type=j.job_type AND p.status=?)",
+                (PENDING, now - grace_seconds, RUNNING, PENDING),
+            ).fetchall()
         return [_row_to_job(r) for r in rows]
 
     def reclaim_expired(self) -> int:

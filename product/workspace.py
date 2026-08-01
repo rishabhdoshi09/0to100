@@ -1,8 +1,8 @@
 """Pure product projections for the QuantTerm professional workspace.
 
-The module deliberately contains no Streamlit, network, scanner, broker or mutation
-imports.  It only projects already-persisted product state into the command center
-and unified scanner.  Backend engines remain the source of truth.
+The module deliberately contains no frontend, network, scanner, broker or mutation
+imports. It only projects already-persisted product state into the command center
+and unified scanner. Backend engines remain the source of truth.
 """
 from __future__ import annotations
 
