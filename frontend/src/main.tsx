@@ -5,6 +5,7 @@ import './styles.css'
 import './truth.css'
 import './views.css'
 import './marketViews.css'
+import './researchData.css'
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
