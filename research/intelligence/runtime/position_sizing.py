@@ -73,9 +73,11 @@ def size_long_cash(
     risk_budget = capital * capped_risk_pct / 100.0
     quantity_by_risk = int(math.floor(risk_budget / risk_per_share))
     quantity_by_capital = int(math.floor(capital * max_position_fraction / effective_entry))
+    if quantity_by_risk <= 0:
+        return _failed("RISK_BUDGET_TOO_SMALL")
+    if quantity_by_capital <= 0:
+        return _failed("POSITION_CAP_TOO_SMALL")
     maximum_quantity = min(quantity_by_risk, quantity_by_capital)
-    if maximum_quantity <= 0:
-        return _failed("NO_FEASIBLE_QUANTITY")
 
     if requested_quantity is None:
         quantity = maximum_quantity
