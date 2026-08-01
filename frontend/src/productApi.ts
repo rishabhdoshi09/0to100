@@ -159,6 +159,42 @@ export const fetchStockIntelligence = (symbol: string): Promise<StockWorkspace> 
     headers: { Accept: 'application/json' },
   }).then((response) => json<StockWorkspace>(response))
 
+export type TradePlan = {
+  available: boolean
+  symbol: string
+  message?: string
+  tradeable?: boolean
+  reason?: string
+  entry?: number
+  stop?: number
+  target?: number | null
+  qty?: number
+  invested?: number
+  rupee_risk?: number
+  capped?: boolean
+  pct_of_capital?: number
+  risk_pct_of_capital?: number
+  reward_risk?: number | null
+  invalidation_pct?: number
+  suggested_risk_pct?: number
+  open_risk_pct_before?: number | null
+  open_risk_pct_after?: number | null
+  heat_verdict?: string
+  heat_warnings?: string[]
+  correlation_status?: string
+  correlated_with?: string[]
+  market_health?: string
+  market_risk_factor?: number
+  capital?: number
+  summary?: string
+}
+
+// Read-only risk-first plan for a scanned candidate. Never places an order.
+export const fetchTradePlan = (symbol: string): Promise<TradePlan> =>
+  fetch(`/api/trade-plan/${encodeURIComponent(symbol)}`, {
+    headers: { Accept: 'application/json' },
+  }).then((response) => json<TradePlan>(response))
+
 export const refreshStockFundamentals = (symbol: string): Promise<{
   accepted: boolean
   symbol: string

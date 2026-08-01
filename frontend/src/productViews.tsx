@@ -8,16 +8,59 @@ import {
   SecurityTable,
 } from './components'
 import { compactDateTime, money, words } from './format'
+// `money` reused by RiskLensCard below; risk % is rendered inline (fractions, not the +/- pct helper)
 import {
   bootstrapProduct,
   fetchProductReadiness,
   fetchStockIntelligence,
+  fetchTradePlan,
   refreshStockFundamentals,
   type IntelligenceMetric,
   type ProductReadiness,
   type StockWorkspace,
+  type TradePlan,
 } from './productApi'
 import type { ChartBar, ControlName, DashboardPayload } from './types'
+
+// Read-only risk-first "R lens" — exact shares, rupee risk, reward:risk, book heat. No orders.
+export function RiskLensCard({ plan }: { plan: TradePlan | null }) {
+  if (!plan) return null
+  if (!plan.available) {
+    return (
+      <section className="risk-lens">
+        <h3>Risk lens</h3>
+        <p className="risk-lens-empty">{plan.message || 'No risk plan available for this symbol.'}</p>
+      </section>
+    )
+  }
+  if (plan.tradeable === false) {
+    return (
+      <section className="risk-lens">
+        <h3>Risk lens</h3>
+        <p className="risk-lens-empty">Not tradeable: {plan.reason}</p>
+      </section>
+    )
+  }
+  const verdict = (plan.heat_verdict || 'OK').toLowerCase()
+  return (
+    <section className="risk-lens">
+      <h3>Risk lens <small>risk before reward · read-only · no orders</small></h3>
+      <div className="risk-lens-grid">
+        <div><span>Position</span><strong>{plan.qty} sh</strong><small>{money(plan.invested)} ({plan.pct_of_capital}% of capital)</small></div>
+        <div><span>Risk if stopped</span><strong>{money(plan.rupee_risk)}</strong><small>{plan.risk_pct_of_capital}% of capital</small></div>
+        <div><span>Reward : risk</span><strong>{plan.reward_risk != null ? `${plan.reward_risk}R` : '—'}</strong><small>invalidation −{plan.invalidation_pct}%</small></div>
+        <div className={`risk-lens-heat risk-lens-${verdict}`}><span>Book open-risk</span><strong>{plan.open_risk_pct_before != null ? `${plan.open_risk_pct_before}%→${plan.open_risk_pct_after}%` : '—'}</strong><small>{plan.heat_verdict}</small></div>
+      </div>
+      {plan.market_risk_factor != null && plan.market_risk_factor < 1 && (
+        <p className="risk-lens-note">Risk throttled to {((plan.suggested_risk_pct ?? 0) * 100).toFixed(2)}% for a {plan.market_health} market.</p>
+      )}
+      {plan.correlation_status === 'adds_to_bet' && (plan.correlated_with || []).length > 0 && (
+        <p className="risk-lens-note">Not a new bet — moves with {(plan.correlated_with || []).join(', ')}.</p>
+      )}
+      <p className="risk-lens-summary">{plan.summary}</p>
+    </section>
+  )
+}
 
 type ViewProps = {
   dashboard: DashboardPayload
@@ -193,6 +236,7 @@ function MetricExplanation({ metric }: { metric: IntelligenceMetric }) {
 export function ProductStockIntelligenceView(props: ViewProps) {
   const { selected, bars, runControl, setActive } = props
   const [workspace, setWorkspace] = useState<StockWorkspace | null>(null)
+  const [plan, setPlan] = useState<TradePlan | null>(null)
   const [loading, setLoading] = useState(false)
   const [busy, setBusy] = useState('')
   const [error, setError] = useState('')
@@ -200,11 +244,13 @@ export function ProductStockIntelligenceView(props: ViewProps) {
   const load = async () => {
     if (!selected) {
       setWorkspace(null)
+      setPlan(null)
       return
     }
     setLoading(true)
     try {
       setWorkspace(await fetchStockIntelligence(selected))
+      try { setPlan(await fetchTradePlan(selected)) } catch { setPlan(null) }
       setError('')
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : 'Stock intelligence unavailable')
@@ -245,6 +291,8 @@ export function ProductStockIntelligenceView(props: ViewProps) {
         <div><span>{workspace?.sector || 'Sector not classified'}</span><h2>{workspace?.company || selected}</h2><p>{selected} · {workspace?.summary || 'Verified research is still loading.'}</p></div>
         <div className="stock-workspace-state"><span>{words(workspace?.state || 'LOADING')}</span><strong>{workspace?.confidence_pct ?? 0}%</strong><small>data confidence</small></div>
       </header>
+
+      <RiskLensCard plan={plan} />
 
       <div className="stock-action-row">
         {(workspace?.next_actions || []).map((item) => (
