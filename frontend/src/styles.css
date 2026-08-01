@@ -360,3 +360,104 @@ body {
   .metric-grid { grid-template-columns: repeat(3, 1fr); }
   .loading-overlay { left: 210px; }
 }
+
+/* ══════════════════════════════════════════════════════════════════════════
+   ⚡ Energetic theme layer — bold, lively, alive on hover. Appended so it wins
+   the cascade without touching the base rules. Respects reduced-motion.
+   ══════════════════════════════════════════════════════════════════════════ */
+:root{
+  --accent: #8b7bf0;               /* electric violet primary */
+  --accent-2: #43d9ff;             /* cyan energy */
+  --glow-v: rgba(139,123,240,.55);
+  --glow-c: rgba(67,217,255,.5);
+  --lift: 0 14px 34px rgba(0,0,0,.45), 0 0 0 1px rgba(139,123,240,.28);
+}
+
+/* live page ambience — a soft moving aurora behind the shell */
+body::before{
+  content:""; position:fixed; inset:-20% -10% auto -10%; height:70%; z-index:-1; pointer-events:none;
+  background:
+    radial-gradient(720px 360px at 20% 0%, rgba(139,123,240,.16), transparent 60%),
+    radial-gradient(680px 340px at 88% 8%, rgba(67,217,255,.12), transparent 60%);
+  filter:saturate(1.1); animation:qt-aurora 16s ease-in-out infinite alternate;
+}
+@keyframes qt-aurora{ from{transform:translateX(-2%) translateY(-1%)} to{transform:translateX(3%) translateY(2%)} }
+
+/* cards / panels / tiles come alive on hover */
+.panel, .today-strip>div, .scanner-lane-cards article, .quality-overlay-grid>div,
+.evidence-stat-grid>div, .long-term-metric-strip>div, .long-term-operation, .lens{
+  transition: transform .16s ease, border-color .16s ease, box-shadow .2s ease, background .2s ease;
+}
+.panel:hover, .today-strip>div:hover, .scanner-lane-cards article:hover,
+.long-term-metric-strip>div:hover{
+  transform: translateY(-3px);
+  border-color: rgba(139,123,240,.5);
+  box-shadow: var(--lift);
+}
+
+/* nav: glowing rounded pill for the active section */
+.nav-item{ transition: background .15s, color .15s, box-shadow .2s, transform .12s; border-radius:11px; }
+.nav-item:hover{ transform: translateX(1px); color:#e8eeff; }
+.nav-item.active{
+  background: linear-gradient(135deg, rgba(139,123,240,.28), rgba(67,217,255,.12));
+  border: 1px solid rgba(139,123,240,.5);
+  box-shadow: inset 0 0 0 1px rgba(139,123,240,.12), 0 0 18px -4px var(--glow-v);
+  color:#fff;
+}
+
+/* punchy numbers — the quant-terminal read */
+.today-strip strong, .scanner-lane-cards strong, .long-term-metric-strip strong,
+.evidence-stat-grid strong, .quality-overlay-grid strong{
+  font-size: 22px; font-weight: 800; letter-spacing:-.02em;
+  font-variant-numeric: tabular-nums;
+  background: linear-gradient(180deg, #ffffff, #cfe6ff); -webkit-background-clip:text; background-clip:text; color:transparent;
+}
+.metric-purple strong, .metric-purple .num{ color:#cabfff; }
+
+/* heroes + primary buttons: energetic gradient + glow + press feedback */
+.experience-hero, .scanner-command-bar, .long-term-hero{
+  border-color: rgba(139,123,240,.34);
+  box-shadow: 0 18px 60px rgba(0,0,0,.3), inset 0 1px 0 rgba(255,255,255,.04);
+}
+.experience-hero span, .scanner-command-bar span, .long-term-hero span,
+.experience-help header span{
+  background: linear-gradient(90deg, var(--accent-2), var(--accent)); -webkit-background-clip:text; background-clip:text; color:transparent;
+}
+.experience-hero button, .scanner-command-bar button, .long-term-hero button,
+.experience-chart-footer button{
+  background: linear-gradient(135deg, var(--accent), #5b49d6);
+  border: 1px solid rgba(139,123,240,.6); color:#fff;
+  box-shadow: 0 8px 22px -8px var(--glow-v); transition: transform .12s, box-shadow .2s, filter .15s;
+}
+.experience-hero button:hover, .scanner-command-bar button:hover, .long-term-hero button:hover{
+  transform: translateY(-1px); filter:brightness(1.08); box-shadow: 0 12px 28px -8px var(--glow-v);
+}
+.experience-hero button:active, .scanner-command-bar button:active{ transform: translateY(0); }
+
+/* live pulse — market-open / autonomy heartbeat / status dots breathe */
+.status-dot, .live-pill i, .pulse.green, .system-insight-board i{ animation: qt-pulse 2s ease-in-out infinite; }
+@keyframes qt-pulse{ 0%,100%{ box-shadow:0 0 0 0 rgba(64,201,138,.55) } 50%{ box-shadow:0 0 0 6px rgba(64,201,138,0) } }
+
+/* instant-scan feels alive — animated shimmer on the progress bar */
+.scan-progress{ border-color: rgba(139,123,240,.3); }
+.scan-progress-track b{
+  background: linear-gradient(90deg, var(--accent-2), var(--accent), var(--accent-2));
+  background-size: 200% 100%; animation: qt-flow 1.1s linear infinite;
+}
+@keyframes qt-flow{ from{ background-position: 200% 0 } to{ background-position: 0 0 } }
+
+/* scanner mode / filter chips get accent energy when active */
+.scanner-mode-row button.active{
+  border-color: rgba(139,123,240,.6);
+  background: linear-gradient(180deg, rgba(139,123,240,.2), rgba(67,217,255,.08));
+  color:#fff; box-shadow: 0 0 14px -6px var(--glow-v);
+}
+
+/* gentle load-in so the terminal arrives with intent */
+.experience-command, .enhanced-scanner, .enhanced-long-term{ animation: qt-rise .4s ease both; }
+@keyframes qt-rise{ from{ opacity:0; transform: translateY(8px) } to{ opacity:1; transform:none } }
+
+@media (prefers-reduced-motion: reduce){
+  *, body::before{ animation: none !important; transition: none !important; }
+  .panel:hover, .today-strip>div:hover, .scanner-lane-cards article:hover{ transform:none; }
+}

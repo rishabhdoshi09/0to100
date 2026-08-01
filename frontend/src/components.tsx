@@ -10,13 +10,14 @@ import type {
 import { PriceChart } from './PriceChart'
 import { compactDateTime, money, pct, score, words } from './format'
 
+// Discovery-first: ideas & research lead; paper portfolio is a side feature, not the spine.
 export const NAV_ITEMS = [
   ['⌘', 'Command Center'],
   ['◉', 'Scanner'],
   ['◎', 'Stock Intelligence'],
-  ['▣', 'Portfolio'],
-  ['↗', 'Market Internals'],
   ['◇', 'Long-Term'],
+  ['↗', 'Market Internals'],
+  ['▣', 'Portfolio'],
   ['◌', 'Automation'],
 ] as const
 
