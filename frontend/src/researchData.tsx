@@ -56,22 +56,15 @@ type EvidenceStatus = {
     sections: Record<string, boolean | number>
   }
 }
-
-type Draft = {
-  file: File | null
-  asOf: string
-  sourceUrl: string
-}
+type Draft = { file: File | null; asOf: string; sourceUrl: string }
 
 const today = () => new Date().toISOString().slice(0, 10)
-
 const statusClass = (status: string) => {
   if (status === 'FRESH') return 'evidence-status fresh'
   if (status === 'STALE') return 'evidence-status stale'
   if (status === 'UNKNOWN_DATE') return 'evidence-status unknown'
   return 'evidence-status missing'
 }
-
 const humanBytes = (value: number) => {
   if (!value) return '0 B'
   if (value < 1024) return `${value} B`
@@ -91,9 +84,7 @@ export function ResearchDataView({ symbol }: { symbol: string }) {
       return
     }
     try {
-      const response = await fetch(`${reportBase}/evidence/${encodeURIComponent(symbol)}`, {
-        headers: { Accept: 'application/json' },
-      })
+      const response = await fetch(`${reportBase}/evidence/${encodeURIComponent(symbol)}`, { headers: { Accept: 'application/json' } })
       if (!response.ok) throw new Error(await response.text())
       setStatus(await response.json() as EvidenceStatus)
       setError('')
@@ -102,22 +93,30 @@ export function ResearchDataView({ symbol }: { symbol: string }) {
     }
   }
 
-  useEffect(() => {
-    void load()
-  }, [symbol])
+  useEffect(() => { void load() }, [symbol])
 
-  const missingCount = useMemo(
-    () => status?.requirements.filter((item) => !item.available).length || 0,
-    [status],
-  )
-  const staleCount = useMemo(
-    () => status?.requirements.filter((item) => item.status === 'STALE').length || 0,
-    [status],
-  )
-
+  const missingCount = useMemo(() => status?.requirements.filter((item) => !item.available).length || 0, [status])
+  const staleCount = useMemo(() => status?.requirements.filter((item) => item.status === 'STALE').length || 0, [status])
   const draft = (key: string): Draft => drafts[key] || { file: null, asOf: today(), sourceUrl: '' }
   const patchDraft = (key: string, patch: Partial<Draft>) => {
     setDrafts((current) => ({ ...current, [key]: { ...draft(key), ...patch } }))
+  }
+
+  const runAutomatic = async (action: 'fundamentals' | 'history' | 'news' | 'fno') => {
+    setBusy(`auto-${action}`)
+    setError('')
+    try {
+      const endpoint = action === 'fundamentals'
+        ? `${reportBase}/evidence/${encodeURIComponent(symbol)}/actions/refresh-fundamentals`
+        : `/api/controls/${action === 'history' ? 'REFRESH_DATA_NOW' : action === 'news' ? 'REFRESH_NEWS_NOW' : 'REFRESH_FNO_NOW'}`
+      const response = await fetch(endpoint, { method: 'POST', headers: { Accept: 'application/json' } })
+      if (!response.ok) throw new Error(await response.text())
+      window.setTimeout(() => void load(), action === 'fundamentals' ? 100 : 1500)
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : `${action} refresh failed`)
+    } finally {
+      setBusy('')
+    }
   }
 
   const upload = async (requirement: Requirement) => {
@@ -138,10 +137,7 @@ export function ResearchDataView({ symbol }: { symbol: string }) {
         `${reportBase}/evidence/${encodeURIComponent(symbol)}/${encodeURIComponent(requirement.key)}?${query.toString()}`,
         {
           method: 'POST',
-          headers: {
-            'Content-Type': current.file.type || 'application/octet-stream',
-            'X-Filename': current.file.name,
-          },
+          headers: { 'Content-Type': current.file.type || 'application/octet-stream', 'X-Filename': current.file.name },
           body: current.file,
         },
       )
@@ -157,14 +153,7 @@ export function ResearchDataView({ symbol }: { symbol: string }) {
   }
 
   if (!symbol) {
-    return (
-      <section className="research-data-view">
-        <div className="evidence-empty">
-          <h2>Select a stock first</h2>
-          <p>Choose a stock from Scanner, Long-Term, F&O Desk or search. QuantTerm will then show exactly which research datasets are available, stale or missing.</p>
-        </div>
-      </section>
-    )
+    return <section className="research-data-view"><div className="evidence-empty"><h2>Select a stock first</h2><p>Choose a stock from Scanner, Long-Term, F&O Desk or search. QuantTerm will then show exactly which research datasets are available, stale or missing.</p></div></section>
   }
 
   return (
@@ -180,9 +169,19 @@ export function ResearchDataView({ symbol }: { symbol: string }) {
 
       <div className="evidence-panel">
         <header>
-          <div><h2>Runtime data dates</h2><p>These are the exact dates powering current QuantTerm views.</p></div>
+          <div><h2>Automatic data preparation</h2><p>QuantTerm fetches what it can itself. These operations are independent of paper trading.</p></div>
           <button type="button" onClick={() => void load()}>Refresh status</button>
         </header>
+        <div className="resource-links">
+          <button type="button" disabled={busy === 'auto-fundamentals'} onClick={() => void runAutomatic('fundamentals')}>Fetch deep fundamentals</button>
+          <button type="button" disabled={busy === 'auto-history'} onClick={() => void runAutomatic('history')}>Prepare official price history</button>
+          <button type="button" disabled={busy === 'auto-news'} onClick={() => void runAutomatic('news')}>Refresh news and filings</button>
+          <button type="button" disabled={busy === 'auto-fno'} onClick={() => void runAutomatic('fno')}>Refresh F&O instruments</button>
+        </div>
+      </div>
+
+      <div className="evidence-panel">
+        <header><div><h2>Runtime data dates</h2><p>These are the exact dates powering current QuantTerm views.</p></div></header>
         <div className="runtime-grid">
           {(status?.runtime_sources || []).map((item) => (
             <article key={item.key}>
@@ -214,32 +213,15 @@ export function ResearchDataView({ symbol }: { symbol: string }) {
                 </div>
                 <p className="requirement-instructions">{item.instructions}</p>
                 <div className="resource-links">
-                  {item.links.map((link) => (
-                    <a key={link.url} href={link.url} target="_blank" rel="noreferrer">
-                      {link.official === 'true' ? 'Official · ' : ''}{link.label}
-                    </a>
-                  ))}
-                  {item.template_available && (
-                    <a href={`${reportBase}${item.template_url}`} target="_blank" rel="noreferrer">Download CSV template</a>
-                  )}
+                  {item.links.map((link) => <a key={link.url} href={link.url} target="_blank" rel="noreferrer">{link.official === 'true' ? 'Official · ' : ''}{link.label}</a>)}
+                  {item.template_available && <a href={`${reportBase}${item.template_url}`} target="_blank" rel="noreferrer">Download CSV template</a>}
                 </div>
                 <small className="accepted-files">Accepted: {item.accepted_extensions.join(', ')}</small>
                 <div className="upload-grid">
-                  <label>
-                    Source data date
-                    <input type="date" value={current.asOf} onChange={(event) => patchDraft(item.key, { asOf: event.target.value })} />
-                  </label>
-                  <label>
-                    Source URL
-                    <input type="url" placeholder="Paste official filing or IR link" value={current.sourceUrl} onChange={(event) => patchDraft(item.key, { sourceUrl: event.target.value })} />
-                  </label>
-                  <label>
-                    Evidence file
-                    <input type="file" accept={item.accepted_extensions.join(',')} onChange={(event) => patchDraft(item.key, { file: event.target.files?.[0] || null })} />
-                  </label>
-                  <button type="button" disabled={busy === item.key} onClick={() => void upload(item)}>
-                    {busy === item.key ? 'Uploading…' : 'Upload evidence'}
-                  </button>
+                  <label>Source data date<input type="date" value={current.asOf} onChange={(event) => patchDraft(item.key, { asOf: event.target.value })} /></label>
+                  <label>Source URL<input type="url" placeholder="Paste official filing or IR link" value={current.sourceUrl} onChange={(event) => patchDraft(item.key, { sourceUrl: event.target.value })} /></label>
+                  <label>Evidence file<input type="file" accept={item.accepted_extensions.join(',')} onChange={(event) => patchDraft(item.key, { file: event.target.files?.[0] || null })} /></label>
+                  <button type="button" disabled={busy === item.key} onClick={() => void upload(item)}>{busy === item.key ? 'Uploading…' : 'Upload evidence'}</button>
                 </div>
               </article>
             )
