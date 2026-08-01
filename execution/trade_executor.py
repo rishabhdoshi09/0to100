@@ -1,22 +1,20 @@
 """
-Trade Executor — scan se execution tak, one click.
+Legacy Trade Executor — manually clicked compatibility path.
 
-place_trade() does the full professional sequence:
-  1. Entry order  — MARKET or LIMIT buy via Kite
-  2. GTT OCO      — one-cancels-other exit: stop-loss + target sit at
-                    the exchange (survives app/laptop shutdown)
-  3. Journal      — every trade recorded in logs/trades.db
-
-Paper mode: when Kite isn't connected, the same flow records a paper
-trade instead — the buttons work identically, money doesn't move.
+This module is NOT the institutional OMS. Its live branch is locked by default while
+QuantTerm builds the durable Target Portfolio → Risk Governor → OMS → reconciliation
+chain. PAPER behaviour remains available for existing UI and Telegram flows.
 
 Safety rails:
   - quantity/price sanity checks before anything is sent
   - stop must be below entry, target above (long-only for now)
+  - connected-broker execution requires an explicit unsafe legacy override
+  - governance uncertainty blocks the order instead of failing open
   - never places anything without an explicit user click upstream
 """
 from __future__ import annotations
 
+import os
 import sqlite3
 import threading
 from core.market_clock import now_ist_naive
@@ -115,78 +113,106 @@ def kite_ready() -> bool:
         return False
 
 
+def legacy_live_enabled() -> bool:
+    """Emergency compatibility override; false by default and never set by the UI."""
+    return os.getenv("QT_ENABLE_UNSAFE_LEGACY_LIVE", "0").strip() == "1"
+
+
 def place_trade(symbol: str, qty: int, entry_type: str, entry_price: float,
                 stop: float, target: float, product: str = "CNC",
                 paper: bool = False, note: str = "") -> dict:
-    """
-    Full trade: entry + GTT OCO exits + journal.
-    paper=True forces paper mode even when Kite is connected — Telegram
-    buttons use this (live orders need the app's full ticket, on purpose).
-    Returns {ok, mode, entry_order_id, gtt_id, message}.
+    """Record a PAPER trade or, only under an explicit unsafe override, use legacy LIVE.
+
+    The institutional execution path must consume a durable TradeIntent through the future
+    OMS. This function remains only for backwards-compatible manually clicked flows.
     """
     err = _validate(symbol, qty, entry_price, stop, target)
     if err:
         return {"ok": False, "mode": "-", "message": err}
 
     if paper or not kite_ready():
-        # ── Paper mode — same flow, no money ─────────────────────────────
+        # Existing compatibility behaviour. The response explicitly identifies PAPER.
         _journal({"mode": "PAPER", "symbol": symbol, "qty": qty,
                   "entry_type": entry_type, "entry_price": entry_price,
                   "stop_price": stop, "target_price": target,
                   "product": product, "status": "PAPER_OPEN", "note": note})
         log.info("paper_trade_placed", symbol=symbol, qty=qty)
-        return {"ok": True, "mode": "PAPER",
+        return {"ok": True, "mode": "PAPER", "fallback": not paper,
                 "message": f"📝 Paper trade recorded: {qty} × {symbol} @ "
                            f"₹{entry_price:,.1f} (stop ₹{stop:,.1f} / target "
-                           f"₹{target:,.1f}). Kite login karke real trade kar "
-                           f"sakte ho."}
+                           f"₹{target:,.1f}). No live order was sent."}
 
-    # ── Governance Sentinel — the kill-switch every LIVE order obeys ─────────
+    if not legacy_live_enabled():
+        reason = ("Live execution is locked: the legacy executor has no durable OMS, "
+                  "broker reconciliation, or verified protection recovery. Use PAPER until "
+                  "the institutional execution chain is certified.")
+        _journal({"mode": "LIVE", "symbol": symbol, "qty": qty,
+                  "entry_type": entry_type, "entry_price": entry_price,
+                  "stop_price": stop, "target_price": target,
+                  "product": product, "status": "BLOCKED_LEGACY_LIVE_LOCK",
+                  "note": reason})
+        return {"ok": False, "mode": "LIVE", "message": reason}
+
+    # Governance must be available and affirmative. Unknown state fails closed.
     try:
         from core.governance import can_place_order
-        _allowed, _size_mult, _gov_reason = can_place_order()
-        if not _allowed:
-            _journal({"mode": "LIVE", "symbol": symbol, "qty": qty,
-                      "entry_type": entry_type, "entry_price": entry_price,
-                      "stop_price": stop, "target_price": target,
-                      "product": product, "status": "BLOCKED_GOVERNANCE",
-                      "note": _gov_reason[:200]})
-            return {"ok": False, "mode": "LIVE", "message": _gov_reason}
-    except Exception:
-        pass  # a broken sentinel must not block trading (fail-open mechanism)
+        allowed, size_mult, gov_reason = can_place_order()
+    except Exception as exc:
+        reason = f"Governance unavailable; live order blocked: {exc}"
+        _journal({"mode": "LIVE", "symbol": symbol, "qty": qty,
+                  "entry_type": entry_type, "entry_price": entry_price,
+                  "stop_price": stop, "target_price": target,
+                  "product": product, "status": "BLOCKED_GOVERNANCE_UNAVAILABLE",
+                  "note": reason[:200]})
+        return {"ok": False, "mode": "LIVE", "message": reason}
+    if not allowed:
+        _journal({"mode": "LIVE", "symbol": symbol, "qty": qty,
+                  "entry_type": entry_type, "entry_price": entry_price,
+                  "stop_price": stop, "target_price": target,
+                  "product": product, "status": "BLOCKED_GOVERNANCE",
+                  "note": gov_reason[:200]})
+        return {"ok": False, "mode": "LIVE", "message": gov_reason}
 
-    # ── LIVE mode ─────────────────────────────────────────────────────────
+    approved_qty = int(qty * float(size_mult))
+    if approved_qty < 1:
+        reason = "Governance reduced the approved quantity below one share; order blocked."
+        _journal({"mode": "LIVE", "symbol": symbol, "qty": qty,
+                  "entry_type": entry_type, "entry_price": entry_price,
+                  "stop_price": stop, "target_price": target,
+                  "product": product, "status": "BLOCKED_GOVERNANCE_SIZE",
+                  "note": reason})
+        return {"ok": False, "mode": "LIVE", "message": reason}
+    qty = approved_qty
+    if gov_reason:
+        note = f"{note} | {gov_reason}".strip(" |")
+
+    # ── LEGACY LIVE mode — emergency override only ─────────────────────────
     from data.kite_client import KiteClient
     kite = KiteClient()
     result = {"ok": False, "mode": "LIVE", "entry_order_id": None,
               "gtt_id": None, "message": ""}
     try:
-        # 1. Entry order
         entry_order_id = kite.place_order(
             symbol=symbol, transaction_type="BUY", quantity=qty,
             order_type=entry_type.upper(),
             price=entry_price if entry_type.upper() == "LIMIT" else None,
-            product=product, tag="quantterm",
+            product=product, tag="quantterm-legacy",
         )
         result["entry_order_id"] = entry_order_id
     except Exception as exc:
-        result["message"] = f"Entry order fail: {exc}"
+        result["message"] = f"Entry order state uncertain or failed: {exc}"
         _journal({"mode": "LIVE", "symbol": symbol, "qty": qty,
                   "entry_type": entry_type, "entry_price": entry_price,
                   "stop_price": stop, "target_price": target,
-                  "product": product, "status": "ENTRY_FAILED",
+                  "product": product, "status": "RECOVERY_REQUIRED",
                   "note": str(exc)[:200]})
-        try:                                   # feed the kill-switch counters
+        try:
             from core.governance import record_order_result
             record_order_result(ok=False)
         except Exception:
             pass
         return result
 
-    # 2. Wait briefly for the fill. GTT before fill is DANGEROUS: a stop
-    #    trigger on an unfilled entry fires a sell with no shares, gets
-    #    rejected, consumes the GTT — and the later-filled position sits
-    #    UNPROTECTED while looking protected.
     filled = _entry_filled(kite, result["entry_order_id"], wait_s=8)
 
     gtt_msg = ""
@@ -197,11 +223,11 @@ def place_trade(symbol: str, qty: int, entry_type: str, entry_price: float,
         status = "PLACED" + ("" if gtt_id else "_NO_GTT")
     else:
         status = "PENDING_GTT"
-        gtt_msg = (" · ⏳ Entry abhi fill nahi hua — GTT fill hone ke BAAD "
-                   "khud lag jayegi (system har scan cycle pe check karta hai)")
+        gtt_msg = (" · Entry not confirmed filled; protection remains pending and "
+                   "requires reconciliation before any retry.")
 
     result["ok"] = True
-    result["message"] = (f"✅ Order placed: {qty} × {symbol} "
+    result["message"] = (f"Order accepted by legacy path: {qty} × {symbol} "
                          f"({entry_type} @ ₹{entry_price:,.1f}){gtt_msg}")
     _journal({"mode": "LIVE", "symbol": symbol, "qty": qty,
               "entry_type": entry_type, "entry_price": entry_price,
@@ -209,10 +235,10 @@ def place_trade(symbol: str, qty: int, entry_type: str, entry_price: float,
               "entry_order_id": result["entry_order_id"],
               "gtt_id": result["gtt_id"],
               "status": status, "note": note})
-    log.info("live_trade_placed", symbol=symbol, qty=qty,
+    log.info("legacy_live_trade_placed", symbol=symbol, qty=qty,
              order_id=result["entry_order_id"], gtt=result["gtt_id"],
              status=status)
-    try:                                       # entry ok; GTT ok only if placed
+    try:
         from core.governance import record_order_result
         record_order_result(ok=True, gtt_ok=bool(result["gtt_id"]) if filled else None)
     except Exception:
@@ -251,7 +277,7 @@ def _place_gtt(kite, symbol: str, qty: int, entry_price: float,
             orders=[
                 {"transaction_type": "SELL", "quantity": qty,
                  "order_type": "LIMIT", "product": product,
-                 "price": round(stop * 0.995, 1)},      # small buffer for fill
+                 "price": round(stop * 0.995, 1)},
                 {"transaction_type": "SELL", "quantity": qty,
                  "order_type": "LIMIT", "product": product,
                  "price": round(target, 1)},
@@ -260,17 +286,12 @@ def _place_gtt(kite, symbol: str, qty: int, entry_price: float,
         return gtt_id, f" · GTT OCO set (stop ₹{stop:,.1f} / target ₹{target:,.1f})"
     except Exception as exc:
         log.warning("gtt_failed", symbol=symbol, error=str(exc))
-        return None, (f" · ⚠ GTT nahi laga ({str(exc)[:80]}) — stop-loss "
-                      f"MANUALLY lagao Kite app mein!")
+        return None, (f" · GTT failed ({str(exc)[:80]}); position is unprotected and "
+                      f"requires immediate recovery.")
 
 
 def ensure_pending_gtts() -> int:
-    """
-    Babysit PENDING_GTT trades: once the entry fills, place the GTT and
-    upgrade the journal row. Rejected/cancelled entries get closed out.
-    Called every scan cycle during market hours. Returns GTTs placed.
-    """
-    import sqlite3
+    """Resolve legacy PENDING_GTT rows after entry status becomes authoritative."""
     if not kite_ready():
         return 0
     try:
