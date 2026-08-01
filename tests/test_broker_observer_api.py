@@ -5,12 +5,18 @@ import terminal_product_api
 from product import observer_api
 
 
-def test_broker_observer_route_is_installed_once():
-    matching = [
-        route for route in terminal_product_api.app.routes
-        if getattr(route, "path", "") == "/api/broker-observer"
+def _routes(path: str):
+    return [
+        route
+        for route in terminal_product_api.app.routes
+        if getattr(route, "path", "") == path
     ]
-    assert len(matching) == 1
+
+
+def test_product_routes_are_installed_once_after_branch_reconciliation():
+    assert len(_routes("/api/broker-observer")) == 1
+    assert len(_routes("/api/command-center-workspace")) == 1
+    assert len(_routes("/api/scanner-workspace/{mode}")) == 1
 
 
 def test_missing_observer_state_is_read_only(tmp_path, monkeypatch):
