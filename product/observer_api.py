@@ -1,6 +1,7 @@
-"""Lifecycle and read-only API projection for the scheduled Zerodha observer."""
+"""Lifecycle and read-only API projections installed on the terminal app."""
 from __future__ import annotations
 
+from datetime import datetime, timezone
 import json
 import os
 from pathlib import Path
@@ -9,7 +10,10 @@ import sys
 import time
 from typing import Any
 
+from fastapi import HTTPException
+
 import terminal_api as core
+from product.workspace import SCANNER_MODES, build_command_center_state, scanner_rows
 
 RUNTIME_PATH = core.ROOT / "logs" / "reconciliation" / "observer_runtime.json"
 SNAPSHOT_DB = core.ROOT / "logs" / "reconciliation" / "broker_snapshots.db"
@@ -84,6 +88,64 @@ def observer_payload() -> dict[str, Any]:
     }
 
 
+def command_center_workspace() -> dict[str, Any]:
+    """Project authoritative persisted state into one coherent command surface."""
+    market = core._market_payload()
+    scan = core._scan_payload()
+    long_term = core._long_term_payload()
+    state = build_command_center_state(
+        scan_payload=scan,
+        long_term_payload=long_term,
+        paper=core._paper_payload(),
+        autonomy=core._autonomy_payload(),
+        market=market,
+    )
+    return {"generated_at": datetime.now(timezone.utc).isoformat(), **state}
+
+
+def scanner_workspace(mode: str) -> dict[str, Any]:
+    """Return one server-ranked scanner mode without duplicating scan calculations."""
+    requested = mode.strip().replace("_", "-")
+    canonical = next(
+        (item for item in SCANNER_MODES if item.lower() == requested.lower()),
+        None,
+    )
+    if canonical is None:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown scanner mode. Choose one of: {', '.join(SCANNER_MODES)}",
+        )
+    market = core._market_payload()
+    scan = core._scan_payload()
+    long_term = core._long_term_payload()
+    rows = scanner_rows(
+        canonical,
+        scan_payload=scan,
+        long_term_payload=long_term,
+        conviction_rows=core._conviction(scan, market),
+    )
+    source = (
+        "long_term"
+        if canonical == "Long-Term"
+        else "conviction"
+        if canonical == "Conviction"
+        else "market_scan"
+    )
+    scanned_at = (
+        long_term.get("scanned_at", "")
+        if canonical == "Long-Term"
+        else scan.get("scanned_at", "")
+    )
+    return {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "mode": canonical,
+        "source": source,
+        "scanned_at": scanned_at,
+        "universe_size": int(scan.get("universe_size", 0) or 0),
+        "rows": rows,
+    }
+
+
 def ensure_observer_worker() -> dict[str, Any]:
     global _observer_process
     payload = observer_payload()
@@ -119,7 +181,7 @@ def stop_observer_worker() -> None:
 
 
 def install(app) -> None:
-    """Install one endpoint and lifecycle hooks on the existing terminal app."""
+    """Install read-only workspace routes and observer lifecycle once."""
     global _installed
     if _installed:
         return
@@ -134,4 +196,16 @@ def install(app) -> None:
         observer_payload,
         methods=["GET"],
         name="broker_observer_status",
+    )
+    app.add_api_route(
+        "/api/command-center-workspace",
+        command_center_workspace,
+        methods=["GET"],
+        name="command_center_workspace",
+    )
+    app.add_api_route(
+        "/api/scanner-workspace/{mode}",
+        scanner_workspace,
+        methods=["GET"],
+        name="scanner_workspace",
     )
