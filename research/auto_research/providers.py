@@ -140,11 +140,12 @@ def daily_bars(date: str) -> dict:
 def current_regime() -> str:
     """Return the deterministic market regime after production PAPER safety wiring.
 
-    A missing macro signal does not manufacture a defensive reading, but a clear RISK_OFF must
-    bite. Failure to install the institutional PAPER pipeline is recorded on the brain and the
-    autonomy safety layer can refuse new entries.
+    Failure to install the institutional PAPER pipeline is treated as RISK_OFF. This is a
+    capability failure, not a market opinion, but the conservative posture guarantees the old
+    direct-book path cannot silently take new production PAPER risk.
     """
-    ensure_production_paper_pipeline()
+    if not ensure_production_paper_pipeline():
+        return "RISK_OFF"
     try:
         from core import macro_pulse
         mp = macro_pulse.assess() if hasattr(macro_pulse, "assess") else {}
