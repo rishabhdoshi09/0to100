@@ -69,13 +69,16 @@ def build_target_portfolio(
 
     current_quantity: dict[str, int] = {}
     current_risk: dict[str, float] = {}
+    current_owners: dict[str, set[str]] = {}
     invested_capital = 0.0
     current_symbols: set[str] = set()
     for position in getattr(book, "open", {}).values():
         symbol = str(position.symbol).upper()
+        strategy_id = str(position.strategy_id)
         qty = max(0, int(position.qty))
         current_quantity[symbol] = current_quantity.get(symbol, 0) + qty
         current_risk[symbol] = current_risk.get(symbol, 0.0) + float(position.risk_amount)
+        current_owners.setdefault(symbol, set()).add(strategy_id)
         invested_capital += qty * float(position.entry_price)
         if qty:
             current_symbols.add(symbol)
@@ -103,15 +106,24 @@ def build_target_portfolio(
         spec_by_id=spec_by_id,
         capital=capital,
     )
-    family_risk.update(_merge_add(family_risk, _float_map(getattr(ctx, "pending_family_risk_pct", {}))))
-    cluster_risk.update(_merge_add(cluster_risk, _float_map(getattr(ctx, "pending_cluster_risk_pct", {}))))
+    family_risk = _merge_add(
+        family_risk,
+        _float_map(getattr(ctx, "pending_family_risk_pct", {})),
+    )
+    cluster_risk = _merge_add(
+        cluster_risk,
+        _float_map(getattr(ctx, "pending_cluster_risk_pct", {})),
+    )
 
     candidates = [
         decision for decision in decisions
         if str(getattr(decision, "action", "")) in {"DEPLOY", "INCREASE"}
         and float(getattr(decision, "target_risk_pct", 0.0) or 0.0) > 0
     ]
-    candidates.sort(key=lambda decision: float(getattr(decision, "score", 0.0) or 0.0), reverse=True)
+    candidates.sort(
+        key=lambda decision: float(getattr(decision, "score", 0.0) or 0.0),
+        reverse=True,
+    )
 
     positions: list[SC.TargetPosition] = []
     executable: list[SC.TargetPosition] = []
@@ -143,6 +155,12 @@ def build_target_portfolio(
         target_risk_pct = float(getattr(decision, "target_risk_pct", 0.0) or 0.0)
         current_qty = current_quantity.get(symbol, 0)
         pending_qty = pending_quantities.get(symbol, 0)
+
+        # A different strategy may not interpret an existing symbol holding as its own
+        # fulfilled target. Preserve an explicit duplicate-economic-exposure refusal.
+        owners = current_owners.get(symbol, set())
+        if current_qty > 0 and strategy_id not in owners:
+            blockers.append("DUPLICATE_SYMBOL")
 
         requires_live = bool(getattr(ctx, "live_confirmation_required", False)) or (
             spec is not None and "live_ticks" in tuple(getattr(spec, "required_data", ()))
@@ -181,25 +199,25 @@ def build_target_portfolio(
             status = HOLD
             reasons.append("target already satisfied by current and pending quantity")
         else:
-            if current_qty > 0 and required_qty > 0:
+            if current_qty > 0 and strategy_id in owners and required_qty > 0:
                 blockers.append("POSITION_INCREASE_NOT_SUPPORTED_BY_PAPER_ADAPTER")
             if current_qty == 0 and pending_qty == 0:
                 projected_count = len(current_symbols | pending_symbols | target_new_symbols) + 1
                 if max_positions > 0 and projected_count > max_positions:
                     blockers.append("MAX_POSITIONS")
             projected_total_risk = (
-                current_open_risk + pending_open_risk + planned_incremental_risk + incremental_risk
+                current_open_risk
+                + pending_open_risk
+                + planned_incremental_risk
+                + incremental_risk
             )
             if projected_total_risk > max_total_risk_amount + 1e-6:
                 blockers.append("TOTAL_OPEN_RISK_CAP")
-            current_family = family_risk.get(family, 0.0)
-            incremental_risk_pct = (incremental_risk / capital * 100.0) if capital > 0 else 0.0
-            if current_family + incremental_risk_pct > float(cfg.max_family_risk_pct) + 1e-9:
+            incremental_risk_pct = _pct(incremental_risk, capital)
+            if family_risk.get(family, 0.0) + incremental_risk_pct > float(cfg.max_family_risk_pct) + 1e-9:
                 blockers.append("FAMILY_CAP")
-            if cluster:
-                current_cluster = cluster_risk.get(cluster, 0.0)
-                if current_cluster + incremental_risk_pct > float(cfg.max_cluster_risk_pct) + 1e-9:
-                    blockers.append("CLUSTER_CAP")
+            if cluster and cluster_risk.get(cluster, 0.0) + incremental_risk_pct > float(cfg.max_cluster_risk_pct) + 1e-9:
+                blockers.append("CLUSTER_CAP")
             if capital_required > available_cash + 1e-6:
                 blockers.append("INSUFFICIENT_CASH")
             status = BLOCKED if blockers else TARGETED
@@ -240,7 +258,7 @@ def build_target_portfolio(
             executable.append(position)
             available_cash -= capital_required
             planned_incremental_risk += incremental_risk
-            incremental_risk_pct = (incremental_risk / capital * 100.0) if capital > 0 else 0.0
+            incremental_risk_pct = _pct(incremental_risk, capital)
             family_risk[family] = family_risk.get(family, 0.0) + incremental_risk_pct
             if cluster:
                 cluster_risk[cluster] = cluster_risk.get(cluster, 0.0) + incremental_risk_pct
@@ -278,7 +296,10 @@ def build_target_portfolio(
     )
 
 
-def trade_intent_from_target(position: SC.TargetPosition, portfolio: SC.TargetPortfolio) -> SC.TradeIntent:
+def trade_intent_from_target(
+    position: SC.TargetPosition,
+    portfolio: SC.TargetPortfolio,
+) -> SC.TradeIntent:
     """Create the only execution instruction permitted from a target delta."""
     if position.status != TARGETED or position.required_quantity <= 0:
         raise ValueError("target position is not executable")
