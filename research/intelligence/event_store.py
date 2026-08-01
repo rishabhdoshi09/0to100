@@ -72,15 +72,48 @@ class EventStore:
                 out[e.strategy_id] = e
         return out
 
+    def latest_target_portfolio(self) -> SC.TargetPortfolio | None:
+        """Return the newest immutable target portfolio in append order."""
+        portfolios = self.of_type("TargetPortfolio")
+        return portfolios[-1] if portfolios else None
+
+    def target_positions_for(self, portfolio: SC.TargetPortfolio | str) -> list[SC.TargetPosition]:
+        """Resolve a portfolio's ordered TargetPosition records from the append-only log."""
+        if isinstance(portfolio, str):
+            selected = next(
+                (item for item in reversed(self.of_type("TargetPortfolio"))
+                 if item.record_id == portfolio),
+                None,
+            )
+            if selected is None:
+                return []
+            portfolio = selected
+        by_id = {item.record_id: item for item in self.of_type("TargetPosition")}
+        return [by_id[position_id] for position_id in portfolio.position_ids if position_id in by_id]
+
     def reconstruct(self) -> dict:
         """Rebuild a compact snapshot of both brains' state purely from the event log."""
         by_type: dict[str, int] = {}
         for e in self.all():
             by_type[type(e).__name__] = by_type.get(type(e).__name__, 0) + 1
-        return {"n_events": len(self._events), "by_type": by_type,
-                "cards": {f"{k[0]}@v{k[1]}": v.evidence_state
-                          for k, v in self.latest_cards().items()},
-                "allocations": {k: v.action for k, v in self.latest_allocations().items()}}
+        latest_target = self.latest_target_portfolio()
+        return {
+            "n_events": len(self._events),
+            "by_type": by_type,
+            "cards": {f"{k[0]}@v{k[1]}": v.evidence_state
+                      for k, v in self.latest_cards().items()},
+            "allocations": {k: v.action for k, v in self.latest_allocations().items()},
+            "target_portfolio": (
+                {
+                    "record_id": latest_target.record_id,
+                    "cycle_id": latest_target.cycle_id,
+                    "positions": len(latest_target.position_ids),
+                    "executable": len(latest_target.executable_position_ids),
+                    "blocked": len(latest_target.blocked_position_ids),
+                }
+                if latest_target else None
+            ),
+        }
 
     # ── persistence (append-only JSONL) ──────────────────────────────────────────
     def _write_line(self, record) -> None:
