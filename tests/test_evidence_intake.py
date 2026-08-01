@@ -5,6 +5,8 @@ import json
 from pathlib import Path
 import sqlite3
 
+import pytest
+
 import reporting.evidence_intake as EI
 
 
@@ -21,6 +23,7 @@ def test_template_and_upload_round_trip(tmp_path: Path, monkeypatch):
         source_url="https://example.com",
     )
     assert item["structured"] is True
+    assert item["extraction_status"] == "STRUCTURED_VALIDATED"
     rows = EI.structured_rows("TEST", "shareholding_history")
     assert rows[0]["fii_pct"] == "7"
     assert EI.upload_path("TEST", item["evidence_id"]).exists()
@@ -48,8 +51,52 @@ def test_requirements_show_dates_links_and_uploaded_status(tmp_path: Path, monke
     assert profile["available"] is True
     assert profile["as_of"] == "2026-07-01"
     assert profile["links"]
+    assert any("bseindia.com" in link["url"] for link in missing["links"])
     assert missing["status"] == "MISSING"
     assert missing["template_available"] is True
+
+
+def test_unparsed_pdf_is_attached_but_not_analytical_data(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr(EI, "EVIDENCE_ROOT", tmp_path / "evidence")
+    monkeypatch.setattr(EI, "FUNDAMENTALS_DB", tmp_path / "missing.db")
+    item = EI.save_upload(
+        "TEST",
+        "management_commentary",
+        b"%PDF-1.4 source-only transcript",
+        filename="transcript.pdf",
+        as_of="2026-07-31",
+        source_url="https://example.com/transcript.pdf",
+    )
+    assert item["extracted"] is False
+    assert item["extraction_status"] == "SOURCE_ATTACHED_UNPARSED"
+    status = EI.evidence_requirements("TEST")
+    commentary = next(row for row in status["requirements"] if row["key"] == "management_commentary")
+    assert commentary["source_attached"] is True
+    assert commentary["available"] is False
+    assert commentary["status"] == "SOURCE_ATTACHED_UNPARSED"
+    assert EI.structured_rows("TEST", "management_commentary") == []
+
+
+def test_malformed_structured_upload_is_rejected(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr(EI, "EVIDENCE_ROOT", tmp_path / "evidence")
+    with pytest.raises(ValueError, match="missing required columns"):
+        EI.save_upload(
+            "TEST",
+            "financial_history",
+            b"period_end,revenue_cr\n2026-03-31,100\n",
+            filename="financials.csv",
+            as_of="2026-03-31",
+            source_url="https://example.com/results",
+        )
+    with pytest.raises(ValueError, match="source_url"):
+        EI.save_upload(
+            "TEST",
+            "annual_report",
+            b"%PDF-1.4",
+            filename="annual-report.pdf",
+            as_of="2026-03-31",
+            source_url="not-a-url",
+        )
 
 
 def test_raw_fundamentals_reads_full_cached_sections(tmp_path: Path, monkeypatch):
