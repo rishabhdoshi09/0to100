@@ -19,6 +19,7 @@ import json
 from dataclasses import dataclass, field, asdict, fields
 
 SCHEMA_VERSION = 1
+TRADE_INTENT_SCHEMA_VERSION = 2
 
 
 def _rid(kind: str, payload: dict) -> str:
@@ -181,9 +182,67 @@ class CanonicalEvent(_Base):
 
 
 @dataclass(frozen=True)
+class TargetPosition(_Base):
+    """One symbol-level desired position before any execution adapter is selected.
+
+    Quantities are reconciled portfolio quantities, not strategy wishes. A positive
+    ``required_quantity`` is the only quantity that may become a TradeIntent.
+    """
+    cycle_id: str = ""
+    symbol: str = ""
+    direction: str = "LONG"
+    family: str = ""
+    correlation_cluster: str = ""
+    current_quantity: int = 0
+    pending_quantity: int = 0
+    desired_quantity: int = 0
+    required_quantity: int = 0
+    intended_entry: float = 0.0
+    stop_price: float = 0.0
+    target_price: float = 0.0
+    target_risk_pct: float = 0.0
+    target_risk_amount: float = 0.0
+    incremental_risk_amount: float = 0.0
+    capital_required: float = 0.0
+    holding_horizon_days: int = 0
+    card_id: str = ""
+    allocation_id: str = ""
+    status: str = "BLOCKED"            # TARGETED / HOLD / BLOCKED
+    reasons: tuple = ()
+    blocked_by: tuple = ()
+
+
+@dataclass(frozen=True)
+class TargetPortfolio(_Base):
+    """The canonical desired portfolio for one cycle.
+
+    It is broker-independent and immutable. It records current, pending and desired
+    exposure separately so execution is always a transition, never a raw signal action.
+    """
+    cycle_id: str = ""
+    mode: str = ""
+    capital: float = 0.0
+    available_cash: float = 0.0
+    current_open_risk_pct: float = 0.0
+    pending_open_risk_pct: float = 0.0
+    target_open_risk_pct: float = 0.0
+    max_total_risk_pct: float = 0.0
+    current_position_count: int = 0
+    target_position_count: int = 0
+    position_ids: tuple = ()
+    executable_position_ids: tuple = ()
+    blocked_position_ids: tuple = ()
+    reasons: tuple = ()
+
+
+@dataclass(frozen=True)
 class TradeIntent(_Base):
-    """A broker-INDEPENDENT instruction produced by Brain 2 (via the loop). The same object
-    can later feed a live EMS after stronger gates — so NO broker-specific fields here."""
+    """A broker-INDEPENDENT instruction produced from a TargetPosition delta.
+
+    The same object can later feed a live EMS after stronger gates — so NO
+    broker-specific fields belong here.
+    """
+    schema_version: int = TRADE_INTENT_SCHEMA_VERSION
     cycle_id: str = ""
     symbol: str = ""
     direction: str = "LONG"
@@ -198,6 +257,12 @@ class TradeIntent(_Base):
     holding_horizon_days: int = 0
     card_id: str = ""
     allocation_id: str = ""
+    target_portfolio_id: str = ""
+    target_position_id: str = ""
+    current_quantity: int = 0
+    pending_quantity: int = 0
+    desired_quantity: int = 0
+    required_quantity: int = 0
     market_context_id: str = ""
     expiry: str = ""
     priority: int = 0
@@ -221,7 +286,8 @@ class LifecycleDecision(_Base):
 RECORD_TYPES = {c.__name__: c for c in (
     CanonicalSignal, MarketContext, StrategyDefinition, ExecutionAssessment,
     OutcomeObservation, ResearchRationale, StrategyEvidenceCard,
-    PaperAllocationDecision, LifecycleDecision, CanonicalEvent, TradeIntent)}
+    PaperAllocationDecision, TargetPosition, TargetPortfolio, LifecycleDecision,
+    CanonicalEvent, TradeIntent)}
 
 
 def from_dict(kind: str, d: dict):

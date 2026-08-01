@@ -8,16 +8,16 @@ the system can trade its own approved strategies hands-off and learn from the ou
 Safety by construction:
   • It imports NOTHING from any real-order execution path. There is no code path from here
     to a real order. It can only move numbers in memory.
-  • It still enforces the house risk invariants (1% risk/trade, 10% per name, 5% total open
-    risk, max open positions) — "blow up" means bad strategies losing simulated money, not
-    reckless sizing that would mask which ideas actually work.
+  • It enforces the house risk invariants (1% maximum risk/trade, 10% per name, 5% total
+    open risk, max open positions) and consumes Brain 2's smaller approved risk budgets.
 
 Pure and deterministic: given the same opens and the same price bars, the book is identical.
 """
 from __future__ import annotations
 
-import math
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, asdict
+
+from research.intelligence.runtime.position_sizing import size_long_cash
 
 
 @dataclass
@@ -31,6 +31,8 @@ class PaperPosition:
     entry_date: str
     max_holding_days: int
     risk_amount: float
+    requested_risk_pct: float = 0.0
+    approved_risk_pct: float = 0.0
     bars_held: int = 0
 
     @property
@@ -81,38 +83,72 @@ class PaperBook:
 
     # ── sizing + open ────────────────────────────────────────────────────────────
     def open_position(self, strategy_id: str, symbol: str, entry: float, stop: float,
-                      target: float, date: str, max_holding_days: int) -> PaperPosition | None:
-        """Open a simulated long. Returns the position, or None if a risk cap refuses it."""
+                      target: float, date: str, max_holding_days: int, *,
+                      risk_pct_of_capital: float | None = None,
+                      quantity: int | None = None) -> PaperPosition | None:
+        """Open a simulated long from an approved risk budget and optional exact quantity.
+
+        ``risk_pct_of_capital`` uses percentage points: ``1.0`` means one percent of
+        capital and ``0.25`` means a quarter percent. A Target Portfolio may provide an
+        exact quantity; the book revalidates it and refuses any quantity above house caps.
+        """
         key = (strategy_id, symbol)
         if key in self.open:
             self.refusals.append((symbol, "already open for this strategy")); return None
         if len(self.open) >= self.max_positions:
             self.refusals.append((symbol, "max open positions reached")); return None
-        if not (entry > 0 and stop > 0 and entry > stop):
-            self.refusals.append((symbol, "invalid entry/stop (need entry>stop>0)")); return None
 
-        # entry slippage — a buyer pays up; the fill is worse than the signal price
-        entry = entry * (1.0 + self.slippage_bps / 1e4)
-        risk_amount = self.capital * self.risk_per_trade_pct
-        r_unit = entry - stop
-        qty = int(math.floor(risk_amount / r_unit))
-        if qty <= 0:
-            self.refusals.append((symbol, "risk unit too wide for 1% sizing")); return None
-        # 10% concentration cap
-        if qty * entry > self.capital * self.max_position_pct:
-            qty = int(math.floor(self.capital * self.max_position_pct / entry))
-        if qty <= 0:
-            self.refusals.append((symbol, "price too high for 10% cap")); return None
-        # 5% total open risk cap
-        new_risk = qty * r_unit
-        if self.open_risk() + new_risk > self.capital * self.max_total_risk_pct + 1e-6:
+        requested_risk_pct = (
+            float(self.risk_per_trade_pct) * 100.0
+            if risk_pct_of_capital is None else risk_pct_of_capital
+        )
+        sizing = size_long_cash(
+            capital=self.capital,
+            entry=entry,
+            stop=stop,
+            requested_risk_pct=requested_risk_pct,
+            max_risk_fraction=self.risk_per_trade_pct,
+            max_position_fraction=self.max_position_pct,
+            slippage_bps=self.slippage_bps,
+            requested_quantity=quantity,
+        )
+        if not sizing.ok:
+            self.refusals.append((symbol, _sizing_refusal(sizing.reason_code)))
+            return None
+
+        if self.open_risk() + sizing.risk_amount > self.capital * self.max_total_risk_pct + 1e-6:
             self.refusals.append((symbol, "total open risk cap (5%) reached")); return None
 
-        pos = PaperPosition(strategy_id=strategy_id, symbol=symbol, entry_price=entry,
-                            stop_price=stop, target_price=target, qty=qty, entry_date=date,
-                            max_holding_days=max_holding_days, risk_amount=new_risk)
+        pos = PaperPosition(
+            strategy_id=strategy_id,
+            symbol=symbol,
+            entry_price=sizing.effective_entry,
+            stop_price=float(stop),
+            target_price=float(target),
+            qty=sizing.quantity,
+            entry_date=date,
+            max_holding_days=max_holding_days,
+            risk_amount=sizing.risk_amount,
+            requested_risk_pct=sizing.requested_risk_pct,
+            approved_risk_pct=sizing.actual_risk_pct,
+        )
         self.open[key] = pos
         return pos
+
+    def open_intent(self, intent, *, date: str) -> PaperPosition | None:
+        """Execute an exact Target Portfolio delta in PAPER after revalidation."""
+        required_quantity = int(getattr(intent, "required_quantity", 0) or 0)
+        return self.open_position(
+            intent.strategy_id,
+            intent.symbol,
+            float(intent.intended_entry),
+            float(intent.stop_price),
+            float(intent.target_price),
+            date,
+            int(intent.holding_horizon_days),
+            risk_pct_of_capital=float(intent.intended_risk_pct),
+            quantity=(required_quantity if required_quantity > 0 else None),
+        )
 
     def open_risk(self) -> float:
         return sum(p.qty * p.r_unit for p in self.open.values())
@@ -257,3 +293,17 @@ class PaperBook:
                 self.open[(pos.strategy_id, pos.symbol)] = pos
         except Exception:
             pass                                    # corrupt snapshot ⇒ keep fresh book
+
+
+def _sizing_refusal(reason_code: str) -> str:
+    return {
+        "INVALID_ENTRY_STOP": "invalid entry/stop (need entry>stop>0)",
+        "NON_POSITIVE_RISK": "approved risk percentage must be positive",
+        "RISK_BUDGET_TOO_SMALL": "risk unit too wide for approved sizing",
+        "POSITION_CAP_TOO_SMALL": "price too high for 10% cap",
+        "INVALID_REQUESTED_QUANTITY": "invalid target portfolio quantity",
+        "NON_POSITIVE_QUANTITY": "target portfolio quantity must be positive",
+        "QUANTITY_EXCEEDS_APPROVED_LIMIT": "target portfolio quantity exceeds house limits",
+        "INVALID_NUMERIC_INPUT": "invalid approved risk percentage",
+        "NON_FINITE_INPUT": "invalid approved risk percentage",
+    }.get(reason_code, f"position sizing refused: {reason_code}")
