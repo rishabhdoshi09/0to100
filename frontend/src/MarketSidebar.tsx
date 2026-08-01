@@ -5,6 +5,7 @@ const NAV_ITEMS = [
   ['⌘', 'Command Center'],
   ['◉', 'Scanner'],
   ['◎', 'Stock Intelligence'],
+  ['▤', 'Research Data'],
   ['▣', 'Portfolio'],
   ['↗', 'Market Internals'],
   ['◇', 'Long-Term'],
