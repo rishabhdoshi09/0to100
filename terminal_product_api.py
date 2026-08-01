@@ -1,9 +1,9 @@
 """Product-hardening API extensions for the QuantTerm terminal.
 
 This module reuses the authoritative terminal API and adds product-level readiness,
-one-click data bootstrap, institutional deployment gates, and explainable single-stock
-intelligence. Run Uvicorn with ``terminal_product_api:app`` so the original endpoints
-remain unchanged.
+one-click data bootstrap, institutional deployment gates, canonical target-portfolio
+projection, and explainable single-stock intelligence. Run Uvicorn with
+``terminal_product_api:app`` so the original endpoints remain unchanged.
 """
 from __future__ import annotations
 
@@ -17,9 +17,10 @@ from product.product_readiness import build_product_readiness
 from product.stock_workspace import build_stock_workspace, clean_symbol
 
 app = core.app
-app.version = "0.6.0"
+app.version = "0.7.0"
 
 INSTITUTIONAL_CERTIFICATIONS = core.ROOT / "logs" / "institutional_readiness" / "certifications.json"
+TARGET_EVENT_STORE = core.ROOT / "logs" / "intelligence" / "events.jsonl"
 
 
 def _current_product_payloads() -> dict[str, dict[str, Any]]:
@@ -55,6 +56,53 @@ def _institutional_capabilities() -> dict[str, bool]:
     }
 
 
+def _target_portfolio_payload() -> dict[str, Any]:
+    """Project the latest canonical target portfolio without inventing missing state."""
+    try:
+        from research.intelligence.event_store import EventStore
+
+        if not TARGET_EVENT_STORE.exists():
+            return {
+                "available": False,
+                "portfolio": {},
+                "positions": [],
+                "message": "No target portfolio has been persisted yet.",
+            }
+        store = EventStore(TARGET_EVENT_STORE)
+        portfolio = store.latest_target_portfolio()
+        if portfolio is None:
+            return {
+                "available": False,
+                "portfolio": {},
+                "positions": [],
+                "message": "No target portfolio has been persisted yet.",
+            }
+        positions = store.target_positions_for(portfolio)
+        return {
+            "available": True,
+            "portfolio": portfolio.as_dict(),
+            "positions": [position.as_dict() for position in positions],
+            "summary": {
+                "current_positions": portfolio.current_position_count,
+                "target_positions": portfolio.target_position_count,
+                "executable_changes": len(portfolio.executable_position_ids),
+                "blocked_changes": len(portfolio.blocked_position_ids),
+                "current_open_risk_pct": portfolio.current_open_risk_pct,
+                "pending_open_risk_pct": portfolio.pending_open_risk_pct,
+                "target_open_risk_pct": portfolio.target_open_risk_pct,
+                "available_cash": portfolio.available_cash,
+            },
+        }
+    except Exception as exc:
+        return {
+            "available": False,
+            "portfolio": {},
+            "positions": [],
+            "message": "Target portfolio projection is unavailable.",
+            "error": str(exc),
+        }
+
+
 @app.get("/api/product-readiness")
 def product_readiness() -> dict[str, Any]:
     payloads = _current_product_payloads()
@@ -74,6 +122,22 @@ def institutional_readiness() -> dict[str, Any]:
         operations=payloads["operations"],
         capabilities=_institutional_capabilities(),
     )
+
+
+@app.get("/api/target-portfolio")
+def target_portfolio() -> dict[str, Any]:
+    """Return the latest immutable target-versus-current portfolio projection."""
+    return _target_portfolio_payload()
+
+
+@app.get("/api/product-dashboard")
+def product_dashboard() -> dict[str, Any]:
+    """Compose existing read-only dashboard state with the new institutional projections."""
+    dashboard_payload = core.dashboard()
+    dashboard_payload["product_readiness"] = product_readiness()
+    dashboard_payload["institutional_readiness"] = institutional_readiness()
+    dashboard_payload["target_portfolio"] = target_portfolio()
+    return dashboard_payload
 
 
 @app.post("/api/product-bootstrap")
