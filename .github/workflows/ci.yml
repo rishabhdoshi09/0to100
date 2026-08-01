@@ -44,4 +44,5 @@ jobs:
 
       - name: Compile every module (import-safety net)
         run: |
-          python -m compileall -q data scan risk execution ui reports ai core alerts news research
+          python -m compileall -q data scan risk execution ui reports ai core alerts news research product reporting operations fundamentals
+          python -m py_compile terminal_api.py terminal_product_api.py report_api.py
