@@ -25,7 +25,8 @@ def test_template_and_upload_round_trip(tmp_path: Path, monkeypatch):
     assert item["structured"] is True
     assert item["extraction_status"] == "STRUCTURED_VALIDATED"
     rows = EI.structured_rows("TEST", "shareholding_history")
-    assert rows[0]["fii_pct"] == "7"
+    fii = next(row for row in rows if row["row_label"] == "FIIs")
+    assert fii["2026-06-30"] == "7"
     assert EI.upload_path("TEST", item["evidence_id"]).exists()
 
 
@@ -99,15 +100,16 @@ def test_malformed_structured_upload_is_rejected(tmp_path: Path, monkeypatch):
         )
 
 
-def test_raw_fundamentals_reads_full_cached_sections(tmp_path: Path, monkeypatch):
+def test_raw_fundamentals_uses_disclosed_period_not_fetch_time(tmp_path: Path, monkeypatch):
     db = tmp_path / "fundamentals.db"
     connection = sqlite3.connect(str(db))
     try:
         connection.execute("CREATE TABLE fundamentals_cache (symbol TEXT PRIMARY KEY, data_json TEXT NOT NULL, fetched_at REAL NOT NULL)")
         payload = {
             "about": "A real company description",
-            "profit_loss": [{"": "Sales", "Mar 2026": 100}],
-            "shareholding": [{"": "FIIs", "Mar 2026": 7}],
+            "quarterly_results": [{"": "Sales", "Jun 2025": 80, "Sep 2025": 90, "Dec 2025": 95, "Mar 2026": 100}],
+            "profit_loss": [{"": "Sales", "Mar 2024": 70, "Mar 2025": 85, "Mar 2026": 100}],
+            "shareholding": [{"": "FIIs", "Jun 2025": 5, "Sep 2025": 6, "Dec 2025": 6.5, "Mar 2026": 7}],
         }
         connection.execute(
             "INSERT INTO fundamentals_cache(symbol,data_json,fetched_at) VALUES(?,?,?)",
@@ -121,3 +123,5 @@ def test_raw_fundamentals_reads_full_cached_sections(tmp_path: Path, monkeypatch
     assert record["available"] is True
     assert record["data"]["about"] == "A real company description"
     assert record["fetched_at"].startswith("2026-08-01")
+    assert record["section_as_of"]["financial_history"] == "2026-03-01"
+    assert record["section_as_of"]["shareholding_history"] == "2026-03-01"
