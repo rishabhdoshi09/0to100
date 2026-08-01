@@ -71,7 +71,7 @@ PY
 fi
 
 echo "[STACK] Starting local API at http://127.0.0.1:8765 …"
-python -u -m uvicorn terminal_api:app --host 127.0.0.1 --port 8765 &
+python -u -m uvicorn terminal_product_api:app --host 127.0.0.1 --port 8765 &
 API_PID=$!
 
 echo "[STACK] Starting dedicated terminal at http://127.0.0.1:5173 …"
