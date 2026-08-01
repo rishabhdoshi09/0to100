@@ -32,6 +32,16 @@ def test_research_ready_does_not_unlock_live_execution():
     assert next(item for item in report["domains"] if item["key"] == "execution")["status"] == BLOCKED
 
 
+def test_history_and_snapshot_do_not_certify_institutional_data():
+    report = build_institutional_readiness(**_base_payload())
+    data = next(item for item in report["domains"] if item["key"] == "data")
+
+    assert data["status"] != READY
+    assert "corporate_actions_point_in_time" in data["blockers"]
+    assert "universe_history_point_in_time" in data["blockers"]
+    assert "symbol_lineage_complete" in data["blockers"]
+
+
 def test_missing_capability_flags_fail_closed():
     report = build_institutional_readiness(**_base_payload(capabilities={"durable_oms": True}))
     execution = next(item for item in report["domains"] if item["key"] == "execution")
@@ -47,6 +57,16 @@ def test_limited_live_requires_all_domains_and_explicit_owner_approval():
         "historical_net_edge_passed": True,
         "forward_evidence_passed": True,
         "capacity_assessed": True,
+        "corporate_actions_point_in_time": True,
+        "universe_history_point_in_time": True,
+        "symbol_lineage_complete": True,
+        "trading_calendar_validated": True,
+        "fundamental_availability_dates_or_not_required": True,
+        "strategy_version_frozen": True,
+        "feature_parity_certified": True,
+        "universe_rule_parity_certified": True,
+        "cost_model_parity_certified": True,
+        "exit_rule_parity_certified": True,
         "canonical_target_portfolio": True,
         "portfolio_constraints_enforced": True,
         "open_order_exposure_included": True,
