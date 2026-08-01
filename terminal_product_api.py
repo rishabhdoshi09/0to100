@@ -1,8 +1,8 @@
 """Product-hardening API extensions for the QuantTerm terminal.
 
 This module reuses the authoritative terminal API and adds product-level readiness,
-one-click data bootstrap, institutional deployment gates, canonical target-portfolio
-projection, and explainable single-stock intelligence. Run Uvicorn with
+one-click data bootstrap, institutional deployment gates, canonical target-portfolio and
+broker-neutral OMS projections, and explainable single-stock intelligence. Run Uvicorn with
 ``terminal_product_api:app`` so the original endpoints remain unchanged.
 """
 from __future__ import annotations
@@ -17,10 +17,11 @@ from product.product_readiness import build_product_readiness
 from product.stock_workspace import build_stock_workspace, clean_symbol
 
 app = core.app
-app.version = "0.7.0"
+app.version = "0.8.0"
 
 INSTITUTIONAL_CERTIFICATIONS = core.ROOT / "logs" / "institutional_readiness" / "certifications.json"
 TARGET_EVENT_STORE = core.ROOT / "logs" / "intelligence" / "events.jsonl"
+OMS_DB = core.ROOT / "logs" / "oms" / "orders.db"
 
 
 def _current_product_payloads() -> dict[str, dict[str, Any]]:
@@ -103,6 +104,39 @@ def _target_portfolio_payload() -> dict[str, Any]:
         }
 
 
+def _oms_payload() -> dict[str, Any]:
+    """Project durable OMS state. This endpoint never creates or advances an order."""
+    try:
+        if not OMS_DB.exists():
+            return {
+                "available": False,
+                "summary": {"orders": 0, "by_status": {}, "recovery_required": []},
+                "orders": [],
+                "message": "No durable OMS database exists yet.",
+            }
+        from execution.oms.store import OmsStore
+
+        store = OmsStore(OMS_DB)
+        orders = store.list_orders()
+        summary = store.summary()
+        return {
+            "available": True,
+            "summary": summary,
+            "orders": [order.as_dict() for order in orders[-100:]],
+            "broker_connected": False,
+            "submission_enabled": False,
+            "message": "OMS is in broker-neutral shadow mode; no broker submission path is connected.",
+        }
+    except Exception as exc:
+        return {
+            "available": False,
+            "summary": {"orders": 0, "by_status": {}, "recovery_required": []},
+            "orders": [],
+            "message": "OMS projection is unavailable.",
+            "error": str(exc),
+        }
+
+
 @app.get("/api/product-readiness")
 def product_readiness() -> dict[str, Any]:
     payloads = _current_product_payloads()
@@ -130,13 +164,20 @@ def target_portfolio() -> dict[str, Any]:
     return _target_portfolio_payload()
 
 
+@app.get("/api/oms")
+def oms_status() -> dict[str, Any]:
+    """Return read-only durable order lifecycle state."""
+    return _oms_payload()
+
+
 @app.get("/api/product-dashboard")
 def product_dashboard() -> dict[str, Any]:
-    """Compose existing read-only dashboard state with the new institutional projections."""
+    """Compose existing read-only dashboard state with institutional projections."""
     dashboard_payload = core.dashboard()
     dashboard_payload["product_readiness"] = product_readiness()
     dashboard_payload["institutional_readiness"] = institutional_readiness()
     dashboard_payload["target_portfolio"] = target_portfolio()
+    dashboard_payload["oms"] = oms_status()
     return dashboard_payload
 
 
