@@ -10,8 +10,13 @@ import pytest
 import reporting.evidence_intake as EI
 
 
-def test_template_and_upload_round_trip(tmp_path: Path, monkeypatch):
+def _sandbox(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(EI, "ROOT", tmp_path)
     monkeypatch.setattr(EI, "EVIDENCE_ROOT", tmp_path / "evidence")
+
+
+def test_template_and_upload_round_trip(tmp_path: Path, monkeypatch):
+    _sandbox(tmp_path, monkeypatch)
     content = EI.template_csv("shareholding_history")
     assert b"quarter_end" in content
     item = EI.save_upload(
@@ -31,7 +36,7 @@ def test_template_and_upload_round_trip(tmp_path: Path, monkeypatch):
 
 
 def test_requirements_show_dates_links_and_uploaded_status(tmp_path: Path, monkeypatch):
-    monkeypatch.setattr(EI, "EVIDENCE_ROOT", tmp_path / "evidence")
+    _sandbox(tmp_path, monkeypatch)
     monkeypatch.setattr(EI, "FUNDAMENTALS_DB", tmp_path / "missing.db")
     EI.save_upload(
         "TEST",
@@ -58,7 +63,7 @@ def test_requirements_show_dates_links_and_uploaded_status(tmp_path: Path, monke
 
 
 def test_unparsed_pdf_is_attached_but_not_analytical_data(tmp_path: Path, monkeypatch):
-    monkeypatch.setattr(EI, "EVIDENCE_ROOT", tmp_path / "evidence")
+    _sandbox(tmp_path, monkeypatch)
     monkeypatch.setattr(EI, "FUNDAMENTALS_DB", tmp_path / "missing.db")
     item = EI.save_upload(
         "TEST",
@@ -79,7 +84,7 @@ def test_unparsed_pdf_is_attached_but_not_analytical_data(tmp_path: Path, monkey
 
 
 def test_malformed_structured_upload_is_rejected(tmp_path: Path, monkeypatch):
-    monkeypatch.setattr(EI, "EVIDENCE_ROOT", tmp_path / "evidence")
+    _sandbox(tmp_path, monkeypatch)
     with pytest.raises(ValueError, match="missing required columns"):
         EI.save_upload(
             "TEST",
