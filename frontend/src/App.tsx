@@ -1,16 +1,22 @@
 import { useEffect, useMemo, useState } from 'react'
 import { fetchChart, fetchDashboard, sendControl } from './api'
+import {
+  DisplayDepthToggle,
+  EnhancedCommandCenterView,
+  EnhancedLongTermView,
+  EnhancedScannerView,
+  ExperienceHelpDrawer,
+} from './experience'
 import { MarketSidebar } from './MarketSidebar'
 import { FnoView, NewsView, OperationsRibbon } from './marketViews'
-import { ProductCommandCenterView, ProductStockIntelligenceView } from './productViews'
+import { ProductStockIntelligenceView } from './productViews'
 import { ResearchDataView } from './researchData'
 import {
   AutomationView,
-  LongTermView,
   MarketInternalsView,
   PortfolioView,
-  ScannerView,
 } from './views'
+import type { DisplayDepth } from './productLanguage'
 import type { ChartBar, ControlName, DashboardPayload } from './types'
 
 const emptyDashboard: DashboardPayload = {
@@ -114,6 +120,8 @@ const emptyDashboard: DashboardPayload = {
 }
 
 const pageTitles: Record<string, string> = {
+  'Command Center': 'Home',
+  Scanner: 'Discover',
   Portfolio: 'Paper Portfolio',
   'F&O Desk': 'F&O Coverage',
   Automation: 'System Health',
@@ -121,7 +129,7 @@ const pageTitles: Record<string, string> = {
 
 const pageSubtitles: Record<string, string> = {
   'Command Center': 'What is ready, what is stale, what to run now, and the best current research in one surface.',
-  Scanner: 'Whole-market technical ranking with dated results, chart structure, evidence and invalidation.',
+  Scanner: 'Momentum, breakout, conviction and long-horizon discovery with visible backend progress.',
   'Stock Intelligence': 'A plain-English stock workspace combining technicals, fundamentals, source dates, risks and context.',
   'Research Data': 'Strict as-of dates, official source links, templates and evidence uploads for the selected stock.',
   Portfolio: 'Secondary paper-execution evidence: capital, open risk, positions and recorded outcomes.',
@@ -141,6 +149,11 @@ function App() {
   const [bars, setBars] = useState<ChartBar[]>([])
   const [controlState, setControlState] = useState('')
   const [query, setQuery] = useState('')
+  const [helpOpen, setHelpOpen] = useState(false)
+  const [depth, setDepth] = useState<DisplayDepth>(() => {
+    const saved = window.localStorage.getItem('quantterm-display-depth')
+    return saved === 'professional' ? 'professional' : 'simple'
+  })
 
   const refresh = async () => {
     try {
@@ -166,6 +179,10 @@ function App() {
     const timer = window.setInterval(() => void refresh(), 5_000)
     return () => window.clearInterval(timer)
   }, [])
+
+  useEffect(() => {
+    window.localStorage.setItem('quantterm-display-depth', depth)
+  }, [depth])
 
   useEffect(() => {
     if (!selected) {
@@ -240,19 +257,20 @@ function App() {
     bars,
     setActive,
     runControl,
+    depth,
   }
 
   const renderView = () => {
-    if (active === 'Scanner') return <ScannerView {...viewProps} />
+    if (active === 'Scanner') return <EnhancedScannerView {...viewProps} />
     if (active === 'Stock Intelligence') return <ProductStockIntelligenceView {...viewProps} />
     if (active === 'Research Data') return <ResearchDataView symbol={selected} />
     if (active === 'Portfolio') return <PortfolioView {...viewProps} />
     if (active === 'Market Internals') return <MarketInternalsView {...viewProps} />
-    if (active === 'Long-Term') return <LongTermView {...viewProps} />
+    if (active === 'Long-Term') return <EnhancedLongTermView {...viewProps} />
     if (active === 'News & Events') return <NewsView {...viewProps} />
     if (active === 'F&O Desk') return <FnoView {...viewProps} />
     if (active === 'Automation') return <AutomationView {...viewProps} />
-    return <ProductCommandCenterView {...viewProps} />
+    return <EnhancedCommandCenterView {...viewProps} />
   }
 
   return (
@@ -274,6 +292,8 @@ function App() {
             <button type="button" onClick={openSearch}>Open stock</button>
           </div>
           <div className="top-status">
+            <DisplayDepthToggle depth={depth} onChange={setDepth} />
+            <button type="button" className="experience-help-trigger" onClick={() => setHelpOpen(true)}>What is this?</button>
             <span className={dashboard.data.ready ? 'live-pill' : 'offline-pill'}><i /> {dashboard.data.ready ? 'CORE DATA READY' : 'DATA INCOMPLETE'}</span>
             <span className={dashboard.operations.running ? 'live-pill' : 'offline-pill'}><i /> {dashboard.operations.running ? 'MARKET OPS ONLINE' : 'MARKET OPS OFFLINE'}</span>
             <button type="button" onClick={() => void refresh()} aria-label="Refresh dashboard">↻</button>
@@ -293,6 +313,7 @@ function App() {
         <OperationsRibbon dashboard={dashboard} />
         {renderView()}
       </main>
+      <ExperienceHelpDrawer page={active} open={helpOpen} onClose={() => setHelpOpen(false)} />
     </div>
   )
 }

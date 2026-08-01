@@ -1,21 +1,52 @@
 import type { DashboardPayload } from './types'
 import { money } from './format'
 
-const NAV_ITEMS = [
-  ['⌘', 'Command Center', 'Command Center'],
-  ['◉', 'Scanner', 'Scanner'],
+const PRIMARY_NAV = [
+  ['⌂', 'Command Center', 'Home'],
+  ['◉', 'Scanner', 'Discover'],
   ['◎', 'Stock Intelligence', 'Stock Intelligence'],
-  ['◇', 'Long-Term Research', 'Long-Term'],
-  ['◈', 'News & Events', 'News & Events'],
+  ['◇', 'Long-Term', 'Long-Term Research'],
   ['▤', 'Research Data', 'Research Data'],
-  ['↗', 'Market & Breadth', 'Market Internals'],
-  ['ƒ', 'F&O Coverage', 'F&O Desk'],
-  ['◌', 'System Health', 'Automation'],
-  ['▣', 'Paper Portfolio', 'Portfolio'],
+] as const
+
+const OPERATIONS_NAV = [
+  ['↗', 'Market Internals', 'Market & Breadth'],
+  ['◈', 'News & Events', 'News & Events'],
+  ['ƒ', 'F&O Desk', 'F&O Coverage'],
+  ['◌', 'Automation', 'System Health'],
+  ['▣', 'Portfolio', 'Paper Portfolio'],
 ] as const
 
 function Logo() {
   return <div className="brand-mark" aria-hidden="true"><span /><span /><span /></div>
+}
+
+function NavigationGroup({
+  label,
+  rows,
+  active,
+  setActive,
+}: {
+  label: string
+  rows: ReadonlyArray<readonly [string, string, string]>
+  active: string
+  setActive: (value: string) => void
+}) {
+  return (
+    <>
+      <div className="nav-section-label">{label}</div>
+      {rows.map(([icon, route, display]) => (
+        <button
+          key={route}
+          className={active === route ? 'nav-item active' : 'nav-item'}
+          type="button"
+          onClick={() => setActive(route)}
+        >
+          <span>{icon}</span>{display}
+        </button>
+      ))}
+    </>
+  )
 }
 
 export function MarketSidebar({
@@ -27,45 +58,34 @@ export function MarketSidebar({
   setActive: (value: string) => void
   dashboard: DashboardPayload
 }) {
+  const autonomy = dashboard.autonomy.running
   const operations = dashboard.operations.running
-  const dataReady = dashboard.data.ready
   return (
     <aside className="sidebar">
-      <div className="brand"><Logo /><div><strong>QUANTTERM</strong><small>RETAIL QUANT RESEARCH</small></div></div>
+      <div className="brand"><Logo /><div><strong>QUANTTERM</strong><small>RETAIL QUANT OS</small></div></div>
       <nav>
-        {NAV_ITEMS.map(([icon, label, route]) => (
-          <button
-            key={route}
-            className={active === route ? 'nav-item active' : 'nav-item'}
-            type="button"
-            onClick={() => setActive(route)}
-          >
-            <span>{icon}</span>{label}
-          </button>
-        ))}
+        <NavigationGroup label="RESEARCH" rows={PRIMARY_NAV} active={active} setActive={setActive} />
+        <NavigationGroup label="OPERATIONS & EVIDENCE" rows={OPERATIONS_NAV} active={active} setActive={setActive} />
       </nav>
       <div className="sidebar-spacer" />
       <div className="broker-card">
         <div className="broker-row">
-          <strong>RESEARCH ENGINE</strong>
-          <span className={operations ? 'status-dot' : 'status-dot status-dot-off'} />
+          <strong>MARKET DATA</strong>
+          <span className={dashboard.data.ready ? 'status-dot' : 'status-dot status-dot-off'} />
         </div>
-        <small>{operations ? `ONLINE · PID ${dashboard.operations.worker_pid || '—'}` : 'OFFLINE · direct scans unavailable'}</small>
+        <small>{dashboard.data.ready ? `READY · ${dashboard.data.bhavcopy.latest_date || 'date unknown'}` : 'INCOMPLETE · inspect Home'}</small>
         <div className="broker-stats">
-          <div><span>History</span><strong>{dashboard.data.bhavcopy.ready ? `${dashboard.data.bhavcopy.sessions}d` : 'MISSING'}</strong></div>
-          <div><span>Scanner rows</span><strong>{dashboard.data.scan_records || 0}</strong></div>
+          <div><span>Sessions</span><strong>{dashboard.data.bhavcopy.sessions || 0}</strong></div>
+          <div><span>Symbols</span><strong>{(dashboard.data.bhavcopy.symbols || 0).toLocaleString('en-IN')}</strong></div>
         </div>
       </div>
-      <div className="broker-card">
-        <div className="broker-row">
-          <strong>DATA QUALITY</strong>
-          <span className={dataReady ? 'status-dot' : 'status-dot status-dot-off'} />
-        </div>
-        <small>{dataReady ? `READY · ${dashboard.data.bhavcopy.latest_date || 'dated source'}` : `${dashboard.data.blockers.length} blocker(s)`}</small>
-        <div className="broker-stats">
-          <div><span>Long-term</span><strong>{dashboard.data.long_term_records || 0}</strong></div>
-          <div><span>Paper equity</span><strong>{money(dashboard.paper.equity)}</strong></div>
-        </div>
+      <div className="broker-card compact-service-card">
+        <div className="broker-row"><strong>MARKET OPS</strong><span className={operations ? 'status-dot' : 'status-dot status-dot-off'} /></div>
+        <small>{operations ? `ONLINE · PID ${dashboard.operations.worker_pid || '—'}` : 'OFFLINE · scans unavailable'}</small>
+      </div>
+      <div className="broker-card compact-service-card secondary-service">
+        <div className="broker-row"><strong>PAPER AUTONOMY</strong><span className={autonomy ? 'status-dot' : 'status-dot status-dot-off'} /></div>
+        <small>{dashboard.autonomy.state || 'UNKNOWN'} · equity {money(dashboard.paper.equity)}</small>
       </div>
     </aside>
   )
