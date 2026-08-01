@@ -2,16 +2,16 @@ import type { DashboardPayload } from './types'
 import { money } from './format'
 
 const NAV_ITEMS = [
-  ['⌘', 'Command Center'],
-  ['◉', 'Scanner'],
-  ['◎', 'Stock Intelligence'],
-  ['▤', 'Research Data'],
-  ['▣', 'Portfolio'],
-  ['↗', 'Market Internals'],
-  ['◇', 'Long-Term'],
-  ['◈', 'News & Events'],
-  ['ƒ', 'F&O Desk'],
-  ['◌', 'Automation'],
+  ['⌘', 'Command Center', 'Command Center'],
+  ['◉', 'Scanner', 'Scanner'],
+  ['◎', 'Stock Intelligence', 'Stock Intelligence'],
+  ['◇', 'Long-Term Research', 'Long-Term'],
+  ['◈', 'News & Events', 'News & Events'],
+  ['▤', 'Research Data', 'Research Data'],
+  ['↗', 'Market & Breadth', 'Market Internals'],
+  ['ƒ', 'F&O Coverage', 'F&O Desk'],
+  ['◌', 'System Health', 'Automation'],
+  ['▣', 'Paper Portfolio', 'Portfolio'],
 ] as const
 
 function Logo() {
@@ -27,18 +27,18 @@ export function MarketSidebar({
   setActive: (value: string) => void
   dashboard: DashboardPayload
 }) {
-  const autonomy = dashboard.autonomy.running
   const operations = dashboard.operations.running
+  const dataReady = dashboard.data.ready
   return (
     <aside className="sidebar">
-      <div className="brand"><Logo /><div><strong>QUANTTERM</strong><small>PROFESSIONAL</small></div></div>
+      <div className="brand"><Logo /><div><strong>QUANTTERM</strong><small>RETAIL QUANT RESEARCH</small></div></div>
       <nav>
-        {NAV_ITEMS.map(([icon, label]) => (
+        {NAV_ITEMS.map(([icon, label, route]) => (
           <button
-            key={label}
-            className={active === label ? 'nav-item active' : 'nav-item'}
+            key={route}
+            className={active === route ? 'nav-item active' : 'nav-item'}
             type="button"
-            onClick={() => setActive(label)}
+            onClick={() => setActive(route)}
           >
             <span>{icon}</span>{label}
           </button>
@@ -47,24 +47,24 @@ export function MarketSidebar({
       <div className="sidebar-spacer" />
       <div className="broker-card">
         <div className="broker-row">
-          <strong>MARKET OPS</strong>
+          <strong>RESEARCH ENGINE</strong>
           <span className={operations ? 'status-dot' : 'status-dot status-dot-off'} />
         </div>
-        <small>{operations ? `ONLINE · PID ${dashboard.operations.worker_pid || '—'}` : 'OFFLINE · scans unavailable'}</small>
+        <small>{operations ? `ONLINE · PID ${dashboard.operations.worker_pid || '—'}` : 'OFFLINE · direct scans unavailable'}</small>
         <div className="broker-stats">
-          <div><span>Active work</span><strong>{dashboard.operations.active.length}</strong></div>
-          <div><span>F&O mapped</span><strong>{dashboard.fno.mapped_underlyings || 0}</strong></div>
+          <div><span>History</span><strong>{dashboard.data.bhavcopy.ready ? `${dashboard.data.bhavcopy.sessions}d` : 'MISSING'}</strong></div>
+          <div><span>Scanner rows</span><strong>{dashboard.data.scan_records || 0}</strong></div>
         </div>
       </div>
       <div className="broker-card">
         <div className="broker-row">
-          <strong>AUTONOMY</strong>
-          <span className={autonomy ? 'status-dot' : 'status-dot status-dot-off'} />
+          <strong>DATA QUALITY</strong>
+          <span className={dataReady ? 'status-dot' : 'status-dot status-dot-off'} />
         </div>
-        <small>{dashboard.autonomy.state || 'UNKNOWN'} · PID {dashboard.autonomy.scheduler_owner_pid || '—'}</small>
+        <small>{dataReady ? `READY · ${dashboard.data.bhavcopy.latest_date || 'dated source'}` : `${dashboard.data.blockers.length} blocker(s)`}</small>
         <div className="broker-stats">
+          <div><span>Long-term</span><strong>{dashboard.data.long_term_records || 0}</strong></div>
           <div><span>Paper equity</span><strong>{money(dashboard.paper.equity)}</strong></div>
-          <div><span>New entries</span><strong>{dashboard.autonomy.new_paper_entries ? 'ALLOWED' : 'BLOCKED'}</strong></div>
         </div>
       </div>
     </aside>
