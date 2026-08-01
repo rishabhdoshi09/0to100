@@ -1,5 +1,3 @@
-from types import SimpleNamespace
-
 from execution.oms import models as OM
 from execution.oms.store import OmsStore
 from execution.protection.store import ProtectionStore
@@ -111,12 +109,19 @@ def test_stale_market_data_freezes_new_risk():
     assert "STALE_MARKET_DATA" in decision.reasons
 
 
-def test_duplicate_observer_process_cannot_own_same_lock(tmp_path):
-    first = SingleObserverLock(tmp_path / "observer.lock")
-    second = SingleObserverLock(tmp_path / "observer.lock")
+def test_failed_lock_owner_cannot_unlink_active_observer_lock(tmp_path):
+    path = tmp_path / "observer.lock"
+    first = SingleObserverLock(path)
+    second = SingleObserverLock(path)
+    third = SingleObserverLock(path)
     try:
         assert first.acquire() is True
         assert second.acquire() is False
+        second.release()
+        assert path.exists() is True
+        assert third.acquire() is False
     finally:
+        third.release()
         second.release()
         first.release()
+    assert path.exists() is False
