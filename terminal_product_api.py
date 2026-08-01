@@ -1,9 +1,10 @@
 """Product-hardening API extensions for the QuantTerm terminal.
 
 This module reuses the authoritative terminal API and adds product-level readiness,
-one-click data bootstrap, institutional deployment gates, canonical target-portfolio and
-broker-neutral OMS projections, and explainable single-stock intelligence. Run Uvicorn with
-``terminal_product_api:app`` so the original endpoints remain unchanged.
+one-click data bootstrap, institutional deployment gates, canonical target-portfolio,
+broker-neutral OMS and independent risk-decision projections, and explainable single-stock
+intelligence. Run Uvicorn with ``terminal_product_api:app`` so the original endpoints remain
+unchanged.
 """
 from __future__ import annotations
 
@@ -17,11 +18,12 @@ from product.product_readiness import build_product_readiness
 from product.stock_workspace import build_stock_workspace, clean_symbol
 
 app = core.app
-app.version = "0.8.0"
+app.version = "0.9.0"
 
 INSTITUTIONAL_CERTIFICATIONS = core.ROOT / "logs" / "institutional_readiness" / "certifications.json"
 TARGET_EVENT_STORE = core.ROOT / "logs" / "intelligence" / "events.jsonl"
 OMS_DB = core.ROOT / "logs" / "oms" / "orders.db"
+RISK_DB = core.ROOT / "logs" / "risk" / "decisions.db"
 
 
 def _current_product_payloads() -> dict[str, dict[str, Any]]:
@@ -137,6 +139,43 @@ def _oms_payload() -> dict[str, Any]:
         }
 
 
+def _risk_governor_payload() -> dict[str, Any]:
+    """Project persisted governor decisions without claiming reconciled live risk state."""
+    try:
+        if not RISK_DB.exists():
+            return {
+                "available": False,
+                "summary": {"decisions": 0, "by_action": {}},
+                "mode": "SHADOW",
+                "authoritative_state_connected": False,
+                "message": "No independent Risk Governor decisions have been persisted yet.",
+            }
+        from risk.governor_store import RiskDecisionStore
+
+        store = RiskDecisionStore(RISK_DB)
+        summary = store.summary()
+        return {
+            "available": True,
+            "summary": summary,
+            "mode": "SHADOW",
+            "authoritative_state_connected": False,
+            "certified_for_live": False,
+            "message": (
+                "The governor is deterministic and independent, but remains shadow-only until "
+                "broker positions, orders, cash, margin and protection are continuously reconciled."
+            ),
+        }
+    except Exception as exc:
+        return {
+            "available": False,
+            "summary": {"decisions": 0, "by_action": {}},
+            "mode": "SHADOW",
+            "authoritative_state_connected": False,
+            "message": "Risk Governor projection is unavailable.",
+            "error": str(exc),
+        }
+
+
 @app.get("/api/product-readiness")
 def product_readiness() -> dict[str, Any]:
     payloads = _current_product_payloads()
@@ -170,6 +209,12 @@ def oms_status() -> dict[str, Any]:
     return _oms_payload()
 
 
+@app.get("/api/risk-governor")
+def risk_governor_status() -> dict[str, Any]:
+    """Return read-only independent risk-decision state."""
+    return _risk_governor_payload()
+
+
 @app.get("/api/product-dashboard")
 def product_dashboard() -> dict[str, Any]:
     """Compose existing read-only dashboard state with institutional projections."""
@@ -178,6 +223,7 @@ def product_dashboard() -> dict[str, Any]:
     dashboard_payload["institutional_readiness"] = institutional_readiness()
     dashboard_payload["target_portfolio"] = target_portfolio()
     dashboard_payload["oms"] = oms_status()
+    dashboard_payload["risk_governor"] = risk_governor_status()
     return dashboard_payload
 
 
