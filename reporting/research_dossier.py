@@ -1,9 +1,8 @@
 """Evidence-first research dossier assembly for QuantTerm.
 
-The dossier uses persisted QuantTerm stores, deep fundamentals, uploaded evidence and
-strict source dates. It never invents business descriptions, management quotations,
-institutional holdings or financial history. Missing sections include official source
-links, instructions and upload/template routes.
+Every section is derived from persisted stores or validated user evidence. Runtime
+sources inherit their actual as-of date and freshness state; attached but unparsed
+source documents do not become analytical claims.
 """
 from __future__ import annotations
 
@@ -21,8 +20,8 @@ def _as_float(value: Any) -> float | None:
     try:
         if value in (None, ""):
             return None
-        result = float(str(value).replace(",", "").replace("%", "").strip())
-        return result if result == result else None
+        number = float(str(value).replace(",", "").replace("%", "").strip())
+        return number if number == number else None
     except (TypeError, ValueError):
         return None
 
@@ -52,13 +51,14 @@ def _return_pct(frame: Any, periods: int) -> float | None:
 
 
 def _price_metrics(frame: Any) -> dict[str, Any]:
+    empty = {
+        "available": False, "latest_price": None, "latest_date": "",
+        "return_1m_pct": None, "return_3m_pct": None, "return_6m_pct": None,
+        "return_12m_pct": None, "high_52w": None, "from_high_pct": None,
+        "avg_volume_20d": None,
+    }
     if frame is None or len(frame) == 0:
-        return {
-            "available": False, "latest_price": None, "latest_date": "",
-            "return_1m_pct": None, "return_3m_pct": None, "return_6m_pct": None,
-            "return_12m_pct": None, "high_52w": None, "from_high_pct": None,
-            "avg_volume_20d": None,
-        }
+        return empty
     try:
         closes = frame["close"].dropna()
         latest = float(closes.iloc[-1])
@@ -79,12 +79,7 @@ def _price_metrics(frame: Any) -> dict[str, Any]:
             "avg_volume_20d": round(float(volume), 0) if volume is not None else None,
         }
     except Exception:
-        return {
-            "available": False, "latest_price": None, "latest_date": "",
-            "return_1m_pct": None, "return_3m_pct": None, "return_6m_pct": None,
-            "return_12m_pct": None, "high_52w": None, "from_high_pct": None,
-            "avg_volume_20d": None,
-        }
+        return empty
 
 
 def _default_inputs(symbol: str) -> dict[str, Any]:
@@ -102,14 +97,11 @@ def _default_inputs(symbol: str) -> dict[str, Any]:
         frame = None
     try:
         from product.market_view import current_market_view
-        market_obj = current_market_view()
+        obj = current_market_view()
         market = {
-            "health": market_obj.health,
-            "summary": market_obj.summary,
-            "trade_stance": market_obj.trade_stance,
-            "breadth": market_obj.breadth,
-            "leaders": list(market_obj.leaders),
-            "laggards": list(market_obj.laggards),
+            "health": obj.health, "summary": obj.summary,
+            "trade_stance": obj.trade_stance, "breadth": obj.breadth,
+            "leaders": list(obj.leaders), "laggards": list(obj.laggards),
         }
     except Exception as exc:
         market = {"health": "Unavailable", "summary": "", "trade_stance": "", "error": str(exc)}
@@ -123,27 +115,19 @@ def _default_inputs(symbol: str) -> dict[str, Any]:
     except Exception:
         news = []
     try:
-        fno_path = ROOT / "logs" / "product" / "fno_universe.json"
-        if fno_path.exists():
-            fno = json.loads(fno_path.read_text(encoding="utf-8"))
+        path = ROOT / "logs" / "product" / "fno_universe.json"
+        if path.exists():
+            fno = json.loads(path.read_text(encoding="utf-8"))
         else:
             from data.fno_universe import current_fno_universe
             report = current_fno_universe()
-            fno = {
-                "generated_at": "",
-                "source": report.source,
-                "underlyings": [item.__dict__ for item in report.underlyings],
-            }
+            fno = {"generated_at": "", "source": report.source, "underlyings": [row.__dict__ for row in report.underlyings]}
     except Exception:
         fno = {}
     return {
-        "scan_payload": scan,
-        "long_term_payload": long_term,
-        "raw_fundamentals": raw_fundamentals,
-        "frame": frame,
-        "market": market,
-        "news": news,
-        "fno_payload": fno,
+        "scan_payload": scan, "long_term_payload": long_term,
+        "raw_fundamentals": raw_fundamentals, "frame": frame,
+        "market": market, "news": news, "fno_payload": fno,
     }
 
 
@@ -152,20 +136,17 @@ def _row_label(row: Mapping[str, Any]) -> str:
         value = row.get(key)
         if value not in (None, ""):
             return str(value)
-    if row:
-        first = next(iter(row.values()))
-        return str(first or "")
-    return ""
+    return str(next(iter(row.values()), "") or "")
 
 
 def _normalise_table(rows: Sequence[Mapping[str, Any]] | None, limit: int = 24) -> list[dict[str, Any]]:
-    result = []
+    output = []
     for raw in list(rows or [])[:limit]:
         row = dict(raw)
         label = _row_label(row)
-        values = {str(k or "period"): v for k, v in row.items() if str(v or "").strip() and str(v) != label}
-        result.append({"label": label, "values": values})
-    return result
+        values = {str(key or "period"): value for key, value in row.items() if str(value or "").strip() and str(value) != label}
+        output.append({"label": label, "values": values})
+    return output
 
 
 def _latest_series_value(rows: Sequence[Mapping[str, Any]], needles: Sequence[str]) -> float | None:
@@ -180,67 +161,62 @@ def _latest_series_value(rows: Sequence[Mapping[str, Any]], needles: Sequence[st
 
 
 def _uploaded_management(rows: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
-    result = []
+    output = []
     for row in rows:
         commentary = str(row.get("commentary") or row.get("management_wording") or "").strip()
-        if not commentary:
-            continue
-        result.append({
-            "published_at": str(row.get("event_date") or row.get("as_of_date") or ""),
-            "fetched_at": "",
-            "source": "User-uploaded traced evidence",
-            "headline": str(row.get("topic") or row.get("guidance_metric") or "Management commentary"),
-            "why_it_matters": commentary,
-            "speaker": str(row.get("speaker") or ""),
-            "source_url": str(row.get("source_url") or ""),
-            "official": False,
-            "event_type": "management_commentary",
-            "impact_score": 0,
-        })
-    return result
+        if commentary:
+            output.append({
+                "published_at": str(row.get("event_date") or row.get("as_of_date") or ""),
+                "fetched_at": "", "source": "User-uploaded traced evidence",
+                "headline": str(row.get("topic") or row.get("guidance_metric") or "Management commentary"),
+                "why_it_matters": commentary, "speaker": str(row.get("speaker") or ""),
+                "source_url": str(row.get("source_url") or ""), "official": False,
+                "event_type": "management_commentary", "impact_score": 0,
+            })
+    return output
 
 
-def _coverage(requirements: Mapping[str, Any], runtime: Mapping[str, bool]) -> tuple[int, list[dict[str, Any]]]:
+def _strict_coverage(requirements: Mapping[str, Any], runtime_presence: Mapping[str, bool]) -> tuple[int, list[dict[str, Any]]]:
     weights = {
         "price_history": 10, "scanner": 10, "long_term": 10,
         "business_profile": 10, "financial_history": 20,
         "shareholding_history": 15, "business_segments": 10,
         "management_commentary": 10, "news": 5,
     }
-    req_map = {item.get("key"): item for item in requirements.get("requirements", [])}
-    rows = []
+    requirement_map = {item.get("key"): item for item in requirements.get("requirements", [])}
+    runtime_map = {item.get("key"): item for item in requirements.get("runtime_sources", [])}
     score = 0.0
+    rows: list[dict[str, Any]] = []
     for key, weight in weights.items():
-        if key in runtime:
-            state = "FRESH" if runtime[key] else "MISSING"
-            available = runtime[key]
-            as_of = ""
-            age = None
+        if key in runtime_map:
+            source = dict(runtime_map[key])
+            # Symbol-specific availability can be narrower than the global store timestamp.
+            available = bool(source.get("available")) and bool(runtime_presence.get(key))
+            status = str(source.get("status") or "MISSING") if available else "MISSING"
         else:
-            item = req_map.get(key, {})
-            state = str(item.get("status") or "MISSING")
-            available = bool(item.get("available"))
-            as_of = str(item.get("as_of") or "")
-            age = item.get("age_days")
-        factor = 1.0 if available and state == "FRESH" else 0.5 if available else 0.0
+            source = dict(requirement_map.get(key, {}))
+            available = bool(source.get("available"))
+            status = str(source.get("status") or "MISSING")
+        factor = 1.0 if available and status == "FRESH" else 0.5 if available and status in {"STALE", "UNKNOWN_DATE"} else 0.0
         score += weight * factor
-        rows.append({"key": key, "weight": weight, "status": state, "available": available, "as_of": as_of, "age_days": age})
+        rows.append({
+            "key": key, "weight": weight, "status": status,
+            "available": available, "as_of": str(source.get("as_of") or ""),
+            "age_days": source.get("age_days"),
+        })
     return round(score), rows
 
 
 def build_equity_dossier(
-    symbol: str,
-    *,
+    symbol: str, *,
     scan_payload: Mapping[str, Any] | None = None,
     long_term_payload: Mapping[str, Any] | None = None,
     raw_fundamentals: Mapping[str, Any] | None = None,
-    frame: Any = None,
-    market: Mapping[str, Any] | None = None,
+    frame: Any = None, market: Mapping[str, Any] | None = None,
     news: Sequence[Mapping[str, Any]] | None = None,
     fno_payload: Mapping[str, Any] | None = None,
     generated_at: datetime | None = None,
 ) -> dict[str, Any]:
-    """Build one auditable single-stock research dossier payload."""
     symbol = _clean_symbol(symbol)
     if any(value is None for value in (scan_payload, long_term_payload, raw_fundamentals, frame, market, news, fno_payload)):
         defaults = _default_inputs(symbol)
@@ -260,9 +236,8 @@ def build_equity_dossier(
     raw_record = dict(raw_fundamentals or {})
     raw = dict(raw_record.get("data", {}) or {})
     fundamentals = dict(long_row.get("fundamentals", {}) or {})
-    raw_shareholding = list(raw.get("shareholding", []) or [])
     uploaded_shareholding = structured_rows(symbol, "shareholding_history")
-    shareholding_rows = uploaded_shareholding or raw_shareholding
+    shareholding_rows = uploaded_shareholding or list(raw.get("shareholding", []) or [])
     if fundamentals.get("fii_holding") is None:
         fundamentals["fii_holding"] = _latest_series_value(shareholding_rows, ("fii", "foreign institutional", "foreign portfolio"))
     if fundamentals.get("dii_holding") is None:
@@ -270,27 +245,21 @@ def build_equity_dossier(
 
     company = str(scan_row.get("company") or long_row.get("company") or symbol)
     sector = str(long_row.get("sector") or scan_row.get("sector") or "Unclassified")
-    quality = list(dict.fromkeys([str(x) for x in (long_row.get("quality_factors", []) or []) if str(x).strip()]))
-    technical = list(dict.fromkeys([str(x) for x in (scan_row.get("reasons", []) or []) if str(x).strip()]))
-    risks = list(dict.fromkeys([str(x) for x in (long_row.get("risk_flags", []) or []) if str(x).strip()]))
+    quality = list(dict.fromkeys(str(value) for value in (long_row.get("quality_factors", []) or []) if str(value).strip()))
+    technical = list(dict.fromkeys(str(value) for value in (scan_row.get("reasons", []) or []) if str(value).strip()))
+    risks = list(dict.fromkeys(str(value) for value in (long_row.get("risk_flags", []) or []) if str(value).strip()))
     if scan_row.get("chase_risk"):
         risks.append("Current price structure is flagged as extended; do not chase without a fresh base or pullback.")
 
     news_rows = [dict(item) for item in (news or []) if isinstance(item, Mapping)]
     news_rows.sort(key=lambda item: (int(item.get("impact_score", 0) or 0), str(item.get("published_at", ""))), reverse=True)
-    uploaded_management = _uploaded_management(structured_rows(symbol, "management_commentary"))
-    management_evidence = uploaded_management + [
+    management_evidence = _uploaded_management(structured_rows(symbol, "management_commentary"))
+    management_evidence += [
         item for item in news_rows
-        if str(item.get("event_type", "")) in {"results", "order_or_contract", "fund_raising", "promoter_or_insider"}
-        or bool(item.get("official"))
+        if str(item.get("event_type", "")) in {"results", "order_or_contract", "fund_raising", "promoter_or_insider"} or bool(item.get("official"))
     ][:10]
 
-    fno_match = None
-    for item in list((fno_payload or {}).get("underlyings", []) or []):
-        if isinstance(item, Mapping) and str(item.get("symbol", "")).upper() == symbol:
-            fno_match = dict(item)
-            break
-
+    fno_match = next((dict(item) for item in list((fno_payload or {}).get("underlyings", []) or []) if isinstance(item, Mapping) and str(item.get("symbol", "")).upper() == symbol), None)
     news_as_of = str(news_rows[0].get("published_at") or news_rows[0].get("fetched_at") or "") if news_rows else ""
     requirements = evidence_requirements(
         symbol,
@@ -300,174 +269,113 @@ def build_equity_dossier(
         news_as_of=news_as_of,
         fno_as_of=str((fno_payload or {}).get("generated_at", "")),
     )
-    runtime_presence = {
+    coverage_pct, section_coverage = _strict_coverage(requirements, {
         "price_history": bool(price.get("available")),
-        "scanner": bool(scan_row),
-        "long_term": bool(long_row),
-        "news": bool(news_rows),
-    }
-    coverage_pct, section_coverage = _coverage(requirements, runtime_presence)
+        "scanner": bool(scan_row), "long_term": bool(long_row), "news": bool(news_rows),
+    })
 
     open_items: list[str] = []
     for item in requirements.get("requirements", []):
         if not item.get("available"):
             links = item.get("links", [])
-            first_link = str(links[0].get("url")) if links else ""
-            action = f" Obtain it from {first_link}." if first_link else ""
-            open_items.append(f"{item.get('label')} is missing. {item.get('instructions')}{action}")
+            first = str(links[0].get("url")) if links else ""
+            state = " A source is attached but still needs structured extraction." if item.get("source_attached") else ""
+            open_items.append(f"{item.get('label')} is not usable.{state} {item.get('instructions')}" + (f" Primary source: {first}." if first else ""))
         elif item.get("status") == "STALE":
-            open_items.append(
-                f"{item.get('label')} is stale: as of {item.get('as_of')} ({item.get('age_days')} days old). Refresh from the listed source."
-            )
+            open_items.append(f"{item.get('label')} is stale: as of {item.get('as_of')} ({item.get('age_days')} days old). Refresh it before circulation.")
     if not price.get("available"):
         open_items.append("Official bhavcopy price history is unavailable for this symbol; no synthetic price series is allowed.")
     if not news_rows:
         open_items.append("No curated company-linked news or filing evidence is available in the current 30-day store.")
 
     company_about = str(raw.get("about") or "").strip()
-    uploaded_profile = structured_rows(symbol, "business_profile")
-    if uploaded_profile:
-        company_about = str(uploaded_profile[0].get("business_summary") or company_about)
-
-    annual_rows = structured_rows(symbol, "financial_history")
+    profile_rows = structured_rows(symbol, "business_profile")
+    if profile_rows:
+        company_about = str(profile_rows[0].get("business_summary") or company_about)
+    uploaded_financials = structured_rows(symbol, "financial_history")
     financial_tables = {
-        "uploaded": annual_rows,
+        "uploaded": uploaded_financials,
         "quarterly_results": _normalise_table(raw.get("quarterly_results", []), 20),
         "profit_loss": _normalise_table(raw.get("profit_loss", []), 24),
         "balance_sheet": _normalise_table(raw.get("balance_sheet", []), 24),
         "cash_flow": _normalise_table(raw.get("cash_flow", []), 20),
         "peer_comparison": _normalise_table(raw.get("peer_comparison", []), 15),
-        "as_of": str((structured_rows(symbol, "financial_history") or [{}])[-1].get("as_of_date") or raw_record.get("fetched_at") or ""),
+        "as_of": str((uploaded_financials or [{}])[-1].get("as_of_date") or raw_record.get("fetched_at") or ""),
     }
-    business_segments = structured_rows(symbol, "business_segments")
-    order_book_guidance = structured_rows(symbol, "order_book_guidance")
 
     sources = [
-        {
-            "name": "Whole-market scanner", "status": "available" if scan_row else "missing",
-            "as_of": str((scan_payload or {}).get("scanned_at", "")), "point_in_time": False,
-            "note": "Current saved technical scan projection.",
-        },
-        {
-            "name": "Long-Term research store", "status": "available" if long_row else "missing",
-            "as_of": str((long_term_payload or {}).get("scanned_at", "")), "point_in_time": False,
-            "note": "Current technical + current-fundamental decision aid; not historical PIT evidence.",
-        },
-        {
-            "name": "Deep fundamentals cache", "status": str(raw_record.get("freshness") or "MISSING"),
-            "as_of": str(raw_record.get("fetched_at") or ""), "point_in_time": False,
-            "note": "Raw company description, financial tables and shareholding snapshot from the cached deep source.",
-        },
-        {
-            "name": "Official NSE bhavcopy", "status": "available" if price.get("available") else "missing",
-            "as_of": str(price.get("latest_date", "")), "point_in_time": True,
-            "note": "Daily OHLCV history from the canonical persisted store.",
-        },
-        {
-            "name": "Curated news and filings", "status": "available" if news_rows else "missing",
-            "as_of": news_as_of, "point_in_time": False,
-            "note": f"{len(news_rows)} linked article(s) in the current 30-day window.",
-        },
-        {
-            "name": "Current F&O instrument master", "status": "available" if fno_match else "not_applicable_or_missing",
-            "as_of": str((fno_payload or {}).get("generated_at", "")), "point_in_time": False,
-            "note": "Current nearest futures contract metadata; not a historical derivatives series.",
-        },
+        {"name": "Whole-market scanner", "status": "available" if scan_row else "missing", "as_of": str((scan_payload or {}).get("scanned_at", "")), "point_in_time": False, "note": "Current saved technical scan projection."},
+        {"name": "Long-Term research store", "status": "available" if long_row else "missing", "as_of": str((long_term_payload or {}).get("scanned_at", "")), "point_in_time": False, "note": "Current technical plus current-fundamental decision aid."},
+        {"name": "Deep fundamentals cache", "status": str(raw_record.get("freshness") or "MISSING"), "as_of": str(raw_record.get("fetched_at") or ""), "point_in_time": False, "note": "Raw company description, financial tables and shareholding snapshot."},
+        {"name": "Official NSE bhavcopy", "status": "available" if price.get("available") else "missing", "as_of": str(price.get("latest_date", "")), "point_in_time": True, "note": "Daily OHLCV history from the canonical store."},
+        {"name": "Curated news and filings", "status": "available" if news_rows else "missing", "as_of": news_as_of, "point_in_time": False, "note": f"{len(news_rows)} linked article(s) in the current 30-day window."},
+        {"name": "Current F&O instrument master", "status": "available" if fno_match else "not_applicable_or_missing", "as_of": str((fno_payload or {}).get("generated_at", "")), "point_in_time": False, "note": "Current nearest futures metadata; not a historical series."},
     ]
     for upload in requirements.get("uploads", []):
         sources.append({
             "name": f"Uploaded evidence: {upload.get('kind')}",
-            "status": "structured" if upload.get("structured") else "source_attached_unparsed",
-            "as_of": str(upload.get("as_of") or ""),
-            "point_in_time": True,
-            "note": f"{upload.get('filename')} · SHA256 {str(upload.get('sha256', ''))[:12]} · {upload.get('source_url') or 'source URL not supplied'}",
+            "status": str(upload.get("extraction_status") or "SOURCE_ATTACHED_UNPARSED"),
+            "as_of": str(upload.get("as_of") or ""), "point_in_time": True,
+            "note": f"{upload.get('filename')} · SHA256 {str(upload.get('sha256', ''))[:12]} · {upload.get('source_url') or 'source URL missing'}",
         })
 
-    thesis = list(dict.fromkeys(quality + technical + [
-        str(item.get("why_it_matters", "")) for item in news_rows[:5] if str(item.get("why_it_matters", "")).strip()
-    ]))[:12]
+    thesis = list(dict.fromkeys(quality + technical + [str(item.get("why_it_matters", "")) for item in news_rows[:5] if str(item.get("why_it_matters", "")).strip()]))[:12]
     if not thesis:
         thesis = ["QuantTerm does not yet have enough traced evidence to publish a positive investment thesis."]
 
     return {
-        "schema_version": 2,
-        "report_type": "EQUITY_RESEARCH_DOSSIER",
-        "symbol": symbol,
-        "company": company,
-        "sector": sector,
+        "schema_version": 3, "report_type": "EQUITY_RESEARCH_DOSSIER",
+        "symbol": symbol, "company": company, "sector": sector,
         "generated_at": (generated_at or datetime.now(timezone.utc)).isoformat(),
         "classification": str(long_row.get("classification") or scan_row.get("status") or "UNCLASSIFIED"),
-        "coverage_pct": coverage_pct,
-        "section_coverage": section_coverage,
-        "price": price,
-        "scan": scan_row,
-        "long_term": long_row,
-        "fundamentals": fundamentals,
-        "deep_fundamentals": raw,
+        "coverage_pct": coverage_pct, "section_coverage": section_coverage,
+        "price": price, "scan": scan_row, "long_term": long_row,
+        "fundamentals": fundamentals, "deep_fundamentals": raw,
         "deep_fundamentals_fetched_at": str(raw_record.get("fetched_at") or ""),
-        "company_about": company_about,
-        "financial_tables": financial_tables,
+        "company_about": company_about, "financial_tables": financial_tables,
         "shareholding_history": _normalise_table(shareholding_rows, 30),
-        "business_segments": business_segments,
-        "order_book_guidance": order_book_guidance,
-        "market": dict(market or {}),
-        "news": news_rows[:15],
-        "management_evidence": management_evidence[:15],
-        "fno": fno_match or {},
-        "thesis": thesis,
-        "quality_factors": quality,
-        "technical_evidence": technical,
+        "business_segments": structured_rows(symbol, "business_segments"),
+        "order_book_guidance": structured_rows(symbol, "order_book_guidance"),
+        "market": dict(market or {}), "news": news_rows[:15],
+        "management_evidence": management_evidence[:15], "fno": fno_match or {},
+        "thesis": thesis, "quality_factors": quality, "technical_evidence": technical,
         "risks": list(dict.fromkeys(risks)) or ["No explicit risk list has been recorded; treat the evidence pack as incomplete."],
-        "sources": sources,
-        "evidence_requirements": requirements,
+        "sources": sources, "evidence_requirements": requirements,
         "open_items": list(dict.fromkeys(open_items)),
-        "disclaimer": (
-            "QuantTerm Research is an evidence-organising decision aid, not a buy or sell recommendation. "
-            "Current fundamentals and news are not point-in-time historical evidence unless explicitly labelled."
-        ),
+        "disclaimer": "QuantTerm Research is an evidence-organising decision aid, not a buy or sell recommendation. Current fundamentals and news are not point-in-time historical evidence unless explicitly labelled.",
         "_frame": frame,
     }
 
 
 def build_long_term_basket(
-    *,
-    symbols: Iterable[str] | None = None,
-    limit: int = 3,
+    *, symbols: Iterable[str] | None = None, limit: int = 3,
     long_term_payload: Mapping[str, Any] | None = None,
     generated_at: datetime | None = None,
 ) -> dict[str, Any]:
-    """Build a multi-company research basket using the current Long-Term shortlist."""
     if long_term_payload is None:
         from product.long_term_store import load_long_term_scan
         long_term_payload = load_long_term_scan() or {}
     records = [dict(item) for item in (long_term_payload.get("records", []) or []) if isinstance(item, Mapping)]
     requested = [_clean_symbol(item) for item in symbols] if symbols else []
-    if requested:
-        chosen = [item for symbol in requested for item in records if str(item.get("symbol", "")).upper() == symbol]
-    else:
-        chosen = records[: max(1, min(int(limit), 10))]
+    chosen = [item for symbol in requested for item in records if str(item.get("symbol", "")).upper() == symbol] if requested else records[:max(1, min(int(limit), 10))]
     dossiers = [build_equity_dossier(str(item.get("symbol", "")), long_term_payload=long_term_payload) for item in chosen]
-    common_quality: dict[str, int] = {}
-    common_risks: dict[str, int] = {}
+    quality_counts: dict[str, int] = {}
+    risk_counts: dict[str, int] = {}
     for dossier in dossiers:
         for item in dossier["quality_factors"]:
-            common_quality[item] = common_quality.get(item, 0) + 1
+            quality_counts[item] = quality_counts.get(item, 0) + 1
         for item in dossier["risks"]:
-            common_risks[item] = common_risks.get(item, 0) + 1
+            risk_counts[item] = risk_counts.get(item, 0) + 1
     return {
-        "schema_version": 2,
-        "report_type": "LONG_TERM_BASKET",
+        "schema_version": 3, "report_type": "LONG_TERM_BASKET",
         "generated_at": (generated_at or datetime.now(timezone.utc)).isoformat(),
         "title": "QuantTerm Long-Term Research Basket",
         "subtitle": "Evidence-backed quality, valuation and technical-timing brief",
         "companies": dossiers,
-        "common_quality": [key for key, count in sorted(common_quality.items(), key=lambda item: (-item[1], item[0])) if count >= 2][:8],
-        "common_risks": [key for key, count in sorted(common_risks.items(), key=lambda item: (-item[1], item[0])) if count >= 2][:8],
+        "common_quality": [key for key, count in sorted(quality_counts.items(), key=lambda item: (-item[1], item[0])) if count >= 2][:8],
+        "common_risks": [key for key, count in sorted(risk_counts.items(), key=lambda item: (-item[1], item[0])) if count >= 2][:8],
         "open_items": list(dict.fromkeys(item for dossier in dossiers for item in dossier["open_items"])),
-        "disclaimer": (
-            "This basket is a current research publication generated from persisted QuantTerm evidence. "
-            "It is not a portfolio recommendation and does not replace independent due diligence."
-        ),
+        "disclaimer": "This basket is a current research publication generated from persisted QuantTerm evidence. It is not a portfolio recommendation and does not replace independent due diligence.",
     }
 
 
@@ -481,7 +389,6 @@ def _report_path(prefix: str, name: str, report_dir: str | Path = DEFAULT_REPORT
 
 def generate_equity_report(symbol: str, *, report_dir: str | Path = DEFAULT_REPORT_DIR) -> Path:
     from reporting.pdf_renderer import render_equity_pdf
-
     dossier = build_equity_dossier(symbol)
     path = _report_path("equity_evidence_brief", dossier["symbol"], report_dir)
     render_equity_pdf(dossier, path)
@@ -490,7 +397,6 @@ def generate_equity_report(symbol: str, *, report_dir: str | Path = DEFAULT_REPO
 
 def generate_basket_report(*, limit: int = 3, report_dir: str | Path = DEFAULT_REPORT_DIR) -> Path:
     from reporting.pdf_renderer import render_basket_pdf
-
     basket = build_long_term_basket(limit=limit)
     path = _report_path("long_term_basket", f"top_{limit}", report_dir)
     render_basket_pdf(basket, path)
