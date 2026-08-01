@@ -13,7 +13,9 @@ never a winning/losing label, never a claim the data cannot support.
 from __future__ import annotations
 
 from research.intelligence import schemas as SC
-from research.auto_research import growth as GR
+# NOTE: `research.auto_research.growth` is imported lazily inside build_card() — importing it at
+# module load creates a cycle (research.auto_research.__init__ → scheduler → … → evidence_brain)
+# that leaves this module partially initialised when it is imported first.
 
 # evidence states (richer than win/lose)
 INSUFFICIENT_EVIDENCE = "INSUFFICIENT_EVIDENCE"
@@ -95,6 +97,7 @@ def build_card(strategy_def: SC.StrategyDefinition, *, backtest_R: float,
         except Exception:
             pass
 
+    from research.auto_research import growth as GR      # lazy: breaks the import cycle
     cal = GR.calibrate("", strategy_def.family, backtest_R, fs["mean"], n_fwd,
                        forward_lower_R=fs["lower"])
     ftb = (fs["mean"] / backtest_R) if backtest_R > 0 else 0.0
