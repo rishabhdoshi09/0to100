@@ -11,11 +11,63 @@ in production they come from here, reading the canonical stores the rest of Quan
 Every one degrades HONESTLY: with no research-grade data on disk they return empty / invalid
 rather than fabricating prices or evidence. `is_synthetic` is False only when the numbers
 came from real history — so the discovery gate treats a no-data run as unavailable, never as
-a passing strategy. Pure reads; no order path.
+a passing strategy. Pure reads; no live broker order path.
 """
 from __future__ import annotations
 
 from research.strategy_studio.discovery import EvidenceReport
+
+
+def ensure_production_paper_pipeline() -> bool:
+    """Idempotently route the production singleton through OMS/Risk/Protection/TCA.
+
+    ``get_brain`` imports this provider module only for production wiring. Directly constructed
+    test brains and scratch backtests retain the plain PaperBook. The wrapper cannot submit to a
+    real broker; all external-looking IDs are simulated and explicitly paper-prefixed.
+    """
+    try:
+        from pathlib import Path
+        from research.auto_research import scheduler as SCH
+
+        brain = getattr(SCH, "_BRAIN", None)
+        if brain is None:
+            return False
+        if bool(getattr(brain.intel_book, "institutional_execution_enabled", False)):
+            return True
+
+        from execution.oms.store import OmsStore
+        from execution.paper_book_adapter import InstitutionalPaperBookAdapter
+        from execution.paper_pipeline import PaperExecutionPipeline
+        from execution.protection.store import ProtectionStore
+        from execution.tca.store import TcaStore
+        from risk.governor_store import RiskDecisionStore
+
+        logs = Path(__file__).resolve().parents[2] / "logs"
+        pipeline = PaperExecutionPipeline(
+            oms_store=OmsStore(logs / "oms" / "orders.db"),
+            risk_store=RiskDecisionStore(logs / "risk" / "decisions.db"),
+            protection_store=ProtectionStore(logs / "protection" / "plans.db"),
+            tca_store=TcaStore(logs / "tca" / "assessments.db"),
+            event_store=brain.event_store,
+        )
+        brain.intel_book = InstitutionalPaperBookAdapter(
+            brain.intel_book,
+            pipeline=pipeline,
+            runtime_state=brain.runtime_state,
+        )
+        return True
+    except Exception as exc:
+        # This is a safety capability, not optional decoration. Preserve the reason so the
+        # supervisor/board can refuse new PAPER risk instead of silently using a weaker path.
+        try:
+            from research.auto_research import scheduler as SCH
+
+            brain = getattr(SCH, "_BRAIN", None)
+            if brain is not None:
+                brain.state.last_error = f"institutional paper pipeline: {exc}"
+        except Exception:
+            pass
+        return False
 
 
 # ── backtest (in-sample evidence from real history) ──────────────────────────────
@@ -86,9 +138,13 @@ def daily_bars(date: str) -> dict:
 # ── forward-test signals (entries from a strategy's rules) ───────────────────────
 
 def current_regime() -> str:
-    """"RISK_ON" / "RISK_OFF" from the macro + breadth read, so the autopilot stands down new
-    deployments in a hostile tape. Fails OPEN to RISK_ON only when it truly can't tell — a
-    missing signal shouldn't freeze the whole system, but a clear RISK_OFF must bite."""
+    """Return the deterministic market regime after production PAPER safety wiring.
+
+    A missing macro signal does not manufacture a defensive reading, but a clear RISK_OFF must
+    bite. Failure to install the institutional PAPER pipeline is recorded on the brain and the
+    autonomy safety layer can refuse new entries.
+    """
+    ensure_production_paper_pipeline()
     try:
         from core import macro_pulse
         mp = macro_pulse.assess() if hasattr(macro_pulse, "assess") else {}
