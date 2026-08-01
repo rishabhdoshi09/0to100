@@ -7,7 +7,7 @@ from fastapi import FastAPI, HTTPException, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 
-app = FastAPI(title="QuantTerm Research Report API", version="0.2.0")
+app = FastAPI(title="QuantTerm Research Report API", version="0.3.0")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://127.0.0.1:5173", "http://localhost:5173"],
@@ -111,6 +111,34 @@ def evidence_status(symbol: str) -> dict:
         raise HTTPException(status_code=500, detail=f"Evidence status failed: {exc}") from exc
 
 
+@app.post("/evidence/{symbol}/actions/refresh-fundamentals")
+def refresh_fundamentals(symbol: str) -> dict:
+    try:
+        from fundamentals.fetcher import get_deep_fundamentals
+        from reporting.evidence_intake import clean_symbol
+
+        clean = clean_symbol(symbol)
+        payload = get_deep_fundamentals(clean, force_refresh=True)
+        return {
+            "accepted": True,
+            "symbol": clean,
+            "sections": {
+                "about": bool(payload.get("about")),
+                "quarterly_results": len(payload.get("quarterly_results", []) or []),
+                "profit_loss": len(payload.get("profit_loss", []) or []),
+                "balance_sheet": len(payload.get("balance_sheet", []) or []),
+                "cash_flow": len(payload.get("cash_flow", []) or []),
+                "shareholding": len(payload.get("shareholding", []) or []),
+                "peer_comparison": len(payload.get("peer_comparison", []) or []),
+            },
+            "status": evidence_status(clean),
+        }
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Deep fundamentals refresh failed: {exc}") from exc
+
+
 @app.get("/evidence/templates/{kind}.csv")
 def evidence_template(kind: str) -> Response:
     try:
@@ -157,15 +185,13 @@ async def upload_evidence(
 @app.get("/evidence/{symbol}/files/{evidence_id}")
 def download_evidence(symbol: str, evidence_id: str) -> FileResponse:
     try:
-        from reporting.evidence_intake import latest_upload, upload_path
+        from reporting.evidence_intake import upload_path
 
+        status = evidence_status(symbol)
         path = upload_path(symbol, evidence_id)
         if path is None:
             raise HTTPException(status_code=404, detail="Evidence file not found")
-        item = next(
-            (entry for entry in evidence_status(symbol).get("uploads", []) if entry.get("evidence_id") == evidence_id),
-            latest_upload(symbol, "") or {},
-        )
+        item = next((entry for entry in status.get("uploads", []) if entry.get("evidence_id") == evidence_id), {})
         return FileResponse(
             path=str(path),
             filename=str(item.get("filename") or path.name),
