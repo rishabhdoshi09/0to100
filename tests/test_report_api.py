@@ -9,6 +9,9 @@ def test_report_api_has_no_broker_or_order_routes():
     paths = {route.path for route in report_api.app.routes}
     assert "/reports/equity/{symbol}" in paths
     assert "/reports/basket/long-term" in paths
+    assert "/evidence/{symbol}" in paths
+    assert "/evidence/{symbol}/{kind}" in paths
+    assert "/evidence/templates/{kind}.csv" in paths
     assert not any("broker" in path.lower() or "order" in path.lower() for path in paths)
 
 
@@ -21,3 +24,9 @@ def test_pdf_response_rejects_non_pdf(tmp_path: Path):
         assert getattr(exc, "status_code", None) == 500
     else:
         raise AssertionError("non-PDF artifact was accepted")
+
+
+def test_template_endpoint_returns_csv():
+    response = report_api.evidence_template("financial_history")
+    assert response.media_type == "text/csv"
+    assert b"period_end" in response.body
