@@ -1,8 +1,9 @@
 """Product-hardening API extensions for the QuantTerm terminal.
 
 This module reuses the authoritative terminal API and adds product-level readiness,
-one-click data bootstrap and explainable single-stock intelligence. Run Uvicorn with
-``terminal_product_api:app`` so the original endpoints remain unchanged.
+one-click data bootstrap, institutional deployment gates, and explainable single-stock
+intelligence. Run Uvicorn with ``terminal_product_api:app`` so the original endpoints
+remain unchanged.
 """
 from __future__ import annotations
 
@@ -11,11 +12,14 @@ from typing import Any
 from fastapi import HTTPException
 
 import terminal_api as core
+from product.institutional_readiness import build_institutional_readiness
 from product.product_readiness import build_product_readiness
 from product.stock_workspace import build_stock_workspace, clean_symbol
 
 app = core.app
-app.version = "0.5.0"
+app.version = "0.6.0"
+
+INSTITUTIONAL_CERTIFICATIONS = core.ROOT / "logs" / "institutional_readiness" / "certifications.json"
 
 
 def _current_product_payloads() -> dict[str, dict[str, Any]]:
@@ -37,10 +41,39 @@ def _current_product_payloads() -> dict[str, dict[str, Any]]:
     }
 
 
+def _institutional_capabilities() -> dict[str, bool]:
+    """Read explicit capability certifications; absent or malformed entries fail closed."""
+    raw = core._json_file(INSTITUTIONAL_CERTIFICATIONS, {})
+    certifications = dict(raw.get("certifications", {}) or {}) if isinstance(raw, dict) else {}
+    return {
+        str(key): True
+        for key, value in certifications.items()
+        if isinstance(value, dict)
+        and value.get("certified") is True
+        and bool(value.get("certified_at"))
+        and bool(value.get("evidence"))
+    }
+
+
 @app.get("/api/product-readiness")
 def product_readiness() -> dict[str, Any]:
     payloads = _current_product_payloads()
     return build_product_readiness(**payloads)
+
+
+@app.get("/api/institutional-readiness")
+def institutional_readiness() -> dict[str, Any]:
+    """Expose independent production gates without converting them into one score."""
+    payloads = _current_product_payloads()
+    return build_institutional_readiness(
+        data=payloads["data"],
+        market=payloads["market"],
+        scan=payloads["scan"],
+        paper=core._paper_payload(),
+        autonomy=core._autonomy_payload(),
+        operations=payloads["operations"],
+        capabilities=_institutional_capabilities(),
+    )
 
 
 @app.post("/api/product-bootstrap")
