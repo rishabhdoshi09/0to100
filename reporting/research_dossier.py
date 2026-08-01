@@ -168,14 +168,14 @@ def build_equity_dossier(
 ) -> dict[str, Any]:
     """Build one auditable single-stock research dossier payload."""
     symbol = _clean_symbol(symbol)
-    if all(value is None for value in (scan_payload, long_term_payload, frame, market, news, fno_payload)):
+    if any(value is None for value in (scan_payload, long_term_payload, frame, market, news, fno_payload)):
         defaults = _default_inputs(symbol)
-        scan_payload = defaults["scan_payload"]
-        long_term_payload = defaults["long_term_payload"]
-        frame = defaults["frame"]
-        market = defaults["market"]
-        news = defaults["news"]
-        fno_payload = defaults["fno_payload"]
+        scan_payload = defaults["scan_payload"] if scan_payload is None else scan_payload
+        long_term_payload = defaults["long_term_payload"] if long_term_payload is None else long_term_payload
+        frame = defaults["frame"] if frame is None else frame
+        market = defaults["market"] if market is None else market
+        news = defaults["news"] if news is None else news
+        fno_payload = defaults["fno_payload"] if fno_payload is None else fno_payload
 
     scan_row = _record(scan_payload, symbol)
     long_row = _record(long_term_payload, symbol)
