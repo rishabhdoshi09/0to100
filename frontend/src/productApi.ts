@@ -1,4 +1,4 @@
-import type { ControlName, LongTermRecord, NewsArticle, ScanRecord } from './types'
+import type { ControlName, ConvictionRecord, LongTermRecord, NewsArticle, ScanRecord } from './types'
 
 export type ProductLane = {
   key: string
@@ -93,6 +93,45 @@ export type StockWorkspace = {
   next_actions: Array<{ control: ControlName | 'REFRESH_STOCK_FUNDAMENTALS'; label: string }>
 }
 
+export type CommandCenterWorkspace = {
+  generated_at: string
+  market_health: string
+  market_summary: string
+  trade_stance: string
+  breadth: string
+  scan_universe: number
+  momentum_count: number
+  ready_count: number
+  near_breakout_count: number
+  long_term_count: number
+  fundamental_coverage_pct: number
+  paper_capital: number
+  paper_equity: number
+  paper_return_pct: number
+  open_position_count: number
+  open_risk: number
+  autonomy_running: boolean
+  autonomy_state: string
+  heartbeat_ist: string
+  top_setups: ScanRecord[]
+  top_long_term: LongTermRecord[]
+  insights: string[]
+}
+
+export type ScannerWorkspaceRow = ScanRecord
+  & Partial<ConvictionRecord>
+  & Partial<LongTermRecord>
+  & { _source?: string }
+
+export type ScannerWorkspace = {
+  generated_at: string
+  mode: string
+  source: string
+  scanned_at: string
+  universe_size: number
+  rows: ScannerWorkspaceRow[]
+}
+
 const json = async <T>(response: Response): Promise<T> => {
   if (!response.ok) {
     const body = await response.text()
@@ -129,3 +168,12 @@ export const refreshStockFundamentals = (symbol: string): Promise<{
   method: 'POST',
   headers: { Accept: 'application/json' },
 }).then((response) => json(response))
+
+export const fetchCommandCenterWorkspace = (): Promise<CommandCenterWorkspace> =>
+  fetch('/api/command-center-workspace', { headers: { Accept: 'application/json' } })
+    .then((response) => json<CommandCenterWorkspace>(response))
+
+export const fetchScannerWorkspace = (mode: string): Promise<ScannerWorkspace> =>
+  fetch(`/api/scanner-workspace/${encodeURIComponent(mode)}`, {
+    headers: { Accept: 'application/json' },
+  }).then((response) => json<ScannerWorkspace>(response))
