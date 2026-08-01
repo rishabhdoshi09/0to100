@@ -2,15 +2,14 @@ import { useEffect, useMemo, useState } from 'react'
 import { fetchChart, fetchDashboard, sendControl } from './api'
 import { MarketSidebar } from './MarketSidebar'
 import { FnoView, NewsView, OperationsRibbon } from './marketViews'
+import { ProductCommandCenterView, ProductStockIntelligenceView } from './productViews'
 import { ResearchDataView } from './researchData'
 import {
   AutomationView,
-  CommandCenterView,
   LongTermView,
   MarketInternalsView,
   PortfolioView,
   ScannerView,
-  StockIntelligenceView,
 } from './views'
 import type { ChartBar, ControlName, DashboardPayload } from './types'
 
@@ -114,17 +113,23 @@ const emptyDashboard: DashboardPayload = {
   conviction: [],
 }
 
+const pageTitles: Record<string, string> = {
+  Portfolio: 'Paper Portfolio',
+  'F&O Desk': 'F&O Coverage',
+  Automation: 'System Health',
+}
+
 const pageSubtitles: Record<string, string> = {
-  'Command Center': 'Market posture, opportunities, portfolio and system health in one decision surface.',
-  Scanner: 'Immediate whole-market momentum, conviction, breakout and pre-breakout research.',
-  'Stock Intelligence': 'Price structure, evidence, quality, risk and invalidation for the selected stock.',
-  'Research Data': 'Strict as-of dates, source links, templates and evidence uploads for the selected stock.',
-  Portfolio: 'Paper capital, open risk, recorded equity, positions and closed-trade attribution.',
-  'Market Internals': 'Regime, breadth, volatility, sector leadership and scanner coverage.',
-  'Long-Term': 'Business quality, valuation and technical timing on a dedicated research lane.',
-  'News & Events': 'Curated market context with source health, entity mapping and F&O linkage.',
-  'F&O Desk': 'Current stock-derivatives universe, contract mapping and explicit exclusions.',
-  Automation: 'Paper supervisor heartbeat, durable jobs, failures, controls and operational dialogue.',
+  'Command Center': 'What is ready, what is stale, what to run now, and the best current research in one surface.',
+  Scanner: 'Whole-market technical ranking with dated results, chart structure, evidence and invalidation.',
+  'Stock Intelligence': 'A plain-English stock workspace combining technicals, fundamentals, source dates, risks and context.',
+  'Research Data': 'Strict as-of dates, official source links, templates and evidence uploads for the selected stock.',
+  Portfolio: 'Secondary paper-execution evidence: capital, open risk, positions and recorded outcomes.',
+  'Market Internals': 'Regime, breadth, volatility, sector leadership and current scanner coverage.',
+  'Long-Term': 'Current business quality, valuation and official-history timing on a dedicated research lane.',
+  'News & Events': 'Dated market context with source health and company mapping; never a standalone trading signal.',
+  'F&O Desk': 'Current derivatives eligibility, nearest futures, expiry and lot size—not an options signal engine.',
+  Automation: 'Operational heartbeat, jobs, failures and controls. Research remains the primary product.',
 }
 
 function App() {
@@ -148,7 +153,7 @@ function App() {
         ...payload.fno.underlyings.map((row) => row.symbol),
       ]
       const first = allSymbols[0] || ''
-      setSelected((current) => (current && allSymbols.includes(current) ? current : first))
+      setSelected((current) => current || first)
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : 'Dashboard API unavailable')
     } finally {
@@ -158,7 +163,7 @@ function App() {
 
   useEffect(() => {
     void refresh()
-    const timer = window.setInterval(() => void refresh(), 2_000)
+    const timer = window.setInterval(() => void refresh(), 5_000)
     return () => window.clearInterval(timer)
   }, [])
 
@@ -184,18 +189,18 @@ function App() {
   const openSearch = () => {
     const clean = query.trim().toUpperCase()
     if (!clean) return
+    if (!/^[A-Z0-9&.-]{1,32}$/.test(clean)) {
+      setControlState('Use a valid NSE symbol such as RELIANCE, TCS or HDFCBANK')
+      return
+    }
     const match = symbols.find((symbol) => symbol === clean)
       || symbols.find((symbol) => symbol.startsWith(clean))
-      || symbols.find((symbol) => symbol.includes(clean))
-    if (match) {
-      setSelected(match)
-      setQuery(match)
-      setActive('Stock Intelligence')
-      setControlState(`Opened ${match}`)
-      window.setTimeout(() => setControlState(''), 1800)
-    } else {
-      setControlState(`No saved QuantTerm record found for ${clean}`)
-    }
+      || clean
+    setSelected(match)
+    setQuery(match)
+    setActive('Stock Intelligence')
+    setControlState(`Opening verified workspace for ${match}`)
+    window.setTimeout(() => setControlState(''), 2500)
   }
 
   const runControl = async (control: ControlName) => {
@@ -239,7 +244,7 @@ function App() {
 
   const renderView = () => {
     if (active === 'Scanner') return <ScannerView {...viewProps} />
-    if (active === 'Stock Intelligence') return <StockIntelligenceView {...viewProps} />
+    if (active === 'Stock Intelligence') return <ProductStockIntelligenceView {...viewProps} />
     if (active === 'Research Data') return <ResearchDataView symbol={selected} />
     if (active === 'Portfolio') return <PortfolioView {...viewProps} />
     if (active === 'Market Internals') return <MarketInternalsView {...viewProps} />
@@ -247,7 +252,7 @@ function App() {
     if (active === 'News & Events') return <NewsView {...viewProps} />
     if (active === 'F&O Desk') return <FnoView {...viewProps} />
     if (active === 'Automation') return <AutomationView {...viewProps} />
-    return <CommandCenterView {...viewProps} />
+    return <ProductCommandCenterView {...viewProps} />
   }
 
   return (
@@ -258,29 +263,25 @@ function App() {
           <div className="search-box">
             ⌕
             <input
-              aria-label="Search saved QuantTerm symbols"
-              placeholder="Search saved stocks…"
+              aria-label="Search NSE symbol"
+              placeholder="Open any NSE symbol…"
               value={query}
               onChange={(event: { target: { value: string } }) => setQuery(event.target.value)}
               onKeyDown={(event: { key: string }) => { if (event.key === 'Enter') openSearch() }}
               list="quantterm-symbols"
             />
             <datalist id="quantterm-symbols">{symbols.slice(0, 800).map((symbol) => <option value={symbol} key={symbol} />)}</datalist>
-            <button type="button" onClick={openSearch}>Open</button>
+            <button type="button" onClick={openSearch}>Open stock</button>
           </div>
           <div className="top-status">
-            <span className={dashboard.operations.running ? 'live-pill' : 'offline-pill'}>
-              <i /> {dashboard.operations.running ? 'MARKET OPS ONLINE' : 'MARKET OPS OFFLINE'}
-            </span>
-            <span className={dashboard.autonomy.running ? 'live-pill' : 'offline-pill'}>
-              <i /> {dashboard.autonomy.running ? 'AUTONOMY ONLINE' : 'AUTONOMY OFFLINE'}
-            </span>
+            <span className={dashboard.data.ready ? 'live-pill' : 'offline-pill'}><i /> {dashboard.data.ready ? 'CORE DATA READY' : 'DATA INCOMPLETE'}</span>
+            <span className={dashboard.operations.running ? 'live-pill' : 'offline-pill'}><i /> {dashboard.operations.running ? 'MARKET OPS ONLINE' : 'MARKET OPS OFFLINE'}</span>
             <button type="button" onClick={() => void refresh()} aria-label="Refresh dashboard">↻</button>
           </div>
         </header>
 
         <section className="page-title">
-          <div><h1>{active}</h1><p>{pageSubtitles[active]}</p></div>
+          <div><h1>{pageTitles[active] || active}</h1><p>{pageSubtitles[active]}</p></div>
           <div className="page-actions">
             <button type="button" disabled={!selected} onClick={openEquityReport}>Equity Evidence PDF</button>
             <button type="button" onClick={openBasketReport}>Top-3 Basket PDF</button>
