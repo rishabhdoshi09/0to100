@@ -1,12 +1,15 @@
-"""Transparent PaperBook adapter that routes production intents through institutional state."""
+"""Transparent PaperBook adapter that routes production through institutional state."""
 from __future__ import annotations
+
+from execution.paper_exit import sync_paper_close
 
 
 class InstitutionalPaperBookAdapter:
-    """Delegate the PaperBook API while replacing only ``open_intent``.
+    """Delegate PaperBook while replacing entry and exit state transitions.
 
-    The autonomous runtime and all position-management code continue to use the same canonical
-    PaperBook object. Only new entries are routed through the durable PAPER execution pipeline.
+    The autonomous runtime continues to use the same canonical PaperBook positions and trade
+    outcomes. New entries route through OMS/Risk/Protection/TCA, and closed trades synchronize
+    the durable OMS and protection ledgers.
     """
 
     def __init__(self, book, *, pipeline, runtime_state) -> None:
@@ -22,6 +25,12 @@ class InstitutionalPaperBookAdapter:
             runtime_state=self._runtime_state,
         )
         return result.position if result.opened else None
+
+    def mark(self, bars: dict, date: str):
+        closed = self._book.mark(bars, date)
+        for trade in closed:
+            sync_paper_close(self._pipeline, trade)
+        return closed
 
     @property
     def institutional_execution_enabled(self) -> bool:
