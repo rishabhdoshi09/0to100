@@ -13,6 +13,7 @@ on:
       - 'reporting/**'
       - 'product/product_readiness.py'
       - 'product/stock_workspace.py'
+      - 'product/workspace.py'
       - 'requirements.txt'
       - '.github/workflows/terminal-ui.yml'
 
@@ -34,4 +35,4 @@ jobs:
         run: |
           python -m py_compile terminal_api.py terminal_product_api.py report_api.py
           python -m py_compile reporting/evidence_intake.py reporting/research_dossier.py reporting/pdf_renderer.py
-          python -m py_compile product/product_readiness.py product/stock_workspace.py
+          python -m py_compile product/product_readiness.py product/stock_workspace.py product/workspace.py
