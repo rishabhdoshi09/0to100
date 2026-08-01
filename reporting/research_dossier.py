@@ -1,8 +1,9 @@
 """Evidence-first research dossier assembly for QuantTerm.
 
-This module builds a deterministic report payload from QuantTerm's persisted stores.
-It does not invent business descriptions, management quotes, institutional holdings,
-or financial history. Missing sections become explicit open items in the final report.
+The dossier uses persisted QuantTerm stores, deep fundamentals, uploaded evidence and
+strict source dates. It never invents business descriptions, management quotations,
+institutional holdings or financial history. Missing sections include official source
+links, instructions and upload/template routes.
 """
 from __future__ import annotations
 
@@ -20,7 +21,7 @@ def _as_float(value: Any) -> float | None:
     try:
         if value in (None, ""):
             return None
-        result = float(value)
+        result = float(str(value).replace(",", "").replace("%", "").strip())
         return result if result == result else None
     except (TypeError, ValueError):
         return None
@@ -53,15 +54,9 @@ def _return_pct(frame: Any, periods: int) -> float | None:
 def _price_metrics(frame: Any) -> dict[str, Any]:
     if frame is None or len(frame) == 0:
         return {
-            "available": False,
-            "latest_price": None,
-            "latest_date": "",
-            "return_1m_pct": None,
-            "return_3m_pct": None,
-            "return_6m_pct": None,
-            "return_12m_pct": None,
-            "high_52w": None,
-            "from_high_pct": None,
+            "available": False, "latest_price": None, "latest_date": "",
+            "return_1m_pct": None, "return_3m_pct": None, "return_6m_pct": None,
+            "return_12m_pct": None, "high_52w": None, "from_high_pct": None,
             "avg_volume_20d": None,
         }
     try:
@@ -85,15 +80,9 @@ def _price_metrics(frame: Any) -> dict[str, Any]:
         }
     except Exception:
         return {
-            "available": False,
-            "latest_price": None,
-            "latest_date": "",
-            "return_1m_pct": None,
-            "return_3m_pct": None,
-            "return_6m_pct": None,
-            "return_12m_pct": None,
-            "high_52w": None,
-            "from_high_pct": None,
+            "available": False, "latest_price": None, "latest_date": "",
+            "return_1m_pct": None, "return_3m_pct": None, "return_6m_pct": None,
+            "return_12m_pct": None, "high_52w": None, "from_high_pct": None,
             "avg_volume_20d": None,
         }
 
@@ -101,9 +90,11 @@ def _price_metrics(frame: Any) -> dict[str, Any]:
 def _default_inputs(symbol: str) -> dict[str, Any]:
     from product.long_term_store import load_long_term_scan
     from product.scan_store import load_scan
+    from reporting.evidence_intake import load_raw_fundamentals
 
     scan = load_scan() or {}
     long_term = load_long_term_scan() or {}
+    raw_fundamentals = load_raw_fundamentals(symbol)
     try:
         from data.bhavcopy_runtime import get_ohlcv
         frame = get_ohlcv(symbol)
@@ -148,6 +139,7 @@ def _default_inputs(symbol: str) -> dict[str, Any]:
     return {
         "scan_payload": scan,
         "long_term_payload": long_term,
+        "raw_fundamentals": raw_fundamentals,
         "frame": frame,
         "market": market,
         "news": news,
@@ -155,11 +147,93 @@ def _default_inputs(symbol: str) -> dict[str, Any]:
     }
 
 
+def _row_label(row: Mapping[str, Any]) -> str:
+    for key in ("", "row_label", "Particulars", "PARTICULARS", "Particular"):
+        value = row.get(key)
+        if value not in (None, ""):
+            return str(value)
+    if row:
+        first = next(iter(row.values()))
+        return str(first or "")
+    return ""
+
+
+def _normalise_table(rows: Sequence[Mapping[str, Any]] | None, limit: int = 24) -> list[dict[str, Any]]:
+    result = []
+    for raw in list(rows or [])[:limit]:
+        row = dict(raw)
+        label = _row_label(row)
+        values = {str(k or "period"): v for k, v in row.items() if str(v or "").strip() and str(v) != label}
+        result.append({"label": label, "values": values})
+    return result
+
+
+def _latest_series_value(rows: Sequence[Mapping[str, Any]], needles: Sequence[str]) -> float | None:
+    for row in rows:
+        label = _row_label(row).lower()
+        if any(needle in label for needle in needles):
+            values = [_as_float(value) for key, value in row.items() if key not in ("", "row_label")]
+            clean = [value for value in values if value is not None]
+            if clean:
+                return clean[-1]
+    return None
+
+
+def _uploaded_management(rows: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    result = []
+    for row in rows:
+        commentary = str(row.get("commentary") or row.get("management_wording") or "").strip()
+        if not commentary:
+            continue
+        result.append({
+            "published_at": str(row.get("event_date") or row.get("as_of_date") or ""),
+            "fetched_at": "",
+            "source": "User-uploaded traced evidence",
+            "headline": str(row.get("topic") or row.get("guidance_metric") or "Management commentary"),
+            "why_it_matters": commentary,
+            "speaker": str(row.get("speaker") or ""),
+            "source_url": str(row.get("source_url") or ""),
+            "official": False,
+            "event_type": "management_commentary",
+            "impact_score": 0,
+        })
+    return result
+
+
+def _coverage(requirements: Mapping[str, Any], runtime: Mapping[str, bool]) -> tuple[int, list[dict[str, Any]]]:
+    weights = {
+        "price_history": 10, "scanner": 10, "long_term": 10,
+        "business_profile": 10, "financial_history": 20,
+        "shareholding_history": 15, "business_segments": 10,
+        "management_commentary": 10, "news": 5,
+    }
+    req_map = {item.get("key"): item for item in requirements.get("requirements", [])}
+    rows = []
+    score = 0.0
+    for key, weight in weights.items():
+        if key in runtime:
+            state = "FRESH" if runtime[key] else "MISSING"
+            available = runtime[key]
+            as_of = ""
+            age = None
+        else:
+            item = req_map.get(key, {})
+            state = str(item.get("status") or "MISSING")
+            available = bool(item.get("available"))
+            as_of = str(item.get("as_of") or "")
+            age = item.get("age_days")
+        factor = 1.0 if available and state == "FRESH" else 0.5 if available else 0.0
+        score += weight * factor
+        rows.append({"key": key, "weight": weight, "status": state, "available": available, "as_of": as_of, "age_days": age})
+    return round(score), rows
+
+
 def build_equity_dossier(
     symbol: str,
     *,
     scan_payload: Mapping[str, Any] | None = None,
     long_term_payload: Mapping[str, Any] | None = None,
+    raw_fundamentals: Mapping[str, Any] | None = None,
     frame: Any = None,
     market: Mapping[str, Any] | None = None,
     news: Sequence[Mapping[str, Any]] | None = None,
@@ -168,19 +242,32 @@ def build_equity_dossier(
 ) -> dict[str, Any]:
     """Build one auditable single-stock research dossier payload."""
     symbol = _clean_symbol(symbol)
-    if any(value is None for value in (scan_payload, long_term_payload, frame, market, news, fno_payload)):
+    if any(value is None for value in (scan_payload, long_term_payload, raw_fundamentals, frame, market, news, fno_payload)):
         defaults = _default_inputs(symbol)
         scan_payload = defaults["scan_payload"] if scan_payload is None else scan_payload
         long_term_payload = defaults["long_term_payload"] if long_term_payload is None else long_term_payload
+        raw_fundamentals = defaults["raw_fundamentals"] if raw_fundamentals is None else raw_fundamentals
         frame = defaults["frame"] if frame is None else frame
         market = defaults["market"] if market is None else market
         news = defaults["news"] if news is None else news
         fno_payload = defaults["fno_payload"] if fno_payload is None else fno_payload
 
+    from reporting.evidence_intake import evidence_requirements, structured_rows
+
     scan_row = _record(scan_payload, symbol)
     long_row = _record(long_term_payload, symbol)
     price = _price_metrics(frame)
+    raw_record = dict(raw_fundamentals or {})
+    raw = dict(raw_record.get("data", {}) or {})
     fundamentals = dict(long_row.get("fundamentals", {}) or {})
+    raw_shareholding = list(raw.get("shareholding", []) or [])
+    uploaded_shareholding = structured_rows(symbol, "shareholding_history")
+    shareholding_rows = uploaded_shareholding or raw_shareholding
+    if fundamentals.get("fii_holding") is None:
+        fundamentals["fii_holding"] = _latest_series_value(shareholding_rows, ("fii", "foreign institutional", "foreign portfolio"))
+    if fundamentals.get("dii_holding") is None:
+        fundamentals["dii_holding"] = _latest_series_value(shareholding_rows, ("dii", "domestic institutional"))
+
     company = str(scan_row.get("company") or long_row.get("company") or symbol)
     sector = str(long_row.get("sector") or scan_row.get("sector") or "Unclassified")
     quality = list(dict.fromkeys([str(x) for x in (long_row.get("quality_factors", []) or []) if str(x).strip()]))
@@ -191,7 +278,8 @@ def build_equity_dossier(
 
     news_rows = [dict(item) for item in (news or []) if isinstance(item, Mapping)]
     news_rows.sort(key=lambda item: (int(item.get("impact_score", 0) or 0), str(item.get("published_at", ""))), reverse=True)
-    management_evidence = [
+    uploaded_management = _uploaded_management(structured_rows(symbol, "management_commentary"))
+    management_evidence = uploaded_management + [
         item for item in news_rows
         if str(item.get("event_type", "")) in {"results", "order_or_contract", "fund_raising", "promoter_or_insider"}
         or bool(item.get("official"))
@@ -203,63 +291,97 @@ def build_equity_dossier(
             fno_match = dict(item)
             break
 
+    news_as_of = str(news_rows[0].get("published_at") or news_rows[0].get("fetched_at") or "") if news_rows else ""
+    requirements = evidence_requirements(
+        symbol,
+        price_as_of=str(price.get("latest_date") or ""),
+        scan_as_of=str((scan_payload or {}).get("scanned_at", "")),
+        long_term_as_of=str((long_term_payload or {}).get("scanned_at", "")),
+        news_as_of=news_as_of,
+        fno_as_of=str((fno_payload or {}).get("generated_at", "")),
+    )
+    runtime_presence = {
+        "price_history": bool(price.get("available")),
+        "scanner": bool(scan_row),
+        "long_term": bool(long_row),
+        "news": bool(news_rows),
+    }
+    coverage_pct, section_coverage = _coverage(requirements, runtime_presence)
+
     open_items: list[str] = []
-    if not long_row:
-        open_items.append("No completed Long-Term record is available for this symbol.")
-    if not fundamentals:
-        open_items.append("Current fundamental metrics are unavailable or not yet refreshed.")
+    for item in requirements.get("requirements", []):
+        if not item.get("available"):
+            links = item.get("links", [])
+            first_link = str(links[0].get("url")) if links else ""
+            action = f" Obtain it from {first_link}." if first_link else ""
+            open_items.append(f"{item.get('label')} is missing. {item.get('instructions')}{action}")
+        elif item.get("status") == "STALE":
+            open_items.append(
+                f"{item.get('label')} is stale: as of {item.get('as_of')} ({item.get('age_days')} days old). Refresh from the listed source."
+            )
     if not price.get("available"):
-        open_items.append("Official bhavcopy price history is unavailable for this symbol.")
+        open_items.append("Official bhavcopy price history is unavailable for this symbol; no synthetic price series is allowed.")
     if not news_rows:
-        open_items.append("No curated company-linked news or filing evidence is available in the current news store.")
-    if fundamentals.get("fii_holding") is None or fundamentals.get("dii_holding") is None:
-        open_items.append("Quarterly FII and DII ownership history is not present in the current canonical data pack.")
-    if not any(key in fundamentals for key in ("sales_growth_3y", "profit_growth_3y", "roce", "roe")):
-        open_items.append("A verified multi-year financial series has not been attached to this dossier.")
-    open_items.append("Business-segment mix and management quotations require traced filing/transcript sources before publication.")
+        open_items.append("No curated company-linked news or filing evidence is available in the current 30-day store.")
+
+    company_about = str(raw.get("about") or "").strip()
+    uploaded_profile = structured_rows(symbol, "business_profile")
+    if uploaded_profile:
+        company_about = str(uploaded_profile[0].get("business_summary") or company_about)
+
+    annual_rows = structured_rows(symbol, "financial_history")
+    financial_tables = {
+        "uploaded": annual_rows,
+        "quarterly_results": _normalise_table(raw.get("quarterly_results", []), 20),
+        "profit_loss": _normalise_table(raw.get("profit_loss", []), 24),
+        "balance_sheet": _normalise_table(raw.get("balance_sheet", []), 24),
+        "cash_flow": _normalise_table(raw.get("cash_flow", []), 20),
+        "peer_comparison": _normalise_table(raw.get("peer_comparison", []), 15),
+        "as_of": str((structured_rows(symbol, "financial_history") or [{}])[-1].get("as_of_date") or raw_record.get("fetched_at") or ""),
+    }
+    business_segments = structured_rows(symbol, "business_segments")
+    order_book_guidance = structured_rows(symbol, "order_book_guidance")
 
     sources = [
         {
-            "name": "Whole-market scanner",
-            "status": "available" if scan_row else "missing",
-            "timestamp": str((scan_payload or {}).get("scanned_at", "")),
-            "point_in_time": False,
+            "name": "Whole-market scanner", "status": "available" if scan_row else "missing",
+            "as_of": str((scan_payload or {}).get("scanned_at", "")), "point_in_time": False,
             "note": "Current saved technical scan projection.",
         },
         {
-            "name": "Long-Term research store",
-            "status": "available" if long_row else "missing",
-            "timestamp": str((long_term_payload or {}).get("scanned_at", "")),
-            "point_in_time": False,
+            "name": "Long-Term research store", "status": "available" if long_row else "missing",
+            "as_of": str((long_term_payload or {}).get("scanned_at", "")), "point_in_time": False,
             "note": "Current technical + current-fundamental decision aid; not historical PIT evidence.",
         },
         {
-            "name": "Official NSE bhavcopy",
-            "status": "available" if price.get("available") else "missing",
-            "timestamp": str(price.get("latest_date", "")),
-            "point_in_time": True,
+            "name": "Deep fundamentals cache", "status": str(raw_record.get("freshness") or "MISSING"),
+            "as_of": str(raw_record.get("fetched_at") or ""), "point_in_time": False,
+            "note": "Raw company description, financial tables and shareholding snapshot from the cached deep source.",
+        },
+        {
+            "name": "Official NSE bhavcopy", "status": "available" if price.get("available") else "missing",
+            "as_of": str(price.get("latest_date", "")), "point_in_time": True,
             "note": "Daily OHLCV history from the canonical persisted store.",
         },
         {
-            "name": "Curated news and filings",
-            "status": "available" if news_rows else "missing",
-            "timestamp": str(news_rows[0].get("fetched_at", "")) if news_rows else "",
-            "point_in_time": False,
+            "name": "Curated news and filings", "status": "available" if news_rows else "missing",
+            "as_of": news_as_of, "point_in_time": False,
             "note": f"{len(news_rows)} linked article(s) in the current 30-day window.",
         },
         {
-            "name": "Current F&O instrument master",
-            "status": "available" if fno_match else "not_applicable_or_missing",
-            "timestamp": str((fno_payload or {}).get("generated_at", "")),
-            "point_in_time": False,
+            "name": "Current F&O instrument master", "status": "available" if fno_match else "not_applicable_or_missing",
+            "as_of": str((fno_payload or {}).get("generated_at", "")), "point_in_time": False,
             "note": "Current nearest futures contract metadata; not a historical derivatives series.",
         },
     ]
-    available_sections = sum(
-        bool(value)
-        for value in (scan_row, long_row, price.get("available"), fundamentals, news_rows)
-    )
-    coverage_pct = round(available_sections / 5 * 100)
+    for upload in requirements.get("uploads", []):
+        sources.append({
+            "name": f"Uploaded evidence: {upload.get('kind')}",
+            "status": "structured" if upload.get("structured") else "source_attached_unparsed",
+            "as_of": str(upload.get("as_of") or ""),
+            "point_in_time": True,
+            "note": f"{upload.get('filename')} · SHA256 {str(upload.get('sha256', ''))[:12]} · {upload.get('source_url') or 'source URL not supplied'}",
+        })
 
     thesis = list(dict.fromkeys(quality + technical + [
         str(item.get("why_it_matters", "")) for item in news_rows[:5] if str(item.get("why_it_matters", "")).strip()
@@ -268,7 +390,7 @@ def build_equity_dossier(
         thesis = ["QuantTerm does not yet have enough traced evidence to publish a positive investment thesis."]
 
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "report_type": "EQUITY_RESEARCH_DOSSIER",
         "symbol": symbol,
         "company": company,
@@ -276,19 +398,28 @@ def build_equity_dossier(
         "generated_at": (generated_at or datetime.now(timezone.utc)).isoformat(),
         "classification": str(long_row.get("classification") or scan_row.get("status") or "UNCLASSIFIED"),
         "coverage_pct": coverage_pct,
+        "section_coverage": section_coverage,
         "price": price,
         "scan": scan_row,
         "long_term": long_row,
         "fundamentals": fundamentals,
+        "deep_fundamentals": raw,
+        "deep_fundamentals_fetched_at": str(raw_record.get("fetched_at") or ""),
+        "company_about": company_about,
+        "financial_tables": financial_tables,
+        "shareholding_history": _normalise_table(shareholding_rows, 30),
+        "business_segments": business_segments,
+        "order_book_guidance": order_book_guidance,
         "market": dict(market or {}),
         "news": news_rows[:15],
-        "management_evidence": management_evidence,
+        "management_evidence": management_evidence[:15],
         "fno": fno_match or {},
         "thesis": thesis,
         "quality_factors": quality,
         "technical_evidence": technical,
         "risks": list(dict.fromkeys(risks)) or ["No explicit risk list has been recorded; treat the evidence pack as incomplete."],
         "sources": sources,
+        "evidence_requirements": requirements,
         "open_items": list(dict.fromkeys(open_items)),
         "disclaimer": (
             "QuantTerm Research is an evidence-organising decision aid, not a buy or sell recommendation. "
@@ -324,7 +455,7 @@ def build_long_term_basket(
         for item in dossier["risks"]:
             common_risks[item] = common_risks.get(item, 0) + 1
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "report_type": "LONG_TERM_BASKET",
         "generated_at": (generated_at or datetime.now(timezone.utc)).isoformat(),
         "title": "QuantTerm Long-Term Research Basket",
@@ -352,7 +483,7 @@ def generate_equity_report(symbol: str, *, report_dir: str | Path = DEFAULT_REPO
     from reporting.pdf_renderer import render_equity_pdf
 
     dossier = build_equity_dossier(symbol)
-    path = _report_path("equity_research", dossier["symbol"], report_dir)
+    path = _report_path("equity_evidence_brief", dossier["symbol"], report_dir)
     render_equity_pdf(dossier, path)
     return path
 
