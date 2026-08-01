@@ -1,11 +1,13 @@
 """Product-hardening API extensions for the QuantTerm terminal.
 
 This module reuses the authoritative terminal API and adds product-level readiness,
-one-click data bootstrap and explainable single-stock intelligence. Run Uvicorn with
-``terminal_product_api:app`` so the original endpoints remain unchanged.
+one-click data bootstrap, explainable single-stock intelligence and pure workspace
+projections. Run Uvicorn with ``terminal_product_api:app`` so the original endpoints
+remain unchanged.
 """
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import HTTPException
@@ -13,9 +15,10 @@ from fastapi import HTTPException
 import terminal_api as core
 from product.product_readiness import build_product_readiness
 from product.stock_workspace import build_stock_workspace, clean_symbol
+from product.workspace import SCANNER_MODES, build_command_center_state, scanner_rows
 
 app = core.app
-app.version = "0.5.0"
+app.version = "0.6.0"
 
 
 def _current_product_payloads() -> dict[str, dict[str, Any]]:
@@ -41,6 +44,50 @@ def _current_product_payloads() -> dict[str, dict[str, Any]]:
 def product_readiness() -> dict[str, Any]:
     payloads = _current_product_payloads()
     return build_product_readiness(**payloads)
+
+
+@app.get("/api/command-center-workspace")
+def command_center_workspace() -> dict[str, Any]:
+    """Project authoritative persisted state into one coherent command surface."""
+    market = core._market_payload()
+    scan = core._scan_payload()
+    long_term = core._long_term_payload()
+    state = build_command_center_state(
+        scan_payload=scan,
+        long_term_payload=long_term,
+        paper=core._paper_payload(),
+        autonomy=core._autonomy_payload(),
+        market=market,
+    )
+    return {"generated_at": datetime.now(timezone.utc).isoformat(), **state}
+
+
+@app.get("/api/scanner-workspace/{mode}")
+def scanner_workspace(mode: str) -> dict[str, Any]:
+    """Return one server-ranked scanner mode without duplicating scan calculations."""
+    requested = mode.strip().replace("_", "-")
+    canonical = next((item for item in SCANNER_MODES if item.lower() == requested.lower()), None)
+    if canonical is None:
+        raise HTTPException(status_code=400, detail=f"Unknown scanner mode. Choose one of: {', '.join(SCANNER_MODES)}")
+    market = core._market_payload()
+    scan = core._scan_payload()
+    long_term = core._long_term_payload()
+    rows = scanner_rows(
+        canonical,
+        scan_payload=scan,
+        long_term_payload=long_term,
+        conviction_rows=core._conviction(scan, market),
+    )
+    source = "long_term" if canonical == "Long-Term" else "conviction" if canonical == "Conviction" else "market_scan"
+    scanned_at = long_term.get("scanned_at", "") if canonical == "Long-Term" else scan.get("scanned_at", "")
+    return {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "mode": canonical,
+        "source": source,
+        "scanned_at": scanned_at,
+        "universe_size": int(scan.get("universe_size", 0) or 0),
+        "rows": rows,
+    }
 
 
 @app.post("/api/product-bootstrap")
