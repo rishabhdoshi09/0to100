@@ -8,6 +8,8 @@ on:
     paths:
       - 'frontend/**'
       - 'terminal_api.py'
+      - 'report_api.py'
+      - 'reporting/**'
       - 'requirements.txt'
       - '.github/workflows/terminal-ui.yml'
 
@@ -25,5 +27,5 @@ jobs:
       - name: Build frontend
         working-directory: frontend
         run: npm run build
-      - name: Compile API bridge
-        run: python -m py_compile terminal_api.py
+      - name: Compile terminal and research APIs
+        run: python -m py_compile terminal_api.py report_api.py reporting/*.py
