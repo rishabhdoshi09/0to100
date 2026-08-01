@@ -8,9 +8,8 @@ the system can trade its own approved strategies hands-off and learn from the ou
 Safety by construction:
   • It imports NOTHING from any real-order execution path. There is no code path from here
     to a real order. It can only move numbers in memory.
-  • It still enforces the house risk invariants (1% risk/trade, 10% per name, 5% total open
-    risk, max open positions) — "blow up" means bad strategies losing simulated money, not
-    reckless sizing that would mask which ideas actually work.
+  • It enforces the house risk invariants (1% maximum risk/trade, 10% per name, 5% total
+    open risk, max open positions) and consumes Brain 2's smaller approved risk budgets.
 
 Pure and deterministic: given the same opens and the same price bars, the book is identical.
 """
@@ -31,6 +30,8 @@ class PaperPosition:
     entry_date: str
     max_holding_days: int
     risk_amount: float
+    requested_risk_pct: float = 0.0
+    approved_risk_pct: float = 0.0
     bars_held: int = 0
 
     @property
@@ -81,8 +82,15 @@ class PaperBook:
 
     # ── sizing + open ────────────────────────────────────────────────────────────
     def open_position(self, strategy_id: str, symbol: str, entry: float, stop: float,
-                      target: float, date: str, max_holding_days: int) -> PaperPosition | None:
-        """Open a simulated long. Returns the position, or None if a risk cap refuses it."""
+                      target: float, date: str, max_holding_days: int, *,
+                      risk_pct_of_capital: float | None = None) -> PaperPosition | None:
+        """Open a simulated long from an approved risk budget.
+
+        ``risk_pct_of_capital`` uses percentage points: ``1.0`` means one percent of
+        capital and ``0.25`` means a quarter percent. Missing values preserve the legacy
+        book default. Requests above the configured per-trade maximum are capped here,
+        so allocation code can never weaken the house limit.
+        """
         key = (strategy_id, symbol)
         if key in self.open:
             self.refusals.append((symbol, "already open for this strategy")); return None
@@ -91,13 +99,25 @@ class PaperBook:
         if not (entry > 0 and stop > 0 and entry > stop):
             self.refusals.append((symbol, "invalid entry/stop (need entry>stop>0)")); return None
 
+        max_risk_pct = float(self.risk_per_trade_pct) * 100.0
+        if risk_pct_of_capital is None:
+            requested_risk_pct = max_risk_pct
+        else:
+            try:
+                requested_risk_pct = float(risk_pct_of_capital)
+            except (TypeError, ValueError):
+                self.refusals.append((symbol, "invalid approved risk percentage")); return None
+            if not math.isfinite(requested_risk_pct) or requested_risk_pct <= 0:
+                self.refusals.append((symbol, "approved risk percentage must be positive")); return None
+        risk_budget_pct = min(requested_risk_pct, max_risk_pct)
+
         # entry slippage — a buyer pays up; the fill is worse than the signal price
         entry = entry * (1.0 + self.slippage_bps / 1e4)
-        risk_amount = self.capital * self.risk_per_trade_pct
+        risk_amount = self.capital * risk_budget_pct / 100.0
         r_unit = entry - stop
         qty = int(math.floor(risk_amount / r_unit))
         if qty <= 0:
-            self.refusals.append((symbol, "risk unit too wide for 1% sizing")); return None
+            self.refusals.append((symbol, "risk unit too wide for approved sizing")); return None
         # 10% concentration cap
         if qty * entry > self.capital * self.max_position_pct:
             qty = int(math.floor(self.capital * self.max_position_pct / entry))
@@ -108,11 +128,27 @@ class PaperBook:
         if self.open_risk() + new_risk > self.capital * self.max_total_risk_pct + 1e-6:
             self.refusals.append((symbol, "total open risk cap (5%) reached")); return None
 
+        approved_risk_pct = (new_risk / self.capital * 100.0) if self.capital > 0 else 0.0
         pos = PaperPosition(strategy_id=strategy_id, symbol=symbol, entry_price=entry,
                             stop_price=stop, target_price=target, qty=qty, entry_date=date,
-                            max_holding_days=max_holding_days, risk_amount=new_risk)
+                            max_holding_days=max_holding_days, risk_amount=new_risk,
+                            requested_risk_pct=requested_risk_pct,
+                            approved_risk_pct=approved_risk_pct)
         self.open[key] = pos
         return pos
+
+    def open_intent(self, intent, *, date: str) -> PaperPosition | None:
+        """Execute a broker-independent TradeIntent in PAPER with allocation-size parity."""
+        return self.open_position(
+            intent.strategy_id,
+            intent.symbol,
+            float(intent.intended_entry),
+            float(intent.stop_price),
+            float(intent.target_price),
+            date,
+            int(intent.holding_horizon_days),
+            risk_pct_of_capital=float(intent.intended_risk_pct),
+        )
 
     def open_risk(self) -> float:
         return sum(p.qty * p.r_unit for p in self.open.values())
