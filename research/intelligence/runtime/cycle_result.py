@@ -24,6 +24,9 @@ class IntelligenceCycleResult:
     events_emitted: int = 0
     cards_created: list = field(default_factory=list)     # strategy ids
     allocation_decisions: list = field(default_factory=list)  # (sid, action)
+    target_portfolios: list = field(default_factory=list)  # portfolio ids
+    target_positions: list = field(default_factory=list)   # target-position ids
+    blocked_target_positions: list = field(default_factory=list)  # (sid, symbol, reason)
     trade_intents: list = field(default_factory=list)     # intent ids
     intents_blocked: list = field(default_factory=list)   # (sid, reason_code)
     positions_opened: list = field(default_factory=list)  # (sid, symbol)
