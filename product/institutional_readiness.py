@@ -1,7 +1,7 @@
 """Fail-closed institutional readiness projection for QuantTerm.
 
-Research, data, portfolio, execution, risk, reconciliation, and live deployment are
-independent control domains. Strength in one domain must never hide a blocker in
+Research, data, parity, portfolio, execution, risk, reconciliation, and live deployment
+are independent control domains. Strength in one domain must never hide a blocker in
 another, so this module deliberately does not produce an aggregate percentage.
 
 The projection is read-only and pure. It does not start workers, call a broker,
@@ -78,8 +78,9 @@ def build_institutional_readiness(
     snapshot = dict(data.get("snapshot", {}) or {})
     sessions = int(bhavcopy.get("sessions", 0) or 0)
     minimum_sessions = int(bhavcopy.get("minimum_sessions", 60) or 60)
-    data_ready = bool(bhavcopy.get("ready")) and sessions >= minimum_sessions
+    history_ready = bool(bhavcopy.get("ready")) and sessions >= minimum_sessions
     snapshot_ready = bool(snapshot.get("ready"))
+    research_data_ready = history_ready and snapshot_ready
     operations_ready = bool(operations.get("running"))
     autonomy_known = bool(autonomy.get("available"))
     paper_available = bool(paper.get("available"))
@@ -89,6 +90,20 @@ def build_institutional_readiness(
         "historical_net_edge_passed",
         "forward_evidence_passed",
         "capacity_assessed",
+    )
+    data_flags = (
+        "corporate_actions_point_in_time",
+        "universe_history_point_in_time",
+        "symbol_lineage_complete",
+        "trading_calendar_validated",
+        "fundamental_availability_dates_or_not_required",
+    )
+    parity_flags = (
+        "strategy_version_frozen",
+        "feature_parity_certified",
+        "universe_rule_parity_certified",
+        "cost_model_parity_certified",
+        "exit_rule_parity_certified",
     )
     portfolio_flags = (
         "canonical_target_portfolio",
@@ -128,12 +143,16 @@ def build_institutional_readiness(
     )
 
     economic_missing = _missing(capabilities, economic_flags)
+    data_missing = _missing(capabilities, data_flags)
+    parity_missing = _missing(capabilities, parity_flags)
     portfolio_missing = _missing(capabilities, portfolio_flags)
     execution_missing = _missing(capabilities, execution_flags)
     risk_missing = _missing(capabilities, risk_flags)
     reconciliation_missing = _missing(capabilities, reconciliation_flags)
     protection_missing = _missing(capabilities, protection_flags)
     operations_missing = _missing(capabilities, operations_flags)
+
+    institutional_data_ready = research_data_ready and not data_missing
 
     domains = [
         _domain(
@@ -152,22 +171,34 @@ def build_institutional_readiness(
         _domain(
             key="data",
             label="Data integrity",
-            status=READY if data_ready and snapshot_ready else PARTIAL if data_ready or snapshot_ready else BLOCKED,
-            summary=f"Official history: {sessions} sessions; verified snapshot: {'yes' if snapshot_ready else 'no'}.",
+            status=(
+                READY
+                if institutional_data_ready
+                else PARTIAL
+                if history_ready or snapshot_ready
+                else BLOCKED
+            ),
+            summary=(
+                f"Official history: {sessions} sessions; verified snapshot: "
+                f"{'yes' if snapshot_ready else 'no'}; PIT controls certified: "
+                f"{len(data_flags) - len(data_missing)}/{len(data_flags)}."
+            ),
             evidence=[
-                "official_history_ready" if data_ready else "",
+                "official_history_ready" if history_ready else "",
                 "verified_snapshot_active" if snapshot_ready else "",
+                *[key for key in data_flags if _flag(capabilities, key)],
             ],
             blockers=[
-                "official_history_not_ready" if not data_ready else "",
+                "official_history_not_ready" if not history_ready else "",
                 "verified_snapshot_missing" if not snapshot_ready else "",
+                *data_missing,
             ],
-            next_action="Complete the Golden Market Dataset and activate a verified point-in-time snapshot.",
+            next_action="Complete and certify the Golden Market Dataset and PIT data controls.",
         ),
         _domain(
             key="research",
             label="Research system",
-            status=READY if data_ready and bool(scan.get("available")) and bool(market.get("available")) else PARTIAL,
+            status=READY if research_data_ready and bool(scan.get("available")) and bool(market.get("available")) else PARTIAL,
             summary="Research readiness is reported separately and never unlocks broker execution.",
             evidence=[
                 "whole_market_scan_available" if scan.get("available") else "",
@@ -176,10 +207,19 @@ def build_institutional_readiness(
             ],
             blockers=[
                 "research_inputs_incomplete"
-                if not (data_ready and scan.get("available") and market.get("available"))
+                if not (research_data_ready and scan.get("available") and market.get("available"))
                 else ""
             ],
-            next_action="Maintain research-to-production parity and preserve failed evidence.",
+            next_action="Maintain evidence governance and preserve failed experiments.",
+        ),
+        _domain(
+            key="parity",
+            label="Research-to-production parity",
+            status=READY if not parity_missing else BLOCKED,
+            summary="The deployed strategy must match its frozen research definition and assumptions.",
+            evidence=[key for key in parity_flags if _flag(capabilities, key)],
+            blockers=parity_missing,
+            next_action="Certify feature, universe, cost and exit parity for the frozen strategy version.",
         ),
         _domain(
             key="portfolio",
@@ -248,6 +288,7 @@ def build_institutional_readiness(
     hard_live_domains = (
         "economic",
         "data",
+        "parity",
         "portfolio",
         "execution",
         "risk",
@@ -283,8 +324,8 @@ def build_institutional_readiness(
             "allowed": True,
         },
         "shadow": {
-            "status": READY if data_ready and operations_ready else PARTIAL,
-            "allowed": bool(data_ready),
+            "status": READY if research_data_ready and operations_ready else PARTIAL,
+            "allowed": bool(research_data_ready),
         },
         "paper": {
             "status": READY if paper_available and autonomy_known else PARTIAL,
