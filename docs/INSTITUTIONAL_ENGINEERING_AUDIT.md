@@ -1,170 +1,126 @@
 # QuantTerm Institutional Engineering Audit
 
-Status: repository-traced audit with readiness, sizing and Target Portfolio milestones implemented  
-Integration base: `agent/quantterm-terminal-ui` at `93bb9350e2367aa38dd5554c5810cc6289d6a992`
+Status: engineering foundation complete; operational and economic evidence remain gated  
+Integration base: latest `agent/quantterm-terminal-ui`, merged into this branch
 
 ## Executive finding
 
-QuantTerm has a strong broker-free research and PAPER autonomy core, immutable evidence records,
-verified snapshot infrastructure, restart-aware internal paper state, explicit operating controls,
-and a dedicated read-only product terminal.
+QuantTerm now has a complete broker-neutral institutional PAPER and read-only broker-observation
+chain. The system preserves immutable research evidence, constructs a canonical Target Portfolio,
+persists every Trade Intent in a durable OMS, applies independent risk, simulates exact approved
+fills, verifies quantity-aware protection, reconciles read-only Zerodha state, attributes
+transaction costs, and exposes read-only board projections.
 
-The authoritative PAPER chain is now:
+The production chain implemented in software is:
 
 ```text
-Evidence
--> Brain 2 allocation proposal
+Verified research evidence
 -> canonical Target Portfolio
--> exact target-versus-current quantity delta
--> Trade Intent
--> PaperBook revalidation and execution
--> durable evidence
+-> exact target-versus-current delta
+-> durable Trade Intent
+-> independent Risk Governor
+-> broker-neutral OMS
+-> production-parity PAPER fill
+-> quantity-aware Protection Manager
+-> PAPER exit and protection cancellation
+-> TCA
+-> scheduled read-only Zerodha observation
+-> reconciliation and quarantine
+-> read-only board projections
 ```
 
-It is still not a production trading operation. The remaining production bridge is:
+This completes the engineering foundation. It does not manufacture operational history or a
+profitable strategy.
 
-```text
-Target Portfolio -> independent risk -> durable OMS/EMS -> broker events
--> protection -> reconciliation -> TCA -> limited-live evidence
-```
+## Completed engineering domains
 
-Research or UI readiness must never be interpreted as LIVE readiness.
+| Domain | State | Canonical implementation |
+|---|---|---|
+| Institutional readiness | COMPLETE | `product/institutional_readiness.py` keeps economic, data, parity, portfolio, execution, risk, reconciliation, protection and operations independent and fail-closed. |
+| Terminal product integration | COMPLETE | Latest terminal workspace/navigation is merged; workspace and institutional routes coexist without duplicate registration. |
+| Allocation-size parity | COMPLETE | Brain 2 risk reaches the shared sizing contract and exact PaperBook quantity. |
+| Canonical Target Portfolio | COMPLETE | Strategy proposals are aggregated and constrained before Trade Intent creation. |
+| Durable OMS | COMPLETE FOR PAPER/SHADOW | Legal transitions, idempotency, ambiguous-submission recovery, fills, restart reconstruction and quarantine are persisted. |
+| Independent Risk Governor | COMPLETE FOR PAPER/SHADOW | Approve, reduce, reject and freeze decisions are deterministic and persisted. |
+| Production PAPER entry | COMPLETE | `execution/paper_pipeline.py` routes intents through OMS, Risk, simulated acknowledgement/fill, Protection and TCA. |
+| Production PAPER exit | COMPLETE | `execution/paper_exit.py` synchronises PaperBook exits to OMS `CLOSED` and cancels protection. |
+| Reconciliation | COMPLETE FOR READ-ONLY OBSERVATION | Complete broker lanes reconcile; incomplete lanes remain unknown and freeze entries. |
+| Protection Manager | COMPLETE FOR PAPER/SHADOW | Partial-fill-aware plans require exact quantity and stop/target identity. |
+| Transaction-cost analysis | COMPLETE | Decision, submission and fill shortfall plus fees and opportunity cost are persisted without invented values. |
+| Zerodha observation | COMPLETE AND READ-ONLY | Orders, trades, positions, margin and GTT state are observed without mutation. |
+| Observation scheduling | COMPLETE | Locked startup, premarket, 15-minute intraday and EOD slots run under a separate read-only process. |
+| Failure injection | COMPLETE FOR IMPLEMENTED FOUNDATION | Timeout-after-accept, restart-before-protection, stale data and duplicate-worker ownership are tested. |
+| Legacy LIVE containment | COMPLETE | Connected legacy execution is locked by default; governance uncertainty fails closed. |
+| Recovery documentation | COMPLETE | Completion contract, observation guide and failure/recovery rules are retained in-repository. |
 
-## Repository-traced capability map
+## Safety defects corrected
 
-| Domain | State | Repository evidence | Required amendment |
-|---|---|---|---|
-| Product data readiness | PARTIAL | `product/product_readiness.py::build_product_readiness` projects market, history, scan, long-term, news, F&O and operations freshness through a weighted score. | Preserve it as a research/product convenience score only. Never use it to unlock execution. |
-| Institutional readiness | IMPLEMENTED | `product/institutional_readiness.py::build_institutional_readiness` separates economic, data, research, parity, portfolio, execution, risk, reconciliation, protection and operations gates. | Wire certifications only after repository-backed implementations and tests exist. |
-| Terminal architecture | COMPLETE FOR READ-ONLY PRODUCT | `terminal_api.py` reads authoritative Python stores; `terminal_product_api.py` projects readiness and the latest persisted Target Portfolio. | Keep the terminal read-only for canonical trading state. Do not add broker-order endpoints to the product layer. |
-| Verified market snapshots | COMPLETE/PARTIAL | Snapshot activation and official history exist. | Certify PIT corporate actions, universe, symbol lineage, calendar and fundamental availability independently. |
-| Strategy/evidence records | STRONG | `research/intelligence/schemas.py` provides frozen deterministic records with provenance and content-derived IDs. | Preserve schemas as the evidence boundary; version material semantic changes. |
-| Brain 1 / Brain 2 separation | COMPLETE FOR PAPER | `autonomous_loop.py` builds Evidence Cards and then allocation decisions. | Keep strategy evidence separate from portfolio, risk and execution authority. |
-| Canonical Target Portfolio | IMPLEMENTED FOR PAPER | `runtime/target_portfolio.py` aggregates ranked proposals into immutable `TargetPosition` and `TargetPortfolio` records before any Trade Intent exists. | Add sector, liquidity and turnover constraints; later feed pending exposure from the durable OMS instead of empty PAPER maps. |
-| Target-versus-actual transition | IMPLEMENTED FOR PAPER | Current and pending quantities are subtracted from desired quantity. Duplicate economic exposure, cash, total risk, family, cluster and position-count blocks carry explicit reason codes. | Replace PAPER state with broker-reconciled state for production certification. |
-| Trade Intent | VERSIONED CONTRACT | `TradeIntent` schema v2 references exact Target Portfolio and Target Position IDs and carries current, pending, desired and required quantities. | Preserve broker independence. A broker adapter may consume the intent but never rewrite its meaning. |
-| Allocation-to-sizing parity | CORRECTED | Shared `position_sizing.py` is used by portfolio planning and PaperBook. PaperBook revalidates the exact planned quantity. | Keep percentage-point units and exact-quantity regression tests frozen. |
-| Paper execution | COMPLETE FOR SIMULATION | `PaperBook` is broker-free, deterministic, cost-aware and enforces house limits. | Production PAPER should later exercise the same durable OMS state machine as LIVE. |
-| Internal restart recovery | PARTIAL | The paper book and runtime state restore and reconcile after restart. | Replace silent corruption handling with explicit quarantine and operator-visible recovery. |
-| Legacy live executor | LOCKED / UNSAFE OVERRIDE ONLY | `execution/trade_executor.py` cannot use connected-broker LIVE by default. It requires `QT_ENABLE_UNSAFE_LEGACY_LIVE=1`; governance uncertainty blocks and ambiguous submission becomes `RECOVERY_REQUIRED`. | Retire this route after the institutional OMS is operational. Never certify it for LIVE. |
-| Broker OMS/EMS | MISSING | No durable broker-neutral order lifecycle owns live order state. | Build a separate execution kernel after Trade Intent; do not add broker calls to the research loop. |
-| Independent live Risk Governor | MISSING | Current constraints operate within PAPER construction and simulation state. | Build an independent service from reconciled positions, orders, cash, margin, pending exposure, P&L and connectivity. |
-| Broker reconciliation | MISSING | Internal paper reconciliation exists; broker order/trade/position/cash reconciliation does not. | Add startup, continuous and EOD reconciliation with deterministic repair and ambiguity quarantine. |
-| Protection Manager | MISSING FOR PRODUCTION | PAPER exits are simulated; the legacy GTT path is not a durable protection service. | Add partial-fill protection, verification, restart recovery and orphan detection. |
-| Transaction-cost analysis | PARTIAL | PAPER records slippage and explicit costs. | Store signal, decision, approval, submission, acknowledgement and fill timestamps; attribute implementation shortfall. |
-| Operations | PARTIAL/STRONG FOR RESEARCH | Separated worker lanes, job stores, heartbeats and autonomy supervision exist. | Add production execution health, duplicate execution-worker prevention, incident severity, recovery runbooks and failure injection. |
-| AI boundary | ACCEPTABLE | The authoritative PAPER loop is deterministic and broker-free; product APIs only project stored state. | Keep JARVIS explanatory. Never grant it order, risk, capital-limit or certification authority. |
+1. Brain 2 allocation risk was recorded but not consumed by actual PAPER sizing.
+2. Strategy proposals could move too directly toward a PaperBook position without one canonical
+   target portfolio.
+3. Existing exposure could be silently treated as a satisfied target instead of a duplicate
+   economic-exposure refusal.
+4. Governance exceptions in the legacy connected-broker route could fail open.
+5. Ambiguous submission could be treated like ordinary failure rather than uncertain external
+   state.
+6. Failed broker endpoints could be mistaken for an empty account or protection book.
+7. GTT stop-limit prices could be confused with stop trigger values.
+8. A failed duplicate observer could unlink the active observer's lock file.
+9. Paper positions could close while durable OMS/protection state remained open.
+10. Workspace and observer routes could diverge across stacked terminal branches.
 
 ## Canonical state ownership
 
 | State | Canonical owner |
 |---|---|
-| Historical and active market state | snapshot and official-history stores |
+| Historical and active market state | verified snapshot and official-history stores |
 | Strategy definition and evidence | frozen strategy registry and immutable evidence records |
-| Strategy allocation proposal | Brain 2 allocation decision |
-| Desired portfolio | `TargetPortfolio` and `TargetPosition` records in the intelligence event store |
-| Simulated executable position | `PaperBook` |
-| Risk authorisation | **new independent Risk Governor** |
-| Order lifecycle | **new durable OMS** |
-| Broker translation and events | **new broker adapter / event-ingestion layer** |
-| Actual executable position | **new reconciled broker-position service** |
-| Product display | terminal/product API read-only projections |
+| Desired exposure | Target Portfolio records |
+| Risk authorisation | independent Risk Governor decision store |
+| Order lifecycle | durable OMS |
+| Simulated position and outcomes | PaperBook, wrapped by the institutional PAPER adapter |
+| Broker reality | append-only read-only Zerodha snapshot ledger |
+| Position/order agreement | reconciliation reports and controlled internal repairs |
+| Exit protection | Protection Manager |
+| Execution economics | TCA store |
+| Product display | read-only terminal projections |
 
-No UI, LLM, scanner or strategy module may become a second owner of these states.
+No UI, scanner, strategy or LLM owns broker, position, risk or order truth.
 
-## Completed milestones
+## What remains intentionally uncompleted
 
-### Milestone 0 — fail-closed readiness contract
+### Operational certification
 
-- Independent readiness domains
-- No aggregate institutional score
-- Evidence-backed capability certifications
-- PIT-data and research-to-production parity gates
-- `LIMITED_LIVE` and `LIVE` blocked by default
-- `/api/institutional-readiness`
+This requires elapsed real sessions and cannot be generated by a code commit:
 
-### Milestone 1 — allocation-to-sizing parity
+- repeated successful startup/premarket/intraday/EOD observations;
+- stable complete Zerodha snapshots;
+- zero unexplained broker/internal mismatches;
+- restart and database recovery evidence;
+- no duplicate workers or orders;
+- every simulated fill protected and closed correctly over multiple sessions;
+- no unresolved critical incident.
 
-- `1.0` explicitly means one percent of capital
-- Brain 2 risk reaches PaperBook
-- Shared pure sizing logic
-- Exact quantity revalidation
-- Requested and actual risk are auditable
-- Legacy snapshots remain readable
+### Economic certification
 
-### Milestone 2 — canonical Target Portfolio
+The historical evidence previously showed no validated production edge. Engineering cannot turn
+failed or inconclusive strategies into profitable ones. Economic readiness requires a frozen
+strategy to pass realistic net historical, forward, production PAPER, capacity, turnover, TCA,
+benchmark and drift gates.
 
-- Immutable `TargetPosition` and `TargetPortfolio`
-- Current, pending, desired and required quantities remain separate
-- Cash and worst-case pending exposure are explicit inputs
-- Portfolio-wide total-risk, family, cluster and position-count limits
-- Duplicate-symbol ownership and duplicate proposal detection
-- Trade Intents originate only from executable target deltas
-- Exact Target Portfolio and Target Position provenance in every intent
-- Latest persisted portfolio projected through `/api/target-portfolio`
-- Product dashboard composition remains read-only
+### LIMITED_LIVE and LIVE
 
-### P0 containment — legacy live executor
+Both remain blocked. Real broker submission through the new OMS is intentionally not connected.
+LIMITED_LIVE requires completed operational/economic certifications and explicit owner approval.
+LIVE additionally requires limited-live evidence and a second approval.
 
-- Connected-broker legacy LIVE locked by default
-- Unsafe compatibility override is environment-only and not exposed to UI
-- Governance exceptions fail closed
-- DE_RISK quantity reduction is enforced
-- Ambiguous broker response enters `RECOVERY_REQUIRED`
-- No new autonomous or terminal broker route was created
+## Honest final classification
 
-## Next milestone — durable broker-neutral OMS
-
-Build outside the research loop and without connecting it to Kite initially:
-
-1. Durable SQLite order and transition ledger
-2. Explicit lifecycle:
-   `PROPOSED -> RISK_APPROVED -> SUBMISSION_PENDING -> BROKER_ACKNOWLEDGED -> PARTIALLY_FILLED -> FILLED -> PROTECTION_PENDING -> PROTECTED -> EXIT_PENDING -> CLOSED`
-3. Exception states:
-   `REJECTED`, `CANCELLED`, `EXPIRED`, `UNKNOWN`, `QUARANTINED`, `RECOVERY_REQUIRED`
-4. Validated state-transition matrix
-5. Idempotency key from immutable Trade Intent
-6. Duplicate-submission prevention
-7. Partial-fill aggregation
-8. Ambiguous-submission quarantine
-9. Restart reconstruction and deterministic replay
-10. Read-only OMS projection for the board
-
-Broker submission remains out of scope until this state machine, independent risk and reconciliation are tested.
-
-## Later sequence
-
-1. Reconciled broker-state model
-2. Independent Risk Governor
-3. Broker adapter and event ingestion
-4. Protection Manager
-5. Continuous reconciliation
-6. Transaction-cost attribution
-7. SHADOW certification
-8. Production PAPER parity
-9. Tightly capped `LIMITED_LIVE`
-
-## Non-goals
-
-Do not add:
-
-- New signal families merely to increase strategy count
-- Direct broker calls in `autonomous_loop.py`
-- Order endpoints in the terminal UI
-- LLM-controlled sizing or risk
-- Microsecond or order-book infrastructure unsuitable for retail horizons
-- A second research, evidence, target-portfolio or position store
-- Any certification merely because a class or dashboard panel exists
-
-## Definition of the next safe checkpoint
-
-The next checkpoint is reached when:
-
-- every Trade Intent can create exactly one durable OMS order intent
-- repeated ingestion cannot duplicate an order
-- illegal lifecycle transitions fail closed
-- an uncertain broker submission cannot be automatically retried
-- partial fills reconstruct correctly after restart
-- OMS state can be projected read-only to the terminal
-- no broker API call is introduced
-- institutional readiness continues to report execution, risk, reconciliation and protection as blocked
+- Engineering foundation: **COMPLETE**
+- Research and production-parity PAPER: **AVAILABLE SUBJECT TO DATA/EVIDENCE GATES**
+- Scheduled read-only Zerodha observation: **COMPLETE**
+- Operational evidence: **ACCUMULATING / NOT YET CERTIFIED**
+- Economic edge: **NOT ESTABLISHED**
+- New OMS real broker submission: **NOT CONNECTED**
+- LIMITED_LIVE: **BLOCKED**
+- LIVE: **BLOCKED**
