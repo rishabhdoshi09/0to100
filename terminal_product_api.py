@@ -2,9 +2,8 @@
 
 This module reuses the authoritative terminal API and adds product-level readiness,
 one-click data bootstrap, institutional deployment gates, canonical target-portfolio,
-broker-neutral OMS and independent risk-decision projections, and explainable single-stock
-intelligence. Run Uvicorn with ``terminal_product_api:app`` so the original endpoints remain
-unchanged.
+broker-neutral execution evidence projections, and explainable single-stock intelligence.
+Run Uvicorn with ``terminal_product_api:app`` so the original endpoints remain unchanged.
 """
 from __future__ import annotations
 
@@ -18,12 +17,17 @@ from product.product_readiness import build_product_readiness
 from product.stock_workspace import build_stock_workspace, clean_symbol
 
 app = core.app
-app.version = "0.9.0"
+app.version = "0.10.0"
 
-INSTITUTIONAL_CERTIFICATIONS = core.ROOT / "logs" / "institutional_readiness" / "certifications.json"
+INSTITUTIONAL_CERTIFICATIONS = (
+    core.ROOT / "logs" / "institutional_readiness" / "certifications.json"
+)
 TARGET_EVENT_STORE = core.ROOT / "logs" / "intelligence" / "events.jsonl"
 OMS_DB = core.ROOT / "logs" / "oms" / "orders.db"
 RISK_DB = core.ROOT / "logs" / "risk" / "decisions.db"
+RECONCILIATION_DB = core.ROOT / "logs" / "reconciliation" / "reports.db"
+PROTECTION_DB = core.ROOT / "logs" / "protection" / "plans.db"
+TCA_DB = core.ROOT / "logs" / "tca" / "assessments.db"
 
 
 def _current_product_payloads() -> dict[str, dict[str, Any]]:
@@ -120,14 +124,15 @@ def _oms_payload() -> dict[str, Any]:
 
         store = OmsStore(OMS_DB)
         orders = store.list_orders()
-        summary = store.summary()
         return {
             "available": True,
-            "summary": summary,
+            "summary": store.summary(),
             "orders": [order.as_dict() for order in orders[-100:]],
             "broker_connected": False,
             "submission_enabled": False,
-            "message": "OMS is in broker-neutral shadow mode; no broker submission path is connected.",
+            "message": (
+                "OMS is in broker-neutral shadow mode; no broker submission path is connected."
+            ),
         }
     except Exception as exc:
         return {
@@ -153,10 +158,9 @@ def _risk_governor_payload() -> dict[str, Any]:
         from risk.governor_store import RiskDecisionStore
 
         store = RiskDecisionStore(RISK_DB)
-        summary = store.summary()
         return {
             "available": True,
-            "summary": summary,
+            "summary": store.summary(),
             "mode": "SHADOW",
             "authoritative_state_connected": False,
             "certified_for_live": False,
@@ -172,6 +176,161 @@ def _risk_governor_payload() -> dict[str, Any]:
             "mode": "SHADOW",
             "authoritative_state_connected": False,
             "message": "Risk Governor projection is unavailable.",
+            "error": str(exc),
+        }
+
+
+def _reconciliation_payload() -> dict[str, Any]:
+    """Project persisted reconciliation evidence without opening a broker connection."""
+    try:
+        if not RECONCILIATION_DB.exists():
+            return {
+                "available": False,
+                "summary": {
+                    "reports": 0,
+                    "by_status": {},
+                    "latest_status": "",
+                    "entry_freeze_required": True,
+                },
+                "latest": {},
+                "certified_for_live": False,
+                "broker_snapshot_connected": False,
+                "message": "No reconciliation report database exists yet.",
+            }
+        from execution.reconciliation.store import ReconciliationReportStore
+
+        store = ReconciliationReportStore(RECONCILIATION_DB)
+        latest = store.latest()
+        if latest is None:
+            return {
+                "available": False,
+                "summary": store.summary(),
+                "latest": {},
+                "certified_for_live": False,
+                "broker_snapshot_connected": False,
+                "message": "No reconciliation report has been persisted yet.",
+            }
+        return {
+            "available": True,
+            "summary": store.summary(),
+            "latest": latest,
+            "certified_for_live": False,
+            "broker_snapshot_connected": False,
+            "message": (
+                "Reconciliation evidence is persisted, but continuous authoritative broker "
+                "observation is not certified for live operation."
+            ),
+        }
+    except Exception as exc:
+        return {
+            "available": False,
+            "summary": {
+                "reports": 0,
+                "by_status": {},
+                "latest_status": "",
+                "entry_freeze_required": True,
+            },
+            "latest": {},
+            "certified_for_live": False,
+            "broker_snapshot_connected": False,
+            "message": "Reconciliation projection is unavailable.",
+            "error": str(exc),
+        }
+
+
+def _protection_payload() -> dict[str, Any]:
+    """Project exact quantity-aware protection plans without touching exchange state."""
+    try:
+        if not PROTECTION_DB.exists():
+            return {
+                "available": False,
+                "summary": {
+                    "plans": 0,
+                    "by_status": {},
+                    "fully_protected": 0,
+                    "unsafe_plan_ids": [],
+                    "entry_freeze_required": True,
+                },
+                "plans": [],
+                "exchange_adapter_connected": False,
+                "certified_for_live": False,
+                "message": "No protection plan database exists yet.",
+            }
+        from execution.protection.store import ProtectionStore
+
+        store = ProtectionStore(PROTECTION_DB)
+        plans = store.list_plans()
+        return {
+            "available": True,
+            "summary": store.summary(),
+            "plans": [plan.as_dict() for plan in plans[-100:]],
+            "exchange_adapter_connected": False,
+            "certified_for_live": False,
+            "message": (
+                "Protection plans are durable and quantity-aware, but exchange-side mutation "
+                "and continuous verification remain disabled."
+            ),
+        }
+    except Exception as exc:
+        return {
+            "available": False,
+            "summary": {
+                "plans": 0,
+                "by_status": {},
+                "fully_protected": 0,
+                "unsafe_plan_ids": [],
+                "entry_freeze_required": True,
+            },
+            "plans": [],
+            "exchange_adapter_connected": False,
+            "certified_for_live": False,
+            "message": "Protection projection is unavailable.",
+            "error": str(exc),
+        }
+
+
+def _tca_payload() -> dict[str, Any]:
+    """Project only persisted transaction-cost evidence; never estimate missing fills."""
+    try:
+        if not TCA_DB.exists():
+            return {
+                "available": False,
+                "summary": {
+                    "assessments": 0,
+                    "complete_assessments": 0,
+                    "total_implementation_shortfall": 0.0,
+                    "average_implementation_shortfall_bps": 0.0,
+                },
+                "assessments": [],
+                "live_fill_feed_connected": False,
+                "message": "No transaction-cost assessment database exists yet.",
+            }
+        from execution.tca.store import TcaStore
+
+        store = TcaStore(TCA_DB)
+        assessments = store.list_assessments()
+        return {
+            "available": True,
+            "summary": store.summary(),
+            "assessments": assessments[-100:],
+            "live_fill_feed_connected": False,
+            "message": (
+                "Only persisted assessments are shown; missing timestamps, fills or fees are "
+                "not invented."
+            ),
+        }
+    except Exception as exc:
+        return {
+            "available": False,
+            "summary": {
+                "assessments": 0,
+                "complete_assessments": 0,
+                "total_implementation_shortfall": 0.0,
+                "average_implementation_shortfall_bps": 0.0,
+            },
+            "assessments": [],
+            "live_fill_feed_connected": False,
+            "message": "Transaction-cost projection is unavailable.",
             "error": str(exc),
         }
 
@@ -215,6 +374,24 @@ def risk_governor_status() -> dict[str, Any]:
     return _risk_governor_payload()
 
 
+@app.get("/api/reconciliation")
+def reconciliation_status() -> dict[str, Any]:
+    """Return the latest persisted broker reconciliation evidence."""
+    return _reconciliation_payload()
+
+
+@app.get("/api/protection")
+def protection_status() -> dict[str, Any]:
+    """Return durable exchange-protection requirements and verification state."""
+    return _protection_payload()
+
+
+@app.get("/api/tca")
+def tca_status() -> dict[str, Any]:
+    """Return persisted transaction-cost and execution-latency assessments."""
+    return _tca_payload()
+
+
 @app.get("/api/product-dashboard")
 def product_dashboard() -> dict[str, Any]:
     """Compose existing read-only dashboard state with institutional projections."""
@@ -224,6 +401,9 @@ def product_dashboard() -> dict[str, Any]:
     dashboard_payload["target_portfolio"] = target_portfolio()
     dashboard_payload["oms"] = oms_status()
     dashboard_payload["risk_governor"] = risk_governor_status()
+    dashboard_payload["reconciliation"] = reconciliation_status()
+    dashboard_payload["protection"] = protection_status()
+    dashboard_payload["tca"] = tca_status()
     return dashboard_payload
 
 
@@ -249,15 +429,20 @@ def product_bootstrap() -> dict[str, Any]:
                 lane=LANES[kind],
                 requested_by="product_bootstrap",
             )
-            operations.append({
-                "kind": kind,
-                "operation_id": item.get("operation_id"),
-                "status": item.get("status"),
-                "created": created,
-            })
+            operations.append(
+                {
+                    "kind": kind,
+                    "operation_id": item.get("operation_id"),
+                    "status": item.get("status"),
+                    "created": created,
+                }
+            )
         return {
             "accepted": True,
-            "message": "QuantTerm preparation queued across independent data, news, scan and long-term lanes.",
+            "message": (
+                "QuantTerm preparation queued across independent data, news, scan and "
+                "long-term lanes."
+            ),
             "operations": operations,
             "readiness": product_readiness(),
         }
