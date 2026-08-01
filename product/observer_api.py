@@ -124,8 +124,11 @@ def install(app) -> None:
     if _installed:
         return
     _installed = True
-    app.add_event_handler("startup", ensure_observer_worker)
-    app.add_event_handler("shutdown", stop_observer_worker)
+    router = getattr(app, "router", None)
+    if router is None or not hasattr(router, "add_event_handler"):
+        raise RuntimeError("terminal FastAPI router does not support lifecycle handlers")
+    router.add_event_handler("startup", ensure_observer_worker)
+    router.add_event_handler("shutdown", stop_observer_worker)
     app.add_api_route(
         "/api/broker-observer",
         observer_payload,
