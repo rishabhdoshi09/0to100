@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { fetchChart, fetchDashboard, sendControl } from './api'
 import { MarketSidebar } from './MarketSidebar'
 import { FnoView, NewsView, OperationsRibbon } from './marketViews'
+import { ResearchDataView } from './researchData'
 import {
   AutomationView,
   CommandCenterView,
@@ -117,6 +118,7 @@ const pageSubtitles: Record<string, string> = {
   'Command Center': 'Market posture, opportunities, portfolio and system health in one decision surface.',
   Scanner: 'Immediate whole-market momentum, conviction, breakout and pre-breakout research.',
   'Stock Intelligence': 'Price structure, evidence, quality, risk and invalidation for the selected stock.',
+  'Research Data': 'Strict as-of dates, source links, templates and evidence uploads for the selected stock.',
   Portfolio: 'Paper capital, open risk, recorded equity, positions and closed-trade attribution.',
   'Market Internals': 'Regime, breadth, volatility, sector leadership and scanner coverage.',
   'Long-Term': 'Business quality, valuation and technical timing on a dedicated research lane.',
@@ -217,7 +219,7 @@ function App() {
   const reportBase = `${window.location.protocol}//${window.location.hostname}:8766`
   const openEquityReport = () => {
     if (!selected) {
-      setControlState('Select a stock before generating an equity research PDF')
+      setControlState('Select a stock before generating an equity evidence PDF')
       return
     }
     window.open(`${reportBase}/reports/equity/${encodeURIComponent(selected)}`, '_blank', 'noopener,noreferrer')
@@ -238,6 +240,7 @@ function App() {
   const renderView = () => {
     if (active === 'Scanner') return <ScannerView {...viewProps} />
     if (active === 'Stock Intelligence') return <StockIntelligenceView {...viewProps} />
+    if (active === 'Research Data') return <ResearchDataView symbol={selected} />
     if (active === 'Portfolio') return <PortfolioView {...viewProps} />
     if (active === 'Market Internals') return <MarketInternalsView {...viewProps} />
     if (active === 'Long-Term') return <LongTermView {...viewProps} />
@@ -279,7 +282,7 @@ function App() {
         <section className="page-title">
           <div><h1>{active}</h1><p>{pageSubtitles[active]}</p></div>
           <div className="page-actions">
-            <button type="button" disabled={!selected} onClick={openEquityReport}>Equity Research PDF</button>
+            <button type="button" disabled={!selected} onClick={openEquityReport}>Equity Evidence PDF</button>
             <button type="button" onClick={openBasketReport}>Top-3 Basket PDF</button>
             <span>{controlState || (loading ? 'Loading real state…' : `Updated ${dashboard.generated_at ? new Date(dashboard.generated_at).toLocaleTimeString('en-IN') : '—'}`)}</span>
           </div>
