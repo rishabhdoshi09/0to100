@@ -295,9 +295,12 @@ def _open_new_positions(ctx, store, book, state, res, decisions, today_signals, 
         EV.emit(store, cid, EV.TRADE_INTENT_CREATED, strategy_id=d.strategy_id,
                 symbol=sig["symbol"], event_ts=ctx.as_of_date, summary={"risk_pct": d.target_risk_pct})
         res.trade_intents.append(intent.record_id)
-        pos = book.open_position(d.strategy_id, sig["symbol"], float(sig["entry"]),
-                                 float(sig["stop"]), float(sig["target"]), ctx.as_of_date,
-                                 int(sig.get("max_hold", 0)))
+        if hasattr(book, "open_intent"):
+            pos = book.open_intent(intent, date=ctx.as_of_date)
+        else:  # compatibility for small injected test doubles; production PaperBook owns sizing
+            pos = book.open_position(d.strategy_id, sig["symbol"], float(sig["entry"]),
+                                     float(sig["stop"]), float(sig["target"]), ctx.as_of_date,
+                                     int(sig.get("max_hold", 0)))
         if pos is None:
             EV.emit(store, cid, EV.TRADE_INTENT_BLOCKED, strategy_id=d.strategy_id,
                     symbol=sig["symbol"], reason="BOOK_REFUSED",
@@ -315,7 +318,13 @@ def _open_new_positions(ctx, store, book, state, res, decisions, today_signals, 
         st.latest_allocation_id = d.record_id
         EV.emit(store, cid, EV.PAPER_POSITION_OPENED, strategy_id=d.strategy_id,
                 symbol=sig["symbol"], event_ts=ctx.as_of_date,
-                summary={"qty": pos.qty, "entry": pos.entry_price})
+                summary={
+                    "qty": pos.qty,
+                    "entry": pos.entry_price,
+                    "requested_risk_pct": intent.intended_risk_pct,
+                    "approved_risk_pct": getattr(pos, "approved_risk_pct", 0.0),
+                    "risk_amount": getattr(pos, "risk_amount", 0.0),
+                })
         if d.action == "INCREASE":
             EV.emit(store, cid, EV.STRATEGY_ALLOCATION_INCREASED, strategy_id=d.strategy_id,
                     event_ts=ctx.as_of_date)
