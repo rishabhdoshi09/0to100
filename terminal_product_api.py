@@ -13,11 +13,13 @@ from fastapi import HTTPException
 
 import terminal_api as core
 from product.institutional_readiness import build_institutional_readiness
+from product.observer_api import install as install_observer_api, observer_payload
 from product.product_readiness import build_product_readiness
 from product.stock_workspace import build_stock_workspace, clean_symbol
 
 app = core.app
-app.version = "0.10.0"
+app.version = "0.11.0"
+install_observer_api(app)
 
 INSTITUTIONAL_CERTIFICATIONS = (
     core.ROOT / "logs" / "institutional_readiness" / "certifications.json"
@@ -404,6 +406,7 @@ def product_dashboard() -> dict[str, Any]:
     dashboard_payload["reconciliation"] = reconciliation_status()
     dashboard_payload["protection"] = protection_status()
     dashboard_payload["tca"] = tca_status()
+    dashboard_payload["broker_observer"] = observer_payload()
     return dashboard_payload
 
 
