@@ -364,6 +364,47 @@ def target_portfolio() -> dict[str, Any]:
     return _target_portfolio_payload()
 
 
+def _trade_plan_payload(symbol: str) -> dict[str, Any]:
+    """Risk-first plan for a scanned candidate, composed from the authoritative sizer + book-risk +
+    market-health functions. Read-only; correlation stays 'unknown' here (no synchronous data fetch)."""
+    from product.trade_plan import plan_for_candidate
+    sym = str(symbol or "").strip().upper()
+    scan = core._scan_payload()
+    record = next((r for r in scan.get("records", []) if str(r.get("symbol", "")).upper() == sym), None)
+    if record is None:
+        return {"available": False, "symbol": sym,
+                "message": "No current scan setup for this symbol. Run a fresh Momentum scan first."}
+    if not (record.get("entry") and record.get("stop")):
+        return {"available": False, "symbol": sym,
+                "message": "This candidate has no entry/stop yet — no risk plan can be computed."}
+    book = core._json_file(core.ROOT / "logs" / "intelligence" / "intel_book.json", {})
+    try:
+        capital = float(book.get("capital") or 0.0)
+    except Exception:
+        capital = 0.0
+    if capital <= 0:
+        try:
+            from config import settings
+            capital = float(settings.trading_capital)
+        except Exception:
+            capital = 100_000.0
+    health = str(core._market_payload().get("health", "")).strip().lower()
+    regime_factor = {"healthy": 1.0, "mixed": 0.75, "weak": 0.5}.get(health, 1.0)
+    plan = plan_for_candidate(record, capital=capital, regime_factor=regime_factor)
+    payload = plan.as_dict()
+    payload.update({"available": True, "symbol": sym, "capital": round(capital, 0),
+                    "market_health": health or "unknown", "market_risk_factor": regime_factor})
+    return payload
+
+
+@app.get("/api/trade-plan/{symbol}")
+def trade_plan(symbol: str) -> dict[str, Any]:
+    """Read-only risk-first plan for a scanned candidate: exact shares, ₹ risk, reward:risk,
+    invalidation, book open-risk before/after and a market-throttled risk suggestion. No order is
+    ever placed."""
+    return _trade_plan_payload(symbol)
+
+
 @app.get("/api/oms")
 def oms_status() -> dict[str, Any]:
     """Return read-only durable order lifecycle state."""
