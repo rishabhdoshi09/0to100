@@ -1,13 +1,8 @@
 """Research evidence intake, freshness and user guidance for QuantTerm.
 
-The intake layer distinguishes three states rigorously:
-- usable structured evidence,
-- a source document attached but not extracted,
-- evidence missing.
-
-An uploaded PDF is preserved and checksum-traced, but it cannot satisfy an analytical
-section until structured extraction exists. CSV/JSON uploads are schema validated and
-must carry a source URL and an explicit as-of date.
+The intake layer distinguishes usable structured evidence, an attached source awaiting
+extraction, and missing evidence. Financial/shareholding freshness is based on the
+latest disclosed period found in the table—not the day the webpage was fetched.
 """
 from __future__ import annotations
 
@@ -122,33 +117,31 @@ def resource_links(symbol: str) -> dict[str, list[dict[str, str]]]:
     bse_shareholding = "https://www.bseindia.com/corporates/Sharehold_Searchnew.aspx"
     screener = f"https://www.screener.in/company/{symbol}/consolidated/"
     company_search = f"https://www.google.com/search?q={symbol}+investor+relations+annual+report+earnings+call+transcript"
-    official_nse_annual = {"label": "NSE annual reports", "url": nse_annual, "official": "true"}
-    ir_search = {"label": "Company investor-relations search", "url": company_search, "official": "false"}
+    annual = {"label": "NSE annual reports", "url": nse_annual, "official": "true"}
+    ir = {"label": "Company investor-relations search", "url": company_search, "official": "false"}
     return {
-        "business_profile": [official_nse_annual, ir_search, {"label": "Screener company page", "url": screener, "official": "false"}],
+        "business_profile": [annual, ir, {"label": "Screener company page", "url": screener, "official": "false"}],
         "financial_history": [
             {"label": "NSE financial results", "url": nse_financials, "official": "true"},
             {"label": "BSE financial results", "url": bse_financials, "official": "true"},
-            official_nse_annual,
+            annual,
             {"label": "Screener company page", "url": screener, "official": "false"},
         ],
         "shareholding_history": [
             {"label": "NSE shareholding patterns", "url": nse_shareholding, "official": "true"},
             {"label": "BSE shareholding search", "url": bse_shareholding, "official": "true"},
         ],
-        "business_segments": [official_nse_annual, ir_search],
+        "business_segments": [annual, ir],
         "management_commentary": [
             {"label": "NSE announcements and call filings", "url": nse_announcements, "official": "true"},
-            {"label": "BSE announcements", "url": bse_announcements, "official": "true"},
-            ir_search,
+            {"label": "BSE announcements", "url": bse_announcements, "official": "true"}, ir,
         ],
         "order_book_guidance": [
             {"label": "NSE corporate announcements", "url": nse_announcements, "official": "true"},
             {"label": "BSE announcements", "url": bse_announcements, "official": "true"},
-            {"label": "NSE financial results", "url": nse_financials, "official": "true"},
-            ir_search,
+            {"label": "NSE financial results", "url": nse_financials, "official": "true"}, ir,
         ],
-        "annual_report": [official_nse_annual, ir_search],
+        "annual_report": [annual, ir],
     }
 
 
@@ -163,12 +156,28 @@ def _parse_datetime(value: Any) -> datetime | None:
         return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
     except ValueError:
         pass
-    for fmt in ("%Y-%m-%d", "%d-%m-%Y", "%d-%b-%Y", "%d/%m/%Y"):
+    for fmt in ("%Y-%m-%d", "%d-%m-%Y", "%d-%b-%Y", "%d/%m/%Y", "%b %Y", "%b-%Y", "%Y"):
         try:
             return datetime.strptime(text[:11], fmt).replace(tzinfo=timezone.utc)
         except ValueError:
             continue
     return None
+
+
+def _latest_table_period(rows: Iterable[Mapping[str, Any]]) -> str:
+    dated: list[datetime] = []
+    for row in rows or []:
+        for key in row.keys():
+            text = str(key or "").strip()
+            if text.lower() in {"", "row_label", "particulars", "particular"}:
+                continue
+            parsed = _parse_datetime(text)
+            if parsed:
+                dated.append(parsed)
+    if not dated:
+        return ""
+    latest = max(dated)
+    return latest.date().isoformat()
 
 
 def age_days(as_of: Any, *, now: datetime | None = None) -> int | None:
@@ -191,7 +200,7 @@ def freshness(as_of: Any, max_age_days: int) -> tuple[str, int | None]:
 def load_raw_fundamentals(symbol: str) -> dict[str, Any]:
     symbol = clean_symbol(symbol)
     if not FUNDAMENTALS_DB.exists():
-        return {"available": False, "data": {}, "fetched_at": "", "age_days": None, "freshness": "MISSING"}
+        return {"available": False, "data": {}, "fetched_at": "", "age_days": None, "freshness": "MISSING", "section_as_of": {}}
     try:
         connection = sqlite3.connect(str(FUNDAMENTALS_DB), timeout=2.0)
         try:
@@ -199,13 +208,21 @@ def load_raw_fundamentals(symbol: str) -> dict[str, Any]:
         finally:
             connection.close()
         if row is None:
-            return {"available": False, "data": {}, "fetched_at": "", "age_days": None, "freshness": "MISSING"}
+            return {"available": False, "data": {}, "fetched_at": "", "age_days": None, "freshness": "MISSING", "section_as_of": {}}
         data = json.loads(row[0])
         fetched = datetime.fromtimestamp(float(row[1]), tz=timezone.utc).isoformat()
         state, age = freshness(fetched, 2)
-        return {"available": True, "data": data, "fetched_at": fetched, "age_days": age, "freshness": state}
+        financial_periods = list(data.get("quarterly_results", []) or []) + list(data.get("profit_loss", []) or [])
+        return {
+            "available": True, "data": data, "fetched_at": fetched,
+            "age_days": age, "freshness": state,
+            "section_as_of": {
+                "financial_history": _latest_table_period(financial_periods),
+                "shareholding_history": _latest_table_period(data.get("shareholding", []) or []),
+            },
+        }
     except Exception as exc:
-        return {"available": False, "data": {}, "fetched_at": "", "age_days": None, "freshness": "ERROR", "error": str(exc)}
+        return {"available": False, "data": {}, "fetched_at": "", "age_days": None, "freshness": "ERROR", "section_as_of": {}, "error": str(exc)}
 
 
 def _symbol_root(symbol: str) -> Path:
@@ -248,8 +265,7 @@ def latest_upload(symbol: str, kind: str, *, usable_only: bool = False) -> dict[
 
 def _structured_records(content: bytes, extension: str) -> list[dict[str, Any]]:
     if extension == ".csv":
-        text = content.decode("utf-8-sig")
-        return [dict(row) for row in csv.DictReader(StringIO(text))]
+        return [dict(row) for row in csv.DictReader(StringIO(content.decode("utf-8-sig")))]
     if extension == ".json":
         payload = json.loads(content.decode("utf-8"))
         rows = payload if isinstance(payload, list) else payload.get("records", [])
@@ -282,15 +298,7 @@ def _validate_structured(kind: str, content: bytes, extension: str, source_url: 
     return rows
 
 
-def save_upload(
-    symbol: str,
-    kind: str,
-    content: bytes,
-    *,
-    filename: str,
-    as_of: str,
-    source_url: str = "",
-) -> dict[str, Any]:
+def save_upload(symbol: str, kind: str, content: bytes, *, filename: str, as_of: str, source_url: str = "") -> dict[str, Any]:
     symbol = clean_symbol(symbol)
     if kind not in RESOURCE_SPECS:
         raise ValueError("unknown evidence kind")
@@ -322,8 +330,8 @@ def save_upload(
         "filename": safe_name, "path": str(destination.relative_to(ROOT)),
         "sha256": digest, "bytes": len(content),
         "as_of": parsed_as_of.date().isoformat(), "uploaded_at": uploaded_at,
-        "source_url": source_url, "structured": structured,
-        "extracted": structured, "validated_rows": len(rows),
+        "source_url": source_url, "structured": structured, "extracted": structured,
+        "validated_rows": len(rows),
         "extraction_status": "STRUCTURED_VALIDATED" if structured else "SOURCE_ATTACHED_UNPARSED",
     }
     existing = [entry for entry in _load_manifest(symbol) if entry.get("sha256") != digest]
@@ -348,6 +356,25 @@ def template_csv(kind: str) -> bytes:
     return output.getvalue().encode("utf-8")
 
 
+def _shareholding_series(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    series = [
+        ("Promoters", "promoter_pct"), ("FIIs", "fii_pct"),
+        ("DIIs", "dii_pct"), ("Public", "public_pct"),
+        ("Promoter pledge", "promoter_pledge_pct"),
+    ]
+    output: list[dict[str, Any]] = []
+    for label, field in series:
+        item: dict[str, Any] = {"row_label": label}
+        for row in rows:
+            period = str(row.get("quarter_end") or "").strip()
+            value = row.get(field)
+            if period and value not in (None, ""):
+                item[period] = value
+        if len(item) > 1:
+            output.append(item)
+    return output
+
+
 def structured_rows(symbol: str, kind: str) -> list[dict[str, Any]]:
     item = latest_upload(symbol, kind, usable_only=True)
     if not item:
@@ -360,7 +387,7 @@ def structured_rows(symbol: str, kind: str) -> list[dict[str, Any]]:
         for row in rows:
             row.setdefault("source_url", item.get("source_url", ""))
             row.setdefault("as_of_date", item.get("as_of", ""))
-        return rows
+        return _shareholding_series(rows) if kind == "shareholding_history" else rows
     except Exception:
         return []
 
@@ -377,14 +404,13 @@ def _raw_section_state(raw: Mapping[str, Any], section: str, minimum_rows: int =
 
 
 def evidence_requirements(
-    symbol: str,
-    *,
-    price_as_of: str = "", scan_as_of: str = "", long_term_as_of: str = "",
-    news_as_of: str = "", fno_as_of: str = "",
+    symbol: str, *, price_as_of: str = "", scan_as_of: str = "",
+    long_term_as_of: str = "", news_as_of: str = "", fno_as_of: str = "",
 ) -> dict[str, Any]:
     symbol = clean_symbol(symbol)
     raw_record = load_raw_fundamentals(symbol)
     raw = dict(raw_record.get("data", {}) or {})
+    section_as_of = dict(raw_record.get("section_as_of", {}) or {})
     links = resource_links(symbol)
     uploads = list_uploads(symbol)
     auto_presence = {
@@ -394,30 +420,28 @@ def evidence_requirements(
         "business_segments": False, "management_commentary": False,
         "order_book_guidance": False, "annual_report": False,
     }
-    auto_as_of = {key: (raw_record.get("fetched_at", "") if auto_presence.get(key) else "") for key in RESOURCE_SPECS}
+    auto_as_of = {
+        "business_profile": raw_record.get("fetched_at", ""),
+        "financial_history": section_as_of.get("financial_history", ""),
+        "shareholding_history": section_as_of.get("shareholding_history", ""),
+        "business_segments": "", "management_commentary": "",
+        "order_book_guidance": "", "annual_report": "",
+    }
     items: list[dict[str, Any]] = []
     for key, spec in RESOURCE_SPECS.items():
         attached = latest_upload(symbol, key)
         usable = latest_upload(symbol, key, usable_only=True)
         if key == "annual_report" and attached:
-            available = True
-            source = "USER_SOURCE_DOCUMENT"
-            as_of = str(attached.get("as_of") or "")
+            available, source, as_of = True, "USER_SOURCE_DOCUMENT", str(attached.get("as_of") or "")
             state, age = freshness(as_of, spec.max_age_days)
         elif auto_presence.get(key):
-            available = True
-            source = "SCREENER_DEEP_CACHE"
-            as_of = str(auto_as_of.get(key) or "")
+            available, source, as_of = True, "SCREENER_DEEP_CACHE", str(auto_as_of.get(key) or "")
             state, age = freshness(as_of, spec.max_age_days)
         elif usable:
-            available = True
-            source = "USER_STRUCTURED_UPLOAD"
-            as_of = str(usable.get("as_of") or "")
+            available, source, as_of = True, "USER_STRUCTURED_UPLOAD", str(usable.get("as_of") or "")
             state, age = freshness(as_of, spec.max_age_days)
         elif attached:
-            available = False
-            source = "USER_SOURCE_DOCUMENT"
-            as_of = str(attached.get("as_of") or "")
+            available, source, as_of = False, "USER_SOURCE_DOCUMENT", str(attached.get("as_of") or "")
             state, age = "SOURCE_ATTACHED_UNPARSED", age_days(as_of)
         else:
             available, source, as_of, state, age = False, "", "", "MISSING", None
@@ -438,19 +462,15 @@ def evidence_requirements(
         ("long_term", "Long-Term shortlist", long_term_as_of, 7),
         ("news", "Curated news and filings", news_as_of, 2),
         ("fno", "Current F&O instrument master", fno_as_of, 2),
-        ("fundamentals_cache", "Deep fundamentals cache", raw_record.get("fetched_at", ""), 2),
+        ("fundamentals_cache", "Deep fundamentals cache retrieval", raw_record.get("fetched_at", ""), 2),
     ]
     runtime = []
     for key, label, as_of, max_days in runtime_specs:
         state, age = freshness(as_of, max_days) if as_of else ("MISSING", None)
-        runtime.append({
-            "key": key, "label": label, "status": state,
-            "available": bool(as_of), "as_of": as_of,
-            "age_days": age, "max_age_days": max_days,
-        })
+        runtime.append({"key": key, "label": label, "status": state, "available": bool(as_of), "as_of": as_of, "age_days": age, "max_age_days": max_days})
     fresh = sum(1 for item in items if item["available"] and item["status"] == "FRESH")
     return {
-        "schema_version": 2, "symbol": symbol,
+        "schema_version": 3, "symbol": symbol,
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "coverage_pct": round(fresh / len(items) * 100) if items else 0,
         "requirements": items, "runtime_sources": runtime, "uploads": uploads,
@@ -459,6 +479,7 @@ def evidence_requirements(
             "fetched_at": raw_record.get("fetched_at", ""),
             "age_days": raw_record.get("age_days"),
             "freshness": raw_record.get("freshness", "MISSING"),
+            "section_as_of": section_as_of,
             "sections": {
                 "about": _raw_section_state(raw, "about"),
                 "quarterly_results": len(raw.get("quarterly_results", []) or []),
