@@ -47,3 +47,4 @@ vaderSentiment>=3.3.2      # Rule-based financial news pre-scoring (Feature 1)
 youtube-transcript-api>=0.6.0  # Earnings call transcript fetcher (Feature 3)
 fastapi>=0.115.0
 uvicorn>=0.30.0
+reportlab>=4.2.0           # Professional evidence-first equity research PDFs
