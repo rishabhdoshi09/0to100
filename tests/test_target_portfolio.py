@@ -136,6 +136,31 @@ def test_pending_quantity_can_fully_satisfy_the_target():
     assert build.positions[0].required_quantity == 0
 
 
+def test_existing_symbol_owned_by_another_strategy_is_explicitly_blocked():
+    book = PaperBook(capital=100_000)
+    existing = book.open_position(
+        "owner-strategy", "AAA", 100, 90, 120, "2026-07-31", 20,
+        risk_pct_of_capital=0.5,
+    )
+    assert existing is not None
+    state = RuntimeState()
+    state.get("owner-strategy", "momentum")
+
+    build = build_target_portfolio(
+        _ctx(),
+        book=book,
+        runtime_state=state,
+        decisions=[_decision("new-strategy", "AAA", risk=0.5)],
+        today_signals=_signals(("new-strategy", "AAA")),
+        cards=[_card("new-strategy")],
+        cfg=AllocationConfig(),
+    )
+
+    assert len(build.executable) == 0
+    assert build.positions[0].status == BLOCKED
+    assert build.positions[0].blocked_by[0] == "DUPLICATE_SYMBOL"
+
+
 def test_duplicate_symbol_proposals_do_not_double_count_exposure():
     book = PaperBook(capital=100_000)
     high = _decision("s1", "AAA", risk=0.5, score=1.0)
