@@ -40,6 +40,7 @@ class SingleObserverLock:
         self.path = path
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._handle = None
+        self._owned = False
 
     def acquire(self) -> bool:
         try:
@@ -49,6 +50,7 @@ class SingleObserverLock:
             fcntl.flock(self._handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
             self._handle.write(str(os.getpid()))
             self._handle.flush()
+            self._owned = True
             return True
         except Exception:
             try:
@@ -56,20 +58,23 @@ class SingleObserverLock:
                     self._handle.close()
             finally:
                 self._handle = None
+                self._owned = False
             return False
 
     def release(self) -> None:
+        owned = bool(self._owned and self._handle is not None)
         try:
-            if self._handle is not None:
+            if owned:
                 import fcntl
 
                 fcntl.flock(self._handle, fcntl.LOCK_UN)
                 self._handle.close()
-            self.path.unlink(missing_ok=True)
+                self.path.unlink(missing_ok=True)
         except Exception:
             pass
         finally:
             self._handle = None
+            self._owned = False
 
 
 def _atomic_json(path: Path, payload: dict[str, Any]) -> None:
