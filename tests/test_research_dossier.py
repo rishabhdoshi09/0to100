@@ -124,7 +124,13 @@ def test_basket_pdf_is_generated(tmp_path: Path, monkeypatch):
         news=[],
         fno_payload={"generated_at": "2026-08-01T00:00:00+00:00", "underlyings": []},
     ))
-    payload = {"records": [{"symbol": "AAA"}, {"symbol": "BBB"}, {"symbol": "CCC"}]}
+    payload = {
+        "records": [
+            {"symbol": "AAA", "classification": "QUALITY_COMPOUNDER", "combined_score": 80, "fundamental_coverage": 0.8},
+            {"symbol": "BBB", "classification": "GARP_CANDIDATE", "combined_score": 75, "fundamental_coverage": 0.7},
+            {"symbol": "CCC", "classification": "NEEDS_FUNDAMENTALS", "combined_score": 90, "fundamental_coverage": 0.2},
+        ],
+    }
     basket = build_long_term_basket(limit=3, long_term_payload=payload)
     path = render_basket_pdf(basket, tmp_path / "basket.pdf")
     assert path.read_bytes().startswith(b"%PDF")

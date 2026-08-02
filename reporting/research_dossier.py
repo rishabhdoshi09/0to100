@@ -391,6 +391,12 @@ def build_long_term_basket(
         from product.long_term_store import load_long_term_scan
         long_term_payload = load_long_term_scan() or {}
     records = [dict(item) for item in (long_term_payload.get("records", []) or []) if isinstance(item, Mapping)]
+    try:
+        from product.radar_workspace import is_long_term_pick
+
+        records = [item for item in records if is_long_term_pick(item)]
+    except Exception:
+        pass
     requested = [_clean_symbol(item) for item in symbols] if symbols else []
     chosen = [item for symbol in requested for item in records if str(item.get("symbol", "")).upper() == symbol] if requested else records[:max(1, min(int(limit), 10))]
     dossiers = [build_equity_dossier(str(item.get("symbol", "")), long_term_payload=long_term_payload) for item in chosen]

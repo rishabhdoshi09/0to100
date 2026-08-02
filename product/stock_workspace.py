@@ -457,6 +457,21 @@ def _default_inputs(symbol: str) -> dict[str, Any]:
     scan = load_scan() or {}
     long_term = load_long_term_scan() or {}
     raw = load_raw_fundamentals(symbol, auto_fetch=False)
+    if not (raw.get("data") or {}):
+        try:
+            from fundamentals.cache import FundamentalsCache
+
+            cache = FundamentalsCache()
+            cached = cache.get(symbol) or cache.get_any(symbol)
+            if cached:
+                raw = {
+                    "available": True,
+                    "data": dict(cached),
+                    "fetched_at": "",
+                    "section_as_of": {},
+                }
+        except Exception:
+            pass
     try:
         from data.bhavcopy_runtime import get_ohlcv
         frame = get_ohlcv(symbol)

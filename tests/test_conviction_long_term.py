@@ -151,6 +151,7 @@ def test_track_long_term_control_is_applied_by_supervisor(tmp_path, monkeypatch)
     payload = {"records": [{
         "symbol": "AAA", "classification": "QUALITY_COMPOUNDER",
         "combined_score": 80, "quality_factors": ["ROCE 25%"],
+        "fundamental_coverage": 0.85,
     }]}
     recorded = []
     monkeypatch.setattr(STORE, "load_long_term_scan", lambda: payload)

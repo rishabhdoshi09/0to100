@@ -14,7 +14,7 @@ def test_command_center_projects_real_counts_without_inventing_values():
     long_term = {
         "summary": {"coverage_pct": 75},
         "records": [
-            {"symbol": "CCC", "classification": "QUALITY_COMPOUNDER", "combined_score": 88},
+            {"symbol": "CCC", "classification": "QUALITY_COMPOUNDER", "combined_score": 88, "fundamental_coverage": 0.75},
             {"symbol": "DDD", "classification": "NEEDS_FUNDAMENTALS", "combined_score": 90},
         ],
     }

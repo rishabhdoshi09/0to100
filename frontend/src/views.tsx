@@ -17,6 +17,7 @@ import {
   type InstitutionalDomain,
   type InstitutionalStack,
 } from './productApi'
+import { longTermPicks } from './longTermPicks'
 import type {
   ChartBar,
   ControlName,
@@ -44,8 +45,7 @@ const momentumRows = (dashboard: DashboardPayload) => dashboard.scan.records
   .filter((row) => row.signals?.includes('MOMENTUM') || row.verdict === 'BUY')
   .sort((a, b) => (b.score || 0) - (a.score || 0))
 
-const qualityRows = (dashboard: DashboardPayload) => dashboard.long_term.records
-  .filter((row) => ['QUALITY_COMPOUNDER', 'GARP_CANDIDATE', 'QUALITY_BUT_EXPENSIVE'].includes(row.classification || ''))
+const qualityRows = (dashboard: DashboardPayload) => longTermPicks(dashboard.long_term.records)
   .sort((a, b) => (b.combined_score || 0) - (a.combined_score || 0))
 
 function EquityCurve({ values }: { values?: number[] }) {
@@ -379,7 +379,11 @@ export function LongTermView(props: ViewProps) {
   const [classification, setClassification] = useState('All')
   const rows = useMemo(() => {
     const all = [...dashboard.long_term.records].sort((a, b) => (b.combined_score || 0) - (a.combined_score || 0))
-    if (classification === 'Quality') return all.filter((row) => ['QUALITY_COMPOUNDER', 'GARP_CANDIDATE'].includes(row.classification || ''))
+    if (classification === 'Quality') {
+      return longTermPicks(all).filter(
+        (row) => row.classification === 'QUALITY_COMPOUNDER' || row.classification === 'GARP_CANDIDATE',
+      )
+    }
     if (classification === 'Expensive') return all.filter((row) => row.classification === 'QUALITY_BUT_EXPENSIVE')
     if (classification === 'Needs Data') return all.filter((row) => row.classification === 'NEEDS_FUNDAMENTALS')
     if (classification === 'Avoid') return all.filter((row) => row.classification === 'AVOID_REVIEW')

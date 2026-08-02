@@ -9,6 +9,14 @@ from typing import Any, Callable, Mapping, Sequence
 
 BREAKOUT_TAGS = frozenset({"BREAKOUT_52W", "BREAKOUT_RES", "GOLDEN_CROSS", "VOL_SQUEEZE"})
 QUALITY_CLASSES = frozenset({"QUALITY_COMPOUNDER", "GARP_CANDIDATE", "QUALITY_BUT_EXPENSIVE"})
+MIN_LT_FUNDAMENTAL_COVERAGE = 0.50
+
+
+def is_long_term_pick(row: Mapping[str, Any]) -> bool:
+    """Actionable long-term idea: quality class with enough fundamental evidence."""
+    if str(row.get("classification", "")) not in QUALITY_CLASSES:
+        return False
+    return _f(row.get("fundamental_coverage")) >= MIN_LT_FUNDAMENTAL_COVERAGE
 
 
 def _signals(row: Mapping[str, Any]) -> set[str]:
@@ -157,7 +165,7 @@ def build_radar_home(
     long_picks = [
         enrich_long_term_row(r, scanned_at=lt_at)
         for r in long_rows
-        if str(r.get("classification", "")) in QUALITY_CLASSES
+        if is_long_term_pick(r)
     ]
     long_picks.sort(key=lambda r: (-_f(r.get("combined_score")), r.get("symbol", "")))
 

@@ -23,6 +23,7 @@ import {
   type TradePlan,
 } from './productApi'
 import type { ChartBar, ControlName, DashboardPayload, OptionsChainPayload } from './types'
+import { longTermPicks } from './longTermPicks'
 import { fetchMarketOptions } from './api'
 
 // Read-only risk-first "R lens" — exact shares, rupee risk, reward:risk, book heat. No orders.
@@ -166,8 +167,7 @@ export function ProductCommandCenterView(props: ViewProps) {
   const momentum = useMemo(() => [...dashboard.scan.records]
     .filter((row) => row.signals?.includes('MOMENTUM') || row.verdict === 'BUY')
     .sort((a, b) => (b.score || 0) - (a.score || 0)), [dashboard.scan.records])
-  const quality = useMemo(() => [...dashboard.long_term.records]
-    .filter((row) => ['QUALITY_COMPOUNDER', 'GARP_CANDIDATE', 'QUALITY_BUT_EXPENSIVE'].includes(row.classification || ''))
+  const quality = useMemo(() => longTermPicks(dashboard.long_term.records)
     .sort((a, b) => (b.combined_score || 0) - (a.combined_score || 0)), [dashboard.long_term.records])
   const selectedRow = dashboard.conviction.find((row) => row.symbol === selected)
     || dashboard.scan.records.find((row) => row.symbol === selected)

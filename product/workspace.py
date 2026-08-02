@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from typing import Any, Mapping, Sequence
 
+from product.radar_workspace import is_long_term_pick
+
 
 SCANNER_MODES = (
     "Momentum",
@@ -65,8 +67,7 @@ def build_command_center_state(
     near = [row for row in scan_rows if "PRE_BREAKOUT" in _signals(row)]
     ready.sort(key=lambda row: (-_f(row.get("score")), str(row.get("symbol", ""))))
 
-    quality_classes = {"QUALITY_COMPOUNDER", "GARP_CANDIDATE", "QUALITY_BUT_EXPENSIVE"}
-    quality = [row for row in long_rows if str(row.get("classification", "")) in quality_classes]
+    quality = [row for row in long_rows if is_long_term_pick(row)]
     quality.sort(key=lambda row: (-_f(row.get("combined_score")), str(row.get("symbol", ""))))
 
     capital = _f(_get(paper, "capital", 0.0))
