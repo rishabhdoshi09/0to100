@@ -46,16 +46,42 @@ def symbol_ratios_workspace(symbol: str) -> dict[str, Any]:
     if not sym:
         raise HTTPException(status_code=400, detail="symbol required")
     from fundamentals.cache import FundamentalsCache
-    from data_platform.ratios import flatten_screener_snapshot, ratios_from_fundamentals
+    from data_platform.ratios import (
+        compute_peer_average_pe,
+        flatten_screener_snapshot,
+        peer_pe_fundamental_metrics,
+        ratios_from_fundamentals,
+    )
     cache = FundamentalsCache()
     raw = cache.get(sym) or cache.get_any(sym) or {}
     flat = flatten_screener_snapshot(raw) if raw else {}
+
+    peer_symbols: list[str] = []
+    try:
+        from product.scan_store import load_scan
+        from product.stock_workspace import _sector_peers_from_scan
+
+        scan = load_scan() or {}
+        sector = ""
+        for row in scan.get("records", []) or []:
+            if str(row.get("symbol", "")).upper() == sym:
+                sector = str(row.get("sector") or "")
+                break
+        peer_symbols = [
+            str(p.get("symbol", "")).upper()
+            for p in _sector_peers_from_scan(sym, sector, scan)
+        ]
+    except Exception:
+        peer_symbols = []
+
+    peer_stats = compute_peer_average_pe(sym, raw, peer_symbols)
     return {
         "symbol": sym,
-        "ratios": ratios_from_fundamentals(sym, raw),
+        "ratios": ratios_from_fundamentals(sym, raw, peer_stats=peer_stats),
         "source": "fundamentals_cache+data_platform.ratios",
         "fundamentals_cached": bool(raw),
         "inputs_available": sorted(k for k, v in flat.items() if v is not None and not str(k).startswith("_")),
+        "peer_average_pe": peer_stats,
     }
 
 

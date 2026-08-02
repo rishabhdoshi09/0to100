@@ -70,6 +70,45 @@ def test_ratios_from_screener_snapshot():
     assert margin["value"] == 20.0
 
 
+def test_peer_average_pe_from_screener_table():
+    from data_platform.ratios import compute_peer_average_pe, ratios_from_fundamentals
+
+    snapshot = {
+        "key_ratios": [{"name": "Stock P/E", "value": "25"}],
+        "peer_comparison": [
+            {"": "Peer A", "P/E": "18", "CMP": "400"},
+            {"": "Peer B", "P/E": "22", "CMP": "500"},
+            {"": "Peer C", "P/E": "20", "CMP": "450"},
+        ],
+    }
+    stats = compute_peer_average_pe("TEST", snapshot, [])
+    assert stats["average_pe"] == 20.0
+    assert stats["sample_count"] == 3
+    assert stats["stock_pe"] == 25.0
+    assert stats["pe_vs_peer_avg"] == 1.25
+    rows = ratios_from_fundamentals("TEST", snapshot, peer_stats=stats)
+    peer_avg = next(r for r in rows if r["key"] == "peer_avg_pe")
+    assert peer_avg["value"] == 20.0
+
+
+def test_peer_average_pe_cache_peers(monkeypatch):
+    from data_platform.ratios import compute_peer_average_pe
+    from fundamentals.cache import FundamentalsCache
+
+    cache = FundamentalsCache()
+    cache.set("PEER1", {"key_ratios": [{"name": "Stock P/E", "value": "30"}]})
+    cache.set("PEER2", {"key_ratios": [{"name": "Stock P/E", "value": "10"}]})
+    stats = compute_peer_average_pe(
+        "TEST",
+        {"key_ratios": [{"name": "Stock P/E", "value": "20"}]},
+        ["PEER1", "PEER2"],
+    )
+    assert stats["average_pe"] == 20.0
+    assert stats["sample_count"] == 2
+    cache.invalidate("PEER1")
+    cache.invalidate("PEER2")
+
+
 def test_coverage_audit_empty_symbol():
     cov = audit_symbol("")
     assert cov.identity == QualityStatus.ERROR

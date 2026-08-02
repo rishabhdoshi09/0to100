@@ -333,6 +333,21 @@ def _peers_payload(
         if isinstance(row, Mapping)
     ]
     sector_peers = _sector_peers_from_scan(symbol, sector, scan_payload)
+    try:
+        from data_platform.ratios import compute_peer_average_pe
+
+        peer_stats = compute_peer_average_pe(
+            symbol,
+            raw,
+            [str(p.get("symbol", "")) for p in sector_peers],
+        )
+    except Exception:
+        peer_stats = {
+            "average_pe": None,
+            "sample_count": 0,
+            "pe_vs_peer_avg": None,
+            "note": "Peer P/E could not be computed.",
+        }
     available = bool(screener_rows or sector_peers)
     note_parts: list[str] = []
     if screener_rows:
@@ -348,6 +363,12 @@ def _peers_payload(
         "sector": sector,
         "screener_table": screener_rows[:25],
         "sector_peers": sector_peers,
+        "average_pe": peer_stats.get("average_pe"),
+        "peer_pe_sample_count": int(peer_stats.get("sample_count") or 0),
+        "pe_vs_peer_avg": peer_stats.get("pe_vs_peer_avg"),
+        "stock_pe": peer_stats.get("stock_pe"),
+        "peer_pe_note": str(peer_stats.get("note") or ""),
+        "peer_pe_sources": list(peer_stats.get("sources") or []),
         "note": " ".join(note_parts),
     }
 
@@ -469,6 +490,20 @@ def build_stock_workspace(
     company = str(scan_row.get("company") or long_row.get("company") or symbol)
     fundamentals = _fundamentals(long_row, raw_record, sector)
     peers = _peers_payload(symbol, sector, dict(raw_record.get("data", {}) or {}), scan_payload)
+    try:
+        from data_platform.ratios import peer_pe_fundamental_metrics
+
+        peer_metric_rows = peer_pe_fundamental_metrics(peers)
+        if peer_metric_rows:
+            fundamentals["metrics"].extend(peer_metric_rows)
+            if peers.get("average_pe") is not None:
+                fundamentals["available"] = True
+                filled = sum(1 for m in fundamentals["metrics"] if m.get("value") is not None)
+                fundamentals["coverage_pct"] = round(
+                    filled / len(fundamentals["metrics"]) * 100
+                ) if fundamentals["metrics"] else fundamentals.get("coverage_pct", 0)
+    except Exception:
+        pass
     news_rows = [dict(item) for item in (news or []) if isinstance(item, Mapping)]
     news_rows.sort(key=lambda item: (str(item.get("published_at") or item.get("fetched_at") or ""), int(item.get("impact_score", 0) or 0)), reverse=True)
     fno_match = next((dict(item) for item in list((fno_payload or {}).get("underlyings", []) or []) if isinstance(item, Mapping) and str(item.get("symbol", "")).upper() == symbol), {})

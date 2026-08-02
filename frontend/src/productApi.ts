@@ -97,6 +97,11 @@ export type StockWorkspace = {
       status: string
       sector: string
     }>
+    average_pe?: number | null
+    peer_pe_sample_count?: number
+    pe_vs_peer_avg?: number | null
+    stock_pe?: number | null
+    peer_pe_note?: string
     note?: string
   }
   scanner: ScanRecord

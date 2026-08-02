@@ -64,6 +64,8 @@ def test_stock_workspace_key_ratios_pe_and_sector_peers():
     assert result["fundamentals"]["key_ratios"][0]["name"] == "Stock P/E"
     assert result["peers"]["sector_peers"][0]["symbol"] == "AAA"
     assert result["peers"]["screener_table"][0]["P/E"] == "19"
+    assert result["peers"]["average_pe"] == 19.0
+    assert result["peers"]["peer_pe_sample_count"] == 1
 
 
 def test_stock_workspace_stays_honest_when_data_is_missing():

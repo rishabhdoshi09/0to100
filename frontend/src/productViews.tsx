@@ -560,6 +560,15 @@ export function ProductStockIntelligenceView(props: ViewProps) {
 
       {tab === 'Peers' && (
         <div className="stock-context-grid">
+          <Panel title="PEER VALUATION" subtitle="Screener peer table + cached peer fundamentals (no fabricated P/E)">
+            <div className="fact-grid">
+              <div><span>Average peer P/E</span><strong>{workspace?.peers?.average_pe != null ? `${workspace.peers.average_pe}x` : '—'}</strong></div>
+              <div><span>P/E vs peer avg</span><strong>{workspace?.peers?.pe_vs_peer_avg != null ? `${workspace.peers.pe_vs_peer_avg}x` : '—'}</strong></div>
+              <div><span>Peer samples</span><strong>{workspace?.peers?.peer_pe_sample_count ?? 0}</strong></div>
+              <div><span>Stock P/E</span><strong>{workspace?.peers?.stock_pe != null ? `${workspace.peers.stock_pe}x` : '—'}</strong></div>
+            </div>
+            {workspace?.peers?.peer_pe_note && <p className="panel-copy">{workspace.peers.peer_pe_note}</p>}
+          </Panel>
           <Panel title="PEERS" subtitle={workspace?.peers?.note || 'Sector context from scan + Screener'}>
             <p className="panel-copy">Sector: <strong>{workspace?.peers?.sector || workspace?.sector || '—'}</strong></p>
             {workspace?.peers?.sector_peers?.length
