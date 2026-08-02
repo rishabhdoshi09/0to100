@@ -22,6 +22,21 @@ from typing import Any
 
 from operations.store import BLOCKED, FAILED, SUCCEEDED, OperationStore
 
+# macOS default RLIMIT_NOFILE is often 256. Concurrent lanes + progress SQLite
+# opens can exhaust that even after connection.close() if other libs hold FDs.
+try:
+    import resource as _resource
+
+    _soft, _hard = _resource.getrlimit(_resource.RLIMIT_NOFILE)
+    _target = 8192
+    if _soft < _target:
+        _resource.setrlimit(
+            _resource.RLIMIT_NOFILE,
+            (min(_target, _hard if _hard > 0 else _target), _hard),
+        )
+except Exception:
+    pass
+
 MARKET_SCAN = "MARKET_SCAN"
 LONG_TERM_SCAN = "LONG_TERM_SCAN"
 LONG_TERM_REFRESH = "LONG_TERM_REFRESH"
@@ -657,11 +672,21 @@ class MarketOperationsWorker:
         raise RuntimeError(f"No market-operations handler for {kind}")
 
     def _lane_loop(self, lane: str) -> None:
+        idle_wait_s = 0.5
         while not self.stop_event.is_set():
-            operation = self.store.lease_next(lane, worker_pid=os.getpid())
-            if operation is None:
-                self.stop_event.wait(0.5)
+            try:
+                operation = self.store.lease_next(lane, worker_pid=os.getpid())
+            except Exception as exc:
+                _emit("WARN", f"lane={lane} lease failed: {type(exc).__name__}: {exc}")
+                self.stop_event.wait(min(5.0, idle_wait_s * 2))
+                idle_wait_s = min(5.0, idle_wait_s * 1.5)
                 continue
+            if operation is None:
+                # Back off while idle so six lanes do not spam SQLite opens.
+                self.stop_event.wait(idle_wait_s)
+                idle_wait_s = min(3.0, idle_wait_s + 0.25)
+                continue
+            idle_wait_s = 0.5
             self._set_active(lane, operation)
             operation_id = str(operation["operation_id"])
             kind = str(operation["kind"])
@@ -675,29 +700,38 @@ class MarketOperationsWorker:
                 _emit("DONE", f"{kind} · id={operation_id} · {elapsed:.1f}s · {result}")
             except OperationBlocked as exc:
                 elapsed = time.monotonic() - started
-                self.store.finish(
-                    operation_id,
-                    status=BLOCKED,
-                    message=str(exc),
-                    result=exc.result,
-                    error_code=exc.code,
-                    error_message=str(exc),
-                )
+                try:
+                    self.store.finish(
+                        operation_id,
+                        status=BLOCKED,
+                        message=str(exc),
+                        result=exc.result,
+                        error_code=exc.code,
+                        error_message=str(exc),
+                    )
+                except Exception as finish_exc:
+                    _emit("WARN", f"finish BLOCKED failed for {operation_id}: {finish_exc}")
                 _emit("BLOCKED", f"{kind} · id={operation_id} · {elapsed:.1f}s · {exc.code}: {exc}")
             except Exception as exc:
                 elapsed = time.monotonic() - started
-                self.store.finish(
-                    operation_id,
-                    status=FAILED,
-                    message=f"{kind} failed after {elapsed:.1f}s",
-                    error_code=type(exc).__name__,
-                    error_message=str(exc),
-                )
+                try:
+                    self.store.finish(
+                        operation_id,
+                        status=FAILED,
+                        message=f"{kind} failed after {elapsed:.1f}s",
+                        error_code=type(exc).__name__,
+                        error_message=str(exc),
+                    )
+                except Exception as finish_exc:
+                    _emit("WARN", f"finish FAILED failed for {operation_id}: {finish_exc}")
                 _emit("FAILED", f"{kind} · id={operation_id} · {elapsed:.1f}s · {type(exc).__name__}: {exc}")
                 traceback.print_exc()
             finally:
                 self._set_active(lane, None)
-                _atomic_json(RUNTIME_PATH, self._runtime_payload(running=True))
+                try:
+                    _atomic_json(RUNTIME_PATH, self._runtime_payload(running=True))
+                except Exception as runtime_exc:
+                    _emit("WARN", f"runtime write failed: {runtime_exc}")
 
     def _bootstrap(self) -> list[str]:
         """Queue missing product inputs without blocking worker bring-up.

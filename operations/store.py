@@ -5,8 +5,9 @@ import json
 import sqlite3
 import time
 import uuid
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Iterable, Iterator
 
 PENDING = "PENDING"
 RUNNING = "RUNNING"
@@ -23,6 +24,10 @@ class OperationStore:
     Every public method opens a short-lived SQLite connection. This avoids sharing
     connection objects across the API process, worker process and worker threads.
     WAL mode keeps dashboard reads responsive while progress is being written.
+
+    Important: ``with sqlite3.connect(...)`` does **not** close the connection on
+    modern CPython — only commit/rollback. Idle lane polling + progress writes
+    previously leaked FDs until Errno 24 / "unable to open database file".
     """
 
     def __init__(self, path: str | Path = "logs/market_ops/jobs.db") -> None:
@@ -30,13 +35,28 @@ class OperationStore:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._init_schema()
 
-    def _connect(self) -> sqlite3.Connection:
+    def _raw_connect(self) -> sqlite3.Connection:
         con = sqlite3.connect(str(self.path), timeout=5.0)
         con.row_factory = sqlite3.Row
         con.execute("PRAGMA journal_mode=WAL")
         con.execute("PRAGMA synchronous=NORMAL")
         con.execute("PRAGMA busy_timeout=5000")
         return con
+
+    @contextmanager
+    def _connect(self) -> Iterator[sqlite3.Connection]:
+        con = self._raw_connect()
+        try:
+            yield con
+            con.commit()
+        except Exception:
+            try:
+                con.rollback()
+            except Exception:
+                pass
+            raise
+        finally:
+            con.close()
 
     def _init_schema(self) -> None:
         with self._connect() as con:
@@ -279,7 +299,7 @@ class OperationStore:
                     RUNNING,
                 ),
             )
-        return int(cur.rowcount or 0)
+            return int(cur.rowcount or 0)
 
     def get(self, operation_id: str) -> dict[str, Any] | None:
         with self._connect() as con:
@@ -340,4 +360,4 @@ class OperationStore:
                     *normalised,
                 ),
             )
-        return int(cur.rowcount or 0)
+            return int(cur.rowcount or 0)

@@ -14,8 +14,9 @@ from __future__ import annotations
 import json
 import sqlite3
 import time
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Iterator, Optional
 
 from logger import get_logger
 
@@ -26,22 +27,39 @@ _DB_PATH = _ROOT / "data" / "fundamentals_cache.db"
 _TTL = 86_400  # 1 day in seconds
 
 
-def _connect() -> sqlite3.Connection:
+@contextmanager
+def _connect() -> Iterator[sqlite3.Connection]:
+    """Open a short-lived connection that is always closed.
+
+    ``with sqlite3.connect(...)`` alone does not close the FD on modern CPython.
+    """
     _DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(_DB_PATH)
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS fundamentals_cache (
-            symbol     TEXT PRIMARY KEY,
-            data_json  TEXT NOT NULL,
-            fetched_at REAL NOT NULL
+    conn = sqlite3.connect(str(_DB_PATH), timeout=5.0)
+    try:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS fundamentals_cache (
+                symbol     TEXT PRIMARY KEY,
+                data_json  TEXT NOT NULL,
+                fetched_at REAL NOT NULL
+            )
+            """
         )
-    """)
-    conn.commit()
-    return conn
+        conn.commit()
+        yield conn
+        conn.commit()
+    except Exception:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        raise
+    finally:
+        conn.close()
 
 
 class FundamentalsCache:
-    """Thread-unsafe SQLite cache — use one instance per process."""
+    """SQLite cache — short-lived connections, always closed after each call."""
 
     def get(self, symbol: str) -> Optional[Dict[str, Any]]:
         """Return cached data if fresh, else None."""
@@ -115,7 +133,6 @@ class FundamentalsCache:
                 """,
                 (symbol, payload, time.time()),
             )
-            conn.commit()
         log.info("fundamentals_cache_written", symbol=symbol, bytes=len(payload))
 
     def clear_old(self) -> int:
@@ -125,8 +142,7 @@ class FundamentalsCache:
             cursor = conn.execute(
                 "DELETE FROM fundamentals_cache WHERE fetched_at < ?", (cutoff,)
             )
-            conn.commit()
-            count = cursor.rowcount
+            count = int(cursor.rowcount or 0)
         if count:
             log.info("fundamentals_cache_cleared_old", count=count)
         return count
@@ -138,5 +154,4 @@ class FundamentalsCache:
             conn.execute(
                 "DELETE FROM fundamentals_cache WHERE symbol = ?", (symbol,)
             )
-            conn.commit()
         log.debug("fundamentals_cache_invalidated", symbol=symbol)

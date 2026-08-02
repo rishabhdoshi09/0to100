@@ -153,12 +153,24 @@ def score_current_fundamentals(fund: Mapping[str, Any] | None, *, sector: str = 
     }
 
 
+_FUNDAMENTALS_CACHE = None
+
+
+def _fundamentals_cache():
+    """Reuse one cache helper for the whole long-term run (connections still close)."""
+    global _FUNDAMENTALS_CACHE
+    if _FUNDAMENTALS_CACHE is None:
+        from fundamentals.cache import FundamentalsCache
+
+        _FUNDAMENTALS_CACHE = FundamentalsCache()
+    return _FUNDAMENTALS_CACHE
+
+
 def _default_fundamental_provider(symbol: str, refresh: bool) -> Mapping[str, Any] | None:
     """Cache-first; ``refresh`` only fills symbols missing from cache (no universe scrape)."""
-    from fundamentals.cache import FundamentalsCache
     from fundamentals.lazy import ensure_deep_fundamentals
 
-    cache = FundamentalsCache()
+    cache = _fundamentals_cache()
     if refresh and not cache.has(symbol):
         try:
             return ensure_deep_fundamentals(symbol, force_refresh=False)
