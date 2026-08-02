@@ -99,6 +99,19 @@ def long_term_basket_report(limit: int = Query(default=3, ge=1, le=10)) -> FileR
         raise HTTPException(status_code=500, detail=f"Basket report generation failed: {exc}") from exc
 
 
+@app.get("/reports/market/institutional")
+def institutional_market_report(
+    days: int = Query(default=30, ge=5, le=365),
+    symbol_limit: int = Query(default=4, ge=1, le=8),
+) -> FileResponse:
+    try:
+        from reporting.market_brief import generate_institutional_market_report
+
+        return _pdf_response(generate_institutional_market_report(days=days, symbol_limit=symbol_limit))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Institutional market report failed: {exc}") from exc
+
+
 @app.get("/evidence/{symbol}")
 def evidence_status(symbol: str) -> dict:
     try:

@@ -110,6 +110,11 @@ const emptyDashboard: DashboardPayload = {
     underlyings: [],
     exclusions: [],
   },
+  institutional: {
+    available: false,
+    cash: { available: false, history: [], totals: {} },
+    bulk_buy_symbols: [],
+  },
   data: {
     ready: false,
     snapshot: { ready: false, snapshot_id: '', latest_date: '', source: '' },
@@ -288,6 +293,9 @@ function App() {
   const openBasketReport = () => {
     window.open(`${reportBase}/reports/basket/long-term?limit=3`, '_blank', 'noopener,noreferrer')
   }
+  const openInstitutionalReport = () => {
+    window.open(`${reportBase}/reports/market/institutional?days=30&symbol_limit=4`, '_blank', 'noopener,noreferrer')
+  }
 
   const addToCompare = (symbol: string) => {
     setCompareSymbols((prev) => [...new Set([...prev, symbol.toUpperCase()])].slice(0, 5))
@@ -390,6 +398,7 @@ function App() {
           <div className="page-actions">
             <button type="button" disabled={!selected} onClick={openEquityReport}>Equity Evidence PDF</button>
             <button type="button" onClick={openBasketReport}>Top-3 Basket PDF</button>
+            <button type="button" onClick={openInstitutionalReport}>FII/DII Market Brief PDF</button>
             <span>{controlState || (loading ? 'Loading real state…' : `Updated ${dashboard.generated_at ? new Date(dashboard.generated_at).toLocaleTimeString('en-IN') : '—'}`)}</span>
           </div>
         </section>

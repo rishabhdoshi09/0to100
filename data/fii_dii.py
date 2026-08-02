@@ -39,99 +39,49 @@ def _nse_session() -> requests.Session:
     return s
 
 
-@st.cache_data(ttl=3600)
-def get_fii_dii_activity(days: int = 30) -> pd.DataFrame:
-    """
-    Fetch FII/DII cash-market activity from NSE.
-
-    Returns DataFrame with columns:
-        date, fii_buy, fii_sell, fii_net, dii_buy, dii_sell, dii_net
-    All monetary values are in ₹ Crore.
-    """
-    # ── Primary: NSE fiidiiTradeReact endpoint ────────────────────────────────
+def _activity_from_store(days: int) -> pd.DataFrame | None:
     try:
-        session = _nse_session()
-        resp = session.get(
-            f"{_NSE_BASE}/api/fiidiiTradeReact",
-            timeout=15,
-        )
-        resp.raise_for_status()
-        raw = resp.json()
+        from data.fii_dii_store import get_history
 
-        records = []
-        for item in raw:
-            try:
-                date_str = item.get("date", "")
-                date = pd.to_datetime(date_str, dayfirst=True, errors="coerce")
-                if pd.isna(date):
-                    continue
-                records.append(
-                    {
-                        "date": date.normalize(),
-                        "fii_buy": float(str(item.get("fiiBuyValue", 0)).replace(",", "") or 0),
-                        "fii_sell": float(str(item.get("fiiSellValue", 0)).replace(",", "") or 0),
-                        "fii_net": float(str(item.get("fiiNetValue", 0)).replace(",", "") or 0),
-                        "dii_buy": float(str(item.get("diiBuyValue", 0)).replace(",", "") or 0),
-                        "dii_sell": float(str(item.get("diiSellValue", 0)).replace(",", "") or 0),
-                        "dii_net": float(str(item.get("diiNetValue", 0)).replace(",", "") or 0),
-                    }
-                )
-            except Exception:
-                continue
+        rows = get_history(days)
+        if not rows:
+            return None
+        df = pd.DataFrame(rows)
+        df["date"] = pd.to_datetime(df["date"])
+        return df.sort_values("date", ascending=False).reset_index(drop=True)
+    except Exception:
+        return None
 
-        if records:
-            df = pd.DataFrame(records).sort_values("date", ascending=False)
-            cutoff = pd.Timestamp.today().normalize() - timedelta(days=days)
-            df = df[df["date"] >= cutoff].reset_index(drop=True)
-            logger.info("FII/DII: loaded %d rows from NSE primary endpoint", len(df))
-            return df
 
+def _fetch_fii_dii_activity_live(days: int = 30) -> pd.DataFrame:
+    try:
+        from data.fii_dii_store import fetch_from_nse, upsert_rows
+
+        rows = fetch_from_nse()
+        if rows:
+            upsert_rows(rows)
     except Exception as exc:
-        logger.warning("NSE FII/DII primary endpoint failed: %s", exc)
-
-    # ── Backup: NSE archives XLS pattern ─────────────────────────────────────
-    records = []
-    for delta in range(days):
-        dt = datetime.today() - timedelta(days=delta)
-        if dt.weekday() >= 5:  # skip weekends
-            continue
-        date_str = dt.strftime("%d%m%Y")
-        url = f"https://archives.nseindia.com/content/fo/fii_stats_{date_str}.xls"
-        try:
-            r = requests.get(url, headers=_NSE_HEADERS, timeout=10)
-            if r.status_code != 200:
-                continue
-            xls = pd.read_excel(r.content, header=None)
-            # NSE archive XLS structure: row 3-5 typically has FII/DII rows
-            fii_row = xls[xls.iloc[:, 0].astype(str).str.contains("FII", na=False)]
-            dii_row = xls[xls.iloc[:, 0].astype(str).str.contains("DII", na=False)]
-            if fii_row.empty or dii_row.empty:
-                continue
-            fv = fii_row.iloc[0]
-            dv = dii_row.iloc[0]
-            records.append(
-                {
-                    "date": pd.Timestamp(dt.date()),
-                    "fii_buy": float(str(fv.iloc[1]).replace(",", "") or 0),
-                    "fii_sell": float(str(fv.iloc[2]).replace(",", "") or 0),
-                    "fii_net": float(str(fv.iloc[3]).replace(",", "") or 0),
-                    "dii_buy": float(str(dv.iloc[1]).replace(",", "") or 0),
-                    "dii_sell": float(str(dv.iloc[2]).replace(",", "") or 0),
-                    "dii_net": float(str(dv.iloc[3]).replace(",", "") or 0),
-                }
-            )
-        except Exception:
-            continue
-
-    if records:
-        df = pd.DataFrame(records).sort_values("date", ascending=False).reset_index(drop=True)
-        logger.info("FII/DII: loaded %d rows from NSE archive backup", len(df))
-        return df
-
-    logger.error("FII/DII: all data sources failed — returning empty DataFrame")
+        logger.warning("FII/DII live fetch for store failed: %s", exc)
+    stored = _activity_from_store(days)
+    if stored is not None and not stored.empty:
+        cutoff = pd.Timestamp.today().normalize() - timedelta(days=days)
+        return stored[stored["date"] >= cutoff].reset_index(drop=True)
     return pd.DataFrame(
         columns=["date", "fii_buy", "fii_sell", "fii_net", "dii_buy", "dii_sell", "dii_net"]
     )
+
+
+@st.cache_data(ttl=3600)
+def get_fii_dii_activity(days: int = 30) -> pd.DataFrame:
+    """
+    FII/DII cash-market activity (₹ Cr). Reads persisted store first; live NSE fetch
+    backfills the store when empty.
+    """
+    stored = _activity_from_store(days)
+    if stored is not None and not stored.empty:
+        cutoff = pd.Timestamp.today().normalize() - timedelta(days=days)
+        return stored[stored["date"] >= cutoff].reset_index(drop=True)
+    return _fetch_fii_dii_activity_live(days)
 
 
 @st.cache_data(ttl=3600)
@@ -234,8 +184,7 @@ def get_block_deals(days: int = 10) -> pd.DataFrame:
     return pd.DataFrame(columns=["date", "symbol", "client_name", "buy_sell", "quantity", "price"])
 
 
-@st.cache_data(ttl=3600)
-def get_fii_derivative_stats() -> dict:
+def get_fii_derivative_stats_uncached() -> dict:
     """
     Fetch FII derivatives positioning from NSE.
 
@@ -297,3 +246,8 @@ def get_fii_derivative_stats() -> dict:
             "stock_options_net": None,
             "total_net": None,
         }
+
+
+@st.cache_data(ttl=3600)
+def get_fii_derivative_stats() -> dict:
+    return get_fii_derivative_stats_uncached()

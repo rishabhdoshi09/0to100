@@ -314,3 +314,6 @@ def install(app) -> None:
         name="watchlist_remove",
     )
     install_data_routes(app)
+    from product.market_api import install_market_routes
+
+    install_market_routes(app)

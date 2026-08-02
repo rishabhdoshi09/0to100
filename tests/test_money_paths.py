@@ -2593,6 +2593,47 @@ class TestInstitutionalFlows:
         assert parse_fii_dii([]) is None                 # no claim
         assert parse_fii_dii([{"category": "FII", "netValue": "5"}]) is None
 
+    def test_fii_dii_store_parse_and_persist(self):
+        from data.fii_dii_store import parse_trade_react_rows, reset_store, upsert_rows, summarize, get_history
+
+        reset_store()
+        rows = parse_trade_react_rows([
+            {
+                "date": "01-Aug-2026",
+                "fiiBuyValue": "12,000",
+                "fiiSellValue": "10,500",
+                "diiBuyValue": "8,000",
+                "diiSellValue": "7,200",
+            },
+            {
+                "date": "31-Jul-2026",
+                "category": "FII/FPI",
+                "buyValue": "9,000",
+                "sellValue": "9,500",
+            },
+            {
+                "date": "31-Jul-2026",
+                "category": "DII",
+                "buyValue": "6,000",
+                "sellValue": "5,500",
+            },
+        ])
+        assert len(rows) == 2
+        assert upsert_rows(rows) == 2
+        hist = get_history(30)
+        assert len(hist) == 2
+        summary = summarize(30)
+        assert summary["available"]
+        assert summary["totals"]["fii_net_cr"] != 0
+        reset_store()
+
+    def test_market_brief_offline(self):
+        from reporting.market_brief import build_institutional_market_brief
+
+        brief = build_institutional_market_brief(days=30, symbol_limit=2)
+        assert brief["report_type"] == "INSTITUTIONAL_MARKET_BRIEF"
+        assert "narrative" in brief
+
     def test_bulk_deals_and_net_buys(self):
         from data.institutional_flows import parse_bulk_deals, bulk_buy_symbols
         deals = parse_bulk_deals({"data": [

@@ -326,6 +326,21 @@ def cmd_fundamentals_backfill(args) -> None:
     print(f"State file: {report.get('state_path')}\n")
 
 
+def cmd_fii_dii_backfill(args) -> None:
+    """Backfill NSE FII/DII cash-market history into the local SQLite store."""
+    from data.fii_dii_store import backfill_status, run_backfill
+
+    if args.status_only:
+        print(json.dumps(backfill_status(), indent=2, default=str))
+        return
+
+    print("\n=== FII/DII backfill ===")
+    print(f"Window label: {args.days} days · source: NSE fiidiiTradeReact\n")
+    report = run_backfill(days=int(args.days), force_fetch=True)
+    print(json.dumps(report, indent=2, default=str))
+    print()
+
+
 def cmd_screener(args) -> None:
     """
     Screen NSE stocks by fundamentals + technicals, or fetch one symbol's data.
@@ -1027,6 +1042,13 @@ def build_parser() -> argparse.ArgumentParser:
     fb.add_argument("--status", dest="status_only", action="store_true",
                     help="Print backfill progress JSON and exit")
 
+    fii = sub.add_parser(
+        "fii-dii-backfill",
+        help="Backfill NSE FII/DII cash-market history into logs/product/fii_dii.sqlite",
+    )
+    fii.add_argument("--days", type=int, default=90, metavar="N", help="Summary window label (default 90)")
+    fii.add_argument("--status", dest="status_only", action="store_true", help="Print backfill status JSON")
+
     ens = sub.add_parser("ensemble", help="Print ensemble ML signal for a symbol")
     ens.add_argument("--symbol", required=True, metavar="SYMBOL", help="NSE symbol, e.g. RELIANCE")
 
@@ -1082,6 +1104,7 @@ def main() -> None:
         "fnolive":    cmd_fnolive,
         "screener":   cmd_screener,
         "fundamentals-backfill": cmd_fundamentals_backfill,
+        "fii-dii-backfill": cmd_fii_dii_backfill,
         "ensemble":   cmd_ensemble,
         "lgb":        cmd_lgb,
         "multi":      cmd_multi,

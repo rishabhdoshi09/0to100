@@ -352,6 +352,27 @@ def render_equity_pdf(dossier: Mapping[str, Any], output: str | Path) -> Path:
     else:
         story += [Spacer(1, 5 * mm), _callout("F&O status", "No current mapped stock-futures contract is available for this symbol.", styles, tone=AMBER)]
 
+    inst = dossier.get("institutional_context") or {}
+    if inst.get("market_note") or inst.get("fii_net_30d_cr") is not None:
+        inst_rows = [
+            ["30d FII net (cash)", f"₹{_fmt(inst.get('fii_net_30d_cr'), 0)} Cr", "30d DII net (cash)", f"₹{_fmt(inst.get('dii_net_30d_cr'), 0)} Cr"],
+            ["Tape bias", str(inst.get("market_bias") or "—"), "Bulk-buy screen", "Yes" if inst.get("symbol_bulk_buy_flag") else "No"],
+        ]
+        story += [Spacer(1, 5 * mm), _p("Market institutional context (NSE)", styles["h2"]), _data_table(["Field", "Value", "Field", "Value"], inst_rows, styles, [43 * mm, 42 * mm, 43 * mm, 43 * mm])]
+        if inst.get("market_note"):
+            story += [_p(str(inst.get("market_note")), styles["body"])]
+    bulk_sym = dossier.get("symbol_bulk_deals") or []
+    if bulk_sym:
+        bd_rows = [[d.get("side", ""), _fmt(d.get("qty"), 0), _fmt(d.get("price"), 2), str(d.get("client", ""))[:40]] for d in bulk_sym[:8]]
+        story += [_p("Recent bulk/block deals (this symbol)", styles["h2"]), _data_table(["Side", "Qty", "Price", "Client"], bd_rows, styles, [20 * mm, 30 * mm, 25 * mm, 86 * mm])]
+
+    opts = dossier.get("options_context") or {}
+    if opts.get("available"):
+        opt_rows = [[_fmt(opts.get("pcr"), 2), _fmt(opts.get("max_pain"), 0), opts.get("bias", ""), opts.get("expiry", ""), _fmt(opts.get("atm_iv"), 2, "%")]]
+        story += [Spacer(1, 5 * mm), _p("Options positioning (nearest expiry)", styles["h2"]), _data_table(["PCR", "Max pain", "Bias", "Expiry", "ATM IV"], opt_rows, styles, [25 * mm, 30 * mm, 30 * mm, 35 * mm, 31 * mm])]
+        if opts.get("note"):
+            story += [_p(str(opts.get("note")), styles["body"])]
+
     story += [PageBreak(), _p("Why QuantTerm shortlisted it", styles["h1"]), *_bullets(dossier.get("thesis", []), styles)]
     story += [_p("What can break the thesis", styles["h2"]), *_bullets(dossier.get("risks", []), styles)]
     story += [Spacer(1, 6 * mm), _callout("Decision rule", "A professional report organises evidence. It does not convert incomplete evidence into certainty or a guaranteed trade.", styles)]
@@ -422,5 +443,56 @@ def render_basket_pdf(basket: Mapping[str, Any], output: str | Path) -> Path:
     story.append(_data_table(["Company", "Sector", "Current class", "Coverage", "Primary evidence"], synth_rows, styles, [34 * mm, 27 * mm, 33 * mm, 20 * mm, 57 * mm]))
     story += [Spacer(1, 6 * mm), _p("Common quality signals", styles["h2"]), *_bullets(basket.get("common_quality", []), styles), _p("Common risks", styles["h2"]), *_bullets(basket.get("common_risks", []), styles)]
     story += [_p("Open items before circulation", styles["h2"]), *_bullets(basket.get("open_items", [])[:20], styles), Spacer(1, 5 * mm), _callout("Research note", basket.get("disclaimer", ""), styles)]
+    doc.build(story, onFirstPage=_header_footer, onLaterPages=_header_footer)
+    return output
+
+
+def render_institutional_market_pdf(brief: Mapping[str, Any], output: str | Path) -> Path:
+    styles = _styles()
+    output = Path(output)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    doc = SimpleDocTemplate(
+        str(output),
+        pagesize=A4,
+        leftMargin=18 * mm,
+        rightMargin=18 * mm,
+        topMargin=20 * mm,
+        bottomMargin=18 * mm,
+        title=brief.get("title", "Institutional Market Brief"),
+    )
+    cash = dict((brief.get("institutional") or {}).get("cash") or {})
+    totals = dict(cash.get("totals") or {})
+    story: list[Any] = [
+        Spacer(1, 12 * mm),
+        _p(brief.get("title", "Institutional market brief"), styles["title"]),
+        _p(f"Generated {str(brief.get('generated_at', ''))[:19]} · window {brief.get('window_days', 30)} days", styles["subtitle"]),
+        _metric_cards([
+            ("FII net (window)", f"₹{_fmt(totals.get('fii_net_cr'), 0)} Cr"),
+            ("DII net (window)", f"₹{_fmt(totals.get('dii_net_cr'), 0)} Cr"),
+            ("Sessions", str(cash.get("sessions", 0))),
+            ("Tape bias", str(cash.get("bias") or "—")),
+        ], styles),
+        Spacer(1, 6 * mm),
+        _p(brief.get("narrative", ""), styles["body"]),
+    ]
+    history = list(cash.get("history") or [])[:15]
+    if history:
+        rows = [
+            [str(r.get("date", "")), f"₹{_fmt(r.get('fii_net'), 0)}", f"₹{_fmt(r.get('dii_net'), 0)}"]
+            for r in history
+        ]
+        story += [_p("Recent FII/DII cash flows (₹ Cr)", styles["h2"]), _data_table(["Date", "FII net", "DII net"], rows, styles, [40 * mm, 50 * mm, 50 * mm])]
+
+    overlap = list(brief.get("bulk_buy_overlap") or [])
+    if overlap:
+        orows = [[o.get("symbol"), o.get("company"), o.get("sector"), o.get("verdict"), _fmt(o.get("score"), 1)] for o in overlap]
+        story += [Spacer(1, 5 * mm), _p("Bulk-buy names overlapping current scan", styles["h2"]), _data_table(["Symbol", "Company", "Sector", "Verdict", "Score"], orows, styles, [22 * mm, 48 * mm, 35 * mm, 30 * mm, 26 * mm])]
+
+    companies = list(brief.get("featured_companies") or [])
+    for dossier in companies[:4]:
+        story += [PageBreak(), _p(f"{dossier.get('company')} ({dossier.get('symbol')})", styles["h1"])]
+        story += [_p((dossier.get("thesis") or ["No thesis"])[0], styles["body"])]
+
+    story += [Spacer(1, 8 * mm), _callout("Disclaimer", brief.get("disclaimer", ""), styles)]
     doc.build(story, onFirstPage=_header_footer, onLaterPages=_header_footer)
     return output

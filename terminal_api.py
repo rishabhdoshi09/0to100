@@ -436,6 +436,15 @@ def _news_payload() -> dict[str, Any]:
         }
 
 
+def _institutional_payload() -> dict[str, Any]:
+    try:
+        from data.fii_dii_store import workspace_payload
+
+        return workspace_payload(days=30)
+    except Exception as exc:
+        return {"available": False, "error": str(exc)}
+
+
 def _fno_payload() -> dict[str, Any]:
     path = ROOT / "logs" / "product" / "fno_universe.json"
     persisted = _json_file(path, {})
@@ -570,6 +579,7 @@ def dashboard() -> dict:
         "operations": operations,
         "news": news,
         "fno": fno,
+        "institutional": _institutional_payload(),
         "data": data,
         "conviction": _conviction(scan, market),
     }

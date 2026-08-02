@@ -22,7 +22,8 @@ import {
   type StockWorkspace,
   type TradePlan,
 } from './productApi'
-import type { ChartBar, ControlName, DashboardPayload } from './types'
+import type { ChartBar, ControlName, DashboardPayload, OptionsChainPayload } from './types'
+import { fetchMarketOptions } from './api'
 
 // Read-only risk-first "R lens" — exact shares, rupee risk, reward:risk, book heat. No orders.
 export function RiskLensCard({ plan }: { plan: TradePlan | null }) {
@@ -248,7 +249,13 @@ export function ProductStockIntelligenceView(props: ViewProps) {
   const [busy, setBusy] = useState('')
   const [error, setError] = useState('')
 
-  const intelTabs = ['Overview', 'Chart', 'Financials', 'Ratios', 'Ownership', 'Events', 'Peers', 'Evidence']
+  const [optionsChain, setOptionsChain] = useState<OptionsChainPayload | null>(null)
+  const [optionsLoading, setOptionsLoading] = useState(false)
+
+  const hasFno = Boolean(workspace?.fno && Object.keys(workspace.fno).length > 0)
+  const intelTabs = hasFno
+    ? ['Overview', 'Chart', 'Financials', 'Ratios', 'Ownership', 'Options', 'Events', 'Peers', 'Evidence']
+    : ['Overview', 'Chart', 'Financials', 'Ratios', 'Ownership', 'Events', 'Peers', 'Evidence']
 
   const load = async () => {
     if (!selected) {
@@ -281,7 +288,17 @@ export function ProductStockIntelligenceView(props: ViewProps) {
 
   useEffect(() => {
     setTab('Overview')
+    setOptionsChain(null)
   }, [selected])
+
+  useEffect(() => {
+    if (tab !== 'Options' || !selected || !hasFno) return
+    setOptionsLoading(true)
+    fetchMarketOptions(selected)
+      .then((payload) => setOptionsChain(payload))
+      .catch(() => setOptionsChain({ available: false, message: 'Option chain fetch failed' }))
+      .finally(() => setOptionsLoading(false))
+  }, [tab, selected, hasFno])
 
   const runAction = async (control: ControlName | 'REFRESH_STOCK_FUNDAMENTALS') => {
     if (!selected) return
@@ -405,6 +422,31 @@ export function ProductStockIntelligenceView(props: ViewProps) {
           </div>
           {!workspace?.fundamentals.metrics?.some((m) => /promoter|fii|dii/i.test(m.label))
             && <EmptyState title="Ownership not in cache" detail="Refresh fundamentals or import shareholding data." />}
+        </Panel>
+      )}
+
+      {tab === 'Options' && (
+        <Panel title="OPTION CHAIN" subtitle="Nearest expiry · NSE public API · context only">
+          {optionsLoading && <p className="panel-copy">Loading option chain for {selected}…</p>}
+          {!optionsLoading && !optionsChain?.available && (
+            <EmptyState title="Options unavailable" detail={optionsChain?.message || 'NSE option chain not available for this symbol right now.'} />
+          )}
+          {optionsChain?.available && (
+            <div className="fact-grid">
+              <div><span>Expiry</span><strong>{optionsChain.expiry || '—'}</strong></div>
+              <div><span>PCR (OI)</span><strong>{optionsChain.pcr ?? '—'}</strong></div>
+              <div><span>Max pain</span><strong>{optionsChain.max_pain ?? '—'}</strong></div>
+              <div><span>Bias</span><strong>{optionsChain.bias || '—'}</strong></div>
+              <div><span>ATM IV</span><strong>{optionsChain.atm_iv != null ? `${optionsChain.atm_iv}%` : '—'}</strong></div>
+            </div>
+          )}
+          {optionsChain?.note && <p className="panel-copy">{optionsChain.note}</p>}
+          {optionsChain?.top_call_oi?.length && (
+            <EvidenceList title="Top call OI strikes" items={optionsChain.top_call_oi.map((r) => `${r.strike}: OI ${r.ce_oi}`)} tone="cyan" />
+          )}
+          {optionsChain?.top_put_oi?.length && (
+            <EvidenceList title="Top put OI strikes" items={optionsChain.top_put_oi.map((r) => `${r.strike}: OI ${r.pe_oi}`)} tone="green" />
+          )}
         </Panel>
       )}
 

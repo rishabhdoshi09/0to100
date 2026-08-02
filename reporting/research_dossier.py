@@ -259,6 +259,38 @@ def build_equity_dossier(
         if str(item.get("event_type", "")) in {"results", "order_or_contract", "fund_raising", "promoter_or_insider"} or bool(item.get("official"))
     ][:10]
 
+    institutional_context: dict[str, Any] = {}
+    symbol_bulk_deals: list[dict[str, Any]] = []
+    try:
+        from data.fii_dii_store import workspace_payload
+
+        inst = workspace_payload(days=30)
+        institutional_context = {
+            "market_bias": str((inst.get("cash") or {}).get("bias") or ""),
+            "market_note": str(inst.get("insight") or (inst.get("cash") or {}).get("note") or ""),
+            "fii_net_30d_cr": (inst.get("cash") or {}).get("totals", {}).get("fii_net_cr"),
+            "dii_net_30d_cr": (inst.get("cash") or {}).get("totals", {}).get("dii_net_cr"),
+            "bulk_buy_symbols": list(inst.get("bulk_buy_symbols") or [])[:20],
+            "derivatives": dict(inst.get("derivatives") or {}),
+        }
+        symbol_bulk_deals = [
+            dict(d) for d in (inst.get("bulk_deals") or [])
+            if str(d.get("symbol", "")).upper() == symbol
+        ]
+        if symbol in institutional_context.get("bulk_buy_symbols", []):
+            institutional_context["symbol_bulk_buy_flag"] = True
+    except Exception:
+        institutional_context = {}
+
+    options_context: dict[str, Any] = {}
+    try:
+        from options.chain_fetch import chain_workspace
+
+        spot = price.get("latest_price")
+        options_context = chain_workspace(symbol, spot=float(spot) if spot else None)
+    except Exception:
+        options_context = {"available": False}
+
     fno_match = next((dict(item) for item in list((fno_payload or {}).get("underlyings", []) or []) if isinstance(item, Mapping) and str(item.get("symbol", "")).upper() == symbol), None)
     news_as_of = str(news_rows[0].get("published_at") or news_rows[0].get("fetched_at") or "") if news_rows else ""
     requirements = evidence_requirements(
@@ -338,6 +370,9 @@ def build_equity_dossier(
         "order_book_guidance": structured_rows(symbol, "order_book_guidance"),
         "market": dict(market or {}), "news": news_rows[:15],
         "management_evidence": management_evidence[:15], "fno": fno_match or {},
+        "institutional_context": institutional_context,
+        "symbol_bulk_deals": symbol_bulk_deals[:10],
+        "options_context": options_context,
         "thesis": thesis, "quality_factors": quality, "technical_evidence": technical,
         "risks": list(dict.fromkeys(risks)) or ["No explicit risk list has been recorded; treat the evidence pack as incomplete."],
         "sources": sources, "evidence_requirements": requirements,

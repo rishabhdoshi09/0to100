@@ -236,14 +236,48 @@ export function PortfolioView({ dashboard, runControl }: ViewProps) {
 
 export function MarketInternalsView({ dashboard }: ViewProps) {
   const details = dashboard.market.technical_details || {}
+  const inst = dashboard.institutional
+  const cash = inst?.cash
+  const history = cash?.history || []
+  const niftyOpts = inst?.nifty_options
   return (
     <section className="workspace-view">
       {!dashboard.data.ready && <DataReadinessPanel dashboard={dashboard} />}
-      <div className="view-metrics"><MetricCard label="REGIME" value={dashboard.market.health} detail={String(details.market_regime || dashboard.market.breadth)} tone={dashboard.market.health.toLowerCase() === 'healthy' ? 'green' : 'amber'} /><MetricCard label="NIFTY 1D" value={pct(dashboard.market.nifty_change_1d)} detail={`5D ${pct(dashboard.market.nifty_change_5d)}`} /><MetricCard label="INDIA VIX" value={Number.isFinite(dashboard.market.vix) ? Number(dashboard.market.vix).toFixed(2) : '—'} tone="purple" /><MetricCard label="SCAN COVERAGE" value={dashboard.scan.universe_size.toLocaleString('en-IN')} detail={`${dashboard.scan.summary.with_any_setup ?? 0} with setups`} /></div>
+      <div className="view-metrics">
+        <MetricCard label="REGIME" value={dashboard.market.health} detail={String(details.market_regime || dashboard.market.breadth)} tone={dashboard.market.health.toLowerCase() === 'healthy' ? 'green' : 'amber'} />
+        <MetricCard label="NIFTY 1D" value={pct(dashboard.market.nifty_change_1d)} detail={`5D ${pct(dashboard.market.nifty_change_5d)}`} />
+        <MetricCard label="INDIA VIX" value={Number.isFinite(dashboard.market.vix) ? Number(dashboard.market.vix).toFixed(2) : '—'} tone="purple" />
+        <MetricCard label="FII NET (30D)" value={cash?.totals?.fii_net_cr != null ? `₹${Number(cash.totals.fii_net_cr).toLocaleString('en-IN')} Cr` : '—'} detail={inst?.insight || cash?.note || 'Run fii-dii-backfill'} tone={Number(cash?.totals?.fii_net_cr || 0) >= 0 ? 'green' : 'amber'} />
+        <MetricCard label="DII NET (30D)" value={cash?.totals?.dii_net_cr != null ? `₹${Number(cash.totals.dii_net_cr).toLocaleString('en-IN')} Cr` : '—'} detail={`Bias ${cash?.bias || '—'}`} />
+        <MetricCard label="BULK BUYS" value={String(inst?.bulk_buy_symbols?.length || 0)} detail="Net bulk-buy symbols today" tone="cyan" />
+      </div>
       <div className="market-grid">
-        <Panel title="MARKET NARRATIVE"><p className="lead-copy">{dashboard.market.summary}</p><p className="panel-copy">{dashboard.market.trade_stance}</p></Panel>
+        <Panel title="MARKET NARRATIVE"><p className="lead-copy">{dashboard.market.summary}</p><p className="panel-copy">{dashboard.market.trade_stance}</p>{inst?.insight && <p className="panel-copy"><strong>Institutional:</strong> {inst.insight}</p>}</Panel>
+        <Panel title="FII / DII CASH FLOWS" subtitle="NSE official · ₹ Crore · persisted store">
+          {!inst?.available && <p className="panel-copy">No FII/DII history yet. Run <code>python main.py fii-dii-backfill</code> or POST /api/market/fii-dii/backfill.</p>}
+          {history.length > 0 && (
+            <div className="fno-table wide-table">
+              <div className="fno-head"><span>DATE</span><span>FII NET</span><span>DII NET</span></div>
+              {history.slice(0, 12).map((row) => (
+                <div className="fno-row" key={row.date} style={{ display: 'grid', cursor: 'default' }}>
+                  <strong>{row.date}</strong>
+                  <span>{Number(row.fii_net).toLocaleString('en-IN')} Cr</span>
+                  <span>{Number(row.dii_net).toLocaleString('en-IN')} Cr</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </Panel>
         <Panel title="SECTOR LEADERS"><div className="tag-cloud">{dashboard.market.leaders.length ? dashboard.market.leaders.map((item) => <span className="positive-tag" key={item}>{item}</span>) : <span>No clear leaders recorded.</span>}</div></Panel>
         <Panel title="SECTOR LAGGARDS"><div className="tag-cloud">{dashboard.market.laggards.length ? dashboard.market.laggards.map((item) => <span className="negative-tag" key={item}>{item}</span>) : <span>No clear laggards recorded.</span>}</div></Panel>
+        <Panel title="BULK DEAL BUYS" subtitle="Symbol-level institutional footprint">
+          <div className="tag-cloud">{inst?.bulk_buy_symbols?.length ? inst.bulk_buy_symbols.slice(0, 24).map((sym) => <span className="positive-tag" key={sym}>{sym}</span>) : <span>No net bulk buys in current cache.</span>}</div>
+        </Panel>
+        <Panel title="NIFTY OPTIONS" subtitle="Nearest expiry · NSE chain when available">
+          {niftyOpts?.available
+            ? <div className="key-value-list"><div><span>PCR</span><strong>{String(niftyOpts.pcr)}</strong></div><div><span>Max pain</span><strong>{String(niftyOpts.max_pain)}</strong></div><div><span>Bias</span><strong>{String(niftyOpts.bias)}</strong></div><div><span>Note</span><strong>{String(niftyOpts.note || '')}</strong></div></div>
+            : <p className="panel-copy">Index option chain unavailable (NSE may block off-hours). Stock options load on Stock Intelligence → Options tab.</p>}
+        </Panel>
         <Panel title="REGIME ENGINE DETAILS"><div className="key-value-list">{Object.entries(details).map(([key, value]) => <div key={key}><span>{words(key)}</span><strong>{String(value ?? '—')}</strong></div>)}</div></Panel>
       </div>
     </section>
