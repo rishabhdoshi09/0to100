@@ -177,6 +177,7 @@ class Supervisor:
         self.jobs.enqueue(SCH.CORPORATE_ACTIONS, idempotency_key=SCH.corporate_actions_key(session_date))
         self.jobs.enqueue(SCH.UNIVERSE_HISTORY, idempotency_key=SCH.universe_history_key(session_date))
         self.jobs.enqueue(SCH.BHAVCOPY_UPDATE, idempotency_key=SCH.bhavcopy_key(session_date))
+        self.jobs.enqueue(SCH.OPTIONS_EOD, idempotency_key=SCH.options_eod_key(session_date))
 
     @staticmethod
     def _news_bucket(now_ist, market_open: bool) -> str:
@@ -209,6 +210,8 @@ class Supervisor:
         if slot == "eod":
             self.jobs.enqueue(SCH.BHAVCOPY_UPDATE,
                               idempotency_key=SCH.eod_bhavcopy_key(session_date))
+            self.jobs.enqueue(SCH.OPTIONS_EOD,
+                              idempotency_key=SCH.eod_options_key(session_date))
             eod_refresh = self.jobs.enqueue(
                 SCH.DATA_REFRESH, idempotency_key=SCH.eod_data_refresh_key(session_date), critical=True)
             if eod_refresh.status != JS.SUCCEEDED:

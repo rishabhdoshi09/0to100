@@ -493,6 +493,19 @@ def _data_payload(scan: dict, long_term: dict, operations: dict, fno: dict, news
             "error": str(exc),
         }
     snapshot = _snapshot_payload()
+    try:
+        from options.eod_store import store_status as options_eod_status
+
+        options_eod = options_eod_status()
+    except Exception as exc:
+        options_eod = {
+            "available": False,
+            "path": "",
+            "symbols": 0,
+            "snapshots": 0,
+            "latest_as_of": "",
+            "error": str(exc),
+        }
     blockers: list[str] = []
     if not bhavcopy.get("ready"):
         blockers.append("Official NSE bhavcopy history is not ready; direct scans will prepare it first.")
@@ -500,6 +513,8 @@ def _data_payload(scan: dict, long_term: dict, operations: dict, fno: dict, news
         blockers.append("Official bhavcopy history is shallower than the minimum screen requirement.")
     if not snapshot.get("ready"):
         blockers.append("Verified snapshot is missing; PAPER autonomy is limited, but direct cash scans can still use official bhavcopy history.")
+    if not options_eod.get("available"):
+        blockers.append("Options EOD OI/IV history is empty; run options-eod capture or wait for the EOD autonomy job.")
     if not operations.get("running"):
         blockers.append("Dedicated market-operations worker is not online.")
     if not fno.get("available"):
@@ -510,6 +525,7 @@ def _data_payload(scan: dict, long_term: dict, operations: dict, fno: dict, news
         "ready": bool(bhavcopy.get("ready") and operations.get("running")),
         "snapshot": snapshot,
         "bhavcopy": bhavcopy,
+        "options_eod": options_eod,
         "scan_saved": bool(scan.get("available")),
         "scan_records": len(scan.get("records", []) or []),
         "long_term_saved": bool(long_term.get("available")),

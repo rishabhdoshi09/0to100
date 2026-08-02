@@ -104,6 +104,8 @@ def build_product_readiness(
     data = dict(data or {})
     operations = dict(operations or {})
     history = dict(data.get("bhavcopy", {}) or {})
+    snapshot = dict(data.get("snapshot", {}) or {})
+    options_eod = dict(data.get("options_eod", {}) or {})
     news_articles = list(news.get("articles", []) or [])
     latest_news = ""
     if news_articles:
@@ -131,9 +133,23 @@ def build_product_readiness(
             available=bool(history.get("ready")) and int(history.get("sessions", 0) or 0) >= 60,
             as_of=history.get("latest_date") or history.get("csv_latest_date"),
             max_age_seconds=4 * 24 * 60 * 60,
-            weight=25,
+            weight=20,
             action="REFRESH_DATA_NOW",
             details=f"{int(history.get('sessions', 0) or 0)} sessions · {int(history.get('symbols', 0) or 0):,} symbols",
+            now=now,
+        ),
+        _lane(
+            key="snapshot",
+            label="Verified market snapshot",
+            meaning="Immutable, content-addressed bars pinned for PAPER autonomy and reproducible research.",
+            available=bool(snapshot.get("ready")) and bool(snapshot.get("snapshot_id")),
+            as_of=snapshot.get("latest_date"),
+            max_age_seconds=4 * 24 * 60 * 60,
+            weight=10,
+            action="CERTIFY_SNAPSHOT_NOW",
+            details=(
+                f"{snapshot.get('snapshot_id') or 'none'} · source={snapshot.get('source') or 'unknown'}"
+            ),
             now=now,
         ),
         _lane(
@@ -143,7 +159,7 @@ def build_product_readiness(
             available=bool(scan.get("available")) and bool(scan.get("records")),
             as_of=scan.get("scanned_at"),
             max_age_seconds=8 * 60 * 60,
-            weight=20,
+            weight=18,
             action="RUN_SCAN_NOW",
             details=f"{len(scan.get('records', []) or [])} saved setups from {int(scan.get('universe_size', 0) or 0):,} evaluated stocks",
             now=now,
@@ -155,7 +171,7 @@ def build_product_readiness(
             available=bool(long_term.get("available")) and bool(long_term.get("records")),
             as_of=long_term.get("scanned_at"),
             max_age_seconds=4 * 24 * 60 * 60,
-            weight=20,
+            weight=18,
             action="RUN_LONG_TERM_SCAN_NOW",
             details=f"{len(long_term.get('records', []) or [])} researched candidates · {float((long_term.get('summary', {}) or {}).get('coverage_pct', 0) or 0):.0f}% reported coverage",
             now=now,
@@ -167,7 +183,7 @@ def build_product_readiness(
             available=bool(news.get("available")) and bool(news_articles),
             as_of=latest_news,
             max_age_seconds=6 * 60 * 60,
-            weight=10,
+            weight=8,
             action="REFRESH_NEWS_NOW",
             details=f"{int((news.get('stats', {}) or {}).get('total', 0) or 0)} articles in the latest 24-hour statistics",
             now=now,
@@ -185,13 +201,28 @@ def build_product_readiness(
             now=now,
         ),
         _lane(
+            key="options_eod",
+            label="Options EOD history",
+            meaning="Persisted daily index option chains (OI/IV/PCR) so multi-day options research is possible.",
+            available=bool(options_eod.get("available")) and int(options_eod.get("snapshots", 0) or 0) > 0,
+            as_of=options_eod.get("latest_as_of"),
+            max_age_seconds=4 * 24 * 60 * 60,
+            weight=5,
+            action="CAPTURE_OPTIONS_EOD_NOW",
+            details=(
+                f"{int(options_eod.get('snapshots', 0) or 0)} snapshots · "
+                f"{int(options_eod.get('symbols', 0) or 0)} underlyings"
+            ),
+            now=now,
+        ),
+        _lane(
             key="market",
             label="Market regime and breadth",
             meaning="Provides the environment in which stock signals are interpreted: trend, breadth, leadership and volatility.",
             available=bool(market.get("available")),
             as_of=history.get("latest_date") or history.get("csv_latest_date"),
             max_age_seconds=4 * 24 * 60 * 60,
-            weight=10,
+            weight=6,
             action="REFRESH_DATA_NOW",
             details=str(market.get("summary") or "No market-regime summary"),
             now=now,

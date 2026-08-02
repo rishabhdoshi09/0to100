@@ -13,6 +13,7 @@ DATA_REFRESH = "data_refresh"
 BHAVCOPY_UPDATE = "bhavcopy_update"
 CORPORATE_ACTIONS = "corporate_actions"
 UNIVERSE_HISTORY = "universe_history"
+OPTIONS_EOD = "options_eod"
 INDEX_WARMUP = "index_warmup"
 MARKET_SCAN = "market_scan"
 NEWS_REFRESH = "news_refresh"
@@ -25,7 +26,7 @@ LONG_TERM_REFRESH = "long_term_refresh"
 
 ALL_JOB_TYPES = (
     AUTH_HEALTH, INSTRUMENT_REFRESH, DATA_REFRESH, BHAVCOPY_UPDATE, CORPORATE_ACTIONS,
-    UNIVERSE_HISTORY, INDEX_WARMUP, MARKET_SCAN, NEWS_REFRESH, PAPER_CYCLE,
+    UNIVERSE_HISTORY, OPTIONS_EOD, INDEX_WARMUP, MARKET_SCAN, NEWS_REFRESH, PAPER_CYCLE,
     OUTCOME_RESOLUTION, LEARNING_CYCLE, RESEARCH_CYCLE, LONG_TERM_SCAN, LONG_TERM_REFRESH,
 )
 CRITICAL_JOBS = {AUTH_HEALTH, DATA_REFRESH, PAPER_CYCLE, OUTCOME_RESOLUTION}
@@ -181,6 +182,14 @@ def corporate_actions_key(session_date: str) -> str:
 
 def universe_history_key(session_date: str) -> str:
     return f"universe_history:{session_date}"
+
+
+def options_eod_key(session_date: str) -> str:
+    return f"options_eod:{session_date}"
+
+
+def eod_options_key(session_date: str) -> str:
+    return f"options_eod:{session_date}:eod"
 
 
 def index_warmup_key(session_date: str) -> str:

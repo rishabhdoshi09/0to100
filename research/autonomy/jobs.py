@@ -145,6 +145,34 @@ class Deps:
         symbols = BS.build_store()
         return {"symbols": int(symbols), "ready": bool(BS.is_ready()), "source": "official_nse"}
 
+    def certify_bhav_snapshot(self, *, activate: bool = True):
+        """Pin an immutable snapshot from the official bhav store (Kite-independent)."""
+        from research.intelligence.data.from_bhav import snapshot_from_bhav_store
+        from research.intelligence.data.snapshot_store import SnapshotStore
+
+        store = SnapshotStore(self.logs / "snapshots")
+        sid, report = snapshot_from_bhav_store(
+            store,
+            activate=activate,
+            actor="autonomy",
+            reason="bhav store certification",
+        )
+        latest = ""
+        if sid:
+            try:
+                latest = str(store.open_snapshot(sid).manifest.get("last_trading_date") or "")
+            except Exception:
+                latest = ""
+        return {
+            "snapshot_id": sid,
+            "activated": bool(report.get("activated")),
+            "accepted": int(report.get("accepted") or 0),
+            "symbols": int(report.get("symbols") or 0),
+            "result": report.get("result"),
+            "source": "bhav_store",
+            "latest_date": latest,
+        }
+
     def corporate_actions_status(self):
         from data import corporate_actions as CA
 
@@ -199,6 +227,16 @@ class Deps:
             status["reason"] = status.get("reason") or "ledger_present"
             return status
         return UH.build_from_bhav(force=False)
+
+    def options_eod_status(self):
+        from options.eod_store import store_status
+
+        return store_status()
+
+    def capture_options_eod(self, symbols=None):
+        from options.eod_snapshot import capture_universe
+
+        return capture_universe(symbols)
 
     def warm_indices(self):
         from data.index_store import build_index_store
@@ -356,10 +394,34 @@ def run_data_refresh(ctx) -> JobResult:
                     error_message=str(exc),
                 )
             if info.get("ready"):
+                snap = {}
+                certify = getattr(ctx.deps, "certify_bhav_snapshot", None)
+                if callable(certify):
+                    try:
+                        snap = certify(activate=True) or {}
+                    except Exception as exc:
+                        snap = {"error": str(exc), "snapshot_id": None}
+                sid = snap.get("snapshot_id")
+                if sid:
+                    latest = str(snap.get("latest_date") or "")
+                    unblocks = [DEP_DATA]
+                    if latest:
+                        unblocks.append(f"EOD_DATA_READY:{latest}")
+                    return JobResult(
+                        JS.SUCCEEDED,
+                        "official bhavcopy ready · verified snapshot certified from bhav "
+                        f"(Kite login still deferred) · {sid}",
+                        output_snapshot_id=sid,
+                        metadata={**info, **snap, "kite_deferred": True},
+                        state_hint=ST.DATA_READY,
+                        clears={H.PROVIDER_UNAVAILABLE, H.SNAPSHOT_STALE},
+                        unblocks=tuple(unblocks),
+                    )
                 return JobResult(
                     JS.SUCCEEDED,
-                    "official bhavcopy ready · Kite snapshot deferred until login window",
-                    metadata={**info, "kite_deferred": True},
+                    "official bhavcopy ready · Kite snapshot deferred until login window "
+                    "(bhav certification pending)",
+                    metadata={**info, **snap, "kite_deferred": True},
                     state_hint=ST.OBSERVING,
                     clears={H.PROVIDER_UNAVAILABLE},
                 )
@@ -419,8 +481,30 @@ def run_bhavcopy_update(ctx) -> JobResult:
     if not info.get("ready"):
         return JobResult(JS.BLOCKED, "official bhavcopy history is not yet sufficient",
                          blocked_on="BHAVCOPY_SOURCE", metadata=info)
+    snap = {}
+    certify = getattr(ctx.deps, "certify_bhav_snapshot", None)
+    if callable(certify):
+        try:
+            snap = certify(activate=True) or {}
+        except Exception as exc:
+            snap = {"error": str(exc)}
+    sid = snap.get("snapshot_id")
+    if sid:
+        latest = str(snap.get("latest_date") or "")
+        unblocks = [DEP_DATA]
+        if latest:
+            unblocks.append(f"EOD_DATA_READY:{latest}")
+        return JobResult(
+            JS.SUCCEEDED,
+            f"official bhavcopy ready · {info.get('symbols', 0)} symbols · snapshot {sid}",
+            output_snapshot_id=sid,
+            metadata={**info, **snap},
+            clears={H.SNAPSHOT_STALE},
+            unblocks=tuple(unblocks),
+            state_hint=ST.DATA_READY,
+        )
     return JobResult(JS.SUCCEEDED, f"official bhavcopy ready · {info.get('symbols', 0)} symbols",
-                     metadata=info)
+                     metadata={**info, **snap})
 
 
 def run_corporate_actions(ctx) -> JobResult:
@@ -469,6 +553,46 @@ def run_universe_history(ctx) -> JobResult:
         f"point-in-time universe ready · {len(info.get('symbols', []))} symbols "
         f"({source}, {grade})",
         clears={H.UNIVERSE_INCOMPLETE},
+        metadata=info,
+    )
+
+
+def run_options_eod(ctx) -> JobResult:
+    try:
+        capture = getattr(ctx.deps, "capture_options_eod", None)
+        info = capture() if callable(capture) else {"saved": 0}
+        status = getattr(ctx.deps, "options_eod_status", lambda: {})()
+        info = {**(status or {}), **(info or {})}
+    except Exception as exc:
+        return JobResult(
+            JS.RETRYABLE_FAILED,
+            "options EOD capture failed",
+            error_code="OPTIONS_EOD_ERROR",
+            error_message=str(exc),
+            failures={H.OPTIONS_HISTORY_INCOMPLETE},
+        )
+    saved = int(info.get("saved") or 0)
+    if saved <= 0 and not info.get("available"):
+        return JobResult(
+            JS.RETRYABLE_FAILED,
+            "options EOD chain unavailable for NIFTY/BANKNIFTY/FINNIFTY — will retry",
+            error_code="OPTIONS_CHAIN_UNAVAILABLE",
+            failures={H.OPTIONS_HISTORY_INCOMPLETE},
+            metadata=info,
+        )
+    if saved <= 0:
+        return JobResult(
+            JS.RETRYABLE_FAILED,
+            "options EOD capture saved no underlyings — will retry",
+            error_code="OPTIONS_EOD_EMPTY",
+            failures={H.OPTIONS_HISTORY_INCOMPLETE},
+            metadata=info,
+        )
+    return JobResult(
+        JS.SUCCEEDED,
+        f"options EOD history saved · {saved}/{info.get('requested', saved)} underlyings · "
+        f"store latest={info.get('latest_as_of') or info.get('as_of') or '?'}",
+        clears={H.OPTIONS_HISTORY_INCOMPLETE},
         metadata=info,
     )
 
@@ -666,6 +790,7 @@ HANDLERS = {
     SCH.BHAVCOPY_UPDATE: run_bhavcopy_update,
     SCH.CORPORATE_ACTIONS: run_corporate_actions,
     SCH.UNIVERSE_HISTORY: run_universe_history,
+    SCH.OPTIONS_EOD: run_options_eod,
     SCH.INDEX_WARMUP: run_index_warmup,
     SCH.MARKET_SCAN: run_market_scan,
     SCH.NEWS_REFRESH: run_news_refresh,

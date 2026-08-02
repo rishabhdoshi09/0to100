@@ -185,3 +185,118 @@ def test_adjustment_policy_raw_vs_adjusted(tmp_path, monkeypatch):
     adj = _P().adjustment_policy()
     assert adj["corporate_actions"] == "ADJUSTED"
     assert "RAW" not in json.dumps(adj)
+
+
+def test_snapshot_from_bhav_store_certifies(tmp_path, monkeypatch):
+    from data import bhavcopy_store as BS
+    from research.intelligence.data.from_bhav import snapshot_from_bhav_store
+    from research.intelligence.data.snapshot_store import SnapshotStore
+
+    idx = pd.date_range("2024-01-02", periods=5, freq="B")
+    frame = pd.DataFrame(
+        {"open": 10.0, "high": 11.0, "low": 9.5, "close": 10.5, "volume": 1000.0},
+        index=idx,
+    )
+    monkeypatch.setattr(BS, "_store", {"GAIL": frame}, raising=False)
+    monkeypatch.setattr("data.bhavcopy_runtime.ensure_loaded", lambda **kwargs: True)
+
+    store = SnapshotStore(tmp_path / "snapshots")
+    sid, report = snapshot_from_bhav_store(store, activate=True, actor="test")
+    assert sid
+    assert report["result"] == "committed"
+    assert report["activated"] is True
+    assert report["accepted"] == 5
+    assert store.get_active_snapshot() == sid
+    snap = store.open_snapshot(sid)
+    assert snap.manifest.get("source") == "bhav_store"
+    assert snap.manifest.get("last_trading_date") == idx[-1].date().isoformat()
+
+
+def test_options_eod_store_roundtrip(tmp_path):
+    from options.eod_store import history, load_chain, save_chain_snapshot, store_status
+
+    db = tmp_path / "eod.sqlite3"
+    saved = save_chain_snapshot(
+        "NIFTY",
+        as_of="2026-07-31",
+        expiry="2026-08-07",
+        rows=[{"strike": 25000, "ce_oi": 10, "pe_oi": 20, "ce_iv": 12.0, "pe_iv": 14.0}],
+        source="unit_test",
+        pcr=2.0,
+        max_pain=25000.0,
+        atm_iv=13.0,
+        spot=24980.0,
+        path=db,
+    )
+    assert saved["strike_count"] == 1
+    payload = load_chain("NIFTY", as_of="2026-07-31", path=db)
+    assert payload is not None
+    assert payload["pcr"] == 2.0
+    assert len(payload["rows"]) == 1
+    hist = history("NIFTY", days=10, path=db)
+    assert hist and hist[0]["as_of"] == "2026-07-31"
+    status = store_status(path=db)
+    assert status["available"] is True
+    assert status["symbols"] == 1
+    assert status["snapshots"] == 1
+
+
+def test_options_eod_job_clears_on_save(tmp_path, monkeypatch):
+    from research.autonomy import health as H
+    from research.autonomy import job_store as JS
+    from research.autonomy import jobs as JOBS
+
+    db = tmp_path / "eod.sqlite3"
+    monkeypatch.setattr("options.eod_store._DEFAULT_DB", db)
+
+    class Deps:
+        def capture_options_eod(self, symbols=None):
+            from options.eod_store import save_chain_snapshot, store_status
+
+            save_chain_snapshot(
+                "BANKNIFTY",
+                as_of="2026-07-31",
+                expiry="2026-08-06",
+                rows=[{"strike": 52000, "ce_oi": 1, "pe_oi": 1}],
+                source="unit_test",
+                path=db,
+            )
+            status = store_status(path=db)
+            return {"requested": 1, "saved": 1, "failed": 0, **status}
+
+        def options_eod_status(self):
+            from options.eod_store import store_status
+
+            return store_status(path=db)
+
+    result = JOBS.run_options_eod(JOBS._Ctx(Deps()))
+    assert result.status == JS.SUCCEEDED
+    assert H.OPTIONS_HISTORY_INCOMPLETE in result.clears
+
+
+def test_product_readiness_includes_snapshot_and_options_lanes():
+    from datetime import datetime, timezone
+
+    from product.product_readiness import build_product_readiness
+
+    now = datetime(2026, 8, 1, 5, 0, tzinfo=timezone.utc)
+    payload = build_product_readiness(
+        market={"available": True, "summary": "ok"},
+        scan={"available": True, "scanned_at": "2026-08-01T03:00:00+00:00", "records": [{"symbol": "A"}]},
+        long_term={"available": True, "scanned_at": "2026-07-31T03:00:00+00:00", "records": [{"symbol": "A"}],
+                   "summary": {"coverage_pct": 50}},
+        news={"available": True, "articles": [{"published_at": "2026-08-01T01:00:00+00:00"}], "stats": {"total": 1}},
+        fno={"available": True, "mapped_underlyings": 10, "generated_at": "2026-08-01T00:00:00+00:00"},
+        data={
+            "bhavcopy": {"ready": True, "sessions": 500, "symbols": 1800, "latest_date": "2026-07-31"},
+            "snapshot": {"ready": True, "snapshot_id": "abc", "latest_date": "2026-07-31", "source": "bhav_store"},
+            "options_eod": {"available": True, "snapshots": 3, "symbols": 3, "latest_as_of": "2026-07-31"},
+        },
+        operations={"running": True, "heartbeat": "2026-08-01T04:59:55+00:00", "active": []},
+        now=now,
+    )
+    keys = {item["key"] for item in payload["lanes"]}
+    assert "snapshot" in keys
+    assert "options_eod" in keys
+    assert payload["state"] == "READY"
+    assert payload["score"] >= 90

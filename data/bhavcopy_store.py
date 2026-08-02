@@ -355,6 +355,20 @@ def store_symbols() -> list[str]:
         return list(_store.keys())
 
 
+def iter_raw_frames():
+    """Yield (symbol, raw_dataframe_copy) for snapshot certification.
+
+    Returns private copies so callers never mutate the live store. Frames are
+    UNADJUSTED (corporate actions applied only in get_ohlcv).
+    """
+    with _lock:
+        items = [(sym, df.copy() if df is not None else None) for sym, df in _store.items()]
+    for sym, df in items:
+        if df is None or getattr(df, "empty", True):
+            continue
+        yield str(sym).upper(), df
+
+
 def symbol_date_spans() -> dict[str, dict]:
     """Return {SYMBOL: {first, last, sessions}} from the raw in-memory store.
 

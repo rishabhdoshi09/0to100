@@ -366,6 +366,52 @@ def cmd_universe_history(args) -> None:
     print(json.dumps(report, indent=2, default=str))
 
 
+def cmd_snapshot_certify(args) -> None:
+    """Commit (+ optionally activate) a verified snapshot from the official bhav store."""
+    from research.intelligence.data.from_bhav import snapshot_from_bhav_store
+    from research.intelligence.data.snapshot_store import SnapshotStore
+
+    store = SnapshotStore()
+    if args.status_only:
+        sid = store.get_active_snapshot()
+        info = {"active_snapshot_id": sid or "", "ready": bool(sid)}
+        if sid:
+            try:
+                snap = store.open_snapshot(sid)
+                info["latest_date"] = snap.manifest.get("last_trading_date")
+                info["source"] = snap.manifest.get("source")
+                info["instrument_count"] = snap.manifest.get("instrument_count")
+            except Exception as exc:
+                info["error"] = str(exc)
+        print(json.dumps(info, indent=2, default=str))
+        return
+    sid, report = snapshot_from_bhav_store(
+        store,
+        activate=not bool(args.no_activate),
+        actor="cli",
+        reason="manual snapshot certification",
+    )
+    print(json.dumps({"snapshot_id": sid, **report}, indent=2, default=str))
+
+
+def cmd_options_eod(args) -> None:
+    """Capture or inspect durable EOD option-chain / OI / IV history."""
+    from options.eod_snapshot import capture_universe
+    from options.eod_store import history, store_status
+
+    if args.status_only:
+        print(json.dumps(store_status(), indent=2, default=str))
+        return
+    if args.history_symbol:
+        print(json.dumps(history(args.history_symbol, days=int(args.days or 30)), indent=2, default=str))
+        return
+    symbols = None
+    if args.symbols:
+        symbols = [s.strip() for s in str(args.symbols).split(",") if s.strip()]
+    report = capture_universe(symbols, as_of=args.as_of or None)
+    print(json.dumps(report, indent=2, default=str))
+
+
 def cmd_screener(args) -> None:
     """
     Screen NSE stocks by fundamentals + technicals, or fetch one symbol's data.
@@ -1088,6 +1134,23 @@ def build_parser() -> argparse.ArgumentParser:
     uh.add_argument("--force", action="store_true", help="Rebuild even if ledger already exists")
     uh.add_argument("--status", dest="status_only", action="store_true", help="Print universe history status")
 
+    sc = sub.add_parser(
+        "snapshot-certify",
+        help="Certify an immutable research snapshot from the official bhav store",
+    )
+    sc.add_argument("--status", dest="status_only", action="store_true", help="Print active snapshot status")
+    sc.add_argument("--no-activate", action="store_true", help="Commit without activating")
+
+    oe = sub.add_parser(
+        "options-eod",
+        help="Capture EOD option-chain OI/IV snapshots into logs/options/eod_chains.sqlite3",
+    )
+    oe.add_argument("--status", dest="status_only", action="store_true", help="Print options EOD store status")
+    oe.add_argument("--symbols", metavar="LIST", help="Comma-separated underlyings (default NIFTY,BANKNIFTY,FINNIFTY)")
+    oe.add_argument("--as-of", dest="as_of", metavar="YYYY-MM-DD", help="Override as-of date")
+    oe.add_argument("--history", dest="history_symbol", metavar="SYMBOL", help="Print recent history for one symbol")
+    oe.add_argument("--days", type=int, default=30, help="History window when using --history")
+
     ens = sub.add_parser("ensemble", help="Print ensemble ML signal for a symbol")
     ens.add_argument("--symbol", required=True, metavar="SYMBOL", help="NSE symbol, e.g. RELIANCE")
 
@@ -1146,6 +1209,8 @@ def main() -> None:
         "fii-dii-backfill": cmd_fii_dii_backfill,
         "ca-ingest": cmd_ca_ingest,
         "universe-history": cmd_universe_history,
+        "snapshot-certify": cmd_snapshot_certify,
+        "options-eod": cmd_options_eod,
         "ensemble":   cmd_ensemble,
         "lgb":        cmd_lgb,
         "multi":      cmd_multi,
