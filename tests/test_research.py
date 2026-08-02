@@ -589,10 +589,12 @@ class TestMarketMemory:
 
     def test_find_analogs_fail_open(self):
         import pandas as pd
+        from research.market_memory import reset_analog_corpus_cache
         close = np.linspace(80, 120, 220)
         df = pd.DataFrame({"close": close, "high": close + 1, "low": close - 1,
                            "volume": [1e6] * 220})
-        assert M.find_analogs("X", df) == {}                  # no corpus in test env
+        reset_analog_corpus_cache()
+        assert M.find_analogs("X", df) == {}                  # no corpus without bhav store
 
 
 from research import registry as REG

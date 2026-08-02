@@ -355,6 +355,15 @@ def store_symbols() -> list[str]:
         return list(_store.keys())
 
 
+def reset_in_memory_store() -> None:
+    """Clear the process-local symbol map (tests and worker isolation)."""
+    global _store, _store_last_day, _store_sessions
+    with _lock:
+        _store = {}
+        _store_last_day = None
+        _store_sessions = 0
+
+
 def is_ready() -> bool:
     with _lock:
         return len(_store) > 0

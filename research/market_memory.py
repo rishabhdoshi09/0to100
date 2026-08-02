@@ -246,6 +246,11 @@ def build_corpus(sample_step: int = 5, horizon: int = _HORIZON,
 _corpus_cache: dict = {"data": None}
 
 
+def reset_analog_corpus_cache() -> None:
+    """Clear cached historical analog corpus (test / process isolation)."""
+    _corpus_cache["data"] = None
+
+
 def find_analogs(symbol: str, df, k: int = _DEFAULT_K) -> dict:
     """User-facing entry: for a live setup (its OHLCV frame), retrieve similar
     historical setups and summarise what they did. Builds+caches the corpus on

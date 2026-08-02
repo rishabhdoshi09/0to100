@@ -101,9 +101,14 @@ class TestDataIntegrity:
         assert DI.phantom_gaps(closes) == []
 
     def test_report_fail_open(self):
-        # no store in the test env → graceful, never raises
+        # Empty in-memory store → graceful headline, never raises.
         r = DI.integrity_report()
         assert r["checked"] == 0 and r["ca_mismatch"] is False
+        # Warm store in-process must not change fail-open when no symbols are registered.
+        from data.bhavcopy_store import reset_in_memory_store
+        reset_in_memory_store()
+        r2 = DI.integrity_report()
+        assert r2["checked"] == 0 and r2["ca_mismatch"] is False
 
 
 class TestCorporateActions:
