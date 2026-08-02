@@ -103,6 +103,13 @@ export type StockWorkspace = {
     stock_pe?: number | null
     peer_pe_note?: string
     note?: string
+    peer_rank?: number
+    total_peers?: number
+    peer_rank_sector?: string
+    peer_rank_score?: number
+    peer_rank_verdict?: string
+    sector_leader?: boolean
+    peer_rank_note?: string
   }
   scanner: ScanRecord
   long_term: LongTermRecord
@@ -502,3 +509,50 @@ export const fetchDataCoverage = (symbol?: string): Promise<DataCoveragePayload>
   return fetch(`/api/data/coverage${query}`, { headers: { Accept: 'application/json' } })
     .then((response) => json<DataCoveragePayload>(response))
 }
+
+export type TargetPortfolioPayload = {
+  available: boolean
+  portfolio: Record<string, unknown>
+  positions: Array<Record<string, unknown>>
+  summary?: {
+    current_positions: number
+    target_positions: number
+    executable_changes: number
+    blocked_changes: number
+    current_open_risk_pct: number
+    pending_open_risk_pct: number
+    target_open_risk_pct: number
+    available_cash: number
+  }
+  message?: string
+  error?: string
+}
+
+export const fetchTargetPortfolio = (): Promise<TargetPortfolioPayload> =>
+  fetch('/api/target-portfolio', { headers: { Accept: 'application/json' } })
+    .then((response) => json<TargetPortfolioPayload>(response))
+
+export const runDataJob = (jobId: string): Promise<{
+  ok: boolean
+  job_id: string
+  message?: string
+  error?: string
+  operation_id?: string
+  created?: boolean
+  kind?: string
+  note?: string
+}> =>
+  fetch(`/api/data/jobs/${encodeURIComponent(jobId)}/run`, {
+    method: 'POST',
+    headers: { Accept: 'application/json' },
+  }).then((response) => json(response))
+
+export const refreshFiiDiiStore = (): Promise<Record<string, unknown>> =>
+  fetch('/api/market/fii-dii/backfill', {
+    method: 'POST',
+    headers: { Accept: 'application/json' },
+  }).then((response) => json(response))
+
+export const fetchMarketInstitutional = (days = 30): Promise<Record<string, unknown>> =>
+  fetch(`/api/market/institutional?days=${days}`, { headers: { Accept: 'application/json' } })
+    .then((response) => json(response))

@@ -35,6 +35,25 @@ def test_stock_workspace_combines_technicals_fundamentals_and_sources():
     assert result["sources"][0]["status"] == "FRESH"
 
 
+def test_block_deals_use_institutional_flows_cache(monkeypatch):
+    from data.block_deals import get_bulk_deals, get_significant_deals
+
+    monkeypatch.setattr(
+        "data.block_deals.get_flows",
+        lambda max_age_s=10800: {
+            "bulk_deals": [
+                {"symbol": "RELIANCE", "client": "FUND", "side": "BUY", "qty": 100000, "price": 2500},
+            ],
+            "block_deals": [],
+        },
+    )
+    bulk = get_bulk_deals()
+    assert len(bulk) == 1
+    assert bulk[0].symbol == "RELIANCE"
+    sig = get_significant_deals(["RELIANCE"], min_value_cr=1.0)
+    assert len(sig) == 1
+
+
 def test_stock_workspace_key_ratios_pe_and_sector_peers():
     result = build_stock_workspace(
         "TEST",

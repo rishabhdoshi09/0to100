@@ -143,3 +143,37 @@ def test_inspect_csv(tmp_path: Path):
 def test_fundamentals_cache_db_is_repo_absolute():
     from fundamentals.cache import _DB_PATH, _ROOT
     assert _DB_PATH == _ROOT / "data" / "fundamentals_cache.db"
+
+
+def test_run_job_coverage_audit():
+    from data_platform.jobs import run_job
+
+    result = run_job("coverage_audit")
+    assert result["ok"] is True
+    assert "report" in result
+
+
+def test_run_job_unknown():
+    from data_platform.jobs import run_job
+
+    result = run_job("not-a-job")
+    assert result["ok"] is False
+
+
+def test_run_job_market_scan_enqueues(monkeypatch):
+    from data_platform.jobs import run_job
+
+    calls: list[str] = []
+
+    class _FakeStore:
+        def enqueue(self, kind, lane=None, requested_by=""):
+            calls.append(kind)
+            return {"operation_id": "op-test", "status": "QUEUED"}, True
+
+    monkeypatch.setattr("terminal_api._ensure_ops_worker", lambda: None)
+    monkeypatch.setattr("operations.store.OperationStore", lambda _db: _FakeStore())
+
+    result = run_job("market_scan")
+    assert result["ok"] is True
+    assert result.get("operation_id") == "op-test"
+    assert calls == ["MARKET_SCAN"]

@@ -12,7 +12,7 @@ import {
   ExperienceHelpDrawer,
 } from './experience'
 import { MarketSidebar } from './MarketSidebar'
-import { NewsView, OperationsRibbon } from './marketViews'
+import { NewsView, OperationsRibbon, FnoView } from './marketViews'
 import { ProductStockIntelligenceView } from './productViews'
 import { ResearchDataView } from './researchData'
 import {
@@ -151,6 +151,7 @@ const pageTitles: Record<string, string> = {
   'Market Overview': 'Market Overview',
   'News & Events': 'News & Events',
   'Research Data': 'Research Data',
+  'F&O Desk': 'F&O Desk',
   'Paper Portfolio': 'Paper Portfolio',
   'System Health': 'System Health',
   // legacy route keys
@@ -171,7 +172,8 @@ const pageSubtitles: Record<string, string> = {
   Watchlist: 'Names you are tracking with latest scan context.',
   'Market Overview': 'Regime, breadth, volatility and sector leadership.',
   'News & Events': 'Dated market context with source health.',
-  'Research Data': 'Verified snapshots and evidence uploads.',
+  'Research Data': 'Verified snapshots, data platform jobs, and evidence uploads.',
+  'F&O Desk': 'Stock derivative coverage — mapped underlyings, expiries and lot sizes.',
   'Paper Portfolio': 'Recorded paper positions and outcomes — secondary evidence.',
   'System Health': 'Operations, autonomy and infrastructure detail.',
 }
@@ -372,6 +374,7 @@ function App() {
     if (active === 'Market Overview' || active === 'Market Internals') return <MarketInternalsView {...viewProps} />
     if (active === 'Long-Term Picks' || active === 'Long-Term') return <EnhancedLongTermView {...viewProps} />
     if (active === 'News & Events') return <NewsView {...viewProps} />
+    if (active === 'F&O Desk') return <FnoView {...viewProps} />
     if (active === 'System Health' || active === 'Automation') return <AutomationView {...viewProps} />
     return <RadarHomeView {...viewProps} onCompare={addToCompare} onWatchlist={addToWatchlist} />
   }

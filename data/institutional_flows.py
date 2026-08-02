@@ -133,11 +133,13 @@ def _fetch() -> dict:
                       timeout=12)
             if r.ok:
                 data = r.json()
-                deals = parse_bulk_deals(
-                    {"data": (data.get("BULK_DEALS_DATA") or
-                              data.get("data") or [])})
+                bulk_raw = data.get("BULK_DEALS_DATA") or data.get("data") or []
+                deals = parse_bulk_deals({"data": bulk_raw})
                 out["bulk_deals"] = deals
                 out["bulk_buys"] = sorted(bulk_buy_symbols(deals))
+                block_raw = data.get("BLOCK_DEALS_DATA") or []
+                if block_raw:
+                    out["block_deals"] = parse_bulk_deals({"data": block_raw})
         except Exception as exc:
             log.debug("bulk_deals_fetch_failed", error=str(exc)[:80])
     except Exception as exc:

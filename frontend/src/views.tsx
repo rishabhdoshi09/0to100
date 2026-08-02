@@ -12,6 +12,8 @@ import {
 import { boolLabel, money, pct, score, words } from './format'
 import {
   fetchInstitutionalStack,
+  fetchTargetPortfolio,
+  refreshFiiDiiStore,
   type InstitutionalDomain,
   type InstitutionalStack,
 } from './productApi'
@@ -225,29 +227,94 @@ export function StockIntelligenceView(props: ViewProps) {
 }
 
 export function PortfolioView({ dashboard, runControl }: ViewProps) {
+  const [target, setTarget] = useState<Awaited<ReturnType<typeof fetchTargetPortfolio>> | null>(null)
   const paperReturn = dashboard.paper.capital > 0 ? ((dashboard.paper.equity / dashboard.paper.capital) - 1) * 100 : null
+
+  useEffect(() => {
+    let alive = true
+    fetchTargetPortfolio()
+      .then((payload) => { if (alive) setTarget(payload) })
+      .catch(() => { if (alive) setTarget(null) })
+    return () => { alive = false }
+  }, [dashboard.autonomy.heartbeat_ist, dashboard.paper.equity])
+
+  const summary = target?.summary
+
   return (
     <section className="workspace-view">
       <div className="inline-actions"><button type="button" onClick={() => void runControl('RUN_CYCLE_NOW')}>Request paper cycle</button><button type="button" onClick={() => void runControl(dashboard.autonomy.new_paper_entries ? 'PAUSE_NEW_PAPER_ENTRIES' : 'RESUME_NEW_PAPER_ENTRIES')}>{dashboard.autonomy.new_paper_entries ? 'Pause new entries' : 'Resume new entries'}</button></div>
-      <div className="view-metrics"><MetricCard label="PAPER CAPITAL" value={money(dashboard.paper.capital)} /><MetricCard label="PAPER EQUITY" value={money(dashboard.paper.equity)} detail={pct(paperReturn)} tone="green" /><MetricCard label="OPEN RISK" value={money(dashboard.paper.open_risk)} detail={`${(dashboard.paper.risk_per_trade_pct * 100).toFixed(1)}% risk/trade`} tone="amber" /><MetricCard label="POSITIONS" value={String(dashboard.paper.open_positions.length)} detail={`Max ${dashboard.paper.max_positions}`} tone="purple" /></div>
+      <div className="view-metrics">
+        <MetricCard label="PAPER CAPITAL" value={money(dashboard.paper.capital)} />
+        <MetricCard label="PAPER EQUITY" value={money(dashboard.paper.equity)} detail={pct(paperReturn)} tone="green" />
+        <MetricCard label="OPEN RISK" value={money(dashboard.paper.open_risk)} detail={`${(dashboard.paper.risk_per_trade_pct * 100).toFixed(1)}% risk/trade`} tone="amber" />
+        <MetricCard label="POSITIONS" value={String(dashboard.paper.open_positions.length)} detail={`Max ${dashboard.paper.max_positions}`} tone="purple" />
+        {summary && (
+          <MetricCard label="TARGET PORTFOLIO" value={target?.available ? `${summary.target_positions} targets` : 'EMPTY'} detail={target?.available ? `Exec ${summary.executable_changes} · blocked ${summary.blocked_changes}` : target?.message || '—'} tone={target?.available ? 'cyan' : 'amber'} />
+        )}
+      </div>
       <div className="portfolio-workspace">
-        <Panel title="RECORDED EQUITY CURVE" subtitle="No synthetic history"><EquityCurve values={dashboard.paper.equity_curve} /></Panel>
-        <Panel title="OPEN PAPER POSITIONS"><PositionsTable rows={dashboard.paper.open_positions} /></Panel>
+        <Panel title="CANONICAL TARGET PORTFOLIO" subtitle="Read-only intelligence target book · not paper">
+          {!target && <p className="panel-copy">Loading target portfolio projection…</p>}
+          {target && !target.available && <p className="panel-copy">{target.message || 'No persisted target portfolio yet.'}</p>}
+          {target?.available && summary && (
+            <div className="key-value-list">
+              <div><span>Current positions</span><strong>{summary.current_positions}</strong></div>
+              <div><span>Target positions</span><strong>{summary.target_positions}</strong></div>
+              <div><span>Open risk (current)</span><strong>{summary.current_open_risk_pct}%</strong></div>
+              <div><span>Open risk (target)</span><strong>{summary.target_open_risk_pct}%</strong></div>
+              <div><span>Available cash</span><strong>{money(summary.available_cash)}</strong></div>
+            </div>
+          )}
+          {target?.positions && target.positions.length > 0 && (
+            <table className="radar-table" style={{ marginTop: '12px' }}>
+              <thead><tr><th>Symbol</th><th>Qty</th><th>Status</th><th>Risk %</th></tr></thead>
+              <tbody>
+                {target.positions.slice(0, 20).map((row, idx) => (
+                  <tr key={String(row.symbol ?? idx)}>
+                    <td>{String(row.symbol ?? '—')}</td>
+                    <td>{String(row.desired_quantity ?? row.required_quantity ?? '—')}</td>
+                    <td>{String(row.status ?? '—')}</td>
+                    <td>{row.target_risk_pct != null ? String(row.target_risk_pct) : '—'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </Panel>
+        <Panel title="RECORDED EQUITY CURVE" subtitle="Paper evidence · no synthetic history"><EquityCurve values={dashboard.paper.equity_curve} /></Panel>
+        <Panel title="OPEN PAPER POSITIONS" subtitle="Secondary paper layer"><PositionsTable rows={dashboard.paper.open_positions} /></Panel>
         <Panel title="RECENT CLOSED TRADES"><PositionsTable rows={[...dashboard.paper.closed_trades].reverse().slice(0, 50)} closed /></Panel>
       </div>
     </section>
   )
 }
 
-export function MarketInternalsView({ dashboard }: ViewProps) {
+export function MarketInternalsView({ dashboard, runControl }: ViewProps) {
   const details = dashboard.market.technical_details || {}
   const inst = dashboard.institutional
   const cash = inst?.cash
   const history = cash?.history || []
   const niftyOpts = inst?.nifty_options
+  const [instBusy, setInstBusy] = useState(false)
+
+  const refreshInstitutional = async () => {
+    setInstBusy(true)
+    try {
+      await refreshFiiDiiStore()
+      await runControl('REFRESH_DATA_NOW')
+    } finally {
+      setInstBusy(false)
+    }
+  }
+
   return (
     <section className="workspace-view">
       {!dashboard.data.ready && <DataReadinessPanel dashboard={dashboard} />}
+      <div className="inline-actions">
+        <button type="button" disabled={instBusy} onClick={() => void refreshInstitutional()}>
+          {instBusy ? 'Syncing FII/DII…' : 'Refresh FII/DII store'}
+        </button>
+      </div>
       <div className="view-metrics">
         <MetricCard label="REGIME" value={dashboard.market.health} detail={String(details.market_regime || dashboard.market.breadth)} tone={dashboard.market.health.toLowerCase() === 'healthy' ? 'green' : 'amber'} />
         <MetricCard label="NIFTY 1D" value={pct(dashboard.market.nifty_change_1d)} detail={`5D ${pct(dashboard.market.nifty_change_5d)}`} />

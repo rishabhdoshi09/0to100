@@ -102,10 +102,25 @@ def fundamentals_backfill_run(
     return run_fundamentals_backfill(scope=scope, force=force, limit=limit, resume=True)
 
 
+def run_job_workspace(job_id: str) -> dict[str, Any]:
+    from data_platform.jobs import run_job
+
+    clean = str(job_id or "").strip()
+    if not clean:
+        raise HTTPException(status_code=400, detail="job_id required")
+    return run_job(clean)
+
+
 def install_data_routes(app) -> None:
     app.add_api_route("/api/data/providers", providers_workspace, methods=["GET"], name="data_providers")
     app.add_api_route("/api/data/coverage", coverage_workspace, methods=["GET"], name="data_coverage")
     app.add_api_route("/api/data/jobs", jobs_workspace, methods=["GET"], name="data_jobs")
+    app.add_api_route(
+        "/api/data/jobs/{job_id}/run",
+        run_job_workspace,
+        methods=["POST"],
+        name="data_job_run",
+    )
     app.add_api_route(
         "/api/data/security-master",
         security_master_workspace,

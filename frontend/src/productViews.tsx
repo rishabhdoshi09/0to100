@@ -567,6 +567,14 @@ export function ProductStockIntelligenceView(props: ViewProps) {
               <div><span>Peer samples</span><strong>{workspace?.peers?.peer_pe_sample_count ?? 0}</strong></div>
               <div><span>Stock P/E</span><strong>{workspace?.peers?.stock_pe != null ? `${workspace.peers.stock_pe}x` : '—'}</strong></div>
             </div>
+            {workspace?.peers?.peer_rank != null && (
+              <p className="panel-copy">
+                <strong>Sector rank:</strong> {workspace.peers.peer_rank}/{workspace.peers.total_peers ?? '—'}
+                {workspace.peers.peer_rank_verdict ? ` · ${workspace.peers.peer_rank_verdict}` : ''}
+                {workspace.peers.sector_leader ? ' · sector leader' : ''}
+                {workspace.peers.peer_rank_note ? ` — ${workspace.peers.peer_rank_note}` : ''}
+              </p>
+            )}
             {workspace?.peers?.peer_pe_note && <p className="panel-copy">{workspace.peers.peer_pe_note}</p>}
           </Panel>
           <Panel title="PEERS" subtitle={workspace?.peers?.note || 'Sector context from scan + Screener'}>

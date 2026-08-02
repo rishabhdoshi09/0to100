@@ -3,6 +3,7 @@ import {
   fetchDataCoverage,
   fetchDataJobs,
   fetchDataProviders,
+  runDataJob,
   fetchStockFundamentals,
   type DataCoveragePayload,
   type DataJobsPayload,
@@ -93,6 +94,21 @@ export function ResearchDataView({ symbol }: { symbol: string }) {
   const [jobs, setJobs] = useState<DataJobsPayload | null>(null)
   const [symbolCoverage, setSymbolCoverage] = useState<DataCoveragePayload | null>(null)
   const [universeCoverage, setUniverseCoverage] = useState<DataCoveragePayload | null>(null)
+  const [jobBusy, setJobBusy] = useState('')
+
+  const runPlatformJob = async (jobId: string) => {
+    setJobBusy(jobId)
+    setError('')
+    try {
+      const result = await runDataJob(jobId)
+      if (!result.ok) throw new Error(result.error || result.message || 'Job failed')
+      await loadPlatformData()
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : 'Job run failed')
+    } finally {
+      setJobBusy('')
+    }
+  }
 
   const loadPlatformData = async () => {
     const [prov, jobList, symCov, uniCov] = await Promise.all([
@@ -251,12 +267,15 @@ export function ResearchDataView({ symbol }: { symbol: string }) {
         )}
         {jobs && (
           <div className="fno-table wide-table" style={{ marginTop: '12px' }}>
-            <div className="fno-head"><span>JOB</span><span>CONTROL</span><span>DESCRIPTION</span></div>
+            <div className="fno-head"><span>JOB</span><span>CONTROL</span><span>DESCRIPTION</span><span>ACTION</span></div>
             {jobs.jobs.map((job) => (
               <div className="fno-row" key={job.id} style={{ display: 'grid', cursor: 'default' }}>
                 <strong>{job.label}</strong>
                 <span>{job.control || job.trigger}</span>
                 <span>{job.description}</span>
+                <button type="button" disabled={jobBusy === job.id} onClick={() => void runPlatformJob(job.id)}>
+                  {jobBusy === job.id ? 'Running…' : 'Run'}
+                </button>
               </div>
             ))}
           </div>

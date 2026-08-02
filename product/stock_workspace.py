@@ -358,6 +358,26 @@ def _peers_payload(
         note_parts.append(
             "Retry fundamentals for Screener peers, or run a market scan for sector-ranked peers."
         )
+    peer_rank_fields: dict[str, Any] = {}
+    try:
+        from core.peer_ranker import rank_vs_peers
+
+        ranked = rank_vs_peers(symbol.upper())
+        if ranked is not None:
+            peer_rank_fields = {
+                "peer_rank": ranked.rank,
+                "total_peers": ranked.total_peers,
+                "peer_rank_sector": ranked.sector,
+                "peer_rank_score": ranked.score,
+                "peer_rank_verdict": ranked.verdict,
+                "sector_leader": ranked.verdict == "SECTOR_LEADER",
+                "peer_rank_note": (
+                    f"Rank {ranked.rank}/{ranked.total_peers} in {ranked.sector} "
+                    f"on momentum, RS proxy and accumulation vs fixed sector basket."
+                ),
+            }
+    except Exception:
+        pass
     return {
         "available": available,
         "sector": sector,
@@ -370,6 +390,7 @@ def _peers_payload(
         "peer_pe_note": str(peer_stats.get("note") or ""),
         "peer_pe_sources": list(peer_stats.get("sources") or []),
         "note": " ".join(note_parts),
+        **peer_rank_fields,
     }
 
 

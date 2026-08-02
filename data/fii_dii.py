@@ -86,101 +86,61 @@ def get_fii_dii_activity(days: int = 30) -> pd.DataFrame:
 
 @st.cache_data(ttl=3600)
 def get_bulk_deals(days: int = 10) -> pd.DataFrame:
-    """
-    Fetch bulk deals from NSE.
+    """Bulk deals from canonical institutional_flows cache (NSE largedeal snapshot)."""
+    from data.institutional_flows import get_flows
 
-    Returns DataFrame with columns:
-        date, symbol, client_name, buy_sell, quantity, price
-    """
-    try:
-        session = _nse_session()
-        resp = session.get(f"{_NSE_BASE}/api/bulkdeals", timeout=15)
-        resp.raise_for_status()
-        raw = resp.json()
-
-        data = raw if isinstance(raw, list) else raw.get("data", raw.get("bulkDeals", []))
-        records = []
-        for item in data:
-            try:
-                date = pd.to_datetime(
-                    item.get("BD_DT_DATE", item.get("date", "")),
-                    dayfirst=True, errors="coerce"
-                )
-                if pd.isna(date):
-                    continue
-                records.append(
-                    {
-                        "date": date.normalize(),
-                        "symbol": str(item.get("BD_SYMBOL", item.get("symbol", ""))).upper().strip(),
-                        "client_name": str(item.get("BD_CLIENT_NAME", item.get("clientName", ""))).strip(),
-                        "buy_sell": str(item.get("BD_BUY_SELL", item.get("buySell", ""))).strip().upper(),
-                        "quantity": int(float(str(item.get("BD_QTY_TRD", item.get("quantity", 0))).replace(",", "") or 0)),
-                        "price": float(str(item.get("BD_TP_WATP", item.get("price", 0))).replace(",", "") or 0),
-                    }
-                )
-            except Exception:
-                continue
-
-        if records:
-            df = pd.DataFrame(records).sort_values("date", ascending=False)
-            cutoff = pd.Timestamp.today().normalize() - timedelta(days=days)
-            df = df[df["date"] >= cutoff].reset_index(drop=True)
-            logger.info("Bulk deals: loaded %d rows", len(df))
-            return df
-
-    except Exception as exc:
-        logger.warning("NSE bulk deals endpoint failed: %s", exc)
-
+    flows = get_flows()
+    deals = flows.get("bulk_deals") or []
+    records = []
+    stamp = pd.Timestamp.today().normalize()
+    for item in deals:
+        try:
+            records.append(
+                {
+                    "date": stamp,
+                    "symbol": str(item.get("symbol", "")).upper().strip(),
+                    "client_name": str(item.get("client", "")).strip(),
+                    "buy_sell": str(item.get("side", "")).strip().upper(),
+                    "quantity": int(float(item.get("qty", 0))),
+                    "price": float(item.get("price", 0)),
+                }
+            )
+        except Exception:
+            continue
+    if records:
+        df = pd.DataFrame(records).sort_values("date", ascending=False)
+        cutoff = pd.Timestamp.today().normalize() - timedelta(days=days)
+        return df[df["date"] >= cutoff].reset_index(drop=True)
     return pd.DataFrame(columns=["date", "symbol", "client_name", "buy_sell", "quantity", "price"])
 
 
 @st.cache_data(ttl=3600)
 def get_block_deals(days: int = 10) -> pd.DataFrame:
-    """
-    Fetch block deals from NSE.
+    """Block deals from canonical institutional_flows cache when present."""
+    from data.institutional_flows import get_flows
 
-    Returns DataFrame with columns:
-        date, symbol, client_name, buy_sell, quantity, price
-    """
-    try:
-        session = _nse_session()
-        resp = session.get(f"{_NSE_BASE}/api/blockdeals", timeout=15)
-        resp.raise_for_status()
-        raw = resp.json()
-
-        data = raw if isinstance(raw, list) else raw.get("data", raw.get("blockDeals", []))
-        records = []
-        for item in data:
-            try:
-                date = pd.to_datetime(
-                    item.get("BD_DT_DATE", item.get("date", "")),
-                    dayfirst=True, errors="coerce"
-                )
-                if pd.isna(date):
-                    continue
-                records.append(
-                    {
-                        "date": date.normalize(),
-                        "symbol": str(item.get("BD_SYMBOL", item.get("symbol", ""))).upper().strip(),
-                        "client_name": str(item.get("BD_CLIENT_NAME", item.get("clientName", ""))).strip(),
-                        "buy_sell": str(item.get("BD_BUY_SELL", item.get("buySell", ""))).strip().upper(),
-                        "quantity": int(float(str(item.get("BD_QTY_TRD", item.get("quantity", 0))).replace(",", "") or 0)),
-                        "price": float(str(item.get("BD_TP_WATP", item.get("price", 0))).replace(",", "") or 0),
-                    }
-                )
-            except Exception:
-                continue
-
-        if records:
-            df = pd.DataFrame(records).sort_values("date", ascending=False)
-            cutoff = pd.Timestamp.today().normalize() - timedelta(days=days)
-            df = df[df["date"] >= cutoff].reset_index(drop=True)
-            logger.info("Block deals: loaded %d rows", len(df))
-            return df
-
-    except Exception as exc:
-        logger.warning("NSE block deals endpoint failed: %s", exc)
-
+    flows = get_flows()
+    deals = flows.get("block_deals") or []
+    records = []
+    stamp = pd.Timestamp.today().normalize()
+    for item in deals:
+        try:
+            records.append(
+                {
+                    "date": stamp,
+                    "symbol": str(item.get("symbol", "")).upper().strip(),
+                    "client_name": str(item.get("client", "")).strip(),
+                    "buy_sell": str(item.get("side", "")).strip().upper(),
+                    "quantity": int(float(item.get("qty", 0))),
+                    "price": float(item.get("price", 0)),
+                }
+            )
+        except Exception:
+            continue
+    if records:
+        df = pd.DataFrame(records).sort_values("date", ascending=False)
+        cutoff = pd.Timestamp.today().normalize() - timedelta(days=days)
+        return df[df["date"] >= cutoff].reset_index(drop=True)
     return pd.DataFrame(columns=["date", "symbol", "client_name", "buy_sell", "quantity", "price"])
 
 

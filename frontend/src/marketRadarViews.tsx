@@ -9,7 +9,6 @@ import {
   fetchWatchlist,
   removeWatchlistItem,
   type CompareWorkspace,
-  type InstitutionalDomain,
   type RadarHome,
   type ScannerWorkspaceRow,
   type WatchlistPayload,
