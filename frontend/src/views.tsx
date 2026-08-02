@@ -143,7 +143,7 @@ export function CommandCenterView(props: ViewProps) {
             <div className="key-value-list">
               <div><span>Worker</span><strong className={dashboard.operations.running ? 'positive' : 'negative'}>{dashboard.operations.running ? `ONLINE · ${dashboard.operations.worker_pid || '—'}` : 'OFFLINE'}</strong></div>
               <div><span>Momentum scan</span><strong>{latestScan ? `${latestScan.status} · ${words(latestScan.stage)}` : 'NOT RUN'}</strong></div>
-              <div><span>Long-term scan</span><strong>{latestLongTerm ? `${latestLongTerm.status} · ${words(latestLongTerm.stage)}` : 'NOT RUN'}</strong></div>
+              <div><span>Long-term scan</span><strong>{latestLongTerm ? `${latestLongTerm.status} · ${words(latestLongTerm.stage)}` : 'NOT RUN'}</strong>{latestLongTerm?.message ? <small style={{ display: 'block', opacity: 0.75 }}>{latestLongTerm.message}</small> : null}</div>
               <div><span>History</span><strong>{dashboard.data.bhavcopy.ready ? `${dashboard.data.bhavcopy.sessions} sessions` : 'PREPARING'}</strong></div>
             </div>
           </Panel>

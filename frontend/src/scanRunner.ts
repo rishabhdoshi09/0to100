@@ -20,14 +20,17 @@ export function isActiveStatus(status: string): boolean {
 }
 
 const STAGE_LABELS: Record<string, string> = {
-  PENDING: 'Starting the scan…',
-  PREPARING_HISTORY: 'Preparing market history…',
-  HISTORY_READY: 'Market history ready…',
+  PENDING: 'Queued — waiting for the market-ops worker…',
+  ACCEPTED: 'Worker picked up the job…',
+  STARTING: 'Worker picked up the job…',
+  PREPARING_HISTORY: 'Preparing official NSE price history…',
+  HISTORY_READY: 'Official history ready…',
   LOADING_UNIVERSE: 'Loading the NSE universe…',
   SCANNING: 'Scanning market candidates…',
   RANKING: 'Ranking qualified ideas…',
   SAVING: 'Saving the latest results…',
-  TECHNICAL_SCREEN: 'Screening long-term candidates…',
+  TECHNICAL_SCREEN: 'Screening long-term technicals across the universe…',
+  FUNDAMENTALS: 'Scoring current fundamentals on shortlisted names…',
   FETCHING_SOURCES: 'Fetching news sources…',
   RECOVERED: 'Recovering interrupted job…',
 }
@@ -39,8 +42,8 @@ export function friendlyStageLabel(stage: string, status: string): string {
   if (status === 'BLOCKED') return 'Scan blocked'
   const key = String(stage || '').trim().toUpperCase()
   if (key && STAGE_LABELS[key]) return STAGE_LABELS[key]
-  if (!key && status === 'PENDING') return 'Starting the scan…'
-  if (!key && status === 'RUNNING') return 'Working on the scan…'
+  if (!key && status === 'PENDING') return STAGE_LABELS.PENDING
+  if (!key && status === 'RUNNING') return 'Working — progress updates every few seconds…'
   if (key) return key.replace(/_/g, ' ').toLowerCase().replace(/^\w/, (c) => c.toUpperCase())
   return 'Scanning…'
 }
@@ -49,10 +52,26 @@ export function buildProgressLine(operation: OperationRecord | null): string | n
   if (!operation) return null
   const total = Number(operation.progress_total || 0)
   const current = Number(operation.progress_current || 0)
+  const message = String(operation.message || '').trim()
   if (total > 0) {
-    return `Scanning ${current.toLocaleString('en-IN')} of ${total.toLocaleString('en-IN')} stocks`
+    const noun = String(operation.kind || '').includes('LONG_TERM') ? 'names' : 'stocks'
+    const counts = `${current.toLocaleString('en-IN')} of ${total.toLocaleString('en-IN')} ${noun}`
+    if (message && (/\d+\s*\/\s*\d+/.test(message) || /of\s+[\d,]+/i.test(message))) {
+      return message
+    }
+    return message ? `${message} · ${counts}` : counts
   }
-  return null
+  return message || null
+}
+
+export function formatElapsed(seconds: number): string {
+  const s = Math.max(0, Math.floor(Number(seconds) || 0))
+  if (s < 60) return `${s}s`
+  const m = Math.floor(s / 60)
+  const rem = s % 60
+  if (m < 60) return `${m}m ${rem}s`
+  const h = Math.floor(m / 60)
+  return `${h}h ${m % 60}m`
 }
 
 export function qualifiedResultLine(operation: OperationRecord | null): string | null {
@@ -245,6 +264,12 @@ export function useScanRunner(kind: ScanKind, options: ScanRunnerOptions = {}): 
   const progressLine = useMemo(() => buildProgressLine(operation), [operation])
   const qualifiedLine = useMemo(() => qualifiedResultLine(operation), [operation])
   const percent = useMemo(() => progressPercent(operation), [operation])
+  const detailLine = useMemo(() => {
+    if (progressLine) return progressLine
+    const message = String(operation?.message || '').trim()
+    if (message && message.toLowerCase() !== friendlyPhase.toLowerCase()) return message
+    return null
+  }, [friendlyPhase, operation?.message, progressLine])
 
   const isActive = Boolean(
     isBusy || (operation && isActiveStatus(operation.status)),
@@ -256,7 +281,7 @@ export function useScanRunner(kind: ScanKind, options: ScanRunnerOptions = {}): 
     isActive,
     isBusy,
     friendlyPhase,
-    progressLine,
+    progressLine: detailLine,
     qualifiedLine,
     percent,
     elapsedSeconds,

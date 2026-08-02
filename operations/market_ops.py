@@ -278,9 +278,25 @@ class MarketOperationsWorker:
             operation_id,
             "TECHNICAL_SCREEN",
             f"Running long-term screen across {history.get('symbols', 0):,} history symbols",
+            0,
+            max(1, int(history.get("symbols") or 1)),
         )
         from scan.long_term_service import run_long_term_scan
-        report = run_long_term_scan(refresh_fundamentals=refresh, save=True)
+
+        def progress(current: int, total: int, message: str) -> None:
+            text = str(message or "")
+            lower = text.lower()
+            if "fundamental" in lower:
+                stage = "FUNDAMENTALS"
+            elif "sav" in lower:
+                stage = "SAVING"
+            elif "histor" in lower or "bhav" in lower:
+                stage = "PREPARING_HISTORY"
+            else:
+                stage = "TECHNICAL_SCREEN"
+            self._progress(operation_id, stage, text, current, total)
+
+        report = run_long_term_scan(refresh_fundamentals=refresh, save=True, progress=progress)
         result = _operation_result(report)
         status = str(getattr(report, "status", ""))
         if hasattr(report, "ok") and not report.ok and status != "NO_CANDIDATES":

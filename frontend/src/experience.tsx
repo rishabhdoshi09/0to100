@@ -28,6 +28,7 @@ import { GLOSSARY, PAGE_GUIDE } from './productLanguage'
 import { isLongTermPick, longTermPicks, MIN_LT_FUNDAMENTAL_COVERAGE } from './longTermPicks'
 import { fetchTradePlan, type TradePlan } from './productApi'
 import type { ScanRunnerHandle } from './scanRunner'
+import { formatElapsed } from './scanRunner'
 
 export { DisplayDepthToggle } from './displayDepth'
 
@@ -191,7 +192,7 @@ export function LiveScanBanner({
           <span>{scan.friendlyPhase}</span>
         </div>
         {scan.isActive && (
-          <small className="live-scan-elapsed">{scan.elapsedSeconds}s</small>
+          <small className="live-scan-elapsed">{formatElapsed(scan.elapsedSeconds)}</small>
         )}
         {(showFailed || showNotice && !scan.isActive) && (
           <button type="button" className="live-scan-dismiss" onClick={() => scan.dismissNotice()} aria-label="Dismiss">×</button>
@@ -200,7 +201,10 @@ export function LiveScanBanner({
       {scan.isActive && (
         <>
           <p className="live-scan-detail">
-            {scan.progressLine || scan.friendlyPhase}
+            {scan.progressLine
+              || (scan.operation?.message && scan.operation.message !== scan.friendlyPhase
+                ? scan.operation.message
+                : 'Still working — counts update as each batch finishes')}
             {scan.qualifiedLine ? ` · ${scan.qualifiedLine}` : ''}
           </p>
           {scan.percent != null ? (
