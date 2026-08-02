@@ -284,7 +284,7 @@ def build_equity_dossier(
 
     options_context: dict[str, Any] = {}
     try:
-        from options.chain_fetch import chain_workspace
+        from options.chain_fetch import chain_workspace_cached
 
         spot = price.get("latest_price")
         options_context = chain_workspace_cached(symbol, spot=float(spot) if spot else None)
