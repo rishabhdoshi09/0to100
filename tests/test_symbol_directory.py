@@ -96,7 +96,7 @@ def test_symbols_api_returns_full_directory(monkeypatch):
     assert all(row["symbol"].startswith("N") or "N" in row["symbol"] for row in n_body["symbols"][:10])
 
 
-def test_empty_directory_not_capped_at_m(monkeypatch):
+def test_empty_directory_always_covers_n_to_z(monkeypatch):
     from product.symbol_directory import build_symbol_directory
     import data.nse_universe as U
 
@@ -108,11 +108,8 @@ def test_empty_directory_not_capped_at_m(monkeypatch):
     monkeypatch.setattr(U, "_load_from_nse_website", lambda: ([], {}))
     monkeypatch.setattr(U, "_filter_to_instruments", lambda symbols, token_map: symbols)
 
-    # Old bug: limit=1000 stopped around I/M and dropped N…Z
-    thin = build_symbol_directory(query="", limit=100)
-    assert thin["truncated"] is True or "N" not in thin["letter_coverage"]
-
-    full = build_symbol_directory(query="", limit=0)
+    # Even a thin requested limit must expand on empty query so N…Z stay visible.
+    full = build_symbol_directory(query="", limit=100)
     assert full["truncated"] is False
     assert {"N", "O", "P", "Z"}.issubset(set(full["letter_coverage"]))
     assert full["count"] == len(fake)
