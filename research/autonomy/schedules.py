@@ -93,6 +93,33 @@ def session_phase(now_ist, holidays=None) -> str:
     return "off_session"
 
 
+def kite_login_optional(now_ist, holidays=None) -> bool:
+    """True when Zerodha session is not required for bhavcopy-first product paths."""
+    if not _is_session_day(now_ist, holidays):
+        return True
+    if in_auth_window(now_ist, holidays) or market_is_open(now_ist, holidays):
+        return False
+    return session_phase(now_ist, holidays) == "off_session"
+
+
+def next_session_start(now_ist, holidays=None):
+    """Next NSE session day at AUTH_WINDOW_START (IST-aware when input is aware)."""
+    from datetime import datetime, timedelta
+
+    holidays = holidays or set()
+    tz = getattr(now_ist, "tzinfo", None)
+    probe = now_ist.date()
+    for _ in range(14):
+        if probe.weekday() < 5 and probe not in holidays:
+            start = datetime.combine(probe, AUTH_WINDOW_START)
+            if tz is not None:
+                start = start.replace(tzinfo=tz)
+            if start > now_ist:
+                return start
+        probe += timedelta(days=1)
+    return None
+
+
 def scan_slot(now_ist, holidays=None) -> str | None:
     """Deterministic scan slot, or None when no scan is scheduled."""
     if in_premarket_window(now_ist, holidays):

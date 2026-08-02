@@ -419,6 +419,10 @@ class Supervisor:
     def _gated_state(self, hint):
         if self.owner_state.get("halted"):
             return ST.HALTED
+        now = self.deps.now_ist()
+        if SCH.kite_login_optional(now, self.deps.holidays()):
+            if hint in (ST.AUTH_REQUIRED, ST.DATA_REFRESHING, ST.STARTING, None):
+                return ST.OBSERVING
         if H.AUTH_MISSING in self.failures or H.AUTH_EXPIRED in self.failures:
             return ST.AUTH_REQUIRED
         if H.SNAPSHOT_STALE in self.failures:

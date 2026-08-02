@@ -10,7 +10,8 @@ from datetime import datetime, timedelta
 
 import pandas as pd
 import requests
-import streamlit as st
+
+from core.cache_ttl import ttl_cache
 
 logger = logging.getLogger("quantterm.fii_dii")
 
@@ -71,7 +72,7 @@ def _fetch_fii_dii_activity_live(days: int = 30) -> pd.DataFrame:
     )
 
 
-@st.cache_data(ttl=3600)
+@ttl_cache(ttl_seconds=3600)
 def get_fii_dii_activity(days: int = 30) -> pd.DataFrame:
     """
     FII/DII cash-market activity (₹ Cr). Reads persisted store first; live NSE fetch
@@ -84,7 +85,7 @@ def get_fii_dii_activity(days: int = 30) -> pd.DataFrame:
     return _fetch_fii_dii_activity_live(days)
 
 
-@st.cache_data(ttl=3600)
+@ttl_cache(ttl_seconds=3600)
 def get_bulk_deals(days: int = 10) -> pd.DataFrame:
     """Bulk deals from canonical institutional_flows cache (NSE largedeal snapshot)."""
     from data.institutional_flows import get_flows
@@ -114,7 +115,7 @@ def get_bulk_deals(days: int = 10) -> pd.DataFrame:
     return pd.DataFrame(columns=["date", "symbol", "client_name", "buy_sell", "quantity", "price"])
 
 
-@st.cache_data(ttl=3600)
+@ttl_cache(ttl_seconds=3600)
 def get_block_deals(days: int = 10) -> pd.DataFrame:
     """Block deals from canonical institutional_flows cache when present."""
     from data.institutional_flows import get_flows
@@ -267,6 +268,6 @@ def get_fii_derivative_stats_uncached() -> dict:
     return dict(result)
 
 
-@st.cache_data(ttl=3600)
+@ttl_cache(ttl_seconds=3600)
 def get_fii_derivative_stats() -> dict:
     return get_fii_derivative_stats_uncached()

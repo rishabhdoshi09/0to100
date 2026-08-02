@@ -18,6 +18,7 @@ from typing import Callable
 from research.autonomy import job_store as JS
 from research.autonomy import schedules as SCH
 from research.autonomy import supervisor_state as ST
+from research.autonomy import health as H
 
 
 def _stamp() -> str:
@@ -106,6 +107,8 @@ def _heartbeat(
     except Exception:
         counts = {}
     failures = sorted(getattr(supervisor, "failures", set()) or set())
+    if _phase(supervisor) == "off_session":
+        failures = [f for f in failures if f not in {H.AUTH_MISSING, H.AUTH_EXPIRED}]
     failure_text = ",".join(failures[:4]) if failures else "none"
     active_text = ""
     if active_job:

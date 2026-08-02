@@ -242,12 +242,26 @@ def _auth_health(deps):
     return AUTH.AuthHealth(AUTH.SESSION_VALID if valid else AUTH.TOKEN_MISSING, "test")
 
 
+def _kite_login_optional(ctx) -> bool:
+    now = ctx.deps.now_ist()
+    holidays = ctx.deps.holidays()
+    return SCH.kite_login_optional(now, holidays)
+
+
 def run_auth_health(ctx) -> JobResult:
     health = _auth_health(ctx.deps)
     if health.status == AUTH.SESSION_VALID:
         return JobResult(JS.SUCCEEDED, "AUTH_READY", clears={H.AUTH_MISSING, H.AUTH_EXPIRED,
                          H.PROVIDER_UNAVAILABLE}, state_hint=ST.DATA_REFRESHING,
                          unblocks=(DEP_AUTH,), metadata=health.as_dict())
+    if _kite_login_optional(ctx):
+        return JobResult(
+            JS.SUCCEEDED,
+            "Zerodha login optional outside session window · bhavcopy scans continue",
+            clears={H.AUTH_MISSING, H.AUTH_EXPIRED, H.PROVIDER_UNAVAILABLE},
+            state_hint=ST.OBSERVING,
+            metadata={**health.as_dict(), "kite_deferred": True},
+        )
     if health.status == AUTH.PROVIDER_UNAVAILABLE:
         return JobResult(JS.RETRYABLE_FAILED, "Zerodha provider temporarily unavailable",
                          error_code=health.error_code or "PROVIDER_UNAVAILABLE",
@@ -263,6 +277,13 @@ def run_auth_health(ctx) -> JobResult:
 
 def run_instrument_refresh(ctx) -> JobResult:
     if not _auth_health(ctx.deps).valid:
+        if _kite_login_optional(ctx):
+            return JobResult(
+                JS.SUCCEEDED,
+                "instrument refresh deferred until auth window",
+                clears={H.AUTH_MISSING, H.AUTH_EXPIRED},
+                metadata={"kite_deferred": True},
+            )
         return JobResult(JS.BLOCKED, "auth required before instrument refresh",
                          failures={H.AUTH_MISSING}, state_hint=ST.AUTH_REQUIRED,
                          blocked_on=DEP_AUTH, new_entries_allowed=False)
@@ -279,6 +300,31 @@ def run_instrument_refresh(ctx) -> JobResult:
 
 def run_data_refresh(ctx) -> JobResult:
     if not _auth_health(ctx.deps).valid:
+        if _kite_login_optional(ctx):
+            try:
+                info = ctx.deps.update_bhavcopy()
+            except Exception as exc:
+                return JobResult(
+                    JS.RETRYABLE_FAILED,
+                    "bhavcopy refresh failed while Kite deferred",
+                    error_code="BHAVCOPY_ERROR",
+                    error_message=str(exc),
+                )
+            if info.get("ready"):
+                return JobResult(
+                    JS.SUCCEEDED,
+                    "official bhavcopy ready · Kite snapshot deferred until login window",
+                    metadata={**info, "kite_deferred": True},
+                    state_hint=ST.OBSERVING,
+                    clears={H.PROVIDER_UNAVAILABLE},
+                )
+            return JobResult(
+                JS.BLOCKED,
+                "bhavcopy not ready; Kite login deferred until next session window",
+                blocked_on="BHAVCOPY_SOURCE",
+                metadata=info,
+                state_hint=ST.DATA_BLOCKED,
+            )
         return JobResult(JS.BLOCKED, "auth required before data refresh",
                          failures={H.AUTH_MISSING}, state_hint=ST.AUTH_REQUIRED,
                          blocked_on=DEP_AUTH, new_entries_allowed=False)
