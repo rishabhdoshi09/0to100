@@ -341,6 +341,31 @@ def cmd_fii_dii_backfill(args) -> None:
     print()
 
 
+def cmd_ca_ingest(args) -> None:
+    """Ingest an operator-supplied corporate-action ledger (never invents events)."""
+    from data import corporate_actions as CA
+
+    if args.status_only:
+        print(json.dumps(CA.ledger_status(), indent=2, default=str))
+        return
+    if not args.source:
+        print("Provide --source path/to/ca_events.json|.csv (or --status)")
+        raise SystemExit(2)
+    report = CA.ingest_from_path(args.source)
+    print(json.dumps(report, indent=2, default=str))
+
+
+def cmd_universe_history(args) -> None:
+    """Bootstrap or inspect point-in-time universe membership."""
+    from data import universe_history as UH
+
+    if args.status_only:
+        print(json.dumps(UH.ledger_status(), indent=2, default=str))
+        return
+    report = UH.build_from_bhav(force=bool(args.force))
+    print(json.dumps(report, indent=2, default=str))
+
+
 def cmd_screener(args) -> None:
     """
     Screen NSE stocks by fundamentals + technicals, or fetch one symbol's data.
@@ -1049,6 +1074,20 @@ def build_parser() -> argparse.ArgumentParser:
     fii.add_argument("--days", type=int, default=90, metavar="N", help="Summary window label (default 90)")
     fii.add_argument("--status", dest="status_only", action="store_true", help="Print backfill status JSON")
 
+    ca = sub.add_parser(
+        "ca-ingest",
+        help="Ingest operator-supplied corporate actions into logs/ca_events.json (never invents events)",
+    )
+    ca.add_argument("--source", metavar="FILE", help="JSON or CSV with symbol,ex_date,factor,type")
+    ca.add_argument("--status", dest="status_only", action="store_true", help="Print CA ledger status")
+
+    uh = sub.add_parser(
+        "universe-history",
+        help="Bootstrap point-in-time universe membership from local bhav (or show status)",
+    )
+    uh.add_argument("--force", action="store_true", help="Rebuild even if ledger already exists")
+    uh.add_argument("--status", dest="status_only", action="store_true", help="Print universe history status")
+
     ens = sub.add_parser("ensemble", help="Print ensemble ML signal for a symbol")
     ens.add_argument("--symbol", required=True, metavar="SYMBOL", help="NSE symbol, e.g. RELIANCE")
 
@@ -1105,6 +1144,8 @@ def main() -> None:
         "screener":   cmd_screener,
         "fundamentals-backfill": cmd_fundamentals_backfill,
         "fii-dii-backfill": cmd_fii_dii_backfill,
+        "ca-ingest": cmd_ca_ingest,
+        "universe-history": cmd_universe_history,
         "ensemble":   cmd_ensemble,
         "lgb":        cmd_lgb,
         "multi":      cmd_multi,

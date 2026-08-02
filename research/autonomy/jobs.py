@@ -147,13 +147,58 @@ class Deps:
 
     def corporate_actions_status(self):
         from data import corporate_actions as CA
-        path = CA._events_path()
-        events = CA.load_events(path)
-        return {"available": path.exists(), "symbols": len(events), "path": str(path)}
+
+        return CA.ledger_status()
+
+    def ensure_corporate_actions(self):
+        """Validate existing ledger or ingest an operator-supplied source.
+
+        Never invents CA events from price gaps. Looks for:
+          1. existing logs/ca_events.json
+          2. QT_CA_SOURCE_FILE
+          3. logs/ca_events.incoming.json / .csv
+        """
+        from data import corporate_actions as CA
+
+        status = CA.ledger_status()
+        if status.get("available") and int(status.get("events") or 0) > 0:
+            status["ingested"] = False
+            status["reason"] = "ledger_present"
+            return status
+
+        candidates = []
+        env_src = os.getenv("QT_CA_SOURCE_FILE", "").strip()
+        if env_src:
+            candidates.append(Path(env_src))
+        candidates.extend([
+            self.logs / "ca_events.incoming.json",
+            self.logs / "ca_events.incoming.csv",
+        ])
+        for src in candidates:
+            if src.exists():
+                info = CA.ingest_from_path(src)
+                info["ingested"] = True
+                info["reason"] = f"ingested:{src.name}"
+                return info
+        status["ingested"] = False
+        status["reason"] = "source_missing"
+        return status
 
     def universe_history_status(self):
         from data.nse_universe import point_in_time_universe
+
         return point_in_time_universe(self.now_ist().date())
+
+    def ensure_universe_history(self):
+        """Bootstrap PIT membership from local bhav when the ledger is missing."""
+        from data import universe_history as UH
+
+        status = UH.ledger_status()
+        if status.get("survivorship_complete"):
+            status["built"] = False
+            status["reason"] = status.get("reason") or "ledger_present"
+            return status
+        return UH.build_from_bhav(force=False)
 
     def warm_indices(self):
         from data.index_store import build_index_store
@@ -380,22 +425,35 @@ def run_bhavcopy_update(ctx) -> JobResult:
 
 def run_corporate_actions(ctx) -> JobResult:
     try:
-        info = ctx.deps.corporate_actions_status()
+        ensure = getattr(ctx.deps, "ensure_corporate_actions", None)
+        info = ensure() if callable(ensure) else ctx.deps.corporate_actions_status()
     except Exception as exc:
         return JobResult(JS.RETRYABLE_FAILED, "corporate-action validation failed",
                          error_code="CA_VALIDATION_ERROR", error_message=str(exc),
                          failures={H.CA_INCOMPLETE})
     if not info.get("available"):
         return JobResult(JS.BLOCKED,
-                         "official corporate-action table unavailable; affected historical research remains blocked",
+                         "official corporate-action table unavailable; drop "
+                         "logs/ca_events.incoming.json (or set QT_CA_SOURCE_FILE) "
+                         "with real NSE CA events — QuantTerm will not invent them",
                          failures={H.CA_INCOMPLETE}, blocked_on=DEP_CA_SOURCE, metadata=info)
-    return JobResult(JS.SUCCEEDED, f"corporate actions loaded · {info.get('symbols', 0)} symbols",
+    if int(info.get("events") or info.get("symbols") or 0) <= 0:
+        return JobResult(JS.BLOCKED,
+                         "corporate-action ledger is present but empty; research stays RAW",
+                         failures={H.CA_INCOMPLETE}, blocked_on=DEP_CA_SOURCE, metadata=info)
+    return JobResult(JS.SUCCEEDED,
+                     f"corporate actions loaded · {info.get('symbols', 0)} symbols / "
+                     f"{info.get('events', info.get('symbols', 0))} events",
                      clears={H.CA_INCOMPLETE}, metadata=info)
 
 
 def run_universe_history(ctx) -> JobResult:
     try:
-        info = ctx.deps.universe_history_status()
+        ensure = getattr(ctx.deps, "ensure_universe_history", None)
+        info = ensure() if callable(ensure) else ctx.deps.universe_history_status()
+        # Re-read PIT view so job metadata matches consumers.
+        status = ctx.deps.universe_history_status()
+        info = {**status, **{k: v for k, v in info.items() if k not in status}}
     except Exception as exc:
         return JobResult(JS.RETRYABLE_FAILED, "universe-history validation failed",
                          error_code="UNIVERSE_HISTORY_ERROR", error_message=str(exc),
@@ -404,8 +462,15 @@ def run_universe_history(ctx) -> JobResult:
         return JobResult(JS.BLOCKED, info.get("note") or "point-in-time universe unavailable",
                          failures={H.UNIVERSE_INCOMPLETE}, blocked_on=DEP_UNIVERSE_SOURCE,
                          metadata=info)
-    return JobResult(JS.SUCCEEDED, f"point-in-time universe ready · {len(info.get('symbols', []))} symbols",
-                     clears={H.UNIVERSE_INCOMPLETE}, metadata=info)
+    source = info.get("source") or "operator"
+    grade = "research-grade" if info.get("research_grade") else "inferred/bootstrap"
+    return JobResult(
+        JS.SUCCEEDED,
+        f"point-in-time universe ready · {len(info.get('symbols', []))} symbols "
+        f"({source}, {grade})",
+        clears={H.UNIVERSE_INCOMPLETE},
+        metadata=info,
+    )
 
 
 def run_index_warmup(ctx) -> JobResult:

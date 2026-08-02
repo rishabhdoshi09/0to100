@@ -355,6 +355,32 @@ def store_symbols() -> list[str]:
         return list(_store.keys())
 
 
+def symbol_date_spans() -> dict[str, dict]:
+    """Return {SYMBOL: {first, last, sessions}} from the raw in-memory store.
+
+    Dates are Python ``date`` objects. Empty store → {}.
+    """
+    out: dict[str, dict] = {}
+    with _lock:
+        items = list(_store.items())
+    for sym, df in items:
+        if df is None or getattr(df, "empty", True):
+            continue
+        try:
+            first = df.index.min()
+            last = df.index.max()
+            first_d = getattr(first, "date", lambda: first)()
+            last_d = getattr(last, "date", lambda: last)()
+            out[str(sym).upper()] = {
+                "first": first_d,
+                "last": last_d,
+                "sessions": int(len(df)),
+            }
+        except Exception:
+            continue
+    return out
+
+
 def reset_in_memory_store() -> None:
     """Clear the process-local symbol map (tests and worker isolation)."""
     global _store, _store_last_day, _store_sessions

@@ -434,39 +434,50 @@ def get_nse_universe_with_names() -> Dict[str, str]:
 
 
 def point_in_time_universe(as_of, path=None) -> dict:
-    """Survivorship-aware membership: the symbols that were TRADEABLE on `as_of`,
-    read from a point-in-time membership table (`logs/universe_history.json`, or
-    QT_UNIVERSE_HISTORY_FILE / `path`). Each row: {symbol, listed, delisted?}.
+    """Survivorship-aware membership: symbols TRADEABLE on `as_of`.
 
-    A symbol counts if listed ≤ as_of AND (no delisting OR delisted > as_of) — so
-    a stock that was live then delisted is INCLUDED for the dates it traded, which
-    is exactly what removes survivorship bias from a historical study.
+    Reads ``logs/universe_history.json`` (or QT_UNIVERSE_HISTORY_FILE / ``path``).
+    Supports both a bare JSON list and the versioned object form written by
+    ``data.universe_history``.
 
-    HONEST FALLBACK (invariant #1 — no fake data): when no history file exists we
-    CANNOT reconstruct the past membership, so we return today's survivors with
-    `survivorship_complete=False` and a note. The caller MUST treat that result as
-    biased. The delisted-symbol history has to come from NSE archives / a vendor;
-    this function will not invent it."""
+    HONEST FALLBACK: when no history file exists we return today's survivors with
+    ``survivorship_complete=False``. Callers MUST treat that as biased.
+    """
     import pandas as pd
-    base = Path(__file__).resolve().parent.parent
-    import os as _os
-    p = Path(path) if path else Path(
-        _os.getenv("QT_UNIVERSE_HISTORY_FILE", str(base / "logs" / "universe_history.json")))
+    from data.universe_history import history_path, ledger_status, _coerce_payload
+
+    p = Path(path) if path else history_path()
     asof = pd.Timestamp(as_of)
     if not p.exists():
-        return {"as_of": str(asof.date()), "symbols": get_nse_universe(),
-                "survivorship_complete": False,
-                "note": ("no membership history on file — returning TODAY's "
-                         "survivors; results built on this are survivorship-biased. "
-                         "Supply logs/universe_history.json from NSE archives.")}
+        return {
+            "as_of": str(asof.date()),
+            "symbols": get_nse_universe(),
+            "survivorship_complete": False,
+            "source": "",
+            "research_grade": False,
+            "note": (
+                "no membership history on file — returning TODAY's survivors; "
+                "results built on this are survivorship-biased. Supply "
+                "logs/universe_history.json from NSE archives, or run the "
+                "universe_history autonomy job to bootstrap from local bhav."
+            ),
+        }
     try:
-        rows = json.loads(p.read_text())
+        raw = json.loads(p.read_text(encoding="utf-8"))
     except Exception as exc:
-        return {"as_of": str(asof.date()), "symbols": get_nse_universe(),
-                "survivorship_complete": False,
-                "note": f"membership history unreadable ({exc}); using survivors."}
+        return {
+            "as_of": str(asof.date()),
+            "symbols": get_nse_universe(),
+            "survivorship_complete": False,
+            "source": "",
+            "research_grade": False,
+            "note": f"membership history unreadable ({exc}); using survivors.",
+        }
+
+    rows, meta = _coerce_payload(raw)
+    status = ledger_status(p)
     live: List[str] = []
-    for r in rows if isinstance(rows, list) else []:
+    for r in rows:
         try:
             sym = str(r["symbol"]).strip().upper()
             listed = pd.Timestamp(r["listed"])
@@ -475,8 +486,16 @@ def point_in_time_universe(as_of, path=None) -> dict:
                 live.append(sym)
         except Exception:
             continue
-    return {"as_of": str(asof.date()), "symbols": sorted(set(live)),
-            "survivorship_complete": True, "note": ""}
+    note = status.get("note") or ""
+    return {
+        "as_of": str(asof.date()),
+        "symbols": sorted(set(live)),
+        "survivorship_complete": True,
+        "source": status.get("source") or str(meta.get("source") or "operator"),
+        "research_grade": bool(status.get("research_grade")),
+        "note": note,
+        "rows": int(status.get("rows") or 0),
+    }
 
 
 def get_nse_universe_by_sector() -> Dict[str, List[str]]:

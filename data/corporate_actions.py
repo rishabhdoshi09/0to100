@@ -1,28 +1,17 @@
 """
-🔧 Corporate-Action Adjustment — make historical prices continuous & trustworthy.
+Corporate-Action Adjustment — make historical prices continuous & trustworthy.
 
-The professor's disqualifier, fixed: NSE bhavcopy is UNADJUSTED, so a 1:1 bonus
-or a 1→5 split reads as a phantom −50% / −80% crash. `core.data_integrity`
-DETECTS those gaps; this module REMOVES them, so a backtest measures price
-action, not accounting.
+NSE bhavcopy is UNADJUSTED, so a 1:1 bonus or a 1→5 split reads as a phantom
+crash. `core.data_integrity` DETECTS those gaps; this module REMOVES them when
+a real ledger is present.
 
-Design (deliberately minimal, and honest about data):
-
-  • An "event" is {symbol, ex_date, factor, type}. `factor` = the multiple by
-    which the SHARE COUNT rose on the ex-date: a 1:1 bonus → 2.0, a 1→5 split
-    → 5.0, a 3:1 bonus (3 new per 1 held) → 4.0. Prices BEFORE the ex-date are
-    divided by the cumulative factor; volumes are multiplied — the standard
-    back-adjustment that pins history to today's share base.
-  • adjust_frame() is a PURE function over a datetime-indexed OHLCV frame.
-  • load_events() reads a real CA table from `logs/ca_events.json`. If that file
-    is ABSENT it returns {} and the whole system behaves exactly as before —
-    there is NO synthesised or guessed adjustment (invariant #1: no fake data).
-    The events themselves must come from NSE corporate-actions archives; this
-    module cannot and will not invent them.
-
-Adjustment is applied ON READ (data.bhavcopy_store.get_ohlcv), so the on-disk
-store stays raw, there is no double-adjustment across rebuilds, and an updated
-CA table takes effect with no re-download.
+Design:
+  • An event is {symbol, ex_date, factor, type}. `factor` = share-count multiple
+    on the ex-date (1:1 bonus → 2.0, 1→5 split → 5.0).
+  • Prices BEFORE ex-date are divided by the cumulative factor; volumes multiplied.
+  • load_events() reads `logs/ca_events.json`. Absent file → {} (no fake data).
+  • This module NEVER invents events from price gaps. Operator/vendor ingest only.
+  • Adjustment is applied ON READ so the on-disk store stays raw.
 """
 from __future__ import annotations
 
@@ -39,22 +28,36 @@ def _events_path() -> Path:
     return Path(override) if override else _CA_FILE
 
 
+def events_path() -> Path:
+    return _events_path()
+
+
+def _coerce_rows(raw) -> list:
+    if isinstance(raw, list):
+        return [row for row in raw if isinstance(row, dict)]
+    if isinstance(raw, dict):
+        nested = raw.get("events") or raw.get("rows") or raw.get("data")
+        if isinstance(nested, list):
+            return [row for row in nested if isinstance(row, dict)]
+    return []
+
+
 def load_events(path=None) -> dict:
-    """Read the corporate-action table → {SYMBOL: [event, ...]}. Returns {} when
-    the file is absent or unreadable — NEVER a fabricated table (no-file ⇒ the
-    system runs exactly as it did before, un-adjusted but flagged by the
-    integrity guard). Each event: {ex_date, factor>0, type}. Malformed rows are
-    dropped, not guessed."""
+    """Read the corporate-action table → {SYMBOL: [event, ...]}.
+
+    Returns {} when the file is absent or unreadable — NEVER a fabricated table.
+    """
     import pandas as pd
+
     p = Path(path) if path else _events_path()
     if not p.exists():
         return {}
     try:
-        raw = json.loads(p.read_text())
+        raw = json.loads(p.read_text(encoding="utf-8"))
     except Exception:
         return {}
     out: dict[str, list[dict]] = {}
-    for row in raw if isinstance(raw, list) else []:
+    for row in _coerce_rows(raw):
         try:
             sym = str(row["symbol"]).strip().upper()
             factor = float(row["factor"])
@@ -64,8 +67,7 @@ def load_events(path=None) -> dict:
                 continue
             if typ not in _VALID_TYPES:
                 continue
-            out.setdefault(sym, []).append(
-                {"ex_date": ex, "factor": factor, "type": typ})
+            out.setdefault(sym, []).append({"ex_date": ex, "factor": factor, "type": typ})
         except Exception:
             continue
     for sym in out:
@@ -73,26 +75,111 @@ def load_events(path=None) -> dict:
     return out
 
 
-def adjust_frame(df, events, copy: bool = True):
-    """Back-adjust one symbol's OHLCV frame for its corporate actions. PURE by
-    default.
+def ledger_status(path=None) -> dict:
+    p = Path(path) if path else _events_path()
+    events = load_events(p)
+    return {
+        "available": p.exists(),
+        "path": str(p),
+        "symbols": len(events),
+        "events": sum(len(v) for v in events.values()),
+        "research_grade": bool(events),
+    }
 
-    `df` is datetime-indexed with any of open/high/low/close/volume (deliv_per, a
-    percentage, is left untouched). `events` is that symbol's event list. Bars
-    STRICTLY BEFORE an ex-date have prices divided by the event's factor and
-    volume multiplied by it, applied cumulatively across all events. Returns a new
-    frame; the input is not mutated. Empty/absent events → the frame is returned
-    unchanged (a copy). `copy=False` mutates `df` in place — for callers that
-    already own a private copy (e.g. bhavcopy_store.get_ohlcv) and want to skip a
-    redundant second copy."""
+
+def validate_event_rows(rows) -> list[dict]:
+    """Return cleaned serialisable event rows; drop invalid entries."""
+    import pandas as pd
+
+    cleaned: list[dict] = []
+    seen: set[tuple] = set()
+    for row in rows if isinstance(rows, list) else []:
+        if not isinstance(row, dict):
+            continue
+        try:
+            sym = str(row.get("symbol", "")).strip().upper()
+            factor = float(row.get("factor"))
+            ex = pd.Timestamp(row.get("ex_date"))
+            typ = str(row.get("type", "split")).lower()
+            if not sym or factor <= 0 or factor == 1.0 or pd.isna(ex):
+                continue
+            if typ not in _VALID_TYPES:
+                continue
+            key = (sym, str(ex.date()), round(factor, 8), typ)
+            if key in seen:
+                continue
+            seen.add(key)
+            cleaned.append({
+                "symbol": sym,
+                "ex_date": str(ex.date()),
+                "factor": float(factor),
+                "type": typ,
+            })
+        except Exception:
+            continue
+    cleaned.sort(key=lambda r: (r["symbol"], r["ex_date"], r["type"]))
+    return cleaned
+
+
+def write_events(rows, path=None, *, source: str = "operator") -> dict:
+    """Atomically write a corporate-action ledger. Never invents events."""
+    p = Path(path) if path else _events_path()
+    cleaned = validate_event_rows(rows)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "schema_version": 1,
+        "source": source,
+        "events": cleaned,
+    }
+    tmp = p.with_suffix(p.suffix + ".tmp")
+    tmp.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    tmp.replace(p)
+    try:
+        from data.bhavcopy_store import reload_corporate_actions
+
+        reload_corporate_actions()
+    except Exception:
+        pass
+    return ledger_status(p)
+
+
+def merge_events(rows, path=None, *, source: str = "operator_merge") -> dict:
+    """Merge new rows into the existing ledger (dedupe by symbol/ex_date/factor/type)."""
+    p = Path(path) if path else _events_path()
+    existing_raw: list = []
+    if p.exists():
+        try:
+            existing_raw = _coerce_rows(json.loads(p.read_text(encoding="utf-8")))
+        except Exception:
+            existing_raw = []
+    return write_events(list(existing_raw) + list(rows or []), path=p, source=source)
+
+
+def ingest_from_path(source_path, *, dest=None) -> dict:
+    """Ingest an operator-supplied CA JSON/CSV into the canonical ledger."""
+    src = Path(source_path)
+    if not src.exists():
+        raise FileNotFoundError(f"corporate-action source not found: {src}")
+    text = src.read_text(encoding="utf-8")
+    if src.suffix.lower() == ".csv":
+        import csv
+        from io import StringIO
+
+        rows = list(csv.DictReader(StringIO(text)))
+    else:
+        rows = _coerce_rows(json.loads(text))
+    return merge_events(rows, path=dest, source=f"ingest:{src.name}")
+
+
+def adjust_frame(df, events, copy: bool = True):
+    """Back-adjust one symbol's OHLCV frame for its corporate actions."""
     if df is None or getattr(df, "empty", True) or not events:
         return (df.copy() if copy else df) if df is not None else df
     import numpy as np
     import pandas as pd
+
     out = df.copy() if copy else df
     idx = pd.DatetimeIndex(out.index)
-    # divisor[i] = product of factors of every event whose ex_date is AFTER bar i.
-    # A DatetimeIndex comparison already yields a plain ndarray mask.
     divisor = np.ones(len(out), dtype=float)
     for e in events:
         divisor[idx < e["ex_date"]] *= e["factor"]
@@ -105,11 +192,10 @@ def adjust_frame(df, events, copy: bool = True):
 
 
 def is_continuous(df, threshold_pct: float = None) -> bool:
-    """True when the (adjusted) close series has NO phantom gap — the acceptance
-    test for a correct adjustment. Delegates to the same detector the integrity
-    guard uses, so 'adjusted' means exactly 'the guard now passes'."""
+    """True when the (adjusted) close series has NO phantom gap."""
     if df is None or getattr(df, "empty", True) or "close" not in df.columns:
         return True
     from core.data_integrity import phantom_gaps, _GAP_PCT
+
     thr = threshold_pct if threshold_pct is not None else _GAP_PCT
     return len(phantom_gaps(df["close"].to_numpy(dtype=float), thr)) == 0

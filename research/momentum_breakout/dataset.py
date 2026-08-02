@@ -133,8 +133,20 @@ class BhavDataProvider:
                 "note": self._universe.get("note", "")}
 
     def adjustment_policy(self):
-        return {"corporate_actions": "adjust_on_read via data/corporate_actions "
-                "(applies only if logs/ca_events.json present, else RAW)"}
+        from data.corporate_actions import load_events
+
+        events = load_events()
+        if events:
+            return {
+                "corporate_actions": "ADJUSTED",
+                "mode": "adjust_on_read",
+                "event_symbols": len(events),
+            }
+        return {
+            "corporate_actions": "RAW",
+            "mode": "unadjusted",
+            "event_symbols": 0,
+        }
 
 
 # ══════════════════════════════════════════════════════════════════════════════
