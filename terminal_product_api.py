@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import HTTPException
+from fastapi import Body, HTTPException
 
 import terminal_api as core
 from product.institutional_readiness import build_institutional_readiness
@@ -515,6 +515,37 @@ def symbols_directory(q: str = "", limit: int = 100) -> dict[str, Any]:
     from product.symbol_directory import build_symbol_directory
 
     return build_symbol_directory(query=q, limit=limit)
+
+
+@app.get("/api/holdings")
+def holdings_book() -> dict[str, Any]:
+    """Your demat holdings book (Zerodha sync or manual import). Never places orders."""
+    from product.holdings_book import build_holdings_payload
+
+    return build_holdings_payload()
+
+
+@app.post("/api/holdings/sync")
+def holdings_sync() -> dict[str, Any]:
+    """Pull CNC holdings from Zerodha Kite when connected."""
+    from product.holdings_book import sync_from_kite
+
+    return sync_from_kite()
+
+
+@app.post("/api/holdings/import")
+def holdings_import(body: dict[str, Any] = Body(default_factory=dict)) -> dict[str, Any]:
+    """Replace the local holdings book from a pasted/imported row list.
+
+    Body: ``{"holdings": [{"tradingsymbol"|"symbol", "quantity", "average_price", ...}, ...]}``
+    """
+    from product.holdings_book import enrich_ltp, save_holdings
+
+    rows = list(body.get("holdings") or body.get("rows") or [])
+    if not rows:
+        raise HTTPException(status_code=400, detail="Provide holdings: [{symbol, quantity, average_price, ...}]")
+    book = save_holdings(rows, source=str(body.get("source") or "import"))
+    return enrich_ltp(book)
 
 
 @app.get("/api/book-correlation")

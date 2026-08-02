@@ -198,11 +198,14 @@ def _is_valid_symbol(sym: str) -> bool:
     # Max 15 chars (MCDOWELL-N = 10, BAJAJ-AUTO = 10, BAJAJFINSV = 10)
     if len(sym) > 15:
         return False
-    # Reject specific bad suffixes that indicate non-equity instruments
-    # -ST=suspended, -BZ=trade-to-trade, -SF=settlement, -IT/-IL=institutional
-    # -BE/-BL=rights/book, -SM=SME, -N0..-N9=bonds/NCDs, -NL=non-listed
+    # Reject specific bad suffixes that indicate non-equity / non-holdable junk.
+    # -BE is KEEP: NSE Trade-for-Trade / book-entry series — retail often holds these
+    # (e.g. GAUDIUMIVF-BE). -BZ stays out of the research scan universe (GSM/T2T junk
+    # filter) but holdings import still accepts the raw broker symbol separately.
+    # -ST=suspended, -SF=settlement, -IT/-IL=institutional, -BL=rights/book,
+    # -SM=SME, -N0..-N9=bonds/NCDs, -NL=non-listed
     _BAD_SUFFIXES = (
-        "-ST", "-BZ", "-SF", "-IT", "-IL", "-BE", "-BL", "-SM",
+        "-ST", "-BZ", "-SF", "-IT", "-IL", "-BL", "-SM",
         "-N0", "-N1", "-N2", "-N3", "-N4", "-N5", "-N6", "-N7", "-N8", "-N9",
         "-NL", "-NI", "-NA", "-NB", "-NC", "-ND", "-NE", "-NF", "-NG",
     )
@@ -212,11 +215,11 @@ def _is_valid_symbol(sym: str) -> bool:
     # Reject if symbol ends in a digit after a hyphen (bond series like AAFS29A-N0)
     if "-" in sym:
         after_hyphen = sym.split("-")[-1]
-        # Keep BAJAJ-AUTO, MCDOWELL-N; reject -N0, -N3, -BZ, -ST etc.
+        # Keep BAJAJ-AUTO, MCDOWELL-N, GAUDIUMIVF-BE; reject -N0, -N3, -BZ, -ST etc.
         if after_hyphen and after_hyphen[-1].isdigit():
             return False
         # Also reject 2-char suffixes that are all letters but in bad set
-        if len(after_hyphen) == 2 and after_hyphen.isalpha() and after_hyphen not in ("AU", "MO"):
+        if len(after_hyphen) == 2 and after_hyphen.isalpha() and after_hyphen not in ("AU", "MO", "BE"):
             return False
     # Reject ETF iNAV tickers (indicative NAV — not tradeable stocks)
     if sym.endswith("INAV"):

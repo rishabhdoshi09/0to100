@@ -11,9 +11,13 @@ import {
 } from './components'
 import { boolLabel, money, pct, score, words } from './format'
 import {
+  fetchHoldings,
   fetchInstitutionalStack,
   fetchTargetPortfolio,
+  importHoldings,
   refreshFiiDiiStore,
+  syncHoldings,
+  type HoldingsBook,
   type InstitutionalDomain,
   type InstitutionalStack,
 } from './productApi'
@@ -226,9 +230,23 @@ export function StockIntelligenceView(props: ViewProps) {
   )
 }
 
-export function PortfolioView({ dashboard, runControl }: ViewProps) {
+export function PortfolioView({ dashboard, runControl, setSelected, setActive }: ViewProps) {
   const [target, setTarget] = useState<Awaited<ReturnType<typeof fetchTargetPortfolio>> | null>(null)
+  const [holdings, setHoldings] = useState<HoldingsBook | null>(null)
+  const [holdingsBusy, setHoldingsBusy] = useState('')
+  const [importText, setImportText] = useState('')
+  const [holdingsError, setHoldingsError] = useState('')
   const paperReturn = dashboard.paper.capital > 0 ? ((dashboard.paper.equity / dashboard.paper.capital) - 1) * 100 : null
+
+  const reloadHoldings = async () => {
+    try {
+      setHoldings(await fetchHoldings())
+      setHoldingsError('')
+    } catch (reason) {
+      setHoldings(null)
+      setHoldingsError(reason instanceof Error ? reason.message : 'Holdings unavailable')
+    }
+  }
 
   useEffect(() => {
     let alive = true
@@ -238,22 +256,144 @@ export function PortfolioView({ dashboard, runControl }: ViewProps) {
     return () => { alive = false }
   }, [dashboard.autonomy.heartbeat_ist, dashboard.paper.equity])
 
+  useEffect(() => {
+    void reloadHoldings()
+  }, [])
+
   const summary = target?.summary
+  const hSummary = holdings?.summary
+
+  const onSync = async () => {
+    setHoldingsBusy('sync')
+    setHoldingsError('')
+    try {
+      const book = await syncHoldings()
+      setHoldings(book)
+      if (!book.available) setHoldingsError(book.message || 'Sync returned no holdings')
+    } catch (reason) {
+      setHoldingsError(reason instanceof Error ? reason.message : 'Zerodha sync failed')
+    } finally {
+      setHoldingsBusy('')
+    }
+  }
+
+  const onImport = async () => {
+    const lines = importText.split(/\n+/).map((line) => line.trim()).filter(Boolean)
+    const rows: Array<Record<string, unknown>> = []
+    for (const line of lines) {
+      // SYMBOL qty avg [ltp]  — e.g. GAUDIUMIVF-BE 118 112.34 137.50
+      const parts = line.split(/[\s,]+/).filter(Boolean)
+      if (parts.length < 3) continue
+      const symbol = parts[0].toUpperCase()
+      const quantity = Number(parts[1])
+      const average_price = Number(parts[2])
+      const last_price = parts[3] != null ? Number(parts[3]) : average_price
+      if (!symbol || !(quantity > 0) || !(average_price >= 0)) continue
+      rows.push({ tradingsymbol: symbol, quantity, average_price, last_price })
+    }
+    if (!rows.length) {
+      setHoldingsError('Paste lines like: GAUDIUMIVF-BE 118 112.34 137.50')
+      return
+    }
+    setHoldingsBusy('import')
+    setHoldingsError('')
+    try {
+      const book = await importHoldings(rows, 'paste')
+      setHoldings(book)
+      setImportText('')
+    } catch (reason) {
+      setHoldingsError(reason instanceof Error ? reason.message : 'Import failed')
+    } finally {
+      setHoldingsBusy('')
+    }
+  }
+
+  const openHolding = (symbol: string) => {
+    const clean = symbol.trim().toUpperCase()
+    if (!clean) return
+    // Stock Intelligence uses EQ research ticker; strip series suffix for workspace.
+    const research = clean.replace(/-(BE|BZ|BL|SM)$/i, '')
+    setSelected(research || clean)
+    setActive('Stock Intelligence')
+  }
 
   return (
     <section className="workspace-view">
-      <div className="inline-actions"><button type="button" onClick={() => void runControl('RUN_CYCLE_NOW')}>Request paper cycle</button><button type="button" onClick={() => void runControl(dashboard.autonomy.new_paper_entries ? 'PAUSE_NEW_PAPER_ENTRIES' : 'RESUME_NEW_PAPER_ENTRIES')}>{dashboard.autonomy.new_paper_entries ? 'Pause new entries' : 'Resume new entries'}</button></div>
+      <div className="inline-actions">
+        <button type="button" disabled={!!holdingsBusy} onClick={() => void onSync()}>
+          {holdingsBusy === 'sync' ? 'Syncing Zerodha…' : 'Sync Zerodha holdings'}
+        </button>
+        <button type="button" onClick={() => void runControl('RUN_CYCLE_NOW')}>Request paper cycle</button>
+        <button type="button" onClick={() => void runControl(dashboard.autonomy.new_paper_entries ? 'PAUSE_NEW_PAPER_ENTRIES' : 'RESUME_NEW_PAPER_ENTRIES')}>
+          {dashboard.autonomy.new_paper_entries ? 'Pause new entries' : 'Resume new entries'}
+        </button>
+      </div>
+      {holdingsError && <div className="api-warning">{holdingsError}</div>}
       <div className="view-metrics">
-        <MetricCard label="PAPER CAPITAL" value={money(dashboard.paper.capital)} />
-        <MetricCard label="PAPER EQUITY" value={money(dashboard.paper.equity)} detail={pct(paperReturn)} tone="green" />
-        <MetricCard label="OPEN RISK" value={money(dashboard.paper.open_risk)} detail={`${(dashboard.paper.risk_per_trade_pct * 100).toFixed(1)}% risk/trade`} tone="amber" />
-        <MetricCard label="POSITIONS" value={String(dashboard.paper.open_positions.length)} detail={`Max ${dashboard.paper.max_positions}`} tone="purple" />
+        <MetricCard label="DEMAT INVESTED" value={money(hSummary?.invested || 0)} detail={holdings?.available ? `${hSummary?.count || 0} holdings · ${holdings.source || 'book'}` : 'Not synced'} />
+        <MetricCard label="DEMAT VALUE" value={money(hSummary?.current_value || 0)} detail={hSummary ? pct(hSummary.pnl_pct) : '—'} tone="green" />
+        <MetricCard label="DEMAT P&L" value={money(hSummary?.pnl || 0)} detail={hSummary?.day_pnl != null ? `Day ${money(hSummary.day_pnl)}` : '—'} tone={(hSummary?.pnl || 0) >= 0 ? 'green' : 'amber'} />
+        <MetricCard label="PAPER EQUITY" value={money(dashboard.paper.equity)} detail={pct(paperReturn)} tone="purple" />
         {summary && (
           <MetricCard label="TARGET PORTFOLIO" value={target?.available ? `${summary.target_positions} targets` : 'EMPTY'} detail={target?.available ? `Exec ${summary.executable_changes} · blocked ${summary.blocked_changes}` : target?.message || '—'} tone={target?.available ? 'cyan' : 'amber'} />
         )}
       </div>
       <div className="portfolio-workspace">
-        <Panel title="CANONICAL TARGET PORTFOLIO" subtitle="Read-only intelligence target book · not paper">
+        <Panel title="MY HOLDINGS · DEMAT" subtitle="Zerodha CNC book · includes -BE series · not paper">
+          {!holdings && <p className="panel-copy">Loading demat holdings…</p>}
+          {holdings && !holdings.available && (
+            <div>
+              <p className="panel-copy">{holdings.message || 'No holdings saved yet.'}</p>
+              <p className="panel-copy">Sync from Zerodha, or paste lines: SYMBOL QTY AVG [LTP]</p>
+            </div>
+          )}
+          {holdings?.available && (
+            <table className="radar-table">
+              <thead>
+                <tr>
+                  <th>Symbol</th>
+                  <th>Qty</th>
+                  <th>Avg</th>
+                  <th>LTP</th>
+                  <th>Invested</th>
+                  <th>P&L</th>
+                </tr>
+              </thead>
+              <tbody>
+                {holdings.holdings.map((row) => (
+                  <tr key={row.tradingsymbol}>
+                    <td>
+                      <button type="button" className="linkish" onClick={() => openHolding(row.tradingsymbol)}>
+                        {row.tradingsymbol}
+                      </button>
+                    </td>
+                    <td>{row.quantity}</td>
+                    <td>{money(row.average_price)}</td>
+                    <td>{money(row.last_price)}</td>
+                    <td>{money(row.invested)}</td>
+                    <td className={row.pnl >= 0 ? 'positive' : 'negative'}>
+                      {money(row.pnl)} ({pct(row.pnl_pct)})
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+          <div className="holdings-import" style={{ marginTop: 12 }}>
+            <textarea
+              aria-label="Paste holdings"
+              placeholder={'ARSSBL 25 609.06 510.80\nFILATFASH 229 0.25 0.19\nGAUDIUMIVF-BE 118 112.34 137.50\nNACLIND 103 235.51 188.93\nSKMEGGPROD 154 205 249.85'}
+              value={importText}
+              onChange={(event) => setImportText(event.target.value)}
+              rows={4}
+              style={{ width: '100%', fontFamily: 'inherit' }}
+            />
+            <button type="button" disabled={!!holdingsBusy || !importText.trim()} onClick={() => void onImport()}>
+              {holdingsBusy === 'import' ? 'Importing…' : 'Import pasted holdings'}
+            </button>
+          </div>
+        </Panel>
+        <Panel title="CANONICAL TARGET PORTFOLIO" subtitle="Read-only intelligence target book · not demat">
           {!target && <p className="panel-copy">Loading target portfolio projection…</p>}
           {target && !target.available && <p className="panel-copy">{target.message || 'No persisted target portfolio yet.'}</p>}
           {target?.available && summary && (

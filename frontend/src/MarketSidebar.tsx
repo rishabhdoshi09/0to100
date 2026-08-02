@@ -15,7 +15,7 @@ const SECONDARY_NAV = [
   ['◈', 'News & Events', 'News & Events'],
   ['▤', 'Research Data', 'Research Data'],
   ['⬡', 'F&O Desk', 'F&O Desk'],
-  ['▣', 'Paper Portfolio', 'Paper Portfolio'],
+  ['▣', 'My Holdings', 'Paper Portfolio'],
   ['◌', 'System Health', 'System Health'],
 ] as const
 

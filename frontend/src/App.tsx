@@ -21,7 +21,7 @@ import {
   PortfolioView,
 } from './views'
 import type { DisplayDepth } from './productLanguage'
-import { addWatchlistItem, fetchSymbolDirectory } from './productApi'
+import { addWatchlistItem, fetchHoldings, fetchSymbolDirectory } from './productApi'
 import { useScanRunner } from './scanRunner'
 import { ReportPdfViewer } from './ReportPdfViewer'
 import type { ChartBar, ControlName, DashboardPayload, OperationRecord } from './types'
@@ -152,13 +152,13 @@ const pageTitles: Record<string, string> = {
   'News & Events': 'News & Events',
   'Research Data': 'Research Data',
   'F&O Desk': 'F&O Desk',
-  'Paper Portfolio': 'Paper Portfolio',
+  'Paper Portfolio': 'My Holdings',
   'System Health': 'System Health',
   // legacy route keys
   'Command Center': 'Home',
   Scanner: 'Market Scanner',
   'Long-Term': 'Long-Term Picks',
-  Portfolio: 'Paper Portfolio',
+  Portfolio: 'My Holdings',
   'Market Internals': 'Market Overview',
   Automation: 'System Health',
 }
@@ -174,7 +174,8 @@ const pageSubtitles: Record<string, string> = {
   'News & Events': 'Dated market context with source health.',
   'Research Data': 'Verified snapshots, data platform jobs, and evidence uploads.',
   'F&O Desk': 'Mapped futures plus live OI / IV / PCR / max-pain context for a selected underlying.',
-  'Paper Portfolio': 'Recorded paper positions and outcomes — secondary evidence.',
+  'Paper Portfolio': 'Demat holdings + paper book — sync Zerodha or paste your shares.',
+  Portfolio: 'Demat holdings + paper book — sync Zerodha or paste your shares.',
   'System Health': 'Operations, autonomy and infrastructure detail.',
 }
 
@@ -266,14 +267,18 @@ function App() {
 
   useEffect(() => {
     let alive = true
-    fetchSymbolDirectory({ limit: 5000 })
-      .then((payload) => {
-        if (!alive) return
-        setUniverseSymbols((payload.symbols || []).map((row) => row.symbol).filter(Boolean))
-      })
-      .catch(() => {
-        if (alive) setUniverseSymbols([])
-      })
+    Promise.all([
+      fetchSymbolDirectory({ limit: 5000 }).catch(() => null),
+      fetchHoldings().catch(() => null),
+    ]).then(([directory, book]) => {
+      if (!alive) return
+      const fromDir = (directory?.symbols || []).map((row) => row.symbol).filter(Boolean)
+      const fromHoldings = (book?.holdings || []).flatMap((row) => [
+        row.tradingsymbol,
+        row.research_symbol || '',
+      ]).filter(Boolean)
+      setUniverseSymbols([...new Set([...fromDir, ...fromHoldings])])
+    })
     return () => { alive = false }
   }, [])
 

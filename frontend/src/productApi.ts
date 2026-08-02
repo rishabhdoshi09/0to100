@@ -664,6 +664,59 @@ export const fetchTargetPortfolio = (): Promise<TargetPortfolioPayload> =>
   fetch('/api/target-portfolio', { headers: { Accept: 'application/json' } })
     .then((response) => json<TargetPortfolioPayload>(response))
 
+export type HoldingRow = {
+  tradingsymbol: string
+  research_symbol?: string
+  quantity: number
+  average_price: number
+  last_price: number
+  invested: number
+  current_value: number
+  pnl: number
+  pnl_pct: number
+  day_change?: number
+  day_change_percentage?: number
+  exchange?: string
+  product?: string
+}
+
+export type HoldingsBook = {
+  schema_version: number
+  available: boolean
+  updated_at?: string
+  source?: string
+  holdings: HoldingRow[]
+  summary: {
+    count: number
+    invested: number
+    current_value: number
+    pnl: number
+    pnl_pct: number
+    day_pnl?: number
+    day_pnl_pct?: number
+  }
+  message?: string
+  synced?: boolean
+  places_orders?: boolean
+}
+
+export const fetchHoldings = (): Promise<HoldingsBook> =>
+  fetch('/api/holdings', { headers: { Accept: 'application/json' } })
+    .then((response) => json<HoldingsBook>(response))
+
+export const syncHoldings = (): Promise<HoldingsBook> =>
+  fetch('/api/holdings/sync', {
+    method: 'POST',
+    headers: { Accept: 'application/json' },
+  }).then((response) => json<HoldingsBook>(response))
+
+export const importHoldings = (holdings: Array<Record<string, unknown>>, source = 'import'): Promise<HoldingsBook> =>
+  fetch('/api/holdings/import', {
+    method: 'POST',
+    headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+    body: JSON.stringify({ holdings, source }),
+  }).then((response) => json<HoldingsBook>(response))
+
 export const runDataJob = (jobId: string): Promise<{
   ok: boolean
   job_id: string
