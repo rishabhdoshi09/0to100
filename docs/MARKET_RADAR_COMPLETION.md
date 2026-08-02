@@ -45,6 +45,8 @@ Canonical owners: `product/radar_workspace.py`, `product/compare_workspace.py`, 
 
 ## Validation
 
+Starting SHA: `c6bf31a` · Final SHA: `2580379` (pushed to `overhaul/evidence-lab`).
+
 ```bash
 python -m pytest tests/test_radar_workspace.py tests/test_compare_workspace.py tests/test_watchlist_api.py
 python -m pytest
