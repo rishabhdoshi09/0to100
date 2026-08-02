@@ -191,12 +191,19 @@ export function LiveScanBanner({
           <strong>{label}</strong>
           <span>{scan.friendlyPhase}</span>
         </div>
-        {scan.isActive && (
-          <small className="live-scan-elapsed">{formatElapsed(scan.elapsedSeconds)}</small>
-        )}
-        {(showFailed || showNotice && !scan.isActive) && (
-          <button type="button" className="live-scan-dismiss" onClick={() => scan.dismissNotice()} aria-label="Dismiss">×</button>
-        )}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+          {scan.isActive && scan.workerOnline != null && (
+            <small className={scan.workerOnline ? 'positive' : 'negative'}>
+              Worker {scan.workerOnline ? `ONLINE${scan.workerPid ? ` · ${scan.workerPid}` : ''}` : 'OFFLINE'}
+            </small>
+          )}
+          {scan.isActive && (
+            <small className="live-scan-elapsed">{formatElapsed(scan.elapsedSeconds)}</small>
+          )}
+          {(showFailed || showNotice && !scan.isActive) && (
+            <button type="button" className="live-scan-dismiss" onClick={() => scan.dismissNotice()} aria-label="Dismiss">×</button>
+          )}
+        </div>
       </div>
       {scan.isActive && (
         <>
@@ -204,7 +211,9 @@ export function LiveScanBanner({
             {scan.progressLine
               || (scan.operation?.message && scan.operation.message !== scan.friendlyPhase
                 ? scan.operation.message
-                : 'Still working — counts update as each batch finishes')}
+                : scan.workerOnline === false
+                  ? 'Market-ops worker is offline — scan stays queued until the worker is running'
+                  : 'Still working — counts update as each batch finishes')}
             {scan.qualifiedLine ? ` · ${scan.qualifiedLine}` : ''}
           </p>
           {scan.percent != null ? (

@@ -40,6 +40,14 @@ describe('scanRunner semantics', () => {
     expect(friendlyStageLabel('', 'CANCELLED')).toBe('Scan stopped')
   })
 
+  it('makes PENDING queue state honest about worker health', () => {
+    expect(friendlyStageLabel('', 'PENDING', { running: false })).toContain('OFFLINE')
+    expect(friendlyStageLabel('', 'PENDING', { running: true })).toContain('ONLINE')
+    expect(friendlyStageLabel('', 'PENDING', { running: true }, 20)).toContain('has not leased')
+    expect(friendlyStageLabel('', 'PENDING', { running: true, activeKind: 'MARKET_SCAN' }))
+      .toContain('Queued behind MARKET_SCAN')
+  })
+
   it('detects terminal and active statuses', () => {
     expect(isTerminalStatus('SUCCEEDED')).toBe(true)
     expect(isTerminalStatus('RUNNING')).toBe(false)

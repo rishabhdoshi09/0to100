@@ -71,28 +71,69 @@ def _ops_runtime_payload() -> dict[str, Any]:
     }
 
 
-def _ensure_ops_worker() -> dict[str, Any]:
+def _ensure_ops_worker(*, wait_s: float = 8.0) -> dict[str, Any]:
     """Start the dedicated market-operations worker when it is not healthy."""
     global _ops_process
     runtime = _ops_runtime_payload()
     if runtime.get("running"):
         return runtime
     if _ops_process is not None and _ops_process.poll() is None:
+        # Child still starting — wait for heartbeat.
+        deadline = time.time() + max(1.0, float(wait_s))
+        while time.time() < deadline:
+            time.sleep(0.15)
+            runtime = _ops_runtime_payload()
+            if runtime.get("running"):
+                return runtime
+            if _ops_process.poll() is not None:
+                break
+        runtime = _ops_runtime_payload()
+        runtime["ensure_attempted"] = True
+        runtime["ensure_ok"] = bool(runtime.get("running"))
         return runtime
     _ops_process = subprocess.Popen(
         [sys.executable, "-u", "-m", "operations.market_ops"],
         cwd=str(ROOT),
         env=os.environ.copy(),
     )
-    deadline = time.time() + 2.5
+    deadline = time.time() + max(1.0, float(wait_s))
     while time.time() < deadline:
-        time.sleep(0.1)
+        time.sleep(0.15)
         runtime = _ops_runtime_payload()
         if runtime.get("running"):
             break
         if _ops_process.poll() is not None:
             break
+    runtime = _ops_runtime_payload()
+    runtime["ensure_attempted"] = True
+    runtime["ensure_ok"] = bool(runtime.get("running"))
+    runtime["spawn_pid"] = getattr(_ops_process, "pid", None)
     return runtime
+
+
+def _queue_message_for_control(kind: str, runtime: dict[str, Any]) -> str:
+    lane = ""
+    try:
+        from operations.market_ops import LANES
+
+        lane = str(LANES.get(kind) or "")
+    except Exception:
+        lane = ""
+    active = dict((runtime.get("active") or {}).get(lane) or {})
+    if not runtime.get("running"):
+        return (
+            "Queued, but market-ops worker is OFFLINE — "
+            "restart with bash scripts/run_quantterm_complete.sh (scans cannot start without the worker)"
+        )
+    if active:
+        return (
+            f"Queued behind active {active.get('kind') or 'job'} on the {lane or 'same'} lane — "
+            "this scan starts when that job finishes"
+        )
+    return (
+        f"Queued — market-ops worker ONLINE (pid {runtime.get('worker_pid') or '—'}); "
+        "should lease this job within a few seconds"
+    )
 
 
 @app.on_event("startup")
@@ -704,19 +745,30 @@ def control(control_name: str) -> dict:
     if name in _OPERATION_CONTROLS:
         from operations.market_ops import LANES
         from operations.store import OperationStore
-        _ensure_ops_worker()
+        runtime = _ensure_ops_worker(wait_s=8.0)
         kind = _OPERATION_CONTROLS[name]
+        queue_message = _queue_message_for_control(kind, runtime)
         operation, created = OperationStore(OPS_DB).enqueue(
             kind,
             lane=LANES[kind],
             requested_by="terminal",
+            message=queue_message,
         )
         return {
             "accepted": True,
             "control": name,
             "operation_id": operation.get("operation_id"),
             "operation_status": operation.get("status"),
+            "operation_message": operation.get("message") or queue_message,
             "created": created,
+            "worker": {
+                "running": bool(runtime.get("running")),
+                "worker_pid": runtime.get("worker_pid"),
+                "heartbeat": runtime.get("heartbeat"),
+                "active_lanes": dict(runtime.get("active") or {}),
+                "ensure_ok": runtime.get("ensure_ok", bool(runtime.get("running"))),
+            },
+            "transparency": queue_message,
         }
     from research.autonomy.controls import request_control
     queued = request_control(name, reason="owner requested control from dedicated terminal frontend")

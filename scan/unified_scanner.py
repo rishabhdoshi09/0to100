@@ -462,7 +462,15 @@ class UnifiedScanner:
         with ThreadPoolExecutor(max_workers=self._max_workers) as pool:
             futures = {pool.submit(self._analyze, sym, get_cached(sym)): sym
                        for sym in available}
+            done = 0
+            total = len(futures) or 1
             for fut in as_completed(futures):
+                done += 1
+                if callable(progress) and (done % 40 == 0 or done == total):
+                    try:
+                        progress(done, total)
+                    except Exception:
+                        pass
                 try:
                     r = fut.result()
                     if r and r.signals:

@@ -249,14 +249,36 @@ class MarketOperationsWorker:
         from scan.market_scan_service import run_whole_market_scan
 
         def prepared_prefetch(symbols, *, progress=None):
-            return len(symbols)
+            # History already prepared by _ensure_history; skip network prefetch noise.
+            total = len(list(symbols) or [])
+            if callable(progress) and total:
+                try:
+                    progress(0, total)
+                except Exception:
+                    pass
+            return total
+
+        def progress_callback(current: int, total: int) -> None:
+            self._progress(
+                operation_id,
+                "SCANNING",
+                f"Scanning market · {int(current):,}/{int(total):,} stocks",
+                int(current),
+                int(total),
+            )
 
         self._progress(
             operation_id,
             "SCANNING",
             f"Evaluating whole NSE universe with {history.get('sessions', 0)} official sessions",
+            0,
+            max(1, int(history.get("symbols") or 1)),
         )
-        report = run_whole_market_scan(prefetch_fn=prepared_prefetch, save=True)
+        report = run_whole_market_scan(
+            prefetch_fn=prepared_prefetch,
+            progress_callback=progress_callback,
+            save=True,
+        )
         result = _operation_result(report)
         if not getattr(report, "ok", False):
             code = str(getattr(report, "error_code", "SCAN_FAILED") or "SCAN_FAILED")

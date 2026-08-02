@@ -22,6 +22,7 @@ def test_terminal_controls_have_no_live_broker_or_order_action():
         "REFRESH_FNO_NOW",
         "RUN_CYCLE_NOW",
         "REFRESH_DATA_NOW",
+        "RUN_FULL_UNIVERSE_BACKTEST_NOW",
         "PAUSE_NEW_PAPER_ENTRIES",
         "RESUME_NEW_PAPER_ENTRIES",
     }
@@ -38,9 +39,21 @@ def test_market_controls_are_dispatched_outside_paper_autonomy():
         "REFRESH_NEWS_NOW": "NEWS_REFRESH",
         "REFRESH_FNO_NOW": "FNO_REFRESH",
         "REFRESH_DATA_NOW": "DATA_PREPARE",
+        "RUN_FULL_UNIVERSE_BACKTEST_NOW": "FULL_UNIVERSE_BACKTEST",
     }
     assert terminal_api._AUTONOMY_CONTROLS == {
         "RUN_CYCLE_NOW",
         "PAUSE_NEW_PAPER_ENTRIES",
         "RESUME_NEW_PAPER_ENTRIES",
     }
+
+
+def test_queue_message_is_honest_about_worker_offline():
+    msg = terminal_api._queue_message_for_control("MARKET_SCAN", {"running": False, "active": {}})
+    assert "OFFLINE" in msg
+    online = terminal_api._queue_message_for_control(
+        "MARKET_SCAN",
+        {"running": True, "worker_pid": 42, "active": {}},
+    )
+    assert "ONLINE" in online
+    assert "42" in online

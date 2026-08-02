@@ -119,7 +119,11 @@ def run_whole_market_scan(
 
     try:
         prefetch_fn(symbols, progress=progress_callback)
-        results = list(scanner.scan(symbols) or [])
+        # Prefer scanners that accept progress; fall back without inventing results.
+        try:
+            results = list(scanner.scan(symbols, progress=progress_callback) or [])
+        except TypeError:
+            results = list(scanner.scan(symbols) or [])
     except Exception as exc:
         return MarketScanReport(FAILED, universe_size=len(symbols), error_code="SCAN_ERROR",
                                 error_message=str(exc), source_snapshot_id=snapshot_id or "")

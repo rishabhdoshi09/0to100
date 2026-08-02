@@ -98,6 +98,7 @@ class OperationStore:
         requested_by: str = "terminal",
         payload: dict[str, Any] | None = None,
         deduplicate: bool = True,
+        message: str | None = None,
     ) -> tuple[dict[str, Any], bool]:
         """Enqueue one operation and return ``(record, created)``.
 
@@ -110,6 +111,10 @@ class OperationStore:
             raise ValueError("kind and lane are required")
         now = time.time()
         operation_id = uuid.uuid4().hex
+        queue_message = str(
+            message
+            or "Queued and waiting for the dedicated market-operations worker"
+        )
         with self._connect() as con:
             con.execute("BEGIN IMMEDIATE")
             if deduplicate:
@@ -137,7 +142,7 @@ class OperationStore:
                     now,
                     now,
                     json.dumps(payload or {}, default=str),
-                    "Queued and waiting for the dedicated market-operations worker",
+                    queue_message,
                 ),
             )
             row = con.execute(
@@ -169,7 +174,7 @@ class OperationStore:
                     now,
                     int(worker_pid),
                     "ACCEPTED",
-                    "Worker accepted the job — preparing history, then screening",
+                    "Worker accepted the job — next stage updates will show live progress",
                     operation_id,
                     PENDING,
                 ),
