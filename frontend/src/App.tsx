@@ -509,18 +509,30 @@ function App() {
         {error && (
           <div className="api-degraded-banner" role="alert">
             <strong>QuantTerm backend is unavailable.</strong>
-            <p>Existing information may be incomplete. Reconnect or start the backend, then retry.</p>
-            <details>
-              <summary>Technical details</summary>
-              <pre>{error}</pre>
-            </details>
-            <button type="button" onClick={() => void refresh()}>Retry connection</button>
+            <p>
+              Dashboard did not load. Market scan needs the Terminal API (:8765) and a live market-ops worker.
+              Prefer a full restart over repeated Retry if this persists.
+            </p>
+            <pre className="api-error-detail">{error || 'No error detail returned by the browser fetch.'}</pre>
+            <div className="inline-actions">
+              <button type="button" onClick={() => void refresh()}>Retry connection</button>
+              <button
+                type="button"
+                disabled={marketScan.isBusy}
+                onClick={() => void marketScan.start()}
+              >
+                Try market scan anyway
+              </button>
+            </div>
+            <small>
+              Restart: bash scripts/stop_quantterm.sh && bash scripts/run_quantterm_complete.sh
+            </small>
           </div>
         )}
         {loading && !error && (
           <div className="api-degraded-banner" role="status">
             <strong>Loading QuantTerm…</strong>
-            <p>Terminal API is up; first dashboard load can wait on NSE bhav cache. Sidebar should already be visible.</p>
+            <p>Fetching dashboard. Sidebar should already be visible.</p>
           </div>
         )}
         {showOpsRibbon && <OperationsRibbon dashboard={dashboard} />}

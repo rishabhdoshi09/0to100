@@ -17,15 +17,31 @@ const json = async <T>(response: Response): Promise<T> => {
 
 export const fetchDashboard = (): Promise<DashboardPayload> => {
   const controller = new AbortController()
-  const timer = window.setTimeout(() => controller.abort(), 45_000)
+  const timer = window.setTimeout(() => controller.abort(), 60_000)
   return fetch('/api/dashboard', {
     headers: { Accept: 'application/json' },
     signal: controller.signal,
   })
-    .then((response) => json<DashboardPayload>(response))
+    .then(async (response) => {
+      if (!response.ok) {
+        const body = await response.text()
+        throw new Error(
+          body?.trim()
+            || `Dashboard HTTP ${response.status} — is http://127.0.0.1:8765 up?`,
+        )
+      }
+      return response.json() as Promise<DashboardPayload>
+    })
     .catch((reason) => {
       if (reason instanceof DOMException && reason.name === 'AbortError') {
-        throw new Error('Dashboard timed out after 45s — API may still be loading bhav history')
+        throw new Error(
+          'Dashboard timed out after 60s. Check Terminal API on :8765 and market-ops worker; then Retry.',
+        )
+      }
+      if (reason instanceof TypeError) {
+        throw new Error(
+          'Cannot reach /api/dashboard (proxy → :8765). Run: bash scripts/stop_quantterm.sh && bash scripts/run_quantterm_complete.sh',
+        )
       }
       throw reason
     })

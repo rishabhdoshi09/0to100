@@ -34,6 +34,8 @@ app.add_middleware(
 )
 
 _ops_process: subprocess.Popen | None = None
+_ops_ensure_last_attempt: float = 0.0
+_bhav_status_cache: dict[str, Any] = {"ts": 0.0, "payload": None}
 
 
 def _safe_float(value: Any) -> float | None:
@@ -71,23 +73,56 @@ def _ops_runtime_payload() -> dict[str, Any]:
     }
 
 
-def _ensure_ops_worker(*, wait_s: float = 8.0) -> dict[str, Any]:
+def _reclaim_stale_ops_lock(*, max_heartbeat_age_s: float = 20.0) -> str:
+    """Clear dead/stale market-ops lock holders so a new worker can start."""
+    try:
+        from operations.market_ops import LOCK_PATH, RUNTIME_PATH, SingleWorkerLock
+    except Exception as exc:
+        return f"lock_import_failed:{exc}"
+
+    lock = SingleWorkerLock(LOCK_PATH)
+    if lock.reclaim_if_dead():
+        return "reclaimed_dead_lock"
+
+    runtime = _json_file(RUNTIME_PATH, {})
+    heartbeat = runtime.get("heartbeat_epoch")
+    stale = not _fresh_epoch(heartbeat, max_age_s=max_heartbeat_age_s)
+    holder = lock.holder_pid() or runtime.get("worker_pid")
+    if holder and stale:
+        # Orphaned worker after API-only stop: alive PID, dead heartbeat.
+        try:
+            lock.path.write_text(str(int(holder)), encoding="utf-8")
+        except Exception:
+            pass
+        if lock.terminate_holder(reason="stale_heartbeat"):
+            try:
+                RUNTIME_PATH.unlink(missing_ok=True)
+            except Exception:
+                pass
+            return f"terminated_stale_holder:{holder}"
+    return "lock_held_or_clear"
+
+
+def _ensure_ops_worker(*, wait_s: float = 8.0, force: bool = False) -> dict[str, Any]:
     """Start the dedicated market-operations worker when it is not healthy."""
-    global _ops_process
+    global _ops_process, _ops_ensure_last_attempt
     runtime = _ops_runtime_payload()
     if runtime.get("running"):
         runtime["ensure_attempted"] = False
         runtime["ensure_ok"] = True
         return runtime
 
-    # If a prior worker died without releasing diagnostics, clear a dead lock file
-    # so a fresh spawn can take ownership.
-    try:
-        from operations.market_ops import LOCK_PATH, SingleWorkerLock
+    now = time.time()
+    if not force and (now - float(_ops_ensure_last_attempt or 0.0)) < 3.0:
+        runtime["ensure_attempted"] = True
+        runtime["ensure_ok"] = False
+        runtime["ensure_error"] = runtime.get("ensure_error") or (
+            "Market-ops worker offline — retry already in flight"
+        )
+        return runtime
+    _ops_ensure_last_attempt = now
 
-        SingleWorkerLock(LOCK_PATH).reclaim_if_dead()
-    except Exception:
-        pass
+    reclaim_note = _reclaim_stale_ops_lock()
 
     def _wait_for_online(deadline: float) -> dict[str, Any]:
         while time.time() < deadline:
@@ -108,6 +143,7 @@ def _ensure_ops_worker(*, wait_s: float = 8.0) -> dict[str, Any]:
             runtime["ensure_error"] = (
                 "Market-ops child process is running but has not published a fresh heartbeat yet"
             )
+        runtime["reclaim"] = reclaim_note
         return runtime
 
     _ops_process = subprocess.Popen(
@@ -117,14 +153,9 @@ def _ensure_ops_worker(*, wait_s: float = 8.0) -> dict[str, Any]:
     )
     runtime = _wait_for_online(time.time() + max(1.0, float(wait_s)))
 
-    # Spawn exited immediately (often lock conflict). Reclaim dead owner and retry once.
+    # Spawn exited immediately (often lock conflict). Force-reclaim stale holder and retry.
     if not runtime.get("running") and _ops_process.poll() is not None:
-        try:
-            from operations.market_ops import LOCK_PATH, SingleWorkerLock
-
-            SingleWorkerLock(LOCK_PATH).reclaim_if_dead()
-        except Exception:
-            pass
+        reclaim_note = _reclaim_stale_ops_lock(max_heartbeat_age_s=5.0)
         _ops_process = subprocess.Popen(
             [sys.executable, "-u", "-m", "operations.market_ops"],
             cwd=str(ROOT),
@@ -135,12 +166,12 @@ def _ensure_ops_worker(*, wait_s: float = 8.0) -> dict[str, Any]:
     runtime["ensure_attempted"] = True
     runtime["ensure_ok"] = bool(runtime.get("running"))
     runtime["spawn_pid"] = getattr(_ops_process, "pid", None)
+    runtime["reclaim"] = reclaim_note
     if not runtime["ensure_ok"]:
         exit_code = _ops_process.poll() if _ops_process is not None else None
         if exit_code is not None:
             runtime["ensure_error"] = (
-                f"Market-ops worker exited before heartbeat (exit={exit_code}). "
-                "Another worker may own the lock, or startup crashed — "
+                f"Market-ops worker exited before heartbeat (exit={exit_code}, {reclaim_note}). "
                 "run: bash scripts/stop_quantterm.sh && bash scripts/run_quantterm_complete.sh"
             )
         else:
@@ -460,9 +491,9 @@ def _operations_payload() -> dict[str, Any]:
         from operations.store import OperationStore
         store = OperationStore(OPS_DB)
         runtime = _ops_runtime_payload()
-        # Self-heal: UI polls this while a scan is PENDING. If the worker died,
-        # try to bring it back so MARKET_SCAN is not stuck forever.
-        if not runtime.get("running") and store.active():
+        # Self-heal whenever the worker is offline — not only when a job is
+        # already queued. Otherwise Scan now queues PENDING and never leases.
+        if not runtime.get("running"):
             runtime = _ensure_ops_worker(wait_s=2.5)
         recent = store.recent(100)
         latest = {}
@@ -478,6 +509,7 @@ def _operations_payload() -> dict[str, Any]:
             "active_lanes": dict(runtime.get("active", {}) or {}),
             "ensure_ok": runtime.get("ensure_ok", bool(runtime.get("running"))),
             "ensure_error": runtime.get("ensure_error", ""),
+            "reclaim": runtime.get("reclaim", ""),
             "counts": store.counts(),
             "active": store.active(),
             "recent": recent,
@@ -571,13 +603,40 @@ def _fno_payload() -> dict[str, Any]:
         }
 
 
-def _data_payload(scan: dict, long_term: dict, operations: dict, fno: dict, news: dict) -> dict:
+def _bhavcopy_status_fast() -> dict[str, Any]:
+    """Dashboard hot-path status — never blocks on a full pickle reload.
+
+    Loading ``store_cache.pkl`` into the API process can take tens of seconds and
+    made the React shell show "backend unavailable". Scans still load history
+    inside the market-ops worker via ``_ensure_history``.
+    """
+    global _bhav_status_cache
+    now = time.time()
+    cached = _bhav_status_cache.get("payload")
+    if cached is not None and (now - float(_bhav_status_cache.get("ts") or 0.0)) < 30.0:
+        return dict(cached)
     try:
         from data.bhavcopy_runtime import status as bhavcopy_status
-        bhavcopy = bhavcopy_status(load_cache=True)
+
+        # Disk metadata only — never load_cache=True on the dashboard path.
+        bhavcopy = dict(bhavcopy_status(load_cache=False))
+        disk_ready = bool(
+            bhavcopy.get("ready")
+            or bhavcopy.get("cache_exists")
+            or int(bhavcopy.get("csv_files", 0) or 0) >= int(bhavcopy.get("minimum_sessions", 60) or 60)
+        )
+        bhavcopy["disk_ready"] = disk_ready
+        if not bhavcopy.get("ready") and disk_ready:
+            bhavcopy["message"] = (
+                "History is on disk; market-ops loads it for scans. "
+                "API skips full pickle reload so the dashboard stays responsive."
+            )
+        _bhav_status_cache = {"ts": now, "payload": dict(bhavcopy)}
+        return dict(bhavcopy)
     except Exception as exc:
-        bhavcopy = {
+        return {
             "ready": False,
+            "disk_ready": False,
             "symbols": 0,
             "sessions": 0,
             "latest_date": "",
@@ -585,6 +644,10 @@ def _data_payload(scan: dict, long_term: dict, operations: dict, fno: dict, news
             "cache_exists": False,
             "error": str(exc),
         }
+
+
+def _data_payload(scan: dict, long_term: dict, operations: dict, fno: dict, news: dict) -> dict:
+    bhavcopy = _bhavcopy_status_fast()
     snapshot = _snapshot_payload()
     try:
         from options.eod_store import store_status as options_eod_status
@@ -600,10 +663,13 @@ def _data_payload(scan: dict, long_term: dict, operations: dict, fno: dict, news
             "error": str(exc),
         }
     blockers: list[str] = []
-    if not bhavcopy.get("ready"):
+    if not bhavcopy.get("ready") and not bhavcopy.get("cache_exists"):
         blockers.append("Official NSE bhavcopy history is not ready; direct scans will prepare it first.")
+    elif not bhavcopy.get("ready") and bhavcopy.get("cache_exists"):
+        blockers.append("Bhavcopy cache exists but is not loaded in the API process yet; scans can still prepare it.")
     elif int(bhavcopy.get("sessions", 0) or 0) < int(bhavcopy.get("minimum_sessions", 60) or 60):
-        blockers.append("Official bhavcopy history is shallower than the minimum screen requirement.")
+        if int(bhavcopy.get("csv_files", 0) or 0) < 60:
+            blockers.append("Official bhavcopy history is shallower than the minimum screen requirement.")
     if not snapshot.get("ready"):
         blockers.append("Verified snapshot is missing; PAPER autonomy is limited, but direct cash scans can still use official bhavcopy history.")
     if not options_eod.get("available"):
@@ -614,8 +680,13 @@ def _data_payload(scan: dict, long_term: dict, operations: dict, fno: dict, news
         blockers.append("Current F&O instrument universe is unavailable; refresh instruments after Zerodha login.")
     if not news.get("available"):
         blockers.append("Curated news store is empty; run a news refresh to inspect source health.")
+    history_ok = bool(
+        bhavcopy.get("ready")
+        or bhavcopy.get("cache_exists")
+        or int(bhavcopy.get("csv_files", 0) or 0) >= 60
+    )
     return {
-        "ready": bool(bhavcopy.get("ready") and operations.get("running")),
+        "ready": bool(history_ok and operations.get("running")),
         "snapshot": snapshot,
         "bhavcopy": bhavcopy,
         "options_eod": options_eod,
@@ -685,6 +756,11 @@ def health_detail() -> dict:
 
 @app.get("/api/dashboard")
 def dashboard() -> dict:
+    # Kick market-ops first so Scan now is not racing a cold worker.
+    try:
+        _ensure_ops_worker(wait_s=1.5)
+    except Exception:
+        pass
     market = _market_payload()
     scan = _scan_payload()
     long_term = _long_term_payload()
@@ -910,7 +986,11 @@ def control(control_name: str) -> dict:
     if name in _OPERATION_CONTROLS:
         from operations.market_ops import LANES
         from operations.store import OperationStore
-        runtime = _ensure_ops_worker(wait_s=8.0)
+        runtime = _ensure_ops_worker(wait_s=10.0, force=True)
+        if not runtime.get("running"):
+            # One hard reclaim+retry before accepting a PENDING forever queue.
+            _reclaim_stale_ops_lock(max_heartbeat_age_s=5.0)
+            runtime = _ensure_ops_worker(wait_s=8.0, force=True)
         kind = _OPERATION_CONTROLS[name]
         queue_message = _queue_message_for_control(kind, runtime)
         operation, created = OperationStore(OPS_DB).enqueue(

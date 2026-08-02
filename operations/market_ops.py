@@ -98,6 +98,31 @@ class SingleWorkerLock:
         except Exception:
             return False
 
+    def terminate_holder(self, *, reason: str = "") -> bool:
+        """Best-effort SIGTERM/SIGKILL against the lock-file PID.
+
+        Used when a previous market-ops worker is alive but no longer heartbeating
+        (common after stop scripts kill only the API port and leave an orphan).
+        """
+        pid = self.holder_pid()
+        if not self.pid_alive(pid):
+            return self.reclaim_if_dead()
+        _emit("WARN", f"terminating stale market-ops lock holder pid={pid} {reason}".strip())
+        try:
+            os.kill(int(pid), signal.SIGTERM)
+        except OSError:
+            return self.reclaim_if_dead()
+        deadline = time.time() + 2.0
+        while time.time() < deadline and self.pid_alive(pid):
+            time.sleep(0.1)
+        if self.pid_alive(pid):
+            try:
+                os.kill(int(pid), signal.SIGKILL)
+            except OSError:
+                pass
+        time.sleep(0.1)
+        return self.reclaim_if_dead() or not self.pid_alive(pid)
+
     def acquire(self) -> bool:
         try:
             import fcntl

@@ -609,6 +609,18 @@ body::before{
   background:rgba(255,104,127,.08);
 }
 .api-degraded-banner p{ margin:6px 0 10px; color:#d8e2f4; }
+.api-error-detail{
+  margin:10px 0;
+  padding:12px;
+  border:1px solid rgba(255,104,127,.35);
+  border-radius:8px;
+  background:rgba(255,104,127,.08);
+  color:#ffb3be;
+  white-space:pre-wrap;
+  overflow:auto;
+  font-size:12px;
+}
+.api-degraded-banner small{ display:block; margin-top:10px; color:#7f8da7; }
 .api-degraded-banner details{ font-size:12px; color:var(--muted); }
 .api-degraded-banner pre{ white-space:pre-wrap; margin-top:8px; }
 
