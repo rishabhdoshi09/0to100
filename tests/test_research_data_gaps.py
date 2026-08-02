@@ -300,3 +300,117 @@ def test_product_readiness_includes_snapshot_and_options_lanes():
     assert "options_eod" in keys
     assert payload["state"] == "READY"
     assert payload["score"] >= 90
+
+
+def test_universe_history_official_ingest_is_research_grade(tmp_path, monkeypatch):
+    from data import universe_history as UH
+    from data import nse_universe as U
+
+    dest = tmp_path / "universe_history.json"
+    src = tmp_path / "universe_history.incoming.csv"
+    monkeypatch.setenv("QT_UNIVERSE_HISTORY_FILE", str(dest))
+    src.write_text(
+        "symbol,listed,delisted\n"
+        "ALIVE,2020-01-01,\n"
+        "DEADCO,2019-01-01,2023-06-01\n",
+        encoding="utf-8",
+    )
+    report = UH.ingest_from_path(src, dest=dest)
+    assert report["research_grade"] is True
+    assert report["survivorship_complete"] is True
+    assert report["rows"] == 2
+    assert report["source"].startswith("ingest:")
+
+    pit = U.point_in_time_universe("2024-01-15", path=dest)
+    assert pit["research_grade"] is True
+    assert "ALIVE" in pit["symbols"]
+    assert "DEADCO" not in pit["symbols"]
+
+
+def test_bhav_bootstrap_cannot_overwrite_research_grade(tmp_path, monkeypatch):
+    from data import bhavcopy_store as BS
+    from data import universe_history as UH
+
+    dest = tmp_path / "universe_history.json"
+    monkeypatch.setenv("QT_UNIVERSE_HISTORY_FILE", str(dest))
+    UH.write_universe_history(
+        [{"symbol": "KEEP", "listed": "2018-01-01"}],
+        path=dest,
+        source="nse_official",
+        note="official archive",
+    )
+    idx = pd.date_range("2024-01-01", periods=20, freq="B")
+    frame = pd.DataFrame(
+        {"open": 1.0, "high": 1.1, "low": 0.9, "close": 1.0, "volume": 100.0},
+        index=idx,
+    )
+    monkeypatch.setattr(BS, "_store", {"OTHER": frame}, raising=False)
+    monkeypatch.setattr(BS, "_store_last_day", idx[-1].date(), raising=False)
+    monkeypatch.setattr("data.bhavcopy_runtime.ensure_loaded", lambda **kwargs: True)
+
+    refused = UH.build_from_bhav(path=dest, force=True)
+    assert refused["built"] is False
+    assert refused["reason"] == "refusing_to_overwrite_research_grade"
+    assert refused["research_grade"] is True
+    assert refused["rows"] == 1
+
+
+def test_ensure_universe_history_ingests_incoming(tmp_path, monkeypatch):
+    from research.autonomy import jobs as JOBS
+
+    dest = tmp_path / "universe_history.json"
+    incoming = tmp_path / "universe_history.incoming.json"
+    monkeypatch.setenv("QT_UNIVERSE_HISTORY_FILE", str(dest))
+    incoming.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "source": "operator_drop",
+                "rows": [
+                    {"symbol": "INFY", "listed": "1993-02-01"},
+                    {"symbol": "GONE", "listed": "2000-01-01", "delisted": "2020-01-01"},
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    class MiniDeps:
+        logs = tmp_path
+
+        def ensure_universe_history(self):
+            return JOBS.Deps.ensure_universe_history(self)
+
+    info = MiniDeps().ensure_universe_history()
+    assert info["ingested"] is True
+    assert info["research_grade"] is True
+    assert dest.exists()
+    assert "INFY" in json.dumps(json.loads(dest.read_text(encoding="utf-8")))
+
+def test_promote_downgraded_when_universe_only_inferred():
+    from research.momentum_breakout import dataset as DS
+    from research.momentum_breakout import runner as RUN
+
+    class P:
+        def universe_policy(self):
+            return {
+                "survivorship_complete": True,
+                "research_grade": False,
+                "source": "bhav_inferred",
+                "note": "inferred",
+            }
+
+        def adjustment_policy(self):
+            return {"corporate_actions": "ADJUSTED"}
+
+    v = RUN._decide(
+        {"verdict": "PROMOTE", "insight": "edge", "expectancy_R": 0.4, "n_trades": 40},
+        DS.DataQualityReport(ok=True, limitations=[]),
+        {"snapshot_id": "s", "experiment_config_hash": "h"},
+        P(),
+        {},
+    )
+    assert v["verdict"] == "INCONCLUSIVE"
+    assert v["research_grade_data"] is False
+    assert any("DOWNGRADED" in r for r in v["reasons"])
+    assert v["limitation_directions"]["survivorship"] == "FAVOURABLE"

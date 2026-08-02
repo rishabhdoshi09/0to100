@@ -218,13 +218,45 @@ class Deps:
         return point_in_time_universe(self.now_ist().date())
 
     def ensure_universe_history(self):
-        """Bootstrap PIT membership from local bhav when the ledger is missing."""
+        """Prefer an official/operator archive; only then bootstrap from bhav.
+
+        Never invents membership. Never overwrites a research-grade ledger with
+        bhav-inferred rows. Looks for:
+          1. existing research-grade ledger
+          2. QT_UNIVERSE_SOURCE_FILE
+          3. logs/universe_history.incoming.json / .csv
+          4. existing inferred ledger (keep)
+          5. bhav bootstrap
+        """
         from data import universe_history as UH
 
         status = UH.ledger_status()
+        if status.get("research_grade"):
+            status["built"] = False
+            status["ingested"] = False
+            status["reason"] = "ledger_present_research_grade"
+            return status
+
+        candidates = []
+        env_src = os.getenv("QT_UNIVERSE_SOURCE_FILE", "").strip()
+        if env_src:
+            candidates.append(Path(env_src))
+        candidates.extend([
+            self.logs / "universe_history.incoming.json",
+            self.logs / "universe_history.incoming.csv",
+        ])
+        for src in candidates:
+            if src.exists():
+                info = UH.ingest_from_path(src)
+                info["built"] = False
+                info["ingested"] = True
+                info["reason"] = f"ingested:{src.name}"
+                return info
+
         if status.get("survivorship_complete"):
             status["built"] = False
-            status["reason"] = status.get("reason") or "ledger_present"
+            status["ingested"] = False
+            status["reason"] = status.get("reason") or "ledger_present_inferred"
             return status
         return UH.build_from_bhav(force=False)
 

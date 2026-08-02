@@ -356,11 +356,15 @@ def cmd_ca_ingest(args) -> None:
 
 
 def cmd_universe_history(args) -> None:
-    """Bootstrap or inspect point-in-time universe membership."""
+    """Ingest / bootstrap / inspect point-in-time universe membership."""
     from data import universe_history as UH
 
     if args.status_only:
         print(json.dumps(UH.ledger_status(), indent=2, default=str))
+        return
+    if args.source:
+        report = UH.ingest_from_path(args.source)
+        print(json.dumps(report, indent=2, default=str))
         return
     report = UH.build_from_bhav(force=bool(args.force))
     print(json.dumps(report, indent=2, default=str))
@@ -1129,9 +1133,18 @@ def build_parser() -> argparse.ArgumentParser:
 
     uh = sub.add_parser(
         "universe-history",
-        help="Bootstrap point-in-time universe membership from local bhav (or show status)",
+        help="Ingest or bootstrap point-in-time universe membership (or show status)",
     )
-    uh.add_argument("--force", action="store_true", help="Rebuild even if ledger already exists")
+    uh.add_argument(
+        "--source",
+        metavar="FILE",
+        help="JSON/CSV listing archive ({symbol,listed,delisted?}) — never invents rows",
+    )
+    uh.add_argument(
+        "--force",
+        action="store_true",
+        help="Rebuild bhav-inferred ledger (refuses to overwrite research-grade)",
+    )
     uh.add_argument("--status", dest="status_only", action="store_true", help="Print universe history status")
 
     sc = sub.add_parser(

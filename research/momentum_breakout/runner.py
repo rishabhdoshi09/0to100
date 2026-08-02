@@ -299,20 +299,31 @@ def _valuation_breakdown(trades, eligible) -> dict:
 
 def _decide(primary: dict, quality, manifest: dict, provider, spec: dict) -> dict:
     """Map harness verdict → PASS/FAIL/INCONCLUSIVE. RESEARCH-GRADE gate: a would-be
-    PASS on non-research-grade data (incomplete survivorship or unadjusted CA) is
-    DOWNGRADED to INCONCLUSIVE — a biased PASS is not defensible. A FAIL is retained
-    (meaningful even on optimistically-biased data)."""
+    PASS on non-research-grade data (incomplete/inferred survivorship or unadjusted CA)
+    is DOWNGRADED to INCONCLUSIVE — a biased PASS is not defensible. A FAIL is retained
+    when limitations are one-directional favourable (meaningful even on optimistic bias)."""
     hv = primary.get("verdict")
     reasons = []
-    survivorship_ok = provider.universe_policy().get("survivorship_complete")
+    up = provider.universe_policy() or {}
+    survivorship_ok = bool(up.get("survivorship_complete"))
+    if "research_grade" in up:
+        universe_rg = bool(up.get("research_grade"))
+    else:
+        # Legacy providers: survivorship_complete alone meant research-grade membership,
+        # unless the source is explicitly the bhav bootstrap.
+        universe_rg = survivorship_ok and str(up.get("source") or "") != "bhav_inferred"
     ca_raw = "RAW" in json.dumps(provider.adjustment_policy())
-    research_grade = bool(survivorship_ok) and not ca_raw
-    directions = _limitation_directions(survivorship_ok, ca_raw)
+    research_grade = bool(universe_rg) and not ca_raw
+    directions = _limitation_directions(universe_rg, ca_raw)
     if hv == "PROMOTE":
         if not research_grade:
-            reasons.append("would-be PASS DOWNGRADED: dataset not research-grade "
-                           f"(survivorship_complete={survivorship_ok}, ca_raw={ca_raw}) "
-                           "— a PASS on optimistically-biased data is not defensible")
+            reasons.append(
+                "would-be PASS DOWNGRADED: dataset not research-grade "
+                f"(survivorship_complete={survivorship_ok}, "
+                f"universe_research_grade={universe_rg}, ca_raw={ca_raw}, "
+                f"source={up.get('source') or ''}) "
+                "— a PASS on optimistically-biased data is not defensible"
+            )
             verdict = "INCONCLUSIVE"
         else:
             verdict = "PASS"; reasons.append(primary.get("insight", ""))
@@ -342,14 +353,18 @@ def _decide(primary: dict, quality, manifest: dict, provider, spec: dict) -> dic
             "note": "Secondary exits / ablations / slices NEVER override the primary verdict."}
 
 
-def _limitation_directions(survivorship_ok, ca_raw) -> dict:
+def _limitation_directions(universe_research_grade, ca_raw) -> dict:
     """Classify each active data limitation by the direction it biases the primary
     hypothesis (FAVOURABLE = makes the edge look better; UNFAVOURABLE = worse; EITHER =
     can go both ways; NEUTRAL = does not affect the primary momentum result; NONE = not
-    active). Used to decide whether a FAIL is trustworthy under incomplete data."""
+    active). Used to decide whether a FAIL is trustworthy under incomplete data.
+
+    ``universe_research_grade`` is True only for an official listing/delisting archive —
+    bhav-inferred membership still carries optimistic survivorship bias.
+    """
     d = {}
-    # survivorship: today's survivors inflate returns → the edge looks BETTER than real
-    d["survivorship"] = "NONE" if survivorship_ok else "FAVOURABLE"
+    # survivorship: survivors / inferred membership inflate returns → edge looks BETTER
+    d["survivorship"] = "NONE" if universe_research_grade else "FAVOURABLE"
     # unadjusted corporate actions: phantom split/bonus gaps fabricate BOTH fake
     # breakouts (favourable) and fake stop-hits/breakdowns (unfavourable) → EITHER
     d["corporate_actions"] = "EITHER" if ca_raw else "NONE"

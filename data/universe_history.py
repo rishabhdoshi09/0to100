@@ -7,7 +7,10 @@ Without a ledger, callers must use today's survivors and treat results as
 survivorship-biased. This module can bootstrap an *inferred* ledger from local
 bhav coverage (first/last session dates). That clears the missing-source gap and
 is better than survivors-only, but it is NOT a substitute for an official NSE
-listing/delisting archive — consumers see ``source=bhav_inferred`` in metadata.
+listing/delisting archive — consumers see ``source=bhav_inferred`` and
+``research_grade=False`` in metadata.
+
+Official / operator archives are ingested via ``ingest_from_path`` (never invented).
 """
 from __future__ import annotations
 
@@ -18,6 +21,7 @@ from pathlib import Path
 from typing import Any
 
 _DEFAULT_PATH = Path(__file__).resolve().parent.parent / "logs" / "universe_history.json"
+_INFERRED_SOURCES = frozenset({"", "bhav_inferred"})
 
 
 def history_path(path: str | Path | None = None) -> Path:
@@ -25,6 +29,15 @@ def history_path(path: str | Path | None = None) -> Path:
         return Path(path)
     override = os.getenv("QT_UNIVERSE_HISTORY_FILE")
     return Path(override) if override else _DEFAULT_PATH
+
+
+def is_research_grade_source(source: str | None) -> bool:
+    src = str(source or "").strip()
+    if not src or src in _INFERRED_SOURCES:
+        return False
+    if src.startswith("bhav_"):
+        return False
+    return True
 
 
 def _coerce_payload(raw: Any) -> tuple[list[dict], dict]:
@@ -54,12 +67,13 @@ def validate_membership_rows(rows) -> list[dict]:
             continue
         try:
             sym = str(row.get("symbol", "")).strip().upper()
-            listed = pd.Timestamp(row.get("listed"))
+            listed = pd.Timestamp(row.get("listed") or row.get("listing_date") or row.get("list_date"))
             if not sym or pd.isna(listed):
                 continue
             item = {"symbol": sym, "listed": str(listed.date())}
-            if row.get("delisted"):
-                delisted = pd.Timestamp(row.get("delisted"))
+            delisted_raw = row.get("delisted") or row.get("delisting_date") or row.get("delist_date")
+            if delisted_raw:
+                delisted = pd.Timestamp(delisted_raw)
                 if pd.isna(delisted) or delisted.date() <= listed.date():
                     continue
                 item["delisted"] = str(delisted.date())
@@ -119,6 +133,47 @@ def merge_universe_history(
     )
 
 
+def ingest_from_path(source_path, *, dest=None, source: str | None = None, note: str = "") -> dict:
+    """Ingest an operator/NSE listing archive (JSON or CSV) into the canonical ledger.
+
+    Never invents membership. Replaces a non-research-grade (bhav-inferred) ledger
+    outright so inferred dates are not mixed with official rows. Merges into an
+    existing research-grade ledger.
+    """
+    src = Path(source_path)
+    if not src.exists():
+        raise FileNotFoundError(f"universe history source not found: {src}")
+    text = src.read_text(encoding="utf-8")
+    if src.suffix.lower() == ".csv":
+        import csv
+        from io import StringIO
+
+        rows = list(csv.DictReader(StringIO(text)))
+    else:
+        rows, _meta = _coerce_payload(json.loads(text))
+    cleaned = validate_membership_rows(rows)
+    if not cleaned:
+        raise ValueError(f"no valid membership rows in {src}")
+    dest_path = history_path(dest)
+    src_label = source or f"ingest:{src.name}"
+    note_text = note or f"Ingested from {src.name}"
+    if dest_path.exists():
+        existing = ledger_status(dest_path)
+        if existing.get("research_grade"):
+            return merge_universe_history(
+                cleaned,
+                path=dest_path,
+                source=src_label,
+                note=note_text,
+            )
+    return write_universe_history(
+        cleaned,
+        path=dest_path,
+        source=src_label,
+        note=note_text,
+    )
+
+
 def ledger_status(path: str | Path | None = None) -> dict:
     p = history_path(path)
     if not p.exists():
@@ -146,7 +201,7 @@ def ledger_status(path: str | Path | None = None) -> dict:
     rows, meta = _coerce_payload(raw)
     cleaned = validate_membership_rows(rows)
     source = str(meta.get("source") or ("operator" if isinstance(raw, list) else ""))
-    research_grade = bool(cleaned) and source not in {"", "bhav_inferred"}
+    research_grade = bool(cleaned) and is_research_grade_source(source)
     note = str(meta.get("note") or "")
     if source == "bhav_inferred" and not note:
         note = (
@@ -157,7 +212,7 @@ def ledger_status(path: str | Path | None = None) -> dict:
         "available": True,
         "path": str(p),
         "rows": len(cleaned),
-        "survivorship_complete": True,
+        "survivorship_complete": bool(cleaned),
         "source": source or "operator",
         "note": note,
         "research_grade": research_grade,
@@ -176,14 +231,19 @@ def build_from_bhav(
 
     listed = first session in store; delisted set when last session is older than
     the store's latest day by ``inactive_after_days``. Never invents symbols that
-    are not present in the local bhav cache.
+    are not present in the local bhav cache. Never overwrites a research-grade ledger.
     """
     dest = history_path(path)
-    if dest.exists() and not force:
+    if dest.exists():
         status = ledger_status(dest)
-        status["built"] = False
-        status["reason"] = "ledger_already_present"
-        return status
+        if status.get("research_grade"):
+            status["built"] = False
+            status["reason"] = "refusing_to_overwrite_research_grade"
+            return status
+        if not force:
+            status["built"] = False
+            status["reason"] = "ledger_already_present"
+            return status
 
     from data.bhavcopy_runtime import ensure_loaded
     from data import bhavcopy_store as BS

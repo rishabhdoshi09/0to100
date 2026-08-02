@@ -77,7 +77,11 @@ def capabilities(active_failures) -> dict:
     if UNRECONCILED in f:
         notes.append("Records need a reconciliation pass before new risk.")
     if UNIVERSE_INCOMPLETE in f:
-        notes.append("Point-in-time universe history is incomplete — PIT-dependent research remains blocked.")
+        notes.append(
+            "Point-in-time universe history is incomplete — PIT-dependent research remains blocked. "
+            "Drop logs/universe_history.incoming.json (or set QT_UNIVERSE_SOURCE_FILE) with official "
+            "listing/delisting rows for research-grade membership."
+        )
     if OPTIONS_HISTORY_INCOMPLETE in f:
         notes.append("Options EOD OI/IV history is incomplete — multi-day PCR/IV studies stay limited.")
     if LEARNING_FAILED in f:

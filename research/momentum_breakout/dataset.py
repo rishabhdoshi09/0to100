@@ -129,8 +129,12 @@ class BhavDataProvider:
                 "fundamental_source": "NONE (no PIT fundamentals)"}
 
     def universe_policy(self):
-        return {"survivorship_complete": bool(self._universe.get("survivorship_complete")),
-                "note": self._universe.get("note", "")}
+        return {
+            "survivorship_complete": bool(self._universe.get("survivorship_complete")),
+            "research_grade": bool(self._universe.get("research_grade")),
+            "source": str(self._universe.get("source") or ""),
+            "note": self._universe.get("note", ""),
+        }
 
     def adjustment_policy(self):
         from data.corporate_actions import load_events
@@ -239,6 +243,12 @@ def data_quality_report(provider, cfg: MomentumBreakoutConfig | None = None
     if not up.get("survivorship_complete"):
         lims.append("SURVIVORSHIP_INCOMPLETE: universe is today's survivors — "
                     "historical results are optimistically biased")
+    elif up.get("research_grade") is False:
+        lims.append(
+            "SURVIVORSHIP_INFERRED: membership is bhav-bootstrap / non-official "
+            f"(source={up.get('source') or 'unknown'}) — not research-grade; "
+            "PASS remains blocked until an official listing/delisting archive is ingested"
+        )
     adj = provider.adjustment_policy()
     if "RAW" in json.dumps(adj):
         lims.append("CA_ADJUSTMENT: corporate actions applied only if ca_events.json "
