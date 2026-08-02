@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { sendControl } from './api'
 import { MetricCard, Panel } from './components'
 import {
   fetchUsDashboard,
   fetchUsStock,
-  sendControl,
   type UsDashboard,
   type UsScanRecord,
   type UsStockWorkspace,
