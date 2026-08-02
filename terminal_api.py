@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 import json
+import logging
 import os
 from pathlib import Path
 import sqlite3
@@ -32,6 +33,17 @@ app.add_middleware(
     allow_methods=["GET", "POST"],
     allow_headers=["*"],
 )
+
+
+class _QuietHealthAccess(logging.Filter):
+    """Stack watch loops hit /api/health often — keep the console readable."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        msg = record.getMessage()
+        return "/api/health" not in msg and ' "GET /health' not in msg
+
+
+logging.getLogger("uvicorn.access").addFilter(_QuietHealthAccess())
 
 _ops_process: subprocess.Popen | None = None
 _ops_ensure_last_attempt: float = 0.0

@@ -40,11 +40,17 @@ def test_stack_cleanup_reaps_vite_by_port() -> None:
 def test_stack_monitor_is_resilient() -> None:
     """UI stack must not die on autonomy exit or a busy-worker HTTP health flap."""
     text = (SCRIPTS / "run_quantterm.sh").read_text(encoding="utf-8")
+    complete = (SCRIPTS / "run_quantterm_complete.sh").read_text(encoding="utf-8")
     assert "Autonomy supervisor exited; leaving API + Vite running" in text
     assert "API_DEAD_LIMIT" in text
     assert "process still up) — not exiting" in text
     assert "stack_port_listening 5173" in text
     assert "continuing with API + Vite only" in text
+    # Low-CPU watch: long sleep + infrequent HTTP probes (not every 3s curl).
+    assert 'WATCH_SLEEP_S="${QT_STACK_WATCH_SLEEP_S:-15}"' in text
+    assert "HTTP_PROBE_EVERY" in text
+    assert 'WATCH_SLEEP_S="${QT_STACK_WATCH_SLEEP_S:-15}"' in complete
+    assert "stack_port_listening 8766" in complete
 
 
 def test_terminal_health_endpoint_is_pure_liveness() -> None:

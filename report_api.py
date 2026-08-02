@@ -1,6 +1,7 @@
 """Local API for QuantTerm research reports and evidence intake."""
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Query, Request, Response
@@ -15,6 +16,16 @@ app.add_middleware(
     allow_methods=["GET", "POST"],
     allow_headers=["*"],
 )
+
+
+class _QuietHealthAccess(logging.Filter):
+    """Stack watch loops hit /health often — keep the console readable."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        return "/health" not in record.getMessage()
+
+
+logging.getLogger("uvicorn.access").addFilter(_QuietHealthAccess())
 
 
 @app.get("/health")

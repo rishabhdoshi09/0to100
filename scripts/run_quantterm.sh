@@ -161,10 +161,15 @@ echo "[STACK] If the UI still errors, run: bash scripts/stop_quantterm.sh && bas
 
 # Hard-fail only when the API process/port is gone. HTTP soft-fails while the
 # process is alive usually mean a busy worker — never tear down Vite for that.
+# Keep watch loops light: port/pid every ~15s; HTTP curl only every ~60s.
 API_DEAD_LIMIT=3
 API_HTTP_WARN_EVERY=5
+WATCH_SLEEP_S="${QT_STACK_WATCH_SLEEP_S:-15}"
+HTTP_PROBE_EVERY="${QT_STACK_HTTP_PROBE_EVERY:-4}"
+WATCH_TICK=0
 
 while true; do
+  WATCH_TICK=$((WATCH_TICK + 1))
   if ! stack_port_listening 5173; then
     if [[ -n "$FRONTEND_PID" ]] && kill -0 "$FRONTEND_PID" >/dev/null 2>&1; then
       echo "[STACK] Vite is not listening on :5173 (npm pid=$FRONTEND_PID still alive)." >&2
@@ -193,14 +198,17 @@ while true; do
     fi
   else
     API_HEALTH_FAILS=0
-    if ! stack_health_ok "$API_HEALTH"; then
-      # Process is up but HTTP probe timed out — warn, do not exit.
-      API_HTTP_FAILS=$((API_HTTP_FAILS + 1))
-      if (( API_HTTP_FAILS == 1 || API_HTTP_FAILS % API_HTTP_WARN_EVERY == 0 )); then
-        echo "[STACK] Terminal API HTTP health slow/busy at $API_HEALTH (warn ${API_HTTP_FAILS}; process still up) — not exiting." >&2
+    # Cheap port check is enough most ticks; occasional HTTP confirms the app loop.
+    if (( WATCH_TICK % HTTP_PROBE_EVERY == 0 )); then
+      if ! stack_health_ok "$API_HEALTH" 2; then
+        # Process is up but HTTP probe timed out — warn, do not exit.
+        API_HTTP_FAILS=$((API_HTTP_FAILS + 1))
+        if (( API_HTTP_FAILS == 1 || API_HTTP_FAILS % API_HTTP_WARN_EVERY == 0 )); then
+          echo "[STACK] Terminal API HTTP health slow/busy at $API_HEALTH (warn ${API_HTTP_FAILS}; process still up) — not exiting." >&2
+        fi
+      else
+        API_HTTP_FAILS=0
       fi
-    else
-      API_HTTP_FAILS=0
     fi
   fi
 
@@ -209,5 +217,5 @@ while true; do
     echo "[STACK] Autonomy supervisor exited; leaving API + Vite running." >&2
     AUTONOMY_PID=""
   fi
-  sleep 3
+  sleep "$WATCH_SLEEP_S"
 done

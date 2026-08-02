@@ -87,13 +87,25 @@ echo "[COMPLETE STACK] Starting QuantTerm terminal, market operations and autono
 bash scripts/run_quantterm.sh &
 STACK_PID=$!
 
+# Light watch loop: process/port every ~15s; HTTP curl only every ~60s.
+WATCH_SLEEP_S="${QT_STACK_WATCH_SLEEP_S:-15}"
+HTTP_PROBE_EVERY="${QT_STACK_HTTP_PROBE_EVERY:-4}"
+WATCH_TICK=0
+
 while true; do
+  WATCH_TICK=$((WATCH_TICK + 1))
   report_alive=1
   if [[ "$REPORT_EXTERNAL" != "1" ]] && [[ -n "$REPORT_PID" ]] && ! kill -0 "$REPORT_PID" >/dev/null 2>&1; then
     report_alive=0
   fi
-  if ! stack_health_ok "$REPORT_HEALTH"; then
+  if ! stack_port_listening 8766; then
     report_alive=0
+  fi
+  # Occasional HTTP probe; port/pid cover most liveness cheaply.
+  if [[ "$report_alive" == "1" ]] && (( WATCH_TICK % HTTP_PROBE_EVERY == 0 )); then
+    if ! stack_health_ok "$REPORT_HEALTH" 2; then
+      report_alive=0
+    fi
   fi
 
   if [[ "$report_alive" == "1" ]]; then
@@ -117,5 +129,5 @@ while true; do
     echo "[COMPLETE STACK] Tip: bash scripts/stop_quantterm.sh  then  bash scripts/run_quantterm_complete.sh" >&2
     exit 1
   fi
-  sleep 3
+  sleep "$WATCH_SLEEP_S"
 done
