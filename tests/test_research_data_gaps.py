@@ -79,7 +79,8 @@ def test_ca_job_clears_only_with_real_events(tmp_path, monkeypatch):
 
     blocked = JOBS.run_corporate_actions(JOBS._Ctx(Deps()))
     assert blocked.status == JS.BLOCKED
-    assert H.CA_INCOMPLETE in blocked.failures
+    assert H.CA_INCOMPLETE in blocked.clears
+    assert H.CA_INCOMPLETE not in blocked.failures
 
     from data import corporate_actions as CA
 

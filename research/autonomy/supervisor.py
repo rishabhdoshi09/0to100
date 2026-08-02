@@ -78,6 +78,7 @@ class Supervisor:
         self._owner_path = self.root / "owner_state.json"
         self.failures = self._load_failures()
         self.owner_state = self._load_owner_state()
+        self._reconcile_expected_research_gaps()
         if self.owner_state.get("new_entries_paused"):
             self.failures.add(H.OWNER_PAUSED)
         else:
@@ -90,6 +91,16 @@ class Supervisor:
             return set(json.loads(self._failures_path.read_text(encoding="utf-8")))
         except Exception:
             return set()
+
+    def _reconcile_expected_research_gaps(self) -> None:
+        """Drop sticky CA / universe incompletes for operator-pending research gaps.
+
+        Missing CA or survivorship history is owned by the retail checklist and BLOCKED
+        jobs. QuantTerm will not invent those ledgers — they must not permanently red
+        the heartbeat as organisational failures.
+        """
+        self.failures.discard(H.CA_INCOMPLETE)
+        self.failures.discard(H.UNIVERSE_INCOMPLETE)
 
     def _save_failures(self) -> None:
         tmp = self._failures_path.with_suffix(".tmp")
@@ -138,6 +149,11 @@ class Supervisor:
         self._write_status()
 
     def heartbeat(self):
+        # Keep operator-pending research gaps out of sticky failures (checklist owns them).
+        before = set(self.failures)
+        self._reconcile_expected_research_gaps()
+        if self.failures != before:
+            self._save_failures()
         self._write_status()
 
     def _write_status(self):
@@ -396,6 +412,8 @@ class Supervisor:
 
         self.failures |= set(result.failures)
         self.failures -= set(result.clears)
+        # CA / universe incompletes are never sticky organisational failures.
+        self._reconcile_expected_research_gaps()
         self._save_failures()
 
         if result.status == JS.RETRYABLE_FAILED:

@@ -548,15 +548,19 @@ def run_corporate_actions(ctx) -> JobResult:
                          error_code="CA_VALIDATION_ERROR", error_message=str(exc),
                          failures={H.CA_INCOMPLETE})
     if not info.get("available"):
+        # Operator-pending source — research checklist tracks the gap. Do NOT sticky-fail
+        # the heartbeat: QuantTerm refuses to invent CA events, so BLOCKED is expected.
         return JobResult(JS.BLOCKED,
                          "official corporate-action table unavailable; drop "
                          "logs/ca_events.incoming.json (or set QT_CA_SOURCE_FILE) "
-                         "with real NSE CA events — QuantTerm will not invent them",
-                         failures={H.CA_INCOMPLETE}, blocked_on=DEP_CA_SOURCE, metadata=info)
+                         "with real NSE CA events — QuantTerm will not invent them. "
+                         "Or: python main.py ca-ingest --from-gaps",
+                         clears={H.CA_INCOMPLETE}, blocked_on=DEP_CA_SOURCE, metadata=info)
     if int(info.get("events") or info.get("symbols") or 0) <= 0:
         return JobResult(JS.BLOCKED,
-                         "corporate-action ledger is present but empty; research stays RAW",
-                         failures={H.CA_INCOMPLETE}, blocked_on=DEP_CA_SOURCE, metadata=info)
+                         "corporate-action ledger is present but empty; research stays RAW. "
+                         "Fill logs/ca_events.todo.csv from NSE filings, then ca-ingest.",
+                         clears={H.CA_INCOMPLETE}, blocked_on=DEP_CA_SOURCE, metadata=info)
     return JobResult(JS.SUCCEEDED,
                      f"corporate actions loaded · {info.get('symbols', 0)} symbols / "
                      f"{info.get('events', info.get('symbols', 0))} events",
@@ -575,9 +579,15 @@ def run_universe_history(ctx) -> JobResult:
                          error_code="UNIVERSE_HISTORY_ERROR", error_message=str(exc),
                          failures={H.UNIVERSE_INCOMPLETE})
     if not info.get("survivorship_complete"):
-        return JobResult(JS.BLOCKED, info.get("note") or "point-in-time universe unavailable",
-                         failures={H.UNIVERSE_INCOMPLETE}, blocked_on=DEP_UNIVERSE_SOURCE,
-                         metadata=info)
+        # Survivors-only / empty bhav bootstrap is an acknowledged research limit,
+        # not a sticky organisational failure. Checklist + research_grade=false remain honest.
+        return JobResult(
+            JS.BLOCKED,
+            info.get("note") or "point-in-time universe unavailable",
+            clears={H.UNIVERSE_INCOMPLETE},
+            blocked_on=DEP_UNIVERSE_SOURCE,
+            metadata=info,
+        )
     source = info.get("source") or "operator"
     grade = "research-grade" if info.get("research_grade") else "inferred/bootstrap"
     return JobResult(

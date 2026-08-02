@@ -37,7 +37,8 @@ READ_ONLY = "read_only"
 # which failures block / limit NEW paper entries
 _ENTRY_BLOCK = {AUTH_MISSING, AUTH_EXPIRED, PROVIDER_UNAVAILABLE, SNAPSHOT_STALE,
                 EVENT_STORE_FAILURE, RISK_GOVERNOR_UNHEALTHY, UNRECONCILED, OWNER_PAUSED}
-_ENTRY_LIMIT = {CA_INCOMPLETE, LIVE_FEED_STALE}
+# CA gaps limit historical research honesty, not today's paper tape — keep out of entry limit.
+_ENTRY_LIMIT = {LIVE_FEED_STALE}
 # which failures limit existing-position management (exits are almost never fully blocked)
 _EXIT_LIMIT = {SNAPSHOT_STALE, LIVE_FEED_STALE, RISK_GOVERNOR_UNHEALTHY, UNRECONCILED, EVENT_STORE_FAILURE}
 # which failures block / limit research
