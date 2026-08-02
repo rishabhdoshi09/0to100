@@ -5,6 +5,7 @@ No API key required — NSE publishes this daily.
 from __future__ import annotations
 
 import logging
+import time
 from datetime import datetime, timedelta
 
 import pandas as pd
@@ -14,6 +15,10 @@ import streamlit as st
 logger = logging.getLogger("quantterm.fii_dii")
 
 _NSE_BASE = "https://www.nseindia.com"
+_DERIV_STATS_TTL_S = 3600
+_deriv_stats_cache: dict | None = None
+_deriv_stats_cache_at: float = 0.0
+_deriv_stats_unavailable_logged = False
 _NSE_HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -179,68 +184,127 @@ def get_block_deals(days: int = 10) -> pd.DataFrame:
     return pd.DataFrame(columns=["date", "symbol", "client_name", "buy_sell", "quantity", "price"])
 
 
+def _reset_derivative_stats_cache_for_tests() -> None:
+  """Test helper — clears derivative-stats TTL cache."""
+  global _deriv_stats_cache, _deriv_stats_cache_at, _deriv_stats_unavailable_logged
+  _deriv_stats_cache = None
+  _deriv_stats_cache_at = 0.0
+  _deriv_stats_unavailable_logged = False
+
+
+def _empty_derivative_stats(note: str) -> dict:
+    return {
+        "available": False,
+        "index_futures_net": None,
+        "index_options_net": None,
+        "stock_futures_net": None,
+        "stock_options_net": None,
+        "total_net": None,
+        "note": note,
+        "source": "nse_public_api",
+    }
+
+
+def _parse_derivative_stats_rows(data: list) -> dict:
+    """Parse NSE FII F&O positioning rows → net ₹ Cr by instrument bucket."""
+    result: dict = {
+        "available": True,
+        "index_futures_net": 0.0,
+        "index_options_net": 0.0,
+        "stock_futures_net": 0.0,
+        "stock_options_net": 0.0,
+        "total_net": 0.0,
+        "source": "nse_public_api",
+    }
+
+    for item in data:
+        if not isinstance(item, dict):
+            continue
+        category = str(item.get("category", item.get("instrumentType", ""))).lower()
+
+        def _val(key: str) -> float:
+            v = item.get(key, 0)
+            try:
+                return float(str(v).replace(",", "") or 0)
+            except Exception:
+                return 0.0
+
+        net = _val("netAmount")
+        if net == 0.0 and ("buyAmount" in item or "sellAmount" in item):
+            net = _val("buyAmount") - _val("sellAmount")
+        if net == 0.0 and "netValue" in item:
+            net = _val("netValue")
+
+        if "index" in category and "future" in category:
+            result["index_futures_net"] += net
+        elif "index" in category and "option" in category:
+            result["index_options_net"] += net
+        elif "stock" in category and "future" in category:
+            result["stock_futures_net"] += net
+        elif "stock" in category and "option" in category:
+            result["stock_options_net"] += net
+
+    result["total_net"] = sum(
+        result[k] for k in [
+            "index_futures_net",
+            "index_options_net",
+            "stock_futures_net",
+            "stock_options_net",
+        ]
+    )
+    return result
+
+
 def get_fii_derivative_stats_uncached() -> dict:
     """
-    Fetch FII derivatives positioning from NSE.
+    Fetch FII derivatives positioning from NSE when a public JSON feed exists.
 
-    Returns dict with keys:
-        index_futures_net, index_options_net, stock_futures_net,
-        stock_options_net, total_net
-    All values in ₹ Crore.
+    NSE removed the legacy ``api/fii-stats`` endpoint (404). We try
+    ``merged-daily-reports?key=fiiStats`` on trading days; otherwise return
+    ``available=False`` with null nets — never fabricated numbers.
     """
+    global _deriv_stats_cache, _deriv_stats_cache_at, _deriv_stats_unavailable_logged
+
+    now = time.time()
+    if _deriv_stats_cache is not None and now - _deriv_stats_cache_at < _DERIV_STATS_TTL_S:
+        return dict(_deriv_stats_cache)
+
+    note = (
+        "FII F&O positioning breakdown is not on a stable NSE JSON feed "
+        "(legacy api/fii-stats removed). Cash-market FII/DII flows remain available."
+    )
     try:
         session = _nse_session()
-        resp = session.get(f"{_NSE_BASE}/api/fii-stats", timeout=15)
-        resp.raise_for_status()
-        raw = resp.json()
-
-        # NSE returns a list; grab the latest/aggregate row
-        data = raw if isinstance(raw, list) else [raw]
-        result: dict = {
-            "index_futures_net": 0.0,
-            "index_options_net": 0.0,
-            "stock_futures_net": 0.0,
-            "stock_options_net": 0.0,
-            "total_net": 0.0,
-        }
-
-        for item in data:
-            category = str(item.get("category", item.get("instrumentType", ""))).lower()
-
-            def _val(key: str) -> float:
-                v = item.get(key, 0)
-                try:
-                    return float(str(v).replace(",", "") or 0)
-                except Exception:
-                    return 0.0
-
-            net = _val("netAmount") or (_val("buyAmount") - _val("sellAmount"))
-
-            if "index" in category and "future" in category:
-                result["index_futures_net"] += net
-            elif "index" in category and "option" in category:
-                result["index_options_net"] += net
-            elif "stock" in category and "future" in category:
-                result["stock_futures_net"] += net
-            elif "stock" in category and "option" in category:
-                result["stock_options_net"] += net
-
-        result["total_net"] = sum(
-            result[k] for k in ["index_futures_net", "index_options_net",
-                                 "stock_futures_net", "stock_options_net"]
+        resp = session.get(
+            f"{_NSE_BASE}/api/merged-daily-reports?key=fiiStats",
+            timeout=15,
         )
-        logger.info("FII derivative stats fetched: total_net=%.0f Cr", result["total_net"])
-        return result
-
+        if resp.ok:
+            raw = resp.json()
+            data = raw.get("data") if isinstance(raw, dict) else raw
+            if isinstance(data, list) and data:
+                result = _parse_derivative_stats_rows(data)
+                _deriv_stats_cache = result
+                _deriv_stats_cache_at = now
+                logger.info(
+                    "FII derivative stats fetched: total_net=%.0f Cr",
+                    result["total_net"],
+                )
+                return dict(result)
     except Exception as exc:
-        logger.warning("NSE FII derivative stats endpoint failed: %s", exc)
-        return {
-            "index_futures_net": None,
-            "index_options_net": None,
-            "stock_futures_net": None,
-            "stock_options_net": None,
-            "total_net": None,
-        }
+        logger.debug("FII derivative stats fetch failed: %s", exc)
+
+    if not _deriv_stats_unavailable_logged:
+        logger.info(
+            "FII derivative positioning unavailable from NSE public API; "
+            "cash FII/DII flows still load via fiidiiTradeReact."
+        )
+        _deriv_stats_unavailable_logged = True
+
+    result = _empty_derivative_stats(note)
+    _deriv_stats_cache = result
+    _deriv_stats_cache_at = now
+    return dict(result)
 
 
 @st.cache_data(ttl=3600)

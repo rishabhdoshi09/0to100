@@ -2659,6 +2659,33 @@ class TestInstitutionalFlows:
         assert again.get("reason") == "fresh"
         reset_store()
 
+    def test_fii_derivative_stats_fail_closed_without_legacy_endpoint(self):
+        from data.fii_dii import (
+            _reset_derivative_stats_cache_for_tests,
+            get_fii_derivative_stats_uncached,
+        )
+
+        _reset_derivative_stats_cache_for_tests()
+        stats = get_fii_derivative_stats_uncached()
+        assert stats["available"] is False
+        assert stats["total_net"] is None
+        assert stats["index_futures_net"] is None
+        assert stats.get("note")
+
+    def test_fii_derivative_stats_parse_rows(self):
+        from data.fii_dii import _parse_derivative_stats_rows
+
+        parsed = _parse_derivative_stats_rows([
+            {"category": "Index Futures", "netAmount": "100"},
+            {"category": "Index Options", "netAmount": "-40"},
+            {"category": "Stock Futures", "buyAmount": "50", "sellAmount": "30"},
+        ])
+        assert parsed["available"] is True
+        assert parsed["index_futures_net"] == 100.0
+        assert parsed["index_options_net"] == -40.0
+        assert parsed["stock_futures_net"] == 20.0
+        assert parsed["total_net"] == 80.0
+
     def test_lazy_fundamentals_ensure_mock(self):
         from fundamentals.cache import FundamentalsCache
         from fundamentals import fetcher as fetcher_mod
