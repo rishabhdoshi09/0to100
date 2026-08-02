@@ -354,7 +354,7 @@ export function ProductStockIntelligenceView(props: ViewProps) {
             <Panel title="COMPANY SNAPSHOT" subtitle={workspace?.sector || 'Sector unknown'}>
               {workspace?.fundamentals.company_about
                 ? <div className="company-about"><p>{workspace.fundamentals.company_about}</p></div>
-                : <EmptyState title="Company description not in cache" detail="Refresh fundamentals or import company profile." />}
+                : <EmptyState title="Company description not in cache" detail="Loads automatically from Screener.in when you open this stock (~1s)." />}
               <div className="fact-grid">
                 <div><span>State</span><strong>{words(workspace?.state || '—')}</strong></div>
                 <div><span>Coverage</span><strong>{workspace?.fundamentals.coverage_pct ?? 0}%</strong></div>
@@ -391,7 +391,7 @@ export function ProductStockIntelligenceView(props: ViewProps) {
       {tab === 'Financials' && (
         <Panel title="FUNDAMENTALS — CURRENT SNAPSHOT" subtitle={`${workspace?.fundamentals.coverage_pct ?? 0}% coverage · fetched ${workspace?.fundamentals.fetched_at || 'unknown'}`}>
           {(workspace?.fundamentals.metrics || []).length === 0
-            ? <EmptyState title="No fundamental snapshot" detail="Run fundamentals refresh or import financial data." />
+            ? <EmptyState title="No fundamental snapshot" detail="Opens Stock Intelligence to fetch from Screener.in automatically, or use Refresh fundamentals." />
             : <div className="explain-metric-grid fundamentals">{(workspace?.fundamentals.metrics || []).map((metric) => <MetricExplanation metric={metric} key={metric.key} />)}</div>}
         </Panel>
       )}
@@ -421,7 +421,7 @@ export function ProductStockIntelligenceView(props: ViewProps) {
             ))}
           </div>
           {!workspace?.fundamentals.metrics?.some((m) => /promoter|fii|dii/i.test(m.label))
-            && <EmptyState title="Ownership not in cache" detail="Refresh fundamentals or import shareholding data." />}
+            && <EmptyState title="Ownership not in cache" detail="Shareholding loads with fundamentals when you open this stock." />}
         </Panel>
       )}
 

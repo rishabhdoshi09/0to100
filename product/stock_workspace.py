@@ -303,7 +303,7 @@ def _default_inputs(symbol: str) -> dict[str, Any]:
 
     scan = load_scan() or {}
     long_term = load_long_term_scan() or {}
-    raw = load_raw_fundamentals(symbol)
+    raw = load_raw_fundamentals(symbol, auto_fetch=True)
     try:
         from data.bhavcopy_runtime import get_ohlcv
         frame = get_ohlcv(symbol)

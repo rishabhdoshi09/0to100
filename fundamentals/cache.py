@@ -61,6 +61,45 @@ class FundamentalsCache:
         log.info("fundamentals_cache_hit", symbol=symbol, age_minutes=round(age / 60, 1))
         return json.loads(data_json)
 
+    def get_any(self, symbol: str) -> Optional[Dict[str, Any]]:
+        """Return cached payload regardless of TTL (for lazy fallback after failed scrape)."""
+        symbol = symbol.upper()
+        with _connect() as conn:
+            row = conn.execute(
+                "SELECT data_json FROM fundamentals_cache WHERE symbol = ?",
+                (symbol,),
+            ).fetchone()
+        if row is None:
+            return None
+        return json.loads(row[0])
+
+    def has(self, symbol: str) -> bool:
+        symbol = symbol.upper()
+        with _connect() as conn:
+            row = conn.execute(
+                "SELECT 1 FROM fundamentals_cache WHERE symbol = ?",
+                (symbol,),
+            ).fetchone()
+        return row is not None
+
+    def stats(self) -> dict[str, Any]:
+        """Row counts for API status — no bulk backfill required."""
+        with _connect() as conn:
+            total = conn.execute("SELECT COUNT(*) FROM fundamentals_cache").fetchone()[0]
+            fresh_cutoff = time.time() - _TTL
+            fresh = conn.execute(
+                "SELECT COUNT(*) FROM fundamentals_cache WHERE fetched_at >= ?",
+                (fresh_cutoff,),
+            ).fetchone()[0]
+        return {
+            "symbols_cached": int(total or 0),
+            "symbols_fresh": int(fresh or 0),
+            "symbols_stale": max(0, int(total or 0) - int(fresh or 0)),
+            "db_path": str(_DB_PATH),
+            "ttl_hours": round(_TTL / 3600, 1),
+            "lazy_sync": True,
+        }
+
     def set(self, symbol: str, data: Dict[str, Any]) -> None:
         """Store data with current timestamp."""
         symbol = symbol.upper()

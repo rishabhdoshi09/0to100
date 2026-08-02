@@ -26,18 +26,8 @@ def get_deep_fundamentals(
     """
     Return full fundamentals dict for *symbol*.
 
-    Flow
-    ----
-    1. If force_refresh=False, check SQLite cache.
-       Return cached data if fresh (< 1 day old).
-    2. Otherwise scrape screener.in (1-second polite delay).
-    3. Store result in cache.
-    4. Return data.
-
-    Raises
-    ------
-    ValueError  – symbol not found on screener.in (HTTP 404)
-    RuntimeError – unexpected HTTP status
+    Prefer ``fundamentals.lazy.ensure_deep_fundamentals`` for API/UI paths
+  (rate-limited, backoff). This function is the direct scrape + cache write.
     """
     symbol = symbol.upper().strip()
 
@@ -54,3 +44,10 @@ def get_deep_fundamentals(
     _cache.clear_old()   # housekeeping — remove stale entries
 
     return data
+
+
+def ensure_deep_fundamentals(symbol: str, *, force_refresh: bool = False) -> Dict[str, Any]:
+    """Lazy per-symbol sync (see fundamentals.lazy)."""
+    from fundamentals.lazy import ensure_deep_fundamentals as _ensure
+
+    return _ensure(symbol, force_refresh=force_refresh)

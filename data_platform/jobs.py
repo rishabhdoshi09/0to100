@@ -60,12 +60,12 @@ def run_job(job_id: str) -> dict[str, Any]:
     if spec is None:
         return {"ok": False, "error": "unknown job", "job_id": job_id}
     if job_id == "fundamentals":
-        try:
-            from fundamentals.backfill import run_fundamentals_backfill
-            report = run_fundamentals_backfill(scope="nse", force=False, limit=50)
-            return {"ok": True, "job_id": job_id, "report": report}
-        except Exception as exc:
-            return {"ok": False, "job_id": job_id, "error": str(exc)}
+        return {
+            "ok": True,
+            "job_id": job_id,
+            "message": "Fundamentals load lazily per symbol when you open Stock Intelligence.",
+            "stats": __import__("fundamentals.lazy", fromlist=["cache_status"]).cache_status(),
+        }
     if job_id == "corporate_actions":
         try:
             from data.corporate_actions import load_events

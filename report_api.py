@@ -115,9 +115,11 @@ def institutional_market_report(
 @app.get("/evidence/{symbol}")
 def evidence_status(symbol: str) -> dict:
     try:
-        from reporting.evidence_intake import evidence_requirements
+        from reporting.evidence_intake import clean_symbol, evidence_requirements, load_raw_fundamentals
 
-        return evidence_requirements(symbol, **_runtime_as_of(symbol))
+        clean = clean_symbol(symbol)
+        load_raw_fundamentals(clean, auto_fetch=True)
+        return evidence_requirements(clean, **_runtime_as_of(clean))
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:

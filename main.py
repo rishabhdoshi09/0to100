@@ -301,16 +301,16 @@ def cmd_backtest(args) -> None:
 
 
 def cmd_fundamentals_backfill(args) -> None:
-    """Backfill Screener fundamentals into the local cache for many symbols."""
-    from fundamentals.backfill import backfill_status, run_fundamentals_backfill
+    """Optional maintenance batch — Stock Intelligence fetches each symbol on demand by default."""
+    from fundamentals.lazy import cache_status
+    from fundamentals.backfill import run_fundamentals_backfill
 
     if args.status_only:
-        print(json.dumps(backfill_status(), indent=2, default=str))
+        print(json.dumps(cache_status(), indent=2, default=str))
         return
 
-    print("\n=== Fundamentals backfill ===")
-    print(f"Scope: {args.scope} · force={args.force} · limit={args.limit or 'all'}")
-    print("Source: screener.in (≈1 sec/symbol). ETFs / missing pages will be recorded as failed.\n")
+    print("\n=== Fundamentals maintenance batch (optional) ===")
+    print("Normal use: open Stock Intelligence — each symbol scrapes Screener.in once (~1s) when missing.\n")
 
     report = run_fundamentals_backfill(
         scope=args.scope,

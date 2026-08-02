@@ -197,8 +197,18 @@ def freshness(as_of: Any, max_age_days: int) -> tuple[str, int | None]:
     return ("FRESH" if age <= max_age_days else "STALE"), age
 
 
-def load_raw_fundamentals(symbol: str) -> dict[str, Any]:
+def load_raw_fundamentals(symbol: str, *, auto_fetch: bool = False) -> dict[str, Any]:
     symbol = clean_symbol(symbol)
+    if auto_fetch:
+        from fundamentals.cache import FundamentalsCache
+
+        if not FundamentalsCache().has(symbol):
+            try:
+                from fundamentals.lazy import ensure_deep_fundamentals
+
+                ensure_deep_fundamentals(symbol, force_refresh=False)
+            except Exception:
+                pass
     if not FUNDAMENTALS_DB.exists():
         return {"available": False, "data": {}, "fetched_at": "", "age_days": None, "freshness": "MISSING", "section_as_of": {}}
     try:

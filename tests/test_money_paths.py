@@ -2659,6 +2659,40 @@ class TestInstitutionalFlows:
         assert again.get("reason") == "fresh"
         reset_store()
 
+    def test_lazy_fundamentals_ensure_mock(self):
+        from fundamentals.cache import FundamentalsCache
+        from fundamentals import fetcher as fetcher_mod
+        from fundamentals.lazy import ensure_deep_fundamentals
+
+        sym = "LAZYTEST"
+        FundamentalsCache().invalidate(sym)
+
+        class _MockScraper:
+            def fetch_all(self, symbol: str) -> dict:
+                return {"about": "mock company", "quarterly_results": [{"": "Q1"}]}
+
+        original = fetcher_mod._scraper
+        fetcher_mod._scraper = _MockScraper()
+        try:
+            data = ensure_deep_fundamentals(sym, force_refresh=False)
+            assert data.get("about") == "mock company"
+            assert FundamentalsCache().has(sym)
+        finally:
+            fetcher_mod._scraper = original
+            FundamentalsCache().invalidate(sym)
+
+    def test_lazy_fundamentals_cache_hit(self):
+        from fundamentals.cache import FundamentalsCache
+        from fundamentals.lazy import ensure_deep_fundamentals
+
+        sym = "LAZYHIT"
+        cache = FundamentalsCache()
+        cache.invalidate(sym)
+        cache.set(sym, {"about": "test co", "quarterly_results": []})
+        hit = ensure_deep_fundamentals(sym, force_refresh=False)
+        assert hit.get("about") == "test co"
+        cache.invalidate(sym)
+
     def test_bulk_deals_and_net_buys(self):
         from data.institutional_flows import parse_bulk_deals, bulk_buy_symbols
         deals = parse_bulk_deals({"data": [

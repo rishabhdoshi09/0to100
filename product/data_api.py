@@ -56,17 +56,19 @@ def symbol_ratios_workspace(symbol: str) -> dict[str, Any]:
 
 
 def fundamentals_backfill_status_workspace() -> dict[str, Any]:
-    from fundamentals.backfill import backfill_status
-    return backfill_status()
+    from fundamentals.lazy import cache_status
+
+    return cache_status()
 
 
 def fundamentals_backfill_run(
-    scope: str = Query("nse", description="nse | nifty500 | bhav"),
-    limit: int = Query(50, ge=1, le=500),
+    scope: str = Query("nse", description="nse | nifty500 | bhav (optional maintenance)"),
+    limit: int = Query(5, ge=1, le=50),
     force: bool = Query(False),
 ) -> dict[str, Any]:
-    """Optional bounded batch (maintenance). Per-symbol fundamentals load on Stock Intelligence refresh."""
+    """Optional maintenance batch — normal use is lazy per-symbol on Stock Intelligence."""
     from fundamentals.backfill import run_fundamentals_backfill
+
     return run_fundamentals_backfill(scope=scope, force=force, limit=limit, resume=True)
 
 
