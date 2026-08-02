@@ -326,6 +326,34 @@ def cmd_fundamentals_backfill(args) -> None:
     print(f"State file: {report.get('state_path')}\n")
 
 
+def cmd_signal_backtest(args) -> None:
+    """Full-universe (default) scanner signal backtest — research only, never places orders."""
+    from product.full_universe_backtest import backtest_status, run_full_universe_backtest
+
+    if args.status_only:
+        print(json.dumps(backtest_status(), indent=2, default=str))
+        return
+
+    scope = str(getattr(args, "scope", "full") or "full")
+    print("\n=== Full-universe signal backtest (paper research) ===")
+    print(f"Scope: {scope} · LIVE locked · no orders\n")
+    report = run_full_universe_backtest(
+        scope=scope,
+        sample_step=int(getattr(args, "sample_step", 5) or 5),
+        lookback_sessions=int(getattr(args, "lookback", 250) or 250),
+        horizon=int(getattr(args, "horizon", 10) or 10),
+    )
+    uni = report.get("universe") or {}
+    print(
+        f"Symbols run: {uni.get('run', report.get('symbols'))} / "
+        f"available {uni.get('available_in_store', '?')} · truncated={uni.get('truncated')}"
+    )
+    print(f"Signal types: {len(report.get('signals') or {})} · elapsed {report.get('elapsed_s')}s")
+    print(f"Report: logs/signal_backtest.json\n")
+    if not report.get("ok", True):
+        print(f"Blocked: {report.get('error_code')} · {report.get('message')}")
+
+
 def cmd_fii_dii_backfill(args) -> None:
     """Force-refresh NSE FII/DII cash flows (optional; dashboard syncs lazily by default)."""
     from data.fii_dii_store import backfill_status, refresh_if_needed
@@ -1158,6 +1186,22 @@ def build_parser() -> argparse.ArgumentParser:
     fb.add_argument("--status", dest="status_only", action="store_true",
                     help="Print backfill progress JSON and exit")
 
+    sbt = sub.add_parser(
+        "signal-backtest",
+        help="Walk-forward scanner signal backtest on 100% of bhav stocks (research only)",
+    )
+    sbt.add_argument(
+        "--scope",
+        choices=["full", "bhav", "nse", "nifty500"],
+        default="full",
+        help="full/bhav = every bhav EQ symbol (default); nse/nifty500 = intersected subsets",
+    )
+    sbt.add_argument("--sample-step", type=int, default=5, dest="sample_step")
+    sbt.add_argument("--lookback", type=int, default=250)
+    sbt.add_argument("--horizon", type=int, default=10)
+    sbt.add_argument("--status", dest="status_only", action="store_true",
+                     help="Print last backtest status JSON and exit")
+
     fii = sub.add_parser(
         "fii-dii-backfill",
         help="Backfill NSE FII/DII cash-market history into logs/product/fii_dii.sqlite",
@@ -1267,6 +1311,7 @@ def main() -> None:
         "fnolive":    cmd_fnolive,
         "screener":   cmd_screener,
         "fundamentals-backfill": cmd_fundamentals_backfill,
+        "signal-backtest": cmd_signal_backtest,
         "fii-dii-backfill": cmd_fii_dii_backfill,
         "ca-ingest": cmd_ca_ingest,
         "universe-history": cmd_universe_history,

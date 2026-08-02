@@ -234,31 +234,70 @@ def sweep_targets(entry: float, stop: float, fwd_high, fwd_low, fwd_close,
 
 
 def run_backtest(sample_step: int = 5, lookback_sessions: int = 250,
-                 horizon: int = 10, max_symbols: int = 800, on_trade=None) -> dict:
+                 horizon: int = 10, max_symbols: int | None = None,
+                 symbols: list[str] | None = None, on_trade=None) -> dict:
     """
     Walk-forward backtest across the bhav store. Returns and persists
     per-signal stats. Needs ≥ (60 + lookback + horizon) sessions of data.
+
+    Universe selection:
+      • ``symbols`` provided → use that list exactly
+      • else ``max_symbols is None`` / ``<= 0`` → **every** bhav store symbol
+      • else first ``max_symbols`` only (legacy capped runs; marked truncated)
 
     `on_trade`, when given, is called with a full per-trade record dict for every
     FILLED trade (the Historical Trade Ledger hook). Default None → the aggregate
     path is byte-for-byte unchanged; the ledger is opt-in for the gauntlet.
     """
-    from data.bhavcopy_store import store_symbols, get_ohlcv
+    from data.bhavcopy_store import store_symbols
     from scan.unified_scanner import UnifiedScanner
 
     sc = UnifiedScanner()
     stats: dict[str, dict] = {}
-    symbols = store_symbols()[:max_symbols]
+    available = list(store_symbols() or [])
+    if symbols is not None:
+        wanted = [str(s).strip().upper() for s in symbols if str(s).strip()]
+        avail_set = set(available)
+        run_symbols = [s for s in wanted if s in avail_set] if avail_set else wanted
+        truncated = len(run_symbols) < len(wanted)
+    elif max_symbols is None or int(max_symbols) <= 0:
+        run_symbols = available
+        truncated = False
+    else:
+        cap = int(max_symbols)
+        run_symbols = available[:cap]
+        truncated = len(available) > len(run_symbols)
 
     with _state_lock:
-        _state.update(running=True, progress=0, total=len(symbols))
+        _state.update(running=True, progress=0, total=len(run_symbols))
 
     t0 = time.time()
     try:
-        return _run_backtest_inner(sc, stats, symbols, sample_step,
+        out = _run_backtest_inner(sc, stats, run_symbols, sample_step,
                                    lookback_sessions, horizon, t0, on_trade)
+        out["universe"] = {
+            "source": "bhavcopy_store",
+            "available": len(available),
+            "run": len(run_symbols),
+            "truncated": truncated,
+            "max_symbols": max_symbols,
+            "note": (
+                "Full bhav EQ universe"
+                if not truncated and symbols is None and (max_symbols is None or int(max_symbols or 0) <= 0)
+                else (
+                    f"Explicit list · {len(run_symbols)} symbols"
+                    if symbols is not None
+                    else f"Capped at {len(run_symbols)} of {len(available)} available symbols"
+                )
+            ),
+        }
+        try:
+            _OUT.parent.mkdir(parents=True, exist_ok=True)
+            _OUT.write_text(json.dumps(out, indent=2))
+        except Exception as exc:
+            log.warning("backtest_save_failed", error=str(exc))
+        return out
     finally:
-        # Crash-proof: 'running' can never stick True and freeze the UI button
         with _state_lock:
             _state["running"] = False
 
@@ -525,4 +564,5 @@ def accuracy_for(signal_key: str) -> str:
 if __name__ == "__main__":
     from data.bhavcopy_store import build_store
     build_store()
-    print(json.dumps(run_backtest(), indent=2))
+    # Default CLI module run = full bhav universe (not the old 800 cap).
+    print(json.dumps(run_backtest(max_symbols=None), indent=2))

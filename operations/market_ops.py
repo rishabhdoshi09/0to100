@@ -28,6 +28,7 @@ LONG_TERM_REFRESH = "LONG_TERM_REFRESH"
 NEWS_REFRESH = "NEWS_REFRESH"
 FNO_REFRESH = "FNO_REFRESH"
 DATA_PREPARE = "DATA_PREPARE"
+FULL_UNIVERSE_BACKTEST = "FULL_UNIVERSE_BACKTEST"
 
 LANES = {
     MARKET_SCAN: "market_scan",
@@ -36,6 +37,7 @@ LANES = {
     NEWS_REFRESH: "news",
     FNO_REFRESH: "data",
     DATA_PREPARE: "data",
+    FULL_UNIVERSE_BACKTEST: "research",
 }
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -354,6 +356,47 @@ class MarketOperationsWorker:
         fno = self._run_fno(operation)
         return {"history": history, "fno": fno}
 
+    def _run_full_universe_backtest(self, operation: dict[str, Any]) -> dict[str, Any]:
+        """Walk-forward signal backtest on 100% of bhav EQ symbols. Never places orders."""
+        operation_id = str(operation["operation_id"])
+        history = self._ensure_history(operation_id)
+        self._progress(
+            operation_id,
+            "FULL_UNIVERSE_BACKTEST",
+            f"Backtesting scanner signals across {history.get('symbols', 0):,} official EQ symbols",
+        )
+        from product.full_universe_backtest import run_full_universe_backtest
+
+        def progress(current: int, total: int, message: str) -> None:
+            self._progress(operation_id, "FULL_UNIVERSE_BACKTEST", message, current, total)
+
+        report = run_full_universe_backtest(scope="full", progress=progress)
+        if not report.get("ok", True) and report.get("error_code"):
+            raise OperationBlocked(
+                str(report.get("message") or "Full-universe backtest unavailable"),
+                code=str(report.get("error_code") or "BACKTEST_BLOCKED"),
+                result=report,
+            )
+        result = {
+            "generated_at": report.get("generated_at"),
+            "symbols": report.get("symbols"),
+            "horizon_days": report.get("horizon_days"),
+            "signal_count": len(report.get("signals") or {}),
+            "universe": report.get("universe") or {},
+            "elapsed_s": report.get("elapsed_s"),
+            "places_orders": False,
+            "live_locked": True,
+            "history": history,
+            "recommended_target_pct": report.get("recommended_target_pct"),
+        }
+        uni = result["universe"]
+        self._progress(
+            operation_id,
+            "BACKTEST_DONE",
+            f"Measured {result['signal_count']} signal types on {uni.get('run', result['symbols'])} symbols",
+        )
+        return result
+
     def _execute(self, operation: dict[str, Any]) -> dict[str, Any]:
         kind = str(operation.get("kind", ""))
         if kind == MARKET_SCAN:
@@ -368,6 +411,8 @@ class MarketOperationsWorker:
             return self._run_fno(operation)
         if kind == DATA_PREPARE:
             return self._run_data_prepare(operation)
+        if kind == FULL_UNIVERSE_BACKTEST:
+            return self._run_full_universe_backtest(operation)
         raise RuntimeError(f"No market-operations handler for {kind}")
 
     def _lane_loop(self, lane: str) -> None:

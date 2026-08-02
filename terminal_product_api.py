@@ -509,6 +509,14 @@ def pre_trade(symbol: str) -> dict[str, Any]:
     return _pre_trade_payload(symbol)
 
 
+@app.get("/api/signal-backtest")
+def signal_backtest_status() -> dict[str, Any]:
+    """Status of the last full-universe signal backtest (research only)."""
+    from product.full_universe_backtest import backtest_status
+
+    return backtest_status()
+
+
 @app.get("/api/symbols")
 def symbols_directory(q: str = "", limit: int = 0) -> dict[str, Any]:
     """Full NSE equity directory for search — A→Z, not limited to scan setups.
