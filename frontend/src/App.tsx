@@ -409,9 +409,9 @@ function App() {
         <section className="page-title">
           <div><h1>{pageTitles[active] || active}</h1><p>{pageSubtitles[active]}</p></div>
           <div className="page-actions">
-            <button type="button" disabled={!selected} onClick={openEquityReport}>View equity evidence PDF</button>
-            <button type="button" onClick={openBasketReport}>View top-3 basket PDF</button>
-            <button type="button" onClick={openInstitutionalReport}>View FII/DII market brief</button>
+            <button type="button" disabled={!selected} onClick={openEquityReport}>View equity evidence</button>
+            <button type="button" onClick={openBasketReport}>View top-3 basket</button>
+            <button type="button" onClick={openInstitutionalReport}>View FII/DII brief</button>
             <span>{controlState || (loading ? 'Loading real state…' : `Updated ${dashboard.generated_at ? new Date(dashboard.generated_at).toLocaleTimeString('en-IN') : '—'}`)}</span>
           </div>
         </section>

@@ -25,14 +25,17 @@ def health() -> dict:
 def _pdf_response(path: Path, *, download: bool = False) -> FileResponse:
     if not path.exists() or path.suffix.lower() != ".pdf":
         raise HTTPException(status_code=500, detail="Report generator did not produce a PDF")
-    disposition = "attachment" if download else "inline"
     safe_name = path.name.replace('"', "")
+    # Prefer Starlette's disposition helper so browsers render inline by default
+    # (Safari often downloads when Content-Disposition is missing or attachment).
     return FileResponse(
         path=str(path),
         media_type="application/pdf",
+        filename=safe_name,
+        content_disposition_type="attachment" if download else "inline",
         headers={
             "Cache-Control": "no-store",
-            "Content-Disposition": f'{disposition}; filename="{safe_name}"',
+            "X-Content-Type-Options": "nosniff",
         },
     )
 

@@ -416,6 +416,32 @@ body {
   background: #0a1018;
 }
 
+.report-pdf-status {
+  flex: 1;
+  display: grid;
+  place-content: center;
+  gap: 8px;
+  padding: 28px;
+  text-align: center;
+  color: #b7c7da;
+  font-size: 13px;
+}
+
+.report-pdf-status strong {
+  color: #edf7ff;
+  font-size: 15px;
+}
+
+.report-pdf-error {
+  color: #ffc9c9;
+}
+
+.report-pdf-error p {
+  margin: 0;
+  max-width: 42rem;
+  justify-self: center;
+}
+
 @media (max-width: 1450px) {
   body { min-width: 1060px; }
   .terminal-root { grid-template-columns: 210px minmax(0, 1fr); }
