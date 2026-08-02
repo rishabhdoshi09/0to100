@@ -74,6 +74,25 @@ echo "[STACK] Starting local API at http://127.0.0.1:8765 …"
 python -u -m uvicorn terminal_product_api:app --host 127.0.0.1 --port 8765 &
 API_PID=$!
 
+echo "[STACK] Waiting for terminal API (bhav load + market ops bootstrap can take ~15–45s)…"
+API_READY=0
+for _ in $(seq 1 240); do
+  if ! kill -0 "$API_PID" >/dev/null 2>&1; then
+    echo "[STACK] Terminal API exited during startup. Review errors above." >&2
+    exit 1
+  fi
+  if curl -fsS --max-time 2 "http://127.0.0.1:8765/api/health" >/dev/null 2>&1; then
+    API_READY=1
+    break
+  fi
+  sleep 0.5
+done
+if [[ "$API_READY" != "1" ]]; then
+  echo "[STACK] Terminal API did not become ready within 120s." >&2
+  exit 1
+fi
+echo "[STACK] Terminal API ready."
+
 echo "[STACK] Starting dedicated terminal at http://127.0.0.1:5173 …"
 (
   cd frontend
@@ -81,7 +100,7 @@ echo "[STACK] Starting dedicated terminal at http://127.0.0.1:5173 …"
 ) &
 FRONTEND_PID=$!
 
-echo "[STACK] QuantTerm is starting. Keep this terminal open; Ctrl-C stops local child services."
+echo "[STACK] QuantTerm is ready. Open http://127.0.0.1:5173 — keep this terminal open; Ctrl-C stops local child services."
 
 while true; do
   for entry in "API:$API_PID" "FRONTEND:$FRONTEND_PID"; do
