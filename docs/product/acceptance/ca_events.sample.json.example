@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "source": "SAMPLE_NOT_FOR_RESEARCH",
-  "note": "Illustrative corporate-action rows only. Replace with a real NSE/operator ledger before trusting ADJUSTED prices. QuantTerm will never invent events from price gaps.",
+  "note": "Illustrative share-count corporate-action rows only (split/bonus/consolidation). Cash dividends are rejected — they are not a share multiple. Replace with a real NSE/operator ledger before trusting ADJUSTED prices. QuantTerm will never invent events from price gaps. Workflow: python main.py ca-ingest --from-gaps → fill factor/type from NSE filings → python main.py ca-ingest --source logs/ca_events.todo.csv → python main.py ca-ingest --verify.",
   "events": [
     {
       "symbol": "EXAMPLE",

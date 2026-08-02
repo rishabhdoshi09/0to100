@@ -523,6 +523,33 @@ def signal_backtest_status() -> dict[str, Any]:
     return backtest_status()
 
 
+@app.get("/api/corporate-actions")
+def corporate_actions_status() -> dict[str, Any]:
+    """Corporate-action ledger status. Never invents events from price gaps."""
+    from data import corporate_actions as CA
+
+    return CA.ledger_status(verify=False)
+
+
+@app.post("/api/corporate-actions/from-gaps")
+def corporate_actions_from_gaps(sample: int = 400) -> dict[str, Any]:
+    """Export phantom-gap TODO CSV (factor/type blank). Never invents factors."""
+    from data import corporate_actions as CA
+
+    return CA.export_gap_todo(sample=max(20, min(int(sample or 400), 2000)))
+
+
+@app.post("/api/corporate-actions/verify")
+def corporate_actions_verify(sample: int = 80) -> dict[str, Any]:
+    """Verify adjust-on-read collapsed phantom gaps. Fails closed without a ledger."""
+    from data import corporate_actions as CA
+
+    verify = CA.refresh_adjustment_verify(sample=max(20, min(int(sample or 80), 400)))
+    status = CA.ledger_status(verify=False)
+    status["verify"] = verify
+    return status
+
+
 @app.get("/api/symbols")
 def symbols_directory(q: str = "", limit: int = 0) -> dict[str, Any]:
     """Full NSE equity directory for search — A→Z, not limited to scan setups.

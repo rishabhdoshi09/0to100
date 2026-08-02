@@ -11,6 +11,8 @@ import {
 } from './components'
 import { boolLabel, money, pct, score, words } from './format'
 import {
+  exportCorporateActionGaps,
+  fetchCorporateActionsStatus,
   fetchHoldings,
   fetchInstitutionalStack,
   fetchSignalBacktestStatus,
@@ -18,6 +20,8 @@ import {
   importHoldings,
   refreshFiiDiiStore,
   syncHoldings,
+  verifyCorporateActions,
+  type CorporateActionsStatus,
   type HoldingsBook,
   type InstitutionalDomain,
   type InstitutionalStack,
@@ -625,6 +629,8 @@ export function AutomationView({ dashboard, runControl }: ViewProps) {
   const a = dashboard.autonomy
   const activeJob = a.active_job || {}
   const [bt, setBt] = useState<SignalBacktestStatus | null>(null)
+  const [ca, setCa] = useState<CorporateActionsStatus | null>(null)
+  const [caBusy, setCaBusy] = useState('')
 
   useEffect(() => {
     let alive = true
@@ -632,6 +638,9 @@ export function AutomationView({ dashboard, runControl }: ViewProps) {
       fetchSignalBacktestStatus()
         .then((payload) => { if (alive) setBt(payload) })
         .catch(() => { if (alive) setBt(null) })
+      fetchCorporateActionsStatus()
+        .then((payload) => { if (alive) setCa(payload) })
+        .catch(() => { if (alive) setCa(null) })
     }
     load()
     const timer = window.setInterval(load, 5000)
@@ -644,6 +653,33 @@ export function AutomationView({ dashboard, runControl }: ViewProps) {
     : bt?.has_report
       ? `${uni.run || bt.symbols_run || 0} stocks · ${bt.generated_at || '—'}`
       : 'No full-universe report yet'
+
+  const caTone = ca?.adjustment_verified ? 'green' : (ca?.events ? 'amber' : 'amber')
+  const caValue = ca?.adjustment_verified
+    ? 'VERIFIED'
+    : (ca?.events ? 'PARTIAL' : 'MISSING')
+
+  const runCaGaps = async () => {
+    setCaBusy('Exporting gap TODO…')
+    try {
+      await exportCorporateActionGaps(400)
+      setCa(await fetchCorporateActionsStatus())
+    } catch {
+      /* surface stays honest empty */
+    } finally {
+      setCaBusy('')
+    }
+  }
+  const runCaVerify = async () => {
+    setCaBusy('Verifying adjustment…')
+    try {
+      setCa(await verifyCorporateActions(80))
+    } catch {
+      /* keep prior */
+    } finally {
+      setCaBusy('')
+    }
+  }
 
   return (
     <section className="workspace-view">
@@ -658,6 +694,12 @@ export function AutomationView({ dashboard, runControl }: ViewProps) {
           detail={btDetail}
           tone={bt?.running ? 'cyan' : (bt?.has_report && !uni.truncated ? 'green' : 'amber')}
         />
+        <MetricCard
+          label="CORPORATE ACTIONS"
+          value={caValue}
+          detail={ca ? `${ca.events} events · ${ca.symbols} symbols` : 'Ledger unread'}
+          tone={caTone}
+        />
         <MetricCard label="FAILURES" value={String(a.active_failures?.length || 0)} detail={(a.active_failures || []).join(', ') || 'None active'} tone="purple" />
       </div>
       <div className="automation-grid">
@@ -669,6 +711,21 @@ export function AutomationView({ dashboard, runControl }: ViewProps) {
             <div><span>Live locked</span><strong>{boolLabel(bt?.live_locked ?? true)}</strong></div>
           </div>
           <p className="panel-copy">After each full backtest, the next market scan demotes proven-loser combos and ranks by measured edge. Pre-trade GO/CAUTION/NO_GO reads that edge.</p>
+        </Panel>
+        <Panel title="CORPORATE ACTIONS" subtitle="Detect phantom gaps · never invent factors · adjust-on-read">
+          <div className="key-value-list">
+            <div><span>Events</span><strong>{ca?.events ?? 0}</strong></div>
+            <div><span>Verified</span><strong>{boolLabel(Boolean(ca?.adjustment_verified))}</strong></div>
+            <div><span>Gap rate</span><strong>{ca?.gap_rate == null ? '—' : `${(Number(ca.gap_rate) * 100).toFixed(1)}%`}</strong></div>
+            <div><span>Todo gaps</span><strong>{ca?.todo_gaps ?? 0}</strong></div>
+          </div>
+          <div className="inline-actions" style={{ marginTop: '10px' }}>
+            <button type="button" disabled={Boolean(caBusy)} onClick={() => void runCaGaps()}>Export gap TODO</button>
+            <button type="button" disabled={Boolean(caBusy)} onClick={() => void runCaVerify()}>Verify adjustment</button>
+          </div>
+          <p className="panel-copy">
+            {caBusy || ca?.next_action || ca?.honesty || 'Fill factor/type from NSE filings into the TODO CSV, then ingest. QuantTerm will not invent corporate actions.'}
+          </p>
         </Panel>
         <Panel title="PAPER-AUTONOMY JOB LEDGER" subtitle="Execution and learning only · market scans use separate lanes" className="job-panel"><JobLedger jobs={a.jobs_recent || []} /></Panel>
         <Panel title="OPERATING STATE"><div className="key-value-list"><div><span>Heartbeat</span><strong>{a.heartbeat_ist || '—'}</strong></div><div><span>Live feed</span><strong>{String(a.live_feed?.connected ?? 'Unavailable')}</strong></div><div><span>Subscriptions</span><strong>{String(a.live_feed?.subscriptions ?? '—')}</strong></div><div><span>Existing exits</span><strong>{boolLabel(a.existing_exits)}</strong></div><div><span>Research</span><strong>{boolLabel(a.research_enabled)}</strong></div></div><p className="panel-copy">{a.explanation || a.plain_state}</p></Panel>

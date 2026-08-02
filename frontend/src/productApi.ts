@@ -700,6 +700,40 @@ export const fetchSignalBacktestStatus = (): Promise<SignalBacktestStatus> =>
   fetch('/api/signal-backtest', { headers: { Accept: 'application/json' } })
     .then((response) => json<SignalBacktestStatus>(response))
 
+export type CorporateActionsStatus = {
+  available: boolean
+  path?: string
+  symbols: number
+  events: number
+  research_grade: boolean
+  adjustment_verified?: boolean
+  gap_rate?: number | null
+  verify_note?: string
+  todo_path?: string
+  todo_available?: boolean
+  todo_gaps?: number | null
+  next_action?: string
+  never_invents?: boolean
+  honesty?: string
+  rejected_types?: { dividend?: number; invalid?: number }
+}
+
+export const fetchCorporateActionsStatus = (): Promise<CorporateActionsStatus> =>
+  fetch('/api/corporate-actions', { headers: { Accept: 'application/json' } })
+    .then((response) => json<CorporateActionsStatus>(response))
+
+export const exportCorporateActionGaps = (sample = 400): Promise<Record<string, unknown>> =>
+  fetch(`/api/corporate-actions/from-gaps?sample=${encodeURIComponent(String(sample))}`, {
+    method: 'POST',
+    headers: { Accept: 'application/json' },
+  }).then((response) => json<Record<string, unknown>>(response))
+
+export const verifyCorporateActions = (sample = 80): Promise<CorporateActionsStatus> =>
+  fetch(`/api/corporate-actions/verify?sample=${encodeURIComponent(String(sample))}`, {
+    method: 'POST',
+    headers: { Accept: 'application/json' },
+  }).then((response) => json<CorporateActionsStatus>(response))
+
 export type HoldingRow = {
   tradingsymbol: string
   research_symbol?: string

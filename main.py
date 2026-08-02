@@ -373,23 +373,39 @@ def cmd_ca_ingest(args) -> None:
     """Ingest an operator-supplied corporate-action ledger (never invents events)."""
     from data import corporate_actions as CA
 
+    if getattr(args, "from_gaps", False):
+        report = CA.export_gap_todo(sample=int(getattr(args, "sample", 0) or 400))
+        print(json.dumps(report, indent=2, default=str))
+        if not report.get("written"):
+            raise SystemExit(1)
+        return
+
+    if getattr(args, "verify", False):
+        verify = CA.refresh_adjustment_verify(sample=int(getattr(args, "sample", 0) or 80))
+        status = CA.ledger_status(verify=False)
+        status["verify"] = verify
+        print(json.dumps(status, indent=2, default=str))
+        raise SystemExit(0 if verify.get("passed") else 1)
+
     if args.status_only:
-        status = CA.ledger_status()
-        if not status.get("research_grade"):
-            status["blocked"] = True
-            status["next_action"] = (
-                "Drop real NSE CA rows at logs/ca_events.incoming.json "
-                "(see docs/product/acceptance/ca_events.sample.json.example for schema), then: "
-                "python main.py ca-ingest --source logs/ca_events.incoming.json. "
-                "QuantTerm will not invent events from price gaps — prices stay RAW until then."
-            )
+        status = CA.ledger_status(verify=False)
         print(json.dumps(status, indent=2, default=str))
         return
     if not args.source:
-        print("Provide --source path/to/ca_events.json|.csv (or --status)")
+        print("Provide --source path/to/ca_events.json|.csv")
+        print("  or --from-gaps  (export phantom-gap TODO CSV — never invents factors)")
+        print("  or --verify     (re-scan adjusted store; fails closed if gaps remain)")
+        print("  or --status")
         print("Schema sample: docs/product/acceptance/ca_events.sample.json.example")
         raise SystemExit(2)
     report = CA.ingest_from_path(args.source)
+    # After ingest, refresh verify cache so product readiness sees new state.
+    try:
+        report["verify"] = CA.refresh_adjustment_verify(
+            sample=int(getattr(args, "sample", 0) or 80)
+        )
+    except Exception as exc:
+        report["verify_error"] = str(exc)
     print(json.dumps(report, indent=2, default=str))
 
 
@@ -1215,6 +1231,22 @@ def build_parser() -> argparse.ArgumentParser:
     )
     ca.add_argument("--source", metavar="FILE", help="JSON or CSV with symbol,ex_date,factor,type")
     ca.add_argument("--status", dest="status_only", action="store_true", help="Print CA ledger status")
+    ca.add_argument(
+        "--from-gaps",
+        action="store_true",
+        help="Export phantom-gap TODO CSV (factor/type blank — operator fills from NSE filings)",
+    )
+    ca.add_argument(
+        "--verify",
+        action="store_true",
+        help="Verify adjust-on-read collapsed phantom gaps (fails closed without a ledger)",
+    )
+    ca.add_argument(
+        "--sample",
+        type=int,
+        default=0,
+        help="Symbol sample size (--from-gaps default 400, --verify default 80)",
+    )
 
     uh = sub.add_parser(
         "universe-history",

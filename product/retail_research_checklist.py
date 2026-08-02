@@ -54,7 +54,10 @@ def build_retail_research_checklist(
     min_sessions = int(bhav.get("minimum_sessions", 60) or 60)
     bhav_ok = bool(bhav.get("ready")) and sessions >= min_sessions
     snap_ok = bool(snapshot.get("ready")) and bool(snapshot.get("snapshot_id"))
-    ca_ok = bool(ca.get("research_grade")) and int(ca.get("events", 0) or 0) > 0
+    ca_events = int(ca.get("events", 0) or 0)
+    ca_verified = bool(ca.get("adjustment_verified"))
+    ca_ok = bool(ca.get("research_grade")) and ca_events > 0 and ca_verified
+    ca_partial = ca_events > 0 and not ca_verified
     uni_ok = bool(universe.get("research_grade"))
     uni_present = bool(universe.get("survivorship_complete"))
     pit_ok = bool(pit_valuations.get("research_grade")) and int(pit_valuations.get("rows", 0) or 0) > 0
@@ -93,14 +96,23 @@ def build_retail_research_checklist(
         _item(
             key="corporate_actions",
             label="Corporate-action ledger",
-            status="READY" if ca_ok else "MISSING",
+            status="READY" if ca_ok else ("PARTIAL" if ca_partial else "MISSING"),
             why_it_matters="Without splits/bonuses, historical moves can look like fake crashes or breakouts.",
             next_action=(
-                "python main.py ca-ingest --source logs/ca_events.incoming.json"
-                if not ca_ok else "NONE"
+                "NONE" if ca_ok
+                else (
+                    ca.get("next_action")
+                    or (
+                        "python main.py ca-ingest --verify"
+                        if ca_partial
+                        else "python main.py ca-ingest --from-gaps"
+                    )
+                )
             ),
             evidence=(
-                f"{int(ca.get('symbols', 0) or 0)} symbols / {int(ca.get('events', 0) or 0)} events"
+                f"{int(ca.get('symbols', 0) or 0)} symbols / {ca_events} events · "
+                f"verified={ca_verified} · gap_rate={ca.get('gap_rate', 'n/a')} · "
+                f"todo_gaps={ca.get('todo_gaps', 0)}"
                 if ca else "ledger empty — QuantTerm will not invent events"
             ),
         ),
