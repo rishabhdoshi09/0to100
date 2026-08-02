@@ -718,6 +718,60 @@ export type CorporateActionsStatus = {
   rejected_types?: { dividend?: number; invalid?: number }
 }
 
+export type EducationLens = 'MACRO' | 'MICRO' | 'POLICY' | 'DERIVATIVES' | 'CONCEPT'
+
+export type EducationCard = {
+  id: string
+  lens: EducationLens | string
+  kind: string
+  title: string
+  teach_point: string
+  why_it_matters: string
+  summary?: string
+  level: string
+  impact_score: number
+  direction: string
+  category?: string
+  event_type?: string
+  source: string
+  source_tier?: number
+  official: boolean
+  url: string
+  published_at: string
+  fetched_at?: string
+  symbols: string[]
+  fno_symbols: string[]
+  sectors?: string[]
+  tags?: string[]
+  corroboration_count: number
+  places_orders?: boolean
+  is_signal?: boolean
+}
+
+export type EducationFeed = {
+  schema_version: number
+  generated_at: string
+  available: boolean
+  honesty: string
+  places_orders: boolean
+  summary: {
+    news_lessons: number
+    macro_themes: number
+    concepts: number
+    by_lens: Record<string, number>
+    articles_considered: number
+  }
+  lenses: EducationLens[]
+  cards: EducationCard[]
+  empty_hint?: string | null
+}
+
+export const fetchEducation = (minImpact = 40, limit = 40): Promise<EducationFeed> =>
+  fetch(
+    `/api/education?min_impact=${encodeURIComponent(String(minImpact))}&limit=${encodeURIComponent(String(limit))}`,
+    { headers: { Accept: 'application/json' } },
+  ).then((response) => json<EducationFeed>(response))
+
 export const fetchCorporateActionsStatus = (): Promise<CorporateActionsStatus> =>
   fetch('/api/corporate-actions', { headers: { Accept: 'application/json' } })
     .then((response) => json<CorporateActionsStatus>(response))

@@ -81,6 +81,18 @@ export const PAGE_GUIDE: Record<string, PageGuide> = {
     action: 'Open the original source and treat the item as context for the stock thesis.',
     doesNot: 'News is never a standalone order signal.',
   },
+  Education: {
+    title: 'Education',
+    purpose: 'Crunches curated market news into learnable micro/macro/policy/F&O cards plus evergreen concepts — without inventing articles.',
+    questions: [
+      'Is this macro weather or company micro?',
+      'What is the teach point, not just the headline?',
+      'Is there an original source URL to verify?',
+      'Am I treating education as context instead of a trade tip?',
+    ],
+    action: 'Read the teach point, open the source when present, then review linked symbols in Stock Intelligence.',
+    doesNot: 'Education never invents blogs and never places or recommends orders.',
+  },
   'F&O Desk': {
     title: 'F&O Coverage',
     purpose: 'Maps current futures eligibility, then shows live nearest-expiry OI, IV, PCR and max pain for a selected name, plus any saved EOD history.',

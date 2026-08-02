@@ -12,6 +12,7 @@ import {
   ExperienceHelpDrawer,
 } from './experience'
 import { MarketSidebar } from './MarketSidebar'
+import { EducationView } from './educationViews'
 import { NewsView, OperationsRibbon, FnoView } from './marketViews'
 import { ProductStockIntelligenceView } from './productViews'
 import { ResearchDataView } from './researchData'
@@ -150,6 +151,7 @@ const pageTitles: Record<string, string> = {
   Watchlist: 'Watchlist',
   'Market Overview': 'Market Overview',
   'News & Events': 'News & Events',
+  Education: 'Education',
   'Research Data': 'Research Data',
   'F&O Desk': 'F&O Desk',
   'Paper Portfolio': 'My Holdings',
@@ -172,6 +174,7 @@ const pageSubtitles: Record<string, string> = {
   Watchlist: 'Names you are tracking with latest scan context.',
   'Market Overview': 'Regime, breadth, volatility and sector leadership.',
   'News & Events': 'Dated market context with source health.',
+  Education: 'Crunched news + macro/micro teach-ins for the share market — never invented blogs, never a signal.',
   'Research Data': 'Verified snapshots, data platform jobs, and evidence uploads.',
   'F&O Desk': 'Mapped futures plus live OI / IV / PCR / max-pain context for a selected underlying.',
   'Paper Portfolio': 'Demat holdings + paper book — sync Zerodha or paste your shares.',
@@ -436,6 +439,15 @@ function App() {
     if (active === 'Market Overview' || active === 'Market Internals') return <MarketInternalsView {...viewProps} />
     if (active === 'Long-Term Picks' || active === 'Long-Term') return <EnhancedLongTermView {...viewProps} />
     if (active === 'News & Events') return <NewsView {...viewProps} />
+    if (active === 'Education') {
+      return (
+        <EducationView
+          runControl={viewProps.runControl}
+          setSelected={setSelected}
+          setActive={setActive}
+        />
+      )
+    }
     if (active === 'F&O Desk') return <FnoView {...viewProps} />
     if (active === 'System Health' || active === 'Automation') return <AutomationView {...viewProps} />
     return <RadarHomeView {...viewProps} onCompare={addToCompare} onWatchlist={addToWatchlist} />

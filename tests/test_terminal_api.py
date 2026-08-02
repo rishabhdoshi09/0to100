@@ -57,3 +57,8 @@ def test_queue_message_is_honest_about_worker_offline():
     )
     assert "ONLINE" in online
     assert "42" in online
+
+
+def test_education_endpoint_is_registered():
+    paths = {getattr(route, "path", None) for route in terminal_api.app.routes}
+    assert "/api/education" in paths

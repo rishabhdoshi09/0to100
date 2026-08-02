@@ -13,6 +13,7 @@ const PRIMARY_NAV = [
 const SECONDARY_NAV = [
   ['↗', 'Market Overview', 'Market Overview'],
   ['◈', 'News & Events', 'News & Events'],
+  ['✎', 'Education', 'Education'],
   ['▤', 'Research Data', 'Research Data'],
   ['⬡', 'F&O Desk', 'F&O Desk'],
   ['▣', 'My Holdings', 'Paper Portfolio'],
