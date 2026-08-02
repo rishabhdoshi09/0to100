@@ -136,7 +136,10 @@ def empty_book(*, message: str = "") -> dict[str, Any]:
             "pnl_pct": 0.0,
             "day_pnl": 0.0,
         },
-        "message": message or "No broker holdings saved yet. Sync from Zerodha or import your demat book.",
+        "message": message or (
+            "No broker holdings saved yet. Sync from your Zerodha account or paste your own demat rows. "
+            "QuantTerm never invents holdings."
+        ),
         "places_orders": False,
     }
 

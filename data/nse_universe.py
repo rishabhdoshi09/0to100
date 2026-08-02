@@ -200,7 +200,7 @@ def _is_valid_symbol(sym: str) -> bool:
         return False
     # Reject specific bad suffixes that indicate non-equity / non-holdable junk.
     # -BE is KEEP: NSE Trade-for-Trade / book-entry series — retail often holds these
-    # (e.g. GAUDIUMIVF-BE). -BZ stays out of the research scan universe (GSM/T2T junk
+    # (suffix form SYMBOL-BE). -BZ stays out of the research scan universe (GSM/T2T junk
     # filter) but holdings import still accepts the raw broker symbol separately.
     # -ST=suspended, -SF=settlement, -IT/-IL=institutional, -BL=rights/book,
     # -SM=SME, -N0..-N9=bonds/NCDs, -NL=non-listed
@@ -215,7 +215,7 @@ def _is_valid_symbol(sym: str) -> bool:
     # Reject if symbol ends in a digit after a hyphen (bond series like AAFS29A-N0)
     if "-" in sym:
         after_hyphen = sym.split("-")[-1]
-        # Keep BAJAJ-AUTO, MCDOWELL-N, GAUDIUMIVF-BE; reject -N0, -N3, -BZ, -ST etc.
+        # Keep BAJAJ-AUTO, MCDOWELL-N, and -BE series; reject -N0, -N3, -BZ, -ST etc.
         if after_hyphen and after_hyphen[-1].isdigit():
             return False
         # Also reject 2-char suffixes that are all letters but in bad set

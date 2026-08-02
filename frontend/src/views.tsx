@@ -281,7 +281,7 @@ export function PortfolioView({ dashboard, runControl, setSelected, setActive }:
     const lines = importText.split(/\n+/).map((line) => line.trim()).filter(Boolean)
     const rows: Array<Record<string, unknown>> = []
     for (const line of lines) {
-      // SYMBOL qty avg [ltp]  — e.g. GAUDIUMIVF-BE 118 112.34 137.50
+      // SYMBOL qty avg [ltp]  — e.g. RELIANCE 10 2500 2550
       const parts = line.split(/[\s,]+/).filter(Boolean)
       if (parts.length < 3) continue
       const symbol = parts[0].toUpperCase()
@@ -292,7 +292,7 @@ export function PortfolioView({ dashboard, runControl, setSelected, setActive }:
       rows.push({ tradingsymbol: symbol, quantity, average_price, last_price })
     }
     if (!rows.length) {
-      setHoldingsError('Paste lines like: GAUDIUMIVF-BE 118 112.34 137.50')
+      setHoldingsError('Paste your own lines like: RELIANCE 10 2500 2550')
       return
     }
     setHoldingsBusy('import')
@@ -382,7 +382,7 @@ export function PortfolioView({ dashboard, runControl, setSelected, setActive }:
           <div className="holdings-import" style={{ marginTop: 12 }}>
             <textarea
               aria-label="Paste holdings"
-              placeholder={'ARSSBL 25 609.06 510.80\nFILATFASH 229 0.25 0.19\nGAUDIUMIVF-BE 118 112.34 137.50\nNACLIND 103 235.51 188.93\nSKMEGGPROD 154 205 249.85'}
+              placeholder={'RELIANCE 10 2500 2550\nTCS 5 3800 3900\nINFY 20 1500'}
               value={importText}
               onChange={(event) => setImportText(event.target.value)}
               rows={4}
@@ -391,6 +391,9 @@ export function PortfolioView({ dashboard, runControl, setSelected, setActive }:
             <button type="button" disabled={!!holdingsBusy || !importText.trim()} onClick={() => void onImport()}>
               {holdingsBusy === 'import' ? 'Importing…' : 'Import pasted holdings'}
             </button>
+            <p className="panel-copy" style={{ marginTop: 8 }}>
+              Empty until you Sync your Zerodha account or paste your own demat rows. QuantTerm never invents holdings.
+            </p>
           </div>
         </Panel>
         <Panel title="CANONICAL TARGET PORTFOLIO" subtitle="Read-only intelligence target book · not demat">
