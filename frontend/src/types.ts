@@ -324,10 +324,37 @@ export type OptionsChainPayload = {
   bias?: string
   note?: string
   atm_iv?: number
+  iv_rank?: number
   spot?: number | null
+  total_ce_oi?: number
+  total_pe_oi?: number
+  strike_count?: number
   top_call_oi?: Array<{ strike: number; ce_oi: number; ce_coi?: number }>
   top_put_oi?: Array<{ strike: number; pe_oi: number; pe_coi?: number }>
   chain?: Array<Record<string, number>>
+  message?: string
+  greeks_available?: boolean
+  signal_desk?: boolean
+  honesty?: string
+}
+
+export type OptionsEodHistoryPayload = {
+  available: boolean
+  symbol: string
+  days: number
+  rows: Array<{
+    symbol: string
+    as_of: string
+    expiry: string
+    pcr?: number | null
+    max_pain?: number | null
+    atm_iv?: number | null
+    spot?: number | null
+    strike_count?: number
+    source?: string
+    captured_at?: string
+  }>
+  store?: Record<string, unknown>
   message?: string
 }
 

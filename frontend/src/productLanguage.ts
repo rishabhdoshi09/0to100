@@ -83,14 +83,15 @@ export const PAGE_GUIDE: Record<string, PageGuide> = {
   },
   'F&O Desk': {
     title: 'F&O Coverage',
-    purpose: 'Shows current derivative eligibility, nearest futures contract, expiry and lot size.',
+    purpose: 'Maps current futures eligibility, then shows live nearest-expiry OI, IV, PCR and max pain for a selected name, plus any saved EOD history.',
     questions: [
       'Is the cash symbol mapped to the current instrument master?',
-      'Which expiry and lot size apply?',
+      'What is PCR / ATM IV / max pain on the nearest expiry?',
+      'Do saved EOD snapshots show a multi-day shift?',
       'Which underlyings were excluded and why?',
     ],
-    action: 'Refresh the instrument master and inspect mapping exclusions.',
-    doesNot: 'This is not yet an option-chain, OI, IV, Greeks or directional strategy engine.',
+    action: 'Pick an index quick-pick or mapped stock, refresh the live chain, and treat PCR bias as positioning context only.',
+    doesNot: 'Black-Scholes Greeks and buy/sell trade direction are not calculated — this is not an F&O signal desk.',
   },
   'Market Internals': {
     title: 'Market & Breadth',

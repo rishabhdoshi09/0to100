@@ -173,7 +173,7 @@ const pageSubtitles: Record<string, string> = {
   'Market Overview': 'Regime, breadth, volatility and sector leadership.',
   'News & Events': 'Dated market context with source health.',
   'Research Data': 'Verified snapshots, data platform jobs, and evidence uploads.',
-  'F&O Desk': 'Stock derivative coverage — mapped underlyings, expiries and lot sizes.',
+  'F&O Desk': 'Mapped futures plus live OI / IV / PCR / max-pain context for a selected underlying.',
   'Paper Portfolio': 'Recorded paper positions and outcomes — secondary evidence.',
   'System Health': 'Operations, autonomy and infrastructure detail.',
 }
