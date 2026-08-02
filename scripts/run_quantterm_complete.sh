@@ -42,8 +42,10 @@ trap cleanup EXIT INT TERM
 
 REPORT_HEALTH="http://127.0.0.1:8766/health"
 set +e
-REPORT_PID="$(stack_start_or_reuse_uvicorn 8766 "report_api:app" "$REPORT_HEALTH" "Research-report API")"
-report_rc=$?
+# Direct call — do not capture via $(...); that kills the backgrounded uvicorn.
+stack_start_or_reuse_uvicorn 8766 "report_api:app" "$REPORT_HEALTH" "Research-report API"
+report_rc=$STACK_UVICORN_RC
+REPORT_PID=$STACK_UVICORN_PID
 set -e
 
 if [[ "$report_rc" == 2 ]]; then
@@ -55,7 +57,8 @@ else
     echo "[COMPLETE STACK] Research-report API failed to start." >&2
     exit 1
   fi
-  if ! stack_wait_for_health "$REPORT_HEALTH" "$REPORT_PID" "Research-report API" 10; then
+  # Allow enough time for import + bind; process-death is still detected early.
+  if ! stack_wait_for_health "$REPORT_HEALTH" "$REPORT_PID" "Research-report API" 60; then
     exit 1
   fi
 fi

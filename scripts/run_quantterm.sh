@@ -83,8 +83,10 @@ fi
 
 API_HEALTH="http://127.0.0.1:8765/api/health"
 set +e
-API_PID="$(stack_start_or_reuse_uvicorn 8765 "terminal_product_api:app" "$API_HEALTH" "Terminal API")"
-api_rc=$?
+# Direct call — do not capture via $(...); that kills the backgrounded uvicorn.
+stack_start_or_reuse_uvicorn 8765 "terminal_product_api:app" "$API_HEALTH" "Terminal API"
+api_rc=$STACK_UVICORN_RC
+API_PID=$STACK_UVICORN_PID
 set -e
 
 if [[ "$api_rc" == 2 ]]; then

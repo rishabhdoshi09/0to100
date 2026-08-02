@@ -1,5 +1,13 @@
 # Shared helpers for QuantTerm local stack scripts (macOS + Linux).
 # Sourced by run_quantterm.sh and run_quantterm_complete.sh — not executed directly.
+#
+# IMPORTANT: Never capture stack_start_or_reuse_uvicorn via $(...). Backgrounding a
+# process inside command substitution starts it in a subshell that exits immediately
+# and kills the child (SIGHUP) — that surfaces as "exited during startup".
+# Callers must use STACK_UVICORN_PID / STACK_UVICORN_RC after a direct call.
+
+STACK_UVICORN_PID=""
+STACK_UVICORN_RC=0
 
 stack_health_ok() {
   local url="$1"
@@ -29,16 +37,22 @@ stack_free_port() {
 }
 
 # Start uvicorn or reuse an already-healthy listener on the same port.
-# On stdout: child PID when started; empty when reusing an existing healthy API.
-# Return code: 0 = started, 2 = reused existing healthy API.
+# Sets STACK_UVICORN_PID (empty when reusing) and STACK_UVICORN_RC:
+#   0 = started a new process (STACK_UVICORN_PID set)
+#   2 = reused an existing healthy API (STACK_UVICORN_PID empty)
+# Return code matches STACK_UVICORN_RC.
 stack_start_or_reuse_uvicorn() {
   local port="$1"
   local app="$2"
   local health_url="$3"
   local label="$4"
 
+  STACK_UVICORN_PID=""
+  STACK_UVICORN_RC=0
+
   if stack_health_ok "$health_url"; then
     echo "[STACK] ${label} already healthy at ${health_url} — reusing existing process." >&2
+    STACK_UVICORN_RC=2
     return 2
   fi
 
@@ -46,12 +60,15 @@ stack_start_or_reuse_uvicorn() {
 
   if stack_health_ok "$health_url"; then
     echo "[STACK] ${label} became healthy after freeing port ${port} — reusing." >&2
+    STACK_UVICORN_RC=2
     return 2
   fi
 
   echo "[STACK] Starting ${label} at http://127.0.0.1:${port} (${app})…" >&2
+  # Must run in the caller's shell (not inside $(...)) so the child survives.
   python -u -m uvicorn "${app}" --host 127.0.0.1 --port "${port}" &
-  echo "$!"
+  STACK_UVICORN_PID=$!
+  STACK_UVICORN_RC=0
   return 0
 }
 
