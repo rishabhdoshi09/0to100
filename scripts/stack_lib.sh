@@ -31,9 +31,20 @@ stack_free_port() {
   # shellcheck disable=SC2086
   kill ${pids} 2>/dev/null || true
   sleep 1
-  # shellcheck disable=SC2086
-  kill -9 ${pids} 2>/dev/null || true
-  sleep 0.5
+  pids="$(stack_pids_on_port "$port")"
+  if [[ -n "$pids" ]]; then
+    # shellcheck disable=SC2086
+    kill -9 ${pids} 2>/dev/null || true
+    sleep 0.5
+  fi
+}
+
+# Stop listeners on one or more ports (reaps npm/vite/uvicorn orphans by bind port).
+stack_stop_ports() {
+  local port
+  for port in "$@"; do
+    stack_free_port "$port" "port-${port}"
+  done
 }
 
 # Start uvicorn or reuse an already-healthy listener on the same port.

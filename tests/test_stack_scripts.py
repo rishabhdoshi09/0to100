@@ -23,6 +23,20 @@ def test_uvicorn_starters_do_not_use_command_substitution() -> None:
     )
 
 
+def test_vite_is_not_started_in_subshell() -> None:
+    """`( cd frontend; npm run dev ) &` leaves orphan Vite after the subshell PID dies."""
+    text = (SCRIPTS / "run_quantterm.sh").read_text(encoding="utf-8")
+    assert "npm --prefix" in text
+    assert not re.search(r"\(\s*cd\s+frontend.*npm run dev", text, re.S), text
+
+
+def test_stack_cleanup_reaps_vite_by_port() -> None:
+    text = (SCRIPTS / "run_quantterm.sh").read_text(encoding="utf-8")
+    complete = (SCRIPTS / "run_quantterm_complete.sh").read_text(encoding="utf-8")
+    assert "stack_free_port 5173" in text
+    assert "stack_free_port 5173" in complete
+
+
 def test_stack_start_keeps_background_child_alive() -> None:
     """Direct call pattern must leave the backgrounded child running."""
     script = r"""

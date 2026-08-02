@@ -43,6 +43,11 @@ cleanup() {
     kill "$AUTONOMY_PID" >/dev/null 2>&1 || true
   fi
   wait >/dev/null 2>&1 || true
+  # Vite/npm often outlive the launcher PID; reap by bind port.
+  stack_free_port 5173 "Vite dev server"
+  if [[ "$API_EXTERNAL" != "1" ]]; then
+    stack_free_port 8765 "Terminal API"
+  fi
   if [[ "$AUTONOMY_EXTERNAL" == "1" ]]; then
     echo "[STACK] Existing external autonomy supervisor was left running."
   fi
@@ -111,11 +116,28 @@ echo "[STACK] Terminal API ready."
 stack_free_port 5173 "Vite dev server"
 
 echo "[STACK] Starting dedicated terminal at http://127.0.0.1:5173 …"
-(
-  cd frontend
-  npm run dev -- --host 127.0.0.1 --port 5173
-) &
+# Avoid `( cd …; npm … ) &` — killing that subshell PID leaves an orphaned Vite
+# that keeps proxying to a dead :8765 and surfaces ECONNREFUSED in the browser.
+npm --prefix "$ROOT/frontend" run dev -- --host 127.0.0.1 --port 5173 &
 FRONTEND_PID=$!
+
+# Confirm Vite bound before advertising ready (API is already healthy above).
+vite_bound=0
+for _ in $(seq 1 60); do
+  if ! kill -0 "$FRONTEND_PID" >/dev/null 2>&1; then
+    echo "[STACK] Vite exited during startup. Review errors above." >&2
+    exit 1
+  fi
+  if [[ -n "$(stack_pids_on_port 5173)" ]]; then
+    vite_bound=1
+    break
+  fi
+  sleep 0.5
+done
+if [[ "$vite_bound" != "1" ]]; then
+  echo "[STACK] Vite did not bind :5173 within 30s." >&2
+  exit 1
+fi
 
 echo "[STACK] QuantTerm is ready. Open http://127.0.0.1:5173"
 echo "[STACK] Keep this terminal open; Ctrl-C stops services started by this script."
@@ -128,10 +150,12 @@ while true; do
   fi
   if [[ "$API_EXTERNAL" != "1" ]] && [[ -n "$API_PID" ]] && ! kill -0 "$API_PID" >/dev/null 2>&1; then
     echo "[STACK] API process exited unexpectedly (pid=$API_PID)."
+    echo "[STACK] Tip: bash scripts/stop_quantterm.sh && bash scripts/run_quantterm_complete.sh" >&2
     exit 1
   fi
   if ! stack_health_ok "$API_HEALTH"; then
     echo "[STACK] Terminal API health check failed at $API_HEALTH — backend may have stopped." >&2
+    echo "[STACK] Vite proxies /api → :8765; restart with: bash scripts/stop_quantterm.sh && bash scripts/run_quantterm_complete.sh" >&2
     exit 1
   fi
   if [[ -n "$AUTONOMY_PID" ]] && ! kill -0 "$AUTONOMY_PID" >/dev/null 2>&1; then

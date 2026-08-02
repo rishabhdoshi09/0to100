@@ -28,11 +28,29 @@ cleanup() {
   echo "[COMPLETE STACK] Stopping report API and QuantTerm stack…"
   if [[ -n "$STACK_PID" ]]; then
     kill "$STACK_PID" >/dev/null 2>&1 || true
+    # Give nested cleanup a moment to reap children before we force ports.
+    for _ in 1 2 3 4 5 6 7 8 9 10; do
+      if ! kill -0 "$STACK_PID" >/dev/null 2>&1; then
+        break
+      fi
+      sleep 0.2
+    done
+    kill -9 "$STACK_PID" >/dev/null 2>&1 || true
   fi
   if [[ -n "$REPORT_PID" ]]; then
     kill "$REPORT_PID" >/dev/null 2>&1 || true
   fi
   wait >/dev/null 2>&1 || true
+  # Always reap Vite; an orphaned :5173 keeps proxying to a dead :8765.
+  stack_free_port 5173 "Vite dev server"
+  if [[ "$REPORT_EXTERNAL" != "1" ]]; then
+    stack_free_port 8766 "Research-report API"
+  fi
+  # Reap a dead terminal API left by a killed nested stack; leave a healthy
+  # pre-existing (external) API alone.
+  if ! stack_health_ok "http://127.0.0.1:8765/api/health"; then
+    stack_free_port 8765 "Terminal API"
+  fi
   if [[ "$REPORT_EXTERNAL" == "1" ]]; then
     echo "[COMPLETE STACK] External report API on :8766 was left running."
   fi
