@@ -247,14 +247,14 @@ export function MarketInternalsView({ dashboard }: ViewProps) {
         <MetricCard label="REGIME" value={dashboard.market.health} detail={String(details.market_regime || dashboard.market.breadth)} tone={dashboard.market.health.toLowerCase() === 'healthy' ? 'green' : 'amber'} />
         <MetricCard label="NIFTY 1D" value={pct(dashboard.market.nifty_change_1d)} detail={`5D ${pct(dashboard.market.nifty_change_5d)}`} />
         <MetricCard label="INDIA VIX" value={Number.isFinite(dashboard.market.vix) ? Number(dashboard.market.vix).toFixed(2) : '—'} tone="purple" />
-        <MetricCard label="FII NET (30D)" value={cash?.totals?.fii_net_cr != null ? `₹${Number(cash.totals.fii_net_cr).toLocaleString('en-IN')} Cr` : '—'} detail={inst?.insight || cash?.note || 'Run fii-dii-backfill'} tone={Number(cash?.totals?.fii_net_cr || 0) >= 0 ? 'green' : 'amber'} />
+        <MetricCard label="FII NET (30D)" value={cash?.totals?.fii_net_cr != null ? `₹${Number(cash.totals.fii_net_cr).toLocaleString('en-IN')} Cr` : '—'} detail={inst?.insight || cash?.note || 'Syncs from NSE when you open this page'} tone={Number(cash?.totals?.fii_net_cr || 0) >= 0 ? 'green' : 'amber'} />
         <MetricCard label="DII NET (30D)" value={cash?.totals?.dii_net_cr != null ? `₹${Number(cash.totals.dii_net_cr).toLocaleString('en-IN')} Cr` : '—'} detail={`Bias ${cash?.bias || '—'}`} />
         <MetricCard label="BULK BUYS" value={String(inst?.bulk_buy_symbols?.length || 0)} detail="Net bulk-buy symbols today" tone="cyan" />
       </div>
       <div className="market-grid">
         <Panel title="MARKET NARRATIVE"><p className="lead-copy">{dashboard.market.summary}</p><p className="panel-copy">{dashboard.market.trade_stance}</p>{inst?.insight && <p className="panel-copy"><strong>Institutional:</strong> {inst.insight}</p>}</Panel>
         <Panel title="FII / DII CASH FLOWS" subtitle="NSE official · ₹ Crore · persisted store">
-          {!inst?.available && <p className="panel-copy">No FII/DII history yet. Run <code>python main.py fii-dii-backfill</code> or POST /api/market/fii-dii/backfill.</p>}
+          {!inst?.available && <p className="panel-copy">FII/DII data loads automatically from NSE on first visit (one quick sync). If NSE is unreachable, numbers stay empty — nothing is fabricated.</p>}
           {history.length > 0 && (
             <div className="fno-table wide-table">
               <div className="fno-head"><span>DATE</span><span>FII NET</span><span>DII NET</span></div>

@@ -54,14 +54,9 @@ def _activity_from_store(days: int) -> pd.DataFrame | None:
 
 
 def _fetch_fii_dii_activity_live(days: int = 30) -> pd.DataFrame:
-    try:
-        from data.fii_dii_store import fetch_from_nse, upsert_rows
+    from data.fii_dii_store import refresh_if_needed
 
-        rows = fetch_from_nse()
-        if rows:
-            upsert_rows(rows)
-    except Exception as exc:
-        logger.warning("FII/DII live fetch for store failed: %s", exc)
+    refresh_if_needed()
     stored = _activity_from_store(days)
     if stored is not None and not stored.empty:
         cutoff = pd.Timestamp.today().normalize() - timedelta(days=days)

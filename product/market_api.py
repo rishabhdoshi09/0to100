@@ -19,9 +19,10 @@ def fii_dii_backfill_status_workspace() -> dict[str, Any]:
 
 
 def fii_dii_backfill_run(days: int = Query(90, ge=30, le=365)) -> dict[str, Any]:
-    from data.fii_dii_store import run_backfill
+    from data.fii_dii_store import refresh_if_needed
 
-    return run_backfill(days=max(30, min(int(days), 365)), force_fetch=True)
+    refresh = refresh_if_needed(force=True)
+    return {"forced": True, "days": days, "refresh": refresh}
 
 
 def options_workspace(
@@ -41,9 +42,9 @@ def options_workspace(
                 resolved_spot = float(frame["close"].iloc[-1])
         except Exception:
             resolved_spot = None
-    from options.chain_fetch import chain_workspace
+    from options.chain_fetch import chain_workspace_cached
 
-    return chain_workspace(sym, spot=resolved_spot)
+    return chain_workspace_cached(sym, spot=resolved_spot)
 
 
 def nifty_options_workspace() -> dict[str, Any]:

@@ -2634,6 +2634,31 @@ class TestInstitutionalFlows:
         assert brief["report_type"] == "INSTITUTIONAL_MARKET_BRIEF"
         assert "narrative" in brief
 
+    def test_fii_dii_lazy_refresh_mock(self):
+        from data.fii_dii_store import reset_store, refresh_if_needed, count_rows
+
+        reset_store()
+        payload = refresh_if_needed(
+            force=True,
+            fetcher=lambda: [
+                {
+                    "date": "2026-08-01",
+                    "fii_buy": 100.0,
+                    "fii_sell": 90.0,
+                    "fii_net": 10.0,
+                    "dii_buy": 50.0,
+                    "dii_sell": 40.0,
+                    "dii_net": 10.0,
+                }
+            ],
+        )
+        assert payload.get("fetched")
+        assert count_rows() == 1
+        again = refresh_if_needed(fetcher=lambda: [])
+        assert again.get("fetched") is False
+        assert again.get("reason") == "fresh"
+        reset_store()
+
     def test_bulk_deals_and_net_buys(self):
         from data.institutional_flows import parse_bulk_deals, bulk_buy_symbols
         deals = parse_bulk_deals({"data": [

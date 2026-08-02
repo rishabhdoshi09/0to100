@@ -65,7 +65,7 @@ def fundamentals_backfill_run(
     limit: int = Query(50, ge=1, le=500),
     force: bool = Query(False),
 ) -> dict[str, Any]:
-    """Run a bounded backfill batch (use CLI for full universe overnight)."""
+    """Optional bounded batch (maintenance). Per-symbol fundamentals load on Stock Intelligence refresh."""
     from fundamentals.backfill import run_fundamentals_backfill
     return run_fundamentals_backfill(scope=scope, force=force, limit=limit, resume=True)
 

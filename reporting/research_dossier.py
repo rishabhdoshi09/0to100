@@ -287,7 +287,7 @@ def build_equity_dossier(
         from options.chain_fetch import chain_workspace
 
         spot = price.get("latest_price")
-        options_context = chain_workspace(symbol, spot=float(spot) if spot else None)
+        options_context = chain_workspace_cached(symbol, spot=float(spot) if spot else None)
     except Exception:
         options_context = {"available": False}
 

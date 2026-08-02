@@ -327,16 +327,16 @@ def cmd_fundamentals_backfill(args) -> None:
 
 
 def cmd_fii_dii_backfill(args) -> None:
-    """Backfill NSE FII/DII cash-market history into the local SQLite store."""
-    from data.fii_dii_store import backfill_status, run_backfill
+    """Force-refresh NSE FII/DII cash flows (optional; dashboard syncs lazily by default)."""
+    from data.fii_dii_store import backfill_status, refresh_if_needed
 
     if args.status_only:
         print(json.dumps(backfill_status(), indent=2, default=str))
         return
 
-    print("\n=== FII/DII backfill ===")
-    print(f"Window label: {args.days} days · source: NSE fiidiiTradeReact\n")
-    report = run_backfill(days=int(args.days), force_fetch=True)
+    print("\n=== FII/DII force refresh ===")
+    print("Normal use: open Market Overview — data syncs automatically when stale.\n")
+    report = refresh_if_needed(force=True)
     print(json.dumps(report, indent=2, default=str))
     print()
 

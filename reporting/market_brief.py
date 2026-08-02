@@ -94,8 +94,7 @@ def build_institutional_market_brief(
 
     if not narrative_parts:
         narrative_parts.append(
-            "Institutional flow history is not yet backfilled. Run "
-            "`python main.py fii-dii-backfill` to populate NSE cash-market data."
+            "Institutional cash-flow history will populate automatically when NSE data is fetched on demand."
         )
 
     return {

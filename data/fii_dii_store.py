@@ -31,6 +31,12 @@ _HEADERS = {
     "Referer": "https://www.nseindia.com/reports/fii-dii",
 }
 
+# Refresh when store is empty or older than TTL — one NSE call returns many sessions.
+_REFRESH_TTL_S = 3600 * 3
+_FAIL_BACKOFF_S = 600
+_last_fetch_attempt_s: float = 0.0
+_last_fetch_fail_s: float = 0.0
+
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -132,10 +138,13 @@ def _connect() -> sqlite3.Connection:
 
 def reset_store() -> None:
     """Hermetic tests: drop persisted FII/DII history."""
+    global _last_fetch_attempt_s, _last_fetch_fail_s
     if _DB_PATH.exists():
         _DB_PATH.unlink()
     if _STATE_PATH.exists():
         _STATE_PATH.unlink()
+    _last_fetch_attempt_s = 0.0
+    _last_fetch_fail_s = 0.0
 
 
 def upsert_rows(rows: Sequence[Mapping[str, Any]]) -> int:
@@ -185,6 +194,76 @@ def count_rows() -> int:
         return int(row["n"] if row else 0)
 
 
+def _store_staleness_s() -> float:
+    """Seconds since the newest persisted row was written."""
+    with _connect() as conn:
+        row = conn.execute("SELECT MAX(updated_at) AS ts FROM cash_flows").fetchone()
+    ts = str(row["ts"] if row and row["ts"] else "")
+    if not ts:
+        return float("inf")
+    try:
+        parsed = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return max(0.0, (datetime.now(timezone.utc) - parsed).total_seconds())
+    except Exception:
+        return float("inf")
+
+
+def refresh_if_needed(
+    *,
+    force: bool = False,
+    fetcher: Callable[[], list[dict[str, Any]]] | None = None,
+) -> dict[str, Any]:
+    """
+    Lazy sync: one NSE API call merges every session NSE returns (~30+ days).
+    No bulk pre-download — runs only when the store is empty, stale, or forced.
+    """
+    global _last_fetch_attempt_s, _last_fetch_fail_s
+    now = time.time()
+    stale = _store_staleness_s()
+    empty = count_rows() == 0
+    need = force or empty or stale > _REFRESH_TTL_S
+
+    if not need:
+        return {
+            "fetched": False,
+            "reason": "fresh",
+            "row_count": count_rows(),
+            "staleness_s": round(stale, 0),
+        }
+
+    if not force and _last_fetch_fail_s and (now - _last_fetch_fail_s) < _FAIL_BACKOFF_S:
+        return {
+            "fetched": False,
+            "reason": "backoff",
+            "row_count": count_rows(),
+            "error": "recent_fetch_failed",
+        }
+
+    _last_fetch_attempt_s = now
+    try:
+        rows = (fetcher or fetch_from_nse)()
+        inserted = upsert_rows(rows)
+        _last_fetch_fail_s = 0.0
+        log.info("fii_dii_lazy_refresh", rows=inserted, total=count_rows())
+        return {
+            "fetched": True,
+            "reason": "empty" if empty else "stale" if stale > _REFRESH_TTL_S else "forced",
+            "rows_merged": inserted,
+            "row_count": count_rows(),
+        }
+    except Exception as exc:
+        _last_fetch_fail_s = now
+        log.warning("fii_dii_lazy_refresh_failed", error=str(exc)[:120])
+        return {
+            "fetched": False,
+            "reason": "error",
+            "row_count": count_rows(),
+            "error": type(exc).__name__,
+        }
+
+
 def get_history(days: int = 30) -> list[dict[str, Any]]:
     cutoff = (datetime.now(timezone.utc).date() - timedelta(days=max(1, int(days)))).isoformat()
     with _connect() as conn:
@@ -213,7 +292,9 @@ def _compute_streak(values: list[float]) -> int:
     return streak
 
 
-def summarize(days: int = 30) -> dict[str, Any]:
+def summarize(days: int = 30, *, auto_refresh: bool = True) -> dict[str, Any]:
+    if auto_refresh:
+        refresh_if_needed()
     history = get_history(days)
     if not history:
         return {
@@ -291,26 +372,15 @@ def run_backfill(
     force_fetch: bool = True,
     fetcher: Callable[[], list[dict[str, Any]]] | None = None,
 ) -> dict[str, Any]:
-    """Fetch from NSE and merge into the local store."""
-    started = _now_iso()
-    inserted = 0
-    error = ""
-    if force_fetch:
-        try:
-            rows = (fetcher or fetch_from_nse)()
-            inserted = upsert_rows(rows)
-        except Exception as exc:
-            error = type(exc).__name__
-            log.warning("fii_dii_backfill_fetch_failed", error=str(exc)[:120])
+    """Force-refresh alias for operators; normal reads use refresh_if_needed()."""
+    refresh = refresh_if_needed(force=force_fetch, fetcher=fetcher)
     state = {
-        "started_at": started,
         "updated_at": _now_iso(),
         "days_requested": days,
-        "rows_fetched": inserted,
+        "refresh": refresh,
         "row_count": count_rows(),
         "sessions_in_window": len(get_history(days)),
-        "error": error,
-        "complete": bool(inserted or count_rows() > 0),
+        "complete": count_rows() > 0,
         "store_path": str(_DB_PATH),
     }
     _STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -325,21 +395,25 @@ def backfill_status() -> dict[str, Any]:
             state = dict(json.loads(_STATE_PATH.read_text(encoding="utf-8")))
     except Exception:
         state = {}
-    summary = summarize(30)
+    summary = summarize(30, auto_refresh=False)
+    stale_s = _store_staleness_s()
     return {
         "available": summary.get("available") or count_rows() > 0,
         "row_count": count_rows(),
         "latest_date": summary.get("latest_date") or "",
-        "sessions_in_store": summary.get("row_count", 0),
-        "last_backfill": state,
+        "sessions_in_store": summary.get("sessions", 0),
+        "staleness_s": round(stale_s, 0) if stale_s != float("inf") else None,
+        "lazy_refresh": True,
+        "refresh_ttl_s": _REFRESH_TTL_S,
+        "last_forced_refresh": state,
         "state_path": str(_STATE_PATH),
         "store_path": str(_DB_PATH),
     }
 
 
-def workspace_payload(days: int = 30) -> dict[str, Any]:
-    """API/dashboard payload: cash flows + derivative stats + bulk deals."""
-    summary = summarize(days)
+def workspace_payload(days: int = 30, *, include_nifty_options: bool = True) -> dict[str, Any]:
+    """API/dashboard payload: lazy NSE sync + cached bulk/options reads."""
+    summary = summarize(days, auto_refresh=True)
     derivatives: dict[str, Any] = {}
     bulk_deals: list[dict[str, Any]] = []
     bulk_buys: list[str] = []
@@ -361,12 +435,13 @@ def workspace_payload(days: int = 30) -> dict[str, Any]:
     except Exception:
         pass
     nifty_options: dict[str, Any] = {"available": False}
-    try:
-        from options.chain_fetch import chain_workspace
+    if include_nifty_options:
+        try:
+            from options.chain_fetch import chain_workspace_cached
 
-        nifty_options = chain_workspace("NIFTY")
-    except Exception:
-        pass
+            nifty_options = chain_workspace_cached("NIFTY")
+        except Exception:
+            pass
     return {
         "available": bool(summary.get("available")),
         "cash": summary,
@@ -376,4 +451,5 @@ def workspace_payload(days: int = 30) -> dict[str, Any]:
         "nifty_options": nifty_options,
         "insight": flows_note or summary.get("note") or "",
         "generated_at": _now_iso(),
+        "lazy_sync": True,
     }

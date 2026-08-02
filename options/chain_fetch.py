@@ -7,6 +7,11 @@ from typing import Any, Optional
 import numpy as np
 import pandas as pd
 
+_WS_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
+_WS_TTL_S = 300
+_WS_FAIL_S: dict[str, float] = {}
+_WS_FAIL_BACKOFF_S = 300
+
 
 def fetch_option_chain(symbol: str = "NIFTY") -> tuple[Optional[pd.DataFrame], Optional[str]]:
     sym = str(symbol or "NIFTY").upper().strip()
@@ -180,3 +185,32 @@ def chain_workspace(symbol: str, spot: float | None = None) -> dict[str, Any]:
         "top_put_oi": top_pe,
         "chain": chain_rows,
     }
+
+
+def chain_workspace_cached(
+    symbol: str,
+    spot: float | None = None,
+    *,
+    force: bool = False,
+) -> dict[str, Any]:
+    """TTL-cached workspace payload — avoids NSE hammering on dashboard polls."""
+    sym = str(symbol or "NIFTY").upper().strip()
+    now = time.time()
+    if not force:
+        cached = _WS_CACHE.get(sym)
+        if cached and (now - cached[0]) < _WS_TTL_S:
+            return cached[1]
+        fail_ts = _WS_FAIL_S.get(sym)
+        if fail_ts and (now - fail_ts) < _WS_FAIL_BACKOFF_S:
+            return {
+                "available": False,
+                "symbol": sym,
+                "message": "Option chain temporarily unavailable; retry shortly.",
+            }
+    result = chain_workspace(sym, spot=spot)
+    if result.get("available"):
+        _WS_CACHE[sym] = (now, result)
+        _WS_FAIL_S.pop(sym, None)
+    else:
+        _WS_FAIL_S[sym] = now
+    return result
