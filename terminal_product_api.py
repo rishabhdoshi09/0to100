@@ -468,6 +468,47 @@ def trade_plan(symbol: str) -> dict[str, Any]:
     return _trade_plan_payload(symbol)
 
 
+def _pre_trade_payload(symbol: str) -> dict[str, Any]:
+    """Compose plan + market + readiness + book into an honest GO/CAUTION/NO_GO cockpit."""
+    from product.pre_trade import build_pre_trade
+
+    sym = str(symbol or "").strip().upper()
+    plan = _trade_plan_payload(sym)
+    market = core._market_payload()
+    scan = core._scan_payload()
+    record = next(
+        (r for r in scan.get("records", []) if str(r.get("symbol", "")).upper() == sym),
+        None,
+    )
+    try:
+        readiness = product_readiness()
+    except Exception:
+        readiness = {}
+    try:
+        book = book_correlation()
+    except Exception:
+        book = {}
+    try:
+        paper = core._paper_payload()
+    except Exception:
+        paper = {}
+    return build_pre_trade(
+        symbol=sym,
+        plan=plan,
+        market=market,
+        scan_record=record,
+        readiness=readiness,
+        book_correlation=book,
+        paper=paper,
+    )
+
+
+@app.get("/api/pre-trade/{symbol}")
+def pre_trade(symbol: str) -> dict[str, Any]:
+    """Read-only pre-trade cockpit. Never places orders; GO is not a buy signal."""
+    return _pre_trade_payload(symbol)
+
+
 @app.get("/api/book-correlation")
 def book_correlation() -> dict[str, Any]:
     """Read-only concentration lens: how many open positions vs independent bets."""

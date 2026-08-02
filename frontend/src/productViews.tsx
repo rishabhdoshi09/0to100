@@ -14,10 +14,11 @@ import {
   bootstrapProduct,
   fetchProductReadiness,
   fetchStockIntelligence,
-  fetchTradePlan,
+  fetchPreTrade,
   fetchStockFundamentals,
   fetchSymbolRatios,
   type IntelligenceMetric,
+  type PreTrade,
   type ProductReadiness,
   type StockWorkspace,
   type TradePlan,
@@ -71,6 +72,36 @@ export function RiskLensCard({ plan }: { plan: TradePlan | null }) {
         <p className="risk-lens-note">Round-trip cost ≈ {plan.cost_drag_r.toFixed(2)}R of the stop distance.</p>
       )}
       <p className="risk-lens-summary">{plan.summary}</p>
+    </section>
+  )
+}
+
+/** Pre-trade cockpit: GO / CAUTION / NO_GO over the risk lens. Never a buy signal. */
+export function PreTradeCockpit({ cockpit }: { cockpit: PreTrade | null }) {
+  if (!cockpit) return null
+  const tone = String(cockpit.verdict || 'NO_GO').toLowerCase().replace('_', '-')
+  const plan = cockpit.plan || null
+  return (
+    <section className={`pre-trade-cockpit pre-trade-${tone}`}>
+      <header className="pre-trade-verdict">
+        <div>
+          <span>PRE-TRADE</span>
+          <strong>{cockpit.verdict}</strong>
+        </div>
+        <p>{cockpit.meaning}</p>
+      </header>
+      {(cockpit.blockers || []).length > 0 && (
+        <ul className="pre-trade-blockers">
+          {cockpit.blockers.map((item) => <li key={item}>{item}</li>)}
+        </ul>
+      )}
+      {(cockpit.warnings || []).length > 0 && (
+        <ul className="pre-trade-warnings">
+          {cockpit.warnings.map((item) => <li key={item}>{item}</li>)}
+        </ul>
+      )}
+      <RiskLensCard plan={plan} />
+      <p className="pre-trade-honesty">{cockpit.honesty}</p>
     </section>
   )
 }
@@ -278,7 +309,7 @@ function MetricExplanation({ metric }: { metric: IntelligenceMetric }) {
 export function ProductStockIntelligenceView(props: ViewProps) {
   const { selected, bars, runControl, setActive, onCompare, onWatchlist, depth } = props
   const [workspace, setWorkspace] = useState<StockWorkspace | null>(null)
-  const [plan, setPlan] = useState<TradePlan | null>(null)
+  const [preTrade, setPreTrade] = useState<PreTrade | null>(null)
   const [ratios, setRatios] = useState<import('./productApi').SymbolRatioRow[]>([])
   const [tab, setTab] = useState('Overview')
   const [loading, setLoading] = useState(false)
@@ -338,7 +369,7 @@ export function ProductStockIntelligenceView(props: ViewProps) {
   const load = async () => {
     if (!selected) {
       setWorkspace(null)
-      setPlan(null)
+      setPreTrade(null)
       setRatios([])
       setFundamentalsError('')
       return
@@ -351,12 +382,12 @@ export function ProductStockIntelligenceView(props: ViewProps) {
       setWorkspace(ws)
       setError('')
       // Clear the full-page loader as soon as the workspace lands. Fundamentals /
-      // trade-plan are slower secondary fetches and have their own busy UI.
+      // pre-trade are slower secondary fetches and have their own busy UI.
       setLoading(false)
       try {
-        setPlan(await fetchTradePlan(selected))
+        setPreTrade(await fetchPreTrade(selected))
       } catch {
-        setPlan(null)
+        setPreTrade(null)
       }
       if (!ws.fundamentals?.available || (ws.fundamentals.coverage_pct ?? 0) < 40) {
         void loadFundamentals(false)
@@ -437,7 +468,7 @@ export function ProductStockIntelligenceView(props: ViewProps) {
         <div className="stock-workspace-state"><span>{words(workspace?.state || 'LOADING')}</span><strong>{workspace?.confidence_pct ?? 0}%</strong><small>data confidence</small></div>
       </header>
 
-      <RiskLensCard plan={plan} />
+      <PreTradeCockpit cockpit={preTrade} />
 
       <div className="stock-action-row">
         {(workspace?.next_actions || []).map((item) => (

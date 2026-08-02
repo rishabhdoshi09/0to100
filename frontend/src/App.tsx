@@ -166,7 +166,7 @@ const pageTitles: Record<string, string> = {
 const pageSubtitles: Record<string, string> = {
   Home: 'Daily command centre — Breakouts, Momentum and Long-Term Picks from the saved market scan.',
   'Market Scanner': 'Professional scanner tables for breakouts, momentum and long-term quality.',
-  'Stock Intelligence': 'Company workspace — chart, financials, ratios and read-only trade plan.',
+  'Stock Intelligence': 'Company workspace — chart, financials, ratios and pre-trade GO/CAUTION/NO_GO cockpit.',
   'Long-Term Picks': 'Business quality, valuation and timing without fabricated model performance.',
   Compare: 'Side-by-side comparison across market, growth, quality and technical dimensions.',
   Watchlist: 'Names you are tracking with latest scan context.',

@@ -447,3 +447,80 @@
 .risk-lens-heat.risk-lens-danger { border-color: #c0392b; }
 .risk-lens-note { margin: 0.55rem 0 0; font-size: 0.78rem; color: var(--accent, #d9a441); }
 .risk-lens-summary { margin: 0.55rem 0 0; font-size: 0.82rem; color: var(--text, #cfe0f2); line-height: 1.5; }
+
+.pre-trade-cockpit {
+  margin: 0 0 1rem;
+  padding: 0.85rem 1rem;
+  border-radius: 12px;
+  border: 1px solid var(--border, #1c2c40);
+  background: linear-gradient(180deg, rgba(12, 22, 36, 0.95), rgba(8, 14, 24, 0.98));
+}
+.pre-trade-cockpit .risk-lens {
+  margin-top: 0.75rem;
+  padding: 0;
+  border: none;
+  background: transparent;
+}
+.pre-trade-verdict {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem 1.25rem;
+  align-items: flex-start;
+  justify-content: space-between;
+}
+.pre-trade-verdict > div {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+.pre-trade-verdict span {
+  font-size: 0.66rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--muted, #8ba0b8);
+}
+.pre-trade-verdict strong {
+  font-size: 1.45rem;
+  letter-spacing: 0.04em;
+  font-variant-numeric: tabular-nums;
+}
+.pre-trade-verdict p {
+  margin: 0;
+  max-width: 38rem;
+  font-size: 0.82rem;
+  line-height: 1.45;
+  color: var(--text, #cfe0f2);
+}
+.pre-trade-go .pre-trade-verdict strong { color: #3ecf8e; }
+.pre-trade-caution .pre-trade-verdict strong { color: #e0b04a; }
+.pre-trade-no-go .pre-trade-verdict strong { color: #e05a4a; }
+.pre-trade-blockers,
+.pre-trade-warnings {
+  margin: 0.65rem 0 0;
+  padding-left: 1.1rem;
+  font-size: 0.8rem;
+  line-height: 1.45;
+}
+.pre-trade-blockers { color: #e05a4a; }
+.pre-trade-warnings { color: #e0b04a; }
+.pre-trade-honesty {
+  margin: 0.7rem 0 0;
+  font-size: 0.72rem;
+  color: var(--muted, #8ba0b8);
+  line-height: 1.4;
+}
+.radar-pretrade-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  margin: 0 0 0.55rem;
+  padding: 0.2rem 0.55rem;
+  border-radius: 6px;
+  font-size: 0.72rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  border: 1px solid var(--border, #1c2c40);
+}
+.radar-pretrade-go { color: #3ecf8e; border-color: #1f7a4d; }
+.radar-pretrade-caution { color: #e0b04a; border-color: #b7791f; }
+.radar-pretrade-no-go { color: #e05a4a; border-color: #c0392b; }

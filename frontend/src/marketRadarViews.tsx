@@ -4,17 +4,18 @@ import { money, pct, words } from './format'
 import {
   addWatchlistItem,
   fetchCompareWorkspace,
+  fetchPreTrade,
   fetchRadarHome,
   fetchScannerWorkspace,
   fetchWatchlist,
   removeWatchlistItem,
   type CompareWorkspace,
+  type PreTrade,
   type RadarHome,
   type ScannerWorkspaceRow,
   type WatchlistPayload,
 } from './productApi'
 import { LiveScanBanner, type ExperienceViewProps } from './experience'
-import { fetchTradePlan, type TradePlan } from './productApi'
 
 type RadarRow = ScannerWorkspaceRow & {
   breakout_state?: string
@@ -140,15 +141,15 @@ export function RadarHomeView(props: ExperienceViewProps & {
 }) {
   const { dashboard, selected, setSelected, bars, setActive, depth, marketScan, longTermScan, onCompare, onWatchlist } = props
   const [radar, setRadar] = useState<RadarHome | null>(null)
-  const [plan, setPlan] = useState<TradePlan | null>(null)
+  const [preTrade, setPreTrade] = useState<PreTrade | null>(null)
 
   useEffect(() => {
     fetchRadarHome().then(setRadar).catch(() => setRadar(null))
   }, [dashboard.scan.scanned_at, dashboard.long_term.scanned_at])
 
   useEffect(() => {
-    if (!selected) { setPlan(null); return }
-    fetchTradePlan(selected).then(setPlan).catch(() => setPlan(null))
+    if (!selected) { setPreTrade(null); return }
+    fetchPreTrade(selected).then(setPreTrade).catch(() => setPreTrade(null))
   }, [selected, dashboard.scan.scanned_at])
 
   const laneCard = (title: string, rows: RadarRow[], count: number) => (
@@ -212,10 +213,21 @@ export function RadarHomeView(props: ExperienceViewProps & {
         <Panel title="DECISION PREVIEW">
           {selected ? (
             <div className="radar-decision-preview">
-              <p><strong>{(row as RadarRow)?.reason || plan?.summary || 'Select a stock from a lane above.'}</strong></p>
-              {plan?.entry != null && <div>Entry zone: {money(plan.entry)}</div>}
-              {plan?.stop != null && <div>Invalidation: {money(plan.stop)}</div>}
-              {plan?.target != null && <div>Target: {money(plan.target)}</div>}
+              {preTrade?.verdict && (
+                <div className={`radar-pretrade-badge radar-pretrade-${String(preTrade.verdict).toLowerCase().replace('_', '-')}`}>
+                  Pre-trade · {preTrade.verdict}
+                </div>
+              )}
+              <p><strong>{(row as RadarRow)?.reason || preTrade?.plan_summary || preTrade?.meaning || 'Select a stock from a lane above.'}</strong></p>
+              {(preTrade?.plan?.entry ?? preTrade?.scan?.entry) != null && (
+                <div>Entry zone: {money(preTrade?.plan?.entry ?? preTrade?.scan?.entry)}</div>
+              )}
+              {(preTrade?.plan?.stop ?? preTrade?.scan?.stop) != null && (
+                <div>Invalidation: {money(preTrade?.plan?.stop ?? preTrade?.scan?.stop)}</div>
+              )}
+              {(preTrade?.plan?.target ?? preTrade?.scan?.target) != null && (
+                <div>Target: {money(preTrade?.plan?.target ?? preTrade?.scan?.target)}</div>
+              )}
               <div className="radar-action-row">
                 <button type="button" onClick={() => setActive('Stock Intelligence')}>Stock Intelligence</button>
                 <button type="button" onClick={() => onCompare(selected)}>Compare</button>

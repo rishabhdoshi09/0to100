@@ -252,6 +252,67 @@ export const fetchTradePlan = (symbol: string): Promise<TradePlan> =>
     headers: { Accept: 'application/json' },
   }).then((response) => json<TradePlan>(response))
 
+export type PreTradeVerdict = 'GO' | 'CAUTION' | 'NO_GO'
+
+export type PreTrade = {
+  schema_version: number
+  symbol: string
+  available: boolean
+  verdict: PreTradeVerdict
+  meaning: string
+  tradeable: boolean
+  blockers: string[]
+  warnings: string[]
+  plan: TradePlan
+  plan_summary: string
+  cost_drag_r: number | null
+  round_trip_cost_pct?: number | null
+  correlation: {
+    status: string
+    correlated_with: string[]
+    effective_bets_before?: number | null
+    effective_bets_after?: number | null
+    n_positions: number
+    n_bets: number
+    message: string
+  }
+  market_throttle: {
+    health: string
+    market_risk_factor: number | null
+    suggested_risk_pct?: number
+    trade_stance: string
+  }
+  data_gaps: Array<{
+    key?: string
+    label?: string
+    status?: string
+    next_action?: string
+  }>
+  paper_snapshot: {
+    open_positions: number
+    capital?: number
+    open_risk_pct?: number | null
+  }
+  scan: {
+    available: boolean
+    verdict?: string
+    score?: number
+    signals?: string[]
+    entry?: number
+    stop?: number
+    target?: number | null
+  }
+  read_only: boolean
+  places_orders: boolean
+  honesty: string
+}
+
+/** Compose plan + book + market + data gaps into GO/CAUTION/NO_GO. Never places orders. */
+export const fetchPreTrade = (symbol: string): Promise<PreTrade> =>
+  fetch(`/api/pre-trade/${encodeURIComponent(symbol)}`, {
+    headers: { Accept: 'application/json' },
+  }).then((response) => json<PreTrade>(response))
+
 export type BookCorrelation = {
   available?: boolean
   n_positions: number
