@@ -649,7 +649,7 @@ def _maybe_run_nightly_backtest() -> None:
                 _bt_done_date = today
                 return
         log.info("nightly_backtest_start")
-        run_backtest(max_symbols=800)
+        run_backtest(max_symbols=None)  # full bhav universe — not a capped sample
         _bt_done_date = today
         # 🗂️ Edge Timeline — once the day's outcomes are settled, record any
         # per-signal drift STATE TRANSITION so the system builds a permanent

@@ -103,17 +103,7 @@ def enqueue_full_universe_backtest(*, requested_by: str) -> dict:
     from operations.store import OperationStore
 
     store = OperationStore(ROOT / "logs" / "market_ops" / "jobs.db")
-    # Skip if same kind already active
-    try:
-        active = store.list_operations(limit=20) if hasattr(store, "list_operations") else []
-    except Exception:
-        active = []
-    for row in active or []:
-        if str(row.get("kind")) == FULL_UNIVERSE_BACKTEST and str(row.get("status")) in {
-            "PENDING", "RUNNING", "LEASED",
-        }:
-            return {"accepted": False, "reason": "full-universe backtest already queued/running", "operation": row}
-
+    # OperationStore deduplicates PENDING/RUNNING of the same kind.
     operation, created = store.enqueue(
         FULL_UNIVERSE_BACKTEST,
         lane=LANES[FULL_UNIVERSE_BACKTEST],
@@ -126,6 +116,7 @@ def enqueue_full_universe_backtest(*, requested_by: str) -> dict:
         "status": operation.get("status"),
         "places_orders": False,
         "live_locked": True,
+        "note": None if created else "Reused existing pending/running full-universe backtest",
     }
 
 
