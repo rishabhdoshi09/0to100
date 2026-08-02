@@ -151,7 +151,9 @@ def run_evidence(provider, cfg: MomentumBreakoutConfig | None = None,
     provenance = {"experiment_id": EXP.EXPERIMENT_ID, "config_hash": cfg.config_hash(),
                   "dataset_snapshot_id": manifest["snapshot_id"],
                   "code_commit": manifest["code_commit"],
-                  "survivorship_complete": provider.universe_policy().get("survivorship_complete")}
+                  "survivorship_complete": provider.universe_policy().get("survivorship_complete"),
+                  "research_grade": provider.universe_policy().get("research_grade"),
+                  "universe_source": provider.universe_policy().get("source")}
 
     # ── 2. chronological candidate generation ──
     eligible, rejected = _generate(provider, cfg, cal, bench, provenance,
@@ -407,7 +409,13 @@ class _EmptyProvider:
     def sector_ctx(self, sym, i): return None
     def valuation(self, sym, i): return None
     def source_identities(self): return {"status": f"unavailable: {self._reason}"}
-    def universe_policy(self): return {"survivorship_complete": False, "note": self._reason}
+    def universe_policy(self):
+        return {
+            "survivorship_complete": False,
+            "research_grade": False,
+            "source": "",
+            "note": self._reason,
+        }
     def adjustment_policy(self): return {"corporate_actions": "unavailable (RAW)"}
 
 
