@@ -15,9 +15,22 @@ const json = async <T>(response: Response): Promise<T> => {
   return response.json() as Promise<T>
 }
 
-export const fetchDashboard = (): Promise<DashboardPayload> =>
-  fetch('/api/dashboard', { headers: { Accept: 'application/json' } })
+export const fetchDashboard = (): Promise<DashboardPayload> => {
+  const controller = new AbortController()
+  const timer = window.setTimeout(() => controller.abort(), 45_000)
+  return fetch('/api/dashboard', {
+    headers: { Accept: 'application/json' },
+    signal: controller.signal,
+  })
     .then((response) => json<DashboardPayload>(response))
+    .catch((reason) => {
+      if (reason instanceof DOMException && reason.name === 'AbortError') {
+        throw new Error('Dashboard timed out after 45s — API may still be loading bhav history')
+      }
+      throw reason
+    })
+    .finally(() => window.clearTimeout(timer))
+}
 
 export const fetchChart = (symbol: string): Promise<{ symbol: string; bars: ChartBar[] }> =>
   fetch(`/api/chart/${encodeURIComponent(symbol)}`, {

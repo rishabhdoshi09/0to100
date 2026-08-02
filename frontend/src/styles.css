@@ -20,7 +20,27 @@
 }
 
 * { box-sizing: border-box; }
-html, body, #root { min-height: 100%; margin: 0; background: var(--bg); }
+html, body, #root { min-height: 100%; margin: 0; background: var(--bg); color: var(--text); }
+.ui-crash-panel {
+  min-height: 100vh;
+  padding: 48px 28px;
+  background: #050914;
+  color: #edf5ff;
+  font-family: ui-sans-serif, system-ui, -apple-system, sans-serif;
+}
+.ui-crash-panel h1 { margin: 0 0 12px; font-size: 28px; }
+.ui-crash-panel p { max-width: 640px; color: #b7c7d8; line-height: 1.5; }
+.ui-crash-panel pre {
+  margin: 18px 0;
+  padding: 14px;
+  border: 1px solid #ff687f66;
+  border-radius: 8px;
+  background: #14080c;
+  color: #ffb3be;
+  white-space: pre-wrap;
+  overflow: auto;
+}
+.ui-crash-panel small { display: block; margin-top: 16px; color: #7f8da7; }
 button, input { font: inherit; }
 button { color: inherit; }
 

@@ -14,8 +14,8 @@ import {
 import { MarketSidebar } from './MarketSidebar'
 import { EducationView } from './educationViews'
 import { NewsView, OperationsRibbon, FnoView } from './marketViews'
-import { UsMarketHome, UsScannerView, UsStockView } from './usMarketViews'
 import { ProductStockIntelligenceView } from './productViews'
+import { UsMarketHome, UsScannerView, UsStockView } from './usMarketViews'
 import { ResearchDataView } from './researchData'
 import {
   AutomationView,
@@ -515,6 +515,12 @@ function App() {
               <pre>{error}</pre>
             </details>
             <button type="button" onClick={() => void refresh()}>Retry connection</button>
+          </div>
+        )}
+        {loading && !error && (
+          <div className="api-degraded-banner" role="status">
+            <strong>Loading QuantTerm…</strong>
+            <p>Terminal API is up; first dashboard load can wait on NSE bhav cache. Sidebar should already be visible.</p>
           </div>
         )}
         {showOpsRibbon && <OperationsRibbon dashboard={dashboard} />}
