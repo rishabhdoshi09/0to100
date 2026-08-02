@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { fetchChart, fetchDashboard, sendControl } from './api'
 import {
   DisplayDepthToggle,
@@ -17,7 +17,13 @@ import {
   PortfolioView,
 } from './views'
 import type { DisplayDepth } from './productLanguage'
-import type { ChartBar, ControlName, DashboardPayload } from './types'
+import { useScanRunner } from './scanRunner'
+import type { ChartBar, ControlName, DashboardPayload, OperationRecord } from './types'
+
+function activeSeed(dashboard: DashboardPayload, kind: string): OperationRecord | null {
+  const active = dashboard.operations.active.find((item) => item.kind === kind)
+  return active ?? null
+}
 
 const emptyDashboard: DashboardPayload = {
   generated_at: '',
@@ -155,7 +161,7 @@ function App() {
     return saved === 'professional' ? 'professional' : 'simple'
   })
 
-  const refresh = async () => {
+  const refresh = useCallback(async () => {
     try {
       const payload = await fetchDashboard()
       setDashboard(payload)
@@ -172,13 +178,26 @@ function App() {
     } finally {
       setLoading(false)
     }
-  }
+  }, [])
+
+  const marketScan = useScanRunner('MARKET_SCAN', {
+    onComplete: () => void refresh(),
+    seedOperation: activeSeed(dashboard, 'MARKET_SCAN'),
+  })
+
+  const longTermScan = useScanRunner('LONG_TERM_SCAN', {
+    onComplete: () => void refresh(),
+    seedOperation: activeSeed(dashboard, 'LONG_TERM_SCAN'),
+  })
+
+  const scanPollingActive = marketScan.isActive || longTermScan.isActive
 
   useEffect(() => {
     void refresh()
-    const timer = window.setInterval(() => void refresh(), 5_000)
+    const interval = scanPollingActive ? 8_000 : 12_000
+    const timer = window.setInterval(() => void refresh(), interval)
     return () => window.clearInterval(timer)
-  }, [])
+  }, [refresh, scanPollingActive])
 
   useEffect(() => {
     window.localStorage.setItem('quantterm-display-depth', depth)
@@ -221,18 +240,18 @@ function App() {
   }
 
   const runControl = async (control: ControlName) => {
-    setControlState('Starting operation…')
+    setControlState('Starting…')
     try {
       const result = await sendControl(control)
       if (!result.accepted) {
-        setControlState('Control was not accepted')
+        setControlState('Request was not accepted')
       } else if (result.operation_id) {
-        setControlState(`${control.replaceAll('_', ' ')} · ${result.operation_status || 'PENDING'} · ${result.operation_id.slice(0, 8)}`)
+        setControlState('Operation queued — watch progress below')
       } else {
-        setControlState(`${control.replaceAll('_', ' ')} queued`)
+        setControlState('Queued successfully')
       }
-      window.setTimeout(() => setControlState(''), 5000)
-      window.setTimeout(() => void refresh(), 250)
+      window.setTimeout(() => setControlState(''), 4000)
+      window.setTimeout(() => void refresh(), 400)
     } catch (reason) {
       setControlState(reason instanceof Error ? reason.message : 'Control failed')
     }
@@ -258,7 +277,11 @@ function App() {
     setActive,
     runControl,
     depth,
+    marketScan,
+    longTermScan,
   }
+
+  const showOpsRibbon = !['Command Center', 'Scanner', 'Stock Intelligence'].includes(active)
 
   const renderView = () => {
     if (active === 'Scanner') return <EnhancedScannerView {...viewProps} />
@@ -309,8 +332,18 @@ function App() {
           </div>
         </section>
 
-        {error && <div className="api-warning">API unavailable: {error}. No numbers below should be treated as current until the local API reconnects.</div>}
-        <OperationsRibbon dashboard={dashboard} />
+        {error && (
+          <div className="api-degraded-banner" role="alert">
+            <strong>QuantTerm backend is unavailable.</strong>
+            <p>Existing information may be incomplete. Reconnect or start the backend, then retry.</p>
+            <details>
+              <summary>Technical details</summary>
+              <pre>{error}</pre>
+            </details>
+            <button type="button" onClick={() => void refresh()}>Retry connection</button>
+          </div>
+        )}
+        {showOpsRibbon && <OperationsRibbon dashboard={dashboard} />}
         {renderView()}
       </main>
       <ExperienceHelpDrawer page={active} open={helpOpen} onClose={() => setHelpOpen(false)} />

@@ -460,4 +460,93 @@ body::before{
 @media (prefers-reduced-motion: reduce){
   *, body::before{ animation: none !important; transition: none !important; }
   .panel:hover, .today-strip>div:hover, .scanner-lane-cards article:hover{ transform:none; }
+  .live-scan-progress-pulse .pulse-bar{ animation: none !important; }
 }
+
+/* Live scan banner */
+.live-scan-banner{
+  margin: 12px 0 16px;
+  padding: 14px 16px;
+  border-radius: 12px;
+  border: 1px solid rgba(38, 215, 255, .28);
+  background: linear-gradient(135deg, rgba(38, 215, 255, .08), rgba(139, 123, 240, .06));
+  box-shadow: 0 0 24px -12px rgba(38, 215, 255, .35);
+}
+.live-scan-banner.running{ border-color: rgba(38, 215, 255, .45); }
+.live-scan-banner.succeeded{ border-color: rgba(53, 233, 134, .4); background: rgba(53, 233, 134, .06); }
+.live-scan-banner.failed{ border-color: rgba(255, 104, 127, .45); background: rgba(255, 104, 127, .06); }
+.live-scan-banner-head{ display:flex; align-items:center; gap:12px; justify-content:space-between; }
+.live-scan-banner-head strong{ display:block; font-size:11px; letter-spacing:.14em; color: var(--cyan); }
+.live-scan-banner-head span{ display:block; margin-top:4px; font-size:15px; font-weight:600; }
+.live-scan-elapsed{ color: var(--muted); font-variant-numeric: tabular-nums; }
+.live-scan-dismiss{ background:transparent; border:none; font-size:20px; cursor:pointer; color:var(--muted); }
+.live-scan-detail{ margin:8px 0 0; color:#c8d6ec; font-size:13px; }
+.live-scan-progress{ margin-top:10px; height:6px; border-radius:999px; background:rgba(255,255,255,.08); overflow:hidden; }
+.live-scan-progress b{ display:block; height:100%; background:linear-gradient(90deg, var(--cyan), var(--purple)); transition:width .35s ease; }
+.live-scan-progress-pulse .pulse-bar{ width:35%; animation: live-scan-pulse 1.4s ease-in-out infinite; }
+@keyframes live-scan-pulse{ 0%,100%{ transform:translateX(0); opacity:.6 } 50%{ transform:translateX(180%); opacity:1 } }
+.live-scan-technical{ display:block; margin-top:8px; color:var(--muted); font-size:11px; }
+.live-scan-notice{ margin-top:8px; display:flex; align-items:center; gap:12px; flex-wrap:wrap; }
+.live-scan-notice p{ margin:0; flex:1; }
+
+/* API degraded */
+.api-degraded-banner{
+  margin:0 0 14px;
+  padding:16px 18px;
+  border-radius:12px;
+  border:1px solid rgba(255,104,127,.35);
+  background:rgba(255,104,127,.08);
+}
+.api-degraded-banner p{ margin:6px 0 10px; color:#d8e2f4; }
+.api-degraded-banner details{ font-size:12px; color:var(--muted); }
+.api-degraded-banner pre{ white-space:pre-wrap; margin-top:8px; }
+
+/* Opportunity board */
+.opportunity-board{ margin: 16px 0 20px; }
+.opportunity-board header h3{ margin:0; font-size:16px; }
+.opportunity-board header p{ margin:4px 0 0; color:var(--muted); font-size:13px; }
+.opportunity-board-grid{
+  display:grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap:10px;
+  margin-top:12px;
+}
+.opportunity-lane{
+  border:1px solid var(--border);
+  border-radius:10px;
+  padding:10px 12px;
+  background:rgba(11,19,34,.85);
+}
+.opportunity-lane header{ display:flex; justify-content:space-between; margin-bottom:8px; }
+.opportunity-lane header span{ font-size:10px; letter-spacing:.12em; color:var(--muted); }
+.opportunity-lane ul{ list-style:none; margin:0; padding:0; }
+.opportunity-lane li button{
+  width:100%; text-align:left; padding:8px 10px; margin-bottom:4px;
+  border:1px solid transparent; border-radius:8px; background:rgba(255,255,255,.03);
+  cursor:pointer;
+}
+.opportunity-lane li button.active{ border-color:rgba(38,215,255,.5); background:rgba(38,215,255,.1); }
+.opportunity-lane li b{ display:block; font-size:13px; }
+.opportunity-lane li span, .opportunity-lane li small{ display:block; color:var(--muted); font-size:11px; }
+.opportunity-empty{ color:var(--muted); font-size:12px; margin:0; }
+
+.market-command-strip.compact{
+  display:grid;
+  grid-template-columns: repeat(4, minmax(0,1fr));
+  gap:10px;
+  margin:12px 0;
+}
+.market-command-strip.compact > div{
+  padding:10px 12px;
+  border-radius:10px;
+  border:1px solid var(--border);
+  background:rgba(8,14,27,.9);
+}
+.market-command-strip.compact span{ font-size:10px; letter-spacing:.12em; color:var(--muted); }
+.strip-blocker{ border-color:rgba(255,104,127,.4); }
+
+.decision-lens-grid{ display:grid; gap:12px; }
+.decision-lens-risk p, .decision-lens-next p{ margin:4px 0 0; color:#d4e0f5; font-size:13px; }
+.decision-lens-empty{ color:var(--muted); font-size:13px; }
+.decision-lens-provenance{ display:block; margin-top:10px; color:var(--muted); font-size:11px; }
+.scanner-intel-footer{ margin-top:12px; }
