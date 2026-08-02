@@ -8,6 +8,7 @@ import './marketViews.css'
 import './researchData.css'
 import './productViews.css'
 import './experience.css'
+import './radar.css'
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>

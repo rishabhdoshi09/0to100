@@ -1,0 +1,120 @@
+/* Market radar — professional dense terminal surfaces */
+
+.radar-home, .market-scanner, .compare-view, .watchlist-view {
+  animation: qt-rise .35s ease both;
+}
+
+.radar-hero {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+  margin-bottom: 14px;
+}
+.radar-hero span { font-size: 10px; letter-spacing: .18em; color: var(--muted); }
+.radar-hero h2 { margin: 6px 0 4px; font-size: 26px; }
+.radar-hero-actions button { min-width: 120px; }
+
+.radar-market-strip {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 8px;
+  margin-bottom: 14px;
+}
+.radar-market-strip > div {
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: rgba(8, 14, 27, .92);
+}
+.radar-market-strip span { font-size: 9px; letter-spacing: .12em; color: var(--muted); display: block; }
+.radar-market-strip strong { font-variant-numeric: tabular-nums; }
+
+.radar-three-lanes {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 16px;
+}
+.radar-lane-card {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 12px;
+  background: linear-gradient(180deg, rgba(11, 19, 34, .95), rgba(6, 10, 20, .98));
+}
+.radar-lane-card header { display: flex; justify-content: space-between; margin-bottom: 8px; }
+.radar-lane-card header span { font-size: 10px; letter-spacing: .14em; color: var(--cyan); }
+.radar-lane-card ul { list-style: none; margin: 0; padding: 0; }
+.radar-lane-card li button {
+  width: 100%; text-align: left; padding: 8px 10px; margin-bottom: 4px;
+  border: 1px solid transparent; border-radius: 8px; background: rgba(255,255,255,.03); cursor: pointer;
+}
+.radar-lane-card li button.active { border-color: rgba(38, 215, 255, .45); background: rgba(38, 215, 255, .08); }
+.radar-lane-card b { display: block; font-size: 13px; }
+.radar-lane-card span, .radar-lane-card small { display: block; color: var(--muted); font-size: 11px; }
+
+.radar-workspace {
+  display: grid;
+  grid-template-columns: 1.2fr .8fr;
+  gap: 12px;
+}
+.radar-decision-preview { font-size: 13px; line-height: 1.5; }
+.radar-action-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.radar-action-row button { font-size: 12px; }
+
+.radar-tab-row { display: flex; gap: 8px; margin-bottom: 12px; }
+.radar-tab-row button {
+  padding: 8px 16px; border-radius: 999px; border: 1px solid var(--border);
+  background: rgba(255,255,255,.03); cursor: pointer;
+}
+.radar-tab-row button.active {
+  border-color: rgba(38, 215, 255, .5);
+  background: linear-gradient(180deg, rgba(38, 215, 255, .15), rgba(139, 123, 240, .08));
+}
+
+.radar-table-wrap { overflow: auto; max-height: 520px; }
+.radar-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.radar-table th {
+  text-align: left;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 10px;
+  letter-spacing: .08em;
+  cursor: pointer;
+  user-select: none;
+}
+.radar-table td {
+  padding: 7px 10px;
+  border-bottom: 1px solid rgba(33, 50, 77, .5);
+}
+.radar-table tbody tr { cursor: pointer; }
+.radar-table tbody tr:hover { background: rgba(38, 215, 255, .05); }
+.radar-table tbody tr.selected { background: rgba(38, 215, 255, .12); }
+.radar-empty, .radar-empty-li { color: var(--muted); font-size: 12px; padding: 12px; }
+
+.compare-chips { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 16px; align-items: center; }
+.compare-chip {
+  padding: 6px 12px; border-radius: 999px; border: 1px solid var(--border);
+  background: rgba(38, 215, 255, .1); cursor: pointer;
+}
+.compare-grid { display: grid; gap: 12px; }
+.compare-table th, .compare-table td { font-size: 11px; }
+
+.watchlist-add { display: flex; gap: 8px; margin-bottom: 14px; flex-wrap: wrap; }
+.watchlist-add input { min-width: 140px; }
+
+@media (max-width: 1280px) {
+  .radar-three-lanes { grid-template-columns: 1fr; }
+  .radar-workspace { grid-template-columns: 1fr; }
+  .radar-market-strip { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .radar-home, .market-scanner, .compare-view, .watchlist-view { animation: none; }
+}

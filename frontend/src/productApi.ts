@@ -213,3 +213,100 @@ export const fetchScannerWorkspace = (mode: string): Promise<ScannerWorkspace> =
   fetch(`/api/scanner-workspace/${encodeURIComponent(mode)}`, {
     headers: { Accept: 'application/json' },
   }).then((response) => json<ScannerWorkspace>(response))
+
+export type RadarHome = {
+  generated_at: string
+  market_session: string
+  market_health: string
+  breadth: string
+  nifty_change_1d: number
+  vix: number
+  leaders: string[]
+  laggards: string[]
+  scan_scanned_at: string
+  long_term_scanned_at: string
+  universe_size: number
+  lanes: {
+    breakouts: ScannerWorkspaceRow[]
+    momentum: ScannerWorkspaceRow[]
+    long_term_picks: ScannerWorkspaceRow[]
+  }
+  counts: { breakouts: number; momentum: number; long_term_picks: number }
+}
+
+export const fetchRadarHome = (): Promise<RadarHome> =>
+  fetch('/api/radar-home', { headers: { Accept: 'application/json' } })
+    .then((response) => json<RadarHome>(response))
+
+export type CompareMetric = {
+  label: string
+  value: unknown
+  unit: string
+  source: string
+  available: boolean
+}
+
+export type CompareRow = {
+  symbol: string
+  company: string
+  sector: string
+  available: boolean
+  error?: string
+  confidence_pct?: number
+  sections: Record<string, CompareMetric[]>
+}
+
+export type CompareWorkspace = {
+  schema_version: number
+  generated_at: string
+  symbols: string[]
+  rows: CompareRow[]
+  section_labels: Record<string, string>
+  disclaimer: string
+}
+
+export const fetchCompareWorkspace = (symbols: string[]): Promise<CompareWorkspace> =>
+  fetch(`/api/compare?symbols=${encodeURIComponent(symbols.join(','))}`, {
+    headers: { Accept: 'application/json' },
+  }).then((response) => json<CompareWorkspace>(response))
+
+export type WatchlistItem = {
+  id: number
+  symbol: string
+  added_date: string
+  notes?: string
+  buy_zone_low?: number | null
+  buy_zone_high?: number | null
+  target_price?: number | null
+  stop_price?: number | null
+  added_price?: number | null
+  snapshot?: ScannerWorkspaceRow & Record<string, unknown>
+}
+
+export type WatchlistPayload = {
+  generated_at: string
+  items: WatchlistItem[]
+  count: number
+}
+
+export const fetchWatchlist = (): Promise<WatchlistPayload> =>
+  fetch('/api/watchlist', { headers: { Accept: 'application/json' } })
+    .then((response) => json<WatchlistPayload>(response))
+
+export const addWatchlistItem = (body: {
+  symbol: string
+  notes?: string
+  buy_zone_low?: number
+  buy_zone_high?: number
+  target_price?: number
+  stop_price?: number
+}): Promise<{ accepted: boolean; item: WatchlistItem }> =>
+  fetch('/api/watchlist', {
+    method: 'POST',
+    headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  }).then((response) => json(response))
+
+export const removeWatchlistItem = (rowId: number): Promise<{ accepted: boolean }> =>
+  fetch(`/api/watchlist/${rowId}`, { method: 'DELETE', headers: { Accept: 'application/json' } })
+    .then((response) => json(response))

@@ -2,19 +2,20 @@ import type { DashboardPayload } from './types'
 import { money } from './format'
 
 const PRIMARY_NAV = [
-  ['⌂', 'Command Center', 'Home'],
-  ['◉', 'Scanner', 'Discover'],
-  ['◎', 'Stock Intelligence', 'Stock Intelligence'],
-  ['◇', 'Long-Term', 'Long-Term Research'],
-  ['▤', 'Research Data', 'Research Data'],
+  ['⌂', 'Home', 'Home'],
+  ['◎', 'Market Scanner', 'Market Scanner'],
+  ['◉', 'Stock Intelligence', 'Stock Intelligence'],
+  ['◇', 'Long-Term Picks', 'Long-Term Picks'],
+  ['⇔', 'Compare', 'Compare'],
+  ['★', 'Watchlist', 'Watchlist'],
 ] as const
 
-const OPERATIONS_NAV = [
-  ['↗', 'Market Internals', 'Market & Breadth'],
+const SECONDARY_NAV = [
+  ['↗', 'Market Overview', 'Market Overview'],
   ['◈', 'News & Events', 'News & Events'],
-  ['ƒ', 'F&O Desk', 'F&O Coverage'],
-  ['◌', 'Automation', 'System Health'],
-  ['▣', 'Portfolio', 'Paper Portfolio'],
+  ['▤', 'Research Data', 'Research Data'],
+  ['▣', 'Paper Portfolio', 'Paper Portfolio'],
+  ['◌', 'System Health', 'System Health'],
 ] as const
 
 function Logo() {
@@ -58,14 +59,13 @@ export function MarketSidebar({
   setActive: (value: string) => void
   dashboard: DashboardPayload
 }) {
-  const autonomy = dashboard.autonomy.running
   const operations = dashboard.operations.running
   return (
     <aside className="sidebar">
-      <div className="brand"><Logo /><div><strong>QUANTTERM</strong><small>RETAIL QUANT OS</small></div></div>
+      <div className="brand"><Logo /><div><strong>QUANTTERM</strong><small>MARKET RADAR</small></div></div>
       <nav>
-        <NavigationGroup label="RESEARCH" rows={PRIMARY_NAV} active={active} setActive={setActive} />
-        <NavigationGroup label="OPERATIONS & EVIDENCE" rows={OPERATIONS_NAV} active={active} setActive={setActive} />
+        <NavigationGroup label="DISCOVERY" rows={PRIMARY_NAV} active={active} setActive={setActive} />
+        <NavigationGroup label="TOOLS & EVIDENCE" rows={SECONDARY_NAV} active={active} setActive={setActive} />
       </nav>
       <div className="sidebar-spacer" />
       <div className="broker-card">
@@ -73,19 +73,15 @@ export function MarketSidebar({
           <strong>MARKET DATA</strong>
           <span className={dashboard.data.ready ? 'status-dot' : 'status-dot status-dot-off'} />
         </div>
-        <small>{dashboard.data.ready ? `READY · ${dashboard.data.bhavcopy.latest_date || 'date unknown'}` : 'INCOMPLETE · inspect Home'}</small>
+        <small>{dashboard.data.ready ? `READY · ${dashboard.data.bhavcopy.latest_date || '—'}` : 'INCOMPLETE'}</small>
         <div className="broker-stats">
           <div><span>Sessions</span><strong>{dashboard.data.bhavcopy.sessions || 0}</strong></div>
-          <div><span>Symbols</span><strong>{(dashboard.data.bhavcopy.symbols || 0).toLocaleString('en-IN')}</strong></div>
+          <div><span>Universe</span><strong>{dashboard.scan.universe_size.toLocaleString('en-IN')}</strong></div>
         </div>
       </div>
       <div className="broker-card compact-service-card">
-        <div className="broker-row"><strong>MARKET OPS</strong><span className={operations ? 'status-dot' : 'status-dot status-dot-off'} /></div>
-        <small>{operations ? `ONLINE · PID ${dashboard.operations.worker_pid || '—'}` : 'OFFLINE · scans unavailable'}</small>
-      </div>
-      <div className="broker-card compact-service-card secondary-service">
-        <div className="broker-row"><strong>PAPER AUTONOMY</strong><span className={autonomy ? 'status-dot' : 'status-dot status-dot-off'} /></div>
-        <small>{dashboard.autonomy.state || 'UNKNOWN'} · equity {money(dashboard.paper.equity)}</small>
+        <div className="broker-row"><strong>SCAN ENGINE</strong><span className={operations ? 'status-dot' : 'status-dot status-dot-off'} /></div>
+        <small>{operations ? 'ONLINE' : 'OFFLINE'} · last scan {dashboard.scan.scanned_at ? new Date(dashboard.scan.scanned_at).toLocaleDateString('en-IN') : '—'}</small>
       </div>
     </aside>
   )

@@ -69,6 +69,8 @@ type ViewProps = {
   bars: ChartBar[]
   setActive: (page: string) => void
   runControl: (control: ControlName) => Promise<void>
+  onCompare?: (symbol: string) => void
+  onWatchlist?: (symbol: string) => void
 }
 
 const laneTone = (status: string) => {
@@ -234,7 +236,7 @@ function MetricExplanation({ metric }: { metric: IntelligenceMetric }) {
 }
 
 export function ProductStockIntelligenceView(props: ViewProps) {
-  const { selected, bars, runControl, setActive } = props
+  const { selected, bars, runControl, setActive, onCompare, onWatchlist } = props
   const [workspace, setWorkspace] = useState<StockWorkspace | null>(null)
   const [plan, setPlan] = useState<TradePlan | null>(null)
   const [loading, setLoading] = useState(false)
@@ -289,6 +291,14 @@ export function ProductStockIntelligenceView(props: ViewProps) {
       {error && <div className="api-warning">{error}</div>}
       <header className="stock-workspace-hero">
         <div><span>{workspace?.sector || 'Sector not classified'}</span><h2>{workspace?.company || selected}</h2><p>{selected} · {workspace?.summary || 'Verified research is still loading.'}</p></div>
+        <div className="stock-workspace-actions">
+          {onWatchlist && (
+            <button type="button" onClick={() => onWatchlist(selected)}>★ Watchlist</button>
+          )}
+          {onCompare && (
+            <button type="button" onClick={() => onCompare(selected)}>⇔ Compare</button>
+          )}
+        </div>
         <div className="stock-workspace-state"><span>{words(workspace?.state || 'LOADING')}</span><strong>{workspace?.confidence_pct ?? 0}%</strong><small>data confidence</small></div>
       </header>
 

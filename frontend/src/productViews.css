@@ -258,6 +258,29 @@
   font-size: clamp(1.6rem, 3vw, 2.5rem);
 }
 
+.stock-workspace-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.stock-workspace-actions button {
+  padding: 8px 14px;
+  border: 1px solid rgba(54, 217, 255, 0.35);
+  border-radius: 8px;
+  background: rgba(54, 217, 255, 0.08);
+  color: #d8ecff;
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+}
+
+.stock-workspace-actions button:hover {
+  background: rgba(54, 217, 255, 0.16);
+}
+
 .stock-workspace-state {
   display: grid;
   justify-items: end;
