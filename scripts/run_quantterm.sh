@@ -30,6 +30,7 @@ FRONTEND_PID=""
 AUTONOMY_EXTERNAL=0
 API_EXTERNAL=0
 API_HEALTH_FAILS=0
+API_HTTP_FAILS=0
 
 cleanup() {
   echo
@@ -146,9 +147,10 @@ echo "[STACK] QuantTerm is ready. Open http://127.0.0.1:5173"
 echo "[STACK] Keep this terminal open; Ctrl-C stops services started by this script."
 echo "[STACK] If the UI still errors, run: bash scripts/stop_quantterm.sh && bash scripts/run_quantterm_complete.sh"
 
-# Require several consecutive failures before tearing down — a single busy
-# uvicorn worker can make curl --max-time health checks flap when the UI loads.
-API_FAIL_LIMIT=3
+# Hard-fail only when the API process/port is gone. HTTP soft-fails while the
+# process is alive usually mean a busy worker — never tear down Vite for that.
+API_DEAD_LIMIT=3
+API_HTTP_WARN_EVERY=5
 
 while true; do
   if ! stack_port_listening 5173; then
@@ -160,23 +162,33 @@ while true; do
     exit 1
   fi
 
-  api_alive=1
+  api_process_dead=0
   if [[ "$API_EXTERNAL" != "1" ]] && [[ -n "$API_PID" ]] && ! kill -0 "$API_PID" >/dev/null 2>&1; then
-    api_alive=0
+    api_process_dead=1
   fi
-  if ! stack_health_ok "$API_HEALTH"; then
-    api_alive=0
+  api_port_down=0
+  if ! stack_port_listening 8765; then
+    api_port_down=1
   fi
 
-  if [[ "$api_alive" == "1" ]]; then
-    API_HEALTH_FAILS=0
-  else
+  if [[ "$api_process_dead" == "1" ]] || [[ "$api_port_down" == "1" ]]; then
     API_HEALTH_FAILS=$((API_HEALTH_FAILS + 1))
-    echo "[STACK] Terminal API health soft-fail ${API_HEALTH_FAILS}/${API_FAIL_LIMIT} at $API_HEALTH" >&2
-    if [[ "$API_HEALTH_FAILS" -ge "$API_FAIL_LIMIT" ]]; then
-      echo "[STACK] Terminal API health check failed at $API_HEALTH — backend may have stopped." >&2
+    echo "[STACK] Terminal API process/port soft-fail ${API_HEALTH_FAILS}/${API_DEAD_LIMIT} (dead=${api_process_dead} port_down=${api_port_down})" >&2
+    if [[ "$API_HEALTH_FAILS" -ge "$API_DEAD_LIMIT" ]]; then
+      echo "[STACK] Terminal API is down on :8765 — backend may have stopped." >&2
       echo "[STACK] Vite proxies /api → :8765; restart with: bash scripts/stop_quantterm.sh && bash scripts/run_quantterm_complete.sh" >&2
       exit 1
+    fi
+  else
+    API_HEALTH_FAILS=0
+    if ! stack_health_ok "$API_HEALTH"; then
+      # Process is up but HTTP probe timed out — warn, do not exit.
+      API_HTTP_FAILS=$((API_HTTP_FAILS + 1))
+      if (( API_HTTP_FAILS == 1 || API_HTTP_FAILS % API_HTTP_WARN_EVERY == 0 )); then
+        echo "[STACK] Terminal API HTTP health slow/busy at $API_HEALTH (warn ${API_HTTP_FAILS}; process still up) — not exiting." >&2
+      fi
+    else
+      API_HTTP_FAILS=0
     fi
   fi
 

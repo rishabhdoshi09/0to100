@@ -546,6 +546,22 @@ def _conviction(scan: dict, market: dict) -> list[dict]:
 
 @app.get("/api/health")
 def health() -> dict:
+    """Pure liveness probe for Vite/stack monitors — must stay cheap and lock-free.
+
+    Rich autonomy/ops status belongs on /api/dashboard (and /api/health/detail).
+    Bundling it here made curl health checks time out while data_refresh or
+    dashboard work held the API busy, and the stack launcher then killed Vite.
+    """
+    return {
+        "ok": True,
+        "service": "quantterm-terminal-api",
+        "version": app.version,
+    }
+
+
+@app.get("/api/health/detail")
+def health_detail() -> dict:
+    """Optional richer status for debugging — not used by stack liveness checks."""
     autonomy = _autonomy_payload()
     operations = _operations_payload()
     return {
