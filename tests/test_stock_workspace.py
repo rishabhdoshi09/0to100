@@ -1,3 +1,5 @@
+import json
+
 from datetime import datetime, timezone
 
 import pandas as pd
@@ -85,6 +87,35 @@ def test_stock_workspace_key_ratios_pe_and_sector_peers():
     assert result["peers"]["screener_table"][0]["P/E"] == "19"
     assert result["peers"]["average_pe"] == 19.0
     assert result["peers"]["peer_pe_sample_count"] == 1
+
+
+def test_stock_workspace_serializes_when_volume_history_is_nan():
+    index = pd.date_range("2025-01-01", periods=120, freq="B")
+    close = pd.Series([100 + i * 0.1 for i in range(120)], index=index)
+    frame = pd.DataFrame(
+        {
+            "open": close - 0.5,
+            "high": close + 1,
+            "low": close - 1,
+            "close": close,
+            "volume": [float("nan")] * 120,
+        },
+        index=index,
+    )
+    result = build_stock_workspace(
+        "NANVOL",
+        scan_payload={},
+        long_term_payload={},
+        raw_fundamentals={},
+        frame=frame,
+        news=[],
+        fno_payload={},
+        now=datetime(2026, 1, 28, tzinfo=timezone.utc),
+    )
+    json.dumps(result, allow_nan=False)
+    vol_metric = next(m for m in result["technical"]["metrics"] if m["key"] == "volume_ratio")
+    assert vol_metric["value"] is None
+    assert result["technical"]["volume_ratio"] is None
 
 
 def test_stock_workspace_stays_honest_when_data_is_missing():

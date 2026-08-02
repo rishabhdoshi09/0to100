@@ -310,16 +310,21 @@ export function ProductStockIntelligenceView(props: ViewProps) {
     setLoading(true)
     setFundamentalsError('')
     try {
-      setWorkspace(await fetchStockIntelligence(selected))
+      const ws = await fetchStockIntelligence(selected)
+      setWorkspace(ws)
       try { setPlan(await fetchTradePlan(selected)) } catch { setPlan(null) }
       setRatios([])
       setError('')
+      if (!ws.fundamentals?.available || (ws.fundamentals.coverage_pct ?? 0) < 40) {
+        await loadFundamentals(false)
+      } else {
+        await loadRatios()
+      }
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : 'Stock intelligence unavailable')
     } finally {
       setLoading(false)
     }
-    await loadFundamentals(false)
   }
 
   useEffect(() => {

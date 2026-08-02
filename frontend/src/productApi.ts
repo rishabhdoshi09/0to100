@@ -161,7 +161,15 @@ export type ScannerWorkspace = {
 const json = async <T>(response: Response): Promise<T> => {
   if (!response.ok) {
     const body = await response.text()
-    throw new Error(body || `Request failed with ${response.status}`)
+    try {
+      const parsed = JSON.parse(body) as { detail?: string }
+      if (typeof parsed.detail === 'string' && parsed.detail.trim()) {
+        throw new Error(parsed.detail)
+      }
+    } catch {
+      // not JSON — use raw body below
+    }
+    throw new Error(body.trim() || `Request failed with ${response.status}`)
   }
   return response.json() as Promise<T>
 }

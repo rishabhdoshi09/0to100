@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 import json
+import math
 from pathlib import Path
 import re
 from typing import Any, Mapping, Sequence
@@ -27,9 +28,28 @@ def _f(value: Any) -> float | None:
         if value in (None, ""):
             return None
         result = float(str(value).replace(",", "").replace("%", "").strip())
-        return result if result == result else None
+        if not math.isfinite(result):
+            return None
+        return result
     except (TypeError, ValueError):
         return None
+
+
+def _sanitize_json(value: Any) -> Any:
+    """Ensure FastAPI can serialize the workspace (no NaN/Inf, no numpy scalars)."""
+    if value is None or isinstance(value, (str, bool)):
+        return value
+    if isinstance(value, (int, float)):
+        if isinstance(value, float) and not math.isfinite(value):
+            return None
+        return value
+    if isinstance(value, Mapping):
+        return {str(k): _sanitize_json(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_sanitize_json(item) for item in value]
+    if hasattr(value, "item"):  # numpy scalar
+        return _sanitize_json(value.item())
+    return value
 
 
 def _find(payload: Mapping[str, Any] | None, symbol: str) -> dict[str, Any]:
@@ -173,9 +193,13 @@ def _technical(frame: Any) -> dict[str, Any]:
         low_52w = round(float(data["low"].tail(min(252, len(data))).min()), 2)
         from_high = round((close / high_52w - 1.0) * 100.0, 2) if high_52w else None
         from_low = round((close / low_52w - 1.0) * 100.0, 2) if low_52w else None
-        avg_volume = float(data["volume"].tail(20).mean()) if "volume" in data.columns else None
-        volume = float(data["volume"].iloc[-1]) if "volume" in data.columns else None
-        volume_ratio = round(volume / avg_volume, 2) if volume is not None and avg_volume not in (None, 0) else None
+        avg_volume = _f(data["volume"].tail(20).mean()) if "volume" in data.columns else None
+        volume = _f(data["volume"].iloc[-1]) if "volume" in data.columns else None
+        volume_ratio = (
+            round(volume / avg_volume, 2)
+            if volume is not None and avg_volume is not None and avg_volume > 0
+            else None
+        )
         trend, trend_explanation = _trend(close, ema20, ema50, ema200)
         latest_index = data.index[-1]
         latest_date = str(getattr(latest_index, "date", lambda: latest_index)())
@@ -594,7 +618,7 @@ def build_stock_workspace(
     if not news_rows or sources[4]["status"] != "FRESH":
         next_actions.append({"control": "REFRESH_NEWS_NOW", "label": "Refresh news and filings"})
 
-    return {
+    return _sanitize_json({
         "schema_version": 1,
         "generated_at": now.isoformat(),
         "symbol": symbol,
@@ -613,4 +637,4 @@ def build_stock_workspace(
         "fno": fno_match,
         "sources": sources,
         "next_actions": next_actions,
-    }
+    })

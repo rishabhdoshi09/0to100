@@ -39,7 +39,7 @@ _SECTOR_PEERS: dict[str, list[str]] = {
     ],
     "METALS": [
         "TATASTEEL", "JSWSTEEL", "HINDALCO", "VEDL", "SAIL",
-        "NATIONALUM", "NMDC", "MOIL", "APL APOLLO", "WELCORP",
+        "NATIONALUM", "NMDC", "MOIL", "APLAPOLLO", "WELCORP",
     ],
     "ENERGY": [
         "RELIANCE", "ONGC", "BPCL", "IOC", "GAIL",
