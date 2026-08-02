@@ -28,33 +28,48 @@ def classify_breakout_state(row: Mapping[str, Any]) -> str:
     if bool(row.get("chase_risk")):
         return "extended_after_breakout"
     signals = _signals(row)
+    vol_ok = _f(row.get("volume_ratio") or row.get("rvol") or 0) >= 1.0 or "VOL_SQUEEZE" in signals
     if "PRE_BREAKOUT" in signals or status == "Watch for breakout":
         return "near_breakout"
     if signals & BREAKOUT_TAGS:
         if str(row.get("verdict", "")).upper() == "BUY" and status == "Ready to trade":
+            if not vol_ok:
+                return "breakout_without_volume"
             return "confirmed_breakout"
-        if signals & BREAKOUT_TAGS:
-            return "insufficient_confirmation"
+        if status == "Wait for pullback":
+            return "failed_breakout"
+        return "breakout_under_observation"
     if status == "Wait for pullback":
         return "failed_or_extended"
+    if not signals and status in {"Watch", "Watch for breakout"}:
+        return "insufficient_data"
     return "not_in_breakout_lane"
 
 
 def classify_momentum_state(row: Mapping[str, Any]) -> str:
     """Momentum strength vs extension without inventing new scores."""
-    if not "MOMENTUM" in _signals(row):
+    if "MOMENTUM" not in _signals(row):
         return "not_momentum"
     if bool(row.get("chase_risk")):
         return "strong_but_extended"
     status = str(row.get("status", "") or "")
     score = _f(row.get("score"))
     mom5 = _f(row.get("momentum_5d"))
+    mom20 = _f(row.get("momentum_20d") or row.get("momentum_21d"))
+    vol = _f(row.get("atr_pct") or row.get("volatility"))
     if status == "Ready to trade" and score >= 65:
+        if vol >= 4.0:
+            return "high_volatility_momentum"
         return "strong_actionable"
+    if mom5 > 0 and mom20 > 0 and score >= 60:
+        return "steady_leadership"
     if mom5 > 0 and score >= 55:
         return "improving"
     if mom5 < 0:
         return "weakening"
+    hist = _f(row.get("history_days") or row.get("sessions") or 0)
+    if hist and hist < 120:
+        return "insufficient_history"
     return "watch_momentum"
 
 

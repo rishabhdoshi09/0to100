@@ -17,6 +17,7 @@ def test_confirmed_breakout_requires_buy_and_ready_status():
         "status": "Ready to trade",
         "chase_risk": False,
         "score": 80,
+        "volume_ratio": 1.5,
     }
     assert classify_breakout_state(row) == "confirmed_breakout"
 
@@ -49,6 +50,7 @@ def test_radar_home_builds_three_lanes():
                 "status": "Ready to trade",
                 "signals": ["MOMENTUM", "BREAKOUT_52W"],
                 "chase_risk": False,
+                "volume_ratio": 1.2,
                 "reasons": ["Strong volume"],
             },
             {

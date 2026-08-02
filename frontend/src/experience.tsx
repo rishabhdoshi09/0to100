@@ -22,9 +22,13 @@ import type {
   LongTermRecord,
   ScanRecord,
 } from './types'
-import { depthLabel, GLOSSARY, PAGE_GUIDE, type DisplayDepth } from './productLanguage'
-import type { ScanRunnerHandle } from './scanRunner'
+import { DisplayDepthToggle } from './displayDepth'
+import type { DisplayDepth } from './productLanguage'
+import { GLOSSARY, PAGE_GUIDE } from './productLanguage'
 import { fetchTradePlan, type TradePlan } from './productApi'
+import type { ScanRunnerHandle } from './scanRunner'
+
+export { DisplayDepthToggle } from './displayDepth'
 
 export type ExperienceViewProps = {
   dashboard: DashboardPayload
@@ -107,26 +111,6 @@ function closedTradeEvidence(dashboard: DashboardPayload) {
     maxDrawdown,
     mature: trades.length >= 20,
   }
-}
-
-export function DisplayDepthToggle({ depth, onChange }: {
-  depth: DisplayDepth
-  onChange: (value: DisplayDepth) => void
-}) {
-  return (
-    <div className="display-depth-toggle" aria-label="Interface depth">
-      {(['simple', 'professional'] as DisplayDepth[]).map((item) => (
-        <button
-          type="button"
-          key={item}
-          className={depth === item ? 'active' : ''}
-          onClick={() => onChange(item)}
-        >
-          {depthLabel(item)}
-        </button>
-      ))}
-    </div>
-  )
 }
 
 export function ExperienceHelpDrawer({ page, open, onClose }: {

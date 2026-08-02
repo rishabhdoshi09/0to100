@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import { SectionTabs, StatusBadge, EmptyState } from './designSystem'
 import {
   ChartWorkspace,
   EvidenceList,
@@ -15,6 +16,7 @@ import {
   fetchStockIntelligence,
   fetchTradePlan,
   refreshStockFundamentals,
+  fetchSymbolRatios,
   type IntelligenceMetric,
   type ProductReadiness,
   type StockWorkspace,
@@ -69,6 +71,7 @@ type ViewProps = {
   bars: ChartBar[]
   setActive: (page: string) => void
   runControl: (control: ControlName) => Promise<void>
+  depth?: import('./productLanguage').DisplayDepth
   onCompare?: (symbol: string) => void
   onWatchlist?: (symbol: string) => void
 }
@@ -236,23 +239,34 @@ function MetricExplanation({ metric }: { metric: IntelligenceMetric }) {
 }
 
 export function ProductStockIntelligenceView(props: ViewProps) {
-  const { selected, bars, runControl, setActive, onCompare, onWatchlist } = props
+  const { selected, bars, runControl, setActive, onCompare, onWatchlist, depth } = props
   const [workspace, setWorkspace] = useState<StockWorkspace | null>(null)
   const [plan, setPlan] = useState<TradePlan | null>(null)
+  const [ratios, setRatios] = useState<import('./productApi').SymbolRatioRow[]>([])
+  const [tab, setTab] = useState('Overview')
   const [loading, setLoading] = useState(false)
   const [busy, setBusy] = useState('')
   const [error, setError] = useState('')
+
+  const intelTabs = ['Overview', 'Chart', 'Financials', 'Ratios', 'Ownership', 'Events', 'Peers', 'Evidence']
 
   const load = async () => {
     if (!selected) {
       setWorkspace(null)
       setPlan(null)
+      setRatios([])
       return
     }
     setLoading(true)
     try {
       setWorkspace(await fetchStockIntelligence(selected))
       try { setPlan(await fetchTradePlan(selected)) } catch { setPlan(null) }
+      try {
+        const ratioPayload = await fetchSymbolRatios(selected)
+        setRatios(ratioPayload.ratios || [])
+      } catch {
+        setRatios([])
+      }
       setError('')
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : 'Stock intelligence unavailable')
@@ -263,6 +277,10 @@ export function ProductStockIntelligenceView(props: ViewProps) {
 
   useEffect(() => {
     void load()
+  }, [selected])
+
+  useEffect(() => {
+    setTab('Overview')
   }, [selected])
 
   const runAction = async (control: ControlName | 'REFRESH_STOCK_FUNDAMENTALS') => {
@@ -311,33 +329,132 @@ export function ProductStockIntelligenceView(props: ViewProps) {
         <button type="button" onClick={() => setActive('Research Data')}>Complete missing research data</button>
       </div>
 
-      <div className="stock-overview-grid">
-        <Panel title={`PRICE STRUCTURE · ${selected}`} subtitle={`History as of ${workspace?.technical.latest_date || 'unknown'}`}><ChartWorkspace symbol={selected} bars={bars} row={workspace?.scanner} /></Panel>
-        <Panel title="WHAT THE CHART CURRENTLY SAYS"><div className="trend-callout"><span>{workspace?.technical.trend || 'UNAVAILABLE'}</span><p>{workspace?.technical.trend_explanation || 'No verified trend calculation.'}</p></div><div className="fact-grid"><div><span>Close</span><strong>{money(workspace?.technical.close)}</strong></div><div><span>EMA 20</span><strong>{money(workspace?.technical.ema20)}</strong></div><div><span>EMA 50</span><strong>{money(workspace?.technical.ema50)}</strong></div><div><span>EMA 200</span><strong>{money(workspace?.technical.ema200)}</strong></div></div></Panel>
-      </div>
+      <SectionTabs tabs={intelTabs} active={tab} onChange={setTab} />
 
-      <Panel title="TECHNICALS — VALUE, MEANING AND INTERPRETATION" subtitle="The system explains the metric instead of assuming the user already knows it.">
-        <div className="explain-metric-grid">{(workspace?.technical.metrics || []).map((metric) => <MetricExplanation metric={metric} key={metric.key} />)}</div>
-      </Panel>
+      {tab === 'Overview' && (
+        <>
+          <div className="stock-overview-grid">
+            <Panel title="COMPANY SNAPSHOT" subtitle={workspace?.sector || 'Sector unknown'}>
+              {workspace?.fundamentals.company_about
+                ? <div className="company-about"><p>{workspace.fundamentals.company_about}</p></div>
+                : <EmptyState title="Company description not in cache" detail="Refresh fundamentals or import company profile." />}
+              <div className="fact-grid">
+                <div><span>State</span><strong>{words(workspace?.state || '—')}</strong></div>
+                <div><span>Coverage</span><strong>{workspace?.fundamentals.coverage_pct ?? 0}%</strong></div>
+                <div><span>Trend</span><strong>{workspace?.technical.trend || '—'}</strong></div>
+                <div><span>Close</span><strong>{money(workspace?.technical.close)}</strong></div>
+              </div>
+            </Panel>
+            <Panel title="DECISION SUMMARY" subtitle="Deterministic scan evidence — not investment advice">
+              <EvidenceList title="Why it qualified" items={[...((workspace?.scanner.reasons as string[] | undefined) || []), ...(workspace?.fundamentals.quality_factors || [])]} tone="green" />
+              <EvidenceList title="What can go wrong" items={[...(workspace?.fundamentals.risk_flags || []), ...(workspace?.gaps || []).map((item) => `${item} is missing or stale.`)]} tone="red" />
+              <p className="panel-copy"><strong>Monitor:</strong> invalidation levels in Trade Plan, breadth and sector context on Home.</p>
+            </Panel>
+          </div>
+        </>
+      )}
 
-      <Panel title="FUNDAMENTALS — CURRENT SNAPSHOT" subtitle={`${workspace?.fundamentals.coverage_pct ?? 0}% of the supported metric set is available · fetched ${workspace?.fundamentals.fetched_at || 'unknown'}`}>
-        {workspace?.fundamentals.company_about && <div className="company-about"><strong>What the company does</strong><p>{workspace.fundamentals.company_about}</p></div>}
-        <div className="explain-metric-grid fundamentals">{(workspace?.fundamentals.metrics || []).map((metric) => <MetricExplanation metric={metric} key={metric.key} />)}</div>
-      </Panel>
+      {tab === 'Chart' && (
+        <div className="stock-overview-grid">
+          <Panel title={`PRICE STRUCTURE · ${selected}`} subtitle={`History as of ${workspace?.technical.latest_date || 'unknown'}`}>
+            <ChartWorkspace symbol={selected} bars={bars} row={workspace?.scanner} />
+          </Panel>
+          <Panel title="WHAT THE CHART CURRENTLY SAYS">
+            <div className="trend-callout"><span>{workspace?.technical.trend || 'UNAVAILABLE'}</span><p>{workspace?.technical.trend_explanation || 'No verified trend calculation.'}</p></div>
+            <div className="fact-grid">
+              <div><span>Close</span><strong>{money(workspace?.technical.close)}</strong></div>
+              <div><span>EMA 20</span><strong>{money(workspace?.technical.ema20)}</strong></div>
+              <div><span>EMA 50</span><strong>{money(workspace?.technical.ema50)}</strong></div>
+              <div><span>EMA 200</span><strong>{money(workspace?.technical.ema200)}</strong></div>
+            </div>
+          </Panel>
+        </div>
+      )}
 
-      <div className="stock-evidence-grid">
-        <Panel title="WHY IT QUALIFIED"><EvidenceList title="Technical and quality evidence" items={[...((workspace?.scanner.reasons as string[] | undefined) || []), ...(workspace?.fundamentals.quality_factors || [])]} tone="green" /></Panel>
-        <Panel title="WHAT CAN GO WRONG"><EvidenceList title="Recorded risks and missing evidence" items={[...(workspace?.fundamentals.risk_flags || []), ...(workspace?.gaps || []).map((item) => `${item} is missing, stale or undated.`)]} tone="red" /></Panel>
-      </div>
+      {tab === 'Financials' && (
+        <Panel title="FUNDAMENTALS — CURRENT SNAPSHOT" subtitle={`${workspace?.fundamentals.coverage_pct ?? 0}% coverage · fetched ${workspace?.fundamentals.fetched_at || 'unknown'}`}>
+          {(workspace?.fundamentals.metrics || []).length === 0
+            ? <EmptyState title="No fundamental snapshot" detail="Run fundamentals refresh or import financial data." />
+            : <div className="explain-metric-grid fundamentals">{(workspace?.fundamentals.metrics || []).map((metric) => <MetricExplanation metric={metric} key={metric.key} />)}</div>}
+        </Panel>
+      )}
 
-      <Panel title="SOURCE DATES AND FRESHNESS" subtitle="A number without a source date is treated as incomplete.">
-        <div className="stock-source-grid">{(workspace?.sources || []).map((source) => <article key={source.name}><header><strong>{source.name}</strong><span className={`lane-status ${laneTone(source.status)}`}>{source.status}</span></header><p>{source.meaning}</p><small>As of {source.as_of || 'unknown'} · {source.age_days == null ? 'age unknown' : `${source.age_days} day(s) old`}</small></article>)}</div>
-      </Panel>
+      {tab === 'Ratios' && (
+        <Panel title="KEY RATIOS" subtitle="Computed centrally from cached fundamentals — missing inputs stay empty">
+          {ratios.length === 0
+            ? <EmptyState title="Ratios unavailable" detail="Fundamentals cache missing or inputs incomplete." />
+            : <div className="explain-metric-grid">
+              {ratios.map((row) => (
+                <article className={`explain-metric ${row.value == null ? 'unavailable' : ''}`} key={row.key}>
+                  <span>{row.label}</span>
+                  <strong>{row.value != null ? row.value : 'Not available'}</strong>
+                  {depth === 'professional' && row.formula && <small>{row.formula} · {row.period || '—'} · {row.scope || '—'}</small>}
+                  {row.value == null && row.missing_reason && <small>{row.missing_reason}</small>}
+                </article>
+              ))}
+            </div>}
+        </Panel>
+      )}
 
-      <div className="stock-context-grid">
-        <Panel title="COMPANY-LINKED NEWS"><div className="command-news-list">{workspace?.news.length ? workspace.news.slice(0, 6).map((item) => <article key={item.article_id}><div><strong>{item.headline}</strong><span>{item.source} · {compactDateTime(item.published_at)}</span></div><b>{item.impact_score}</b></article>) : <div className="large-empty">No company-linked news in the current store.</div>}</div></Panel>
-        <Panel title="F&O COVERAGE — NOT A SIGNAL"><div className="panel-copy">{Object.keys(workspace?.fno || {}).length ? `Current instrument master maps ${selected} to ${(workspace?.fno.future_symbol as string) || 'a stock future'} with lot size ${(workspace?.fno.lot_size as number) || 'unknown'} and expiry ${(workspace?.fno.expiry as string) || 'unknown'}. This tells you contract eligibility, not direction.` : `${selected} is not mapped in the current stock-derivatives universe, or the instrument master is missing.`}</div></Panel>
-      </div>
+      {tab === 'Ownership' && (
+        <Panel title="OWNERSHIP" subtitle="From fundamentals provider when available">
+          <div className="explain-metric-grid fundamentals">
+            {(workspace?.fundamentals.metrics || []).filter((m) => /promoter|fii|dii|pledge|holding/i.test(m.label)).map((metric) => (
+              <MetricExplanation metric={metric} key={metric.key} />
+            ))}
+          </div>
+          {!workspace?.fundamentals.metrics?.some((m) => /promoter|fii|dii/i.test(m.label))
+            && <EmptyState title="Ownership not in cache" detail="Refresh fundamentals or import shareholding data." />}
+        </Panel>
+      )}
+
+      {tab === 'Events' && (
+        <div className="stock-context-grid">
+          <Panel title="COMPANY-LINKED NEWS">
+            <div className="command-news-list">
+              {workspace?.news.length
+                ? workspace.news.slice(0, 12).map((item) => (
+                  <article key={item.article_id}><div><strong>{item.headline}</strong><span>{item.source} · {compactDateTime(item.published_at)}</span></div><b>{item.impact_score}</b></article>
+                ))
+                : <EmptyState title="No company-linked news" />}
+            </div>
+          </Panel>
+          <Panel title="F&O ELIGIBILITY — NOT A SIGNAL">
+            <div className="panel-copy">
+              {Object.keys(workspace?.fno || {}).length
+                ? `Maps to ${(workspace?.fno.future_symbol as string) || 'stock future'} · lot ${(workspace?.fno.lot_size as number) || '—'} · expiry ${(workspace?.fno.expiry as string) || '—'}`
+                : 'Not in current F&O universe or master file missing.'}
+            </div>
+          </Panel>
+        </div>
+      )}
+
+      {tab === 'Peers' && (
+        <Panel title="PEERS" subtitle="Sector context from scanner universe">
+          <p className="panel-copy">Sector: <strong>{workspace?.sector || '—'}</strong>. Use Compare to evaluate peers side-by-side.</p>
+          {onCompare && <button type="button" onClick={() => onCompare(selected)}>Open Compare with {selected}</button>}
+        </Panel>
+      )}
+
+      {tab === 'Evidence' && (
+        <>
+          <Panel title="TECHNICALS" subtitle="Value, meaning and interpretation">
+            <div className="explain-metric-grid">{(workspace?.technical.metrics || []).map((metric) => <MetricExplanation metric={metric} key={metric.key} />)}</div>
+          </Panel>
+          <Panel title="SOURCE DATES AND FRESHNESS">
+            <div className="stock-source-grid">
+              {(workspace?.sources || []).map((source) => (
+                <article key={source.name}>
+                  <header><strong>{source.name}</strong><StatusBadge status={source.status} /></header>
+                  <p>{source.meaning}</p>
+                  <small>As of {source.as_of || 'unknown'} · {source.age_days == null ? 'age unknown' : `${source.age_days} day(s) old`}</small>
+                </article>
+              ))}
+            </div>
+          </Panel>
+        </>
+      )}
+
     </section>
   )
 }

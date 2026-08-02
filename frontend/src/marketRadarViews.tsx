@@ -33,17 +33,24 @@ type RadarRow = ScannerWorkspaceRow & {
 const breakoutLabel: Record<string, string> = {
   confirmed_breakout: 'Confirmed',
   near_breakout: 'Near breakout',
+  breakout_under_observation: 'Under observation',
+  breakout_without_volume: 'No volume confirm',
   insufficient_confirmation: 'Needs confirmation',
   extended_after_breakout: 'Extended',
+  failed_breakout: 'Failed',
   failed_or_extended: 'Failed / extended',
+  insufficient_data: 'Insufficient data',
   not_in_breakout_lane: '—',
 }
 
 const momentumLabel: Record<string, string> = {
   strong_actionable: 'Strong · actionable',
   strong_but_extended: 'Strong · extended',
+  steady_leadership: 'Steady leadership',
   improving: 'Improving',
   weakening: 'Weakening',
+  high_volatility_momentum: 'High-vol momentum',
+  insufficient_history: 'Short history',
   watch_momentum: 'Watch',
   not_momentum: '—',
 }

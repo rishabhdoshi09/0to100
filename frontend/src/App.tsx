@@ -6,8 +6,8 @@ import {
   RadarHomeView,
   WatchlistView,
 } from './marketRadarViews'
+import { DisplayDepthToggle } from './displayDepth'
 import {
-  DisplayDepthToggle,
   EnhancedLongTermView,
   ExperienceHelpDrawer,
 } from './experience'
@@ -343,6 +343,7 @@ function App() {
       return (
         <ProductStockIntelligenceView
           {...viewProps}
+          depth={depth}
           onCompare={addToCompare}
           onWatchlist={addToWatchlist}
         />

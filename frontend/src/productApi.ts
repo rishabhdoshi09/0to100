@@ -310,3 +310,18 @@ export const addWatchlistItem = (body: {
 export const removeWatchlistItem = (rowId: number): Promise<{ accepted: boolean }> =>
   fetch(`/api/watchlist/${rowId}`, { method: 'DELETE', headers: { Accept: 'application/json' } })
     .then((response) => json(response))
+
+export type SymbolRatioRow = {
+  key: string
+  label: string
+  value: number | null
+  formula?: string
+  period?: string
+  scope?: string
+  missing_reason?: string
+  quality_status?: string
+}
+
+export const fetchSymbolRatios = (symbol: string): Promise<{ symbol: string; ratios: SymbolRatioRow[] }> =>
+  fetch(`/api/data/ratios/${encodeURIComponent(symbol)}`, { headers: { Accept: 'application/json' } })
+    .then((response) => json(response))
