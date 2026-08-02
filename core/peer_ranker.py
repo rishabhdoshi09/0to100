@@ -94,53 +94,90 @@ def _find_sector(symbol: str) -> Optional[str]:
 
 
 def _score_peer(symbol: str) -> dict:
-    """Score a single stock for peer ranking. Returns lightweight score dict."""
+    """Score a single stock for peer ranking from local official history only.
+
+    Must not call Kite/yfinance — Stock Intelligence embeds this for every peer and
+    network round-trips made symbol pages (e.g. GAIL) hang for tens of seconds.
+    """
     try:
-        from agents.tools import get_technical_indicators
-        d = get_technical_indicators(symbol, days=60)
-        if "error" in d:
+        from data.bhavcopy_runtime import get_ohlcv
+
+        frame = get_ohlcv(symbol)
+        if frame is None or len(frame) < 25:
             return {"symbol": symbol, "score": 0, "error": True}
 
+        data = frame.sort_index().copy()
+        close = data["close"].astype(float).dropna()
+        if len(close) < 25:
+            return {"symbol": symbol, "score": 0, "error": True}
+
+        price = float(close.iloc[-1])
+        mom20 = ((price / float(close.iloc[-21]) - 1.0) * 100.0) if len(close) > 21 else 0.0
+        mom5 = ((price / float(close.iloc[-6]) - 1.0) * 100.0) if len(close) > 6 else 0.0
+
+        delta = close.diff()
+        gain = delta.clip(lower=0).ewm(alpha=1 / 14, adjust=False, min_periods=14).mean()
+        loss = (-delta.clip(upper=0)).ewm(alpha=1 / 14, adjust=False, min_periods=14).mean()
+        last_loss = float(loss.iloc[-1]) or 1e-9
+        rsi = 100.0 - (100.0 / (1.0 + float(gain.iloc[-1]) / last_loss))
+
+        ema20 = float(close.ewm(span=20, adjust=False).mean().iloc[-1])
+        ema50 = float(close.ewm(span=50, adjust=False).mean().iloc[-1]) if len(close) >= 50 else ema20
+        ema200 = float(close.ewm(span=200, adjust=False).mean().iloc[-1]) if len(close) >= 200 else ema50
+        above20 = ((price / ema20) - 1.0) * 100.0 if ema20 else 0.0
+        above50 = ((price / ema50) - 1.0) * 100.0 if ema50 else 0.0
+        gc = ema50 > ema200
+
+        vr = 1.0
+        if "volume" in data.columns:
+            volume = float(data["volume"].astype(float).iloc[-1])
+            avg_volume = float(data["volume"].astype(float).tail(20).mean())
+            if avg_volume > 0:
+                vr = volume / avg_volume
+
         score = 0.0
-        price    = float(d.get("ltp") or d.get("price") or 0)
-        mom20    = float(d.get("momentum_20d_pct") or 0)
-        mom5     = float(d.get("momentum_5d_pct") or 0)
-        vr       = float(d.get("volume_ratio") or 1.0)
-        rsi      = float(d.get("rsi_14") or 50)
-        gc       = bool(d.get("golden_cross", False))
-        ema20    = d.get("ema_20")
-        above20  = float(d.get("pct_above_sma20") or 0)
-        above50  = float(d.get("pct_above_sma50") or 0)
+        if mom20 > 15:
+            score += 40
+        elif mom20 > 8:
+            score += 30
+        elif mom20 > 3:
+            score += 20
+        elif mom20 > 0:
+            score += 10
 
-        # Momentum component (40 pts)
-        if mom20 > 15:   score += 40
-        elif mom20 > 8:  score += 30
-        elif mom20 > 3:  score += 20
-        elif mom20 > 0:  score += 10
+        if above50 > 5 and gc:
+            score += 30
+        elif above50 > 0 and gc:
+            score += 22
+        elif above50 > 0:
+            score += 14
+        elif above20 > 0:
+            score += 7
 
-        # Relative strength proxy (30 pts) — price vs moving averages
-        if above50 > 5 and gc:  score += 30
-        elif above50 > 0 and gc: score += 22
-        elif above50 > 0:        score += 14
-        elif above20 > 0:        score += 7
+        if vr > 2.0:
+            score += 20
+        elif vr > 1.5:
+            score += 14
+        elif vr > 1.0:
+            score += 7
 
-        # Volume / accumulation (20 pts)
-        if vr > 2.0:    score += 20
-        elif vr > 1.5:  score += 14
-        elif vr > 1.0:  score += 7
+        if 55 <= rsi <= 70:
+            score += 10
+        elif 45 <= rsi < 55:
+            score += 5
 
-        # RSI quality zone (10 pts)
-        if 55 <= rsi <= 70:     score += 10
-        elif 45 <= rsi < 55:    score += 5
-
-        # Rough RS vs Nifty (use 20d momentum as proxy since Nifty ~12% pa = ~1% per week)
-        rs_proxy = mom20 - 1.0  # > 0 = outperforming Nifty
+        rs_proxy = mom20 - 1.0
 
         return {
-            "symbol": symbol, "score": round(score, 1), "price": price,
-            "momentum_20d": mom20, "momentum_5d": mom5,
-            "volume_ratio": vr, "rsi": rsi,
-            "rs_proxy": round(rs_proxy, 2), "above50": above50,
+            "symbol": symbol,
+            "score": round(score, 1),
+            "price": round(price, 2),
+            "momentum_20d": round(mom20, 2),
+            "momentum_5d": round(mom5, 2),
+            "volume_ratio": round(vr, 2),
+            "rsi": round(rsi, 2),
+            "rs_proxy": round(rs_proxy, 2),
+            "above50": round(above50, 2),
         }
     except Exception:
         return {"symbol": symbol, "score": 0, "error": True}

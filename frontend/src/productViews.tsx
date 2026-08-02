@@ -309,20 +309,26 @@ export function ProductStockIntelligenceView(props: ViewProps) {
     }
     setLoading(true)
     setFundamentalsError('')
+    setRatios([])
     try {
       const ws = await fetchStockIntelligence(selected)
       setWorkspace(ws)
-      try { setPlan(await fetchTradePlan(selected)) } catch { setPlan(null) }
-      setRatios([])
       setError('')
+      // Clear the full-page loader as soon as the workspace lands. Fundamentals /
+      // trade-plan are slower secondary fetches and have their own busy UI.
+      setLoading(false)
+      try {
+        setPlan(await fetchTradePlan(selected))
+      } catch {
+        setPlan(null)
+      }
       if (!ws.fundamentals?.available || (ws.fundamentals.coverage_pct ?? 0) < 40) {
-        await loadFundamentals(false)
+        void loadFundamentals(false)
       } else {
-        await loadRatios()
+        void loadRatios()
       }
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : 'Stock intelligence unavailable')
-    } finally {
       setLoading(false)
     }
   }
