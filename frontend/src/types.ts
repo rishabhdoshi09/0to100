@@ -15,6 +15,7 @@ export type ScanRecord = {
   signals?: string[]
   reasons?: string[]
   chase_risk?: boolean
+  edge_r?: number | null
 }
 
 export type ConvictionRecord = ScanRecord & {

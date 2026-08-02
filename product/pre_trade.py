@@ -69,14 +69,62 @@ def build_pre_trade(
             f"Not a new independent bet — moves with {', '.join(str(s) for s in correlated[:4])}."
         )
 
+    learning: dict[str, Any] = {"signal_backtest_actionable": False}
+    bt_actionable = False
+    try:
+        from scan.signal_backtest import load_report, report_is_actionable, universe_evidence_note
+
+        bt = load_report()
+        bt_actionable = report_is_actionable(bt)
+        learning = {
+            "signal_backtest_actionable": bt_actionable,
+            "evidence_note": universe_evidence_note(bt),
+            "as_of": (bt or {}).get("generated_at") if isinstance(bt, dict) else None,
+            "n_symbols_tested": (
+                (
+                    ((bt or {}).get("universe") or {}).get("run")
+                    or (bt or {}).get("symbols")
+                )
+                if isinstance(bt, dict)
+                else None
+            ),
+        }
+        if isinstance(bt, dict) and bt and not bt_actionable:
+            warnings.append(universe_evidence_note(bt) + " — treat setups as unproven.")
+    except Exception:
+        pass
+
     if scan_record:
         if scan_record.get("chase_risk") or scan_record.get("extended"):
             warnings.append("Scan flags chase/extension risk — late entry quality is weaker.")
         if str(scan_record.get("verdict") or "").upper() in {"AVOID", "SELL", "REJECT"}:
             warnings.append(f"Scanner verdict is {scan_record.get('verdict')} — treat as caution, not confirmation.")
+        edge_raw = scan_record.get("edge_r")
+        try:
+            edge_f = float(edge_raw) if edge_raw is not None else None
+        except (TypeError, ValueError):
+            edge_f = None
+        if edge_f is None:
+            # Only nag when a usable report exists but this setup was never tagged
+            # (stale scan). Missing report is covered by checklist soft gap + learning.
+            if bt_actionable:
+                warnings.append(
+                    "No measured edge_r on this setup — rescan after full-universe backtest "
+                    "so ranking/pre-trade use evidence."
+                )
+        elif edge_f <= -0.05:
+            blockers.append(
+                f"Measured signal-combo edge is {edge_f:+.2f}R (proven loser on full-universe backtest) — do not add risk."
+            )
+        elif edge_f < 0.05:
+            warnings.append(f"Measured edge is thin ({edge_f:+.2f}R) — size down or wait for better evidence.")
+    else:
+        edge_f = None
 
     checklist = dict(readiness.get("retail_research_checklist") or {})
     gaps = list(checklist.get("gaps") or [])
+    # signal_backtest is soft: missing evidence → caution/checklist, not a hard
+    # block on paper. Negative measured edge (above) is the hard learning gate.
     critical_gap_keys = {
         "bhav_history",
         "verified_snapshot",
@@ -179,14 +227,17 @@ def build_pre_trade(
             "verdict": (scan_record or {}).get("verdict"),
             "score": (scan_record or {}).get("score"),
             "signals": (scan_record or {}).get("signals") or [],
+            "edge_r": edge_f,
             "entry": (scan_record or {}).get("entry") or plan.get("entry"),
             "stop": (scan_record or {}).get("stop") or plan.get("stop"),
             "target": (scan_record or {}).get("target") or plan.get("target"),
         },
+        "measured_edge_r": edge_f,
+        "learning": learning,
         "read_only": True,
         "places_orders": False,
         "honesty": (
-            "Pre-trade cockpit composes size, book heat, costs, correlation and data gaps. "
-            "GO is not a signal and does not arm LIVE trading."
+            "Pre-trade cockpit composes size, book heat, costs, correlation, measured "
+            "signal-backtest edge and data gaps. GO is not a signal and does not arm LIVE."
         ),
     }

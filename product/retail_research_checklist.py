@@ -36,6 +36,7 @@ def build_retail_research_checklist(
     live_edge: Mapping[str, Any] | None = None,
     book_correlation: Mapping[str, Any] | None = None,
     options_eod: Mapping[str, Any] | None = None,
+    signal_backtest: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     data = dict(data or {})
     bhav = dict(data.get("bhavcopy", {}) or {})
@@ -46,6 +47,7 @@ def build_retail_research_checklist(
     pit_valuations = dict(pit_valuations or {})
     live_edge = dict(live_edge or {})
     book_correlation = dict(book_correlation or {})
+    signal_backtest = dict(signal_backtest or {})
     overall = dict(live_edge.get("overall", {}) or {})
 
     sessions = int(bhav.get("sessions", 0) or 0)
@@ -63,6 +65,13 @@ def build_retail_research_checklist(
     n_bets = int(book_correlation.get("n_bets", 0) or 0)
     book_ok = n_pos >= 2
     opts_ok = bool(options_eod.get("available")) and int(options_eod.get("snapshots", 0) or 0) > 0
+
+    bt_uni = dict(signal_backtest.get("universe") or {})
+    bt_run = int(bt_uni.get("run") or signal_backtest.get("symbols_run") or 0)
+    bt_truncated = bool(bt_uni.get("truncated"))
+    bt_running = bool(signal_backtest.get("running"))
+    bt_ok = bool(signal_backtest.get("has_report")) and bt_run >= 500 and not bt_truncated
+    bt_partial = bool(signal_backtest.get("has_report")) and not bt_ok
 
     items = [
         _item(
@@ -130,6 +139,23 @@ def build_retail_research_checklist(
             evidence=f"n={live_n} · expectancy_r={overall.get('expectancy_r', 'n/a')}",
         ),
         _item(
+            key="signal_backtest",
+            label="Full-universe signal backtest",
+            status=(
+                "READY" if bt_ok
+                else ("RUNNING" if bt_running else ("PARTIAL" if bt_partial else "MISSING"))
+            ),
+            why_it_matters="Scanner setups need measured expectancy on all bhav stocks — not a hand-picked sample.",
+            next_action=(
+                "NONE" if bt_ok
+                else ("Wait for running backtest" if bt_running else "RUN_FULL_UNIVERSE_BACKTEST_NOW")
+            ),
+            evidence=(
+                f"run={bt_run} · truncated={bt_truncated} · "
+                f"generated_at={signal_backtest.get('generated_at') or 'never'}"
+            ),
+        ),
+        _item(
             key="book_correlation",
             label="Book concentration lens",
             status="READY" if book_ok else ("EMPTY_BOOK" if n_pos == 0 else "SINGLE_NAME"),
@@ -146,7 +172,7 @@ def build_retail_research_checklist(
             evidence=f"{int(options_eod.get('snapshots', 0) or 0)} snapshots",
         ),
     ]
-    missing = [i for i in items if i["status"] not in {"READY", "EMPTY_BOOK", "SINGLE_NAME"}]
+    missing = [i for i in items if i["status"] not in {"READY", "EMPTY_BOOK", "SINGLE_NAME", "RUNNING"}]
     return {
         "schema_version": 1,
         "summary": (

@@ -141,13 +141,16 @@ def maybe_trigger(*, idle_seconds: float, cooldown_s: float, force: bool = False
         reason = f"idle {idle:.0f}s >= {idle_seconds:.0f}s"
 
     result = enqueue_full_universe_backtest(requested_by=f"idle_watcher:{reason}")
-    if result.get("accepted"):
+    if result.get("accepted") and result.get("created"):
         _write_state({
             "last_triggered_at": now,
             "last_reason": reason,
             "last_operation_id": result.get("operation_id"),
         })
-    return {"triggered": bool(result.get("accepted")), "reason": reason, **result}
+    elif result.get("accepted") and not result.get("created"):
+        # Reused pending job — do not burn the cooldown window.
+        return {"triggered": False, "reason": "backtest already queued/running", **result}
+    return {"triggered": bool(result.get("accepted") and result.get("created")), "reason": reason, **result}
 
 
 def main() -> int:

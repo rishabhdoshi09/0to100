@@ -330,9 +330,17 @@ export type PreTrade = {
     verdict?: string
     score?: number
     signals?: string[]
+    edge_r?: number | null
     entry?: number
     stop?: number
     target?: number | null
+  }
+  measured_edge_r?: number | null
+  learning?: {
+    signal_backtest_actionable?: boolean
+    evidence_note?: string
+    as_of?: string | null
+    n_symbols_tested?: number | null
   }
   read_only: boolean
   places_orders: boolean
@@ -668,6 +676,29 @@ export type TargetPortfolioPayload = {
 export const fetchTargetPortfolio = (): Promise<TargetPortfolioPayload> =>
   fetch('/api/target-portfolio', { headers: { Accept: 'application/json' } })
     .then((response) => json<TargetPortfolioPayload>(response))
+
+export type SignalBacktestStatus = {
+  running: boolean
+  progress?: number
+  total?: number
+  has_report: boolean
+  generated_at?: string
+  symbols_run?: number
+  universe?: {
+    run?: number
+    available?: number
+    available_in_store?: number
+    truncated?: boolean
+    scope?: string
+    note?: string
+  }
+  places_orders?: boolean
+  live_locked?: boolean
+}
+
+export const fetchSignalBacktestStatus = (): Promise<SignalBacktestStatus> =>
+  fetch('/api/signal-backtest', { headers: { Accept: 'application/json' } })
+    .then((response) => json<SignalBacktestStatus>(response))
 
 export type HoldingRow = {
   tradingsymbol: string

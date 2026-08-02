@@ -371,6 +371,12 @@ def product_readiness() -> dict[str, Any]:
         extras["book_correlation"] = book_correlation_report()
     except Exception:
         extras["book_correlation"] = {}
+    try:
+        from product.full_universe_backtest import backtest_status
+
+        extras["signal_backtest"] = backtest_status()
+    except Exception:
+        extras["signal_backtest"] = {}
     return build_product_readiness(**payloads, **extras)
 
 

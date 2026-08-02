@@ -447,7 +447,7 @@ def _scan_once_locked(universe: Optional[list[str]] = None, progress=None) -> No
                     r["verdict"] = "WATCH"
                     r.setdefault("reasons", []).insert(
                         0, f"⚠ Backtest LOSER: is pattern-combo ki measured edge "
-                           f"{edge:+.2f}R hai (800 stocks pe test) — proven negative, skip")
+                           f"{edge:+.2f}R hai — proven negative, skip")
             # Proven edge floats to the top; demoted setups sink below every
             # buy — in cards, Telegram, Dashboard and JARVIS alike.
             _vrank = {"STRONG BUY": 2, "BUY": 1}

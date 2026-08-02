@@ -366,11 +366,36 @@ class MarketOperationsWorker:
             f"Backtesting scanner signals across {history.get('symbols', 0):,} official EQ symbols",
         )
         from product.full_universe_backtest import run_full_universe_backtest
+        from scan.signal_backtest import get_state
+
+        stop_poll = threading.Event()
+
+        def _poll_progress() -> None:
+            while not stop_poll.wait(2.0):
+                try:
+                    st = get_state()
+                    if st.get("running") and int(st.get("total") or 0) > 0:
+                        self._progress(
+                            operation_id,
+                            "FULL_UNIVERSE_BACKTEST",
+                            f"Measuring signal edge · {st.get('progress', 0)}/{st.get('total', 0)} symbols",
+                            int(st.get("progress") or 0),
+                            int(st.get("total") or 0),
+                        )
+                except Exception:
+                    pass
+
+        poller = threading.Thread(target=_poll_progress, name="bt-progress", daemon=True)
+        poller.start()
 
         def progress(current: int, total: int, message: str) -> None:
             self._progress(operation_id, "FULL_UNIVERSE_BACKTEST", message, current, total)
 
-        report = run_full_universe_backtest(scope="full", progress=progress)
+        try:
+            report = run_full_universe_backtest(scope="full", progress=progress)
+        finally:
+            stop_poll.set()
+
         if not report.get("ok", True) and report.get("error_code"):
             raise OperationBlocked(
                 str(report.get("message") or "Full-universe backtest unavailable"),

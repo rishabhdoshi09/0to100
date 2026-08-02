@@ -27,6 +27,7 @@ fi
 AUTONOMY_PID=""
 API_PID=""
 FRONTEND_PID=""
+IDLE_BT_PID=""
 AUTONOMY_EXTERNAL=0
 API_EXTERNAL=0
 API_HEALTH_FAILS=0
@@ -37,6 +38,9 @@ cleanup() {
   echo "[STACK] Stopping QuantTerm child services…"
   if [[ -n "$FRONTEND_PID" ]]; then
     kill "$FRONTEND_PID" >/dev/null 2>&1 || true
+  fi
+  if [[ -n "$IDLE_BT_PID" ]]; then
+    kill "$IDLE_BT_PID" >/dev/null 2>&1 || true
   fi
   if [[ -n "$API_PID" ]]; then
     kill "$API_PID" >/dev/null 2>&1 || true
@@ -115,6 +119,14 @@ else
   stack_wait_for_health "$API_HEALTH" "$API_PID" "Terminal API" || exit 1
 fi
 echo "[STACK] Terminal API ready."
+
+# Research-only: when laptop idle ≥10m, enqueue full-universe signal backtest.
+# Never places orders. No-op on headless hosts without idle detection (unless QT_FAKE_IDLE_SECONDS).
+if [[ "${QT_DISABLE_IDLE_BACKTEST:-}" != "1" ]]; then
+  echo "[STACK] Starting idle full-universe backtest watcher (10m idle → research job)…"
+  python -u "$ROOT/scripts/idle_full_universe_backtest.py" --idle-seconds 600 &
+  IDLE_BT_PID=$!
+fi
 
 stack_free_port 5173 "Vite dev server"
 

@@ -484,14 +484,45 @@ def load_report() -> dict | None:
     return None
 
 
+def report_is_actionable(report: dict | None = None) -> bool:
+    """True only when the persisted signal backtest is usable for product decisions."""
+    rep = dict(report or load_report() or {})
+    if not rep or not rep.get("signals"):
+        return False
+    uni = dict(rep.get("universe") or {})
+    run = int(uni.get("run") or rep.get("symbols") or 0)
+    if run < 100:
+        return False
+    available = int(uni.get("available") or uni.get("available_in_store") or 0)
+    truncated = bool(uni.get("truncated"))
+    if truncated and run < 500:
+        return False
+    if available and run < max(100, int(available * 0.35)):
+        return False
+    return True
+
+
+def universe_evidence_note(report: dict | None = None) -> str:
+    rep = dict(report or load_report() or {})
+    uni = dict(rep.get("universe") or {})
+    run = int(uni.get("run") or rep.get("symbols") or 0)
+    available = int(uni.get("available") or uni.get("available_in_store") or run)
+    if run <= 0:
+        return "no measured backtest yet"
+    if uni.get("truncated"):
+        return f"{run} of {available} stocks (truncated sample)"
+    return f"{run} stocks (full-universe backtest)"
+
+
 def combo_edge(signal_keys: list[str], min_trades: int = 30) -> float | None:
     """
     Measured expectancy (avg R/trade) for a stock's signal combo —
     mean of each signal's backtested expectancy, using only signals
-    with enough evidence. None when no backtest / no evidenced signal.
+    with enough evidence. None when no backtest / no evidenced signal /
+    report too thin or truncated to trust for product decisions.
     """
     rep = load_report()
-    if not rep:
+    if not report_is_actionable(rep):
         return None
     vals = []
     for k in signal_keys:
@@ -507,7 +538,7 @@ def edge_in_regime(signal_keys: list[str], regime: str,
     overall number per signal when its regime bucket is too thin —
     honest specificity, never thin-slice noise."""
     rep = load_report()
-    if not rep:
+    if not report_is_actionable(rep):
         return None
     vals = []
     for k in signal_keys:

@@ -29,13 +29,33 @@ def _base_plan(**overrides):
     return plan
 
 
-def test_pre_trade_go_when_clean():
+def test_pre_trade_go_when_clean(monkeypatch):
+    import scan.signal_backtest as sb
+
+    monkeypatch.setattr(sb, "load_report", lambda: None)
+    monkeypatch.setattr(sb, "report_is_actionable", lambda _r=None: False)
     body = build_pre_trade(symbol="acme", plan=_base_plan())
     assert body["verdict"] == GO
     assert body["tradeable"] is True
     assert body["places_orders"] is False
     assert body["blockers"] == []
     assert "not a signal" in body["honesty"].lower() or "not a signal" in body["meaning"].lower()
+
+
+def test_pre_trade_blocks_proven_loser_edge(monkeypatch):
+    import scan.signal_backtest as sb
+
+    monkeypatch.setattr(sb, "load_report", lambda: {"signals": {"X": {}}, "universe": {"run": 800}})
+    monkeypatch.setattr(sb, "report_is_actionable", lambda _r=None: True)
+    monkeypatch.setattr(sb, "universe_evidence_note", lambda _r=None: "800 stocks")
+    body = build_pre_trade(
+        symbol="LOSE",
+        plan=_base_plan(),
+        scan_record={"symbol": "LOSE", "edge_r": -0.2, "signals": ["PRE_BREAKOUT"], "verdict": "BUY"},
+    )
+    assert body["verdict"] == NO_GO
+    assert body["measured_edge_r"] == -0.2
+    assert any("loser" in b.lower() or "-0.20" in b or "-0.2" in b for b in body["blockers"])
 
 
 def test_pre_trade_no_go_without_plan():

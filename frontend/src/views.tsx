@@ -13,6 +13,7 @@ import { boolLabel, money, pct, score, words } from './format'
 import {
   fetchHoldings,
   fetchInstitutionalStack,
+  fetchSignalBacktestStatus,
   fetchTargetPortfolio,
   importHoldings,
   refreshFiiDiiStore,
@@ -20,6 +21,7 @@ import {
   type HoldingsBook,
   type InstitutionalDomain,
   type InstitutionalStack,
+  type SignalBacktestStatus,
 } from './productApi'
 import { longTermPicks } from './longTermPicks'
 import type {
@@ -622,11 +624,52 @@ function InstitutionalStackPanel() {
 export function AutomationView({ dashboard, runControl }: ViewProps) {
   const a = dashboard.autonomy
   const activeJob = a.active_job || {}
+  const [bt, setBt] = useState<SignalBacktestStatus | null>(null)
+
+  useEffect(() => {
+    let alive = true
+    const load = () => {
+      fetchSignalBacktestStatus()
+        .then((payload) => { if (alive) setBt(payload) })
+        .catch(() => { if (alive) setBt(null) })
+    }
+    load()
+    const timer = window.setInterval(load, 5000)
+    return () => { alive = false; window.clearInterval(timer) }
+  }, [dashboard.autonomy.heartbeat_ist])
+
+  const uni = bt?.universe || {}
+  const btDetail = bt?.running
+    ? `${bt.progress || 0}/${bt.total || 0} symbols`
+    : bt?.has_report
+      ? `${uni.run || bt.symbols_run || 0} stocks · ${bt.generated_at || '—'}`
+      : 'No full-universe report yet'
+
   return (
     <section className="workspace-view">
       <div className="inline-actions"><button type="button" onClick={() => void runControl('RUN_SCAN_NOW')}>Start market scan</button><button type="button" onClick={() => void runControl('RUN_CYCLE_NOW')}>Request paper cycle</button><button type="button" onClick={() => void runControl('REFRESH_DATA_NOW')}>Prepare market data</button><button type="button" onClick={() => void runControl('RUN_FULL_UNIVERSE_BACKTEST_NOW')}>Backtest all stocks</button><button type="button" onClick={() => void runControl(a.new_paper_entries ? 'PAUSE_NEW_PAPER_ENTRIES' : 'RESUME_NEW_PAPER_ENTRIES')}>{a.new_paper_entries ? 'Pause entries' : 'Resume entries'}</button></div>
-      <div className="view-metrics"><MetricCard label="PAPER SUPERVISOR" value={a.running ? 'ONLINE' : 'OFFLINE'} detail={`PID ${a.scheduler_owner_pid || '—'}`} tone={a.running ? 'green' : 'amber'} /><MetricCard label="STATE" value={a.state} detail={a.plain_state} /><MetricCard label="ACTIVE PAPER JOB" value={String(activeJob.job_type || 'IDLE').toUpperCase()} detail={activeJob.elapsed_s ? `${activeJob.elapsed_s}s elapsed` : 'No paper worker job reported'} tone="cyan" /><MetricCard label="FAILURES" value={String(a.active_failures?.length || 0)} detail={(a.active_failures || []).join(', ') || 'None active'} tone="purple" /></div>
+      <div className="view-metrics">
+        <MetricCard label="PAPER SUPERVISOR" value={a.running ? 'ONLINE' : 'OFFLINE'} detail={`PID ${a.scheduler_owner_pid || '—'}`} tone={a.running ? 'green' : 'amber'} />
+        <MetricCard label="STATE" value={a.state} detail={a.plain_state} />
+        <MetricCard label="ACTIVE PAPER JOB" value={String(activeJob.job_type || 'IDLE').toUpperCase()} detail={activeJob.elapsed_s ? `${activeJob.elapsed_s}s elapsed` : 'No paper worker job reported'} tone="cyan" />
+        <MetricCard
+          label="SIGNAL BACKTEST"
+          value={bt?.running ? 'RUNNING' : (bt?.has_report ? (uni.truncated ? 'PARTIAL' : 'READY') : 'MISSING')}
+          detail={btDetail}
+          tone={bt?.running ? 'cyan' : (bt?.has_report && !uni.truncated ? 'green' : 'amber')}
+        />
+        <MetricCard label="FAILURES" value={String(a.active_failures?.length || 0)} detail={(a.active_failures || []).join(', ') || 'None active'} tone="purple" />
+      </div>
       <div className="automation-grid">
+        <Panel title="GETTING SMARTER" subtitle="Full-universe backtest feeds scanner ranking + pre-trade gates">
+          <div className="key-value-list">
+            <div><span>Last report</span><strong>{bt?.generated_at || 'Never'}</strong></div>
+            <div><span>Symbols measured</span><strong>{uni.run || bt?.symbols_run || 0}</strong></div>
+            <div><span>Truncated</span><strong>{uni.truncated ? 'Yes — re-run full backtest' : 'No'}</strong></div>
+            <div><span>Live locked</span><strong>{boolLabel(bt?.live_locked ?? true)}</strong></div>
+          </div>
+          <p className="panel-copy">After each full backtest, the next market scan demotes proven-loser combos and ranks by measured edge. Pre-trade GO/CAUTION/NO_GO reads that edge.</p>
+        </Panel>
         <Panel title="PAPER-AUTONOMY JOB LEDGER" subtitle="Execution and learning only · market scans use separate lanes" className="job-panel"><JobLedger jobs={a.jobs_recent || []} /></Panel>
         <Panel title="OPERATING STATE"><div className="key-value-list"><div><span>Heartbeat</span><strong>{a.heartbeat_ist || '—'}</strong></div><div><span>Live feed</span><strong>{String(a.live_feed?.connected ?? 'Unavailable')}</strong></div><div><span>Subscriptions</span><strong>{String(a.live_feed?.subscriptions ?? '—')}</strong></div><div><span>Existing exits</span><strong>{boolLabel(a.existing_exits)}</strong></div><div><span>Research</span><strong>{boolLabel(a.research_enabled)}</strong></div></div><p className="panel-copy">{a.explanation || a.plain_state}</p></Panel>
         <Panel title="RECENT SUPERVISOR DIALOGUE"><div className="dialogue-list">{a.recent_dialogue.length === 0 && <div className="empty-row">No dialogue records.</div>}{[...a.recent_dialogue].reverse().slice(0, 20).map((record, index) => <div key={index}><strong>{words(String(record.record_type || record.decision || 'event'))}</strong><span>{String(record.claim || record.explanation || record.summary || JSON.stringify(record))}</span></div>)}</div></Panel>

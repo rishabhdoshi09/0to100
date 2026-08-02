@@ -98,6 +98,7 @@ def build_product_readiness(
     pit_valuations: Mapping[str, Any] | None = None,
     live_edge: Mapping[str, Any] | None = None,
     book_correlation: Mapping[str, Any] | None = None,
+    signal_backtest: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build the readiness score shown in the product shell."""
     now = now or datetime.now(timezone.utc)
@@ -261,6 +262,7 @@ def build_product_readiness(
         live_edge=live_edge,
         book_correlation=book_correlation,
         options_eod=options_eod,
+        signal_backtest=signal_backtest,
     )
     return {
         "schema_version": 2,

@@ -81,6 +81,8 @@ export function PreTradeCockpit({ cockpit }: { cockpit: PreTrade | null }) {
   if (!cockpit) return null
   const tone = String(cockpit.verdict || 'NO_GO').toLowerCase().replace('_', '-')
   const plan = cockpit.plan || null
+  const edge = cockpit.measured_edge_r ?? cockpit.scan?.edge_r
+  const learning = cockpit.learning
   return (
     <section className={`pre-trade-cockpit pre-trade-${tone}`}>
       <header className="pre-trade-verdict">
@@ -90,6 +92,16 @@ export function PreTradeCockpit({ cockpit }: { cockpit: PreTrade | null }) {
         </div>
         <p>{cockpit.meaning}</p>
       </header>
+      <div className="key-value-list" style={{ marginBottom: '10px' }}>
+        <div>
+          <span>Measured edge</span>
+          <strong>{edge == null ? '—' : `${edge >= 0 ? '+' : ''}${Number(edge).toFixed(2)}R`}</strong>
+        </div>
+        <div>
+          <span>Learning</span>
+          <strong>{learning?.evidence_note || (learning?.signal_backtest_actionable ? 'actionable' : 'unproven')}</strong>
+        </div>
+      </div>
       {(cockpit.blockers || []).length > 0 && (
         <ul className="pre-trade-blockers">
           {cockpit.blockers.map((item) => <li key={item}>{item}</li>)}
