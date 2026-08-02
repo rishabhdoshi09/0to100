@@ -23,6 +23,7 @@ const STAGE_LABELS: Record<string, string> = {
   PENDING: 'Queued — waiting for the market-ops worker…',
   ACCEPTED: 'Worker picked up the job…',
   STARTING: 'Worker picked up the job…',
+  WAITING_HISTORY: 'Waiting for shared NSE history prepare…',
   PREPARING_HISTORY: 'Preparing official NSE price history…',
   HISTORY_READY: 'Official history ready…',
   LOADING_UNIVERSE: 'Loading the NSE universe…',
@@ -90,6 +91,33 @@ export function buildProgressLine(operation: OperationRecord | null): string | n
   return message || null
 }
 
+/** Seconds since the operation last wrote progress (0 if unknown/not running). */
+export function secondsSinceUpdate(operation: OperationRecord | null, nowMs = Date.now()): number | null {
+  if (!operation || !isActiveStatus(operation.status)) return null
+  const updatedAt = Number(operation.updated_at || 0)
+  if (!Number.isFinite(updatedAt) || updatedAt <= 0) return null
+  // Backend stores unix seconds; tolerate ms accidentally.
+  const updatedMs = updatedAt > 1e12 ? updatedAt : updatedAt * 1000
+  return Math.max(0, Math.floor((nowMs - updatedMs) / 1000))
+}
+
+export function staleProgressHint(operation: OperationRecord | null, nowMs = Date.now()): string | null {
+  const age = secondsSinceUpdate(operation, nowMs)
+  if (age == null) return null
+  const stage = String(operation?.stage || '').toUpperCase()
+  if (stage === 'WAITING_HISTORY') {
+    return 'Another lane is still preparing shared history — this scan is alive and waiting'
+  }
+  if (stage === 'ACCEPTED' && age >= 8) {
+    return `Worker accepted the job ${age}s ago — next stage should appear shortly`
+  }
+  if (age < 12) return null
+  if (Number(operation?.progress_total || 0) > 0 && Number(operation?.progress_current || 0) === 0) {
+    return `Counts still at 0/${operation?.progress_total} · last engine update ${age}s ago (loading universe / first batch)`
+  }
+  return `Last engine update ${age}s ago — scan is still running`
+}
+
 export function formatElapsed(seconds: number): string {
   const s = Math.max(0, Math.floor(Number(seconds) || 0))
   if (s < 60) return `${s}s`
@@ -134,6 +162,8 @@ export type ScanRunnerHandle = {
   qualifiedLine: string | null
   percent: number | null
   elapsedSeconds: number
+  secondsSinceUpdate: number | null
+  staleHint: string | null
   notice: string | null
   failed: boolean
   succeeded: boolean
@@ -332,8 +362,17 @@ export function useScanRunner(kind: ScanKind, options: ScanRunnerOptions = {}): 
   const progressLine = useMemo(() => buildProgressLine(operation), [operation])
   const qualifiedLine = useMemo(() => qualifiedResultLine(operation), [operation])
   const percent = useMemo(() => progressPercent(operation), [operation])
+  const updateAge = useMemo(
+    () => secondsSinceUpdate(operation),
+    [operation, elapsedSeconds, operation?.updated_at, operation?.progress_current, operation?.stage],
+  )
+  const staleHint = useMemo(
+    () => staleProgressHint(operation),
+    [operation, elapsedSeconds, operation?.updated_at, operation?.progress_current, operation?.stage],
+  )
   const detailLine = useMemo(() => {
     if (progressLine) return progressLine
+    if (staleHint) return staleHint
     if (worker.transparency) return worker.transparency
     const message = String(operation?.message || '').trim()
     if (message && message.toLowerCase() !== friendlyPhase.toLowerCase()) return message
@@ -341,7 +380,7 @@ export function useScanRunner(kind: ScanKind, options: ScanRunnerOptions = {}): 
       return 'Restart the stack so market-ops can lease this job'
     }
     return null
-  }, [friendlyPhase, operation?.message, operation?.status, progressLine, worker])
+  }, [friendlyPhase, operation?.message, operation?.status, progressLine, staleHint, worker])
 
   const isActive = Boolean(
     isBusy || (operation && isActiveStatus(operation.status)),
@@ -357,6 +396,8 @@ export function useScanRunner(kind: ScanKind, options: ScanRunnerOptions = {}): 
     qualifiedLine,
     percent,
     elapsedSeconds,
+    secondsSinceUpdate: updateAge,
+    staleHint,
     notice,
     failed: operation?.status === 'FAILED' || operation?.status === 'BLOCKED',
     succeeded: operation?.status === 'SUCCEEDED',

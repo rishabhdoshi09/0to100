@@ -210,7 +210,18 @@ class MarketOperationsWorker:
             _emit("PROGRESS", f"{operation_id[:8]} · {stage} · {message}")
 
     def _ensure_history(self, operation_id: str, *, days: int = HISTORY_DAYS) -> dict[str, Any]:
-        with self._history_lock:
+        # Parallel lanes share one history prepare. Announce waits so the UI
+        # never looks frozen on ACCEPTED while blocked on this lock.
+        waited_s = 0.0
+        while not self._history_lock.acquire(timeout=0.5):
+            waited_s += 0.5
+            self._progress(
+                operation_id,
+                "WAITING_HISTORY",
+                f"Waiting for shared NSE history prepare · {waited_s:.0f}s "
+                "(another lane is loading bhavcopy)",
+            )
+        try:
             from data.bhavcopy_runtime import status as history_status
             current = history_status(load_cache=True)
             if current.get("ready") and int(current.get("sessions", 0) or 0) >= 60:
@@ -227,7 +238,7 @@ class MarketOperationsWorker:
                 self._progress(
                     operation_id,
                     "PREPARING_HISTORY",
-                    "Downloading/loading missing official NSE bhavcopy sessions",
+                    f"Downloading/loading official NSE bhavcopy · {int(current_count)}/{int(total)} sessions",
                     current_count,
                     total,
                 )
@@ -241,6 +252,8 @@ class MarketOperationsWorker:
                     result=current,
                 )
             return current
+        finally:
+            self._history_lock.release()
 
     def _run_market_scan(self, operation: dict[str, Any]) -> dict[str, Any]:
         operation_id = str(operation["operation_id"])
@@ -249,7 +262,16 @@ class MarketOperationsWorker:
         from scan.market_scan_service import run_whole_market_scan
 
         def prepared_prefetch(symbols, *, progress=None):
-            # History already prepared by _ensure_history; skip network prefetch noise.
+            # History already prepared by _ensure_history. Mark the in-process
+            # bhav cache warm so UnifiedScanner does not re-enter build_store /
+            # apply_live (that looked like a frozen "Scanning 0/N").
+            try:
+                from scan import bulk_fetcher as bf
+
+                with bf._lock:
+                    bf._bhav_ok = True
+            except Exception:
+                pass
             total = len(list(symbols) or [])
             if callable(progress) and total:
                 try:
@@ -267,17 +289,19 @@ class MarketOperationsWorker:
                 int(total),
             )
 
+        universe_guess = max(1, int(history.get("symbols") or 1))
         self._progress(
             operation_id,
             "SCANNING",
-            f"Evaluating whole NSE universe with {history.get('sessions', 0)} official sessions",
+            f"Starting whole-market evaluation · {history.get('sessions', 0)} official sessions · ~{universe_guess:,} symbols",
             0,
-            max(1, int(history.get("symbols") or 1)),
+            universe_guess,
         )
         report = run_whole_market_scan(
             prefetch_fn=prepared_prefetch,
             progress_callback=progress_callback,
             save=True,
+            skip_scanner_prefetch=True,
         )
         result = _operation_result(report)
         if not getattr(report, "ok", False):

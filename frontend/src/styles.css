@@ -570,6 +570,8 @@ body::before{
 .live-scan-elapsed{ color: var(--muted); font-variant-numeric: tabular-nums; }
 .live-scan-dismiss{ background:transparent; border:none; font-size:20px; cursor:pointer; color:var(--muted); }
 .live-scan-detail{ margin:8px 0 0; color:#c8d6ec; font-size:13px; }
+.live-scan-stale{ margin:6px 0 0; color:#f4b456; font-size:12px; }
+.live-scan-heartbeat{ display:block; margin-top:6px; color:var(--muted); font-size:11px; font-variant-numeric: tabular-nums; }
 .live-scan-progress{ margin-top:10px; height:6px; border-radius:999px; background:rgba(255,255,255,.08); overflow:hidden; }
 .live-scan-progress b{ display:block; height:100%; background:linear-gradient(90deg, var(--cyan), var(--purple)); transition:width .35s ease; }
 .live-scan-progress-pulse .pulse-bar{ width:35%; animation: live-scan-pulse 1.4s ease-in-out infinite; }

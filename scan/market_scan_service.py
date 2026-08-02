@@ -94,12 +94,17 @@ def run_whole_market_scan(
     progress_callback: Callable[[int, int], None] | None = None,
     save: bool = True,
     snapshot_id: str | None = None,
+    skip_scanner_prefetch: bool = False,
 ) -> MarketScanReport:
     """Run and optionally persist one deterministic broad-NSE scan.
 
     Dependency injection keeps this function network-free in tests.  Results are always ordered by
     the existing canonical payload builder, and F&O availability is overlaid only after the cash
     universe has been evaluated.
+
+    ``skip_scanner_prefetch`` is for callers that already warmed official history
+    (market-ops). It prevents a second silent prefetch/live-overlay inside the
+    scanner that made the UI look stuck at 0/N.
     """
     universe_provider = universe_provider or _default_universe
     prefetch_fn = prefetch_fn or _default_prefetch
@@ -118,12 +123,27 @@ def run_whole_market_scan(
                                 source_snapshot_id=snapshot_id or "")
 
     try:
+        if callable(progress_callback):
+            try:
+                progress_callback(0, len(symbols))
+            except Exception:
+                pass
         prefetch_fn(symbols, progress=progress_callback)
         # Prefer scanners that accept progress; fall back without inventing results.
         try:
-            results = list(scanner.scan(symbols, progress=progress_callback) or [])
+            results = list(
+                scanner.scan(
+                    symbols,
+                    progress=progress_callback,
+                    skip_prefetch=bool(skip_scanner_prefetch),
+                )
+                or []
+            )
         except TypeError:
-            results = list(scanner.scan(symbols) or [])
+            try:
+                results = list(scanner.scan(symbols, progress=progress_callback) or [])
+            except TypeError:
+                results = list(scanner.scan(symbols) or [])
     except Exception as exc:
         return MarketScanReport(FAILED, universe_size=len(symbols), error_code="SCAN_ERROR",
                                 error_message=str(exc), source_snapshot_id=snapshot_id or "")

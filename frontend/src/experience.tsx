@@ -216,6 +216,15 @@ export function LiveScanBanner({
                   : 'Still working — counts update as each batch finishes')}
             {scan.qualifiedLine ? ` · ${scan.qualifiedLine}` : ''}
           </p>
+          {scan.isActive && scan.staleHint && scan.progressLine && scan.staleHint !== scan.progressLine ? (
+            <p className="live-scan-stale">{scan.staleHint}</p>
+          ) : null}
+          {scan.isActive && scan.secondsSinceUpdate != null ? (
+            <small className="live-scan-heartbeat">
+              Engine heartbeat · last update {scan.secondsSinceUpdate}s ago
+              {scan.operation?.stage ? ` · ${scan.operation.stage}` : ''}
+            </small>
+          ) : null}
           {scan.percent != null ? (
             <div className="live-scan-progress" aria-label={`${scan.percent}% complete`}>
               <b style={{ width: `${scan.percent}%` }} />

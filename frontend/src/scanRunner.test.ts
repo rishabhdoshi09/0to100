@@ -7,6 +7,8 @@ import {
   isTerminalStatus,
   progressPercent,
   qualifiedResultLine,
+  secondsSinceUpdate,
+  staleProgressHint,
   TERMINAL_STATUSES,
 } from './scanRunner'
 import type { OperationRecord } from './types'
@@ -30,6 +32,7 @@ const baseOperation = (overrides: Partial<OperationRecord> = {}): OperationRecor
 describe('scanRunner semantics', () => {
   it('maps backend stages to friendly retail language', () => {
     expect(friendlyStageLabel('PREPARING_HISTORY', 'RUNNING')).toBe('Preparing official NSE price history…')
+    expect(friendlyStageLabel('WAITING_HISTORY', 'RUNNING')).toContain('shared NSE history')
     expect(friendlyStageLabel('SCANNING', 'RUNNING')).toBe('Scanning market candidates…')
     expect(friendlyStageLabel('STARTING', 'RUNNING')).toBe('Worker picked up the job…')
     expect(friendlyStageLabel('ACCEPTED', 'RUNNING')).toBe('Worker picked up the job…')
@@ -86,5 +89,35 @@ describe('scanRunner semantics', () => {
       result: { summary: { qualified: 26 }, records: 26 },
     })
     expect(qualifiedResultLine(op)).toBe('26 qualified ideas found')
+  })
+
+  it('exposes heartbeat age and stale hints while running', () => {
+    const now = Date.now()
+    const fresh = baseOperation({
+      status: 'RUNNING',
+      stage: 'SCANNING',
+      updated_at: now / 1000,
+      progress_current: 10,
+      progress_total: 100,
+    })
+    expect(secondsSinceUpdate(fresh, now)).toBe(0)
+    expect(staleProgressHint(fresh, now)).toBeNull()
+
+    const stuckAtZero = baseOperation({
+      status: 'RUNNING',
+      stage: 'SCANNING',
+      updated_at: (now / 1000) - 20,
+      progress_current: 0,
+      progress_total: 1800,
+    })
+    expect(secondsSinceUpdate(stuckAtZero, now)).toBe(20)
+    expect(staleProgressHint(stuckAtZero, now) || '').toMatch(/0\/1800|last engine update/i)
+
+    const waiting = baseOperation({
+      status: 'RUNNING',
+      stage: 'WAITING_HISTORY',
+      updated_at: (now / 1000) - 3,
+    })
+    expect(staleProgressHint(waiting, now) || '').toMatch(/shared history/i)
   })
 })
