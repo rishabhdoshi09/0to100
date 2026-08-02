@@ -509,6 +509,14 @@ def pre_trade(symbol: str) -> dict[str, Any]:
     return _pre_trade_payload(symbol)
 
 
+@app.get("/api/symbols")
+def symbols_directory(q: str = "", limit: int = 100) -> dict[str, Any]:
+    """Full NSE equity directory for search — not limited to Momentum scan setups."""
+    from product.symbol_directory import build_symbol_directory
+
+    return build_symbol_directory(query=q, limit=limit)
+
+
 @app.get("/api/book-correlation")
 def book_correlation() -> dict[str, Any]:
     """Read-only concentration lens: how many open positions vs independent bets."""

@@ -252,6 +252,33 @@ export const fetchTradePlan = (symbol: string): Promise<TradePlan> =>
     headers: { Accept: 'application/json' },
   }).then((response) => json<TradePlan>(response))
 
+export type SymbolDirectoryRow = {
+  symbol: string
+  name: string
+}
+
+export type SymbolDirectory = {
+  schema_version: number
+  query: string
+  limit: number
+  universe_size: number
+  count: number
+  symbols: SymbolDirectoryRow[]
+  source: string
+  note?: string
+}
+
+/** Full NSE equity directory for search — not limited to scan setups. */
+export const fetchSymbolDirectory = (opts?: { q?: string; limit?: number }): Promise<SymbolDirectory> => {
+  const params = new URLSearchParams()
+  if (opts?.q) params.set('q', opts.q)
+  if (opts?.limit != null) params.set('limit', String(opts.limit))
+  const q = params.toString()
+  return fetch(`/api/symbols${q ? `?${q}` : ''}`, {
+    headers: { Accept: 'application/json' },
+  }).then((response) => json<SymbolDirectory>(response))
+}
+
 export type PreTradeVerdict = 'GO' | 'CAUTION' | 'NO_GO'
 
 export type PreTrade = {

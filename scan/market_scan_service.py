@@ -45,8 +45,21 @@ class MarketScanReport:
 
 
 def _default_universe() -> Mapping[str, str]:
-    from data.nse_universe import get_nse_universe_with_names
-    return get_nse_universe_with_names()
+    """Full approved cash universe — never keys-from-names-only.
+
+    ``get_nse_universe_with_names()`` always returns one entry per live symbol
+    (empty string if the display name is unknown). Fall back to the bare symbol
+    list if the names helper fails so a thin name map cannot zero the scan.
+    """
+    from data.nse_universe import get_nse_universe, get_nse_universe_with_names
+
+    try:
+        names = dict(get_nse_universe_with_names() or {})
+    except Exception:
+        names = {}
+    if names:
+        return names
+    return {str(sym).strip().upper(): "" for sym in (get_nse_universe() or []) if str(sym).strip()}
 
 
 def _default_prefetch(symbols, *, progress=None):

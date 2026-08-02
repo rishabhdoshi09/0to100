@@ -1,10 +1,11 @@
 """
 NSE Full Universe Provider.
 
-Returns all actively traded NSE equity stocks from the best available source:
-  Tier 1: Kite instruments cache (logs/instruments_cache.csv) — up to ~2000 stocks
-  Tier 2: NSE website direct (bhavcopy / equity list) — ~1800+ stocks
+Returns all actively traded NSE equity stocks by *unioning* available sources:
+  Tier 1: Kite instruments cache (logs/instruments_cache.csv) — ~2000 EQ stocks
+  Tier 2: NSE website EQUITY_L.csv — when local coverage is thin (<1500)
   Tier 3: Local fallback CSV (data/nse_symbols_fallback.csv) — 320 stocks
+  Plus:  local bhavcopy store symbols (official EQ history already on disk)
 """
 from __future__ import annotations
 
@@ -363,51 +364,101 @@ _cached_universe: List[str] = []
 _cached_names: Dict[str, str] = {}
 _universe_loaded: bool = False
 
+# Prefer network / secondary sources when local coverage is thinner than this.
+_THIN_UNIVERSE = 1500
+
+
+def reset_universe_cache() -> None:
+    """Test helper — force the next get_nse_universe() call to reload tiers."""
+    global _cached_universe, _cached_names, _universe_loaded
+    _cached_universe = []
+    _cached_names = {}
+    _universe_loaded = False
+
+
+def _merge_names(dest: Dict[str, str], src: Dict[str, str]) -> None:
+    for key, value in src.items():
+        sym = str(key or "").strip().upper()
+        if not _is_valid_symbol(sym):
+            continue
+        label = str(value or "").strip()
+        if label and not dest.get(sym):
+            dest[sym] = label
+        else:
+            dest.setdefault(sym, label)
+
+
+def _bhav_symbols() -> List[str]:
+    """Official EQ names present in the local bhavcopy store (may be empty)."""
+    try:
+        from data.bhavcopy_store import store_symbols
+        return [str(s).strip().upper() for s in (store_symbols() or []) if str(s).strip()]
+    except Exception as exc:
+        logger.debug("universe bhav merge skipped: %s", exc)
+        return []
+
 
 def _load_universe() -> tuple:
+    """Build the live equity universe by *unioning* local sources.
+
+    Older logic took the first non-empty tier only. That left the product on a
+    320-name fallback CSV (or a partial Kite dump) even when bhav history already
+    covered the full EQ market. Search, scan, and Stock Intelligence then looked
+    like “shares are missing”.
+    """
     global _cached_universe, _cached_names, _universe_loaded
     if _universe_loaded:
         return _cached_universe, _cached_names
 
-    symbols: List[str] = []
+    pool: set[str] = set()
     names: Dict[str, str] = {}
 
-    # Tier 1
     t1_syms, t1_names = _load_from_kite_cache()
-    if t1_syms:
-        symbols = t1_syms
-        names.update(t1_names)
+    pool.update(s.strip().upper() for s in t1_syms if s)
+    _merge_names(names, t1_names)
 
-    # Tier 2
-    if not symbols:
+    t3_syms, t3_names = _load_from_fallback_csv()
+    pool.update(s.strip().upper() for s in t3_syms if s)
+    _merge_names(names, t3_names)
+
+    for sym in _bhav_symbols():
+        if _is_valid_symbol(sym):
+            pool.add(sym)
+            names.setdefault(sym, "")
+
+    # Pull the official NSE equity list when local coverage is thin or empty.
+    if len(pool) < _THIN_UNIVERSE:
         t2_syms, t2_names = _load_from_nse_website()
-        if t2_syms:
-            symbols = t2_syms
-            names.update(t2_names)
+        pool.update(s.strip().upper() for s in t2_syms if s)
+        _merge_names(names, t2_names)
 
-    # Tier 3
-    if not symbols:
-        t3_syms, t3_names = _load_from_fallback_csv()
-        symbols = t3_syms
-        names.update(t3_names)
-
-    # Ultimate fallback — use the built-in NIFTY500 constant
-    if not symbols:
+    if not pool:
         logger.warning("All tiers failed — using built-in NIFTY500 list")
-        symbols = list(NIFTY500)
+        pool.update(str(s).strip().upper() for s in NIFTY500)
+
+    symbols = _dedupe_sorted(list(pool))
 
     # Cross-check against the live Kite instrument map — removes stale NSE
-    # listings (Tier-2 EQUITY_L.csv is broader than what Kite actually carries)
-    # that would otherwise miss on every fetch. Guarded + fail-safe (see fn).
+    # listings that would otherwise miss on every fetch. Guarded + fail-safe.
     try:
         from data.instruments import InstrumentManager
         symbols = _filter_to_instruments(symbols, InstrumentManager()._token_map)
     except Exception as exc:
         logger.debug("universe instrument cross-check skipped: %s", exc)
 
-    _cached_universe = _dedupe_sorted(symbols)
-    _cached_names = {k: v for k, v in names.items() if _is_valid_symbol(k)}
+    # Every universe member must appear in the names map so scan services that
+    # iterate dict keys never see an empty universe after a constant fallback.
+    for sym in symbols:
+        names.setdefault(sym, "")
+
+    _cached_universe = symbols
+    _cached_names = {k: v for k, v in names.items() if k in set(symbols)}
     _universe_loaded = True
+    logger.info(
+        "universe_loaded count=%d named=%d",
+        len(_cached_universe),
+        sum(1 for v in _cached_names.values() if v),
+    )
     return _cached_universe, _cached_names
 
 
@@ -419,7 +470,7 @@ def get_nse_universe() -> List[str]:
     filtered to EQ segment instruments only. Result is cached for process lifetime.
     """
     syms, _ = _load_universe()
-    return syms
+    return list(syms)
 
 
 def get_nifty500_universe() -> List[str]:
@@ -428,9 +479,42 @@ def get_nifty500_universe() -> List[str]:
 
 
 def get_nse_universe_with_names() -> Dict[str, str]:
-    """Returns {symbol: company_name} dict for all NSE equities."""
-    _, names = _load_universe()
-    return dict(names)
+    """Returns {symbol: company_name} for *every* equity in get_nse_universe().
+
+    Missing display names are empty strings — never drop symbols from the map.
+    """
+    syms, names = _load_universe()
+    return {sym: str(names.get(sym) or "") for sym in syms}
+
+
+def search_nse_symbols(query: str = "", *, limit: int = 50) -> List[Dict[str, str]]:
+    """Prefix/substring search over the full live universe for UI autocomplete."""
+    q = str(query or "").strip().upper()
+    lim = max(1, min(int(limit or 50), 5000))
+    names = get_nse_universe_with_names()
+    rows: List[Dict[str, str]] = []
+    if not q:
+        for sym in list(names)[:lim]:
+            rows.append({"symbol": sym, "name": names.get(sym) or ""})
+        return rows
+    # Exact + prefix first, then name / substring matches.
+    exact = []
+    prefix = []
+    fuzzy = []
+    for sym, name in names.items():
+        label = (name or "").upper()
+        if sym == q:
+            exact.append({"symbol": sym, "name": name or ""})
+        elif sym.startswith(q):
+            prefix.append({"symbol": sym, "name": name or ""})
+        elif q in sym or (label and q in label):
+            fuzzy.append({"symbol": sym, "name": name or ""})
+    for bucket in (exact, sorted(prefix, key=lambda r: r["symbol"]), sorted(fuzzy, key=lambda r: r["symbol"])):
+        for row in bucket:
+            rows.append(row)
+            if len(rows) >= lim:
+                return rows
+    return rows
 
 
 def point_in_time_universe(as_of, path=None) -> dict:

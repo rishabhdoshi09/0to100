@@ -21,7 +21,7 @@ import {
   PortfolioView,
 } from './views'
 import type { DisplayDepth } from './productLanguage'
-import { addWatchlistItem } from './productApi'
+import { addWatchlistItem, fetchSymbolDirectory } from './productApi'
 import { useScanRunner } from './scanRunner'
 import { ReportPdfViewer } from './ReportPdfViewer'
 import type { ChartBar, ControlName, DashboardPayload, OperationRecord } from './types'
@@ -188,6 +188,7 @@ function App() {
   const [bars, setBars] = useState<ChartBar[]>([])
   const [controlState, setControlState] = useState('')
   const [query, setQuery] = useState('')
+  const [universeSymbols, setUniverseSymbols] = useState<string[]>([])
   const [helpOpen, setHelpOpen] = useState(false)
   const [pdfViewer, setPdfViewer] = useState<{ title: string; url: string } | null>(null)
   const [depth, setDepth] = useState<DisplayDepth>(() => {
@@ -249,12 +250,32 @@ function App() {
 
   const symbols = useMemo(() => {
     const values = [
+      ...universeSymbols,
       ...dashboard.scan.records.map((row) => row.symbol),
       ...dashboard.long_term.records.map((row) => row.symbol),
       ...dashboard.fno.underlyings.map((row) => row.symbol),
     ]
     return [...new Set(values)].sort()
-  }, [dashboard.fno.underlyings, dashboard.long_term.records, dashboard.scan.records])
+  }, [universeSymbols, dashboard.fno.underlyings, dashboard.long_term.records, dashboard.scan.records])
+
+  const symbolSuggestions = useMemo(() => {
+    const q = query.trim().toUpperCase()
+    if (!q) return symbols.slice(0, 80)
+    return symbols.filter((symbol) => symbol.startsWith(q)).slice(0, 80)
+  }, [query, symbols])
+
+  useEffect(() => {
+    let alive = true
+    fetchSymbolDirectory({ limit: 5000 })
+      .then((payload) => {
+        if (!alive) return
+        setUniverseSymbols((payload.symbols || []).map((row) => row.symbol).filter(Boolean))
+      })
+      .catch(() => {
+        if (alive) setUniverseSymbols([])
+      })
+    return () => { alive = false }
+  }, [])
 
   const openSearch = () => {
     const clean = query.trim().toUpperCase()
@@ -269,7 +290,11 @@ function App() {
     setSelected(match)
     setQuery(match)
     setActive('Stock Intelligence')
-    setControlState(`Opening verified workspace for ${match}`)
+    setControlState(
+      symbols.includes(match)
+        ? `Opening verified workspace for ${match}`
+        : `Opening ${match} — not in local universe cache; workspace still loads if bhav history exists`,
+    )
     window.setTimeout(() => setControlState(''), 2500)
   }
 
@@ -388,13 +413,13 @@ function App() {
             ⌕
             <input
               aria-label="Search NSE symbol"
-              placeholder="Open any NSE symbol…"
+              placeholder="Search any NSE share…"
               value={query}
               onChange={(event: { target: { value: string } }) => setQuery(event.target.value)}
               onKeyDown={(event: { key: string }) => { if (event.key === 'Enter') openSearch() }}
               list="quantterm-symbols"
             />
-            <datalist id="quantterm-symbols">{symbols.slice(0, 800).map((symbol) => <option value={symbol} key={symbol} />)}</datalist>
+            <datalist id="quantterm-symbols">{symbolSuggestions.map((symbol) => <option value={symbol} key={symbol} />)}</datalist>
             <button type="button" onClick={openSearch}>Open stock</button>
           </div>
           <div className="top-status">
