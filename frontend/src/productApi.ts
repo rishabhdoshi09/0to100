@@ -24,6 +24,25 @@ export type ProductReadiness = {
   lanes: ProductLane[]
   blockers: string[]
   recommended_action: string
+  retail_research_checklist?: RetailResearchChecklist
+}
+
+export type RetailChecklistItem = {
+  key: string
+  label: string
+  status: string
+  why_it_matters: string
+  next_action: string
+  evidence: string
+}
+
+export type RetailResearchChecklist = {
+  schema_version: number
+  summary: string
+  ready_count: number
+  gap_count: number
+  items: RetailChecklistItem[]
+  gaps: RetailChecklistItem[]
 }
 
 export type IntelligenceMetric = {
@@ -217,6 +236,10 @@ export type TradePlan = {
   heat_warnings?: string[]
   correlation_status?: string
   correlated_with?: string[]
+  effective_bets_before?: number | null
+  effective_bets_after?: number | null
+  round_trip_cost_pct?: number | null
+  cost_drag_r?: number | null
   market_health?: string
   market_risk_factor?: number
   capital?: number
@@ -228,6 +251,19 @@ export const fetchTradePlan = (symbol: string): Promise<TradePlan> =>
   fetch(`/api/trade-plan/${encodeURIComponent(symbol)}`, {
     headers: { Accept: 'application/json' },
   }).then((response) => json<TradePlan>(response))
+
+export type BookCorrelation = {
+  available?: boolean
+  n_positions: number
+  n_bets: number
+  clusters: string[][]
+  biggest: string[] | null
+  message?: string
+}
+
+export const fetchBookCorrelation = (): Promise<BookCorrelation> =>
+  fetch('/api/book-correlation', { headers: { Accept: 'application/json' } })
+    .then((response) => json<BookCorrelation>(response))
 
 export const fetchStockFundamentals = (
   symbol: string,

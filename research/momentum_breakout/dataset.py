@@ -119,8 +119,15 @@ class BhavDataProvider:
         return None
 
     def valuation(self, sym, i):
-        # no point-in-time fundamentals with publication dates exist in the repo
-        return None
+        # Point-in-time valuations only — operator/vendor ledger with available_ts.
+        # Screener cache fetched_at is NEVER used (would leak look-ahead).
+        try:
+            from data.pit_valuations import get_valuation
+
+            as_of = self._dates[i]
+            return get_valuation(sym, as_of)
+        except Exception:
+            return None
 
     def source_identities(self):
         return {"prices": "NSE_bhavcopy_official_EOD_CA_adjusted_on_read",
@@ -254,7 +261,16 @@ def data_quality_report(provider, cfg: MomentumBreakoutConfig | None = None
         lims.append("CA_ADJUSTMENT: corporate actions applied only if ca_events.json "
                     "present; otherwise raw prices (phantom split/bonus gaps possible)")
     lims.append("SECTOR_MEMBERSHIP_NOT_PIT: sector classification is not historically dated")
-    lims.append("VALUATION_DATA_UNAVAILABLE: no point-in-time fundamentals with publication dates")
+    try:
+        from data.pit_valuations import ledger_status as pit_status
+
+        if not pit_status().get("research_grade"):
+            lims.append(
+                "VALUATION_DATA_UNAVAILABLE: no research-grade point-in-time fundamentals "
+                "with publication dates (drop logs/pit_valuations.incoming.json)"
+            )
+    except Exception:
+        lims.append("VALUATION_DATA_UNAVAILABLE: no point-in-time fundamentals with publication dates")
     if m["ca_gap_anomalies"] > 0:
         lims.append(f"CA_GAP_ANOMALIES: {m['ca_gap_anomalies']} unexplained >40% one-day "
                     "moves (possible unadjusted corporate actions)")

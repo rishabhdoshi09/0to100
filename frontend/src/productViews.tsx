@@ -61,6 +61,15 @@ export function RiskLensCard({ plan }: { plan: TradePlan | null }) {
       {plan.correlation_status === 'adds_to_bet' && (plan.correlated_with || []).length > 0 && (
         <p className="risk-lens-note">Not a new bet — moves with {(plan.correlated_with || []).join(', ')}.</p>
       )}
+      {plan.effective_bets_before != null && plan.effective_bets_after != null && (
+        <p className="risk-lens-note">
+          Effective bets {plan.effective_bets_before}→{plan.effective_bets_after}
+          {plan.cost_drag_r != null ? ` · round-trip cost ≈ ${plan.cost_drag_r.toFixed(2)}R` : ''}
+        </p>
+      )}
+      {plan.effective_bets_before == null && plan.cost_drag_r != null && (
+        <p className="risk-lens-note">Round-trip cost ≈ {plan.cost_drag_r.toFixed(2)}R of the stop distance.</p>
+      )}
       <p className="risk-lens-summary">{plan.summary}</p>
     </section>
   )
@@ -129,6 +138,32 @@ function LaneGrid({ readiness }: { readiness: ProductReadiness | null }) {
   )
 }
 
+function RetailChecklist({ readiness }: { readiness: ProductReadiness | null }) {
+  const checklist = readiness?.retail_research_checklist
+  if (!checklist) return null
+  return (
+    <section className="retail-research-checklist">
+      <header>
+        <strong>Research checklist for cash traders</strong>
+        <span>{checklist.ready_count} ready · {checklist.gap_count} gap(s)</span>
+      </header>
+      <p>{checklist.summary}</p>
+      <div className="retail-checklist-items">
+        {(checklist.items || []).map((item) => (
+          <article key={item.key} className={`retail-check ${laneTone(item.status === 'READY' ? 'FRESH' : item.status === 'PARTIAL' ? 'STALE' : 'MISSING')}`}>
+            <header><strong>{item.label}</strong><span>{item.status}</span></header>
+            <p>{item.why_it_matters}</p>
+            <b>{item.evidence}</b>
+            {item.next_action && item.next_action !== 'NONE' && (
+              <small>Next: {item.next_action}</small>
+            )}
+          </article>
+        ))}
+      </div>
+    </section>
+  )
+}
+
 export function ProductCommandCenterView(props: ViewProps) {
   const { dashboard, selected, setSelected, bars, setActive, runControl } = props
   const [readiness, setReadiness] = useState<ProductReadiness | null>(null)
@@ -179,6 +214,7 @@ export function ProductCommandCenterView(props: ViewProps) {
       <ReadinessHero readiness={readiness} busy={bootstrapBusy} onBootstrap={() => void bootstrap()} />
       {message && <div className="product-message">{message}</div>}
       <LaneGrid readiness={readiness} />
+      <RetailChecklist readiness={readiness} />
 
       <div className="product-quick-actions">
         <div><strong>Start with a job, not a menu.</strong><span>Every action below produces a visible operation and a dated saved result.</span></div>

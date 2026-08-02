@@ -346,10 +346,20 @@ def cmd_ca_ingest(args) -> None:
     from data import corporate_actions as CA
 
     if args.status_only:
-        print(json.dumps(CA.ledger_status(), indent=2, default=str))
+        status = CA.ledger_status()
+        if not status.get("research_grade"):
+            status["blocked"] = True
+            status["next_action"] = (
+                "Drop real NSE CA rows at logs/ca_events.incoming.json "
+                "(see docs/product/acceptance/ca_events.sample.json.example for schema), then: "
+                "python main.py ca-ingest --source logs/ca_events.incoming.json. "
+                "QuantTerm will not invent events from price gaps — prices stay RAW until then."
+            )
+        print(json.dumps(status, indent=2, default=str))
         return
     if not args.source:
         print("Provide --source path/to/ca_events.json|.csv (or --status)")
+        print("Schema sample: docs/product/acceptance/ca_events.sample.json.example")
         raise SystemExit(2)
     report = CA.ingest_from_path(args.source)
     print(json.dumps(report, indent=2, default=str))
@@ -360,13 +370,44 @@ def cmd_universe_history(args) -> None:
     from data import universe_history as UH
 
     if args.status_only:
-        print(json.dumps(UH.ledger_status(), indent=2, default=str))
+        status = UH.ledger_status()
+        if not status.get("research_grade"):
+            status["next_action"] = (
+                "For research-grade membership, ingest an official archive: "
+                "python main.py universe-history --source logs/universe_history.incoming.csv "
+                "(schema: docs/product/acceptance/universe_history.sample.json.example). "
+                "Bhav bootstrap clears the missing-ledger gap but stays research_grade=false."
+            )
+        print(json.dumps(status, indent=2, default=str))
         return
     if args.source:
         report = UH.ingest_from_path(args.source)
         print(json.dumps(report, indent=2, default=str))
         return
     report = UH.build_from_bhav(force=bool(args.force))
+    print(json.dumps(report, indent=2, default=str))
+
+
+def cmd_pit_valuations(args) -> None:
+    """Ingest or inspect point-in-time valuation rows (publication-dated)."""
+    from data import pit_valuations as PV
+
+    if args.status_only:
+        status = PV.ledger_status()
+        if not status.get("research_grade"):
+            status["next_action"] = (
+                "Drop publication-dated rows at logs/pit_valuations.incoming.json "
+                "(see docs/product/acceptance/pit_valuations.sample.json.example), then: "
+                "python main.py pit-valuations --source logs/pit_valuations.incoming.json. "
+                "Never use screener fetch time as available_ts."
+            )
+        print(json.dumps(status, indent=2, default=str))
+        return
+    if not args.source:
+        print("Provide --source path/to/pit_valuations.json|.csv (or --status)")
+        print("Schema sample: docs/product/acceptance/pit_valuations.sample.json.example")
+        raise SystemExit(2)
+    report = PV.ingest_from_path(args.source)
     print(json.dumps(report, indent=2, default=str))
 
 
@@ -1164,6 +1205,13 @@ def build_parser() -> argparse.ArgumentParser:
     oe.add_argument("--history", dest="history_symbol", metavar="SYMBOL", help="Print recent history for one symbol")
     oe.add_argument("--days", type=int, default=30, help="History window when using --history")
 
+    pv = sub.add_parser(
+        "pit-valuations",
+        help="Ingest publication-dated valuations into logs/pit_valuations.json (never invents rows)",
+    )
+    pv.add_argument("--source", metavar="FILE", help="JSON/CSV with symbol,available_ts,pe,...")
+    pv.add_argument("--status", dest="status_only", action="store_true", help="Print PIT valuation ledger status")
+
     ens = sub.add_parser("ensemble", help="Print ensemble ML signal for a symbol")
     ens.add_argument("--symbol", required=True, metavar="SYMBOL", help="NSE symbol, e.g. RELIANCE")
 
@@ -1224,6 +1272,7 @@ def main() -> None:
         "universe-history": cmd_universe_history,
         "snapshot-certify": cmd_snapshot_certify,
         "options-eod": cmd_options_eod,
+        "pit-valuations": cmd_pit_valuations,
         "ensemble":   cmd_ensemble,
         "lgb":        cmd_lgb,
         "multi":      cmd_multi,

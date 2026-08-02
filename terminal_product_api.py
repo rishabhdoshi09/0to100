@@ -340,7 +340,38 @@ def _tca_payload() -> dict[str, Any]:
 @app.get("/api/product-readiness")
 def product_readiness() -> dict[str, Any]:
     payloads = _current_product_payloads()
-    return build_product_readiness(**payloads)
+    extras: dict[str, Any] = {}
+    try:
+        from data import corporate_actions as CA
+
+        extras["ca"] = CA.ledger_status()
+    except Exception:
+        extras["ca"] = {}
+    try:
+        from data import universe_history as UH
+
+        extras["universe"] = UH.ledger_status()
+    except Exception:
+        extras["universe"] = {}
+    try:
+        from data import pit_valuations as PV
+
+        extras["pit_valuations"] = PV.ledger_status()
+    except Exception:
+        extras["pit_valuations"] = {}
+    try:
+        from scan.live_edge import profile_edge
+
+        extras["live_edge"] = profile_edge()
+    except Exception:
+        extras["live_edge"] = {}
+    try:
+        from risk.correlation import book_correlation_report
+
+        extras["book_correlation"] = book_correlation_report()
+    except Exception:
+        extras["book_correlation"] = {}
+    return build_product_readiness(**payloads, **extras)
 
 
 @app.get("/api/institutional-readiness")
@@ -366,7 +397,7 @@ def target_portfolio() -> dict[str, Any]:
 
 def _trade_plan_payload(symbol: str) -> dict[str, Any]:
     """Risk-first plan for a scanned candidate, composed from the authoritative sizer + book-risk +
-    market-health functions. Read-only; correlation stays 'unknown' here (no synchronous data fetch)."""
+    market-health functions. Read-only; uses open paper symbols for correlation when available."""
     from product.trade_plan import plan_for_candidate
     sym = str(symbol or "").strip().upper()
     scan = core._scan_payload()
@@ -390,10 +421,42 @@ def _trade_plan_payload(symbol: str) -> dict[str, Any]:
             capital = 100_000.0
     health = str(core._market_payload().get("health", "")).strip().lower()
     regime_factor = {"healthy": 1.0, "mixed": 0.75, "weak": 0.5}.get(health, 1.0)
-    plan = plan_for_candidate(record, capital=capital, regime_factor=regime_factor)
+    open_symbols: list[str] = []
+    try:
+        paper = core._paper_payload()
+        open_symbols = [
+            str(p.get("symbol") or "").upper()
+            for p in (paper.get("open_positions") or [])
+            if p.get("symbol")
+        ]
+    except Exception:
+        open_symbols = []
+    if not open_symbols:
+        try:
+            from risk.position_manager import review_positions
+
+            open_symbols = [
+                str(p.get("symbol") or "").upper()
+                for p in (review_positions() or [])
+                if p.get("symbol")
+            ]
+        except Exception:
+            open_symbols = []
+    plan = plan_for_candidate(
+        record,
+        capital=capital,
+        regime_factor=regime_factor,
+        open_symbols=open_symbols or None,
+    )
     payload = plan.as_dict()
-    payload.update({"available": True, "symbol": sym, "capital": round(capital, 0),
-                    "market_health": health or "unknown", "market_risk_factor": regime_factor})
+    payload.update({
+        "available": True,
+        "symbol": sym,
+        "capital": round(capital, 0),
+        "market_health": health or "unknown",
+        "market_risk_factor": regime_factor,
+        "open_symbols_considered": open_symbols,
+    })
     return payload
 
 
@@ -403,6 +466,25 @@ def trade_plan(symbol: str) -> dict[str, Any]:
     invalidation, book open-risk before/after and a market-throttled risk suggestion. No order is
     ever placed."""
     return _trade_plan_payload(symbol)
+
+
+@app.get("/api/book-correlation")
+def book_correlation() -> dict[str, Any]:
+    """Read-only concentration lens: how many open positions vs independent bets."""
+    try:
+        from risk.correlation import book_correlation_report
+
+        return book_correlation_report()
+    except Exception as exc:
+        return {
+            "available": False,
+            "n_positions": 0,
+            "n_bets": 0,
+            "clusters": [],
+            "biggest": None,
+            "message": "Book correlation unavailable.",
+            "error": str(exc),
+        }
 
 
 @app.get("/api/oms")

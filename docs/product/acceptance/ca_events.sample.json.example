@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "source": "SAMPLE_NOT_FOR_RESEARCH",
+  "note": "Illustrative corporate-action rows only. Replace with a real NSE/operator ledger before trusting ADJUSTED prices. QuantTerm will never invent events from price gaps.",
+  "events": [
+    {
+      "symbol": "EXAMPLE",
+      "ex_date": "2020-01-15",
+      "factor": 2.0,
+      "type": "bonus"
+    },
+    {
+      "symbol": "EXAMPLE",
+      "ex_date": "2018-06-01",
+      "factor": 5.0,
+      "type": "split"
+    }
+  ]
+}

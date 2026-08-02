@@ -93,6 +93,11 @@ def build_product_readiness(
     data: Mapping[str, Any] | None,
     operations: Mapping[str, Any] | None,
     now: datetime | None = None,
+    ca: Mapping[str, Any] | None = None,
+    universe: Mapping[str, Any] | None = None,
+    pit_valuations: Mapping[str, Any] | None = None,
+    live_edge: Mapping[str, Any] | None = None,
+    book_correlation: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build the readiness score shown in the product shell."""
     now = now or datetime.now(timezone.utc)
@@ -246,8 +251,19 @@ def build_product_readiness(
         for item in lanes
         if item["status"] != "FRESH" and item["weight"] >= 10
     ]
+    from product.retail_research_checklist import build_retail_research_checklist
+
+    checklist = build_retail_research_checklist(
+        data=data,
+        ca=ca,
+        universe=universe,
+        pit_valuations=pit_valuations,
+        live_edge=live_edge,
+        book_correlation=book_correlation,
+        options_eod=options_eod,
+    )
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "generated_at": now.isoformat(),
         "score": score,
         "state": state,
@@ -255,4 +271,5 @@ def build_product_readiness(
         "lanes": lanes,
         "blockers": blockers,
         "recommended_action": "BOOTSTRAP_PRODUCT_NOW" if score < 90 else "RUN_SCAN_NOW",
+        "retail_research_checklist": checklist,
     }

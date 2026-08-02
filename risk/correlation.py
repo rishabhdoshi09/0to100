@@ -86,7 +86,7 @@ def clusters_from_corr(symbols: list[str], corr: dict,
 
 def book_correlation_report() -> dict:
     """The live book through the correlation lens:
-    {n_positions, n_bets, clusters: [[syms...]], biggest: [syms]|None}.
+    {available, n_positions, n_bets, clusters: [[syms...]], biggest: [syms]|None}.
     Safe on empty book / missing history (falls back to positions=bets)."""
     try:
         from risk.position_manager import review_positions
@@ -95,10 +95,27 @@ def book_correlation_report() -> dict:
     except Exception:
         symbols = []
     if len(symbols) < 2:
-        return {"n_positions": len(symbols), "n_bets": len(symbols),
-                "clusters": [[s] for s in symbols], "biggest": None}
+        return {
+            "available": True,
+            "n_positions": len(symbols),
+            "n_bets": len(symbols),
+            "clusters": [[s] for s in symbols],
+            "biggest": None,
+            "message": (
+                "Need at least two open positions to measure concentration."
+                if len(symbols) < 2 else ""
+            ),
+        }
     corr = pairwise_corr(symbols)
     clusters = clusters_from_corr(symbols, corr)
     biggest = clusters[0] if clusters and len(clusters[0]) > 1 else None
-    return {"n_positions": len(symbols), "n_bets": len(clusters),
-            "clusters": clusters, "biggest": biggest}
+    return {
+        "available": True,
+        "n_positions": len(symbols),
+        "n_bets": len(clusters),
+        "clusters": clusters,
+        "biggest": biggest,
+        "message": (
+            f"{len(symbols)} positions behave like {len(clusters)} independent bet(s)."
+        ),
+    }
