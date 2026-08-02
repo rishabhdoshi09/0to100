@@ -29,6 +29,7 @@ API_PID=""
 FRONTEND_PID=""
 AUTONOMY_EXTERNAL=0
 API_EXTERNAL=0
+API_HEALTH_FAILS=0
 
 cleanup() {
   echo
@@ -80,8 +81,9 @@ PY
       AUTONOMY_PID=""
       AUTONOMY_EXTERNAL=1
     else
-      echo "[STACK] Autonomy failed to stay alive. Review the visible error above."
-      exit 1
+      # Autonomy is best-effort for the terminal UI — do not abort the stack.
+      echo "[STACK] Autonomy failed to stay alive; continuing with API + Vite only." >&2
+      AUTONOMY_PID=""
     fi
   fi
 fi
@@ -124,13 +126,14 @@ FRONTEND_PID=$!
 # Confirm Vite bound before advertising ready (API is already healthy above).
 vite_bound=0
 for _ in $(seq 1 60); do
-  if ! kill -0 "$FRONTEND_PID" >/dev/null 2>&1; then
-    echo "[STACK] Vite exited during startup. Review errors above." >&2
-    exit 1
-  fi
-  if [[ -n "$(stack_pids_on_port 5173)" ]]; then
+  if stack_port_listening 5173; then
     vite_bound=1
     break
+  fi
+  # npm may spawn vite and exit on some setups; only fail if neither PID nor port live.
+  if ! kill -0 "$FRONTEND_PID" >/dev/null 2>&1 && ! stack_port_listening 5173; then
+    echo "[STACK] Vite exited during startup. Review errors above." >&2
+    exit 1
   fi
   sleep 0.5
 done
@@ -143,24 +146,44 @@ echo "[STACK] QuantTerm is ready. Open http://127.0.0.1:5173"
 echo "[STACK] Keep this terminal open; Ctrl-C stops services started by this script."
 echo "[STACK] If the UI still errors, run: bash scripts/stop_quantterm.sh && bash scripts/run_quantterm_complete.sh"
 
+# Require several consecutive failures before tearing down — a single busy
+# uvicorn worker can make curl --max-time health checks flap when the UI loads.
+API_FAIL_LIMIT=3
+
 while true; do
-  if ! kill -0 "$FRONTEND_PID" >/dev/null 2>&1; then
-    echo "[STACK] FRONTEND process exited unexpectedly (pid=$FRONTEND_PID)."
+  if ! stack_port_listening 5173; then
+    if [[ -n "$FRONTEND_PID" ]] && kill -0 "$FRONTEND_PID" >/dev/null 2>&1; then
+      echo "[STACK] Vite is not listening on :5173 (npm pid=$FRONTEND_PID still alive)." >&2
+    else
+      echo "[STACK] FRONTEND/Vite exited unexpectedly (nothing on :5173)." >&2
+    fi
     exit 1
   fi
+
+  api_alive=1
   if [[ "$API_EXTERNAL" != "1" ]] && [[ -n "$API_PID" ]] && ! kill -0 "$API_PID" >/dev/null 2>&1; then
-    echo "[STACK] API process exited unexpectedly (pid=$API_PID)."
-    echo "[STACK] Tip: bash scripts/stop_quantterm.sh && bash scripts/run_quantterm_complete.sh" >&2
-    exit 1
+    api_alive=0
   fi
   if ! stack_health_ok "$API_HEALTH"; then
-    echo "[STACK] Terminal API health check failed at $API_HEALTH — backend may have stopped." >&2
-    echo "[STACK] Vite proxies /api → :8765; restart with: bash scripts/stop_quantterm.sh && bash scripts/run_quantterm_complete.sh" >&2
-    exit 1
+    api_alive=0
   fi
+
+  if [[ "$api_alive" == "1" ]]; then
+    API_HEALTH_FAILS=0
+  else
+    API_HEALTH_FAILS=$((API_HEALTH_FAILS + 1))
+    echo "[STACK] Terminal API health soft-fail ${API_HEALTH_FAILS}/${API_FAIL_LIMIT} at $API_HEALTH" >&2
+    if [[ "$API_HEALTH_FAILS" -ge "$API_FAIL_LIMIT" ]]; then
+      echo "[STACK] Terminal API health check failed at $API_HEALTH — backend may have stopped." >&2
+      echo "[STACK] Vite proxies /api → :8765; restart with: bash scripts/stop_quantterm.sh && bash scripts/run_quantterm_complete.sh" >&2
+      exit 1
+    fi
+  fi
+
   if [[ -n "$AUTONOMY_PID" ]] && ! kill -0 "$AUTONOMY_PID" >/dev/null 2>&1; then
-    echo "[STACK] AUTONOMY process exited unexpectedly (pid=$AUTONOMY_PID)."
-    exit 1
+    # Do not tear down the terminal UI if autonomy exits later.
+    echo "[STACK] Autonomy supervisor exited; leaving API + Vite running." >&2
+    AUTONOMY_PID=""
   fi
   sleep 3
 done

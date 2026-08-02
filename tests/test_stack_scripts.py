@@ -37,6 +37,15 @@ def test_stack_cleanup_reaps_vite_by_port() -> None:
     assert "stack_free_port 5173" in complete
 
 
+def test_stack_monitor_is_resilient() -> None:
+    """UI stack must not die on autonomy exit or a single busy-worker health flap."""
+    text = (SCRIPTS / "run_quantterm.sh").read_text(encoding="utf-8")
+    assert "Autonomy supervisor exited; leaving API + Vite running" in text
+    assert "API_FAIL_LIMIT" in text
+    assert "stack_port_listening 5173" in text
+    assert "continuing with API + Vite only" in text
+
+
 def test_stack_start_keeps_background_child_alive() -> None:
     """Direct call pattern must leave the backgrounded child running."""
     script = r"""

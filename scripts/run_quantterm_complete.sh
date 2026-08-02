@@ -22,6 +22,8 @@ fi
 REPORT_PID=""
 STACK_PID=""
 REPORT_EXTERNAL=0
+REPORT_HEALTH_FAILS=0
+REPORT_FAIL_LIMIT=3
 
 cleanup() {
   echo
@@ -86,16 +88,32 @@ bash scripts/run_quantterm.sh &
 STACK_PID=$!
 
 while true; do
+  report_alive=1
   if [[ "$REPORT_EXTERNAL" != "1" ]] && [[ -n "$REPORT_PID" ]] && ! kill -0 "$REPORT_PID" >/dev/null 2>&1; then
-    echo "[COMPLETE STACK] REPORT API exited unexpectedly (pid=$REPORT_PID)." >&2
-    exit 1
+    report_alive=0
   fi
   if ! stack_health_ok "$REPORT_HEALTH"; then
-    echo "[COMPLETE STACK] Report API health check failed at $REPORT_HEALTH." >&2
-    exit 1
+    report_alive=0
   fi
+
+  if [[ "$report_alive" == "1" ]]; then
+    REPORT_HEALTH_FAILS=0
+  else
+    REPORT_HEALTH_FAILS=$((REPORT_HEALTH_FAILS + 1))
+    echo "[COMPLETE STACK] Report API health soft-fail ${REPORT_HEALTH_FAILS}/${REPORT_FAIL_LIMIT} at $REPORT_HEALTH" >&2
+    if [[ "$REPORT_HEALTH_FAILS" -ge "$REPORT_FAIL_LIMIT" ]]; then
+      echo "[COMPLETE STACK] Report API health check failed at $REPORT_HEALTH." >&2
+      exit 1
+    fi
+  fi
+
   if ! kill -0 "$STACK_PID" >/dev/null 2>&1; then
-    echo "[COMPLETE STACK] QuantTerm stack exited unexpectedly (pid=$STACK_PID)." >&2
+    set +e
+    wait "$STACK_PID"
+    stack_ec=$?
+    set -e
+    echo "[COMPLETE STACK] QuantTerm stack exited unexpectedly (pid=$STACK_PID, exit=$stack_ec)." >&2
+    echo "[COMPLETE STACK] Scroll up for the nested [STACK] reason (API/Vite/autonomy)." >&2
     echo "[COMPLETE STACK] Tip: bash scripts/stop_quantterm.sh  then  bash scripts/run_quantterm_complete.sh" >&2
     exit 1
   fi

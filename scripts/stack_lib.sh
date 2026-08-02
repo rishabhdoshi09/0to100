@@ -11,12 +11,18 @@ STACK_UVICORN_RC=0
 
 stack_health_ok() {
   local url="$1"
-  curl -fsS --max-time 2 "$url" >/dev/null 2>&1
+  local timeout="${2:-5}"
+  curl -fsS --max-time "$timeout" "$url" >/dev/null 2>&1
 }
 
 stack_pids_on_port() {
   local port="$1"
   lsof -ti ":${port}" 2>/dev/null || true
+}
+
+stack_port_listening() {
+  local port="$1"
+  [[ -n "$(stack_pids_on_port "$port")" ]]
 }
 
 stack_free_port() {
