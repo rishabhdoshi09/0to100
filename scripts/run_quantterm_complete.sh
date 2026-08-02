@@ -4,6 +4,9 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
+# shellcheck source=stack_lib.sh
+source "$ROOT/scripts/stack_lib.sh"
+
 if [[ ! -d venv ]]; then
   echo "Missing venv. Create the QuantTerm Python environment first." >&2
   exit 1
@@ -18,6 +21,7 @@ fi
 
 REPORT_PID=""
 STACK_PID=""
+REPORT_EXTERNAL=0
 
 cleanup() {
   echo
@@ -29,18 +33,31 @@ cleanup() {
     kill "$REPORT_PID" >/dev/null 2>&1 || true
   fi
   wait >/dev/null 2>&1 || true
+  if [[ "$REPORT_EXTERNAL" == "1" ]]; then
+    echo "[COMPLETE STACK] External report API on :8766 was left running."
+  fi
   echo "[COMPLETE STACK] Stopped."
 }
 trap cleanup EXIT INT TERM
 
-echo "[COMPLETE STACK] Starting research-report API at http://127.0.0.1:8766 …"
-python -u -m uvicorn report_api:app --host 127.0.0.1 --port 8766 &
-REPORT_PID=$!
+REPORT_HEALTH="http://127.0.0.1:8766/health"
+set +e
+REPORT_PID="$(stack_start_or_reuse_uvicorn 8766 "report_api:app" "$REPORT_HEALTH" "Research-report API")"
+report_rc=$?
+set -e
 
-sleep 1
-if ! kill -0 "$REPORT_PID" >/dev/null 2>&1; then
-  echo "[COMPLETE STACK] Research-report API failed to start. Review the error above." >&2
-  exit 1
+if [[ "$report_rc" == 2 ]]; then
+  REPORT_EXTERNAL=1
+  REPORT_PID=""
+else
+  REPORT_EXTERNAL=0
+  if [[ -z "$REPORT_PID" ]]; then
+    echo "[COMPLETE STACK] Research-report API failed to start." >&2
+    exit 1
+  fi
+  if ! stack_wait_for_health "$REPORT_HEALTH" "$REPORT_PID" "Research-report API" 10; then
+    exit 1
+  fi
 fi
 
 echo "[COMPLETE STACK] Starting QuantTerm terminal, market operations and autonomy…"
@@ -48,12 +65,17 @@ bash scripts/run_quantterm.sh &
 STACK_PID=$!
 
 while true; do
-  if ! kill -0 "$REPORT_PID" >/dev/null 2>&1; then
+  if [[ "$REPORT_EXTERNAL" != "1" ]] && [[ -n "$REPORT_PID" ]] && ! kill -0 "$REPORT_PID" >/dev/null 2>&1; then
     echo "[COMPLETE STACK] REPORT API exited unexpectedly (pid=$REPORT_PID)." >&2
+    exit 1
+  fi
+  if ! stack_health_ok "$REPORT_HEALTH"; then
+    echo "[COMPLETE STACK] Report API health check failed at $REPORT_HEALTH." >&2
     exit 1
   fi
   if ! kill -0 "$STACK_PID" >/dev/null 2>&1; then
     echo "[COMPLETE STACK] QuantTerm stack exited unexpectedly (pid=$STACK_PID)." >&2
+    echo "[COMPLETE STACK] Tip: bash scripts/stop_quantterm.sh  then  bash scripts/run_quantterm_complete.sh" >&2
     exit 1
   fi
   sleep 3

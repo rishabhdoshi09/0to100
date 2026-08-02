@@ -4,6 +4,9 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
+# shellcheck source=stack_lib.sh
+source "$ROOT/scripts/stack_lib.sh"
+
 if [[ ! -d venv ]]; then
   echo "Missing venv. Create the QuantTerm Python environment first." >&2
   exit 1
@@ -25,18 +28,26 @@ AUTONOMY_PID=""
 API_PID=""
 FRONTEND_PID=""
 AUTONOMY_EXTERNAL=0
+API_EXTERNAL=0
 
 cleanup() {
   echo
   echo "[STACK] Stopping QuantTerm child services…"
-  for pid in "$FRONTEND_PID" "$API_PID" "$AUTONOMY_PID"; do
-    if [[ -n "$pid" ]]; then
-      kill "$pid" >/dev/null 2>&1 || true
-    fi
-  done
+  if [[ -n "$FRONTEND_PID" ]]; then
+    kill "$FRONTEND_PID" >/dev/null 2>&1 || true
+  fi
+  if [[ -n "$API_PID" ]]; then
+    kill "$API_PID" >/dev/null 2>&1 || true
+  fi
+  if [[ -n "$AUTONOMY_PID" ]]; then
+    kill "$AUTONOMY_PID" >/dev/null 2>&1 || true
+  fi
   wait >/dev/null 2>&1 || true
   if [[ "$AUTONOMY_EXTERNAL" == "1" ]]; then
     echo "[STACK] Existing external autonomy supervisor was left running."
+  fi
+  if [[ "$API_EXTERNAL" == "1" ]]; then
+    echo "[STACK] External terminal API on :8765 was left running."
   fi
   echo "[STACK] Child services stopped."
 }
@@ -70,47 +81,57 @@ PY
   fi
 fi
 
-echo "[STACK] Starting local API at http://127.0.0.1:8765 …"
-python -u -m uvicorn terminal_product_api:app --host 127.0.0.1 --port 8765 &
-API_PID=$!
+API_HEALTH="http://127.0.0.1:8765/api/health"
+set +e
+API_PID="$(stack_start_or_reuse_uvicorn 8765 "terminal_product_api:app" "$API_HEALTH" "Terminal API")"
+api_rc=$?
+set -e
 
-echo "[STACK] Waiting for terminal API (bhav load + market ops bootstrap can take ~15–45s)…"
-API_READY=0
-for _ in $(seq 1 240); do
-  if ! kill -0 "$API_PID" >/dev/null 2>&1; then
-    echo "[STACK] Terminal API exited during startup. Review errors above." >&2
+if [[ "$api_rc" == 2 ]]; then
+  API_EXTERNAL=1
+  API_PID=""
+else
+  API_EXTERNAL=0
+  if [[ -z "$API_PID" ]]; then
+    echo "[STACK] Terminal API failed to start (no pid)." >&2
     exit 1
   fi
-  if curl -fsS --max-time 2 "http://127.0.0.1:8765/api/health" >/dev/null 2>&1; then
-    API_READY=1
-    break
-  fi
-  sleep 0.5
-done
-if [[ "$API_READY" != "1" ]]; then
-  echo "[STACK] Terminal API did not become ready within 120s." >&2
-  exit 1
+fi
+
+echo "[STACK] Waiting for terminal API (bhav load + market ops bootstrap can take ~15–45s)…"
+if [[ "$API_EXTERNAL" == "1" ]]; then
+  stack_wait_for_health "$API_HEALTH" "" "Terminal API" || exit 1
+else
+  stack_wait_for_health "$API_HEALTH" "$API_PID" "Terminal API" || exit 1
 fi
 echo "[STACK] Terminal API ready."
+
+stack_free_port 5173 "Vite dev server"
 
 echo "[STACK] Starting dedicated terminal at http://127.0.0.1:5173 …"
 (
   cd frontend
-  npm run dev -- --host 127.0.0.1
+  npm run dev -- --host 127.0.0.1 --port 5173
 ) &
 FRONTEND_PID=$!
 
-echo "[STACK] QuantTerm is ready. Open http://127.0.0.1:5173 — keep this terminal open; Ctrl-C stops local child services."
+echo "[STACK] QuantTerm is ready. Open http://127.0.0.1:5173"
+echo "[STACK] Keep this terminal open; Ctrl-C stops services started by this script."
+echo "[STACK] If the UI still errors, run: bash scripts/stop_quantterm.sh && bash scripts/run_quantterm_complete.sh"
 
 while true; do
-  for entry in "API:$API_PID" "FRONTEND:$FRONTEND_PID"; do
-    name="${entry%%:*}"
-    pid="${entry##*:}"
-    if ! kill -0 "$pid" >/dev/null 2>&1; then
-      echo "[STACK] $name process exited unexpectedly (pid=$pid)."
-      exit 1
-    fi
-  done
+  if ! kill -0 "$FRONTEND_PID" >/dev/null 2>&1; then
+    echo "[STACK] FRONTEND process exited unexpectedly (pid=$FRONTEND_PID)."
+    exit 1
+  fi
+  if [[ "$API_EXTERNAL" != "1" ]] && [[ -n "$API_PID" ]] && ! kill -0 "$API_PID" >/dev/null 2>&1; then
+    echo "[STACK] API process exited unexpectedly (pid=$API_PID)."
+    exit 1
+  fi
+  if ! stack_health_ok "$API_HEALTH"; then
+    echo "[STACK] Terminal API health check failed at $API_HEALTH — backend may have stopped." >&2
+    exit 1
+  fi
   if [[ -n "$AUTONOMY_PID" ]] && ! kill -0 "$AUTONOMY_PID" >/dev/null 2>&1; then
     echo "[STACK] AUTONOMY process exited unexpectedly (pid=$AUTONOMY_PID)."
     exit 1
