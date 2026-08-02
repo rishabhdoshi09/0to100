@@ -28,6 +28,7 @@ def fii_dii_backfill_run(days: int = Query(90, ge=30, le=365)) -> dict[str, Any]
 def options_workspace(
     symbol: str,
     spot: float | None = Query(None, description="Optional spot for ATM IV"),
+    force: bool = Query(False, description="Bypass TTL cache and failure backoff"),
 ) -> dict[str, Any]:
     sym = str(symbol or "").strip().upper()
     if not sym or len(sym) > 32:
@@ -44,7 +45,7 @@ def options_workspace(
             resolved_spot = None
     from options.chain_fetch import chain_workspace_cached
 
-    return chain_workspace_cached(sym, spot=resolved_spot)
+    return chain_workspace_cached(sym, spot=resolved_spot, force=force)
 
 
 def nifty_options_workspace() -> dict[str, Any]:

@@ -39,6 +39,11 @@ def _fetch_nse(symbol: str) -> tuple[Optional[pd.DataFrame], Optional[str]]:
         if symbol in ("NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY", "NIFTYNXT50"):
             url = f"https://www.nseindia.com/api/option-chain-indices?symbol={symbol}"
         else:
+            session.get(
+                f"https://www.nseindia.com/get-quotes/equity?symbol={symbol}",
+                headers=headers,
+                timeout=8,
+            )
             url = f"https://www.nseindia.com/api/option-chain-equities?symbol={symbol}"
         data = None
         for attempt in range(3):
@@ -144,7 +149,10 @@ def chain_workspace(symbol: str, spot: float | None = None) -> dict[str, Any]:
         return {
             "available": False,
             "symbol": sym,
-            "message": "Option chain unavailable from NSE and fallback sources.",
+            "message": (
+                "Option chain unavailable from NSE (often blocked off-hours/weekends). "
+                "Use Retry — Yahoo Finance fallback may still load strikes."
+            ),
         }
     pcr = compute_pcr(df)
     max_pain = compute_max_pain(df)

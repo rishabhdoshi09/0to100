@@ -35,6 +35,37 @@ def test_stock_workspace_combines_technicals_fundamentals_and_sources():
     assert result["sources"][0]["status"] == "FRESH"
 
 
+def test_stock_workspace_key_ratios_pe_and_sector_peers():
+    result = build_stock_workspace(
+        "TEST",
+        scan_payload={
+            "records": [
+                {"symbol": "TEST", "sector": "Banking", "score": 70, "status": "Watch", "company": "Test"},
+                {"symbol": "AAA", "sector": "Banking", "score": 82, "status": "Ready", "company": "Alpha"},
+            ],
+        },
+        long_term_payload={"records": []},
+        raw_fundamentals={
+            "available": True,
+            "fetched_at": "2026-01-28T09:00:00+00:00",
+            "data": {
+                "key_ratios": [{"name": "Stock P/E", "value": "21.2"}],
+                "peer_comparison": [{"": "Peer Ltd", "P/E": "19", "CMP": "400"}],
+            },
+            "section_as_of": {},
+        },
+        frame=[],
+        news=[],
+        fno_payload={},
+        now=datetime(2026, 1, 28, tzinfo=timezone.utc),
+    )
+    pe = next(item for item in result["fundamentals"]["metrics"] if item["key"] == "pe")
+    assert pe["value"] == 21.2
+    assert result["fundamentals"]["key_ratios"][0]["name"] == "Stock P/E"
+    assert result["peers"]["sector_peers"][0]["symbol"] == "AAA"
+    assert result["peers"]["screener_table"][0]["P/E"] == "19"
+
+
 def test_stock_workspace_stays_honest_when_data_is_missing():
     result = build_stock_workspace(
         "EMPTY",

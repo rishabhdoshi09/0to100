@@ -140,6 +140,18 @@ def flatten_screener_snapshot(raw: Mapping[str, Any] | None) -> dict[str, Any]:
         "current_price": _key_ratio_lookup(data, "current price", "cmp", "price"),
         "book_value": _key_ratio_lookup(data, "book value", "bvps"),
     }
+    if flat.get("_direct_pe") is None:
+        pe = _key_ratio_lookup(
+            data,
+            "stock p/e",
+            "p/e",
+            "pe ratio",
+            "price to earning",
+            "price/earning",
+            "price earning",
+        )
+        if pe is not None:
+            flat["_direct_pe"] = pe
 
     for src, dst in (
         ("pe", "_direct_pe"),

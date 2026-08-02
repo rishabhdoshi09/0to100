@@ -81,9 +81,23 @@ export type StockWorkspace = {
     quality_factors: string[]
     risk_flags: string[]
     metrics: IntelligenceMetric[]
+    key_ratios?: Array<{ name: string; value: string }>
     company_about: string
     fetched_at: string
     section_as_of: Record<string, string>
+  }
+  peers?: {
+    available: boolean
+    sector: string
+    screener_table: Array<Record<string, unknown>>
+    sector_peers: Array<{
+      symbol: string
+      company: string
+      score: number
+      status: string
+      sector: string
+    }>
+    note?: string
   }
   scanner: ScanRecord
   long_term: LongTermRecord

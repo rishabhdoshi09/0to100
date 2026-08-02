@@ -22,8 +22,8 @@ export const fetchOperation = (operationId: string): Promise<OperationRecord> =>
     headers: { Accept: 'application/json' },
   }).then((response) => json<OperationRecord>(response))
 
-export const fetchMarketOptions = (symbol: string): Promise<OptionsChainPayload> =>
-  fetch(`/api/market/options/${encodeURIComponent(symbol)}`, {
+export const fetchMarketOptions = (symbol: string, force = false): Promise<OptionsChainPayload> =>
+  fetch(`/api/market/options/${encodeURIComponent(symbol)}?force=${force ? 'true' : 'false'}`, {
     headers: { Accept: 'application/json' },
   }).then((response) => json<OptionsChainPayload>(response))
 

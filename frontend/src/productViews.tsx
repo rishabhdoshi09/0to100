@@ -252,11 +252,19 @@ export function ProductStockIntelligenceView(props: ViewProps) {
 
   const [optionsChain, setOptionsChain] = useState<OptionsChainPayload | null>(null)
   const [optionsLoading, setOptionsLoading] = useState(false)
+  const [optionsForce, setOptionsForce] = useState(0)
 
-  const hasFno = Boolean(workspace?.fno && Object.keys(workspace.fno).length > 0)
-  const intelTabs = hasFno
-    ? ['Overview', 'Chart', 'Financials', 'Ratios', 'Ownership', 'Options', 'Events', 'Peers', 'Evidence']
-    : ['Overview', 'Chart', 'Financials', 'Ratios', 'Ownership', 'Events', 'Peers', 'Evidence']
+  const intelTabs = [
+    'Overview',
+    'Chart',
+    'Financials',
+    'Ratios',
+    'Ownership',
+    'Options',
+    'Events',
+    'Peers',
+    'Evidence',
+  ]
 
   const fundamentalsBusy = busy === 'FETCH_FUNDAMENTALS' || busy === 'REFRESH_STOCK_FUNDAMENTALS'
 
@@ -324,13 +332,14 @@ export function ProductStockIntelligenceView(props: ViewProps) {
   }, [selected])
 
   useEffect(() => {
-    if (tab !== 'Options' || !selected || !hasFno) return
+    if (tab !== 'Options' || !selected) return
     setOptionsLoading(true)
-    fetchMarketOptions(selected)
+    const force = optionsForce > 0
+    fetchMarketOptions(selected, force)
       .then((payload) => setOptionsChain(payload))
       .catch(() => setOptionsChain({ available: false, message: 'Option chain fetch failed' }))
       .finally(() => setOptionsLoading(false))
-  }, [tab, selected, hasFno])
+  }, [tab, selected, optionsForce])
 
   const runAction = async (control: ControlName | 'REFRESH_STOCK_FUNDAMENTALS') => {
     if (!selected) return
@@ -443,11 +452,25 @@ export function ProductStockIntelligenceView(props: ViewProps) {
       )}
 
       {tab === 'Financials' && (
-        <Panel title="FUNDAMENTALS — CURRENT SNAPSHOT" subtitle={`${workspace?.fundamentals.coverage_pct ?? 0}% coverage · fetched ${workspace?.fundamentals.fetched_at || 'unknown'}`}>
-          {(workspace?.fundamentals.metrics || []).length === 0
-            ? <EmptyState title="No fundamental snapshot" detail={fundamentalsBusy ? 'Loading from Screener.in…' : 'Tap Retry fundamentals above.'} />
-            : <div className="explain-metric-grid fundamentals">{(workspace?.fundamentals.metrics || []).map((metric) => <MetricExplanation metric={metric} key={metric.key} />)}</div>}
-        </Panel>
+        <>
+          {(workspace?.fundamentals.key_ratios?.length ?? 0) > 0 && (
+            <Panel title="SCREENER KEY RATIOS" subtitle="Top-of-page ratios from Screener.in (includes P/E when published)">
+              <div className="explain-metric-grid fundamentals">
+                {workspace?.fundamentals.key_ratios?.map((row) => (
+                  <article className="explain-metric" key={row.name}>
+                    <span>{row.name}</span>
+                    <strong>{row.value}</strong>
+                  </article>
+                ))}
+              </div>
+            </Panel>
+          )}
+          <Panel title="FUNDAMENTALS — CURRENT SNAPSHOT" subtitle={`${workspace?.fundamentals.coverage_pct ?? 0}% coverage · fetched ${workspace?.fundamentals.fetched_at || 'unknown'}`}>
+            {(workspace?.fundamentals.metrics || []).length === 0
+              ? <EmptyState title="No fundamental snapshot" detail={fundamentalsBusy ? 'Loading from Screener.in…' : 'Tap Retry fundamentals above.'} />
+              : <div className="explain-metric-grid fundamentals">{(workspace?.fundamentals.metrics || []).map((metric) => <MetricExplanation metric={metric} key={metric.key} />)}</div>}
+          </Panel>
+        </>
       )}
 
       {tab === 'Ratios' && (
@@ -482,10 +505,18 @@ export function ProductStockIntelligenceView(props: ViewProps) {
       )}
 
       {tab === 'Options' && (
-        <Panel title="OPTION CHAIN" subtitle="Nearest expiry · NSE public API · context only">
+        <Panel title="OPTION CHAIN" subtitle="Nearest expiry · NSE then Yahoo fallback · context only">
+          {(!workspace?.fno || !Object.keys(workspace.fno).length) && (
+            <p className="panel-copy">This symbol may not be in the current F&O universe — chain fetch still attempts NSE/Yahoo if contracts exist.</p>
+          )}
+          <div className="inline-actions">
+            <button type="button" disabled={optionsLoading} onClick={() => setOptionsForce((n) => n + 1)}>
+              {optionsLoading ? 'Loading…' : 'Retry option chain'}
+            </button>
+          </div>
           {optionsLoading && <p className="panel-copy">Loading option chain for {selected}…</p>}
           {!optionsLoading && !optionsChain?.available && (
-            <EmptyState title="Options unavailable" detail={optionsChain?.message || 'NSE option chain not available for this symbol right now.'} />
+            <EmptyState title="Options unavailable" detail={optionsChain?.message || 'NSE often blocks off-hours — retry or check on a trading day.'} />
           )}
           {optionsChain?.available && (
             <div className="fact-grid">
@@ -528,10 +559,41 @@ export function ProductStockIntelligenceView(props: ViewProps) {
       )}
 
       {tab === 'Peers' && (
-        <Panel title="PEERS" subtitle="Sector context from scanner universe">
-          <p className="panel-copy">Sector: <strong>{workspace?.sector || '—'}</strong>. Use Compare to evaluate peers side-by-side.</p>
-          {onCompare && <button type="button" onClick={() => onCompare(selected)}>Open Compare with {selected}</button>}
-        </Panel>
+        <div className="stock-context-grid">
+          <Panel title="PEERS" subtitle={workspace?.peers?.note || 'Sector context from scan + Screener'}>
+            <p className="panel-copy">Sector: <strong>{workspace?.peers?.sector || workspace?.sector || '—'}</strong></p>
+            {workspace?.peers?.sector_peers?.length
+              ? (
+                <div className="fno-table wide-table">
+                  <div className="fno-head"><span>SYMBOL</span><span>SCORE</span><span>STATUS</span></div>
+                  {workspace.peers.sector_peers.map((peer) => (
+                    <div className="fno-row" key={peer.symbol} style={{ display: 'grid', cursor: 'pointer' }} onClick={() => onCompare?.(peer.symbol)}>
+                      <strong>{peer.symbol}</strong>
+                      <span>{peer.score}</span>
+                      <span>{peer.status || '—'}</span>
+                    </div>
+                  ))}
+                </div>
+              )
+              : <EmptyState title="No sector peers in scan" detail="Run a whole-market scan, or open a symbol in a mapped sector (e.g. banking, IT)." />}
+            {onCompare && <button type="button" onClick={() => onCompare(selected)}>Compare {selected} with another symbol</button>}
+          </Panel>
+          <Panel title="SCREENER PEER TABLE" subtitle="From fundamentals cache when Screener publishes it">
+            {workspace?.peers?.screener_table?.length
+              ? (
+                <div className="fno-table wide-table">
+                  {workspace.peers.screener_table.slice(0, 12).map((row, idx) => (
+                    <div className="fno-row" key={idx} style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr', gap: '8px' }}>
+                      <span>{String(row[''] || row.Company || row.company || row.name || '—')}</span>
+                      <span>{String(row['P/E'] || row.PE || row.pe || '—')}</span>
+                      <span>{String(row.CMP || row.cmp || row.Price || '—')}</span>
+                    </div>
+                  ))}
+                </div>
+              )
+              : <EmptyState title="Screener peer table not loaded" detail="Retry fundamentals — peer comparison is scraped from Screener.in with the company page." />}
+          </Panel>
+        </div>
       )}
 
       {tab === 'Evidence' && (
