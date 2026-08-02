@@ -23,6 +23,8 @@ def test_terminal_controls_have_no_live_broker_or_order_action():
         "RUN_CYCLE_NOW",
         "REFRESH_DATA_NOW",
         "RUN_FULL_UNIVERSE_BACKTEST_NOW",
+        "RUN_US_DATA_PREPARE_NOW",
+        "RUN_US_SCAN_NOW",
         "PAUSE_NEW_PAPER_ENTRIES",
         "RESUME_NEW_PAPER_ENTRIES",
     }
@@ -40,6 +42,8 @@ def test_market_controls_are_dispatched_outside_paper_autonomy():
         "REFRESH_FNO_NOW": "FNO_REFRESH",
         "REFRESH_DATA_NOW": "DATA_PREPARE",
         "RUN_FULL_UNIVERSE_BACKTEST_NOW": "FULL_UNIVERSE_BACKTEST",
+        "RUN_US_DATA_PREPARE_NOW": "US_DATA_PREPARE",
+        "RUN_US_SCAN_NOW": "US_MARKET_SCAN",
     }
     assert terminal_api._AUTONOMY_CONTROLS == {
         "RUN_CYCLE_NOW",

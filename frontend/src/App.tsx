@@ -14,6 +14,7 @@ import {
 import { MarketSidebar } from './MarketSidebar'
 import { EducationView } from './educationViews'
 import { NewsView, OperationsRibbon, FnoView } from './marketViews'
+import { UsMarketHome, UsScannerView, UsStockView } from './usMarketViews'
 import { ProductStockIntelligenceView } from './productViews'
 import { ResearchDataView } from './researchData'
 import {
@@ -152,6 +153,9 @@ const pageTitles: Record<string, string> = {
   'Market Overview': 'Market Overview',
   'News & Events': 'News & Events',
   Education: 'Education',
+  'US Market': 'US Market',
+  'US Scanner': 'US Scanner',
+  'US Stock': 'US Stock',
   'Research Data': 'Research Data',
   'F&O Desk': 'F&O Desk',
   'Paper Portfolio': 'My Holdings',
@@ -175,6 +179,9 @@ const pageSubtitles: Record<string, string> = {
   'Market Overview': 'Regime, breadth, volatility and sector leadership.',
   'News & Events': 'Dated market context with source health.',
   Education: 'Crunched news + macro/micro teach-ins for the share market — never invented blogs, never a signal.',
+  'US Market': 'US retail plane — NASDAQ listings, Yahoo EOD, S&P-scoped scan, paper autopilot only.',
+  'US Scanner': 'US setups from Yahoo daily bars · liquid quality floor · no options overlay.',
+  'US Stock': 'US ticker workspace — daily chart + last scan setup. Fundamentals/options marked unavailable.',
   'Research Data': 'Verified snapshots, data platform jobs, and evidence uploads.',
   'F&O Desk': 'Mapped futures plus live OI / IV / PCR / max-pain context for a selected underlying.',
   'Paper Portfolio': 'Demat holdings + paper book — sync Zerodha or paste your shares.',
@@ -447,6 +454,15 @@ function App() {
           setActive={setActive}
         />
       )
+    }
+    if (active === 'US Market') {
+      return <UsMarketHome setActive={setActive} setSelected={setSelected} />
+    }
+    if (active === 'US Scanner') {
+      return <UsScannerView setActive={setActive} setSelected={setSelected} />
+    }
+    if (active === 'US Stock') {
+      return <UsStockView symbol={selected} setSymbol={setSelected} />
     }
     if (active === 'F&O Desk') return <FnoView {...viewProps} />
     if (active === 'System Health' || active === 'Automation') return <AutomationView {...viewProps} />

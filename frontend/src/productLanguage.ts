@@ -93,6 +93,32 @@ export const PAGE_GUIDE: Record<string, PageGuide> = {
     action: 'Read the teach point, open the source when present, then review linked symbols in Stock Intelligence.',
     doesNot: 'Education never invents blogs and never places or recommends orders.',
   },
+  'US Market': {
+    title: 'US Market',
+    purpose: 'Retail US plane — NASDAQ Trader listings, Yahoo EOD cache, liquid scan scope, paper autopilot only.',
+    questions: [
+      'Is US history cache ready?',
+      'Which scope was scanned (S&P 500 default)?',
+      'Are quotes delayed free-feed prints?',
+      'Am I treating paper autopilot as live?',
+    ],
+    action: 'Prepare US history, run US scan, open setups in US Stock.',
+    doesNot: 'No live US broker orders and no US options desk.',
+  },
+  'US Scanner': {
+    title: 'US Scanner',
+    purpose: 'Same setup engine as NSE, pointed at US equities with S&P relative strength and a liquid-name quality floor.',
+    questions: ['Is the setup above the $5 / turnover floor?', 'What is entry/stop/target?', 'Is chase risk flagged?'],
+    action: 'Open the ticker in US Stock and verify the Yahoo daily chart.',
+    doesNot: 'Scanner output is not a live US order ticket.',
+  },
+  'US Stock': {
+    title: 'US Stock',
+    purpose: 'Ticker workspace with Yahoo daily history and last scan setup — fundamentals/options marked unavailable when missing.',
+    questions: ['Do daily bars exist?', 'Is there a scan row?', 'What exactly is unavailable?'],
+    action: 'Use chart + setup as context only; prepare history if bars are empty.',
+    doesNot: 'Does not invent US fundamentals, Greeks, or broker fills.',
+  },
   'F&O Desk': {
     title: 'F&O Coverage',
     purpose: 'Maps current futures eligibility, then shows live nearest-expiry OI, IV, PCR and max pain for a selected name, plus any saved EOD history.',

@@ -742,6 +742,104 @@ def education_feed(min_impact: int = 40, limit: int = 40) -> dict:
     )
 
 
+@app.get("/api/us/dashboard")
+def us_dashboard() -> dict:
+    """US retail dashboard — listings, Yahoo EOD, scan, paper autopilot."""
+    from product import us_retail
+
+    return us_retail.dashboard()
+
+
+@app.get("/api/us/readiness")
+def us_readiness() -> dict:
+    from product import us_retail
+
+    return us_retail.readiness()
+
+
+@app.get("/api/us/overview")
+def us_overview() -> dict:
+    from product import us_retail
+
+    return us_retail.overview()
+
+
+@app.get("/api/us/scan")
+def us_scan() -> dict:
+    from product import us_retail
+
+    return us_retail.scan_payload()
+
+
+@app.get("/api/us/paper")
+def us_paper() -> dict:
+    from product import us_retail
+
+    return us_retail.paper_status()
+
+
+@app.get("/api/us/stock/{symbol}")
+def us_stock(symbol: str) -> dict:
+    from product import us_retail
+
+    return us_retail.stock_workspace(symbol)
+
+
+@app.get("/api/us/chart/{symbol}")
+def us_chart(symbol: str, limit: int = 220) -> dict:
+    """US OHLCV chart — disk cache first, Yahoo on miss. Never invents bars."""
+    from data import us_history_store as hist
+
+    clean = symbol.strip().upper()
+    if not clean or len(clean) > 16:
+        raise HTTPException(status_code=400, detail="Invalid US symbol")
+    frame = hist.get_ohlcv(clean, allow_network=True)
+    readiness = hist.status()
+    if frame is None or len(frame) == 0:
+        return {
+            "symbol": clean,
+            "market": "US",
+            "bars": [],
+            "history": readiness,
+            "source": "yfinance",
+            "message": "No US history available for this symbol",
+        }
+    frame = frame.tail(max(20, min(int(limit), 500))).copy()
+    bars = []
+    for index, row in frame.iterrows():
+        stamp = getattr(index, "date", lambda: index)()
+        bars.append({
+            "time": str(stamp),
+            "open": float(row["open"]),
+            "high": float(row["high"]),
+            "low": float(row["low"]),
+            "close": float(row["close"]),
+            "volume": float(row.get("volume", 0.0) or 0.0),
+        })
+    return {
+        "symbol": clean,
+        "market": "US",
+        "bars": bars,
+        "history": readiness,
+        "source": "yfinance",
+    }
+
+
+@app.get("/api/us/education")
+def us_education() -> dict:
+    from product import us_retail
+
+    cards = us_retail.education_concepts()
+    return {
+        "schema_version": 1,
+        "market": "US",
+        "available": True,
+        "places_orders": False,
+        "honesty": "Fixed US teach-ins — never invented articles.",
+        "cards": cards,
+    }
+
+
 @app.get("/api/fno")
 def fno_status() -> dict:
     return _fno_payload()
@@ -793,6 +891,8 @@ _OPERATION_CONTROLS = {
     "REFRESH_FNO_NOW": "FNO_REFRESH",
     "REFRESH_DATA_NOW": "DATA_PREPARE",
     "RUN_FULL_UNIVERSE_BACKTEST_NOW": "FULL_UNIVERSE_BACKTEST",
+    "RUN_US_DATA_PREPARE_NOW": "US_DATA_PREPARE",
+    "RUN_US_SCAN_NOW": "US_MARKET_SCAN",
 }
 _AUTONOMY_CONTROLS = {
     "RUN_CYCLE_NOW",

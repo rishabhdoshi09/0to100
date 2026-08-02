@@ -772,6 +772,90 @@ export const fetchEducation = (minImpact = 40, limit = 40): Promise<EducationFee
     { headers: { Accept: 'application/json' } },
   ).then((response) => json<EducationFeed>(response))
 
+export type UsScanRecord = {
+  symbol: string
+  company?: string
+  status?: string
+  verdict?: string
+  price?: number
+  score?: number
+  entry?: number
+  stop?: number
+  target?: number
+  signals?: string[]
+  reasons?: string[]
+  chase_risk?: boolean
+  fno_available?: boolean
+  market?: string
+  currency?: string
+}
+
+export type UsDashboard = {
+  schema_version: number
+  market: string
+  generated_at: string
+  honesty?: string
+  places_orders?: boolean
+  readiness: {
+    state: string
+    score: number
+    recommended_action: string
+    universe_size: number
+    history: {
+      ready?: boolean
+      symbols?: number
+      latest_date?: string
+      source?: string
+    }
+    lanes: Array<{
+      key: string
+      label: string
+      status: string
+      available: boolean
+      details: string
+      action?: string
+    }>
+  }
+  overview: {
+    session_open: boolean
+    session_label: string
+    timezone?: string
+    currency: string
+    indices: Array<{ symbol: string; label: string; price?: number | null; available: boolean }>
+  }
+  scan: {
+    available: boolean
+    scanned_at: string
+    scope: string
+    universe_size: number
+    summary: Record<string, number>
+    records: UsScanRecord[]
+    honesty?: string
+  }
+  paper?: Record<string, unknown>
+}
+
+export type UsStockWorkspace = {
+  available: boolean
+  symbol: string
+  company?: string
+  bars: Array<{ time: string; open: number; high: number; low: number; close: number; volume: number }>
+  history_source?: string
+  scan_row?: UsScanRecord | null
+  fundamentals?: { available: boolean; message?: string }
+  options?: { available: boolean; message?: string }
+  honesty?: string
+  places_orders?: boolean
+}
+
+export const fetchUsDashboard = (): Promise<UsDashboard> =>
+  fetch('/api/us/dashboard', { headers: { Accept: 'application/json' } })
+    .then((response) => json<UsDashboard>(response))
+
+export const fetchUsStock = (symbol: string): Promise<UsStockWorkspace> =>
+  fetch(`/api/us/stock/${encodeURIComponent(symbol)}`, { headers: { Accept: 'application/json' } })
+    .then((response) => json<UsStockWorkspace>(response))
+
 export const fetchCorporateActionsStatus = (): Promise<CorporateActionsStatus> =>
   fetch('/api/corporate-actions', { headers: { Accept: 'application/json' } })
     .then((response) => json<CorporateActionsStatus>(response))

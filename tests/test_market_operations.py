@@ -82,6 +82,14 @@ def test_bootstrap_queues_missing_product_inputs_without_network(tmp_path: Path,
         "status",
         lambda load_cache=False: {"ready": True, "sessions": 500, "symbols": 3000},
     )
+    monkeypatch.setattr(
+        "data.us_history_store.status",
+        lambda: {"ready": True, "symbols": 200, "latest_date": "2026-08-01"},
+    )
+    # Fresh US scan artifact under patched ROOT → US_MARKET_SCAN not due.
+    us_scan = tmp_path / "logs" / "product" / "latest_us_scan.json"
+    us_scan.parent.mkdir(parents=True, exist_ok=True)
+    us_scan.write_text("{}", encoding="utf-8")
 
     store = OperationStore(tmp_path / "market_ops" / "jobs.db")
     worker = MO.MarketOperationsWorker(store)

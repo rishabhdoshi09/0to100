@@ -20,6 +20,12 @@ const SECONDARY_NAV = [
   ['◌', 'System Health', 'System Health'],
 ] as const
 
+const US_NAV = [
+  ['⌂', 'US Market', 'US Home'],
+  ['◎', 'US Scanner', 'US Scanner'],
+  ['◉', 'US Stock', 'US Stock'],
+] as const
+
 function Logo() {
   return <div className="brand-mark" aria-hidden="true"><span /><span /><span /></div>
 }
@@ -66,7 +72,8 @@ export function MarketSidebar({
     <aside className="sidebar">
       <div className="brand"><Logo /><div><strong>QUANTTERM</strong><small>MARKET RADAR</small></div></div>
       <nav>
-        <NavigationGroup label="DISCOVERY" rows={PRIMARY_NAV} active={active} setActive={setActive} />
+        <NavigationGroup label="NSE INDIA" rows={PRIMARY_NAV} active={active} setActive={setActive} />
+        <NavigationGroup label="US MARKET" rows={US_NAV} active={active} setActive={setActive} />
         <NavigationGroup label="TOOLS & EVIDENCE" rows={SECONDARY_NAV} active={active} setActive={setActive} />
       </nav>
       <div className="sidebar-spacer" />

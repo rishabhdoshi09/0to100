@@ -29,6 +29,8 @@ NEWS_REFRESH = "NEWS_REFRESH"
 FNO_REFRESH = "FNO_REFRESH"
 DATA_PREPARE = "DATA_PREPARE"
 FULL_UNIVERSE_BACKTEST = "FULL_UNIVERSE_BACKTEST"
+US_DATA_PREPARE = "US_DATA_PREPARE"
+US_MARKET_SCAN = "US_MARKET_SCAN"
 
 LANES = {
     MARKET_SCAN: "market_scan",
@@ -38,6 +40,9 @@ LANES = {
     FNO_REFRESH: "data",
     DATA_PREPARE: "data",
     FULL_UNIVERSE_BACKTEST: "research",
+    # Separate US lane so NSE scans are never blocked by Yahoo US prepare.
+    US_DATA_PREPARE: "us_market",
+    US_MARKET_SCAN: "us_market",
 }
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -449,6 +454,95 @@ class MarketOperationsWorker:
         fno = self._run_fno(operation)
         return {"history": history, "fno": fno}
 
+    def _run_us_data_prepare(self, operation: dict[str, Any]) -> dict[str, Any]:
+        """Warm US Yahoo EOD cache for the retail default scope (S&P 500)."""
+        import os
+
+        operation_id = str(operation["operation_id"])
+        scope = str(
+            (operation.get("payload") or {}).get("scope")
+            or os.getenv("QT_US_SCAN_SCOPE", "S&P 500")
+        ).strip() or "S&P 500"
+        self._progress(
+            operation_id,
+            "US_UNIVERSE",
+            f"Loading US universe scope · {scope}",
+        )
+        from scan.us_market_scan_service import _scope_universe
+        from data import us_history_store as hist
+
+        names, scope_label = _scope_universe(scope)
+        symbols = sorted(names.keys())
+        self._progress(
+            operation_id,
+            "US_HISTORY",
+            f"Downloading Yahoo daily bars for {len(symbols):,} US symbols · {scope_label}",
+            0,
+            max(1, len(symbols)),
+        )
+
+        def progress(current: int, total: int) -> None:
+            self._progress(
+                operation_id,
+                "US_HISTORY",
+                f"US history cache · {int(current):,}/{int(total):,} symbols",
+                int(current),
+                int(total),
+            )
+
+        result = hist.prepare_history(symbols, progress=progress, scope=scope_label)
+        result["market"] = "US"
+        result["places_orders"] = False
+        if not result.get("ready"):
+            raise OperationBlocked(
+                "US Yahoo history cache is still incomplete",
+                code="US_HISTORY_NOT_READY",
+                result=result,
+            )
+        return result
+
+    def _run_us_market_scan(self, operation: dict[str, Any]) -> dict[str, Any]:
+        import os
+
+        operation_id = str(operation["operation_id"])
+        scope = str(
+            (operation.get("payload") or {}).get("scope")
+            or os.getenv("QT_US_SCAN_SCOPE", "S&P 500")
+        ).strip() or "S&P 500"
+        self._progress(
+            operation_id,
+            "US_SCANNING",
+            f"Scanning US market · scope {scope}",
+            0,
+            1,
+        )
+        from scan.us_market_scan_service import run_us_market_scan
+
+        def progress(current: int, total: int) -> None:
+            self._progress(
+                operation_id,
+                "US_SCANNING",
+                f"Scanning US · {int(current):,}/{int(total):,} stocks",
+                int(current),
+                int(total),
+            )
+
+        report = run_us_market_scan(scope=scope, progress_callback=progress, save=True)
+        result = _operation_result(report)
+        if not report.ok:
+            code = str(report.error_code or "US_SCAN_FAILED")
+            message = str(report.error_message or "US market scan failed")
+            if report.status == "DATA_UNAVAILABLE":
+                raise OperationBlocked(message, code=code, result=result)
+            raise RuntimeError(f"{code}: {message}")
+        payload = dict(report.payload or {})
+        result["summary"] = dict(payload.get("summary") or {})
+        result["records"] = len(payload.get("records") or [])
+        result["scope"] = report.scope
+        result["market"] = "US"
+        result["places_orders"] = False
+        return result
+
     def _run_full_universe_backtest(self, operation: dict[str, Any]) -> dict[str, Any]:
         """Walk-forward signal backtest on 100% of bhav EQ symbols. Never places orders."""
         operation_id = str(operation["operation_id"])
@@ -529,6 +623,10 @@ class MarketOperationsWorker:
             return self._run_fno(operation)
         if kind == DATA_PREPARE:
             return self._run_data_prepare(operation)
+        if kind == US_DATA_PREPARE:
+            return self._run_us_data_prepare(operation)
+        if kind == US_MARKET_SCAN:
+            return self._run_us_market_scan(operation)
         if kind == FULL_UNIVERSE_BACKTEST:
             return self._run_full_universe_backtest(operation)
         raise RuntimeError(f"No market-operations handler for {kind}")
@@ -617,6 +715,25 @@ class MarketOperationsWorker:
             _item, created = self.store.enqueue(LONG_TERM_SCAN, lane=LANES[LONG_TERM_SCAN], requested_by="bootstrap")
             if created:
                 queued.append(LONG_TERM_SCAN)
+        # US retail plane — separate lane; default liquid S&P 500 scope.
+        try:
+            from data import us_history_store as us_hist
+
+            us_ready = bool(us_hist.status().get("ready"))
+        except Exception:
+            us_ready = False
+        if not us_ready:
+            _item, created = self.store.enqueue(
+                US_DATA_PREPARE, lane=LANES[US_DATA_PREPARE], requested_by="bootstrap",
+            )
+            if created:
+                queued.append(US_DATA_PREPARE)
+        elif _stale(ROOT / "logs" / "product" / "latest_us_scan.json", SCAN_FRESH_S):
+            _item, created = self.store.enqueue(
+                US_MARKET_SCAN, lane=LANES[US_MARKET_SCAN], requested_by="bootstrap",
+            )
+            if created:
+                queued.append(US_MARKET_SCAN)
         return queued
 
     def run(self) -> int:
