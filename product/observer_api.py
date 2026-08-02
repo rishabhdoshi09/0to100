@@ -10,7 +10,7 @@ import sys
 import time
 from typing import Any
 
-from fastapi import HTTPException
+from fastapi import Body, HTTPException, Query
 
 import terminal_api as core
 from product.workspace import SCANNER_MODES, build_command_center_state, scanner_rows
@@ -124,6 +124,17 @@ def scanner_workspace(mode: str) -> dict[str, Any]:
         long_term_payload=long_term,
         conviction_rows=core._conviction(scan, market),
     )
+    from product.radar_workspace import enrich_long_term_row, enrich_scanner_rows
+
+    scanned_at = (
+        long_term.get("scanned_at", "")
+        if canonical == "Long-Term"
+        else scan.get("scanned_at", "")
+    )
+    if canonical == "Long-Term":
+        enriched = [enrich_long_term_row(dict(row), scanned_at=scanned_at) for row in rows]
+    else:
+        enriched = enrich_scanner_rows(rows, scanned_at=scanned_at)
     source = (
         "long_term"
         if canonical == "Long-Term"
@@ -131,19 +142,82 @@ def scanner_workspace(mode: str) -> dict[str, Any]:
         if canonical == "Conviction"
         else "market_scan"
     )
-    scanned_at = (
-        long_term.get("scanned_at", "")
-        if canonical == "Long-Term"
-        else scan.get("scanned_at", "")
-    )
     return {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "mode": canonical,
         "source": source,
         "scanned_at": scanned_at,
         "universe_size": int(scan.get("universe_size", 0) or 0),
-        "rows": rows,
+        "rows": enriched,
     }
+
+
+def radar_home_workspace() -> dict[str, Any]:
+    market = core._market_payload()
+    scan = core._scan_payload()
+    long_term = core._long_term_payload()
+    from product.radar_workspace import build_radar_home
+    return build_radar_home(
+        scan_payload=scan,
+        long_term_payload=long_term,
+        market=market,
+    )
+
+
+def compare_workspace(symbols: str = Query("", description="Comma-separated NSE symbols")) -> dict[str, Any]:
+    from product.compare_workspace import build_compare_workspace
+    parts = [item.strip() for item in str(symbols or "").split(",") if item.strip()]
+    if not parts:
+        raise HTTPException(status_code=400, detail="Provide symbols as comma-separated list")
+    if len(parts) > 5:
+        raise HTTPException(status_code=400, detail="Compare up to 5 symbols at once")
+    return build_compare_workspace(parts)
+
+
+def watchlist_workspace() -> dict[str, Any]:
+    from product.watchlist_store import list_items
+    from product.radar_workspace import enrich_scan_row
+
+    scan = core._scan_payload()
+    scan_at = str(scan.get("scanned_at", "") or "")
+    scan_map = {str(r.get("symbol", "")).upper(): r for r in scan.get("records", []) or []}
+    items = []
+    for row in list_items():
+        sym = str(row.get("symbol", "")).upper()
+        scan_row = scan_map.get(sym)
+        enriched = enrich_scan_row(scan_row or {"symbol": sym}, scanned_at=scan_at) if scan_row else {"symbol": sym}
+        items.append({**row, "snapshot": enriched})
+    return {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "items": items,
+        "count": len(items),
+    }
+
+
+def watchlist_add(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    from product.watchlist_store import add_item
+    symbol = str(payload.get("symbol", "") or "")
+    try:
+        item = add_item(
+            symbol,
+            buy_low=payload.get("buy_zone_low"),
+            buy_high=payload.get("buy_zone_high"),
+            target=payload.get("target_price"),
+            stop=payload.get("stop_price"),
+            notes=str(payload.get("notes", "") or ""),
+            added_price=payload.get("added_price"),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"accepted": True, "item": item}
+
+
+def watchlist_remove(row_id: int) -> dict[str, Any]:
+    from product.watchlist_store import remove_item
+    removed = remove_item(row_id)
+    if not removed:
+        raise HTTPException(status_code=404, detail="Watchlist item not found")
+    return {"accepted": True, "removed_id": row_id}
 
 
 def ensure_observer_worker() -> dict[str, Any]:
@@ -208,4 +282,34 @@ def install(app) -> None:
         scanner_workspace,
         methods=["GET"],
         name="scanner_workspace",
+    )
+    app.add_api_route(
+        "/api/radar-home",
+        radar_home_workspace,
+        methods=["GET"],
+        name="radar_home_workspace",
+    )
+    app.add_api_route(
+        "/api/compare",
+        compare_workspace,
+        methods=["GET"],
+        name="compare_workspace",
+    )
+    app.add_api_route(
+        "/api/watchlist",
+        watchlist_workspace,
+        methods=["GET"],
+        name="watchlist_workspace",
+    )
+    app.add_api_route(
+        "/api/watchlist",
+        watchlist_add,
+        methods=["POST"],
+        name="watchlist_add",
+    )
+    app.add_api_route(
+        "/api/watchlist/{row_id}",
+        watchlist_remove,
+        methods=["DELETE"],
+        name="watchlist_remove",
     )
