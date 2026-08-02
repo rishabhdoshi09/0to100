@@ -12,6 +12,8 @@ export default defineConfig({
     port: 5173,
     proxy: {
       '/api': 'http://127.0.0.1:8765',
+      '/reports': 'http://127.0.0.1:8766',
+      '/evidence': 'http://127.0.0.1:8766',
     },
   },
   build: {

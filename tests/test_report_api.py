@@ -26,6 +26,21 @@ def test_pdf_response_rejects_non_pdf(tmp_path: Path):
         raise AssertionError("non-PDF artifact was accepted")
 
 
+def test_pdf_response_inline_by_default(tmp_path: Path):
+    path = tmp_path / "sample.pdf"
+    path.write_bytes(b"%PDF-1.4 test")
+    response = report_api._pdf_response(path)
+    assert "inline" in response.headers["content-disposition"]
+    assert response.media_type == "application/pdf"
+
+
+def test_pdf_response_attachment_when_download(tmp_path: Path):
+    path = tmp_path / "sample.pdf"
+    path.write_bytes(b"%PDF-1.4 test")
+    response = report_api._pdf_response(path, download=True)
+    assert "attachment" in response.headers["content-disposition"]
+
+
 def test_template_endpoint_returns_csv():
     response = report_api.evidence_template("financial_history")
     assert response.media_type == "text/csv"

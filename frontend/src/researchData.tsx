@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useState } from 'react'
 import { fetchStockFundamentals } from './productApi'
 
-const reportBase = `${window.location.protocol}//${window.location.hostname}:8766`
+const reportBase = import.meta.env.DEV
+  ? ''
+  : `${window.location.protocol}//${window.location.hostname}:8766`
 
 type LinkItem = { label: string; url: string; official: string }
 type Requirement = {

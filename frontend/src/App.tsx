@@ -23,7 +23,13 @@ import {
 import type { DisplayDepth } from './productLanguage'
 import { addWatchlistItem } from './productApi'
 import { useScanRunner } from './scanRunner'
+import { ReportPdfViewer } from './ReportPdfViewer'
 import type { ChartBar, ControlName, DashboardPayload, OperationRecord } from './types'
+
+/** In dev, Vite proxies /reports and /evidence to the report API on :8766. */
+const reportApiBase = import.meta.env.DEV
+  ? ''
+  : `${window.location.protocol}//${window.location.hostname}:8766`
 
 function activeSeed(dashboard: DashboardPayload, kind: string): OperationRecord | null {
   const active = dashboard.operations.active.find((item) => item.kind === kind)
@@ -181,6 +187,7 @@ function App() {
   const [controlState, setControlState] = useState('')
   const [query, setQuery] = useState('')
   const [helpOpen, setHelpOpen] = useState(false)
+  const [pdfViewer, setPdfViewer] = useState<{ title: string; url: string } | null>(null)
   const [depth, setDepth] = useState<DisplayDepth>(() => {
     const saved = window.localStorage.getItem('quantterm-display-depth')
     return saved === 'professional' ? 'professional' : 'simple'
@@ -282,19 +289,22 @@ function App() {
     }
   }
 
-  const reportBase = `${window.location.protocol}//${window.location.hostname}:8766`
+  const reportBase = reportApiBase
+  const openReportViewer = (title: string, path: string) => {
+    setPdfViewer({ title, url: `${reportBase}${path}` })
+  }
   const openEquityReport = () => {
     if (!selected) {
       setControlState('Select a stock before generating an equity evidence PDF')
       return
     }
-    window.open(`${reportBase}/reports/equity/${encodeURIComponent(selected)}`, '_blank', 'noopener,noreferrer')
+    openReportViewer(`${selected} · equity evidence`, `/reports/equity/${encodeURIComponent(selected)}`)
   }
   const openBasketReport = () => {
-    window.open(`${reportBase}/reports/basket/long-term?limit=3`, '_blank', 'noopener,noreferrer')
+    openReportViewer('Top-3 long-term basket', '/reports/basket/long-term?limit=3')
   }
   const openInstitutionalReport = () => {
-    window.open(`${reportBase}/reports/market/institutional?days=30&symbol_limit=4`, '_blank', 'noopener,noreferrer')
+    openReportViewer('FII/DII market brief', '/reports/market/institutional?days=30&symbol_limit=4')
   }
 
   const addToCompare = (symbol: string) => {
@@ -396,9 +406,9 @@ function App() {
         <section className="page-title">
           <div><h1>{pageTitles[active] || active}</h1><p>{pageSubtitles[active]}</p></div>
           <div className="page-actions">
-            <button type="button" disabled={!selected} onClick={openEquityReport}>Equity Evidence PDF</button>
-            <button type="button" onClick={openBasketReport}>Top-3 Basket PDF</button>
-            <button type="button" onClick={openInstitutionalReport}>FII/DII Market Brief PDF</button>
+            <button type="button" disabled={!selected} onClick={openEquityReport}>View equity evidence PDF</button>
+            <button type="button" onClick={openBasketReport}>View top-3 basket PDF</button>
+            <button type="button" onClick={openInstitutionalReport}>View FII/DII market brief</button>
             <span>{controlState || (loading ? 'Loading real state…' : `Updated ${dashboard.generated_at ? new Date(dashboard.generated_at).toLocaleTimeString('en-IN') : '—'}`)}</span>
           </div>
         </section>
@@ -418,6 +428,12 @@ function App() {
         {renderView()}
       </main>
       <ExperienceHelpDrawer page={active} open={helpOpen} onClose={() => setHelpOpen(false)} />
+      <ReportPdfViewer
+        open={pdfViewer != null}
+        title={pdfViewer?.title ?? 'Research report'}
+        viewUrl={pdfViewer?.url ?? ''}
+        onClose={() => setPdfViewer(null)}
+      />
     </div>
   )
 }
