@@ -260,6 +260,19 @@ export function ProductStockIntelligenceView(props: ViewProps) {
 
   const fundamentalsBusy = busy === 'FETCH_FUNDAMENTALS' || busy === 'REFRESH_STOCK_FUNDAMENTALS'
 
+  const loadRatios = async () => {
+    if (!selected) {
+      setRatios([])
+      return
+    }
+    try {
+      const ratioPayload = await fetchSymbolRatios(selected)
+      setRatios(ratioPayload.ratios || [])
+    } catch {
+      setRatios([])
+    }
+  }
+
   const loadFundamentals = async (force: boolean) => {
     if (!selected) return
     const token = force ? 'REFRESH_STOCK_FUNDAMENTALS' : 'FETCH_FUNDAMENTALS'
@@ -268,6 +281,7 @@ export function ProductStockIntelligenceView(props: ViewProps) {
     try {
       const result = await fetchStockFundamentals(selected, force)
       setWorkspace(result.workspace)
+      await loadRatios()
     } catch (reason) {
       setFundamentalsError(
         reason instanceof Error ? reason.message : 'Fundamentals fetch failed — try Retry',
@@ -290,12 +304,7 @@ export function ProductStockIntelligenceView(props: ViewProps) {
     try {
       setWorkspace(await fetchStockIntelligence(selected))
       try { setPlan(await fetchTradePlan(selected)) } catch { setPlan(null) }
-      try {
-        const ratioPayload = await fetchSymbolRatios(selected)
-        setRatios(ratioPayload.ratios || [])
-      } catch {
-        setRatios([])
-      }
+      setRatios([])
       setError('')
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : 'Stock intelligence unavailable')
@@ -442,9 +451,11 @@ export function ProductStockIntelligenceView(props: ViewProps) {
       )}
 
       {tab === 'Ratios' && (
-        <Panel title="KEY RATIOS" subtitle="Computed centrally from cached fundamentals — missing inputs stay empty">
-          {ratios.length === 0
-            ? <EmptyState title="Ratios unavailable" detail="Fundamentals cache missing or inputs incomplete." />
+        <Panel title="KEY RATIOS" subtitle="From Screener.in cache — computed where inputs exist; top ratios used when tables are thin">
+          {fundamentalsBusy
+            ? <EmptyState title="Loading ratios" detail={`Fetching fundamentals for ${selected}…`} />
+            : ratios.length === 0
+            ? <EmptyState title="Ratios unavailable" detail="Tap Retry fundamentals above. Screener.in must respond (~1s per symbol)." />
             : <div className="explain-metric-grid">
               {ratios.map((row) => (
                 <article className={`explain-metric ${row.value == null ? 'unavailable' : ''}`} key={row.key}>

@@ -46,12 +46,16 @@ def symbol_ratios_workspace(symbol: str) -> dict[str, Any]:
     if not sym:
         raise HTTPException(status_code=400, detail="symbol required")
     from fundamentals.cache import FundamentalsCache
-    from data_platform.ratios import ratios_from_fundamentals
-    raw = FundamentalsCache().get(sym) or {}
+    from data_platform.ratios import flatten_screener_snapshot, ratios_from_fundamentals
+    cache = FundamentalsCache()
+    raw = cache.get(sym) or cache.get_any(sym) or {}
+    flat = flatten_screener_snapshot(raw) if raw else {}
     return {
         "symbol": sym,
         "ratios": ratios_from_fundamentals(sym, raw),
         "source": "fundamentals_cache+data_platform.ratios",
+        "fundamentals_cached": bool(raw),
+        "inputs_available": sorted(k for k, v in flat.items() if v is not None and not str(k).startswith("_")),
     }
 
 

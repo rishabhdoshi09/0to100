@@ -10,7 +10,7 @@ from data_platform.contracts import QualityStatus
 from data_platform.coverage import audit_symbol, remediation_for
 from data_platform.import_pipeline import import_fundamentals_json, inspect_file
 from data_platform.provider_registry import pick_provider, providers_for
-from data_platform.ratios import ratios_from_fundamentals
+from data_platform.ratios import flatten_screener_snapshot, ratios_from_fundamentals
 from data_platform.contracts import DataCapability
 
 
@@ -38,6 +38,36 @@ def test_ratios_operating_margin_formula():
     margin = next(r for r in rows if r["key"] == "operating_margin")
     assert margin["value"] == 20.0
     assert margin["formula"] == "operating_profit / revenue"
+
+
+def test_ratios_from_screener_snapshot():
+    snapshot = {
+        "key_ratios": [
+            {"name": "Stock P/E", "value": "25"},
+            {"name": "ROE", "value": "22%"},
+            {"name": "Debt to equity", "value": "0.20"},
+        ],
+        "profit_loss": [
+            {"": "Sales", "2024": 100, "2025": 120, "2026": 150},
+            {"": "Operating Profit", "2024": 20, "2025": 24, "2026": 30},
+            {"": "Net Profit", "2024": 10, "2025": 13, "2026": 18},
+        ],
+        "balance_sheet": [
+            {"": "Borrowings", "2024": 40, "2025": 35, "2026": 30},
+            {"": "Equity Capital", "2024": 100, "2025": 110, "2026": 120},
+        ],
+    }
+    flat = flatten_screener_snapshot(snapshot)
+    assert flat["revenue"] == 150
+    assert flat["_direct_pe"] == 25.0
+    assert flat["_direct_roe"] == 22.0
+    rows = ratios_from_fundamentals("TEST", snapshot)
+    pe = next(r for r in rows if r["key"] == "pe")
+    roe = next(r for r in rows if r["key"] == "roe")
+    margin = next(r for r in rows if r["key"] == "operating_margin")
+    assert pe["value"] == 25.0
+    assert roe["value"] == 22.0
+    assert margin["value"] == 20.0
 
 
 def test_coverage_audit_empty_symbol():

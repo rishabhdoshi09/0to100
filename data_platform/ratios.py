@@ -51,9 +51,119 @@ def _ratio(
     )
 
 
+def _row_latest(data: Mapping[str, Any], section: str, *needles: str) -> float | None:
+    """Latest numeric cell from a Screener.in table section (chronological columns)."""
+    for row in data.get(section, []) or []:
+        if not isinstance(row, Mapping):
+            continue
+        label = str(row.get("", row.get("row_label", "")) or "").lower().strip()
+        if not any(needle in label for needle in needles):
+            continue
+        vals: list[float] = []
+        for key, value in row.items():
+            if key in ("", "row_label"):
+                continue
+            parsed = _f(value)
+            if parsed is not None:
+                vals.append(parsed)
+        if vals:
+            return vals[-1]
+    return None
+
+
+def _key_ratio_lookup(data: Mapping[str, Any], *needles: str) -> float | None:
+    for item in data.get("key_ratios", []) or []:
+        if not isinstance(item, Mapping):
+            continue
+        name = str(item.get("name", "")).lower().strip()
+        if any(needle in name for needle in needles):
+            return _f(item.get("value"))
+    return None
+
+
+def flatten_screener_snapshot(raw: Mapping[str, Any] | None) -> dict[str, Any]:
+    """Map Screener.in deep snapshot → flat fields for ratio math + direct overrides."""
+    data = dict(raw or {})
+    if not data:
+        return {}
+
+    extracted: dict[str, Any] = {}
+    try:
+        from screener.engine import _extract_fundamentals
+
+        extracted = dict(_extract_fundamentals(data) or {})
+    except Exception:
+        extracted = {}
+
+    equity: float | None = None
+    debt: float | None = None
+    for row in data.get("balance_sheet", []) or []:
+        if not isinstance(row, Mapping):
+            continue
+        label = str(row.get("", row.get("row_label", "")) or "").lower().strip()
+        vals: list[float] = []
+        for key, value in row.items():
+            if key in ("", "row_label"):
+                continue
+            parsed = _f(value)
+            if parsed is not None:
+                vals.append(parsed)
+        latest = vals[-1] if vals else None
+        if latest is None:
+            continue
+        if "borrowing" in label:
+            debt = (debt or 0.0) + latest
+        if (
+            "equity capital" in label
+            or "total equity" in label
+            or ("reserves" in label and "share" in label)
+        ):
+            equity = (equity or 0.0) + latest
+
+    flat: dict[str, Any] = {
+        "period": str(data.get("period") or data.get("as_of") or ""),
+        "scope": str(data.get("scope") or "consolidated"),
+        "revenue": _row_latest(data, "profit_loss", "sales", "revenue"),
+        "operating_profit": _row_latest(
+            data, "profit_loss", "operating profit", "ebit", "op profit"
+        ),
+        "net_profit": _row_latest(
+            data, "profit_loss", "net profit", "profit after tax", "pat"
+        ),
+        "operating_cash_flow": _row_latest(
+            data, "cash_flow", "cash from operating", "cash flow from operating"
+        ),
+        "finance_cost": _row_latest(data, "profit_loss", "finance cost", "interest"),
+        "equity": equity,
+        "total_debt": debt,
+        "eps": _key_ratio_lookup(data, "eps", "earning per share"),
+        "current_price": _key_ratio_lookup(data, "current price", "cmp", "price"),
+        "book_value": _key_ratio_lookup(data, "book value", "bvps"),
+    }
+
+    for src, dst in (
+        ("pe", "_direct_pe"),
+        ("roe", "_direct_roe"),
+        ("debt_to_equity", "_direct_debt_to_equity"),
+        ("interest_coverage", "_direct_interest_coverage"),
+        ("cfo_to_pat", "_direct_cash_flow_conversion"),
+    ):
+        if extracted.get(src) is not None:
+            flat[dst] = extracted[src]
+
+    return flat
+
+
+def _coerce_fundamentals_payload(raw: Mapping[str, Any] | None) -> dict[str, Any]:
+    data = dict(raw or {})
+    if "key_ratios" in data or "profit_loss" in data or "balance_sheet" in data:
+        return flatten_screener_snapshot(data)
+    return data
+
+
 def ratios_from_fundamentals(symbol: str, raw: Mapping[str, Any] | None) -> list[dict[str, Any]]:
     sym = str(symbol or "").upper()
-    data = dict(raw or {})
+    data = _coerce_fundamentals_payload(raw)
     period = str(data.get("period") or data.get("as_of") or "")
     scope = str(data.get("scope") or "consolidated")
     revenue = _f(data.get("revenue") or data.get("sales"))
@@ -113,4 +223,21 @@ def ratios_from_fundamentals(symbol: str, raw: Mapping[str, Any] | None) -> list
         if s.meta:
             row["quality_status"] = s.meta.quality_status.value
         out.append(row)
+
+    direct_overrides = {
+        "pe": "_direct_pe",
+        "roe": "_direct_roe",
+        "debt_equity": "_direct_debt_to_equity",
+        "interest_coverage": "_direct_interest_coverage",
+        "cash_flow_conversion": "_direct_cash_flow_conversion",
+    }
+    for row in out:
+        direct_key = direct_overrides.get(row["key"])
+        if direct_key and data.get(direct_key) is not None:
+            row["value"] = data[direct_key]
+            row["missing_reason"] = ""
+            row["quality_status"] = QualityStatus.FRESH.value
+            if direct_key.startswith("_direct_"):
+                row["formula"] = f"Screener.in key ratio ({row['key']})"
+
     return out
