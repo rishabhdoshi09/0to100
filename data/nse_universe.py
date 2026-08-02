@@ -491,9 +491,15 @@ def get_nse_universe_with_names() -> Dict[str, str]:
 
 
 def search_nse_symbols(query: str = "", *, limit: int = 50) -> List[Dict[str, str]]:
-    """Prefix/substring search over the full live universe for UI autocomplete."""
+    """Prefix/substring search over the full live universe for UI autocomplete.
+
+    Empty query returns an alphabetical slice of the *entire* directory up to
+    ``limit``. Callers that need N…Z names must request a limit covering the
+    full universe (or pass a non-empty prefix like ``N``).
+    """
     q = str(query or "").strip().upper()
-    lim = max(1, min(int(limit or 50), 5000))
+    # NSE cash universe is ~2–3k equities; keep headroom for growth / holdings pins.
+    lim = max(1, min(int(limit or 50), 20_000))
     names = get_nse_universe_with_names()
     rows: List[Dict[str, str]] = []
     if not q:

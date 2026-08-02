@@ -73,14 +73,46 @@ def test_symbols_api_returns_full_directory(monkeypatch):
     import terminal_product_api as api
 
     U.reset_universe_cache()
-    monkeypatch.setattr(U, "_load_from_kite_cache", lambda: (["AAA", "AARTIIND", "TCS"], {"TCS": "Tata"}))
+    # Build a universe that spans A→Z so truncation past M would be visible.
+    fake = [f"A{i:04d}" for i in range(40)] + [f"M{i:04d}" for i in range(40)] + [
+        f"N{i:04d}" for i in range(40)
+    ] + [f"Z{i:04d}" for i in range(40)]
+    names = {s: s for s in fake}
+    monkeypatch.setattr(U, "_load_from_kite_cache", lambda: (fake, names))
     monkeypatch.setattr(U, "_load_from_fallback_csv", lambda: ([], {}))
     monkeypatch.setattr(U, "_bhav_symbols", lambda: [])
     monkeypatch.setattr(U, "_load_from_nse_website", lambda: ([], {}))
     monkeypatch.setattr(U, "_filter_to_instruments", lambda symbols, token_map: symbols)
 
     client = TestClient(api.app)
-    body = client.get("/api/symbols?q=AA&limit=10").json()
-    assert body["universe_size"] == 3
-    assert body["count"] >= 1
-    assert all(row["symbol"].startswith("AA") or "AA" in row["symbol"] for row in body["symbols"])
+    body = client.get("/api/symbols?limit=0").json()
+    assert body["truncated"] is False
+    assert body["count"] == len(fake)
+    letters = set(body["letter_coverage"])
+    assert {"A", "M", "N", "Z"}.issubset(letters)
+
+    n_body = client.get("/api/symbols?q=N&limit=20").json()
+    assert n_body["count"] >= 1
+    assert all(row["symbol"].startswith("N") or "N" in row["symbol"] for row in n_body["symbols"][:10])
+
+
+def test_empty_directory_not_capped_at_m(monkeypatch):
+    from product.symbol_directory import build_symbol_directory
+    import data.nse_universe as U
+
+    U.reset_universe_cache()
+    fake = [f"{letter}{i:03d}" for letter in "ABCDEFGHIJKLMNOPQRSTUVWXYZ" for i in range(10)]
+    monkeypatch.setattr(U, "_load_from_kite_cache", lambda: (fake, {s: "" for s in fake}))
+    monkeypatch.setattr(U, "_load_from_fallback_csv", lambda: ([], {}))
+    monkeypatch.setattr(U, "_bhav_symbols", lambda: [])
+    monkeypatch.setattr(U, "_load_from_nse_website", lambda: ([], {}))
+    monkeypatch.setattr(U, "_filter_to_instruments", lambda symbols, token_map: symbols)
+
+    # Old bug: limit=1000 stopped around I/M and dropped N…Z
+    thin = build_symbol_directory(query="", limit=100)
+    assert thin["truncated"] is True or "N" not in thin["letter_coverage"]
+
+    full = build_symbol_directory(query="", limit=0)
+    assert full["truncated"] is False
+    assert {"N", "O", "P", "Z"}.issubset(set(full["letter_coverage"]))
+    assert full["count"] == len(fake)

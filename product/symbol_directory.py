@@ -10,13 +10,22 @@ def build_symbol_directory(*, query: str = "", limit: int = 50) -> dict[str, Any
     This is intentionally broader than the Momentum scan payload, which only
     keeps rows that produced setups. Broker holdings (including ``-BE`` series)
     are always merged so demat shares remain searchable.
+
+    Empty ``query`` with ``limit<=0`` (or a thin limit) expands to the full
+    universe size so letters after M/N are not truncated out of autocomplete.
     """
     from data.nse_universe import get_nse_universe_with_names, search_nse_symbols
 
     q = str(query or "").strip()
-    lim = max(1, min(int(limit or 50), 5000))
-    matches = search_nse_symbols(q, limit=lim)
     all_names = dict(get_nse_universe_with_names())
+    requested = int(limit or 0)
+    if not q and requested <= 0:
+        requested = max(len(all_names), 5000)
+    lim = max(1, min(requested if requested > 0 else 50, 20_000))
+    # Always ask for at least the full universe size on empty query.
+    if not q:
+        lim = max(lim, len(all_names) or lim)
+    matches = search_nse_symbols(q, limit=lim)
 
     held: list[str] = []
     try:
@@ -38,6 +47,7 @@ def build_symbol_directory(*, query: str = "", limit: int = 50) -> dict[str, Any
             if len(matches) > lim:
                 matches = matches[:lim]
 
+    letters = sorted({(row["symbol"][:1] or "?") for row in matches if row.get("symbol")})
     return {
         "schema_version": 1,
         "query": q,
@@ -45,6 +55,8 @@ def build_symbol_directory(*, query: str = "", limit: int = 50) -> dict[str, Any
         "universe_size": len(all_names),
         "count": len(matches),
         "symbols": matches,
+        "letter_coverage": letters,
+        "truncated": (not q) and len(matches) < len(all_names),
         "holdings_pinned": len(held),
         "source": "nse_universe+holdings",
         "note": (

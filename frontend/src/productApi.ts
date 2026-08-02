@@ -264,6 +264,9 @@ export type SymbolDirectory = {
   universe_size: number
   count: number
   symbols: SymbolDirectoryRow[]
+  letter_coverage?: string[]
+  truncated?: boolean
+  holdings_pinned?: number
   source: string
   note?: string
 }
@@ -272,7 +275,9 @@ export type SymbolDirectory = {
 export const fetchSymbolDirectory = (opts?: { q?: string; limit?: number }): Promise<SymbolDirectory> => {
   const params = new URLSearchParams()
   if (opts?.q) params.set('q', opts.q)
+  // limit=0 → API returns the complete A→Z universe on empty query
   if (opts?.limit != null) params.set('limit', String(opts.limit))
+  else if (!opts?.q) params.set('limit', '0')
   const q = params.toString()
   return fetch(`/api/symbols${q ? `?${q}` : ''}`, {
     headers: { Accept: 'application/json' },

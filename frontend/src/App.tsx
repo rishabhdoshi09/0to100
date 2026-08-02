@@ -190,6 +190,7 @@ function App() {
   const [controlState, setControlState] = useState('')
   const [query, setQuery] = useState('')
   const [universeSymbols, setUniverseSymbols] = useState<string[]>([])
+  const [remoteSuggestions, setRemoteSuggestions] = useState<string[]>([])
   const [helpOpen, setHelpOpen] = useState(false)
   const [pdfViewer, setPdfViewer] = useState<{ title: string; url: string } | null>(null)
   const [depth, setDepth] = useState<DisplayDepth>(() => {
@@ -262,13 +263,15 @@ function App() {
   const symbolSuggestions = useMemo(() => {
     const q = query.trim().toUpperCase()
     if (!q) return symbols.slice(0, 80)
-    return symbols.filter((symbol) => symbol.startsWith(q)).slice(0, 80)
-  }, [query, symbols])
+    const local = symbols.filter((symbol) => symbol.startsWith(q))
+    return [...new Set([...remoteSuggestions, ...local])].sort().slice(0, 80)
+  }, [query, symbols, remoteSuggestions])
 
   useEffect(() => {
     let alive = true
+    // limit=0 → complete A→Z directory (do not stop around letter M)
     Promise.all([
-      fetchSymbolDirectory({ limit: 5000 }).catch(() => null),
+      fetchSymbolDirectory({ limit: 0 }).catch(() => null),
       fetchHoldings().catch(() => null),
     ]).then(([directory, book]) => {
       if (!alive) return
@@ -278,9 +281,36 @@ function App() {
         row.research_symbol || '',
       ]).filter(Boolean)
       setUniverseSymbols([...new Set([...fromDir, ...fromHoldings])])
+      if (directory?.truncated) {
+        setControlState(`Symbol directory truncated (${directory.count}/${directory.universe_size}) — retry refresh`)
+      }
     })
     return () => { alive = false }
   }, [])
+
+  // Server-side typeahead so N…Z prefixes work even if the local cache is thin.
+  useEffect(() => {
+    const q = query.trim().toUpperCase()
+    if (q.length < 1) {
+      setRemoteSuggestions([])
+      return
+    }
+    let alive = true
+    const timer = window.setTimeout(() => {
+      fetchSymbolDirectory({ q, limit: 80 })
+        .then((payload) => {
+          if (!alive) return
+          setRemoteSuggestions((payload.symbols || []).map((row) => row.symbol).filter(Boolean))
+        })
+        .catch(() => {
+          if (alive) setRemoteSuggestions([])
+        })
+    }, 120)
+    return () => {
+      alive = false
+      window.clearTimeout(timer)
+    }
+  }, [query])
 
   const openSearch = () => {
     const clean = query.trim().toUpperCase()
@@ -290,13 +320,15 @@ function App() {
       return
     }
     const match = symbols.find((symbol) => symbol === clean)
+      || remoteSuggestions.find((symbol) => symbol === clean)
       || symbols.find((symbol) => symbol.startsWith(clean))
+      || remoteSuggestions.find((symbol) => symbol.startsWith(clean))
       || clean
     setSelected(match)
     setQuery(match)
     setActive('Stock Intelligence')
     setControlState(
-      symbols.includes(match)
+      symbols.includes(match) || remoteSuggestions.includes(match)
         ? `Opening verified workspace for ${match}`
         : `Opening ${match} — not in local universe cache; workspace still loads if bhav history exists`,
     )

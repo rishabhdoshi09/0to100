@@ -510,8 +510,12 @@ def pre_trade(symbol: str) -> dict[str, Any]:
 
 
 @app.get("/api/symbols")
-def symbols_directory(q: str = "", limit: int = 100) -> dict[str, Any]:
-    """Full NSE equity directory for search — not limited to Momentum scan setups."""
+def symbols_directory(q: str = "", limit: int = 0) -> dict[str, Any]:
+    """Full NSE equity directory for search — A→Z, not limited to scan setups.
+
+    ``limit=0`` (default) returns the complete universe on empty query so letters
+    after M/N are not truncated. Pass ``q=N`` for prefix search.
+    """
     from product.symbol_directory import build_symbol_directory
 
     return build_symbol_directory(query=q, limit=limit)
