@@ -496,6 +496,7 @@ def product_bootstrap() -> dict[str, Any]:
 
 @app.get("/api/stock-intelligence/{symbol}")
 def stock_intelligence(symbol: str) -> dict[str, Any]:
+    """Read-only workspace (fundamentals from cache only — use fetch-fundamentals from UI)."""
     try:
         return build_stock_workspace(clean_symbol(symbol))
     except ValueError as exc:
@@ -504,28 +505,44 @@ def stock_intelligence(symbol: str) -> dict[str, Any]:
         raise HTTPException(status_code=500, detail=f"Stock intelligence failed: {exc}") from exc
 
 
-@app.post("/api/stock-intelligence/{symbol}/refresh-fundamentals")
-def refresh_stock_fundamentals(symbol: str) -> dict[str, Any]:
-    try:
-        from fundamentals.fetcher import get_deep_fundamentals
+def _fundamentals_fetch_payload(symbol: str, data: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "accepted": True,
+        "symbol": symbol,
+        "sections": {
+            "about": bool(data.get("about")),
+            "quarterly_results": len(data.get("quarterly_results", []) or []),
+            "profit_loss": len(data.get("profit_loss", []) or []),
+            "balance_sheet": len(data.get("balance_sheet", []) or []),
+            "cash_flow": len(data.get("cash_flow", []) or []),
+            "shareholding": len(data.get("shareholding", []) or []),
+            "peer_comparison": len(data.get("peer_comparison", []) or []),
+        },
+        "workspace": build_stock_workspace(symbol),
+    }
 
+
+@app.post("/api/stock-intelligence/{symbol}/fetch-fundamentals")
+def fetch_stock_fundamentals(symbol: str, force: bool = False) -> dict[str, Any]:
+    """Frontend-triggered Screener.in load (force=false lazy, force=true retry)."""
+    try:
         clean = clean_symbol(symbol)
-        data = get_deep_fundamentals(clean, force_refresh=True)
-        return {
-            "accepted": True,
-            "symbol": clean,
-            "sections": {
-                "about": bool(data.get("about")),
-                "quarterly_results": len(data.get("quarterly_results", []) or []),
-                "profit_loss": len(data.get("profit_loss", []) or []),
-                "balance_sheet": len(data.get("balance_sheet", []) or []),
-                "cash_flow": len(data.get("cash_flow", []) or []),
-                "shareholding": len(data.get("shareholding", []) or []),
-                "peer_comparison": len(data.get("peer_comparison", []) or []),
-            },
-            "workspace": build_stock_workspace(clean),
-        }
+        if force:
+            from fundamentals.fetcher import get_deep_fundamentals
+
+            data = get_deep_fundamentals(clean, force_refresh=True)
+        else:
+            from fundamentals.lazy import ensure_deep_fundamentals
+
+            data = ensure_deep_fundamentals(clean, force_refresh=False)
+        return _fundamentals_fetch_payload(clean, data)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"Fundamental refresh failed: {exc}") from exc
+        raise HTTPException(status_code=502, detail=f"Fundamentals fetch failed: {exc}") from exc
+
+
+@app.post("/api/stock-intelligence/{symbol}/refresh-fundamentals")
+def refresh_stock_fundamentals(symbol: str) -> dict[str, Any]:
+    """Force-refresh alias for retry from the UI."""
+    return fetch_stock_fundamentals(symbol, force=True)

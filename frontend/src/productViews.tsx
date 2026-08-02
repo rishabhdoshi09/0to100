@@ -15,7 +15,7 @@ import {
   fetchProductReadiness,
   fetchStockIntelligence,
   fetchTradePlan,
-  refreshStockFundamentals,
+  fetchStockFundamentals,
   fetchSymbolRatios,
   type IntelligenceMetric,
   type ProductReadiness,
@@ -247,6 +247,7 @@ export function ProductStockIntelligenceView(props: ViewProps) {
   const [tab, setTab] = useState('Overview')
   const [loading, setLoading] = useState(false)
   const [busy, setBusy] = useState('')
+  const [fundamentalsError, setFundamentalsError] = useState('')
   const [error, setError] = useState('')
 
   const [optionsChain, setOptionsChain] = useState<OptionsChainPayload | null>(null)
@@ -257,14 +258,35 @@ export function ProductStockIntelligenceView(props: ViewProps) {
     ? ['Overview', 'Chart', 'Financials', 'Ratios', 'Ownership', 'Options', 'Events', 'Peers', 'Evidence']
     : ['Overview', 'Chart', 'Financials', 'Ratios', 'Ownership', 'Events', 'Peers', 'Evidence']
 
+  const fundamentalsBusy = busy === 'FETCH_FUNDAMENTALS' || busy === 'REFRESH_STOCK_FUNDAMENTALS'
+
+  const loadFundamentals = async (force: boolean) => {
+    if (!selected) return
+    const token = force ? 'REFRESH_STOCK_FUNDAMENTALS' : 'FETCH_FUNDAMENTALS'
+    setBusy(token)
+    setFundamentalsError('')
+    try {
+      const result = await fetchStockFundamentals(selected, force)
+      setWorkspace(result.workspace)
+    } catch (reason) {
+      setFundamentalsError(
+        reason instanceof Error ? reason.message : 'Fundamentals fetch failed — try Retry',
+      )
+    } finally {
+      setBusy('')
+    }
+  }
+
   const load = async () => {
     if (!selected) {
       setWorkspace(null)
       setPlan(null)
       setRatios([])
+      setFundamentalsError('')
       return
     }
     setLoading(true)
+    setFundamentalsError('')
     try {
       setWorkspace(await fetchStockIntelligence(selected))
       try { setPlan(await fetchTradePlan(selected)) } catch { setPlan(null) }
@@ -280,6 +302,7 @@ export function ProductStockIntelligenceView(props: ViewProps) {
     } finally {
       setLoading(false)
     }
+    await loadFundamentals(false)
   }
 
   useEffect(() => {
@@ -302,15 +325,14 @@ export function ProductStockIntelligenceView(props: ViewProps) {
 
   const runAction = async (control: ControlName | 'REFRESH_STOCK_FUNDAMENTALS') => {
     if (!selected) return
+    if (control === 'REFRESH_STOCK_FUNDAMENTALS') {
+      await loadFundamentals(true)
+      return
+    }
     setBusy(control)
     setError('')
     try {
-      if (control === 'REFRESH_STOCK_FUNDAMENTALS') {
-        const result = await refreshStockFundamentals(selected)
-        setWorkspace(result.workspace)
-      } else {
-        await runControl(control)
-      }
+      await runControl(control)
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : 'Action failed')
     } finally {
@@ -324,6 +346,19 @@ export function ProductStockIntelligenceView(props: ViewProps) {
   return (
     <section className="stock-workspace-v2">
       {error && <div className="api-warning">{error}</div>}
+      {fundamentalsError && (
+        <div className="api-warning">
+          {fundamentalsError}
+          <button type="button" className="mode-action" disabled={fundamentalsBusy} onClick={() => void loadFundamentals(true)}>
+            {fundamentalsBusy ? 'Retrying…' : 'Retry fundamentals'}
+          </button>
+        </div>
+      )}
+      {fundamentalsBusy && !fundamentalsError && (
+        <div className="api-warning" style={{ borderColor: 'var(--accent-cyan, #26d7ff)' }}>
+          Fetching fundamentals from Screener.in for {selected}… (~1s)
+        </div>
+      )}
       <header className="stock-workspace-hero">
         <div><span>{workspace?.sector || 'Sector not classified'}</span><h2>{workspace?.company || selected}</h2><p>{selected} · {workspace?.summary || 'Verified research is still loading.'}</p></div>
         <div className="stock-workspace-actions">
@@ -341,8 +376,18 @@ export function ProductStockIntelligenceView(props: ViewProps) {
 
       <div className="stock-action-row">
         {(workspace?.next_actions || []).map((item) => (
-          <button type="button" key={item.control} disabled={busy === item.control} onClick={() => void runAction(item.control)}>{busy === item.control ? 'Working…' : item.label}</button>
+          <button
+            type="button"
+            key={item.control}
+            disabled={busy === item.control || (item.control === 'REFRESH_STOCK_FUNDAMENTALS' && fundamentalsBusy)}
+            onClick={() => void runAction(item.control)}
+          >
+            {busy === item.control || (item.control === 'REFRESH_STOCK_FUNDAMENTALS' && fundamentalsBusy) ? 'Working…' : item.label}
+          </button>
         ))}
+        <button type="button" disabled={fundamentalsBusy || !selected} onClick={() => void loadFundamentals(true)}>
+          {fundamentalsBusy ? 'Loading…' : 'Retry fundamentals'}
+        </button>
         <button type="button" onClick={() => setActive('Research Data')}>Complete missing research data</button>
       </div>
 
@@ -354,7 +399,7 @@ export function ProductStockIntelligenceView(props: ViewProps) {
             <Panel title="COMPANY SNAPSHOT" subtitle={workspace?.sector || 'Sector unknown'}>
               {workspace?.fundamentals.company_about
                 ? <div className="company-about"><p>{workspace.fundamentals.company_about}</p></div>
-                : <EmptyState title="Company description not in cache" detail="Loads automatically from Screener.in when you open this stock (~1s)." />}
+                : <EmptyState title="Company description not loading" detail={fundamentalsBusy ? 'Fetching from Screener.in…' : 'Use Retry fundamentals if the fetch failed.'} />}
               <div className="fact-grid">
                 <div><span>State</span><strong>{words(workspace?.state || '—')}</strong></div>
                 <div><span>Coverage</span><strong>{workspace?.fundamentals.coverage_pct ?? 0}%</strong></div>
@@ -391,7 +436,7 @@ export function ProductStockIntelligenceView(props: ViewProps) {
       {tab === 'Financials' && (
         <Panel title="FUNDAMENTALS — CURRENT SNAPSHOT" subtitle={`${workspace?.fundamentals.coverage_pct ?? 0}% coverage · fetched ${workspace?.fundamentals.fetched_at || 'unknown'}`}>
           {(workspace?.fundamentals.metrics || []).length === 0
-            ? <EmptyState title="No fundamental snapshot" detail="Opens Stock Intelligence to fetch from Screener.in automatically, or use Refresh fundamentals." />
+            ? <EmptyState title="No fundamental snapshot" detail={fundamentalsBusy ? 'Loading from Screener.in…' : 'Tap Retry fundamentals above.'} />
             : <div className="explain-metric-grid fundamentals">{(workspace?.fundamentals.metrics || []).map((metric) => <MetricExplanation metric={metric} key={metric.key} />)}</div>}
         </Panel>
       )}

@@ -195,15 +195,29 @@ export const fetchTradePlan = (symbol: string): Promise<TradePlan> =>
     headers: { Accept: 'application/json' },
   }).then((response) => json<TradePlan>(response))
 
+export const fetchStockFundamentals = (
+  symbol: string,
+  force = false,
+): Promise<{
+  accepted: boolean
+  symbol: string
+  sections: Record<string, number | boolean>
+  workspace: StockWorkspace
+}> =>
+  fetch(
+    `/api/stock-intelligence/${encodeURIComponent(symbol)}/fetch-fundamentals?force=${force ? 'true' : 'false'}`,
+    {
+      method: 'POST',
+      headers: { Accept: 'application/json' },
+    },
+  ).then((response) => json(response))
+
 export const refreshStockFundamentals = (symbol: string): Promise<{
   accepted: boolean
   symbol: string
   sections: Record<string, number | boolean>
   workspace: StockWorkspace
-}> => fetch(`/api/stock-intelligence/${encodeURIComponent(symbol)}/refresh-fundamentals`, {
-  method: 'POST',
-  headers: { Accept: 'application/json' },
-}).then((response) => json(response))
+}> => fetchStockFundamentals(symbol, true)
 
 export const fetchCommandCenterWorkspace = (): Promise<CommandCenterWorkspace> =>
   fetch('/api/command-center-workspace', { headers: { Accept: 'application/json' } })

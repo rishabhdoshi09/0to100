@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import { fetchStockFundamentals } from './productApi'
 
 const reportBase = `${window.location.protocol}//${window.location.hostname}:8766`
 
@@ -76,9 +77,10 @@ export function ResearchDataView({ symbol }: { symbol: string }) {
   const [status, setStatus] = useState<EvidenceStatus | null>(null)
   const [error, setError] = useState('')
   const [busy, setBusy] = useState('')
+  const [fundaBusy, setFundaBusy] = useState(false)
   const [drafts, setDrafts] = useState<Record<string, Draft>>({})
 
-  const load = async () => {
+  const loadEvidence = async () => {
     if (!symbol) {
       setStatus(null)
       return
@@ -87,13 +89,33 @@ export function ResearchDataView({ symbol }: { symbol: string }) {
       const response = await fetch(`${reportBase}/evidence/${encodeURIComponent(symbol)}`, { headers: { Accept: 'application/json' } })
       if (!response.ok) throw new Error(await response.text())
       setStatus(await response.json() as EvidenceStatus)
-      setError('')
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : 'Evidence service unavailable')
     }
   }
 
-  useEffect(() => { void load() }, [symbol])
+  const loadFundamentals = async (force: boolean) => {
+    if (!symbol) return
+    setFundaBusy(true)
+    if (!force) setError('')
+    try {
+      await fetchStockFundamentals(symbol, force)
+      await loadEvidence()
+      if (force) setError('')
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : 'Fundamentals fetch failed — use Retry')
+    } finally {
+      setFundaBusy(false)
+    }
+  }
+
+  useEffect(() => {
+    if (!symbol) {
+      setStatus(null)
+      return
+    }
+    void loadFundamentals(false)
+  }, [symbol])
 
   const missingCount = useMemo(() => status?.requirements.filter((item) => !item.available).length || 0, [status])
   const staleCount = useMemo(() => status?.requirements.filter((item) => item.status === 'STALE').length || 0, [status])
@@ -106,12 +128,14 @@ export function ResearchDataView({ symbol }: { symbol: string }) {
     setBusy(`auto-${action}`)
     setError('')
     try {
-      const endpoint = action === 'fundamentals'
-        ? `${reportBase}/evidence/${encodeURIComponent(symbol)}/actions/refresh-fundamentals`
-        : `/api/controls/${action === 'history' ? 'REFRESH_DATA_NOW' : action === 'news' ? 'REFRESH_NEWS_NOW' : 'REFRESH_FNO_NOW'}`
-      const response = await fetch(endpoint, { method: 'POST', headers: { Accept: 'application/json' } })
-      if (!response.ok) throw new Error(await response.text())
-      window.setTimeout(() => void load(), action === 'fundamentals' ? 100 : 1500)
+      if (action === 'fundamentals') {
+        await loadFundamentals(true)
+      } else {
+        const endpoint = `/api/controls/${action === 'history' ? 'REFRESH_DATA_NOW' : action === 'news' ? 'REFRESH_NEWS_NOW' : 'REFRESH_FNO_NOW'}`
+        const response = await fetch(endpoint, { method: 'POST', headers: { Accept: 'application/json' } })
+        if (!response.ok) throw new Error(await response.text())
+        window.setTimeout(() => void loadEvidence(), 1500)
+      }
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : `${action} refresh failed`)
     } finally {
@@ -158,7 +182,19 @@ export function ResearchDataView({ symbol }: { symbol: string }) {
 
   return (
     <section className="research-data-view">
-      {error && <div className="api-warning">{error}</div>}
+      {error && (
+        <div className="api-warning">
+          {error}
+          <button type="button" className="mode-action" disabled={fundaBusy} onClick={() => void loadFundamentals(true)}>
+            {fundaBusy ? 'Retrying…' : 'Retry fundamentals'}
+          </button>
+        </div>
+      )}
+      {fundaBusy && !error && (
+        <div className="api-warning" style={{ borderColor: 'var(--accent-cyan, #26d7ff)' }}>
+          Fetching fundamentals from Screener.in for {symbol}…
+        </div>
+      )}
       <div className="evidence-summary">
         <div><span>SYMBOL</span><strong>{symbol}</strong></div>
         <div><span>RESEARCH COVERAGE</span><strong>{status?.coverage_pct ?? 0}%</strong></div>
@@ -170,10 +206,12 @@ export function ResearchDataView({ symbol }: { symbol: string }) {
       <div className="evidence-panel">
         <header>
           <div><h2>Automatic data preparation</h2><p>QuantTerm fetches what it can itself. These operations are independent of paper trading.</p></div>
-          <button type="button" onClick={() => void load()}>Refresh status</button>
+          <button type="button" onClick={() => void loadEvidence()}>Refresh status</button>
         </header>
         <div className="resource-links">
-          <button type="button" disabled={busy === 'auto-fundamentals'} onClick={() => void runAutomatic('fundamentals')}>Fetch deep fundamentals</button>
+          <button type="button" disabled={busy === 'auto-fundamentals' || fundaBusy} onClick={() => void runAutomatic('fundamentals')}>
+            {fundaBusy || busy === 'auto-fundamentals' ? 'Fetching…' : 'Retry deep fundamentals'}
+          </button>
           <button type="button" disabled={busy === 'auto-history'} onClick={() => void runAutomatic('history')}>Prepare official price history</button>
           <button type="button" disabled={busy === 'auto-news'} onClick={() => void runAutomatic('news')}>Refresh news and filings</button>
           <button type="button" disabled={busy === 'auto-fno'} onClick={() => void runAutomatic('fno')}>Refresh F&O instruments</button>
