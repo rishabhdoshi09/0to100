@@ -41,6 +41,7 @@ export type WorkerSnapshot = {
   worker_pid?: number | null
   activeKind?: string | null
   transparency?: string | null
+  ensure_error?: string | null
 }
 
 export function friendlyStageLabel(
@@ -54,7 +55,7 @@ export function friendlyStageLabel(
   if (status === 'CANCELLED') return 'Scan stopped'
   if (status === 'BLOCKED') return 'Scan blocked'
   if (status === 'PENDING') {
-    if (worker?.running === false) {
+    if (worker?.running === false || (worker?.running == null && elapsedSeconds >= 8)) {
       return 'Market-ops worker is OFFLINE — scan cannot start until it is online'
     }
     if (worker?.activeKind) {
@@ -215,6 +216,7 @@ export function useScanRunner(kind: ScanKind, options: ScanRunnerOptions = {}): 
         worker_pid: ops.worker_pid ?? null,
         activeKind: active?.kind || null,
         transparency: prev.transparency || null,
+        ensure_error: (ops as { ensure_error?: string }).ensure_error || prev.ensure_error || null,
       }))
     } catch {
       if (mountedRef.current) setWorker((prev) => ({ ...prev, running: null }))
@@ -307,20 +309,29 @@ export function useScanRunner(kind: ScanKind, options: ScanRunnerOptions = {}): 
       const result = await sendControl(KIND_CONTROL[kind]) as {
         accepted: boolean
         operation_id?: string
-        worker?: { running?: boolean; worker_pid?: number }
+        worker?: {
+          running?: boolean
+          worker_pid?: number
+          ensure_error?: string
+        }
         transparency?: string
+        blocker?: string | null
       }
       if (result.worker) {
         setWorker({
           running: Boolean(result.worker.running),
           worker_pid: result.worker.worker_pid ?? null,
           transparency: result.transparency || null,
+          ensure_error: result.worker.ensure_error || result.blocker || null,
         })
       }
       if (!result.accepted) {
         setIsBusy(false)
         setNotice('Scan request was not accepted by the backend')
         return
+      }
+      if (result.blocker && !result.worker?.running) {
+        setNotice(result.blocker)
       }
       if (!result.operation_id) {
         setIsBusy(false)
@@ -372,12 +383,15 @@ export function useScanRunner(kind: ScanKind, options: ScanRunnerOptions = {}): 
   )
   const detailLine = useMemo(() => {
     if (progressLine) return progressLine
+    if (worker.ensure_error && (worker.running === false || worker.running == null)) {
+      return worker.ensure_error
+    }
     if (staleHint) return staleHint
     if (worker.transparency) return worker.transparency
     const message = String(operation?.message || '').trim()
     if (message && message.toLowerCase() !== friendlyPhase.toLowerCase()) return message
-    if (operation?.status === 'PENDING' && worker.running === false) {
-      return 'Restart the stack so market-ops can lease this job'
+    if (operation?.status === 'PENDING' && worker.running !== true) {
+      return 'Restart the stack so market-ops can lease this job: bash scripts/stop_quantterm.sh && bash scripts/run_quantterm_complete.sh'
     }
     return null
   }, [friendlyPhase, operation?.message, operation?.status, progressLine, staleHint, worker])

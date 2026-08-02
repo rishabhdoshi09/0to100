@@ -253,6 +253,8 @@ export type DashboardPayload = {
     worker_pid?: number | null
     heartbeat: string
     active_lanes: Record<string, Record<string, unknown>>
+    ensure_ok?: boolean
+    ensure_error?: string
     counts: Record<string, number>
     active: OperationRecord[]
     recent: OperationRecord[]

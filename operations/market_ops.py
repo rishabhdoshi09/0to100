@@ -65,9 +65,38 @@ class SingleWorkerLock:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._handle = None
 
+    def holder_pid(self) -> int | None:
+        try:
+            text = self.path.read_text(encoding="utf-8").strip().splitlines()[0].strip()
+            return int(text) if text else None
+        except Exception:
+            return None
+
+    def pid_alive(self, pid: int | None) -> bool:
+        if not pid or int(pid) <= 0:
+            return False
+        try:
+            os.kill(int(pid), 0)
+            return True
+        except OSError:
+            return False
+
+    def reclaim_if_dead(self) -> bool:
+        """Clear a lock file whose owner PID is gone. Flock itself dies with the process,
+        but a leftover lock file can confuse diagnostics; unlink when safe."""
+        pid = self.holder_pid()
+        if self.pid_alive(pid):
+            return False
+        try:
+            self.path.unlink(missing_ok=True)
+            return True
+        except Exception:
+            return False
+
     def acquire(self) -> bool:
         try:
             import fcntl
+            self.reclaim_if_dead()
             self._handle = self.path.open("w")
             try:
                 fcntl.flock(self._handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -75,6 +104,8 @@ class SingleWorkerLock:
                 self._handle.close()
                 self._handle = None
                 return False
+            self._handle.seek(0)
+            self._handle.truncate()
             self._handle.write(str(os.getpid()))
             self._handle.flush()
             return True
@@ -546,14 +577,27 @@ class MarketOperationsWorker:
                 _atomic_json(RUNTIME_PATH, self._runtime_payload(running=True))
 
     def _bootstrap(self) -> list[str]:
+        """Queue missing product inputs without blocking worker bring-up.
+
+        Intentionally avoids ``load_cache=True`` here — loading the full bhav
+        pickle can take minutes and used to delay the first heartbeat, leaving
+        MARKET_SCAN PENDING while the UI said the worker was offline.
+        Heavy history load happens later inside each job via ``_ensure_history``.
+        """
         queued: list[str] = []
         try:
             from data.bhavcopy_runtime import status as history_status
-            history = history_status(load_cache=True)
+
+            history = history_status(load_cache=False)
         except Exception:
-            history = {"ready": False, "sessions": 0}
-        history_missing = not history.get("ready") or int(history.get("sessions", 0) or 0) < 60
-        if history_missing:
+            history = {"ready": False, "sessions": 0, "cache_exists": False, "csv_files": 0}
+        history_present = bool(
+            history.get("ready")
+            or history.get("cache_exists")
+            or int(history.get("csv_files") or 0) >= 60
+            or int(history.get("sessions") or 0) >= 60
+        )
+        if not history_present:
             _item, created = self.store.enqueue(DATA_PREPARE, lane=LANES[DATA_PREPARE], requested_by="bootstrap")
             if created:
                 queued.append(DATA_PREPARE)
@@ -577,15 +621,19 @@ class MarketOperationsWorker:
 
     def run(self) -> int:
         if not self.lock.acquire():
-            _emit("INFO", "another market-operations worker already owns the lock")
-            return 1
+            # Another live process owns the lock. If heartbeat is dead, reclaim once.
+            self.lock.reclaim_if_dead()
+            if not self.lock.acquire():
+                holder = self.lock.holder_pid()
+                _emit(
+                    "INFO",
+                    f"another market-operations worker already owns the lock"
+                    + (f" (pid={holder})" if holder else ""),
+                )
+                return 1
         recovered = self.store.recover_orphans()
-        bootstrap = self._bootstrap()
-        _emit(
-            "ONLINE",
-            f"pid={os.getpid()} · lanes={','.join(sorted(set(LANES.values())))} · "
-            f"recovered={recovered} · bootstrap={','.join(bootstrap) or 'nothing_due'}",
-        )
+        # Come ONLINE before bootstrap so PENDING market scans can lease immediately.
+        # A slow bootstrap used to leave scans queued for many minutes with no heartbeat.
         _atomic_json(RUNTIME_PATH, self._runtime_payload(running=True))
         heartbeat = threading.Thread(target=self._heartbeat_loop, name="market-ops-heartbeat", daemon=True)
         heartbeat.start()
@@ -599,6 +647,13 @@ class MarketOperationsWorker:
             )
             thread.start()
             self._threads.append(thread)
+        bootstrap = self._bootstrap()
+        _emit(
+            "ONLINE",
+            f"pid={os.getpid()} · lanes={','.join(sorted(set(LANES.values())))} · "
+            f"recovered={recovered} · bootstrap={','.join(bootstrap) or 'nothing_due'}",
+        )
+        _atomic_json(RUNTIME_PATH, self._runtime_payload(running=True))
         try:
             while not self.stop_event.wait(1.0):
                 pass

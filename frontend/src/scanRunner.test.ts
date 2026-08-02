@@ -49,6 +49,8 @@ describe('scanRunner semantics', () => {
     expect(friendlyStageLabel('', 'PENDING', { running: true }, 20)).toContain('has not leased')
     expect(friendlyStageLabel('', 'PENDING', { running: true, activeKind: 'MARKET_SCAN' }))
       .toContain('Queued behind MARKET_SCAN')
+    // Unknown worker state after a few seconds is treated as offline, not endless "waiting".
+    expect(friendlyStageLabel('', 'PENDING', { running: null }, 12)).toContain('OFFLINE')
   })
 
   it('detects terminal and active statuses', () => {

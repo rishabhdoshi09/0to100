@@ -76,38 +76,78 @@ def _ensure_ops_worker(*, wait_s: float = 8.0) -> dict[str, Any]:
     global _ops_process
     runtime = _ops_runtime_payload()
     if runtime.get("running"):
+        runtime["ensure_attempted"] = False
+        runtime["ensure_ok"] = True
         return runtime
-    if _ops_process is not None and _ops_process.poll() is None:
-        # Child still starting — wait for heartbeat.
-        deadline = time.time() + max(1.0, float(wait_s))
+
+    # If a prior worker died without releasing diagnostics, clear a dead lock file
+    # so a fresh spawn can take ownership.
+    try:
+        from operations.market_ops import LOCK_PATH, SingleWorkerLock
+
+        SingleWorkerLock(LOCK_PATH).reclaim_if_dead()
+    except Exception:
+        pass
+
+    def _wait_for_online(deadline: float) -> dict[str, Any]:
         while time.time() < deadline:
             time.sleep(0.15)
-            runtime = _ops_runtime_payload()
-            if runtime.get("running"):
-                return runtime
-            if _ops_process.poll() is not None:
+            current = _ops_runtime_payload()
+            if current.get("running"):
+                return current
+            if _ops_process is not None and _ops_process.poll() is not None:
                 break
-        runtime = _ops_runtime_payload()
+        return _ops_runtime_payload()
+
+    if _ops_process is not None and _ops_process.poll() is None:
+        # Child still starting — wait for heartbeat.
+        runtime = _wait_for_online(time.time() + max(1.0, float(wait_s)))
         runtime["ensure_attempted"] = True
         runtime["ensure_ok"] = bool(runtime.get("running"))
+        if not runtime["ensure_ok"]:
+            runtime["ensure_error"] = (
+                "Market-ops child process is running but has not published a fresh heartbeat yet"
+            )
         return runtime
+
     _ops_process = subprocess.Popen(
         [sys.executable, "-u", "-m", "operations.market_ops"],
         cwd=str(ROOT),
         env=os.environ.copy(),
     )
-    deadline = time.time() + max(1.0, float(wait_s))
-    while time.time() < deadline:
-        time.sleep(0.15)
-        runtime = _ops_runtime_payload()
-        if runtime.get("running"):
-            break
-        if _ops_process.poll() is not None:
-            break
-    runtime = _ops_runtime_payload()
+    runtime = _wait_for_online(time.time() + max(1.0, float(wait_s)))
+
+    # Spawn exited immediately (often lock conflict). Reclaim dead owner and retry once.
+    if not runtime.get("running") and _ops_process.poll() is not None:
+        try:
+            from operations.market_ops import LOCK_PATH, SingleWorkerLock
+
+            SingleWorkerLock(LOCK_PATH).reclaim_if_dead()
+        except Exception:
+            pass
+        _ops_process = subprocess.Popen(
+            [sys.executable, "-u", "-m", "operations.market_ops"],
+            cwd=str(ROOT),
+            env=os.environ.copy(),
+        )
+        runtime = _wait_for_online(time.time() + max(1.0, float(wait_s)))
+
     runtime["ensure_attempted"] = True
     runtime["ensure_ok"] = bool(runtime.get("running"))
     runtime["spawn_pid"] = getattr(_ops_process, "pid", None)
+    if not runtime["ensure_ok"]:
+        exit_code = _ops_process.poll() if _ops_process is not None else None
+        if exit_code is not None:
+            runtime["ensure_error"] = (
+                f"Market-ops worker exited before heartbeat (exit={exit_code}). "
+                "Another worker may own the lock, or startup crashed — "
+                "run: bash scripts/stop_quantterm.sh && bash scripts/run_quantterm_complete.sh"
+            )
+        else:
+            runtime["ensure_error"] = (
+                "Market-ops worker was spawned but no heartbeat yet — "
+                "wait a few seconds or restart the stack"
+            )
     return runtime
 
 
@@ -121,9 +161,13 @@ def _queue_message_for_control(kind: str, runtime: dict[str, Any]) -> str:
         lane = ""
     active = dict((runtime.get("active") or {}).get(lane) or {})
     if not runtime.get("running"):
-        return (
+        detail = str(runtime.get("ensure_error") or "").strip()
+        base = (
             "Queued, but market-ops worker is OFFLINE — "
-            "restart with bash scripts/run_quantterm_complete.sh (scans cannot start without the worker)"
+            "restart with bash scripts/stop_quantterm.sh && bash scripts/run_quantterm_complete.sh"
+        )
+        return f"{base}. {detail}" if detail else (
+            base + " (scans cannot start without the worker)"
         )
     if active:
         return (
@@ -416,6 +460,10 @@ def _operations_payload() -> dict[str, Any]:
         from operations.store import OperationStore
         store = OperationStore(OPS_DB)
         runtime = _ops_runtime_payload()
+        # Self-heal: UI polls this while a scan is PENDING. If the worker died,
+        # try to bring it back so MARKET_SCAN is not stuck forever.
+        if not runtime.get("running") and store.active():
+            runtime = _ensure_ops_worker(wait_s=2.5)
         recent = store.recent(100)
         latest = {}
         for kind in LANES:
@@ -428,6 +476,8 @@ def _operations_payload() -> dict[str, Any]:
             "worker_pid": runtime.get("worker_pid"),
             "heartbeat": runtime.get("heartbeat", ""),
             "active_lanes": dict(runtime.get("active", {}) or {}),
+            "ensure_ok": runtime.get("ensure_ok", bool(runtime.get("running"))),
+            "ensure_error": runtime.get("ensure_error", ""),
             "counts": store.counts(),
             "active": store.active(),
             "recent": recent,
@@ -440,6 +490,8 @@ def _operations_payload() -> dict[str, Any]:
             "worker_pid": None,
             "heartbeat": "",
             "active_lanes": {},
+            "ensure_ok": False,
+            "ensure_error": str(exc),
             "counts": {},
             "active": [],
             "recent": [],
@@ -780,8 +832,14 @@ def control(control_name: str) -> dict:
                 "heartbeat": runtime.get("heartbeat"),
                 "active_lanes": dict(runtime.get("active") or {}),
                 "ensure_ok": runtime.get("ensure_ok", bool(runtime.get("running"))),
+                "ensure_error": runtime.get("ensure_error", ""),
             },
             "transparency": queue_message,
+            "blocker": (
+                None
+                if runtime.get("running")
+                else (runtime.get("ensure_error") or "Market-ops worker is OFFLINE")
+            ),
         }
     from research.autonomy.controls import request_control
     queued = request_control(name, reason="owner requested control from dedicated terminal frontend")

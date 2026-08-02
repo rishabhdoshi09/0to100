@@ -124,6 +124,24 @@ class OperationStore:
                     (kind, PENDING, RUNNING),
                 ).fetchone()
                 if row is not None:
+                    # Refresh the visible queue message on re-click so OFFLINE/ONLINE
+                    # transparency is not stuck on the bootstrap default text.
+                    if message and str(row["status"]) == PENDING:
+                        con.execute(
+                            "UPDATE operations SET message=?, updated_at=?, requested_by=? "
+                            "WHERE operation_id=? AND status=?",
+                            (
+                                queue_message,
+                                now,
+                                str(requested_by or "terminal"),
+                                str(row["operation_id"]),
+                                PENDING,
+                            ),
+                        )
+                        row = con.execute(
+                            "SELECT * FROM operations WHERE operation_id=?",
+                            (str(row["operation_id"]),),
+                        ).fetchone()
                     con.commit()
                     return self._decode(row) or {}, False
             con.execute(
