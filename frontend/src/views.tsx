@@ -10,6 +10,11 @@ import {
   SecurityTable,
 } from './components'
 import { boolLabel, money, pct, score, words } from './format'
+import {
+  fetchInstitutionalStack,
+  type InstitutionalDomain,
+  type InstitutionalStack,
+} from './productApi'
 import type {
   ChartBar,
   ControlName,
@@ -273,6 +278,24 @@ export function MarketInternalsView({ dashboard }: ViewProps) {
         <Panel title="BULK DEAL BUYS" subtitle="Symbol-level institutional footprint">
           <div className="tag-cloud">{inst?.bulk_buy_symbols?.length ? inst.bulk_buy_symbols.slice(0, 24).map((sym) => <span className="positive-tag" key={sym}>{sym}</span>) : <span>No net bulk buys in current cache.</span>}</div>
         </Panel>
+        <Panel title="BULK DEAL DETAIL" subtitle="NSE largedeal snapshot · client, qty, price">
+          {(inst?.bulk_deals?.length ?? 0) > 0 ? (
+            <div className="fno-table wide-table">
+              <div className="fno-head"><span>SYMBOL</span><span>SIDE</span><span>QTY</span><span>PRICE</span><span>CLIENT</span></div>
+              {inst!.bulk_deals!.slice(0, 24).map((deal, idx) => (
+                <div className="fno-row" key={`${deal.symbol}-${idx}`} style={{ display: 'grid', cursor: 'default' }}>
+                  <strong>{String(deal.symbol ?? '—')}</strong>
+                  <span className={String(deal.side) === 'BUY' ? 'positive-tag' : 'negative-tag'}>{String(deal.side ?? '—')}</span>
+                  <span>{Number(deal.qty ?? 0).toLocaleString('en-IN')}</span>
+                  <span>{money(Number(deal.price ?? 0))}</span>
+                  <span>{String(deal.client ?? '').slice(0, 40) || '—'}</span>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="panel-copy">No bulk deals in cache. Data syncs from NSE when institutional flows refresh (same path as Brain bulk tags).</p>
+          )}
+        </Panel>
         <Panel title="NIFTY OPTIONS" subtitle="Nearest expiry · NSE chain when available">
           {niftyOpts?.available
             ? <div className="key-value-list"><div><span>PCR</span><strong>{String(niftyOpts.pcr)}</strong></div><div><span>Max pain</span><strong>{String(niftyOpts.max_pain)}</strong></div><div><span>Bias</span><strong>{String(niftyOpts.bias)}</strong></div><div><span>Note</span><strong>{String(niftyOpts.note || '')}</strong></div></div>
@@ -315,6 +338,73 @@ export function LongTermView(props: ViewProps) {
   )
 }
 
+function InstitutionalStackPanel() {
+  const [stack, setStack] = useState<InstitutionalStack | null>(null)
+
+  useEffect(() => {
+    let alive = true
+    fetchInstitutionalStack()
+      .then((payload) => { if (alive) setStack(payload) })
+      .catch(() => { if (alive) setStack(null) })
+    return () => { alive = false }
+  }, [])
+
+  const readiness = stack?.readiness
+  const readinessOk = readiness && 'domains' in readiness ? readiness : null
+  const domains = readinessOk?.domains || []
+  const systemState = readinessOk?.system_state || 'UNAVAILABLE'
+
+  const serviceCards = stack ? [
+    { label: 'OMS', data: stack.oms, detail: String(stack.oms.summary?.orders ?? stack.oms.summary?.open_orders ?? '—') },
+    { label: 'RISK GOVERNOR', data: stack.risk_governor, detail: String(stack.risk_governor.mode ?? stack.risk_governor.summary?.decisions ?? '—') },
+    { label: 'RECONCILIATION', data: stack.reconciliation, detail: String(stack.reconciliation.summary?.latest_status ?? '—') },
+    { label: 'PROTECTION', data: stack.protection, detail: String(stack.protection.summary?.fully_protected ?? '—') },
+    { label: 'TCA', data: stack.tca, detail: String(stack.tca.summary?.assessments ?? '—') },
+    {
+      label: 'BROKER OBSERVER',
+      data: stack.broker_observer,
+      detail: stack.broker_observer.running ? 'RUNNING' : 'OFF',
+      available: Boolean(stack.broker_observer.running) || Boolean(stack.broker_observer.snapshots?.available),
+    },
+  ] : []
+
+  return (
+    <Panel title="INSTITUTIONAL EXECUTION STACK" subtitle="Read-only projections · no live orders from this panel">
+      {!stack && <p className="panel-copy">Loading institutional APIs…</p>}
+      {stack && (
+        <>
+          <div className="view-metrics">
+            <MetricCard label="SYSTEM STATE" value={systemState} detail={String(readinessOk?.summary || '')} tone={systemState.includes('ELIGIBLE') ? 'green' : 'amber'} />
+            <MetricCard label="HARD BLOCKERS" value={String(readinessOk?.hard_blockers?.length ?? 0)} detail={(readinessOk?.hard_blockers || []).slice(0, 3).join(', ') || 'None listed'} tone="purple" />
+          </div>
+          <div className="runtime-grid">
+            {domains.map((domain: InstitutionalDomain) => (
+              <article key={domain.key}>
+                <span>{domain.label}</span>
+                <strong className={`evidence-status ${domain.status === 'READY' ? 'fresh' : domain.status === 'PARTIAL' ? 'stale' : 'missing'}`}>{domain.status}</strong>
+                <small>{domain.summary}</small>
+                {domain.blockers.length > 0 && <small>Blockers: {domain.blockers.join('; ')}</small>}
+              </article>
+            ))}
+          </div>
+          <div className="view-metrics" style={{ marginTop: '12px' }}>
+            {serviceCards.map((card) => (
+              <MetricCard
+                key={card.label}
+                label={card.label}
+                value={(card.available ?? card.data.available) ? 'AVAILABLE' : 'EMPTY'}
+                detail={card.detail}
+                tone={(card.available ?? card.data.available) ? 'cyan' : 'amber'}
+              />
+            ))}
+          </div>
+          {stack.broker_observer.message && <p className="panel-copy">{stack.broker_observer.message}</p>}
+        </>
+      )}
+    </Panel>
+  )
+}
+
 export function AutomationView({ dashboard, runControl }: ViewProps) {
   const a = dashboard.autonomy
   const activeJob = a.active_job || {}
@@ -327,6 +417,7 @@ export function AutomationView({ dashboard, runControl }: ViewProps) {
         <Panel title="OPERATING STATE"><div className="key-value-list"><div><span>Heartbeat</span><strong>{a.heartbeat_ist || '—'}</strong></div><div><span>Live feed</span><strong>{String(a.live_feed?.connected ?? 'Unavailable')}</strong></div><div><span>Subscriptions</span><strong>{String(a.live_feed?.subscriptions ?? '—')}</strong></div><div><span>Existing exits</span><strong>{boolLabel(a.existing_exits)}</strong></div><div><span>Research</span><strong>{boolLabel(a.research_enabled)}</strong></div></div><p className="panel-copy">{a.explanation || a.plain_state}</p></Panel>
         <Panel title="RECENT SUPERVISOR DIALOGUE"><div className="dialogue-list">{a.recent_dialogue.length === 0 && <div className="empty-row">No dialogue records.</div>}{[...a.recent_dialogue].reverse().slice(0, 20).map((record, index) => <div key={index}><strong>{words(String(record.record_type || record.decision || 'event'))}</strong><span>{String(record.claim || record.explanation || record.summary || JSON.stringify(record))}</span></div>)}</div></Panel>
         <Panel title="CAPABILITY NOTES"><EvidenceList title="Current constraints" items={[...(a.capability_notes || []), ...(a.active_failures || [])]} tone={a.active_failures?.length ? 'red' : 'cyan'} /></Panel>
+        <InstitutionalStackPanel />
         <DataReadinessPanel dashboard={dashboard} />
       </div>
     </section>

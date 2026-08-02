@@ -1,5 +1,13 @@
 import { useEffect, useMemo, useState } from 'react'
-import { fetchStockFundamentals } from './productApi'
+import {
+  fetchDataCoverage,
+  fetchDataJobs,
+  fetchDataProviders,
+  fetchStockFundamentals,
+  type DataCoveragePayload,
+  type DataJobsPayload,
+  type DataProvidersPayload,
+} from './productApi'
 
 const reportBase = import.meta.env.DEV
   ? ''
@@ -81,6 +89,23 @@ export function ResearchDataView({ symbol }: { symbol: string }) {
   const [busy, setBusy] = useState('')
   const [fundaBusy, setFundaBusy] = useState(false)
   const [drafts, setDrafts] = useState<Record<string, Draft>>({})
+  const [providers, setProviders] = useState<DataProvidersPayload | null>(null)
+  const [jobs, setJobs] = useState<DataJobsPayload | null>(null)
+  const [symbolCoverage, setSymbolCoverage] = useState<DataCoveragePayload | null>(null)
+  const [universeCoverage, setUniverseCoverage] = useState<DataCoveragePayload | null>(null)
+
+  const loadPlatformData = async () => {
+    const [prov, jobList, symCov, uniCov] = await Promise.all([
+      fetchDataProviders().catch(() => null),
+      fetchDataJobs().catch(() => null),
+      symbol ? fetchDataCoverage(symbol).catch(() => null) : Promise.resolve(null),
+      fetchDataCoverage().catch(() => null),
+    ])
+    setProviders(prov)
+    setJobs(jobList)
+    setSymbolCoverage(symCov)
+    setUniverseCoverage(uniCov)
+  }
 
   const loadEvidence = async () => {
     if (!symbol) {
@@ -114,9 +139,11 @@ export function ResearchDataView({ symbol }: { symbol: string }) {
   useEffect(() => {
     if (!symbol) {
       setStatus(null)
+      setSymbolCoverage(null)
       return
     }
     void loadFundamentals(false)
+    void loadPlatformData()
   }, [symbol])
 
   const missingCount = useMemo(() => status?.requirements.filter((item) => !item.available).length || 0, [status])
@@ -203,6 +230,54 @@ export function ResearchDataView({ symbol }: { symbol: string }) {
         <div><span>MISSING DATASETS</span><strong>{missingCount}</strong></div>
         <div><span>STALE DATASETS</span><strong>{staleCount}</strong></div>
         <div><span>DEEP FUNDAMENTALS</span><strong>{status?.raw_fundamentals.freshness || 'UNKNOWN'}</strong></div>
+      </div>
+
+      <div className="evidence-panel">
+        <header>
+          <div><h2>Data platform audit</h2><p>Provider registry, refresh jobs, and per-symbol coverage from /api/data/* (not inferred from UI).</p></div>
+          <button type="button" onClick={() => void loadPlatformData()}>Refresh platform</button>
+        </header>
+        {providers && (
+          <div className="runtime-grid">
+            {providers.providers.map((row) => (
+              <article key={row.name}>
+                <span>{row.name}</span>
+                <strong className={statusClass(row.status)}>{row.status}</strong>
+                <small>{row.coverage_note}</small>
+                <small>Auth: {row.authentication_status} · caps: {row.capabilities.join(', ')}</small>
+              </article>
+            ))}
+          </div>
+        )}
+        {jobs && (
+          <div className="fno-table wide-table" style={{ marginTop: '12px' }}>
+            <div className="fno-head"><span>JOB</span><span>CONTROL</span><span>DESCRIPTION</span></div>
+            {jobs.jobs.map((job) => (
+              <div className="fno-row" key={job.id} style={{ display: 'grid', cursor: 'default' }}>
+                <strong>{job.label}</strong>
+                <span>{job.control || job.trigger}</span>
+                <span>{job.description}</span>
+              </div>
+            ))}
+          </div>
+        )}
+        {symbolCoverage?.coverage && (
+          <div className="key-value-list" style={{ marginTop: '12px' }}>
+            <div><span>{symbol} identity</span><strong>{String(symbolCoverage.coverage.identity ?? '—')}</strong></div>
+            <div><span>Price history</span><strong>{String(symbolCoverage.coverage.price_history ?? '—')}</strong></div>
+            <div><span>Fundamentals</span><strong>{String(symbolCoverage.coverage.fundamentals ?? '—')}</strong></div>
+            <div><span>Ratios</span><strong>{String(symbolCoverage.coverage.ratios ?? '—')}</strong></div>
+            <div><span>Long-term eligible</span><strong>{String(symbolCoverage.coverage.long_term_eligible ?? '—')}</strong></div>
+          </div>
+        )}
+        {universeCoverage?.audited != null && (
+          <p className="panel-copy" style={{ marginTop: '12px' }}>
+            Universe sample: {universeCoverage.audited} symbols audited · remediation queue {universeCoverage.remediation_queue?.length ?? 0} items
+            {universeCoverage.status_counts && (
+              <> · counts: {Object.entries(universeCoverage.status_counts).map(([k, v]) => `${k}=${v}`).join(', ')}</>
+            )}
+          </p>
+        )}
       </div>
 
       <div className="evidence-panel">

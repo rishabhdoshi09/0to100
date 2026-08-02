@@ -20,7 +20,9 @@ python main.py autonomy
 Start the dedicated UI in another terminal:
 
 ```bash
-bash scripts/run_terminal.sh
+bash scripts/run_quantterm.sh
+# or full stack (reports on :8766): bash scripts/run_quantterm_complete.sh
+# run_terminal.sh is an alias that starts the same product API (terminal_product_api)
 ```
 
 Then open:

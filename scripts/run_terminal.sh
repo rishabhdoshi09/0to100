@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# Legacy entry name — same product API as run_quantterm.sh (terminal_product_api on :8765).
+# terminal_api:app omits scanner-workspace, stock-intelligence, data/ratios, and market routes.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -26,8 +28,28 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-python -m uvicorn terminal_api:app --host 127.0.0.1 --port 8765 &
+echo "[TERMINAL] Starting product API at http://127.0.0.1:8765 (terminal_product_api)…"
+python -m uvicorn terminal_product_api:app --host 127.0.0.1 --port 8765 &
 API_PID=$!
+
+echo "[TERMINAL] Waiting for /api/health…"
+API_READY=0
+for _ in $(seq 1 240); do
+  if ! kill -0 "$API_PID" >/dev/null 2>&1; then
+    echo "[TERMINAL] API exited during startup." >&2
+    exit 1
+  fi
+  if curl -fsS --max-time 2 "http://127.0.0.1:8765/api/health" >/dev/null 2>&1; then
+    API_READY=1
+    break
+  fi
+  sleep 0.5
+done
+if [[ "$API_READY" != "1" ]]; then
+  echo "[TERMINAL] API did not become ready within 120s." >&2
+  exit 1
+fi
+echo "[TERMINAL] API ready. For autonomy + report API use: bash scripts/run_quantterm_complete.sh"
 
 cd frontend
 npm run dev

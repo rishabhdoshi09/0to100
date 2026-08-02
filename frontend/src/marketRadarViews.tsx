@@ -9,6 +9,7 @@ import {
   fetchWatchlist,
   removeWatchlistItem,
   type CompareWorkspace,
+  type InstitutionalDomain,
   type RadarHome,
   type ScannerWorkspaceRow,
   type WatchlistPayload,
@@ -233,7 +234,10 @@ export function RadarHomeView(props: ExperienceViewProps & {
 
 export function MarketScannerView(props: ExperienceViewProps & { onCompare: (symbol: string) => void }) {
   const { dashboard, selected, setSelected, bars, setActive, depth, marketScan, longTermScan, onCompare } = props
-  const [tab, setTab] = useState<'Breakouts' | 'Momentum' | 'Long-Term'>('Breakouts')
+  const scannerTabs = depth === 'professional'
+    ? ['Breakouts', 'Momentum', 'Conviction', 'Pre-Breakout', 'Long-Term', 'F&O', 'Avoid']
+    : ['Breakouts', 'Momentum', 'Long-Term']
+  const [tab, setTab] = useState('Breakouts')
   const [rows, setRows] = useState<RadarRow[]>([])
   const [meta, setMeta] = useState({ scanned_at: '', universe: 0 })
   const [search, setSearch] = useState('')
@@ -241,6 +245,10 @@ export function MarketScannerView(props: ExperienceViewProps & { onCompare: (sym
   const [excludeChase, setExcludeChase] = useState(true)
 
   const activeScan = tab === 'Long-Term' ? longTermScan : marketScan
+
+  useEffect(() => {
+    if (!scannerTabs.includes(tab)) setTab(scannerTabs[0])
+  }, [depth])
 
   useEffect(() => {
     fetchScannerWorkspace(tab)
@@ -267,7 +275,7 @@ export function MarketScannerView(props: ExperienceViewProps & { onCompare: (sym
       <header className="scanner-command-bar">
         <div>
           <span>MARKET SCANNER</span>
-          <h2>Breakouts · Momentum · Long-Term</h2>
+          <h2>Breakouts · Momentum · Conviction · F&O</h2>
           <p>{filtered.length} matches · universe {meta.universe.toLocaleString('en-IN')} · scan {meta.scanned_at || '—'}</p>
         </div>
         <button type="button" disabled={activeScan.isBusy} onClick={() => void activeScan.start()}>
@@ -278,7 +286,7 @@ export function MarketScannerView(props: ExperienceViewProps & { onCompare: (sym
       <LiveScanBanner scan={activeScan} depth={depth} label={tab === 'Long-Term' ? 'Long-term scan' : 'Market scan'} />
 
       <div className="radar-tab-row">
-        {(['Breakouts', 'Momentum', 'Long-Term'] as const).map((item) => (
+        {scannerTabs.map((item) => (
           <button key={item} type="button" className={tab === item ? 'active' : ''} onClick={() => setTab(item)}>{item}</button>
         ))}
       </div>

@@ -358,3 +358,147 @@ export type SymbolRatioRow = {
 export const fetchSymbolRatios = (symbol: string): Promise<{ symbol: string; ratios: SymbolRatioRow[] }> =>
   fetch(`/api/data/ratios/${encodeURIComponent(symbol)}`, { headers: { Accept: 'application/json' } })
     .then((response) => json(response))
+
+export type InstitutionalDomain = {
+  key: string
+  label: string
+  status: string
+  summary: string
+  evidence: string[]
+  blockers: string[]
+  next_action: string
+}
+
+export type InstitutionalReadiness = {
+  schema_version: number
+  generated_at: string
+  system_state: string
+  summary: string
+  domains: InstitutionalDomain[]
+  deployment: Record<string, { status: string; allowed: boolean; blockers?: string[] }>
+  hard_blockers: string[]
+}
+
+export type ServiceProjection = {
+  available: boolean
+  message?: string
+  summary?: Record<string, unknown>
+  mode?: string
+  latest?: Record<string, unknown>
+  certified_for_live?: boolean
+  enabled?: boolean
+  running?: boolean
+}
+
+export type InstitutionalStack = {
+  readiness: InstitutionalReadiness | { available: false; message?: string }
+  oms: ServiceProjection
+  risk_governor: ServiceProjection
+  reconciliation: ServiceProjection
+  protection: ServiceProjection
+  tca: ServiceProjection
+  broker_observer: ServiceProjection & { snapshots?: ServiceProjection }
+}
+
+export type DataProviderRow = {
+  name: string
+  capabilities: string[]
+  priority: number
+  authentication_status: string
+  coverage_note: string
+  freshness_note: string
+  status: string
+}
+
+export type DataProvidersPayload = {
+  generated_at: string
+  providers: DataProviderRow[]
+}
+
+export type DataJobRow = {
+  id: string
+  label: string
+  control: string | null
+  description: string
+  trigger: string
+}
+
+export type DataJobsPayload = {
+  generated_at: string
+  bhavcopy: Record<string, unknown>
+  jobs: DataJobRow[]
+}
+
+export type SymbolCoverageRow = {
+  symbol: string
+  identity: string
+  price_history: string
+  fundamentals: string
+  long_term_eligible: string
+  reasons: Record<string, string>
+}
+
+export type DataCoveragePayload = {
+  generated_at: string
+  symbol?: string
+  audited?: number
+  status_counts?: Record<string, number>
+  symbols?: SymbolCoverageRow[]
+  remediation_queue?: Array<{ action: string; symbol: string; reason: string }>
+  coverage?: Record<string, unknown>
+}
+
+const safeJson = async <T>(path: string, fallback: T): Promise<T> => {
+  try {
+    const response = await fetch(path, { headers: { Accept: 'application/json' } })
+    if (!response.ok) return fallback
+    return (await response.json()) as T
+  } catch {
+    return fallback
+  }
+}
+
+export const fetchInstitutionalReadiness = (): Promise<InstitutionalReadiness> =>
+  fetch('/api/institutional-readiness', { headers: { Accept: 'application/json' } })
+    .then((response) => json<InstitutionalReadiness>(response))
+
+export const fetchInstitutionalStack = async (): Promise<InstitutionalStack> => {
+  const [readiness, oms, risk_governor, reconciliation, protection, tca, broker_observer] =
+    await Promise.all([
+      safeJson<InstitutionalReadiness | { available: false; message?: string }>(
+        '/api/institutional-readiness',
+        { available: false, message: 'Institutional readiness unavailable' },
+      ),
+      safeJson<ServiceProjection>('/api/oms', { available: false }),
+      safeJson<ServiceProjection>('/api/risk-governor', { available: false }),
+      safeJson<ServiceProjection>('/api/reconciliation', { available: false }),
+      safeJson<ServiceProjection>('/api/protection', { available: false }),
+      safeJson<ServiceProjection>('/api/tca', { available: false }),
+      safeJson<ServiceProjection & { snapshots?: ServiceProjection }>('/api/broker-observer', {
+        available: false,
+      }),
+    ])
+  return {
+    readiness,
+    oms,
+    risk_governor,
+    reconciliation,
+    protection,
+    tca,
+    broker_observer,
+  }
+}
+
+export const fetchDataProviders = (): Promise<DataProvidersPayload> =>
+  fetch('/api/data/providers', { headers: { Accept: 'application/json' } })
+    .then((response) => json<DataProvidersPayload>(response))
+
+export const fetchDataJobs = (): Promise<DataJobsPayload> =>
+  fetch('/api/data/jobs', { headers: { Accept: 'application/json' } })
+    .then((response) => json<DataJobsPayload>(response))
+
+export const fetchDataCoverage = (symbol?: string): Promise<DataCoveragePayload> => {
+  const query = symbol?.trim() ? `?symbol=${encodeURIComponent(symbol.trim().toUpperCase())}` : ''
+  return fetch(`/api/data/coverage${query}`, { headers: { Accept: 'application/json' } })
+    .then((response) => json<DataCoveragePayload>(response))
+}
