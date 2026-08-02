@@ -59,6 +59,13 @@ def run_job(job_id: str) -> dict[str, Any]:
     spec = next((j for j in JOBS if j.id == job_id), None)
     if spec is None:
         return {"ok": False, "error": "unknown job", "job_id": job_id}
+    if job_id == "fundamentals":
+        try:
+            from fundamentals.backfill import run_fundamentals_backfill
+            report = run_fundamentals_backfill(scope="nse", force=False, limit=50)
+            return {"ok": True, "job_id": job_id, "report": report}
+        except Exception as exc:
+            return {"ok": False, "job_id": job_id, "error": str(exc)}
     if job_id == "corporate_actions":
         try:
             from data.corporate_actions import load_events

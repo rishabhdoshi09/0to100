@@ -55,6 +55,21 @@ def symbol_ratios_workspace(symbol: str) -> dict[str, Any]:
     }
 
 
+def fundamentals_backfill_status_workspace() -> dict[str, Any]:
+    from fundamentals.backfill import backfill_status
+    return backfill_status()
+
+
+def fundamentals_backfill_run(
+    scope: str = Query("nse", description="nse | nifty500 | bhav"),
+    limit: int = Query(50, ge=1, le=500),
+    force: bool = Query(False),
+) -> dict[str, Any]:
+    """Run a bounded backfill batch (use CLI for full universe overnight)."""
+    from fundamentals.backfill import run_fundamentals_backfill
+    return run_fundamentals_backfill(scope=scope, force=force, limit=limit, resume=True)
+
+
 def install_data_routes(app) -> None:
     app.add_api_route("/api/data/providers", providers_workspace, methods=["GET"], name="data_providers")
     app.add_api_route("/api/data/coverage", coverage_workspace, methods=["GET"], name="data_coverage")
@@ -70,4 +85,16 @@ def install_data_routes(app) -> None:
         symbol_ratios_workspace,
         methods=["GET"],
         name="data_symbol_ratios",
+    )
+    app.add_api_route(
+        "/api/data/fundamentals-backfill",
+        fundamentals_backfill_status_workspace,
+        methods=["GET"],
+        name="fundamentals_backfill_status",
+    )
+    app.add_api_route(
+        "/api/data/fundamentals-backfill",
+        fundamentals_backfill_run,
+        methods=["POST"],
+        name="fundamentals_backfill_run",
     )

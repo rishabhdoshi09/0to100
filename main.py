@@ -16,6 +16,7 @@ Environment:
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from datetime import date, timedelta
 from pathlib import Path
@@ -297,6 +298,32 @@ def cmd_backtest(args) -> None:
     ret = (final - initial) / initial * 100
     print(f"\nBacktest complete. Return: {ret:.2f}%  |  Final equity: ₹{final:,.0f}")
     print(f"Reports saved to: {settings.log_dir}/")
+
+
+def cmd_fundamentals_backfill(args) -> None:
+    """Backfill Screener fundamentals into the local cache for many symbols."""
+    from fundamentals.backfill import backfill_status, run_fundamentals_backfill
+
+    if args.status_only:
+        print(json.dumps(backfill_status(), indent=2, default=str))
+        return
+
+    print("\n=== Fundamentals backfill ===")
+    print(f"Scope: {args.scope} · force={args.force} · limit={args.limit or 'all'}")
+    print("Source: screener.in (≈1 sec/symbol). ETFs / missing pages will be recorded as failed.\n")
+
+    report = run_fundamentals_backfill(
+        scope=args.scope,
+        force=bool(args.force),
+        limit=args.limit,
+        resume=not args.no_resume,
+    )
+    print(f"Succeeded: {report['succeeded_count']} · Failed: {report['failed_count']}")
+    print(f"Skipped (fresh): {report['skipped_fresh']} · Processed this run: {report['processed_this_run']}")
+    if report.get("failed"):
+        sample = list(report["failed"].items())[:10]
+        print("Sample failures:", sample)
+    print(f"State file: {report.get('state_path')}\n")
 
 
 def cmd_screener(args) -> None:
@@ -987,6 +1014,19 @@ def build_parser() -> argparse.ArgumentParser:
     scr.add_argument("--scrape",            action="store_true",
                      help="Scrape screener.in for symbols missing fundamentals (slower)")
 
+    fb = sub.add_parser(
+        "fundamentals-backfill",
+        help="Download fundamentals for the full NSE universe into the local cache",
+    )
+    fb.add_argument("--scope", choices=["nse", "nifty500", "bhav"], default="nse",
+                    help="Symbol list: nse EQ universe (~2000), nifty500, or all bhav symbols")
+    fb.add_argument("--force", action="store_true", help="Re-scrape even when cache is fresh")
+    fb.add_argument("--limit", type=int, default=None, metavar="N",
+                    help="Max symbols to fetch this run (after skip logic)")
+    fb.add_argument("--no-resume", action="store_true", help="Do not skip prior successes")
+    fb.add_argument("--status", dest="status_only", action="store_true",
+                    help="Print backfill progress JSON and exit")
+
     ens = sub.add_parser("ensemble", help="Print ensemble ML signal for a symbol")
     ens.add_argument("--symbol", required=True, metavar="SYMBOL", help="NSE symbol, e.g. RELIANCE")
 
@@ -1041,6 +1081,7 @@ def main() -> None:
         "walkforward": cmd_walkforward,
         "fnolive":    cmd_fnolive,
         "screener":   cmd_screener,
+        "fundamentals-backfill": cmd_fundamentals_backfill,
         "ensemble":   cmd_ensemble,
         "lgb":        cmd_lgb,
         "multi":      cmd_multi,
