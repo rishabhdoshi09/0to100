@@ -21,7 +21,8 @@ from logger import get_logger
 
 log = get_logger(__name__)
 
-_DB_PATH = Path("data/fundamentals_cache.db")
+_ROOT = Path(__file__).resolve().parents[1]
+_DB_PATH = _ROOT / "data" / "fundamentals_cache.db"
 _TTL = 86_400  # 1 day in seconds
 
 

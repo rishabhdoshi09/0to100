@@ -258,6 +258,8 @@ def _fundamentals(long_row: Mapping[str, Any], raw_record: Mapping[str, Any], se
         try:
             from screener.engine import _extract_fundamentals
             extracted = dict(_extract_fundamentals(raw) or {})
+            if extracted.get("market_cap_cr") is not None and values.get("market_cap") in (None, ""):
+                values["market_cap"] = extracted.get("market_cap_cr")
             for key, value in extracted.items():
                 if values.get(key) in (None, ""):
                     values[key] = value

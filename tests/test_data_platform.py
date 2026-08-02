@@ -69,3 +69,8 @@ def test_inspect_csv(tmp_path: Path):
     path.write_text("symbol,revenue\nRELIANCE,100\n", encoding="utf-8")
     info = inspect_file(path)
     assert info["ok"] and "symbol" in info["columns"]
+
+
+def test_fundamentals_cache_db_is_repo_absolute():
+    from fundamentals.cache import _DB_PATH, _ROOT
+    assert _DB_PATH == _ROOT / "data" / "fundamentals_cache.db"
