@@ -257,7 +257,8 @@ export function useScanRunner(kind: ScanKind, options: ScanRunnerOptions = {}): 
     trackedIdRef.current = operationId
     startedAtRef.current = Date.now()
     clearPoll()
-    pollRef.current = window.setInterval(() => void pollOnce(operationId), 1000)
+    const pollMs = import.meta.env.VITE_QT_LOW_POWER === '1' ? 2500 : 1000
+    pollRef.current = window.setInterval(() => void pollOnce(operationId), pollMs)
     void pollOnce(operationId)
   }, [clearPoll, pollOnce])
 

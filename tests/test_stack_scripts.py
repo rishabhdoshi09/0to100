@@ -51,6 +51,12 @@ def test_stack_monitor_is_resilient() -> None:
     assert "HTTP_PROBE_EVERY" in text
     assert 'WATCH_SLEEP_S="${QT_STACK_WATCH_SLEEP_S:-15}"' in complete
     assert "stack_port_listening 8766" in complete
+    assert "QT_AUTONOMY_INTERVAL_S" in text
+    assert (SCRIPTS / "run_quantterm_low_power.sh").exists()
+    assert (SCRIPTS / "apply_low_power_env.sh").exists()
+    low = (SCRIPTS / "apply_low_power_env.sh").read_text(encoding="utf-8")
+    assert "QT_LOW_POWER=1" in low
+    assert "QT_DISABLE_IDLE_BACKTEST=1" in low
 
 
 def test_terminal_health_endpoint_is_pure_liveness() -> None:

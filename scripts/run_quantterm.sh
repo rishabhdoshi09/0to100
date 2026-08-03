@@ -68,6 +68,11 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
+if [[ "${QT_LOW_POWER:-}" == "1" ]]; then
+  # shellcheck source=apply_low_power_env.sh
+  source "$ROOT/scripts/apply_low_power_env.sh"
+fi
+
 if python - <<'PY' >/dev/null 2>&1
 from product.autonomy_status import read_autonomy_status
 raise SystemExit(0 if read_autonomy_status().get("running") else 1)
@@ -76,8 +81,9 @@ then
   AUTONOMY_EXTERNAL=1
   echo "[STACK] A healthy autonomy supervisor is already running; reusing it."
 else
-  echo "[STACK] Starting autonomy supervisor…"
-  python -u main.py autonomy &
+  AUTONOMY_INTERVAL="${QT_AUTONOMY_INTERVAL_S:-15}"
+  echo "[STACK] Starting autonomy supervisor (interval ${AUTONOMY_INTERVAL}s)…"
+  python -u main.py autonomy --interval "$AUTONOMY_INTERVAL" &
   AUTONOMY_PID=$!
   sleep 1
   if ! kill -0 "$AUTONOMY_PID" >/dev/null 2>&1; then

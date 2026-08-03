@@ -241,7 +241,11 @@ function App() {
 
   useEffect(() => {
     void refresh()
-    const interval = scanPollingActive ? 8_000 : 12_000
+    // Low-power Macs: poll the heavy /api/dashboard far less often.
+    const lowPower = import.meta.env.VITE_QT_LOW_POWER === '1'
+    const interval = scanPollingActive
+      ? (lowPower ? 20_000 : 8_000)
+      : (lowPower ? 45_000 : 12_000)
     const timer = window.setInterval(() => void refresh(), interval)
     return () => window.clearInterval(timer)
   }, [refresh, scanPollingActive])

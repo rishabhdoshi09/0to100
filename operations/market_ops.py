@@ -724,21 +724,23 @@ class MarketOperationsWorker:
         raise RuntimeError(f"No market-operations handler for {kind}")
 
     def _lane_loop(self, lane: str) -> None:
-        idle_wait_s = 0.5
+        low_power = str(os.getenv("QT_LOW_POWER", "") or "").strip() in {"1", "true", "TRUE", "yes"}
+        idle_wait_s = 1.5 if low_power else 0.5
+        idle_cap_s = 8.0 if low_power else 3.0
         while not self.stop_event.is_set():
             try:
                 operation = self.store.lease_next(lane, worker_pid=os.getpid())
             except Exception as exc:
                 _emit("WARN", f"lane={lane} lease failed: {type(exc).__name__}: {exc}")
-                self.stop_event.wait(min(5.0, idle_wait_s * 2))
-                idle_wait_s = min(5.0, idle_wait_s * 1.5)
+                self.stop_event.wait(min(idle_cap_s, idle_wait_s * 2))
+                idle_wait_s = min(idle_cap_s, idle_wait_s * 1.5)
                 continue
             if operation is None:
                 # Back off while idle so six lanes do not spam SQLite opens.
                 self.stop_event.wait(idle_wait_s)
-                idle_wait_s = min(3.0, idle_wait_s + 0.25)
+                idle_wait_s = min(idle_cap_s, idle_wait_s + (0.5 if low_power else 0.25))
                 continue
-            idle_wait_s = 0.5
+            idle_wait_s = 1.5 if low_power else 0.5
             self._set_active(lane, operation)
             operation_id = str(operation["operation_id"])
             kind = str(operation["kind"])
@@ -819,33 +821,47 @@ class MarketOperationsWorker:
             if created:
                 queued.append(NEWS_REFRESH)
         # Canonical scan artifact is latest_momentum_scan.json (product/scan_store).
-        if _stale(ROOT / "logs" / "product" / "latest_momentum_scan.json", SCAN_FRESH_S):
+        low_power = str(os.getenv("QT_LOW_POWER", "") or "").strip() in {"1", "true", "TRUE", "yes"}
+        # Low-power / old Macs: do not auto-queue heavy scans at boot — user runs Scan now.
+        if (
+            not low_power
+            and str(os.getenv("QT_DISABLE_AUTO_MARKET_SCAN", "") or "").strip() not in {"1", "true", "TRUE", "yes"}
+            and _stale(ROOT / "logs" / "product" / "latest_momentum_scan.json", SCAN_FRESH_S)
+        ):
             _item, created = self.store.enqueue(MARKET_SCAN, lane=LANES[MARKET_SCAN], requested_by="bootstrap")
             if created:
                 queued.append(MARKET_SCAN)
-        if _stale(ROOT / "logs" / "product" / "latest_long_term_scan.json", LONG_TERM_FRESH_S):
+        if (
+            not low_power
+            and str(os.getenv("QT_DISABLE_AUTO_LONG_TERM", "") or "").strip() not in {"1", "true", "TRUE", "yes"}
+            and _stale(ROOT / "logs" / "product" / "latest_long_term_scan.json", LONG_TERM_FRESH_S)
+        ):
             _item, created = self.store.enqueue(LONG_TERM_SCAN, lane=LANES[LONG_TERM_SCAN], requested_by="bootstrap")
             if created:
                 queued.append(LONG_TERM_SCAN)
         # US retail plane — separate lane; default liquid S&P 500 scope.
-        try:
-            from data import us_history_store as us_hist
+        disable_us = low_power or str(os.getenv("QT_DISABLE_US_BOOTSTRAP", "") or "").strip() in {
+            "1", "true", "TRUE", "yes",
+        }
+        if not disable_us:
+            try:
+                from data import us_history_store as us_hist
 
-            us_ready = bool(us_hist.status().get("ready"))
-        except Exception:
-            us_ready = False
-        if not us_ready:
-            _item, created = self.store.enqueue(
-                US_DATA_PREPARE, lane=LANES[US_DATA_PREPARE], requested_by="bootstrap",
-            )
-            if created:
-                queued.append(US_DATA_PREPARE)
-        elif _stale(ROOT / "logs" / "product" / "latest_us_scan.json", SCAN_FRESH_S):
-            _item, created = self.store.enqueue(
-                US_MARKET_SCAN, lane=LANES[US_MARKET_SCAN], requested_by="bootstrap",
-            )
-            if created:
-                queued.append(US_MARKET_SCAN)
+                us_ready = bool(us_hist.status().get("ready"))
+            except Exception:
+                us_ready = False
+            if not us_ready:
+                _item, created = self.store.enqueue(
+                    US_DATA_PREPARE, lane=LANES[US_DATA_PREPARE], requested_by="bootstrap",
+                )
+                if created:
+                    queued.append(US_DATA_PREPARE)
+            elif _stale(ROOT / "logs" / "product" / "latest_us_scan.json", SCAN_FRESH_S):
+                _item, created = self.store.enqueue(
+                    US_MARKET_SCAN, lane=LANES[US_MARKET_SCAN], requested_by="bootstrap",
+                )
+                if created:
+                    queued.append(US_MARKET_SCAN)
         return queued
 
     def run(self) -> int:

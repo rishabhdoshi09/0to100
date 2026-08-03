@@ -412,8 +412,13 @@ def _load_calibration() -> dict[str, float]:
 class UnifiedScanner:
     """Scans the full universe from the bulk cache. Compute-only, no network."""
 
-    def __init__(self, max_workers: int = 8):
-        self._max_workers = max_workers
+    def __init__(self, max_workers: int | None = None):
+        if max_workers is None:
+            try:
+                max_workers = int(_os.getenv("QT_SCAN_WORKERS", "8") or 8)
+            except Exception:
+                max_workers = 8
+        self._max_workers = max(1, min(16, int(max_workers)))
         self._calib = _load_calibration()
         # Live edge — blend our OWN forward-tested outcomes into the backtest
         # calibration. CONSERVATIVE: take the lower multiplier of the two, so
