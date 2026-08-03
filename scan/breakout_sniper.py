@@ -152,22 +152,51 @@ def _quality_skip(r: dict) -> str:
     return ""
 
 
+def _is_sniper_candidate(r: dict) -> bool:
+    """Accept legacy auto_scan rows and product scan_store records."""
+    categories = [str(x) for x in (r.get("categories") or [])]
+    signals = [str(x).upper() for x in (r.get("signals") or [])]
+    status = str(r.get("status") or "")
+    entry = float(r.get("entry") or 0)
+    price = float(r.get("price") or 0)
+    if entry <= 0:
+        return False
+    # Legacy Streamlit shape.
+    if "PreBreakout" in categories:
+        dist = float(r.get("pivot_distance_pct") or 99)
+        return 0 < dist <= 2.5
+    # Product / terminal shape.
+    if status == "Ready to trade" or str(r.get("verdict") or "").upper() in ("BUY", "STRONG BUY"):
+        return True
+    if status == "Watch for breakout" or "PRE_BREAKOUT" in signals:
+        if price <= 0:
+            return True
+        dist_pct = abs(entry - price) / entry * 100.0
+        return dist_pct <= 2.5
+    return False
+
+
 def build_watch_map(results: list[dict]) -> dict[int, dict]:
     """Token→level map from scan results (pre-breakout ≤2.5%%) + watchlist.
     Chase-risk / blow-off-top names are skipped — the sniper must not fire
     a 'confirmed breakout' on a stock the scanner would demote for quality."""
     targets: dict[str, dict] = {}
     for r in results:
-        if "PreBreakout" in (r.get("categories") or []) \
-                and 0 < (r.get("pivot_distance_pct") or 99) <= 2.5:
-            skip = _quality_skip(r)
-            if skip:
-                log.debug("sniper_quality_skip", symbol=r.get("symbol"), why=skip)
-                continue
-            targets[r["symbol"]] = {"trigger": float(r.get("entry") or 0),
-                                    "stop": float(r.get("stop") or 0),
-                                    "target": float(r.get("target") or 0),
-                                    "avg_vol": float(r.get("avg_vol20") or 0)}
+        if not _is_sniper_candidate(r):
+            continue
+        skip = _quality_skip(r)
+        if skip:
+            log.debug("sniper_quality_skip", symbol=r.get("symbol"), why=skip)
+            continue
+        sym = str(r.get("symbol") or "").upper()
+        if not sym:
+            continue
+        targets[sym] = {
+            "trigger": float(r.get("entry") or 0),
+            "stop": float(r.get("stop") or 0),
+            "target": float(r.get("target") or 0),
+            "avg_vol": float(r.get("avg_vol20") or r.get("avg_vol") or 0),
+        }
     try:
         import sqlite3
         from pathlib import Path
@@ -177,10 +206,12 @@ def build_watch_map(results: list[dict]) -> dict[int, dict]:
             for sym, hi, stp, tgt in conn.execute(
                     "SELECT symbol, buy_zone_high, stop_price, target_price "
                     "FROM watchlist"):
-                if hi and sym not in targets:
-                    targets[sym] = {"trigger": float(hi),
-                                    "stop": float(stp or 0),
-                                    "target": float(tgt or 0)}
+                if hi and str(sym).upper() not in targets:
+                    targets[str(sym).upper()] = {
+                        "trigger": float(hi),
+                        "stop": float(stp or 0),
+                        "target": float(tgt or 0),
+                    }
             conn.close()
     except Exception:
         pass
@@ -194,6 +225,38 @@ def build_watch_map(results: list[dict]) -> dict[int, dict]:
     except Exception as exc:
         log.debug("sniper_tokens_failed", error=str(exc))
         return {}
+
+
+def refresh_watch_from_scan_store(limit: int = 80) -> int:
+    """Load the durable product scan and rebuild the sniper watch map."""
+    try:
+        from product.scan_store import load_scan, watchlist_rows
+
+        payload = load_scan()
+        if not payload:
+            return refresh_watch([])
+        # Prefer watchlist ranking, then fall back to full record list.
+        rows = watchlist_rows(payload, limit=limit) or list(payload.get("records") or [])
+        return refresh_watch(rows)
+    except Exception as exc:
+        log.debug("sniper_scan_store_refresh_failed", error=str(exc))
+        return 0
+
+
+def sniper_status() -> dict:
+    """Lightweight runtime snapshot for stack diagnostics."""
+    with _lock:
+        watching = sorted({v.get("symbol") for v in _watch.values() if v.get("symbol")})
+        today = datetime.now(IST).strftime("%Y-%m-%d")
+        fired = sorted(_fired.get(today, set()))
+        return {
+            "started": bool(_started),
+            "watching": len(watching),
+            "symbols": watching[:40],
+            "fired_today": fired,
+            "hold_seconds": _HOLD_SECONDS,
+            "clearance_pct": _CLEARANCE_PCT,
+        }
 
 
 def _alert(hits: list[dict]) -> None:

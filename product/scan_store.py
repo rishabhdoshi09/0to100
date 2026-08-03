@@ -49,6 +49,8 @@ def _record(signal: Any, names: Mapping[str, str], fno_symbols: set[str]) -> dic
         "entry": float(_value(signal, "entry", 0.0) or 0.0),
         "stop": float(_value(signal, "stop", 0.0) or 0.0),
         "target": float(_value(signal, "target", 0.0) or 0.0),
+        # Sniper volume pacing uses 20-day average when present.
+        "avg_vol20": float(_value(signal, "avg_vol20", 0.0) or 0.0),
         "chase_risk": chase,
         "fno_available": symbol in fno_symbols,
         "signals": signals,

@@ -28,6 +28,7 @@ AUTONOMY_PID=""
 API_PID=""
 FRONTEND_PID=""
 IDLE_BT_PID=""
+SNIPER_PID=""
 AUTONOMY_EXTERNAL=0
 API_EXTERNAL=0
 API_HEALTH_FAILS=0
@@ -41,6 +42,9 @@ cleanup() {
   fi
   if [[ -n "$IDLE_BT_PID" ]]; then
     kill "$IDLE_BT_PID" >/dev/null 2>&1 || true
+  fi
+  if [[ -n "$SNIPER_PID" ]]; then
+    kill "$SNIPER_PID" >/dev/null 2>&1 || true
   fi
   if [[ -n "$API_PID" ]]; then
     kill "$API_PID" >/dev/null 2>&1 || true
@@ -126,6 +130,13 @@ if [[ "${QT_DISABLE_IDLE_BACKTEST:-}" != "1" ]]; then
   echo "[STACK] Starting idle full-universe backtest watcher (10m idle → research job)…"
   python -u "$ROOT/scripts/idle_full_universe_backtest.py" --idle-seconds 600 &
   IDLE_BT_PID=$!
+fi
+
+# Single-stock breakout sniper (Kite ticks → Telegram). Alert-only; no broker orders.
+if [[ "${QT_DISABLE_BREAKOUT_SNIPER:-}" != "1" ]]; then
+  echo "[STACK] Starting breakout sniper (live pivot confirm → Telegram)…"
+  python -u -m scan.sniper_runtime &
+  SNIPER_PID=$!
 fi
 
 stack_free_port 5173 "Vite dev server"
