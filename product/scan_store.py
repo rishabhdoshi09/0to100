@@ -28,7 +28,9 @@ def _record(signal: Any, names: Mapping[str, str], fno_symbols: set[str]) -> dic
     verdict = str(_value(signal, "verdict", "WATCH") or "WATCH")
     if chase:
         status = "Wait for pullback"
-    elif verdict == "BUY":
+    elif verdict in ("BUY", "STRONG BUY"):
+        # STRONG BUY must stay on the live-breakout / Telegram watchlist path —
+        # mapping it to plain "Watch" hid names from observe_live_breakouts.
         status = "Ready to trade"
     elif "PRE_BREAKOUT" in signals:
         status = "Watch for breakout"

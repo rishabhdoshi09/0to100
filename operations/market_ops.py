@@ -191,6 +191,55 @@ def _operation_result(report: Any) -> dict[str, Any]:
     return {"value": str(report)}
 
 
+def _notify_market_scan_telegram(payload: dict[str, Any]) -> dict[str, Any]:
+    """Push setup / near-breakout alerts after a terminal MARKET_SCAN.
+
+    Uses the same durable notifier as autonomy so dedupe survives restarts.
+    Never raises into the scan lane — Telegram failure must not fail the scan.
+    """
+    try:
+        from research.autonomy import default_root
+        from research.autonomy import schedules as SCH
+        from research.autonomy.telegram_notifications import TelegramNotifier
+
+        holidays = set()
+        try:
+            from research.intelligence.data import nse_calendar as CAL
+
+            holidays = CAL.load_holidays() or set()
+        except Exception:
+            holidays = set()
+        try:
+            from core.market_clock import now_ist
+
+            now = now_ist()
+        except Exception:
+            from datetime import datetime
+
+            try:
+                from zoneinfo import ZoneInfo
+
+                now = datetime.now(ZoneInfo("Asia/Kolkata"))
+            except Exception:
+                now = datetime.now()
+        phase = SCH.session_phase(now, holidays)
+        notifier = TelegramNotifier(default_root())
+        if not notifier.configured():
+            _emit("WARN", "Telegram not configured — scan saved, no phone alert")
+            return {"skipped": "not_configured"}
+        sent = notifier.notify_scan(payload, phase=phase) or {}
+        _emit(
+            "INFO",
+            "Telegram scan notify · "
+            f"setup={sent.get('setup', 0)} prebreakout={sent.get('prebreakout', 0)} "
+            f"briefing={sent.get('briefing', 0)} eod={sent.get('eod', 0)} · phase={phase}",
+        )
+        return dict(sent)
+    except Exception as exc:
+        _emit("WARN", f"Telegram scan notify failed: {type(exc).__name__}: {exc}")
+        return {"error": str(exc)}
+
+
 def _stale(path: Path, max_age_s: float, *, now: float | None = None) -> bool:
     if not path.exists():
         return True
@@ -391,6 +440,9 @@ class MarketOperationsWorker:
         result["summary"] = summary
         result["records"] = len(payload.get("records", []) or [])
         result["history"] = history
+        # Terminal/UI scans used to save silently with no phone alerts — only the
+        # autonomy job path called Telegram. Notify here so Scan now reaches Telegram.
+        result["telegram"] = _notify_market_scan_telegram(payload)
         return result
 
     def _run_long_term(self, operation: dict[str, Any], *, refresh: bool) -> dict[str, Any]:
@@ -766,7 +818,8 @@ class MarketOperationsWorker:
             _item, created = self.store.enqueue(NEWS_REFRESH, lane=LANES[NEWS_REFRESH], requested_by="bootstrap")
             if created:
                 queued.append(NEWS_REFRESH)
-        if _stale(ROOT / "logs" / "product" / "latest_scan.json", SCAN_FRESH_S):
+        # Canonical scan artifact is latest_momentum_scan.json (product/scan_store).
+        if _stale(ROOT / "logs" / "product" / "latest_momentum_scan.json", SCAN_FRESH_S):
             _item, created = self.store.enqueue(MARKET_SCAN, lane=LANES[MARKET_SCAN], requested_by="bootstrap")
             if created:
                 queued.append(MARKET_SCAN)
