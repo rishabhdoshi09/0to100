@@ -42,6 +42,7 @@ export type ExperienceViewProps = {
   depth: DisplayDepth
   marketScan: ScanRunnerHandle
   longTermScan: ScanRunnerHandle
+  sniperBoardEval?: ScanRunnerHandle
 }
 
 const scoreOf = (row: ScannerWorkspaceRow) => Number(

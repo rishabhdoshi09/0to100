@@ -317,37 +317,47 @@ def _alert(hits: list[dict]) -> None:
         _fired[today].update(h["symbol"] for h in fresh)
     if not fresh:
         return
+
+    # Durable product board first — survives Telegram/autopilot being off.
+    try:
+        from product.sniper_board import append_hits
+
+        append_hits(fresh)
+    except Exception as exc:
+        log.debug("sniper_board_append_failed", error=str(exc))
+
+    log.info("sniper_fired", symbols=[h["symbol"] for h in fresh])
+
     try:
         from alerts.telegram_alerts import AlertEngine
         engine = AlertEngine()
-        if not engine.is_configured():
-            return
-        lines = ["🚨 <b>BREAKOUT CONFIRMED</b>"]
-        for h in fresh[:5]:
-            plan = ""
-            if h.get("stop") and h.get("target"):
-                plan = f"\n   plan: stop ₹{h['stop']:,.0f} / target ₹{h['target']:,.0f}"
-            held = h.get("held_s")
-            hold_bit = f", {held}s tak upar ruka" if held else ""
-            vol_bit = ""
-            if h.get("cum_vol") and h.get("avg_vol"):
-                vr = h["cum_vol"] / h["avg_vol"]
-                vol_bit = f", volume {vr:.1f}× (pace se aage)"
-            lines.append(f"\n<b>{h['symbol']}</b> ne ₹{h['trigger']:,.0f} toda "
-                         f"(₹{h['ltp']:,.1f}{hold_bit}{vol_bit}){plan}")
-        engine.send("\n".join(lines))
-        log.info("sniper_fired", symbols=[h["symbol"] for h in fresh])
-        # 🤖 Autopilot hook — off-thread, tick stream kabhi block nahi hota
-        def _feed_autopilot(hits_copy=list(fresh)):
-            try:
-                from execution.autopilot import on_breakout
-                for h in hits_copy:
-                    on_breakout(h)
-            except Exception as exc:
-                log.debug("autopilot_breakout_skip", error=str(exc))
-        threading.Thread(target=_feed_autopilot, daemon=True).start()
+        if engine.is_configured():
+            lines = ["🚨 <b>BREAKOUT CONFIRMED</b>"]
+            for h in fresh[:5]:
+                plan = ""
+                if h.get("stop") and h.get("target"):
+                    plan = f"\n   plan: stop ₹{h['stop']:,.0f} / target ₹{h['target']:,.0f}"
+                held = h.get("held_s")
+                hold_bit = f", {held}s tak upar ruka" if held else ""
+                vol_bit = ""
+                if h.get("cum_vol") and h.get("avg_vol"):
+                    vr = h["cum_vol"] / h["avg_vol"]
+                    vol_bit = f", volume {vr:.1f}× (pace se aage)"
+                lines.append(f"\n<b>{h['symbol']}</b> ne ₹{h['trigger']:,.0f} toda "
+                             f"(₹{h['ltp']:,.1f}{hold_bit}{vol_bit}){plan}")
+            engine.send("\n".join(lines))
     except Exception as exc:
         log.debug("sniper_alert_failed", error=str(exc))
+
+    # 🤖 Autopilot hook — off-thread, tick stream kabhi block nahi hota
+    def _feed_autopilot(hits_copy=list(fresh)):
+        try:
+            from execution.autopilot import on_breakout
+            for h in hits_copy:
+                on_breakout(h)
+        except Exception as exc:
+            log.debug("autopilot_breakout_skip", error=str(exc))
+    threading.Thread(target=_feed_autopilot, daemon=True).start()
 
 
 # ── WebSocket shell ───────────────────────────────────────────────────────────

@@ -16,6 +16,7 @@ import { EducationView } from './educationViews'
 import { NewsView, OperationsRibbon, FnoView } from './marketViews'
 import { ProductStockIntelligenceView } from './productViews'
 import { UsMarketHome, UsScannerView, UsStockView } from './usMarketViews'
+import { ConfirmedBreakoutsView } from './sniperBoardView'
 import { ResearchDataView } from './researchData'
 import {
   AutomationView,
@@ -146,6 +147,7 @@ const emptyDashboard: DashboardPayload = {
 const pageTitles: Record<string, string> = {
   Home: 'Home',
   'Market Scanner': 'Market Scanner',
+  'Confirmed Breakouts': 'Confirmed Breakouts',
   'Stock Intelligence': 'Stock Intelligence',
   'Long-Term Picks': 'Long-Term Picks',
   Compare: 'Compare',
@@ -172,6 +174,7 @@ const pageTitles: Record<string, string> = {
 const pageSubtitles: Record<string, string> = {
   Home: 'Daily command centre — Breakouts, Momentum and Long-Term Picks from the saved market scan.',
   'Market Scanner': 'Professional scanner tables for breakouts, momentum and long-term quality.',
+  'Confirmed Breakouts': 'Live sniper confirms collected into one board, then ranked for tomorrow-watch / research.',
   'Stock Intelligence': 'Company workspace — chart, financials, ratios and pre-trade GO/CAUTION/NO_GO cockpit.',
   'Long-Term Picks': 'Business quality, valuation and timing without fabricated model performance.',
   Compare: 'Side-by-side comparison across market, growth, quality and technical dimensions.',
@@ -237,7 +240,12 @@ function App() {
     seedOperation: activeSeed(dashboard, 'LONG_TERM_SCAN'),
   })
 
-  const scanPollingActive = marketScan.isActive || longTermScan.isActive
+  const sniperBoardEval = useScanRunner('SNIPER_BOARD_EVAL', {
+    onComplete: () => void refresh(),
+    seedOperation: activeSeed(dashboard, 'SNIPER_BOARD_EVAL'),
+  })
+
+  const scanPollingActive = marketScan.isActive || longTermScan.isActive || sniperBoardEval.isActive
 
   useEffect(() => {
     void refresh()
@@ -410,9 +418,10 @@ function App() {
     depth,
     marketScan,
     longTermScan,
+    sniperBoardEval,
   }
 
-  const primaryPages = ['Home', 'Market Scanner', 'Stock Intelligence', 'Long-Term Picks', 'Compare', 'Watchlist', 'Command Center', 'Scanner']
+  const primaryPages = ['Home', 'Market Scanner', 'Confirmed Breakouts', 'Stock Intelligence', 'Long-Term Picks', 'Compare', 'Watchlist', 'Command Center', 'Scanner']
   const showOpsRibbon = !primaryPages.includes(active)
 
   const renderView = () => {
@@ -431,6 +440,16 @@ function App() {
     }
     if (active === 'Market Scanner' || active === 'Scanner') {
       return <MarketScannerView {...viewProps} onCompare={addToCompare} />
+    }
+    if (active === 'Confirmed Breakouts') {
+      return (
+        <ConfirmedBreakoutsView
+          selected={selected}
+          setSelected={setSelected}
+          setActive={setActive}
+          evalScan={sniperBoardEval}
+        />
+      )
     }
     if (active === 'Home' || active === 'Command Center') {
       return <RadarHomeView {...viewProps} onCompare={addToCompare} onWatchlist={addToWatchlist} />

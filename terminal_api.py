@@ -846,6 +846,27 @@ def dashboard() -> dict:
     }
 
 
+@app.get("/api/sniper-board")
+def sniper_board_status() -> dict:
+    """Confirmed sniper breakouts + optional focused evaluation ranking."""
+    try:
+        from product.sniper_board import board_api_payload
+
+        return board_api_payload()
+    except Exception as exc:
+        return {
+            "available": False,
+            "hits": [],
+            "hit_count": 0,
+            "symbols": [],
+            "evaluation_records": [],
+            "evaluation_summary": {},
+            "places_orders": False,
+            "live_locked": True,
+            "error": str(exc),
+        }
+
+
 @app.get("/api/operations")
 def operations_status() -> dict:
     return _operations_payload()
@@ -1029,6 +1050,7 @@ _OPERATION_CONTROLS = {
     "RUN_FULL_UNIVERSE_BACKTEST_NOW": "FULL_UNIVERSE_BACKTEST",
     "RUN_US_DATA_PREPARE_NOW": "US_DATA_PREPARE",
     "RUN_US_SCAN_NOW": "US_MARKET_SCAN",
+    "RUN_SNIPER_BOARD_EVAL_NOW": "SNIPER_BOARD_EVAL",
 }
 _AUTONOMY_CONTROLS = {
     "RUN_CYCLE_NOW",

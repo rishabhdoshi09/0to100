@@ -25,6 +25,7 @@ def test_terminal_controls_have_no_live_broker_or_order_action():
         "RUN_FULL_UNIVERSE_BACKTEST_NOW",
         "RUN_US_DATA_PREPARE_NOW",
         "RUN_US_SCAN_NOW",
+        "RUN_SNIPER_BOARD_EVAL_NOW",
         "PAUSE_NEW_PAPER_ENTRIES",
         "RESUME_NEW_PAPER_ENTRIES",
     }
@@ -44,6 +45,7 @@ def test_market_controls_are_dispatched_outside_paper_autonomy():
         "RUN_FULL_UNIVERSE_BACKTEST_NOW": "FULL_UNIVERSE_BACKTEST",
         "RUN_US_DATA_PREPARE_NOW": "US_DATA_PREPARE",
         "RUN_US_SCAN_NOW": "US_MARKET_SCAN",
+        "RUN_SNIPER_BOARD_EVAL_NOW": "SNIPER_BOARD_EVAL",
     }
     assert terminal_api._AUTONOMY_CONTROLS == {
         "RUN_CYCLE_NOW",

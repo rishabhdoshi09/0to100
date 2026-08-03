@@ -370,6 +370,66 @@ export type ChartBar = {
   volume: number
 }
 
+export type SniperBoardHit = {
+  symbol: string
+  trigger?: number
+  ltp?: number
+  held_s?: number
+  stop?: number | null
+  target?: number | null
+  cum_vol?: number | null
+  avg_vol?: number | null
+  vol_pace?: number | null
+  confirmed_at?: string
+  session_date?: string
+  source?: string
+}
+
+export type SniperEvalRecord = {
+  symbol: string
+  company?: string
+  verdict?: string
+  rank_score?: number | null
+  edge_r?: number | null
+  momentum_score?: number | null
+  momentum_5d?: number | null
+  fundamental_score?: number | null
+  fundamental_coverage?: number | null
+  technical_score?: number | null
+  breakout_quality?: number | null
+  chase_risk?: boolean
+  classification?: string
+  consider_for?: string[]
+  reasons?: string[]
+  risks?: string[]
+  trigger?: number | null
+  confirm_ltp?: number | null
+  held_s?: number | null
+  vol_pace?: number | null
+  stop?: number | null
+  target?: number | null
+  price?: number | null
+  session_date?: string
+  confirmed_at?: string
+}
+
+export type SniperBoardPayload = {
+  available: boolean
+  updated_at?: string
+  hits: SniperBoardHit[]
+  hit_count: number
+  symbols: string[]
+  evaluated_at?: string | null
+  evaluation_summary: Record<string, number | string | boolean | null | undefined>
+  evaluation_records: SniperEvalRecord[]
+  evaluation?: Record<string, unknown> | null
+  sniper_runtime?: Record<string, unknown>
+  places_orders?: boolean
+  live_locked?: boolean
+  honesty?: string
+  error?: string
+}
+
 export type ControlName =
   | 'RUN_SCAN_NOW'
   | 'RUN_LONG_TERM_SCAN_NOW'
@@ -381,5 +441,6 @@ export type ControlName =
   | 'RUN_FULL_UNIVERSE_BACKTEST_NOW'
   | 'RUN_US_DATA_PREPARE_NOW'
   | 'RUN_US_SCAN_NOW'
+  | 'RUN_SNIPER_BOARD_EVAL_NOW'
   | 'PAUSE_NEW_PAPER_ENTRIES'
   | 'RESUME_NEW_PAPER_ENTRIES'

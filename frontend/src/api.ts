@@ -5,6 +5,7 @@ import type {
   OperationRecord,
   OptionsChainPayload,
   OptionsEodHistoryPayload,
+  SniperBoardPayload,
 } from './types'
 
 const json = async <T>(response: Response): Promise<T> => {
@@ -74,6 +75,10 @@ export const fetchOptionsEodHistory = (
 export const fetchOperationsPayload = (): Promise<DashboardPayload['operations']> =>
   fetch('/api/operations', { headers: { Accept: 'application/json' } })
     .then((response) => json<DashboardPayload['operations']>(response))
+
+export const fetchSniperBoard = (): Promise<SniperBoardPayload> =>
+  fetch('/api/sniper-board', { headers: { Accept: 'application/json' } })
+    .then((response) => json<SniperBoardPayload>(response))
 
 export const sendControl = (
   control: ControlName,

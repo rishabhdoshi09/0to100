@@ -46,6 +46,7 @@ DATA_PREPARE = "DATA_PREPARE"
 FULL_UNIVERSE_BACKTEST = "FULL_UNIVERSE_BACKTEST"
 US_DATA_PREPARE = "US_DATA_PREPARE"
 US_MARKET_SCAN = "US_MARKET_SCAN"
+SNIPER_BOARD_EVAL = "SNIPER_BOARD_EVAL"
 
 LANES = {
     MARKET_SCAN: "market_scan",
@@ -58,6 +59,8 @@ LANES = {
     # Separate US lane so NSE scans are never blocked by Yahoo US prepare.
     US_DATA_PREPARE: "us_market",
     US_MARKET_SCAN: "us_market",
+    # Focused rank of confirmed sniper hits — market_scan lane (uses scan + LT join).
+    SNIPER_BOARD_EVAL: "market_scan",
 }
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -635,6 +638,73 @@ class MarketOperationsWorker:
         result["places_orders"] = False
         return result
 
+    def _run_sniper_board_eval(self, operation: dict[str, Any]) -> dict[str, Any]:
+        operation_id = str(operation["operation_id"])
+        self._progress(
+            operation_id,
+            "LOADING_BOARD",
+            "Loading confirmed sniper breakouts for focused evaluation",
+        )
+        from product.sniper_board import board_symbols, evaluate_board, load_board
+
+        board = load_board()
+        symbols = board_symbols(board)
+        if not symbols:
+            self._progress(
+                operation_id,
+                "EMPTY_BOARD",
+                "No confirmed sniper hits yet — waiting for live breakout confirms",
+            )
+            evaluation = evaluate_board(save=True)
+            return {
+                "records": 0,
+                "summary": dict(evaluation.get("summary") or {}),
+                "evaluated_at": evaluation.get("evaluated_at"),
+                "places_orders": False,
+                "live_locked": True,
+                "message": "Sniper board is empty — no symbols to rank",
+            }
+
+        self._progress(
+            operation_id,
+            "RANKING",
+            f"Ranking {len(symbols)} confirmed breakout symbols · momentum · fundamentals · measured edge",
+            0,
+            len(symbols),
+        )
+
+        def progress(current: int, total: int, message: str) -> None:
+            text = str(message or "")
+            lower = text.lower()
+            if "fundamental" in lower or "long-term" in lower or "long term" in lower:
+                stage = "FUNDAMENTALS"
+            elif "market scan" in lower or "loading" in lower:
+                stage = "LOADING_CONTEXT"
+            else:
+                stage = "RANKING"
+            self._progress(operation_id, stage, text, current, total)
+
+        evaluation = evaluate_board(progress=progress, save=True)
+        summary = dict(evaluation.get("summary") or {})
+        records = list(evaluation.get("records") or [])
+        self._progress(
+            operation_id,
+            "SAVING",
+            f"Saved sniper-board ranking · {len(records)} symbols · "
+            f"priority={summary.get('priority', 0)} · candidate={summary.get('candidate', 0)}",
+            len(records),
+            max(1, len(records)),
+        )
+        return {
+            "records": len(records),
+            "summary": summary,
+            "evaluated_at": evaluation.get("evaluated_at"),
+            "symbols": list(evaluation.get("symbols") or []),
+            "places_orders": False,
+            "live_locked": True,
+            "honesty": evaluation.get("honesty"),
+        }
+
     def _run_full_universe_backtest(self, operation: dict[str, Any]) -> dict[str, Any]:
         """Walk-forward signal backtest on 100% of bhav EQ symbols. Never places orders."""
         operation_id = str(operation["operation_id"])
@@ -721,6 +791,8 @@ class MarketOperationsWorker:
             return self._run_us_market_scan(operation)
         if kind == FULL_UNIVERSE_BACKTEST:
             return self._run_full_universe_backtest(operation)
+        if kind == SNIPER_BOARD_EVAL:
+            return self._run_sniper_board_eval(operation)
         raise RuntimeError(f"No market-operations handler for {kind}")
 
     def _lane_loop(self, lane: str) -> None:

@@ -33,6 +33,18 @@ export const PAGE_GUIDE: Record<string, PageGuide> = {
     action: 'Run a fresh scan, filter the result, then inspect one stock in Stock Intelligence.',
     doesNot: 'A scanner match is a research candidate, not a guaranteed trade.',
   },
+  'Confirmed Breakouts': {
+    title: 'Confirmed Breakouts',
+    purpose: 'Collects live sniper pivot confirms into one durable board, then ranks only that list.',
+    questions: [
+      'Which names actually confirmed a held breakout today?',
+      'Among those, which still look strong on momentum and measured edge?',
+      'Do fundamentals support a longer-horizon shortlist?',
+      'What evidence is still missing before considering a buy tomorrow?',
+    ],
+    action: 'Wait for sniper confirms, click Evaluate board, then open Stock Intelligence on PRIORITY / CANDIDATE names.',
+    doesNot: 'A sniper confirm or Priority verdict is not a live buy order and never invents missing edge or fundamentals.',
+  },
   'Stock Intelligence': {
     title: 'Stock Intelligence',
     purpose: 'Combines price structure, technicals, current fundamentals, risks, news and source dates.',

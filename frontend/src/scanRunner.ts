@@ -2,11 +2,12 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { fetchOperation, fetchOperationsPayload, sendControl } from './api'
 import type { ControlName, OperationRecord } from './types'
 
-export type ScanKind = 'MARKET_SCAN' | 'LONG_TERM_SCAN'
+export type ScanKind = 'MARKET_SCAN' | 'LONG_TERM_SCAN' | 'SNIPER_BOARD_EVAL'
 
 const KIND_CONTROL: Record<ScanKind, ControlName> = {
   MARKET_SCAN: 'RUN_SCAN_NOW',
   LONG_TERM_SCAN: 'RUN_LONG_TERM_SCAN_NOW',
+  SNIPER_BOARD_EVAL: 'RUN_SNIPER_BOARD_EVAL_NOW',
 }
 
 export const TERMINAL_STATUSES = new Set(['SUCCEEDED', 'FAILED', 'BLOCKED', 'CANCELLED'])
@@ -33,6 +34,10 @@ const STAGE_LABELS: Record<string, string> = {
   TECHNICAL_SCREEN: 'Screening long-term technicals across the universe…',
   FUNDAMENTALS: 'Scoring current fundamentals on shortlisted names…',
   FETCHING_SOURCES: 'Fetching news sources…',
+  LOADING_BOARD: 'Loading confirmed sniper breakouts…',
+  LOADING_CONTEXT: 'Joining market-scan context for sniper symbols…',
+  RANKING: 'Ranking sniper hits by momentum, fundamentals and measured edge…',
+  EMPTY_BOARD: 'No confirmed sniper hits yet…',
   RECOVERED: 'Recovering interrupted job…',
 }
 
@@ -183,6 +188,7 @@ type ScanRunnerOptions = {
 const LANE_FOR_KIND: Record<ScanKind, string> = {
   MARKET_SCAN: 'market_scan',
   LONG_TERM_SCAN: 'long_term',
+  SNIPER_BOARD_EVAL: 'market_scan',
 }
 
 export function useScanRunner(kind: ScanKind, options: ScanRunnerOptions = {}): ScanRunnerHandle {
