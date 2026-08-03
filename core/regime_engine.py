@@ -863,17 +863,26 @@ def _risk_mode(
 # Public API
 # ---------------------------------------------------------------------------
 
-def compute_regime() -> RegimeState:
+def compute_regime(*, allow_network: bool = True) -> RegimeState:
     """
     Compute and return the current 5-dimension market regime.
     Results are cached for 15 minutes.
+
+    ``allow_network=False`` (dashboard hot path) never blocks on yfinance —
+    returns a fresh/stale cache, or raises if nothing is cached yet.
     """
     now = time.time()
     cached = _CACHE.get("regime_state")
-    cached_ts = _CACHE.get("timestamp", 0.0)
+    cached_ts = float(_CACHE.get("timestamp", 0.0) or 0.0)
 
     if cached is not None and (now - cached_ts) < _cache_ttl():
         return cached
+    if cached is not None and not allow_network:
+        # Prefer a slightly stale regime over a 30–60s Yahoo hang that times
+        # out the Terminal dashboard on older Macs.
+        return cached
+    if not allow_network:
+        raise RuntimeError("regime cache empty; network refresh deferred")
 
     # ---- parallel data fetch ------------------------------------------------
     tickers_to_fetch: dict[str, str] = {"NIFTY": NIFTY_TICKER, "VIX": VIX_TICKER}
@@ -884,7 +893,8 @@ def compute_regime() -> RegimeState:
     def _fetch(name: str, ticker: str) -> tuple[str, Optional[pd.DataFrame]]:
         return name, _fetch_ohlcv(ticker, period="1y")
 
-    with ThreadPoolExecutor(max_workers=8) as pool:
+    workers = 3 if str(__import__("os").getenv("QT_LOW_POWER", "")).strip() in {"1", "true", "TRUE", "yes"} else 8
+    with ThreadPoolExecutor(max_workers=workers) as pool:
         futures = {pool.submit(_fetch, n, t): n for n, t in tickers_to_fetch.items()}
         for fut in as_completed(futures):
             try:

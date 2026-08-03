@@ -80,6 +80,6 @@ def build_market_view(regime: Any) -> RetailMarketView:
     )
 
 
-def current_market_view() -> RetailMarketView:
+def current_market_view(*, allow_network: bool = True) -> RetailMarketView:
     from core.regime_engine import compute_regime
-    return build_market_view(compute_regime())
+    return build_market_view(compute_regime(allow_network=allow_network))

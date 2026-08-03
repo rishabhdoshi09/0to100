@@ -271,18 +271,41 @@ def build_store(days: int = DEFAULT_DAYS, progress=None) -> int:
     return _full_build(available)
 
 
+_DATES_CACHE: dict = {"mtime": None, "dates": None, "ts": 0.0}
+
+
 def _dates_on_disk() -> list[date]:
-    """Trading dates for every bhavcopy CSV already present in the store dir."""
+    """Trading dates for every bhavcopy CSV already present in the store dir.
+
+    Cached briefly — status()/dashboard used to re-glob ~1.5k CSVs on every
+    call, which freezes older Macs for many seconds.
+    """
     from datetime import datetime as _dt
+    global _DATES_CACHE
+    now = time.time()
+    try:
+        mtime = _BHAV_DIR.stat().st_mtime if _BHAV_DIR.exists() else None
+    except Exception:
+        mtime = None
+    cached = _DATES_CACHE.get("dates")
+    if (
+        cached is not None
+        and _DATES_CACHE.get("mtime") == mtime
+        and (now - float(_DATES_CACHE.get("ts") or 0.0)) < 60.0
+    ):
+        return list(cached)
     out: list[date] = []
     if not _BHAV_DIR.exists():
+        _DATES_CACHE = {"mtime": mtime, "dates": out, "ts": now}
         return out
     for p in _BHAV_DIR.glob("*.csv"):
         try:
             out.append(_dt.strptime(p.stem, "%d%m%Y").date())
         except Exception:
             continue
-    return sorted(out)
+    out = sorted(out)
+    _DATES_CACHE = {"mtime": mtime, "dates": out, "ts": now}
+    return list(out)
 
 
 def build_from_local() -> int:

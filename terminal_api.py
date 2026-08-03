@@ -146,9 +146,11 @@ def _ensure_ops_worker(*, wait_s: float = 8.0, force: bool = False) -> dict[str,
                 break
         return _ops_runtime_payload()
 
+    wait = max(0.0, float(wait_s))
+
     if _ops_process is not None and _ops_process.poll() is None:
-        # Child still starting — wait for heartbeat.
-        runtime = _wait_for_online(time.time() + max(1.0, float(wait_s)))
+        # Child still starting — wait for heartbeat only when requested.
+        runtime = _wait_for_online(time.time() + wait) if wait > 0 else _ops_runtime_payload()
         runtime["ensure_attempted"] = True
         runtime["ensure_ok"] = bool(runtime.get("running"))
         if not runtime["ensure_ok"]:
@@ -163,7 +165,7 @@ def _ensure_ops_worker(*, wait_s: float = 8.0, force: bool = False) -> dict[str,
         cwd=str(ROOT),
         env=os.environ.copy(),
     )
-    runtime = _wait_for_online(time.time() + max(1.0, float(wait_s)))
+    runtime = _wait_for_online(time.time() + wait) if wait > 0 else _ops_runtime_payload()
 
     # Spawn exited immediately (often lock conflict). Force-reclaim stale holder and retry.
     if not runtime.get("running") and _ops_process.poll() is not None:
@@ -173,7 +175,7 @@ def _ensure_ops_worker(*, wait_s: float = 8.0, force: bool = False) -> dict[str,
             cwd=str(ROOT),
             env=os.environ.copy(),
         )
-        runtime = _wait_for_online(time.time() + max(1.0, float(wait_s)))
+        runtime = _wait_for_online(time.time() + wait) if wait > 0 else _ops_runtime_payload()
 
     runtime["ensure_attempted"] = True
     runtime["ensure_ok"] = bool(runtime.get("running"))
@@ -225,7 +227,9 @@ def _queue_message_for_control(kind: str, runtime: dict[str, Any]) -> str:
 
 @app.on_event("startup")
 def _startup() -> None:
-    _ensure_ops_worker()
+    # Do not block API bind on worker heartbeat — old Macs need /api/health fast.
+    _ensure_ops_worker(wait_s=0.0)
+    _schedule_regime_refresh()
 
 
 @app.on_event("shutdown")
@@ -240,10 +244,39 @@ def _shutdown() -> None:
     _ops_process = None
 
 
-def _market_payload() -> dict:
+_regime_refresh_started = False
+
+
+def _schedule_regime_refresh() -> None:
+    """Warm/refresh Yahoo regime off the dashboard request path."""
+    global _regime_refresh_started
+    if _regime_refresh_started:
+        return
+    _regime_refresh_started = True
+
+    def _worker() -> None:
+        while True:
+            try:
+                from core.regime_engine import compute_regime
+
+                compute_regime(allow_network=True)
+            except Exception:
+                pass
+            # Keep the Terminal API free; refresh in the background only.
+            time.sleep(120.0 if str(os.getenv("QT_LOW_POWER", "")).strip() in {"1", "true", "TRUE", "yes"} else 60.0)
+
+    try:
+        import threading
+
+        threading.Thread(target=_worker, name="regime-refresh", daemon=True).start()
+    except Exception:
+        _regime_refresh_started = False
+
+
+def _market_payload(*, allow_network: bool = False) -> dict:
     try:
         from product.market_view import current_market_view
-        market = current_market_view()
+        market = current_market_view(allow_network=allow_network)
         return {
             "available": True,
             "health": market.health,
@@ -274,17 +307,25 @@ def _market_payload() -> dict:
         }
 
 
-def _scan_payload() -> dict:
+def _scan_payload(*, record_limit: int = 150) -> dict:
     try:
-        from product.scan_store import load_scan
+        from product.scan_store import load_scan, watchlist_rows
         payload = load_scan() or {}
-        records = [dict(row) for row in (payload.get("records", []) or []) if isinstance(row, dict)]
+        all_records = [dict(row) for row in (payload.get("records", []) or []) if isinstance(row, dict)]
+        # Dashboard must stay small — shipping 2k+ rows freezes older Macs.
+        limit = max(20, min(int(record_limit), 400))
+        if len(all_records) > limit:
+            records = [dict(row) for row in watchlist_rows(payload, limit=limit)]
+        else:
+            records = all_records
         return {
             "available": bool(payload),
             "scanned_at": payload.get("scanned_at", ""),
             "universe_size": int(payload.get("universe_size", 0) or 0),
             "summary": dict(payload.get("summary", {}) or {}),
             "records": records,
+            "records_truncated": len(all_records) > len(records),
+            "records_total": len(all_records),
         }
     except Exception as exc:
         return {
@@ -293,6 +334,8 @@ def _scan_payload() -> dict:
             "universe_size": 0,
             "summary": {},
             "records": [],
+            "records_truncated": False,
+            "records_total": 0,
             "error": str(exc),
         }
 
@@ -326,16 +369,18 @@ def _latest_autonomy_job(job_types: set[str]) -> dict:
     return {}
 
 
-def _long_term_payload() -> dict:
+def _long_term_payload(*, record_limit: int = 80) -> dict:
     try:
         from product.long_term_store import load_long_term_scan
         payload = load_long_term_scan() or {}
+        records = [dict(row) for row in (payload.get("records", []) or []) if isinstance(row, dict)]
+        limit = max(10, min(int(record_limit), 200))
         return {
             "available": bool(payload),
             "scanned_at": payload.get("scanned_at", ""),
             "fundamentals_source": payload.get("fundamentals_source", ""),
             "summary": dict(payload.get("summary", {}) or {}),
-            "records": [dict(row) for row in (payload.get("records", []) or []) if isinstance(row, dict)],
+            "records": records[:limit],
             "job": _latest_autonomy_job({"long_term_scan", "long_term_refresh"}),
         }
     except Exception as exc:
@@ -437,7 +482,7 @@ def _autonomy_payload() -> dict:
             "recent_dialogue": list(status.get("recent_dialogue", []) or [])[-40:],
             "recent_transitions": list(status.get("recent_transitions", []) or [])[-30:],
             "jobs": dict(status.get("jobs", {}) or {}),
-            "jobs_recent": _recent_autonomy_jobs(),
+            "jobs_recent": _recent_autonomy_jobs(limit=20),
             "owner_state": dict(status.get("owner_state", {}) or {}),
             "live_feed": dict(raw.get("live_feed", {}) or {}),
             "last_cycle": dict(status.get("last_cycle", {}) or {}),
@@ -497,7 +542,7 @@ def _snapshot_payload() -> dict:
         return {"ready": False, "snapshot_id": "", "latest_date": "", "source": "", "error": str(exc)}
 
 
-def _operations_payload() -> dict[str, Any]:
+def _operations_payload(*, wait_s: float = 0.0, recent_limit: int = 40) -> dict[str, Any]:
     try:
         from operations.market_ops import LANES
         from operations.store import OperationStore
@@ -505,9 +550,10 @@ def _operations_payload() -> dict[str, Any]:
         runtime = _ops_runtime_payload()
         # Self-heal whenever the worker is offline — not only when a job is
         # already queued. Otherwise Scan now queues PENDING and never leases.
+        # Default wait_s=0 keeps /api/dashboard non-blocking on old Macs.
         if not runtime.get("running"):
-            runtime = _ensure_ops_worker(wait_s=2.5)
-        recent = store.recent(100)
+            runtime = _ensure_ops_worker(wait_s=max(0.0, float(wait_s)))
+        recent = store.recent(max(10, min(int(recent_limit), 100)))
         latest = {}
         for kind in LANES:
             item = store.latest(kind)
@@ -768,17 +814,19 @@ def health_detail() -> dict:
 
 @app.get("/api/dashboard")
 def dashboard() -> dict:
-    # Kick market-ops first so Scan now is not racing a cold worker.
+    # Never block the dashboard on Yahoo regime fetch or worker heartbeat waits.
+    # Those freezes timed out the UI (60s) on older MacBooks.
     try:
-        _ensure_ops_worker(wait_s=1.5)
+        _ensure_ops_worker(wait_s=0.0)
     except Exception:
         pass
-    market = _market_payload()
-    scan = _scan_payload()
-    long_term = _long_term_payload()
+    _schedule_regime_refresh()
+    market = _market_payload(allow_network=False)
+    scan = _scan_payload(record_limit=150)
+    long_term = _long_term_payload(record_limit=80)
     paper = _paper_payload()
     autonomy = _autonomy_payload()
-    operations = _operations_payload()
+    operations = _operations_payload(wait_s=0.0, recent_limit=30)
     news = _news_payload()
     fno = _fno_payload()
     data = _data_payload(scan, long_term, operations, fno, news)
