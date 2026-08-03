@@ -36,6 +36,9 @@ _fired: dict[str, set] = {}        # {YYYY-MM-DD: {symbols}}
 _arm: dict[str, float] = {}        # symbol -> ts when it first CLEARED the level
 _ticker = None
 _started = False
+_instrument_manager = None
+_last_scan_mtime: float | None = None
+_last_watch_fingerprint: str = ""
 
 # ── Confirmation thresholds (the false-break killer) ─────────────────────────
 # A tick TOUCHING the level is not a breakout — the intraday false-break is
@@ -152,6 +155,30 @@ def _quality_skip(r: dict) -> str:
     return ""
 
 
+def _instrument_tokens(symbols: list[str]) -> dict[str, int]:
+    """Reuse one InstrumentManager — rebuilding it every poll reloads a 10k CSV."""
+    global _instrument_manager
+    try:
+        from data.instruments import InstrumentManager
+
+        if _instrument_manager is None:
+            _instrument_manager = InstrumentManager()
+        return _instrument_manager.tokens_for(list(symbols))
+    except Exception as exc:
+        log.debug("sniper_tokens_failed", error=str(exc))
+        return {}
+
+
+def _is_junk_symbol(symbol: str) -> bool:
+    """Liquid/gold ETFs are not single-stock breakout candidates."""
+    u = str(symbol or "").upper()
+    if not u:
+        return True
+    if "LIQUID" in u or u.endswith("BEES") or u.endswith("ETF") or "GOLD" in u:
+        return True
+    return False
+
+
 def _is_sniper_candidate(r: dict) -> bool:
     """Accept legacy auto_scan rows and product scan_store records."""
     categories = [str(x) for x in (r.get("categories") or [])]
@@ -159,7 +186,8 @@ def _is_sniper_candidate(r: dict) -> bool:
     status = str(r.get("status") or "")
     entry = float(r.get("entry") or 0)
     price = float(r.get("price") or 0)
-    if entry <= 0:
+    sym = str(r.get("symbol") or "").upper()
+    if entry <= 0 or _is_junk_symbol(sym):
         return False
     # Legacy Streamlit shape.
     if "PreBreakout" in categories:
@@ -181,12 +209,13 @@ def build_watch_map(results: list[dict]) -> dict[int, dict]:
     Chase-risk / blow-off-top names are skipped — the sniper must not fire
     a 'confirmed breakout' on a stock the scanner would demote for quality."""
     targets: dict[str, dict] = {}
+    skipped = 0
     for r in results:
         if not _is_sniper_candidate(r):
             continue
         skip = _quality_skip(r)
         if skip:
-            log.debug("sniper_quality_skip", symbol=r.get("symbol"), why=skip)
+            skipped += 1
             continue
         sym = str(r.get("symbol") or "").upper()
         if not sym:
@@ -197,6 +226,9 @@ def build_watch_map(results: list[dict]) -> dict[int, dict]:
             "target": float(r.get("target") or 0),
             "avg_vol": float(r.get("avg_vol20") or r.get("avg_vol") or 0),
         }
+    if skipped:
+        # One line — not a per-symbol spam every poll on old Macs.
+        log.debug("sniper_quality_skipped", count=skipped)
     try:
         import sqlite3
         from pathlib import Path
@@ -217,27 +249,42 @@ def build_watch_map(results: list[dict]) -> dict[int, dict]:
         pass
     if not targets:
         return {}
+    tokens = _instrument_tokens(list(targets))
+    return {tok: {"symbol": sym, **targets[sym]}
+            for sym, tok in tokens.items() if tok}
+
+
+def refresh_watch_from_scan_store(limit: int = 80, *, force: bool = False) -> int:
+    """Load the durable product scan and rebuild the sniper watch map.
+
+    Skips rebuild when the scan file mtime is unchanged — avoids reloading
+    instruments + spam logs every sniper poll.
+    """
+    global _last_scan_mtime
     try:
-        from data.instruments import InstrumentManager
-        tokens = InstrumentManager().tokens_for(list(targets))
-        return {tok: {"symbol": sym, **targets[sym]}
-                for sym, tok in tokens.items() if tok}
-    except Exception as exc:
-        log.debug("sniper_tokens_failed", error=str(exc))
-        return {}
+        from product.scan_store import DEFAULT_SCAN_PATH, load_scan, watchlist_rows
 
-
-def refresh_watch_from_scan_store(limit: int = 80) -> int:
-    """Load the durable product scan and rebuild the sniper watch map."""
-    try:
-        from product.scan_store import load_scan, watchlist_rows
-
+        path = DEFAULT_SCAN_PATH
+        try:
+            mtime = path.stat().st_mtime if path.exists() else None
+        except Exception:
+            mtime = None
+        if (
+            not force
+            and mtime is not None
+            and _last_scan_mtime == mtime
+            and _watch
+        ):
+            with _lock:
+                return len(_watch)
         payload = load_scan()
         if not payload:
+            _last_scan_mtime = mtime
             return refresh_watch([])
-        # Prefer watchlist ranking, then fall back to full record list.
         rows = watchlist_rows(payload, limit=limit) or list(payload.get("records") or [])
-        return refresh_watch(rows)
+        n = refresh_watch(rows)
+        _last_scan_mtime = mtime
+        return n
     except Exception as exc:
         log.debug("sniper_scan_store_refresh_failed", error=str(exc))
         return 0
@@ -307,14 +354,22 @@ def _alert(hits: list[dict]) -> None:
 
 def refresh_watch(results: list[dict]) -> int:
     """Rebuild the watch map after each scan; (re)subscribe if live."""
-    global _watch
+    global _watch, _last_watch_fingerprint
     new_map = build_watch_map(results)
+    fingerprint = ",".join(
+        f"{v['symbol']}:{v.get('trigger')}"
+        for _, v in sorted(new_map.items(), key=lambda item: item[1].get("symbol", ""))
+    )
+    unchanged = fingerprint == _last_watch_fingerprint and bool(new_map)
     with _lock:
         _watch = new_map
         # prune arm-state for symbols no longer watched
         _watched_syms = {v["symbol"] for v in new_map.values()}
         for _s in [s for s in _arm if s not in _watched_syms]:
             _arm.pop(_s, None)
+    if unchanged:
+        return len(new_map)
+    _last_watch_fingerprint = fingerprint
     if _ticker is not None and new_map:
         try:
             _ticker.subscribe(list(new_map))
