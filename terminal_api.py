@@ -248,7 +248,7 @@ _regime_refresh_started = False
 
 
 def _schedule_regime_refresh() -> None:
-    """Warm/refresh Yahoo regime off the dashboard request path."""
+    """Warm/refresh Kite-first regime off the dashboard request path."""
     global _regime_refresh_started
     if _regime_refresh_started:
         return
@@ -294,7 +294,7 @@ def _market_payload(*, allow_network: bool = False) -> dict:
         return {
             "available": False,
             "health": "Unavailable",
-            "summary": "Market regime projection is unavailable.",
+            "summary": "Market regime unavailable — needs Kite login / index history.",
             "trade_stance": "Do not infer a market stance from missing data.",
             "breadth": "—",
             "leaders": [],
@@ -302,7 +302,7 @@ def _market_payload(*, allow_network: bool = False) -> dict:
             "nifty_change_1d": None,
             "nifty_change_5d": None,
             "vix": None,
-            "technical_details": {},
+            "technical_details": {"primary_source": "kite", "yahoo_fallback": False},
             "error": str(exc),
         }
 

@@ -4,15 +4,16 @@ regime_engine.py — 5-dimension market regime classifier for NSE India.
 Public API:
     compute_regime() -> RegimeState
 
-All data sourced via yfinance. Sector fetches are parallelised.
-Module-level cache with 15-minute TTL (no Streamlit dependency).
-All external calls degrade gracefully — never raise.
+India index/regime data is Kite-first. NSE official index store is the
+offline secondary. Yahoo is opt-in only via QT_YAHOO_FALLBACK=1.
+Never invents a demo regime when feeds are missing.
 """
 
 from __future__ import annotations
 
-import time
 import logging
+import os
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field, asdict
 from datetime import datetime, timezone
@@ -20,9 +21,11 @@ from typing import Optional
 
 import numpy as np
 import pandas as pd
-import yfinance as yf
 
 logger = logging.getLogger(__name__)
+
+# Last successful source per ticker for honesty/diagnostics.
+_LAST_SOURCES: dict[str, str] = {}
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -184,12 +187,25 @@ def _fetch_ohlcv_kite(ticker: str, days: int = 365) -> Optional[pd.DataFrame]:
 # yfinance helpers
 # ---------------------------------------------------------------------------
 
+def _yahoo_fallback_enabled() -> bool:
+    return str(os.getenv("QT_YAHOO_FALLBACK", "0") or "0").strip() in {
+        "1", "true", "TRUE", "yes",
+    }
+
+
 def _fetch_ohlcv(ticker: str, period: str = "1y") -> Optional[pd.DataFrame]:
-    """Index OHLCV: NSE official index store → Kite → yfinance (last resort).
-    Kite historical needs a paid add-on and Yahoo's crumb auth keeps
-    breaking, so the free official ind_close_all archive leads."""
+    """Index OHLCV: Kite → NSE official index store → optional Yahoo.
+
+    Terminal product path is Kite-primary. Yahoo stays off unless
+    ``QT_YAHOO_FALLBACK=1`` is set explicitly.
+    """
     days = 400 if period == "1y" else 30
-    # 1. NSE official index store (free, offline-cached)
+    # 1. Kite Connect (requires daily login; historical may need API entitlement)
+    df = _fetch_ohlcv_kite(ticker, days=days)
+    if df is not None:
+        _LAST_SOURCES[ticker] = "kite"
+        return df
+    # 2. NSE official index store (offline cache / free archive — not Yahoo)
     try:
         from data.index_store import get_index_ohlcv
         df = get_index_ohlcv(ticker)
@@ -197,28 +213,32 @@ def _fetch_ohlcv(ticker: str, period: str = "1y") -> Optional[pd.DataFrame]:
             if "Volume" not in df.columns:   # old-cache shape safety
                 df = df.copy()
                 df["Volume"] = 0.0
+            _LAST_SOURCES[ticker] = "nse_index_store"
             return df.tail(days)
     except Exception as exc:
         logger.debug("index_store miss for %s: %s", ticker, exc)
-    # 2. Kite (only works with the historical-API subscription)
-    df = _fetch_ohlcv_kite(ticker, days=days)
-    if df is not None:
-        return df
-    # 3. Fall back to yfinance — suppress noisy warnings for known-missing sector indices
+    # 3. Yahoo — opt-in only; never the default India path
+    if not _yahoo_fallback_enabled():
+        _LAST_SOURCES[ticker] = "unavailable"
+        return None
     try:
         import warnings
+        import yfinance as yf
+
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            # bounded: a slow/blocked feed must not hang the caller (e.g. the retail Market page)
             df = yf.download(ticker, period=period, progress=False, auto_adjust=True, timeout=8)
         if df is None or df.empty:
-            logger.debug("No yfinance data for %s (Kite may not be connected)", ticker)
+            logger.debug("No yfinance data for %s", ticker)
+            _LAST_SOURCES[ticker] = "unavailable"
             return None
         df.index = pd.to_datetime(df.index)
         df.sort_index(inplace=True)
+        _LAST_SOURCES[ticker] = "yfinance"
         return df
     except Exception as exc:
         logger.debug("yfinance fetch skipped for %s: %s", ticker, exc)
+        _LAST_SOURCES[ticker] = "unavailable"
         return None
 
 
@@ -420,7 +440,8 @@ def _compute_breadth(sector_data: dict[str, Optional[pd.DataFrame]]) -> tuple[in
             declines += 1
 
     if not scores:
-        return 50, "NEUTRAL", 1.0
+        # Honest miss — do not invent a "neutral 50" breadth reading.
+        return 0, "UNAVAILABLE", float("nan")
 
     raw = float(np.mean(scores)) * 100  # 0-100
     breadth_score = int(round(raw))
@@ -447,11 +468,13 @@ def _classify_sector_rotation(
     returns: dict[str, float] = {}
     for name, df in sector_data.items():
         if df is None or len(df) < 7:
-            returns[name] = 0.0
             continue
         close = df["Close"].squeeze()
         ret5d = float((close.iloc[-1] / close.iloc[-6] - 1) * 100) if len(close) > 5 else 0.0
         returns[name] = round(ret5d, 3)
+
+    if not returns:
+        return [], [], "UNAVAILABLE", {}
 
     ranked = sorted(returns, key=lambda s: returns[s], reverse=True)
     leaders = ranked[:3]
@@ -915,45 +938,17 @@ def compute_regime(*, allow_network: bool = True) -> RegimeState:
     leaders, laggards, rotation_mode, sector_returns = _classify_sector_rotation(sector_data)
     institutional = _classify_institutional(nifty_df, market_regime, vix, sma50, sma200)
 
-    # ---- demo fallback: if no live data, use realistic demo data ------------
+    # Never invent DEMO_REGIME — if Kite/index bars are missing, fail closed.
     all_data_missing = (np.isnan(nifty_price) or nifty_price == 0.0)
     if all_data_missing:
-        try:
-            from core.demo_data import DEMO_REGIME as _d
-            logger.info("Live data unavailable — using demo data (HTTP 403 / network restricted env)")
-            fetch_time_utc = datetime.now(timezone.utc)
-            state = RegimeState(
-                market_regime=_d["market_regime"],
-                volatility_regime=_d["volatility_regime"],
-                breadth_strength=int(_d["breadth_strength"]),
-                breadth_label=_d["breadth_label"],
-                breakout_environment=_d["breakout_environment"],
-                risk_mode=_d["risk_mode"],
-                institutional_activity=_d["institutional_activity"],
-                leading_sectors=_d["leading_sectors"],
-                lagging_sectors=_d["lagging_sectors"],
-                rotation_mode=_d["rotation_mode"],
-                sector_returns=_d["sector_returns"],
-                nifty_price=_d["nifty_price"],
-                nifty_change_1d=_d["nifty_change_1d"],
-                nifty_change_5d=_d["nifty_change_5d"],
-                sma50=_d["sma50"],
-                sma200=_d["sma200"],
-                vix=_d["vix"],
-                regime_score=_d["regime_score"],
-                regime_confidence=60.0,
-                regime_confidence_label="MODERATE",
-                quality_multiplier=_d["quality_multiplier"],
-                recommended_playbooks=_d["recommended_playbooks"],
-                avoid_patterns=_d["avoid_patterns"],
-                timestamp=fetch_time_utc.strftime("%H:%M") + " ⚠demo",
-                data_age_mins=0,
-            )
-            _CACHE["regime_state"] = state
-            _CACHE["timestamp"] = now
-            return state
-        except Exception as exc:
-            logger.warning("Demo data fallback failed: %s", exc)
+        logger.warning(
+            "Regime unavailable — no Kite/NSE index bars "
+            "(run: python main.py login; sources=%s)",
+            dict(_LAST_SOURCES),
+        )
+        raise RuntimeError(
+            "regime unavailable: Kite/NSE index data missing — run python main.py login"
+        )
 
     # ---- derived fields -----------------------------------------------------
     regime_score = _compute_regime_score(market_regime, volatility_regime, breadth_score, institutional)

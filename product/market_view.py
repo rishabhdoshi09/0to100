@@ -81,5 +81,28 @@ def build_market_view(regime: Any) -> RetailMarketView:
 
 
 def current_market_view(*, allow_network: bool = True) -> RetailMarketView:
-    from core.regime_engine import compute_regime
-    return build_market_view(compute_regime(allow_network=allow_network))
+    from core import regime_engine as RE
+    view = build_market_view(RE.compute_regime(allow_network=allow_network))
+    sources = {
+        str(k): str(v)
+        for k, v in dict(getattr(RE, "_LAST_SOURCES", {}) or {}).items()
+    }
+    primary = "kite" if any(v == "kite" for v in sources.values()) else (
+        "nse_index_store" if any(v == "nse_index_store" for v in sources.values()) else "unavailable"
+    )
+    details = dict(view.technical_details or {})
+    details["data_sources"] = sources
+    details["primary_source"] = primary
+    details["yahoo_fallback"] = any(v == "yfinance" for v in sources.values())
+    return RetailMarketView(
+        health=view.health,
+        summary=view.summary,
+        trade_stance=view.trade_stance,
+        breadth=view.breadth,
+        leaders=view.leaders,
+        laggards=view.laggards,
+        nifty_change_1d=view.nifty_change_1d,
+        nifty_change_5d=view.nifty_change_5d,
+        vix=view.vix,
+        technical_details=details,
+    )
