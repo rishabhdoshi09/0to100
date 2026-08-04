@@ -411,37 +411,74 @@ def backfill_status() -> dict[str, Any]:
     }
 
 
-def workspace_payload(days: int = 30, *, include_nifty_options: bool = True) -> dict[str, Any]:
-    """API/dashboard payload: lazy NSE sync + cached bulk/options reads."""
-    summary = summarize(days, auto_refresh=True)
+def workspace_payload(
+    days: int = 30,
+    *,
+    include_nifty_options: bool = True,
+    allow_network: bool = True,
+) -> dict[str, Any]:
+    """Institutional flows payload.
+
+    ``allow_network=False`` (dashboard hot path) reads SQLite/disk/memory cache
+    only — never blocks on NSE cookie priming, FII stats, bulk deals, or
+    option-chain fetches. Background refresh warms those separately.
+    """
+    summary = summarize(days, auto_refresh=bool(allow_network))
     derivatives: dict[str, Any] = {}
     bulk_deals: list[dict[str, Any]] = []
     bulk_buys: list[str] = []
     flows_note = summary.get("note") or ""
-    try:
-        from data.fii_dii import get_fii_derivative_stats_uncached
-
-        derivatives = get_fii_derivative_stats_uncached()
-    except Exception:
-        derivatives = {}
-    try:
-        from data.institutional_flows import get_flows
-
-        flows = get_flows()
-        bulk_deals = list(flows.get("bulk_deals") or [])
-        bulk_buys = list(flows.get("bulk_buys") or [])
-        if flows.get("fii_dii") and not summary.get("note"):
-            flows_note = str((flows.get("fii_dii") or {}).get("note") or "")
-    except Exception:
-        pass
     nifty_options: dict[str, Any] = {"available": False}
-    if include_nifty_options:
-        try:
-            from options.chain_fetch import chain_workspace_cached
 
-            nifty_options = chain_workspace_cached("NIFTY")
+    if allow_network:
+        try:
+            from data.fii_dii import get_fii_derivative_stats_uncached
+
+            derivatives = get_fii_derivative_stats_uncached()
+        except Exception:
+            derivatives = {}
+        try:
+            from data.institutional_flows import get_flows
+
+            flows = get_flows()
+            bulk_deals = list(flows.get("bulk_deals") or [])
+            bulk_buys = list(flows.get("bulk_buys") or [])
+            if flows.get("fii_dii") and not summary.get("note"):
+                flows_note = str((flows.get("fii_dii") or {}).get("note") or "")
         except Exception:
             pass
+        if include_nifty_options:
+            try:
+                from options.chain_fetch import chain_workspace_cached
+
+                nifty_options = chain_workspace_cached("NIFTY")
+            except Exception:
+                pass
+    else:
+        try:
+            from data.fii_dii import get_fii_derivative_stats_cached_only
+
+            derivatives = get_fii_derivative_stats_cached_only()
+        except Exception:
+            derivatives = {"available": False}
+        try:
+            from data.institutional_flows import get_flows_cached_only
+
+            flows = get_flows_cached_only()
+            bulk_deals = list(flows.get("bulk_deals") or [])
+            bulk_buys = list(flows.get("bulk_buys") or [])
+            if flows.get("fii_dii") and not summary.get("note"):
+                flows_note = str((flows.get("fii_dii") or {}).get("note") or "")
+        except Exception:
+            pass
+        if include_nifty_options:
+            try:
+                from options.chain_fetch import chain_workspace_memory_only
+
+                nifty_options = chain_workspace_memory_only("NIFTY")
+            except Exception:
+                nifty_options = {"available": False}
+
     return {
         "available": bool(summary.get("available")),
         "cash": summary,
@@ -452,4 +489,5 @@ def workspace_payload(days: int = 30, *, include_nifty_options: bool = True) -> 
         "insight": flows_note or summary.get("note") or "",
         "generated_at": _now_iso(),
         "lazy_sync": True,
+        "network_used": bool(allow_network),
     }

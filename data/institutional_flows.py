@@ -147,6 +147,21 @@ def _fetch() -> dict:
     return out
 
 
+def get_flows_cached_only() -> dict:
+    """Disk cache only — never hits NSE. Empty dict when nothing is cached."""
+    try:
+        if _CACHE.exists():
+            data = json.loads(_CACHE.read_text())
+            if isinstance(data, dict):
+                data = dict(data)
+                data["stale"] = True
+                data["network_used"] = False
+                return data
+    except Exception:
+        pass
+    return {}
+
+
 def get_flows(max_age_s: int = _TTL_S) -> dict:
     """Cached institutional flows: {fii_dii: {...}|absent, bulk_deals: [...],
     bulk_buys: [...]}. Cache-first (3h TTL); fetch fail → purana cache

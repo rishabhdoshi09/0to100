@@ -33,11 +33,13 @@ TCA_DB = core.ROOT / "logs" / "tca" / "assessments.db"
 
 
 def _current_product_payloads() -> dict[str, dict[str, Any]]:
-    market = core._market_payload()
-    scan = core._scan_payload()
-    long_term = core._long_term_payload()
-    operations = core._operations_payload()
-    news = core._news_payload()
+    market = core._market_payload(allow_network=False)
+    scan = core._scan_payload(record_limit=80)
+    long_term = core._long_term_payload(record_limit=40)
+    operations = core._operations_payload(wait_s=0.0, recent_limit=20)
+    news = core._news_payload(
+        latest_refresh=dict((operations.get("latest") or {}).get("NEWS_REFRESH") or {}),
+    )
     fno = core._fno_payload()
     data = core._data_payload(scan, long_term, operations, fno, news)
     return {

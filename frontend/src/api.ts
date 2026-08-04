@@ -16,9 +16,10 @@ const json = async <T>(response: Response): Promise<T> => {
   return response.json() as Promise<T>
 }
 
-export const fetchDashboard = (): Promise<DashboardPayload> => {
+export const fetchDashboard = (opts?: { timeoutMs?: number }): Promise<DashboardPayload> => {
+  const timeoutMs = Math.max(5_000, Number(opts?.timeoutMs) || 25_000)
   const controller = new AbortController()
-  const timer = window.setTimeout(() => controller.abort(), 60_000)
+  const timer = window.setTimeout(() => controller.abort(), timeoutMs)
   return fetch('/api/dashboard', {
     headers: { Accept: 'application/json' },
     signal: controller.signal,
@@ -36,7 +37,7 @@ export const fetchDashboard = (): Promise<DashboardPayload> => {
     .catch((reason) => {
       if (reason instanceof DOMException && reason.name === 'AbortError') {
         throw new Error(
-          'Dashboard timed out after 60s. Check Terminal API on :8765 and market-ops worker; then Retry.',
+          `Dashboard timed out after ${Math.round(timeoutMs / 1000)}s. Check Terminal API on :8765 and market-ops worker; then Retry.`,
         )
       }
       if (reason instanceof TypeError) {

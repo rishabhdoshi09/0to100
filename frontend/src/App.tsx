@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { fetchChart, fetchDashboard, sendControl } from './api'
+import { fetchChart, fetchDashboard, fetchOperationsPayload, sendControl } from './api'
 import {
   CompareView,
   MarketScannerView,
@@ -211,9 +211,12 @@ function App() {
     return saved === 'professional' ? 'professional' : 'simple'
   })
 
-  const refresh = useCallback(async () => {
+  const refresh = useCallback(async (opts?: { soft?: boolean }) => {
+    const soft = Boolean(opts?.soft)
     try {
-      const payload = await fetchDashboard()
+      // Soft polls during an active scan use a shorter timeout and never wipe
+      // the last good dashboard if the API is temporarily busy.
+      const payload = await fetchDashboard({ timeoutMs: soft ? 12_000 : 25_000 })
       setDashboard(payload)
       setError('')
       const allSymbols = [
@@ -224,7 +227,20 @@ function App() {
       const first = allSymbols[0] || ''
       setSelected((current) => current || first)
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : 'Dashboard API unavailable')
+      const message = reason instanceof Error ? reason.message : 'Dashboard API unavailable'
+      if (soft) {
+        // Keep UI usable while market-ops is scanning — merge ops if possible.
+        try {
+          const ops = await fetchOperationsPayload()
+          setDashboard((prev) => ({ ...prev, operations: ops }))
+          setError('')
+          setControlState('Dashboard busy during scan — showing last good state + live ops')
+        } catch {
+          setControlState(message)
+        }
+      } else {
+        setError(message)
+      }
     } finally {
       setLoading(false)
     }
@@ -248,13 +264,17 @@ function App() {
   const scanPollingActive = marketScan.isActive || longTermScan.isActive || sniperBoardEval.isActive
 
   useEffect(() => {
-    void refresh()
-    // Low-power Macs: poll the heavy /api/dashboard far less often.
+    void refresh({ soft: false })
+    // During scans: poll ops-friendly soft dashboard less often so the API
+    // stays free for market-ops on older Macs.
     const lowPower = import.meta.env.VITE_QT_LOW_POWER === '1'
     const interval = scanPollingActive
-      ? (lowPower ? 20_000 : 8_000)
-      : (lowPower ? 45_000 : 12_000)
-    const timer = window.setInterval(() => void refresh(), interval)
+      ? (lowPower ? 45_000 : 25_000)
+      : (lowPower ? 45_000 : 15_000)
+    const timer = window.setInterval(
+      () => void refresh({ soft: scanPollingActive }),
+      interval,
+    )
     return () => window.clearInterval(timer)
   }, [refresh, scanPollingActive])
 
@@ -531,14 +551,19 @@ function App() {
 
         {error && (
           <div className="api-degraded-banner" role="alert">
-            <strong>QuantTerm backend is unavailable.</strong>
+            <strong>
+              {scanPollingActive
+                ? 'Dashboard is busy while a scan is running.'
+                : 'QuantTerm backend is unavailable.'}
+            </strong>
             <p>
-              Dashboard did not load. Market scan needs the Terminal API (:8765) and a live market-ops worker.
-              Prefer a full restart over repeated Retry if this persists.
+              {scanPollingActive
+                ? 'Market-ops may still be scanning — wait for the scan banner to finish, then Retry. Prefer a full restart only if the worker stays OFFLINE.'
+                : 'Dashboard did not load. Market scan needs the Terminal API (:8765) and a live market-ops worker. Prefer a full restart over repeated Retry if this persists.'}
             </p>
             <pre className="api-error-detail">{error || 'No error detail returned by the browser fetch.'}</pre>
             <div className="inline-actions">
-              <button type="button" onClick={() => void refresh()}>Retry connection</button>
+              <button type="button" onClick={() => void refresh({ soft: false })}>Retry connection</button>
               <button
                 type="button"
                 disabled={marketScan.isBusy}
@@ -548,7 +573,7 @@ function App() {
               </button>
             </div>
             <small>
-              Restart: bash scripts/stop_quantterm.sh && bash scripts/run_quantterm_complete.sh
+              Restart: bash scripts/stop_quantterm.sh && bash scripts/run_quantterm_low_power.sh
             </small>
           </div>
         )}

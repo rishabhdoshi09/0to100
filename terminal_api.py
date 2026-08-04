@@ -48,6 +48,9 @@ logging.getLogger("uvicorn.access").addFilter(_QuietHealthAccess())
 _ops_process: subprocess.Popen | None = None
 _ops_ensure_last_attempt: float = 0.0
 _bhav_status_cache: dict[str, Any] = {"ts": 0.0, "payload": None}
+_dashboard_cache: dict[str, Any] = {"ts": 0.0, "payload": None}
+_DASHBOARD_CACHE_TTL_S = 2.0
+_institutional_refresh_started = False
 
 
 def _safe_float(value: Any) -> float | None:
@@ -271,6 +274,37 @@ def _schedule_regime_refresh() -> None:
         threading.Thread(target=_worker, name="regime-refresh", daemon=True).start()
     except Exception:
         _regime_refresh_started = False
+
+
+def _schedule_institutional_refresh() -> None:
+    """Warm FII/DII + option-chain caches off the dashboard request path.
+
+    The previous dashboard path called NSE (cookie prime + FII + bulk deals +
+    NIFTY chain) on every poll — that routinely exceeded the UI's 60s timeout
+    while a market scan was already saturating an old Mac.
+    """
+    global _institutional_refresh_started
+    if _institutional_refresh_started:
+        return
+    _institutional_refresh_started = True
+
+    def _worker() -> None:
+        while True:
+            try:
+                from data.fii_dii_store import workspace_payload
+
+                workspace_payload(days=30, include_nifty_options=True, allow_network=True)
+            except Exception:
+                pass
+            low = str(os.getenv("QT_LOW_POWER", "")).strip() in {"1", "true", "TRUE", "yes"}
+            time.sleep(300.0 if low else 180.0)
+
+    try:
+        import threading
+
+        threading.Thread(target=_worker, name="institutional-refresh", daemon=True).start()
+    except Exception:
+        _institutional_refresh_started = False
 
 
 def _market_payload(*, allow_network: bool = False) -> dict:
@@ -553,12 +587,7 @@ def _operations_payload(*, wait_s: float = 0.0, recent_limit: int = 40) -> dict[
         # Default wait_s=0 keeps /api/dashboard non-blocking on old Macs.
         if not runtime.get("running"):
             runtime = _ensure_ops_worker(wait_s=max(0.0, float(wait_s)))
-        recent = store.recent(max(10, min(int(recent_limit), 100)))
-        latest = {}
-        for kind in LANES:
-            item = store.latest(kind)
-            if item:
-                latest[kind] = item
+        snap = store.dashboard_snapshot(kinds=LANES.keys(), recent_limit=recent_limit)
         return {
             "available": True,
             "running": bool(runtime.get("running")),
@@ -568,10 +597,10 @@ def _operations_payload(*, wait_s: float = 0.0, recent_limit: int = 40) -> dict[
             "ensure_ok": runtime.get("ensure_ok", bool(runtime.get("running"))),
             "ensure_error": runtime.get("ensure_error", ""),
             "reclaim": runtime.get("reclaim", ""),
-            "counts": store.counts(),
-            "active": store.active(),
-            "recent": recent,
-            "latest": latest,
+            "counts": dict(snap.get("counts") or {}),
+            "active": list(snap.get("active") or []),
+            "recent": list(snap.get("recent") or []),
+            "latest": dict(snap.get("latest") or {}),
         }
     except Exception as exc:
         return {
@@ -590,7 +619,7 @@ def _operations_payload(*, wait_s: float = 0.0, recent_limit: int = 40) -> dict[
         }
 
 
-def _news_payload() -> dict[str, Any]:
+def _news_payload(*, latest_refresh: dict[str, Any] | None = None) -> dict[str, Any]:
     try:
         from news.curator_store import NewsCuratorStore
         store = NewsCuratorStore(ROOT / "logs" / "news_curator.sqlite3")
@@ -600,13 +629,14 @@ def _news_payload() -> dict[str, Any]:
             stats = store.stats(hours=24)
         finally:
             store.close()
-        latest_refresh = _operations_payload().get("latest", {}).get("NEWS_REFRESH", {})
+        # Caller should pass operations.latest — never re-open the ops DB here.
+        refresh = dict(latest_refresh or {})
         return {
             "available": bool(articles or health),
             "stats": stats,
             "articles": articles,
             "source_health": health,
-            "latest_refresh": latest_refresh,
+            "latest_refresh": refresh,
         }
     except Exception as exc:
         return {
@@ -619,46 +649,36 @@ def _news_payload() -> dict[str, Any]:
         }
 
 
-def _institutional_payload() -> dict[str, Any]:
+def _institutional_payload(*, allow_network: bool = False) -> dict[str, Any]:
+    """Dashboard default is cache-only; background thread warms NSE separately."""
     try:
         from data.fii_dii_store import workspace_payload
 
-        return workspace_payload(days=30)
+        return workspace_payload(
+            days=30,
+            include_nifty_options=True,
+            allow_network=bool(allow_network),
+        )
     except Exception as exc:
-        return {"available": False, "error": str(exc)}
+        return {"available": False, "error": str(exc), "network_used": bool(allow_network)}
 
 
 def _fno_payload() -> dict[str, Any]:
+    """Persisted F&O universe only — never rebuild instruments on dashboard path."""
     path = ROOT / "logs" / "product" / "fno_universe.json"
     persisted = _json_file(path, {})
     if persisted:
         persisted["available"] = int(persisted.get("mapped_underlyings", 0) or 0) > 0
         persisted["cache_mtime"] = path.stat().st_mtime if path.exists() else None
         return persisted
-    try:
-        from data.fno_universe import current_fno_universe
-        report = current_fno_universe()
-        return {
-            "available": report.mapped_underlyings > 0,
-            "generated_at": None,
-            "source": report.source,
-            "total_instrument_rows": report.total_instrument_rows,
-            "total_future_contracts": report.total_future_contracts,
-            "index_future_contracts": report.index_future_contracts,
-            "unique_stock_underlyings": report.unique_stock_underlyings,
-            "mapped_underlyings": report.mapped_underlyings,
-            "underlyings": [item.__dict__ for item in report.underlyings],
-            "exclusions": [item.__dict__ for item in report.exclusions],
-        }
-    except Exception as exc:
-        return {
-            "available": False,
-            "source": "unavailable",
-            "mapped_underlyings": 0,
-            "underlyings": [],
-            "exclusions": [],
-            "error": str(exc),
-        }
+    return {
+        "available": False,
+        "source": "unavailable",
+        "mapped_underlyings": 0,
+        "underlyings": [],
+        "exclusions": [],
+        "error": "No persisted fno_universe.json — run REFRESH_FNO_NOW / market-ops bootstrap",
+    }
 
 
 def _bhavcopy_status_fast() -> dict[str, Any]:
@@ -814,23 +834,37 @@ def health_detail() -> dict:
 
 @app.get("/api/dashboard")
 def dashboard() -> dict:
-    # Never block the dashboard on Yahoo regime fetch or worker heartbeat waits.
-    # Those freezes timed out the UI (60s) on older MacBooks.
+    # Never block the dashboard on Yahoo/NSE fetches or worker heartbeat waits.
+    # Those freezes timed out the UI (60s) on older MacBooks — especially while
+    # a market scan was already saturating CPU/disk.
+    global _dashboard_cache
+    now = time.time()
+    cached = _dashboard_cache.get("payload")
+    if cached is not None and (now - float(_dashboard_cache.get("ts") or 0.0)) < _DASHBOARD_CACHE_TTL_S:
+        # Serve a micro-cached copy so scan-time polling does not stampede SQLite/JSON.
+        out = dict(cached)
+        out["generated_at"] = datetime.now(timezone.utc).isoformat()
+        out["cache_hit"] = True
+        return out
+
     try:
         _ensure_ops_worker(wait_s=0.0)
     except Exception:
         pass
     _schedule_regime_refresh()
+    _schedule_institutional_refresh()
     market = _market_payload(allow_network=False)
-    scan = _scan_payload(record_limit=150)
-    long_term = _long_term_payload(record_limit=80)
+    scan = _scan_payload(record_limit=80)
+    long_term = _long_term_payload(record_limit=40)
     paper = _paper_payload()
     autonomy = _autonomy_payload()
-    operations = _operations_payload(wait_s=0.0, recent_limit=30)
-    news = _news_payload()
+    operations = _operations_payload(wait_s=0.0, recent_limit=20)
+    news = _news_payload(
+        latest_refresh=dict((operations.get("latest") or {}).get("NEWS_REFRESH") or {}),
+    )
     fno = _fno_payload()
     data = _data_payload(scan, long_term, operations, fno, news)
-    return {
+    payload = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "market": market,
         "scan": scan,
@@ -840,10 +874,14 @@ def dashboard() -> dict:
         "operations": operations,
         "news": news,
         "fno": fno,
-        "institutional": _institutional_payload(),
+        # Cache-only — NSE FII/options warmed by background thread.
+        "institutional": _institutional_payload(allow_network=False),
         "data": data,
         "conviction": _conviction(scan, market),
+        "cache_hit": False,
     }
+    _dashboard_cache = {"ts": now, "payload": dict(payload)}
+    return payload
 
 
 @app.get("/api/sniper-board")
@@ -1068,11 +1106,12 @@ def control(control_name: str) -> dict:
     if name in _OPERATION_CONTROLS:
         from operations.market_ops import LANES
         from operations.store import OperationStore
-        runtime = _ensure_ops_worker(wait_s=10.0, force=True)
+        # Keep control clicks snappy on old Macs — do not sit 10s waiting for heartbeat.
+        runtime = _ensure_ops_worker(wait_s=2.0, force=True)
         if not runtime.get("running"):
             # One hard reclaim+retry before accepting a PENDING forever queue.
             _reclaim_stale_ops_lock(max_heartbeat_age_s=5.0)
-            runtime = _ensure_ops_worker(wait_s=8.0, force=True)
+            runtime = _ensure_ops_worker(wait_s=2.0, force=True)
         kind = _OPERATION_CONTROLS[name]
         queue_message = _queue_message_for_control(kind, runtime)
         operation, created = OperationStore(OPS_DB).enqueue(

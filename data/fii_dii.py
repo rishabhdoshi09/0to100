@@ -268,6 +268,15 @@ def get_fii_derivative_stats_uncached() -> dict:
     return dict(result)
 
 
+def get_fii_derivative_stats_cached_only() -> dict:
+    """In-memory cache only — never opens an NSE session."""
+    if _deriv_stats_cache is not None:
+        return dict(_deriv_stats_cache)
+    return _empty_derivative_stats(
+        "FII F&O positioning not cached yet; dashboard skips live NSE fetch."
+    )
+
+
 @ttl_cache(ttl_seconds=3600)
 def get_fii_derivative_stats() -> dict:
     return get_fii_derivative_stats_uncached()

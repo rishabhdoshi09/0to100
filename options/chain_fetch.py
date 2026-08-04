@@ -215,6 +215,19 @@ def chain_workspace(symbol: str, spot: float | None = None) -> dict[str, Any]:
     }
 
 
+def chain_workspace_memory_only(symbol: str = "NIFTY") -> dict[str, Any]:
+    """Return an in-memory chain if present; never fetch. Dashboard-safe."""
+    sym = str(symbol or "NIFTY").upper().strip()
+    cached = _WS_CACHE.get(sym)
+    if cached:
+        return dict(cached[1])
+    return {
+        "available": False,
+        "symbol": sym,
+        "message": "Option chain not cached yet; dashboard skips live NSE fetch.",
+    }
+
+
 def chain_workspace_cached(
     symbol: str,
     spot: float | None = None,

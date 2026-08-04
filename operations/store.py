@@ -316,6 +316,61 @@ class OperationStore:
             ).fetchone()
         return self._decode(row)
 
+    def latest_by_kinds(self, kinds: Iterable[str]) -> dict[str, dict[str, Any]]:
+        """One connection for many kind lookups — keeps /api/dashboard light."""
+        wanted = [str(k).upper() for k in kinds if str(k).strip()]
+        if not wanted:
+            return {}
+        out: dict[str, dict[str, Any]] = {}
+        with self._connect() as con:
+            for kind in wanted:
+                row = con.execute(
+                    "SELECT * FROM operations WHERE kind=? ORDER BY requested_at DESC LIMIT 1",
+                    (kind,),
+                ).fetchone()
+                item = self._decode(row)
+                if item:
+                    out[kind] = item
+        return out
+
+    def dashboard_snapshot(
+        self,
+        *,
+        kinds: Iterable[str],
+        recent_limit: int = 40,
+    ) -> dict[str, Any]:
+        """Single-connection ops snapshot for the Terminal dashboard hot path."""
+        wanted = [str(k).upper() for k in kinds if str(k).strip()]
+        limit = max(10, min(int(recent_limit), 100))
+        latest: dict[str, dict[str, Any]] = {}
+        with self._connect() as con:
+            for kind in wanted:
+                row = con.execute(
+                    "SELECT * FROM operations WHERE kind=? ORDER BY requested_at DESC LIMIT 1",
+                    (kind,),
+                ).fetchone()
+                item = self._decode(row)
+                if item:
+                    latest[kind] = item
+            recent_rows = con.execute(
+                "SELECT * FROM operations ORDER BY requested_at DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+            active_rows = con.execute(
+                "SELECT * FROM operations WHERE status IN (?,?) "
+                "ORDER BY CASE status WHEN ? THEN 0 ELSE 1 END, requested_at ASC",
+                (RUNNING, PENDING, RUNNING),
+            ).fetchall()
+            count_rows = con.execute(
+                "SELECT status,COUNT(*) AS n FROM operations GROUP BY status"
+            ).fetchall()
+        return {
+            "latest": latest,
+            "recent": [self._decode(row) or {} for row in recent_rows],
+            "active": [self._decode(row) or {} for row in active_rows],
+            "counts": {str(row["status"]): int(row["n"]) for row in count_rows},
+        }
+
     def recent(self, limit: int = 80) -> list[dict[str, Any]]:
         with self._connect() as con:
             rows = con.execute(
