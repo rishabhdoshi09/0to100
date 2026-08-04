@@ -24,8 +24,14 @@ STACK_PID=""
 REPORT_EXTERNAL=0
 REPORT_HEALTH_FAILS=0
 REPORT_FAIL_LIMIT=3
+SHUTTING_DOWN=0
 
 cleanup() {
+  # Re-entrancy guard: EXIT after INT would otherwise double-stop.
+  if [[ "$SHUTTING_DOWN" == "1" ]]; then
+    return 0
+  fi
+  SHUTTING_DOWN=1
   echo
   echo "[COMPLETE STACK] Stopping report API and QuantTerm stack…"
   if [[ -n "$STACK_PID" ]]; then
@@ -58,7 +64,14 @@ cleanup() {
   fi
   echo "[COMPLETE STACK] Stopped."
 }
-trap cleanup EXIT INT TERM
+
+on_signal() {
+  cleanup
+  # INT/TERM must exit — otherwise the watch loop resumes and prints false alarms.
+  exit 0
+}
+trap cleanup EXIT
+trap on_signal INT TERM
 
 REPORT_HEALTH="http://127.0.0.1:8766/health"
 set +e
@@ -119,14 +132,24 @@ while true; do
     fi
   fi
 
+  if [[ "$SHUTTING_DOWN" == "1" ]]; then
+    exit 0
+  fi
   if ! kill -0 "$STACK_PID" >/dev/null 2>&1; then
+    if [[ "$SHUTTING_DOWN" == "1" ]]; then
+      exit 0
+    fi
     set +e
-    wait "$STACK_PID"
+    wait "$STACK_PID" 2>/dev/null
     stack_ec=$?
     set -e
+    # 127 = not a child (already reaped by cleanup) — not an unexpected crash.
+    if [[ "$stack_ec" -eq 127 ]] || [[ "$SHUTTING_DOWN" == "1" ]]; then
+      exit 0
+    fi
     echo "[COMPLETE STACK] QuantTerm stack exited unexpectedly (pid=$STACK_PID, exit=$stack_ec)." >&2
     echo "[COMPLETE STACK] Scroll up for the nested [STACK] reason (API/Vite/autonomy)." >&2
-    echo "[COMPLETE STACK] Tip: bash scripts/stop_quantterm.sh  then  bash scripts/run_quantterm_complete.sh" >&2
+    echo "[COMPLETE STACK] Tip: bash scripts/stop_quantterm.sh  then  bash scripts/run_quantterm_low_power.sh" >&2
     exit 1
   fi
   sleep "$WATCH_SLEEP_S"

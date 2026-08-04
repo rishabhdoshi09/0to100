@@ -52,11 +52,20 @@ def test_stack_monitor_is_resilient() -> None:
     assert 'WATCH_SLEEP_S="${QT_STACK_WATCH_SLEEP_S:-15}"' in complete
     assert "stack_port_listening 8766" in complete
     assert "QT_AUTONOMY_INTERVAL_S" in text
+    # Ctrl+C must exit after cleanup — not resume the watch loop with false alarms.
+    assert "on_signal" in complete
+    assert "SHUTTING_DOWN" in complete
     assert (SCRIPTS / "run_quantterm_low_power.sh").exists()
     assert (SCRIPTS / "apply_low_power_env.sh").exists()
     low = (SCRIPTS / "apply_low_power_env.sh").read_text(encoding="utf-8")
     assert "QT_LOW_POWER=1" in low
     assert "QT_DISABLE_IDLE_BACKTEST=1" in low
+
+
+def test_idle_backtest_watcher_is_quiet_while_waiting() -> None:
+    text = (SCRIPTS / "idle_full_universe_backtest.py").read_text(encoding="utf-8")
+    assert "waiting_idle" in text
+    assert "QT_IDLE_BACKTEST_HEARTBEAT_S" in text
 
 
 def test_terminal_health_endpoint_is_pure_liveness() -> None:

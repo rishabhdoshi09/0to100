@@ -171,9 +171,25 @@ def main() -> int:
     print(
         "idle_full_universe_backtest online · "
         f"idle>={args.idle_seconds:.0f}s · cooldown={args.cooldown_seconds:.0f}s · "
-        "LIVE locked · research only",
+        "LIVE locked · research only · quiet until trigger/heartbeat",
         flush=True,
     )
+
+    last_print = 0.0
+    last_kind = ""
+    heartbeat_s = float(os.environ.get("QT_IDLE_BACKTEST_HEARTBEAT_S", "300") or 300)
+
+    def _kind(payload: dict) -> str:
+        if payload.get("triggered"):
+            return "triggered"
+        reason = str(payload.get("reason") or "")
+        if reason.startswith("idle ") and "< threshold" in reason:
+            return "waiting_idle"
+        if reason.startswith("cooldown"):
+            return "cooldown"
+        if "already queued" in reason:
+            return "queued"
+        return reason[:48] or "unknown"
 
     while True:
         payload = maybe_trigger(
@@ -181,7 +197,20 @@ def main() -> int:
             cooldown_s=float(args.cooldown_seconds),
             force=bool(args.now),
         )
-        print(json.dumps(payload, default=str), flush=True)
+        kind = _kind(payload)
+        now = time.time()
+        # Avoid spamming console every 30s while waiting for 10m idle.
+        should_print = (
+            bool(args.now)
+            or bool(args.once)
+            or bool(payload.get("triggered"))
+            or kind != last_kind
+            or (now - last_print) >= max(60.0, heartbeat_s)
+        )
+        if should_print:
+            print(json.dumps(payload, default=str), flush=True)
+            last_print = now
+            last_kind = kind
         if args.now or args.once:
             return 0 if payload.get("triggered") or payload.get("accepted") else 0
         # --now only fires once
