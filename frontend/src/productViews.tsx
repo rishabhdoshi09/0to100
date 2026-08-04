@@ -26,6 +26,7 @@ import {
 import type { ChartBar, ControlName, DashboardPayload, OptionsChainPayload } from './types'
 import { longTermPicks } from './longTermPicks'
 import { fetchMarketOptions } from './api'
+import { PositioningReadCard } from './marketViews'
 
 // Read-only risk-first "R lens" — exact shares, rupee risk, reward:risk, book heat. No orders.
 export function RiskLensCard({ plan }: { plan: TradePlan | null }) {
@@ -609,15 +610,19 @@ export function ProductStockIntelligenceView(props: ViewProps) {
             <EmptyState title="Options unavailable" detail={optionsChain?.message || 'NSE often blocks off-hours — retry or check on a trading day.'} />
           )}
           {optionsChain?.available && (
-            <div className="fact-grid">
-              <div><span>Expiry</span><strong>{optionsChain.expiry || '—'}</strong></div>
-              <div><span>PCR (OI)</span><strong>{optionsChain.pcr ?? '—'}</strong></div>
-              <div><span>Max pain</span><strong>{optionsChain.max_pain ?? '—'}</strong></div>
-              <div><span>Bias</span><strong>{optionsChain.bias || '—'}</strong></div>
-              <div><span>ATM IV</span><strong>{optionsChain.atm_iv != null ? `${optionsChain.atm_iv}%` : '—'}</strong></div>
-            </div>
+            <>
+              <PositioningReadCard read={optionsChain.positioning_read} />
+              <div className="fact-grid">
+                <div><span>Expiry</span><strong>{optionsChain.expiry || '—'}</strong></div>
+                <div><span>PCR (OI)</span><strong>{optionsChain.pcr ?? '—'}</strong></div>
+                <div><span>Max pain</span><strong>{optionsChain.max_pain ?? '—'}</strong></div>
+                <div><span>Bias</span><strong>{optionsChain.bias || '—'}</strong></div>
+                <div><span>ATM IV</span><strong>{optionsChain.atm_iv != null ? `${optionsChain.atm_iv}%` : '—'}</strong></div>
+              </div>
+            </>
           )}
           {optionsChain?.note && <p className="panel-copy">{optionsChain.note}</p>}
+          {optionsChain?.honesty && <p className="panel-copy">{optionsChain.honesty}</p>}
           {optionsChain?.top_call_oi?.length && (
             <EvidenceList title="Top call OI strikes" items={optionsChain.top_call_oi.map((r) => `${r.strike}: OI ${r.ce_oi}`)} tone="cyan" />
           )}

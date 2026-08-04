@@ -25,6 +25,20 @@ def fii_dii_backfill_run(days: int = Query(90, ge=30, le=365)) -> dict[str, Any]
     return {"forced": True, "days": days, "refresh": refresh}
 
 
+def _scan_row_for(symbol: str) -> dict[str, Any] | None:
+    """Join latest cash-scan facts when present — never invent."""
+    try:
+        from product.scan_store import load_scan
+
+        payload = load_scan() or {}
+        for row in payload.get("records") or []:
+            if str(row.get("symbol") or "").upper() == symbol:
+                return dict(row)
+    except Exception:
+        return None
+    return None
+
+
 def options_workspace(
     symbol: str,
     spot: float | None = Query(None, description="Optional spot for ATM IV"),
@@ -44,8 +58,18 @@ def options_workspace(
         except Exception:
             resolved_spot = None
     from options.chain_fetch import chain_workspace_cached
+    from options.positioning_read import attach_positioning_read
 
-    return chain_workspace_cached(sym, spot=resolved_spot, force=force)
+    chain = chain_workspace_cached(sym, spot=resolved_spot, force=force)
+    history_rows: list[dict[str, Any]] = []
+    try:
+        from options.eod_store import history
+
+        history_rows = list(history(sym, days=14) or [])
+    except Exception:
+        history_rows = []
+    scan_row = None if sym in ("NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY", "NIFTYNXT50") else _scan_row_for(sym)
+    return attach_positioning_read(chain, history_rows=history_rows, scan_row=scan_row)
 
 
 def options_history_workspace(

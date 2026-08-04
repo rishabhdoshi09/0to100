@@ -12,7 +12,8 @@ def get_option_chain(symbol: str = "NIFTY") -> tuple[Optional[pd.DataFrame], Opt
     """Fetch option chain. Tries NSE API first, yfinance fallback."""
     from options.chain_fetch import fetch_option_chain
 
-    return fetch_option_chain(symbol)
+    df, expiry, _underlying = fetch_option_chain(symbol)
+    return df, expiry
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -27,7 +28,7 @@ def nifty_options_summary() -> Optional[dict]:
     try:
         from options.chain_fetch import compute_max_pain, compute_pcr, fetch_option_chain
 
-        df, _expiry = fetch_option_chain("NIFTY")
+        df, _expiry, _underlying = fetch_option_chain("NIFTY")
         if df is None or df.empty:
             return None
         pcr = compute_pcr(df)

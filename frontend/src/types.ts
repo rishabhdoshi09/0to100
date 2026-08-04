@@ -318,6 +318,25 @@ export type InstitutionalFlowsPayload = {
   error?: string
 }
 
+export type OptionsPositioningRead = {
+  available: boolean
+  symbol?: string
+  expiry?: string
+  stance?: 'SUPPORTIVE' | 'CAUTION' | 'HOSTILE' | 'NEUTRAL' | 'INCOMPLETE' | string
+  score?: number | null
+  confidence?: number
+  headline?: string
+  reasons?: string[]
+  risks?: string[]
+  factors?: Array<{ name: string; score: number; note: string }>
+  consider_for?: string[]
+  cash_scan_joined?: boolean
+  places_orders?: boolean
+  live_locked?: boolean
+  signal_desk?: boolean
+  honesty?: string
+}
+
 export type OptionsChainPayload = {
   available: boolean
   symbol?: string
@@ -339,6 +358,7 @@ export type OptionsChainPayload = {
   greeks_available?: boolean
   signal_desk?: boolean
   honesty?: string
+  positioning_read?: OptionsPositioningRead
 }
 
 export type OptionsEodHistoryPayload = {

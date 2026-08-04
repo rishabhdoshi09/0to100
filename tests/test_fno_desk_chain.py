@@ -14,7 +14,7 @@ def test_chain_workspace_exposes_oi_iv_pcr_not_greeks(monkeypatch):
             {"strike": 25000, "ce_oi": 120, "pe_oi": 60, "ce_iv": 10.0, "pe_iv": 12.0, "ce_coi": 0, "pe_coi": 0},
         ]
     )
-    monkeypatch.setattr(CF, "fetch_option_chain", lambda symbol: (df, "2026-08-07"))
+    monkeypatch.setattr(CF, "fetch_option_chain", lambda symbol: (df, "2026-08-07", 24500.0))
     payload = CF.chain_workspace("NIFTY", spot=24500)
     assert payload["available"] is True
     assert payload["pcr"] == round((200 + 90 + 60) / (100 + 80 + 120), 2)
@@ -54,8 +54,9 @@ def test_rows_from_records_accepts_v3_shape():
             ],
         }
     }
-    rows, expiry = _rows_from_records(data, "04-Aug-2026")
+    rows, expiry, underlying = _rows_from_records(data, "04-Aug-2026")
     assert expiry == "04-Aug-2026"
+    assert underlying is None
     assert len(rows) == 1
     assert rows[0]["ce_oi"] == 10
     assert rows[0]["pe_oi"] == 20
@@ -75,7 +76,7 @@ def test_fetch_nse_prefers_v3(monkeypatch):
                 "ce_coi": 0, "pe_coi": 0, "ce_ltp": 1, "pe_ltp": 1, "ce_volume": 0, "pe_volume": 0,
             }]
         )
-        return df, "04-Aug-2026"
+        return df, "04-Aug-2026", 24500.0
 
     def boom_legacy(session, symbol):
         calls.append("legacy")
@@ -90,8 +91,9 @@ def test_fetch_nse_prefers_v3(monkeypatch):
     monkeypatch.setattr(CF, "_fetch_nse_v3", fake_v3)
     monkeypatch.setattr(CF, "_fetch_nse_legacy", boom_legacy)
 
-    df, expiry = CF._fetch_nse("NIFTY")
+    df, expiry, underlying = CF._fetch_nse("NIFTY")
     assert expiry == "04-Aug-2026"
+    assert underlying == 24500.0
     assert df is not None and len(df) == 1
     assert calls == ["v3"]
 

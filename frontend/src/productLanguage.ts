@@ -133,15 +133,15 @@ export const PAGE_GUIDE: Record<string, PageGuide> = {
   },
   'F&O Desk': {
     title: 'F&O Coverage',
-    purpose: 'Maps current futures eligibility, then shows live nearest-expiry OI, IV, PCR and max pain for a selected name, plus any saved EOD history.',
+    purpose: 'Maps futures eligibility, loads live OI/IV/PCR/max pain, and builds a research positioning stance (not a buy ticket).',
     questions: [
       'Is the cash symbol mapped to the current instrument master?',
-      'What is PCR / ATM IV / max pain on the nearest expiry?',
-      'Do saved EOD snapshots show a multi-day shift?',
-      'Which underlyings were excluded and why?',
+      'Is options positioning SUPPORTIVE, CAUTION, or HOSTILE for a long watch?',
+      'What OI walls / max-pain gravity sit near spot?',
+      'Does cash-scan evidence agree, or is chase risk flagged?',
     ],
-    action: 'Pick an index quick-pick or mapped stock, refresh the live chain, and treat PCR bias as positioning context only.',
-    doesNot: 'Black-Scholes Greeks and buy/sell trade direction are not calculated — this is not an F&O signal desk.',
+    action: 'Refresh the live chain, read the positioning stance, then open Stock Intelligence / pre-trade before any paper rehearsal.',
+    doesNot: 'SUPPORTIVE is not BUY. No Greeks, no live orders, no invented fills — paper-first research only.',
   },
   'Market Internals': {
     title: 'Market & Breadth',

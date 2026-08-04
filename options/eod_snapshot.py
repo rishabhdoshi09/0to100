@@ -27,7 +27,7 @@ def _spot_for(symbol: str) -> float | None:
 
 def capture_symbol(symbol: str, *, as_of: str | date | None = None, spot: float | None = None) -> dict:
     sym = str(symbol or "").upper().strip()
-    df, expiry = fetch_option_chain(sym)
+    df, expiry, underlying = fetch_option_chain(sym)
     if df is None or df.empty or not expiry:
         return {
             "symbol": sym,
@@ -38,7 +38,9 @@ def capture_symbol(symbol: str, *, as_of: str | date | None = None, spot: float 
     rows = df.to_dict("records")
     pcr = compute_pcr(df)
     max_pain = compute_max_pain(df)
-    spot_px = float(spot) if spot and spot > 0 else _spot_for(sym)
+    spot_px = float(spot) if spot and spot > 0 else (
+        float(underlying) if underlying else _spot_for(sym)
+    )
     atm_iv = 0.0
     if spot_px and spot_px > 0 and "strike" in df.columns:
         idx = (df["strike"] - spot_px).abs().idxmin()

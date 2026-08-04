@@ -21,12 +21,16 @@ _WS_FAIL_BACKOFF_S = 45
 _INDEX_SYMBOLS = frozenset({"NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY", "NIFTYNXT50"})
 
 
-def fetch_option_chain(symbol: str = "NIFTY") -> tuple[Optional[pd.DataFrame], Optional[str]]:
+def fetch_option_chain(
+    symbol: str = "NIFTY",
+) -> tuple[Optional[pd.DataFrame], Optional[str], Optional[float]]:
+    """Return (strikes_df, expiry, underlying_spot_or_None)."""
     sym = str(symbol or "NIFTY").upper().strip()
-    df, expiry = _fetch_nse(sym)
+    df, expiry, underlying = _fetch_nse(sym)
     if df is not None and not df.empty:
-        return df, expiry
-    return _fetch_yfinance(sym)
+        return df, expiry, underlying
+    ydf, yexp = _fetch_yfinance(sym)
+    return ydf, yexp, None
 
 
 def _nse_headers() -> dict[str, str]:
@@ -52,16 +56,25 @@ def _prime_nse_session(session) -> None:
         pass
 
 
-def _rows_from_records(data: dict[str, Any], expiry: str | None) -> tuple[list[dict], str | None]:
+def _rows_from_records(
+    data: dict[str, Any],
+    expiry: str | None,
+) -> tuple[list[dict], str | None, float | None]:
     """Normalise legacy + v3 NSE option-chain JSON into strike rows."""
     records = data.get("records") if isinstance(data, dict) else None
     if not isinstance(records, dict):
-        return [], None
+        return [], None, None
     raw_rows = records.get("data") or []
     expiry_dates = [str(x) for x in (records.get("expiryDates") or []) if x]
     chosen = str(expiry or (expiry_dates[0] if expiry_dates else "") or "")
     if not chosen and raw_rows and isinstance(raw_rows[0], dict):
         chosen = str(raw_rows[0].get("expiryDates") or raw_rows[0].get("expiryDate") or "")
+    underlying = None
+    try:
+        if records.get("underlyingValue") not in (None, ""):
+            underlying = float(records.get("underlyingValue"))
+    except Exception:
+        underlying = None
     out: list[dict] = []
     for rec in raw_rows:
         if not isinstance(rec, dict):
@@ -90,10 +103,12 @@ def _rows_from_records(data: dict[str, Any], expiry: str | None) -> tuple[list[d
                 "pe_volume": pe.get("totalTradedVolume", 0) or 0,
             }
         )
-    return out, (chosen or None)
+    return out, (chosen or None), underlying
 
 
-def _fetch_nse_v3(session, symbol: str) -> tuple[Optional[pd.DataFrame], Optional[str]]:
+def _fetch_nse_v3(
+    session, symbol: str,
+) -> tuple[Optional[pd.DataFrame], Optional[str], Optional[float]]:
     """Current NSE option-chain API (requires nearest expiry from contract-info)."""
     headers = _nse_headers()
     info_resp = session.get(
@@ -103,14 +118,14 @@ def _fetch_nse_v3(session, symbol: str) -> tuple[Optional[pd.DataFrame], Optiona
         timeout=12,
     )
     if info_resp.status_code != 200 or not info_resp.content:
-        return None, None
+        return None, None, None
     try:
         info = info_resp.json()
     except Exception:
-        return None, None
+        return None, None, None
     expiries = [str(x) for x in (info.get("expiryDates") or []) if x]
     if not expiries:
-        return None, None
+        return None, None, None
     expiry = expiries[0]
     chain_type = "Indices" if symbol in _INDEX_SYMBOLS else "Equity"
     data = None
@@ -133,14 +148,16 @@ def _fetch_nse_v3(session, symbol: str) -> tuple[Optional[pd.DataFrame], Optiona
         if resp.status_code in (401, 403):
             _prime_nse_session(session)
     if data is None:
-        return None, None
-    rows, chosen = _rows_from_records(data, expiry)
+        return None, None, None
+    rows, chosen, underlying = _rows_from_records(data, expiry)
     if not rows:
-        return None, None
-    return pd.DataFrame(rows), chosen or expiry
+        return None, None, None
+    return pd.DataFrame(rows), chosen or expiry, underlying
 
 
-def _fetch_nse_legacy(session, symbol: str) -> tuple[Optional[pd.DataFrame], Optional[str]]:
+def _fetch_nse_legacy(
+    session, symbol: str,
+) -> tuple[Optional[pd.DataFrame], Optional[str], Optional[float]]:
     """Legacy indices/equities endpoints — kept as a short fallback while NSE transitions."""
     headers = _nse_headers()
     if symbol in _INDEX_SYMBOLS:
@@ -169,27 +186,29 @@ def _fetch_nse_legacy(session, symbol: str) -> tuple[Optional[pd.DataFrame], Opt
         if resp.status_code == 404:
             break
     if data is None:
-        return None, None
+        return None, None, None
     expiry_dates = [str(x) for x in ((data.get("records") or {}).get("expiryDates") or []) if x]
     expiry = expiry_dates[0] if expiry_dates else None
-    rows, chosen = _rows_from_records(data, expiry)
+    rows, chosen, underlying = _rows_from_records(data, expiry)
     if not rows:
-        return None, None
-    return pd.DataFrame(rows), chosen or expiry
+        return None, None, None
+    return pd.DataFrame(rows), chosen or expiry, underlying
 
 
-def _fetch_nse(symbol: str) -> tuple[Optional[pd.DataFrame], Optional[str]]:
+def _fetch_nse(
+    symbol: str,
+) -> tuple[Optional[pd.DataFrame], Optional[str], Optional[float]]:
     try:
         import requests
 
         session = requests.Session()
         _prime_nse_session(session)
-        df, expiry = _fetch_nse_v3(session, symbol)
+        df, expiry, underlying = _fetch_nse_v3(session, symbol)
         if df is not None and not df.empty:
-            return df, expiry
+            return df, expiry, underlying
         return _fetch_nse_legacy(session, symbol)
     except Exception:
-        return None, None
+        return None, None, None
 
 
 def _fetch_yfinance(symbol: str) -> tuple[Optional[pd.DataFrame], Optional[str]]:
@@ -246,7 +265,9 @@ def compute_max_pain(df: pd.DataFrame) -> float:
 
 def chain_workspace(symbol: str, spot: float | None = None) -> dict[str, Any]:
     sym = str(symbol or "NIFTY").upper().strip()
-    df, expiry = fetch_option_chain(sym)
+    df, expiry, underlying = fetch_option_chain(sym)
+    if spot is None and underlying is not None:
+        spot = float(underlying)
     if df is None or df.empty:
         return {
             "available": False,

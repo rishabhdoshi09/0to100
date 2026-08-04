@@ -6,10 +6,19 @@ import type {
   NewsArticle,
   OptionsChainPayload,
   OptionsEodHistoryPayload,
+  OptionsPositioningRead,
 } from './types'
 import { compactDateTime, words } from './format'
-import { MetricCard, Panel } from './components'
+import { EvidenceList, MetricCard, Panel } from './components'
 import { fetchMarketOptions, fetchOptionsEodHistory } from './api'
+
+function stanceTone(stance?: string): 'green' | 'amber' | 'purple' | 'cyan' {
+  const s = String(stance || '').toUpperCase()
+  if (s === 'SUPPORTIVE') return 'green'
+  if (s === 'HOSTILE' || s === 'CAUTION') return 'amber'
+  if (s === 'NEUTRAL') return 'purple'
+  return 'cyan'
+}
 
 type Props = {
   dashboard: DashboardPayload
@@ -223,6 +232,7 @@ function ChainContextPanel({
         )}
         {!loading && chain?.available && (
           <>
+            <PositioningReadCard read={chain.positioning_read} />
             <div className="fno-chain-metrics">
               <MetricCard label="PCR (OI)" value={String(chain.pcr ?? '—')} detail={chain.note || 'Put/call open interest'} tone={biasTone} />
               <MetricCard label="MAX PAIN" value={chain.max_pain != null ? String(chain.max_pain) : '—'} detail={`Expiry ${chain.expiry || '—'}`} />
@@ -293,6 +303,45 @@ function ChainContextPanel({
   )
 }
 
+export function PositioningReadCard({ read }: { read?: OptionsPositioningRead }) {
+  if (!read) {
+    return (
+      <div className="empty-row" style={{ marginBottom: 10 }}>
+        Positioning read not attached — refresh live chain.
+      </div>
+    )
+  }
+  const tone = stanceTone(read.stance)
+  return (
+    <div className="fno-positioning-read" style={{ marginBottom: 14 }}>
+      <div className="fno-chain-metrics">
+        <MetricCard
+          label="POSITIONING STANCE"
+          value={words(read.stance || 'Incomplete')}
+          detail={read.headline || 'Research context only'}
+          tone={tone}
+        />
+        <MetricCard
+          label="READ SCORE"
+          value={read.score == null ? '—' : read.score.toFixed(2)}
+          detail={`Confidence ${read.confidence == null ? '—' : `${Math.round(Number(read.confidence) * 100)}%`}`}
+        />
+        <MetricCard
+          label="CONSIDER"
+          value={(read.consider_for || []).map(words).slice(0, 2).join(' · ') || '—'}
+          detail={read.cash_scan_joined ? 'Cash scan joined' : 'Options-only factors'}
+          tone="purple"
+        />
+      </div>
+      <p className="fno-honesty">{read.honesty || 'Not a buy signal.'}</p>
+      <div className="evidence-grid">
+        <EvidenceList title="Why supportive / watchable" items={read.reasons} tone="green" />
+        <EvidenceList title="Risks / gaps" items={read.risks} tone="red" />
+      </div>
+    </div>
+  )
+}
+
 export function FnoView({ dashboard, runControl, setSelected, setActive }: Props) {
   const [query, setQuery] = useState('')
   const [focus, setFocus] = useState('NIFTY')
@@ -353,10 +402,10 @@ export function FnoView({ dashboard, runControl, setSelected, setActive }: Props
       <div className="feature-purpose">
         <strong>What F&O Coverage does—and does not do</strong>
         <p>
-          It maps which stocks have current futures contracts (nearest future, expiry, lot size),
-          then loads the live nearest-expiry option chain for a selected name: OI, IV, PCR and max pain,
-          plus any saved EOD history. It does <em>not</em> compute Black-Scholes Greeks or issue trade
-          direction — PCR bias is positioning context only, not a buy/sell desk.
+          It maps futures coverage, loads the live nearest-expiry chain (OI / IV / PCR / max pain),
+          then builds a smart <em>positioning read</em> (SUPPORTIVE / CAUTION / HOSTILE) you can use
+          for tomorrow-watch research. It does <em>not</em> compute Greeks, place orders, or emit a
+          BUY ticket — SUPPORTIVE means friendly context to watch, not “buy now”.
         </p>
       </div>
       <div className="inline-actions">

@@ -649,7 +649,7 @@ def _get_pcr_signal() -> float:
     """
     try:
         # Use the shared v3-aware fetcher — legacy option-chain-indices is 404.
-        from options.chain_fetch import chain_workspace_cached, compute_pcr
+        from options.chain_fetch import chain_workspace_cached
 
         payload = chain_workspace_cached("NIFTY", force=False)
         if not payload.get("available"):
