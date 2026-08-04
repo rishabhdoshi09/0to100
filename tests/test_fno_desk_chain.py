@@ -26,6 +26,76 @@ def test_chain_workspace_exposes_oi_iv_pcr_not_greeks(monkeypatch):
     assert "Greeks" in payload["honesty"]
 
 
+def test_rows_from_records_accepts_v3_shape():
+    from options.chain_fetch import _rows_from_records
+
+    data = {
+        "records": {
+            "expiryDates": ["04-Aug-2026"],
+            "data": [
+                {
+                    "expiryDates": "04-Aug-2026",
+                    "strikePrice": 24500,
+                    "CE": {
+                        "openInterest": 10,
+                        "changeinOpenInterest": 1,
+                        "impliedVolatility": 12.5,
+                        "lastPrice": 100,
+                        "totalTradedVolume": 5,
+                    },
+                    "PE": {
+                        "openInterest": 20,
+                        "changeinOpenInterest": 2,
+                        "impliedVolatility": 13.5,
+                        "lastPrice": 90,
+                        "totalTradedVolume": 7,
+                    },
+                }
+            ],
+        }
+    }
+    rows, expiry = _rows_from_records(data, "04-Aug-2026")
+    assert expiry == "04-Aug-2026"
+    assert len(rows) == 1
+    assert rows[0]["ce_oi"] == 10
+    assert rows[0]["pe_oi"] == 20
+
+
+def test_fetch_nse_prefers_v3(monkeypatch):
+    from options import chain_fetch as CF
+    import types
+
+    calls: list[str] = []
+
+    def fake_v3(session, symbol):
+        calls.append("v3")
+        df = pd.DataFrame(
+            [{
+                "strike": 100, "ce_oi": 1, "pe_oi": 2, "ce_iv": 1, "pe_iv": 1,
+                "ce_coi": 0, "pe_coi": 0, "ce_ltp": 1, "pe_ltp": 1, "ce_volume": 0, "pe_volume": 0,
+            }]
+        )
+        return df, "04-Aug-2026"
+
+    def boom_legacy(session, symbol):
+        calls.append("legacy")
+        raise AssertionError("legacy must not run when v3 succeeds")
+
+    class FakeSession:
+        pass
+
+    fake_requests = types.SimpleNamespace(Session=lambda: FakeSession())
+    monkeypatch.setitem(__import__("sys").modules, "requests", fake_requests)
+    monkeypatch.setattr(CF, "_prime_nse_session", lambda session: None)
+    monkeypatch.setattr(CF, "_fetch_nse_v3", fake_v3)
+    monkeypatch.setattr(CF, "_fetch_nse_legacy", boom_legacy)
+
+    df, expiry = CF._fetch_nse("NIFTY")
+    assert expiry == "04-Aug-2026"
+    assert df is not None and len(df) == 1
+    assert calls == ["v3"]
+
+
 def test_options_history_workspace_empty(tmp_path, monkeypatch):
     from product import market_api as MA
 

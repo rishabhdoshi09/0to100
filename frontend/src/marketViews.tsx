@@ -316,8 +316,9 @@ export function FnoView({ dashboard, runControl, setSelected, setActive }: Props
     if (!focus) return
     let cancelled = false
     setLoading(true)
+    // Always force on desk loads — background warm fail-backoff must not blank the chain.
     Promise.all([
-      fetchMarketOptions(focus, reloadToken > 0),
+      fetchMarketOptions(focus, true),
       fetchOptionsEodHistory(focus, 14),
     ])
       .then(([live, eod]) => {

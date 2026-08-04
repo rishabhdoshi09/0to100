@@ -424,8 +424,8 @@ export function ProductStockIntelligenceView(props: ViewProps) {
   useEffect(() => {
     if (tab !== 'Options' || !selected) return
     setOptionsLoading(true)
-    const force = optionsForce > 0
-    fetchMarketOptions(selected, force)
+    // Force network on desk/tab loads so a background warm miss cannot blank the chain.
+    fetchMarketOptions(selected, true)
       .then((payload) => setOptionsChain(payload))
       .catch(() => setOptionsChain({ available: false, message: 'Option chain fetch failed' }))
       .finally(() => setOptionsLoading(false))
