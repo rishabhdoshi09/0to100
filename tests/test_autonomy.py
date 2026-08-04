@@ -174,6 +174,22 @@ def test_data_refresh_bhavcopy_when_kite_deferred(tmp_path):
     assert "bhavcopy" in r.summary.lower()
 
 
+def test_data_refresh_low_power_reuses_existing_snapshot(monkeypatch, tmp_path):
+    monkeypatch.setenv("QT_LOW_POWER", "1")
+
+    class Deps(FakeDeps):
+        def active_snapshot_info(self):
+            return {"snapshot_id": "snap-low", "latest_date": "2026-08-01", "source": "kite"}
+
+        def activate(self):
+            raise AssertionError("full Kite activate must not run in low-power reuse path")
+
+    r = JOBS.run_data_refresh(JOBS._Ctx(Deps(now=datetime(2026, 8, 4, 9, 0), authed=True)))
+    assert r.status == JS.SUCCEEDED
+    assert r.output_snapshot_id == "snap-low"
+    assert r.metadata.get("reused_existing") is True
+
+
 def test_kite_login_optional_weekend():
     from datetime import datetime
 

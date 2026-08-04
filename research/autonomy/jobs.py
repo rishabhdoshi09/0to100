@@ -413,7 +413,50 @@ def run_instrument_refresh(ctx) -> JobResult:
                          error_code="INSTRUMENT_REFRESH_ERROR", error_message=str(exc))
 
 
+def _low_power_mode() -> bool:
+    return str(os.getenv("QT_LOW_POWER", "") or "").strip() in {"1", "true", "TRUE", "yes"}
+
+
+def _reuse_existing_snapshot(ctx) -> JobResult | None:
+    """Avoid multi-minute Kite daily_refresh when a usable snapshot already exists."""
+    info = {}
+    if hasattr(ctx.deps, "active_snapshot_info"):
+        try:
+            info = dict(ctx.deps.active_snapshot_info() or {})
+        except Exception:
+            info = {}
+    sid = str(info.get("snapshot_id") or "") or None
+    if not sid and hasattr(ctx.deps, "active_snapshot_id"):
+        try:
+            sid = ctx.deps.active_snapshot_id()
+        except Exception:
+            sid = None
+    if not sid:
+        return None
+    latest = str(info.get("latest_date") or "")
+    unblocks = [DEP_DATA]
+    if latest:
+        unblocks.append(f"EOD_DATA_READY:{latest}")
+    return JobResult(
+        JS.SUCCEEDED,
+        f"existing snapshot reused · {sid}"
+        + (" · low-power mode skips full Kite history refresh" if _low_power_mode() else ""),
+        output_snapshot_id=str(sid),
+        metadata={**info, "reused_existing": True, "low_power": _low_power_mode()},
+        state_hint=ST.DATA_READY,
+        clears={H.PROVIDER_UNAVAILABLE, H.SNAPSHOT_STALE, H.AUTH_MISSING, H.AUTH_EXPIRED},
+        unblocks=tuple(unblocks),
+    )
+
+
 def run_data_refresh(ctx) -> JobResult:
+    # Low-power Macs: never block the supervisor for 10–20 minutes on Kite
+    # daily_refresh. Reuse an active snapshot, else fall through to bhav/activate.
+    if _low_power_mode():
+        reused = _reuse_existing_snapshot(ctx)
+        if reused is not None:
+            return reused
+
     if not _auth_health(ctx.deps).valid:
         if _kite_login_optional(ctx):
             try:

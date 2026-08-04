@@ -233,6 +233,7 @@ def _startup() -> None:
     # Do not block API bind on worker heartbeat — old Macs need /api/health fast.
     _ensure_ops_worker(wait_s=0.0)
     _schedule_regime_refresh()
+    _schedule_institutional_refresh()
 
 
 @app.on_event("shutdown")
