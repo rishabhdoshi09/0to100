@@ -648,20 +648,19 @@ def _get_pcr_signal() -> float:
     PCR > 1.0 = puts dominating = fear = +0
     """
     try:
-        import requests
-        resp = requests.get(
-            "https://www.nseindia.com/api/option-chain-indices?symbol=NIFTY",
-            headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json"},
-            timeout=5,
-        )
-        data = resp.json()
-        ce_oi = sum(r.get("CE", {}).get("openInterest", 0)
-                    for r in data.get("records", {}).get("data", []) if "CE" in r)
-        pe_oi = sum(r.get("PE", {}).get("openInterest", 0)
-                    for r in data.get("records", {}).get("data", []) if "PE" in r)
-        pcr = pe_oi / ce_oi if ce_oi > 0 else 1.0
-        if pcr < 0.7:  return 33.0
-        if pcr < 1.0:  return 15.0
+        # Use the shared v3-aware fetcher — legacy option-chain-indices is 404.
+        from options.chain_fetch import chain_workspace_cached, compute_pcr
+
+        payload = chain_workspace_cached("NIFTY", force=False)
+        if not payload.get("available"):
+            return 15.0
+        pcr = float(payload.get("pcr") or 0.0)
+        if pcr <= 0:
+            return 15.0
+        if pcr < 0.7:
+            return 33.0
+        if pcr < 1.0:
+            return 15.0
         return 0.0
     except Exception:
         return 15.0  # neutral assumption when unavailable
