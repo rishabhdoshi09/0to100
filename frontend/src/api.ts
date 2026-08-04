@@ -81,6 +81,82 @@ export const fetchSniperBoard = (): Promise<SniperBoardPayload> =>
   fetch('/api/sniper-board', { headers: { Accept: 'application/json' } })
     .then((response) => json<SniperBoardPayload>(response))
 
+export type StreetPulseStock = {
+  symbol?: string
+  company?: string
+  price?: number | null
+  change_pct?: number | null
+  chg_pct?: number | null
+  chg_5d?: number | null
+  volume_ratio?: number | null
+  score?: number | null
+  entry?: number | null
+  stop?: number | null
+  target?: number | null
+  pivot_distance_pct?: number | null
+  status?: string
+  verdict?: string
+  note?: string
+  why?: string
+  reasons?: string[]
+  signals?: string[]
+  chase_risk?: boolean
+}
+
+export type StreetPulsePayload = {
+  available: boolean
+  report_type?: string
+  title?: string
+  date?: string
+  generated_at?: string
+  takeaways?: string[]
+  snapshot?: {
+    indices?: Array<{ name?: string; price?: number; chg_pct?: number }>
+    commentary?: string
+    regime?: string
+    options_stance?: {
+      stance?: string
+      score?: number | null
+      confidence?: number
+      headline?: string
+      honesty?: string
+      consider_for?: string[]
+    }
+    options?: Record<string, unknown>
+  }
+  sectors?: {
+    available?: boolean
+    leaders?: Array<{ sector?: string; chg_1d?: number; chg_5d?: number; members?: number }>
+    laggards?: Array<{ sector?: string; chg_1d?: number; chg_5d?: number; members?: number }>
+    message?: string
+  }
+  gainers?: StreetPulseStock[]
+  losers?: StreetPulseStock[]
+  buzzing?: StreetPulseStock | null
+  strength?: StreetPulseStock | null
+  weak?: StreetPulseStock | null
+  relative_strength?: StreetPulseStock[]
+  breakouts_today?: StreetPulseStock[]
+  breakouts_tomorrow?: StreetPulseStock[]
+  global_cues?: Array<{ name?: string; price?: number; chg_pct?: number; source?: string }>
+  headlines?: string[]
+  scanned?: number
+  scan_as_of?: string
+  scan_source?: string
+  gaps?: string[]
+  places_orders?: boolean
+  live_locked?: boolean
+  signal_desk?: boolean
+  honesty?: string
+  disclaimer?: string
+  error?: string
+}
+
+export const fetchStreetPulse = (force = false): Promise<StreetPulsePayload> =>
+  fetch(`/api/street-pulse?force=${force ? 'true' : 'false'}`, {
+    headers: { Accept: 'application/json' },
+  }).then((response) => json<StreetPulsePayload>(response))
+
 export const sendControl = (
   control: ControlName,
 ): Promise<{

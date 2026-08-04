@@ -496,3 +496,126 @@ def render_institutional_market_pdf(brief: Mapping[str, Any], output: str | Path
     story += [Spacer(1, 8 * mm), _callout("Disclaimer", brief.get("disclaimer", ""), styles)]
     doc.build(story, onFirstPage=_header_footer, onLaterPages=_header_footer)
     return output
+
+
+def render_street_pulse_pdf(pulse: Mapping[str, Any], output: str | Path) -> Path:
+    """Render Daily Street Pulse as an evidence digest PDF."""
+    styles = _styles()
+    output = Path(output)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    doc = SimpleDocTemplate(
+        str(output),
+        pagesize=A4,
+        leftMargin=18 * mm,
+        rightMargin=18 * mm,
+        topMargin=20 * mm,
+        bottomMargin=18 * mm,
+        title=pulse.get("title", "Daily Street Pulse"),
+    )
+    snap = dict(pulse.get("snapshot") or {})
+    stance = dict(snap.get("options_stance") or {})
+    sectors = dict(pulse.get("sectors") or {})
+    story: list[Any] = [
+        Spacer(1, 10 * mm),
+        _p(pulse.get("title", "Daily Street Pulse"), styles["title"]),
+        _p(
+            f"{pulse.get('date', '')} · scan {pulse.get('scan_source', '—')} · "
+            f"{pulse.get('scanned', 0)} names · generated {str(pulse.get('generated_at', ''))[:19]}",
+            styles["subtitle"],
+        ),
+        _metric_cards(
+            [
+                ("Options stance", str(stance.get("stance") or "—")),
+                ("Scan source", str(pulse.get("scan_source") or "—")),
+                ("Universe", str(pulse.get("scanned") or 0)),
+                ("Gaps", str(len(pulse.get("gaps") or []))),
+            ],
+            styles,
+        ),
+        Spacer(1, 5 * mm),
+        _callout("Research frame", pulse.get("honesty") or pulse.get("disclaimer") or "", styles),
+        Spacer(1, 4 * mm),
+        _p("Cover takeaways", styles["h2"]),
+        *_bullets(pulse.get("takeaways") or [], styles, empty="No takeaways available."),
+    ]
+
+    idx_rows = [
+        [i.get("name", ""), _fmt(i.get("price"), 0), f"{_fmt(i.get('chg_pct'), 2)}%"]
+        for i in (snap.get("indices") or [])
+    ]
+    if idx_rows:
+        story += [
+            Spacer(1, 4 * mm),
+            _p("Market snapshot", styles["h2"]),
+            _data_table(["Index", "Price", "Change"], idx_rows, styles, [60 * mm, 50 * mm, 40 * mm]),
+        ]
+    if snap.get("commentary"):
+        story.append(_p(str(snap.get("commentary")), styles["body"]))
+    if stance.get("headline"):
+        story.append(_p(f"Options: {stance.get('headline')}", styles["body"]))
+
+    if sectors.get("available"):
+        lead = [[r.get("sector"), f"{_fmt(r.get('chg_1d'), 2)}%", f"{_fmt(r.get('chg_5d'), 2)}%", r.get("members")] for r in (sectors.get("leaders") or [])[:6]]
+        lag = [[r.get("sector"), f"{_fmt(r.get('chg_1d'), 2)}%", f"{_fmt(r.get('chg_5d'), 2)}%", r.get("members")] for r in (sectors.get("laggards") or [])[:6]]
+        if lead:
+            story += [Spacer(1, 4 * mm), _p("Sector heat — leaders", styles["h2"]), _data_table(["Sector", "1D", "5D", "N"], lead, styles, [70 * mm, 30 * mm, 30 * mm, 20 * mm])]
+        if lag:
+            story += [_p("Sector heat — laggards", styles["h2"]), _data_table(["Sector", "1D", "5D", "N"], lag, styles, [70 * mm, 30 * mm, 30 * mm, 20 * mm])]
+
+    g_rows = [[r.get("symbol"), _fmt(r.get("price"), 1), f"{_fmt(r.get('chg_pct'), 2)}%"] for r in (pulse.get("gainers") or [])]
+    l_rows = [[r.get("symbol"), _fmt(r.get("price"), 1), f"{_fmt(r.get('chg_pct'), 2)}%"] for r in (pulse.get("losers") or [])]
+    if g_rows or l_rows:
+        story += [Spacer(1, 4 * mm), _p("Liquid gainers / losers (bhav)", styles["h2"])]
+        if g_rows:
+            story += [_p("Gainers", styles["body"]), _data_table(["Symbol", "Price", "Chg"], g_rows, styles, [40 * mm, 40 * mm, 40 * mm])]
+        if l_rows:
+            story += [_p("Losers", styles["body"]), _data_table(["Symbol", "Price", "Chg"], l_rows, styles, [40 * mm, 40 * mm, 40 * mm])]
+
+    def _named(card: Mapping[str, Any] | None, title: str) -> None:
+        nonlocal story
+        if not card:
+            return
+        story += [
+            Spacer(1, 4 * mm),
+            _p(title, styles["h2"]),
+            _p(
+                f"{card.get('symbol')} · price {_fmt(card.get('price'), 1)} · "
+                f"{card.get('note') or card.get('why') or ''}",
+                styles["body"],
+            ),
+        ]
+
+    _named(pulse.get("buzzing"), "Buzzing stock")
+    _named(pulse.get("strength"), "Gaining strength")
+    _named(pulse.get("weak"), "Losing momentum")
+
+    rs_rows = [
+        [r.get("symbol"), _fmt(r.get("score"), 1), r.get("status", ""), (r.get("why") or "")[:60]]
+        for r in (pulse.get("relative_strength") or [])
+    ]
+    if rs_rows:
+        story += [
+            Spacer(1, 4 * mm),
+            _p("Relative strength (scan-score leaders)", styles["h2"]),
+            _data_table(["Symbol", "Score", "Status", "Why"], rs_rows, styles, [28 * mm, 22 * mm, 35 * mm, 86 * mm]),
+        ]
+
+    brk = [[r.get("symbol"), r.get("status") or "breakout", (r.get("why") or "")[:70]] for r in (pulse.get("breakouts_today") or [])]
+    watch = [[r.get("symbol"), _fmt(r.get("pivot_distance_pct"), 1, "%"), (r.get("why") or "")[:70]] for r in (pulse.get("breakouts_tomorrow") or [])]
+    if brk:
+        story += [Spacer(1, 4 * mm), _p("Breakouts today", styles["h2"]), _data_table(["Symbol", "Status", "Note"], brk, styles, [30 * mm, 40 * mm, 101 * mm])]
+    if watch:
+        story += [_p("Tomorrow watch (near pivot)", styles["h2"]), _data_table(["Symbol", "Pivot dist", "Note"], watch, styles, [30 * mm, 30 * mm, 111 * mm])]
+
+    cues = [[c.get("name"), _fmt(c.get("price"), 1), f"{_fmt(c.get('chg_pct'), 2)}%"] for c in (pulse.get("global_cues") or [])]
+    if cues:
+        story += [Spacer(1, 4 * mm), _p("Global / US cues", styles["h2"]), _data_table(["Name", "Price", "Chg"], cues, styles, [60 * mm, 50 * mm, 40 * mm])]
+
+    if pulse.get("headlines"):
+        story += [Spacer(1, 4 * mm), _p("Top updates", styles["h2"]), *_bullets(pulse.get("headlines") or [], styles)]
+    if pulse.get("gaps"):
+        story += [Spacer(1, 4 * mm), _p("Gaps / unavailable", styles["h2"]), *_bullets(pulse.get("gaps") or [], styles)]
+
+    story += [Spacer(1, 6 * mm), _callout("Disclaimer", pulse.get("disclaimer") or "", styles)]
+    doc.build(story, onFirstPage=_header_footer, onLaterPages=_header_footer)
+    return output

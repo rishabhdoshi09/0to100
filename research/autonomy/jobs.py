@@ -865,6 +865,33 @@ def run_news_refresh(ctx) -> JobResult:
     return JobResult(JS.SUCCEEDED, "news refresh complete", clears={H.NEWS_UNAVAILABLE})
 
 
+def run_street_pulse(ctx) -> JobResult:
+    """Compose + persist Daily Street Pulse after scan/news evidence exists."""
+    try:
+        from reports.street_pulse import build_pulse
+
+        pulse = build_pulse(persist=True)
+    except Exception as exc:
+        return JobResult(
+            JS.RETRYABLE_FAILED,
+            "street pulse assemble failed",
+            error_code="STREET_PULSE_ERROR",
+            error_message=str(exc),
+        )
+    gaps = len(pulse.get("gaps") or [])
+    takeaways = len(pulse.get("takeaways") or [])
+    return JobResult(
+        JS.SUCCEEDED,
+        f"street pulse saved · {takeaways} takeaways · {gaps} gaps disclosed",
+        metadata={
+            "date": pulse.get("date"),
+            "scan_source": pulse.get("scan_source"),
+            "scanned": pulse.get("scanned"),
+            "gaps": gaps,
+        },
+    )
+
+
 # Compatibility name retained for older tests.
 run_news_health = run_news_refresh
 
@@ -879,6 +906,7 @@ HANDLERS = {
     SCH.INDEX_WARMUP: run_index_warmup,
     SCH.MARKET_SCAN: run_market_scan,
     SCH.NEWS_REFRESH: run_news_refresh,
+    SCH.STREET_PULSE: run_street_pulse,
     SCH.PAPER_CYCLE: run_paper_cycle,
     SCH.OUTCOME_RESOLUTION: run_outcome_resolution,
     SCH.LEARNING_CYCLE: run_learning_cycle,

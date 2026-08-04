@@ -906,6 +906,27 @@ def sniper_board_status() -> dict:
         }
 
 
+@app.get("/api/street-pulse")
+def street_pulse_status(force: bool = False) -> dict:
+    """Daily Street Pulse research digest — composes stores; never invents fills."""
+    try:
+        from reports.street_pulse import pulse_api_payload
+
+        return pulse_api_payload(force=bool(force))
+    except Exception as exc:
+        return {
+            "available": False,
+            "report_type": "DAILY_STREET_PULSE",
+            "takeaways": [],
+            "gaps": [str(exc)],
+            "places_orders": False,
+            "live_locked": True,
+            "signal_desk": False,
+            "honesty": "Street pulse failed to assemble — no invented market narrative.",
+            "error": str(exc),
+        }
+
+
 @app.get("/api/operations")
 def operations_status() -> dict:
     return _operations_payload()

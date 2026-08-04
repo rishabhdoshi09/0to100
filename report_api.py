@@ -137,6 +137,20 @@ def institutional_market_report(
         raise HTTPException(status_code=500, detail=f"Institutional market report failed: {exc}") from exc
 
 
+@app.get("/reports/market/street-pulse")
+def street_pulse_report(
+    force: bool = Query(default=True, description="Rebuild pulse before rendering PDF"),
+    download: bool = Query(False),
+) -> FileResponse:
+    """Daily Street Pulse PDF — research digest from stores, not a buy desk."""
+    try:
+        from reporting.street_pulse_report import generate_street_pulse_report
+
+        return _pdf_response(generate_street_pulse_report(force=force), download=download)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Street pulse report failed: {exc}") from exc
+
+
 @app.get("/evidence/{symbol}")
 def evidence_status(symbol: str) -> dict:
     try:

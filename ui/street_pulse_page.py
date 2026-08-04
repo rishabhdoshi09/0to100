@@ -450,18 +450,34 @@ def render_street_pulse() -> None:
         _section_title("💪 Stock Gaining Strength")
         if p.get("strength"):
             s = p["strength"]
-            dist = s.get("pivot_distance_pct", 0)
+            dist = s.get("pivot_distance_pct")
+            entry = s.get("entry")
+            stop = s.get("stop")
+            target = s.get("target")
+            price = s.get("price")
+            price_txt = f"₹{price:,.1f}" if price is not None else "—"
+            pivot_txt = (
+                f"Pivot ₹{entry:,.0f} se {float(dist):.1f}% neeche"
+                if entry is not None and dist is not None
+                else "Near-pivot watch"
+            )
+            levels = []
+            if stop is not None:
+                levels.append(f"Stop ₹{stop:,.0f}")
+            if target is not None:
+                levels.append(f"Target ₹{target:,.0f}")
+            levels_txt = " · ".join(levels)
             st.markdown(
                 f"<div style='{_CARD};border-left:3px solid #00d4a0'>"
                 f"<span style='font-size:1.05rem;font-weight:800;color:#e6edf3;"
                 f"font-family:JetBrains Mono,monospace'>{s['symbol']}</span> "
-                f"<span style='color:#e2e8f0'>₹{s['price']:,.1f}</span>"
+                f"<span style='color:#e2e8f0'>{price_txt}</span>"
                 f"<div style='font-size:.82rem;color:#c9d1d9;margin-top:6px'>"
-                f"{(s.get('reasons') or [''])[0]}</div>"
+                f"{((s.get('reasons') or [None])[0] or s.get('why') or '')}</div>"
                 f"<div style='font-size:.78rem;color:#94a3b8;margin-top:4px'>"
-                f"Pivot ₹{s['entry']:,.0f} se {dist:.1f}% neeche · "
-                f"Stop ₹{s['stop']:,.0f} · Target ₹{s['target']:,.0f}</div>"
-                f"</div>", unsafe_allow_html=True)
+                f"{pivot_txt}"
+                + (f" · {levels_txt}" if levels_txt else "")
+                + "</div></div>", unsafe_allow_html=True)
             _render_daily_chart(s["symbol"])
         else:
             st.caption("Koi strong accumulation candidate nahi mila.")

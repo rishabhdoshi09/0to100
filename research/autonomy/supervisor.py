@@ -237,6 +237,11 @@ class Supervisor:
             skey = SCH.scan_key(snap, slot, session_date)
             scan_job = self.jobs.enqueue(SCH.MARKET_SCAN, idempotency_key=skey,
                                          input_snapshot_id=None if snap == "none" else snap)
+            if slot in {"premarket", "eod"} and scan_job.status == JS.SUCCEEDED:
+                self.jobs.enqueue(
+                    SCH.STREET_PULSE,
+                    idempotency_key=SCH.street_pulse_key(session_date, slot),
+                )
             if slot.startswith("intraday") and scan_job.status == JS.SUCCEEDED:
                 self.jobs.enqueue(
                     SCH.PAPER_CYCLE,

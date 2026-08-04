@@ -17,6 +17,7 @@ OPTIONS_EOD = "options_eod"
 INDEX_WARMUP = "index_warmup"
 MARKET_SCAN = "market_scan"
 NEWS_REFRESH = "news_refresh"
+STREET_PULSE = "street_pulse"
 PAPER_CYCLE = "paper_cycle"
 OUTCOME_RESOLUTION = "outcome_resolution"
 LEARNING_CYCLE = "learning_cycle"
@@ -26,8 +27,9 @@ LONG_TERM_REFRESH = "long_term_refresh"
 
 ALL_JOB_TYPES = (
     AUTH_HEALTH, INSTRUMENT_REFRESH, DATA_REFRESH, BHAVCOPY_UPDATE, CORPORATE_ACTIONS,
-    UNIVERSE_HISTORY, OPTIONS_EOD, INDEX_WARMUP, MARKET_SCAN, NEWS_REFRESH, PAPER_CYCLE,
-    OUTCOME_RESOLUTION, LEARNING_CYCLE, RESEARCH_CYCLE, LONG_TERM_SCAN, LONG_TERM_REFRESH,
+    UNIVERSE_HISTORY, OPTIONS_EOD, INDEX_WARMUP, MARKET_SCAN, NEWS_REFRESH, STREET_PULSE,
+    PAPER_CYCLE, OUTCOME_RESOLUTION, LEARNING_CYCLE, RESEARCH_CYCLE, LONG_TERM_SCAN,
+    LONG_TERM_REFRESH,
 )
 CRITICAL_JOBS = {AUTH_HEALTH, DATA_REFRESH, PAPER_CYCLE, OUTCOME_RESOLUTION}
 
@@ -198,6 +200,10 @@ def index_warmup_key(session_date: str) -> str:
 
 def news_key(session_date: str, bucket: str) -> str:
     return f"news_refresh:{session_date}:{bucket}"
+
+
+def street_pulse_key(session_date: str, slot: str) -> str:
+    return f"street_pulse:{session_date}:{slot}"
 
 
 def learning_key(session_date: str) -> str:

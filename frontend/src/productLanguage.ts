@@ -105,6 +105,19 @@ export const PAGE_GUIDE: Record<string, PageGuide> = {
     action: 'Read the teach point, open the source when present, then review linked symbols in Stock Intelligence.',
     doesNot: 'Education never invents blogs and never places or recommends orders.',
   },
+  'Daily Pulse': {
+    title: 'Daily Street Pulse',
+    purpose: 'Auto-assembles a Daily Street Pulse-style research digest from scan, bhav, sector heat, options stance, sniper board, and news.',
+    questions: [
+      'What are today’s defensible takeaways?',
+      'Which sectors lead / lag on bhav?',
+      'Is options positioning SUPPORTIVE, CAUTION, or HOSTILE?',
+      'Which names are buzzing, gaining strength, or losing momentum?',
+      'What is on tomorrow’s near-pivot watch — and what gaps are disclosed?',
+    ],
+    action: 'Rebuild after a market scan, open PDF if needed, then drill into Stock Intelligence / Confirmed Breakouts before any paper rehearsal.',
+    doesNot: 'Not a buy desk. Buzzing / breakout / SUPPORTIVE labels are research context only — missing sections stay missing.',
+  },
   'US Market': {
     title: 'US Market',
     purpose: 'Retail US plane — NASDAQ Trader listings, Yahoo EOD cache, liquid scan scope, paper autopilot only.',

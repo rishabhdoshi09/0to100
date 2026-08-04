@@ -501,6 +501,27 @@ def cmd_options_eod(args) -> None:
     print(json.dumps(report, indent=2, default=str))
 
 
+def cmd_street_pulse(args) -> None:
+    """Build or inspect the durable Daily Street Pulse research digest."""
+    from reports.street_pulse import build_pulse, load_pulse, pulse_to_telegram
+
+    if args.status_only:
+        cached = load_pulse()
+        print(json.dumps(cached or {"available": False, "message": "No pulse saved yet"}, indent=2, default=str))
+        return
+    pulse = build_pulse(persist=True)
+    if args.telegram:
+        print(pulse_to_telegram(pulse))
+        return
+    if args.pdf:
+        from reporting.street_pulse_report import generate_street_pulse_report
+
+        path = generate_street_pulse_report(force=False)
+        print(json.dumps({"pdf": str(path), "date": pulse.get("date"), "gaps": pulse.get("gaps")}, indent=2, default=str))
+        return
+    print(json.dumps(pulse, indent=2, default=str))
+
+
 def cmd_screener(args) -> None:
     """
     Screen NSE stocks by fundamentals + technicals, or fetch one symbol's data.
@@ -1281,6 +1302,14 @@ def build_parser() -> argparse.ArgumentParser:
     oe.add_argument("--history", dest="history_symbol", metavar="SYMBOL", help="Print recent history for one symbol")
     oe.add_argument("--days", type=int, default=30, help="History window when using --history")
 
+    sp = sub.add_parser(
+        "street-pulse",
+        help="Build Daily Street Pulse research digest (scan/bhav/options/news — not a buy desk)",
+    )
+    sp.add_argument("--status", dest="status_only", action="store_true", help="Print last saved pulse JSON")
+    sp.add_argument("--telegram", action="store_true", help="Print Telegram HTML compact form")
+    sp.add_argument("--pdf", action="store_true", help="Also render reportlab PDF under logs/reports/")
+
     pv = sub.add_parser(
         "pit-valuations",
         help="Ingest publication-dated valuations into logs/pit_valuations.json (never invents rows)",
@@ -1349,6 +1378,7 @@ def main() -> None:
         "universe-history": cmd_universe_history,
         "snapshot-certify": cmd_snapshot_certify,
         "options-eod": cmd_options_eod,
+        "street-pulse": cmd_street_pulse,
         "pit-valuations": cmd_pit_valuations,
         "ensemble":   cmd_ensemble,
         "lgb":        cmd_lgb,

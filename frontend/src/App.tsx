@@ -13,6 +13,7 @@ import {
 } from './experience'
 import { MarketSidebar } from './MarketSidebar'
 import { EducationView } from './educationViews'
+import { StreetPulseView } from './streetPulseView'
 import { NewsView, OperationsRibbon, FnoView } from './marketViews'
 import { ProductStockIntelligenceView } from './productViews'
 import { UsMarketHome, UsScannerView, UsStockView } from './usMarketViews'
@@ -155,6 +156,7 @@ const pageTitles: Record<string, string> = {
   'Market Overview': 'Market Overview',
   'News & Events': 'News & Events',
   Education: 'Education',
+  'Daily Pulse': 'Daily Pulse',
   'US Market': 'US Market',
   'US Scanner': 'US Scanner',
   'US Stock': 'US Stock',
@@ -182,6 +184,7 @@ const pageSubtitles: Record<string, string> = {
   'Market Overview': 'Regime, breadth, volatility and sector leadership.',
   'News & Events': 'Dated market context with source health.',
   Education: 'Crunched news + macro/micro teach-ins for the share market — never invented blogs, never a signal.',
+  'Daily Pulse': 'Auto Daily Street Pulse — snapshot, sector heat, buzzing/strength/weak, breakouts, RS, options stance.',
   'US Market': 'US retail plane — NASDAQ listings, Yahoo EOD, S&P-scoped scan, paper autopilot only.',
   'US Scanner': 'US setups from Yahoo daily bars · liquid quality floor · no options overlay.',
   'US Stock': 'US ticker workspace — daily chart + last scan setup. Fundamentals/options marked unavailable.',
@@ -412,6 +415,9 @@ function App() {
   const openInstitutionalReport = () => {
     openReportViewer('FII/DII market brief', '/reports/market/institutional?days=30&symbol_limit=4')
   }
+  const openStreetPulseReport = () => {
+    openReportViewer('Daily Street Pulse', '/reports/market/street-pulse?force=true')
+  }
 
   const addToCompare = (symbol: string) => {
     setCompareSymbols((prev) => [...new Set([...prev, symbol.toUpperCase()])].slice(0, 5))
@@ -495,6 +501,15 @@ function App() {
           runControl={viewProps.runControl}
           setSelected={setSelected}
           setActive={setActive}
+        />
+      )
+    }
+    if (active === 'Daily Pulse') {
+      return (
+        <StreetPulseView
+          setSelected={setSelected}
+          setActive={setActive}
+          onOpenPdf={openStreetPulseReport}
         />
       )
     }
