@@ -150,6 +150,44 @@ def _guidance_rows(symbol: str) -> tuple[list[dict[str, Any]], list[dict[str, An
         return [], [], []
 
 
+def _source_packs(symbol: str) -> list[dict[str, Any]]:
+    """Clickable source packs so users can open filings and upload evidence."""
+    try:
+        from reporting.evidence_intake import RESOURCE_SPECS, resource_links
+
+        links = resource_links(symbol)
+    except Exception:
+        return []
+    # Outlook prioritises packs that unlock the growth/guidance brief.
+    priority = (
+        "management_commentary",
+        "order_book_guidance",
+        "financial_history",
+        "business_profile",
+        "annual_report",
+        "business_segments",
+        "shareholding_history",
+    )
+    packs: list[dict[str, Any]] = []
+    for key in priority:
+        spec = RESOURCE_SPECS.get(key)
+        if spec is None:
+            continue
+        packs.append(
+            {
+                "key": key,
+                "label": spec.label,
+                "why": spec.why,
+                "instructions": spec.instructions,
+                "accepted_extensions": list(spec.accepted_extensions),
+                "template_url": f"/evidence/templates/{key}.csv" if spec.template_columns else "",
+                "links": list(links.get(key) or []),
+                "upload_hint": f"Research Data → {spec.label} → paste source URL + upload file",
+            }
+        )
+    return packs
+
+
 def _uploaded_margin_trend(financial_history: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     rows = [dict(r) for r in financial_history if isinstance(r, Mapping) and _f(r.get("ebitda_margin_pct")) is not None]
     if len(rows) < 2:
@@ -441,6 +479,7 @@ def build_growth_outlook(
     )
 
     available = any(c["status"] == "AVAILABLE" for c in claims) or bool(guidance_items)
+    source_packs = _source_packs(sym)
     return {
         "available": available,
         "symbol": sym,
@@ -451,6 +490,7 @@ def build_growth_outlook(
         "claims": claims,
         "sections": sections,
         "guidance": guidance_items,
+        "source_packs": source_packs,
         "technical": {
             "available": bool(technical.get("available")),
             "price": price,
@@ -464,6 +504,7 @@ def build_growth_outlook(
         "honesty": (
             "Evidence-only outlook. Sales/profit/margins come from Screener cache or your uploads. "
             "Concall guidance appears only from uploaded management_commentary / order_book_guidance. "
+            "Open the source links below, download filings, then upload under Research Data. "
             "No invented FY targets, quotes, or prices. Not a buy/sell ticket."
         ),
     }

@@ -333,14 +333,17 @@ function GrowthOutlookPanel({
   onRetryFundamentals: () => void
   onOpenResearch: () => void
 }) {
-  if (!outlook?.available && !(outlook?.claims || []).length) {
+  const reportBase = import.meta.env.DEV
+    ? ''
+    : `${window.location.protocol}//${window.location.hostname}:8766`
+  if (!outlook?.available && !(outlook?.claims || []).length && !(outlook?.source_packs || []).length) {
     return (
       <EmptyState
         title="Growth outlook needs fundamentals"
         detail={
           fundamentalsBusy
             ? 'Fetching Screener fundamentals…'
-            : 'Refresh fundamentals, then optionally upload concall/guidance under Research Data.'
+            : 'Refresh fundamentals, then open the source links below and upload concall/guidance under Research Data.'
         }
       />
     )
@@ -348,6 +351,7 @@ function GrowthOutlookPanel({
   const claims = outlook?.claims || []
   const guidance = outlook?.guidance || []
   const sections = outlook?.sections || []
+  const packs = outlook?.source_packs || []
   const formatClaim = (row: {
     value?: number | string | null
     unit?: string
@@ -372,7 +376,48 @@ function GrowthOutlookPanel({
             {fundamentalsBusy ? 'Refreshing…' : 'Refresh fundamentals'}
           </button>
           <button type="button" onClick={onOpenResearch}>
-            Upload concall / guidance
+            Open Research Data to upload
+          </button>
+        </div>
+      </Panel>
+
+      <Panel
+        title="SOURCES TO OPEN & UPLOAD"
+        subtitle="Open a filing/IR link → download → upload in Research Data with the source URL"
+      >
+        {packs.length === 0 ? (
+          <EmptyState title="Source links unavailable" detail="Open Research Data for the full evidence desk." />
+        ) : (
+          <div className="stock-context-grid">
+            {packs.map((pack) => (
+              <article className="explain-metric" key={pack.key} style={{ alignItems: 'flex-start', minHeight: 'auto' }}>
+                <span>{pack.label}</span>
+                <strong style={{ fontSize: 12, fontWeight: 600 }}>{pack.why}</strong>
+                <small>{pack.instructions}</small>
+                <small>{pack.upload_hint}</small>
+                <div className="resource-links" style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 8 }}>
+                  {(pack.links || []).map((link) => (
+                    <a key={`${pack.key}-${link.url}`} href={link.url} target="_blank" rel="noreferrer">
+                      {link.official === 'true' ? 'Official · ' : ''}
+                      {link.label}
+                    </a>
+                  ))}
+                  {pack.template_url ? (
+                    <a href={`${reportBase}${pack.template_url}`} target="_blank" rel="noreferrer">
+                      Download CSV template
+                    </a>
+                  ) : null}
+                </div>
+                {pack.accepted_extensions?.length ? (
+                  <small>Accepted: {pack.accepted_extensions.join(', ')}</small>
+                ) : null}
+              </article>
+            ))}
+          </div>
+        )}
+        <div className="inline-actions" style={{ marginTop: 12 }}>
+          <button type="button" onClick={onOpenResearch}>
+            Go upload in Research Data
           </button>
         </div>
       </Panel>
@@ -414,7 +459,7 @@ function GrowthOutlookPanel({
         {guidance.length === 0 ? (
           <EmptyState
             title="No concall guidance uploaded"
-            detail="Upload management_commentary or order_book_guidance in Research Data. QuantTerm will not invent management quotes or FY targets."
+            detail="Use the source links above (NSE/BSE/IR/transcript search), then upload management_commentary or order_book_guidance in Research Data. QuantTerm will not invent management quotes."
           />
         ) : (
           <EvidenceList
@@ -422,7 +467,8 @@ function GrowthOutlookPanel({
             items={guidance.map((g) => {
               const head = [g.event_date, g.speaker, g.topic].filter(Boolean).join(' · ')
               const guide = [g.guidance_metric, g.guidance_value, g.guidance_period].filter(Boolean).join(' ')
-              return `${head}${guide ? ` — ${guide}` : ''}${g.commentary ? `: ${g.commentary}` : ''}`
+              const body = `${head}${guide ? ` — ${guide}` : ''}${g.commentary ? `: ${g.commentary}` : ''}`
+              return g.source_url ? `${body} · ${g.source_url}` : body
             })}
             tone="cyan"
           />

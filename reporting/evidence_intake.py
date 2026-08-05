@@ -134,12 +134,29 @@ def resource_links(symbol: str) -> dict[str, list[dict[str, str]]]:
         "business_segments": [annual, ir],
         "management_commentary": [
             {"label": "NSE announcements and call filings", "url": nse_announcements, "official": "true"},
-            {"label": "BSE announcements", "url": bse_announcements, "official": "true"}, ir,
+            {"label": "BSE announcements", "url": bse_announcements, "official": "true"},
+            ir,
+            {
+                "label": "Earnings-call transcript search",
+                "url": f"https://www.google.com/search?q={symbol}+earnings+call+transcript+OR+concall",
+                "official": "false",
+            },
+            {
+                "label": "Investor presentation search",
+                "url": f"https://www.google.com/search?q={symbol}+investor+presentation+PDF",
+                "official": "false",
+            },
         ],
         "order_book_guidance": [
             {"label": "NSE corporate announcements", "url": nse_announcements, "official": "true"},
             {"label": "BSE announcements", "url": bse_announcements, "official": "true"},
-            {"label": "NSE financial results", "url": nse_financials, "official": "true"}, ir,
+            {"label": "NSE financial results", "url": nse_financials, "official": "true"},
+            ir,
+            {
+                "label": "Order book / guidance search",
+                "url": f"https://www.google.com/search?q={symbol}+order+book+OR+guidance+investor+presentation",
+                "official": "false",
+            },
         ],
         "annual_report": [annual, ir],
     }

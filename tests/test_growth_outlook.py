@@ -52,19 +52,27 @@ def test_double_engine_from_sales_and_margin(monkeypatch):
     assert "20% CAGR by" not in blob
 
 
-def test_missing_guidance_stays_missing(monkeypatch):
+def test_source_packs_include_upload_links(monkeypatch):
     from product import growth_outlook as GO
 
     monkeypatch.setattr(GO, "_guidance_rows", lambda symbol: ([], [], []))
     out = GO.build_growth_outlook(
-        "TESTCO",
+        "RKFORGE",
         fundamentals={"metrics": [], "key_ratios": [], "raw_values": {}},
         technical={"available": False},
         raw_fundamentals={"data": {}},
     )
-    assert out["guidance"] == []
-    assert any("guidance" in g.lower() or "concall" in g.lower() for g in out["gaps"])
-    assert "INCOMPLETE" in out["thesis"]["label"]
+    packs = out["source_packs"]
+    assert packs
+    keys = {p["key"] for p in packs}
+    assert "management_commentary" in keys
+    assert "order_book_guidance" in keys
+    assert "financial_history" in keys
+    mgmt = next(p for p in packs if p["key"] == "management_commentary")
+    assert mgmt["links"]
+    assert any("nseindia.com" in str(link.get("url")) for link in mgmt["links"])
+    assert mgmt["template_url"].endswith("management_commentary.csv")
+    assert "Research Data" in mgmt["upload_hint"]
 
 
 def test_uploaded_guidance_is_cited(monkeypatch):

@@ -145,6 +145,16 @@ export type StockWorkspace = {
     summary?: string
     honesty?: string
     places_orders?: boolean
+    source_packs?: Array<{
+      key: string
+      label: string
+      why?: string
+      instructions?: string
+      accepted_extensions?: string[]
+      template_url?: string
+      upload_hint?: string
+      links?: Array<{ label: string; url: string; official?: string }>
+    }>
   }
   peers?: {
     available: boolean
