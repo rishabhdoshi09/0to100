@@ -441,15 +441,72 @@ export const refreshStockFundamentals = (symbol: string): Promise<{
   workspace: StockWorkspace
 }> => fetchStockFundamentals(symbol, true)
 
+export type SmartFetchJob = {
+  job_id?: string
+  symbol?: string
+  status?: string
+  message?: string
+  kinds?: string[]
+  force?: boolean
+  report?: {
+    attached_count?: number
+    failed_count?: number
+    results?: Array<{
+      kind: string
+      ok: boolean
+      method?: string
+      error?: string
+      note?: string
+    }>
+    honesty?: string
+    screener_note?: string
+    skipped?: boolean
+  }
+  error?: string
+}
+
+export const scheduleSmartFetch = (
+  symbol: string,
+  body?: { kinds?: string[]; refresh_screener?: boolean; force?: boolean; requested_by?: string },
+): Promise<{
+  accepted: boolean
+  created: boolean
+  symbol: string
+  message?: string
+  job?: SmartFetchJob
+  cooldown_s?: number
+}> =>
+  fetch(`/api/stock-intelligence/${encodeURIComponent(symbol)}/smart-fetch`, {
+    method: 'POST',
+    headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+    body: JSON.stringify(body || {}),
+  }).then((response) => json(response))
+
+export const fetchSmartFetchStatus = (
+  symbol: string,
+): Promise<{
+  symbol: string
+  job: SmartFetchJob | null
+  queue_depth: number
+  low_power: boolean
+  cooldown_s: number
+}> =>
+  fetch(`/api/stock-intelligence/${encodeURIComponent(symbol)}/smart-fetch`, {
+    headers: { Accept: 'application/json' },
+  }).then((response) => json(response))
+
 export const autofetchStockEvidence = (
   symbol: string,
-  body?: { kinds?: string[]; refresh_screener?: boolean },
+  body?: { kinds?: string[]; refresh_screener?: boolean; force?: boolean; wait?: boolean },
 ): Promise<{
   accepted: boolean
   symbol: string
-  attached_count: number
-  failed_count: number
-  results: Array<{
+  mode?: string
+  created?: boolean
+  message?: string
+  attached_count?: number
+  failed_count?: number
+  results?: Array<{
     kind: string
     ok: boolean
     method?: string
@@ -461,6 +518,7 @@ export const autofetchStockEvidence = (
   }>
   honesty?: string
   screener_note?: string
+  job?: SmartFetchJob
   workspace: StockWorkspace
 }> =>
   fetch(`/api/stock-intelligence/${encodeURIComponent(symbol)}/autofetch-evidence`, {
@@ -468,6 +526,46 @@ export const autofetchStockEvidence = (
     headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
     body: JSON.stringify(body || {}),
   }).then((response) => json(response))
+
+/** Queue smart fetch and poll until terminal status (or timeout). Keeps UI responsive. */
+export const runSmartFetchUntilSettled = async (
+  symbol: string,
+  body?: { kinds?: string[]; refresh_screener?: boolean; force?: boolean },
+  options?: { timeoutMs?: number; pollMs?: number },
+): Promise<{
+  accepted: boolean
+  symbol: string
+  job: SmartFetchJob | null
+  timedOut: boolean
+  message: string
+}> => {
+  const timeoutMs = options?.timeoutMs ?? 90_000
+  const pollMs = options?.pollMs ?? 2_500
+  await scheduleSmartFetch(symbol, { refresh_screener: true, ...(body || {}) })
+  const started = Date.now()
+  while (Date.now() - started < timeoutMs) {
+    const status = await fetchSmartFetchStatus(symbol)
+    const state = status.job?.status || ''
+    if (['SUCCEEDED', 'FAILED', 'DROPPED', 'INTERRUPTED'].includes(state)) {
+      return {
+        accepted: true,
+        symbol,
+        job: status.job,
+        timedOut: false,
+        message: status.job?.message || state,
+      }
+    }
+    await new Promise((resolve) => window.setTimeout(resolve, pollMs))
+  }
+  const last = await fetchSmartFetchStatus(symbol)
+  return {
+    accepted: true,
+    symbol,
+    job: last.job,
+    timedOut: true,
+    message: last.job?.message || 'Still downloading in the background (backend stays responsive)',
+  }
+}
 
 export const fetchCommandCenterWorkspace = (): Promise<CommandCenterWorkspace> =>
   fetch('/api/command-center-workspace', { headers: { Accept: 'application/json' } })

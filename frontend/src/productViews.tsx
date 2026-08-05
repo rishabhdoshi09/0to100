@@ -17,7 +17,8 @@ import {
   fetchStockIntelligence,
   fetchPreTrade,
   fetchStockFundamentals,
-  autofetchStockEvidence,
+  runSmartFetchUntilSettled,
+  scheduleSmartFetch,
   fetchSymbolRatios,
   type IntelligenceMetric,
   type PreTrade,
@@ -390,11 +391,14 @@ function GrowthOutlookPanel({
           </button>
         </div>
         {autofetchNote ? <p className="panel-copy">{autofetchNote}</p> : null}
+        <p className="panel-copy">
+          Opens also queue a load-safe background download (one symbol at a time, missing kinds only).
+        </p>
       </Panel>
 
       <Panel
         title="SOURCES — AUTO-FETCH OR OPEN"
-        subtitle="Auto-fetch exports Screener tables + downloads official filings when reachable"
+        subtitle="Queued worker · Screener export first · official PDFs when reachable · never blocks the API"
       >
         {packs.length === 0 ? (
           <EmptyState title="Source links unavailable" detail="Open Research Data for the full evidence desk." />
@@ -559,35 +563,48 @@ export function ProductStockIntelligenceView(props: ViewProps) {
     }
   }
 
-  const runAutofetchEvidence = async () => {
+  const runAutofetchEvidence = async (opts?: { silent?: boolean; force?: boolean }) => {
     if (!selected) return
-    setBusy('AUTOFETCH_EVIDENCE')
-    setAutofetchNote('')
+    const symbol = selected
+    if (!opts?.silent) setBusy('AUTOFETCH_EVIDENCE')
+    if (!opts?.silent) setAutofetchNote('Queued load-safe auto-download…')
     try {
-      const result = await autofetchStockEvidence(selected, { refresh_screener: true })
-      setWorkspace(result.workspace)
-      const okBits = (result.results || [])
-        .filter((row) => row.ok)
-        .map((row) => `${row.kind}: ${row.method || 'ok'}`)
-      const failBits = (result.results || [])
-        .filter((row) => !row.ok)
-        .map((row) => `${row.kind}: ${row.error || 'failed'}`)
+      const settled = await runSmartFetchUntilSettled(
+        symbol,
+        { refresh_screener: true, force: Boolean(opts?.force) },
+        { timeoutMs: opts?.silent ? 45_000 : 90_000, pollMs: 2_500 },
+      )
+      if (selected !== symbol) return
+      const report = settled.job?.report
+      const results = report?.results || []
+      const okBits = results.filter((row) => row.ok).map((row) => `${row.kind}: ${row.method || 'ok'}`)
+      const failBits = results.filter((row) => !row.ok).map((row) => `${row.kind}: ${row.error || 'failed'}`)
       setAutofetchNote(
         [
-          result.honesty,
-          result.screener_note,
-          `Attached ${result.attached_count}, failed ${result.failed_count}.`,
+          settled.timedOut ? 'Still running in background (API stayed up).' : '',
+          settled.message,
+          report?.honesty,
+          report?.screener_note,
+          report
+            ? `Attached ${report.attached_count ?? 0}, failed ${report.failed_count ?? 0}.`
+            : '',
           okBits.length ? `OK — ${okBits.join(' · ')}` : '',
           failBits.length ? `Not attached — ${failBits.join(' · ')}` : '',
         ]
           .filter(Boolean)
           .join(' '),
       )
+      // Refresh workspace after background attach without blocking the terminal.
+      const ws = await fetchStockIntelligence(symbol)
+      if (selected !== symbol) return
+      setWorkspace(ws)
       await loadRatios()
     } catch (reason) {
-      setAutofetchNote(reason instanceof Error ? reason.message : 'Auto-fetch failed')
+      if (!opts?.silent && selected === symbol) {
+        setAutofetchNote(reason instanceof Error ? reason.message : 'Auto-fetch failed')
+      }
     } finally {
-      setBusy('')
+      if (!opts?.silent && selected === symbol) setBusy('')
     }
   }
 
@@ -620,6 +637,22 @@ export function ProductStockIntelligenceView(props: ViewProps) {
       } else {
         void loadRatios()
       }
+      // Auto-download missing research sources in the background (queued, one-at-a-time).
+      void scheduleSmartFetch(selected, {
+        refresh_screener: true,
+        requested_by: 'stock-intelligence-open',
+      })
+        .then((scheduled) => {
+          if (scheduled.created) {
+            setAutofetchNote('Auto-download queued for missing sources (load-safe).')
+            void runAutofetchEvidence({ silent: true })
+          } else if (scheduled.job?.status === 'SUCCEEDED' && scheduled.job.report) {
+            setAutofetchNote(scheduled.message || 'Recent auto-download still fresh.')
+          }
+        })
+        .catch(() => {
+          /* non-blocking */
+        })
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : 'Stock intelligence unavailable')
       setLoading(false)

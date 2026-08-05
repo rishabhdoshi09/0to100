@@ -206,6 +206,8 @@ def evidence_autofetch(symbol: str, body: dict = Body(default_factory=dict)) -> 
             clean_symbol(symbol),
             kinds=kinds,
             refresh_screener=bool(refresh),
+            only_missing=not bool(payload.get("force", False)),
+            max_link_downloads=int(payload.get("max_link_downloads") or 3),
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

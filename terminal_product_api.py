@@ -745,8 +745,14 @@ def product_dashboard() -> dict[str, Any]:
 
 @app.post("/api/product-bootstrap")
 def product_bootstrap() -> dict[str, Any]:
-    """Queue the independent operations that make the retail product usable."""
+    """Queue the independent operations that make the retail product usable.
+
+    Under QT_LOW_POWER, skip whole-market scan / long-term refresh so an old Mac
+    is not crushed at click-time. Data + news remain the useful prep jobs.
+    """
     try:
+        import os
+
         from operations.market_ops import (
             DATA_PREPARE,
             LANES,
@@ -758,8 +764,16 @@ def product_bootstrap() -> dict[str, Any]:
 
         core._ensure_ops_worker()
         store = OperationStore(core.OPS_DB)
+        low_power = str(os.getenv("QT_LOW_POWER", "") or "").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+        }
+        kinds = [DATA_PREPARE, NEWS_REFRESH]
+        if not low_power:
+            kinds.extend([MARKET_SCAN, LONG_TERM_REFRESH])
         operations = []
-        for kind in (DATA_PREPARE, NEWS_REFRESH, MARKET_SCAN, LONG_TERM_REFRESH):
+        for kind in kinds:
             item, created = store.enqueue(
                 kind,
                 lane=LANES[kind],
@@ -775,9 +789,14 @@ def product_bootstrap() -> dict[str, Any]:
             )
         return {
             "accepted": True,
+            "low_power": low_power,
             "message": (
-                "QuantTerm preparation queued across independent data, news, scan and "
-                "long-term lanes."
+                "Low-power prep queued (data + news only — scans stay manual)."
+                if low_power
+                else (
+                    "QuantTerm preparation queued across independent data, news, scan and "
+                    "long-term lanes."
+                )
             ),
             "operations": operations,
             "readiness": product_readiness(),
@@ -842,22 +861,92 @@ def refresh_stock_fundamentals(symbol: str) -> dict[str, Any]:
 
 @app.post("/api/stock-intelligence/{symbol}/autofetch-evidence")
 def autofetch_stock_evidence(symbol: str, body: dict[str, Any] = Body(default_factory=dict)) -> dict[str, Any]:
-    """Download/export source links into the evidence store, then rebuild workspace."""
+    """Queue load-safe auto-download for a symbol (preferred), or run sync when wait=true.
+
+    Default is non-blocking schedule so the terminal API never sits on Screener/PDF I/O.
+    """
     try:
-        from reporting.evidence_autofetch import autofetch_evidence
+        from product.smart_fetch import schedule_symbol_fetch, symbol_fetch_status
 
         clean = clean_symbol(symbol)
+        payload = body or {}
+        wait = bool(payload.get("wait", False))
+        if not wait:
+            scheduled = schedule_symbol_fetch(
+                clean,
+                force=bool(payload.get("force", False)),
+                kinds=payload.get("kinds"),
+                refresh_screener=bool(payload.get("refresh_screener", True)),
+                requested_by="autofetch-evidence",
+            )
+            return {
+                **scheduled,
+                "mode": "queued",
+                "workspace": build_stock_workspace(clean),
+                "status": symbol_fetch_status(clean),
+            }
+
+        from reporting.evidence_autofetch import autofetch_evidence
+
         report = autofetch_evidence(
             clean,
-            kinds=body.get("kinds"),
-            refresh_screener=bool(body.get("refresh_screener", True)),
+            kinds=payload.get("kinds"),
+            refresh_screener=bool(payload.get("refresh_screener", True)),
+            only_missing=not bool(payload.get("force", False)),
+            max_link_downloads=int(payload.get("max_link_downloads") or 3),
         )
         workspace = build_stock_workspace(clean)
         return {
             **report,
+            "mode": "sync",
             "workspace": workspace,
         }
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"Evidence autofetch failed: {exc}") from exc
+
+
+@app.post("/api/stock-intelligence/{symbol}/smart-fetch")
+def schedule_smart_fetch(symbol: str, body: dict[str, Any] = Body(default_factory=dict)) -> dict[str, Any]:
+    """Enqueue background research auto-download for the active symbol."""
+    try:
+        from product.smart_fetch import schedule_symbol_fetch
+
+        clean = clean_symbol(symbol)
+        payload = body or {}
+        return schedule_symbol_fetch(
+            clean,
+            force=bool(payload.get("force", False)),
+            kinds=payload.get("kinds"),
+            refresh_screener=bool(payload.get("refresh_screener", True)),
+            requested_by=str(payload.get("requested_by") or "smart-fetch"),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Smart fetch schedule failed: {exc}") from exc
+
+
+@app.get("/api/stock-intelligence/{symbol}/smart-fetch")
+def get_smart_fetch_status(symbol: str) -> dict[str, Any]:
+    """Poll background research auto-download status for one symbol."""
+    try:
+        from product.smart_fetch import symbol_fetch_status
+
+        return symbol_fetch_status(clean_symbol(symbol))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Smart fetch status failed: {exc}") from exc
+
+
+@app.get("/api/smart-fetch")
+def smart_fetch_scheduler() -> dict[str, Any]:
+    """Global smart-fetch queue snapshot (ops transparency)."""
+    try:
+        from product.smart_fetch import scheduler_snapshot
+
+        return scheduler_snapshot()
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Smart fetch snapshot failed: {exc}") from exc

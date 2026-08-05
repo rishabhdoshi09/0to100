@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useState } from 'react'
 import {
-  autofetchStockEvidence,
   fetchDataCoverage,
   fetchDataJobs,
   fetchDataProviders,
   runDataJob,
   fetchStockFundamentals,
+  runSmartFetchUntilSettled,
+  scheduleSmartFetch,
   type DataCoveragePayload,
   type DataJobsPayload,
   type DataProvidersPayload,
@@ -162,6 +163,19 @@ export function ResearchDataView({ symbol }: { symbol: string }) {
     }
     void loadFundamentals(false)
     void loadPlatformData()
+    void scheduleSmartFetch(symbol, {
+      refresh_screener: true,
+      requested_by: 'research-data-open',
+    })
+      .then((scheduled) => {
+        if (scheduled.created) {
+          setAutofetchNote('Auto-download queued for missing sources (load-safe).')
+          void runAutofetchEvidence({ silent: true })
+        }
+      })
+      .catch(() => {
+        /* non-blocking */
+      })
   }, [symbol])
 
   const missingCount = useMemo(() => status?.requirements.filter((item) => !item.available).length || 0, [status])
@@ -190,35 +204,47 @@ export function ResearchDataView({ symbol }: { symbol: string }) {
     }
   }
 
-  const runAutofetchEvidence = async () => {
+  const runAutofetchEvidence = async (opts?: { silent?: boolean }) => {
     if (!symbol) return
-    setBusy('auto-autofetch')
-    setError('')
-    setAutofetchNote('')
+    const active = symbol
+    if (!opts?.silent) {
+      setBusy('auto-autofetch')
+      setError('')
+      setAutofetchNote('Queued load-safe auto-download…')
+    }
     try {
-      const result = await autofetchStockEvidence(symbol, { refresh_screener: true })
-      const okBits = (result.results || [])
-        .filter((row) => row.ok)
-        .map((row) => `${row.kind}: ${row.method || 'ok'}`)
-      const failBits = (result.results || [])
-        .filter((row) => !row.ok)
-        .map((row) => `${row.kind}: ${row.error || 'failed'}`)
+      const settled = await runSmartFetchUntilSettled(
+        active,
+        { refresh_screener: true },
+        { timeoutMs: opts?.silent ? 45_000 : 90_000, pollMs: 2_500 },
+      )
+      if (symbol !== active) return
+      const report = settled.job?.report
+      const results = report?.results || []
+      const okBits = results.filter((row) => row.ok).map((row) => `${row.kind}: ${row.method || 'ok'}`)
+      const failBits = results.filter((row) => !row.ok).map((row) => `${row.kind}: ${row.error || 'failed'}`)
       setAutofetchNote(
         [
-          `Attached ${result.attached_count}, failed ${result.failed_count}.`,
-          result.screener_note,
+          settled.timedOut ? 'Still running in background (API stayed up).' : '',
+          settled.message,
+          report
+            ? `Attached ${report.attached_count ?? 0}, failed ${report.failed_count ?? 0}.`
+            : '',
+          report?.screener_note,
           okBits.length ? `OK — ${okBits.join(' · ')}` : '',
           failBits.length ? `Not attached — ${failBits.join(' · ')}` : '',
-          result.honesty,
+          report?.honesty,
         ]
           .filter(Boolean)
           .join(' '),
       )
       await loadEvidence()
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : 'Auto-fetch evidence failed')
+      if (!opts?.silent) {
+        setError(reason instanceof Error ? reason.message : 'Auto-fetch evidence failed')
+      }
     } finally {
-      setBusy('')
+      if (!opts?.silent) setBusy('')
     }
   }
 
@@ -335,7 +361,7 @@ export function ResearchDataView({ symbol }: { symbol: string }) {
 
       <div className="evidence-panel">
         <header>
-          <div><h2>Automatic data preparation</h2><p>QuantTerm fetches what it can itself. These operations are independent of paper trading.</p></div>
+          <div><h2>Automatic data preparation</h2><p>QuantTerm auto-downloads missing research for the open symbol via a single-flight queue so the backend stays up on low-power machines.</p></div>
           <button type="button" onClick={() => void loadEvidence()}>Refresh status</button>
         </header>
         <div className="resource-links">

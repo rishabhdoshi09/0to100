@@ -396,10 +396,27 @@ def _autofetch_from_screener(symbol: str, kind: str, raw: Mapping[str, Any]) -> 
     }
 
 
-def _autofetch_from_links(symbol: str, kind: str, links: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+def _autofetch_from_links(
+    symbol: str,
+    kind: str,
+    links: Sequence[Mapping[str, Any]],
+    *,
+    max_downloads: int = 3,
+) -> dict[str, Any]:
     session = _session()
     attempts: list[dict[str, Any]] = []
+    downloads_left = max(0, int(max_downloads))
     for link in links:
+        if downloads_left <= 0:
+            attempts.append(
+                {
+                    "url": "",
+                    "label": kind,
+                    "ok": False,
+                    "error": "download budget exhausted for this kind (load protection)",
+                }
+            )
+            break
         url = str(link.get("url") or "").strip()
         label = str(link.get("label") or url)
         if not url or _should_skip_url(url):
@@ -407,16 +424,21 @@ def _autofetch_from_links(symbol: str, kind: str, links: Sequence[Mapping[str, A
             continue
         try:
             content, content_type, final_url = _download(session, url)
+            downloads_left -= 1
         except Exception as exc:
+            downloads_left -= 1
             attempts.append({"url": url, "label": label, "ok": False, "error": str(exc)})
             continue
 
         # Prefer nested PDFs from HTML listing pages for annual/guidance packs.
         if "html" in content_type.lower() and kind in {"annual_report", "management_commentary", "order_book_guidance"}:
-            pdfs = _find_pdf_links(content, final_url, limit=3)
+            pdfs = _find_pdf_links(content, final_url, limit=min(2, downloads_left or 1))
             for pdf_url in pdfs:
+                if downloads_left <= 0:
+                    break
                 try:
                     pdf_bytes, pdf_ct, pdf_final = _download(session, pdf_url)
+                    downloads_left -= 1
                     ext = _extension_for(pdf_ct, pdf_final, kind) or (
                         ".pdf" if ".pdf" in RESOURCE_SPECS[kind].accepted_extensions else None
                     )
@@ -508,11 +530,26 @@ DEFAULT_KINDS = (
 )
 
 
+def _kind_already_covered(symbol: str, kind: str) -> bool:
+    status = evidence_requirements(symbol)
+    for item in status.get("requirements") or []:
+        if str(item.get("key")) != kind:
+            continue
+        if item.get("available"):
+            return True
+        if kind == "annual_report" and item.get("source_attached"):
+            return True
+        return False
+    return False
+
+
 def autofetch_evidence(
     symbol: str,
     *,
     kinds: Iterable[str] | None = None,
     refresh_screener: bool = True,
+    only_missing: bool = True,
+    max_link_downloads: int = 3,
 ) -> dict[str, Any]:
     """Download/export evidence for a symbol and attach into the evidence store."""
     symbol = clean_symbol(symbol)
@@ -521,12 +558,35 @@ def autofetch_evidence(
     if not wanted:
         raise ValueError("no valid evidence kinds requested")
 
+    if only_missing:
+        wanted = [k for k in wanted if not _kind_already_covered(symbol, k)]
+        if not wanted:
+            return {
+                "accepted": True,
+                "symbol": symbol,
+                "generated_at": datetime.now(timezone.utc).isoformat(),
+                "screener_note": "Skipped — all requested kinds already present.",
+                "attached_count": 0,
+                "failed_count": 0,
+                "results": [],
+                "skipped": True,
+                "status": evidence_requirements(symbol),
+                "places_orders": False,
+                "honesty": (
+                    "Auto-fetch attaches real downloads or Screener-cache exports only. "
+                    "Nothing was missing for the requested kinds."
+                ),
+            }
+
     screener_note = ""
-    if refresh_screener:
+    needs_screener = any(
+        k in {"financial_history", "business_profile", "shareholding_history"} for k in wanted
+    )
+    if refresh_screener and needs_screener:
         try:
             from fundamentals.lazy import ensure_deep_fundamentals
 
-            ensure_deep_fundamentals(symbol, force=False)
+            ensure_deep_fundamentals(symbol, force_refresh=False)
             screener_note = "Screener cache checked/refreshed before export."
         except Exception as exc:
             screener_note = f"Screener refresh skipped/failed: {exc}"
@@ -534,6 +594,7 @@ def autofetch_evidence(
     raw_record = load_raw_fundamentals(symbol, auto_fetch=False)
     raw = dict(raw_record.get("data") or {})
     links = resource_links(symbol)
+    download_budget = max(0, int(max_link_downloads))
 
     results: list[dict[str, Any]] = []
     for kind in wanted:
@@ -544,10 +605,26 @@ def autofetch_evidence(
                 # If Screener export failed, still try link download as fallback for PDFs.
                 if result.get("ok"):
                     continue
+        if download_budget <= 0:
+            results.append(
+                {
+                    "kind": kind,
+                    "ok": False,
+                    "method": "official_link_download",
+                    "error": "Global download budget exhausted (load protection).",
+                }
+            )
+            continue
         link_rows = list(links.get(kind) or [])
         # Prefer official links first.
         link_rows.sort(key=lambda row: 0 if str(row.get("official")) == "true" else 1)
-        results.append(_autofetch_from_links(symbol, kind, link_rows))
+        per_kind = min(2, download_budget)
+        link_result = _autofetch_from_links(symbol, kind, link_rows, max_downloads=per_kind)
+        # Account for attempted downloads roughly from attempts + success.
+        used = 1 if link_result.get("ok") else 0
+        used += sum(1 for a in (link_result.get("attempts") or []) if a.get("url"))
+        download_budget = max(0, download_budget - max(used, 1))
+        results.append(link_result)
 
     attached = [r for r in results if r.get("ok")]
     failed = [r for r in results if not r.get("ok")]
