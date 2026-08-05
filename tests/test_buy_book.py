@@ -105,11 +105,50 @@ def test_evaluate_healthy_uptrend(monkeypatch):
     assert health["status_label"] == "HEALTHY"
 
 
+def test_evaluate_book_cache_avoids_repeat_work(tmp_path, monkeypatch):
+    from product import buy_book as BB
+    from product import buy_health as BH
+
+    monkeypatch.setattr(BB, "DEFAULT_PATH", tmp_path / "buy_book.json")
+    BH.invalidate_eval_cache()
+    BB.add_item("CACHECO", entry_price=100)
+
+    calls = {"n": 0}
+
+    def fake_eval(symbol, **kwargs):
+        calls["n"] += 1
+        return {
+            "symbol": symbol,
+            "available": True,
+            "severity": "good",
+            "status_label": "HEALTHY",
+            "price": 101,
+            "warnings": [],
+            "risk_score": 0,
+            "supports": {},
+            "averages": {},
+            "structure": {"chg_1d_pct": 0.5, "chg_5d_pct": 1.0},
+            "vs_entry_pct": 1.0,
+        }
+
+    monkeypatch.setattr(BH, "evaluate_symbol", fake_eval)
+    monkeypatch.setattr("data.live_quotes.get_live_quotes", lambda symbols, ttl=8.0: {})
+    first = BH.evaluate_book()
+    second = BH.evaluate_book()
+    assert calls["n"] == 1
+    assert first["cached"] is False
+    assert second["cached"] is True
+    forced = BH.evaluate_book(force=True)
+    assert calls["n"] == 2
+    assert forced["cached"] is False
+
+
 def test_evaluate_book_sorts_risk_first(tmp_path, monkeypatch):
     from product import buy_book as BB
     from product import buy_health as BH
 
     monkeypatch.setattr(BB, "DEFAULT_PATH", tmp_path / "buy_book.json")
+    BH.invalidate_eval_cache()
     BB.add_item("AAA")
     BB.add_item("BBB")
 
@@ -144,7 +183,7 @@ def test_evaluate_book_sorts_risk_first(tmp_path, monkeypatch):
 
     monkeypatch.setattr(BH, "evaluate_symbol", fake_eval)
     monkeypatch.setattr("data.live_quotes.get_live_quotes", lambda symbols, ttl=8.0: {})
-    payload = BH.evaluate_book()
+    payload = BH.evaluate_book(force=True)
     assert payload["summary"]["critical"] == 1
     assert payload["items"][0]["symbol"] == "AAA"
     assert payload["places_orders"] is False

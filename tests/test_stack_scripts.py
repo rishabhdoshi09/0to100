@@ -55,6 +55,12 @@ def test_stack_monitor_is_resilient() -> None:
     # Ctrl+C must exit after cleanup — not resume the watch loop with false alarms.
     assert "on_signal" in complete
     assert "SHUTTING_DOWN" in complete
+    # Report API flaps must not tear down the terminal backend.
+    assert "not stopping backend" in complete
+    assert "Leaving terminal API + Vite running" in complete
+    assert "_restart_report_api" in complete
+    assert "Report API health check failed" not in complete
+    assert "REPORT_MONITOR" in complete
     assert (SCRIPTS / "run_quantterm_low_power.sh").exists()
     assert (SCRIPTS / "apply_low_power_env.sh").exists()
     low = (SCRIPTS / "apply_low_power_env.sh").read_text(encoding="utf-8")

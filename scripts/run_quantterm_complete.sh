@@ -101,40 +101,51 @@ bash scripts/run_quantterm.sh &
 STACK_PID=$!
 
 # Light watch loop: process/port every ~15s; HTTP curl only every ~60s.
+# Report API must NEVER tear down the terminal backend (:8765) + Vite.
+# PDF generation can block /health briefly — treat HTTP flaps as warnings only.
 WATCH_SLEEP_S="${QT_STACK_WATCH_SLEEP_S:-15}"
 HTTP_PROBE_EVERY="${QT_STACK_HTTP_PROBE_EVERY:-4}"
+REPORT_RESTART_LIMIT="${QT_REPORT_RESTART_LIMIT:-3}"
+REPORT_HTTP_WARN_EVERY=5
+REPORT_RESTARTS=0
+REPORT_HTTP_FAILS=0
+REPORT_MONITOR=1
 WATCH_TICK=0
+
+_restart_report_api() {
+  echo "[COMPLETE STACK] Restarting Research-report API (attempt $((REPORT_RESTARTS + 1))/${REPORT_RESTART_LIMIT})…" >&2
+  set +e
+  stack_start_or_reuse_uvicorn 8766 "report_api:app" "$REPORT_HEALTH" "Research-report API"
+  local rc=$STACK_UVICORN_RC
+  local pid=$STACK_UVICORN_PID
+  set -e
+  if [[ "$rc" == 2 ]]; then
+    REPORT_EXTERNAL=1
+    REPORT_PID=""
+    REPORT_HEALTH_FAILS=0
+    return 0
+  fi
+  if [[ -z "$pid" ]]; then
+    return 1
+  fi
+  REPORT_EXTERNAL=0
+  REPORT_PID=$pid
+  REPORT_RESTARTS=$((REPORT_RESTARTS + 1))
+  if stack_wait_for_health "$REPORT_HEALTH" "$REPORT_PID" "Research-report API" 40; then
+    REPORT_HEALTH_FAILS=0
+    return 0
+  fi
+  return 1
+}
 
 while true; do
   WATCH_TICK=$((WATCH_TICK + 1))
-  report_alive=1
-  if [[ "$REPORT_EXTERNAL" != "1" ]] && [[ -n "$REPORT_PID" ]] && ! kill -0 "$REPORT_PID" >/dev/null 2>&1; then
-    report_alive=0
-  fi
-  if ! stack_port_listening 8766; then
-    report_alive=0
-  fi
-  # Occasional HTTP probe; port/pid cover most liveness cheaply.
-  if [[ "$report_alive" == "1" ]] && (( WATCH_TICK % HTTP_PROBE_EVERY == 0 )); then
-    if ! stack_health_ok "$REPORT_HEALTH" 2; then
-      report_alive=0
-    fi
-  fi
-
-  if [[ "$report_alive" == "1" ]]; then
-    REPORT_HEALTH_FAILS=0
-  else
-    REPORT_HEALTH_FAILS=$((REPORT_HEALTH_FAILS + 1))
-    echo "[COMPLETE STACK] Report API health soft-fail ${REPORT_HEALTH_FAILS}/${REPORT_FAIL_LIMIT} at $REPORT_HEALTH" >&2
-    if [[ "$REPORT_HEALTH_FAILS" -ge "$REPORT_FAIL_LIMIT" ]]; then
-      echo "[COMPLETE STACK] Report API health check failed at $REPORT_HEALTH." >&2
-      exit 1
-    fi
-  fi
 
   if [[ "$SHUTTING_DOWN" == "1" ]]; then
     exit 0
   fi
+
+  # Nested terminal stack is the real backend — only its death ends this script.
   if ! kill -0 "$STACK_PID" >/dev/null 2>&1; then
     if [[ "$SHUTTING_DOWN" == "1" ]]; then
       exit 0
@@ -152,5 +163,51 @@ while true; do
     echo "[COMPLETE STACK] Tip: bash scripts/stop_quantterm.sh  then  bash scripts/run_quantterm_low_power.sh" >&2
     exit 1
   fi
+
+  if [[ "$REPORT_MONITOR" == "1" ]] && [[ "$REPORT_EXTERNAL" != "1" ]]; then
+    report_process_dead=0
+    if [[ -n "$REPORT_PID" ]] && ! kill -0 "$REPORT_PID" >/dev/null 2>&1; then
+      report_process_dead=1
+    fi
+    report_port_down=0
+    if ! stack_port_listening 8766; then
+      report_port_down=1
+    fi
+
+    if [[ "$report_process_dead" == "1" ]] || [[ "$report_port_down" == "1" ]]; then
+      REPORT_HEALTH_FAILS=$((REPORT_HEALTH_FAILS + 1))
+      echo "[COMPLETE STACK] Report API process/port soft-fail ${REPORT_HEALTH_FAILS}/${REPORT_FAIL_LIMIT} (dead=${report_process_dead} port_down=${report_port_down})" >&2
+      if [[ "$REPORT_HEALTH_FAILS" -ge "$REPORT_FAIL_LIMIT" ]]; then
+        if [[ "$REPORT_RESTARTS" -lt "$REPORT_RESTART_LIMIT" ]]; then
+          if _restart_report_api; then
+            echo "[COMPLETE STACK] Research-report API is back on :8766." >&2
+          else
+            echo "[COMPLETE STACK] Research-report API restart failed — will retry on next fail window." >&2
+            REPORT_HEALTH_FAILS=0
+          fi
+        else
+          echo "[COMPLETE STACK] Research-report API unavailable after ${REPORT_RESTART_LIMIT} restarts." >&2
+          echo "[COMPLETE STACK] Leaving terminal API + Vite running (PDFs on :8766 paused)." >&2
+          echo "[COMPLETE STACK] Tip: bash scripts/stop_quantterm.sh && bash scripts/run_quantterm_low_power.sh" >&2
+          REPORT_MONITOR=0
+          REPORT_PID=""
+        fi
+      fi
+    else
+      REPORT_HEALTH_FAILS=0
+      if (( WATCH_TICK % HTTP_PROBE_EVERY == 0 )); then
+        if ! stack_health_ok "$REPORT_HEALTH" 2; then
+          # Process/port up but /health slow (often PDF gen) — warn, never exit.
+          REPORT_HTTP_FAILS=$((REPORT_HTTP_FAILS + 1))
+          if (( REPORT_HTTP_FAILS == 1 || REPORT_HTTP_FAILS % REPORT_HTTP_WARN_EVERY == 0 )); then
+            echo "[COMPLETE STACK] Report API HTTP health slow/busy at $REPORT_HEALTH (warn ${REPORT_HTTP_FAILS}; process still up) — not stopping backend." >&2
+          fi
+        else
+          REPORT_HTTP_FAILS=0
+        fi
+      fi
+    fi
+  fi
+
   sleep "$WATCH_SLEEP_S"
 done

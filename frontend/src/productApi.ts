@@ -569,9 +569,15 @@ export type BuyBookPayload = {
   honesty?: string
 }
 
-export const fetchBuyBook = (): Promise<BuyBookPayload> =>
-  fetch('/api/buy-book', { headers: { Accept: 'application/json' } })
+export const fetchBuyBook = (opts?: { fresh?: boolean }): Promise<BuyBookPayload> => {
+  const qs = opts?.fresh ? '?fresh=1' : ''
+  return fetch(`/api/buy-book${qs}`, { headers: { Accept: 'application/json' } })
     .then((response) => json<BuyBookPayload>(response))
+}
+
+export const fetchBuyBookSymbols = (): Promise<{ symbols: string[]; updated_at?: string | null }> =>
+  fetch('/api/buy-book/symbols', { headers: { Accept: 'application/json' } })
+    .then((response) => json(response))
 
 export const addBuyBookItem = (body: {
   symbol: string

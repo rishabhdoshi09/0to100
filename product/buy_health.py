@@ -18,6 +18,10 @@ import numpy as np
 
 SEVERITY_RANK = {"critical": 0, "warn": 1, "info": 2, "good": 3, "unknown": 4}
 
+# Short TTL so Active Buys page + App heartbeat don't thrash bhav on every nav.
+_EVAL_CACHE: dict[str, Any] = {"ts": 0.0, "key": "", "payload": None}
+_EVAL_CACHE_TTL_S = 12.0
+
 
 def _f(value: Any) -> float | None:
     try:
@@ -226,11 +230,34 @@ def evaluate_symbol(
     return out
 
 
-def evaluate_book(items: list[Mapping[str, Any]] | None = None) -> dict[str, Any]:
-    """Evaluate all active buy-book rows. Returns sorted unhealthy-first list."""
+def evaluate_book(
+    items: list[Mapping[str, Any]] | None = None,
+    *,
+    force: bool = False,
+) -> dict[str, Any]:
+    """Evaluate all active buy-book rows. Returns sorted unhealthy-first list.
+
+    Results are cached briefly so nav/heartbeat does not re-scan bhav every click.
+    Pass force=True after add/remove or when the UI taps Refresh.
+    """
     from product.buy_book import list_active, empty_book
+    import time
 
     rows = list(items) if items is not None else list_active()
+    cache_key = "|".join(
+        f"{r.get('id')}:{r.get('symbol')}:{r.get('entry_price')}:{r.get('stop_price')}:{r.get('quantity')}:{r.get('updated_at')}"
+        for r in rows
+    )
+    now = time.monotonic()
+    cached = _EVAL_CACHE.get("payload")
+    if (
+        not force
+        and cached is not None
+        and _EVAL_CACHE.get("key") == cache_key
+        and (now - float(_EVAL_CACHE.get("ts") or 0.0)) < _EVAL_CACHE_TTL_S
+    ):
+        return cached
+
     symbols = sorted({str(r.get("symbol") or "").upper() for r in rows if r.get("symbol")})
     live: dict[str, dict] = {}
     if symbols:
@@ -293,7 +320,7 @@ def evaluate_book(items: list[Mapping[str, Any]] | None = None) -> dict[str, Any
     }
     results = _results_summary(evaluated)
     base = empty_book()
-    return {
+    payload = {
         "available": True,
         "generated_at": __import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat(),
         "summary": summary,
@@ -302,7 +329,18 @@ def evaluate_book(items: list[Mapping[str, Any]] | None = None) -> dict[str, Any
         "places_orders": False,
         "live_locked": True,
         "honesty": base["honesty"],
+        "cached": False,
     }
+    _EVAL_CACHE["ts"] = now
+    _EVAL_CACHE["key"] = cache_key
+    _EVAL_CACHE["payload"] = {**payload, "cached": True}
+    return payload
+
+
+def invalidate_eval_cache() -> None:
+    _EVAL_CACHE["ts"] = 0.0
+    _EVAL_CACHE["key"] = ""
+    _EVAL_CACHE["payload"] = None
 
 
 def _result_label(vs_entry: float | None, *, has_entry: bool) -> str:

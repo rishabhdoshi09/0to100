@@ -28,7 +28,7 @@ import {
   PortfolioView,
 } from './views'
 import type { DisplayDepth } from './productLanguage'
-import { addWatchlistItem, fetchBuyBook, fetchHoldings, fetchSymbolDirectory } from './productApi'
+import { addWatchlistItem, fetchBuyBookSymbols, fetchHoldings, fetchSymbolDirectory } from './productApi'
 import { useScanRunner } from './scanRunner'
 import { ReportPdfViewer } from './ReportPdfViewer'
 import type { ChartBar, ControlName, DashboardPayload, OperationRecord } from './types'
@@ -274,10 +274,11 @@ function App() {
 
   useEffect(() => {
     let cancelled = false
-    fetchBuyBook()
+    // Lightweight symbol list only — full evaluate_book would block the API on every nav.
+    fetchBuyBookSymbols()
       .then((payload) => {
         if (cancelled) return
-        setBuyBookSymbols((payload.items || []).map((row) => String(row.symbol || '').toUpperCase()).filter(Boolean))
+        setBuyBookSymbols((payload.symbols || []).map((s) => String(s || '').toUpperCase()).filter(Boolean))
       })
       .catch(() => {
         if (!cancelled) setBuyBookSymbols([])

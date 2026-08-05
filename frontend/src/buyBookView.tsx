@@ -47,11 +47,11 @@ export function BuyBookView({ selected, setSelected, setActive }: Props) {
   const [busy, setBusy] = useState(false)
   const [note, setNote] = useState('')
 
-  const refresh = useCallback(async () => {
+  const refresh = useCallback(async (fresh = false) => {
     setLoading(true)
     setError('')
     try {
-      const payload = await fetchBuyBook()
+      const payload = await fetchBuyBook({ fresh })
       setBook(payload)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Active Buys unavailable')
@@ -61,7 +61,7 @@ export function BuyBookView({ selected, setSelected, setActive }: Props) {
   }, [])
 
   useEffect(() => {
-    void refresh()
+    void refresh(false)
   }, [refresh])
 
   useEffect(() => {
@@ -86,7 +86,7 @@ export function BuyBookView({ selected, setSelected, setActive }: Props) {
       setQty('')
       setNotes('')
       setNote(`${clean} added — results refresh with live/EOD price`)
-      await refresh()
+      await refresh(true)
     } catch (err) {
       setNote(err instanceof Error ? err.message : 'Could not add')
     } finally {
@@ -98,7 +98,7 @@ export function BuyBookView({ selected, setSelected, setActive }: Props) {
     setBusy(true)
     try {
       await removeBuyBookItem(item.id)
-      await refresh()
+      await refresh(true)
     } catch (err) {
       setNote(err instanceof Error ? err.message : 'Could not remove')
     } finally {
@@ -223,7 +223,7 @@ export function BuyBookView({ selected, setSelected, setActive }: Props) {
           <button type="button" disabled={busy || !symbol.trim()} onClick={() => void onAdd()}>
             {busy ? 'Saving…' : 'Add to Active Buys'}
           </button>
-          <button type="button" disabled={loading} onClick={() => void refresh()}>
+          <button type="button" disabled={loading} onClick={() => void refresh(true)}>
             Refresh results
           </button>
         </div>

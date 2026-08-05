@@ -595,19 +595,33 @@ def holdings_import(body: dict[str, Any] = Body(default_factory=dict)) -> dict[s
     return enrich_ltp(book)
 
 
+@app.get("/api/buy-book/symbols")
+def buy_book_symbols() -> dict[str, Any]:
+    """Lightweight symbol list for live heartbeat — no health evaluation."""
+    from product.buy_book import load_book, symbols
+
+    book = load_book()
+    return {
+        "symbols": symbols(),
+        "updated_at": book.get("updated_at"),
+        "places_orders": False,
+        "honesty": "Symbol list only — open Active Buys for results and health.",
+    }
+
+
 @app.get("/api/buy-book")
-def buy_book_status() -> dict[str, Any]:
+def buy_book_status(fresh: bool = False) -> dict[str, Any]:
     """Active Buys + technical health (MA/support/volume). Warnings only — never orders."""
     from product.buy_health import evaluate_book
 
-    return evaluate_book()
+    return evaluate_book(force=bool(fresh))
 
 
 @app.post("/api/buy-book")
 def buy_book_add(body: dict[str, Any] = Body(default_factory=dict)) -> dict[str, Any]:
     """Add/update a stock you are buying. Body: {symbol, entry_price?, stop_price?, quantity?, notes?}."""
     from product.buy_book import add_item
-    from product.buy_health import evaluate_symbol
+    from product.buy_health import evaluate_symbol, invalidate_eval_cache
 
     symbol = str(body.get("symbol") or "").strip().upper()
     if not symbol:
@@ -622,6 +636,7 @@ def buy_book_add(body: dict[str, Any] = Body(default_factory=dict)) -> dict[str,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    invalidate_eval_cache()
     health = evaluate_symbol(
         item["symbol"],
         entry_price=item.get("entry_price"),
@@ -638,10 +653,12 @@ def buy_book_add(body: dict[str, Any] = Body(default_factory=dict)) -> dict[str,
 def buy_book_remove(item_id: str) -> dict[str, Any]:
     """Remove an Active Buy by id (or symbol)."""
     from product.buy_book import remove_item
+    from product.buy_health import invalidate_eval_cache
 
     ok = remove_item(item_id)
     if not ok:
         raise HTTPException(status_code=404, detail="Active buy not found")
+    invalidate_eval_cache()
     return {"accepted": True, "removed": item_id, "places_orders": False}
 
 
@@ -649,6 +666,7 @@ def buy_book_remove(item_id: str) -> dict[str, Any]:
 def buy_book_status_update(item_id: str, body: dict[str, Any] = Body(default_factory=dict)) -> dict[str, Any]:
     """Set status active|paused|closed."""
     from product.buy_book import set_status
+    from product.buy_health import invalidate_eval_cache
 
     try:
         row = set_status(item_id, str(body.get("status") or ""))
@@ -656,6 +674,7 @@ def buy_book_status_update(item_id: str, body: dict[str, Any] = Body(default_fac
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     if row is None:
         raise HTTPException(status_code=404, detail="Active buy not found")
+    invalidate_eval_cache()
     return {"accepted": True, "item": row, "places_orders": False}
 
 
