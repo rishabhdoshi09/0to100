@@ -152,6 +152,40 @@ export type StreetPulsePayload = {
   error?: string
 }
 
+export type QuoteTick = {
+  symbol: string
+  price: number
+  chg_pct?: number | null
+  volume?: number | null
+  high?: number | null
+  low?: number | null
+  age_s?: number | null
+  source?: string
+  streaming?: boolean
+}
+
+export type QuoteHeartbeatPayload = {
+  available: boolean
+  session_open?: boolean
+  streaming?: boolean
+  watching?: number
+  requested?: string[]
+  missing?: string[]
+  quotes?: Record<string, QuoteTick>
+  rows?: QuoteTick[]
+  sources?: string[]
+  max_age_s?: number | null
+  honesty?: string
+  error?: string
+}
+
+export const fetchQuoteHeartbeat = (symbols: string[], limit = 40): Promise<QuoteHeartbeatPayload> => {
+  const qs = encodeURIComponent(symbols.filter(Boolean).join(','))
+  return fetch(`/api/quotes/heartbeat?symbols=${qs}&limit=${limit}`, {
+    headers: { Accept: 'application/json' },
+  }).then((response) => json<QuoteHeartbeatPayload>(response))
+}
+
 export const fetchStreetPulse = (force = false): Promise<StreetPulsePayload> =>
   fetch(`/api/street-pulse?force=${force ? 'true' : 'false'}`, {
     headers: { Accept: 'application/json' },

@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { fetchChart, fetchDashboard, fetchOperationsPayload, sendControl } from './api'
+import { LivePriceStrip } from './LivePriceStrip'
+import { useQuoteHeartbeat } from './useQuoteHeartbeat'
 import {
   CompareView,
   MarketScannerView,
@@ -266,6 +268,22 @@ function App() {
 
   const scanPollingActive = marketScan.isActive || longTermScan.isActive || sniperBoardEval.isActive
 
+  const heartbeatSymbols = useMemo(() => {
+    const out = new Set<string>(['NIFTY', 'BANKNIFTY'])
+    if (selected) out.add(selected.toUpperCase())
+    for (const row of dashboard.paper.open_positions || []) {
+      if (row.symbol) out.add(String(row.symbol).toUpperCase())
+    }
+    for (const row of (dashboard.scan.records || []).slice(0, 8)) {
+      if (row.symbol) out.add(String(row.symbol).toUpperCase())
+    }
+    return [...out].slice(0, 30)
+  }, [selected, dashboard.paper.open_positions, dashboard.scan.records])
+
+  // Skip live heartbeat on US pages — Yahoo EOD plane, not Kite.
+  const liveEnabled = !String(active).startsWith('US')
+  const liveQuotes = useQuoteHeartbeat(heartbeatSymbols, { enabled: liveEnabled })
+
   useEffect(() => {
     void refresh({ soft: false })
     // During scans: poll ops-friendly soft dashboard less often so the API
@@ -487,6 +505,8 @@ function App() {
           depth={depth}
           onCompare={addToCompare}
           onWatchlist={addToWatchlist}
+          liveTick={selected ? liveQuotes.get(selected) : undefined}
+          liveSessionOpen={liveQuotes.sessionOpen}
         />
       )
     }
@@ -553,6 +573,7 @@ function App() {
             <button type="button" onClick={() => void refresh()} aria-label="Refresh dashboard">↻</button>
           </div>
         </header>
+        {liveEnabled && <LivePriceStrip payload={liveQuotes.payload} focusSymbol={selected} />}
 
         <section className="page-title">
           <div><h1>{pageTitles[active] || active}</h1><p>{pageSubtitles[active]}</p></div>

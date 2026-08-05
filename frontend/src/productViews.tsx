@@ -8,7 +8,8 @@ import {
   Panel,
   SecurityTable,
 } from './components'
-import { compactDateTime, money, words } from './format'
+import { compactDateTime, money, pct, words } from './format'
+import type { QuoteTick } from './api'
 // `money` reused by RiskLensCard below; risk % is rendered inline (fractions, not the +/- pct helper)
 import {
   bootstrapProduct,
@@ -129,6 +130,8 @@ type ViewProps = {
   depth?: import('./productLanguage').DisplayDepth
   onCompare?: (symbol: string) => void
   onWatchlist?: (symbol: string) => void
+  liveTick?: QuoteTick
+  liveSessionOpen?: boolean
 }
 
 const laneTone = (status: string) => {
@@ -320,7 +323,7 @@ function MetricExplanation({ metric }: { metric: IntelligenceMetric }) {
 }
 
 export function ProductStockIntelligenceView(props: ViewProps) {
-  const { selected, bars, runControl, setActive, onCompare, onWatchlist, depth } = props
+  const { selected, bars, runControl, setActive, onCompare, onWatchlist, depth, liveTick, liveSessionOpen } = props
   const [workspace, setWorkspace] = useState<StockWorkspace | null>(null)
   const [preTrade, setPreTrade] = useState<PreTrade | null>(null)
   const [ratios, setRatios] = useState<import('./productApi').SymbolRatioRow[]>([])
@@ -471,6 +474,17 @@ export function ProductStockIntelligenceView(props: ViewProps) {
       <header className="stock-workspace-hero">
         <div><span>{workspace?.sector || 'Sector not classified'}</span><h2>{workspace?.company || selected}</h2><p>{selected} · {workspace?.summary || 'Verified research is still loading.'}</p></div>
         <div className="stock-workspace-actions">
+          {liveTick?.price != null ? (
+            <div className="live-ltp-badge" title={liveSessionOpen ? 'Live last traded price' : 'Last available quote (session may be closed)'}>
+              <span>{liveSessionOpen ? 'LIVE LTP' : 'LAST QUOTE'}</span>
+              <strong>{money(liveTick.price, liveTick.price >= 100 ? 1 : 2)}</strong>
+              <small>
+                {pct(liveTick.chg_pct)}
+                {liveTick.age_s != null ? ` · ${Math.round(Number(liveTick.age_s))}s` : ''}
+                {liveTick.source ? ` · ${liveTick.source}` : ''}
+              </small>
+            </div>
+          ) : null}
           {onWatchlist && (
             <button type="button" onClick={() => onWatchlist(selected)}>★ Watchlist</button>
           )}
@@ -513,7 +527,8 @@ export function ProductStockIntelligenceView(props: ViewProps) {
                 <div><span>State</span><strong>{words(workspace?.state || '—')}</strong></div>
                 <div><span>Coverage</span><strong>{workspace?.fundamentals.coverage_pct ?? 0}%</strong></div>
                 <div><span>Trend</span><strong>{workspace?.technical.trend || '—'}</strong></div>
-                <div><span>Close</span><strong>{money(workspace?.technical.close)}</strong></div>
+                <div><span>EOD close</span><strong>{money(workspace?.technical.close)}</strong></div>
+                <div><span>Live LTP</span><strong>{liveTick?.price != null ? money(liveTick.price, liveTick.price >= 100 ? 1 : 2) : '—'}</strong></div>
               </div>
             </Panel>
             <Panel title="DECISION SUMMARY" subtitle="Deterministic scan evidence — not investment advice">

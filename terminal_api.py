@@ -906,6 +906,32 @@ def sniper_board_status() -> dict:
         }
 
 
+@app.get("/api/quotes/heartbeat")
+def quotes_heartbeat(symbols: str = "", limit: int = 40) -> dict:
+    """Live LTP heartbeat for visible symbols — Kite WS preferred, REST fallback.
+
+    Charts / dossiers stay on EOD. Off-session returns honest session_open=false.
+    """
+    try:
+        from product.quote_heartbeat import build_quote_heartbeat
+
+        parts = [p.strip() for p in str(symbols or "").split(",") if p.strip()]
+        return build_quote_heartbeat(parts, limit=max(1, min(int(limit or 40), 80)))
+    except Exception as exc:
+        return {
+            "available": False,
+            "session_open": False,
+            "streaming": False,
+            "quotes": {},
+            "rows": [],
+            "missing": [],
+            "places_orders": False,
+            "live_locked": True,
+            "honesty": "Live quote heartbeat unavailable — no invented ticks.",
+            "error": str(exc),
+        }
+
+
 @app.get("/api/street-pulse")
 def street_pulse_status(force: bool = False) -> dict:
     """Daily Street Pulse research digest — composes stores; never invents fills."""

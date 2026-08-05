@@ -183,6 +183,65 @@ body {
 .offline-pill { color: var(--red); }
 .live-pill i, .offline-pill i { width: 8px; height: 8px; border-radius: 50%; background: currentColor; box-shadow: 0 0 8px currentColor; }
 
+.live-price-strip {
+  display: flex;
+  align-items: stretch;
+  gap: 8px;
+  padding: 8px 24px;
+  border-bottom: 1px solid #17243a;
+  background: linear-gradient(180deg, rgba(8, 18, 32, .96), rgba(5, 10, 20, .9));
+  overflow-x: auto;
+}
+.live-tick-mode {
+  min-width: 92px;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0 10px;
+  border: 1px solid #1e334a;
+  border-radius: 7px;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: .04em;
+  color: #7f93aa;
+}
+.live-tick-mode.on { color: var(--green); border-color: rgba(56, 200, 140, .35); }
+.live-tick-mode.off { color: #a46516; border-color: rgba(164, 101, 22, .35); }
+.live-tick-mode i {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+  box-shadow: 0 0 8px currentColor;
+}
+.live-tick-cell {
+  min-width: 118px;
+  padding: 4px 10px;
+  border: 1px solid #1a2a40;
+  border-radius: 7px;
+  background: #08111f;
+  display: grid;
+  gap: 1px;
+}
+.live-tick-cell span { font-size: 10px; color: #6f829e; letter-spacing: .06em; }
+.live-tick-cell strong { font-size: 14px; color: var(--text); font-variant-numeric: tabular-nums; }
+.live-tick-cell small { font-size: 10px; color: #7f93aa; }
+.live-tick-cell.up strong { color: var(--green); }
+.live-tick-cell.down strong { color: var(--red); }
+.live-tick-cell.muted strong { color: #60718e; }
+.live-ltp-badge {
+  display: inline-flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 12px;
+  border: 1px solid rgba(56, 200, 140, .28);
+  border-radius: 8px;
+  background: rgba(8, 24, 20, .55);
+}
+.live-ltp-badge span { font-size: 10px; color: #7f93aa; letter-spacing: .05em; }
+.live-ltp-badge strong { font-size: 18px; color: var(--green); font-variant-numeric: tabular-nums; }
+.live-ltp-badge small { font-size: 11px; color: #9db0c8; }
+
 .page-title {
   padding: 18px 24px 12px;
   display: flex;
