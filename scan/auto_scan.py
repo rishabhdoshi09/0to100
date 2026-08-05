@@ -896,6 +896,12 @@ def _worker() -> None:
                     push_watchlist_alerts()
                 except Exception as exc:
                     log.debug("watchlist_watch_skip", error=str(exc))
+                # Active Buys — MA/support/volume health warnings
+                try:
+                    from risk.buy_book_watcher import push_buy_book_alerts
+                    push_buy_book_alerts()
+                except Exception as exc:
+                    log.debug("buy_book_watch_skip", error=str(exc))
             # 🤖 Autopilot EOD digest — post-close din ka hisaab (once/day)
             try:
                 from execution.autopilot import eod_digest

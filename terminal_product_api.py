@@ -595,6 +595,69 @@ def holdings_import(body: dict[str, Any] = Body(default_factory=dict)) -> dict[s
     return enrich_ltp(book)
 
 
+@app.get("/api/buy-book")
+def buy_book_status() -> dict[str, Any]:
+    """Active Buys + technical health (MA/support/volume). Warnings only — never orders."""
+    from product.buy_health import evaluate_book
+
+    return evaluate_book()
+
+
+@app.post("/api/buy-book")
+def buy_book_add(body: dict[str, Any] = Body(default_factory=dict)) -> dict[str, Any]:
+    """Add/update a stock you are buying. Body: {symbol, entry_price?, stop_price?, notes?}."""
+    from product.buy_book import add_item
+    from product.buy_health import evaluate_symbol
+
+    symbol = str(body.get("symbol") or "").strip().upper()
+    if not symbol:
+        raise HTTPException(status_code=400, detail="symbol required")
+    try:
+        item = add_item(
+            symbol,
+            entry_price=body.get("entry_price"),
+            stop_price=body.get("stop_price"),
+            notes=str(body.get("notes") or ""),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    health = evaluate_symbol(
+        item["symbol"],
+        entry_price=item.get("entry_price"),
+        stop_price=item.get("stop_price"),
+    )
+    return {
+        "accepted": True,
+        "item": {**item, "health": health, "severity": health.get("severity"), "status_label": health.get("status_label")},
+        "places_orders": False,
+    }
+
+
+@app.delete("/api/buy-book/{item_id}")
+def buy_book_remove(item_id: str) -> dict[str, Any]:
+    """Remove an Active Buy by id (or symbol)."""
+    from product.buy_book import remove_item
+
+    ok = remove_item(item_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Active buy not found")
+    return {"accepted": True, "removed": item_id, "places_orders": False}
+
+
+@app.post("/api/buy-book/{item_id}/status")
+def buy_book_status_update(item_id: str, body: dict[str, Any] = Body(default_factory=dict)) -> dict[str, Any]:
+    """Set status active|paused|closed."""
+    from product.buy_book import set_status
+
+    try:
+        row = set_status(item_id, str(body.get("status") or ""))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if row is None:
+        raise HTTPException(status_code=404, detail="Active buy not found")
+    return {"accepted": True, "item": row, "places_orders": False}
+
+
 @app.get("/api/book-correlation")
 def book_correlation() -> dict[str, Any]:
     """Read-only concentration lens: how many open positions vs independent bets."""

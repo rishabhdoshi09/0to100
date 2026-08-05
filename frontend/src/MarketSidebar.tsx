@@ -4,6 +4,7 @@ import { money } from './format'
 const PRIMARY_NAV = [
   ['⌂', 'Home', 'Home'],
   ['▦', 'Daily Pulse', 'Daily Pulse'],
+  ['▣', 'Active Buys', 'Active Buys'],
   ['◎', 'Market Scanner', 'Market Scanner'],
   ['⚡', 'Confirmed Breakouts', 'Confirmed Breakouts'],
   ['◉', 'Stock Intelligence', 'Stock Intelligence'],
@@ -18,7 +19,7 @@ const SECONDARY_NAV = [
   ['✎', 'Education', 'Education'],
   ['▤', 'Research Data', 'Research Data'],
   ['⬡', 'F&O Desk', 'F&O Desk'],
-  ['▣', 'My Holdings', 'Paper Portfolio'],
+  ['▤', 'My Holdings', 'Paper Portfolio'],
   ['◌', 'System Health', 'System Health'],
 ] as const
 

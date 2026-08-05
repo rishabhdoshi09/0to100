@@ -496,6 +496,84 @@ export const removeWatchlistItem = (rowId: number): Promise<{ accepted: boolean 
   fetch(`/api/watchlist/${rowId}`, { method: 'DELETE', headers: { Accept: 'application/json' } })
     .then((response) => json(response))
 
+export type BuyHealthWarning = {
+  severity: string
+  code: string
+  text: string
+}
+
+export type BuyBookHealth = {
+  available: boolean
+  severity?: string
+  status_label?: string
+  price?: number | null
+  eod_close?: number | null
+  live_price?: number | null
+  price_source?: string
+  as_of?: string
+  warnings?: BuyHealthWarning[]
+  risk_score?: number
+  supports?: { swing_20d?: number | null; swing_60d?: number | null }
+  averages?: { ema20?: number | null; ema50?: number | null; ema200?: number | null }
+  structure?: Record<string, unknown>
+  vs_entry_pct?: number | null
+  honesty?: string
+}
+
+export type BuyBookItem = {
+  id: string
+  symbol: string
+  entry_price?: number | null
+  stop_price?: number | null
+  notes?: string
+  status?: string
+  added_at?: string
+  updated_at?: string
+  health?: BuyBookHealth
+  severity?: string
+  status_label?: string
+  price?: number | null
+  vs_entry_pct?: number | null
+}
+
+export type BuyBookPayload = {
+  available: boolean
+  generated_at?: string
+  summary?: {
+    total: number
+    critical: number
+    warn: number
+    info: number
+    good: number
+    unknown: number
+  }
+  items: BuyBookItem[]
+  places_orders?: boolean
+  honesty?: string
+}
+
+export const fetchBuyBook = (): Promise<BuyBookPayload> =>
+  fetch('/api/buy-book', { headers: { Accept: 'application/json' } })
+    .then((response) => json<BuyBookPayload>(response))
+
+export const addBuyBookItem = (body: {
+  symbol: string
+  entry_price?: number
+  stop_price?: number
+  notes?: string
+}): Promise<{ accepted: boolean; item: BuyBookItem }> =>
+  fetch('/api/buy-book', {
+    method: 'POST',
+    headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  }).then((response) => json(response))
+
+export const removeBuyBookItem = (itemId: string): Promise<{ accepted: boolean }> =>
+  fetch(`/api/buy-book/${encodeURIComponent(itemId)}`, {
+    method: 'DELETE',
+    headers: { Accept: 'application/json' },
+  }).then((response) => json(response))
+
 export type SymbolRatioRow = {
   key: string
   label: string

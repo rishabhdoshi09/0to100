@@ -16,6 +16,7 @@ import {
 import { MarketSidebar } from './MarketSidebar'
 import { EducationView } from './educationViews'
 import { StreetPulseView } from './streetPulseView'
+import { BuyBookView } from './buyBookView'
 import { NewsView, OperationsRibbon, FnoView } from './marketViews'
 import { ProductStockIntelligenceView } from './productViews'
 import { UsMarketHome, UsScannerView, UsStockView } from './usMarketViews'
@@ -27,7 +28,7 @@ import {
   PortfolioView,
 } from './views'
 import type { DisplayDepth } from './productLanguage'
-import { addWatchlistItem, fetchHoldings, fetchSymbolDirectory } from './productApi'
+import { addWatchlistItem, fetchBuyBook, fetchHoldings, fetchSymbolDirectory } from './productApi'
 import { useScanRunner } from './scanRunner'
 import { ReportPdfViewer } from './ReportPdfViewer'
 import type { ChartBar, ControlName, DashboardPayload, OperationRecord } from './types'
@@ -159,6 +160,7 @@ const pageTitles: Record<string, string> = {
   'News & Events': 'News & Events',
   Education: 'Education',
   'Daily Pulse': 'Daily Pulse',
+  'Active Buys': 'Active Buys',
   'US Market': 'US Market',
   'US Scanner': 'US Scanner',
   'US Stock': 'US Stock',
@@ -187,6 +189,7 @@ const pageSubtitles: Record<string, string> = {
   'News & Events': 'Dated market context with source health.',
   Education: 'Crunched news + macro/micro teach-ins for the share market — never invented blogs, never a signal.',
   'Daily Pulse': 'Simple daily market digest — what moved, what to watch, options mood. Send to Telegram anytime.',
+  'Active Buys': 'Stocks you are buying — warns if price breaks major averages, swing support, or shows heavy selling.',
   'US Market': 'US retail plane — NASDAQ listings, Yahoo EOD, S&P-scoped scan, paper autopilot only.',
   'US Scanner': 'US setups from Yahoo daily bars · liquid quality floor · no options overlay.',
   'US Stock': 'US ticker workspace — daily chart + last scan setup. Fundamentals/options marked unavailable.',
@@ -211,6 +214,7 @@ function App() {
   const [remoteSuggestions, setRemoteSuggestions] = useState<string[]>([])
   const [helpOpen, setHelpOpen] = useState(false)
   const [pdfViewer, setPdfViewer] = useState<{ title: string; url: string } | null>(null)
+  const [buyBookSymbols, setBuyBookSymbols] = useState<string[]>([])
   const [depth, setDepth] = useState<DisplayDepth>(() => {
     const saved = window.localStorage.getItem('quantterm-display-depth')
     return saved === 'professional' ? 'professional' : 'simple'
@@ -268,9 +272,25 @@ function App() {
 
   const scanPollingActive = marketScan.isActive || longTermScan.isActive || sniperBoardEval.isActive
 
+  useEffect(() => {
+    let cancelled = false
+    fetchBuyBook()
+      .then((payload) => {
+        if (cancelled) return
+        setBuyBookSymbols((payload.items || []).map((row) => String(row.symbol || '').toUpperCase()).filter(Boolean))
+      })
+      .catch(() => {
+        if (!cancelled) setBuyBookSymbols([])
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [active])
+
   const heartbeatSymbols = useMemo(() => {
     const out = new Set<string>(['NIFTY', 'BANKNIFTY'])
     if (selected) out.add(selected.toUpperCase())
+    for (const sym of buyBookSymbols) out.add(sym)
     for (const row of dashboard.paper.open_positions || []) {
       if (row.symbol) out.add(String(row.symbol).toUpperCase())
     }
@@ -278,7 +298,7 @@ function App() {
       if (row.symbol) out.add(String(row.symbol).toUpperCase())
     }
     return [...out].slice(0, 30)
-  }, [selected, dashboard.paper.open_positions, dashboard.scan.records])
+  }, [selected, buyBookSymbols, dashboard.paper.open_positions, dashboard.scan.records])
 
   // Skip live heartbeat on US pages — Yahoo EOD plane, not Kite.
   const liveEnabled = !String(active).startsWith('US')
@@ -465,7 +485,7 @@ function App() {
     sniperBoardEval,
   }
 
-  const primaryPages = ['Home', 'Daily Pulse', 'Market Scanner', 'Confirmed Breakouts', 'Stock Intelligence', 'Long-Term Picks', 'Compare', 'Watchlist', 'Command Center', 'Scanner']
+  const primaryPages = ['Home', 'Daily Pulse', 'Active Buys', 'Market Scanner', 'Confirmed Breakouts', 'Stock Intelligence', 'Long-Term Picks', 'Compare', 'Watchlist', 'Command Center', 'Scanner']
   const showOpsRibbon = !primaryPages.includes(active)
 
   const renderView = () => {
@@ -530,6 +550,15 @@ function App() {
           setSelected={setSelected}
           setActive={setActive}
           onOpenPdf={openStreetPulseReport}
+        />
+      )
+    }
+    if (active === 'Active Buys') {
+      return (
+        <BuyBookView
+          selected={selected}
+          setSelected={setSelected}
+          setActive={setActive}
         />
       )
     }

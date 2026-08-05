@@ -118,6 +118,19 @@ export const PAGE_GUIDE: Record<string, PageGuide> = {
     action: 'Rebuild after a market scan, tap Send to Telegram, then open a stock in Stock Intelligence before any paper trade.',
     doesNot: 'Not a buy desk. Labels are research context only — missing sections stay missing.',
   },
+  'Active Buys': {
+    title: 'Active Buys',
+    purpose: 'Your list of stocks you are buying — watched for breaks of 20/50/200-day averages, swing support, volume dumps, and your stop.',
+    questions: [
+      'Is price still above the 20/50/200-day averages?',
+      'Did it break 20-session or 60-session swing support?',
+      'Is there a volume dump on a down day?',
+      'Am I below my entry or stop?',
+      'Is this a research warning, not an automatic sell?',
+    ],
+    action: 'Add the symbol with entry/stop if you have them. Refresh health during market hours. Open Stock Intelligence before changing the plan.',
+    doesNot: 'Not a broker order desk. Warnings do not sell for you. Missing history stays missing.',
+  },
   'US Market': {
     title: 'US Market',
     purpose: 'Retail US plane — NASDAQ Trader listings, Yahoo EOD cache, liquid scan scope, paper autopilot only.',
