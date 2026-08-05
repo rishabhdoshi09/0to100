@@ -322,6 +322,120 @@ function MetricExplanation({ metric }: { metric: IntelligenceMetric }) {
   )
 }
 
+function GrowthOutlookPanel({
+  outlook,
+  fundamentalsBusy,
+  onRetryFundamentals,
+  onOpenResearch,
+}: {
+  outlook?: StockWorkspace['growth_outlook']
+  fundamentalsBusy: boolean
+  onRetryFundamentals: () => void
+  onOpenResearch: () => void
+}) {
+  if (!outlook?.available && !(outlook?.claims || []).length) {
+    return (
+      <EmptyState
+        title="Growth outlook needs fundamentals"
+        detail={
+          fundamentalsBusy
+            ? 'Fetching Screener fundamentals…'
+            : 'Refresh fundamentals, then optionally upload concall/guidance under Research Data.'
+        }
+      />
+    )
+  }
+  const claims = outlook?.claims || []
+  const guidance = outlook?.guidance || []
+  const sections = outlook?.sections || []
+  const formatClaim = (row: {
+    value?: number | string | null
+    unit?: string
+    status?: string
+  }) => {
+    if (row.value == null || row.status === 'MISSING') return '—'
+    if (typeof row.value === 'number') {
+      if (row.unit === '%') return pct(row.value)
+      if (row.unit === 'INR Cr' || row.unit === 'INR') return money(row.value, 1)
+      return `${row.value}${row.unit ? ` ${row.unit}` : ''}`
+    }
+    return String(row.value)
+  }
+  return (
+    <>
+      <Panel title={outlook?.title || 'GROWTH & FINANCIAL OUTLOOK'} subtitle="Evidence-only · missing stays missing">
+        <p className="panel-copy">{outlook?.honesty}</p>
+        <p className="panel-copy"><strong>{outlook?.thesis?.label || 'INCOMPLETE'}</strong> — {outlook?.thesis?.text}</p>
+        <p className="panel-copy">{outlook?.summary}</p>
+        <div className="inline-actions">
+          <button type="button" disabled={fundamentalsBusy} onClick={onRetryFundamentals}>
+            {fundamentalsBusy ? 'Refreshing…' : 'Refresh fundamentals'}
+          </button>
+          <button type="button" onClick={onOpenResearch}>
+            Upload concall / guidance
+          </button>
+        </div>
+      </Panel>
+
+      <Panel title="FINANCIAL CLAIMS" subtitle="Cited from Screener cache or your uploads">
+        <div className="radar-table-wrap">
+          <table className="radar-table">
+            <thead>
+              <tr>
+                <th>Metric</th>
+                <th>Value</th>
+                <th>Source</th>
+                <th>As of</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              {claims.map((row) => (
+                <tr key={row.key}>
+                  <td>{row.label}</td>
+                  <td><strong>{formatClaim(row)}</strong></td>
+                  <td>{row.source || '—'}</td>
+                  <td>{row.as_of || '—'}</td>
+                  <td>{row.status || '—'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </Panel>
+
+      {(sections || []).map((section) => (
+        <Panel key={section.id} title={section.title.toUpperCase()}>
+          <p className="panel-copy">{section.body}</p>
+        </Panel>
+      ))}
+
+      <Panel title="MANAGEMENT / CONCALL GUIDANCE" subtitle={guidance.length ? `${guidance.length} uploaded row(s)` : 'None uploaded'}>
+        {guidance.length === 0 ? (
+          <EmptyState
+            title="No concall guidance uploaded"
+            detail="Upload management_commentary or order_book_guidance in Research Data. QuantTerm will not invent management quotes or FY targets."
+          />
+        ) : (
+          <EvidenceList
+            title="Dated guidance"
+            items={guidance.map((g) => {
+              const head = [g.event_date, g.speaker, g.topic].filter(Boolean).join(' · ')
+              const guide = [g.guidance_metric, g.guidance_value, g.guidance_period].filter(Boolean).join(' ')
+              return `${head}${guide ? ` — ${guide}` : ''}${g.commentary ? `: ${g.commentary}` : ''}`
+            })}
+            tone="cyan"
+          />
+        )}
+      </Panel>
+
+      {(outlook?.gaps || []).length > 0 && (
+        <EvidenceList title="Open gaps" items={outlook?.gaps} tone="red" />
+      )}
+    </>
+  )
+}
+
 export function ProductStockIntelligenceView(props: ViewProps) {
   const { selected, bars, runControl, setActive, onCompare, onWatchlist, depth, liveTick, liveSessionOpen } = props
   const [workspace, setWorkspace] = useState<StockWorkspace | null>(null)
@@ -341,6 +455,7 @@ export function ProductStockIntelligenceView(props: ViewProps) {
     'Overview',
     'Chart',
     'Financials',
+    'Outlook',
     'Ratios',
     'Ownership',
     'Options',
@@ -577,6 +692,15 @@ export function ProductStockIntelligenceView(props: ViewProps) {
               : <div className="explain-metric-grid fundamentals">{(workspace?.fundamentals.metrics || []).map((metric) => <MetricExplanation metric={metric} key={metric.key} />)}</div>}
           </Panel>
         </>
+      )}
+
+      {tab === 'Outlook' && (
+        <GrowthOutlookPanel
+          outlook={workspace?.growth_outlook}
+          fundamentalsBusy={fundamentalsBusy}
+          onRetryFundamentals={() => void loadFundamentals(true)}
+          onOpenResearch={() => setActive('Research Data')}
+        />
       )}
 
       {tab === 'Ratios' && (

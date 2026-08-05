@@ -618,6 +618,31 @@ def build_stock_workspace(
     if not news_rows or sources[4]["status"] != "FRESH":
         next_actions.append({"control": "REFRESH_NEWS_NOW", "label": "Refresh news and filings"})
 
+    growth_outlook: dict[str, Any] = {"available": False, "gaps": ["Outlook not built"], "honesty": ""}
+    try:
+        from product.growth_outlook import build_growth_outlook
+
+        growth_outlook = build_growth_outlook(
+            symbol,
+            fundamentals=fundamentals,
+            technical=technical,
+            company=company,
+            sector=sector,
+            raw_fundamentals=raw_record,
+        )
+    except Exception as exc:
+        growth_outlook = {
+            "available": False,
+            "symbol": symbol,
+            "gaps": [f"Outlook unavailable ({exc})"],
+            "claims": [],
+            "sections": [],
+            "guidance": [],
+            "summary": "Growth outlook could not be built from current evidence.",
+            "places_orders": False,
+            "honesty": "Evidence-only outlook — missing stays missing.",
+        }
+
     return _sanitize_json({
         "schema_version": 1,
         "generated_at": now.isoformat(),
@@ -630,6 +655,7 @@ def build_stock_workspace(
         "gaps": gaps,
         "technical": technical,
         "fundamentals": fundamentals,
+        "growth_outlook": growth_outlook,
         "peers": peers,
         "scanner": scan_row,
         "long_term": long_row,

@@ -105,6 +105,47 @@ export type StockWorkspace = {
     fetched_at: string
     section_as_of: Record<string, string>
   }
+  growth_outlook?: {
+    available: boolean
+    symbol?: string
+    company?: string
+    sector?: string
+    title?: string
+    thesis?: { label?: string; engines?: string[]; text?: string }
+    claims?: Array<{
+      key: string
+      label: string
+      value?: number | string | null
+      unit?: string
+      source?: string
+      as_of?: string
+      status?: string
+      note?: string
+    }>
+    sections?: Array<{ id: string; title: string; body: string }>
+    guidance?: Array<{
+      kind?: string
+      event_date?: string
+      speaker?: string
+      topic?: string
+      commentary?: string
+      guidance_metric?: string
+      guidance_value?: string
+      guidance_period?: string
+      source_url?: string
+    }>
+    technical?: {
+      available?: boolean
+      price?: number | null
+      trend?: string
+      trend_explanation?: string
+      as_of?: string
+    }
+    gaps?: string[]
+    summary?: string
+    honesty?: string
+    places_orders?: boolean
+  }
   peers?: {
     available: boolean
     sector: string

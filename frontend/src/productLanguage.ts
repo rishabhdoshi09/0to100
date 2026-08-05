@@ -47,15 +47,15 @@ export const PAGE_GUIDE: Record<string, PageGuide> = {
   },
   'Stock Intelligence': {
     title: 'Stock Intelligence',
-    purpose: 'Combines price structure, technicals, current fundamentals, risks, news and source dates.',
+    purpose: 'Combines price structure, technicals, current fundamentals, growth/outlook (evidence-only), risks, news and source dates.',
     questions: [
       'What is the current trend and volatility?',
-      'Are fundamentals complete and fresh?',
-      'Which evidence supports the shortlist?',
+      'Are sales/profit growth and margins visible in verified data?',
+      'Is there uploaded concall / management guidance, or is it still missing?',
       'Which missing fact could change the conclusion?',
     ],
-    action: 'Refresh missing fundamentals or complete the source pack in Research Data.',
-    doesNot: 'Current fundamentals are not point-in-time historical evidence unless explicitly labelled.',
+    action: 'Open Outlook after fundamentals refresh. Upload concall/guidance under Research Data when you have filings — never invent quotes.',
+    doesNot: 'Outlook never invents FY targets or management quotes. Current fundamentals are not point-in-time historical evidence unless labelled.',
   },
   'Long-Term': {
     title: 'Long-Term Research',
