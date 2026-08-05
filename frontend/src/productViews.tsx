@@ -17,6 +17,7 @@ import {
   fetchStockIntelligence,
   fetchPreTrade,
   fetchStockFundamentals,
+  autofetchStockEvidence,
   fetchSymbolRatios,
   type IntelligenceMetric,
   type PreTrade,
@@ -325,12 +326,18 @@ function MetricExplanation({ metric }: { metric: IntelligenceMetric }) {
 function GrowthOutlookPanel({
   outlook,
   fundamentalsBusy,
+  autofetchBusy,
+  autofetchNote,
   onRetryFundamentals,
+  onAutofetch,
   onOpenResearch,
 }: {
   outlook?: StockWorkspace['growth_outlook']
   fundamentalsBusy: boolean
+  autofetchBusy: boolean
+  autofetchNote: string
   onRetryFundamentals: () => void
+  onAutofetch: () => void
   onOpenResearch: () => void
 }) {
   const reportBase = import.meta.env.DEV
@@ -343,7 +350,7 @@ function GrowthOutlookPanel({
         detail={
           fundamentalsBusy
             ? 'Fetching Screener fundamentals…'
-            : 'Refresh fundamentals, then open the source links below and upload concall/guidance under Research Data.'
+            : 'Tap Auto-fetch sources, or refresh fundamentals then open Research Data.'
         }
       />
     )
@@ -372,18 +379,22 @@ function GrowthOutlookPanel({
         <p className="panel-copy"><strong>{outlook?.thesis?.label || 'INCOMPLETE'}</strong> — {outlook?.thesis?.text}</p>
         <p className="panel-copy">{outlook?.summary}</p>
         <div className="inline-actions">
+          <button type="button" disabled={autofetchBusy || fundamentalsBusy} onClick={onAutofetch}>
+            {autofetchBusy ? 'Auto-fetching…' : 'Auto-fetch & attach sources'}
+          </button>
           <button type="button" disabled={fundamentalsBusy} onClick={onRetryFundamentals}>
             {fundamentalsBusy ? 'Refreshing…' : 'Refresh fundamentals'}
           </button>
           <button type="button" onClick={onOpenResearch}>
-            Open Research Data to upload
+            Open Research Data
           </button>
         </div>
+        {autofetchNote ? <p className="panel-copy">{autofetchNote}</p> : null}
       </Panel>
 
       <Panel
-        title="SOURCES TO OPEN & UPLOAD"
-        subtitle="Open a filing/IR link → download → upload in Research Data with the source URL"
+        title="SOURCES — AUTO-FETCH OR OPEN"
+        subtitle="Auto-fetch exports Screener tables + downloads official filings when reachable"
       >
         {packs.length === 0 ? (
           <EmptyState title="Source links unavailable" detail="Open Research Data for the full evidence desk." />
@@ -416,8 +427,11 @@ function GrowthOutlookPanel({
           </div>
         )}
         <div className="inline-actions" style={{ marginTop: 12 }}>
+          <button type="button" disabled={autofetchBusy || fundamentalsBusy} onClick={onAutofetch}>
+            {autofetchBusy ? 'Auto-fetching…' : 'Auto-fetch & attach now'}
+          </button>
           <button type="button" onClick={onOpenResearch}>
-            Go upload in Research Data
+            Manual upload desk
           </button>
         </div>
       </Panel>
@@ -496,6 +510,7 @@ export function ProductStockIntelligenceView(props: ViewProps) {
   const [optionsChain, setOptionsChain] = useState<OptionsChainPayload | null>(null)
   const [optionsLoading, setOptionsLoading] = useState(false)
   const [optionsForce, setOptionsForce] = useState(0)
+  const [autofetchNote, setAutofetchNote] = useState('')
 
   const intelTabs = [
     'Overview',
@@ -511,6 +526,7 @@ export function ProductStockIntelligenceView(props: ViewProps) {
   ]
 
   const fundamentalsBusy = busy === 'FETCH_FUNDAMENTALS' || busy === 'REFRESH_STOCK_FUNDAMENTALS'
+  const autofetchBusy = busy === 'AUTOFETCH_EVIDENCE'
 
   const loadRatios = async () => {
     if (!selected) {
@@ -543,6 +559,38 @@ export function ProductStockIntelligenceView(props: ViewProps) {
     }
   }
 
+  const runAutofetchEvidence = async () => {
+    if (!selected) return
+    setBusy('AUTOFETCH_EVIDENCE')
+    setAutofetchNote('')
+    try {
+      const result = await autofetchStockEvidence(selected, { refresh_screener: true })
+      setWorkspace(result.workspace)
+      const okBits = (result.results || [])
+        .filter((row) => row.ok)
+        .map((row) => `${row.kind}: ${row.method || 'ok'}`)
+      const failBits = (result.results || [])
+        .filter((row) => !row.ok)
+        .map((row) => `${row.kind}: ${row.error || 'failed'}`)
+      setAutofetchNote(
+        [
+          result.honesty,
+          result.screener_note,
+          `Attached ${result.attached_count}, failed ${result.failed_count}.`,
+          okBits.length ? `OK — ${okBits.join(' · ')}` : '',
+          failBits.length ? `Not attached — ${failBits.join(' · ')}` : '',
+        ]
+          .filter(Boolean)
+          .join(' '),
+      )
+      await loadRatios()
+    } catch (reason) {
+      setAutofetchNote(reason instanceof Error ? reason.message : 'Auto-fetch failed')
+    } finally {
+      setBusy('')
+    }
+  }
+
   const load = async () => {
     if (!selected) {
       setWorkspace(null)
@@ -553,6 +601,7 @@ export function ProductStockIntelligenceView(props: ViewProps) {
     }
     setLoading(true)
     setFundamentalsError('')
+    setAutofetchNote('')
     setRatios([])
     try {
       const ws = await fetchStockIntelligence(selected)
@@ -744,7 +793,10 @@ export function ProductStockIntelligenceView(props: ViewProps) {
         <GrowthOutlookPanel
           outlook={workspace?.growth_outlook}
           fundamentalsBusy={fundamentalsBusy}
+          autofetchBusy={autofetchBusy}
+          autofetchNote={autofetchNote}
           onRetryFundamentals={() => void loadFundamentals(true)}
+          onAutofetch={() => void runAutofetchEvidence()}
           onOpenResearch={() => setActive('Research Data')}
         />
       )}

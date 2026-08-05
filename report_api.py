@@ -4,7 +4,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, Query, Request, Response
+from fastapi import Body, FastAPI, HTTPException, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 
@@ -190,6 +190,27 @@ def refresh_fundamentals(symbol: str) -> dict:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"Deep fundamentals refresh failed: {exc}") from exc
+
+
+@app.post("/evidence/{symbol}/actions/autofetch")
+def evidence_autofetch(symbol: str, body: dict = Body(default_factory=dict)) -> dict:
+    """Download/export evidence from known source links and attach automatically."""
+    try:
+        from reporting.evidence_autofetch import autofetch_evidence
+        from reporting.evidence_intake import clean_symbol
+
+        payload = body or {}
+        kinds = payload.get("kinds")
+        refresh = payload.get("refresh_screener", True)
+        return autofetch_evidence(
+            clean_symbol(symbol),
+            kinds=kinds,
+            refresh_screener=bool(refresh),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Evidence autofetch failed: {exc}") from exc
 
 
 @app.get("/evidence/templates/{kind}.csv")

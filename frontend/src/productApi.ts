@@ -441,6 +441,34 @@ export const refreshStockFundamentals = (symbol: string): Promise<{
   workspace: StockWorkspace
 }> => fetchStockFundamentals(symbol, true)
 
+export const autofetchStockEvidence = (
+  symbol: string,
+  body?: { kinds?: string[]; refresh_screener?: boolean },
+): Promise<{
+  accepted: boolean
+  symbol: string
+  attached_count: number
+  failed_count: number
+  results: Array<{
+    kind: string
+    ok: boolean
+    method?: string
+    error?: string
+    note?: string
+    source_url?: string
+    filename?: string
+    extraction_status?: string
+  }>
+  honesty?: string
+  screener_note?: string
+  workspace: StockWorkspace
+}> =>
+  fetch(`/api/stock-intelligence/${encodeURIComponent(symbol)}/autofetch-evidence`, {
+    method: 'POST',
+    headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+    body: JSON.stringify(body || {}),
+  }).then((response) => json(response))
+
 export const fetchCommandCenterWorkspace = (): Promise<CommandCenterWorkspace> =>
   fetch('/api/command-center-workspace', { headers: { Accept: 'application/json' } })
     .then((response) => json<CommandCenterWorkspace>(response))

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import {
+  autofetchStockEvidence,
   fetchDataCoverage,
   fetchDataJobs,
   fetchDataProviders,
@@ -95,6 +96,7 @@ export function ResearchDataView({ symbol }: { symbol: string }) {
   const [symbolCoverage, setSymbolCoverage] = useState<DataCoveragePayload | null>(null)
   const [universeCoverage, setUniverseCoverage] = useState<DataCoveragePayload | null>(null)
   const [jobBusy, setJobBusy] = useState('')
+  const [autofetchNote, setAutofetchNote] = useState('')
 
   const runPlatformJob = async (jobId: string) => {
     setJobBusy(jobId)
@@ -183,6 +185,38 @@ export function ResearchDataView({ symbol }: { symbol: string }) {
       }
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : `${action} refresh failed`)
+    } finally {
+      setBusy('')
+    }
+  }
+
+  const runAutofetchEvidence = async () => {
+    if (!symbol) return
+    setBusy('auto-autofetch')
+    setError('')
+    setAutofetchNote('')
+    try {
+      const result = await autofetchStockEvidence(symbol, { refresh_screener: true })
+      const okBits = (result.results || [])
+        .filter((row) => row.ok)
+        .map((row) => `${row.kind}: ${row.method || 'ok'}`)
+      const failBits = (result.results || [])
+        .filter((row) => !row.ok)
+        .map((row) => `${row.kind}: ${row.error || 'failed'}`)
+      setAutofetchNote(
+        [
+          `Attached ${result.attached_count}, failed ${result.failed_count}.`,
+          result.screener_note,
+          okBits.length ? `OK — ${okBits.join(' · ')}` : '',
+          failBits.length ? `Not attached — ${failBits.join(' · ')}` : '',
+          result.honesty,
+        ]
+          .filter(Boolean)
+          .join(' '),
+      )
+      await loadEvidence()
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : 'Auto-fetch evidence failed')
     } finally {
       setBusy('')
     }
@@ -305,6 +339,9 @@ export function ResearchDataView({ symbol }: { symbol: string }) {
           <button type="button" onClick={() => void loadEvidence()}>Refresh status</button>
         </header>
         <div className="resource-links">
+          <button type="button" disabled={busy === 'auto-autofetch' || fundaBusy} onClick={() => void runAutofetchEvidence()}>
+            {busy === 'auto-autofetch' ? 'Auto-fetching…' : 'Auto-fetch & attach sources'}
+          </button>
           <button type="button" disabled={busy === 'auto-fundamentals' || fundaBusy} onClick={() => void runAutomatic('fundamentals')}>
             {fundaBusy || busy === 'auto-fundamentals' ? 'Fetching…' : 'Retry deep fundamentals'}
           </button>
@@ -312,6 +349,7 @@ export function ResearchDataView({ symbol }: { symbol: string }) {
           <button type="button" disabled={busy === 'auto-news'} onClick={() => void runAutomatic('news')}>Refresh news and filings</button>
           <button type="button" disabled={busy === 'auto-fno'} onClick={() => void runAutomatic('fno')}>Refresh F&O instruments</button>
         </div>
+        {autofetchNote ? <p className="requirement-instructions">{autofetchNote}</p> : null}
       </div>
 
       <div className="evidence-panel">

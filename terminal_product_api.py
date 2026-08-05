@@ -838,3 +838,26 @@ def fetch_stock_fundamentals(symbol: str, force: bool = False) -> dict[str, Any]
 def refresh_stock_fundamentals(symbol: str) -> dict[str, Any]:
     """Force-refresh alias for retry from the UI."""
     return fetch_stock_fundamentals(symbol, force=True)
+
+
+@app.post("/api/stock-intelligence/{symbol}/autofetch-evidence")
+def autofetch_stock_evidence(symbol: str, body: dict[str, Any] = Body(default_factory=dict)) -> dict[str, Any]:
+    """Download/export source links into the evidence store, then rebuild workspace."""
+    try:
+        from reporting.evidence_autofetch import autofetch_evidence
+
+        clean = clean_symbol(symbol)
+        report = autofetch_evidence(
+            clean,
+            kinds=body.get("kinds"),
+            refresh_screener=bool(body.get("refresh_screener", True)),
+        )
+        workspace = build_stock_workspace(clean)
+        return {
+            **report,
+            "workspace": workspace,
+        }
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Evidence autofetch failed: {exc}") from exc
