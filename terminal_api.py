@@ -14,6 +14,7 @@ from pathlib import Path
 import sqlite3
 import subprocess
 import sys
+import threading
 import time
 from typing import Any
 
@@ -49,7 +50,10 @@ _ops_process: subprocess.Popen | None = None
 _ops_ensure_last_attempt: float = 0.0
 _bhav_status_cache: dict[str, Any] = {"ts": 0.0, "payload": None}
 _dashboard_cache: dict[str, Any] = {"ts": 0.0, "payload": None}
-_DASHBOARD_CACHE_TTL_S = 2.0
+_DASHBOARD_CACHE_TTL_S = 8.0
+_DASHBOARD_STALE_S = 90.0
+_dashboard_rebuild_lock = threading.Lock()
+_dashboard_rebuild_started = False
 _institutional_refresh_started = False
 
 
@@ -78,17 +82,47 @@ def _fresh_epoch(value: Any, max_age_s: float = 10.0) -> bool:
         return False
 
 
+def _ops_pid_alive(pid: Any) -> bool:
+    try:
+        pid_i = int(pid)
+    except Exception:
+        return False
+    if pid_i <= 0:
+        return False
+    try:
+        os.kill(pid_i, 0)
+        return True
+    except OSError:
+        return False
+
+
 def _ops_runtime_payload() -> dict[str, Any]:
     runtime = _json_file(OPS_RUNTIME, {})
-    running = bool(runtime.get("process_running")) and _fresh_epoch(runtime.get("heartbeat_epoch"))
+    # Heartbeat thread writes every ~2s, but heavy scans on old Macs can starve
+    # the GIL long enough to miss a 10s window — that used to flip the worker
+    # "OFFLINE" and trigger a terminate/respawn storm mid-scan.
+    hb_fresh = _fresh_epoch(runtime.get("heartbeat_epoch"), max_age_s=60.0)
+    pid = runtime.get("worker_pid")
+    pid_alive = _ops_pid_alive(pid)
+    process_flag = bool(runtime.get("process_running"))
+    running = bool(process_flag and pid_alive and hb_fresh)
+    # Busy-but-alive: PID still up, heartbeat only slightly late — stay ONLINE.
+    if not running and process_flag and pid_alive and _fresh_epoch(runtime.get("heartbeat_epoch"), max_age_s=120.0):
+        running = True
     return {
         **runtime,
         "running": running,
-        "process_running": bool(runtime.get("process_running")),
+        "process_running": process_flag,
+        "pid_alive": pid_alive,
+        "heartbeat_fresh": hb_fresh,
     }
 
 
-def _reclaim_stale_ops_lock(*, max_heartbeat_age_s: float = 20.0) -> str:
+def _reclaim_stale_ops_lock(
+    *,
+    max_heartbeat_age_s: float = 90.0,
+    allow_terminate: bool = True,
+) -> str:
     """Clear dead/stale market-ops lock holders so a new worker can start."""
     try:
         from operations.market_ops import LOCK_PATH, RUNTIME_PATH, SingleWorkerLock
@@ -104,6 +138,8 @@ def _reclaim_stale_ops_lock(*, max_heartbeat_age_s: float = 20.0) -> str:
     stale = not _fresh_epoch(heartbeat, max_age_s=max_heartbeat_age_s)
     holder = lock.holder_pid() or runtime.get("worker_pid")
     if holder and stale:
+        if not allow_terminate:
+            return f"stale_holder_kept:{holder}"
         # Orphaned worker after API-only stop: alive PID, dead heartbeat.
         try:
             lock.path.write_text(str(int(holder)), encoding="utf-8")
@@ -118,7 +154,12 @@ def _reclaim_stale_ops_lock(*, max_heartbeat_age_s: float = 20.0) -> str:
     return "lock_held_or_clear"
 
 
-def _ensure_ops_worker(*, wait_s: float = 8.0, force: bool = False) -> dict[str, Any]:
+def _ensure_ops_worker(
+    *,
+    wait_s: float = 8.0,
+    force: bool = False,
+    allow_terminate: bool = True,
+) -> dict[str, Any]:
     """Start the dedicated market-operations worker when it is not healthy."""
     global _ops_process, _ops_ensure_last_attempt
     runtime = _ops_runtime_payload()
@@ -137,7 +178,7 @@ def _ensure_ops_worker(*, wait_s: float = 8.0, force: bool = False) -> dict[str,
         return runtime
     _ops_ensure_last_attempt = now
 
-    reclaim_note = _reclaim_stale_ops_lock()
+    reclaim_note = _reclaim_stale_ops_lock(allow_terminate=allow_terminate)
 
     def _wait_for_online(deadline: float) -> dict[str, Any]:
         while time.time() < deadline:
@@ -172,7 +213,10 @@ def _ensure_ops_worker(*, wait_s: float = 8.0, force: bool = False) -> dict[str,
 
     # Spawn exited immediately (often lock conflict). Force-reclaim stale holder and retry.
     if not runtime.get("running") and _ops_process.poll() is not None:
-        reclaim_note = _reclaim_stale_ops_lock(max_heartbeat_age_s=5.0)
+        reclaim_note = _reclaim_stale_ops_lock(
+            max_heartbeat_age_s=5.0,
+            allow_terminate=allow_terminate,
+        )
         _ops_process = subprocess.Popen(
             [sys.executable, "-u", "-m", "operations.market_ops"],
             cwd=str(ROOT),
@@ -231,7 +275,8 @@ def _queue_message_for_control(kind: str, runtime: dict[str, Any]) -> str:
 @app.on_event("startup")
 def _startup() -> None:
     # Do not block API bind on worker heartbeat — old Macs need /api/health fast.
-    _ensure_ops_worker(wait_s=0.0)
+    # Never terminate an existing ops PID from startup; only spawn if missing.
+    _ensure_ops_worker(wait_s=0.0, allow_terminate=False)
     _schedule_regime_refresh()
     _schedule_institutional_refresh()
 
@@ -587,7 +632,11 @@ def _operations_payload(*, wait_s: float = 0.0, recent_limit: int = 40) -> dict[
         # already queued. Otherwise Scan now queues PENDING and never leases.
         # Default wait_s=0 keeps /api/dashboard non-blocking on old Macs.
         if not runtime.get("running"):
-            runtime = _ensure_ops_worker(wait_s=max(0.0, float(wait_s)))
+            # Dashboard/ops polls: spawn only — never terminate a busy worker.
+            runtime = _ensure_ops_worker(
+                wait_s=max(0.0, float(wait_s)),
+                allow_terminate=float(wait_s) > 0,
+            )
         snap = store.dashboard_snapshot(kinds=LANES.keys(), recent_limit=recent_limit)
         return {
             "available": True,
@@ -833,23 +882,19 @@ def health_detail() -> dict:
     }
 
 
-@app.get("/api/dashboard")
-def dashboard() -> dict:
-    # Never block the dashboard on Yahoo/NSE fetches or worker heartbeat waits.
-    # Those freezes timed out the UI (60s) on older MacBooks — especially while
-    # a market scan was already saturating CPU/disk.
-    global _dashboard_cache
-    now = time.time()
-    cached = _dashboard_cache.get("payload")
-    if cached is not None and (now - float(_dashboard_cache.get("ts") or 0.0)) < _DASHBOARD_CACHE_TTL_S:
-        # Serve a micro-cached copy so scan-time polling does not stampede SQLite/JSON.
-        out = dict(cached)
-        out["generated_at"] = datetime.now(timezone.utc).isoformat()
-        out["cache_hit"] = True
-        return out
 
+
+
+def _dashboard_cache_ttl() -> float:
+    low = str(os.getenv("QT_LOW_POWER", "")).strip() in {"1", "true", "TRUE", "yes"}
+    return 15.0 if low else _DASHBOARD_CACHE_TTL_S
+
+
+def _build_dashboard_payload() -> dict:
     try:
-        _ensure_ops_worker(wait_s=0.0)
+        # Hot path: never terminate a busy market-ops worker just because its
+        # heartbeat lagged under GIL pressure — that killed scans and jammed :8765.
+        _ensure_ops_worker(wait_s=0.0, allow_terminate=False)
     except Exception:
         pass
     _schedule_regime_refresh()
@@ -865,7 +910,7 @@ def dashboard() -> dict:
     )
     fno = _fno_payload()
     data = _data_payload(scan, long_term, operations, fno, news)
-    payload = {
+    return {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "market": market,
         "scan": scan,
@@ -881,6 +926,62 @@ def dashboard() -> dict:
         "conviction": _conviction(scan, market),
         "cache_hit": False,
     }
+
+
+def _schedule_dashboard_rebuild() -> None:
+    """Refresh dashboard cache off the request path when serving stale."""
+    global _dashboard_rebuild_started
+    if not _dashboard_rebuild_lock.acquire(blocking=False):
+        return
+    if _dashboard_rebuild_started:
+        _dashboard_rebuild_lock.release()
+        return
+    _dashboard_rebuild_started = True
+    _dashboard_rebuild_lock.release()
+
+    def _worker() -> None:
+        global _dashboard_rebuild_started, _dashboard_cache
+        try:
+            payload = _build_dashboard_payload()
+            _dashboard_cache = {"ts": time.time(), "payload": dict(payload)}
+        except Exception:
+            pass
+        finally:
+            _dashboard_rebuild_started = False
+
+    try:
+        threading.Thread(target=_worker, name="dashboard-rebuild", daemon=True).start()
+    except Exception:
+        _dashboard_rebuild_started = False
+
+
+@app.get("/api/dashboard")
+def dashboard() -> dict:
+    # Never block the dashboard on Yahoo/NSE fetches or worker heartbeat waits.
+    # Those freezes timed out the UI (25–60s) on older MacBooks — especially while
+    # a market scan was already saturating CPU/disk.
+    global _dashboard_cache
+    now = time.time()
+    cached = _dashboard_cache.get("payload")
+    cache_age = now - float(_dashboard_cache.get("ts") or 0.0)
+    ttl = _dashboard_cache_ttl()
+    if cached is not None and cache_age < ttl:
+        out = dict(cached)
+        out["generated_at"] = datetime.now(timezone.utc).isoformat()
+        out["cache_hit"] = True
+        out["cache_age_s"] = round(cache_age, 2)
+        return out
+    if cached is not None and cache_age < _DASHBOARD_STALE_S:
+        # Stale-while-revalidate: answer immediately, rebuild in background.
+        _schedule_dashboard_rebuild()
+        out = dict(cached)
+        out["generated_at"] = datetime.now(timezone.utc).isoformat()
+        out["cache_hit"] = True
+        out["cache_stale"] = True
+        out["cache_age_s"] = round(cache_age, 2)
+        return out
+
+    payload = _build_dashboard_payload()
     _dashboard_cache = {"ts": now, "payload": dict(payload)}
     return payload
 

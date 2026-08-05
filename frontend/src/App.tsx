@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { fetchChart, fetchDashboard, fetchOperationsPayload, sendControl } from './api'
 import { LivePriceStrip } from './LivePriceStrip'
 import { useQuoteHeartbeat } from './useQuoteHeartbeat'
@@ -202,6 +202,8 @@ const pageSubtitles: Record<string, string> = {
 
 function App() {
   const [dashboard, setDashboard] = useState<DashboardPayload>(emptyDashboard)
+  const hadDashboardRef = useRef(false)
+  const [dashboardReady, setDashboardReady] = useState(false)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [active, setActive] = useState('Home')
@@ -222,11 +224,18 @@ function App() {
 
   const refresh = useCallback(async (opts?: { soft?: boolean }) => {
     const soft = Boolean(opts?.soft)
+    const lowPower = import.meta.env.VITE_QT_LOW_POWER === '1'
     try {
-      // Soft polls during an active scan use a shorter timeout and never wipe
-      // the last good dashboard if the API is temporarily busy.
-      const payload = await fetchDashboard({ timeoutMs: soft ? 12_000 : 25_000 })
+      // Soft polls never wipe the last good dashboard if the API is temporarily busy.
+      // Low-power Macs get a longer first-load budget — 25s was too tight when
+      // market-ops and live quotes share one CPU.
+      const timeoutMs = soft
+        ? (lowPower ? 20_000 : 12_000)
+        : (lowPower ? 45_000 : 30_000)
+      const payload = await fetchDashboard({ timeoutMs })
       setDashboard(payload)
+      hadDashboardRef.current = Boolean(payload.generated_at)
+      setDashboardReady(Boolean(payload.generated_at))
       setError('')
       const allSymbols = [
         ...payload.scan.records.map((row) => row.symbol),
@@ -237,15 +246,25 @@ function App() {
       setSelected((current) => current || first)
     } catch (reason) {
       const message = reason instanceof Error ? reason.message : 'Dashboard API unavailable'
-      if (soft) {
-        // Keep UI usable while market-ops is scanning — merge ops if possible.
+      const hadGood = hadDashboardRef.current
+      if (soft || hadGood) {
+        // Keep UI usable while market-ops is scanning or API is briefly busy.
         try {
           const ops = await fetchOperationsPayload()
           setDashboard((prev) => ({ ...prev, operations: ops }))
           setError('')
-          setControlState('Dashboard busy during scan — showing last good state + live ops')
+          setControlState(
+            soft
+              ? 'Dashboard busy during scan — showing last good state + live ops'
+              : 'Dashboard slow — showing last good state. Prefer full restart only if MARKET OPS stays OFFLINE.',
+          )
         } catch {
-          setControlState(message)
+          if (hadGood) {
+            setError('')
+            setControlState(message)
+          } else {
+            setError(message)
+          }
         }
       } else {
         setError(message)
@@ -256,17 +275,17 @@ function App() {
   }, [])
 
   const marketScan = useScanRunner('MARKET_SCAN', {
-    onComplete: () => void refresh(),
+    onComplete: () => void refresh({ soft: true }),
     seedOperation: activeSeed(dashboard, 'MARKET_SCAN'),
   })
 
   const longTermScan = useScanRunner('LONG_TERM_SCAN', {
-    onComplete: () => void refresh(),
+    onComplete: () => void refresh({ soft: true }),
     seedOperation: activeSeed(dashboard, 'LONG_TERM_SCAN'),
   })
 
   const sniperBoardEval = useScanRunner('SNIPER_BOARD_EVAL', {
-    onComplete: () => void refresh(),
+    onComplete: () => void refresh({ soft: true }),
     seedOperation: activeSeed(dashboard, 'SNIPER_BOARD_EVAL'),
   })
 
@@ -302,19 +321,20 @@ function App() {
   }, [selected, buyBookSymbols, dashboard.paper.open_positions, dashboard.scan.records])
 
   // Skip live heartbeat on US pages — Yahoo EOD plane, not Kite.
-  const liveEnabled = !String(active).startsWith('US')
+  // Wait until the first dashboard lands so heartbeat does not compete with :8765 on old Macs.
+  const liveEnabled = !String(active).startsWith('US') && dashboardReady
   const liveQuotes = useQuoteHeartbeat(heartbeatSymbols, { enabled: liveEnabled })
 
   useEffect(() => {
     void refresh({ soft: false })
-    // During scans: poll ops-friendly soft dashboard less often so the API
-    // stays free for market-ops on older Macs.
+    // Interval polls are always soft — a hard timeout must not paint
+    // "backend unavailable" over a still-good last dashboard.
     const lowPower = import.meta.env.VITE_QT_LOW_POWER === '1'
     const interval = scanPollingActive
       ? (lowPower ? 45_000 : 25_000)
       : (lowPower ? 45_000 : 15_000)
     const timer = window.setInterval(
-      () => void refresh({ soft: scanPollingActive }),
+      () => void refresh({ soft: true }),
       interval,
     )
     return () => window.clearInterval(timer)

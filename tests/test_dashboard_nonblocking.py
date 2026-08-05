@@ -1,6 +1,7 @@
 """Dashboard must not block on Yahoo regime fetch or huge scan payloads."""
 from __future__ import annotations
 
+import json
 import time
 from types import SimpleNamespace
 
@@ -99,6 +100,60 @@ def test_ensure_ops_worker_wait_zero_does_not_sleep(monkeypatch):
     assert sleeps == []
     # restore unused
     assert real_sleep
+
+
+def test_reclaim_can_keep_stale_holder_without_terminate(monkeypatch, tmp_path):
+    import terminal_api as api
+    import operations.market_ops as MO
+
+    lock_path = tmp_path / "market_ops.lock"
+    runtime_path = tmp_path / "runtime.json"
+    lock_path.write_text("424242", encoding="utf-8")
+    runtime_path.write_text(
+        '{"process_running": true, "worker_pid": 424242, "heartbeat_epoch": 1}',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(MO, "LOCK_PATH", lock_path)
+    monkeypatch.setattr(MO, "RUNTIME_PATH", runtime_path)
+
+    class FakeLock:
+        def __init__(self, path):
+            self.path = path
+
+        def reclaim_if_dead(self):
+            return False
+
+        def holder_pid(self):
+            return 424242
+
+        def terminate_holder(self, **k):
+            raise AssertionError("terminate must not run when allow_terminate=False")
+
+    monkeypatch.setattr(MO, "SingleWorkerLock", FakeLock)
+    note = api._reclaim_stale_ops_lock(max_heartbeat_age_s=1.0, allow_terminate=False)
+    assert note == "stale_holder_kept:424242"
+
+
+def test_ops_runtime_keeps_alive_pid_with_lagged_heartbeat(monkeypatch, tmp_path):
+    import terminal_api as api
+
+    runtime = tmp_path / "runtime.json"
+    runtime.write_text(
+        json.dumps(
+            {
+                "process_running": True,
+                "worker_pid": 12345,
+                "heartbeat_epoch": time.time() - 30,
+                "active": {},
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(api, "OPS_RUNTIME", runtime)
+    monkeypatch.setattr(api, "_ops_pid_alive", lambda pid: True)
+    out = api._ops_runtime_payload()
+    assert out["running"] is True
+    assert out["pid_alive"] is True
 
 
 def test_institutional_dashboard_path_is_cache_only(monkeypatch):

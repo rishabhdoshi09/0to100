@@ -12,7 +12,13 @@ export default defineConfig({
     port: 5173,
     strictPort: true,
     proxy: {
-      '/api': 'http://127.0.0.1:8765',
+      '/api': {
+        target: 'http://127.0.0.1:8765',
+        // Old Macs can take >25s when market-ops is saturating CPU; don't
+        // drop the proxy socket before the browser's own AbortController.
+        timeout: 120_000,
+        proxyTimeout: 120_000,
+      },
       '/reports': 'http://127.0.0.1:8766',
       '/evidence': 'http://127.0.0.1:8766',
     },

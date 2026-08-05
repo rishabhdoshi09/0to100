@@ -17,7 +17,7 @@ const json = async <T>(response: Response): Promise<T> => {
 }
 
 export const fetchDashboard = (opts?: { timeoutMs?: number }): Promise<DashboardPayload> => {
-  const timeoutMs = Math.max(5_000, Number(opts?.timeoutMs) || 25_000)
+  const timeoutMs = Math.max(5_000, Number(opts?.timeoutMs) || 30_000)
   const controller = new AbortController()
   const timer = window.setTimeout(() => controller.abort(), timeoutMs)
   return fetch('/api/dashboard', {
@@ -42,7 +42,7 @@ export const fetchDashboard = (opts?: { timeoutMs?: number }): Promise<Dashboard
       }
       if (reason instanceof TypeError) {
         throw new Error(
-          'Cannot reach /api/dashboard (proxy → :8765). Run: bash scripts/stop_quantterm.sh && bash scripts/run_quantterm_complete.sh',
+          'Cannot reach /api/dashboard (proxy → :8765). Run: bash scripts/stop_quantterm.sh && bash scripts/run_quantterm_low_power.sh',
         )
       }
       throw reason
