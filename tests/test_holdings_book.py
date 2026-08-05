@@ -75,6 +75,89 @@ def test_holdings_api_import_and_get(tmp_path, monkeypatch):
     assert {h["tradingsymbol"] for h in got["holdings"]} == {"AAA", "ACMECO-BE"}
 
 
+def test_connection_status_reports_missing_token(tmp_path, monkeypatch):
+    from product import holdings_book as HB
+
+    path = tmp_path / "holdings.json"
+    monkeypatch.setenv("QT_HOLDINGS_FILE", str(path))
+    monkeypatch.delenv("KITE_API_KEY", raising=False)
+    monkeypatch.delenv("KITE_ACCESS_TOKEN", raising=False)
+    monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
+    monkeypatch.delenv("TELEGRAM_CHAT_ID", raising=False)
+
+    status = HB.connection_status(path)
+    assert status["available"] is False
+    assert status["kite_connected"] is False
+    assert status["telegram_configured"] is False
+    assert "KITE_API_KEY" in status["message"] or "token" in status["message"].lower()
+
+
+def test_notify_holdings_telegram_sends_when_configured(tmp_path, monkeypatch):
+    from product import holdings_book as HB
+
+    path = tmp_path / "holdings.json"
+    monkeypatch.setenv("QT_HOLDINGS_FILE", str(path))
+    book = HB.save_holdings(
+        [{"tradingsymbol": "INFY", "quantity": 10, "average_price": 100, "last_price": 110}],
+        source="paste",
+        path=path,
+    )
+
+    class _FakeEngine:
+        def is_configured(self):
+            return True
+
+        def send(self, message: str):
+            assert "INFY" in message
+            assert "My Holdings" in message
+            return True
+
+    monkeypatch.setattr("alerts.telegram_alerts.AlertEngine", _FakeEngine)
+    result = HB.notify_holdings_telegram(book)
+    assert result["sent"] is True
+    assert result["count"] == 1
+
+
+def test_holdings_status_and_notify_api(tmp_path, monkeypatch):
+    import terminal_product_api as api
+    from product import holdings_book as HB
+
+    path = tmp_path / "holdings.json"
+    monkeypatch.setenv("QT_HOLDINGS_FILE", str(path))
+    monkeypatch.setattr(HB, "DEFAULT_PATH", path)
+    HB.save_holdings(
+        [{"tradingsymbol": "TCS", "quantity": 1, "average_price": 3000, "last_price": 3100}],
+        source="paste",
+        path=path,
+    )
+
+    sent = {"n": 0}
+
+    class _FakeEngine:
+        def is_configured(self):
+            return True
+
+        def send(self, message: str):
+            sent["n"] += 1
+            return True
+
+    monkeypatch.setattr("alerts.telegram_alerts.AlertEngine", _FakeEngine)
+    client = TestClient(api.app)
+    status = client.get("/api/holdings/status").json()
+    assert status["available"] is True
+    assert status["count"] == 1
+    assert status["telegram_configured"] is True
+
+    got = client.get("/api/holdings").json()
+    assert "connection" in got
+    assert got["connection"]["count"] == 1
+
+    notify = client.post("/api/holdings/notify").json()
+    assert notify["accepted"] is True
+    assert notify["telegram"]["sent"] is True
+    assert sent["n"] == 1
+
+
 def test_symbol_directory_pins_holdings(tmp_path, monkeypatch):
     import data.nse_universe as U
     from product import holdings_book as HB

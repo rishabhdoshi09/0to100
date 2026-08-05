@@ -14,15 +14,19 @@ import {
   exportCorporateActionGaps,
   fetchCorporateActionsStatus,
   fetchHoldings,
+  fetchHoldingsStatus,
   fetchInstitutionalStack,
   fetchSignalBacktestStatus,
   fetchTargetPortfolio,
   importHoldings,
+  notifyHoldingsTelegram,
   refreshFiiDiiStore,
+  syncBuyBookFromHoldings,
   syncHoldings,
   verifyCorporateActions,
   type CorporateActionsStatus,
   type HoldingsBook,
+  type HoldingsConnection,
   type InstitutionalDomain,
   type InstitutionalStack,
   type SignalBacktestStatus,
@@ -239,14 +243,21 @@ export function StockIntelligenceView(props: ViewProps) {
 export function PortfolioView({ dashboard, runControl, setSelected, setActive }: ViewProps) {
   const [target, setTarget] = useState<Awaited<ReturnType<typeof fetchTargetPortfolio>> | null>(null)
   const [holdings, setHoldings] = useState<HoldingsBook | null>(null)
+  const [connection, setConnection] = useState<HoldingsConnection | null>(null)
   const [holdingsBusy, setHoldingsBusy] = useState('')
   const [importText, setImportText] = useState('')
   const [holdingsError, setHoldingsError] = useState('')
+  const [holdingsNote, setHoldingsNote] = useState('')
   const paperReturn = dashboard.paper.capital > 0 ? ((dashboard.paper.equity / dashboard.paper.capital) - 1) * 100 : null
 
   const reloadHoldings = async () => {
     try {
-      setHoldings(await fetchHoldings())
+      const [book, status] = await Promise.all([
+        fetchHoldings(),
+        fetchHoldingsStatus().catch(() => null),
+      ])
+      setHoldings(book)
+      setConnection(status || book.connection || null)
       setHoldingsError('')
     } catch (reason) {
       setHoldings(null)
@@ -272,12 +283,72 @@ export function PortfolioView({ dashboard, runControl, setSelected, setActive }:
   const onSync = async () => {
     setHoldingsBusy('sync')
     setHoldingsError('')
+    setHoldingsNote('')
     try {
-      const book = await syncHoldings()
+      const book = await syncHoldings({ notify: true })
       setHoldings(book)
-      if (!book.available) setHoldingsError(book.message || 'Sync returned no holdings')
+      setConnection(book.connection || null)
+      if (!book.available) {
+        setHoldingsError(
+          book.message
+          || book.connection?.message
+          || 'Sync returned no holdings — check KITE_ACCESS_TOKEN',
+        )
+      } else {
+        const tg = book.telegram?.sent
+          ? ' · Telegram notified'
+          : book.telegram?.reason
+            ? ` · Telegram: ${book.telegram.reason}`
+            : ''
+        setHoldingsNote(`Synced ${book.summary?.count || book.holdings.length} holding(s) from Zerodha${tg}`)
+      }
     } catch (reason) {
       setHoldingsError(reason instanceof Error ? reason.message : 'Zerodha sync failed')
+    } finally {
+      setHoldingsBusy('')
+    }
+  }
+
+  const onSyncAndTrack = async () => {
+    setHoldingsBusy('track')
+    setHoldingsError('')
+    setHoldingsNote('Syncing Zerodha → My Holdings + Active Buys…')
+    try {
+      const book = await syncHoldings({ notify: true })
+      setHoldings(book)
+      setConnection(book.connection || null)
+      if (!book.available) {
+        setHoldingsError(book.message || book.connection?.message || 'No holdings to track')
+        setHoldingsNote('')
+        return
+      }
+      const tracked = await syncBuyBookFromHoldings({ refresh_kite: false })
+      const tgBits = [
+        book.telegram?.sent ? 'Holdings Telegram sent' : '',
+        tracked.telegram?.active_buys_sent ? 'Active Buys Telegram sent' : '',
+      ].filter(Boolean).join(' · ')
+      setHoldingsNote(
+        `Tracking ${tracked.upserted} name(s) in Active Buys${tgBits ? ` · ${tgBits}` : ''}. Open Active Buys for tech+fund health.`,
+      )
+    } catch (reason) {
+      setHoldingsError(reason instanceof Error ? reason.message : 'Sync + track failed')
+      setHoldingsNote('')
+    } finally {
+      setHoldingsBusy('')
+    }
+  }
+
+  const onNotifyTelegram = async () => {
+    setHoldingsBusy('notify')
+    try {
+      const result = await notifyHoldingsTelegram()
+      setHoldingsNote(
+        result.telegram?.sent
+          ? `Telegram sent for ${result.count ?? 0} holding(s)`
+          : result.telegram?.reason || 'Telegram not sent — check TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID in .env',
+      )
+    } catch (reason) {
+      setHoldingsError(reason instanceof Error ? reason.message : 'Telegram notify failed')
     } finally {
       setHoldingsBusy('')
     }
@@ -304,9 +375,14 @@ export function PortfolioView({ dashboard, runControl, setSelected, setActive }:
     setHoldingsBusy('import')
     setHoldingsError('')
     try {
-      const book = await importHoldings(rows, 'paste')
+      const book = await importHoldings(rows, 'paste', { notify: true })
       setHoldings(book)
       setImportText('')
+      setHoldingsNote(
+        book.telegram?.sent
+          ? `Imported ${book.summary.count} row(s) · Telegram notified`
+          : `Imported ${book.summary.count} row(s)`,
+      )
     } catch (reason) {
       setHoldingsError(reason instanceof Error ? reason.message : 'Import failed')
     } finally {
@@ -325,16 +401,50 @@ export function PortfolioView({ dashboard, runControl, setSelected, setActive }:
 
   return (
     <section className="workspace-view">
-      <div className="inline-actions">
+      <header className="stock-workspace-hero" style={{ marginBottom: 16 }}>
+        <div>
+          <span>Demat book · Zerodha CNC</span>
+          <h2>My Holdings</h2>
+          <p>
+            Sync your Zerodha holdings here first. Then track them in Active Buys for technicals + fundamentals,
+            with Telegram warnings when health weakens.
+          </p>
+        </div>
+      </header>
+      <Panel title="CONNECTION" subtitle="Why holdings may be empty">
+        <div className="fact-grid">
+          <div><span>Kite API key</span><strong>{connection?.kite_api_key_present ? 'Present' : 'Missing'}</strong></div>
+          <div><span>Access token</span><strong>{connection?.kite_connected ? 'Present' : 'Missing / expired'}</strong></div>
+          <div><span>Local book</span><strong>{connection?.holdings_file_exists ? `${connection.count ?? 0} rows` : 'Not created yet'}</strong></div>
+          <div><span>Telegram</span><strong>{connection?.telegram_configured ? 'Configured' : 'Not configured'}</strong></div>
+        </div>
+        <p className="panel-copy">{connection?.message || holdings?.message || 'Tap Sync Zerodha holdings.'}</p>
+        {!connection?.kite_connected ? (
+          <p className="panel-copy">
+            Fix: put today&apos;s <code>KITE_ACCESS_TOKEN</code> in <code>.env</code> (daily Zerodha login), restart the stack, then Sync.
+          </p>
+        ) : null}
+        {!connection?.telegram_configured ? (
+          <p className="panel-copy">
+            Telegram: set <code>TELEGRAM_BOT_TOKEN</code> and <code>TELEGRAM_CHAT_ID</code> in <code>.env</code>, then restart.
+          </p>
+        ) : null}
+      </Panel>
+      <div className="inline-actions" style={{ flexWrap: 'wrap', gap: 8 }}>
         <button type="button" disabled={!!holdingsBusy} onClick={() => void onSync()}>
           {holdingsBusy === 'sync' ? 'Syncing Zerodha…' : 'Sync Zerodha holdings'}
         </button>
-        <button type="button" onClick={() => void runControl('RUN_CYCLE_NOW')}>Request paper cycle</button>
-        <button type="button" onClick={() => void runControl(dashboard.autonomy.new_paper_entries ? 'PAUSE_NEW_PAPER_ENTRIES' : 'RESUME_NEW_PAPER_ENTRIES')}>
-          {dashboard.autonomy.new_paper_entries ? 'Pause new entries' : 'Resume new entries'}
+        <button type="button" disabled={!!holdingsBusy} onClick={() => void onSyncAndTrack()}>
+          {holdingsBusy === 'track' ? 'Tracking…' : 'Sync + track in Active Buys'}
         </button>
+        <button type="button" disabled={!!holdingsBusy || !holdings?.available} onClick={() => void onNotifyTelegram()}>
+          {holdingsBusy === 'notify' ? 'Sending…' : 'Send holdings to Telegram'}
+        </button>
+        <button type="button" onClick={() => setActive('Active Buys')}>Open Active Buys</button>
+        <button type="button" onClick={() => void runControl('RUN_CYCLE_NOW')}>Request paper cycle</button>
       </div>
       {holdingsError && <div className="api-warning">{holdingsError}</div>}
+      {holdingsNote ? <p className="panel-copy">{holdingsNote}</p> : null}
       <div className="view-metrics">
         <MetricCard label="DEMAT INVESTED" value={money(hSummary?.invested || 0)} detail={holdings?.available ? `${hSummary?.count || 0} holdings · ${holdings.source || 'book'}` : 'Not synced'} />
         <MetricCard label="DEMAT VALUE" value={money(hSummary?.current_value || 0)} detail={hSummary ? pct(hSummary.pnl_pct) : '—'} tone="green" />
@@ -350,7 +460,13 @@ export function PortfolioView({ dashboard, runControl, setSelected, setActive }:
           {holdings && !holdings.available && (
             <div>
               <p className="panel-copy">{holdings.message || 'No holdings saved yet.'}</p>
-              <p className="panel-copy">Sync from Zerodha, or paste lines: SYMBOL QTY AVG [LTP]</p>
+              <p className="panel-copy">
+                1) Ensure today&apos;s Kite access token is in <code>.env</code>
+                <br />
+                2) Tap <strong>Sync Zerodha holdings</strong>
+                <br />
+                3) Or paste lines: SYMBOL QTY AVG [LTP]
+              </p>
             </div>
           )}
           {holdings?.available && (

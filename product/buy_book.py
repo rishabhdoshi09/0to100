@@ -222,7 +222,7 @@ def sync_from_holdings(
     from product.holdings_book import build_holdings_payload, research_symbol, sync_from_kite
 
     if refresh_kite:
-        holdings_payload = sync_from_kite()
+        holdings_payload = sync_from_kite(notify=True)
         if not holdings_payload.get("available") and not holdings_payload.get("synced"):
             # Fall back to last saved book so UI can still track offline demat snapshot.
             holdings_payload = build_holdings_payload()
@@ -269,15 +269,42 @@ def sync_from_holdings(
             set_status(str(row.get("id")), "closed", path=path)
             closed.append(str(row.get("symbol")))
 
+    telegram = holdings_payload.get("telegram") if isinstance(holdings_payload.get("telegram"), dict) else {}
+    # Also notify Active Buys tracking outcome when Telegram is configured.
+    try:
+        from alerts.telegram_alerts import AlertEngine
+
+        engine = AlertEngine()
+        if engine.is_configured() and upserted:
+            lines = [
+                "<b>Active Buys · tracking Zerodha holdings</b>",
+                f"Tracking {len(upserted)} name(s) · closed stale {len(closed)}",
+                "",
+            ]
+            for item in upserted[:10]:
+                lines.append(
+                    f"• <b>{item.get('symbol')}</b> qty {item.get('quantity') or '—'} · "
+                    f"avg ₹{float(item.get('entry_price') or 0):,.1f}"
+                )
+            lines.append("\n<i>Technicals + fundamentals watch · not a sell ticket</i>")
+            telegram = {
+                **telegram,
+                "active_buys_sent": bool(engine.send("\n".join(lines))),
+            }
+    except Exception as exc:
+        telegram = {**telegram, "active_buys_error": str(exc)}
+
     return {
         "accepted": True,
         "synced_from": str(holdings_payload.get("source") or ("kite" if refresh_kite else "file")),
         "holdings_available": bool(holdings_payload.get("available")),
         "holdings_message": str(holdings_payload.get("message") or ""),
+        "connection": holdings_payload.get("connection") or {},
         "upserted": len(upserted),
         "symbols": sorted(held_symbols),
         "closed_stale_zerodha": closed,
         "items": upserted,
+        "telegram": telegram,
         "places_orders": False,
         "honesty": (
             "Zerodha holdings were mapped into Active Buys for tracking. "

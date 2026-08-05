@@ -265,14 +265,109 @@ def build_holdings_payload(path: Path | None = None) -> dict[str, Any]:
     return enrich_ltp(load_holdings(path))
 
 
-def sync_from_kite(path: Path | None = None) -> dict[str, Any]:
+def connection_status(path: Path | None = None) -> dict[str, Any]:
+    """Diagnose why My Holdings may be empty — Kite token + local book."""
+    target = holdings_path(path)
+    book = load_holdings(path)
+    api_key = ""
+    access_token = ""
+    try:
+        from data.kite_client import _fresh_env
+
+        api_key = _fresh_env("KITE_API_KEY")
+        access_token = _fresh_env("KITE_ACCESS_TOKEN")
+    except Exception:
+        api_key = str(os.getenv("KITE_API_KEY") or "")
+        access_token = str(os.getenv("KITE_ACCESS_TOKEN") or "")
+    kite_connected = bool(access_token.strip())
+    count = int((book.get("summary") or {}).get("count") or len(book.get("holdings") or []))
+    if count > 0:
+        hint = f"{count} holding(s) saved locally (source={book.get('source') or 'file'})."
+    elif not api_key.strip():
+        hint = "KITE_API_KEY missing in .env — add Zerodha API key."
+    elif not kite_connected:
+        hint = "KITE_ACCESS_TOKEN missing/expired — login via python main.py (or your Kite login flow), then Sync Zerodha holdings."
+    else:
+        hint = "Kite token present but no holdings file yet — tap Sync Zerodha holdings on My Holdings."
+    return {
+        "kite_api_key_present": bool(api_key.strip()),
+        "kite_connected": kite_connected,
+        "holdings_file": str(target),
+        "holdings_file_exists": target.exists(),
+        "available": bool(book.get("available")),
+        "count": count,
+        "updated_at": book.get("updated_at") or "",
+        "source": book.get("source") or "",
+        "message": hint,
+        "telegram_configured": _telegram_configured(),
+        "places_orders": False,
+    }
+
+
+def _telegram_configured() -> bool:
+    try:
+        from alerts.telegram_alerts import AlertEngine
+
+        return AlertEngine().is_configured()
+    except Exception:
+        return False
+
+
+def notify_holdings_telegram(book: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    """Push a holdings snapshot to Telegram after sync/import."""
+    payload = dict(book or build_holdings_payload())
+    try:
+        from alerts.telegram_alerts import AlertEngine
+
+        engine = AlertEngine()
+        if not engine.is_configured():
+            return {"sent": False, "reason": "Telegram not configured (TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID)"}
+    except Exception as exc:
+        return {"sent": False, "reason": str(exc)}
+
+    holdings = list(payload.get("holdings") or [])
+    summary = payload.get("summary") or {}
+    if not holdings:
+        msg = (
+            "<b>My Holdings</b>\n"
+            "Synced, but book is empty.\n"
+            f"<i>{payload.get('message') or 'No CNC holdings returned.'}</i>"
+        )
+    else:
+        lines = [
+            "<b>My Holdings · Zerodha sync</b>",
+            f"Count: {summary.get('count') or len(holdings)} · "
+            f"Invested ₹{float(summary.get('invested') or 0):,.0f} · "
+            f"P&L ₹{float(summary.get('pnl') or 0):,.0f} "
+            f"({float(summary.get('pnl_pct') or 0):+.1f}%)",
+            "",
+        ]
+        for row in holdings[:12]:
+            sym = row.get("tradingsymbol") or row.get("symbol")
+            qty = row.get("quantity")
+            pnl = float(row.get("pnl") or 0)
+            lines.append(
+                f"• <b>{sym}</b> ×{qty} · avg ₹{float(row.get('average_price') or 0):,.1f} · "
+                f"P&L ₹{pnl:,.0f}"
+            )
+        if len(holdings) > 12:
+            lines.append(f"… +{len(holdings) - 12} more")
+        lines.append("\n<i>Research desk · never places orders</i>")
+        msg = "\n".join(lines)
+    ok = engine.send(msg)
+    return {"sent": bool(ok), "count": len(holdings)}
+
+
+def sync_from_kite(path: Path | None = None, *, notify: bool = True) -> dict[str, Any]:
     """Pull CNC holdings from Zerodha when the session is connected."""
+    status = connection_status(path)
     try:
         from data.kite_client import KiteClient
     except Exception as exc:
         return {
             **empty_book(message=f"Kite client unavailable: {exc}"),
             "synced": False,
+            "connection": status,
         }
     try:
         kc = KiteClient()
@@ -280,27 +375,49 @@ def sync_from_kite(path: Path | None = None) -> dict[str, Any]:
         return {
             **empty_book(message=f"Zerodha not connected: {exc}"),
             "synced": False,
+            "connection": status,
         }
     if not kc.is_connected():
         return {
-            **empty_book(message="Zerodha access token missing — connect Kite, then Sync holdings."),
+            **empty_book(
+                message=(
+                    "Zerodha access token missing — set KITE_ACCESS_TOKEN in .env "
+                    "(daily login), then tap Sync Zerodha holdings."
+                )
+            ),
             "synced": False,
+            "connection": connection_status(path),
         }
     try:
         raw = list(kc.get_holdings() or [])
     except Exception as exc:
+        err = str(exc)
+        hint = err
+        lower = err.lower()
+        if "token" in lower or "invalid" in lower or "expired" in lower:
+            hint = (
+                f"Kite token rejected ({err}). Re-login to refresh KITE_ACCESS_TOKEN, then sync again."
+            )
         return {
-            **empty_book(message=f"Kite holdings fetch failed: {exc}"),
+            **empty_book(message=hint),
             "synced": False,
+            "connection": connection_status(path),
         }
     if not raw:
         book = save_holdings([], source="kite", path=path)
         book["synced"] = True
-        book["message"] = "Kite connected but returned zero holdings."
+        book["message"] = "Kite connected but returned zero CNC holdings."
+        book["connection"] = connection_status(path)
+        if notify:
+            book["telegram"] = notify_holdings_telegram(book)
         return book
     book = save_holdings(raw, source="kite", path=path)
     book["synced"] = True
-    return enrich_ltp(book)
+    book = enrich_ltp(book)
+    book["connection"] = connection_status(path)
+    if notify:
+        book["telegram"] = notify_holdings_telegram(book)
+    return book
 
 
 def holdings_symbols(path: Path | None = None) -> list[str]:

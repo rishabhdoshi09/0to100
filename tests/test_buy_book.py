@@ -240,6 +240,85 @@ def test_sync_holdings_into_active_buys(tmp_path, monkeypatch):
     assert "MANUAL" in symbols
 
 
+def test_buy_book_watcher_includes_fund_flags(monkeypatch):
+    from risk import buy_book_watcher as W
+
+    monkeypatch.setattr(
+        "product.buy_health.evaluate_book",
+        lambda: {
+            "items": [
+                {
+                    "symbol": "WEAK",
+                    "health": {
+                        "price": 100,
+                        "warnings": [
+                            {"severity": "critical", "code": "DEATH_STACK", "text": "below EMAs"},
+                            {"severity": "info", "code": "NOTE", "text": "ignore"},
+                        ],
+                        "fundamentals": {
+                            "flags": [
+                                {"severity": "warn", "code": "HIGH_DEBT", "text": "Debt elevated"},
+                                {"severity": "good", "code": "SOLID_ROE", "text": "ok"},
+                            ]
+                        },
+                    },
+                }
+            ]
+        },
+    )
+    events = W.check_buy_book()
+    codes = {e["event"] for e in events}
+    assert "TECH:DEATH_STACK" in codes
+    assert "FUND:HIGH_DEBT" in codes
+    assert "TECH:NOTE" not in codes
+    assert "FUND:SOLID_ROE" not in codes
+
+    sent_msgs: list[str] = []
+
+    class _FakeEngine:
+        def is_configured(self):
+            return True
+
+        def send(self, message: str):
+            sent_msgs.append(message)
+            return True
+
+    monkeypatch.setattr("alerts.telegram_alerts.AlertEngine", _FakeEngine)
+    W._alerted.clear()
+    n = W.push_buy_book_alerts()
+    assert n == 2
+    assert sent_msgs and "WEAK" in sent_msgs[0]
+    assert W.push_buy_book_alerts() == 0  # once per day
+
+
+def test_sync_from_holdings_notifies_active_buys(tmp_path, monkeypatch):
+    from product import buy_book as BB
+    from product import holdings_book as HB
+
+    monkeypatch.setattr(BB, "DEFAULT_PATH", tmp_path / "buy_book.json")
+    monkeypatch.setattr(HB, "DEFAULT_PATH", tmp_path / "holdings.json")
+    monkeypatch.setenv("QT_HOLDINGS_FILE", str(tmp_path / "holdings.json"))
+    HB.save_holdings(
+        [{"tradingsymbol": "INFY", "quantity": 5, "average_price": 1400, "last_price": 1450}],
+        source="paste",
+    )
+    sent: list[str] = []
+
+    class _FakeEngine:
+        def is_configured(self):
+            return True
+
+        def send(self, message: str):
+            sent.append(message)
+            return True
+
+    monkeypatch.setattr("alerts.telegram_alerts.AlertEngine", _FakeEngine)
+    report = BB.sync_from_holdings(refresh_kite=False)
+    assert report["upserted"] == 1
+    assert report["telegram"].get("active_buys_sent") is True
+    assert any("Active Buys" in m for m in sent)
+
+
 def test_fundamentals_snapshot_from_cache(monkeypatch):
     from product import buy_health as BH
 

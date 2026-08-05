@@ -279,6 +279,7 @@ def _startup() -> None:
     _ensure_ops_worker(wait_s=0.0, allow_terminate=False)
     _schedule_regime_refresh()
     _schedule_institutional_refresh()
+    _schedule_active_buy_alerts()
 
 
 @app.on_event("shutdown")
@@ -351,6 +352,41 @@ def _schedule_institutional_refresh() -> None:
         threading.Thread(target=_worker, name="institutional-refresh", daemon=True).start()
     except Exception:
         _institutional_refresh_started = False
+
+
+_active_buy_alerts_started = False
+
+
+def _schedule_active_buy_alerts() -> None:
+    """Push Active Buys tech/fund warnings to Telegram without needing market scan.
+
+    Low-power mode disables auto MARKET_SCAN, which used to be the only path that
+    called ``push_buy_book_alerts``. This dedicated loop keeps retail alerts alive.
+    """
+    global _active_buy_alerts_started
+    if _active_buy_alerts_started:
+        return
+    _active_buy_alerts_started = True
+
+    def _worker() -> None:
+        # First pass after a short delay so API bind is not competing with Kite.
+        time.sleep(45.0)
+        while True:
+            try:
+                from risk.buy_book_watcher import push_buy_book_alerts
+
+                push_buy_book_alerts()
+            except Exception:
+                pass
+            low = str(os.getenv("QT_LOW_POWER", "")).strip() in {"1", "true", "TRUE", "yes"}
+            time.sleep(900.0 if low else 420.0)
+
+    try:
+        import threading
+
+        threading.Thread(target=_worker, name="active-buy-alerts", daemon=True).start()
+    except Exception:
+        _active_buy_alerts_started = False
 
 
 def _market_payload(*, allow_network: bool = False) -> dict:
@@ -899,6 +935,7 @@ def _build_dashboard_payload() -> dict:
         pass
     _schedule_regime_refresh()
     _schedule_institutional_refresh()
+    _schedule_active_buy_alerts()
     market = _market_payload(allow_network=False)
     scan = _scan_payload(record_limit=80)
     long_term = _long_term_payload(record_limit=40)

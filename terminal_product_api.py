@@ -567,17 +567,28 @@ def symbols_directory(q: str = "", limit: int = 0) -> dict[str, Any]:
 @app.get("/api/holdings")
 def holdings_book() -> dict[str, Any]:
     """Your demat holdings book (Zerodha sync or manual import). Never places orders."""
-    from product.holdings_book import build_holdings_payload
+    from product.holdings_book import build_holdings_payload, connection_status
 
-    return build_holdings_payload()
+    book = build_holdings_payload()
+    book["connection"] = connection_status()
+    return book
+
+
+@app.get("/api/holdings/status")
+def holdings_status() -> dict[str, Any]:
+    """Why My Holdings may be empty — Kite token + local file + Telegram config."""
+    from product.holdings_book import connection_status
+
+    return connection_status()
 
 
 @app.post("/api/holdings/sync")
-def holdings_sync() -> dict[str, Any]:
-    """Pull CNC holdings from Zerodha Kite when connected."""
+def holdings_sync(body: dict[str, Any] = Body(default_factory=dict)) -> dict[str, Any]:
+    """Pull CNC holdings from Zerodha Kite when connected. Notifies Telegram when configured."""
     from product.holdings_book import sync_from_kite
 
-    return sync_from_kite()
+    notify = bool((body or {}).get("notify", True))
+    return sync_from_kite(notify=notify)
 
 
 @app.post("/api/holdings/import")
@@ -586,13 +597,25 @@ def holdings_import(body: dict[str, Any] = Body(default_factory=dict)) -> dict[s
 
     Body: ``{"holdings": [{"tradingsymbol"|"symbol", "quantity", "average_price", ...}, ...]}``
     """
-    from product.holdings_book import enrich_ltp, save_holdings
+    from product.holdings_book import enrich_ltp, notify_holdings_telegram, save_holdings
 
     rows = list(body.get("holdings") or body.get("rows") or [])
     if not rows:
         raise HTTPException(status_code=400, detail="Provide holdings: [{symbol, quantity, average_price, ...}]")
-    book = save_holdings(rows, source=str(body.get("source") or "import"))
-    return enrich_ltp(book)
+    book = enrich_ltp(save_holdings(rows, source=str(body.get("source") or "import")))
+    if bool(body.get("notify", True)):
+        book["telegram"] = notify_holdings_telegram(book)
+    return book
+
+
+@app.post("/api/holdings/notify")
+def holdings_notify() -> dict[str, Any]:
+    """Re-send the current holdings book snapshot to Telegram."""
+    from product.holdings_book import build_holdings_payload, notify_holdings_telegram
+
+    book = build_holdings_payload()
+    telegram = notify_holdings_telegram(book)
+    return {"accepted": True, "telegram": telegram, "count": len(book.get("holdings") or [])}
 
 
 @app.get("/api/buy-book/symbols")

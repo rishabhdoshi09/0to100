@@ -931,6 +931,7 @@ export const syncBuyBookFromHoldings = (
   holdings_message?: string
   synced_from?: string
   honesty?: string
+  telegram?: { sent?: boolean; reason?: string; active_buys_sent?: boolean; active_buys_error?: string }
   book: BuyBookPayload
 }> =>
   fetch('/api/buy-book/sync-holdings', {
@@ -1331,6 +1332,19 @@ export type HoldingRow = {
   product?: string
 }
 
+export type HoldingsConnection = {
+  kite_api_key_present?: boolean
+  kite_connected?: boolean
+  holdings_file?: string
+  holdings_file_exists?: boolean
+  available?: boolean
+  count?: number
+  updated_at?: string
+  source?: string
+  message?: string
+  telegram_configured?: boolean
+}
+
 export type HoldingsBook = {
   schema_version: number
   available: boolean
@@ -1348,6 +1362,8 @@ export type HoldingsBook = {
   }
   message?: string
   synced?: boolean
+  connection?: HoldingsConnection
+  telegram?: { sent?: boolean; reason?: string; count?: number; active_buys_sent?: boolean }
   places_orders?: boolean
 }
 
@@ -1355,18 +1371,33 @@ export const fetchHoldings = (): Promise<HoldingsBook> =>
   fetch('/api/holdings', { headers: { Accept: 'application/json' } })
     .then((response) => json<HoldingsBook>(response))
 
-export const syncHoldings = (): Promise<HoldingsBook> =>
+export const fetchHoldingsStatus = (): Promise<HoldingsConnection> =>
+  fetch('/api/holdings/status', { headers: { Accept: 'application/json' } })
+    .then((response) => json<HoldingsConnection>(response))
+
+export const syncHoldings = (opts?: { notify?: boolean }): Promise<HoldingsBook> =>
   fetch('/api/holdings/sync', {
     method: 'POST',
-    headers: { Accept: 'application/json' },
+    headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+    body: JSON.stringify({ notify: opts?.notify ?? true }),
   }).then((response) => json<HoldingsBook>(response))
 
-export const importHoldings = (holdings: Array<Record<string, unknown>>, source = 'import'): Promise<HoldingsBook> =>
+export const importHoldings = (
+  holdings: Array<Record<string, unknown>>,
+  source = 'import',
+  opts?: { notify?: boolean },
+): Promise<HoldingsBook> =>
   fetch('/api/holdings/import', {
     method: 'POST',
     headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
-    body: JSON.stringify({ holdings, source }),
+    body: JSON.stringify({ holdings, source, notify: opts?.notify ?? true }),
   }).then((response) => json<HoldingsBook>(response))
+
+export const notifyHoldingsTelegram = (): Promise<{ accepted: boolean; telegram?: { sent?: boolean; reason?: string }; count?: number }> =>
+  fetch('/api/holdings/notify', {
+    method: 'POST',
+    headers: { Accept: 'application/json' },
+  }).then((response) => json(response))
 
 export const runDataJob = (jobId: string): Promise<{
   ok: boolean
