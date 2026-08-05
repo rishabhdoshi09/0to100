@@ -162,11 +162,17 @@ def radar_home_workspace() -> dict[str, Any]:
     scan = core._scan_payload()
     long_term = core._long_term_payload()
     from product.radar_workspace import build_radar_home
-    return build_radar_home(
+    home = build_radar_home(
         scan_payload=scan,
         long_term_payload=long_term,
         market=market,
     )
+    try:
+        from product.desk_composition import build_market_command
+
+        return build_market_command(home=home)
+    except Exception:
+        return home
 
 
 def compare_workspace(symbols: str = Query("", description="Comma-separated NSE symbols")) -> dict[str, Any]:
@@ -192,11 +198,16 @@ def watchlist_workspace() -> dict[str, Any]:
         scan_row = scan_map.get(sym)
         enriched = enrich_scan_row(scan_row or {"symbol": sym}, scanned_at=scan_at) if scan_row else {"symbol": sym}
         items.append({**row, "snapshot": enriched})
-    return {
-        "generated_at": datetime.now(timezone.utc).isoformat(),
-        "items": items,
-        "count": len(items),
-    }
+    try:
+        from product.desk_composition import build_watchlist_briefing
+
+        return build_watchlist_briefing(items)
+    except Exception:
+        return {
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "items": items,
+            "count": len(items),
+        }
 
 
 def watchlist_add(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:

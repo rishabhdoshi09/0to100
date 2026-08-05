@@ -187,6 +187,80 @@ export type StockWorkspace = {
   fno: Record<string, unknown>
   sources: IntelligenceSource[]
   next_actions: Array<{ control: ControlName | 'REFRESH_STOCK_FUNDAMENTALS'; label: string }>
+  desk_tape?: {
+    schema_version?: number
+    symbol?: string
+    title?: string
+    info_score_pct?: number
+    bullets?: string[]
+    evidence?: {
+      available?: boolean
+      score_pct?: number | null
+      fresh?: number
+      attached?: number
+      total?: number
+      missing?: string[]
+      note?: string
+    }
+    position?: {
+      in_buy_book?: boolean
+      in_holdings?: boolean
+      entry_price?: number | null
+      stop_price?: number | null
+      health?: {
+        available?: boolean
+        severity?: string
+        status_label?: string
+        warnings?: Array<{ severity?: string; text?: string }>
+      } | null
+    }
+    earnings?: {
+      available?: boolean
+      risk_level?: string
+      note?: string
+      days_to_earnings?: number | null
+      date?: string | null
+      confidence?: string
+    }
+    flows?: {
+      available?: boolean
+      bias?: string
+      note?: string
+      latest_fii_net_cr?: number | null
+      latest_dii_net_cr?: number | null
+      as_of?: string
+      bulk_deals?: Array<Record<string, unknown>>
+    }
+    scan?: {
+      setup?: string
+      score?: number | null
+      chase_risk?: boolean
+      relative_strength_proxy?: number | null
+      liquidity?: {
+        volume_ratio?: number | null
+        atr_pct?: number | null
+        from_high_pct?: number | null
+      }
+      note?: string
+    }
+    peers_snapshot?: {
+      average_pe?: number | null
+      pe_vs_peer_avg?: number | null
+      peer_rank?: number
+      total_peers?: number
+      peer_rank_verdict?: string
+      sector_leader?: boolean
+    }
+    top_news?: Array<{
+      title?: string
+      published_at?: string
+      impact_score?: number
+      source?: string
+    }>
+    outlook_thesis?: { label?: string; text?: string; engines?: string[] }
+    honesty?: string
+    places_orders?: boolean
+  }
 }
 
 export type CommandCenterWorkspace = {
@@ -594,6 +668,25 @@ export type RadarHome = {
     long_term_picks: ScannerWorkspaceRow[]
   }
   counts: { breakouts: number; momentum: number; long_term_picks: number }
+  command?: {
+    available?: boolean
+    posture?: string
+    posture_reason?: string
+    verdict_line?: string
+    regime?: string
+    flows_bias?: string
+    flows_note?: string
+    fii_net_cr?: number | null
+    dii_net_cr?: number | null
+    flows_as_of?: string
+    options_bias?: string
+    takeaways?: string[]
+    pulse_as_of?: string
+    active_buy_warnings?: number
+    active_buy_critical?: number
+    honesty?: string
+    low_power?: boolean
+  }
 }
 
 export const fetchRadarHome = (): Promise<RadarHome> =>
@@ -643,12 +736,22 @@ export type WatchlistItem = {
   stop_price?: number | null
   added_price?: number | null
   snapshot?: ScannerWorkspaceRow & Record<string, unknown>
+  briefing?: {
+    badges?: string[]
+    in_pulse_movers?: boolean
+    sniper_hit?: boolean
+    news_72h?: number
+    health_label?: string
+    changed_today?: boolean
+  }
 }
 
 export type WatchlistPayload = {
   generated_at: string
   items: WatchlistItem[]
   count: number
+  changed_today?: number
+  honesty?: string
 }
 
 export const fetchWatchlist = (): Promise<WatchlistPayload> =>

@@ -643,7 +643,7 @@ def build_stock_workspace(
             "honesty": "Evidence-only outlook — missing stays missing.",
         }
 
-    return _sanitize_json({
+    workspace_core = {
         "schema_version": 1,
         "generated_at": now.isoformat(),
         "symbol": symbol,
@@ -663,4 +663,18 @@ def build_stock_workspace(
         "fno": fno_match,
         "sources": sources,
         "next_actions": next_actions,
-    })
+    }
+    try:
+        from product.desk_composition import build_stock_desk_tape
+
+        workspace_core["desk_tape"] = build_stock_desk_tape(symbol, workspace=workspace_core)
+    except Exception as exc:
+        workspace_core["desk_tape"] = {
+            "available": False,
+            "symbol": symbol,
+            "bullets": [],
+            "note": f"Desk tape unavailable ({exc})",
+            "honesty": "Desk tape composes existing stores only.",
+            "places_orders": False,
+        }
+    return _sanitize_json(workspace_core)

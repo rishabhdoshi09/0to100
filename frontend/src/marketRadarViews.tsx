@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { ChartWorkspace, Panel } from './components'
+import { ChartWorkspace, EvidenceList, Panel } from './components'
 import { money, pct, words } from './format'
 import {
   addWatchlistItem,
@@ -193,10 +193,21 @@ export function RadarHomeView(props: ExperienceViewProps & {
         <div><span>NIFTY 1D</span><strong>{pct(radar?.nifty_change_1d ?? dashboard.market.nifty_change_1d)}</strong></div>
         <div><span>BREADTH</span><strong>{radar?.breadth || dashboard.market.breadth}</strong></div>
         <div><span>VIX</span><strong>{radar?.vix ?? dashboard.market.vix ?? '—'}</strong></div>
-        <div><span>LEADERS</span><strong>{(radar?.leaders || dashboard.market.leaders).slice(0, 3).join(', ') || '—'}</strong></div>
+        <div><span>POSTURE</span><strong>{radar?.command?.posture || '—'}</strong></div>
+        <div><span>FII/DII</span><strong>{radar?.command?.flows_bias || '—'}</strong></div>
+        <div><span>FII NET</span><strong>{radar?.command?.fii_net_cr != null ? `${radar.command.fii_net_cr}` : '—'}</strong></div>
+        <div><span>ACTIVE BUYS</span><strong>{radar?.command?.active_buy_warnings ?? 0} warn</strong></div>
         <div><span>LAST SCAN</span><strong>{radar?.scan_scanned_at || dashboard.scan.scanned_at || 'Not run'}</strong></div>
-        <div><span>DATA</span><strong>{dashboard.data.bhavcopy.latest_date || '—'}</strong></div>
       </div>
+
+      {(radar?.command?.takeaways || []).length > 0 && (
+        <Panel title="MARKET COMMAND — WHAT MATTERS NOW" subtitle={radar?.command?.verdict_line || radar?.command?.honesty || 'Pulse + flows + posture'}>
+          <EvidenceList title="Takeaways" items={(radar?.command?.takeaways || []).filter(Boolean)} tone="green" />
+          {radar?.command?.active_buy_critical ? (
+            <p className="panel-copy">Active Buys: {radar.command.active_buy_critical} critical structure warning(s) — open Active Buys.</p>
+          ) : null}
+        </Panel>
+      )}
 
       <LiveScanBanner scan={marketScan} depth={depth} label="Market scan" />
 
@@ -422,7 +433,14 @@ export function WatchlistView({ setActive, setSelected, onCompare }: {
   return (
     <section className="watchlist-view">
       <header className="radar-hero">
-        <div><span>WATCHLIST</span><h2>Track names you want to investigate</h2><p>Personal list — not a second alerts engine.</p></div>
+        <div>
+          <span>WATCHLIST</span>
+          <h2>Track names you want to investigate</h2>
+          <p>
+            Personal list with a daily briefing — scan setup, pulse movers, sniper hits, news buzz.
+            {payload?.changed_today != null ? ` · ${payload.changed_today} changed today` : ''}
+          </p>
+        </div>
       </header>
       <div className="watchlist-add">
         <input value={symbol} onChange={(e) => setSymbol(e.target.value)} placeholder="NSE symbol" />
@@ -430,13 +448,14 @@ export function WatchlistView({ setActive, setSelected, onCompare }: {
         <button type="button" disabled={busy} onClick={() => void add()}>Add</button>
       </div>
       <table className="radar-table">
-        <thead><tr><th>Symbol</th><th>Added</th><th>Setup</th><th>Notes</th><th>Actions</th></tr></thead>
+        <thead><tr><th>Symbol</th><th>Added</th><th>Setup</th><th>Briefing</th><th>Notes</th><th>Actions</th></tr></thead>
         <tbody>
           {(payload?.items || []).map((item) => (
             <tr key={item.id}>
               <td><button type="button" onClick={() => { setSelected(item.symbol); setActive('Stock Intelligence') }}>{item.symbol}</button></td>
               <td>{item.added_date}</td>
               <td>{String((item.snapshot as RadarRow)?.setup_label || item.snapshot?.status || '—')}</td>
+              <td>{(item.briefing?.badges || []).join(' · ') || (item.briefing?.changed_today ? 'changed' : '—')}</td>
               <td>{item.notes || '—'}</td>
               <td className="radar-action-row">
                 <button type="button" onClick={() => onCompare(item.symbol)}>Compare</button>

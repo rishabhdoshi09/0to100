@@ -735,7 +735,11 @@ export function ProductStockIntelligenceView(props: ViewProps) {
             <button type="button" onClick={() => onCompare(selected)}>⇔ Compare</button>
           )}
         </div>
-        <div className="stock-workspace-state"><span>{words(workspace?.state || 'LOADING')}</span><strong>{workspace?.confidence_pct ?? 0}%</strong><small>data confidence</small></div>
+        <div className="stock-workspace-state">
+          <span>{words(workspace?.state || 'LOADING')}</span>
+          <strong>{workspace?.desk_tape?.info_score_pct ?? workspace?.confidence_pct ?? 0}%</strong>
+          <small>info score</small>
+        </div>
       </header>
 
       <PreTradeCockpit cockpit={preTrade} />
@@ -761,6 +765,44 @@ export function ProductStockIntelligenceView(props: ViewProps) {
 
       {tab === 'Overview' && (
         <>
+          <Panel
+            title="DESK TAPE"
+            subtitle="Every store that already exists — price, setup, ownership flows, news, evidence, position health"
+          >
+            <div className="fact-grid">
+              <div><span>Info score</span><strong>{workspace?.desk_tape?.info_score_pct ?? workspace?.confidence_pct ?? 0}%</strong></div>
+              <div><span>Evidence</span><strong>{workspace?.desk_tape?.evidence?.score_pct ?? '—'}%</strong></div>
+              <div><span>Setup</span><strong>{workspace?.desk_tape?.scan?.setup || '—'}</strong></div>
+              <div><span>RS proxy</span><strong>{workspace?.desk_tape?.scan?.relative_strength_proxy ?? '—'}</strong></div>
+              <div><span>Vol ratio</span><strong>{workspace?.desk_tape?.scan?.liquidity?.volume_ratio ?? '—'}</strong></div>
+              <div><span>FII/DII</span><strong>{workspace?.desk_tape?.flows?.bias || '—'}</strong></div>
+              <div><span>Earnings</span><strong>{workspace?.desk_tape?.earnings?.risk_level || '—'}</strong></div>
+              <div>
+                <span>Position</span>
+                <strong>
+                  {workspace?.desk_tape?.position?.in_buy_book
+                    ? `Buy book · ${workspace?.desk_tape?.position?.health?.status_label || 'active'}`
+                    : workspace?.desk_tape?.position?.in_holdings
+                      ? `Holdings · ${workspace?.desk_tape?.position?.health?.status_label || 'held'}`
+                      : 'Not in book'}
+                </strong>
+              </div>
+            </div>
+            <EvidenceList title="What the desk sees" items={workspace?.desk_tape?.bullets || []} tone="green" />
+            {(workspace?.desk_tape?.top_news || []).length > 0 && (
+              <EvidenceList
+                title="Recent headlines"
+                items={(workspace?.desk_tape?.top_news || []).map((n) => String(n.title || '')).filter(Boolean)}
+                tone="red"
+              />
+            )}
+            {workspace?.desk_tape?.evidence?.missing?.length ? (
+              <p className="panel-copy">
+                Still missing: {workspace.desk_tape.evidence.missing.slice(0, 5).join(' · ')}. Use Outlook auto-fetch or Research Data.
+              </p>
+            ) : null}
+            <p className="panel-copy">{workspace?.desk_tape?.honesty}</p>
+          </Panel>
           <div className="stock-overview-grid">
             <Panel title="COMPANY SNAPSHOT" subtitle={workspace?.sector || 'Sector unknown'}>
               {workspace?.fundamentals.company_about
@@ -772,6 +814,7 @@ export function ProductStockIntelligenceView(props: ViewProps) {
                 <div><span>Trend</span><strong>{workspace?.technical.trend || '—'}</strong></div>
                 <div><span>EOD close</span><strong>{money(workspace?.technical.close)}</strong></div>
                 <div><span>Live LTP</span><strong>{liveTick?.price != null ? money(liveTick.price, liveTick.price >= 100 ? 1 : 2) : '—'}</strong></div>
+                <div><span>Peer rank</span><strong>{workspace?.desk_tape?.peers_snapshot?.peer_rank != null ? `${workspace.desk_tape.peers_snapshot.peer_rank}/${workspace.desk_tape.peers_snapshot.total_peers ?? '—'}` : '—'}</strong></div>
               </div>
             </Panel>
             <Panel title="DECISION SUMMARY" subtitle="Deterministic scan evidence — not investment advice">
