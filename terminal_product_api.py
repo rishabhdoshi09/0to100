@@ -611,10 +611,34 @@ def buy_book_symbols() -> dict[str, Any]:
 
 @app.get("/api/buy-book")
 def buy_book_status(fresh: bool = False) -> dict[str, Any]:
-    """Active Buys + technical health (MA/support/volume). Warnings only — never orders."""
+    """Active Buys with technicals + fundamentals. Warnings only — never orders."""
     from product.buy_health import evaluate_book
 
     return evaluate_book(force=bool(fresh))
+
+
+@app.post("/api/buy-book/sync-holdings")
+def buy_book_sync_holdings(body: dict[str, Any] = Body(default_factory=dict)) -> dict[str, Any]:
+    """Sync Zerodha/demat holdings into Active Buys for tracking.
+
+    Body: ``{"refresh_kite": true}`` (default true). Then re-evaluates the book.
+    """
+    try:
+        from product.buy_book import sync_from_holdings
+        from product.buy_health import evaluate_book, invalidate_eval_cache
+
+        payload = body or {}
+        sync = sync_from_holdings(refresh_kite=bool(payload.get("refresh_kite", True)))
+        invalidate_eval_cache()
+        book = evaluate_book(force=True)
+        return {
+            **sync,
+            "book": book,
+        }
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Holdings sync into Active Buys failed: {exc}") from exc
 
 
 @app.post("/api/buy-book")
@@ -633,6 +657,7 @@ def buy_book_add(body: dict[str, Any] = Body(default_factory=dict)) -> dict[str,
             stop_price=body.get("stop_price"),
             quantity=body.get("quantity") if body.get("quantity") is not None else body.get("qty"),
             notes=str(body.get("notes") or ""),
+            source=str(body.get("source") or "manual"),
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -644,7 +669,14 @@ def buy_book_add(body: dict[str, Any] = Body(default_factory=dict)) -> dict[str,
     )
     return {
         "accepted": True,
-        "item": {**item, "health": health, "severity": health.get("severity"), "status_label": health.get("status_label")},
+        "item": {
+            **item,
+            "health": health,
+            "severity": health.get("severity"),
+            "status_label": health.get("status_label"),
+            "technicals": health.get("technicals"),
+            "fundamentals": health.get("fundamentals"),
+        },
         "places_orders": False,
     }
 

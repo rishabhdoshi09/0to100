@@ -1,16 +1,21 @@
-"""Technical health for Active Buys — warnings only, never a sell ticket.
+"""Health for Active Buys — technicals + fundamentals, never a sell ticket.
 
-Evaluates each user-added buy against:
-  • EMA 20 / 50 / 200 stack (from official bhav history)
+Technicals (official bhav):
+  • EMA 20 / 50 / 200 stack
   • Major swing support (20d / 60d lows)
   • Volume dump / distribution day
-  • Optional user stop breach
-  • Optional entry drawdown
+  • Optional user stop breach / entry drawdown
 
-Missing history stays missing. Live LTP overlays when available; charts stay EOD.
+Fundamentals (Screener cache only — no invent, no live scrape on every refresh):
+  • Key ratios (P/E, ROE, debt when present)
+  • Sales / profit trend flags from cached profit-loss table
+  • Missing cache stays MISSING (open Stock Intelligence to fetch)
+
+Live LTP overlays when available; charts stay EOD. Never places orders.
 """
 from __future__ import annotations
 
+import re
 from typing import Any, Mapping
 
 import numpy as np
@@ -49,6 +54,165 @@ def _swing_support(lows: np.ndarray, lookback: int) -> float | None:
     return round(float(np.nanmin(window)), 2)
 
 
+def _ratio_map(key_ratios: Any) -> dict[str, str]:
+    out: dict[str, str] = {}
+    for row in key_ratios or []:
+        if not isinstance(row, Mapping):
+            continue
+        name = str(row.get("name") or row.get("label") or "").strip()
+        value = row.get("value")
+        if name and value not in (None, ""):
+            out[name.lower()] = str(value).strip()
+    return out
+
+
+def _parse_number(text: Any) -> float | None:
+    try:
+        if text in (None, ""):
+            return None
+        cleaned = re.sub(r"[^\d.\-]", "", str(text).replace(",", ""))
+        if cleaned in {"", "-", "."}:
+            return None
+        return float(cleaned)
+    except (TypeError, ValueError):
+        return None
+
+
+def _find_ratio(ratios: Mapping[str, str], *needles: str) -> float | None:
+    for key, value in ratios.items():
+        if any(n in key for n in needles):
+            return _parse_number(value)
+    return None
+
+
+def _pl_series(table: Any, *needles: str) -> list[float]:
+    for row in table or []:
+        if not isinstance(row, Mapping):
+            continue
+        label = str(row.get("row_label") or row.get("label") or "").strip().lower()
+        if not any(n in label for n in needles):
+            continue
+        values: list[float] = []
+        for key, raw in row.items():
+            if str(key).lower() in {"", "row_label", "label", "particulars", "particular"}:
+                continue
+            num = _parse_number(raw)
+            if num is not None:
+                values.append(num)
+        return values
+    return []
+
+
+def fundamentals_snapshot(symbol: str) -> dict[str, Any]:
+    """Cache-only fundamental lens for Active Buys. Missing stays missing."""
+    sym = str(symbol or "").strip().upper()
+    out: dict[str, Any] = {
+        "available": False,
+        "status": "MISSING",
+        "severity": "unknown",
+        "ratios": {},
+        "flags": [],
+        "about": "",
+        "fetched_at": "",
+        "freshness": "MISSING",
+        "note": "Fundamentals not in Screener cache — open Stock Intelligence → Retry fundamentals.",
+    }
+    try:
+        from reporting.evidence_intake import load_raw_fundamentals
+
+        raw = load_raw_fundamentals(sym, auto_fetch=False)
+    except Exception as exc:
+        out["note"] = f"Fundamentals unavailable ({exc})"
+        return out
+    if not raw.get("available"):
+        return out
+    data = dict(raw.get("data") or {})
+    ratios = _ratio_map(data.get("key_ratios"))
+    pe = _find_ratio(ratios, "stock p/e", "p/e", "pe")
+    roe = _find_ratio(ratios, "roe", "return on equity")
+    roce = _find_ratio(ratios, "roce")
+    debt = _find_ratio(ratios, "debt to equity", "debt/equity", "d/e")
+    sales_growth = _find_ratio(ratios, "sales growth", "revenue growth")
+    profit_growth = _find_ratio(ratios, "profit growth", "np growth")
+
+    sales = _pl_series(data.get("profit_loss"), "sales", "revenue")
+    profits = _pl_series(data.get("profit_loss"), "net profit", "profit after tax", "pat")
+    sales_yoy = None
+    profit_yoy = None
+    if len(sales) >= 2 and sales[-2] not in (0, None):
+        sales_yoy = round((sales[-1] / sales[-2] - 1.0) * 100.0, 1)
+    if len(profits) >= 2 and profits[-2] not in (0, None):
+        profit_yoy = round((profits[-1] / profits[-2] - 1.0) * 100.0, 1)
+
+    flags: list[dict[str, str]] = []
+    score = 0
+
+    def flag(sev: str, code: str, text: str) -> None:
+        nonlocal score
+        flags.append({"severity": sev, "code": code, "text": text})
+        score += {"critical": 30, "warn": 15, "info": 6, "good": 0}.get(sev, 0)
+
+    if pe is not None and pe < 0:
+        flag("warn", "NEG_PE", f"P/E is negative ({pe:.1f}) — earnings currently not supporting the price.")
+    elif pe is not None and pe >= 80:
+        flag("warn", "RICH_PE", f"P/E looks rich at {pe:.1f}x — valuation risk if growth disappoints.")
+    if debt is not None and debt >= 1.5:
+        flag("warn", "HIGH_DEBT", f"Debt/equity {debt:.2f} — balance-sheet leverage is elevated.")
+    if roe is not None and roe < 8:
+        flag("info", "LOW_ROE", f"ROE {roe:.1f}% — capital efficiency looks modest on cached figures.")
+    elif roe is not None and roe >= 18:
+        flag("good", "SOLID_ROE", f"ROE {roe:.1f}% — quality signal from cached fundamentals.")
+    yoy_sales = sales_growth if sales_growth is not None else sales_yoy
+    yoy_profit = profit_growth if profit_growth is not None else profit_yoy
+    if yoy_sales is not None and yoy_sales <= -10:
+        flag("warn", "SALES_SHRINK", f"Sales growth about {yoy_sales:+.1f}% — top-line is contracting.")
+    elif yoy_sales is not None and yoy_sales >= 15:
+        flag("good", "SALES_GROWTH", f"Sales growth about {yoy_sales:+.1f}% on cached periods.")
+    if yoy_profit is not None and yoy_profit <= -15:
+        flag("warn", "PROFIT_SHRINK", f"Profit growth about {yoy_profit:+.1f}% — earnings momentum is weak.")
+    elif yoy_profit is not None and yoy_profit >= 15:
+        flag("good", "PROFIT_GROWTH", f"Profit growth about {yoy_profit:+.1f}% on cached periods.")
+
+    if any(f["severity"] == "critical" for f in flags):
+        severity = "critical"
+    elif any(f["severity"] == "warn" for f in flags):
+        severity = "warn"
+    elif any(f["severity"] == "good" for f in flags) and not any(f["severity"] in {"warn", "critical"} for f in flags):
+        severity = "good"
+    elif flags:
+        severity = "info"
+    else:
+        severity = "info"
+        flags.append(
+            {
+                "severity": "info",
+                "code": "FUND_PRESENT",
+                "text": "Fundamentals cache present — no automatic red flags from available ratios.",
+            }
+        )
+
+    about = str(data.get("about") or "").strip()
+    return {
+        "available": True,
+        "status": str(raw.get("freshness") or "UNKNOWN"),
+        "severity": severity,
+        "risk_score": min(100, score),
+        "ratios": {
+            "pe": pe,
+            "roe": roe,
+            "roce": roce,
+            "debt_to_equity": debt,
+            "sales_growth_pct": yoy_sales,
+            "profit_growth_pct": yoy_profit,
+        },
+        "flags": flags,
+        "about": about[:280],
+        "fetched_at": str(raw.get("fetched_at") or ""),
+        "freshness": str(raw.get("freshness") or ""),
+        "note": "From Screener cache only — missing ratios stay blank; not a valuation call.",
+    }
+
+
 def evaluate_symbol(
     symbol: str,
     *,
@@ -56,7 +220,7 @@ def evaluate_symbol(
     stop_price: float | None = None,
     live_price: float | None = None,
 ) -> dict[str, Any]:
-    """Return health snapshot for one symbol from bhav + optional live print."""
+    """Return technical + fundamental health for one Active Buy symbol."""
     sym = str(symbol or "").strip().upper()
     out: dict[str, Any] = {
         "symbol": sym,
@@ -71,8 +235,10 @@ def evaluate_symbol(
         "supports": {},
         "averages": {},
         "structure": {},
+        "technicals": {"available": False},
+        "fundamentals": fundamentals_snapshot(sym),
         "vs_entry_pct": None,
-        "honesty": "Research warning only — not a sell order.",
+        "honesty": "Technicals + fundamentals research warning only — not a sell order.",
     }
     try:
         from data.bhavcopy_runtime import get_ohlcv
@@ -198,10 +364,45 @@ def evaluate_symbol(
     latest_index = data.index[-1]
     latest_date = str(getattr(latest_index, "date", lambda: latest_index)())
 
+    technicals = {
+        "available": True,
+        "severity": severity,
+        "status_label": label,
+        "risk_score": min(100, score),
+        "averages": {
+            "ema20": ema20,
+            "ema50": ema50,
+            "ema200": ema200,
+        },
+        "supports": {
+            "swing_20d": support_20,
+            "swing_60d": support_60,
+        },
+        "structure": {
+            "chg_1d_pct": chg_1d,
+            "chg_5d_pct": chg_5d,
+            "volume_ratio": vol_ratio,
+            "notes": structure_notes,
+        },
+        "warnings": warnings,
+        "as_of": latest_date,
+        "note": "Official daily history — charts stay EOD even when LTP overlays.",
+    }
+    fundamentals = out.get("fundamentals") or fundamentals_snapshot(sym)
+    # Blend: technicals drive primary label; fund warn/critical escalate one notch.
+    fund_sev = str(fundamentals.get("severity") or "unknown")
+    blend = severity
+    if severity == "good" and fund_sev == "warn":
+        blend, label = "warn", "WEAKENING"
+    elif severity in {"good", "info"} and fund_sev == "critical":
+        blend, label = "critical", "AT RISK"
+    elif severity == "info" and fund_sev == "warn":
+        blend, label = "warn", "WEAKENING"
+
     out.update(
         {
             "available": True,
-            "severity": severity,
+            "severity": blend,
             "status_label": label,
             "price": round(px, 2),
             "eod_close": round(eod, 2),
@@ -209,22 +410,12 @@ def evaluate_symbol(
             "price_source": price_source,
             "as_of": latest_date,
             "warnings": warnings,
-            "risk_score": min(100, score),
-            "supports": {
-                "swing_20d": support_20,
-                "swing_60d": support_60,
-            },
-            "averages": {
-                "ema20": ema20,
-                "ema50": ema50,
-                "ema200": ema200,
-            },
-            "structure": {
-                "chg_1d_pct": chg_1d,
-                "chg_5d_pct": chg_5d,
-                "volume_ratio": vol_ratio,
-                "notes": structure_notes,
-            },
+            "risk_score": min(100, score + int(fundamentals.get("risk_score") or 0) // 2),
+            "supports": technicals["supports"],
+            "averages": technicals["averages"],
+            "structure": technicals["structure"],
+            "technicals": technicals,
+            "fundamentals": fundamentals,
         }
     )
     return out
@@ -288,6 +479,8 @@ def evaluate_book(
         est_pnl = None
         if entry and entry > 0 and qty and qty > 0 and price and price > 0:
             est_pnl = round((price - entry) * qty, 2)
+        fundamentals = health.get("fundamentals") or {}
+        technicals = health.get("technicals") or {}
         evaluated.append(
             {
                 **dict(row),
@@ -300,6 +493,14 @@ def evaluate_book(
                 "chg_5d_pct": structure.get("chg_5d_pct"),
                 "est_pnl": est_pnl,
                 "result_label": _result_label(vs_entry, has_entry=entry is not None and entry > 0),
+                "technicals": technicals,
+                "fundamentals": fundamentals,
+                "tech_label": technicals.get("status_label") or health.get("status_label"),
+                "fund_label": (
+                    "MISSING"
+                    if not fundamentals.get("available")
+                    else str(fundamentals.get("severity") or "unknown").upper()
+                ),
             }
         )
 

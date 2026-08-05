@@ -188,3 +188,118 @@ def test_evaluate_book_sorts_risk_first(tmp_path, monkeypatch):
     assert payload["items"][0]["symbol"] == "AAA"
     assert payload["places_orders"] is False
     assert "results" in payload
+
+
+def test_sync_holdings_into_active_buys(tmp_path, monkeypatch):
+    from product import buy_book as BB
+    from product import holdings_book as HB
+
+    monkeypatch.setattr(BB, "DEFAULT_PATH", tmp_path / "buy_book.json")
+    monkeypatch.setattr(HB, "DEFAULT_PATH", tmp_path / "holdings.json")
+    HB.save_holdings(
+        [
+            {
+                "tradingsymbol": "INFY",
+                "quantity": 15,
+                "average_price": 1400,
+                "pnl": 1200,
+                "pnl_pct": 5.5,
+            },
+            {
+                "tradingsymbol": "TCS-BE",
+                "quantity": 2,
+                "average_price": 3200,
+                "pnl": -100,
+                "pnl_pct": -1.5,
+            },
+        ],
+        source="kite",
+    )
+    BB.add_item("MANUAL", entry_price=10, notes="keep me", source="manual")
+
+    report = BB.sync_from_holdings(refresh_kite=False)
+    assert report["upserted"] == 2
+    assert set(report["symbols"]) == {"INFY", "TCS"}
+    active = {r["symbol"]: r for r in BB.list_active()}
+    assert active["INFY"]["source"] == "zerodha"
+    assert active["INFY"]["entry_price"] == 1400
+    assert active["INFY"]["quantity"] == 15
+    assert active["TCS"]["entry_price"] == 3200
+    assert active["MANUAL"]["source"] == "manual"
+
+    # Drop INFY from demat — zerodha row should close; manual stays.
+    HB.save_holdings(
+        [{"tradingsymbol": "TCS", "quantity": 2, "average_price": 3200}],
+        source="kite",
+    )
+    again = BB.sync_from_holdings(refresh_kite=False)
+    assert "INFY" in again["closed_stale_zerodha"]
+    symbols = set(BB.symbols())
+    assert "INFY" not in symbols
+    assert "TCS" in symbols
+    assert "MANUAL" in symbols
+
+
+def test_fundamentals_snapshot_from_cache(monkeypatch):
+    from product import buy_health as BH
+
+    monkeypatch.setattr(
+        "reporting.evidence_intake.load_raw_fundamentals",
+        lambda symbol, auto_fetch=False: {
+            "available": True,
+            "fetched_at": "2026-08-01T00:00:00+00:00",
+            "freshness": "FRESH",
+            "data": {
+                "about": "IT services company",
+                "key_ratios": [
+                    {"name": "Stock P/E", "value": "25.5"},
+                    {"name": "ROE", "value": "22%"},
+                    {"name": "Debt to equity", "value": "0.1"},
+                ],
+                "profit_loss": [
+                    {"row_label": "Sales", "Mar 2024": 100, "Mar 2025": 120},
+                    {"row_label": "Net Profit", "Mar 2024": 20, "Mar 2025": 26},
+                ],
+            },
+        },
+    )
+    snap = BH.fundamentals_snapshot("INFY")
+    assert snap["available"] is True
+    assert snap["ratios"]["pe"] == 25.5
+    assert snap["ratios"]["roe"] == 22.0
+    assert snap["ratios"]["sales_growth_pct"] == 20.0
+    assert any(f["code"] == "SOLID_ROE" for f in snap["flags"])
+
+
+def test_evaluate_symbol_exposes_technicals_and_fundamentals(monkeypatch):
+    from product import buy_health as BH
+    import numpy as np
+    import pandas as pd
+
+    n = 220
+    close = np.linspace(100, 200, n)
+    frame = pd.DataFrame(
+        {"close": close, "high": close + 1, "low": close - 1, "volume": np.full(n, 500_000.0)},
+        index=pd.date_range("2025-01-01", periods=n, freq="B"),
+    )
+    monkeypatch.setattr("data.bhavcopy_runtime.get_ohlcv", lambda symbol: frame)
+    monkeypatch.setattr(
+        BH,
+        "fundamentals_snapshot",
+        lambda symbol: {
+            "available": True,
+            "status": "FRESH",
+            "severity": "good",
+            "risk_score": 0,
+            "ratios": {"pe": 18, "roe": 20},
+            "flags": [{"severity": "good", "code": "SOLID_ROE", "text": "ROE ok"}],
+            "about": "demo",
+            "fetched_at": "2026-08-01",
+            "freshness": "FRESH",
+            "note": "ok",
+        },
+    )
+    health = BH.evaluate_symbol("GOODCO", live_price=199.0)
+    assert health["technicals"]["available"] is True
+    assert health["fundamentals"]["available"] is True
+    assert health["technicals"]["averages"]["ema20"] is not None

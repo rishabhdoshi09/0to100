@@ -1,11 +1,10 @@
 """Active Buys book — stocks you are buying / holding by intent.
 
-Distinct from:
-  • watchlist (candidates)
-  • demat holdings (broker-owned)
-  • paper portfolio (simulated)
+Sources:
+  • manual add (user-authored)
+  • Zerodha / demat sync (``sync_from_holdings``) — tracks CNC holdings as active buys
 
-User-authored only. Never invents symbols, prices, or fills.
+Never invents symbols, prices, or fills. Never places orders.
 Persists to ``logs/product/buy_book.json``.
 """
 from __future__ import annotations
@@ -63,11 +62,11 @@ def empty_book() -> dict[str, Any]:
         "places_orders": False,
         "live_locked": True,
         "honesty": (
-            "Active Buys is your list of stocks you are buying or watching as buys. "
-            "Results compare your entry to live LTP or EOD close when available. "
-            "Health warnings use official history. "
-            "Optional quantity P&L is your estimate only — not demat truth. "
-            "Not a buy/sell ticket and never places orders."
+            "Active Buys tracks stocks you are buying — manually or synced from Zerodha holdings. "
+            "Each row emphasizes technicals (EMA/support/volume) and fundamentals (Screener cache). "
+            "Results compare your entry/avg to live LTP or EOD. "
+            "Zerodha sync uses demat avg + qty; estimate P&L is not a sell ticket. "
+            "Never places orders."
         ),
     }
 
@@ -114,14 +113,28 @@ def normalize_item(row: Mapping[str, Any] | None) -> dict[str, Any] | None:
     qty = _f(row.get("quantity") if row.get("quantity") is not None else row.get("qty"))
     if qty is not None and qty <= 0:
         qty = None
+    source = str(row.get("source") or "manual").strip().lower()
+    if source not in {"manual", "zerodha", "holdings"}:
+        source = "manual"
+    demat_pnl = _f(row.get("demat_pnl"))
+    demat_pnl_pct = _f(row.get("demat_pnl_pct"))
     return {
         "id": item_id,
         "symbol": symbol,
-        "entry_price": _f(row.get("entry_price") if row.get("entry_price") is not None else row.get("avg")),
+        "entry_price": _f(
+            row.get("entry_price")
+            if row.get("entry_price") is not None
+            else row.get("average_price")
+            if row.get("average_price") is not None
+            else row.get("avg")
+        ),
         "stop_price": _f(row.get("stop_price") if row.get("stop_price") is not None else row.get("stop")),
         "quantity": qty,
         "notes": str(row.get("notes") or "")[:240],
         "status": status,
+        "source": source,
+        "demat_pnl": demat_pnl,
+        "demat_pnl_pct": demat_pnl_pct,
         "added_at": str(row.get("added_at") or _utc_now()),
         "updated_at": str(row.get("updated_at") or _utc_now()),
     }
@@ -139,6 +152,9 @@ def add_item(
     stop_price: float | None = None,
     quantity: float | None = None,
     notes: str = "",
+    source: str = "manual",
+    demat_pnl: float | None = None,
+    demat_pnl_pct: float | None = None,
     path: Path | None = None,
 ) -> dict[str, Any]:
     book = load_book(path)
@@ -148,6 +164,9 @@ def add_item(
     items = list(book.get("items") or [])
     existing = next((r for r in items if r.get("symbol") == sym and r.get("status") == "active"), None)
     now = _utc_now()
+    src = str(source or "manual").strip().lower()
+    if src not in {"manual", "zerodha", "holdings"}:
+        src = "manual"
     if existing:
         existing["entry_price"] = entry_price if entry_price is not None else existing.get("entry_price")
         existing["stop_price"] = stop_price if stop_price is not None else existing.get("stop_price")
@@ -155,6 +174,13 @@ def add_item(
             existing["quantity"] = quantity if quantity > 0 else None
         if notes:
             existing["notes"] = str(notes)[:240]
+        # Zerodha sync may upgrade source; never downgrade a zerodha row to manual on empty sync.
+        if src in {"zerodha", "holdings"} or not existing.get("source"):
+            existing["source"] = src
+        if demat_pnl is not None:
+            existing["demat_pnl"] = demat_pnl
+        if demat_pnl_pct is not None:
+            existing["demat_pnl_pct"] = demat_pnl_pct
         existing["updated_at"] = now
         item = existing
     else:
@@ -166,6 +192,9 @@ def add_item(
                 "quantity": quantity,
                 "notes": notes,
                 "status": "active",
+                "source": src,
+                "demat_pnl": demat_pnl,
+                "demat_pnl_pct": demat_pnl_pct,
                 "added_at": now,
                 "updated_at": now,
             }
@@ -176,6 +205,85 @@ def add_item(
     saved = save_book(book, path)
     saved_item = next(r for r in saved["items"] if r["symbol"] == sym and r["status"] == "active")
     return saved_item
+
+
+def sync_from_holdings(
+    *,
+    refresh_kite: bool = True,
+    path: Path | None = None,
+) -> dict[str, Any]:
+    """Pull Zerodha/demat holdings into Active Buys for tracking.
+
+    - ``refresh_kite=True`` calls Kite sync first (when connected)
+    - Upserts each CNC holding as an active buy (avg → entry, qty preserved)
+    - Closes prior ``zerodha``/``holdings`` rows that are no longer in demat
+    - Leaves manually added buys untouched unless the same symbol is held
+    """
+    from product.holdings_book import build_holdings_payload, research_symbol, sync_from_kite
+
+    if refresh_kite:
+        holdings_payload = sync_from_kite()
+        if not holdings_payload.get("available") and not holdings_payload.get("synced"):
+            # Fall back to last saved book so UI can still track offline demat snapshot.
+            holdings_payload = build_holdings_payload()
+    else:
+        holdings_payload = build_holdings_payload()
+
+    holdings = [
+        row
+        for row in (holdings_payload.get("holdings") or [])
+        if isinstance(row, Mapping)
+    ]
+    held_symbols: set[str] = set()
+    upserted: list[dict[str, Any]] = []
+    for row in holdings:
+        tradingsymbol = str(row.get("tradingsymbol") or row.get("symbol") or "")
+        symbol = research_symbol(tradingsymbol) or _clean_symbol(tradingsymbol)
+        qty = _f(row.get("quantity") if row.get("quantity") is not None else row.get("qty"))
+        t1 = _f(row.get("t1_quantity"))
+        total_qty = (qty or 0) + (t1 or 0)
+        if total_qty <= 0 or not symbol:
+            continue
+        held_symbols.add(symbol)
+        avg = _f(row.get("average_price") if row.get("average_price") is not None else row.get("avg"))
+        item = add_item(
+            symbol,
+            entry_price=avg,
+            quantity=total_qty,
+            notes=str(row.get("notes") or f"Zerodha holding ({tradingsymbol or symbol})"),
+            source="zerodha",
+            demat_pnl=_f(row.get("pnl")),
+            demat_pnl_pct=_f(row.get("pnl_pct")),
+            path=path,
+        )
+        upserted.append(item)
+
+    closed: list[str] = []
+    book = load_book(path)
+    for row in list(book.get("items") or []):
+        if row.get("status") != "active":
+            continue
+        if str(row.get("source") or "") not in {"zerodha", "holdings"}:
+            continue
+        if str(row.get("symbol") or "") not in held_symbols:
+            set_status(str(row.get("id")), "closed", path=path)
+            closed.append(str(row.get("symbol")))
+
+    return {
+        "accepted": True,
+        "synced_from": str(holdings_payload.get("source") or ("kite" if refresh_kite else "file")),
+        "holdings_available": bool(holdings_payload.get("available")),
+        "holdings_message": str(holdings_payload.get("message") or ""),
+        "upserted": len(upserted),
+        "symbols": sorted(held_symbols),
+        "closed_stale_zerodha": closed,
+        "items": upserted,
+        "places_orders": False,
+        "honesty": (
+            "Zerodha holdings were mapped into Active Buys for tracking. "
+            "Entry = demat average price. QuantTerm does not place orders."
+        ),
+    }
 
 
 def remove_item(item_id: str, *, path: Path | None = None) -> bool:

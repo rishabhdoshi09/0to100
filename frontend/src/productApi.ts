@@ -782,6 +782,39 @@ export type BuyHealthWarning = {
   text: string
 }
 
+export type BuyBookFundamentals = {
+  available?: boolean
+  status?: string
+  severity?: string
+  risk_score?: number
+  ratios?: {
+    pe?: number | null
+    roe?: number | null
+    roce?: number | null
+    debt_to_equity?: number | null
+    sales_growth_pct?: number | null
+    profit_growth_pct?: number | null
+  }
+  flags?: BuyHealthWarning[]
+  about?: string
+  fetched_at?: string
+  freshness?: string
+  note?: string
+}
+
+export type BuyBookTechnicals = {
+  available?: boolean
+  severity?: string
+  status_label?: string
+  risk_score?: number
+  averages?: { ema20?: number | null; ema50?: number | null; ema200?: number | null }
+  supports?: { swing_20d?: number | null; swing_60d?: number | null }
+  structure?: Record<string, unknown>
+  warnings?: BuyHealthWarning[]
+  as_of?: string
+  note?: string
+}
+
 export type BuyBookHealth = {
   available: boolean
   severity?: string
@@ -796,6 +829,8 @@ export type BuyBookHealth = {
   supports?: { swing_20d?: number | null; swing_60d?: number | null }
   averages?: { ema20?: number | null; ema50?: number | null; ema200?: number | null }
   structure?: Record<string, unknown>
+  technicals?: BuyBookTechnicals
+  fundamentals?: BuyBookFundamentals
   vs_entry_pct?: number | null
   honesty?: string
 }
@@ -808,6 +843,9 @@ export type BuyBookItem = {
   quantity?: number | null
   notes?: string
   status?: string
+  source?: string
+  demat_pnl?: number | null
+  demat_pnl_pct?: number | null
   added_at?: string
   updated_at?: string
   health?: BuyBookHealth
@@ -819,6 +857,10 @@ export type BuyBookItem = {
   chg_5d_pct?: number | null
   est_pnl?: number | null
   result_label?: string
+  technicals?: BuyBookTechnicals
+  fundamentals?: BuyBookFundamentals
+  tech_label?: string
+  fund_label?: string
 }
 
 export type BuyBookResults = {
@@ -876,6 +918,25 @@ export const removeBuyBookItem = (itemId: string): Promise<{ accepted: boolean }
   fetch(`/api/buy-book/${encodeURIComponent(itemId)}`, {
     method: 'DELETE',
     headers: { Accept: 'application/json' },
+  }).then((response) => json(response))
+
+export const syncBuyBookFromHoldings = (
+  body?: { refresh_kite?: boolean },
+): Promise<{
+  accepted: boolean
+  upserted: number
+  symbols: string[]
+  closed_stale_zerodha?: string[]
+  holdings_available?: boolean
+  holdings_message?: string
+  synced_from?: string
+  honesty?: string
+  book: BuyBookPayload
+}> =>
+  fetch('/api/buy-book/sync-holdings', {
+    method: 'POST',
+    headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+    body: JSON.stringify(body || { refresh_kite: true }),
   }).then((response) => json(response))
 
 export type SymbolRatioRow = {

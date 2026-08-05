@@ -96,9 +96,12 @@ def _buy_context(symbol: str) -> dict[str, Any]:
     try:
         from product.holdings_book import build_holdings_payload
 
+        from product.holdings_book import research_symbol
+
         holdings = build_holdings_payload()
         for item in holdings.get("holdings") or holdings.get("items") or []:
-            if str(item.get("tradingsymbol") or item.get("symbol") or "").upper() != symbol:
+            held = research_symbol(str(item.get("tradingsymbol") or item.get("symbol") or ""))
+            if held != symbol:
                 continue
             out["in_holdings"] = True
             out["avg_price"] = _f(item.get("average_price") or item.get("avg_price"))
