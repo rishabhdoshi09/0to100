@@ -184,7 +184,7 @@ const pageSubtitles: Record<string, string> = {
   'Market Overview': 'Regime, breadth, volatility and sector leadership.',
   'News & Events': 'Dated market context with source health.',
   Education: 'Crunched news + macro/micro teach-ins for the share market — never invented blogs, never a signal.',
-  'Daily Pulse': 'Auto Daily Street Pulse — snapshot, sector heat, buzzing/strength/weak, breakouts, RS, options stance.',
+  'Daily Pulse': 'Simple daily market digest — what moved, what to watch, options mood. Send to Telegram anytime.',
   'US Market': 'US retail plane — NASDAQ listings, Yahoo EOD, S&P-scoped scan, paper autopilot only.',
   'US Scanner': 'US setups from Yahoo daily bars · liquid quality floor · no options overlay.',
   'US Stock': 'US ticker workspace — daily chart + last scan setup. Fundamentals/options marked unavailable.',
@@ -447,7 +447,7 @@ function App() {
     sniperBoardEval,
   }
 
-  const primaryPages = ['Home', 'Market Scanner', 'Confirmed Breakouts', 'Stock Intelligence', 'Long-Term Picks', 'Compare', 'Watchlist', 'Command Center', 'Scanner']
+  const primaryPages = ['Home', 'Daily Pulse', 'Market Scanner', 'Confirmed Breakouts', 'Stock Intelligence', 'Long-Term Picks', 'Compare', 'Watchlist', 'Command Center', 'Scanner']
   const showOpsRibbon = !primaryPages.includes(active)
 
   const renderView = () => {

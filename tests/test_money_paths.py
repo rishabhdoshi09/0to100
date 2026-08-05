@@ -1662,10 +1662,12 @@ class TestBrain:
         monkeypatch.setattr(brain, "_probe_macro", lambda m: {})   # no live news
         msg = brain.briefing_telegram("IN")
         assert "QuantTerm Brain" in msg and "GREEN LIGHT" in msg
-        assert "TATA" in msg and "TRENDING_BULL" in msg
-        assert "HEALTHY" in msg and "62%>50DMA" in msg     # breadth on the phone
-        assert "BULLISH" in msg                            # options vote on the phone
-        assert "read-only" in msg                          # never implies it trades
+        assert "TATA" in msg
+        assert "Market trend looks up" in msg              # plain English, not TRENDING_BULL
+        assert "50-day average" in msg or "Breadth:" in msg
+        assert "Options mood" in msg and "not a buy" in msg
+        assert "Read-only" in msg or "read-only" in msg
+        assert "Daily Pulse" in msg
 
     def test_briefing_pusher_window_dedupe_weekend(self, monkeypatch):
         import scan.auto_scan as a

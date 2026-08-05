@@ -866,9 +866,9 @@ def run_news_refresh(ctx) -> JobResult:
 
 
 def run_street_pulse(ctx) -> JobResult:
-    """Compose + persist Daily Street Pulse after scan/news evidence exists."""
+    """Compose + persist Daily Street Pulse, then Telegram when configured."""
     try:
-        from reports.street_pulse import build_pulse
+        from reports.street_pulse import build_pulse, pulse_to_telegram
 
         pulse = build_pulse(persist=True)
     except Exception as exc:
@@ -880,14 +880,32 @@ def run_street_pulse(ctx) -> JobResult:
         )
     gaps = len(pulse.get("gaps") or [])
     takeaways = len(pulse.get("takeaways") or [])
+    telegram: dict = {"sent": False, "configured": False}
+    try:
+        from alerts.telegram_alerts import AlertEngine
+
+        engine = AlertEngine()
+        if engine.is_configured():
+            ok = bool(engine.send(pulse_to_telegram(pulse)))
+            telegram = {"sent": ok, "configured": True}
+        else:
+            telegram = {"sent": False, "configured": False}
+    except Exception as exc:
+        telegram = {"sent": False, "configured": False, "error": str(exc)}
+    sent_bit = (
+        " · telegram sent"
+        if telegram.get("sent")
+        else (" · telegram not configured" if not telegram.get("configured") else " · telegram failed")
+    )
     return JobResult(
         JS.SUCCEEDED,
-        f"street pulse saved · {takeaways} takeaways · {gaps} gaps disclosed",
+        f"street pulse saved · {takeaways} takeaways · {gaps} gaps disclosed{sent_bit}",
         metadata={
             "date": pulse.get("date"),
             "scan_source": pulse.get("scan_source"),
             "scanned": pulse.get("scanned"),
             "gaps": gaps,
+            "telegram": telegram,
         },
     )
 

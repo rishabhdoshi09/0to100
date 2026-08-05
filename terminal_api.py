@@ -927,6 +927,26 @@ def street_pulse_status(force: bool = False) -> dict:
         }
 
 
+@app.post("/api/street-pulse/telegram")
+def street_pulse_telegram(force: bool = True) -> dict:
+    """Send Daily Pulse to Telegram (research digest only — never places orders)."""
+    try:
+        from reports.street_pulse import send_pulse_telegram
+
+        result = send_pulse_telegram(force_build=bool(force))
+        result["places_orders"] = False
+        result["live_locked"] = True
+        return result
+    except Exception as exc:
+        return {
+            "sent": False,
+            "configured": False,
+            "places_orders": False,
+            "live_locked": True,
+            "error": str(exc),
+        }
+
+
 @app.get("/api/operations")
 def operations_status() -> dict:
     return _operations_payload()

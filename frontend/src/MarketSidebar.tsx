@@ -3,6 +3,7 @@ import { money } from './format'
 
 const PRIMARY_NAV = [
   ['⌂', 'Home', 'Home'],
+  ['▦', 'Daily Pulse', 'Daily Pulse'],
   ['◎', 'Market Scanner', 'Market Scanner'],
   ['⚡', 'Confirmed Breakouts', 'Confirmed Breakouts'],
   ['◉', 'Stock Intelligence', 'Stock Intelligence'],
@@ -13,7 +14,6 @@ const PRIMARY_NAV = [
 
 const SECONDARY_NAV = [
   ['↗', 'Market Overview', 'Market Overview'],
-  ['▦', 'Daily Pulse', 'Daily Pulse'],
   ['◈', 'News & Events', 'News & Events'],
   ['✎', 'Education', 'Education'],
   ['▤', 'Research Data', 'Research Data'],

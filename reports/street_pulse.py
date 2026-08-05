@@ -596,35 +596,90 @@ def pulse_api_payload(*, force: bool = False) -> dict[str, Any]:
 
 
 def pulse_to_telegram(pulse: dict) -> str:
-    """Compact HTML version of the pulse for a Telegram morning message."""
-    lines = [f"<b>Daily Street Pulse — {pulse.get('date')}</b>"]
-    for t in pulse.get("takeaways") or []:
-        lines.append(f"• {t}")
+    """Compact plain-English Telegram pulse (HTML)."""
+    lines = [f"<b>Daily Pulse</b> — {pulse.get('date') or 'today'}"]
+    takeaways = list(pulse.get("takeaways") or [])[:4]
+    if takeaways:
+        lines.append("")
+        lines.append("<b>Today in short</b>")
+        for t in takeaways:
+            lines.append(f"• {t}")
     stance = ((pulse.get("snapshot") or {}).get("options_stance") or {}).get("stance")
     if stance:
-        lines.append(f"\nOptions stance: <b>{stance}</b> (research, not a buy)")
+        meaning = {
+            "SUPPORTIVE": "friendly for a long watch",
+            "CAUTION": "mixed — wait for a cleaner entry",
+            "HOSTILE": "not friendly for fresh longs",
+            "NEUTRAL": "balanced",
+            "INCOMPLETE": "not enough data",
+        }.get(str(stance).upper(), "see app")
+        lines.append(f"\nOptions mood: <b>{stance}</b> — {meaning} (not a buy)")
     sectors = pulse.get("sectors") or {}
     if sectors.get("available") and sectors.get("leaders"):
-        top = ", ".join(f"{r['sector']} ({r['chg_1d']:+.1f}%)" for r in sectors["leaders"][:3])
-        lines.append(f"Sector heat: {top}")
+        top = ", ".join(
+            f"{r.get('sector')} ({float(r.get('chg_1d') or 0):+.1f}%)"
+            for r in (sectors.get("leaders") or [])[:3]
+        )
+        lines.append(f"Strong sectors today: {top}")
     if pulse.get("buzzing"):
         b = pulse["buzzing"]
-        lines.append(f"\nBuzzing: <b>{b['symbol']}</b> — {b.get('note', '')}")
+        chg = b.get("change_pct")
+        vol = b.get("volume_ratio")
+        bit = []
+        if chg is not None:
+            bit.append(f"{float(chg):+.1f}%")
+        if vol is not None:
+            bit.append(f"{float(vol):.1f}× volume")
+        lines.append(
+            f"\nBuzzing stock: <b>{b.get('symbol')}</b>"
+            + (f" ({', '.join(bit)})" if bit else "")
+        )
     if pulse.get("strength"):
         s = pulse["strength"]
         dist = s.get("pivot_distance_pct")
-        entry = s.get("entry")
-        dist_txt = f"{dist:.1f}% from pivot" if dist is not None else "near pivot"
-        entry_txt = f"₹{entry:,.0f}" if entry else "pivot"
-        lines.append(f"Gaining strength: <b>{s['symbol']}</b> — {entry_txt} · {dist_txt}")
+        dist_txt = f"{float(dist):.1f}% below breakout level" if dist is not None else "near breakout level"
+        lines.append(f"Gaining strength: <b>{s.get('symbol')}</b> — {dist_txt}")
     if pulse.get("weak"):
         w = pulse["weak"]
-        lines.append(f"Losing momentum: <b>{w['symbol']}</b> — {w.get('note', '')}")
+        lines.append(f"Losing steam: <b>{w.get('symbol')}</b> — stay away for now")
     if pulse.get("relative_strength"):
-        syms = ", ".join(r["symbol"] for r in pulse["relative_strength"][:4])
-        lines.append(f"RS (scan leaders): {syms}")
+        syms = ", ".join(r.get("symbol") for r in (pulse.get("relative_strength") or [])[:4] if r.get("symbol"))
+        if syms:
+            lines.append(f"Relative strength leaders: {syms}")
+    if pulse.get("breakouts_today"):
+        syms = ", ".join(r.get("symbol") for r in (pulse.get("breakouts_today") or [])[:4] if r.get("symbol"))
+        if syms:
+            lines.append(f"Breakouts confirmed: {syms}")
     if pulse.get("breakouts_tomorrow"):
-        syms = ", ".join(r["symbol"] for r in pulse["breakouts_tomorrow"])
-        lines.append(f"\nTomorrow watch: {syms}")
-    lines.append("\nNot a buy ticket · paper-first research digest")
+        syms = ", ".join(r.get("symbol") for r in (pulse.get("breakouts_tomorrow") or [])[:4] if r.get("symbol"))
+        if syms:
+            lines.append(f"\nWatch tomorrow: {syms}")
+    gaps = list(pulse.get("gaps") or [])
+    if gaps:
+        lines.append(f"\nMissing data: {gaps[0]}")
+    lines.append("\n<i>Research digest only · not a buy ticket · paper-first</i>")
     return "\n".join(lines)
+
+
+def send_pulse_telegram(*, force_build: bool = True) -> dict:
+    """Build (optional) and send Daily Pulse to Telegram. Never places orders."""
+    try:
+        from alerts.telegram_alerts import AlertEngine
+    except Exception as exc:
+        return {"sent": False, "configured": False, "error": f"telegram module unavailable: {exc}"}
+    engine = AlertEngine()
+    if not engine.is_configured():
+        return {
+            "sent": False,
+            "configured": False,
+            "error": "Telegram not configured (set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID)",
+        }
+    pulse = build_pulse(persist=True) if force_build else (load_pulse() or build_pulse(persist=True))
+    ok = bool(engine.send(pulse_to_telegram(pulse)))
+    return {
+        "sent": ok,
+        "configured": True,
+        "date": pulse.get("date"),
+        "scan_source": pulse.get("scan_source"),
+        "error": None if ok else "Telegram send failed",
+    }

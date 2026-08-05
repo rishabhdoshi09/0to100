@@ -117,8 +117,26 @@ def test_build_pulse_persists_and_discloses_honesty(tmp_path, monkeypatch):
     assert loaded["buzzing"]["symbol"] == "ATHERENERG"
 
     tg = pulse_to_telegram(pulse)
-    assert "Daily Street Pulse" in tg
-    assert "Not a buy ticket" in tg
+    assert "Daily Pulse" in tg
+    assert "not a buy" in tg.lower()
+    assert "ATHERENERG" in tg
+
+
+def test_send_pulse_telegram_reports_unconfigured(monkeypatch):
+    from reports import street_pulse as SP
+
+    class _Eng:
+        def is_configured(self):
+            return False
+
+        def send(self, msg):
+            raise AssertionError("should not send")
+
+    monkeypatch.setattr("alerts.telegram_alerts.AlertEngine", lambda: _Eng())
+    monkeypatch.setattr(SP, "build_pulse", lambda persist=True: {"date": "05 August 2026"})
+    out = SP.send_pulse_telegram(force_build=True)
+    assert out["sent"] is False
+    assert out["configured"] is False
 
 
 def test_save_load_roundtrip(tmp_path):

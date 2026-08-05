@@ -624,41 +624,152 @@ def assess(market: str = "IN", capital: float = 100_000.0) -> dict:
     }
 
 
+def _simple_regime(regime: str) -> str:
+    r = str(regime or "").upper()
+    if r in {"TRENDING_BULL", "BULL", "RISK_ON"}:
+        return "Market trend looks up"
+    if r in {"TRENDING_BEAR", "BEAR", "RISK_OFF"}:
+        return "Market trend looks weak"
+    if r in {"CHOPPY", "RANGE", "SIDEWAYS"}:
+        return "Market is sideways / choppy"
+    if not r or r == "UNKNOWN":
+        return "Market trend unclear"
+    return f"Market regime: {r.replace('_', ' ').title()}"
+
+
+def _simple_posture_line(posture: str) -> str:
+    p = str(posture or "").upper()
+    return {
+        "AGGRESSIVE": "🟢 GREEN LIGHT — conditions look good (still paper-first)",
+        "NORMAL": "🔵 NORMAL — trade only clear setups, normal size",
+        "DEFENSIVE": "🟠 CAREFUL — keep size small today",
+        "STAND_ASIDE": "🔴 STAND ASIDE — avoid new risk today",
+    }.get(p, f"{p or 'UNKNOWN'} — check the app")
+
+
+def _simple_why(posture_reason: str, vitals: dict) -> str:
+    """One short why-line in plain English (no jargon dump)."""
+    raw = str(posture_reason or "").strip()
+    # Prefer a short mapped line from vitals when the Hindi/jargon reason is dense.
+    book = str(vitals.get("book_verdict") or "OK").upper()
+    if book == "DANGER":
+        return "Open risk in the book is too high — lighten first."
+    if str(vitals.get("edge_trend") or "") == "decaying":
+        return "Recent results are weaker than usual — do not increase size."
+    regime = str(vitals.get("regime") or "").upper()
+    if regime in {"TRENDING_BEAR", "BEAR", "RISK_OFF"}:
+        return "The tape is weak — new breakout longs are risky."
+    if str(vitals.get("breadth") or "").upper() == "NARROW":
+        return "Only a few stocks are leading — breakouts may fail."
+    if str(vitals.get("macro_mood") or "").upper() == "RISK_OFF":
+        return "Macro news is risk-off — stay careful."
+    # Soft-clean common Hindi/jargon fragments for phone read.
+    cleaned = (
+        raw.replace(" — ", ". ")
+        .replace("tape kamzor", "market is weak")
+        .replace("edge decaying", "recent edge is fading")
+        .replace("edge negative", "system edge is negative")
+        .replace("book caution", "portfolio risk needs care")
+        .replace("chhota size", "use small size")
+        .replace("sirf A+ setups", "only the best setups")
+        .replace("stops tight", "keep stops tight")
+        .replace("Kaam theek", "Things look steady")
+        .replace("discipline banaye rakho", "keep discipline")
+        .replace("lean-in nahi", "do not press size")
+        .replace("normal-plus size", "slightly larger size ok")
+        .replace("winners ko chalne do", "let winners run")
+    )
+    return cleaned[:180] if cleaned else "See the Daily Pulse tab for detail."
+
+
+def _simple_directive(text: str) -> str:
+    import re
+
+    t = str(text or "").strip()
+    # Drop a leading emoji / symbol run only (keep Hindi/English words intact).
+    t = re.sub(
+        r"^[\U0001F300-\U0001FAFF\u2600-\u27BF🛠🔧🛑📉🌡⏱⚠📊🌍🎯🏦🧩🔄🟢🔴🟠🔵➕➖•]+\s*",
+        "",
+        t,
+    )
+    replacements = (
+        ("Daemon ", "Background job "),
+        ("DEAD", "stopped"),
+        ("expectancy", "average result"),
+        ("Autopilot", "Paper autopilot"),
+        ("high-conviction setups", "strong setups"),
+        ("Fresh longs pe careful", "Be careful with new buys"),
+        ("size mat badhao", "do not increase size"),
+        ("naya trade avoid", "skip new trades"),
+        ("50DMA", "50-day average"),
+        ("max-pain", "options max-pain"),
+    )
+    for a, b in replacements:
+        t = t.replace(a, b)
+    return t[:220]
+
+
 def briefing_telegram(market: str = "IN", capital: float = 100_000.0) -> str:
-    """The Brain's verdict as a compact Telegram briefing (HTML). This is the
-    one message that lets the user skip opening the app: posture, why, vitals,
-    and the prioritised to-do — the whole board in a phone-sized read."""
+    """Compact Telegram briefing in plain English — phone-sized, read-only."""
     from datetime import datetime
 
     from core.market_clock import IST
     a = assess(market=market, capital=capital)
     v = a["vitals"]
-    _, label = posture_meta(a["posture"])
     cur = v.get("cur", "₹")
-    _tr = {"improving": "📈", "decaying": "📉", "stable": "➖"}.get(
-        v.get("edge_trend"), "")
-    ap_bit = "🤖 ARMED" if v.get("autopilot_armed") else "🤖 off"
+    edge = float(v.get("expectancy_r") or 0)
+    edge_word = {
+        "improving": "getting better",
+        "decaying": "getting weaker",
+        "stable": "steady",
+    }.get(str(v.get("edge_trend") or ""), "unknown")
+    book = str(v.get("book_verdict") or "OK")
+    risk_pct = float(v.get("open_risk_pct") or 0)
+    n_setups = int(v.get("n_buys") or 0)
+    n_strong = int(v.get("n_high_conviction") or 0)
+    ap = "Paper autopilot ON" if v.get("autopilot_armed") else "Paper autopilot OFF"
     day = v.get("day_pnl")
-    day_bit = f" ({cur}{day:+,.0f})" if day is not None else ""
-    _br = v.get("breadth", "")
-    br_bit = (f" · breadth <b>{_br}</b> ({v.get('pct_above_50', 0):.0f}%>50DMA)"
-              if _br else "")
-    _op = v.get("options_bias", "")
-    op_bit = f" · options <b>{_op}</b>" if _op and _op != "NEUTRAL" else ""
-    _mm = v.get("macro_mood", "")
-    macro_bit = (f" · macro <b>{_mm}</b>" if _mm in ("RISK_OFF", "CAUTIOUS")
-                 else "")
-    lines = [
-        f"🧠 <b>QuantTerm Brain</b> · {datetime.now(IST).strftime('%d %b')}",
-        f"<b>{label}</b>",
-        a["posture_reason"], "",
-        (f"tape <b>{v.get('regime', '?')}</b> · edge "
-         f"<b>{v.get('expectancy_r', 0):+.2f}R</b> {_tr}{br_bit}{op_bit}{macro_bit} · book "
-         f"<b>{v.get('book_verdict', 'OK')}</b> ({v.get('open_risk_pct', 0):.1f}%) "
-         f"· setups <b>{v.get('n_buys', 0)}</b> ({v.get('n_high_conviction', 0)} 🎯) "
-         f"· {ap_bit}{day_bit}"), "",
-        "<b>Aaj:</b>",
+    day_bit = f" · today {cur}{day:+,.0f}" if day is not None else ""
+
+    facts: list[str] = [
+        _simple_regime(str(v.get("regime") or "")),
+        f"System edge: {edge:+.2f}R ({edge_word})",
+        f"Portfolio risk: {book} ({risk_pct:.1f}% open)",
+        f"Setups ready: {n_setups} ({n_strong} strong)",
+        f"{ap}{day_bit}",
     ]
-    lines += [f"• {d['text']}" for d in a["directives"]]
-    lines.append("\n<i>Detail app ke Pulse tab par · ye read-only verdict hai</i>")
+    br = str(v.get("breadth") or "").upper()
+    if br:
+        pct50 = float(v.get("pct_above_50") or 0)
+        br_word = {
+            "HEALTHY": "many stocks above their 50-day average",
+            "NARROW": "few stocks leading the move",
+            "WEAK": "weak participation",
+        }.get(br, br.title())
+        facts.append(f"Breadth: {br_word}" + (f" ({pct50:.0f}%)" if pct50 else ""))
+    op = str(v.get("options_bias") or "").upper()
+    if op and op != "NEUTRAL":
+        op_word = "supportive" if op == "BULLISH" else "cautious" if op == "BEARISH" else op.title()
+        facts.append(f"Options mood: {op_word} (context only — not a buy)")
+    mm = str(v.get("macro_mood") or "").upper()
+    if mm in {"RISK_OFF", "CAUTIOUS"}:
+        facts.append(f"Macro news: {mm.replace('_', '-').title()}")
+
+    lines = [
+        f"<b>QuantTerm Brain</b> · {datetime.now(IST).strftime('%d %b')}",
+        _simple_posture_line(str(a.get("posture") or "")),
+        _simple_why(str(a.get("posture_reason") or ""), v),
+        "",
+        "<b>Quick facts</b>",
+    ]
+    lines += [f"• {f}" for f in facts]
+    lines += ["", "<b>Do today</b>"]
+    dirs = [_simple_directive(d.get("text", "")) for d in (a.get("directives") or [])]
+    dirs = [d for d in dirs if d]
+    if not dirs:
+        dirs = ["No urgent action — open Daily Pulse in the app for the full picture."]
+    lines += [f"• {d}" for d in dirs[:8]]
+    lines.append(
+        "\n<i>Read-only. Not a buy/sell order. Full detail → app Daily Pulse tab.</i>"
+    )
     return "\n".join(lines)

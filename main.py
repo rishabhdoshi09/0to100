@@ -503,13 +503,16 @@ def cmd_options_eod(args) -> None:
 
 def cmd_street_pulse(args) -> None:
     """Build or inspect the durable Daily Street Pulse research digest."""
-    from reports.street_pulse import build_pulse, load_pulse, pulse_to_telegram
+    from reports.street_pulse import build_pulse, load_pulse, pulse_to_telegram, send_pulse_telegram
 
     if args.status_only:
         cached = load_pulse()
         print(json.dumps(cached or {"available": False, "message": "No pulse saved yet"}, indent=2, default=str))
         return
     pulse = build_pulse(persist=True)
+    if args.send:
+        print(json.dumps(send_pulse_telegram(force_build=False), indent=2, default=str))
+        return
     if args.telegram:
         print(pulse_to_telegram(pulse))
         return
@@ -1308,6 +1311,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     sp.add_argument("--status", dest="status_only", action="store_true", help="Print last saved pulse JSON")
     sp.add_argument("--telegram", action="store_true", help="Print Telegram HTML compact form")
+    sp.add_argument("--send", action="store_true", help="Send Daily Pulse to Telegram (needs bot token + chat id)")
     sp.add_argument("--pdf", action="store_true", help="Also render reportlab PDF under logs/reports/")
 
     pv = sub.add_parser(

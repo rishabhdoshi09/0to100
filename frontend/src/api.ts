@@ -157,6 +157,24 @@ export const fetchStreetPulse = (force = false): Promise<StreetPulsePayload> =>
     headers: { Accept: 'application/json' },
   }).then((response) => json<StreetPulsePayload>(response))
 
+export const sendStreetPulseTelegram = (force = true): Promise<{
+  sent: boolean
+  configured?: boolean
+  date?: string
+  error?: string | null
+  places_orders?: boolean
+}> =>
+  fetch(`/api/street-pulse/telegram?force=${force ? 'true' : 'false'}`, {
+    method: 'POST',
+    headers: { Accept: 'application/json' },
+  }).then((response) => json<{
+    sent: boolean
+    configured?: boolean
+    date?: string
+    error?: string | null
+    places_orders?: boolean
+  }>(response))
+
 export const sendControl = (
   control: ControlName,
 ): Promise<{

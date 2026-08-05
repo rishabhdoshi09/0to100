@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { EmptyState, MetricCell, StatusBadge } from './designSystem'
 import { EvidenceList, MetricCard, Panel } from './components'
 import { words } from './format'
-import { fetchStreetPulse, type StreetPulsePayload } from './api'
+import { fetchStreetPulse, sendStreetPulseTelegram, type StreetPulsePayload } from './api'
 
 type Props = {
   setSelected?: (symbol: string) => void
@@ -46,6 +46,8 @@ export function StreetPulseView({ setSelected, setActive, onOpenPdf }: Props) {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [token, setToken] = useState(0)
+  const [sending, setSending] = useState(false)
+  const [sendNote, setSendNote] = useState('')
 
   useEffect(() => {
     let cancelled = false
@@ -71,6 +73,25 @@ export function StreetPulseView({ setSelected, setActive, onOpenPdf }: Props) {
     setActive?.('Stock Intelligence')
   }
 
+  const sendTelegram = async () => {
+    setSending(true)
+    setSendNote('')
+    try {
+      const result = await sendStreetPulseTelegram(true)
+      if (result.sent) {
+        setSendNote(`Sent to Telegram${result.date ? ` · ${result.date}` : ''}`)
+      } else if (result.configured === false) {
+        setSendNote(result.error || 'Telegram not configured — set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID')
+      } else {
+        setSendNote(result.error || 'Telegram send failed')
+      }
+    } catch (err) {
+      setSendNote(err instanceof Error ? err.message : 'Telegram send failed')
+    } finally {
+      setSending(false)
+    }
+  }
+
   const stance = pulse?.snapshot?.options_stance?.stance
   const sectors = pulse?.sectors
 
@@ -80,12 +101,16 @@ export function StreetPulseView({ setSelected, setActive, onOpenPdf }: Props) {
         <button type="button" disabled={loading} onClick={() => setToken((n) => n + 1)}>
           {loading ? 'Building pulse…' : 'Rebuild pulse'}
         </button>
+        <button type="button" disabled={sending || loading} onClick={() => void sendTelegram()}>
+          {sending ? 'Sending…' : 'Send to Telegram'}
+        </button>
         {onOpenPdf ? (
           <button type="button" onClick={onOpenPdf}>
             Open PDF
           </button>
         ) : null}
       </div>
+      {sendNote ? <p className="panel-copy">{sendNote}</p> : null}
 
       {loading && !pulse && <div className="large-empty">Assembling Daily Street Pulse from scan, bhav, options and news…</div>}
       {error && <EmptyState title="Pulse unavailable" detail={error} />}
