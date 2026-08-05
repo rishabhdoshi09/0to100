@@ -525,6 +525,7 @@ export type BuyBookItem = {
   symbol: string
   entry_price?: number | null
   stop_price?: number | null
+  quantity?: number | null
   notes?: string
   status?: string
   added_at?: string
@@ -534,6 +535,21 @@ export type BuyBookItem = {
   status_label?: string
   price?: number | null
   vs_entry_pct?: number | null
+  chg_1d_pct?: number | null
+  chg_5d_pct?: number | null
+  est_pnl?: number | null
+  result_label?: string
+}
+
+export type BuyBookResults = {
+  with_entry: number
+  missing_entry: number
+  up: number
+  down: number
+  flat: number
+  avg_vs_entry_pct?: number | null
+  est_pnl_total?: number | null
+  honesty?: string
 }
 
 export type BuyBookPayload = {
@@ -547,6 +563,7 @@ export type BuyBookPayload = {
     good: number
     unknown: number
   }
+  results?: BuyBookResults
   items: BuyBookItem[]
   places_orders?: boolean
   honesty?: string
@@ -560,6 +577,7 @@ export const addBuyBookItem = (body: {
   symbol: string
   entry_price?: number
   stop_price?: number
+  quantity?: number
   notes?: string
 }): Promise<{ accepted: boolean; item: BuyBookItem }> =>
   fetch('/api/buy-book', {

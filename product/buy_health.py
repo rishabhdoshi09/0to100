@@ -253,6 +253,14 @@ def evaluate_book(items: list[Mapping[str, Any]] | None = None) -> dict[str, Any
             stop_price=_f(row.get("stop_price")),
             live_price=ltp,
         )
+        structure = health.get("structure") or {}
+        entry = _f(row.get("entry_price"))
+        qty = _f(row.get("quantity"))
+        price = _f(health.get("price"))
+        vs_entry = _f(health.get("vs_entry_pct"))
+        est_pnl = None
+        if entry and entry > 0 and qty and qty > 0 and price and price > 0:
+            est_pnl = round((price - entry) * qty, 2)
         evaluated.append(
             {
                 **dict(row),
@@ -261,6 +269,10 @@ def evaluate_book(items: list[Mapping[str, Any]] | None = None) -> dict[str, Any
                 "status_label": health.get("status_label"),
                 "price": health.get("price"),
                 "vs_entry_pct": health.get("vs_entry_pct"),
+                "chg_1d_pct": structure.get("chg_1d_pct"),
+                "chg_5d_pct": structure.get("chg_5d_pct"),
+                "est_pnl": est_pnl,
+                "result_label": _result_label(vs_entry, has_entry=entry is not None and entry > 0),
             }
         )
 
@@ -279,13 +291,53 @@ def evaluate_book(items: list[Mapping[str, Any]] | None = None) -> dict[str, Any
         "good": sum(1 for r in evaluated if r.get("severity") == "good"),
         "unknown": sum(1 for r in evaluated if r.get("severity") == "unknown"),
     }
+    results = _results_summary(evaluated)
     base = empty_book()
     return {
         "available": True,
         "generated_at": __import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat(),
         "summary": summary,
+        "results": results,
         "items": evaluated,
         "places_orders": False,
         "live_locked": True,
         "honesty": base["honesty"],
+    }
+
+
+def _result_label(vs_entry: float | None, *, has_entry: bool) -> str:
+    if not has_entry or vs_entry is None:
+        return "NO ENTRY"
+    if vs_entry >= 0.5:
+        return "UP"
+    if vs_entry <= -0.5:
+        return "DOWN"
+    return "FLAT"
+
+
+def _results_summary(rows: list[Mapping[str, Any]]) -> dict[str, Any]:
+    """Book-level stock results from user entry vs current print — never invents fills."""
+    with_entry = [r for r in rows if _f(r.get("vs_entry_pct")) is not None]
+    missing_entry = len(rows) - len(with_entry)
+    ups = sum(1 for r in with_entry if float(r["vs_entry_pct"]) >= 0.5)
+    downs = sum(1 for r in with_entry if float(r["vs_entry_pct"]) <= -0.5)
+    flats = len(with_entry) - ups - downs
+    avg_vs = None
+    if with_entry:
+        avg_vs = round(sum(float(r["vs_entry_pct"]) for r in with_entry) / len(with_entry), 2)
+    pnl_rows = [r for r in rows if _f(r.get("est_pnl")) is not None]
+    est_pnl_total = round(sum(float(r["est_pnl"]) for r in pnl_rows), 2) if pnl_rows else None
+    return {
+        "with_entry": len(with_entry),
+        "missing_entry": missing_entry,
+        "up": ups,
+        "down": downs,
+        "flat": flats,
+        "avg_vs_entry_pct": avg_vs,
+        "est_pnl_total": est_pnl_total,
+        "honesty": (
+            "Results = your entry vs live LTP or EOD close. "
+            "Qty rupee P&L is an estimate you typed — not broker demat truth. "
+            "Missing entry stays missing."
+        ),
     }

@@ -120,16 +120,16 @@ export const PAGE_GUIDE: Record<string, PageGuide> = {
   },
   'Active Buys': {
     title: 'Active Buys',
-    purpose: 'Your list of stocks you are buying — watched for breaks of 20/50/200-day averages, swing support, volume dumps, and your stop.',
+    purpose: 'Stock results for names you are buying — entry → now %, 1D/5D move, optional qty estimate — plus technical health if averages or support break.',
     questions: [
+      'Am I up or down vs my entry?',
+      'What did this stock do today and over 5 sessions?',
       'Is price still above the 20/50/200-day averages?',
       'Did it break 20-session or 60-session swing support?',
-      'Is there a volume dump on a down day?',
-      'Am I below my entry or stop?',
       'Is this a research warning, not an automatic sell?',
     ],
-    action: 'Add the symbol with entry/stop if you have them. Refresh health during market hours. Open Stock Intelligence before changing the plan.',
-    doesNot: 'Not a broker order desk. Warnings do not sell for you. Missing history stays missing.',
+    action: 'Add symbol + entry (qty optional for ₹ estimate). Refresh results during market hours. Use My Holdings for demat P&L truth.',
+    doesNot: 'Not a broker order desk. Qty P&L is your estimate, not demat. Warnings do not sell for you. Missing entry stays missing.',
   },
   'US Market': {
     title: 'US Market',

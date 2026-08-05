@@ -605,7 +605,7 @@ def buy_book_status() -> dict[str, Any]:
 
 @app.post("/api/buy-book")
 def buy_book_add(body: dict[str, Any] = Body(default_factory=dict)) -> dict[str, Any]:
-    """Add/update a stock you are buying. Body: {symbol, entry_price?, stop_price?, notes?}."""
+    """Add/update a stock you are buying. Body: {symbol, entry_price?, stop_price?, quantity?, notes?}."""
     from product.buy_book import add_item
     from product.buy_health import evaluate_symbol
 
@@ -617,6 +617,7 @@ def buy_book_add(body: dict[str, Any] = Body(default_factory=dict)) -> dict[str,
             symbol,
             entry_price=body.get("entry_price"),
             stop_price=body.get("stop_price"),
+            quantity=body.get("quantity") if body.get("quantity") is not None else body.get("qty"),
             notes=str(body.get("notes") or ""),
         )
     except ValueError as exc:

@@ -189,7 +189,7 @@ const pageSubtitles: Record<string, string> = {
   'News & Events': 'Dated market context with source health.',
   Education: 'Crunched news + macro/micro teach-ins for the share market — never invented blogs, never a signal.',
   'Daily Pulse': 'Simple daily market digest — what moved, what to watch, options mood. Send to Telegram anytime.',
-  'Active Buys': 'Stocks you are buying — warns if price breaks major averages, swing support, or shows heavy selling.',
+  'Active Buys': 'Stock results for names you are buying — entry vs now, 1D/5D, plus warnings if averages or support break.',
   'US Market': 'US retail plane — NASDAQ listings, Yahoo EOD, S&P-scoped scan, paper autopilot only.',
   'US Scanner': 'US setups from Yahoo daily bars · liquid quality floor · no options overlay.',
   'US Stock': 'US ticker workspace — daily chart + last scan setup. Fundamentals/options marked unavailable.',

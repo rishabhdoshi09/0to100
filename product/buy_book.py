@@ -64,7 +64,9 @@ def empty_book() -> dict[str, Any]:
         "live_locked": True,
         "honesty": (
             "Active Buys is your list of stocks you are buying or watching as buys. "
-            "Health warnings use official history + live LTP when available. "
+            "Results compare your entry to live LTP or EOD close when available. "
+            "Health warnings use official history. "
+            "Optional quantity P&L is your estimate only — not demat truth. "
             "Not a buy/sell ticket and never places orders."
         ),
     }
@@ -109,11 +111,15 @@ def normalize_item(row: Mapping[str, Any] | None) -> dict[str, Any] | None:
     if status not in {"active", "closed", "paused"}:
         status = "active"
     item_id = str(row.get("id") or "").strip() or uuid.uuid4().hex[:12]
+    qty = _f(row.get("quantity") if row.get("quantity") is not None else row.get("qty"))
+    if qty is not None and qty <= 0:
+        qty = None
     return {
         "id": item_id,
         "symbol": symbol,
         "entry_price": _f(row.get("entry_price") if row.get("entry_price") is not None else row.get("avg")),
         "stop_price": _f(row.get("stop_price") if row.get("stop_price") is not None else row.get("stop")),
+        "quantity": qty,
         "notes": str(row.get("notes") or "")[:240],
         "status": status,
         "added_at": str(row.get("added_at") or _utc_now()),
@@ -131,6 +137,7 @@ def add_item(
     *,
     entry_price: float | None = None,
     stop_price: float | None = None,
+    quantity: float | None = None,
     notes: str = "",
     path: Path | None = None,
 ) -> dict[str, Any]:
@@ -144,6 +151,8 @@ def add_item(
     if existing:
         existing["entry_price"] = entry_price if entry_price is not None else existing.get("entry_price")
         existing["stop_price"] = stop_price if stop_price is not None else existing.get("stop_price")
+        if quantity is not None:
+            existing["quantity"] = quantity if quantity > 0 else None
         if notes:
             existing["notes"] = str(notes)[:240]
         existing["updated_at"] = now
@@ -154,6 +163,7 @@ def add_item(
                 "symbol": sym,
                 "entry_price": entry_price,
                 "stop_price": stop_price,
+                "quantity": quantity,
                 "notes": notes,
                 "status": "active",
                 "added_at": now,
