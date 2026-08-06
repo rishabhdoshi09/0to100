@@ -10,6 +10,12 @@ const KIND_CONTROL: Record<ScanKind, ControlName> = {
   SNIPER_BOARD_EVAL: 'RUN_SNIPER_BOARD_EVAL_NOW',
 }
 
+const KIND_CANCEL_CONTROL: Record<ScanKind, ControlName> = {
+  MARKET_SCAN: 'CANCEL_SCAN_NOW',
+  LONG_TERM_SCAN: 'CANCEL_LONG_TERM_SCAN_NOW',
+  SNIPER_BOARD_EVAL: 'CANCEL_SNIPER_BOARD_EVAL_NOW',
+}
+
 export const TERMINAL_STATUSES = new Set(['SUCCEEDED', 'FAILED', 'BLOCKED', 'CANCELLED'])
 
 export function isTerminalStatus(status: string): boolean {
@@ -133,6 +139,31 @@ export function formatElapsed(seconds: number): string {
   return `${h}h ${m % 60}m`
 }
 
+/** ETA from observed scan rate — null until enough progress exists. */
+export function estimateEtaSeconds(
+  operation: OperationRecord | null,
+  elapsedSeconds: number,
+): number | null {
+  if (!operation || !isActiveStatus(operation.status)) return null
+  const current = Number(operation.progress_current || 0)
+  const total = Number(operation.progress_total || 0)
+  const elapsed = Math.max(0, Number(elapsedSeconds) || 0)
+  if (!(current >= 3) || !(total > current) || !(elapsed >= 3)) return null
+  const rate = current / elapsed
+  if (!(rate > 0)) return null
+  const remaining = (total - current) / rate
+  if (!Number.isFinite(remaining) || remaining < 0) return null
+  // Ignore absurd estimates (e.g. history stage with tiny current).
+  if (remaining > 6 * 60 * 60) return null
+  return Math.round(remaining)
+}
+
+export function formatEta(seconds: number | null): string | null {
+  if (seconds == null || !Number.isFinite(seconds)) return null
+  if (seconds < 5) return 'ETA <5s'
+  return `ETA ~${formatElapsed(seconds)}`
+}
+
 export function qualifiedResultLine(operation: OperationRecord | null): string | null {
   if (!operation?.result) return null
   const result = operation.result
@@ -167,14 +198,19 @@ export type ScanRunnerHandle = {
   qualifiedLine: string | null
   percent: number | null
   elapsedSeconds: number
+  etaSeconds: number | null
+  etaLabel: string | null
   secondsSinceUpdate: number | null
   staleHint: string | null
   notice: string | null
   failed: boolean
   succeeded: boolean
+  cancelled: boolean
+  stopping: boolean
   workerOnline: boolean | null
   workerPid: number | null
   start: () => Promise<void>
+  stop: () => Promise<void>
   retry: () => Promise<void>
   dismissNotice: () => void
 }
@@ -194,6 +230,7 @@ export function useScanRunner(kind: ScanKind, options: ScanRunnerOptions = {}): 
   const { onComplete, seedOperation } = options
   const [operation, setOperation] = useState<OperationRecord | null>(null)
   const [isBusy, setIsBusy] = useState(false)
+  const [stopping, setStopping] = useState(false)
   const [notice, setNotice] = useState<string | null>(null)
   const [worker, setWorker] = useState<WorkerSnapshot>({ running: null })
   const mountedRef = useRef(true)
@@ -234,6 +271,7 @@ export function useScanRunner(kind: ScanKind, options: ScanRunnerOptions = {}): 
     clearPoll()
     trackedIdRef.current = null
     setIsBusy(false)
+    setStopping(false)
     startedAtRef.current = null
     if (op.status === 'SUCCEEDED') {
       setNotice('Scan complete — refreshing results…')
@@ -241,6 +279,8 @@ export function useScanRunner(kind: ScanKind, options: ScanRunnerOptions = {}): 
       window.setTimeout(() => {
         if (mountedRef.current) setNotice(null)
       }, 5000)
+    } else if (op.status === 'CANCELLED') {
+      setNotice('Scan stopped')
     } else {
       const detail = op.error_message || op.message || `Scan ${String(op.status).toLowerCase()}`
       setNotice(detail)
@@ -309,6 +349,7 @@ export function useScanRunner(kind: ScanKind, options: ScanRunnerOptions = {}): 
 
   const start = useCallback(async () => {
     setIsBusy(true)
+    setStopping(false)
     setNotice(null)
     completedIdRef.current = null
     try {
@@ -360,6 +401,34 @@ export function useScanRunner(kind: ScanKind, options: ScanRunnerOptions = {}): 
     }
   }, [beginPolling, handleTerminal, kind])
 
+  const stop = useCallback(async () => {
+    if (stopping) return
+    setStopping(true)
+    setNotice('Stopping scan…')
+    try {
+      await sendControl(KIND_CANCEL_CONTROL[kind])
+      const opId = trackedIdRef.current || operation?.operation_id
+      if (opId) {
+        const op = await fetchOperation(opId)
+        if (!mountedRef.current) return
+        setOperation(op)
+        if (isTerminalStatus(op.status)) {
+          handleTerminal(op)
+        } else {
+          beginPolling(op.operation_id)
+          setNotice('Stop requested — waiting for current batch to finish…')
+        }
+      } else {
+        setIsBusy(false)
+        setStopping(false)
+        setNotice('Scan stopped')
+      }
+    } catch (reason) {
+      setStopping(false)
+      setNotice(reason instanceof Error ? reason.message : 'Could not stop scan')
+    }
+  }, [beginPolling, handleTerminal, kind, operation?.operation_id, stopping])
+
   const retry = useCallback(async () => {
     await start()
   }, [start])
@@ -379,6 +448,11 @@ export function useScanRunner(kind: ScanKind, options: ScanRunnerOptions = {}): 
   const progressLine = useMemo(() => buildProgressLine(operation), [operation])
   const qualifiedLine = useMemo(() => qualifiedResultLine(operation), [operation])
   const percent = useMemo(() => progressPercent(operation), [operation])
+  const etaSeconds = useMemo(
+    () => estimateEtaSeconds(operation, elapsedSeconds),
+    [elapsedSeconds, operation, operation?.progress_current, operation?.progress_total, operation?.status],
+  )
+  const etaLabel = useMemo(() => formatEta(etaSeconds), [etaSeconds])
   const updateAge = useMemo(
     () => secondsSinceUpdate(operation),
     [operation, elapsedSeconds, operation?.updated_at, operation?.progress_current, operation?.stage],
@@ -388,6 +462,11 @@ export function useScanRunner(kind: ScanKind, options: ScanRunnerOptions = {}): 
     [operation, elapsedSeconds, operation?.updated_at, operation?.progress_current, operation?.stage],
   )
   const detailLine = useMemo(() => {
+    if (stopping) {
+      return progressLine
+        ? `${progressLine} · stopping after this batch`
+        : 'Stop requested — finishing current batch…'
+    }
     if (progressLine) return progressLine
     if (worker.ensure_error && (worker.running === false || worker.running == null)) {
       return worker.ensure_error
@@ -400,7 +479,7 @@ export function useScanRunner(kind: ScanKind, options: ScanRunnerOptions = {}): 
       return 'Restart the stack so market-ops can lease this job: bash scripts/stop_quantterm.sh && bash scripts/run_quantterm_complete.sh'
     }
     return null
-  }, [friendlyPhase, operation?.message, operation?.status, progressLine, staleHint, worker])
+  }, [friendlyPhase, operation?.message, operation?.status, progressLine, staleHint, stopping, worker])
 
   const isActive = Boolean(
     isBusy || (operation && isActiveStatus(operation.status)),
@@ -416,14 +495,19 @@ export function useScanRunner(kind: ScanKind, options: ScanRunnerOptions = {}): 
     qualifiedLine,
     percent,
     elapsedSeconds,
+    etaSeconds,
+    etaLabel,
     secondsSinceUpdate: updateAge,
     staleHint,
     notice,
     failed: operation?.status === 'FAILED' || operation?.status === 'BLOCKED',
     succeeded: operation?.status === 'SUCCEEDED',
+    cancelled: operation?.status === 'CANCELLED',
+    stopping,
     workerOnline: worker.running,
     workerPid: worker.worker_pid ?? null,
     start,
+    stop,
     retry,
     dismissNotice,
   }

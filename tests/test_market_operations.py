@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from operations.store import OperationStore, PENDING, RUNNING, SUCCEEDED
+from operations.store import CANCELLED, OperationStore, PENDING, RUNNING, SUCCEEDED
 
 
 def test_operation_queue_deduplicates_active_clicks(tmp_path: Path):
@@ -46,6 +46,23 @@ def test_operation_progress_is_durable(tmp_path: Path):
     assert final["status"] == SUCCEEDED
     assert final["progress_current"] == 4
     assert final["result"]["articles"] == 12
+
+
+def test_request_cancel_stops_pending_and_flags_running(tmp_path: Path):
+    store = OperationStore(tmp_path / "ops.db")
+    pending, _ = store.enqueue("MARKET_SCAN", lane="market_scan")
+    report = store.request_cancel_kinds(["MARKET_SCAN"])
+    assert report["cancelled_pending"] == 1
+    assert store.get(pending["operation_id"])["status"] == CANCELLED
+
+    running, _ = store.enqueue("MARKET_SCAN", lane="market_scan")
+    leased = store.lease_next("market_scan", worker_pid=9)
+    assert leased is not None
+    flagged = store.request_cancel(running["operation_id"])
+    assert flagged is not None
+    assert flagged["status"] == RUNNING
+    assert flagged["payload"]["cancel_requested"] is True
+    assert store.is_cancel_requested(running["operation_id"]) is True
 
 
 def test_worker_restart_requeues_orphans(tmp_path: Path):

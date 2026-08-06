@@ -16,6 +16,7 @@ import {
   type WatchlistPayload,
 } from './productApi'
 import { LiveScanBanner, type ExperienceViewProps } from './experience'
+import { formatElapsed } from './scanRunner'
 
 type RadarRow = ScannerWorkspaceRow & {
   breakout_state?: string
@@ -182,10 +183,22 @@ export function RadarHomeView(props: ExperienceViewProps & {
           <h2>{radar?.market_health || dashboard.market.health}</h2>
           <p>{dashboard.market.summary}</p>
         </div>
-        <div className="radar-hero-actions">
-          <button type="button" disabled={marketScan.isBusy} onClick={() => void marketScan.start()}>
-            {marketScan.isBusy ? 'Scanning…' : 'Scan now'}
-          </button>
+        <div className="radar-hero-actions" style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          {marketScan.isActive ? (
+            <button type="button" disabled={marketScan.stopping} onClick={() => void marketScan.stop()}>
+              {marketScan.stopping ? 'Stopping…' : 'Stop scan'}
+            </button>
+          ) : (
+            <button type="button" disabled={marketScan.isBusy} onClick={() => void marketScan.start()}>
+              Scan now
+            </button>
+          )}
+          {marketScan.isActive && (
+            <small style={{ alignSelf: 'center' }}>
+              {formatElapsed(marketScan.elapsedSeconds)}
+              {marketScan.etaLabel ? ` · ${marketScan.etaLabel}` : marketScan.percent != null ? ` · ${marketScan.percent}%` : ''}
+            </small>
+          )}
         </div>
       </header>
 
@@ -307,9 +320,23 @@ export function MarketScannerView(props: ExperienceViewProps & { onCompare: (sym
           <h2>Breakouts · Momentum · Conviction · F&O</h2>
           <p>{filtered.length} matches · universe {meta.universe.toLocaleString('en-IN')} · scan {meta.scanned_at || '—'}</p>
         </div>
-        <button type="button" disabled={activeScan.isBusy} onClick={() => void activeScan.start()}>
-          {activeScan.isBusy ? 'Scanning…' : tab === 'Long-Term' ? 'Run long-term scan' : 'Scan now'}
-        </button>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+          {activeScan.isActive ? (
+            <button type="button" disabled={activeScan.stopping} onClick={() => void activeScan.stop()}>
+              {activeScan.stopping ? 'Stopping…' : 'Stop scan'}
+            </button>
+          ) : (
+            <button type="button" disabled={activeScan.isBusy} onClick={() => void activeScan.start()}>
+              {tab === 'Long-Term' ? 'Run long-term scan' : 'Scan now'}
+            </button>
+          )}
+          {activeScan.isActive && (
+            <small>
+              {formatElapsed(activeScan.elapsedSeconds)}
+              {activeScan.etaLabel ? ` · ${activeScan.etaLabel}` : activeScan.percent != null ? ` · ${activeScan.percent}%` : ''}
+            </small>
+          )}
+        </div>
       </header>
 
       <LiveScanBanner scan={activeScan} depth={depth} label={tab === 'Long-Term' ? 'Long-term scan' : 'Market scan'} />

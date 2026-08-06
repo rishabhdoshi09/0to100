@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import {
   buildProgressLine,
+  estimateEtaSeconds,
   formatElapsed,
+  formatEta,
   friendlyStageLabel,
   isActiveStatus,
   isTerminalStatus,
@@ -78,6 +80,21 @@ describe('scanRunner semantics', () => {
   it('formats elapsed time without raw second spam', () => {
     expect(formatElapsed(12)).toBe('12s')
     expect(formatElapsed(211)).toBe('3m 31s')
+  })
+
+  it('estimates ETA only after enough progress exists', () => {
+    expect(estimateEtaSeconds(baseOperation({
+      progress_current: 1,
+      progress_total: 1000,
+    }), 10)).toBeNull()
+    const eta = estimateEtaSeconds(baseOperation({
+      progress_current: 100,
+      progress_total: 1000,
+    }), 50)
+    // 100 in 50s => 2/s => 900 left => ~450s
+    expect(eta).toBe(450)
+    expect(formatEta(eta)).toBe('ETA ~7m 30s')
+    expect(formatEta(3)).toBe('ETA <5s')
   })
 
   it('never invents a percentage without totals', () => {

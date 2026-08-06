@@ -26,6 +26,10 @@ def test_terminal_controls_have_no_live_broker_or_order_action():
         "RUN_US_DATA_PREPARE_NOW",
         "RUN_US_SCAN_NOW",
         "RUN_SNIPER_BOARD_EVAL_NOW",
+        "CANCEL_SCAN_NOW",
+        "CANCEL_LONG_TERM_SCAN_NOW",
+        "CANCEL_SNIPER_BOARD_EVAL_NOW",
+        "CANCEL_US_SCAN_NOW",
         "PAUSE_NEW_PAPER_ENTRIES",
         "RESUME_NEW_PAPER_ENTRIES",
     }
@@ -46,6 +50,12 @@ def test_market_controls_are_dispatched_outside_paper_autonomy():
         "RUN_US_DATA_PREPARE_NOW": "US_DATA_PREPARE",
         "RUN_US_SCAN_NOW": "US_MARKET_SCAN",
         "RUN_SNIPER_BOARD_EVAL_NOW": "SNIPER_BOARD_EVAL",
+    }
+    assert terminal_api._CANCEL_CONTROLS == {
+        "CANCEL_SCAN_NOW": ("MARKET_SCAN",),
+        "CANCEL_LONG_TERM_SCAN_NOW": ("LONG_TERM_SCAN", "LONG_TERM_REFRESH"),
+        "CANCEL_SNIPER_BOARD_EVAL_NOW": ("SNIPER_BOARD_EVAL",),
+        "CANCEL_US_SCAN_NOW": ("US_MARKET_SCAN",),
     }
     assert terminal_api._AUTONOMY_CONTROLS == {
         "RUN_CYCLE_NOW",

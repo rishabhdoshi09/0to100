@@ -799,7 +799,14 @@ export function AutomationView({ dashboard, runControl }: ViewProps) {
 
   return (
     <section className="workspace-view">
-      <div className="inline-actions"><button type="button" onClick={() => void runControl('RUN_SCAN_NOW')}>Start market scan</button><button type="button" onClick={() => void runControl('RUN_CYCLE_NOW')}>Request paper cycle</button><button type="button" onClick={() => void runControl('REFRESH_DATA_NOW')}>Prepare market data</button><button type="button" onClick={() => void runControl('RUN_FULL_UNIVERSE_BACKTEST_NOW')}>Backtest all stocks</button><button type="button" onClick={() => void runControl(a.new_paper_entries ? 'PAUSE_NEW_PAPER_ENTRIES' : 'RESUME_NEW_PAPER_ENTRIES')}>{a.new_paper_entries ? 'Pause entries' : 'Resume entries'}</button></div>
+      <div className="inline-actions" style={{ flexWrap: 'wrap', gap: 8 }}>
+        <button type="button" onClick={() => void runControl('RUN_SCAN_NOW')}>Start market scan</button>
+        <button type="button" onClick={() => void runControl('CANCEL_SCAN_NOW')}>Stop market scan</button>
+        <button type="button" onClick={() => void runControl('RUN_CYCLE_NOW')}>Request paper cycle</button>
+        <button type="button" onClick={() => void runControl('REFRESH_DATA_NOW')}>Prepare market data</button>
+        <button type="button" onClick={() => void runControl('RUN_FULL_UNIVERSE_BACKTEST_NOW')}>Backtest all stocks</button>
+        <button type="button" onClick={() => void runControl(a.new_paper_entries ? 'PAUSE_NEW_PAPER_ENTRIES' : 'RESUME_NEW_PAPER_ENTRIES')}>{a.new_paper_entries ? 'Pause entries' : 'Resume entries'}</button>
+      </div>
       <div className="view-metrics">
         <MetricCard label="PAPER SUPERVISOR" value={a.running ? 'ONLINE' : 'OFFLINE'} detail={`PID ${a.scheduler_owner_pid || '—'}`} tone={a.running ? 'green' : 'amber'} />
         <MetricCard label="STATE" value={a.state} detail={a.plain_state} />

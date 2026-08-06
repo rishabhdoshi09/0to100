@@ -1353,12 +1353,18 @@ _OPERATION_CONTROLS = {
     "RUN_US_SCAN_NOW": "US_MARKET_SCAN",
     "RUN_SNIPER_BOARD_EVAL_NOW": "SNIPER_BOARD_EVAL",
 }
+_CANCEL_CONTROLS = {
+    "CANCEL_SCAN_NOW": ("MARKET_SCAN",),
+    "CANCEL_LONG_TERM_SCAN_NOW": ("LONG_TERM_SCAN", "LONG_TERM_REFRESH"),
+    "CANCEL_SNIPER_BOARD_EVAL_NOW": ("SNIPER_BOARD_EVAL",),
+    "CANCEL_US_SCAN_NOW": ("US_MARKET_SCAN",),
+}
 _AUTONOMY_CONTROLS = {
     "RUN_CYCLE_NOW",
     "PAUSE_NEW_PAPER_ENTRIES",
     "RESUME_NEW_PAPER_ENTRIES",
 }
-_ALLOWED_CONTROLS = set(_OPERATION_CONTROLS) | _AUTONOMY_CONTROLS
+_ALLOWED_CONTROLS = set(_OPERATION_CONTROLS) | set(_CANCEL_CONTROLS) | _AUTONOMY_CONTROLS
 
 
 @app.post("/api/controls/{control_name}")
@@ -1366,6 +1372,24 @@ def control(control_name: str) -> dict:
     name = control_name.strip().upper()
     if name not in _ALLOWED_CONTROLS:
         raise HTTPException(status_code=400, detail="Control is not allowed through the terminal API")
+    if name in _CANCEL_CONTROLS:
+        from operations.store import OperationStore
+
+        kinds = _CANCEL_CONTROLS[name]
+        report = OperationStore(OPS_DB).request_cancel_kinds(kinds)
+        return {
+            "accepted": True,
+            "control": name,
+            "cancelled": True,
+            "kinds": list(report.get("kinds") or kinds),
+            "cancelled_pending": int(report.get("cancelled_pending") or 0),
+            "cancel_requested_running": int(report.get("cancel_requested_running") or 0),
+            "operation_ids": list(report.get("operation_ids") or []),
+            "transparency": (
+                "Stop requested — queued scans cancelled immediately; "
+                "a running scan stops after the current batch."
+            ),
+        }
     if name in _OPERATION_CONTROLS:
         from operations.market_ops import LANES
         from operations.store import OperationStore

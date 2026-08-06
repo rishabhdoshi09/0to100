@@ -192,14 +192,27 @@ export function LiveScanBanner({
           <strong>{label}</strong>
           <span>{scan.friendlyPhase}</span>
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
           {scan.isActive && scan.workerOnline != null && (
             <small className={scan.workerOnline ? 'positive' : 'negative'}>
               Worker {scan.workerOnline ? `ONLINE${scan.workerPid ? ` · ${scan.workerPid}` : ''}` : 'OFFLINE'}
             </small>
           )}
           {scan.isActive && (
-            <small className="live-scan-elapsed">{formatElapsed(scan.elapsedSeconds)}</small>
+            <small className="live-scan-elapsed">
+              {formatElapsed(scan.elapsedSeconds)}
+              {scan.etaLabel ? ` · ${scan.etaLabel}` : scan.percent != null ? ` · ${scan.percent}%` : ''}
+            </small>
+          )}
+          {scan.isActive && (
+            <button
+              type="button"
+              className="live-scan-stop"
+              disabled={scan.stopping}
+              onClick={() => void scan.stop()}
+            >
+              {scan.stopping ? 'Stopping…' : 'Stop scan'}
+            </button>
           )}
           {(showFailed || showNotice && !scan.isActive) && (
             <button type="button" className="live-scan-dismiss" onClick={() => scan.dismissNotice()} aria-label="Dismiss">×</button>
@@ -216,6 +229,7 @@ export function LiveScanBanner({
                   ? 'Market-ops worker is offline — scan stays queued until the worker is running'
                   : 'Still working — counts update as each batch finishes')}
             {scan.qualifiedLine ? ` · ${scan.qualifiedLine}` : ''}
+            {scan.etaLabel && scan.percent != null ? ` · ${scan.percent}% · ${scan.etaLabel}` : ''}
           </p>
           {scan.isActive && scan.staleHint && scan.progressLine && scan.staleHint !== scan.progressLine ? (
             <p className="live-scan-stale">{scan.staleHint}</p>
@@ -224,10 +238,11 @@ export function LiveScanBanner({
             <small className="live-scan-heartbeat">
               Engine heartbeat · last update {scan.secondsSinceUpdate}s ago
               {scan.operation?.stage ? ` · ${scan.operation.stage}` : ''}
+              {scan.etaLabel ? ` · ${scan.etaLabel} left` : ''}
             </small>
           ) : null}
           {scan.percent != null ? (
-            <div className="live-scan-progress" aria-label={`${scan.percent}% complete`}>
+            <div className="live-scan-progress" aria-label={`${scan.percent}% complete${scan.etaLabel ? `, ${scan.etaLabel}` : ''}`}>
               <b style={{ width: `${scan.percent}%` }} />
             </div>
           ) : (
@@ -242,6 +257,11 @@ export function LiveScanBanner({
             </small>
           )}
         </>
+      )}
+      {!scan.isActive && showNotice && (showFailed || scan.cancelled) && (
+        <div className="inline-actions" style={{ marginTop: 8 }}>
+          <button type="button" onClick={() => void scan.retry()}>Retry scan</button>
+        </div>
       )}
       {showNotice && !scan.isActive && (
         <div className="live-scan-notice">
@@ -429,13 +449,25 @@ export function EnhancedCommandCenterView(props: ExperienceViewProps) {
           <h2>{dashboard.market.health || 'Market state unavailable'}</h2>
           <p>{dashboard.market.summary}</p>
         </div>
-        <div className="experience-hero-actions">
-          <button type="button" disabled={marketScan.isBusy} onClick={() => void marketScan.start()}>
-            {marketScan.isBusy ? 'Scanning…' : 'Scan now'}
-          </button>
-          <button type="button" disabled={longTermScan.isBusy} onClick={() => void longTermScan.start()}>
-            {longTermScan.isBusy ? 'Scanning…' : 'Long-term scan'}
-          </button>
+        <div className="experience-hero-actions" style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          {marketScan.isActive ? (
+            <button type="button" disabled={marketScan.stopping} onClick={() => void marketScan.stop()}>
+              {marketScan.stopping ? 'Stopping…' : 'Stop market scan'}
+            </button>
+          ) : (
+            <button type="button" disabled={marketScan.isBusy} onClick={() => void marketScan.start()}>
+              Scan now
+            </button>
+          )}
+          {longTermScan.isActive ? (
+            <button type="button" disabled={longTermScan.stopping} onClick={() => void longTermScan.stop()}>
+              {longTermScan.stopping ? 'Stopping…' : 'Stop long-term'}
+            </button>
+          ) : (
+            <button type="button" disabled={longTermScan.isBusy} onClick={() => void longTermScan.start()}>
+              Long-term scan
+            </button>
+          )}
         </div>
       </header>
       <TodayStrip dashboard={dashboard} />
@@ -547,13 +579,20 @@ export function EnhancedScannerView(props: ExperienceViewProps) {
           <h2>Momentum and long-horizon research, one stock at a time</h2>
           <p>{sourceMessage} · {filtered.length} matches · universe {dashboard.scan.universe_size.toLocaleString('en-IN')}</p>
         </div>
-        <button
-          type="button"
-          disabled={activeScan.isBusy}
-          onClick={() => void activeScan.start()}
-        >
-          {activeScan.isBusy ? 'Scanning…' : mode === 'Long-Term' ? 'Run long-term scan' : 'Scan now'}
-        </button>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+          {activeScan.isActive ? (
+            <button type="button" disabled={activeScan.stopping} onClick={() => void activeScan.stop()}>
+              {activeScan.stopping ? 'Stopping…' : 'Stop scan'}
+            </button>
+          ) : (
+            <button type="button" disabled={activeScan.isBusy} onClick={() => void activeScan.start()}>
+              {mode === 'Long-Term' ? 'Run long-term scan' : 'Scan now'}
+            </button>
+          )}
+          {activeScan.isActive && activeScan.etaLabel ? (
+            <small>{activeScan.etaLabel}{activeScan.percent != null ? ` · ${activeScan.percent}%` : ''}</small>
+          ) : null}
+        </div>
       </header>
 
       <LiveScanBanner scan={activeScan} depth={depth} label={mode === 'Long-Term' ? 'Long-term scan' : 'Market scan'} />

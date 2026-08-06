@@ -450,7 +450,10 @@ class UnifiedScanner:
                 return
             try:
                 progress(int(current), int(total))
-            except Exception:
+            except Exception as exc:
+                # Cooperative stop from market-ops (ScanCancelled) must abort the pool.
+                if exc.__class__.__name__ == "ScanCancelled" or "Stopped by user" in str(exc):
+                    raise
                 pass
 
         if skip_prefetch:
@@ -496,7 +499,9 @@ class UnifiedScanner:
         _report(0, total)
 
         results: list[StockSignal] = []
-        with ThreadPoolExecutor(max_workers=self._max_workers) as pool:
+        pool = ThreadPoolExecutor(max_workers=self._max_workers)
+        cancelled = False
+        try:
             futures = {pool.submit(self._analyze, sym, get_cached(sym)): sym
                        for sym in available}
             done = 0
@@ -507,7 +512,13 @@ class UnifiedScanner:
                 now = _time.monotonic()
                 # Report often enough that a 2k-universe scan never looks frozen.
                 if done == 1 or done == total or done % 10 == 0 or (now - last_report) >= 1.5:
-                    _report(done, total)
+                    try:
+                        _report(done, total)
+                    except Exception as exc:
+                        if exc.__class__.__name__ == "ScanCancelled" or "Stopped by user" in str(exc):
+                            cancelled = True
+                            raise
+                        pass
                     last_report = now
                 try:
                     r = fut.result()
@@ -515,6 +526,14 @@ class UnifiedScanner:
                         results.append(r)
                 except Exception as exc:
                     log.debug("unified_analyze_failed", symbol=futures[fut], error=str(exc))
+        finally:
+            if cancelled:
+                try:
+                    pool.shutdown(wait=False, cancel_futures=True)
+                except TypeError:
+                    pool.shutdown(wait=False)
+            else:
+                pool.shutdown(wait=True)
 
         results.sort(key=lambda r: r.score, reverse=True)
         log.info("unified_scan_done", scanned=len(available), with_signals=len(results))

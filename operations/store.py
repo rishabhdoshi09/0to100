@@ -410,9 +410,102 @@ class OperationStore:
                     now,
                     now,
                     CANCELLED,
-                    "Cancelled before execution",
+                    "Stopped by user before execution",
                     PENDING,
                     *normalised,
                 ),
             )
             return int(cur.rowcount or 0)
+
+    def request_cancel(self, operation_id: str) -> dict[str, Any] | None:
+        """Cancel PENDING immediately; ask RUNNING ops to stop cooperatively."""
+        op_id = str(operation_id or "").strip()
+        if not op_id:
+            return None
+        now = time.time()
+        with self._connect() as con:
+            con.execute("BEGIN IMMEDIATE")
+            row = con.execute(
+                "SELECT * FROM operations WHERE operation_id=?",
+                (op_id,),
+            ).fetchone()
+            if row is None:
+                con.commit()
+                return None
+            status = str(row["status"] or "")
+            if status in TERMINAL:
+                con.commit()
+                return self._decode(row)
+            if status == PENDING:
+                con.execute(
+                    "UPDATE operations SET status=?,finished_at=?,updated_at=?,stage=?,message=? "
+                    "WHERE operation_id=? AND status=?",
+                    (
+                        CANCELLED,
+                        now,
+                        now,
+                        CANCELLED,
+                        "Stopped by user before execution",
+                        op_id,
+                        PENDING,
+                    ),
+                )
+            else:
+                try:
+                    payload = json.loads(row["payload_json"] or "{}")
+                except Exception:
+                    payload = {}
+                if not isinstance(payload, dict):
+                    payload = {}
+                payload["cancel_requested"] = True
+                payload["cancel_requested_at"] = now
+                con.execute(
+                    "UPDATE operations SET payload_json=?,updated_at=?,message=? "
+                    "WHERE operation_id=? AND status=?",
+                    (
+                        json.dumps(payload, default=str),
+                        now,
+                        "Stop requested — finishing current batch…",
+                        op_id,
+                        RUNNING,
+                    ),
+                )
+            row = con.execute(
+                "SELECT * FROM operations WHERE operation_id=?",
+                (op_id,),
+            ).fetchone()
+            con.commit()
+        return self._decode(row)
+
+    def request_cancel_kinds(self, kinds: Iterable[str]) -> dict[str, Any]:
+        """Stop queued + request cancel on running ops for the given kinds."""
+        normalised = sorted({str(kind).upper() for kind in kinds if str(kind).strip()})
+        pending_n = self.cancel_pending(normalised)
+        running_ids: list[str] = []
+        with self._connect() as con:
+            if normalised:
+                placeholders = ",".join("?" for _ in normalised)
+                rows = con.execute(
+                    f"SELECT operation_id FROM operations WHERE status=? AND kind IN ({placeholders})",
+                    (RUNNING, *normalised),
+                ).fetchall()
+                running_ids = [str(r["operation_id"]) for r in rows]
+        running_n = 0
+        for op_id in running_ids:
+            if self.request_cancel(op_id) is not None:
+                running_n += 1
+        return {
+            "kinds": normalised,
+            "cancelled_pending": pending_n,
+            "cancel_requested_running": running_n,
+            "operation_ids": running_ids,
+        }
+
+    def is_cancel_requested(self, operation_id: str) -> bool:
+        op = self.get(operation_id)
+        if not op:
+            return False
+        if str(op.get("status") or "") == CANCELLED:
+            return True
+        payload = op.get("payload") if isinstance(op.get("payload"), dict) else {}
+        return bool(payload.get("cancel_requested"))

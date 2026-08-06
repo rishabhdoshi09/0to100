@@ -647,6 +647,17 @@ body::before{
 .live-scan-banner-head strong{ display:block; font-size:11px; letter-spacing:.14em; color: var(--cyan); }
 .live-scan-banner-head span{ display:block; margin-top:4px; font-size:15px; font-weight:600; }
 .live-scan-elapsed{ color: var(--muted); font-variant-numeric: tabular-nums; }
+.live-scan-stop{
+  border:1px solid rgba(255,104,127,.55);
+  background:rgba(255,104,127,.12);
+  color:#ffd0d8;
+  border-radius:8px;
+  padding:6px 10px;
+  font-size:12px;
+  font-weight:600;
+  cursor:pointer;
+}
+.live-scan-stop:disabled{ opacity:.6; cursor:wait; }
 .live-scan-dismiss{ background:transparent; border:none; font-size:20px; cursor:pointer; color:var(--muted); }
 .live-scan-detail{ margin:8px 0 0; color:#c8d6ec; font-size:13px; }
 .live-scan-stale{ margin:6px 0 0; color:#f4b456; font-size:12px; }

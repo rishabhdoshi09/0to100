@@ -20,7 +20,7 @@ import time
 import traceback
 from typing import Any
 
-from operations.store import BLOCKED, FAILED, SUCCEEDED, OperationStore
+from operations.store import BLOCKED, CANCELLED, FAILED, SUCCEEDED, OperationStore
 
 # macOS default RLIMIT_NOFILE is often 256. Concurrent lanes + progress SQLite
 # opens can exhaust that even after connection.close() if other libs hold FDs.
@@ -73,6 +73,10 @@ FNO_FRESH_S = 24 * 60 * 60
 SCAN_FRESH_S = 6 * 60 * 60
 LONG_TERM_FRESH_S = 3 * 24 * 60 * 60
 HISTORY_DAYS = 500
+
+
+class ScanCancelled(RuntimeError):
+    """Raised when the user stops a scan mid-flight (cooperative abort)."""
 
 
 class OperationBlocked(RuntimeError):
@@ -324,6 +328,8 @@ class MarketOperationsWorker:
 
     def _progress(self, operation_id: str, stage: str, message: str,
                   current: int | None = None, total: int | None = None) -> None:
+        if self.store.is_cancel_requested(operation_id):
+            raise ScanCancelled("Stopped by user")
         self.store.progress(
             operation_id,
             stage=stage,
@@ -337,12 +343,17 @@ class MarketOperationsWorker:
         else:
             _emit("PROGRESS", f"{operation_id[:8]} · {stage} · {message}")
 
+    def _raise_if_cancelled(self, operation_id: str) -> None:
+        if self.store.is_cancel_requested(operation_id):
+            raise ScanCancelled("Stopped by user")
+
     def _ensure_history(self, operation_id: str, *, days: int = HISTORY_DAYS) -> dict[str, Any]:
         # Parallel lanes share one history prepare. Announce waits so the UI
         # never looks frozen on ACCEPTED while blocked on this lock.
         waited_s = 0.0
         while not self._history_lock.acquire(timeout=0.5):
             waited_s += 0.5
+            self._raise_if_cancelled(operation_id)
             self._progress(
                 operation_id,
                 "WAITING_HISTORY",
@@ -385,7 +396,9 @@ class MarketOperationsWorker:
 
     def _run_market_scan(self, operation: dict[str, Any]) -> dict[str, Any]:
         operation_id = str(operation["operation_id"])
+        self._raise_if_cancelled(operation_id)
         history = self._ensure_history(operation_id)
+        self._raise_if_cancelled(operation_id)
         self._progress(operation_id, "LOADING_UNIVERSE", "Loading approved NSE cash universe")
         from scan.market_scan_service import run_whole_market_scan
 
@@ -393,6 +406,7 @@ class MarketOperationsWorker:
             # History already prepared by _ensure_history. Mark the in-process
             # bhav cache warm so UnifiedScanner does not re-enter build_store /
             # apply_live (that looked like a frozen "Scanning 0/N").
+            self._raise_if_cancelled(operation_id)
             try:
                 from scan import bulk_fetcher as bf
 
@@ -404,6 +418,8 @@ class MarketOperationsWorker:
             if callable(progress) and total:
                 try:
                     progress(0, total)
+                except ScanCancelled:
+                    raise
                 except Exception:
                     pass
             return total
@@ -821,9 +837,26 @@ class MarketOperationsWorker:
             try:
                 result = self._execute(operation)
                 elapsed = time.monotonic() - started
+                # User may have clicked Stop just as work finished — honour cancel.
+                if self.store.is_cancel_requested(operation_id):
+                    raise ScanCancelled("Stopped by user")
                 message = f"{kind} completed in {elapsed:.1f}s"
                 self.store.finish(operation_id, status=SUCCEEDED, message=message, result=result)
                 _emit("DONE", f"{kind} · id={operation_id} · {elapsed:.1f}s · {result}")
+            except ScanCancelled as exc:
+                elapsed = time.monotonic() - started
+                try:
+                    self.store.finish(
+                        operation_id,
+                        status=CANCELLED,
+                        message=f"Stopped by user after {elapsed:.1f}s",
+                        result={"cancelled": True, "elapsed_s": round(elapsed, 1)},
+                        error_code="CANCELLED",
+                        error_message=str(exc),
+                    )
+                except Exception as finish_exc:
+                    _emit("WARN", f"finish CANCELLED failed for {operation_id}: {finish_exc}")
+                _emit("CANCELLED", f"{kind} · id={operation_id} · {elapsed:.1f}s · stopped by user")
             except OperationBlocked as exc:
                 elapsed = time.monotonic() - started
                 try:

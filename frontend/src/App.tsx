@@ -507,7 +507,8 @@ function App() {
   }
 
   const primaryPages = ['Home', 'Daily Pulse', 'Active Buys', 'Market Scanner', 'Confirmed Breakouts', 'Stock Intelligence', 'Long-Term Picks', 'Compare', 'Watchlist', 'Command Center', 'Scanner']
-  const showOpsRibbon = !primaryPages.includes(active)
+  // Keep ops chips visible while a scan is live so Stop/ETA context is never orphaned.
+  const showOpsRibbon = !primaryPages.includes(active) || scanPollingActive
 
   const renderView = () => {
     if (active === 'Compare') {
@@ -644,19 +645,25 @@ function App() {
             </strong>
             <p>
               {scanPollingActive
-                ? 'Market-ops may still be scanning — wait for the scan banner to finish, then Retry. Prefer a full restart only if the worker stays OFFLINE.'
+                ? `Market-ops may still be scanning${marketScan.etaLabel ? ` · ${marketScan.etaLabel}` : ''}. Use Stop scan, or wait for the banner to finish, then Retry.`
                 : 'Dashboard did not load. Market scan needs the Terminal API (:8765) and a live market-ops worker. Prefer a full restart over repeated Retry if this persists.'}
             </p>
             <pre className="api-error-detail">{error || 'No error detail returned by the browser fetch.'}</pre>
             <div className="inline-actions">
               <button type="button" onClick={() => void refresh({ soft: false })}>Retry connection</button>
-              <button
-                type="button"
-                disabled={marketScan.isBusy}
-                onClick={() => void marketScan.start()}
-              >
-                Try market scan anyway
-              </button>
+              {marketScan.isActive ? (
+                <button type="button" disabled={marketScan.stopping} onClick={() => void marketScan.stop()}>
+                  {marketScan.stopping ? 'Stopping…' : 'Stop scan'}
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  disabled={marketScan.isBusy}
+                  onClick={() => void marketScan.start()}
+                >
+                  Try market scan anyway
+                </button>
+              )}
             </div>
             <small>
               Restart: bash scripts/stop_quantterm.sh && bash scripts/run_quantterm_low_power.sh
@@ -667,6 +674,53 @@ function App() {
           <div className="api-degraded-banner" role="status">
             <strong>Loading QuantTerm…</strong>
             <p>Fetching dashboard. Sidebar should already be visible.</p>
+          </div>
+        )}
+        {scanPollingActive && (
+          <div className="live-scan-banner running" role="status" style={{ marginBottom: 12 }}>
+            <div className="live-scan-banner-head">
+              <div>
+                <strong>LIVE SCAN</strong>
+                <span>
+                  {marketScan.isActive
+                    ? marketScan.friendlyPhase
+                    : longTermScan.isActive
+                      ? longTermScan.friendlyPhase
+                      : sniperBoardEval.friendlyPhase}
+                </span>
+              </div>
+              <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+                <small className="live-scan-elapsed">
+                  {marketScan.isActive && (
+                    <>
+                      {marketScan.percent != null ? `${marketScan.percent}% · ` : ''}
+                      {marketScan.etaLabel || 'ETA calculating…'}
+                    </>
+                  )}
+                  {longTermScan.isActive && !marketScan.isActive && (
+                    <>
+                      {longTermScan.percent != null ? `${longTermScan.percent}% · ` : ''}
+                      {longTermScan.etaLabel || 'ETA calculating…'}
+                    </>
+                  )}
+                </small>
+                {marketScan.isActive && (
+                  <button type="button" className="live-scan-stop" disabled={marketScan.stopping} onClick={() => void marketScan.stop()}>
+                    {marketScan.stopping ? 'Stopping…' : 'Stop'}
+                  </button>
+                )}
+                {longTermScan.isActive && (
+                  <button type="button" className="live-scan-stop" disabled={longTermScan.stopping} onClick={() => void longTermScan.stop()}>
+                    {longTermScan.stopping ? 'Stopping…' : 'Stop LT'}
+                  </button>
+                )}
+                {sniperBoardEval.isActive && (
+                  <button type="button" className="live-scan-stop" disabled={sniperBoardEval.stopping} onClick={() => void sniperBoardEval.stop()}>
+                    {sniperBoardEval.stopping ? 'Stopping…' : 'Stop eval'}
+                  </button>
+                )}
+              </div>
+            </div>
           </div>
         )}
         {showOpsRibbon && <OperationsRibbon dashboard={dashboard} />}

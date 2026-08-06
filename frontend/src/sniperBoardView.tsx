@@ -81,9 +81,15 @@ export function ConfirmedBreakoutsView({
             fundamentals, and measured backtest edge — without inventing missing evidence.
           </p>
         </div>
-        <button type="button" disabled={evalScan.isBusy || hits.length === 0} onClick={() => void evalScan.start()}>
-          {evalScan.isBusy ? 'Evaluating…' : 'Evaluate board'}
-        </button>
+        {evalScan.isActive ? (
+          <button type="button" disabled={evalScan.stopping} onClick={() => void evalScan.stop()}>
+            {evalScan.stopping ? 'Stopping…' : 'Stop evaluation'}
+          </button>
+        ) : (
+          <button type="button" disabled={evalScan.isBusy || hits.length === 0} onClick={() => void evalScan.start()}>
+            Evaluate board
+          </button>
+        )}
       </header>
 
       <LiveScanBanner scan={evalScan} depth="professional" label="Sniper-board evaluation" />
