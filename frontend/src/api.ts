@@ -140,6 +140,7 @@ export type StreetPulsePayload = {
   breakouts_tomorrow?: StreetPulseStock[]
   global_cues?: Array<{ name?: string; price?: number; chg_pct?: number; source?: string }>
   headlines?: string[]
+  wrap_of_the_day?: WrapOfTheDayPayload
   scanned?: number
   scan_as_of?: string
   scan_source?: string
@@ -150,6 +151,20 @@ export type StreetPulsePayload = {
   honesty?: string
   disclaimer?: string
   error?: string
+}
+
+export type WrapOfTheDayPayload = {
+  available: boolean
+  date?: string
+  title?: string
+  bullets?: string[]
+  source?: string
+  raw_text?: string
+  updated_at?: string
+  message?: string
+  places_orders?: boolean
+  honesty?: string
+  telegram?: { sent?: boolean; reason?: string; count?: number; date?: string }
 }
 
 export type QuoteTick = {
@@ -208,6 +223,35 @@ export const sendStreetPulseTelegram = (force = true): Promise<{
     error?: string | null
     places_orders?: boolean
   }>(response))
+
+export const fetchWrapOfTheDay = (): Promise<WrapOfTheDayPayload> =>
+  fetch('/api/wrap-of-the-day', { headers: { Accept: 'application/json' } })
+    .then((response) => json<WrapOfTheDayPayload>(response))
+
+export const saveWrapOfTheDay = (body: {
+  text?: string
+  bullets?: string[]
+  date?: string
+  notify?: boolean
+  source?: string
+}): Promise<WrapOfTheDayPayload> =>
+  fetch('/api/wrap-of-the-day', {
+    method: 'POST',
+    headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  }).then((response) => json<WrapOfTheDayPayload>(response))
+
+export const notifyWrapOfTheDay = (): Promise<{
+  accepted: boolean
+  telegram?: { sent?: boolean; reason?: string; count?: number; date?: string }
+  available?: boolean
+  count?: number
+  date?: string
+}> =>
+  fetch('/api/wrap-of-the-day/notify', {
+    method: 'POST',
+    headers: { Accept: 'application/json' },
+  }).then((response) => json(response))
 
 export const sendControl = (
   control: ControlName,

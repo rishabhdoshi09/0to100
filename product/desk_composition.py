@@ -431,7 +431,17 @@ def build_market_command(*, home: Mapping[str, Any] | None = None) -> dict[str, 
     except Exception:
         pass
 
-    takeaways = list(pulse.get("takeaways") or pulse.get("headlines") or [])[:4]
+    wrap: dict[str, Any] = {}
+    try:
+        from product.wrap_of_the_day import load_wrap
+
+        wrap = load_wrap()
+    except Exception:
+        wrap = {}
+
+    takeaways = list((wrap.get("bullets") if wrap.get("available") else None) or [])
+    if not takeaways:
+        takeaways = list(pulse.get("takeaways") or pulse.get("headlines") or [])[:4]
     if not takeaways and brain.get("verdict_line"):
         takeaways = [brain.get("verdict_line")]
 
@@ -453,12 +463,21 @@ def build_market_command(*, home: Mapping[str, Any] | None = None) -> dict[str, 
             "takeaways": [
                 (t.get("text") if isinstance(t, Mapping) else str(t))
                 for t in takeaways
-            ][:4],
+            ][:5],
+            "wrap_of_the_day": {
+                "available": bool(wrap.get("available")),
+                "date": wrap.get("date") or "",
+                "bullets": list(wrap.get("bullets") or [])[:5],
+                "source": wrap.get("source") or "",
+            },
             "pulse_as_of": pulse.get("generated_at") or pulse.get("as_of") or "",
             "active_buy_warnings": buy_warnings,
             "active_buy_critical": buy_critical,
             "lane_counts": base.get("counts") or {},
-            "honesty": "Market command reuses Pulse, FII/DII, Brain/market view and Active Buys — no invented tape.",
+            "honesty": (
+                "Market command reuses Wrap of the Day (user-authored), Pulse, FII/DII, "
+                "Brain/market view and Active Buys — no invented tape."
+            ),
             "low_power": _low_power(),
         },
     }

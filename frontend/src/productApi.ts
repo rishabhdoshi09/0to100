@@ -681,6 +681,12 @@ export type RadarHome = {
     flows_as_of?: string
     options_bias?: string
     takeaways?: string[]
+    wrap_of_the_day?: {
+      available?: boolean
+      date?: string
+      bullets?: string[]
+      source?: string
+    }
     pulse_as_of?: string
     active_buy_warnings?: number
     active_buy_critical?: number

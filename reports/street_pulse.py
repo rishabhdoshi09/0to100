@@ -518,6 +518,18 @@ def build_pulse(*, persist: bool = True) -> dict[str, Any]:
         gaps.append("Sector heat unavailable")
 
     takeaways = _takeaways(snapshot, gainers, sectors, buzzing)
+    wrap: dict[str, Any] = {"available": False, "bullets": []}
+    try:
+        from product.wrap_of_the_day import load_wrap
+
+        wrap = load_wrap()
+        if wrap.get("available") and wrap.get("bullets"):
+            # User-authored wrap leads the cover; system takeaways stay as backup.
+            takeaways = [str(b) for b in wrap.get("bullets") or [] if str(b).strip()][:5]
+    except Exception as exc:
+        log.debug("pulse_wrap_miss", error=str(exc))
+        wrap = {"available": False, "bullets": [], "message": str(exc)}
+
     now = datetime.now(timezone.utc)
     pulse = {
         "schema_version": SCHEMA_VERSION,
@@ -527,6 +539,7 @@ def build_pulse(*, persist: bool = True) -> dict[str, Any]:
         "date": datetime.now().strftime("%d %B %Y"),
         "generated_at": now.isoformat(),
         "takeaways": takeaways,
+        "wrap_of_the_day": wrap,
         "snapshot": snapshot,
         "sectors": sectors,
         "gainers": gainers,
@@ -586,20 +599,41 @@ def load_pulse(path: str | Path | None = None) -> dict[str, Any] | None:
         return None
 
 
+def _attach_live_wrap(pulse: dict[str, Any]) -> dict[str, Any]:
+    """Refresh wrap on read so a new paste shows without full pulse rebuild."""
+    try:
+        from product.wrap_of_the_day import load_wrap
+
+        wrap = load_wrap()
+        pulse["wrap_of_the_day"] = wrap
+        if wrap.get("available") and wrap.get("bullets"):
+            pulse["takeaways"] = [str(b) for b in wrap.get("bullets") or [] if str(b).strip()][:5]
+    except Exception:
+        pass
+    return pulse
+
+
 def pulse_api_payload(*, force: bool = False) -> dict[str, Any]:
     """API helper — reuse persisted pulse unless force rebuild requested."""
     if not force:
         cached = load_pulse()
         if cached and cached.get("available"):
-            return cached
-    return build_pulse(persist=True)
+            return _attach_live_wrap(cached)
+    return _attach_live_wrap(build_pulse(persist=True))
 
 
 def pulse_to_telegram(pulse: dict) -> str:
     """Compact plain-English Telegram pulse (HTML)."""
     lines = [f"<b>Daily Pulse</b> — {pulse.get('date') or 'today'}"]
-    takeaways = list(pulse.get("takeaways") or [])[:4]
-    if takeaways:
+    wrap = pulse.get("wrap_of_the_day") or {}
+    wrap_bullets = list(wrap.get("bullets") or []) if isinstance(wrap, dict) else []
+    takeaways = list(pulse.get("takeaways") or [])[:5]
+    if wrap_bullets:
+        lines.append("")
+        lines.append("<b>Wrap of the Day</b>")
+        for i, t in enumerate(wrap_bullets[:5], 1):
+            lines.append(f"{i}) {t}")
+    elif takeaways:
         lines.append("")
         lines.append("<b>Today in short</b>")
         for t in takeaways:

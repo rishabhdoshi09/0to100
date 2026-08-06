@@ -201,7 +201,14 @@ export function RadarHomeView(props: ExperienceViewProps & {
       </div>
 
       {(radar?.command?.takeaways || []).length > 0 && (
-        <Panel title="MARKET COMMAND — WHAT MATTERS NOW" subtitle={radar?.command?.verdict_line || radar?.command?.honesty || 'Pulse + flows + posture'}>
+        <Panel
+          title={radar?.command?.wrap_of_the_day?.available ? 'WRAP OF THE DAY' : 'MARKET COMMAND — WHAT MATTERS NOW'}
+          subtitle={
+            radar?.command?.wrap_of_the_day?.available
+              ? `User-authored · ${radar.command.wrap_of_the_day.date || 'today'}`
+              : radar?.command?.verdict_line || radar?.command?.honesty || 'Pulse + flows + posture'
+          }
+        >
           <EvidenceList title="Takeaways" items={(radar?.command?.takeaways || []).filter(Boolean)} tone="green" />
           {radar?.command?.active_buy_critical ? (
             <p className="panel-copy">Active Buys: {radar.command.active_buy_critical} critical structure warning(s) — open Active Buys.</p>

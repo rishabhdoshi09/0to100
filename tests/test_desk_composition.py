@@ -72,6 +72,10 @@ def test_market_command_attaches_to_home(tmp_path, monkeypatch):
         encoding="utf-8",
     )
     monkeypatch.setattr(
+        "product.wrap_of_the_day.load_wrap",
+        lambda date=None, path=None: {"available": False, "bullets": []},
+    )
+    monkeypatch.setattr(
         DC,
         "_brain_posture_light",
         lambda: {

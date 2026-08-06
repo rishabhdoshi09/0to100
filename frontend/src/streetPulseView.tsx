@@ -2,7 +2,13 @@ import { useEffect, useState } from 'react'
 import { EmptyState, MetricCell, StatusBadge } from './designSystem'
 import { EvidenceList, MetricCard, Panel } from './components'
 import { words } from './format'
-import { fetchStreetPulse, sendStreetPulseTelegram, type StreetPulsePayload } from './api'
+import {
+  fetchStreetPulse,
+  notifyWrapOfTheDay,
+  saveWrapOfTheDay,
+  sendStreetPulseTelegram,
+  type StreetPulsePayload,
+} from './api'
 
 type Props = {
   setSelected?: (symbol: string) => void
@@ -48,6 +54,9 @@ export function StreetPulseView({ setSelected, setActive, onOpenPdf }: Props) {
   const [token, setToken] = useState(0)
   const [sending, setSending] = useState(false)
   const [sendNote, setSendNote] = useState('')
+  const [wrapText, setWrapText] = useState('')
+  const [wrapBusy, setWrapBusy] = useState('')
+  const [wrapNote, setWrapNote] = useState('')
 
   useEffect(() => {
     let cancelled = false
@@ -55,7 +64,13 @@ export function StreetPulseView({ setSelected, setActive, onOpenPdf }: Props) {
     setError('')
     fetchStreetPulse(token > 0)
       .then((payload) => {
-        if (!cancelled) setPulse(payload)
+        if (!cancelled) {
+          setPulse(payload)
+          const bullets = payload.wrap_of_the_day?.bullets || []
+          if (bullets.length && !wrapText.trim()) {
+            setWrapText(bullets.map((b, i) => `${i + 1}) ${b}`).join('\n\n'))
+          }
+        }
       })
       .catch((err: Error) => {
         if (!cancelled) setError(err.message || 'Street pulse failed')
@@ -67,6 +82,46 @@ export function StreetPulseView({ setSelected, setActive, onOpenPdf }: Props) {
       cancelled = true
     }
   }, [token])
+
+  const saveWrap = async (notify: boolean) => {
+    setWrapBusy(notify ? 'notify' : 'save')
+    setWrapNote('')
+    try {
+      const saved = await saveWrapOfTheDay({ text: wrapText, notify, source: 'paste' })
+      if (!saved.available) {
+        setWrapNote(saved.message || 'Wrap not saved')
+        return
+      }
+      const tg = saved.telegram?.sent
+        ? ' · Telegram sent'
+        : saved.telegram?.reason
+          ? ` · Telegram: ${saved.telegram.reason}`
+          : ''
+      setWrapNote(`Saved ${saved.bullets?.length || 0} wrap bullet(s)${tg}`)
+      setToken((n) => n + 1)
+    } catch (err) {
+      setWrapNote(err instanceof Error ? err.message : 'Wrap save failed')
+    } finally {
+      setWrapBusy('')
+    }
+  }
+
+  const sendWrapTelegram = async () => {
+    setWrapBusy('notify')
+    setWrapNote('')
+    try {
+      const result = await notifyWrapOfTheDay()
+      setWrapNote(
+        result.telegram?.sent
+          ? `Wrap sent to Telegram · ${result.count ?? 0} bullet(s)`
+          : result.telegram?.reason || 'Telegram not sent — check TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID',
+      )
+    } catch (err) {
+      setWrapNote(err instanceof Error ? err.message : 'Telegram notify failed')
+    } finally {
+      setWrapBusy('')
+    }
+  }
 
   const openSymbol = (symbol: string) => {
     setSelected?.(symbol)
@@ -165,8 +220,51 @@ export function StreetPulseView({ setSelected, setActive, onOpenPdf }: Props) {
             />
           </div>
 
-          <Panel title="COVER TAKEAWAYS" subtitle="What the system can defend from today's stores">
-            {(pulse.takeaways || []).length === 0 && <EmptyState title="No takeaways yet" detail="Rebuild after a market scan." />}
+          <Panel
+            title="WRAP OF THE DAY"
+            subtitle={
+              pulse.wrap_of_the_day?.available
+                ? `User-authored · ${pulse.wrap_of_the_day.date || 'today'} · source ${pulse.wrap_of_the_day.source || '—'}`
+                : 'Paste your wrap — QuantTerm never invents these bullets'
+            }
+          >
+            {(pulse.wrap_of_the_day?.bullets || []).length > 0 ? (
+              <ol className="plain-list">
+                {(pulse.wrap_of_the_day?.bullets || []).map((item) => (
+                  <li key={item}>{item}</li>
+                ))}
+              </ol>
+            ) : (
+              <EmptyState title="No wrap yet" detail="Paste today's Wrap of the Day below, then Save." />
+            )}
+            <textarea
+              aria-label="Paste Wrap of the Day"
+              placeholder={"Here's the Wrap of the Day:\n\n1) ...\n2) ..."}
+              value={wrapText}
+              onChange={(event) => setWrapText(event.target.value)}
+              rows={8}
+              style={{ width: '100%', marginTop: 12, fontFamily: 'inherit' }}
+            />
+            <div className="inline-actions" style={{ marginTop: 8, flexWrap: 'wrap', gap: 8 }}>
+              <button type="button" disabled={!!wrapBusy || !wrapText.trim()} onClick={() => void saveWrap(false)}>
+                {wrapBusy === 'save' ? 'Saving…' : 'Save wrap'}
+              </button>
+              <button type="button" disabled={!!wrapBusy || !wrapText.trim()} onClick={() => void saveWrap(true)}>
+                {wrapBusy === 'notify' ? 'Sending…' : 'Save + Telegram'}
+              </button>
+              <button
+                type="button"
+                disabled={!!wrapBusy || !(pulse.wrap_of_the_day?.available)}
+                onClick={() => void sendWrapTelegram()}
+              >
+                Send wrap to Telegram
+              </button>
+            </div>
+            {wrapNote ? <p className="panel-copy">{wrapNote}</p> : null}
+          </Panel>
+
+          <Panel title="COVER TAKEAWAYS" subtitle="Wrap of the Day when present · else store-defended pulse takeaways">
+            {(pulse.takeaways || []).length === 0 && <EmptyState title="No takeaways yet" detail="Save a wrap or rebuild after a market scan." />}
             <ul className="plain-list">
               {(pulse.takeaways || []).map((item) => (
                 <li key={item}>{item}</li>

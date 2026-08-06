@@ -18,7 +18,7 @@ import threading
 import time
 from typing import Any
 
-from fastapi import FastAPI, HTTPException
+from fastapi import Body, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
 ROOT = Path(__file__).resolve().parent
@@ -1068,6 +1068,63 @@ def quotes_heartbeat(symbols: str = "", limit: int = 40) -> dict:
             "honesty": "Live quote heartbeat unavailable — no invented ticks.",
             "error": str(exc),
         }
+
+
+@app.get("/api/wrap-of-the-day")
+def wrap_of_the_day_get() -> dict:
+    """User-authored Wrap of the Day — never invents bullets."""
+    try:
+        from product.wrap_of_the_day import load_wrap
+
+        return load_wrap()
+    except Exception as exc:
+        return {
+            "available": False,
+            "bullets": [],
+            "message": str(exc),
+            "places_orders": False,
+            "honesty": "Wrap of the Day unavailable.",
+        }
+
+
+@app.post("/api/wrap-of-the-day")
+def wrap_of_the_day_save(body: dict[str, Any] = Body(default_factory=dict)) -> dict:
+    """Save today's Wrap of the Day from pasted text or bullet list."""
+    payload = body or {}
+    try:
+        from product.wrap_of_the_day import notify_wrap_telegram, save_wrap
+
+        wrap = save_wrap(
+            payload.get("bullets") or [],
+            text=str(payload.get("text") or payload.get("raw_text") or ""),
+            date=str(payload.get("date") or "") or None,
+            source=str(payload.get("source") or "paste"),
+        )
+        if bool(payload.get("notify", False)) and wrap.get("available"):
+            wrap["telegram"] = notify_wrap_telegram(wrap)
+        return wrap
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@app.post("/api/wrap-of-the-day/notify")
+def wrap_of_the_day_notify() -> dict:
+    """Send the current Wrap of the Day to Telegram."""
+    try:
+        from product.wrap_of_the_day import load_wrap, notify_wrap_telegram
+
+        wrap = load_wrap()
+        telegram = notify_wrap_telegram(wrap)
+        return {
+            "accepted": True,
+            "telegram": telegram,
+            "available": bool(wrap.get("available")),
+            "count": len(wrap.get("bullets") or []),
+            "date": wrap.get("date") or "",
+            "places_orders": False,
+        }
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
 @app.get("/api/street-pulse")
