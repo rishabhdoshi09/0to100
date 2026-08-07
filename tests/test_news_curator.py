@@ -74,5 +74,6 @@ def test_source_catalog_contains_official_and_discovery_feeds():
     sources = default_sources(["https://example.com/market.xml"])
     keys = {source.key for source in sources}
     assert {"nse_announcements", "sebi", "rbi_press", "pib_releases"}.issubset(keys)
+    assert "moneycontrol_markets" in keys
     assert any(source.key.startswith("google_") for source in sources)
     assert len({source.url for source in sources}) == len(sources)

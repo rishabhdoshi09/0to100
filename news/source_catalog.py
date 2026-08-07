@@ -66,12 +66,33 @@ _OFFICIAL_SOURCES: tuple[SourceSpec, ...] = (
 )
 
 
+# Always-on retail business media — broader than the default config RSS list.
+_RETAIL_MEDIA_FEEDS: tuple[tuple[str, str, str], ...] = (
+    ("moneycontrol_markets", "Moneycontrol Markets", "https://www.moneycontrol.com/rss/marketreports.xml"),
+    ("moneycontrol_latest", "Moneycontrol Latest", "https://www.moneycontrol.com/rss/latestnews.xml"),
+    ("moneycontrol_business", "Moneycontrol Business", "https://www.moneycontrol.com/rss/business.xml"),
+    ("et_markets", "Economic Times Markets", "https://economictimes.indiatimes.com/markets/rssfeeds/1977021501.cms"),
+    ("et_stocks", "Economic Times Stocks", "https://economictimes.indiatimes.com/markets/stocks/rssfeeds/2146842.cms"),
+    ("et_ipo", "Economic Times IPO", "https://economictimes.indiatimes.com/markets/ipo/rssfeeds/14655708.cms"),
+    ("mint_markets", "Mint Markets", "https://www.livemint.com/rss/markets"),
+    ("mint_companies", "Mint Companies", "https://www.livemint.com/rss/companies"),
+    ("bs_markets", "Business Standard Markets", "https://www.business-standard.com/rss/markets-106.rss"),
+    ("bs_companies", "Business Standard Companies", "https://www.business-standard.com/rss/companies-101.rss"),
+    ("cnbctv18_market", "CNBC-TV18 Market", "https://www.cnbctv18.com/commonfeeds/v1/cne/rss/market.xml"),
+    ("hindu_bl_markets", "BusinessLine Markets", "https://www.thehindubusinessline.com/markets/feeder/default.rss"),
+    ("ndtv_business", "NDTV Profit", "https://feeds.feedburner.com/ndtvprofit-latest"),
+    ("reuters_india", "Reuters India", "https://feeds.reuters.com/reuters/INbusinessNews"),
+)
+
 _DISCOVERY_QUERIES: tuple[tuple[str, str, str], ...] = (
-    ("google_india_markets", "India stock market NSE BSE shares", "market"),
+    ("google_india_markets", "India stock market NSE BSE Sensex Nifty today", "market"),
     ("google_fno", "India NSE futures options F&O stocks", "derivatives"),
     ("google_economy", "India economy RBI inflation GDP rupee crude oil", "economy"),
-    ("google_results", "India listed company results order win merger acquisition", "company"),
-    ("google_global", "US Fed crude oil dollar China tariffs India stocks", "global"),
+    ("google_results", "India listed company quarterly results earnings profit", "company"),
+    ("google_ipo", "India IPO listing debut grey market allotment", "company"),
+    ("google_orders", "India company order book defence contract win crore", "company"),
+    ("google_pharma", "India pharma earnings USFDA hospital stock", "company"),
+    ("google_global", "US stock futures Dow S&P Nasdaq Fed earnings India", "global"),
 )
 
 
@@ -96,11 +117,25 @@ def _key_from_url(url: str) -> str:
 def default_sources(extra_feed_urls: list[str] | tuple[str, ...] | None = None) -> list[SourceSpec]:
     """Return a deduplicated source catalog.
 
-    `extra_feed_urls` usually comes from the existing `settings.rss_feed_list`,
-    preserving the user's configured publishers without making the catalog a
-    second configuration authority.
+    Always includes retail business media (Moneycontrol/ET/Mint/BS/CNBC/etc.),
+    then merges `extra_feed_urls` from settings, then Google News discovery.
+    Official filings remain tier 1; media never outranks an official filing on trust.
     """
     sources = list(_OFFICIAL_SOURCES)
+
+    for key, name, url in _RETAIL_MEDIA_FEEDS:
+        sources.append(
+            SourceSpec(
+                key=key,
+                name=name,
+                url=url,
+                category="market",
+                tier=2,
+                official=False,
+                max_items=120,
+            )
+        )
+
     for url in extra_feed_urls or ():
         clean = str(url or "").strip()
         if not clean:
@@ -121,7 +156,7 @@ def default_sources(extra_feed_urls: list[str] | tuple[str, ...] | None = None) 
         sources.append(
             SourceSpec(
                 key=key,
-                name=f"Google News · {category.title()}",
+                name=f"Google News · {query.split()[0].title() if category == 'company' else category.title()}",
                 url=(
                     "https://news.google.com/rss/search?q="
                     + quote_plus(query)

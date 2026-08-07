@@ -39,11 +39,17 @@ class Settings(BaseSettings):
     # ── News ──────────────────────────────────────────────────────────────────
     news_rss_feeds: str = Field(
         default=(
+            "https://www.moneycontrol.com/rss/marketreports.xml,"
+            "https://www.moneycontrol.com/rss/latestnews.xml,"
             "https://economictimes.indiatimes.com/markets/rssfeeds/1977021501.cms,"
             "https://economictimes.indiatimes.com/markets/stocks/rssfeeds/2146842.cms,"
+            "https://economictimes.indiatimes.com/markets/ipo/rssfeeds/14655708.cms,"
             "https://www.livemint.com/rss/markets,"
+            "https://www.livemint.com/rss/companies,"
             "https://www.business-standard.com/rss/markets-106.rss,"
-            "https://www.cnbctv18.com/commonfeeds/v1/cne/rss/market.xml"
+            "https://www.business-standard.com/rss/companies-101.rss,"
+            "https://www.cnbctv18.com/commonfeeds/v1/cne/rss/market.xml,"
+            "https://www.thehindubusinessline.com/markets/feeder/default.rss"
         )
     )
 

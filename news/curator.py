@@ -71,16 +71,23 @@ _CATEGORY_KEYWORDS: dict[str, tuple[str, ...]] = {
 }
 
 _EVENT_KEYWORDS: tuple[tuple[str, tuple[str, ...]], ...] = (
-    ("results", ("RESULT", "EARNINGS", "REVENUE", "PROFIT", "EBITDA", "MARGIN")),
-    ("order_or_contract", ("ORDER WIN", "WINS ORDER", "CONTRACT AWARD", "LETTER OF AWARD")),
+    ("listing_ipo", ("IPO", "LISTING", "DEBUT", "LISTED TODAY", "OPENS AT", "GREY MARKET", "SUBSCRIPTION")),
+    ("results", ("RESULT", "EARNINGS", "REVENUE", "PROFIT", "EBITDA", "MARGIN", "NET PROFIT", "TOP LINE")),
+    (
+        "order_or_contract",
+        (
+            "ORDER WIN", "WINS ORDER", "BAGS ORDER", "WON ORDER", "ORDER BOOK", "ORDERBOOK",
+            "CONTRACT AWARD", "LETTER OF AWARD", "CRORE ORDER", "DEFENCE ORDER",
+        ),
+    ),
     ("merger_or_acquisition", ("MERGER", "ACQUISITION", "TAKEOVER", "DEMERGER", "AMALGAMATION")),
     ("capital_action", ("DIVIDEND", "BONUS", "STOCK SPLIT", "BUYBACK", "RIGHTS ISSUE")),
-    ("fund_raising", ("FUND RAISE", "QIP", "PREFERENTIAL ISSUE", "DEBT ISSUE")),
+    ("fund_raising", ("FUND RAISE", "QIP", "PREFERENTIAL ISSUE", "DEBT ISSUE", "FPO")),
     ("rating", ("UPGRADE", "DOWNGRADE", "RATING", "TARGET PRICE")),
     ("promoter_or_insider", ("PROMOTER", "INSIDER TRADING", "PLEDGE", "ENCUMBRANCE")),
     ("macro", ("GDP", "INFLATION", "CPI", "REPO RATE", "BUDGET", "FISCAL", "RUPEE", "CRUDE")),
-    ("regulatory", ("SEBI", "RBI", "CIRCULAR", "REGULATION", "ORDER", "PENALTY")),
-    ("derivatives", ("FUTURES", "OPTIONS", "OPEN INTEREST", "F&O", "EXPIRY")),
+    ("regulatory", ("SEBI", "RBI", "CIRCULAR", "REGULATION", "PENALTY", "CONSULTATION PAPER")),
+    ("derivatives", ("FUTURES", "OPTIONS", "OPEN INTEREST", "F&O", "EXPIRY", "US FUTURES")),
 )
 
 _POSITIVE_WORDS = (
@@ -280,7 +287,9 @@ def _impact_score(
         score += min(12, 6 + len(fno_symbols) * 2)
     if category in {"economy", "regulation", "global", "derivatives"}:
         score += 8
-    if event_type in {"results", "order_or_contract", "merger_or_acquisition", "regulatory", "macro"}:
+    if event_type in {
+        "listing_ipo", "results", "order_or_contract", "merger_or_acquisition", "regulatory", "macro",
+    }:
         score += 12
     elif event_type in {"capital_action", "fund_raising", "rating", "promoter_or_insider", "derivatives"}:
         score += 8
@@ -302,10 +311,12 @@ def _why_it_matters(
         parts.append(f"Directly linked to {', '.join(symbols[:5])}")
     if fno_symbols:
         parts.append("these underlyings also have current F&O contracts, so volatility and open interest may react")
-    if event_type == "results":
+    if event_type == "listing_ipo":
+        parts.append("IPO/listing days often show valuation froth versus lasting business quality")
+    elif event_type == "results":
         parts.append("earnings can reset price, volume and analyst expectations")
     elif event_type == "order_or_contract":
-        parts.append("a material order can change the revenue pipeline")
+        parts.append("a material order book can set multi-year revenue visibility")
     elif event_type == "merger_or_acquisition":
         parts.append("deal terms can reprice both the buyer and target")
     elif event_type == "regulatory":

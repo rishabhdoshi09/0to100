@@ -266,8 +266,8 @@ export function StreetPulseView({ setSelected, setActive, onOpenPdf }: Props) {
             title="WRAP OF THE DAY"
             subtitle={
               pulse.wrap_of_the_day?.available
-                ? `${pulse.wrap_of_the_day.override ? 'User override' : 'System-composed'} · ${pulse.wrap_of_the_day.date || 'today'} · ${pulse.wrap_of_the_day.source || 'auto'}`
-                : 'Auto-built from scan, bhav, options, news and global cues — missing stays missing'
+                ? `${pulse.wrap_of_the_day.override ? 'User override' : 'News-led system wrap'} · ${pulse.wrap_of_the_day.date || 'today'} · ${(pulse.day_stories || []).length} day stories`
+                : 'Built from Moneycontrol/ET/Mint/BS/CNBC/Google News day stories + tape — missing stays missing'
             }
           >
             {(pulse.wrap_of_the_day?.bullets || []).length > 0 ? (
@@ -279,15 +279,22 @@ export function StreetPulseView({ setSelected, setActive, onOpenPdf }: Props) {
             ) : (
               <EmptyState
                 title="Wrap not ready yet"
-                detail={pulse.wrap_of_the_day?.message || 'Rebuild pulse after a market scan so stores can fill.'}
+                detail={pulse.wrap_of_the_day?.message || 'Tap Rebuild wrap (refreshes market news) or run Refresh news on System Health.'}
               />
             )}
+            {(pulse.day_stories || []).length > 0 ? (
+              <p className="panel-copy">
+                Sources today:{' '}
+                {Array.from(new Set((pulse.day_stories || []).map((s) => s.source).filter(Boolean))).slice(0, 6).join(' · ')
+                  || 'curator'}
+              </p>
+            ) : null}
             {(pulse.wrap_of_the_day?.gaps || []).length > 0 ? (
               <p className="panel-copy">Gaps: {(pulse.wrap_of_the_day?.gaps || []).slice(0, 3).join(' · ')}</p>
             ) : null}
             <div className="inline-actions" style={{ marginTop: 8, flexWrap: 'wrap', gap: 8 }}>
               <button type="button" disabled={!!wrapBusy} onClick={() => void rebuildWrap()}>
-                {wrapBusy === 'rebuild' ? 'Rebuilding…' : 'Rebuild wrap'}
+                {wrapBusy === 'rebuild' ? 'Refreshing news + wrap…' : 'Rebuild wrap'}
               </button>
               <button
                 type="button"

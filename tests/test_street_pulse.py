@@ -104,6 +104,10 @@ def test_build_pulse_persists_and_discloses_honesty(tmp_path, monkeypatch):
     )
     monkeypatch.setattr("reports.street_pulse._losing_momentum", lambda: None)
     monkeypatch.setattr("reports.street_pulse._sniper_breakouts", lambda limit=4: [])
+    monkeypatch.setattr(
+        "reports.street_pulse._day_stories",
+        lambda max_n=5, refresh_if_stale=False: [],
+    )
     monkeypatch.setattr("reports.street_pulse._headlines", lambda max_n=5: ["RBI holds rates"])
     monkeypatch.setattr(
         "reports.street_pulse._global_cues",

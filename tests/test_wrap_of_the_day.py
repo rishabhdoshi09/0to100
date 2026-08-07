@@ -46,41 +46,64 @@ def test_seed_loads_for_historical_date(tmp_path, monkeypatch):
     assert any("Neuland" in b for b in wrap["bullets"])
 
 
-def test_compose_from_pulse_builds_newsletter_style_bullets():
+def test_compose_from_pulse_is_news_led_and_lively():
     from product import wrap_of_the_day as W
 
     wrap = W.compose_from_pulse(
         {
+            "day_stories": [
+                {
+                    "headline": "Manipal Health falls after strong listing",
+                    "wrap_line": (
+                        "Manipal Health fell after its strong listing as investors booked profits, "
+                        "showing that even strong listings can see short-term profit booking when valuations run ahead."
+                    ),
+                    "source": "Moneycontrol",
+                    "event_type": "listing_ipo",
+                    "mentioned_symbols": [],
+                },
+                {
+                    "headline": "HAL highlights large order book",
+                    "wrap_line": (
+                        "HAL rallied after highlighting a large defence order book, "
+                        "showing that large order books can still set years of growth visibility."
+                    ),
+                    "source": "Economic Times",
+                    "event_type": "order_or_contract",
+                    "mentioned_symbols": ["HAL"],
+                },
+                {
+                    "headline": "Neuland Laboratories profit jumps",
+                    "wrap_line": (
+                        "Neuland Laboratories reported a massive jump in profit and revenue, "
+                        "proving that strong execution in a focused franchise can still deliver exceptional earnings growth."
+                    ),
+                    "source": "Mint",
+                    "event_type": "results",
+                    "mentioned_symbols": [],
+                },
+            ],
             "snapshot": {
                 "indices": [{"name": "NIFTY 50", "price": 24500, "chg_pct": 0.4}],
                 "options_stance": {"stance": "CAUTION"},
-                "commentary": "Choppy tape",
             },
             "sectors": {
                 "available": True,
                 "leaders": [{"sector": "Defence", "chg_1d": 2.1}],
-                "laggards": [{"sector": "IT", "chg_1d": -1.2}],
+                "laggards": [],
             },
-            "buzzing": {
-                "symbol": "HAL",
-                "change_pct": 4.5,
-                "volume_ratio": 2.8,
-                "note": "order-book focus in scan",
-            },
-            "breakouts_today": [{"symbol": "BEL"}],
-            "headlines": ["Defence PSU order book in focus"],
             "global_cues": [{"name": "S&P 500", "chg_pct": 0.3}],
             "gaps": [],
         }
     )
     assert wrap["available"] is True
     assert wrap["source"] == "auto"
-    assert wrap["auto"] is True
-    assert any("NIFTY 50" in b for b in wrap["bullets"])
+    assert wrap["bullets"][0].startswith("Manipal")
     assert any("HAL" in b for b in wrap["bullets"])
-    assert any("Defence" in b or "defence" in b.lower() for b in wrap["bullets"])
-    assert any("S&P 500" in b for b in wrap["bullets"])
-    assert any("In the news" in b for b in wrap["bullets"])
+    assert any("Neuland" in b for b in wrap["bullets"])
+    assert any("On the Indian tape" in b for b in wrap["bullets"])
+    assert not any(b.startswith("In the news:") for b in wrap["bullets"])
+    assert not any(b.startswith("Indian benchmarks:") for b in wrap["bullets"])
 
 
 def test_compose_does_not_invent_when_stores_empty():
@@ -192,6 +215,22 @@ def test_pulse_uses_auto_wrap_then_override(tmp_path, monkeypatch):
     )
     monkeypatch.setattr(SP, "_losing_momentum", lambda: None)
     monkeypatch.setattr(SP, "_sniper_breakouts", lambda limit=4: [])
+    monkeypatch.setattr(
+        SP,
+        "_day_stories",
+        lambda max_n=5, refresh_if_stale=False: [
+            {
+                "headline": "HAL highlights large defence order book",
+                "wrap_line": (
+                    "HAL rallied after highlighting a large defence order book, "
+                    "showing that large order books can still set years of growth visibility."
+                ),
+                "source": "Economic Times",
+                "event_type": "order_or_contract",
+                "mentioned_symbols": ["HAL"],
+            }
+        ],
+    )
     monkeypatch.setattr(SP, "_headlines", lambda max_n=5: ["Defence names in focus"])
     monkeypatch.setattr(
         SP,
@@ -202,7 +241,8 @@ def test_pulse_uses_auto_wrap_then_override(tmp_path, monkeypatch):
     pulse = SP.build_pulse(persist=True)
     assert pulse["wrap_of_the_day"]["available"] is True
     assert pulse["wrap_of_the_day"]["source"] == "auto"
-    assert any("NIFTY" in t for t in pulse["takeaways"])
+    assert any("HAL" in t for t in pulse["takeaways"])
+    assert any("On the Indian tape" in t or "NIFTY" in t for t in pulse["takeaways"])
 
     W.save_wrap(
         bullets=["Override: HAL order book narrative only."],

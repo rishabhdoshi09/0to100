@@ -140,6 +140,14 @@ export type StreetPulsePayload = {
   breakouts_tomorrow?: StreetPulseStock[]
   global_cues?: Array<{ name?: string; price?: number; chg_pct?: number; source?: string }>
   headlines?: string[]
+  day_stories?: Array<{
+    headline?: string
+    wrap_line?: string
+    source?: string
+    event_type?: string
+    mentioned_symbols?: string[]
+    wrap_score?: number
+  }>
   wrap_of_the_day?: WrapOfTheDayPayload
   scanned?: number
   scan_as_of?: string

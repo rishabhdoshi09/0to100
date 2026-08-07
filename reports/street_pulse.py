@@ -326,15 +326,24 @@ def _sniper_breakouts(limit: int = 4) -> list[dict[str, Any]]:
 
 def _headlines(max_n: int = 5) -> list[str]:
     try:
+        from news.day_story_engine import build_day_stories
+
+        stories = build_day_stories(hours=20, limit=max_n, refresh_if_stale=False).get("stories") or []
+        heads = [str(s.get("headline") or "")[:140] for s in stories if s.get("headline")]
+        if heads:
+            return heads
+    except Exception:
+        pass
+    try:
         from news.curator_store import NewsCuratorStore
 
         store = NewsCuratorStore(Path("logs/news_curator.sqlite3"))
         try:
-            rows = store.recent(hours=18, limit=max_n)
-            heads = [str(getattr(r, "headline", "") or "")[:120] for r in rows]
+            rows = store.recent(hours=18, limit=max(max_n * 3, 15), min_impact=20)
+            heads = [str(getattr(r, "headline", "") or "")[:140] for r in rows]
             heads = [h for h in heads if h]
             if heads:
-                return heads
+                return heads[:max_n]
         finally:
             store.close()
     except Exception:
@@ -343,7 +352,21 @@ def _headlines(max_n: int = 5) -> list[str]:
         from news.fetcher import NewsFetcher
 
         arts = NewsFetcher().fetch_all(max_age_hours=18)
-        return [a.headline[:120] for a in arts[:max_n]]
+        return [a.headline[:140] for a in arts[:max_n]]
+    except Exception:
+        return []
+
+
+def _day_stories(max_n: int = 5, *, refresh_if_stale: bool = False) -> list[dict[str, Any]]:
+    try:
+        from news.day_story_engine import build_day_stories
+
+        payload = build_day_stories(
+            hours=20,
+            limit=max_n,
+            refresh_if_stale=refresh_if_stale,
+        )
+        return [dict(row) for row in (payload.get("stories") or []) if isinstance(row, dict)]
     except Exception:
         return []
 
@@ -504,9 +527,14 @@ def build_pulse(*, persist: bool = True) -> dict[str, Any]:
     if not rs:
         gaps.append("Relative-strength leaders unavailable (empty or unscored scan)")
 
-    headlines = _headlines()
+    day_stories = _day_stories(5, refresh_if_stale=False)
+    headlines = [str(s.get("headline") or "") for s in day_stories if s.get("headline")]
+    if not headlines:
+        headlines = _headlines()
     if not headlines:
         gaps.append("No fresh headlines in curator/fetcher")
+    if not day_stories:
+        gaps.append("No wrap-ready day stories ranked yet — refresh market news")
 
     cues = _global_cues()
     if not cues:
@@ -539,6 +567,7 @@ def build_pulse(*, persist: bool = True) -> dict[str, Any]:
         "breakouts_today": today_brk,
         "breakouts_tomorrow": tomorrow_brk,
         "global_cues": cues,
+        "day_stories": day_stories,
         "headlines": headlines,
         "scanned": universe_size,
         "scan_as_of": scan_as_of,

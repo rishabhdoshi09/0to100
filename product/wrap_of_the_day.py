@@ -74,7 +74,7 @@ def empty_wrap(*, message: str = "", date: str | None = None) -> dict[str, Any]:
         ),
         "places_orders": False,
         "honesty": (
-            "System-composed Wrap of the Day from QuantTerm stores. "
+            "System-composed Wrap of the Day from multi-site market news + tape stores. "
             "Missing evidence stays missing — never invented."
         ),
     }
@@ -118,8 +118,8 @@ def _normalize(
             "User override Wrap of the Day. Research narrative only — not a buy ticket."
             if is_manual and src != "seed"
             else (
-                "System-composed Wrap of the Day from scan, bhav, options, news and "
-                "global cues. Missing stays missing — not a buy ticket."
+                "System-composed Wrap of the Day from Moneycontrol/ET/Mint/BS/CNBC/"
+                "Google News day stories plus tape/global cues. Missing stays missing — not a buy ticket."
             )
         ),
     }
@@ -134,66 +134,112 @@ def _f(value: Any, default: float = 0.0) -> float:
         return default
 
 
+def _tape_bullet(snapshot: Mapping[str, Any], sectors: Mapping[str, Any]) -> str:
+    """One lively market-tape sentence from indices/sectors — no invented narrative."""
+    indices = list(snapshot.get("indices") or [])
+    bits: list[str] = []
+    for idx in indices[:2]:
+        name = str(idx.get("name") or "").strip()
+        chg = idx.get("chg_pct")
+        if not name or chg is None:
+            continue
+        move = "firmer" if _f(chg) > 0.15 else "softer" if _f(chg) < -0.15 else "little changed"
+        bits.append(f"{name} {_f(chg):+.2f}% ({move})")
+    leaders = list(sectors.get("leaders") or [])[:1]
+    if leaders and leaders[0].get("sector"):
+        bits.append(
+            f"{leaders[0].get('sector')} led sector heat at {_f(leaders[0].get('chg_1d')):+.1f}%"
+        )
+    stance = ((snapshot.get("options_stance") or {}) if isinstance(snapshot, Mapping) else {}).get("stance")
+    if stance:
+        bits.append(f"NIFTY options stance {stance}")
+    if not bits:
+        return ""
+    return "On the Indian tape, " + "; ".join(bits) + "."
+
+
+def _global_bullet(cues: Sequence[Mapping[str, Any]], day_stories: Sequence[Mapping[str, Any]]) -> str:
+    """Prefer a global day-story; else a lively cue sentence from real % moves."""
+    for story in day_stories:
+        if str(story.get("category") or "") == "global" or str(story.get("event_type") or "") == "derivatives":
+            line = str(story.get("wrap_line") or "").strip()
+            if line:
+                return line
+    if not cues:
+        return ""
+    parts: list[str] = []
+    verb = "mixed"
+    for row in list(cues)[:3]:
+        name = str(row.get("name") or "").strip()
+        chg = row.get("chg_pct")
+        if not name or chg is None:
+            continue
+        parts.append(f"{name} {_f(chg):+.2f}%")
+    if not parts:
+        return ""
+    # Direction from the first cue only — never invent a separate narrative.
+    first = _f((cues[0] or {}).get("chg_pct"))
+    if first > 0.1:
+        verb = "edged higher"
+    elif first < -0.1:
+        verb = "slipped"
+    else:
+        verb = "stayed mixed"
+    return (
+        f"Overseas, {parts[0].split()[0]} {verb} "
+        f"({'; '.join(parts)}), as investors stayed focused on global earnings and risk cues."
+    )
+
+
 def compose_from_pulse(pulse: Mapping[str, Any] | None) -> dict[str, Any]:
-    """Build newsletter-style wrap bullets from an assembled Street Pulse payload."""
+    """News-led Wrap of the Day — day stories first, tape/global as support."""
     payload = dict(pulse or {})
     bullets: list[str] = []
     gaps: list[str] = []
 
+    day_stories = [
+        row for row in (payload.get("day_stories") or [])
+        if isinstance(row, Mapping) and str(row.get("wrap_line") or row.get("headline") or "").strip()
+    ]
+    if not day_stories:
+        try:
+            from news.day_story_engine import build_day_stories
+
+            engine = build_day_stories(hours=20, limit=5, refresh_if_stale=False)
+            day_stories = [
+                row for row in (engine.get("stories") or [])
+                if isinstance(row, Mapping)
+            ]
+            if not day_stories:
+                gaps.append(str(engine.get("message") or "No wrap-ready day stories yet"))
+        except Exception as exc:
+            gaps.append(f"Day-story engine unavailable ({exc})")
+
+    for story in day_stories[:4]:
+        line = str(story.get("wrap_line") or story.get("headline") or "").strip()
+        if line:
+            bullets.append(line if line.endswith(".") else f"{line}.")
+
     snapshot = payload.get("snapshot") if isinstance(payload.get("snapshot"), Mapping) else {}
-    indices = list(snapshot.get("indices") or [])
-    if indices:
-        parts: list[str] = []
-        for idx in indices[:3]:
-            name = str(idx.get("name") or "").strip()
-            chg = idx.get("chg_pct")
-            price = idx.get("price")
-            if not name or chg is None:
-                continue
-            bit = f"{name} {_f(chg):+.2f}%"
-            if price is not None:
-                bit += f" at {_f(price):,.0f}"
-            parts.append(bit)
-        if parts:
-            bullets.append("Indian benchmarks: " + "; ".join(parts) + ".")
-    else:
+    sectors = payload.get("sectors") if isinstance(payload.get("sectors"), Mapping) else {}
+    tape = _tape_bullet(snapshot, sectors)
+    if tape:
+        bullets.append(tape)
+    elif not snapshot.get("indices"):
         gaps.append("Index quotes unavailable")
 
-    stance = ((snapshot.get("options_stance") or {}) if isinstance(snapshot, Mapping) else {}).get("stance")
-    if stance:
-        bullets.append(
-            f"NIFTY options positioning reads {stance} — research context only, not a buy stance."
-        )
-
-    if snapshot.get("commentary"):
-        commentary = str(snapshot.get("commentary") or "").strip()
-        if commentary and commentary not in bullets:
-            bullets.append(commentary if commentary.endswith(".") else f"{commentary}.")
-
-    sectors = payload.get("sectors") if isinstance(payload.get("sectors"), Mapping) else {}
-    leaders = list(sectors.get("leaders") or [])[:2]
-    laggards = list(sectors.get("laggards") or [])[:1]
-    if leaders:
-        lead_txt = ", ".join(
-            f"{r.get('sector')} ({_f(r.get('chg_1d')):+.1f}%)" for r in leaders if r.get("sector")
-        )
-        if lead_txt:
-            bullets.append(f"Sector heat leaders: {lead_txt}.")
-    elif not sectors.get("available"):
-        gaps.append("Sector heat unavailable")
-    # Keep laggard only when the wrap is still short — prefer news/global later.
-    if laggards and laggards[0].get("sector") and len(bullets) < 4:
-        bullets.append(
-            f"Sector heat laggard: {laggards[0].get('sector')} ({_f(laggards[0].get('chg_1d')):+.1f}%)."
-        )
-
+    # Buzzing name only if not already covered by a day story symbol.
+    story_syms = {
+        str(s).upper()
+        for row in day_stories
+        for s in (row.get("mentioned_symbols") or [])
+    }
     buzzing = payload.get("buzzing") if isinstance(payload.get("buzzing"), Mapping) else None
-    gainers = [r for r in (payload.get("gainers") or []) if isinstance(r, Mapping)]
-    if buzzing and buzzing.get("symbol"):
-        note = str(buzzing.get("note") or buzzing.get("why") or "").strip()
+    if buzzing and buzzing.get("symbol") and str(buzzing.get("symbol")).upper() not in story_syms:
         chg = buzzing.get("change_pct")
         vol = buzzing.get("volume_ratio")
-        core = f"{buzzing.get('symbol')} is buzzing"
+        note = str(buzzing.get("note") or buzzing.get("why") or "").strip()
+        core = f"{buzzing.get('symbol')} stayed in the volume spotlight"
         extras: list[str] = []
         if chg is not None:
             extras.append(f"{_f(chg):+.1f}%")
@@ -204,52 +250,21 @@ def compose_from_pulse(pulse: Mapping[str, Any] | None) -> dict[str, Any]:
         if note:
             core += f" — {note.rstrip('.')}"
         bullets.append(core + ".")
-    elif gainers and gainers[0].get("symbol"):
-        g = gainers[0]
-        bullets.append(
-            f"{g.get('symbol')} led liquid gainers ({_f(g.get('chg_pct')):+.1f}%)."
-        )
-
-    headlines = [str(h).strip() for h in (payload.get("headlines") or []) if str(h).strip()]
-    for head in headlines[:1]:
-        bullets.append(f"In the news: {head.rstrip('.')}.")
-    if not headlines:
-        gaps.append("No fresh headlines in curator/fetcher")
 
     cues = [r for r in (payload.get("global_cues") or []) if isinstance(r, Mapping)]
-    if cues:
-        cue_bits = []
-        for row in cues[:3]:
-            name = str(row.get("name") or "").strip()
-            chg = row.get("chg_pct")
-            if not name or chg is None:
-                continue
-            cue_bits.append(f"{name} {_f(chg):+.2f}%")
-        if cue_bits:
-            bullets.append("Global cues: " + "; ".join(cue_bits) + ".")
+    global_line = _global_bullet(cues, day_stories)
+    if global_line:
+        # Avoid duplicating an already-included global day story.
+        if not any(global_line.lower() == b.lower() for b in bullets):
+            bullets.append(global_line)
     else:
         gaps.append("Global/US cues unavailable")
 
-    breakouts = [r for r in (payload.get("breakouts_today") or []) if isinstance(r, Mapping)]
-    strength = payload.get("strength") if isinstance(payload.get("strength"), Mapping) else None
-    if breakouts:
-        syms = ", ".join(str(r.get("symbol")) for r in breakouts[:3] if r.get("symbol"))
-        if syms:
-            bullets.append(f"Breakouts in focus: {syms} (research labels, not buy tickets).")
-    elif strength and strength.get("symbol"):
-        dist = strength.get("pivot_distance_pct")
-        dist_txt = (
-            f"{_f(dist):.1f}% below breakout level"
-            if dist is not None
-            else "near breakout level"
-        )
-        bullets.append(f"Gaining strength: {strength.get('symbol')} — {dist_txt}.")
+    if not day_stories:
+        # Last-resort: plain headlines (still real), never invented company narratives.
+        for head in [str(h).strip() for h in (payload.get("headlines") or []) if str(h).strip()][:2]:
+            bullets.append(f"{head.rstrip('.')}.")
 
-    weak = payload.get("weak") if isinstance(payload.get("weak"), Mapping) else None
-    if weak and weak.get("symbol"):
-        bullets.append(f"Losing momentum: {weak.get('symbol')} — stay selective.")
-
-    # Deduplicate while preserving order.
     seen: set[str] = set()
     unique: list[str] = []
     for b in bullets:
@@ -260,30 +275,48 @@ def compose_from_pulse(pulse: Mapping[str, Any] | None) -> dict[str, Any]:
         unique.append(b)
 
     if not unique:
-        # Surface pulse gaps honestly instead of inventing a wrap.
         pulse_gaps = [str(g) for g in (payload.get("gaps") or []) if str(g).strip()]
         return empty_wrap(
             message=(
-                "Could not compose Wrap of the Day from current stores. "
-                + (pulse_gaps[0] if pulse_gaps else "Run a market scan, then Rebuild pulse.")
+                "Could not compose Wrap of the Day from current news/tape stores. "
+                + (gaps[0] if gaps else pulse_gaps[0] if pulse_gaps else "Refresh market news, then Rebuild wrap.")
             )
         )
 
-    return _normalize(unique[:8], source="auto", gaps=gaps)
+    return _normalize(
+        unique[:6],
+        source="auto",
+        gaps=gaps,
+    )
 
 
-def compose_wrap(*, persist: bool = True) -> dict[str, Any]:
-    """Compose from live stores via Street Pulse assembly (no invented fills)."""
-    try:
-        from reports.street_pulse import build_pulse
+def compose_wrap(*, persist: bool = True, refresh_news: bool = True) -> dict[str, Any]:
+    """Compose from live stores via Street Pulse assembly (no invented fills).
 
-        pulse = build_pulse(persist=False)
-    except Exception as exc:
-        return empty_wrap(message=f"Wrap compose failed: {exc}")
-    # Prefer any manual override for today over freshly composed auto text.
+    When ``refresh_news`` is true, stale curator DBs are refreshed from
+    Moneycontrol/ET/Mint/BS/CNBC/Google News before ranking day stories.
+    """
     manual = load_manual_override()
     if manual:
         return manual
+    try:
+        from news.day_story_engine import build_day_stories
+        from reports.street_pulse import build_pulse
+
+        stories_payload = build_day_stories(
+            hours=20,
+            limit=5,
+            refresh_if_stale=bool(refresh_news),
+            stale_minutes=40,
+        )
+        pulse = build_pulse(persist=False)
+        if stories_payload.get("stories") and not pulse.get("day_stories"):
+            pulse["day_stories"] = list(stories_payload.get("stories") or [])
+        elif stories_payload.get("stories"):
+            # Prefer freshly refreshed ranking on explicit rebuild.
+            pulse["day_stories"] = list(stories_payload.get("stories") or [])
+    except Exception as exc:
+        return empty_wrap(message=f"Wrap compose failed: {exc}")
     wrap = compose_from_pulse(pulse)
     if persist and wrap.get("available"):
         save_wrap(

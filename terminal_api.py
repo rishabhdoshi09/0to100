@@ -1205,6 +1205,23 @@ def operation_status(operation_id: str) -> dict:
     return item
 
 
+@app.get("/api/news/day-stories")
+def news_day_stories(refresh: bool = False) -> dict:
+    """Rank today's market news into Wrap-ready day stories (multi-site curator)."""
+    try:
+        from news.day_story_engine import build_day_stories
+
+        return build_day_stories(hours=20, limit=6, refresh_if_stale=bool(refresh))
+    except Exception as exc:
+        return {
+            "available": False,
+            "stories": [],
+            "count": 0,
+            "message": str(exc),
+            "honesty": "Day-story engine failed — no invented market news.",
+        }
+
+
 @app.get("/api/news")
 def news_status() -> dict:
     return _news_payload()
