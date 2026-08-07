@@ -154,12 +154,14 @@ while true; do
     wait "$STACK_PID" 2>/dev/null
     stack_ec=$?
     set -e
+    # 0 = nested handled SIGTERM/Ctrl-C cleanly via on_signal.
     # 127 = not a child (already reaped by cleanup) — not an unexpected crash.
-    if [[ "$stack_ec" -eq 127 ]] || [[ "$SHUTTING_DOWN" == "1" ]]; then
+    if [[ "$stack_ec" -eq 0 ]] || [[ "$stack_ec" -eq 127 ]] || [[ "$SHUTTING_DOWN" == "1" ]]; then
       exit 0
     fi
     echo "[COMPLETE STACK] QuantTerm stack exited unexpectedly (pid=$STACK_PID, exit=$stack_ec)." >&2
-    echo "[COMPLETE STACK] Scroll up for the nested [STACK] reason (API/Vite/autonomy)." >&2
+    echo "[COMPLETE STACK] Scroll up for the nested [STACK] reason (API/Vite)." >&2
+    echo "[COMPLETE STACK] Vite log: $ROOT/logs/stack/vite.dev.log" >&2
     echo "[COMPLETE STACK] Tip: bash scripts/stop_quantterm.sh  then  bash scripts/run_quantterm_low_power.sh" >&2
     exit 1
   fi

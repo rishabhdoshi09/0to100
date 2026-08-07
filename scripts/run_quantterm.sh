@@ -33,8 +33,18 @@ AUTONOMY_EXTERNAL=0
 API_EXTERNAL=0
 API_HEALTH_FAILS=0
 API_HTTP_FAILS=0
+VITE_RESTARTS=0
+VITE_RESTART_LIMIT="${QT_VITE_RESTART_LIMIT:-3}"
+SHUTTING_DOWN=0
+VITE_LOG="$ROOT/logs/stack/vite.dev.log"
+mkdir -p "$ROOT/logs/stack"
 
 cleanup() {
+  # Re-entrancy: EXIT after INT/TERM must not double-stop or resume the watch loop.
+  if [[ "$SHUTTING_DOWN" == "1" ]]; then
+    return 0
+  fi
+  SHUTTING_DOWN=1
   echo
   echo "[STACK] Stopping QuantTerm child services…"
   if [[ -n "$FRONTEND_PID" ]]; then
@@ -66,7 +76,56 @@ cleanup() {
   fi
   echo "[STACK] Child services stopped."
 }
-trap cleanup EXIT INT TERM
+
+on_signal() {
+  cleanup
+  # INT/TERM must exit — otherwise the watch loop resumes and prints
+  # "FRONTEND/Vite exited unexpectedly" after we intentionally stopped it.
+  exit 0
+}
+trap cleanup EXIT
+trap on_signal INT TERM
+
+start_vite() {
+  stack_free_port 5173 "Vite dev server"
+  echo "[STACK] Starting dedicated terminal at http://127.0.0.1:5173 …"
+  echo "[STACK] Vite log → ${VITE_LOG}"
+  {
+    echo "===== vite start $(date -u +%Y-%m-%dT%H:%M:%SZ) ====="
+  } >>"$VITE_LOG"
+  # Avoid `( cd …; npm … ) &` — killing that subshell PID leaves an orphaned Vite
+  # that keeps proxying to a dead :8765 and surfaces ECONNREFUSED in the browser.
+  npm --prefix "$ROOT/frontend" run dev -- --host 127.0.0.1 --port 5173 >>"$VITE_LOG" 2>&1 &
+  FRONTEND_PID=$!
+}
+
+wait_for_vite() {
+  local attempts="${1:-60}"
+  local vite_bound=0
+  local i
+  for i in $(seq 1 "$attempts"); do
+    if [[ "$SHUTTING_DOWN" == "1" ]]; then
+      return 1
+    fi
+    if stack_port_listening 5173; then
+      vite_bound=1
+      break
+    fi
+    # npm may spawn vite and exit on some setups; only fail if neither PID nor port live.
+    if ! kill -0 "$FRONTEND_PID" >/dev/null 2>&1 && ! stack_port_listening 5173; then
+      echo "[STACK] Vite exited during startup. Last log lines:" >&2
+      tail -n 40 "$VITE_LOG" 2>/dev/null >&2 || true
+      return 1
+    fi
+    sleep 0.5
+  done
+  if [[ "$vite_bound" != "1" ]]; then
+    echo "[STACK] Vite did not bind :5173 within $((attempts / 2))s. Last log lines:" >&2
+    tail -n 40 "$VITE_LOG" 2>/dev/null >&2 || true
+    return 1
+  fi
+  return 0
+}
 
 if [[ "${QT_LOW_POWER:-}" == "1" ]]; then
   # shellcheck source=apply_low_power_env.sh
@@ -145,40 +204,25 @@ if [[ "${QT_DISABLE_BREAKOUT_SNIPER:-}" != "1" ]]; then
   SNIPER_PID=$!
 fi
 
-stack_free_port 5173 "Vite dev server"
+# Low-power Macs can take longer for first Vite bind (cold node/npm).
+VITE_WAIT_ATTEMPTS=60
+if [[ "${QT_LOW_POWER:-}" == "1" ]]; then
+  VITE_WAIT_ATTEMPTS=120
+fi
 
-echo "[STACK] Starting dedicated terminal at http://127.0.0.1:5173 …"
-# Avoid `( cd …; npm … ) &` — killing that subshell PID leaves an orphaned Vite
-# that keeps proxying to a dead :8765 and surfaces ECONNREFUSED in the browser.
-npm --prefix "$ROOT/frontend" run dev -- --host 127.0.0.1 --port 5173 &
-FRONTEND_PID=$!
-
-# Confirm Vite bound before advertising ready (API is already healthy above).
-vite_bound=0
-for _ in $(seq 1 60); do
-  if stack_port_listening 5173; then
-    vite_bound=1
-    break
-  fi
-  # npm may spawn vite and exit on some setups; only fail if neither PID nor port live.
-  if ! kill -0 "$FRONTEND_PID" >/dev/null 2>&1 && ! stack_port_listening 5173; then
-    echo "[STACK] Vite exited during startup. Review errors above." >&2
-    exit 1
-  fi
-  sleep 0.5
-done
-if [[ "$vite_bound" != "1" ]]; then
-  echo "[STACK] Vite did not bind :5173 within 30s." >&2
+start_vite
+if ! wait_for_vite "$VITE_WAIT_ATTEMPTS"; then
   exit 1
 fi
 
 echo "[STACK] QuantTerm is ready. Open http://127.0.0.1:5173"
 echo "[STACK] Keep this terminal open; Ctrl-C stops services started by this script."
-echo "[STACK] If the UI still errors, run: bash scripts/stop_quantterm.sh && bash scripts/run_quantterm_complete.sh"
+echo "[STACK] If the UI still errors, run: bash scripts/stop_quantterm.sh && bash scripts/run_quantterm_low_power.sh"
 
 # Hard-fail only when the API process/port is gone. HTTP soft-fails while the
 # process is alive usually mean a busy worker — never tear down Vite for that.
 # Keep watch loops light: port/pid every ~15s; HTTP curl only every ~60s.
+# Vite death: restart a few times (old Macs / OOM) before abandoning the stack.
 API_DEAD_LIMIT=3
 API_HTTP_WARN_EVERY=5
 WATCH_SLEEP_S="${QT_STACK_WATCH_SLEEP_S:-15}"
@@ -187,13 +231,37 @@ WATCH_TICK=0
 
 while true; do
   WATCH_TICK=$((WATCH_TICK + 1))
+
+  if [[ "$SHUTTING_DOWN" == "1" ]]; then
+    exit 0
+  fi
+
   if ! stack_port_listening 5173; then
-    if [[ -n "$FRONTEND_PID" ]] && kill -0 "$FRONTEND_PID" >/dev/null 2>&1; then
-      echo "[STACK] Vite is not listening on :5173 (npm pid=$FRONTEND_PID still alive)." >&2
-    else
-      echo "[STACK] FRONTEND/Vite exited unexpectedly (nothing on :5173)." >&2
+    if [[ "$SHUTTING_DOWN" == "1" ]]; then
+      exit 0
     fi
-    exit 1
+    if [[ -n "$FRONTEND_PID" ]] && kill -0 "$FRONTEND_PID" >/dev/null 2>&1; then
+      echo "[STACK] Vite is not listening on :5173 (npm pid=$FRONTEND_PID still alive) — waiting one tick…" >&2
+    elif [[ "$VITE_RESTARTS" -lt "$VITE_RESTART_LIMIT" ]]; then
+      VITE_RESTARTS=$((VITE_RESTARTS + 1))
+      echo "[STACK] FRONTEND/Vite dropped off :5173 — restarting (${VITE_RESTARTS}/${VITE_RESTART_LIMIT})…" >&2
+      echo "[STACK] Recent Vite log:" >&2
+      tail -n 30 "$VITE_LOG" 2>/dev/null >&2 || true
+      start_vite
+      if wait_for_vite "$VITE_WAIT_ATTEMPTS"; then
+        echo "[STACK] Vite is back on http://127.0.0.1:5173" >&2
+      else
+        echo "[STACK] Vite restart failed (${VITE_RESTARTS}/${VITE_RESTART_LIMIT})." >&2
+        if [[ "$VITE_RESTARTS" -ge "$VITE_RESTART_LIMIT" ]]; then
+          exit 1
+        fi
+      fi
+    else
+      echo "[STACK] FRONTEND/Vite exited unexpectedly (nothing on :5173) after ${VITE_RESTART_LIMIT} restart(s)." >&2
+      echo "[STACK] See ${VITE_LOG}" >&2
+      tail -n 40 "$VITE_LOG" 2>/dev/null >&2 || true
+      exit 1
+    fi
   fi
 
   api_process_dead=0
@@ -210,7 +278,7 @@ while true; do
     echo "[STACK] Terminal API process/port soft-fail ${API_HEALTH_FAILS}/${API_DEAD_LIMIT} (dead=${api_process_dead} port_down=${api_port_down})" >&2
     if [[ "$API_HEALTH_FAILS" -ge "$API_DEAD_LIMIT" ]]; then
       echo "[STACK] Terminal API is down on :8765 — backend may have stopped." >&2
-      echo "[STACK] Vite proxies /api → :8765; restart with: bash scripts/stop_quantterm.sh && bash scripts/run_quantterm_complete.sh" >&2
+      echo "[STACK] Vite proxies /api → :8765; restart with: bash scripts/stop_quantterm.sh && bash scripts/run_quantterm_low_power.sh" >&2
       exit 1
     fi
   else

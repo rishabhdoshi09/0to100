@@ -52,9 +52,20 @@ def test_stack_monitor_is_resilient() -> None:
     assert 'WATCH_SLEEP_S="${QT_STACK_WATCH_SLEEP_S:-15}"' in complete
     assert "stack_port_listening 8766" in complete
     assert "QT_AUTONOMY_INTERVAL_S" in text
-    # Ctrl+C must exit after cleanup — not resume the watch loop with false alarms.
+    # Ctrl+C / SIGTERM must exit after cleanup — not resume the watch loop with
+    # false "FRONTEND/Vite exited unexpectedly" alarms (nested + complete).
+    assert "on_signal" in text
+    assert "SHUTTING_DOWN" in text
     assert "on_signal" in complete
     assert "SHUTTING_DOWN" in complete
+    assert 'trap cleanup EXIT' in text
+    assert "trap on_signal INT TERM" in text
+    # Vite should restart a few times before abandoning the stack.
+    assert "VITE_RESTART_LIMIT" in text
+    assert "start_vite" in text
+    assert "vite.dev.log" in text
+    # Clean nested exit (0) must not look like a crash to the complete wrapper.
+    assert 'stack_ec" -eq 0' in complete or "stack_ec -eq 0" in complete
     # Report API flaps must not tear down the terminal backend.
     assert "not stopping backend" in complete
     assert "Leaving terminal API + Vite running" in complete
@@ -66,6 +77,49 @@ def test_stack_monitor_is_resilient() -> None:
     low = (SCRIPTS / "apply_low_power_env.sh").read_text(encoding="utf-8")
     assert "QT_LOW_POWER=1" in low
     assert "QT_DISABLE_IDLE_BACKTEST=1" in low
+
+
+def test_nested_stack_signal_exits_cleanly() -> None:
+    """SIGTERM must run cleanup and exit 0 — not fall into the Vite-dead watch path."""
+    script = r"""
+set -euo pipefail
+SHUTTING_DOWN=0
+cleanup() {
+  if [[ "$SHUTTING_DOWN" == "1" ]]; then
+    return 0
+  fi
+  SHUTTING_DOWN=1
+  echo CLEANUP
+}
+on_signal() {
+  cleanup
+  exit 0
+}
+trap cleanup EXIT
+trap on_signal INT TERM
+
+# Simulate the watch loop briefly, then deliver TERM like the complete wrapper.
+(
+  sleep 0.3
+  kill -TERM $$
+) &
+while true; do
+  if [[ "$SHUTTING_DOWN" == "1" ]]; then
+    exit 0
+  fi
+  sleep 0.05
+done
+"""
+    result = subprocess.run(
+        ["bash", "-c", script],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        timeout=10,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert "CLEANUP" in result.stdout
 
 
 def test_idle_backtest_watcher_is_quiet_while_waiting() -> None:
