@@ -704,7 +704,10 @@ def buy_book_sync_holdings(body: dict[str, Any] = Body(default_factory=dict)) ->
         from product.buy_health import evaluate_book, invalidate_eval_cache
 
         payload = body or {}
-        sync = sync_from_holdings(refresh_kite=bool(payload.get("refresh_kite", True)))
+        sync = sync_from_holdings(
+            refresh_kite=bool(payload.get("refresh_kite", True)),
+            notify=bool(payload.get("notify", False)),
+        )
         invalidate_eval_cache()
         book = evaluate_book(force=True)
         return {

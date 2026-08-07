@@ -685,8 +685,10 @@ def pulse_api_payload(*, force: bool = False) -> dict[str, Any]:
 
 
 def pulse_to_telegram(pulse: dict) -> str:
-    """Compact plain-English Telegram pulse (HTML)."""
-    lines = [f"<b>Daily Pulse</b> — {pulse.get('date') or 'today'}"]
+    """Compact plain-English Telegram pulse (HTML) — escape dynamic text."""
+    from alerts.telegram_alerts import escape_html as esc
+
+    lines = [f"<b>Daily Pulse</b> — {esc(pulse.get('date') or 'today')}"]
     wrap = pulse.get("wrap_of_the_day") or {}
     wrap_bullets = list(wrap.get("bullets") or []) if isinstance(wrap, dict) else []
     takeaways = list(pulse.get("takeaways") or [])[:5]
@@ -694,12 +696,12 @@ def pulse_to_telegram(pulse: dict) -> str:
         lines.append("")
         lines.append("<b>Wrap of the Day</b>")
         for i, t in enumerate(wrap_bullets[:5], 1):
-            lines.append(f"{i}) {t}")
+            lines.append(f"{i}) {esc(t)}")
     elif takeaways:
         lines.append("")
         lines.append("<b>Today in short</b>")
         for t in takeaways:
-            lines.append(f"• {t}")
+            lines.append(f"• {esc(t)}")
     stance = ((pulse.get("snapshot") or {}).get("options_stance") or {}).get("stance")
     if stance:
         meaning = {
@@ -709,11 +711,11 @@ def pulse_to_telegram(pulse: dict) -> str:
             "NEUTRAL": "balanced",
             "INCOMPLETE": "not enough data",
         }.get(str(stance).upper(), "see app")
-        lines.append(f"\nOptions mood: <b>{stance}</b> — {meaning} (not a buy)")
+        lines.append(f"\nOptions mood: <b>{esc(stance)}</b> — {esc(meaning)} (not a buy)")
     sectors = pulse.get("sectors") or {}
     if sectors.get("available") and sectors.get("leaders"):
         top = ", ".join(
-            f"{r.get('sector')} ({float(r.get('chg_1d') or 0):+.1f}%)"
+            f"{esc(r.get('sector'))} ({float(r.get('chg_1d') or 0):+.1f}%)"
             for r in (sectors.get("leaders") or [])[:3]
         )
         lines.append(f"Strong sectors today: {top}")
@@ -727,44 +729,65 @@ def pulse_to_telegram(pulse: dict) -> str:
         if vol is not None:
             bit.append(f"{float(vol):.1f}× volume")
         lines.append(
-            f"\nBuzzing stock: <b>{b.get('symbol')}</b>"
+            f"\nBuzzing stock: <b>{esc(b.get('symbol'))}</b>"
             + (f" ({', '.join(bit)})" if bit else "")
         )
     if pulse.get("strength"):
         s = pulse["strength"]
         dist = s.get("pivot_distance_pct")
         dist_txt = f"{float(dist):.1f}% below breakout level" if dist is not None else "near breakout level"
-        lines.append(f"Gaining strength: <b>{s.get('symbol')}</b> — {dist_txt}")
+        lines.append(f"Gaining strength: <b>{esc(s.get('symbol'))}</b> — {esc(dist_txt)}")
     if pulse.get("weak"):
         w = pulse["weak"]
-        lines.append(f"Losing steam: <b>{w.get('symbol')}</b> — stay away for now")
+        lines.append(f"Losing steam: <b>{esc(w.get('symbol'))}</b> — stay away for now")
     if pulse.get("relative_strength"):
-        syms = ", ".join(r.get("symbol") for r in (pulse.get("relative_strength") or [])[:4] if r.get("symbol"))
+        syms = ", ".join(
+            esc(r.get("symbol")) for r in (pulse.get("relative_strength") or [])[:4] if r.get("symbol")
+        )
         if syms:
             lines.append(f"Relative strength leaders: {syms}")
     if pulse.get("breakouts_today"):
-        syms = ", ".join(r.get("symbol") for r in (pulse.get("breakouts_today") or [])[:4] if r.get("symbol"))
+        syms = ", ".join(
+            esc(r.get("symbol")) for r in (pulse.get("breakouts_today") or [])[:4] if r.get("symbol")
+        )
         if syms:
             lines.append(f"Breakouts confirmed: {syms}")
     if pulse.get("breakouts_tomorrow"):
-        syms = ", ".join(r.get("symbol") for r in (pulse.get("breakouts_tomorrow") or [])[:4] if r.get("symbol"))
+        syms = ", ".join(
+            esc(r.get("symbol")) for r in (pulse.get("breakouts_tomorrow") or [])[:4] if r.get("symbol")
+        )
         if syms:
             lines.append(f"\nWatch tomorrow: {syms}")
     desk = pulse.get("holdings_desk") or {}
     desk_rows = list(desk.get("rows") or []) if isinstance(desk, dict) else []
+    flows = desk.get("market_flows") if isinstance(desk, dict) else {}
+    if isinstance(flows, dict) and (flows.get("bias_label") or flows.get("bias")):
+        lines.append(
+            f"\nFII/DII: <b>{esc(flows.get('bias_label') or flows.get('bias'))}</b>"
+            + (f" · {esc(flows.get('as_of'))}" if flows.get("as_of") else "")
+        )
     if desk_rows:
         lines.append("\n<b>Holdings desk</b> (research watches)")
         for row in desk_rows[:8]:
-            sym = row.get("symbol") or row.get("tradingsymbol")
-            sug = row.get("suggestion") or row.get("stance")
-            news = ((row.get("news") or {}).get("bias")) or "NONE"
-            lines.append(f"• <b>{sym}</b> → {sug} · news {news}")
+            sym = esc(row.get("symbol") or row.get("tradingsymbol"))
+            sug = esc(row.get("suggestion") or row.get("stance"))
+            plan = row.get("price_plan") if isinstance(row.get("price_plan"), Mapping) else {}
+            lines.append(
+                f"• <b>{sym}</b> → {sug}"
+                + (
+                    f" · stop ₹{esc(plan.get('stop_watch') or '—')} → tgt ₹{esc(plan.get('target_watch') or '—')}"
+                    if plan
+                    else ""
+                )
+            )
+            if row.get("fund_brief"):
+                lines.append(f"  {esc(str(row.get('fund_brief'))[:140])}")
         if len(desk_rows) > 8:
             lines.append(f"… +{len(desk_rows) - 8} more")
     gaps = list(pulse.get("gaps") or [])
     if gaps:
-        lines.append(f"\nMissing data: {gaps[0]}")
-    lines.append("\n<i>Research digest only · not a buy ticket · paper-first</i>")
+        lines.append(f"\nMissing data: {esc(gaps[0])}")
+    lines.append("\n<i>Research digest only · not a buy ticket · analyse before acting · paper-first</i>")
     return "\n".join(lines)
 
 

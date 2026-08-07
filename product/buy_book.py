@@ -210,6 +210,7 @@ def add_item(
 def sync_from_holdings(
     *,
     refresh_kite: bool = True,
+    notify: bool = False,
     path: Path | None = None,
 ) -> dict[str, Any]:
     """Pull Zerodha/demat holdings into Active Buys for tracking.
@@ -218,11 +219,12 @@ def sync_from_holdings(
     - Upserts each CNC holding as an active buy (avg → entry, qty preserved)
     - Closes prior ``zerodha``/``holdings`` rows that are no longer in demat
     - Leaves manually added buys untouched unless the same symbol is held
+    - Telegram only when ``notify=True`` — analyse first, then send deliberately
     """
     from product.holdings_book import build_holdings_payload, research_symbol, sync_from_kite
 
     if refresh_kite:
-        holdings_payload = sync_from_kite(notify=True)
+        holdings_payload = sync_from_kite(notify=bool(notify))
         if not holdings_payload.get("available") and not holdings_payload.get("synced"):
             # Fall back to last saved book so UI can still track offline demat snapshot.
             holdings_payload = build_holdings_payload()
@@ -270,29 +272,30 @@ def sync_from_holdings(
             closed.append(str(row.get("symbol")))
 
     telegram = holdings_payload.get("telegram") if isinstance(holdings_payload.get("telegram"), dict) else {}
-    # Also notify Active Buys tracking outcome when Telegram is configured.
-    try:
-        from alerts.telegram_alerts import AlertEngine
+    # Opt-in only — do not rush Active Buys Telegram before the user analyses.
+    if notify:
+        try:
+            from alerts.telegram_alerts import AlertEngine
 
-        engine = AlertEngine()
-        if engine.is_configured() and upserted:
-            lines = [
-                "<b>Active Buys · tracking Zerodha holdings</b>",
-                f"Tracking {len(upserted)} name(s) · closed stale {len(closed)}",
-                "",
-            ]
-            for item in upserted[:10]:
-                lines.append(
-                    f"• <b>{item.get('symbol')}</b> qty {item.get('quantity') or '—'} · "
-                    f"avg ₹{float(item.get('entry_price') or 0):,.1f}"
-                )
-            lines.append("\n<i>Technicals + fundamentals watch · not a sell ticket</i>")
-            telegram = {
-                **telegram,
-                "active_buys_sent": bool(engine.send("\n".join(lines))),
-            }
-    except Exception as exc:
-        telegram = {**telegram, "active_buys_error": str(exc)}
+            engine = AlertEngine()
+            if engine.is_configured() and upserted:
+                lines = [
+                    "<b>Active Buys · tracking Zerodha holdings</b>",
+                    f"Tracking {len(upserted)} name(s) · closed stale {len(closed)}",
+                    "",
+                ]
+                for item in upserted[:10]:
+                    lines.append(
+                        f"• <b>{item.get('symbol')}</b> qty {item.get('quantity') or '—'} · "
+                        f"avg ₹{float(item.get('entry_price') or 0):,.1f}"
+                    )
+                lines.append("\n<i>Technicals + fundamentals watch · not a sell ticket</i>")
+                telegram = {
+                    **telegram,
+                    "active_buys_sent": bool(engine.send("\n".join(lines))),
+                }
+        except Exception as exc:
+            telegram = {**telegram, "active_buys_error": str(exc)}
 
     return {
         "accepted": True,

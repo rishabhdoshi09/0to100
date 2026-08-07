@@ -225,6 +225,7 @@ export type StockWorkspace = {
     flows?: {
       available?: boolean
       bias?: string
+      bias_label?: string
       note?: string
       latest_fii_net_cr?: number | null
       latest_dii_net_cr?: number | null
@@ -675,6 +676,7 @@ export type RadarHome = {
     verdict_line?: string
     regime?: string
     flows_bias?: string
+    flows_bias_label?: string
     flows_note?: string
     fii_net_cr?: number | null
     dii_net_cr?: number | null
@@ -927,7 +929,7 @@ export const removeBuyBookItem = (itemId: string): Promise<{ accepted: boolean }
   }).then((response) => json(response))
 
 export const syncBuyBookFromHoldings = (
-  body?: { refresh_kite?: boolean },
+  body?: { refresh_kite?: boolean; notify?: boolean },
 ): Promise<{
   accepted: boolean
   upserted: number
@@ -943,7 +945,7 @@ export const syncBuyBookFromHoldings = (
   fetch('/api/buy-book/sync-holdings', {
     method: 'POST',
     headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
-    body: JSON.stringify(body || { refresh_kite: true }),
+    body: JSON.stringify({ refresh_kite: true, notify: false, ...(body || {}) }),
   }).then((response) => json(response))
 
 export type SymbolRatioRow = {

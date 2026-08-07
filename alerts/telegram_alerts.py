@@ -11,9 +11,11 @@ on-disk ``.env`` file — uvicorn stack scripts often start without sourcing
 """
 from __future__ import annotations
 
-import os
-import sqlite3
+import html
 import logging
+import os
+import re
+import sqlite3
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -45,6 +47,18 @@ def _read_dotenv_value(name: str) -> str:
     except Exception:
         pass
     return ""
+
+
+def escape_html(text: object) -> str:
+    """Escape dynamic content for Telegram HTML parse_mode."""
+    return html.escape(str(text or ""), quote=False)
+
+
+def strip_telegram_html(message: str) -> str:
+    """Plain-text fallback — never leave raw <b> tags visible in Telegram."""
+    text = re.sub(r"<br\s*/?>", "\n", message or "", flags=re.I)
+    text = re.sub(r"</?(b|i|strong|em|u|code|pre)>", "", text, flags=re.I)
+    return html.unescape(text)
 
 
 def resolve_telegram_credentials() -> tuple[str, str, str]:
@@ -161,6 +175,16 @@ class AlertEngine:
             chunks.append(current)
         return chunks
 
+    @classmethod
+    def strip_html(cls, message: str) -> str:
+        """Plain-text fallback — never leave raw <b> tags visible in Telegram."""
+        return strip_telegram_html(message)
+
+    @staticmethod
+    def escape(text: str) -> str:
+        """Escape dynamic content for Telegram HTML parse_mode."""
+        return escape_html(text)
+
     def _post_chunk(self, url: str, payload: dict) -> tuple[bool, str | None]:
         try:
             resp = requests.post(url, json=payload, timeout=12)
@@ -187,7 +211,8 @@ class AlertEngine:
         attaches inline action buttons (see alerts/telegram_actions.py).
         Long messages auto-split at the 4096-char API cap (buttons ride
         on the last chunk). Returns True only if EVERY chunk delivered.
-        On HTML parse failures, retries the chunk without parse_mode.
+        On HTML parse failures, retries as plain text with tags stripped
+        so users never see literal ``<b>`` markers.
         """
         self.last_error = None
         if not self.enabled:
@@ -205,10 +230,11 @@ class AlertEngine:
             if reply_markup and i == len(chunks) - 1:
                 payload["reply_markup"] = reply_markup
             delivered, err = self._post_chunk(url, payload)
-            if not delivered and err and "parse" in err.lower():
-                # Unescaped <>& in wrap/news text often breaks HTML mode.
+            if not delivered:
+                # Always fall back to cleaned plain text — never show raw tags.
                 plain = dict(payload)
                 plain.pop("parse_mode", None)
+                plain["text"] = self.strip_html(chunk)
                 delivered, err = self._post_chunk(url, plain)
             if not delivered:
                 self.last_error = err or f"Telegram send failed (chunk {i + 1}/{len(chunks)})"

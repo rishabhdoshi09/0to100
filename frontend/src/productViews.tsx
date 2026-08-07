@@ -775,7 +775,7 @@ export function ProductStockIntelligenceView(props: ViewProps) {
               <div><span>Setup</span><strong>{workspace?.desk_tape?.scan?.setup || '—'}</strong></div>
               <div><span>RS proxy</span><strong>{workspace?.desk_tape?.scan?.relative_strength_proxy ?? '—'}</strong></div>
               <div><span>Vol ratio</span><strong>{workspace?.desk_tape?.scan?.liquidity?.volume_ratio ?? '—'}</strong></div>
-              <div><span>FII/DII</span><strong>{workspace?.desk_tape?.flows?.bias || '—'}</strong></div>
+              <div><span>FII/DII</span><strong>{workspace?.desk_tape?.flows?.bias_label || workspace?.desk_tape?.flows?.bias || '—'}</strong></div>
               <div><span>Earnings</span><strong>{workspace?.desk_tape?.earnings?.risk_level || '—'}</strong></div>
               <div>
                 <span>Position</span>

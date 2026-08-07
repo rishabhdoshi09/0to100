@@ -39,6 +39,38 @@ _HEADERS = {
 
 # ── Pure parsers (testable) ──────────────────────────────────────────────────
 
+# Short UI/Telegram labels — snake codes truncate in metric cards (e.g. …DII_ABSO).
+_BIAS_PLAIN = {
+    "SUPPORTIVE": "Both buying",
+    "FII_SELLING_DII_ABSORBING": "FII sell · DII absorb",
+    "DISTRIBUTION": "Both selling",
+    "MIXED": "Mixed flows",
+    "UNKNOWN": "Flows unknown",
+    "": "Flows unknown",
+}
+
+_BIAS_TRADER = {
+    "SUPPORTIVE": "FII and DII both net buyers — institutional bid under the tape.",
+    "FII_SELLING_DII_ABSORBING": (
+        "Foreign money is selling; domestic institutions are absorbing. "
+        "Dips can find a bid, but foreign outflows still matter for risk."
+    ),
+    "DISTRIBUTION": "FII and DII both net sellers — respect distribution; avoid chasing breakouts.",
+    "MIXED": "FII/DII pulling in opposite directions — wait for a cleaner flow day.",
+    "UNKNOWN": "FII/DII not available yet — do not invent a flows call.",
+}
+
+
+def humanize_flow_bias(bias: str | None) -> dict[str, str]:
+    """Map machine bias codes to short labels that fit UI cards + trader notes."""
+    code = str(bias or "").strip().upper()
+    return {
+        "bias": code or "UNKNOWN",
+        "bias_label": _BIAS_PLAIN.get(code, code.replace("_", " ").title() if code else "Flows unknown"),
+        "bias_note": _BIAS_TRADER.get(code, _BIAS_TRADER["UNKNOWN"]),
+    }
+
+
 def parse_fii_dii(rows: list[dict]) -> dict | None:
     """NSE fiidiiTradeReact rows → {date, fii_net_cr, dii_net_cr, bias, note}.
     bias: SUPPORTIVE (dono +) / FII_SELLING_DII_ABSORBING / DISTRIBUTION
@@ -72,8 +104,16 @@ def parse_fii_dii(rows: list[dict]) -> dict | None:
     else:
         bias, note = "MIXED", (f"FII +₹{fii:,.0f}cr, DII ₹{dii:,.0f}cr — "
                                f"mixed haath")
-    return {"date": date, "fii_net_cr": round(fii, 0),
-            "dii_net_cr": round(dii, 0), "bias": bias, "note": note}
+    plain = humanize_flow_bias(bias)
+    return {
+        "date": date,
+        "fii_net_cr": round(fii, 0),
+        "dii_net_cr": round(dii, 0),
+        "bias": bias,
+        "bias_label": plain["bias_label"],
+        "bias_note": plain["bias_note"],
+        "note": note,
+    }
 
 
 def parse_bulk_deals(payload: dict) -> list[dict]:

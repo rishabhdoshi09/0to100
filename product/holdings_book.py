@@ -368,8 +368,11 @@ def notify_holdings_telegram(book: Mapping[str, Any] | None = None) -> dict[str,
     }
 
 
-def sync_from_kite(path: Path | None = None, *, notify: bool = True) -> dict[str, Any]:
-    """Pull CNC holdings from Zerodha when the session is connected."""
+def sync_from_kite(path: Path | None = None, *, notify: bool = False) -> dict[str, Any]:
+    """Pull CNC holdings from Zerodha when the session is connected.
+
+    Telegram is opt-in (``notify=True``) — analyse holdings desk before blasting chat.
+    """
     status = connection_status(path)
     try:
         from data.kite_client import KiteClient

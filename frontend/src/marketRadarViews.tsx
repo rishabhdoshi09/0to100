@@ -207,7 +207,7 @@ export function RadarHomeView(props: ExperienceViewProps & {
         <div><span>BREADTH</span><strong>{radar?.breadth || dashboard.market.breadth}</strong></div>
         <div><span>VIX</span><strong>{radar?.vix ?? dashboard.market.vix ?? '—'}</strong></div>
         <div><span>POSTURE</span><strong>{radar?.command?.posture || '—'}</strong></div>
-        <div><span>FII/DII</span><strong>{radar?.command?.flows_bias || '—'}</strong></div>
+        <div><span>FII/DII</span><strong>{radar?.command?.flows_bias_label || radar?.command?.flows_bias || '—'}</strong></div>
         <div><span>FII NET</span><strong>{radar?.command?.fii_net_cr != null ? `${radar.command.fii_net_cr}` : '—'}</strong></div>
         <div><span>ACTIVE BUYS</span><strong>{radar?.command?.active_buy_warnings ?? 0} warn</strong></div>
         <div><span>LAST SCAN</span><strong>{radar?.scan_scanned_at || dashboard.scan.scanned_at || 'Not run'}</strong></div>

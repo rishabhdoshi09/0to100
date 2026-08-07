@@ -307,12 +307,17 @@ export type InstitutionalFlowsPayload = {
     fii_streak?: number
     dii_streak?: number
     bias?: string
+    bias_label?: string
+    bias_note?: string
     note?: string
   }
   derivatives?: Record<string, number | null>
   bulk_deals?: Array<Record<string, unknown>>
   bulk_buy_symbols?: string[]
   nifty_options?: OptionsChainPayload
+  bias?: string
+  bias_label?: string
+  bias_note?: string
   insight?: string
   generated_at?: string
   error?: string

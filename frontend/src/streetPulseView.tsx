@@ -393,10 +393,26 @@ export function StreetPulseView({ setSelected, setActive, onOpenPdf }: Props) {
                 : 'Track demat book: fundamentals → technicals → news good/bad → buy/sell/hold-style watch'
             }
           >
+            {((desk || pulse.holdings_desk)?.market_flows?.bias_label
+              || (desk || pulse.holdings_desk)?.market_flows?.bias) ? (
+              <p className="panel-copy">
+                Market FII/DII:{' '}
+                <strong>
+                  {(desk || pulse.holdings_desk)?.market_flows?.bias_label
+                    || (desk || pulse.holdings_desk)?.market_flows?.bias}
+                </strong>
+                {(desk || pulse.holdings_desk)?.market_flows?.as_of
+                  ? ` · ${(desk || pulse.holdings_desk)?.market_flows?.as_of}`
+                  : ''}
+                {(desk || pulse.holdings_desk)?.market_flows?.bias_note
+                  ? ` — ${(desk || pulse.holdings_desk)?.market_flows?.bias_note}`
+                  : ''}
+              </p>
+            ) : null}
             {((desk || pulse.holdings_desk)?.rows || []).length === 0 ? (
               <EmptyState
                 title="Holdings desk not scored yet"
-                detail={(desk || pulse.holdings_desk)?.message || 'Sync Zerodha holdings on My Holdings, then Run holdings desk.'}
+                detail={(desk || pulse.holdings_desk)?.message || 'Sync Zerodha holdings on My Holdings, then Run holdings desk. Analyse first — Telegram is a separate step.'}
               />
             ) : (
               <div style={{ display: 'grid', gap: 12 }}>
@@ -407,17 +423,19 @@ export function StreetPulseView({ setSelected, setActive, onOpenPdf }: Props) {
                         symbol={row.symbol || row.tradingsymbol}
                         detail={
                           row.vs_entry_pct == null
-                            ? `${row.quantity ?? '—'} sh`
-                            : `${row.quantity ?? '—'} sh · vs avg ${row.vs_entry_pct > 0 ? '+' : ''}${row.vs_entry_pct}%`
+                            ? `${row.quantity ?? '—'} sh · ${row.horizon || 'SHORT_TERM'}`
+                            : `${row.quantity ?? '—'} sh · vs avg ${row.vs_entry_pct > 0 ? '+' : ''}${row.vs_entry_pct}% · ${row.horizon || 'SHORT_TERM'}`
                         }
                         onOpen={openSymbol}
                       />
                       <div style={{ marginTop: 4, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                         <StatusBadge status={String(row.suggestion || row.stance || 'INCOMPLETE')} />
                         <StatusBadge status={`NEWS_${String(row.news?.bias || 'NONE')}`} />
+                        <StatusBadge status={String(row.horizon || 'SHORT_TERM')} />
                       </div>
                       <p className="panel-copy" style={{ marginTop: 6 }}>{row.thesis}</p>
-                      {(row.suggestions || []).slice(0, 2).map((tip) => (
+                      <p className="panel-copy">{row.fund_brief || row.fundamentals?.brief || row.fundamentals?.note}</p>
+                      {(row.suggestions || []).slice(0, 3).map((tip) => (
                         <p key={tip} className="panel-copy">{tip}</p>
                       ))}
                     </div>
@@ -430,6 +448,23 @@ export function StreetPulseView({ setSelected, setActive, onOpenPdf }: Props) {
                         label="FUNDAMENTALS"
                         value={words(row.fundamentals?.severity || '—')}
                       />
+                      <MetricCell
+                        label="RANGE"
+                        value={
+                          row.price_plan?.range_low != null || row.price_plan?.range_high != null
+                            ? `₹${row.price_plan?.range_low ?? '—'}–₹${row.price_plan?.range_high ?? '—'}`
+                            : '—'
+                        }
+                      />
+                      <MetricCell
+                        label="STOP / TARGET"
+                        value={
+                          row.price_plan?.stop_watch != null || row.price_plan?.target_watch != null
+                            ? `₹${row.price_plan?.stop_watch ?? '—'} → ₹${row.price_plan?.target_watch ?? '—'}`
+                            : '—'
+                        }
+                        hint={row.price_plan?.target_note || row.price_plan?.note}
+                      />
                       <p className="panel-copy">{row.news?.label || row.news?.headlines?.[0]?.title || 'No recent symbol news'}</p>
                     </div>
                   </div>
@@ -438,23 +473,20 @@ export function StreetPulseView({ setSelected, setActive, onOpenPdf }: Props) {
             )}
             <div className="inline-actions" style={{ marginTop: 8, flexWrap: 'wrap', gap: 8 }}>
               <button type="button" disabled={!!deskBusy} onClick={() => void runDesk(false)}>
-                {deskBusy === 'run' ? 'Scoring holdings…' : 'Run holdings desk'}
+                {deskBusy === 'run' ? 'Analysing holdings…' : 'Analyse holdings desk'}
               </button>
               <button
                 type="button"
                 disabled={!!deskBusy || !((desk || pulse.holdings_desk)?.available)}
                 onClick={() => void sendDeskTelegram()}
               >
-                {deskBusy === 'notify' ? 'Sending…' : 'Send desk to Telegram'}
-              </button>
-              <button type="button" disabled={!!deskBusy} onClick={() => void runDesk(true)}>
-                Run + Telegram
+                {deskBusy === 'notify' ? 'Sending…' : 'Send analysed desk to Telegram'}
               </button>
             </div>
             {deskNote ? <p className="panel-copy">{deskNote}</p> : null}
             <p className="panel-copy">
               {(desk || pulse.holdings_desk)?.honesty
-                || 'Research suggestions only — BUY/SELL/HOLD labels are watches, never live orders.'}
+                || 'Research suggestions only — BUY/SELL/HOLD labels are watches, never live orders. Analyse before Telegram.'}
             </p>
           </Panel>
 

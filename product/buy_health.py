@@ -273,6 +273,8 @@ def evaluate_symbol(
     ema200 = _ema(close, 200)
     support_20 = _swing_support(low, 20)
     support_60 = _swing_support(low, 60)
+    resistance_20 = float(np.nanmax(high[-20:])) if len(high) >= 20 else None
+    resistance_60 = float(np.nanmax(high[-60:])) if len(high) >= 60 else None
 
     avg_vol20 = float(np.nanmean(vol[-21:-1])) if len(vol) >= 22 and np.nanmean(vol[-21:-1]) > 0 else None
     vol_ratio = round(float(vol[-1]) / avg_vol20, 2) if avg_vol20 else None
@@ -378,6 +380,10 @@ def evaluate_symbol(
             "swing_20d": support_20,
             "swing_60d": support_60,
         },
+        "resistances": {
+            "swing_20d": round(resistance_20, 2) if resistance_20 else None,
+            "swing_60d": round(resistance_60, 2) if resistance_60 else None,
+        },
         "structure": {
             "chg_1d_pct": chg_1d,
             "chg_5d_pct": chg_5d,
@@ -412,6 +418,7 @@ def evaluate_symbol(
             "warnings": warnings,
             "risk_score": min(100, score + int(fundamentals.get("risk_score") or 0) // 2),
             "supports": technicals["supports"],
+            "resistances": technicals.get("resistances") or {},
             "averages": technicals["averages"],
             "structure": technicals["structure"],
             "technicals": technicals,

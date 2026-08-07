@@ -285,7 +285,7 @@ export function PortfolioView({ dashboard, runControl, setSelected, setActive }:
     setHoldingsError('')
     setHoldingsNote('')
     try {
-      const book = await syncHoldings({ notify: true })
+      const book = await syncHoldings({ notify: false })
       setHoldings(book)
       setConnection(book.connection || null)
       if (!book.available) {
@@ -295,12 +295,9 @@ export function PortfolioView({ dashboard, runControl, setSelected, setActive }:
           || 'Sync returned no holdings — check KITE_ACCESS_TOKEN',
         )
       } else {
-        const tg = book.telegram?.sent
-          ? ' · Telegram notified'
-          : book.telegram?.reason
-            ? ` · Telegram: ${book.telegram.reason}`
-            : ''
-        setHoldingsNote(`Synced ${book.summary?.count || book.holdings.length} holding(s) from Zerodha${tg}`)
+        setHoldingsNote(
+          `Synced ${book.summary?.count || book.holdings.length} holding(s) from Zerodha · analyse on Daily Pulse before Telegram`,
+        )
       }
     } catch (reason) {
       setHoldingsError(reason instanceof Error ? reason.message : 'Zerodha sync failed')
@@ -314,7 +311,7 @@ export function PortfolioView({ dashboard, runControl, setSelected, setActive }:
     setHoldingsError('')
     setHoldingsNote('Syncing Zerodha → My Holdings + Active Buys…')
     try {
-      const book = await syncHoldings({ notify: true })
+      const book = await syncHoldings({ notify: false })
       setHoldings(book)
       setConnection(book.connection || null)
       if (!book.available) {
@@ -322,13 +319,9 @@ export function PortfolioView({ dashboard, runControl, setSelected, setActive }:
         setHoldingsNote('')
         return
       }
-      const tracked = await syncBuyBookFromHoldings({ refresh_kite: false })
-      const tgBits = [
-        book.telegram?.sent ? 'Holdings Telegram sent' : '',
-        tracked.telegram?.active_buys_sent ? 'Active Buys Telegram sent' : '',
-      ].filter(Boolean).join(' · ')
+      const tracked = await syncBuyBookFromHoldings({ refresh_kite: false, notify: false })
       setHoldingsNote(
-        `Tracking ${tracked.upserted} name(s) in Active Buys${tgBits ? ` · ${tgBits}` : ''}. Open Active Buys for tech+fund health.`,
+        `Tracking ${tracked.upserted} name(s) in Active Buys · analyse tech+fund on Active Buys / Daily Pulse before Telegram`,
       )
     } catch (reason) {
       setHoldingsError(reason instanceof Error ? reason.message : 'Sync + track failed')
@@ -375,13 +368,11 @@ export function PortfolioView({ dashboard, runControl, setSelected, setActive }:
     setHoldingsBusy('import')
     setHoldingsError('')
     try {
-      const book = await importHoldings(rows, 'paste', { notify: true })
+      const book = await importHoldings(rows, 'paste', { notify: false })
       setHoldings(book)
       setImportText('')
       setHoldingsNote(
-        book.telegram?.sent
-          ? `Imported ${book.summary.count} row(s) · Telegram notified`
-          : `Imported ${book.summary.count} row(s)`,
+        `Imported ${book.summary.count} row(s) · run Holdings Desk on Daily Pulse before Telegram`,
       )
     } catch (reason) {
       setHoldingsError(reason instanceof Error ? reason.message : 'Import failed')
@@ -585,7 +576,7 @@ export function MarketInternalsView({ dashboard, runControl }: ViewProps) {
         <MetricCard label="NIFTY 1D" value={pct(dashboard.market.nifty_change_1d)} detail={`5D ${pct(dashboard.market.nifty_change_5d)}`} />
         <MetricCard label="INDIA VIX" value={Number.isFinite(dashboard.market.vix) ? Number(dashboard.market.vix).toFixed(2) : '—'} tone="purple" />
         <MetricCard label="FII NET (30D)" value={cash?.totals?.fii_net_cr != null ? `₹${Number(cash.totals.fii_net_cr).toLocaleString('en-IN')} Cr` : '—'} detail={inst?.insight || cash?.note || 'Syncs from NSE when you open this page'} tone={Number(cash?.totals?.fii_net_cr || 0) >= 0 ? 'green' : 'amber'} />
-        <MetricCard label="DII NET (30D)" value={cash?.totals?.dii_net_cr != null ? `₹${Number(cash.totals.dii_net_cr).toLocaleString('en-IN')} Cr` : '—'} detail={`Bias ${cash?.bias || '—'}`} />
+        <MetricCard label="DII NET (30D)" value={cash?.totals?.dii_net_cr != null ? `₹${Number(cash.totals.dii_net_cr).toLocaleString('en-IN')} Cr` : '—'} detail={`Bias ${cash?.bias_label || cash?.bias || '—'}`} />
         <MetricCard label="BULK BUYS" value={String(inst?.bulk_buy_symbols?.length || 0)} detail="Net bulk-buy symbols today" tone="cyan" />
       </div>
       <div className="market-grid">

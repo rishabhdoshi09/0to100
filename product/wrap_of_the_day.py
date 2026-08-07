@@ -475,9 +475,11 @@ def load_wrap(
 
 
 def wrap_telegram_message(wrap: Mapping[str, Any] | None = None) -> str:
+    from alerts.telegram_alerts import escape_html as esc
+
     payload = dict(wrap or load_wrap())
     bullets = list(payload.get("bullets") or [])
-    day = payload.get("date") or today_ist()
+    day = esc(payload.get("date") or today_ist())
     source = str(payload.get("source") or "auto")
     if not bullets:
         return (
@@ -485,10 +487,10 @@ def wrap_telegram_message(wrap: Mapping[str, Any] | None = None) -> str:
             "No wrap available from current stores yet.\n"
             "<i>System-composed · not a buy ticket</i>"
         )
-    label = "user override" if payload.get("override") else f"source {source}"
+    label = "user override" if payload.get("override") else f"source {esc(source)}"
     lines = [f"<b>Wrap of the Day</b> — {day}", f"<i>{label}</i>", ""]
     for i, bullet in enumerate(bullets[:12], 1):
-        lines.append(f"{i}) {bullet}")
+        lines.append(f"{i}) {esc(bullet)}")
     if len(bullets) > 12:
         lines.append(f"… +{len(bullets) - 12} more")
     lines.append("\n<i>Research wrap · not a buy ticket · paper-first</i>")

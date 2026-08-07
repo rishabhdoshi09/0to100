@@ -160,8 +160,24 @@ def _flow_context(symbol: str) -> dict[str, Any]:
         flows = workspace_payload(days=30, allow_network=False, include_nifty_options=False)
         cash = flows.get("cash") if isinstance(flows.get("cash"), Mapping) else {}
         out["available"] = bool(flows.get("available") or cash.get("available"))
-        out["bias"] = str(cash.get("bias") or "")
-        out["note"] = str(flows.get("insight") or cash.get("note") or "")
+        out["bias"] = str(cash.get("bias") or flows.get("bias") or "")
+        out["bias_label"] = str(
+            cash.get("bias_label") or flows.get("bias_label") or ""
+        )
+        if not out["bias_label"] and out["bias"]:
+            try:
+                from data.institutional_flows import humanize_flow_bias
+
+                out["bias_label"] = humanize_flow_bias(out["bias"])["bias_label"]
+            except Exception:
+                out["bias_label"] = str(out["bias"]).replace("_", " ")
+        out["note"] = str(
+            flows.get("bias_note")
+            or cash.get("bias_note")
+            or flows.get("insight")
+            or cash.get("note")
+            or ""
+        )
         today = cash.get("today") if isinstance(cash.get("today"), Mapping) else {}
         out["as_of"] = str(today.get("date") or "")
         out["latest_fii_net_cr"] = _f(today.get("fii_net"))
@@ -242,8 +258,12 @@ def _headline_bullets(
                 bullets.append(f"Health: {warn.get('text')}")
     if earnings.get("available") and str(earnings.get("risk_level") or "").upper() in {"HIGH", "MEDIUM"}:
         bullets.append(str(earnings.get("note") or f"Earnings risk {earnings.get('risk_level')}"))
-    if flows.get("bias"):
-        bullets.append(f"Market FII/DII bias: {flows.get('bias')}" + (f" · {flows.get('as_of')}" if flows.get("as_of") else ""))
+    if flows.get("bias") or flows.get("bias_label"):
+        label = flows.get("bias_label") or str(flows.get("bias") or "").replace("_", " ")
+        bullets.append(
+            f"Market FII/DII: {label}"
+            + (f" · {flows.get('as_of')}" if flows.get("as_of") else "")
+        )
     if flows.get("bulk_deals"):
         bullets.append(f"Bulk deal tag on this symbol ({len(flows['bulk_deals'])} recent)")
     for item in list(news or [])[:2]:
@@ -455,6 +475,12 @@ def build_market_command(*, home: Mapping[str, Any] | None = None) -> dict[str, 
             "verdict_line": brain.get("verdict_line") or "",
             "regime": brain.get("regime") or base.get("market_health") or "",
             "flows_bias": flows.get("bias") or brain.get("flows_bias") or "",
+            "flows_bias_label": flows.get("bias_label")
+            or (
+                str(flows.get("bias") or brain.get("flows_bias") or "")
+                .replace("_", " ")
+                .strip()
+            ),
             "flows_note": flows.get("note") or "",
             "fii_net_cr": flows.get("latest_fii_net_cr"),
             "dii_net_cr": flows.get("latest_dii_net_cr"),

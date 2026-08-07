@@ -329,6 +329,12 @@ def summarize(days: int = 30, *, auto_refresh: bool = True) -> dict[str, Any]:
     )
     bias = str((bias_row or {}).get("bias") or "")
     note = str((bias_row or {}).get("note") or "")
+    try:
+        from data.institutional_flows import humanize_flow_bias
+
+        plain = humanize_flow_bias(bias)
+    except Exception:
+        plain = {"bias_label": bias.replace("_", " ") if bias else "Flows unknown", "bias_note": note}
 
     return {
         "available": True,
@@ -344,6 +350,8 @@ def summarize(days: int = 30, *, auto_refresh: bool = True) -> dict[str, Any]:
         "fii_streak": fii_streak,
         "dii_streak": dii_streak,
         "bias": bias,
+        "bias_label": plain.get("bias_label") or bias,
+        "bias_note": plain.get("bias_note") or note,
         "note": note,
         "store_path": str(_DB_PATH),
         "row_count": count_rows(),
@@ -479,6 +487,8 @@ def workspace_payload(
             except Exception:
                 nifty_options = {"available": False}
 
+    bias_label = str(summary.get("bias_label") or "")
+    bias_note = str(summary.get("bias_note") or "")
     return {
         "available": bool(summary.get("available")),
         "cash": summary,
@@ -486,7 +496,10 @@ def workspace_payload(
         "bulk_deals": bulk_deals[:100],
         "bulk_buy_symbols": bulk_buys[:50],
         "nifty_options": nifty_options,
-        "insight": flows_note or summary.get("note") or "",
+        "bias": str(summary.get("bias") or ""),
+        "bias_label": bias_label,
+        "bias_note": bias_note,
+        "insight": bias_note or flows_note or summary.get("note") or "",
         "generated_at": _now_iso(),
         "lazy_sync": True,
         "network_used": bool(allow_network),

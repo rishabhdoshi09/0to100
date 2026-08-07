@@ -171,17 +171,30 @@ export type HoldingsDeskRow = {
   pnl?: number | null
   pnl_pct?: number | null
   vs_entry_pct?: number | null
+  horizon?: string
   stance?: string
   suggestion?: string
   confidence?: number
   thesis?: string
+  fund_brief?: string
   suggestions?: string[]
+  price_plan?: {
+    horizon?: string
+    range_low?: number | null
+    range_high?: number | null
+    stop_watch?: number | null
+    target_watch?: number | null
+    target_note?: string
+    reward_risk?: number | null
+    note?: string
+  }
   fundamentals?: {
     available?: boolean
     severity?: string
     status?: string
     ratios?: Record<string, number | null | undefined>
     flags?: Array<{ severity?: string; code?: string; text?: string }>
+    brief?: string
     note?: string
   }
   technicals?: {
@@ -212,6 +225,15 @@ export type HoldingsDeskPayload = {
   holdings_count?: number
   rows?: HoldingsDeskRow[]
   summary?: Record<string, number>
+  market_flows?: {
+    available?: boolean
+    bias?: string
+    bias_label?: string
+    bias_note?: string
+    fii_net_cr?: number | null
+    dii_net_cr?: number | null
+    as_of?: string
+  }
   message?: string
   places_orders?: boolean
   honesty?: string
