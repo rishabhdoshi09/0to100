@@ -697,7 +697,8 @@ def buy_book_status(fresh: bool = False) -> dict[str, Any]:
 def buy_book_sync_holdings(body: dict[str, Any] = Body(default_factory=dict)) -> dict[str, Any]:
     """Sync Zerodha/demat holdings into Active Buys for tracking.
 
-    Body: ``{"refresh_kite": true}`` (default true). Then re-evaluates the book.
+    Body: ``{"refresh_kite": true, "fetch_research": false, "force_fundamentals": false}``.
+    When ``fetch_research`` is true, also pulls Screener fundamentals + warms technicals.
     """
     try:
         from product.buy_book import sync_from_holdings
@@ -707,6 +708,8 @@ def buy_book_sync_holdings(body: dict[str, Any] = Body(default_factory=dict)) ->
         sync = sync_from_holdings(
             refresh_kite=bool(payload.get("refresh_kite", True)),
             notify=bool(payload.get("notify", False)),
+            fetch_research=bool(payload.get("fetch_research", False)),
+            force_fundamentals=bool(payload.get("force_fundamentals", False)),
         )
         invalidate_eval_cache()
         book = evaluate_book(force=True)
@@ -718,6 +721,38 @@ def buy_book_sync_holdings(body: dict[str, Any] = Body(default_factory=dict)) ->
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"Holdings sync into Active Buys failed: {exc}") from exc
+
+
+@app.post("/api/buy-book/refresh-research")
+def buy_book_refresh_research(body: dict[str, Any] = Body(default_factory=dict)) -> dict[str, Any]:
+    """Fetch Screener fundamentals + warm official technicals for Active Buys symbols."""
+    try:
+        from product.buy_health import evaluate_book, refresh_book_research
+
+        payload = body or {}
+        symbols = payload.get("symbols")
+        if symbols is not None and not isinstance(symbols, list):
+            raise HTTPException(status_code=400, detail="symbols must be a list when provided")
+        max_symbols = payload.get("max_symbols")
+        try:
+            max_symbols_i = int(max_symbols) if max_symbols is not None else None
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail="max_symbols must be an integer") from exc
+        research = refresh_book_research(
+            [str(s) for s in symbols] if isinstance(symbols, list) else None,
+            force_fundamentals=bool(payload.get("force_fundamentals", False)),
+            max_symbols=max_symbols_i,
+        )
+        book = evaluate_book(force=True)
+        return {
+            **research,
+            "book": book,
+            "places_orders": False,
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Active Buys research refresh failed: {exc}") from exc
 
 
 @app.post("/api/buy-book")

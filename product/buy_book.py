@@ -211,6 +211,8 @@ def sync_from_holdings(
     *,
     refresh_kite: bool = True,
     notify: bool = False,
+    fetch_research: bool = False,
+    force_fundamentals: bool = False,
     path: Path | None = None,
 ) -> dict[str, Any]:
     """Pull Zerodha/demat holdings into Active Buys for tracking.
@@ -219,6 +221,7 @@ def sync_from_holdings(
     - Upserts each CNC holding as an active buy (avg → entry, qty preserved)
     - Closes prior ``zerodha``/``holdings`` rows that are no longer in demat
     - Leaves manually added buys untouched unless the same symbol is held
+    - ``fetch_research=True`` opt-in: Screener fundamentals + warm technicals
     - Telegram only when ``notify=True`` — analyse first, then send deliberately
     """
     from product.holdings_book import build_holdings_payload, research_symbol, sync_from_kite
@@ -297,6 +300,22 @@ def sync_from_holdings(
         except Exception as exc:
             telegram = {**telegram, "active_buys_error": str(exc)}
 
+    research: dict[str, Any] | None = None
+    if fetch_research and held_symbols:
+        try:
+            from product.buy_health import refresh_book_research
+
+            research = refresh_book_research(
+                sorted(held_symbols),
+                force_fundamentals=bool(force_fundamentals),
+            )
+        except Exception as exc:
+            research = {
+                "accepted": False,
+                "message": f"Research refresh failed: {exc}",
+                "places_orders": False,
+            }
+
     return {
         "accepted": True,
         "synced_from": str(holdings_payload.get("source") or ("kite" if refresh_kite else "file")),
@@ -308,10 +327,18 @@ def sync_from_holdings(
         "closed_stale_zerodha": closed,
         "items": upserted,
         "telegram": telegram,
+        "research": research,
+        "fetch_research": bool(fetch_research),
         "places_orders": False,
         "honesty": (
             "Zerodha holdings were mapped into Active Buys for tracking. "
-            "Entry = demat average price. QuantTerm does not place orders."
+            "Entry = demat average price. "
+            + (
+                "Fundamentals + technicals were also refreshed (opt-in). "
+                if fetch_research
+                else "Use Fetch fund + tech to pull Screener + bhav research. "
+            )
+            + "QuantTerm does not place orders."
         ),
     }
 

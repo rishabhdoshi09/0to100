@@ -313,10 +313,85 @@ def test_sync_from_holdings_notifies_active_buys(tmp_path, monkeypatch):
             return True
 
     monkeypatch.setattr("alerts.telegram_alerts.AlertEngine", _FakeEngine)
-    report = BB.sync_from_holdings(refresh_kite=False)
+    report = BB.sync_from_holdings(refresh_kite=False, notify=True)
     assert report["upserted"] == 1
     assert report["telegram"].get("active_buys_sent") is True
     assert any("Active Buys" in m for m in sent)
+
+
+def test_sync_from_holdings_fetch_research(tmp_path, monkeypatch):
+    from product import buy_book as BB
+    from product import holdings_book as HB
+
+    monkeypatch.setattr(BB, "DEFAULT_PATH", tmp_path / "buy_book.json")
+    monkeypatch.setattr(HB, "DEFAULT_PATH", tmp_path / "holdings.json")
+    monkeypatch.setenv("QT_HOLDINGS_FILE", str(tmp_path / "holdings.json"))
+    HB.save_holdings(
+        [{"tradingsymbol": "INFY", "quantity": 5, "average_price": 1400, "last_price": 1450}],
+        source="paste",
+    )
+
+    called: dict[str, object] = {}
+
+    def fake_research(symbols, *, force_fundamentals=False, max_symbols=None):
+        called["symbols"] = list(symbols)
+        called["force"] = force_fundamentals
+        return {
+            "accepted": True,
+            "message": "Research refresh: fund ok 1/1 · tech ready 1/1",
+            "fundamentals": {"ok": 1, "cached": 0, "failed": 0},
+            "technicals": {"ok": 1, "thin_or_missing": 0},
+            "places_orders": False,
+        }
+
+    monkeypatch.setattr("product.buy_health.refresh_book_research", fake_research)
+    report = BB.sync_from_holdings(refresh_kite=False, fetch_research=True, force_fundamentals=True)
+    assert report["upserted"] == 1
+    assert report["fetch_research"] is True
+    assert report["research"]["accepted"] is True
+    assert called["symbols"] == ["INFY"]
+    assert called["force"] is True
+
+
+def test_refresh_book_research_scores_fund_and_tech(tmp_path, monkeypatch):
+    from product import buy_book as BB
+    from product import buy_health as BH
+
+    monkeypatch.setattr(BB, "DEFAULT_PATH", tmp_path / "buy_book.json")
+    BB.add_item("INFY", entry_price=1400, quantity=5, source="zerodha")
+
+    monkeypatch.setattr(
+        "fundamentals.lazy.ensure_deep_fundamentals",
+        lambda symbol, force_refresh=False: {"about": "IT", "key_ratios": []},
+    )
+
+    class _Cache:
+        def has(self, symbol):
+            return False
+
+    monkeypatch.setattr("fundamentals.cache.FundamentalsCache", lambda: _Cache())
+    monkeypatch.setattr(
+        "data.bhavcopy_runtime.ensure_loaded",
+        lambda rebuild_from_local=False: {"ready": True, "symbols": 1},
+    )
+    idx = pd.date_range("2025-01-01", periods=40, freq="B")
+    frame = pd.DataFrame(
+        {
+            "close": np.linspace(100, 120, 40),
+            "high": np.linspace(101, 121, 40),
+            "low": np.linspace(99, 119, 40),
+            "volume": np.full(40, 1_000_000.0),
+        },
+        index=idx,
+    )
+    monkeypatch.setattr("data.bhavcopy_runtime.get_ohlcv", lambda symbol: frame)
+
+    out = BH.refresh_book_research(["INFY"], force_fundamentals=False)
+    assert out["accepted"] is True
+    assert out["fundamentals"]["ok"] == 1
+    assert out["technicals"]["ok"] == 1
+    assert out["places_orders"] is False
+    assert "INFY" in {r["symbol"] for r in out["rows"]}
 
 
 def test_fundamentals_snapshot_from_cache(monkeypatch):

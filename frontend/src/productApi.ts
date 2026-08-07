@@ -928,8 +928,31 @@ export const removeBuyBookItem = (itemId: string): Promise<{ accepted: boolean }
     headers: { Accept: 'application/json' },
   }).then((response) => json(response))
 
+export type BuyBookResearchRefresh = {
+  accepted?: boolean
+  requested?: number
+  processed?: number
+  skipped?: string[]
+  force_fundamentals?: boolean
+  low_power?: boolean
+  fundamentals?: { ok?: number; cached?: number; failed?: number }
+  technicals?: { ok?: number; thin_or_missing?: number }
+  message?: string
+  honesty?: string
+  rows?: Array<{
+    symbol?: string
+    fundamentals?: { ok?: boolean; source?: string; message?: string }
+    technicals?: { ok?: boolean; bars?: number; message?: string }
+  }>
+}
+
 export const syncBuyBookFromHoldings = (
-  body?: { refresh_kite?: boolean; notify?: boolean },
+  body?: {
+    refresh_kite?: boolean
+    notify?: boolean
+    fetch_research?: boolean
+    force_fundamentals?: boolean
+  },
 ): Promise<{
   accepted: boolean
   upserted: number
@@ -939,13 +962,24 @@ export const syncBuyBookFromHoldings = (
   holdings_message?: string
   synced_from?: string
   honesty?: string
+  fetch_research?: boolean
+  research?: BuyBookResearchRefresh | null
   telegram?: { sent?: boolean; reason?: string; active_buys_sent?: boolean; active_buys_error?: string }
   book: BuyBookPayload
 }> =>
   fetch('/api/buy-book/sync-holdings', {
     method: 'POST',
     headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
-    body: JSON.stringify({ refresh_kite: true, notify: false, ...(body || {}) }),
+    body: JSON.stringify({ refresh_kite: true, notify: false, fetch_research: false, ...(body || {}) }),
+  }).then((response) => json(response))
+
+export const refreshBuyBookResearch = (
+  body?: { symbols?: string[]; force_fundamentals?: boolean; max_symbols?: number },
+): Promise<BuyBookResearchRefresh & { book?: BuyBookPayload }> =>
+  fetch('/api/buy-book/refresh-research', {
+    method: 'POST',
+    headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+    body: JSON.stringify(body || {}),
   }).then((response) => json(response))
 
 export type SymbolRatioRow = {

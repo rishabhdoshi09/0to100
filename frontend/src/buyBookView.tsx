@@ -5,6 +5,7 @@ import { money, pct, words } from './format'
 import {
   addBuyBookItem,
   fetchBuyBook,
+  refreshBuyBookResearch,
   removeBuyBookItem,
   syncBuyBookFromHoldings,
   type BuyBookItem,
@@ -52,6 +53,8 @@ export function BuyBookView({ selected, setSelected, setActive }: Props) {
   const [notes, setNotes] = useState('')
   const [busy, setBusy] = useState(false)
   const [note, setNote] = useState('')
+  const [fetchResearch, setFetchResearch] = useState(true)
+  const [forceFund, setForceFund] = useState(false)
 
   const refresh = useCallback(async (fresh = false) => {
     setLoading(true)
@@ -114,21 +117,46 @@ export function BuyBookView({ selected, setSelected, setActive }: Props) {
 
   const onSyncHoldings = async () => {
     setBusy(true)
-    setNote('Syncing Zerodha holdings into Active Buys…')
+    setNote(
+      fetchResearch
+        ? 'Syncing Zerodha holdings + fetching fundamentals & technicals…'
+        : 'Syncing Zerodha holdings into Active Buys…',
+    )
     try {
-      const result = await syncBuyBookFromHoldings({ refresh_kite: true })
+      const result = await syncBuyBookFromHoldings({
+        refresh_kite: true,
+        notify: false,
+        fetch_research: fetchResearch,
+        force_fundamentals: forceFund,
+      })
       if (result.book) setBook(result.book)
       const closed = result.closed_stale_zerodha?.length
         ? ` · closed ${result.closed_stale_zerodha.length} stale Zerodha row(s)`
         : ''
+      const researchMsg = result.research?.message ? ` · ${result.research.message}` : ''
       setNote(
         result.holdings_available === false && !result.upserted
           ? result.holdings_message || 'Zerodha not connected — connect Kite or import holdings first.'
-          : `Tracking ${result.upserted} holding(s) from ${result.synced_from || 'Zerodha'}${closed}. Fundamentals + technicals refresh next.`,
+          : `Tracking ${result.upserted} holding(s) from ${result.synced_from || 'Zerodha'}${closed}${researchMsg}`,
       )
       await refresh(true)
     } catch (err) {
       setNote(err instanceof Error ? err.message : 'Holdings sync failed')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const onFetchResearch = async () => {
+    setBusy(true)
+    setNote('Fetching Screener fundamentals + warming official technicals for Active Buys…')
+    try {
+      const result = await refreshBuyBookResearch({ force_fundamentals: forceFund })
+      if (result.book) setBook(result.book as BuyBookPayload)
+      setNote(result.message || 'Research refresh finished')
+      await refresh(true)
+    } catch (err) {
+      setNote(err instanceof Error ? err.message : 'Fund + tech fetch failed')
     } finally {
       setBusy(false)
     }
@@ -172,25 +200,56 @@ export function BuyBookView({ selected, setSelected, setActive }: Props) {
       <p className="panel-copy">{book?.honesty || 'Not a buy/sell ticket.'}</p>
       {results?.honesty ? <p className="panel-copy">{results.honesty}</p> : null}
 
-      <Panel title="ZERODHA → ACTIVE BUYS" subtitle="Track CNC holdings with avg cost as entry">
+      <Panel title="ZERODHA → ACTIVE BUYS" subtitle="Track CNC holdings · optional fundamentals + technicals fetch">
+        <label className="panel-copy" style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 8 }}>
+          <input
+            type="checkbox"
+            checked={fetchResearch}
+            onChange={(event) => setFetchResearch(event.target.checked)}
+            disabled={busy}
+          />
+          Also fetch fundamentals + technicals after sync (Screener + official bhav)
+        </label>
+        <label className="panel-copy" style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 8 }}>
+          <input
+            type="checkbox"
+            checked={forceFund}
+            onChange={(event) => setForceFund(event.target.checked)}
+            disabled={busy}
+          />
+          Force re-fetch fundamentals (ignore Screener cache)
+        </label>
         <div className="inline-actions" style={{ flexWrap: 'wrap', gap: 8 }}>
           <button type="button" disabled={busy} onClick={() => void onSyncHoldings()}>
-            {busy ? 'Syncing…' : 'Track Zerodha holdings'}
+            {busy
+              ? fetchResearch
+                ? 'Syncing + fetching research…'
+                : 'Syncing…'
+              : fetchResearch
+                ? 'Track Zerodha + fetch fund/tech'
+                : 'Track Zerodha holdings'}
+          </button>
+          <button type="button" disabled={busy || !items.length} onClick={() => void onFetchResearch()}>
+            {busy ? 'Fetching…' : 'Fetch fund + tech now'}
           </button>
           <button type="button" onClick={openHoldings}>
             Open My Holdings
           </button>
-          <button type="button" disabled={loading} onClick={() => void refresh(true)}>
-            Refresh tech + fund
+          <button type="button" disabled={loading || busy} onClick={() => void refresh(true)}>
+            Re-score from cache
           </button>
         </div>
+        <p className="panel-copy" style={{ marginTop: 8 }}>
+          Fundamentals = Screener.in (cache-first). Technicals = official NSE bhav history already on disk.
+          Low-power mode caps the batch so your Air stays usable. Missing stays missing — never invents PE/prices.
+        </p>
         <div className="metric-grid" style={{ marginTop: 12 }}>
           <MetricCard label="TRACKED" value={String(summary?.total ?? 0)} detail="Active buy rows" />
           <MetricCard label="FROM ZERODHA" value={String(zerodhaCount)} detail="Synced demat names" tone="cyan" />
           <MetricCard
             label="FUND MISSING"
             value={String(fundMissing)}
-            detail="Open Stock Intelligence to fetch"
+            detail={fundMissing ? 'Tap Fetch fund + tech now' : 'Screener cache present'}
             tone={fundMissing ? 'amber' : 'green'}
           />
           <MetricCard label="AT RISK" value={String(summary?.critical ?? 0)} detail="Tech/fund damage" tone="amber" />

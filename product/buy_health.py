@@ -587,3 +587,144 @@ def _results_summary(rows: list[Mapping[str, Any]]) -> dict[str, Any]:
             "Missing entry stays missing."
         ),
     }
+
+
+def refresh_book_research(
+    symbols: list[str] | None = None,
+    *,
+    force_fundamentals: bool = False,
+    max_symbols: int | None = None,
+) -> dict[str, Any]:
+    """Fetch Screener fundamentals + warm official technical history for Active Buys.
+
+    Opt-in from UI (sync checkbox or Fetch fund+tech). Never invents ratios/prices.
+    Low-power caps the batch so old Macs are not hammered by Screener.
+    """
+    import os
+
+    from product.buy_book import list_active
+
+    if symbols is None:
+        wanted = sorted({str(r.get("symbol") or "").upper() for r in list_active() if r.get("symbol")})
+    else:
+        wanted = sorted({str(s or "").strip().upper() for s in symbols if str(s or "").strip()})
+
+    low_power = str(os.getenv("QT_LOW_POWER", "") or "").strip().lower() in {"1", "true", "yes"}
+    if max_symbols is None:
+        max_symbols = 12 if low_power else 40
+    capped = wanted[: max(1, int(max_symbols))]
+    skipped = wanted[len(capped) :]
+
+    # Warm official bhav into this process so technicals can score.
+    bhav_status: dict[str, Any] = {}
+    try:
+        from data.bhavcopy_runtime import ensure_loaded, get_ohlcv
+
+        bhav_status = ensure_loaded(rebuild_from_local=True)
+    except Exception as exc:
+        get_ohlcv = None  # type: ignore[assignment]
+        bhav_status = {"ready": False, "error": str(exc)}
+
+    fund_ok = 0
+    fund_fail = 0
+    fund_cached = 0
+    tech_ok = 0
+    tech_thin = 0
+    rows_out: list[dict[str, Any]] = []
+
+    for sym in capped:
+        row: dict[str, Any] = {
+            "symbol": sym,
+            "fundamentals": {"ok": False, "source": "", "message": ""},
+            "technicals": {"ok": False, "bars": 0, "message": ""},
+        }
+        # ── Fundamentals (Screener lazy fetch) ─────────────────────────────
+        try:
+            from fundamentals.lazy import ensure_deep_fundamentals
+            from fundamentals.cache import FundamentalsCache
+
+            cache = FundamentalsCache()
+            had_cache = bool(cache.has(sym)) and not force_fundamentals
+            data = ensure_deep_fundamentals(sym, force_refresh=bool(force_fundamentals))
+            ok = bool(data)
+            row["fundamentals"] = {
+                "ok": ok,
+                "source": "cache" if had_cache else "screener",
+                "message": "Fundamentals ready" if ok else "Empty fundamentals payload",
+            }
+            if ok and had_cache:
+                fund_cached += 1
+                fund_ok += 1
+            elif ok:
+                fund_ok += 1
+            else:
+                fund_fail += 1
+        except Exception as exc:
+            fund_fail += 1
+            row["fundamentals"] = {
+                "ok": False,
+                "source": "error",
+                "message": str(exc)[:160],
+            }
+
+        # ── Technicals (official daily history warm + length check) ────────
+        bars = 0
+        try:
+            if get_ohlcv is not None:
+                frame = get_ohlcv(sym)
+                bars = int(len(frame)) if frame is not None else 0
+            if bars >= 30:
+                tech_ok += 1
+                row["technicals"] = {
+                    "ok": True,
+                    "bars": bars,
+                    "message": f"{bars} official daily bars ready",
+                }
+            else:
+                tech_thin += 1
+                row["technicals"] = {
+                    "ok": False,
+                    "bars": bars,
+                    "message": (
+                        f"Only {bars} bar(s) — need ~30+ sessions in bhav store"
+                        if bars
+                        else "No official daily history in bhav store yet"
+                    ),
+                }
+        except Exception as exc:
+            tech_thin += 1
+            row["technicals"] = {"ok": False, "bars": 0, "message": str(exc)[:160]}
+
+        rows_out.append(row)
+
+    invalidate_eval_cache()
+    return {
+        "accepted": True,
+        "requested": len(wanted),
+        "processed": len(capped),
+        "skipped": skipped,
+        "force_fundamentals": bool(force_fundamentals),
+        "low_power": low_power,
+        "bhav": bhav_status,
+        "fundamentals": {
+            "ok": fund_ok,
+            "cached": fund_cached,
+            "failed": fund_fail,
+        },
+        "technicals": {
+            "ok": tech_ok,
+            "thin_or_missing": tech_thin,
+        },
+        "rows": rows_out,
+        "places_orders": False,
+        "honesty": (
+            "Fetched Screener fundamentals (cache-first) and warmed official bhav technicals "
+            "for Active Buys. Missing stays missing — never invents PE or prices. Paper-first."
+        ),
+        "message": (
+            f"Research refresh: fund ok {fund_ok}/{len(capped)} "
+            f"(cached {fund_cached}, failed {fund_fail}) · "
+            f"tech ready {tech_ok}/{len(capped)}"
+            + (f" · skipped {len(skipped)} (cap {max_symbols})" if skipped else "")
+        ),
+    }
