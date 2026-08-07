@@ -1,0 +1,30 @@
+{
+  "adjustment_policy": {
+    "corporate_actions": "unavailable (RAW)"
+  },
+  "benchmark_identity": "unavailable",
+  "code_commit": "a634be3b5e49499cb992430b2822f56c7cbd4851",
+  "config_hash": "4f638f99e13bf939",
+  "cost_model": {
+    "note": "modelled aggregate \u2014 NOT a broker contract-note replication",
+    "roundtrip_pct": 0.22,
+    "slippage_pct": 0.1
+  },
+  "date_range": [
+    null,
+    null
+  ],
+  "experiment_config_hash": "4f638f99e13bf939",
+  "fundamental_data_identity": "NONE (no PIT fundamentals)",
+  "row_count": null,
+  "sector_data_identity": "scan/sector_heat (current membership, not dated)",
+  "snapshot_id": "ad652107580ddae1",
+  "source_identities": {
+    "status": "unavailable: bhav store empty (logs/bhav = 0 files, is_ready()=False); build_store() requires NSE network which is unavailable in this environment (https://www1.nseindia.com -> HTTP 000; build blocks and cannot complete). No universe_history.json / ca_events.json / point-in-time fundamentals present."
+  },
+  "symbol_count": 0,
+  "universe_policy": {
+    "note": "bhav store empty (logs/bhav = 0 files, is_ready()=False); build_store() requires NSE network which is unavailable in this environment (https://www1.nseindia.com -> HTTP 000; build blocks and cannot complete). No universe_history.json / ca_events.json / point-in-time fundamentals present.",
+    "survivorship_complete": false
+  }
+}

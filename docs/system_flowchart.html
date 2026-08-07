@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>QUANTTERM — System Architecture</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: #f5f5f5;
+    font-family: Arial, sans-serif;
+    font-size: 11px;
+    color: #111;
+    padding: 30px;
+  }
+  h1 {
+    text-align: center;
+    font-size: 15px;
+    font-weight: bold;
+    margin-bottom: 24px;
+    color: #111;
+    letter-spacing: .03em;
+  }
+  .wrap {
+    position: relative;
+    width: 1060px;
+    height: 900px;
+    margin: 0 auto;
+    background: #fff;
+    border: 1px solid #bbb;
+  }
+  /* ── Box ── */
+  .box {
+    position: absolute;
+    background: #fff;
+    border: 1.5px solid #333;
+    border-radius: 4px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    padding: 5px 8px;
+    line-height: 1.35;
+    font-size: 11px;
+    font-family: Arial, sans-serif;
+  }
+  .box.start {
+    border-width: 2px;
+    font-weight: bold;
+    background: #f0f0f0;
+  }
+  .box.output {
+    border-width: 2px;
+    background: #e8f4e8;
+  }
+  svg {
+    position: absolute;
+    top: 0; left: 0;
+    width: 100%; height: 100%;
+    overflow: visible;
+    pointer-events: none;
+  }
+</style>
+</head>
+<body>
+<h1>QUANTTERM — System Architecture Flowchart</h1>
+<div class="wrap" id="diagram">
+
+  <!-- ═══════════════ BOXES ═══════════════ -->
+
+  <!-- COL 1: Earnings branch (x≈55) -->
+  <div class="box" id="b_earnings"    style="left:30px;  top:390px; width:120px; height:44px">add earnings<br>agent.py</div>
+  <div class="box" id="b_youtube"     style="left:30px;  top:470px; width:120px; height:44px">automatically find<br>YouTube earning call</div>
+  <div class="box" id="b_transcript"  style="left:30px;  top:550px; width:120px; height:44px">transcript<br>extractor</div>
+  <div class="box" id="b_summary"     style="left:30px;  top:630px; width:120px; height:44px">summarization</div>
+  <div class="box output" id="b_eps"  style="left:30px;  top:720px; width:120px; height:50px">Revenue / EPS /<br>guidance insights</div>
+
+  <!-- COL 2: Stock ticker + Ensemble + MI (x≈210) -->
+  <div class="box start" id="b_ticker"   style="left:205px; top:180px; width:120px; height:44px">Stock ticker</div>
+  <div class="box" id="b_ensemble"       style="left:205px; top:310px; width:120px; height:44px">Ensemble<br>signal.py</div>
+  <div class="box" id="b_mi"             style="left:205px; top:440px; width:130px; height:50px">MI layer to<br>sure the buy/sell</div>
+  <div class="box output" id="b_refined" style="left:205px; top:570px; width:130px; height:50px">Give a refined<br>buy/sell call<br>using DeepSeek</div>
+
+  <!-- COL 3: signal.py + LLM (x≈400) -->
+  <div class="box" id="b_signal"  style="left:390px; top:310px; width:135px; height:55px">signal.py<br>Get data from<br>processor + give score</div>
+  <div class="box" id="b_llm"    style="left:390px; top:440px; width:135px; height:50px">process the data<br>Use LLM –<br>DeepSeek</div>
+  <div class="box output" id="b_frontend" style="left:350px; top:620px; width:135px; height:44px">show frontend<br>computation</div>
+
+  <!-- COL 4: Technical branch (x≈595) -->
+  <div class="box" id="b_tagent"   style="left:580px; top:50px;  width:120px; height:44px">Technical<br>agemt.py</div>
+  <div class="box" id="b_xgboost"  style="left:580px; top:150px; width:120px; height:44px">use xgboost</div>
+  <div class="box" id="b_techchart"style="left:560px; top:280px; width:140px; height:55px">Technical + chart<br>pattern recognition<br>numta</div>
+  <div class="box" id="b_multih"   style="left:730px; top:280px; width:120px; height:44px">multihorizo n.py<br>computation</div>
+
+  <!-- COL 5: Agents + News + Fundamentals (x≈730) -->
+  <div class="box" id="b_agents"  style="left:730px; top:390px; width:120px; height:44px">MULTIPle<br>agents</div>
+  <div class="box" id="b_news"    style="left:880px; top:310px; width:120px; height:44px">News for<br>sentiment</div>
+  <div class="box" id="b_builder" style="left:880px; top:440px; width:120px; height:44px">builder.py</div>
+  <div class="box" id="b_fund"    style="left:730px; top:520px; width:120px; height:44px">Fundamentals</div>
+
+  <!-- ═══════════════ ARROWS (SVG) ═══════════════ -->
+  <svg>
+    <defs>
+      <marker id="arr" markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto">
+        <path d="M0,0 L0,6 L8,3 z" fill="#333"/>
+      </marker>
+    </defs>
+
+    <!-- Earnings branch: top-down -->
+    <!-- earnings → youtube -->
+    <line x1="90"  y1="434" x2="90"  y2="468" stroke="#333" stroke-width="1.5" marker-end="url(#arr)"/>
+    <!-- youtube → transcript -->
+    <line x1="90"  y1="514" x2="90"  y2="548" stroke="#333" stroke-width="1.5" marker-end="url(#arr)"/>
+    <!-- transcript → summary -->
+    <line x1="90"  y1="594" x2="90"  y2="628" stroke="#333" stroke-width="1.5" marker-end="url(#arr)"/>
+    <!-- summary → eps -->
+    <line x1="90"  y1="674" x2="90"  y2="718" stroke="#333" stroke-width="1.5" marker-end="url(#arr)"/>
+
+    <!-- Stock ticker → Ensemble -->
+    <line x1="265" y1="224" x2="265" y2="308" stroke="#333" stroke-width="1.5" marker-end="url(#arr)"/>
+
+    <!-- Ensemble → MI -->
+    <line x1="265" y1="354" x2="265" y2="438" stroke="#333" stroke-width="1.5" marker-end="url(#arr)"/>
+
+    <!-- MI → Refined -->
+    <line x1="265" y1="490" x2="265" y2="568" stroke="#333" stroke-width="1.5" marker-end="url(#arr)"/>
+
+    <!-- Refined → frontend (right to frontend) -->
+    <line x1="335" y1="595" x2="352" y2="637" stroke="#333" stroke-width="1.5" marker-end="url(#arr)"/>
+
+    <!-- Stock ticker → signal.py (right) -->
+    <line x1="325" y1="202" x2="457" y2="308" stroke="#333" stroke-width="1.5" marker-end="url(#arr)"/>
+
+    <!-- Ensemble → signal.py (right) -->
+    <line x1="325" y1="332" x2="388" y2="332" stroke="#333" stroke-width="1.5" marker-end="url(#arr)"/>
+
+    <!-- signal.py → LLM -->
+    <line x1="457" y1="365" x2="457" y2="438" stroke="#333" stroke-width="1.5" marker-end="url(#arr)"/>
+
+    <!-- LLM → frontend -->
+    <line x1="457" y1="490" x2="457" y2="618" stroke="#333" stroke-width="1.5" marker-end="url(#arr)"/>
+
+    <!-- technical agemt → xgboost -->
+    <line x1="640" y1="94"  x2="640" y2="148" stroke="#333" stroke-width="1.5" marker-end="url(#arr)"/>
+
+    <!-- xgboost → techchart -->
+    <line x1="640" y1="194" x2="640" y2="278" stroke="#333" stroke-width="1.5" marker-end="url(#arr)"/>
+
+    <!-- multihorizo → techchart (left arrow) -->
+    <line x1="730" y1="302" x2="702" y2="302" stroke="#333" stroke-width="1.5" marker-end="url(#arr)"/>
+
+    <!-- techchart → LLM (down-left) -->
+    <line x1="630" y1="335" x2="527" y2="440" stroke="#333" stroke-width="1.5" marker-end="url(#arr)"/>
+
+    <!-- Stock ticker → agents (right, dashed) -->
+    <line x1="325" y1="202" x2="790" y2="388" stroke="#666" stroke-width="1.5" stroke-dasharray="5,4" marker-end="url(#arr)"/>
+
+    <!-- agents → news (up-right) -->
+    <line x1="850" y1="390" x2="940" y2="355" stroke="#333" stroke-width="1.5" marker-end="url(#arr)"/>
+
+    <!-- agents → builder (right) -->
+    <line x1="850" y1="412" x2="878" y2="462" stroke="#333" stroke-width="1.5" marker-end="url(#arr)"/>
+
+    <!-- agents → fundamentals (down) -->
+    <line x1="790" y1="434" x2="790" y2="518" stroke="#333" stroke-width="1.5" marker-end="url(#arr)"/>
+
+    <!-- fundamentals → frontend (left) -->
+    <line x1="730" y1="542" x2="487" y2="642" stroke="#333" stroke-width="1.5" marker-end="url(#arr)"/>
+
+    <!-- techchart → agents (right) -->
+    <line x1="700" y1="307" x2="728" y2="398" stroke="#333" stroke-width="1.5" marker-end="url(#arr)"/>
+
+    <!-- ticker → earnings agent (left, down) -->
+    <line x1="205" y1="213" x2="150" y2="402" stroke="#666" stroke-width="1.5" stroke-dasharray="5,4" marker-end="url(#arr)"/>
+
+    <!-- news → builder -->
+    <line x1="940" y1="354" x2="940" y2="438" stroke="#333" stroke-width="1.5" marker-end="url(#arr)"/>
+  </svg>
+
+</div>
+
+<p style="text-align:center;font-size:11px;color:#888;margin-top:14px">
+  QUANTTERM AI — System Architecture &nbsp;|&nbsp; DeepSeek V3 + R1 Pipeline &nbsp;|&nbsp; NSE/BSE
+</p>
+</body>
+</html>

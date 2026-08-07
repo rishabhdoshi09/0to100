@@ -1,0 +1,306 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$ROOT"
+
+# shellcheck source=stack_lib.sh
+source "$ROOT/scripts/stack_lib.sh"
+
+if [[ ! -d venv ]]; then
+  echo "Missing venv. Create the QuantTerm Python environment first." >&2
+  exit 1
+fi
+
+source venv/bin/activate
+
+if ! python -c 'import fastapi, uvicorn' >/dev/null 2>&1; then
+  echo "[STACK] Installing local terminal API dependencies…"
+  python -m pip install 'fastapi>=0.115.0' 'uvicorn>=0.30.0'
+fi
+
+if [[ ! -d frontend/node_modules ]]; then
+  echo "[STACK] Installing terminal frontend dependencies…"
+  (cd frontend && npm install)
+fi
+
+AUTONOMY_PID=""
+API_PID=""
+FRONTEND_PID=""
+IDLE_BT_PID=""
+SNIPER_PID=""
+AUTONOMY_EXTERNAL=0
+API_EXTERNAL=0
+API_HEALTH_FAILS=0
+API_HTTP_FAILS=0
+VITE_RESTARTS=0
+VITE_RESTART_LIMIT="${QT_VITE_RESTART_LIMIT:-3}"
+SHUTTING_DOWN=0
+VITE_LOG="$ROOT/logs/stack/vite.dev.log"
+mkdir -p "$ROOT/logs/stack"
+
+cleanup() {
+  # Re-entrancy: EXIT after INT/TERM must not double-stop or resume the watch loop.
+  if [[ "$SHUTTING_DOWN" == "1" ]]; then
+    return 0
+  fi
+  SHUTTING_DOWN=1
+  echo
+  echo "[STACK] Stopping QuantTerm child services…"
+  if [[ -n "$FRONTEND_PID" ]]; then
+    kill "$FRONTEND_PID" >/dev/null 2>&1 || true
+  fi
+  if [[ -n "$IDLE_BT_PID" ]]; then
+    kill "$IDLE_BT_PID" >/dev/null 2>&1 || true
+  fi
+  if [[ -n "$SNIPER_PID" ]]; then
+    kill "$SNIPER_PID" >/dev/null 2>&1 || true
+  fi
+  if [[ -n "$API_PID" ]]; then
+    kill "$API_PID" >/dev/null 2>&1 || true
+  fi
+  if [[ -n "$AUTONOMY_PID" ]]; then
+    kill "$AUTONOMY_PID" >/dev/null 2>&1 || true
+  fi
+  wait >/dev/null 2>&1 || true
+  # Vite/npm often outlive the launcher PID; reap by bind port.
+  stack_free_port 5173 "Vite dev server"
+  if [[ "$API_EXTERNAL" != "1" ]]; then
+    stack_free_port 8765 "Terminal API"
+  fi
+  if [[ "$AUTONOMY_EXTERNAL" == "1" ]]; then
+    echo "[STACK] Existing external autonomy supervisor was left running."
+  fi
+  if [[ "$API_EXTERNAL" == "1" ]]; then
+    echo "[STACK] External terminal API on :8765 was left running."
+  fi
+  echo "[STACK] Child services stopped."
+}
+
+on_signal() {
+  cleanup
+  # INT/TERM must exit — otherwise the watch loop resumes and prints
+  # "FRONTEND/Vite exited unexpectedly" after we intentionally stopped it.
+  exit 0
+}
+trap cleanup EXIT
+trap on_signal INT TERM
+
+start_vite() {
+  stack_free_port 5173 "Vite dev server"
+  echo "[STACK] Starting dedicated terminal at http://127.0.0.1:5173 …"
+  echo "[STACK] Vite log → ${VITE_LOG}"
+  {
+    echo "===== vite start $(date -u +%Y-%m-%dT%H:%M:%SZ) ====="
+  } >>"$VITE_LOG"
+  # Avoid `( cd …; npm … ) &` — killing that subshell PID leaves an orphaned Vite
+  # that keeps proxying to a dead :8765 and surfaces ECONNREFUSED in the browser.
+  npm --prefix "$ROOT/frontend" run dev -- --host 127.0.0.1 --port 5173 >>"$VITE_LOG" 2>&1 &
+  FRONTEND_PID=$!
+}
+
+wait_for_vite() {
+  local attempts="${1:-60}"
+  local vite_bound=0
+  local i
+  for i in $(seq 1 "$attempts"); do
+    if [[ "$SHUTTING_DOWN" == "1" ]]; then
+      return 1
+    fi
+    if stack_port_listening 5173; then
+      vite_bound=1
+      break
+    fi
+    # npm may spawn vite and exit on some setups; only fail if neither PID nor port live.
+    if ! kill -0 "$FRONTEND_PID" >/dev/null 2>&1 && ! stack_port_listening 5173; then
+      echo "[STACK] Vite exited during startup. Last log lines:" >&2
+      tail -n 40 "$VITE_LOG" 2>/dev/null >&2 || true
+      return 1
+    fi
+    sleep 0.5
+  done
+  if [[ "$vite_bound" != "1" ]]; then
+    echo "[STACK] Vite did not bind :5173 within $((attempts / 2))s. Last log lines:" >&2
+    tail -n 40 "$VITE_LOG" 2>/dev/null >&2 || true
+    return 1
+  fi
+  return 0
+}
+
+if [[ "${QT_LOW_POWER:-}" == "1" ]]; then
+  # shellcheck source=apply_low_power_env.sh
+  source "$ROOT/scripts/apply_low_power_env.sh"
+fi
+
+if python - <<'PY' >/dev/null 2>&1
+from product.autonomy_status import read_autonomy_status
+raise SystemExit(0 if read_autonomy_status().get("running") else 1)
+PY
+then
+  AUTONOMY_EXTERNAL=1
+  echo "[STACK] A healthy autonomy supervisor is already running; reusing it."
+else
+  AUTONOMY_INTERVAL="${QT_AUTONOMY_INTERVAL_S:-15}"
+  echo "[STACK] Starting autonomy supervisor (interval ${AUTONOMY_INTERVAL}s)…"
+  python -u main.py autonomy --interval "$AUTONOMY_INTERVAL" &
+  AUTONOMY_PID=$!
+  sleep 1
+  if ! kill -0 "$AUTONOMY_PID" >/dev/null 2>&1; then
+    if python - <<'PY' >/dev/null 2>&1
+from product.autonomy_status import read_autonomy_status
+raise SystemExit(0 if read_autonomy_status().get("running") else 1)
+PY
+    then
+      echo "[STACK] Another healthy supervisor acquired the lock; reusing it."
+      AUTONOMY_PID=""
+      AUTONOMY_EXTERNAL=1
+    else
+      # Autonomy is best-effort for the terminal UI — do not abort the stack.
+      echo "[STACK] Autonomy failed to stay alive; continuing with API + Vite only." >&2
+      AUTONOMY_PID=""
+    fi
+  fi
+fi
+
+API_HEALTH="http://127.0.0.1:8765/api/health"
+set +e
+# Direct call — do not capture via $(...); that kills the backgrounded uvicorn.
+stack_start_or_reuse_uvicorn 8765 "terminal_product_api:app" "$API_HEALTH" "Terminal API"
+api_rc=$STACK_UVICORN_RC
+API_PID=$STACK_UVICORN_PID
+set -e
+
+if [[ "$api_rc" == 2 ]]; then
+  API_EXTERNAL=1
+  API_PID=""
+else
+  API_EXTERNAL=0
+  if [[ -z "$API_PID" ]]; then
+    echo "[STACK] Terminal API failed to start (no pid)." >&2
+    exit 1
+  fi
+fi
+
+echo "[STACK] Waiting for terminal API (bhav load + market ops bootstrap can take ~15–45s)…"
+if [[ "$API_EXTERNAL" == "1" ]]; then
+  stack_wait_for_health "$API_HEALTH" "" "Terminal API" || exit 1
+else
+  stack_wait_for_health "$API_HEALTH" "$API_PID" "Terminal API" || exit 1
+fi
+echo "[STACK] Terminal API ready."
+
+# Research-only: when laptop idle ≥10m, enqueue full-universe signal backtest.
+# Never places orders. No-op on headless hosts without idle detection (unless QT_FAKE_IDLE_SECONDS).
+if [[ "${QT_DISABLE_IDLE_BACKTEST:-}" != "1" ]]; then
+  echo "[STACK] Starting idle full-universe backtest watcher (10m idle → research job)…"
+  python -u "$ROOT/scripts/idle_full_universe_backtest.py" --idle-seconds 600 &
+  IDLE_BT_PID=$!
+fi
+
+# Single-stock breakout sniper (Kite ticks → Telegram). Alert-only; no broker orders.
+if [[ "${QT_DISABLE_BREAKOUT_SNIPER:-}" != "1" ]]; then
+  echo "[STACK] Starting breakout sniper (live pivot confirm → Telegram)…"
+  python -u -m scan.sniper_runtime &
+  SNIPER_PID=$!
+fi
+
+# Low-power Macs can take longer for first Vite bind (cold node/npm).
+VITE_WAIT_ATTEMPTS=60
+if [[ "${QT_LOW_POWER:-}" == "1" ]]; then
+  VITE_WAIT_ATTEMPTS=120
+fi
+
+start_vite
+if ! wait_for_vite "$VITE_WAIT_ATTEMPTS"; then
+  exit 1
+fi
+
+echo "[STACK] QuantTerm is ready. Open http://127.0.0.1:5173"
+echo "[STACK] Keep this terminal open; Ctrl-C stops services started by this script."
+echo "[STACK] If the UI still errors, run: bash scripts/stop_quantterm.sh && bash scripts/run_quantterm_low_power.sh"
+
+# Hard-fail only when the API process/port is gone. HTTP soft-fails while the
+# process is alive usually mean a busy worker — never tear down Vite for that.
+# Keep watch loops light: port/pid every ~15s; HTTP curl only every ~60s.
+# Vite death: restart a few times (old Macs / OOM) before abandoning the stack.
+API_DEAD_LIMIT=3
+API_HTTP_WARN_EVERY=5
+WATCH_SLEEP_S="${QT_STACK_WATCH_SLEEP_S:-15}"
+HTTP_PROBE_EVERY="${QT_STACK_HTTP_PROBE_EVERY:-4}"
+WATCH_TICK=0
+
+while true; do
+  WATCH_TICK=$((WATCH_TICK + 1))
+
+  if [[ "$SHUTTING_DOWN" == "1" ]]; then
+    exit 0
+  fi
+
+  if ! stack_port_listening 5173; then
+    if [[ "$SHUTTING_DOWN" == "1" ]]; then
+      exit 0
+    fi
+    if [[ -n "$FRONTEND_PID" ]] && kill -0 "$FRONTEND_PID" >/dev/null 2>&1; then
+      echo "[STACK] Vite is not listening on :5173 (npm pid=$FRONTEND_PID still alive) — waiting one tick…" >&2
+    elif [[ "$VITE_RESTARTS" -lt "$VITE_RESTART_LIMIT" ]]; then
+      VITE_RESTARTS=$((VITE_RESTARTS + 1))
+      echo "[STACK] FRONTEND/Vite dropped off :5173 — restarting (${VITE_RESTARTS}/${VITE_RESTART_LIMIT})…" >&2
+      echo "[STACK] Recent Vite log:" >&2
+      tail -n 30 "$VITE_LOG" 2>/dev/null >&2 || true
+      start_vite
+      if wait_for_vite "$VITE_WAIT_ATTEMPTS"; then
+        echo "[STACK] Vite is back on http://127.0.0.1:5173" >&2
+      else
+        echo "[STACK] Vite restart failed (${VITE_RESTARTS}/${VITE_RESTART_LIMIT})." >&2
+        if [[ "$VITE_RESTARTS" -ge "$VITE_RESTART_LIMIT" ]]; then
+          exit 1
+        fi
+      fi
+    else
+      echo "[STACK] FRONTEND/Vite exited unexpectedly (nothing on :5173) after ${VITE_RESTART_LIMIT} restart(s)." >&2
+      echo "[STACK] See ${VITE_LOG}" >&2
+      tail -n 40 "$VITE_LOG" 2>/dev/null >&2 || true
+      exit 1
+    fi
+  fi
+
+  api_process_dead=0
+  if [[ "$API_EXTERNAL" != "1" ]] && [[ -n "$API_PID" ]] && ! kill -0 "$API_PID" >/dev/null 2>&1; then
+    api_process_dead=1
+  fi
+  api_port_down=0
+  if ! stack_port_listening 8765; then
+    api_port_down=1
+  fi
+
+  if [[ "$api_process_dead" == "1" ]] || [[ "$api_port_down" == "1" ]]; then
+    API_HEALTH_FAILS=$((API_HEALTH_FAILS + 1))
+    echo "[STACK] Terminal API process/port soft-fail ${API_HEALTH_FAILS}/${API_DEAD_LIMIT} (dead=${api_process_dead} port_down=${api_port_down})" >&2
+    if [[ "$API_HEALTH_FAILS" -ge "$API_DEAD_LIMIT" ]]; then
+      echo "[STACK] Terminal API is down on :8765 — backend may have stopped." >&2
+      echo "[STACK] Vite proxies /api → :8765; restart with: bash scripts/stop_quantterm.sh && bash scripts/run_quantterm_low_power.sh" >&2
+      exit 1
+    fi
+  else
+    API_HEALTH_FAILS=0
+    # Cheap port check is enough most ticks; occasional HTTP confirms the app loop.
+    if (( WATCH_TICK % HTTP_PROBE_EVERY == 0 )); then
+      if ! stack_health_ok "$API_HEALTH" 2; then
+        # Process is up but HTTP probe timed out — warn, do not exit.
+        API_HTTP_FAILS=$((API_HTTP_FAILS + 1))
+        if (( API_HTTP_FAILS == 1 || API_HTTP_FAILS % API_HTTP_WARN_EVERY == 0 )); then
+          echo "[STACK] Terminal API HTTP health slow/busy at $API_HEALTH (warn ${API_HTTP_FAILS}; process still up) — not exiting." >&2
+        fi
+      else
+        API_HTTP_FAILS=0
+      fi
+    fi
+  fi
+
+  if [[ -n "$AUTONOMY_PID" ]] && ! kill -0 "$AUTONOMY_PID" >/dev/null 2>&1; then
+    # Do not tear down the terminal UI if autonomy exits later.
+    echo "[STACK] Autonomy supervisor exited; leaving API + Vite running." >&2
+    AUTONOMY_PID=""
+  fi
+  sleep "$WATCH_SLEEP_S"
+done

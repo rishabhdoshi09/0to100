@@ -1,0 +1,9 @@
+{
+  "experiment_id": "EXP-006",
+  "limitations": [],
+  "note": "Data-quality gate failed closed \u2014 no defensible PASS/FAIL is possible on this dataset. This is NOT strategy evidence.",
+  "primary_exit": "structural_trend",
+  "reason": "DATA_UNAVAILABLE: bhav store empty (logs/bhav = 0 files, is_ready()=False); build_store() requires NSE network which is unavailable in this environment (https://www1.nseindia.com -> HTTP 000; build blocks and cannot complete). No universe_history.json / ca_events.json / point-in-time fundamentals present.",
+  "snapshot_id": "ad652107580ddae1",
+  "verdict": "INCONCLUSIVE"
+}

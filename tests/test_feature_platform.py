@@ -1,0 +1,527 @@
+"""
+Feature Platform + Knowledge Base tests.
+
+The platform's job is reproducibility and data integrity, so these tests are
+adversarial about exactly that: a bad feed must be rejected by the PLATFORM (not
+the scanner), a frozen vector must be immutable, the schema must be versioned so
+old snapshots stay attributable, and the knowledge base must never silently
+resurrect a rejected belief or keep asserting a decayed one.
+"""
+import tempfile
+from pathlib import Path
+
+import numpy as np
+import pytest
+
+from research import feature_schema as S
+from research import feature_store as FS
+from research import scientific_memory as K
+
+
+class TestFeatureSchema:
+    def test_schema_version_is_deterministic_and_tagged(self):
+        assert S.SCHEMA_VERSION == S._schema_hash(S.FEATURE_REGISTRY)
+        assert S.SCHEMA_TAG.startswith("fs_")
+
+    def test_version_bump_changes_the_schema_hash(self):
+        # improving a feature (version bump) must flip the schema fingerprint so
+        # snapshots stay attributable to the exact definition that made them
+        reg = dict(S.FEATURE_REGISTRY)
+        old = reg["rel_strength"]
+        reg["rel_strength"] = S.Feature(old.name, old.version + 1, old.dtype,
+                                        old.description, old.lo, old.hi)
+        assert S._schema_hash(reg) != S.SCHEMA_VERSION
+
+    def test_impossible_value_is_rejected(self):
+        # delivery 250% is physically impossible — the PLATFORM catches it
+        v, _ = S.FEATURE_REGISTRY["delivery_pct"].validate(250.0)
+        assert v == S.IMPOSSIBLE
+        v2, _ = S.FEATURE_REGISTRY["rsi"].validate(50.0)
+        assert v2 == S.OK
+
+    def test_outlier_vs_impossible_bands(self):
+        # RSI 3 is inside hard [0,100] but past the sane soft band → OUTLIER
+        assert S.FEATURE_REGISTRY["rsi"].validate(3.0)[0] == S.OUTLIER
+        assert S.FEATURE_REGISTRY["rsi"].validate(-1.0)[0] == S.IMPOSSIBLE
+
+    def test_unknown_category_is_impossible(self):
+        assert S.FEATURE_REGISTRY["regime"].validate("MOON")[0] == S.IMPOSSIBLE
+        assert S.FEATURE_REGISTRY["regime"].validate("DISTRIBUTION")[0] == S.OK
+
+    def test_staleness_flag(self):
+        f = S.FEATURE_REGISTRY["vix"]                      # max_age_days=3
+        assert f.validate(15.0, age_days=1.0)[0] == S.OK
+        assert f.validate(15.0, age_days=9.0)[0] == S.STALE
+
+    def test_canonicalize_drops_unknown_and_fills_missing(self):
+        c = S.canonicalize({"rsi": "65", "regime": "MIXED", "junk": 1})
+        assert c["rsi"] == 65.0 and c["regime"] == "MIXED"
+        assert "junk" not in c and c["crude_usd"] is None   # missing → None
+        assert set(c) == set(S.FEATURE_NAMES)
+
+    def test_validate_vector_hard_fails_only_on_impossible_or_stale(self):
+        c = S.canonicalize({"rsi": 60})                     # everything else missing
+        rep = S.validate_vector(c)
+        assert rep.ok is True                               # MISSING alone doesn't fail
+        rep2 = S.validate_vector(S.canonicalize({"delivery_pct": 250}))
+        assert rep2.ok is False                             # IMPOSSIBLE fails
+
+
+class TestFeatureStore:
+    @pytest.fixture(autouse=True)
+    def _tmp(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(FS, "_DB_PATH", tmp_path / "fs.db")
+
+    def test_snapshot_freezes_and_is_immutable(self):
+        r = FS.snapshot("o1", "TCS", "SCAN",
+                        {"rsi": 65, "clv": 0.8, "regime": "TRENDING_BULL"})
+        assert r["status"] == "frozen" and r["schema_version"] == S.SCHEMA_VERSION
+        # write-once: a second snapshot of the same id changes NOTHING
+        r2 = FS.snapshot("o1", "TCS", "SCAN", {"rsi": 99})
+        assert r2["status"] == "exists"
+        assert FS.get_observation("o1")["features"]["rsi"] == 65.0
+
+    def test_bad_feed_is_flagged_by_the_platform(self):
+        r = FS.snapshot("o2", "INFY", "SCAN", {"rsi": 50, "delivery_pct": 250})
+        assert any(p[0] == "delivery_pct" and p[1] == S.IMPOSSIBLE
+                   for p in r["problems"])
+
+    def test_outcome_is_settled_not_recomputed(self):
+        FS.snapshot("o3", "WIPRO", "TRADE", {"rsi": 60})
+        assert FS.set_outcome("o3", 1.4)["status"] == "settled"
+        assert FS.get_observation("o3")["outcome"] == 1.4
+        # settling the label must not touch the frozen features
+        assert FS.get_observation("o3")["features"]["rsi"] == 60.0
+        assert FS.set_outcome("missing", 1.0)["status"] == "not_found"
+
+    def test_load_matrix_is_aligned_and_version_tagged(self):
+        FS.snapshot("a", "A", "TRADE", {"rsi": 55, "atr_pct": 3}, outcome=0.5)
+        FS.snapshot("b", "B", "TRADE", {"rsi": 70}, outcome=-1.0)  # atr missing → NaN
+        m = FS.load_matrix(kind="TRADE", require_outcome=True)
+        assert m["X"].shape == (2, len(S.FEATURE_NAMES))
+        assert m["y"].tolist() == [0.5, -1.0]
+        assert m["schema_versions"] == {S.SCHEMA_VERSION}
+        atr_col = m["features"].index("atr_pct")
+        assert np.isnan(m["X"][1, atr_col])                 # missing → NaN, aligned
+
+    def test_unknown_kind_refused(self):
+        assert FS.snapshot("x", "Z", "GOSSIP", {"rsi": 50})["status"] == "error"
+
+    def test_coverage_surfaces_a_thin_feature(self):
+        FS.snapshot("c1", "A", "SCAN", {"rsi": 55})
+        FS.snapshot("c2", "B", "SCAN", {"rsi": 60})
+        cov = {d["feature"]: d for d in FS.feature_coverage()}
+        assert cov["rsi"]["fill_rate"] == 1.0
+        assert cov["crude_usd"]["fill_rate"] == 0.0         # never provided
+
+
+class TestScientificMemory:
+    @pytest.fixture(autouse=True)
+    def _tmp(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(K, "_DB_PATH", tmp_path / "kb.db")
+        # promote_from_experiment writes provenance — keep it off the real graph
+        monkeypatch.setattr(G, "_DB_PATH", tmp_path / "eg.db")
+
+    def test_lifecycle_transitions_are_mechanical(self):
+        assert K._next_status("ACTIVE", "DECAYING", 0.3, "HIGH") == K.WATCH
+        assert K._next_status("ACTIVE", "DEAD", -0.1, "HIGH") == K.RETIRED
+        assert K._next_status("WATCH", "STABLE", 0.4, "HIGH") == K.ACTIVE
+        assert K._next_status("WATCH", "STABLE", -0.1, "HIGH") == K.WATCH   # no EV
+        assert K._next_status("REJECTED", "STRENGTHENING", 0.9, "HIGH") == K.REJECTED
+
+    def test_promoted_experiment_becomes_active_belief(self):
+        bid = K.promote_from_experiment(
+            "hyp1", "Breakouts work in healthy breadth", "breakout",
+            evidence_n=184, confidence="HIGH", ev_r=0.35,
+            schema_version=S.SCHEMA_VERSION)
+        b = K.get_belief(bid)
+        assert b["status"] == K.ACTIVE and b["evidence_n"] == 184
+        assert b["schema_version"] == S.SCHEMA_VERSION
+        assert b["hypothesis_id"] == "hyp1"
+
+    def test_decaying_belief_demotes_and_surfaces_a_directive(self):
+        bid = K.record_belief("X works", "x", status=K.ACTIVE, evidence_n=120,
+                              confidence="HIGH", ev_r=0.3)
+        K.revalidate(bid, drift_status="DECAYING", ev_r=0.02, evidence_n=140)
+        assert K.get_belief(bid)["status"] == K.WATCH
+        assert any("under review" in d["text"] for d in K.belief_directives())
+
+    def test_negative_knowledge_is_permanent(self):
+        K.record_negative("Buying knives works", "falling_knife")
+        assert K.is_known_dead("Buying knives works", "falling_knife") is True
+        # a plain re-record must NOT resurrect it to ACTIVE
+        K.record_belief("Buying knives works", "falling_knife", status=K.ACTIVE,
+                        evidence_n=5, confidence="HIGH", ev_r=0.9)
+        assert K.get_belief(K.belief_id("Buying knives works", "falling_knife"))[
+            "status"] == K.REJECTED
+
+    def test_idempotent_identity(self):
+        a = K.belief_id("same claim", "sig")
+        b = K.belief_id("Same Claim", "SIG")               # case-insensitive
+        assert a == b
+
+    def test_fail_open_reads(self):
+        assert K.list_beliefs() == [] or isinstance(K.list_beliefs(), list)
+        assert K.get_belief("nope") is None
+        assert isinstance(K.belief_directives(), list)
+
+    def test_registry_autosync_is_idempotent_and_lifecycle_safe(self, tmp_path,
+                                                                monkeypatch):
+        from research import registry as REG
+        monkeypatch.setattr(REG, "_DB_PATH", tmp_path / "exp.db")
+        # a promoted experiment with enough evidence
+        hid = REG.register_hypothesis("breakout in breadth",
+                                      {"n": {"gte": 30}}, {"w": 1})
+        REG.record_result(hid, {"n": 150, "mean_r": 0.4, "signal": "breakout",
+                                "confidence": "HIGH", "schema_version": "fs_x"})
+        assert REG.get_experiment(hid)["status"] == "PROMOTED"
+        out = K.sync_from_registry()
+        assert out["synced"] == 1
+        b = K.get_belief(K.belief_id("breakout in breadth", "breakout"))
+        assert b and b["status"] == K.ACTIVE and b["evidence_n"] == 150
+        # now the belief decays but still has positive EV → WATCH (not retired);
+        # a re-sync must NOT clobber it back to ACTIVE
+        K.revalidate(b["belief_id"], drift_status="DECAYING", ev_r=0.1)
+        assert K.get_belief(b["belief_id"])["status"] == K.WATCH
+        assert K.sync_from_registry()["synced"] == 0        # idempotent
+        assert K.get_belief(b["belief_id"])["status"] == K.WATCH   # lifecycle kept
+
+    def test_autosync_skips_underpowered_experiments(self, tmp_path, monkeypatch):
+        from research import registry as REG
+        monkeypatch.setattr(REG, "_DB_PATH", tmp_path / "exp.db")
+        hid = REG.register_hypothesis("thin idea", {"n": {"gte": 1}}, {"w": 1})
+        REG.record_result(hid, {"n": 8, "mean_r": 1.0, "signal": "x"})   # n < 30
+        assert K.sync_from_registry()["synced"] == 0        # below the floor
+
+
+from research import non_event as NE
+
+
+class _FakeSignal:
+    """Minimal stand-in for a scanner StockSignal (only the fields the mapper
+    reads)."""
+    def __init__(self, symbol, verdict="WATCH", score=40.0, rsi=60.0,
+                 chase_risk=False, pivot_distance_pct=0.0):
+        self.symbol = symbol
+        self.verdict = verdict
+        self.score = score
+        self.rsi = rsi
+        self.chase_risk = chase_risk
+        self.pivot_distance_pct = pivot_distance_pct
+
+
+class TestNonEvent:
+    """The 1,900 stocks you didn't trade are the control group — structured
+    causes + two near-miss types + counterfactual verdicts + boundary replay."""
+
+    @pytest.fixture(autouse=True)
+    def _tmp(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(FS, "_DB_PATH", tmp_path / "fs.db")
+
+    def test_rejection_carries_structured_cause_and_dedupes(self):
+        r = NE.capture_rejection("TCS", {"rsi": 85}, "BLOWOFF_RSI",
+                                 ts="2026-06-01T09:00:00")
+        assert r["status"] == "frozen"
+        # same day + symbol + reason → stored once (write-once)
+        r2 = NE.capture_rejection("TCS", {"rsi": 84}, "BLOWOFF_RSI",
+                                  ts="2026-06-01T12:00:00")
+        assert r2["status"] == "exists"
+        obs = FS.get_observation("2026-06-01:TCS:REJ:BLOWOFF_RSI")
+        assert obs["reason"] == "BLOWOFF_RSI" and obs["kind"] == "REJECTION"
+
+    def test_unknown_reason_falls_back_to_other(self):
+        NE.capture_rejection("X", {"rsi": 50}, "MERCURY_RETROGRADE",
+                             ts="2026-06-01T09:00:00")
+        assert FS.get_observation("2026-06-01:X:REJ:OTHER")["reason"] == "OTHER"
+
+    def test_two_near_miss_types_stored_separately_with_gap(self):
+        NE.capture_near_miss("A", {"rsi": 60}, NE.ALMOST,
+                             gap={"feature": "rsi", "needed": 72, "observed": 71.6},
+                             ts="2026-06-01T09:00:00")
+        NE.capture_near_miss("A", {"rsi": 60}, NE.FADED, ts="2026-06-01T09:00:00")
+        a = FS.get_observation("2026-06-01:A:NM:ALMOST")
+        f = FS.get_observation("2026-06-01:A:NM:FADED")
+        assert a["subtype"] == "ALMOST" and a["meta"]["gap"]["observed"] == 71.6
+        assert f["subtype"] == "FADED"                       # distinct rows
+
+    def test_reason_verdicts_earning_vs_too_conservative(self):
+        # a reason that rejected names which then FELL → EARNING
+        for i in range(34):
+            NE.capture_rejection(f"D{i}", {"rsi": 85}, "BLOWOFF_RSI",
+                                 ts="2026-06-01T09:00:00")
+            FS.set_outcome(f"2026-06-01:D{i}:REJ:BLOWOFF_RSI", -3.0 + (i % 3))
+        # a reason that rejected names which then ROSE → TOO_CONSERVATIVE
+        for i in range(34):
+            NE.capture_rejection(f"U{i}", {"rsi": 55}, "LAGGARD",
+                                 ts="2026-06-01T09:00:00")
+            FS.set_outcome(f"2026-06-01:U{i}:REJ:LAGGARD", 6.0 + (i % 4))
+        verdicts = {a["reason"]: a["verdict"] for a in NE.rejection_analysis()}
+        assert verdicts["BLOWOFF_RSI"] == "EARNING"
+        assert verdicts["LAGGARD"] == "TOO_CONSERVATIVE"
+        assert any("too strict" in d["text"] for d in NE.rejection_directives())
+
+    def test_thin_evidence_makes_no_claim(self):
+        for i in range(5):                                   # below the 30 floor
+            NE.capture_rejection(f"T{i}", {"rsi": 80}, "MACRO",
+                                 ts="2026-06-01T09:00:00")
+            FS.set_outcome(f"2026-06-01:T{i}:REJ:MACRO", -5.0)
+        assert NE.rejection_analysis()[0]["verdict"] == "INSUFFICIENT"
+
+    def test_decision_boundary_replay_no_rescan(self):
+        # RSI-cap near-misses just above 72; relaxing the cap 72→74 should flip
+        # exactly those whose observed RSI is in (72, 74]
+        NE.capture_near_miss("P", {"rsi": 73}, NE.ALMOST,
+                             gap={"feature": "rsi", "needed": 72, "observed": 73.0},
+                             ts="2026-06-01T09:00:00")
+        NE.capture_near_miss("Q", {"rsi": 78}, NE.ALMOST,
+                             gap={"feature": "rsi", "needed": 72, "observed": 78.0},
+                             ts="2026-06-01T09:00:00")
+        FS.set_outcome("2026-06-01:P:NM:ALMOST", 4.0)         # would've been a winner
+        rp = NE.replay_threshold("rsi", 72, 74, "ceiling")
+        assert rp["would_qualify"] == 1 and "P" in rp["symbols"]
+        assert rp["winners"] == 1                            # and it rose
+
+    def test_scan_batch_maps_causes(self):
+        results = [
+            _FakeSignal("BUYME", verdict="BUY"),             # → TRADE (the corpus)
+            _FakeSignal("EXT", chase_risk=True),             # → EXTENSION
+            _FakeSignal("NEAR", pivot_distance_pct=0.8),     # → ALMOST
+            _FakeSignal("MEH", score=20.0),                  # → LOW_CONVICTION
+        ]
+        counts = NE.record_scan_batch(results, regime="MIXED")
+        assert counts == {"extension": 1, "almost": 1, "low_conviction": 1, "trade": 1}
+        # the BUY is now frozen as a TRADE observation — the Similar‑history corpus
+        buy = FS.get_observation(f"{NE._today()}:BUYME:TRADE")
+        assert buy is not None and buy["kind"] == "TRADE"
+        assert FS.get_observation(f"{NE._today()}:EXT:REJ:EXTENSION") is not None
+        assert FS.get_observation(f"{NE._today()}:NEAR:NM:ALMOST") is not None
+
+    def test_modeled_r_is_separate_labelled_and_never_canonical(self):
+        # observed forward-return % is canonical; modeled R is a labelled add-on
+        for i in range(34):
+            NE.capture_rejection(f"M{i}", {"rsi": 55, "atr_pct": 3.0}, "LAGGARD",
+                                 ts="2026-06-01T09:00:00")
+            FS.set_outcome(f"2026-06-01:M{i}:REJ:LAGGARD", 6.0)   # +6% obs
+        a = [x for x in NE.rejection_analysis() if x["reason"] == "LAGGARD"][0]
+        assert a["avg_fwd_pct"] == 6.0                       # observed, canonical
+        assert a["modeled_avg_r"] == 1.0                     # 6 / (2 × 3) — modeled
+        assert "counterfactual" in a["modeled_assumption"]   # never unlabelled
+        # a rejection with NO ATR yields no modeled R (no model → no claim)
+        assert NE.modeled_r(6.0, None) is None
+        assert NE.modeled_r(6.0, 0.0) is None
+
+    def test_settle_and_directives_fail_open(self):
+        assert NE.settle_outcomes() == 0                     # no bhavcopy in test env
+        assert isinstance(NE.rejection_analysis(), list)
+        assert isinstance(NE.rejection_directives(), list)
+
+
+from research import evidence_graph as G
+
+
+class TestEvidenceGraph:
+    """Provenance for every belief — the audit trail behind 'why is this active?'"""
+
+    @pytest.fixture(autouse=True)
+    def _tmp(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(G, "_DB_PATH", tmp_path / "eg.db")
+
+    def test_pure_walk_is_cycle_safe_and_ordered(self):
+        adj = {"a": [("b", "R1")], "b": [("c", "R2")], "c": [("a", "R3")]}  # cycle
+        steps = G._walk(adj, "a", max_depth=8)
+        assert [s["node"] for s in steps] == ["b", "c"]      # each once, no loop
+        assert steps[0]["depth"] == 1 and steps[1]["depth"] == 2
+
+    def test_promotion_spine_and_gate_provenance(self):
+        G.record_promotion("breadth conditions breakout", "hyp19", "belief81",
+                            hypothesis_label="breadth conditions breakout edge",
+                            belief_label="breakouts work in healthy breadth",
+                            schema_version="fs_abc", evidence_n=184)
+        gate = G.record_gate("extension_guard", "belief81",
+                             gate_label="Extension Guard")
+        kinds = {(s.get("detail") or {}).get("kind") for s in G.ancestry(gate)}
+        # the full chain gate ← belief ← experiment ← hypothesis, + schema dep
+        assert {"BELIEF", "EXPERIMENT", "HYPOTHESIS", "SCHEMA"} <= kinds
+        text = G.explain(gate)
+        assert "Extension Guard" in text and "healthy breadth" in text
+        assert "HYPOTHESIS" in text and "SCHEMA" in text
+
+    def test_descendants_show_what_a_belief_led_to(self):
+        G.record_promotion("h", "e1", "b1")
+        G.record_gate("g1", "b1")
+        G.record_drift("b1", "d1", status="DECAYING")
+        refs = {(s.get("detail") or {}).get("kind") for s in
+                G.descendants(G.node_id("BELIEF", "b1"))}
+        assert "GATE" in refs and "DRIFT_EVENT" in refs
+
+    def test_nodes_and_links_are_idempotent(self):
+        a = G.add_node("BELIEF", "x", "first")
+        b = G.add_node("BELIEF", "x", "second")             # same id, updated label
+        assert a == b == G.node_id("BELIEF", "x")
+        assert G.get_node(a)["label"] == "second"
+        assert G.link(a, G.add_node("GATE", "gg"), "GATES") is True
+        assert G.link(a, G.node_id("GATE", "gg"), "GATES") is True   # no dup, no raise
+
+    def test_invalid_kinds_relations_are_safe(self):
+        assert G.link("BELIEF:z", "GATE:z", "NONSENSE") is False
+        assert G.explain("GATE:missing").endswith("no provenance recorded.")
+
+
+from research import explainability as EX
+
+
+class TestExplainability:
+    """'Why wasn't this recommended?' answered with sourced evidence, observed
+    and modeled figures kept visibly separate."""
+
+    @pytest.fixture(autouse=True)
+    def _tmp(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(FS, "_DB_PATH", tmp_path / "fs.db")
+        monkeypatch.setattr(K, "_DB_PATH", tmp_path / "kb.db")
+        monkeypatch.setattr(G, "_DB_PATH", tmp_path / "eg.db")
+
+    def _seed(self):
+        for i in range(40):
+            NE.capture_rejection(f"S{i}", {"rsi": 70, "atr_pct": 3.0}, "EXTENSION",
+                                 ts="2026-06-20T09:00:00")
+            FS.set_outcome(f"2026-06-20:S{i}:REJ:EXTENSION",
+                           -2.4 if i >= 4 else 5.0)   # 36 fell, 4 rose
+
+    def test_explain_rejection_is_sourced_and_separates_observed_from_modeled(self):
+        self._seed()
+        K.record_belief("breakouts fail when extended", "EXTENSION",
+                        status=K.ACTIVE, evidence_n=417, confidence="HIGH", ev_r=0.2)
+        r = EX.explain_rejection("S10")
+        assert r["found"] is True and r["reason"] == "EXTENSION"
+        assert r["label"] == "Extension Guard"
+        assert r["n_observations"] == 40
+        assert r["false_rejection_rate"] == 0.1           # 4 / 40
+        assert r["avg_fwd_pct"] < 0                        # observed: saved money
+        assert r["modeled_avg_r"] is not None              # modeled, present
+        assert "counterfactual" in r["modeled_assumption"] # and clearly labelled
+        assert r["verdict"] == "EARNING"
+        assert "breakouts fail when extended" in r["summary"]
+        assert "HIGH confidence" in r["summary"]
+
+    def test_unknown_symbol_and_reason_fail_open(self):
+        assert EX.explain_rejection("GHOST")["found"] is False
+        stub = EX.explain_reason("MERCURY")                # unknown → OTHER stub
+        assert "summary" in stub and stub["reason"] == "OTHER"
+
+    def test_trust_window_is_concise_and_jargon_free(self):
+        K.record_belief("breakouts work in healthy breadth", "breakout",
+                        status=K.ACTIVE, evidence_n=184, confidence="HIGH", ev_r=0.35)
+        t = EX.trust_recommendation("breakout")
+        assert t["evidence_n"] == 184 and t["confidence"] == "HIGH"
+        assert "184 similar observations" in t["summary"]
+        # no statistical jargon leaks into the customer sentence
+        for jargon in ("p_value", "Welch", "permutation", "Sharpe", "DSR"):
+            assert jargon not in t["summary"]
+
+    def test_confidence_change_window_gives_a_size_recommendation(self):
+        # no drift record → stable, unchanged
+        c = EX.confidence_change("breakout")
+        assert c["changed"] is False and "stable" in c["summary"].lower()
+
+    def test_row_intelligence_bundles_the_four_windows(self):
+        K.record_belief("breakouts work in healthy breadth", "breakout",
+                        status=K.ACTIVE, evidence_n=184, confidence="HIGH", ev_r=0.35)
+        ri = EX.row_intelligence("RELIANCE", verdict="WATCH", signal="breakout",
+                                 signals=["Breakout 52W"], features={"rsi": 60})
+        assert set(("why_buy", "why_not", "evidence", "trust",
+                    "similar_history")) <= set(ri)
+        assert "Breakout 52W" in ri["why_buy"]["summary"]
+        assert "breakouts work" in ri["evidence"]["summary"]
+
+    def test_similar_history_retrieves_and_summarises(self):
+        import numpy as np
+        rng = np.random.default_rng(1)
+        for i in range(40):
+            FS.snapshot(f"t{i}", "SYM", "TRADE",
+                        {"rsi": float(55 + rng.normal(0, 8)),
+                         "atr_pct": float(3 + rng.normal(0, 1)), "clv": 0.6,
+                         "regime": "TRENDING_BULL",
+                         "breadth_pct_above_50dma": 60, "vix": 13},
+                        outcome=float(rng.normal(2, 4)))
+        from research.similar_history import similar
+        s = similar({"rsi": 56, "atr_pct": 3.0, "clv": 0.6,
+                     "regime": "TRENDING_BULL", "breadth_pct_above_50dma": 60,
+                     "vix": 13, "liquidity_cr": 30})
+        assert s["found"] is True and s["n_similar"] == 40
+        assert s["worst_pct"] <= s["median_outcome_pct"] <= s["best_pct"]
+        assert "Healthy Breadth" in s["environment"]
+
+    def test_similar_history_needs_enough_corpus(self):
+        from research.similar_history import similar
+        FS.snapshot("only1", "X", "TRADE", {"rsi": 60}, outcome=1.0)
+        assert similar({"rsi": 60})["found"] is False   # < min corpus
+
+
+from research import research_overview as RO
+
+
+class TestResearchOverview:
+    """Mission control — 'is my research organisation healthy?' composed from the
+    subsystems, JARVIS-queryable, and fail-open even with feeds down."""
+
+    @pytest.fixture(autouse=True)
+    def _tmp(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(FS, "_DB_PATH", tmp_path / "fs.db")
+        monkeypatch.setattr(K, "_DB_PATH", tmp_path / "kb.db")
+        monkeypatch.setattr(G, "_DB_PATH", tmp_path / "eg.db")
+
+    def test_overview_is_always_complete_and_fail_open(self):
+        # even with empty stores, every section renders (mission control never blanks)
+        o = RO.overview()
+        assert set(o) == {"research_health", "knowledge_growth", "edge_health",
+                          "gate_scorecard", "data_health", "research_debt"}
+        assert isinstance(o["gate_scorecard"], list)
+
+    def test_gate_scorecard_ranks_and_scores(self):
+        for i in range(40):
+            NE.capture_rejection(f"E{i}", {"rsi": 70, "atr_pct": 3.0}, "EXTENSION",
+                                 ts="2026-06-20T09:00:00")
+            FS.set_outcome(f"2026-06-20:E{i}:REJ:EXTENSION", -2.4 if i >= 4 else 5.0)
+        card = RO.gate_scorecard()
+        ext = next(r for r in card if r["reason"] == "EXTENSION")
+        assert ext["gate"] == "Extension Guard"
+        assert ext["saved"] == 36 and ext["cost"] == 4
+        assert ext["net_fwd_pct"] < 0 and ext["verdict"] == "EARNING"
+        assert ext["trend"] in ("↑", "↓", "→")
+
+    def test_research_health_counts_beliefs_and_activity(self):
+        K.record_belief("A works", "a", status=K.ACTIVE, evidence_n=120,
+                        confidence="HIGH", ev_r=0.3)
+        K.record_belief("B fails", "b", status=K.REJECTED)
+        rh = RO.research_health()
+        assert rh["beliefs_active"] == 1 and rh["beliefs_rejected"] == 1
+        assert rh["promoted_this_week"] >= 1
+
+    def test_data_health_surfaces_schema_and_counts(self):
+        FS.snapshot("o1", "TCS", "SCAN", {"rsi": 60})
+        dh = RO.data_health()
+        assert dh["total_observations"] == 1
+        assert dh["by_kind"]["SCAN"]["total"] == 1
+        assert dh["on_current_schema"] is True
+
+    def test_knowledge_growth_tracks_net_learning(self):
+        K.record_belief("A", "a", status=K.ACTIVE, evidence_n=120,
+                        confidence="HIGH", ev_r=0.3)
+        K.record_belief("B", "b", status=K.ACTIVE, evidence_n=80,
+                        confidence="HIGH", ev_r=0.2)
+        kg = RO.knowledge_growth()
+        assert kg["beliefs_active"] == 2
+        assert kg["validated_in_window"] >= 2 and kg["net_knowledge_gain"] >= 2
+        assert kg["avg_evidence_per_belief"] == 100.0
+        assert kg["learning"] is True
+
+    def test_time_machine_reconstructs_past_beliefs(self):
+        bid = K.record_belief("X works", "x", status=K.ACTIVE, evidence_n=100,
+                              confidence="HIGH", ev_r=0.3)
+        K.revalidate(bid, drift_status="DECAYING", ev_r=0.1)   # now WATCH
+        # today's view: WATCH; the past reconstruction is by event history
+        import datetime
+        now = datetime.datetime.now().isoformat()
+        tm = RO.time_machine(now)
+        assert tm["total"] == 1
+        assert RO.time_machine("2000-01-01")["total"] == 0    # before it existed

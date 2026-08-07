@@ -1,0 +1,8 @@
+sma_20
+sma_50
+volatility_20
+momentum_5d
+volume_trend
+rsi
+atr
+regime

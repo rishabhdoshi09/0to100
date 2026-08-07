@@ -1,0 +1,1016 @@
+"""
+regime_engine.py — 5-dimension market regime classifier for NSE India.
+
+Public API:
+    compute_regime() -> RegimeState
+
+India index/regime data is Kite-first. NSE official index store is the
+offline secondary. Yahoo is opt-in only via QT_YAHOO_FALLBACK=1.
+Never invents a demo regime when feeds are missing.
+"""
+
+from __future__ import annotations
+
+import logging
+import os
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass, field, asdict
+from datetime import datetime, timezone
+from typing import Optional
+
+import numpy as np
+import pandas as pd
+
+logger = logging.getLogger(__name__)
+
+# Last successful source per ticker for honesty/diagnostics.
+_LAST_SOURCES: dict[str, str] = {}
+
+# ---------------------------------------------------------------------------
+# Constants
+# ---------------------------------------------------------------------------
+
+NIFTY_TICKER = "^NSEI"
+VIX_TICKER = "^INDIAVIX"
+
+SECTOR_TICKERS: dict[str, str] = {
+    "IT":      "^CNXIT",
+    "BANK":    "^NSEBANK",
+    "AUTO":    "^CNXAUTO",
+    "PHARMA":  "^CNXPHARMA",
+    "FMCG":    "^CNXFMCG",
+    "METAL":   "^CNXMETAL",
+    "ENERGY":  "^CNXENERGY",
+    "REALTY":  "^CNXREALTY",
+}
+
+OFFENSIVE_SECTORS = {"IT", "AUTO", "METAL"}
+DEFENSIVE_SECTORS = {"PHARMA", "FMCG", "ENERGY"}
+
+_CACHE_TTL_DEFAULT = 15 * 60   # 15 min outside market hours
+
+_CACHE: dict = {}          # keys: "regime_state", "timestamp"
+
+
+def _cache_ttl() -> int:
+    """Dynamic TTL — 60s during market hours, 5m pre-market, 15m otherwise."""
+    try:
+        import pytz
+        from datetime import time as _time
+        ist = pytz.timezone("Asia/Kolkata")
+        now = datetime.now(ist)
+        if now.weekday() >= 5:           # weekend
+            return 60 * 60
+        t = now.time()
+        if _time(9, 10) <= t <= _time(15, 35):
+            return 60                    # every minute during live session
+        if _time(8, 0) <= t < _time(9, 10):
+            return 5 * 60               # pre-market warmup
+    except Exception:
+        pass
+    return _CACHE_TTL_DEFAULT
+
+# ---------------------------------------------------------------------------
+# Data classes
+# ---------------------------------------------------------------------------
+
+@dataclass
+class RegimeState:
+    # Primary dimensions
+    market_regime: str              # TRENDING_BULL | TRENDING_BEAR | CHOPPY | COMPRESSION | EXPANSION | DISTRIBUTION
+    volatility_regime: str          # LOW_VOL_COMPRESSION | NORMAL | TREND_VOLATILITY | ELEVATED | PANIC
+    breadth_strength: int           # 0-100
+    breadth_label: str              # STRONG | NEUTRAL | WEAK
+    breakout_environment: str       # FAVORABLE | NEUTRAL | UNFAVORABLE
+    risk_mode: str                  # RISK_ON | RISK_OFF | NEUTRAL
+    institutional_activity: str     # ACCUMULATION | DISTRIBUTION | NEUTRAL | RISK_ON | RISK_OFF
+
+    # Sector rotation
+    leading_sectors: list[str]
+    lagging_sectors: list[str]
+    rotation_mode: str              # OFFENSIVE | DEFENSIVE | MIXED
+    sector_returns: dict[str, float]
+
+    # Nifty raw metrics
+    nifty_price: float
+    nifty_change_1d: float
+    nifty_change_5d: float
+    sma50: float
+    sma200: float
+    vix: float
+
+    # Derived / actionable
+    regime_score: float             # 0-100, overall bullishness
+    regime_confidence: float        # 0-100, how certain is the classification
+    regime_confidence_label: str    # "HIGH" | "MODERATE" | "LOW" | "UNCERTAIN"
+    quality_multiplier: float       # applied to downstream setup scores
+    recommended_playbooks: list[str]
+    avoid_patterns: list[str]
+
+    # Meta
+    timestamp: str
+    data_age_mins: int
+
+    # Sector rotation leaders (from acceleration matrix) — optional
+    rotation_leaders: list[dict] = field(default_factory=list)
+
+    # ------------------------------------------------------------------
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+    def summary_line(self) -> str:
+        return (
+            f"[{self.timestamp[:16]}] "
+            f"Regime={self.market_regime} | "
+            f"Vol={self.volatility_regime} | "
+            f"Breadth={self.breadth_label}({self.breadth_strength}) | "
+            f"Risk={self.risk_mode} | "
+            f"Score={self.regime_score:.1f} | "
+            f"QM={self.quality_multiplier:.2f}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Kite instrument tokens for NSE indices (fixed/stable across sessions)
+# ---------------------------------------------------------------------------
+
+_KITE_INDEX_TOKENS: dict[str, int] = {
+    "^NSEI":     256265,   # NIFTY 50
+    "^INDIAVIX": 264969,   # INDIA VIX
+    "^NSEBANK":  260105,   # NIFTY BANK
+    "^CNXIT":    259849,   # NIFTY IT
+    "^CNXAUTO":  258049,   # NIFTY AUTO
+    "^CNXPHARMA": 261249,  # NIFTY PHARMA
+    "^CNXFMCG":  257801,   # NIFTY FMCG
+    "^CNXMETAL":  234249,  # NIFTY METAL
+    "^CNXENERGY": 258921,  # NIFTY ENERGY
+    "^CNXREALTY": 261633,  # NIFTY REALTY
+}
+
+
+def _fetch_ohlcv_kite(ticker: str, days: int = 365) -> Optional[pd.DataFrame]:
+    """Fetch index OHLCV from Kite Connect using known instrument tokens."""
+    token = _KITE_INDEX_TOKENS.get(ticker)
+    if token is None:
+        return None
+    try:
+        from data.kite_client import KiteClient
+        kite = KiteClient()
+        if not kite.is_connected():
+            return None
+        from datetime import date, timedelta
+        to_dt = date.today().strftime("%Y-%m-%d")
+        from_dt = (date.today() - timedelta(days=days)).strftime("%Y-%m-%d")
+        df = kite.get_historical(
+            instrument_token=token,
+            from_date=from_dt,
+            to_date=to_dt,
+            interval="day",
+        )
+        if df is None or df.empty or len(df) < 10:
+            return None
+        # Normalize column names to match yfinance convention (Title case)
+        df = df.rename(columns={
+            "open": "Open", "high": "High", "low": "Low",
+            "close": "Close", "volume": "Volume",
+        })
+        df.index = pd.to_datetime(df.index)
+        df.sort_index(inplace=True)
+        return df
+    except Exception as exc:
+        logger.debug("Kite fetch failed for %s: %s", ticker, exc)
+        return None
+
+
+# ---------------------------------------------------------------------------
+# yfinance helpers
+# ---------------------------------------------------------------------------
+
+def _yahoo_fallback_enabled() -> bool:
+    return str(os.getenv("QT_YAHOO_FALLBACK", "0") or "0").strip() in {
+        "1", "true", "TRUE", "yes",
+    }
+
+
+def _fetch_ohlcv(ticker: str, period: str = "1y") -> Optional[pd.DataFrame]:
+    """Index OHLCV: Kite → NSE official index store → optional Yahoo.
+
+    Terminal product path is Kite-primary. Yahoo stays off unless
+    ``QT_YAHOO_FALLBACK=1`` is set explicitly.
+    """
+    days = 400 if period == "1y" else 30
+    # 1. Kite Connect (requires daily login; historical may need API entitlement)
+    df = _fetch_ohlcv_kite(ticker, days=days)
+    if df is not None:
+        _LAST_SOURCES[ticker] = "kite"
+        return df
+    # 2. NSE official index store (offline cache / free archive — not Yahoo)
+    try:
+        from data.index_store import get_index_ohlcv
+        df = get_index_ohlcv(ticker)
+        if df is not None and len(df) >= 30:
+            if "Volume" not in df.columns:   # old-cache shape safety
+                df = df.copy()
+                df["Volume"] = 0.0
+            _LAST_SOURCES[ticker] = "nse_index_store"
+            return df.tail(days)
+    except Exception as exc:
+        logger.debug("index_store miss for %s: %s", ticker, exc)
+    # 3. Yahoo — opt-in only; never the default India path
+    if not _yahoo_fallback_enabled():
+        _LAST_SOURCES[ticker] = "unavailable"
+        return None
+    try:
+        import warnings
+        import yfinance as yf
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            df = yf.download(ticker, period=period, progress=False, auto_adjust=True, timeout=8)
+        if df is None or df.empty:
+            logger.debug("No yfinance data for %s", ticker)
+            _LAST_SOURCES[ticker] = "unavailable"
+            return None
+        df.index = pd.to_datetime(df.index)
+        df.sort_index(inplace=True)
+        _LAST_SOURCES[ticker] = "yfinance"
+        return df
+    except Exception as exc:
+        logger.debug("yfinance fetch skipped for %s: %s", ticker, exc)
+        _LAST_SOURCES[ticker] = "unavailable"
+        return None
+
+
+def _latest_close(df: pd.DataFrame) -> float:
+    return float(df["Close"].iloc[-1])
+
+
+def _sma(series: pd.Series, window: int) -> pd.Series:
+    return series.rolling(window, min_periods=window).mean()
+
+
+def _ema(series: pd.Series, window: int) -> pd.Series:
+    return series.ewm(span=window, adjust=False).mean()
+
+
+def _atr(df: pd.DataFrame, window: int = 14) -> pd.Series:
+    high = df["High"]
+    low = df["Low"]
+    close = df["Close"]
+    prev_close = close.shift(1)
+    tr = pd.concat([
+        high - low,
+        (high - prev_close).abs(),
+        (low - prev_close).abs(),
+    ], axis=1).max(axis=1)
+    return tr.ewm(span=window, adjust=False).mean()
+
+
+def _adx(df: pd.DataFrame, window: int = 14) -> float:
+    """Return scalar current ADX value; NaN on failure."""
+    try:
+        high = df["High"]
+        low = df["Low"]
+        close = df["Close"]
+
+        plus_dm = high.diff()
+        minus_dm = -low.diff()
+        plus_dm = plus_dm.where((plus_dm > minus_dm) & (plus_dm > 0), 0.0)
+        minus_dm = minus_dm.where((minus_dm > plus_dm) & (minus_dm > 0), 0.0)
+
+        atr_series = _atr(df, window)
+        smoothed_plus = plus_dm.ewm(span=window, adjust=False).mean()
+        smoothed_minus = minus_dm.ewm(span=window, adjust=False).mean()
+
+        pdi = 100 * smoothed_plus / atr_series.replace(0, np.nan)
+        mdi = 100 * smoothed_minus / atr_series.replace(0, np.nan)
+        dx = 100 * (pdi - mdi).abs() / (pdi + mdi).replace(0, np.nan)
+        adx_series = dx.ewm(span=window, adjust=False).mean()
+        return float(adx_series.iloc[-1])
+    except Exception:
+        return float("nan")
+
+
+def _bollinger_width(close: pd.Series, window: int = 20) -> pd.Series:
+    ma = _sma(close, window)
+    std = close.rolling(window, min_periods=window).std()
+    upper = ma + 2 * std
+    lower = ma - 2 * std
+    return (upper - lower) / ma.replace(0, np.nan)
+
+
+# ---------------------------------------------------------------------------
+# A. Market Regime
+# ---------------------------------------------------------------------------
+
+def _classify_market_regime(df: pd.DataFrame) -> tuple[str, float, float, float, float, float]:
+    """Return (regime_label, price, chg1d, chg5d, sma50, sma200)."""
+    fallback = ("CHOPPY", float("nan"), float("nan"), float("nan"), float("nan"), float("nan"))
+    if df is None or len(df) < 210:
+        return fallback
+
+    close = df["Close"].squeeze()
+    volume = df["Volume"].squeeze()
+
+    price = float(close.iloc[-1])
+    chg1d = float((close.iloc[-1] / close.iloc[-2] - 1) * 100) if len(close) > 1 else 0.0
+    chg5d = float((close.iloc[-1] / close.iloc[-6] - 1) * 100) if len(close) > 5 else 0.0
+
+    sma50_s = _sma(close, 50)
+    sma200_s = _sma(close, 200)
+    sma50 = float(sma50_s.iloc[-1])
+    sma200 = float(sma200_s.iloc[-1])
+
+    # SMA50 slope: compare today vs 5 sessions ago
+    sma50_slope = float(sma50_s.iloc[-1] - sma50_s.iloc[-6]) if not sma50_s.iloc[-6:].isna().any() else 0.0
+
+    adx_val = _adx(df)
+    high_52w = float(close.rolling(252, min_periods=200).max().iloc[-1])
+    atr_series = _atr(df)
+    bb_width = _bollinger_width(close)
+
+    # ATR contracting: current ATR < 5-session avg ATR * 0.9
+    atr_contracting = (
+        float(atr_series.iloc[-1]) < float(atr_series.iloc[-6:-1].mean()) * 0.90
+        if len(atr_series) > 6 else False
+    )
+
+    # BB width percentile over last 252 sessions
+    bb_recent = bb_width.dropna().iloc[-252:]
+    bb_current = float(bb_width.iloc[-1]) if not np.isnan(float(bb_width.iloc[-1])) else 0.0
+    bb_pct20 = float(bb_recent.quantile(0.20)) if len(bb_recent) >= 50 else float("nan")
+
+    # BB width expanding vs 10-session average
+    bb_10avg = float(bb_width.iloc[-11:-1].mean()) if len(bb_width) > 11 else float("nan")
+    bb_expanding = (bb_current > bb_10avg * 1.30) if not np.isnan(bb_10avg) else False
+
+    # Volume on up vs down days (last 20 sessions)
+    recent = df.iloc[-20:]
+    up_days = recent[recent["Close"].squeeze() >= recent["Open"].squeeze()]
+    dn_days = recent[recent["Close"].squeeze() < recent["Open"].squeeze()]
+    avg_vol_up = float(up_days["Volume"].squeeze().mean()) if len(up_days) > 0 else 0.0
+    avg_vol_dn = float(dn_days["Volume"].squeeze().mean()) if len(dn_days) > 0 else 0.0
+    volume_on_down = avg_vol_dn > avg_vol_up * 1.10
+
+    # Determine regime
+    if (price > sma50 > sma200
+            and sma50_slope > 0
+            and adx_val > 25
+            and price > high_52w * 0.90):
+        regime = "TRENDING_BULL"
+
+    elif price < sma50 < sma200 and sma50_slope < 0:
+        regime = "TRENDING_BEAR"
+
+    elif (not np.isnan(bb_pct20)
+          and bb_current <= bb_pct20
+          and atr_contracting):
+        regime = "COMPRESSION"
+
+    elif bb_expanding and abs(chg5d) > 1.5:
+        regime = "EXPANSION"
+
+    elif (price < sma50
+          and volume_on_down
+          and sma50_slope <= 0):
+        regime = "DISTRIBUTION"
+
+    else:
+        # CHOPPY: price between SMA50/SMA200 OR ADX < 20 for 10+ sessions
+        adx_recent_low = adx_val < 20  # simplified; ADX already smoothed
+        price_between = min(sma50, sma200) <= price <= max(sma50, sma200)
+        regime = "CHOPPY" if (price_between or adx_recent_low) else "CHOPPY"
+
+    return regime, price, chg1d, chg5d, sma50, sma200
+
+
+# ---------------------------------------------------------------------------
+# B. Volatility Regime
+# ---------------------------------------------------------------------------
+
+def _classify_volatility(vix_df: Optional[pd.DataFrame]) -> tuple[str, float]:
+    if vix_df is None or vix_df.empty:
+        return "NORMAL", float("nan")
+
+    close = vix_df["Close"].squeeze()
+    vix = float(close.iloc[-1])
+    ma5 = float(_sma(close, 5).iloc[-1]) if len(close) >= 5 else vix
+
+    if vix > 30:
+        label = "PANIC"
+    elif vix > 24:
+        label = "ELEVATED"
+    elif vix > 18:
+        label = "TREND_VOLATILITY"
+    elif vix > 14:
+        label = "NORMAL"
+    else:
+        label = "LOW_VOL_COMPRESSION" if vix < ma5 else "NORMAL"
+
+    return label, vix
+
+
+# ---------------------------------------------------------------------------
+# C. Breadth
+# ---------------------------------------------------------------------------
+
+def _compute_breadth(sector_data: dict[str, Optional[pd.DataFrame]]) -> tuple[int, str, float]:
+    """Return (breadth_score 0-100, label, advance_decline_proxy)."""
+    scores: list[float] = []
+    advances = 0
+    declines = 0
+
+    for name, df in sector_data.items():
+        if df is None or len(df) < 55:
+            continue
+        close = df["Close"].squeeze()
+        price = float(close.iloc[-1])
+        ma50 = float(_sma(close, 50).iloc[-1])
+        ret5d = float((close.iloc[-1] / close.iloc[-6] - 1)) if len(close) > 5 else 0.0
+
+        above_50d = 1.0 if price > ma50 else 0.0
+        positive_5d = 1.0 if ret5d > 0 else 0.0
+        # sector score 0-1
+        scores.append((above_50d + positive_5d) / 2.0)
+
+        if ret5d > 0:
+            advances += 1
+        else:
+            declines += 1
+
+    if not scores:
+        # Honest miss — do not invent a "neutral 50" breadth reading.
+        return 0, "UNAVAILABLE", float("nan")
+
+    raw = float(np.mean(scores)) * 100  # 0-100
+    breadth_score = int(round(raw))
+
+    if breadth_score > 65:
+        label = "STRONG"
+    elif breadth_score >= 40:
+        label = "NEUTRAL"
+    else:
+        label = "WEAK"
+
+    ad_proxy = advances / max(declines, 1)
+    return breadth_score, label, ad_proxy
+
+
+# ---------------------------------------------------------------------------
+# D. Sector Rotation
+# ---------------------------------------------------------------------------
+
+def _classify_sector_rotation(
+    sector_data: dict[str, Optional[pd.DataFrame]]
+) -> tuple[list[str], list[str], str, dict[str, float]]:
+    """Return (leaders, laggards, rotation_mode, sector_returns)."""
+    returns: dict[str, float] = {}
+    for name, df in sector_data.items():
+        if df is None or len(df) < 7:
+            continue
+        close = df["Close"].squeeze()
+        ret5d = float((close.iloc[-1] / close.iloc[-6] - 1) * 100) if len(close) > 5 else 0.0
+        returns[name] = round(ret5d, 3)
+
+    if not returns:
+        return [], [], "UNAVAILABLE", {}
+
+    ranked = sorted(returns, key=lambda s: returns[s], reverse=True)
+    leaders = ranked[:3]
+    laggards = ranked[-3:]
+
+    leaders_set = set(leaders)
+    offensive_leading = leaders_set & OFFENSIVE_SECTORS
+    defensive_leading = leaders_set & DEFENSIVE_SECTORS
+
+    if len(offensive_leading) >= 2:
+        rotation_mode = "OFFENSIVE"
+    elif len(defensive_leading) >= 2:
+        rotation_mode = "DEFENSIVE"
+    else:
+        rotation_mode = "MIXED"
+
+    return leaders, laggards, rotation_mode, returns
+
+
+# ---------------------------------------------------------------------------
+# E. Institutional Activity
+# ---------------------------------------------------------------------------
+
+def _classify_institutional(
+    df: pd.DataFrame,
+    market_regime: str,
+    vix: float,
+    sma50: float,
+    sma200: float,
+) -> str:
+    if df is None or len(df) < 20:
+        return "NEUTRAL"
+
+    close = df["Close"].squeeze()
+    high = df["High"].squeeze()
+    volume = df["Volume"].squeeze()
+
+    # RISK_ON / RISK_OFF conditions (use broad signals)
+    price = float(close.iloc[-1])
+    high_52w = float(close.rolling(252, min_periods=200).max().iloc[-1])
+    low_52w = float(close.rolling(252, min_periods=200).min().iloc[-1])
+    range_52w = high_52w - low_52w
+    in_upper_half = price > (low_52w + range_52w * 0.5) if range_52w > 0 else False
+
+    vix_declining = False
+    if not np.isnan(vix):
+        vix_declining = True  # placeholder; actual VIX trend computed in vol regime
+
+    if sma50 > sma200 and in_upper_half and (np.isnan(vix) or vix < 22):
+        return "RISK_ON"
+
+    if sma50 < sma200 or (not np.isnan(vix) and vix > 22):
+        return "RISK_OFF"
+
+    # ACCUMULATION / DISTRIBUTION from price + volume micro-structure (last 20 bars)
+    recent = df.iloc[-20:]
+    recent_close = recent["Close"].squeeze()
+    recent_open = recent["Open"].squeeze()
+    recent_volume = recent["Volume"].squeeze()
+    recent_high = recent["High"].squeeze()
+
+    up_mask = recent_close >= recent_open
+    dn_mask = ~up_mask
+    avg_vol_up = float(recent_volume[up_mask].mean()) if up_mask.sum() > 0 else 0.0
+    avg_vol_dn = float(recent_volume[dn_mask].mean()) if dn_mask.sum() > 0 else 0.0
+
+    # Higher lows proxy: last 10 lows trending up
+    lows_10 = recent["Low"].squeeze().iloc[-10:]
+    higher_lows = (lows_10.diff().dropna() > 0).sum() >= 6
+
+    # Lower highs proxy
+    highs_10 = recent_high.iloc[-10:]
+    lower_highs = (highs_10.diff().dropna() < 0).sum() >= 6
+
+    vol_up_dominant = avg_vol_up > avg_vol_dn * 1.05
+    vol_dn_dominant = avg_vol_dn > avg_vol_up * 1.10
+
+    # Daily range compression (accumulation signature)
+    daily_range = (recent_high - recent["Low"].squeeze())
+    range_contracting = float(daily_range.iloc[-5:].mean()) < float(daily_range.iloc[-15:-5].mean()) * 0.90
+
+    if higher_lows and vol_up_dominant and range_contracting:
+        return "ACCUMULATION"
+    if lower_highs and vol_dn_dominant:
+        return "DISTRIBUTION"
+
+    return "NEUTRAL"
+
+
+# ---------------------------------------------------------------------------
+# Scoring and playbooks
+# ---------------------------------------------------------------------------
+
+def _compute_regime_score(
+    market_regime: str,
+    volatility_regime: str,
+    breadth_score: int,
+    institutional: str,
+) -> float:
+    """Return 0-100 overall bullishness score."""
+    market_map = {
+        "TRENDING_BULL": 85,
+        "EXPANSION":     70,
+        "CHOPPY":        50,
+        "COMPRESSION":   45,
+        "DISTRIBUTION":  25,
+        "TRENDING_BEAR": 15,
+    }
+    vol_map = {
+        "LOW_VOL_COMPRESSION": 75,
+        "NORMAL":              65,
+        "TREND_VOLATILITY":    55,
+        "ELEVATED":            35,
+        "PANIC":               10,
+    }
+    inst_map = {
+        "RISK_ON":        80,
+        "ACCUMULATION":   70,
+        "NEUTRAL":        50,
+        "DISTRIBUTION":   30,
+        "RISK_OFF":       20,
+    }
+    m = market_map.get(market_regime, 50)
+    v = vol_map.get(volatility_regime, 50)
+    b = breadth_score
+    i = inst_map.get(institutional, 50)
+
+    score = m * 0.35 + v * 0.20 + b * 0.25 + i * 0.20
+    return round(min(max(score, 0), 100), 2)
+
+
+def _multi_tf_coherence(
+    daily_regime: str,
+    hourly_regime: str | None,
+    min15_regime: str | None,
+) -> float:
+    """
+    Confidence multiplier (0.4–1.0) based on timeframe agreement.
+    All three agreeing = 1.0. Two agreeing = 0.75. All different = 0.4.
+    If sub-timeframes unavailable, returns 0.85 (mild penalty for unknown).
+    """
+    if hourly_regime is None and min15_regime is None:
+        return 0.85  # only daily available — mild uncertainty
+
+    bull_regimes = {"TRENDING_BULL", "EXPANSION"}
+    bear_regimes = {"TRENDING_BEAR", "DISTRIBUTION"}
+    neutral_regimes = {"CHOPPY", "COMPRESSION"}
+
+    def _classify(r: str | None) -> str:
+        if r in bull_regimes:    return "bull"
+        if r in bear_regimes:    return "bear"
+        if r in neutral_regimes: return "neutral"
+        return "unknown"
+
+    classes = [_classify(daily_regime)]
+    if hourly_regime:  classes.append(_classify(hourly_regime))
+    if min15_regime:   classes.append(_classify(min15_regime))
+
+    unique = set(classes) - {"unknown"}
+    if len(unique) == 1:  return 1.0   # full agreement
+    if len(unique) == 2:  return 0.75  # partial agreement
+    return 0.40                         # conflict — significant uncertainty
+
+
+def _get_pcr_signal() -> float:
+    """
+    Put-Call Ratio from NSE options data.
+    Returns confidence boost: 0-33 points.
+    PCR < 0.7 = calls dominating = risk-on = +33
+    PCR 0.7-1.0 = neutral = +15
+    PCR > 1.0 = puts dominating = fear = +0
+    """
+    try:
+        # Use the shared v3-aware fetcher — legacy option-chain-indices is 404.
+        from options.chain_fetch import chain_workspace_cached
+
+        payload = chain_workspace_cached("NIFTY", force=False)
+        if not payload.get("available"):
+            return 15.0
+        pcr = float(payload.get("pcr") or 0.0)
+        if pcr <= 0:
+            return 15.0
+        if pcr < 0.7:
+            return 33.0
+        if pcr < 1.0:
+            return 15.0
+        return 0.0
+    except Exception:
+        return 15.0  # neutral assumption when unavailable
+
+
+def _get_fii_futures_signal() -> float:
+    """
+    FII net position in index futures (not cash — futures reveals conviction).
+    Returns confidence boost: 0-33 points.
+    Positive net long = risk-on = +33
+    """
+    try:
+        import requests
+        resp = requests.get(
+            "https://www.nseindia.com/api/fiidiiTradeReact",
+            headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json"},
+            timeout=5,
+        )
+        data = resp.json()
+        for entry in data:
+            if "future" in str(entry.get("category", "")).lower():
+                net = float(entry.get("netAmount", 0) or 0)
+                return 33.0 if net > 0 else 0.0
+    except Exception:
+        pass
+    return 15.0  # neutral when unavailable
+
+
+def _compute_regime_confidence(
+    market_regime: str,
+    volatility_regime: str,
+    breadth_label: str,
+    institutional: str,
+    nifty_vs_sma200: float,
+    vix: float,
+    tf_coherence: float = 0.85,
+) -> tuple[float, str]:
+    """
+    Confidence = how many sub-signals agree on the regime direction.
+    Returns (0-100, label).
+    """
+    bull_signals = 0
+    bear_signals = 0
+    total = 4
+
+    # 1. Market regime direction
+    if market_regime in ("TRENDING_BULL", "EXPANSION"):
+        bull_signals += 1
+    elif market_regime in ("TRENDING_BEAR", "DISTRIBUTION"):
+        bear_signals += 1
+
+    # 2. Nifty above/below SMA200
+    if nifty_vs_sma200 > 1.0:     # above
+        bull_signals += 1
+    elif nifty_vs_sma200 < -1.0:  # below
+        bear_signals += 1
+
+    # 3. Breadth
+    if breadth_label == "STRONG":
+        bull_signals += 1
+    elif breadth_label == "WEAK":
+        bear_signals += 1
+
+    # 4. Institutional
+    if institutional in ("ACCUMULATION", "RISK_ON"):
+        bull_signals += 1
+    elif institutional in ("DISTRIBUTION", "RISK_OFF"):
+        bear_signals += 1
+
+    max_aligned = max(bull_signals, bear_signals)
+    confidence = (max_aligned / total) * 100
+
+    # Apply multi-timeframe coherence multiplier
+    confidence = round(min(100.0, confidence * tf_coherence), 1)
+
+    if confidence >= 75:
+        label = "HIGH"
+    elif confidence >= 50:
+        label = "MODERATE"
+    elif confidence >= 25:
+        label = "LOW"
+    else:
+        label = "UNCERTAIN"
+
+    return round(confidence, 1), label
+
+
+def _quality_multiplier(market_regime: str, volatility_regime: str) -> float:
+    base = {
+        "TRENDING_BULL": 1.25,
+        "EXPANSION":     1.10,
+        "CHOPPY":        0.90,
+        "COMPRESSION":   0.85,
+        "DISTRIBUTION":  0.75,
+        "TRENDING_BEAR": 0.65,
+    }.get(market_regime, 0.90)
+
+    vol_adj = {
+        "LOW_VOL_COMPRESSION": 0.05,
+        "NORMAL":              0.00,
+        "TREND_VOLATILITY":   -0.05,
+        "ELEVATED":           -0.10,
+        "PANIC":              -0.20,
+    }.get(volatility_regime, 0.0)
+
+    return round(min(max(base + vol_adj, 0.50), 1.40), 2)
+
+
+def _derive_playbooks(
+    market_regime: str,
+    volatility_regime: str,
+    breadth_label: str,
+    rotation_mode: str,
+    institutional: str,
+) -> tuple[list[str], list[str]]:
+    recommended: list[str] = []
+    avoid: list[str] = []
+
+    bull_vol = market_regime == "TRENDING_BULL"
+    low_vol = volatility_regime in ("LOW_VOL_COMPRESSION", "NORMAL")
+    strong_breadth = breadth_label == "STRONG"
+    risk_on = institutional in ("RISK_ON", "ACCUMULATION")
+
+    if bull_vol and low_vol:
+        recommended += ["VCP_BREAKOUT", "MOMENTUM_EXPANSION", "EARLY_LEADER"]
+        avoid += ["MEAN_REVERSION", "COUNTER_TREND_SHORT"]
+
+    if market_regime == "COMPRESSION" and risk_on:
+        recommended += ["VCP_BREAKOUT", "ACCUMULATION_BREAKOUT"]
+        avoid += ["MOMENTUM_CHASING", "LATE_MOMENTUM"]
+
+    if market_regime == "TRENDING_BEAR":
+        recommended += ["FAILED_BREAKOUT_REVERSAL", "MEAN_REVERSION"]
+        avoid += ["BREAKOUT_BUY", "MOMENTUM_EXPANSION", "VCP_BREAKOUT"]
+
+    if market_regime == "EXPANSION":
+        recommended += ["MOMENTUM_EXPANSION", "SECTOR_BREAKOUT"]
+        avoid += ["MEAN_REVERSION"]
+
+    if market_regime == "CHOPPY":
+        recommended += ["RANGE_FADE", "MEAN_REVERSION"]
+        avoid += ["MOMENTUM_EXPANSION", "BREAKOUT_BUY"]
+
+    if market_regime == "DISTRIBUTION":
+        recommended += ["DEFENSIVE_POSITIONING", "CASH_CONSERVATION"]
+        avoid += ["BREAKOUT_BUY", "VCP_BREAKOUT", "EARLY_LEADER"]
+
+    if rotation_mode == "OFFENSIVE" and bull_vol:
+        recommended += ["SECTOR_MOMENTUM"]
+    elif rotation_mode == "DEFENSIVE":
+        recommended += ["DEFENSIVE_ROTATION"]
+        avoid += ["HIGH_BETA_MOMENTUM"]
+
+    if strong_breadth and bull_vol:
+        if "BROAD_MARKET_LONG" not in recommended:
+            recommended.append("BROAD_MARKET_LONG")
+
+    if volatility_regime == "PANIC":
+        avoid += ["BREAKOUT_BUY", "MOMENTUM_EXPANSION"]
+        recommended = [p for p in recommended if p not in avoid]
+        recommended.insert(0, "VOLATILITY_MEAN_REVERSION")
+
+    # deduplicate preserving order
+    seen: set[str] = set()
+    rec_dedup: list[str] = []
+    for p in recommended:
+        if p not in seen:
+            seen.add(p)
+            rec_dedup.append(p)
+
+    seen2: set[str] = set()
+    avd_dedup: list[str] = []
+    for p in avoid:
+        if p not in seen2 and p not in set(rec_dedup):
+            seen2.add(p)
+            avd_dedup.append(p)
+
+    return rec_dedup, avd_dedup
+
+
+def _breakout_environment(
+    market_regime: str,
+    volatility_regime: str,
+    breadth_label: str,
+) -> str:
+    favorable = (
+        breadth_label == "STRONG"
+        and volatility_regime in ("NORMAL", "LOW_VOL_COMPRESSION")
+        and market_regime in ("TRENDING_BULL", "EXPANSION")
+    )
+    unfavorable = (
+        market_regime in ("TRENDING_BEAR", "DISTRIBUTION")
+        or volatility_regime in ("ELEVATED", "PANIC")
+        or breadth_label == "WEAK"
+    )
+    if favorable:
+        return "FAVORABLE"
+    if unfavorable:
+        return "UNFAVORABLE"
+    return "NEUTRAL"
+
+
+def _risk_mode(
+    sma50: float,
+    sma200: float,
+    vix: float,
+    institutional: str,
+) -> str:
+    if institutional in ("RISK_ON",):
+        return "RISK_ON"
+    if institutional in ("RISK_OFF",):
+        return "RISK_OFF"
+    if not np.isnan(sma50) and not np.isnan(sma200):
+        if sma50 > sma200 and (np.isnan(vix) or vix < 22):
+            return "RISK_ON"
+        if sma50 < sma200 or (not np.isnan(vix) and vix > 22):
+            return "RISK_OFF"
+    return "NEUTRAL"
+
+
+# ---------------------------------------------------------------------------
+# Public API
+# ---------------------------------------------------------------------------
+
+def compute_regime(*, allow_network: bool = True) -> RegimeState:
+    """
+    Compute and return the current 5-dimension market regime.
+    Results are cached for 15 minutes.
+
+    ``allow_network=False`` (dashboard hot path) never blocks on yfinance —
+    returns a fresh/stale cache, or raises if nothing is cached yet.
+    """
+    now = time.time()
+    cached = _CACHE.get("regime_state")
+    cached_ts = float(_CACHE.get("timestamp", 0.0) or 0.0)
+
+    if cached is not None and (now - cached_ts) < _cache_ttl():
+        return cached
+    if cached is not None and not allow_network:
+        # Prefer a slightly stale regime over a 30–60s Yahoo hang that times
+        # out the Terminal dashboard on older Macs.
+        return cached
+    if not allow_network:
+        raise RuntimeError("regime cache empty; network refresh deferred")
+
+    # ---- parallel data fetch ------------------------------------------------
+    tickers_to_fetch: dict[str, str] = {"NIFTY": NIFTY_TICKER, "VIX": VIX_TICKER}
+    tickers_to_fetch.update({name: tick for name, tick in SECTOR_TICKERS.items()})
+
+    raw_data: dict[str, Optional[pd.DataFrame]] = {}
+
+    def _fetch(name: str, ticker: str) -> tuple[str, Optional[pd.DataFrame]]:
+        return name, _fetch_ohlcv(ticker, period="1y")
+
+    workers = 3 if str(__import__("os").getenv("QT_LOW_POWER", "")).strip() in {"1", "true", "TRUE", "yes"} else 8
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = {pool.submit(_fetch, n, t): n for n, t in tickers_to_fetch.items()}
+        for fut in as_completed(futures):
+            try:
+                name, df = fut.result()
+                raw_data[name] = df
+            except Exception as exc:
+                logger.warning("Fetch future failed: %s", exc)
+                raw_data[futures[fut]] = None
+
+    nifty_df = raw_data.get("NIFTY")
+    vix_df = raw_data.get("VIX")
+    sector_data = {name: raw_data.get(name) for name in SECTOR_TICKERS}
+
+    # ---- classify each dimension --------------------------------------------
+    market_regime, nifty_price, chg1d, chg5d, sma50, sma200 = _classify_market_regime(nifty_df)
+    volatility_regime, vix = _classify_volatility(vix_df)
+    breadth_score, breadth_label, ad_proxy = _compute_breadth(sector_data)
+    leaders, laggards, rotation_mode, sector_returns = _classify_sector_rotation(sector_data)
+    institutional = _classify_institutional(nifty_df, market_regime, vix, sma50, sma200)
+
+    # Never invent DEMO_REGIME — if Kite/index bars are missing, fail closed.
+    all_data_missing = (np.isnan(nifty_price) or nifty_price == 0.0)
+    if all_data_missing:
+        logger.warning(
+            "Regime unavailable — no Kite/NSE index bars "
+            "(run: python main.py login; sources=%s)",
+            dict(_LAST_SOURCES),
+        )
+        raise RuntimeError(
+            "regime unavailable: Kite/NSE index data missing — run python main.py login"
+        )
+
+    # ---- derived fields -----------------------------------------------------
+    regime_score = _compute_regime_score(market_regime, volatility_regime, breadth_score, institutional)
+    nifty_vs_sma200 = ((nifty_price - sma200) / sma200 * 100) if sma200 and not np.isnan(sma200) else 0.0
+    regime_confidence, confidence_label = _compute_regime_confidence(
+        market_regime, volatility_regime, breadth_label, institutional, nifty_vs_sma200, vix,
+        tf_coherence=0.85,
+    )
+    qm = _quality_multiplier(market_regime, volatility_regime)
+    recommended, avoid = _derive_playbooks(
+        market_regime, volatility_regime, breadth_label, rotation_mode, institutional
+    )
+    breakout_env = _breakout_environment(market_regime, volatility_regime, breadth_label)
+    risk_mode = _risk_mode(sma50, sma200, vix, institutional)
+
+    fetch_time_utc = datetime.now(timezone.utc)
+    data_age_mins = 0  # just fetched
+
+    state = RegimeState(
+        market_regime=market_regime,
+        volatility_regime=volatility_regime,
+        breadth_strength=breadth_score,
+        breadth_label=breadth_label,
+        breakout_environment=breakout_env,
+        risk_mode=risk_mode,
+        institutional_activity=institutional,
+        leading_sectors=leaders,
+        lagging_sectors=laggards,
+        rotation_mode=rotation_mode,
+        sector_returns=sector_returns,
+        nifty_price=round(nifty_price, 2) if not np.isnan(nifty_price) else 0.0,
+        nifty_change_1d=round(chg1d, 3) if not np.isnan(chg1d) else 0.0,
+        nifty_change_5d=round(chg5d, 3) if not np.isnan(chg5d) else 0.0,
+        sma50=round(sma50, 2) if not np.isnan(sma50) else 0.0,
+        sma200=round(sma200, 2) if not np.isnan(sma200) else 0.0,
+        vix=round(vix, 2) if not np.isnan(vix) else 0.0,
+        regime_score=regime_score,
+        regime_confidence=regime_confidence,
+        regime_confidence_label=confidence_label,
+        quality_multiplier=qm,
+        recommended_playbooks=recommended,
+        avoid_patterns=avoid,
+        timestamp=fetch_time_utc.strftime("%H:%M"),
+        data_age_mins=data_age_mins,
+    )
+
+    # ---- sector rotation acceleration leaders (non-blocking) ---------------
+    try:
+        from core.sector_rotation import get_rotation_leaders as _get_rotation_leaders
+        state.rotation_leaders = _get_rotation_leaders()
+    except Exception:
+        pass
+
+    _CACHE["regime_state"] = state
+    _CACHE["timestamp"] = now
+
+    logger.info("RegimeState computed: %s", state.summary_line())
+    return state
+
+
+if __name__ == "__main__":
+    import json
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
+    rs = compute_regime()
+    print(rs.summary_line())
+    print(json.dumps(rs.to_dict(), indent=2, default=str))

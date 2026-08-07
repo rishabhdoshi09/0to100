@@ -1,0 +1,23 @@
+{
+  "artifact_hashes": {
+    "artifact_index.json": "sha256:8cd554c37bdd90178ca9283cbc5801d9",
+    "config_snapshot.json": "sha256:a049c02123d9ecdfe8ece08e935727c4",
+    "data_quality.json": "sha256:49374a2c49d9cc639e496c11cabec3e7",
+    "experiment_spec.json": "sha256:c06b4da1a717cee2bd1897bc521f78d5",
+    "limitations.json": "sha256:35d4d5612ab39700e0035305e7b1f12a",
+    "snapshot_manifest.json": "sha256:bf8071b0bf931b2a5efc196014684fb5",
+    "verdict.json": "sha256:6be4cdbba8e1f048b36349ff539f1ff0"
+  },
+  "code_commit": "6a865c899d3f141f97e3c61f507249046866ab9f",
+  "completion_ts": "same run; no candidate generation reached",
+  "config_hash": "4f638f99e13bf939",
+  "data_quality_status": "FAILED_CLOSED: DATA_UNAVAILABLE",
+  "dataset_snapshot_id": "ad652107580ddae1",
+  "economic_hypothesis": "UNEVALUATED",
+  "note": "Immutable blocked-run record. Not a historical evidence verdict. Relocated from docs/overhaul/exp006_run/ (committed 6a865c8) into the append-only runs tree; content unchanged.",
+  "run_id": "0001-blocked",
+  "start_ts": "n/a (data-quality gate failed closed immediately)",
+  "status": "BLOCKED_BEFORE_CANDIDATE_GENERATION",
+  "verdict": "INCONCLUSIVE",
+  "verdict_reason": "DATA_UNAVAILABLE: bhav store empty (logs/bhav = 0 files, is_ready()=False); build_store() requires NSE network which is unavailable in this environment (https://www1.nseindia.com -> HTTP 000; build blocks and cannot complete). No universe_history.json / ca_events.json / point-in-time fundamentals present."
+}

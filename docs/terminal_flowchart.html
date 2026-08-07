@@ -1,0 +1,514 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>My Trading Terminal — Architecture</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: #0a0e1a;
+    color: #e8eaf0;
+    font-family: 'JetBrains Mono', 'Fira Code', monospace;
+    min-height: 100vh;
+    padding: 32px 24px;
+  }
+  h1 {
+    text-align: center;
+    font-size: 1.6rem;
+    color: #00d4ff;
+    letter-spacing: 3px;
+    margin-bottom: 6px;
+  }
+  .subtitle {
+    text-align: center;
+    color: #4a5568;
+    font-size: 0.75rem;
+    margin-bottom: 40px;
+    letter-spacing: 1px;
+  }
+
+  /* ── LAYER LABELS ── */
+  .layer-label {
+    font-size: 0.65rem;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    color: #4a5568;
+    text-align: center;
+    margin-bottom: 10px;
+  }
+
+  /* ── ROW ── */
+  .row {
+    display: flex;
+    justify-content: center;
+    align-items: flex-start;
+    gap: 16px;
+    margin-bottom: 0;
+  }
+
+  /* ── CONNECTOR ── */
+  .connector-row {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    gap: 0;
+    height: 36px;
+    margin: 0;
+    position: relative;
+  }
+
+  /* ── BOX BASE ── */
+  .box {
+    border-radius: 10px;
+    padding: 12px 16px;
+    text-align: center;
+    font-size: 0.72rem;
+    line-height: 1.6;
+    position: relative;
+    min-width: 120px;
+  }
+  .box .icon { font-size: 1.2rem; display: block; margin-bottom: 4px; }
+  .box .title { font-weight: 700; font-size: 0.75rem; display: block; margin-bottom: 2px; }
+  .box .sub { color: #8892a4; font-size: 0.62rem; }
+
+  /* ── BOX COLORS ── */
+  .blue   { background: rgba(0,212,255,0.08);  border: 1px solid rgba(0,212,255,0.3);  }
+  .green  { background: rgba(0,212,160,0.08);  border: 1px solid rgba(0,212,160,0.3);  }
+  .purple { background: rgba(139,92,246,0.10); border: 1px solid rgba(139,92,246,0.4); }
+  .yellow { background: rgba(245,158,11,0.08); border: 1px solid rgba(245,158,11,0.3); }
+  .red    { background: rgba(255,75,75,0.08);  border: 1px solid rgba(255,75,75,0.3);  }
+  .orange { background: rgba(251,146,60,0.10); border: 1px solid rgba(251,146,60,0.4); }
+  .teal   { background: rgba(20,184,166,0.10); border: 1px solid rgba(20,184,166,0.4); }
+  .gray   { background: rgba(100,116,139,0.10);border: 1px solid rgba(100,116,139,0.3);}
+
+  /* ── SECTION WRAPPER ── */
+  .section {
+    background: rgba(255,255,255,0.02);
+    border: 1px solid rgba(255,255,255,0.05);
+    border-radius: 16px;
+    padding: 20px 24px;
+    margin-bottom: 8px;
+  }
+
+  /* ── ARROW DOWN ── */
+  .arrow-down {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    height: 32px;
+    color: #2d3748;
+    font-size: 1.2rem;
+  }
+  .arrow-down-multi {
+    display: flex;
+    justify-content: space-around;
+    align-items: center;
+    height: 32px;
+    color: #2d3748;
+    font-size: 1.1rem;
+    max-width: 900px;
+    margin: 0 auto;
+  }
+
+  /* ── SCORE BADGE ── */
+  .score {
+    display: inline-block;
+    background: rgba(0,212,255,0.15);
+    border: 1px solid rgba(0,212,255,0.3);
+    border-radius: 20px;
+    padding: 1px 8px;
+    font-size: 0.58rem;
+    color: #00d4ff;
+    margin-top: 4px;
+  }
+
+  /* ── DECISION DIAMOND ── */
+  .diamond-wrap {
+    display: flex;
+    justify-content: center;
+    margin: 0;
+  }
+  .diamond {
+    width: 160px;
+    height: 80px;
+    background: rgba(139,92,246,0.12);
+    border: 2px solid rgba(139,92,246,0.5);
+    transform: rotate(0deg);
+    border-radius: 10px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    padding: 10px;
+    font-size: 0.72rem;
+    font-weight: 700;
+    color: #a78bfa;
+    position: relative;
+    clip-path: polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%);
+    width: 200px;
+    height: 90px;
+  }
+  .decision-box {
+    background: rgba(139,92,246,0.12);
+    border: 2px solid rgba(139,92,246,0.5);
+    border-radius: 50%;
+    width: 140px;
+    height: 70px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    font-size: 0.7rem;
+    font-weight: 700;
+    color: #a78bfa;
+    padding: 8px;
+  }
+
+  /* ── SPLIT ARROWS ── */
+  .split-row {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    gap: 80px;
+    height: 40px;
+    font-size: 0.65rem;
+    color: #4a5568;
+  }
+  .split-yes { color: #00d4a0; font-weight: 700; }
+  .split-no  { color: #ff4b4b; font-weight: 700; }
+
+  /* ── MEMORY BAND ── */
+  .memory-band {
+    background: rgba(245,158,11,0.06);
+    border: 1px dashed rgba(245,158,11,0.3);
+    border-radius: 12px;
+    padding: 14px 20px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 24px;
+    font-size: 0.68rem;
+    color: #f59e0b;
+    margin-top: 8px;
+  }
+  .memory-band .item { text-align: center; }
+  .memory-band .item span { display: block; color: #8892a4; font-size: 0.6rem; margin-top: 2px; }
+
+  /* ── FOOTER ── */
+  .legend {
+    display: flex;
+    justify-content: center;
+    gap: 24px;
+    margin-top: 28px;
+    flex-wrap: wrap;
+  }
+  .legend-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.62rem;
+    color: #8892a4;
+  }
+  .legend-dot {
+    width: 10px; height: 10px; border-radius: 2px;
+  }
+</style>
+</head>
+<body>
+
+<h1>MY TRADING TERMINAL</h1>
+<div class="subtitle">full architecture · if I built it from scratch</div>
+
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+<!-- LAYER 1: DATA -->
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+<div class="section">
+  <div class="layer-label">① DATA INGESTION</div>
+  <div class="row">
+    <div class="box blue">
+      <span class="icon">📡</span>
+      <span class="title">Live Ticks</span>
+      <span class="sub">Kite WebSocket<br>1-min OHLCV builder</span>
+    </div>
+    <div class="box blue">
+      <span class="icon">📊</span>
+      <span class="title">Historical</span>
+      <span class="sub">Kite API<br>1m · 5m · 1d</span>
+    </div>
+    <div class="box blue">
+      <span class="icon">📰</span>
+      <span class="title">News</span>
+      <span class="sub">RSS + Marketaux<br>entity-level sentiment</span>
+    </div>
+    <div class="box blue">
+      <span class="icon">🏦</span>
+      <span class="title">Fundamentals</span>
+      <span class="sub">Screener.in<br>PE · PB · ROE · Debt</span>
+    </div>
+    <div class="box blue">
+      <span class="icon">🎙️</span>
+      <span class="title">Earnings Intel</span>
+      <span class="sub">NSE Announcements<br>YouTube transcripts</span>
+    </div>
+    <div class="box blue">
+      <span class="icon">🐋</span>
+      <span class="title">Options Chain</span>
+      <span class="sub">PCR · OI buildup<br>Unusual activity</span>
+    </div>
+  </div>
+</div>
+
+<div class="arrow-down">▼</div>
+
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+<!-- LAYER 2: PROCESSING -->
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+<div class="section">
+  <div class="layer-label">② PROCESSING ENGINES</div>
+  <div class="row">
+    <div class="box green">
+      <span class="icon">🔬</span>
+      <span class="title">Technical Engine</span>
+      <span class="sub">XGBoost classifier<br>40+ indicators<br>Chart pattern recognition<br>Multi-timeframe confluence</span>
+    </div>
+    <div class="box green">
+      <span class="icon">💰</span>
+      <span class="title">Fundamental Engine</span>
+      <span class="sub">Earnings growth quality<br>Promoter holding trend<br>Debt trajectory<br>Sector rotation</span>
+    </div>
+    <div class="box green">
+      <span class="icon">🧠</span>
+      <span class="title">Sentiment Engine</span>
+      <span class="sub">VADER rule-based<br>DeepSeek news summary<br>Sector mood score</span>
+    </div>
+    <div class="box green">
+      <span class="icon">🎯</span>
+      <span class="title">Earnings Agent</span>
+      <span class="sub">Transcript → metrics<br>Guidance vs Delivery<br>Mgmt credibility score</span>
+    </div>
+    <div class="box green">
+      <span class="icon">📈</span>
+      <span class="title">Options Flow</span>
+      <span class="sub">FII direction<br>Unusual OI spikes<br>PCR momentum</span>
+    </div>
+  </div>
+</div>
+
+<div class="arrow-down">▼</div>
+
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+<!-- LAYER 3: PARALLEL AGENTS -->
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+<div class="section">
+  <div class="layer-label">③ PARALLEL AGENTS — ThreadPoolExecutor</div>
+  <div class="row">
+    <div class="box purple">
+      <span class="icon">🤖</span>
+      <span class="title">Technical Agent</span>
+      <div class="score">Score 0–100</div>
+      <span class="sub" style="margin-top:6px;display:block">Weight: 35%</span>
+    </div>
+    <div class="box purple">
+      <span class="icon">🤖</span>
+      <span class="title">Fundamental Agent</span>
+      <div class="score">Score 0–100</div>
+      <span class="sub" style="margin-top:6px;display:block">Weight: 25%</span>
+    </div>
+    <div class="box purple">
+      <span class="icon">🤖</span>
+      <span class="title">Sentiment Agent</span>
+      <div class="score">Score 0–100</div>
+      <span class="sub" style="margin-top:6px;display:block">Weight: 20%</span>
+    </div>
+    <div class="box purple">
+      <span class="icon">🤖</span>
+      <span class="title">Earnings Agent</span>
+      <div class="score">Score 0–100</div>
+      <span class="sub" style="margin-top:6px;display:block">Weight: 15%</span>
+    </div>
+    <div class="box purple">
+      <span class="icon">🤖</span>
+      <span class="title">Options Agent</span>
+      <div class="score">Score 0–100</div>
+      <span class="sub" style="margin-top:6px;display:block">Weight: 5%</span>
+    </div>
+  </div>
+</div>
+
+<div class="arrow-down">▼</div>
+
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+<!-- LAYER 4: SIGNAL BRAIN -->
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+<div class="section">
+  <div class="layer-label">④ SIGNAL BRAIN</div>
+  <div class="row" style="align-items:center; gap:24px;">
+
+    <div class="box teal" style="min-width:150px;">
+      <span class="icon">⚖️</span>
+      <span class="title">Weighted Ensemble</span>
+      <span class="sub">35+25+20+15+5<br>→ Composite score<br>+ Conviction level</span>
+    </div>
+
+    <div style="color:#2d3748; font-size:1.4rem;">→</div>
+
+    <div class="box green" style="min-width:150px;">
+      <span class="icon">⚡</span>
+      <span class="title">DeepSeek V3</span>
+      <span class="sub">Fast pass<br>Structured JSON signal<br>BUY / SELL / HOLD</span>
+    </div>
+
+    <div style="color:#2d3748; font-size:1.4rem;">→</div>
+
+    <div class="box red" style="min-width:170px; border-color:rgba(255,75,75,0.5);">
+      <span class="icon">😈</span>
+      <span class="title">DeepSeek R1</span>
+      <span class="sub" style="color:#ff6b6b;">Devil's Advocate<br>Chain-of-thought:<br>"10 reasons this FAILS"<br>Challenges the signal</span>
+    </div>
+
+    <div style="color:#2d3748; font-size:1.4rem;">→</div>
+
+    <div class="decision-box">
+      Signal survives<br>challenge?
+    </div>
+
+  </div>
+
+  <div class="split-row" style="margin-top:8px;">
+    <span class="split-yes">✓ YES → CONFIRMED</span>
+    <span class="split-no">✗ NO → REJECTED + logged</span>
+  </div>
+</div>
+
+<div class="arrow-down" style="color:#00d4a0;">▼</div>
+
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+<!-- LAYER 5: RISK GATE -->
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+<div class="section">
+  <div class="layer-label">⑤ RISK GATE — non-negotiable</div>
+  <div class="row">
+    <div class="box yellow">
+      <span class="icon">📐</span>
+      <span class="title">Position Sizing</span>
+      <span class="sub">Kelly criterion<br>+ ATR-based SL</span>
+    </div>
+    <div class="box yellow">
+      <span class="icon">🔒</span>
+      <span class="title">Exposure Check</span>
+      <span class="sub">Max 20% capital<br>Max 5 open positions</span>
+    </div>
+    <div class="box yellow">
+      <span class="icon">📉</span>
+      <span class="title">Daily Loss Limit</span>
+      <span class="sub">2% drawdown<br>→ auto kill switch</span>
+    </div>
+    <div class="box red">
+      <span class="icon">🚨</span>
+      <span class="title">Kill Switch</span>
+      <span class="sub">Immediate halt<br>Cancel all orders</span>
+    </div>
+  </div>
+</div>
+
+<div class="arrow-down">▼</div>
+
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+<!-- LAYER 6: EXECUTION -->
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+<div class="section">
+  <div class="layer-label">⑥ EXECUTION</div>
+  <div class="row">
+    <div class="box gray">
+      <span class="icon">📝</span>
+      <span class="title">Paper Trade</span>
+      <span class="sub">Always parallel<br>No real money</span>
+    </div>
+    <div class="box green" style="border-color:rgba(0,212,160,0.5);">
+      <span class="icon">⚡</span>
+      <span class="title">Zerodha Kite API</span>
+      <span class="sub">Live order placement<br>MIS / CNC</span>
+    </div>
+    <div class="box teal">
+      <span class="icon">👁️</span>
+      <span class="title">Order Monitor</span>
+      <span class="sub">SL · Target<br>Trailing stop<br>Auto-exit 3:20 PM</span>
+    </div>
+    <div class="box orange">
+      <span class="icon">📊</span>
+      <span class="title">Backtester</span>
+      <span class="sub">Same signal pipeline<br>on historical data<br>Walk-forward validation</span>
+    </div>
+  </div>
+</div>
+
+<div class="arrow-down" style="color:#f59e0b;">▼</div>
+
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+<!-- LAYER 7: FEEDBACK LOOP / MEMORY -->
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+<div class="memory-band">
+  <div style="font-weight:700; font-size:0.8rem; color:#f59e0b;">♻️ FEEDBACK LOOP</div>
+
+  <div class="item">
+    💾 Trade Outcomes DB
+    <span>Win / loss per setup type</span>
+  </div>
+  <div style="color:#4a5568;">→</div>
+  <div class="item">
+    🧮 Weight Optimizer
+    <span>Backtest tunes agent weights</span>
+  </div>
+  <div style="color:#4a5568;">→</div>
+  <div class="item">
+    🔄 Confidence Adjuster
+    <span>Similar past signals → adjust score</span>
+  </div>
+  <div style="color:#4a5568;">→</div>
+  <div class="item">
+    📈 System improves
+    <span>Live trading ← learns from backtest</span>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+<!-- LAYER 8: UI -->
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+<div class="section" style="margin-top:16px;">
+  <div class="layer-label">⑦ TERMINAL UI</div>
+  <div class="row">
+    <div class="box blue">
+      <span class="icon">📋</span>
+      <span class="title">Left Panel</span>
+      <span class="sub">Watchlist<br>Live LTP<br>Color-coded signal strength</span>
+    </div>
+    <div class="box blue">
+      <span class="icon">📈</span>
+      <span class="title">Center</span>
+      <span class="sub">TradingView chart<br>Signal overlays<br>Entry · SL · Target lines</span>
+    </div>
+    <div class="box purple">
+      <span class="icon">🧠</span>
+      <span class="title">Right Panel</span>
+      <span class="sub">Agent reasoning<br>LIVE stream<br>"what AI is thinking"</span>
+    </div>
+    <div class="box gray">
+      <span class="icon">💼</span>
+      <span class="title">Bottom Bar</span>
+      <span class="sub">Portfolio P&amp;L<br>Trade journal<br>Equity curve</span>
+    </div>
+  </div>
+</div>
+
+<!-- legend -->
+<div class="legend">
+  <div class="legend-item"><div class="legend-dot" style="background:#00d4ff33;border:1px solid #00d4ff55;"></div>Data</div>
+  <div class="legend-item"><div class="legend-dot" style="background:#00d4a033;border:1px solid #00d4a055;"></div>Processing</div>
+  <div class="legend-item"><div class="legend-dot" style="background:#8b5cf633;border:1px solid #8b5cf655;"></div>Agents</div>
+  <div class="legend-item"><div class="legend-dot" style="background:#14b8a633;border:1px solid #14b8a655;"></div>Signal brain</div>
+  <div class="legend-item"><div class="legend-dot" style="background:#f59e0b33;border:1px solid #f59e0b55;"></div>Risk / Memory</div>
+  <div class="legend-item"><div class="legend-dot" style="background:#ff4b4b33;border:1px solid #ff4b4b55;"></div>Kill switch / Reject</div>
+</div>
+
+</body>
+</html>

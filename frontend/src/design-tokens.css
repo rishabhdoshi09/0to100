@@ -1,0 +1,106 @@
+/* QuantTerm design tokens — professional terminal surfaces */
+:root {
+  --qt-bg-base: #070d17;
+  --qt-bg-surface: #0c1828;
+  --qt-bg-elevated: #122236;
+  --qt-border: rgba(72, 98, 128, 0.35);
+  --qt-border-accent: rgba(54, 217, 255, 0.28);
+  --qt-text-primary: #eef4fb;
+  --qt-text-secondary: #9cb0c8;
+  --qt-text-muted: #6d8299;
+  --qt-accent-cyan: #36d9ff;
+  --qt-accent-violet: #977cff;
+  --qt-positive: #3dd68c;
+  --qt-negative: #f07178;
+  --qt-warning: #e6b450;
+  --qt-radius-sm: 6px;
+  --qt-radius-md: 10px;
+  --qt-radius-lg: 14px;
+  --qt-space-xs: 4px;
+  --qt-space-sm: 8px;
+  --qt-space-md: 16px;
+  --qt-space-lg: 24px;
+  --qt-font-mono: ui-monospace, 'SF Mono', Menlo, monospace;
+  --qt-shadow-panel: 0 4px 24px rgba(0, 0, 0, 0.35);
+  --qt-motion-fast: 140ms ease;
+}
+
+.qt-status-fresh { color: var(--qt-positive); }
+.qt-status-stale { color: var(--qt-warning); }
+.qt-status-missing { color: var(--qt-text-muted); }
+.qt-status-error { color: var(--qt-negative); }
+
+.section-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--qt-space-sm);
+  margin-bottom: var(--qt-space-md);
+  border-bottom: 1px solid var(--qt-border);
+  padding-bottom: var(--qt-space-sm);
+}
+
+.section-tabs button {
+  padding: 8px 14px;
+  border: 1px solid transparent;
+  border-radius: var(--qt-radius-sm);
+  background: transparent;
+  color: var(--qt-text-secondary);
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  cursor: pointer;
+  transition: background var(--qt-motion-fast), color var(--qt-motion-fast);
+}
+
+.section-tabs button:hover {
+  color: var(--qt-text-primary);
+  background: rgba(54, 217, 255, 0.06);
+}
+
+.section-tabs button.active {
+  color: var(--qt-accent-cyan);
+  border-color: var(--qt-border-accent);
+  background: rgba(54, 217, 255, 0.1);
+}
+
+.status-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  font-size: 0.68rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  border: 1px solid var(--qt-border);
+}
+
+.status-badge.fresh { border-color: rgba(61, 214, 140, 0.45); color: var(--qt-positive); }
+.status-badge.stale { border-color: rgba(230, 180, 80, 0.45); color: var(--qt-warning); }
+.status-badge.missing { color: var(--qt-text-muted); }
+
+.display-depth-toggle {
+  display: flex;
+  gap: 4px;
+  padding: 2px;
+  border-radius: var(--qt-radius-sm);
+  border: 1px solid var(--qt-border);
+  background: var(--qt-bg-elevated);
+}
+
+.display-depth-toggle button {
+  padding: 6px 10px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--qt-text-secondary);
+  font-size: 0.72rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.display-depth-toggle button.active {
+  background: rgba(54, 217, 255, 0.15);
+  color: var(--qt-accent-cyan);
+}

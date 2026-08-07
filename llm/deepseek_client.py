@@ -1,0 +1,190 @@
+"""
+DeepSeek LLM client.
+
+Supports two models (set DEEPSEEK_MODEL in .env):
+  deepseek-reasoner  (R1) — chain-of-thought reasoning. Best for trading decisions.
+                            Internally thinks before answering; reasoning_content is
+                            logged for audit. No temperature param, no JSON mode.
+  deepseek-chat      (V3) — faster, supports JSON mode. Good for high-freq cycles.
+"""
+
+from __future__ import annotations
+
+import json
+import re
+from typing import Any, Dict, Optional
+
+from openai import OpenAI
+
+from config import settings
+from logger import get_logger
+
+log = get_logger(__name__)
+
+
+# ── DeepSeekDual: V3 (fast) + R1 (chain-of-thought) in one class ─────────────
+# Consolidated from ai/deepseek_dual.py — canonical location for all DeepSeek calls.
+
+class DeepSeekDual:
+    """Thin dual-model wrapper: V3 for speed, R1 for deep reasoning."""
+
+    def __init__(self, api_key: str | None = None) -> None:
+        import os
+        self._client = OpenAI(
+            api_key=api_key or settings.deepseek_api_key,
+            base_url=settings.deepseek_base_url,
+        )
+        self.model_fast = "deepseek-chat"        # V3
+        self.model_reason = "deepseek-reasoner"  # R1
+
+    def chat(
+        self,
+        messages: list[dict],
+        temperature: float = 0.7,
+        reasoning: bool = False,
+    ) -> str:
+        model = self.model_reason if reasoning else self.model_fast
+        kwargs: dict = {
+            "model": model,
+            "messages": messages,
+            "max_tokens": 8000 if reasoning else 2048,
+        }
+        if not reasoning:
+            kwargs["temperature"] = temperature
+        resp = self._client.chat.completions.create(**kwargs)
+        return resp.choices[0].message.content or ""
+
+    def structured_response(
+        self,
+        prompt: str,
+        system: str | None = None,
+        reasoning: bool = False,
+    ) -> dict:
+        messages: list[dict] = []
+        if system:
+            messages.append({"role": "system", "content": system})
+        messages.append({"role": "user", "content": prompt})
+        resp = self.chat(messages, reasoning=reasoning)
+        if "```" in resp:
+            resp = re.sub(r"```(?:json)?", "", resp).strip().rstrip("`").strip()
+        try:
+            return json.loads(resp)
+        except json.JSONDecodeError:
+            pass
+        start, end = resp.find("{"), resp.rfind("}") + 1
+        if start != -1 and end > start:
+            try:
+                return json.loads(resp[start:end])
+            except json.JSONDecodeError:
+                pass
+        return {"raw": resp}
+
+
+_SYSTEM_PROMPT = """You are a quantitative trading signal generator for Indian equities (NSE).
+
+Your role:
+- Analyze the provided market data, technical indicators, and news context.
+- Reason carefully about risk, momentum, and macro context before deciding.
+- Generate a single trading signal as a strict JSON object.
+- Output ONLY the JSON. No text before or after it.
+
+Output format (EXACT — no deviation):
+{
+  "symbol": "<NSE symbol>",
+  "action": "BUY" | "SELL" | "HOLD",
+  "confidence": <float 0.0-1.0>,
+  "time_horizon": "intraday" | "swing" | "positional",
+  "position_size": <float, fraction of capital 0.0-1.0>,
+  "reasoning": "<2-3 sentence explanation integrating technicals + news>",
+  "risk_level": "low" | "medium" | "high"
+}
+
+CRITICAL RULES:
+1. Output ONLY the JSON object. Nothing before or after.
+2. Never fabricate data. Use only what is provided.
+3. News is context only — not confirmation of a trade.
+4. Each stock has its own setup — analyse the provided indicators independently.
+5. Express genuine directional conviction when the data supports it (BUY or SELL).
+   Use HOLD only when signals are genuinely mixed or conflicting.
+"""
+
+
+class DeepSeekClient:
+    def __init__(self) -> None:
+        self._client = OpenAI(
+            api_key=settings.deepseek_api_key,
+            base_url=settings.deepseek_base_url,
+        )
+        self._model = settings.deepseek_model
+        self._is_reasoner = "reasoner" in self._model.lower()
+        log.info("deepseek_client_init", model=self._model, reasoner=self._is_reasoner)
+
+    def get_signal(self, context_prompt: str) -> Optional[Dict[str, Any]]:
+        """
+        Send context to DeepSeek and return parsed JSON signal.
+        Returns None if model output is invalid or unparseable.
+        """
+        try:
+            kwargs: Dict[str, Any] = {
+                "model": self._model,
+                "messages": [
+                    {"role": "system", "content": _SYSTEM_PROMPT},
+                    {"role": "user", "content": context_prompt},
+                ],
+                "max_tokens": 8000 if self._is_reasoner else 1024,
+            }
+
+            if self._is_reasoner:
+                # R1: no temperature/response_format — reasoning fills tokens first,
+                # needs large max_tokens so JSON output is not truncated
+                pass
+            else:
+                # V3: moderate temperature for stock-specific variation + JSON mode
+                kwargs["temperature"] = 0.35
+                kwargs["response_format"] = {"type": "json_object"}
+
+            response = self._client.chat.completions.create(**kwargs)
+            message = response.choices[0].message
+
+            # R1 exposes chain-of-thought in reasoning_content — log for audit trail
+            reasoning = getattr(message, "reasoning_content", None)
+            if reasoning:
+                log.debug(
+                    "llm_chain_of_thought",
+                    chars=len(reasoning),
+                    preview=reasoning[:300],
+                )
+
+            raw_text = message.content or ""
+            log.debug("llm_raw_response", model=self._model, text=raw_text[:300])
+            return self._parse_json(raw_text)
+
+        except Exception as exc:
+            log.error("llm_call_failed", error=str(exc))
+            return None
+
+    @staticmethod
+    def _parse_json(text: str) -> Optional[Dict[str, Any]]:
+        """Extract and parse the JSON object from model output."""
+        text = text.strip()
+
+        # Strip markdown code fences
+        if "```" in text:
+            text = re.sub(r"```(?:json)?", "", text).strip()
+
+        # Try direct parse
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError:
+            pass
+
+        # Fall back: extract first { ... } block (handles prose around JSON)
+        match = re.search(r"\{.*\}", text, re.DOTALL)
+        if match:
+            try:
+                return json.loads(match.group())
+            except json.JSONDecodeError:
+                pass
+
+        log.warning("llm_json_parse_failed", text=text[:300])
+        return None
