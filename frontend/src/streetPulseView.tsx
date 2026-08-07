@@ -3,8 +3,10 @@ import { EmptyState, MetricCell, StatusBadge } from './designSystem'
 import { EvidenceList, MetricCard, Panel } from './components'
 import { words } from './format'
 import {
+  clearWrapOverride,
   fetchStreetPulse,
   notifyWrapOfTheDay,
+  rebuildWrapOfTheDay,
   saveWrapOfTheDay,
   sendStreetPulseTelegram,
   type StreetPulsePayload,
@@ -57,6 +59,7 @@ export function StreetPulseView({ setSelected, setActive, onOpenPdf }: Props) {
   const [wrapText, setWrapText] = useState('')
   const [wrapBusy, setWrapBusy] = useState('')
   const [wrapNote, setWrapNote] = useState('')
+  const [showOverride, setShowOverride] = useState(false)
 
   useEffect(() => {
     let cancelled = false
@@ -66,9 +69,10 @@ export function StreetPulseView({ setSelected, setActive, onOpenPdf }: Props) {
       .then((payload) => {
         if (!cancelled) {
           setPulse(payload)
-          const bullets = payload.wrap_of_the_day?.bullets || []
-          if (bullets.length && !wrapText.trim()) {
+          if (payload.wrap_of_the_day?.override) {
+            const bullets = payload.wrap_of_the_day?.bullets || []
             setWrapText(bullets.map((b, i) => `${i + 1}) ${b}`).join('\n\n'))
+            setShowOverride(true)
           }
         }
       })
@@ -83,13 +87,31 @@ export function StreetPulseView({ setSelected, setActive, onOpenPdf }: Props) {
     }
   }, [token])
 
+  const rebuildWrap = async () => {
+    setWrapBusy('rebuild')
+    setWrapNote('')
+    try {
+      const wrap = await rebuildWrapOfTheDay()
+      setWrapNote(
+        wrap.available
+          ? `Rebuilt ${wrap.bullets?.length || 0} system wrap bullet(s) from Pulse stores`
+          : wrap.message || 'Wrap rebuild produced no bullets — run a market scan first',
+      )
+      setToken((n) => n + 1)
+    } catch (err) {
+      setWrapNote(err instanceof Error ? err.message : 'Wrap rebuild failed')
+    } finally {
+      setWrapBusy('')
+    }
+  }
+
   const saveWrap = async (notify: boolean) => {
     setWrapBusy(notify ? 'notify' : 'save')
     setWrapNote('')
     try {
-      const saved = await saveWrapOfTheDay({ text: wrapText, notify, source: 'paste' })
+      const saved = await saveWrapOfTheDay({ text: wrapText, notify, source: 'override' })
       if (!saved.available) {
-        setWrapNote(saved.message || 'Wrap not saved')
+        setWrapNote(saved.message || 'Override not saved')
         return
       }
       const tg = saved.telegram?.sent
@@ -97,10 +119,30 @@ export function StreetPulseView({ setSelected, setActive, onOpenPdf }: Props) {
         : saved.telegram?.reason
           ? ` · Telegram: ${saved.telegram.reason}`
           : ''
-      setWrapNote(`Saved ${saved.bullets?.length || 0} wrap bullet(s)${tg}`)
+      setWrapNote(`Saved override · ${saved.bullets?.length || 0} bullet(s)${tg}`)
       setToken((n) => n + 1)
     } catch (err) {
-      setWrapNote(err instanceof Error ? err.message : 'Wrap save failed')
+      setWrapNote(err instanceof Error ? err.message : 'Override save failed')
+    } finally {
+      setWrapBusy('')
+    }
+  }
+
+  const clearOverride = async () => {
+    setWrapBusy('clear')
+    setWrapNote('')
+    try {
+      const wrap = await clearWrapOverride()
+      setWrapText('')
+      setShowOverride(false)
+      setWrapNote(
+        wrap.available
+          ? `Override cleared · restored ${wrap.bullets?.length || 0} system bullet(s)`
+          : 'Override cleared',
+      )
+      setToken((n) => n + 1)
+    } catch (err) {
+      setWrapNote(err instanceof Error ? err.message : 'Clear override failed')
     } finally {
       setWrapBusy('')
     }
@@ -224,8 +266,8 @@ export function StreetPulseView({ setSelected, setActive, onOpenPdf }: Props) {
             title="WRAP OF THE DAY"
             subtitle={
               pulse.wrap_of_the_day?.available
-                ? `User-authored · ${pulse.wrap_of_the_day.date || 'today'} · source ${pulse.wrap_of_the_day.source || '—'}`
-                : 'Paste your wrap — QuantTerm never invents these bullets'
+                ? `${pulse.wrap_of_the_day.override ? 'User override' : 'System-composed'} · ${pulse.wrap_of_the_day.date || 'today'} · ${pulse.wrap_of_the_day.source || 'auto'}`
+                : 'Auto-built from scan, bhav, options, news and global cues — missing stays missing'
             }
           >
             {(pulse.wrap_of_the_day?.bullets || []).length > 0 ? (
@@ -235,36 +277,64 @@ export function StreetPulseView({ setSelected, setActive, onOpenPdf }: Props) {
                 ))}
               </ol>
             ) : (
-              <EmptyState title="No wrap yet" detail="Paste today's Wrap of the Day below, then Save." />
+              <EmptyState
+                title="Wrap not ready yet"
+                detail={pulse.wrap_of_the_day?.message || 'Rebuild pulse after a market scan so stores can fill.'}
+              />
             )}
-            <textarea
-              aria-label="Paste Wrap of the Day"
-              placeholder={"Here's the Wrap of the Day:\n\n1) ...\n2) ..."}
-              value={wrapText}
-              onChange={(event) => setWrapText(event.target.value)}
-              rows={8}
-              style={{ width: '100%', marginTop: 12, fontFamily: 'inherit' }}
-            />
+            {(pulse.wrap_of_the_day?.gaps || []).length > 0 ? (
+              <p className="panel-copy">Gaps: {(pulse.wrap_of_the_day?.gaps || []).slice(0, 3).join(' · ')}</p>
+            ) : null}
             <div className="inline-actions" style={{ marginTop: 8, flexWrap: 'wrap', gap: 8 }}>
-              <button type="button" disabled={!!wrapBusy || !wrapText.trim()} onClick={() => void saveWrap(false)}>
-                {wrapBusy === 'save' ? 'Saving…' : 'Save wrap'}
-              </button>
-              <button type="button" disabled={!!wrapBusy || !wrapText.trim()} onClick={() => void saveWrap(true)}>
-                {wrapBusy === 'notify' ? 'Sending…' : 'Save + Telegram'}
+              <button type="button" disabled={!!wrapBusy} onClick={() => void rebuildWrap()}>
+                {wrapBusy === 'rebuild' ? 'Rebuilding…' : 'Rebuild wrap'}
               </button>
               <button
                 type="button"
                 disabled={!!wrapBusy || !(pulse.wrap_of_the_day?.available)}
                 onClick={() => void sendWrapTelegram()}
               >
-                Send wrap to Telegram
+                {wrapBusy === 'notify' ? 'Sending…' : 'Send wrap to Telegram'}
               </button>
+              {pulse.wrap_of_the_day?.override ? (
+                <button type="button" disabled={!!wrapBusy} onClick={() => void clearOverride()}>
+                  {wrapBusy === 'clear' ? 'Clearing…' : 'Clear override'}
+                </button>
+              ) : (
+                <button type="button" onClick={() => setShowOverride((v) => !v)}>
+                  {showOverride ? 'Hide override' : 'Optional override'}
+                </button>
+              )}
             </div>
+            {showOverride ? (
+              <div style={{ marginTop: 12 }}>
+                <p className="panel-copy">Optional only — system wrap is the default. Paste replaces today’s auto wrap until cleared.</p>
+                <textarea
+                  aria-label="Optional Wrap of the Day override"
+                  placeholder={"1) ...\n2) ..."}
+                  value={wrapText}
+                  onChange={(event) => setWrapText(event.target.value)}
+                  rows={5}
+                  style={{ width: '100%', fontFamily: 'inherit' }}
+                />
+                <div className="inline-actions" style={{ marginTop: 8, flexWrap: 'wrap', gap: 8 }}>
+                  <button type="button" disabled={!!wrapBusy || !wrapText.trim()} onClick={() => void saveWrap(false)}>
+                    {wrapBusy === 'save' ? 'Saving…' : 'Save override'}
+                  </button>
+                  <button type="button" disabled={!!wrapBusy || !wrapText.trim()} onClick={() => void saveWrap(true)}>
+                    Save override + Telegram
+                  </button>
+                </div>
+              </div>
+            ) : null}
             {wrapNote ? <p className="panel-copy">{wrapNote}</p> : null}
+            <p className="panel-copy">{pulse.wrap_of_the_day?.honesty || pulse.honesty}</p>
           </Panel>
 
-          <Panel title="COVER TAKEAWAYS" subtitle="Wrap of the Day when present · else store-defended pulse takeaways">
-            {(pulse.takeaways || []).length === 0 && <EmptyState title="No takeaways yet" detail="Save a wrap or rebuild after a market scan." />}
+          <Panel title="COVER TAKEAWAYS" subtitle="Same as Wrap of the Day when composed · else store takeaways">
+            {(pulse.takeaways || []).length === 0 && (
+              <EmptyState title="No takeaways yet" detail="Rebuild pulse after a market scan." />
+            )}
             <ul className="plain-list">
               {(pulse.takeaways || []).map((item) => (
                 <li key={item}>{item}</li>

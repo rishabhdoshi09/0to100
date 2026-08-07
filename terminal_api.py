@@ -1072,11 +1072,11 @@ def quotes_heartbeat(symbols: str = "", limit: int = 40) -> dict:
 
 @app.get("/api/wrap-of-the-day")
 def wrap_of_the_day_get() -> dict:
-    """User-authored Wrap of the Day — never invents bullets."""
+    """System-composed Wrap of the Day from Pulse stores — never invents bullets."""
     try:
         from product.wrap_of_the_day import load_wrap
 
-        return load_wrap()
+        return load_wrap(compose=True)
     except Exception as exc:
         return {
             "available": False,
@@ -1089,7 +1089,7 @@ def wrap_of_the_day_get() -> dict:
 
 @app.post("/api/wrap-of-the-day")
 def wrap_of_the_day_save(body: dict[str, Any] = Body(default_factory=dict)) -> dict:
-    """Save today's Wrap of the Day from pasted text or bullet list."""
+    """Optional user override — default wrap is system-composed via rebuild."""
     payload = body or {}
     try:
         from product.wrap_of_the_day import notify_wrap_telegram, save_wrap
@@ -1098,11 +1098,33 @@ def wrap_of_the_day_save(body: dict[str, Any] = Body(default_factory=dict)) -> d
             payload.get("bullets") or [],
             text=str(payload.get("text") or payload.get("raw_text") or ""),
             date=str(payload.get("date") or "") or None,
-            source=str(payload.get("source") or "paste"),
+            source=str(payload.get("source") or "override"),
         )
         if bool(payload.get("notify", False)) and wrap.get("available"):
             wrap["telegram"] = notify_wrap_telegram(wrap)
         return wrap
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@app.post("/api/wrap-of-the-day/rebuild")
+def wrap_of_the_day_rebuild() -> dict:
+    """Force-compose Wrap of the Day from current Pulse stores."""
+    try:
+        from product.wrap_of_the_day import compose_wrap
+
+        return compose_wrap(persist=True)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@app.post("/api/wrap-of-the-day/clear-override")
+def wrap_of_the_day_clear_override() -> dict:
+    """Drop a user override and restore system-composed wrap."""
+    try:
+        from product.wrap_of_the_day import clear_override
+
+        return clear_override()
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
@@ -1113,7 +1135,7 @@ def wrap_of_the_day_notify() -> dict:
     try:
         from product.wrap_of_the_day import load_wrap, notify_wrap_telegram
 
-        wrap = load_wrap()
+        wrap = load_wrap(compose=True)
         telegram = notify_wrap_telegram(wrap)
         return {
             "accepted": True,
@@ -1121,6 +1143,7 @@ def wrap_of_the_day_notify() -> dict:
             "available": bool(wrap.get("available")),
             "count": len(wrap.get("bullets") or []),
             "date": wrap.get("date") or "",
+            "source": wrap.get("source") or "",
             "places_orders": False,
         }
     except Exception as exc:

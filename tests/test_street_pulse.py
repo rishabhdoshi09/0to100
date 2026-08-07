@@ -33,8 +33,12 @@ def test_stock_card_maps_scan_store_prebreakout():
 def test_build_pulse_persists_and_discloses_honesty(tmp_path, monkeypatch):
     monkeypatch.setattr("reports.street_pulse.DEFAULT_PULSE_PATH", tmp_path / "pulse.json")
     monkeypatch.setattr(
-        "product.wrap_of_the_day.load_wrap",
-        lambda date=None, path=None: {"available": False, "bullets": []},
+        "product.wrap_of_the_day.load_manual_override",
+        lambda date=None, path=None: None,
+    )
+    monkeypatch.setattr(
+        "product.wrap_of_the_day.save_wrap",
+        lambda *args, **kwargs: {"available": False, "bullets": []},
     )
     monkeypatch.setattr(
         "reports.street_pulse._scan_universe",

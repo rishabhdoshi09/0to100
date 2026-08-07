@@ -518,18 +518,6 @@ def build_pulse(*, persist: bool = True) -> dict[str, Any]:
         gaps.append("Sector heat unavailable")
 
     takeaways = _takeaways(snapshot, gainers, sectors, buzzing)
-    wrap: dict[str, Any] = {"available": False, "bullets": []}
-    try:
-        from product.wrap_of_the_day import load_wrap
-
-        wrap = load_wrap()
-        if wrap.get("available") and wrap.get("bullets"):
-            # User-authored wrap leads the cover; system takeaways stay as backup.
-            takeaways = [str(b) for b in wrap.get("bullets") or [] if str(b).strip()][:5]
-    except Exception as exc:
-        log.debug("pulse_wrap_miss", error=str(exc))
-        wrap = {"available": False, "bullets": [], "message": str(exc)}
-
     now = datetime.now(timezone.utc)
     pulse = {
         "schema_version": SCHEMA_VERSION,
@@ -539,7 +527,7 @@ def build_pulse(*, persist: bool = True) -> dict[str, Any]:
         "date": datetime.now().strftime("%d %B %Y"),
         "generated_at": now.isoformat(),
         "takeaways": takeaways,
-        "wrap_of_the_day": wrap,
+        "wrap_of_the_day": {"available": False, "bullets": []},
         "snapshot": snapshot,
         "sectors": sectors,
         "gainers": gainers,
@@ -569,6 +557,26 @@ def build_pulse(*, persist: bool = True) -> dict[str, Any]:
             "It is not investment advice and does not place orders."
         ),
     }
+    # System-composed Wrap of the Day (manual override wins when present).
+    try:
+        from product.wrap_of_the_day import compose_from_pulse, load_manual_override, save_wrap
+
+        manual = load_manual_override()
+        wrap = manual or compose_from_pulse(pulse)
+        pulse["wrap_of_the_day"] = wrap
+        if wrap.get("available") and wrap.get("bullets"):
+            pulse["takeaways"] = [str(b) for b in wrap.get("bullets") or [] if str(b).strip()][:6]
+            if not manual and persist:
+                save_wrap(
+                    wrap.get("bullets") or [],
+                    date=str(wrap.get("date") or ""),
+                    source="auto",
+                    gaps=list(wrap.get("gaps") or []),
+                )
+    except Exception as exc:
+        log.debug("pulse_wrap_miss", error=str(exc))
+        pulse["wrap_of_the_day"] = {"available": False, "bullets": [], "message": str(exc)}
+
     if persist:
         try:
             save_pulse(pulse)
@@ -600,14 +608,22 @@ def load_pulse(path: str | Path | None = None) -> dict[str, Any] | None:
 
 
 def _attach_live_wrap(pulse: dict[str, Any]) -> dict[str, Any]:
-    """Refresh wrap on read so a new paste shows without full pulse rebuild."""
+    """Refresh wrap on read — auto-compose from this pulse; manual override wins."""
     try:
-        from product.wrap_of_the_day import load_wrap
+        from product.wrap_of_the_day import compose_from_pulse, load_manual_override, save_wrap
 
-        wrap = load_wrap()
+        manual = load_manual_override()
+        wrap = manual or compose_from_pulse(pulse)
         pulse["wrap_of_the_day"] = wrap
         if wrap.get("available") and wrap.get("bullets"):
-            pulse["takeaways"] = [str(b) for b in wrap.get("bullets") or [] if str(b).strip()][:5]
+            pulse["takeaways"] = [str(b) for b in wrap.get("bullets") or [] if str(b).strip()][:6]
+            if not manual:
+                save_wrap(
+                    wrap.get("bullets") or [],
+                    date=str(wrap.get("date") or ""),
+                    source="auto",
+                    gaps=list(wrap.get("gaps") or []),
+                )
     except Exception:
         pass
     return pulse

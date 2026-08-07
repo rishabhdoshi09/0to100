@@ -159,12 +159,15 @@ export type WrapOfTheDayPayload = {
   title?: string
   bullets?: string[]
   source?: string
+  auto?: boolean
+  override?: boolean
   raw_text?: string
   updated_at?: string
+  gaps?: string[]
   message?: string
   places_orders?: boolean
   honesty?: string
-  telegram?: { sent?: boolean; reason?: string; count?: number; date?: string }
+  telegram?: { sent?: boolean; reason?: string; count?: number; date?: string; source?: string }
 }
 
 export type QuoteTick = {
@@ -243,15 +246,28 @@ export const saveWrapOfTheDay = (body: {
 
 export const notifyWrapOfTheDay = (): Promise<{
   accepted: boolean
-  telegram?: { sent?: boolean; reason?: string; count?: number; date?: string }
+  telegram?: { sent?: boolean; reason?: string; count?: number; date?: string; source?: string }
   available?: boolean
   count?: number
   date?: string
+  source?: string
 }> =>
   fetch('/api/wrap-of-the-day/notify', {
     method: 'POST',
     headers: { Accept: 'application/json' },
   }).then((response) => json(response))
+
+export const rebuildWrapOfTheDay = (): Promise<WrapOfTheDayPayload> =>
+  fetch('/api/wrap-of-the-day/rebuild', {
+    method: 'POST',
+    headers: { Accept: 'application/json' },
+  }).then((response) => json<WrapOfTheDayPayload>(response))
+
+export const clearWrapOverride = (): Promise<WrapOfTheDayPayload> =>
+  fetch('/api/wrap-of-the-day/clear-override', {
+    method: 'POST',
+    headers: { Accept: 'application/json' },
+  }).then((response) => json<WrapOfTheDayPayload>(response))
 
 export const sendControl = (
   control: ControlName,

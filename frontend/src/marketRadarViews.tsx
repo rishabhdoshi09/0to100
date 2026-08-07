@@ -218,7 +218,7 @@ export function RadarHomeView(props: ExperienceViewProps & {
           title={radar?.command?.wrap_of_the_day?.available ? 'WRAP OF THE DAY' : 'MARKET COMMAND — WHAT MATTERS NOW'}
           subtitle={
             radar?.command?.wrap_of_the_day?.available
-              ? `User-authored · ${radar.command.wrap_of_the_day.date || 'today'}`
+              ? `${radar.command.wrap_of_the_day.source === 'override' || radar.command.wrap_of_the_day.source === 'paste' ? 'Override' : 'System-composed'} · ${radar.command.wrap_of_the_day.date || 'today'}`
               : radar?.command?.verdict_line || radar?.command?.honesty || 'Pulse + flows + posture'
           }
         >
