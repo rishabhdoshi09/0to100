@@ -671,6 +671,65 @@ def telegram_status() -> dict[str, Any]:
         }
 
 
+@app.get("/api/market-decision-brief")
+def market_decision_brief_get(force: bool = False) -> dict[str, Any]:
+    """Motilal-competitive retail brief: 3 deciders + fund/tech picks.
+
+    Default returns durable cache (no Gift/Yahoo scrape). force=true rebuilds.
+    """
+    try:
+        from product.market_decision_brief import build_market_decision_brief, load_brief
+
+        if force:
+            return build_market_decision_brief(persist=True, allow_network=True)
+        return load_brief()
+    except Exception as exc:
+        return {
+            "available": False,
+            "report_type": "MARKET_DECISION_BRIEF",
+            "deciders": [],
+            "gaps": [str(exc)],
+            "places_orders": False,
+            "honesty": "Market Decision Brief failed to assemble — nothing invented.",
+        }
+
+
+@app.post("/api/market-decision-brief/rebuild")
+def market_decision_brief_rebuild() -> dict[str, Any]:
+    """Force-rebuild Gift/global/options + fund/tech picks from live stores."""
+    try:
+        from product.market_decision_brief import build_market_decision_brief
+
+        return build_market_decision_brief(persist=True, allow_network=True)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@app.post("/api/market-decision-brief/notify")
+def market_decision_brief_notify() -> dict[str, Any]:
+    """Send Market Decision Brief to Telegram after analysis."""
+    try:
+        from product.market_decision_brief import (
+            build_market_decision_brief,
+            load_brief,
+            notify_market_decision_brief,
+        )
+
+        brief = load_brief()
+        if not brief.get("available"):
+            brief = build_market_decision_brief(persist=True, allow_network=True)
+        telegram = notify_market_decision_brief(brief)
+        return {
+            "accepted": True,
+            "telegram": telegram,
+            "available": bool(brief.get("available")),
+            "message": brief.get("message"),
+            "places_orders": False,
+        }
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
 @app.get("/api/buy-book/symbols")
 def buy_book_symbols() -> dict[str, Any]:
     """Lightweight symbol list for live heartbeat — no health evaluation."""

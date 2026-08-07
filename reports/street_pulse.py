@@ -675,13 +675,42 @@ def _attach_holdings_desk(pulse: dict[str, Any]) -> dict[str, Any]:
     return pulse
 
 
+def _attach_market_decision_brief(pulse: dict[str, Any], *, force: bool = False) -> dict[str, Any]:
+    """Attach Motilal-competitive Market Decision Brief (rebuild when force).
+
+    Soft attach never hits Gift/Yahoo network — low-power Mac stays snappy.
+    Force / Rebuild Brief buttons run the networked compose.
+    """
+    try:
+        from product.market_decision_brief import build_market_decision_brief, load_brief
+
+        if force:
+            pulse["market_decision_brief"] = build_market_decision_brief(
+                persist=True, allow_network=True
+            )
+        else:
+            pulse["market_decision_brief"] = load_brief()
+    except Exception as exc:
+        pulse["market_decision_brief"] = {
+            "available": False,
+            "deciders": [],
+            "message": str(exc),
+            "places_orders": False,
+        }
+    return pulse
+
+
 def pulse_api_payload(*, force: bool = False) -> dict[str, Any]:
     """API helper — reuse persisted pulse unless force rebuild requested."""
     if not force:
         cached = load_pulse()
         if cached and cached.get("available"):
-            return _attach_holdings_desk(_attach_live_wrap(cached))
-    return _attach_holdings_desk(_attach_live_wrap(build_pulse(persist=True)))
+            return _attach_market_decision_brief(
+                _attach_holdings_desk(_attach_live_wrap(cached)), force=False
+            )
+    return _attach_market_decision_brief(
+        _attach_holdings_desk(_attach_live_wrap(build_pulse(persist=True))), force=True
+    )
 
 
 def pulse_to_telegram(pulse: dict) -> str:
@@ -758,6 +787,34 @@ def pulse_to_telegram(pulse: dict) -> str:
         )
         if syms:
             lines.append(f"\nWatch tomorrow: {syms}")
+    brief = pulse.get("market_decision_brief") or {}
+    if isinstance(brief, dict) and brief.get("available"):
+        lines.append("\n<b>3 Things That Will Decide the Market</b>")
+        for i, decider in enumerate(brief.get("deciders") or [], 1):
+            if not isinstance(decider, Mapping) or not decider.get("available"):
+                continue
+            lines.append(f"{i}) <b>{esc(decider.get('title'))}</b>")
+            if decider.get("headline"):
+                lines.append(esc(str(decider.get("headline"))[:180]))
+        fund = brief.get("fundamental_picks") or {}
+        if fund.get("available"):
+            picks = ", ".join(
+                str(r.get("symbol"))
+                for r in (fund.get("rows") or [])[:4]
+                if r.get("symbol")
+            )
+            if picks:
+                lines.append(f"Long-term fund watches: {esc(picks)}")
+        tech = brief.get("technical_picks") or {}
+        if tech.get("available"):
+            picks = ", ".join(
+                str(r.get("symbol"))
+                for r in (tech.get("rows") or [])[:4]
+                if r.get("symbol")
+            )
+            if picks:
+                lines.append(f"Short-term tech watches: {esc(picks)}")
+
     desk = pulse.get("holdings_desk") or {}
     desk_rows = list(desk.get("rows") or []) if isinstance(desk, dict) else []
     flows = desk.get("market_flows") if isinstance(desk, dict) else {}

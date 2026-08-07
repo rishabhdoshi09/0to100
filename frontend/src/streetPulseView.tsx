@@ -6,12 +6,15 @@ import {
   clearWrapOverride,
   fetchStreetPulse,
   notifyHoldingsDesk,
+  notifyMarketDecisionBrief,
   notifyWrapOfTheDay,
+  rebuildMarketDecisionBrief,
   rebuildWrapOfTheDay,
   runHoldingsDesk,
   saveWrapOfTheDay,
   sendStreetPulseTelegram,
   type HoldingsDeskPayload,
+  type MarketDecisionBriefPayload,
   type StreetPulsePayload,
 } from './api'
 
@@ -66,6 +69,9 @@ export function StreetPulseView({ setSelected, setActive, onOpenPdf }: Props) {
   const [deskBusy, setDeskBusy] = useState('')
   const [deskNote, setDeskNote] = useState('')
   const [desk, setDesk] = useState<HoldingsDeskPayload | null>(null)
+  const [brief, setBrief] = useState<MarketDecisionBriefPayload | null>(null)
+  const [briefBusy, setBriefBusy] = useState('')
+  const [briefNote, setBriefNote] = useState('')
 
   useEffect(() => {
     let cancelled = false
@@ -76,6 +82,7 @@ export function StreetPulseView({ setSelected, setActive, onOpenPdf }: Props) {
         if (!cancelled) {
           setPulse(payload)
           if (payload.holdings_desk) setDesk(payload.holdings_desk)
+          if (payload.market_decision_brief) setBrief(payload.market_decision_brief)
           if (payload.wrap_of_the_day?.override) {
             const bullets = payload.wrap_of_the_day?.bullets || []
             setWrapText(bullets.map((b, i) => `${i + 1}) ${b}`).join('\n\n'))
@@ -93,6 +100,41 @@ export function StreetPulseView({ setSelected, setActive, onOpenPdf }: Props) {
       cancelled = true
     }
   }, [token])
+
+  const rebuildBrief = async () => {
+    setBriefBusy('rebuild')
+    setBriefNote('')
+    try {
+      const next = await rebuildMarketDecisionBrief()
+      setBrief(next)
+      setBriefNote(
+        next.available
+          ? next.message || 'Market Decision Brief rebuilt from live stores'
+          : next.message || 'Brief incomplete — missing sections stay missing',
+      )
+    } catch (err) {
+      setBriefNote(err instanceof Error ? err.message : 'Brief rebuild failed')
+    } finally {
+      setBriefBusy('')
+    }
+  }
+
+  const sendBriefTelegram = async () => {
+    setBriefBusy('notify')
+    setBriefNote('')
+    try {
+      const result = await notifyMarketDecisionBrief()
+      setBriefNote(
+        result.telegram?.sent
+          ? 'Market Decision Brief sent to Telegram'
+          : result.telegram?.reason || 'Telegram send failed — check bot token / chat id',
+      )
+    } catch (err) {
+      setBriefNote(err instanceof Error ? err.message : 'Telegram notify failed')
+    } finally {
+      setBriefBusy('')
+    }
+  }
 
   const rebuildWrap = async () => {
     setWrapBusy('rebuild')
@@ -308,6 +350,154 @@ export function StreetPulseView({ setSelected, setActive, onOpenPdf }: Props) {
               tone={pulse.available ? 'green' : 'amber'}
             />
           </div>
+
+          <Panel
+            title="3 THINGS THAT WILL DECIDE THE MARKET"
+            subtitle={
+              (brief || pulse.market_decision_brief)?.available
+                ? `${(brief || pulse.market_decision_brief)?.message || 'Retail morning desk'} · beat sell-side with honesty`
+                : 'Gift / global / options zones + long-term fund picks + scanner tech picks — rebuild when you want fresh prints'
+            }
+          >
+            {((brief || pulse.market_decision_brief)?.deciders || []).length === 0 ? (
+              <EmptyState
+                title="Market Decision Brief not built yet"
+                detail="Tap Rebuild brief to compose Gift/premarket, macro prints, options zones, and fund/tech picks from real stores."
+              />
+            ) : (
+              <div style={{ display: 'grid', gap: 14 }}>
+                {((brief || pulse.market_decision_brief)?.deciders || []).map((decider, idx) => (
+                  <div key={decider.key || decider.title || idx}>
+                    <div style={{ display: 'flex', gap: 8, alignItems: 'baseline', flexWrap: 'wrap' }}>
+                      <strong>
+                        {idx + 1}. {decider.title || 'Decider'}
+                      </strong>
+                      <StatusBadge status={decider.available ? 'READY' : 'INCOMPLETE'} />
+                    </div>
+                    {decider.headline ? <p className="panel-copy">{decider.headline}</p> : null}
+                    {(decider.bullets || []).length > 0 ? (
+                      <ul className="plain-list">
+                        {(decider.bullets || []).slice(0, 5).map((item) => (
+                          <li key={item}>{item}</li>
+                        ))}
+                      </ul>
+                    ) : null}
+                  </div>
+                ))}
+
+                <div>
+                  <strong>Fundamental / long-term picks</strong>
+                  <p className="panel-copy">
+                    {(brief || pulse.market_decision_brief)?.fundamental_picks?.subtitle
+                      || 'Multi-month research · prior-high watch when history exists · not broker targets'}
+                  </p>
+                  {((brief || pulse.market_decision_brief)?.fundamental_picks?.rows || []).length === 0 ? (
+                    <p className="panel-copy">
+                      {(brief || pulse.market_decision_brief)?.fundamental_picks?.message
+                        || 'No long-term picks yet — run Long-Term scan.'}
+                    </p>
+                  ) : (
+                    <div style={{ display: 'grid', gap: 8 }}>
+                      {((brief || pulse.market_decision_brief)?.fundamental_picks?.rows || []).map((row) => (
+                        <div key={row.symbol} className="fact-grid" style={{ alignItems: 'start' }}>
+                          <div>
+                            <StockChip
+                              symbol={row.symbol}
+                              detail={
+                                row.upside_to_prior_high_pct != null
+                                  ? `prior-high ~${row.upside_to_prior_high_pct}% · ${row.verdict || 'LONG_TERM'}`
+                                  : row.verdict || 'LONG_TERM'
+                              }
+                              onOpen={openSymbol}
+                            />
+                            <p className="panel-copy">{row.thesis || row.note}</p>
+                          </div>
+                          <div>
+                            <MetricCell label="PRICE" value={row.price != null ? `₹${row.price}` : '—'} />
+                            <MetricCell
+                              label="PRIOR-HIGH WATCH"
+                              value={row.target_watch != null ? `₹${row.target_watch}` : '—'}
+                              hint="Official history — not a sell-side TP"
+                            />
+                            <MetricCell label="SCORE" value={row.score != null ? String(row.score) : '—'} />
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                <div>
+                  <strong>Technical picks</strong>
+                  <p className="panel-copy">
+                    {(brief || pulse.market_decision_brief)?.technical_picks?.subtitle
+                      || 'Short-term research from last whole-market scan'}
+                  </p>
+                  {((brief || pulse.market_decision_brief)?.technical_picks?.rows || []).length === 0 ? (
+                    <p className="panel-copy">
+                      {(brief || pulse.market_decision_brief)?.technical_picks?.message
+                        || 'No scanner setups yet — run Scan now.'}
+                    </p>
+                  ) : (
+                    <div style={{ display: 'grid', gap: 8 }}>
+                      {((brief || pulse.market_decision_brief)?.technical_picks?.rows || []).map((row) => (
+                        <div key={row.symbol} className="fact-grid" style={{ alignItems: 'start' }}>
+                          <div>
+                            <StockChip
+                              symbol={row.symbol}
+                              detail={
+                                row.upside_pct != null
+                                  ? `${row.status || row.verdict || 'WATCH'} · ~${row.upside_pct}% to target`
+                                  : row.status || row.verdict || 'WATCH'
+                              }
+                              onOpen={openSymbol}
+                            />
+                            <p className="panel-copy">{row.why || (row.signals || []).slice(0, 2).join(' · ')}</p>
+                          </div>
+                          <div>
+                            <MetricCell label="ENTRY" value={row.entry != null ? `₹${row.entry}` : '—'} />
+                            <MetricCell label="STOP" value={row.stop != null ? `₹${row.stop}` : '—'} />
+                            <MetricCell label="TARGET" value={row.target != null ? `₹${row.target}` : '—'} />
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {((brief || pulse.market_decision_brief)?.gaps || []).length > 0 ? (
+              <p className="panel-copy">
+                Gaps: {((brief || pulse.market_decision_brief)?.gaps || []).slice(0, 4).join(' · ')}
+              </p>
+            ) : null}
+            {((brief || pulse.market_decision_brief)?.why_better || []).length > 0 ? (
+              <EvidenceList
+                title="Why this beats a broker morning note"
+                items={((brief || pulse.market_decision_brief)?.why_better || []).slice(0, 4)}
+              />
+            ) : null}
+
+            <div className="inline-actions" style={{ marginTop: 8, flexWrap: 'wrap', gap: 8 }}>
+              <button type="button" disabled={!!briefBusy} onClick={() => void rebuildBrief()}>
+                {briefBusy === 'rebuild' ? 'Composing Gift + globals + levels…' : 'Rebuild brief'}
+              </button>
+              <button
+                type="button"
+                disabled={!!briefBusy || !(brief || pulse.market_decision_brief)?.available}
+                onClick={() => void sendBriefTelegram()}
+              >
+                {briefBusy === 'notify' ? 'Sending…' : 'Send brief to Telegram'}
+              </button>
+            </div>
+            {briefNote ? <p className="panel-copy">{briefNote}</p> : null}
+            <p className="panel-copy">
+              {(brief || pulse.market_decision_brief)?.honesty
+                || (brief || pulse.market_decision_brief)?.competitor_note
+                || 'Research brief · not a buy ticket · paper-first'}
+            </p>
+          </Panel>
 
           <Panel
             title="WRAP OF THE DAY"

@@ -149,6 +149,7 @@ export type StreetPulsePayload = {
     wrap_score?: number
   }>
   wrap_of_the_day?: WrapOfTheDayPayload
+  market_decision_brief?: MarketDecisionBriefPayload
   holdings_desk?: HoldingsDeskPayload
   scanned?: number
   scan_as_of?: string
@@ -255,6 +256,79 @@ export type WrapOfTheDayPayload = {
   places_orders?: boolean
   honesty?: string
   telegram?: { sent?: boolean; reason?: string; count?: number; date?: string; source?: string }
+}
+
+export type MarketDecisionDecider = {
+  available?: boolean
+  key?: string
+  title?: string
+  icon?: string
+  headline?: string
+  bullets?: string[]
+  gaps?: string[]
+  levels?: Array<{
+    symbol?: string
+    spot?: number | null
+    zone?: string | null
+    pcr?: number | null
+    max_pain?: number | null
+    stance?: string
+    bias?: string
+    note?: string
+  }>
+  cues?: Array<{ name?: string; price?: number | null; chg_pct?: number | null }>
+  gift_nifty?: { level?: number | null; chg_pct?: number | null; snippet?: string }
+}
+
+export type MarketDecisionPick = {
+  symbol?: string
+  price?: number | null
+  score?: number | null
+  verdict?: string
+  status?: string
+  thesis?: string
+  why?: string
+  note?: string
+  target_watch?: number | null
+  upside_to_prior_high_pct?: number | null
+  entry?: number | null
+  stop?: number | null
+  target?: number | null
+  upside_pct?: number | null
+  horizon?: string
+  signals?: string[]
+}
+
+export type MarketDecisionBriefPayload = {
+  available: boolean
+  title?: string
+  generated_at?: string
+  message?: string
+  deciders?: MarketDecisionDecider[]
+  fundamental_picks?: {
+    available?: boolean
+    title?: string
+    subtitle?: string
+    rows?: MarketDecisionPick[]
+    message?: string
+    honesty?: string
+    as_of?: string
+  }
+  technical_picks?: {
+    available?: boolean
+    title?: string
+    subtitle?: string
+    rows?: MarketDecisionPick[]
+    message?: string
+    honesty?: string
+    as_of?: string
+  }
+  why_better?: string[]
+  gaps?: string[]
+  competitor_note?: string
+  places_orders?: boolean
+  live_locked?: boolean
+  honesty?: string
 }
 
 export type QuoteTick = {
@@ -374,6 +448,29 @@ export const notifyHoldingsDesk = (): Promise<{
   count?: number
 }> =>
   fetch('/api/holdings-desk/notify', {
+    method: 'POST',
+    headers: { Accept: 'application/json' },
+  }).then((response) => json(response))
+
+export const fetchMarketDecisionBrief = (force = false): Promise<MarketDecisionBriefPayload> =>
+  fetch(`/api/market-decision-brief?force=${force ? 'true' : 'false'}`, {
+    headers: { Accept: 'application/json' },
+  }).then((response) => json<MarketDecisionBriefPayload>(response))
+
+export const rebuildMarketDecisionBrief = (): Promise<MarketDecisionBriefPayload> =>
+  fetch('/api/market-decision-brief/rebuild', {
+    method: 'POST',
+    headers: { Accept: 'application/json' },
+  }).then((response) => json<MarketDecisionBriefPayload>(response))
+
+export const notifyMarketDecisionBrief = (): Promise<{
+  accepted: boolean
+  telegram?: { sent?: boolean; reason?: string; configured?: boolean }
+  available?: boolean
+  message?: string
+  places_orders?: boolean
+}> =>
+  fetch('/api/market-decision-brief/notify', {
     method: 'POST',
     headers: { Accept: 'application/json' },
   }).then((response) => json(response))
