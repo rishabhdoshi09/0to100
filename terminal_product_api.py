@@ -618,6 +618,59 @@ def holdings_notify() -> dict[str, Any]:
     return {"accepted": True, "telegram": telegram, "count": len(book.get("holdings") or [])}
 
 
+@app.get("/api/holdings-desk")
+def holdings_desk_get() -> dict[str, Any]:
+    """Last holdings desk scorecard (fund → tech → news → research verdict)."""
+    from product.holdings_desk import load_desk
+
+    return load_desk()
+
+
+@app.post("/api/holdings-desk/run")
+def holdings_desk_run(body: dict[str, Any] = Body(default_factory=dict)) -> dict[str, Any]:
+    """Score Zerodha holdings: fundamentals → technicals → news → buy/sell/hold-style watch."""
+    from product.holdings_desk import notify_holdings_desk_telegram, run_holdings_desk
+
+    desk = run_holdings_desk(persist=True)
+    if bool((body or {}).get("notify", False)) and desk.get("available"):
+        desk["telegram"] = notify_holdings_desk_telegram(desk)
+    return desk
+
+
+@app.post("/api/holdings-desk/notify")
+def holdings_desk_notify() -> dict[str, Any]:
+    """Send holdings desk research verdicts to Telegram."""
+    from product.holdings_desk import load_desk, notify_holdings_desk_telegram, run_holdings_desk
+
+    desk = load_desk()
+    if not desk.get("available"):
+        desk = run_holdings_desk(persist=True)
+    telegram = notify_holdings_desk_telegram(desk)
+    return {
+        "accepted": True,
+        "telegram": telegram,
+        "available": bool(desk.get("available")),
+        "count": len(desk.get("rows") or []),
+        "places_orders": False,
+    }
+
+
+@app.get("/api/telegram/status")
+def telegram_status() -> dict[str, Any]:
+    """Diagnose Telegram bot credentials (process env / Settings / .env file)."""
+    try:
+        from alerts.telegram_alerts import AlertEngine
+
+        return AlertEngine().connection_status()
+    except Exception as exc:
+        return {
+            "configured": False,
+            "token_present": False,
+            "chat_id_present": False,
+            "message": str(exc),
+        }
+
+
 @app.get("/api/buy-book/symbols")
 def buy_book_symbols() -> dict[str, Any]:
     """Lightweight symbol list for live heartbeat — no health evaluation."""

@@ -149,6 +149,7 @@ export type StreetPulsePayload = {
     wrap_score?: number
   }>
   wrap_of_the_day?: WrapOfTheDayPayload
+  holdings_desk?: HoldingsDeskPayload
   scanned?: number
   scan_as_of?: string
   scan_source?: string
@@ -159,6 +160,62 @@ export type StreetPulsePayload = {
   honesty?: string
   disclaimer?: string
   error?: string
+}
+
+export type HoldingsDeskRow = {
+  tradingsymbol?: string
+  symbol?: string
+  quantity?: number
+  average_price?: number | null
+  last_price?: number | null
+  pnl?: number | null
+  pnl_pct?: number | null
+  vs_entry_pct?: number | null
+  stance?: string
+  suggestion?: string
+  confidence?: number
+  thesis?: string
+  suggestions?: string[]
+  fundamentals?: {
+    available?: boolean
+    severity?: string
+    status?: string
+    ratios?: Record<string, number | null | undefined>
+    flags?: Array<{ severity?: string; code?: string; text?: string }>
+    note?: string
+  }
+  technicals?: {
+    available?: boolean
+    severity?: string
+    status_label?: string
+    risk_score?: number | null
+    warnings?: Array<{ severity?: string; code?: string; text?: string } | string>
+    structure?: Record<string, unknown>
+    as_of?: string
+  }
+  news?: {
+    available?: boolean
+    bias?: string
+    label?: string
+    positive?: number
+    negative?: number
+    headlines?: Array<{ title?: string; tone?: string; source?: string }>
+  }
+  places_orders?: boolean
+  honesty?: string
+}
+
+export type HoldingsDeskPayload = {
+  available: boolean
+  title?: string
+  generated_at?: string
+  holdings_count?: number
+  rows?: HoldingsDeskRow[]
+  summary?: Record<string, number>
+  message?: string
+  places_orders?: boolean
+  honesty?: string
+  telegram?: { sent?: boolean; reason?: string; count?: number; configured?: boolean }
 }
 
 export type WrapOfTheDayPayload = {
@@ -276,6 +333,28 @@ export const clearWrapOverride = (): Promise<WrapOfTheDayPayload> =>
     method: 'POST',
     headers: { Accept: 'application/json' },
   }).then((response) => json<WrapOfTheDayPayload>(response))
+
+export const fetchHoldingsDesk = (): Promise<HoldingsDeskPayload> =>
+  fetch('/api/holdings-desk', { headers: { Accept: 'application/json' } })
+    .then((response) => json<HoldingsDeskPayload>(response))
+
+export const runHoldingsDesk = (notify = false): Promise<HoldingsDeskPayload> =>
+  fetch('/api/holdings-desk/run', {
+    method: 'POST',
+    headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+    body: JSON.stringify({ notify }),
+  }).then((response) => json<HoldingsDeskPayload>(response))
+
+export const notifyHoldingsDesk = (): Promise<{
+  accepted: boolean
+  telegram?: { sent?: boolean; reason?: string; count?: number; configured?: boolean }
+  available?: boolean
+  count?: number
+}> =>
+  fetch('/api/holdings-desk/notify', {
+    method: 'POST',
+    headers: { Accept: 'application/json' },
+  }).then((response) => json(response))
 
 export const sendControl = (
   control: ControlName,

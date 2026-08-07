@@ -321,9 +321,13 @@ def notify_holdings_telegram(book: Mapping[str, Any] | None = None) -> dict[str,
 
         engine = AlertEngine()
         if not engine.is_configured():
-            return {"sent": False, "reason": "Telegram not configured (TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID)"}
+            return {
+                "sent": False,
+                "configured": False,
+                "reason": "Telegram not configured (TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID in .env)",
+            }
     except Exception as exc:
-        return {"sent": False, "reason": str(exc)}
+        return {"sent": False, "configured": False, "reason": str(exc)}
 
     holdings = list(payload.get("holdings") or [])
     summary = payload.get("summary") or {}
@@ -355,7 +359,13 @@ def notify_holdings_telegram(book: Mapping[str, Any] | None = None) -> dict[str,
         lines.append("\n<i>Research desk · never places orders</i>")
         msg = "\n".join(lines)
     ok = engine.send(msg)
-    return {"sent": bool(ok), "count": len(holdings)}
+    return {
+        "sent": bool(ok),
+        "configured": True,
+        "count": len(holdings),
+        "reason": None if ok else (engine.last_error or "Telegram send failed"),
+        "cred_source": getattr(engine, "cred_source", "") or "",
+    }
 
 
 def sync_from_kite(path: Path | None = None, *, notify: bool = True) -> dict[str, Any]:

@@ -4,6 +4,10 @@ Telegram alert engine — price/RSI/breakout alerts via Telegram bot.
 Setup: user sets TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID in .env
 Bot creation: https://t.me/BotFather → /newbot → get token
 Chat ID: message the bot, then GET https://api.telegram.org/bot<token>/getUpdates
+
+Credentials resolve from process env, pydantic Settings (.env), then the
+on-disk ``.env`` file — uvicorn stack scripts often start without sourcing
+``.env``, so AlertEngine must not rely on process env alone.
 """
 from __future__ import annotations
 
@@ -19,11 +23,68 @@ import requests
 
 logger = logging.getLogger("quantterm.telegram_alerts")
 
+_ROOT = Path(__file__).resolve().parent.parent
 _LOGS_DIR = Path(os.environ.get("DEVBLOOM_LOG_DIR", "logs"))
 _LOGS_DIR.mkdir(parents=True, exist_ok=True)
 _DB_PATH = _LOGS_DIR / "alerts.db"
 
 AlertType = Literal["PRICE_CROSS", "RSI_CROSS", "BREAKOUT"]
+
+
+def _read_dotenv_value(name: str) -> str:
+    """Read one key from repo-root ``.env`` without mutating process env."""
+    path = _ROOT / ".env"
+    try:
+        for raw in path.read_text(encoding="utf-8").splitlines():
+            line = raw.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, val = line.split("=", 1)
+            if key.strip() == name:
+                return val.strip().strip('"').strip("'")
+    except Exception:
+        pass
+    return ""
+
+
+def resolve_telegram_credentials() -> tuple[str, str, str]:
+    """Return ``(token, chat_id, source)`` from env / Settings / ``.env`` file."""
+    token = (os.environ.get("TELEGRAM_BOT_TOKEN") or "").strip()
+    chat = (os.environ.get("TELEGRAM_CHAT_ID") or "").strip()
+    source = "process_env" if token and chat else ""
+
+    if not token or not chat:
+        try:
+            from config import settings
+
+            token = token or (settings.telegram_bot_token or "").strip()
+            chat = chat or (settings.telegram_chat_id or "").strip()
+            if token and chat and not source:
+                source = "settings"
+        except Exception:
+            pass
+
+    if not token or not chat:
+        try:
+            from dotenv import load_dotenv
+
+            load_dotenv(_ROOT / ".env", override=False)
+            token = token or (os.environ.get("TELEGRAM_BOT_TOKEN") or "").strip()
+            chat = chat or (os.environ.get("TELEGRAM_CHAT_ID") or "").strip()
+            if token and chat and not source:
+                source = "dotenv_load"
+        except Exception:
+            pass
+
+    if not token or not chat:
+        file_token = _read_dotenv_value("TELEGRAM_BOT_TOKEN")
+        file_chat = _read_dotenv_value("TELEGRAM_CHAT_ID")
+        token = token or file_token
+        chat = chat or file_chat
+        if token and chat and not source:
+            source = "dotenv_file"
+
+    return token, chat, source
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -50,17 +111,32 @@ class AlertEngine:
     _TELEGRAM_API = "https://api.telegram.org/bot{token}/sendMessage"
 
     def __init__(self) -> None:
-        self._token   = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
-        self._chat_id = os.environ.get("TELEGRAM_CHAT_ID", "").strip()
-        self.enabled  = bool(self._token and self._chat_id)
+        self._token, self._chat_id, self.cred_source = resolve_telegram_credentials()
+        self.enabled = bool(self._token and self._chat_id)
+        self.last_error: str | None = None
 
     # ------------------------------------------------------------------
     # Public helpers
     # ------------------------------------------------------------------
 
     def is_configured(self) -> bool:
-        """Return True if both token and chat_id are present in env."""
+        """Return True if both token and chat_id are resolvable."""
         return self.enabled
+
+    def connection_status(self) -> dict:
+        """Diagnose Telegram config for UI / API error surfaces."""
+        return {
+            "configured": self.enabled,
+            "token_present": bool(self._token),
+            "chat_id_present": bool(self._chat_id),
+            "source": self.cred_source if self.enabled else "",
+            "last_error": self.last_error,
+            "message": (
+                "Telegram ready"
+                if self.enabled
+                else "Set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID in .env, then restart or retry send."
+            ),
+        }
 
     _MAX_LEN = 3800   # Telegram hard cap is 4096; headroom for HTML entities
 
@@ -85,32 +161,63 @@ class AlertEngine:
             chunks.append(current)
         return chunks
 
+    def _post_chunk(self, url: str, payload: dict) -> tuple[bool, str | None]:
+        try:
+            resp = requests.post(url, json=payload, timeout=12)
+        except Exception as exc:
+            return False, str(exc)
+        description = ""
+        try:
+            data = resp.json() if resp.content else {}
+        except Exception:
+            data = {}
+        if isinstance(data, dict):
+            description = str(data.get("description") or "").strip()
+            if data.get("ok") is True:
+                return True, None
+            if data.get("ok") is False:
+                return False, description or f"Telegram API error (HTTP {resp.status_code})"
+        if resp.ok:
+            return True, None
+        return False, description or f"HTTP {resp.status_code}: {(resp.text or '')[:180]}"
+
     def send(self, message: str, reply_markup: dict | None = None) -> bool:
         """
         POST *message* to Telegram sendMessage. Optional reply_markup
         attaches inline action buttons (see alerts/telegram_actions.py).
         Long messages auto-split at the 4096-char API cap (buttons ride
         on the last chunk). Returns True only if EVERY chunk delivered.
+        On HTML parse failures, retries the chunk without parse_mode.
         """
+        self.last_error = None
         if not self.enabled:
+            self.last_error = "Telegram not configured (TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID)"
             return False
         url = self._TELEGRAM_API.format(token=self._token)
         chunks = self._split_message(message, self._MAX_LEN)
         ok = True
         for i, chunk in enumerate(chunks):
             payload = {
-                "chat_id":    self._chat_id,
-                "text":       chunk,
+                "chat_id": self._chat_id,
+                "text": chunk,
                 "parse_mode": "HTML",
             }
             if reply_markup and i == len(chunks) - 1:
                 payload["reply_markup"] = reply_markup
-            try:
-                resp = requests.post(url, json=payload, timeout=8)
-                resp.raise_for_status()
-            except Exception as exc:
-                logger.warning("Telegram send failed (chunk %d/%d): %s",
-                               i + 1, len(chunks), exc)
+            delivered, err = self._post_chunk(url, payload)
+            if not delivered and err and "parse" in err.lower():
+                # Unescaped <>& in wrap/news text often breaks HTML mode.
+                plain = dict(payload)
+                plain.pop("parse_mode", None)
+                delivered, err = self._post_chunk(url, plain)
+            if not delivered:
+                self.last_error = err or f"Telegram send failed (chunk {i + 1}/{len(chunks)})"
+                logger.warning(
+                    "Telegram send failed (chunk %d/%d): %s",
+                    i + 1,
+                    len(chunks),
+                    self.last_error,
+                )
                 ok = False
         return ok
 

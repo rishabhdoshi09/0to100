@@ -504,14 +504,18 @@ def notify_wrap_telegram(wrap: Mapping[str, Any] | None = None) -> dict[str, Any
         if not engine.is_configured():
             return {
                 "sent": False,
-                "reason": "Telegram not configured (TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID)",
+                "configured": False,
+                "reason": "Telegram not configured (TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID in .env)",
             }
     except Exception as exc:
-        return {"sent": False, "reason": str(exc)}
+        return {"sent": False, "configured": False, "reason": str(exc)}
     ok = bool(engine.send(wrap_telegram_message(payload)))
     return {
         "sent": ok,
+        "configured": True,
         "count": len(payload.get("bullets") or []),
         "date": payload.get("date") or today_ist(),
         "source": payload.get("source") or "",
+        "reason": None if ok else (engine.last_error or "Telegram send failed"),
+        "cred_source": getattr(engine, "cred_source", "") or "",
     }

@@ -5,10 +5,13 @@ import { words } from './format'
 import {
   clearWrapOverride,
   fetchStreetPulse,
+  notifyHoldingsDesk,
   notifyWrapOfTheDay,
   rebuildWrapOfTheDay,
+  runHoldingsDesk,
   saveWrapOfTheDay,
   sendStreetPulseTelegram,
+  type HoldingsDeskPayload,
   type StreetPulsePayload,
 } from './api'
 
@@ -60,6 +63,9 @@ export function StreetPulseView({ setSelected, setActive, onOpenPdf }: Props) {
   const [wrapBusy, setWrapBusy] = useState('')
   const [wrapNote, setWrapNote] = useState('')
   const [showOverride, setShowOverride] = useState(false)
+  const [deskBusy, setDeskBusy] = useState('')
+  const [deskNote, setDeskNote] = useState('')
+  const [desk, setDesk] = useState<HoldingsDeskPayload | null>(null)
 
   useEffect(() => {
     let cancelled = false
@@ -69,6 +75,7 @@ export function StreetPulseView({ setSelected, setActive, onOpenPdf }: Props) {
       .then((payload) => {
         if (!cancelled) {
           setPulse(payload)
+          if (payload.holdings_desk) setDesk(payload.holdings_desk)
           if (payload.wrap_of_the_day?.override) {
             const bullets = payload.wrap_of_the_day?.bullets || []
             setWrapText(bullets.map((b, i) => `${i + 1}) ${b}`).join('\n\n'))
@@ -156,12 +163,52 @@ export function StreetPulseView({ setSelected, setActive, onOpenPdf }: Props) {
       setWrapNote(
         result.telegram?.sent
           ? `Wrap sent to Telegram · ${result.count ?? 0} bullet(s)`
-          : result.telegram?.reason || 'Telegram not sent — check TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID',
+          : result.telegram?.reason || 'Telegram not sent — check TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID in .env',
       )
     } catch (err) {
       setWrapNote(err instanceof Error ? err.message : 'Telegram notify failed')
     } finally {
       setWrapBusy('')
+    }
+  }
+
+  const runDesk = async (notify: boolean) => {
+    setDeskBusy(notify ? 'notify' : 'run')
+    setDeskNote('')
+    try {
+      const scored = await runHoldingsDesk(notify)
+      setDesk(scored)
+      const tg = scored.telegram?.sent
+        ? ' · Telegram sent'
+        : scored.telegram?.reason
+          ? ` · Telegram: ${scored.telegram.reason}`
+          : ''
+      setDeskNote(
+        scored.available
+          ? `${scored.message || `Scored ${scored.holdings_count || 0} holding(s)`}${tg}`
+          : scored.message || 'Holdings desk empty — sync Zerodha holdings first',
+      )
+    } catch (err) {
+      setDeskNote(err instanceof Error ? err.message : 'Holdings desk failed')
+    } finally {
+      setDeskBusy('')
+    }
+  }
+
+  const sendDeskTelegram = async () => {
+    setDeskBusy('notify')
+    setDeskNote('')
+    try {
+      const result = await notifyHoldingsDesk()
+      setDeskNote(
+        result.telegram?.sent
+          ? `Holdings desk sent to Telegram · ${result.count ?? 0} name(s)`
+          : result.telegram?.reason || 'Telegram not sent — check TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID in .env',
+      )
+    } catch (err) {
+      setDeskNote(err instanceof Error ? err.message : 'Holdings desk Telegram failed')
+    } finally {
+      setDeskBusy('')
     }
   }
 
@@ -178,7 +225,7 @@ export function StreetPulseView({ setSelected, setActive, onOpenPdf }: Props) {
       if (result.sent) {
         setSendNote(`Sent to Telegram${result.date ? ` · ${result.date}` : ''}`)
       } else if (result.configured === false) {
-        setSendNote(result.error || 'Telegram not configured — set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID')
+        setSendNote(result.error || 'Telegram not configured — set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID in .env')
       } else {
         setSendNote(result.error || 'Telegram send failed')
       }
@@ -336,6 +383,79 @@ export function StreetPulseView({ setSelected, setActive, onOpenPdf }: Props) {
             ) : null}
             {wrapNote ? <p className="panel-copy">{wrapNote}</p> : null}
             <p className="panel-copy">{pulse.wrap_of_the_day?.honesty || pulse.honesty}</p>
+          </Panel>
+
+          <Panel
+            title="HOLDINGS DESK"
+            subtitle={
+              (desk || pulse.holdings_desk)?.available
+                ? `${(desk || pulse.holdings_desk)?.holdings_count || 0} Zerodha holding(s) · fund → tech → news → research verdict`
+                : 'Track demat book: fundamentals → technicals → news good/bad → buy/sell/hold-style watch'
+            }
+          >
+            {((desk || pulse.holdings_desk)?.rows || []).length === 0 ? (
+              <EmptyState
+                title="Holdings desk not scored yet"
+                detail={(desk || pulse.holdings_desk)?.message || 'Sync Zerodha holdings on My Holdings, then Run holdings desk.'}
+              />
+            ) : (
+              <div style={{ display: 'grid', gap: 12 }}>
+                {((desk || pulse.holdings_desk)?.rows || []).map((row) => (
+                  <div key={row.symbol || row.tradingsymbol} className="fact-grid" style={{ alignItems: 'start' }}>
+                    <div>
+                      <StockChip
+                        symbol={row.symbol || row.tradingsymbol}
+                        detail={
+                          row.vs_entry_pct == null
+                            ? `${row.quantity ?? '—'} sh`
+                            : `${row.quantity ?? '—'} sh · vs avg ${row.vs_entry_pct > 0 ? '+' : ''}${row.vs_entry_pct}%`
+                        }
+                        onOpen={openSymbol}
+                      />
+                      <div style={{ marginTop: 4, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                        <StatusBadge status={String(row.suggestion || row.stance || 'INCOMPLETE')} />
+                        <StatusBadge status={`NEWS_${String(row.news?.bias || 'NONE')}`} />
+                      </div>
+                      <p className="panel-copy" style={{ marginTop: 6 }}>{row.thesis}</p>
+                      {(row.suggestions || []).slice(0, 2).map((tip) => (
+                        <p key={tip} className="panel-copy">{tip}</p>
+                      ))}
+                    </div>
+                    <div>
+                      <MetricCell
+                        label="TECHNICALS"
+                        value={words(row.technicals?.status_label || row.technicals?.severity || '—')}
+                      />
+                      <MetricCell
+                        label="FUNDAMENTALS"
+                        value={words(row.fundamentals?.severity || '—')}
+                      />
+                      <p className="panel-copy">{row.news?.label || row.news?.headlines?.[0]?.title || 'No recent symbol news'}</p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+            <div className="inline-actions" style={{ marginTop: 8, flexWrap: 'wrap', gap: 8 }}>
+              <button type="button" disabled={!!deskBusy} onClick={() => void runDesk(false)}>
+                {deskBusy === 'run' ? 'Scoring holdings…' : 'Run holdings desk'}
+              </button>
+              <button
+                type="button"
+                disabled={!!deskBusy || !((desk || pulse.holdings_desk)?.available)}
+                onClick={() => void sendDeskTelegram()}
+              >
+                {deskBusy === 'notify' ? 'Sending…' : 'Send desk to Telegram'}
+              </button>
+              <button type="button" disabled={!!deskBusy} onClick={() => void runDesk(true)}>
+                Run + Telegram
+              </button>
+            </div>
+            {deskNote ? <p className="panel-copy">{deskNote}</p> : null}
+            <p className="panel-copy">
+              {(desk || pulse.holdings_desk)?.honesty
+                || 'Research suggestions only — BUY/SELL/HOLD labels are watches, never live orders.'}
+            </p>
           </Panel>
 
           <Panel title="COVER TAKEAWAYS" subtitle="Same as Wrap of the Day when composed · else store takeaways">

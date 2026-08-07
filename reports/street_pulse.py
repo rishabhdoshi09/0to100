@@ -658,13 +658,30 @@ def _attach_live_wrap(pulse: dict[str, Any]) -> dict[str, Any]:
     return pulse
 
 
+def _attach_holdings_desk(pulse: dict[str, Any]) -> dict[str, Any]:
+    """Attach last holdings-desk scorecard (does not re-run the engine on every read)."""
+    try:
+        from product.holdings_desk import load_desk
+
+        desk = load_desk()
+        pulse["holdings_desk"] = desk
+    except Exception as exc:
+        pulse["holdings_desk"] = {
+            "available": False,
+            "rows": [],
+            "message": str(exc),
+            "places_orders": False,
+        }
+    return pulse
+
+
 def pulse_api_payload(*, force: bool = False) -> dict[str, Any]:
     """API helper — reuse persisted pulse unless force rebuild requested."""
     if not force:
         cached = load_pulse()
         if cached and cached.get("available"):
-            return _attach_live_wrap(cached)
-    return _attach_live_wrap(build_pulse(persist=True))
+            return _attach_holdings_desk(_attach_live_wrap(cached))
+    return _attach_holdings_desk(_attach_live_wrap(build_pulse(persist=True)))
 
 
 def pulse_to_telegram(pulse: dict) -> str:
@@ -733,6 +750,17 @@ def pulse_to_telegram(pulse: dict) -> str:
         syms = ", ".join(r.get("symbol") for r in (pulse.get("breakouts_tomorrow") or [])[:4] if r.get("symbol"))
         if syms:
             lines.append(f"\nWatch tomorrow: {syms}")
+    desk = pulse.get("holdings_desk") or {}
+    desk_rows = list(desk.get("rows") or []) if isinstance(desk, dict) else []
+    if desk_rows:
+        lines.append("\n<b>Holdings desk</b> (research watches)")
+        for row in desk_rows[:8]:
+            sym = row.get("symbol") or row.get("tradingsymbol")
+            sug = row.get("suggestion") or row.get("stance")
+            news = ((row.get("news") or {}).get("bias")) or "NONE"
+            lines.append(f"• <b>{sym}</b> → {sug} · news {news}")
+        if len(desk_rows) > 8:
+            lines.append(f"… +{len(desk_rows) - 8} more")
     gaps = list(pulse.get("gaps") or [])
     if gaps:
         lines.append(f"\nMissing data: {gaps[0]}")
@@ -751,14 +779,19 @@ def send_pulse_telegram(*, force_build: bool = True) -> dict:
         return {
             "sent": False,
             "configured": False,
-            "error": "Telegram not configured (set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID)",
+            "error": "Telegram not configured (set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID in .env)",
+            "reason": "Telegram not configured (set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID in .env)",
         }
     pulse = build_pulse(persist=True) if force_build else (load_pulse() or build_pulse(persist=True))
+    pulse = _attach_holdings_desk(pulse)
     ok = bool(engine.send(pulse_to_telegram(pulse)))
+    err = None if ok else (engine.last_error or "Telegram send failed")
     return {
         "sent": ok,
         "configured": True,
         "date": pulse.get("date"),
         "scan_source": pulse.get("scan_source"),
-        "error": None if ok else "Telegram send failed",
+        "error": err,
+        "reason": err,
+        "cred_source": getattr(engine, "cred_source", "") or "",
     }
