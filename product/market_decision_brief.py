@@ -92,29 +92,43 @@ def save_brief(payload: Mapping[str, Any], path: Path | None = None) -> dict[str
     return out
 
 
-def _global_macro_cues(*, allow_network: bool = True) -> dict[str, Any]:
+def _low_power() -> bool:
+    return os.environ.get("QT_LOW_POWER", "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _global_macro_cues(
+    *,
+    allow_network: bool = True,
+    skip_commodity_names: set[str] | None = None,
+) -> dict[str, Any]:
     """US / Asia / Europe / commodities — soft-fail each ticker."""
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
     cues: list[dict[str, Any]] = []
     gaps: list[str] = []
-    # Prefer product us_retail when it has chg_pct
+    skip_cmds = {n.lower() for n in (skip_commodity_names or set())}
+
+    # Prefer product us_retail (name/label + chg_pct after us_live_prices fix)
     try:
         from product import us_retail
 
         ov = us_retail.overview() or {}
         for item in ov.get("indices") or []:
-            if item.get("name") and item.get("chg_pct") is not None:
+            name = item.get("name") or item.get("label")
+            chg = item.get("chg_pct")
+            if name and chg is not None:
                 cues.append(
                     {
-                        "name": item.get("name"),
+                        "name": str(name).replace("NASDAQ", "Nasdaq").replace("Dow 30", "Dow"),
                         "price": item.get("price"),
-                        "chg_pct": item.get("chg_pct"),
+                        "chg_pct": chg,
                         "source": "us_retail",
                     }
                 )
     except Exception:
         pass
 
-    tickers = (
+    tickers = [
         ("S&P 500", "^GSPC"),
         ("Nasdaq", "^IXIC"),
         ("Dow", "^DJI"),
@@ -125,34 +139,46 @@ def _global_macro_cues(*, allow_network: bool = True) -> dict[str, Any]:
         ("Kospi", "^KS11"),
         ("Gold", "GC=F"),
         ("Brent crude", "BZ=F"),
-        ("WTI crude", "CL=F"),
         ("India VIX", "^INDIAVIX"),
-    )
+    ]
+    if not _low_power():
+        tickers.append(("WTI crude", "CL=F"))
+
     have = {str(c.get("name") or "").lower() for c in cues}
     if allow_network:
-        try:
-            import yfinance as yf
+        def _one(name: str, tk: str) -> dict[str, Any] | None:
+            try:
+                import yfinance as yf
 
-            for name, tk in tickers:
-                if name.lower() in have:
-                    continue
+                fi = yf.Ticker(tk).fast_info
+                last = float(getattr(fi, "last_price", 0) or 0)
+                prev = float(getattr(fi, "previous_close", 0) or 0)
+                if last > 0 and prev > 0:
+                    return {
+                        "name": name,
+                        "price": round(last, 2),
+                        "chg_pct": round((last - prev) / prev * 100.0, 2),
+                        "source": "yfinance",
+                    }
+            except Exception:
+                return None
+            return None
+
+        pending = [(n, t) for n, t in tickers if n.lower() not in have]
+        workers = 3 if _low_power() else 6
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            futs = {pool.submit(_one, n, t): n for n, t in pending}
+            for fut in as_completed(futs):
+                name = futs[fut]
                 try:
-                    fi = yf.Ticker(tk).fast_info
-                    last = float(getattr(fi, "last_price", 0) or 0)
-                    prev = float(getattr(fi, "previous_close", 0) or 0)
-                    if last > 0 and prev > 0:
-                        cues.append(
-                            {
-                                "name": name,
-                                "price": round(last, 2),
-                                "chg_pct": round((last - prev) / prev * 100.0, 2),
-                                "source": "yfinance",
-                            }
-                        )
+                    row = fut.result()
                 except Exception:
                     gaps.append(f"{name} unavailable")
-        except Exception as exc:
-            gaps.append(f"yfinance unavailable ({exc})")
+                    continue
+                if row:
+                    cues.append(row)
+                else:
+                    gaps.append(f"{name} unavailable")
     else:
         gaps.append("Network disabled for global prints")
 
@@ -183,11 +209,34 @@ def _global_macro_cues(*, allow_network: bool = True) -> dict[str, Any]:
     except Exception:
         pass
 
+    # Day-story global / macro lines (curator-backed, no invented prices)
+    day_lines: list[str] = []
+    try:
+        from news.day_story_engine import build_day_stories
+
+        payload = build_day_stories(limit=8) or {}
+        stories = list(payload.get("stories") or []) if isinstance(payload, Mapping) else []
+        for st in stories:
+            if not isinstance(st, Mapping):
+                continue
+            cat = str(st.get("category") or "")
+            et = str(st.get("event_type") or "")
+            line = str(st.get("wrap_line") or st.get("headline") or "")
+            if line and (cat in {"global", "economy"} or et in {"macro", "global"}):
+                day_lines.append(line[:160])
+    except Exception:
+        pass
+
     bullets: list[str] = []
     us = [c for c in cues if c["name"] in {"S&P 500", "Nasdaq", "Dow"}]
     asia = [c for c in cues if c["name"] in {"Nikkei", "Hang Seng", "Kospi"}]
     europe = [c for c in cues if c["name"] in {"FTSE 100", "DAX"}]
-    cmds = [c for c in cues if c["name"] in {"Gold", "Brent crude", "WTI crude"}]
+    cmds = [
+        c
+        for c in cues
+        if c["name"] in {"Gold", "Brent crude", "WTI crude"}
+        and c["name"].lower() not in skip_cmds
+    ]
 
     def _band(rows: list[dict[str, Any]], label: str) -> None:
         if not rows:
@@ -209,20 +258,34 @@ def _global_macro_cues(*, allow_network: bool = True) -> dict[str, Any]:
         bullets.append(
             f"{c['name']} {float(c['chg_pct']):+.1f}% at {unit}{float(c['price']):,.2f}."
         )
-    for theme in themes[:3]:
+    for theme in themes[:2]:
         bullets.append(f"Macro theme on the tape: {theme}.")
+    for line in day_lines[:2]:
+        bullets.append(f"Day story: {line}")
 
-    # FII/DII as India-specific macro
+    # FII/DII with ₹ Cr when SQLite has today
     try:
         from data.institutional_flows import humanize_flow_bias
-        from data.fii_dii_store import workspace_payload
+        from data.fii_dii_store import summarize
 
-        flows = workspace_payload(days=10, allow_network=False, include_nifty_options=False)
-        cash = flows.get("cash") if isinstance(flows.get("cash"), Mapping) else {}
-        bias = str(cash.get("bias") or flows.get("bias") or "")
-        if bias:
-            plain = humanize_flow_bias(bias)
-            bullets.append(f"India FII/DII: {plain['bias_label']} — {plain['bias_note']}")
+        summary = summarize(days=10, auto_refresh=False)
+        if summary.get("available"):
+            today = summary.get("today") or {}
+            plain = humanize_flow_bias(str(summary.get("bias") or ""))
+            fii = today.get("fii_net")
+            dii = today.get("dii_net")
+            as_of = summary.get("latest_date") or ""
+            if fii is not None and dii is not None:
+                bullets.append(
+                    f"India FII/DII ({as_of}): FII ₹{float(fii):+.0f} Cr · DII ₹{float(dii):+.0f} Cr "
+                    f"— {plain.get('bias_label') or summary.get('bias')}"
+                )
+            elif summary.get("bias"):
+                bullets.append(
+                    f"India FII/DII: {plain.get('bias_label')} — {plain.get('bias_note')}"
+                )
+        else:
+            gaps.append("FII/DII store empty")
     except Exception:
         gaps.append("FII/DII unavailable")
 
@@ -252,8 +315,55 @@ def _index_zone(spot: float | None, support: float | None, resistance: float | N
     return f"{lo_r} to {hi_r}"
 
 
-def _options_levels_block() -> dict[str, Any]:
-    """Nifty / Bank Nifty / Sensex options zones from real chain + quotes."""
+def _side_aware_walls(
+    spot: float | None,
+    top_calls: list[Mapping[str, Any]],
+    top_puts: list[Mapping[str, Any]],
+) -> tuple[float | None, float | None]:
+    """Nearest heavy PE below spot (support) / CE above spot (resistance)."""
+    if spot is None or spot <= 0:
+        return None, None
+    call_above: list[tuple[float, float]] = []
+    for row in top_calls or []:
+        strike = _f(row.get("strike"))
+        oi = _f(row.get("ce_oi")) or 0.0
+        if strike is not None and strike > spot and oi > 0:
+            call_above.append((strike, oi))
+    put_below: list[tuple[float, float]] = []
+    for row in top_puts or []:
+        strike = _f(row.get("strike"))
+        oi = _f(row.get("pe_oi")) or 0.0
+        if strike is not None and strike < spot and oi > 0:
+            put_below.append((strike, oi))
+    call_above.sort(key=lambda x: x[0])
+    put_below.sort(key=lambda x: -x[0])
+    support = put_below[0][0] if put_below else None
+    resistance = call_above[0][0] if call_above else None
+    return support, resistance
+
+
+def _sensex_session_band(spot: float | None, *, allow_network: bool) -> tuple[float | None, float | None, str]:
+    """Recent session high/low for Sensex — never invent OI walls."""
+    if not spot:
+        return None, None, "no spot"
+    if allow_network:
+        try:
+            import yfinance as yf
+
+            hist = yf.Ticker("^BSESN").history(period="5d")
+            if hist is not None and not hist.empty and "High" in hist.columns:
+                hi = float(hist["High"].max())
+                lo = float(hist["Low"].min())
+                if hi > 0 and lo > 0:
+                    return lo, hi, "yahoo_5d_high_low"
+        except Exception:
+            pass
+    # Honest quote band — labeled, not sold as OI
+    return spot * 0.99, spot * 1.01, "quote_band_1pct"
+
+
+def _options_levels_block(*, allow_network: bool = True) -> dict[str, Any]:
+    """Nifty / Bank Nifty / Sensex key levels from real chain + quotes."""
     gaps: list[str] = []
     levels: list[dict[str, Any]] = []
     bullets: list[str] = []
@@ -276,33 +386,29 @@ def _options_levels_block() -> dict[str, Any]:
                 return {"available": False, "symbol": symbol, "message": chain.get("message")}
             attached = attach_positioning_read(chain)
             spot = _f(attached.get("spot")) or _f((quotes.get(symbol) or {}).get("price"))
-            # OI walls
-            support = resistance = None
-            try:
-                import pandas as pd
-                from options.analytics import get_oi_buildup
+            top_pe = list(attached.get("top_put_oi") or chain.get("top_put_oi") or [])
+            top_ce = list(attached.get("top_call_oi") or chain.get("top_call_oi") or [])
+            support, resistance = _side_aware_walls(spot, top_ce, top_pe)
+            # Optional analytics backup only when side-aware empty
+            if (support is None or resistance is None) and spot:
+                try:
+                    import pandas as pd
+                    from options.analytics import get_oi_buildup
 
-                rows = attached.get("chain") or chain.get("chain") or []
-                if rows and spot:
-                    df = pd.DataFrame(rows)
-                    walls = get_oi_buildup(df, float(spot)) if not df.empty else {}
-                    pe = walls.get("support_levels") or []
-                    ce = walls.get("resistance_levels") or []
-                    if pe:
-                        support = _f(pe[0].get("strike"))
-                    if ce:
-                        resistance = _f(ce[0].get("strike"))
-            except Exception:
-                pass
-            # Fallback walls from top put/call OI lists
-            if support is None:
-                top_pe = attached.get("top_put_oi") or chain.get("top_put_oi") or []
-                if top_pe:
-                    support = _f(top_pe[0].get("strike"))
-            if resistance is None:
-                top_ce = attached.get("top_call_oi") or chain.get("top_call_oi") or []
-                if top_ce:
-                    resistance = _f(top_ce[0].get("strike"))
+                    rows = attached.get("chain") or chain.get("chain") or []
+                    if rows:
+                        df = pd.DataFrame(rows)
+                        walls = get_oi_buildup(df, float(spot)) if not df.empty else {}
+                        if support is None:
+                            pe = walls.get("support_levels") or []
+                            if pe:
+                                support = _f(pe[0].get("strike"))
+                        if resistance is None:
+                            ce = walls.get("resistance_levels") or []
+                            if ce:
+                                resistance = _f(ce[0].get("strike"))
+                except Exception:
+                    pass
 
             zone = _index_zone(spot, support, resistance)
             read = attached.get("positioning_read") or {}
@@ -318,6 +424,7 @@ def _options_levels_block() -> dict[str, Any]:
                 "support": support,
                 "resistance": resistance,
                 "zone": zone,
+                "wall_method": "side_aware_oi",
                 "note": attached.get("note") or read.get("headline") or "",
             }
         except Exception as exc:
@@ -329,6 +436,10 @@ def _options_levels_block() -> dict[str, Any]:
         if block.get("available") and block.get("zone"):
             bullets.append(f"{label} {block['zone']} zones")
             extras = []
+            if block.get("support") is not None:
+                extras.append(f"put wall {float(block['support']):,.0f}")
+            if block.get("resistance") is not None:
+                extras.append(f"call wall {float(block['resistance']):,.0f}")
             if block.get("pcr") is not None:
                 extras.append(f"PCR {float(block['pcr']):.2f}")
             if block.get("max_pain"):
@@ -340,23 +451,43 @@ def _options_levels_block() -> dict[str, Any]:
         else:
             gaps.append(f"{label} options chain incomplete")
 
-    # Sensex — quote zone only (no NSE FO chain in this stack)
+    # Sensex — session high/low when possible; never pretend BSE FO chain exists
     sx = quotes.get("SENSEX") or {}
     sx_spot = _f(sx.get("price"))
+    if sx_spot is None and allow_network:
+        try:
+            import yfinance as yf
+
+            fi = yf.Ticker("^BSESN").fast_info
+            last = float(getattr(fi, "last_price", 0) or 0)
+            if last > 0:
+                sx_spot = last
+                sx = {"price": last, "chg_pct": None, "source": "yfinance"}
+        except Exception:
+            pass
     if sx_spot:
-        zone = _index_zone(sx_spot, sx_spot * 0.99, sx_spot * 1.01)
+        lo, hi, method = _sensex_session_band(sx_spot, allow_network=allow_network)
+        zone = _index_zone(sx_spot, lo, hi)
         levels.append(
             {
                 "available": True,
                 "symbol": "SENSEX",
                 "spot": sx_spot,
                 "zone": zone,
+                "support": lo,
+                "resistance": hi,
                 "chg_pct": sx.get("chg_pct"),
-                "note": "Sensex zone from live/index quote band — options chain not attached.",
+                "wall_method": method,
+                "note": (
+                    "Sensex session high/low band — not an options OI wall."
+                    if method == "yahoo_5d_high_low"
+                    else "Sensex quote band (±1%) — options chain not attached."
+                ),
             }
         )
         if zone:
-            bullets.append(f"Sensex {zone} zones")
+            label = "session band" if method == "yahoo_5d_high_low" else "quote band"
+            bullets.append(f"Sensex {zone} ({label})")
     else:
         gaps.append("Sensex quote unavailable")
 
@@ -365,8 +496,8 @@ def _options_levels_block() -> dict[str, Any]:
         bullets.append(f"India VIX at {float(vix['price']):.2f}.")
 
     headline = (
-        " · ".join(b for b in bullets if "zones" in b)[:160]
-        if any("zones" in b for b in bullets)
+        " · ".join(b for b in bullets if "zones" in b or "band" in b)[:160]
+        if any(("zones" in b or "band" in b) for b in bullets)
         else "Options / key levels incomplete"
     )
     return {
@@ -379,6 +510,15 @@ def _options_levels_block() -> dict[str, Any]:
         "levels": levels,
         "gaps": gaps,
     }
+
+
+_FUND_CLASS_OK = {
+    "QUALITY_COMPOUNDER",
+    "GARP_CANDIDATE",
+    "QUALITY_BUT_EXPENSIVE",
+    "LONG_TERM_WATCH",
+    "NEEDS_FUNDAMENTALS",
+}
 
 
 def _fundamental_picks(limit: int = 5) -> dict[str, Any]:
@@ -395,26 +535,42 @@ def _fundamental_picks(limit: int = 5) -> dict[str, Any]:
             "message": f"Long-term store unavailable ({exc})",
         }
     records = [r for r in (payload.get("records") or []) if isinstance(r, Mapping)]
+    as_of = (
+        payload.get("scanned_at")
+        or payload.get("generated_at")
+        or payload.get("as_of")
+        or ""
+    )
     if not records:
         return {
             "available": False,
             "horizon": "LONG_TERM",
             "rows": [],
             "message": "No long-term picks yet — run Long-Term scan / autonomy weekly pass.",
-            "as_of": payload.get("generated_at") or payload.get("as_of") or "",
+            "as_of": as_of,
         }
 
-    ranked = sorted(
-        records,
-        key=lambda r: float(r.get("score") or r.get("long_term_score") or 0),
-        reverse=True,
-    )
+    def _rank_key(r: Mapping[str, Any]) -> float:
+        for key in ("combined_score", "score", "long_term_score", "technical_score"):
+            val = _f(r.get(key))
+            if val is not None:
+                return val
+        return 0.0
+
+    ranked = sorted(records, key=_rank_key, reverse=True)
     rows: list[dict[str, Any]] = []
     for rec in ranked:
         verdict = str(rec.get("verdict") or rec.get("status") or "").upper()
-        if "SKIP" in verdict or "AVOID" in verdict:
+        classification = str(rec.get("classification") or "").upper()
+        if "SKIP" in verdict or classification == "AVOID_REVIEW":
             continue
-        if verdict and verdict not in {"LONG_TERM_BUY", "BUY", "WATCH", "LONG_TERM", ""}:
+        if classification and classification not in _FUND_CLASS_OK:
+            # Still allow classic LONG_TERM_BUY / WATCH when classification absent
+            if verdict not in {"LONG_TERM_BUY", "BUY", "WATCH", "LONG_TERM", ""}:
+                continue
+        elif not classification and verdict and verdict not in {
+            "LONG_TERM_BUY", "BUY", "WATCH", "LONG_TERM", ""
+        }:
             continue
         price = _f(rec.get("price") or rec.get("last_price"))
         # Long-term scan: from_high_pct = % below 52w high (positive when below).
@@ -425,14 +581,20 @@ def _fundamental_picks(limit: int = 5) -> dict[str, Any]:
             target_watch = round(price / (1.0 - from_high / 100.0), 2)  # prior high
             upside = round((target_watch / price - 1.0) * 100.0, 1)
         thesis = str(rec.get("thesis") or rec.get("why") or "")
+        if not thesis and rec.get("quality_factors"):
+            thesis = "; ".join(str(f) for f in list(rec.get("quality_factors") or [])[:3])
         if not thesis and rec.get("factors"):
             thesis = "; ".join(str(f) for f in list(rec.get("factors") or [])[:3])
         rows.append(
             {
                 "symbol": str(rec.get("symbol") or "").upper(),
                 "price": price,
-                "score": _f(rec.get("score") or rec.get("long_term_score")),
+                "score": _rank_key(rec),
+                "combined_score": _f(rec.get("combined_score")),
+                "technical_score": _f(rec.get("technical_score") or rec.get("score")),
+                "fundamental_score": _f(rec.get("fundamental_score")),
                 "verdict": verdict or "LONG_TERM",
+                "classification": classification or None,
                 "thesis": thesis[:200],
                 "target_watch": target_watch,
                 "upside_to_prior_high_pct": upside,
@@ -454,12 +616,12 @@ def _fundamental_picks(limit: int = 5) -> dict[str, Any]:
         "title": "Fundamental / Long-Term Picks",
         "subtitle": "For more than a year · QuantTerm long-term store · research only",
         "rows": rows,
-        "as_of": payload.get("generated_at") or payload.get("as_of") or "",
+        "as_of": as_of,
         "message": "" if rows else "Long-term shortlist empty",
         "places_orders": False,
         "honesty": (
             "Targets shown as prior-high watch levels from official history when available — "
-            "not sell-side broker target prices."
+            "not sell-side broker target prices. Ranked by combined_score when present."
         ),
     }
 
@@ -500,6 +662,9 @@ def _technical_picks(limit: int = 5) -> dict[str, Any]:
             upside = round((target / price - 1.0) * 100.0, 1)
         elif entry and target and target > entry:
             upside = round((target / entry - 1.0) * 100.0, 1)
+        why = str(rec.get("why") or "")
+        if not why and rec.get("reasons"):
+            why = str((rec.get("reasons") or ["setup"])[0])
         rows.append(
             {
                 "symbol": str(rec.get("symbol") or "").upper(),
@@ -510,8 +675,9 @@ def _technical_picks(limit: int = 5) -> dict[str, Any]:
                 "stop": stop,
                 "target": target,
                 "upside_pct": upside,
+                "edge_r": _f(rec.get("edge_r")),
                 "score": _f(rec.get("score")),
-                "why": str(rec.get("why") or (rec.get("reasons") or ["setup"])[0])[:160],
+                "why": why[:160],
                 "signals": list(rec.get("signals") or [])[:6],
                 "horizon": "SHORT_TERM",
             }
@@ -519,13 +685,19 @@ def _technical_picks(limit: int = 5) -> dict[str, Any]:
         if len(rows) >= limit:
             break
 
+    as_of = (
+        (payload or {}).get("scanned_at")
+        or (payload or {}).get("generated_at")
+        or (payload or {}).get("as_of")
+        or ""
+    )
     return {
         "available": bool(rows),
         "horizon": "SHORT_TERM",
         "title": "Technical Picks",
         "subtitle": "Short-term research from last whole-market scan · entry/stop/target when present",
         "rows": rows,
-        "as_of": (payload or {}).get("generated_at") or (payload or {}).get("as_of") or "",
+        "as_of": as_of,
         "scan_source": (payload or {}).get("source") or "",
         "message": "" if rows else "No scanner setups yet — run Scan now.",
         "places_orders": False,
@@ -556,26 +728,47 @@ def build_market_decision_brief(
             "headline": "",
             "bullets": [],
             "gaps": [str(exc)],
+            "gift_hard": False,
         }
+    gift_hard = bool(premarket.get("gift_hard"))
+    gift_title = (
+        "GIFT Nifty (Gift City Cues)"
+        if gift_hard
+        else "Premarket / Overnight Risk (Gift print incomplete)"
+    )
     decider_gift = {
         "available": bool(premarket.get("available")),
         "key": "gift_premarket",
-        "title": "GIFT Nifty (Gift City Cues)",
+        "title": gift_title,
         "icon": "gift",
+        "gift_hard": gift_hard,
         "headline": premarket.get("headline") or "Gift / premarket cues incomplete",
         "bullets": list(premarket.get("bullets") or [])[:6],
         "gift_nifty": premarket.get("gift_nifty"),
         "us_futures": premarket.get("us_futures") or [],
+        "source": premarket.get("source") or "",
+        "stale": bool(premarket.get("stale")),
         "gaps": list(premarket.get("gaps") or []),
     }
     gaps.extend(decider_gift["gaps"][:2])
 
+    # Commodities already printed under premarket → skip duplicate bullets in macro
+    skip_cmds: set[str] = set()
+    for b in decider_gift["bullets"]:
+        low = str(b).lower()
+        if "brent" in low:
+            skip_cmds.add("brent crude")
+        if "wti" in low:
+            skip_cmds.add("wti crude")
+        if "gold" in low and "gift" not in low:
+            skip_cmds.add("gold")
+
     # 2) Macro / global
-    macro = _global_macro_cues(allow_network=allow_network)
+    macro = _global_macro_cues(allow_network=allow_network, skip_commodity_names=skip_cmds)
     gaps.extend(list(macro.get("gaps") or [])[:2])
 
-    # 3) Options levels (local/cached chains — no scrape required)
-    options = _options_levels_block()
+    # 3) Options levels — prefer cached chains; Sensex may use Yahoo session band
+    options = _options_levels_block(allow_network=allow_network)
     gaps.extend(list(options.get("gaps") or [])[:2])
 
     fund = _fundamental_picks(limit=5)
@@ -589,11 +782,12 @@ def build_market_decision_brief(
     available = any(d.get("available") for d in deciders) or fund.get("available") or tech.get("available")
 
     why_better = [
-        "Every print traces to a QuantTerm store — Gift/premarket, Yahoo globals, options OI, long-term + scan picks.",
-        "Fundamental 'targets' are prior-high watches from official history — not invented broker TP numbers.",
-        "Technical picks ship real entry / stop / target from the last whole-market scan when present.",
-        "Missing Gift Nifty, chain walls, or scans stay missing — never padded to look like a sell-side note.",
-        "Research brief only · paper-first · never places LIVE orders.",
+        "Gift Nifty: Moneycontrol → ET/Mint/BS/CNBC RSS → Google News consensus (median pts/%) — never cash-Nifty labeled as Gift.",
+        "Macro prints parallel-fetch Yahoo + FII ₹ Cr from SQLite + day-story global lines.",
+        "Options zones use side-aware put-below / call-above OI walls; Sensex is session/quote band, not fake FO.",
+        "Fundamental watches = prior-high from official history · ranked by combined_score — not broker TPs.",
+        "Technical picks ship real entry / stop / target from the last whole-market scan.",
+        "Missing stays missing. Research only · paper-first · never places LIVE orders.",
     ]
 
     brief = {

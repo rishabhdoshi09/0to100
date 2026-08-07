@@ -128,9 +128,11 @@ def sp500_return_30d() -> float:
 
 
 def us_live_prices(symbols: list[str]) -> dict[str, dict]:
-    """{symbol: {price}} via yfinance fast_info. Near-real-time for
-    indices, can be delayed for individual stocks (free-feed limit).
-    Missing symbol simply absent — never a fake zero."""
+    """{symbol: {price, previous_close?, chg_pct?}} via yfinance fast_info.
+
+    Near-real-time for indices; can be delayed for individual stocks (free-feed limit).
+    Missing symbol simply absent — never a fake zero.
+    """
     out: dict[str, dict] = {}
     if not symbols:
         return out
@@ -140,8 +142,14 @@ def us_live_prices(symbols: list[str]) -> dict[str, dict]:
             try:
                 fi = yf.Ticker(sym).fast_info
                 px = float(getattr(fi, "last_price", 0) or 0)
-                if px > 0:
-                    out[sym] = {"price": px}
+                if px <= 0:
+                    continue
+                row: dict = {"price": px}
+                prev = float(getattr(fi, "previous_close", 0) or 0)
+                if prev > 0:
+                    row["previous_close"] = prev
+                    row["chg_pct"] = round((px - prev) / prev * 100.0, 2)
+                out[sym] = row
             except Exception:
                 continue
     except Exception:

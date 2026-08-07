@@ -109,10 +109,14 @@ def overview() -> dict[str, Any]:
     labels = {"^GSPC": "S&P 500", "^IXIC": "NASDAQ", "^DJI": "Dow 30", "^VIX": "VIX"}
     for sym in index_symbols:
         q = quotes.get(sym) or {}
+        name = labels.get(sym, sym)
         indices.append({
             "symbol": sym,
-            "label": labels.get(sym, sym),
+            "name": name,  # Market Decision Brief / pulse consumers
+            "label": name,
             "price": q.get("price"),
+            "previous_close": q.get("previous_close"),
+            "chg_pct": q.get("chg_pct"),
             "available": bool(q.get("price")),
         })
     scan = load_us_scan() or {}

@@ -266,6 +266,9 @@ export type MarketDecisionDecider = {
   headline?: string
   bullets?: string[]
   gaps?: string[]
+  gift_hard?: boolean
+  source?: string
+  stale?: boolean
   levels?: Array<{
     symbol?: string
     spot?: number | null
@@ -275,9 +278,17 @@ export type MarketDecisionDecider = {
     stance?: string
     bias?: string
     note?: string
+    wall_method?: string
   }>
   cues?: Array<{ name?: string; price?: number | null; chg_pct?: number | null }>
-  gift_nifty?: { level?: number | null; chg_pct?: number | null; snippet?: string }
+  gift_nifty?: {
+    level?: number | null
+    chg_pct?: number | null
+    chg_points?: number | null
+    snippet?: string
+    evidence_count?: number
+    source?: string
+  }
 }
 
 export type MarketDecisionPick = {

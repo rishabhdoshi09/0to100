@@ -373,6 +373,8 @@ export function StreetPulseView({ setSelected, setActive, onOpenPdf }: Props) {
                         {idx + 1}. {decider.title || 'Decider'}
                       </strong>
                       <StatusBadge status={decider.available ? 'READY' : 'INCOMPLETE'} />
+                      {decider.gift_hard ? <StatusBadge status="GIFT_HARD" /> : null}
+                      {decider.stale ? <StatusBadge status="STALE_CACHE" /> : null}
                     </div>
                     {decider.headline ? <p className="panel-copy">{decider.headline}</p> : null}
                     {(decider.bullets || []).length > 0 ? (

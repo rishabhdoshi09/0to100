@@ -26,6 +26,89 @@ def test_parse_gift_nifty_snippet_without_pct():
     assert "Gift Nifty" in (gift.get("snippet") or "")
 
 
+def test_parse_gift_headline_points_lower():
+    gift = PM._parse_gift_headline(
+        "Gift Nifty Signals Negative Start Today, Trades 97 Points Lower",
+        source="rss:google_gift",
+    )
+    assert gift is not None
+    assert gift["chg_points"] == -97.0
+
+
+def test_parse_gift_headline_falls_pts():
+    gift = PM._parse_gift_headline(
+        "GIFT Nifty falls 100 pts, signals muted start for Sensex, Nifty",
+        source="rss:moneycontrol",
+    )
+    assert gift is not None
+    assert gift["chg_points"] == -100.0
+
+
+def test_consensus_gift_median_points():
+    cands = [
+        {"chg_points": -100.0, "source": "a", "headline": "falls 100"},
+        {"chg_points": -97.0, "source": "b", "headline": "97 lower"},
+        {"chg_points": -93.0, "source": "c", "headline": "down 93"},
+    ]
+    cons = PM._consensus_gift(cands, nifty_spot=24500.0)
+    assert cons is not None
+    assert cons["chg_points"] == -97.0
+    assert cons["chg_pct"] is not None
+    assert cons["evidence_count"] == 3
+    assert cons["source"] == "headline_consensus"
+
+
+def test_side_aware_walls_respect_spot():
+    support, resistance = MDB._side_aware_walls(
+        24500.0,
+        top_calls=[{"strike": 24800, "ce_oi": 1e6}, {"strike": 24000, "ce_oi": 9e6}],
+        top_puts=[{"strike": 24200, "pe_oi": 1e6}, {"strike": 25000, "pe_oi": 9e6}],
+    )
+    assert support == 24200.0
+    assert resistance == 24800.0
+
+
+def test_fundamental_picks_prefer_combined_score_and_classification(monkeypatch):
+    monkeypatch.setattr(
+        "product.long_term_store.load_long_term_scan",
+        lambda: {
+            "schema_version": 1,
+            "scanned_at": "2026-08-07T00:00:00Z",
+            "records": [
+                {
+                    "symbol": "SKIPME",
+                    "verdict": "LONG_TERM_BUY",
+                    "classification": "AVOID_REVIEW",
+                    "combined_score": 99,
+                    "price": 10,
+                },
+                {
+                    "symbol": "ETERNAL",
+                    "verdict": "LONG_TERM_BUY",
+                    "classification": "QUALITY_COMPOUNDER",
+                    "combined_score": 80,
+                    "price": 315,
+                    "from_high_pct": 21.0,
+                    "thesis": "compounder",
+                },
+                {
+                    "symbol": "LOW",
+                    "verdict": "WATCH",
+                    "classification": "LONG_TERM_WATCH",
+                    "combined_score": 40,
+                    "price": 100,
+                    "from_high_pct": 10.0,
+                },
+            ],
+        },
+    )
+    fund = MDB._fundamental_picks(limit=5)
+    assert fund["available"] is True
+    assert fund["as_of"] == "2026-08-07T00:00:00Z"
+    assert [r["symbol"] for r in fund["rows"]] == ["ETERNAL", "LOW"]
+    assert fund["rows"][0]["target_watch"] is not None
+
+
 def test_build_brief_offline_composes_picks(tmp_path, monkeypatch):
     monkeypatch.setenv("QT_MARKET_BRIEF_FILE", str(tmp_path / "brief.json"))
     monkeypatch.setattr(
@@ -42,7 +125,7 @@ def test_build_brief_offline_composes_picks(tmp_path, monkeypatch):
     monkeypatch.setattr(
         MDB,
         "_global_macro_cues",
-        lambda allow_network=True: {
+        lambda allow_network=True, skip_commodity_names=None: {
             "available": True,
             "key": "macro_global",
             "title": "Macro / Global Cues",
@@ -57,7 +140,7 @@ def test_build_brief_offline_composes_picks(tmp_path, monkeypatch):
     monkeypatch.setattr(
         MDB,
         "_options_levels_block",
-        lambda: {
+        lambda allow_network=True: {
             "available": True,
             "key": "options_levels",
             "title": "Options Data & Key Levels",

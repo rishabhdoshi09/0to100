@@ -93,6 +93,7 @@ _DISCOVERY_QUERIES: tuple[tuple[str, str, str], ...] = (
     ("google_orders", "India company order book defence contract win crore", "company"),
     ("google_pharma", "India pharma earnings USFDA hospital stock", "company"),
     ("google_global", "US stock futures Dow S&P Nasdaq Fed earnings India", "global"),
+    ("google_gift_nifty", "Gift Nifty OR GIFT Nifty India pre-market open today", "global"),
 )
 
 
