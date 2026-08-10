@@ -44,12 +44,15 @@ class SingleObserverLock:
 
     def acquire(self) -> bool:
         try:
-            import fcntl
+            from utils.process_lock import ProcessFileLock
 
-            self._handle = self.path.open("w", encoding="utf-8")
-            fcntl.flock(self._handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            self._handle.write(str(os.getpid()))
-            self._handle.flush()
+            lock = ProcessFileLock(self.path)
+            if not lock.acquire():
+                self._handle = None
+                self._owned = False
+                return False
+            self._process_lock = lock
+            self._handle = lock._handle
             self._owned = True
             return True
         except Exception:
@@ -62,17 +65,17 @@ class SingleObserverLock:
             return False
 
     def release(self) -> None:
-        owned = bool(self._owned and self._handle is not None)
         try:
-            if owned:
-                import fcntl
-
-                fcntl.flock(self._handle, fcntl.LOCK_UN)
+            lock = getattr(self, "_process_lock", None)
+            if lock is not None and self._owned:
+                lock.release()
+            elif self._owned and self._handle is not None:
                 self._handle.close()
                 self.path.unlink(missing_ok=True)
         except Exception:
             pass
         finally:
+            self._process_lock = None
             self._handle = None
             self._owned = False
 

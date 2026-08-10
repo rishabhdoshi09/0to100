@@ -2,12 +2,42 @@
 
 ## Recommended local start
 
+### macOS / Linux
 ```bash
 cd ~/0to100
 source venv/bin/activate
-chmod +x scripts/run_quantterm.sh
 bash scripts/run_quantterm.sh
+# low-power laptop:
+bash scripts/run_quantterm_low_power.sh
 ```
+
+### Windows (PowerShell)
+```powershell
+cd C:\path\to\0to100
+.\scripts\setup_windows.ps1          # first time only
+.\scripts\run_quantterm.ps1
+# low-power PC:
+.\scripts\run_quantterm_low_power.ps1
+# stop ports 8765 / 8766 / 5173:
+.\scripts\stop_quantterm.ps1
+```
+
+Cmd / double-click: `scripts\run_quantterm.bat` · `scripts\stop_quantterm.bat`
+
+Cross-platform engine (any OS):
+```text
+python scripts/quantterm_stack.py setup
+python scripts/quantterm_stack.py run
+python scripts/quantterm_stack.py run --low-power
+python scripts/quantterm_stack.py run --complete
+python scripts/quantterm_stack.py stop
+```
+
+Windows notes:
+- Install **Python 3.11+** (check “Add python.exe to PATH”) and **Node.js LTS**.
+- If PowerShell blocks scripts: `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`
+- Paths use `venv\Scripts\python.exe` (not `venv/bin`).
+- Process locks and idle detection are Windows-native (`msvcrt` / `GetLastInputInfo`).
 
 The stack launcher starts or reuses the single autonomy supervisor, starts the local FastAPI bridge on
 `127.0.0.1:8765`, and starts the dedicated React terminal on `127.0.0.1:5173`.

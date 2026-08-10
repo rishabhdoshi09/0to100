@@ -25,6 +25,24 @@ DEFAULT_COOLDOWN_S = 6 * 60 * 60
 
 def _idle_seconds() -> float | None:
     """Best-effort OS idle seconds. None if undetectable (headless / no GUI)."""
+    # Windows: GetLastInputInfo
+    if os.name == "nt":
+        try:
+            import ctypes
+            from ctypes import wintypes
+
+            class LASTINPUTINFO(ctypes.Structure):
+                _fields_ = [("cbSize", wintypes.UINT), ("dwTime", wintypes.DWORD)]
+
+            info = LASTINPUTINFO()
+            info.cbSize = ctypes.sizeof(info)
+            if ctypes.windll.user32.GetLastInputInfo(ctypes.byref(info)):
+                tick = ctypes.windll.kernel32.GetTickCount()
+                idle_ms = int(tick) - int(info.dwTime)
+                if idle_ms >= 0:
+                    return idle_ms / 1000.0
+        except Exception:
+            pass
     # Linux: xprintidle (ms)
     try:
         import subprocess
@@ -73,20 +91,13 @@ def _write_state(payload: dict) -> None:
 
 
 def _acquire_lock() -> bool:
-    LOCK.parent.mkdir(parents=True, exist_ok=True)
     try:
-        import fcntl
+        from utils.process_lock import ProcessFileLock
 
-        handle = LOCK.open("w")
-        try:
-            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except OSError:
-            handle.close()
+        lock = ProcessFileLock(LOCK)
+        if not lock.acquire():
             return False
-        handle.write(str(os.getpid()))
-        handle.flush()
-        # Keep handle alive for process lifetime
-        globals()["_lock_handle"] = handle
+        globals()["_lock_handle"] = lock
         return True
     except Exception:
         return False
@@ -134,7 +145,7 @@ def maybe_trigger(*, idle_seconds: float, cooldown_s: float, force: bool = False
     if force:
         reason = "manual --now"
     elif idle is None:
-        return {"triggered": False, "reason": "idle time undetectable on this host (install xprintidle or run on laptop GUI)"}
+        return {"triggered": False, "reason": "idle time undetectable on this host (Windows GetLastInputInfo / xprintidle / macOS ioreg — or set QT_FAKE_IDLE_SECONDS)"}
     elif idle < idle_seconds:
         return {"triggered": False, "reason": f"idle {idle:.0f}s < threshold {idle_seconds:.0f}s", "idle_s": idle}
     else:

@@ -95,28 +95,27 @@ class SingleWorkerLock:
 
     def acquire(self) -> bool:
         try:
-            import fcntl
             self.reclaim_if_dead()
-            self._handle = self.path.open("w")
-            try:
-                fcntl.flock(self._handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            except OSError:
-                self._handle.close()
-                self._handle = None
+            from utils.process_lock import ProcessFileLock
+
+            lock = ProcessFileLock(self.path)
+            if not lock.acquire():
                 return False
-            self._handle.seek(0)
-            self._handle.truncate()
-            self._handle.write(str(os.getpid()))
-            self._handle.flush()
+            self._handle = lock._handle
+            self._process_lock = lock
             return True
         except Exception:
             return False
 
     def release(self) -> None:
         try:
+            lock = getattr(self, "_process_lock", None)
+            if lock is not None:
+                lock.release()
+                self._process_lock = None
+                self._handle = None
+                return
             if self._handle is not None:
-                import fcntl
-                fcntl.flock(self._handle, fcntl.LOCK_UN)
                 self._handle.close()
             self.path.unlink(missing_ok=True)
         except Exception:

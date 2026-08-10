@@ -22,37 +22,19 @@ class SingleInstanceLock:
     def __init__(self, path):
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self._fh = None
+        from utils.process_lock import ProcessFileLock
+
+        self._lock = ProcessFileLock(self.path)
+        self._fh = None  # compat for older diagnostics
 
     def acquire(self) -> bool:
-        try:
-            import fcntl
-            self._fh = open(self.path, "w")
-            try:
-                fcntl.flock(self._fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            except OSError:
-                self._fh.close(); self._fh = None
-                return False
-            self._fh.write(str(os.getpid())); self._fh.flush()
-            return True
-        except Exception:
-            try:
-                fd = os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-                os.write(fd, str(os.getpid()).encode()); os.close(fd)
-                return True
-            except FileExistsError:
-                return False
+        ok = self._lock.acquire()
+        self._fh = self._lock._handle
+        return ok
 
     def release(self) -> None:
-        try:
-            if self._fh is not None:
-                import fcntl
-                fcntl.flock(self._fh, fcntl.LOCK_UN)
-                self._fh.close()
-            if self.path.exists():
-                self.path.unlink()
-        except Exception:
-            pass
+        self._lock.release()
+        self._fh = None
 
 
 class Supervisor:
