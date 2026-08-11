@@ -52,6 +52,7 @@ def _record(signal: Any, names: Mapping[str, str], fno_symbols: set[str]) -> dic
         "signals": signals,
         "reasons": reasons,
         "why": reasons[0] if reasons else "No explanation recorded",
+        "sector": str(_value(signal, "sector", "") or ""),
         "edge_r": (
             float(_value(signal, "edge_r"))
             if _value(signal, "edge_r", None) is not None

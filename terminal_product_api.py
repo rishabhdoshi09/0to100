@@ -753,3 +753,45 @@ def fetch_stock_fundamentals(symbol: str, force: bool = False) -> dict[str, Any]
 def refresh_stock_fundamentals(symbol: str) -> dict[str, Any]:
     """Force-refresh alias for retry from the UI."""
     return fetch_stock_fundamentals(symbol, force=True)
+
+
+@app.get("/api/autopilot/status")
+def autopilot_status() -> dict[str, Any]:
+    """Scanner autopilot arm/mode/pool + today's funnel counts."""
+    try:
+        from execution.autopilot import get_status, reject_funnel
+
+        status = get_status()
+        funnel = reject_funnel()
+        return {
+            "available": True,
+            "armed": bool(status.get("armed")),
+            "mode": status.get("mode"),
+            "disarmed_reason": status.get("disarmed_reason") or "",
+            "allocation": status.get("allocation"),
+            "pool": status.get("pool"),
+            "trades_today": status.get("trades_today_count"),
+            "open_trades": len(status.get("open_trades") or []),
+            "funnel": funnel,
+            "activity": list(status.get("activity") or [])[:10],
+            "places_orders": False,
+            "live_enabled": status.get("live_enabled"),
+        }
+    except Exception as exc:
+        return {"available": False, "error": str(exc), "places_orders": False}
+
+
+@app.get("/api/autopilot/diagnose")
+def autopilot_diagnose() -> dict[str, Any]:
+    """Why autopilot is not taking trades — durable state only."""
+    try:
+        from execution.autopilot import diagnose_silence
+
+        return diagnose_silence()
+    except Exception as exc:
+        return {
+            "available": False,
+            "headline": f"Diagnose failed: {exc}",
+            "blockers": [str(exc)],
+            "places_orders": False,
+        }

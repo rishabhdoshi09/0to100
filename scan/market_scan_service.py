@@ -162,6 +162,9 @@ def run_whole_market_scan(
     payload["scan_status"] = SUCCEEDED
     if save:
         save_scan(payload)
+    # Feed scanner autopilot — same hook Streamlit auto_scan used to own alone.
+    # Without this, React/autonomy MARKET_SCAN never places paper/live entries.
+    _feed_autopilot_from_scan(payload)
     summary = dict(payload.get("summary", {}))
     n_setups = int(summary.get("with_any_setup", 0) or 0)
     status = SUCCEEDED if n_setups else NO_SETUPS
@@ -169,3 +172,35 @@ def run_whole_market_scan(
     return MarketScanReport(status=status, payload=payload, universe_size=len(symbols),
                             scanned=int(payload.get("universe_size", len(symbols)) or len(symbols)),
                             source_snapshot_id=sid)
+
+
+def _feed_autopilot_from_scan(payload: Mapping[str, Any]) -> None:
+    """Hand BUY/STRONG BUY rows to execution.autopilot (armed or no-op)."""
+    try:
+        from execution.autopilot import on_setups, review_cycle
+
+        records = [dict(r) for r in (payload.get("records") or []) if isinstance(r, Mapping)]
+        if records:
+            # Attach sector when missing so concentration / heat gates stay honest.
+            try:
+                from scan.sector_heat import sector_of
+
+                for row in records:
+                    if not row.get("sector") and row.get("symbol"):
+                        row["sector"] = sector_of(str(row["symbol"]))
+            except Exception:
+                pass
+            on_setups(records)
+        # Keep exits / circuit breaker moving even without Streamlit auto_scan.
+        try:
+            from core.market_session import in_market_open
+
+            if in_market_open():
+                review_cycle()
+        except Exception:
+            try:
+                review_cycle()
+            except Exception:
+                pass
+    except Exception:
+        pass

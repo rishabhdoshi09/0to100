@@ -1059,6 +1059,35 @@ def cmd_status(args) -> None:
         print(f"Failed to fetch status: {exc}")
 
 
+def cmd_autopilot(args) -> None:
+    """Diagnose why scanner autopilot is / isn't taking trades."""
+    from execution.autopilot import diagnose_silence, get_status
+
+    if getattr(args, "diagnose", True):
+        d = diagnose_silence()
+        print("\n=== Autopilot diagnose ===")
+        print(d.get("headline") or "")
+        print(f"armed={d.get('armed')} mode={d.get('mode')} in_window={d.get('in_window')}")
+        print(
+            f"trades_today={d.get('trades_today')} open={d.get('open_positions')} "
+            f"considered={d.get('considered_today')} buy_setups={d.get('buy_setups_in_last_scan')}"
+        )
+        for b in d.get("blockers") or []:
+            print(f"  BLOCKER: {b}")
+        for n in d.get("notes") or []:
+            print(f"  · {n}")
+        rejects = d.get("rejects_today") or {}
+        if rejects:
+            print("  Rejects today:")
+            for k, v in sorted(rejects.items(), key=lambda kv: -kv[1])[:8]:
+                print(f"    {k}: {v}")
+        for line in d.get("activity") or []:
+            print(f"  {line}")
+        return
+    s = get_status()
+    print(s)
+
+
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
 def _assert_credentials() -> None:
@@ -1327,6 +1356,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("kill", help="Write kill switch flag")
     sub.add_parser("status", help="Print live portfolio status from Kite")
+    ap = sub.add_parser("autopilot", help="Diagnose scanner autopilot silence / status")
+    ap.add_argument("--diagnose", action="store_true", default=True,
+                    help="Print why trades are / aren't being taken (default)")
 
     return parser
 
@@ -1360,6 +1392,7 @@ def main() -> None:
         "explain":    cmd_explain,
         "kill":       cmd_kill,
         "status":     cmd_status,
+        "autopilot":  cmd_autopilot,
         "autonomy":   cmd_autonomy,
     }
     dispatch[args.command](args)
