@@ -1,0 +1,98 @@
+"""Shared evaluation utilities for Phase A.5 (research only)."""
+from __future__ import annotations
+
+import numpy as np
+import pandas as pd
+
+from research.harness import evaluate, benjamini_hochberg, effective_sample_size
+
+
+def returns_panel(closes: pd.DataFrame) -> pd.DataFrame:
+    return closes.pct_change().dropna(how="all")
+
+
+def cross_sectional_momentum_scores(closes: pd.DataFrame, lookback: int = 60) -> pd.DataFrame:
+    """Incumbent-style rule: 60d return rank (transparent baseline, not ML)."""
+    rets = closes.pct_change(lookback)
+    return rets.rank(axis=1, pct=True)
+
+
+def long_short_from_scores(scores: pd.DataFrame, fwd: pd.DataFrame, top_q: float = 0.2):
+    """Equal-weight long top quintile vs short bottom; returns per-date portfolio R."""
+    common = scores.index.intersection(fwd.index)
+    scores, fwd = scores.loc[common], fwd.loc[common]
+    port = []
+    dates = []
+    for dt in common:
+        s = scores.loc[dt].dropna()
+        f = fwd.loc[dt].reindex(s.index).dropna()
+        s = s.reindex(f.index).dropna()
+        if len(s) < 6:
+            continue
+        n = max(1, int(len(s) * top_q))
+        long = s.nlargest(n).index
+        short = s.nsmallest(n).index
+        r = float(f.loc[long].mean() - f.loc[short].mean())
+        port.append(r)
+        dates.append(dt)
+    return pd.Series(port, index=pd.Index(dates), dtype=float)
+
+
+def forward_returns(closes: pd.DataFrame, horizon: int) -> pd.DataFrame:
+    return closes.pct_change(horizon).shift(-horizon)
+
+
+def cost_drag(turnover_one_way: float, round_trip_pct: float) -> float:
+    # round_trip_pct is percent points (e.g. 0.32); convert to fraction
+    return float(turnover_one_way) * (round_trip_pct / 100.0)
+
+
+def harness_pack(returns, *, n_trials: int = 1, min_n: int = 30) -> dict:
+    ev = evaluate(returns, n_trials=n_trials, min_n=min_n)
+    return {
+        "verdict": ev.verdict,
+        "n": ev.n,
+        "n_eff": float(effective_sample_size(returns)) if len(returns) else 0.0,
+        "mean_r": ev.mean_r,
+        "sharpe": ev.sharpe,
+        "psr": ev.psr,
+        "dsr": ev.dsr,
+        "p_value": ev.p_value,
+        "insight": ev.insight,
+    }
+
+
+def fdr_on_pvalues(named_p: dict[str, float], alpha: float = 0.05) -> dict:
+    names = list(named_p)
+    p = [named_p[n] for n in names]
+    if not p:
+        return {"rejected": [], "detail": {}}
+    res = benjamini_hochberg(p, alpha=alpha)
+    rejected_mask = np.asarray(res["rejected"], dtype=bool)
+    qvalues = np.asarray(res["qvalues"], dtype=float)
+    rejected = []
+    detail = {}
+    for i, n in enumerate(names):
+        flag = bool(rejected_mask[i])
+        detail[n] = {"p": named_p[n], "rejected": flag, "q": float(qvalues[i])}
+        if flag:
+            rejected.append(n)
+    return {"rejected": rejected, "detail": detail, "threshold": res["threshold"]}
+
+
+
+def gate_research_grade(manifest: dict) -> dict:
+    """Hard gate: exploratory sources cannot earn PASS_* promotion verdicts."""
+    rg = bool(manifest.get("research_grade"))
+    trust = str(manifest.get("trust_class") or "")
+    return {
+        "research_grade": rg,
+        "trust_class": trust,
+        "may_promote": rg and trust == "RESEARCH_GRADE",
+        "reason": (
+            "RESEARCH_GRADE inputs present"
+            if rg and trust == "RESEARCH_GRADE"
+            else "inputs are not RESEARCH_GRADE — exploratory metrics only; "
+                 "PASS_ALPHA/PASS_RISK promotion blocked"
+        ),
+    }
