@@ -2391,6 +2391,7 @@ class TestEcoMode:
     def test_defaults_off_full_power(self, monkeypatch):
         import core.eco as eco
         monkeypatch.delenv("QT_ECO", raising=False)
+        monkeypatch.delenv("QT_LOW_POWER", raising=False)
         assert eco.eco_on() is False
         assert eco.workers(8) == 8                      # untouched
         assert eco.scan_interval(900) == 900
@@ -2398,6 +2399,7 @@ class TestEcoMode:
 
     def test_eco_clamps_and_skips_offhours(self, monkeypatch):
         import core.eco as eco
+        monkeypatch.delenv("QT_LOW_POWER", raising=False)
         monkeypatch.setenv("QT_ECO", "1")
         assert eco.eco_on() is True
         assert eco.workers(8) == 2 and eco.workers(6) == 2
