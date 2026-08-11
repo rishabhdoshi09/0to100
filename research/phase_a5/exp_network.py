@@ -14,52 +14,64 @@ from research.phase_a5 import prereg
 
 def run_exp_a6_01(*, closes: pd.DataFrame, sectors: dict, manifest: dict,
                   lookback: int = 60, step: int = 21,
-                  oos_start_frac: float = 0.7) -> dict:
+                  oos_start_frac: float = 0.7,
+                  oos_start_date: str | None = None,
+                  frozen_hypothesis_id: str | None = None) -> dict:
     gate = M.gate_research_grade(manifest)
     rets = M.returns_panel(closes)
     dates = list(closes.index)
     n = len(dates)
-    oos_start = int(n * oos_start_frac)
+    if oos_start_date:
+        oos_start = next(
+            (i for i, d in enumerate(dates)
+             if str(pd.Timestamp(d).date()) >= str(oos_start_date)[:10]),
+            int(n * oos_start_frac),
+        )
+    else:
+        oos_start = int(n * oos_start_frac)
 
-    hid = prereg.preregister(
-        experiment_id="EXP-A6-01",
-        hypothesis=(
-            "Correlation-graph network metrics (community concentration, centrality, "
-            "incremental community risk) identify future correlated portfolio losses "
-            "beyond pairwise correlation clusters and sector caps."
-        ),
-        null_hypothesis=(
-            "Network metrics add no incremental explanatory power for simultaneous "
-            "losses / drawdowns after conditioning on pairwise ρ clusters and sectors."
-        ),
-        success_criteria={
-            "research_grade": {"eq": 1},
-            "incremental_auc_proxy": {"gt": 0.0},
-            "conditioned_improvement": {"gt": 0.0},
-        },
-        data_window={
-            "snapshot_id": manifest.get("snapshot_id"),
-            "trust_class": manifest.get("trust_class"),
-            "research_grade": False,
-            "oos_start": str(pd.Timestamp(dates[oos_start]).date()),
-            "lookback": lookback,
-            "universe": list(closes.columns),
-        },
-        protocol={
-            "baseline": ["pairwise_corr_clusters", "sector_herfindahl"],
-            "challenger": [
-                "community_exposure", "degree", "eigenvector", "betweenness",
-                "network_concentration", "incremental_community_risk",
-            ],
-            "auto_block": False,
-            "primary_metric": "incremental explanatory power for simultaneous loss events",
-            "success_criterion": "research_grade + positive conditioned improvement",
-            "failure_criterion": "no improvement after conditioning on pairwise/sector",
-            "multiple_testing": "BH-FDR across network feature predictors",
-            "transaction_costs_pct": round_trip_cost_pct("CNC"),
-            "known_limitations": protocol_limitations(gate),
-        },
-    )
+    if frozen_hypothesis_id:
+        hid = frozen_hypothesis_id
+    else:
+        hid = prereg.preregister(
+            experiment_id="EXP-A6-01",
+            hypothesis=(
+                "Correlation-graph network metrics (community concentration, centrality, "
+                "incremental community risk) identify future correlated portfolio losses "
+                "beyond pairwise correlation clusters and sector caps."
+            ),
+            null_hypothesis=(
+                "Network metrics add no incremental explanatory power for simultaneous "
+                "losses / drawdowns after conditioning on pairwise ρ clusters and sectors."
+            ),
+            success_criteria={
+                "research_grade": {"eq": 1},
+                "incremental_auc_proxy": {"gt": 0.0},
+                "conditioned_improvement": {"gt": 0.0},
+            },
+            data_window={
+                "snapshot_id": manifest.get("snapshot_id"),
+                "trust_class": manifest.get("trust_class"),
+                "research_grade": False,
+                "oos_start": str(pd.Timestamp(dates[oos_start]).date()),
+                "lookback": lookback,
+                "universe": list(closes.columns),
+            },
+            protocol={
+                "baseline": ["pairwise_corr_clusters", "sector_herfindahl"],
+                "challenger": [
+                    "community_exposure", "degree", "eigenvector", "betweenness",
+                    "network_concentration", "incremental_community_risk",
+                ],
+                "auto_block": False,
+                "primary_metric": "incremental explanatory power for simultaneous loss events",
+                "success_criterion": "research_grade + positive conditioned improvement",
+                "failure_criterion": "no improvement after conditioning on pairwise/sector",
+                "multiple_testing": "BH-FDR across network feature predictors",
+                "transaction_costs_pct": round_trip_cost_pct("CNC"),
+                "known_limitations": protocol_limitations(gate),
+            },
+        )
 
     rows = []
     eval_points = list(range(max(lookback + 5, oos_start), n - 21, step))
@@ -200,7 +212,12 @@ def run_exp_a6_01(*, closes: pd.DataFrame, sectors: dict, manifest: dict,
     else:
         verdict, reason = "INCONCLUSIVE", "point improvement without FDR clearance"
 
-    if verdict in ("FAIL", "INCONCLUSIVE"):
+    if verdict == "FAIL":
+        prereg.remember_negative(
+            f"EXP-A6-01 FAIL: network no conditioned improvement partial_r={incr_r:.4f}",
+            signal="portfolio_network", evidence_n=len(df), notes=reason,
+        )
+    elif verdict == "INCONCLUSIVE":
         prereg.remember_watch(
             f"EXP-A6-01 {verdict}: partial_r={incr_r:.4f}",
             signal="portfolio_network", evidence_n=len(df), ev_r=incr_r,
@@ -212,12 +229,15 @@ def run_exp_a6_01(*, closes: pd.DataFrame, sectors: dict, manifest: dict,
         "hypothesis_id": hid,
         "registry_status": reg.get("status"),
         "verdict": verdict,
+        "scientific_verdict": M.scientific_verdict(verdict),
         "reason": reason,
         "gate": gate,
         "feature_stats": feature_stats,
         "partial_incr_risk": {"r": incr_r, "p": incr_p},
         "fdr": fdr,
         "metrics": metrics,
+        "evaluation_snapshot_id": manifest.get("snapshot_id"),
+        "oos_start": str(pd.Timestamp(dates[oos_start]).date()),
         "production_authority": False,
         "auto_block": False,
     }

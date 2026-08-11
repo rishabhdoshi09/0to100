@@ -20,12 +20,21 @@ def _closes_window(closes: pd.DataFrame, end_loc: int, lookback: int) -> dict:
 
 def run_exp_a5_01(*, closes: pd.DataFrame, sectors: dict, manifest: dict,
                   lookback: int = 60, step: int = 21, n_clusters: int = 5,
-                  oos_start_frac: float = 0.7) -> dict:
+                  oos_start_frac: float = 0.7,
+                  oos_start_date: str | None = None,
+                  frozen_hypothesis_id: str | None = None) -> dict:
     """Preregister then evaluate structure methods without tuning on future returns."""
     gate = M.gate_research_grade(manifest)
     dates = list(closes.index)
     n = len(dates)
-    oos_start = int(n * oos_start_frac)
+    if oos_start_date:
+        oos_start = next(
+            (i for i, d in enumerate(dates)
+             if str(pd.Timestamp(d).date()) >= str(oos_start_date)[:10]),
+            int(n * oos_start_frac),
+        )
+    else:
+        oos_start = int(n * oos_start_frac)
 
     data_window = {
         "snapshot_id": manifest.get("snapshot_id"),
@@ -59,10 +68,11 @@ def run_exp_a5_01(*, closes: pd.DataFrame, sectors: dict, manifest: dict,
         "multiple_testing": "BH-FDR across methods on incremental_r2 p-proxy",
         "transaction_costs_pct": round_trip_cost_pct("CNC"),
         "benchmark": "static NSE sector map + correlation clusters",
-        "known_limitations": [
-            "DISPLAY_ONLY yfinance panel" if not gate["may_promote"] else "none",
-            "no CA ledger", "no PIT sector history", "survivorship-biased universe",
-        ],
+        "known_limitations": (
+            ["none"] if gate["may_promote"]
+            else ["DISPLAY_ONLY yfinance panel", "no CA ledger",
+                  "no PIT sector history", "survivorship-biased universe"]
+        ),
     }
     # Success criteria require research_grade==1 so exploratory runs cannot "PROMOTE"
     success_criteria = {
@@ -70,21 +80,24 @@ def run_exp_a5_01(*, closes: pd.DataFrame, sectors: dict, manifest: dict,
         "stability_ari": {"gte": 0.3},
         "incremental_r2": {"gt": 0.0},
     }
-    hid = prereg.preregister(
-        experiment_id="EXP-A5-01",
-        hypothesis=(
-            "Dynamically discovered market structure (hierarchical/k-means/PCA) provides "
-            "stable incremental future co-movement information beyond static sectors and "
-            "pairwise correlation clusters."
-        ),
-        null_hypothesis=(
-            "Discovered clusters add no incremental future co-movement information and/or "
-            "are unstable relative to sector and correlation baselines."
-        ),
-        success_criteria=success_criteria,
-        data_window=data_window,
-        protocol=protocol,
-    )
+    if frozen_hypothesis_id:
+        hid = frozen_hypothesis_id
+    else:
+        hid = prereg.preregister(
+            experiment_id="EXP-A5-01",
+            hypothesis=(
+                "Dynamically discovered market structure (hierarchical/k-means/PCA) provides "
+                "stable incremental future co-movement information beyond static sectors and "
+                "pairwise correlation clusters."
+            ),
+            null_hypothesis=(
+                "Discovered clusters add no incremental future co-movement information and/or "
+                "are unstable relative to sector and correlation baselines."
+            ),
+            success_criteria=success_criteria,
+            data_window=data_window,
+            protocol=protocol,
+        )
 
     rets = M.returns_panel(closes)
     methods = ["hierarchical", "kmeans", "pca_kmeans"]
@@ -219,7 +232,15 @@ def run_exp_a5_01(*, closes: pd.DataFrame, sectors: dict, manifest: dict,
         verdict = "INCONCLUSIVE"
         reason = "unstable or FDR-insignificant"
 
-    if verdict in ("FAIL", "INCONCLUSIVE"):
+    if verdict == "FAIL":
+        prereg.remember_negative(
+            f"EXP-A5-01 FAIL: dynamic structure no incremental vs baseline "
+            f"(best={best}, incr={best_row['incremental_vs_best_baseline']})",
+            signal="market_structure",
+            evidence_n=best_row["n_eval"],
+            notes=reason,
+        )
+    elif verdict == "INCONCLUSIVE":
         prereg.remember_watch(
             f"EXP-A5-01 {verdict}: {best} incremental={best_row['incremental_vs_best_baseline']}",
             signal="market_structure",
@@ -234,11 +255,14 @@ def run_exp_a5_01(*, closes: pd.DataFrame, sectors: dict, manifest: dict,
         "hypothesis_id": hid,
         "registry_status": reg.get("status"),
         "verdict": verdict,
+        "scientific_verdict": M.scientific_verdict(verdict),
         "reason": reason,
         "gate": gate,
         "baselines": {"sector_static": sector_base, "correlation_clusters": corr_base},
         "methods": results_by_method,
         "fdr": fdr,
         "metrics": metrics,
+        "evaluation_snapshot_id": manifest.get("snapshot_id"),
+        "oos_start": str(pd.Timestamp(dates[oos_start]).date()),
         "production_authority": False,
     }

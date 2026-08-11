@@ -75,48 +75,52 @@ class RankIncumbent:
         return np.sign(X[:, 3])
 
 
-def run_exp_a3_01(*, closes: pd.DataFrame, manifest: dict) -> dict:
+def run_exp_a3_01(*, closes: pd.DataFrame, manifest: dict,
+                  frozen_hypothesis_id: str | None = None) -> dict:
     gate = M.gate_research_grade(manifest)
     X, y, feature_names, idx = _feature_matrix(closes)
     target = get_legacy_mh_target("10d")
     cost = round_trip_cost_pct("CNC")
 
-    hid = prereg.preregister(
-        experiment_id="EXP-A3-01",
-        hypothesis=(
-            "A simple logistic regression on QuantTerm-style momentum/vol features "
-            "extracts incremental OOS economic value over naive and rank-rule incumbents."
-        ),
-        null_hypothesis=(
-            "Logistic challenger does not improve cost-aware OOS expectancy vs naive/"
-            "rank incumbents after evidence gating."
-        ),
-        success_criteria={
-            "research_grade": {"eq": 1},
-            "economic_value_delta": {"gt": 0.0},
-            "challenger_harness_promote": {"eq": 1},
-        },
-        data_window={
-            "snapshot_id": manifest.get("snapshot_id"),
-            "trust_class": manifest.get("trust_class"),
-            "research_grade": False,
-            "features": feature_names,
-            "target": "10d classification (+1/-1/0 at ±1%)",
-            "n_rows": int(len(y)),
-            "cost_pct": cost,
-        },
-        protocol={
-            "incumbents": ["naive_baseline", "momentum_rank_sign"],
-            "challenger": "logistic_regression",
-            "identical_splits": True,
-            "primary_metric": "economic_value_delta (mean OOS R)",
-            "multiple_testing": "single primary challenger; n_trials=1 vs each incumbent",
-            "no_deep_learning": True,
-            "known_limitations": [
-                "DISPLAY_ONLY panel" if not gate["may_promote"] else "none",
-            ],
-        },
-    )
+    if frozen_hypothesis_id:
+        hid = frozen_hypothesis_id
+    else:
+        hid = prereg.preregister(
+            experiment_id="EXP-A3-01",
+            hypothesis=(
+                "A simple logistic regression on QuantTerm-style momentum/vol features "
+                "extracts incremental OOS economic value over naive and rank-rule incumbents."
+            ),
+            null_hypothesis=(
+                "Logistic challenger does not improve cost-aware OOS expectancy vs naive/"
+                "rank incumbents after evidence gating."
+            ),
+            success_criteria={
+                "research_grade": {"eq": 1},
+                "economic_value_delta": {"gt": 0.0},
+                "challenger_harness_promote": {"eq": 1},
+            },
+            data_window={
+                "snapshot_id": manifest.get("snapshot_id"),
+                "trust_class": manifest.get("trust_class"),
+                "research_grade": False,
+                "features": feature_names,
+                "target": "10d classification (+1/-1/0 at ±1%)",
+                "n_rows": int(len(y)),
+                "cost_pct": cost,
+            },
+            protocol={
+                "incumbents": ["naive_baseline", "momentum_rank_sign"],
+                "challenger": "logistic_regression",
+                "identical_splits": True,
+                "primary_metric": "economic_value_delta (mean OOS R)",
+                "multiple_testing": "single primary challenger; n_trials=1 vs each incumbent",
+                "no_deep_learning": True,
+                "known_limitations": [
+                    "DISPLAY_ONLY panel" if not gate["may_promote"] else "none",
+                ],
+            },
+        )
 
     # Bake-off 1: logistic vs naive
     r_naive = run_bakeoff(
@@ -178,18 +182,18 @@ def run_exp_a3_01(*, closes: pd.DataFrame, manifest: dict) -> dict:
     else:
         verdict, reason = "INCONCLUSIVE", "mixed bake-off / evidence gate"
 
-    if verdict in ("FAIL", "INCONCLUSIVE"):
-        prereg.remember_watch(
-            f"EXP-A3-01 {verdict}: delta={delta:.4f} vs_rank={r_rank.verdict}",
-            signal="simple_challenger", evidence_n=r_rank.oos_period.get("n") or 0,
-            ev_r=delta, hypothesis_id=hid, notes=reason,
-        )
-    elif verdict.startswith("FAIL"):
+    if verdict == "FAIL":
         prereg.remember_negative(
             f"EXP-A3-01 FAIL logistic vs rank delta={delta:.4f}",
             signal="simple_challenger",
             evidence_n=r_rank.oos_period.get("n") or 0,
             notes=reason,
+        )
+    elif verdict == "INCONCLUSIVE":
+        prereg.remember_watch(
+            f"EXP-A3-01 {verdict}: delta={delta:.4f} vs_rank={r_rank.verdict}",
+            signal="simple_challenger", evidence_n=r_rank.oos_period.get("n") or 0,
+            ev_r=delta, hypothesis_id=hid, notes=reason,
         )
 
     return {
@@ -197,10 +201,12 @@ def run_exp_a3_01(*, closes: pd.DataFrame, manifest: dict) -> dict:
         "hypothesis_id": hid,
         "registry_status": reg.get("status"),
         "verdict": verdict,
+        "scientific_verdict": M.scientific_verdict(verdict),
         "reason": reason,
         "gate": gate,
         "vs_naive": r_naive.to_dict(),
         "vs_rank": r_rank.to_dict(),
         "metrics": metrics,
+        "evaluation_snapshot_id": manifest.get("snapshot_id"),
         "production_authority": False,
     }

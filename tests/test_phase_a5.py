@@ -56,6 +56,21 @@ def test_gate_blocks_non_research_grade():
     assert g["may_promote"] is False
 
 
+def test_gate_allows_scoped_scientific_without_global_research_grade():
+    g = gate_research_grade({
+        "trust_class": "OPERATIONAL_ONLY",
+        "research_grade": False,
+        "scoped_certification": "READY_FOR_SCIENTIFIC_RERUN",
+        "scoped_eligible_for_scientific_rerun": True,
+        "scope": "PHASE_A5_FROZEN_PROTOCOL",
+        "snapshot_id": "a7a9828ec37e09e4",
+    })
+    assert g["may_promote"] is True
+    assert g["scoped_ok"] is True
+    assert g["production_authority"] is False
+    assert g["trust_class"] == "OPERATIONAL_ONLY"
+
+
 def test_structure_and_horizon_runners_preregister(synth_panel):
     closes, sectors = synth_panel
     manifest = {

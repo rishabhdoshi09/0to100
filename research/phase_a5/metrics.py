@@ -82,17 +82,56 @@ def fdr_on_pvalues(named_p: dict[str, float], alpha: float = 0.05) -> dict:
 
 
 def gate_research_grade(manifest: dict) -> dict:
-    """Hard gate: exploratory sources cannot earn PASS_* promotion verdicts."""
+    """Hard gate: exploratory sources cannot earn scientific PASS/FAIL verdicts.
+
+    Scientific evaluation is allowed when:
+      • global ``trust_class=RESEARCH_GRADE`` and ``research_grade=True``, OR
+      • Phase A.5 **scoped** certification is ``READY_FOR_SCIENTIFIC_RERUN``
+        (global trust may remain ``OPERATIONAL_ONLY``).
+
+    ``may_promote`` here means "may issue scientific PASS/FAIL" — it does **not**
+    grant production authority. Callers must keep ``production_authority=False``.
+    """
     rg = bool(manifest.get("research_grade"))
     trust = str(manifest.get("trust_class") or "")
+    scoped_ok = (
+        str(manifest.get("scoped_certification") or "") == "READY_FOR_SCIENTIFIC_RERUN"
+        and bool(manifest.get("scoped_eligible_for_scientific_rerun"))
+        and str(manifest.get("scope") or "") == "PHASE_A5_FROZEN_PROTOCOL"
+        and bool(manifest.get("snapshot_id"))
+    )
+    global_ok = rg and trust == "RESEARCH_GRADE"
+    scientific = bool(global_ok or scoped_ok)
+    if global_ok:
+        reason = "RESEARCH_GRADE inputs present"
+    elif scoped_ok:
+        reason = (
+            "Phase A.5 scoped certification READY_FOR_SCIENTIFIC_RERUN "
+            f"(snapshot={manifest.get('snapshot_id')}); "
+            f"global trust remains {trust or 'UNKNOWN'}"
+        )
+    else:
+        reason = (
+            "inputs are not RESEARCH_GRADE — exploratory metrics only; "
+            "PASS_ALPHA/PASS_RISK promotion blocked"
+        )
     return {
-        "research_grade": rg,
+        "research_grade": bool(rg or scoped_ok),
         "trust_class": trust,
-        "may_promote": rg and trust == "RESEARCH_GRADE",
-        "reason": (
-            "RESEARCH_GRADE inputs present"
-            if rg and trust == "RESEARCH_GRADE"
-            else "inputs are not RESEARCH_GRADE — exploratory metrics only; "
-                 "PASS_ALPHA/PASS_RISK promotion blocked"
-        ),
+        "scoped_certification": manifest.get("scoped_certification"),
+        "scoped_ok": scoped_ok,
+        "scientific_evaluation": scientific,
+        "may_promote": scientific,
+        "production_authority": False,
+        "reason": reason,
     }
+
+
+def scientific_verdict(raw: str) -> str:
+    """Map internal runner tags to report vocabulary PASS|FAIL|INCONCLUSIVE."""
+    v = str(raw or "").upper()
+    if v in {"PASS", "PASS_ALPHA", "PASS_RISK", "PROMOTE"}:
+        return "PASS"
+    if v in {"FAIL", "REJECT", "REJECTED"}:
+        return "FAIL"
+    return "INCONCLUSIVE"

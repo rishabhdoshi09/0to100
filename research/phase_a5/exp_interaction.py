@@ -20,47 +20,59 @@ INTERACTIONS = (
 
 def run_exp_a5a6_01(*, closes: pd.DataFrame, sectors: dict, manifest: dict,
                     lookback: int = 60, step: int = 21,
-                    oos_start_frac: float = 0.7) -> dict:
+                    oos_start_frac: float = 0.7,
+                    oos_start_date: str | None = None,
+                    frozen_hypothesis_id: str | None = None) -> dict:
     gate = M.gate_research_grade(manifest)
     rets = M.returns_panel(closes)
     dates = list(closes.index)
     n = len(dates)
-    oos_start = int(n * oos_start_frac)
+    if oos_start_date:
+        oos_start = next(
+            (i for i, d in enumerate(dates)
+             if str(pd.Timestamp(d).date()) >= str(oos_start_date)[:10]),
+            int(n * oos_start_frac),
+        )
+    else:
+        oos_start = int(n * oos_start_frac)
     scores = M.cross_sectional_momentum_scores(closes, lookback=60)
     fwd = M.forward_returns(closes, 10)
 
-    hid = prereg.preregister(
-        experiment_id="EXP-A5A6-01",
-        hypothesis=(
-            "Market-structure stability and network concentration modulate momentum "
-            "payoffs as context (interaction), rather than as standalone alpha."
-        ),
-        null_hypothesis=(
-            "Preregistered interactions have no FDR-significant effect on momentum "
-            "forward returns after multiple-testing control."
-        ),
-        success_criteria={
-            "research_grade": {"eq": 1},
-            "n_fdr_interactions": {"gte": 1},
-        },
-        data_window={
-            "snapshot_id": manifest.get("snapshot_id"),
-            "trust_class": manifest.get("trust_class"),
-            "research_grade": False,
-            "interactions": list(INTERACTIONS),
-            "signal": "60d_momentum_rank",
-            "response": "10d_forward_return",
-        },
-        protocol={
-            "interactions": list(INTERACTIONS),
-            "no_unrestricted_feature_mining": True,
-            "multiple_testing": "BH-FDR across preregistered interactions",
-            "context_not_standalone_alpha": True,
-            "known_limitations": [
-                "DISPLAY_ONLY panel" if not gate["may_promote"] else "none",
-            ],
-        },
-    )
+    if frozen_hypothesis_id:
+        hid = frozen_hypothesis_id
+    else:
+        hid = prereg.preregister(
+            experiment_id="EXP-A5A6-01",
+            hypothesis=(
+                "Market-structure stability and network concentration modulate momentum "
+                "payoffs as context (interaction), rather than as standalone alpha."
+            ),
+            null_hypothesis=(
+                "Preregistered interactions have no FDR-significant effect on momentum "
+                "forward returns after multiple-testing control."
+            ),
+            success_criteria={
+                "research_grade": {"eq": 1},
+                "n_fdr_interactions": {"gte": 1},
+            },
+            data_window={
+                "snapshot_id": manifest.get("snapshot_id"),
+                "trust_class": manifest.get("trust_class"),
+                "research_grade": False,
+                "interactions": list(INTERACTIONS),
+                "signal": "60d_momentum_rank",
+                "response": "10d_forward_return",
+            },
+            protocol={
+                "interactions": list(INTERACTIONS),
+                "no_unrestricted_feature_mining": True,
+                "multiple_testing": "BH-FDR across preregistered interactions",
+                "context_not_standalone_alpha": True,
+                "known_limitations": [
+                    "DISPLAY_ONLY panel" if not gate["may_promote"] else "none",
+                ],
+            },
+        )
 
     rows = []
     prev_labels = None
@@ -165,7 +177,12 @@ def run_exp_a5a6_01(*, closes: pd.DataFrame, sectors: dict, manifest: dict,
     else:
         verdict, reason = "FAIL", "no interaction effects detected"
 
-    if verdict in ("FAIL", "INCONCLUSIVE"):
+    if verdict == "FAIL":
+        prereg.remember_negative(
+            f"EXP-A5A6-01 FAIL: no FDR-significant interactions",
+            signal="context_interaction", evidence_n=len(df), notes=reason,
+        )
+    elif verdict == "INCONCLUSIVE":
         prereg.remember_watch(
             f"EXP-A5A6-01 {verdict}: fdr={fdr.get('rejected')}",
             signal="context_interaction", evidence_n=len(df), ev_r=0.0,
@@ -177,10 +194,13 @@ def run_exp_a5a6_01(*, closes: pd.DataFrame, sectors: dict, manifest: dict,
         "hypothesis_id": hid,
         "registry_status": reg.get("status"),
         "verdict": verdict,
+        "scientific_verdict": M.scientific_verdict(verdict),
         "reason": reason,
         "gate": gate,
         "interactions": interaction_stats,
         "fdr": fdr,
         "metrics": metrics,
+        "evaluation_snapshot_id": manifest.get("snapshot_id"),
+        "oos_start": str(pd.Timestamp(dates[oos_start]).date()),
         "production_authority": False,
     }
