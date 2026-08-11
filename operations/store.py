@@ -26,12 +26,29 @@ class OperationStore:
     """
 
     def __init__(self, path: str | Path = "logs/market_ops/jobs.db") -> None:
-        self.path = Path(path)
-        self.path.parent.mkdir(parents=True, exist_ok=True)
+        # Absolute path — relative paths break if a worker thread's CWD drifts
+        # or the launcher starts from a different directory than the API.
+        self.path = Path(path).expanduser().resolve()
+        self._ensure_parent()
         self._init_schema()
 
+    def _ensure_parent(self) -> None:
+        try:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            raise sqlite3.OperationalError(
+                f"cannot create market-ops DB directory {self.path.parent}: {exc}"
+            ) from exc
+
     def _connect(self) -> sqlite3.Connection:
-        con = sqlite3.connect(str(self.path), timeout=5.0)
+        # Re-mkdir on every open: stop/start races and macOS cleanup can remove
+        # an empty logs/market_ops between leases.
+        self._ensure_parent()
+        try:
+            con = sqlite3.connect(str(self.path), timeout=5.0)
+        except sqlite3.OperationalError:
+            self._ensure_parent()
+            con = sqlite3.connect(str(self.path), timeout=5.0)
         con.row_factory = sqlite3.Row
         con.execute("PRAGMA journal_mode=WAL")
         con.execute("PRAGMA synchronous=NORMAL")
