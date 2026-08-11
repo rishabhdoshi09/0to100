@@ -366,6 +366,157 @@ def template_csv(kind: str) -> bytes:
     return output.getvalue().encode("utf-8")
 
 
+# Worked-example package — used when exchange pages are unreachable or the
+# user needs a clickable download → upload → analysis path that actually
+# works offline. Rows are SCHEMA-VALID plumbing fixtures, clearly sourced
+# from example.com, never presented as live Screener/NSE fundamentals.
+WORKED_EXAMPLE_SOURCE = "https://example.com/quantterm/worked-example"
+WORKED_EXAMPLE_AS_OF = "2026-06-30"
+_WORKED_EXAMPLE_ROWS: dict[str, list[dict[str, str]]] = {
+    "business_profile": [{
+        "as_of_date": WORKED_EXAMPLE_AS_OF,
+        "business_summary": "Industrial automation and power systems for factories and utilities.",
+        "customers": "Factories; utilities; EPC contractors",
+        "demand_drivers": "Capex cycle; grid upgrades; factory automation",
+        "source_url": f"{WORKED_EXAMPLE_SOURCE}/business_profile",
+    }],
+    "financial_history": [
+        {
+            "period_end": "2025-03-31", "period_type": "annual",
+            "revenue_cr": "4200", "ebitda_cr": "840", "ebitda_margin_pct": "20",
+            "pat_cr": "510", "cfo_cr": "620", "debt_cr": "900",
+            "source_url": f"{WORKED_EXAMPLE_SOURCE}/financial_history",
+            "as_of_date": WORKED_EXAMPLE_AS_OF,
+        },
+        {
+            "period_end": "2026-03-31", "period_type": "annual",
+            "revenue_cr": "4680", "ebitda_cr": "960", "ebitda_margin_pct": "20.5",
+            "pat_cr": "580", "cfo_cr": "710", "debt_cr": "850",
+            "source_url": f"{WORKED_EXAMPLE_SOURCE}/financial_history",
+            "as_of_date": WORKED_EXAMPLE_AS_OF,
+        },
+        {
+            "period_end": "2026-06-30", "period_type": "quarter",
+            "revenue_cr": "1210", "ebitda_cr": "250", "ebitda_margin_pct": "20.7",
+            "pat_cr": "150", "cfo_cr": "180", "debt_cr": "840",
+            "source_url": f"{WORKED_EXAMPLE_SOURCE}/financial_history",
+            "as_of_date": WORKED_EXAMPLE_AS_OF,
+        },
+    ],
+    "shareholding_history": [
+        {
+            "quarter_end": "2025-09-30", "promoter_pct": "54.2", "fii_pct": "8.1",
+            "dii_pct": "10.4", "public_pct": "27.3", "promoter_pledge_pct": "0",
+            "source_url": f"{WORKED_EXAMPLE_SOURCE}/shareholding_history",
+            "as_of_date": WORKED_EXAMPLE_AS_OF,
+        },
+        {
+            "quarter_end": "2025-12-31", "promoter_pct": "54.0", "fii_pct": "8.6",
+            "dii_pct": "10.8", "public_pct": "26.6", "promoter_pledge_pct": "0",
+            "source_url": f"{WORKED_EXAMPLE_SOURCE}/shareholding_history",
+            "as_of_date": WORKED_EXAMPLE_AS_OF,
+        },
+        {
+            "quarter_end": "2026-03-31", "promoter_pct": "53.8", "fii_pct": "9.0",
+            "dii_pct": "11.1", "public_pct": "26.1", "promoter_pledge_pct": "0",
+            "source_url": f"{WORKED_EXAMPLE_SOURCE}/shareholding_history",
+            "as_of_date": WORKED_EXAMPLE_AS_OF,
+        },
+        {
+            "quarter_end": "2026-06-30", "promoter_pct": "53.5", "fii_pct": "9.4",
+            "dii_pct": "11.5", "public_pct": "25.6", "promoter_pledge_pct": "0",
+            "source_url": f"{WORKED_EXAMPLE_SOURCE}/shareholding_history",
+            "as_of_date": WORKED_EXAMPLE_AS_OF,
+        },
+    ],
+    "business_segments": [
+        {
+            "period_end": WORKED_EXAMPLE_AS_OF, "segment": "Power systems",
+            "revenue_cr": "2800", "revenue_mix_pct": "60", "growth_pct": "11",
+            "margin_pct": "18", "driver": "Grid upgrade orders",
+            "source_url": f"{WORKED_EXAMPLE_SOURCE}/business_segments",
+            "as_of_date": WORKED_EXAMPLE_AS_OF,
+        },
+        {
+            "period_end": WORKED_EXAMPLE_AS_OF, "segment": "Automation",
+            "revenue_cr": "1880", "revenue_mix_pct": "40", "growth_pct": "14",
+            "margin_pct": "24", "driver": "Factory capex",
+            "source_url": f"{WORKED_EXAMPLE_SOURCE}/business_segments",
+            "as_of_date": WORKED_EXAMPLE_AS_OF,
+        },
+    ],
+    "management_commentary": [{
+        "event_date": WORKED_EXAMPLE_AS_OF, "speaker": "CEO",
+        "topic": "Demand outlook",
+        "commentary": "Order book visibility remains healthy into the next two quarters.",
+        "guidance_metric": "revenue_growth_pct", "guidance_value": "12",
+        "guidance_period": "FY27",
+        "source_url": f"{WORKED_EXAMPLE_SOURCE}/management_commentary",
+        "as_of_date": WORKED_EXAMPLE_AS_OF,
+    }],
+    "order_book_guidance": [{
+        "as_of_date": WORKED_EXAMPLE_AS_OF, "metric": "order_book",
+        "value": "9200", "unit": "INR_cr", "period": "FY27H1",
+        "management_wording": "Order book stood at about ₹9,200 crore.",
+        "source_url": f"{WORKED_EXAMPLE_SOURCE}/order_book_guidance",
+    }],
+}
+
+
+def worked_example_kinds() -> list[str]:
+    return [key for key in RESOURCE_SPECS if key in _WORKED_EXAMPLE_ROWS]
+
+
+def worked_example_csv(kind: str) -> bytes:
+    """Pre-filled CSV that validates against the QuantTerm schema.
+
+    This is a plumbing fixture for download → upload → analysis when NSE/BSE
+    pages are blocked or incomplete. It is not live market data.
+    """
+    rows = _WORKED_EXAMPLE_ROWS.get(kind)
+    spec = RESOURCE_SPECS.get(kind)
+    if not rows or spec is None or not spec.template_columns:
+        raise ValueError("no worked-example CSV is available for this evidence kind")
+    output = StringIO()
+    writer = csv.DictWriter(output, fieldnames=list(spec.template_columns), extrasaction="ignore")
+    writer.writeheader()
+    for row in rows:
+        writer.writerow({column: row.get(column, "") for column in spec.template_columns})
+    return output.getvalue().encode("utf-8")
+
+
+def install_worked_example(symbol: str, *, kinds: Iterable[str] | None = None) -> dict[str, Any]:
+    """Download (generate) and upload the worked-example package for a symbol.
+
+    Marks source_url as the QuantTerm worked-example URI so reports can show
+    the provenance instead of pretending the rows came from NSE.
+    """
+    symbol = clean_symbol(symbol)
+    selected = [str(item) for item in (kinds or worked_example_kinds())]
+    installed: list[dict[str, Any]] = []
+    for kind in selected:
+        if kind not in _WORKED_EXAMPLE_ROWS:
+            raise ValueError(f"no worked example for {kind}")
+        content = worked_example_csv(kind)
+        item = save_upload(
+            symbol,
+            kind,
+            content,
+            filename=f"quantterm_{kind}_worked_example.csv",
+            as_of=WORKED_EXAMPLE_AS_OF,
+            source_url=f"{WORKED_EXAMPLE_SOURCE}/{kind}",
+        )
+        installed.append(item)
+    return {
+        "accepted": True,
+        "symbol": symbol,
+        "as_of": WORKED_EXAMPLE_AS_OF,
+        "source_url": WORKED_EXAMPLE_SOURCE,
+        "note": "Worked-example package installed for offline download→upload→analysis. Not live exchange fundamentals.",
+        "installed": installed,
+        "status": evidence_requirements(symbol),
+    }
+
 def _shareholding_series(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     series = [
         ("Promoters", "promoter_pct"), ("FIIs", "fii_pct"),
@@ -464,6 +615,8 @@ def evidence_requirements(
             "accepted_extensions": list(spec.accepted_extensions),
             "template_available": bool(spec.template_columns),
             "template_url": f"/evidence/templates/{key}.csv" if spec.template_columns else "",
+            "example_available": key in _WORKED_EXAMPLE_ROWS,
+            "example_url": f"/evidence/examples/{key}.csv" if key in _WORKED_EXAMPLE_ROWS else "",
             "links": links.get(key, []), "latest_upload": attached or {},
         })
     runtime_specs = [

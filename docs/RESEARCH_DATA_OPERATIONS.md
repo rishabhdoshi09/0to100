@@ -42,6 +42,25 @@ Every upload requires:
 3. an accepted file type;
 4. for CSV/JSON, the required QuantTerm schema and at least one complete row.
 
+## When exchange pages are blocked (Mac / offline / sandbox)
+
+Official NSE/BSE links still appear so you can fetch the real filing when the network allows.
+When those pages are unreachable, QuantTerm also exposes a **worked-example** path that is
+schema-valid and useful for verifying download → upload → analysis:
+
+1. Open **Research Data** for any symbol.
+2. Click **Download worked example** on a requirement (pre-filled CSV), *or*
+3. Click **Auto-install worked example** — QuantTerm generates the CSVs, uploads them, and
+   refreshes coverage so the research dossier can use the structured rows.
+4. Uploaded rows keep `https://example.com/quantterm/worked-example/...` as provenance —
+   they are **not** live Screener/NSE fundamentals.
+
+API equivalents (report API on `:8766`):
+
+- `GET /evidence/examples/{kind}.csv` — download filled CSV
+- `POST /evidence/{symbol}/actions/install-worked-example` — one-click install
+- `GET /evidence/{symbol}` — coverage after install
+
 ## Extraction rule
 
 - Validated CSV/JSON: usable structured evidence.

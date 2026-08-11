@@ -29,6 +29,8 @@ type Requirement = {
   accepted_extensions: string[]
   template_available: boolean
   template_url: string
+  example_available?: boolean
+  example_url?: string
   links: LinkItem[]
   latest_upload: Record<string, unknown>
 }
@@ -221,6 +223,24 @@ export function ResearchDataView({ symbol }: { symbol: string }) {
     }
   }
 
+  const installWorkedExample = async () => {
+    setBusy('worked-example')
+    setError('')
+    try {
+      const response = await fetch(
+        `${reportBase}/evidence/${encodeURIComponent(symbol)}/actions/install-worked-example`,
+        { method: 'POST', headers: { Accept: 'application/json' } },
+      )
+      if (!response.ok) throw new Error(await response.text())
+      const payload = await response.json() as { status: EvidenceStatus; note?: string }
+      setStatus(payload.status)
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : 'Worked-example install failed')
+    } finally {
+      setBusy('')
+    }
+  }
+
   if (!symbol) {
     return <section className="research-data-view"><div className="evidence-empty"><h2>Select a stock first</h2><p>Choose a stock from Scanner, Long-Term, F&O Desk or search. QuantTerm will then show exactly which research datasets are available, stale or missing.</p></div></section>
   }
@@ -329,7 +349,16 @@ export function ResearchDataView({ symbol }: { symbol: string }) {
       </div>
 
       <div className="evidence-panel">
-        <header><div><h2>Research completion desk</h2><p>Open the source, download a template, or upload the original evidence with its data date.</p></div></header>
+        <header><div><h2>Research completion desk</h2><p>Open the source, download a template, or upload the original evidence with its data date.</p></div>
+          <button type="button" disabled={busy === 'worked-example'} onClick={() => void installWorkedExample()}>
+            {busy === 'worked-example' ? 'Installing worked example…' : 'Auto-install worked example'}
+          </button>
+        </header>
+        <p className="requirement-instructions">
+          When NSE/BSE/Screener pages are blocked or incomplete, use <strong>Download worked example</strong> (clickable CSV)
+          or <strong>Auto-install worked example</strong> (download + upload + analysis in one step).
+          These rows are schema-valid fixtures with example.com provenance — not live exchange fundamentals.
+        </p>
         <div className="requirements-list">
           {(status?.requirements || []).map((item) => {
             const current = draft(item.key)
@@ -349,6 +378,9 @@ export function ResearchDataView({ symbol }: { symbol: string }) {
                 <div className="resource-links">
                   {item.links.map((link) => <a key={link.url} href={link.url} target="_blank" rel="noreferrer">{link.official === 'true' ? 'Official · ' : ''}{link.label}</a>)}
                   {item.template_available && <a href={`${reportBase}${item.template_url}`} target="_blank" rel="noreferrer">Download CSV template</a>}
+                  {item.example_available && item.example_url && (
+                    <a href={`${reportBase}${item.example_url}`} target="_blank" rel="noreferrer">Download worked example</a>
+                  )}
                 </div>
                 <small className="accepted-files">Accepted: {item.accepted_extensions.join(', ')}</small>
                 <div className="upload-grid">

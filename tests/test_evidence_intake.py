@@ -130,3 +130,27 @@ def test_raw_fundamentals_uses_disclosed_period_not_fetch_time(tmp_path: Path, m
     assert record["fetched_at"].startswith("2026-08-01")
     assert record["section_as_of"]["financial_history"] == "2026-03-01"
     assert record["section_as_of"]["shareholding_history"] == "2026-03-01"
+
+
+def test_worked_example_download_upload_and_analysis(tmp_path: Path, monkeypatch):
+    """Real-world offline path: clickable example CSV → upload → structured rows."""
+    _sandbox(tmp_path, monkeypatch)
+    monkeypatch.setattr(EI, "FUNDAMENTALS_DB", tmp_path / "missing.db")
+    content = EI.worked_example_csv("shareholding_history")
+    assert b"quarter_end" in content
+    assert b"2026-06-30" in content
+    result = EI.install_worked_example("DEMOCO")
+    assert result["accepted"] is True
+    assert len(result["installed"]) >= 4
+    status = result["status"]
+    share = next(item for item in status["requirements"] if item["key"] == "shareholding_history")
+    assert share["available"] is True
+    assert share["status"] == "FRESH"
+    assert share["source"] == "USER_STRUCTURED_UPLOAD"
+    assert share["example_available"] is True
+    assert share["example_url"].endswith("/evidence/examples/shareholding_history.csv")
+    rows = EI.structured_rows("DEMOCO", "shareholding_history")
+    assert any(row.get("row_label") == "FIIs" for row in rows)
+    financials = EI.structured_rows("DEMOCO", "financial_history")
+    assert len(financials) >= 2
+    assert all("source_url" in row for row in financials)

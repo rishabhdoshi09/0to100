@@ -182,6 +182,43 @@ def evidence_template(kind: str) -> Response:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
+@app.get("/evidence/examples/{kind}.csv")
+def evidence_worked_example(kind: str) -> Response:
+    """Clickable pre-filled CSV — same schema as the blank template, ready to upload."""
+    try:
+        from reporting.evidence_intake import worked_example_csv
+
+        content = worked_example_csv(kind)
+        return Response(
+            content=content,
+            media_type="text/csv",
+            headers={
+                "Content-Disposition": f'attachment; filename="quantterm_{kind}_worked_example.csv"',
+                "X-QuantTerm-Example": "SAMPLE_NOT_LIVE_EXCHANGE_DATA",
+            },
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.post("/evidence/{symbol}/actions/install-worked-example")
+def install_worked_example_action(symbol: str) -> dict:
+    """One-click path: generate worked-example CSVs and upload them for analysis.
+
+    Use when NSE/BSE/Screener pages are blocked or incomplete. Installed rows
+    are schema-valid fixtures with an example.com provenance URL — not live
+    fundamentals.
+    """
+    try:
+        from reporting.evidence_intake import install_worked_example
+
+        return install_worked_example(symbol)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Worked-example install failed: {exc}") from exc
+
+
 @app.post("/evidence/{symbol}/{kind}")
 async def upload_evidence(
     symbol: str,

@@ -3608,10 +3608,11 @@ class TestSniperConfirmation:
     """The BAJEL bug: a wick that pokes the level then keeps falling must
     NEVER fire 'BREAKOUT CONFIRMED'."""
     WATCH = {101: {"symbol": "BAJEL", "trigger": 182.0,
-                   "stop": 169.0, "target": 210.0}}
+                   "stop": 169.0, "target": 210.0, "avg_vol": 1_000_000}}
 
-    def _tick(self, ltp):
-        return [{"instrument_token": 101, "last_price": ltp}]
+    def _tick(self, ltp, volume=800_000):
+        return [{"instrument_token": 101, "last_price": ltp,
+                 "volume_traded": volume}]
 
     def test_wick_then_reverse_never_fires(self):
         from scan.breakout_sniper import process_ticks
@@ -3636,11 +3637,20 @@ class TestSniperConfirmation:
         arm, fired = {}, set()
         # clears and holds above for the full window → CONFIRMED
         assert process_ticks(self._tick(183.0), self.WATCH, fired, arm,
-                             now=0, hold_seconds=45) == []
+                             now=0, hold_seconds=45, frac=0.5) == []
         hits = process_ticks(self._tick(184.0), self.WATCH, fired, arm,
-                             now=50, hold_seconds=45)
+                             now=50, hold_seconds=45, frac=0.5)
         assert len(hits) == 1
         assert hits[0]["symbol"] == "BAJEL" and hits[0]["held_s"] == 50
+
+    def test_zero_volume_never_confirms(self):
+        from scan.breakout_sniper import process_ticks
+        arm, fired = {}, set()
+        process_ticks(self._tick(183.0, volume=0), self.WATCH, fired, arm,
+                      now=0, hold_seconds=45, frac=0.5)
+        hits = process_ticks(self._tick(184.0, volume=0), self.WATCH, fired, arm,
+                             now=50, hold_seconds=45, frac=0.5)
+        assert hits == []
 
     def test_volume_confirms_pacing(self):
         from scan.breakout_sniper import volume_confirms
@@ -3648,10 +3658,14 @@ class TestSniperConfirmation:
         # need 1.2× = 600k
         assert volume_confirms(700_000, 1_000_000, 0.5) is True   # hot
         assert volume_confirms(400_000, 1_000_000, 0.5) is False  # dead
-        # fail-open: unknown avg volume never blocks
-        assert volume_confirms(0, 0, 0.5) is True
-        # fail-open: too early to judge (< 5% of day)
+        # fail-closed: zero traded volume never confirms
+        assert volume_confirms(0, 1_000_000, 0.5) is False
+        # fail-closed: unknown avg volume never confirms
+        assert volume_confirms(700_000, 0, 0.5) is False
+        # early session: volume present + known avg → allow (pace waived)
         assert volume_confirms(1, 1_000_000, 0.01) is True
+        # early session still rejects zero prints
+        assert volume_confirms(0, 1_000_000, 0.01) is False
 
     def test_day_fraction_bounds(self):
         import pytz
@@ -3702,20 +3716,28 @@ class TestSniperConfirmation:
         clean = {**base, "symbol": "CLEAN", "rsi": 60, "chase_risk": False}
         chased = {**base, "symbol": "CHASED", "rsi": 60, "chase_risk": True}
         blowoff = {**base, "symbol": "BLOWOFF", "rsi": 88, "chase_risk": False}
+        zero_vol = {**base, "symbol": "NOVOL", "rsi": 55, "chase_risk": False,
+                    "avg_vol20": 0}
         # tokens_for is best-effort; watch map keys off symbol regardless
         syms = {v["symbol"] for v in
-                build_watch_map([clean, chased, blowoff]).values()}
+                build_watch_map([clean, chased, blowoff, zero_vol]).values()}
         # even if instrument-token lookup is empty in the test env, the
         # PURE filter decision is what we assert — re-derive it directly:
         from scan.breakout_sniper import _quality_skip
         assert _quality_skip(clean) == ""
         assert "chase" in _quality_skip(chased)
         assert "blow-off" in _quality_skip(blowoff)
+        assert "volume" in _quality_skip(zero_vol).lower()
+        assert "NOVOL" not in syms
+        assert "BLOWOFF" not in syms
+        assert "CHASED" not in syms
 
     def test_quality_skip_backward_compatible(self):
-        """A result with neither flag (old scan dicts) is never skipped."""
+        """Old scan dicts without chase/rsi flags still pass when volume is known;
+        missing volume is never sniper-suggested."""
         from scan.breakout_sniper import _quality_skip
-        assert _quality_skip({"symbol": "X"}) == ""
+        assert _quality_skip({"symbol": "X", "avg_vol20": 500_000}) == ""
+        assert "volume" in _quality_skip({"symbol": "X"}).lower()
 
 
 class TestBreakoutConfirmation:
@@ -3801,20 +3823,19 @@ class TestBreakoutConfirmation:
         assert worst == round(strong * 0.6, 0)         # worst-case: 40% cut, floored
 
     def test_rsi_overbought_soft_demotes_grade_a_to_b(self):
-        """Clean clearance that would grade A, but RSI is already extended
-        (soft ceiling) — demote A→B. No room left to run is a real risk
-        ATR/volume alone can't see."""
+        """Clean clearance that would grade A, but RSI is at the soft ceiling
+        (70) — demote A→B. Above 70 hard-rejects; exactly 70 only demotes."""
         from scan.unified_scanner import grade_breakout as g
         strong = g(price=105, level=100, atr=3.33, vratio=3.0, day_change=2,
                   rsi=55)
         assert strong == (True, "A", strong[2])              # normal RSI → A stays
         extended = g(price=105, level=100, atr=3.33, vratio=3.0, day_change=2,
-                     rsi=75)
+                     rsi=70)
         assert extended[0] is True and extended[1] == "B"    # demoted, still confirmed
-        assert "demote" in extended[2] and "75" in extended[2]
+        assert "demote" in extended[2] and "70" in extended[2]
 
     def test_rsi_overbought_hard_rejects_outright(self):
-        """RSI >=82 is a blow-off-top — rejected outright, same tier as the
+        """RSI >70 is a blow-off-top — rejected outright, same tier as the
         gap-exhaustion check, regardless of otherwise-clean clearance."""
         from scan.unified_scanner import grade_breakout as g
         ok, grade, note = g(price=105, level=100, atr=3.33, vratio=3.0,
@@ -3834,12 +3855,12 @@ class TestBreakoutConfirmation:
     def test_rsi_and_clv_combined_flags(self):
         """Weak close AND extended RSI can fire together — both flags land
         in one note, still just a demote (not a double-penalty reject)
-        as long as the underlying clearance is clean."""
+        as long as the underlying clearance is clean and RSI is not >70."""
         from scan.unified_scanner import grade_breakout as g
         ok, grade, note = g(price=105, level=100, atr=3.33, vratio=3.0,
-                            day_change=2, clv=0.2, rsi=75)
+                            day_change=2, clv=0.2, rsi=70)
         assert ok is True and grade == "B"
-        assert "CLV" in note and "RSI" in note and "75" in note
+        assert "CLV" in note and "RSI" in note and "70" in note
 
     def test_breakout_conviction_pct_below_high_demotion_and_floor(self):
         """A break happening well below the 52-week high is a laggard, not
@@ -4041,9 +4062,9 @@ class TestFallingKnifeFilter:
     def test_beaten_down_arr_threshold(self):
         from scan.unified_scanner import is_beaten_down_arr
         highs = [100.0] * 250
-        assert is_beaten_down_arr(highs, 39.0) is True      # −61% → knife
-        assert is_beaten_down_arr(highs, 41.0) is False     # −59% → ok
-        assert is_beaten_down_arr(highs, 40.0) is True      # exactly −60%
+        assert is_beaten_down_arr(highs, 49.0) is True      # −51% → knife
+        assert is_beaten_down_arr(highs, 51.0) is False     # −49% → ok
+        assert is_beaten_down_arr(highs, 50.0) is True      # exactly −50%
         # too little history → never flagged (no guessing)
         assert is_beaten_down_arr([100.0] * 10, 5.0) is False
         assert is_beaten_down_arr(highs, 0.0) is False

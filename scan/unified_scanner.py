@@ -46,10 +46,10 @@ log = get_logger(__name__)
 # ── Falling-knife filter (system-wide) ────────────────────────────────────────
 # Stocks down more than this from their 52-week (250-session) high are
 # ignored EVERYWHERE — scanner signals, pulse, movers, autopilot, all of
-# it. A −60% name is a delisting/insolvency risk or a knife still falling;
+# it. A −50%+ name is a delisting/insolvency risk or a knife still falling;
 # the system does not chase it. Tunable via .env, never below 40%.
 import os as _os
-_MAX_DROP = max(0.40, float(_os.getenv("QT_MAX_DROP_FROM_HIGH", "0.60") or 0.60))
+_MAX_DROP = max(0.40, float(_os.getenv("QT_MAX_DROP_FROM_HIGH", "0.50") or 0.50))
 _DROP_LOOKBACK = 250
 
 
@@ -83,9 +83,10 @@ _CLV_WEAK = 0.40
 
 # RSI overbought — a breakout with NO room left to run is a blow-off-top
 # risk, not a leader continuing higher. Soft = demote A→B; Hard = reject
-# outright (same tier as the gap-exhaustion check).
-_RSI_OVERBOUGHT_SOFT = float(_os.getenv("QT_RSI_OVERBOUGHT_SOFT", "72") or 72)
-_RSI_OVERBOUGHT_HARD = float(_os.getenv("QT_RSI_OVERBOUGHT_HARD", "82") or 82)
+# outright (same tier as the gap-exhaustion check). Suggestion rule:
+# never recommend names with RSI > 70.
+_RSI_OVERBOUGHT_SOFT = float(_os.getenv("QT_RSI_OVERBOUGHT_SOFT", "70") or 70)
+_RSI_OVERBOUGHT_HARD = float(_os.getenv("QT_RSI_OVERBOUGHT_HARD", "70") or 70)
 
 # Falling-knife / momentum-rollover — the OPPOSITE failure mode from
 # extension. A fresh breakout/momentum BUY is a STRENGTH signal; a stock that
@@ -123,17 +124,17 @@ def grade_breakout(price: float, level: float, atr: float, vratio: float,
     clv (Close Location Value, default 1.0 = no penalty): weak close (<0.40
     — closed in bottom 40% of the day's range) flags a possible bull-trap —
     sellers took the day back despite the clearance.
-    rsi (default 0.0 = no penalty): ≥82 rejects outright (blow-off-top, no
-    room to run — same tier as the gap-exhaustion check); ≥72 flags as
-    extended. Both flags DEMOTE only — A→B, or B→unconfirmed if either
-    fires alongside a merely-marginal clearance. Never upgrades a grade."""
+    rsi (default 0.0 = no penalty): >70 rejects outright (blow-off-top, no
+    room to run — same tier as the gap-exhaustion check); ≥ soft ceiling
+    flags as extended. Soft flag demotes A→B (or B→unconfirmed on a
+    marginal clearance). Never upgrades a grade."""
     if level <= 0 or price <= level:
         return False, "", ""
     clearance = price - level
     atr_mult = clearance / atr if atr > 0 else 0.0
     if day_change > _BREAKOUT_MAX_GAP:
         return False, "", f"gap {day_change:+.0f}% — exhaustion risk, chase nahi"
-    if rsi >= _RSI_OVERBOUGHT_HARD:
+    if rsi > _RSI_OVERBOUGHT_HARD:
         return False, "", f"RSI {rsi:.0f} — blow-off-top overbought, chase nahi"
     vol_ok = vratio >= _BREAKOUT_MIN_VOL
     room_ok = atr_mult >= _BREAKOUT_ATR_BUFFER
@@ -563,7 +564,7 @@ class UnifiedScanner:
         # ── Momentum ──────────────────────────────────────────────────────────
         mom_score = (_norm(mom5, -5, 10) * 0.40 + _norm(rsi, 30, 70) * 0.35
                      + _norm(vratio, 0.5, 3.0) * 0.25) * 100
-        if mom_score >= 65 and 50 <= rsi < 78:
+        if mom_score >= 65 and 50 <= rsi <= _RSI_OVERBOUGHT_HARD:
             signals.append("MOMENTUM")
             reasons.append(f"Up {mom5:+.1f}% in 5 days on {vratio:.1f}× volume")
 

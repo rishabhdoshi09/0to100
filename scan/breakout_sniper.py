@@ -47,18 +47,17 @@ _CLEARANCE_PCT = float(os.getenv("QT_SNIPER_CLEARANCE_PCT", "0.0015") or 0.0015)
 _HOLD_SECONDS = float(os.getenv("QT_SNIPER_HOLD_SECONDS", "45") or 45)
 # Volume pacing — a break on dead volume is a trap even if it holds. We
 # require the day's cumulative volume to run AHEAD of its normal pace for
-# the time of day. Fail-open: unknown avg volume or very early session →
-# lean on the hold alone (never block for missing data).
+# the time of day. Zero / missing volume is NEVER suggested (fail-closed).
 _VOL_SURGE = float(os.getenv("QT_SNIPER_VOL_SURGE", "1.2") or 1.2)
 # Quality gate — the sniper is a SEPARATE path from the main scanner, so the
 # scanner's demote-only quality filters (extension/chase guard, RSI ceiling)
 # do NOT apply automatically. Without this, a stock the scanner flagged as a
-# chase (extended, already run hard) or a blow-off-top (RSI ≥ hard ceiling)
+# chase (extended, already run hard) or a blow-off-top (RSI > 70)
 # could still fire a green "BREAKOUT CONFIRMED" and get auto-traded — exactly
 # the low-quality break we spent the filters rejecting. We carry the daily
 # context (chase_risk, rsi) from the scan result into the watch map and skip
 # those names here. A CLEAN pre-breakout near its pivot is still watched.
-_RSI_BLOWOFF = float(os.getenv("QT_SNIPER_RSI_BLOWOFF", "82") or 82)
+_RSI_BLOWOFF = float(os.getenv("QT_SNIPER_RSI_BLOWOFF", "70") or 70)
 _MKT_OPEN_MIN = 9 * 60 + 15
 _MKT_CLOSE_MIN = 15 * 60 + 30
 _MKT_MINUTES = _MKT_CLOSE_MIN - _MKT_OPEN_MIN
@@ -80,9 +79,15 @@ def volume_confirms(cum_vol: float, avg_daily_vol: float, frac: float,
                     surge: float = _VOL_SURGE) -> bool:
     """Is today's volume running hot enough for a real breakout? Compares
     cumulative volume to the pace expected by this point in the day.
-    Fail-open when data is missing or it's too early to judge."""
-    if not avg_daily_vol or avg_daily_vol <= 0 or frac < 0.05:
-        return True                   # not enough info → don't block
+    Fail-closed on zero/missing volume — sniper must not suggest dead prints.
+    Early session (<5% of day) still requires positive traded volume and a
+    known average; pace surge is waived only until there is enough clock."""
+    if cum_vol <= 0:
+        return False                  # 0-volume break → never suggest
+    if not avg_daily_vol or avg_daily_vol <= 0:
+        return False                  # unknown avg → do not invent confirmation
+    if frac < 0.05:
+        return True                   # too early for pace math; volume present
     expected_by_now = avg_daily_vol * frac
     return cum_vol >= surge * expected_by_now
 
@@ -99,8 +104,7 @@ def process_ticks(ticks: list[dict], watch: dict[int, dict],
       ARM     — price clears trigger × (1 + clearance). Timestamp recorded.
       DISARM  — price falls back below trigger → false poke, forgotten.
       CONFIRM — still cleared AND held ≥ hold_seconds AND volume running
-                ahead of pace (dead-volume breaks rejected; fail-open when
-                avg volume unknown).
+                ahead of pace (0 / missing volume rejected; no fail-open).
 
     arm_state persists across calls (like already_fired). Returns the
     confirmed breakouts only — a wick or a low-volume poke never appears."""
@@ -147,15 +151,19 @@ def _quality_skip(r: dict) -> str:
     if r.get("chase_risk"):
         return "extended/chase-risk (already run hard, no clean base)"
     rsi = float(r.get("rsi") or 0)
-    if rsi >= _RSI_BLOWOFF:
+    if rsi > _RSI_BLOWOFF:
         return f"RSI {rsi:.0f} — blow-off-top overbought"
+    avg_vol = float(r.get("avg_vol20") or 0)
+    if avg_vol <= 0:
+        return "0 / unknown volume — sniper will not watch"
     return ""
 
 
 def build_watch_map(results: list[dict]) -> dict[int, dict]:
     """Token→level map from scan results (pre-breakout ≤2.5%%) + watchlist.
-    Chase-risk / blow-off-top names are skipped — the sniper must not fire
-    a 'confirmed breakout' on a stock the scanner would demote for quality."""
+    Chase-risk / blow-off-top / zero-volume names are skipped — the sniper
+    must not fire a 'confirmed breakout' on a stock the scanner would demote
+    for quality, or on a print with no volume evidence."""
     targets: dict[str, dict] = {}
     for r in results:
         if "PreBreakout" in (r.get("categories") or []) \
@@ -177,10 +185,10 @@ def build_watch_map(results: list[dict]) -> dict[int, dict]:
             for sym, hi, stp, tgt in conn.execute(
                     "SELECT symbol, buy_zone_high, stop_price, target_price "
                     "FROM watchlist"):
+                # Watchlist rows have no avg volume — do not sniper-suggest
+                # them until a scan result supplies real volume evidence.
                 if hi and sym not in targets:
-                    targets[sym] = {"trigger": float(hi),
-                                    "stop": float(stp or 0),
-                                    "target": float(tgt or 0)}
+                    log.debug("sniper_watchlist_skip_no_volume", symbol=sym)
             conn.close()
     except Exception:
         pass
