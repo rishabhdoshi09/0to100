@@ -325,9 +325,16 @@ def cmd_run(*, complete: bool = False, low_power: bool = False) -> int:
     env = os.environ.copy()
     env["PYTHONUNBUFFERED"] = "1"
     if low_power:
+        # Same service topology as complete (report API + autonomy + scans).
+        # Low-power only throttles CPU / skips idle backtest + US bootstrap.
+        complete = True
         env["QT_LOW_POWER"] = "1"
         env.setdefault("QT_DISABLE_IDLE_BACKTEST", "1")
-        _log("[STACK] Low-power mode: QT_LOW_POWER=1 (lighter scans / brief network).")
+        env.setdefault("QT_DISABLE_US_BOOTSTRAP", "1")
+        env.pop("QT_DISABLE_AUTO_MARKET_SCAN", None)
+        env.pop("QT_DISABLE_AUTO_LONG_TERM", None)
+        _log("[STACK] Low-power mode: same stack as complete; lighter CPU / no idle backtest.")
+        _log("[STACK] Market scan + autopilot feed still auto-start (not disabled).")
 
     py = _python()
     _ensure_api_deps(py)

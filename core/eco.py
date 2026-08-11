@@ -2,7 +2,7 @@
 🍃 Eco mode — shared-machine ke liye QuantTerm ki CPU bhookh kam karo.
 
 MacBook (fanless!) pe business software ke saath chalana ho toh full-power
-scanning garmi banati hai. QT_ECO=1 pe:
+scanning garmi banati hai. QT_ECO=1 *or* QT_LOW_POWER=1 pe:
 
   • off-hours mein market scan BILKUL band (raat ko 3 baje scan ka koi
     matlab nahi tha — data hi nahi badalta)
@@ -10,12 +10,11 @@ scanning garmi banati hai. QT_ECO=1 pe:
   • market-hours cadence relaxed (min 30 min; sniper phir bhi instant
     breakouts pakadta hai — woh websocket hai, CPU nahi khaata)
 
-Kya NAHI badalta: signals, gates, risk, autopilot logic — sirf KAB aur
-KITNI-TEZI se compute hota hai. Nightly backtest + outcome updates bhi
-chalte rehte hain (din mein ek baar, evidence rukna nahi chahiye).
+Kya NAHI badalta: signals, gates, risk, autopilot logic, market-scan
+bootstrap that feeds autopilot — sirf KAB aur KITNI-TEZI se compute hota hai.
 
-Enable: .env mein QT_ECO=1 (ya launchd/systemd env). Default: OFF —
-dedicated server pe full power.
+Enable: .env mein QT_ECO=1, or launch via scripts/run_quantterm_low_power.sh
+(which sets QT_LOW_POWER=1 and starts the same complete stack).
 """
 from __future__ import annotations
 
@@ -30,7 +29,11 @@ _ECO_MIN_INTERVAL_S = 1800        # market hours: at most every 30 min
 
 
 def eco_on() -> bool:
-    return str(os.getenv("QT_ECO", "")).strip().lower() in ("1", "true", "yes")
+    """True when QT_ECO=1 or QT_LOW_POWER=1 (Mac low-power launcher)."""
+    for key in ("QT_ECO", "QT_LOW_POWER"):
+        if str(os.getenv(key, "")).strip().lower() in ("1", "true", "yes", "on"):
+            return True
+    return False
 
 
 def workers(default: int) -> int:

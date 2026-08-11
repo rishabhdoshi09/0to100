@@ -613,11 +613,19 @@ class MarketOperationsWorker:
             _item, created = self.store.enqueue(NEWS_REFRESH, lane=LANES[NEWS_REFRESH], requested_by="bootstrap")
             if created:
                 queued.append(NEWS_REFRESH)
-        if _stale(ROOT / "logs" / "product" / "latest_scan.json", SCAN_FRESH_S):
+        # India market scan always bootstraps — even in QT_LOW_POWER. Autopilot
+        # is fed from scan results; disabling this made low-power "not trade".
+        disable_market = str(os.getenv("QT_DISABLE_AUTO_MARKET_SCAN", "") or "").strip().lower() in {
+            "1", "true", "yes", "on",
+        }
+        if (not disable_market) and _stale(ROOT / "logs" / "product" / "latest_scan.json", SCAN_FRESH_S):
             _item, created = self.store.enqueue(MARKET_SCAN, lane=LANES[MARKET_SCAN], requested_by="bootstrap")
             if created:
                 queued.append(MARKET_SCAN)
-        if _stale(ROOT / "logs" / "product" / "latest_long_term_scan.json", LONG_TERM_FRESH_S):
+        disable_lt = str(os.getenv("QT_DISABLE_AUTO_LONG_TERM", "") or "").strip().lower() in {
+            "1", "true", "yes", "on",
+        }
+        if (not disable_lt) and _stale(ROOT / "logs" / "product" / "latest_long_term_scan.json", LONG_TERM_FRESH_S):
             _item, created = self.store.enqueue(LONG_TERM_SCAN, lane=LANES[LONG_TERM_SCAN], requested_by="bootstrap")
             if created:
                 queued.append(LONG_TERM_SCAN)

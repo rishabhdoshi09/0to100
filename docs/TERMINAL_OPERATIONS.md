@@ -6,10 +6,14 @@
 ```bash
 cd ~/0to100
 source venv/bin/activate
-bash scripts/run_quantterm.sh
-# low-power laptop:
+bash scripts/run_quantterm_complete.sh
+# same stack, lighter CPU (autopilot + market scan still auto-start):
 bash scripts/run_quantterm_low_power.sh
 ```
+
+Low-power is **not** a thinner product — it starts the same complete stack
+(report API, autonomy, market-ops, market-scan bootstrap that feeds autopilot).
+It only reduces background CPU (idle backtest / US bootstrap off, fewer scan workers).
 
 ### Windows (PowerShell)
 ```powershell
