@@ -26,7 +26,9 @@ def test_ca_write_merge_and_object_schema(tmp_path, monkeypatch):
     assert status["available"] is True
     assert status["symbols"] == 1
     assert status["events"] == 1
-    assert status["research_grade"] is True
+    # Events alone do not earn research_grade — adjustment verify must PASS.
+    assert status["research_grade"] is False
+    assert status["adjustment_verified"] is False
 
     payload = json.loads(dest.read_text(encoding="utf-8"))
     assert payload["schema_version"] == 1

@@ -42,13 +42,21 @@ def evaluate_research_grade(
                 f"n={ids.get('n_securities')} lineage_complete="
                 f"{ids.get('symbol_lineage_complete')}",
             ))
+            # Official delist archive is required; full ISIN lineage may still be False.
             if not ids.get("has_official_delistings"):
                 checks.append(_fail(
                     "official_delistings",
-                    "EQUITY_L has no delisting archive — survivorship incomplete",
+                    "official NSE delisting archive not present on identity ledger",
                 ))
             else:
                 checks.append(_pass("official_delistings"))
+            if not ids.get("symbol_lineage_complete"):
+                checks.append(_fail(
+                    "symbol_lineage_complete",
+                    "symbol↔ISIN lineage not fully closed — unknown transitions remain",
+                ))
+            else:
+                checks.append(_pass("symbol_lineage_complete"))
     except Exception as exc:
         checks.append(_fail("security_identity", str(exc)))
 
@@ -133,10 +141,12 @@ def evaluate_research_grade(
 
     # 4) Raw bhav + index present
     try:
-        from data.bhavcopy_store import store_sessions, store_symbols
+        from data.bhavcopy_runtime import ensure_loaded
+        from data import bhavcopy_store as BS
         from data import index_store as IX
-        sessions = int(store_sessions() or 0)
-        n_sym = len(store_symbols() or [])
+        ensure_loaded(rebuild_from_local=False)
+        sessions = int(getattr(BS, "_store_sessions", 0) or 0)
+        n_sym = len(BS.store_symbols() or [])
         if sessions < 200 or n_sym < 50:
             checks.append(_fail(
                 "bhav_coverage",
@@ -144,12 +154,35 @@ def evaluate_research_grade(
             ))
         else:
             checks.append(_pass("bhav_coverage", f"sessions={sessions} symbols={n_sym}"))
-        with IX._lock:
-            nifty = IX._store.get("Nifty 50")
-        if nifty is None or len(nifty) < 200:
-            checks.append(_fail("benchmark", "Nifty 50 index history missing/short"))
-        else:
-            checks.append(_pass("benchmark", f"nifty_bars={len(nifty)}"))
+        try:
+            # Ensure index pickle is resident (network-free load).
+            if hasattr(IX, "build_index_store"):
+                try:
+                    IX.build_index_store(days=0)  # may no-op / load cache
+                except Exception:
+                    pass
+            # Prefer explicit load helpers if present
+            for name in ("ensure_loaded", "load_store", "_load_pickle"):
+                fn = getattr(IX, name, None)
+                if callable(fn):
+                    try:
+                        fn()
+                    except Exception:
+                        pass
+            with IX._lock:
+                nifty = IX._store.get("Nifty 50")
+                vix = IX._store.get("India VIX")
+            n_bars = 0 if nifty is None else len(nifty)
+            if n_bars < 200:
+                checks.append(_fail("benchmark", f"Nifty 50 index history missing/short (bars={n_bars})"))
+            else:
+                checks.append(_pass("benchmark", f"nifty_bars={n_bars}"))
+            if vix is None or len(vix) < 100:
+                checks.append(_fail("vix_history", "India VIX history missing/short"))
+            else:
+                checks.append(_pass("vix_history", f"vix_bars={len(vix)}"))
+        except Exception as exc:
+            checks.append(_fail("benchmark", str(exc)))
     except Exception as exc:
         checks.append(_fail("bhav_coverage", str(exc)))
 

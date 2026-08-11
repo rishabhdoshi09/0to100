@@ -24,6 +24,7 @@ _ROOT = Path(__file__).resolve().parent.parent
 _DEFAULT_PATH = _ROOT / "logs" / "security_identity.json"
 _EQUITY_L_URL = "https://nsearchives.nseindia.com/content/equities/EQUITY_L.csv"
 _SYMBOLCHANGE_URL = "https://archives.nseindia.com/content/equities/symbolchange.csv"
+_DELISTED_URL = "https://nsearchives.nseindia.com/content/equities/delisted.csv"
 _HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -91,6 +92,52 @@ def fetch_equity_l(*, session: requests.Session | None = None) -> tuple[list[dic
         })
     meta = {
         "source_url": _EQUITY_L_URL,
+        "source_sha256": _sha256_bytes(raw),
+        "n_rows": len(rows),
+        "fetched_at": datetime.now(timezone.utc).isoformat(),
+    }
+    return rows, meta
+
+
+def _parse_delist_date(raw: str) -> str | None:
+    raw = (raw or "").strip()
+    if not raw:
+        return None
+    got = _parse_nse_date(raw)
+    if got:
+        return got
+    for fmt in ("%d-%b-%y", "%d-%B-%y", "%d/%m/%y"):
+        try:
+            return datetime.strptime(raw, fmt).date().isoformat()
+        except ValueError:
+            continue
+    return None
+
+
+def fetch_delisted(*, session: requests.Session | None = None) -> tuple[list[dict], dict]:
+    """Official NSE delisting archive."""
+    import csv
+    import io
+    sess = session or requests.Session()
+    resp = sess.get(_DELISTED_URL, headers=_HEADERS, timeout=60)
+    resp.raise_for_status()
+    raw = resp.content
+    reader = csv.DictReader(io.StringIO(raw.decode("utf-8", errors="replace")))
+    rows: list[dict] = []
+    for r in reader:
+        sym = str(r.get("Symbol") or r.get("SYMBOL") or "").strip().upper()
+        when = _parse_delist_date(str(r.get("Delisted Date") or ""))
+        if not sym or not when:
+            continue
+        rows.append({
+            "symbol": sym,
+            "delisted": when,
+            "delist_type": str(r.get("Type of Delisting") or "").strip(),
+            "company": str(r.get("Company") or "").strip(),
+            "provenance": "nse_delisted",
+        })
+    meta = {
+        "source_url": _DELISTED_URL,
         "source_sha256": _sha256_bytes(raw),
         "n_rows": len(rows),
         "fetched_at": datetime.now(timezone.utc).isoformat(),
@@ -215,16 +262,57 @@ def materialize_from_nse(*, path: str | Path | None = None) -> dict:
     sess = requests.Session()
     equity_rows, eq_meta = fetch_equity_l(session=sess)
     changes, ch_meta = fetch_symbol_changes(session=sess)
+    try:
+        delisted_rows, de_meta = fetch_delisted(session=sess)
+    except Exception as exc:
+        delisted_rows, de_meta = [], {"error": str(exc)}
+
+    # Apply official delisting dates onto matching securities (evidence only).
+    by_delist = {d["symbol"]: d for d in delisted_rows}
+    for row in equity_rows:
+        d = by_delist.get(row["symbol"])
+        if d:
+            row["delisting_date"] = d["delisted"]
+            if row.get("valid_to") is None:
+                row["valid_to"] = d["delisted"]
+                row["tradable"] = False
+
+    # Delisted-only names (not in EQUITY_L): record with unknown listing unless skipped
+    known = {r["symbol"] for r in equity_rows}
+    for d in delisted_rows:
+        if d["symbol"] in known:
+            continue
+        equity_rows.append({
+            "security_id": f"sym:{d['symbol']}",
+            "symbol": d["symbol"],
+            "series": "EQ",
+            "isin": None,
+            "valid_from": None,  # unknown listing — not invented
+            "valid_to": d["delisted"],
+            "listing_date": None,
+            "delisting_date": d["delisted"],
+            "tradable": False,
+            "provenance": "nse_delisted",
+        })
+
     ledger = build_identity_ledger(
         equity_rows,
         changes,
-        source_meta={"equity_l": eq_meta, "symbolchange": ch_meta},
+        source_meta={"equity_l": eq_meta, "symbolchange": ch_meta, "delisted": de_meta},
     )
+    ledger["source"] = "nse_equity_l+nse_symbolchange+nse_delisted"
+    ledger["completeness"] = {
+        "has_isin_for_current_eq": True,
+        "has_official_delistings": bool(delisted_rows),
+        # Lineage still incomplete without full rename↔ISIN closure proofs
+        "symbol_lineage_complete": False,
+    }
     out = write_identity_ledger(ledger, path=path)
     return {
         "path": str(out),
         "n_securities": len(ledger["securities"]),
         "n_symbol_changes": len(ledger["symbol_changes"]),
+        "n_delisted": len(delisted_rows),
         "completeness": ledger["completeness"],
         "source_meta": ledger["source_meta"],
     }

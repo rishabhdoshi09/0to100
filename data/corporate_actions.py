@@ -165,7 +165,8 @@ def ledger_status(path=None, *, verify: bool = False, sample: int = 80) -> dict:
         "path": str(p),
         "symbols": len(events),
         "events": n_events,
-        "research_grade": bool(events),
+        # Events on disk ≠ research-grade prices. Verification must PASS.
+        "research_grade": False,
         "share_adjust_types": sorted(_VALID_TYPES),
         "rejected_types": rejected,
         "todo_path": str(todo_path()),
@@ -192,6 +193,8 @@ def ledger_status(path=None, *, verify: bool = False, sample: int = 80) -> dict:
     else:
         status["adjustment_verified"] = False
         status["verify_note"] = "verify not run yet — python main.py ca-ingest --verify"
+    # Earn ledger research_grade only after share-count events exist AND verify PASS.
+    status["research_grade"] = bool(n_events) and bool(status.get("adjustment_verified"))
     todo = todo_path()
     status["todo_available"] = todo.exists()
     if todo.exists():
@@ -203,7 +206,7 @@ def ledger_status(path=None, *, verify: bool = False, sample: int = 80) -> dict:
             status["todo_gaps"] = None
     else:
         status["todo_gaps"] = 0
-    if not status["research_grade"]:
+    if not status["available"] or n_events < 1:
         status["next_action"] = (
             "python main.py ca-ingest --from-gaps  "
             "→ fill factor/type from NSE filings in logs/ca_events.todo.csv  "
