@@ -9,6 +9,40 @@
 
 ---
 
+## In plain English
+
+**Conclusion:** QuantTerm already has the tools to build trustworthy historical
+tests. It does **not** yet have the trustworthy historical files on disk.
+
+**Why:** Official day-by-day NSE prices, corporate-action records, and
+“who was listed when” membership history are missing in this environment.
+
+**What it means:** Research results so far are exploration-only. They must not
+steer real-money strategy promotion.
+
+**What to do:** After approval, load the missing ledgers through the **existing**
+data path, run the quality checks, earn a research-quality stamp, then rerun the
+same frozen Phase A.5 tests. Do not invent missing history. Do not change live
+trading behaviour.
+
+**Data quality today:** Good enough for charts and exploration, not for proving
+a strategy (`DISPLAY_ONLY` exploratory panel only).
+
+**Research status:** UNPROVEN until a research-quality snapshot is earned.
+
+<details>
+<summary>Technical details</summary>
+
+Missing on disk: `logs/bhav/`, `logs/index/`, `logs/ca_events.json`,
+`logs/universe_history.json`, `logs/snapshots/`. Reuse existing
+`bhavcopy_store`, `SnapshotStore`, `PitContract`, `corporate_actions`,
+`universe_history`, validators — do **not** create parallel stores.
+See scoreboard below. Presentation contract: `COMMON_MAN_READABILITY.md`.
+
+</details>
+
+---
+
 ## Required end-state (target pipeline)
 
 ```text

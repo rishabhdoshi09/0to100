@@ -342,6 +342,27 @@ def render_help() -> None:
 ### Important
 A day with no trade is not a failure. It means no setup passed the evidence and safety checks.
 """)
+    st.markdown("### How QuantTerm explains itself")
+    st.caption(
+        "Everyday screens lead with a conclusion in plain language. "
+        "Technical codes stay available under details — they are not renamed in the engine."
+    )
+    try:
+        from product.plain_language import explain_research_verdict, explain_trust_class
+
+        for card in (
+            explain_trust_class("DISPLAY_ONLY"),
+            explain_trust_class("RESEARCH_GRADE"),
+            explain_research_verdict("INCONCLUSIVE"),
+        ):
+            st.markdown(f"**{card.label} — {card.state}**")
+            st.write(card.explanation)
+            if card.implication:
+                st.caption(card.implication)
+            with st.expander("Technical details", expanded=False):
+                st.code(card.technical)
+    except Exception:
+        st.caption("Plain-language helpers are temporarily unavailable.")
 
 
 def render_advanced() -> None:

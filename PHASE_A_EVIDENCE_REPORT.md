@@ -7,6 +7,36 @@
 
 ---
 
+## In plain English
+
+**Conclusion:** QuantTerm tested five research ideas. None are ready for real trades.
+
+**Why:** The historical data used was only good enough for charts and exploration
+(`DISPLAY_ONLY`), not for proving a strategy. So every formal result stays
+**unproven**.
+
+**What it means:** Even where the rough numbers looked weak or negative, we still
+cannot promote or kill ideas as scientific fact until research-quality market
+history is available.
+
+**What to do:** Do **not** start bigger models or Phase B. First finish
+research-grade data (official prices + corporate actions + who was listed when),
+then rerun the **same** frozen tests.
+
+**Research status:** UNPROVEN  
+**Data quality:** Good enough for exploration, not for proof.
+
+<details>
+<summary>Technical details</summary>
+
+Formal verdict on all five: `INCONCLUSIVE` (trust-gated). Registry status:
+`REJECTED` because frozen criterion `research_grade == 1` failed.
+Trust class: `DISPLAY_ONLY`. See sections below for experiment ids and metrics.
+
+</details>
+
+---
+
 ## 1. Executive verdict
 
 Phase A infrastructure works end-to-end (PitContract → horizons → challenger lab →
