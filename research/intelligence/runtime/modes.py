@@ -12,6 +12,8 @@ OFF = "OFF"
 RESEARCH_ONLY = "RESEARCH_ONLY"
 SHADOW = "SHADOW"                 # evaluate + decide, but place NO paper orders
 PAPER_AUTO = "PAPER_AUTO"        # full automatic PAPER loop (this milestone)
+# Conceptual alias used by the forward-evidence system — same execution path as PAPER_AUTO.
+PAPER_FORWARD_EVIDENCE = "PAPER_FORWARD_EVIDENCE"
 PAPER_PAUSED = "PAPER_PAUSED"    # manage/exit existing, open NO new entries
 LIMITED_LIVE = "LIMITED_LIVE"    # disabled this milestone
 GUARDED_LIVE = "GUARDED_LIVE"    # disabled this milestone
@@ -19,11 +21,12 @@ FULL_AUTO = "FULL_AUTO"          # disabled this milestone
 LIQUIDATE_ONLY = "LIQUIDATE_ONLY"  # only close positions
 HALTED = "HALTED"                # do nothing
 
-MODES = (OFF, RESEARCH_ONLY, SHADOW, PAPER_AUTO, PAPER_PAUSED, LIMITED_LIVE,
-         GUARDED_LIVE, FULL_AUTO, LIQUIDATE_ONLY, HALTED)
+MODES = (OFF, RESEARCH_ONLY, SHADOW, PAPER_AUTO, PAPER_FORWARD_EVIDENCE, PAPER_PAUSED,
+         LIMITED_LIVE, GUARDED_LIVE, FULL_AUTO, LIQUIDATE_ONLY, HALTED)
 
 # modes that are permitted to run in THIS milestone (no live)
-_ENABLED = {OFF, RESEARCH_ONLY, SHADOW, PAPER_AUTO, PAPER_PAUSED, LIQUIDATE_ONLY, HALTED}
+_ENABLED = {OFF, RESEARCH_ONLY, SHADOW, PAPER_AUTO, PAPER_FORWARD_EVIDENCE,
+            PAPER_PAUSED, LIQUIDATE_ONLY, HALTED}
 _LIVE = {LIMITED_LIVE, GUARDED_LIVE, FULL_AUTO}
 
 
@@ -49,9 +52,9 @@ def assert_no_live(mode: str) -> None:
 
 def opens_new_entries(mode: str) -> bool:
     """Whether the loop may OPEN new paper positions in this mode."""
-    return mode == PAPER_AUTO
+    return mode in (PAPER_AUTO, PAPER_FORWARD_EVIDENCE)
 
 
 def manages_positions(mode: str) -> bool:
     """Whether the loop should still manage/exit open positions."""
-    return mode in (PAPER_AUTO, PAPER_PAUSED, LIQUIDATE_ONLY, SHADOW)
+    return mode in (PAPER_AUTO, PAPER_FORWARD_EVIDENCE, PAPER_PAUSED, LIQUIDATE_ONLY, SHADOW)

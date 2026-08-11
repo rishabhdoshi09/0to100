@@ -136,7 +136,7 @@ class AutoResearchBrain:
         self._save_paper_config()
 
     def is_paper_auto_enabled(self) -> bool:
-        return bool(self.paper_auto_enabled) and self.mode == "PAPER_AUTO"
+        return bool(self.paper_auto_enabled) and self.mode in ("PAPER_AUTO", "PAPER_FORWARD_EVIDENCE")
 
     def _load_paper_config(self) -> bool:
         if not self.paper_config_path:

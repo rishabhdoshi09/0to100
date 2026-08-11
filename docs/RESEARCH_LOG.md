@@ -595,3 +595,20 @@ guarantee.
 - **Next action:** `RECORD_EVIDENCE_NO_TUNING`.
 - **Supersedes / references:** follow-up to EXP-FUND-03; does not revise parent
   CONFIRMED discovery/confirmation record.
+
+---
+
+## FORWARD-TRADING-EVIDENCE — PAPER observation architecture
+
+- **Hypothesis:** QuantTerm can accumulate labelled forward paper evidence through the
+  existing institutional PAPER_AUTO path without granting live authority.
+- **Null:** Paper observation cannot be armed without inventing parallel OMS/risk/book
+  systems or unlocking live submission.
+- **Execution date:** 2026-08-11. Branch `cursor/forward-trading-evidence-80a2`.
+- **Status:** **IMPLEMENTED — PAPER ARMED / LIVE BLOCKED.**
+- **Evidence:** `QUANTTERM_FORWARD_TRADING_EVIDENCE_REPORT.md`;
+  `research/forward_evidence/*`; `tests/test_forward_trading_evidence.py`.
+- **Decision:** Paper allowlist active for existing runtime families. EXP-FUND-03 and
+  fund-cycle experiments DENIED for paper observation from research status alone.
+  Live remains blocked.
+- **Next action:** Operate autonomy supervisor; accumulate `PAPER_FORWARD` outcomes.
