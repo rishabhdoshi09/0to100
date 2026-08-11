@@ -36,6 +36,7 @@ DOMAIN_UNIVERSE = "universe"
 DOMAIN_CORPORATE_ACTIONS = "corporate_actions"
 DOMAIN_VALUATIONS = "valuations"
 DOMAIN_FUNDAMENTALS = "fundamentals"
+DOMAIN_EVENTS = "events"
 DOMAIN_SECTORS = "sectors"
 
 DOMAINS = (
@@ -45,6 +46,7 @@ DOMAINS = (
     DOMAIN_CORPORATE_ACTIONS,
     DOMAIN_VALUATIONS,
     DOMAIN_FUNDAMENTALS,
+    DOMAIN_EVENTS,
     DOMAIN_SECTORS,
 )
 
@@ -94,6 +96,8 @@ class PitContract:
         universe_history_path=None,
         ca_events_path=None,
         valuations_path=None,
+        fundamentals_path=None,
+        events_path=None,
         allow_network: bool = False,
     ):
         if allow_network:
@@ -106,6 +110,8 @@ class PitContract:
         self._universe_history_path = universe_history_path
         self._ca_events_path = ca_events_path
         self._valuations_path = valuations_path
+        self._fundamentals_path = fundamentals_path
+        self._events_path = events_path
 
     # ── factories ────────────────────────────────────────────────────────────
     @classmethod
@@ -216,18 +222,9 @@ class PitContract:
         if domain == DOMAIN_VALUATIONS:
             return self._valuations(as_of, symbol)
         if domain == DOMAIN_FUNDAMENTALS:
-            return PitReadResult(
-                status=DS.NOT_PIT_SAFE,
-                domain=domain,
-                as_of=as_of,
-                data=None,
-                reasons=(
-                    "fundamentals caches are as-of-now; no publication-dated ledger "
-                    "is bound through PitContract",
-                ),
-                snapshot_id=self.snapshot_id,
-                source="fundamentals_cache",
-            )
+            return self._fundamentals(as_of, symbol)
+        if domain == DOMAIN_EVENTS:
+            return self._events(as_of, symbol)
         if domain == DOMAIN_SECTORS:
             return PitReadResult(
                 status=DS.NOT_PIT_SAFE,
@@ -282,6 +279,8 @@ class PitContract:
         univ = self._universe_ledger_status()
         ca = self._ca_ledger_status()
         val = self._valuations_ledger_status()
+        fund = self._fundamentals_ledger_status()
+        ev = self._events_ledger_status()
 
         if not univ.get("available"):
             health["has_universe_history"] = False
@@ -302,6 +301,10 @@ class PitContract:
 
         if not val.get("available"):
             reasons.append("PIT valuation ledger absent")
+        if not fund.get("available"):
+            reasons.append("PIT fundamentals ledger absent or empty")
+        if not ev.get("available"):
+            reasons.append("PIT events ledger absent or empty")
 
         # Evidence tier from existing classifier — never upgrades on assumption
         if when is not None and latest is not None:
@@ -316,6 +319,19 @@ class PitContract:
         elif not health.get("has_prices"):
             status = DS.INCOMPLETE
 
+        fund_domain = (
+            DS.READY if fund.get("available") and fund.get("research_grade")
+            else (DS.INCOMPLETE if fund.get("available") else DS.NOT_PIT_SAFE)
+        )
+        # Without a publication-dated ledger, fundamentals remain NOT_PIT_SAFE
+        # (operational screener caches must never look READY).
+        if not fund.get("available"):
+            fund_domain = DS.NOT_PIT_SAFE
+        ev_domain = (
+            DS.READY if ev.get("available") and ev.get("research_grade")
+            else (DS.INCOMPLETE if ev.get("available") else DS.INCOMPLETE)
+        )
+
         cov = {
             "health": health,
             "tier": tier,
@@ -324,6 +340,8 @@ class PitContract:
                 "universe_history": univ,
                 "corporate_actions": ca,
                 "valuations": val,
+                "fundamentals": fund,
+                "events": ev,
             },
             "domains": {
                 DOMAIN_BARS: DS.READY if health.get("has_prices") else DS.INCOMPLETE,
@@ -340,7 +358,8 @@ class PitContract:
                 DOMAIN_VALUATIONS: (
                     DS.READY if val.get("available") else DS.INCOMPLETE
                 ),
-                DOMAIN_FUNDAMENTALS: DS.NOT_PIT_SAFE,
+                DOMAIN_FUNDAMENTALS: fund_domain,
+                DOMAIN_EVENTS: ev_domain,
                 DOMAIN_SECTORS: DS.NOT_PIT_SAFE,
             },
         }
@@ -653,6 +672,87 @@ class PitContract:
             meta={"available_ts": avail, "symbol": symbol.upper()},
         )
 
+    def _fundamentals(self, as_of: str, symbol: str | None) -> PitReadResult:
+        from data.pit_fundamentals import get_fundamentals, ledger_status
+
+        info = ledger_status(self._fundamentals_path)
+        if not info.get("available"):
+            # Preserve hard wall: operational caches are never a silent fallback.
+            return PitReadResult(
+                status=DS.NOT_PIT_SAFE,
+                domain=DOMAIN_FUNDAMENTALS,
+                as_of=as_of,
+                data=None,
+                reasons=(
+                    "fundamentals caches are as-of-now; no publication-dated ledger "
+                    "is bound through PitContract",
+                ),
+                snapshot_id=self.snapshot_id,
+                source="fundamentals_cache",
+                meta=info,
+            )
+        if not symbol:
+            return self._blocked(DOMAIN_FUNDAMENTALS, as_of, "symbol is required for fundamentals")
+        row = get_fundamentals(symbol, as_of, path=self._fundamentals_path)
+        if row is None:
+            return PitReadResult(
+                status=DS.INCOMPLETE,
+                domain=DOMAIN_FUNDAMENTALS,
+                as_of=as_of,
+                data=None,
+                reasons=(f"no fundamentals for {symbol.upper()} with available_at <= {as_of}",),
+                snapshot_id=self.snapshot_id,
+                source="pit_fundamentals",
+            )
+        avail = _norm_date(row.get("available_at"))
+        if avail > as_of:
+            return PitReadResult(
+                status=DS.BLOCKED,
+                domain=DOMAIN_FUNDAMENTALS,
+                as_of=as_of,
+                data=None,
+                reasons=("fundamentals available_at exceeded as_of — refusing look-ahead",),
+                snapshot_id=self.snapshot_id,
+                source="pit_fundamentals",
+            )
+        return PitReadResult(
+            status=DS.READY,
+            domain=DOMAIN_FUNDAMENTALS,
+            as_of=as_of,
+            data=row,
+            reasons=(),
+            snapshot_id=self.snapshot_id,
+            source="pit_fundamentals",
+            meta={"available_at": avail, "symbol": symbol.upper()},
+        )
+
+    def _events(self, as_of: str, symbol: str | None) -> PitReadResult:
+        from data.pit_events import get_events, ledger_status
+
+        info = ledger_status(self._events_path)
+        if not info.get("available"):
+            return PitReadResult(
+                status=DS.INCOMPLETE,
+                domain=DOMAIN_EVENTS,
+                as_of=as_of,
+                data=None,
+                reasons=("PIT events ledger absent — refusing undated announcement caches",),
+                snapshot_id=self.snapshot_id,
+                source="pit_events",
+                meta=info,
+            )
+        rows = get_events(symbol, as_of, path=self._events_path)
+        return PitReadResult(
+            status=DS.READY,
+            domain=DOMAIN_EVENTS,
+            as_of=as_of,
+            data=rows,
+            reasons=(),
+            snapshot_id=self.snapshot_id,
+            source="pit_events",
+            meta={"n": len(rows), "symbol": (symbol or "").upper() or None},
+        )
+
     # ── ledger probes ────────────────────────────────────────────────────────
     def _universe_ledger_status(self) -> dict:
         try:
@@ -680,6 +780,22 @@ class PitContract:
             from data.pit_valuations import ledger_status
 
             return ledger_status(self._valuations_path)
+        except Exception as exc:
+            return {"available": False, "note": str(exc)}
+
+    def _fundamentals_ledger_status(self) -> dict:
+        try:
+            from data.pit_fundamentals import ledger_status
+
+            return ledger_status(self._fundamentals_path)
+        except Exception as exc:
+            return {"available": False, "note": str(exc)}
+
+    def _events_ledger_status(self) -> dict:
+        try:
+            from data.pit_events import ledger_status
+
+            return ledger_status(self._events_path)
         except Exception as exc:
             return {"available": False, "note": str(exc)}
 

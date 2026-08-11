@@ -137,9 +137,12 @@ class TestSnapshotCompatibility:
 # ── Explicit unsafe / incomplete states ──────────────────────────────────────
 
 class TestExplicitUnsafeStates:
-    def test_fundamentals_are_not_pit_safe(self, store_and_sid):
+    def test_fundamentals_are_not_pit_safe(self, store_and_sid, tmp_path):
         store, sid = store_and_sid
-        pit = PitContract.from_store(store, sid)
+        # Isolate from any on-disk research ledger — operational caches stay NOT_PIT_SAFE.
+        pit = PitContract.from_store(
+            store, sid, fundamentals_path=tmp_path / "no_pit_fundamentals.json"
+        )
         result = pit.as_of(DOMAIN_FUNDAMENTALS, when="d002", symbol="AAA")
         assert result.status == DS.NOT_PIT_SAFE
         assert result.data is None
@@ -234,6 +237,8 @@ class TestCoverageAndUniverse:
             universe_history_path=tmp_path / "missing_uh.json",
             ca_events_path=tmp_path / "missing_ca.json",
             valuations_path=tmp_path / "missing_val.json",
+            fundamentals_path=tmp_path / "missing_fund.json",
+            events_path=tmp_path / "missing_events.json",
         )
         cov = pit.coverage(as_of="d004")
         assert isinstance(cov, PitReadResult)

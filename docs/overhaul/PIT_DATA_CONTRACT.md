@@ -32,7 +32,8 @@ valuation ledgers.
 | `universe` | Snapshot bar-contemporaneous membership, or membership ledger |
 | `corporate_actions` | Operator CA ledger events with `ex_date <= as_of` |
 | `valuations` | `pit_valuations.get_valuation` (`available_ts <= as_of`) |
-| `fundamentals` | Always `NOT_PIT_SAFE` (as-of-now caches) |
+| `fundamentals` | `pit_fundamentals.get_fundamentals` when publication-dated ledger bound; otherwise `NOT_PIT_SAFE` (never uses as-of-now caches) |
+| `events` | `pit_events.get_events` (`available_at <= as_of`) — earnings/announcements |
 | `sectors` | Always `NOT_PIT_SAFE` (static maps, not historically dated) |
 
 ## Status vocabulary
