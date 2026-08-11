@@ -521,6 +521,9 @@ def explain_unresolved_lineage() -> PlainCard:
         implication="Unresolved lineage can block research-grade certification.",
         technical="UNRESOLVED_LINEAGE",
     )
+
+
+def research_report_blurb(verdict: str | None, *, trust_class: str | None = None) -> str:
     """One plain paragraph for research report headers."""
     v = explain_research_verdict(verdict)
     parts = [v.explanation]
