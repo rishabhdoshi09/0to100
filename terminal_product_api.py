@@ -712,10 +712,15 @@ def stock_intelligence(symbol: str) -> dict[str, Any]:
         raise HTTPException(status_code=500, detail=f"Stock intelligence failed: {exc}") from exc
 
 
-def _fundamentals_fetch_payload(symbol: str, data: dict[str, Any]) -> dict[str, Any]:
+def _fundamentals_fetch_payload(symbol: str, data: dict[str, Any], *, steps: list | None = None) -> dict[str, Any]:
+    from fundamentals.resolver import coverage_score, next_actions
+
     return {
         "accepted": True,
         "symbol": symbol,
+        "outcome": "READY",
+        "source": str(data.get("_source") or "unknown"),
+        "coverage": coverage_score(data),
         "sections": {
             "about": bool(data.get("about")),
             "quarterly_results": len(data.get("quarterly_results", []) or []),
@@ -725,28 +730,67 @@ def _fundamentals_fetch_payload(symbol: str, data: dict[str, Any]) -> dict[str, 
             "shareholding": len(data.get("shareholding", []) or []),
             "peer_comparison": len(data.get("peer_comparison", []) or []),
         },
+        "steps": list(steps or []),
+        "next_actions": next_actions(symbol),
         "workspace": build_stock_workspace(symbol),
     }
 
 
 @app.post("/api/stock-intelligence/{symbol}/fetch-fundamentals")
 def fetch_stock_fundamentals(symbol: str, force: bool = False) -> dict[str, Any]:
-    """Frontend-triggered Screener.in load (force=false lazy, force=true retry)."""
+    """Resolve fundamentals with per-step yield trail (Screener → Yahoo → cache → uploads)."""
     try:
         clean = clean_symbol(symbol)
+        from fundamentals.lazy import ensure_deep_fundamentals, last_resolve_trail
+        from fundamentals.resolver import next_actions, resolve
+
         if force:
-            from fundamentals.fetcher import get_deep_fundamentals
-
-            data = get_deep_fundamentals(clean, force_refresh=True)
+            data, steps = resolve(clean, force_refresh=True, write_cache=True)
         else:
-            from fundamentals.lazy import ensure_deep_fundamentals
-
             data = ensure_deep_fundamentals(clean, force_refresh=False)
-        return _fundamentals_fetch_payload(clean, data)
+            steps = last_resolve_trail(clean)
+        if data is None:
+            return {
+                "accepted": False,
+                "symbol": clean,
+                "outcome": "MISSING",
+                "source": "",
+                "coverage": 0,
+                "sections": {},
+                "steps": steps,
+                "next_actions": next_actions(clean),
+                "message": steps[-1]["message"] if steps else "All fundamentals sources exhausted",
+            }
+        return _fundamentals_fetch_payload(clean, data, steps=steps)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"Fundamentals fetch failed: {exc}") from exc
+        # Still yield what we know so the UI can show the trail + next actions
+        try:
+            from fundamentals.lazy import last_resolve_trail
+            from fundamentals.resolver import next_actions
+
+            clean = clean_symbol(symbol)
+            steps = last_resolve_trail(clean)
+            return {
+                "accepted": False,
+                "symbol": clean,
+                "outcome": "ERROR",
+                "source": "",
+                "coverage": 0,
+                "sections": {},
+                "steps": steps,
+                "next_actions": next_actions(clean),
+                "message": str(exc),
+            }
+        except Exception:
+            raise HTTPException(status_code=502, detail=f"Fundamentals fetch failed: {exc}") from exc
+
+
+@app.post("/api/stock-intelligence/{symbol}/resolve-fundamentals")
+def resolve_stock_fundamentals(symbol: str, force: bool = True) -> dict[str, Any]:
+    """Explicit resolve endpoint — always returns the full step trail."""
+    return fetch_stock_fundamentals(symbol, force=force)
 
 
 @app.post("/api/stock-intelligence/{symbol}/refresh-fundamentals")

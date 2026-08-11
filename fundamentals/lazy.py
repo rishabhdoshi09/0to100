@@ -1,11 +1,10 @@
-"""Lazy fundamentals sync — scrape Screener.in per symbol on demand, not bulk upfront."""
+"""Lazy fundamentals sync — multi-source resolver with per-step yield trail."""
 from __future__ import annotations
 
 import time
 from typing import Any, Dict
 
 from fundamentals.cache import FundamentalsCache
-from fundamentals.fetcher import get_deep_fundamentals
 from logger import get_logger
 
 log = get_logger(__name__)
@@ -14,6 +13,7 @@ _MIN_GAP_S = 1.0
 _FAIL_BACKOFF_S = 600
 _last_scrape_s = 0.0
 _fail_until: dict[str, float] = {}
+_last_trail: dict[str, list[dict[str, Any]]] = {}
 
 
 def _throttle() -> None:
@@ -25,17 +25,20 @@ def _throttle() -> None:
     _last_scrape_s = time.time()
 
 
+def last_resolve_trail(symbol: str) -> list[dict[str, Any]]:
+    return list(_last_trail.get(symbol.upper().strip(), []))
+
+
 def ensure_deep_fundamentals(
     symbol: str,
     *,
     force_refresh: bool = False,
 ) -> Dict[str, Any]:
     """
-    Return fundamentals for one symbol, fetching from Screener.in only when needed.
+    Return fundamentals for one symbol via the yielding multi-source resolver.
 
-    - Fresh cache hit → instant return
-    - Missing or stale (when force_refresh) → single polite scrape (~1s)
-    - Scrape fail → return stale cache if any exists; otherwise raise
+    Order: fresh cache → Screener.in → Yahoo Finance → stale cache → uploads.
+    Every attempt is recorded in ``last_resolve_trail(symbol)``.
     """
     symbol = symbol.upper().strip()
     cache = FundamentalsCache()
@@ -43,27 +46,45 @@ def ensure_deep_fundamentals(
     if not force_refresh:
         cached = cache.get(symbol)
         if cached is not None:
+            _last_trail[symbol] = [{
+                "step": 1, "source": "local_cache_fresh", "status": "OK",
+                "message": "Fresh cache hit — no network fetch needed",
+                "elapsed_ms": 0, "sections": {}, "reputed": True,
+                "official": False, "coverage": 100,
+            }]
             return cached
         if not cache.has(symbol):
             fail_ts = _fail_until.get(symbol)
             if fail_ts and time.time() < fail_ts:
                 stale = cache.get_any(symbol)
                 if stale:
+                    _last_trail[symbol] = [{
+                        "step": 1, "source": "local_cache_stale", "status": "OK",
+                        "message": "Backoff active — serving stale cache",
+                        "elapsed_ms": 0, "sections": {}, "reputed": False,
+                        "official": False, "coverage": 50,
+                    }]
                     return stale
-                raise RuntimeError(f"Fundamentals fetch for {symbol} is in backoff after a recent failure")
+                raise RuntimeError(
+                    f"Fundamentals fetch for {symbol} is in backoff after a recent failure"
+                )
 
     _throttle()
-    try:
-        data = get_deep_fundamentals(symbol, force_refresh=force_refresh)
+    from fundamentals.resolver import resolve
+
+    data, steps = resolve(symbol, force_refresh=force_refresh, write_cache=True)
+    _last_trail[symbol] = steps
+    if data is not None:
         _fail_until.pop(symbol, None)
         return data
-    except Exception as exc:
-        _fail_until[symbol] = time.time() + _FAIL_BACKOFF_S
-        stale = cache.get_any(symbol)
-        if stale:
-            log.warning("fundamentals_ensure_stale_fallback", symbol=symbol, error=type(exc).__name__)
-            return stale
-        raise
+
+    _fail_until[symbol] = time.time() + _FAIL_BACKOFF_S
+    stale = cache.get_any(symbol)
+    if stale:
+        log.warning("fundamentals_ensure_stale_fallback", symbol=symbol)
+        return stale
+    detail = steps[-1]["message"] if steps else "all sources exhausted"
+    raise RuntimeError(f"Fundamentals unavailable for {symbol}: {detail}")
 
 
 def cache_status() -> dict[str, Any]:

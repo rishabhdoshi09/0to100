@@ -47,7 +47,14 @@ _REGISTRY: list[ProviderSpec] = [
         capabilities=frozenset({DataCapability.FUNDAMENTALS, DataCapability.OWNERSHIP}),
         priority=4,
         authentication_status="scrape",
-        coverage_note="Screener.in via fundamentals/fetcher cache",
+        coverage_note="Screener.in via fundamentals resolver (primary)",
+    ),
+    ProviderSpec(
+        name="yahoo_finance",
+        capabilities=frozenset({DataCapability.FUNDAMENTALS, DataCapability.DAILY_PRICES}),
+        priority=6,
+        authentication_status="public",
+        coverage_note="Reputed fallback when Screener.in is blocked or thin",
     ),
     ProviderSpec(
         name="google_finance",
@@ -66,10 +73,9 @@ _REGISTRY: list[ProviderSpec] = [
         }),
         priority=5,
         authentication_status="user_supplied",
-        coverage_note="Validated CSV/ZIP import pipeline",
+        coverage_note="Validated CSV/ZIP import pipeline + Research Data uploads",
     ),
 ]
-
 
 def providers_for(capability: DataCapability) -> list[ProviderSpec]:
     ranked = [p for p in _REGISTRY if capability in p.capabilities]

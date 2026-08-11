@@ -10,13 +10,11 @@ from __future__ import annotations
 from typing import Any, Dict
 
 from fundamentals.cache import FundamentalsCache
-from fundamentals.screener_deep import ScreenerDeepFetcher
 from logger import get_logger
 
 log = get_logger(__name__)
 
-_cache   = FundamentalsCache()
-_scraper = ScreenerDeepFetcher()
+_cache = FundamentalsCache()
 
 
 def get_deep_fundamentals(
@@ -26,8 +24,9 @@ def get_deep_fundamentals(
     """
     Return full fundamentals dict for *symbol*.
 
-    Prefer ``fundamentals.lazy.ensure_deep_fundamentals`` for API/UI paths
-  (rate-limited, backoff). This function is the direct scrape + cache write.
+    Uses the yielding multi-source resolver (Screener.in → Yahoo Finance →
+    stale cache → user uploads). Prefer ``fundamentals.lazy.ensure_deep_fundamentals``
+    for API/UI paths (rate-limited, backoff, trail).
     """
     symbol = symbol.upper().strip()
 
@@ -37,12 +36,14 @@ def get_deep_fundamentals(
             log.info("fundamentals_served_from_cache", symbol=symbol)
             return cached
 
-    log.info("fundamentals_scraping", symbol=symbol, force=force_refresh)
-    data = _scraper.fetch_all(symbol)
+    from fundamentals.resolver import resolve
 
-    _cache.set(symbol, data)
-    _cache.clear_old()   # housekeeping — remove stale entries
-
+    log.info("fundamentals_resolving", symbol=symbol, force=force_refresh)
+    data, steps = resolve(symbol, force_refresh=True, write_cache=True)
+    if data is None:
+        detail = steps[-1]["message"] if steps else "all sources exhausted"
+        raise RuntimeError(f"Fundamentals unavailable for {symbol}: {detail}")
+    _cache.clear_old()
     return data
 
 

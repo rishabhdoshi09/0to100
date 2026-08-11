@@ -142,22 +142,36 @@ def evidence_status(symbol: str) -> dict:
 @app.post("/evidence/{symbol}/actions/refresh-fundamentals")
 def refresh_fundamentals(symbol: str) -> dict:
     try:
-        from fundamentals.fetcher import get_deep_fundamentals
         from reporting.evidence_intake import clean_symbol
+        from fundamentals.resolver import next_actions, resolve
 
         clean = clean_symbol(symbol)
-        payload = get_deep_fundamentals(clean, force_refresh=True)
+        data, steps = resolve(clean, force_refresh=True, write_cache=True)
+        if data is None:
+            return {
+                "accepted": False,
+                "symbol": clean,
+                "outcome": "MISSING",
+                "steps": steps,
+                "next_actions": next_actions(clean),
+                "message": steps[-1]["message"] if steps else "All fundamentals sources exhausted",
+                "status": evidence_status(clean),
+            }
         return {
             "accepted": True,
             "symbol": clean,
+            "outcome": "READY",
+            "source": str(data.get("_source") or ""),
+            "steps": steps,
+            "next_actions": next_actions(clean),
             "sections": {
-                "about": bool(payload.get("about")),
-                "quarterly_results": len(payload.get("quarterly_results", []) or []),
-                "profit_loss": len(payload.get("profit_loss", []) or []),
-                "balance_sheet": len(payload.get("balance_sheet", []) or []),
-                "cash_flow": len(payload.get("cash_flow", []) or []),
-                "shareholding": len(payload.get("shareholding", []) or []),
-                "peer_comparison": len(payload.get("peer_comparison", []) or []),
+                "about": bool(data.get("about")),
+                "quarterly_results": len(data.get("quarterly_results", []) or []),
+                "profit_loss": len(data.get("profit_loss", []) or []),
+                "balance_sheet": len(data.get("balance_sheet", []) or []),
+                "cash_flow": len(data.get("cash_flow", []) or []),
+                "shareholding": len(data.get("shareholding", []) or []),
+                "peer_comparison": len(data.get("peer_comparison", []) or []),
             },
             "status": evidence_status(clean),
         }

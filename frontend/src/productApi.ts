@@ -372,8 +372,23 @@ export const fetchStockFundamentals = (
 ): Promise<{
   accepted: boolean
   symbol: string
+  outcome?: string
+  source?: string
+  coverage?: number
   sections: Record<string, number | boolean>
-  workspace: StockWorkspace
+  steps?: Array<{
+    step: number
+    source: string
+    status: string
+    message: string
+    elapsed_ms?: number
+    coverage?: number
+    reputed?: boolean
+    official?: boolean
+  }>
+  next_actions?: Array<{ label: string; url: string; kind: string }>
+  message?: string
+  workspace?: StockWorkspace
 }> =>
   fetch(
     `/api/stock-intelligence/${encodeURIComponent(symbol)}/fetch-fundamentals?force=${force ? 'true' : 'false'}`,

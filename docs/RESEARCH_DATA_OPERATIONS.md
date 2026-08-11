@@ -25,6 +25,20 @@ QuantTerm can initiate these itself:
 
 A provider failure is shown to the user. It is never replaced with a synthetic number.
 
+### Fundamentals resolve chain (yields at every step)
+
+Order is fixed and transparent in Research Data → **Resolve trail**:
+
+1. Local fresh cache
+2. **Screener.in** (primary reputed)
+3. **Yahoo Finance** (reputed fallback when Screener is blocked/thin)
+4. Local stale cache
+5. User structured uploads (Research Data)
+
+Each attempt emits `TRYING` → `OK` / `PARTIAL` / `ERROR` / `EMPTY`. If all fail,
+outcome is `EXHAUSTED` with next actions (official NSE/BSE links, Screener, Yahoo,
+worked-example install). Missing stays missing — no invented figures.
+
 ## Manual evidence
 
 The following commonly require the user to select an official company document:

@@ -86,11 +86,26 @@ const humanBytes = (value: number) => {
   return `${(value / 1024 / 1024).toFixed(1)} MB`
 }
 
+type ResolveStep = {
+  step: number
+  source: string
+  status: string
+  message: string
+  elapsed_ms?: number
+  coverage?: number
+  reputed?: boolean
+  official?: boolean
+}
+type NextAction = { label: string; url: string; kind: string }
+
 export function ResearchDataView({ symbol }: { symbol: string }) {
   const [status, setStatus] = useState<EvidenceStatus | null>(null)
   const [error, setError] = useState('')
   const [busy, setBusy] = useState('')
   const [fundaBusy, setFundaBusy] = useState(false)
+  const [resolveTrail, setResolveTrail] = useState<ResolveStep[]>([])
+  const [nextActions, setNextActions] = useState<NextAction[]>([])
+  const [resolveSource, setResolveSource] = useState('')
   const [drafts, setDrafts] = useState<Record<string, Draft>>({})
   const [providers, setProviders] = useState<DataProvidersPayload | null>(null)
   const [jobs, setJobs] = useState<DataJobsPayload | null>(null)
@@ -144,9 +159,16 @@ export function ResearchDataView({ symbol }: { symbol: string }) {
     setFundaBusy(true)
     if (!force) setError('')
     try {
-      await fetchStockFundamentals(symbol, force)
+      const payload = await fetchStockFundamentals(symbol, force)
+      setResolveTrail(payload.steps || [])
+      setNextActions(payload.next_actions || [])
+      setResolveSource(payload.source || '')
       await loadEvidence()
-      if (force) setError('')
+      if (!payload.accepted) {
+        setError(payload.message || 'Fundamentals missing after all sources — use next actions below')
+      } else if (force) {
+        setError('')
+      }
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : 'Fundamentals fetch failed — use Retry')
     } finally {
@@ -158,6 +180,9 @@ export function ResearchDataView({ symbol }: { symbol: string }) {
     if (!symbol) {
       setStatus(null)
       setSymbolCoverage(null)
+      setResolveTrail([])
+      setNextActions([])
+      setResolveSource('')
       return
     }
     void loadFundamentals(false)
@@ -257,7 +282,46 @@ export function ResearchDataView({ symbol }: { symbol: string }) {
       )}
       {fundaBusy && !error && (
         <div className="api-warning" style={{ borderColor: 'var(--accent-cyan, #26d7ff)' }}>
-          Fetching fundamentals from Screener.in for {symbol}…
+          Resolving fundamentals for {symbol} — Screener.in → Yahoo Finance → cache → uploads…
+        </div>
+      )}
+      {resolveTrail.length > 0 && (
+        <div className="evidence-panel">
+          <header>
+            <div>
+              <h2>Resolve trail</h2>
+              <p>Every source attempt yields a status. {resolveSource ? `Active source: ${resolveSource}.` : 'No source produced usable data yet.'}</p>
+            </div>
+            <button type="button" disabled={fundaBusy} onClick={() => void loadFundamentals(true)}>
+              {fundaBusy ? 'Resolving…' : 'Re-resolve now'}
+            </button>
+          </header>
+          <div className="runtime-grid">
+            {resolveTrail.map((step) => (
+              <article key={`${step.step}-${step.source}-${step.status}`}>
+                <span>#{step.step} · {step.source}</span>
+                <strong className={statusClass(step.status === 'OK' ? 'FRESH' : step.status === 'ERROR' || step.status === 'EXHAUSTED' ? 'MISSING' : 'STALE')}>
+                  {step.status}
+                </strong>
+                <small>{step.message}</small>
+                <small>{typeof step.elapsed_ms === 'number' ? `${step.elapsed_ms} ms` : ''}{typeof step.coverage === 'number' ? ` · coverage ${step.coverage}` : ''}</small>
+              </article>
+            ))}
+          </div>
+          {nextActions.length > 0 && (
+            <div className="resource-links" style={{ marginTop: '0.75rem' }}>
+              {nextActions.map((action) => (
+                <a
+                  key={`${action.kind}-${action.url}`}
+                  href={action.url.startsWith('/') ? `${reportBase}${action.url}` : action.url}
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  {action.kind === 'official' ? 'Official · ' : action.kind === 'reputed' ? 'Reputed · ' : ''}{action.label}
+                </a>
+              ))}
+            </div>
+          )}
         </div>
       )}
       <div className="evidence-summary">
