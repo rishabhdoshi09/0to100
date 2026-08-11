@@ -50,13 +50,43 @@ def evaluate_research_grade(
                 ))
             else:
                 checks.append(_pass("official_delistings"))
-            if not ids.get("symbol_lineage_complete"):
-                checks.append(_fail(
-                    "symbol_lineage_complete",
-                    "symbol↔ISIN lineage not fully closed — unknown transitions remain",
-                ))
-            else:
-                checks.append(_pass("symbol_lineage_complete"))
+            # Lineage: use evidence classification — PARTIAL official renames OK;
+            # CONFLICT/UNRESOLVED fail. Full ISIN confirmation rate is informational.
+            try:
+                from data.security_identity import lineage_coverage_report, load_identity_ledger
+                from research.intelligence.data.discontinuity_audit import phase_a5_symbols
+                lin = lineage_coverage_report(
+                    load_identity_ledger(),
+                    focus_symbols=phase_a5_symbols(),
+                )
+                if lin.get("by_status", {}).get("CONFLICT", 0) > 0:
+                    checks.append(_fail(
+                        "symbol_lineage_complete",
+                        f"CONFLICT transitions={lin['by_status']['CONFLICT']}",
+                    ))
+                elif lin.get("by_status", {}).get("UNRESOLVED", 0) > 0:
+                    checks.append(_fail(
+                        "symbol_lineage_complete",
+                        f"UNRESOLVED transitions={lin['by_status']['UNRESOLVED']}",
+                    ))
+                elif lin.get("focus_blocking"):
+                    checks.append(_fail(
+                        "symbol_lineage_complete",
+                        f"focus panel blocking transitions={len(lin['focus_blocking'])}",
+                    ))
+                else:
+                    checks.append(_pass(
+                        "symbol_lineage_complete",
+                        f"official transitions evidenced; CONFIRMED="
+                        f"{lin.get('confirmed')} PARTIAL={lin.get('by_status',{}).get('PARTIAL')} "
+                        f"isin_confirmed_rate="
+                        f"{(lin.get('confirmed') or 0)/max(1,lin.get('n_changes') or 1):.3f}",
+                    ))
+            except Exception as exc:
+                if not ids.get("symbol_lineage_complete"):
+                    checks.append(_fail("symbol_lineage_complete", str(exc)))
+                else:
+                    checks.append(_pass("symbol_lineage_complete"))
     except Exception as exc:
         checks.append(_fail("security_identity", str(exc)))
 

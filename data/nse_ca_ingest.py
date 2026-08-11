@@ -46,16 +46,15 @@ ADJUSTMENT_POLICY = {
 
 
 _BONUS_RE = re.compile(r"\bbonus\s+(\d+)\s*:\s*(\d+)\b", re.I)
+# NSE subjects vary: "From Rs 10 to Rs 2", "From Rs10/- Per Share To Re 1/- Per Share"
+_FV_NUM = r"r[se]\.?\s*([\d.]+)\s*(?:/-)?"
 _SPLIT_RE = re.compile(
-    r"face\s*value\s*split.*?from\s*r[se]\.?\s*([\d.]+)\s*to\s*r[se]\.?\s*([\d.]+)",
-    re.I,
-)
-_SPLIT_RE2 = re.compile(
-    r"sub[- ]?division.*?from\s*r[se]\.?\s*([\d.]+)\s*to\s*r[se]\.?\s*([\d.]+)",
+    rf"(?:face\s*value\s*split|sub[- ]?division).*?from\s*{_FV_NUM}"
+    rf"(?:\s*per\s*share)?\s*to\s*{_FV_NUM}",
     re.I,
 )
 _CONSOL_RE = re.compile(
-    r"consolidat.*?from\s*r[se]\.?\s*([\d.]+)\s*to\s*r[se]\.?\s*([\d.]+)",
+    rf"consolidat.*?from\s*{_FV_NUM}(?:\s*per\s*share)?\s*to\s*{_FV_NUM}",
     re.I,
 )
 
@@ -73,7 +72,10 @@ def _parse_ex_date(raw: str) -> str | None:
 
 
 def parse_share_factor(subject: str) -> tuple[str, float] | None:
-    """Return (type, factor) when the subject string is unambiguous; else None."""
+    """Return (type, factor) when the official subject string is unambiguous; else None.
+
+    Parses NSE corporates-API subject text only. Never infers factors from prices.
+    """
     s = str(subject or "")
     m = _BONUS_RE.search(s)
     if m:
@@ -85,7 +87,7 @@ def parse_share_factor(subject: str) -> tuple[str, float] | None:
         if factor <= 1.0:
             return None
         return "bonus", float(factor)
-    m = _SPLIT_RE.search(s) or _SPLIT_RE2.search(s)
+    m = _SPLIT_RE.search(s)
     if m:
         old_fv, new_fv = float(m.group(1)), float(m.group(2))
         if new_fv <= 0 or old_fv <= 0:

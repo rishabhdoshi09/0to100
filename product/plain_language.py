@@ -491,7 +491,36 @@ def explain_metric(
     )
 
 
-def research_report_blurb(verdict: str | None, *, trust_class: str | None = None) -> str:
+def explain_unresolved_ca() -> PlainCard:
+    return PlainCard(
+        topic="data_quality",
+        internal_key="UNRESOLVED_CA",
+        internal_value="UNRESOLVED",
+        label="Historical price adjustment",
+        state="NOT_READY",
+        explanation=(
+            "We found a large historical price change that may be related to a corporate "
+            "action, but we do not yet have enough official evidence to adjust it safely."
+        ),
+        implication="Do not treat strategy tests on affected names as fully trustworthy yet.",
+        technical="UNRESOLVED_CA",
+    )
+
+
+def explain_unresolved_lineage() -> PlainCard:
+    return PlainCard(
+        topic="data_quality",
+        internal_key="UNRESOLVED_LINEAGE",
+        internal_value="UNRESOLVED",
+        label="Stock history link",
+        state="NOT_READY",
+        explanation=(
+            "The company's ticker/history changed, and QuantTerm cannot yet prove that the "
+            "old and new records represent the same security."
+        ),
+        implication="Unresolved lineage can block research-grade certification.",
+        technical="UNRESOLVED_LINEAGE",
+    )
     """One plain paragraph for research report headers."""
     v = explain_research_verdict(verdict)
     parts = [v.explanation]

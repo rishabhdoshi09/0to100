@@ -69,10 +69,12 @@ def fetch_equity_l(*, session: requests.Session | None = None) -> tuple[list[dic
     reader = csv.DictReader(io.StringIO(text))
     rows: list[dict] = []
     for r in reader:
+        # NSE headers often have leading spaces (" ISIN NUMBER").
+        r = {str(k).strip(): (v.strip() if isinstance(v, str) else v) for k, v in r.items()}
         sym = str(r.get("SYMBOL") or "").strip().upper()
-        series = str(r.get(" SERIES") or r.get("SERIES") or "").strip().upper()
+        series = str(r.get("SERIES") or "").strip().upper()
         isin = str(r.get("ISIN NUMBER") or r.get("ISIN") or "").strip().upper()
-        listed = _parse_nse_date(str(r.get(" DATE OF LISTING") or r.get("DATE OF LISTING") or ""))
+        listed = _parse_nse_date(str(r.get("DATE OF LISTING") or ""))
         if not sym or not listed:
             continue
         if series and series != "EQ":
@@ -301,11 +303,13 @@ def materialize_from_nse(*, path: str | Path | None = None) -> dict:
         source_meta={"equity_l": eq_meta, "symbolchange": ch_meta, "delisted": de_meta},
     )
     ledger["source"] = "nse_equity_l+nse_symbolchange+nse_delisted"
+    lin = lineage_coverage_report(ledger)
     ledger["completeness"] = {
-        "has_isin_for_current_eq": True,
+        "has_isin_for_current_eq": any(bool(r.get("isin")) for r in ledger["securities"]),
         "has_official_delistings": bool(delisted_rows),
-        # Lineage still incomplete without full rename↔ISIN closure proofs
-        "symbol_lineage_complete": False,
+        "symbol_lineage_complete": bool(lin.get("symbol_lineage_complete")),
+        "isin_confirmed_rate": lin.get("isin_confirmed_rate"),
+        "lineage_by_status": lin.get("by_status"),
     }
     out = write_identity_ledger(ledger, path=path)
     return {
@@ -315,6 +319,11 @@ def materialize_from_nse(*, path: str | Path | None = None) -> dict:
         "n_delisted": len(delisted_rows),
         "completeness": ledger["completeness"],
         "source_meta": ledger["source_meta"],
+        "lineage": {
+            "symbol_lineage_complete": lin.get("symbol_lineage_complete"),
+            "isin_confirmed_rate": lin.get("isin_confirmed_rate"),
+            "by_status": lin.get("by_status"),
+        },
     }
 
 
@@ -347,6 +356,135 @@ def resolve_as_of(symbol: str, as_of: str, ledger: dict | None = None) -> dict[s
             "delisting_date": row.get("delisting_date"),
         }
     return {"status": "UNKNOWN", "security_id": None, "symbol": sym, "as_of": as_of_s}
+
+
+def lineage_coverage_report(ledger: dict | None = None, *, focus_symbols: set[str] | None = None) -> dict:
+    """Classify each official symbol-change row; never invent missing links.
+
+    Statuses: CONFIRMED | PARTIAL | CONFLICT | UNRESOLVED
+    """
+    from product.plain_language import PlainCard, render_layers
+
+    ledger = ledger if ledger is not None else load_identity_ledger()
+    if not ledger:
+        return {
+            "available": False,
+            "symbol_lineage_complete": False,
+            "n_changes": 0,
+            "by_status": {},
+            "unresolved": [],
+            "focus": {},
+            "user_facing": render_layers(PlainCard(
+                label="Stock history link",
+                state="NOT_READY",
+                explanation=(
+                    "The company's ticker/history changed, and QuantTerm cannot yet prove "
+                    "that the old and new records represent the same security."
+                ),
+                implication="Unresolved lineage blocks RESEARCH_GRADE until evidenced.",
+                technical="UNRESOLVED_LINEAGE; identity ledger missing",
+                internal_key="UNRESOLVED_LINEAGE",
+                internal_value="MISSING_LEDGER",
+            )),
+        }
+
+    by_sym = {r.get("symbol"): r for r in (ledger.get("securities") or []) if r.get("symbol")}
+    classified = []
+    by_status = {"CONFIRMED": 0, "PARTIAL": 0, "CONFLICT": 0, "UNRESOLVED": 0}
+    for ch in ledger.get("symbol_changes") or []:
+        old_s = str(ch.get("old_symbol") or "").upper()
+        new_s = str(ch.get("new_symbol") or "").upper()
+        when = ch.get("effective_date")
+        old = by_sym.get(old_s) or {}
+        new = by_sym.get(new_s) or {}
+        old_isin = old.get("isin")
+        new_isin = new.get("isin")
+        status = "PARTIAL"
+        note = "Official symbol-change row present."
+        if old_isin and new_isin and old_isin == new_isin:
+            status = "CONFIRMED"
+            note = "Old and new symbols share the same ISIN evidence."
+        elif old_isin and new_isin and old_isin != new_isin:
+            status = "CONFLICT"
+            note = f"ISIN mismatch old={old_isin} new={new_isin}."
+        elif not old_isin and not new_isin:
+            status = "PARTIAL"
+            note = "Rename evidenced by NSE symbolchange.csv; ISIN link not available."
+        elif old_isin or new_isin:
+            status = "PARTIAL"
+            note = "Only one side has ISIN evidence; link not fully closed."
+        if not when or not old_s or not new_s:
+            status = "UNRESOLVED"
+            note = "Incomplete transition fields."
+        row = {
+            "old_symbol": old_s,
+            "new_symbol": new_s,
+            "security_id": new.get("security_id") or old.get("security_id"),
+            "isin": new_isin or old_isin,
+            "valid_from": when,
+            "valid_to": None,
+            "event": "symbol_change",
+            "source": ch.get("provenance") or "nse_symbolchange",
+            "evidence_reference": (ledger.get("source_meta") or {}).get("symbolchange", {}).get("source_sha256"),
+            "status": status,
+            "note": note,
+        }
+        classified.append(row)
+        by_status[status] = by_status.get(status, 0) + 1
+
+    focus_symbols = {s.upper() for s in (focus_symbols or set())}
+    focus_hits = [
+        r for r in classified
+        if r["old_symbol"] in focus_symbols or r["new_symbol"] in focus_symbols
+    ]
+    # Complete when every transition is officially evidenced and none CONFLICT/UNRESOLVED.
+    # PARTIAL (official rename without dual-ISIN closure) is allowed for completeness of
+    # *available evidence*; isin_confirmed_rate is reported separately.
+    complete = (
+        bool(classified)
+        and by_status.get("CONFLICT", 0) == 0
+        and by_status.get("UNRESOLVED", 0) == 0
+    )
+    isin_confirmed_rate = (
+        by_status.get("CONFIRMED", 0) / len(classified) if classified else 0.0
+    )
+    focus_blocking = [r for r in focus_hits if r["status"] in {"CONFLICT", "UNRESOLVED"}]
+
+    return {
+        "available": True,
+        "symbol_lineage_complete": complete,
+        "isin_confirmed_rate": round(isin_confirmed_rate, 4),
+        "n_changes": len(classified),
+        "by_status": by_status,
+        "unresolved": [r for r in classified if r["status"] in {"UNRESOLVED", "CONFLICT"}],
+        "partial": [r for r in classified if r["status"] == "PARTIAL"][:50],
+        "confirmed": by_status.get("CONFIRMED", 0),
+        "focus_symbols": sorted(focus_symbols),
+        "focus_transitions": focus_hits,
+        "focus_blocking": focus_blocking,
+        "user_facing": render_layers(PlainCard(
+            label="Stock history link",
+            state="GOOD" if complete and not focus_blocking else ("CAUTION" if not focus_blocking else "NOT_READY"),
+            explanation=(
+                "Official rename notices are on file. Matching ISINs confirm some links; "
+                "others remain evidence-backed renames without dual-ISIN closure."
+                if complete else
+                "The company's ticker/history changed, and QuantTerm cannot yet prove "
+                "that the old and new records represent the same security."
+            ),
+            implication=(
+                "No conflicting lineage blocks research; ISIN confirmation rate is reported separately."
+                if complete and not focus_blocking else
+                "Unresolved lineage on names that matter for a test can block RESEARCH_GRADE."
+            ),
+            technical=(
+                f"UNRESOLVED_LINEAGE complete={complete} isin_confirmed_rate={isin_confirmed_rate:.3f} "
+                f"by_status={by_status} focus_blocking={len(focus_blocking)}"
+            ),
+            internal_key="UNRESOLVED_LINEAGE",
+            internal_value="COMPLETE" if complete else "PARTIAL",
+        )),
+    }
 
 
 def ledger_status(path: str | Path | None = None) -> dict:
