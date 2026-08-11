@@ -80,3 +80,23 @@ One or more hypotheses confirmed on this certified scope. Follow-up research onl
 
 _Generated 2026-08-11T18:15:45.911117+00:00_
 _git_sha `378cd4895c6b00fa116a3076e1f0eedac5d84324`_
+
+---
+
+## Follow-up (2026-08-11) — EXP-FUND-03 only
+
+Parent EXP-FUND-03 remains **CONFIRMED** / `ELIGIBLE_FOR_FOLLOWUP_RESEARCH` (not overwritten).
+
+Follow-up experiment **EXP-FUND-03-FOLLOWUP** completed under frozen protocol
+`docs/overhaul/EXP_FUND_03_FOLLOWUP_FROZEN_PROTOCOL.json`.
+
+| Item | Result |
+|---|---|
+| Reproduction | PASS |
+| Follow-up verdict | **INCONCLUSIVE_FOLLOWUP** |
+| Next action | `RECORD_EVIDENCE_NO_TUNING` |
+| Report | `EXP_FUND_03_EARNINGS_GROWTH_FOLLOWUP.md` |
+
+Blocking reasons for `ROBUST_CONFIRMED`: placebo controls not clean; little
+incremental information vs 60d momentum after residualization. No production
+authority. No Phase B. FUND-01/02/04 remain HOLD_NO_TUNING.
