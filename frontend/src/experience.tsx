@@ -28,6 +28,7 @@ import { GLOSSARY, PAGE_GUIDE } from './productLanguage'
 import { isLongTermPick, longTermPicks, MIN_LT_FUNDAMENTAL_COVERAGE } from './longTermPicks'
 import { fetchTradePlan, type TradePlan } from './productApi'
 import type { ScanRunnerHandle } from './scanRunner'
+import { formatElapsed } from './scanRunner'
 
 export { DisplayDepthToggle } from './displayDepth'
 
@@ -190,19 +191,40 @@ export function LiveScanBanner({
           <strong>{label}</strong>
           <span>{scan.friendlyPhase}</span>
         </div>
-        {scan.isActive && (
-          <small className="live-scan-elapsed">{scan.elapsedSeconds}s</small>
-        )}
-        {(showFailed || showNotice && !scan.isActive) && (
-          <button type="button" className="live-scan-dismiss" onClick={() => scan.dismissNotice()} aria-label="Dismiss">×</button>
-        )}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+          {scan.isActive && scan.workerOnline != null && (
+            <small className={scan.workerOnline ? 'positive' : 'negative'}>
+              Worker {scan.workerOnline ? `ONLINE${scan.workerPid ? ` · ${scan.workerPid}` : ''}` : 'OFFLINE'}
+            </small>
+          )}
+          {scan.isActive && (
+            <small className="live-scan-elapsed">{formatElapsed(scan.elapsedSeconds)}</small>
+          )}
+          {(showFailed || showNotice && !scan.isActive) && (
+            <button type="button" className="live-scan-dismiss" onClick={() => scan.dismissNotice()} aria-label="Dismiss">×</button>
+          )}
+        </div>
       </div>
       {scan.isActive && (
         <>
           <p className="live-scan-detail">
-            {scan.progressLine || scan.friendlyPhase}
+            {scan.progressLine
+              || (scan.operation?.message && scan.operation.message !== scan.friendlyPhase
+                ? scan.operation.message
+                : scan.workerOnline === false
+                  ? 'Market-ops worker is offline — scan stays queued until the worker is running'
+                  : 'Still working — counts update as each batch finishes')}
             {scan.qualifiedLine ? ` · ${scan.qualifiedLine}` : ''}
           </p>
+          {scan.isActive && scan.staleHint && scan.progressLine && scan.staleHint !== scan.progressLine ? (
+            <p className="live-scan-stale">{scan.staleHint}</p>
+          ) : null}
+          {scan.isActive && scan.secondsSinceUpdate != null ? (
+            <small className="live-scan-heartbeat">
+              Engine heartbeat · last update {scan.secondsSinceUpdate}s ago
+              {scan.operation?.stage ? ` · ${scan.operation.stage}` : ''}
+            </small>
+          ) : null}
           {scan.percent != null ? (
             <div className="live-scan-progress" aria-label={`${scan.percent}% complete`}>
               <b style={{ width: `${scan.percent}%` }} />

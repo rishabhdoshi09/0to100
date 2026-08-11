@@ -1,14 +1,28 @@
 # Shared helpers for QuantTerm local stack scripts (macOS + Linux).
 # Sourced by run_quantterm.sh and run_quantterm_complete.sh — not executed directly.
+#
+# IMPORTANT: Never capture stack_start_or_reuse_uvicorn via $(...). Backgrounding a
+# process inside command substitution starts it in a subshell that exits immediately
+# and kills the child (SIGHUP) — that surfaces as "exited during startup".
+# Callers must use STACK_UVICORN_PID / STACK_UVICORN_RC after a direct call.
+
+STACK_UVICORN_PID=""
+STACK_UVICORN_RC=0
 
 stack_health_ok() {
   local url="$1"
-  curl -fsS --max-time 2 "$url" >/dev/null 2>&1
+  local timeout="${2:-5}"
+  curl -fsS --max-time "$timeout" "$url" >/dev/null 2>&1
 }
 
 stack_pids_on_port() {
   local port="$1"
   lsof -ti ":${port}" 2>/dev/null || true
+}
+
+stack_port_listening() {
+  local port="$1"
+  [[ -n "$(stack_pids_on_port "$port")" ]]
 }
 
 stack_free_port() {
@@ -23,22 +37,39 @@ stack_free_port() {
   # shellcheck disable=SC2086
   kill ${pids} 2>/dev/null || true
   sleep 1
-  # shellcheck disable=SC2086
-  kill -9 ${pids} 2>/dev/null || true
-  sleep 0.5
+  pids="$(stack_pids_on_port "$port")"
+  if [[ -n "$pids" ]]; then
+    # shellcheck disable=SC2086
+    kill -9 ${pids} 2>/dev/null || true
+    sleep 0.5
+  fi
+}
+
+# Stop listeners on one or more ports (reaps npm/vite/uvicorn orphans by bind port).
+stack_stop_ports() {
+  local port
+  for port in "$@"; do
+    stack_free_port "$port" "port-${port}"
+  done
 }
 
 # Start uvicorn or reuse an already-healthy listener on the same port.
-# On stdout: child PID when started; empty when reusing an existing healthy API.
-# Return code: 0 = started, 2 = reused existing healthy API.
+# Sets STACK_UVICORN_PID (empty when reusing) and STACK_UVICORN_RC:
+#   0 = started a new process (STACK_UVICORN_PID set)
+#   2 = reused an existing healthy API (STACK_UVICORN_PID empty)
+# Return code matches STACK_UVICORN_RC.
 stack_start_or_reuse_uvicorn() {
   local port="$1"
   local app="$2"
   local health_url="$3"
   local label="$4"
 
+  STACK_UVICORN_PID=""
+  STACK_UVICORN_RC=0
+
   if stack_health_ok "$health_url"; then
     echo "[STACK] ${label} already healthy at ${health_url} — reusing existing process." >&2
+    STACK_UVICORN_RC=2
     return 2
   fi
 
@@ -46,12 +77,15 @@ stack_start_or_reuse_uvicorn() {
 
   if stack_health_ok "$health_url"; then
     echo "[STACK] ${label} became healthy after freeing port ${port} — reusing." >&2
+    STACK_UVICORN_RC=2
     return 2
   fi
 
   echo "[STACK] Starting ${label} at http://127.0.0.1:${port} (${app})…" >&2
+  # Must run in the caller's shell (not inside $(...)) so the child survives.
   python -u -m uvicorn "${app}" --host 127.0.0.1 --port "${port}" &
-  echo "$!"
+  STACK_UVICORN_PID=$!
+  STACK_UVICORN_RC=0
   return 0
 }
 

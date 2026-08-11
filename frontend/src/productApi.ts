@@ -24,6 +24,25 @@ export type ProductReadiness = {
   lanes: ProductLane[]
   blockers: string[]
   recommended_action: string
+  retail_research_checklist?: RetailResearchChecklist
+}
+
+export type RetailChecklistItem = {
+  key: string
+  label: string
+  status: string
+  why_it_matters: string
+  next_action: string
+  evidence: string
+}
+
+export type RetailResearchChecklist = {
+  schema_version: number
+  summary: string
+  ready_count: number
+  gap_count: number
+  items: RetailChecklistItem[]
+  gaps: RetailChecklistItem[]
 }
 
 export type IntelligenceMetric = {
@@ -217,6 +236,10 @@ export type TradePlan = {
   heat_warnings?: string[]
   correlation_status?: string
   correlated_with?: string[]
+  effective_bets_before?: number | null
+  effective_bets_after?: number | null
+  round_trip_cost_pct?: number | null
+  cost_drag_r?: number | null
   market_health?: string
   market_risk_factor?: number
   capital?: number
@@ -228,6 +251,120 @@ export const fetchTradePlan = (symbol: string): Promise<TradePlan> =>
   fetch(`/api/trade-plan/${encodeURIComponent(symbol)}`, {
     headers: { Accept: 'application/json' },
   }).then((response) => json<TradePlan>(response))
+
+export type SymbolDirectoryRow = {
+  symbol: string
+  name: string
+}
+
+export type SymbolDirectory = {
+  schema_version: number
+  query: string
+  limit: number
+  universe_size: number
+  count: number
+  symbols: SymbolDirectoryRow[]
+  letter_coverage?: string[]
+  truncated?: boolean
+  holdings_pinned?: number
+  source: string
+  note?: string
+}
+
+/** Full NSE equity directory for search — not limited to scan setups. */
+export const fetchSymbolDirectory = (opts?: { q?: string; limit?: number }): Promise<SymbolDirectory> => {
+  const params = new URLSearchParams()
+  if (opts?.q) params.set('q', opts.q)
+  // limit=0 → API returns the complete A→Z universe on empty query
+  if (opts?.limit != null) params.set('limit', String(opts.limit))
+  else if (!opts?.q) params.set('limit', '0')
+  const q = params.toString()
+  return fetch(`/api/symbols${q ? `?${q}` : ''}`, {
+    headers: { Accept: 'application/json' },
+  }).then((response) => json<SymbolDirectory>(response))
+}
+
+export type PreTradeVerdict = 'GO' | 'CAUTION' | 'NO_GO'
+
+export type PreTrade = {
+  schema_version: number
+  symbol: string
+  available: boolean
+  verdict: PreTradeVerdict
+  meaning: string
+  tradeable: boolean
+  blockers: string[]
+  warnings: string[]
+  plan: TradePlan
+  plan_summary: string
+  cost_drag_r: number | null
+  round_trip_cost_pct?: number | null
+  correlation: {
+    status: string
+    correlated_with: string[]
+    effective_bets_before?: number | null
+    effective_bets_after?: number | null
+    n_positions: number
+    n_bets: number
+    message: string
+  }
+  market_throttle: {
+    health: string
+    market_risk_factor: number | null
+    suggested_risk_pct?: number
+    trade_stance: string
+  }
+  data_gaps: Array<{
+    key?: string
+    label?: string
+    status?: string
+    next_action?: string
+  }>
+  paper_snapshot: {
+    open_positions: number
+    capital?: number
+    open_risk_pct?: number | null
+  }
+  scan: {
+    available: boolean
+    verdict?: string
+    score?: number
+    signals?: string[]
+    edge_r?: number | null
+    entry?: number
+    stop?: number
+    target?: number | null
+  }
+  measured_edge_r?: number | null
+  learning?: {
+    signal_backtest_actionable?: boolean
+    evidence_note?: string
+    as_of?: string | null
+    n_symbols_tested?: number | null
+  }
+  read_only: boolean
+  places_orders: boolean
+  honesty: string
+}
+
+/** Compose plan + book + market + data gaps into GO/CAUTION/NO_GO. Never places orders. */
+export const fetchPreTrade = (symbol: string): Promise<PreTrade> =>
+  fetch(`/api/pre-trade/${encodeURIComponent(symbol)}`, {
+    headers: { Accept: 'application/json' },
+  }).then((response) => json<PreTrade>(response))
+
+export type BookCorrelation = {
+  available?: boolean
+  n_positions: number
+  n_bets: number
+  clusters: string[][]
+  biggest: string[] | null
+  message?: string
+}
+
+export const fetchBookCorrelation = (): Promise<BookCorrelation> =>
+  fetch('/api/book-correlation', { headers: { Accept: 'application/json' } })
+    .then((response) => json<BookCorrelation>(response))
 
 export const fetchStockFundamentals = (
   symbol: string,
@@ -539,6 +676,170 @@ export type TargetPortfolioPayload = {
 export const fetchTargetPortfolio = (): Promise<TargetPortfolioPayload> =>
   fetch('/api/target-portfolio', { headers: { Accept: 'application/json' } })
     .then((response) => json<TargetPortfolioPayload>(response))
+
+export type SignalBacktestStatus = {
+  running: boolean
+  progress?: number
+  total?: number
+  has_report: boolean
+  generated_at?: string
+  symbols_run?: number
+  universe?: {
+    run?: number
+    available?: number
+    available_in_store?: number
+    truncated?: boolean
+    scope?: string
+    note?: string
+  }
+  places_orders?: boolean
+  live_locked?: boolean
+}
+
+export const fetchSignalBacktestStatus = (): Promise<SignalBacktestStatus> =>
+  fetch('/api/signal-backtest', { headers: { Accept: 'application/json' } })
+    .then((response) => json<SignalBacktestStatus>(response))
+
+export type CorporateActionsStatus = {
+  available: boolean
+  path?: string
+  symbols: number
+  events: number
+  research_grade: boolean
+  adjustment_verified?: boolean
+  gap_rate?: number | null
+  verify_note?: string
+  todo_path?: string
+  todo_available?: boolean
+  todo_gaps?: number | null
+  next_action?: string
+  never_invents?: boolean
+  honesty?: string
+  rejected_types?: { dividend?: number; invalid?: number }
+}
+
+export type EducationLens = 'MACRO' | 'MICRO' | 'POLICY' | 'DERIVATIVES' | 'CONCEPT'
+
+export type EducationCard = {
+  id: string
+  lens: EducationLens | string
+  kind: string
+  title: string
+  teach_point: string
+  why_it_matters: string
+  summary?: string
+  level: string
+  impact_score: number
+  direction: string
+  category?: string
+  event_type?: string
+  source: string
+  source_tier?: number
+  official: boolean
+  url: string
+  published_at: string
+  fetched_at?: string
+  symbols: string[]
+  fno_symbols: string[]
+  sectors?: string[]
+  tags?: string[]
+  corroboration_count: number
+  places_orders?: boolean
+  is_signal?: boolean
+}
+
+export type EducationFeed = {
+  schema_version: number
+  generated_at: string
+  available: boolean
+  honesty: string
+  places_orders: boolean
+  summary: {
+    news_lessons: number
+    macro_themes: number
+    concepts: number
+    by_lens: Record<string, number>
+    articles_considered: number
+  }
+  lenses: EducationLens[]
+  cards: EducationCard[]
+  empty_hint?: string | null
+}
+
+export const fetchEducation = (minImpact = 40, limit = 40): Promise<EducationFeed> =>
+  fetch(
+    `/api/education?min_impact=${encodeURIComponent(String(minImpact))}&limit=${encodeURIComponent(String(limit))}`,
+    { headers: { Accept: 'application/json' } },
+  ).then((response) => json<EducationFeed>(response))
+
+export const fetchCorporateActionsStatus = (): Promise<CorporateActionsStatus> =>
+  fetch('/api/corporate-actions', { headers: { Accept: 'application/json' } })
+    .then((response) => json<CorporateActionsStatus>(response))
+
+export const exportCorporateActionGaps = (sample = 400): Promise<Record<string, unknown>> =>
+  fetch(`/api/corporate-actions/from-gaps?sample=${encodeURIComponent(String(sample))}`, {
+    method: 'POST',
+    headers: { Accept: 'application/json' },
+  }).then((response) => json<Record<string, unknown>>(response))
+
+export const verifyCorporateActions = (sample = 80): Promise<CorporateActionsStatus> =>
+  fetch(`/api/corporate-actions/verify?sample=${encodeURIComponent(String(sample))}`, {
+    method: 'POST',
+    headers: { Accept: 'application/json' },
+  }).then((response) => json<CorporateActionsStatus>(response))
+
+export type HoldingRow = {
+  tradingsymbol: string
+  research_symbol?: string
+  quantity: number
+  average_price: number
+  last_price: number
+  invested: number
+  current_value: number
+  pnl: number
+  pnl_pct: number
+  day_change?: number
+  day_change_percentage?: number
+  exchange?: string
+  product?: string
+}
+
+export type HoldingsBook = {
+  schema_version: number
+  available: boolean
+  updated_at?: string
+  source?: string
+  holdings: HoldingRow[]
+  summary: {
+    count: number
+    invested: number
+    current_value: number
+    pnl: number
+    pnl_pct: number
+    day_pnl?: number
+    day_pnl_pct?: number
+  }
+  message?: string
+  synced?: boolean
+  places_orders?: boolean
+}
+
+export const fetchHoldings = (): Promise<HoldingsBook> =>
+  fetch('/api/holdings', { headers: { Accept: 'application/json' } })
+    .then((response) => json<HoldingsBook>(response))
+
+export const syncHoldings = (): Promise<HoldingsBook> =>
+  fetch('/api/holdings/sync', {
+    method: 'POST',
+    headers: { Accept: 'application/json' },
+  }).then((response) => json<HoldingsBook>(response))
+
+export const importHoldings = (holdings: Array<Record<string, unknown>>, source = 'import'): Promise<HoldingsBook> =>
+  fetch('/api/holdings/import', {
+    method: 'POST',
+    headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+    body: JSON.stringify({ holdings, source }),
+  }).then((response) => json<HoldingsBook>(response))
 
 export const runDataJob = (jobId: string): Promise<{
   ok: boolean

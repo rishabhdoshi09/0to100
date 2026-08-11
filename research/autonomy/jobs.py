@@ -145,15 +145,130 @@ class Deps:
         symbols = BS.build_store()
         return {"symbols": int(symbols), "ready": bool(BS.is_ready()), "source": "official_nse"}
 
+    def certify_bhav_snapshot(self, *, activate: bool = True):
+        """Pin an immutable snapshot from the official bhav store (Kite-independent)."""
+        from research.intelligence.data.from_bhav import snapshot_from_bhav_store
+        from research.intelligence.data.snapshot_store import SnapshotStore
+
+        store = SnapshotStore(self.logs / "snapshots")
+        sid, report = snapshot_from_bhav_store(
+            store,
+            activate=activate,
+            actor="autonomy",
+            reason="bhav store certification",
+        )
+        latest = ""
+        if sid:
+            try:
+                latest = str(store.open_snapshot(sid).manifest.get("last_trading_date") or "")
+            except Exception:
+                latest = ""
+        return {
+            "snapshot_id": sid,
+            "activated": bool(report.get("activated")),
+            "accepted": int(report.get("accepted") or 0),
+            "symbols": int(report.get("symbols") or 0),
+            "result": report.get("result"),
+            "source": "bhav_store",
+            "latest_date": latest,
+        }
+
     def corporate_actions_status(self):
         from data import corporate_actions as CA
-        path = CA._events_path()
-        events = CA.load_events(path)
-        return {"available": path.exists(), "symbols": len(events), "path": str(path)}
+
+        return CA.ledger_status()
+
+    def ensure_corporate_actions(self):
+        """Validate existing ledger or ingest an operator-supplied source.
+
+        Never invents CA events from price gaps. Looks for:
+          1. existing logs/ca_events.json
+          2. QT_CA_SOURCE_FILE
+          3. logs/ca_events.incoming.json / .csv
+        """
+        from data import corporate_actions as CA
+
+        status = CA.ledger_status()
+        if status.get("available") and int(status.get("events") or 0) > 0:
+            status["ingested"] = False
+            status["reason"] = "ledger_present"
+            return status
+
+        candidates = []
+        env_src = os.getenv("QT_CA_SOURCE_FILE", "").strip()
+        if env_src:
+            candidates.append(Path(env_src))
+        candidates.extend([
+            self.logs / "ca_events.incoming.json",
+            self.logs / "ca_events.incoming.csv",
+        ])
+        for src in candidates:
+            if src.exists():
+                info = CA.ingest_from_path(src)
+                info["ingested"] = True
+                info["reason"] = f"ingested:{src.name}"
+                return info
+        status["ingested"] = False
+        status["reason"] = "source_missing"
+        return status
 
     def universe_history_status(self):
         from data.nse_universe import point_in_time_universe
+
         return point_in_time_universe(self.now_ist().date())
+
+    def ensure_universe_history(self):
+        """Prefer an official/operator archive; only then bootstrap from bhav.
+
+        Never invents membership. Never overwrites a research-grade ledger with
+        bhav-inferred rows. Looks for:
+          1. existing research-grade ledger
+          2. QT_UNIVERSE_SOURCE_FILE
+          3. logs/universe_history.incoming.json / .csv
+          4. existing inferred ledger (keep)
+          5. bhav bootstrap
+        """
+        from data import universe_history as UH
+
+        status = UH.ledger_status()
+        if status.get("research_grade"):
+            status["built"] = False
+            status["ingested"] = False
+            status["reason"] = "ledger_present_research_grade"
+            return status
+
+        candidates = []
+        env_src = os.getenv("QT_UNIVERSE_SOURCE_FILE", "").strip()
+        if env_src:
+            candidates.append(Path(env_src))
+        candidates.extend([
+            self.logs / "universe_history.incoming.json",
+            self.logs / "universe_history.incoming.csv",
+        ])
+        for src in candidates:
+            if src.exists():
+                info = UH.ingest_from_path(src)
+                info["built"] = False
+                info["ingested"] = True
+                info["reason"] = f"ingested:{src.name}"
+                return info
+
+        if status.get("survivorship_complete"):
+            status["built"] = False
+            status["ingested"] = False
+            status["reason"] = status.get("reason") or "ledger_present_inferred"
+            return status
+        return UH.build_from_bhav(force=False)
+
+    def options_eod_status(self):
+        from options.eod_store import store_status
+
+        return store_status()
+
+    def capture_options_eod(self, symbols=None):
+        from options.eod_snapshot import capture_universe
+
+        return capture_universe(symbols)
 
     def warm_indices(self):
         from data.index_store import build_index_store
@@ -311,10 +426,34 @@ def run_data_refresh(ctx) -> JobResult:
                     error_message=str(exc),
                 )
             if info.get("ready"):
+                snap = {}
+                certify = getattr(ctx.deps, "certify_bhav_snapshot", None)
+                if callable(certify):
+                    try:
+                        snap = certify(activate=True) or {}
+                    except Exception as exc:
+                        snap = {"error": str(exc), "snapshot_id": None}
+                sid = snap.get("snapshot_id")
+                if sid:
+                    latest = str(snap.get("latest_date") or "")
+                    unblocks = [DEP_DATA]
+                    if latest:
+                        unblocks.append(f"EOD_DATA_READY:{latest}")
+                    return JobResult(
+                        JS.SUCCEEDED,
+                        "official bhavcopy ready · verified snapshot certified from bhav "
+                        f"(Kite login still deferred) · {sid}",
+                        output_snapshot_id=sid,
+                        metadata={**info, **snap, "kite_deferred": True},
+                        state_hint=ST.DATA_READY,
+                        clears={H.PROVIDER_UNAVAILABLE, H.SNAPSHOT_STALE},
+                        unblocks=tuple(unblocks),
+                    )
                 return JobResult(
                     JS.SUCCEEDED,
-                    "official bhavcopy ready · Kite snapshot deferred until login window",
-                    metadata={**info, "kite_deferred": True},
+                    "official bhavcopy ready · Kite snapshot deferred until login window "
+                    "(bhav certification pending)",
+                    metadata={**info, **snap, "kite_deferred": True},
                     state_hint=ST.OBSERVING,
                     clears={H.PROVIDER_UNAVAILABLE},
                 )
@@ -374,38 +513,130 @@ def run_bhavcopy_update(ctx) -> JobResult:
     if not info.get("ready"):
         return JobResult(JS.BLOCKED, "official bhavcopy history is not yet sufficient",
                          blocked_on="BHAVCOPY_SOURCE", metadata=info)
+    snap = {}
+    certify = getattr(ctx.deps, "certify_bhav_snapshot", None)
+    if callable(certify):
+        try:
+            snap = certify(activate=True) or {}
+        except Exception as exc:
+            snap = {"error": str(exc)}
+    sid = snap.get("snapshot_id")
+    if sid:
+        latest = str(snap.get("latest_date") or "")
+        unblocks = [DEP_DATA]
+        if latest:
+            unblocks.append(f"EOD_DATA_READY:{latest}")
+        return JobResult(
+            JS.SUCCEEDED,
+            f"official bhavcopy ready · {info.get('symbols', 0)} symbols · snapshot {sid}",
+            output_snapshot_id=sid,
+            metadata={**info, **snap},
+            clears={H.SNAPSHOT_STALE},
+            unblocks=tuple(unblocks),
+            state_hint=ST.DATA_READY,
+        )
     return JobResult(JS.SUCCEEDED, f"official bhavcopy ready · {info.get('symbols', 0)} symbols",
-                     metadata=info)
+                     metadata={**info, **snap})
 
 
 def run_corporate_actions(ctx) -> JobResult:
     try:
-        info = ctx.deps.corporate_actions_status()
+        ensure = getattr(ctx.deps, "ensure_corporate_actions", None)
+        info = ensure() if callable(ensure) else ctx.deps.corporate_actions_status()
     except Exception as exc:
         return JobResult(JS.RETRYABLE_FAILED, "corporate-action validation failed",
                          error_code="CA_VALIDATION_ERROR", error_message=str(exc),
                          failures={H.CA_INCOMPLETE})
     if not info.get("available"):
+        # Operator-pending source — research checklist tracks the gap. Do NOT sticky-fail
+        # the heartbeat: QuantTerm refuses to invent CA events, so BLOCKED is expected.
         return JobResult(JS.BLOCKED,
-                         "official corporate-action table unavailable; affected historical research remains blocked",
-                         failures={H.CA_INCOMPLETE}, blocked_on=DEP_CA_SOURCE, metadata=info)
-    return JobResult(JS.SUCCEEDED, f"corporate actions loaded · {info.get('symbols', 0)} symbols",
+                         "official corporate-action table unavailable; drop "
+                         "logs/ca_events.incoming.json (or set QT_CA_SOURCE_FILE) "
+                         "with real NSE CA events — QuantTerm will not invent them. "
+                         "Or: python main.py ca-ingest --from-gaps",
+                         clears={H.CA_INCOMPLETE}, blocked_on=DEP_CA_SOURCE, metadata=info)
+    if int(info.get("events") or info.get("symbols") or 0) <= 0:
+        return JobResult(JS.BLOCKED,
+                         "corporate-action ledger is present but empty; research stays RAW. "
+                         "Fill logs/ca_events.todo.csv from NSE filings, then ca-ingest.",
+                         clears={H.CA_INCOMPLETE}, blocked_on=DEP_CA_SOURCE, metadata=info)
+    return JobResult(JS.SUCCEEDED,
+                     f"corporate actions loaded · {info.get('symbols', 0)} symbols / "
+                     f"{info.get('events', info.get('symbols', 0))} events",
                      clears={H.CA_INCOMPLETE}, metadata=info)
 
 
 def run_universe_history(ctx) -> JobResult:
     try:
-        info = ctx.deps.universe_history_status()
+        ensure = getattr(ctx.deps, "ensure_universe_history", None)
+        info = ensure() if callable(ensure) else ctx.deps.universe_history_status()
+        # Re-read PIT view so job metadata matches consumers.
+        status = ctx.deps.universe_history_status()
+        info = {**status, **{k: v for k, v in info.items() if k not in status}}
     except Exception as exc:
         return JobResult(JS.RETRYABLE_FAILED, "universe-history validation failed",
                          error_code="UNIVERSE_HISTORY_ERROR", error_message=str(exc),
                          failures={H.UNIVERSE_INCOMPLETE})
     if not info.get("survivorship_complete"):
-        return JobResult(JS.BLOCKED, info.get("note") or "point-in-time universe unavailable",
-                         failures={H.UNIVERSE_INCOMPLETE}, blocked_on=DEP_UNIVERSE_SOURCE,
-                         metadata=info)
-    return JobResult(JS.SUCCEEDED, f"point-in-time universe ready · {len(info.get('symbols', []))} symbols",
-                     clears={H.UNIVERSE_INCOMPLETE}, metadata=info)
+        # Survivors-only / empty bhav bootstrap is an acknowledged research limit,
+        # not a sticky organisational failure. Checklist + research_grade=false remain honest.
+        return JobResult(
+            JS.BLOCKED,
+            info.get("note") or "point-in-time universe unavailable",
+            clears={H.UNIVERSE_INCOMPLETE},
+            blocked_on=DEP_UNIVERSE_SOURCE,
+            metadata=info,
+        )
+    source = info.get("source") or "operator"
+    grade = "research-grade" if info.get("research_grade") else "inferred/bootstrap"
+    return JobResult(
+        JS.SUCCEEDED,
+        f"point-in-time universe ready · {len(info.get('symbols', []))} symbols "
+        f"({source}, {grade})",
+        clears={H.UNIVERSE_INCOMPLETE},
+        metadata=info,
+    )
+
+
+def run_options_eod(ctx) -> JobResult:
+    try:
+        capture = getattr(ctx.deps, "capture_options_eod", None)
+        info = capture() if callable(capture) else {"saved": 0}
+        status = getattr(ctx.deps, "options_eod_status", lambda: {})()
+        info = {**(status or {}), **(info or {})}
+    except Exception as exc:
+        return JobResult(
+            JS.RETRYABLE_FAILED,
+            "options EOD capture failed",
+            error_code="OPTIONS_EOD_ERROR",
+            error_message=str(exc),
+            failures={H.OPTIONS_HISTORY_INCOMPLETE},
+        )
+    saved = int(info.get("saved") or 0)
+    if saved <= 0 and not info.get("available"):
+        return JobResult(
+            JS.RETRYABLE_FAILED,
+            "options EOD chain unavailable for NIFTY/BANKNIFTY/FINNIFTY — will retry",
+            error_code="OPTIONS_CHAIN_UNAVAILABLE",
+            failures={H.OPTIONS_HISTORY_INCOMPLETE},
+            metadata=info,
+        )
+    if saved <= 0:
+        return JobResult(
+            JS.RETRYABLE_FAILED,
+            "options EOD capture saved no underlyings — will retry",
+            error_code="OPTIONS_EOD_EMPTY",
+            failures={H.OPTIONS_HISTORY_INCOMPLETE},
+            metadata=info,
+        )
+    return JobResult(
+        JS.SUCCEEDED,
+        f"options EOD history saved · {saved}/{info.get('requested', saved)} underlyings · "
+        f"store latest={info.get('latest_as_of') or info.get('as_of') or '?'}",
+        clears={H.OPTIONS_HISTORY_INCOMPLETE},
+        metadata=info,
+    )
 
 
 def run_index_warmup(ctx) -> JobResult:
@@ -601,6 +832,7 @@ HANDLERS = {
     SCH.BHAVCOPY_UPDATE: run_bhavcopy_update,
     SCH.CORPORATE_ACTIONS: run_corporate_actions,
     SCH.UNIVERSE_HISTORY: run_universe_history,
+    SCH.OPTIONS_EOD: run_options_eod,
     SCH.INDEX_WARMUP: run_index_warmup,
     SCH.MARKET_SCAN: run_market_scan,
     SCH.NEWS_REFRESH: run_news_refresh,

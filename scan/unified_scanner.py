@@ -436,11 +436,42 @@ class UnifiedScanner:
         if self._calib:
             log.info("scanner_calibrated", signals=len(self._calib))
 
-    def scan(self, symbols: list[str], progress=None) -> list[StockSignal]:
+    def scan(self, symbols: list[str], progress=None, *, skip_prefetch: bool = False) -> list[StockSignal]:
         from scan.bulk_fetcher import prefetch, get_cached, cached_symbols
+        import time as _time
 
-        prefetch(symbols, progress=progress)
+        def _report(current: int, total: int) -> None:
+            if not callable(progress):
+                return
+            try:
+                progress(int(current), int(total))
+            except Exception:
+                pass
+
+        if skip_prefetch:
+            # Caller already warmed official history (market-ops). Ensure the
+            # in-process bhav flag is on so get_cached/cached_symbols use it.
+            try:
+                from scan import bulk_fetcher as bf
+
+                with bf._lock:
+                    if not bf._bhav_ok:
+                        try:
+                            from data.bhavcopy_store import store_symbols as _store_symbols
+
+                            if _store_symbols():
+                                bf._bhav_ok = True
+                        except Exception:
+                            pass
+            except Exception:
+                pass
+        else:
+            prefetch(symbols, progress=progress)
+
         available = [s for s in symbols if s in set(cached_symbols())]
+        total = max(1, len(available) or len(symbols) or 1)
+        _report(0, total)
+
         self._nifty_ret30 = _nifty_return_30d()      # RS benchmark, once/scan
         # Current market tape → regime-conditional demotion for this scan only.
         # compute_regime is cached (15 min) + streamlit-free; one call/scan.
@@ -457,12 +488,22 @@ class UnifiedScanner:
             log.debug("regime_calib_skip", error=str(exc))
             self._regime, self._regime_calib = "", {}
         log.info("unified_scan_start", requested=len(symbols), with_data=len(available))
+        _report(0, total)
 
         results: list[StockSignal] = []
         with ThreadPoolExecutor(max_workers=self._max_workers) as pool:
             futures = {pool.submit(self._analyze, sym, get_cached(sym)): sym
                        for sym in available}
+            done = 0
+            total = len(futures) or 1
+            last_report = _time.monotonic()
             for fut in as_completed(futures):
+                done += 1
+                now = _time.monotonic()
+                # Report often enough that a 2k-universe scan never looks frozen.
+                if done == 1 or done == total or done % 10 == 0 or (now - last_report) >= 1.5:
+                    _report(done, total)
+                    last_report = now
                 try:
                     r = fut.result()
                     if r and r.signals:
@@ -472,6 +513,7 @@ class UnifiedScanner:
 
         results.sort(key=lambda r: r.score, reverse=True)
         log.info("unified_scan_done", scanned=len(available), with_signals=len(results))
+        _report(total, total)
         return results
 
     # ── Per-stock analysis ────────────────────────────────────────────────────

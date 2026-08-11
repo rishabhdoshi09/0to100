@@ -519,3 +519,14 @@
   .positions-panel { grid-column: 1 / -1; }
   .metric-grid { grid-template-columns: repeat(3, minmax(155px, 1fr)); }
 }
+
+button.linkish {
+  background: none;
+  border: none;
+  color: var(--accent-cyan, #26d7ff);
+  cursor: pointer;
+  padding: 0;
+  font: inherit;
+  text-align: left;
+}
+button.linkish:hover { text-decoration: underline; }

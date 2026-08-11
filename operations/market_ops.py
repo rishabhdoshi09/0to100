@@ -28,6 +28,7 @@ LONG_TERM_REFRESH = "LONG_TERM_REFRESH"
 NEWS_REFRESH = "NEWS_REFRESH"
 FNO_REFRESH = "FNO_REFRESH"
 DATA_PREPARE = "DATA_PREPARE"
+FULL_UNIVERSE_BACKTEST = "FULL_UNIVERSE_BACKTEST"
 
 LANES = {
     MARKET_SCAN: "market_scan",
@@ -36,6 +37,7 @@ LANES = {
     NEWS_REFRESH: "news",
     FNO_REFRESH: "data",
     DATA_PREPARE: "data",
+    FULL_UNIVERSE_BACKTEST: "research",
 }
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -63,27 +65,62 @@ class SingleWorkerLock:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._handle = None
 
+    def holder_pid(self) -> int | None:
+        try:
+            text = self.path.read_text(encoding="utf-8").strip().splitlines()[0].strip()
+            return int(text) if text else None
+        except Exception:
+            return None
+
+    def pid_alive(self, pid: int | None) -> bool:
+        if not pid or int(pid) <= 0:
+            return False
+        try:
+            os.kill(int(pid), 0)
+            return True
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            # Windows / restricted PID — process exists
+            return True
+        except OSError:
+            return False
+
+    def reclaim_if_dead(self) -> bool:
+        """Clear a lock file whose owner PID is gone. Flock itself dies with the process,
+        but a leftover lock file can confuse diagnostics; unlink when safe."""
+        pid = self.holder_pid()
+        if self.pid_alive(pid):
+            return False
+        try:
+            self.path.unlink(missing_ok=True)
+            return True
+        except Exception:
+            return False
+
     def acquire(self) -> bool:
         try:
-            import fcntl
-            self._handle = self.path.open("w")
-            try:
-                fcntl.flock(self._handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            except OSError:
-                self._handle.close()
-                self._handle = None
+            self.reclaim_if_dead()
+            from utils.process_lock import ProcessFileLock
+
+            lock = ProcessFileLock(self.path)
+            if not lock.acquire():
                 return False
-            self._handle.write(str(os.getpid()))
-            self._handle.flush()
+            self._handle = lock._handle
+            self._process_lock = lock
             return True
         except Exception:
             return False
 
     def release(self) -> None:
         try:
+            lock = getattr(self, "_process_lock", None)
+            if lock is not None:
+                lock.release()
+                self._process_lock = None
+                self._handle = None
+                return
             if self._handle is not None:
-                import fcntl
-                fcntl.flock(self._handle, fcntl.LOCK_UN)
                 self._handle.close()
             self.path.unlink(missing_ok=True)
         except Exception:
@@ -208,7 +245,18 @@ class MarketOperationsWorker:
             _emit("PROGRESS", f"{operation_id[:8]} · {stage} · {message}")
 
     def _ensure_history(self, operation_id: str, *, days: int = HISTORY_DAYS) -> dict[str, Any]:
-        with self._history_lock:
+        # Parallel lanes share one history prepare. Announce waits so the UI
+        # never looks frozen on ACCEPTED while blocked on this lock.
+        waited_s = 0.0
+        while not self._history_lock.acquire(timeout=0.5):
+            waited_s += 0.5
+            self._progress(
+                operation_id,
+                "WAITING_HISTORY",
+                f"Waiting for shared NSE history prepare · {waited_s:.0f}s "
+                "(another lane is loading bhavcopy)",
+            )
+        try:
             from data.bhavcopy_runtime import status as history_status
             current = history_status(load_cache=True)
             if current.get("ready") and int(current.get("sessions", 0) or 0) >= 60:
@@ -225,7 +273,7 @@ class MarketOperationsWorker:
                 self._progress(
                     operation_id,
                     "PREPARING_HISTORY",
-                    "Downloading/loading missing official NSE bhavcopy sessions",
+                    f"Downloading/loading official NSE bhavcopy · {int(current_count)}/{int(total)} sessions",
                     current_count,
                     total,
                 )
@@ -239,6 +287,8 @@ class MarketOperationsWorker:
                     result=current,
                 )
             return current
+        finally:
+            self._history_lock.release()
 
     def _run_market_scan(self, operation: dict[str, Any]) -> dict[str, Any]:
         operation_id = str(operation["operation_id"])
@@ -247,14 +297,47 @@ class MarketOperationsWorker:
         from scan.market_scan_service import run_whole_market_scan
 
         def prepared_prefetch(symbols, *, progress=None):
-            return len(symbols)
+            # History already prepared by _ensure_history. Mark the in-process
+            # bhav cache warm so UnifiedScanner does not re-enter build_store /
+            # apply_live (that looked like a frozen "Scanning 0/N").
+            try:
+                from scan import bulk_fetcher as bf
 
+                with bf._lock:
+                    bf._bhav_ok = True
+            except Exception:
+                pass
+            total = len(list(symbols) or [])
+            if callable(progress) and total:
+                try:
+                    progress(0, total)
+                except Exception:
+                    pass
+            return total
+
+        def progress_callback(current: int, total: int) -> None:
+            self._progress(
+                operation_id,
+                "SCANNING",
+                f"Scanning market · {int(current):,}/{int(total):,} stocks",
+                int(current),
+                int(total),
+            )
+
+        universe_guess = max(1, int(history.get("symbols") or 1))
         self._progress(
             operation_id,
             "SCANNING",
-            f"Evaluating whole NSE universe with {history.get('sessions', 0)} official sessions",
+            f"Starting whole-market evaluation · {history.get('sessions', 0)} official sessions · ~{universe_guess:,} symbols",
+            0,
+            universe_guess,
         )
-        report = run_whole_market_scan(prefetch_fn=prepared_prefetch, save=True)
+        report = run_whole_market_scan(
+            prefetch_fn=prepared_prefetch,
+            progress_callback=progress_callback,
+            save=True,
+            skip_scanner_prefetch=True,
+        )
         result = _operation_result(report)
         if not getattr(report, "ok", False):
             code = str(getattr(report, "error_code", "SCAN_FAILED") or "SCAN_FAILED")
@@ -276,9 +359,25 @@ class MarketOperationsWorker:
             operation_id,
             "TECHNICAL_SCREEN",
             f"Running long-term screen across {history.get('symbols', 0):,} history symbols",
+            0,
+            max(1, int(history.get("symbols") or 1)),
         )
         from scan.long_term_service import run_long_term_scan
-        report = run_long_term_scan(refresh_fundamentals=refresh, save=True)
+
+        def progress(current: int, total: int, message: str) -> None:
+            text = str(message or "")
+            lower = text.lower()
+            if "fundamental" in lower:
+                stage = "FUNDAMENTALS"
+            elif "sav" in lower:
+                stage = "SAVING"
+            elif "histor" in lower or "bhav" in lower:
+                stage = "PREPARING_HISTORY"
+            else:
+                stage = "TECHNICAL_SCREEN"
+            self._progress(operation_id, stage, text, current, total)
+
+        report = run_long_term_scan(refresh_fundamentals=refresh, save=True, progress=progress)
         result = _operation_result(report)
         status = str(getattr(report, "status", ""))
         if hasattr(report, "ok") and not report.ok and status != "NO_CANDIDATES":
@@ -354,6 +453,72 @@ class MarketOperationsWorker:
         fno = self._run_fno(operation)
         return {"history": history, "fno": fno}
 
+    def _run_full_universe_backtest(self, operation: dict[str, Any]) -> dict[str, Any]:
+        """Walk-forward signal backtest on 100% of bhav EQ symbols. Never places orders."""
+        operation_id = str(operation["operation_id"])
+        history = self._ensure_history(operation_id)
+        self._progress(
+            operation_id,
+            "FULL_UNIVERSE_BACKTEST",
+            f"Backtesting scanner signals across {history.get('symbols', 0):,} official EQ symbols",
+        )
+        from product.full_universe_backtest import run_full_universe_backtest
+        from scan.signal_backtest import get_state
+
+        stop_poll = threading.Event()
+
+        def _poll_progress() -> None:
+            while not stop_poll.wait(2.0):
+                try:
+                    st = get_state()
+                    if st.get("running") and int(st.get("total") or 0) > 0:
+                        self._progress(
+                            operation_id,
+                            "FULL_UNIVERSE_BACKTEST",
+                            f"Measuring signal edge · {st.get('progress', 0)}/{st.get('total', 0)} symbols",
+                            int(st.get("progress") or 0),
+                            int(st.get("total") or 0),
+                        )
+                except Exception:
+                    pass
+
+        poller = threading.Thread(target=_poll_progress, name="bt-progress", daemon=True)
+        poller.start()
+
+        def progress(current: int, total: int, message: str) -> None:
+            self._progress(operation_id, "FULL_UNIVERSE_BACKTEST", message, current, total)
+
+        try:
+            report = run_full_universe_backtest(scope="full", progress=progress)
+        finally:
+            stop_poll.set()
+
+        if not report.get("ok", True) and report.get("error_code"):
+            raise OperationBlocked(
+                str(report.get("message") or "Full-universe backtest unavailable"),
+                code=str(report.get("error_code") or "BACKTEST_BLOCKED"),
+                result=report,
+            )
+        result = {
+            "generated_at": report.get("generated_at"),
+            "symbols": report.get("symbols"),
+            "horizon_days": report.get("horizon_days"),
+            "signal_count": len(report.get("signals") or {}),
+            "universe": report.get("universe") or {},
+            "elapsed_s": report.get("elapsed_s"),
+            "places_orders": False,
+            "live_locked": True,
+            "history": history,
+            "recommended_target_pct": report.get("recommended_target_pct"),
+        }
+        uni = result["universe"]
+        self._progress(
+            operation_id,
+            "BACKTEST_DONE",
+            f"Measured {result['signal_count']} signal types on {uni.get('run', result['symbols'])} symbols",
+        )
+        return result
+
     def _execute(self, operation: dict[str, Any]) -> dict[str, Any]:
         kind = str(operation.get("kind", ""))
         if kind == MARKET_SCAN:
@@ -368,6 +533,8 @@ class MarketOperationsWorker:
             return self._run_fno(operation)
         if kind == DATA_PREPARE:
             return self._run_data_prepare(operation)
+        if kind == FULL_UNIVERSE_BACKTEST:
+            return self._run_full_universe_backtest(operation)
         raise RuntimeError(f"No market-operations handler for {kind}")
 
     def _lane_loop(self, lane: str) -> None:
@@ -414,14 +581,27 @@ class MarketOperationsWorker:
                 _atomic_json(RUNTIME_PATH, self._runtime_payload(running=True))
 
     def _bootstrap(self) -> list[str]:
+        """Queue missing product inputs without blocking worker bring-up.
+
+        Intentionally avoids ``load_cache=True`` here — loading the full bhav
+        pickle can take minutes and used to delay the first heartbeat, leaving
+        MARKET_SCAN PENDING while the UI said the worker was offline.
+        Heavy history load happens later inside each job via ``_ensure_history``.
+        """
         queued: list[str] = []
         try:
             from data.bhavcopy_runtime import status as history_status
-            history = history_status(load_cache=True)
+
+            history = history_status(load_cache=False)
         except Exception:
-            history = {"ready": False, "sessions": 0}
-        history_missing = not history.get("ready") or int(history.get("sessions", 0) or 0) < 60
-        if history_missing:
+            history = {"ready": False, "sessions": 0, "cache_exists": False, "csv_files": 0}
+        history_present = bool(
+            history.get("ready")
+            or history.get("cache_exists")
+            or int(history.get("csv_files") or 0) >= 60
+            or int(history.get("sessions") or 0) >= 60
+        )
+        if not history_present:
             _item, created = self.store.enqueue(DATA_PREPARE, lane=LANES[DATA_PREPARE], requested_by="bootstrap")
             if created:
                 queued.append(DATA_PREPARE)
@@ -445,15 +625,19 @@ class MarketOperationsWorker:
 
     def run(self) -> int:
         if not self.lock.acquire():
-            _emit("INFO", "another market-operations worker already owns the lock")
-            return 1
+            # Another live process owns the lock. If heartbeat is dead, reclaim once.
+            self.lock.reclaim_if_dead()
+            if not self.lock.acquire():
+                holder = self.lock.holder_pid()
+                _emit(
+                    "INFO",
+                    f"another market-operations worker already owns the lock"
+                    + (f" (pid={holder})" if holder else ""),
+                )
+                return 1
         recovered = self.store.recover_orphans()
-        bootstrap = self._bootstrap()
-        _emit(
-            "ONLINE",
-            f"pid={os.getpid()} · lanes={','.join(sorted(set(LANES.values())))} · "
-            f"recovered={recovered} · bootstrap={','.join(bootstrap) or 'nothing_due'}",
-        )
+        # Come ONLINE before bootstrap so PENDING market scans can lease immediately.
+        # A slow bootstrap used to leave scans queued for many minutes with no heartbeat.
         _atomic_json(RUNTIME_PATH, self._runtime_payload(running=True))
         heartbeat = threading.Thread(target=self._heartbeat_loop, name="market-ops-heartbeat", daemon=True)
         heartbeat.start()
@@ -467,6 +651,13 @@ class MarketOperationsWorker:
             )
             thread.start()
             self._threads.append(thread)
+        bootstrap = self._bootstrap()
+        _emit(
+            "ONLINE",
+            f"pid={os.getpid()} · lanes={','.join(sorted(set(LANES.values())))} · "
+            f"recovered={recovered} · bootstrap={','.join(bootstrap) or 'nothing_due'}",
+        )
+        _atomic_json(RUNTIME_PATH, self._runtime_payload(running=True))
         try:
             while not self.stop_event.wait(1.0):
                 pass

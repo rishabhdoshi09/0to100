@@ -138,7 +138,7 @@ export function SecurityTable({
   const visible = typeof limit === 'number' ? rows.slice(0, limit) : rows
   return (
     <div className="table-shell">
-      <div className="table-head"><span>#</span><span>STOCK</span><span>SCORE</span><span>PRICE</span><span>5D</span><span>SETUP</span></div>
+      <div className="table-head"><span>#</span><span>STOCK</span><span>SCORE</span><span>EDGE</span><span>PRICE</span><span>5D</span><span>SETUP</span></div>
       {visible.length === 0 && <div className="empty-row">{empty}</div>}
       {visible.map((row, index) => (
         <button
@@ -150,6 +150,9 @@ export function SecurityTable({
           <span>{index + 1}</span>
           <strong>{row.symbol}</strong>
           <span className="score-cell">{score(rowScore(row))}</span>
+          <span className={(row.edge_r || 0) >= 0 ? 'positive' : 'negative'}>
+            {row.edge_r == null ? '—' : `${row.edge_r >= 0 ? '+' : ''}${Number(row.edge_r).toFixed(2)}R`}
+          </span>
           <span>{money(row.price)}</span>
           <span className={(row.momentum_5d || 0) >= 0 ? 'positive' : 'negative'}>{pct(row.momentum_5d)}</span>
           <span>{words((row as ConvictionRecord).classification || row.signals?.[0] || row.status || row.verdict)}</span>

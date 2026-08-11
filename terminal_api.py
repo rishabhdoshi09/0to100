@@ -71,28 +71,113 @@ def _ops_runtime_payload() -> dict[str, Any]:
     }
 
 
-def _ensure_ops_worker() -> dict[str, Any]:
+def _ensure_ops_worker(*, wait_s: float = 8.0) -> dict[str, Any]:
     """Start the dedicated market-operations worker when it is not healthy."""
     global _ops_process
     runtime = _ops_runtime_payload()
     if runtime.get("running"):
+        runtime["ensure_attempted"] = False
+        runtime["ensure_ok"] = True
         return runtime
+
+    # If a prior worker died without releasing diagnostics, clear a dead lock file
+    # so a fresh spawn can take ownership.
+    try:
+        from operations.market_ops import LOCK_PATH, SingleWorkerLock
+
+        SingleWorkerLock(LOCK_PATH).reclaim_if_dead()
+    except Exception:
+        pass
+
+    def _wait_for_online(deadline: float) -> dict[str, Any]:
+        while time.time() < deadline:
+            time.sleep(0.15)
+            current = _ops_runtime_payload()
+            if current.get("running"):
+                return current
+            if _ops_process is not None and _ops_process.poll() is not None:
+                break
+        return _ops_runtime_payload()
+
     if _ops_process is not None and _ops_process.poll() is None:
+        # Child still starting — wait for heartbeat.
+        runtime = _wait_for_online(time.time() + max(1.0, float(wait_s)))
+        runtime["ensure_attempted"] = True
+        runtime["ensure_ok"] = bool(runtime.get("running"))
+        if not runtime["ensure_ok"]:
+            runtime["ensure_error"] = (
+                "Market-ops child process is running but has not published a fresh heartbeat yet"
+            )
         return runtime
+
     _ops_process = subprocess.Popen(
         [sys.executable, "-u", "-m", "operations.market_ops"],
         cwd=str(ROOT),
         env=os.environ.copy(),
     )
-    deadline = time.time() + 2.5
-    while time.time() < deadline:
-        time.sleep(0.1)
-        runtime = _ops_runtime_payload()
-        if runtime.get("running"):
-            break
-        if _ops_process.poll() is not None:
-            break
+    runtime = _wait_for_online(time.time() + max(1.0, float(wait_s)))
+
+    # Spawn exited immediately (often lock conflict). Reclaim dead owner and retry once.
+    if not runtime.get("running") and _ops_process.poll() is not None:
+        try:
+            from operations.market_ops import LOCK_PATH, SingleWorkerLock
+
+            SingleWorkerLock(LOCK_PATH).reclaim_if_dead()
+        except Exception:
+            pass
+        _ops_process = subprocess.Popen(
+            [sys.executable, "-u", "-m", "operations.market_ops"],
+            cwd=str(ROOT),
+            env=os.environ.copy(),
+        )
+        runtime = _wait_for_online(time.time() + max(1.0, float(wait_s)))
+
+    runtime["ensure_attempted"] = True
+    runtime["ensure_ok"] = bool(runtime.get("running"))
+    runtime["spawn_pid"] = getattr(_ops_process, "pid", None)
+    if not runtime["ensure_ok"]:
+        exit_code = _ops_process.poll() if _ops_process is not None else None
+        if exit_code is not None:
+            runtime["ensure_error"] = (
+                f"Market-ops worker exited before heartbeat (exit={exit_code}). "
+                "Another worker may own the lock, or startup crashed — "
+                "run: bash scripts/stop_quantterm.sh && bash scripts/run_quantterm_complete.sh"
+            )
+        else:
+            runtime["ensure_error"] = (
+                "Market-ops worker was spawned but no heartbeat yet — "
+                "wait a few seconds or restart the stack"
+            )
     return runtime
+
+
+def _queue_message_for_control(kind: str, runtime: dict[str, Any]) -> str:
+    lane = ""
+    try:
+        from operations.market_ops import LANES
+
+        lane = str(LANES.get(kind) or "")
+    except Exception:
+        lane = ""
+    active = dict((runtime.get("active") or {}).get(lane) or {})
+    if not runtime.get("running"):
+        detail = str(runtime.get("ensure_error") or "").strip()
+        base = (
+            "Queued, but market-ops worker is OFFLINE — "
+            "restart with bash scripts/stop_quantterm.sh && bash scripts/run_quantterm_complete.sh"
+        )
+        return f"{base}. {detail}" if detail else (
+            base + " (scans cannot start without the worker)"
+        )
+    if active:
+        return (
+            f"Queued behind active {active.get('kind') or 'job'} on the {lane or 'same'} lane — "
+            "this scan starts when that job finishes"
+        )
+    return (
+        f"Queued — market-ops worker ONLINE (pid {runtime.get('worker_pid') or '—'}); "
+        "should lease this job within a few seconds"
+    )
 
 
 @app.on_event("startup")
@@ -375,6 +460,10 @@ def _operations_payload() -> dict[str, Any]:
         from operations.store import OperationStore
         store = OperationStore(OPS_DB)
         runtime = _ops_runtime_payload()
+        # Self-heal: UI polls this while a scan is PENDING. If the worker died,
+        # try to bring it back so MARKET_SCAN is not stuck forever.
+        if not runtime.get("running") and store.active():
+            runtime = _ensure_ops_worker(wait_s=2.5)
         recent = store.recent(100)
         latest = {}
         for kind in LANES:
@@ -387,6 +476,8 @@ def _operations_payload() -> dict[str, Any]:
             "worker_pid": runtime.get("worker_pid"),
             "heartbeat": runtime.get("heartbeat", ""),
             "active_lanes": dict(runtime.get("active", {}) or {}),
+            "ensure_ok": runtime.get("ensure_ok", bool(runtime.get("running"))),
+            "ensure_error": runtime.get("ensure_error", ""),
             "counts": store.counts(),
             "active": store.active(),
             "recent": recent,
@@ -399,6 +490,8 @@ def _operations_payload() -> dict[str, Any]:
             "worker_pid": None,
             "heartbeat": "",
             "active_lanes": {},
+            "ensure_ok": False,
+            "ensure_error": str(exc),
             "counts": {},
             "active": [],
             "recent": [],
@@ -493,6 +586,19 @@ def _data_payload(scan: dict, long_term: dict, operations: dict, fno: dict, news
             "error": str(exc),
         }
     snapshot = _snapshot_payload()
+    try:
+        from options.eod_store import store_status as options_eod_status
+
+        options_eod = options_eod_status()
+    except Exception as exc:
+        options_eod = {
+            "available": False,
+            "path": "",
+            "symbols": 0,
+            "snapshots": 0,
+            "latest_as_of": "",
+            "error": str(exc),
+        }
     blockers: list[str] = []
     if not bhavcopy.get("ready"):
         blockers.append("Official NSE bhavcopy history is not ready; direct scans will prepare it first.")
@@ -500,6 +606,8 @@ def _data_payload(scan: dict, long_term: dict, operations: dict, fno: dict, news
         blockers.append("Official bhavcopy history is shallower than the minimum screen requirement.")
     if not snapshot.get("ready"):
         blockers.append("Verified snapshot is missing; PAPER autonomy is limited, but direct cash scans can still use official bhavcopy history.")
+    if not options_eod.get("available"):
+        blockers.append("Options EOD OI/IV history is empty; run options-eod capture or wait for the EOD autonomy job.")
     if not operations.get("running"):
         blockers.append("Dedicated market-operations worker is not online.")
     if not fno.get("available"):
@@ -510,6 +618,7 @@ def _data_payload(scan: dict, long_term: dict, operations: dict, fno: dict, news
         "ready": bool(bhavcopy.get("ready") and operations.get("running")),
         "snapshot": snapshot,
         "bhavcopy": bhavcopy,
+        "options_eod": options_eod,
         "scan_saved": bool(scan.get("available")),
         "scan_records": len(scan.get("records", []) or []),
         "long_term_saved": bool(long_term.get("available")),
@@ -546,6 +655,22 @@ def _conviction(scan: dict, market: dict) -> list[dict]:
 
 @app.get("/api/health")
 def health() -> dict:
+    """Pure liveness probe for Vite/stack monitors — must stay cheap and lock-free.
+
+    Rich autonomy/ops status belongs on /api/dashboard (and /api/health/detail).
+    Bundling it here made curl health checks time out while data_refresh or
+    dashboard work held the API busy, and the stack launcher then killed Vite.
+    """
+    return {
+        "ok": True,
+        "service": "quantterm-terminal-api",
+        "version": app.version,
+    }
+
+
+@app.get("/api/health/detail")
+def health_detail() -> dict:
+    """Optional richer status for debugging — not used by stack liveness checks."""
     autonomy = _autonomy_payload()
     operations = _operations_payload()
     return {
@@ -604,6 +729,19 @@ def news_status() -> dict:
     return _news_payload()
 
 
+@app.get("/api/education")
+def education_feed(min_impact: int = 40, limit: int = 40) -> dict:
+    """Educational cards projected from curated news — never invents articles."""
+    from product.education_feed import build_education_feed
+
+    news = _news_payload()
+    return build_education_feed(
+        articles=list(news.get("articles") or []),
+        min_impact=max(0, min(int(min_impact or 40), 100)),
+        limit=max(1, min(int(limit or 40), 100)),
+    )
+
+
 @app.get("/api/fno")
 def fno_status() -> dict:
     return _fno_payload()
@@ -654,6 +792,7 @@ _OPERATION_CONTROLS = {
     "REFRESH_NEWS_NOW": "NEWS_REFRESH",
     "REFRESH_FNO_NOW": "FNO_REFRESH",
     "REFRESH_DATA_NOW": "DATA_PREPARE",
+    "RUN_FULL_UNIVERSE_BACKTEST_NOW": "FULL_UNIVERSE_BACKTEST",
 }
 _AUTONOMY_CONTROLS = {
     "RUN_CYCLE_NOW",
@@ -671,19 +810,36 @@ def control(control_name: str) -> dict:
     if name in _OPERATION_CONTROLS:
         from operations.market_ops import LANES
         from operations.store import OperationStore
-        _ensure_ops_worker()
+        runtime = _ensure_ops_worker(wait_s=8.0)
         kind = _OPERATION_CONTROLS[name]
+        queue_message = _queue_message_for_control(kind, runtime)
         operation, created = OperationStore(OPS_DB).enqueue(
             kind,
             lane=LANES[kind],
             requested_by="terminal",
+            message=queue_message,
         )
         return {
             "accepted": True,
             "control": name,
             "operation_id": operation.get("operation_id"),
             "operation_status": operation.get("status"),
+            "operation_message": operation.get("message") or queue_message,
             "created": created,
+            "worker": {
+                "running": bool(runtime.get("running")),
+                "worker_pid": runtime.get("worker_pid"),
+                "heartbeat": runtime.get("heartbeat"),
+                "active_lanes": dict(runtime.get("active") or {}),
+                "ensure_ok": runtime.get("ensure_ok", bool(runtime.get("running"))),
+                "ensure_error": runtime.get("ensure_error", ""),
+            },
+            "transparency": queue_message,
+            "blocker": (
+                None
+                if runtime.get("running")
+                else (runtime.get("ensure_error") or "Market-ops worker is OFFLINE")
+            ),
         }
     from research.autonomy.controls import request_control
     queued = request_control(name, reason="owner requested control from dedicated terminal frontend")

@@ -92,6 +92,91 @@ def snapshot_from_bhav_dir(bhav_dir, store: SnapshotStore | None = None, *, inde
     return sid, report
 
 
+def rows_from_bhav_store(*, max_symbols: int | None = None) -> tuple:
+    """Materialise equity rows from the in-memory official bhav store."""
+    from data.bhavcopy_runtime import ensure_loaded
+    from data import bhavcopy_store as BS
+
+    ensure_loaded(rebuild_from_local=False)
+    rows: list = []
+    report = {
+        "symbols_seen": 0,
+        "accepted": 0,
+        "quarantined": 0,
+        "source": "bhav_store",
+    }
+    today = date.today()
+    for sym, df in BS.iter_raw_frames():
+        report["symbols_seen"] += 1
+        if max_symbols is not None and report["symbols_seen"] > max_symbols:
+            break
+        try:
+            frame = df.sort_index()
+            for ts, bar in frame.iterrows():
+                try:
+                    d = getattr(ts, "date", lambda: ts)()
+                    iso = d.isoformat() if hasattr(d, "isoformat") else str(d)[:10]
+                    if date.fromisoformat(iso) > today:
+                        report["quarantined"] += 1
+                        continue
+                    o = float(bar.get("open"))
+                    h = float(bar.get("high"))
+                    l = float(bar.get("low"))
+                    c = float(bar.get("close"))
+                    vol = int(float(bar.get("volume") or 0))
+                except Exception:
+                    report["quarantined"] += 1
+                    continue
+                if min(o, h, l, c) <= 0 or not (l <= o <= h and l <= c <= h):
+                    report["quarantined"] += 1
+                    continue
+                rows.append((sym, iso, o, h, l, c, vol, "EQ"))
+                report["accepted"] += 1
+        except Exception:
+            report["quarantined"] += 1
+            continue
+    report["symbols"] = len({r[0] for r in rows})
+    return rows, report
+
+
+def snapshot_from_bhav_store(
+    store: SnapshotStore | None = None,
+    *,
+    activate: bool = True,
+    actor: str = "system",
+    reason: str = "bhav store certification",
+    extra_manifest: dict | None = None,
+):
+    """Commit (+ optionally activate) a verified snapshot from the live bhav store.
+
+    Used when Kite auth is deferred/unavailable so research still has a pinned
+    ``snapshot_id`` sourced from official NSE bhavcopy.
+    """
+    store = store or SnapshotStore()
+    rows, report = rows_from_bhav_store()
+    if not rows:
+        report["result"] = "bhav store empty — nothing committed"
+        report["snapshot_id"] = None
+        report["activated"] = False
+        return None, report
+    sid = store.commit_snapshot(
+        rows,
+        extra_manifest={
+            "source": "bhav_store",
+            "has_universe_history": False,
+            **(extra_manifest or {}),
+        },
+    )
+    report["snapshot_id"] = sid
+    report["result"] = "committed"
+    if activate:
+        store.activate_snapshot(sid, actor=actor, reason=reason)
+        report["activated"] = True
+    else:
+        report["activated"] = False
+    return sid, report
+
+
 def _index_rows(index_dir) -> list:
     out = []
     for f in sorted(Path(index_dir).glob("*.csv")):

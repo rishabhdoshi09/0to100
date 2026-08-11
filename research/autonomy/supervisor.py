@@ -22,37 +22,19 @@ class SingleInstanceLock:
     def __init__(self, path):
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self._fh = None
+        from utils.process_lock import ProcessFileLock
+
+        self._lock = ProcessFileLock(self.path)
+        self._fh = None  # compat for older diagnostics
 
     def acquire(self) -> bool:
-        try:
-            import fcntl
-            self._fh = open(self.path, "w")
-            try:
-                fcntl.flock(self._fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            except OSError:
-                self._fh.close(); self._fh = None
-                return False
-            self._fh.write(str(os.getpid())); self._fh.flush()
-            return True
-        except Exception:
-            try:
-                fd = os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-                os.write(fd, str(os.getpid()).encode()); os.close(fd)
-                return True
-            except FileExistsError:
-                return False
+        ok = self._lock.acquire()
+        self._fh = self._lock._handle
+        return ok
 
     def release(self) -> None:
-        try:
-            if self._fh is not None:
-                import fcntl
-                fcntl.flock(self._fh, fcntl.LOCK_UN)
-                self._fh.close()
-            if self.path.exists():
-                self.path.unlink()
-        except Exception:
-            pass
+        self._lock.release()
+        self._fh = None
 
 
 class Supervisor:
@@ -78,6 +60,7 @@ class Supervisor:
         self._owner_path = self.root / "owner_state.json"
         self.failures = self._load_failures()
         self.owner_state = self._load_owner_state()
+        self._reconcile_expected_research_gaps()
         if self.owner_state.get("new_entries_paused"):
             self.failures.add(H.OWNER_PAUSED)
         else:
@@ -90,6 +73,16 @@ class Supervisor:
             return set(json.loads(self._failures_path.read_text(encoding="utf-8")))
         except Exception:
             return set()
+
+    def _reconcile_expected_research_gaps(self) -> None:
+        """Drop sticky CA / universe incompletes for operator-pending research gaps.
+
+        Missing CA or survivorship history is owned by the retail checklist and BLOCKED
+        jobs. QuantTerm will not invent those ledgers — they must not permanently red
+        the heartbeat as organisational failures.
+        """
+        self.failures.discard(H.CA_INCOMPLETE)
+        self.failures.discard(H.UNIVERSE_INCOMPLETE)
 
     def _save_failures(self) -> None:
         tmp = self._failures_path.with_suffix(".tmp")
@@ -138,6 +131,11 @@ class Supervisor:
         self._write_status()
 
     def heartbeat(self):
+        # Keep operator-pending research gaps out of sticky failures (checklist owns them).
+        before = set(self.failures)
+        self._reconcile_expected_research_gaps()
+        if self.failures != before:
+            self._save_failures()
         self._write_status()
 
     def _write_status(self):
@@ -177,6 +175,7 @@ class Supervisor:
         self.jobs.enqueue(SCH.CORPORATE_ACTIONS, idempotency_key=SCH.corporate_actions_key(session_date))
         self.jobs.enqueue(SCH.UNIVERSE_HISTORY, idempotency_key=SCH.universe_history_key(session_date))
         self.jobs.enqueue(SCH.BHAVCOPY_UPDATE, idempotency_key=SCH.bhavcopy_key(session_date))
+        self.jobs.enqueue(SCH.OPTIONS_EOD, idempotency_key=SCH.options_eod_key(session_date))
 
     @staticmethod
     def _news_bucket(now_ist, market_open: bool) -> str:
@@ -209,6 +208,8 @@ class Supervisor:
         if slot == "eod":
             self.jobs.enqueue(SCH.BHAVCOPY_UPDATE,
                               idempotency_key=SCH.eod_bhavcopy_key(session_date))
+            self.jobs.enqueue(SCH.OPTIONS_EOD,
+                              idempotency_key=SCH.eod_options_key(session_date))
             eod_refresh = self.jobs.enqueue(
                 SCH.DATA_REFRESH, idempotency_key=SCH.eod_data_refresh_key(session_date), critical=True)
             if eod_refresh.status != JS.SUCCEEDED:
@@ -393,6 +394,8 @@ class Supervisor:
 
         self.failures |= set(result.failures)
         self.failures -= set(result.clears)
+        # CA / universe incompletes are never sticky organisational failures.
+        self._reconcile_expected_research_gaps()
         self._save_failures()
 
         if result.status == JS.RETRYABLE_FAILED:

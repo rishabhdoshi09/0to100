@@ -1,4 +1,11 @@
-import type { ChartBar, ControlName, DashboardPayload, OperationRecord, OptionsChainPayload } from './types'
+import type {
+  ChartBar,
+  ControlName,
+  DashboardPayload,
+  OperationRecord,
+  OptionsChainPayload,
+  OptionsEodHistoryPayload,
+} from './types'
 
 const json = async <T>(response: Response): Promise<T> => {
   if (!response.ok) {
@@ -26,6 +33,14 @@ export const fetchMarketOptions = (symbol: string, force = false): Promise<Optio
   fetch(`/api/market/options/${encodeURIComponent(symbol)}?force=${force ? 'true' : 'false'}`, {
     headers: { Accept: 'application/json' },
   }).then((response) => json<OptionsChainPayload>(response))
+
+export const fetchOptionsEodHistory = (
+  symbol: string,
+  days = 14,
+): Promise<OptionsEodHistoryPayload> =>
+  fetch(`/api/market/options/${encodeURIComponent(symbol)}/history?days=${days}`, {
+    headers: { Accept: 'application/json' },
+  }).then((response) => json<OptionsEodHistoryPayload>(response))
 
 export const fetchOperationsPayload = (): Promise<DashboardPayload['operations']> =>
   fetch('/api/operations', { headers: { Accept: 'application/json' } })

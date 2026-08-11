@@ -52,6 +52,12 @@ def _record(signal: Any, names: Mapping[str, str], fno_symbols: set[str]) -> dic
         "signals": signals,
         "reasons": reasons,
         "why": reasons[0] if reasons else "No explanation recorded",
+        "sector": str(_value(signal, "sector", "") or ""),
+        "edge_r": (
+            float(_value(signal, "edge_r"))
+            if _value(signal, "edge_r", None) is not None
+            else None
+        ),
     }
 
 
@@ -63,12 +69,29 @@ def build_scan_payload(
     scanned_at: datetime | None = None,
 ) -> dict[str, Any]:
     fno = {str(s).upper() for s in fno_symbols}
-    records = [_record(row, names, fno) for row in results]
-    # deterministic ranking: score descending, symbol as the stable secondary key for ties
-    records.sort(key=lambda row: (-float(row["score"] or 0.0), row["symbol"]))
+    # Apply full-universe backtest evidence before serialization so React /
+    # pre-trade / conviction all see the same measured edge.
+    result_list = list(results)
+    try:
+        from scan.measured_edge import apply_measured_edge
+
+        apply_measured_edge(result_list)
+    except Exception:
+        pass
+    records = [_record(row, names, fno) for row in result_list]
+    # Rank by verdict tier, then score + measured edge — demoted losers stay down.
+    vrank = {"STRONG BUY": 2, "BUY": 1}
+    records.sort(
+        key=lambda row: (
+            -vrank.get(str(row.get("verdict") or ""), 0),
+            -float(row["score"] or 0.0) - 40.0 * float(row["edge_r"] or 0.0),
+            row["symbol"],
+        )
+    )
     momentum = [r for r in records if "MOMENTUM" in r["signals"]]
     near = [r for r in records if "PRE_BREAKOUT" in r["signals"] and "MOMENTUM" not in r["signals"]]
     ready = [r for r in records if r["status"] == "Ready to trade"]
+    edged = sum(1 for r in records if r.get("edge_r") is not None)
     now = scanned_at or datetime.now(timezone.utc)
     return {
         "schema_version": 1,
@@ -82,6 +105,7 @@ def build_scan_payload(
             "near_breakout": len(near),
             "ready_to_trade": len(ready),
             "extended": sum(1 for r in records if r["chase_risk"]),
+            "with_measured_edge": edged,
         },
     }
 

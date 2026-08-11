@@ -179,6 +179,16 @@ def chain_workspace(symbol: str, spot: float | None = None) -> dict[str, Any]:
     if len(chain_rows) > 80:
         mid = len(chain_rows) // 2
         chain_rows = chain_rows[max(0, mid - 40): mid + 40]
+    total_ce_oi = float(df["ce_oi"].sum()) if "ce_oi" in df.columns else 0.0
+    total_pe_oi = float(df["pe_oi"].sum()) if "pe_oi" in df.columns else 0.0
+    iv_rank = 0.0
+    try:
+        all_iv = pd.concat([df["ce_iv"], df["pe_iv"]]).replace(0, np.nan).dropna()
+        if not all_iv.empty and float(all_iv.max()) > float(all_iv.min()):
+            probe = atm_iv if atm_iv > 0 else float(all_iv.median())
+            iv_rank = round((probe - float(all_iv.min())) / (float(all_iv.max()) - float(all_iv.min())) * 100, 1)
+    except Exception:
+        iv_rank = 0.0
     return {
         "available": True,
         "symbol": sym,
@@ -188,10 +198,20 @@ def chain_workspace(symbol: str, spot: float | None = None) -> dict[str, Any]:
         "bias": bias,
         "note": note,
         "atm_iv": atm_iv,
+        "iv_rank": iv_rank,
         "spot": spot,
+        "total_ce_oi": int(total_ce_oi),
+        "total_pe_oi": int(total_pe_oi),
+        "strike_count": int(len(df)),
         "top_call_oi": top_ce,
         "top_put_oi": top_pe,
         "chain": chain_rows,
+        "greeks_available": False,
+        "signal_desk": False,
+        "honesty": (
+            "Live chain shows OI, IV, PCR and max pain for the nearest expiry. "
+            "Black-Scholes Greeks and trade direction are not calculated — this is context, not a signal."
+        ),
     }
 
 

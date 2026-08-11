@@ -45,8 +45,21 @@ class MarketScanReport:
 
 
 def _default_universe() -> Mapping[str, str]:
-    from data.nse_universe import get_nse_universe_with_names
-    return get_nse_universe_with_names()
+    """Full approved cash universe — never keys-from-names-only.
+
+    ``get_nse_universe_with_names()`` always returns one entry per live symbol
+    (empty string if the display name is unknown). Fall back to the bare symbol
+    list if the names helper fails so a thin name map cannot zero the scan.
+    """
+    from data.nse_universe import get_nse_universe, get_nse_universe_with_names
+
+    try:
+        names = dict(get_nse_universe_with_names() or {})
+    except Exception:
+        names = {}
+    if names:
+        return names
+    return {str(sym).strip().upper(): "" for sym in (get_nse_universe() or []) if str(sym).strip()}
 
 
 def _default_prefetch(symbols, *, progress=None):
@@ -81,12 +94,17 @@ def run_whole_market_scan(
     progress_callback: Callable[[int, int], None] | None = None,
     save: bool = True,
     snapshot_id: str | None = None,
+    skip_scanner_prefetch: bool = False,
 ) -> MarketScanReport:
     """Run and optionally persist one deterministic broad-NSE scan.
 
     Dependency injection keeps this function network-free in tests.  Results are always ordered by
     the existing canonical payload builder, and F&O availability is overlaid only after the cash
     universe has been evaluated.
+
+    ``skip_scanner_prefetch`` is for callers that already warmed official history
+    (market-ops). It prevents a second silent prefetch/live-overlay inside the
+    scanner that made the UI look stuck at 0/N.
     """
     universe_provider = universe_provider or _default_universe
     prefetch_fn = prefetch_fn or _default_prefetch
@@ -105,8 +123,27 @@ def run_whole_market_scan(
                                 source_snapshot_id=snapshot_id or "")
 
     try:
+        if callable(progress_callback):
+            try:
+                progress_callback(0, len(symbols))
+            except Exception:
+                pass
         prefetch_fn(symbols, progress=progress_callback)
-        results = list(scanner.scan(symbols) or [])
+        # Prefer scanners that accept progress; fall back without inventing results.
+        try:
+            results = list(
+                scanner.scan(
+                    symbols,
+                    progress=progress_callback,
+                    skip_prefetch=bool(skip_scanner_prefetch),
+                )
+                or []
+            )
+        except TypeError:
+            try:
+                results = list(scanner.scan(symbols, progress=progress_callback) or [])
+            except TypeError:
+                results = list(scanner.scan(symbols) or [])
     except Exception as exc:
         return MarketScanReport(FAILED, universe_size=len(symbols), error_code="SCAN_ERROR",
                                 error_message=str(exc), source_snapshot_id=snapshot_id or "")
@@ -125,6 +162,9 @@ def run_whole_market_scan(
     payload["scan_status"] = SUCCEEDED
     if save:
         save_scan(payload)
+    # Feed scanner autopilot — same hook Streamlit auto_scan used to own alone.
+    # Without this, React/autonomy MARKET_SCAN never places paper/live entries.
+    _feed_autopilot_from_scan(payload)
     summary = dict(payload.get("summary", {}))
     n_setups = int(summary.get("with_any_setup", 0) or 0)
     status = SUCCEEDED if n_setups else NO_SETUPS
@@ -132,3 +172,35 @@ def run_whole_market_scan(
     return MarketScanReport(status=status, payload=payload, universe_size=len(symbols),
                             scanned=int(payload.get("universe_size", len(symbols)) or len(symbols)),
                             source_snapshot_id=sid)
+
+
+def _feed_autopilot_from_scan(payload: Mapping[str, Any]) -> None:
+    """Hand BUY/STRONG BUY rows to execution.autopilot (armed or no-op)."""
+    try:
+        from execution.autopilot import on_setups, review_cycle
+
+        records = [dict(r) for r in (payload.get("records") or []) if isinstance(r, Mapping)]
+        if records:
+            # Attach sector when missing so concentration / heat gates stay honest.
+            try:
+                from scan.sector_heat import sector_of
+
+                for row in records:
+                    if not row.get("sector") and row.get("symbol"):
+                        row["sector"] = sector_of(str(row["symbol"]))
+            except Exception:
+                pass
+            on_setups(records)
+        # Keep exits / circuit breaker moving even without Streamlit auto_scan.
+        try:
+            from core.market_session import in_market_open
+
+            if in_market_open():
+                review_cycle()
+        except Exception:
+            try:
+                review_cycle()
+            except Exception:
+                pass
+    except Exception:
+        pass

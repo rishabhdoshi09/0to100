@@ -46,19 +46,15 @@ def _closed_rows() -> list[dict]:
 
 
 def _row_r(row: dict) -> float | None:
-    entry, stop = float(row["entry_price"]), float(row["stop_price"])
-    if entry <= stop:
-        return None
-    risk_frac = (entry - stop) / entry
-    r = (float(row["outcome_pct"]) / 100) / risk_frac
-    # NET of round-trip trading costs — the edge that survives brokerage/STT/
-    # slippage, which is what live_edge / EV / drift / beliefs should learn from.
-    try:
-        from core.costs import cost_in_r
-        r -= cost_in_r(risk_frac, "CNC")
-    except Exception:
-        pass
-    return max(_R_CLIP[0], min(_R_CLIP[1], r))
+    from core.costs import outcome_to_net_r
+
+    return outcome_to_net_r(
+        row["entry_price"],
+        row["stop_price"],
+        row["outcome_pct"],
+        product="CNC",
+        clip=_R_CLIP,
+    )
 
 
 def _bucket(expectancy_r: float) -> float:

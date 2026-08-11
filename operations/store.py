@@ -98,6 +98,7 @@ class OperationStore:
         requested_by: str = "terminal",
         payload: dict[str, Any] | None = None,
         deduplicate: bool = True,
+        message: str | None = None,
     ) -> tuple[dict[str, Any], bool]:
         """Enqueue one operation and return ``(record, created)``.
 
@@ -110,6 +111,10 @@ class OperationStore:
             raise ValueError("kind and lane are required")
         now = time.time()
         operation_id = uuid.uuid4().hex
+        queue_message = str(
+            message
+            or "Queued and waiting for the dedicated market-operations worker"
+        )
         with self._connect() as con:
             con.execute("BEGIN IMMEDIATE")
             if deduplicate:
@@ -119,6 +124,24 @@ class OperationStore:
                     (kind, PENDING, RUNNING),
                 ).fetchone()
                 if row is not None:
+                    # Refresh the visible queue message on re-click so OFFLINE/ONLINE
+                    # transparency is not stuck on the bootstrap default text.
+                    if message and str(row["status"]) == PENDING:
+                        con.execute(
+                            "UPDATE operations SET message=?, updated_at=?, requested_by=? "
+                            "WHERE operation_id=? AND status=?",
+                            (
+                                queue_message,
+                                now,
+                                str(requested_by or "terminal"),
+                                str(row["operation_id"]),
+                                PENDING,
+                            ),
+                        )
+                        row = con.execute(
+                            "SELECT * FROM operations WHERE operation_id=?",
+                            (str(row["operation_id"]),),
+                        ).fetchone()
                     con.commit()
                     return self._decode(row) or {}, False
             con.execute(
@@ -137,7 +160,7 @@ class OperationStore:
                     now,
                     now,
                     json.dumps(payload or {}, default=str),
-                    "Queued and waiting for the dedicated market-operations worker",
+                    queue_message,
                 ),
             )
             row = con.execute(
@@ -168,8 +191,8 @@ class OperationStore:
                     now,
                     now,
                     int(worker_pid),
-                    "STARTING",
-                    "Worker accepted the operation",
+                    "ACCEPTED",
+                    "Worker accepted the job — next stage updates will show live progress",
                     operation_id,
                     PENDING,
                 ),

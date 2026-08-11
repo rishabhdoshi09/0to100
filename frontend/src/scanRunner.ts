@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { fetchOperation, sendControl } from './api'
+import { fetchOperation, fetchOperationsPayload, sendControl } from './api'
 import type { ControlName, OperationRecord } from './types'
 
 export type ScanKind = 'MARKET_SCAN' | 'LONG_TERM_SCAN'
@@ -20,27 +20,58 @@ export function isActiveStatus(status: string): boolean {
 }
 
 const STAGE_LABELS: Record<string, string> = {
-  PENDING: 'Starting the scan…',
-  PREPARING_HISTORY: 'Preparing market history…',
-  HISTORY_READY: 'Market history ready…',
+  PENDING: 'Queued — waiting for the market-ops worker…',
+  ACCEPTED: 'Worker picked up the job…',
+  STARTING: 'Worker picked up the job…',
+  WAITING_HISTORY: 'Waiting for shared NSE history prepare…',
+  PREPARING_HISTORY: 'Preparing official NSE price history…',
+  HISTORY_READY: 'Official history ready…',
   LOADING_UNIVERSE: 'Loading the NSE universe…',
   SCANNING: 'Scanning market candidates…',
   RANKING: 'Ranking qualified ideas…',
   SAVING: 'Saving the latest results…',
-  TECHNICAL_SCREEN: 'Screening long-term candidates…',
+  TECHNICAL_SCREEN: 'Screening long-term technicals across the universe…',
+  FUNDAMENTALS: 'Scoring current fundamentals on shortlisted names…',
   FETCHING_SOURCES: 'Fetching news sources…',
   RECOVERED: 'Recovering interrupted job…',
 }
 
-export function friendlyStageLabel(stage: string, status: string): string {
+export type WorkerSnapshot = {
+  running: boolean | null
+  worker_pid?: number | null
+  activeKind?: string | null
+  transparency?: string | null
+  ensure_error?: string | null
+}
+
+export function friendlyStageLabel(
+  stage: string,
+  status: string,
+  worker: WorkerSnapshot | null = null,
+  elapsedSeconds = 0,
+): string {
   if (status === 'SUCCEEDED') return 'Scan complete'
   if (status === 'FAILED') return 'Scan failed'
   if (status === 'CANCELLED') return 'Scan stopped'
   if (status === 'BLOCKED') return 'Scan blocked'
+  if (status === 'PENDING') {
+    if (worker?.running === false || (worker?.running == null && elapsedSeconds >= 8)) {
+      return 'Market-ops worker is OFFLINE — scan cannot start until it is online'
+    }
+    if (worker?.activeKind) {
+      return `Queued behind ${worker.activeKind} on this lane…`
+    }
+    if (elapsedSeconds >= 15 && worker?.running) {
+      return 'Still queued — worker is ONLINE but has not leased this job yet'
+    }
+    if (worker?.running) {
+      return 'Queued — market-ops worker is ONLINE and should start soon'
+    }
+    return STAGE_LABELS.PENDING
+  }
   const key = String(stage || '').trim().toUpperCase()
   if (key && STAGE_LABELS[key]) return STAGE_LABELS[key]
-  if (!key && status === 'PENDING') return 'Starting the scan…'
-  if (!key && status === 'RUNNING') return 'Working on the scan…'
+  if (!key && status === 'RUNNING') return 'Working — progress updates every few seconds…'
   if (key) return key.replace(/_/g, ' ').toLowerCase().replace(/^\w/, (c) => c.toUpperCase())
   return 'Scanning…'
 }
@@ -49,10 +80,53 @@ export function buildProgressLine(operation: OperationRecord | null): string | n
   if (!operation) return null
   const total = Number(operation.progress_total || 0)
   const current = Number(operation.progress_current || 0)
+  const message = String(operation.message || '').trim()
   if (total > 0) {
-    return `Scanning ${current.toLocaleString('en-IN')} of ${total.toLocaleString('en-IN')} stocks`
+    const noun = String(operation.kind || '').includes('LONG_TERM') ? 'names' : 'stocks'
+    const counts = `${current.toLocaleString('en-IN')} of ${total.toLocaleString('en-IN')} ${noun}`
+    if (message && (/\d+\s*\/\s*\d+/.test(message) || /of\s+[\d,]+/i.test(message))) {
+      return message
+    }
+    return message ? `${message} · ${counts}` : counts
   }
-  return null
+  return message || null
+}
+
+/** Seconds since the operation last wrote progress (0 if unknown/not running). */
+export function secondsSinceUpdate(operation: OperationRecord | null, nowMs = Date.now()): number | null {
+  if (!operation || !isActiveStatus(operation.status)) return null
+  const updatedAt = Number(operation.updated_at || 0)
+  if (!Number.isFinite(updatedAt) || updatedAt <= 0) return null
+  // Backend stores unix seconds; tolerate ms accidentally.
+  const updatedMs = updatedAt > 1e12 ? updatedAt : updatedAt * 1000
+  return Math.max(0, Math.floor((nowMs - updatedMs) / 1000))
+}
+
+export function staleProgressHint(operation: OperationRecord | null, nowMs = Date.now()): string | null {
+  const age = secondsSinceUpdate(operation, nowMs)
+  if (age == null) return null
+  const stage = String(operation?.stage || '').toUpperCase()
+  if (stage === 'WAITING_HISTORY') {
+    return 'Another lane is still preparing shared history — this scan is alive and waiting'
+  }
+  if (stage === 'ACCEPTED' && age >= 8) {
+    return `Worker accepted the job ${age}s ago — next stage should appear shortly`
+  }
+  if (age < 12) return null
+  if (Number(operation?.progress_total || 0) > 0 && Number(operation?.progress_current || 0) === 0) {
+    return `Counts still at 0/${operation?.progress_total} · last engine update ${age}s ago (loading universe / first batch)`
+  }
+  return `Last engine update ${age}s ago — scan is still running`
+}
+
+export function formatElapsed(seconds: number): string {
+  const s = Math.max(0, Math.floor(Number(seconds) || 0))
+  if (s < 60) return `${s}s`
+  const m = Math.floor(s / 60)
+  const rem = s % 60
+  if (m < 60) return `${m}m ${rem}s`
+  const h = Math.floor(m / 60)
+  return `${h}h ${m % 60}m`
 }
 
 export function qualifiedResultLine(operation: OperationRecord | null): string | null {
@@ -89,9 +163,13 @@ export type ScanRunnerHandle = {
   qualifiedLine: string | null
   percent: number | null
   elapsedSeconds: number
+  secondsSinceUpdate: number | null
+  staleHint: string | null
   notice: string | null
   failed: boolean
   succeeded: boolean
+  workerOnline: boolean | null
+  workerPid: number | null
   start: () => Promise<void>
   retry: () => Promise<void>
   dismissNotice: () => void
@@ -102,11 +180,17 @@ type ScanRunnerOptions = {
   seedOperation?: OperationRecord | null
 }
 
+const LANE_FOR_KIND: Record<ScanKind, string> = {
+  MARKET_SCAN: 'market_scan',
+  LONG_TERM_SCAN: 'long_term',
+}
+
 export function useScanRunner(kind: ScanKind, options: ScanRunnerOptions = {}): ScanRunnerHandle {
   const { onComplete, seedOperation } = options
   const [operation, setOperation] = useState<OperationRecord | null>(null)
   const [isBusy, setIsBusy] = useState(false)
   const [notice, setNotice] = useState<string | null>(null)
+  const [worker, setWorker] = useState<WorkerSnapshot>({ running: null })
   const mountedRef = useRef(true)
   const pollRef = useRef<number | null>(null)
   const trackedIdRef = useRef<string | null>(null)
@@ -120,6 +204,24 @@ export function useScanRunner(kind: ScanKind, options: ScanRunnerOptions = {}): 
       pollRef.current = null
     }
   }, [])
+
+  const refreshWorker = useCallback(async () => {
+    try {
+      const ops = await fetchOperationsPayload()
+      if (!mountedRef.current) return
+      const lane = LANE_FOR_KIND[kind]
+      const active = (ops.active_lanes || {})[lane] as { kind?: string } | undefined
+      setWorker((prev) => ({
+        running: Boolean(ops.running),
+        worker_pid: ops.worker_pid ?? null,
+        activeKind: active?.kind || null,
+        transparency: prev.transparency || null,
+        ensure_error: (ops as { ensure_error?: string }).ensure_error || prev.ensure_error || null,
+      }))
+    } catch {
+      if (mountedRef.current) setWorker((prev) => ({ ...prev, running: null }))
+    }
+  }, [kind])
 
   const handleTerminal = useCallback((op: OperationRecord) => {
     if (completedIdRef.current === op.operation_id) return
@@ -142,14 +244,14 @@ export function useScanRunner(kind: ScanKind, options: ScanRunnerOptions = {}): 
 
   const pollOnce = useCallback(async (operationId: string) => {
     try {
-      const op = await fetchOperation(operationId)
+      const [op] = await Promise.all([fetchOperation(operationId), refreshWorker()])
       if (!mountedRef.current) return
       setOperation(op)
       if (isTerminalStatus(op.status)) handleTerminal(op)
     } catch {
       // transient network errors while polling — keep trying until terminal or unmount
     }
-  }, [handleTerminal])
+  }, [handleTerminal, refreshWorker])
 
   const beginPolling = useCallback((operationId: string) => {
     trackedIdRef.current = operationId
@@ -204,11 +306,32 @@ export function useScanRunner(kind: ScanKind, options: ScanRunnerOptions = {}): 
     setNotice(null)
     completedIdRef.current = null
     try {
-      const result = await sendControl(KIND_CONTROL[kind])
+      const result = await sendControl(KIND_CONTROL[kind]) as {
+        accepted: boolean
+        operation_id?: string
+        worker?: {
+          running?: boolean
+          worker_pid?: number
+          ensure_error?: string
+        }
+        transparency?: string
+        blocker?: string | null
+      }
+      if (result.worker) {
+        setWorker({
+          running: Boolean(result.worker.running),
+          worker_pid: result.worker.worker_pid ?? null,
+          transparency: result.transparency || null,
+          ensure_error: result.worker.ensure_error || result.blocker || null,
+        })
+      }
       if (!result.accepted) {
         setIsBusy(false)
         setNotice('Scan request was not accepted by the backend')
         return
+      }
+      if (result.blocker && !result.worker?.running) {
+        setNotice(result.blocker)
       }
       if (!result.operation_id) {
         setIsBusy(false)
@@ -238,13 +361,40 @@ export function useScanRunner(kind: ScanKind, options: ScanRunnerOptions = {}): 
   const dismissNotice = useCallback(() => setNotice(null), [])
 
   const friendlyPhase = useMemo(
-    () => friendlyStageLabel(operation?.stage || '', operation?.status || (isBusy ? 'PENDING' : '')),
-    [isBusy, operation?.stage, operation?.status],
+    () => friendlyStageLabel(
+      operation?.stage || '',
+      operation?.status || (isBusy ? 'PENDING' : ''),
+      worker,
+      elapsedSeconds,
+    ),
+    [elapsedSeconds, isBusy, operation?.stage, operation?.status, worker],
   )
 
   const progressLine = useMemo(() => buildProgressLine(operation), [operation])
   const qualifiedLine = useMemo(() => qualifiedResultLine(operation), [operation])
   const percent = useMemo(() => progressPercent(operation), [operation])
+  const updateAge = useMemo(
+    () => secondsSinceUpdate(operation),
+    [operation, elapsedSeconds, operation?.updated_at, operation?.progress_current, operation?.stage],
+  )
+  const staleHint = useMemo(
+    () => staleProgressHint(operation),
+    [operation, elapsedSeconds, operation?.updated_at, operation?.progress_current, operation?.stage],
+  )
+  const detailLine = useMemo(() => {
+    if (progressLine) return progressLine
+    if (worker.ensure_error && (worker.running === false || worker.running == null)) {
+      return worker.ensure_error
+    }
+    if (staleHint) return staleHint
+    if (worker.transparency) return worker.transparency
+    const message = String(operation?.message || '').trim()
+    if (message && message.toLowerCase() !== friendlyPhase.toLowerCase()) return message
+    if (operation?.status === 'PENDING' && worker.running !== true) {
+      return 'Restart the stack so market-ops can lease this job: bash scripts/stop_quantterm.sh && bash scripts/run_quantterm_complete.sh'
+    }
+    return null
+  }, [friendlyPhase, operation?.message, operation?.status, progressLine, staleHint, worker])
 
   const isActive = Boolean(
     isBusy || (operation && isActiveStatus(operation.status)),
@@ -256,13 +406,17 @@ export function useScanRunner(kind: ScanKind, options: ScanRunnerOptions = {}): 
     isActive,
     isBusy,
     friendlyPhase,
-    progressLine,
+    progressLine: detailLine,
     qualifiedLine,
     percent,
     elapsedSeconds,
+    secondsSinceUpdate: updateAge,
+    staleHint,
     notice,
     failed: operation?.status === 'FAILED' || operation?.status === 'BLOCKED',
     succeeded: operation?.status === 'SUCCEEDED',
+    workerOnline: worker.running,
+    workerPid: worker.worker_pid ?? null,
     start,
     retry,
     dismissNotice,

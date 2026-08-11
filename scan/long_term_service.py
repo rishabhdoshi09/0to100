@@ -197,13 +197,23 @@ def run_long_term_scan(
     sector_lookup: Callable[[str], str] | None = None,
     save: bool = True,
     top: int = 40,
+    progress: Callable[[int, int, str], None] | None = None,
 ) -> LongTermScanReport:
+    def _progress(current: int, total: int, message: str) -> None:
+        if not callable(progress):
+            return
+        try:
+            progress(int(current), int(total), str(message))
+        except Exception:
+            pass
+
     default_technical = technical_scanner is None
     technical_scanner = technical_scanner or __import__(
         "scan.long_term", fromlist=["scan_long_term"]).scan_long_term
     history: dict = {}
     if default_technical:
         try:
+            _progress(0, 1, "Checking official bhavcopy history…")
             history = _prepare_official_history()
             if not history.get("ready"):
                 return LongTermScanReport(
@@ -234,11 +244,39 @@ def run_long_term_scan(
         except Exception:
             symbols = None
     technical_limit = max(top, 30) if refresh_fundamentals else max(top * 2, 60)
+    universe_n = len(list(symbols)) if symbols is not None else 0
+    _progress(
+        0,
+        max(universe_n, 1),
+        f"Technical long-term screen starting"
+        + (f" · {universe_n:,} symbols" if universe_n else " · full store"),
+    )
     try:
-        technical = technical_scanner(symbols=symbols, min_score=45, top=technical_limit,
-                                      include_watch=True)
+        technical = technical_scanner(
+            symbols=symbols,
+            min_score=45,
+            top=technical_limit,
+            include_watch=True,
+            progress=progress,
+        )
     except TypeError:
-        technical = technical_scanner(symbols=symbols, min_score=45, top=technical_limit)
+        try:
+            technical = technical_scanner(
+                symbols=symbols, min_score=45, top=technical_limit, include_watch=True,
+            )
+        except TypeError:
+            try:
+                technical = technical_scanner(
+                    symbols=symbols, min_score=45, top=technical_limit,
+                )
+            except Exception as exc:
+                return LongTermScanReport(
+                    FAILED, error_code="LONG_TERM_TECHNICAL_ERROR", error_message=str(exc),
+                )
+        except Exception as exc:
+            return LongTermScanReport(
+                FAILED, error_code="LONG_TERM_TECHNICAL_ERROR", error_message=str(exc),
+            )
     except Exception as exc:
         return LongTermScanReport(FAILED, error_code="LONG_TERM_TECHNICAL_ERROR",
                                   error_message=str(exc))
@@ -250,7 +288,10 @@ def run_long_term_scan(
         return LongTermScanReport(NO_CANDIDATES, payload)
 
     records: list[dict] = []
-    for technical_row in technical:
+    n_tech = len(technical)
+    _progress(0, n_tech, f"Scoring current fundamentals for {n_tech} technical candidates")
+    for idx, technical_row in enumerate(technical):
+        _progress(idx + 1, n_tech, f"Fundamentals · {idx + 1}/{n_tech} · {technical_row.get('symbol', '')}")
         row = dict(technical_row)
         symbol = str(row.get("symbol", "") or "").upper()
         sector = str(sector_lookup(symbol) or "Unknown")
@@ -308,6 +349,7 @@ def run_long_term_scan(
                 "NEEDS_FUNDAMENTALS": 4, "AVOID_REVIEW": 5}
     records.sort(key=lambda r: (priority.get(r["classification"], 9),
                                 -float(r["combined_score"]), r["symbol"]))
+    _progress(n_tech, n_tech, f"Saving top {min(top, len(records))} long-term candidates")
     payload = _payload(records[:top], scope=scope, refresh=refresh_fundamentals, history=history)
     if save:
         from product.long_term_store import save_long_term_scan

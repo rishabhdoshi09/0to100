@@ -39,21 +39,45 @@ data → signals → EV ranking → risk gates → execution → outcomes → le
 
 ## Quickstart
 
+### macOS / Linux
 ```bash
 git clone <repo> && cd 0to100
 python3 -m venv venv && source venv/bin/activate
 pip install -r requirements.txt
 cp .env.example .env          # Kite / Telegram / DeepSeek keys
-streamlit run app.py
+bash scripts/run_quantterm.sh
+# older / low-power machine:
+bash scripts/run_quantterm_low_power.sh
 ```
 
+### Windows (PowerShell)
+```powershell
+git clone <repo>; cd 0to100
+# one-time: Python 3.11+ and Node.js LTS must be on PATH
+.\scripts\setup_windows.ps1
+# edit .env (Kite / Telegram keys)
+.\scripts\run_quantterm.ps1
+# older / low-power PC:
+.\scripts\run_quantterm_low_power.ps1
+# stop:
+.\scripts\stop_quantterm.ps1
+```
+
+Or double-click `scripts\run_quantterm.bat` after setup. Cross-platform engine:
+`python scripts\quantterm_stack.py run`.
+
+Open the terminal at **http://127.0.0.1:5173** (API on `:8765`).
+
 Daily: `python main.py login` (Kite token — Telegram reminds you at 08:30).
+
+Streamlit fallback (optional): `streamlit run app.py`
 
 ## Run it 24/7
 
 | Where | How |
 |---|---|
 | Your Mac (₹0) | `bash deploy/setup_mac.sh` — launchd service; add `QT_ECO=1` on a shared/fanless machine |
+| Your Windows PC | `.\scripts\setup_windows.ps1` then `.\scripts\run_quantterm.ps1` — see `docs/WINDOWS.md` |
 | Any Ubuntu server / VPS | `bash deploy/setup_server.sh` — systemd, IST timezone, swap, auto-restart |
 | Oracle Cloud free tier | see `docs/ORACLE_SETUP.md` |
 

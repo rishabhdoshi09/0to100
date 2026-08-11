@@ -27,14 +27,20 @@ fi
 AUTONOMY_PID=""
 API_PID=""
 FRONTEND_PID=""
+IDLE_BT_PID=""
 AUTONOMY_EXTERNAL=0
 API_EXTERNAL=0
+API_HEALTH_FAILS=0
+API_HTTP_FAILS=0
 
 cleanup() {
   echo
   echo "[STACK] Stopping QuantTerm child services…"
   if [[ -n "$FRONTEND_PID" ]]; then
     kill "$FRONTEND_PID" >/dev/null 2>&1 || true
+  fi
+  if [[ -n "$IDLE_BT_PID" ]]; then
+    kill "$IDLE_BT_PID" >/dev/null 2>&1 || true
   fi
   if [[ -n "$API_PID" ]]; then
     kill "$API_PID" >/dev/null 2>&1 || true
@@ -43,6 +49,11 @@ cleanup() {
     kill "$AUTONOMY_PID" >/dev/null 2>&1 || true
   fi
   wait >/dev/null 2>&1 || true
+  # Vite/npm often outlive the launcher PID; reap by bind port.
+  stack_free_port 5173 "Vite dev server"
+  if [[ "$API_EXTERNAL" != "1" ]]; then
+    stack_free_port 8765 "Terminal API"
+  fi
   if [[ "$AUTONOMY_EXTERNAL" == "1" ]]; then
     echo "[STACK] Existing external autonomy supervisor was left running."
   fi
@@ -75,16 +86,19 @@ PY
       AUTONOMY_PID=""
       AUTONOMY_EXTERNAL=1
     else
-      echo "[STACK] Autonomy failed to stay alive. Review the visible error above."
-      exit 1
+      # Autonomy is best-effort for the terminal UI — do not abort the stack.
+      echo "[STACK] Autonomy failed to stay alive; continuing with API + Vite only." >&2
+      AUTONOMY_PID=""
     fi
   fi
 fi
 
 API_HEALTH="http://127.0.0.1:8765/api/health"
 set +e
-API_PID="$(stack_start_or_reuse_uvicorn 8765 "terminal_product_api:app" "$API_HEALTH" "Terminal API")"
-api_rc=$?
+# Direct call — do not capture via $(...); that kills the backgrounded uvicorn.
+stack_start_or_reuse_uvicorn 8765 "terminal_product_api:app" "$API_HEALTH" "Terminal API"
+api_rc=$STACK_UVICORN_RC
+API_PID=$STACK_UVICORN_PID
 set -e
 
 if [[ "$api_rc" == 2 ]]; then
@@ -106,35 +120,94 @@ else
 fi
 echo "[STACK] Terminal API ready."
 
+# Research-only: when laptop idle ≥10m, enqueue full-universe signal backtest.
+# Never places orders. No-op on headless hosts without idle detection (unless QT_FAKE_IDLE_SECONDS).
+if [[ "${QT_DISABLE_IDLE_BACKTEST:-}" != "1" ]]; then
+  echo "[STACK] Starting idle full-universe backtest watcher (10m idle → research job)…"
+  python -u "$ROOT/scripts/idle_full_universe_backtest.py" --idle-seconds 600 &
+  IDLE_BT_PID=$!
+fi
+
 stack_free_port 5173 "Vite dev server"
 
 echo "[STACK] Starting dedicated terminal at http://127.0.0.1:5173 …"
-(
-  cd frontend
-  npm run dev -- --host 127.0.0.1 --port 5173
-) &
+# Avoid `( cd …; npm … ) &` — killing that subshell PID leaves an orphaned Vite
+# that keeps proxying to a dead :8765 and surfaces ECONNREFUSED in the browser.
+npm --prefix "$ROOT/frontend" run dev -- --host 127.0.0.1 --port 5173 &
 FRONTEND_PID=$!
+
+# Confirm Vite bound before advertising ready (API is already healthy above).
+vite_bound=0
+for _ in $(seq 1 60); do
+  if stack_port_listening 5173; then
+    vite_bound=1
+    break
+  fi
+  # npm may spawn vite and exit on some setups; only fail if neither PID nor port live.
+  if ! kill -0 "$FRONTEND_PID" >/dev/null 2>&1 && ! stack_port_listening 5173; then
+    echo "[STACK] Vite exited during startup. Review errors above." >&2
+    exit 1
+  fi
+  sleep 0.5
+done
+if [[ "$vite_bound" != "1" ]]; then
+  echo "[STACK] Vite did not bind :5173 within 30s." >&2
+  exit 1
+fi
 
 echo "[STACK] QuantTerm is ready. Open http://127.0.0.1:5173"
 echo "[STACK] Keep this terminal open; Ctrl-C stops services started by this script."
 echo "[STACK] If the UI still errors, run: bash scripts/stop_quantterm.sh && bash scripts/run_quantterm_complete.sh"
 
+# Hard-fail only when the API process/port is gone. HTTP soft-fails while the
+# process is alive usually mean a busy worker — never tear down Vite for that.
+API_DEAD_LIMIT=3
+API_HTTP_WARN_EVERY=5
+
 while true; do
-  if ! kill -0 "$FRONTEND_PID" >/dev/null 2>&1; then
-    echo "[STACK] FRONTEND process exited unexpectedly (pid=$FRONTEND_PID)."
+  if ! stack_port_listening 5173; then
+    if [[ -n "$FRONTEND_PID" ]] && kill -0 "$FRONTEND_PID" >/dev/null 2>&1; then
+      echo "[STACK] Vite is not listening on :5173 (npm pid=$FRONTEND_PID still alive)." >&2
+    else
+      echo "[STACK] FRONTEND/Vite exited unexpectedly (nothing on :5173)." >&2
+    fi
     exit 1
   fi
+
+  api_process_dead=0
   if [[ "$API_EXTERNAL" != "1" ]] && [[ -n "$API_PID" ]] && ! kill -0 "$API_PID" >/dev/null 2>&1; then
-    echo "[STACK] API process exited unexpectedly (pid=$API_PID)."
-    exit 1
+    api_process_dead=1
   fi
-  if ! stack_health_ok "$API_HEALTH"; then
-    echo "[STACK] Terminal API health check failed at $API_HEALTH — backend may have stopped." >&2
-    exit 1
+  api_port_down=0
+  if ! stack_port_listening 8765; then
+    api_port_down=1
   fi
+
+  if [[ "$api_process_dead" == "1" ]] || [[ "$api_port_down" == "1" ]]; then
+    API_HEALTH_FAILS=$((API_HEALTH_FAILS + 1))
+    echo "[STACK] Terminal API process/port soft-fail ${API_HEALTH_FAILS}/${API_DEAD_LIMIT} (dead=${api_process_dead} port_down=${api_port_down})" >&2
+    if [[ "$API_HEALTH_FAILS" -ge "$API_DEAD_LIMIT" ]]; then
+      echo "[STACK] Terminal API is down on :8765 — backend may have stopped." >&2
+      echo "[STACK] Vite proxies /api → :8765; restart with: bash scripts/stop_quantterm.sh && bash scripts/run_quantterm_complete.sh" >&2
+      exit 1
+    fi
+  else
+    API_HEALTH_FAILS=0
+    if ! stack_health_ok "$API_HEALTH"; then
+      # Process is up but HTTP probe timed out — warn, do not exit.
+      API_HTTP_FAILS=$((API_HTTP_FAILS + 1))
+      if (( API_HTTP_FAILS == 1 || API_HTTP_FAILS % API_HTTP_WARN_EVERY == 0 )); then
+        echo "[STACK] Terminal API HTTP health slow/busy at $API_HEALTH (warn ${API_HTTP_FAILS}; process still up) — not exiting." >&2
+      fi
+    else
+      API_HTTP_FAILS=0
+    fi
+  fi
+
   if [[ -n "$AUTONOMY_PID" ]] && ! kill -0 "$AUTONOMY_PID" >/dev/null 2>&1; then
-    echo "[STACK] AUTONOMY process exited unexpectedly (pid=$AUTONOMY_PID)."
-    exit 1
+    # Do not tear down the terminal UI if autonomy exits later.
+    echo "[STACK] Autonomy supervisor exited; leaving API + Vite running." >&2
+    AUTONOMY_PID=""
   fi
   sleep 3
 done

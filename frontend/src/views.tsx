@@ -11,11 +11,21 @@ import {
 } from './components'
 import { boolLabel, money, pct, score, words } from './format'
 import {
+  exportCorporateActionGaps,
+  fetchCorporateActionsStatus,
+  fetchHoldings,
   fetchInstitutionalStack,
+  fetchSignalBacktestStatus,
   fetchTargetPortfolio,
+  importHoldings,
   refreshFiiDiiStore,
+  syncHoldings,
+  verifyCorporateActions,
+  type CorporateActionsStatus,
+  type HoldingsBook,
   type InstitutionalDomain,
   type InstitutionalStack,
+  type SignalBacktestStatus,
 } from './productApi'
 import { longTermPicks } from './longTermPicks'
 import type {
@@ -133,7 +143,7 @@ export function CommandCenterView(props: ViewProps) {
             <div className="key-value-list">
               <div><span>Worker</span><strong className={dashboard.operations.running ? 'positive' : 'negative'}>{dashboard.operations.running ? `ONLINE · ${dashboard.operations.worker_pid || '—'}` : 'OFFLINE'}</strong></div>
               <div><span>Momentum scan</span><strong>{latestScan ? `${latestScan.status} · ${words(latestScan.stage)}` : 'NOT RUN'}</strong></div>
-              <div><span>Long-term scan</span><strong>{latestLongTerm ? `${latestLongTerm.status} · ${words(latestLongTerm.stage)}` : 'NOT RUN'}</strong></div>
+              <div><span>Long-term scan</span><strong>{latestLongTerm ? `${latestLongTerm.status} · ${words(latestLongTerm.stage)}` : 'NOT RUN'}</strong>{latestLongTerm?.message ? <small style={{ display: 'block', opacity: 0.75 }}>{latestLongTerm.message}</small> : null}</div>
               <div><span>History</span><strong>{dashboard.data.bhavcopy.ready ? `${dashboard.data.bhavcopy.sessions} sessions` : 'PREPARING'}</strong></div>
             </div>
           </Panel>
@@ -226,9 +236,23 @@ export function StockIntelligenceView(props: ViewProps) {
   )
 }
 
-export function PortfolioView({ dashboard, runControl }: ViewProps) {
+export function PortfolioView({ dashboard, runControl, setSelected, setActive }: ViewProps) {
   const [target, setTarget] = useState<Awaited<ReturnType<typeof fetchTargetPortfolio>> | null>(null)
+  const [holdings, setHoldings] = useState<HoldingsBook | null>(null)
+  const [holdingsBusy, setHoldingsBusy] = useState('')
+  const [importText, setImportText] = useState('')
+  const [holdingsError, setHoldingsError] = useState('')
   const paperReturn = dashboard.paper.capital > 0 ? ((dashboard.paper.equity / dashboard.paper.capital) - 1) * 100 : null
+
+  const reloadHoldings = async () => {
+    try {
+      setHoldings(await fetchHoldings())
+      setHoldingsError('')
+    } catch (reason) {
+      setHoldings(null)
+      setHoldingsError(reason instanceof Error ? reason.message : 'Holdings unavailable')
+    }
+  }
 
   useEffect(() => {
     let alive = true
@@ -238,22 +262,147 @@ export function PortfolioView({ dashboard, runControl }: ViewProps) {
     return () => { alive = false }
   }, [dashboard.autonomy.heartbeat_ist, dashboard.paper.equity])
 
+  useEffect(() => {
+    void reloadHoldings()
+  }, [])
+
   const summary = target?.summary
+  const hSummary = holdings?.summary
+
+  const onSync = async () => {
+    setHoldingsBusy('sync')
+    setHoldingsError('')
+    try {
+      const book = await syncHoldings()
+      setHoldings(book)
+      if (!book.available) setHoldingsError(book.message || 'Sync returned no holdings')
+    } catch (reason) {
+      setHoldingsError(reason instanceof Error ? reason.message : 'Zerodha sync failed')
+    } finally {
+      setHoldingsBusy('')
+    }
+  }
+
+  const onImport = async () => {
+    const lines = importText.split(/\n+/).map((line) => line.trim()).filter(Boolean)
+    const rows: Array<Record<string, unknown>> = []
+    for (const line of lines) {
+      // SYMBOL qty avg [ltp]  — e.g. RELIANCE 10 2500 2550
+      const parts = line.split(/[\s,]+/).filter(Boolean)
+      if (parts.length < 3) continue
+      const symbol = parts[0].toUpperCase()
+      const quantity = Number(parts[1])
+      const average_price = Number(parts[2])
+      const last_price = parts[3] != null ? Number(parts[3]) : average_price
+      if (!symbol || !(quantity > 0) || !(average_price >= 0)) continue
+      rows.push({ tradingsymbol: symbol, quantity, average_price, last_price })
+    }
+    if (!rows.length) {
+      setHoldingsError('Paste your own lines like: RELIANCE 10 2500 2550')
+      return
+    }
+    setHoldingsBusy('import')
+    setHoldingsError('')
+    try {
+      const book = await importHoldings(rows, 'paste')
+      setHoldings(book)
+      setImportText('')
+    } catch (reason) {
+      setHoldingsError(reason instanceof Error ? reason.message : 'Import failed')
+    } finally {
+      setHoldingsBusy('')
+    }
+  }
+
+  const openHolding = (symbol: string) => {
+    const clean = symbol.trim().toUpperCase()
+    if (!clean) return
+    // Stock Intelligence uses EQ research ticker; strip series suffix for workspace.
+    const research = clean.replace(/-(BE|BZ|BL|SM)$/i, '')
+    setSelected(research || clean)
+    setActive('Stock Intelligence')
+  }
 
   return (
     <section className="workspace-view">
-      <div className="inline-actions"><button type="button" onClick={() => void runControl('RUN_CYCLE_NOW')}>Request paper cycle</button><button type="button" onClick={() => void runControl(dashboard.autonomy.new_paper_entries ? 'PAUSE_NEW_PAPER_ENTRIES' : 'RESUME_NEW_PAPER_ENTRIES')}>{dashboard.autonomy.new_paper_entries ? 'Pause new entries' : 'Resume new entries'}</button></div>
+      <div className="inline-actions">
+        <button type="button" disabled={!!holdingsBusy} onClick={() => void onSync()}>
+          {holdingsBusy === 'sync' ? 'Syncing Zerodha…' : 'Sync Zerodha holdings'}
+        </button>
+        <button type="button" onClick={() => void runControl('RUN_CYCLE_NOW')}>Request paper cycle</button>
+        <button type="button" onClick={() => void runControl(dashboard.autonomy.new_paper_entries ? 'PAUSE_NEW_PAPER_ENTRIES' : 'RESUME_NEW_PAPER_ENTRIES')}>
+          {dashboard.autonomy.new_paper_entries ? 'Pause new entries' : 'Resume new entries'}
+        </button>
+      </div>
+      {holdingsError && <div className="api-warning">{holdingsError}</div>}
       <div className="view-metrics">
-        <MetricCard label="PAPER CAPITAL" value={money(dashboard.paper.capital)} />
-        <MetricCard label="PAPER EQUITY" value={money(dashboard.paper.equity)} detail={pct(paperReturn)} tone="green" />
-        <MetricCard label="OPEN RISK" value={money(dashboard.paper.open_risk)} detail={`${(dashboard.paper.risk_per_trade_pct * 100).toFixed(1)}% risk/trade`} tone="amber" />
-        <MetricCard label="POSITIONS" value={String(dashboard.paper.open_positions.length)} detail={`Max ${dashboard.paper.max_positions}`} tone="purple" />
+        <MetricCard label="DEMAT INVESTED" value={money(hSummary?.invested || 0)} detail={holdings?.available ? `${hSummary?.count || 0} holdings · ${holdings.source || 'book'}` : 'Not synced'} />
+        <MetricCard label="DEMAT VALUE" value={money(hSummary?.current_value || 0)} detail={hSummary ? pct(hSummary.pnl_pct) : '—'} tone="green" />
+        <MetricCard label="DEMAT P&L" value={money(hSummary?.pnl || 0)} detail={hSummary?.day_pnl != null ? `Day ${money(hSummary.day_pnl)}` : '—'} tone={(hSummary?.pnl || 0) >= 0 ? 'green' : 'amber'} />
+        <MetricCard label="PAPER EQUITY" value={money(dashboard.paper.equity)} detail={pct(paperReturn)} tone="purple" />
         {summary && (
           <MetricCard label="TARGET PORTFOLIO" value={target?.available ? `${summary.target_positions} targets` : 'EMPTY'} detail={target?.available ? `Exec ${summary.executable_changes} · blocked ${summary.blocked_changes}` : target?.message || '—'} tone={target?.available ? 'cyan' : 'amber'} />
         )}
       </div>
       <div className="portfolio-workspace">
-        <Panel title="CANONICAL TARGET PORTFOLIO" subtitle="Read-only intelligence target book · not paper">
+        <Panel title="MY HOLDINGS · DEMAT" subtitle="Zerodha CNC book · includes -BE series · not paper">
+          {!holdings && <p className="panel-copy">Loading demat holdings…</p>}
+          {holdings && !holdings.available && (
+            <div>
+              <p className="panel-copy">{holdings.message || 'No holdings saved yet.'}</p>
+              <p className="panel-copy">Sync from Zerodha, or paste lines: SYMBOL QTY AVG [LTP]</p>
+            </div>
+          )}
+          {holdings?.available && (
+            <table className="radar-table">
+              <thead>
+                <tr>
+                  <th>Symbol</th>
+                  <th>Qty</th>
+                  <th>Avg</th>
+                  <th>LTP</th>
+                  <th>Invested</th>
+                  <th>P&L</th>
+                </tr>
+              </thead>
+              <tbody>
+                {holdings.holdings.map((row) => (
+                  <tr key={row.tradingsymbol}>
+                    <td>
+                      <button type="button" className="linkish" onClick={() => openHolding(row.tradingsymbol)}>
+                        {row.tradingsymbol}
+                      </button>
+                    </td>
+                    <td>{row.quantity}</td>
+                    <td>{money(row.average_price)}</td>
+                    <td>{money(row.last_price)}</td>
+                    <td>{money(row.invested)}</td>
+                    <td className={row.pnl >= 0 ? 'positive' : 'negative'}>
+                      {money(row.pnl)} ({pct(row.pnl_pct)})
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+          <div className="holdings-import" style={{ marginTop: 12 }}>
+            <textarea
+              aria-label="Paste holdings"
+              placeholder={'RELIANCE 10 2500 2550\nTCS 5 3800 3900\nINFY 20 1500'}
+              value={importText}
+              onChange={(event) => setImportText(event.target.value)}
+              rows={4}
+              style={{ width: '100%', fontFamily: 'inherit' }}
+            />
+            <button type="button" disabled={!!holdingsBusy || !importText.trim()} onClick={() => void onImport()}>
+              {holdingsBusy === 'import' ? 'Importing…' : 'Import pasted holdings'}
+            </button>
+            <p className="panel-copy" style={{ marginTop: 8 }}>
+              Empty until you Sync your Zerodha account or paste your own demat rows. QuantTerm never invents holdings.
+            </p>
+          </div>
+        </Panel>
+        <Panel title="CANONICAL TARGET PORTFOLIO" subtitle="Read-only intelligence target book · not demat">
           {!target && <p className="panel-copy">Loading target portfolio projection…</p>}
           {target && !target.available && <p className="panel-copy">{target.message || 'No persisted target portfolio yet.'}</p>}
           {target?.available && summary && (
@@ -479,11 +628,105 @@ function InstitutionalStackPanel() {
 export function AutomationView({ dashboard, runControl }: ViewProps) {
   const a = dashboard.autonomy
   const activeJob = a.active_job || {}
+  const [bt, setBt] = useState<SignalBacktestStatus | null>(null)
+  const [ca, setCa] = useState<CorporateActionsStatus | null>(null)
+  const [caBusy, setCaBusy] = useState('')
+
+  useEffect(() => {
+    let alive = true
+    const load = () => {
+      fetchSignalBacktestStatus()
+        .then((payload) => { if (alive) setBt(payload) })
+        .catch(() => { if (alive) setBt(null) })
+      fetchCorporateActionsStatus()
+        .then((payload) => { if (alive) setCa(payload) })
+        .catch(() => { if (alive) setCa(null) })
+    }
+    load()
+    const timer = window.setInterval(load, 5000)
+    return () => { alive = false; window.clearInterval(timer) }
+  }, [dashboard.autonomy.heartbeat_ist])
+
+  const uni = bt?.universe || {}
+  const btDetail = bt?.running
+    ? `${bt.progress || 0}/${bt.total || 0} symbols`
+    : bt?.has_report
+      ? `${uni.run || bt.symbols_run || 0} stocks · ${bt.generated_at || '—'}`
+      : 'No full-universe report yet'
+
+  const caTone = ca?.adjustment_verified ? 'green' : (ca?.events ? 'amber' : 'amber')
+  const caValue = ca?.adjustment_verified
+    ? 'VERIFIED'
+    : (ca?.events ? 'PARTIAL' : 'MISSING')
+
+  const runCaGaps = async () => {
+    setCaBusy('Exporting gap TODO…')
+    try {
+      await exportCorporateActionGaps(400)
+      setCa(await fetchCorporateActionsStatus())
+    } catch {
+      /* surface stays honest empty */
+    } finally {
+      setCaBusy('')
+    }
+  }
+  const runCaVerify = async () => {
+    setCaBusy('Verifying adjustment…')
+    try {
+      setCa(await verifyCorporateActions(80))
+    } catch {
+      /* keep prior */
+    } finally {
+      setCaBusy('')
+    }
+  }
+
   return (
     <section className="workspace-view">
-      <div className="inline-actions"><button type="button" onClick={() => void runControl('RUN_SCAN_NOW')}>Start market scan</button><button type="button" onClick={() => void runControl('RUN_CYCLE_NOW')}>Request paper cycle</button><button type="button" onClick={() => void runControl('REFRESH_DATA_NOW')}>Prepare market data</button><button type="button" onClick={() => void runControl(a.new_paper_entries ? 'PAUSE_NEW_PAPER_ENTRIES' : 'RESUME_NEW_PAPER_ENTRIES')}>{a.new_paper_entries ? 'Pause entries' : 'Resume entries'}</button></div>
-      <div className="view-metrics"><MetricCard label="PAPER SUPERVISOR" value={a.running ? 'ONLINE' : 'OFFLINE'} detail={`PID ${a.scheduler_owner_pid || '—'}`} tone={a.running ? 'green' : 'amber'} /><MetricCard label="STATE" value={a.state} detail={a.plain_state} /><MetricCard label="ACTIVE PAPER JOB" value={String(activeJob.job_type || 'IDLE').toUpperCase()} detail={activeJob.elapsed_s ? `${activeJob.elapsed_s}s elapsed` : 'No paper worker job reported'} tone="cyan" /><MetricCard label="FAILURES" value={String(a.active_failures?.length || 0)} detail={(a.active_failures || []).join(', ') || 'None active'} tone="purple" /></div>
+      <div className="inline-actions"><button type="button" onClick={() => void runControl('RUN_SCAN_NOW')}>Start market scan</button><button type="button" onClick={() => void runControl('RUN_CYCLE_NOW')}>Request paper cycle</button><button type="button" onClick={() => void runControl('REFRESH_DATA_NOW')}>Prepare market data</button><button type="button" onClick={() => void runControl('RUN_FULL_UNIVERSE_BACKTEST_NOW')}>Backtest all stocks</button><button type="button" onClick={() => void runControl(a.new_paper_entries ? 'PAUSE_NEW_PAPER_ENTRIES' : 'RESUME_NEW_PAPER_ENTRIES')}>{a.new_paper_entries ? 'Pause entries' : 'Resume entries'}</button></div>
+      <div className="view-metrics">
+        <MetricCard label="PAPER SUPERVISOR" value={a.running ? 'ONLINE' : 'OFFLINE'} detail={`PID ${a.scheduler_owner_pid || '—'}`} tone={a.running ? 'green' : 'amber'} />
+        <MetricCard label="STATE" value={a.state} detail={a.plain_state} />
+        <MetricCard label="ACTIVE PAPER JOB" value={String(activeJob.job_type || 'IDLE').toUpperCase()} detail={activeJob.elapsed_s ? `${activeJob.elapsed_s}s elapsed` : 'No paper worker job reported'} tone="cyan" />
+        <MetricCard
+          label="SIGNAL BACKTEST"
+          value={bt?.running ? 'RUNNING' : (bt?.has_report ? (uni.truncated ? 'PARTIAL' : 'READY') : 'MISSING')}
+          detail={btDetail}
+          tone={bt?.running ? 'cyan' : (bt?.has_report && !uni.truncated ? 'green' : 'amber')}
+        />
+        <MetricCard
+          label="CORPORATE ACTIONS"
+          value={caValue}
+          detail={ca ? `${ca.events} events · ${ca.symbols} symbols` : 'Ledger unread'}
+          tone={caTone}
+        />
+        <MetricCard label="FAILURES" value={String(a.active_failures?.length || 0)} detail={(a.active_failures || []).join(', ') || 'None active'} tone="purple" />
+      </div>
       <div className="automation-grid">
+        <Panel title="GETTING SMARTER" subtitle="Full-universe backtest feeds scanner ranking + pre-trade gates">
+          <div className="key-value-list">
+            <div><span>Last report</span><strong>{bt?.generated_at || 'Never'}</strong></div>
+            <div><span>Symbols measured</span><strong>{uni.run || bt?.symbols_run || 0}</strong></div>
+            <div><span>Truncated</span><strong>{uni.truncated ? 'Yes — re-run full backtest' : 'No'}</strong></div>
+            <div><span>Live locked</span><strong>{boolLabel(bt?.live_locked ?? true)}</strong></div>
+          </div>
+          <p className="panel-copy">After each full backtest, the next market scan demotes proven-loser combos and ranks by measured edge. Pre-trade GO/CAUTION/NO_GO reads that edge.</p>
+        </Panel>
+        <Panel title="CORPORATE ACTIONS" subtitle="Detect phantom gaps · never invent factors · adjust-on-read">
+          <div className="key-value-list">
+            <div><span>Events</span><strong>{ca?.events ?? 0}</strong></div>
+            <div><span>Verified</span><strong>{boolLabel(Boolean(ca?.adjustment_verified))}</strong></div>
+            <div><span>Gap rate</span><strong>{ca?.gap_rate == null ? '—' : `${(Number(ca.gap_rate) * 100).toFixed(1)}%`}</strong></div>
+            <div><span>Todo gaps</span><strong>{ca?.todo_gaps ?? 0}</strong></div>
+          </div>
+          <div className="inline-actions" style={{ marginTop: '10px' }}>
+            <button type="button" disabled={Boolean(caBusy)} onClick={() => void runCaGaps()}>Export gap TODO</button>
+            <button type="button" disabled={Boolean(caBusy)} onClick={() => void runCaVerify()}>Verify adjustment</button>
+          </div>
+          <p className="panel-copy">
+            {caBusy || ca?.next_action || ca?.honesty || 'Fill factor/type from NSE filings into the TODO CSV, then ingest. QuantTerm will not invent corporate actions.'}
+          </p>
+        </Panel>
         <Panel title="PAPER-AUTONOMY JOB LEDGER" subtitle="Execution and learning only · market scans use separate lanes" className="job-panel"><JobLedger jobs={a.jobs_recent || []} /></Panel>
         <Panel title="OPERATING STATE"><div className="key-value-list"><div><span>Heartbeat</span><strong>{a.heartbeat_ist || '—'}</strong></div><div><span>Live feed</span><strong>{String(a.live_feed?.connected ?? 'Unavailable')}</strong></div><div><span>Subscriptions</span><strong>{String(a.live_feed?.subscriptions ?? '—')}</strong></div><div><span>Existing exits</span><strong>{boolLabel(a.existing_exits)}</strong></div><div><span>Research</span><strong>{boolLabel(a.research_enabled)}</strong></div></div><p className="panel-copy">{a.explanation || a.plain_state}</p></Panel>
         <Panel title="RECENT SUPERVISOR DIALOGUE"><div className="dialogue-list">{a.recent_dialogue.length === 0 && <div className="empty-row">No dialogue records.</div>}{[...a.recent_dialogue].reverse().slice(0, 20).map((record, index) => <div key={index}><strong>{words(String(record.record_type || record.decision || 'event'))}</strong><span>{String(record.claim || record.explanation || record.summary || JSON.stringify(record))}</span></div>)}</div></Panel>

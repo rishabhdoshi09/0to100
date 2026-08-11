@@ -119,8 +119,15 @@ class BhavDataProvider:
         return None
 
     def valuation(self, sym, i):
-        # no point-in-time fundamentals with publication dates exist in the repo
-        return None
+        # Point-in-time valuations only — operator/vendor ledger with available_ts.
+        # Screener cache fetched_at is NEVER used (would leak look-ahead).
+        try:
+            from data.pit_valuations import get_valuation
+
+            as_of = self._dates[i]
+            return get_valuation(sym, as_of)
+        except Exception:
+            return None
 
     def source_identities(self):
         return {"prices": "NSE_bhavcopy_official_EOD_CA_adjusted_on_read",
@@ -129,12 +136,28 @@ class BhavDataProvider:
                 "fundamental_source": "NONE (no PIT fundamentals)"}
 
     def universe_policy(self):
-        return {"survivorship_complete": bool(self._universe.get("survivorship_complete")),
-                "note": self._universe.get("note", "")}
+        return {
+            "survivorship_complete": bool(self._universe.get("survivorship_complete")),
+            "research_grade": bool(self._universe.get("research_grade")),
+            "source": str(self._universe.get("source") or ""),
+            "note": self._universe.get("note", ""),
+        }
 
     def adjustment_policy(self):
-        return {"corporate_actions": "adjust_on_read via data/corporate_actions "
-                "(applies only if logs/ca_events.json present, else RAW)"}
+        from data.corporate_actions import load_events
+
+        events = load_events()
+        if events:
+            return {
+                "corporate_actions": "ADJUSTED",
+                "mode": "adjust_on_read",
+                "event_symbols": len(events),
+            }
+        return {
+            "corporate_actions": "RAW",
+            "mode": "unadjusted",
+            "event_symbols": 0,
+        }
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -227,12 +250,27 @@ def data_quality_report(provider, cfg: MomentumBreakoutConfig | None = None
     if not up.get("survivorship_complete"):
         lims.append("SURVIVORSHIP_INCOMPLETE: universe is today's survivors — "
                     "historical results are optimistically biased")
+    elif up.get("research_grade") is False:
+        lims.append(
+            "SURVIVORSHIP_INFERRED: membership is bhav-bootstrap / non-official "
+            f"(source={up.get('source') or 'unknown'}) — not research-grade; "
+            "PASS remains blocked until an official listing/delisting archive is ingested"
+        )
     adj = provider.adjustment_policy()
     if "RAW" in json.dumps(adj):
         lims.append("CA_ADJUSTMENT: corporate actions applied only if ca_events.json "
                     "present; otherwise raw prices (phantom split/bonus gaps possible)")
     lims.append("SECTOR_MEMBERSHIP_NOT_PIT: sector classification is not historically dated")
-    lims.append("VALUATION_DATA_UNAVAILABLE: no point-in-time fundamentals with publication dates")
+    try:
+        from data.pit_valuations import ledger_status as pit_status
+
+        if not pit_status().get("research_grade"):
+            lims.append(
+                "VALUATION_DATA_UNAVAILABLE: no research-grade point-in-time fundamentals "
+                "with publication dates (drop logs/pit_valuations.incoming.json)"
+            )
+    except Exception:
+        lims.append("VALUATION_DATA_UNAVAILABLE: no point-in-time fundamentals with publication dates")
     if m["ca_gap_anomalies"] > 0:
         lims.append(f"CA_GAP_ANOMALIES: {m['ca_gap_anomalies']} unexplained >40% one-day "
                     "moves (possible unadjusted corporate actions)")

@@ -242,6 +242,122 @@ def get_status() -> dict:
     return s
 
 
+def diagnose_silence() -> dict:
+    """Plain-English diagnosis when autopilot is not taking new trades.
+
+    Never invents — reads durable autopilot state + last scan + health.
+    """
+    s = get_status()
+    funnel = reject_funnel()
+    reasons: list[str] = []
+    blockers: list[str] = []
+
+    if not s.get("armed"):
+        blockers.append(
+            f"DISARMED — {s.get('disarmed_reason') or 'not armed (default OFF)'}"
+        )
+    if float(s.get("allocation") or 0) < 5000:
+        blockers.append(
+            f"Allocation ₹{float(s.get('allocation') or 0):,.0f} too low "
+            "(need ≥ ₹5,000 to arm/size meaningfully)"
+        )
+    if not _in_window():
+        blockers.append(
+            f"Outside entry window {s.get('start_time')}-{s.get('end_time')} IST "
+            "(weekdays only)"
+        )
+    if s.get("brain_gate", True):
+        posture, why = _brain_posture()
+        if posture == "STAND_ASIDE":
+            blockers.append(f"Brain STAND_ASIDE — {why or 'survival veto'}")
+
+    today = _ist_today().isoformat()
+    trades_today = int(s.get("trades_today", {}).get(today, 0) or 0)
+    if trades_today >= int(s.get("max_trades_per_day") or 0):
+        blockers.append(f"Daily trade limit hit ({trades_today}/{s.get('max_trades_per_day')})")
+    open_n = len(s.get("open_trades") or [])
+    if open_n >= int(s.get("max_open_positions") or 0):
+        blockers.append(f"Max open positions full ({open_n}/{s.get('max_open_positions')})")
+
+    # Scan feed health — React/autonomy path must call on_setups after market scan
+    buy_n = 0
+    scan_as_of = ""
+    try:
+        from product.scan_store import load_scan
+
+        scan = load_scan() or {}
+        scan_as_of = str(scan.get("scanned_at") or "")
+        buy_n = sum(
+            1
+            for r in (scan.get("records") or [])
+            if str(r.get("verdict") or "") in {"BUY", "STRONG BUY"}
+            and not r.get("chase_risk")
+        )
+    except Exception:
+        scan = {}
+    if not scan:
+        reasons.append("No durable market scan yet — autonomy MARKET_SCAN / Scan now required")
+    elif buy_n == 0:
+        reasons.append(
+            "Latest scan has 0 BUY / STRONG BUY setups "
+            "(edge demotion / weak tape — nothing for autopilot to take)"
+        )
+    else:
+        reasons.append(f"Latest scan has {buy_n} BUY-tier setup(s) as of {scan_as_of or '—'}")
+
+    considered = int(funnel.get("considered") or 0)
+    rejects = dict(funnel.get("rejects") or {})
+    if considered == 0 and s.get("armed") and buy_n > 0:
+        blockers.append(
+            "Armed + BUY setups exist but considered=0 today — "
+            "scan→autopilot feed may be dead (fixed: market_scan_service now calls on_setups)"
+        )
+    top_reject = ""
+    if rejects:
+        top_reject = max(rejects.items(), key=lambda kv: kv[1])
+        reasons.append(f"Top reject today: {top_reject[0]} ×{top_reject[1]}")
+
+    # Adaptive source pause
+    try:
+        for src in ("scanner", "sniper"):
+            paused = _source_paused(src)
+            if paused:
+                blockers.append(paused)
+    except Exception:
+        pass
+
+    headline = (
+        blockers[0] if blockers
+        else (
+            "Autopilot is armed and in window — waiting for next BUY that clears gates"
+            if s.get("armed")
+            else "Autopilot is not armed"
+        )
+    )
+    return {
+        "available": True,
+        "headline": headline,
+        "armed": bool(s.get("armed")),
+        "mode": s.get("mode"),
+        "disarmed_reason": s.get("disarmed_reason") or "",
+        "in_window": _in_window(),
+        "trades_today": trades_today,
+        "open_positions": open_n,
+        "considered_today": considered,
+        "rejects_today": rejects,
+        "buy_setups_in_last_scan": buy_n,
+        "scan_as_of": scan_as_of,
+        "blockers": blockers,
+        "notes": reasons,
+        "activity": list(s.get("activity") or [])[:8],
+        "places_orders": False,
+        "honesty": (
+            "Diagnosis reads logs/autopilot.json + latest scan only. "
+            "Missing evidence stays missing."
+        ),
+    }
+
+
 def set_config(**kwargs) -> None:
     """UI-settable limits. Numeric fields clamped to sane ranges."""
     clamps = {
@@ -575,15 +691,23 @@ def _in_window(now: datetime | None = None) -> bool:
     return s["start_time"] <= hm <= s["end_time"]
 
 
-def _top_sectors() -> list[str]:
+def _top_sectors() -> tuple[list[str], str]:
+    """Return (top positive sectors, status).
+
+    status:
+      ok — ranked list (may be empty if every sector is ≤0 today)
+      unavailable — sector heat failed; callers must fail-open
+    """
     try:
         from scan.sector_heat import sector_performance
         s = _load()
         perf = sector_performance()
-        return [p["sector"] for p in perf[:s["sector_top_n"]]
-                if p["chg_1d"] > 0]
+        if not perf:
+            return [], "unavailable"
+        tops = [p["sector"] for p in perf[:s["sector_top_n"]] if p["chg_1d"] > 0]
+        return tops, "ok"
     except Exception:
-        return []
+        return [], "unavailable"
 
 
 def _open_in_sector(sector: str) -> int:
@@ -633,10 +757,13 @@ def _passes_gates(symbol: str, score: float, edge, sector: str) -> str | None:
         return f"score {score:.0f} < min {s['min_score']:.0f}"
     if edge is not None and edge < 0:
         return f"negative measured edge ({edge:+.2f}R)"
-    tops = _top_sectors()
-    if tops and sector not in tops:
+    tops, sector_status = _top_sectors()
+    if sector_status == "unavailable":
+        # Data outage must not freeze the whole desk — sector gate fail-open.
+        pass
+    elif tops and sector not in tops:
         return f"sector '{sector or '?'}' not in top {len(tops)} {tops}"
-    if not tops:
+    elif not tops:
         return "no positive sector trend right now"
     if s.get("regime_gate", True):
         reg = _market_regime()

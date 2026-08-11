@@ -96,15 +96,14 @@ def gate_attribution(rejected_by_gate: dict, taken_r=None,
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _decision_r(entry_ref: float, stop_ref: float, outcome_pct: float) -> float | None:
-    """Outcome as an R-multiple — same convention as scan/live_edge (one
-    language for evidence). None when the risk geometry is invalid."""
-    if entry_ref <= 0 or stop_ref <= 0 or entry_ref <= stop_ref:
-        return None
-    risk_frac = (entry_ref - stop_ref) / entry_ref
-    if risk_frac <= 0:
-        return None
-    r = (outcome_pct / 100.0) / risk_frac
-    return float(max(-1.5, min(6.0, r)))              # clip pathological tails
+    """Outcome as a cost-aware R-multiple — same convention as scan/live_edge.
+
+    Retail evidence must be net of brokerage/STT/slippage. None when geometry
+    is invalid.
+    """
+    from core.costs import outcome_to_net_r
+
+    return outcome_to_net_r(entry_ref, stop_ref, outcome_pct, product="CNC", clip=(-1.5, 4.0))
 
 
 def _load_decisions() -> tuple[dict, list]:

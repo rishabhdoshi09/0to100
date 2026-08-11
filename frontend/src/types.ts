@@ -15,6 +15,7 @@ export type ScanRecord = {
   signals?: string[]
   reasons?: string[]
   chase_risk?: boolean
+  edge_r?: number | null
 }
 
 export type ConvictionRecord = ScanRecord & {
@@ -252,6 +253,8 @@ export type DashboardPayload = {
     worker_pid?: number | null
     heartbeat: string
     active_lanes: Record<string, Record<string, unknown>>
+    ensure_ok?: boolean
+    ensure_error?: string
     counts: Record<string, number>
     active: OperationRecord[]
     recent: OperationRecord[]
@@ -324,10 +327,37 @@ export type OptionsChainPayload = {
   bias?: string
   note?: string
   atm_iv?: number
+  iv_rank?: number
   spot?: number | null
+  total_ce_oi?: number
+  total_pe_oi?: number
+  strike_count?: number
   top_call_oi?: Array<{ strike: number; ce_oi: number; ce_coi?: number }>
   top_put_oi?: Array<{ strike: number; pe_oi: number; pe_coi?: number }>
   chain?: Array<Record<string, number>>
+  message?: string
+  greeks_available?: boolean
+  signal_desk?: boolean
+  honesty?: string
+}
+
+export type OptionsEodHistoryPayload = {
+  available: boolean
+  symbol: string
+  days: number
+  rows: Array<{
+    symbol: string
+    as_of: string
+    expiry: string
+    pcr?: number | null
+    max_pain?: number | null
+    atm_iv?: number | null
+    spot?: number | null
+    strike_count?: number
+    source?: string
+    captured_at?: string
+  }>
+  store?: Record<string, unknown>
   message?: string
 }
 
@@ -348,5 +378,6 @@ export type ControlName =
   | 'REFRESH_FNO_NOW'
   | 'RUN_CYCLE_NOW'
   | 'REFRESH_DATA_NOW'
+  | 'RUN_FULL_UNIVERSE_BACKTEST_NOW'
   | 'PAUSE_NEW_PAPER_ENTRIES'
   | 'RESUME_NEW_PAPER_ENTRIES'

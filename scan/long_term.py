@@ -134,22 +134,36 @@ def thesis_line(pick: dict) -> str:
 
 
 def scan_long_term(symbols=None, min_score: float | None = None,
-                   top: int = 30, *, include_watch: bool = False) -> list[dict]:
+                   top: int = 30, *, include_watch: bool = False,
+                   progress=None) -> list[dict]:
     """Screen the market for long-term technical candidates.
 
     The default remains backward compatible and returns only ``LONG_TERM_BUY``
     technical candidates.  ``include_watch=True`` also returns structurally
     valid WATCH rows so the current-fundamental layer can make the final retail
     classification.  Reads official bhavcopy only — fail-open → [].
+
+    ``progress(current, total, message)`` is optional and never invents results.
     """
     try:
         from data.bhavcopy_store import get_ohlcv, store_symbols
-        syms = symbols if symbols is not None else store_symbols()
+        syms = list(symbols) if symbols is not None else list(store_symbols())
     except Exception:
         return []
     bar = _BUY_SCORE if min_score is None else min_score
     picks: list[dict] = []
-    for sym in syms:
+    total = len(syms)
+    if callable(progress) and total:
+        try:
+            progress(0, total, f"Technical screen across {total:,} symbols")
+        except Exception:
+            pass
+    for idx, sym in enumerate(syms):
+        if callable(progress) and total and (idx % 40 == 0 or idx + 1 == total):
+            try:
+                progress(idx + 1, total, f"Technical screen · {idx + 1:,}/{total:,} symbols")
+            except Exception:
+                pass
         try:
             df = get_ohlcv(sym)
             if df is None or len(df) < _MIN_SESSIONS:

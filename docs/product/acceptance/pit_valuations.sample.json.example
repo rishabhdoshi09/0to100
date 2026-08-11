@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "source": "SAMPLE_NOT_FOR_RESEARCH",
+  "note": "Illustrative PIT valuations. available_ts is the public-release date — never use screener fetch time. SAMPLE source is not research-grade.",
+  "rows": [
+    {
+      "symbol": "EXAMPLE",
+      "available_ts": "2024-05-15",
+      "pe": 22.5,
+      "price_to_sales": 3.1,
+      "market_cap_cr": 50000,
+      "sales_growth_pct": 12.0,
+      "earnings_growth_pct": 8.0,
+      "age_days": 45
+    }
+  ]
+}

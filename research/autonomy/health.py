@@ -24,6 +24,7 @@ EVENT_STORE_FAILURE = "event_store_failure"
 RISK_GOVERNOR_UNHEALTHY = "risk_governor_unhealthy"
 UNRECONCILED = "unreconciled_state"
 UNIVERSE_INCOMPLETE = "universe_history_incomplete"
+OPTIONS_HISTORY_INCOMPLETE = "options_history_incomplete"
 LEARNING_FAILED = "learning_failed"
 OWNER_PAUSED = "owner_paused"
 
@@ -36,12 +37,16 @@ READ_ONLY = "read_only"
 # which failures block / limit NEW paper entries
 _ENTRY_BLOCK = {AUTH_MISSING, AUTH_EXPIRED, PROVIDER_UNAVAILABLE, SNAPSHOT_STALE,
                 EVENT_STORE_FAILURE, RISK_GOVERNOR_UNHEALTHY, UNRECONCILED, OWNER_PAUSED}
-_ENTRY_LIMIT = {CA_INCOMPLETE, LIVE_FEED_STALE}
+# CA gaps limit historical research honesty, not today's paper tape — keep out of entry limit.
+_ENTRY_LIMIT = {LIVE_FEED_STALE}
 # which failures limit existing-position management (exits are almost never fully blocked)
 _EXIT_LIMIT = {SNAPSHOT_STALE, LIVE_FEED_STALE, RISK_GOVERNOR_UNHEALTHY, UNRECONCILED, EVENT_STORE_FAILURE}
 # which failures block / limit research
 _RESEARCH_BLOCK = {EVENT_STORE_FAILURE}
-_RESEARCH_LIMIT = {NEWS_UNAVAILABLE, CA_INCOMPLETE, UNIVERSE_INCOMPLETE, LEARNING_FAILED}
+_RESEARCH_LIMIT = {
+    NEWS_UNAVAILABLE, CA_INCOMPLETE, UNIVERSE_INCOMPLETE,
+    OPTIONS_HISTORY_INCOMPLETE, LEARNING_FAILED,
+}
 
 
 def capabilities(active_failures) -> dict:
@@ -73,7 +78,13 @@ def capabilities(active_failures) -> dict:
     if UNRECONCILED in f:
         notes.append("Records need a reconciliation pass before new risk.")
     if UNIVERSE_INCOMPLETE in f:
-        notes.append("Point-in-time universe history is incomplete — PIT-dependent research remains blocked.")
+        notes.append(
+            "Point-in-time universe history is incomplete — PIT-dependent research remains blocked. "
+            "Drop logs/universe_history.incoming.json (or set QT_UNIVERSE_SOURCE_FILE) with official "
+            "listing/delisting rows for research-grade membership."
+        )
+    if OPTIONS_HISTORY_INCOMPLETE in f:
+        notes.append("Options EOD OI/IV history is incomplete — multi-day PCR/IV studies stay limited.")
     if LEARNING_FAILED in f:
         notes.append("Latest learning cycle failed — existing approved paper state continues; new promotion is blocked.")
     if OWNER_PAUSED in f:

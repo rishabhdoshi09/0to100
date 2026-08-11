@@ -42,6 +42,8 @@ class TradePlan:
     correlated_with: tuple = ()
     effective_bets_before: int | None = None
     effective_bets_after: int | None = None
+    round_trip_cost_pct: float | None = None
+    cost_drag_r: float | None = None
     summary: str = ""
 
     def as_dict(self) -> dict:
@@ -124,9 +126,20 @@ def build_trade_plan(symbol: str, entry: float, stop: float, target: float | Non
         correlated = tuple(s for s in correlated_with if s and s != symbol)
         corr_status = ADDS_TO_BET if correlated else NEW_BET
 
-    summary = _summarize(symbol, qty, rupee_risk, risk_pct_cap, pct_cap, reward_risk, capped,
-                         before_pct, after_pct, heat_verdict, corr_status, correlated,
-                         suggested_risk_pct, risk_pct, regime_factor)
+    try:
+        from core.costs import cost_drag_r, round_trip_cost_pct
+
+        cost_pct = float(round_trip_cost_pct("CNC"))
+        drag = cost_drag_r(entry, stop, product="CNC")
+    except Exception:
+        cost_pct = None
+        drag = None
+
+    summary = _summarize(
+        symbol, qty, rupee_risk, risk_pct_cap, pct_cap, reward_risk, capped,
+        before_pct, after_pct, heat_verdict, corr_status, correlated,
+        suggested_risk_pct, risk_pct, regime_factor, cost_drag_r=drag,
+    )
 
     return TradePlan(symbol=symbol, tradeable=True, reason="", entry=entry, stop=stop, target=target,
                      qty=qty, invested=round(invested, 0), rupee_risk=round(rupee_risk, 0),
@@ -136,17 +149,21 @@ def build_trade_plan(symbol: str, entry: float, stop: float, target: float | Non
                      open_risk_pct_after=after_pct, heat_verdict=heat_verdict, heat_warnings=warnings,
                      correlation_status=corr_status, correlated_with=correlated,
                      effective_bets_before=effective_bets_before,
-                     effective_bets_after=effective_bets_after, summary=summary)
+                     effective_bets_after=effective_bets_after,
+                     round_trip_cost_pct=cost_pct, cost_drag_r=drag, summary=summary)
 
 
 def _summarize(symbol, qty, rupee_risk, risk_pct_cap, pct_cap, rr, capped, before, after,
-               verdict, corr_status, correlated, suggested_risk_pct, base_risk_pct, regime_factor):
+               verdict, corr_status, correlated, suggested_risk_pct, base_risk_pct, regime_factor,
+               *, cost_drag_r=None):
     parts = [f"Buy {qty} {symbol}: risking ₹{rupee_risk:,.0f} "
              f"({risk_pct_cap:.2f}% of capital) to hold ₹{pct_cap:,.1f}% of capital."]
     if rr is not None:
         parts.append(f"Reward:risk is {rr:.2f}R to target.")
     else:
         parts.append("No target set — reward:risk unknown.")
+    if cost_drag_r is not None and cost_drag_r > 0:
+        parts.append(f"Round-trip costs ≈ {cost_drag_r:.2f}R of the stop distance.")
     if regime_factor < 1.0:
         parts.append(f"Risk throttled to {suggested_risk_pct*100:.2f}% "
                      f"(from {base_risk_pct*100:.2f}%) for the current market condition.")
@@ -170,23 +187,31 @@ def _summarize(symbol, qty, rupee_risk, risk_pct_cap, pct_cap, rr, capped, befor
 def plan_for_candidate(candidate: dict, *, capital: float, risk_pct: float = 0.01,
                        regime_factor: float = 1.0, open_symbols=None,
                        price_history=None) -> TradePlan:
-    """Gather the authoritative context and build the plan. `open_symbols` + `price_history` enable
-    the correlation read; without them it stays honestly `unknown`."""
+    """Gather the authoritative context and build the plan.
+
+    ``open_symbols`` enables the correlation read (``pairwise_corr`` loads bhav
+    itself). ``price_history`` is accepted for older callers but unused — history
+    comes from the official bhav store. Without open symbols, correlation stays
+    honestly ``unknown``.
+    """
     from risk.portfolio_risk import portfolio_risk_report
     symbol = str(candidate.get("symbol", "")).upper()
     correlated = None
     bets_before = bets_after = None
-    if open_symbols and price_history is not None:
+    if open_symbols:
         try:
             from risk.correlation import pairwise_corr, clusters_from_corr
-            syms = sorted({*[s.upper() for s in open_symbols], symbol})
-            corr = pairwise_corr(syms)
+            syms = sorted({*[str(s).upper() for s in open_symbols if s], symbol})
+            corr = pairwise_corr(syms) if price_history is None else pairwise_corr(syms)
+            # price_history injection is reserved for tests that monkeypatch pairwise_corr
+            _ = price_history
             clusters = clusters_from_corr(syms, corr)
             bets_after = len(clusters)
-            bets_before = len(clusters_from_corr([s for s in syms if s != symbol],
-                                                 corr)) if len(syms) > 1 else 0
+            others = [s for s in syms if s != symbol]
+            bets_before = len(clusters_from_corr(others, corr)) if others else 0
             mine = next((c for c in clusters if symbol in c), [symbol])
-            correlated = [s for s in mine if s != symbol and s in {x.upper() for x in open_symbols}]
+            open_set = {str(x).upper() for x in open_symbols}
+            correlated = [s for s in mine if s != symbol and s in open_set]
         except Exception:
             correlated = None
     return build_trade_plan(symbol, candidate.get("entry"), candidate.get("stop"),

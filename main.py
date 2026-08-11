@@ -326,6 +326,34 @@ def cmd_fundamentals_backfill(args) -> None:
     print(f"State file: {report.get('state_path')}\n")
 
 
+def cmd_signal_backtest(args) -> None:
+    """Full-universe (default) scanner signal backtest — research only, never places orders."""
+    from product.full_universe_backtest import backtest_status, run_full_universe_backtest
+
+    if args.status_only:
+        print(json.dumps(backtest_status(), indent=2, default=str))
+        return
+
+    scope = str(getattr(args, "scope", "full") or "full")
+    print("\n=== Full-universe signal backtest (paper research) ===")
+    print(f"Scope: {scope} · LIVE locked · no orders\n")
+    report = run_full_universe_backtest(
+        scope=scope,
+        sample_step=int(getattr(args, "sample_step", 5) or 5),
+        lookback_sessions=int(getattr(args, "lookback", 250) or 250),
+        horizon=int(getattr(args, "horizon", 10) or 10),
+    )
+    uni = report.get("universe") or {}
+    print(
+        f"Symbols run: {uni.get('run', report.get('symbols'))} / "
+        f"available {uni.get('available_in_store', '?')} · truncated={uni.get('truncated')}"
+    )
+    print(f"Signal types: {len(report.get('signals') or {})} · elapsed {report.get('elapsed_s')}s")
+    print(f"Report: logs/signal_backtest.json\n")
+    if not report.get("ok", True):
+        print(f"Blocked: {report.get('error_code')} · {report.get('message')}")
+
+
 def cmd_fii_dii_backfill(args) -> None:
     """Force-refresh NSE FII/DII cash flows (optional; dashboard syncs lazily by default)."""
     from data.fii_dii_store import backfill_status, refresh_if_needed
@@ -339,6 +367,138 @@ def cmd_fii_dii_backfill(args) -> None:
     report = refresh_if_needed(force=True)
     print(json.dumps(report, indent=2, default=str))
     print()
+
+
+def cmd_ca_ingest(args) -> None:
+    """Ingest an operator-supplied corporate-action ledger (never invents events)."""
+    from data import corporate_actions as CA
+
+    if getattr(args, "from_gaps", False):
+        report = CA.export_gap_todo(sample=int(getattr(args, "sample", 0) or 400))
+        print(json.dumps(report, indent=2, default=str))
+        if not report.get("written"):
+            raise SystemExit(1)
+        return
+
+    if getattr(args, "verify", False):
+        verify = CA.refresh_adjustment_verify(sample=int(getattr(args, "sample", 0) or 80))
+        status = CA.ledger_status(verify=False)
+        status["verify"] = verify
+        print(json.dumps(status, indent=2, default=str))
+        raise SystemExit(0 if verify.get("passed") else 1)
+
+    if args.status_only:
+        status = CA.ledger_status(verify=False)
+        print(json.dumps(status, indent=2, default=str))
+        return
+    if not args.source:
+        print("Provide --source path/to/ca_events.json|.csv")
+        print("  or --from-gaps  (export phantom-gap TODO CSV — never invents factors)")
+        print("  or --verify     (re-scan adjusted store; fails closed if gaps remain)")
+        print("  or --status")
+        print("Schema sample: docs/product/acceptance/ca_events.sample.json.example")
+        raise SystemExit(2)
+    report = CA.ingest_from_path(args.source)
+    # After ingest, refresh verify cache so product readiness sees new state.
+    try:
+        report["verify"] = CA.refresh_adjustment_verify(
+            sample=int(getattr(args, "sample", 0) or 80)
+        )
+    except Exception as exc:
+        report["verify_error"] = str(exc)
+    print(json.dumps(report, indent=2, default=str))
+
+
+def cmd_universe_history(args) -> None:
+    """Ingest / bootstrap / inspect point-in-time universe membership."""
+    from data import universe_history as UH
+
+    if args.status_only:
+        status = UH.ledger_status()
+        if not status.get("research_grade"):
+            status["next_action"] = (
+                "For research-grade membership, ingest an official archive: "
+                "python main.py universe-history --source logs/universe_history.incoming.csv "
+                "(schema: docs/product/acceptance/universe_history.sample.json.example). "
+                "Bhav bootstrap clears the missing-ledger gap but stays research_grade=false."
+            )
+        print(json.dumps(status, indent=2, default=str))
+        return
+    if args.source:
+        report = UH.ingest_from_path(args.source)
+        print(json.dumps(report, indent=2, default=str))
+        return
+    report = UH.build_from_bhav(force=bool(args.force))
+    print(json.dumps(report, indent=2, default=str))
+
+
+def cmd_pit_valuations(args) -> None:
+    """Ingest or inspect point-in-time valuation rows (publication-dated)."""
+    from data import pit_valuations as PV
+
+    if args.status_only:
+        status = PV.ledger_status()
+        if not status.get("research_grade"):
+            status["next_action"] = (
+                "Drop publication-dated rows at logs/pit_valuations.incoming.json "
+                "(see docs/product/acceptance/pit_valuations.sample.json.example), then: "
+                "python main.py pit-valuations --source logs/pit_valuations.incoming.json. "
+                "Never use screener fetch time as available_ts."
+            )
+        print(json.dumps(status, indent=2, default=str))
+        return
+    if not args.source:
+        print("Provide --source path/to/pit_valuations.json|.csv (or --status)")
+        print("Schema sample: docs/product/acceptance/pit_valuations.sample.json.example")
+        raise SystemExit(2)
+    report = PV.ingest_from_path(args.source)
+    print(json.dumps(report, indent=2, default=str))
+
+
+def cmd_snapshot_certify(args) -> None:
+    """Commit (+ optionally activate) a verified snapshot from the official bhav store."""
+    from research.intelligence.data.from_bhav import snapshot_from_bhav_store
+    from research.intelligence.data.snapshot_store import SnapshotStore
+
+    store = SnapshotStore()
+    if args.status_only:
+        sid = store.get_active_snapshot()
+        info = {"active_snapshot_id": sid or "", "ready": bool(sid)}
+        if sid:
+            try:
+                snap = store.open_snapshot(sid)
+                info["latest_date"] = snap.manifest.get("last_trading_date")
+                info["source"] = snap.manifest.get("source")
+                info["instrument_count"] = snap.manifest.get("instrument_count")
+            except Exception as exc:
+                info["error"] = str(exc)
+        print(json.dumps(info, indent=2, default=str))
+        return
+    sid, report = snapshot_from_bhav_store(
+        store,
+        activate=not bool(args.no_activate),
+        actor="cli",
+        reason="manual snapshot certification",
+    )
+    print(json.dumps({"snapshot_id": sid, **report}, indent=2, default=str))
+
+
+def cmd_options_eod(args) -> None:
+    """Capture or inspect durable EOD option-chain / OI / IV history."""
+    from options.eod_snapshot import capture_universe
+    from options.eod_store import history, store_status
+
+    if args.status_only:
+        print(json.dumps(store_status(), indent=2, default=str))
+        return
+    if args.history_symbol:
+        print(json.dumps(history(args.history_symbol, days=int(args.days or 30)), indent=2, default=str))
+        return
+    symbols = None
+    if args.symbols:
+        symbols = [s.strip() for s in str(args.symbols).split(",") if s.strip()]
+    report = capture_universe(symbols, as_of=args.as_of or None)
+    print(json.dumps(report, indent=2, default=str))
 
 
 def cmd_screener(args) -> None:
@@ -899,6 +1059,35 @@ def cmd_status(args) -> None:
         print(f"Failed to fetch status: {exc}")
 
 
+def cmd_autopilot(args) -> None:
+    """Diagnose why scanner autopilot is / isn't taking trades."""
+    from execution.autopilot import diagnose_silence, get_status
+
+    if getattr(args, "diagnose", True):
+        d = diagnose_silence()
+        print("\n=== Autopilot diagnose ===")
+        print(d.get("headline") or "")
+        print(f"armed={d.get('armed')} mode={d.get('mode')} in_window={d.get('in_window')}")
+        print(
+            f"trades_today={d.get('trades_today')} open={d.get('open_positions')} "
+            f"considered={d.get('considered_today')} buy_setups={d.get('buy_setups_in_last_scan')}"
+        )
+        for b in d.get("blockers") or []:
+            print(f"  BLOCKER: {b}")
+        for n in d.get("notes") or []:
+            print(f"  · {n}")
+        rejects = d.get("rejects_today") or {}
+        if rejects:
+            print("  Rejects today:")
+            for k, v in sorted(rejects.items(), key=lambda kv: -kv[1])[:8]:
+                print(f"    {k}: {v}")
+        for line in d.get("activity") or []:
+            print(f"  {line}")
+        return
+    s = get_status()
+    print(s)
+
+
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
 def _assert_credentials() -> None:
@@ -1042,12 +1231,91 @@ def build_parser() -> argparse.ArgumentParser:
     fb.add_argument("--status", dest="status_only", action="store_true",
                     help="Print backfill progress JSON and exit")
 
+    sbt = sub.add_parser(
+        "signal-backtest",
+        help="Walk-forward scanner signal backtest on 100% of bhav stocks (research only)",
+    )
+    sbt.add_argument(
+        "--scope",
+        choices=["full", "bhav", "nse", "nifty500"],
+        default="full",
+        help="full/bhav = every bhav EQ symbol (default); nse/nifty500 = intersected subsets",
+    )
+    sbt.add_argument("--sample-step", type=int, default=5, dest="sample_step")
+    sbt.add_argument("--lookback", type=int, default=250)
+    sbt.add_argument("--horizon", type=int, default=10)
+    sbt.add_argument("--status", dest="status_only", action="store_true",
+                     help="Print last backtest status JSON and exit")
+
     fii = sub.add_parser(
         "fii-dii-backfill",
         help="Backfill NSE FII/DII cash-market history into logs/product/fii_dii.sqlite",
     )
     fii.add_argument("--days", type=int, default=90, metavar="N", help="Summary window label (default 90)")
     fii.add_argument("--status", dest="status_only", action="store_true", help="Print backfill status JSON")
+
+    ca = sub.add_parser(
+        "ca-ingest",
+        help="Ingest operator-supplied corporate actions into logs/ca_events.json (never invents events)",
+    )
+    ca.add_argument("--source", metavar="FILE", help="JSON or CSV with symbol,ex_date,factor,type")
+    ca.add_argument("--status", dest="status_only", action="store_true", help="Print CA ledger status")
+    ca.add_argument(
+        "--from-gaps",
+        action="store_true",
+        help="Export phantom-gap TODO CSV (factor/type blank — operator fills from NSE filings)",
+    )
+    ca.add_argument(
+        "--verify",
+        action="store_true",
+        help="Verify adjust-on-read collapsed phantom gaps (fails closed without a ledger)",
+    )
+    ca.add_argument(
+        "--sample",
+        type=int,
+        default=0,
+        help="Symbol sample size (--from-gaps default 400, --verify default 80)",
+    )
+
+    uh = sub.add_parser(
+        "universe-history",
+        help="Ingest or bootstrap point-in-time universe membership (or show status)",
+    )
+    uh.add_argument(
+        "--source",
+        metavar="FILE",
+        help="JSON/CSV listing archive ({symbol,listed,delisted?}) — never invents rows",
+    )
+    uh.add_argument(
+        "--force",
+        action="store_true",
+        help="Rebuild bhav-inferred ledger (refuses to overwrite research-grade)",
+    )
+    uh.add_argument("--status", dest="status_only", action="store_true", help="Print universe history status")
+
+    sc = sub.add_parser(
+        "snapshot-certify",
+        help="Certify an immutable research snapshot from the official bhav store",
+    )
+    sc.add_argument("--status", dest="status_only", action="store_true", help="Print active snapshot status")
+    sc.add_argument("--no-activate", action="store_true", help="Commit without activating")
+
+    oe = sub.add_parser(
+        "options-eod",
+        help="Capture EOD option-chain OI/IV snapshots into logs/options/eod_chains.sqlite3",
+    )
+    oe.add_argument("--status", dest="status_only", action="store_true", help="Print options EOD store status")
+    oe.add_argument("--symbols", metavar="LIST", help="Comma-separated underlyings (default NIFTY,BANKNIFTY,FINNIFTY)")
+    oe.add_argument("--as-of", dest="as_of", metavar="YYYY-MM-DD", help="Override as-of date")
+    oe.add_argument("--history", dest="history_symbol", metavar="SYMBOL", help="Print recent history for one symbol")
+    oe.add_argument("--days", type=int, default=30, help="History window when using --history")
+
+    pv = sub.add_parser(
+        "pit-valuations",
+        help="Ingest publication-dated valuations into logs/pit_valuations.json (never invents rows)",
+    )
+    pv.add_argument("--source", metavar="FILE", help="JSON/CSV with symbol,available_ts,pe,...")
+    pv.add_argument("--status", dest="status_only", action="store_true", help="Print PIT valuation ledger status")
 
     ens = sub.add_parser("ensemble", help="Print ensemble ML signal for a symbol")
     ens.add_argument("--symbol", required=True, metavar="SYMBOL", help="NSE symbol, e.g. RELIANCE")
@@ -1088,6 +1356,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("kill", help="Write kill switch flag")
     sub.add_parser("status", help="Print live portfolio status from Kite")
+    ap = sub.add_parser("autopilot", help="Diagnose scanner autopilot silence / status")
+    ap.add_argument("--diagnose", action="store_true", default=True,
+                    help="Print why trades are / aren't being taken (default)")
 
     return parser
 
@@ -1104,7 +1375,13 @@ def main() -> None:
         "fnolive":    cmd_fnolive,
         "screener":   cmd_screener,
         "fundamentals-backfill": cmd_fundamentals_backfill,
+        "signal-backtest": cmd_signal_backtest,
         "fii-dii-backfill": cmd_fii_dii_backfill,
+        "ca-ingest": cmd_ca_ingest,
+        "universe-history": cmd_universe_history,
+        "snapshot-certify": cmd_snapshot_certify,
+        "options-eod": cmd_options_eod,
+        "pit-valuations": cmd_pit_valuations,
         "ensemble":   cmd_ensemble,
         "lgb":        cmd_lgb,
         "multi":      cmd_multi,
@@ -1115,6 +1392,7 @@ def main() -> None:
         "explain":    cmd_explain,
         "kill":       cmd_kill,
         "status":     cmd_status,
+        "autopilot":  cmd_autopilot,
         "autonomy":   cmd_autonomy,
     }
     dispatch[args.command](args)

@@ -58,6 +58,52 @@ def net_r(gross_r: float, risk_frac: float, product: str = "CNC") -> float:
     return float(gross_r) - cost_in_r(risk_frac, product)
 
 
+def outcome_to_net_r(
+    entry: float,
+    stop: float,
+    outcome_pct: float,
+    *,
+    product: str = "CNC",
+    clip: tuple[float, float] = (-1.5, 6.0),
+) -> float | None:
+    """Convert a %-outcome into a cost-aware R-multiple.
+
+    Shared by live edge and counterfactual attribution so retail evidence
+    speaks one language: what you keep after brokerage/STT/slippage.
+    Returns None when the stop geometry is invalid.
+    """
+    try:
+        entry_f = float(entry)
+        stop_f = float(stop)
+        outcome_f = float(outcome_pct)
+    except (TypeError, ValueError):
+        return None
+    if entry_f <= 0 or stop_f <= 0 or entry_f <= stop_f:
+        return None
+    risk_frac = (entry_f - stop_f) / entry_f
+    if risk_frac <= 0:
+        return None
+    gross = (outcome_f / 100.0) / risk_frac
+    net = net_r(gross, risk_frac, product)
+    lo, hi = clip
+    return float(max(lo, min(hi, net)))
+
+
+def cost_drag_r(entry: float, stop: float, *, product: str = "CNC") -> float | None:
+    """Round-trip cost in R for a candidate entry/stop. None if geometry invalid."""
+    try:
+        entry_f = float(entry)
+        stop_f = float(stop)
+    except (TypeError, ValueError):
+        return None
+    if entry_f <= 0 or entry_f <= stop_f:
+        return None
+    risk_frac = (entry_f - stop_f) / entry_f
+    if risk_frac <= 0:
+        return None
+    return float(cost_in_r(risk_frac, product))
+
+
 def cost_rupees(qty: int, price: float, product: str = "CNC") -> float:
     """Round-trip cost in rupees for `qty` shares bought at `price`."""
     try:

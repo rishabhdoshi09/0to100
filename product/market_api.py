@@ -48,6 +48,42 @@ def options_workspace(
     return chain_workspace_cached(sym, spot=resolved_spot, force=force)
 
 
+def options_history_workspace(
+    symbol: str,
+    days: int = Query(14, ge=3, le=90),
+) -> dict[str, Any]:
+    """Persisted EOD PCR/IV/OI snapshots for multi-day context (read-only)."""
+    sym = str(symbol or "").strip().upper()
+    if not sym or len(sym) > 32:
+        raise HTTPException(status_code=400, detail="invalid symbol")
+    try:
+        from options.eod_store import history, store_status
+
+        rows = history(sym, days=int(days))
+        status = store_status()
+        return {
+            "available": bool(rows),
+            "symbol": sym,
+            "days": int(days),
+            "rows": rows,
+            "store": status,
+            "message": (
+                ""
+                if rows
+                else "No EOD options history yet — run python main.py options-eod or wait for the autonomy job."
+            ),
+        }
+    except Exception as exc:
+        return {
+            "available": False,
+            "symbol": sym,
+            "days": int(days),
+            "rows": [],
+            "store": {},
+            "message": f"Options EOD history unavailable ({exc})",
+        }
+
+
 def nifty_options_workspace() -> dict[str, Any]:
     return options_workspace("NIFTY")
 
@@ -76,6 +112,12 @@ def install_market_routes(app) -> None:
         nifty_options_workspace,
         methods=["GET"],
         name="market_options_nifty",
+    )
+    app.add_api_route(
+        "/api/market/options/{symbol}/history",
+        options_history_workspace,
+        methods=["GET"],
+        name="market_options_history",
     )
     app.add_api_route(
         "/api/market/options/{symbol}",

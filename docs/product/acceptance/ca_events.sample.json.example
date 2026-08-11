@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "source": "SAMPLE_NOT_FOR_RESEARCH",
+  "note": "Illustrative share-count corporate-action rows only (split/bonus/consolidation). Cash dividends are rejected — they are not a share multiple. Replace with a real NSE/operator ledger before trusting ADJUSTED prices. QuantTerm will never invent events from price gaps. Workflow: python main.py ca-ingest --from-gaps → fill factor/type from NSE filings → python main.py ca-ingest --source logs/ca_events.todo.csv → python main.py ca-ingest --verify.",
+  "events": [
+    {
+      "symbol": "EXAMPLE",
+      "ex_date": "2020-01-15",
+      "factor": 2.0,
+      "type": "bonus"
+    },
+    {
+      "symbol": "EXAMPLE",
+      "ex_date": "2018-06-01",
+      "factor": 5.0,
+      "type": "split"
+    }
+  ]
+}

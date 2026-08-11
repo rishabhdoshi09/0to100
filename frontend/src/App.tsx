@@ -12,6 +12,7 @@ import {
   ExperienceHelpDrawer,
 } from './experience'
 import { MarketSidebar } from './MarketSidebar'
+import { EducationView } from './educationViews'
 import { NewsView, OperationsRibbon, FnoView } from './marketViews'
 import { ProductStockIntelligenceView } from './productViews'
 import { ResearchDataView } from './researchData'
@@ -21,7 +22,7 @@ import {
   PortfolioView,
 } from './views'
 import type { DisplayDepth } from './productLanguage'
-import { addWatchlistItem } from './productApi'
+import { addWatchlistItem, fetchHoldings, fetchSymbolDirectory } from './productApi'
 import { useScanRunner } from './scanRunner'
 import { ReportPdfViewer } from './ReportPdfViewer'
 import type { ChartBar, ControlName, DashboardPayload, OperationRecord } from './types'
@@ -150,15 +151,16 @@ const pageTitles: Record<string, string> = {
   Watchlist: 'Watchlist',
   'Market Overview': 'Market Overview',
   'News & Events': 'News & Events',
+  Education: 'Education',
   'Research Data': 'Research Data',
   'F&O Desk': 'F&O Desk',
-  'Paper Portfolio': 'Paper Portfolio',
+  'Paper Portfolio': 'My Holdings',
   'System Health': 'System Health',
   // legacy route keys
   'Command Center': 'Home',
   Scanner: 'Market Scanner',
   'Long-Term': 'Long-Term Picks',
-  Portfolio: 'Paper Portfolio',
+  Portfolio: 'My Holdings',
   'Market Internals': 'Market Overview',
   Automation: 'System Health',
 }
@@ -166,15 +168,17 @@ const pageTitles: Record<string, string> = {
 const pageSubtitles: Record<string, string> = {
   Home: 'Daily command centre — Breakouts, Momentum and Long-Term Picks from the saved market scan.',
   'Market Scanner': 'Professional scanner tables for breakouts, momentum and long-term quality.',
-  'Stock Intelligence': 'Company workspace — chart, financials, ratios and read-only trade plan.',
+  'Stock Intelligence': 'Company workspace — chart, financials, ratios and pre-trade GO/CAUTION/NO_GO cockpit.',
   'Long-Term Picks': 'Business quality, valuation and timing without fabricated model performance.',
   Compare: 'Side-by-side comparison across market, growth, quality and technical dimensions.',
   Watchlist: 'Names you are tracking with latest scan context.',
   'Market Overview': 'Regime, breadth, volatility and sector leadership.',
   'News & Events': 'Dated market context with source health.',
+  Education: 'Crunched news + macro/micro teach-ins for the share market — never invented blogs, never a signal.',
   'Research Data': 'Verified snapshots, data platform jobs, and evidence uploads.',
-  'F&O Desk': 'Stock derivative coverage — mapped underlyings, expiries and lot sizes.',
-  'Paper Portfolio': 'Recorded paper positions and outcomes — secondary evidence.',
+  'F&O Desk': 'Mapped futures plus live OI / IV / PCR / max-pain context for a selected underlying.',
+  'Paper Portfolio': 'Demat holdings + paper book — sync Zerodha or paste your shares.',
+  Portfolio: 'Demat holdings + paper book — sync Zerodha or paste your shares.',
   'System Health': 'Operations, autonomy and infrastructure detail.',
 }
 
@@ -188,6 +192,8 @@ function App() {
   const [bars, setBars] = useState<ChartBar[]>([])
   const [controlState, setControlState] = useState('')
   const [query, setQuery] = useState('')
+  const [universeSymbols, setUniverseSymbols] = useState<string[]>([])
+  const [remoteSuggestions, setRemoteSuggestions] = useState<string[]>([])
   const [helpOpen, setHelpOpen] = useState(false)
   const [pdfViewer, setPdfViewer] = useState<{ title: string; url: string } | null>(null)
   const [depth, setDepth] = useState<DisplayDepth>(() => {
@@ -249,12 +255,65 @@ function App() {
 
   const symbols = useMemo(() => {
     const values = [
+      ...universeSymbols,
       ...dashboard.scan.records.map((row) => row.symbol),
       ...dashboard.long_term.records.map((row) => row.symbol),
       ...dashboard.fno.underlyings.map((row) => row.symbol),
     ]
     return [...new Set(values)].sort()
-  }, [dashboard.fno.underlyings, dashboard.long_term.records, dashboard.scan.records])
+  }, [universeSymbols, dashboard.fno.underlyings, dashboard.long_term.records, dashboard.scan.records])
+
+  const symbolSuggestions = useMemo(() => {
+    const q = query.trim().toUpperCase()
+    if (!q) return symbols.slice(0, 80)
+    const local = symbols.filter((symbol) => symbol.startsWith(q))
+    return [...new Set([...remoteSuggestions, ...local])].sort().slice(0, 80)
+  }, [query, symbols, remoteSuggestions])
+
+  useEffect(() => {
+    let alive = true
+    // limit=0 → complete A→Z directory (do not stop around letter M)
+    Promise.all([
+      fetchSymbolDirectory({ limit: 0 }).catch(() => null),
+      fetchHoldings().catch(() => null),
+    ]).then(([directory, book]) => {
+      if (!alive) return
+      const fromDir = (directory?.symbols || []).map((row) => row.symbol).filter(Boolean)
+      const fromHoldings = (book?.holdings || []).flatMap((row) => [
+        row.tradingsymbol,
+        row.research_symbol || '',
+      ]).filter(Boolean)
+      setUniverseSymbols([...new Set([...fromDir, ...fromHoldings])])
+      if (directory?.truncated) {
+        setControlState(`Symbol directory truncated (${directory.count}/${directory.universe_size}) — retry refresh`)
+      }
+    })
+    return () => { alive = false }
+  }, [])
+
+  // Server-side typeahead so N…Z prefixes work even if the local cache is thin.
+  useEffect(() => {
+    const q = query.trim().toUpperCase()
+    if (q.length < 1) {
+      setRemoteSuggestions([])
+      return
+    }
+    let alive = true
+    const timer = window.setTimeout(() => {
+      fetchSymbolDirectory({ q, limit: 80 })
+        .then((payload) => {
+          if (!alive) return
+          setRemoteSuggestions((payload.symbols || []).map((row) => row.symbol).filter(Boolean))
+        })
+        .catch(() => {
+          if (alive) setRemoteSuggestions([])
+        })
+    }, 120)
+    return () => {
+      alive = false
+      window.clearTimeout(timer)
+    }
+  }, [query])
 
   const openSearch = () => {
     const clean = query.trim().toUpperCase()
@@ -264,12 +323,18 @@ function App() {
       return
     }
     const match = symbols.find((symbol) => symbol === clean)
+      || remoteSuggestions.find((symbol) => symbol === clean)
       || symbols.find((symbol) => symbol.startsWith(clean))
+      || remoteSuggestions.find((symbol) => symbol.startsWith(clean))
       || clean
     setSelected(match)
     setQuery(match)
     setActive('Stock Intelligence')
-    setControlState(`Opening verified workspace for ${match}`)
+    setControlState(
+      symbols.includes(match) || remoteSuggestions.includes(match)
+        ? `Opening verified workspace for ${match}`
+        : `Opening ${match} — not in local universe cache; workspace still loads if bhav history exists`,
+    )
     window.setTimeout(() => setControlState(''), 2500)
   }
 
@@ -374,6 +439,15 @@ function App() {
     if (active === 'Market Overview' || active === 'Market Internals') return <MarketInternalsView {...viewProps} />
     if (active === 'Long-Term Picks' || active === 'Long-Term') return <EnhancedLongTermView {...viewProps} />
     if (active === 'News & Events') return <NewsView {...viewProps} />
+    if (active === 'Education') {
+      return (
+        <EducationView
+          runControl={viewProps.runControl}
+          setSelected={setSelected}
+          setActive={setActive}
+        />
+      )
+    }
     if (active === 'F&O Desk') return <FnoView {...viewProps} />
     if (active === 'System Health' || active === 'Automation') return <AutomationView {...viewProps} />
     return <RadarHomeView {...viewProps} onCompare={addToCompare} onWatchlist={addToWatchlist} />
@@ -388,13 +462,13 @@ function App() {
             ⌕
             <input
               aria-label="Search NSE symbol"
-              placeholder="Open any NSE symbol…"
+              placeholder="Search any NSE share…"
               value={query}
               onChange={(event: { target: { value: string } }) => setQuery(event.target.value)}
               onKeyDown={(event: { key: string }) => { if (event.key === 'Enter') openSearch() }}
               list="quantterm-symbols"
             />
-            <datalist id="quantterm-symbols">{symbols.slice(0, 800).map((symbol) => <option value={symbol} key={symbol} />)}</datalist>
+            <datalist id="quantterm-symbols">{symbolSuggestions.map((symbol) => <option value={symbol} key={symbol} />)}</datalist>
             <button type="button" onClick={openSearch}>Open stock</button>
           </div>
           <div className="top-status">
@@ -409,9 +483,9 @@ function App() {
         <section className="page-title">
           <div><h1>{pageTitles[active] || active}</h1><p>{pageSubtitles[active]}</p></div>
           <div className="page-actions">
-            <button type="button" disabled={!selected} onClick={openEquityReport}>View equity evidence PDF</button>
-            <button type="button" onClick={openBasketReport}>View top-3 basket PDF</button>
-            <button type="button" onClick={openInstitutionalReport}>View FII/DII market brief</button>
+            <button type="button" disabled={!selected} onClick={openEquityReport}>View equity evidence</button>
+            <button type="button" onClick={openBasketReport}>View top-3 basket</button>
+            <button type="button" onClick={openInstitutionalReport}>View FII/DII brief</button>
             <span>{controlState || (loading ? 'Loading real state…' : `Updated ${dashboard.generated_at ? new Date(dashboard.generated_at).toLocaleTimeString('en-IN') : '—'}`)}</span>
           </div>
         </section>
