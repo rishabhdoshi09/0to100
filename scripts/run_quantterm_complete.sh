@@ -1,0 +1,121 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$ROOT"
+
+# shellcheck source=stack_lib.sh
+source "$ROOT/scripts/stack_lib.sh"
+
+if [[ ! -d venv ]]; then
+  echo "Missing venv. Create the QuantTerm Python environment first." >&2
+  exit 1
+fi
+
+source venv/bin/activate
+
+if ! python -c 'import reportlab, fastapi, uvicorn' >/dev/null 2>&1; then
+  echo "[STACK] Installing professional report dependencies…"
+  python -m pip install 'reportlab>=4.2.0' 'fastapi>=0.115.0' 'uvicorn>=0.30.0'
+fi
+
+REPORT_PID=""
+STACK_PID=""
+REPORT_EXTERNAL=0
+REPORT_HEALTH_FAILS=0
+REPORT_FAIL_LIMIT=3
+
+cleanup() {
+  echo
+  echo "[COMPLETE STACK] Stopping report API and QuantTerm stack…"
+  if [[ -n "$STACK_PID" ]]; then
+    kill "$STACK_PID" >/dev/null 2>&1 || true
+    # Give nested cleanup a moment to reap children before we force ports.
+    for _ in 1 2 3 4 5 6 7 8 9 10; do
+      if ! kill -0 "$STACK_PID" >/dev/null 2>&1; then
+        break
+      fi
+      sleep 0.2
+    done
+    kill -9 "$STACK_PID" >/dev/null 2>&1 || true
+  fi
+  if [[ -n "$REPORT_PID" ]]; then
+    kill "$REPORT_PID" >/dev/null 2>&1 || true
+  fi
+  wait >/dev/null 2>&1 || true
+  # Always reap Vite; an orphaned :5173 keeps proxying to a dead :8765.
+  stack_free_port 5173 "Vite dev server"
+  if [[ "$REPORT_EXTERNAL" != "1" ]]; then
+    stack_free_port 8766 "Research-report API"
+  fi
+  # Reap a dead terminal API left by a killed nested stack; leave a healthy
+  # pre-existing (external) API alone.
+  if ! stack_health_ok "http://127.0.0.1:8765/api/health"; then
+    stack_free_port 8765 "Terminal API"
+  fi
+  if [[ "$REPORT_EXTERNAL" == "1" ]]; then
+    echo "[COMPLETE STACK] External report API on :8766 was left running."
+  fi
+  echo "[COMPLETE STACK] Stopped."
+}
+trap cleanup EXIT INT TERM
+
+REPORT_HEALTH="http://127.0.0.1:8766/health"
+set +e
+# Direct call — do not capture via $(...); that kills the backgrounded uvicorn.
+stack_start_or_reuse_uvicorn 8766 "report_api:app" "$REPORT_HEALTH" "Research-report API"
+report_rc=$STACK_UVICORN_RC
+REPORT_PID=$STACK_UVICORN_PID
+set -e
+
+if [[ "$report_rc" == 2 ]]; then
+  REPORT_EXTERNAL=1
+  REPORT_PID=""
+else
+  REPORT_EXTERNAL=0
+  if [[ -z "$REPORT_PID" ]]; then
+    echo "[COMPLETE STACK] Research-report API failed to start." >&2
+    exit 1
+  fi
+  # Allow enough time for import + bind; process-death is still detected early.
+  if ! stack_wait_for_health "$REPORT_HEALTH" "$REPORT_PID" "Research-report API" 60; then
+    exit 1
+  fi
+fi
+
+echo "[COMPLETE STACK] Starting QuantTerm terminal, market operations and autonomy…"
+bash scripts/run_quantterm.sh &
+STACK_PID=$!
+
+while true; do
+  report_alive=1
+  if [[ "$REPORT_EXTERNAL" != "1" ]] && [[ -n "$REPORT_PID" ]] && ! kill -0 "$REPORT_PID" >/dev/null 2>&1; then
+    report_alive=0
+  fi
+  if ! stack_health_ok "$REPORT_HEALTH"; then
+    report_alive=0
+  fi
+
+  if [[ "$report_alive" == "1" ]]; then
+    REPORT_HEALTH_FAILS=0
+  else
+    REPORT_HEALTH_FAILS=$((REPORT_HEALTH_FAILS + 1))
+    echo "[COMPLETE STACK] Report API health soft-fail ${REPORT_HEALTH_FAILS}/${REPORT_FAIL_LIMIT} at $REPORT_HEALTH" >&2
+    if [[ "$REPORT_HEALTH_FAILS" -ge "$REPORT_FAIL_LIMIT" ]]; then
+      echo "[COMPLETE STACK] Report API health check failed at $REPORT_HEALTH." >&2
+      exit 1
+    fi
+  fi
+
+  if ! kill -0 "$STACK_PID" >/dev/null 2>&1; then
+    set +e
+    wait "$STACK_PID"
+    stack_ec=$?
+    set -e
+    echo "[COMPLETE STACK] QuantTerm stack exited unexpectedly (pid=$STACK_PID, exit=$stack_ec)." >&2
+    echo "[COMPLETE STACK] Scroll up for the nested [STACK] reason (API/Vite/autonomy)." >&2
+    echo "[COMPLETE STACK] Tip: bash scripts/stop_quantterm.sh  then  bash scripts/run_quantterm_complete.sh" >&2
+    exit 1
+  fi
+  sleep 3
+done

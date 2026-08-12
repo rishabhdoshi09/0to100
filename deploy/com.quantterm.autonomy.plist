@@ -1,0 +1,2 @@
+<!-- Template/documentation only; setup_mac.sh writes an absolute-path LaunchAgent. -->
+<plist version="1.0"><dict><key>Label</key><string>com.quantterm.autonomy</string></dict></plist>

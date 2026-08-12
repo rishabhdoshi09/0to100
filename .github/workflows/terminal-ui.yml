@@ -1,0 +1,38 @@
+name: Terminal UI
+
+on:
+  push:
+    branches:
+      - agent/quantterm-terminal-ui
+  pull_request:
+    paths:
+      - 'frontend/**'
+      - 'terminal_api.py'
+      - 'terminal_product_api.py'
+      - 'report_api.py'
+      - 'reporting/**'
+      - 'product/product_readiness.py'
+      - 'product/stock_workspace.py'
+      - 'product/workspace.py'
+      - 'requirements.txt'
+      - '.github/workflows/terminal-ui.yml'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20.20.0'
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm install
+      - name: Build frontend
+        working-directory: frontend
+        run: npm run build
+      - name: Compile terminal, product and research APIs
+        run: |
+          python -m py_compile terminal_api.py terminal_product_api.py report_api.py
+          python -m py_compile reporting/evidence_intake.py reporting/research_dossier.py reporting/pdf_renderer.py
+          python -m py_compile product/product_readiness.py product/stock_workspace.py product/workspace.py

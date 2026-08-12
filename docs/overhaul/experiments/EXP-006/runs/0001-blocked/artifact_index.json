@@ -1,0 +1,11 @@
+{
+  "artifacts": [
+    "config_snapshot.json",
+    "data_quality.json",
+    "experiment_spec.json",
+    "limitations.json",
+    "snapshot_manifest.json",
+    "verdict.json"
+  ],
+  "snapshot_id": "ad652107580ddae1"
+}

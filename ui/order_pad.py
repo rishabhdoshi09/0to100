@@ -1,0 +1,416 @@
+"""Execution & Risk Cockpit — order pad, position monitor, backtest bridge."""
+from __future__ import annotations
+
+import time
+from datetime import datetime
+
+import pandas as pd
+import plotly.graph_objects as go
+import streamlit as st
+
+from paper_trading import (
+    close_position,
+    get_closed_positions,
+    get_equity_curve,
+    get_open_positions,
+    get_trading_summary,
+    init_db,
+    open_position,
+)
+from signals.trade_setup import compute_trade_setup
+
+
+def _log_ai_verdict(symbol: str, action: str, price: float, verdict: str):
+    """Write the AI pre-trade verdict alongside the journal entry."""
+    try:
+        from ui.journal import log_trade_to_journal
+        log_trade_to_journal(symbol, action, price, 0, ai_verdict=verdict)
+    except Exception:
+        pass
+
+
+def render_order_pad(symbol: str = "", price: float = 0.0, indicators: dict | None = None):
+    """Advanced order pad with bracket orders and live risk preview."""
+    ind = indicators or {}
+
+    st.markdown("#### Order Pad")
+    init_db()
+
+    # ── Emergency Kill Switch ─────────────────────────────────────────────────────
+    kill_active = st.session_state.get("kill_switch_active", False)
+    if kill_active:
+        st.error("🚨 KILL SWITCH ACTIVE — All new trades blocked. Restart app to resume.")
+    else:
+        if st.button("🚨 EMERGENCY STOP", type="secondary", help="Cancel all open orders and block new trades immediately"):
+            st.session_state["kill_switch_active"] = True
+            try:
+                from risk.risk_manager import RiskManager
+                RiskManager().activate_kill_switch()
+            except Exception:
+                pass
+            try:
+                from config import settings
+                import requests
+                if settings.telegram_bot_token and settings.telegram_chat_id:
+                    requests.post(
+                        f"https://api.telegram.org/bot{settings.telegram_bot_token}/sendMessage",
+                        json={"chat_id": settings.telegram_chat_id,
+                              "text": "🚨 EMERGENCY STOP ACTIVATED from UI. All trading halted."},
+                        timeout=5,
+                    )
+            except Exception:
+                pass
+            st.rerun()
+
+    with st.form("order_pad_form", clear_on_submit=True):
+        col1, col2, col3 = st.columns(3)
+        sym    = col1.text_input("Symbol", value=symbol.upper() or "", placeholder="RELIANCE")
+        otype  = col2.selectbox("Order Type", ["MARKET", "LIMIT", "SL", "SL-M"])
+        action = col3.selectbox("Action", ["BUY", "SELL"])
+
+        col4, col5, col6 = st.columns(3)
+        qty    = col4.number_input("Quantity", min_value=1, value=1, step=1)
+        entry  = col5.number_input("Entry Price ₹", min_value=0.0, value=float(price), step=0.05, format="%.2f")
+        col6.empty()
+
+        # Auto-fill bracket from ATR trade setup
+        if price and ind:
+            try:
+                _atr = float(ind.get("atr_14", price * 0.015) or price * 0.015)
+                _setup = compute_trade_setup(symbol or "STOCK", "BUY", price, _atr)
+                default_stop   = float(_setup.stop)
+                default_target = float(_setup.target)
+            except Exception:
+                default_stop, default_target = round(price * 0.98, 2), round(price * 1.04, 2)
+        else:
+            default_stop, default_target = 0.0, 0.0
+
+        col7, col8 = st.columns(2)
+        stop_loss  = col7.number_input("Stop Loss ₹", min_value=0.0, value=round(default_stop, 2), step=0.05, format="%.2f")
+        target     = col8.number_input("Target ₹",   min_value=0.0, value=round(default_target, 2), step=0.05, format="%.2f")
+
+        # Live risk preview
+        if entry and stop_loss and target and qty:
+            risk    = abs(entry - stop_loss) * qty
+            reward  = abs(target - entry)   * qty
+            rr      = reward / risk if risk else 0
+            rr_color = "#00ff88" if rr >= 2 else ("#ffb800" if rr >= 1 else "#ff4466")
+            st.markdown(
+                f"<div class='devbloom-card' style='padding:.6rem 1rem'>"
+                f"<span style='color:#8892a4;font-size:.72rem'>Risk Preview: </span>"
+                f"<span style='color:#ff4466;font-family:JetBrains Mono,monospace'>₹{risk:,.0f} risk</span> · "
+                f"<span style='color:#00ff88;font-family:JetBrains Mono,monospace'>₹{reward:,.0f} reward</span> · "
+                f"<span style='color:{rr_color};font-weight:600'>R:R {rr:.2f}</span>"
+                f"</div>",
+                unsafe_allow_html=True,
+            )
+
+        # ── Concentration Reality Check ───────────────────────────────────────
+        try:
+            from risk.concentration_check import render_concentration_warning
+            from paper_trading import get_open_positions as _get_open_pos
+            _open_pos = _get_open_pos()
+            if _open_pos is not None and not _open_pos.empty:
+                _pos_dict = {
+                    row["symbol"]: float(row.get("quantity", 1) * row.get("entry_price", 0))
+                    for _, row in _open_pos.iterrows()
+                    if row.get("symbol")
+                }
+                # Normalise to % of a rough portfolio value
+                _total_val = sum(_pos_dict.values()) or 1.0
+                _pos_pct = {s: v / _total_val * 100 for s, v in _pos_dict.items()}
+            else:
+                _pos_pct = {}
+            if sym and entry:
+                _portfolio_val = sum(v for _, row in (_open_pos.iterrows() if _open_pos is not None and not _open_pos.empty else iter([])) for v in [float(row.get("quantity", 1) * row.get("entry_price", 0))]) or 100_000
+                _size_pct = (qty * entry) / _portfolio_val * 100 if _portfolio_val else 0.0
+                render_concentration_warning(sym, _size_pct, _pos_pct)
+        except Exception:
+            pass
+
+        # ── Trade Thesis Input ────────────────────────────────────────────────
+        try:
+            from ai.thesis_recorder import render_thesis_input
+            _thesis_val = render_thesis_input(sym or "STOCK", "MANUAL")
+            st.session_state["pending_thesis"] = _thesis_val
+        except Exception:
+            pass
+
+        col_checklist, col_ai, col_place = st.columns([1, 1, 2])
+        checklist_btn = col_checklist.form_submit_button("✅ Pre-Trade Gate", width="stretch")
+        ai_check = col_ai.form_submit_button("🤖 AI Check", width="stretch")
+
+        # ABORT blocks Place Order — user must clear to override
+        ai_data    = st.session_state.get("_order_ai_verdict")
+        gate_data  = st.session_state.get("_order_gate_result")
+        is_aborted = (ai_data and ai_data[0] == "ABORT") or (gate_data and gate_data.get("grade") == "ABORT")
+        submitted  = col_place.form_submit_button(
+            "⚡ Place Paper Order", width="stretch",
+            disabled=bool(is_aborted),
+        )
+
+        if checklist_btn and sym and entry:
+            with st.spinner("Running pre-trade checklist…"):
+                try:
+                    from ui.pre_trade_checklist import run_checklist
+                    result = run_checklist(
+                        symbol=sym, action=action, price=float(entry or price),
+                        stop=float(stop_loss), target=float(target), qty=int(qty),
+                    )
+                    st.session_state["_order_gate_result"] = {
+                        "grade": result.grade, "score": result.score,
+                        "summary": result.summary, "result_obj": result,
+                    }
+                except Exception as exc:
+                    st.session_state["_order_gate_result"] = {"grade": "CAUTION", "score": 50, "summary": str(exc)}
+
+        if ai_check and sym:
+            with st.spinner("DeepSeek trade check…"):
+                from ai.dual_llm_service import get_service
+                svc = get_service()
+                verdict, dm, detail = svc.order_confirmation(
+                    sym, action, entry or price, stop_loss, target, qty, ind
+                )
+            from datetime import datetime as _dt
+            badge = svc.badge(dm, detail, ts=_dt.now().strftime("%H:%M"))
+            st.session_state["_order_ai_verdict"] = (verdict, badge, dm)
+
+        # Show pre-trade checklist result
+        gate_data = st.session_state.get("_order_gate_result")
+        if gate_data:
+            g_grade = gate_data.get("grade", "CAUTION")
+            g_color = {"GO": "#00d4a0", "CAUTION": "#f59e0b", "ABORT": "#ff4b4b"}.get(g_grade, "#8892a4")
+            g_score = gate_data.get("score", 0)
+            g_summary = gate_data.get("summary", "")
+            result_obj = gate_data.get("result_obj")
+            if result_obj is not None:
+                try:
+                    from ui.pre_trade_checklist import render_checklist_ui
+                    render_checklist_ui(result_obj)
+                except Exception:
+                    pass
+            else:
+                st.markdown(
+                    f"<div style='background:{g_color}11;border:1px solid {g_color}55;"
+                    f"border-radius:8px;padding:.5rem 1rem'>"
+                    f"<span style='color:{g_color};font-weight:700'>Gate: {g_grade} ({g_score:.0f}/100)</span> "
+                    f"<span style='color:#8892a4;font-size:.75rem'>{g_summary}</span></div>",
+                    unsafe_allow_html=True,
+                )
+
+        # Show stored AI verdict
+        ai_data = st.session_state.get("_order_ai_verdict")
+        if ai_data:
+            v_verdict, v_badge, _v_dm = ai_data
+            v_color = {"GO": "#00ff88", "CAUTION": "#ffb800", "ABORT": "#ff4466"}.get(v_verdict, "#8892a4")
+            abort_note = " — Place Order disabled. Clear to override." if v_verdict == "ABORT" else ""
+            st.markdown(
+                f"<div class='devbloom-card' style='padding:.5rem 1rem'>"
+                f"{v_badge} "
+                f"<span style='color:{v_color};font-weight:700;font-family:JetBrains Mono,monospace'>"
+                f"{v_verdict}</span>"
+                f"<span style='color:#8892a4;font-size:.7rem'>{abort_note}</span>"
+                f"</div>",
+                unsafe_allow_html=True,
+            )
+
+        if submitted:
+            if not sym:
+                st.error("Enter a symbol.")
+            else:
+                ai_verdict_str = (ai_data[0] if ai_data else "")
+                if action == "BUY":
+                    open_position(sym, entry or price, qty, "BUY", datetime.now().strftime("%Y-%m-%d"))
+                    _log_ai_verdict(sym, action, entry or price, ai_verdict_str)
+                    st.success(f"✅ BUY {qty}×{sym} @ ₹{entry or price:,.2f} placed (paper)")
+                    st.session_state.pop("_order_ai_verdict", None)
+                else:
+                    open_pos = get_open_positions()
+                    if open_pos is not None and not open_pos.empty:
+                        match = open_pos[open_pos["symbol"] == sym]
+                        if not match.empty:
+                            close_position(match.iloc[0]["id"], entry or price, datetime.now().strftime("%Y-%m-%d"))
+                            _log_ai_verdict(sym, action, entry or price, ai_verdict_str)
+                            st.success(f"✅ SELL {sym} @ ₹{entry or price:,.2f} — position closed")
+                            st.session_state.pop("_order_ai_verdict", None)
+                        else:
+                            st.warning(f"No open position in {sym}.")
+                    else:
+                        st.warning("No open positions.")
+
+
+def render_position_monitor():
+    """Live position table with per-tick P&L and ATR trailing stop suggestions."""
+    init_db()
+    st.markdown("#### Open Positions")
+    open_pos = get_open_positions()
+
+    if open_pos is None or open_pos.empty:
+        st.markdown(
+            "<div style='color:#8892a4;font-size:.85rem;text-align:center;padding:1rem'>"
+            "No open positions. Use the Order Pad to enter a trade.</div>",
+            unsafe_allow_html=True,
+        )
+        return
+
+    # Render each position as a card
+    for _, row in open_pos.iterrows():
+        entry_p  = row.get("entry_price", 0)
+        qty      = row.get("quantity", 0)
+        sym      = row.get("symbol", "")
+        side     = row.get("direction", row.get("side", "BUY"))   # schema uses "direction"
+        date_in  = row.get("entry_date", row.get("date", ""))
+
+        # Try to fetch current price via Kite (or yfinance fallback)
+        try:
+            from data.market_data import get_provider
+            price = get_provider().quote(sym).get("price", 0) or entry_p
+        except Exception:
+            price = entry_p
+
+        pnl   = (price - entry_p) * qty if side == "BUY" else (entry_p - price) * qty
+        pnl_p = pnl / (entry_p * qty) * 100 if entry_p and qty else 0
+        color = "#00ff88" if pnl >= 0 else "#ff4466"
+
+        st.markdown(
+            f"<div class='devbloom-card'>"
+            f"<div style='display:flex;justify-content:space-between;align-items:center'>"
+            f"  <div>"
+            f"    <span style='font-size:1rem;font-weight:700;color:#e8eaf0'>{sym}</span>"
+            f"    <span style='font-size:.7rem;color:#8892a4;margin-left:.5rem'>{'▲' if side=='BUY' else '▼'} {side} · {qty} shares</span>"
+            f"  </div>"
+            f"  <div style='text-align:right'>"
+            f"    <div style='font-family:JetBrains Mono,monospace;font-size:.95rem;color:#e8eaf0'>₹{price:,.2f}</div>"
+            f"    <div style='font-family:JetBrains Mono,monospace;font-size:.85rem;color:{color}'>"
+            f"      {'+'if pnl>=0 else ''}₹{pnl:,.0f} ({'+' if pnl_p>=0 else ''}{pnl_p:.2f}%)"
+            f"    </div>"
+            f"  </div>"
+            f"</div>"
+            f"<div style='font-size:.68rem;color:#8892a4;margin-top:.3rem'>"
+            f"  Entry ₹{entry_p:,.2f} · {date_in}"
+            f"</div>"
+            f"</div>",
+            unsafe_allow_html=True,
+        )
+
+
+def render_equity_curve():
+    """Equity curve chart from paper trading database."""
+    init_db()
+    eq_df = get_equity_curve()
+
+    if eq_df is None or eq_df.empty:
+        st.info("No equity history yet. Place trades to build a curve.")
+        return
+
+    fig = go.Figure(go.Scatter(
+        x=eq_df["date"] if "date" in eq_df.columns else eq_df.index,
+        y=eq_df["equity"] if "equity" in eq_df.columns else eq_df.iloc[:, -1],
+        mode="lines",
+        line=dict(color="#00d4ff", width=2),
+        fill="tozeroy",
+        fillcolor="rgba(0,212,255,0.06)",
+        hovertemplate="%{x}: ₹%{y:,.0f}<extra></extra>",
+    ))
+    fig.update_layout(
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(8,12,28,0.6)",
+        margin=dict(l=0, r=0, t=8, b=0),
+        height=220,
+        xaxis=dict(color="#8892a4", showgrid=False),
+        yaxis=dict(color="#8892a4", tickprefix="₹",
+                   gridcolor="rgba(255,255,255,0.04)"),
+        showlegend=False,
+    )
+    st.plotly_chart(fig, width='stretch', config={"displayModeBar": False})
+
+
+def render_backtest_bridge(symbol: str, fetcher=None, ie=None):
+    """Quick backtest bridge — runs 2-year backtest and shows tearsheet."""
+    st.markdown("#### Backtest Bridge (Ctrl+Shift+B)")
+    st.caption("Run a 2-year conviction-based backtest on the selected symbol before going live.")
+
+    col1, col2, col3 = st.columns(3)
+    capital   = col1.number_input("Capital ₹", value=1_000_000, step=50_000)
+    slippage  = col2.slider("Slippage %", 0.0, 1.0, 0.05, 0.01)
+    use_llm   = col3.checkbox("Include LLM signals", value=False)
+
+    if st.button("▶ Run Backtest", width="stretch", key="run_backtest_bridge"):
+        if not symbol:
+            st.error("No symbol selected.")
+            return
+        with st.spinner(f"Backtesting {symbol} on 2 years of daily data…"):
+            try:
+                from datetime import timedelta
+                from backtest.backtester import Backtester
+
+                end   = datetime.now()
+                start = end - timedelta(days=730)
+
+                if fetcher is None or ie is None:
+                    st.warning("Backtester requires live data fetcher — not available in demo mode.")
+                    return
+
+                df = fetcher.fetch(symbol, start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d"), interval="day")
+                if df is None or len(df) < 50:
+                    st.error(f"Insufficient data for {symbol}.")
+                    return
+
+                bt = Backtester(
+                    historical_data={symbol: df},
+                    initial_capital=capital,
+                    slippage=slippage / 100,
+                    use_llm=use_llm,
+                )
+                results = bt.run()
+
+                from analytics.reporter import PerformanceReporter
+                rpt = PerformanceReporter(results)
+                stats = rpt.summary_stats()
+
+                # Show tearsheet
+                m1, m2, m3, m4 = st.columns(4)
+                m1.metric("Total Return", f"{stats.get('total_return_pct', 0):.1f}%")
+                m2.metric("Sharpe",       f"{stats.get('sharpe_ratio', 0):.2f}")
+                m3.metric("Max DD",       f"{stats.get('max_drawdown_pct', 0):.1f}%")
+                m4.metric("Win Rate",     f"{stats.get('win_rate_pct', 0):.1f}%")
+
+                eq = results.get("equity_curve", [])
+                if eq:
+                    eq_df = pd.DataFrame(eq)
+                    fig = go.Figure(go.Scatter(
+                        x=eq_df["date"], y=eq_df["equity"],
+                        mode="lines", line=dict(color="#00d4ff", width=2),
+                        fill="tozeroy", fillcolor="rgba(0,212,255,0.06)",
+                    ))
+                    fig.update_layout(
+                        paper_bgcolor="rgba(0,0,0,0)",
+                        plot_bgcolor="rgba(8,12,28,0.6)",
+                        margin=dict(l=0, r=0, t=0, b=0), height=200,
+                        xaxis=dict(color="#8892a4", showgrid=False),
+                        yaxis=dict(color="#8892a4", tickprefix="₹",
+                                   gridcolor="rgba(255,255,255,0.04)"),
+                    )
+                    st.plotly_chart(fig, width='stretch', config={"displayModeBar": False})
+
+            except Exception as e:
+                st.error(f"Backtest failed: {e}")
+
+    # ── Shadow Trader Divergence Report ──────────────────────────────────────────
+    with st.expander("🔬 Shadow Trader — Live vs Paper Comparison", expanded=False):
+        try:
+            from engine.shadow_trader import get_divergence_report
+            report = get_divergence_report()
+            if report.get("status") == "insufficient_data":
+                st.caption(f"Tracking {report['closed_trades']}/{report['required']} trades needed for analysis.")
+            else:
+                if report.get("warning"):
+                    st.warning(report["warning"])
+                c1, c2, c3 = st.columns(3)
+                c1.metric("Live PnL", f"{report['total_live_pnl_pct']:+.1f}%")
+                c2.metric("Paper PnL", f"{report['total_paper_pnl_pct']:+.1f}%")
+                c3.metric("Divergence", f"{report['overall_divergence_pct']:+.1f}%",
+                          delta_color="inverse" if report['overall_divergence_pct'] > 0 else "normal")
+                st.caption(f"Based on {report['closed_trades']} closed shadow trades.")
+        except Exception as e:
+            st.caption(f"Shadow trader data unavailable: {e}")

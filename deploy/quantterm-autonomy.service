@@ -1,0 +1,12 @@
+# Template only. deploy/setup_server.sh installs an absolute-path unit.
+[Unit]
+Description=QuantTerm autonomous paper supervisor
+After=network-online.target
+[Service]
+Type=simple
+WorkingDirectory=__APP_DIR__
+Environment=QT_AUTONOMY_OWNER=1
+ExecStart=__APP_DIR__/venv/bin/python main.py autonomy --interval 15
+Restart=on-failure
+[Install]
+WantedBy=multi-user.target

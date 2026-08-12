@@ -1,0 +1,61 @@
+{
+  "action": "STOP and report the precise acquisition blocker. No synthetic or display-only data substituted. runs/0001-blocked NOT overwritten; no new run directory created (no run occurred).",
+  "attempt_id": "acq-0001",
+  "before_experiment_report": {
+    "adjustment_policy": "RAW (would be, once data exists) \u2014 currently N/A",
+    "benchmark_readiness": "UNAVAILABLE (no index data)",
+    "bhavcopy_file_count": 0,
+    "corporate_action_coverage": "none (ca_events.json absent; no source access)",
+    "data_quality_result": {
+      "fatal_reasons": [
+        "DATA_UNAVAILABLE: NSE archive hosts denied by the environment's outbound proxy (Tunnel connection failed: 403 Forbidden; nsearchives.nseindia.com not in proxy allowlist). build_store() -> 0 sessions, is_ready()=False, 0 raw files."
+      ],
+      "limitations": [],
+      "metrics": {},
+      "ok": false
+    },
+    "dataset_snapshot_id": "n/a (no dataset materialised)",
+    "equity_symbol_count": 0,
+    "first_market_date": null,
+    "historical_universe_coverage": "none (universe_history.json absent; no source access)",
+    "index_file_count": 0,
+    "last_market_date": null,
+    "machine_identity": "vm / Linux-6.18.5-x86_64-with-glibc2.39",
+    "persistent_storage_location": "/home/user/0to100/logs",
+    "row_count": 0,
+    "source_connectivity": "DENIED (403 proxy; HTTP 000)"
+  },
+  "code_commit": "63e91d667f3cc0e8032a2ec19b80257ef50625f5",
+  "config_hash": "4f638f99e13bf939",
+  "date": "2026-07-28",
+  "experiment_executed": false,
+  "host": {
+    "data_capable": false,
+    "identity": "vm / Linux-6.18.5-x86_64-with-glibc2.39",
+    "persistent_storage": {
+      "disk_avail": "~29G free on /",
+      "logs/bhav": "writable, empty",
+      "logs/index": "writable, empty"
+    }
+  },
+  "ingestion_attempt": {
+    "bhav_file_count": 0,
+    "canonical_path": "data.bhavcopy_store.build_store + data.index_store.build_index_store",
+    "competing_impl_created": false,
+    "equity_symbols": 0,
+    "index_file_count": 0,
+    "is_ready": false,
+    "raw_file_hashes": "n/a (no raw files retrieved)",
+    "rows": 0,
+    "sessions": 0
+  },
+  "milestone": "Materialise minimum real NSE historical dataset",
+  "readiness_gate": "RED \u2014 DATA_UNAVAILABLE (non-empty price history: NO; benchmark: NO; snapshot: n/a; readiness not satisfied)",
+  "source_connectivity": {
+    "bhavcopy_url_family": "https://nsearchives.nseindia.com/products/content/sec_bhavdata_full_DDMMYYYY.csv",
+    "index_url_family": "https://nsearchives.nseindia.com/content/indices/ind_close_all_DDMMYYYY.csv",
+    "probe_result": "HTTP 000 for all NSE URLs",
+    "proxy_block": "Tunnel connection failed: 403 Forbidden (nseindia.com not in proxy allowlist)"
+  },
+  "verdict_restriction_applied": "No economic PASS/FAIL issued \u2014 readiness is RED (and benchmark unavailable, snapshot not reproducible)."
+}

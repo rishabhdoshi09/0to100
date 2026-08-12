@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "source": "SAMPLE_NOT_FOR_RESEARCH",
+  "note": "Illustrative listing/delisting rows. Replace with an official NSE archive for research-grade survivorship.",
+  "rows": [
+    {"symbol": "ALIVE", "listed": "2015-01-01"},
+    {"symbol": "DEADCO", "listed": "2012-03-01", "delisted": "2022-08-15"}
+  ]
+}

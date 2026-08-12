@@ -1,0 +1,6 @@
+{
+  "fatal": [
+    "DATA_UNAVAILABLE: bhav store empty (logs/bhav = 0 files, is_ready()=False); build_store() requires NSE network which is unavailable in this environment (https://www1.nseindia.com -> HTTP 000; build blocks and cannot complete). No universe_history.json / ca_events.json / point-in-time fundamentals present."
+  ],
+  "limitations": []
+}

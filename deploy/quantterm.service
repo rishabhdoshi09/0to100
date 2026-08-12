@@ -1,0 +1,2 @@
+# DEPRECATED: the old combined service is intentionally not installable.
+# Use quantterm-ui.service + quantterm-autonomy.service via setup_server.sh.
