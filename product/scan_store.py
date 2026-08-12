@@ -65,6 +65,11 @@ def _record(signal: Any, names: Mapping[str, str], fno_symbols: set[str]) -> dic
             if _value(signal, "edge_r", None) is not None
             else None
         ),
+        # Breakout quality — used to surface the BEST breakout among peers
+        "breakout_grade": str(_value(signal, "breakout_grade", "") or ""),
+        "breakout_conviction": float(
+            _value(signal, "breakout_conviction", 0.0) or 0.0
+        ),
     }
 
 

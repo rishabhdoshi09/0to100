@@ -108,11 +108,18 @@ _DEFAULTS = {
     "considered": {},              # {YYYY-MM-DD: candidates seen}
     "preset": "Balanced",          # aggressiveness dial (frequency, not safety)
     "brain_gate": True,            # Brain STAND_ASIDE → pause new entries (survival)
-    "profit_book_rupees": 0.0,     # >0 → ₹X AIM: is se pehle book NAHI hota
-    "profit_book_min_rupees": 1000.0,  # hard floor — isse KAM pe kabhi book nahi
-    "profit_trail_giveback_rupees": 300.0,  # aim cross → peak se itna neeche book
+    # Profit booking: default AIM = 3% of pool (paper + live math). Absolute
+    # ₹ override (profit_book_rupees) still wins when >0 (legacy /book 1500).
+    # Quality of technicals + fundamentals scales the per-trade AIM 0.5×–1.25×.
+    "profit_book_pct": 3.0,        # % of pool AIM (0 + rupees 0 = booking OFF)
+    "profit_book_rupees": 0.0,     # >0 → absolute ₹ AIM overrides pct mode
+    "profit_book_min_pct": 1.5,    # floor as % of pool (pct mode)
+    "profit_book_min_rupees": 1000.0,  # hard floor when absolute ₹ mode
+    "profit_trail_giveback_pct": 0.6,  # giveback as % of pool (pct mode)
+    "profit_trail_giveback_rupees": 300.0,  # giveback when absolute ₹ mode
     "book_nudges": {},             # {date: [symbols]} LIVE book-alert dedupe
     "trail_peaks": {},             # {trade_id: peak NET ₹} — trailing state
+    "book_plans": {},              # {trade_id: {aim,floor,giveback,quality_mult}}
     "symbol_memory_gate": True,    # 🧠 serial false-breaker naam dobara nahi
 }
 
@@ -375,8 +382,11 @@ def set_config(**kwargs) -> None:
         "breakeven_trigger_pct": (0.5, 8.0),
         "max_hold_days": (2, 15),
         "max_chase_pct": (0.25, 5.0),
+        "profit_book_pct": (0.0, 15.0),
         "profit_book_rupees": (0.0, 100000.0),
+        "profit_book_min_pct": (0.0, 10.0),
         "profit_book_min_rupees": (0.0, 100000.0),
+        "profit_trail_giveback_pct": (0.05, 5.0),
         "profit_trail_giveback_rupees": (50.0, 50000.0),
     }
     bools = ("trailing_enabled", "regime_gate", "conviction_sizing",
@@ -908,6 +918,95 @@ def _conviction_multiplier(score: float, edge, ev_conf=None) -> float:
     return min(2.0 if ev_conf == "HIGH" else 1.5, max(0.5, m))
 
 
+def _booking_enabled(s: dict | None = None) -> bool:
+    """True when either capital-% AIM or absolute ₹ AIM is set."""
+    s = s if s is not None else _load()
+    return (float(s.get("profit_book_rupees") or 0) > 0
+            or float(s.get("profit_book_pct") or 0) > 0)
+
+
+def _book_quality_mult(score: float, grade: str = "",
+                       breakout_conviction: float = 0.0,
+                       fund_score=None) -> float:
+    """Scale the 3% capital profit AIM by technicals + fundamentals.
+
+    Weak setups book earlier (0.5×); A-grade + strong fund stretch toward
+    1.25×. Never invents fundamentals — missing fund_score is neutral.
+    """
+    m = 0.70
+    g = str(grade or "").upper()
+    if g == "A":
+        m += 0.25
+    elif g == "B":
+        m += 0.12
+    if score >= 85:
+        m += 0.15
+    elif score >= 70:
+        m += 0.08
+    conv = float(breakout_conviction or 0)
+    if conv >= 75:
+        m += 0.15
+    elif conv >= 55:
+        m += 0.08
+    if fund_score is not None:
+        fs = float(fund_score)
+        if fs >= 70:
+            m += 0.12
+        elif fs >= 50:
+            m += 0.05
+        elif fs < 35:
+            m -= 0.10
+    return max(0.50, min(1.25, round(m, 3)))
+
+
+def _base_book_aim_rupees(s: dict | None = None, pool: float | None = None) -> float:
+    """Unresolved AIM before quality scaling (absolute ₹ wins over %)."""
+    s = s if s is not None else _load()
+    rupees = float(s.get("profit_book_rupees") or 0)
+    if rupees > 0:
+        return rupees
+    pct = float(s.get("profit_book_pct") or 0)
+    if pct <= 0:
+        return 0.0
+    if pool is None:
+        pool = float(get_status().get("pool") or 0)
+    if pool <= 0:
+        return 0.0
+    return round(pool * pct / 100.0, 0)
+
+
+def _book_plan_for_trade(score: float, grade: str = "",
+                         breakout_conviction: float = 0.0,
+                         fund_score=None,
+                         s: dict | None = None) -> dict:
+    """Per-trade AIM / floor / giveback in rupees, quality-scaled."""
+    s = s if s is not None else _load()
+    pool = float(get_status().get("pool") or 0)
+    base = _base_book_aim_rupees(s, pool)
+    if base <= 0:
+        return {"aim": 0.0, "floor": 0.0, "giveback": 0.0, "quality_mult": 1.0}
+    qm = _book_quality_mult(score, grade, breakout_conviction, fund_score)
+    aim = round(base * qm, 0)
+    abs_mode = float(s.get("profit_book_rupees") or 0) > 0
+    if abs_mode:
+        floor = float(s.get("profit_book_min_rupees") or 0)
+        giveback = max(1.0, float(s.get("profit_trail_giveback_rupees") or 300))
+    else:
+        floor = round(pool * float(s.get("profit_book_min_pct") or 0) / 100.0 * qm, 0)
+        giveback = max(
+            1.0,
+            round(pool * float(s.get("profit_trail_giveback_pct") or 0.6) / 100.0, 0),
+        )
+    floor = min(floor, aim) if aim > 0 else floor
+    return {
+        "aim": aim,
+        "floor": floor,
+        "giveback": giveback,
+        "quality_mult": qm,
+        "base_aim": base,
+    }
+
+
 def _size(entry: float, stop: float, mult: float = 1.0,
           cap_mult: float = 1.0) -> int:
     """Qty from 1%-of-pool risk (× conviction multiplier), capped by
@@ -936,7 +1035,9 @@ def _size(entry: float, stop: float, mult: float = 1.0,
 
 def consider(symbol: str, entry: float, stop: float, score: float,
              edge, sector: str, source: str, ev_pct=None, p_win=None,
-             ev_conf=None, grade: str = "") -> bool:
+             ev_conf=None, grade: str = "",
+             breakout_conviction: float = 0.0,
+             fund_score=None) -> bool:
     """Full gate → size → execute path. Returns True if a trade was placed.
 
     Thread-safe: scanner + sniper hooks may call this concurrently; the
@@ -946,12 +1047,15 @@ def consider(symbol: str, entry: float, stop: float, score: float,
     """
     with _consider_lock:
         return _consider_locked(symbol, entry, stop, score, edge, sector,
-                                source, ev_pct, p_win, ev_conf, grade)
+                                source, ev_pct, p_win, ev_conf, grade,
+                                breakout_conviction, fund_score)
 
 
 def _consider_locked(symbol: str, entry: float, stop: float, score: float,
                      edge, sector: str, source: str, ev_pct=None, p_win=None,
-                     ev_conf=None, grade: str = "") -> bool:
+                     ev_conf=None, grade: str = "",
+                     breakout_conviction: float = 0.0,
+                     fund_score=None) -> bool:
     def _jlog(decision: str, reason: str = "") -> None:
         # Evidence infrastructure: EVERY decision journaled with its
         # prediction — even rejections. "not armed" skipped (pure noise).
@@ -1025,12 +1129,16 @@ def _consider_locked(symbol: str, entry: float, stop: float, score: float,
         # needed-move% = (book ÷ risk-budget) × stop-width%. Scanner ka 2×ATR
         # swing-stop wide hai → chhoti qty → bada move chahiye (slow). Ek
         # CONFIRMED A/B break (ya sniper confirm) ka structure pivot ke paas
-        # tight stop deta hai → SAME rupee risk pe ~2.5× qty → ₹1,500 ke
-        # liye ~2.5× chhota move. Floor 0.8% (tick-noise se neeche kabhi
-        # nahi), aur original se LOOSE kabhi nahi. Unconfirmed setups apna
-        # wide swing-stop rakhte hain — structure nahi toh tightening nahi.
+        # tight stop deta hai → SAME rupee risk pe ~2.5× qty → 3% capital
+        # aim ke liye ~2.5× chhota move. Floor 0.8% (tick-noise se neeche
+        # kabhi nahi), aur original se LOOSE kabhi nahi. Unconfirmed setups
+        # apna wide swing-stop rakhte hain — structure nahi toh tightening
+        # nahi.
         _fast_book = False
-        if (float(s.get("profit_book_rupees") or 0) > 0
+        _plan = _book_plan_for_trade(
+            score, grade, breakout_conviction, fund_score, s,
+        )
+        if (_plan["aim"] > 0
                 and (grade in ("A", "B") or source == "sniper")):
             atr_proxy = (entry - stop) / 2.0          # scanner stop = 2×ATR
             tight = entry - max(0.75 * atr_proxy, entry * 0.008)
@@ -1076,8 +1184,22 @@ def _consider_locked(symbol: str, entry: float, stop: float, score: float,
             s.setdefault("traded_symbols", {})
             s["traded_symbols"] = {
                 today: s["traded_symbols"].get(today, []) + [symbol]}
+            # Persist per-trade quality-scaled book plan (survives restarts)
+            if _plan["aim"] > 0:
+                opens = [t for t in _open_autopilot_trades()
+                         if t.get("symbol") == symbol]
+                if opens:
+                    tid = str(max(int(t["id"]) for t in opens))
+                    plans = dict(s.get("book_plans") or {})
+                    plans[tid] = {
+                        "aim": float(_plan["aim"]),
+                        "floor": float(_plan["floor"]),
+                        "giveback": float(_plan["giveback"]),
+                        "quality_mult": float(_plan["quality_mult"]),
+                    }
+                    s["book_plans"] = plans
         _save()
-        _book_amt = float(s.get("profit_book_rupees") or 0)
+        _book_amt = float(_plan.get("aim") or 0)
         _book_bit = ""
         if _book_amt > 0 and qty > 0:
             # NET-honest: charges ke baad ₹X bachane ke liye kitna GROSS move
@@ -1087,8 +1209,10 @@ def _consider_locked(symbol: str, entry: float, stop: float, score: float,
             except Exception:
                 _need_gross = _book_amt
             _mv = _need_gross / (qty * entry) * 100
-            _floor = float(s.get("profit_book_min_rupees") or 0)
-            _book_bit = (f" [NET ₹{_book_amt:,.0f} aim @ +{_mv:.1f}% "
+            _floor = float(_plan.get("floor") or 0)
+            _qm = float(_plan.get("quality_mult") or 1.0)
+            _book_bit = (f" [NET ₹{_book_amt:,.0f} aim "
+                         f"(quality {_qm:.2f}×) @ +{_mv:.1f}% "
                          f"(gross ₹{_need_gross:,.0f}), phir TRAIL, floor "
                          f"₹{_floor:,.0f}]")
         _log_activity(f"BUY {qty}×{symbol} @ ₹{entry:,.1f} "
@@ -1123,12 +1247,15 @@ def on_setups(results: list[dict]) -> None:
             continue
         # PLANNED entry (breakout level) as the chase reference — the
         # live anchor inside consider() supplies the actual order price
+        fund = r.get("fundamental_score")
         consider(symbol=r["symbol"], entry=float(r.get("entry") or r.get("price") or 0),
                  stop=float(r.get("stop") or 0), score=float(r.get("score") or 0),
                  edge=r.get("edge_r"), sector=r.get("sector") or "",
                  source="scanner", ev_pct=r.get("ev_pct"),
                  p_win=r.get("p_win"), ev_conf=r.get("ev_conf"),
-                 grade=str(r.get("breakout_grade") or ""))
+                 grade=str(r.get("breakout_grade") or ""),
+                 breakout_conviction=float(r.get("breakout_conviction") or 0),
+                 fund_score=float(fund) if fund is not None else None)
 
 
 def on_breakout(hit: dict) -> None:
@@ -1256,19 +1383,15 @@ def _profit_book() -> None:
     """💰⛓️ NET-aware profit booking WITH A TRAIL.
 
     Teen level, saaf:
-      AIM (profit_book_rupees)        — isse pehle book NAHI hota, chalne do
-      FLOOR (profit_book_min_rupees)  — isse KAM pe kabhi book nahi hota
-                                         (armed hone ke baad ka worst-case)
-      GIVEBACK (profit_trail_giveback_rupees) — AIM cross hote hi trailing
-                                         ARM; peak NET se itna neeche aane
-                                         par lock — runner ko chalne do,
-                                         par jo mila usse pakad lo
+      AIM   — isse pehle book NAHI hota, chalne do
+              (default = 3% of pool × quality; absolute ₹ overrides)
+      FLOOR — isse KAM pe kabhi book nahi hota (armed hone ke baad worst-case)
+      GIVEBACK — AIM cross hote hi trailing ARM; peak NET se itna neeche
+                 aane par lock — runner ko chalne do, jo mila usse pakad lo
 
-    trail_stop = max(FLOOR, peak_net − GIVEBACK). Matlab: agar stock ₹1,500
-    ke baad ₹3,000 tak bhaage, hum turant nahi bechte — peak track karte
-    hain aur sirf pullback pe (kam se kam FLOOR guarantee ke saath) book
-    karte hain. 'Chhota profit pe kaat dena' ab structurally possible nahi:
-    AIM se neeche kabhi book hi nahi hota.
+    trail_stop = max(FLOOR, peak_net − GIVEBACK). Per-trade plans (from
+    technicals + fundamentals at entry) live in book_plans; missing plan
+    falls back to the global base AIM.
 
     PAPER → turant close (PAPER_WIN, live price pe) — capital recycle.
     LIVE → GTT exchange pe baitha hai isliye auto-sell nahi; trail-stop hit
@@ -1276,12 +1399,23 @@ def _profit_book() -> None:
     Trader math note: entry filter (prime/gates) hi asli edge hai, ye
     sirf uska disciplined cashier."""
     s = _load()
-    aim = float(s.get("profit_book_rupees") or 0)
-    if aim <= 0:
+    if not _booking_enabled(s):
         return
-    floor = float(s.get("profit_book_min_rupees") or 0)
-    floor = min(floor, aim)                    # floor kabhi aim se upar nahi
-    giveback = max(1.0, float(s.get("profit_trail_giveback_rupees") or 300))
+    default_aim = _base_book_aim_rupees(s)
+    if default_aim <= 0:
+        return
+    abs_mode = float(s.get("profit_book_rupees") or 0) > 0
+    pool = float(get_status().get("pool") or 0)
+    if abs_mode:
+        default_floor = float(s.get("profit_book_min_rupees") or 0)
+        default_give = max(1.0, float(s.get("profit_trail_giveback_rupees") or 300))
+    else:
+        default_floor = round(
+            pool * float(s.get("profit_book_min_pct") or 0) / 100.0, 0)
+        default_give = max(
+            1.0,
+            round(pool * float(s.get("profit_trail_giveback_pct") or 0.6) / 100.0, 0),
+        )
     opens = _open_autopilot_trades()
     if not opens:
         return
@@ -1293,8 +1427,11 @@ def _profit_book() -> None:
     today = _ist_today().isoformat()
     open_ids = {str(t["id"]) for t in opens}
     with _lock:
-        trail = {k: v for k, v in dict(_load().get("trail_peaks") or {}).items()
+        st0 = _load()
+        trail = {k: v for k, v in dict(st0.get("trail_peaks") or {}).items()
                  if k in open_ids}              # stale entries prune (already closed)
+        plans = {k: v for k, v in dict(st0.get("book_plans") or {}).items()
+                 if k in open_ids}
 
     for t in opens:
         q = live.get(t["symbol"])
@@ -1316,6 +1453,19 @@ def _profit_book() -> None:
             ch = 0.0
         net = pnl - ch
         tid = str(t["id"])
+        if abs_mode:
+            # Absolute ₹ override is global — ignore per-trade plan so
+            # /book 1500 (and tests that set AIM after entry) stay exact.
+            aim = default_aim
+            floor = min(default_floor, aim)
+            giveback = default_give
+        else:
+            plan = plans.get(tid) or {}
+            aim = float(plan.get("aim") or default_aim)
+            floor = float(plan.get("floor") if plan.get("floor") is not None
+                          else default_floor)
+            giveback = max(1.0, float(plan.get("giveback") or default_give))
+            floor = min(floor, aim)                    # floor kabhi aim se upar nahi
         peak = max(trail.get(tid, 0.0), net)
         trail[tid] = peak
 
@@ -1340,6 +1490,7 @@ def _profit_book() -> None:
                     f"charges ₹{ch:,.0f} minus). Trade band, capital wapas "
                     f"pool mein.")
             trail.pop(tid, None)
+            plans.pop(tid, None)
         else:
             with _lock:
                 st = _load()
@@ -1358,6 +1509,7 @@ def _profit_book() -> None:
     with _lock:
         st = _load()
         st["trail_peaks"] = trail
+        st["book_plans"] = plans
     _save()
 
 
@@ -1365,7 +1517,7 @@ def daily_scoreboard() -> dict:
     """🎯 MACHINE KA PURPOSE, ek number mein: aaj ka target vs aaj ki NET
     booking. 1+1=2 — koi kahani nahi, sirf hisaab:
 
-      target  = max_trades_per_day × profit_book_rupees   (full-house goal)
+      target  = max_trades_per_day × base_book_aim   (full-house goal)
       booked  = aaj ke CLOSED trades ka NET (charges ke baad — pnl_snapshot)
       slots   = kitne trades abhi baaki
 
@@ -1373,7 +1525,7 @@ def daily_scoreboard() -> dict:
     """
     s = _load()
     pnl = pnl_snapshot()
-    book = float(s.get("profit_book_rupees") or 0)
+    book = _base_book_aim_rupees(s)
     max_day = int(s.get("max_trades_per_day") or 0)
     today = _ist_today().isoformat()
     taken = int(s.get("trades_today", {}).get(today, 0))
@@ -1386,7 +1538,7 @@ def daily_scoreboard() -> dict:
     if not s.get("armed"):
         line = "🔴 Machine OFF — ARM karo (ya /resume), warna aaj ka target ₹0."
     elif book <= 0:
-        line = "⚪ Booking OFF — /book 1500 set karo, machine ko target do."
+        line = "⚪ Booking OFF — /book 3% set karo, machine ko target do."
     elif booked_net >= target > 0:
         line = f"🏆 FULL HOUSE — target ₹{target:,.0f} poora! Machine ne kaam kar diya."
     elif booked_n > 0:
@@ -1400,7 +1552,9 @@ def daily_scoreboard() -> dict:
     return {"armed": bool(s.get("armed")), "book": book, "max_day": max_day,
             "target": target, "booked_net": round(booked_net, 0),
             "booked_n": booked_n, "taken": taken, "slots": slots,
-            "pct": pct, "line": line}
+            "pct": pct, "line": line,
+            "book_pct": float(s.get("profit_book_pct") or 0),
+            "book_rupees": float(s.get("profit_book_rupees") or 0)}
 
 
 # ── ⚡ Fast-exit monitor — booking/exits scan-cycle ka wait nahi karte ─────────
@@ -1435,8 +1589,8 @@ def _book_tick() -> int:
             review_positions()
         except Exception:
             pass
-        # ₹-booking turant
-        if float(s.get("profit_book_rupees") or 0) > 0:
+        # ₹/%-booking turant
+        if _booking_enabled(s):
             _profit_book()
         # 🐕 cross-watch: scan worker mar jaye toh yahan se khabar jaye
         # (watchdog ka apna 5-min throttle hai — yahan sasta hai)

@@ -426,6 +426,7 @@ export type RadarHome = {
   scan_scanned_at: string
   long_term_scanned_at: string
   universe_size: number
+  best_breakout?: ScannerWorkspaceRow | null
   lanes: {
     breakouts: ScannerWorkspaceRow[]
     momentum: ScannerWorkspaceRow[]

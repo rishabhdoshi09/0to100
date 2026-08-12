@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Any, Mapping, Sequence
 
-from product.radar_workspace import is_long_term_pick
+from product.radar_workspace import breakout_quality_score, is_long_term_pick, merge_fundamental_context
 
 
 SCANNER_MODES = (
@@ -58,6 +58,13 @@ def build_command_center_state(
     long_rows = _records(long_term_payload)
     autonomy = dict(autonomy or {})
 
+    fund_by_symbol = {
+        str(r.get("symbol", "") or "").upper(): r
+        for r in long_rows
+        if str(r.get("symbol", "") or "")
+    }
+    scan_rows = [merge_fundamental_context(row, fund_by_symbol) for row in scan_rows]
+
     ready = [
         row for row in scan_rows
         if str(row.get("status", "")) == "Ready to trade"
@@ -65,7 +72,13 @@ def build_command_center_state(
     ]
     momentum = [row for row in scan_rows if "MOMENTUM" in _signals(row)]
     near = [row for row in scan_rows if "PRE_BREAKOUT" in _signals(row)]
-    ready.sort(key=lambda row: (-_f(row.get("score")), str(row.get("symbol", ""))))
+    ready.sort(
+        key=lambda row: (
+            -breakout_quality_score(row),
+            -_f(row.get("score")),
+            str(row.get("symbol", "")),
+        )
+    )
 
     quality = [row for row in long_rows if is_long_term_pick(row)]
     quality.sort(key=lambda row: (-_f(row.get("combined_score")), str(row.get("symbol", ""))))
@@ -140,6 +153,12 @@ def scanner_rows(
     normalized = str(mode or "Momentum").strip().lower()
     scan_rows = _records(scan_payload)
     long_rows = _records(long_term_payload)
+    fund_by_symbol = {
+        str(r.get("symbol", "") or "").upper(): r
+        for r in long_rows
+        if str(r.get("symbol", "") or "")
+    }
+    scan_rows = [merge_fundamental_context(row, fund_by_symbol) for row in scan_rows]
 
     if normalized == "long-term":
         rows = [dict(row, _source="long_term") for row in long_rows]
@@ -179,11 +198,22 @@ def scanner_rows(
         rows = list(scan_rows)
 
     projected = [dict(row, _source=row.get("_source", "market_scan")) for row in rows]
-    projected.sort(
-        key=lambda row: (
-            bool(row.get("chase_risk")),
-            -_f(row.get("score", row.get("combined_score", 0.0))),
-            str(row.get("symbol", "")),
+    if normalized == "breakouts":
+        projected.sort(
+            key=lambda row: (
+                bool(row.get("chase_risk")),
+                -breakout_quality_score(row),
+                -_f(row.get("breakout_conviction")),
+                -_f(row.get("score", 0.0)),
+                str(row.get("symbol", "")),
+            )
         )
-    )
+    else:
+        projected.sort(
+            key=lambda row: (
+                bool(row.get("chase_risk")),
+                -_f(row.get("score", row.get("combined_score", 0.0))),
+                str(row.get("symbol", "")),
+            )
+        )
     return projected

@@ -11,7 +11,7 @@
   /aggressive    — zyada trades (10/day tak, wider net)
   /balanced      — default discipline
   /conservative  — sirf A+ setups, kam trades
-  /book 1500     — har trade ₹1500 profit pe book (0 = off)
+  /book 3%       — har trade ~3% of pool pe book (quality-scaled; 0 = off)
   /funnel        — aaj kitne dekhe/liye/kyun reject — poora hisaab
   /brain         — abhi ka Brain verdict on demand
   /help          — ye list
@@ -63,8 +63,10 @@ def _status() -> str:
             f"{s.get('max_trades_per_day', 0)} · "
             f"Preset: {s.get('preset', 'Balanced')}\n"
             f"Pool: ₹{s.get('pool', 0):,.0f} · "
-            f"Book: ₹{s.get('profit_book_rupees', 0):,.0f}"
-            f"{day_bit}{posture}")
+            f"Book: {s.get('profit_book_pct', 0):g}% pool"
+            + (f" / ₹{s.get('profit_book_rupees', 0):,.0f} abs"
+               if float(s.get('profit_book_rupees') or 0) > 0 else "")
+            + f"{day_bit}{posture}")
 
 
 def _pause() -> str:
@@ -103,21 +105,44 @@ def _preset(name: str) -> str:
 
 
 def _book(arg: str) -> str:
+    """Set profit-book AIM.
+
+    /book 3%   → 3% of pool (recommended; quality scales per trade)
+    /book 3    → same when ≤20 (pct mode)
+    /book 1500 → absolute ₹ override (legacy)
+    /book 0    → OFF
+    """
+    raw = (arg or "").strip().lower()
+    if not raw:
+        return "Aise: /book 3%  (capital %) ya /book 1500 (₹) · /book 0 = off"
+    pct_mode = raw.endswith("%")
     try:
-        amt = float(arg)
+        amt = float(raw.rstrip("%"))
     except Exception:
-        return "Aise: /book 1500  (ya /book 0 = off)"
-    from execution.autopilot import set_config, get_status
+        return "Aise: /book 3%  (capital %) ya /book 1500 (₹) · /book 0 = off"
+    from execution.autopilot import set_config, get_status, _base_book_aim_rupees
+    if amt <= 0:
+        set_config(profit_book_rupees=0.0, profit_book_pct=0.0)
+        return "💰 Profit-book — OFF"
+    if pct_mode or amt <= 20:
+        set_config(profit_book_pct=float(amt), profit_book_rupees=0.0)
+        s = get_status()
+        base = _base_book_aim_rupees(s)
+        return (f"💰 Profit-book AIM: <b>{amt:g}% of pool</b> "
+                f"(≈ ₹{base:,.0f} base @ pool ₹{s.get('pool', 0):,.0f}). "
+                f"Technicals + fundamentals scale each trade 0.5×–1.25×. "
+                f"Floor {s.get('profit_book_min_pct', 1.5):g}% · "
+                f"trail give-back {s.get('profit_trail_giveback_pct', 0.6):g}%.")
     set_config(profit_book_rupees=amt)
     s = get_status()
     val = s.get("profit_book_rupees", 0)
     floor = s.get("profit_book_min_rupees", 1000)
     give = s.get("profit_trail_giveback_rupees", 300)
-    return (f"💰 Profit-book AIM: <b>₹{val:,.0f}</b>/trade"
+    return (f"💰 Profit-book AIM: <b>₹{val:,.0f}</b>/trade (absolute override)"
             + (" — OFF" if val <= 0 else
                f" — isse pehle book nahi. Aim cross → trail arm (peak se "
                f"₹{give:,.0f} giveback pe lock, floor ₹{floor:,.0f} — isse "
-               f"kam kabhi nahi). App mein floor/give-back tune kar sakte ho."))
+               f"kam kabhi nahi). Prefer /book 3% for capital-scaled aims."))
 
 
 def _trade_now() -> str:
@@ -185,8 +210,8 @@ _HELP = ("📱 <b>Commands</b>\n"
          "/pause — 🛑 naye trades band\n"
          "/resume — 🟢 wapas chalu (paper)\n"
          "/aggressive · /balanced · /conservative — kitne trades\n"
-         "/book 1500 — NET ₹ aim (charges ke baad); floor 1000, trail "
-         "give-back 300 default — app mein tune karo\n"
+         "/book 3% — NET aim = 3% of pool (tech+fund scale 0.5–1.25×); "
+         "/book 1500 absolute ₹ override; /book 0 = off\n"
          "/funnel — aaj ka hisaab (kyun kam trades)\n"
          "/brain — abhi ka verdict")
 

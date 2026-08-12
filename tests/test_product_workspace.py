@@ -74,6 +74,33 @@ def test_scanner_modes_use_one_source_without_mixing_long_term_into_momentum():
     assert {row["symbol"] for row in avoid} == {"EXT", "BAD"}
 
 
+def test_breakouts_mode_ranks_best_quality_first():
+    scan = {
+        "records": [
+            {
+                "symbol": "WEAK", "signals": ["BREAKOUT_52W"], "score": 88,
+                "breakout_grade": "", "breakout_conviction": 40, "chase_risk": False,
+            },
+            {
+                "symbol": "STRONG", "signals": ["BREAKOUT_52W"], "score": 70,
+                "breakout_grade": "A", "breakout_conviction": 85, "chase_risk": False,
+            },
+        ]
+    }
+    long_term = {
+        "records": [
+            {
+                "symbol": "STRONG", "classification": "QUALITY_COMPOUNDER",
+                "combined_score": 90, "fundamental_coverage": 0.85,
+                "fundamental_score": 82,
+            },
+        ]
+    }
+    rows = scanner_rows("Breakouts", scan_payload=scan, long_term_payload=long_term)
+    assert [r["symbol"] for r in rows] == ["STRONG", "WEAK"]
+    assert rows[0]["fundamental_score"] == 82
+
+
 def test_conviction_mode_preserves_conviction_ranking():
     rows = [
         {"symbol": "LOW", "conviction_score": 61},

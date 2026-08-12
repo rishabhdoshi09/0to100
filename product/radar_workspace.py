@@ -30,6 +30,59 @@ def _f(value: Any, default: float = 0.0) -> float:
         return float(default)
 
 
+def breakout_quality_score(row: Mapping[str, Any]) -> float:
+    """Rank breakouts by technical force + optional fundamentals.
+
+    Higher is better. Demote-only on chase / avoid classifications — never
+    invents fundamental coverage that isn't on the row.
+    """
+    grade = str(row.get("breakout_grade") or "").upper()
+    grade_pts = {"A": 30.0, "B": 15.0}.get(grade, 0.0)
+    conv = _f(row.get("breakout_conviction"))
+    score = _f(row.get("score"))
+    edge = _f(row.get("edge_r"))
+    fund_pts = 0.0
+    cov = _f(row.get("fundamental_coverage"))
+    if row.get("fundamental_score") is not None and cov >= MIN_LT_FUNDAMENTAL_COVERAGE:
+        fund_pts = min(20.0, _f(row.get("fundamental_score")) * 0.20)
+        cls = str(row.get("classification") or "")
+        if cls in {"QUALITY_COMPOUNDER", "GARP_CANDIDATE"}:
+            fund_pts += 5.0
+        elif cls == "QUALITY_BUT_EXPENSIVE":
+            fund_pts += 2.0
+        elif cls == "AVOID_REVIEW":
+            fund_pts -= 10.0
+    chase_pen = 25.0 if bool(row.get("chase_risk")) else 0.0
+    return round(
+        grade_pts + conv * 0.35 + score * 0.25 + edge * 40.0 + fund_pts - chase_pen,
+        2,
+    )
+
+
+def merge_fundamental_context(
+    row: Mapping[str, Any],
+    fund_by_symbol: Mapping[str, Mapping[str, Any]] | None,
+) -> dict[str, Any]:
+    """Attach long-term fundamental fields onto a scan row when available."""
+    out = dict(row)
+    if not fund_by_symbol:
+        return out
+    fund = fund_by_symbol.get(str(out.get("symbol", "") or "").upper())
+    if not fund:
+        return out
+    for key in (
+        "fundamental_score",
+        "fundamental_coverage",
+        "combined_score",
+        "classification",
+        "quality_factors",
+        "risk_flags",
+    ):
+        if key in fund and fund.get(key) is not None and out.get(key) is None:
+            out[key] = fund.get(key)
+    return out
+
+
 def classify_breakout_state(row: Mapping[str, Any]) -> str:
     """Deterministic breakout sub-state for retail scanner tables."""
     status = str(row.get("status", "") or "")
@@ -143,7 +196,21 @@ def build_radar_home(
     scan_at = str((scan_payload or {}).get("scanned_at", "") or "")
     lt_at = str((long_term_payload or {}).get("scanned_at", "") or "")
 
-    enriched = [enrich_scan_row(r, sector_lookup=sector_lookup, scanned_at=scan_at) for r in scan_rows]
+    fund_by_symbol = {
+        str(r.get("symbol", "") or "").upper(): r
+        for r in long_rows
+        if str(r.get("symbol", "") or "")
+    }
+    enriched = [
+        enrich_scan_row(
+            merge_fundamental_context(r, fund_by_symbol),
+            sector_lookup=sector_lookup,
+            scanned_at=scan_at,
+        )
+        for r in scan_rows
+    ]
+    for row in enriched:
+        row["breakout_quality"] = breakout_quality_score(row)
 
     breakouts = [
         r for r in enriched
@@ -151,10 +218,13 @@ def build_radar_home(
             "confirmed_breakout", "near_breakout", "insufficient_confirmation", "extended_after_breakout",
         }
     ]
+    # Best-first: confirmed → near → others, then technical+fundamental quality
     breakouts.sort(key=lambda r: (
         r["breakout_state"] != "confirmed_breakout",
         r["breakout_state"] != "near_breakout",
         bool(r.get("chase_risk")),
+        -_f(r.get("breakout_quality")),
+        -_f(r.get("breakout_conviction")),
         -_f(r.get("score")),
         r.get("symbol", ""),
     ))
@@ -169,6 +239,7 @@ def build_radar_home(
     ]
     long_picks.sort(key=lambda r: (-_f(r.get("combined_score")), r.get("symbol", "")))
 
+    best_breakout = breakouts[0] if breakouts else None
     health = str(getattr(market, "health", "") or (market or {}).get("health", "Unavailable") if isinstance(market, Mapping) else "Unavailable")
     return {
         "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -182,6 +253,7 @@ def build_radar_home(
         "scan_scanned_at": scan_at,
         "long_term_scanned_at": lt_at,
         "universe_size": int((scan_payload or {}).get("universe_size", 0) or 0),
+        "best_breakout": best_breakout,
         "lanes": {
             "breakouts": breakouts[:12],
             "momentum": momentum[:12],

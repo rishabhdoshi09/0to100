@@ -21,12 +21,15 @@ def test_scan_store_preserves_sniper_fields():
         signals=["PRE_BREAKOUT"], reasons=["near pivot"], score=70,
         entry=101, stop=95, target=110, verdict="WATCH", chase_risk=False,
         pivot_distance_pct=1.2, avg_vol20=500000,
+        breakout_grade="A", breakout_conviction=72.0,
     )
     payload = build_scan_payload({"KAYNES": "Kaynes"}, [sig])
     row = payload["records"][0]
     assert "PreBreakout" in row["categories"]
     assert row["pivot_distance_pct"] == 1.2
     assert row["avg_vol20"] == 500000
+    assert row["breakout_grade"] == "A"
+    assert row["breakout_conviction"] == 72.0
 
 
 def test_build_watch_map_accepts_product_records(monkeypatch):

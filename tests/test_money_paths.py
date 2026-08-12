@@ -1932,6 +1932,7 @@ class TestProfitBooking:
         ap.arm()
         monkeypatch.setattr(ap, "_in_window", lambda now=None: True)
         # booking OFF — old wide 2×ATR stop, normal cap
+        ap.set_config(profit_book_pct=0.0, profit_book_rupees=0.0)
         ap.consider("HAL", 1000, 960, 80, 0.2, "Defence", "t", grade="A")
         t1 = te.recent_trades(1)[0]
         # booking ON + confirmed grade — tight stop, relaxed (bounded) cap
@@ -1966,6 +1967,56 @@ class TestProfitBooking:
         assert m(60, 0.25, "HIGH") == 1.25           # weak score → no stretch
         assert m(80, 0.25, "MEDIUM") == 1.5          # only HIGH stretches
 
+    def test_capital_pct_book_scales_with_quality(self, tmp_path, monkeypatch):
+        """Default AIM is 3% of pool; stronger tech+fund → higher aim."""
+        ta = TestAutopilot()
+        ap, te = ta._setup(tmp_path, monkeypatch)
+        ta._zero_costs(monkeypatch)
+        ap.set_config(profit_book_pct=3.0, profit_book_rupees=0.0,
+                      profit_book_min_pct=1.5, profit_trail_giveback_pct=0.6)
+        # 3% of ₹1L = ₹3000 base
+        assert ap._base_book_aim_rupees() == 3000.0
+        weak = ap._book_plan_for_trade(55, grade="", breakout_conviction=40)
+        strong = ap._book_plan_for_trade(
+            85, grade="A", breakout_conviction=80, fund_score=75,
+        )
+        assert weak["aim"] < 3000
+        assert strong["aim"] > weak["aim"]
+        assert strong["quality_mult"] > weak["quality_mult"]
+        assert 0.5 <= weak["quality_mult"] <= 1.25
+        assert 0.5 <= strong["quality_mult"] <= 1.25
+        # Absolute ₹ still overrides pct
+        ap.set_config(profit_book_rupees=1500.0)
+        assert ap._base_book_aim_rupees() == 1500.0
+        # Paper entry stores quality-scaled plan
+        ap.set_config(profit_book_rupees=0.0, profit_book_pct=3.0)
+        ap.arm()
+        monkeypatch.setattr(ap, "_in_window", lambda now=None: True)
+        assert ap.consider(
+            "HAL", 4500, 4300, 85, 0.25, "Defence", "t",
+            grade="A", breakout_conviction=80, fund_score=75,
+        ) is True
+        tid = str(te.recent_trades(1)[0]["id"])
+        plan = ap.get_status()["book_plans"][tid]
+        assert plan["aim"] == strong["aim"]
+        # Book when NET crosses quality-scaled aim + trail
+        qty = int(te.recent_trades(1)[0]["qty"])
+        aim = float(plan["aim"])
+        give = float(plan["giveback"])
+        monkeypatch.setattr(
+            "data.live_quotes.get_live_quotes",
+            lambda syms: {"HAL": {"price": 4500 + (aim + give + 200) / qty}},
+        )
+        ap._profit_book()
+        assert te.recent_trades(1)[0]["status"] == "PAPER_OPEN"
+        # Pull below trail_stop = peak - giveback
+        monkeypatch.setattr(
+            "data.live_quotes.get_live_quotes",
+            lambda syms: {"HAL": {"price": 4500 + (aim + 50) / qty}},
+        )
+        ap._profit_book()
+        assert te.recent_trades(1)[0]["status"] == "PAPER_WIN"
+
 
 class TestTelegramCommands:
     """📱 Phone commands: control anywhere, LIVE-arming never, chat-guarded."""
@@ -1992,6 +2043,9 @@ class TestTelegramCommands:
         assert ap.get_status()["max_trades_per_day"] == 10
         assert "1,500" in h("/book 1500")
         assert ap.get_status()["profit_book_rupees"] == 1500.0
+        assert "3%" in h("/book 3%")
+        assert ap.get_status()["profit_book_pct"] == 3.0
+        assert ap.get_status()["profit_book_rupees"] == 0.0
         assert "PAUSED" in h("/pause")
         assert ap.get_status()["armed"] is False
         assert "Already OFF" in h("/pause")          # idempotent
@@ -2046,7 +2100,7 @@ class TestTelegramCommands:
         assert h("") is None
         assert "Commands" in h("/help")
         assert "Commands" in h("/nonsense")          # unknown → help
-        assert "/book 1500" in h("/book abc")        # bad arg → usage hint
+        assert "/book 3%" in h("/book abc")        # bad arg → usage hint
 
     def test_chat_guard_blocks_strangers(self, monkeypatch):
         """Sirf configured chat-id se commands — baaki silently ignored."""
@@ -2158,7 +2212,7 @@ class TestDailyScoreboard:
         sb = ap.daily_scoreboard()
         assert sb["target"] == 15000.0 and "OFF" in sb["line"]
         # armed + booking off → purpose maango
-        ap.set_config(profit_book_rupees=0.0)
+        ap.set_config(profit_book_rupees=0.0, profit_book_pct=0.0)
         ap.arm()
         assert "/book" in ap.daily_scoreboard()["line"]
         # armed + booking on, koi trade nahi → slots ready
@@ -2226,7 +2280,7 @@ class TestFastExit:
         ap._book_tick()
         assert calls == {"book": 1, "review": 1}
         # booking off → exits phir bhi fast (review chalta hai)
-        ap.set_config(profit_book_rupees=0.0)
+        ap.set_config(profit_book_rupees=0.0, profit_book_pct=0.0)
         ap._book_tick()
         assert calls == {"book": 1, "review": 2}
         # market closed → kuch nahi

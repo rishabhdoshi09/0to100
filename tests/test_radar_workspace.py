@@ -64,6 +64,20 @@ def test_radar_home_builds_three_lanes():
                 "chase_risk": False,
                 "volume_ratio": 1.2,
                 "reasons": ["Strong volume"],
+                "breakout_grade": "B",
+                "breakout_conviction": 55,
+            },
+            {
+                "symbol": "BEST",
+                "score": 78,
+                "verdict": "BUY",
+                "status": "Ready to trade",
+                "signals": ["BREAKOUT_52W"],
+                "chase_risk": False,
+                "volume_ratio": 2.0,
+                "reasons": ["A-grade break"],
+                "breakout_grade": "A",
+                "breakout_conviction": 82,
             },
             {
                 "symbol": "BBB",
@@ -78,14 +92,36 @@ def test_radar_home_builds_three_lanes():
         "scanned_at": "2026-08-01T00:00:00+00:00",
         "records": [
             {"symbol": "QUAL", "classification": "QUALITY_COMPOUNDER", "combined_score": 88, "fundamental_coverage": 0.8},
+            {
+                "symbol": "BEST",
+                "classification": "QUALITY_COMPOUNDER",
+                "combined_score": 86,
+                "fundamental_coverage": 0.9,
+                "fundamental_score": 80,
+            },
         ],
     }
     market = {"health": "Healthy", "breadth": "60% adv", "trade_stance": "Open", "leaders": [], "laggards": []}
     payload = build_radar_home(scan_payload=scan, long_term_payload=long_term, market=market)
     assert payload["counts"]["momentum"] >= 1
     assert payload["counts"]["breakouts"] >= 1
-    assert payload["counts"]["long_term_picks"] == 1
+    assert payload["counts"]["long_term_picks"] == 2
     assert payload["lanes"]["momentum"][0]["symbol"] == "AAA"
+    # Among confirmed breakouts, BEST wins on grade/conviction + fundamentals
+    assert payload["best_breakout"]["symbol"] == "BEST"
+    assert payload["lanes"]["breakouts"][0]["symbol"] == "BEST"
+    assert payload["lanes"]["breakouts"][0]["fundamental_score"] == 80
+
+
+def test_breakout_quality_prefers_grade_and_fundamentals():
+    from product.radar_workspace import breakout_quality_score
+    weak = {"score": 90, "breakout_grade": "", "breakout_conviction": 40, "edge_r": 0}
+    strong = {
+        "score": 75, "breakout_grade": "A", "breakout_conviction": 80, "edge_r": 0.2,
+        "fundamental_score": 78, "fundamental_coverage": 0.8,
+        "classification": "QUALITY_COMPOUNDER",
+    }
+    assert breakout_quality_score(strong) > breakout_quality_score(weak)
 
 
 def test_enrich_scan_row_never_fakes_daily_change_label():

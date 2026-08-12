@@ -29,6 +29,10 @@ type RadarRow = ScannerWorkspaceRow & {
   company?: string
   classification?: string
   combined_score?: number
+  breakout_grade?: string
+  breakout_conviction?: number
+  breakout_quality?: number
+  fundamental_score?: number
 }
 
 const breakoutLabel: Record<string, string> = {
@@ -199,6 +203,41 @@ export function RadarHomeView(props: ExperienceViewProps & {
       </div>
 
       <LiveScanBanner scan={marketScan} depth={depth} label="Market scan" />
+
+      {radar?.best_breakout && (
+        <div className="radar-best-breakout" style={{ marginBottom: '1rem' }}>
+          <Panel
+            title={`BEST BREAKOUT · ${radar.best_breakout.symbol}`}
+            subtitle={
+              [
+                radar.best_breakout.breakout_grade
+                  ? `Grade ${radar.best_breakout.breakout_grade}`
+                  : null,
+                radar.best_breakout.breakout_conviction != null
+                  ? `Conv ${Math.round(Number(radar.best_breakout.breakout_conviction))}`
+                  : null,
+                radar.best_breakout.classification
+                  ? String(radar.best_breakout.classification).replace(/_/g, ' ')
+                  : null,
+              ].filter(Boolean).join(' · ') || 'Top ranked by technicals + fundamentals'
+            }
+          >
+            <button
+              type="button"
+              onClick={() => setSelected(String(radar.best_breakout?.symbol || ''))}
+              style={{ background: 'transparent', border: 0, color: 'inherit', cursor: 'pointer', padding: 0, textAlign: 'left' }}
+            >
+              Score {radar.best_breakout.score ?? '—'}
+              {radar.best_breakout.breakout_quality != null
+                ? ` · Quality ${Number(radar.best_breakout.breakout_quality).toFixed(0)}`
+                : ''}
+              {' · '}
+              {breakoutLabel[String(radar.best_breakout.breakout_state || '')]
+                || words(String(radar.best_breakout.breakout_state || radar.best_breakout.status || ''))}
+            </button>
+          </Panel>
+        </div>
+      )}
 
       <div className="radar-three-lanes">
         {laneCard('Breakouts', radar?.lanes.breakouts || [], radar?.counts.breakouts || 0)}

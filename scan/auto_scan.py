@@ -195,11 +195,11 @@ def _push_new_setups(picks: list[dict]) -> None:
         if not fresh and not pre:
             return
 
-        # ₹-book plan context (autopilot ka profit_book_rupees, agar set hai)
+        # ₹/%-book plan context (autopilot AIM, agar set hai)
         _book_amt = 0.0
         try:
-            from execution.autopilot import get_status as _ap_status
-            _book_amt = float(_ap_status().get("profit_book_rupees") or 0)
+            from execution.autopilot import _base_book_aim_rupees
+            _book_amt = float(_base_book_aim_rupees() or 0)
         except Exception:
             _book_amt = 0.0
 
