@@ -11,6 +11,10 @@ Label thresholds:
   horizon_10d : fwd_10d > +1.00% → BUY, < -1.00% → SELL
 
 Models saved to models/{symbol}_lgb_{horizon}.pkl
+
+Research note (Phase A / A2): generic leakage-safe horizon/target specs live in
+``research.horizons`` (``LEGACY_MH_TARGETS`` reproduces these thresholds).
+This module remains the live inference path; it is not auto-wired to promotion.
 """
 
 from __future__ import annotations
