@@ -5,12 +5,26 @@ Carries validated data state, the frozen strategy registry, per-strategy point-i
 history, the paper book, persisted runtime state, the event store, knowledge, and config. The
 `cycle_id` is deterministic over the identity fields, so re-running the same cycle is detectable
 and idempotent.
+
+Phase A / A4 adds optional research seams (`market_structure`, `network_risk`,
+`horizon_view`, `challenger_evidence`). They default to None, are excluded from
+`cycle_id()` identity, and must not alter Brain/execution behaviour until an
+evidence gate promotes a producer.
 """
 from __future__ import annotations
 
 import hashlib
 import json
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from research.intelligence.runtime.research_seams import (
+        ChallengerEvidenceView,
+        HorizonView,
+        MarketStructureView,
+        NetworkRiskView,
+    )
 
 
 @dataclass
@@ -40,6 +54,11 @@ class CycleContext:
     capability_failures: tuple[str, ...] = ()
     live_confirmation_required: bool = False
     fresh_live_symbols: frozenset[str] = field(default_factory=frozenset)
+    # ── Phase A / A4 research seams (optional; None = not computed) ──────────
+    market_structure: "MarketStructureView | None" = None
+    network_risk: "NetworkRiskView | None" = None
+    horizon_view: "HorizonView | None" = None
+    challenger_evidence: "ChallengerEvidenceView | None" = None
 
     def cycle_id(self) -> str:
         ident = {

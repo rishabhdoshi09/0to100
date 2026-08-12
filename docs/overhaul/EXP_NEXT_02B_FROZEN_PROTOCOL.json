@@ -1,0 +1,123 @@
+{
+  "experiment_id": "EXP-NEXT-02B",
+  "title": "Low-volatility effect — expanded certified panel retest",
+  "parent_experiment_id": "EXP-NEXT-02",
+  "parent_hypothesis_id": "5eb01b27fc75b885",
+  "parent_result": "INCONCLUSIVE",
+  "parent_next_action": "HOLD_NO_TUNING",
+  "frozen_at": "2026-08-11T17:40:00+00:00",
+  "frozen_before_outcome_inspection": true,
+  "protocol_version": "lowvol_expanded_retest.v1",
+  "code_hash": "exp_next_02b_lowvol_expanded_v1",
+  "snapshot_id": "2f683be0c73eaa33",
+  "parent_snapshot_id": "a7a9828ec37e09e4",
+  "global_trust_class": "OPERATIONAL_ONLY",
+  "scoped_certification": "SCOPED_RESEARCH_READY",
+  "path": "B_PRIMARY",
+  "universe": {
+    "mode": "FIXED_SCOPED_CERTIFIABLE_PANEL",
+    "n_symbols": 870,
+    "source": "manifest.panel of snapshot 2f683be0c73eaa33",
+    "excludes_uncertified_names": true,
+    "note": "TATASTEEL/BAJAJFINSV and other BLOCKED_CA names outside scope remain outside"
+  },
+  "hypothesis_plain": "Do calmer stocks give investors better returns for the amount of risk taken?",
+  "hypothesis": "Lowest trailing 20d realized-volatility quintile outperforms the highest-vol quintile on a 21d hold after CNC costs, with positive net mean return and harness PROMOTE on discovery; confirmation requires the same gates on the untouched confirmation partition.",
+  "null_hypothesis": "No positive cost-aware OOS low-minus-high vol edge after CNC costs; any gross gap is economically destroyed by costs, statistically underpowered, or fails confirmation.",
+  "volatility_definition": "cross-sectional realized volatility = std of daily simple returns over lookback window",
+  "lookback": 20,
+  "ranking": "inverse vol percentile rank; long top quintile (lowest vol), short bottom quintile (highest vol)",
+  "cohort_quantile": 0.2,
+  "rebalance_every_sessions": 21,
+  "holding_horizon_sessions": 21,
+  "benchmark": "equal-weight universe available on rebalance date (long-only Sharpe proxy comparison); primary portfolio is low-minus-high",
+  "transaction_costs": {
+    "product": "CNC",
+    "round_trip_cost_pct_points": 0.32,
+    "turnover_one_way_assumption": 1.0,
+    "cost_drag_fraction": 0.0032
+  },
+  "turnover_treatment": "conservative full one-way turnover charged each rebalance via round_trip_cost_pct",
+  "primary_metric": "mean_net of low-minus-high portfolio per rebalance (fraction)",
+  "secondary_metrics": [
+    "mean_gross",
+    "cost_drag",
+    "sharpe",
+    "psr",
+    "dsr",
+    "p_value",
+    "ci_95",
+    "hit_rate",
+    "profit_factor",
+    "max_drawdown",
+    "n",
+    "n_eff",
+    "long_only_sharpe_proxy_vs_ew"
+  ],
+  "statistical_significance": {
+    "harness": "research.harness.evaluate",
+    "min_n": 30,
+    "n_trials": 1,
+    "multiple_testing": "single primary specification; DSR n_trials=1 (no family-wise mining)"
+  },
+  "economic_significance": {
+    "mean_net_gt": 0.0,
+    "note": "Statistically significant but mean_net<=0 is FAIL. Gross-only edge destroyed by costs is FAIL. Trivial positive net without harness PROMOTE is not PASS."
+  },
+  "discovery_pass_criterion": "harness verdict PROMOTE AND mean_net > 0 on discovery partition",
+  "confirmation_criterion": "same gates on untouched confirmation partition",
+  "failure_criterion": "mean_net <= 0 OR harness REJECT on discovery (or confirmation FAIL after discovery PASS)",
+  "inconclusive_criterion": "mean_net > 0 but harness UNDERPOWERED/INCONCLUSIVE, or confirmation inconclusive",
+  "partitions": {
+    "method": "chronological; no random shuffle",
+    "burn_in_feature_history": "2020-01-01 → before discovery (lookback uses prior bars only)",
+    "discovery_start": "2021-01-01",
+    "discovery_end": "2023-12-31",
+    "confirm_start": "2024-01-01",
+    "confirm_end": "panel_end",
+    "partition_rationale": "Chosen from certified date coverage BEFORE outcome inspection so discovery and confirmation each have approx >=30 21d rebalance slots (disc~42, conf~31), enabling a defensible independent confirmation rather than capping at DISCOVERY_PASS_NEEDS_FUTURE_CONFIRMATION by construction.",
+    "approx_discovery_rebalances_pre_run": 42,
+    "approx_confirm_rebalances_pre_run": 31
+  },
+  "methodological_versioning_vs_EXP_NEXT_02": {
+    "unchanged": [
+      "vol lookback 20",
+      "quintile 0.2",
+      "rebalance 21",
+      "hold 21",
+      "CNC costs + full turnover assumption",
+      "long low-vol / short high-vol",
+      "harness min_n=30",
+      "single primary spec"
+    ],
+    "changed_and_why": [
+      "NEW experiment_id EXP-NEXT-02B — must not overwrite EXP-NEXT-02",
+      "snapshot 2f683be0c73eaa33 / 870-name scoped CERTIFIABLE panel — material evidence expansion (Path B primary)",
+      "chronological partitions resized to 2021-01-01→2023-12-31 discovery and 2024-01-01→end confirm — required so confirmation is independently powered on longer history; not a return-based tune",
+      "panel construction allows date-wise available names (outer coverage) — required because expanded panel is not a complete rectangular 29-name dropna-any block"
+    ],
+    "not_tuned_on_prior_inconclusive": true
+  },
+  "path_a_secondary": {
+    "enabled": true,
+    "role": "SECONDARY_ROBUSTNESS_EVIDENCE",
+    "snapshot_id": "a7a9828ec37e09e4",
+    "universe": "FIXED_PREREGISTERED_29",
+    "protocol_params": "same lookback/q/rebalance/hold/costs",
+    "partitions": "original EXP-NEXT-02 partitions (2024-08-01→2025-07-31 discovery; 2025-08-01→end confirm)",
+    "cannot_override_primary_verdict": true
+  },
+  "production_authority": false,
+  "if_confirmed": "ELIGIBLE_FOR_FOLLOWUP_VALIDATION only — no Brain/ranking/risk/execution changes",
+  "if_fail": "REJECT_CLOSE_BRANCH — no low-vol combinations or ML rescue",
+  "no_ml": true,
+  "closed_branches_not_reopened": [
+    "momentum",
+    "reversal",
+    "market-structure",
+    "network alpha",
+    "network interaction",
+    "logistic challenger",
+    "vol-compression"
+  ]
+}

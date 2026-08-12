@@ -254,7 +254,9 @@ class Supervisor:
                     self.failures.discard(H.OWNER_PAUSED)
                     try:
                         from research.auto_research.scheduler import get_brain
+                        from research.forward_evidence.service import ensure_armed
                         brain = get_brain(); brain.enable_paper_auto(); brain.engage_paper_autonomy()
+                        ensure_armed(enable_paper_auto=True)
                     except Exception:
                         pass
                 elif ctype == CTRL.PAUSE_NEW_PAPER_ENTRIES:
