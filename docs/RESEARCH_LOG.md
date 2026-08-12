@@ -554,3 +554,44 @@ guarantee.
 - **Precise blocker:** environment lacks outbound access to NSE sources; materialisation
   requires a data-capable host (or an operator-supplied bhav store + `ca_events.json` +
   `universe_history.json`). The economic hypothesis remains UNEVALUATED.
+
+---
+
+## EXP-FUND-03-FOLLOWUP — Earnings-growth robustness validation
+
+- **Hypothesis:** The CONFIRMED EXP-FUND-03 YoY basic-EPS growth effect is robust,
+  economically meaningful, implementable, cost-tolerant, and stable enough to
+  justify designing a future paper/shadow policy experiment.
+- **Null hypothesis:** Follow-up diagnostics show fragility, concentration, PIT
+  concern, irreproducibility, or economic non-viability.
+- **Parent (unchanged):** EXP-FUND-03 hypothesis `ef129d36b8f8378b`, result hash
+  `3d508563a5d81633`, final **CONFIRMED**, next action remained
+  `ELIGIBLE_FOR_FOLLOWUP_RESEARCH` (not overwritten).
+- **Pre-registered success (follow-up):** exact reproduction of parent discovery +
+  confirmation; then preregistered F3–F10 diagnostics without tuning the factor.
+  `ROBUST_CONFIRMED` only if reproduction, time-stability, cost survival, PIT
+  cleanliness, non-concentration, and clean placebos all clear.
+- **Data:** foundation `46ff79f58ee21c9e`; OHLCV `2f683be0c73eaa33`; CNC costs;
+  PitContract AVAILABLE_AT.
+- **Execution date:** 2026-08-11. Branch `cursor/earnings-growth-followup-80a2`.
+- **Status:** **INCONCLUSIVE_FOLLOWUP**.
+- **Reason for outcome:** Exact reproduction **PASS** (discovery n=66 net≈0.0071;
+  confirm n=37 net≈0.0042). Subperiods all POSITIVE; quintile monotonicity
+  supportive (Spearman≈0.9); base and +0.50pct-pt cost scenarios remain positive
+  (break-even ≈0.96 pct pts); liquidity/concentration acceptable; PIT restatement
+  look-ahead audit found **0** leak rows in the frozen package. However (1)
+  preregistered placebos were suspiciously strong (period_end visibility and
+  pre-AVAILABLE_AT return prediction), and (2) growth residualized vs PIT-safe
+  60d momentum loses the net edge — so useful unique information vs a simpler
+  known variable is not established. Does **not** clear `ROBUST_CONFIRMED`.
+- **Evidence generated:** `EXP_FUND_03_EARNINGS_GROWTH_FOLLOWUP.md`;
+  `docs/overhaul/EXP_FUND_03_FOLLOWUP_FROZEN_PROTOCOL.json`;
+  `docs/overhaul/EXP_FUND_03_FOLLOWUP_EVIDENCE.json`;
+  registry hypothesis `2617d6e4022e4ddb` (REJECTED vs robust-success criteria);
+  scientific-memory watch/negative note for follow-up (parent belief untouched).
+- **Evidence Level change:** none for production; no Brain/ranking/execution change.
+- **Decision made:** Do **not** design paper/shadow policy yet. Do **not** tune
+  the growth definition. Do **not** add ML / PE / quality. Do **not** begin Phase B.
+- **Next action:** `RECORD_EVIDENCE_NO_TUNING`.
+- **Supersedes / references:** follow-up to EXP-FUND-03; does not revise parent
+  CONFIRMED discovery/confirmation record.

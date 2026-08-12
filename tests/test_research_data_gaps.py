@@ -26,7 +26,9 @@ def test_ca_write_merge_and_object_schema(tmp_path, monkeypatch):
     assert status["available"] is True
     assert status["symbols"] == 1
     assert status["events"] == 1
-    assert status["research_grade"] is True
+    # Events alone do not earn research_grade — adjustment verify must PASS.
+    assert status["research_grade"] is False
+    assert status["adjustment_verified"] is False
 
     payload = json.loads(dest.read_text(encoding="utf-8"))
     assert payload["schema_version"] == 1
@@ -352,8 +354,10 @@ def test_bhav_bootstrap_cannot_overwrite_research_grade(tmp_path, monkeypatch):
     refused = UH.build_from_bhav(path=dest, force=True)
     assert refused["built"] is False
     assert refused["reason"] == "refusing_to_overwrite_research_grade"
-    assert refused["research_grade"] is True
+    # Official source is protected even when survivorship is still incomplete.
+    assert refused["source"] == "nse_official"
     assert refused["rows"] == 1
+    assert UH.is_research_grade_source(refused["source"]) is True
 
 
 def test_ensure_universe_history_ingests_incoming(tmp_path, monkeypatch):
