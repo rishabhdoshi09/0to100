@@ -156,6 +156,7 @@ if [[ "$vite_bound" != "1" ]]; then
 fi
 
 echo "[STACK] QuantTerm is ready. Open http://127.0.0.1:5173"
+echo "[STACK] Autonomy owns MARKET_SCAN + breakout sniper (needs Kite login for live ticks)."
 echo "[STACK] Keep this terminal open; Ctrl-C stops services started by this script."
 echo "[STACK] If the UI still errors, run: bash scripts/stop_quantterm.sh && bash scripts/run_quantterm_complete.sh"
 

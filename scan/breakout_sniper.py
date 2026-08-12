@@ -163,19 +163,46 @@ def build_watch_map(results: list[dict]) -> dict[int, dict]:
     """Token→level map from scan results (pre-breakout ≤2.5%%) + watchlist.
     Chase-risk / blow-off-top / zero-volume names are skipped — the sniper
     must not fire a 'confirmed breakout' on a stock the scanner would demote
-    for quality, or on a print with no volume evidence."""
+    for quality, or on a print with no volume evidence.
+
+    Accepts both unified-scanner rows (categories/PreBreakout) and product
+    scan-store records (signals/PRE_BREAKOUT, status Watch for breakout).
+    """
     targets: dict[str, dict] = {}
     for r in results:
-        if "PreBreakout" in (r.get("categories") or []) \
-                and 0 < (r.get("pivot_distance_pct") or 99) <= 2.5:
-            skip = _quality_skip(r)
-            if skip:
-                log.debug("sniper_quality_skip", symbol=r.get("symbol"), why=skip)
-                continue
-            targets[r["symbol"]] = {"trigger": float(r.get("entry") or 0),
-                                    "stop": float(r.get("stop") or 0),
-                                    "target": float(r.get("target") or 0),
-                                    "avg_vol": float(r.get("avg_vol20") or 0)}
+        cats = set(r.get("categories") or [])
+        sigs = [str(x) for x in (r.get("signals") or [])]
+        is_pre = (
+            "PreBreakout" in cats
+            or "PRE_BREAKOUT" in sigs
+            or str(r.get("status") or "") == "Watch for breakout"
+        )
+        dist = r.get("pivot_distance_pct")
+        try:
+            dist_f = float(dist) if dist is not None else 99.0
+        except (TypeError, ValueError):
+            dist_f = 99.0
+        # Product records without an explicit distance still qualify when the
+        # scanner already labelled them pre-breakout / watch-for-breakout.
+        if dist is None and is_pre:
+            dist_f = 0.0
+        if not (is_pre and 0 <= dist_f <= 2.5):
+            continue
+        if float(r.get("entry") or 0) <= 0:
+            continue
+        skip = _quality_skip(r)
+        if skip:
+            log.debug("sniper_quality_skip", symbol=r.get("symbol"), why=skip)
+            continue
+        sym = str(r.get("symbol") or "").upper()
+        if not sym:
+            continue
+        targets[sym] = {
+            "trigger": float(r.get("entry") or 0),
+            "stop": float(r.get("stop") or 0),
+            "target": float(r.get("target") or 0),
+            "avg_vol": float(r.get("avg_vol20") or 0),
+        }
     try:
         import sqlite3
         from pathlib import Path
