@@ -29,8 +29,10 @@ Money model (compounding):
   deployed  = Σ entry×qty of OPEN autopilot trades
   available = pool × (1 - cash_reserve_pct) - deployed
 
-Exits: every entry ships with GTT OCO — stop from the signal, target
-= entry × (1 + target_pct/100)  [default 3%, NOT the scanner target].
+Exits: every entry ships with GTT OCO — stop from the signal; under
+thesis_hold (default) the target is a wide runner ceiling and the
+position is held while technicals + fundamentals look good. Optional
+profit_book_* remains available as an explicit scalp AIM.
 
 State persists atomically to logs/autopilot.json.
 """
@@ -87,7 +89,7 @@ _DEFAULTS = {
     "sector_top_n": 3,
     "start_time": "09:30",
     "end_time": "14:45",
-    "target_pct": 3.0,             # aim +3%, not the scanner target
+    "target_pct": 3.0,             # scalp GTT % when thesis_hold is OFF
     "trailing_enabled": True,      # +breakeven_trigger% → stop moves to entry
     "breakeven_trigger_pct": 2.0,  # profit level that arms the breakeven trail
     "regime_gate": True,           # no new entries in DISTRIBUTION / BEAR tape
@@ -95,7 +97,7 @@ _DEFAULTS = {
     "max_chase_pct": 1.0,          # live price entry se itna upar → chase NAHI
     "conviction_sizing": True,     # risk scales 0.5×–1.5× with measured edge
     "adaptive_source_gate": True,  # pause a source its OWN record proves negative
-    "max_hold_days": 5,            # time-stop: stale flat positions recycle
+    "max_hold_days": 15,           # soft ceiling; thesis_hold skips if still good
     "time_nudges": {},             # {date: [symbols]} LIVE stale-nudge dedupe
     "trades_today": {},            # {YYYY-MM-DD: count}
     "traded_symbols": {},          # {YYYY-MM-DD: [symbols]}
@@ -108,11 +110,12 @@ _DEFAULTS = {
     "considered": {},              # {YYYY-MM-DD: candidates seen}
     "preset": "Balanced",          # aggressiveness dial (frequency, not safety)
     "brain_gate": True,            # Brain STAND_ASIDE → pause new entries (survival)
-    # Profit booking: default AIM = 3% of pool (paper + live math). Absolute
-    # ₹ override (profit_book_rupees) still wins when >0 (legacy /book 1500).
-    # Quality of technicals + fundamentals scales the per-trade AIM 0.5×–1.25×.
-    "profit_book_pct": 3.0,        # % of pool AIM (0 + rupees 0 = booking OFF)
-    "profit_book_rupees": 0.0,     # >0 → absolute ₹ AIM overrides pct mode
+    # Hold while technicals + fundamentals look good (NOT a fixed ₹/3% scalp).
+    # Optional profit_book_* remains available if the user wants a scalp AIM.
+    "thesis_hold": True,
+    "runner_target_pct": 10.0,     # wide GTT ceiling under thesis_hold
+    "profit_book_pct": 0.0,        # OFF by default — thesis hold, not scalp
+    "profit_book_rupees": 0.0,     # >0 → absolute ₹ AIM (legacy /book 1500)
     "profit_book_min_pct": 1.5,    # floor as % of pool (pct mode)
     "profit_book_min_rupees": 1000.0,  # hard floor when absolute ₹ mode
     "profit_trail_giveback_pct": 0.6,  # giveback as % of pool (pct mode)
@@ -120,6 +123,7 @@ _DEFAULTS = {
     "book_nudges": {},             # {date: [symbols]} LIVE book-alert dedupe
     "trail_peaks": {},             # {trade_id: peak NET ₹} — trailing state
     "book_plans": {},              # {trade_id: {aim,floor,giveback,quality_mult}}
+    "thesis_nudges": {},           # {date: [symbols]} LIVE thesis-exit dedupe
     "symbol_memory_gate": True,    # 🧠 serial false-breaker naam dobara nahi
 }
 
@@ -382,8 +386,9 @@ def set_config(**kwargs) -> None:
         "sector_top_n": (1, 8),
         "target_pct": (1.0, 10.0),
         "breakeven_trigger_pct": (0.5, 8.0),
-        "max_hold_days": (2, 15),
+        "max_hold_days": (2, 30),
         "max_chase_pct": (0.25, 5.0),
+        "runner_target_pct": (5.0, 25.0),
         "profit_book_pct": (0.0, 15.0),
         "profit_book_rupees": (0.0, 100000.0),
         "profit_book_min_pct": (0.0, 10.0),
@@ -392,7 +397,8 @@ def set_config(**kwargs) -> None:
         "profit_trail_giveback_rupees": (50.0, 50000.0),
     }
     bools = ("trailing_enabled", "regime_gate", "conviction_sizing",
-             "adaptive_source_gate", "brain_gate", "symbol_memory_gate")
+             "adaptive_source_gate", "brain_gate", "symbol_memory_gate",
+             "thesis_hold")
     with _lock:
         s = _load()
         for k, v in kwargs.items():
@@ -492,8 +498,11 @@ def arm(confirm_phrase: str = "") -> tuple[bool, str]:
     _notify(f"ARMED in <b>{s['mode']}</b> mode.\nPool: ₹{pool:,.0f} · "
             f"max deploy: ₹{pool * (1 - s['cash_reserve_pct']):,.0f} "
             f"(reserve {s['cash_reserve_pct']*100:.0f}% untouched)\n"
-            f"Entries {s['start_time']}–{s['end_time']} · target +{s['target_pct']}% · "
-            f"max {s['max_trades_per_day']} trades/day")
+            f"Entries {s['start_time']}–{s['end_time']} · "
+            + ("thesis-hold (exit jab tech/fund tootein)"
+               if s.get("thesis_hold", True)
+               else f"target +{s['target_pct']}%")
+            + f" · max {s['max_trades_per_day']} trades/day")
     try:
         start_book_monitor()               # ⚡ fast exits armed hote hi zinda
     except Exception:
@@ -1050,7 +1059,8 @@ def consider(symbol: str, entry: float, stop: float, score: float,
              ev_conf=None, grade: str = "",
              breakout_conviction: float = 0.0,
              fund_score=None, rsi: float = 0.0,
-             volume_ratio: float = 0.0) -> bool:
+             volume_ratio: float = 0.0,
+             signal_target: float = 0.0) -> bool:
     """Full gate → size → execute path. Returns True if a trade was placed.
 
     Thread-safe: scanner + sniper hooks may call this concurrently; the
@@ -1062,7 +1072,7 @@ def consider(symbol: str, entry: float, stop: float, score: float,
         return _consider_locked(symbol, entry, stop, score, edge, sector,
                                 source, ev_pct, p_win, ev_conf, grade,
                                 breakout_conviction, fund_score, rsi,
-                                volume_ratio)
+                                volume_ratio, signal_target)
 
 
 def _consider_locked(symbol: str, entry: float, stop: float, score: float,
@@ -1070,7 +1080,8 @@ def _consider_locked(symbol: str, entry: float, stop: float, score: float,
                      ev_conf=None, grade: str = "",
                      breakout_conviction: float = 0.0,
                      fund_score=None, rsi: float = 0.0,
-                     volume_ratio: float = 0.0) -> bool:
+                     volume_ratio: float = 0.0,
+                     signal_target: float = 0.0) -> bool:
     def _jlog(decision: str, reason: str = "") -> None:
         # Evidence infrastructure: EVERY decision journaled with its
         # prediction — even rejections. "not armed" skipped (pure noise).
@@ -1143,15 +1154,8 @@ def _consider_locked(symbol: str, entry: float, stop: float, score: float,
             return False
         entry = live_entry
 
-        # ⚡ Fast-book stop GEOMETRY — ₹-booking ka speed lever, risk nahi:
-        # needed-move% = (book ÷ risk-budget) × stop-width%. Scanner ka 2×ATR
-        # swing-stop wide hai → chhoti qty → bada move chahiye (slow). Ek
-        # CONFIRMED A/B break (ya sniper confirm) ka structure pivot ke paas
-        # tight stop deta hai → SAME rupee risk pe ~2.5× qty → 3% capital
-        # aim ke liye ~2.5× chhota move. Floor 0.8% (tick-noise se neeche
-        # kabhi nahi), aur original se LOOSE kabhi nahi. Unconfirmed setups
-        # apna wide swing-stop rakhte hain — structure nahi toh tightening
-        # nahi.
+        # ⚡ Fast-book stop GEOMETRY — only when an explicit ₹/% book AIM is
+        # armed (optional scalp). Default thesis_hold keeps the scanner stop.
         _fast_book = False
         _plan = _book_plan_for_trade(
             score, grade, breakout_conviction, fund_score, s,
@@ -1164,7 +1168,18 @@ def _consider_locked(symbol: str, entry: float, stop: float, score: float,
                 stop = round(tight, 1)
                 _fast_book = True
 
-        target = round(entry * (1 + s["target_pct"] / 100), 1)
+        # Thesis hold: wide runner GTT ceiling (hold while tech+fund good).
+        # Scalp mode: fixed target_pct cut.
+        if s.get("thesis_hold", True):
+            from execution.thesis_hold import runner_target as _runner_target
+            target = _runner_target(
+                entry, float(signal_target or 0),
+                float(s.get("runner_target_pct") or 10.0),
+            )
+            _tgt_bit = f"runner +{(target / entry - 1) * 100:.0f}%"
+        else:
+            target = round(entry * (1 + s["target_pct"] / 100), 1)
+            _tgt_bit = f"+{s['target_pct']}%"
         mult = (_conviction_multiplier(score, edge, ev_conf)
                 if s.get("conviction_sizing", True) else 1.0)
         qty = _size(entry, stop, mult, cap_mult=2.0 if _fast_book else 1.0)
@@ -1238,8 +1253,9 @@ def _consider_locked(symbol: str, entry: float, stop: float, score: float,
                       f"[{source}] [{s['mode']}] [conviction {mult:.2f}×]"
                       f"{_book_bit}")
         _notify(f"BUY <b>{qty} × {symbol}</b> @ ₹{entry:,.1f} ({s['mode']})\n"
-                f"stop ₹{stop:,.1f} · target ₹{target:,.1f} (+{s['target_pct']}%) "
-                f"· via {source}")
+                f"stop ₹{stop:,.1f} · target ₹{target:,.1f} ({_tgt_bit}) "
+                f"· via {source}"
+                + (" · thesis-hold" if s.get("thesis_hold", True) else ""))
         _jlog("TAKEN")
         return True
     except Exception as exc:
@@ -1304,7 +1320,8 @@ def on_setups(results: list[dict]) -> None:
                  breakout_conviction=float(r.get("breakout_conviction") or 0),
                  fund_score=float(fund) if fund is not None else None,
                  rsi=rsi,
-                 volume_ratio=float(r.get("volume_ratio") or 0))
+                 volume_ratio=float(r.get("volume_ratio") or 0),
+                 signal_target=float(r.get("target") or 0))
 
 
 def on_breakout(hit: dict) -> None:
@@ -1319,7 +1336,8 @@ def on_breakout(hit: dict) -> None:
         sector = ""
     consider(symbol=hit["symbol"], entry=float(hit.get("ltp") or hit.get("trigger") or 0),
              stop=float(hit.get("stop") or 0), score=70.0,
-             edge=None, sector=sector, source="sniper")
+             edge=None, sector=sector, source="sniper",
+             signal_target=float(hit.get("target") or 0))
 
 
 # ── P&L snapshot: frontend ke liye ek sach — live, realized, day ─────────────
@@ -1587,7 +1605,11 @@ def daily_scoreboard() -> dict:
     if not s.get("armed"):
         line = "🔴 Machine OFF — ARM karo (ya /resume), warna aaj ka target ₹0."
     elif book <= 0:
-        line = "⚪ Booking OFF — /book 3% set karo, machine ko target do."
+        if s.get("thesis_hold", True):
+            line = ("🟢 Thesis-hold ON — jab tak technicals/fundamentals "
+                    "theek hain hold; optional scalp: /book 3% ya /book 1500.")
+        else:
+            line = "⚪ Booking OFF — /book 3% set karo, machine ko target do."
     elif booked_net >= target > 0:
         line = f"🏆 FULL HOUSE — target ₹{target:,.0f} poora! Machine ne kaam kar diya."
     elif booked_n > 0:
@@ -1638,9 +1660,11 @@ def _book_tick() -> int:
             review_positions()
         except Exception:
             pass
-        # ₹/%-booking turant
+        # ₹/%-booking turant (optional scalp — OFF by default)
         if _booking_enabled(s):
             _profit_book()
+        # Thesis hold exits when tech/fund break
+        _thesis_exits()
         # 🐕 cross-watch: scan worker mar jaye toh yahan se khabar jaye
         # (watchdog ka apna 5-min throttle hai — yahan sasta hai)
         try:
@@ -1677,13 +1701,115 @@ def start_book_monitor() -> None:
     log.info("fast_exit_monitor_started")
 
 
+def _lookup_thesis_context(symbol: str) -> tuple[dict | None, dict | None]:
+    """Latest scan + long-term fund rows for a symbol (best-effort, no invent)."""
+    scan_row = None
+    fund_row = None
+    try:
+        from product.scan_store import load_scan
+        payload = load_scan() or {}
+        for row in payload.get("records") or []:
+            if str(row.get("symbol") or "").upper() == symbol.upper():
+                scan_row = dict(row)
+                break
+    except Exception:
+        pass
+    try:
+        from product.long_term_store import load_long_term_scan
+        lt = load_long_term_scan() or {}
+        for row in lt.get("records") or []:
+            if str(row.get("symbol") or "").upper() == symbol.upper():
+                fund_row = dict(row)
+                break
+    except Exception:
+        pass
+    return scan_row, fund_row
+
+
+def _thesis_status(t: dict, live_px: float) -> tuple[bool, str]:
+    from execution.thesis_hold import evaluate_thesis
+    scan_row, fund_row = _lookup_thesis_context(str(t.get("symbol") or ""))
+    return evaluate_thesis(
+        entry=float(t.get("entry_price") or 0),
+        stop=float(t.get("stop_price") or 0),
+        live_px=float(live_px or 0),
+        scan_row=scan_row,
+        fund_row=fund_row,
+    )
+
+
+def _thesis_exits() -> None:
+    """Exit (paper) / nudge (live) when technicals or fundamentals break.
+
+    Default hold policy: not a fixed ₹/% scalp — keep the trade while the
+    thesis is intact, leave when it isn't.
+    """
+    s = _load()
+    if not s.get("thesis_hold", True):
+        return
+    opens = _open_autopilot_trades()
+    if not opens:
+        return
+    try:
+        from data.live_quotes import get_live_quotes
+        live = get_live_quotes(sorted({t["symbol"] for t in opens}))
+    except Exception:
+        return
+    today = _ist_today().isoformat()
+    for t in opens:
+        q = live.get(t["symbol"])
+        if not (q and q.get("price")):
+            continue
+        px = float(q["price"])
+        ok, why = _thesis_status(t, px)
+        if ok:
+            continue
+        entry = float(t["entry_price"] or 0)
+        qty = int(t["qty"] or 0)
+        pnl = (px - entry) * qty if entry and qty else 0.0
+        if t["mode"] == "PAPER":
+            _ensure_exit_col()
+            outcome = "PAPER_WIN" if pnl >= 0 else "PAPER_LOSS"
+            _update_trade(
+                t["id"], "exit_price=?, status=?, note=note||?",
+                (px, outcome,
+                 f" | thesis-exit ({why}) NET ₹{pnl:+,.0f} @ ₹{px:,.1f}"),
+            )
+            _log_activity(
+                f"{'💰' if pnl >= 0 else '🔻'} THESIS EXIT {t['symbol']} "
+                f"₹{pnl:+,.0f} — {why}"
+            )
+            _notify(
+                f"{'💰' if pnl >= 0 else '🔻'} <b>THESIS EXIT</b> — "
+                f"{t['symbol']} @ ₹{px:,.1f}\n{why}"
+            )
+        else:
+            with _lock:
+                st = _load()
+                nudged = dict(st.get("thesis_nudges") or {})
+                done = list(nudged.get(today, []))
+                if t["symbol"] in done:
+                    continue
+                st["thesis_nudges"] = {today: done + [t["symbol"]]}
+            _save()
+            _notify(
+                f"⚠️ <b>{t['symbol']} thesis toot gaya</b> "
+                f"(LTP ₹{px:,.1f}, P&amp;L ₹{pnl:+,.0f}).\n{why}\n"
+                f"LIVE auto-sell nahi — GTT/ticket se exit tumhara call."
+            )
+
+
 def _time_stop() -> None:
     """Positions older than max_hold_days that hit neither stop nor target:
     PAPER → close at market (capital recycles, outcome recorded honestly).
     LIVE  → Telegram nudge only, once per day — autonomous selling of a
-    live position is the user's call, not the machine's."""
+    live position is the user's call, not the machine's.
+
+    Under thesis_hold: skip the time-force exit while technicals/fundamentals
+    still look good — hold the runner.
+    """
     s = _load()
-    max_days = int(s.get("max_hold_days", 5))
+    max_days = int(s.get("max_hold_days", 15))
     stale = []
     for t in _open_autopilot_trades():
         try:
@@ -1706,6 +1832,10 @@ def _time_stop() -> None:
             continue
         px = float(q["price"])
         entry = float(t["entry_price"] or 0)
+        if s.get("thesis_hold", True):
+            ok, _why = _thesis_status(t, px)
+            if ok:
+                continue  # still healthy — keep holding
         if t["mode"] == "PAPER":
             _ensure_exit_col()
             status = "PAPER_WIN" if px >= entry else "PAPER_LOSS"
@@ -1714,7 +1844,7 @@ def _time_stop() -> None:
                            f" | time-stop day {max_days} @ ₹{px:,.1f}"))
             _log_activity(f"⏳ TIME-STOP {t['symbol']} @ ₹{px:,.1f} "
                           f"(₹{(px-entry)*int(t['qty'] or 0):+,.0f}) — "
-                          f"{max_days} din flat, capital recycle")
+                          f"{max_days} din, thesis weak/flat, capital recycle")
         else:
             with _lock:
                 nudged = _load().setdefault("time_nudges", {})
@@ -1848,6 +1978,7 @@ def review_cycle() -> None:
         _close_crossed_live_trades() # …price-cross estimate as fallback
         _trail_stops()
         _profit_book()
+        _thesis_exits()
         _time_stop()
         _circuit_breaker()
     except Exception as exc:

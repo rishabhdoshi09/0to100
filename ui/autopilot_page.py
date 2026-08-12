@@ -276,11 +276,17 @@ def _render_india_autopilot() -> None:
                      "nikla toh woh source khud pause ho jata hai")
         with u3:
             hold_days = st.number_input(
-                "Time-stop (days)", 2, 15, int(s.get("max_hold_days", 5)),
+                "Time-stop (days)", 2, 30, int(s.get("max_hold_days", 15)),
                 key="ap_hold",
-                help="Itne din flat → PAPER close (capital recycle), "
-                     "LIVE pe sirf Telegram nudge")
-        # 🎯 Target % — backtest ka evidence saath mein
+                help="Soft ceiling. With thesis-hold ON, a healthy runner is "
+                     "NOT force-closed just because days elapsed.")
+        thesis_on = st.toggle(
+            "📌 Thesis hold (recommended)",
+            value=bool(s.get("thesis_hold", True)), key="ap_thesis",
+            help="Hold while technicals + fundamentals look good. Exit when "
+                 "RSI blows off, setup breaks, or fundamentals collapse. "
+                 "NOT a fixed ₹1500 / 3% scalp.")
+        # 🎯 Target % — used when thesis_hold is OFF; runner ceiling when ON
         _rec_txt = ""
         try:
             from scan.signal_backtest import load_report
@@ -295,12 +301,20 @@ def _render_india_autopilot() -> None:
             pass
         tg1, tg2 = st.columns(2)
         with tg1:
-            target_pct = st.slider(
-                "Profit target (%)", 1.0, 10.0, float(s.get("target_pct", 3.0)),
-                0.5, key="ap_target",
-                help=(_rec_txt or "Har entry ka GTT target = LIVE entry price "
-                                  "× (1 + yeh %). Backtest chalao toh "
-                                  "evidence-backed recommendation dikhegi"))
+            if thesis_on:
+                runner_pct = st.slider(
+                    "Runner GTT ceiling (%)", 5.0, 25.0,
+                    float(s.get("runner_target_pct", 10.0)), 0.5,
+                    key="ap_runner",
+                    help="Wide exchange-side ceiling so a healthy runner is "
+                         "not cut early. Real exit = thesis break / trail / stop.")
+                target_pct = float(s.get("target_pct", 3.0))
+            else:
+                target_pct = st.slider(
+                    "Profit target (%)", 1.0, 10.0, float(s.get("target_pct", 3.0)),
+                    0.5, key="ap_target",
+                    help=(_rec_txt or "Scalp mode: GTT target = entry × (1+%)."))
+                runner_pct = float(s.get("runner_target_pct", 10.0))
         with tg2:
             chase_pct = st.slider(
                 "Max chase (%)", 0.25, 5.0,
@@ -308,16 +322,18 @@ def _render_india_autopilot() -> None:
                 help="Live price signal-entry se isse zyada upar → trade "
                      "SKIP. Bhaagti train ka peecha nahi — extension pe "
                      "buy karna edge kha jata hai")
+        st.caption(
+            "Optional scalp booking (usually leave at 0 — thesis-hold is the default):"
+        )
         book_pct = st.number_input(
-            "💰 Profit-book AIM (% of pool, 0 = off)", 0.0, 15.0,
-            float(s.get("profit_book_pct", 3.0)), 0.5, key="ap_book_pct",
-            help="Default 3% of autopilot pool. Technicals + fundamentals "
-                 "scale each trade 0.5×–1.25×. Absolute ₹ below overrides "
-                 "when >0 (legacy). Aim cross → trailing ARM.")
+            "💰 Optional profit-book AIM (% of pool, 0 = off)", 0.0, 15.0,
+            float(s.get("profit_book_pct", 0.0)), 0.5, key="ap_book_pct",
+            help="Optional. Default OFF. Thesis-hold exits on tech/fund break "
+                 "instead of a fixed profit AIM.")
         book_rs = st.number_input(
-            "💰 Absolute ₹ override (0 = use % above)", 0.0, 100000.0,
+            "💰 Absolute ₹ override (0 = use % / thesis-hold)", 0.0, 100000.0,
             float(s.get("profit_book_rupees", 0.0)), 250.0, key="ap_book",
-            help="Legacy fixed-rupee AIM. When >0 this overrides the % mode.")
+            help="Legacy fixed-rupee AIM. When >0 this overrides % mode.")
         bf1, bf2 = st.columns(2)
         with bf1:
             book_floor_pct = st.number_input(
@@ -362,6 +378,8 @@ def _render_india_autopilot() -> None:
                        conviction_sizing=conv_on,
                        adaptive_source_gate=adapt_on,
                        max_hold_days=int(hold_days),
+                       thesis_hold=bool(thesis_on),
+                       runner_target_pct=float(runner_pct),
                        target_pct=float(target_pct),
                        max_chase_pct=float(chase_pct),
                        profit_book_pct=float(book_pct),

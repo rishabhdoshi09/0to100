@@ -11,7 +11,7 @@
   /aggressive    — zyada trades (10/day tak, wider net)
   /balanced      — default discipline
   /conservative  — sirf A+ setups, kam trades
-  /book 3%       — har trade ~3% of pool pe book (quality-scaled; 0 = off)
+  /book 3%       — optional scalp AIM (default OFF; thesis-hold is default)
   /funnel        — aaj kitne dekhe/liye/kyun reject — poora hisaab
   /brain         — abhi ka Brain verdict on demand
   /help          — ye list
@@ -63,6 +63,7 @@ def _status() -> str:
             f"{s.get('max_trades_per_day', 0)} · "
             f"Preset: {s.get('preset', 'Balanced')}\n"
             f"Pool: ₹{s.get('pool', 0):,.0f} · "
+            f"Hold: {'thesis' if s.get('thesis_hold', True) else 'scalp'} · "
             f"Book: {s.get('profit_book_pct', 0):g}% pool"
             + (f" / ₹{s.get('profit_book_rupees', 0):,.0f} abs"
                if float(s.get('profit_book_rupees') or 0) > 0 else "")
@@ -233,8 +234,8 @@ _HELP = ("📱 <b>Commands</b>\n"
          "/pause — 🛑 naye trades band\n"
          "/resume — 🟢 wapas chalu (paper)\n"
          "/aggressive · /balanced · /conservative — kitne trades\n"
-         "/book 3% — NET aim = 3% of pool (tech+fund scale 0.5–1.25×); "
-         "/book 1500 absolute ₹ override; /book 0 = off\n"
+         "/book 3% — optional scalp NET AIM (default is thesis-hold: keep while "
+         "tech+fund look good); /book 1500 absolute ₹; /book 0 = off\n"
          "/funnel — aaj ka hisaab (kyun kam trades)\n"
          "/brain — abhi ka verdict")
 

@@ -817,6 +817,7 @@ class TestAutopilot:
 
     def test_gates_and_three_pct_target(self, tmp_path, monkeypatch):
         ap, te = self._setup(tmp_path, monkeypatch)
+        ap.set_config(thesis_hold=False, target_pct=3.0)  # scalp mode
         ok, _ = ap.arm()
         assert ok
         monkeypatch.setattr(ap, "_in_window", lambda now=None: True)
@@ -824,7 +825,7 @@ class TestAutopilot:
         assert ap.consider("X", 500, 480, 80, 0.2, "Cement", "t") is False
         assert ap.consider("HAL", 4500, 4300, 45, 0.2, "Defence", "t") is False
         assert ap.consider("HAL", 4500, 4300, 80, -0.1, "Defence", "t") is False
-        # valid → placed, tagged, +3% target (not scanner target)
+        # valid → placed, tagged, +3% target (scalp mode)
         assert ap.consider("HAL", 4500, 4300, 80, 0.2, "Defence", "t") is True
         t = te.recent_trades(1)[0]
         assert "AUTOPILOT" in t["note"]
@@ -1112,6 +1113,7 @@ class TestAutopilot:
         """Placed trade's entry/target = LIVE price, not the signal's."""
         import data.live_quotes as lq
         ap, te = self._setup(tmp_path, monkeypatch)
+        ap.set_config(thesis_hold=False, target_pct=3.0)
         monkeypatch.setattr(ap, "_anchor_live", self._real_anchor)  # real one
         monkeypatch.setattr(lq, "get_live_quotes",
                             lambda syms, ttl=8.0: {"HAL": {"price": 4530.0}})
@@ -1281,6 +1283,7 @@ class TestAutopilot:
         from datetime import datetime as dt, timedelta
         import data.live_quotes as lq
         ap, te = self._setup(tmp_path, monkeypatch)
+        ap.set_config(max_hold_days=5, thesis_hold=False)
         ap.arm()
         monkeypatch.setattr(ap, "_in_window", lambda now=None: True)
         assert ap.consider("HAL", 500, 450, 80, 0.2, "Defence", "t") is True
