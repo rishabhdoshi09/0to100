@@ -147,9 +147,9 @@ def _book(arg: str) -> str:
 
 def _trade_now() -> str:
     """📈 'Abhi ek trade lo' — next 15-min scan ka wait nahi. Store ka
-    best untraded BUY (prime/EV-ranked) autopilot ke SAARE gates se guzaar
-    ke place karne ki koshish. Gates fail hue toh imaandaar wajah batata
-    hai — force nahi, sirf timing manual."""
+    best sniper-quality BUY (RSI≤70, volume prioritized) autopilot ke
+    SAARE gates se guzaar ke place karne ki koshish. Gates fail hue toh
+    imaandaar wajah batata hai — force nahi, sirf timing manual."""
     from execution.autopilot import get_status, consider
     s = get_status()
     if not s.get("armed"):
@@ -160,23 +160,46 @@ def _trade_now() -> str:
     try:
         from scan.auto_scan import get_results
         from scan.ev_engine import ev_rank_key
+        from product.radar_workspace import (
+            MIN_VOLUME_RATIO,
+            RSI_BLOWOFF,
+            breakout_quality_score,
+            is_sniper_breakout_candidate,
+            _volume_ratio,
+        )
         results, _n, _ts, _st = get_results()
     except Exception:
         return "Scan store abhi khali — thodi der mein /trade dobara."
     buys = [r for r in results if r.get("verdict") in ("STRONG BUY", "BUY")]
     if not buys:
         return "Abhi koi BUY setup store mein nahi. /status se dekho."
-    # prime first, phir conservative-EV/conviction
-    buys.sort(key=lambda r: (bool(r.get("prime")), ev_rank_key(r)),
-              reverse=True)
+    # Sniper-first · volume ≥1× · ignore RSI blow-off · then prime/EV
+    buys.sort(
+        key=lambda r: (
+            float(r.get("rsi") or 0) <= RSI_BLOWOFF,
+            is_sniper_breakout_candidate(r),
+            not (0 < _volume_ratio(r) < MIN_VOLUME_RATIO),
+            bool(r.get("prime")),
+            breakout_quality_score(r),
+            ev_rank_key(r),
+        ),
+        reverse=True,
+    )
     for r in buys[:8]:                          # top few try — pehla jo pass ho
+        rsi = float(r.get("rsi") or 0)
+        if rsi > RSI_BLOWOFF:
+            continue
         placed = consider(
             symbol=r["symbol"],
             entry=float(r.get("entry") or r.get("price") or 0),
             stop=float(r.get("stop") or 0), score=float(r.get("score") or 0),
             edge=r.get("edge_r"), sector=r.get("sector") or "",
             source="manual", ev_pct=r.get("ev_pct"), p_win=r.get("p_win"),
-            ev_conf=r.get("ev_conf"), grade=str(r.get("breakout_grade") or ""))
+            ev_conf=r.get("ev_conf"), grade=str(r.get("breakout_grade") or ""),
+            breakout_conviction=float(r.get("breakout_conviction") or 0),
+            rsi=rsi,
+            volume_ratio=float(r.get("volume_ratio") or 0),
+        )
         if placed:
             return (f"✅ Trade liya: <b>{r['symbol']}</b> — gates paar, order "
                     f"lag gaya. /status se dekho.")

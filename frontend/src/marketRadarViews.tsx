@@ -207,7 +207,7 @@ export function RadarHomeView(props: ExperienceViewProps & {
       {radar?.best_breakout && (
         <div className="radar-best-breakout" style={{ marginBottom: '1rem' }}>
           <Panel
-            title={`BEST BREAKOUT · ${radar.best_breakout.symbol}`}
+            title={`BEST SNIPER BREAKOUT · ${radar.best_breakout.symbol}`}
             subtitle={
               [
                 radar.best_breakout.breakout_grade
@@ -216,10 +216,16 @@ export function RadarHomeView(props: ExperienceViewProps & {
                 radar.best_breakout.breakout_conviction != null
                   ? `Conv ${Math.round(Number(radar.best_breakout.breakout_conviction))}`
                   : null,
+                radar.best_breakout.rsi != null
+                  ? `RSI ${Math.round(Number(radar.best_breakout.rsi))}`
+                  : null,
+                radar.best_breakout.volume_ratio != null
+                  ? `Vol ${Number(radar.best_breakout.volume_ratio).toFixed(1)}×`
+                  : null,
                 radar.best_breakout.classification
                   ? String(radar.best_breakout.classification).replace(/_/g, ' ')
                   : null,
-              ].filter(Boolean).join(' · ') || 'Top ranked by technicals + fundamentals'
+              ].filter(Boolean).join(' · ') || 'Sniper pool · RSI≤70 · volume prioritized'
             }
           >
             <button

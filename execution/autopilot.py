@@ -130,6 +130,8 @@ def _reject_category(reason: str) -> str:
     r = (reason or "").lower()
     if "brain" in r or "stand_aside" in r: return "Brain STAND_ASIDE (survival)"
     if "symbol memory" in r:      return "symbol memory (serial false-breaker)"
+    if "rsi" in r or "blow-off" in r: return "RSI blow-off (ignored)"
+    if "volume" in r and "1×" in (reason or ""): return "volume < 1× (priority niche)"
     if "time window" in r:        return "time window (market band/settle)"
     if "daily trade limit" in r:  return "daily limit hit (max/day)"
     if "max open positions" in r: return "position limit full"
@@ -732,13 +734,18 @@ def _open_in_sector(sector: str) -> int:
         return 0
 
 
-def _passes_gates(symbol: str, score: float, edge, sector: str) -> str | None:
+def _passes_gates(symbol: str, score: float, edge, sector: str,
+                  rsi: float = 0.0, volume_ratio: float = 0.0,
+                  source: str = "") -> str | None:
     """None = all gates pass; otherwise the (logged) rejection reason."""
     s = _load()
     if not s["armed"]:
         return "not armed"
     if not _in_window():
         return f"time window ({s['start_time']}-{s['end_time']}) ke bahar"
+    # Fewer, higher-win: RSI blow-off ignored (same ceiling as sniper/scanner)
+    if rsi > 70:
+        return f"RSI {rsi:.0f} — blow-off-top, ignore (win-rate filter)"
     # Whole-board survival veto: if the Brain reads STAND_ASIDE (over-risked
     # book, or hostile tape + negative edge) no new entry today — regardless of
     # how good this one setup looks. Cached (~5 min); demote-only, never loosens.
@@ -767,6 +774,11 @@ def _passes_gates(symbol: str, score: float, edge, sector: str) -> str | None:
         return f"score {score:.0f} < min {s['min_score']:.0f}"
     if edge is not None and edge < 0:
         return f"negative measured edge ({edge:+.2f}R)"
+    # Non-sniper path: volume < 1× is lower priority — skip so scarce daily
+    # slots go to real volume breaks (sniper confirms volume at fire time).
+    if (source != "sniper" and volume_ratio > 0
+            and volume_ratio < 1.0):
+        return f"volume {volume_ratio:.2f}× < 1× — priority niche, skip"
     tops, sector_status = _top_sectors()
     if sector_status == "unavailable":
         # Data outage must not freeze the whole desk — sector gate fail-open.
@@ -1037,7 +1049,8 @@ def consider(symbol: str, entry: float, stop: float, score: float,
              edge, sector: str, source: str, ev_pct=None, p_win=None,
              ev_conf=None, grade: str = "",
              breakout_conviction: float = 0.0,
-             fund_score=None) -> bool:
+             fund_score=None, rsi: float = 0.0,
+             volume_ratio: float = 0.0) -> bool:
     """Full gate → size → execute path. Returns True if a trade was placed.
 
     Thread-safe: scanner + sniper hooks may call this concurrently; the
@@ -1048,14 +1061,16 @@ def consider(symbol: str, entry: float, stop: float, score: float,
     with _consider_lock:
         return _consider_locked(symbol, entry, stop, score, edge, sector,
                                 source, ev_pct, p_win, ev_conf, grade,
-                                breakout_conviction, fund_score)
+                                breakout_conviction, fund_score, rsi,
+                                volume_ratio)
 
 
 def _consider_locked(symbol: str, entry: float, stop: float, score: float,
                      edge, sector: str, source: str, ev_pct=None, p_win=None,
                      ev_conf=None, grade: str = "",
                      breakout_conviction: float = 0.0,
-                     fund_score=None) -> bool:
+                     fund_score=None, rsi: float = 0.0,
+                     volume_ratio: float = 0.0) -> bool:
     def _jlog(decision: str, reason: str = "") -> None:
         # Evidence infrastructure: EVERY decision journaled with its
         # prediction — even rejections. "not armed" skipped (pure noise).
@@ -1097,7 +1112,10 @@ def _consider_locked(symbol: str, entry: float, stop: float, score: float,
             _jlog("REJECTED", "invalid stop")
             return False
 
-        reject = _passes_gates(symbol, score, edge, sector)
+        reject = _passes_gates(symbol, score, edge, sector,
+                               rsi=float(rsi or 0),
+                               volume_ratio=float(volume_ratio or 0),
+                               source=source)
         if reject:
             log.debug("autopilot_reject", symbol=symbol, reason=reject)
             _note_reject(reject)
@@ -1231,20 +1249,49 @@ def _consider_locked(symbol: str, entry: float, stop: float, score: float,
 
 def on_setups(results: list[dict]) -> None:
     """Hook: called after every scan with serialized results (read-only).
+
     Candidates are taken HIGHEST CONVICTION FIRST — daily trade slots and
-    pool capital are limited, so the best-evidenced setups claim them."""
+    pool capital are limited, so the best sniper-quality setups claim them.
+    High-RSI blow-offs are ignored; volume < 1× is deprioritized.
+    """
     s = _load()
     if not s["armed"]:
         return
-    ranked = sorted(
-        results[:20],
-        key=lambda r: float(r.get("conviction_rank")
-                            if r.get("conviction_rank") is not None
-                            else float(r.get("score", 0) or 0)),
-        reverse=True)
+    try:
+        from product.radar_workspace import (
+            MIN_VOLUME_RATIO,
+            RSI_BLOWOFF,
+            breakout_quality_score,
+            is_sniper_breakout_candidate,
+            _volume_ratio,
+        )
+    except Exception:
+        breakout_quality_score = lambda r: float(r.get("score") or 0)  # noqa: E731
+        is_sniper_breakout_candidate = lambda r: False  # noqa: E731
+        _volume_ratio = lambda r: float(r.get("volume_ratio") or 0)  # noqa: E731
+        MIN_VOLUME_RATIO, RSI_BLOWOFF = 1.0, 70.0
+
+    def _rank_key(r: dict):
+        rsi = float(r.get("rsi") or 0)
+        vol = _volume_ratio(r)
+        conv = float(r.get("conviction_rank")
+                     if r.get("conviction_rank") is not None
+                     else float(r.get("score", 0) or 0))
+        return (
+            0 if rsi > RSI_BLOWOFF else 1,                 # ignore high RSI last
+            1 if is_sniper_breakout_candidate(r) else 0,   # sniper first
+            0 if (0 < vol < MIN_VOLUME_RATIO) else 1,      # vol≥1× before thin
+            breakout_quality_score(r),
+            conv,
+        )
+
+    ranked = sorted(results[:40], key=_rank_key, reverse=True)
     for r in ranked:
         if r.get("verdict") not in ("STRONG BUY", "BUY"):
             continue
+        rsi = float(r.get("rsi") or 0)
+        if rsi > RSI_BLOWOFF:
+            continue  # hard ignore — don't spend a slot
         # PLANNED entry (breakout level) as the chase reference — the
         # live anchor inside consider() supplies the actual order price
         fund = r.get("fundamental_score")
@@ -1255,7 +1302,9 @@ def on_setups(results: list[dict]) -> None:
                  p_win=r.get("p_win"), ev_conf=r.get("ev_conf"),
                  grade=str(r.get("breakout_grade") or ""),
                  breakout_conviction=float(r.get("breakout_conviction") or 0),
-                 fund_score=float(fund) if fund is not None else None)
+                 fund_score=float(fund) if fund is not None else None,
+                 rsi=rsi,
+                 volume_ratio=float(r.get("volume_ratio") or 0))
 
 
 def on_breakout(hit: dict) -> None:

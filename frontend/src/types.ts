@@ -22,6 +22,7 @@ export type ScanRecord = {
   breakout_state?: string
   fundamental_score?: number
   classification?: string
+  sniper_candidate?: boolean
 }
 
 export type ConvictionRecord = ScanRecord & {

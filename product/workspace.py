@@ -8,7 +8,15 @@ from __future__ import annotations
 
 from typing import Any, Mapping, Sequence
 
-from product.radar_workspace import breakout_quality_score, is_long_term_pick, merge_fundamental_context
+from product.radar_workspace import (
+    MIN_VOLUME_RATIO,
+    RSI_BLOWOFF,
+    breakout_quality_score,
+    is_long_term_pick,
+    is_sniper_breakout_candidate,
+    merge_fundamental_context,
+    _volume_ratio,
+)
 
 
 SCANNER_MODES = (
@@ -201,6 +209,9 @@ def scanner_rows(
     if normalized == "breakouts":
         projected.sort(
             key=lambda row: (
+                not is_sniper_breakout_candidate(row),
+                _f(row.get("rsi")) > RSI_BLOWOFF,
+                _volume_ratio(row) < MIN_VOLUME_RATIO and _volume_ratio(row) > 0,
                 bool(row.get("chase_risk")),
                 -breakout_quality_score(row),
                 -_f(row.get("breakout_conviction")),

@@ -1235,6 +1235,25 @@ class TestAutopilot:
         assert ap.consider("CONV", 500, 450, 85, 0.30, "Defence", "t") is True
         assert int(te.recent_trades(1)[0]["qty"]) == 30
 
+    def test_rsi_blowoff_and_thin_volume_gates(self, tmp_path, monkeypatch):
+        """Fewer trades, higher win-rate: ignore RSI>70; volume<1× skip."""
+        ap, te = self._setup(tmp_path, monkeypatch)
+        ap.arm()
+        monkeypatch.setattr(ap, "_in_window", lambda now=None: True)
+        assert ap.consider(
+            "HOT", 500, 480, 85, 0.2, "Defence", "scanner", rsi=82,
+            volume_ratio=2.0,
+        ) is False
+        assert ap.consider(
+            "THIN", 500, 480, 85, 0.2, "Defence", "scanner", rsi=55,
+            volume_ratio=0.7,
+        ) is False
+        assert ap.consider(
+            "OK", 500, 480, 85, 0.2, "Defence", "scanner", rsi=55,
+            volume_ratio=1.5,
+        ) is True
+        assert te.recent_trades(1)[0]["symbol"] == "OK"
+
     def test_adaptive_source_gate_pauses_proven_loser(self, tmp_path, monkeypatch):
         ap, te = self._setup(tmp_path, monkeypatch)
         ap.arm()

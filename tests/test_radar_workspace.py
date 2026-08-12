@@ -63,9 +63,11 @@ def test_radar_home_builds_three_lanes():
                 "signals": ["MOMENTUM", "BREAKOUT_52W"],
                 "chase_risk": False,
                 "volume_ratio": 1.2,
+                "rsi": 58,
                 "reasons": ["Strong volume"],
                 "breakout_grade": "B",
                 "breakout_conviction": 55,
+                "avg_vol20": 1_000_000,
             },
             {
                 "symbol": "BEST",
@@ -75,9 +77,37 @@ def test_radar_home_builds_three_lanes():
                 "signals": ["BREAKOUT_52W"],
                 "chase_risk": False,
                 "volume_ratio": 2.0,
+                "rsi": 55,
                 "reasons": ["A-grade break"],
                 "breakout_grade": "A",
                 "breakout_conviction": 82,
+                "avg_vol20": 2_000_000,
+            },
+            {
+                "symbol": "HOT",
+                "score": 95,
+                "verdict": "BUY",
+                "status": "Ready to trade",
+                "signals": ["BREAKOUT_52W"],
+                "chase_risk": False,
+                "volume_ratio": 3.0,
+                "rsi": 82,
+                "breakout_grade": "A",
+                "breakout_conviction": 90,
+                "avg_vol20": 2_000_000,
+            },
+            {
+                "symbol": "THIN",
+                "score": 88,
+                "verdict": "BUY",
+                "status": "Ready to trade",
+                "signals": ["BREAKOUT_52W"],
+                "chase_risk": False,
+                "volume_ratio": 0.6,
+                "rsi": 50,
+                "breakout_grade": "A",
+                "breakout_conviction": 80,
+                "avg_vol20": 500_000,
             },
             {
                 "symbol": "BBB",
@@ -107,21 +137,54 @@ def test_radar_home_builds_three_lanes():
     assert payload["counts"]["breakouts"] >= 1
     assert payload["counts"]["long_term_picks"] == 2
     assert payload["lanes"]["momentum"][0]["symbol"] == "AAA"
-    # Among confirmed breakouts, BEST wins on grade/conviction + fundamentals
+    # Best = sniper pool, RSI≤70 ignored, volume ≥1× preferred
     assert payload["best_breakout"]["symbol"] == "BEST"
+    assert payload["best_breakout"]["symbol"] != "HOT"  # RSI 82 ignored
     assert payload["lanes"]["breakouts"][0]["symbol"] == "BEST"
     assert payload["lanes"]["breakouts"][0]["fundamental_score"] == 80
+    # Thin volume (<1×) is not a confirmed breakout lane row; HOT (RSI blow-off)
+    # is never the best sniper pick even if it appears in the wider lane.
+    syms = [r["symbol"] for r in payload["lanes"]["breakouts"]]
+    assert "BEST" in syms
+    if "HOT" in syms:
+        assert syms.index("BEST") < syms.index("HOT")
+    assert payload["best_breakout"]["volume_ratio"] >= 1.0
+    assert payload["best_breakout"]["rsi"] <= 70
 
 
 def test_breakout_quality_prefers_grade_and_fundamentals():
     from product.radar_workspace import breakout_quality_score
-    weak = {"score": 90, "breakout_grade": "", "breakout_conviction": 40, "edge_r": 0}
+    weak = {"score": 90, "breakout_grade": "", "breakout_conviction": 40, "edge_r": 0, "rsi": 50}
     strong = {
         "score": 75, "breakout_grade": "A", "breakout_conviction": 80, "edge_r": 0.2,
         "fundamental_score": 78, "fundamental_coverage": 0.8,
         "classification": "QUALITY_COMPOUNDER",
+        "rsi": 55, "volume_ratio": 2.0, "avg_vol20": 1e6,
+        "signals": ["BREAKOUT_52W"], "verdict": "BUY", "status": "Ready to trade",
     }
     assert breakout_quality_score(strong) > breakout_quality_score(weak)
+
+
+def test_high_rsi_ignored_and_low_volume_demoted():
+    from product.radar_workspace import (
+        breakout_quality_score,
+        is_sniper_breakout_candidate,
+        pick_best_sniper_breakout,
+    )
+    base = {
+        "verdict": "BUY", "status": "Ready to trade", "signals": ["BREAKOUT_52W"],
+        "breakout_grade": "A", "breakout_conviction": 80, "score": 80,
+        "avg_vol20": 1e6, "chase_risk": False,
+    }
+    hot = {**base, "symbol": "HOT", "rsi": 85, "volume_ratio": 2.5}
+    thin = {**base, "symbol": "THIN", "rsi": 55, "volume_ratio": 0.5}
+    solid = {**base, "symbol": "SOLID", "rsi": 55, "volume_ratio": 1.8}
+    assert not is_sniper_breakout_candidate(hot)
+    assert is_sniper_breakout_candidate(solid)
+    assert breakout_quality_score(hot) < breakout_quality_score(thin)
+    assert breakout_quality_score(solid) > breakout_quality_score(thin)
+    best = pick_best_sniper_breakout([hot, thin, solid])
+    assert best is not None and best["symbol"] == "SOLID"
 
 
 def test_enrich_scan_row_never_fakes_daily_change_label():

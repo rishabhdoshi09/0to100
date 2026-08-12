@@ -432,7 +432,7 @@ export type RadarHome = {
     momentum: ScannerWorkspaceRow[]
     long_term_picks: ScannerWorkspaceRow[]
   }
-  counts: { breakouts: number; momentum: number; long_term_picks: number }
+    counts: { breakouts: number; momentum: number; long_term_picks: number; sniper_breakouts?: number }
 }
 
 export const fetchRadarHome = (): Promise<RadarHome> =>
