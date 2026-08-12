@@ -1,0 +1,120 @@
+{
+  "cycle_id": "QUANTTERM_FUNDAMENTALS_EVENTS_RESEARCH_CYCLE",
+  "frozen_at": "2026-08-11T18:15:00+00:00",
+  "frozen_before_outcome_inspection": true,
+  "foundation_package_id": "46ff79f58ee21c9e",
+  "parent_ohlcv_snapshot_id": "2f683be0c73eaa33",
+  "global_trust_class": "OPERATIONAL_ONLY",
+  "scoped_certification": "SCOPED_PIT_FUNDAMENTALS_EVENTS_READY",
+  "costs": {
+    "product": "CNC",
+    "round_trip_cost_pct_points": 0.32,
+    "turnover_one_way_assumption": 1.0
+  },
+  "partitions": {
+    "method": "chronological",
+    "discovery_start": "2023-01-01",
+    "discovery_end": "2024-06-30",
+    "confirm_start": "2024-07-01",
+    "confirm_end": "2025-03-18",
+    "confirm_end_rationale": "Fundamentals/valuations AVAILABLE_AT end at 2025-03-18; confirmation cannot use later undated info",
+    "approx_cs_rebalances_reb5": {"discovery": 84, "confirm": 36}
+  },
+  "multiple_testing": {
+    "n_experiments_in_family": 4,
+    "per_experiment_harness_n_trials": 4,
+    "cycle_fdr": "Benjamini-Hochberg alpha=0.05 across the four discovery p-values"
+  },
+  "no_ml": true,
+  "no_sector_neutral": true,
+  "no_shareholding": true,
+  "closed_branches_not_reopened": [
+    "momentum", "reversal", "low-volatility", "volatility compression",
+    "market-structure alpha", "network alpha", "network interaction", "logistic challenger"
+  ],
+  "production_authority": false,
+  "experiments": {
+    "EXP-FUND-01": {
+      "title": "Post-earnings drift",
+      "type": "ALPHA_EVENT",
+      "hypothesis_plain": "After a company reports materially better or worse business results, does the stock continue moving in the same direction for some time?",
+      "hypothesis": "Stocks with the highest YoY basic_EPS surprise at official earnings AVAILABLE_AT outperform the lowest-surprise cohort over a 21-session hold after CNC costs when entered at the next session after AVAILABLE_AT.",
+      "null_hypothesis": "No positive cost-aware post-earnings drift using YoY EPS surprise; any gross gap is noise or destroyed by costs.",
+      "event_definition": "EARNINGS_RESULT rows from pit_events with matching PIT fundamentals row (symbol + available_at)",
+      "fundamental_change_definition": "YoY basic_eps change = (eps_t - eps_{t-4q}) / max(|eps_{t-4q}|, 0.01) for Quarterly consolidated-preferring series; requires prior comparable quarter with earlier available_at",
+      "entry_timing": "ALWAYS next trading session strictly after available_at date (conservative; no same-bar / same-day trade even if released during hours)",
+      "holding_horizon_sessions": 21,
+      "portfolio": "long top surprise quintile / short bottom surprise quintile among events with valid surprise in the partition",
+      "benchmark": "equal-weight of all valid-surprise events in the same partition window (descriptive)",
+      "primary_metric": "mean_net of long-short event returns",
+      "success_criteria": {
+        "discovery_pass": {"eq": 1},
+        "confirm_pass": {"eq": 1},
+        "mean_net": {"gt": 0.0}
+      },
+      "announcement_mining": false,
+      "event_types_allowed": ["EARNINGS_RESULT"]
+    },
+    "EXP-FUND-02": {
+      "title": "Quality / profitability",
+      "type": "ALPHA_FUNDAMENTAL",
+      "hypothesis_plain": "Do financially stronger and more profitable companies produce better future risk-adjusted returns?",
+      "hypothesis": "Highest net-profit-margin quintile (PAT/Revenue from latest PIT fundamentals as of formation) outperforms lowest quintile on 21d forward returns after CNC costs.",
+      "null_hypothesis": "No positive cost-aware quality edge using PAT/Revenue.",
+      "quality_metric": "net_margin = profit_after_tax / revenue_from_operations when revenue_from_operations > 0; else missing",
+      "composite": false,
+      "leverage_required": false,
+      "rebalance_every_sessions": 5,
+      "holding_horizon_sessions": 21,
+      "cohort_quantile": 0.2,
+      "portfolio": "long high margin / short low margin",
+      "benchmark": "equal-weight universe of names with valid margin on formation date",
+      "primary_metric": "mean_net of long-short portfolio",
+      "success_criteria": {
+        "discovery_pass": {"eq": 1},
+        "confirm_pass": {"eq": 1},
+        "mean_net": {"gt": 0.0}
+      }
+    },
+    "EXP-FUND-03": {
+      "title": "Earnings growth",
+      "type": "ALPHA_FUNDAMENTAL",
+      "hypothesis_plain": "Do companies whose earnings are improving faster subsequently outperform?",
+      "hypothesis": "Highest YoY basic_EPS growth quintile (from latest PIT fundamentals as of formation) outperforms lowest quintile on 21d forward returns after CNC costs.",
+      "null_hypothesis": "No positive cost-aware earnings-growth edge.",
+      "growth_metric": "Same YoY basic_eps formula as EXP-FUND-01, evaluated cross-sectionally at formation dates (not event-entry)",
+      "rebalance_every_sessions": 5,
+      "holding_horizon_sessions": 21,
+      "cohort_quantile": 0.2,
+      "portfolio": "long high YoY EPS growth / short low",
+      "benchmark": "equal-weight names with valid YoY EPS growth",
+      "primary_metric": "mean_net of long-short portfolio",
+      "success_criteria": {
+        "discovery_pass": {"eq": 1},
+        "confirm_pass": {"eq": 1},
+        "mean_net": {"gt": 0.0}
+      }
+    },
+    "EXP-FUND-04": {
+      "title": "Value / trailing PE",
+      "type": "ALPHA_FUNDAMENTAL",
+      "hypothesis_plain": "Do cheaper companies, measured using information actually known at the time, outperform more expensive companies?",
+      "hypothesis": "Lowest trailing-PE quintile outperforms highest trailing-PE quintile on 21d forward returns after CNC costs using PIT valuations available_ts <= formation date.",
+      "null_hypothesis": "No positive cost-aware value edge using trailing PE.",
+      "valuation_field": "pe from pit_valuations",
+      "negative_earnings_rule": "rows with pe<=0 excluded (ledger already stores pe>0 only); missing PE excluded",
+      "outlier_rule": "exclude pe > 200 at formation (preregistered hard cap; not fit on outcomes)",
+      "rebalance_every_sessions": 5,
+      "holding_horizon_sessions": 21,
+      "cohort_quantile": 0.2,
+      "portfolio": "long low PE / short high PE",
+      "benchmark": "equal-weight names with valid PE",
+      "primary_metric": "mean_net of long-short portfolio",
+      "success_criteria": {
+        "discovery_pass": {"eq": 1},
+        "confirm_pass": {"eq": 1},
+        "mean_net": {"gt": 0.0}
+      }
+    }
+  }
+}

@@ -1,0 +1,117 @@
+{
+  "experiment_id": "EXP-FUND-03-FOLLOWUP",
+  "family": "EARNINGS_GROWTH_FOLLOWUP_VALIDATION",
+  "parent_experiment_id": "EXP-FUND-03",
+  "parent_hypothesis_id": "ef129d36b8f8378b",
+  "parent_result_hash": "3d508563a5d81633",
+  "parent_status": "CONFIRMED",
+  "parent_next_action": "ELIGIBLE_FOR_FOLLOWUP_RESEARCH",
+  "frozen_at": "2026-08-11T18:30:00+00:00",
+  "frozen_before_outcome_inspection": true,
+  "purpose": "Robustness / economic usability of the CONFIRMED earnings-growth effect. NOT a search for a better growth strategy. NOT independent confirmation.",
+  "do_not_alter_parent": true,
+  "no_ml": true,
+  "no_phase_b": true,
+  "no_production_authority": true,
+  "no_signal_tuning": true,
+  "foundation_package_id": "46ff79f58ee21c9e",
+  "parent_ohlcv_snapshot_id": "2f683be0c73eaa33",
+  "available_at_enforcement": "PitContract",
+  "costs_base": {
+    "product": "CNC",
+    "round_trip_cost_pct_points": 0.32,
+    "turnover_one_way_assumption": 1.0,
+    "drag_per_rebalance": 0.0032
+  },
+  "frozen_effect": {
+    "definition": "YoY basic_EPS growth = (eps_t - eps_{t-4q}) / max(|eps_{t-4q}|, 0.01) on quarterly rows; consolidated preferred on duplicate symbol+period_end",
+    "accounting_fields": ["basic_eps", "period", "period_end", "available_at", "consolidated"],
+    "available_at_treatment": "latest_asof_frame: score visible on formation date only if available_at <= formation date",
+    "universe": "OHLCV snapshot 2f683be0c73eaa33 scoped equity panel (~870 liquid names)",
+    "ranking_cohort": "cross-sectional quintiles (top_q=0.2); long high growth / short low growth",
+    "rebalance_every_sessions": 5,
+    "holding_horizon_sessions": 21,
+    "benchmark": "equal-weight names with valid YoY EPS growth on formation date",
+    "missing_data_treatment": "names without valid YoY growth on formation date excluded from that date's cross-section",
+    "outlier_handling": "none beyond YoY denom floor 0.01 (same as parent; not retuned)",
+    "statistical_criteria_parent": {
+      "discovery_pass": 1,
+      "confirm_pass": 1,
+      "mean_net_gt": 0.0,
+      "n_trials": 4
+    },
+    "confirmation_result": {
+      "discovery": {"verdict": "PASS", "n": 66, "mean_gross": 0.010273, "mean_net": 0.007073},
+      "confirmation": {"verdict": "PASS", "n": 37, "mean_gross": 0.0074, "mean_net": 0.0042},
+      "final": "CONFIRMED",
+      "net_effect_headline": 0.0071
+    }
+  },
+  "reproduction": {
+    "source_artifact": "logs/research_expansion/fund_cycle/cycle_result.json",
+    "tolerances": {
+      "mean_net_abs": 1e-4,
+      "mean_gross_abs": 1e-4,
+      "n_exact": true,
+      "verdict_exact": true
+    },
+    "stop_if_material_fail": true
+  },
+  "diagnostics_preregistered": {
+    "subperiods_chronological": [
+      {"id": "SP1_2023H1", "start": "2023-01-01", "end": "2023-06-30"},
+      {"id": "SP2_2023H2", "start": "2023-07-01", "end": "2023-12-31"},
+      {"id": "SP3_2024H1", "start": "2024-01-01", "end": "2024-06-30"},
+      {"id": "SP4_CONFIRM", "start": "2024-07-01", "end": "2025-03-18"}
+    ],
+    "monotonicity": {
+      "structure": "quintiles",
+      "top_q": 0.2,
+      "note": "Report mean forward return by growth quintile Q1(low)..Q5(high). Do not optimize bucket count."
+    },
+    "cost_scenarios_round_trip_pct_points": [0.32, 0.50, 0.75, 1.00],
+    "liquidity": {
+      "adv_window_sessions": 21,
+      "thin_definition": "selected name ADV below cross-sectional 20th percentile of formation-date ADV among scored universe",
+      "no_invented_capacity": true
+    },
+    "concentration": {
+      "top_k_rebalances": 5,
+      "top_k_names": 5,
+      "report_mean_vs_median": true,
+      "no_post_hoc_outlier_removal": true
+    },
+    "placebos": [
+      {
+        "id": "PLACEBO_PREMATURE_PERIOD_END",
+        "description": "Assign score visibility at period_end instead of true AVAILABLE_AT (information used before filing)."
+      },
+      {
+        "id": "PLACEBO_PRE_RELEASE_WINDOW",
+        "description": "Use true growth scores to predict the 21-session return ending the session before AVAILABLE_AT (should not work if PIT-clean)."
+      }
+    ],
+    "incrementality": {
+      "controls_allowed": ["60d_momentum_residualized_growth"],
+      "controls_forbidden": ["PIT-unsafe sectors", "reopening EXP-FUND-01/02/04 as optimizers", "ML"]
+    }
+  },
+  "verdict_classes": [
+    "ROBUST_CONFIRMED",
+    "CONFIRMED_BUT_FRAGILE",
+    "CONFIRMED_BUT_CONCENTRATED",
+    "DATA_CONCERN",
+    "FAILED_ROBUSTNESS",
+    "INCONCLUSIVE_FOLLOWUP"
+  ],
+  "robust_confirmed_requires": [
+    "parent_confirmation_valid",
+    "reproduction_pass",
+    "effect_direction_reasonably_stable",
+    "economic_value_survives_realistic_costs",
+    "no_material_pit_leakage",
+    "not_dominated_by_tiny_observation_set"
+  ],
+  "if_robust_confirmed_next_action": "DESIGN_PAPER_SHADOW_POLICY_EXPERIMENT",
+  "if_fail_next_action": "RECORD_EVIDENCE_NO_TUNING"
+}

@@ -80,33 +80,85 @@ def check_symbol(symbol: str) -> dict:
 
 
 def verify_ca_adjustment(sample: int = 200) -> dict:
-    """Acceptance test for Phase-1 corporate-action adjustment: read the store
-    THROUGH the adjust-on-read path and confirm the phantom-gap rate has collapsed
-    to ~0. This is what turns 'we applied a CA table' into 'the data is now
-    trustworthy'. Returns {checked, still_flagged, gap_rate, ca_events_loaded,
-    passed}. `passed` requires an events table to actually be loaded AND a
-    post-adjustment gap_rate ≤ 0.2% — an empty table that leaves gaps must FAIL,
-    never green-light un-adjusted data. Fail-open → passed=False."""
+    """Acceptance test for corporate-action adjustment quality.
+
+    IMPORTANT (remediation R1/R6): the research-quality measure is the rate of
+    *unresolved consecutive-session* discontinuities after adjustment — NOT the
+    raw frequency of any large adjacent-bar move (which incorrectly counted
+    suspension/sparse-trading spans as CA failures).
+
+    ``passed`` requires an events table loaded AND
+    ``unresolved_symbol_rate ≤ 0.002``. Fail-open → passed=False.
+    """
     try:
         from data.corporate_actions import load_events
         n_events = len(load_events())
     except Exception:
         n_events = 0
-    rep = integrity_report(sample=sample)
-    checked = rep.get("checked", 0)
-    gap_rate = rep.get("gap_rate", 1.0)
-    passed = bool(n_events > 0 and checked > 0 and gap_rate <= 0.002)
-    return {"checked": checked, "still_flagged": rep.get("with_phantom_gaps", 0),
-            "gap_rate": gap_rate, "ca_events_loaded": n_events,
-            "flagged": rep.get("flagged", []), "passed": passed,
-            "note": ("PASS — data continuous after adjustment" if passed else
-                     "FAIL — supply/complete logs/ca_events.json until gap_rate≈0"
-                     if n_events == 0 or gap_rate > 0.002 else "no data to check")}
+    try:
+        from research.intelligence.data.discontinuity_audit import audit_universe
+        audit = audit_universe(sample=sample)
+        checked = int(audit.get("symbols_checked") or 0)
+        gap_rate = float(audit.get("unresolved_symbol_rate") or 1.0)
+        flagged = [
+            r["symbol"] for r in (audit.get("top_unresolved") or [])
+        ]
+        # unique preserve order
+        seen = set()
+        flagged_u = []
+        for s in flagged:
+            if s not in seen:
+                seen.add(s)
+                flagged_u.append(s)
+        still = int(audit.get("unresolved_consecutive_events") or 0)
+        passed = bool(n_events > 0 and checked > 0 and gap_rate <= 0.002)
+        return {
+            "checked": checked,
+            "still_flagged": len(flagged_u),
+            "gap_rate": gap_rate,
+            "ca_events_loaded": n_events,
+            "flagged": flagged_u[:15],
+            "passed": passed,
+            "metric": "unresolved_consecutive_session_symbol_rate",
+            "legacy_note": audit.get("legacy_any_large_move_symbol_rate_note"),
+            "by_class": audit.get("by_class"),
+            "verified_ca_events": audit.get("verified_ca_events"),
+            "sparse_or_suspension_events": audit.get("sparse_or_suspension_events"),
+            "note": (
+                "PASS — unresolved consecutive discontinuities collapsed"
+                if passed else
+                "FAIL — unresolved consecutive-session discontinuities remain "
+                "(suspension/sparse spans are classified separately and do not "
+                "alone fail this gate)"
+                if n_events == 0 or gap_rate > 0.002 else
+                "no data to check"
+            ),
+            "unresolved_consecutive_events": still,
+        }
+    except Exception as exc:
+        # Fall back to legacy integrity_report if audit import/runtime fails
+        rep = integrity_report(sample=sample)
+        checked = rep.get("checked", 0)
+        gap_rate = rep.get("gap_rate", 1.0)
+        passed = bool(n_events > 0 and checked > 0 and gap_rate <= 0.002)
+        return {"checked": checked, "still_flagged": rep.get("with_phantom_gaps", 0),
+                "gap_rate": gap_rate, "ca_events_loaded": n_events,
+                "flagged": rep.get("flagged", []), "passed": passed,
+                "metric": "legacy_any_large_move_symbol_rate",
+                "fallback_error": str(exc),
+                "note": ("PASS — data continuous after adjustment" if passed else
+                         "FAIL — supply/complete logs/ca_events.json until gap_rate≈0"
+                         if n_events == 0 or gap_rate > 0.002 else "no data to check")}
 
 
 def integrity_report(sample: int = 120) -> dict:
     """Store-wide data-health headline over a sample of symbols → the input the
-    Governance Sentinel reads. Fail-open → {'checked': 0}."""
+    Governance Sentinel reads. Fail-open → {'checked': 0}.
+
+    ``gap_rate`` here remains the *legacy* any-large-move rate for operational
+    HALT signalling. Research certification must use ``verify_ca_adjustment`` /
+    ``discontinuity_audit.audit_universe`` (unresolved consecutive rate).
+    """
     try:
         from data.bhavcopy_store import store_symbols
         syms = store_symbols()[:sample]
@@ -135,8 +187,8 @@ def integrity_report(sample: int = 120) -> dict:
         "gap_rate": round(gap_rate, 3),
         "stale_symbols": stale,
         "flagged": flagged,
-        # HALT-worthy: a broad phantom-gap rate means the store is likely
-        # un-adjusted for corporate actions — every backtest number is suspect.
+        # HALT-worthy operational signal (legacy). Research uses discontinuity_audit.
         "ca_mismatch": gap_rate > 0.02,
         "stale": checked > 0 and (stale / checked) > 0.5,
+        "metric": "legacy_any_large_move_symbol_rate",
     }

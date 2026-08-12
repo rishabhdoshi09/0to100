@@ -2,12 +2,17 @@
 
 This module never owns trading state. It translates existing backend facts into
 plain-language UI state and recommended actions.
+
+Canonical field names stay technical in schemas; user labels come from
+``product.plain_language`` (see COMMON_MAN_READABILITY.md).
 """
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from product.plain_language import TERMINOLOGY as _PLAIN_TERMINOLOGY
 
+# Keep the historical keys + extended common-man map (schemas unchanged).
 TERMINOLOGY = {
     "snapshot": "Saved market data",
     "forward_eligible": "Data ready for trading",
@@ -19,6 +24,10 @@ TERMINOLOGY = {
     "reconciliation": "Record check",
     "in_sample": "Historical test",
     "no_eligible_intent": "No safe trade found",
+    **{k: v for k, v in _PLAIN_TERMINOLOGY.items() if k not in {
+        "snapshot", "forward_eligible", "evidence_card", "regime", "allocation",
+        "risk_governor", "intent", "reconciliation", "in_sample", "no_eligible_intent",
+    }},
 }
 
 

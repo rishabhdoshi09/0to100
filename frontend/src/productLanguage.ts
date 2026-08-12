@@ -138,7 +138,92 @@ export const GLOSSARY: Record<string, string> = {
   'Fundamental coverage': 'How much of the required quality data is actually present.',
   'Chase risk': 'Price is extended enough that a fresh entry may have poor risk/reward.',
   'Market regime': 'The broad trend, breadth and volatility environment.',
+  'Market condition': 'The broad trend, breadth and volatility environment.',
   'Source date': 'The period or timestamp the displayed fact actually represents.',
+  'Portfolio overlap': 'How much a new stock moves like names you already own.',
+  'Research confidence': 'How strongly historical evidence supports the claim.',
+  'Data quality': 'Whether the numbers are good enough for charts, trading, or scientific tests.',
+  'Historical data quality': 'Whether past prices and memberships reflect only what was known then.',
+}
+
+/** Internal enum → Layer-1 copy. Canonical codes stay unchanged in APIs. */
+export type PlainTrustCopy = {
+  label: string
+  state: string
+  explanation: string
+  implication: string
+  technical: string
+}
+
+export const TRUST_CLASS_PLAIN: Record<string, PlainTrustCopy> = {
+  RESEARCH_GRADE: {
+    label: 'Research quality',
+    state: 'PROVEN',
+    explanation: 'This dataset passed the checks required for scientific historical testing.',
+    implication: 'Safe to use when judging whether a strategy deserves real money.',
+    technical: 'trust_class=RESEARCH_GRADE',
+  },
+  OPERATIONAL_ONLY: {
+    label: 'Data quality',
+    state: 'CAUTION',
+    explanation: "Good enough for today's trading view, not fully reconstructible history.",
+    implication: 'Use for live/paper decisions; do not treat results as scientific proof.',
+    technical: 'trust_class=OPERATIONAL_ONLY',
+  },
+  DISPLAY_ONLY: {
+    label: 'Data quality',
+    state: 'UNPROVEN',
+    explanation: 'Good enough for charts and exploration, not for proving a strategy.',
+    implication: 'QuantTerm will not promote a strategy on this data alone.',
+    technical: 'trust_class=DISPLAY_ONLY',
+  },
+  NOT_PIT_SAFE: {
+    label: 'Historical data quality',
+    state: 'RISKY',
+    explanation:
+      'This historical data may contain information that was not actually known at the time. Do not use it for serious backtesting.',
+    implication: 'Treat any backtest on this series as exploratory only.',
+    technical: 'pit_state=NOT_PIT_SAFE',
+  },
+}
+
+export const RESEARCH_VERDICT_PLAIN: Record<string, PlainTrustCopy> = {
+  INCONCLUSIVE: {
+    label: 'Past test result',
+    state: 'UNPROVEN',
+    explanation:
+      'We do not have enough trustworthy data yet to say whether this strategy works. The result remains unproven.',
+    implication: 'Do not promote and do not expand models on this result alone.',
+    technical: 'verdict=INCONCLUSIVE',
+  },
+  FAIL: {
+    label: 'Past test result',
+    state: 'FAILED',
+    explanation:
+      'We tested this idea properly. So far, it does not show a reliable advantage after trading costs. QuantTerm will not use it for real trades.',
+    implication: 'Do not promote this idea; keep or archive as a negative result.',
+    technical: 'verdict=FAIL',
+  },
+  REJECTED: {
+    label: 'Past test result',
+    state: 'FAILED',
+    explanation: 'The idea failed its pre-registered success checks.',
+    implication: 'QuantTerm will not use it for live decisions.',
+    technical: 'verdict=REJECTED',
+  },
+}
+
+/** Internal metric key → friendly UI label (do not rename API fields). */
+export const FIELD_LABELS: Record<string, string> = {
+  regime: 'Market condition',
+  network_concentration_score: 'Portfolio overlap risk',
+  betweenness_centrality: 'Portfolio dependency',
+  evidence_level: 'Research confidence',
+  trust_class: 'Data quality',
+  pit_state: 'Historical data quality',
+  expectancy: 'How much can we expect?',
+  calibration_score: 'How reliable is this?',
+  gauntlet_verdict: 'Past test result',
 }
 
 export const depthLabel = (depth: DisplayDepth) => depth === 'simple' ? 'Simple' : 'Professional'

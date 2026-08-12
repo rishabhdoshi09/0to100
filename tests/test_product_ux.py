@@ -47,6 +47,8 @@ def test_plain_language_terminology_map():
     assert TERMINOLOGY["snapshot"] == "Saved market data"
     assert TERMINOLOGY["risk_governor"] == "Safety checks"
     assert TERMINOLOGY["no_eligible_intent"] == "No safe trade found"
+    assert TERMINOLOGY["regime"] == "Market condition"
+    assert TERMINOLOGY["network_concentration_score"] == "Portfolio overlap risk"
 
 
 def test_market_closed_actions_include_backtest_and_fno():

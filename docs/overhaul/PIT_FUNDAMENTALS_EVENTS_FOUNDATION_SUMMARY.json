@@ -1,0 +1,20 @@
+{
+  "snapshot_id": "46ff79f58ee21c9e",
+  "parent_ohlcv_snapshot": "2f683be0c73eaa33",
+  "events_rows": 43569,
+  "events_symbols": 868,
+  "fundamentals_rows": 12584,
+  "fundamentals_symbols": 860,
+  "valuations_rows": 10427,
+  "validation_ok": true,
+  "ready_families": [
+    "post_earnings_drift_timing",
+    "event_reactions_announcements",
+    "quality_profitability",
+    "earnings_growth",
+    "value"
+  ],
+  "partial_families": [],
+  "global_trust_class": "OPERATIONAL_ONLY",
+  "validator_version": "pit_fundamentals_events_foundation.v1"
+}

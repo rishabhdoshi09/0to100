@@ -1,0 +1,182 @@
+{
+  "snapshot_id": "2f683be0c73eaa33",
+  "parent_snapshot_id": "a7a9828ec37e09e4",
+  "supersedes_shallow_index_snapshot": "0e51fa13587372c9",
+  "global_trust_class": "OPERATIONAL_ONLY",
+  "scoped_certification": "SCOPED_RESEARCH_READY",
+  "window": [
+    "2020-01-01",
+    "2026-08-11"
+  ],
+  "classification_counts": {
+    "CERTIFIABLE": 870,
+    "PARTIAL": 608,
+    "BLOCKED_IDENTITY": 1036,
+    "BLOCKED_CA": 116,
+    "BLOCKED_UNIVERSE": 1,
+    "INSUFFICIENT_HISTORY": 362,
+    "OTHER": 137
+  },
+  "certifiable_n": 870,
+  "partial_n": 608,
+  "n_sessions": 1900,
+  "date_range": [
+    "2020-01-01",
+    "2026-08-11"
+  ],
+  "coverage": {
+    "median_names_per_session": 816.5,
+    "min_names_per_session": 649,
+    "max_names_per_session": 870,
+    "total_security_sessions": 1497079
+  },
+  "prior_29_in_expanded_certifiable": [
+    "ADANIENT",
+    "AXISBANK",
+    "BAJFINANCE",
+    "BPCL",
+    "CIPLA",
+    "DRREDDY",
+    "HCLTECH",
+    "HDFCBANK",
+    "HINDALCO",
+    "HINDUNILVR",
+    "ICICIBANK",
+    "INFY",
+    "ITC",
+    "JSWSTEEL",
+    "KOTAKBANK",
+    "LT",
+    "M&M",
+    "MARUTI",
+    "NESTLEIND",
+    "NTPC",
+    "ONGC",
+    "POWERGRID",
+    "RELIANCE",
+    "SBIN",
+    "SUNPHARMA",
+    "TCS",
+    "WIPRO"
+  ],
+  "prior_29_blocked_ca_on_full_window": [
+    "TATASTEEL",
+    "BAJAJFINSV"
+  ],
+  "prior_29_blocked_ca_dates": {
+    "TATASTEEL": "2022-07-27\u21922022-07-28 (~-89.5%, no official parseable factor in ledger)",
+    "BAJAJFINSV": "2022-09-12\u21922022-09-13 (~-89.6%, no official parseable factor in ledger)"
+  },
+  "research_power": {
+    "securities": 870,
+    "sessions": 1900,
+    "security_sessions": 1497079,
+    "security_years": 5940.8,
+    "prior_29_security_years": 87.9,
+    "approx_sample_size_gain": 67.57,
+    "effective_cross_sectional_breadth": 870,
+    "independent_calendar_years": 7,
+    "independent_time_periods_approx": 6,
+    "date_range": [
+      "2020-01-01",
+      "2026-08-11"
+    ],
+    "market_regimes_represented": [
+      {
+        "period": "2020",
+        "label": "COVID crash + recovery"
+      },
+      {
+        "period": "2021",
+        "label": "Post-stimulus / reopening equity strength"
+      },
+      {
+        "period": "2022",
+        "label": "Rate-hike / risk-off year"
+      },
+      {
+        "period": "2023",
+        "label": "Recovery / consolidation"
+      },
+      {
+        "period": "2024",
+        "label": "Election / mid-cycle tape"
+      },
+      {
+        "period": "2025-2026",
+        "label": "Recent live research window"
+      }
+    ],
+    "hypothesis_family_readiness": [
+      {
+        "family": "cross_sectional_price_factors_ohlcv",
+        "class": "READY_TO_TEST",
+        "note": "Low-vol / other price-only CS factors with broader panel+years"
+      },
+      {
+        "family": "short_horizon_reversal",
+        "class": "CLOSED_REJECTED",
+        "note": "Do not reopen; data expansion \u2260 retune"
+      },
+      {
+        "family": "momentum_60d",
+        "class": "CLOSED_REJECTED",
+        "note": "Do not reopen"
+      },
+      {
+        "family": "dynamic_market_structure",
+        "class": "CLOSED_REJECTED",
+        "note": "Do not reopen"
+      },
+      {
+        "family": "standalone_network_alpha",
+        "class": "CLOSED_REJECTED",
+        "note": "Do not reopen"
+      },
+      {
+        "family": "network_concentration_interaction",
+        "class": "CLOSED_REJECTED",
+        "note": "Do not reopen"
+      },
+      {
+        "family": "logistic_challenger",
+        "class": "CLOSED_REJECTED",
+        "note": "Do not reopen"
+      },
+      {
+        "family": "volatility_compression_risk",
+        "class": "CLOSED_REJECTED",
+        "note": "Do not reopen"
+      },
+      {
+        "family": "value_quality_profitability",
+        "class": "DATA_MISSING",
+        "note": "Need PIT fundamentals with AVAILABLE_AT"
+      },
+      {
+        "family": "post_earnings_drift_events",
+        "class": "DATA_MISSING",
+        "note": "Need earnings AVAILABLE_AT timestamps"
+      },
+      {
+        "family": "sector_neutral_factors",
+        "class": "PIT_UNSAFE",
+        "note": "PIT sector history NOT_RESEARCH_READY"
+      },
+      {
+        "family": "ownership_shareholding_effects",
+        "class": "DATA_MISSING",
+        "note": "No PIT ownership ledger"
+      }
+    ]
+  },
+  "low_vol_retest_verdict": "LOW_VOL_RETEST_READY",
+  "sector_history_status": "NOT_RESEARCH_READY",
+  "hashes": {
+    "ca_events": "840efb14b9196b0b7b7d1a99e69477b4831d3dee648c5224337820ffb80eacb1",
+    "security_identity": "b47474aa4c7e95fd1d7c9d6f21634fb94c83d2626238fe6615027b39192d59a0",
+    "universe_history": "1422fbb3f4322dd6b35f5e2d408a31e9d1a9a317aa360cabeed70bd916ef8f78"
+  },
+  "git_sha_at_classification": "17b3faeb6bd4938b00884d2065a2ea795f01b847",
+  "validator_version": "research_data_expansion.scoped.v1"
+}
