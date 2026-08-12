@@ -4,6 +4,7 @@
 #   .\scripts\setup_windows.ps1
 #   .\scripts\run_quantterm.ps1
 #   .\scripts\run_quantterm_low_power.ps1
+#   .\scripts\run_quantterm_lean.ps1
 #   .\scripts\run_quantterm_complete.ps1
 #   .\scripts\stop_quantterm.ps1
 

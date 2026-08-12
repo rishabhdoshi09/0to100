@@ -317,14 +317,27 @@ def cmd_stop() -> int:
     return 0
 
 
-def cmd_run(*, complete: bool = False, low_power: bool = False) -> int:
+def cmd_run(*, complete: bool = False, low_power: bool = False, lean: bool = False) -> int:
     if not _venv_ok():
         _log("Missing venv. Run: python scripts/quantterm_stack.py setup")
         return 1
 
     env = os.environ.copy()
     env["PYTHONUNBUFFERED"] = "1"
-    if low_power:
+    if lean:
+        # 3GB / very old PCs: trading stack only — no research-report API (:8766).
+        # Autopilot + market-scan bootstrap stay on.
+        low_power = True
+        complete = False
+        env["QT_LOW_POWER"] = "1"
+        env["QT_LEAN"] = "1"
+        env.setdefault("QT_DISABLE_IDLE_BACKTEST", "1")
+        env.setdefault("QT_DISABLE_US_BOOTSTRAP", "1")
+        env.pop("QT_DISABLE_AUTO_MARKET_SCAN", None)
+        env.pop("QT_DISABLE_AUTO_LONG_TERM", None)
+        _log("[STACK] Lean mode: autonomy + terminal API + Vite (no report API :8766).")
+        _log("[STACK] Market scan + autopilot feed still auto-start. Best for ~3GB RAM.")
+    elif low_power:
         # Same service topology as complete (report API + autonomy + scans).
         # Low-power only throttles CPU / skips idle backtest + US bootstrap.
         complete = True
@@ -528,13 +541,17 @@ def cmd_run(*, complete: bool = False, low_power: bool = False) -> int:
             cleanup()
             return 1
 
-        mode = "complete" if complete else ("low-power" if low_power else "standard")
+        mode = "lean" if lean else ("complete" if complete else ("low-power" if low_power else "standard"))
         _log(f"[STACK] QuantTerm is ready ({mode}). Open http://127.0.0.1:{VITE_PORT}")
         _log("[STACK] Keep this window open. Ctrl-C stops services started here.")
         if _is_windows():
             _log("[STACK] Stop later with: .\\scripts\\stop_quantterm.ps1")
+            if lean:
+                _log("[STACK] Research Data / PDF reports need: .\\scripts\\run_quantterm_complete.ps1")
         else:
             _log("[STACK] Stop later with: bash scripts/stop_quantterm.sh")
+            if lean:
+                _log("[STACK] Research Data / PDF reports need: bash scripts/run_quantterm_complete.sh")
 
         api_health_fails = 0
         api_http_fails = 0
@@ -588,6 +605,11 @@ def main(argv: list[str] | None = None) -> int:
     run_p = sub.add_parser("run", help="Start terminal stack")
     run_p.add_argument("--complete", action="store_true", help="Also start research-report API :8766")
     run_p.add_argument("--low-power", action="store_true", help="QT_LOW_POWER=1 for older/slower machines")
+    run_p.add_argument(
+        "--lean",
+        action="store_true",
+        help="3GB RAM profile: low-power eco + no report API (keeps market scan / autopilot)",
+    )
 
     args = parser.parse_args(argv)
     os.chdir(ROOT)
@@ -596,7 +618,11 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "stop":
         return cmd_stop()
     if args.cmd == "run":
-        return cmd_run(complete=bool(args.complete), low_power=bool(args.low_power))
+        return cmd_run(
+            complete=bool(args.complete),
+            low_power=bool(args.low_power),
+            lean=bool(getattr(args, "lean", False)),
+        )
     return 2
 
 

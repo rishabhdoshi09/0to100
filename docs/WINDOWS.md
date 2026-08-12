@@ -21,15 +21,27 @@ Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
 
 ## Daily start / stop
 ```powershell
-.\scripts\run_quantterm_low_power.ps1    # recommended on older PCs
-# or full:
+# ~3GB RAM (old PC) — trading only, no report API:
+.\scripts\run_quantterm_lean.ps1
+
+# Older PC with a bit more RAM — full stack, lighter CPU:
+.\scripts\run_quantterm_low_power.ps1
+
+# Standard:
 .\scripts\run_quantterm.ps1
-# complete (+ report API :8766):
+
+# Complete (+ Research Data / PDF on :8766):
 .\scripts\run_quantterm_complete.ps1
 
 # stop
 .\scripts\stop_quantterm.ps1
 ```
+
+| Launcher | Report API :8766 | Market scan / autopilot | Best for |
+|----------|------------------|-------------------------|----------|
+| `run_quantterm_lean.ps1` | No (saves RAM) | Yes | **~3GB Windows** |
+| `run_quantterm_low_power.ps1` | Yes | Yes | 4–8GB older PC |
+| `run_quantterm_complete.ps1` | Yes | Yes | Normal daily use |
 
 Open **http://127.0.0.1:5173**
 
