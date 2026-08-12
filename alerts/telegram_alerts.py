@@ -50,9 +50,33 @@ class AlertEngine:
     _TELEGRAM_API = "https://api.telegram.org/bot{token}/sendMessage"
 
     def __init__(self) -> None:
-        self._token   = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
-        self._chat_id = os.environ.get("TELEGRAM_CHAT_ID", "").strip()
-        self.enabled  = bool(self._token and self._chat_id)
+        # Prefer settings (.env via pydantic). Fall back to os.environ after an
+        # explicit dotenv load so WebSocket sniper threads still work when the
+        # process did not export TELEGRAM_* into the environment.
+        token = ""
+        chat_id = ""
+        try:
+            from config import settings
+            token = str(getattr(settings, "telegram_bot_token", "") or "").strip()
+            chat_id = str(getattr(settings, "telegram_chat_id", "") or "").strip()
+        except Exception:
+            pass
+        if not (token and chat_id):
+            try:
+                from dotenv import load_dotenv
+                load_dotenv(Path(__file__).resolve().parents[1] / ".env", override=False)
+            except Exception:
+                pass
+            token = (os.environ.get("TELEGRAM_BOT_TOKEN", "") or token).strip()
+            chat_id = (os.environ.get("TELEGRAM_CHAT_ID", "") or chat_id).strip()
+        self._token = token
+        self._chat_id = chat_id
+        self.enabled = bool(self._token and self._chat_id)
+        if not self.enabled:
+            logger.warning(
+                "telegram_not_configured — set TELEGRAM_BOT_TOKEN and "
+                "TELEGRAM_CHAT_ID in .env"
+            )
 
     # ------------------------------------------------------------------
     # Public helpers

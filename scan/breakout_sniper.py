@@ -246,6 +246,7 @@ def _alert(hits: list[dict]) -> None:
         from alerts.telegram_alerts import AlertEngine
         engine = AlertEngine()
         if not engine.is_configured():
+            log.warning("sniper_telegram_not_configured")
             return
         lines = ["🚨 <b>BREAKOUT CONFIRMED</b>"]
         for h in fresh[:5]:
@@ -260,8 +261,11 @@ def _alert(hits: list[dict]) -> None:
                 vol_bit = f", volume {vr:.1f}× (pace se aage)"
             lines.append(f"\n<b>{h['symbol']}</b> ne ₹{h['trigger']:,.0f} toda "
                          f"(₹{h['ltp']:,.1f}{hold_bit}{vol_bit}){plan}")
-        engine.send("\n".join(lines))
-        log.info("sniper_fired", symbols=[h["symbol"] for h in fresh])
+        ok = engine.send("\n".join(lines))
+        if ok:
+            log.info("sniper_fired", symbols=[h["symbol"] for h in fresh])
+        else:
+            log.warning("sniper_telegram_send_failed", symbols=[h["symbol"] for h in fresh])
         # 🤖 Autopilot hook — off-thread, tick stream kabhi block nahi hota
         def _feed_autopilot(hits_copy=list(fresh)):
             try:

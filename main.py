@@ -1029,6 +1029,27 @@ def cmd_autonomy(args) -> None:
                                     max_iterations=getattr(args, "max_iterations", None)))
 
 
+def cmd_telegram_diag(args) -> None:
+    """Diagnose why breakout Telegram alerts may be silent."""
+    import json
+    from research.autonomy.sniper_bridge import diagnose_breakout_alerts
+    report = diagnose_breakout_alerts()
+    print("\n=== Breakout Telegram diagnose ===")
+    print(json.dumps(report, indent=2, default=str))
+    if getattr(args, "send_test", False):
+        from alerts.telegram_alerts import AlertEngine
+        eng = AlertEngine()
+        if not eng.is_configured():
+            print("\nTEST SKIPPED — Telegram not configured in .env")
+            raise SystemExit(2)
+        ok = eng.send_test() if hasattr(eng, "send_test") else eng.send(
+            "🧪 QuantTerm test — breakout alerts path is reachable."
+        )
+        print("\nTEST SEND:", "OK" if ok else "FAILED")
+        raise SystemExit(0 if ok else 1)
+    raise SystemExit(0 if report.get("ok") else 2)
+
+
 def cmd_status(args) -> None:
     """Print live portfolio status (reads Kite positions directly)."""
     _assert_credentials()
@@ -1122,6 +1143,16 @@ def build_parser() -> argparse.ArgumentParser:
                           help="Run the autonomous supervisor (Streamlit-independent; paper-only)")
     auto.add_argument("--interval", type=float, default=15.0, help="loop interval seconds")
     auto.add_argument("--max-iterations", type=int, default=None, help="stop after N ticks (testing)")
+
+    tg = sub.add_parser(
+        "telegram-diag",
+        help="Diagnose silent breakout Telegram alerts (sniper / autonomy path)",
+    )
+    tg.add_argument(
+        "--send-test",
+        action="store_true",
+        help="Also send a test Telegram message if configured",
+    )
 
     bt = sub.add_parser("backtest", help="Run event-driven backtest")
     bt.add_argument(
@@ -1394,6 +1425,7 @@ def main() -> None:
         "status":     cmd_status,
         "autopilot":  cmd_autopilot,
         "autonomy":   cmd_autonomy,
+        "telegram-diag": cmd_telegram_diag,
     }
     dispatch[args.command](args)
 
