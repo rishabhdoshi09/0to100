@@ -77,7 +77,11 @@ export type StockWorkspace = {
   technical: {
     available: boolean
     latest_date?: string
+    eod_as_of?: string
     close?: number
+    price_tag?: string
+    live?: boolean
+    quote_source?: string
     ema20?: number | null
     ema50?: number | null
     ema200?: number | null

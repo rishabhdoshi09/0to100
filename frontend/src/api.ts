@@ -19,10 +19,27 @@ export const fetchDashboard = (): Promise<DashboardPayload> =>
   fetch('/api/dashboard', { headers: { Accept: 'application/json' } })
     .then((response) => json<DashboardPayload>(response))
 
-export const fetchChart = (symbol: string): Promise<{ symbol: string; bars: ChartBar[] }> =>
+export type ChartPayload = {
+  symbol: string
+  bars: ChartBar[]
+  last_close?: number | null
+  price_tag?: 'LIVE' | 'EOD' | string
+  freshness?: {
+    live?: boolean
+    source?: string
+    eod_as_of?: string
+    price_tag?: string
+    sessions_behind?: number | null
+    history_fresh?: boolean | null
+    required_session?: string | null
+  }
+  history?: Record<string, unknown>
+}
+
+export const fetchChart = (symbol: string): Promise<ChartPayload> =>
   fetch(`/api/chart/${encodeURIComponent(symbol)}`, {
     headers: { Accept: 'application/json' },
-  }).then((response) => json<{ symbol: string; bars: ChartBar[] }>(response))
+  }).then((response) => json<ChartPayload>(response))
 
 export const fetchOperation = (operationId: string): Promise<OperationRecord> =>
   fetch(`/api/operations/${encodeURIComponent(operationId)}`, {

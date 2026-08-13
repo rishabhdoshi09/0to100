@@ -527,7 +527,14 @@ export function ProductStockIntelligenceView(props: ViewProps) {
       {tab === 'Chart' && (
         <div className="stock-overview-grid">
           <Panel title={`PRICE STRUCTURE · ${selected}`} subtitle={`History as of ${workspace?.technical.latest_date || 'unknown'}`}>
-            <ChartWorkspace symbol={selected} bars={bars} row={workspace?.scanner} />
+            <ChartWorkspace
+              symbol={selected}
+              bars={bars}
+              row={workspace?.scanner}
+              priceTag={props.chartMeta?.price_tag || workspace?.technical?.price_tag}
+              lastClose={props.chartMeta?.last_close ?? workspace?.technical?.close}
+              sessionsBehind={props.chartMeta?.freshness?.sessions_behind}
+            />
           </Panel>
           <Panel title="WHAT THE CHART CURRENTLY SAYS">
             <div className="trend-callout"><span>{workspace?.technical.trend || 'UNAVAILABLE'}</span><p>{workspace?.technical.trend_explanation || 'No verified trend calculation.'}</p></div>

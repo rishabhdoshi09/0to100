@@ -201,12 +201,20 @@ export function ChartWorkspace({
   symbol,
   bars,
   row,
+  priceTag,
+  lastClose,
+  sessionsBehind,
 }: {
   symbol: string
   bars: ChartBar[]
   row?: ScanRecord | ConvictionRecord | LongTermRecord
+  priceTag?: string
+  lastClose?: number | null
+  sessionsBehind?: number | null
 }) {
   const scan = row as ScanRecord | undefined
+  const tag = String(priceTag || '').toUpperCase() === 'LIVE' ? 'LIVE' : 'EOD'
+  const displayPrice = lastClose != null ? lastClose : row?.price
   return (
     <div>
       {bars.length > 0 ? (
@@ -218,8 +226,16 @@ export function ChartWorkspace({
           <span>Saved bhavcopy history is required. Missing history is not simulated.</span>
         </div>
       )}
+      {sessionsBehind != null && sessionsBehind > 0 && (
+        <p className="chart-stale-note">
+          Official EOD is {sessionsBehind} session(s) behind — run Prepare official price history.
+        </p>
+      )}
       <div className="ohlc-strip">
-        <div><span>PRICE</span><strong>{money(row?.price)}</strong></div>
+        <div>
+          <span>PRICE · {tag}</span>
+          <strong>{money(displayPrice)}</strong>
+        </div>
         <div><span>ENTRY</span><strong>{money(scan?.entry)}</strong></div>
         <div><span>STOP</span><strong className="negative">{money(scan?.stop)}</strong></div>
         <div><span>TARGET</span><strong className="positive">{money(scan?.target)}</strong></div>

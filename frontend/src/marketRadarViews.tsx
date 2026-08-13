@@ -139,7 +139,7 @@ export function RadarHomeView(props: ExperienceViewProps & {
   onCompare: (symbol: string) => void
   onWatchlist: (symbol: string) => void
 }) {
-  const { dashboard, selected, setSelected, bars, setActive, depth, marketScan, longTermScan, onCompare, onWatchlist } = props
+  const { dashboard, selected, setSelected, bars, chartMeta, setActive, depth, marketScan, longTermScan, onCompare, onWatchlist } = props
   const [radar, setRadar] = useState<RadarHome | null>(null)
   const [preTrade, setPreTrade] = useState<PreTrade | null>(null)
 
@@ -207,8 +207,15 @@ export function RadarHomeView(props: ExperienceViewProps & {
       </div>
 
       <div className="radar-workspace">
-        <Panel title={`CHART · ${selected || 'SELECT STOCK'}`} subtitle={`Official history · ${dashboard.data.bhavcopy.latest_date || '—'}`}>
-          <ChartWorkspace symbol={selected} bars={bars} row={row} />
+        <Panel title={`CHART · ${selected || 'SELECT STOCK'}`} subtitle={`${chartMeta?.price_tag || 'EOD'} · history ${dashboard.data.bhavcopy.latest_date || '—'}`}>
+          <ChartWorkspace
+            symbol={selected}
+            bars={bars}
+            row={row}
+            priceTag={chartMeta?.price_tag}
+            lastClose={chartMeta?.last_close}
+            sessionsBehind={chartMeta?.freshness?.sessions_behind}
+          />
         </Panel>
         <Panel title="DECISION PREVIEW">
           {selected ? (
@@ -244,7 +251,7 @@ export function RadarHomeView(props: ExperienceViewProps & {
 }
 
 export function MarketScannerView(props: ExperienceViewProps & { onCompare: (symbol: string) => void }) {
-  const { dashboard, selected, setSelected, bars, setActive, depth, marketScan, longTermScan, onCompare } = props
+  const { dashboard, selected, setSelected, bars, chartMeta, setActive, depth, marketScan, longTermScan, onCompare } = props
   const scannerTabs = depth === 'professional'
     ? ['Breakouts', 'Momentum', 'Conviction', 'Pre-Breakout', 'Long-Term', 'F&O', 'Avoid']
     : ['Breakouts', 'Momentum', 'Long-Term']
@@ -313,7 +320,16 @@ export function MarketScannerView(props: ExperienceViewProps & { onCompare: (sym
           <DenseTable rows={filtered} selected={selected} onSelect={setSelected} depth={depth} mode={tab} />
         </Panel>
         <div className="scanner-detail-column">
-          <Panel title={`CHART · ${selected || '—'}`}><ChartWorkspace symbol={selected} bars={bars} row={selectedRow} /></Panel>
+          <Panel title={`CHART · ${selected || '—'}`}>
+            <ChartWorkspace
+              symbol={selected}
+              bars={bars}
+              row={selectedRow}
+              priceTag={chartMeta?.price_tag}
+              lastClose={chartMeta?.last_close}
+              sessionsBehind={chartMeta?.freshness?.sessions_behind}
+            />
+          </Panel>
           <Panel title="ACTIONS">
             <div className="radar-action-row">
               <button type="button" disabled={!selected} onClick={() => setActive('Stock Intelligence')}>Stock Intelligence</button>

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { fetchChart, fetchDashboard, sendControl } from './api'
+import { fetchChart, fetchDashboard, sendControl, type ChartPayload } from './api'
 import {
   CompareView,
   MarketScannerView,
@@ -190,6 +190,7 @@ function App() {
   const [compareSymbols, setCompareSymbols] = useState<string[]>([])
   const [selected, setSelected] = useState('')
   const [bars, setBars] = useState<ChartBar[]>([])
+  const [chartMeta, setChartMeta] = useState<Pick<ChartPayload, 'price_tag' | 'last_close' | 'freshness'> | null>(null)
   const [controlState, setControlState] = useState('')
   const [query, setQuery] = useState('')
   const [universeSymbols, setUniverseSymbols] = useState<string[]>([])
@@ -246,11 +247,22 @@ function App() {
   useEffect(() => {
     if (!selected) {
       setBars([])
+      setChartMeta(null)
       return
     }
     fetchChart(selected)
-      .then((result) => setBars(result.bars))
-      .catch(() => setBars([]))
+      .then((result) => {
+        setBars(result.bars)
+        setChartMeta({
+          price_tag: result.price_tag,
+          last_close: result.last_close,
+          freshness: result.freshness,
+        })
+      })
+      .catch(() => {
+        setBars([])
+        setChartMeta(null)
+      })
   }, [selected, dashboard.data.bhavcopy.ready, dashboard.data.bhavcopy.latest_date])
 
   const symbols = useMemo(() => {
@@ -394,6 +406,7 @@ function App() {
     selected,
     setSelected,
     bars,
+    chartMeta,
     setActive,
     runControl,
     depth,

@@ -545,7 +545,18 @@ def build_stock_workspace(
     scan_row = _find(scan_payload, symbol)
     long_row = _find(long_term_payload, symbol)
     raw_record = dict(raw_fundamentals or {})
+    price_meta = {"live": False, "price_tag": "EOD", "eod_as_of": "", "source": ""}
+    try:
+        from data.nse_live import overlay_live_on_frame
+        frame, price_meta = overlay_live_on_frame(frame, symbol)
+    except Exception:
+        pass
     technical = _technical(frame)
+    technical["price_tag"] = price_meta.get("price_tag") or "EOD"
+    technical["live"] = bool(price_meta.get("live"))
+    technical["quote_source"] = str(price_meta.get("source") or "")
+    if price_meta.get("eod_as_of"):
+        technical["eod_as_of"] = price_meta.get("eod_as_of")
     sector = str(long_row.get("sector") or scan_row.get("sector") or "Unclassified")
     company = str(scan_row.get("company") or long_row.get("company") or symbol)
     fundamentals = _fundamentals(long_row, raw_record, sector)
@@ -568,8 +579,36 @@ def build_stock_workspace(
     news_rows.sort(key=lambda item: (str(item.get("published_at") or item.get("fetched_at") or ""), int(item.get("impact_score", 0) or 0)), reverse=True)
     fno_match = next((dict(item) for item in list((fno_payload or {}).get("underlyings", []) or []) if isinstance(item, Mapping) and str(item.get("symbol", "")).upper() == symbol), {})
 
+    history_source = _source(
+        "Official price history",
+        technical.get("available", False),
+        technical.get("eod_as_of") or technical.get("latest_date"),
+        2,
+        "Charts and technical calculations use saved NSE daily OHLCV; live overlay tagged separately when available.",
+        now=now,
+    )
+    # Prefer NSE session freshness over wall-clock days for history.
+    try:
+        from research.intelligence.data import nse_calendar as CAL
+        from core.market_clock import IST
+        now_ist = now.astimezone(IST).replace(tzinfo=None) if now.tzinfo else now
+        eod = str(technical.get("eod_as_of") or technical.get("latest_date") or "")
+        if technical.get("available") and eod:
+            verdict = CAL.snapshot_freshness(eod, now=now_ist, allowance_sessions=0)
+            if not verdict.get("fresh"):
+                history_source["status"] = "STALE"
+                history_source["meaning"] = (
+                    f"Official EOD is {verdict.get('sessions_behind')} session(s) behind "
+                    f"(need {verdict.get('required')}). Run Prepare official price history."
+                )
+            history_source["sessions_behind"] = verdict.get("sessions_behind")
+    except Exception:
+        pass
+    if technical.get("live"):
+        history_source["details_live"] = f"LIVE overlay via {technical.get('quote_source') or 'quote'}"
+
     sources = [
-        _source("Official price history", technical.get("available", False), technical.get("latest_date"), 4, "Charts and technical calculations use saved NSE daily OHLCV.", now=now),
+        history_source,
         _source("Whole-market scanner", bool(scan_row), (scan_payload or {}).get("scanned_at"), 1, "Current technical setup, entry framework and scanner reasons.", now=now),
         _source("Long-term research", bool(long_row), (long_term_payload or {}).get("scanned_at"), 4, "Current business-quality snapshot combined with technical timing.", now=now),
         _source(
