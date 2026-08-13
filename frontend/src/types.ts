@@ -16,6 +16,13 @@ export type ScanRecord = {
   reasons?: string[]
   chase_risk?: boolean
   edge_r?: number | null
+  breakout_grade?: string
+  breakout_conviction?: number
+  breakout_quality?: number
+  breakout_state?: string
+  fundamental_score?: number
+  classification?: string
+  sniper_candidate?: boolean
 }
 
 export type ConvictionRecord = ScanRecord & {

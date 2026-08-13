@@ -154,6 +154,12 @@ def _manage_positions(ctx, store, book, state, res) -> None:
             store.append(rec)
         for rec in REG.decode("execution", t.as_dict()):
             store.append(rec)
+        # Forward-evidence ledger (PAPER_FORWARD label; never merges with LIVE)
+        try:
+            from research.forward_evidence.hooks import on_paper_trade_closed
+            on_paper_trade_closed(t, cycle_id=ctx.cycle_id())
+        except Exception:
+            pass
         EV.emit(store, ctx.cycle_id(), EV.PAPER_POSITION_CLOSED, strategy_id=t.strategy_id,
                 symbol=t.symbol, reason=t.exit_reason, event_ts=ctx.as_of_date,
                 summary={"realized_R": round(t.realized_R, 4), "pnl": round(t.pnl, 2)})
@@ -315,6 +321,20 @@ def _open_new_positions(ctx, store, book, state, res, decisions, today_signals, 
 
     decision_by_strategy = {str(d.strategy_id): d for d in decisions}
     for target in build.executable:
+        # PAPER observation allowlist — scientific status alone never grants paper authority
+        try:
+            from research.forward_evidence.hooks import may_open_paper
+            if not may_open_paper(str(target.strategy_id), family=str(getattr(target, "family", "") or "")):
+                EV.emit(store, cid, EV.TRADE_INTENT_BLOCKED,
+                        strategy_id=target.strategy_id, symbol=target.symbol,
+                        reason="NOT_PAPER_ENABLED", event_ts=ctx.as_of_date,
+                        causation_id=target.record_id,
+                        summary={"policy": target.strategy_id, "live_enabled": False})
+                res.intents_blocked.append((target.strategy_id, "NOT_PAPER_ENABLED"))
+                continue
+        except Exception:
+            pass
+
         intent = TARGET.trade_intent_from_target(target, build.portfolio)
         store.append(intent)
         EV.emit(store, cid, EV.TRADE_INTENT_CREATED,
@@ -364,6 +384,28 @@ def _open_new_positions(ctx, store, book, state, res, decisions, today_signals, 
         st.lifecycle = "PAPER_EVALUATION"
         st.latest_card_id = target.card_id
         st.latest_allocation_id = target.allocation_id
+        # Freeze decision-time snapshot for forward evidence (idempotent)
+        try:
+            from research.forward_evidence.hooks import on_paper_intent_opened
+            on_paper_intent_opened(
+                policy_id=str(target.strategy_id),
+                symbol=str(target.symbol),
+                timestamp=str(ctx.as_of_date),
+                entry=float(pos.entry_price),
+                stop=float(pos.stop_price),
+                target=float(pos.target_price),
+                qty=int(pos.qty),
+                policy_version=str(getattr(target, "strategy_version", "1")),
+                config_hash=str(getattr(target, "rules_hash", "")),
+                cycle_id=cid,
+                intent_id=str(intent.record_id),
+                target_position_id=str(target.record_id),
+                data_snapshot_id=str(getattr(target, "data_snapshot_id", "")),
+                evidence_state=str(getattr(decision, "action", "") if decision else ""),
+                mode=str(ctx.mode),
+            )
+        except Exception:
+            pass
         EV.emit(store, cid, EV.PAPER_POSITION_OPENED,
                 strategy_id=target.strategy_id, symbol=target.symbol,
                 event_ts=ctx.as_of_date, causation_id=intent.record_id,

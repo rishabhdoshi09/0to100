@@ -1,0 +1,48 @@
+{
+  "experiment_id": "EXP-FUND-03-FOLLOWUP",
+  "parent_experiment_id": "EXP-FUND-03",
+  "parent_hypothesis_id": "ef129d36b8f8378b",
+  "parent_result_hash": "3d508563a5d81633",
+  "parent_final_unchanged": "CONFIRMED",
+  "followup_hypothesis_id": "2617d6e4022e4ddb",
+  "reproduction_pass": 1,
+  "final_verdict": "INCONCLUSIVE_FOLLOWUP",
+  "next_action": "RECORD_EVIDENCE_NO_TUNING",
+  "status_card": {
+    "time_stable": "YES",
+    "monotonic": "YES",
+    "cost_robust": "YES",
+    "liquidity_ok": "YES",
+    "concentration_ok": "YES",
+    "pit_clean": "YES",
+    "placebo_clean": "NO"
+  },
+  "verdict_reasons": [
+    "placebo controls not clean \u2014 cannot clear robust bar",
+    "little incremental information vs 60d momentum"
+  ],
+  "pooled_mean_net": 0.00642,
+  "cost_break_even_pct_pts": 0.962,
+  "subperiod_directions": {
+    "SP1_2023H1": "POSITIVE",
+    "SP2_2023H2": "POSITIVE",
+    "SP3_2024H1": "POSITIVE",
+    "SP4_CONFIRM": "POSITIVE"
+  },
+  "monotonic_spearman": 0.9,
+  "placebo_flags": [
+    {
+      "id": "PLACEBO_PREMATURE_PERIOD_END",
+      "flag_suspicious": 1
+    },
+    {
+      "id": "PLACEBO_PRE_RELEASE_WINDOW",
+      "flag_suspicious": 1
+    }
+  ],
+  "incremental_vs_mom60": 0,
+  "residualized_mean_net": -0.000877,
+  "result_hash": "9b4956698f1e6023",
+  "production_authority": false,
+  "parent_not_overwritten": true
+}

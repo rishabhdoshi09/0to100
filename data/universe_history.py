@@ -201,22 +201,48 @@ def ledger_status(path: str | Path | None = None) -> dict:
     rows, meta = _coerce_payload(raw)
     cleaned = validate_membership_rows(rows)
     source = str(meta.get("source") or ("operator" if isinstance(raw, list) else ""))
-    research_grade = bool(cleaned) and is_research_grade_source(source)
     note = str(meta.get("note") or "")
     if source == "bhav_inferred" and not note:
         note = (
             "Membership inferred from local bhav first/last sessions — better than "
             "today's survivors only, but not an official NSE listing/delisting archive."
         )
+    completeness = raw.get("completeness") if isinstance(raw, dict) else None
+    if not isinstance(completeness, dict):
+        completeness = {}
+
+    has_any_delist = any(bool(r.get("delisted")) for r in cleaned)
+    survivor_only = bool(completeness.get("reconstructed_from_survivors_only", False))
+
+    if "survivorship_complete" in completeness:
+        survivorship_complete = bool(completeness.get("survivorship_complete"))
+    elif source == "bhav_inferred":
+        # Operational PIT intervals from local bhav — NOT research-grade.
+        survivorship_complete = bool(cleaned)
+    elif is_research_grade_source(source) and has_any_delist and not survivor_only:
+        # Official/operator archive that includes delisting evidence.
+        survivorship_complete = True
+    else:
+        # Fail closed for official listing-only masters (e.g. EQUITY_L survivors).
+        survivorship_complete = False
+
+    research_grade = (
+        bool(cleaned)
+        and is_research_grade_source(source)
+        and survivorship_complete
+        and not survivor_only
+        and has_any_delist
+    )
     return {
         "available": True,
         "path": str(p),
         "rows": len(cleaned),
-        "survivorship_complete": bool(cleaned),
+        "survivorship_complete": survivorship_complete,
         "source": source or "operator",
         "note": note,
         "research_grade": research_grade,
         "generated_at": meta.get("generated_at") or "",
+        "completeness": completeness,
     }
 
 
@@ -236,7 +262,8 @@ def build_from_bhav(
     dest = history_path(path)
     if dest.exists():
         status = ledger_status(dest)
-        if status.get("research_grade"):
+        # Never overwrite an official / research-grade ledger with bhav inference.
+        if status.get("research_grade") or is_research_grade_source(status.get("source")):
             status["built"] = False
             status["reason"] = "refusing_to_overwrite_research_grade"
             return status

@@ -717,10 +717,16 @@ def run_market_scan(ctx) -> JobResult:
             telegram = ctx.deps.notify_scan(payload, phase=phase) or {}
         except Exception:
             telegram = {"error": "notification_failed"}
+    sniper = {}
+    try:
+        from research.autonomy.sniper_bridge import ensure_breakout_sniper
+        sniper = ensure_breakout_sniper(payload) or {}
+    except Exception:
+        sniper = {"error": "sniper_bridge_failed"}
     return JobResult(JS.SUCCEEDED,
                      f"scan complete · {n} setups · {summary.get('momentum', 0)} momentum",
                      state_hint=ST.OBSERVING, unblocks=(DEP_SCAN,),
-                     metadata={**summary, "telegram": telegram})
+                     metadata={**summary, "telegram": telegram, "sniper": sniper})
 
 
 def _entry_reason(now, holidays, ctx) -> tuple[bool, str, str]:

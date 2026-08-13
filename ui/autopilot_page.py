@@ -276,11 +276,17 @@ def _render_india_autopilot() -> None:
                      "nikla toh woh source khud pause ho jata hai")
         with u3:
             hold_days = st.number_input(
-                "Time-stop (days)", 2, 15, int(s.get("max_hold_days", 5)),
+                "Time-stop (days)", 2, 30, int(s.get("max_hold_days", 15)),
                 key="ap_hold",
-                help="Itne din flat → PAPER close (capital recycle), "
-                     "LIVE pe sirf Telegram nudge")
-        # 🎯 Target % — backtest ka evidence saath mein
+                help="Soft ceiling. With thesis-hold ON, a healthy runner is "
+                     "NOT force-closed just because days elapsed.")
+        thesis_on = st.toggle(
+            "📌 Thesis hold (recommended)",
+            value=bool(s.get("thesis_hold", True)), key="ap_thesis",
+            help="Hold while technicals + fundamentals look good. Exit when "
+                 "RSI blows off, setup breaks, or fundamentals collapse. "
+                 "NOT a fixed ₹1500 / 3% scalp.")
+        # 🎯 Target % — used when thesis_hold is OFF; runner ceiling when ON
         _rec_txt = ""
         try:
             from scan.signal_backtest import load_report
@@ -295,12 +301,20 @@ def _render_india_autopilot() -> None:
             pass
         tg1, tg2 = st.columns(2)
         with tg1:
-            target_pct = st.slider(
-                "Profit target (%)", 1.0, 10.0, float(s.get("target_pct", 3.0)),
-                0.5, key="ap_target",
-                help=(_rec_txt or "Har entry ka GTT target = LIVE entry price "
-                                  "× (1 + yeh %). Backtest chalao toh "
-                                  "evidence-backed recommendation dikhegi"))
+            if thesis_on:
+                runner_pct = st.slider(
+                    "Runner GTT ceiling (%)", 5.0, 25.0,
+                    float(s.get("runner_target_pct", 10.0)), 0.5,
+                    key="ap_runner",
+                    help="Wide exchange-side ceiling so a healthy runner is "
+                         "not cut early. Real exit = thesis break / trail / stop.")
+                target_pct = float(s.get("target_pct", 3.0))
+            else:
+                target_pct = st.slider(
+                    "Profit target (%)", 1.0, 10.0, float(s.get("target_pct", 3.0)),
+                    0.5, key="ap_target",
+                    help=(_rec_txt or "Scalp mode: GTT target = entry × (1+%)."))
+                runner_pct = float(s.get("runner_target_pct", 10.0))
         with tg2:
             chase_pct = st.slider(
                 "Max chase (%)", 0.25, 5.0,
@@ -308,30 +322,41 @@ def _render_india_autopilot() -> None:
                 help="Live price signal-entry se isse zyada upar → trade "
                      "SKIP. Bhaagti train ka peecha nahi — extension pe "
                      "buy karna edge kha jata hai")
+        st.caption(
+            "Optional scalp booking (usually leave at 0 — thesis-hold is the default):"
+        )
+        book_pct = st.number_input(
+            "💰 Optional profit-book AIM (% of pool, 0 = off)", 0.0, 15.0,
+            float(s.get("profit_book_pct", 0.0)), 0.5, key="ap_book_pct",
+            help="Optional. Default OFF. Thesis-hold exits on tech/fund break "
+                 "instead of a fixed profit AIM.")
         book_rs = st.number_input(
-            "💰 Profit-book AIM (₹ per trade, 0 = off)", 0.0, 100000.0,
+            "💰 Absolute ₹ override (0 = use % / thesis-hold)", 0.0, 100000.0,
             float(s.get("profit_book_rupees", 0.0)), 250.0, key="ap_book",
-            help="Isse PEHLE book NAHI hota — pehle chalne do. Aim cross "
-                 "hote hi trailing ARM ho jaati hai (neeche floor/give-back "
-                 "dekho). ⚡ Fast-exit monitor har ~60s check karta hai (scan "
-                 "ka wait nahi). GTT exchange-side safety net alag se rehta hai.")
+            help="Legacy fixed-rupee AIM. When >0 this overrides % mode.")
         bf1, bf2 = st.columns(2)
         with bf1:
+            book_floor_pct = st.number_input(
+                "🛡️ Min floor (% of pool)", 0.0, 10.0,
+                float(s.get("profit_book_min_pct", 1.5)), 0.25,
+                key="ap_book_floor_pct",
+                help="Pct-mode worst-case floor after trail arms.")
             book_floor = st.number_input(
-                "🛡️ Min floor (₹, isse KAM pe kabhi book nahi)", 0.0, 100000.0,
+                "🛡️ Min floor ₹ (absolute mode)", 0.0, 100000.0,
                 float(s.get("profit_book_min_rupees", 1000.0)), 100.0,
                 key="ap_book_floor",
-                help="Trailing ARM hone ke baad ka WORST-CASE guarantee — "
-                     "peak se pullback ho bhi jaye, isse neeche kabhi book "
-                     "nahi hota.")
+                help="Used only when absolute ₹ override is set.")
         with bf2:
+            book_give_pct = st.number_input(
+                "📉 Trail give-back (% of pool)", 0.05, 5.0,
+                float(s.get("profit_trail_giveback_pct", 0.6)), 0.05,
+                key="ap_book_give_pct",
+                help="Pct-mode: peak NET se itna % pool neeche aane par lock.")
             book_give = st.number_input(
-                "📉 Trail give-back (₹ peak se)", 50.0, 50000.0,
+                "📉 Trail give-back ₹ (absolute mode)", 50.0, 50000.0,
                 float(s.get("profit_trail_giveback_rupees", 300.0)), 50.0,
                 key="ap_book_give",
-                help="Aim cross karte hi trailing arm — peak NET se itna "
-                     "neeche aane par lock (floor se kam kabhi nahi). Runner "
-                     "ko chalne do, jo mila usse pakdo.")
+                help="Used only when absolute ₹ override is set.")
         if _rec_txt:
             st.caption(f"📊 {_rec_txt} — slider tumhara hai, evidence humara.")
         if st.button("💾 Save limits", key="ap_save", width="stretch"):
@@ -353,10 +378,15 @@ def _render_india_autopilot() -> None:
                        conviction_sizing=conv_on,
                        adaptive_source_gate=adapt_on,
                        max_hold_days=int(hold_days),
+                       thesis_hold=bool(thesis_on),
+                       runner_target_pct=float(runner_pct),
                        target_pct=float(target_pct),
                        max_chase_pct=float(chase_pct),
+                       profit_book_pct=float(book_pct),
                        profit_book_rupees=float(book_rs),
+                       profit_book_min_pct=float(book_floor_pct),
                        profit_book_min_rupees=float(book_floor),
+                       profit_trail_giveback_pct=float(book_give_pct),
                        profit_trail_giveback_rupees=float(book_give))
             st.success("Limits saved. (Mode change hua ho toh dobara ARM karna hoga.)")
             st.rerun()

@@ -53,10 +53,22 @@ def _record(signal: Any, names: Mapping[str, str], fno_symbols: set[str]) -> dic
         "reasons": reasons,
         "why": reasons[0] if reasons else "No explanation recorded",
         "sector": str(_value(signal, "sector", "") or ""),
+        # Sniper / live-breakout fields (preserved so autonomy can arm Kite WS)
+        "categories": sorted(
+            set(_value(signal, "categories", set()) or set())
+            or ({"PreBreakout"} if "PRE_BREAKOUT" in signals else set())
+        ),
+        "pivot_distance_pct": float(_value(signal, "pivot_distance_pct", 0.0) or 0.0),
+        "avg_vol20": float(_value(signal, "avg_vol20", 0.0) or 0.0),
         "edge_r": (
             float(_value(signal, "edge_r"))
             if _value(signal, "edge_r", None) is not None
             else None
+        ),
+        # Breakout quality — used to surface the BEST breakout among peers
+        "breakout_grade": str(_value(signal, "breakout_grade", "") or ""),
+        "breakout_conviction": float(
+            _value(signal, "breakout_conviction", 0.0) or 0.0
         ),
     }
 

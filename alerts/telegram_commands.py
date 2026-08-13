@@ -11,7 +11,7 @@
   /aggressive    — zyada trades (10/day tak, wider net)
   /balanced      — default discipline
   /conservative  — sirf A+ setups, kam trades
-  /book 1500     — har trade ₹1500 profit pe book (0 = off)
+  /book 3%       — optional scalp AIM (default OFF; thesis-hold is default)
   /funnel        — aaj kitne dekhe/liye/kyun reject — poora hisaab
   /brain         — abhi ka Brain verdict on demand
   /help          — ye list
@@ -63,8 +63,11 @@ def _status() -> str:
             f"{s.get('max_trades_per_day', 0)} · "
             f"Preset: {s.get('preset', 'Balanced')}\n"
             f"Pool: ₹{s.get('pool', 0):,.0f} · "
-            f"Book: ₹{s.get('profit_book_rupees', 0):,.0f}"
-            f"{day_bit}{posture}")
+            f"Hold: {'thesis' if s.get('thesis_hold', True) else 'scalp'} · "
+            f"Book: {s.get('profit_book_pct', 0):g}% pool"
+            + (f" / ₹{s.get('profit_book_rupees', 0):,.0f} abs"
+               if float(s.get('profit_book_rupees') or 0) > 0 else "")
+            + f"{day_bit}{posture}")
 
 
 def _pause() -> str:
@@ -103,28 +106,51 @@ def _preset(name: str) -> str:
 
 
 def _book(arg: str) -> str:
+    """Set profit-book AIM.
+
+    /book 3%   → 3% of pool (recommended; quality scales per trade)
+    /book 3    → same when ≤20 (pct mode)
+    /book 1500 → absolute ₹ override (legacy)
+    /book 0    → OFF
+    """
+    raw = (arg or "").strip().lower()
+    if not raw:
+        return "Aise: /book 3%  (capital %) ya /book 1500 (₹) · /book 0 = off"
+    pct_mode = raw.endswith("%")
     try:
-        amt = float(arg)
+        amt = float(raw.rstrip("%"))
     except Exception:
-        return "Aise: /book 1500  (ya /book 0 = off)"
-    from execution.autopilot import set_config, get_status
+        return "Aise: /book 3%  (capital %) ya /book 1500 (₹) · /book 0 = off"
+    from execution.autopilot import set_config, get_status, _base_book_aim_rupees
+    if amt <= 0:
+        set_config(profit_book_rupees=0.0, profit_book_pct=0.0)
+        return "💰 Profit-book — OFF"
+    if pct_mode or amt <= 20:
+        set_config(profit_book_pct=float(amt), profit_book_rupees=0.0)
+        s = get_status()
+        base = _base_book_aim_rupees(s)
+        return (f"💰 Profit-book AIM: <b>{amt:g}% of pool</b> "
+                f"(≈ ₹{base:,.0f} base @ pool ₹{s.get('pool', 0):,.0f}). "
+                f"Technicals + fundamentals scale each trade 0.5×–1.25×. "
+                f"Floor {s.get('profit_book_min_pct', 1.5):g}% · "
+                f"trail give-back {s.get('profit_trail_giveback_pct', 0.6):g}%.")
     set_config(profit_book_rupees=amt)
     s = get_status()
     val = s.get("profit_book_rupees", 0)
     floor = s.get("profit_book_min_rupees", 1000)
     give = s.get("profit_trail_giveback_rupees", 300)
-    return (f"💰 Profit-book AIM: <b>₹{val:,.0f}</b>/trade"
+    return (f"💰 Profit-book AIM: <b>₹{val:,.0f}</b>/trade (absolute override)"
             + (" — OFF" if val <= 0 else
                f" — isse pehle book nahi. Aim cross → trail arm (peak se "
                f"₹{give:,.0f} giveback pe lock, floor ₹{floor:,.0f} — isse "
-               f"kam kabhi nahi). App mein floor/give-back tune kar sakte ho."))
+               f"kam kabhi nahi). Prefer /book 3% for capital-scaled aims."))
 
 
 def _trade_now() -> str:
     """📈 'Abhi ek trade lo' — next 15-min scan ka wait nahi. Store ka
-    best untraded BUY (prime/EV-ranked) autopilot ke SAARE gates se guzaar
-    ke place karne ki koshish. Gates fail hue toh imaandaar wajah batata
-    hai — force nahi, sirf timing manual."""
+    best sniper-quality BUY (RSI≤70, volume prioritized) autopilot ke
+    SAARE gates se guzaar ke place karne ki koshish. Gates fail hue toh
+    imaandaar wajah batata hai — force nahi, sirf timing manual."""
     from execution.autopilot import get_status, consider
     s = get_status()
     if not s.get("armed"):
@@ -135,23 +161,46 @@ def _trade_now() -> str:
     try:
         from scan.auto_scan import get_results
         from scan.ev_engine import ev_rank_key
+        from product.radar_workspace import (
+            MIN_VOLUME_RATIO,
+            RSI_BLOWOFF,
+            breakout_quality_score,
+            is_sniper_breakout_candidate,
+            _volume_ratio,
+        )
         results, _n, _ts, _st = get_results()
     except Exception:
         return "Scan store abhi khali — thodi der mein /trade dobara."
     buys = [r for r in results if r.get("verdict") in ("STRONG BUY", "BUY")]
     if not buys:
         return "Abhi koi BUY setup store mein nahi. /status se dekho."
-    # prime first, phir conservative-EV/conviction
-    buys.sort(key=lambda r: (bool(r.get("prime")), ev_rank_key(r)),
-              reverse=True)
+    # Sniper-first · volume ≥1× · ignore RSI blow-off · then prime/EV
+    buys.sort(
+        key=lambda r: (
+            float(r.get("rsi") or 0) <= RSI_BLOWOFF,
+            is_sniper_breakout_candidate(r),
+            not (0 < _volume_ratio(r) < MIN_VOLUME_RATIO),
+            bool(r.get("prime")),
+            breakout_quality_score(r),
+            ev_rank_key(r),
+        ),
+        reverse=True,
+    )
     for r in buys[:8]:                          # top few try — pehla jo pass ho
+        rsi = float(r.get("rsi") or 0)
+        if rsi > RSI_BLOWOFF:
+            continue
         placed = consider(
             symbol=r["symbol"],
             entry=float(r.get("entry") or r.get("price") or 0),
             stop=float(r.get("stop") or 0), score=float(r.get("score") or 0),
             edge=r.get("edge_r"), sector=r.get("sector") or "",
             source="manual", ev_pct=r.get("ev_pct"), p_win=r.get("p_win"),
-            ev_conf=r.get("ev_conf"), grade=str(r.get("breakout_grade") or ""))
+            ev_conf=r.get("ev_conf"), grade=str(r.get("breakout_grade") or ""),
+            breakout_conviction=float(r.get("breakout_conviction") or 0),
+            rsi=rsi,
+            volume_ratio=float(r.get("volume_ratio") or 0),
+        )
         if placed:
             return (f"✅ Trade liya: <b>{r['symbol']}</b> — gates paar, order "
                     f"lag gaya. /status se dekho.")
@@ -185,8 +234,8 @@ _HELP = ("📱 <b>Commands</b>\n"
          "/pause — 🛑 naye trades band\n"
          "/resume — 🟢 wapas chalu (paper)\n"
          "/aggressive · /balanced · /conservative — kitne trades\n"
-         "/book 1500 — NET ₹ aim (charges ke baad); floor 1000, trail "
-         "give-back 300 default — app mein tune karo\n"
+         "/book 3% — optional scalp NET AIM (default is thesis-hold: keep while "
+         "tech+fund look good); /book 1500 absolute ₹; /book 0 = off\n"
          "/funnel — aaj ka hisaab (kyun kam trades)\n"
          "/brain — abhi ka verdict")
 

@@ -21,6 +21,15 @@ FAILED = "FAILED"
 DATA_STATES = (NO_DATA, IMPORTING, VALIDATING, READY, READY_WITH_WARNINGS,
                DEGRADED, STALE, CONFLICTED, FAILED)
 
+# ── research PIT-read vocabulary (facade; does NOT alter automation DATA_STATES) ─
+# Reuses READY / DEGRADED / STALE string values. Extra statuses describe honest
+# research-read outcomes that automation DATA_STATES never needed to name.
+INCOMPLETE = "INCOMPLETE"         # required ledger/slice missing or partial
+NOT_PIT_SAFE = "NOT_PIT_SAFE"     # source exists but is not point-in-time safe
+BLOCKED = "BLOCKED"               # request refused (future as_of, no snapshot, …)
+
+PIT_READ_STATES = (READY, DEGRADED, STALE, INCOMPLETE, NOT_PIT_SAFE, BLOCKED)
+
 
 def allows_new_entries(state: str) -> bool:
     """Only genuinely healthy states may OPEN new positions."""

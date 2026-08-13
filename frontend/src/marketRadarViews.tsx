@@ -29,6 +29,13 @@ type RadarRow = ScannerWorkspaceRow & {
   company?: string
   classification?: string
   combined_score?: number
+  breakout_grade?: string
+  breakout_conviction?: number
+  breakout_quality?: number
+  fundamental_score?: number
+  sniper_candidate?: boolean
+  volume_ratio?: number
+  rsi?: number
 }
 
 const breakoutLabel: Record<string, string> = {
@@ -56,6 +63,70 @@ const momentumLabel: Record<string, string> = {
   not_momentum: '—',
 }
 
+function BestSniperPanel({
+  best,
+  sniperCount,
+  onSelect,
+}: {
+  best: RadarRow | null | undefined
+  sniperCount: number
+  onSelect: (symbol: string) => void
+}) {
+  if (best) {
+    return (
+      <div className="radar-best-breakout">
+        <Panel
+          title={`BEST SNIPER CANDIDATE · ${best.symbol}`}
+          subtitle={
+            [
+              sniperCount > 0 ? `${sniperCount} sniper candidate${sniperCount === 1 ? '' : 's'}` : null,
+              best.breakout_grade ? `Grade ${best.breakout_grade}` : null,
+              best.breakout_conviction != null
+                ? `Conv ${Math.round(Number(best.breakout_conviction))}`
+                : null,
+              best.rsi != null ? `RSI ${Math.round(Number(best.rsi))}` : null,
+              best.volume_ratio != null
+                ? `Vol ${Number(best.volume_ratio).toFixed(1)}×`
+                : null,
+              best.classification
+                ? String(best.classification).replace(/_/g, ' ')
+                : null,
+            ].filter(Boolean).join(' · ') || 'Sniper pool · RSI≤70 · volume prioritized'
+          }
+        >
+          <button
+            type="button"
+            className="radar-best-pick-btn"
+            onClick={() => onSelect(String(best.symbol || ''))}
+          >
+            Score {best.score ?? '—'}
+            {best.breakout_quality != null
+              ? ` · Quality ${Number(best.breakout_quality).toFixed(0)}`
+              : ''}
+            {' · '}
+            {breakoutLabel[String(best.breakout_state || '')]
+              || words(String(best.breakout_state || best.status || ''))}
+          </button>
+        </Panel>
+      </div>
+    )
+  }
+  return (
+    <div className="radar-best-breakout radar-best-empty">
+      <Panel
+        title="BEST SNIPER CANDIDATE"
+        subtitle="No sniper-quality name in the current pool (need RSI≤70, near pivot or graded A/B, volume evidence)"
+      >
+        <p className="radar-empty-li">
+          {sniperCount === 0
+            ? 'Sniper pool empty — wider breakouts still listed below.'
+            : 'Sniper pool has names but none cleared the best-pick gate.'}
+        </p>
+      </Panel>
+    </div>
+  )
+}
+
 function DenseTable({
   rows,
   selected,
@@ -69,10 +140,17 @@ function DenseTable({
   depth: ExperienceViewProps['depth']
   mode: string
 }) {
-  const [sortKey, setSortKey] = useState('score')
+  // Breakouts: keep server sniper-first ranking until the user clicks a column.
+  const [sortKey, setSortKey] = useState(mode === 'Breakouts' ? '' : 'score')
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc')
 
+  useEffect(() => {
+    setSortKey(mode === 'Breakouts' ? '' : 'score')
+    setSortDir('desc')
+  }, [mode])
+
   const sorted = useMemo(() => {
+    if (!sortKey) return rows
     const copy = [...rows]
     copy.sort((a, b) => {
       const av = (a as Record<string, unknown>)[sortKey]
@@ -96,9 +174,13 @@ function DenseTable({
 
   const cols = mode === 'Long-Term'
     ? ['symbol', 'classification', 'combined_score', 'sector', 'coverage_pct', 'risk_label']
-    : depth === 'professional'
-      ? ['symbol', 'price', 'change_5d_pct', 'sector', 'setup_label', 'breakout_state', 'momentum_state', 'relative_strength', 'risk_label']
-      : ['symbol', 'price', 'change_5d_pct', 'sector', 'setup_label', 'risk_label']
+    : mode === 'Breakouts'
+      ? depth === 'professional'
+        ? ['symbol', 'sniper', 'price', 'volume_ratio', 'rsi', 'breakout_grade', 'breakout_quality', 'breakout_state', 'sector', 'risk_label']
+        : ['symbol', 'sniper', 'price', 'volume_ratio', 'rsi', 'breakout_quality', 'setup_label', 'risk_label']
+      : depth === 'professional'
+        ? ['symbol', 'price', 'change_5d_pct', 'sector', 'setup_label', 'breakout_state', 'momentum_state', 'relative_strength', 'risk_label']
+        : ['symbol', 'price', 'change_5d_pct', 'sector', 'setup_label', 'risk_label']
 
   return (
     <div className="radar-table-wrap">
@@ -106,7 +188,9 @@ function DenseTable({
         <thead>
           <tr>
             {cols.map((col) => (
-              <th key={col} onClick={() => toggleSort(col)}>{words(col.replace(/_/g, ' '))}</th>
+              <th key={col} onClick={() => toggleSort(col)}>
+                {col === 'sniper' ? 'Sniper' : words(col.replace(/_/g, ' '))}
+              </th>
             ))}
           </tr>
         </thead>
@@ -115,15 +199,26 @@ function DenseTable({
             <tr><td colSpan={cols.length} className="radar-empty">No matches in saved scan data. Run Scan Now.</td></tr>
           )}
           {sorted.map((row) => (
-            <tr key={row.symbol} className={selected === row.symbol ? 'selected' : ''} onClick={() => onSelect(row.symbol)}>
+            <tr
+              key={row.symbol}
+              className={[
+                selected === row.symbol ? 'selected' : '',
+                row.sniper_candidate ? 'sniper-row' : '',
+              ].filter(Boolean).join(' ')}
+              onClick={() => onSelect(row.symbol)}
+            >
               {cols.map((col) => {
                 const raw = (row as Record<string, unknown>)[col]
                 let cell: string
-                if (col === 'breakout_state') cell = breakoutLabel[String(raw)] || words(String(raw))
+                if (col === 'sniper') cell = row.sniper_candidate ? 'YES' : '—'
+                else if (col === 'breakout_state') cell = breakoutLabel[String(raw)] || words(String(raw))
                 else if (col === 'momentum_state') cell = momentumLabel[String(raw)] || words(String(raw))
                 else if (col === 'price') cell = money(raw as number)
                 else if (col === 'change_5d_pct') cell = pct(raw as number)
-                else if (col === 'combined_score' || col === 'relative_strength') cell = raw != null ? String(raw) : '—'
+                else if (col === 'volume_ratio') cell = raw != null ? `${Number(raw).toFixed(1)}×` : '—'
+                else if (col === 'rsi' || col === 'breakout_quality' || col === 'combined_score' || col === 'relative_strength') {
+                  cell = raw != null ? String(Math.round(Number(raw))) : '—'
+                }
                 else cell = String(raw ?? '—')
                 return <td key={col}>{cell}</td>
               })}
@@ -152,14 +247,23 @@ export function RadarHomeView(props: ExperienceViewProps & {
     fetchPreTrade(selected).then(setPreTrade).catch(() => setPreTrade(null))
   }, [selected, dashboard.scan.scanned_at])
 
-  const laneCard = (title: string, rows: RadarRow[], count: number) => (
+  const laneCard = (title: string, rows: RadarRow[], count: number, sniperHint?: number) => (
     <section className="radar-lane-card">
-      <header><span>{title}</span><strong>{count}</strong></header>
+      <header>
+        <span>{title}</span>
+        <strong>
+          {count}
+          {sniperHint != null ? ` · ${sniperHint} sniper` : ''}
+        </strong>
+      </header>
       <ul>
         {rows.slice(0, 6).map((row) => (
           <li key={row.symbol}>
             <button type="button" className={selected === row.symbol ? 'active' : ''} onClick={() => setSelected(row.symbol)}>
-              <b>{row.symbol}</b>
+              <b>
+                {row.symbol}
+                {row.sniper_candidate ? <em className="sniper-tag"> SNIPER</em> : null}
+              </b>
               <span>{row.setup_label || row.status}</span>
               <small>{row.sector} · {row.reason?.slice(0, 48) || '—'}</small>
             </button>
@@ -200,8 +304,46 @@ export function RadarHomeView(props: ExperienceViewProps & {
 
       <LiveScanBanner scan={marketScan} depth={depth} label="Market scan" />
 
+      <BestSniperPanel
+        best={radar?.best_breakout as RadarRow | null | undefined}
+        sniperCount={radar?.counts.sniper_breakouts || radar?.sniper_candidates?.length || 0}
+        onSelect={setSelected}
+      />
+
+      {(radar?.sniper_candidates?.length || 0) > 0 && (
+        <section className="radar-sniper-pool">
+          <header>
+            <span>SNIPER BREAKOUT CANDIDATES</span>
+            <strong>{radar?.sniper_candidates?.length}</strong>
+          </header>
+          <ul>
+            {(radar?.sniper_candidates || []).slice(0, 8).map((row) => (
+              <li key={row.symbol}>
+                <button
+                  type="button"
+                  className={selected === row.symbol ? 'active' : ''}
+                  onClick={() => setSelected(row.symbol)}
+                >
+                  <b>{row.symbol}</b>
+                  <span>
+                    {row.breakout_grade ? `G${row.breakout_grade}` : '—'}
+                    {row.volume_ratio != null ? ` · ${Number(row.volume_ratio).toFixed(1)}×` : ''}
+                    {row.rsi != null ? ` · RSI ${Math.round(Number(row.rsi))}` : ''}
+                  </span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+
       <div className="radar-three-lanes">
-        {laneCard('Breakouts', radar?.lanes.breakouts || [], radar?.counts.breakouts || 0)}
+        {laneCard(
+          'Breakouts',
+          radar?.lanes.breakouts || [],
+          radar?.counts.breakouts || 0,
+          radar?.counts.sniper_breakouts,
+        )}
         {laneCard('Momentum', radar?.lanes.momentum || [], radar?.counts.momentum || 0)}
         {laneCard('Long-Term Picks', radar?.lanes.long_term_picks || [], radar?.counts.long_term_picks || 0)}
       </div>
@@ -250,10 +392,13 @@ export function MarketScannerView(props: ExperienceViewProps & { onCompare: (sym
     : ['Breakouts', 'Momentum', 'Long-Term']
   const [tab, setTab] = useState('Breakouts')
   const [rows, setRows] = useState<RadarRow[]>([])
+  const [bestBreakout, setBestBreakout] = useState<RadarRow | null>(null)
+  const [sniperCount, setSniperCount] = useState(0)
   const [meta, setMeta] = useState({ scanned_at: '', universe: 0 })
   const [search, setSearch] = useState('')
   const [sector, setSector] = useState('All')
   const [excludeChase, setExcludeChase] = useState(true)
+  const [sniperOnly, setSniperOnly] = useState(false)
 
   const activeScan = tab === 'Long-Term' ? longTermScan : marketScan
 
@@ -266,8 +411,14 @@ export function MarketScannerView(props: ExperienceViewProps & { onCompare: (sym
       .then((result) => {
         setRows(result.rows as RadarRow[])
         setMeta({ scanned_at: result.scanned_at, universe: result.universe_size })
+        setBestBreakout((result.best_breakout as RadarRow | null | undefined) || null)
+        setSniperCount(result.sniper_count ?? (result.sniper_rows?.length || 0))
       })
-      .catch(() => setRows([]))
+      .catch(() => {
+        setRows([])
+        setBestBreakout(null)
+        setSniperCount(0)
+      })
   }, [tab, dashboard.scan.scanned_at, dashboard.long_term.scanned_at])
 
   const sectors = useMemo(() => [...new Set(rows.map((r) => r.sector).filter(Boolean))].sort(), [rows])
@@ -276,6 +427,7 @@ export function MarketScannerView(props: ExperienceViewProps & { onCompare: (sym
     if (q && !row.symbol.includes(q) && !String(row.company || '').toUpperCase().includes(q)) return false
     if (sector !== 'All' && row.sector !== sector) return false
     if (excludeChase && row.chase_risk) return false
+    if (tab === 'Breakouts' && sniperOnly && !row.sniper_candidate) return false
     return true
   })
 
@@ -302,14 +454,33 @@ export function MarketScannerView(props: ExperienceViewProps & { onCompare: (sym
         ))}
       </div>
 
+      {tab === 'Breakouts' && (
+        <BestSniperPanel
+          best={bestBreakout}
+          sniperCount={sniperCount}
+          onSelect={setSelected}
+        />
+      )}
+
       <div className="scanner-filter-row">
         <label>Search<input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Symbol" /></label>
         <label>Sector<select value={sector} onChange={(e) => setSector(e.target.value)}><option>All</option>{sectors.map((s) => <option key={s}>{s}</option>)}</select></label>
         <label className="scanner-check"><input type="checkbox" checked={excludeChase} onChange={(e) => setExcludeChase(e.target.checked)} /> Hide extended</label>
+        {tab === 'Breakouts' && (
+          <label className="scanner-check">
+            <input type="checkbox" checked={sniperOnly} onChange={(e) => setSniperOnly(e.target.checked)} />
+            Sniper candidates only
+          </label>
+        )}
       </div>
 
       <div className="scanner-workspace-grid">
-        <Panel title={`${tab.toUpperCase()} · ${filtered.length}`} subtitle="Sorted from persisted backend scan">
+        <Panel
+          title={`${tab.toUpperCase()} · ${filtered.length}`}
+          subtitle={tab === 'Breakouts'
+            ? `Server sniper-first rank · ${sniperCount} sniper candidate${sniperCount === 1 ? '' : 's'}`
+            : 'Sorted from persisted backend scan'}
+        >
           <DenseTable rows={filtered} selected={selected} onSelect={setSelected} depth={depth} mode={tab} />
         </Panel>
         <div className="scanner-detail-column">

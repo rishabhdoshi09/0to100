@@ -817,6 +817,7 @@ class TestAutopilot:
 
     def test_gates_and_three_pct_target(self, tmp_path, monkeypatch):
         ap, te = self._setup(tmp_path, monkeypatch)
+        ap.set_config(thesis_hold=False, target_pct=3.0)  # scalp mode
         ok, _ = ap.arm()
         assert ok
         monkeypatch.setattr(ap, "_in_window", lambda now=None: True)
@@ -824,7 +825,7 @@ class TestAutopilot:
         assert ap.consider("X", 500, 480, 80, 0.2, "Cement", "t") is False
         assert ap.consider("HAL", 4500, 4300, 45, 0.2, "Defence", "t") is False
         assert ap.consider("HAL", 4500, 4300, 80, -0.1, "Defence", "t") is False
-        # valid → placed, tagged, +3% target (not scanner target)
+        # valid → placed, tagged, +3% target (scalp mode)
         assert ap.consider("HAL", 4500, 4300, 80, 0.2, "Defence", "t") is True
         t = te.recent_trades(1)[0]
         assert "AUTOPILOT" in t["note"]
@@ -1112,6 +1113,7 @@ class TestAutopilot:
         """Placed trade's entry/target = LIVE price, not the signal's."""
         import data.live_quotes as lq
         ap, te = self._setup(tmp_path, monkeypatch)
+        ap.set_config(thesis_hold=False, target_pct=3.0)
         monkeypatch.setattr(ap, "_anchor_live", self._real_anchor)  # real one
         monkeypatch.setattr(lq, "get_live_quotes",
                             lambda syms, ttl=8.0: {"HAL": {"price": 4530.0}})
@@ -1235,6 +1237,25 @@ class TestAutopilot:
         assert ap.consider("CONV", 500, 450, 85, 0.30, "Defence", "t") is True
         assert int(te.recent_trades(1)[0]["qty"]) == 30
 
+    def test_rsi_blowoff_and_thin_volume_gates(self, tmp_path, monkeypatch):
+        """Fewer trades, higher win-rate: ignore RSI>70; volume<1× skip."""
+        ap, te = self._setup(tmp_path, monkeypatch)
+        ap.arm()
+        monkeypatch.setattr(ap, "_in_window", lambda now=None: True)
+        assert ap.consider(
+            "HOT", 500, 480, 85, 0.2, "Defence", "scanner", rsi=82,
+            volume_ratio=2.0,
+        ) is False
+        assert ap.consider(
+            "THIN", 500, 480, 85, 0.2, "Defence", "scanner", rsi=55,
+            volume_ratio=0.7,
+        ) is False
+        assert ap.consider(
+            "OK", 500, 480, 85, 0.2, "Defence", "scanner", rsi=55,
+            volume_ratio=1.5,
+        ) is True
+        assert te.recent_trades(1)[0]["symbol"] == "OK"
+
     def test_adaptive_source_gate_pauses_proven_loser(self, tmp_path, monkeypatch):
         ap, te = self._setup(tmp_path, monkeypatch)
         ap.arm()
@@ -1262,6 +1283,7 @@ class TestAutopilot:
         from datetime import datetime as dt, timedelta
         import data.live_quotes as lq
         ap, te = self._setup(tmp_path, monkeypatch)
+        ap.set_config(max_hold_days=5, thesis_hold=False)
         ap.arm()
         monkeypatch.setattr(ap, "_in_window", lambda now=None: True)
         assert ap.consider("HAL", 500, 450, 80, 0.2, "Defence", "t") is True
@@ -1932,6 +1954,7 @@ class TestProfitBooking:
         ap.arm()
         monkeypatch.setattr(ap, "_in_window", lambda now=None: True)
         # booking OFF — old wide 2×ATR stop, normal cap
+        ap.set_config(profit_book_pct=0.0, profit_book_rupees=0.0)
         ap.consider("HAL", 1000, 960, 80, 0.2, "Defence", "t", grade="A")
         t1 = te.recent_trades(1)[0]
         # booking ON + confirmed grade — tight stop, relaxed (bounded) cap
@@ -1966,6 +1989,56 @@ class TestProfitBooking:
         assert m(60, 0.25, "HIGH") == 1.25           # weak score → no stretch
         assert m(80, 0.25, "MEDIUM") == 1.5          # only HIGH stretches
 
+    def test_capital_pct_book_scales_with_quality(self, tmp_path, monkeypatch):
+        """Default AIM is 3% of pool; stronger tech+fund → higher aim."""
+        ta = TestAutopilot()
+        ap, te = ta._setup(tmp_path, monkeypatch)
+        ta._zero_costs(monkeypatch)
+        ap.set_config(profit_book_pct=3.0, profit_book_rupees=0.0,
+                      profit_book_min_pct=1.5, profit_trail_giveback_pct=0.6)
+        # 3% of ₹1L = ₹3000 base
+        assert ap._base_book_aim_rupees() == 3000.0
+        weak = ap._book_plan_for_trade(55, grade="", breakout_conviction=40)
+        strong = ap._book_plan_for_trade(
+            85, grade="A", breakout_conviction=80, fund_score=75,
+        )
+        assert weak["aim"] < 3000
+        assert strong["aim"] > weak["aim"]
+        assert strong["quality_mult"] > weak["quality_mult"]
+        assert 0.5 <= weak["quality_mult"] <= 1.25
+        assert 0.5 <= strong["quality_mult"] <= 1.25
+        # Absolute ₹ still overrides pct
+        ap.set_config(profit_book_rupees=1500.0)
+        assert ap._base_book_aim_rupees() == 1500.0
+        # Paper entry stores quality-scaled plan
+        ap.set_config(profit_book_rupees=0.0, profit_book_pct=3.0)
+        ap.arm()
+        monkeypatch.setattr(ap, "_in_window", lambda now=None: True)
+        assert ap.consider(
+            "HAL", 4500, 4300, 85, 0.25, "Defence", "t",
+            grade="A", breakout_conviction=80, fund_score=75,
+        ) is True
+        tid = str(te.recent_trades(1)[0]["id"])
+        plan = ap.get_status()["book_plans"][tid]
+        assert plan["aim"] == strong["aim"]
+        # Book when NET crosses quality-scaled aim + trail
+        qty = int(te.recent_trades(1)[0]["qty"])
+        aim = float(plan["aim"])
+        give = float(plan["giveback"])
+        monkeypatch.setattr(
+            "data.live_quotes.get_live_quotes",
+            lambda syms: {"HAL": {"price": 4500 + (aim + give + 200) / qty}},
+        )
+        ap._profit_book()
+        assert te.recent_trades(1)[0]["status"] == "PAPER_OPEN"
+        # Pull below trail_stop = peak - giveback
+        monkeypatch.setattr(
+            "data.live_quotes.get_live_quotes",
+            lambda syms: {"HAL": {"price": 4500 + (aim + 50) / qty}},
+        )
+        ap._profit_book()
+        assert te.recent_trades(1)[0]["status"] == "PAPER_WIN"
+
 
 class TestTelegramCommands:
     """📱 Phone commands: control anywhere, LIVE-arming never, chat-guarded."""
@@ -1992,6 +2065,9 @@ class TestTelegramCommands:
         assert ap.get_status()["max_trades_per_day"] == 10
         assert "1,500" in h("/book 1500")
         assert ap.get_status()["profit_book_rupees"] == 1500.0
+        assert "3%" in h("/book 3%")
+        assert ap.get_status()["profit_book_pct"] == 3.0
+        assert ap.get_status()["profit_book_rupees"] == 0.0
         assert "PAUSED" in h("/pause")
         assert ap.get_status()["armed"] is False
         assert "Already OFF" in h("/pause")          # idempotent
@@ -2046,7 +2122,7 @@ class TestTelegramCommands:
         assert h("") is None
         assert "Commands" in h("/help")
         assert "Commands" in h("/nonsense")          # unknown → help
-        assert "/book 1500" in h("/book abc")        # bad arg → usage hint
+        assert "/book 3%" in h("/book abc")        # bad arg → usage hint
 
     def test_chat_guard_blocks_strangers(self, monkeypatch):
         """Sirf configured chat-id se commands — baaki silently ignored."""
@@ -2158,7 +2234,7 @@ class TestDailyScoreboard:
         sb = ap.daily_scoreboard()
         assert sb["target"] == 15000.0 and "OFF" in sb["line"]
         # armed + booking off → purpose maango
-        ap.set_config(profit_book_rupees=0.0)
+        ap.set_config(profit_book_rupees=0.0, profit_book_pct=0.0)
         ap.arm()
         assert "/book" in ap.daily_scoreboard()["line"]
         # armed + booking on, koi trade nahi → slots ready
@@ -2226,7 +2302,7 @@ class TestFastExit:
         ap._book_tick()
         assert calls == {"book": 1, "review": 1}
         # booking off → exits phir bhi fast (review chalta hai)
-        ap.set_config(profit_book_rupees=0.0)
+        ap.set_config(profit_book_rupees=0.0, profit_book_pct=0.0)
         ap._book_tick()
         assert calls == {"book": 1, "review": 2}
         # market closed → kuch nahi
@@ -3612,7 +3688,7 @@ class TestSniperConfirmation:
     WATCH = {101: {"symbol": "BAJEL", "trigger": 182.0,
                    "stop": 169.0, "target": 210.0, "avg_vol": 1_000_000}}
 
-    def _tick(self, ltp, volume=800_000):
+    def _tick(self, ltp, volume=1_200_000):
         return [{"instrument_token": 101, "last_price": ltp,
                  "volume_traded": volume}]
 
@@ -3656,18 +3732,33 @@ class TestSniperConfirmation:
 
     def test_volume_confirms_pacing(self):
         from scan.breakout_sniper import volume_confirms
-        # halfway through the day, avg daily 1M → expect 500k by now,
-        # need 1.2× = 600k
-        assert volume_confirms(700_000, 1_000_000, 0.5) is True   # hot
-        assert volume_confirms(400_000, 1_000_000, 0.5) is False  # dead
-        # fail-closed: zero traded volume never confirms
+        # Absolute floor 1.0× avg-day — AUROPHARMA-style 0.1× never confirms
+        assert volume_confirms(100_000, 1_000_000, 0.08) is False  # 0.1×
+        assert volume_confirms(100_000, 1_000_000, 0.01) is False  # early, still thin
+        # halfway: need ≥1.0× abs AND pace (1.2× × 0.5 = 0.6×) → 1.0× binds
+        assert volume_confirms(1_200_000, 1_000_000, 0.5) is True
+        assert volume_confirms(700_000, 1_000_000, 0.5) is False   # < 1.0× abs
+        assert volume_confirms(400_000, 1_000_000, 0.5) is False
+        # fail-closed: zero / unknown avg
         assert volume_confirms(0, 1_000_000, 0.5) is False
-        # fail-closed: unknown avg volume never confirms
-        assert volume_confirms(700_000, 0, 0.5) is False
-        # early session: volume present + known avg → allow (pace waived)
-        assert volume_confirms(1, 1_000_000, 0.01) is True
-        # early session still rejects zero prints
-        assert volume_confirms(0, 1_000_000, 0.01) is False
+        assert volume_confirms(1_200_000, 0, 0.5) is False
+        # early session: absolute 1.0× already = real open surge → allow
+        assert volume_confirms(1_000_000, 1_000_000, 0.01) is True
+        assert volume_confirms(1, 1_000_000, 0.01) is False
+
+    def test_thin_absolute_volume_break_does_not_fire(self):
+        """0.1× avg-day must never fire BREAKOUT CONFIRMED (pace math trap)."""
+        from scan.breakout_sniper import process_ticks
+        watch = {101: {"symbol": "THIN", "trigger": 182.0, "stop": 169.0,
+                       "target": 210.0, "avg_vol": 1_000_000}}
+        arm, fired = {}, set()
+        process_ticks([{"instrument_token": 101, "last_price": 183.0,
+                        "volume_traded": 100_000}], watch, fired, arm,
+                      now=0, hold_seconds=45, frac=0.08)
+        hits = process_ticks([{"instrument_token": 101, "last_price": 184.0,
+                               "volume_traded": 100_000}], watch, fired, arm,
+                             now=50, hold_seconds=45, frac=0.08)
+        assert hits == []
 
     def test_day_fraction_bounds(self):
         import pytz
@@ -3693,9 +3784,9 @@ class TestSniperConfirmation:
                                "volume_traded": 150_000}], watch, fired, arm,
                              now=50, hold_seconds=45, frac=0.5)
         assert hits == []
-        # same break but volume running hot → confirms
+        # same break but volume running hot (≥1.0× avg-day) → confirms
         hits2 = process_ticks([{"instrument_token": 101, "last_price": 184.0,
-                                "volume_traded": 800_000}], watch, fired, arm,
+                                "volume_traded": 1_200_000}], watch, fired, arm,
                               now=60, hold_seconds=45, frac=0.5)
         assert len(hits2) == 1 and hits2[0]["symbol"] == "DEAD"
 

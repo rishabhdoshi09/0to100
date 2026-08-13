@@ -147,7 +147,7 @@ def scanner_workspace(mode: str) -> dict[str, Any]:
         if canonical == "Conviction"
         else "market_scan"
     )
-    return {
+    payload: dict[str, Any] = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "mode": canonical,
         "source": source,
@@ -155,6 +155,16 @@ def scanner_workspace(mode: str) -> dict[str, Any]:
         "universe_size": int(scan.get("universe_size", 0) or 0),
         "rows": enriched,
     }
+    # Breakouts mode: surface the best sniper candidate as a first-class
+    # field so the UI can render a dedicated section (not bury it in a table).
+    if canonical == "Breakouts":
+        from product.radar_workspace import pick_best_sniper_breakout
+
+        sniper_rows = [r for r in enriched if r.get("sniper_candidate")]
+        payload["best_breakout"] = pick_best_sniper_breakout(enriched)
+        payload["sniper_count"] = len(sniper_rows)
+        payload["sniper_rows"] = sniper_rows[:12]
+    return payload
 
 
 def radar_home_workspace() -> dict[str, Any]:

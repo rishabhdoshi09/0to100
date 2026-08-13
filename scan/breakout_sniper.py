@@ -46,9 +46,11 @@ _started = False
 _CLEARANCE_PCT = float(os.getenv("QT_SNIPER_CLEARANCE_PCT", "0.0015") or 0.0015)
 _HOLD_SECONDS = float(os.getenv("QT_SNIPER_HOLD_SECONDS", "45") or 45)
 # Volume pacing — a break on dead volume is a trap even if it holds. We
-# require the day's cumulative volume to run AHEAD of its normal pace for
-# the time of day. Zero / missing volume is NEVER suggested (fail-closed).
+# require BOTH: (a) today's cumulative volume ≥ full average-day floor
+# (default 1.0× — a "breakout" at 0.1× is not a breakout), and (b) volume
+# running ahead of time-of-day pace. Zero / missing volume is NEVER suggested.
 _VOL_SURGE = float(os.getenv("QT_SNIPER_VOL_SURGE", "1.2") or 1.2)
+_VOL_ABS_MIN = float(os.getenv("QT_SNIPER_VOL_ABS_MIN", "1.0") or 1.0)
 # Quality gate — the sniper is a SEPARATE path from the main scanner, so the
 # scanner's demote-only quality filters (extension/chase guard, RSI ceiling)
 # do NOT apply automatically. Without this, a stock the scanner flagged as a
@@ -76,18 +78,25 @@ def day_fraction(now_dt=None) -> float:
 
 
 def volume_confirms(cum_vol: float, avg_daily_vol: float, frac: float,
-                    surge: float = _VOL_SURGE) -> bool:
-    """Is today's volume running hot enough for a real breakout? Compares
-    cumulative volume to the pace expected by this point in the day.
-    Fail-closed on zero/missing volume — sniper must not suggest dead prints.
-    Early session (<5% of day) still requires positive traded volume and a
-    known average; pace surge is waived only until there is enough clock."""
+                    surge: float = _VOL_SURGE,
+                    abs_min: float = _VOL_ABS_MIN) -> bool:
+    """Is today's volume strong enough for a real breakout?
+
+    Fail-closed on zero/missing volume. Requires:
+      1. Absolute day ratio ≥ abs_min (default 1.0× avg daily) — a print at
+         0.1× is never "BREAKOUT CONFIRMED", even if early-session pace math
+         would call it ahead of a tiny expected-by-now.
+      2. After the open (frac ≥ 5%), also beat time-of-day pace (surge × frac).
+    """
     if cum_vol <= 0:
         return False                  # 0-volume break → never suggest
     if not avg_daily_vol or avg_daily_vol <= 0:
         return False                  # unknown avg → do not invent confirmation
+    day_ratio = cum_vol / avg_daily_vol
+    if day_ratio < max(0.0, float(abs_min)):
+        return False                  # thin day — not a breakout
     if frac < 0.05:
-        return True                   # too early for pace math; volume present
+        return True                   # absolute floor already cleared
     expected_by_now = avg_daily_vol * frac
     return cum_vol >= surge * expected_by_now
 
@@ -163,19 +172,46 @@ def build_watch_map(results: list[dict]) -> dict[int, dict]:
     """Token→level map from scan results (pre-breakout ≤2.5%%) + watchlist.
     Chase-risk / blow-off-top / zero-volume names are skipped — the sniper
     must not fire a 'confirmed breakout' on a stock the scanner would demote
-    for quality, or on a print with no volume evidence."""
+    for quality, or on a print with no volume evidence.
+
+    Accepts both unified-scanner rows (categories/PreBreakout) and product
+    scan-store records (signals/PRE_BREAKOUT, status Watch for breakout).
+    """
     targets: dict[str, dict] = {}
     for r in results:
-        if "PreBreakout" in (r.get("categories") or []) \
-                and 0 < (r.get("pivot_distance_pct") or 99) <= 2.5:
-            skip = _quality_skip(r)
-            if skip:
-                log.debug("sniper_quality_skip", symbol=r.get("symbol"), why=skip)
-                continue
-            targets[r["symbol"]] = {"trigger": float(r.get("entry") or 0),
-                                    "stop": float(r.get("stop") or 0),
-                                    "target": float(r.get("target") or 0),
-                                    "avg_vol": float(r.get("avg_vol20") or 0)}
+        cats = set(r.get("categories") or [])
+        sigs = [str(x) for x in (r.get("signals") or [])]
+        is_pre = (
+            "PreBreakout" in cats
+            or "PRE_BREAKOUT" in sigs
+            or str(r.get("status") or "") == "Watch for breakout"
+        )
+        dist = r.get("pivot_distance_pct")
+        try:
+            dist_f = float(dist) if dist is not None else 99.0
+        except (TypeError, ValueError):
+            dist_f = 99.0
+        # Product records without an explicit distance still qualify when the
+        # scanner already labelled them pre-breakout / watch-for-breakout.
+        if dist is None and is_pre:
+            dist_f = 0.0
+        if not (is_pre and 0 <= dist_f <= 2.5):
+            continue
+        if float(r.get("entry") or 0) <= 0:
+            continue
+        skip = _quality_skip(r)
+        if skip:
+            log.debug("sniper_quality_skip", symbol=r.get("symbol"), why=skip)
+            continue
+        sym = str(r.get("symbol") or "").upper()
+        if not sym:
+            continue
+        targets[sym] = {
+            "trigger": float(r.get("entry") or 0),
+            "stop": float(r.get("stop") or 0),
+            "target": float(r.get("target") or 0),
+            "avg_vol": float(r.get("avg_vol20") or 0),
+        }
     try:
         import sqlite3
         from pathlib import Path
@@ -219,6 +255,7 @@ def _alert(hits: list[dict]) -> None:
         from alerts.telegram_alerts import AlertEngine
         engine = AlertEngine()
         if not engine.is_configured():
+            log.warning("sniper_telegram_not_configured")
             return
         lines = ["🚨 <b>BREAKOUT CONFIRMED</b>"]
         for h in fresh[:5]:
@@ -230,11 +267,14 @@ def _alert(hits: list[dict]) -> None:
             vol_bit = ""
             if h.get("cum_vol") and h.get("avg_vol"):
                 vr = h["cum_vol"] / h["avg_vol"]
-                vol_bit = f", volume {vr:.1f}× (pace se aage)"
+                vol_bit = f", volume {vr:.1f}× avg-day"
             lines.append(f"\n<b>{h['symbol']}</b> ne ₹{h['trigger']:,.0f} toda "
                          f"(₹{h['ltp']:,.1f}{hold_bit}{vol_bit}){plan}")
-        engine.send("\n".join(lines))
-        log.info("sniper_fired", symbols=[h["symbol"] for h in fresh])
+        ok = engine.send("\n".join(lines))
+        if ok:
+            log.info("sniper_fired", symbols=[h["symbol"] for h in fresh])
+        else:
+            log.warning("sniper_telegram_send_failed", symbols=[h["symbol"] for h in fresh])
         # 🤖 Autopilot hook — off-thread, tick stream kabhi block nahi hota
         def _feed_autopilot(hits_copy=list(fresh)):
             try:

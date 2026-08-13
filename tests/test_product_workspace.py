@@ -74,6 +74,52 @@ def test_scanner_modes_use_one_source_without_mixing_long_term_into_momentum():
     assert {row["symbol"] for row in avoid} == {"EXT", "BAD"}
 
 
+def test_breakouts_mode_ranks_best_quality_first():
+    scan = {
+        "records": [
+            {
+                "symbol": "WEAK", "signals": ["BREAKOUT_52W"], "score": 88,
+                "breakout_grade": "", "breakout_conviction": 40, "chase_risk": False,
+                "rsi": 50, "volume_ratio": 1.2, "avg_vol20": 1e6,
+                "verdict": "BUY", "status": "Ready to trade",
+            },
+            {
+                "symbol": "HOT", "signals": ["BREAKOUT_52W"], "score": 95,
+                "breakout_grade": "A", "breakout_conviction": 90, "chase_risk": False,
+                "rsi": 82, "volume_ratio": 2.5, "avg_vol20": 1e6,
+                "verdict": "BUY", "status": "Ready to trade",
+            },
+            {
+                "symbol": "STRONG", "signals": ["BREAKOUT_52W"], "score": 70,
+                "breakout_grade": "A", "breakout_conviction": 85, "chase_risk": False,
+                "rsi": 55, "volume_ratio": 2.0, "avg_vol20": 1e6,
+                "verdict": "BUY", "status": "Ready to trade",
+            },
+        ]
+    }
+    long_term = {
+        "records": [
+            {
+                "symbol": "STRONG", "classification": "QUALITY_COMPOUNDER",
+                "combined_score": 90, "fundamental_coverage": 0.85,
+                "fundamental_score": 82,
+            },
+        ]
+    }
+    rows = scanner_rows("Breakouts", scan_payload=scan, long_term_payload=long_term)
+    assert rows[0]["symbol"] == "STRONG"
+    assert rows[0]["fundamental_score"] == 82
+    # High RSI and weak names sit below the sniper-quality pick
+    assert [r["symbol"] for r in rows][0] != "HOT"
+
+    from product.radar_workspace import enrich_scanner_rows, pick_best_sniper_breakout
+
+    enriched = enrich_scanner_rows(rows, scanned_at="t")
+    best = pick_best_sniper_breakout(enriched)
+    assert best is not None and best["symbol"] == "STRONG"
+    assert sum(1 for r in enriched if r.get("sniper_candidate")) >= 1
+
+
 def test_conviction_mode_preserves_conviction_ranking():
     rows = [
         {"symbol": "LOW", "conviction_score": 61},
