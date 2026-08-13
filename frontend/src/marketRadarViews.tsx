@@ -38,7 +38,6 @@ type RadarRow = ScannerWorkspaceRow & {
   rsi?: number
   tech_source?: string
   price_tag?: string
-  rsi_scan?: number
 }
 
 const breakoutLabel: Record<string, string> = {
@@ -255,14 +254,32 @@ export function RadarHomeView(props: ExperienceViewProps & {
   const [radar, setRadar] = useState<RadarHome | null>(null)
   const [preTrade, setPreTrade] = useState<PreTrade | null>(null)
 
+  // Daily fields (RSI/price/vol) must not freeze on last scan — poll the
+  // live-refreshed radar payload on a short timer.
   useEffect(() => {
-    fetchRadarHome().then(setRadar).catch(() => setRadar(null))
-  }, [dashboard.scan.scanned_at, dashboard.long_term.scanned_at])
+    let alive = true
+    const load = () => {
+      fetchRadarHome()
+        .then((payload) => { if (alive) setRadar(payload) })
+        .catch(() => { if (alive) setRadar(null) })
+    }
+    load()
+    const timer = window.setInterval(load, 20_000)
+    return () => { alive = false; window.clearInterval(timer) }
+  }, [dashboard.scan.scanned_at, dashboard.long_term.scanned_at, dashboard.generated_at])
 
   useEffect(() => {
     if (!selected) { setPreTrade(null); return }
-    fetchPreTrade(selected).then(setPreTrade).catch(() => setPreTrade(null))
-  }, [selected, dashboard.scan.scanned_at])
+    let alive = true
+    const load = () => {
+      fetchPreTrade(selected)
+        .then((payload) => { if (alive) setPreTrade(payload) })
+        .catch(() => { if (alive) setPreTrade(null) })
+    }
+    load()
+    const timer = window.setInterval(load, 20_000)
+    return () => { alive = false; window.clearInterval(timer) }
+  }, [selected, dashboard.scan.scanned_at, dashboard.generated_at])
 
   const laneCard = (title: string, rows: RadarRow[], count: number, sniperHint?: number) => (
     <section className="radar-lane-card">
@@ -426,19 +443,29 @@ export function MarketScannerView(props: ExperienceViewProps & { onCompare: (sym
   }, [depth])
 
   useEffect(() => {
-    fetchScannerWorkspace(tab)
-      .then((result) => {
-        setRows(result.rows as RadarRow[])
-        setMeta({ scanned_at: result.scanned_at, universe: result.universe_size })
-        setBestBreakout((result.best_breakout as RadarRow | null | undefined) || null)
-        setSniperCount(result.sniper_count ?? (result.sniper_rows?.length || 0))
-      })
-      .catch(() => {
-        setRows([])
-        setBestBreakout(null)
-        setSniperCount(0)
-      })
-  }, [tab, dashboard.scan.scanned_at, dashboard.long_term.scanned_at])
+    let alive = true
+    const load = () => {
+      fetchScannerWorkspace(tab)
+        .then((result) => {
+          if (!alive) return
+          setRows(result.rows as RadarRow[])
+          setMeta({ scanned_at: result.scanned_at, universe: result.universe_size })
+          setBestBreakout((result.best_breakout as RadarRow | null | undefined) || null)
+          setSniperCount(result.sniper_count ?? (result.sniper_rows?.length || 0))
+        })
+        .catch(() => {
+          if (!alive) return
+          setRows([])
+          setBestBreakout(null)
+          setSniperCount(0)
+        })
+    }
+    load()
+    // Breakouts/Pre-Breakout change every minute — don't wait for a new scan.
+    const pollMs = (tab === 'Breakouts' || tab === 'Pre-Breakout') ? 20_000 : 60_000
+    const timer = window.setInterval(load, pollMs)
+    return () => { alive = false; window.clearInterval(timer) }
+  }, [tab, dashboard.scan.scanned_at, dashboard.long_term.scanned_at, dashboard.generated_at])
 
   const sectors = useMemo(() => [...new Set(rows.map((r) => r.sector).filter(Boolean))].sort(), [rows])
   const filtered = rows.filter((row) => {

@@ -501,6 +501,14 @@ def _default_inputs(symbol: str) -> dict[str, Any]:
         frame = get_ohlcv(symbol)
     except Exception:
         frame = None
+    # Overlay today's live bar when store is still on prior EOD — RSI/price
+    # must track the tape, not the last scan or last bhavcopy publish.
+    if frame is not None and getattr(frame, "empty", True) is False:
+        try:
+            from data.nse_live import overlay_live_on_frame
+            frame, _ = overlay_live_on_frame(frame, symbol)
+        except Exception:
+            pass
     try:
         from news.curator_store import NewsCuratorStore
         store = NewsCuratorStore(ROOT / "logs" / "news_curator.sqlite3")

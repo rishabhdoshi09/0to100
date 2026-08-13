@@ -328,8 +328,7 @@ def build_radar_home(
                 by_sym[sym].update({
                     k: row[k] for k in (
                         "price", "rsi", "volume_ratio", "tech_source", "price_tag",
-                        "rsi_scan", "price_scan", "volume_ratio_scan", "eod_as_of",
-                        "quote_source",
+                        "eod_as_of", "quote_source",
                     ) if k in row
                 })
     except Exception:

@@ -1,8 +1,6 @@
 """Live technical refresh — RSI/price must not freeze at scan time."""
 from __future__ import annotations
 
-from datetime import date
-
 import pandas as pd
 import pytest
 
@@ -11,9 +9,8 @@ def _frame_with_drop():
     """Synthetic history: rally then drop — live close pulls RSI down vs scan."""
     idx = pd.date_range("2026-07-01", periods=40, freq="B")
     close = list(range(100, 140))  # grind up
-    # last EOD still elevated
     close[-1] = 138
-    df = pd.DataFrame(
+    return pd.DataFrame(
         {
             "open": close,
             "high": [c + 2 for c in close],
@@ -23,14 +20,12 @@ def _frame_with_drop():
         },
         index=idx,
     )
-    return df
 
 
 def test_refresh_recomputes_rsi_below_stale_scan_value(monkeypatch):
     from product import live_technicals as lt
 
     frame = _frame_with_drop()
-    # Append a sharp live down-day → RSI should fall vs scan's "66"
     live_idx = frame.index[-1] + pd.Timedelta(days=1)
     while live_idx.weekday() >= 5:
         live_idx += pd.Timedelta(days=1)
@@ -57,9 +52,8 @@ def test_refresh_recomputes_rsi_below_stale_scan_value(monkeypatch):
         "volume_ratio": 4.9,
         "avg_vol20": 1_000_000,
     }
-    out = lt.refresh_row_technicals(row, overlay_store=False)
+    out = lt.refresh_row_technicals(row)
     assert out["rsi"] < 66.0
-    assert out["rsi_scan"] == 66.0
     assert out["price"] == pytest.approx(120.0)
     assert out["tech_source"] in {"live", "eod"}
     assert out["price_tag"] in {"LIVE", "EOD"}
@@ -73,7 +67,8 @@ def test_refresh_fail_open_keeps_scan_fields(monkeypatch):
     row = {"symbol": "MISSING", "rsi": 55.0, "price": 100.0, "volume_ratio": 1.2}
     out = lt.refresh_row_technicals(row)
     assert out["rsi"] == 55.0
-    assert out["tech_source"] == "scan"
+    assert out["price"] == 100.0
+    assert "tech_source" not in out
 
 
 def test_radar_home_uses_refreshed_rsi(monkeypatch):
@@ -85,7 +80,6 @@ def test_radar_home_uses_refreshed_rsi(monkeypatch):
             row = dict(r)
             if row.get("symbol") == "YATHARTH":
                 row["rsi"] = 49.0
-                row["rsi_scan"] = 66.0
                 row["price"] = 848.0
                 row["tech_source"] = "live"
                 row["price_tag"] = "LIVE"
@@ -134,7 +128,6 @@ def test_radar_home_uses_refreshed_rsi(monkeypatch):
     yath = next(r for r in payload["lanes"]["breakouts"] if r["symbol"] == "YATHARTH")
     assert yath["rsi"] == pytest.approx(49.0)
     assert yath.get("tech_source") == "live"
-    # Sniper candidates also see the refreshed RSI
     if payload["sniper_candidates"]:
         hit = [r for r in payload["sniper_candidates"] if r["symbol"] == "YATHARTH"]
         if hit:
