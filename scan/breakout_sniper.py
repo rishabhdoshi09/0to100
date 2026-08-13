@@ -46,9 +46,11 @@ _started = False
 _CLEARANCE_PCT = float(os.getenv("QT_SNIPER_CLEARANCE_PCT", "0.0015") or 0.0015)
 _HOLD_SECONDS = float(os.getenv("QT_SNIPER_HOLD_SECONDS", "45") or 45)
 # Volume pacing — a break on dead volume is a trap even if it holds. We
-# require the day's cumulative volume to run AHEAD of its normal pace for
-# the time of day. Zero / missing volume is NEVER suggested (fail-closed).
+# require BOTH: (a) today's cumulative volume ≥ full average-day floor
+# (default 1.0× — a "breakout" at 0.1× is not a breakout), and (b) volume
+# running ahead of time-of-day pace. Zero / missing volume is NEVER suggested.
 _VOL_SURGE = float(os.getenv("QT_SNIPER_VOL_SURGE", "1.2") or 1.2)
+_VOL_ABS_MIN = float(os.getenv("QT_SNIPER_VOL_ABS_MIN", "1.0") or 1.0)
 # Quality gate — the sniper is a SEPARATE path from the main scanner, so the
 # scanner's demote-only quality filters (extension/chase guard, RSI ceiling)
 # do NOT apply automatically. Without this, a stock the scanner flagged as a
@@ -76,18 +78,25 @@ def day_fraction(now_dt=None) -> float:
 
 
 def volume_confirms(cum_vol: float, avg_daily_vol: float, frac: float,
-                    surge: float = _VOL_SURGE) -> bool:
-    """Is today's volume running hot enough for a real breakout? Compares
-    cumulative volume to the pace expected by this point in the day.
-    Fail-closed on zero/missing volume — sniper must not suggest dead prints.
-    Early session (<5% of day) still requires positive traded volume and a
-    known average; pace surge is waived only until there is enough clock."""
+                    surge: float = _VOL_SURGE,
+                    abs_min: float = _VOL_ABS_MIN) -> bool:
+    """Is today's volume strong enough for a real breakout?
+
+    Fail-closed on zero/missing volume. Requires:
+      1. Absolute day ratio ≥ abs_min (default 1.0× avg daily) — a print at
+         0.1× is never "BREAKOUT CONFIRMED", even if early-session pace math
+         would call it ahead of a tiny expected-by-now.
+      2. After the open (frac ≥ 5%), also beat time-of-day pace (surge × frac).
+    """
     if cum_vol <= 0:
         return False                  # 0-volume break → never suggest
     if not avg_daily_vol or avg_daily_vol <= 0:
         return False                  # unknown avg → do not invent confirmation
+    day_ratio = cum_vol / avg_daily_vol
+    if day_ratio < max(0.0, float(abs_min)):
+        return False                  # thin day — not a breakout
     if frac < 0.05:
-        return True                   # too early for pace math; volume present
+        return True                   # absolute floor already cleared
     expected_by_now = avg_daily_vol * frac
     return cum_vol >= surge * expected_by_now
 
@@ -258,7 +267,7 @@ def _alert(hits: list[dict]) -> None:
             vol_bit = ""
             if h.get("cum_vol") and h.get("avg_vol"):
                 vr = h["cum_vol"] / h["avg_vol"]
-                vol_bit = f", volume {vr:.1f}× (pace se aage)"
+                vol_bit = f", volume {vr:.1f}× avg-day"
             lines.append(f"\n<b>{h['symbol']}</b> ne ₹{h['trigger']:,.0f} toda "
                          f"(₹{h['ltp']:,.1f}{hold_bit}{vol_bit}){plan}")
         ok = engine.send("\n".join(lines))

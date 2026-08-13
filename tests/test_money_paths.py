@@ -3688,7 +3688,7 @@ class TestSniperConfirmation:
     WATCH = {101: {"symbol": "BAJEL", "trigger": 182.0,
                    "stop": 169.0, "target": 210.0, "avg_vol": 1_000_000}}
 
-    def _tick(self, ltp, volume=800_000):
+    def _tick(self, ltp, volume=1_200_000):
         return [{"instrument_token": 101, "last_price": ltp,
                  "volume_traded": volume}]
 
@@ -3732,18 +3732,33 @@ class TestSniperConfirmation:
 
     def test_volume_confirms_pacing(self):
         from scan.breakout_sniper import volume_confirms
-        # halfway through the day, avg daily 1M → expect 500k by now,
-        # need 1.2× = 600k
-        assert volume_confirms(700_000, 1_000_000, 0.5) is True   # hot
-        assert volume_confirms(400_000, 1_000_000, 0.5) is False  # dead
-        # fail-closed: zero traded volume never confirms
+        # Absolute floor 1.0× avg-day — AUROPHARMA-style 0.1× never confirms
+        assert volume_confirms(100_000, 1_000_000, 0.08) is False  # 0.1×
+        assert volume_confirms(100_000, 1_000_000, 0.01) is False  # early, still thin
+        # halfway: need ≥1.0× abs AND pace (1.2× × 0.5 = 0.6×) → 1.0× binds
+        assert volume_confirms(1_200_000, 1_000_000, 0.5) is True
+        assert volume_confirms(700_000, 1_000_000, 0.5) is False   # < 1.0× abs
+        assert volume_confirms(400_000, 1_000_000, 0.5) is False
+        # fail-closed: zero / unknown avg
         assert volume_confirms(0, 1_000_000, 0.5) is False
-        # fail-closed: unknown avg volume never confirms
-        assert volume_confirms(700_000, 0, 0.5) is False
-        # early session: volume present + known avg → allow (pace waived)
-        assert volume_confirms(1, 1_000_000, 0.01) is True
-        # early session still rejects zero prints
-        assert volume_confirms(0, 1_000_000, 0.01) is False
+        assert volume_confirms(1_200_000, 0, 0.5) is False
+        # early session: absolute 1.0× already = real open surge → allow
+        assert volume_confirms(1_000_000, 1_000_000, 0.01) is True
+        assert volume_confirms(1, 1_000_000, 0.01) is False
+
+    def test_thin_absolute_volume_break_does_not_fire(self):
+        """0.1× avg-day must never fire BREAKOUT CONFIRMED (pace math trap)."""
+        from scan.breakout_sniper import process_ticks
+        watch = {101: {"symbol": "THIN", "trigger": 182.0, "stop": 169.0,
+                       "target": 210.0, "avg_vol": 1_000_000}}
+        arm, fired = {}, set()
+        process_ticks([{"instrument_token": 101, "last_price": 183.0,
+                        "volume_traded": 100_000}], watch, fired, arm,
+                      now=0, hold_seconds=45, frac=0.08)
+        hits = process_ticks([{"instrument_token": 101, "last_price": 184.0,
+                               "volume_traded": 100_000}], watch, fired, arm,
+                             now=50, hold_seconds=45, frac=0.08)
+        assert hits == []
 
     def test_day_fraction_bounds(self):
         import pytz
@@ -3769,9 +3784,9 @@ class TestSniperConfirmation:
                                "volume_traded": 150_000}], watch, fired, arm,
                              now=50, hold_seconds=45, frac=0.5)
         assert hits == []
-        # same break but volume running hot → confirms
+        # same break but volume running hot (≥1.0× avg-day) → confirms
         hits2 = process_ticks([{"instrument_token": 101, "last_price": 184.0,
-                                "volume_traded": 800_000}], watch, fired, arm,
+                                "volume_traded": 1_200_000}], watch, fired, arm,
                               now=60, hold_seconds=45, frac=0.5)
         assert len(hits2) == 1 and hits2[0]["symbol"] == "DEAD"
 
