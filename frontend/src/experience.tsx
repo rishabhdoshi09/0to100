@@ -37,6 +37,15 @@ export type ExperienceViewProps = {
   selected: string
   setSelected: (symbol: string) => void
   bars: ChartBar[]
+  chartMeta?: {
+    price_tag?: string
+    last_close?: number | null
+    freshness?: {
+      sessions_behind?: number | null
+      price_tag?: string
+      history_fresh?: boolean | null
+    }
+  } | null
   setActive: (page: string) => void
   runControl: (control: ControlName) => Promise<void>
   depth: DisplayDepth

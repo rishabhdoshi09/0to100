@@ -90,11 +90,24 @@ def fetch_live_snapshot() -> dict[str, dict]:
 
 
 def _is_trading_now() -> bool:
-    now = datetime.now()
+    """NSE cash session in IST — never use the machine's local clock."""
+    try:
+        from core.market_clock import now_ist
+        now = now_ist()
+    except Exception:
+        now = datetime.now()
     if now.weekday() >= 5:
         return False
     minutes = now.hour * 60 + now.minute
     return 9 * 60 + 15 <= minutes <= 16 * 60   # till ~4 PM (post-close prints)
+
+
+def _today_session() -> date:
+    try:
+        from core.market_clock import today_ist
+        return today_ist()
+    except Exception:
+        return date.today()
 
 
 def _kite_snapshot(symbols: list[str]) -> dict[str, dict]:
@@ -144,9 +157,10 @@ def apply_live_to_store() -> int:
     try:
         import pandas as pd
         from data import bhavcopy_store as bs
+        today = _today_session()
         with bs._lock:
             last_day = bs._store_last_day
-        if last_day == date.today():
+        if last_day == today:
             return 0            # today's official bhavcopy already in store
 
         # Kite first — proven working; NSE public API only as fallback
@@ -163,7 +177,7 @@ def apply_live_to_store() -> int:
                      hint="Kite login + NSE API dono se intraday nahi mila")
             return 0
 
-        today_ts = pd.Timestamp(date.today())
+        today_ts = pd.Timestamp(today)
         updated = 0
         with bs._lock:
             for sym, bar in snap.items():
@@ -185,6 +199,84 @@ def apply_live_to_store() -> int:
     except Exception as exc:
         log.warning("live_overlay_store_failed", error=str(exc))
         return 0
+
+
+def live_bar_for(symbol: str) -> Optional[dict]:
+    """Today's live OHLCV for one symbol (Kite → NSE snapshot). None if unavailable."""
+    if not symbol or not _is_trading_now():
+        return None
+    sym = str(symbol).strip().upper()
+    try:
+        kite = _kite_snapshot([sym])
+        if sym in kite:
+            bar = dict(kite[sym])
+            bar["source"] = "kite"
+            return bar
+    except Exception:
+        pass
+    try:
+        snap = fetch_live_snapshot()
+        bar = snap.get(sym)
+        if bar:
+            out = dict(bar)
+            out["source"] = "nse"
+            return out
+    except Exception:
+        pass
+    # Last resort: LTP-only quote → flat OHLC (honest partial live print)
+    try:
+        from data.live_quotes import get_live_quotes
+        q = get_live_quotes([sym]).get(sym) or {}
+        ltp = float(q.get("price") or 0)
+        if ltp > 0:
+            return {
+                "open": ltp, "high": ltp, "low": ltp, "close": ltp,
+                "volume": 0.0, "source": str(q.get("source") or "quote"),
+            }
+    except Exception:
+        pass
+    return None
+
+
+def overlay_live_on_frame(frame, symbol: str):
+    """Return (frame, meta) with today's live bar appended/updated when available.
+
+    Never invents history: if no live print exists, the EOD frame is unchanged
+    and meta.live is False. Meta always reports eod_as_of for honesty tags.
+    """
+    import pandas as pd
+
+    meta = {
+        "live": False,
+        "source": "",
+        "eod_as_of": "",
+        "price_tag": "EOD",
+    }
+    if frame is None or getattr(frame, "empty", True):
+        return frame, meta
+    try:
+        last_idx = frame.index[-1]
+        meta["eod_as_of"] = str(getattr(last_idx, "date", lambda: last_idx)())
+    except Exception:
+        meta["eod_as_of"] = ""
+    bar = live_bar_for(symbol)
+    if not bar:
+        return frame, meta
+    today_ts = pd.Timestamp(_today_session())
+    out = frame.copy()
+    cols = [c for c in ("open", "high", "low", "close", "volume") if c in out.columns]
+    values = [float(bar.get(c) or 0) for c in cols]
+    if len(out) and out.index[-1] == today_ts:
+        out.loc[today_ts, cols] = values
+    else:
+        out = pd.concat([out, pd.DataFrame([dict(zip(cols, values))], index=[today_ts])])
+    meta.update({
+        "live": True,
+        "source": str(bar.get("source") or "live"),
+        "price_tag": "LIVE",
+        "live_as_of": str(_today_session()),
+    })
+    return out, meta
 
 
 def live_quotes(symbols: list[str]) -> dict[str, dict]:

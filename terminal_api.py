@@ -768,8 +768,39 @@ def chart(symbol: str, limit: int = 220) -> dict:
         readiness = bhavcopy_status(load_cache=False)
     except Exception as exc:
         raise HTTPException(status_code=503, detail=f"Price history unavailable: {exc}") from exc
+    live_meta = {
+        "live": False,
+        "source": "",
+        "eod_as_of": str(readiness.get("latest_date") or ""),
+        "price_tag": "EOD",
+        "sessions_behind": None,
+    }
     if frame is None or len(frame) == 0:
-        return {"symbol": clean_symbol, "bars": [], "history": readiness}
+        return {
+            "symbol": clean_symbol,
+            "bars": [],
+            "history": readiness,
+            "freshness": live_meta,
+        }
+    # Session freshness — missing completed EOD days must look stale.
+    try:
+        from research.intelligence.data import nse_calendar as CAL
+        latest = str(readiness.get("latest_date") or "")
+        if latest:
+            verdict = CAL.snapshot_freshness(latest, allowance_sessions=0)
+            live_meta["sessions_behind"] = verdict.get("sessions_behind")
+            live_meta["history_fresh"] = bool(verdict.get("fresh"))
+            live_meta["required_session"] = verdict.get("required")
+    except Exception:
+        live_meta["history_fresh"] = None
+    # During market hours, overlay today's live print so charts match
+    # Google/Kite instead of freezing on yesterday's EOD close.
+    try:
+        from data.nse_live import overlay_live_on_frame
+        frame, overlay = overlay_live_on_frame(frame, clean_symbol)
+        live_meta.update({k: overlay.get(k, live_meta.get(k)) for k in overlay})
+    except Exception:
+        pass
     frame = frame.tail(max(20, min(int(limit), 500))).copy()
     bars = []
     for index, row in frame.iterrows():
@@ -782,7 +813,15 @@ def chart(symbol: str, limit: int = 220) -> dict:
             "close": float(row["close"]),
             "volume": float(row.get("volume", 0.0) or 0.0),
         })
-    return {"symbol": clean_symbol, "bars": bars, "history": readiness}
+    last_close = float(bars[-1]["close"]) if bars else None
+    return {
+        "symbol": clean_symbol,
+        "bars": bars,
+        "history": readiness,
+        "freshness": live_meta,
+        "last_close": last_close,
+        "price_tag": live_meta.get("price_tag") or "EOD",
+    }
 
 
 _OPERATION_CONTROLS = {

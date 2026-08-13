@@ -83,6 +83,70 @@ def _lane(
     }
 
 
+def _history_lane(*, history: Mapping[str, Any], now: datetime) -> dict[str, Any]:
+    """Official price history — session-aware, not a loose 4-day wall-clock.
+
+    A missing completed NSE session must show STALE even when calendar age is
+    still under four days (e.g. store stuck on Tuesday while Wednesday EOD
+    already published). Uses allowance_sessions=0 for the retail readiness UI.
+    """
+    available = bool(history.get("ready")) and int(history.get("sessions", 0) or 0) >= 60
+    as_of = history.get("latest_date") or history.get("csv_latest_date")
+    sessions = int(history.get("sessions", 0) or 0)
+    symbols = int(history.get("symbols", 0) or 0)
+    details = f"{sessions} sessions · {symbols:,} symbols"
+    age = _age_seconds(as_of, now=now)
+    sessions_behind = None
+    if not available:
+        status, factor = "MISSING", 0.0
+    elif not as_of:
+        status, factor = "UNKNOWN_DATE", 0.45
+    else:
+        try:
+            from research.intelligence.data import nse_calendar as CAL
+            # Convert wall-clock `now` into naive IST for the trading calendar.
+            try:
+                from core.market_clock import IST
+                now_ist = now.astimezone(IST).replace(tzinfo=None) if now.tzinfo else now
+            except Exception:
+                now_ist = now.replace(tzinfo=None) if getattr(now, "tzinfo", None) else now
+            verdict = CAL.snapshot_freshness(
+                str(as_of), now=now_ist, allowance_sessions=0,
+            )
+            sessions_behind = verdict.get("sessions_behind")
+            if verdict.get("fresh"):
+                status, factor = "FRESH", 1.0
+            else:
+                status, factor = "STALE", 0.45
+                details = (
+                    f"{details} · {sessions_behind} session(s) behind "
+                    f"(need {verdict.get('required')})"
+                )
+        except Exception:
+            # Fail closed to wall-clock only if calendar import fails.
+            if age is None:
+                status, factor = "UNKNOWN_DATE", 0.45
+            elif age > 2 * 24 * 60 * 60:
+                status, factor = "STALE", 0.45
+            else:
+                status, factor = "FRESH", 1.0
+    return {
+        "key": "history",
+        "label": "Official price history",
+        "meaning": "Daily NSE OHLCV used for charts, momentum, breakouts, risk and long-term technicals.",
+        "status": status,
+        "available": bool(available),
+        "as_of": str(as_of or ""),
+        "age_seconds": round(age, 1) if age is not None else None,
+        "max_age_seconds": 2 * 24 * 60 * 60,
+        "sessions_behind": sessions_behind,
+        "weight": 20,
+        "earned_weight": round(20 * factor, 2),
+        "action": "REFRESH_DATA_NOW",
+        "details": details,
+    }
+
+
 def build_product_readiness(
     *,
     market: Mapping[str, Any] | None,
@@ -132,18 +196,7 @@ def build_product_readiness(
             details=f"{len(operations.get('active', []) or [])} operation(s) active",
             now=now,
         ),
-        _lane(
-            key="history",
-            label="Official price history",
-            meaning="Daily NSE OHLCV used for charts, momentum, breakouts, risk and long-term technicals.",
-            available=bool(history.get("ready")) and int(history.get("sessions", 0) or 0) >= 60,
-            as_of=history.get("latest_date") or history.get("csv_latest_date"),
-            max_age_seconds=4 * 24 * 60 * 60,
-            weight=20,
-            action="REFRESH_DATA_NOW",
-            details=f"{int(history.get('sessions', 0) or 0)} sessions · {int(history.get('symbols', 0) or 0):,} symbols",
-            now=now,
-        ),
+        _history_lane(history=history, now=now),
         _lane(
             key="snapshot",
             label="Verified market snapshot",
