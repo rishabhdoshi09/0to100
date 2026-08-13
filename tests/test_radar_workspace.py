@@ -152,7 +152,14 @@ def test_radar_home_builds_three_lanes():
     assert payload["best_breakout"]["rsi"] <= 70
     assert payload["counts"]["sniper_breakouts"] >= 1
     assert any(r["symbol"] == "BEST" for r in payload["sniper_candidates"])
+    assert not any(r["symbol"] == "THIN" for r in payload["sniper_candidates"])
     assert payload["lanes"]["breakouts"][0].get("sniper_candidate") is True
+    # Thin volume → breakout_without_volume (excluded from the breakouts lane)
+    from product.radar_workspace import classify_breakout_state, is_sniper_breakout_candidate
+    thin_raw = next(r for r in scan["records"] if r["symbol"] == "THIN")
+    assert classify_breakout_state(thin_raw) == "breakout_without_volume"
+    assert is_sniper_breakout_candidate(thin_raw) is False
+    assert "THIN" not in [r["symbol"] for r in payload["lanes"]["breakouts"]]
 
 
 def test_breakout_quality_prefers_grade_and_fundamentals():
@@ -168,7 +175,7 @@ def test_breakout_quality_prefers_grade_and_fundamentals():
     assert breakout_quality_score(strong) > breakout_quality_score(weak)
 
 
-def test_high_rsi_ignored_and_low_volume_demoted():
+def test_high_rsi_and_thin_volume_hard_rejected_from_best():
     from product.radar_workspace import (
         breakout_quality_score,
         is_sniper_breakout_candidate,
@@ -181,13 +188,27 @@ def test_high_rsi_ignored_and_low_volume_demoted():
     }
     hot = {**base, "symbol": "HOT", "rsi": 85, "volume_ratio": 2.5}
     thin = {**base, "symbol": "THIN", "rsi": 55, "volume_ratio": 0.5}
-    solid = {**base, "symbol": "SOLID", "rsi": 55, "volume_ratio": 1.8}
+    avoid = {
+        **base, "symbol": "AVOID", "rsi": 55, "volume_ratio": 2.0,
+        "classification": "AVOID_REVIEW", "fundamental_coverage": 0.9,
+        "fundamental_score": 20,
+    }
+    solid = {
+        **base, "symbol": "SOLID", "rsi": 55, "volume_ratio": 1.8,
+        "classification": "QUALITY_COMPOUNDER", "fundamental_coverage": 0.85,
+        "fundamental_score": 80,
+    }
     assert not is_sniper_breakout_candidate(hot)
+    assert not is_sniper_breakout_candidate(thin)
+    assert not is_sniper_breakout_candidate(avoid)
     assert is_sniper_breakout_candidate(solid)
-    assert breakout_quality_score(hot) < breakout_quality_score(thin)
-    assert breakout_quality_score(solid) > breakout_quality_score(thin)
-    best = pick_best_sniper_breakout([hot, thin, solid])
+    assert breakout_quality_score(thin) == -1000.0
+    assert breakout_quality_score(solid) > breakout_quality_score(hot)
+    best = pick_best_sniper_breakout([hot, thin, avoid, solid])
     assert best is not None and best["symbol"] == "SOLID"
+    assert best["quality_ok"] is True
+    assert best["quality_gates"]["volume"] == "pass"
+    assert "breakout_context" in best
 
 
 def test_enrich_scan_row_never_fakes_daily_change_label():

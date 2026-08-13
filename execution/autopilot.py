@@ -785,9 +785,12 @@ def _passes_gates(symbol: str, score: float, edge, sector: str,
         return f"negative measured edge ({edge:+.2f}R)"
     # Non-sniper path: volume < 1× is lower priority — skip so scarce daily
     # slots go to real volume breaks (sniper confirms volume at fire time).
-    if (source != "sniper" and volume_ratio > 0
-            and volume_ratio < 1.0):
-        return f"volume {volume_ratio:.2f}× < 1× — priority niche, skip"
+    # Hard floor for every source — sniper confirms already require ≥1.0× avg-day;
+    # scanner/Telegram paths must not sneak thin tape through.
+    if volume_ratio > 0 and volume_ratio < 1.0:
+        return f"volume {volume_ratio:.2f}× < 1× — hard reject"
+    if volume_ratio <= 0 and source != "sniper":
+        return "volume missing/zero — hard reject"
     tops, sector_status = _top_sectors()
     if sector_status == "unavailable":
         # Data outage must not freeze the whole desk — sector gate fail-open.

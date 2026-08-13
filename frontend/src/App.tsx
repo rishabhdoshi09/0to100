@@ -248,9 +248,16 @@ function App() {
       setBars([])
       return
     }
-    fetchChart(selected)
-      .then((result) => setBars(result.bars))
-      .catch(() => setBars([]))
+    let alive = true
+    const load = () => {
+      fetchChart(selected)
+        .then((result) => { if (alive) setBars(result.bars) })
+        .catch(() => { if (alive) setBars([]) })
+    }
+    load()
+    // Intraday bar changes — don't wait for a new bhavcopy date.
+    const timer = window.setInterval(load, 20_000)
+    return () => { alive = false; window.clearInterval(timer) }
   }, [selected, dashboard.data.bhavcopy.ready, dashboard.data.bhavcopy.latest_date])
 
   const symbols = useMemo(() => {

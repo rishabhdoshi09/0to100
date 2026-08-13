@@ -486,18 +486,29 @@ def _render_high_conviction(results: list[dict]) -> None:
 
 def _pick_best_trade(results: list[dict]) -> dict | None:
     """The single most actionable setup: buy verdict + non-negative measured
-    edge + live price not broken below entry. Results are already sorted
-    verdict-first + edge-weighted, so the first qualifier IS the best.
+    edge + live price not broken below entry + volume/tech/fund gates.
 
     STRICT: market hours mein bina live-verified price ke koi card
-    'THE trade' nahi ban sakta — unverified hero = stale hero."""
+    'THE trade' nahi ban sakta — unverified hero = stale hero.
+    Thin volume (<1×), RSI blow-off, chase risk and AVOID_REVIEW never win.
+    """
+    try:
+        from product.breakout_quality import gate_breakout_quality
+    except Exception:
+        gate_breakout_quality = None
     require_live = _mkt_open()
-    for r in results[:25]:
+    for r in results[:40]:
         if r.get("verdict") not in ("STRONG BUY", "BUY"):
             continue
         if (r.get("edge_r") is not None) and r["edge_r"] < 0:
             continue
         if require_live and not r.get("live"):
+            continue
+        if gate_breakout_quality is not None:
+            ok, _, _ = gate_breakout_quality(r)
+            if not ok:
+                continue
+        elif float(r.get("volume_ratio") or 0) < 1.0:
             continue
         return r
     return None

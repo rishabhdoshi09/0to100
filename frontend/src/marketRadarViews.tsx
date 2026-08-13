@@ -36,6 +36,8 @@ type RadarRow = ScannerWorkspaceRow & {
   sniper_candidate?: boolean
   volume_ratio?: number
   rsi?: number
+  tech_source?: string
+  price_tag?: string
 }
 
 const breakoutLabel: Record<string, string> = {
@@ -73,25 +75,30 @@ function BestSniperPanel({
   onSelect: (symbol: string) => void
 }) {
   if (best) {
+    const gates = (best as RadarRow & { quality_gates?: Record<string, string> }).quality_gates || {}
+    const ctx = (best as RadarRow & {
+      breakout_context?: { order_book?: { status?: string; note?: string }; concall?: { status?: string; note?: string } }
+    }).breakout_context
     return (
       <div className="radar-best-breakout">
         <Panel
           title={`BEST SNIPER CANDIDATE · ${best.symbol}`}
           subtitle={
             [
-              sniperCount > 0 ? `${sniperCount} sniper candidate${sniperCount === 1 ? '' : 's'}` : null,
+              sniperCount > 0 ? `${sniperCount} gated candidate${sniperCount === 1 ? '' : 's'}` : null,
               best.breakout_grade ? `Grade ${best.breakout_grade}` : null,
-              best.breakout_conviction != null
-                ? `Conv ${Math.round(Number(best.breakout_conviction))}`
+              best.rsi != null
+                ? `RSI ${Math.round(Number(best.rsi))}${best.tech_source === 'live' || best.price_tag === 'LIVE' ? ' LIVE' : ''}`
                 : null,
-              best.rsi != null ? `RSI ${Math.round(Number(best.rsi))}` : null,
               best.volume_ratio != null
                 ? `Vol ${Number(best.volume_ratio).toFixed(1)}×`
                 : null,
               best.classification
                 ? String(best.classification).replace(/_/g, ' ')
                 : null,
-            ].filter(Boolean).join(' · ') || 'Sniper pool · RSI≤70 · volume prioritized'
+              gates.fundamentals ? `Fund ${gates.fundamentals}` : null,
+              gates.trend ? `Trend ${gates.trend}` : null,
+            ].filter(Boolean).join(' · ') || 'Vol≥1× · RSI≤70 · fund/tech gated'
           }
         >
           <button
@@ -107,6 +114,15 @@ function BestSniperPanel({
             {breakoutLabel[String(best.breakout_state || '')]
               || words(String(best.breakout_state || best.status || ''))}
           </button>
+          {ctx && (
+            <p className="radar-empty-li" style={{ paddingTop: 8 }}>
+              Order book: {ctx.order_book?.status || 'unavailable'}
+              {ctx.order_book?.note ? ` — ${ctx.order_book.note}` : ''}
+              {' · '}
+              Concall: {ctx.concall?.status || 'unavailable'}
+              {ctx.concall?.note && ctx.concall.status === 'present' ? ` — ${ctx.concall.note}` : ''}
+            </p>
+          )}
         </Panel>
       </div>
     )
@@ -115,11 +131,11 @@ function BestSniperPanel({
     <div className="radar-best-breakout radar-best-empty">
       <Panel
         title="BEST SNIPER CANDIDATE"
-        subtitle="No sniper-quality name in the current pool (need RSI≤70, near pivot or graded A/B, volume evidence)"
+        subtitle="Need vol≥1.0×, RSI≤70, no chase, no AVOID_REVIEW — thin tape never qualifies"
       >
         <p className="radar-empty-li">
           {sniperCount === 0
-            ? 'Sniper pool empty — wider breakouts still listed below.'
+            ? 'No gated sniper candidates — thin-volume / blow-off names are excluded.'
             : 'Sniper pool has names but none cleared the best-pick gate.'}
         </p>
       </Panel>
@@ -238,14 +254,32 @@ export function RadarHomeView(props: ExperienceViewProps & {
   const [radar, setRadar] = useState<RadarHome | null>(null)
   const [preTrade, setPreTrade] = useState<PreTrade | null>(null)
 
+  // Daily fields (RSI/price/vol) must not freeze on last scan — poll the
+  // live-refreshed radar payload on a short timer.
   useEffect(() => {
-    fetchRadarHome().then(setRadar).catch(() => setRadar(null))
-  }, [dashboard.scan.scanned_at, dashboard.long_term.scanned_at])
+    let alive = true
+    const load = () => {
+      fetchRadarHome()
+        .then((payload) => { if (alive) setRadar(payload) })
+        .catch(() => { if (alive) setRadar(null) })
+    }
+    load()
+    const timer = window.setInterval(load, 20_000)
+    return () => { alive = false; window.clearInterval(timer) }
+  }, [dashboard.scan.scanned_at, dashboard.long_term.scanned_at, dashboard.generated_at])
 
   useEffect(() => {
     if (!selected) { setPreTrade(null); return }
-    fetchPreTrade(selected).then(setPreTrade).catch(() => setPreTrade(null))
-  }, [selected, dashboard.scan.scanned_at])
+    let alive = true
+    const load = () => {
+      fetchPreTrade(selected)
+        .then((payload) => { if (alive) setPreTrade(payload) })
+        .catch(() => { if (alive) setPreTrade(null) })
+    }
+    load()
+    const timer = window.setInterval(load, 20_000)
+    return () => { alive = false; window.clearInterval(timer) }
+  }, [selected, dashboard.scan.scanned_at, dashboard.generated_at])
 
   const laneCard = (title: string, rows: RadarRow[], count: number, sniperHint?: number) => (
     <section className="radar-lane-card">
@@ -328,7 +362,9 @@ export function RadarHomeView(props: ExperienceViewProps & {
                   <span>
                     {row.breakout_grade ? `G${row.breakout_grade}` : '—'}
                     {row.volume_ratio != null ? ` · ${Number(row.volume_ratio).toFixed(1)}×` : ''}
-                    {row.rsi != null ? ` · RSI ${Math.round(Number(row.rsi))}` : ''}
+                    {row.rsi != null
+                      ? ` · RSI ${Math.round(Number(row.rsi))}${(row as RadarRow).tech_source === 'live' || (row as RadarRow).price_tag === 'LIVE' ? '·L' : ''}`
+                      : ''}
                   </span>
                 </button>
               </li>
@@ -407,19 +443,29 @@ export function MarketScannerView(props: ExperienceViewProps & { onCompare: (sym
   }, [depth])
 
   useEffect(() => {
-    fetchScannerWorkspace(tab)
-      .then((result) => {
-        setRows(result.rows as RadarRow[])
-        setMeta({ scanned_at: result.scanned_at, universe: result.universe_size })
-        setBestBreakout((result.best_breakout as RadarRow | null | undefined) || null)
-        setSniperCount(result.sniper_count ?? (result.sniper_rows?.length || 0))
-      })
-      .catch(() => {
-        setRows([])
-        setBestBreakout(null)
-        setSniperCount(0)
-      })
-  }, [tab, dashboard.scan.scanned_at, dashboard.long_term.scanned_at])
+    let alive = true
+    const load = () => {
+      fetchScannerWorkspace(tab)
+        .then((result) => {
+          if (!alive) return
+          setRows(result.rows as RadarRow[])
+          setMeta({ scanned_at: result.scanned_at, universe: result.universe_size })
+          setBestBreakout((result.best_breakout as RadarRow | null | undefined) || null)
+          setSniperCount(result.sniper_count ?? (result.sniper_rows?.length || 0))
+        })
+        .catch(() => {
+          if (!alive) return
+          setRows([])
+          setBestBreakout(null)
+          setSniperCount(0)
+        })
+    }
+    load()
+    // Breakouts/Pre-Breakout change every minute — don't wait for a new scan.
+    const pollMs = (tab === 'Breakouts' || tab === 'Pre-Breakout') ? 20_000 : 60_000
+    const timer = window.setInterval(load, pollMs)
+    return () => { alive = false; window.clearInterval(timer) }
+  }, [tab, dashboard.scan.scanned_at, dashboard.long_term.scanned_at, dashboard.generated_at])
 
   const sectors = useMemo(() => [...new Set(rows.map((r) => r.sector).filter(Boolean))].sort(), [rows])
   const filtered = rows.filter((row) => {

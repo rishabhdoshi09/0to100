@@ -113,7 +113,12 @@ def _read_day(d: date) -> Optional[pd.DataFrame]:
 
 def _trading_days_back(n_days: int) -> list[date]:
     """Candidate weekdays going back far enough to cover n_days sessions."""
-    out, d = [], date.today()
+    try:
+        from core.market_clock import today_ist
+        start = today_ist()
+    except Exception:
+        start = date.today()
+    out, d = [], start
     while len(out) < int(n_days * 1.55):
         if d.weekday() < 5:
             out.append(d)

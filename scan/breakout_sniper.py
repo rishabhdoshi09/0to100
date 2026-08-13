@@ -165,6 +165,13 @@ def _quality_skip(r: dict) -> str:
     avg_vol = float(r.get("avg_vol20") or 0)
     if avg_vol <= 0:
         return "0 / unknown volume — sniper will not watch"
+    try:
+        vratio = float(r.get("volume_ratio") or r.get("rvol") or 0)
+    except (TypeError, ValueError):
+        vratio = 0.0
+    # Scan-day relative volume already thin → do not arm for a "confirmed" fire.
+    if 0 < vratio < _VOL_ABS_MIN:
+        return f"volume {vratio:.2f}× < {_VOL_ABS_MIN:.1f}× — thin tape, skip"
     return ""
 
 

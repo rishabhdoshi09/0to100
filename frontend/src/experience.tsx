@@ -507,18 +507,23 @@ export function EnhancedScannerView(props: ExperienceViewProps) {
   useEffect(() => {
     let alive = true
     const apiMode = mode === 'F&O Coverage' ? 'F&O' : mode
-    fetchScannerWorkspace(apiMode)
-      .then((result) => {
-        if (!alive) return
-        setRows(result.rows)
-        setSourceMessage(`${result.source} · ${result.scanned_at || 'date unavailable'}`)
-      })
-      .catch(() => {
-        if (!alive) return
-        setRows(fallbackRows(mode, dashboard))
-        setSourceMessage('Local dashboard fallback')
-      })
-    return () => { alive = false }
+    const load = () => {
+      fetchScannerWorkspace(apiMode)
+        .then((result) => {
+          if (!alive) return
+          setRows(result.rows)
+          setSourceMessage(`${result.source} · ${result.scanned_at || 'date unavailable'}`)
+        })
+        .catch(() => {
+          if (!alive) return
+          setRows(fallbackRows(mode, dashboard))
+          setSourceMessage('Local dashboard fallback')
+        })
+    }
+    load()
+    const pollMs = (mode === 'Breakouts' || mode === 'Pre-Breakout') ? 20_000 : 60_000
+    const timer = window.setInterval(load, pollMs)
+    return () => { alive = false; window.clearInterval(timer) }
   }, [mode, dashboard.scan.scanned_at, dashboard.long_term.scanned_at])
 
   const sectors = useMemo(() => [...new Set(rows.map((row) => row.sector).filter(Boolean) as string[])].sort(), [rows])

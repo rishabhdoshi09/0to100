@@ -378,7 +378,7 @@ export function ProductStockIntelligenceView(props: ViewProps) {
     }
   }
 
-  const load = async () => {
+  const load = async (opts?: { soft?: boolean }) => {
     if (!selected) {
       setWorkspace(null)
       setPreTrade(null)
@@ -386,34 +386,44 @@ export function ProductStockIntelligenceView(props: ViewProps) {
       setFundamentalsError('')
       return
     }
-    setLoading(true)
-    setFundamentalsError('')
-    setRatios([])
+    const soft = Boolean(opts?.soft)
+    if (!soft) {
+      setLoading(true)
+      setFundamentalsError('')
+      setRatios([])
+    }
     try {
       const ws = await fetchStockIntelligence(selected)
       setWorkspace(ws)
       setError('')
       // Clear the full-page loader as soon as the workspace lands. Fundamentals /
       // pre-trade are slower secondary fetches and have their own busy UI.
-      setLoading(false)
+      if (!soft) setLoading(false)
       try {
         setPreTrade(await fetchPreTrade(selected))
       } catch {
         setPreTrade(null)
       }
+      if (soft) return
       if (!ws.fundamentals?.available || (ws.fundamentals.coverage_pct ?? 0) < 40) {
         void loadFundamentals(false)
       } else {
         void loadRatios()
       }
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : 'Stock intelligence unavailable')
-      setLoading(false)
+      if (!soft) {
+        setError(reason instanceof Error ? reason.message : 'Stock intelligence unavailable')
+        setLoading(false)
+      }
     }
   }
 
   useEffect(() => {
     void load()
+    if (!selected) return undefined
+    // Soft-refresh technicals; don't flash the page or re-fetch fundamentals.
+    const timer = window.setInterval(() => { void load({ soft: true }) }, 20_000)
+    return () => window.clearInterval(timer)
   }, [selected])
 
   useEffect(() => {

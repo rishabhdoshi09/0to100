@@ -197,6 +197,32 @@ export function LongTermTable({
   )
 }
 
+/** Wilder RSI from chart closes — same alpha=1/14 path as the backend. */
+function rsiFromBars(bars: ChartBar[], periods = 14): number | null {
+  if (bars.length < periods + 1) return null
+  const closes = bars.map((b) => Number(b.close)).filter((n) => Number.isFinite(n))
+  if (closes.length < periods + 1) return null
+  let avgGain = 0
+  let avgLoss = 0
+  for (let i = 1; i <= periods; i += 1) {
+    const delta = closes[i] - closes[i - 1]
+    if (delta >= 0) avgGain += delta
+    else avgLoss -= delta
+  }
+  avgGain /= periods
+  avgLoss /= periods
+  for (let i = periods + 1; i < closes.length; i += 1) {
+    const delta = closes[i] - closes[i - 1]
+    const gain = delta > 0 ? delta : 0
+    const loss = delta < 0 ? -delta : 0
+    avgGain = (avgGain * (periods - 1) + gain) / periods
+    avgLoss = (avgLoss * (periods - 1) + loss) / periods
+  }
+  if (avgLoss === 0) return 100
+  const rs = avgGain / avgLoss
+  return Math.round((100 - 100 / (1 + rs)) * 100) / 100
+}
+
 export function ChartWorkspace({
   symbol,
   bars,
@@ -207,6 +233,9 @@ export function ChartWorkspace({
   row?: ScanRecord | ConvictionRecord | LongTermRecord
 }) {
   const scan = row as ScanRecord | undefined
+  const lastClose = bars.length ? Number(bars[bars.length - 1].close) : NaN
+  const livePrice = Number.isFinite(lastClose) ? lastClose : row?.price
+  const liveRsi = rsiFromBars(bars)
   return (
     <div>
       {bars.length > 0 ? (
@@ -219,11 +248,11 @@ export function ChartWorkspace({
         </div>
       )}
       <div className="ohlc-strip">
-        <div><span>PRICE</span><strong>{money(row?.price)}</strong></div>
+        <div><span>PRICE</span><strong>{money(livePrice)}</strong></div>
         <div><span>ENTRY</span><strong>{money(scan?.entry)}</strong></div>
         <div><span>STOP</span><strong className="negative">{money(scan?.stop)}</strong></div>
         <div><span>TARGET</span><strong className="positive">{money(scan?.target)}</strong></div>
-        <div><span>RSI / SCORE</span><strong>{Number.isFinite(scan?.rsi) ? Number(scan?.rsi).toFixed(0) : score((row as LongTermRecord)?.combined_score || scan?.score)}</strong></div>
+        <div><span>RSI / SCORE</span><strong>{liveRsi != null ? liveRsi.toFixed(0) : Number.isFinite(scan?.rsi) ? Number(scan?.rsi).toFixed(0) : score((row as LongTermRecord)?.combined_score || scan?.score)}</strong></div>
       </div>
     </div>
   )
