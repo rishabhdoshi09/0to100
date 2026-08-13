@@ -112,6 +112,13 @@ def test_breakouts_mode_ranks_best_quality_first():
     # High RSI and weak names sit below the sniper-quality pick
     assert [r["symbol"] for r in rows][0] != "HOT"
 
+    from product.radar_workspace import enrich_scanner_rows, pick_best_sniper_breakout
+
+    enriched = enrich_scanner_rows(rows, scanned_at="t")
+    best = pick_best_sniper_breakout(enriched)
+    assert best is not None and best["symbol"] == "STRONG"
+    assert sum(1 for r in enriched if r.get("sniper_candidate")) >= 1
+
 
 def test_conviction_mode_preserves_conviction_ranking():
     rows = [

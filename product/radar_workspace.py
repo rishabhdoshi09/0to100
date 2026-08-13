@@ -255,6 +255,10 @@ def enrich_scan_row(
     )
     reason = row.get("reasons") or row.get("why") or []
     enriched["reason"] = str(reason[0] if isinstance(reason, list) and reason else row.get("why") or "")
+    # Sniper ranking fields — always present so Market Scanner / radar can
+    # surface a BEST candidate without a second pass.
+    enriched["sniper_candidate"] = is_sniper_breakout_candidate(enriched)
+    enriched["breakout_quality"] = breakout_quality_score(enriched)
     return enriched
 
 
@@ -333,6 +337,7 @@ def build_radar_home(
     long_picks.sort(key=lambda r: (-_f(r.get("combined_score")), r.get("symbol", "")))
 
     best_breakout = pick_best_sniper_breakout(breakouts)
+    sniper_breakouts = [r for r in breakouts if r.get("sniper_candidate")]
     health = str(getattr(market, "health", "") or (market or {}).get("health", "Unavailable") if isinstance(market, Mapping) else "Unavailable")
     return {
         "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -347,6 +352,7 @@ def build_radar_home(
         "long_term_scanned_at": lt_at,
         "universe_size": int((scan_payload or {}).get("universe_size", 0) or 0),
         "best_breakout": best_breakout,
+        "sniper_candidates": sniper_breakouts[:12],
         "lanes": {
             "breakouts": breakouts[:12],
             "momentum": momentum[:12],
@@ -356,7 +362,7 @@ def build_radar_home(
             "breakouts": len(breakouts),
             "momentum": len(momentum),
             "long_term_picks": len(long_picks),
-            "sniper_breakouts": sum(1 for r in breakouts if r.get("sniper_candidate")),
+            "sniper_breakouts": len(sniper_breakouts),
         },
     }
 

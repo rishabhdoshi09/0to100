@@ -175,6 +175,9 @@ export type ScannerWorkspace = {
   scanned_at: string
   universe_size: number
   rows: ScannerWorkspaceRow[]
+  best_breakout?: ScannerWorkspaceRow | null
+  sniper_count?: number
+  sniper_rows?: ScannerWorkspaceRow[]
 }
 
 const json = async <T>(response: Response): Promise<T> => {
@@ -427,12 +430,13 @@ export type RadarHome = {
   long_term_scanned_at: string
   universe_size: number
   best_breakout?: ScannerWorkspaceRow | null
+  sniper_candidates?: ScannerWorkspaceRow[]
   lanes: {
     breakouts: ScannerWorkspaceRow[]
     momentum: ScannerWorkspaceRow[]
     long_term_picks: ScannerWorkspaceRow[]
   }
-    counts: { breakouts: number; momentum: number; long_term_picks: number; sniper_breakouts?: number }
+  counts: { breakouts: number; momentum: number; long_term_picks: number; sniper_breakouts?: number }
 }
 
 export const fetchRadarHome = (): Promise<RadarHome> =>

@@ -150,6 +150,9 @@ def test_radar_home_builds_three_lanes():
         assert syms.index("BEST") < syms.index("HOT")
     assert payload["best_breakout"]["volume_ratio"] >= 1.0
     assert payload["best_breakout"]["rsi"] <= 70
+    assert payload["counts"]["sniper_breakouts"] >= 1
+    assert any(r["symbol"] == "BEST" for r in payload["sniper_candidates"])
+    assert payload["lanes"]["breakouts"][0].get("sniper_candidate") is True
 
 
 def test_breakout_quality_prefers_grade_and_fundamentals():
@@ -191,3 +194,25 @@ def test_enrich_scan_row_never_fakes_daily_change_label():
     row = enrich_scan_row({"symbol": "X", "momentum_5d": 4.2, "signals": ["MOMENTUM"]}, scanned_at="2026-01-01")
     assert row["change_5d_pct"] == 4.2
     assert "sector" in row
+    assert "sniper_candidate" in row
+    assert "breakout_quality" in row
+
+
+def test_enrich_marks_graded_breakout_as_sniper_candidate():
+    row = enrich_scan_row(
+        {
+            "symbol": "ABC",
+            "signals": ["BREAKOUT_52W"],
+            "verdict": "BUY",
+            "status": "Ready to trade",
+            "breakout_grade": "A",
+            "breakout_conviction": 80,
+            "rsi": 55,
+            "volume_ratio": 1.5,
+            "avg_vol20": 1e6,
+            "chase_risk": False,
+        },
+        scanned_at="2026-01-01",
+    )
+    assert row["sniper_candidate"] is True
+    assert row["breakout_quality"] > 0
