@@ -15,6 +15,26 @@
 .radar-hero h2 { margin: 6px 0 4px; font-size: 26px; }
 .radar-hero-actions button { min-width: 120px; }
 
+.radar-desk-strip {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.radar-desk-strip > div {
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: linear-gradient(180deg, rgba(14, 24, 40, .98), rgba(8, 14, 27, .96));
+}
+.radar-desk-strip.desk-warn > div:nth-child(3) {
+  border-color: rgba(255, 184, 77, .45);
+  background: rgba(90, 60, 10, .28);
+}
+.radar-desk-strip span { font-size: 9px; letter-spacing: .12em; color: var(--muted); display: block; }
+.radar-desk-strip strong { font-variant-numeric: tabular-nums; font-size: 14px; }
+.radar-desk-strip small { display: block; margin-top: 4px; color: var(--muted); font-size: 11px; line-height: 1.35; }
+
 .radar-market-strip {
   display: grid;
   grid-template-columns: repeat(6, minmax(0, 1fr));
@@ -59,8 +79,32 @@
   gap: 12px;
 }
 .radar-decision-preview { font-size: 13px; line-height: 1.5; }
+.radar-decision-preview .risk-lens { margin-top: 10px; }
+.radar-decision-blockers {
+  margin: 8px 0 0;
+  padding-left: 18px;
+  color: #ff8fa0;
+  font-size: 12px;
+}
 .radar-action-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
 .radar-action-row button { font-size: 12px; }
+.thin-tag {
+  font-style: normal;
+  font-size: 9px;
+  letter-spacing: .08em;
+  color: #ff8fa0;
+  margin-left: 6px;
+}
+.radar-lane-card li button.thin-volume {
+  border-color: rgba(255, 103, 126, .35);
+  background: rgba(90, 20, 36, .22);
+}
+.radar-table tbody tr.thin-volume-row td { color: #ffb4bf; }
+.radar-table tbody tr.thin-volume-row td.cell-warn,
+.radar-table td.cell-warn {
+  color: #ff8fa0;
+  font-weight: 600;
+}
 
 .radar-tab-row { display: flex; gap: 8px; margin-bottom: 12px; }
 .radar-tab-row button {
@@ -185,6 +229,7 @@
   .radar-three-lanes { grid-template-columns: 1fr; }
   .radar-workspace { grid-template-columns: 1fr; }
   .radar-market-strip { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .radar-desk-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .radar-sniper-pool ul { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 
