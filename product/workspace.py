@@ -207,11 +207,18 @@ def scanner_rows(
 
     projected = [dict(row, _source=row.get("_source", "market_scan")) for row in rows]
     if normalized == "breakouts":
+        from product.breakout_quality import passes_volume_floor
+
+        # Hard-exclude thin volume from the actionable head of the list.
+        projected = [
+            row for row in projected
+            if passes_volume_floor(row) or str(row.get("status", "")) == "Watch for breakout"
+        ]
         projected.sort(
             key=lambda row: (
                 not is_sniper_breakout_candidate(row),
+                not passes_volume_floor(row),
                 _f(row.get("rsi")) > RSI_BLOWOFF,
-                _volume_ratio(row) < MIN_VOLUME_RATIO and _volume_ratio(row) > 0,
                 bool(row.get("chase_risk")),
                 -breakout_quality_score(row),
                 -_f(row.get("breakout_conviction")),

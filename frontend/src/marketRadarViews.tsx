@@ -73,17 +73,18 @@ function BestSniperPanel({
   onSelect: (symbol: string) => void
 }) {
   if (best) {
+    const gates = (best as RadarRow & { quality_gates?: Record<string, string> }).quality_gates || {}
+    const ctx = (best as RadarRow & {
+      breakout_context?: { order_book?: { status?: string; note?: string }; concall?: { status?: string; note?: string } }
+    }).breakout_context
     return (
       <div className="radar-best-breakout">
         <Panel
           title={`BEST SNIPER CANDIDATE · ${best.symbol}`}
           subtitle={
             [
-              sniperCount > 0 ? `${sniperCount} sniper candidate${sniperCount === 1 ? '' : 's'}` : null,
+              sniperCount > 0 ? `${sniperCount} gated candidate${sniperCount === 1 ? '' : 's'}` : null,
               best.breakout_grade ? `Grade ${best.breakout_grade}` : null,
-              best.breakout_conviction != null
-                ? `Conv ${Math.round(Number(best.breakout_conviction))}`
-                : null,
               best.rsi != null ? `RSI ${Math.round(Number(best.rsi))}` : null,
               best.volume_ratio != null
                 ? `Vol ${Number(best.volume_ratio).toFixed(1)}×`
@@ -91,7 +92,9 @@ function BestSniperPanel({
               best.classification
                 ? String(best.classification).replace(/_/g, ' ')
                 : null,
-            ].filter(Boolean).join(' · ') || 'Sniper pool · RSI≤70 · volume prioritized'
+              gates.fundamentals ? `Fund ${gates.fundamentals}` : null,
+              gates.trend ? `Trend ${gates.trend}` : null,
+            ].filter(Boolean).join(' · ') || 'Vol≥1× · RSI≤70 · fund/tech gated'
           }
         >
           <button
@@ -107,6 +110,15 @@ function BestSniperPanel({
             {breakoutLabel[String(best.breakout_state || '')]
               || words(String(best.breakout_state || best.status || ''))}
           </button>
+          {ctx && (
+            <p className="radar-empty-li" style={{ paddingTop: 8 }}>
+              Order book: {ctx.order_book?.status || 'unavailable'}
+              {ctx.order_book?.note ? ` — ${ctx.order_book.note}` : ''}
+              {' · '}
+              Concall: {ctx.concall?.status || 'unavailable'}
+              {ctx.concall?.note && ctx.concall.status === 'present' ? ` — ${ctx.concall.note}` : ''}
+            </p>
+          )}
         </Panel>
       </div>
     )
@@ -115,11 +127,11 @@ function BestSniperPanel({
     <div className="radar-best-breakout radar-best-empty">
       <Panel
         title="BEST SNIPER CANDIDATE"
-        subtitle="No sniper-quality name in the current pool (need RSI≤70, near pivot or graded A/B, volume evidence)"
+        subtitle="Need vol≥1.0×, RSI≤70, no chase, no AVOID_REVIEW — thin tape never qualifies"
       >
         <p className="radar-empty-li">
           {sniperCount === 0
-            ? 'Sniper pool empty — wider breakouts still listed below.'
+            ? 'No gated sniper candidates — thin-volume / blow-off names are excluded.'
             : 'Sniper pool has names but none cleared the best-pick gate.'}
         </p>
       </Panel>

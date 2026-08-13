@@ -7,13 +7,20 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any, Callable, Mapping, Sequence
 
+from product.breakout_quality import (
+    MIN_VOLUME_RATIO,
+    RSI_BLOWOFF,
+    attach_best_pick_meta,
+    gate_breakout_quality,
+    passes_volume_floor,
+    volume_ratio as _volume_ratio_shared,
+)
+
 BREAKOUT_TAGS = frozenset({"BREAKOUT_52W", "BREAKOUT_RES", "GOLDEN_CROSS", "VOL_SQUEEZE"})
 QUALITY_CLASSES = frozenset({"QUALITY_COMPOUNDER", "GARP_CANDIDATE", "QUALITY_BUT_EXPENSIVE"})
 MIN_LT_FUNDAMENTAL_COVERAGE = 0.50
-# Align with sniper / scanner blow-off ceiling — high RSI = ignore for "best"
-RSI_BLOWOFF = 70.0
-# Relative volume below 1× is demoted (priority niche), not always hard-rejected
-MIN_VOLUME_RATIO = 1.0
+# Re-export shared floors so callers keep importing from this module.
+# Volume < 1× is a HARD reject for sniper/best — never just a sort demote.
 
 
 def is_long_term_pick(row: Mapping[str, Any]) -> bool:
@@ -35,20 +42,18 @@ def _f(value: Any, default: float = 0.0) -> float:
 
 
 def _volume_ratio(row: Mapping[str, Any]) -> float:
-    return _f(row.get("volume_ratio") or row.get("rvol") or 0)
+    return _volume_ratio_shared(row)
 
 
 def is_sniper_breakout_candidate(row: Mapping[str, Any]) -> bool:
     """True when this row is in the sniper's breakout universe.
 
     Matches sniper watch eligibility (pre-break near pivot) OR a graded /
-    confirmed breakout the sniper path is meant to catch — excluding
-    chase-risk and RSI blow-offs (those are ignored for "best").
+    confirmed breakout — excluding chase-risk, RSI blow-offs, thin volume
+    (<1×), and AVOID_REVIEW fundamentals.
     """
-    if bool(row.get("chase_risk")):
-        return False
-    rsi = _f(row.get("rsi"))
-    if rsi > RSI_BLOWOFF:
+    ok, _, _ = gate_breakout_quality(row)
+    if not ok:
         return False
     cats = {str(c) for c in (row.get("categories") or [])}
     sigs = _signals(row)
@@ -81,11 +86,11 @@ def is_sniper_breakout_candidate(row: Mapping[str, Any]) -> bool:
 def breakout_quality_score(row: Mapping[str, Any]) -> float:
     """Rank sniper-style breakouts for fewer, higher-win-rate picks.
 
-    Higher is better. Hard-ignores RSI blow-offs (score crushed). Volume
-    below 1× is demoted (priority niche). Never invents fundamentals.
+    Higher is better. Hard-ignores RSI blow-offs and volume <1× (crushed).
+    Rewards graded breaks + usable fundamentals. Never invents fundamentals.
     """
-    rsi = _f(row.get("rsi"))
-    if rsi > RSI_BLOWOFF:
+    ok, _, gates = gate_breakout_quality(row)
+    if not ok:
         return -1000.0  # ignore — never the "best"
 
     grade = str(row.get("breakout_grade") or "").upper()
@@ -102,49 +107,49 @@ def breakout_quality_score(row: Mapping[str, Any]) -> float:
             fund_pts += 5.0
         elif cls == "QUALITY_BUT_EXPENSIVE":
             fund_pts += 2.0
-        elif cls == "AVOID_REVIEW":
-            fund_pts -= 10.0
+    elif gates.get("fundamentals") == "unknown":
+        fund_pts = -5.0  # prefer names with readable fund context
 
     vol = _volume_ratio(row)
-    vol_pts = 0.0
-    if 0 < vol < MIN_VOLUME_RATIO:
-        vol_pts = -35.0  # priority niche — thin tape breaks last
-    elif vol >= 2.0:
+    if vol >= 2.0:
         vol_pts = 12.0
-    elif vol >= MIN_VOLUME_RATIO:
+    else:
         vol_pts = 6.0
 
-    # Soft RSI pressure approaching the ceiling (still tradable, less ideal)
+    rsi = _f(row.get("rsi"))
     rsi_pen = 12.0 if rsi >= 65 else 0.0
-    chase_pen = 25.0 if bool(row.get("chase_risk")) else 0.0
+    trend_pts = 6.0 if gates.get("trend") == "pass" else 0.0
     sniper_boost = 20.0 if is_sniper_breakout_candidate(row) else 0.0
 
     return round(
         grade_pts + conv * 0.35 + score * 0.25 + edge * 40.0
-        + fund_pts + vol_pts + sniper_boost - chase_pen - rsi_pen,
+        + fund_pts + vol_pts + sniper_boost + trend_pts - rsi_pen,
         2,
     )
 
 
 def pick_best_sniper_breakout(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any] | None:
-    """Best among sniper breakout candidates — RSI blow-offs ignored,
-    volume < 1× sorted last. None if no sniper-quality name exists."""
+    """Best among sniper breakout candidates that clear volume+tech+fund gates.
+
+    Thin volume (<1×), RSI blow-offs, chase risk and AVOID_REVIEW never win.
+    Attaches quality_gates + optional order-book/concall context.
+    """
     pool = [
         dict(r) for r in rows
-        if is_sniper_breakout_candidate(r) and _f(r.get("rsi")) <= RSI_BLOWOFF
+        if is_sniper_breakout_candidate(r) and passes_volume_floor(r)
     ]
     if not pool:
         return None
     for r in pool:
         r["breakout_quality"] = breakout_quality_score(r)
     pool.sort(key=lambda r: (
-        _volume_ratio(r) < MIN_VOLUME_RATIO,  # volume ≥1× first
+        str(r.get("classification") or "") not in QUALITY_CLASSES,
         -_f(r.get("breakout_quality")),
         -_f(r.get("breakout_conviction")),
         -_f(r.get("score")),
         str(r.get("symbol", "")),
     ))
-    return pool[0]
+    return attach_best_pick_meta(pool[0], with_context=True)
 
 
 def merge_fundamental_context(
@@ -177,7 +182,8 @@ def classify_breakout_state(row: Mapping[str, Any]) -> str:
     if bool(row.get("chase_risk")):
         return "extended_after_breakout"
     signals = _signals(row)
-    vol_ok = _f(row.get("volume_ratio") or row.get("rvol") or 0) >= 1.0 or "VOL_SQUEEZE" in signals
+    # Volume floor is absolute — VOL_SQUEEZE is a pattern tag, not a volume waiver.
+    vol_ok = passes_volume_floor(row)
     if "PRE_BREAKOUT" in signals or status == "Watch for breakout":
         return "near_breakout"
     if signals & BREAKOUT_TAGS:
@@ -311,12 +317,12 @@ def build_radar_home(
             "confirmed_breakout", "near_breakout", "insufficient_confirmation", "extended_after_breakout",
         }
     ]
-    # Sniper-first: candidates the sniper path would watch/fire, then quality.
-    # High RSI ignored for "best"; volume < 1× sorted last.
+    # Sniper-first: only volume≥1× / non-blow-off / non-chase names lead the lane.
+    # Thin-volume rows stay in the wider lane but never at the top.
     breakouts.sort(key=lambda r: (
         not bool(r.get("sniper_candidate")),
+        not passes_volume_floor(r),
         _f(r.get("rsi")) > RSI_BLOWOFF,
-        _volume_ratio(r) < MIN_VOLUME_RATIO and _volume_ratio(r) > 0,
         bool(r.get("chase_risk")),
         r["breakout_state"] != "confirmed_breakout",
         r["breakout_state"] != "near_breakout",
@@ -337,7 +343,12 @@ def build_radar_home(
     long_picks.sort(key=lambda r: (-_f(r.get("combined_score")), r.get("symbol", "")))
 
     best_breakout = pick_best_sniper_breakout(breakouts)
-    sniper_breakouts = [r for r in breakouts if r.get("sniper_candidate")]
+    # Candidate list = only names that cleared the hard gates (no thin-volume noise).
+    sniper_breakouts = [
+        attach_best_pick_meta(r, with_context=False)
+        for r in breakouts
+        if r.get("sniper_candidate") and passes_volume_floor(r)
+    ]
     health = str(getattr(market, "health", "") or (market or {}).get("health", "Unavailable") if isinstance(market, Mapping) else "Unavailable")
     return {
         "generated_at": datetime.now(timezone.utc).isoformat(),

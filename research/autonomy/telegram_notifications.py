@@ -304,6 +304,11 @@ class TelegramNotifier:
         now = float(self._epoch())
         confirmed: list[tuple[dict, float]] = []
 
+        try:
+            from product.breakout_quality import gate_breakout_quality
+        except Exception:
+            gate_breakout_quality = None  # type: ignore
+
         for r in records:
             sym = str(r.get("symbol", "")).upper()
             entry = self._f(r.get("entry"))
@@ -313,6 +318,15 @@ class TelegramNotifier:
             relevant = (str(r.get("status", "")) in ("Watch for breakout", "Ready to trade")
                         or "PRE_BREAKOUT" in signals)
             if not relevant:
+                continue
+            # Same hard gates as sniper/best — never alert 0.1× / blow-off / AVOID.
+            if gate_breakout_quality is not None:
+                ok, reasons, _ = gate_breakout_quality(r)
+                if not ok:
+                    arms.pop(sym, None)
+                    continue
+            elif self._f(r.get("volume_ratio")) < 1.0:
+                arms.pop(sym, None)
                 continue
             try:
                 fresh = bool(live_feed.entry_allowed(sym))
@@ -347,7 +361,9 @@ class TelegramNotifier:
                 f"\n⚡ <b>{self._esc(sym)}</b> crossed ₹{self._f(r.get('entry')):,.2f} "
                 f"and held above it\n"
                 f"   LTP ₹{price:,.2f} · Score {self._f(r.get('score')):.0f} · "
-                f"Scan volume {self._f(r.get('volume_ratio')):.1f}×\n"
+                f"Volume {self._f(r.get('volume_ratio')):.1f}× (≥1.0×)\n"
+                f"   RSI {self._f(r.get('rsi')):.0f} · "
+                f"{self._esc(str(r.get('classification') or 'fundamentals n/a'))}\n"
                 f"   PAPER plan: stop ₹{self._f(r.get('stop')):,.2f} · "
                 f"target ₹{self._f(r.get('target')):,.2f}"
             )
