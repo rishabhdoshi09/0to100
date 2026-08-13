@@ -174,6 +174,13 @@ def _trade_now() -> str:
     buys = [r for r in results if r.get("verdict") in ("STRONG BUY", "BUY")]
     if not buys:
         return "Abhi koi BUY setup store mein nahi. /status se dekho."
+    # Overwrite RSI/price/volume from the live tape — scan-frozen oscillators
+    # must not paper-place a blow-off that already cooled (or vice versa).
+    try:
+        from product.live_technicals import refresh_rows_technicals
+        buys = refresh_rows_technicals(buys[:40], bulk_overlay=True)
+    except Exception:
+        pass
     # Sniper-first · volume ≥1× · ignore RSI blow-off · then prime/EV
     buys.sort(
         key=lambda r: (
@@ -190,6 +197,9 @@ def _trade_now() -> str:
         rsi = float(r.get("rsi") or 0)
         if rsi > RSI_BLOWOFF:
             continue
+        vol = float(r.get("volume_ratio") or 0)
+        if 0 < vol < MIN_VOLUME_RATIO:
+            continue
         placed = consider(
             symbol=r["symbol"],
             entry=float(r.get("entry") or r.get("price") or 0),
@@ -199,7 +209,7 @@ def _trade_now() -> str:
             ev_conf=r.get("ev_conf"), grade=str(r.get("breakout_grade") or ""),
             breakout_conviction=float(r.get("breakout_conviction") or 0),
             rsi=rsi,
-            volume_ratio=float(r.get("volume_ratio") or 0),
+            volume_ratio=vol,
         )
         if placed:
             return (f"✅ Trade liya: <b>{r['symbol']}</b> — gates paar, order "

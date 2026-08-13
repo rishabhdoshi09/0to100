@@ -1,20 +1,24 @@
 import { useEffect, useMemo, useState } from 'react'
 import { ChartWorkspace, Panel } from './components'
-import { money, pct, words } from './format'
+import { money, pct, relativeAge, words } from './format'
 import {
   addWatchlistItem,
+  bootstrapProduct,
   fetchCompareWorkspace,
   fetchPreTrade,
+  fetchProductReadiness,
   fetchRadarHome,
   fetchScannerWorkspace,
   fetchWatchlist,
   removeWatchlistItem,
   type CompareWorkspace,
   type PreTrade,
+  type ProductReadiness,
   type RadarHome,
   type ScannerWorkspaceRow,
   type WatchlistPayload,
 } from './productApi'
+import { RiskLensCard } from './productViews'
 import { LiveScanBanner, type ExperienceViewProps } from './experience'
 
 type RadarRow = ScannerWorkspaceRow & {
@@ -79,26 +83,27 @@ function BestSniperPanel({
     const ctx = (best as RadarRow & {
       breakout_context?: { order_book?: { status?: string; note?: string }; concall?: { status?: string; note?: string } }
     }).breakout_context
+    const volOk = best.volume_ratio == null || Number(best.volume_ratio) >= 1
     return (
       <div className="radar-best-breakout">
         <Panel
-          title={`BEST SNIPER CANDIDATE · ${best.symbol}`}
+          title={`BEST BREAKOUT PICK · ${best.symbol}`}
           subtitle={
             [
-              sniperCount > 0 ? `${sniperCount} gated candidate${sniperCount === 1 ? '' : 's'}` : null,
+              sniperCount > 0 ? `${sniperCount} quality candidate${sniperCount === 1 ? '' : 's'}` : null,
               best.breakout_grade ? `Grade ${best.breakout_grade}` : null,
               best.rsi != null
-                ? `RSI ${Math.round(Number(best.rsi))}${best.tech_source === 'live' || best.price_tag === 'LIVE' ? ' LIVE' : ''}`
+                ? `RSI ${Math.round(Number(best.rsi))}${best.tech_source === 'live' || best.price_tag === 'LIVE' ? ' LIVE' : ' EOD'}`
                 : null,
               best.volume_ratio != null
-                ? `Vol ${Number(best.volume_ratio).toFixed(1)}×`
+                ? `Vol ${Number(best.volume_ratio).toFixed(1)}×${volOk ? '' : ' THIN'}`
                 : null,
               best.classification
                 ? String(best.classification).replace(/_/g, ' ')
                 : null,
               gates.fundamentals ? `Fund ${gates.fundamentals}` : null,
               gates.trend ? `Trend ${gates.trend}` : null,
-            ].filter(Boolean).join(' · ') || 'Vol≥1× · RSI≤70 · fund/tech gated'
+            ].filter(Boolean).join(' · ') || 'Needs volume ≥1×, RSI ≤70, not extended'
           }
         >
           <button
@@ -118,6 +123,9 @@ function BestSniperPanel({
             <p className="radar-empty-li" style={{ paddingTop: 8 }}>
               Order book: {ctx.order_book?.status || 'unavailable'}
               {ctx.order_book?.note ? ` — ${ctx.order_book.note}` : ''}
+              {ctx.order_book?.status === 'unavailable'
+                ? ' (Zerodha login needed for live depth)'
+                : ''}
               {' · '}
               Concall: {ctx.concall?.status || 'unavailable'}
               {ctx.concall?.note && ctx.concall.status === 'present' ? ` — ${ctx.concall.note}` : ''}
@@ -130,17 +138,23 @@ function BestSniperPanel({
   return (
     <div className="radar-best-breakout radar-best-empty">
       <Panel
-        title="BEST SNIPER CANDIDATE"
-        subtitle="Need vol≥1.0×, RSI≤70, no chase, no AVOID_REVIEW — thin tape never qualifies"
+        title="BEST BREAKOUT PICK"
+        subtitle="Needs volume ≥1.0× average, RSI ≤70, not chasing, not avoid-review"
       >
         <p className="radar-empty-li">
           {sniperCount === 0
-            ? 'No gated sniper candidates — thin-volume / blow-off names are excluded.'
-            : 'Sniper pool has names but none cleared the best-pick gate.'}
+            ? 'No quality breakout yet — thin-volume and blow-off names stay out.'
+            : 'Candidates exist, but none cleared the best-pick gate.'}
         </p>
       </Panel>
     </div>
   )
+}
+
+function thinVolume(row: RadarRow): boolean {
+  const vol = Number(row.volume_ratio)
+  return row.breakout_state === 'breakout_without_volume'
+    || (Number.isFinite(vol) && vol > 0 && vol < 1)
 }
 
 function DenseTable({
@@ -212,34 +226,49 @@ function DenseTable({
         </thead>
         <tbody>
           {sorted.length === 0 && (
-            <tr><td colSpan={cols.length} className="radar-empty">No matches in saved scan data. Run Scan Now.</td></tr>
+            <tr><td colSpan={cols.length} className="radar-empty">No matches yet — run Scan now (or Make ready if data is incomplete).</td></tr>
           )}
-          {sorted.map((row) => (
+          {sorted.map((row) => {
+            const thin = thinVolume(row)
+            return (
             <tr
               key={row.symbol}
               className={[
                 selected === row.symbol ? 'selected' : '',
                 row.sniper_candidate ? 'sniper-row' : '',
+                thin ? 'thin-volume-row' : '',
               ].filter(Boolean).join(' ')}
               onClick={() => onSelect(row.symbol)}
             >
               {cols.map((col) => {
                 const raw = (row as Record<string, unknown>)[col]
                 let cell: string
+                let tone = ''
                 if (col === 'sniper') cell = row.sniper_candidate ? 'YES' : '—'
                 else if (col === 'breakout_state') cell = breakoutLabel[String(raw)] || words(String(raw))
                 else if (col === 'momentum_state') cell = momentumLabel[String(raw)] || words(String(raw))
                 else if (col === 'price') cell = money(raw as number)
                 else if (col === 'change_5d_pct') cell = pct(raw as number)
-                else if (col === 'volume_ratio') cell = raw != null ? `${Number(raw).toFixed(1)}×` : '—'
+                else if (col === 'volume_ratio') {
+                  if (raw == null) cell = '—'
+                  else if (thin) {
+                    cell = `${Number(raw).toFixed(1)}× NO VOL`
+                    tone = 'cell-warn'
+                  } else cell = `${Number(raw).toFixed(1)}×`
+                }
                 else if (col === 'rsi' || col === 'breakout_quality' || col === 'combined_score' || col === 'relative_strength') {
                   cell = raw != null ? String(Math.round(Number(raw))) : '—'
                 }
+                else if (col === 'setup_label' && thin) {
+                  cell = 'No volume confirm'
+                  tone = 'cell-warn'
+                }
                 else cell = String(raw ?? '—')
-                return <td key={col}>{cell}</td>
+                return <td key={col} className={tone || undefined}>{cell}</td>
               })}
             </tr>
-          ))}
+            )
+          })}
         </tbody>
       </table>
     </div>
@@ -253,6 +282,9 @@ export function RadarHomeView(props: ExperienceViewProps & {
   const { dashboard, selected, setSelected, bars, setActive, depth, marketScan, longTermScan, onCompare, onWatchlist } = props
   const [radar, setRadar] = useState<RadarHome | null>(null)
   const [preTrade, setPreTrade] = useState<PreTrade | null>(null)
+  const [readiness, setReadiness] = useState<ProductReadiness | null>(null)
+  const [bootstrapBusy, setBootstrapBusy] = useState(false)
+  const [deskNote, setDeskNote] = useState('')
 
   // Daily fields (RSI/price/vol) must not freeze on last scan — poll the
   // live-refreshed radar payload on a short timer.
@@ -262,6 +294,9 @@ export function RadarHomeView(props: ExperienceViewProps & {
       fetchRadarHome()
         .then((payload) => { if (alive) setRadar(payload) })
         .catch(() => { if (alive) setRadar(null) })
+      fetchProductReadiness()
+        .then((payload) => { if (alive) setReadiness(payload) })
+        .catch(() => undefined)
     }
     load()
     const timer = window.setInterval(load, 20_000)
@@ -281,29 +316,71 @@ export function RadarHomeView(props: ExperienceViewProps & {
     return () => { alive = false; window.clearInterval(timer) }
   }, [selected, dashboard.scan.scanned_at, dashboard.generated_at])
 
-  const laneCard = (title: string, rows: RadarRow[], count: number, sniperHint?: number) => (
+  const scanAt = radar?.scan_scanned_at || dashboard.scan.scanned_at || ''
+  const kiteOk = dashboard.autonomy.state !== 'AUTH_REQUIRED'
+    && !(dashboard.autonomy.active_failures || []).some((f) => String(f).includes('auth'))
+  const emptyDesk = !scanAt
+    || ((radar?.counts.breakouts || 0) + (radar?.counts.momentum || 0) + (radar?.counts.long_term_picks || 0) === 0)
+  const readinessScore = readiness?.score ?? 0
+  const needsBootstrap = emptyDesk || readinessScore < 70 || !dashboard.data.ready
+
+  const runBootstrap = async () => {
+    setBootstrapBusy(true)
+    setDeskNote('Preparing data lanes…')
+    try {
+      const result = await bootstrapProduct()
+      setReadiness(result.readiness)
+      setDeskNote(result.message || 'Bootstrap queued')
+      if (!marketScan.isBusy) void marketScan.start()
+    } catch (reason) {
+      setDeskNote(reason instanceof Error ? reason.message : 'Bootstrap failed')
+    } finally {
+      setBootstrapBusy(false)
+      window.setTimeout(() => setDeskNote(''), 4000)
+    }
+  }
+
+  const laneCard = (title: string, rows: RadarRow[], count: number, qualityHint?: number) => (
     <section className="radar-lane-card">
       <header>
         <span>{title}</span>
         <strong>
           {count}
-          {sniperHint != null ? ` · ${sniperHint} sniper` : ''}
+          {qualityHint != null ? ` · ${qualityHint} quality` : ''}
         </strong>
       </header>
       <ul>
-        {rows.slice(0, 6).map((row) => (
-          <li key={row.symbol}>
-            <button type="button" className={selected === row.symbol ? 'active' : ''} onClick={() => setSelected(row.symbol)}>
+        {rows.slice(0, 6).map((item) => {
+          const thin = thinVolume(item)
+          return (
+          <li key={item.symbol}>
+            <button
+              type="button"
+              className={[selected === item.symbol ? 'active' : '', thin ? 'thin-volume' : ''].filter(Boolean).join(' ')}
+              onClick={() => setSelected(item.symbol)}
+            >
               <b>
-                {row.symbol}
-                {row.sniper_candidate ? <em className="sniper-tag"> SNIPER</em> : null}
+                {item.symbol}
+                {item.sniper_candidate ? <em className="sniper-tag"> QUALITY</em> : null}
+                {thin ? <em className="thin-tag"> THIN VOL</em> : null}
               </b>
-              <span>{row.setup_label || row.status}</span>
-              <small>{row.sector} · {row.reason?.slice(0, 48) || '—'}</small>
+              <span>{thin ? 'No volume confirm' : (item.setup_label || item.status)}</span>
+              <small>
+                {item.sector}
+                {item.volume_ratio != null ? ` · ${Number(item.volume_ratio).toFixed(1)}×` : ''}
+                {item.rsi != null ? ` · RSI ${Math.round(Number(item.rsi))}` : ''}
+                {' · '}
+                {item.reason?.slice(0, 36) || '—'}
+              </small>
             </button>
           </li>
-        ))}
-        {rows.length === 0 && <li className="radar-empty-li">No saved matches</li>}
+          )
+        })}
+        {rows.length === 0 && (
+          <li className="radar-empty-li">
+            No matches yet — use Make ready / Scan now above.
+          </li>
+        )}
       </ul>
     </section>
   )
@@ -316,24 +393,64 @@ export function RadarHomeView(props: ExperienceViewProps & {
     <section className="radar-home">
       <header className="radar-hero">
         <div>
-          <span>MARKET COMMAND</span>
+          <span>MARKET DESK</span>
           <h2>{radar?.market_health || dashboard.market.health}</h2>
           <p>{dashboard.market.summary}</p>
         </div>
         <div className="radar-hero-actions">
+          {needsBootstrap && (
+            <button type="button" disabled={bootstrapBusy} onClick={() => void runBootstrap()}>
+              {bootstrapBusy ? 'Preparing…' : readinessScore >= 90 ? 'Refresh desk' : 'Make ready'}
+            </button>
+          )}
           <button type="button" disabled={marketScan.isBusy} onClick={() => void marketScan.start()}>
             {marketScan.isBusy ? 'Scanning…' : 'Scan now'}
           </button>
         </div>
       </header>
 
+      <div className={`radar-desk-strip ${kiteOk ? '' : 'desk-warn'}`}>
+        <div>
+          <span>SCAN</span>
+          <strong>{relativeAge(scanAt)}</strong>
+          <small>{scanAt ? 'signals from last scan · prices refresh live' : 'run Scan now'}</small>
+        </div>
+        <div>
+          <span>PRICE DATA</span>
+          <strong>{dashboard.data.bhavcopy.latest_date || 'MISSING'}</strong>
+          <small>{dashboard.data.ready ? 'official bhavcopy ready' : 'data incomplete'}</small>
+        </div>
+        <div>
+          <span>ZERODHA</span>
+          <strong>{kiteOk ? 'SESSION OK' : 'LOGIN NEEDED'}</strong>
+          <small>
+            {kiteOk
+              ? 'live quotes / depth available when market is open'
+              : (dashboard.autonomy.plain_state || 'python main.py login')}
+          </small>
+        </div>
+        <div>
+          <span>NEXT</span>
+          <strong>
+            {!dashboard.data.ready || readinessScore < 70
+              ? 'Make ready'
+              : !scanAt
+                ? 'Scan now'
+                : selected
+                  ? 'Check ₹ risk'
+                  : 'Pick one name'}
+          </strong>
+          <small>{deskNote || dashboard.market.trade_stance}</small>
+        </div>
+      </div>
+
       <div className="radar-market-strip">
         <div><span>NIFTY 1D</span><strong>{pct(radar?.nifty_change_1d ?? dashboard.market.nifty_change_1d)}</strong></div>
         <div><span>BREADTH</span><strong>{radar?.breadth || dashboard.market.breadth}</strong></div>
         <div><span>VIX</span><strong>{radar?.vix ?? dashboard.market.vix ?? '—'}</strong></div>
         <div><span>LEADERS</span><strong>{(radar?.leaders || dashboard.market.leaders).slice(0, 3).join(', ') || '—'}</strong></div>
-        <div><span>LAST SCAN</span><strong>{radar?.scan_scanned_at || dashboard.scan.scanned_at || 'Not run'}</strong></div>
-        <div><span>DATA</span><strong>{dashboard.data.bhavcopy.latest_date || '—'}</strong></div>
+        <div><span>SCAN AGE</span><strong>{relativeAge(scanAt)}</strong></div>
+        <div><span>STANCE</span><strong>{dashboard.market.trade_stance?.split(';')[0] || '—'}</strong></div>
       </div>
 
       <LiveScanBanner scan={marketScan} depth={depth} label="Market scan" />
@@ -347,23 +464,23 @@ export function RadarHomeView(props: ExperienceViewProps & {
       {(radar?.sniper_candidates?.length || 0) > 0 && (
         <section className="radar-sniper-pool">
           <header>
-            <span>SNIPER BREAKOUT CANDIDATES</span>
+            <span>QUALITY BREAKOUT CANDIDATES</span>
             <strong>{radar?.sniper_candidates?.length}</strong>
           </header>
           <ul>
-            {(radar?.sniper_candidates || []).slice(0, 8).map((row) => (
-              <li key={row.symbol}>
+            {(radar?.sniper_candidates || []).slice(0, 8).map((item) => (
+              <li key={item.symbol}>
                 <button
                   type="button"
-                  className={selected === row.symbol ? 'active' : ''}
-                  onClick={() => setSelected(row.symbol)}
+                  className={selected === item.symbol ? 'active' : ''}
+                  onClick={() => setSelected(item.symbol)}
                 >
-                  <b>{row.symbol}</b>
+                  <b>{item.symbol}</b>
                   <span>
-                    {row.breakout_grade ? `G${row.breakout_grade}` : '—'}
-                    {row.volume_ratio != null ? ` · ${Number(row.volume_ratio).toFixed(1)}×` : ''}
-                    {row.rsi != null
-                      ? ` · RSI ${Math.round(Number(row.rsi))}${(row as RadarRow).tech_source === 'live' || (row as RadarRow).price_tag === 'LIVE' ? '·L' : ''}`
+                    {item.breakout_grade ? `G${item.breakout_grade}` : '—'}
+                    {item.volume_ratio != null ? ` · ${Number(item.volume_ratio).toFixed(1)}×` : ''}
+                    {item.rsi != null
+                      ? ` · RSI ${Math.round(Number(item.rsi))}${(item as RadarRow).tech_source === 'live' || (item as RadarRow).price_tag === 'LIVE' ? ' LIVE' : ''}`
                       : ''}
                   </span>
                 </button>
@@ -388,7 +505,7 @@ export function RadarHomeView(props: ExperienceViewProps & {
         <Panel title={`CHART · ${selected || 'SELECT STOCK'}`} subtitle={`Official history · ${dashboard.data.bhavcopy.latest_date || '—'}`}>
           <ChartWorkspace symbol={selected} bars={bars} row={row} />
         </Panel>
-        <Panel title="DECISION PREVIEW">
+        <Panel title="DECISION PREVIEW" subtitle="Risk before reward · read-only">
           {selected ? (
             <div className="radar-decision-preview">
               {preTrade?.verdict && (
@@ -406,14 +523,20 @@ export function RadarHomeView(props: ExperienceViewProps & {
               {(preTrade?.plan?.target ?? preTrade?.scan?.target) != null && (
                 <div>Target: {money(preTrade?.plan?.target ?? preTrade?.scan?.target)}</div>
               )}
+              {(preTrade?.blockers || []).length > 0 && (
+                <ul className="radar-decision-blockers">
+                  {preTrade!.blockers!.slice(0, 3).map((item) => <li key={item}>{item}</li>)}
+                </ul>
+              )}
+              <RiskLensCard plan={preTrade?.plan || null} />
               <div className="radar-action-row">
-                <button type="button" onClick={() => setActive('Stock Intelligence')}>Stock Intelligence</button>
+                <button type="button" onClick={() => setActive('Stock Intelligence')}>Full research</button>
                 <button type="button" onClick={() => onCompare(selected)}>Compare</button>
                 <button type="button" onClick={() => onWatchlist(selected)}>Watchlist</button>
               </div>
             </div>
           ) : (
-            <p className="radar-empty-li">Select a stock to preview the trade plan and next steps.</p>
+            <p className="radar-empty-li">Pick one name above — then check ₹ risk here before opening research.</p>
           )}
         </Panel>
       </div>
@@ -485,7 +608,11 @@ export function MarketScannerView(props: ExperienceViewProps & { onCompare: (sym
         <div>
           <span>MARKET SCANNER</span>
           <h2>Breakouts · Momentum · Conviction · F&O</h2>
-          <p>{filtered.length} matches · universe {meta.universe.toLocaleString('en-IN')} · scan {meta.scanned_at || '—'}</p>
+          <p>
+            {filtered.length} matches · universe {meta.universe.toLocaleString('en-IN')}
+            {' · scan '}{relativeAge(meta.scanned_at)}
+            {' · prices refresh live / EOD'}
+          </p>
         </div>
         <button type="button" disabled={activeScan.isBusy} onClick={() => void activeScan.start()}>
           {activeScan.isBusy ? 'Scanning…' : tab === 'Long-Term' ? 'Run long-term scan' : 'Scan now'}
@@ -515,7 +642,7 @@ export function MarketScannerView(props: ExperienceViewProps & { onCompare: (sym
         {tab === 'Breakouts' && (
           <label className="scanner-check">
             <input type="checkbox" checked={sniperOnly} onChange={(e) => setSniperOnly(e.target.checked)} />
-            Sniper candidates only
+            Quality candidates only
           </label>
         )}
       </div>
@@ -524,8 +651,8 @@ export function MarketScannerView(props: ExperienceViewProps & { onCompare: (sym
         <Panel
           title={`${tab.toUpperCase()} · ${filtered.length}`}
           subtitle={tab === 'Breakouts'
-            ? `Server sniper-first rank · ${sniperCount} sniper candidate${sniperCount === 1 ? '' : 's'}`
-            : 'Sorted from persisted backend scan'}
+            ? `Quality-first rank · ${sniperCount} gated candidate${sniperCount === 1 ? '' : 's'} · thin volume marked red`
+            : 'Sorted from persisted backend scan · tape fields refresh live'}
         >
           <DenseTable rows={filtered} selected={selected} onSelect={setSelected} depth={depth} mode={tab} />
         </Panel>

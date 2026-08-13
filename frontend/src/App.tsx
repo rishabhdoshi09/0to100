@@ -410,6 +410,16 @@ function App() {
 
   const primaryPages = ['Home', 'Market Scanner', 'Stock Intelligence', 'Long-Term Picks', 'Compare', 'Watchlist', 'Command Center', 'Scanner']
   const showOpsRibbon = !primaryPages.includes(active)
+  const showReportActions = [
+    'Stock Intelligence',
+    'Research Data',
+    'Long-Term Picks',
+    'Long-Term',
+    'Market Overview',
+    'Market Internals',
+  ].includes(active)
+  const kiteOk = dashboard.autonomy.state !== 'AUTH_REQUIRED'
+    && !(dashboard.autonomy.active_failures || []).some((f) => String(f).includes('auth'))
 
   const renderView = () => {
     if (active === 'Compare') {
@@ -481,8 +491,10 @@ function App() {
           <div className="top-status">
             <DisplayDepthToggle depth={depth} onChange={setDepth} />
             <button type="button" className="experience-help-trigger" onClick={() => setHelpOpen(true)}>What is this?</button>
-            <span className={dashboard.data.ready ? 'live-pill' : 'offline-pill'}><i /> {dashboard.data.ready ? 'CORE DATA READY' : 'DATA INCOMPLETE'}</span>
-            <span className={dashboard.operations.running ? 'live-pill' : 'offline-pill'}><i /> {dashboard.operations.running ? 'MARKET OPS ONLINE' : 'MARKET OPS OFFLINE'}</span>
+            <span className={dashboard.data.ready ? 'live-pill' : 'offline-pill'}><i /> {dashboard.data.ready ? 'DATA READY' : 'DATA INCOMPLETE'}</span>
+            <span className={kiteOk ? 'live-pill' : 'offline-pill'} title={dashboard.autonomy.plain_state || ''}>
+              <i /> {kiteOk ? 'ZERODHA OK' : 'ZERODHA LOGIN'}
+            </span>
             <button type="button" onClick={() => void refresh()} aria-label="Refresh dashboard">↻</button>
           </div>
         </header>
@@ -490,9 +502,13 @@ function App() {
         <section className="page-title">
           <div><h1>{pageTitles[active] || active}</h1><p>{pageSubtitles[active]}</p></div>
           <div className="page-actions">
-            <button type="button" disabled={!selected} onClick={openEquityReport}>View equity evidence</button>
-            <button type="button" onClick={openBasketReport}>View top-3 basket</button>
-            <button type="button" onClick={openInstitutionalReport}>View FII/DII brief</button>
+            {showReportActions && (
+              <>
+                <button type="button" disabled={!selected} onClick={openEquityReport}>Equity evidence PDF</button>
+                <button type="button" onClick={openBasketReport}>Top-3 basket PDF</button>
+                <button type="button" onClick={openInstitutionalReport}>FII/DII brief PDF</button>
+              </>
+            )}
             <span>{controlState || (loading ? 'Loading real state…' : `Updated ${dashboard.generated_at ? new Date(dashboard.generated_at).toLocaleTimeString('en-IN') : '—'}`)}</span>
           </div>
         </section>

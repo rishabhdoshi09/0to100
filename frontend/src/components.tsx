@@ -252,7 +252,20 @@ export function ChartWorkspace({
         <div><span>ENTRY</span><strong>{money(scan?.entry)}</strong></div>
         <div><span>STOP</span><strong className="negative">{money(scan?.stop)}</strong></div>
         <div><span>TARGET</span><strong className="positive">{money(scan?.target)}</strong></div>
-        <div><span>RSI / SCORE</span><strong>{liveRsi != null ? liveRsi.toFixed(0) : Number.isFinite(scan?.rsi) ? Number(scan?.rsi).toFixed(0) : score((row as LongTermRecord)?.combined_score || scan?.score)}</strong></div>
+        <div>
+          <span>RSI (tape)</span>
+          <strong>
+            {liveRsi != null
+              ? liveRsi.toFixed(0)
+              : Number.isFinite(scan?.rsi)
+                ? Number(scan?.rsi).toFixed(0)
+                : '—'}
+          </strong>
+        </div>
+        <div>
+          <span>SETUP SCORE</span>
+          <strong>{score((row as LongTermRecord)?.combined_score || scan?.score)}</strong>
+        </div>
       </div>
     </div>
   )

@@ -27,4 +27,17 @@ export const compactDateTime = (value?: string | number | null): string => {
   return Number.isNaN(d.getTime()) ? String(value).slice(0, 19) : d.toLocaleString('en-IN')
 }
 
+/** Human age for retail freshness — never dump raw ISO as the hero time. */
+export const relativeAge = (value?: string | number | null, nowMs = Date.now()): string => {
+  if (value == null || value === '') return 'Not run'
+  const d = typeof value === 'number' ? new Date(value * 1000) : new Date(value)
+  if (Number.isNaN(d.getTime())) return String(value).slice(0, 19)
+  const sec = Math.max(0, Math.round((nowMs - d.getTime()) / 1000))
+  if (sec < 60) return `${sec}s ago`
+  if (sec < 3600) return `${Math.round(sec / 60)} min ago`
+  if (sec < 86400) return `${Math.round(sec / 3600)} hr ago`
+  const days = Math.round(sec / 86400)
+  return days === 1 ? 'yesterday' : `${days} days ago`
+}
+
 export const boolLabel = (value?: boolean): string => value ? 'ON' : 'OFF'
