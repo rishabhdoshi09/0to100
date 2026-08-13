@@ -140,6 +140,21 @@ def scanner_workspace(mode: str) -> dict[str, Any]:
         enriched = [enrich_long_term_row(dict(row), scanned_at=scanned_at) for row in rows]
     else:
         enriched = enrich_scanner_rows(rows, scanned_at=scanned_at)
+    # Breakouts/Pre-Breakout: recompute RSI/price from live/EOD history so the
+    # table is not frozen at the last scan's oscillator values.
+    if canonical in {"Breakouts", "Pre-Breakout"}:
+        try:
+            from product.live_technicals import refresh_rows_technicals
+            from product.radar_workspace import (
+                breakout_quality_score,
+                is_sniper_breakout_candidate,
+            )
+            enriched = refresh_rows_technicals(enriched, limit=120, bulk_overlay=True)
+            for row in enriched:
+                row["breakout_quality"] = breakout_quality_score(row)
+                row["sniper_candidate"] = is_sniper_breakout_candidate(row)
+        except Exception:
+            pass
     source = (
         "long_term"
         if canonical == "Long-Term"

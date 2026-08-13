@@ -36,6 +36,9 @@ type RadarRow = ScannerWorkspaceRow & {
   sniper_candidate?: boolean
   volume_ratio?: number
   rsi?: number
+  tech_source?: string
+  price_tag?: string
+  rsi_scan?: number
 }
 
 const breakoutLabel: Record<string, string> = {
@@ -85,7 +88,9 @@ function BestSniperPanel({
             [
               sniperCount > 0 ? `${sniperCount} gated candidate${sniperCount === 1 ? '' : 's'}` : null,
               best.breakout_grade ? `Grade ${best.breakout_grade}` : null,
-              best.rsi != null ? `RSI ${Math.round(Number(best.rsi))}` : null,
+              best.rsi != null
+                ? `RSI ${Math.round(Number(best.rsi))}${best.tech_source === 'live' || best.price_tag === 'LIVE' ? ' LIVE' : ''}`
+                : null,
               best.volume_ratio != null
                 ? `Vol ${Number(best.volume_ratio).toFixed(1)}×`
                 : null,
@@ -340,7 +345,9 @@ export function RadarHomeView(props: ExperienceViewProps & {
                   <span>
                     {row.breakout_grade ? `G${row.breakout_grade}` : '—'}
                     {row.volume_ratio != null ? ` · ${Number(row.volume_ratio).toFixed(1)}×` : ''}
-                    {row.rsi != null ? ` · RSI ${Math.round(Number(row.rsi))}` : ''}
+                    {row.rsi != null
+                      ? ` · RSI ${Math.round(Number(row.rsi))}${(row as RadarRow).tech_source === 'live' || (row as RadarRow).price_tag === 'LIVE' ? '·L' : ''}`
+                      : ''}
                   </span>
                 </button>
               </li>

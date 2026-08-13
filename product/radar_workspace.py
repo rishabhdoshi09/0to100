@@ -307,18 +307,43 @@ def build_radar_home(
         )
         for r in scan_rows
     ]
-    for row in enriched:
+
+    # Pre-filter breakout-ish rows, then refresh RSI/price from live/EOD history
+    # BEFORE sniper/best gates — scan-time RSI (e.g. YATHARTH 66) is not "now".
+    breakout_states = {
+        "confirmed_breakout", "near_breakout", "insufficient_confirmation", "extended_after_breakout",
+    }
+    breakouts = [r for r in enriched if r.get("breakout_state") in breakout_states]
+    try:
+        from product.live_technicals import refresh_rows_technicals
+        refreshed = {
+            str(r.get("symbol", "")).upper(): r
+            for r in refresh_rows_technicals(breakouts, bulk_overlay=True)
+        }
+        breakouts = [refreshed.get(str(r.get("symbol", "")).upper(), r) for r in breakouts]
+        # Mirror refreshed technicals back onto the enriched universe rows.
+        by_sym = {str(r.get("symbol", "")).upper(): r for r in enriched}
+        for sym, row in refreshed.items():
+            if sym in by_sym:
+                by_sym[sym].update({
+                    k: row[k] for k in (
+                        "price", "rsi", "volume_ratio", "tech_source", "price_tag",
+                        "rsi_scan", "price_scan", "volume_ratio_scan", "eod_as_of",
+                        "quote_source",
+                    ) if k in row
+                })
+    except Exception:
+        pass
+
+    for row in breakouts:
         row["breakout_quality"] = breakout_quality_score(row)
         row["sniper_candidate"] = is_sniper_breakout_candidate(row)
+    for row in enriched:
+        if "sniper_candidate" not in row:
+            row["breakout_quality"] = breakout_quality_score(row)
+            row["sniper_candidate"] = is_sniper_breakout_candidate(row)
 
-    breakouts = [
-        r for r in enriched
-        if r["breakout_state"] in {
-            "confirmed_breakout", "near_breakout", "insufficient_confirmation", "extended_after_breakout",
-        }
-    ]
     # Sniper-first: only volume≥1× / non-blow-off / non-chase names lead the lane.
-    # Thin-volume rows stay in the wider lane but never at the top.
     breakouts.sort(key=lambda r: (
         not bool(r.get("sniper_candidate")),
         not passes_volume_floor(r),
@@ -333,6 +358,12 @@ def build_radar_home(
     ))
 
     momentum = [r for r in enriched if "MOMENTUM" in _signals(r)]
+    # Refresh technicals for the momentum lane head (visible cards only).
+    try:
+        from product.live_technicals import refresh_rows_technicals
+        momentum = refresh_rows_technicals(momentum[:24], bulk_overlay=False) + momentum[24:]
+    except Exception:
+        pass
     momentum.sort(key=lambda r: (bool(r.get("chase_risk")), -_f(r.get("score")), r.get("symbol", "")))
 
     long_picks = [
@@ -343,7 +374,6 @@ def build_radar_home(
     long_picks.sort(key=lambda r: (-_f(r.get("combined_score")), r.get("symbol", "")))
 
     best_breakout = pick_best_sniper_breakout(breakouts)
-    # Candidate list = only names that cleared the hard gates (no thin-volume noise).
     sniper_breakouts = [
         attach_best_pick_meta(r, with_context=False)
         for r in breakouts
