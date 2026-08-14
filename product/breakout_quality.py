@@ -1,16 +1,20 @@
-"""Shared breakout quality gates for sniper / best-pick / Telegram / autopilot.
+"""Breakout gates — technical for candidates; fundamentals only for best-among.
 
-Hard rejects thin tape and obvious technical/fundamental red flags so a
-"best candidate" list cannot be filled with 0.1× volume noise. Optional
-order-book and concall context is attached when available — never invented,
-never a sole reason to promote.
+Breakout / sniper / Telegram arming use tape + structure only (volume, chase,
+hard RSI blow-off). Fundamentals never zero the breakout lane.
+
+A separate best-among pick may require readable fund context and rejects
+AVOID_REVIEW. Optional order-book / concall context is attached when available
+— never invented, never a sole reason to promote.
 """
 from __future__ import annotations
 
 from typing import Any, Mapping
 
 MIN_VOLUME_RATIO = 1.0
+# Soft ceiling: prefer / best-among. Hard: scanner blow-off (CLAUDE.md).
 RSI_BLOWOFF = 70.0
+RSI_HARD = 82.0
 MIN_FUND_COVERAGE = 0.50
 AVOID_CLASSES = frozenset({"AVOID_REVIEW"})
 QUALITY_CLASSES = frozenset({
@@ -40,22 +44,27 @@ def passes_volume_floor(row: Mapping[str, Any], *, min_ratio: float = MIN_VOLUME
 def gate_breakout_quality(
     row: Mapping[str, Any],
     *,
+    for_best: bool = False,
     require_fundamentals: bool = False,
     min_volume: float = MIN_VOLUME_RATIO,
 ) -> tuple[bool, list[str], dict[str, str]]:
     """Return (ok, reject_reasons, gate_status).
 
-    Hard rejects (ok=False):
+    Technical path (``for_best=False``, default — sniper / Telegram / lane):
       - volume missing/zero or < min_volume
-      - RSI > blow-off
+      - RSI > RSI_HARD (82)
       - chase_risk
-      - classification AVOID_REVIEW when fund context is present
-      - require_fundamentals and coverage < MIN_FUND_COVERAGE
+      Fundamentals are status-only — never reject.
 
-    Soft status values: pass | fail | unknown (unknown ≠ reject unless required).
+    Best-among path (``for_best=True``):
+      - same technicals, but RSI > RSI_BLOWOFF (70)
+      - AVOID_REVIEW rejected
+      - optional require_fundamentals coverage floor
+      - both SMAs below → reject
     """
     status: dict[str, str] = {}
     reasons: list[str] = []
+    want_best = bool(for_best or require_fundamentals)
 
     vol = volume_ratio(row)
     if vol <= 0:
@@ -68,11 +77,12 @@ def gate_breakout_quality(
         status["volume"] = "pass"
 
     rsi = _f(row.get("rsi"))
-    if rsi > RSI_BLOWOFF:
+    rsi_cap = RSI_BLOWOFF if want_best else RSI_HARD
+    if rsi > rsi_cap:
         status["rsi"] = "fail"
-        reasons.append(f"RSI {rsi:.0f} > {RSI_BLOWOFF:.0f} blow-off")
+        reasons.append(f"RSI {rsi:.0f} > {rsi_cap:.0f} blow-off")
     elif rsi > 0:
-        status["rsi"] = "pass"
+        status["rsi"] = "pass" if rsi <= RSI_BLOWOFF else "elevated"
     else:
         status["rsi"] = "unknown"
 
@@ -87,7 +97,8 @@ def gate_breakout_quality(
     has_fund = row.get("fundamental_score") is not None or bool(cls) or cov > 0
     if cls in AVOID_CLASSES:
         status["fundamentals"] = "fail"
-        reasons.append("fundamentals AVOID_REVIEW")
+        if want_best:
+            reasons.append("fundamentals AVOID_REVIEW")
     elif has_fund and cov > 0 and cov < MIN_FUND_COVERAGE:
         status["fundamentals"] = "fail" if require_fundamentals else "unknown"
         if require_fundamentals:
@@ -101,12 +112,12 @@ def gate_breakout_quality(
         if require_fundamentals:
             reasons.append("fundamentals required but missing")
 
-    # Technical structure: soft unless clearly broken
     above50 = row.get("above_sma50")
     above200 = row.get("above_sma200")
     if above50 is False and above200 is False:
         status["trend"] = "fail"
-        reasons.append("below SMA50 and SMA200")
+        if want_best:
+            reasons.append("below SMA50 and SMA200")
     elif above50 is True or above200 is True:
         status["trend"] = "pass"
     else:
@@ -116,12 +127,21 @@ def gate_breakout_quality(
     return ok, reasons, status
 
 
-def enrich_optional_context(symbol: str) -> dict[str, Any]:
-    """Best-effort order-book + concall context. Never fabricates a pass.
+def has_usable_fundamentals(row: Mapping[str, Any]) -> bool:
+    """True when long-term fund context is good enough for best-among."""
+    cls = str(row.get("classification") or "")
+    if cls in AVOID_CLASSES:
+        return False
+    cov = _f(row.get("fundamental_coverage"))
+    if cov < MIN_FUND_COVERAGE:
+        return False
+    if cls in QUALITY_CLASSES:
+        return True
+    return row.get("fundamental_score") is not None
 
-    Returns only what can be verified from live Kite depth or cached evidence.
-    Missing sources stay ``unavailable`` so the UI stays honest.
-    """
+
+def enrich_optional_context(symbol: str) -> dict[str, Any]:
+    """Best-effort order-book + concall context. Never fabricates a pass."""
     out: dict[str, Any] = {
         "order_book": {"status": "unavailable", "note": "No live depth for this symbol."},
         "concall": {"status": "unavailable", "note": "No traced earnings-call evidence on file."},
@@ -130,11 +150,10 @@ def enrich_optional_context(symbol: str) -> dict[str, Any]:
     if not sym:
         return out
 
-    # Order book — Kite full quote depth when logged in
     try:
-        from data.kite_client import KiteClient
-        from config import settings
-        if settings.kite_access_token:
+        from data.kite_client import KiteClient, _fresh_env
+        if _fresh_env("KITE_ACCESS_TOKEN"):
+            from config import settings
             kite = KiteClient()
             key = f"{settings.exchange}:{sym}"
             raw = kite.raw.quote([key]) or {}
@@ -165,7 +184,6 @@ def enrich_optional_context(symbol: str) -> dict[str, Any]:
     except Exception:
         pass
 
-    # Concall / earnings evidence — structured intake only (no scrape invention)
     try:
         from pathlib import Path
         import json
@@ -180,7 +198,6 @@ def enrich_optional_context(symbol: str) -> dict[str, Any]:
             payload = json.loads(path.read_text(encoding="utf-8"))
             if not isinstance(payload, Mapping):
                 continue
-            # Accept only explicitly dated / sourced transcript notes
             dated = (
                 payload.get("concall_date")
                 or payload.get("call_date")
@@ -200,10 +217,15 @@ def enrich_optional_context(symbol: str) -> dict[str, Any]:
     return out
 
 
-def attach_best_pick_meta(row: Mapping[str, Any], *, with_context: bool = True) -> dict[str, Any]:
+def attach_best_pick_meta(
+    row: Mapping[str, Any],
+    *,
+    with_context: bool = True,
+    for_best: bool = True,
+) -> dict[str, Any]:
     """Copy row + quality gate status (+ optional book/concall context)."""
     out = dict(row)
-    ok, reasons, status = gate_breakout_quality(out)
+    ok, reasons, status = gate_breakout_quality(out, for_best=for_best)
     out["quality_ok"] = ok
     out["quality_gates"] = status
     out["quality_reject_reasons"] = reasons

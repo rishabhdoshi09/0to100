@@ -177,6 +177,11 @@ def scanner_workspace(mode: str) -> dict[str, Any]:
 
         sniper_rows = [r for r in enriched if r.get("sniper_candidate")]
         payload["best_breakout"] = pick_best_sniper_breakout(enriched)
+        try:
+            from product.radar_workspace import pick_best_among_fundamentals
+            payload["best_among_fundamentals"] = pick_best_among_fundamentals(enriched)
+        except Exception:
+            payload["best_among_fundamentals"] = None
         payload["sniper_count"] = len(sniper_rows)
         payload["sniper_rows"] = sniper_rows[:12]
     return payload

@@ -59,7 +59,7 @@ _VOL_ABS_MIN = float(os.getenv("QT_SNIPER_VOL_ABS_MIN", "1.0") or 1.0)
 # the low-quality break we spent the filters rejecting. We carry the daily
 # context (chase_risk, rsi) from the scan result into the watch map and skip
 # those names here. A CLEAN pre-breakout near its pivot is still watched.
-_RSI_BLOWOFF = float(os.getenv("QT_SNIPER_RSI_BLOWOFF", "70") or 70)
+_RSI_BLOWOFF = float(os.getenv("QT_SNIPER_RSI_BLOWOFF", "82") or 82)
 _MKT_OPEN_MIN = 9 * 60 + 15
 _MKT_CLOSE_MIN = 15 * 60 + 30
 _MKT_MINUTES = _MKT_CLOSE_MIN - _MKT_OPEN_MIN

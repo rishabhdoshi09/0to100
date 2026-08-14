@@ -79,18 +79,14 @@ function BestSniperPanel({
   onSelect: (symbol: string) => void
 }) {
   if (best) {
-    const gates = (best as RadarRow & { quality_gates?: Record<string, string> }).quality_gates || {}
-    const ctx = (best as RadarRow & {
-      breakout_context?: { order_book?: { status?: string; note?: string }; concall?: { status?: string; note?: string } }
-    }).breakout_context
     const volOk = best.volume_ratio == null || Number(best.volume_ratio) >= 1
     return (
       <div className="radar-best-breakout">
         <Panel
-          title={`BEST BREAKOUT PICK · ${best.symbol}`}
+          title={`BEST TECHNICAL BREAKOUT · ${best.symbol}`}
           subtitle={
             [
-              sniperCount > 0 ? `${sniperCount} quality candidate${sniperCount === 1 ? '' : 's'}` : null,
+              sniperCount > 0 ? `${sniperCount} sniper candidate${sniperCount === 1 ? '' : 's'}` : null,
               best.breakout_grade ? `Grade ${best.breakout_grade}` : null,
               best.rsi != null
                 ? `RSI ${Math.round(Number(best.rsi))}${best.tech_source === 'live' || best.price_tag === 'LIVE' ? ' LIVE' : ' EOD'}`
@@ -98,12 +94,67 @@ function BestSniperPanel({
               best.volume_ratio != null
                 ? `Vol ${Number(best.volume_ratio).toFixed(1)}×${volOk ? '' : ' THIN'}`
                 : null,
-              best.classification
-                ? String(best.classification).replace(/_/g, ' ')
-                : null,
+            ].filter(Boolean).join(' · ') || 'Volume ≥1× · not chasing · RSI ≤82 — fundamentals not required'
+          }
+        >
+          <button
+            type="button"
+            className="radar-best-pick-btn"
+            onClick={() => onSelect(String(best.symbol || ''))}
+          >
+            Score {best.score ?? '—'}
+            {best.breakout_quality != null
+              ? ` · Quality ${Number(best.breakout_quality).toFixed(0)}`
+              : ''}
+            {' · '}
+            {breakoutLabel[String(best.breakout_state || '')]
+              || words(String(best.breakout_state || best.status || ''))}
+          </button>
+        </Panel>
+      </div>
+    )
+  }
+  return (
+    <div className="radar-best-breakout radar-best-empty">
+      <Panel
+        title="BEST TECHNICAL BREAKOUT"
+        subtitle="Volume ≥1.0× · not extended · RSI ≤82 — tape only, no fund gate"
+      >
+        <p className="radar-empty-li">
+          {sniperCount === 0
+            ? 'No sniper breakouts yet — thin volume / extended names stay out.'
+            : 'Sniper pool has names but none ranked as technical best.'}
+        </p>
+      </Panel>
+    </div>
+  )
+}
+
+function BestAmongFundamentalsPanel({
+  best,
+  onSelect,
+}: {
+  best: RadarRow | null | undefined
+  onSelect: (symbol: string) => void
+}) {
+  if (best) {
+    const gates = (best as RadarRow & { quality_gates?: Record<string, string> }).quality_gates || {}
+    const ctx = (best as RadarRow & {
+      breakout_context?: { order_book?: { status?: string; note?: string }; concall?: { status?: string; note?: string } }
+    }).breakout_context
+    return (
+      <div className="radar-best-fundamentals">
+        <Panel
+          title={`BEST AMONG BREAKOUTS · ${best.symbol}`}
+          subtitle={
+            [
+              'Fundamentals filter',
+              best.classification ? String(best.classification).replace(/_/g, ' ') : null,
+              best.fundamental_score != null ? `Fund score ${Math.round(Number(best.fundamental_score))}` : null,
               gates.fundamentals ? `Fund ${gates.fundamentals}` : null,
-              gates.trend ? `Trend ${gates.trend}` : null,
-            ].filter(Boolean).join(' · ') || 'Needs volume ≥1×, RSI ≤70, not extended'
+              best.rsi != null ? `RSI ${Math.round(Number(best.rsi))}` : null,
+              best.volume_ratio != null ? `Vol ${Number(best.volume_ratio).toFixed(1)}×` : null,
+            ].filter(Boolean).join(' · ')
           }
         >
           <button
@@ -123,9 +174,6 @@ function BestSniperPanel({
             <p className="radar-empty-li" style={{ paddingTop: 8 }}>
               Order book: {ctx.order_book?.status || 'unavailable'}
               {ctx.order_book?.note ? ` — ${ctx.order_book.note}` : ''}
-              {ctx.order_book?.status === 'unavailable'
-                ? ' (Zerodha login needed for live depth)'
-                : ''}
               {' · '}
               Concall: {ctx.concall?.status || 'unavailable'}
               {ctx.concall?.note && ctx.concall.status === 'present' ? ` — ${ctx.concall.note}` : ''}
@@ -136,15 +184,13 @@ function BestSniperPanel({
     )
   }
   return (
-    <div className="radar-best-breakout radar-best-empty">
+    <div className="radar-best-fundamentals radar-best-empty">
       <Panel
-        title="BEST BREAKOUT PICK"
-        subtitle="Needs volume ≥1.0× average, RSI ≤70, not chasing, not avoid-review"
+        title="BEST AMONG BREAKOUTS"
+        subtitle="Only uses fundamentals among already-valid breakout candidates"
       >
         <p className="radar-empty-li">
-          {sniperCount === 0
-            ? 'No quality breakout yet — thin-volume and blow-off names stay out.'
-            : 'Candidates exist, but none cleared the best-pick gate.'}
+          No breakout candidate has usable fundamental coverage yet — run long-term scan, or wait for fund data. Technical sniper lane above is independent.
         </p>
       </Panel>
     </div>
@@ -461,6 +507,11 @@ export function RadarHomeView(props: ExperienceViewProps & {
         onSelect={setSelected}
       />
 
+      <BestAmongFundamentalsPanel
+        best={radar?.best_among_fundamentals as RadarRow | null | undefined}
+        onSelect={setSelected}
+      />
+
       {(radar?.sniper_candidates?.length || 0) > 0 && (
         <section className="radar-sniper-pool">
           <header>
@@ -552,6 +603,7 @@ export function MarketScannerView(props: ExperienceViewProps & { onCompare: (sym
   const [tab, setTab] = useState('Breakouts')
   const [rows, setRows] = useState<RadarRow[]>([])
   const [bestBreakout, setBestBreakout] = useState<RadarRow | null>(null)
+  const [bestAmongFund, setBestAmongFund] = useState<RadarRow | null>(null)
   const [sniperCount, setSniperCount] = useState(0)
   const [meta, setMeta] = useState({ scanned_at: '', universe: 0 })
   const [search, setSearch] = useState('')
@@ -574,12 +626,14 @@ export function MarketScannerView(props: ExperienceViewProps & { onCompare: (sym
           setRows(result.rows as RadarRow[])
           setMeta({ scanned_at: result.scanned_at, universe: result.universe_size })
           setBestBreakout((result.best_breakout as RadarRow | null | undefined) || null)
+          setBestAmongFund((result.best_among_fundamentals as RadarRow | null | undefined) || null)
           setSniperCount(result.sniper_count ?? (result.sniper_rows?.length || 0))
         })
         .catch(() => {
           if (!alive) return
           setRows([])
           setBestBreakout(null)
+          setBestAmongFund(null)
           setSniperCount(0)
         })
     }
@@ -628,11 +682,17 @@ export function MarketScannerView(props: ExperienceViewProps & { onCompare: (sym
       </div>
 
       {tab === 'Breakouts' && (
-        <BestSniperPanel
-          best={bestBreakout}
-          sniperCount={sniperCount}
-          onSelect={setSelected}
-        />
+        <>
+          <BestSniperPanel
+            best={bestBreakout}
+            sniperCount={sniperCount}
+            onSelect={setSelected}
+          />
+          <BestAmongFundamentalsPanel
+            best={bestAmongFund}
+            onSelect={setSelected}
+          />
+        </>
       )}
 
       <div className="scanner-filter-row">

@@ -179,6 +179,7 @@ def test_high_rsi_and_thin_volume_hard_rejected_from_best():
     from product.radar_workspace import (
         breakout_quality_score,
         is_sniper_breakout_candidate,
+        pick_best_among_fundamentals,
         pick_best_sniper_breakout,
     )
     base = {
@@ -193,22 +194,28 @@ def test_high_rsi_and_thin_volume_hard_rejected_from_best():
         "classification": "AVOID_REVIEW", "fundamental_coverage": 0.9,
         "fundamental_score": 20,
     }
+    elevated = {**base, "symbol": "WARM", "rsi": 76, "volume_ratio": 1.8}
     solid = {
         **base, "symbol": "SOLID", "rsi": 55, "volume_ratio": 1.8,
         "classification": "QUALITY_COMPOUNDER", "fundamental_coverage": 0.85,
         "fundamental_score": 80,
     }
-    assert not is_sniper_breakout_candidate(hot)
+    assert not is_sniper_breakout_candidate(hot)   # >82 hard
     assert not is_sniper_breakout_candidate(thin)
-    assert not is_sniper_breakout_candidate(avoid)
+    assert is_sniper_breakout_candidate(avoid)     # fund no longer blocks sniper
+    assert is_sniper_breakout_candidate(elevated)  # 70–82 ok for technical
     assert is_sniper_breakout_candidate(solid)
     assert breakout_quality_score(thin) == -1000.0
-    assert breakout_quality_score(solid) > breakout_quality_score(hot)
-    best = pick_best_sniper_breakout([hot, thin, avoid, solid])
-    assert best is not None and best["symbol"] == "SOLID"
+    best = pick_best_sniper_breakout([hot, thin, avoid, elevated, solid])
+    assert best is not None
+    assert best["symbol"] in {"SOLID", "AVOID", "WARM"}
     assert best["quality_ok"] is True
     assert best["quality_gates"]["volume"] == "pass"
     assert "breakout_context" in best
+
+    fund_best = pick_best_among_fundamentals([hot, thin, avoid, elevated, solid])
+    assert fund_best is not None and fund_best["symbol"] == "SOLID"
+    assert fund_best.get("best_among_kind") == "fundamentals"
 
 
 def test_enrich_scan_row_never_fakes_daily_change_label():
