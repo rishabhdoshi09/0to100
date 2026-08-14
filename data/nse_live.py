@@ -202,7 +202,12 @@ def apply_live_to_store() -> int:
 
 
 def live_bar_for(symbol: str) -> Optional[dict]:
-    """Today's live OHLCV for one symbol (Kite → NSE snapshot). None if unavailable."""
+    """Today's live OHLCV for one symbol (Kite → NSE snapshot only).
+
+    Google Finance is intentionally NOT used here: it has no trustworthy
+    intraday OHLCV, and per-symbol scrapes freeze the radar. If Kite is
+    logged out and NSE is blocked, return None — caller keeps EOD.
+    """
     if not symbol or not _is_trading_now():
         return None
     sym = str(symbol).strip().upper()
@@ -223,20 +228,7 @@ def live_bar_for(symbol: str) -> Optional[dict]:
             return out
     except Exception:
         pass
-    # Last resort: LTP-only quote → flat OHLC for *price* honesty.
-        # Never invent volume here — volume=0 would falsely fail the 1× sniper floor.
-        try:
-            from data.live_quotes import get_live_quotes
-            q = get_live_quotes([sym]).get(sym) or {}
-            ltp = float(q.get("price") or 0)
-            if ltp > 0:
-                return {
-                    "open": ltp, "high": ltp, "low": ltp, "close": ltp,
-                    "volume": None, "source": str(q.get("source") or "quote"),
-                }
-        except Exception:
-            pass
-        return None
+    return None
 
 
 def overlay_live_on_frame(frame, symbol: str):
