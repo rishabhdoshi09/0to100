@@ -640,7 +640,7 @@ class MarketOperationsWorker:
         disable_market = str(os.getenv("QT_DISABLE_AUTO_MARKET_SCAN", "") or "").strip().lower() in {
             "1", "true", "yes", "on",
         }
-        if (not disable_market) and _stale(ROOT / "logs" / "product" / "latest_scan.json", SCAN_FRESH_S):
+        if (not disable_market) and _stale(ROOT / "logs" / "product" / "latest_momentum_scan.json", SCAN_FRESH_S):
             _item, created = self.store.enqueue(MARKET_SCAN, lane=LANES[MARKET_SCAN], requested_by="bootstrap")
             if created:
                 queued.append(MARKET_SCAN)

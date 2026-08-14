@@ -139,9 +139,29 @@ def load_scan(path: str | Path = DEFAULT_SCAN_PATH) -> dict[str, Any] | None:
         payload = json.loads(target.read_text(encoding="utf-8"))
         if int(payload.get("schema_version", 0)) != 1 or not isinstance(payload.get("records"), list):
             return None
-        return payload
+        out = dict(payload)
+        same_day = _scanned_on_ist_today(out)
+        out["same_ist_day"] = same_day
+        # Prior-day file is a SNAPSHOT, never "current live memory".
+        out["records_status"] = "CURRENT_DAY" if same_day else "PRIOR_DAY_SNAPSHOT"
+        return out
     except Exception:
         return None
+
+
+def _scanned_on_ist_today(payload: Mapping[str, Any]) -> bool:
+    stamp = str(payload.get("scanned_at") or "").strip()
+    if not stamp:
+        return False
+    try:
+        from core.market_clock import IST, today_ist
+        dt = datetime.fromisoformat(stamp.replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            # Product scans historically stored UTC-ish ISO; treat naive as UTC.
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(IST).date() == today_ist()
+    except Exception:
+        return False
 
 
 def watchlist_rows(payload: Mapping[str, Any] | None, limit: int = 25) -> list[dict[str, Any]]:

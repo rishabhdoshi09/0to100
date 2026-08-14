@@ -53,7 +53,9 @@ def symbol_ratios_workspace(symbol: str) -> dict[str, Any]:
         ratios_from_fundamentals,
     )
     cache = FundamentalsCache()
-    raw = cache.get(sym) or cache.get_any(sym) or {}
+    fresh = cache.get(sym)
+    stale = None if fresh else cache.get_any(sym)
+    raw = fresh or stale or {}
     flat = flatten_screener_snapshot(raw) if raw else {}
 
     peer_symbols: list[str] = []
@@ -80,6 +82,12 @@ def symbol_ratios_workspace(symbol: str) -> dict[str, Any]:
         "ratios": ratios_from_fundamentals(sym, raw, peer_stats=peer_stats),
         "source": "fundamentals_cache+data_platform.ratios",
         "fundamentals_cached": bool(raw),
+        "fundamentals_fresh": bool(fresh),
+        "fundamentals_stale": bool(stale) and not bool(fresh),
+        "cache_status": (
+            str((fresh or stale or {}).get("_qt_cache_status") or "")
+            or ("TODAY" if fresh else "STALE" if stale else "MISSING")
+        ),
         "inputs_available": sorted(k for k, v in flat.items() if v is not None and not str(k).startswith("_")),
         "peer_average_pe": peer_stats,
     }

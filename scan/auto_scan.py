@@ -134,8 +134,7 @@ def _save_state() -> None:
 
 
 def _load_state() -> None:
-    """Warm the store from disk at startup — results show instantly with
-    their honest age instead of a blank 'pehla scan chal raha hai'."""
+    """Warm the store from disk only for today's IST scan — never cross-day memory."""
     global _results, _scanned_count, _last_scan_ts, _status, _pushed
     import json
     try:
@@ -144,15 +143,27 @@ def _load_state() -> None:
         data = json.loads(_STATE_FILE.read_text())
         if not data.get("results"):
             return
-        # Stale beyond 3 days → ignore (weekend ke baad Monday tak theek hai)
-        if time.time() - float(data.get("ts") or 0) > 3 * 86400:
+        ts = float(data.get("ts") or 0)
+        if ts <= 0:
             return
+        # Strict current: prior IST days are discarded (no 3-day memory restore).
+        try:
+            from datetime import datetime
+            from core.market_clock import IST, today_ist
+            scan_day = datetime.fromtimestamp(ts, tz=IST).date()
+            if scan_day != today_ist():
+                log.info("scan_state_ignored_prior_day", scan_day=str(scan_day),
+                         today=str(today_ist()))
+                return
+        except Exception:
+            if time.time() - ts > 86400:
+                return
         with _lock:
             if _results:
                 return                      # live scan already beat us to it
             _results = data["results"]
             _scanned_count = int(data.get("count") or 0)
-            _last_scan_ts = float(data.get("ts") or 0)
+            _last_scan_ts = ts
             _status = "ready"
             _pushed = {k: set(v) for k, v in (data.get("pushed") or {}).items()}
         log.info("scan_state_restored", results=len(data["results"]),

@@ -23,7 +23,21 @@ log = get_logger(__name__)
 
 _INSTRUMENT_URL = "https://api.kite.trade/instruments"
 _CACHE_FILE = Path("logs/instruments_cache.csv")
-_CACHE_TTL_SECONDS = 86_400  # 24 h
+
+
+def _cache_is_today() -> bool:
+    """Instruments dump is once-per-IST-day — not a rolling 24h window."""
+    if not _CACHE_FILE.exists():
+        return False
+    try:
+        from datetime import datetime
+        from core.market_clock import IST, today_ist
+        mtime = _CACHE_FILE.stat().st_mtime
+        day = datetime.fromtimestamp(mtime, tz=IST).date()
+        return day == today_ist()
+    except Exception:
+        age = time.time() - _CACHE_FILE.stat().st_mtime
+        return age < 86_400
 
 
 class InstrumentManager:
@@ -33,12 +47,11 @@ class InstrumentManager:
         self._load()
 
     def _load(self) -> None:
-        if _CACHE_FILE.exists():
-            age = time.time() - _CACHE_FILE.stat().st_mtime
-            if age < _CACHE_TTL_SECONDS:
-                self._parse_csv(_CACHE_FILE.read_text(encoding="utf-8"))
-                log.info("instruments_loaded_from_cache", count=len(self._token_map))
-                return
+        if _cache_is_today():
+            self._parse_csv(_CACHE_FILE.read_text(encoding="utf-8"))
+            log.info("instruments_loaded_from_cache", count=len(self._token_map),
+                     freshness="ist_calendar_day")
+            return
 
         # Skip network download when Kite credentials are not configured
         if not settings.kite_api_key:

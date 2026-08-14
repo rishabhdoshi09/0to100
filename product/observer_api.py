@@ -140,16 +140,19 @@ def scanner_workspace(mode: str) -> dict[str, Any]:
         enriched = [enrich_long_term_row(dict(row), scanned_at=scanned_at) for row in rows]
     else:
         enriched = enrich_scanner_rows(rows, scanned_at=scanned_at)
-    # Breakouts/Pre-Breakout: recompute RSI/price from live/EOD history so the
-    # table is not frozen at the last scan's oscillator values.
+    # Always recompute price/RSI/volume from store+live — never serve frozen
+    # scan-memory oscillators as if they were current tape.
+    try:
+        from product.live_technicals import refresh_rows_technicals
+        enriched = refresh_rows_technicals(enriched, limit=80, bulk_overlay=True)
+    except Exception:
+        pass
     if canonical in {"Breakouts", "Pre-Breakout"}:
         try:
-            from product.live_technicals import refresh_rows_technicals
             from product.radar_workspace import (
                 breakout_quality_score,
                 is_sniper_breakout_candidate,
             )
-            enriched = refresh_rows_technicals(enriched, limit=80, bulk_overlay=True)
             for row in enriched:
                 row["breakout_quality"] = breakout_quality_score(row)
                 row["sniper_candidate"] = is_sniper_breakout_candidate(row)
@@ -169,6 +172,7 @@ def scanner_workspace(mode: str) -> dict[str, Any]:
         "scanned_at": scanned_at,
         "universe_size": int(scan.get("universe_size", 0) or 0),
         "rows": enriched,
+        "data_policy": "live_technicals+daily_fundamentals",
     }
     # Breakouts mode: surface the best sniper candidate as a first-class
     # field so the UI can render a dedicated section (not bury it in a table).
