@@ -117,10 +117,30 @@ def test_retryable_then_permanent(tmp_path):
 def test_critical_overdue_alerts_and_degrades(tmp_path):
     clk = [10_000.0]
     sup = _sup(tmp_path, clock=lambda: clk[0]); sup.start()
-    sup.jobs.enqueue(SCH.PAPER_CYCLE, scheduled_for=0.0, idempotency_key="old", critical=True)
+    # Critical non-paper work left pending while the owner is alive past grace.
+    sup.jobs.enqueue(SCH.DATA_REFRESH, scheduled_for=clk[0], idempotency_key="old", critical=True)
+    clk[0] += 4_000.0
     sup._check_overdue()
     assert sup.state.state == ST.DEGRADED
     assert any(r["record_type"] == OPERATIONAL_INCIDENT for r in sup.dialogue.all())
+    sup.shutdown()
+
+
+def test_auth_failure_suppresses_data_overdue_noise(tmp_path):
+    clk = [10_000.0]
+    deps = FakeDeps(authed=False)
+    sup = _sup(tmp_path, deps=deps, clock=lambda: clk[0]); sup.start()
+    from research.autonomy import health as H
+    sup.failures.add(H.AUTH_MISSING)
+    sup.jobs.enqueue(SCH.DATA_REFRESH, scheduled_for=clk[0], idempotency_key="dr", critical=True)
+    clk[0] += 4_000.0
+    sup._check_overdue()
+    # Auth is the real blocker — do not also DEGRADE for data_refresh overdue.
+    assert sup.state.state != ST.DEGRADED
+    assert not any(
+        (r.get("decision") == "CRITICAL_OVERDUE") for r in (sup.dialogue.all() or [])
+        if isinstance(r, dict)
+    )
     sup.shutdown()
 
 

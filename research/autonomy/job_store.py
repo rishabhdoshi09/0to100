@@ -303,7 +303,25 @@ class JobStore:
             self._db.commit()
             return cur.rowcount
 
-    def overdue_critical(self, *, grace_seconds: float = 0.0) -> list[Job]:
+    def reschedule_pending_critical(self, *, when: float | None = None) -> int:
+        """Bump PENDING critical work to ``when`` (default: now).
+
+        Used on supervisor boot so downtime does not instantly look like a
+        live control-plane outage (jobs enqueued hours earlier while offline).
+        """
+        now = self.clock()
+        sched = now if when is None else when
+        with self._lock:
+            cur = self._db.execute(
+                "UPDATE jobs SET scheduled_for=? WHERE critical=1 AND status=? "
+                "AND NOT (job_type='paper_cycle' AND idempotency_key LIKE 'paper_cycle:%')",
+                (sched, PENDING),
+            )
+            self._db.commit()
+            return cur.rowcount
+
+    def overdue_critical(self, *, grace_seconds: float = 0.0,
+                         not_before: float | None = None) -> list[Job]:
         """Return current critical work, not historical recurring backlog.
 
         Only the newest pending row for each job type is considered. A job type
@@ -311,19 +329,32 @@ class JobStore:
         position-management events and remain visible in the ledger without
         degrading the organisation as an infrastructure outage. Synthetic or
         manually requested critical rows still exercise the generic safety path.
+
+        ``not_before`` (supervisor start) means a job cannot be overdue until it
+        has remained due for ``grace_seconds`` *while this owner was alive*.
         """
         now = self.clock()
+        # Effective due time cannot precede supervisor boot — avoids CRITICAL_OVERDUE
+        # the moment autonomy restarts after Mac sleep / stack downtime.
+        floor = float(not_before) if not_before is not None else 0.0
+        cutoff = now - grace_seconds
         with self._lock:
             rows = self._db.execute(
                 "SELECT j.* FROM jobs j "
-                "WHERE j.critical=1 AND j.status=? AND j.scheduled_for < ? "
+                "WHERE j.critical=1 AND j.status=? "
                 "AND NOT (j.job_type='paper_cycle' AND j.idempotency_key LIKE 'paper_cycle:%') "
                 "AND NOT EXISTS (SELECT 1 FROM jobs r WHERE r.job_type=j.job_type AND r.status=?) "
                 "AND j.scheduled_for=(SELECT MAX(p.scheduled_for) FROM jobs p "
                 "WHERE p.job_type=j.job_type AND p.status=?)",
-                (PENDING, now - grace_seconds, RUNNING, PENDING),
+                (PENDING, RUNNING, PENDING),
             ).fetchall()
-        return [_row_to_job(r) for r in rows]
+        out = []
+        for r in rows:
+            job = _row_to_job(r)
+            effective = max(float(job.scheduled_for or 0.0), floor)
+            if effective < cutoff:
+                out.append(job)
+        return out
 
     def reclaim_expired(self) -> int:
         now = self.clock()

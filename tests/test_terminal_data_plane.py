@@ -95,3 +95,53 @@ def test_genuinely_current_overdue_critical_job_is_reported(tmp_path):
         assert [job.job_id for job in overdue] == [expected.job_id]
     finally:
         store.close()
+
+
+def test_overdue_respects_supervisor_boot_not_before(tmp_path):
+    """Jobs queued while autonomy was offline must not CRITICAL_OVERDUE on boot."""
+    now = 20_000.0
+    store = JS.JobStore(tmp_path / "jobs.db", clock=lambda: now)
+    try:
+        store.enqueue(
+            "data_refresh",
+            scheduled_for=1_000.0,
+            idempotency_key="data:old",
+            critical=True,
+        )
+        boot = 19_500.0  # supervisor just started
+        assert store.overdue_critical(grace_seconds=3_600.0, not_before=boot) == []
+        # Once the owner has been alive longer than grace past effective due:
+        later = 20_000.0 + 3_700.0
+        store2 = JS.JobStore(tmp_path / "jobs2.db", clock=lambda: later)
+        try:
+            store2.enqueue(
+                "outcome_resolution",
+                scheduled_for=boot,
+                idempotency_key="outcome:stuck",
+                critical=True,
+            )
+            overdue = store2.overdue_critical(grace_seconds=3_600.0, not_before=boot)
+            assert [j.job_type for j in overdue] == ["outcome_resolution"]
+        finally:
+            store2.close()
+    finally:
+        store.close()
+
+
+def test_reschedule_pending_critical_on_boot(tmp_path):
+    now = 20_000.0
+    store = JS.JobStore(tmp_path / "jobs.db", clock=lambda: now)
+    try:
+        job = store.enqueue(
+            "data_refresh",
+            scheduled_for=1_000.0,
+            idempotency_key="data:boot",
+            critical=True,
+        )
+        assert store.reschedule_pending_critical(when=now) == 1
+        refreshed = store.get(job.job_id)
+        assert refreshed is not None
+        assert refreshed.scheduled_for == now
+        assert store.overdue_critical(grace_seconds=3_600.0) == []
+    finally:
+        store.close()
