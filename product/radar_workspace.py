@@ -308,20 +308,40 @@ def build_radar_home(
         for r in scan_rows
     ]
 
-    # Pre-filter breakout-ish rows, then refresh RSI/price from live/EOD history
-    # BEFORE sniper/best gates — scan-time RSI (e.g. YATHARTH 66) is not "now".
+    # Pre-filter breakout-ish rows, then refresh RSI/price from the store
+    # (bulk live overlay once). Cap the refresh set — refreshing hundreds of
+    # rows with per-symbol quote scrapers made radar-home time out so the UI
+    # showed ZERO snipers even when ~30 were eligible.
     breakout_states = {
         "confirmed_breakout", "near_breakout", "insufficient_confirmation", "extended_after_breakout",
     }
     breakouts = [r for r in enriched if r.get("breakout_state") in breakout_states]
     try:
         from product.live_technicals import refresh_rows_technicals
+        priority = [
+            r for r in breakouts
+            if r.get("breakout_state") in {"confirmed_breakout", "near_breakout"}
+            and not bool(r.get("chase_risk"))
+        ]
+        priority.sort(key=lambda r: (-_f(r.get("score")), r.get("symbol", "")))
+        refresh_cap = 80
+        to_refresh = priority[:refresh_cap]
+        # Always include graded A/B names even if outside the score head.
+        seen = {str(r.get("symbol", "")).upper() for r in to_refresh}
+        for r in breakouts:
+            sym = str(r.get("symbol", "")).upper()
+            if sym in seen:
+                continue
+            if str(r.get("breakout_grade") or "").upper() in {"A", "B"} and not bool(r.get("chase_risk")):
+                to_refresh.append(r)
+                seen.add(sym)
+            if len(to_refresh) >= refresh_cap + 20:
+                break
         refreshed = {
             str(r.get("symbol", "")).upper(): r
-            for r in refresh_rows_technicals(breakouts, bulk_overlay=True)
+            for r in refresh_rows_technicals(to_refresh, bulk_overlay=True)
         }
         breakouts = [refreshed.get(str(r.get("symbol", "")).upper(), r) for r in breakouts]
-        # Mirror refreshed technicals back onto the enriched universe rows.
         by_sym = {str(r.get("symbol", "")).upper(): r for r in enriched}
         for sym, row in refreshed.items():
             if sym in by_sym:

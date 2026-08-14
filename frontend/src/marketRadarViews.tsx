@@ -346,7 +346,7 @@ export function RadarHomeView(props: ExperienceViewProps & {
         <span>{title}</span>
         <strong>
           {count}
-          {qualityHint != null ? ` · ${qualityHint} quality` : ''}
+          {qualityHint != null ? ` · ${qualityHint} sniper` : ''}
         </strong>
       </header>
       <ul>
@@ -361,7 +361,7 @@ export function RadarHomeView(props: ExperienceViewProps & {
             >
               <b>
                 {item.symbol}
-                {item.sniper_candidate ? <em className="sniper-tag"> QUALITY</em> : null}
+                {item.sniper_candidate ? <em className="sniper-tag"> SNIPER</em> : null}
                 {thin ? <em className="thin-tag"> THIN VOL</em> : null}
               </b>
               <span>{thin ? 'No volume confirm' : (item.setup_label || item.status)}</span>
@@ -464,7 +464,7 @@ export function RadarHomeView(props: ExperienceViewProps & {
       {(radar?.sniper_candidates?.length || 0) > 0 && (
         <section className="radar-sniper-pool">
           <header>
-            <span>QUALITY BREAKOUT CANDIDATES</span>
+            <span>SNIPER BREAKOUT CANDIDATES</span>
             <strong>{radar?.sniper_candidates?.length}</strong>
           </header>
           <ul>
@@ -642,7 +642,7 @@ export function MarketScannerView(props: ExperienceViewProps & { onCompare: (sym
         {tab === 'Breakouts' && (
           <label className="scanner-check">
             <input type="checkbox" checked={sniperOnly} onChange={(e) => setSniperOnly(e.target.checked)} />
-            Quality candidates only
+            Sniper candidates only
           </label>
         )}
       </div>
@@ -651,7 +651,7 @@ export function MarketScannerView(props: ExperienceViewProps & { onCompare: (sym
         <Panel
           title={`${tab.toUpperCase()} · ${filtered.length}`}
           subtitle={tab === 'Breakouts'
-            ? `Quality-first rank · ${sniperCount} gated candidate${sniperCount === 1 ? '' : 's'} · thin volume marked red`
+            ? `Sniper-first rank · ${sniperCount} sniper candidate${sniperCount === 1 ? '' : 's'} · thin volume marked red`
             : 'Sorted from persisted backend scan · tape fields refresh live'}
         >
           <DenseTable rows={filtered} selected={selected} onSelect={setSelected} depth={depth} mode={tab} />
