@@ -71,6 +71,39 @@ def test_refresh_fail_open_keeps_scan_fields(monkeypatch):
     assert "tech_source" not in out
 
 
+def test_bulk_refresh_skips_per_symbol_network(monkeypatch):
+    """Radar must not scrape Google per breakout — that emptied the sniper lane."""
+    from product import live_technicals as lt
+    import pandas as pd
+
+    idx = pd.date_range("2026-07-01", periods=30, freq="B")
+    frame = pd.DataFrame(
+        {
+            "open": list(range(100, 130)),
+            "high": list(range(102, 132)),
+            "low": list(range(98, 128)),
+            "close": list(range(100, 130)),
+            "volume": [1_000_000] * 30,
+        },
+        index=idx,
+    )
+    calls = {"overlay": 0}
+
+    def _overlay(fr, sym):
+        calls["overlay"] += 1
+        return fr, {"live": True, "price_tag": "LIVE", "source": "nse"}
+
+    monkeypatch.setattr(lt, "ensure_live_store_overlay", lambda: 0)
+    monkeypatch.setattr("data.bhavcopy_runtime.get_ohlcv", lambda sym: frame.copy())
+    monkeypatch.setattr("data.nse_live.overlay_live_on_frame", _overlay)
+    monkeypatch.setattr("core.market_clock.today_ist", lambda: idx[-1].date())
+
+    rows = [{"symbol": "AAA", "rsi": 60, "volume_ratio": 1.5, "avg_vol20": 1e6}]
+    out = lt.refresh_rows_technicals(rows, bulk_overlay=True)
+    assert calls["overlay"] == 0
+    assert out[0]["rsi"] is not None
+
+
 def test_radar_home_uses_refreshed_rsi(monkeypatch):
     from product.radar_workspace import build_radar_home
 

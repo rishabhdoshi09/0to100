@@ -223,19 +223,20 @@ def live_bar_for(symbol: str) -> Optional[dict]:
             return out
     except Exception:
         pass
-    # Last resort: LTP-only quote → flat OHLC (honest partial live print)
-    try:
-        from data.live_quotes import get_live_quotes
-        q = get_live_quotes([sym]).get(sym) or {}
-        ltp = float(q.get("price") or 0)
-        if ltp > 0:
-            return {
-                "open": ltp, "high": ltp, "low": ltp, "close": ltp,
-                "volume": 0.0, "source": str(q.get("source") or "quote"),
-            }
-    except Exception:
-        pass
-    return None
+    # Last resort: LTP-only quote → flat OHLC for *price* honesty.
+        # Never invent volume here — volume=0 would falsely fail the 1× sniper floor.
+        try:
+            from data.live_quotes import get_live_quotes
+            q = get_live_quotes([sym]).get(sym) or {}
+            ltp = float(q.get("price") or 0)
+            if ltp > 0:
+                return {
+                    "open": ltp, "high": ltp, "low": ltp, "close": ltp,
+                    "volume": None, "source": str(q.get("source") or "quote"),
+                }
+        except Exception:
+            pass
+        return None
 
 
 def overlay_live_on_frame(frame, symbol: str):
@@ -265,7 +266,18 @@ def overlay_live_on_frame(frame, symbol: str):
     today_ts = pd.Timestamp(_today_session())
     out = frame.copy()
     cols = [c for c in ("open", "high", "low", "close", "volume") if c in out.columns]
-    values = [float(bar.get(c) or 0) for c in cols]
+    values = []
+    for c in cols:
+        raw = bar.get(c)
+        if c == "volume" and raw is None:
+            # Preserve prior/session volume when LTP-only quote has no volume print.
+            if len(out) and out.index[-1] == today_ts:
+                raw = out.loc[today_ts, "volume"]
+            elif len(out):
+                raw = out.iloc[-1]["volume"]
+            else:
+                raw = 0
+        values.append(float(raw or 0))
     if len(out) and out.index[-1] == today_ts:
         out.loc[today_ts, cols] = values
     else:

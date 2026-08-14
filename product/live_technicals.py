@@ -1,8 +1,12 @@
 """Current technicals for display — never serve frozen scan RSI/price as truth.
 
 Scan payloads are signal snapshots. Price, RSI and volume ratio change every
-session, so every radar/scanner read recomputes them from bhavcopy + today's
-live bar. Simple overwrite. No parallel "scan RSI" UI path.
+session, so radar/scanner reads recompute them from bhavcopy + today's live
+bar when the store already has it.
+
+Bulk path: one store overlay, then local frame math only. Never scrape
+Google/quote fallbacks per symbol — that freezes the desk for minutes and
+makes sniper lanes look empty.
 """
 from __future__ import annotations
 
@@ -52,8 +56,16 @@ def _today():
         return date.today()
 
 
-def refresh_row_technicals(row: Mapping[str, Any]) -> dict[str, Any]:
-    """Overwrite price / RSI / volume_ratio with the current tape."""
+def refresh_row_technicals(
+    row: Mapping[str, Any],
+    *,
+    allow_network: bool = False,
+) -> dict[str, Any]:
+    """Overwrite price / RSI / volume_ratio from the store (and optional live bar).
+
+    ``allow_network=True`` only for single-symbol views. Radar/scanner bulk
+    paths must stay store-local after ``ensure_live_store_overlay()``.
+    """
     out = dict(row)
     sym = str(out.get("symbol") or "").strip().upper()
     if not sym:
@@ -68,14 +80,16 @@ def refresh_row_technicals(row: Mapping[str, Any]) -> dict[str, Any]:
 
     try:
         last_day = getattr(frame.index[-1], "date", lambda: frame.index[-1])()
-        if str(last_day) != str(_today()):
+        if str(last_day) != str(_today()) and allow_network:
             from data.nse_live import overlay_live_on_frame
             frame, meta = overlay_live_on_frame(frame, sym)
         else:
             from data.nse_live import _is_trading_now
+            on_today = str(last_day) == str(_today())
+            live_now = bool(on_today and _is_trading_now())
             meta = {
-                "live": bool(_is_trading_now()),
-                "price_tag": "LIVE" if _is_trading_now() else "EOD",
+                "live": live_now,
+                "price_tag": "LIVE" if live_now else "EOD",
                 "source": "store",
             }
     except Exception:
@@ -91,6 +105,7 @@ def refresh_row_technicals(row: Mapping[str, Any]) -> dict[str, Any]:
         avg20 = _f(out.get("avg_vol20"))
         if avg20 <= 0 and "volume" in frame.columns and len(frame) >= 21:
             avg20 = float(frame["volume"].astype(float).iloc[-21:-1].mean() or 0)
+        # Incomplete live prints sometimes land with volume=0 — keep prior ratio.
         if avg20 > 0 and vol > 0:
             out["volume_ratio"] = round(vol / avg20, 2)
         out["price_tag"] = meta.get("price_tag") or ("LIVE" if meta.get("live") else "EOD")
@@ -105,10 +120,13 @@ def refresh_rows_technicals(
     *,
     limit: int | None = None,
     bulk_overlay: bool = True,
+    allow_network: bool = False,
 ) -> list[dict[str, Any]]:
     items = list(rows)
     if limit is not None:
         items = items[: max(0, int(limit))]
     if bulk_overlay and items:
         ensure_live_store_overlay()
-    return [refresh_row_technicals(r) for r in items]
+    # After a bulk store overlay, never scrape per symbol.
+    network = bool(allow_network) and not bulk_overlay
+    return [refresh_row_technicals(r, allow_network=network) for r in items]

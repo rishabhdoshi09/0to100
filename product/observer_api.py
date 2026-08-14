@@ -149,7 +149,7 @@ def scanner_workspace(mode: str) -> dict[str, Any]:
                 breakout_quality_score,
                 is_sniper_breakout_candidate,
             )
-            enriched = refresh_rows_technicals(enriched, limit=120, bulk_overlay=True)
+            enriched = refresh_rows_technicals(enriched, limit=80, bulk_overlay=True)
             for row in enriched:
                 row["breakout_quality"] = breakout_quality_score(row)
                 row["sniper_candidate"] = is_sniper_breakout_candidate(row)
