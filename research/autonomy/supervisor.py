@@ -67,6 +67,7 @@ class Supervisor:
             self.failures.discard(H.OWNER_PAUSED)
         self._stop = False
         self._running = False
+        self._started_at = self.clock()
 
     def _load_failures(self) -> set:
         try:
@@ -116,6 +117,12 @@ class Supervisor:
             return False
         os.environ["QT_AUTONOMY_OWNER"] = "1"
         self._running = True
+        self._started_at = self.clock()
+        # Downtime backlog is not a live outage — give due work a fresh schedule.
+        try:
+            self.jobs.reschedule_pending_critical(when=self._started_at)
+        except Exception:
+            pass
         self._transition(ST.STARTING, "boot", "Supervisor acquired the single mutation-owner lock.", "start")
         if hasattr(self.deps, "notify_online"):
             try:
@@ -150,7 +157,11 @@ class Supervisor:
                 last_cycle = {}
         d.update({
             "heartbeat_ist": ST._now_ist_iso(), "active_failures": sorted(self.failures),
-            "capabilities": caps, "overdue_critical": [j.job_type for j in self.jobs.overdue_critical()],
+            "capabilities": caps,
+            "overdue_critical": [
+                j.job_type for j in self.jobs.overdue_critical(
+                    not_before=getattr(self, "_started_at", None))
+            ],
             "jobs": self._job_counts(), "owner_state": dict(self.owner_state),
             "scheduler_owner_pid": os.getpid(), "scheduler_of_record": "quantterm-autonomy",
             "process_running": bool(self._running), "last_cycle": last_cycle,
@@ -372,12 +383,14 @@ class Supervisor:
             self.heartbeat()
             return None
         self.enqueue_due(current)
-        self._check_overdue()
         job = self.jobs.lease_due(self.owner, lease_seconds=300.0)
         if job is None:
+            # Only alert overdue after we had a chance to drain due work this tick.
+            self._check_overdue()
             self.heartbeat()
             return None
         self._execute(job)
+        self._check_overdue()
         self.heartbeat()
         return job
 
@@ -456,7 +469,12 @@ class Supervisor:
                                    error_code=error_code, error_message=error_message)
 
     def _check_overdue(self):
-        overdue = self.jobs.overdue_critical(grace_seconds=3600.0)
+        overdue = self.jobs.overdue_critical(
+            grace_seconds=3600.0, not_before=getattr(self, "_started_at", None))
+        # Auth is the real dependency — data_refresh / outcome_resolution stay
+        # blocked until login. Do not also scream CRITICAL_OVERDUE for them.
+        if {H.AUTH_MISSING, H.AUTH_EXPIRED} & self.failures:
+            overdue = [j for j in overdue if j.job_type == SCH.AUTH_HEALTH]
         if overdue and self.state.state not in (ST.DEGRADED, ST.HALTED):
             names = ", ".join(sorted({j.job_type for j in overdue}))
             self._incident("CRITICAL_OVERDUE", f"Critical jobs overdue: {names}", overdue[0])
