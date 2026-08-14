@@ -96,7 +96,6 @@ def breakout_quality_score(row: Mapping[str, Any], *, for_best: bool = False) ->
     fund_pts = 0.0
     if for_best:
         from product.breakout_quality import has_usable_fundamentals
-        cov = _f(row.get("fundamental_coverage"))
         if has_usable_fundamentals(row):
             fund_pts = min(20.0, _f(row.get("fundamental_score")) * 0.20)
             cls = str(row.get("classification") or "")
