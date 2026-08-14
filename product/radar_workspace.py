@@ -10,6 +10,7 @@ from typing import Any, Callable, Mapping, Sequence
 from product.breakout_quality import (
     MIN_VOLUME_RATIO,
     RSI_BLOWOFF,
+    RSI_HARD,
     attach_best_pick_meta,
     gate_breakout_quality,
     passes_volume_floor,
@@ -48,11 +49,10 @@ def _volume_ratio(row: Mapping[str, Any]) -> float:
 def is_sniper_breakout_candidate(row: Mapping[str, Any]) -> bool:
     """True when this row is in the sniper's breakout universe.
 
-    Matches sniper watch eligibility (pre-break near pivot) OR a graded /
-    confirmed breakout — excluding chase-risk, RSI blow-offs, thin volume
-    (<1×), and AVOID_REVIEW fundamentals.
+    Technical gates only (volume ≥1×, not chase, RSI ≤82). Fundamentals are
+    NOT required here — they feed the separate best-among section.
     """
-    ok, _, _ = gate_breakout_quality(row)
+    ok, _, _ = gate_breakout_quality(row, for_best=False)
     if not ok:
         return False
     cats = {str(c) for c in (row.get("categories") or [])}
@@ -77,21 +77,16 @@ def is_sniper_breakout_candidate(row: Mapping[str, Any]) -> bool:
     )
     if not (near_pivot or confirmed):
         return False
-    # Sniper refuses zero/unknown avg volume evidence
     if _f(row.get("avg_vol20")) <= 0 and _volume_ratio(row) <= 0:
         return False
     return True
 
 
-def breakout_quality_score(row: Mapping[str, Any]) -> float:
-    """Rank sniper-style breakouts for fewer, higher-win-rate picks.
-
-    Higher is better. Hard-ignores RSI blow-offs and volume <1× (crushed).
-    Rewards graded breaks + usable fundamentals. Never invents fundamentals.
-    """
-    ok, _, gates = gate_breakout_quality(row)
+def breakout_quality_score(row: Mapping[str, Any], *, for_best: bool = False) -> float:
+    """Rank breakouts. Technical path ignores missing funds; best-among boosts them."""
+    ok, _, gates = gate_breakout_quality(row, for_best=for_best)
     if not ok:
-        return -1000.0  # ignore — never the "best"
+        return -1000.0
 
     grade = str(row.get("breakout_grade") or "").upper()
     grade_pts = {"A": 30.0, "B": 15.0}.get(grade, 0.0)
@@ -99,23 +94,20 @@ def breakout_quality_score(row: Mapping[str, Any]) -> float:
     score = _f(row.get("score"))
     edge = _f(row.get("edge_r"))
     fund_pts = 0.0
-    cov = _f(row.get("fundamental_coverage"))
-    if row.get("fundamental_score") is not None and cov >= MIN_LT_FUNDAMENTAL_COVERAGE:
-        fund_pts = min(20.0, _f(row.get("fundamental_score")) * 0.20)
-        cls = str(row.get("classification") or "")
-        if cls in {"QUALITY_COMPOUNDER", "GARP_CANDIDATE"}:
-            fund_pts += 5.0
-        elif cls == "QUALITY_BUT_EXPENSIVE":
-            fund_pts += 2.0
-    elif gates.get("fundamentals") == "unknown":
-        fund_pts = -5.0  # prefer names with readable fund context
+    if for_best:
+        from product.breakout_quality import has_usable_fundamentals
+        if has_usable_fundamentals(row):
+            fund_pts = min(20.0, _f(row.get("fundamental_score")) * 0.20)
+            cls = str(row.get("classification") or "")
+            if cls in {"QUALITY_COMPOUNDER", "GARP_CANDIDATE"}:
+                fund_pts += 5.0
+            elif cls == "QUALITY_BUT_EXPENSIVE":
+                fund_pts += 2.0
+        elif gates.get("fundamentals") == "unknown":
+            fund_pts = -5.0
 
     vol = _volume_ratio(row)
-    if vol >= 2.0:
-        vol_pts = 12.0
-    else:
-        vol_pts = 6.0
-
+    vol_pts = 12.0 if vol >= 2.0 else 6.0
     rsi = _f(row.get("rsi"))
     rsi_pen = 12.0 if rsi >= 65 else 0.0
     trend_pts = 6.0 if gates.get("trend") == "pass" else 0.0
@@ -129,11 +121,7 @@ def breakout_quality_score(row: Mapping[str, Any]) -> float:
 
 
 def pick_best_sniper_breakout(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any] | None:
-    """Best among sniper breakout candidates that clear volume+tech+fund gates.
-
-    Thin volume (<1×), RSI blow-offs, chase risk and AVOID_REVIEW never win.
-    Attaches quality_gates + optional order-book/concall context.
-    """
+    """Best technical sniper candidate (no fundamentals required)."""
     pool = [
         dict(r) for r in rows
         if is_sniper_breakout_candidate(r) and passes_volume_floor(r)
@@ -141,15 +129,47 @@ def pick_best_sniper_breakout(rows: Sequence[Mapping[str, Any]]) -> dict[str, An
     if not pool:
         return None
     for r in pool:
-        r["breakout_quality"] = breakout_quality_score(r)
+        r["breakout_quality"] = breakout_quality_score(r, for_best=False)
     pool.sort(key=lambda r: (
-        str(r.get("classification") or "") not in QUALITY_CLASSES,
         -_f(r.get("breakout_quality")),
         -_f(r.get("breakout_conviction")),
         -_f(r.get("score")),
         str(r.get("symbol", "")),
     ))
-    return attach_best_pick_meta(pool[0], with_context=True)
+    return attach_best_pick_meta(pool[0], with_context=True, for_best=False)
+
+
+def pick_best_among_fundamentals(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any] | None:
+    """Best among breakout candidates that also have usable fundamentals.
+
+    Separate from the technical sniper lane — fund context never empties breakouts.
+    """
+    from product.breakout_quality import has_usable_fundamentals
+
+    pool: list[dict[str, Any]] = []
+    for r in rows:
+        if not is_sniper_breakout_candidate(r) or not passes_volume_floor(r):
+            continue
+        ok, _, _ = gate_breakout_quality(r, for_best=True)
+        if not ok:
+            continue
+        if not has_usable_fundamentals(r):
+            continue
+        row = dict(r)
+        row["breakout_quality"] = breakout_quality_score(row, for_best=True)
+        pool.append(row)
+    if not pool:
+        return None
+    pool.sort(key=lambda r: (
+        str(r.get("classification") or "") not in QUALITY_CLASSES,
+        -_f(r.get("fundamental_score")),
+        -_f(r.get("breakout_quality")),
+        -_f(r.get("score")),
+        str(r.get("symbol", "")),
+    ))
+    out = attach_best_pick_meta(pool[0], with_context=True, for_best=True)
+    out["best_among_kind"] = "fundamentals"
+    return out
 
 
 def merge_fundamental_context(
@@ -366,7 +386,7 @@ def build_radar_home(
     breakouts.sort(key=lambda r: (
         not bool(r.get("sniper_candidate")),
         not passes_volume_floor(r),
-        _f(r.get("rsi")) > RSI_BLOWOFF,
+        _f(r.get("rsi")) > RSI_HARD,
         bool(r.get("chase_risk")),
         r["breakout_state"] != "confirmed_breakout",
         r["breakout_state"] != "near_breakout",
@@ -393,8 +413,9 @@ def build_radar_home(
     long_picks.sort(key=lambda r: (-_f(r.get("combined_score")), r.get("symbol", "")))
 
     best_breakout = pick_best_sniper_breakout(breakouts)
+    best_among_fundamentals = pick_best_among_fundamentals(breakouts)
     sniper_breakouts = [
-        attach_best_pick_meta(r, with_context=False)
+        attach_best_pick_meta(r, with_context=False, for_best=False)
         for r in breakouts
         if r.get("sniper_candidate") and passes_volume_floor(r)
     ]
@@ -412,6 +433,7 @@ def build_radar_home(
         "long_term_scanned_at": lt_at,
         "universe_size": int((scan_payload or {}).get("universe_size", 0) or 0),
         "best_breakout": best_breakout,
+        "best_among_fundamentals": best_among_fundamentals,
         "sniper_candidates": sniper_breakouts[:12],
         "lanes": {
             "breakouts": breakouts[:12],

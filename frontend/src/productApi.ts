@@ -176,6 +176,7 @@ export type ScannerWorkspace = {
   universe_size: number
   rows: ScannerWorkspaceRow[]
   best_breakout?: ScannerWorkspaceRow | null
+  best_among_fundamentals?: ScannerWorkspaceRow | null
   sniper_count?: number
   sniper_rows?: ScannerWorkspaceRow[]
 }
@@ -430,6 +431,7 @@ export type RadarHome = {
   long_term_scanned_at: string
   universe_size: number
   best_breakout?: ScannerWorkspaceRow | null
+  best_among_fundamentals?: ScannerWorkspaceRow | null
   sniper_candidates?: ScannerWorkspaceRow[]
   lanes: {
     breakouts: ScannerWorkspaceRow[]

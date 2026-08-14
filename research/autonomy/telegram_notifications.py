@@ -321,7 +321,7 @@ class TelegramNotifier:
                 continue
             # Same hard gates as sniper/best — never alert 0.1× / blow-off / AVOID.
             if gate_breakout_quality is not None:
-                ok, reasons, _ = gate_breakout_quality(r)
+                ok, reasons, _ = gate_breakout_quality(r, for_best=False)
                 if not ok:
                     arms.pop(sym, None)
                     continue
