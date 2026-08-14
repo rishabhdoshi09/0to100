@@ -48,7 +48,7 @@ def ensure_deep_fundamentals(
         if cached is not None:
             _last_trail[symbol] = [{
                 "step": 1, "source": "local_cache_fresh", "status": "OK",
-                "message": "Fresh cache hit — no network fetch needed",
+                "message": "Today's IST cache hit — no network fetch (once per day)",
                 "elapsed_ms": 0, "sections": {}, "reputed": True,
                 "official": False, "coverage": 100,
             }]
@@ -56,15 +56,6 @@ def ensure_deep_fundamentals(
         if not cache.has(symbol):
             fail_ts = _fail_until.get(symbol)
             if fail_ts and time.time() < fail_ts:
-                stale = cache.get_any(symbol)
-                if stale:
-                    _last_trail[symbol] = [{
-                        "step": 1, "source": "local_cache_stale", "status": "OK",
-                        "message": "Backoff active — serving stale cache",
-                        "elapsed_ms": 0, "sections": {}, "reputed": False,
-                        "official": False, "coverage": 50,
-                    }]
-                    return stale
                 raise RuntimeError(
                     f"Fundamentals fetch for {symbol} is in backoff after a recent failure"
                 )
@@ -76,12 +67,22 @@ def ensure_deep_fundamentals(
     _last_trail[symbol] = steps
     if data is not None:
         _fail_until.pop(symbol, None)
+        if isinstance(data, dict):
+            data = {**data, "_qt_cache_status": "TODAY"}
         return data
 
     _fail_until[symbol] = time.time() + _FAIL_BACKOFF_S
     stale = cache.get_any(symbol)
     if stale:
         log.warning("fundamentals_ensure_stale_fallback", symbol=symbol)
+        if isinstance(stale, dict):
+            stale = {**stale, "_qt_cache_status": "STALE"}
+        _last_trail[symbol] = (steps or []) + [{
+            "step": 99, "source": "local_cache_stale", "status": "STALE",
+            "message": "Network failed — serving prior-day cache marked STALE (not current)",
+            "elapsed_ms": 0, "sections": {}, "reputed": False,
+            "official": False, "coverage": 50,
+        }]
         return stale
     detail = steps[-1]["message"] if steps else "all sources exhausted"
     raise RuntimeError(f"Fundamentals unavailable for {symbol}: {detail}")

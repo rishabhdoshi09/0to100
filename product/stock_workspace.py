@@ -486,13 +486,20 @@ def _default_inputs(symbol: str) -> dict[str, Any]:
             from fundamentals.cache import FundamentalsCache
 
             cache = FundamentalsCache()
-            cached = cache.get(symbol) or cache.get_any(symbol)
+            # Prefer today's IST fetch only. Prior-day get_any is marked STALE —
+            # never presented as current fundamentals.
+            cached = cache.get(symbol)
+            status = "TODAY"
+            if cached is None:
+                cached = cache.get_any(symbol)
+                status = "STALE" if cached else ""
             if cached:
                 raw = {
                     "available": True,
                     "data": dict(cached),
-                    "fetched_at": "",
+                    "fetched_at": str(cached.get("_qt_fetched_at") or ""),
                     "section_as_of": {},
+                    "cache_status": status or str(cached.get("_qt_cache_status") or ""),
                 }
         except Exception:
             pass
