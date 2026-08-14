@@ -91,11 +91,13 @@ def diagnose_breakout_alerts() -> dict:
         st = read_autonomy_status()
         out["autonomy_running"] = bool(st.get("running"))
         out["autonomy_heartbeat"] = st.get("heartbeat_ist")
+        out["autonomy_state"] = st.get("state") or st.get("plain_state")
     except Exception as exc:
         out["autonomy_running"] = False
         out["autonomy_error"] = str(exc)
     try:
         from product.scan_store import load_scan
+        from scan.breakout_sniper import build_watch_map, _quality_skip
         payload = load_scan() or {}
         recs = records_from_payload(payload)
         pre = [
@@ -103,13 +105,33 @@ def diagnose_breakout_alerts() -> dict:
             if "PRE_BREAKOUT" in [str(x).upper() for x in (r.get("signals") or [])]
             or str(r.get("status") or "") == "Watch for breakout"
         ]
+        skip_reasons: dict[str, int] = {}
+        eligible = 0
+        for r in pre:
+            why = _quality_skip(r)
+            if why:
+                key = why.split("—")[0].strip()[:48]
+                skip_reasons[key] = skip_reasons.get(key, 0) + 1
+            else:
+                eligible += 1
+        watch = build_watch_map(pre)
         out["scan_present"] = bool(payload)
         out["scan_records"] = len(recs)
         out["pre_breakout_candidates"] = len(pre)
+        out["pre_breakout_quality_ok"] = eligible
+        out["quality_skip_reasons"] = skip_reasons
+        out["sniper_watch_tokens"] = len(watch)
         out["scanned_at"] = payload.get("scanned_at")
         out["sample_pre"] = [
-            {"symbol": r.get("symbol"), "entry": r.get("entry"), "avg_vol20": r.get("avg_vol20")}
-            for r in pre[:5]
+            {
+                "symbol": r.get("symbol"),
+                "entry": r.get("entry"),
+                "avg_vol20": r.get("avg_vol20"),
+                "volume_ratio": r.get("volume_ratio"),
+                "rsi": r.get("rsi"),
+                "skip": _quality_skip(r) or "",
+            }
+            for r in pre[:8]
         ]
     except Exception as exc:
         out["scan_present"] = False
@@ -128,19 +150,30 @@ def diagnose_breakout_alerts() -> dict:
     out["sniper"] = sniper
     blockers = []
     if not out.get("telegram_configured"):
-        blockers.append("TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID missing or unread from .env")
+        blockers.append("TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID missing — set both in .env")
     if not out.get("kite_ready"):
-        blockers.append("Kite not ready — run: python main.py login")
+        blockers.append("Kite not ready — run: python main.py login (then keep stack running)")
     if not out.get("autonomy_running"):
-        blockers.append("Autonomy supervisor not running — restart bash scripts/run_quantterm.sh")
+        blockers.append("Autonomy supervisor not running — bash scripts/run_quantterm_complete.sh")
     if not out.get("scan_present"):
         blockers.append("No scan payload yet — wait for MARKET_SCAN after 09:30 IST")
     elif int(out.get("pre_breakout_candidates") or 0) == 0:
         blockers.append("Scan has zero pre-breakout candidates right now")
+    elif int(out.get("pre_breakout_quality_ok") or 0) == 0:
+        blockers.append("Pre-breakouts exist but all fail quality (RSI/volume/chase) — nothing to watch")
+    elif int(out.get("sniper_watch_tokens") or 0) == 0:
+        blockers.append("Quality OK but instrument tokens missing — refresh instruments after Kite login")
     if sniper.get("error") == "kite_unavailable":
         blockers.append("Sniper cannot start WebSocket without Kite")
     if sniper.get("error") == "market_closed":
-        blockers.append("Market closed — sniper arms only in session")
+        blockers.append("Market closed — sniper arms only in cash session (09:15–15:30 IST)")
+    if out.get("market_open") and sniper.get("ok") and int(sniper.get("watching") or 0) == 0:
+        blockers.append("Sniper started but watching=0 — no armed names this scan")
     out["blockers"] = blockers
     out["ok"] = not blockers
+    out["hint"] = (
+        "BREAKOUT CONFIRMED needs: Telegram + Kite WS + autonomy + pre-breakout "
+        "within 2.5% of pivot that CLEARS and HOLDS with pace-aware volume. "
+        "Scan setup alerts (🎯) are separate and fire after each market scan."
+    )
     return out

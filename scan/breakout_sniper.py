@@ -83,21 +83,25 @@ def volume_confirms(cum_vol: float, avg_daily_vol: float, frac: float,
     """Is today's volume strong enough for a real breakout?
 
     Fail-closed on zero/missing volume. Requires:
-      1. Absolute day ratio ≥ abs_min (default 1.0× avg daily) — a print at
-         0.1× is never "BREAKOUT CONFIRMED", even if early-session pace math
-         would call it ahead of a tiny expected-by-now.
+      1. Pace-aware absolute floor — need ≥ abs_min × max(session_frac, 0.25)
+         of a full average day. Blocks AUROPHARMA-style 0.1× prints, but does
+         NOT demand a full day's volume by 11am (that silenced every alert).
       2. After the open (frac ≥ 5%), also beat time-of-day pace (surge × frac).
     """
     if cum_vol <= 0:
         return False                  # 0-volume break → never suggest
     if not avg_daily_vol or avg_daily_vol <= 0:
         return False                  # unknown avg → do not invent confirmation
+    session_frac = max(0.0, min(1.0, float(frac)))
     day_ratio = cum_vol / avg_daily_vol
-    if day_ratio < max(0.0, float(abs_min)):
-        return False                  # thin day — not a breakout
-    if frac < 0.05:
+    # Early bar: still insist on a meaningful open surge (≥25% of avg day when
+    # abs_min=1). Later: scale the floor with session progress up to abs_min.
+    abs_floor = float(abs_min) * max(session_frac, 0.25)
+    if day_ratio < abs_floor:
+        return False
+    if session_frac < 0.05:
         return True                   # absolute floor already cleared
-    expected_by_now = avg_daily_vol * frac
+    expected_by_now = avg_daily_vol * session_frac
     return cum_vol >= surge * expected_by_now
 
 

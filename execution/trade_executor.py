@@ -103,11 +103,17 @@ def _validate(symbol: str, qty: int, entry_price: float,
 
 
 def kite_ready() -> bool:
+    """True when a usable Kite session exists.
+
+    Re-reads ``KITE_ACCESS_TOKEN`` from ``.env`` so ``python main.py login``
+    wakes the sniper without requiring an autonomy process restart.
+    """
     try:
-        from config import settings
-        if not settings.kite_access_token:
+        from data.kite_client import KiteClient, _fresh_env
+        token = (_fresh_env("KITE_ACCESS_TOKEN") or "").strip()
+        key = (_fresh_env("KITE_API_KEY") or "").strip()
+        if not token or not key:
             return False
-        from data.kite_client import KiteClient
         return KiteClient().is_connected()
     except Exception:
         return False

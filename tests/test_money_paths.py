@@ -3732,19 +3732,23 @@ class TestSniperConfirmation:
 
     def test_volume_confirms_pacing(self):
         from scan.breakout_sniper import volume_confirms
-        # Absolute floor 1.0× avg-day — AUROPHARMA-style 0.1× never confirms
-        assert volume_confirms(100_000, 1_000_000, 0.08) is False  # 0.1×
+        # Pace-aware absolute floor — AUROPHARMA-style 0.1× never confirms
+        assert volume_confirms(100_000, 1_000_000, 0.08) is False  # 0.1× < 0.25 early floor
         assert volume_confirms(100_000, 1_000_000, 0.01) is False  # early, still thin
-        # halfway: need ≥1.0× abs AND pace (1.2× × 0.5 = 0.6×) → 1.0× binds
+        # halfway: floor = max(0.5, 0.25)=0.5× day; pace needs 1.2×0.5=0.6×
         assert volume_confirms(1_200_000, 1_000_000, 0.5) is True
-        assert volume_confirms(700_000, 1_000_000, 0.5) is False   # < 1.0× abs
-        assert volume_confirms(400_000, 1_000_000, 0.5) is False
+        assert volume_confirms(700_000, 1_000_000, 0.5) is True    # 0.7 ≥ 0.6 pace + 0.5 floor
+        assert volume_confirms(400_000, 1_000_000, 0.5) is False   # 0.4 < 0.5 floor
         # fail-closed: zero / unknown avg
         assert volume_confirms(0, 1_000_000, 0.5) is False
         assert volume_confirms(1_200_000, 0, 0.5) is False
-        # early session: absolute 1.0× already = real open surge → allow
+        # early session: real open surge (≥0.25×) allowed; tiny print not
         assert volume_confirms(1_000_000, 1_000_000, 0.01) is True
+        assert volume_confirms(250_000, 1_000_000, 0.01) is True
         assert volume_confirms(1, 1_000_000, 0.01) is False
+        # mid-morning legitimate surge (0.35× day at ~20% session) can confirm
+        assert volume_confirms(350_000, 1_000_000, 0.2) is True
+        assert volume_confirms(200_000, 1_000_000, 0.2) is False  # below 0.25 early floor
 
     def test_thin_absolute_volume_break_does_not_fire(self):
         """0.1× avg-day must never fire BREAKOUT CONFIRMED (pace math trap)."""
@@ -3784,9 +3788,9 @@ class TestSniperConfirmation:
                                "volume_traded": 150_000}], watch, fired, arm,
                              now=50, hold_seconds=45, frac=0.5)
         assert hits == []
-        # same break but volume running hot (≥1.0× avg-day) → confirms
+        # same break but volume running hot (≥ pace + floor) → confirms
         hits2 = process_ticks([{"instrument_token": 101, "last_price": 184.0,
-                                "volume_traded": 1_200_000}], watch, fired, arm,
+                                "volume_traded": 700_000}], watch, fired, arm,
                               now=60, hold_seconds=45, frac=0.5)
         assert len(hits2) == 1 and hits2[0]["symbol"] == "DEAD"
 
