@@ -3733,22 +3733,25 @@ class TestSniperConfirmation:
     def test_volume_confirms_pacing(self):
         from scan.breakout_sniper import volume_confirms
         # Pace-aware absolute floor — AUROPHARMA-style 0.1× never confirms
-        assert volume_confirms(100_000, 1_000_000, 0.08) is False  # 0.1× < 0.25 early floor
+        # early floor = 0.7 × 0.15 = 0.105×
+        assert volume_confirms(100_000, 1_000_000, 0.08) is False  # 0.1× < early floor
         assert volume_confirms(100_000, 1_000_000, 0.01) is False  # early, still thin
-        # halfway: floor = max(0.5, 0.25)=0.5× day; pace needs 1.2×0.5=0.6×
+        # halfway: floor = 0.7×0.5=0.35; pace needs 1.0×0.5=0.5×
         assert volume_confirms(1_200_000, 1_000_000, 0.5) is True
-        assert volume_confirms(700_000, 1_000_000, 0.5) is True    # 0.7 ≥ 0.6 pace + 0.5 floor
-        assert volume_confirms(400_000, 1_000_000, 0.5) is False   # 0.4 < 0.5 floor
+        assert volume_confirms(700_000, 1_000_000, 0.5) is True    # 0.7 ≥ 0.5 pace + 0.35 floor
+        assert volume_confirms(400_000, 1_000_000, 0.5) is False   # 0.4 ≥ floor but < pace
+        assert volume_confirms(300_000, 1_000_000, 0.5) is False   # 0.3 < 0.35 floor
         # fail-closed: zero / unknown avg
         assert volume_confirms(0, 1_000_000, 0.5) is False
         assert volume_confirms(1_200_000, 0, 0.5) is False
-        # early session: real open surge (≥0.25×) allowed; tiny print not
+        # early session: real open surge (≥0.105×) allowed; tiny print not
         assert volume_confirms(1_000_000, 1_000_000, 0.01) is True
-        assert volume_confirms(250_000, 1_000_000, 0.01) is True
+        assert volume_confirms(150_000, 1_000_000, 0.01) is True
         assert volume_confirms(1, 1_000_000, 0.01) is False
-        # mid-morning legitimate surge (0.35× day at ~20% session) can confirm
+        # mid-morning: on-pace (surge 1.0) confirms; below pace/floor does not
         assert volume_confirms(350_000, 1_000_000, 0.2) is True
-        assert volume_confirms(200_000, 1_000_000, 0.2) is False  # below 0.25 early floor
+        assert volume_confirms(200_000, 1_000_000, 0.2) is True   # = pace, > floor 0.14
+        assert volume_confirms(100_000, 1_000_000, 0.2) is False  # below floor
 
     def test_thin_absolute_volume_break_does_not_fire(self):
         """0.1× avg-day must never fire BREAKOUT CONFIRMED (pace math trap)."""
@@ -3758,10 +3761,10 @@ class TestSniperConfirmation:
         arm, fired = {}, set()
         process_ticks([{"instrument_token": 101, "last_price": 183.0,
                         "volume_traded": 100_000}], watch, fired, arm,
-                      now=0, hold_seconds=45, frac=0.08)
+                      now=0, hold_seconds=20, frac=0.08)
         hits = process_ticks([{"instrument_token": 101, "last_price": 184.0,
                                "volume_traded": 100_000}], watch, fired, arm,
-                             now=50, hold_seconds=45, frac=0.08)
+                             now=25, hold_seconds=20, frac=0.08)
         assert hits == []
 
     def test_day_fraction_bounds(self):
@@ -3782,16 +3785,16 @@ class TestSniperConfirmation:
         # arm at t0, cleared + will hold, but volume dead
         process_ticks([{"instrument_token": 101, "last_price": 183.0,
                         "volume_traded": 100_000}], watch, fired, arm,
-                      now=0, hold_seconds=45, frac=0.5)
+                      now=0, hold_seconds=20, frac=0.5)
         # held long enough BUT volume way below pace → still no fire
         hits = process_ticks([{"instrument_token": 101, "last_price": 184.0,
                                "volume_traded": 150_000}], watch, fired, arm,
-                             now=50, hold_seconds=45, frac=0.5)
+                             now=25, hold_seconds=20, frac=0.5)
         assert hits == []
         # same break but volume running hot (≥ pace + floor) → confirms
         hits2 = process_ticks([{"instrument_token": 101, "last_price": 184.0,
                                 "volume_traded": 700_000}], watch, fired, arm,
-                              now=60, hold_seconds=45, frac=0.5)
+                              now=30, hold_seconds=20, frac=0.5)
         assert len(hits2) == 1 and hits2[0]["symbol"] == "DEAD"
 
     def test_touch_without_clearance_does_not_arm(self):
@@ -3799,13 +3802,12 @@ class TestSniperConfirmation:
         arm, fired = {}, set()
         # exactly at trigger (no clearance buffer) → not armed
         process_ticks(self._tick(182.0), self.WATCH, fired, arm,
-                      now=0, hold_seconds=45)
+                      now=0, hold_seconds=20)
         assert "BAJEL" not in arm
 
-    def test_watch_map_skips_chase_risk_and_blowoff(self):
-        """The sniper is a separate path from the scanner — it must apply the
-        scanner's own quality demotes, not fire a green 'BREAKOUT CONFIRMED'
-        (and auto-trade) on a stock the scanner flagged extended/overbought."""
+    def test_watch_map_skips_blowoff_and_thin_not_chase_by_default(self):
+        """Blow-off / thin vol still skipped; chase is soft (watched) by default
+        so Telegram breakouts fire like the earlier desk."""
         from scan.breakout_sniper import build_watch_map
         base = {"categories": ["PreBreakout"], "pivot_distance_pct": 1.0,
                 "entry": 100.0, "stop": 95.0, "target": 112.0,
@@ -3815,19 +3817,17 @@ class TestSniperConfirmation:
         blowoff = {**base, "symbol": "BLOWOFF", "rsi": 88, "chase_risk": False}
         zero_vol = {**base, "symbol": "NOVOL", "rsi": 55, "chase_risk": False,
                     "avg_vol20": 0}
-        # tokens_for is best-effort; watch map keys off symbol regardless
         syms = {v["symbol"] for v in
                 build_watch_map([clean, chased, blowoff, zero_vol]).values()}
-        # even if instrument-token lookup is empty in the test env, the
-        # PURE filter decision is what we assert — re-derive it directly:
         from scan.breakout_sniper import _quality_skip
         assert _quality_skip(clean) == ""
-        assert "chase" in _quality_skip(chased)
+        assert _quality_skip(chased) == ""   # soft chase — still watch
         assert "blow-off" in _quality_skip(blowoff)
         assert "volume" in _quality_skip(zero_vol).lower()
         assert "NOVOL" not in syms
         assert "BLOWOFF" not in syms
-        assert "CHASED" not in syms
+        # CHASED may lack instrument token in CI — quality gate is the contract
+        assert _quality_skip(chased) == ""
 
     def test_quality_skip_backward_compatible(self):
         """Old scan dicts without chase/rsi flags still pass when volume is known;

@@ -108,6 +108,36 @@ def test_telegram_live_breakouts_skip_thin_volume(tmp_path):
     assert "FAT" in n.state.get("arms", {})
 
 
+def test_technical_chase_is_soft_best_among_hard():
+    from product.breakout_quality import gate_breakout_quality
+
+    ok, reasons, status = gate_breakout_quality({
+        "volume_ratio": 1.2, "rsi": 55, "chase_risk": True,
+    }, for_best=False)
+    assert ok is True
+    assert status["extension"] == "fail"
+    assert reasons == []
+
+    ok_best, reasons_best, _ = gate_breakout_quality({
+        "volume_ratio": 1.2, "rsi": 55, "chase_risk": True,
+        "classification": "GARP_CANDIDATE", "fundamental_coverage": 0.7,
+        "fundamental_score": 70,
+    }, for_best=True)
+    assert ok_best is False
+    assert any("chase" in r for r in reasons_best)
+
+
+def test_technical_allows_volume_above_eased_floor():
+    from product.breakout_quality import gate_breakout_quality
+
+    ok, reasons, status = gate_breakout_quality({
+        "volume_ratio": 0.75, "rsi": 55, "chase_risk": False,
+    }, for_best=False)
+    assert ok is True
+    assert status["volume"] == "pass"
+    assert reasons == []
+
+
 def test_optional_context_marks_unavailable_without_kite(monkeypatch):
     from product import breakout_quality as bq
 

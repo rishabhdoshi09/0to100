@@ -11,7 +11,9 @@ from __future__ import annotations
 
 from typing import Any, Mapping
 
-MIN_VOLUME_RATIO = 1.0
+# Technical sniper / Telegram lane — eased so mid-day on-pace prints still arm.
+# Best-among can still pass a stricter min_volume explicitly.
+MIN_VOLUME_RATIO = 0.7
 # Soft ceiling: prefer / best-among. Hard: scanner blow-off (CLAUDE.md).
 RSI_BLOWOFF = 70.0
 RSI_HARD = 82.0
@@ -51,13 +53,14 @@ def gate_breakout_quality(
     """Return (ok, reject_reasons, gate_status).
 
     Technical path (``for_best=False``, default — sniper / Telegram / lane):
-      - volume missing/zero or < min_volume
+      - volume missing/zero or < min_volume (default 0.7×)
       - RSI > RSI_HARD (82)
-      - chase_risk
+      - chase_risk is status-only (soft) — still arms alerts
       Fundamentals are status-only — never reject.
 
     Best-among path (``for_best=True``):
       - same technicals, but RSI > RSI_BLOWOFF (70)
+      - chase_risk hard-rejects
       - AVOID_REVIEW rejected
       - optional require_fundamentals coverage floor
       - both SMAs below → reject
@@ -88,7 +91,9 @@ def gate_breakout_quality(
 
     if bool(row.get("chase_risk")):
         status["extension"] = "fail"
-        reasons.append("chase/extension risk")
+        # Soft on the technical lane (Telegram/sniper); hard only for best-among.
+        if want_best:
+            reasons.append("chase/extension risk")
     else:
         status["extension"] = "pass"
 

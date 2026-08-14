@@ -43,23 +43,25 @@ _started = False
 # We fire only when the break (a) CLEARS the level by a buffer and (b) HOLDS
 # above it for a dwell window. A wick that reverses within the window disarms
 # and never alerts. Both tunable via .env.
-_CLEARANCE_PCT = float(os.getenv("QT_SNIPER_CLEARANCE_PCT", "0.0015") or 0.0015)
-_HOLD_SECONDS = float(os.getenv("QT_SNIPER_HOLD_SECONDS", "45") or 45)
+# Eased defaults (still block AUROPHARMA-style 0.1× thin tape / RSI blow-off).
+# Override via .env if you want the older stricter desk.
+_CLEARANCE_PCT = float(os.getenv("QT_SNIPER_CLEARANCE_PCT", "0.0010") or 0.0010)
+_HOLD_SECONDS = float(os.getenv("QT_SNIPER_HOLD_SECONDS", "20") or 20)
 # Volume pacing — a break on dead volume is a trap even if it holds. We
-# require BOTH: (a) today's cumulative volume ≥ full average-day floor
-# (default 1.0× — a "breakout" at 0.1× is not a breakout), and (b) volume
-# running ahead of time-of-day pace. Zero / missing volume is NEVER suggested.
-_VOL_SURGE = float(os.getenv("QT_SNIPER_VOL_SURGE", "1.2") or 1.2)
-_VOL_ABS_MIN = float(os.getenv("QT_SNIPER_VOL_ABS_MIN", "1.0") or 1.0)
-# Quality gate — the sniper is a SEPARATE path from the main scanner, so the
-# scanner's demote-only quality filters (extension/chase guard, RSI ceiling)
-# do NOT apply automatically. Without this, a stock the scanner flagged as a
-# chase (extended, already run hard) or a blow-off-top (RSI > 70)
-# could still fire a green "BREAKOUT CONFIRMED" and get auto-traded — exactly
-# the low-quality break we spent the filters rejecting. We carry the daily
-# context (chase_risk, rsi) from the scan result into the watch map and skip
-# those names here. A CLEAN pre-breakout near its pivot is still watched.
+# require BOTH: (a) pace-aware absolute floor (default 0.7× scaled by session),
+# and (b) at least keeping up with time-of-day pace. Zero / missing volume is
+# NEVER suggested. 0.1× prints still fail closed.
+_VOL_SURGE = float(os.getenv("QT_SNIPER_VOL_SURGE", "1.0") or 1.0)
+_VOL_ABS_MIN = float(os.getenv("QT_SNIPER_VOL_ABS_MIN", "0.7") or 0.7)
+_VOL_EARLY_FRAC = float(os.getenv("QT_SNIPER_VOL_EARLY_FRAC", "0.15") or 0.15)
+# Quality gate — the sniper is a SEPARATE path from the main scanner.
+# Blow-off RSI still hard-skips. Chase/extension is SOFT by default (watch
+# still arms; scanner BUY demote remains) so Telegram fires like the earlier
+# desk — set QT_SNIPER_SKIP_CHASE=1 to restore hard skip.
 _RSI_BLOWOFF = float(os.getenv("QT_SNIPER_RSI_BLOWOFF", "82") or 82)
+_SKIP_CHASE = (os.getenv("QT_SNIPER_SKIP_CHASE", "0") or "0").strip().lower() in (
+    "1", "true", "yes", "on",
+)
 _MKT_OPEN_MIN = 9 * 60 + 15
 _MKT_CLOSE_MIN = 15 * 60 + 30
 _MKT_MINUTES = _MKT_CLOSE_MIN - _MKT_OPEN_MIN
@@ -79,14 +81,16 @@ def day_fraction(now_dt=None) -> float:
 
 def volume_confirms(cum_vol: float, avg_daily_vol: float, frac: float,
                     surge: float = _VOL_SURGE,
-                    abs_min: float = _VOL_ABS_MIN) -> bool:
+                    abs_min: float = _VOL_ABS_MIN,
+                    early_frac: float = _VOL_EARLY_FRAC) -> bool:
     """Is today's volume strong enough for a real breakout?
 
     Fail-closed on zero/missing volume. Requires:
-      1. Pace-aware absolute floor — need ≥ abs_min × max(session_frac, 0.25)
+      1. Pace-aware absolute floor — need ≥ abs_min × max(session_frac, early_frac)
          of a full average day. Blocks AUROPHARMA-style 0.1× prints, but does
          NOT demand a full day's volume by 11am (that silenced every alert).
-      2. After the open (frac ≥ 5%), also beat time-of-day pace (surge × frac).
+      2. After the open (frac ≥ 5%), also keep up with time-of-day pace
+         (surge × frac; default surge 1.0 = on-pace is enough).
     """
     if cum_vol <= 0:
         return False                  # 0-volume break → never suggest
@@ -94,9 +98,10 @@ def volume_confirms(cum_vol: float, avg_daily_vol: float, frac: float,
         return False                  # unknown avg → do not invent confirmation
     session_frac = max(0.0, min(1.0, float(frac)))
     day_ratio = cum_vol / avg_daily_vol
-    # Early bar: still insist on a meaningful open surge (≥25% of avg day when
-    # abs_min=1). Later: scale the floor with session progress up to abs_min.
-    abs_floor = float(abs_min) * max(session_frac, 0.25)
+    # Early bar: insist on a meaningful open surge (≥ early_frac × abs_min of
+    # avg day). Later: scale the floor with session progress up to abs_min.
+    floor_frac = max(session_frac, max(0.05, float(early_frac)))
+    abs_floor = float(abs_min) * floor_frac
     if day_ratio < abs_floor:
         return False
     if session_frac < 0.05:
@@ -161,7 +166,7 @@ def process_ticks(ticks: list[dict], watch: dict[int, dict],
 def _quality_skip(r: dict) -> str:
     """Non-empty reason if this scan result is too low-quality to snipe —
     the sniper's version of the scanner's demote gates. '' = fine to watch."""
-    if r.get("chase_risk"):
+    if r.get("chase_risk") and _SKIP_CHASE:
         return "extended/chase-risk (already run hard, no clean base)"
     rsi = float(r.get("rsi") or 0)
     if rsi > _RSI_BLOWOFF:
@@ -181,9 +186,9 @@ def _quality_skip(r: dict) -> str:
 
 def build_watch_map(results: list[dict]) -> dict[int, dict]:
     """Token→level map from scan results (pre-breakout ≤2.5%%) + watchlist.
-    Chase-risk / blow-off-top / zero-volume names are skipped — the sniper
-    must not fire a 'confirmed breakout' on a stock the scanner would demote
-    for quality, or on a print with no volume evidence.
+    Blow-off-top / thin-or-zero-volume names are skipped. Chase/extension is
+    soft by default (still watched) so alerts fire; set QT_SNIPER_SKIP_CHASE=1
+    to hard-skip extended names.
 
     Accepts both unified-scanner rows (categories/PreBreakout) and product
     scan-store records (signals/PRE_BREAKOUT, status Watch for breakout).
