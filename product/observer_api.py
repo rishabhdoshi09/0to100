@@ -219,6 +219,23 @@ def market_reports_workspace() -> dict[str, Any]:
     return build_market_reports_workspace(persist_today=True)
 
 
+def recommendation_detail(
+    symbol: str,
+    category_id: str = Query("", description="Optional reco category id"),
+) -> dict[str, Any]:
+    """Reco-style Performance / Thesis detail for one pick."""
+    from product.recommendation_detail import build_recommendation_detail
+    sym = str(symbol or "").strip().upper()
+    if not sym:
+        raise HTTPException(status_code=400, detail="symbol required")
+    return build_recommendation_detail(
+        sym,
+        category_id=str(category_id or ""),
+        scan_payload=core._scan_payload(),
+        long_term_payload=core._long_term_payload(),
+    )
+
+
 def compare_workspace(symbols: str = Query("", description="Comma-separated NSE symbols")) -> dict[str, Any]:
     from product.compare_workspace import build_compare_workspace
     parts = [item.strip() for item in str(symbols or "").split(",") if item.strip()]
@@ -355,6 +372,12 @@ def install(app) -> None:
         market_reports_workspace,
         methods=["GET"],
         name="market_reports_workspace",
+    )
+    app.add_api_route(
+        "/api/recommendation-detail/{symbol}",
+        recommendation_detail,
+        methods=["GET"],
+        name="recommendation_detail",
     )
     app.add_api_route(
         "/api/compare",

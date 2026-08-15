@@ -509,6 +509,64 @@ export const fetchRecommendationsWorkspace = (): Promise<RecommendationsWorkspac
   fetch('/api/recommendations-workspace', { headers: { Accept: 'application/json' } })
     .then((response) => json<RecommendationsWorkspace>(response))
 
+export type RecommendationKpi = {
+  key: string
+  label: string
+  value: number | null
+  unit: string
+  available: boolean
+  hint?: string
+  display: string
+}
+
+export type RecommendationDetail = {
+  schema_version: number
+  generated_at: string
+  symbol: string
+  company: string
+  category_id: string
+  category_label: string
+  action_badge: string
+  risk_tier: string
+  setup_label: string
+  sector: string
+  performance: {
+    entry?: number | null
+    cmp?: number | null
+    target?: number | null
+    stop?: number | null
+    upside_from_entry_pct?: number | null
+    upside_to_target_pct?: number | null
+    downside_from_cmp_pct?: number | null
+    price_tag?: string
+  }
+  kpis: {
+    profitability: RecommendationKpi[]
+    valuation: RecommendationKpi[]
+    margins: RecommendationKpi[]
+  }
+  fundamentals_ready: boolean
+  fundamentals_note: string
+  thesis: {
+    our_take: string
+    quality_factors: string[]
+    risk_flags: string[]
+    qualify_reason: string
+    classification: string
+  }
+  disclaimer: string
+}
+
+export const fetchRecommendationDetail = (
+  symbol: string,
+  categoryId = '',
+): Promise<RecommendationDetail> => {
+  const q = categoryId ? `?category_id=${encodeURIComponent(categoryId)}` : ''
+  return fetch(`/api/recommendation-detail/${encodeURIComponent(symbol)}${q}`, {
+    headers: { Accept: 'application/json' },
+  }).then((response) => json<RecommendationDetail>(response))
+}
+
 export type MarketReportItem = {
   id: string
   title: string
