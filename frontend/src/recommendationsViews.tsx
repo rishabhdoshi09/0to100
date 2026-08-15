@@ -1,6 +1,5 @@
-import './radar.css'
+import './recommendations.css'
 import { useEffect, useMemo, useState } from 'react'
-import { Panel } from './components'
 import { money, pct, relativeAge, words } from './format'
 import {
   fetchMarketReportsWorkspace,
@@ -10,9 +9,22 @@ import {
   type RecommendationsWorkspace,
   type MarketReportsWorkspace,
 } from './productApi'
-import { EmptyState, SectionTabs } from './designSystem'
 import type { ExperienceViewProps } from './experience'
 import { LiveScanBanner } from './experience'
+
+const CAT_ICONS: Record<string, string> = {
+  wealth_builders: 'W',
+  super_trends: 'S',
+  momentum_breakouts: 'B',
+  recovery_setups: 'R',
+}
+
+function badgeClass(action: string): string {
+  const a = action.toLowerCase()
+  if (a.includes('buy') || a === 'open' || a === 'tracked' || a === 'win') return ''
+  if (a.includes('closed') || a.includes('loss') || a.includes('void')) return 'is-closed'
+  return 'is-watch'
+}
 
 function CardTile({
   card,
@@ -22,51 +34,47 @@ function CardTile({
   onSelect: (symbol: string) => void
 }) {
   const upside = card.upside_from_entry_pct
-  const toTarget = card.upside_to_target_pct
-  const upsideCls =
-    upside == null ? '' : upside >= 0 ? 'reco-upside-pos' : 'reco-upside-neg'
+  const risk = (card.risk_tier || 'Medium').toLowerCase()
   return (
-    <button type="button" className="reco-card" onClick={() => onSelect(card.symbol)}>
-      <div className="reco-card-top">
-        <span className={`reco-badge reco-badge-${card.action_badge.toLowerCase().replace(/\s+/g, '-')}`}>
-          {card.action_badge}
-        </span>
-        <span className={`reco-risk reco-risk-${card.risk_tier.toLowerCase()}`}>
+    <button type="button" className="reco-pick" onClick={() => onSelect(card.symbol)}>
+      <div className="reco-pick-row1">
+        <span className={`reco-buy ${badgeClass(card.action_badge)}`}>{card.action_badge}</span>
+        <span className={`reco-risk-chip ${risk}`}>
+          <span className="reco-risk-meter" aria-hidden="true" />
           {card.risk_tier} Risk
         </span>
       </div>
-      <strong className="reco-company">{card.company || card.symbol}</strong>
-      <div className="reco-meta">
+      <h3 className="reco-pick-name">{card.company || card.symbol}</h3>
+      <div className="reco-pick-sub">
         <span>{card.symbol}</span>
-        <span className="reco-cat-tag">{card.category_label}</span>
+        <span className="reco-tag">{card.category_label}</span>
+        {card.price_tag ? <span>{card.price_tag}</span> : null}
       </div>
-      <div className="reco-prices">
-        <div>
-          <span>CMP</span>
-          <strong>{card.cmp != null ? money(card.cmp) : '—'}</strong>
-          {card.price_tag ? <small>{card.price_tag}</small> : null}
-        </div>
-        <div>
+      <div className="reco-pick-stats">
+        <div className="reco-target">
           <span>Target</span>
-          <strong>{card.target != null ? money(card.target) : '—'}</strong>
+          <strong>{card.target != null ? money(card.target, 2) : '—'}</strong>
         </div>
-        <div>
-          <span>Entry</span>
-          <strong>{card.entry != null ? money(card.entry) : '—'}</strong>
+        <div className="reco-gain">
+          {upside != null ? (
+            <>
+              <strong className={upside < 0 ? 'neg' : ''}>
+                {upside >= 0 ? '↗ ' : '↘ '}
+                {pct(upside)}
+              </strong>
+              <small>% Upside from entry</small>
+            </>
+          ) : (
+            <>
+              <strong>—</strong>
+              <small>
+                {card.cmp != null ? `CMP ${money(card.cmp, 2)}` : 'Entry not set'}
+              </small>
+            </>
+          )}
         </div>
       </div>
-      <div className={`reco-upside ${upsideCls}`}>
-        {upside != null ? (
-          <>
-            <span>{upside >= 0 ? '↗' : '↘'} {pct(upside)}</span>
-            <small>% from entry</small>
-          </>
-        ) : (
-          <small>Entry not set</small>
-        )}
-        {toTarget != null ? <em>{pct(toTarget)} to target</em> : null}
-      </div>
-      {card.reason ? <p className="reco-reason">{card.reason}</p> : null}
+      {card.reason ? <p className="reco-pick-note">{card.reason}</p> : null}
     </button>
   )
 }
@@ -117,17 +125,14 @@ export function RecommendationsView({
     if (!data || !category) return []
     const q = query.trim().toUpperCase()
     if (lifecycle === 'Closed') {
-      return (data.lifecycle.closed || []).filter((c) => {
-        if (categoryId && c.category_id && c.category_id !== categoryId) {
-          // Show all closed if category filter would empty the strip.
-          const anyInCat = data.lifecycle.closed.some((x) => x.category_id === categoryId)
-          if (anyInCat) return c.category_id === categoryId
-        }
+      const closed = data.lifecycle.closed || []
+      const anyInCat = closed.some((x) => x.category_id === categoryId)
+      return closed.filter((c) => {
+        if (anyInCat && c.category_id && c.category_id !== categoryId) return false
         if (!q) return true
         return c.symbol.includes(q) || (c.company || '').toUpperCase().includes(q)
       })
     }
-    // Active: category cards first; merge tracker actives for same category.
     const fromCat = category.cards || []
     const tracked = (data.lifecycle.active || []).filter(
       (c) => !c.category_id || c.category_id === category.id,
@@ -145,39 +150,74 @@ export function RecommendationsView({
     setActive('Stock Intelligence')
   }
 
-  if (loading) return <div className="large-empty"><strong>Loading recommendations…</strong></div>
-  if (error) return <EmptyState title="Recommendations unavailable" detail={error} />
-  if (!data || !category) return <EmptyState title="No recommendation data yet" detail="Run a market scan and long-term refresh first." />
-
-  const catTabs = data.categories.map((c) => `${c.label} (${c.count})`)
-  const activeCatLabel = `${category.label} (${category.count})`
+  if (loading) {
+    return (
+      <div className="reco-light">
+        <div className="reco-empty"><strong>Loading recommendations…</strong></div>
+      </div>
+    )
+  }
+  if (error || !data || !category) {
+    return (
+      <div className="reco-light">
+        <div className="reco-empty">
+          <strong>{error || 'No recommendation data yet'}</strong>
+          <p>Run a market scan and long-term refresh first.</p>
+        </div>
+      </div>
+    )
+  }
 
   return (
-    <div className="reco-desk">
+    <div className="reco-light">
       <LiveScanBanner scan={marketScan} depth={depth} label="Market scan" />
       <LiveScanBanner scan={longTermScan} depth={depth} label="Long-term scan" />
-      <Panel
-        title={category.label}
-        subtitle={category.blurb}
-      >
-        <div className="reco-cmp-note" role="status">
-          <span aria-hidden="true">⚠</span>
-          <span>{data.cmp_note}</span>
+
+      <nav className="reco-crumb" aria-label="Breadcrumb">
+        <button type="button" onClick={() => setActive('Home')}>Home</button>
+        <span>›</span>
+        <button type="button" onClick={() => setLifecycle('Active')}>Recommendations</button>
+        <span>›</span>
+        <strong>{category.label}</strong>
+      </nav>
+
+      <header className="reco-hero">
+        <div className="reco-hero-icon" aria-hidden="true">
+          {CAT_ICONS[category.id] || '•'}
+        </div>
+        <div>
+          <h2>{category.label}</h2>
+          <p>{category.blurb}</p>
+        </div>
+      </header>
+
+      <div className="reco-cat-rail" role="tablist" aria-label="Recommendation categories">
+        {data.categories.map((c) => (
+          <button
+            key={c.id}
+            type="button"
+            role="tab"
+            aria-selected={c.id === category.id}
+            className={c.id === category.id ? 'active' : ''}
+            onClick={() => setCategoryId(c.id)}
+          >
+            {c.label} · {c.count}
+          </button>
+        ))}
+      </div>
+
+      <div className="reco-cmp-banner" role="status">
+        <span className="ico" aria-hidden="true">!</span>
+        <div>
+          <div>{data.cmp_note}</div>
           {data.scan_scanned_at ? (
-            <em>Scan {relativeAge(data.scan_scanned_at)}</em>
+            <em>Last scan {relativeAge(data.scan_scanned_at)}</em>
           ) : null}
         </div>
+      </div>
 
-        <SectionTabs
-          tabs={catTabs}
-          active={activeCatLabel}
-          onChange={(tab) => {
-            const match = data.categories.find((c) => tab.startsWith(c.label))
-            if (match) setCategoryId(match.id)
-          }}
-        />
-
-        <div className="reco-toolbar">
+      <div className="reco-controls">
+        <div className="reco-search-wrap">
           <input
             type="search"
             placeholder="Search stocks"
@@ -185,42 +225,69 @@ export function RecommendationsView({
             onChange={(e) => setQuery(e.target.value)}
             aria-label="Search stocks"
           />
-          <div className="reco-lifecycle" role="tablist" aria-label="Lifecycle">
-            {(['Active', 'Closed'] as const).map((tab) => (
-              <button
-                key={tab}
-                type="button"
-                role="tab"
-                aria-selected={lifecycle === tab}
-                className={lifecycle === tab ? 'active' : ''}
-                onClick={() => setLifecycle(tab)}
-              >
-                {tab}
-                {tab === 'Active' ? ` · ${data.lifecycle.active_count}` : ` · ${data.lifecycle.closed_count}`}
-              </button>
-            ))}
-          </div>
+          <button type="button" className="reco-filter-btn" aria-label="Filters" title="Filters">
+            ☰
+          </button>
         </div>
+        <div className="reco-life-toggle" role="tablist" aria-label="Lifecycle">
+          {(['Active', 'Closed'] as const).map((tab) => (
+            <button
+              key={tab}
+              type="button"
+              role="tab"
+              aria-selected={lifecycle === tab}
+              className={lifecycle === tab ? 'active' : ''}
+              onClick={() => setLifecycle(tab)}
+            >
+              {tab}
+            </button>
+          ))}
+        </div>
+      </div>
 
-        {cards.length === 0 ? (
-          <EmptyState
-            title={lifecycle === 'Closed' ? 'No closed picks in this category yet.' : category.empty_detail || 'No active picks in this category yet.'}
-            detail={lifecycle === 'Active' ? 'Evidence filter found no matches in the current scan.' : 'Closed outcomes appear after tracked picks exit or signals resolve.'}
-          />
-        ) : (
-          <div className="reco-grid">
-            {cards.map((card) => (
-              <CardTile key={`${card.lifecycle}-${card.symbol}-${card.setup_label}`} card={card} onSelect={onSelect} />
-            ))}
-          </div>
-        )}
-        <p className="reco-disclaimer">{data.disclaimer}</p>
-      </Panel>
+      {cards.length === 0 ? (
+        <div className="reco-empty">
+          <strong>
+            {lifecycle === 'Closed'
+              ? 'No closed picks in this category yet.'
+              : 'No active picks in this category yet.'}
+          </strong>
+          <p>
+            {lifecycle === 'Active'
+              ? (category.empty_detail || 'Evidence filter found no matches in the current scan.')
+              : 'Closed outcomes appear after tracked picks exit or signals resolve.'}
+          </p>
+        </div>
+      ) : (
+        <div className="reco-card-stack">
+          {cards.map((card) => (
+            <CardTile
+              key={`${card.lifecycle}-${card.symbol}-${card.setup_label}-${card.category_id}`}
+              card={card}
+              onSelect={onSelect}
+            />
+          ))}
+        </div>
+      )}
+      <p className="reco-foot">{data.disclaimer}</p>
     </div>
   )
 }
 
-export function MarketReportsView(_props: ExperienceViewProps) {
+function formatReportDate(value: string): string {
+  if (!value) return ''
+  try {
+    const d = new Date(value.length <= 10 ? `${value}T12:00:00` : value)
+    if (Number.isNaN(d.getTime())) return words(value)
+    return d.toLocaleDateString('en-IN', {
+      day: 'numeric', month: 'long', year: 'numeric',
+    }).toUpperCase()
+  } catch {
+    return words(value)
+  }
+}
+
+export function MarketReportsView({ setActive }: ExperienceViewProps) {
   const [data, setData] = useState<MarketReportsWorkspace | null>(null)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(true)
@@ -261,17 +328,41 @@ export function MarketReportsView(_props: ExperienceViewProps) {
     )
   }, [data, query])
 
-  if (loading) return <div className="large-empty"><strong>Loading market reports…</strong></div>
-  if (error) return <EmptyState title="Market reports unavailable" detail={error} />
-  if (!data) return <EmptyState title="No reports yet" />
+  if (loading) {
+    return (
+      <div className="reco-light">
+        <div className="reco-empty"><strong>Loading market reports…</strong></div>
+      </div>
+    )
+  }
+  if (error || !data) {
+    return (
+      <div className="reco-light">
+        <div className="reco-empty">
+          <strong>{error || 'No reports yet'}</strong>
+        </div>
+      </div>
+    )
+  }
 
   const pulse = data.today_pulse || {}
   const takeaways = (pulse.takeaways as string[] | undefined) || []
 
   return (
-    <div className="reco-desk market-reports-desk">
-      <Panel title={data.title} subtitle={data.blurb}>
-        <div className="reco-toolbar">
+    <div className="reco-light market-reports-desk">
+      <nav className="reco-crumb" aria-label="Breadcrumb">
+        <button type="button" onClick={() => setActive('Home')}>Home</button>
+        <span>›</span>
+        <strong>Market Reports</strong>
+      </nav>
+
+      <header className="rw-reports-hero">
+        <h1>{data.title}</h1>
+        <p>{data.blurb}</p>
+      </header>
+
+      <div className="reco-controls">
+        <div className="reco-search-wrap">
           <input
             type="search"
             placeholder="Search reports"
@@ -279,59 +370,66 @@ export function MarketReportsView(_props: ExperienceViewProps) {
             onChange={(e) => setQuery(e.target.value)}
             aria-label="Search reports"
           />
+          <button type="button" className="reco-filter-btn" aria-label="Filters" title="Filters">
+            ☰
+          </button>
         </div>
+      </div>
 
-        <div className="market-reports-layout">
-          <ul className="market-reports-list">
-            {reports.length === 0 ? (
-              <li className="market-reports-empty">No reports match this search.</li>
-            ) : (
-              reports.map((r) => (
-                <li key={r.id}>
-                  <button
-                    type="button"
-                    className={selected?.id === r.id ? 'active' : ''}
-                    onClick={() => setSelected(r)}
-                  >
-                    <strong>{r.title}</strong>
-                    <span>{words(r.date)}</span>
-                    {r.is_new ? <em className="market-report-new">{r.badge || 'New market report'}</em> : null}
-                    <small>{r.summary}</small>
-                  </button>
-                </li>
-              ))
-            )}
-          </ul>
-
-          <div className="market-report-detail">
-            {selected ? (
-              <>
-                <header>
-                  <h2>{selected.title}</h2>
-                  <p>{words(selected.date)}</p>
-                </header>
-                {takeaways.length > 0 && selected.is_new ? (
-                  <ul className="market-pulse-takeaways">
-                    {takeaways.map((t) => <li key={t}>{t}</li>)}
-                  </ul>
-                ) : (
-                  <p>{selected.summary}</p>
-                )}
-                {Array.isArray(pulse.breakouts_today) && pulse.breakouts_today.length > 0 ? (
-                  <div className="market-pulse-block">
-                    <h3>Breakouts in focus</h3>
-                    <p>{pulse.breakouts_today.map((b: { symbol?: string }) => b.symbol).filter(Boolean).join(', ')}</p>
-                  </div>
+      <ul className="rw-report-list">
+        {reports.length === 0 ? (
+          <li>
+            <button type="button" disabled>
+              <strong>No reports match this search.</strong>
+            </button>
+          </li>
+        ) : (
+          reports.map((r) => (
+            <li key={r.id}>
+              <button
+                type="button"
+                className={`${selected?.id === r.id ? 'active' : ''} ${r.is_new ? 'is-new' : ''}`}
+                onClick={() => setSelected(r)}
+              >
+                <strong>{r.title}</strong>
+                <span className="date">{formatReportDate(r.date)}</span>
+                {r.is_new ? (
+                  <em className="rw-report-new">{r.badge || 'New market report'}</em>
                 ) : null}
-              </>
-            ) : (
-              <EmptyState title="Select a report" detail="Choose a Market Pulse entry from the list." />
-            )}
-          </div>
+                <small>{r.summary}</small>
+              </button>
+            </li>
+          ))
+        )}
+      </ul>
+
+      {selected ? (
+        <div className="rw-report-detail">
+          <h2>{selected.title}</h2>
+          <p className="when">{formatReportDate(selected.date)}</p>
+          {takeaways.length > 0 && selected.is_new ? (
+            <ul>
+              {takeaways.map((t) => <li key={t}>{t}</li>)}
+            </ul>
+          ) : (
+            <p>{selected.summary}</p>
+          )}
+          {Array.isArray(pulse.breakouts_today) && pulse.breakouts_today.length > 0 ? (
+            <>
+              <h3>Breakouts in focus</h3>
+              <p>
+                {pulse.breakouts_today
+                  .map((b: { symbol?: string }) => b.symbol)
+                  .filter(Boolean)
+                  .join(', ')}
+              </p>
+            </>
+          ) : null}
         </div>
-        <p className="reco-disclaimer">{data.disclaimer}</p>
-        {data.error ? <p className="reco-disclaimer">Pulse note: {data.error}</p> : null}
-      </Panel>
+      ) : null}
+
+      <p className="reco-foot">{data.disclaimer}</p>
+      {data.error ? <p className="reco-foot">Pulse note: {data.error}</p> : null}
     </div>
   )
 }
