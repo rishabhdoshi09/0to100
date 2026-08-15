@@ -1,11 +1,15 @@
 import './recommendations.css'
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
+import { createPortal } from 'react-dom'
 import { money, pct, relativeAge, words } from './format'
 import {
   fetchMarketReportsWorkspace,
+  fetchRecommendationDetail,
   fetchRecommendationsWorkspace,
   type MarketReportItem,
   type RecommendationCard,
+  type RecommendationDetail,
+  type RecommendationKpi,
   type RecommendationsWorkspace,
   type MarketReportsWorkspace,
 } from './productApi'
@@ -19,6 +23,8 @@ const CAT_ICONS: Record<string, string> = {
   recovery_setups: 'R',
 }
 
+type KpiTab = 'profitability' | 'valuation' | 'margins'
+
 function badgeClass(action: string): string {
   const a = action.toLowerCase()
   if (a.includes('buy') || a === 'open' || a === 'tracked' || a === 'win') return ''
@@ -31,6 +37,253 @@ function initials(name: string, symbol: string): string {
   const parts = base.split(/\s+/).filter(Boolean)
   if (parts.length >= 2) return (parts[0][0] + parts[1][0]).toUpperCase()
   return (symbol || base).slice(0, 2).toUpperCase()
+}
+
+function MetricTile({
+  label,
+  value,
+  tone,
+  badge,
+}: {
+  label: string
+  value: string
+  tone: 'entry' | 'current' | 'target'
+  badge?: string
+}) {
+  return (
+    <div className={`rw-metric-tile tone-${tone}`}>
+      <span className="dot" aria-hidden="true" />
+      <span className="lbl">{label}</span>
+      <strong>{value}</strong>
+      {badge ? <em className="badge">{badge}</em> : null}
+    </div>
+  )
+}
+
+function KpiList({ rows }: { rows: RecommendationKpi[] }) {
+  if (!rows.length) return <p className="rw-kpi-empty">No metrics in this group.</p>
+  return (
+    <ul className="rw-kpi-list">
+      {rows.map((row) => (
+        <li key={row.key}>
+          <div className="rw-kpi-name">
+            <span>{row.label}</span>
+            {row.hint ? <abbr title={row.hint}>i</abbr> : null}
+          </div>
+          <strong className={row.available ? '' : 'missing'}>{row.display}</strong>
+        </li>
+      ))}
+    </ul>
+  )
+}
+
+function PickDetailSheet({
+  symbol,
+  categoryId,
+  onClose,
+  onOpenIntel,
+}: {
+  symbol: string
+  categoryId: string
+  onClose: () => void
+  onOpenIntel: (symbol: string) => void
+}) {
+  const [detail, setDetail] = useState<RecommendationDetail | null>(null)
+  const [error, setError] = useState('')
+  const [loading, setLoading] = useState(true)
+  const [mainTab, setMainTab] = useState<'performance' | 'thesis'>('performance')
+  const [kpiTab, setKpiTab] = useState<KpiTab>('profitability')
+
+  useEffect(() => {
+    let cancelled = false
+    setLoading(true)
+    fetchRecommendationDetail(symbol, categoryId)
+      .then((payload) => {
+        if (!cancelled) {
+          setDetail(payload)
+          setError('')
+        }
+      })
+      .catch((err: Error) => {
+        if (!cancelled) setError(err.message || 'Failed to load detail')
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [symbol, categoryId])
+
+  const kpiRows = detail?.kpis?.[kpiTab] || []
+  const perf = detail?.performance
+  const upsideBadge =
+    perf?.upside_from_entry_pct != null
+      ? `${perf.upside_from_entry_pct >= 0 ? '' : ''}${pct(perf.upside_from_entry_pct)} Upside`
+      : undefined
+
+  return createPortal(
+    <div className="reco-light rw-sheet-backdrop" role="presentation" onClick={onClose}>
+      <div
+        className="rw-sheet"
+        role="dialog"
+        aria-modal="true"
+        aria-label={`${symbol} recommendation detail`}
+        onClick={(e) => e.stopPropagation()}
+      >
+        {loading ? (
+          <div className="rw-sheet-loading">Loading detail…</div>
+        ) : error || !detail ? (
+          <div className="rw-sheet-loading">
+            <strong>{error || 'Detail unavailable'}</strong>
+            <button type="button" className="rw-sheet-close" onClick={onClose}>Close</button>
+          </div>
+        ) : (
+          <>
+            <header className="rw-sheet-hero">
+              <div className="rw-sheet-hero-top">
+                <span className={`reco-buy ${badgeClass(detail.action_badge)}`}>{detail.action_badge}</span>
+                <button type="button" className="rw-sheet-x" onClick={onClose} aria-label="Close">×</button>
+              </div>
+              <div className="rw-sheet-identity">
+                <div className="reco-avatar light">{initials(detail.company, detail.symbol)}</div>
+                <div>
+                  <h2>{detail.company}</h2>
+                  <div className="ticker">{detail.symbol}</div>
+                </div>
+              </div>
+              <div className="rw-sheet-tags">
+                {detail.category_label ? <span className="tag cat">{detail.category_label}</span> : null}
+                <span className={`tag risk ${(detail.risk_tier || '').toLowerCase()}`}>
+                  {detail.risk_tier} Risk
+                </span>
+              </div>
+            </header>
+
+            <div className="rw-sheet-tabs" role="tablist">
+              <button
+                type="button"
+                role="tab"
+                className={mainTab === 'performance' ? 'active' : ''}
+                onClick={() => setMainTab('performance')}
+              >
+                Performance
+              </button>
+              <button
+                type="button"
+                role="tab"
+                className={mainTab === 'thesis' ? 'active' : ''}
+                onClick={() => setMainTab('thesis')}
+              >
+                Thesis
+              </button>
+            </div>
+
+            <div className="rw-sheet-body">
+              {mainTab === 'performance' ? (
+                <>
+                  <section className="rw-section">
+                    <h3>Performance Metrics</h3>
+                    <p className="sub">Entry, current, and target from this setup — never invented.</p>
+                    <div className="rw-metric-grid">
+                      <MetricTile
+                        label="Entry Price"
+                        value={perf?.entry != null ? money(perf.entry, 2) : '—'}
+                        tone="entry"
+                      />
+                      <MetricTile
+                        label="Current Price"
+                        value={perf?.cmp != null ? money(perf.cmp, 2) : '—'}
+                        tone="current"
+                        badge={perf?.price_tag || undefined}
+                      />
+                      <MetricTile
+                        label="Target Price"
+                        value={perf?.target != null ? money(perf.target, 2) : '—'}
+                        tone="target"
+                        badge={upsideBadge}
+                      />
+                    </div>
+                  </section>
+
+                  {perf?.stop != null ? (
+                    <section className="rw-section rw-stop-card">
+                      <h3>Stop Loss Protection</h3>
+                      <p className="sub">Downside protection level on this setup.</p>
+                      <div className="rw-stop-row">
+                        <span>Downside protection level</span>
+                        <div>
+                          <strong>{money(perf.stop, 2)}</strong>
+                          {perf.downside_from_cmp_pct != null ? (
+                            <small>{pct(perf.downside_from_cmp_pct)} from current</small>
+                          ) : null}
+                        </div>
+                      </div>
+                    </section>
+                  ) : null}
+
+                  <section className="rw-section">
+                    <h3>Key Performance Indicators</h3>
+                    <p className="sub">Profitability, valuation, and margins from verified fundamentals.</p>
+                    <div className="rw-kpi-toggle" role="tablist" aria-label="KPI group">
+                      {([
+                        ['profitability', 'Profitability'],
+                        ['valuation', 'Valuation'],
+                        ['margins', 'Margins'],
+                      ] as const).map(([id, label]) => (
+                        <button
+                          key={id}
+                          type="button"
+                          role="tab"
+                          className={kpiTab === id ? 'active' : ''}
+                          onClick={() => setKpiTab(id)}
+                        >
+                          {label}
+                        </button>
+                      ))}
+                    </div>
+                    <div className="rw-kpi-panel">
+                      <div className="rw-kpi-heading">{kpiTab[0].toUpperCase() + kpiTab.slice(1)}</div>
+                      <KpiList rows={kpiRows} />
+                      <p className="rw-fund-note">{detail.fundamentals_note}</p>
+                    </div>
+                  </section>
+                </>
+              ) : (
+                <>
+                  <section className="rw-section rw-report-link">
+                    <div>
+                      <strong>Full research context</strong>
+                      <p>Open Stock Intelligence for charts, news, and the full verified pack.</p>
+                    </div>
+                    <button type="button" onClick={() => onOpenIntel(detail.symbol)}>Open →</button>
+                  </section>
+                  <section className="rw-section">
+                    <span className="rw-our-take">Our take</span>
+                    <p className="rw-thesis-body">{detail.thesis.our_take}</p>
+                    {detail.thesis.quality_factors.length > 0 ? (
+                      <>
+                        <h4>Quality factors</h4>
+                        <ul>{detail.thesis.quality_factors.map((f) => <li key={f}>{f}</li>)}</ul>
+                      </>
+                    ) : null}
+                    {detail.thesis.risk_flags.length > 0 ? (
+                      <>
+                        <h4>What can go wrong</h4>
+                        <ul>{detail.thesis.risk_flags.map((f) => <li key={f}>{f}</li>)}</ul>
+                      </>
+                    ) : null}
+                  </section>
+                </>
+              )}
+              <p className="rw-sheet-disclaimer">{detail.disclaimer}</p>
+            </div>
+          </>
+        )}
+      </div>
+    </div>,
+    document.body,
+  )
 }
 
 function CardTile({
@@ -162,6 +415,7 @@ export function RecommendationsView({
   const [categoryId, setCategoryId] = useState('wealth_builders')
   const [lifecycle, setLifecycle] = useState<'Active' | 'Closed'>('Active')
   const [query, setQuery] = useState('')
+  const [detailSymbol, setDetailSymbol] = useState<string | null>(null)
 
   useEffect(() => {
     let cancelled = false
@@ -208,6 +462,11 @@ export function RecommendationsView({
   }, [data, category, lifecycle, query])
 
   const onSelect = (symbol: string) => {
+    setDetailSymbol(symbol)
+  }
+
+  const onOpenIntel = (symbol: string) => {
+    setDetailSymbol(null)
     setSelected(symbol)
     setActive('Stock Intelligence')
   }
@@ -332,6 +591,14 @@ export function RecommendationsView({
         </div>
       )}
       <p className="reco-foot">{data.disclaimer}</p>
+      {detailSymbol ? (
+        <PickDetailSheet
+          symbol={detailSymbol}
+          categoryId={category.id}
+          onClose={() => setDetailSymbol(null)}
+          onOpenIntel={onOpenIntel}
+        />
+      ) : null}
     </DeskShell>
   )
 }
