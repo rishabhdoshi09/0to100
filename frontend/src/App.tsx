@@ -482,7 +482,7 @@ function App() {
   }
 
   return (
-    <div className="terminal-root hud-shell">
+    <div className="terminal-root">
       <MarketSidebar active={active} setActive={setActive} dashboard={dashboard} />
       <main className="workspace">
         <header className="topbar">
