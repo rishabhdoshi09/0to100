@@ -4,11 +4,17 @@ Maps QuantTerm evidence into named research categories (Wealth Builders,
 Super Trends, Momentum Breakouts, Recovery Setups) plus Active/Closed
 lifecycle strips from long-term + signal-outcome trackers.
 
+Productisation (Reco lesson, QuantTerm engine):
+  complexity stays inside the scanner / EV / breadth / live-edge;
+  the customer sees a decision card (entry, target, stop, why now,
+  what changes our mind) with See Evidence for the machinery.
+
 Honest rules:
   - Empty category → empty list (never fabricate picks)
   - Prices/upside from real entry/target/price fields only
   - CMP freshness tags come from live_technicals when available
   - Each scan symbol gets ONE primary category (no multi-bucket spam)
+  - Expected payoff / Strong evidence require live sample size (≥30)
 """
 from __future__ import annotations
 
@@ -17,6 +23,12 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from product.breakout_quality import RSI_HARD, passes_volume_floor
+from product.decision_card import (
+    HORIZON_BY_CATEGORY,
+    attach_live_ev,
+    build_desk_context,
+    decision_surface,
+)
 from product.radar_workspace import (
     enrich_long_term_row,
     enrich_scan_row,
@@ -143,16 +155,26 @@ def card_from_row(
     category_label: str,
     qualify_reason: str = "",
     evidence_tags: Sequence[str] | None = None,
+    market_ctx: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     ups = upside_metrics(row)
     tags = [str(t) for t in (evidence_tags or []) if t]
     reason = qualify_reason or str(row.get("reason") or "")
+    badge = _action_badge(row, category_id=category_id)
+    surface = decision_surface(
+        row,
+        category_id=category_id,
+        action_badge=badge,
+        qualify_reason=reason,
+        evidence_tags=tags,
+        market_ctx=market_ctx,
+    )
     return {
         "symbol": str(row.get("symbol") or "").upper(),
         "company": str(row.get("company") or row.get("symbol") or ""),
         "category_id": category_id,
         "category_label": category_label,
-        "action_badge": _action_badge(row, category_id=category_id),
+        "action_badge": badge,
         "risk_tier": risk_tier(row),
         "risk_label": str(row.get("risk_label") or risk_tier(row)),
         "setup_label": str(row.get("setup_label") or row.get("status") or row.get("classification") or ""),
@@ -167,6 +189,7 @@ def card_from_row(
         "evidence_tags": tags,
         "lifecycle": "active",
         **ups,
+        **surface,
     }
 
 
@@ -392,9 +415,50 @@ def _empty_detail_for(
     return "No matching setups in the current scan / long-term shortlist."
 
 
+def _empty_decision_fields(action_badge: str, category_id: str) -> dict[str, Any]:
+    """Lifecycle rows still render on the Reco card without inventing prices/EV."""
+    return {
+        "stop": None,
+        "buy_zone_low": None,
+        "buy_zone_high": None,
+        "horizon": HORIZON_BY_CATEGORY.get(category_id, ""),
+        "opportunity_label": (
+            "TRACKED" if action_badge in {"Tracked", "Open"}
+            else "CLOSED" if action_badge in {"Closed", "Win", "Loss", "Void"}
+            else "WATCH"
+        ),
+        "expected_payoff": "Unproven",
+        "expected_payoff_detail": "Lifecycle row — expected payoff is not restated here.",
+        "evidence": "Thin",
+        "strategy_health": "Unmeasured",
+        "strategy_health_detail": "",
+        "market_support": "Unmeasured",
+        "market_support_detail": "",
+        "why_now": [],
+        "what_changes_mind": [],
+        "next_step": "Open the deeper research for the live plan.",
+        "evidence_panel": {
+            "sample_size": None,
+            "ev_pct": None,
+            "ev_lb_pct": None,
+            "p_win": None,
+            "confidence": None,
+            "score": None,
+            "rsi": None,
+            "volume_ratio": None,
+            "signals": [],
+            "price_tag": "",
+            "tech_source": "",
+            "fundamental_coverage": None,
+            "provenance": "Long-term / signal-outcome tracker — not a fresh scan card.",
+        },
+    }
+
+
 def _bucket_rows(
     scan_rows: Sequence[Mapping[str, Any]],
     lt_rows: Sequence[Mapping[str, Any]],
+    market_ctx: Mapping[str, Any] | None = None,
 ) -> dict[str, list[dict[str, Any]]]:
     wealth: list[dict[str, Any]] = []
     for r in lt_rows:
@@ -407,6 +471,7 @@ def _bucket_rows(
             category_label="Wealth Builders",
             qualify_reason=why,
             evidence_tags=tags,
+            market_ctx=market_ctx,
         ))
     wealth.sort(key=lambda c: (
         0 if "COMPOUNDER" in str(c.get("setup_label") or "") else
@@ -431,6 +496,7 @@ def _bucket_rows(
             category_label=labels[cat_id],
             qualify_reason=why,
             evidence_tags=tags,
+            market_ctx=market_ctx,
         )
         if cat_id == "momentum_breakouts":
             breakouts.append(card)
@@ -488,6 +554,7 @@ def _tracker_lifecycle() -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
                 ),
                 "upside_to_target_pct": None,
                 "reason": str(p.get("thesis") or "")[:160],
+                **_empty_decision_fields("Tracked", "wealth_builders"),
             }
             active.append(card)
         for p in exited_picks(limit=40):
@@ -514,6 +581,7 @@ def _tracker_lifecycle() -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
                 ),
                 "upside_to_target_pct": None,
                 "reason": str(p.get("exit_reason") or p.get("thesis") or "")[:160],
+                **_empty_decision_fields("Closed", "wealth_builders"),
             })
     except Exception:
         pass
@@ -539,6 +607,7 @@ def _tracker_lifecycle() -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
                 "entry": entry or None,
                 "target": target or None,
                 "reason": f"Logged {s.get('logged_at') or ''}".strip(),
+                **_empty_decision_fields("Open", "momentum_breakouts"),
             }
             if worked is None:
                 active.append({
@@ -561,6 +630,10 @@ def _tracker_lifecycle() -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
                         round(_f(s.get("outcome_pct")), 1) if s.get("outcome_pct") is not None else None
                     ),
                     "upside_to_target_pct": None,
+                    **_empty_decision_fields(
+                        "Win" if worked == 1 else ("Void" if worked == -1 else "Loss"),
+                        "momentum_breakouts",
+                    ),
                 })
     except Exception:
         pass
@@ -595,7 +668,9 @@ def build_recommendations_workspace(
         except Exception:
             pass
 
-    buckets = _bucket_rows(scan_rows, lt_rows)
+    attach_live_ev(scan_rows)
+    desk = build_desk_context(scan_rows)
+    buckets = _bucket_rows(scan_rows, lt_rows, market_ctx=desk)
     active, closed = _tracker_lifecycle()
 
     categories = []
@@ -619,7 +694,7 @@ def build_recommendations_workspace(
         cmp_note = "Scan file is a PRIOR-DAY SNAPSHOT — run a fresh market scan before acting. " + cmp_note
 
     return {
-        "schema_version": 2,
+        "schema_version": 3,
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "scan_scanned_at": scan_at,
         "long_term_scanned_at": lt_at,
@@ -630,6 +705,7 @@ def build_recommendations_workspace(
             "exclusive_primary: momentum_breakouts > recovery_setups > super_trends; "
             "wealth_builders from long-term quality only"
         ),
+        "desk": desk,
         "categories": categories,
         "lifecycle": {
             "active": active[:60],
@@ -639,7 +715,8 @@ def build_recommendations_workspace(
         },
         "disclaimer": (
             "Research categories from QuantTerm evidence — not broker recommendations, "
-            "not a promise of returns, not Reco Wealth."
+            "not a promise of returns, not Reco Wealth. Expected payoff stays Unproven "
+            "until ≥30 comparable outcomes exist."
         ),
     }
 

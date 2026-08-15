@@ -88,7 +88,7 @@ def test_categories_project_from_scan_and_long_term_without_invention():
         scan_payload=scan, long_term_payload=long_term, refresh_technicals=False,
     )
     by_id = {c["id"]: c for c in payload["categories"]}
-    assert payload["schema_version"] == 2
+    assert payload["schema_version"] == 3
     assert by_id["wealth_builders"]["count"] == 1
     assert by_id["wealth_builders"]["cards"][0]["symbol"] == "QUAL"
     assert "coverage" in (by_id["wealth_builders"]["cards"][0].get("qualify_reason") or "").lower()
@@ -101,8 +101,17 @@ def test_categories_project_from_scan_and_long_term_without_invention():
     card = card_from_row(scan["records"][0], category_id="super_trends", category_label="Super Trends")
     assert card["action_badge"] == "Buy"
     assert card["upside_from_entry_pct"] == 10.0
+    assert card["opportunity_label"] == "OPPORTUNITY"
+    assert card["buy_zone_low"] == 100.0
+    assert card["buy_zone_high"] == 100.0
+    assert card["stop"] == 95.0
+    assert card["expected_payoff"] == "Unproven"
+    assert card["evidence"] == "Thin"
+    assert "Momentum improving" in card["why_now"]
+    assert any("95" in item for item in card["what_changes_mind"])
     assert "lifecycle" in payload
     assert payload["disclaimer"]
+    assert payload["desk"]["market_support"] == "Unmeasured"
 
 
 def test_scan_categories_are_exclusive_primary():
@@ -211,3 +220,86 @@ def test_market_reports_lists_today_pulse(tmp_path, monkeypatch):
     assert payload["reports"][0]["title"] == "Market Pulse"
     assert (tmp_path / list(tmp_path.glob("market_pulse_*.json"))[0]).exists()
     assert "Nifty" in payload["reports"][0]["summary"]
+
+
+def test_buy_zone_requires_real_entry_and_uses_atr_when_present():
+    from product.decision_card import buy_zone, expected_payoff, evidence_strength
+
+    assert buy_zone({"price": 110}) == (None, None)
+    lo, hi = buy_zone({"entry": 100, "atr_pct": 4, "price": 100, "stop": 90})
+    assert lo == 98.0  # 100 - 0.5*4
+    assert hi == 102.0
+    # Zone never drops through the stop.
+    lo2, hi2 = buy_zone({"entry": 100, "atr_pct": 40, "price": 100, "stop": 99})
+    assert lo2 >= 99
+    assert hi2 >= lo2
+    label, detail = expected_payoff({"price": 100, "entry": 100, "stop": 95})
+    assert label == "Unproven"
+    assert "30" in detail
+    assert expected_payoff({"ev_n": 80, "ev_lb_pct": 1.4, "ev_conf": "HIGH"})[0] == "Positive"
+    assert expected_payoff({"ev_n": 80, "ev_lb_pct": -0.8, "ev_conf": "MEDIUM"})[0] == "Negative"
+    assert expected_payoff({"ev_n": 12, "ev_lb_pct": 9.9, "ev_conf": "HIGH"})[0] == "Unproven"
+    assert evidence_strength({"ev_n": 80, "ev_conf": "HIGH"}) == "Strong"
+    assert evidence_strength({"ev_n": 80, "ev_conf": "MEDIUM"}) == "Moderate"
+    assert evidence_strength({"score": 90, "breakout_grade": "A"}) == "Moderate"
+    assert evidence_strength({"score": 90}) == "Thin"
+
+
+def test_decision_card_keeps_quant_machinery_behind_evidence_panel():
+    from product.decision_card import decision_surface
+
+    surface = decision_surface(
+        {
+            "symbol": "ABC",
+            "signals": ["MOMENTUM", "GOLDEN_CROSS"],
+            "reasons": ["RS leadership"],
+            "price": 1200, "entry": 1180, "target": 1310, "stop": 1135,
+            "atr_pct": 2.0, "volume_ratio": 1.6, "above_sma50": True,
+            "sector": "Banks", "rsi": 58, "score": 72,
+            "ev_n": 80, "ev_lb_pct": 1.2, "ev_pct": 1.8, "p_win": 61.0,
+            "ev_conf": "HIGH",
+        },
+        category_id="super_trends",
+        action_badge="Buy",
+        qualify_reason="Trend momentum",
+        market_ctx={
+            "market_support": "Positive",
+            "market_support_detail": "HEALTHY breadth",
+            "strategy_health": "Normal",
+            "strategy_health_detail": "Live expectancy +0.20R",
+            "signal_health": {
+                "MOMENTUM": {"health": "Normal", "n": 90, "expectancy_r": 0.22},
+            },
+        },
+    )
+    assert surface["opportunity_label"] == "OPPORTUNITY"
+    assert surface["buy_zone_low"] == 1168.0  # 1180 - 0.5*(1200*0.02)
+    assert surface["buy_zone_high"] == 1192.0
+    assert surface["stop"] == 1135.0
+    assert surface["expected_payoff"] == "Positive"
+    assert surface["evidence"] == "Strong"
+    assert surface["strategy_health"] == "Normal"
+    assert surface["market_support"] == "Positive"
+    assert surface["horizon"] == "3–9 months"
+    assert "Momentum improving" in surface["why_now"]
+    assert "Volume confirmation" in surface["why_now"]
+    assert any("1,135" in item or "1135" in item for item in surface["what_changes_mind"])
+    assert any("Banks" in item for item in surface["what_changes_mind"])
+    panel = surface["evidence_panel"]
+    assert panel["sample_size"] == 80
+    assert panel["ev_lb_pct"] == 1.2
+    assert "MOMENTUM" in panel["signals"]
+    assert "30" in panel["provenance"]
+
+
+def test_desk_context_breadth_gate_and_healthy_tape():
+    from product.decision_card import build_desk_context
+
+    thin = build_desk_context([{"change_pct": 1, "above_sma50": True}] * 40)
+    assert thin["market_support"] == "Unmeasured"
+    healthy_rows = [
+        {"change_pct": 1.2, "above_sma50": True, "above_sma200": True}
+        for _ in range(320)
+    ]
+    healthy = build_desk_context(healthy_rows)
+    assert healthy["market_support"] == "Positive"
