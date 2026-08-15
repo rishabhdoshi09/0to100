@@ -21,6 +21,10 @@ HORIZON_BY_CATEGORY = {
     "recovery_setups": "3–12 months",
 }
 
+_SKIP_WHY_TAGS = frozenset({
+    "QUALITY_COMPOUNDER", "GARP_CANDIDATE", "QUALITY_BUT_EXPENSIVE",
+    "NEEDS_FUNDAMENTALS",
+})
 _WHY_NOW_LABELS = {
     "BREAKOUT_52W": "52-week high breakout",
     "BREAKOUT_RES": "Resistance break with volume",
@@ -39,6 +43,12 @@ _WHY_NOW_LABELS = {
     "POCKET_PIVOT": "Pocket-pivot volume",
     "MOMENTUM": "Momentum improving",
     "PULLBACK_SUPPORT": "Pullback to support in an uptrend",
+    "NEAR_BREAKOUT": "Price is near the breakout pivot",
+    "CONFIRMED_BREAKOUT": "Breakout is confirmed",
+    "BREAKOUT_UNDER_OBSERVATION": "Breakout is under observation",
+    "STRONG_ACTIONABLE": "Setup is ready to trade",
+    "STEADY_LEADERSHIP": "Steady leadership versus the market",
+    "IMPROVING": "Momentum is improving",
 }
 
 _HEALTH_RANK = {"Degraded": 0, "Caution": 1, "Normal": 2, "Unmeasured": 3}
@@ -172,7 +182,12 @@ def why_now(
         key = str(tag or "").strip().upper()
         if key in _WHY_NOW_LABELS:
             add(_WHY_NOW_LABELS[key])
-        elif key and not key.startswith("GRADE_") and "COVERAGE_" not in key:
+        elif (
+            key
+            and key not in _SKIP_WHY_TAGS
+            and not key.startswith("GRADE_")
+            and "COVERAGE_" not in key
+        ):
             add(str(tag).replace("_", " "))
     vol = _f(row.get("volume_ratio"))
     if vol >= 1.3:

@@ -92,6 +92,7 @@ def test_categories_project_from_scan_and_long_term_without_invention():
     assert by_id["wealth_builders"]["count"] == 1
     assert by_id["wealth_builders"]["cards"][0]["symbol"] == "QUAL"
     assert "coverage" in (by_id["wealth_builders"]["cards"][0].get("qualify_reason") or "").lower()
+    assert "QUALITY COMPOUNDER" not in " ".join(by_id["wealth_builders"]["cards"][0].get("why_now") or [])
     assert by_id["super_trends"]["count"] >= 1
     assert any(c["symbol"] == "TRENDY" for c in by_id["super_trends"]["cards"])
     assert not any(c["symbol"] == "CHASE" for c in by_id["super_trends"]["cards"])
