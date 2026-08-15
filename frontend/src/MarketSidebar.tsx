@@ -1,4 +1,5 @@
 import type { DashboardPayload } from './types'
+import { money } from './format'
 
 const PRIMARY_NAV = [
   ['⌂', 'Home', 'Home'],
@@ -21,8 +22,8 @@ const SECONDARY_NAV = [
   ['◌', 'System Health', 'System Health'],
 ] as const
 
-function ArcReactor() {
-  return <div className="hud-arc" aria-hidden="true" />
+function Logo() {
+  return <div className="brand-mark" aria-hidden="true"><span /><span /><span /></div>
 }
 
 function NavigationGroup({
@@ -46,8 +47,7 @@ function NavigationGroup({
           type="button"
           onClick={() => setActive(route)}
         >
-          <span className="hud-ico" aria-hidden="true">{icon}</span>
-          {display}
+          <span>{icon}</span>{display}
         </button>
       ))}
     </>
@@ -65,51 +65,27 @@ export function MarketSidebar({
 }) {
   const operations = dashboard.operations.running
   return (
-    <aside className="sidebar hud-sidebar">
-      <div className="hud-brand">
-        <ArcReactor />
-        <div className="hud-brand-copy">
-          <strong>QUANTTERM</strong>
-          <small>JARVIS DESK</small>
-        </div>
-      </div>
-      <nav aria-label="Primary navigation">
+    <aside className="sidebar">
+      <div className="brand"><Logo /><div><strong>QUANTTERM</strong><small>MARKET RADAR</small></div></div>
+      <nav>
         <NavigationGroup label="DISCOVERY" rows={PRIMARY_NAV} active={active} setActive={setActive} />
         <NavigationGroup label="TOOLS & EVIDENCE" rows={SECONDARY_NAV} active={active} setActive={setActive} />
       </nav>
       <div className="sidebar-spacer" />
-      <div className="hud-telemetry broker-card">
+      <div className="broker-card">
         <div className="broker-row">
           <strong>MARKET DATA</strong>
           <span className={dashboard.data.ready ? 'status-dot' : 'status-dot status-dot-off'} />
         </div>
-        <small>
-          {dashboard.data.ready
-            ? `READY · ${dashboard.data.bhavcopy.latest_date || '—'}`
-            : 'INCOMPLETE'}
-        </small>
+        <small>{dashboard.data.ready ? `READY · ${dashboard.data.bhavcopy.latest_date || '—'}` : 'INCOMPLETE'}</small>
         <div className="broker-stats">
-          <div>
-            <span>Sessions</span>
-            <strong>{dashboard.data.bhavcopy.sessions || 0}</strong>
-          </div>
-          <div>
-            <span>Universe</span>
-            <strong>{dashboard.scan.universe_size.toLocaleString('en-IN')}</strong>
-          </div>
+          <div><span>Sessions</span><strong>{dashboard.data.bhavcopy.sessions || 0}</strong></div>
+          <div><span>Universe</span><strong>{dashboard.scan.universe_size.toLocaleString('en-IN')}</strong></div>
         </div>
       </div>
-      <div className="hud-telemetry broker-card compact-service-card">
-        <div className="broker-row">
-          <strong>SCAN ENGINE</strong>
-          <span className={operations ? 'status-dot' : 'status-dot status-dot-off'} />
-        </div>
-        <small>
-          {operations ? 'ONLINE' : 'OFFLINE'} · last scan{' '}
-          {dashboard.scan.scanned_at
-            ? new Date(dashboard.scan.scanned_at).toLocaleDateString('en-IN')
-            : '—'}
-        </small>
+      <div className="broker-card compact-service-card">
+        <div className="broker-row"><strong>SCAN ENGINE</strong><span className={operations ? 'status-dot' : 'status-dot status-dot-off'} /></div>
+        <small>{operations ? 'ONLINE' : 'OFFLINE'} · last scan {dashboard.scan.scanned_at ? new Date(dashboard.scan.scanned_at).toLocaleDateString('en-IN') : '—'}</small>
       </div>
     </aside>
   )

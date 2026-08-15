@@ -88,7 +88,8 @@ def test_categories_project_from_scan_and_long_term_without_invention():
         scan_payload=scan, long_term_payload=long_term, refresh_technicals=False,
     )
     by_id = {c["id"]: c for c in payload["categories"]}
-    assert payload["schema_version"] == 2
+    assert payload["schema_version"] == 3
+    assert payload.get("api_compat", {}).get("min_schema") == 2
     assert by_id["wealth_builders"]["count"] == 1
     assert by_id["wealth_builders"]["cards"][0]["symbol"] == "QUAL"
     assert "coverage" in (by_id["wealth_builders"]["cards"][0].get("qualify_reason") or "").lower()
@@ -190,6 +191,26 @@ def test_ev_rank_prefers_conservative_claim():
     with_ev = {"ev_pct": 1.0, "ev_lb_pct": 0.6, "score": 50}
     score_only = {"score": 99}
     assert rank_key(with_ev) > rank_key(score_only)
+
+
+def test_grade_and_confluence_are_tiebreaks_only():
+    from product.reco_intelligence import rank_key
+
+    # Same EV claim: grade A + confluence outranks bare row, without inventing EV.
+    a = {"ev_pct": 1.0, "ev_lb_pct": 0.5, "score": 70, "breakout_grade": "A",
+         "signals": ["PRE_BREAKOUT", "VOL_SQUEEZE", "MOMENTUM"]}
+    b = {"ev_pct": 1.0, "ev_lb_pct": 0.5, "score": 70, "breakout_grade": "B",
+         "signals": ["PRE_BREAKOUT"]}
+    assert rank_key(a) > rank_key(b)
+
+
+def test_recovery_rejects_known_thin_volume():
+    row = enrich_scan_row({
+        "symbol": "THINVOL", "signals": ["DOUBLE_BOTTOM"], "score": 70,
+        "chase_risk": False, "rsi": 45, "volume_ratio": 0.2, "avg_vol20": 1e6,
+        "verdict": "WATCH", "status": "Watch",
+    })
+    assert primary_scan_category(row) is None or primary_scan_category(row)[0] != "recovery_setups"
 
 
 def test_wealth_empty_explains_needs_fundamentals():

@@ -468,6 +468,7 @@ export type RecommendationCard = {
   p_win?: number | null
   ev_n?: number | null
   ev_conf?: string
+  stop?: number | null
   lifecycle: string
   upside_from_entry_pct?: number | null
   upside_to_target_pct?: number | null
@@ -489,12 +490,14 @@ export type RecommendationCategory = {
 
 export type RecommendationsWorkspace = {
   schema_version: number
+  api_compat?: { min_schema?: number; notes?: string }
   generated_at: string
   scan_scanned_at: string
   long_term_scanned_at: string
   records_status: string
   same_ist_day: boolean
   cmp_note: string
+  assignment_policy?: string
   categories: RecommendationCategory[]
   lifecycle: {
     active: RecommendationCard[]
