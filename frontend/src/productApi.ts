@@ -445,6 +445,90 @@ export const fetchRadarHome = (): Promise<RadarHome> =>
   fetch('/api/radar-home', { headers: { Accept: 'application/json' } })
     .then((response) => json<RadarHome>(response))
 
+export type RecommendationCard = {
+  symbol: string
+  company: string
+  category_id: string
+  category_label: string
+  action_badge: string
+  risk_tier: string
+  risk_label: string
+  setup_label: string
+  sector: string
+  score: number
+  rsi?: number | null
+  volume_ratio?: number | null
+  price_tag?: string
+  tech_source?: string
+  reason?: string
+  lifecycle: string
+  upside_from_entry_pct?: number | null
+  upside_to_target_pct?: number | null
+  entry?: number | null
+  target?: number | null
+  cmp?: number | null
+  source?: string
+}
+
+export type RecommendationCategory = {
+  id: string
+  label: string
+  blurb: string
+  icon: string
+  count: number
+  cards: RecommendationCard[]
+  empty_detail: string
+}
+
+export type RecommendationsWorkspace = {
+  schema_version: number
+  generated_at: string
+  scan_scanned_at: string
+  long_term_scanned_at: string
+  records_status: string
+  same_ist_day: boolean
+  cmp_note: string
+  categories: RecommendationCategory[]
+  lifecycle: {
+    active: RecommendationCard[]
+    closed: RecommendationCard[]
+    active_count: number
+    closed_count: number
+  }
+  disclaimer: string
+}
+
+export const fetchRecommendationsWorkspace = (): Promise<RecommendationsWorkspace> =>
+  fetch('/api/recommendations-workspace', { headers: { Accept: 'application/json' } })
+    .then((response) => json<RecommendationsWorkspace>(response))
+
+export type MarketReportItem = {
+  id: string
+  title: string
+  kind: string
+  date: string
+  created_at: string
+  is_new: boolean
+  badge?: string
+  summary: string
+  path?: string
+}
+
+export type MarketReportsWorkspace = {
+  schema_version: number
+  generated_at: string
+  title: string
+  blurb: string
+  reports: MarketReportItem[]
+  today_pulse: Record<string, unknown>
+  error: string
+  disclaimer: string
+}
+
+export const fetchMarketReportsWorkspace = (): Promise<MarketReportsWorkspace> =>
+  fetch('/api/market-reports-workspace', { headers: { Accept: 'application/json' } })
+    .then((response) => json<MarketReportsWorkspace>(response))
+
 export type CompareMetric = {
   label: string
   value: unknown

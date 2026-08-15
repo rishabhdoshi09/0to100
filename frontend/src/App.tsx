@@ -6,6 +6,7 @@ import {
   RadarHomeView,
   WatchlistView,
 } from './marketRadarViews'
+import { MarketReportsView, RecommendationsView } from './recommendationsViews'
 import { DisplayDepthToggle } from './displayDepth'
 import {
   EnhancedLongTermView,
@@ -145,6 +146,8 @@ const emptyDashboard: DashboardPayload = {
 const pageTitles: Record<string, string> = {
   Home: 'Home',
   'Market Scanner': 'Market Scanner',
+  Recommendations: 'Recommendations',
+  'Market Reports': 'Market Reports',
   'Stock Intelligence': 'Stock Intelligence',
   'Long-Term Picks': 'Long-Term Picks',
   Compare: 'Compare',
@@ -168,6 +171,8 @@ const pageTitles: Record<string, string> = {
 const pageSubtitles: Record<string, string> = {
   Home: 'Daily command centre — Breakouts, Momentum and Long-Term Picks from the saved market scan.',
   'Market Scanner': 'Professional scanner tables for breakouts, momentum and long-term quality.',
+  Recommendations: 'Research categories — Wealth Builders, Super Trends, Momentum Breakouts, Recovery — with Active/Closed tracking.',
+  'Market Reports': 'Daily Market Pulse archive — trends, sector movers and breakout context from live system state.',
   'Stock Intelligence': 'Company workspace — chart, financials, ratios and pre-trade GO/CAUTION/NO_GO cockpit.',
   'Long-Term Picks': 'Business quality, valuation and timing without fabricated model performance.',
   Compare: 'Side-by-side comparison across market, growth, quality and technical dimensions.',
@@ -437,6 +442,12 @@ function App() {
     }
     if (active === 'Market Scanner' || active === 'Scanner') {
       return <MarketScannerView {...viewProps} onCompare={addToCompare} />
+    }
+    if (active === 'Recommendations') {
+      return <RecommendationsView {...viewProps} />
+    }
+    if (active === 'Market Reports') {
+      return <MarketReportsView {...viewProps} />
     }
     if (active === 'Home' || active === 'Command Center') {
       return <RadarHomeView {...viewProps} onCompare={addToCompare} onWatchlist={addToWatchlist} />
