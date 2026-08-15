@@ -461,6 +461,8 @@ export type RecommendationCard = {
   price_tag?: string
   tech_source?: string
   reason?: string
+  qualify_reason?: string
+  evidence_tags?: string[]
   lifecycle: string
   upside_from_entry_pct?: number | null
   upside_to_target_pct?: number | null

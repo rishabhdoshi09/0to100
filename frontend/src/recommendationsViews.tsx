@@ -74,7 +74,16 @@ function CardTile({
           )}
         </div>
       </div>
-      {card.reason ? <p className="reco-pick-note">{card.reason}</p> : null}
+      {(card.qualify_reason || card.reason) ? (
+        <p className="reco-pick-note">{card.qualify_reason || card.reason}</p>
+      ) : null}
+      {card.evidence_tags && card.evidence_tags.length > 0 ? (
+        <div className="reco-pick-tags" aria-label="Evidence tags">
+          {card.evidence_tags.slice(0, 4).map((tag) => (
+            <span key={tag} className="reco-evidence-tag">{tag.replace(/_/g, ' ')}</span>
+          ))}
+        </div>
+      ) : null}
     </button>
   )
 }

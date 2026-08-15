@@ -8,6 +8,7 @@ Honest rules:
   - Empty category → empty list (never fabricate picks)
   - Prices/upside from real entry/target/price fields only
   - CMP freshness tags come from live_technicals when available
+  - Each scan symbol gets ONE primary category (no multi-bucket spam)
 """
 from __future__ import annotations
 
@@ -15,6 +16,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
+from product.breakout_quality import RSI_HARD, passes_volume_floor
 from product.radar_workspace import (
     enrich_long_term_row,
     enrich_scan_row,
@@ -30,35 +32,41 @@ CATEGORIES: tuple[dict[str, str], ...] = (
     {
         "id": "wealth_builders",
         "label": "Wealth Builders",
-        "blurb": "Quality compounders with readable fundamentals — long-term research, not day trades.",
+        "blurb": "Long-term quality / GARP — compounders with ≥50% fundamental coverage.",
         "icon": "compound",
     },
     {
         "id": "super_trends",
         "label": "Super Trends",
-        "blurb": "Names riding trend and relative strength without chase/extension flags.",
+        "blurb": "Momentum without chase — trend + RS leadership, not extended.",
         "icon": "trend",
     },
     {
         "id": "momentum_breakouts",
         "label": "Momentum Breakouts",
-        "blurb": "Sniper-grade and confirmed breakouts — volume, structure, RSI hard ceiling.",
+        "blurb": "Sniper / graded breakouts with volume floor — near pivot or confirmed.",
         "icon": "breakout",
     },
     {
         "id": "recovery_setups",
         "label": "Recovery Setups",
-        "blurb": "Accumulation / double-bottom style recovery patterns when the scan finds them.",
+        "blurb": "True turnarounds only — double-bottom / accumulation (not coils).",
         "icon": "recovery",
     },
 )
 
-_RECOVERY_SIGNALS = frozenset({
-    "DOUBLE_BOTTOM", "ACCUMULATION", "CUP_HANDLE", "POCKET_PIVOT", "NR7",
+# True recovery = turnaround evidence. Coils (CUP_HANDLE / POCKET_PIVOT / NR7)
+# are setups, not recoveries — they must NOT land here.
+_RECOVERY_SIGNALS = frozenset({"DOUBLE_BOTTOM", "ACCUMULATION"})
+_ACTIONABLE_MOMENTUM = frozenset({
+    "strong_actionable", "steady_leadership", "improving",
 })
-_TREND_SIGNALS = frozenset({
-    "MOMENTUM", "GOLDEN_CROSS", "TRENDING", "HIGH_TIGHT_FLAG",
+_WEALTH_CLASSES = frozenset({
+    "QUALITY_COMPOUNDER", "GARP_CANDIDATE", "QUALITY_BUT_EXPENSIVE",
 })
+# Soft RSI ceiling on the research desk (hard scanner blow-off stays 82).
+_DESK_RSI_SOFT = 72.0
+_BUCKET_CAP = 40
 
 
 def _f(value: Any, default: float = 0.0) -> float:
@@ -110,27 +118,41 @@ def upside_metrics(row: Mapping[str, Any]) -> dict[str, float | None]:
     }
 
 
-def _action_badge(row: Mapping[str, Any]) -> str:
+def _action_badge(row: Mapping[str, Any], *, category_id: str = "") -> str:
+    cls = str(row.get("classification") or "")
+    if category_id == "wealth_builders":
+        if cls == "QUALITY_BUT_EXPENSIVE":
+            return "Research"
+        if cls in {"QUALITY_COMPOUNDER", "GARP_CANDIDATE"}:
+            return "Hold / Research"
     verdict = str(row.get("verdict") or "").upper()
     status = str(row.get("status") or "")
     if verdict in {"BUY", "STRONG BUY"} or status == "Ready to trade":
         return "Buy"
     if "breakout" in status.lower() or str(row.get("breakout_grade") or "").upper() in {"A", "B"}:
         return "Watch"
-    cls = str(row.get("classification") or "")
     if cls in {"QUALITY_COMPOUNDER", "GARP_CANDIDATE"}:
         return "Hold / Research"
     return "Watch"
 
 
-def card_from_row(row: Mapping[str, Any], *, category_id: str, category_label: str) -> dict[str, Any]:
+def card_from_row(
+    row: Mapping[str, Any],
+    *,
+    category_id: str,
+    category_label: str,
+    qualify_reason: str = "",
+    evidence_tags: Sequence[str] | None = None,
+) -> dict[str, Any]:
     ups = upside_metrics(row)
+    tags = [str(t) for t in (evidence_tags or []) if t]
+    reason = qualify_reason or str(row.get("reason") or "")
     return {
         "symbol": str(row.get("symbol") or "").upper(),
         "company": str(row.get("company") or row.get("symbol") or ""),
         "category_id": category_id,
         "category_label": category_label,
-        "action_badge": _action_badge(row),
+        "action_badge": _action_badge(row, category_id=category_id),
         "risk_tier": risk_tier(row),
         "risk_label": str(row.get("risk_label") or risk_tier(row)),
         "setup_label": str(row.get("setup_label") or row.get("status") or row.get("classification") or ""),
@@ -140,31 +162,234 @@ def card_from_row(row: Mapping[str, Any], *, category_id: str, category_label: s
         "volume_ratio": _f(row.get("volume_ratio")) or None,
         "price_tag": str(row.get("price_tag") or ""),
         "tech_source": str(row.get("tech_source") or ""),
-        "reason": str(row.get("reason") or ""),
+        "reason": reason,
+        "qualify_reason": reason,
+        "evidence_tags": tags,
         "lifecycle": "active",
         **ups,
     }
 
 
-def _is_super_trend(row: Mapping[str, Any]) -> bool:
+def _trend_structure_ok(row: Mapping[str, Any]) -> bool:
+    """Pass when above a key SMA, or SMA unknown (don't invent a fail)."""
+    above50 = row.get("above_sma50")
+    above200 = row.get("above_sma200")
+    if above50 is False and above200 is False:
+        return False
+    return True
+
+
+def _is_momentum_breakout(row: Mapping[str, Any]) -> tuple[bool, str, list[str]]:
+    """Sniper / graded breakouts — volume floor, no chase on the research desk."""
     if bool(row.get("chase_risk")):
-        return False
+        return False, "", []
+    rsi = _f(row.get("rsi"))
+    if rsi > RSI_HARD:
+        return False, "", []
+    if not passes_volume_floor(row):
+        return False, "", []
+    grade = str(row.get("breakout_grade") or "").upper()
+    sniper = is_sniper_breakout_candidate(row)
+    if not sniper and grade not in {"A", "B"}:
+        return False, "", []
+    state = str(row.get("breakout_state") or "")
     sigs = _signals(row)
-    if not (sigs & _TREND_SIGNALS) and "MOMENTUM" not in sigs:
-        # Momentum state from enrich also qualifies.
-        state = str(row.get("momentum_state") or "")
-        if state not in {"strong_actionable", "steady_leadership", "improving"}:
-            return False
+    status = str(row.get("status") or "")
+    cats = {str(c) for c in (row.get("categories") or [])}
+    is_pre = (
+        "PreBreakout" in cats
+        or "PRE_BREAKOUT" in sigs
+        or status == "Watch for breakout"
+    )
+    try:
+        dist = float(row.get("pivot_distance_pct")) if row.get("pivot_distance_pct") is not None else None
+    except (TypeError, ValueError):
+        dist = None
+    near_pivot = bool(is_pre and dist is not None and 0.0 <= dist <= 2.5)
+    structure_ok = (
+        state in {"near_breakout", "confirmed_breakout", "breakout_under_observation"}
+        or grade in {"A", "B"}
+        or near_pivot
+        or bool(sigs & {"PRE_BREAKOUT", "BREAKOUT_52W", "BREAKOUT_RES"})
+    )
+    # Reject ghost sniper hits with no breakout structure (state=not_in_breakout_lane).
+    if not structure_ok:
+        return False, "", []
+    tags = sorted(sigs & {
+        "PRE_BREAKOUT", "BREAKOUT_52W", "BREAKOUT_RES", "GOLDEN_CROSS", "VOL_SQUEEZE",
+    })
+    if grade:
+        tags = [f"grade_{grade}"] + tags
+    display_state = state
+    if (not display_state or display_state == "not_in_breakout_lane") and near_pivot:
+        display_state = "near_breakout"
+    if display_state and display_state != "not_in_breakout_lane":
+        tags.append(display_state)
+    why = (
+        f"Sniper breakout · vol {_f(row.get('volume_ratio')):.1f}×"
+        + (f" · grade {grade}" if grade else "")
+        + (
+            f" · {display_state.replace('_', ' ')}"
+            if display_state and display_state != "not_in_breakout_lane"
+            else ""
+        )
+    )
+    return True, why, tags
+
+
+def _is_recovery(row: Mapping[str, Any]) -> tuple[bool, str, list[str]]:
+    """Double-bottom / accumulation only — coils are not recoveries."""
+    if bool(row.get("chase_risk")):
+        return False, "", []
+    sigs = _signals(row)
+    hits = sorted(sigs & _RECOVERY_SIGNALS)
+    if not hits:
+        return False, "", []
+    rsi = _f(row.get("rsi"))
+    if rsi > _DESK_RSI_SOFT:
+        return False, "", []
     if str(row.get("verdict") or "").upper() == "AVOID":
-        return False
-    # Prefer names still in trend structure.
-    if row.get("above_sma50") is False and row.get("above_sma200") is False:
-        return False
-    return _f(row.get("score")) >= 50 or _f(row.get("momentum_5d")) >= 3
+        return False, "", []
+    # Confirmed breakout already fired → not a recovery base anymore.
+    if str(row.get("breakout_grade") or "").upper() in {"A", "B"}:
+        return False, "", []
+    if str(row.get("breakout_state") or "") == "confirmed_breakout":
+        return False, "", []
+    why = "Recovery · " + " + ".join(h.replace("_", " ").title() for h in hits)
+    return True, why, hits
 
 
-def _is_recovery(row: Mapping[str, Any]) -> bool:
-    return bool(_signals(row) & _RECOVERY_SIGNALS)
+def _is_super_trend(row: Mapping[str, Any]) -> tuple[bool, str, list[str]]:
+    """Momentum leadership without chase / extension."""
+    if bool(row.get("chase_risk")):
+        return False, "", []
+    if str(row.get("verdict") or "").upper() == "AVOID":
+        return False, "", []
+    rsi = _f(row.get("rsi"))
+    if rsi > _DESK_RSI_SOFT:
+        return False, "", []
+    if not _trend_structure_ok(row):
+        return False, "", []
+    sigs = _signals(row)
+    state = str(row.get("momentum_state") or "")
+    has_mom_signal = "MOMENTUM" in sigs or "GOLDEN_CROSS" in sigs
+    has_mom_state = state in _ACTIONABLE_MOMENTUM
+    if not (has_mom_signal or has_mom_state):
+        return False, "", []
+    # Require real thrust — score alone used to spam mediocre names.
+    score = _f(row.get("score"))
+    mom5_raw = row.get("momentum_5d")
+    mom5 = _f(mom5_raw) if mom5_raw is not None else None
+    if mom5 is not None and mom5 < 0:
+        return False, "", []  # Super Trends = rising leadership, not fading prints
+    mom5_v = float(mom5 or 0.0)
+    if score < 55 and mom5_v < 2.0 and state not in {"strong_actionable", "steady_leadership"}:
+        return False, "", []
+    if _f(row.get("volume_ratio")) > 0 and not passes_volume_floor(row):
+        return False, "", []
+    tags: list[str] = []
+    if "MOMENTUM" in sigs:
+        tags.append("MOMENTUM")
+    if "GOLDEN_CROSS" in sigs:
+        tags.append("GOLDEN_CROSS")
+    if state and state != "not_momentum":
+        tags.append(state)
+    why = (
+        f"Trend momentum · score {score:.0f}"
+        + (f" · 5d {mom5_v:+.1f}%" if mom5 is not None else "")
+        + (f" · {state.replace('_', ' ')}" if state in _ACTIONABLE_MOMENTUM else "")
+    )
+    return True, why, tags
+
+
+def _wealth_qualify(row: Mapping[str, Any]) -> tuple[bool, str, list[str]]:
+    if not is_long_term_pick(row):
+        return False, "", []
+    cls = str(row.get("classification") or "")
+    cov = _f(row.get("fundamental_coverage"))
+    tags = [cls, f"coverage_{cov:.0%}"]
+    if cls == "QUALITY_BUT_EXPENSIVE":
+        why = f"Quality but expensive · fund coverage {cov:.0%}"
+    elif cls == "GARP_CANDIDATE":
+        why = f"GARP candidate · fund coverage {cov:.0%}"
+    else:
+        why = f"Quality compounder · fund coverage {cov:.0%}"
+    factors = [str(x) for x in (row.get("quality_factors") or [])[:2] if x]
+    if factors:
+        why = why + " · " + ", ".join(factors)
+        tags.extend(factors)
+    return True, why, tags
+
+
+def primary_scan_category(row: Mapping[str, Any]) -> tuple[str, str, list[str]] | None:
+    """Exclusive primary bucket for a scan row.
+
+    Priority: Momentum Breakouts → Recovery → Super Trends.
+    A symbol never appears in two scan categories.
+    """
+    ok, why, tags = _is_momentum_breakout(row)
+    if ok:
+        return "momentum_breakouts", why, tags
+    ok, why, tags = _is_recovery(row)
+    if ok:
+        return "recovery_setups", why, tags
+    ok, why, tags = _is_super_trend(row)
+    if ok:
+        return "super_trends", why, tags
+    return None
+
+
+def _empty_detail_for(
+    category_id: str,
+    *,
+    cards: Sequence[Mapping[str, Any]],
+    lt_rows: Sequence[Mapping[str, Any]],
+    scan_rows: Sequence[Mapping[str, Any]],
+) -> str:
+    if cards:
+        return ""
+    if category_id == "wealth_builders":
+        if not lt_rows:
+            return "No long-term shortlist on file — run a long-term scan with fundamentals."
+        needs = sum(
+            1 for r in lt_rows
+            if str(r.get("classification") or "") == "NEEDS_FUNDAMENTALS"
+        )
+        thin = sum(
+            1 for r in lt_rows
+            if str(r.get("classification") or "") in _WEALTH_CLASSES
+            and _f(r.get("fundamental_coverage")) < 0.50
+        )
+        if needs == len(lt_rows):
+            return (
+                f"Long-term shortlist has {needs} name(s) but all are NEEDS_FUNDAMENTALS "
+                "(coverage <50%). Refresh fundamentals, then re-run long-term scan."
+            )
+        if thin:
+            return (
+                "Quality classes present but fundamental coverage is below 50% — "
+                "Wealth Builders stay empty until coverage is readable."
+            )
+        return (
+            "No QUALITY_COMPOUNDER / GARP / QUALITY_BUT_EXPENSIVE with ≥50% coverage "
+            "in the current long-term shortlist."
+        )
+    if category_id == "momentum_breakouts":
+        return (
+            "No sniper/graded breakouts with volume floor and without chase risk "
+            f"in this scan ({len(scan_rows)} rows)."
+        )
+    if category_id == "recovery_setups":
+        return (
+            "No double-bottom / accumulation recoveries (coils like cup-handle / "
+            "pocket-pivot / NR7 are excluded on purpose)."
+        )
+    if category_id == "super_trends":
+        return (
+            "No non-chase momentum leadership (MOMENTUM / actionable RS) above trend "
+            "structure in this scan."
+        )
+    return "No matching setups in the current scan / long-term shortlist."
 
 
 def _bucket_rows(
@@ -173,30 +398,64 @@ def _bucket_rows(
 ) -> dict[str, list[dict[str, Any]]]:
     wealth: list[dict[str, Any]] = []
     for r in lt_rows:
-        if not is_long_term_pick(r):
+        ok, why, tags = _wealth_qualify(r)
+        if not ok:
             continue
-        wealth.append(card_from_row(r, category_id="wealth_builders", category_label="Wealth Builders"))
-    wealth.sort(key=lambda c: (-_f(c.get("score")), c["symbol"]))
+        wealth.append(card_from_row(
+            r,
+            category_id="wealth_builders",
+            category_label="Wealth Builders",
+            qualify_reason=why,
+            evidence_tags=tags,
+        ))
+    wealth.sort(key=lambda c: (
+        0 if "COMPOUNDER" in str(c.get("setup_label") or "") else
+        1 if "GARP" in str(c.get("setup_label") or "") else 2,
+        -_f(c.get("score")),
+        c["symbol"],
+    ))
 
     trends: list[dict[str, Any]] = []
     breakouts: list[dict[str, Any]] = []
     recovery: list[dict[str, Any]] = []
+    labels = {m["id"]: m["label"] for m in CATEGORIES}
+
     for r in scan_rows:
-        if _is_super_trend(r):
-            trends.append(card_from_row(r, category_id="super_trends", category_label="Super Trends"))
-        if is_sniper_breakout_candidate(r) or str(r.get("breakout_grade") or "").upper() in {"A", "B"}:
-            breakouts.append(card_from_row(r, category_id="momentum_breakouts", category_label="Momentum Breakouts"))
-        if _is_recovery(r):
-            recovery.append(card_from_row(r, category_id="recovery_setups", category_label="Recovery Setups"))
+        assigned = primary_scan_category(r)
+        if not assigned:
+            continue
+        cat_id, why, tags = assigned
+        card = card_from_row(
+            r,
+            category_id=cat_id,
+            category_label=labels[cat_id],
+            qualify_reason=why,
+            evidence_tags=tags,
+        )
+        if cat_id == "momentum_breakouts":
+            breakouts.append(card)
+        elif cat_id == "recovery_setups":
+            recovery.append(card)
+        else:
+            trends.append(card)
 
     trends.sort(key=lambda c: (-_f(c.get("score")), c["symbol"]))
-    breakouts.sort(key=lambda c: (-_f(c.get("score")), c["symbol"]))
-    recovery.sort(key=lambda c: (-_f(c.get("score")), c["symbol"]))
+    breakouts.sort(key=lambda c: (
+        -_f(c.get("score")),
+        c["symbol"],
+    ))
+    # Prefer higher breakout_quality when present on source rows — score already
+    # embeds sniper boost after enrich; keep symbol tie-break stable.
+    recovery.sort(key=lambda c: (
+        0 if "DOUBLE_BOTTOM" in (c.get("evidence_tags") or []) else 1,
+        -_f(c.get("score")),
+        c["symbol"],
+    ))
     return {
-        "wealth_builders": wealth[:40],
-        "super_trends": trends[:40],
-        "momentum_breakouts": breakouts[:40],
-        "recovery_setups": recovery[:40],
+        "wealth_builders": wealth[:_BUCKET_CAP],
+        "super_trends": trends[:_BUCKET_CAP],
+        "momentum_breakouts": breakouts[:_BUCKET_CAP],
+        "recovery_setups": recovery[:_BUCKET_CAP],
     }
 
 
@@ -346,27 +605,31 @@ def build_recommendations_workspace(
             **meta,
             "count": len(cards),
             "cards": cards,
-            "empty_detail": (
-                "No matching setups in the current scan / long-term shortlist."
-                if not cards else ""
+            "empty_detail": _empty_detail_for(
+                meta["id"], cards=cards, lt_rows=lt_rows, scan_rows=scan_rows,
             ),
         })
 
     cmp_note = (
         "CMP uses live Kite/NSE overlay when available; otherwise last official EOD. "
+        "Each scan symbol maps to one primary category (breakout → recovery → trend). "
         "Scan signals are research snapshots — check scanned_at."
     )
     if str(scan.get("records_status") or "") == "PRIOR_DAY_SNAPSHOT":
         cmp_note = "Scan file is a PRIOR-DAY SNAPSHOT — run a fresh market scan before acting. " + cmp_note
 
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "scan_scanned_at": scan_at,
         "long_term_scanned_at": lt_at,
         "records_status": str(scan.get("records_status") or ""),
         "same_ist_day": bool(scan.get("same_ist_day")),
         "cmp_note": cmp_note,
+        "assignment_policy": (
+            "exclusive_primary: momentum_breakouts > recovery_setups > super_trends; "
+            "wealth_builders from long-term quality only"
+        ),
         "categories": categories,
         "lifecycle": {
             "active": active[:60],
