@@ -254,6 +254,14 @@
 .reco-pick-note {
   margin: 10px 0 0; color: var(--rw-muted); font-size: 13px; line-height: 1.4;
 }
+.reco-pick-tags {
+  display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px;
+}
+.reco-evidence-tag {
+  font-size: 11px; letter-spacing: 0.02em; color: var(--rw-muted);
+  border-bottom: 1px solid var(--rw-line); padding: 0 0 1px;
+  text-transform: lowercase;
+}
 .reco-empty {
   max-width: 720px; padding: 36px 20px; text-align: center;
   border: 1px dashed var(--rw-line); border-radius: var(--rw-radius);
