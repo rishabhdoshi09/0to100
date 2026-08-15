@@ -463,6 +463,11 @@ export type RecommendationCard = {
   reason?: string
   qualify_reason?: string
   evidence_tags?: string[]
+  ev_pct?: number | null
+  ev_lb_pct?: number | null
+  p_win?: number | null
+  ev_n?: number | null
+  ev_conf?: string
   lifecycle: string
   upside_from_entry_pct?: number | null
   upside_to_target_pct?: number | null
