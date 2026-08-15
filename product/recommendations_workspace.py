@@ -174,6 +174,9 @@ def card_from_row(
         card["p_win"] = _f(row.get("p_win")) if row.get("p_win") is not None else None
         card["ev_n"] = int(_f(row.get("ev_n"))) if row.get("ev_n") is not None else None
         card["ev_conf"] = str(row.get("ev_conf") or "")
+    stop = _f(row.get("stop") or row.get("stop_price"))
+    if stop > 0:
+        card["stop"] = stop
     return card
 
 
@@ -261,6 +264,9 @@ def _is_recovery(row: Mapping[str, Any]) -> tuple[bool, str, list[str]]:
     if str(row.get("breakout_grade") or "").upper() in {"A", "B"}:
         return False, "", []
     if str(row.get("breakout_state") or "") == "confirmed_breakout":
+        return False, "", []
+    # Known thin volume fails closed; unknown volume stays pass (compat).
+    if _f(row.get("volume_ratio")) > 0 and not passes_volume_floor(row):
         return False, "", []
     why = "Recovery · " + " + ".join(h.replace("_", " ").title() for h in hits)
     return True, why, hits
@@ -634,7 +640,14 @@ def build_recommendations_workspace(
         cmp_note = "Scan file is a PRIOR-DAY SNAPSHOT — run a fresh market scan before acting. " + cmp_note
 
     return {
-        "schema_version": 2,
+        "schema_version": 3,
+        "api_compat": {
+            "min_schema": 2,
+            "notes": (
+                "Additive fields only (ev_*, evidence_tags, qualify_reason, stop). "
+                "Clients on schema 2 ignore unknowns safely."
+            ),
+        },
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "scan_scanned_at": scan_at,
         "long_term_scanned_at": lt_at,
@@ -644,7 +657,8 @@ def build_recommendations_workspace(
         "assignment_policy": (
             "exclusive_primary: momentum_breakouts > recovery_setups > super_trends; "
             "wealth_builders from long-term quality only; "
-            "rank by conservative EV when available, demote negative measured edge"
+            "rank by conservative EV when available, then grade/confluence; "
+            "demote negative measured edge; recovery requires volume floor when known"
         ),
         "categories": categories,
         "lifecycle": {
