@@ -163,6 +163,35 @@ def test_negative_momentum_not_super_trend():
     assert assigned is None or assigned[0] != "super_trends"
 
 
+def test_negative_measured_edge_is_demoted(monkeypatch):
+    from product import reco_intelligence as ri
+
+    assert ri.measured_edge_ok({"ev_lb_pct": -0.5}) is False
+    assert ri.measured_edge_ok({"ev_lb_pct": 0.2}) is True
+    # No claim / no signals → pass-through (do not invent a veto).
+    assert ri.measured_edge_ok({}) is True
+    assert ri.measured_edge_ok({"signals": []}) is True
+
+    monkeypatch.setattr(
+        "scan.signal_backtest.combo_edge",
+        lambda keys, min_trades=30: -0.2,
+    )
+    assert ri.measured_edge_ok({"signals": ["MOMENTUM", "BREAKOUT_52W"]}) is False
+
+    monkeypatch.setattr(
+        "scan.signal_backtest.combo_edge",
+        lambda keys, min_trades=30: None,
+    )
+    assert ri.measured_edge_ok({"signals": ["MOMENTUM"]}) is True
+
+def test_ev_rank_prefers_conservative_claim():
+    from product.reco_intelligence import rank_key
+
+    with_ev = {"ev_pct": 1.0, "ev_lb_pct": 0.6, "score": 50}
+    score_only = {"score": 99}
+    assert rank_key(with_ev) > rank_key(score_only)
+
+
 def test_wealth_empty_explains_needs_fundamentals():
     payload = build_recommendations_workspace(
         scan_payload={"records": [], "scanned_at": ""},

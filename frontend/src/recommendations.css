@@ -254,6 +254,10 @@
 .reco-pick-note {
   margin: 10px 0 0; color: var(--rw-muted); font-size: 13px; line-height: 1.4;
 }
+.reco-pick-ev {
+  margin: 6px 0 0; color: var(--rw-ink); font-size: 12px; font-weight: 600;
+  letter-spacing: 0.01em;
+}
 .reco-pick-tags {
   display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px;
 }

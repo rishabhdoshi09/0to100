@@ -147,7 +147,7 @@ def card_from_row(
     ups = upside_metrics(row)
     tags = [str(t) for t in (evidence_tags or []) if t]
     reason = qualify_reason or str(row.get("reason") or "")
-    return {
+    card = {
         "symbol": str(row.get("symbol") or "").upper(),
         "company": str(row.get("company") or row.get("symbol") or ""),
         "category_id": category_id,
@@ -168,6 +168,13 @@ def card_from_row(
         "lifecycle": "active",
         **ups,
     }
+    if row.get("ev_pct") is not None:
+        card["ev_pct"] = _f(row.get("ev_pct"))
+        card["ev_lb_pct"] = _f(row.get("ev_lb_pct")) if row.get("ev_lb_pct") is not None else None
+        card["p_win"] = _f(row.get("p_win")) if row.get("p_win") is not None else None
+        card["ev_n"] = int(_f(row.get("ev_n"))) if row.get("ev_n") is not None else None
+        card["ev_conf"] = str(row.get("ev_conf") or "")
+    return card
 
 
 def _trend_structure_ok(row: Mapping[str, Any]) -> bool:
@@ -396,6 +403,8 @@ def _bucket_rows(
     scan_rows: Sequence[Mapping[str, Any]],
     lt_rows: Sequence[Mapping[str, Any]],
 ) -> dict[str, list[dict[str, Any]]]:
+    from product.reco_intelligence import measured_edge_ok, rank_key
+
     wealth: list[dict[str, Any]] = []
     for r in lt_rows:
         ok, why, tags = _wealth_qualify(r)
@@ -415,48 +424,46 @@ def _bucket_rows(
         c["symbol"],
     ))
 
-    trends: list[dict[str, Any]] = []
-    breakouts: list[dict[str, Any]] = []
-    recovery: list[dict[str, Any]] = []
+    pools: dict[str, list[tuple[dict[str, Any], str, list[str]]]] = {
+        "super_trends": [],
+        "momentum_breakouts": [],
+        "recovery_setups": [],
+    }
     labels = {m["id"]: m["label"] for m in CATEGORIES}
 
     for r in scan_rows:
+        if not measured_edge_ok(r):
+            continue
         assigned = primary_scan_category(r)
         if not assigned:
             continue
         cat_id, why, tags = assigned
-        card = card_from_row(
-            r,
-            category_id=cat_id,
-            category_label=labels[cat_id],
-            qualify_reason=why,
-            evidence_tags=tags,
-        )
-        if cat_id == "momentum_breakouts":
-            breakouts.append(card)
-        elif cat_id == "recovery_setups":
-            recovery.append(card)
-        else:
-            trends.append(card)
+        pools[cat_id].append((dict(r), why, list(tags)))
 
-    trends.sort(key=lambda c: (-_f(c.get("score")), c["symbol"]))
-    breakouts.sort(key=lambda c: (
-        -_f(c.get("score")),
-        c["symbol"],
-    ))
-    # Prefer higher breakout_quality when present on source rows — score already
-    # embeds sniper boost after enrich; keep symbol tie-break stable.
-    recovery.sort(key=lambda c: (
-        0 if "DOUBLE_BOTTOM" in (c.get("evidence_tags") or []) else 1,
-        -_f(c.get("score")),
-        c["symbol"],
-    ))
-    return {
+    out: dict[str, list[dict[str, Any]]] = {
         "wealth_builders": wealth[:_BUCKET_CAP],
-        "super_trends": trends[:_BUCKET_CAP],
-        "momentum_breakouts": breakouts[:_BUCKET_CAP],
-        "recovery_setups": recovery[:_BUCKET_CAP],
+        "super_trends": [],
+        "momentum_breakouts": [],
+        "recovery_setups": [],
     }
+    for cat_id, items in pools.items():
+        items.sort(key=lambda it: rank_key(it[0]), reverse=True)
+        if cat_id == "recovery_setups":
+            items.sort(key=lambda it: (
+                0 if "DOUBLE_BOTTOM" in _signals(it[0]) else 1,
+                tuple(-float(x) if isinstance(x, (int, float)) else 0 for x in rank_key(it[0])),
+            ))
+        cards: list[dict[str, Any]] = []
+        for row, why, tags in items[:_BUCKET_CAP]:
+            cards.append(card_from_row(
+                row,
+                category_id=cat_id,
+                category_label=labels[cat_id],
+                qualify_reason=why,
+                evidence_tags=tags,
+            ))
+        out[cat_id] = cards
+    return out
 
 
 def _tracker_lifecycle() -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
@@ -595,6 +602,13 @@ def build_recommendations_workspace(
         except Exception:
             pass
 
+    # Smarter ranking: attach conservative EV when outcomes exist (fail-open).
+    try:
+        from product.reco_intelligence import tag_rows_ev
+        scan_rows = tag_rows_ev(scan_rows)
+    except Exception:
+        pass
+
     buckets = _bucket_rows(scan_rows, lt_rows)
     active, closed = _tracker_lifecycle()
 
@@ -613,7 +627,8 @@ def build_recommendations_workspace(
     cmp_note = (
         "CMP uses live Kite/NSE overlay when available; otherwise last official EOD. "
         "Each scan symbol maps to one primary category (breakout → recovery → trend). "
-        "Scan signals are research snapshots — check scanned_at."
+        "Within a bucket, names with measured EV rank ahead of score-only; "
+        "negative measured edge is demoted. Scan signals are research snapshots — check scanned_at."
     )
     if str(scan.get("records_status") or "") == "PRIOR_DAY_SNAPSHOT":
         cmp_note = "Scan file is a PRIOR-DAY SNAPSHOT — run a fresh market scan before acting. " + cmp_note
@@ -628,7 +643,8 @@ def build_recommendations_workspace(
         "cmp_note": cmp_note,
         "assignment_policy": (
             "exclusive_primary: momentum_breakouts > recovery_setups > super_trends; "
-            "wealth_builders from long-term quality only"
+            "wealth_builders from long-term quality only; "
+            "rank by conservative EV when available, demote negative measured edge"
         ),
         "categories": categories,
         "lifecycle": {

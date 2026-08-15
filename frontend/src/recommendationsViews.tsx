@@ -77,6 +77,14 @@ function CardTile({
       {(card.qualify_reason || card.reason) ? (
         <p className="reco-pick-note">{card.qualify_reason || card.reason}</p>
       ) : null}
+      {card.ev_lb_pct != null ? (
+        <p className="reco-pick-ev">
+          EV {card.ev_lb_pct >= 0 ? '+' : ''}{card.ev_lb_pct.toFixed(2)}%
+          {card.p_win != null ? ` · p(win) ${card.p_win.toFixed(0)}%` : ''}
+          {card.ev_n != null ? ` · n=${card.ev_n}` : ''}
+          {card.ev_conf ? ` · ${card.ev_conf}` : ''}
+        </p>
+      ) : null}
       {card.evidence_tags && card.evidence_tags.length > 0 ? (
         <div className="reco-pick-tags" aria-label="Evidence tags">
           {card.evidence_tags.slice(0, 4).map((tag) => (
