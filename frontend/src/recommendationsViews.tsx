@@ -124,26 +124,19 @@ export function RecommendationsView({
   const cards = useMemo(() => {
     if (!data || !category) return []
     const q = query.trim().toUpperCase()
-    if (lifecycle === 'Closed') {
-      const closed = data.lifecycle.closed || []
-      const anyInCat = closed.some((x) => x.category_id === categoryId)
-      return closed.filter((c) => {
-        if (anyInCat && c.category_id && c.category_id !== categoryId) return false
-        if (!q) return true
-        return c.symbol.includes(q) || (c.company || '').toUpperCase().includes(q)
-      })
-    }
-    const fromCat = category.cards || []
-    const tracked = (data.lifecycle.active || []).filter(
-      (c) => !c.category_id || c.category_id === category.id,
-    )
-    const seen = new Set(fromCat.map((c) => c.symbol))
-    const merged = [...fromCat, ...tracked.filter((c) => !seen.has(c.symbol))]
-    return merged.filter((c) => {
+    const matchQuery = (c: RecommendationCard) => {
       if (!q) return true
       return c.symbol.includes(q) || (c.company || '').toUpperCase().includes(q)
-    })
-  }, [data, category, categoryId, lifecycle, query])
+    }
+    if (lifecycle === 'Closed') {
+      const closed = data.lifecycle.closed || []
+      const inCat = closed.filter((c) => c.category_id === category.id)
+      const pool = inCat.length > 0 ? inCat : closed
+      return pool.filter(matchQuery)
+    }
+    // Active: only this category's research cards (never bleed prior category).
+    return (category.cards || []).filter(matchQuery)
+  }, [data, category, lifecycle, query])
 
   const onSelect = (symbol: string) => {
     setSelected(symbol)
