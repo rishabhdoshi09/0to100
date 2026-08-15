@@ -367,7 +367,7 @@ export function ProductStockIntelligenceView(props: ViewProps) {
     setFundamentalsError('')
     try {
       const result = await fetchStockFundamentals(selected, force)
-      setWorkspace(result.workspace)
+      setWorkspace(result.workspace ?? null)
       await loadRatios()
     } catch (reason) {
       setFundamentalsError(

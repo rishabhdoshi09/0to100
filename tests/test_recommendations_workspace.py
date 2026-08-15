@@ -261,3 +261,5 @@ def test_market_reports_lists_today_pulse(tmp_path, monkeypatch):
     assert payload["reports"][0]["title"] == "Market Pulse"
     assert (tmp_path / list(tmp_path.glob("market_pulse_*.json"))[0]).exists()
     assert "Nifty" in payload["reports"][0]["summary"]
+    assert "breadth_gauge" in payload
+    assert "Keep informed" in payload["title"]

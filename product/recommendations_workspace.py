@@ -732,6 +732,43 @@ def _pulse_summary(pulse: Mapping[str, Any]) -> str:
     return str(pulse.get("date") or "Market overview")
 
 
+def _breadth_gauge() -> dict[str, Any]:
+    """Honest tape gauge from market breadth — never a fabricated greed score."""
+    empty = {
+        "available": False,
+        "score": None,
+        "label": "",
+        "line": "Breadth unavailable — open after a full-market scan.",
+        "verdict": "",
+        "pct_above_50": None,
+    }
+    try:
+        from scan.breadth import breadth_from_cache
+        b = breadth_from_cache() or {}
+    except Exception:
+        return empty
+    if not b.get("verdict"):
+        return {**empty, "line": str(b.get("line") or empty["line"])}
+    score = int(round(float(b.get("pct_above_50") or 0)))
+    score = max(0, min(100, score))
+    verdict = str(b.get("verdict") or "")
+    label = {
+        "HEALTHY": "Constructive",
+        "MIXED": "Mixed",
+        "NARROW": "Narrow",
+    }.get(verdict, verdict.title() or "Tape")
+    return {
+        "available": True,
+        "score": score,
+        "label": label,
+        "line": str(b.get("line") or ""),
+        "verdict": verdict,
+        "pct_above_50": float(b.get("pct_above_50") or 0),
+        "n": int(b.get("n") or 0),
+        "source": "breadth_pct_above_50dma",
+    }
+
+
 def build_market_reports_workspace(*, persist_today: bool = True) -> dict[str, Any]:
     """Chronological Market Pulse list from live street pulse + saved day files."""
     pulse: dict[str, Any] = {}
@@ -767,16 +804,28 @@ def build_market_reports_workspace(*, persist_today: bool = True) -> dict[str, A
             "path": "",
         }]
 
+    gauge = _breadth_gauge()
+    insights: list[dict[str, str]] = []
+    for t in (pulse.get("takeaways") or [])[:3]:
+        if t:
+            insights.append({
+                "title": "Market Pulse",
+                "body": str(t)[:320],
+            })
+    for h in (pulse.get("headlines") or [])[:2]:
+        text = str(h)[:280]
+        if text:
+            insights.append({"title": "Headline", "body": text})
+
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "generated_at": datetime.now(timezone.utc).isoformat(),
-        "title": "Stay on top of the markets",
-        "blurb": (
-            "Daily Market Pulse from QuantTerm scanners — trends, sector movers, "
-            "and breakout context. Assembled from live system state, never invented."
-        ),
+        "title": "Keep informed about industry trends",
+        "blurb": "Stay in the loop with the latest developments from QuantTerm scanners.",
         "reports": reports,
         "today_pulse": pulse,
+        "breadth_gauge": gauge,
+        "insights": insights,
         "error": error,
         "disclaimer": "Market reports are research summaries, not trade instructions.",
     }

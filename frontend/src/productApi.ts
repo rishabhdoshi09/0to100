@@ -402,12 +402,9 @@ export const fetchStockFundamentals = (
     },
   ).then((response) => json(response))
 
-export const refreshStockFundamentals = (symbol: string): Promise<{
-  accepted: boolean
-  symbol: string
-  sections: Record<string, number | boolean>
-  workspace: StockWorkspace
-}> => fetchStockFundamentals(symbol, true)
+export const refreshStockFundamentals = (
+  symbol: string,
+): ReturnType<typeof fetchStockFundamentals> => fetchStockFundamentals(symbol, true)
 
 export const fetchCommandCenterWorkspace = (): Promise<CommandCenterWorkspace> =>
   fetch('/api/command-center-workspace', { headers: { Accept: 'application/json' } })
@@ -531,6 +528,17 @@ export type MarketReportsWorkspace = {
   blurb: string
   reports: MarketReportItem[]
   today_pulse: Record<string, unknown>
+  breadth_gauge?: {
+    available?: boolean
+    score?: number | null
+    label?: string
+    line?: string
+    verdict?: string
+    pct_above_50?: number | null
+    n?: number
+    source?: string
+  }
+  insights?: Array<{ title: string; body: string }>
   error: string
   disclaimer: string
 }
