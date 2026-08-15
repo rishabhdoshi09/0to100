@@ -33,6 +33,29 @@ export const PAGE_GUIDE: Record<string, PageGuide> = {
     action: 'Run a fresh scan, filter the result, then inspect one stock in Stock Intelligence.',
     doesNot: 'A scanner match is a research candidate, not a guaranteed trade.',
   },
+  Recommendations: {
+    title: 'Recommendations',
+    purpose: 'Groups QuantTerm evidence into research categories with Active/Closed lifecycle tracking.',
+    questions: [
+      'Which category matches my horizon (compound vs breakout)?',
+      'Is CMP live or EOD, and how old is the scan?',
+      'What is upside from entry vs room to target?',
+      'Which tracked picks are still open vs resolved?',
+    ],
+    action: 'Open a card in Stock Intelligence, or refresh scan/long-term data if categories are empty.',
+    doesNot: 'A Buy badge is research classification — not a broker order or return promise.',
+  },
+  'Market Reports': {
+    title: 'Market Reports',
+    purpose: 'Daily Market Pulse assembled from live scanners — movers, breadth notes and breakout context.',
+    questions: [
+      'What changed in the market today?',
+      'Which names are buzzing or near breakouts?',
+      'Is this report from today IST or an older saved pulse?',
+    ],
+    action: 'Read takeaways, then jump to Recommendations or Scanner for names mentioned.',
+    doesNot: 'A pulse summary is context, not a trade ticket.',
+  },
   'Stock Intelligence': {
     title: 'Stock Intelligence',
     purpose: 'Combines price structure, technicals, current fundamentals, risks, news and source dates.',

@@ -203,6 +203,22 @@ def radar_home_workspace() -> dict[str, Any]:
     )
 
 
+def recommendations_workspace() -> dict[str, Any]:
+    """Reco-style research categories + Active/Closed lifecycle (evidence only)."""
+    from product.recommendations_workspace import build_recommendations_workspace
+    return build_recommendations_workspace(
+        scan_payload=core._scan_payload(),
+        long_term_payload=core._long_term_payload(),
+        refresh_technicals=True,
+    )
+
+
+def market_reports_workspace() -> dict[str, Any]:
+    """Chronological Market Pulse desk from street_pulse + saved day files."""
+    from product.recommendations_workspace import build_market_reports_workspace
+    return build_market_reports_workspace(persist_today=True)
+
+
 def compare_workspace(symbols: str = Query("", description="Comma-separated NSE symbols")) -> dict[str, Any]:
     from product.compare_workspace import build_compare_workspace
     parts = [item.strip() for item in str(symbols or "").split(",") if item.strip()]
@@ -327,6 +343,18 @@ def install(app) -> None:
         radar_home_workspace,
         methods=["GET"],
         name="radar_home_workspace",
+    )
+    app.add_api_route(
+        "/api/recommendations-workspace",
+        recommendations_workspace,
+        methods=["GET"],
+        name="recommendations_workspace",
+    )
+    app.add_api_route(
+        "/api/market-reports-workspace",
+        market_reports_workspace,
+        methods=["GET"],
+        name="market_reports_workspace",
     )
     app.add_api_route(
         "/api/compare",
