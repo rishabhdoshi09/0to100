@@ -143,7 +143,7 @@ function TodayStrip({ dashboard }: { dashboard: DashboardPayload }) {
       <div><span>MARKET</span><strong>{dashboard.market.health.toUpperCase()}</strong><small>{dashboard.market.trade_stance}</small></div>
       <div><span>NIFTY 1D</span><strong className={(dashboard.market.nifty_change_1d || 0) >= 0 ? 'positive' : 'negative'}>{pct(dashboard.market.nifty_change_1d)}</strong><small>{dashboard.market.breadth}</small></div>
       <div><span>VOLATILITY</span><strong>{dashboard.market.vix == null ? '—' : Number(dashboard.market.vix).toFixed(2)}</strong><small>VIX / regime input</small></div>
-      <div><span>PRICE DATA</span><strong>{dashboard.data.bhavcopy.latest_date || 'MISSING'}</strong><small>{dashboard.data.bhavcopy.sessions} sessions</small></div>
+      <div><span>PRICE DATA</span><strong>{dashboard.data.bhavcopy.latest_date || 'MISSING'}</strong><small>{dashboard.data.bhavcopy.is_stale ? `STALE · need ${dashboard.data.bhavcopy.required_session || 'latest session'}` : `${dashboard.data.bhavcopy.sessions} sessions`}</small></div>
       <div><span>MARKET SCAN</span><strong>{scanOperation?.status || 'NOT RUN'}</strong><small>{scanOperation?.progress_pct == null ? relativeDate(dashboard.scan.scanned_at) : `${scanOperation.progress_pct.toFixed(0)}% · ${words(scanOperation.stage)}`}</small></div>
     </div>
   )
@@ -445,7 +445,7 @@ export function EnhancedCommandCenterView(props: ExperienceViewProps) {
         <div><span>SESSION</span><strong>{dashboard.market.trade_stance}</strong><small>{dashboard.market.breadth}</small></div>
         <div><span>LEADERS</span><strong>{dashboard.market.leaders.slice(0, 3).join(', ') || '—'}</strong><small>Sector leadership</small></div>
         <div><span>LAST SCAN</span><strong>{dashboard.scan.scanned_at || 'Not run'}</strong><small>{dashboard.scan.universe_size.toLocaleString('en-IN')} universe</small></div>
-        <div><span>DATA</span><strong>{dashboard.data.bhavcopy.latest_date || 'MISSING'}</strong><small>{dashboard.data.ready ? 'Core data ready' : 'Incomplete'}</small></div>
+        <div><span>DATA</span><strong>{dashboard.data.bhavcopy.latest_date || 'MISSING'}</strong><small>{dashboard.data.bhavcopy.is_stale ? `STALE · need ${dashboard.data.bhavcopy.required_session || 'latest session'}` : dashboard.data.ready ? 'Core data ready' : 'Incomplete'}</small></div>
         {blocker && <div className="strip-blocker"><span>BLOCKER</span><strong>{blocker}</strong></div>}
       </section>
 
@@ -566,7 +566,7 @@ export function EnhancedScannerView(props: ExperienceViewProps) {
         <article><span>MOMENTUM LANE</span><strong>{fallbackRows('Momentum', dashboard).length}</strong><small>Current technical-strength matches</small></article>
         <article><span>LONG-TERM LANE</span><strong>{dashboard.long_term.records.length}</strong><small>Quality, valuation and timing candidates</small></article>
         <article><span>UNIVERSE</span><strong>{dashboard.scan.universe_size.toLocaleString('en-IN')}</strong><small>Stocks in the saved market scan</small></article>
-        <article><span>PRICE DATA</span><strong>{dashboard.data.bhavcopy.latest_date || 'MISSING'}</strong><small>{dashboard.data.bhavcopy.sessions} official sessions</small></article>
+        <article><span>PRICE DATA</span><strong>{dashboard.data.bhavcopy.latest_date || 'MISSING'}</strong><small>{dashboard.data.bhavcopy.is_stale ? `STALE · need ${dashboard.data.bhavcopy.required_session || 'latest session'}` : `${dashboard.data.bhavcopy.sessions} official sessions`}</small></article>
       </div>
 
       <div className="scanner-mode-row">{modes.map((item) => <button type="button" key={item} className={mode === item ? 'active' : ''} onClick={() => setMode(item)}>{item}</button>)}</div>

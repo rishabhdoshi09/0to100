@@ -173,6 +173,9 @@ export type DataReadiness = {
     bhavcopy_dir?: string
     minimum_sessions?: number
     source?: string
+    required_session?: string
+    is_stale?: boolean
+    freshness?: string
     error?: string
   }
   scan_saved: boolean

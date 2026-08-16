@@ -15,10 +15,38 @@ from datetime import date
 from pathlib import Path
 from typing import Any
 
+_last_network_build_ts = 0.0
+_NETWORK_COOLDOWN_S = 600.0
+
 
 def _store_module():
     from data import bhavcopy_store as store
     return store
+
+
+def _required_session() -> str:
+    try:
+        from core.market_clock import now_ist_naive
+        from research.autonomy.schedules import required_completed_session
+        return required_completed_session(now_ist_naive())
+    except Exception:
+        return ""
+
+
+def _freshness_fields(latest: str) -> dict[str, Any]:
+    required = _required_session()
+    latest_s = str(latest or "")
+    if required and (not latest_s or latest_s < required):
+        freshness, stale = "STALE", True
+    elif latest_s:
+        freshness, stale = "READY", False
+    else:
+        freshness, stale = "MISSING", True
+    return {
+        "required_session": required,
+        "is_stale": stale,
+        "freshness": freshness,
+    }
 
 
 def _snapshot(store) -> dict[str, Any]:
@@ -27,11 +55,12 @@ def _snapshot(store) -> dict[str, Any]:
         sessions = int(store._store_sessions or 0)
         latest = store._store_last_day
     dates = store._dates_on_disk()
-    return {
+    latest_s = latest.isoformat() if isinstance(latest, date) else str(latest or "")
+    payload = {
         "ready": symbols > 0,
         "symbols": symbols,
         "sessions": sessions,
-        "latest_date": latest.isoformat() if isinstance(latest, date) else str(latest or ""),
+        "latest_date": latest_s,
         "csv_files": len(dates),
         "csv_latest_date": dates[-1].isoformat() if dates else "",
         "cache_exists": bool(store._PKL.exists()),
@@ -40,6 +69,8 @@ def _snapshot(store) -> dict[str, Any]:
         "minimum_sessions": int(store._MIN_DAYS),
         "source": "official_nse_bhavcopy",
     }
+    payload.update(_freshness_fields(latest_s))
+    return payload
 
 
 def status(*, load_cache: bool = False) -> dict[str, Any]:
@@ -76,3 +107,35 @@ def get_ohlcv(symbol: str):
     """Return canonical OHLCV after lazily loading the persisted cache."""
     ensure_loaded(rebuild_from_local=False)
     return _store_module().get_ohlcv(symbol)
+
+
+def ensure_current_session(*, allow_network: bool = False) -> dict[str, Any]:
+    """Bring the in-process store up to the last completed NSE session.
+
+    Local CSVs already on disk are appended immediately. Network download is
+    optional and rate-limited so a dashboard poll cannot hammer NSE.
+    """
+    global _last_network_build_ts
+    current = status(load_cache=True)
+    if not current.get("is_stale"):
+        return current
+    store = _store_module()
+    csv_latest = str(current.get("csv_latest_date") or "")
+    latest = str(current.get("latest_date") or "")
+    if csv_latest and (not latest or csv_latest > latest):
+        try:
+            store.build_store()
+        except Exception:
+            pass
+        return status(load_cache=False)
+    if allow_network:
+        import time
+        now = time.time()
+        if now - _last_network_build_ts >= _NETWORK_COOLDOWN_S:
+            _last_network_build_ts = now
+            try:
+                store.build_store()
+            except Exception:
+                pass
+            return status(load_cache=False)
+    return status(load_cache=False)
