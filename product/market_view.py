@@ -80,6 +80,66 @@ def build_market_view(regime: Any) -> RetailMarketView:
     )
 
 
+def _view_from_official_tape() -> RetailMarketView | None:
+    """Desk tape from official NSE files. Never imports Yahoo."""
+    from product.local_tape import read_official_tape
+
+    tape = read_official_tape()
+    if not tape.usable:
+        return None
+    breadth = tape.breadth or {}
+    verdict = str(breadth.get("verdict") or "MIXED")
+    strength = int(round(float(breadth.get("pct_above_50") or 50)))
+    nifty_1d = float(tape.nifty_change_1d or 0.0)
+    vix = float(tape.vix or 0.0)
+
+    if verdict == "NARROW" or nifty_1d <= -1.0 or (vix and vix >= 18):
+        health = "Weak"
+    elif verdict == "HEALTHY" and nifty_1d >= 0 and (not vix or vix < 14):
+        health = "Healthy"
+    else:
+        health = "Mixed"
+
+    if health == "Weak" or verdict == "NARROW":
+        stance = "Be selective. Breadth or the index is not supporting chase entries."
+    elif health == "Healthy":
+        stance = "Tape is constructive. Take only setups that are still intact on the live bar."
+    else:
+        stance = "Use normal caution. Prefer names still near their 20-day high."
+
+    lead_text = ", ".join(tape.leaders[:3]) if tape.leaders else "no clear sector leader"
+    lag_text = ", ".join(tape.laggards[:3]) if tape.laggards else "no clear laggard"
+    breadth_label = verdict.title() if verdict else "Unknown"
+    summary = (
+        f"Market condition is {health.lower()}. Breadth is {breadth_label.lower()} "
+        f"({strength}/100). Leading: {lead_text}. Lagging: {lag_text}."
+    )
+    if tape.as_of:
+        summary = f"{summary} Prices as of {tape.as_of} EOD."
+    return RetailMarketView(
+        health=health,
+        summary=summary,
+        trade_stance=stance,
+        breadth=f"{breadth_label} · {strength}/100",
+        leaders=tape.leaders,
+        laggards=tape.laggards,
+        nifty_change_1d=nifty_1d,
+        nifty_change_5d=float(tape.nifty_change_5d or 0.0),
+        vix=vix,
+        technical_details={
+            "as_of": tape.as_of,
+            "source": tape.source,
+            "nifty_close": tape.nifty_close,
+            "breadth": breadth,
+            "sector_changes": tape.sector_changes,
+        },
+    )
+
+
 def current_market_view() -> RetailMarketView:
+    """Prefer official local tape. Regime/Yahoo is optional enrichment only."""
+    local = _view_from_official_tape()
+    if local is not None:
+        return local
     from core.regime_engine import compute_regime
     return build_market_view(compute_regime())

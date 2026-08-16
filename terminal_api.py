@@ -212,6 +212,8 @@ def _market_payload() -> dict:
             "nifty_change_1d": _safe_float(market.nifty_change_1d),
             "nifty_change_5d": _safe_float(market.nifty_change_5d),
             "vix": _safe_float(market.vix),
+            "as_of": str((getattr(market, "technical_details", {}) or {}).get("as_of") or ""),
+            "source": str((getattr(market, "technical_details", {}) or {}).get("source") or ""),
             "technical_details": dict(getattr(market, "technical_details", {}) or {}),
         }
     except Exception as exc:

@@ -269,6 +269,33 @@ def classify_momentum_state(row: Mapping[str, Any]) -> str:
     return "watch_momentum"
 
 
+def _market_field(market: Any, name: str, default: str = "") -> str:
+    if isinstance(market, Mapping):
+        value = market.get(name)
+        if value not in (None, ""):
+            return str(value)
+        details = market.get("technical_details") or {}
+        if isinstance(details, Mapping) and details.get(name) not in (None, ""):
+            return str(details.get(name))
+        return default
+    value = getattr(market, name, None)
+    if value not in (None, ""):
+        return str(value)
+    details = getattr(market, "technical_details", {}) or {}
+    if isinstance(details, Mapping) and details.get(name) not in (None, ""):
+        return str(details.get(name))
+    return default
+
+
+def _price_session() -> str:
+    try:
+        from data.bhavcopy_runtime import status as bhav_status
+        snap = bhav_status(load_cache=True)
+        return str(snap.get("latest_date") or snap.get("required_session") or "")
+    except Exception:
+        return ""
+
+
 def default_sector_lookup(symbol: str) -> str:
     try:
         from scan.sector_heat import sector_of
@@ -455,6 +482,8 @@ def build_radar_home(
         "laggards": list(getattr(market, "laggards", ()) or (market or {}).get("laggards", []) if isinstance(market, Mapping) else []),
         "scan_scanned_at": scan_at,
         "long_term_scanned_at": lt_at,
+        "price_session": _price_session(),
+        "market_as_of": _market_field(market, "as_of"),
         "universe_size": int((scan_payload or {}).get("universe_size", 0) or 0),
         "best_breakout": best_breakout,
         "best_among_fundamentals": best_among_fundamentals,
