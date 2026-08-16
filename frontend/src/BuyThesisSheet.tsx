@@ -105,21 +105,44 @@ export function BuyThesisSheet({
           </ul>
         </article>
         <article>
-          <h3>Fundamentals</h3>
-          {thesis?.fundamentals.available ? (
+          <h3>Sector wave</h3>
+          <p className={`thesis-wave thesis-wave-${String(thesis?.sector_wave?.wave || 'NO_CLAIM').toLowerCase()}`}>
+            {thesis?.sector_wave?.headline || (loading ? 'Identifying sector…' : 'Sector not identified yet.')}
+          </p>
+          <ul>
+            {(thesis?.sector_wave?.bullets || []).map((item) => <li key={item}>{item}</li>)}
+          </ul>
+          {thesis?.sector_wave?.note ? <small>{thesis.sector_wave.note}</small> : null}
+        </article>
+        <article>
+          <h3>FII / DII / named buyers</h3>
+          <p>{thesis?.smart_money?.headline || 'Checking shareholding and NSE prints…'}</p>
+          <ul>
+            {(thesis?.smart_money?.bullets || []).map((item) => <li key={item}>{item}</li>)}
+          </ul>
+          {thesis?.smart_money?.note ? <small>{thesis.smart_money.note}</small> : null}
+        </article>
+        <article>
+          <h3>Earnings, margins, valuations</h3>
+          {thesis?.earnings?.available ? (
             <ul>
-              {(thesis.fundamentals.metrics || []).slice(0, 8).map((m) => (
+              {(thesis.earnings.bullets || []).map((item) => <li key={item}>{item}</li>)}
+              {(thesis.fundamentals.metrics || [])
+                .filter((m) => ['roe', 'roce', 'debt_to_equity', 'promoter_holding'].includes(String(m.key)))
+                .map((m) => (
+                  <li key={String(m.key)}>{metricLine(String(m.label), m.value, m.unit === '%' ? '%' : m.unit ? ` ${m.unit}` : '')}</li>
+                ))}
+            </ul>
+          ) : thesis?.fundamentals.available ? (
+            <ul>
+              {(thesis.fundamentals.metrics || []).slice(0, 10).map((m) => (
                 <li key={String(m.key)}>{metricLine(String(m.label), m.value, m.unit === '%' ? '%' : m.unit ? ` ${m.unit}` : '')}</li>
               ))}
             </ul>
           ) : (
             <p>Filings not in cache yet. {fetching ? 'Fetching now…' : 'A fetch was attempted from Screener, then Yahoo.'}</p>
           )}
-          {thesis?.fundamentals.about ? <p className="thesis-about">{thesis.fundamentals.about}</p> : null}
-        </article>
-        <article>
-          <h3>Sales</h3>
-          {sales?.cagr_3y != null ? <p>3-year sales CAGR {Number(sales.cagr_3y).toFixed(1)}%</p> : <p>{sales?.note || 'Sales history not loaded.'}</p>}
+          {sales?.cagr_3y != null ? <p>3-year sales CAGR {Number(sales.cagr_3y).toFixed(1)}% (annual table)</p> : null}
           {sales?.series && sales.series.length > 0 ? (
             <ul>
               {sales.series.map((row) => (
@@ -127,6 +150,7 @@ export function BuyThesisSheet({
               ))}
             </ul>
           ) : null}
+          {thesis?.fundamentals.about ? <p className="thesis-about">{thesis.fundamentals.about}</p> : null}
         </article>
         <article>
           <h3>Order book</h3>
