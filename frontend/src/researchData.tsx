@@ -267,7 +267,7 @@ export function ResearchDataView({ symbol }: { symbol: string }) {
   }
 
   if (!symbol) {
-    return <section className="research-data-view"><div className="evidence-empty"><h2>Select a stock first</h2><p>Choose a stock from Scanner, Long-Term, F&O Desk or search. QuantTerm will then show exactly which research datasets are available, stale or missing.</p></div></section>
+    return <section className="research-data-view"><div className="evidence-empty"><h2>Select a stock first</h2><p>Open a name from Ideas or search. This tab is the file layer under that stock — which datasets are fresh, stale or missing.</p></div></section>
   }
 
   return (

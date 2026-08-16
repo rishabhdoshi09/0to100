@@ -143,7 +143,7 @@ export function EducationView({ runControl, setSelected, setActive }: Props) {
           {loading ? 'Loading…' : 'Reload education feed'}
         </button>
         <button type="button" onClick={() => setActive?.('News & Events')}>
-          Open News & Events
+          Open the news list
         </button>
       </div>
       {error ? <div className="large-empty">{error}</div> : null}
@@ -194,7 +194,7 @@ export function EducationView({ runControl, setSelected, setActive }: Props) {
           {!loading && cards.length === 0 ? (
             <div className="large-empty">
               {feed?.empty_hint
-                || 'No cards for this lens yet. Refresh News & Events, then reload Education.'}
+                || 'No cards for this lens yet. Refresh news, then reload Learn.'}
             </div>
           ) : null}
           {cards.map((card) => (

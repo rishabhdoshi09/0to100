@@ -584,7 +584,7 @@ export function RadarHomeView(props: ExperienceViewProps & {
       <nav className="reco-crumb" aria-label="Breadcrumb">
         <button type="button" onClick={() => setActive('Home')}>Home</button>
         <span>›</span>
-        <strong>Market desk</strong>
+        <strong>Desk</strong>
         <span>›</span>
         <strong>{laneLabel}</strong>
       </nav>
@@ -833,9 +833,9 @@ export function MarketScannerView(props: ExperienceViewProps & { onCompare: (sym
   return (
     <section className="reco-light market-scanner">
       <nav className="reco-crumb" aria-label="Breadcrumb">
-        <button type="button" onClick={() => setActive('Home')}>Home</button>
+        <button type="button" onClick={() => setActive('Recommendations')}>Ideas</button>
         <span>›</span>
-        <strong>Market Scanner</strong>
+        <strong>Table</strong>
         <span>›</span>
         <strong>{tab}</strong>
       </nav>

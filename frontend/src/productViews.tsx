@@ -458,7 +458,7 @@ export function ProductStockIntelligenceView(props: ViewProps) {
     }
   }
 
-  if (!selected) return <section className="workspace-view"><div className="large-empty">Search or select an NSE symbol. QuantTerm can open the workspace even when the stock is not already in a saved shortlist.</div></section>
+  if (!selected) return <section className="workspace-view"><div className="large-empty">Search a name. Chart, financials, options (F&amp;O) and evidence all live on that stock — not as separate sidebar pages.</div></section>
   if (loading && !workspace) return <section className="workspace-view"><div className="large-empty">Loading verified price, technical, fundamental and source data for {selected}…</div></section>
 
   return (

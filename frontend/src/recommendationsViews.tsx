@@ -176,9 +176,9 @@ export function RecommendationsView({
       <LiveScanBanner scan={longTermScan} depth={depth} label="Long-term scan" />
 
       <nav className="reco-crumb" aria-label="Breadcrumb">
-        <button type="button" onClick={() => setActive('Home')}>Home</button>
+        <button type="button" onClick={() => setActive('Recommendations')}>Ideas</button>
         <span>›</span>
-        <button type="button" onClick={() => setLifecycle('Active')}>Recommendations</button>
+        <button type="button" onClick={() => setLifecycle('Active')}>Categories</button>
         <span>›</span>
         <strong>{category.label}</strong>
       </nav>
@@ -353,9 +353,9 @@ export function MarketReportsView({ setActive }: ExperienceViewProps) {
   return (
     <div className="reco-light market-reports-desk">
       <nav className="reco-crumb" aria-label="Breadcrumb">
-        <button type="button" onClick={() => setActive('Home')}>Home</button>
+        <button type="button" onClick={() => setActive('News & Events')}>Context</button>
         <span>›</span>
-        <strong>Market Reports</strong>
+        <strong>Pulse</strong>
       </nav>
 
       <header className="rw-reports-hero">

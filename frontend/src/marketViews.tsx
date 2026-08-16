@@ -350,12 +350,12 @@ export function FnoView({ dashboard, runControl, setSelected, setActive }: Props
   return (
     <section className="workspace-view">
       <div className="feature-purpose">
-        <strong>What F&O Coverage does—and does not do</strong>
+        <strong>How to use F&O</strong>
         <p>
-          It maps which stocks have current futures contracts (nearest future, expiry, lot size),
-          then loads the live nearest-expiry option chain for a selected name: OI, IV, PCR and max pain,
-          plus any saved EOD history. It does <em>not</em> compute Black-Scholes Greeks or issue trade
-          direction — PCR bias is positioning context only, not a buy/sell desk.
+          This is the derivatives floor of a name — not a separate product. Pick a mapped stock or
+          index, read nearest-expiry OI / IV / PCR / max pain as positioning context, then open the
+          stock for chart and financials. The same chain also lives on that stock’s Options tab.
+          No Greeks, no buy/sell direction.
         </p>
       </div>
       <div className="inline-actions">

@@ -115,13 +115,23 @@ function closedTradeEvidence(dashboard: DashboardPayload) {
   }
 }
 
+const GUIDE_ALIAS: Record<string, string> = {
+  Home: 'Command Center',
+  'Market Scanner': 'Scanner',
+  'Long-Term Picks': 'Long-Term',
+  'System Health': 'Automation',
+  'Paper Portfolio': 'Portfolio',
+  'Market Overview': 'Market Internals',
+}
+
 export function ExperienceHelpDrawer({ page, open, onClose }: {
   page: string
   open: boolean
   onClose: () => void
 }) {
   if (!open) return null
-  const guide = PAGE_GUIDE[page] || PAGE_GUIDE['Command Center']
+  const guideKey = page in PAGE_GUIDE ? page : (GUIDE_ALIAS[page] || 'Command Center')
+  const guide = PAGE_GUIDE[guideKey] || PAGE_GUIDE['Command Center']
   return (
     <div className="experience-help-backdrop" role="presentation" onClick={onClose}>
       <aside className="experience-help" role="dialog" aria-modal="true" aria-label={`${guide.title} help`} onClick={(event: { stopPropagation: () => void }) => event.stopPropagation()}>
