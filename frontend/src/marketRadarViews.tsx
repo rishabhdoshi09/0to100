@@ -446,6 +446,12 @@ export function RadarHomeView(props: ExperienceViewProps & {
   }, [dashboard.scan.scanned_at, dashboard.long_term.scanned_at, dashboard.generated_at])
 
   useEffect(() => {
+    if (selected) return
+    const best = String(radar?.best_breakout?.symbol || '').toUpperCase()
+    if (best) setSelected(best)
+  }, [radar?.best_breakout, selected, setSelected])
+
+  useEffect(() => {
     if (!selected) { setPreTrade(null); return }
     let alive = true
     const load = () => {

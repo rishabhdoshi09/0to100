@@ -211,13 +211,8 @@ function App() {
       const payload = await fetchDashboard()
       setDashboard(payload)
       setError('')
-      const allSymbols = [
-        ...payload.scan.records.map((row) => row.symbol),
-        ...payload.long_term.records.map((row) => row.symbol),
-        ...payload.fno.underlyings.map((row) => row.symbol),
-      ]
-      const first = allSymbols[0] || ''
-      setSelected((current) => current || first)
+      // Do not auto-open scan.records[0]. That list is raw scan rank — a faded
+      // name (YATHARTH) can sit on top and then get chart/pre-trade polled forever.
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : 'Dashboard API unavailable')
     } finally {
