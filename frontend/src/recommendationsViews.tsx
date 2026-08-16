@@ -1,6 +1,7 @@
 import './recommendations.css'
 import { useEffect, useMemo, useState } from 'react'
 import { money, pct, relativeAge, words } from './format'
+import { BuyThesisSheet } from './BuyThesisSheet'
 import {
   fetchMarketReportsWorkspace,
   fetchRecommendationsWorkspace,
@@ -29,9 +30,11 @@ function badgeClass(action: string): string {
 
 function CardTile({
   card,
+  selected,
   onSelect,
 }: {
   card: RecommendationCard
+  selected?: string
   onSelect: (symbol: string) => void
 }) {
   const buy = card.entry ?? card.cmp ?? null
@@ -41,7 +44,7 @@ function CardTile({
       : null)
   const risk = (card.risk_tier || 'Medium').toLowerCase()
   return (
-    <button type="button" className="reco-pick" onClick={() => onSelect(card.symbol)}>
+    <button type="button" className={`reco-pick${selected === card.symbol ? ' is-active' : ''}`} onClick={() => onSelect(card.symbol)}>
       <div className="reco-pick-row1">
         <span className={`reco-buy ${badgeClass(card.action_badge)}`}>{card.action_badge}</span>
         <span className={`reco-risk-chip ${risk}`}>
@@ -92,12 +95,20 @@ function CardTile({
 }
 
 export function RecommendationsView({
+  dashboard,
+  selected,
   setSelected,
+  bars,
   setActive,
   marketScan,
   longTermScan,
   depth,
-}: ExperienceViewProps) {
+  onCompare,
+  onWatchlist,
+}: ExperienceViewProps & {
+  onCompare?: (symbol: string) => void
+  onWatchlist?: (symbol: string) => void
+}) {
   const [data, setData] = useState<RecommendationsWorkspace | null>(null)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(true)
@@ -152,8 +163,11 @@ export function RecommendationsView({
 
   const onSelect = (symbol: string) => {
     setSelected(symbol)
-    setActive('Stock Intelligence')
   }
+
+  const selectedRow = dashboard.scan.records.find((row) => row.symbol === selected)
+    || dashboard.long_term.records.find((row) => row.symbol === selected)
+    || dashboard.conviction.find((row) => row.symbol === selected)
 
   if (loading) {
     return (
@@ -269,10 +283,24 @@ export function RecommendationsView({
             <CardTile
               key={`${card.lifecycle}-${card.symbol}-${card.setup_label}-${card.category_id}`}
               card={card}
+              selected={selected}
               onSelect={onSelect}
             />
           ))}
         </div>
+      )}
+      {selected ? (
+        <BuyThesisSheet
+          symbol={selected}
+          bars={bars}
+          row={selectedRow as Record<string, unknown> | null}
+          onClose={() => setSelected('')}
+          onOpenResearch={() => setActive('Stock Intelligence')}
+          onCompare={() => onCompare?.(selected)}
+          onWatchlist={() => onWatchlist?.(selected)}
+        />
+      ) : (
+        <p className="reco-foot">Tap a name for the buy thesis.</p>
       )}
       <p className="reco-foot">{data.disclaimer}</p>
     </div>

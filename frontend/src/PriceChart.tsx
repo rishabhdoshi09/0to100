@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react'
 import { ColorType, createChart, type IChartApi } from 'lightweight-charts'
+import { chartHeightForWidth } from './phoneLayout'
 import type { ChartBar } from './types'
 
 type Props = {
@@ -17,7 +18,7 @@ export function PriceChart({ symbol, bars }: Props) {
 
     const chart = createChart(container, {
       width: container.clientWidth,
-      height: 360,
+      height: chartHeightForWidth(container.clientWidth),
       layout: {
         background: { type: ColorType.Solid, color: 'transparent' },
         textColor: '#8390a8',
@@ -67,7 +68,10 @@ export function PriceChart({ symbol, bars }: Props) {
     chartRef.current = chart
 
     const resize = new ResizeObserver(([entry]) => {
-      chart.applyOptions({ width: entry.contentRect.width })
+      chart.applyOptions({
+        width: entry.contentRect.width,
+        height: chartHeightForWidth(entry.contentRect.width),
+      })
     })
     resize.observe(container)
 

@@ -1,12 +1,14 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { ChartWorkspace } from './components'
 import { money, pct } from './format'
+import { isPhoneLayout, shouldPortalThesis, thesisSheetClassName } from './phoneLayout'
 import {
   fetchBuyThesis,
   fetchStockFundamentals,
   type BuyThesis,
 } from './productApi'
-import type { ChartBar } from './types'
+import type { ChartBar, ConvictionRecord, LongTermRecord, ScanRecord } from './types'
 
 function metricLine(label: string, value: unknown, unit = '') {
   if (value == null || value === '') return `${label}: not in cache`
@@ -23,6 +25,7 @@ export function BuyThesisSheet({
   symbol,
   bars,
   row,
+  onClose,
   onOpenResearch,
   onCompare,
   onWatchlist,
@@ -30,6 +33,7 @@ export function BuyThesisSheet({
   symbol: string
   bars: ChartBar[]
   row?: Record<string, unknown> | null
+  onClose?: () => void
   onOpenResearch: () => void
   onCompare: () => void
   onWatchlist: () => void
@@ -38,6 +42,16 @@ export function BuyThesisSheet({
   const [loading, setLoading] = useState(false)
   const [fetching, setFetching] = useState(false)
   const [error, setError] = useState('')
+  const [phone, setPhone] = useState(() => isPhoneLayout())
+  const sheetRef = useRef<HTMLElement | null>(null)
+
+  useEffect(() => {
+    const media = window.matchMedia(`(max-width: 820px)`)
+    const sync = () => setPhone(media.matches)
+    sync()
+    media.addEventListener('change', sync)
+    return () => media.removeEventListener('change', sync)
+  }, [])
 
   useEffect(() => {
     let alive = true
@@ -65,11 +79,39 @@ export function BuyThesisSheet({
     return () => { alive = false }
   }, [symbol])
 
+  useEffect(() => {
+    sheetRef.current?.scrollTo(0, 0)
+    if (!onClose) return
+    document.documentElement.classList.add('thesis-open')
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') onClose()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => {
+      document.documentElement.classList.remove('thesis-open')
+      window.removeEventListener('keydown', onKey)
+    }
+  }, [onClose, symbol])
+
   const plan = thesis?.plan
   const book = thesis?.order_book
   const sales = thesis?.sales
-  return (
-    <section className="reco-sheet thesis-sheet" aria-label={`Buy thesis ${symbol}`}>
+  const sheet = (
+    <section
+      ref={sheetRef}
+      className={thesisSheetClassName(Boolean(onClose))}
+      role={onClose ? 'dialog' : undefined}
+      aria-modal={onClose ? true : undefined}
+      aria-label={`Buy thesis ${symbol}`}
+    >
+      {onClose ? (
+        <div className="thesis-toolbar">
+          <button type="button" className="thesis-close" onClick={onClose}>
+            ← Close
+          </button>
+          <strong>{symbol}</strong>
+        </div>
+      ) : null}
       <header className="reco-sheet-hero">
         <p>{thesis?.sector || 'Selected name'}</p>
         <h2>{thesis?.company || symbol}</h2>
@@ -180,9 +222,19 @@ export function BuyThesisSheet({
         <button type="button" className="reco-ghost" onClick={onCompare}>Compare</button>
         <button type="button" className="reco-ghost" onClick={onWatchlist}>Watchlist</button>
       </div>
-      <div className="reco-chart-card">
-        <ChartWorkspace symbol={symbol} bars={bars} row={row} />
-      </div>
+      <details className="thesis-chart-fold" open={!phone}>
+        <summary>Chart</summary>
+        <div className="reco-chart-card">
+          <ChartWorkspace
+            symbol={symbol}
+            bars={bars}
+            row={(row || undefined) as ScanRecord | ConvictionRecord | LongTermRecord | undefined}
+          />
+        </div>
+      </details>
     </section>
   )
+
+  if (shouldPortalThesis(Boolean(onClose), phone)) return createPortal(sheet, document.body)
+  return sheet
 }

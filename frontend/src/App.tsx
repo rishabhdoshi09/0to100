@@ -444,10 +444,10 @@ function App() {
       return <WatchlistView setActive={setActive} setSelected={setSelected} onCompare={addToCompare} />
     }
     if (active === 'Market Scanner' || active === 'Scanner') {
-      return <MarketScannerView {...viewProps} onCompare={addToCompare} />
+      return <MarketScannerView {...viewProps} onCompare={addToCompare} onWatchlist={addToWatchlist} />
     }
     if (active === 'Recommendations') {
-      return <RecommendationsView {...viewProps} />
+      return <RecommendationsView {...viewProps} onCompare={addToCompare} onWatchlist={addToWatchlist} />
     }
     if (active === 'Market Reports') {
       return <MarketReportsView {...viewProps} />
@@ -551,7 +551,7 @@ function App() {
               list="quantterm-symbols"
             />
             <datalist id="quantterm-symbols">{symbolSuggestions.map((symbol) => <option value={symbol} key={symbol} />)}</datalist>
-            <button type="button" onClick={openSearch}>Open stock</button>
+            <button type="button" onClick={openSearch}>Open</button>
           </div>
           <div className="top-status">
             <DisplayDepthToggle depth={depth} onChange={setDepth} />

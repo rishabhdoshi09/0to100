@@ -417,6 +417,22 @@
   .stock-context-grid { grid-template-columns: 1fr; }
 }
 
+@media (max-width: 820px) {
+  .product-command-center,
+  .stock-workspace-v2 { padding: 10px 12px 20px; }
+  .stock-workspace-hero {
+    align-items: flex-start;
+    flex-direction: column;
+    padding: 14px;
+    gap: 10px;
+  }
+  .stock-workspace-hero h2 { font-size: 1.45rem; }
+  .stock-workspace-state { justify-items: start; }
+  .stock-workspace-state strong { font-size: 1.6rem; }
+  .stock-action-row button { min-height: 44px; flex: 1 1 140px; }
+  .fact-grid { grid-template-columns: 1fr 1fr; }
+}
+
 @media (max-width: 680px) {
   .product-command-center,
   .stock-workspace-v2 { padding: 12px; }
