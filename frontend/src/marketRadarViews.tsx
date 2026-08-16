@@ -21,7 +21,6 @@ import {
 import { RiskLensCard } from './productViews'
 import { LiveScanBanner, type ExperienceViewProps } from './experience'
 import { EvChip } from './evChip'
-import { pickTodaySymbol } from './homeFloorPath'
 import { HomeTodayPath, useTodayFloors } from './HomeTodayPath'
 import type { DashboardPayload } from './types'
 
@@ -486,7 +485,7 @@ function DenseTable({
 export function RadarHomeView(props: ExperienceViewProps & {
   onCompare: (symbol: string) => void
   onWatchlist: (symbol: string) => void
-  onOpenFloor?: (page: string, opts?: { symbol?: string; intelTab?: string }) => void
+  onOpenFloor?: (page: string) => void
 }) {
   const { dashboard, selected, setSelected, bars, setActive, depth, marketScan, longTermScan, onCompare, onWatchlist, onOpenFloor } = props
   const todayPath = useTodayFloors()
@@ -514,12 +513,6 @@ export function RadarHomeView(props: ExperienceViewProps & {
     const timer = window.setInterval(load, 20_000)
     return () => { alive = false; window.clearInterval(timer) }
   }, [dashboard.scan.scanned_at, dashboard.long_term.scanned_at, dashboard.generated_at])
-
-  useEffect(() => {
-    if (selected) return
-    const best = String(radar?.best_breakout?.symbol || '').toUpperCase()
-    if (best) setSelected(best)
-  }, [radar?.best_breakout, selected, setSelected])
 
   useEffect(() => {
     if (!selected) { setPreTrade(null); return }
@@ -588,32 +581,23 @@ export function RadarHomeView(props: ExperienceViewProps & {
     : (dashboard.data.kite?.note || 'Kite token rejected — run python main.py login')
   const laneLabel = lane === 'breakouts' ? 'Breakouts' : lane === 'momentum' ? 'Momentum' : 'Long-term picks'
   const heroIcon = health.slice(0, 1).toUpperCase() || 'M'
-  const pathSymbol = pickTodaySymbol({
-    selected,
-    best,
-    visible,
-    scan: dashboard.scan.records,
-    query,
-  })
   const openTodayPath = () => {
-    if (!pathSymbol) return
-    setSelected(pathSymbol)
-    const fromCard = (best?.symbol === pathSymbol ? best : null)
-      || visible.find((item) => item.symbol === pathSymbol)
-      || (row as RadarRow | undefined)
-    void todayPath.open(pathSymbol, {
-      entry: fromCard?.entry,
-      stop: fromCard?.stop,
-      target: fromCard?.target,
-      verdict: fromCard?.setup_label || fromCard?.verdict,
+    void todayPath.open({
+      scanRecords: scanCount,
+      lastSession: priceSession || dashboard.session?.last_session || '',
+      lastSessionLabel: dashboard.session?.last_session_label || priceSession || '',
+      sessionBanner: desk?.session?.banner || dashboard.session?.banner || '',
+      optionsEodAvailable: Boolean(dashboard.data.options_eod?.available),
+      optionsEodSymbols: Number(dashboard.data.options_eod?.symbols || 0),
+      optionsEodAsOf: String(dashboard.data.options_eod?.latest_as_of || ''),
+      dataReady: Boolean(dashboard.data.ready),
     })
   }
-  const jumpFloor = (page: string, intelTab?: string) => {
+  const jumpFloor = (page: string) => {
     if (onOpenFloor) {
-      onOpenFloor(page, { symbol: pathSymbol || selected, intelTab })
+      onOpenFloor(page)
       return
     }
-    if (pathSymbol) setSelected(pathSymbol)
     setActive(page)
   }
 
@@ -644,8 +628,8 @@ export function RadarHomeView(props: ExperienceViewProps & {
           <button type="button" className="reco-ghost" disabled={marketScan.isBusy} onClick={() => void marketScan.start()}>
             {marketScan.isBusy ? 'Scanning…' : 'Scan now'}
           </button>
-          <button type="button" className="reco-primary" disabled={!pathSymbol || todayPath.busy} onClick={openTodayPath}>
-            {todayPath.busy ? 'Opening floors…' : pathSymbol ? `Open ${pathSymbol}'s floors` : "Open today's path"}
+          <button type="button" className="reco-primary" disabled={todayPath.busy} onClick={openTodayPath}>
+            {todayPath.busy ? 'Opening floors…' : "Open today's path"}
           </button>
         </div>
       </header>
@@ -680,14 +664,13 @@ export function RadarHomeView(props: ExperienceViewProps & {
           <em>
             {scanAt
               ? `Last scan ${relativeAge(scanAt)} · bars as of ${priceSession || dashboard.session?.last_session_label || 'last session'} EOD`
-              : 'Click Open today\'s path once a name is on the desk, or Scan now.'}
+              : 'Click Open today\'s path to wire the floors, or Scan now to fill lanes.'}
             {deskNote ? ` · ${deskNote}` : ''}
           </em>
         </div>
       </div>
 
       <HomeTodayPath
-        symbol={pathSymbol}
         busy={todayPath.busy}
         floors={todayPath.floors}
         error={todayPath.error}
@@ -750,7 +733,7 @@ export function RadarHomeView(props: ExperienceViewProps & {
           <strong>{emptyDesk ? 'First run' : `No ${laneLabel.toLowerCase()} yet`}</strong>
           <p>
             {emptyDesk
-              ? 'Click Open today\'s path on this page once a name is selected. Scan now fills this lane when history is ready.'
+              ? 'Click Open today\'s path to wire the floors. Scan now fills this lane when history is ready.'
               : 'Use Make ready / Scan now above, or clear the search.'}
           </p>
         </div>

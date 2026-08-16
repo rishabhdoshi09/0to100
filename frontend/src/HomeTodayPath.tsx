@@ -1,152 +1,91 @@
 import { useState } from 'react'
-import { money } from './format'
-import { FLOOR_JUMPS, pathButtonLabel, type FloorId } from './homeFloorPath'
-import { fetchMarketOptions, fetchOptionsEodHistory, watchOptionsEod } from './api'
+import {
+  FLOOR_JUMPS,
+  PATH_BUTTON_LABEL,
+  dataFloorCopy,
+  deskFloorCopy,
+  optionsFloorCopy,
+  type FloorContext,
+  type FloorId,
+} from './homeFloorPath'
 import {
   fetchDataCoverage,
   fetchDecisionJournal,
   fetchPortfolioIntel,
-  fetchPreTrade,
   type DecisionJournalPayload,
   type PortfolioIntelPayload,
-  type PreTrade,
 } from './productApi'
-import type { OptionsChainPayload, OptionsEodHistoryPayload } from './types'
-
-type EvidenceSummary = {
-  symbol?: string
-  coverage_pct?: number
-}
-
-export type DeskFallback = {
-  entry?: number | null
-  stop?: number | null
-  target?: number | null
-  verdict?: string
-}
 
 export type TodayFloors = {
-  symbol: string
-  desk: PreTrade | null
-  deskFallback?: DeskFallback | null
-  chain: OptionsChainPayload | null
-  history: OptionsEodHistoryPayload | null
-  watch: { accepted?: boolean; message?: string; capture_list?: string[] } | null
-  evidence: EvidenceSummary | null
+  context: FloorContext
+  audited: number | null
   coverageReady: boolean
   journal: DecisionJournalPayload | null
   intel: PortfolioIntelPayload | null
 }
 
-async function fetchEvidence(symbol: string): Promise<EvidenceSummary | null> {
-  const response = await fetch(`/evidence/${encodeURIComponent(symbol)}`, {
-    headers: { Accept: 'application/json' },
-  })
-  if (!response.ok) throw new Error('Evidence unavailable')
-  return response.json() as Promise<EvidenceSummary>
-}
-
-export async function loadTodayFloors(symbol: string, deskFallback?: DeskFallback | null): Promise<TodayFloors> {
-  const [desk, chain, history, watch, evidence, coverage, journal, intel] = await Promise.all([
-    fetchPreTrade(symbol).catch(() => null),
-    fetchMarketOptions(symbol, false).catch(() => null),
-    fetchOptionsEodHistory(symbol, 14).catch(() => null),
-    watchOptionsEod(symbol).catch(() => null),
-    fetchEvidence(symbol).catch(() => null),
-    fetchDataCoverage(symbol).then(() => true).catch(() => false),
+export async function loadTodayFloors(context: FloorContext): Promise<TodayFloors> {
+  const [coverage, journal, intel] = await Promise.all([
+    fetchDataCoverage().catch(() => null),
     fetchDecisionJournal().catch(() => null),
     fetchPortfolioIntel().catch(() => null),
   ])
+  const audited = coverage?.audited != null ? Number(coverage.audited) : null
   return {
-    symbol,
-    desk,
-    deskFallback: deskFallback || null,
-    chain,
-    history,
-    watch,
-    evidence,
-    coverageReady: coverage,
+    context,
+    audited: Number.isFinite(audited) ? audited : null,
+    coverageReady: Boolean(coverage),
     journal,
     intel,
   }
 }
 
 function floorCopy(id: FloorId, floors: TodayFloors): { title: string; detail: string } {
-  if (id === 'desk') {
-    const buy = floors.desk?.plan?.entry ?? floors.desk?.scan?.entry ?? floors.deskFallback?.entry
-    const verdict = floors.desk?.verdict || floors.deskFallback?.verdict || 'Desk'
-    return {
-      title: verdict,
-      detail: buy != null ? `Buy ${money(buy, 2)} · not an order` : 'Desk numbers load from the last scan',
-    }
-  }
-  if (id === 'options') {
-    if (floors.chain?.available) {
-      return { title: `PCR ${floors.chain.pcr ?? '—'}`, detail: 'Nearest-expiry context · no Greeks' }
-    }
-    const queued = floors.watch?.accepted
-      ? floors.watch.message || `${floors.symbol} queued for EOD`
-      : 'EOD queue not updated'
-    return {
-      title: floors.chain?.backoff ? 'Retry is live' : 'Chain unavailable',
-      detail: floors.chain?.message || queued,
-    }
-  }
-  if (id === 'data') {
-    const pct = floors.evidence?.coverage_pct
-    return {
-      title: pct == null ? (floors.coverageReady ? 'Files reachable' : 'Evidence offline') : `${pct}% coverage`,
-      detail: pct == null
-        ? 'Open Data to see which files are missing'
-        : 'Same-origin evidence · upload if a number is missing',
-    }
-  }
+  if (id === 'desk') return deskFloorCopy(floors.context)
+  if (id === 'options') return optionsFloorCopy(floors.context)
+  if (id === 'data') return dataFloorCopy(floors.audited, floors.coverageReady)
   if (id === 'holdings') {
     return {
-      title: floors.intel?.swap ? `Review ${floors.intel.swap.out} → ${floors.intel.swap.in}` : 'No swap claim',
-      detail: floors.intel?.message || 'Advice only — never rotates',
+      title: floors.intel?.swap ? 'Opportunity-cost note' : 'No swap claim',
+      detail: floors.intel?.message || 'Advice only — never rotates, never picks a stock',
     }
   }
   return {
-    title: floors.journal?.thin === false ? (floors.journal.message || 'Journal has a claim') : 'No claim yet',
+    title: floors.journal?.thin === false ? 'Journal has a claim' : 'No claim yet',
     detail: floors.journal?.message || 'Taken and rejected need ≥10 resolved outcomes',
   }
 }
 
 export function HomeTodayPath({
-  symbol,
   busy,
   floors,
   error,
   onOpen,
   onJump,
 }: {
-  symbol: string
   busy: boolean
   floors: TodayFloors | null
   error: string
   onOpen: () => void
-  onJump: (page: string, intelTab?: string) => void
+  onJump: (page: string) => void
 }) {
   return (
     <section className="home-path" aria-label="Today's path">
       <header className="home-path-head">
         <div>
           <p>Today's path</p>
-          <h3>{symbol ? `${symbol} across today's floors` : 'Pick a name, then one click'}</h3>
-          <em>One click wires Desk, Options and Data on this page. Jumps stay optional. Nothing here places an order.</em>
+          <h3>Wire today's floors</h3>
+          <em>
+            One click reads Desk, Options, Data, Holdings and Health as floors — not as one stock.
+            Jumps stay optional. Nothing here places an order or picks a name.
+          </em>
         </div>
-        <button
-          type="button"
-          className="reco-primary"
-          disabled={!symbol || busy}
-          onClick={onOpen}
-        >
-          {busy ? 'Opening floors…' : pathButtonLabel(symbol)}
+        <button type="button" className="reco-primary" disabled={busy} onClick={onOpen}>
+          {busy ? 'Opening floors…' : PATH_BUTTON_LABEL}
         </button>
       </header>
       {error ? <p className="home-path-error">{error}</p> : null}
-      {floors && floors.symbol === symbol ? (
+      {floors ? (
         <div className="home-path-grid">
           {FLOOR_JUMPS.map((floor) => {
             const copy = floorCopy(floor.id, floors)
@@ -155,7 +94,7 @@ export function HomeTodayPath({
                 key={floor.id}
                 type="button"
                 className="home-path-tile"
-                onClick={() => onJump(floor.page, floor.intelTab)}
+                onClick={() => onJump(floor.page)}
               >
                 <small>{floor.label}</small>
                 <strong>{copy.title}</strong>
@@ -166,9 +105,7 @@ export function HomeTodayPath({
         </div>
       ) : (
         <p className="home-path-hint">
-          {symbol
-            ? `Click to load Desk numbers, queue Options EOD, and read Data coverage for ${symbol}.`
-            : 'Scan now or search a name in the top bar first.'}
+          Click to load the floors. Search stays yours if you later want one stock.
         </p>
       )}
     </section>
@@ -180,15 +117,11 @@ export function useTodayFloors() {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
 
-  const open = async (symbol: string, deskFallback?: DeskFallback | null) => {
-    if (!symbol) {
-      setError('Scan now or search a name first.')
-      return
-    }
+  const open = async (context: FloorContext) => {
     setBusy(true)
     setError('')
     try {
-      setFloors(await loadTodayFloors(symbol, deskFallback))
+      setFloors(await loadTodayFloors(context))
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : 'Could not open today\'s floors')
     } finally {

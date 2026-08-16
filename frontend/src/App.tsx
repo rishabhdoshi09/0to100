@@ -457,11 +457,7 @@ function App() {
           {...viewProps}
           onCompare={addToCompare}
           onWatchlist={addToWatchlist}
-          onOpenFloor={(page, opts) => {
-            if (opts?.symbol) setSelected(opts.symbol)
-            if (opts?.intelTab) setIntelTab(opts.intelTab)
-            setActive(page)
-          }}
+          onOpenFloor={(page) => setActive(page)}
         />
       )
     }
@@ -515,11 +511,7 @@ function App() {
         {...viewProps}
         onCompare={addToCompare}
         onWatchlist={addToWatchlist}
-        onOpenFloor={(page, opts) => {
-          if (opts?.symbol) setSelected(opts.symbol)
-          if (opts?.intelTab) setIntelTab(opts.intelTab)
-          setActive(page)
-        }}
+        onOpenFloor={(page) => setActive(page)}
       />
     )
   }

@@ -18,7 +18,7 @@ export const PAGE_GUIDE: Record<string, PageGuide> = {
       'Which names qualify for technical or long-term review?',
       'What should be refreshed before trusting the screen?',
     ],
-    action: 'Click Open today\'s path on Home — that wires Desk, Options and Data for the name on the desk.',
+    action: 'Click Open today\'s path on Home to wire the floors. Search a name only when you want one stock.',
     doesNot: 'A green market or high score is not an instruction to buy.',
   },
   Scanner: {
