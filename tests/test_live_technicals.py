@@ -110,7 +110,7 @@ def test_kite_last_print_overrides_store_close(monkeypatch):
 
     monkeypatch.setattr("data.kite_client._fresh_env", lambda name, default="": "token" if name == "KITE_ACCESS_TOKEN" else default)
     monkeypatch.setattr(
-        "data.live_quotes.get_live_quotes",
+        "data.live_quotes._kite_quotes",
         lambda symbols: {"RPEL": {"price": 1440.5, "chg_pct": 0.4, "source": "kite"}},
     )
     monkeypatch.setattr("data.nse_live._is_trading_now", lambda: False)
@@ -129,6 +129,21 @@ def test_kite_last_print_overrides_store_close(monkeypatch):
     assert out[0]["quote_source"] == "kite"
     assert out[0]["price_tag"] == "KITE"
     assert out[0]["pct_below_20d_high"] < 2.65
+
+
+def test_nse_fallback_quote_is_not_tagged_kite(monkeypatch):
+    from product import live_technicals as lt
+
+    monkeypatch.setattr("data.kite_client._fresh_env", lambda name, default="": "token" if name == "KITE_ACCESS_TOKEN" else default)
+    monkeypatch.setattr(
+        "data.live_quotes._kite_quotes",
+        lambda symbols: {"RPEL": {"price": 1440.5, "chg_pct": 0.4, "source": "nse"}},
+    )
+    rows = [{"symbol": "RPEL", "price": 1433.9, "price_tag": "EOD", "tech_source": "eod"}]
+    out = lt._apply_kite_last(rows)
+    assert out[0]["price"] == pytest.approx(1433.9)
+    assert out[0].get("quote_source") != "kite"
+    assert out[0]["price_tag"] == "EOD"
 
 
 def test_radar_home_uses_refreshed_rsi(monkeypatch):

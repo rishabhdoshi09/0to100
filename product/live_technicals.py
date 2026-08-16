@@ -169,10 +169,10 @@ def _apply_kite_last(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         from data.kite_client import _fresh_env
         if not (_fresh_env("KITE_ACCESS_TOKEN") or "").strip():
             return rows
-        from data.live_quotes import get_live_quotes
+        from data.live_quotes import _kite_quotes
         symbols = [str(r.get("symbol") or "").strip().upper() for r in rows]
         symbols = [s for s in symbols if s]
-        quotes = get_live_quotes(symbols) if symbols else {}
+        quotes = _kite_quotes(symbols) if symbols else {}
     except Exception:
         return rows
     if not quotes:
@@ -180,7 +180,7 @@ def _apply_kite_last(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     for row in rows:
         q = quotes.get(str(row.get("symbol") or "").strip().upper())
-        if not q or not q.get("price"):
+        if not q or not q.get("price") or q.get("source") != "kite":
             out.append(row)
             continue
         updated = dict(row)

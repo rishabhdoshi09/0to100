@@ -370,12 +370,6 @@ export function RadarHomeView(props: ExperienceViewProps & {
   const scanAt = radar?.scan_scanned_at || dashboard.scan.scanned_at || ''
   const priceSession = radar?.price_session || radar?.market_as_of || dashboard.data.bhavcopy.latest_date || ''
   const kiteOk = Boolean(dashboard.data.kite?.ok)
-    || (
-      dashboard.autonomy.state !== 'AUTH_REQUIRED'
-      && !(dashboard.autonomy.active_failures || []).some((f) => String(f).includes('auth'))
-      && dashboard.data.kite?.status !== 'stale'
-      && dashboard.data.kite?.status !== 'missing'
-    )
   const emptyDesk = !scanAt
     || ((radar?.counts.breakouts || 0) + (radar?.counts.momentum || 0) + (radar?.counts.long_term_picks || 0) === 0)
   const readinessScore = readiness?.score ?? 0
