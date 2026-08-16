@@ -170,7 +170,7 @@ const pageTitles: Record<string, string> = {
 }
 
 const pageSubtitles: Record<string, string> = {
-  Home: 'Desk of names plus the market weather they sit in.',
+  Home: 'Sit down, click once. The desk fills itself.',
   'Market Scanner': 'The same scan as a dense table.',
   Recommendations: 'Research shortlist — categories, table, long-term and F&O.',
   'Market Reports': 'Daily digest, source list, and the same flow taught.',
@@ -452,7 +452,14 @@ function App() {
       return <MarketReportsView {...viewProps} />
     }
     if (active === 'Home' || active === 'Command Center') {
-      return <RadarHomeView {...viewProps} onCompare={addToCompare} onWatchlist={addToWatchlist} />
+      return (
+        <RadarHomeView
+          {...viewProps}
+          onCompare={addToCompare}
+          onWatchlist={addToWatchlist}
+          onOpenFloor={(page) => setActive(page)}
+        />
+      )
     }
     if (active === 'Stock Intelligence') {
       return (
@@ -499,7 +506,14 @@ function App() {
       )
     }
     if (active === 'System Health' || active === 'Automation') return <AutomationView {...viewProps} />
-    return <RadarHomeView {...viewProps} onCompare={addToCompare} onWatchlist={addToWatchlist} />
+    return (
+      <RadarHomeView
+        {...viewProps}
+        onCompare={addToCompare}
+        onWatchlist={addToWatchlist}
+        onOpenFloor={(page) => setActive(page)}
+      />
+    )
   }
 
   return (

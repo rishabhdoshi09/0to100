@@ -21,6 +21,8 @@ import {
 import { RiskLensCard } from './productViews'
 import { LiveScanBanner, type ExperienceViewProps } from './experience'
 import { EvChip } from './evChip'
+import { HomeTodayPath, useTodayFloors } from './HomeTodayPath'
+import { decideNextStep, type FloorContext } from './homeFloorPath'
 import type { DashboardPayload } from './types'
 
 type RadarRow = ScannerWorkspaceRow & {
@@ -484,8 +486,10 @@ function DenseTable({
 export function RadarHomeView(props: ExperienceViewProps & {
   onCompare: (symbol: string) => void
   onWatchlist: (symbol: string) => void
+  onOpenFloor?: (page: string) => void
 }) {
-  const { dashboard, selected, setSelected, bars, setActive, depth, marketScan, longTermScan, onCompare, onWatchlist } = props
+  const { dashboard, selected, setSelected, bars, setActive, depth, marketScan, longTermScan, runControl, onCompare, onWatchlist, onOpenFloor } = props
+  const todayPath = useTodayFloors()
   const [radar, setRadar] = useState<RadarHome | null>(null)
   const [preTrade, setPreTrade] = useState<PreTrade | null>(null)
   const [readiness, setReadiness] = useState<ProductReadiness | null>(null)
@@ -512,12 +516,6 @@ export function RadarHomeView(props: ExperienceViewProps & {
   }, [dashboard.scan.scanned_at, dashboard.long_term.scanned_at, dashboard.generated_at])
 
   useEffect(() => {
-    if (selected) return
-    const best = String(radar?.best_breakout?.symbol || '').toUpperCase()
-    if (best) setSelected(best)
-  }, [radar?.best_breakout, selected, setSelected])
-
-  useEffect(() => {
     if (!selected) { setPreTrade(null); return }
     let alive = true
     const load = () => {
@@ -537,18 +535,67 @@ export function RadarHomeView(props: ExperienceViewProps & {
   const priceSession = desk?.price_session || desk?.market_as_of || dashboard.data.bhavcopy.latest_date || ''
   const emptyDesk = scanCount === 0 && !scanAt
   const readinessScore = readiness?.score ?? 0
-  const needsBootstrap = emptyDesk || readinessScore < 70 || !dashboard.data.ready
 
-  const runBootstrap = async () => {
+  const longTermCount = dashboard.long_term.records?.length || 0
+  const fnoMapped = dashboard.fno.mapped_underlyings || 0
+  const floorContext = (): FloorContext => ({
+    scanRecords: scanCount,
+    lastSession: priceSession || dashboard.session?.last_session || '',
+    lastSessionLabel: dashboard.session?.last_session_label || priceSession || '',
+    sessionBanner: desk?.session?.banner || dashboard.session?.banner || '',
+    optionsEodAvailable: Boolean(dashboard.data.options_eod?.available),
+    optionsEodSymbols: Number(dashboard.data.options_eod?.symbols || 0),
+    optionsEodAsOf: String(dashboard.data.options_eod?.latest_as_of || ''),
+    dataReady: Boolean(dashboard.data.ready),
+  })
+  const nextStep = decideNextStep({
+    dataReady: Boolean(dashboard.data.ready),
+    readinessScore,
+    scanRecords: scanCount,
+    longTermRecords: longTermCount,
+    scanBusy: marketScan.isBusy || bootstrapBusy,
+    longTermBusy: longTermScan.isBusy,
+  })
+  const pathProgress = marketScan.progressLine || longTermScan.progressLine || deskNote
+
+  const doNext = async () => {
+    const step = decideNextStep({
+      dataReady: Boolean(dashboard.data.ready),
+      readinessScore,
+      scanRecords: scanCount,
+      longTermRecords: longTermCount,
+      scanBusy: marketScan.isBusy || bootstrapBusy,
+      longTermBusy: longTermScan.isBusy,
+    })
+    if (step.id === 'working') return
+    if (step.id === 'see_picture') {
+      await todayPath.open(floorContext())
+      return
+    }
     setBootstrapBusy(true)
-    setDeskNote('Preparing data lanes…')
+    setDeskNote(step.why)
     try {
-      const result = await bootstrapProduct()
-      setReadiness(result.readiness)
-      setDeskNote(result.message || 'Bootstrap queued')
-      if (!marketScan.isBusy) void marketScan.start()
+      if (step.id === 'fill_desk') {
+        const result = await bootstrapProduct()
+        setReadiness(result.readiness)
+        setDeskNote(result.message || 'Desk is filling…')
+        if (scanCount <= 0 && !marketScan.isBusy) await marketScan.start()
+        if (longTermCount <= 0 && !longTermScan.isBusy) await longTermScan.start()
+        if (fnoMapped === 0) {
+          try {
+            await runControl('REFRESH_FNO_NOW')
+          } catch {
+            /* F&O master is complementary; a miss must not block the desk. */
+          }
+        }
+      } else if (step.id === 'find_names') {
+        await marketScan.start()
+      } else if (step.id === 'add_long_term') {
+        await longTermScan.start()
+      }
+      await todayPath.open(floorContext())
     } catch (reason) {
-      setDeskNote(reason instanceof Error ? reason.message : 'Bootstrap failed')
+      setDeskNote(reason instanceof Error ? reason.message : 'Could not run the next job')
     } finally {
       setBootstrapBusy(false)
       window.setTimeout(() => setDeskNote(''), 4000)
@@ -584,10 +631,41 @@ export function RadarHomeView(props: ExperienceViewProps & {
     : (dashboard.data.kite?.note || 'Kite token rejected — run python main.py login')
   const laneLabel = lane === 'breakouts' ? 'Breakouts' : lane === 'momentum' ? 'Momentum' : 'Long-term picks'
   const heroIcon = health.slice(0, 1).toUpperCase() || 'M'
+  const jumpFloor = (page: string) => {
+    if (onOpenFloor) {
+      onOpenFloor(page)
+      return
+    }
+    setActive(page)
+  }
+
+  useEffect(() => {
+    void todayPath.open(floorContext())
+    // Read-only picture. Never picks a name.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    scanCount,
+    longTermCount,
+    dashboard.data.ready,
+    dashboard.data.options_eod?.available,
+    dashboard.data.options_eod?.symbols,
+    dashboard.session?.last_session_label,
+  ])
 
   return (
     <div className="reco-light">
       <LiveScanBanner scan={marketScan} depth={depth} label="Market scan" />
+      <LiveScanBanner scan={longTermScan} depth={depth} label="Long-term research" />
+
+      <HomeTodayPath
+        busy={todayPath.busy || bootstrapBusy}
+        floors={todayPath.floors}
+        error={todayPath.error}
+        step={nextStep}
+        progress={pathProgress || ''}
+        onOpen={() => void doNext()}
+        onJump={jumpFloor}
+      />
 
       <nav className="reco-crumb" aria-label="Breadcrumb">
         <button type="button" onClick={() => setActive('Home')}>Home</button>
@@ -602,16 +680,6 @@ export function RadarHomeView(props: ExperienceViewProps & {
         <div>
           <h2>{health}</h2>
           <p>{dashboard.market.summary}</p>
-        </div>
-        <div className="reco-hero-actions">
-          {needsBootstrap && (
-            <button type="button" className="reco-ghost" disabled={bootstrapBusy} onClick={() => void runBootstrap()}>
-              {bootstrapBusy ? 'Preparing…' : readinessScore >= 90 ? 'Refresh desk' : 'Make ready'}
-            </button>
-          )}
-          <button type="button" className="reco-primary" disabled={marketScan.isBusy} onClick={() => void marketScan.start()}>
-            {marketScan.isBusy ? 'Scanning…' : 'Scan now'}
-          </button>
         </div>
       </header>
 
@@ -645,7 +713,7 @@ export function RadarHomeView(props: ExperienceViewProps & {
           <em>
             {scanAt
               ? `Last scan ${relativeAge(scanAt)} · bars as of ${priceSession || dashboard.session?.last_session_label || 'last session'} EOD`
-              : 'Search a name above, open the stock, then use Desk / Options / Data. Or Scan now to fill the desk.'}
+              : 'Click the button at the top. The system fills the next missing layer — you do not pick a stock.'}
             {deskNote ? ` · ${deskNote}` : ''}
           </em>
         </div>
@@ -706,8 +774,8 @@ export function RadarHomeView(props: ExperienceViewProps & {
           <strong>{emptyDesk ? 'First run' : `No ${laneLabel.toLowerCase()} yet`}</strong>
           <p>
             {emptyDesk
-              ? 'Search any NSE share in the top bar → Open stock → then Desk, Options, or System → Data. Scan now fills this lane when history is ready.'
-              : 'Use Make ready / Scan now above, or clear the search.'}
+              ? 'Click the button at the top. One job at a time — files, then names, then quality research.'
+              : 'Clear the search, or click the button at the top to refresh today\'s picture.'}
           </p>
         </div>
       ) : (

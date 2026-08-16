@@ -107,7 +107,7 @@ export function HomeHub({
   const tab = homeTabOf(active)
   return (
     <HubShell
-      blurb="The tape first. Search a name → open the stock → Desk / Options / Data. Desk is names that cleared the scan. Internals is the weather those names sit in."
+      blurb="Sit down, click once. The system picks the next job and shows results here. Internals is the weather the desk sits in."
       tabs={HOME_TABS}
       active={tab}
       onChange={(next) => setActive(HOME_ROUTE[next as (typeof HOME_TABS)[number]])}

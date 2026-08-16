@@ -18,7 +18,7 @@ export const PAGE_GUIDE: Record<string, PageGuide> = {
       'Which names qualify for technical or long-term review?',
       'What should be refreshed before trusting the screen?',
     ],
-    action: 'Start the missing data lane or open one stock for evidence review.',
+    action: 'Click Start here on Home. The system fills the next missing layer. Search a name only when you want one stock.',
     doesNot: 'A green market or high score is not an instruction to buy.',
   },
   Scanner: {
