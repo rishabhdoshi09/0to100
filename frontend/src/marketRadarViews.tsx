@@ -21,6 +21,8 @@ import {
 import { RiskLensCard } from './productViews'
 import { LiveScanBanner, type ExperienceViewProps } from './experience'
 import { EvChip } from './evChip'
+import { pickTodaySymbol } from './homeFloorPath'
+import { HomeTodayPath, useTodayFloors } from './HomeTodayPath'
 import type { DashboardPayload } from './types'
 
 type RadarRow = ScannerWorkspaceRow & {
@@ -484,8 +486,10 @@ function DenseTable({
 export function RadarHomeView(props: ExperienceViewProps & {
   onCompare: (symbol: string) => void
   onWatchlist: (symbol: string) => void
+  onOpenFloor?: (page: string, opts?: { symbol?: string; intelTab?: string }) => void
 }) {
-  const { dashboard, selected, setSelected, bars, setActive, depth, marketScan, longTermScan, onCompare, onWatchlist } = props
+  const { dashboard, selected, setSelected, bars, setActive, depth, marketScan, longTermScan, onCompare, onWatchlist, onOpenFloor } = props
+  const todayPath = useTodayFloors()
   const [radar, setRadar] = useState<RadarHome | null>(null)
   const [preTrade, setPreTrade] = useState<PreTrade | null>(null)
   const [readiness, setReadiness] = useState<ProductReadiness | null>(null)
@@ -584,6 +588,26 @@ export function RadarHomeView(props: ExperienceViewProps & {
     : (dashboard.data.kite?.note || 'Kite token rejected — run python main.py login')
   const laneLabel = lane === 'breakouts' ? 'Breakouts' : lane === 'momentum' ? 'Momentum' : 'Long-term picks'
   const heroIcon = health.slice(0, 1).toUpperCase() || 'M'
+  const pathSymbol = pickTodaySymbol({
+    selected,
+    best,
+    visible,
+    scan: dashboard.scan.records,
+    query,
+  })
+  const openTodayPath = () => {
+    if (!pathSymbol) return
+    setSelected(pathSymbol)
+    void todayPath.open(pathSymbol)
+  }
+  const jumpFloor = (page: string, intelTab?: string) => {
+    if (onOpenFloor) {
+      onOpenFloor(page, { symbol: pathSymbol || selected, intelTab })
+      return
+    }
+    if (pathSymbol) setSelected(pathSymbol)
+    setActive(page)
+  }
 
   return (
     <div className="reco-light">
@@ -609,8 +633,11 @@ export function RadarHomeView(props: ExperienceViewProps & {
               {bootstrapBusy ? 'Preparing…' : readinessScore >= 90 ? 'Refresh desk' : 'Make ready'}
             </button>
           )}
-          <button type="button" className="reco-primary" disabled={marketScan.isBusy} onClick={() => void marketScan.start()}>
+          <button type="button" className="reco-ghost" disabled={marketScan.isBusy} onClick={() => void marketScan.start()}>
             {marketScan.isBusy ? 'Scanning…' : 'Scan now'}
+          </button>
+          <button type="button" className="reco-primary" disabled={!pathSymbol || todayPath.busy} onClick={openTodayPath}>
+            {todayPath.busy ? 'Opening floors…' : pathSymbol ? `Open ${pathSymbol}'s floors` : "Open today's path"}
           </button>
         </div>
       </header>
@@ -645,11 +672,20 @@ export function RadarHomeView(props: ExperienceViewProps & {
           <em>
             {scanAt
               ? `Last scan ${relativeAge(scanAt)} · bars as of ${priceSession || dashboard.session?.last_session_label || 'last session'} EOD`
-              : 'Search a name above, open the stock, then use Desk / Options / Data. Or Scan now to fill the desk.'}
+              : 'Click Open today\'s path once a name is on the desk, or Scan now.'}
             {deskNote ? ` · ${deskNote}` : ''}
           </em>
         </div>
       </div>
+
+      <HomeTodayPath
+        symbol={pathSymbol}
+        busy={todayPath.busy}
+        floors={todayPath.floors}
+        error={todayPath.error}
+        onOpen={openTodayPath}
+        onJump={jumpFloor}
+      />
 
       <div className="reco-cat-rail" role="tablist" aria-label="Desk lanes">
         <button type="button" role="tab" aria-selected={lane === 'breakouts'} className={lane === 'breakouts' ? 'active' : ''} onClick={() => setLane('breakouts')}>
@@ -706,7 +742,7 @@ export function RadarHomeView(props: ExperienceViewProps & {
           <strong>{emptyDesk ? 'First run' : `No ${laneLabel.toLowerCase()} yet`}</strong>
           <p>
             {emptyDesk
-              ? 'Search any NSE share in the top bar → Open stock → then Desk, Options, or System → Data. Scan now fills this lane when history is ready.'
+              ? 'Click Open today\'s path on this page once a name is selected. Scan now fills this lane when history is ready.'
               : 'Use Make ready / Scan now above, or clear the search.'}
           </p>
         </div>

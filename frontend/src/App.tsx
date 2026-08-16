@@ -452,7 +452,18 @@ function App() {
       return <MarketReportsView {...viewProps} />
     }
     if (active === 'Home' || active === 'Command Center') {
-      return <RadarHomeView {...viewProps} onCompare={addToCompare} onWatchlist={addToWatchlist} />
+      return (
+        <RadarHomeView
+          {...viewProps}
+          onCompare={addToCompare}
+          onWatchlist={addToWatchlist}
+          onOpenFloor={(page, opts) => {
+            if (opts?.symbol) setSelected(opts.symbol)
+            if (opts?.intelTab) setIntelTab(opts.intelTab)
+            setActive(page)
+          }}
+        />
+      )
     }
     if (active === 'Stock Intelligence') {
       return (
@@ -499,7 +510,18 @@ function App() {
       )
     }
     if (active === 'System Health' || active === 'Automation') return <AutomationView {...viewProps} />
-    return <RadarHomeView {...viewProps} onCompare={addToCompare} onWatchlist={addToWatchlist} />
+    return (
+      <RadarHomeView
+        {...viewProps}
+        onCompare={addToCompare}
+        onWatchlist={addToWatchlist}
+        onOpenFloor={(page, opts) => {
+          if (opts?.symbol) setSelected(opts.symbol)
+          if (opts?.intelTab) setIntelTab(opts.intelTab)
+          setActive(page)
+        }}
+      />
+    )
   }
 
   return (
