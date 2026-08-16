@@ -509,7 +509,7 @@ function App() {
           </div>
         </header>
 
-        <section className="page-title">
+        <section className={`page-title ${active === 'Home' || active === 'Command Center' ? 'is-hidden' : ''}`}>
           <div><h1>{pageTitles[active] || active}</h1><p>{pageSubtitles[active]}</p></div>
           <div className="page-actions">
             {showReportActions && (

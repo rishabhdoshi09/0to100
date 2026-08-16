@@ -208,6 +208,95 @@ function thinVolume(row: RadarRow): boolean {
     || (Number.isFinite(vol) && vol > 0 && vol < 1)
 }
 
+type DeskLane = 'breakouts' | 'momentum' | 'long_term'
+
+function radarBadge(row: RadarRow): { label: string; cls: string } {
+  if (thinVolume(row)) return { label: 'THIN VOL', cls: 'is-closed' }
+  const state = String(row.breakout_state || '')
+  if (state === 'faded_breakout' || state === 'failed_breakout' || state === 'failed_or_extended') {
+    return { label: 'FADED', cls: 'is-closed' }
+  }
+  if (row.sniper_candidate) return { label: 'CONFIRMED', cls: '' }
+  if (row.chase_risk || state === 'extended_after_breakout') return { label: 'EXTENDED', cls: 'is-watch' }
+  if (row.classification) return { label: String(row.classification).replace(/_/g, ' '), cls: 'is-watch' }
+  return { label: (row.setup_label || row.status || 'WATCH').slice(0, 18), cls: 'is-watch' }
+}
+
+function radarRiskClass(row: RadarRow): string {
+  const label = String(row.risk_label || '')
+  if (/high|chase|extended/i.test(label) || row.chase_risk) return 'high'
+  if (/low/i.test(label)) return 'low'
+  return 'medium'
+}
+
+function RadarPickCard({
+  row,
+  selected,
+  featured,
+  onSelect,
+}: {
+  row: RadarRow
+  selected: string
+  featured?: boolean
+  onSelect: (symbol: string) => void
+}) {
+  const badge = radarBadge(row)
+  const off20 = row.pct_below_20d_high
+  const last = Number((row as RadarRow & { price?: number }).price)
+  return (
+    <button
+      type="button"
+      className={[
+        'reco-pick',
+        selected === row.symbol ? 'is-active' : '',
+        featured ? 'is-featured' : '',
+      ].filter(Boolean).join(' ')}
+      onClick={() => onSelect(row.symbol)}
+    >
+      <div className="reco-pick-row1">
+        <span className={`reco-buy ${badge.cls}`}>{badge.label}</span>
+        <span className={`reco-risk-chip ${radarRiskClass(row)}`}>
+          <span className="reco-risk-meter" aria-hidden="true" />
+          {row.risk_label || 'Medium'} Risk
+        </span>
+      </div>
+      <h3 className="reco-pick-name">{row.company || row.symbol}</h3>
+      <div className="reco-pick-sub">
+        <span>{row.symbol}</span>
+        {row.sector ? <span className="reco-tag">{row.sector}</span> : null}
+        {row.price_tag ? <span>{row.price_tag}</span> : null}
+        {row.sniper_candidate ? <span className="reco-tag">Confirmed</span> : null}
+      </div>
+      <div className="reco-pick-kpis">
+        <div>
+          <span>Last</span>
+          <strong>{Number.isFinite(last) && last > 0 ? money(last, 2) : '—'}</strong>
+        </div>
+        <div>
+          <span>Volume</span>
+          <strong>{row.volume_ratio != null ? `${Number(row.volume_ratio).toFixed(1)}×` : '—'}</strong>
+        </div>
+        <div>
+          <span>RSI</span>
+          <strong>{row.rsi != null ? Math.round(Number(row.rsi)) : '—'}</strong>
+        </div>
+        <div className="reco-gain">
+          <strong className={off20 != null && Number(off20) > 5 ? 'neg' : ''}>
+            {off20 != null ? `${Number(off20).toFixed(1)}%` : '—'}
+          </strong>
+          <small>off 20-day high</small>
+        </div>
+      </div>
+      {row.reason ? <p className="reco-pick-note">{row.reason}</p> : null}
+      <div className="reco-pick-tags" aria-label="Setup tags">
+        {row.breakout_grade ? <span className="reco-evidence-tag">grade {row.breakout_grade}</span> : null}
+        {row.setup_label ? <span className="reco-evidence-tag">{row.setup_label}</span> : null}
+        {row.tech_source ? <span className="reco-evidence-tag">{row.tech_source}</span> : null}
+      </div>
+    </button>
+  )
+}
+
 function DenseTable({
   rows,
   selected,
@@ -336,6 +425,8 @@ export function RadarHomeView(props: ExperienceViewProps & {
   const [readiness, setReadiness] = useState<ProductReadiness | null>(null)
   const [bootstrapBusy, setBootstrapBusy] = useState(false)
   const [deskNote, setDeskNote] = useState('')
+  const [lane, setLane] = useState<DeskLane>('breakouts')
+  const [query, setQuery] = useState('')
 
   // Daily fields (RSI/price/vol) must not freeze on last scan — poll the
   // live-refreshed radar payload on a short timer.
@@ -369,7 +460,6 @@ export function RadarHomeView(props: ExperienceViewProps & {
 
   const scanAt = radar?.scan_scanned_at || dashboard.scan.scanned_at || ''
   const priceSession = radar?.price_session || radar?.market_as_of || dashboard.data.bhavcopy.latest_date || ''
-  const kiteOk = Boolean(dashboard.data.kite?.ok)
   const emptyDesk = !scanAt
     || ((radar?.counts.breakouts || 0) + (radar?.counts.momentum || 0) + (radar?.counts.long_term_picks || 0) === 0)
   const readinessScore = readiness?.score ?? 0
@@ -391,224 +481,225 @@ export function RadarHomeView(props: ExperienceViewProps & {
     }
   }
 
-  const laneCard = (title: string, rows: RadarRow[], count: number, qualityHint?: number) => (
-    <section className="radar-lane-card">
-      <header>
-        <span>{title}</span>
-        <strong>
-          {count}
-          {qualityHint != null ? ` · ${qualityHint} confirmed` : ''}
-        </strong>
-      </header>
-      <ul>
-        {rows.slice(0, 6).map((item) => {
-          const thin = thinVolume(item)
-          return (
-          <li key={item.symbol}>
-            <button
-              type="button"
-              className={[selected === item.symbol ? 'active' : '', thin ? 'thin-volume' : ''].filter(Boolean).join(' ')}
-              onClick={() => setSelected(item.symbol)}
-            >
-              <b>
-                {item.symbol}
-                {item.sniper_candidate ? <em className="sniper-tag"> CONFIRMED</em> : null}
-                {thin ? <em className="thin-tag"> THIN VOL</em> : null}
-              </b>
-              <span>{thin ? 'No volume confirm' : (item.setup_label || item.status)}</span>
-              <small>
-                {item.sector}
-                {item.volume_ratio != null ? ` · ${Number(item.volume_ratio).toFixed(1)}×` : ''}
-                {item.rsi != null ? ` · RSI ${Math.round(Number(item.rsi))}` : ''}
-                {' · '}
-                {item.reason?.slice(0, 36) || '—'}
-              </small>
-            </button>
-          </li>
-          )
-        })}
-        {rows.length === 0 && (
-          <li className="radar-empty-li">
-            No matches yet — use Make ready / Scan now above.
-          </li>
-        )}
-      </ul>
-    </section>
-  )
-
   const row = radar?.lanes.breakouts.find((r) => r.symbol === selected)
     || radar?.lanes.momentum.find((r) => r.symbol === selected)
     || radar?.lanes.long_term_picks.find((r) => r.symbol === selected)
 
+  const health = radar?.market_health || dashboard.market.health || 'Market'
+  const laneRows: Record<DeskLane, RadarRow[]> = {
+    breakouts: (radar?.lanes.breakouts || []) as RadarRow[],
+    momentum: (radar?.lanes.momentum || []) as RadarRow[],
+    long_term: (radar?.lanes.long_term_picks || []) as RadarRow[],
+  }
+  const q = query.trim().toUpperCase()
+  const visible = laneRows[lane].filter((item) => {
+    if (!q) return true
+    return item.symbol.includes(q) || String(item.company || '').toUpperCase().includes(q)
+  })
+  const best = radar?.best_breakout as RadarRow | null | undefined
+  const fundBest = radar?.best_among_fundamentals as RadarRow | null | undefined
+  const kiteLive = Boolean(dashboard.data.kite?.ok)
+  const stale = Boolean(dashboard.data.bhavcopy.is_stale)
+  const nifty = radar?.nifty_change_1d ?? dashboard.market.nifty_change_1d
+  const bannerNote = kiteLive
+    ? (stale
+      ? `Kite is live, but official history is stale — need ${dashboard.data.bhavcopy.required_session || 'latest session'}.`
+      : dashboard.market.quote_source === 'kite'
+        ? `Kite is the primary last print. Official session ${priceSession || dashboard.data.bhavcopy.latest_date || '—'}.`
+        : `Official bhavcopy ready · ${priceSession || dashboard.data.bhavcopy.latest_date || '—'}.`)
+    : (dashboard.data.kite?.note || 'Kite token rejected — run python main.py login')
+  const laneLabel = lane === 'breakouts' ? 'Breakouts' : lane === 'momentum' ? 'Momentum' : 'Long-term picks'
+  const heroIcon = health.slice(0, 1).toUpperCase() || 'M'
+
   return (
-    <section className="radar-home">
-      <header className="radar-hero">
+    <div className="reco-light">
+      <LiveScanBanner scan={marketScan} depth={depth} label="Market scan" />
+
+      <nav className="reco-crumb" aria-label="Breadcrumb">
+        <button type="button" onClick={() => setActive('Home')}>Home</button>
+        <span>›</span>
+        <strong>Market desk</strong>
+        <span>›</span>
+        <strong>{laneLabel}</strong>
+      </nav>
+
+      <header className="reco-hero">
+        <div className="reco-hero-icon" aria-hidden="true">{heroIcon}</div>
         <div>
-          <span>MARKET DESK</span>
-          <h2>{radar?.market_health || dashboard.market.health}</h2>
+          <h2>{health}</h2>
           <p>{dashboard.market.summary}</p>
         </div>
-        <div className="radar-hero-actions">
+        <div className="reco-hero-actions">
           {needsBootstrap && (
-            <button type="button" disabled={bootstrapBusy} onClick={() => void runBootstrap()}>
+            <button type="button" className="reco-ghost" disabled={bootstrapBusy} onClick={() => void runBootstrap()}>
               {bootstrapBusy ? 'Preparing…' : readinessScore >= 90 ? 'Refresh desk' : 'Make ready'}
             </button>
           )}
-          <button type="button" disabled={marketScan.isBusy} onClick={() => void marketScan.start()}>
+          <button type="button" className="reco-primary" disabled={marketScan.isBusy} onClick={() => void marketScan.start()}>
             {marketScan.isBusy ? 'Scanning…' : 'Scan now'}
           </button>
         </div>
       </header>
 
-      <div className={`radar-desk-strip ${kiteOk ? '' : 'desk-warn'}`}>
+      <div className="reco-status-row" aria-label="Market status">
+        <div className={`reco-status ${Number(nifty) >= 0 ? 'is-good' : 'is-mid'}`}>
+          <small>Nifty 1D</small>
+          <strong>{pct(nifty)}</strong>
+        </div>
+        <div className={`reco-status ${/narrow/i.test(String(radar?.breadth || dashboard.market.breadth)) ? 'is-bad' : 'is-mid'}`}>
+          <small>Breadth</small>
+          <strong>{radar?.breadth || dashboard.market.breadth || '—'}</strong>
+        </div>
+        <div className="reco-status is-mid">
+          <small>VIX</small>
+          <strong>{radar?.vix ?? dashboard.market.vix ?? '—'}</strong>
+        </div>
+        <div className={`reco-status ${kiteLive ? 'is-good' : 'is-warn'}`}>
+          <small>Zerodha</small>
+          <strong>{kiteLive ? 'Kite live' : 'Login needed'}</strong>
+        </div>
+        <div className={`reco-status ${stale ? 'is-warn' : 'is-good'}`}>
+          <small>Price data</small>
+          <strong>{dashboard.data.bhavcopy.latest_date || 'Missing'}</strong>
+        </div>
+      </div>
+
+      <div className="reco-cmp-banner" role="status">
+        <span className="ico" aria-hidden="true">!</span>
         <div>
-          <span>SCAN</span>
-          <strong>{relativeAge(scanAt)}</strong>
-          <small>
+          <div>{bannerNote}</div>
+          <em>
             {scanAt
-              ? `signal list from last scan · bars as of ${priceSession || 'last session'} EOD`
-              : 'run Scan now'}
-          </small>
-        </div>
-        <div>
-          <span>PRICE DATA</span>
-          <strong>{dashboard.data.bhavcopy.latest_date || 'MISSING'}</strong>
-          <small>
-            {dashboard.data.bhavcopy.is_stale
-              ? `STALE — need ${dashboard.data.bhavcopy.required_session || 'latest session'}`
-              : dashboard.market.quote_source === 'kite'
-                ? `Kite primary · official session ${dashboard.data.bhavcopy.latest_date || '—'}`
-                : dashboard.data.ready
-                  ? 'official bhavcopy ready'
-                  : 'data incomplete'}
-          </small>
-        </div>
-        <div>
-          <span>ZERODHA</span>
-          <strong>{dashboard.data.kite?.ok ? 'KITE LIVE' : kiteOk ? 'TOKEN ON FILE' : 'LOGIN NEEDED'}</strong>
-          <small>
-            {dashboard.data.kite?.ok
-              ? 'Kite is the primary last print'
-              : dashboard.data.kite?.note || dashboard.autonomy.plain_state || 'python main.py login'}
-          </small>
-        </div>
-        <div>
-          <span>NEXT</span>
-          <strong>
-            {!dashboard.data.ready || readinessScore < 70
-              ? 'Make ready'
-              : !scanAt
-                ? 'Scan now'
-                : selected
-                  ? 'Check ₹ risk'
-                  : 'Pick one name'}
-          </strong>
-          <small>{deskNote || dashboard.market.trade_stance}</small>
+              ? `Last scan ${relativeAge(scanAt)} · bars as of ${priceSession || 'last session'} EOD`
+              : 'Run Scan now to fill the desk'}
+            {deskNote ? ` · ${deskNote}` : ''}
+          </em>
         </div>
       </div>
 
-      <div className="radar-market-strip">
-        <div><span>NIFTY 1D</span><strong>{pct(radar?.nifty_change_1d ?? dashboard.market.nifty_change_1d)}</strong></div>
-        <div><span>BREADTH</span><strong>{radar?.breadth || dashboard.market.breadth}</strong></div>
-        <div><span>VIX</span><strong>{radar?.vix ?? dashboard.market.vix ?? '—'}</strong></div>
-        <div><span>LEADERS</span><strong>{(radar?.leaders || dashboard.market.leaders).slice(0, 3).join(', ') || '—'}</strong></div>
-        <div><span>SCAN AGE</span><strong>{relativeAge(scanAt)}</strong></div>
-        <div><span>STANCE</span><strong>{dashboard.market.trade_stance?.split(';')[0] || '—'}</strong></div>
+      <div className="reco-cat-rail" role="tablist" aria-label="Desk lanes">
+        <button type="button" role="tab" aria-selected={lane === 'breakouts'} className={lane === 'breakouts' ? 'active' : ''} onClick={() => setLane('breakouts')}>
+          Breakouts · {radar?.counts.breakouts || 0}
+          {radar?.counts.sniper_breakouts ? ` · ${radar.counts.sniper_breakouts} confirmed` : ''}
+        </button>
+        <button type="button" role="tab" aria-selected={lane === 'momentum'} className={lane === 'momentum' ? 'active' : ''} onClick={() => setLane('momentum')}>
+          Momentum · {radar?.counts.momentum || 0}
+        </button>
+        <button type="button" role="tab" aria-selected={lane === 'long_term'} className={lane === 'long_term' ? 'active' : ''} onClick={() => setLane('long_term')}>
+          Long-term · {radar?.counts.long_term_picks || 0}
+        </button>
       </div>
 
-      <LiveScanBanner scan={marketScan} depth={depth} label="Market scan" />
+      <div className="reco-controls">
+        <div className="reco-search-wrap">
+          <input
+            type="search"
+            placeholder="Search stocks"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            aria-label="Search stocks"
+          />
+        </div>
+      </div>
 
-      <BestSniperPanel
-        best={radar?.best_breakout as RadarRow | null | undefined}
-        sniperCount={radar?.counts.sniper_breakouts || radar?.sniper_candidates?.length || 0}
-        onSelect={setSelected}
-      />
+      {lane === 'breakouts' && best ? (
+        <>
+          <p className="reco-featured-label">Best live breakout</p>
+          <div className="reco-card-stack">
+            <RadarPickCard row={best} selected={selected} featured onSelect={setSelected} />
+          </div>
+        </>
+      ) : null}
 
-      <BestAmongFundamentalsPanel
-        best={radar?.best_among_fundamentals as RadarRow | null | undefined}
-        onSelect={setSelected}
-      />
+      {lane === 'breakouts' && !best ? (
+        <div className="reco-empty">
+          <strong>No confirmed live breakout</strong>
+          <p>Thin volume or faded names stay out. Volume ≥1.0× and still near the 20-day high.</p>
+        </div>
+      ) : null}
 
-      {(radar?.sniper_candidates?.length || 0) > 0 && (
-        <section className="radar-sniper-pool">
-          <header>
-            <span>CONFIRMED BREAKOUTS</span>
-            <strong>{radar?.sniper_candidates?.length}</strong>
-          </header>
-          <ul>
-            {(radar?.sniper_candidates || []).slice(0, 8).map((item) => (
-              <li key={item.symbol}>
-                <button
-                  type="button"
-                  className={selected === item.symbol ? 'active' : ''}
-                  onClick={() => setSelected(item.symbol)}
-                >
-                  <b>{item.symbol}</b>
-                  <span>
-                    {item.breakout_grade ? `G${item.breakout_grade}` : '—'}
-                    {item.volume_ratio != null ? ` · ${Number(item.volume_ratio).toFixed(1)}×` : ''}
-                    {item.rsi != null
-                      ? ` · RSI ${Math.round(Number(item.rsi))}${(item as RadarRow).tech_source === 'live' || (item as RadarRow).price_tag === 'LIVE' ? ' LIVE' : ''}`
-                      : ''}
-                  </span>
-                </button>
-              </li>
-            ))}
-          </ul>
-        </section>
+      {lane === 'breakouts' && fundBest ? (
+        <>
+          <p className="reco-featured-label">Best among breakouts with fundamentals</p>
+          <div className="reco-card-stack">
+            <RadarPickCard row={fundBest} selected={selected} onSelect={setSelected} />
+          </div>
+        </>
+      ) : null}
+
+      {visible.length === 0 ? (
+        <div className="reco-empty">
+          <strong>No {laneLabel.toLowerCase()} yet</strong>
+          <p>Use Make ready / Scan now above, or clear the search.</p>
+        </div>
+      ) : (
+        <div className="reco-card-stack">
+          {visible.slice(0, 8).filter((item) => item.symbol !== best?.symbol || lane !== 'breakouts').map((item) => (
+            <RadarPickCard key={item.symbol} row={item} selected={selected} onSelect={setSelected} />
+          ))}
+        </div>
       )}
 
-      <div className="radar-three-lanes">
-        {laneCard(
-          'Breakouts',
-          radar?.lanes.breakouts || [],
-          radar?.counts.breakouts || 0,
-          radar?.counts.sniper_breakouts,
-        )}
-        {laneCard('Momentum', radar?.lanes.momentum || [], radar?.counts.momentum || 0)}
-        {laneCard('Long-Term Picks', radar?.lanes.long_term_picks || [], radar?.counts.long_term_picks || 0)}
-      </div>
-
-      <div className="radar-workspace">
-        <Panel title={`CHART · ${selected || 'SELECT STOCK'}`} subtitle={`Official history · ${dashboard.data.bhavcopy.latest_date || '—'}`}>
-          <ChartWorkspace symbol={selected} bars={bars} row={row} />
-        </Panel>
-        <Panel title="DECISION PREVIEW" subtitle="Risk before reward · read-only">
-          {selected ? (
-            <div className="radar-decision-preview">
-              {preTrade?.verdict && (
-                <div className={`radar-pretrade-badge radar-pretrade-${String(preTrade.verdict).toLowerCase().replace('_', '-')}`}>
-                  Pre-trade · {preTrade.verdict}
-                </div>
-              )}
-              <p><strong>{(row as RadarRow)?.reason || preTrade?.plan_summary || preTrade?.meaning || 'Select a stock from a lane above.'}</strong></p>
-              {(preTrade?.plan?.entry ?? preTrade?.scan?.entry) != null && (
-                <div>Entry zone: {money(preTrade?.plan?.entry ?? preTrade?.scan?.entry)}</div>
-              )}
-              {(preTrade?.plan?.stop ?? preTrade?.scan?.stop) != null && (
-                <div>Invalidation: {money(preTrade?.plan?.stop ?? preTrade?.scan?.stop)}</div>
-              )}
-              {(preTrade?.plan?.target ?? preTrade?.scan?.target) != null && (
-                <div>Target: {money(preTrade?.plan?.target ?? preTrade?.scan?.target)}</div>
-              )}
-              {(preTrade?.blockers || []).length > 0 && (
-                <ul className="radar-decision-blockers">
-                  {preTrade!.blockers!.slice(0, 3).map((item) => <li key={item}>{item}</li>)}
-                </ul>
-              )}
-              <RiskLensCard plan={preTrade?.plan || null} />
-              <div className="radar-action-row">
-                <button type="button" onClick={() => setActive('Stock Intelligence')}>Full research</button>
-                <button type="button" onClick={() => onCompare(selected)}>Compare</button>
-                <button type="button" onClick={() => onWatchlist(selected)}>Watchlist</button>
+      {selected ? (
+        <section className="reco-sheet">
+          <header className="reco-sheet-hero">
+            <p>{(row as RadarRow)?.sector || 'Selected name'}</p>
+            <h2>{(row as RadarRow)?.company || selected}</h2>
+            <p>{(row as RadarRow)?.reason || preTrade?.plan_summary || preTrade?.meaning || 'Check rupee risk before opening full research.'}</p>
+          </header>
+          <div className="reco-sheet-kpis">
+            <div>
+              <span>Entry</span>
+              <strong>{money(preTrade?.plan?.entry ?? preTrade?.scan?.entry, 2)}</strong>
+            </div>
+            <div>
+              <span>Stop</span>
+              <strong>{money(preTrade?.plan?.stop ?? preTrade?.scan?.stop, 2)}</strong>
+            </div>
+            <div>
+              <span>Target</span>
+              <strong>{money(preTrade?.plan?.target ?? preTrade?.scan?.target, 2)}</strong>
+            </div>
+            <div>
+              <span>Pre-trade</span>
+              <strong>{preTrade?.verdict || '—'}</strong>
+            </div>
+          </div>
+          <div className="reco-next">{deskNote || dashboard.market.trade_stance}</div>
+          {(preTrade?.blockers || []).length > 0 ? (
+            <div className="reco-sheet-cols">
+              <div>
+                <h3>What blocks a trade</h3>
+                <ul>{preTrade!.blockers!.slice(0, 4).map((item) => <li key={item}>{item}</li>)}</ul>
+              </div>
+              <div>
+                <h3>Leaders / laggards</h3>
+                <p>
+                  Leading {(radar?.leaders || dashboard.market.leaders).slice(0, 3).join(', ') || '—'}.
+                  Lagging {(radar?.laggards || dashboard.market.laggards).slice(0, 3).join(', ') || '—'}.
+                </p>
               </div>
             </div>
-          ) : (
-            <p className="radar-empty-li">Pick one name above — then check ₹ risk here before opening research.</p>
-          )}
-        </Panel>
-      </div>
-    </section>
+          ) : null}
+          <RiskLensCard plan={preTrade?.plan || null} />
+          <div className="reco-sheet-actions">
+            <button type="button" className="reco-primary" onClick={() => setActive('Stock Intelligence')}>Full research</button>
+            <button type="button" className="reco-ghost" onClick={() => onCompare(selected)}>Compare</button>
+            <button type="button" className="reco-ghost" onClick={() => onWatchlist(selected)}>Watchlist</button>
+          </div>
+          <div className="reco-chart-card">
+            <ChartWorkspace symbol={selected} bars={bars} row={row} />
+          </div>
+        </section>
+      ) : (
+        <p className="reco-foot">Pick one name — then check rupee risk here before opening research.</p>
+      )}
+
+      <p className="reco-foot">
+        Last prints prefer Kite. History stays on official NSE bhavcopy.
+        {priceSession ? ` Session ${priceSession}.` : ''}
+      </p>
+    </div>
   )
 }
 
@@ -674,27 +765,36 @@ export function MarketScannerView(props: ExperienceViewProps & { onCompare: (sym
   const selectedRow = filtered.find((r) => r.symbol === selected) || rows.find((r) => r.symbol === selected)
 
   return (
-    <section className="market-scanner">
-      <header className="scanner-command-bar">
+    <section className="reco-light market-scanner">
+      <nav className="reco-crumb" aria-label="Breadcrumb">
+        <button type="button" onClick={() => setActive('Home')}>Home</button>
+        <span>›</span>
+        <strong>Market Scanner</strong>
+        <span>›</span>
+        <strong>{tab}</strong>
+      </nav>
+      <header className="reco-hero">
+        <div className="reco-hero-icon" aria-hidden="true">S</div>
         <div>
-          <span>MARKET SCANNER</span>
-          <h2>Breakouts · Momentum · Conviction · F&O</h2>
+          <h2>{tab}</h2>
           <p>
             {filtered.length} matches · universe {meta.universe.toLocaleString('en-IN')}
             {' · scan '}{relativeAge(meta.scanned_at)}
-            {' · prices refresh live / EOD'}
+            {' · last prints prefer Kite'}
           </p>
         </div>
-        <button type="button" disabled={activeScan.isBusy} onClick={() => void activeScan.start()}>
-          {activeScan.isBusy ? 'Scanning…' : tab === 'Long-Term' ? 'Run long-term scan' : 'Scan now'}
-        </button>
+        <div className="reco-hero-actions">
+          <button type="button" className="reco-primary" disabled={activeScan.isBusy} onClick={() => void activeScan.start()}>
+            {activeScan.isBusy ? 'Scanning…' : tab === 'Long-Term' ? 'Run long-term scan' : 'Scan now'}
+          </button>
+        </div>
       </header>
 
       <LiveScanBanner scan={activeScan} depth={depth} label={tab === 'Long-Term' ? 'Long-term scan' : 'Market scan'} />
 
-      <div className="radar-tab-row">
+      <div className="reco-cat-rail" role="tablist" aria-label="Scanner lanes">
         {scannerTabs.map((item) => (
-          <button key={item} type="button" className={tab === item ? 'active' : ''} onClick={() => setTab(item)}>{item}</button>
+          <button key={item} type="button" role="tab" aria-selected={tab === item} className={tab === item ? 'active' : ''} onClick={() => setTab(item)}>{item}</button>
         ))}
       </div>
 

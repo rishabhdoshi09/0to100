@@ -168,6 +168,9 @@ body {
   justify-content: space-between;
   align-items: flex-end;
 }
+.page-title.is-hidden {
+  display: none;
+}
 .page-title h1 { margin: 0; font-size: 20px; letter-spacing: .02em; }
 .page-title p { margin: 5px 0 0; color: var(--muted); font-size: 12px; }
 .page-actions { display: flex; align-items: center; gap: 10px; }
