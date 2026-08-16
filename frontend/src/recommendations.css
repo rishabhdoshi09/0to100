@@ -178,6 +178,9 @@
   text-transform: uppercase; color: var(--rw-green);
 }
 .desk-delivery p { margin: 4px 0 0; font-size: 14px; line-height: 1.4; }
+.reco-cmp-banner {
+  display: flex; gap: 10px; align-items: flex-start;
+  margin: 0 0 14px; padding: 12px 14px;
   border-radius: 12px;
   background: var(--rw-amber-bg);
   border: 1px solid var(--rw-amber-line);
