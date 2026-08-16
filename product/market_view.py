@@ -114,7 +114,9 @@ def _view_from_official_tape() -> RetailMarketView | None:
         f"Market condition is {health.lower()}. Breadth is {breadth_label.lower()} "
         f"({strength}/100). Leading: {lead_text}. Lagging: {lag_text}."
     )
-    if tape.as_of:
+    if tape.quote_source == "kite":
+        summary = f"{summary} Kite last print · official session {tape.as_of}." if tape.as_of else f"{summary} Kite last print."
+    elif tape.as_of:
         summary = f"{summary} Prices as of {tape.as_of} EOD."
     return RetailMarketView(
         health=health,
@@ -129,6 +131,7 @@ def _view_from_official_tape() -> RetailMarketView | None:
         technical_details={
             "as_of": tape.as_of,
             "source": tape.source,
+            "quote_source": tape.quote_source,
             "nifty_close": tape.nifty_close,
             "breadth": breadth,
             "sector_changes": tape.sector_changes,

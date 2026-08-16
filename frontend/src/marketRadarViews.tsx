@@ -91,7 +91,7 @@ function BestSniperPanel({
               sniperCount > 0 ? `${sniperCount} confirmed setup${sniperCount === 1 ? '' : 's'}` : null,
               best.breakout_grade ? `Grade ${best.breakout_grade}` : null,
               best.rsi != null
-                ? `RSI ${Math.round(Number(best.rsi))}${best.tech_source === 'live' || best.price_tag === 'LIVE' ? ' LIVE' : ' EOD'}`
+                ? `RSI ${Math.round(Number(best.rsi))}${best.tech_source === 'kite' || best.price_tag === 'KITE' ? ' KITE' : best.tech_source === 'live' || best.price_tag === 'LIVE' ? ' LIVE' : ' EOD'}`
                 : null,
               best.volume_ratio != null
                 ? `Vol ${Number(best.volume_ratio).toFixed(1)}×${volOk ? '' : ' THIN'}`
@@ -369,8 +369,13 @@ export function RadarHomeView(props: ExperienceViewProps & {
 
   const scanAt = radar?.scan_scanned_at || dashboard.scan.scanned_at || ''
   const priceSession = radar?.price_session || radar?.market_as_of || dashboard.data.bhavcopy.latest_date || ''
-  const kiteOk = dashboard.autonomy.state !== 'AUTH_REQUIRED'
-    && !(dashboard.autonomy.active_failures || []).some((f) => String(f).includes('auth'))
+  const kiteOk = Boolean(dashboard.data.kite?.ok)
+    || (
+      dashboard.autonomy.state !== 'AUTH_REQUIRED'
+      && !(dashboard.autonomy.active_failures || []).some((f) => String(f).includes('auth'))
+      && dashboard.data.kite?.status !== 'stale'
+      && dashboard.data.kite?.status !== 'missing'
+    )
   const emptyDesk = !scanAt
     || ((radar?.counts.breakouts || 0) + (radar?.counts.momentum || 0) + (radar?.counts.long_term_picks || 0) === 0)
   const readinessScore = readiness?.score ?? 0
@@ -477,18 +482,20 @@ export function RadarHomeView(props: ExperienceViewProps & {
           <small>
             {dashboard.data.bhavcopy.is_stale
               ? `STALE — need ${dashboard.data.bhavcopy.required_session || 'latest session'}`
-              : dashboard.data.ready
-                ? 'official bhavcopy ready'
-                : 'data incomplete'}
+              : dashboard.market.quote_source === 'kite'
+                ? `Kite primary · official session ${dashboard.data.bhavcopy.latest_date || '—'}`
+                : dashboard.data.ready
+                  ? 'official bhavcopy ready'
+                  : 'data incomplete'}
           </small>
         </div>
         <div>
           <span>ZERODHA</span>
-          <strong>{kiteOk ? 'SESSION OK' : 'LOGIN NEEDED'}</strong>
+          <strong>{dashboard.data.kite?.ok ? 'KITE LIVE' : kiteOk ? 'TOKEN ON FILE' : 'LOGIN NEEDED'}</strong>
           <small>
-            {kiteOk
-              ? 'live quotes / depth available when market is open'
-              : (dashboard.autonomy.plain_state || 'python main.py login')}
+            {dashboard.data.kite?.ok
+              ? 'Kite is the primary last print'
+              : dashboard.data.kite?.note || dashboard.autonomy.plain_state || 'python main.py login'}
           </small>
         </div>
         <div>

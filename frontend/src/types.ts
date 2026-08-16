@@ -178,6 +178,13 @@ export type DataReadiness = {
     freshness?: string
     error?: string
   }
+  kite?: {
+    ok?: boolean
+    status?: string
+    note?: string
+    nifty?: number
+    chg_pct?: number
+  }
   scan_saved: boolean
   scan_records: number
   long_term_saved: boolean
@@ -198,6 +205,9 @@ export type DashboardPayload = {
     nifty_change_1d: number | null
     nifty_change_5d: number | null
     vix: number | null
+    as_of?: string
+    source?: string
+    quote_source?: string
     technical_details?: Record<string, unknown>
   }
   scan: {

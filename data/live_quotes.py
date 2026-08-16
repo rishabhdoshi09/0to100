@@ -164,28 +164,49 @@ def get_live_quotes(symbols: list[str], ttl: float = _QUOTE_TTL_S) -> dict[str, 
 _KITE_INDEX_KEYS = {
     "NIFTY":      "NSE:NIFTY 50",
     "BANKNIFTY":  "NSE:NIFTY BANK",
+    "BANK":       "NSE:NIFTY BANK",
     "FINNIFTY":   "NSE:NIFTY FIN SERVICE",
     "MIDCPNIFTY": "NSE:NIFTY MID SELECT",
     "VIX":        "NSE:INDIA VIX",
     "SENSEX":     "BSE:SENSEX",
+    "IT":         "NSE:NIFTY IT",
+    "PHARMA":     "NSE:NIFTY PHARMA",
+    "AUTO":       "NSE:NIFTY AUTO",
+    "FMCG":       "NSE:NIFTY FMCG",
+    "METAL":      "NSE:NIFTY METAL",
+    "ENERGY":     "NSE:NIFTY ENERGY",
+    "REALTY":     "NSE:NIFTY REALTY",
+}
+
+_INDEX_STORE_NAMES = {
+    "NIFTY": "Nifty 50",
+    "VIX": "India VIX",
+    "BANK": "Nifty Bank",
+    "BANKNIFTY": "Nifty Bank",
+    "IT": "Nifty IT",
+    "PHARMA": "Nifty Pharma",
+    "AUTO": "Nifty Auto",
+    "FMCG": "Nifty FMCG",
+    "METAL": "Nifty Metal",
+    "ENERGY": "Nifty Energy",
+    "REALTY": "Nifty Realty",
 }
 
 
 def get_index_quotes(names: list[str]) -> dict[str, dict]:
     """
-    {name: {price, chg_pct, source}} for NIFTY/BANKNIFTY/VIX/SENSEX.
-    Kite first (real-time indices), Google Finance fallback.
+    {name: {price, chg_pct, source}} for NIFTY / VIX / sectors.
+    Kite first, official NSE index store next, Google last.
     """
     out: dict[str, dict] = {}
     wanted = [n.upper() for n in names]
-    # 1. Kite — one ltp-style quote call for all indices
+    # 1. Kite — one quote call for all requested indices
     try:
-        from config import settings
-        if settings.kite_access_token:
-            from data.kite_client import KiteClient
+        from data.kite_client import KiteClient, _fresh_env
+        if (_fresh_env("KITE_ACCESS_TOKEN") or "").strip():
             kite = KiteClient()
             keys = [_KITE_INDEX_KEYS[n] for n in wanted if n in _KITE_INDEX_KEYS]
-            raw = kite.raw.quote(keys)
+            raw = kite.raw.quote(keys) if keys else {}
             for name in wanted:
                 key = _KITE_INDEX_KEYS.get(name)
                 d = raw.get(key) if key else None
@@ -199,9 +220,33 @@ def get_index_quotes(names: list[str]) -> dict[str, dict]:
                                  "source": "kite"}
     except Exception as exc:
         log.debug("kite_index_quotes_failed", error=str(exc))
-    # 2. Google Finance for what Kite missed
+    # 2. Official NSE index store for what Kite missed
     missing = [n for n in wanted if n not in out]
-    for name in missing:
+    if missing:
+        try:
+            from data.index_store import TICKER_MAP, get_index_ohlcv
+            for name in missing:
+                official = _INDEX_STORE_NAMES.get(name)
+                if not official:
+                    continue
+                ticker = next((t for t, n in TICKER_MAP.items() if n == official), "")
+                frame = get_index_ohlcv(ticker) if ticker else None
+                if frame is None or getattr(frame, "empty", True) or len(frame) < 2:
+                    continue
+                close = frame["Close"] if "Close" in frame.columns else frame["close"]
+                last = float(close.iloc[-1])
+                prev = float(close.iloc[-2])
+                if last > 0 and prev:
+                    out[name] = {
+                        "price": last,
+                        "chg_pct": round((last / prev - 1.0) * 100.0, 2),
+                        "source": "official_nse",
+                    }
+        except Exception as exc:
+            log.debug("index_store_quotes_failed", error=str(exc))
+    # 3. Google Finance last resort
+    still = [n for n in wanted if n not in out]
+    for name in still:
         try:
             from data.google_finance import get_quote
             q = get_quote(name)
@@ -210,6 +255,43 @@ def get_index_quotes(names: list[str]) -> dict[str, dict]:
         except Exception:
             pass
     return out
+
+
+_kite_health_cache: tuple[float, dict] | None = None
+_KITE_HEALTH_TTL_S = 30.0
+
+
+def kite_quote_health() -> dict:
+    """Live probe: token on file is not enough — Kite must answer a quote."""
+    global _kite_health_cache
+    now = time.time()
+    if _kite_health_cache and now - _kite_health_cache[0] < _KITE_HEALTH_TTL_S:
+        return dict(_kite_health_cache[1])
+    try:
+        from data.kite_client import _fresh_env
+        if not (_fresh_env("KITE_ACCESS_TOKEN") or "").strip():
+            payload = {"ok": False, "status": "missing", "note": "No Kite access token — python main.py login"}
+        else:
+            quotes = get_index_quotes(["NIFTY"])
+            nifty = quotes.get("NIFTY") or {}
+            if nifty.get("source") == "kite" and nifty.get("price"):
+                payload = {
+                    "ok": True,
+                    "status": "live",
+                    "note": "Kite last print",
+                    "nifty": float(nifty["price"]),
+                    "chg_pct": nifty.get("chg_pct"),
+                }
+            else:
+                payload = {
+                    "ok": False,
+                    "status": "stale",
+                    "note": "Kite token rejected — run python main.py login",
+                }
+    except Exception as exc:
+        payload = {"ok": False, "status": "error", "note": str(exc)[:160]}
+    _kite_health_cache = (now, payload)
+    return dict(payload)
 
 
 def source_health(sample: str = "RELIANCE") -> tuple[bool, str]:

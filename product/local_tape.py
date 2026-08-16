@@ -26,6 +26,7 @@ class OfficialTape:
     sector_changes: dict[str, float] = field(default_factory=dict)
     breadth: dict[str, Any] = field(default_factory=dict)
     source: str = "official_nse_index+bhavcopy"
+    quote_source: str = "official_nse"
 
     @property
     def usable(self) -> bool:
@@ -149,8 +150,24 @@ def session_breadth(*, min_n: int = 300) -> dict[str, Any]:
     return payload
 
 
+_KITE_TAPE_NAMES = ("NIFTY", "VIX", "BANK", "IT", "PHARMA", "AUTO", "FMCG", "METAL", "ENERGY", "REALTY")
+
+
+def _kite_index_overlay() -> dict[str, dict]:
+    """Live / last Kite prints for the desk tape. Empty when session is down."""
+    try:
+        from data.kite_client import _fresh_env
+        if not (_fresh_env("KITE_ACCESS_TOKEN") or "").strip():
+            return {}
+        from data.live_quotes import get_index_quotes
+        raw = get_index_quotes(list(_KITE_TAPE_NAMES))
+        return {k: v for k, v in (raw or {}).items() if (v or {}).get("source") == "kite"}
+    except Exception:
+        return {}
+
+
 def read_official_tape() -> OfficialTape:
-    """Nifty / VIX / sectors from the official index store + bhav breadth."""
+    """Kite-first tape; official NSE index + bhavcopy fill what Kite misses."""
     nifty = _index_frame("Nifty 50")
     vix_df = _index_frame("India VIX")
     as_of = _as_of(nifty) or _as_of(vix_df)
@@ -170,6 +187,34 @@ def read_official_tape() -> OfficialTape:
         chg = _pct_change(_index_frame(name), 1)
         if chg is not None:
             changes[label] = chg
+
+    nifty_close = _last_close(nifty)
+    nifty_1d = _pct_change(nifty, 1)
+    nifty_5d = _pct_change(nifty, 5)
+    vix = _last_close(vix_df) or None
+    source = "official_nse_index+bhavcopy"
+    quote_source = "official_nse"
+
+    kite = _kite_index_overlay()
+    if kite.get("NIFTY", {}).get("price"):
+        nifty_close = float(kite["NIFTY"]["price"])
+        nifty_1d = float(kite["NIFTY"].get("chg_pct") or nifty_1d or 0)
+        source = "kite+official_nse"
+        quote_source = "kite"
+    if kite.get("VIX", {}).get("price"):
+        vix = float(kite["VIX"]["price"])
+        source = "kite+official_nse"
+        quote_source = "kite"
+    kite_sectors = {
+        label: float(kite[label]["chg_pct"])
+        for label in sector_names
+        if kite.get(label) and kite[label].get("chg_pct") is not None
+    }
+    if kite_sectors:
+        changes.update(kite_sectors)
+        source = "kite+official_nse"
+        quote_source = "kite"
+
     ranked = sorted(changes.items(), key=lambda kv: kv[1], reverse=True)
     leaders = tuple(name for name, _ in ranked[:3] if ranked)
     laggards = tuple(name for name, _ in ranked[-3:] if ranked)
@@ -177,12 +222,14 @@ def read_official_tape() -> OfficialTape:
 
     return OfficialTape(
         as_of=as_of,
-        nifty_close=_last_close(nifty),
-        nifty_change_1d=_pct_change(nifty, 1),
-        nifty_change_5d=_pct_change(nifty, 5),
-        vix=_last_close(vix_df) or None,
+        nifty_close=nifty_close,
+        nifty_change_1d=nifty_1d,
+        nifty_change_5d=nifty_5d,
+        vix=vix,
         leaders=leaders,
         laggards=laggards,
         sector_changes=changes,
         breadth=session_breadth(),
+        source=source,
+        quote_source=quote_source,
     )

@@ -153,4 +153,51 @@ def refresh_rows_technicals(
         ensure_live_store_overlay()
     # After a bulk store overlay, never scrape per symbol.
     network = bool(allow_network) and not bulk_overlay
-    return [refresh_row_technicals(r, allow_network=network) for r in items]
+    refreshed = [refresh_row_technicals(r, allow_network=network) for r in items]
+    return _apply_kite_last(refreshed)
+
+
+def _apply_kite_last(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Overwrite displayed last price from Kite when the session is up.
+
+    History / RSI / structure stay on the official frame. The last print
+    the trader sees must be Kite, not a frozen bhavcopy close.
+    """
+    if not rows:
+        return rows
+    try:
+        from data.kite_client import _fresh_env
+        if not (_fresh_env("KITE_ACCESS_TOKEN") or "").strip():
+            return rows
+        from data.live_quotes import get_live_quotes
+        symbols = [str(r.get("symbol") or "").strip().upper() for r in rows]
+        symbols = [s for s in symbols if s]
+        quotes = get_live_quotes(symbols) if symbols else {}
+    except Exception:
+        return rows
+    if not quotes:
+        return rows
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        q = quotes.get(str(row.get("symbol") or "").strip().upper())
+        if not q or not q.get("price"):
+            out.append(row)
+            continue
+        updated = dict(row)
+        price = round(float(q["price"]), 2)
+        updated["price"] = price
+        updated["quote_source"] = "kite"
+        updated["tech_source"] = "kite"
+        try:
+            from data.nse_live import _is_trading_now
+            updated["price_tag"] = "LIVE" if _is_trading_now() else "KITE"
+        except Exception:
+            updated["price_tag"] = "KITE"
+        high20 = _f(updated.get("high_20d"))
+        high52 = _f(updated.get("high_52w"))
+        if high20 > 0:
+            updated["pct_below_20d_high"] = round((high20 - price) / high20 * 100.0, 2)
+        if high52 > 0:
+            updated["pct_below_52w_high"] = round((high52 - price) / high52 * 100.0, 2)
+        out.append(updated)
+    return out

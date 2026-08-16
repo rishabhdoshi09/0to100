@@ -214,6 +214,7 @@ def _market_payload() -> dict:
             "vix": _safe_float(market.vix),
             "as_of": str((getattr(market, "technical_details", {}) or {}).get("as_of") or ""),
             "source": str((getattr(market, "technical_details", {}) or {}).get("source") or ""),
+            "quote_source": str((getattr(market, "technical_details", {}) or {}).get("quote_source") or ""),
             "technical_details": dict(getattr(market, "technical_details", {}) or {}),
         }
     except Exception as exc:
@@ -622,10 +623,16 @@ def _data_payload(scan: dict, long_term: dict, operations: dict, fno: dict, news
         blockers.append("Current F&O instrument universe is unavailable; refresh instruments after Zerodha login.")
     if not news.get("available"):
         blockers.append("Curated news store is empty; run a news refresh to inspect source health.")
+    try:
+        from data.live_quotes import kite_quote_health
+        kite = kite_quote_health()
+    except Exception as exc:
+        kite = {"ok": False, "status": "error", "note": str(exc)[:160]}
     return {
         "ready": bool(history_current and operations.get("running")),
         "snapshot": snapshot,
         "bhavcopy": bhavcopy,
+        "kite": kite,
         "options_eod": options_eod,
         "scan_saved": bool(scan.get("available")),
         "scan_records": len(scan.get("records", []) or []),

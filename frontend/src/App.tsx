@@ -423,8 +423,7 @@ function App() {
     'Market Overview',
     'Market Internals',
   ].includes(active)
-  const kiteOk = dashboard.autonomy.state !== 'AUTH_REQUIRED'
-    && !(dashboard.autonomy.active_failures || []).some((f) => String(f).includes('auth'))
+  const kiteOk = Boolean(dashboard.data.kite?.ok)
 
   const renderView = () => {
     if (active === 'Compare') {
@@ -503,8 +502,8 @@ function App() {
             <DisplayDepthToggle depth={depth} onChange={setDepth} />
             <button type="button" className="experience-help-trigger" onClick={() => setHelpOpen(true)}>What is this?</button>
             <span className={dashboard.data.ready ? 'live-pill' : 'offline-pill'}><i /> {dashboard.data.ready ? 'DATA READY' : 'DATA INCOMPLETE'}</span>
-            <span className={kiteOk ? 'live-pill' : 'offline-pill'} title={dashboard.autonomy.plain_state || ''}>
-              <i /> {kiteOk ? 'ZERODHA OK' : 'ZERODHA LOGIN'}
+            <span className={kiteOk ? 'live-pill' : 'offline-pill'} title={dashboard.data.kite?.note || dashboard.autonomy.plain_state || ''}>
+              <i /> {kiteOk ? 'KITE LIVE' : 'KITE LOGIN'}
             </span>
             <button type="button" onClick={() => void refresh()} aria-label="Refresh dashboard">↻</button>
           </div>
