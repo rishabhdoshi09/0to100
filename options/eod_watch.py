@@ -40,8 +40,8 @@ def _clean(symbol: str) -> str:
     return str(symbol or "").strip().upper()
 
 
-def watched_symbols(path: Path = WATCH_PATH) -> list[str]:
-    raw = _read(path).get("symbols") or []
+def watched_symbols(path: Path | None = None) -> list[str]:
+    raw = _read(path or WATCH_PATH).get("symbols") or []
     out: list[str] = []
     seen: set[str] = set()
     for item in raw:
@@ -53,8 +53,9 @@ def watched_symbols(path: Path = WATCH_PATH) -> list[str]:
     return out
 
 
-def add_watch(symbol: str, *, path: Path = WATCH_PATH) -> dict[str, Any]:
+def add_watch(symbol: str, *, path: Path | None = None) -> dict[str, Any]:
     """Enqueue a name. FIFO cap. Idempotent. Never captures a chain here."""
+    path = path or WATCH_PATH
     sym = _clean(symbol)
     if not sym or len(sym) > 32:
         return {"accepted": False, "symbol": sym, "watched": watched_symbols(path), "message": "invalid symbol"}
@@ -82,8 +83,9 @@ def add_watch(symbol: str, *, path: Path = WATCH_PATH) -> dict[str, Any]:
     }
 
 
-def capture_list(*, path: Path = WATCH_PATH) -> list[str]:
+def capture_list(*, path: Path | None = None) -> list[str]:
     """Index defaults first, then user-opened names — unique, stable order."""
+    path = path or WATCH_PATH
     out: list[str] = []
     seen: set[str] = set()
     for item in list(DEFAULT_UNDERLYINGS) + watched_symbols(path):
