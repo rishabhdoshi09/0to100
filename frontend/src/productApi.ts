@@ -482,6 +482,41 @@ export type BuyThesis = {
     fetched_at?: string
     about?: string
   }
+  sector_wave?: {
+    sector?: string
+    identified?: boolean
+    source?: string
+    wave?: string
+    headline?: string
+    note?: string
+    chg_1d?: number | null
+    chg_5d?: number | null
+    nifty_1d?: number | null
+    nifty_5d?: number | null
+    vs_nifty_5d_pp?: number | null
+    members?: number
+    pack?: { count?: number; names?: string[] }
+    bullets?: string[]
+  }
+  smart_money?: {
+    stance?: string
+    headline?: string
+    note?: string
+    bullets?: string[]
+    fii?: { latest?: number; latest_period?: string; delta_pp?: number | null; action?: string } | null
+    dii?: { latest?: number; latest_period?: string; delta_pp?: number | null; action?: string } | null
+    influencers?: Array<{ client?: string; client_kind?: string; side?: string; qty?: number; price?: number; kind?: string }>
+  }
+  earnings?: {
+    available?: boolean
+    bullets?: string[]
+    quarterly_sales?: Array<{ period: string; value: number }>
+    quarterly_profit?: Array<{ period: string; value: number }>
+    opm?: Array<{ period: string; value: number }>
+    npm?: Array<{ period: string; value: number }>
+    valuations?: Array<{ key: string; label?: string; value?: number; unit?: string }>
+    growth?: Array<{ key: string; label?: string; value?: number; unit?: string }>
+  }
   sales: {
     available: boolean
     cagr_3y?: number | null

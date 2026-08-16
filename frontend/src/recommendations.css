@@ -525,6 +525,10 @@
 .thesis-grid ul { margin: 0; padding-left: 18px; line-height: 1.5; font-size: 13px; }
 .thesis-grid p, .thesis-grid small { font-size: 13px; color: var(--rw-muted); }
 .thesis-about { margin-top: 8px; }
+.thesis-wave { margin: 0 0 8px; font-weight: 600; color: var(--rw-ink); }
+.thesis-wave-inflow { color: var(--rw-green); }
+.thesis-wave-outflow { color: #b45309; }
+.thesis-wave-mixed, .thesis-wave-no_claim { color: var(--rw-muted); font-weight: 500; }
 .thesis-book { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 8px; }
 .thesis-book span { display: block; font-size: 12px; }
 @media (max-width: 960px) {

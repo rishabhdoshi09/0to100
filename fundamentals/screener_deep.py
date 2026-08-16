@@ -132,6 +132,7 @@ class ScreenerDeepFetcher:
             "cash_flow":         self._parse_table_section(soup, "cash_flow"),
             "peer_comparison":   self._parse_table_section(soup, "peer_comparison"),
         }
+        result.update(self._parse_sector_path(soup))
 
         total_rows = sum(len(v) for v in result.values() if isinstance(v, list))
         result["metadata"] = {
@@ -238,6 +239,25 @@ class ScreenerDeepFetcher:
         if sub:
             return sub.get_text(" ", strip=True)[:2000]
         return ""
+
+    def _parse_sector_path(self, soup: BeautifulSoup) -> Dict[str, str]:
+        """Peer-header breadcrumb: Broad Sector / Sector / Broad Industry."""
+        out = {"macro": "", "sector": "", "industry": ""}
+        peers = soup.find(["section", "div"], id="peers")
+        if peers is None:
+            return out
+        for link in peers.find_all("a"):
+            title = str(link.get("title") or "").strip().lower()
+            text = link.get_text(" ", strip=True)
+            if not text:
+                continue
+            if title == "broad sector":
+                out["macro"] = text
+            elif title == "sector":
+                out["sector"] = text
+            elif title in {"broad industry", "industry"}:
+                out["industry"] = text
+        return out
 
     def _parse_key_ratios(self, soup: BeautifulSoup) -> List[Dict[str, str]]:
         ratios: List[Dict[str, str]] = []

@@ -299,14 +299,61 @@ def live_quotes(symbols: list[str]) -> dict[str, dict]:
 
 
 _quote_cache: dict[str, tuple[float, dict]] = {}
+_quote_payload_cache: dict[str, tuple[float, dict]] = {}
 _QUOTE_TTL_S = 30.0
+
+
+def _quote_equity_payload(symbol: str) -> dict:
+    """One NSE quote-equity GET, shared by depth and industry. Fail closed."""
+    import requests
+    from urllib.parse import quote as urlquote
+
+    sym = str(symbol or "").strip().upper()
+    if not sym:
+        return {"_error": "empty symbol"}
+    now = time.time()
+    cached = _quote_payload_cache.get(sym)
+    if cached and now - cached[0] < _QUOTE_TTL_S:
+        return dict(cached[1])
+    try:
+        s = requests.Session()
+        s.headers.update(_HEADERS)
+        s.get("https://www.nseindia.com", timeout=8)
+        r = s.get(
+            f"https://www.nseindia.com/api/quote-equity?symbol={urlquote(sym)}",
+            timeout=10,
+        )
+        if r.status_code != 200:
+            payload = {"_error": f"NSE quote HTTP {r.status_code}"}
+            _quote_payload_cache[sym] = (now, payload)
+            return payload
+        payload = r.json() or {}
+        if not isinstance(payload, dict):
+            payload = {"_error": "NSE quote was not an object"}
+        _quote_payload_cache[sym] = (now, payload)
+        return dict(payload)
+    except Exception as exc:
+        return {"_error": f"NSE quote failed: {type(exc).__name__}"}
+
+
+def fetch_equity_industry(symbol: str) -> dict:
+    """NSE industryInfo for a symbol. Empty fields when the quote is blocked."""
+    payload = _quote_equity_payload(symbol)
+    info = payload.get("industryInfo") if isinstance(payload, dict) else None
+    if not isinstance(info, dict):
+        info = {}
+    return {
+        "macro": str(info.get("macro") or "").strip(),
+        "sector": str(info.get("sector") or "").strip(),
+        "industry": str(info.get("industry") or "").strip(),
+        "basic_industry": str(info.get("basicIndustry") or "").strip(),
+        "source": "nse_quote_equity" if info else "",
+        "error": str(payload.get("_error") or ""),
+    }
 
 
 def fetch_market_depth(symbol: str) -> dict:
     """Official NSE quote-equity order book. Empty when closed or blocked."""
-    import requests
-    from urllib.parse import quote as urlquote
-
     sym = str(symbol or "").strip().upper()
     empty = {
         "available": False,
@@ -322,18 +369,11 @@ def fetch_market_depth(symbol: str) -> dict:
     cached = _quote_cache.get(sym)
     if cached and now - cached[0] < _QUOTE_TTL_S:
         return dict(cached[1])
+    payload = _quote_equity_payload(sym)
+    if payload.get("_error"):
+        empty["note"] = str(payload["_error"])
+        return empty
     try:
-        s = requests.Session()
-        s.headers.update(_HEADERS)
-        s.get("https://www.nseindia.com", timeout=8)
-        r = s.get(
-            f"https://www.nseindia.com/api/quote-equity?symbol={urlquote(sym)}",
-            timeout=10,
-        )
-        if r.status_code != 200:
-            empty["note"] = f"NSE quote HTTP {r.status_code}"
-            return empty
-        payload = r.json() or {}
         book = payload.get("marketDeptOrderBook") or {}
         bids = book.get("bid") or book.get("buy") or []
         asks = book.get("ask") or book.get("sell") or []
