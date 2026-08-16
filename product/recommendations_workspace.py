@@ -144,8 +144,13 @@ def card_from_row(
     qualify_reason: str = "",
     evidence_tags: Sequence[str] | None = None,
 ) -> dict[str, Any]:
+    from product.research_levels import attach_research_levels, levels_tag
+    row = attach_research_levels(row)
     ups = upside_metrics(row)
     tags = [str(t) for t in (evidence_tags or []) if t]
+    tag = levels_tag(str(row.get("levels_source") or ""))
+    if tag and tag not in tags:
+        tags.append(tag)
     reason = qualify_reason or str(row.get("reason") or "")
     ev_n = int(row.get("ev_n") or 0)
     ev_pct = row.get("ev_pct")
@@ -177,6 +182,9 @@ def card_from_row(
         "qualify_reason": reason,
         "evidence_tags": tags,
         "lifecycle": "active",
+        "stop": _f(row.get("stop")) or None,
+        "levels_source": str(row.get("levels_source") or ""),
+        "upside_from_buy_pct": row.get("upside_from_buy_pct"),
         **ups,
         **ev,
     }

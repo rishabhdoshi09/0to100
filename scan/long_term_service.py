@@ -11,6 +11,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Callable, Mapping
 
+from product.research_levels import attach_research_levels
+
 SUCCEEDED = "SUCCEEDED"
 NO_CANDIDATES = "NO_CANDIDATES"
 DATA_UNAVAILABLE = "DATA_UNAVAILABLE"
@@ -334,7 +336,7 @@ def run_long_term_scan(
         risks = list(dict.fromkeys(fq["risks"] +
                     (["Current fundamentals unavailable or incomplete"] if fq["coverage"] < 0.50 else []) +
                     (["Price extended above 200-DMA"] if extension >= 35 else [])))
-        records.append({
+        records.append(attach_research_levels({
             **row, "symbol": symbol, "sector": sector,
             "technical_score": round(technical_score, 1),
             "fundamental_score": fq["score"], "fundamental_coverage": fq["coverage"],
@@ -342,7 +344,7 @@ def run_long_term_scan(
             "timing": timing, "fundamentals": fund, "fundamental_error": error,
             "quality_factors": factors[:8], "risk_flags": risks[:8],
             "fundamentals_point_in_time": False,
-        })
+        }))
 
     priority = {"QUALITY_COMPOUNDER": 0, "GARP_CANDIDATE": 1,
                 "QUALITY_BUT_EXPENSIVE": 2, "LONG_TERM_WATCH": 3,

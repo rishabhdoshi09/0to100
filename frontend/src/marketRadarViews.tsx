@@ -49,6 +49,8 @@ type RadarRow = ScannerWorkspaceRow & {
   pct_below_20d_high?: number
   ev_pct?: number | null
   ev_lb_pct?: number | null
+  levels_source?: string
+  upside_from_buy_pct?: number | null
   ev_n?: number | null
   ev_conf?: string
   p_win?: number | null
@@ -360,6 +362,10 @@ function RadarPickCard({
         {row.breakout_grade ? <span className="reco-evidence-tag">grade {row.breakout_grade}</span> : null}
         {row.setup_label ? <span className="reco-evidence-tag">{row.setup_label}</span> : null}
         {row.tech_source ? <span className="reco-evidence-tag">{row.tech_source}</span> : null}
+        {row.levels_source === 'atr' || row.levels_source === 'atr_pct' || row.levels_source === 'vol_pct'
+          ? <span className="reco-evidence-tag">2×ATR stop</span>
+          : null}
+        {row.levels_source === 'pct_fallback' ? <span className="reco-evidence-tag">5% stop</span> : null}
       </div>
     </button>
   )
@@ -411,7 +417,7 @@ function DenseTable({
   }
 
   const cols = mode === 'Long-Term'
-    ? ['symbol', 'classification', 'combined_score', 'sector', 'coverage_pct', 'risk_label']
+    ? ['symbol', 'classification', 'price', 'entry', 'stop', 'target', 'upside_from_buy_pct', 'coverage_pct', 'risk_label']
     : mode === 'Breakouts'
       ? depth === 'professional'
         ? ['symbol', 'sniper', 'price', 'volume_ratio', 'rsi', 'breakout_grade', 'breakout_quality', 'breakout_state', 'sector', 'risk_label']
@@ -455,8 +461,8 @@ function DenseTable({
                 if (col === 'sniper') cell = row.sniper_candidate ? 'YES' : '—'
                 else if (col === 'breakout_state') cell = breakoutLabel[String(raw)] || words(String(raw))
                 else if (col === 'momentum_state') cell = momentumLabel[String(raw)] || words(String(raw))
-                else if (col === 'price') cell = money(raw as number)
-                else if (col === 'change_5d_pct') cell = pct(raw as number)
+                else if (col === 'price' || col === 'entry' || col === 'stop' || col === 'target') cell = money(raw as number)
+                else if (col === 'change_5d_pct' || col === 'upside_from_buy_pct') cell = pct(raw as number)
                 else if (col === 'volume_ratio') {
                   if (raw == null) cell = '—'
                   else if (thin) {

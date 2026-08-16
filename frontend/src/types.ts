@@ -45,6 +45,11 @@ export type LongTermRecord = {
   fundamental_score?: number
   fundamental_coverage?: number
   price?: number
+  entry?: number
+  stop?: number
+  target?: number
+  upside_from_buy_pct?: number
+  levels_source?: string
   sector?: string
   timing?: string
   mom_12m_pct?: number
