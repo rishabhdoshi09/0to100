@@ -11,7 +11,6 @@ import './experience.css'
 import './design-tokens.css'
 import './radar.css'
 import './recommendations.css'
-import './ironman-hud.css'
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
