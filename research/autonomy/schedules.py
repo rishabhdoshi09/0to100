@@ -212,6 +212,53 @@ def research_key(session_date: str) -> str:
     return f"research_cycle:{session_date}"
 
 
+def _holiday_iso_set(holidays) -> set[str]:
+    out: set[str] = set()
+    for item in holidays or ():
+        if hasattr(item, "isoformat") and not isinstance(item, str):
+            out.add(item.isoformat())
+        else:
+            text = str(item).strip()
+            if text:
+                out.add(text)
+    return out
+
+
+def required_completed_session(now_ist, holidays=None) -> str:
+    """ISO date of the last NSE session whose EOD file should already exist.
+
+    Calendar today is not a completed session on weekends, holidays, or before
+    the bhavcopy publish cutoff. Outcome jobs must wait on this date — never
+    on Saturday/Sunday — or Friday's tape looks stale every weekend.
+    """
+    from research.intelligence.data import nse_calendar as CAL
+
+    required = CAL.latest_required_session(now_ist, _holiday_iso_set(holidays))
+    return required.isoformat()
+
+
+def is_expected_eod_wait(*, blocked_on: str = "", summary: str = "") -> bool:
+    """True for a completed-session dependency wait — not an incident to page."""
+    if str(blocked_on or "").startswith("EOD_DATA_READY:"):
+        return True
+    return str(summary or "").startswith("outcomes wait for completed-session")
+
+
+def eod_ready_keys(now_ist, holidays=None, *, latest: str = "") -> tuple[str, ...]:
+    """Dependencies to release once `latest` covers the completed session.
+
+    Also drops calendar-day waits (weekend / holiday) that can never publish.
+    """
+    required = required_completed_session(now_ist, holidays)
+    keys = {f"EOD_DATA_READY:{required}"}
+    if latest:
+        keys.add(f"EOD_DATA_READY:{str(latest)}")
+    today = now_ist.date().isoformat()
+    if today != required:
+        keys.add(f"EOD_DATA_READY:{today}")
+    return tuple(sorted(keys))
+
+
 def long_term_weekly_due(now_ist, holidays=None) -> bool:
     """Friday EOD is the automatic long-term review window."""
     return in_eod_window(now_ist, holidays) and now_ist.weekday() == 4

@@ -763,8 +763,18 @@ def run_paper_cycle(ctx) -> JobResult:
                                "session_phase": phase})
 
 
+def _holidays(ctx) -> set:
+    if hasattr(ctx.deps, "holidays"):
+        try:
+            return set(ctx.deps.holidays() or ())
+        except Exception:
+            return set()
+    return set()
+
+
 def run_outcome_resolution(ctx) -> JobResult:
-    session_date = ctx.deps.now_ist().date().isoformat()
+    now = ctx.deps.now_ist()
+    session_date = SCH.required_completed_session(now, _holidays(ctx))
     if not ctx.deps.active_snapshot_id():
         return JobResult(JS.BLOCKED, "verified EOD data required before outcome resolution",
                          blocked_on=DEP_DATA, failures={H.SNAPSHOT_STALE})
@@ -785,11 +795,12 @@ def run_outcome_resolution(ctx) -> JobResult:
     closed = len((result or {}).get("positions_closed", []))
     recorded = len((result or {}).get("outcomes_recorded", []))
     return JobResult(JS.SUCCEEDED, f"outcomes resolved · {closed} positions closed · {recorded} decoded",
+                     clears={H.SNAPSHOT_STALE},
                      unblocks=(f"{DEP_OUTCOMES}:{session_date}",), metadata=result or {})
 
 
 def run_learning_cycle(ctx) -> JobResult:
-    session_date = ctx.deps.now_ist().date().isoformat()
+    session_date = SCH.required_completed_session(ctx.deps.now_ist(), _holidays(ctx))
     try:
         result = ctx.deps.run_learning(session_date, getattr(ctx, "dialogue", None))
     except Exception as exc:
@@ -801,7 +812,7 @@ def run_learning_cycle(ctx) -> JobResult:
 
 
 def run_research_cycle(ctx) -> JobResult:
-    session_date = ctx.deps.now_ist().date().isoformat()
+    session_date = SCH.required_completed_session(ctx.deps.now_ist(), _holidays(ctx))
     try:
         result = ctx.deps.run_research(session_date, getattr(ctx, "dialogue", None))
     except Exception as exc:
