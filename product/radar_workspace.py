@@ -333,7 +333,8 @@ def enrich_scan_row(
     # surface a BEST candidate without a second pass.
     enriched["sniper_candidate"] = is_sniper_breakout_candidate(enriched)
     enriched["breakout_quality"] = breakout_quality_score(enriched)
-    return enriched
+    from product.research_levels import attach_research_levels
+    return attach_research_levels(enriched)
 
 
 def enrich_long_term_row(row: Mapping[str, Any], *, scanned_at: str = "") -> dict[str, Any]:
@@ -347,7 +348,8 @@ def enrich_long_term_row(row: Mapping[str, Any], *, scanned_at: str = "") -> dic
     enriched["risk_label"] = ", ".join((row.get("risk_flags") or [])[:1]) or "Review risks"
     cov = row.get("fundamental_coverage")
     enriched["coverage_pct"] = round(_f(cov) * 100, 1) if cov is not None else None
-    return enriched
+    from product.research_levels import attach_research_levels
+    return attach_research_levels(enriched)
 
 
 def build_radar_home(

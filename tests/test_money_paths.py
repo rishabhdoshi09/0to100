@@ -1792,6 +1792,24 @@ class TestEVEngine:
         assert shown["ev_pct"] == 2.0
 
 
+class TestResearchLevels:
+    """Quality cards must carry a real buy/stop/target — never a blank plan
+    when a price exists, never a fabricated price when it does not."""
+
+    def test_vol_pct_plan_matches_scanner_geometry(self):
+        from product.research_levels import research_levels
+        levels = research_levels({"price": 1000.0, "vol_pct": 2.0})
+        assert levels["stop"] == 960.0
+        assert levels["target"] == 1080.0
+        assert levels["upside_from_buy_pct"] == 8.0
+
+    def test_no_price_stays_blank(self):
+        from product.research_levels import research_levels
+        levels = research_levels({"symbol": "NONE"})
+        assert levels["stop"] is None
+        assert levels["target"] is None
+
+
 class TestPrimeFilter:
     """💎 Every data layer must pass before a setup earns the Telegram top
     slot — conviction, EV, liquidity, breadth, regime. Demote-only."""

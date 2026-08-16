@@ -34,7 +34,11 @@ function CardTile({
   card: RecommendationCard
   onSelect: (symbol: string) => void
 }) {
-  const upside = card.upside_from_entry_pct
+  const buy = card.entry ?? card.cmp ?? null
+  const upside = card.upside_from_buy_pct
+    ?? (buy != null && card.target != null && buy > 0
+      ? ((Number(card.target) - Number(buy)) / Number(buy)) * 100
+      : null)
   const risk = (card.risk_tier || 'Medium').toLowerCase()
   return (
     <button type="button" className="reco-pick" onClick={() => onSelect(card.symbol)}>
@@ -49,30 +53,27 @@ function CardTile({
       <div className="reco-pick-sub">
         <span>{card.symbol}</span>
         <span className="reco-tag">{card.category_label}</span>
+        {card.cmp != null ? <span>CMP {money(card.cmp, 2)}</span> : null}
         {card.price_tag ? <span>{card.price_tag}</span> : null}
       </div>
-      <div className="reco-pick-stats">
-        <div className="reco-target">
+      <div className="reco-pick-kpis">
+        <div>
+          <span>Buy</span>
+          <strong>{buy != null ? money(buy, 2) : '—'}</strong>
+        </div>
+        <div>
+          <span>Stop</span>
+          <strong>{card.stop != null ? money(card.stop, 2) : '—'}</strong>
+        </div>
+        <div>
           <span>Target</span>
           <strong>{card.target != null ? money(card.target, 2) : '—'}</strong>
         </div>
         <div className="reco-gain">
-          {upside != null ? (
-            <>
-              <strong className={upside < 0 ? 'neg' : ''}>
-                {upside >= 0 ? '↗ ' : '↘ '}
-                {pct(upside)}
-              </strong>
-              <small>% Upside from entry</small>
-            </>
-          ) : (
-            <>
-              <strong>—</strong>
-              <small>
-                {card.cmp != null ? `CMP ${money(card.cmp, 2)}` : 'Entry not set'}
-              </small>
-            </>
-          )}
+          <strong className={upside != null && upside < 0 ? 'neg' : ''}>
+            {upside != null ? `${upside >= 0 ? '↗ ' : '↘ '}${pct(upside)}` : '—'}
+          </strong>
+          <small>% upside from buy</small>
         </div>
       </div>
       <EvChip row={card} />

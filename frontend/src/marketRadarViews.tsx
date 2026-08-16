@@ -49,6 +49,7 @@ type RadarRow = ScannerWorkspaceRow & {
   pct_below_20d_high?: number
   ev_pct?: number | null
   ev_lb_pct?: number | null
+  levels_source?: string
   ev_n?: number | null
   ev_conf?: string
   p_win?: number | null
@@ -360,6 +361,10 @@ function RadarPickCard({
         {row.breakout_grade ? <span className="reco-evidence-tag">grade {row.breakout_grade}</span> : null}
         {row.setup_label ? <span className="reco-evidence-tag">{row.setup_label}</span> : null}
         {row.tech_source ? <span className="reco-evidence-tag">{row.tech_source}</span> : null}
+        {row.levels_source === 'atr' || row.levels_source === 'atr_pct' || row.levels_source === 'vol_pct'
+          ? <span className="reco-evidence-tag">2×ATR stop</span>
+          : null}
+        {row.levels_source === 'pct_fallback' ? <span className="reco-evidence-tag">5% stop</span> : null}
       </div>
     </button>
   )

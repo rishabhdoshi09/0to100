@@ -478,9 +478,12 @@ export type RecommendationCard = {
   lifecycle: string
   upside_from_entry_pct?: number | null
   upside_to_target_pct?: number | null
+  upside_from_buy_pct?: number | null
   entry?: number | null
+  stop?: number | null
   target?: number | null
   cmp?: number | null
+  levels_source?: string
   source?: string
   ev_pct?: number | null
   ev_lb_pct?: number | null
