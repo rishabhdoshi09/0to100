@@ -10,12 +10,15 @@ import type {
 import { compactDateTime, words } from './format'
 import { MetricCard, Panel } from './components'
 import { fetchMarketOptions, fetchOptionsEodHistory } from './api'
+import { FNO_INDEX_UNDERLYINGS, canOpenStockFromFno, defaultFnoFocus, isFnoIndex } from './fnoDesk'
 
 type Props = {
   dashboard: DashboardPayload
   runControl: (control: ControlName) => Promise<void>
+  selected?: string
   setSelected?: (symbol: string) => void
   setActive?: (page: string) => void
+  onOpenStock?: (symbol: string) => void
 }
 
 const operationLabel = (kind: string) => words(kind.replace('MARKET_', ''))
@@ -141,7 +144,7 @@ export function NewsView({ dashboard, runControl, setSelected, setActive }: Prop
   )
 }
 
-const INDEX_QUICK = ['NIFTY', 'BANKNIFTY', 'FINNIFTY'] as const
+const INDEX_QUICK = FNO_INDEX_UNDERLYINGS
 
 function FnoTable({
   rows,
@@ -175,7 +178,7 @@ function FnoTable({
   )
 }
 
-function ChainContextPanel({
+export function ChainContextPanel({
   symbol,
   coverage,
   chain,
@@ -183,6 +186,7 @@ function ChainContextPanel({
   loading,
   onRetry,
   onOpenIntelligence,
+  stockOpenable = true,
 }: {
   symbol: string
   coverage: FnoUnderlying | null
@@ -190,7 +194,8 @@ function ChainContextPanel({
   history: OptionsEodHistoryPayload | null
   loading: boolean
   onRetry: () => void
-  onOpenIntelligence: () => void
+  onOpenIntelligence?: () => void
+  stockOpenable?: boolean
 }) {
   const biasTone = (chain?.bias || '').toLowerCase() === 'bullish'
     ? 'green'
@@ -204,8 +209,8 @@ function ChainContextPanel({
         subtitle={
           coverage
             ? `Mapped future ${coverage.future_symbol} · lot ${coverage.lot_size} · expiry ${coverage.expiry || '—'}`
-            : INDEX_QUICK.includes(symbol as (typeof INDEX_QUICK)[number])
-              ? 'Index option chain (no stock-future mapping required)'
+            : isFnoIndex(symbol)
+              ? 'Index option chain — stays on this floor, not a company workspace'
               : 'Select a mapped underlying or an index quick-pick'
         }
       >
@@ -213,9 +218,16 @@ function ChainContextPanel({
           <button type="button" disabled={!symbol || loading} onClick={onRetry}>
             {loading ? 'Loading chain…' : 'Refresh live chain'}
           </button>
-          <button type="button" disabled={!symbol} onClick={onOpenIntelligence}>
-            Open Stock Intelligence
-          </button>
+          {onOpenIntelligence && (
+            <button
+              type="button"
+              disabled={!symbol || !stockOpenable}
+              title={stockOpenable ? 'Open this name on the Options tab' : 'Indices are not company workspaces'}
+              onClick={onOpenIntelligence}
+            >
+              {stockOpenable ? 'Open stock · Options' : 'Index — stay here'}
+            </button>
+          )}
         </div>
         {loading && <div className="empty-row">Fetching nearest-expiry OI / IV / PCR…</div>}
         {!loading && chain && !chain.available && (
@@ -271,7 +283,7 @@ function ChainContextPanel({
           </>
         )}
       </Panel>
-      <Panel title="EOD HISTORY" subtitle="Saved daily PCR / ATM IV (not a live Greek stream)">
+      <Panel title="EOD HISTORY" subtitle="Nightly job captures NIFTY / BANKNIFTY / FINNIFTY. Stock EOD stays empty until that name is captured — not a live Greek stream.">
         {!history?.available && (
           <div className="empty-row">{history?.message || 'No EOD options history for this symbol yet.'}</div>
         )}
@@ -293,13 +305,17 @@ function ChainContextPanel({
   )
 }
 
-export function FnoView({ dashboard, runControl, setSelected, setActive }: Props) {
+export function FnoView({ dashboard, runControl, selected, setSelected, onOpenStock }: Props) {
   const [query, setQuery] = useState('')
-  const [focus, setFocus] = useState('NIFTY')
+  const [focus, setFocus] = useState(() => defaultFnoFocus(selected))
   const [chain, setChain] = useState<OptionsChainPayload | null>(null)
   const [history, setHistory] = useState<OptionsEodHistoryPayload | null>(null)
   const [loading, setLoading] = useState(false)
   const [reloadToken, setReloadToken] = useState(0)
+
+  useEffect(() => {
+    if (selected && !isFnoIndex(selected)) setFocus(selected)
+  }, [selected])
 
   const rows = useMemo(() => {
     const clean = query.trim().toUpperCase()
@@ -344,18 +360,19 @@ export function FnoView({ dashboard, runControl, setSelected, setActive }: Props
 
   const select = (symbol: string) => {
     setFocus(symbol)
-    setSelected?.(symbol)
+    if (!isFnoIndex(symbol)) setSelected?.(symbol)
   }
+  const eod = dashboard.data.options_eod
   const generatedAt = dashboard.fno.generated_at ? new Date(Number(dashboard.fno.generated_at) * 1000).toLocaleString('en-IN') : 'unknown'
   return (
     <section className="workspace-view">
       <div className="feature-purpose">
         <strong>How to use F&O</strong>
         <p>
-          This is the derivatives floor of a name — not a separate product. Pick a mapped stock or
-          index, read nearest-expiry OI / IV / PCR / max pain as positioning context, then open the
-          stock for chart and financials. The same chain also lives on that stock’s Options tab.
-          No Greeks, no buy/sell direction.
+          This is the derivatives floor of a name — not a separate product. Pick a mapped stock,
+          read nearest-expiry OI / IV / PCR / max pain as positioning context, then open the stock
+          on its Options tab (same chain). Indices stay here. No Greeks, no buy/sell direction.
+          Weekend and off-hours: NSE often blocks the live chain — Retry forces a fresh fetch.
         </p>
       </div>
       <div className="inline-actions">
@@ -377,6 +394,12 @@ export function FnoView({ dashboard, runControl, setSelected, setActive }: Props
         <MetricCard label="STOCK UNDERLYINGS" value={String(dashboard.fno.unique_stock_underlyings || 0)} detail="Unique current stock derivative names" />
         <MetricCard label="FUTURE CONTRACTS" value={String(dashboard.fno.total_future_contracts || 0)} detail={`${dashboard.fno.index_future_contracts || 0} index contracts kept separate`} tone="purple" />
         <MetricCard label="MAPPING GAPS" value={String(dashboard.fno.exclusions.length)} detail="Names that could not be safely mapped" tone="amber" />
+        <MetricCard
+          label="EOD STORE"
+          value={eod?.available ? `${eod.symbols || 0} names` : 'EMPTY'}
+          detail={eod?.available ? `Latest ${eod.latest_as_of || '—'} · ${eod.snapshots || 0} snaps` : 'Index job not captured yet — stock history will be blank'}
+          tone={eod?.available ? 'green' : 'amber'}
+        />
       </div>
       <div className="fno-desk-layout">
         <Panel title={`CURRENT STOCK-DERIVATIVES COVERAGE · ${rows.length}`} subtitle="Click a stock to load its option-chain context on this page">
@@ -389,10 +412,11 @@ export function FnoView({ dashboard, runControl, setSelected, setActive }: Props
           history={history}
           loading={loading}
           onRetry={() => setReloadToken((n) => n + 1)}
+          stockOpenable={canOpenStockFromFno(focus)}
           onOpenIntelligence={() => {
-            if (!focus) return
+            if (!canOpenStockFromFno(focus)) return
             setSelected?.(focus)
-            setActive?.('Stock Intelligence')
+            onOpenStock?.(focus)
           }}
         />
       </div>

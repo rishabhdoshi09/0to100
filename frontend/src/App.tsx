@@ -194,6 +194,7 @@ function App() {
   const [active, setActive] = useState('Home')
   const [compareSymbols, setCompareSymbols] = useState<string[]>([])
   const [selected, setSelected] = useState('')
+  const [intelTab, setIntelTab] = useState<string | undefined>()
   const [bars, setBars] = useState<ChartBar[]>([])
   const [controlState, setControlState] = useState('')
   const [query, setQuery] = useState('')
@@ -336,6 +337,7 @@ function App() {
       || clean
     setSelected(match)
     setQuery(match)
+    setIntelTab(undefined)
     setActive('Stock Intelligence')
     setControlState(
       symbols.includes(match) || remoteSuggestions.includes(match)
@@ -408,6 +410,10 @@ function App() {
     longTermScan,
   }
 
+  useEffect(() => {
+    if (active !== 'Stock Intelligence') setIntelTab(undefined)
+  }, [active])
+
   const hub = hubOf(active)
   const hidePageTitle = hub === 'Home' || hub === 'Ideas' || hub === 'Context' || hub === 'System'
   const showOpsRibbon = hub === 'System'
@@ -452,6 +458,7 @@ function App() {
         <ProductStockIntelligenceView
           {...viewProps}
           depth={depth}
+          initialTab={intelTab}
           onCompare={addToCompare}
           onWatchlist={addToWatchlist}
         />
@@ -471,7 +478,18 @@ function App() {
         />
       )
     }
-    if (active === 'F&O Desk') return <FnoView {...viewProps} />
+    if (active === 'F&O Desk') {
+      return (
+        <FnoView
+          {...viewProps}
+          onOpenStock={(symbol) => {
+            setSelected(symbol)
+            setIntelTab('Options')
+            setActive('Stock Intelligence')
+          }}
+        />
+      )
+    }
     if (active === 'System Health' || active === 'Automation') return <AutomationView {...viewProps} />
     return <RadarHomeView {...viewProps} onCompare={addToCompare} onWatchlist={addToWatchlist} />
   }

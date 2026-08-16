@@ -23,9 +23,10 @@ import {
   type StockWorkspace,
   type TradePlan,
 } from './productApi'
-import type { ChartBar, ControlName, DashboardPayload, OptionsChainPayload } from './types'
+import type { ChartBar, ControlName, DashboardPayload, FnoUnderlying, OptionsChainPayload, OptionsEodHistoryPayload } from './types'
 import { longTermPicks } from './longTermPicks'
-import { fetchMarketOptions } from './api'
+import { fetchMarketOptions, fetchOptionsEodHistory } from './api'
+import { ChainContextPanel } from './marketViews'
 
 // Read-only risk-first "R lens" — exact shares, rupee risk, reward:risk, book heat. No orders.
 export function RiskLensCard({ plan }: { plan: TradePlan | null }) {
@@ -128,6 +129,7 @@ type ViewProps = {
   depth?: import('./productLanguage').DisplayDepth
   onCompare?: (symbol: string) => void
   onWatchlist?: (symbol: string) => void
+  initialTab?: string
 }
 
 const laneTone = (status: string) => {
@@ -319,7 +321,7 @@ function MetricExplanation({ metric }: { metric: IntelligenceMetric }) {
 }
 
 export function ProductStockIntelligenceView(props: ViewProps) {
-  const { selected, bars, runControl, setActive, onCompare, onWatchlist, depth } = props
+  const { selected, bars, runControl, setActive, onCompare, onWatchlist, depth, initialTab } = props
   const [workspace, setWorkspace] = useState<StockWorkspace | null>(null)
   const [preTrade, setPreTrade] = useState<PreTrade | null>(null)
   const [ratios, setRatios] = useState<import('./productApi').SymbolRatioRow[]>([])
@@ -330,6 +332,7 @@ export function ProductStockIntelligenceView(props: ViewProps) {
   const [error, setError] = useState('')
 
   const [optionsChain, setOptionsChain] = useState<OptionsChainPayload | null>(null)
+  const [optionsHistory, setOptionsHistory] = useState<OptionsEodHistoryPayload | null>(null)
   const [optionsLoading, setOptionsLoading] = useState(false)
   const [optionsForce, setOptionsForce] = useState(0)
 
@@ -427,17 +430,27 @@ export function ProductStockIntelligenceView(props: ViewProps) {
   }, [selected])
 
   useEffect(() => {
-    setTab('Overview')
+    setTab(initialTab || 'Overview')
     setOptionsChain(null)
-  }, [selected])
+    setOptionsHistory(null)
+  }, [selected, initialTab])
 
   useEffect(() => {
     if (tab !== 'Options' || !selected) return
     setOptionsLoading(true)
     const force = optionsForce > 0
-    fetchMarketOptions(selected, force)
-      .then((payload) => setOptionsChain(payload))
-      .catch(() => setOptionsChain({ available: false, message: 'Option chain fetch failed' }))
+    Promise.all([
+      fetchMarketOptions(selected, force),
+      fetchOptionsEodHistory(selected, 14),
+    ])
+      .then(([payload, eod]) => {
+        setOptionsChain(payload)
+        setOptionsHistory(eod)
+      })
+      .catch(() => {
+        setOptionsChain({ available: false, message: 'Option chain fetch failed' })
+        setOptionsHistory(null)
+      })
       .finally(() => setOptionsLoading(false))
   }, [tab, selected, optionsForce])
 
@@ -506,7 +519,9 @@ export function ProductStockIntelligenceView(props: ViewProps) {
         <button type="button" disabled={fundamentalsBusy || !selected} onClick={() => void loadFundamentals(true)}>
           {fundamentalsBusy ? 'Loading…' : 'Retry fundamentals'}
         </button>
-        <button type="button" onClick={() => setActive('Research Data')}>Complete missing research data</button>
+        <button type="button" onClick={() => setActive('Research Data')}>
+          {workspace?.gaps?.length ? `Close ${workspace.gaps.length} research gap${workspace.gaps.length === 1 ? '' : 's'}` : 'Open file layer'}
+        </button>
       </div>
 
       <SectionTabs tabs={intelTabs} active={tab} onChange={setTab} />
@@ -605,36 +620,14 @@ export function ProductStockIntelligenceView(props: ViewProps) {
       )}
 
       {tab === 'Options' && (
-        <Panel title="OPTION CHAIN" subtitle="Nearest expiry · NSE then Yahoo fallback · context only">
-          {(!workspace?.fno || !Object.keys(workspace.fno).length) && (
-            <p className="panel-copy">This symbol may not be in the current F&O universe — chain fetch still attempts NSE/Yahoo if contracts exist.</p>
-          )}
-          <div className="inline-actions">
-            <button type="button" disabled={optionsLoading} onClick={() => setOptionsForce((n) => n + 1)}>
-              {optionsLoading ? 'Loading…' : 'Retry option chain'}
-            </button>
-          </div>
-          {optionsLoading && <p className="panel-copy">Loading option chain for {selected}…</p>}
-          {!optionsLoading && !optionsChain?.available && (
-            <EmptyState title="Options unavailable" detail={optionsChain?.message || 'NSE often blocks off-hours — retry or check on a trading day.'} />
-          )}
-          {optionsChain?.available && (
-            <div className="fact-grid">
-              <div><span>Expiry</span><strong>{optionsChain.expiry || '—'}</strong></div>
-              <div><span>PCR (OI)</span><strong>{optionsChain.pcr ?? '—'}</strong></div>
-              <div><span>Max pain</span><strong>{optionsChain.max_pain ?? '—'}</strong></div>
-              <div><span>Bias</span><strong>{optionsChain.bias || '—'}</strong></div>
-              <div><span>ATM IV</span><strong>{optionsChain.atm_iv != null ? `${optionsChain.atm_iv}%` : '—'}</strong></div>
-            </div>
-          )}
-          {optionsChain?.note && <p className="panel-copy">{optionsChain.note}</p>}
-          {optionsChain?.top_call_oi?.length && (
-            <EvidenceList title="Top call OI strikes" items={optionsChain.top_call_oi.map((r) => `${r.strike}: OI ${r.ce_oi}`)} tone="cyan" />
-          )}
-          {optionsChain?.top_put_oi?.length && (
-            <EvidenceList title="Top put OI strikes" items={optionsChain.top_put_oi.map((r) => `${r.strike}: OI ${r.pe_oi}`)} tone="green" />
-          )}
-        </Panel>
+        <ChainContextPanel
+          symbol={selected}
+          coverage={(workspace?.fno && Object.keys(workspace.fno).length ? workspace.fno : null) as FnoUnderlying | null}
+          chain={optionsChain}
+          history={optionsHistory}
+          loading={optionsLoading}
+          onRetry={() => setOptionsForce((n) => n + 1)}
+        />
       )}
 
       {tab === 'Events' && (
@@ -651,9 +644,10 @@ export function ProductStockIntelligenceView(props: ViewProps) {
           <Panel title="F&O ELIGIBILITY — NOT A SIGNAL">
             <div className="panel-copy">
               {Object.keys(workspace?.fno || {}).length
-                ? `Maps to ${(workspace?.fno.future_symbol as string) || 'stock future'} · lot ${(workspace?.fno.lot_size as number) || '—'} · expiry ${(workspace?.fno.expiry as string) || '—'}`
-                : 'Not in current F&O universe or master file missing.'}
+                ? `Maps to ${(workspace?.fno.future_symbol as string) || 'stock future'} · lot ${(workspace?.fno.lot_size as number) || '—'} · expiry ${(workspace?.fno.expiry as string) || '—'}. The live chain lives on the Options tab.`
+                : 'Not in current F&O universe or master file missing. Open Ideas → F&O to see mapped names.'}
             </div>
+            <button type="button" onClick={() => setTab('Options')}>Open Options floor</button>
           </Panel>
         </div>
       )}
@@ -715,6 +709,12 @@ export function ProductStockIntelligenceView(props: ViewProps) {
 
       {tab === 'Evidence' && (
         <>
+          <Panel title="FILE LAYER" subtitle="Read-only freshness here. Uploads and templates live on System → Data.">
+            {workspace?.gaps?.length
+              ? <p className="panel-copy">Open gaps: {workspace.gaps.join(' · ')}</p>
+              : <p className="panel-copy">No workspace gaps listed. System → Data still shows which files are fresh, stale or missing.</p>}
+            <button type="button" onClick={() => setActive('Research Data')}>Open System → Data</button>
+          </Panel>
           <Panel title="TECHNICALS" subtitle="Value, meaning and interpretation">
             <div className="explain-metric-grid">{(workspace?.technical.metrics || []).map((metric) => <MetricExplanation metric={metric} key={metric.key} />)}</div>
           </Panel>

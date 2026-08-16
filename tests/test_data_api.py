@@ -21,6 +21,8 @@ def test_data_coverage_endpoint():
     body = response.json()
     assert body.get("symbol") == "RELIANCE"
     assert "coverage" in body
+    assert body.get("generated_at") != "RELIANCE"
+    assert isinstance(body.get("generated_at"), str) and "T" in body["generated_at"]
 
 
 def test_data_ratios_endpoint():

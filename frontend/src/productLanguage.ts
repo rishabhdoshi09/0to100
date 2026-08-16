@@ -125,7 +125,7 @@ export const PAGE_GUIDE: Record<string, PageGuide> = {
       'Do saved EOD snapshots show a multi-day shift?',
       'Which underlyings were excluded and why?',
     ],
-    action: 'Pick an index or mapped stock, read PCR as positioning context, then open the stock for the full company workspace.',
+    action: 'Pick a mapped stock (indices stay on this floor), read PCR as positioning context, then Open stock · Options for the same chain on the company workspace.',
     doesNot: 'Black-Scholes Greeks and buy/sell trade direction are not calculated — this is not an F&O signal desk.',
   },
   'Market Internals': {
