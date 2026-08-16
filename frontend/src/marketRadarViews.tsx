@@ -267,6 +267,16 @@ function radarRiskClass(row: RadarRow): string {
   return 'medium'
 }
 
+function rupee(value: unknown): number | null {
+  const n = Number(value)
+  return Number.isFinite(n) && n > 0 ? n : null
+}
+
+function upsidePct(entry: number | null, target: number | null): number | null {
+  if (entry == null || target == null || entry <= 0) return null
+  return ((target - entry) / entry) * 100
+}
+
 function RadarPickCard({
   row,
   selected,
@@ -280,7 +290,11 @@ function RadarPickCard({
 }) {
   const badge = radarBadge(row)
   const off20 = row.pct_below_20d_high
-  const last = Number((row as RadarRow & { price?: number }).price)
+  const last = rupee((row as RadarRow & { price?: number }).price)
+  const buy = rupee(row.entry) || last
+  const stop = rupee(row.stop)
+  const target = rupee(row.target)
+  const upside = upsidePct(buy, target)
   return (
     <button
       type="button"
@@ -302,28 +316,34 @@ function RadarPickCard({
       <div className="reco-pick-sub">
         <span>{row.symbol}</span>
         {row.sector ? <span className="reco-tag">{row.sector}</span> : null}
+        {last ? <span>CMP {money(last, 2)}</span> : null}
         {row.price_tag ? <span>{row.price_tag}</span> : null}
         {row.sniper_candidate ? <span className="reco-tag">Confirmed</span> : null}
       </div>
       <div className="reco-pick-kpis">
         <div>
-          <span>Last</span>
-          <strong>{Number.isFinite(last) && last > 0 ? money(last, 2) : '—'}</strong>
+          <span>Buy</span>
+          <strong>{buy != null ? money(buy, 2) : '—'}</strong>
         </div>
         <div>
-          <span>Volume</span>
-          <strong>{row.volume_ratio != null ? `${Number(row.volume_ratio).toFixed(1)}×` : '—'}</strong>
+          <span>Stop</span>
+          <strong>{stop != null ? money(stop, 2) : '—'}</strong>
         </div>
         <div>
-          <span>RSI</span>
-          <strong>{row.rsi != null ? Math.round(Number(row.rsi)) : '—'}</strong>
+          <span>Target</span>
+          <strong>{target != null ? money(target, 2) : '—'}</strong>
         </div>
         <div className="reco-gain">
-          <strong className={off20 != null && Number(off20) > 5 ? 'neg' : ''}>
-            {off20 != null ? `${Number(off20).toFixed(1)}%` : '—'}
+          <strong className={upside != null && upside < 0 ? 'neg' : ''}>
+            {upside != null ? `${upside >= 0 ? '↗ ' : '↘ '}${pct(upside)}` : '—'}
           </strong>
-          <small>off 20-day high</small>
+          <small>% upside from buy</small>
         </div>
+      </div>
+      <div className="reco-pick-sub">
+        {row.volume_ratio != null ? <span>Vol {Number(row.volume_ratio).toFixed(1)}×</span> : null}
+        {row.rsi != null ? <span>RSI {Math.round(Number(row.rsi))}</span> : null}
+        {off20 != null ? <span>{Number(off20).toFixed(1)}% off 20d high</span> : null}
       </div>
       {row.reason ? <p className="reco-pick-note">{row.reason}</p> : null}
       <div className="reco-pick-tags" aria-label="Setup tags">
@@ -695,16 +715,16 @@ export function RadarHomeView(props: ExperienceViewProps & {
           </header>
           <div className="reco-sheet-kpis">
             <div>
-              <span>Entry</span>
-              <strong>{money(preTrade?.plan?.entry ?? preTrade?.scan?.entry, 2)}</strong>
+              <span>Buy</span>
+              <strong>{money(preTrade?.plan?.entry ?? preTrade?.scan?.entry ?? (row as RadarRow)?.entry, 2)}</strong>
             </div>
             <div>
               <span>Stop</span>
-              <strong>{money(preTrade?.plan?.stop ?? preTrade?.scan?.stop, 2)}</strong>
+              <strong>{money(preTrade?.plan?.stop ?? preTrade?.scan?.stop ?? (row as RadarRow)?.stop, 2)}</strong>
             </div>
             <div>
               <span>Target</span>
-              <strong>{money(preTrade?.plan?.target ?? preTrade?.scan?.target, 2)}</strong>
+              <strong>{money(preTrade?.plan?.target ?? preTrade?.scan?.target ?? (row as RadarRow)?.target, 2)}</strong>
             </div>
             <div>
               <span>Pre-trade</span>
