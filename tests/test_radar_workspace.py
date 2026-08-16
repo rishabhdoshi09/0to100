@@ -158,12 +158,13 @@ def test_radar_home_builds_three_lanes():
     assert any(r["symbol"] == "BEST" for r in payload["sniper_candidates"])
     assert not any(r["symbol"] == "THIN" for r in payload["sniper_candidates"])
     assert payload["lanes"]["breakouts"][0].get("sniper_candidate") is True
-    # Thin volume → breakout_without_volume (excluded from the breakouts lane)
+    # Thin volume is listed (so the desk is not empty) but never confirmed / best.
     from product.radar_workspace import classify_breakout_state, is_sniper_breakout_candidate
     thin_raw = next(r for r in scan["records"] if r["symbol"] == "THIN")
     assert classify_breakout_state(thin_raw) == "breakout_without_volume"
     assert is_sniper_breakout_candidate(thin_raw) is False
-    assert "THIN" not in [r["symbol"] for r in payload["lanes"]["breakouts"]]
+    thin_lane = next(r for r in payload["lanes"]["breakouts"] if r["symbol"] == "THIN")
+    assert thin_lane.get("sniper_candidate") is False
 
 
 def test_breakout_quality_prefers_grade_and_fundamentals():
@@ -299,3 +300,43 @@ def test_yatharth_shaped_fade_is_not_best_breakout():
     assert best is not None
     assert best["symbol"] == "SOLID"
     assert pick_best_sniper_breakout([faded]) is None
+
+
+def test_faded_breakout_still_listed_in_lane():
+    from product.radar_workspace import build_radar_home
+
+    scan = {
+        "scanned_at": "2026-08-14T10:00:00+00:00",
+        "universe_size": 2,
+        "records": [
+            {
+                "symbol": "YATHARTH",
+                "score": 59,
+                "verdict": "BUY",
+                "status": "Ready to trade",
+                "signals": ["BREAKOUT_52W"],
+                "chase_risk": False,
+                "volume_ratio": 4.2,
+                "rsi": 48.5,
+                "breakout_grade": "B",
+                "avg_vol20": 1e6,
+                "pct_below_20d_high": 8.2,
+            },
+            {
+                "symbol": "MOM",
+                "score": 70,
+                "signals": ["MOMENTUM"],
+                "status": "Watch",
+                "chase_risk": False,
+            },
+        ],
+    }
+    payload = build_radar_home(
+        scan_payload=scan,
+        long_term_payload={"records": []},
+        market={"health": "Weak", "breadth": "Narrow"},
+    )
+    assert payload["counts"]["breakouts"] >= 1
+    assert payload["counts"]["momentum"] >= 1
+    assert any(r["symbol"] == "YATHARTH" for r in payload["lanes"]["breakouts"])
+    assert payload["best_breakout"] is None

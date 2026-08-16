@@ -381,7 +381,9 @@ def build_radar_home(
     # rows with per-symbol quote scrapers made radar-home time out so the UI
     # showed ZERO snipers even when ~30 were eligible.
     breakout_states = {
-        "confirmed_breakout", "near_breakout", "insufficient_confirmation", "extended_after_breakout",
+        "confirmed_breakout", "near_breakout", "insufficient_confirmation",
+        "extended_after_breakout", "faded_breakout", "breakout_without_volume",
+        "breakout_under_observation",
     }
     breakouts = [r for r in enriched if r.get("breakout_state") in breakout_states]
     try:

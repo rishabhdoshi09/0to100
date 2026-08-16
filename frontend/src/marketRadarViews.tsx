@@ -20,6 +20,7 @@ import {
 } from './productApi'
 import { RiskLensCard } from './productViews'
 import { LiveScanBanner, type ExperienceViewProps } from './experience'
+import type { DashboardPayload } from './types'
 
 type RadarRow = ScannerWorkspaceRow & {
   breakout_state?: string
@@ -200,6 +201,43 @@ function BestAmongFundamentalsPanel({
       </Panel>
     </div>
   )
+}
+
+function fallbackRadarFromDashboard(dashboard: DashboardPayload): RadarHome {
+  const records = (dashboard.scan.records || []) as RadarRow[]
+  const breakouts = records.filter((row) => {
+    const sigs = row.signals || []
+    return sigs.some((item) => String(item).includes('BREAKOUT') || item === 'GOLDEN_CROSS' || item === 'VOL_SQUEEZE')
+      || Boolean(row.breakout_grade)
+      || row.status === 'Ready to trade'
+  })
+  const momentum = records.filter((row) => (row.signals || []).includes('MOMENTUM'))
+  const longTerm = (dashboard.long_term.records || []) as RadarRow[]
+  return {
+    generated_at: dashboard.generated_at,
+    market_session: dashboard.market.trade_stance,
+    market_health: dashboard.market.health,
+    breadth: dashboard.market.breadth,
+    nifty_change_1d: Number(dashboard.market.nifty_change_1d || 0),
+    vix: Number(dashboard.market.vix || 0),
+    leaders: dashboard.market.leaders || [],
+    laggards: dashboard.market.laggards || [],
+    scan_scanned_at: dashboard.scan.scanned_at || '',
+    long_term_scanned_at: dashboard.long_term.scanned_at || '',
+    price_session: dashboard.data.bhavcopy.latest_date,
+    market_as_of: dashboard.market.as_of,
+    universe_size: dashboard.scan.universe_size,
+    lanes: {
+      breakouts: breakouts.slice(0, 12),
+      momentum: momentum.slice(0, 12),
+      long_term_picks: longTerm.slice(0, 12),
+    },
+    counts: {
+      breakouts: breakouts.length,
+      momentum: momentum.length,
+      long_term_picks: longTerm.length,
+    },
+  }
 }
 
 function thinVolume(row: RadarRow): boolean {
@@ -435,7 +473,7 @@ export function RadarHomeView(props: ExperienceViewProps & {
     const load = () => {
       fetchRadarHome()
         .then((payload) => { if (alive) setRadar(payload) })
-        .catch(() => { if (alive) setRadar(null) })
+        .catch(() => undefined)
       fetchProductReadiness()
         .then((payload) => { if (alive) setReadiness(payload) })
         .catch(() => undefined)
@@ -464,10 +502,12 @@ export function RadarHomeView(props: ExperienceViewProps & {
     return () => { alive = false; window.clearInterval(timer) }
   }, [selected, dashboard.scan.scanned_at, dashboard.generated_at])
 
-  const scanAt = radar?.scan_scanned_at || dashboard.scan.scanned_at || ''
-  const priceSession = radar?.price_session || radar?.market_as_of || dashboard.data.bhavcopy.latest_date || ''
-  const emptyDesk = !scanAt
-    || ((radar?.counts.breakouts || 0) + (radar?.counts.momentum || 0) + (radar?.counts.long_term_picks || 0) === 0)
+  const scanCount = dashboard.scan.records?.length || 0
+  const radarCount = (radar?.counts.breakouts || 0) + (radar?.counts.momentum || 0) + (radar?.counts.long_term_picks || 0)
+  const desk = radar && radarCount > 0 ? radar : (scanCount > 0 ? fallbackRadarFromDashboard(dashboard) : radar)
+  const scanAt = desk?.scan_scanned_at || dashboard.scan.scanned_at || ''
+  const priceSession = desk?.price_session || desk?.market_as_of || dashboard.data.bhavcopy.latest_date || ''
+  const emptyDesk = scanCount === 0 && !scanAt
   const readinessScore = readiness?.score ?? 0
   const needsBootstrap = emptyDesk || readinessScore < 70 || !dashboard.data.ready
 
@@ -487,26 +527,26 @@ export function RadarHomeView(props: ExperienceViewProps & {
     }
   }
 
-  const row = radar?.lanes.breakouts.find((r) => r.symbol === selected)
-    || radar?.lanes.momentum.find((r) => r.symbol === selected)
-    || radar?.lanes.long_term_picks.find((r) => r.symbol === selected)
+  const row = desk?.lanes.breakouts.find((r) => r.symbol === selected)
+    || desk?.lanes.momentum.find((r) => r.symbol === selected)
+    || desk?.lanes.long_term_picks.find((r) => r.symbol === selected)
 
-  const health = radar?.market_health || dashboard.market.health || 'Market'
+  const health = desk?.market_health || dashboard.market.health || 'Market'
   const laneRows: Record<DeskLane, RadarRow[]> = {
-    breakouts: (radar?.lanes.breakouts || []) as RadarRow[],
-    momentum: (radar?.lanes.momentum || []) as RadarRow[],
-    long_term: (radar?.lanes.long_term_picks || []) as RadarRow[],
+    breakouts: (desk?.lanes.breakouts || []) as RadarRow[],
+    momentum: (desk?.lanes.momentum || []) as RadarRow[],
+    long_term: (desk?.lanes.long_term_picks || []) as RadarRow[],
   }
   const q = query.trim().toUpperCase()
   const visible = laneRows[lane].filter((item) => {
     if (!q) return true
     return item.symbol.includes(q) || String(item.company || '').toUpperCase().includes(q)
   })
-  const best = radar?.best_breakout as RadarRow | null | undefined
-  const fundBest = radar?.best_among_fundamentals as RadarRow | null | undefined
+  const best = desk?.best_breakout as RadarRow | null | undefined
+  const fundBest = desk?.best_among_fundamentals as RadarRow | null | undefined
   const kiteLive = Boolean(dashboard.data.kite?.ok)
   const stale = Boolean(dashboard.data.bhavcopy.is_stale)
-  const nifty = radar?.nifty_change_1d ?? dashboard.market.nifty_change_1d
+  const nifty = desk?.nifty_change_1d ?? dashboard.market.nifty_change_1d
   const bannerNote = kiteLive
     ? (stale
       ? `Kite is live, but official history is stale — need ${dashboard.data.bhavcopy.required_session || 'latest session'}.`
@@ -552,13 +592,13 @@ export function RadarHomeView(props: ExperienceViewProps & {
           <small>Nifty 1D</small>
           <strong>{pct(nifty)}</strong>
         </div>
-        <div className={`reco-status ${/narrow/i.test(String(radar?.breadth || dashboard.market.breadth)) ? 'is-bad' : 'is-mid'}`}>
+        <div className={`reco-status ${/narrow/i.test(String(desk?.breadth || dashboard.market.breadth)) ? 'is-bad' : 'is-mid'}`}>
           <small>Breadth</small>
-          <strong>{radar?.breadth || dashboard.market.breadth || '—'}</strong>
+          <strong>{desk?.breadth || dashboard.market.breadth || '—'}</strong>
         </div>
         <div className="reco-status is-mid">
           <small>VIX</small>
-          <strong>{radar?.vix ?? dashboard.market.vix ?? '—'}</strong>
+          <strong>{desk?.vix ?? dashboard.market.vix ?? '—'}</strong>
         </div>
         <div className={`reco-status ${kiteLive ? 'is-good' : 'is-warn'}`}>
           <small>Zerodha</small>
@@ -585,14 +625,14 @@ export function RadarHomeView(props: ExperienceViewProps & {
 
       <div className="reco-cat-rail" role="tablist" aria-label="Desk lanes">
         <button type="button" role="tab" aria-selected={lane === 'breakouts'} className={lane === 'breakouts' ? 'active' : ''} onClick={() => setLane('breakouts')}>
-          Breakouts · {radar?.counts.breakouts || 0}
-          {radar?.counts.sniper_breakouts ? ` · ${radar.counts.sniper_breakouts} confirmed` : ''}
+          Breakouts · {desk?.counts.breakouts || 0}
+          {desk?.counts.sniper_breakouts ? ` · ${desk.counts.sniper_breakouts} confirmed` : ''}
         </button>
         <button type="button" role="tab" aria-selected={lane === 'momentum'} className={lane === 'momentum' ? 'active' : ''} onClick={() => setLane('momentum')}>
-          Momentum · {radar?.counts.momentum || 0}
+          Momentum · {desk?.counts.momentum || 0}
         </button>
         <button type="button" role="tab" aria-selected={lane === 'long_term'} className={lane === 'long_term' ? 'active' : ''} onClick={() => setLane('long_term')}>
-          Long-term · {radar?.counts.long_term_picks || 0}
+          Long-term · {desk?.counts.long_term_picks || 0}
         </button>
       </div>
 
@@ -617,10 +657,10 @@ export function RadarHomeView(props: ExperienceViewProps & {
         </>
       ) : null}
 
-      {lane === 'breakouts' && !best ? (
+      {lane === 'breakouts' && !best && visible.length > 0 ? (
         <div className="reco-empty">
           <strong>No confirmed live breakout</strong>
-          <p>Thin volume or faded names stay out. Volume ≥1.0× and still near the 20-day high.</p>
+          <p>Names below are from the last scan. Confirmed only if volume ≥1.0× and still near the 20-day high.</p>
         </div>
       ) : null}
 

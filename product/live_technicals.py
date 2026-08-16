@@ -166,6 +166,9 @@ def _apply_kite_last(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     if not rows:
         return rows
     try:
+        from data.nse_live import _is_trading_now
+        if not _is_trading_now():
+            return rows
         from data.kite_client import _fresh_env
         if not (_fresh_env("KITE_ACCESS_TOKEN") or "").strip():
             return rows
