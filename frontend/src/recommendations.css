@@ -702,7 +702,12 @@
     z-index: 60;
     margin: 0;
     max-width: none;
+    width: 100%;
+    height: 100dvh;
+    max-height: 100dvh;
     overflow-y: auto;
+    overflow-x: hidden;
+    overscroll-behavior: contain;
     -webkit-overflow-scrolling: touch;
     background:
       radial-gradient(1200px 420px at 10% -10%, rgba(27, 107, 69, 0.08), transparent 55%),
@@ -711,6 +716,8 @@
     border-radius: 0;
     padding: calc(10px + env(safe-area-inset-top, 0px)) 14px calc(18px + env(safe-area-inset-bottom, 0px));
   }
+  html.thesis-open .reco-light { animation: none; transform: none; }
+  .thesis-sheet.has-close .reco-sheet-hero h2 { overflow-wrap: anywhere; }
   .thesis-sheet.has-close .thesis-toolbar {
     display: flex;
     position: sticky;

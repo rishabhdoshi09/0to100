@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { ChartWorkspace } from './components'
 import { money, pct } from './format'
-import { isPhoneLayout, thesisSheetClassName } from './phoneLayout'
+import { isPhoneLayout, shouldPortalThesis, thesisSheetClassName } from './phoneLayout'
 import {
   fetchBuyThesis,
   fetchStockFundamentals,
@@ -41,7 +42,14 @@ export function BuyThesisSheet({
   const [loading, setLoading] = useState(false)
   const [fetching, setFetching] = useState(false)
   const [error, setError] = useState('')
+  const [phone, setPhone] = useState(() => isPhoneLayout())
   const sheetRef = useRef<HTMLElement | null>(null)
+
+  useEffect(() => {
+    const sync = () => setPhone(isPhoneLayout())
+    window.addEventListener('resize', sync)
+    return () => window.removeEventListener('resize', sync)
+  }, [])
 
   useEffect(() => {
     let alive = true
@@ -72,26 +80,21 @@ export function BuyThesisSheet({
   useEffect(() => {
     sheetRef.current?.scrollTo(0, 0)
     if (!onClose) return
-    const applyLock = () => {
-      document.documentElement.classList.toggle('thesis-open', isPhoneLayout())
-    }
-    applyLock()
+    document.documentElement.classList.add('thesis-open')
     const onKey = (event: KeyboardEvent) => {
       if (event.key === 'Escape') onClose()
     }
     window.addEventListener('keydown', onKey)
-    window.addEventListener('resize', applyLock)
     return () => {
       document.documentElement.classList.remove('thesis-open')
       window.removeEventListener('keydown', onKey)
-      window.removeEventListener('resize', applyLock)
     }
   }, [onClose, symbol])
 
   const plan = thesis?.plan
   const book = thesis?.order_book
   const sales = thesis?.sales
-  return (
+  const sheet = (
     <section
       ref={sheetRef}
       className={thesisSheetClassName(Boolean(onClose))}
@@ -217,7 +220,7 @@ export function BuyThesisSheet({
         <button type="button" className="reco-ghost" onClick={onCompare}>Compare</button>
         <button type="button" className="reco-ghost" onClick={onWatchlist}>Watchlist</button>
       </div>
-      <details className="thesis-chart-fold" open={!isPhoneLayout()}>
+      <details className="thesis-chart-fold" open={!phone}>
         <summary>Chart</summary>
         <div className="reco-chart-card">
           <ChartWorkspace
@@ -229,4 +232,7 @@ export function BuyThesisSheet({
       </details>
     </section>
   )
+
+  if (shouldPortalThesis(Boolean(onClose), phone)) return createPortal(sheet, document.body)
+  return sheet
 }

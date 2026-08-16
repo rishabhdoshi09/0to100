@@ -3,6 +3,7 @@ import {
   PHONE_MAX_WIDTH_PX,
   chartHeightForWidth,
   isPhoneLayout,
+  shouldPortalThesis,
   thesisSheetClassName,
 } from './phoneLayout'
 
@@ -21,5 +22,11 @@ describe('phone layout helpers', () => {
   it('marks a closable thesis sheet for the phone overlay', () => {
     expect(thesisSheetClassName(true)).toBe('reco-sheet thesis-sheet has-close')
     expect(thesisSheetClassName(false)).toBe('reco-sheet thesis-sheet')
+  })
+
+  it('portals the thesis only on a phone when Close exists', () => {
+    expect(shouldPortalThesis(true, true)).toBe(true)
+    expect(shouldPortalThesis(true, false)).toBe(false)
+    expect(shouldPortalThesis(false, true)).toBe(false)
   })
 })

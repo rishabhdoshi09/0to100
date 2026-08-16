@@ -18,7 +18,7 @@ export function PriceChart({ symbol, bars }: Props) {
 
     const chart = createChart(container, {
       width: container.clientWidth,
-      height: chartHeightForWidth(window.innerWidth),
+      height: chartHeightForWidth(container.clientWidth),
       layout: {
         background: { type: ColorType.Solid, color: 'transparent' },
         textColor: '#8390a8',
@@ -70,7 +70,7 @@ export function PriceChart({ symbol, bars }: Props) {
     const resize = new ResizeObserver(([entry]) => {
       chart.applyOptions({
         width: entry.contentRect.width,
-        height: chartHeightForWidth(window.innerWidth),
+        height: chartHeightForWidth(entry.contentRect.width),
       })
     })
     resize.observe(container)
