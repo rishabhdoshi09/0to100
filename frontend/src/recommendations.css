@@ -580,6 +580,7 @@
 .thesis-wave-mixed, .thesis-wave-no_claim { color: var(--rw-muted); font-weight: 500; }
 .thesis-book { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 8px; }
 .thesis-book span { display: block; font-size: 12px; }
+.thesis-book-kpis { margin-top: 10px; grid-template-columns: repeat(3, minmax(0, 1fr)); }
 @media (max-width: 960px) {
   .thesis-grid, .thesis-book { grid-template-columns: 1fr; }
 }

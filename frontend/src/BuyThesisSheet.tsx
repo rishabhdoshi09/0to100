@@ -196,7 +196,21 @@ export function BuyThesisSheet({
         <article>
           <h3>Order book</h3>
           <p>{book?.note || 'No live depth.'}</p>
-          {book?.source ? <small>Source: {book.source}</small> : null}
+          {book?.source ? <small>Source: {book.source}{book.as_of ? ` · ${book.as_of}` : ''}</small> : null}
+          <div className="reco-sheet-kpis reco-numbers-light thesis-book-kpis">
+            <div>
+              <span>Last print</span>
+              <strong>{book?.last_price != null ? money(book.last_price, 2) : '—'}</strong>
+            </div>
+            <div>
+              <span>Buy qty</span>
+              <strong>{book?.bid_qty ? Number(book.bid_qty).toLocaleString('en-IN') : '—'}</strong>
+            </div>
+            <div>
+              <span>Sell qty</span>
+              <strong>{book?.ask_qty ? Number(book.ask_qty).toLocaleString('en-IN') : '—'}</strong>
+            </div>
+          </div>
           {book?.available && (book.bids?.length || book.asks?.length) ? (
             <div className="thesis-book">
               <div>

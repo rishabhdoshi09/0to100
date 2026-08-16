@@ -532,6 +532,10 @@ export type BuyThesis = {
     status?: string
     note?: string
     source?: string
+    last_price?: number | null
+    bid_qty?: number | null
+    ask_qty?: number | null
+    as_of?: string
     bids?: Array<{ price?: number; quantity?: number }>
     asks?: Array<{ price?: number; quantity?: number }>
   }

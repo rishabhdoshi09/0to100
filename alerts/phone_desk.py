@@ -187,6 +187,13 @@ def format_thesis(payload: Mapping[str, Any]) -> str:
     src = str(book.get("source") or "")
     lines.append("")
     lines.append(f"<b>Order book</b> — {_esc(note)}" + (f" ({_esc(src)})" if src else ""))
+    last = _f(book.get("last_price"))
+    if last is not None:
+        lines.append(f"Last print {_money(last)}")
+    bid_qty = _f(book.get("bid_qty"))
+    ask_qty = _f(book.get("ask_qty"))
+    if bid_qty or ask_qty:
+        lines.append(f"Buy qty {int(bid_qty or 0):,} · sell qty {int(ask_qty or 0):,}")
     lines.append("Paper/watch: Home pe card, ya owner chat ke buttons.")
     text = "\n".join(lines)
     return text[:3900]

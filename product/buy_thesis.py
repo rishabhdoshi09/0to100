@@ -847,17 +847,8 @@ def _sales_from_raw(raw_record: Mapping[str, Any]) -> dict[str, Any]:
 
 def _order_book(symbol: str) -> dict[str, Any]:
     try:
-        from product.breakout_quality import enrich_optional_context
-        kite_book = dict((enrich_optional_context(symbol) or {}).get("order_book") or {})
-        if kite_book.get("status") not in (None, "", "unavailable"):
-            kite_book["source"] = kite_book.get("source") or "kite"
-            kite_book["available"] = True
-            return kite_book
-    except Exception:
-        pass
-    try:
-        from data.nse_live import fetch_market_depth
-        return fetch_market_depth(symbol)
+        from data.order_book import fetch_order_book
+        return fetch_order_book(symbol)
     except Exception as exc:
         return {
             "available": False,

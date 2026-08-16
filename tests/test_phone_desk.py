@@ -78,7 +78,13 @@ def test_format_thesis_includes_requested_layers_and_stays_honest():
         "earnings": {
             "bullets": ["P/E 30.2x", "Operating margin 18.0%"],
         },
-        "order_book": {"note": "NSE quote HTTP 403", "source": "nse"},
+        "order_book": {
+            "note": "NSE quote HTTP 403",
+            "source": "nse",
+            "last_price": 2018,
+            "bid_qty": 0,
+            "ask_qty": 0,
+        },
     })
     assert "Sector wave" in text
     assert "YES — sector money is coming in around this name." in text
@@ -88,6 +94,7 @@ def test_format_thesis_includes_requested_layers_and_stays_honest():
     assert "FII / DII" in text
     assert "P/E 30.2x" in text
     assert "HTTP 403" in text
+    assert "Last print" in text
     assert "not an order" in text.lower() or "research" in text.lower()
 
 
