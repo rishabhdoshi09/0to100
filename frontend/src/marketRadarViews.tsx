@@ -42,6 +42,7 @@ type RadarRow = ScannerWorkspaceRow & {
   rsi?: number
   tech_source?: string
   price_tag?: string
+  pct_below_20d_high?: number
 }
 
 const breakoutLabel: Record<string, string> = {
@@ -51,6 +52,7 @@ const breakoutLabel: Record<string, string> = {
   breakout_without_volume: 'No volume confirm',
   insufficient_confirmation: 'Needs confirmation',
   extended_after_breakout: 'Extended',
+  faded_breakout: 'Faded',
   failed_breakout: 'Failed',
   failed_or_extended: 'Failed / extended',
   insufficient_data: 'Insufficient data',
@@ -94,6 +96,9 @@ function BestSniperPanel({
               best.volume_ratio != null
                 ? `Vol ${Number(best.volume_ratio).toFixed(1)}×${volOk ? '' : ' THIN'}`
                 : null,
+              best.pct_below_20d_high != null
+                ? `${Number(best.pct_below_20d_high).toFixed(1)}% off 20d high`
+                : null,
             ].filter(Boolean).join(' · ') || 'Volume ≥1× · not chasing · RSI ≤82 — fundamentals not required'
           }
         >
@@ -118,7 +123,7 @@ function BestSniperPanel({
     <div className="radar-best-breakout radar-best-empty">
       <Panel
         title="BEST TECHNICAL BREAKOUT"
-        subtitle="Volume ≥1.0× · not extended · RSI ≤82 — tape only, no fund gate"
+        subtitle="Volume ≥1.0× · still near the 20-day high · RSI ≤82 — tape only"
       >
         <p className="radar-empty-li">
           {sniperCount === 0
@@ -464,7 +469,13 @@ export function RadarHomeView(props: ExperienceViewProps & {
         <div>
           <span>PRICE DATA</span>
           <strong>{dashboard.data.bhavcopy.latest_date || 'MISSING'}</strong>
-          <small>{dashboard.data.ready ? 'official bhavcopy ready' : 'data incomplete'}</small>
+          <small>
+            {dashboard.data.bhavcopy.is_stale
+              ? `STALE — need ${dashboard.data.bhavcopy.required_session || 'latest session'}`
+              : dashboard.data.ready
+                ? 'official bhavcopy ready'
+                : 'data incomplete'}
+          </small>
         </div>
         <div>
           <span>ZERODHA</span>

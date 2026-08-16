@@ -57,6 +57,7 @@ def test_refresh_recomputes_rsi_below_stale_scan_value(monkeypatch):
     assert out["price"] == pytest.approx(120.0)
     assert out["tech_source"] in {"live", "eod"}
     assert out["price_tag"] in {"LIVE", "EOD"}
+    assert out["pct_below_20d_high"] > 5.0
 
 
 def test_refresh_fail_open_keeps_scan_fields(monkeypatch):
@@ -116,6 +117,9 @@ def test_radar_home_uses_refreshed_rsi(monkeypatch):
                 row["price"] = 848.0
                 row["tech_source"] = "live"
                 row["price_tag"] = "LIVE"
+                row["pct_below_20d_high"] = 8.2
+            elif row.get("symbol") == "SOLID":
+                row["pct_below_20d_high"] = 1.1
             out.append(row)
         return out
 
@@ -161,7 +165,7 @@ def test_radar_home_uses_refreshed_rsi(monkeypatch):
     yath = next(r for r in payload["lanes"]["breakouts"] if r["symbol"] == "YATHARTH")
     assert yath["rsi"] == pytest.approx(49.0)
     assert yath.get("tech_source") == "live"
-    if payload["sniper_candidates"]:
-        hit = [r for r in payload["sniper_candidates"] if r["symbol"] == "YATHARTH"]
-        if hit:
-            assert hit[0]["rsi"] == pytest.approx(49.0)
+    assert yath.get("breakout_state") == "faded_breakout"
+    assert not any(r["symbol"] == "YATHARTH" for r in payload.get("sniper_candidates") or [])
+    assert payload["best_breakout"] is not None
+    assert payload["best_breakout"]["symbol"] == "SOLID"

@@ -110,9 +110,33 @@ def refresh_row_technicals(
             out["volume_ratio"] = round(vol / avg20, 2)
         out["price_tag"] = meta.get("price_tag") or ("LIVE" if meta.get("live") else "EOD")
         out["tech_source"] = "live" if meta.get("live") else "eod"
+        out.update(_structure_from_frame(frame, float(close.iloc[-1])))
     except Exception:
         pass
     return out
+
+
+def _structure_from_frame(frame, close: float) -> dict[str, float]:
+    """Distance from recent highs — used to drop faded scan-time breakouts."""
+    try:
+        high = frame["high"].astype(float) if "high" in frame.columns else frame["close"].astype(float)
+        high = high.dropna()
+        if high.empty or close <= 0:
+            return {}
+        lookback_20 = high.iloc[-20:] if len(high) >= 20 else high
+        lookback_52w = high.iloc[-252:] if len(high) >= 252 else high
+        h20 = float(lookback_20.max())
+        h52 = float(lookback_52w.max())
+        out: dict[str, float] = {}
+        if h20 > 0:
+            out["high_20d"] = round(h20, 2)
+            out["pct_below_20d_high"] = round((h20 - close) / h20 * 100.0, 2)
+        if h52 > 0:
+            out["high_52w"] = round(h52, 2)
+            out["pct_below_52w_high"] = round((h52 - close) / h52 * 100.0, 2)
+        return out
+    except Exception:
+        return {}
 
 
 def refresh_rows_technicals(

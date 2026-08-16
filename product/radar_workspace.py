@@ -8,11 +8,13 @@ from datetime import datetime, timezone
 from typing import Any, Callable, Mapping, Sequence
 
 from product.breakout_quality import (
+    BEST_MIN_VOLUME_RATIO,
     MIN_VOLUME_RATIO,
     RSI_BLOWOFF,
     RSI_HARD,
     attach_best_pick_meta,
     gate_breakout_quality,
+    live_breakout_intact,
     passes_volume_floor,
     volume_ratio as _volume_ratio_shared,
 )
@@ -79,6 +81,9 @@ def is_sniper_breakout_candidate(row: Mapping[str, Any]) -> bool:
         return False
     if _f(row.get("avg_vol20")) <= 0 and _volume_ratio(row) <= 0:
         return False
+    intact, _ = live_breakout_intact(row, for_best=False)
+    if not intact:
+        return False
     return True
 
 
@@ -121,11 +126,21 @@ def breakout_quality_score(row: Mapping[str, Any], *, for_best: bool = False) ->
 
 
 def pick_best_sniper_breakout(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any] | None:
-    """Best technical sniper candidate (no fundamentals required)."""
-    pool = [
-        dict(r) for r in rows
-        if is_sniper_breakout_candidate(r) and passes_volume_floor(r)
-    ]
+    """Best technical sniper candidate (no fundamentals required).
+
+    Fail-closed on live structure: a sticky Grade B from last week's scan
+    is not "best technical breakout" after the name has rolled over.
+    """
+    pool: list[dict[str, Any]] = []
+    for r in rows:
+        if not is_sniper_breakout_candidate(r):
+            continue
+        if not passes_volume_floor(r, min_ratio=BEST_MIN_VOLUME_RATIO):
+            continue
+        intact, _ = live_breakout_intact(r, for_best=True)
+        if not intact:
+            continue
+        pool.append(dict(r))
     if not pool:
         return None
     for r in pool:
@@ -148,7 +163,10 @@ def pick_best_among_fundamentals(rows: Sequence[Mapping[str, Any]]) -> dict[str,
 
     pool: list[dict[str, Any]] = []
     for r in rows:
-        if not is_sniper_breakout_candidate(r) or not passes_volume_floor(r):
+        if not is_sniper_breakout_candidate(r) or not passes_volume_floor(r, min_ratio=BEST_MIN_VOLUME_RATIO):
+            continue
+        intact, _ = live_breakout_intact(r, for_best=True)
+        if not intact:
             continue
         ok, _, _ = gate_breakout_quality(r, for_best=True)
         if not ok:
@@ -198,6 +216,9 @@ def merge_fundamental_context(
 
 def classify_breakout_state(row: Mapping[str, Any]) -> str:
     """Deterministic breakout sub-state for retail scanner tables."""
+    intact, _ = live_breakout_intact(row, for_best=False)
+    if not intact:
+        return "faded_breakout"
     status = str(row.get("status", "") or "")
     if bool(row.get("chase_risk")):
         return "extended_after_breakout"
@@ -369,12 +390,15 @@ def build_radar_home(
                     k: row[k] for k in (
                         "price", "rsi", "volume_ratio", "tech_source", "price_tag",
                         "eod_as_of", "quote_source",
+                        "pct_below_20d_high", "pct_below_52w_high",
+                        "high_20d", "high_52w",
                     ) if k in row
                 })
     except Exception:
         pass
 
     for row in breakouts:
+        row["breakout_state"] = classify_breakout_state(row)
         row["breakout_quality"] = breakout_quality_score(row)
         row["sniper_candidate"] = is_sniper_breakout_candidate(row)
     for row in enriched:

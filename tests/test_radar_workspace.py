@@ -68,6 +68,7 @@ def test_radar_home_builds_three_lanes():
                 "breakout_grade": "B",
                 "breakout_conviction": 55,
                 "avg_vol20": 1_000_000,
+                "pct_below_20d_high": 1.4,
             },
             {
                 "symbol": "BEST",
@@ -82,6 +83,7 @@ def test_radar_home_builds_three_lanes():
                 "breakout_grade": "A",
                 "breakout_conviction": 82,
                 "avg_vol20": 2_000_000,
+                "pct_below_20d_high": 0.8,
             },
             {
                 "symbol": "HOT",
@@ -186,6 +188,7 @@ def test_high_rsi_and_thin_volume_hard_rejected_from_best():
         "verdict": "BUY", "status": "Ready to trade", "signals": ["BREAKOUT_52W"],
         "breakout_grade": "A", "breakout_conviction": 80, "score": 80,
         "avg_vol20": 1e6, "chase_risk": False,
+        "pct_below_20d_high": 1.0,
     }
     hot = {**base, "symbol": "HOT", "rsi": 85, "volume_ratio": 2.5}
     thin = {**base, "symbol": "THIN", "rsi": 55, "volume_ratio": 0.5}
@@ -239,8 +242,55 @@ def test_enrich_marks_graded_breakout_as_sniper_candidate():
             "volume_ratio": 1.5,
             "avg_vol20": 1e6,
             "chase_risk": False,
+            "pct_below_20d_high": 1.2,
         },
         scanned_at="2026-01-01",
     )
     assert row["sniper_candidate"] is True
     assert row["breakout_quality"] > 0
+
+
+def test_yatharth_shaped_fade_is_not_best_breakout():
+    """Grade B + scan RSI 68 is not a live breakout after an 8% pullback."""
+    from product.radar_workspace import (
+        classify_breakout_state,
+        is_sniper_breakout_candidate,
+        pick_best_sniper_breakout,
+    )
+
+    faded = {
+        "symbol": "YATHARTH",
+        "score": 59,
+        "verdict": "BUY",
+        "status": "Ready to trade",
+        "signals": ["BREAKOUT_52W"],
+        "chase_risk": False,
+        "volume_ratio": 4.2,
+        "rsi": 48.5,
+        "price": 844.7,
+        "breakout_grade": "B",
+        "breakout_conviction": 60,
+        "avg_vol20": 1e6,
+        "pct_below_20d_high": 8.2,
+    }
+    intact = {
+        "symbol": "SOLID",
+        "score": 75,
+        "verdict": "BUY",
+        "status": "Ready to trade",
+        "signals": ["BREAKOUT_52W"],
+        "chase_risk": False,
+        "volume_ratio": 2.0,
+        "rsi": 55.0,
+        "breakout_grade": "A",
+        "breakout_conviction": 80,
+        "avg_vol20": 1e6,
+        "pct_below_20d_high": 1.1,
+    }
+    assert is_sniper_breakout_candidate(faded) is False
+    assert classify_breakout_state(faded) == "faded_breakout"
+    assert is_sniper_breakout_candidate(intact) is True
+    best = pick_best_sniper_breakout([faded, intact])
+    assert best is not None
+    assert best["symbol"] == "SOLID"
+    assert pick_best_sniper_breakout([faded]) is None
