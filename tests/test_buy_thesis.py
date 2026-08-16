@@ -86,6 +86,20 @@ def test_sector_wave_no_claim_when_sector_unknown():
     assert "inflow" not in wave["headline"].lower() or "not identified" in wave["headline"].lower()
 
 
+def test_screener_sector_from_cache_aligns():
+    from unittest.mock import patch
+    with patch("scan.sector_heat.sector_of", return_value=""), \
+         patch("data.nse_live.fetch_equity_industry", return_value={"sector": "", "industry": "", "macro": "", "basic_industry": "", "source": "", "error": "NSE quote HTTP 403"}):
+        ident = resolve_sector(
+            "EIMCOELECO",
+            workspace_sector="Unclassified",
+            raw_data={"sector": "Capital Goods"},
+        )
+    assert ident["identified"]
+    assert ident["source"] == "screener"
+    assert "Capital Goods" in ident["sector"] or ident["sector"] == "Engineering"
+
+
 def test_nse_industry_aligns_to_mapped_sector():
     from unittest.mock import patch
     with patch("scan.sector_heat.sector_of", return_value=""), \

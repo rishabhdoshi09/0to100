@@ -124,7 +124,32 @@ def _align_to_mapped_sector(nse_name: str) -> str:
     return best if best_hits >= 1 else ""
 
 
-def resolve_sector(symbol: str, workspace_sector: str = "") -> dict[str, Any]:
+_screener_sector_memo: dict[str, str] = {}
+
+
+def _sector_from_screener(symbol: str, raw_data: Mapping[str, Any] | None = None) -> str:
+    cached = str((raw_data or {}).get("sector") or "").strip()
+    if cached:
+        return cached
+    if symbol in _screener_sector_memo:
+        return _screener_sector_memo[symbol]
+    try:
+        from fundamentals.screener_deep import ScreenerDeepFetcher
+        fetcher = ScreenerDeepFetcher()
+        _url, soup = fetcher._fetch_page(symbol)
+        path = fetcher._parse_sector_path(soup)
+        label = str(path.get("sector") or path.get("industry") or "").strip()
+    except Exception:
+        label = ""
+    _screener_sector_memo[symbol] = label
+    return label
+
+
+def resolve_sector(
+    symbol: str,
+    workspace_sector: str = "",
+    raw_data: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
     """Identify the stock's sector before any wave claim."""
     mapped = ""
     try:
@@ -138,6 +163,7 @@ def resolve_sector(symbol: str, workspace_sector: str = "") -> dict[str, Any]:
     nse = {}
     nse_label = ""
     aligned = ""
+    screener_label = ""
     if not mapped:
         try:
             from data.nse_live import fetch_equity_industry
@@ -149,11 +175,16 @@ def resolve_sector(symbol: str, workspace_sector: str = "") -> dict[str, Any]:
             if nse_label:
                 break
         aligned = _align_to_mapped_sector(nse.get("sector") or "") or _align_to_mapped_sector(nse_label)
-    sector = mapped or aligned or nse_label or ws
+        if not aligned and not nse_label:
+            screener_label = _sector_from_screener(symbol, raw_data)
+            aligned = _align_to_mapped_sector(screener_label)
+    sector = mapped or aligned or nse_label or screener_label or ws
     if mapped:
         source = "nse_universe_map"
-    elif aligned:
+    elif aligned and nse_label:
         source = "nse_industry"
+    elif aligned or screener_label:
+        source = "screener"
     elif nse_label:
         source = "nse_industry"
     elif ws:
@@ -346,15 +377,16 @@ def build_sector_wave(
     workspace_sector: str = "",
     scan_records: Sequence[Mapping[str, Any]] | None = None,
     flows: Mapping[str, Any] | None = None,
+    raw_data: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    ident = resolve_sector(symbol, workspace_sector)
+    ident = resolve_sector(symbol, workspace_sector, raw_data=raw_data)
     sector = ident["sector"]
     if not ident["identified"]:
         return {
             **ident,
             "wave": "NO_CLAIM",
             "headline": "Sector not identified — no inflow claim.",
-            "note": "The NSE universe map has no sector for this symbol, and the desk row is unclassified.",
+            "note": "Sector is unknown in the NSE map, NSE quote, and Screener peer header — no inflow claim.",
             "chg_1d": None,
             "chg_5d": None,
             "nifty_1d": None,
@@ -912,6 +944,7 @@ def build_buy_thesis(symbol: str, *, fetch_missing: bool = False) -> dict[str, A
         str(workspace.get("sector") or long_row.get("sector") or scan.get("sector") or ""),
         scan_records,
         flows,
+        raw_data=raw_data,
     )
     smart_money = build_smart_money(symbol, shareholding, flows)
     earnings = _earnings_block(raw_data, fund_metrics)
