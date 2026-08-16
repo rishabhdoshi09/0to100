@@ -1,25 +1,20 @@
 import type { DashboardPayload } from './types'
+import { hubOf, routeForHub, type NavHub } from './hubs'
 
-const PRIMARY_NAV = [
+const FIND: Array<[string, Exclude<NavHub, ''>, string]> = [
   ['⌂', 'Home', 'Home'],
-  ['◎', 'Market Scanner', 'Market Scanner'],
-  ['▣', 'Recommendations', 'Recommendations'],
-  ['▤', 'Market Reports', 'Market Reports'],
-  ['◉', 'Stock Intelligence', 'Stock Intelligence'],
-  ['◇', 'Long-Term Picks', 'Long-Term Picks'],
-  ['⇔', 'Compare', 'Compare'],
-  ['★', 'Watchlist', 'Watchlist'],
-] as const
+  ['◎', 'Ideas', 'Ideas'],
+  ['◈', 'Context', 'Context'],
+]
 
-const SECONDARY_NAV = [
-  ['↗', 'Market Overview', 'Market Overview'],
-  ['◈', 'News & Events', 'News & Events'],
-  ['✎', 'Education', 'Education'],
-  ['▤', 'Research Data', 'Research Data'],
-  ['⬡', 'F&O Desk', 'F&O Desk'],
-  ['▣', 'My Holdings', 'Paper Portfolio'],
-  ['◌', 'System Health', 'System Health'],
-] as const
+const BOOK: Array<[string, Exclude<NavHub, ''>, string]> = [
+  ['★', 'Watchlist', 'Watchlist'],
+  ['▣', 'Holdings', 'Holdings'],
+]
+
+const RUN: Array<[string, Exclude<NavHub, ''>, string]> = [
+  ['◌', 'System', 'System'],
+]
 
 function Logo() {
   return <div className="brand-mark" aria-hidden="true"><span /><span /><span /></div>
@@ -28,23 +23,23 @@ function Logo() {
 function NavigationGroup({
   label,
   rows,
-  active,
+  hub,
   setActive,
 }: {
   label: string
-  rows: ReadonlyArray<readonly [string, string, string]>
-  active: string
+  rows: Array<[string, Exclude<NavHub, ''>, string]>
+  hub: NavHub
   setActive: (value: string) => void
 }) {
   return (
     <>
       <div className="nav-section-label">{label}</div>
-      {rows.map(([icon, route, display]) => (
+      {rows.map(([icon, id, display]) => (
         <button
-          key={route}
-          className={active === route ? 'nav-item active' : 'nav-item'}
+          key={id}
+          className={hub === id ? 'nav-item active' : 'nav-item'}
           type="button"
-          onClick={() => setActive(route)}
+          onClick={() => setActive(routeForHub(id))}
         >
           <span>{icon}</span>{display}
         </button>
@@ -64,12 +59,14 @@ export function MarketSidebar({
 }) {
   const operations = dashboard.operations.running
   const stale = Boolean(dashboard.data.bhavcopy.is_stale)
+  const hub = hubOf(active)
   return (
     <aside className="sidebar">
       <div className="brand"><Logo /><div><strong>QUANTTERM</strong><small>MARKET RADAR</small></div></div>
       <nav>
-        <NavigationGroup label="DISCOVERY" rows={PRIMARY_NAV} active={active} setActive={setActive} />
-        <NavigationGroup label="TOOLS & EVIDENCE" rows={SECONDARY_NAV} active={active} setActive={setActive} />
+        <NavigationGroup label="Find" rows={FIND} hub={hub} setActive={setActive} />
+        <NavigationGroup label="Your book" rows={BOOK} hub={hub} setActive={setActive} />
+        <NavigationGroup label="Keep honest" rows={RUN} hub={hub} setActive={setActive} />
       </nav>
       <div className="sidebar-spacer" />
       <div className="broker-card">

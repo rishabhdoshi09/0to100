@@ -98,7 +98,7 @@ type ResolveStep = {
 }
 type NextAction = { label: string; url: string; kind: string }
 
-export function ResearchDataView({ symbol }: { symbol: string }) {
+export function ResearchDataView({ symbol, onOpenStock }: { symbol: string; onOpenStock?: () => void }) {
   const [status, setStatus] = useState<EvidenceStatus | null>(null)
   const [error, setError] = useState('')
   const [busy, setBusy] = useState('')
@@ -112,6 +112,8 @@ export function ResearchDataView({ symbol }: { symbol: string }) {
   const [symbolCoverage, setSymbolCoverage] = useState<DataCoveragePayload | null>(null)
   const [universeCoverage, setUniverseCoverage] = useState<DataCoveragePayload | null>(null)
   const [jobBusy, setJobBusy] = useState('')
+  const [evidenceLoading, setEvidenceLoading] = useState(false)
+  const [evidenceOffline, setEvidenceOffline] = useState(false)
 
   const runPlatformJob = async (jobId: string) => {
     setJobBusy(jobId)
@@ -143,14 +145,20 @@ export function ResearchDataView({ symbol }: { symbol: string }) {
   const loadEvidence = async () => {
     if (!symbol) {
       setStatus(null)
+      setEvidenceOffline(false)
       return
     }
+    setEvidenceLoading(true)
     try {
       const response = await fetch(`${reportBase}/evidence/${encodeURIComponent(symbol)}`, { headers: { Accept: 'application/json' } })
       if (!response.ok) throw new Error(await response.text())
       setStatus(await response.json() as EvidenceStatus)
+      setEvidenceOffline(false)
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : 'Evidence service unavailable')
+      setEvidenceOffline(true)
+      setError(reason instanceof Error ? reason.message : 'Evidence service unavailable — start the report API on :8766 (bash scripts/run_quantterm_complete.sh).')
+    } finally {
+      setEvidenceLoading(false)
     }
   }
 
@@ -163,7 +171,6 @@ export function ResearchDataView({ symbol }: { symbol: string }) {
       setResolveTrail(payload.steps || [])
       setNextActions(payload.next_actions || [])
       setResolveSource(payload.source || '')
-      await loadEvidence()
       if (!payload.accepted) {
         setError(payload.message || 'Fundamentals missing after all sources — use next actions below')
       } else if (force) {
@@ -177,21 +184,28 @@ export function ResearchDataView({ symbol }: { symbol: string }) {
   }
 
   useEffect(() => {
+    void loadPlatformData()
     if (!symbol) {
       setStatus(null)
       setSymbolCoverage(null)
       setResolveTrail([])
       setNextActions([])
       setResolveSource('')
+      setEvidenceOffline(false)
       return
     }
+    void loadEvidence()
     void loadFundamentals(false)
-    void loadPlatformData()
   }, [symbol])
 
   const missingCount = useMemo(() => status?.requirements.filter((item) => !item.available).length || 0, [status])
   const staleCount = useMemo(() => status?.requirements.filter((item) => item.status === 'STALE').length || 0, [status])
-  const draft = (key: string): Draft => drafts[key] || { file: null, asOf: today(), sourceUrl: '' }
+  const draft = (key: string, requirement?: Requirement): Draft => {
+    const stored = drafts[key]
+    if (stored) return stored
+    const official = requirement?.links.find((link) => link.official === 'true') || requirement?.links[0]
+    return { file: null, asOf: today(), sourceUrl: official?.url || '' }
+  }
   const patchDraft = (key: string, patch: Partial<Draft>) => {
     setDrafts((current) => ({ ...current, [key]: { ...draft(key), ...patch } }))
   }
@@ -266,12 +280,80 @@ export function ResearchDataView({ symbol }: { symbol: string }) {
     }
   }
 
+  const platformPanel = (
+    <div className="evidence-panel">
+      <header>
+        <div><h2>Data platform audit</h2><p>Provider registry and refresh jobs — available even before you pick a stock. Per-symbol coverage appears after search.</p></div>
+        <button type="button" onClick={() => void loadPlatformData()}>Refresh platform</button>
+      </header>
+      {providers && (
+        <div className="runtime-grid">
+          {providers.providers.map((row) => (
+            <article key={row.name}>
+              <span>{row.name}</span>
+              <strong className={statusClass(row.status)}>{row.status}</strong>
+              <small>{row.coverage_note}</small>
+              <small>Auth: {row.authentication_status} · caps: {row.capabilities.join(', ')}</small>
+            </article>
+          ))}
+        </div>
+      )}
+      {jobs && (
+        <div className="fno-table wide-table" style={{ marginTop: '12px' }}>
+          <div className="fno-head"><span>JOB</span><span>CONTROL</span><span>DESCRIPTION</span><span>ACTION</span></div>
+          {jobs.jobs.map((job) => (
+            <div className="fno-row" key={job.id} style={{ display: 'grid', cursor: 'default' }}>
+              <strong>{job.label}</strong>
+              <span>{job.control || job.trigger}</span>
+              <span>{job.description}</span>
+              <button type="button" disabled={jobBusy === job.id || job.id === 'fundamentals'} onClick={() => void runPlatformJob(job.id)}>
+                {job.id === 'fundamentals' ? (symbol ? 'Use Retry below' : 'Pick a stock first') : jobBusy === job.id ? 'Running…' : 'Run'}
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+      {symbolCoverage?.coverage && (
+        <div className="key-value-list" style={{ marginTop: '12px' }}>
+          <div><span>{symbol} identity</span><strong>{String(symbolCoverage.coverage.identity ?? '—')}</strong></div>
+          <div><span>Price history</span><strong>{String(symbolCoverage.coverage.price_history ?? '—')}</strong></div>
+          <div><span>Fundamentals</span><strong>{String(symbolCoverage.coverage.fundamentals ?? '—')}</strong></div>
+          <div><span>Ratios</span><strong>{String(symbolCoverage.coverage.ratios ?? '—')}</strong></div>
+          <div><span>Long-term eligible</span><strong>{String(symbolCoverage.coverage.long_term_eligible ?? '—')}</strong></div>
+        </div>
+      )}
+      {universeCoverage?.audited != null && (
+        <p className="panel-copy" style={{ marginTop: '12px' }}>
+          Universe sample: {universeCoverage.audited} symbols audited · remediation queue {universeCoverage.remediation_queue?.length ?? 0} items
+          {universeCoverage.status_counts && (
+            <> · counts: {Object.entries(universeCoverage.status_counts).map(([k, v]) => `${k}=${v}`).join(', ')}</>
+          )}
+        </p>
+      )}
+    </div>
+  )
+
   if (!symbol) {
-    return <section className="research-data-view"><div className="evidence-empty"><h2>Select a stock first</h2><p>Choose a stock from Scanner, Long-Term, F&O Desk or search. QuantTerm will then show exactly which research datasets are available, stale or missing.</p></div></section>
+    return (
+      <section className="research-data-view">
+        <div className="evidence-empty">
+          <h2>Pick a name to see its file layer</h2>
+          <p>Search any NSE share above, or open a card from Ideas. Health is whether workers are alive. This tab is whether the files behind a stock are fresh, stale or missing.</p>
+          <button type="button" onClick={onOpenStock}>Back to Ideas</button>
+        </div>
+        {platformPanel}
+      </section>
+    )
   }
 
   return (
     <section className="research-data-view">
+      {evidenceOffline && (
+        <div className="api-warning">
+          Evidence desk needs the report API on :8766. Price, coverage and jobs below still come from the terminal API.
+          Start with <code>bash scripts/run_quantterm_complete.sh</code>.
+        </div>
+      )}
       {error && (
         <div className="api-warning">
           {error}
@@ -326,62 +408,18 @@ export function ResearchDataView({ symbol }: { symbol: string }) {
       )}
       <div className="evidence-summary">
         <div><span>SYMBOL</span><strong>{symbol}</strong></div>
-        <div><span>RESEARCH COVERAGE</span><strong>{status?.coverage_pct ?? 0}%</strong></div>
+        <div><span>RESEARCH COVERAGE</span><strong>{evidenceLoading && !status ? '…' : `${status?.coverage_pct ?? 0}%`}</strong></div>
         <div><span>MISSING DATASETS</span><strong>{missingCount}</strong></div>
         <div><span>STALE DATASETS</span><strong>{staleCount}</strong></div>
         <div><span>DEEP FUNDAMENTALS</span><strong>{status?.raw_fundamentals.freshness || 'UNKNOWN'}</strong></div>
       </div>
+      {onOpenStock && (
+        <div className="inline-actions" style={{ margin: '0 0 12px' }}>
+          <button type="button" onClick={onOpenStock}>Open this stock</button>
+        </div>
+      )}
 
-      <div className="evidence-panel">
-        <header>
-          <div><h2>Data platform audit</h2><p>Provider registry, refresh jobs, and per-symbol coverage from /api/data/* (not inferred from UI).</p></div>
-          <button type="button" onClick={() => void loadPlatformData()}>Refresh platform</button>
-        </header>
-        {providers && (
-          <div className="runtime-grid">
-            {providers.providers.map((row) => (
-              <article key={row.name}>
-                <span>{row.name}</span>
-                <strong className={statusClass(row.status)}>{row.status}</strong>
-                <small>{row.coverage_note}</small>
-                <small>Auth: {row.authentication_status} · caps: {row.capabilities.join(', ')}</small>
-              </article>
-            ))}
-          </div>
-        )}
-        {jobs && (
-          <div className="fno-table wide-table" style={{ marginTop: '12px' }}>
-            <div className="fno-head"><span>JOB</span><span>CONTROL</span><span>DESCRIPTION</span><span>ACTION</span></div>
-            {jobs.jobs.map((job) => (
-              <div className="fno-row" key={job.id} style={{ display: 'grid', cursor: 'default' }}>
-                <strong>{job.label}</strong>
-                <span>{job.control || job.trigger}</span>
-                <span>{job.description}</span>
-                <button type="button" disabled={jobBusy === job.id} onClick={() => void runPlatformJob(job.id)}>
-                  {jobBusy === job.id ? 'Running…' : 'Run'}
-                </button>
-              </div>
-            ))}
-          </div>
-        )}
-        {symbolCoverage?.coverage && (
-          <div className="key-value-list" style={{ marginTop: '12px' }}>
-            <div><span>{symbol} identity</span><strong>{String(symbolCoverage.coverage.identity ?? '—')}</strong></div>
-            <div><span>Price history</span><strong>{String(symbolCoverage.coverage.price_history ?? '—')}</strong></div>
-            <div><span>Fundamentals</span><strong>{String(symbolCoverage.coverage.fundamentals ?? '—')}</strong></div>
-            <div><span>Ratios</span><strong>{String(symbolCoverage.coverage.ratios ?? '—')}</strong></div>
-            <div><span>Long-term eligible</span><strong>{String(symbolCoverage.coverage.long_term_eligible ?? '—')}</strong></div>
-          </div>
-        )}
-        {universeCoverage?.audited != null && (
-          <p className="panel-copy" style={{ marginTop: '12px' }}>
-            Universe sample: {universeCoverage.audited} symbols audited · remediation queue {universeCoverage.remediation_queue?.length ?? 0} items
-            {universeCoverage.status_counts && (
-              <> · counts: {Object.entries(universeCoverage.status_counts).map(([k, v]) => `${k}=${v}`).join(', ')}</>
-            )}
-          </p>
-        )}
-      </div>
+      {platformPanel}
 
       <div className="evidence-panel">
         <header>
@@ -425,7 +463,7 @@ export function ResearchDataView({ symbol }: { symbol: string }) {
         </p>
         <div className="requirements-list">
           {(status?.requirements || []).map((item) => {
-            const current = draft(item.key)
+            const current = draft(item.key, item)
             return (
               <article className="requirement-card" key={item.key}>
                 <div className="requirement-head">

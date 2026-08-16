@@ -584,7 +584,7 @@ export function RadarHomeView(props: ExperienceViewProps & {
       <nav className="reco-crumb" aria-label="Breadcrumb">
         <button type="button" onClick={() => setActive('Home')}>Home</button>
         <span>›</span>
-        <strong>Market desk</strong>
+        <strong>Desk</strong>
         <span>›</span>
         <strong>{laneLabel}</strong>
       </nav>
@@ -608,18 +608,18 @@ export function RadarHomeView(props: ExperienceViewProps & {
       </header>
 
       <div className="reco-status-row" aria-label="Market status">
-        <div className={`reco-status ${Number(nifty) >= 0 ? 'is-good' : 'is-mid'}`}>
+        <button type="button" className={`reco-status ${Number(nifty) >= 0 ? 'is-good' : 'is-mid'}`} onClick={() => setActive('Market Overview')}>
           <small>Nifty 1D</small>
           <strong>{pct(nifty)}</strong>
-        </div>
-        <div className={`reco-status ${/narrow/i.test(String(desk?.breadth || dashboard.market.breadth)) ? 'is-bad' : 'is-mid'}`}>
+        </button>
+        <button type="button" className={`reco-status ${/narrow/i.test(String(desk?.breadth || dashboard.market.breadth)) ? 'is-bad' : 'is-mid'}`} onClick={() => setActive('Market Overview')}>
           <small>Breadth</small>
           <strong>{desk?.breadth || dashboard.market.breadth || '—'}</strong>
-        </div>
-        <div className="reco-status is-mid">
+        </button>
+        <button type="button" className="reco-status is-mid" onClick={() => setActive('Market Overview')}>
           <small>VIX</small>
           <strong>{desk?.vix ?? dashboard.market.vix ?? '—'}</strong>
-        </div>
+        </button>
         <div className={`reco-status ${kiteLive ? 'is-good' : 'is-warn'}`}>
           <small>Zerodha</small>
           <strong>{kiteLive ? 'Kite live' : 'Login needed'}</strong>
@@ -833,9 +833,9 @@ export function MarketScannerView(props: ExperienceViewProps & { onCompare: (sym
   return (
     <section className="reco-light market-scanner">
       <nav className="reco-crumb" aria-label="Breadcrumb">
-        <button type="button" onClick={() => setActive('Home')}>Home</button>
+        <button type="button" onClick={() => setActive('Recommendations')}>Ideas</button>
         <span>›</span>
-        <strong>Market Scanner</strong>
+        <strong>Table</strong>
         <span>›</span>
         <strong>{tab}</strong>
       </nav>
@@ -905,6 +905,12 @@ export function MarketScannerView(props: ExperienceViewProps & { onCompare: (sym
             <div className="radar-action-row">
               <button type="button" disabled={!selected} onClick={() => setActive('Stock Intelligence')}>Stock Intelligence</button>
               <button type="button" disabled={!selected} onClick={() => selected && onCompare(selected)}>Compare</button>
+              {tab === 'F&O' && (
+                <button type="button" onClick={() => setActive('F&O Desk')}>Open F&O floor</button>
+              )}
+              {tab === 'Long-Term' && (
+                <button type="button" onClick={() => setActive('Long-Term Picks')}>Open long-term research</button>
+              )}
             </div>
           </Panel>
         </div>

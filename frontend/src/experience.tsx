@@ -115,13 +115,23 @@ function closedTradeEvidence(dashboard: DashboardPayload) {
   }
 }
 
+const GUIDE_ALIAS: Record<string, string> = {
+  Home: 'Command Center',
+  'Market Scanner': 'Scanner',
+  'Long-Term Picks': 'Long-Term',
+  'System Health': 'Automation',
+  'Paper Portfolio': 'Portfolio',
+  'Market Overview': 'Market Internals',
+}
+
 export function ExperienceHelpDrawer({ page, open, onClose }: {
   page: string
   open: boolean
   onClose: () => void
 }) {
   if (!open) return null
-  const guide = PAGE_GUIDE[page] || PAGE_GUIDE['Command Center']
+  const guideKey = page in PAGE_GUIDE ? page : (GUIDE_ALIAS[page] || 'Command Center')
+  const guide = PAGE_GUIDE[guideKey] || PAGE_GUIDE['Command Center']
   return (
     <div className="experience-help-backdrop" role="presentation" onClick={onClose}>
       <aside className="experience-help" role="dialog" aria-modal="true" aria-label={`${guide.title} help`} onClick={(event: { stopPropagation: () => void }) => event.stopPropagation()}>
@@ -608,7 +618,7 @@ function median(values: number[]) {
 }
 
 export function EnhancedLongTermView(props: ExperienceViewProps) {
-  const { dashboard, selected, setSelected, bars, depth, longTermScan } = props
+  const { dashboard, selected, setSelected, bars, setActive, depth, longTermScan } = props
   const [classification, setClassification] = useState('All')
   const [sector, setSector] = useState('All')
   const [minCoverage, setMinCoverage] = useState(Math.round(MIN_LT_FUNDAMENTAL_COVERAGE * 100))
@@ -664,6 +674,10 @@ export function EnhancedLongTermView(props: ExperienceViewProps) {
           <Panel title={`PRICE & TIMING · ${selected || 'SELECT STOCK'}`}><ChartWorkspace symbol={selected} bars={bars} row={current} /></Panel>
           <Panel title="QUALITY OVERLAYS"><div className="quality-overlay-grid"><div><span>Classification</span><strong>{words(current?.classification || 'Unavailable')}</strong></div><div><span>Fundamental score</span><strong>{score(current?.fundamental_score)}</strong></div><div><span>Technical score</span><strong>{score(current?.technical_score)}</strong></div><div><span>Combined score</span><strong>{score(current?.combined_score)}</strong></div><div><span>Coverage</span><strong>{current?.fundamental_coverage == null ? '—' : `${(Number(current.fundamental_coverage) * 100).toFixed(0)}%`}</strong></div><div><span>Timing</span><strong>{words(current?.timing || 'Unavailable')}</strong></div></div></Panel>
           <Panel title="EVIDENCE AND RISKS"><div className="evidence-grid"><EvidenceList title="Quality factors" items={current?.quality_factors} tone="green" /><EvidenceList title="Risk flags" items={current?.risk_flags} tone="red" /></div></Panel>
+          <div className="radar-action-row">
+            <button type="button" disabled={!selected} onClick={() => setActive('Stock Intelligence')}>Open stock</button>
+            <button type="button" disabled={!selected} onClick={() => setActive('Research Data')}>Close data gaps</button>
+          </div>
           <div className="no-fake-performance"><strong>Why there is no glossy model-performance chart</strong><p>This shortlist does not yet carry a matched strategy-level out-of-sample performance series. QuantTerm will not display a decorative Sharpe, CAGR or projection without that evidence.</p></div>
         </div>
       </div>

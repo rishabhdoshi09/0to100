@@ -372,6 +372,10 @@
   border-radius: 10px;
   background: #f6faf7;
   border: 1px solid var(--rw-line);
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+  color: inherit;
 }
 .reco-status small {
   font-size: 10px; letter-spacing: .06em; text-transform: uppercase;

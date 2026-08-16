@@ -13,6 +13,7 @@ import {
   ExperienceHelpDrawer,
 } from './experience'
 import { MarketSidebar } from './MarketSidebar'
+import { hubOf, wrapInHub } from './hubs'
 import { EducationView } from './educationViews'
 import { NewsView, OperationsRibbon, FnoView } from './marketViews'
 import { ProductStockIntelligenceView } from './productViews'
@@ -145,46 +146,45 @@ const emptyDashboard: DashboardPayload = {
 
 const pageTitles: Record<string, string> = {
   Home: 'Home',
-  'Market Scanner': 'Market Scanner',
-  Recommendations: 'Recommendations',
-  'Market Reports': 'Market Reports',
-  'Stock Intelligence': 'Stock Intelligence',
-  'Long-Term Picks': 'Long-Term Picks',
+  'Market Scanner': 'Ideas',
+  Recommendations: 'Ideas',
+  'Market Reports': 'Context',
+  'Stock Intelligence': 'Stock',
+  'Long-Term Picks': 'Ideas',
   Compare: 'Compare',
   Watchlist: 'Watchlist',
-  'Market Overview': 'Market Overview',
-  'News & Events': 'News & Events',
-  Education: 'Education',
-  'Research Data': 'Research Data',
-  'F&O Desk': 'F&O Desk',
-  'Paper Portfolio': 'My Holdings',
-  'System Health': 'System Health',
-  // legacy route keys
+  'Market Overview': 'Home',
+  'News & Events': 'Context',
+  Education: 'Context',
+  'Research Data': 'System',
+  'F&O Desk': 'Ideas',
+  'Paper Portfolio': 'Holdings',
+  'System Health': 'System',
   'Command Center': 'Home',
-  Scanner: 'Market Scanner',
-  'Long-Term': 'Long-Term Picks',
-  Portfolio: 'My Holdings',
-  'Market Internals': 'Market Overview',
-  Automation: 'System Health',
+  Scanner: 'Ideas',
+  'Long-Term': 'Ideas',
+  Portfolio: 'Holdings',
+  'Market Internals': 'Home',
+  Automation: 'System',
 }
 
 const pageSubtitles: Record<string, string> = {
-  Home: 'Market desk — last-session prices, confirmed breakouts, momentum and long-term picks.',
-  'Market Scanner': 'Professional scanner tables for breakouts, momentum and long-term quality.',
-  Recommendations: 'Research categories — Wealth Builders, Super Trends, Momentum Breakouts, Recovery — with Active/Closed tracking.',
-  'Market Reports': 'Daily Market Pulse archive — trends, sector movers and breakout context from live system state.',
-  'Stock Intelligence': 'Company workspace — chart, financials, ratios and pre-trade GO/CAUTION/NO_GO cockpit.',
-  'Long-Term Picks': 'Business quality, valuation and timing without fabricated model performance.',
-  Compare: 'Side-by-side comparison across market, growth, quality and technical dimensions.',
+  Home: 'Desk of names plus the market weather they sit in.',
+  'Market Scanner': 'The same scan as a dense table.',
+  Recommendations: 'Research shortlist — categories, table, long-term and F&O.',
+  'Market Reports': 'Daily digest, source list, and the same flow taught.',
+  'Stock Intelligence': 'One company — chart, financials, options and evidence.',
+  'Long-Term Picks': 'Quality, valuation and timing without fabricated performance.',
+  Compare: 'Side-by-side across market, growth, quality and technicals.',
   Watchlist: 'Names you are tracking with latest scan context.',
-  'Market Overview': 'Regime, breadth, volatility and sector leadership.',
+  'Market Overview': 'Regime, breadth, volatility and FII/DII — the weather for the desk.',
   'News & Events': 'Dated market context with source health.',
-  Education: 'Crunched news + macro/micro teach-ins for the share market — never invented blogs, never a signal.',
-  'Research Data': 'Verified snapshots, data platform jobs, and evidence uploads.',
-  'F&O Desk': 'Mapped futures plus live OI / IV / PCR / max-pain context for a selected underlying.',
+  Education: 'The news flow, taught — never invented blogs, never a signal.',
+  'Research Data': 'Which files behind a stock are fresh, stale or missing.',
+  'F&O Desk': 'Derivatives floor of a name — mapped futures, then the live chain.',
   'Paper Portfolio': 'Demat holdings + paper book — sync Zerodha or paste your shares.',
   Portfolio: 'Demat holdings + paper book — sync Zerodha or paste your shares.',
-  'System Health': 'Operations, autonomy and infrastructure detail.',
+  'System Health': 'Workers alive, then the files behind a stock.',
 }
 
 function App() {
@@ -194,6 +194,7 @@ function App() {
   const [active, setActive] = useState('Home')
   const [compareSymbols, setCompareSymbols] = useState<string[]>([])
   const [selected, setSelected] = useState('')
+  const [intelTab, setIntelTab] = useState<string | undefined>()
   const [bars, setBars] = useState<ChartBar[]>([])
   const [controlState, setControlState] = useState('')
   const [query, setQuery] = useState('')
@@ -336,6 +337,7 @@ function App() {
       || clean
     setSelected(match)
     setQuery(match)
+    setIntelTab(undefined)
     setActive('Stock Intelligence')
     setControlState(
       symbols.includes(match) || remoteSuggestions.includes(match)
@@ -408,8 +410,13 @@ function App() {
     longTermScan,
   }
 
-  const primaryPages = ['Home', 'Market Scanner', 'Stock Intelligence', 'Long-Term Picks', 'Compare', 'Watchlist', 'Command Center', 'Scanner']
-  const showOpsRibbon = !primaryPages.includes(active)
+  useEffect(() => {
+    if (active !== 'Stock Intelligence') setIntelTab(undefined)
+  }, [active])
+
+  const hub = hubOf(active)
+  const hidePageTitle = hub === 'Home' || hub === 'Ideas' || hub === 'Context' || hub === 'System'
+  const showOpsRibbon = hub === 'System'
   const showReportActions = [
     'Stock Intelligence',
     'Research Data',
@@ -451,12 +458,20 @@ function App() {
         <ProductStockIntelligenceView
           {...viewProps}
           depth={depth}
+          initialTab={intelTab}
           onCompare={addToCompare}
           onWatchlist={addToWatchlist}
         />
       )
     }
-    if (active === 'Research Data') return <ResearchDataView symbol={selected} />
+    if (active === 'Research Data') {
+      return (
+        <ResearchDataView
+          symbol={selected}
+          onOpenStock={() => setActive(selected ? 'Stock Intelligence' : 'Recommendations')}
+        />
+      )
+    }
     if (active === 'Paper Portfolio' || active === 'Portfolio') return <PortfolioView {...viewProps} />
     if (active === 'Market Overview' || active === 'Market Internals') return <MarketInternalsView {...viewProps} />
     if (active === 'Long-Term Picks' || active === 'Long-Term') return <EnhancedLongTermView {...viewProps} />
@@ -470,7 +485,18 @@ function App() {
         />
       )
     }
-    if (active === 'F&O Desk') return <FnoView {...viewProps} />
+    if (active === 'F&O Desk') {
+      return (
+        <FnoView
+          {...viewProps}
+          onOpenStock={(symbol) => {
+            setSelected(symbol)
+            setIntelTab('Options')
+            setActive('Stock Intelligence')
+          }}
+        />
+      )
+    }
     if (active === 'System Health' || active === 'Automation') return <AutomationView {...viewProps} />
     return <RadarHomeView {...viewProps} onCompare={addToCompare} onWatchlist={addToWatchlist} />
   }
@@ -504,7 +530,7 @@ function App() {
           </div>
         </header>
 
-        <section className={`page-title ${active === 'Home' || active === 'Command Center' ? 'is-hidden' : ''}`}>
+        <section className={`page-title ${hidePageTitle ? 'is-hidden' : ''}`}>
           <div><h1>{pageTitles[active] || active}</h1><p>{pageSubtitles[active]}</p></div>
           <div className="page-actions">
             {showReportActions && (
@@ -530,7 +556,7 @@ function App() {
           </div>
         )}
         {showOpsRibbon && <OperationsRibbon dashboard={dashboard} />}
-        {renderView()}
+        {wrapInHub(active, setActive, renderView())}
       </main>
       <ExperienceHelpDrawer page={active} open={helpOpen} onClose={() => setHelpOpen(false)} />
       <ReportPdfViewer

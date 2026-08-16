@@ -185,6 +185,13 @@ export type DataReadiness = {
     nifty?: number
     chg_pct?: number
   }
+  options_eod?: {
+    available?: boolean
+    path?: string
+    symbols?: number
+    snapshots?: number
+    latest_as_of?: string
+  }
   scan_saved: boolean
   scan_records: number
   long_term_saved: boolean

@@ -10,12 +10,15 @@ import type {
 import { compactDateTime, words } from './format'
 import { MetricCard, Panel } from './components'
 import { fetchMarketOptions, fetchOptionsEodHistory } from './api'
+import { FNO_INDEX_UNDERLYINGS, canOpenStockFromFno, defaultFnoFocus, isFnoIndex } from './fnoDesk'
 
 type Props = {
   dashboard: DashboardPayload
   runControl: (control: ControlName) => Promise<void>
+  selected?: string
   setSelected?: (symbol: string) => void
   setActive?: (page: string) => void
+  onOpenStock?: (symbol: string) => void
 }
 
 const operationLabel = (kind: string) => words(kind.replace('MARKET_', ''))
@@ -70,7 +73,7 @@ const canonicalCategory = (article: NewsArticle) => {
   return 'Market'
 }
 
-function NewsCard({ article, openSymbol }: { article: NewsArticle; openSymbol: (symbol: string) => void }) {
+function NewsCard({ article, openSymbol, openFno }: { article: NewsArticle; openSymbol: (symbol: string) => void; openFno: (symbol: string) => void }) {
   return (
     <article className="news-card">
       <header>
@@ -82,7 +85,9 @@ function NewsCard({ article, openSymbol }: { article: NewsArticle; openSymbol: (
       <div className="news-meta"><span>{article.source}</span><span>{article.official ? 'Official source' : `Source tier ${article.source_tier}`}</span><span>{article.corroboration_count} corroborating source(s)</span></div>
       <div className="news-symbols">
         {article.mentioned_symbols.slice(0, 8).map((symbol) => <button type="button" key={symbol} onClick={() => openSymbol(symbol)}>{symbol}</button>)}
-        {article.fno_symbols.length > 0 && <em>F&O linked: {article.fno_symbols.slice(0, 6).join(', ')}</em>}
+        {article.fno_symbols.slice(0, 6).map((symbol) => (
+          <button type="button" key={`fno-${symbol}`} onClick={() => openFno(symbol)}>{`F&O ${symbol}`}</button>
+        ))}
       </div>
       {article.url && <a href={article.url} target="_blank" rel="noreferrer">Open original source ↗</a>}
     </article>
@@ -106,6 +111,10 @@ export function NewsView({ dashboard, runControl, setSelected, setActive }: Prop
     setSelected?.(symbol)
     setActive?.('Stock Intelligence')
   }
+  const openFno = (symbol: string) => {
+    setSelected?.(symbol)
+    setActive?.('F&O Desk')
+  }
   const health = dashboard.news.source_health
   const healthy = health.filter((item) => item.status === 'OK').length
   const failed = health.filter((item) => item.status !== 'OK').length
@@ -118,6 +127,8 @@ export function NewsView({ dashboard, runControl, setSelected, setActive }: Prop
       <div className="inline-actions">
         <button type="button" onClick={() => void runControl('REFRESH_NEWS_NOW')}>Refresh news and filings</button>
         <button type="button" onClick={() => setImportantOnly((value) => !value)}>{importantOnly ? 'Show every impact level' : 'Show impact 70+ only'}</button>
+        <button type="button" onClick={() => setActive?.('Education')}>Open Learn</button>
+        <button type="button" onClick={() => setActive?.('Market Reports')}>Open Pulse</button>
       </div>
       <div className="view-metrics">
         <MetricCard label="24H ARTICLES" value={String(dashboard.news.stats.total || 0)} detail={`${dashboard.news.stats.important || 0} high impact`} />
@@ -128,7 +139,7 @@ export function NewsView({ dashboard, runControl, setSelected, setActive }: Prop
       <div className="mode-tabs">{categories.map((item) => <button type="button" key={item} className={category === item ? 'active' : ''} onClick={() => setCategory(item)}>{item}</button>)}</div>
       <div className="news-layout">
         <Panel title={`CURATED MARKET CONTEXT · ${articles.length}`} subtitle="Every article keeps its source, date, impact and entity mapping">
-          <div className="news-feed">{articles.length ? articles.map((article) => <NewsCard key={article.article_id} article={article} openSymbol={openSymbol} />) : <div className="large-empty">No article matches this view. Refresh the store, then inspect the source-health panel for the exact provider failure.</div>}</div>
+          <div className="news-feed">{articles.length ? articles.map((article) => <NewsCard key={article.article_id} article={article} openSymbol={openSymbol} openFno={openFno} />) : <div className="large-empty">No article matches this view. Refresh the store, then inspect the source-health panel for the exact provider failure.</div>}</div>
         </Panel>
         <Panel title="SOURCE HEALTH" subtitle="Provider failures remain visible">
           <div className="source-health-list">
@@ -141,7 +152,7 @@ export function NewsView({ dashboard, runControl, setSelected, setActive }: Prop
   )
 }
 
-const INDEX_QUICK = ['NIFTY', 'BANKNIFTY', 'FINNIFTY'] as const
+const INDEX_QUICK = FNO_INDEX_UNDERLYINGS
 
 function FnoTable({
   rows,
@@ -175,7 +186,7 @@ function FnoTable({
   )
 }
 
-function ChainContextPanel({
+export function ChainContextPanel({
   symbol,
   coverage,
   chain,
@@ -183,6 +194,7 @@ function ChainContextPanel({
   loading,
   onRetry,
   onOpenIntelligence,
+  stockOpenable = true,
 }: {
   symbol: string
   coverage: FnoUnderlying | null
@@ -190,7 +202,8 @@ function ChainContextPanel({
   history: OptionsEodHistoryPayload | null
   loading: boolean
   onRetry: () => void
-  onOpenIntelligence: () => void
+  onOpenIntelligence?: () => void
+  stockOpenable?: boolean
 }) {
   const biasTone = (chain?.bias || '').toLowerCase() === 'bullish'
     ? 'green'
@@ -204,8 +217,8 @@ function ChainContextPanel({
         subtitle={
           coverage
             ? `Mapped future ${coverage.future_symbol} · lot ${coverage.lot_size} · expiry ${coverage.expiry || '—'}`
-            : INDEX_QUICK.includes(symbol as (typeof INDEX_QUICK)[number])
-              ? 'Index option chain (no stock-future mapping required)'
+            : isFnoIndex(symbol)
+              ? 'Index option chain — stays on this floor, not a company workspace'
               : 'Select a mapped underlying or an index quick-pick'
         }
       >
@@ -213,9 +226,16 @@ function ChainContextPanel({
           <button type="button" disabled={!symbol || loading} onClick={onRetry}>
             {loading ? 'Loading chain…' : 'Refresh live chain'}
           </button>
-          <button type="button" disabled={!symbol} onClick={onOpenIntelligence}>
-            Open Stock Intelligence
-          </button>
+          {onOpenIntelligence && (
+            <button
+              type="button"
+              disabled={!symbol || !stockOpenable}
+              title={stockOpenable ? 'Open this name on the Options tab' : 'Indices are not company workspaces'}
+              onClick={onOpenIntelligence}
+            >
+              {stockOpenable ? 'Open stock · Options' : 'Index — stay here'}
+            </button>
+          )}
         </div>
         {loading && <div className="empty-row">Fetching nearest-expiry OI / IV / PCR…</div>}
         {!loading && chain && !chain.available && (
@@ -271,7 +291,7 @@ function ChainContextPanel({
           </>
         )}
       </Panel>
-      <Panel title="EOD HISTORY" subtitle="Saved daily PCR / ATM IV (not a live Greek stream)">
+      <Panel title="EOD HISTORY" subtitle="Nightly job captures NIFTY / BANKNIFTY / FINNIFTY. Stock EOD stays empty until that name is captured — not a live Greek stream.">
         {!history?.available && (
           <div className="empty-row">{history?.message || 'No EOD options history for this symbol yet.'}</div>
         )}
@@ -293,13 +313,17 @@ function ChainContextPanel({
   )
 }
 
-export function FnoView({ dashboard, runControl, setSelected, setActive }: Props) {
+export function FnoView({ dashboard, runControl, selected, setSelected, onOpenStock }: Props) {
   const [query, setQuery] = useState('')
-  const [focus, setFocus] = useState('NIFTY')
+  const [focus, setFocus] = useState(() => defaultFnoFocus(selected))
   const [chain, setChain] = useState<OptionsChainPayload | null>(null)
   const [history, setHistory] = useState<OptionsEodHistoryPayload | null>(null)
   const [loading, setLoading] = useState(false)
   const [reloadToken, setReloadToken] = useState(0)
+
+  useEffect(() => {
+    if (selected && !isFnoIndex(selected)) setFocus(selected)
+  }, [selected])
 
   const rows = useMemo(() => {
     const clean = query.trim().toUpperCase()
@@ -344,18 +368,19 @@ export function FnoView({ dashboard, runControl, setSelected, setActive }: Props
 
   const select = (symbol: string) => {
     setFocus(symbol)
-    setSelected?.(symbol)
+    if (!isFnoIndex(symbol)) setSelected?.(symbol)
   }
+  const eod = dashboard.data.options_eod
   const generatedAt = dashboard.fno.generated_at ? new Date(Number(dashboard.fno.generated_at) * 1000).toLocaleString('en-IN') : 'unknown'
   return (
     <section className="workspace-view">
       <div className="feature-purpose">
-        <strong>What F&O Coverage does—and does not do</strong>
+        <strong>How to use F&O</strong>
         <p>
-          It maps which stocks have current futures contracts (nearest future, expiry, lot size),
-          then loads the live nearest-expiry option chain for a selected name: OI, IV, PCR and max pain,
-          plus any saved EOD history. It does <em>not</em> compute Black-Scholes Greeks or issue trade
-          direction — PCR bias is positioning context only, not a buy/sell desk.
+          This is the derivatives floor of a name — not a separate product. Pick a mapped stock,
+          read nearest-expiry OI / IV / PCR / max pain as positioning context, then open the stock
+          on its Options tab (same chain). Indices stay here. No Greeks, no buy/sell direction.
+          Weekend and off-hours: NSE often blocks the live chain — Retry forces a fresh fetch.
         </p>
       </div>
       <div className="inline-actions">
@@ -377,6 +402,12 @@ export function FnoView({ dashboard, runControl, setSelected, setActive }: Props
         <MetricCard label="STOCK UNDERLYINGS" value={String(dashboard.fno.unique_stock_underlyings || 0)} detail="Unique current stock derivative names" />
         <MetricCard label="FUTURE CONTRACTS" value={String(dashboard.fno.total_future_contracts || 0)} detail={`${dashboard.fno.index_future_contracts || 0} index contracts kept separate`} tone="purple" />
         <MetricCard label="MAPPING GAPS" value={String(dashboard.fno.exclusions.length)} detail="Names that could not be safely mapped" tone="amber" />
+        <MetricCard
+          label="EOD STORE"
+          value={eod?.available ? `${eod.symbols || 0} names` : 'EMPTY'}
+          detail={eod?.available ? `Latest ${eod.latest_as_of || '—'} · ${eod.snapshots || 0} snaps` : 'Index job not captured yet — stock history will be blank'}
+          tone={eod?.available ? 'green' : 'amber'}
+        />
       </div>
       <div className="fno-desk-layout">
         <Panel title={`CURRENT STOCK-DERIVATIVES COVERAGE · ${rows.length}`} subtitle="Click a stock to load its option-chain context on this page">
@@ -389,10 +420,11 @@ export function FnoView({ dashboard, runControl, setSelected, setActive }: Props
           history={history}
           loading={loading}
           onRetry={() => setReloadToken((n) => n + 1)}
+          stockOpenable={canOpenStockFromFno(focus)}
           onOpenIntelligence={() => {
-            if (!focus) return
+            if (!canOpenStockFromFno(focus)) return
             setSelected?.(focus)
-            setActive?.('Stock Intelligence')
+            onOpenStock?.(focus)
           }}
         />
       </div>

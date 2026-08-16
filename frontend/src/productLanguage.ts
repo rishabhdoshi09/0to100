@@ -11,7 +11,7 @@ export type PageGuide = {
 export const PAGE_GUIDE: Record<string, PageGuide> = {
   'Command Center': {
     title: 'Home',
-    purpose: 'Shows whether QuantTerm has usable data and what deserves attention now.',
+    purpose: 'The tape first — names that cleared the scan, plus Internals for the weather they sit in.',
     questions: [
       'Is the market-data pipeline fresh?',
       'Did the current scan actually finish?',
@@ -22,7 +22,7 @@ export const PAGE_GUIDE: Record<string, PageGuide> = {
     doesNot: 'A green market or high score is not an instruction to buy.',
   },
   Scanner: {
-    title: 'Discover',
+    title: 'Ideas · Table',
     purpose: 'Ranks saved whole-market research by momentum, breakout, conviction or avoidance state.',
     questions: [
       'When was the universe last scanned?',
@@ -34,8 +34,8 @@ export const PAGE_GUIDE: Record<string, PageGuide> = {
     doesNot: 'A scanner match is a research candidate, not a guaranteed trade.',
   },
   Recommendations: {
-    title: 'Recommendations',
-    purpose: 'Groups QuantTerm evidence into research categories with Active/Closed lifecycle tracking.',
+    title: 'Ideas · Categories',
+    purpose: 'Groups QuantTerm evidence into research categories with Active/Closed lifecycle tracking. Table, Long-term and F&O are the other floors of the same Ideas hub.',
     questions: [
       'Which category matches my horizon (compound vs breakout)?',
       'Is CMP live or EOD, and how old is the scan?',
@@ -46,14 +46,14 @@ export const PAGE_GUIDE: Record<string, PageGuide> = {
     doesNot: 'A Buy badge is research classification — not a broker order or return promise.',
   },
   'Market Reports': {
-    title: 'Market Reports',
-    purpose: 'Daily Market Pulse assembled from live scanners — movers, breadth notes and breakout context.',
+    title: 'Context · Pulse',
+    purpose: 'Daily Market Pulse assembled from live scanners — movers, breadth notes and breakout context. News is the source list; Learn teaches the same flow.',
     questions: [
       'What changed in the market today?',
       'Which names are buzzing or near breakouts?',
       'Is this report from today IST or an older saved pulse?',
     ],
-    action: 'Read takeaways, then jump to Recommendations or Scanner for names mentioned.',
+    action: 'Read takeaways, then open Ideas for the names mentioned.',
     doesNot: 'A pulse summary is context, not a trade ticket.',
   },
   'Stock Intelligence': {
@@ -65,11 +65,11 @@ export const PAGE_GUIDE: Record<string, PageGuide> = {
       'Which evidence supports the shortlist?',
       'Which missing fact could change the conclusion?',
     ],
-    action: 'Refresh missing fundamentals or complete the source pack in Research Data.',
+    action: 'Refresh missing fundamentals or open System → Data to close one evidence gap.',
     doesNot: 'Current fundamentals are not point-in-time historical evidence unless explicitly labelled.',
   },
   'Long-Term': {
-    title: 'Long-Term Research',
+    title: 'Ideas · Long-term',
     purpose: 'Filters technically eligible companies using current quality, growth, leverage and valuation evidence.',
     questions: [
       'Is fundamental coverage adequate?',
@@ -81,70 +81,70 @@ export const PAGE_GUIDE: Record<string, PageGuide> = {
     doesNot: 'A long-term classification is not a promise of compounding or future returns.',
   },
   'Research Data': {
-    title: 'Research Data',
-    purpose: 'Shows exactly which datasets are fresh, stale, missing, uploaded or awaiting extraction.',
+    title: 'System · Data',
+    purpose: 'The file layer under a stock — which datasets are fresh, stale, missing, uploaded or awaiting extraction. Lives next to System Health because both answer “can I trust this machine?”',
     questions: [
       'What period does each number represent?',
       'Which official source supports it?',
       'Can QuantTerm fetch it automatically?',
       'Is an uploaded document structured and usable or only attached?',
     ],
-    action: 'Use the official link, template and upload flow to close one evidence gap.',
+    action: 'Open a stock first, then use the official link, template and upload flow to close one evidence gap.',
     doesNot: 'Attaching a PDF does not automatically make its claims available to the model.',
   },
   'News & Events': {
-    title: 'News & Events',
-    purpose: 'Adds dated company, regulatory and macro context with source-by-source health.',
+    title: 'Context · News',
+    purpose: 'The source list — dated company, regulatory and macro items with source-by-source health. Learn is the same flow, taught.',
     questions: [
       'Is the item official or editorial?',
       'When was it published and fetched?',
       'Which company or derivative is actually linked?',
       'Why might it matter relative to company size or fundamentals?',
     ],
-    action: 'Open the original source and treat the item as context for the stock thesis.',
+    action: 'Open the original source, or switch to Learn if you want the teach point.',
     doesNot: 'News is never a standalone order signal.',
   },
   Education: {
-    title: 'Education',
-    purpose: 'Crunches curated market news into learnable micro/macro/policy/F&O cards plus evergreen concepts — without inventing articles.',
+    title: 'Context · Learn',
+    purpose: 'The news flow, taught — curated items become micro/macro/policy/F&O cards plus evergreen concepts. Not a second news feed and never invented articles.',
     questions: [
       'Is this macro weather or company micro?',
       'What is the teach point, not just the headline?',
       'Is there an original source URL to verify?',
       'Am I treating education as context instead of a trade tip?',
     ],
-    action: 'Read the teach point, open the source when present, then review linked symbols in Stock Intelligence.',
+    action: 'Read the teach point, open the source when present, then open the linked stock.',
     doesNot: 'Education never invents blogs and never places or recommends orders.',
   },
   'F&O Desk': {
-    title: 'F&O Coverage',
-    purpose: 'Maps current futures eligibility, then shows live nearest-expiry OI, IV, PCR and max pain for a selected name, plus any saved EOD history.',
+    title: 'Ideas · F&O',
+    purpose: 'The derivatives floor of a name. Maps which stocks have current futures, then shows live nearest-expiry OI, IV, PCR and max pain. The same chain also lives on that stock’s Options tab.',
     questions: [
       'Is the cash symbol mapped to the current instrument master?',
       'What is PCR / ATM IV / max pain on the nearest expiry?',
       'Do saved EOD snapshots show a multi-day shift?',
       'Which underlyings were excluded and why?',
     ],
-    action: 'Pick an index quick-pick or mapped stock, refresh the live chain, and treat PCR bias as positioning context only.',
+    action: 'Pick a mapped stock (indices stay on this floor), read PCR as positioning context, then Open stock · Options for the same chain on the company workspace.',
     doesNot: 'Black-Scholes Greeks and buy/sell trade direction are not calculated — this is not an F&O signal desk.',
   },
   'Market Internals': {
-    title: 'Market & Breadth',
-    purpose: 'Explains the environment in which stock signals are being interpreted.',
+    title: 'Home · Internals',
+    purpose: 'The weather the desk sits in — regime, breadth, VIX and FII/DII.',
     questions: ['Is breadth supportive?', 'Which sectors lead or lag?', 'Is volatility expanding?', 'Does the regime support new risk?'],
     action: 'Use the market state as a portfolio constraint, not as a stock recommendation.',
     doesNot: 'A healthy index does not make every individual setup safe.',
   },
   Portfolio: {
-    title: 'Paper Portfolio',
+    title: 'Holdings',
     purpose: 'Records simulated positions, risk and outcomes so the system can be judged honestly.',
     questions: ['How much open risk exists?', 'Are exits protected?', 'How many closed trades exist?', 'Is the sample large enough for performance statistics?'],
     action: 'Review position-level risk and refusals before looking at headline P&L.',
     doesNot: 'Paper equity is evidence plumbing, not the brain or heart of QuantTerm.',
   },
   Automation: {
-    title: 'System Health',
-    purpose: 'Shows worker liveness, job throughput, failures, retries and owner controls.',
+    title: 'System · Health',
+    purpose: 'Shows worker liveness, job throughput, failures, retries and owner controls. Data is the file layer under a stock.',
     questions: ['Is the process alive?', 'Is usable data flowing?', 'Which job is active?', 'What exact blocker requires action?'],
     action: 'Resolve the oldest critical blocker or restart only the failed service.',
     doesNot: 'A live PID alone does not mean the product is ready.',
@@ -249,4 +249,4 @@ export const FIELD_LABELS: Record<string, string> = {
   gauntlet_verdict: 'Past test result',
 }
 
-export const depthLabel = (depth: DisplayDepth) => depth === 'simple' ? 'Simple' : 'Pro'
+export const depthLabel = (depth: DisplayDepth) => depth === 'simple' ? 'Simple desk' : 'Pro desk'

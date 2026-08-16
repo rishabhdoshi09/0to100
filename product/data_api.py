@@ -15,9 +15,10 @@ def coverage_workspace(symbol: str = Query("", description="Optional single symb
     from data_platform.coverage import audit_symbol, audit_universe
     from data_platform.security_master import supported_symbols
     if symbol.strip():
+        from data_platform.contracts import utc_now_iso
         row = audit_symbol(symbol.strip().upper())
         return {
-            "generated_at": row.symbol,
+            "generated_at": utc_now_iso(),
             "symbol": row.symbol,
             "coverage": {
                 "identity": row.identity.value,

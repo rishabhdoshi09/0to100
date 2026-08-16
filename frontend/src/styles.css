@@ -106,7 +106,33 @@ body {
   border-color: #1a2b44;
 }
 .nav-item.active span { color: var(--cyan); }
+.nav-section-label {
+  margin: 14px 12px 4px;
+  color: #6d7d96;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: .16em;
+  text-transform: uppercase;
+}
+.nav-section-label:first-child { margin-top: 2px; }
 .sidebar-spacer { flex: 1; }
+
+.hub-page {
+  padding: 8px 24px 28px;
+}
+.hub-blurb {
+  margin: 0 0 14px;
+  max-width: 72ch;
+  color: #9aabc4;
+  font-size: 13px;
+  line-height: 1.5;
+}
+.hub-page .workspace-view,
+.hub-page .research-data-view,
+.hub-page .enhanced-long-term {
+  padding-left: 0;
+  padding-right: 0;
+}
 
 .broker-card, .system-mini {
   margin: 8px 0 0;
