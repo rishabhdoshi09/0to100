@@ -238,16 +238,16 @@ def _brain() -> str:
     return briefing_telegram("IN")
 
 
-_HELP = ("📱 <b>Commands</b>\n"
-         "/status — ek nazar sab\n"
-         "/trade — 📈 ABHI ek trade lo (best setup, gates ke saath)\n"
-         "/pause — 🛑 naye trades band\n"
-         "/resume — 🟢 wapas chalu (paper)\n"
-         "/aggressive · /balanced · /conservative — kitne trades\n"
-         "/book 3% — optional scalp NET AIM (default is thesis-hold: keep while "
-         "tech+fund look good); /book 1500 absolute ₹; /book 0 = off\n"
-         "/funnel — aaj ka hisaab (kyun kam trades)\n"
-         "/brain — abhi ka verdict")
+_HELP = ("📱 <b>Phone desk</b> — 1000 km door bhi yahi bot\n"
+         "/desk — aaj ke names (thesis buttons)\n"
+         "/thesis RELIANCE — kyun choose, sector wave, FII/DII, earnings\n"
+         "/status — armed? trades aaj, P&amp;L\n"
+         "/brain — abhi ka verdict\n"
+         "\n<b>Paper only on this chat</b> — live order app ticket se.\n"
+         "/trade — ABHI ek paper trade (gates ke saath)\n"
+         "/pause — naye trades band · /resume — paper wapas\n"
+         "/aggressive · /balanced · /conservative\n"
+         "/book 3% — optional scalp AIM · /funnel — kyun kam trades")
 
 
 def handle_command(text: str) -> str | None:
@@ -279,9 +279,29 @@ def handle_command(text: str) -> str | None:
             return _funnel()
         if cmd == "/brain":
             return _brain()
+        if cmd == "/desk":
+            from alerts.phone_desk import format_desk
+            return format_desk()
+        if cmd == "/thesis":
+            from alerts.phone_desk import load_thesis_text
+            if not arg:
+                return "Aise: /thesis RELIANCE"
+            return load_thesis_text(arg)
         if cmd in ("/help", "/start"):
             return _HELP
         return _HELP                              # unknown → help
     except Exception as exc:
         log.warning("telegram_command_failed", cmd=text[:30], error=str(exc))
         return "❌ Command fail hua — logs dekho ya /status try karo."
+
+
+def command_keyboard(text: str, *, thesis_only: bool = False) -> dict | None:
+    """Inline buttons for /desk. None for other commands."""
+    parts = (text or "").strip().split()
+    if not parts:
+        return None
+    cmd = parts[0].lower().split("@")[0]
+    if cmd != "/desk":
+        return None
+    from alerts.phone_desk import desk_keyboard
+    return desk_keyboard(thesis_only=thesis_only)

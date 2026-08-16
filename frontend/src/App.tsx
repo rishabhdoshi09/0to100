@@ -202,6 +202,7 @@ function App() {
   const [universeSymbols, setUniverseSymbols] = useState<string[]>([])
   const [remoteSuggestions, setRemoteSuggestions] = useState<string[]>([])
   const [helpOpen, setHelpOpen] = useState(false)
+  const [navOpen, setNavOpen] = useState(false)
   const [pdfViewer, setPdfViewer] = useState<{ title: string; url: string } | null>(null)
   const [depth, setDepth] = useState<DisplayDepth>(() => {
     const saved = window.localStorage.getItem('quantterm-display-depth')
@@ -517,8 +518,26 @@ function App() {
   }
 
   return (
-    <div className="terminal-root">
-      <MarketSidebar active={active} setActive={setActive} dashboard={dashboard} />
+    <div className={`terminal-root${navOpen ? ' nav-open' : ''}`}>
+      <button
+        type="button"
+        className="nav-toggle"
+        aria-label={navOpen ? 'Close menu' : 'Open menu'}
+        onClick={() => setNavOpen((open) => !open)}
+      >
+        {navOpen ? '✕' : '☰'}
+      </button>
+      {navOpen ? (
+        <button type="button" className="nav-scrim" aria-label="Close menu" onClick={() => setNavOpen(false)} />
+      ) : null}
+      <MarketSidebar
+        active={active}
+        setActive={(page) => {
+          setActive(page)
+          setNavOpen(false)
+        }}
+        dashboard={dashboard}
+      />
       <main className="workspace">
         <header className="topbar">
           <div className="search-box">

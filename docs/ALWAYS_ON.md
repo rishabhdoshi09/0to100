@@ -120,6 +120,29 @@ cd 0to100 && git pull origin overhaul/evidence-lab
 systemctl restart quantterm
 ```
 
+## Phone, 1000 km away
+
+The person on the phone should use **Telegram**, not a public IP of this
+trading terminal.
+
+1. Bot already running (`TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID` in `.env`).
+2. On that phone: open the bot → `/start` → `/desk`.
+3. `/thesis EIMCOELECO` (or the 📖 button) shows sector wave, FII/DII,
+   earnings, and the plan. Paper/watch buttons stay on the **owner** chat.
+4. Live orders never go through Telegram.
+
+If the phone belongs to someone else, add their chat id:
+
+```
+TELEGRAM_PHONE_CHAT_IDS=their_chat_id
+```
+
+They can read the desk. They cannot `/trade` or `/resume`.
+
+Full radar UI on a phone (optional): install Tailscale on the server and
+the phone, then open `http://<tailscale-ip>:5173` (React) or `:8501`
+(Streamlit). Do **not** open those ports to `0.0.0.0/0`.
+
 ## Health check
 - Telegram pe subah Pulse aa raha hai? → scans chal rahe hain
 - App ke scanner header pe sab dots green? → data sources theek

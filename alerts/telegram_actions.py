@@ -86,11 +86,24 @@ def _do_watchlist(sym: str, entry: float, stop: float, target: float) -> str:
         return f"❌ Watchlist add fail: {str(exc)[:60]}"
 
 
+def _allowed_owner_and_extra() -> tuple[str, str]:
+    import os
+    return (
+        os.environ.get("TELEGRAM_CHAT_ID", "").strip(),
+        os.environ.get("TELEGRAM_PHONE_CHAT_IDS", "").strip(),
+    )
+
+
 def _handle_callback(cb: dict, token: str, allowed_chat: str) -> None:
     import requests
+    from alerts.phone_desk import load_thesis_text, phone_may_run
+
     cb_id = cb.get("id", "")
     chat_id = str(((cb.get("message") or {}).get("chat") or {}).get("id", ""))
     data = cb.get("data", "")
+    owner, extra = _allowed_owner_and_extra()
+    if not owner:
+        owner = allowed_chat
 
     def answer(text: str) -> None:
         try:
@@ -100,9 +113,36 @@ def _handle_callback(cb: dict, token: str, allowed_chat: str) -> None:
         except Exception:
             pass
 
-    if chat_id != str(allowed_chat):
+    parts = str(data or "").split("|")
+    action = parts[0] if parts else ""
+    guest = chat_id != str(owner)
+    if action == "th":
+        if not phone_may_run(chat_id, "/thesis", owner, extra):
+            answer("Not authorised.")
+            log.warning("telegram_unauthorised_tap", chat=chat_id)
+            return
+        if len(parts) < 2:
+            answer("Button data samajh nahi aaya.")
+            return
+        msg = load_thesis_text(parts[1])
+        answer("Thesis")
+        try:
+            requests.post(
+                f"https://api.telegram.org/bot{token}/sendMessage",
+                json={"chat_id": chat_id, "text": msg, "parse_mode": "HTML"},
+                timeout=8,
+            )
+        except Exception:
+            pass
+        log.info("telegram_action_done", action="th", symbol=parts[1])
+        return
+
+    if guest:
         answer("Not authorised.")
         log.warning("telegram_unauthorised_tap", chat=chat_id)
+        return
+    if chat_id != str(owner):
+        answer("Not authorised.")
         return
 
     try:
@@ -119,34 +159,55 @@ def _handle_callback(cb: dict, token: str, allowed_chat: str) -> None:
     else:
         msg = "Unknown action."
     answer(msg)
-    # Also send as a proper message so it stays in the chat history
     try:
         requests.post(f"https://api.telegram.org/bot{token}/sendMessage",
-                      json={"chat_id": allowed_chat, "text": msg}, timeout=8)
+                      json={"chat_id": owner, "text": msg}, timeout=8)
     except Exception:
         pass
     log.info("telegram_action_done", action=action, symbol=sym)
 
 
 def _handle_message(msg: dict, token: str, allowed_chat: str) -> None:
-    """📱 Text commands (/status, /pause, /aggressive …) — ADDITIVE layer,
-    button-tap/alerts logic untouched. Wahi chat-id guard jo taps par hai:
-    kisi aur ka message = silently ignore + log."""
+    """📱 Text commands — ADDITIVE layer. Owner gets the full paper set.
+    Extra phone chats (TELEGRAM_PHONE_CHAT_IDS) get desk/thesis/status only."""
     import requests
+    from alerts.phone_desk import allowed_chat_ids, phone_may_run
+    from alerts.telegram_commands import command_keyboard, handle_command
+
     chat_id = str(((msg.get("chat") or {}).get("id", "")))
     text = str(msg.get("text") or "")
     if not text.startswith("/"):
         return
-    if chat_id != str(allowed_chat):
+    owner, extra = _allowed_owner_and_extra()
+    if not owner:
+        owner = allowed_chat
+    _owner_id, allowed = allowed_chat_ids(owner, extra)
+    if chat_id not in allowed:
         log.warning("telegram_unauthorised_command", chat=chat_id)
         return
+    if not phone_may_run(chat_id, text, owner, extra):
+        try:
+            requests.post(
+                f"https://api.telegram.org/bot{token}/sendMessage",
+                json={
+                    "chat_id": chat_id,
+                    "text": "This phone is read-only. Use /desk or /thesis RELIANCE. Live/paper trades stay with the owner chat.",
+                },
+                timeout=8,
+            )
+        except Exception:
+            pass
+        return
     try:
-        from alerts.telegram_commands import handle_command
         reply = handle_command(text)
         if reply:
-            requests.post(f"https://api.telegram.org/bot{token}/sendMessage",
-                          json={"chat_id": allowed_chat, "text": reply,
-                                "parse_mode": "HTML"}, timeout=8)
+            payload = {"chat_id": chat_id, "text": reply, "parse_mode": "HTML"}
+            kb = command_keyboard(text, thesis_only=(chat_id != str(owner)))
+            if kb and kb.get("inline_keyboard"):
+                payload["reply_markup"] = kb
+            requests.post(
+                f"https://api.telegram.org/bot{token}/sendMessage",
+                json=payload, timeout=8)
             log.info("telegram_command", cmd=text.split()[0])
     except Exception as exc:
         log.debug("telegram_command_error", error=str(exc)[:100])

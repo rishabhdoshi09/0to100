@@ -1,0 +1,10 @@
+{
+  "name": "QuantTerm",
+  "short_name": "QuantTerm",
+  "description": "NSE desk — Home, thesis, paper only on the phone.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#050914",
+  "theme_color": "#1b6b45",
+  "lang": "en-IN"
+}
