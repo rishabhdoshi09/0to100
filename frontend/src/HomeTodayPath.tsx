@@ -18,9 +18,17 @@ type EvidenceSummary = {
   coverage_pct?: number
 }
 
+export type DeskFallback = {
+  entry?: number | null
+  stop?: number | null
+  target?: number | null
+  verdict?: string
+}
+
 export type TodayFloors = {
   symbol: string
   desk: PreTrade | null
+  deskFallback?: DeskFallback | null
   chain: OptionsChainPayload | null
   history: OptionsEodHistoryPayload | null
   watch: { accepted?: boolean; message?: string; capture_list?: string[] } | null
@@ -38,7 +46,7 @@ async function fetchEvidence(symbol: string): Promise<EvidenceSummary | null> {
   return response.json() as Promise<EvidenceSummary>
 }
 
-export async function loadTodayFloors(symbol: string): Promise<TodayFloors> {
+export async function loadTodayFloors(symbol: string, deskFallback?: DeskFallback | null): Promise<TodayFloors> {
   const [desk, chain, history, watch, evidence, coverage, journal, intel] = await Promise.all([
     fetchPreTrade(symbol).catch(() => null),
     fetchMarketOptions(symbol, false).catch(() => null),
@@ -52,6 +60,7 @@ export async function loadTodayFloors(symbol: string): Promise<TodayFloors> {
   return {
     symbol,
     desk,
+    deskFallback: deskFallback || null,
     chain,
     history,
     watch,
@@ -64,8 +73,8 @@ export async function loadTodayFloors(symbol: string): Promise<TodayFloors> {
 
 function floorCopy(id: FloorId, floors: TodayFloors): { title: string; detail: string } {
   if (id === 'desk') {
-    const buy = floors.desk?.plan?.entry ?? floors.desk?.scan?.entry
-    const verdict = floors.desk?.verdict || 'No pre-trade yet'
+    const buy = floors.desk?.plan?.entry ?? floors.desk?.scan?.entry ?? floors.deskFallback?.entry
+    const verdict = floors.desk?.verdict || floors.deskFallback?.verdict || 'Desk'
     return {
       title: verdict,
       detail: buy != null ? `Buy ${money(buy, 2)} · not an order` : 'Desk numbers load from the last scan',
@@ -171,7 +180,7 @@ export function useTodayFloors() {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
 
-  const open = async (symbol: string) => {
+  const open = async (symbol: string, deskFallback?: DeskFallback | null) => {
     if (!symbol) {
       setError('Scan now or search a name first.')
       return
@@ -179,7 +188,7 @@ export function useTodayFloors() {
     setBusy(true)
     setError('')
     try {
-      setFloors(await loadTodayFloors(symbol))
+      setFloors(await loadTodayFloors(symbol, deskFallback))
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : 'Could not open today\'s floors')
     } finally {

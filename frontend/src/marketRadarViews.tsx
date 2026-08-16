@@ -598,7 +598,15 @@ export function RadarHomeView(props: ExperienceViewProps & {
   const openTodayPath = () => {
     if (!pathSymbol) return
     setSelected(pathSymbol)
-    void todayPath.open(pathSymbol)
+    const fromCard = (best?.symbol === pathSymbol ? best : null)
+      || visible.find((item) => item.symbol === pathSymbol)
+      || (row as RadarRow | undefined)
+    void todayPath.open(pathSymbol, {
+      entry: fromCard?.entry,
+      stop: fromCard?.stop,
+      target: fromCard?.target,
+      verdict: fromCard?.setup_label || fromCard?.verdict,
+    })
   }
   const jumpFloor = (page: string, intelTab?: string) => {
     if (onOpenFloor) {
