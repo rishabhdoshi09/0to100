@@ -445,6 +445,22 @@ export const fetchRadarHome = (): Promise<RadarHome> =>
   fetch('/api/radar-home', { headers: { Accept: 'application/json' } })
     .then((response) => json<RadarHome>(response))
 
+export type RecommendationEvidencePanel = {
+  sample_size?: number | null
+  ev_pct?: number | null
+  ev_lb_pct?: number | null
+  p_win?: number | null
+  confidence?: string | null
+  score?: number | null
+  rsi?: number | null
+  volume_ratio?: number | null
+  signals?: string[]
+  price_tag?: string
+  tech_source?: string
+  fundamental_coverage?: number | null
+  provenance?: string
+}
+
 export type RecommendationCard = {
   symbol: string
   company: string
@@ -470,6 +486,30 @@ export type RecommendationCard = {
   target?: number | null
   cmp?: number | null
   source?: string
+  stop?: number | null
+  buy_zone_low?: number | null
+  buy_zone_high?: number | null
+  horizon?: string
+  opportunity_label?: string
+  expected_payoff?: string
+  expected_payoff_detail?: string
+  evidence?: string
+  strategy_health?: string
+  strategy_health_detail?: string
+  market_support?: string
+  market_support_detail?: string
+  why_now?: string[]
+  what_changes_mind?: string[]
+  next_step?: string
+  evidence_panel?: RecommendationEvidencePanel
+}
+
+export type RecommendationDesk = {
+  market_support: string
+  market_support_detail: string
+  strategy_health: string
+  strategy_health_detail: string
+  live_n?: number
 }
 
 export type RecommendationCategory = {
@@ -490,6 +530,7 @@ export type RecommendationsWorkspace = {
   records_status: string
   same_ist_day: boolean
   cmp_note: string
+  desk?: RecommendationDesk
   categories: RecommendationCategory[]
   lifecycle: {
     active: RecommendationCard[]
@@ -504,6 +545,12 @@ export const fetchRecommendationsWorkspace = (): Promise<RecommendationsWorkspac
   fetch('/api/recommendations-workspace', { headers: { Accept: 'application/json' } })
     .then((response) => json<RecommendationsWorkspace>(response))
 
+export type MarketMover = {
+  symbol: string
+  price?: number
+  chg_pct?: number
+}
+
 export type MarketReportItem = {
   id: string
   title: string
@@ -513,12 +560,22 @@ export type MarketReportItem = {
   is_new: boolean
   badge?: string
   summary: string
+  takeaways?: string[]
+  breakouts_today?: string[]
+  gainers?: MarketMover[]
+  losers?: MarketMover[]
+  snapshot?: {
+    indices?: Array<{ name: string; price?: number; chg_pct?: number }>
+    commentary?: string
+  }
+  as_of_ist?: string
   path?: string
 }
 
 export type MarketReportsWorkspace = {
   schema_version: number
   generated_at: string
+  as_of_ist?: string
   title: string
   blurb: string
   reports: MarketReportItem[]

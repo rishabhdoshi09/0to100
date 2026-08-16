@@ -171,7 +171,7 @@ const pageTitles: Record<string, string> = {
 const pageSubtitles: Record<string, string> = {
   Home: 'Daily command centre — Breakouts, Momentum and Long-Term Picks from the saved market scan.',
   'Market Scanner': 'Professional scanner tables for breakouts, momentum and long-term quality.',
-  Recommendations: 'Research categories — Wealth Builders, Super Trends, Momentum Breakouts, Recovery — with Active/Closed tracking.',
+  Recommendations: 'Simple decisions on the outside — buy zone, target, stop, why now — with QuantTerm evidence underneath.',
   'Market Reports': 'Daily Market Pulse archive — trends, sector movers and breakout context from live system state.',
   'Stock Intelligence': 'Company workspace — chart, financials, ratios and pre-trade GO/CAUTION/NO_GO cockpit.',
   'Long-Term Picks': 'Business quality, valuation and timing without fabricated model performance.',

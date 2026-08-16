@@ -159,14 +159,19 @@
   max-width: 720px;
 }
 .reco-pick {
-  width: 100%; text-align: left; cursor: pointer;
+  width: 100%; text-align: left;
   border: 1px solid var(--rw-line);
   border-radius: var(--rw-radius);
   background: var(--rw-surface);
   box-shadow: var(--rw-shadow);
-  padding: 16px 16px 14px;
   color: var(--rw-ink);
   transition: transform 160ms ease, box-shadow 160ms ease;
+  overflow: hidden;
+}
+.reco-pick-hit {
+  width: 100%; text-align: left; cursor: pointer;
+  border: 0; background: transparent; color: inherit; font: inherit;
+  padding: 16px 16px 14px;
 }
 .reco-pick:hover {
   transform: translateY(-1px);
@@ -190,6 +195,11 @@
 .reco-buy.is-watch::before { background: #2f5f86; }
 .reco-buy.is-closed { background: #fdecec; color: var(--rw-danger); }
 .reco-buy.is-closed::before { background: var(--rw-danger); }
+.reco-opp {
+  margin-right: auto;
+  font-size: 11px; font-weight: 800; letter-spacing: .08em;
+  color: var(--rw-green); text-transform: uppercase;
+}
 
 .reco-risk-chip {
   display: inline-flex; align-items: center; gap: 6px;
@@ -226,31 +236,126 @@
   background: #f8fbf9;
   font-size: 12px; font-weight: 600;
 }
-.reco-pick-stats {
-  display: flex; justify-content: space-between; gap: 12px; align-items: end;
+.reco-pick-kpis {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
   margin-top: 14px; padding-top: 12px; border-top: 1px solid #eef2ef;
 }
-.reco-target span {
+.reco-pick-kpis span,
+.reco-sheet-kpis span {
   display: block; font-size: 12px; color: var(--rw-muted); margin-bottom: 2px;
 }
-.reco-target strong {
-  font-size: 18px; font-variant-numeric: tabular-nums; font-weight: 700;
-}
-.reco-gain {
-  text-align: right;
+.reco-pick-kpis strong,
+.reco-sheet-kpis strong {
+  font-size: 16px; font-variant-numeric: tabular-nums; font-weight: 700;
+  word-break: break-word;
 }
 .reco-gain strong {
   display: block;
-  font-size: 22px; font-weight: 800;
+  font-size: 18px; font-weight: 800;
   font-variant-numeric: tabular-nums;
   color: var(--rw-green-hot);
   line-height: 1.1;
 }
-.reco-gain strong.neg { color: var(--rw-danger); }
-.reco-gain small {
-  display: block; margin-top: 2px;
-  color: var(--rw-muted); font-size: 12px;
+.reco-gain strong.neg,
+.reco-sheet-kpis strong.neg { color: var(--rw-danger); }
+.reco-status-row {
+  display: flex; flex-wrap: wrap; gap: 8px;
+  margin-top: 12px;
 }
+.reco-status {
+  display: grid; gap: 1px;
+  min-width: 88px;
+  padding: 6px 10px;
+  border-radius: 10px;
+  background: #f6faf7;
+  border: 1px solid var(--rw-line);
+}
+.reco-status small {
+  font-size: 10px; letter-spacing: .06em; text-transform: uppercase;
+  color: var(--rw-muted);
+}
+.reco-status strong { font-size: 13px; font-weight: 700; }
+.reco-status.is-good { background: var(--rw-green-soft); border-color: #cfe7d8; }
+.reco-status.is-good strong { color: var(--rw-green-hot); }
+.reco-status.is-mid { background: #f7f8f4; }
+.reco-status.is-bad { background: #fdecec; border-color: #f3c8c4; }
+.reco-status.is-bad strong { color: var(--rw-danger); }
+.reco-desk-strip {
+  display: grid;
+  grid-template-columns: auto auto 1fr;
+  gap: 10px; align-items: center;
+  margin: 0 0 14px; padding: 10px 12px;
+  background: var(--rw-surface);
+  border: 1px solid var(--rw-line);
+  border-radius: 12px;
+}
+.reco-desk-strip p {
+  margin: 0; font-size: 12px; color: var(--rw-muted); line-height: 1.4;
+}
+.reco-sheet {
+  max-width: 760px;
+}
+.reco-sheet-hero h2 {
+  margin: 8px 0 4px;
+  font-family: 'Fraunces', Georgia, serif;
+  font-size: clamp(28px, 4vw, 40px);
+  letter-spacing: -0.02em;
+}
+.reco-sheet-hero p { margin: 0; color: var(--rw-muted); }
+.reco-sheet-kpis {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  margin: 18px 0 8px; padding: 16px;
+  background: var(--rw-surface);
+  border: 1px solid var(--rw-line);
+  border-radius: 14px;
+  box-shadow: var(--rw-shadow);
+}
+.reco-sheet-kpis strong { font-size: 20px; }
+.reco-sheet-cmp { margin: 0 0 12px; color: var(--rw-muted); font-size: 13px; }
+.reco-status-row-lg .reco-status { min-width: 120px; padding: 8px 12px; }
+.reco-sheet-cols {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 16px;
+  margin: 16px 0;
+}
+.reco-sheet-cols h3 {
+  margin: 0 0 8px; font-size: 12px; letter-spacing: .08em;
+  text-transform: uppercase; color: var(--rw-muted);
+}
+.reco-sheet-cols ul { margin: 0; padding-left: 18px; line-height: 1.55; }
+.reco-sheet-cols p { margin: 0; color: var(--rw-muted); }
+.reco-next {
+  margin: 0 0 16px; padding: 12px 14px;
+  background: var(--rw-green-soft); border-radius: 12px;
+  color: var(--rw-ink); font-size: 14px; line-height: 1.45;
+}
+.reco-sheet-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 12px; }
+.reco-ghost, .reco-primary {
+  height: 44px; padding: 0 18px; border-radius: 999px;
+  font: inherit; font-weight: 700; cursor: pointer;
+}
+.reco-ghost {
+  border: 1px solid var(--rw-line); background: var(--rw-surface); color: var(--rw-ink);
+}
+.reco-primary {
+  border: 0; background: var(--rw-green); color: #fff;
+  box-shadow: 0 6px 14px rgba(27, 107, 69, 0.25);
+}
+.reco-evidence-panel {
+  padding: 14px 16px; border-radius: 14px;
+  background: #f3f7f4; border: 1px dashed var(--rw-line);
+}
+.reco-evidence-panel p { margin: 0 0 10px; font-size: 13px; color: var(--rw-muted); }
+.reco-evidence-panel dl { margin: 0; display: grid; gap: 6px; }
+.reco-evidence-panel dl div {
+  display: grid; grid-template-columns: 140px 1fr; gap: 8px;
+  font-size: 13px;
+}
+.reco-evidence-panel dt { color: var(--rw-muted); }
+.reco-evidence-panel dd { margin: 0; font-weight: 600; }
 .reco-pick-note {
   margin: 10px 0 0; color: var(--rw-muted); font-size: 13px; line-height: 1.4;
 }
@@ -332,6 +437,10 @@
   .reco-life-toggle { width: 100%; }
   .reco-life-toggle button { flex: 1; }
   .reco-pick-stats { flex-direction: column; align-items: start; }
+  .reco-pick-kpis, .reco-sheet-kpis, .reco-sheet-cols, .reco-desk-strip {
+    grid-template-columns: 1fr 1fr;
+  }
+  .reco-desk-strip p { grid-column: 1 / -1; }
   .reco-gain { text-align: left; }
 }
 

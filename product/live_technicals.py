@@ -110,9 +110,84 @@ def refresh_row_technicals(
             out["volume_ratio"] = round(vol / avg20, 2)
         out["price_tag"] = meta.get("price_tag") or ("LIVE" if meta.get("live") else "EOD")
         out["tech_source"] = "live" if meta.get("live") else "eod"
+        apply_current_trade_levels(out, frame)
     except Exception:
         pass
+    if _f(out.get("price") or out.get("cmp")) > 0:
+        apply_current_trade_levels(out, None)
     return out
+
+
+def _atr14(frame: Any, periods: int = 14) -> float | None:
+    try:
+        high = frame["high"].astype(float)
+        low = frame["low"].astype(float)
+        close = frame["close"].astype(float)
+        previous = close.shift(1)
+        tr = (high - low).to_frame("a")
+        tr["b"] = (high - previous).abs()
+        tr["c"] = (low - previous).abs()
+        value = tr.max(axis=1).ewm(alpha=1 / periods, adjust=False, min_periods=periods).mean().iloc[-1]
+        return float(value)
+    except Exception:
+        return None
+
+
+def _positive_level(row: Mapping[str, Any], *keys: str) -> float:
+    for key in keys:
+        value = _f(row.get(key))
+        if value > 0:
+            return value
+    return 0.0
+
+
+def apply_current_trade_levels(row: dict[str, Any], frame: Any = None) -> dict[str, Any]:
+    """Fill missing entry / stop / target from the latest close.
+
+    Same plan as unified_scanner: stop = entry − 2×ATR, target = entry + 4×ATR
+    (5% / 10% fallback). Existing scanner buy-zone levels stay intact.
+    """
+    price = _f(row.get("price") or row.get("cmp"))
+    if price <= 0:
+        return row
+    entry = _positive_level(row, "entry", "entry_price")
+    stop = _positive_level(row, "stop", "stop_price")
+    target = _positive_level(row, "target", "target_price")
+    if entry > 0 and stop > 0 and target > 0:
+        return row
+    atr = _atr14(frame) if frame is not None else None
+    if atr is None or atr <= 0:
+        try:
+            atr_pct = _f(row.get("atr_pct"))
+            atr = price * atr_pct / 100.0 if atr_pct > 0 else 0.0
+        except Exception:
+            atr = 0.0
+    filled = False
+    if entry <= 0:
+        entry = round(price, 2)
+        row["entry"] = entry
+        filled = True
+    if atr and atr > 0:
+        row["atr"] = round(atr, 2)
+        row["atr_pct"] = round(atr / price * 100.0, 2)
+        if stop <= 0:
+            row["stop"] = round(max(0.01, entry - 2.0 * atr), 2)
+            filled = True
+        if target <= 0:
+            row["target"] = round(entry + 4.0 * atr, 2)
+            filled = True
+        if filled:
+            row["levels_source"] = "current_ohlcv"
+    else:
+        if stop <= 0:
+            row["stop"] = round(entry * 0.95, 2)
+            filled = True
+        if target <= 0:
+            row["target"] = round(entry * 1.10, 2)
+            filled = True
+        if filled:
+            row["levels_source"] = "current_pct"
+    return row
 
 
 def refresh_rows_technicals(
