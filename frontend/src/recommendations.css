@@ -122,7 +122,8 @@
   font-size: 13px; max-width: 62ch; line-height: 1.4;
 }
 .home-path-error { margin: 10px 0 0; color: var(--rw-danger); font-size: 13px; }
-.home-path-hint { margin: 10px 0 0; color: var(--rw-muted); font-size: 13px; }
+.home-path-why { margin: 10px 0 0; font-size: 14px; line-height: 1.4; }
+.home-path-hint { margin: 6px 0 0; color: var(--rw-muted); font-size: 13px; }
 .home-path-grid {
   display: grid;
   grid-template-columns: repeat(5, minmax(0, 1fr));

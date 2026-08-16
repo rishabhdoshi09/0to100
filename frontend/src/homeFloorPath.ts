@@ -16,7 +16,64 @@ export const FLOOR_JUMPS: FloorJump[] = [
   { id: 'health', label: 'Health', page: 'System Health' },
 ]
 
-export const PATH_BUTTON_LABEL = "Open today's path"
+export const PATH_BUTTON_LABEL = "Fill today's desk"
+
+export type NextStepId = 'working' | 'fill_desk' | 'find_names' | 'add_long_term' | 'see_picture'
+
+export type NextStep = {
+  id: NextStepId
+  label: string
+  why: string
+  resultHint: string
+}
+
+export function decideNextStep(input: {
+  dataReady: boolean
+  readinessScore: number
+  scanRecords: number
+  longTermRecords: number
+  scanBusy: boolean
+  longTermBusy: boolean
+}): NextStep {
+  if (input.scanBusy || input.longTermBusy) {
+    return {
+      id: 'working',
+      label: 'Working…',
+      why: 'Stay on this page. Files and names are filling by themselves.',
+      resultHint: 'Results appear below when the job finishes. You do not need the sidebar.',
+    }
+  }
+  if (!input.dataReady || input.readinessScore < 70) {
+    return {
+      id: 'fill_desk',
+      label: "Fill today's desk",
+      why: 'One click prepares official prices, news, a market scan and long-term research.',
+      resultHint: 'The desk then shows names. Options, Data, Holdings and Health fill in next to it.',
+    }
+  }
+  if (input.scanRecords <= 0) {
+    return {
+      id: 'find_names',
+      label: "Find today's names",
+      why: 'Price files are ready. This click scans the market and puts names on the desk.',
+      resultHint: 'Breakout and momentum lists appear below. No stock is pre-picked.',
+    }
+  }
+  if (input.longTermRecords <= 0) {
+    return {
+      id: 'add_long_term',
+      label: 'Add quality research',
+      why: 'Technical names are in. This click adds the quality-and-valuation layer.',
+      resultHint: 'Long-term picks join the desk. Still not a buy order.',
+    }
+  }
+  return {
+    id: 'see_picture',
+    label: "Refresh today's picture",
+    why: 'The desk already has names. This click re-reads the other floors — it does not pick a stock.',
+    resultHint: 'Empty floors stay empty and honest.',
+  }
+}
 
 export type FloorContext = {
   scanRecords: number

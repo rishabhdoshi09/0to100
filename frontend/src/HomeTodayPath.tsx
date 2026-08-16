@@ -1,12 +1,12 @@
 import { useState } from 'react'
 import {
   FLOOR_JUMPS,
-  PATH_BUTTON_LABEL,
   dataFloorCopy,
   deskFloorCopy,
   optionsFloorCopy,
   type FloorContext,
   type FloorId,
+  type NextStep,
 } from './homeFloorPath'
 import {
   fetchDataCoverage,
@@ -60,30 +60,37 @@ export function HomeTodayPath({
   busy,
   floors,
   error,
+  step,
+  progress,
   onOpen,
   onJump,
 }: {
   busy: boolean
   floors: TodayFloors | null
   error: string
+  step: NextStep
+  progress: string
   onOpen: () => void
   onJump: (page: string) => void
 }) {
+  const working = busy || step.id === 'working'
   return (
-    <section className="home-path" aria-label="Today's path">
+    <section className="home-path" aria-label="Start here">
       <header className="home-path-head">
         <div>
-          <p>Today's path</p>
-          <h3>Wire today's floors</h3>
+          <p>Start here</p>
+          <h3>One click. The system knows the next job.</h3>
           <em>
-            One click reads Desk, Options, Data, Holdings and Health as floors — not as one stock.
-            Jumps stay optional. Nothing here places an order or picks a name.
+            System khud jaanta hai agla kaam kya hai — desk bharo, names dhoondo, ya picture refresh.
+            You click. Results stay on Home. No ticker required.
           </em>
         </div>
-        <button type="button" className="reco-primary" disabled={busy} onClick={onOpen}>
-          {busy ? 'Opening floors…' : PATH_BUTTON_LABEL}
+        <button type="button" className="reco-primary" disabled={working} onClick={onOpen}>
+          {working ? 'Working…' : step.label}
         </button>
       </header>
+      <p className="home-path-why">{working && progress ? progress : step.why}</p>
+      {step.resultHint ? <p className="home-path-hint">{step.resultHint}</p> : null}
       {error ? <p className="home-path-error">{error}</p> : null}
       {floors ? (
         <div className="home-path-grid">
@@ -105,7 +112,7 @@ export function HomeTodayPath({
         </div>
       ) : (
         <p className="home-path-hint">
-          Click to load the floors. Search stays yours if you later want one stock.
+          Click once. The floors fill themselves. Search stays yours if you later want one stock.
         </p>
       )}
     </section>
@@ -123,7 +130,7 @@ export function useTodayFloors() {
     try {
       setFloors(await loadTodayFloors(context))
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : 'Could not open today\'s floors')
+      setError(reason instanceof Error ? reason.message : 'Could not read today\'s floors')
     } finally {
       setBusy(false)
     }

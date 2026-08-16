@@ -170,7 +170,7 @@ const pageTitles: Record<string, string> = {
 }
 
 const pageSubtitles: Record<string, string> = {
-  Home: 'Desk of names plus the market weather they sit in.',
+  Home: 'Sit down, click once. The desk fills itself.',
   'Market Scanner': 'The same scan as a dense table.',
   Recommendations: 'Research shortlist — categories, table, long-term and F&O.',
   'Market Reports': 'Daily digest, source list, and the same flow taught.',
