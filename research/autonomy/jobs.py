@@ -800,7 +800,7 @@ def run_outcome_resolution(ctx) -> JobResult:
 
 
 def run_learning_cycle(ctx) -> JobResult:
-    session_date = ctx.deps.now_ist().date().isoformat()
+    session_date = SCH.required_completed_session(ctx.deps.now_ist(), _holidays(ctx))
     try:
         result = ctx.deps.run_learning(session_date, getattr(ctx, "dialogue", None))
     except Exception as exc:
@@ -812,7 +812,7 @@ def run_learning_cycle(ctx) -> JobResult:
 
 
 def run_research_cycle(ctx) -> JobResult:
-    session_date = ctx.deps.now_ist().date().isoformat()
+    session_date = SCH.required_completed_session(ctx.deps.now_ist(), _holidays(ctx))
     try:
         result = ctx.deps.run_research(session_date, getattr(ctx, "dialogue", None))
     except Exception as exc:

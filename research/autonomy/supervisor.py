@@ -448,7 +448,8 @@ class Supervisor:
                             reason=result.error_message or result.summary,
                             dependency_version=result.dependency_version or None,
                             result_summary=result.summary)
-            self._incident("BLOCKED", result.summary, job)
+            if not SCH.is_expected_eod_wait(blocked_on=dependency, summary=result.summary):
+                self._incident("BLOCKED", result.summary, job)
         else:
             self.jobs.complete(job.job_id, result.status, result_summary=result.summary,
                                output_snapshot_id=result.output_snapshot_id,

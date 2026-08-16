@@ -237,6 +237,13 @@ def required_completed_session(now_ist, holidays=None) -> str:
     return required.isoformat()
 
 
+def is_expected_eod_wait(*, blocked_on: str = "", summary: str = "") -> bool:
+    """True for a completed-session dependency wait — not an incident to page."""
+    if str(blocked_on or "").startswith("EOD_DATA_READY:"):
+        return True
+    return str(summary or "").startswith("outcomes wait for completed-session")
+
+
 def eod_ready_keys(now_ist, holidays=None, *, latest: str = "") -> tuple[str, ...]:
     """Dependencies to release once `latest` covers the completed session.
 

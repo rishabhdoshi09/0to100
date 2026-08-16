@@ -288,6 +288,40 @@ def test_outcome_resolution_accepts_friday_tape_on_sunday():
     assert H.SNAPSHOT_STALE in result.clears
 
 
+def test_learning_and_research_use_friday_session_on_sunday():
+    from datetime import datetime
+    from research.autonomy import jobs as JOBS
+    from research.autonomy import job_store as JS
+    from research.autonomy import schedules as SCH
+
+    class Deps:
+        learned = None
+        researched = None
+
+        def now_ist(self): return datetime(2026, 8, 16, 10, 0)
+        def holidays(self): return set()
+        def run_learning(self, session_date, dialogue=None):
+            self.learned = session_date
+            return {"diagnostics": 1}
+        def run_research(self, session_date, dialogue=None):
+            self.researched = session_date
+            return {"decision": "NO_RESEARCH_GAP"}
+
+    deps = Deps()
+    ctx = JOBS._Ctx(deps)
+    learned = JOBS.run_learning_cycle(ctx)
+    researched = JOBS.run_research_cycle(ctx)
+    assert learned.status == JS.SUCCEEDED
+    assert researched.status == JS.SUCCEEDED
+    assert deps.learned == "2026-08-14"
+    assert deps.researched == "2026-08-14"
+    assert SCH.is_expected_eod_wait(
+        blocked_on="EOD_DATA_READY:2026-08-16",
+        summary="outcomes wait for completed-session data (2026-08-14 < 2026-08-16)",
+    )
+    assert not SCH.is_expected_eod_wait(blocked_on="AUTH_READY", summary="auth required")
+
+
 def test_all_ui_entrypoints_are_scheduler_side_effect_free():
     """No browser surface may start or directly mutate the autonomous brain."""
     paths = [Path("app.py"), Path("legacy_app.py"), *Path("ui").glob("*.py")]
