@@ -195,6 +195,18 @@ export type DataReadiness = {
     nifty?: number
     chg_pct?: number
   }
+  telegram?: {
+    required?: boolean
+    desk?: string
+    configured?: boolean
+    listener_running?: boolean
+    bot_reachable?: boolean | null
+    last_send_ok?: boolean | null
+    last_send_at?: string
+    last_inbound_at?: string
+    last_error?: string
+    note?: string
+  }
   options_eod?: {
     available?: boolean
     path?: string

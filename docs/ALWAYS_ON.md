@@ -122,27 +122,28 @@ systemctl restart quantterm
 
 ## Phone, 1000 km away
 
-The person on the phone should use **Telegram**, not a public IP of this
-trading terminal.
+**The desk is the browser.** Open Home on a phone (Safari / Chrome). Tap a
+card for the buy thesis. Search stays in the top bar. Telegram is **not**
+required — not everyone has it.
 
-1. Bot already running (`TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID` in `.env`).
-2. On that phone: open the bot → `/start` → `/desk`.
-3. `/thesis EIMCOELECO` (or the 📖 button) shows sector wave, FII/DII,
-   earnings, and the plan. Paper/watch buttons stay on the **owner** chat.
-4. Live orders never go through Telegram.
+Same Tailscale URL as the owner: `http://<tailscale-ip>:5173`. Do **not**
+open those ports to `0.0.0.0/0`.
 
-If the phone belongs to someone else, add their chat id:
+Telegram is optional extra for people who already use the bot:
+
+1. `TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID` in `.env`
+2. The React API starts the inbox listener (so `/desk` and `/thesis` work)
+3. If Telegram is silent, System Health shows why. The browser desk still works.
+
+Live orders never go through Telegram.
+
+If another phone should get bot commands, add:
 
 ```
 TELEGRAM_PHONE_CHAT_IDS=their_chat_id
 ```
 
 They can read the desk. They cannot `/trade` or `/resume`.
-
-Full radar UI on a phone: same Tailscale URL, then Home / Ideas. Tap a
-card for the buy thesis as a full-screen sheet (Close, then Buy / Stop /
-Target stay sticky). Search stays in the top bar. Do **not** open those
-ports to `0.0.0.0/0`.
 
 ## Health check
 - Telegram pe subah Pulse aa raha hai? → scans chal rahe hain

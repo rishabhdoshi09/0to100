@@ -237,13 +237,29 @@ def _listener() -> None:
                 offset = max(offset, int(upd.get("update_id", 0)) + 1)
                 if "callback_query" in upd:
                     _handle_callback(upd["callback_query"], token, chat)
+                    try:
+                        from alerts.telegram_status import record_inbound
+                        record_inbound()
+                    except Exception:
+                        pass
                 elif "message" in upd:
                     _handle_message(upd["message"], token, chat)
+                    try:
+                        from alerts.telegram_status import record_inbound
+                        record_inbound()
+                    except Exception:
+                        pass
             if fails >= 3:
                 log.info("telegram_listener_recovered")
             fails = 0
         except Exception as exc:
             fails += 1
+            try:
+                from alerts.telegram_status import classify_error, record_listener
+                if fails == 3:
+                    record_listener(True, classify_error(exc))
+            except Exception:
+                pass
             # Backoff during outages: 10s → 60s after 3 straight fails.
             # One warning when entering backoff, then silence — a dead
             # network must not fill the log at 6 lines/minute.
@@ -261,9 +277,30 @@ def start_telegram_listener() -> None:
     with _lock:
         if _started:
             return
-        if not (os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
-                and os.environ.get("TELEGRAM_CHAT_ID", "").strip()):
+        token = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
+        chat = os.environ.get("TELEGRAM_CHAT_ID", "").strip()
+        if not (token and chat):
+            try:
+                from dotenv import load_dotenv
+                from pathlib import Path
+                load_dotenv(Path(__file__).resolve().parents[1] / ".env", override=False)
+            except Exception:
+                pass
+            token = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
+            chat = os.environ.get("TELEGRAM_CHAT_ID", "").strip()
+        if not (token and chat):
+            try:
+                from alerts.telegram_status import record_listener
+                record_listener(False, "not_configured")
+            except Exception:
+                pass
             return
         _started = True
     threading.Thread(target=_listener, name="tg-actions", daemon=True).start()
     log.info("telegram_listener_started")
+    try:
+        from alerts.telegram_status import record_listener, probe_bot
+        record_listener(True)
+        probe_bot()
+    except Exception:
+        pass
