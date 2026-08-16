@@ -68,6 +68,8 @@ def test_radar_home_builds_three_lanes():
                 "breakout_grade": "B",
                 "breakout_conviction": 55,
                 "avg_vol20": 1_000_000,
+                "pct_below_20d_high": 1.4,
+                "pct_below_52w_high": 2.0,
             },
             {
                 "symbol": "BEST",
@@ -82,6 +84,8 @@ def test_radar_home_builds_three_lanes():
                 "breakout_grade": "A",
                 "breakout_conviction": 82,
                 "avg_vol20": 2_000_000,
+                "pct_below_20d_high": 0.8,
+                "pct_below_52w_high": 1.5,
             },
             {
                 "symbol": "HOT",
@@ -154,12 +158,13 @@ def test_radar_home_builds_three_lanes():
     assert any(r["symbol"] == "BEST" for r in payload["sniper_candidates"])
     assert not any(r["symbol"] == "THIN" for r in payload["sniper_candidates"])
     assert payload["lanes"]["breakouts"][0].get("sniper_candidate") is True
-    # Thin volume → breakout_without_volume (excluded from the breakouts lane)
+    # Thin volume is listed (so the desk is not empty) but never confirmed / best.
     from product.radar_workspace import classify_breakout_state, is_sniper_breakout_candidate
     thin_raw = next(r for r in scan["records"] if r["symbol"] == "THIN")
     assert classify_breakout_state(thin_raw) == "breakout_without_volume"
     assert is_sniper_breakout_candidate(thin_raw) is False
-    assert "THIN" not in [r["symbol"] for r in payload["lanes"]["breakouts"]]
+    thin_lane = next(r for r in payload["lanes"]["breakouts"] if r["symbol"] == "THIN")
+    assert thin_lane.get("sniper_candidate") is False
 
 
 def test_breakout_quality_prefers_grade_and_fundamentals():
@@ -186,6 +191,8 @@ def test_high_rsi_and_thin_volume_hard_rejected_from_best():
         "verdict": "BUY", "status": "Ready to trade", "signals": ["BREAKOUT_52W"],
         "breakout_grade": "A", "breakout_conviction": 80, "score": 80,
         "avg_vol20": 1e6, "chase_risk": False,
+        "pct_below_20d_high": 1.0,
+        "pct_below_52w_high": 2.0,
     }
     hot = {**base, "symbol": "HOT", "rsi": 85, "volume_ratio": 2.5}
     thin = {**base, "symbol": "THIN", "rsi": 55, "volume_ratio": 0.5}
@@ -239,8 +246,97 @@ def test_enrich_marks_graded_breakout_as_sniper_candidate():
             "volume_ratio": 1.5,
             "avg_vol20": 1e6,
             "chase_risk": False,
+            "pct_below_20d_high": 1.2,
+            "pct_below_52w_high": 2.0,
         },
         scanned_at="2026-01-01",
     )
     assert row["sniper_candidate"] is True
     assert row["breakout_quality"] > 0
+
+
+def test_yatharth_shaped_fade_is_not_best_breakout():
+    """Grade B + scan RSI 68 is not a live breakout after an 8% pullback."""
+    from product.radar_workspace import (
+        classify_breakout_state,
+        is_sniper_breakout_candidate,
+        pick_best_sniper_breakout,
+    )
+
+    faded = {
+        "symbol": "YATHARTH",
+        "score": 59,
+        "verdict": "BUY",
+        "status": "Ready to trade",
+        "signals": ["BREAKOUT_52W"],
+        "chase_risk": False,
+        "volume_ratio": 4.2,
+        "rsi": 48.5,
+        "price": 844.7,
+        "breakout_grade": "B",
+        "breakout_conviction": 60,
+        "avg_vol20": 1e6,
+        "pct_below_20d_high": 8.2,
+    }
+    intact = {
+        "symbol": "SOLID",
+        "score": 75,
+        "verdict": "BUY",
+        "status": "Ready to trade",
+        "signals": ["BREAKOUT_52W"],
+        "chase_risk": False,
+        "volume_ratio": 2.0,
+        "rsi": 55.0,
+        "breakout_grade": "A",
+        "breakout_conviction": 80,
+        "avg_vol20": 1e6,
+        "pct_below_20d_high": 1.1,
+        "pct_below_52w_high": 2.0,
+    }
+    assert is_sniper_breakout_candidate(faded) is False
+    assert classify_breakout_state(faded) == "faded_breakout"
+    assert is_sniper_breakout_candidate(intact) is True
+    best = pick_best_sniper_breakout([faded, intact])
+    assert best is not None
+    assert best["symbol"] == "SOLID"
+    assert pick_best_sniper_breakout([faded]) is None
+
+
+def test_faded_breakout_still_listed_in_lane():
+    from product.radar_workspace import build_radar_home
+
+    scan = {
+        "scanned_at": "2026-08-14T10:00:00+00:00",
+        "universe_size": 2,
+        "records": [
+            {
+                "symbol": "YATHARTH",
+                "score": 59,
+                "verdict": "BUY",
+                "status": "Ready to trade",
+                "signals": ["BREAKOUT_52W"],
+                "chase_risk": False,
+                "volume_ratio": 4.2,
+                "rsi": 48.5,
+                "breakout_grade": "B",
+                "avg_vol20": 1e6,
+                "pct_below_20d_high": 8.2,
+            },
+            {
+                "symbol": "MOM",
+                "score": 70,
+                "signals": ["MOMENTUM"],
+                "status": "Watch",
+                "chase_risk": False,
+            },
+        ],
+    }
+    payload = build_radar_home(
+        scan_payload=scan,
+        long_term_payload={"records": []},
+        market={"health": "Weak", "breadth": "Narrow"},
+    )
+    assert payload["counts"]["breakouts"] >= 1
+    assert payload["counts"]["momentum"] >= 1
+    assert any(r["symbol"] == "YATHARTH" for r in payload["lanes"]["breakouts"])
+    assert payload["best_breakout"] is None

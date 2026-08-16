@@ -36,6 +36,62 @@ def test_api_process_loads_persisted_bhavcopy_cache(tmp_path, monkeypatch):
     assert state["sessions"] == 120
     assert state["latest_date"] == "2026-07-30"
     assert bhavcopy_runtime.get_ohlcv("TEST") is not None
+    assert "freshness" in state
+    assert "required_session" in state
+    assert "is_stale" in state
+
+
+def test_status_marks_stale_when_behind_required_session(tmp_path, monkeypatch):
+    cache = tmp_path / "store_cache.pkl"
+    frame = pd.DataFrame(
+        [{"open": 100.0, "high": 104.0, "low": 99.0, "close": 103.0, "volume": 1000.0}],
+        index=[pd.Timestamp("2026-08-10")],
+    )
+    with cache.open("wb") as handle:
+        pickle.dump(
+            {"store": {"TEST": frame}, "last_day": date(2026, 8, 10), "sessions": 120},
+            handle,
+            protocol=pickle.HIGHEST_PROTOCOL,
+        )
+
+    monkeypatch.setattr(bhavcopy_store, "_BHAV_DIR", tmp_path)
+    monkeypatch.setattr(bhavcopy_store, "_PKL", cache)
+    monkeypatch.setattr(bhavcopy_store, "_store", {})
+    monkeypatch.setattr(bhavcopy_store, "_store_last_day", None)
+    monkeypatch.setattr(bhavcopy_store, "_store_sessions", 0)
+    monkeypatch.setattr(bhavcopy_runtime, "_required_session", lambda: "2026-08-14")
+
+    state = bhavcopy_runtime.status(load_cache=True)
+    assert state["latest_date"] == "2026-08-10"
+    assert state["required_session"] == "2026-08-14"
+    assert state["is_stale"] is True
+    assert state["freshness"] == "STALE"
+
+
+def test_status_ready_when_store_matches_required_session(tmp_path, monkeypatch):
+    cache = tmp_path / "store_cache.pkl"
+    frame = pd.DataFrame(
+        [{"open": 100.0, "high": 104.0, "low": 99.0, "close": 103.0, "volume": 1000.0}],
+        index=[pd.Timestamp("2026-08-14")],
+    )
+    with cache.open("wb") as handle:
+        pickle.dump(
+            {"store": {"TEST": frame}, "last_day": date(2026, 8, 14), "sessions": 120},
+            handle,
+            protocol=pickle.HIGHEST_PROTOCOL,
+        )
+
+    monkeypatch.setattr(bhavcopy_store, "_BHAV_DIR", tmp_path)
+    monkeypatch.setattr(bhavcopy_store, "_PKL", cache)
+    monkeypatch.setattr(bhavcopy_store, "_store", {})
+    monkeypatch.setattr(bhavcopy_store, "_store_last_day", None)
+    monkeypatch.setattr(bhavcopy_store, "_store_sessions", 0)
+    monkeypatch.setattr(bhavcopy_runtime, "_required_session", lambda: "2026-08-14")
+
+    state = bhavcopy_runtime.status(load_cache=True)
+    assert state["latest_date"] == "2026-08-14"
+    assert state["is_stale"] is False
+    assert state["freshness"] == "READY"
 
 
 def test_overdue_critical_uses_latest_recurring_intent(tmp_path):

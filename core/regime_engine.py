@@ -20,7 +20,6 @@ from typing import Optional
 
 import numpy as np
 import pandas as pd
-import yfinance as yf
 
 logger = logging.getLogger(__name__)
 
@@ -210,6 +209,7 @@ def _fetch_ohlcv(ticker: str, period: str = "1y") -> Optional[pd.DataFrame]:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             # bounded: a slow/blocked feed must not hang the caller (e.g. the retail Market page)
+            import yfinance as yf
             df = yf.download(ticker, period=period, progress=False, auto_adjust=True, timeout=8)
         if df is None or df.empty:
             logger.debug("No yfinance data for %s (Kite may not be connected)", ticker)

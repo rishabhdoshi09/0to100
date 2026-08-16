@@ -57,6 +57,7 @@ def test_refresh_recomputes_rsi_below_stale_scan_value(monkeypatch):
     assert out["price"] == pytest.approx(120.0)
     assert out["tech_source"] in {"live", "eod"}
     assert out["price_tag"] in {"LIVE", "EOD"}
+    assert out["pct_below_20d_high"] > 5.0
 
 
 def test_refresh_fail_open_keeps_scan_fields(monkeypatch):
@@ -104,6 +105,62 @@ def test_bulk_refresh_skips_per_symbol_network(monkeypatch):
     assert out[0]["rsi"] is not None
 
 
+def test_kite_last_print_overrides_store_close(monkeypatch):
+    from product import live_technicals as lt
+
+    monkeypatch.setattr("data.kite_client._fresh_env", lambda name, default="": "token" if name == "KITE_ACCESS_TOKEN" else default)
+    monkeypatch.setattr(
+        "data.live_quotes._kite_quotes",
+        lambda symbols: {"RPEL": {"price": 1440.5, "chg_pct": 0.4, "source": "kite"}},
+    )
+    monkeypatch.setattr("data.nse_live._is_trading_now", lambda: True)
+    rows = [{
+        "symbol": "RPEL",
+        "price": 1433.9,
+        "high_20d": 1473.0,
+        "high_52w": 1473.0,
+        "pct_below_20d_high": 2.65,
+        "pct_below_52w_high": 2.65,
+        "price_tag": "EOD",
+        "tech_source": "eod",
+    }]
+    out = lt._apply_kite_last(rows)
+    assert out[0]["price"] == pytest.approx(1440.5)
+    assert out[0]["quote_source"] == "kite"
+    assert out[0]["price_tag"] == "LIVE"
+    assert out[0]["pct_below_20d_high"] < 2.65
+
+
+def test_kite_last_print_skipped_when_market_closed(monkeypatch):
+    from product import live_technicals as lt
+
+    monkeypatch.setattr("data.nse_live._is_trading_now", lambda: False)
+    monkeypatch.setattr("data.kite_client._fresh_env", lambda name, default="": "token" if name == "KITE_ACCESS_TOKEN" else default)
+    monkeypatch.setattr(
+        "data.live_quotes._kite_quotes",
+        lambda symbols: {"RPEL": {"price": 1440.5, "chg_pct": 0.4, "source": "kite"}},
+    )
+    rows = [{"symbol": "RPEL", "price": 1433.9, "price_tag": "EOD"}]
+    out = lt._apply_kite_last(rows)
+    assert out[0]["price"] == pytest.approx(1433.9)
+    assert out[0].get("quote_source") != "kite"
+
+
+def test_nse_fallback_quote_is_not_tagged_kite(monkeypatch):
+    from product import live_technicals as lt
+
+    monkeypatch.setattr("data.kite_client._fresh_env", lambda name, default="": "token" if name == "KITE_ACCESS_TOKEN" else default)
+    monkeypatch.setattr(
+        "data.live_quotes._kite_quotes",
+        lambda symbols: {"RPEL": {"price": 1440.5, "chg_pct": 0.4, "source": "nse"}},
+    )
+    rows = [{"symbol": "RPEL", "price": 1433.9, "price_tag": "EOD", "tech_source": "eod"}]
+    out = lt._apply_kite_last(rows)
+    assert out[0]["price"] == pytest.approx(1433.9)
+    assert out[0].get("quote_source") != "kite"
+    assert out[0]["price_tag"] == "EOD"
+
+
 def test_radar_home_uses_refreshed_rsi(monkeypatch):
     from product.radar_workspace import build_radar_home
 
@@ -116,6 +173,10 @@ def test_radar_home_uses_refreshed_rsi(monkeypatch):
                 row["price"] = 848.0
                 row["tech_source"] = "live"
                 row["price_tag"] = "LIVE"
+                row["pct_below_20d_high"] = 8.2
+            elif row.get("symbol") == "SOLID":
+                row["pct_below_20d_high"] = 1.1
+                row["pct_below_52w_high"] = 2.0
             out.append(row)
         return out
 
@@ -161,7 +222,7 @@ def test_radar_home_uses_refreshed_rsi(monkeypatch):
     yath = next(r for r in payload["lanes"]["breakouts"] if r["symbol"] == "YATHARTH")
     assert yath["rsi"] == pytest.approx(49.0)
     assert yath.get("tech_source") == "live"
-    if payload["sniper_candidates"]:
-        hit = [r for r in payload["sniper_candidates"] if r["symbol"] == "YATHARTH"]
-        if hit:
-            assert hit[0]["rsi"] == pytest.approx(49.0)
+    assert yath.get("breakout_state") == "faded_breakout"
+    assert not any(r["symbol"] == "YATHARTH" for r in payload.get("sniper_candidates") or [])
+    assert payload["best_breakout"] is not None
+    assert payload["best_breakout"]["symbol"] == "SOLID"

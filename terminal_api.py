@@ -212,6 +212,9 @@ def _market_payload() -> dict:
             "nifty_change_1d": _safe_float(market.nifty_change_1d),
             "nifty_change_5d": _safe_float(market.nifty_change_5d),
             "vix": _safe_float(market.vix),
+            "as_of": str((getattr(market, "technical_details", {}) or {}).get("as_of") or ""),
+            "source": str((getattr(market, "technical_details", {}) or {}).get("source") or ""),
+            "quote_source": str((getattr(market, "technical_details", {}) or {}).get("quote_source") or ""),
             "technical_details": dict(getattr(market, "technical_details", {}) or {}),
         }
     except Exception as exc:
@@ -573,8 +576,8 @@ def _fno_payload() -> dict[str, Any]:
 
 def _data_payload(scan: dict, long_term: dict, operations: dict, fno: dict, news: dict) -> dict:
     try:
-        from data.bhavcopy_runtime import status as bhavcopy_status
-        bhavcopy = bhavcopy_status(load_cache=True)
+        from data.bhavcopy_runtime import ensure_current_session
+        bhavcopy = ensure_current_session(allow_network=True)
     except Exception as exc:
         bhavcopy = {
             "ready": False,
@@ -600,8 +603,14 @@ def _data_payload(scan: dict, long_term: dict, operations: dict, fno: dict, news
             "error": str(exc),
         }
     blockers: list[str] = []
+    history_current = bool(bhavcopy.get("ready")) and not bool(bhavcopy.get("is_stale"))
     if not bhavcopy.get("ready"):
         blockers.append("Official NSE bhavcopy history is not ready; direct scans will prepare it first.")
+    elif bhavcopy.get("is_stale"):
+        blockers.append(
+            f"Official bhavcopy last bar is {bhavcopy.get('latest_date') or 'missing'}; "
+            f"required session is {bhavcopy.get('required_session') or 'latest completed'}."
+        )
     elif int(bhavcopy.get("sessions", 0) or 0) < int(bhavcopy.get("minimum_sessions", 60) or 60):
         blockers.append("Official bhavcopy history is shallower than the minimum screen requirement.")
     if not snapshot.get("ready"):
@@ -614,10 +623,16 @@ def _data_payload(scan: dict, long_term: dict, operations: dict, fno: dict, news
         blockers.append("Current F&O instrument universe is unavailable; refresh instruments after Zerodha login.")
     if not news.get("available"):
         blockers.append("Curated news store is empty; run a news refresh to inspect source health.")
+    try:
+        from data.live_quotes import kite_quote_health
+        kite = kite_quote_health()
+    except Exception as exc:
+        kite = {"ok": False, "status": "error", "note": str(exc)[:160]}
     return {
-        "ready": bool(bhavcopy.get("ready") and operations.get("running")),
+        "ready": bool(history_current and operations.get("running")),
         "snapshot": snapshot,
         "bhavcopy": bhavcopy,
+        "kite": kite,
         "options_eod": options_eod,
         "scan_saved": bool(scan.get("available")),
         "scan_records": len(scan.get("records", []) or []),

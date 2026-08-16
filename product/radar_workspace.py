@@ -8,11 +8,13 @@ from datetime import datetime, timezone
 from typing import Any, Callable, Mapping, Sequence
 
 from product.breakout_quality import (
+    BEST_MIN_VOLUME_RATIO,
     MIN_VOLUME_RATIO,
     RSI_BLOWOFF,
     RSI_HARD,
     attach_best_pick_meta,
     gate_breakout_quality,
+    live_breakout_intact,
     passes_volume_floor,
     volume_ratio as _volume_ratio_shared,
 )
@@ -79,6 +81,9 @@ def is_sniper_breakout_candidate(row: Mapping[str, Any]) -> bool:
         return False
     if _f(row.get("avg_vol20")) <= 0 and _volume_ratio(row) <= 0:
         return False
+    intact, _ = live_breakout_intact(row, for_best=False)
+    if not intact:
+        return False
     return True
 
 
@@ -121,11 +126,21 @@ def breakout_quality_score(row: Mapping[str, Any], *, for_best: bool = False) ->
 
 
 def pick_best_sniper_breakout(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any] | None:
-    """Best technical sniper candidate (no fundamentals required)."""
-    pool = [
-        dict(r) for r in rows
-        if is_sniper_breakout_candidate(r) and passes_volume_floor(r)
-    ]
+    """Best technical sniper candidate (no fundamentals required).
+
+    Fail-closed on live structure: a sticky Grade B from last week's scan
+    is not "best technical breakout" after the name has rolled over.
+    """
+    pool: list[dict[str, Any]] = []
+    for r in rows:
+        if not is_sniper_breakout_candidate(r):
+            continue
+        if not passes_volume_floor(r, min_ratio=BEST_MIN_VOLUME_RATIO):
+            continue
+        intact, _ = live_breakout_intact(r, for_best=True)
+        if not intact:
+            continue
+        pool.append(dict(r))
     if not pool:
         return None
     for r in pool:
@@ -148,7 +163,10 @@ def pick_best_among_fundamentals(rows: Sequence[Mapping[str, Any]]) -> dict[str,
 
     pool: list[dict[str, Any]] = []
     for r in rows:
-        if not is_sniper_breakout_candidate(r) or not passes_volume_floor(r):
+        if not is_sniper_breakout_candidate(r) or not passes_volume_floor(r, min_ratio=BEST_MIN_VOLUME_RATIO):
+            continue
+        intact, _ = live_breakout_intact(r, for_best=True)
+        if not intact:
             continue
         ok, _, _ = gate_breakout_quality(r, for_best=True)
         if not ok:
@@ -198,6 +216,9 @@ def merge_fundamental_context(
 
 def classify_breakout_state(row: Mapping[str, Any]) -> str:
     """Deterministic breakout sub-state for retail scanner tables."""
+    intact, _ = live_breakout_intact(row, for_best=False)
+    if not intact:
+        return "faded_breakout"
     status = str(row.get("status", "") or "")
     if bool(row.get("chase_risk")):
         return "extended_after_breakout"
@@ -246,6 +267,33 @@ def classify_momentum_state(row: Mapping[str, Any]) -> str:
     if hist and hist < 120:
         return "insufficient_history"
     return "watch_momentum"
+
+
+def _market_field(market: Any, name: str, default: str = "") -> str:
+    if isinstance(market, Mapping):
+        value = market.get(name)
+        if value not in (None, ""):
+            return str(value)
+        details = market.get("technical_details") or {}
+        if isinstance(details, Mapping) and details.get(name) not in (None, ""):
+            return str(details.get(name))
+        return default
+    value = getattr(market, name, None)
+    if value not in (None, ""):
+        return str(value)
+    details = getattr(market, "technical_details", {}) or {}
+    if isinstance(details, Mapping) and details.get(name) not in (None, ""):
+        return str(details.get(name))
+    return default
+
+
+def _price_session() -> str:
+    try:
+        from data.bhavcopy_runtime import status as bhav_status
+        snap = bhav_status(load_cache=True)
+        return str(snap.get("latest_date") or snap.get("required_session") or "")
+    except Exception:
+        return ""
 
 
 def default_sector_lookup(symbol: str) -> str:
@@ -333,7 +381,9 @@ def build_radar_home(
     # rows with per-symbol quote scrapers made radar-home time out so the UI
     # showed ZERO snipers even when ~30 were eligible.
     breakout_states = {
-        "confirmed_breakout", "near_breakout", "insufficient_confirmation", "extended_after_breakout",
+        "confirmed_breakout", "near_breakout", "insufficient_confirmation",
+        "extended_after_breakout", "faded_breakout", "breakout_without_volume",
+        "breakout_under_observation",
     }
     breakouts = [r for r in enriched if r.get("breakout_state") in breakout_states]
     try:
@@ -369,12 +419,15 @@ def build_radar_home(
                     k: row[k] for k in (
                         "price", "rsi", "volume_ratio", "tech_source", "price_tag",
                         "eod_as_of", "quote_source",
+                        "pct_below_20d_high", "pct_below_52w_high",
+                        "high_20d", "high_52w",
                     ) if k in row
                 })
     except Exception:
         pass
 
     for row in breakouts:
+        row["breakout_state"] = classify_breakout_state(row)
         row["breakout_quality"] = breakout_quality_score(row)
         row["sniper_candidate"] = is_sniper_breakout_candidate(row)
     for row in enriched:
@@ -431,6 +484,8 @@ def build_radar_home(
         "laggards": list(getattr(market, "laggards", ()) or (market or {}).get("laggards", []) if isinstance(market, Mapping) else []),
         "scan_scanned_at": scan_at,
         "long_term_scanned_at": lt_at,
+        "price_session": _price_session(),
+        "market_as_of": _market_field(market, "as_of"),
         "universe_size": int((scan_payload or {}).get("universe_size", 0) or 0),
         "best_breakout": best_breakout,
         "best_among_fundamentals": best_among_fundamentals,

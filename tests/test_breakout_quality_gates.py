@@ -138,6 +138,34 @@ def test_technical_allows_volume_above_eased_floor():
     assert reasons == []
 
 
+def test_live_structure_rejects_faded_best_and_sniper():
+    from product.breakout_quality import live_breakout_intact
+
+    faded = {"pct_below_20d_high": 8.2, "rsi": 48.5, "chase_risk": False}
+    ok_lane, reasons = live_breakout_intact(faded, for_best=False)
+    assert ok_lane is False
+    assert any("faded" in r for r in reasons)
+
+    ok_best, best_reasons = live_breakout_intact(faded, for_best=True)
+    assert ok_best is False
+    assert any("faded" in r for r in best_reasons)
+
+    unknown = {"rsi": 55, "volume_ratio": 2.0}
+    assert live_breakout_intact(unknown, for_best=False)[0] is True
+    assert live_breakout_intact(unknown, for_best=True)[0] is False
+
+    intact = {"pct_below_20d_high": 1.0, "pct_below_52w_high": 2.0, "rsi": 55, "chase_risk": False}
+    assert live_breakout_intact(intact, for_best=False)[0] is True
+    assert live_breakout_intact(intact, for_best=True)[0] is True
+
+    midrange = {"pct_below_20d_high": 0.8, "pct_below_52w_high": 12.6, "rsi": 63, "chase_risk": False}
+    assert live_breakout_intact(midrange, for_best=False)[0] is True
+    assert live_breakout_intact(midrange, for_best=True)[0] is False
+
+    rollover = {"pct_below_20d_high": 3.2, "rsi": 47, "chase_risk": False}
+    assert live_breakout_intact(rollover, for_best=False)[0] is False
+
+
 def test_optional_context_marks_unavailable_without_kite(monkeypatch):
     from product import breakout_quality as bq
 

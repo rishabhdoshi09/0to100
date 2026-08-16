@@ -240,12 +240,86 @@ def test_outcome_resolution_blocks_old_snapshot():
 
     class Deps:
         def now_ist(self): return datetime(2026, 7, 31, 18, 10)
+        def holidays(self): return set()
         def active_snapshot_id(self): return "snap-old"
         def active_snapshot_info(self): return {"latest_date": "2026-07-30"}
 
     result = JOBS.run_outcome_resolution(JOBS._Ctx(Deps()))
     assert result.status == JS.BLOCKED
     assert result.blocked_on == "EOD_DATA_READY:2026-07-31"
+
+
+def test_required_completed_session_skips_weekend():
+    from datetime import datetime
+    from research.autonomy import schedules as SCH
+
+    sunday = datetime(2026, 8, 16, 10, 0)
+    friday_eod = datetime(2026, 8, 14, 18, 10)
+    monday_morning = datetime(2026, 8, 17, 10, 0)
+    assert SCH.required_completed_session(sunday, set()) == "2026-08-14"
+    assert SCH.required_completed_session(friday_eod, set()) == "2026-08-14"
+    assert SCH.required_completed_session(monday_morning, set()) == "2026-08-14"
+    keys = SCH.eod_ready_keys(sunday, set(), latest="2026-08-14")
+    assert "EOD_DATA_READY:2026-08-14" in keys
+    assert "EOD_DATA_READY:2026-08-16" in keys
+
+
+def test_outcome_resolution_accepts_friday_tape_on_sunday():
+    from datetime import datetime
+    from research.autonomy import health as H
+    from research.autonomy import jobs as JOBS
+    from research.autonomy import job_store as JS
+
+    class Deps:
+        resolved = None
+
+        def now_ist(self): return datetime(2026, 8, 16, 10, 0)
+        def holidays(self): return set()
+        def active_snapshot_id(self): return "snap-fri"
+        def active_snapshot_info(self): return {"latest_date": "2026-08-14"}
+        def resolve_outcomes(self, session_date, failures=()):
+            self.resolved = session_date
+            return {"positions_closed": ["A"], "outcomes_recorded": ["A"]}
+
+    deps = Deps()
+    result = JOBS.run_outcome_resolution(JOBS._Ctx(deps))
+    assert result.status == JS.SUCCEEDED
+    assert deps.resolved == "2026-08-14"
+    assert H.SNAPSHOT_STALE in result.clears
+
+
+def test_learning_and_research_use_friday_session_on_sunday():
+    from datetime import datetime
+    from research.autonomy import jobs as JOBS
+    from research.autonomy import job_store as JS
+    from research.autonomy import schedules as SCH
+
+    class Deps:
+        learned = None
+        researched = None
+
+        def now_ist(self): return datetime(2026, 8, 16, 10, 0)
+        def holidays(self): return set()
+        def run_learning(self, session_date, dialogue=None):
+            self.learned = session_date
+            return {"diagnostics": 1}
+        def run_research(self, session_date, dialogue=None):
+            self.researched = session_date
+            return {"decision": "NO_RESEARCH_GAP"}
+
+    deps = Deps()
+    ctx = JOBS._Ctx(deps)
+    learned = JOBS.run_learning_cycle(ctx)
+    researched = JOBS.run_research_cycle(ctx)
+    assert learned.status == JS.SUCCEEDED
+    assert researched.status == JS.SUCCEEDED
+    assert deps.learned == "2026-08-14"
+    assert deps.researched == "2026-08-14"
+    assert SCH.is_expected_eod_wait(
+        blocked_on="EOD_DATA_READY:2026-08-16",
+        summary="outcomes wait for completed-session data (2026-08-14 < 2026-08-16)",
+    )
+    assert not SCH.is_expected_eod_wait(blocked_on="AUTH_READY", summary="auth required")
 
 
 def test_all_ui_entrypoints_are_scheduler_side_effect_free():

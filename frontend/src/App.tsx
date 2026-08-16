@@ -169,7 +169,7 @@ const pageTitles: Record<string, string> = {
 }
 
 const pageSubtitles: Record<string, string> = {
-  Home: 'Daily command centre — Breakouts, Momentum and Long-Term Picks from the saved market scan.',
+  Home: 'Market desk — last-session prices, confirmed breakouts, momentum and long-term picks.',
   'Market Scanner': 'Professional scanner tables for breakouts, momentum and long-term quality.',
   Recommendations: 'Research categories — Wealth Builders, Super Trends, Momentum Breakouts, Recovery — with Active/Closed tracking.',
   'Market Reports': 'Daily Market Pulse archive — trends, sector movers and breakout context from live system state.',
@@ -211,13 +211,8 @@ function App() {
       const payload = await fetchDashboard()
       setDashboard(payload)
       setError('')
-      const allSymbols = [
-        ...payload.scan.records.map((row) => row.symbol),
-        ...payload.long_term.records.map((row) => row.symbol),
-        ...payload.fno.underlyings.map((row) => row.symbol),
-      ]
-      const first = allSymbols[0] || ''
-      setSelected((current) => current || first)
+      // Do not auto-open scan.records[0]. That list is raw scan rank — a faded
+      // name (YATHARTH) can sit on top and then get chart/pre-trade polled forever.
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : 'Dashboard API unavailable')
     } finally {
@@ -423,8 +418,7 @@ function App() {
     'Market Overview',
     'Market Internals',
   ].includes(active)
-  const kiteOk = dashboard.autonomy.state !== 'AUTH_REQUIRED'
-    && !(dashboard.autonomy.active_failures || []).some((f) => String(f).includes('auth'))
+  const kiteOk = Boolean(dashboard.data.kite?.ok)
 
   const renderView = () => {
     if (active === 'Compare') {
@@ -482,7 +476,7 @@ function App() {
   }
 
   return (
-    <div className="terminal-root hud-shell">
+    <div className="terminal-root">
       <MarketSidebar active={active} setActive={setActive} dashboard={dashboard} />
       <main className="workspace">
         <header className="topbar">
@@ -503,14 +497,14 @@ function App() {
             <DisplayDepthToggle depth={depth} onChange={setDepth} />
             <button type="button" className="experience-help-trigger" onClick={() => setHelpOpen(true)}>What is this?</button>
             <span className={dashboard.data.ready ? 'live-pill' : 'offline-pill'}><i /> {dashboard.data.ready ? 'DATA READY' : 'DATA INCOMPLETE'}</span>
-            <span className={kiteOk ? 'live-pill' : 'offline-pill'} title={dashboard.autonomy.plain_state || ''}>
-              <i /> {kiteOk ? 'ZERODHA OK' : 'ZERODHA LOGIN'}
+            <span className={kiteOk ? 'live-pill' : 'offline-pill'} title={dashboard.data.kite?.note || dashboard.autonomy.plain_state || ''}>
+              <i /> {kiteOk ? 'KITE LIVE' : 'KITE LOGIN'}
             </span>
             <button type="button" onClick={() => void refresh()} aria-label="Refresh dashboard">↻</button>
           </div>
         </header>
 
-        <section className="page-title">
+        <section className={`page-title ${active === 'Home' || active === 'Command Center' ? 'is-hidden' : ''}`}>
           <div><h1>{pageTitles[active] || active}</h1><p>{pageSubtitles[active]}</p></div>
           <div className="page-actions">
             {showReportActions && (

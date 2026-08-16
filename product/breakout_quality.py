@@ -14,9 +14,16 @@ from typing import Any, Mapping
 # Technical sniper / Telegram lane — eased so mid-day on-pace prints still arm.
 # Best-among can still pass a stricter min_volume explicitly.
 MIN_VOLUME_RATIO = 0.7
+BEST_MIN_VOLUME_RATIO = 1.0
 # Soft ceiling: prefer / best-among. Hard: scanner blow-off (CLAUDE.md).
 RSI_BLOWOFF = 70.0
 RSI_HARD = 82.0
+# Live structure: a breakout that has already given back the high is not "best".
+FADE_20D_PCT = 5.0
+ROLLOVER_20D_PCT = 2.5
+ROLLOVER_RSI = 50.0
+# Hero card only: a "best breakout" must be near the 52-week high.
+BEST_52W_PCT = 8.0
 MIN_FUND_COVERAGE = 0.50
 AVOID_CLASSES = frozenset({"AVOID_REVIEW"})
 QUALITY_CLASSES = frozenset({
@@ -41,6 +48,61 @@ def passes_volume_floor(row: Mapping[str, Any], *, min_ratio: float = MIN_VOLUME
     if vol <= 0:
         return False
     return vol >= float(min_ratio)
+
+
+def _pct_field(row: Mapping[str, Any], key: str) -> float | None:
+    raw = row.get(key)
+    if raw is None or raw == "":
+        return None
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return None
+
+
+def pct_below_20d_high(row: Mapping[str, Any]) -> float | None:
+    return _pct_field(row, "pct_below_20d_high")
+
+
+def pct_below_52w_high(row: Mapping[str, Any]) -> float | None:
+    return _pct_field(row, "pct_below_52w_high")
+
+
+def live_breakout_intact(row: Mapping[str, Any], *, for_best: bool = False) -> tuple[bool, list[str]]:
+    """Whether the live tape still looks like a breakout — not a faded scan tag.
+
+    Scan grade A/B is sticky. After a multi-day pullback the name can still
+    carry BREAKOUT_52W + Grade B while price sits well under the 20-day high
+    and RSI has rolled over. That is not a live breakout.
+
+    ``for_best=False`` (sniper lane): fail-open when structure is unknown;
+    reject when the live bar has already faded.
+    ``for_best=True`` (BEST pick): fail-closed without structure, and chase
+    is a hard reject.
+    """
+    reasons: list[str] = []
+    below = pct_below_20d_high(row)
+    rsi = _f(row.get("rsi"))
+
+    if below is None:
+        if for_best:
+            reasons.append("live structure unknown — not ranked as best")
+            return False, reasons
+        return True, []
+
+    if below > FADE_20D_PCT:
+        reasons.append(f"{below:.1f}% below 20-day high — breakout faded")
+    elif rsi > 0 and rsi < ROLLOVER_RSI and below > ROLLOVER_20D_PCT:
+        reasons.append(f"RSI {rsi:.0f} and {below:.1f}% off 20-day high — rolled over")
+
+    if for_best:
+        below52 = pct_below_52w_high(row)
+        if below52 is not None and below52 > BEST_52W_PCT:
+            reasons.append(f"{below52:.1f}% below 52-week high — not a leading breakout")
+        if bool(row.get("chase_risk")):
+            reasons.append("chase/extension risk")
+
+    return not reasons, reasons
 
 
 def gate_breakout_quality(

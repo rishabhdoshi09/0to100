@@ -429,6 +429,8 @@ export type RadarHome = {
   laggards: string[]
   scan_scanned_at: string
   long_term_scanned_at: string
+  price_session?: string
+  market_as_of?: string
   universe_size: number
   best_breakout?: ScannerWorkspaceRow | null
   best_among_fundamentals?: ScannerWorkspaceRow | null

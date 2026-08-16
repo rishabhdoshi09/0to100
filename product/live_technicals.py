@@ -110,9 +110,33 @@ def refresh_row_technicals(
             out["volume_ratio"] = round(vol / avg20, 2)
         out["price_tag"] = meta.get("price_tag") or ("LIVE" if meta.get("live") else "EOD")
         out["tech_source"] = "live" if meta.get("live") else "eod"
+        out.update(_structure_from_frame(frame, float(close.iloc[-1])))
     except Exception:
         pass
     return out
+
+
+def _structure_from_frame(frame, close: float) -> dict[str, float]:
+    """Distance from recent highs — used to drop faded scan-time breakouts."""
+    try:
+        high = frame["high"].astype(float) if "high" in frame.columns else frame["close"].astype(float)
+        high = high.dropna()
+        if high.empty or close <= 0:
+            return {}
+        lookback_20 = high.iloc[-20:] if len(high) >= 20 else high
+        lookback_52w = high.iloc[-252:] if len(high) >= 252 else high
+        h20 = float(lookback_20.max())
+        h52 = float(lookback_52w.max())
+        out: dict[str, float] = {}
+        if h20 > 0:
+            out["high_20d"] = round(h20, 2)
+            out["pct_below_20d_high"] = round((h20 - close) / h20 * 100.0, 2)
+        if h52 > 0:
+            out["high_52w"] = round(h52, 2)
+            out["pct_below_52w_high"] = round((h52 - close) / h52 * 100.0, 2)
+        return out
+    except Exception:
+        return {}
 
 
 def refresh_rows_technicals(
@@ -129,4 +153,54 @@ def refresh_rows_technicals(
         ensure_live_store_overlay()
     # After a bulk store overlay, never scrape per symbol.
     network = bool(allow_network) and not bulk_overlay
-    return [refresh_row_technicals(r, allow_network=network) for r in items]
+    refreshed = [refresh_row_technicals(r, allow_network=network) for r in items]
+    return _apply_kite_last(refreshed)
+
+
+def _apply_kite_last(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Overwrite displayed last price from Kite when the session is up.
+
+    History / RSI / structure stay on the official frame. The last print
+    the trader sees must be Kite, not a frozen bhavcopy close.
+    """
+    if not rows:
+        return rows
+    try:
+        from data.nse_live import _is_trading_now
+        if not _is_trading_now():
+            return rows
+        from data.kite_client import _fresh_env
+        if not (_fresh_env("KITE_ACCESS_TOKEN") or "").strip():
+            return rows
+        from data.live_quotes import _kite_quotes
+        symbols = [str(r.get("symbol") or "").strip().upper() for r in rows]
+        symbols = [s for s in symbols if s]
+        quotes = _kite_quotes(symbols) if symbols else {}
+    except Exception:
+        return rows
+    if not quotes:
+        return rows
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        q = quotes.get(str(row.get("symbol") or "").strip().upper())
+        if not q or not q.get("price") or q.get("source") != "kite":
+            out.append(row)
+            continue
+        updated = dict(row)
+        price = round(float(q["price"]), 2)
+        updated["price"] = price
+        updated["quote_source"] = "kite"
+        updated["tech_source"] = "kite"
+        try:
+            from data.nse_live import _is_trading_now
+            updated["price_tag"] = "LIVE" if _is_trading_now() else "KITE"
+        except Exception:
+            updated["price_tag"] = "KITE"
+        high20 = _f(updated.get("high_20d"))
+        high52 = _f(updated.get("high_52w"))
+        if high20 > 0:
+            updated["pct_below_20d_high"] = round((high20 - price) / high20 * 100.0, 2)
+        if high52 > 0:
+            updated["pct_below_52w_high"] = round((high52 - price) / high52 * 100.0, 2)
+        out.append(updated)
+    return out

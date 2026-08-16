@@ -173,7 +173,17 @@ export type DataReadiness = {
     bhavcopy_dir?: string
     minimum_sessions?: number
     source?: string
+    required_session?: string
+    is_stale?: boolean
+    freshness?: string
     error?: string
+  }
+  kite?: {
+    ok?: boolean
+    status?: string
+    note?: string
+    nifty?: number
+    chg_pct?: number
   }
   scan_saved: boolean
   scan_records: number
@@ -195,6 +205,9 @@ export type DashboardPayload = {
     nifty_change_1d: number | null
     nifty_change_5d: number | null
     vix: number | null
+    as_of?: string
+    source?: string
+    quote_source?: string
     technical_details?: Record<string, unknown>
   }
   scan: {
