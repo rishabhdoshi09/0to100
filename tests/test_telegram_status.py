@@ -16,6 +16,7 @@ def test_classify_error_does_not_leak_tokens():
     err = classify_error("401 Unauthorized bot123:AASECRET", 401)
     assert "unauthorized" in err
     assert "AASECRET" not in err
+    assert "bot_not_found" in classify_error("not found", 404)
 
 
 def test_html_send_retries_without_parse_mode(monkeypatch, tmp_path):

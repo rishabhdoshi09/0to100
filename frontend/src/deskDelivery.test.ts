@@ -8,6 +8,16 @@ describe('desk delivery copy', () => {
       .toContain('optional extra')
   })
 
+  it('says the desk still works when the bot is unreachable', () => {
+    const line = deskDeliveryCopy({
+      configured: true,
+      listener_running: true,
+      bot_reachable: false,
+    })
+    expect(line).toContain('unreachable')
+    expect(line).toContain('still works')
+  })
+
   it('says the desk still works when Telegram send failed', () => {
     const line = deskDeliveryCopy({
       configured: true,

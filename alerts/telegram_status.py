@@ -49,6 +49,8 @@ def classify_error(exc: BaseException | str, status_code: int | None = None) -> 
     code = int(status_code or 0)
     if code == 401 or code == 403 or "unauthorized" in text:
         return "unauthorized — token or chat id rejected"
+    if code == 404 or "not found" in text:
+        return "bot_not_found — token rejected"
     if code == 409 or "conflict" in text:
         return "conflict — two listeners polling the same bot"
     if code == 400 or "bad request" in text:
@@ -170,7 +172,7 @@ def probe_bot(timeout: float = 5.0) -> dict[str, Any]:
             payload["bot_reachable"] = reachable
             payload["configured"] = configured()
             if not reachable:
-                payload["last_error"] = classify_error(resp.text[:120], resp.status_code)
+                payload["last_error"] = classify_error(resp.reason or "not found", resp.status_code)
             elif payload.get("last_error") in ("not_configured", "unauthorized — token or chat id rejected"):
                 payload["last_error"] = ""
             _write(payload)

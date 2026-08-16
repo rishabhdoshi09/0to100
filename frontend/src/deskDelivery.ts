@@ -1,6 +1,7 @@
 export type TelegramDelivery = {
   configured?: boolean
   listener_running?: boolean
+  bot_reachable?: boolean | null
   last_send_ok?: boolean | null
   last_error?: string
   note?: string
@@ -8,6 +9,9 @@ export type TelegramDelivery = {
 
 export function deskDeliveryCopy(telegram?: TelegramDelivery | null): string {
   const tg = telegram || {}
+  if (tg.configured && tg.bot_reachable === false) {
+    return 'Telegram bot is unreachable (token rejected or network). The desk still works in this browser.'
+  }
   if (tg.configured && tg.last_send_ok === false) {
     return `Telegram last send failed (${tg.last_error || 'unknown'}). The desk still works in this browser.`
   }
