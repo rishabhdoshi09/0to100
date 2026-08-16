@@ -147,6 +147,17 @@ def card_from_row(
     ups = upside_metrics(row)
     tags = [str(t) for t in (evidence_tags or []) if t]
     reason = qualify_reason or str(row.get("reason") or "")
+    ev_n = int(row.get("ev_n") or 0)
+    ev_pct = row.get("ev_pct")
+    ev = {}
+    if ev_n >= 30 and ev_pct is not None:
+        ev = {
+            "ev_pct": _f(ev_pct),
+            "ev_lb_pct": _f(row.get("ev_lb_pct")) if row.get("ev_lb_pct") is not None else None,
+            "ev_n": ev_n,
+            "ev_conf": str(row.get("ev_conf") or ""),
+            "p_win": _f(row.get("p_win")) if row.get("p_win") is not None else None,
+        }
     return {
         "symbol": str(row.get("symbol") or "").upper(),
         "company": str(row.get("company") or row.get("symbol") or ""),
@@ -167,6 +178,7 @@ def card_from_row(
         "evidence_tags": tags,
         "lifecycle": "active",
         **ups,
+        **ev,
     }
 
 

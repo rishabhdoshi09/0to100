@@ -20,6 +20,7 @@ import {
 } from './productApi'
 import { RiskLensCard } from './productViews'
 import { LiveScanBanner, type ExperienceViewProps } from './experience'
+import { EvChip } from './evChip'
 import type { DashboardPayload } from './types'
 
 type RadarRow = ScannerWorkspaceRow & {
@@ -44,6 +45,11 @@ type RadarRow = ScannerWorkspaceRow & {
   tech_source?: string
   price_tag?: string
   pct_below_20d_high?: number
+  ev_pct?: number | null
+  ev_lb_pct?: number | null
+  ev_n?: number | null
+  ev_conf?: string
+  p_win?: number | null
 }
 
 const breakoutLabel: Record<string, string> = {
@@ -215,6 +221,7 @@ function fallbackRadarFromDashboard(dashboard: DashboardPayload): RadarHome {
   const longTerm = (dashboard.long_term.records || []) as RadarRow[]
   return {
     generated_at: dashboard.generated_at,
+    session: dashboard.session,
     market_session: dashboard.market.trade_stance,
     market_health: dashboard.market.health,
     breadth: dashboard.market.breadth,
@@ -345,6 +352,7 @@ function RadarPickCard({
         {row.rsi != null ? <span>RSI {Math.round(Number(row.rsi))}</span> : null}
         {off20 != null ? <span>{Number(off20).toFixed(1)}% off 20d high</span> : null}
       </div>
+      <EvChip row={row} />
       {row.reason ? <p className="reco-pick-note">{row.reason}</p> : null}
       <div className="reco-pick-tags" aria-label="Setup tags">
         {row.breakout_grade ? <span className="reco-evidence-tag">grade {row.breakout_grade}</span> : null}
@@ -633,11 +641,11 @@ export function RadarHomeView(props: ExperienceViewProps & {
       <div className="reco-cmp-banner" role="status">
         <span className="ico" aria-hidden="true">!</span>
         <div>
-          <div>{bannerNote}</div>
+          <div>{desk?.session?.banner || dashboard.session?.banner || bannerNote}</div>
           <em>
             {scanAt
-              ? `Last scan ${relativeAge(scanAt)} · bars as of ${priceSession || 'last session'} EOD`
-              : 'Run Scan now to fill the desk'}
+              ? `Last scan ${relativeAge(scanAt)} · bars as of ${priceSession || dashboard.session?.last_session_label || 'last session'} EOD`
+              : 'Search a name above, open the stock, then use Desk / Options / Data. Or Scan now to fill the desk.'}
             {deskNote ? ` · ${deskNote}` : ''}
           </em>
         </div>
@@ -695,8 +703,12 @@ export function RadarHomeView(props: ExperienceViewProps & {
 
       {visible.length === 0 ? (
         <div className="reco-empty">
-          <strong>No {laneLabel.toLowerCase()} yet</strong>
-          <p>Use Make ready / Scan now above, or clear the search.</p>
+          <strong>{emptyDesk ? 'First run' : `No ${laneLabel.toLowerCase()} yet`}</strong>
+          <p>
+            {emptyDesk
+              ? 'Search any NSE share in the top bar → Open stock → then Desk, Options, or System → Data. Scan now fills this lane when history is ready.'
+              : 'Use Make ready / Scan now above, or clear the search.'}
+          </p>
         </div>
       ) : (
         <div className="reco-card-stack">

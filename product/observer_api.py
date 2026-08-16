@@ -382,5 +382,9 @@ def install(app) -> None:
     )
     install_data_routes(app)
     from product.market_api import install_market_routes
+    from product.evidence_api import install_evidence_routes
+    from product.system_loops import install_system_loop_routes
 
     install_market_routes(app)
+    install_evidence_routes(app)
+    install_system_loop_routes(app)

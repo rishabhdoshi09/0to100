@@ -1778,6 +1778,19 @@ class TestEVEngine:
         rows.sort(key=ev_rank_key, reverse=True)
         assert [r["symbol"] for r in rows] == ["EV", "PTS"]   # measured first
 
+    def test_reco_card_hides_ev_below_thirty(self):
+        from product.recommendations_workspace import card_from_row
+        hidden = card_from_row(
+            {"symbol": "THIN", "ev_pct": 2.0, "ev_n": 10, "entry": 100, "target": 110},
+            category_id="super_trends", category_label="Super Trends",
+        )
+        assert "ev_pct" not in hidden
+        shown = card_from_row(
+            {"symbol": "FAT", "ev_pct": 2.0, "ev_n": 30, "entry": 100, "target": 110},
+            category_id="super_trends", category_label="Super Trends",
+        )
+        assert shown["ev_pct"] == 2.0
+
 
 class TestPrimeFilter:
     """💎 Every data layer must pass before a setup earns the Telegram top

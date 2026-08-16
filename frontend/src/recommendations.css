@@ -257,6 +257,13 @@
 .reco-pick-tags {
   display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px;
 }
+.reco-ev-chip {
+  display: inline-block; margin-top: 8px;
+  font-size: 12px; letter-spacing: 0.02em;
+  color: var(--rw-ink);
+  border: 1px solid var(--rw-line); border-radius: 999px;
+  padding: 2px 8px;
+}
 .reco-evidence-tag {
   font-size: 11px; letter-spacing: 0.02em; color: var(--rw-muted);
   border-bottom: 1px solid var(--rw-line); padding: 0 0 1px;

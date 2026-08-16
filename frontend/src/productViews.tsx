@@ -25,7 +25,7 @@ import {
 } from './productApi'
 import type { ChartBar, ControlName, DashboardPayload, FnoUnderlying, OptionsChainPayload, OptionsEodHistoryPayload } from './types'
 import { longTermPicks } from './longTermPicks'
-import { fetchMarketOptions, fetchOptionsEodHistory } from './api'
+import { fetchMarketOptions, fetchOptionsEodHistory, watchOptionsEod } from './api'
 import { ChainContextPanel } from './marketViews'
 
 // Read-only risk-first "R lens" — exact shares, rupee risk, reward:risk, book heat. No orders.
@@ -437,6 +437,7 @@ export function ProductStockIntelligenceView(props: ViewProps) {
 
   useEffect(() => {
     if (tab !== 'Options' || !selected) return
+    void watchOptionsEod(selected).catch(() => undefined)
     setOptionsLoading(true)
     const force = optionsForce > 0
     Promise.all([

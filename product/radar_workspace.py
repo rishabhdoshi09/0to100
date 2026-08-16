@@ -473,8 +473,15 @@ def build_radar_home(
         if r.get("sniper_candidate") and passes_volume_floor(r)
     ]
     health = str(getattr(market, "health", "") or (market or {}).get("health", "Unavailable") if isinstance(market, Mapping) else "Unavailable")
+    try:
+        from product.session_honesty import session_payload
+
+        session = session_payload()
+    except Exception:
+        session = {"available": False, "banner": "", "last_session": _price_session()}
     return {
         "generated_at": datetime.now(timezone.utc).isoformat(),
+        "session": session,
         "market_session": str(getattr(market, "trade_stance", "") or (market or {}).get("trade_stance", "") if isinstance(market, Mapping) else ""),
         "market_health": health,
         "breadth": str(getattr(market, "breadth", "") or (market or {}).get("breadth", "") if isinstance(market, Mapping) else ""),

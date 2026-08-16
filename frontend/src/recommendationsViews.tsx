@@ -11,6 +11,7 @@ import {
 } from './productApi'
 import type { ExperienceViewProps } from './experience'
 import { LiveScanBanner } from './experience'
+import { EvChip } from './evChip'
 
 const CAT_ICONS: Record<string, string> = {
   wealth_builders: 'W',
@@ -74,6 +75,7 @@ function CardTile({
           )}
         </div>
       </div>
+      <EvChip row={card} />
       {(card.qualify_reason || card.reason) ? (
         <p className="reco-pick-note">{card.qualify_reason || card.reason}</p>
       ) : null}

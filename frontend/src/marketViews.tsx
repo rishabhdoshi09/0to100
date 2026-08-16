@@ -9,7 +9,7 @@ import type {
 } from './types'
 import { compactDateTime, words } from './format'
 import { MetricCard, Panel } from './components'
-import { fetchMarketOptions, fetchOptionsEodHistory } from './api'
+import { fetchMarketOptions, fetchOptionsEodHistory, watchOptionsEod } from './api'
 import { FNO_INDEX_UNDERLYINGS, canOpenStockFromFno, defaultFnoFocus, isFnoIndex } from './fnoDesk'
 
 type Props = {
@@ -223,8 +223,8 @@ export function ChainContextPanel({
         }
       >
         <div className="inline-actions" style={{ marginBottom: 10 }}>
-          <button type="button" disabled={!symbol || loading} onClick={onRetry}>
-            {loading ? 'Loading chain…' : 'Refresh live chain'}
+          <button type="button" disabled={!symbol || loading} onClick={onRetry} title={chain?.retry_after_s ? `Force fetch now. Automatic wait ${chain.retry_after_s}s after a fail.` : 'Force a fresh NSE fetch'}>
+            {loading ? 'Loading chain…' : chain?.backoff ? 'Retry now (force)' : 'Refresh live chain'}
           </button>
           {onOpenIntelligence && (
             <button
@@ -239,7 +239,10 @@ export function ChainContextPanel({
         </div>
         {loading && <div className="empty-row">Fetching nearest-expiry OI / IV / PCR…</div>}
         {!loading && chain && !chain.available && (
-          <div className="empty-row">{chain.message || 'Option chain unavailable right now.'}</div>
+          <div className="empty-row">
+            {chain.message || 'Option chain unavailable right now.'}
+            {chain.backoff ? ' This button is live — the wait is anti-hammer, not a hang.' : ''}
+          </div>
         )}
         {!loading && chain?.available && (
           <>
@@ -291,7 +294,7 @@ export function ChainContextPanel({
           </>
         )}
       </Panel>
-      <Panel title="EOD HISTORY" subtitle="Nightly job captures NIFTY / BANKNIFTY / FINNIFTY. Stock EOD stays empty until that name is captured — not a live Greek stream.">
+      <Panel title="EOD HISTORY" subtitle="Nightly job captures NIFTY / BANKNIFTY / FINNIFTY plus names you opened here. Stock history stays empty until that capture — not a live Greek stream.">
         {!history?.available && (
           <div className="empty-row">{history?.message || 'No EOD options history for this symbol yet.'}</div>
         )}
@@ -335,6 +338,11 @@ export function FnoView({ dashboard, runControl, selected, setSelected, onOpenSt
     () => dashboard.fno.underlyings.find((row) => row.symbol === focus) || null,
     [dashboard.fno.underlyings, focus],
   )
+
+  useEffect(() => {
+    if (!focus || isFnoIndex(focus)) return
+    void watchOptionsEod(focus).catch(() => undefined)
+  }, [focus])
 
   useEffect(() => {
     if (!focus) return
@@ -405,7 +413,7 @@ export function FnoView({ dashboard, runControl, selected, setSelected, onOpenSt
         <MetricCard
           label="EOD STORE"
           value={eod?.available ? `${eod.symbols || 0} names` : 'EMPTY'}
-          detail={eod?.available ? `Latest ${eod.latest_as_of || '—'} · ${eod.snapshots || 0} snaps` : 'Index job not captured yet — stock history will be blank'}
+          detail={eod?.available ? `Latest ${eod.latest_as_of || '—'} · ${eod.snapshots || 0} snaps` : 'Index job not captured yet — opening a stock queues it for the next EOD run'}
           tone={eod?.available ? 'green' : 'amber'}
         />
       </div>

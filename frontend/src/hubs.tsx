@@ -107,7 +107,7 @@ export function HomeHub({
   const tab = homeTabOf(active)
   return (
     <HubShell
-      blurb="The tape first. Desk is names that cleared the scan. Internals is the weather those names sit in — breadth, VIX, FII/DII."
+      blurb="The tape first. Search a name → open the stock → Desk / Options / Data. Desk is names that cleared the scan. Internals is the weather those names sit in."
       tabs={HOME_TABS}
       active={tab}
       onChange={(next) => setActive(HOME_ROUTE[next as (typeof HOME_TABS)[number]])}
@@ -173,7 +173,7 @@ export function SystemHub({
   const tab = systemTabOf(active)
   return (
     <HubShell
-      blurb="Keep the machine honest. Health is whether workers are alive. Data is whether the files behind a stock are fresh — open a name first, then upload a statement if a number is missing."
+      blurb="Keep the machine honest. Health is whether workers are alive — including the decision journal. Data is whether the files behind a stock are fresh (served from this same API). Open a name first, then upload a statement if a number is missing."
       tabs={SYSTEM_TABS}
       active={tab}
       onChange={(next) => setActive(SYSTEM_ROUTE[next as (typeof SYSTEM_TABS)[number]])}

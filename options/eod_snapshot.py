@@ -73,7 +73,16 @@ def capture_universe(
     *,
     as_of: str | date | None = None,
 ) -> dict:
-    underlyings = [str(s).upper().strip() for s in (symbols or DEFAULT_UNDERLYINGS) if str(s).strip()]
+    if symbols is None:
+        try:
+            from options.eod_watch import capture_list
+
+            requested = capture_list()
+        except Exception:
+            requested = list(DEFAULT_UNDERLYINGS)
+    else:
+        requested = symbols
+    underlyings = [str(s).upper().strip() for s in requested if str(s).strip()]
     results = []
     saved = 0
     for sym in underlyings:

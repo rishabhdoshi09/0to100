@@ -34,6 +34,16 @@ export const fetchMarketOptions = (symbol: string, force = false): Promise<Optio
     headers: { Accept: 'application/json' },
   }).then((response) => json<OptionsChainPayload>(response))
 
+export const watchOptionsEod = (symbol: string): Promise<{
+  accepted: boolean
+  symbol: string
+  message?: string
+}> =>
+  fetch(`/api/market/options/${encodeURIComponent(symbol)}/watch-eod`, {
+    method: 'POST',
+    headers: { Accept: 'application/json' },
+  }).then((response) => json(response))
+
 export const fetchOptionsEodHistory = (
   symbol: string,
   days = 14,

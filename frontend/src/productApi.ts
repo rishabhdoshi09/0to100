@@ -420,6 +420,16 @@ export const fetchScannerWorkspace = (mode: string): Promise<ScannerWorkspace> =
 
 export type RadarHome = {
   generated_at: string
+  session?: {
+    available?: boolean
+    state?: string
+    market_open?: boolean
+    is_weekend?: boolean
+    last_session?: string
+    last_session_label?: string
+    banner?: string
+    retry_note?: string
+  }
   market_session: string
   market_health: string
   breadth: string
@@ -472,6 +482,11 @@ export type RecommendationCard = {
   target?: number | null
   cmp?: number | null
   source?: string
+  ev_pct?: number | null
+  ev_lb_pct?: number | null
+  ev_n?: number | null
+  ev_conf?: string
+  p_win?: number | null
 }
 
 export type RecommendationCategory = {
@@ -975,3 +990,61 @@ export const refreshFiiDiiStore = (): Promise<Record<string, unknown>> =>
 export const fetchMarketInstitutional = (days = 30): Promise<Record<string, unknown>> =>
   fetch(`/api/market/institutional?days=${days}`, { headers: { Accept: 'application/json' } })
     .then((response) => json(response))
+
+export const watchOptionsEod = (symbol: string): Promise<{
+  accepted: boolean
+  symbol: string
+  watched?: string[]
+  capture_list?: string[]
+  message?: string
+}> =>
+  fetch(`/api/market/options/${encodeURIComponent(symbol)}/watch-eod`, {
+    method: 'POST',
+    headers: { Accept: 'application/json' },
+  }).then((response) => json(response))
+
+export type DecisionJournalPayload = {
+  available: boolean
+  thin?: boolean
+  taken_n?: number
+  rejected_n?: number
+  message?: string
+  calibration_message?: string
+  decision?: {
+    taken?: { n: number; avg_outcome_pct: number; win_rate: number }
+    rejected?: { n: number; avg_outcome_pct: number; win_rate: number }
+    by_reason?: Record<string, { n: number; avg_outcome_pct: number; win_rate: number }>
+    verdict?: string
+  }
+  calibration?: {
+    buckets?: Array<{ range: string; n: number; predicted: number | null; actual: number | null }>
+    verdict?: string
+  }
+}
+
+export const fetchDecisionJournal = (): Promise<DecisionJournalPayload> =>
+  fetch('/api/decision-journal', { headers: { Accept: 'application/json' } })
+    .then((response) => json<DecisionJournalPayload>(response))
+
+export type PortfolioIntelPayload = {
+  available?: boolean
+  advice_only?: boolean
+  n_holdings?: number
+  portfolio_ev_pct?: number | null
+  min_ev_gap_pct?: number
+  message?: string
+  weakest?: { symbol?: string; ev_pct?: number | null } | null
+  best_new?: { symbol?: string; ev_pct?: number | null; verdict?: string } | null
+  swap?: {
+    out: string
+    out_ev: number
+    in: string
+    in_ev: number
+    gap_pct: number
+    note?: string
+  } | null
+}
+
+export const fetchPortfolioIntel = (): Promise<PortfolioIntelPayload> =>
+  fetch('/api/portfolio-intel', { headers: { Accept: 'application/json' } })
+    .then((response) => json<PortfolioIntelPayload>(response))
