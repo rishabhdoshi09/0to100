@@ -139,9 +139,10 @@ TELEGRAM_PHONE_CHAT_IDS=their_chat_id
 
 They can read the desk. They cannot `/trade` or `/resume`.
 
-Full radar UI on a phone (optional): install Tailscale on the server and
-the phone, then open `http://<tailscale-ip>:5173` (React) or `:8501`
-(Streamlit). Do **not** open those ports to `0.0.0.0/0`.
+Full radar UI on a phone: same Tailscale URL, then Home / Ideas. Tap a
+card for the buy thesis as a full-screen sheet (Close, then Buy / Stop /
+Target stay sticky). Search stays in the top bar. Do **not** open those
+ports to `0.0.0.0/0`.
 
 ## Health check
 - Telegram pe subah Pulse aa raha hai? → scans chal rahe hain

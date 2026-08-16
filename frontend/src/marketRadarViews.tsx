@@ -803,12 +803,13 @@ export function RadarHomeView(props: ExperienceViewProps & {
           symbol={selected}
           bars={bars}
           row={row as Record<string, unknown> | null}
+          onClose={() => setSelected('')}
           onOpenResearch={() => setActive('Stock Intelligence')}
           onCompare={() => onCompare(selected)}
           onWatchlist={() => onWatchlist(selected)}
         />
       ) : (
-        <p className="reco-foot">Click a name for the buy thesis — why it is here, filings, sales, book, and chart.</p>
+        <p className="reco-foot">Tap a name for the buy thesis — why it is here, filings, sales, book, and chart.</p>
       )}
 
       <p className="reco-foot">
@@ -819,8 +820,11 @@ export function RadarHomeView(props: ExperienceViewProps & {
   )
 }
 
-export function MarketScannerView(props: ExperienceViewProps & { onCompare: (symbol: string) => void }) {
-  const { dashboard, selected, setSelected, bars, setActive, depth, marketScan, longTermScan, onCompare } = props
+export function MarketScannerView(props: ExperienceViewProps & {
+  onCompare: (symbol: string) => void
+  onWatchlist?: (symbol: string) => void
+}) {
+  const { dashboard, selected, setSelected, bars, setActive, depth, marketScan, longTermScan, onCompare, onWatchlist } = props
   const scannerTabs = depth === 'professional'
     ? ['Breakouts', 'Momentum', 'Conviction', 'Pre-Breakout', 'Long-Term', 'F&O', 'Avoid']
     : ['Breakouts', 'Momentum', 'Long-Term']
@@ -965,6 +969,19 @@ export function MarketScannerView(props: ExperienceViewProps & { onCompare: (sym
           </Panel>
         </div>
       </div>
+      {selected ? (
+        <BuyThesisSheet
+          symbol={selected}
+          bars={bars}
+          row={selectedRow as Record<string, unknown> | null}
+          onClose={() => setSelected('')}
+          onOpenResearch={() => setActive('Stock Intelligence')}
+          onCompare={() => onCompare(selected)}
+          onWatchlist={() => onWatchlist?.(selected)}
+        />
+      ) : (
+        <p className="reco-foot">Tap a row for the buy thesis.</p>
+      )}
     </section>
   )
 }
