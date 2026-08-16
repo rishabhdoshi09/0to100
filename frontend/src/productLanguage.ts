@@ -82,7 +82,7 @@ export const PAGE_GUIDE: Record<string, PageGuide> = {
   },
   'Research Data': {
     title: 'System · Data',
-    purpose: 'The file layer under a stock — which datasets are fresh, stale, missing, uploaded or awaiting extraction. Lives next to System Health because both answer “can I trust this machine?”',
+    purpose: 'The file layer under a stock — which datasets are fresh, stale, missing, uploaded or awaiting extraction. Served from the same terminal API as the rest of the desk. Lives next to System Health because both answer “can I trust this machine?”',
     questions: [
       'What period does each number represent?',
       'Which official source supports it?',

@@ -10,9 +10,8 @@ import {
   type DataProvidersPayload,
 } from './productApi'
 
-const reportBase = import.meta.env.DEV
-  ? ''
-  : `${window.location.protocol}//${window.location.hostname}:8766`
+/** Evidence lives on the terminal API (:8765). Same-origin via Vite proxy in dev. */
+const reportBase = ''
 
 type LinkItem = { label: string; url: string; official: string }
 type Requirement = {
@@ -156,7 +155,7 @@ export function ResearchDataView({ symbol, onOpenStock }: { symbol: string; onOp
       setEvidenceOffline(false)
     } catch (reason) {
       setEvidenceOffline(true)
-      setError(reason instanceof Error ? reason.message : 'Evidence service unavailable — start the report API on :8766 (bash scripts/run_quantterm_complete.sh).')
+      setError(reason instanceof Error ? reason.message : 'Evidence service unavailable — restart the terminal API on :8765 so /evidence is served from one origin.')
     } finally {
       setEvidenceLoading(false)
     }
@@ -350,8 +349,7 @@ export function ResearchDataView({ symbol, onOpenStock }: { symbol: string; onOp
     <section className="research-data-view">
       {evidenceOffline && (
         <div className="api-warning">
-          Evidence desk needs the report API on :8766. Price, coverage and jobs below still come from the terminal API.
-          Start with <code>bash scripts/run_quantterm_complete.sh</code>.
+          Evidence desk is served by the terminal API on :8765 (same origin as /api). Restart that process if this banner stays up.
         </div>
       )}
       {error && (

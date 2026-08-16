@@ -15,6 +15,11 @@ export type ScanRecord = {
   signals?: string[]
   reasons?: string[]
   chase_risk?: boolean
+  ev_pct?: number | null
+  ev_lb_pct?: number | null
+  ev_n?: number | null
+  ev_conf?: string
+  p_win?: number | null
   edge_r?: number | null
   breakout_grade?: string
   breakout_conviction?: number
@@ -199,8 +204,22 @@ export type DataReadiness = {
   blockers: string[]
 }
 
+export type SessionHonesty = {
+  available?: boolean
+  state?: string
+  market_open?: boolean
+  is_weekend?: boolean
+  ist_date?: string
+  weekday?: string
+  last_session?: string
+  last_session_label?: string
+  banner?: string
+  retry_note?: string
+}
+
 export type DashboardPayload = {
   generated_at: string
+  session?: SessionHonesty
   market: {
     available: boolean
     health: string
@@ -363,6 +382,9 @@ export type OptionsChainPayload = {
   top_put_oi?: Array<{ strike: number; pe_oi: number; pe_coi?: number }>
   chain?: Array<Record<string, number>>
   message?: string
+  backoff?: boolean
+  retry_after_s?: number
+  force_bypasses_backoff?: boolean
   greeks_available?: boolean
   signal_desk?: boolean
   honesty?: string

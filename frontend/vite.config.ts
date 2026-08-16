@@ -14,7 +14,7 @@ export default defineConfig({
     proxy: {
       '/api': 'http://127.0.0.1:8765',
       '/reports': 'http://127.0.0.1:8766',
-      '/evidence': 'http://127.0.0.1:8766',
+      '/evidence': 'http://127.0.0.1:8765',
     },
   },
   build: {

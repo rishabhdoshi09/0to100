@@ -230,10 +230,17 @@ def chain_workspace_cached(
             return cached[1]
         fail_ts = _WS_FAIL_S.get(sym)
         if fail_ts and (now - fail_ts) < _WS_FAIL_BACKOFF_S:
+            remaining = max(0, int(_WS_FAIL_BACKOFF_S - (now - fail_ts)))
             return {
                 "available": False,
                 "symbol": sym,
-                "message": "Option chain temporarily unavailable; retry shortly.",
+                "backoff": True,
+                "retry_after_s": remaining,
+                "force_bypasses_backoff": True,
+                "message": (
+                    f"Last fetch failed. Automatic retry waits {remaining}s so we do not hammer NSE. "
+                    "Refresh live chain forces a new attempt — a weekend fail is expected, not a dead button."
+                ),
             }
     result = chain_workspace(sym, spot=spot)
     if result.get("available"):

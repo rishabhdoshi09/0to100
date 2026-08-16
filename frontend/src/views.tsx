@@ -13,8 +13,10 @@ import { boolLabel, money, pct, score, words } from './format'
 import {
   exportCorporateActionGaps,
   fetchCorporateActionsStatus,
+  fetchDecisionJournal,
   fetchHoldings,
   fetchInstitutionalStack,
+  fetchPortfolioIntel,
   fetchSignalBacktestStatus,
   fetchTargetPortfolio,
   importHoldings,
@@ -22,7 +24,9 @@ import {
   syncHoldings,
   verifyCorporateActions,
   type CorporateActionsStatus,
+  type DecisionJournalPayload,
   type HoldingsBook,
+  type PortfolioIntelPayload,
   type InstitutionalDomain,
   type InstitutionalStack,
   type SignalBacktestStatus,
@@ -238,6 +242,7 @@ export function StockIntelligenceView(props: ViewProps) {
 
 export function PortfolioView({ dashboard, runControl, setSelected, setActive }: ViewProps) {
   const [target, setTarget] = useState<Awaited<ReturnType<typeof fetchTargetPortfolio>> | null>(null)
+  const [intel, setIntel] = useState<PortfolioIntelPayload | null>(null)
   const [holdings, setHoldings] = useState<HoldingsBook | null>(null)
   const [holdingsBusy, setHoldingsBusy] = useState('')
   const [importText, setImportText] = useState('')
@@ -259,6 +264,9 @@ export function PortfolioView({ dashboard, runControl, setSelected, setActive }:
     fetchTargetPortfolio()
       .then((payload) => { if (alive) setTarget(payload) })
       .catch(() => { if (alive) setTarget(null) })
+    fetchPortfolioIntel()
+      .then((payload) => { if (alive) setIntel(payload) })
+      .catch(() => { if (alive) setIntel(null) })
     return () => { alive = false }
   }, [dashboard.autonomy.heartbeat_ist, dashboard.paper.equity])
 
@@ -432,6 +440,39 @@ export function PortfolioView({ dashboard, runControl, setSelected, setActive }:
                 ))}
               </tbody>
             </table>
+          )}
+        </Panel>
+        <Panel title="HOLDINGS VS IDEAS" subtitle="Advice only · never rotates · EV gap must clear 2.5pp after costs">
+          {!intel && <p className="panel-copy">Loading opportunity-cost review…</p>}
+          {intel && (
+            <>
+              <p className="panel-copy">{intel.message}</p>
+              <div className="key-value-list">
+                <div><span>Book EV</span><strong>{intel.portfolio_ev_pct == null ? 'No EV yet' : `${intel.portfolio_ev_pct}%`}</strong></div>
+                <div><span>Holdings</span><strong>{intel.n_holdings ?? 0}</strong></div>
+                <div>
+                  <span>Weakest</span>
+                  <strong>
+                    {intel.weakest?.symbol
+                      ? <button type="button" className="linkish" onClick={() => openHolding(String(intel.weakest?.symbol))}>{intel.weakest.symbol}</button>
+                      : '—'}
+                  </strong>
+                </div>
+                <div>
+                  <span>Best unused idea</span>
+                  <strong>
+                    {intel.best_new?.symbol
+                      ? <button type="button" className="linkish" onClick={() => { setSelected(String(intel.best_new?.symbol)); setActive('Recommendations') }}>{intel.best_new.symbol}</button>
+                      : '—'}
+                  </strong>
+                </div>
+              </div>
+              {intel.swap ? (
+                <p className="panel-copy">
+                  Consider reviewing {intel.swap.out} against {intel.swap.in} (gap {intel.swap.gap_pct}pp). You own the click.
+                </p>
+              ) : null}
+            </>
           )}
         </Panel>
         <Panel title="RECORDED EQUITY CURVE" subtitle="Paper evidence · no synthetic history"><EquityCurve values={dashboard.paper.equity_curve} /></Panel>
@@ -639,6 +680,7 @@ export function AutomationView({ dashboard, runControl, setActive }: ViewProps) 
   const activeJob = a.active_job || {}
   const [bt, setBt] = useState<SignalBacktestStatus | null>(null)
   const [ca, setCa] = useState<CorporateActionsStatus | null>(null)
+  const [journal, setJournal] = useState<DecisionJournalPayload | null>(null)
   const [caBusy, setCaBusy] = useState('')
 
   useEffect(() => {
@@ -650,6 +692,9 @@ export function AutomationView({ dashboard, runControl, setActive }: ViewProps) 
       fetchCorporateActionsStatus()
         .then((payload) => { if (alive) setCa(payload) })
         .catch(() => { if (alive) setCa(null) })
+      fetchDecisionJournal()
+        .then((payload) => { if (alive) setJournal(payload) })
+        .catch(() => { if (alive) setJournal(null) })
     }
     load()
     const timer = window.setInterval(load, 5000)
@@ -720,6 +765,21 @@ export function AutomationView({ dashboard, runControl, setActive }: ViewProps) 
         <MetricCard label="FAILURES" value={String(a.active_failures?.length || 0)} detail={(a.active_failures || []).join(', ') || 'None active'} tone="purple" />
       </div>
       <div className="automation-grid">
+        <Panel title="DECISION JOURNAL" subtitle="Taken vs rejected · calibration · no claim below the sample floor">
+          {!journal && <p className="panel-copy">Loading decision journal…</p>}
+          {journal && (
+            <>
+              <div className="key-value-list">
+                <div><span>Taken (resolved)</span><strong>{journal.taken_n ?? journal.decision?.taken?.n ?? 0}</strong></div>
+                <div><span>Rejected (resolved)</span><strong>{journal.rejected_n ?? journal.decision?.rejected?.n ?? 0}</strong></div>
+                <div><span>Taken avg</span><strong>{journal.decision?.taken?.n ? `${journal.decision.taken.avg_outcome_pct}%` : '—'}</strong></div>
+                <div><span>Rejected avg</span><strong>{journal.decision?.rejected?.n ? `${journal.decision.rejected.avg_outcome_pct}%` : '—'}</strong></div>
+              </div>
+              <p className="panel-copy">{journal.message}</p>
+              {journal.calibration_message ? <p className="panel-copy">{journal.calibration_message}</p> : null}
+            </>
+          )}
+        </Panel>
         <Panel title="GETTING SMARTER" subtitle="Full-universe backtest feeds scanner ranking + pre-trade gates">
           <div className="key-value-list">
             <div><span>Last report</span><strong>{bt?.generated_at || 'Never'}</strong></div>

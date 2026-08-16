@@ -88,6 +88,13 @@ def nifty_options_workspace() -> dict[str, Any]:
     return options_workspace("NIFTY")
 
 
+def options_watch_eod(symbol: str) -> dict[str, Any]:
+    """Enqueue a user-opened underlying for the next options EOD job."""
+    from options.eod_watch import add_watch
+
+    return add_watch(symbol)
+
+
 def install_market_routes(app) -> None:
     app.add_api_route(
         "/api/market/institutional",
@@ -118,6 +125,12 @@ def install_market_routes(app) -> None:
         options_history_workspace,
         methods=["GET"],
         name="market_options_history",
+    )
+    app.add_api_route(
+        "/api/market/options/{symbol}/watch-eod",
+        options_watch_eod,
+        methods=["POST"],
+        name="market_options_watch_eod",
     )
     app.add_api_route(
         "/api/market/options/{symbol}",

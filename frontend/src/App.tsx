@@ -29,7 +29,7 @@ import { useScanRunner } from './scanRunner'
 import { ReportPdfViewer } from './ReportPdfViewer'
 import type { ChartBar, ControlName, DashboardPayload, OperationRecord } from './types'
 
-/** In dev, Vite proxies /reports and /evidence to the report API on :8766. */
+/** In dev, Vite proxies /reports to :8766 (PDFs) and /evidence to :8765 (one origin). */
 const reportApiBase = import.meta.env.DEV
   ? ''
   : `${window.location.protocol}//${window.location.hostname}:8766`
@@ -41,6 +41,7 @@ function activeSeed(dashboard: DashboardPayload, kind: string): OperationRecord 
 
 const emptyDashboard: DashboardPayload = {
   generated_at: '',
+  session: { available: false, banner: '', last_session: '' },
   market: {
     available: false,
     health: 'Unavailable',

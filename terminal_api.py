@@ -709,8 +709,15 @@ def dashboard() -> dict:
     news = _news_payload()
     fno = _fno_payload()
     data = _data_payload(scan, long_term, operations, fno, news)
+    try:
+        from product.session_honesty import session_payload
+
+        session = session_payload()
+    except Exception:
+        session = {"available": False, "banner": "", "last_session": ""}
     return {
         "generated_at": datetime.now(timezone.utc).isoformat(),
+        "session": session,
         "market": market,
         "scan": scan,
         "long_term": long_term,
