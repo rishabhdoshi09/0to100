@@ -383,6 +383,7 @@ class Supervisor:
             self.heartbeat()
             return None
         self.enqueue_due(current)
+        self._release_completed_session_waits(current)
         job = self.jobs.lease_due(self.owner, lease_seconds=300.0)
         if job is None:
             # Only alert overdue after we had a chance to drain due work this tick.
@@ -393,6 +394,21 @@ class Supervisor:
         self._check_overdue()
         self.heartbeat()
         return job
+
+    def _release_completed_session_waits(self, now_ist):
+        """Unblock weekend/holiday EOD waits once Friday's (or last session's) tape is in."""
+        latest = ""
+        if hasattr(self.deps, "active_snapshot_info"):
+            try:
+                latest = str((self.deps.active_snapshot_info() or {}).get("latest_date") or "")
+            except Exception:
+                latest = ""
+        holidays = self.deps.holidays() if hasattr(self.deps, "holidays") else set()
+        required = SCH.required_completed_session(now_ist, holidays)
+        if not latest or latest < required:
+            return
+        for key in SCH.eod_ready_keys(now_ist, holidays, latest=latest):
+            self.jobs.unblock_dependency(key)
 
     def _execute(self, job):
         handler = JOBS.HANDLERS.get(job.job_type)
@@ -405,7 +421,10 @@ class Supervisor:
                         owner_paused=self.owner_state.get("new_entries_paused", False), root=self.root)
         ctx.dialogue = self.dialogue
         if job.job_type == SCH.DATA_REFRESH and str(job.idempotency_key or "").endswith(":eod"):
-            ctx.required_session_date = self.deps.now_ist().date().isoformat()
+            holidays = self.deps.holidays() if hasattr(self.deps, "holidays") else set()
+            ctx.required_session_date = SCH.required_completed_session(
+                self.deps.now_ist(), holidays,
+            )
         try:
             result = handler(ctx)
         except Exception as exc:
