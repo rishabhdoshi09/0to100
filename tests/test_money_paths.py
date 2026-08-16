@@ -2137,7 +2137,7 @@ class TestTelegramCommands:
 
     def test_help_lists_trade_command(self):
         from alerts.telegram_commands import _HELP
-        assert "/trade" in _HELP and "NET" in _HELP
+        assert "/trade" in _HELP and "/desk" in _HELP and "/thesis" in _HELP
 
     def test_live_arming_always_refused(self, tmp_path, monkeypatch):
         ap = self._setup(tmp_path, monkeypatch)
