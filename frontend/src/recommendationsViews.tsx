@@ -2,6 +2,8 @@ import './recommendations.css'
 import { useEffect, useMemo, useState } from 'react'
 import { money, pct, relativeAge, words } from './format'
 import { BuyThesisSheet } from './BuyThesisSheet'
+import { deskSymbol, thesisReplacesList } from './deskThesis'
+import { usePhoneLayout } from './phoneLayout'
 import {
   fetchMarketReportsWorkspace,
   fetchRecommendationsWorkspace,
@@ -43,8 +45,22 @@ function CardTile({
       ? ((Number(card.target) - Number(buy)) / Number(buy)) * 100
       : null)
   const risk = (card.risk_tier || 'Medium').toLowerCase()
+  const symbol = deskSymbol(card.symbol)
+  const openThesis = () => { if (symbol) onSelect(symbol) }
   return (
-    <button type="button" className={`reco-pick${selected === card.symbol ? ' is-active' : ''}`} onClick={() => onSelect(card.symbol)}>
+    <article
+      role="button"
+      tabIndex={0}
+      data-symbol={symbol}
+      className={`reco-pick${deskSymbol(selected) === symbol ? ' is-active' : ''}`}
+      onClick={openThesis}
+      onKeyDown={(event) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault()
+          openThesis()
+        }
+      }}
+    >
       <div className="reco-pick-row1">
         <span className={`reco-buy ${badgeClass(card.action_badge)}`}>{card.action_badge}</span>
         <span className={`reco-risk-chip ${risk}`}>
@@ -59,7 +75,7 @@ function CardTile({
         {card.cmp != null ? <span>CMP {money(card.cmp, 2)}</span> : null}
         {card.price_tag ? <span>{card.price_tag}</span> : null}
       </div>
-      <div className="reco-pick-kpis">
+      <div className="reco-pick-kpis reco-numbers-light">
         <div>
           <span>Buy</span>
           <strong>{buy != null ? money(buy, 2) : '—'}</strong>
@@ -90,7 +106,8 @@ function CardTile({
           ))}
         </div>
       ) : null}
-    </button>
+      <span className="reco-pick-open">Read thesis</span>
+    </article>
   )
 }
 
@@ -115,6 +132,7 @@ export function RecommendationsView({
   const [categoryId, setCategoryId] = useState('wealth_builders')
   const [lifecycle, setLifecycle] = useState<'Active' | 'Closed'>('Active')
   const [query, setQuery] = useState('')
+  const phone = usePhoneLayout()
 
   useEffect(() => {
     let cancelled = false
@@ -162,12 +180,13 @@ export function RecommendationsView({
   }, [data, category, lifecycle, query])
 
   const onSelect = (symbol: string) => {
-    setSelected(symbol)
+    const clean = deskSymbol(symbol)
+    if (clean) setSelected(clean)
   }
 
-  const selectedRow = dashboard.scan.records.find((row) => row.symbol === selected)
-    || dashboard.long_term.records.find((row) => row.symbol === selected)
-    || dashboard.conviction.find((row) => row.symbol === selected)
+  const selectedRow = dashboard.scan.records.find((row) => deskSymbol(row.symbol) === deskSymbol(selected))
+    || dashboard.long_term.records.find((row) => deskSymbol(row.symbol) === deskSymbol(selected))
+    || dashboard.conviction.find((row) => deskSymbol(row.symbol) === deskSymbol(selected))
 
   if (loading) {
     return (
@@ -185,6 +204,22 @@ export function RecommendationsView({
         </div>
       </div>
     )
+  }
+
+  const thesisSheet = selected ? (
+    <BuyThesisSheet
+      symbol={deskSymbol(selected)}
+      bars={bars}
+      row={selectedRow as Record<string, unknown> | null}
+      onClose={() => setSelected('')}
+      onOpenResearch={() => setActive('Stock Intelligence')}
+      onCompare={() => onCompare?.(selected)}
+      onWatchlist={() => onWatchlist?.(selected)}
+    />
+  ) : null
+
+  if (thesisReplacesList(phone, selected) && thesisSheet) {
+    return <div className="reco-light reco-thesis-only">{thesisSheet}</div>
   }
 
   return (
@@ -279,9 +314,9 @@ export function RecommendationsView({
         </div>
       ) : (
         <div className="reco-card-stack">
-          {cards.map((card) => (
+          {cards.map((card, idx) => (
             <CardTile
-              key={`${card.lifecycle}-${card.symbol}-${card.setup_label}-${card.category_id}`}
+              key={`${card.lifecycle}-${deskSymbol(card.symbol)}-${card.setup_label}-${card.category_id}-${idx}`}
               card={card}
               selected={selected}
               onSelect={onSelect}
@@ -289,17 +324,7 @@ export function RecommendationsView({
           ))}
         </div>
       )}
-      {selected ? (
-        <BuyThesisSheet
-          symbol={selected}
-          bars={bars}
-          row={selectedRow as Record<string, unknown> | null}
-          onClose={() => setSelected('')}
-          onOpenResearch={() => setActive('Stock Intelligence')}
-          onCompare={() => onCompare?.(selected)}
-          onWatchlist={() => onWatchlist?.(selected)}
-        />
-      ) : (
+      {thesisSheet || (
         <p className="reco-foot">Tap a name for the buy thesis.</p>
       )}
       <p className="reco-foot">{data.disclaimer}</p>

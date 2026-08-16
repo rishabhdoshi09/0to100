@@ -10,6 +10,7 @@ from product.buy_thesis import (
     build_smart_money,
     classify_client,
     resolve_sector,
+    sector_wave_verdict,
 )
 
 
@@ -83,6 +84,8 @@ def test_sector_wave_no_claim_when_sector_unknown():
         wave = build_sector_wave("ZZZNOTASECTOR", workspace_sector="", scan_records=[], flows={})
     assert wave["wave"] == "NO_CLAIM"
     assert wave["identified"] is False
+    assert wave["verdict"] == "NO"
+    assert str(wave["verdict_line"]).startswith("NO")
     assert "inflow" not in wave["headline"].lower() or "not identified" in wave["headline"].lower()
 
 
@@ -134,8 +137,18 @@ def test_sector_wave_inflow_from_basket_and_pack():
             flows={},
         )
     assert wave["wave"] == "INFLOW"
+    assert wave["verdict"] == "YES"
+    assert str(wave["verdict_line"]).startswith("YES")
     assert "Capital Goods" in wave["headline"]
     assert any("Nifty" in b for b in wave["bullets"])
+
+
+def test_sector_wave_verdict_is_yes_only_for_inflow():
+    assert sector_wave_verdict("INFLOW")["verdict"] == "YES"
+    for wave in ("OUTFLOW", "MIXED", "NO_CLAIM", ""):
+        bit = sector_wave_verdict(wave)
+        assert bit["verdict"] == "NO"
+        assert bit["verdict_line"].startswith("NO")
 
 
 def test_classify_client_does_not_call_a_desk_influential():

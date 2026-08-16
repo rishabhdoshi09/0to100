@@ -23,6 +23,8 @@ import { HomeTodayPath, useTodayFloors } from './HomeTodayPath'
 import { decideNextStep, type FloorContext } from './homeFloorPath'
 import { jobClock } from './scanRunner'
 import { BuyThesisSheet } from './BuyThesisSheet'
+import { deskSymbol, thesisReplacesList } from './deskThesis'
+import { usePhoneLayout } from './phoneLayout'
 import type { DashboardPayload } from './types'
 
 type RadarRow = ScannerWorkspaceRow & {
@@ -116,7 +118,7 @@ function BestSniperPanel({
           <button
             type="button"
             className="radar-best-pick-btn"
-            onClick={() => onSelect(String(best.symbol || ''))}
+            onClick={() => onSelect(deskSymbol(best.symbol))}
           >
             Score {best.score ?? '—'}
             {best.breakout_quality != null
@@ -176,7 +178,7 @@ function BestAmongFundamentalsPanel({
           <button
             type="button"
             className="radar-best-pick-btn"
-            onClick={() => onSelect(String(best.symbol || ''))}
+            onClick={() => onSelect(deskSymbol(best.symbol))}
           >
             Score {best.score ?? '—'}
             {best.breakout_quality != null
@@ -306,15 +308,25 @@ function RadarPickCard({
   const stop = rupee(row.stop)
   const target = rupee(row.target)
   const upside = upsidePct(buy, target)
+  const symbol = deskSymbol(row.symbol)
+  const openThesis = () => { if (symbol) onSelect(symbol) }
   return (
-    <button
-      type="button"
+    <article
+      role="button"
+      tabIndex={0}
+      data-symbol={symbol}
       className={[
         'reco-pick',
-        selected === row.symbol ? 'is-active' : '',
+        selected === symbol ? 'is-active' : '',
         featured ? 'is-featured' : '',
       ].filter(Boolean).join(' ')}
-      onClick={() => onSelect(row.symbol)}
+      onClick={openThesis}
+      onKeyDown={(event) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault()
+          openThesis()
+        }
+      }}
     >
       <div className="reco-pick-row1">
         <span className={`reco-buy ${badge.cls}`}>{badge.label}</span>
@@ -331,7 +343,7 @@ function RadarPickCard({
         {row.price_tag ? <span>{row.price_tag}</span> : null}
         {row.sniper_candidate ? <span className="reco-tag">Confirmed</span> : null}
       </div>
-      <div className="reco-pick-kpis">
+      <div className="reco-pick-kpis reco-numbers-light">
         <div>
           <span>Buy</span>
           <strong>{buy != null ? money(buy, 2) : '—'}</strong>
@@ -367,7 +379,8 @@ function RadarPickCard({
           : null}
         {row.levels_source === 'pct_fallback' ? <span className="reco-evidence-tag">5% stop</span> : null}
       </div>
-    </button>
+      <span className="reco-pick-open">Read thesis</span>
+    </article>
   )
 }
 
@@ -442,17 +455,18 @@ function DenseTable({
           {sorted.length === 0 && (
             <tr><td colSpan={cols.length} className="radar-empty">No matches yet — run Scan now (or Make ready if data is incomplete).</td></tr>
           )}
-          {sorted.map((row) => {
+          {sorted.map((row, idx) => {
             const thin = thinVolume(row)
+            const symbol = deskSymbol(row.symbol)
             return (
             <tr
-              key={row.symbol}
+              key={`${symbol}-${idx}`}
               className={[
-                selected === row.symbol ? 'selected' : '',
+                selected === symbol ? 'selected' : '',
                 row.sniper_candidate ? 'sniper-row' : '',
                 thin ? 'thin-volume-row' : '',
               ].filter(Boolean).join(' ')}
-              onClick={() => onSelect(row.symbol)}
+              onClick={() => { if (symbol) onSelect(symbol) }}
             >
               {cols.map((col) => {
                 const raw = (row as Record<string, unknown>)[col]
@@ -495,6 +509,7 @@ export function RadarHomeView(props: ExperienceViewProps & {
   onOpenFloor?: (page: string) => void
 }) {
   const { dashboard, selected, setSelected, bars, setActive, depth, marketScan, longTermScan, runControl, onCompare, onWatchlist, onOpenFloor } = props
+  const phone = usePhoneLayout()
   const todayPath = useTodayFloors()
   const [radar, setRadar] = useState<RadarHome | null>(null)
   const [readiness, setReadiness] = useState<ProductReadiness | null>(null)
@@ -614,9 +629,9 @@ export function RadarHomeView(props: ExperienceViewProps & {
     }
   }
 
-  const row = desk?.lanes.breakouts.find((r) => r.symbol === selected)
-    || desk?.lanes.momentum.find((r) => r.symbol === selected)
-    || desk?.lanes.long_term_picks.find((r) => r.symbol === selected)
+  const row = desk?.lanes.breakouts.find((r) => deskSymbol(r.symbol) === deskSymbol(selected))
+    || desk?.lanes.momentum.find((r) => deskSymbol(r.symbol) === deskSymbol(selected))
+    || desk?.lanes.long_term_picks.find((r) => deskSymbol(r.symbol) === deskSymbol(selected))
 
   const health = desk?.market_health || dashboard.market.health || 'Market'
   const laneRows: Record<DeskLane, RadarRow[]> = {
@@ -643,6 +658,30 @@ export function RadarHomeView(props: ExperienceViewProps & {
     : (dashboard.data.kite?.note || 'Kite token rejected — run python main.py login')
   const laneLabel = lane === 'breakouts' ? 'Breakouts' : lane === 'momentum' ? 'Momentum' : 'Long-term picks'
   const heroIcon = health.slice(0, 1).toUpperCase() || 'M'
+  const featuredSymbols = new Set(
+    [best, fundBest]
+      .filter((item) => lane === 'breakouts' && item)
+      .map((item) => deskSymbol(item?.symbol)),
+  )
+  const listRows = visible
+    .filter((item) => {
+      const symbol = deskSymbol(item.symbol)
+      return Boolean(symbol) && !featuredSymbols.has(symbol)
+    })
+    .slice(0, 8)
+
+  const thesisSheet = selected ? (
+    <BuyThesisSheet
+      symbol={deskSymbol(selected)}
+      bars={bars}
+      row={row as Record<string, unknown> | null}
+      onClose={() => setSelected('')}
+      onOpenResearch={() => setActive('Stock Intelligence')}
+      onCompare={() => onCompare(selected)}
+      onWatchlist={() => onWatchlist(selected)}
+    />
+  ) : null
+
   const jumpFloor = (page: string) => {
     if (onOpenFloor) {
       onOpenFloor(page)
@@ -663,6 +702,10 @@ export function RadarHomeView(props: ExperienceViewProps & {
     dashboard.data.options_eod?.symbols,
     dashboard.session?.last_session_label,
   ])
+
+  if (thesisReplacesList(phone, selected) && thesisSheet) {
+    return <div className="reco-light reco-thesis-only">{thesisSheet}</div>
+  }
 
   return (
     <div className="reco-light">
@@ -797,23 +840,18 @@ export function RadarHomeView(props: ExperienceViewProps & {
         </div>
       ) : (
         <div className="reco-card-stack">
-          {visible.slice(0, 8).filter((item) => item.symbol !== best?.symbol || lane !== 'breakouts').map((item) => (
-            <RadarPickCard key={item.symbol} row={item} selected={selected} onSelect={setSelected} />
+          {listRows.map((item, idx) => (
+            <RadarPickCard
+              key={`${lane}-${deskSymbol(item.symbol)}-${idx}`}
+              row={item}
+              selected={selected}
+              onSelect={setSelected}
+            />
           ))}
         </div>
       )}
 
-      {selected ? (
-        <BuyThesisSheet
-          symbol={selected}
-          bars={bars}
-          row={row as Record<string, unknown> | null}
-          onClose={() => setSelected('')}
-          onOpenResearch={() => setActive('Stock Intelligence')}
-          onCompare={() => onCompare(selected)}
-          onWatchlist={() => onWatchlist(selected)}
-        />
-      ) : (
+      {thesisSheet || (
         <p className="reco-foot">Tap a name for the buy thesis — why it is here, filings, sales, book, and chart.</p>
       )}
 
@@ -830,6 +868,7 @@ export function MarketScannerView(props: ExperienceViewProps & {
   onWatchlist?: (symbol: string) => void
 }) {
   const { dashboard, selected, setSelected, bars, setActive, depth, marketScan, longTermScan, onCompare, onWatchlist } = props
+  const phone = usePhoneLayout()
   const scannerTabs = depth === 'professional'
     ? ['Breakouts', 'Momentum', 'Conviction', 'Pre-Breakout', 'Long-Term', 'F&O', 'Avoid']
     : ['Breakouts', 'Momentum', 'Long-Term']
@@ -887,7 +926,23 @@ export function MarketScannerView(props: ExperienceViewProps & {
     return true
   })
 
-  const selectedRow = filtered.find((r) => r.symbol === selected) || rows.find((r) => r.symbol === selected)
+  const selectedRow = filtered.find((r) => deskSymbol(r.symbol) === deskSymbol(selected))
+    || rows.find((r) => deskSymbol(r.symbol) === deskSymbol(selected))
+  const thesisSheet = selected ? (
+    <BuyThesisSheet
+      symbol={deskSymbol(selected)}
+      bars={bars}
+      row={selectedRow as Record<string, unknown> | null}
+      onClose={() => setSelected('')}
+      onOpenResearch={() => setActive('Stock Intelligence')}
+      onCompare={() => onCompare(selected)}
+      onWatchlist={() => onWatchlist?.(selected)}
+    />
+  ) : null
+
+  if (thesisReplacesList(phone, selected) && thesisSheet) {
+    return <section className="reco-light reco-thesis-only">{thesisSheet}</section>
+  }
 
   return (
     <section className="reco-light market-scanner">
@@ -974,17 +1029,7 @@ export function MarketScannerView(props: ExperienceViewProps & {
           </Panel>
         </div>
       </div>
-      {selected ? (
-        <BuyThesisSheet
-          symbol={selected}
-          bars={bars}
-          row={selectedRow as Record<string, unknown> | null}
-          onClose={() => setSelected('')}
-          onOpenResearch={() => setActive('Stock Intelligence')}
-          onCompare={() => onCompare(selected)}
-          onWatchlist={() => onWatchlist?.(selected)}
-        />
-      ) : (
+      {thesisSheet || (
         <p className="reco-foot">Tap a row for the buy thesis.</p>
       )}
     </section>

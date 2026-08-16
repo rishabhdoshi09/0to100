@@ -2,7 +2,8 @@ import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { ChartWorkspace } from './components'
 import { money, pct } from './format'
-import { isPhoneLayout, shouldPortalThesis, thesisSheetClassName } from './phoneLayout'
+import { sectorWaveFirstLine, sectorWaveVerdict } from './deskThesis'
+import { shouldPortalThesis, thesisSheetClassName, usePhoneLayout } from './phoneLayout'
 import {
   fetchBuyThesis,
   fetchStockFundamentals,
@@ -42,16 +43,8 @@ export function BuyThesisSheet({
   const [loading, setLoading] = useState(false)
   const [fetching, setFetching] = useState(false)
   const [error, setError] = useState('')
-  const [phone, setPhone] = useState(() => isPhoneLayout())
+  const phone = usePhoneLayout()
   const sheetRef = useRef<HTMLElement | null>(null)
-
-  useEffect(() => {
-    const media = window.matchMedia(`(max-width: 820px)`)
-    const sync = () => setPhone(media.matches)
-    sync()
-    media.addEventListener('change', sync)
-    return () => media.removeEventListener('change', sync)
-  }, [])
 
   useEffect(() => {
     let alive = true
@@ -107,7 +100,7 @@ export function BuyThesisSheet({
       {onClose ? (
         <div className="thesis-toolbar">
           <button type="button" className="thesis-close" onClick={onClose}>
-            ← Close
+            ← Close thesis
           </button>
           <strong>{symbol}</strong>
         </div>
@@ -120,7 +113,7 @@ export function BuyThesisSheet({
       {error ? <p className="home-path-error">{error}</p> : null}
       {fetching ? <p className="home-path-hint">Fetching company filings from Screener / Yahoo — current cache was thin.</p> : null}
 
-      <div className="reco-sheet-kpis">
+        <div className="reco-sheet-kpis reco-numbers-light">
         <div>
           <span>Buy</span>
           <strong>{money(plan?.buy, 2)}</strong>
@@ -148,6 +141,12 @@ export function BuyThesisSheet({
         </article>
         <article>
           <h3>Sector wave</h3>
+          <p
+            className={`thesis-wave-verdict thesis-wave-verdict-${sectorWaveVerdict(thesis?.sector_wave).toLowerCase()}`}
+            data-testid="sector-wave-verdict"
+          >
+            {loading && !thesis ? '…' : sectorWaveFirstLine(thesis?.sector_wave)}
+          </p>
           <p className={`thesis-wave thesis-wave-${String(thesis?.sector_wave?.wave || 'NO_CLAIM').toLowerCase()}`}>
             {thesis?.sector_wave?.headline || (loading ? 'Identifying sector…' : 'Sector not identified yet.')}
           </p>
@@ -224,7 +223,7 @@ export function BuyThesisSheet({
       </div>
       <details className="thesis-chart-fold" open={!phone}>
         <summary>Chart</summary>
-        <div className="reco-chart-card">
+        <div className="reco-chart-card reco-numbers-light">
           <ChartWorkspace
             symbol={symbol}
             bars={bars}

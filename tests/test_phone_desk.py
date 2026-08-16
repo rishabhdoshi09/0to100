@@ -66,6 +66,8 @@ def test_format_thesis_includes_requested_layers_and_stays_honest():
         "headline": "Clicked name — evidence below.",
         "plan": {"buy": 2018, "stop": 1875.1, "target": 2303.7, "upside_from_buy_pct": 14.2},
         "sector_wave": {
+            "verdict": "YES",
+            "verdict_line": "YES — sector money is coming in around this name.",
             "headline": "Manufacturing & Capital Goods basket is ahead of Nifty.",
             "bullets": ["Sector: Manufacturing & Capital Goods (from screener)"],
         },
@@ -79,6 +81,10 @@ def test_format_thesis_includes_requested_layers_and_stays_honest():
         "order_book": {"note": "NSE quote HTTP 403", "source": "nse"},
     })
     assert "Sector wave" in text
+    assert "YES — sector money is coming in around this name." in text
+    yes_at = text.index("YES —")
+    headline_at = text.index("ahead of Nifty")
+    assert yes_at < headline_at
     assert "FII / DII" in text
     assert "P/E 30.2x" in text
     assert "HTTP 403" in text

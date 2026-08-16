@@ -372,6 +372,34 @@ def _sector_bulk_net(sector: str, deals: Sequence[Mapping[str, Any]] | None) -> 
     }
 
 
+def sector_wave_verdict(wave: str) -> dict[str, str]:
+    """First reply while discussing a sector wave: YES or NO, nothing in between.
+
+    YES only when the tape is a clean INFLOW. OUTFLOW / MIXED / NO_CLAIM stay NO —
+    never dress thin evidence as a supporting wave.
+    """
+    kind = str(wave or "NO_CLAIM").upper()
+    if kind == "INFLOW":
+        return {
+            "verdict": "YES",
+            "verdict_line": "YES — sector money is coming in around this name.",
+        }
+    if kind == "OUTFLOW":
+        return {
+            "verdict": "NO",
+            "verdict_line": "NO — sector money is leaving, not supporting this name.",
+        }
+    if kind == "MIXED":
+        return {
+            "verdict": "NO",
+            "verdict_line": "NO — sector tape is mixed; do not treat this as a supporting wave.",
+        }
+    return {
+        "verdict": "NO",
+        "verdict_line": "NO — not enough current sector evidence to claim a wave.",
+    }
+
+
 def build_sector_wave(
     symbol: str,
     workspace_sector: str = "",
@@ -385,6 +413,7 @@ def build_sector_wave(
         return {
             **ident,
             "wave": "NO_CLAIM",
+            **sector_wave_verdict("NO_CLAIM"),
             "headline": "Sector not identified — no inflow claim.",
             "note": "Sector is unknown in the NSE map, NSE quote, and Screener peer header — no inflow claim.",
             "chg_1d": None,
@@ -469,6 +498,7 @@ def build_sector_wave(
     return {
         **ident,
         "wave": wave,
+        **sector_wave_verdict(wave),
         "headline": headlines[wave],
         "note": (
             "NSE does not publish FII/DII by sector. This wave uses the stock's mapped "

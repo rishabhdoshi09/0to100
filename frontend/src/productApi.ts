@@ -487,6 +487,8 @@ export type BuyThesis = {
     identified?: boolean
     source?: string
     wave?: string
+    verdict?: 'YES' | 'NO' | string
+    verdict_line?: string
     headline?: string
     note?: string
     chg_1d?: number | null

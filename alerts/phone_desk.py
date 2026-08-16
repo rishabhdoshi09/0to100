@@ -170,6 +170,7 @@ def format_thesis(payload: Mapping[str, Any]) -> str:
         lines.append(f"Upside +{upside:.1f}% from buy — research, not an order.")
     lines.append("")
     lines.append("<b>Sector wave</b>")
+    lines.append(_esc(wave.get("verdict_line") or wave.get("verdict") or "NO"))
     lines.append(_esc(wave.get("headline") or "Sector not identified."))
     for item in list(wave.get("bullets") or [])[:3]:
         lines.append("· " + _esc(item)[:140])
