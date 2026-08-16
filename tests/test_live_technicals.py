@@ -120,6 +120,7 @@ def test_radar_home_uses_refreshed_rsi(monkeypatch):
                 row["pct_below_20d_high"] = 8.2
             elif row.get("symbol") == "SOLID":
                 row["pct_below_20d_high"] = 1.1
+                row["pct_below_52w_high"] = 2.0
             out.append(row)
         return out
 

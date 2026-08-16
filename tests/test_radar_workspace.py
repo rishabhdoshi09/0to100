@@ -69,6 +69,7 @@ def test_radar_home_builds_three_lanes():
                 "breakout_conviction": 55,
                 "avg_vol20": 1_000_000,
                 "pct_below_20d_high": 1.4,
+                "pct_below_52w_high": 2.0,
             },
             {
                 "symbol": "BEST",
@@ -84,6 +85,7 @@ def test_radar_home_builds_three_lanes():
                 "breakout_conviction": 82,
                 "avg_vol20": 2_000_000,
                 "pct_below_20d_high": 0.8,
+                "pct_below_52w_high": 1.5,
             },
             {
                 "symbol": "HOT",
@@ -189,6 +191,7 @@ def test_high_rsi_and_thin_volume_hard_rejected_from_best():
         "breakout_grade": "A", "breakout_conviction": 80, "score": 80,
         "avg_vol20": 1e6, "chase_risk": False,
         "pct_below_20d_high": 1.0,
+        "pct_below_52w_high": 2.0,
     }
     hot = {**base, "symbol": "HOT", "rsi": 85, "volume_ratio": 2.5}
     thin = {**base, "symbol": "THIN", "rsi": 55, "volume_ratio": 0.5}
@@ -243,6 +246,7 @@ def test_enrich_marks_graded_breakout_as_sniper_candidate():
             "avg_vol20": 1e6,
             "chase_risk": False,
             "pct_below_20d_high": 1.2,
+            "pct_below_52w_high": 2.0,
         },
         scanned_at="2026-01-01",
     )
@@ -286,6 +290,7 @@ def test_yatharth_shaped_fade_is_not_best_breakout():
         "breakout_conviction": 80,
         "avg_vol20": 1e6,
         "pct_below_20d_high": 1.1,
+        "pct_below_52w_high": 2.0,
     }
     assert is_sniper_breakout_candidate(faded) is False
     assert classify_breakout_state(faded) == "faded_breakout"

@@ -85,10 +85,10 @@ function BestSniperPanel({
     return (
       <div className="radar-best-breakout">
         <Panel
-          title={`BEST TECHNICAL BREAKOUT · ${best.symbol}`}
+          title={`Best live breakout · ${best.symbol}`}
           subtitle={
             [
-              sniperCount > 0 ? `${sniperCount} sniper candidate${sniperCount === 1 ? '' : 's'}` : null,
+              sniperCount > 0 ? `${sniperCount} confirmed setup${sniperCount === 1 ? '' : 's'}` : null,
               best.breakout_grade ? `Grade ${best.breakout_grade}` : null,
               best.rsi != null
                 ? `RSI ${Math.round(Number(best.rsi))}${best.tech_source === 'live' || best.price_tag === 'LIVE' ? ' LIVE' : ' EOD'}`
@@ -122,13 +122,13 @@ function BestSniperPanel({
   return (
     <div className="radar-best-breakout radar-best-empty">
       <Panel
-        title="BEST TECHNICAL BREAKOUT"
+        title="Best live breakout"
         subtitle="Volume ≥1.0× · still near the 20-day high · RSI ≤82 — tape only"
       >
         <p className="radar-empty-li">
           {sniperCount === 0
-            ? 'No sniper breakouts yet — thin volume / extended names stay out.'
-            : 'Sniper pool has names but none ranked as technical best.'}
+            ? 'No confirmed breakouts — thin volume or faded names stay out.'
+            : 'Confirmed pool has names but none still intact on the live bar.'}
         </p>
       </Panel>
     </div>
@@ -195,7 +195,7 @@ function BestAmongFundamentalsPanel({
         subtitle="Only uses fundamentals among already-valid breakout candidates"
       >
         <p className="radar-empty-li">
-          No breakout candidate has usable fundamental coverage yet — run long-term scan, or wait for fund data. Technical sniper lane above is independent.
+          No breakout candidate has usable fundamental coverage yet — run long-term scan, or wait for fund data. The confirmed-breakout list above is independent.
         </p>
       </Panel>
     </div>
@@ -270,7 +270,7 @@ function DenseTable({
           <tr>
             {cols.map((col) => (
               <th key={col} onClick={() => toggleSort(col)}>
-                {col === 'sniper' ? 'Sniper' : words(col.replace(/_/g, ' '))}
+                {col === 'sniper' ? 'Confirmed' : words(col.replace(/_/g, ' '))}
               </th>
             ))}
           </tr>
@@ -368,6 +368,7 @@ export function RadarHomeView(props: ExperienceViewProps & {
   }, [selected, dashboard.scan.scanned_at, dashboard.generated_at])
 
   const scanAt = radar?.scan_scanned_at || dashboard.scan.scanned_at || ''
+  const priceSession = radar?.price_session || radar?.market_as_of || dashboard.data.bhavcopy.latest_date || ''
   const kiteOk = dashboard.autonomy.state !== 'AUTH_REQUIRED'
     && !(dashboard.autonomy.active_failures || []).some((f) => String(f).includes('auth'))
   const emptyDesk = !scanAt
@@ -397,7 +398,7 @@ export function RadarHomeView(props: ExperienceViewProps & {
         <span>{title}</span>
         <strong>
           {count}
-          {qualityHint != null ? ` · ${qualityHint} sniper` : ''}
+          {qualityHint != null ? ` · ${qualityHint} confirmed` : ''}
         </strong>
       </header>
       <ul>
@@ -412,7 +413,7 @@ export function RadarHomeView(props: ExperienceViewProps & {
             >
               <b>
                 {item.symbol}
-                {item.sniper_candidate ? <em className="sniper-tag"> SNIPER</em> : null}
+                {item.sniper_candidate ? <em className="sniper-tag"> CONFIRMED</em> : null}
                 {thin ? <em className="thin-tag"> THIN VOL</em> : null}
               </b>
               <span>{thin ? 'No volume confirm' : (item.setup_label || item.status)}</span>
@@ -464,7 +465,11 @@ export function RadarHomeView(props: ExperienceViewProps & {
         <div>
           <span>SCAN</span>
           <strong>{relativeAge(scanAt)}</strong>
-          <small>{scanAt ? 'signals from last scan · prices refresh live' : 'run Scan now'}</small>
+          <small>
+            {scanAt
+              ? `signal list from last scan · bars as of ${priceSession || 'last session'} EOD`
+              : 'run Scan now'}
+          </small>
         </div>
         <div>
           <span>PRICE DATA</span>
@@ -526,7 +531,7 @@ export function RadarHomeView(props: ExperienceViewProps & {
       {(radar?.sniper_candidates?.length || 0) > 0 && (
         <section className="radar-sniper-pool">
           <header>
-            <span>SNIPER BREAKOUT CANDIDATES</span>
+            <span>CONFIRMED BREAKOUTS</span>
             <strong>{radar?.sniper_candidates?.length}</strong>
           </header>
           <ul>
@@ -713,7 +718,7 @@ export function MarketScannerView(props: ExperienceViewProps & { onCompare: (sym
         {tab === 'Breakouts' && (
           <label className="scanner-check">
             <input type="checkbox" checked={sniperOnly} onChange={(e) => setSniperOnly(e.target.checked)} />
-            Sniper candidates only
+            Confirmed setups only
           </label>
         )}
       </div>
@@ -722,7 +727,7 @@ export function MarketScannerView(props: ExperienceViewProps & { onCompare: (sym
         <Panel
           title={`${tab.toUpperCase()} · ${filtered.length}`}
           subtitle={tab === 'Breakouts'
-            ? `Sniper-first rank · ${sniperCount} sniper candidate${sniperCount === 1 ? '' : 's'} · thin volume marked red`
+            ? `Confirmed-first rank · ${sniperCount} intact setup${sniperCount === 1 ? '' : 's'} · thin volume marked red`
             : 'Sorted from persisted backend scan · tape fields refresh live'}
         >
           <DenseTable rows={filtered} selected={selected} onSelect={setSelected} depth={depth} mode={tab} />

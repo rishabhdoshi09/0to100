@@ -462,15 +462,7 @@ body {
   --lift: 0 14px 34px rgba(0,0,0,.45), 0 0 0 1px rgba(139,123,240,.28);
 }
 
-/* live page ambience — a soft moving aurora behind the shell */
-body::before{
-  content:""; position:fixed; inset:-20% -10% auto -10%; height:70%; z-index:-1; pointer-events:none;
-  background:
-    radial-gradient(720px 360px at 20% 0%, rgba(139,123,240,.16), transparent 60%),
-    radial-gradient(680px 340px at 88% 8%, rgba(67,217,255,.12), transparent 60%);
-  filter:saturate(1.1); animation:qt-aurora 16s ease-in-out infinite alternate;
-}
-@keyframes qt-aurora{ from{transform:translateX(-2%) translateY(-1%)} to{transform:translateX(3%) translateY(2%)} }
+/* Quiet desk — no moving aurora / costume glow. */}
 
 /* cards / panels / tiles come alive on hover */
 .panel, .today-strip>div, .scanner-lane-cards article, .quality-overlay-grid>div,
@@ -488,18 +480,16 @@ body::before{
 .nav-item{ transition: background .15s, color .15s, box-shadow .2s, transform .12s; border-radius:11px; }
 .nav-item:hover{ transform: translateX(1px); color:#e8eeff; }
 .nav-item.active{
-  background: linear-gradient(135deg, rgba(139,123,240,.28), rgba(67,217,255,.12));
-  border: 1px solid rgba(139,123,240,.5);
-  box-shadow: inset 0 0 0 1px rgba(139,123,240,.12), 0 0 18px -4px var(--glow-v);
+  background: rgba(38, 215, 255, .08);
+  border: 1px solid var(--border);
   color:#fff;
 }
 
 /* punchy numbers — the quant-terminal read */
 .today-strip strong, .scanner-lane-cards strong, .long-term-metric-strip strong,
 .evidence-stat-grid strong, .quality-overlay-grid strong{
-  font-size: 22px; font-weight: 800; letter-spacing:-.02em;
+  font-size: 22px; font-weight: 700; letter-spacing:-.02em;
   font-variant-numeric: tabular-nums;
-  background: linear-gradient(180deg, #ffffff, #cfe6ff); -webkit-background-clip:text; background-clip:text; color:transparent;
 }
 .metric-purple strong, .metric-purple .num{ color:#cabfff; }
 

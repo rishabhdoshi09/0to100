@@ -154,9 +154,13 @@ def test_live_structure_rejects_faded_best_and_sniper():
     assert live_breakout_intact(unknown, for_best=False)[0] is True
     assert live_breakout_intact(unknown, for_best=True)[0] is False
 
-    intact = {"pct_below_20d_high": 1.0, "rsi": 55, "chase_risk": False}
+    intact = {"pct_below_20d_high": 1.0, "pct_below_52w_high": 2.0, "rsi": 55, "chase_risk": False}
     assert live_breakout_intact(intact, for_best=False)[0] is True
     assert live_breakout_intact(intact, for_best=True)[0] is True
+
+    midrange = {"pct_below_20d_high": 0.8, "pct_below_52w_high": 12.6, "rsi": 63, "chase_risk": False}
+    assert live_breakout_intact(midrange, for_best=False)[0] is True
+    assert live_breakout_intact(midrange, for_best=True)[0] is False
 
     rollover = {"pct_below_20d_high": 3.2, "rsi": 47, "chase_risk": False}
     assert live_breakout_intact(rollover, for_best=False)[0] is False

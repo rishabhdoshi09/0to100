@@ -22,6 +22,8 @@ RSI_HARD = 82.0
 FADE_20D_PCT = 5.0
 ROLLOVER_20D_PCT = 2.5
 ROLLOVER_RSI = 50.0
+# Hero card only: a "best breakout" must be near the 52-week high.
+BEST_52W_PCT = 8.0
 MIN_FUND_COVERAGE = 0.50
 AVOID_CLASSES = frozenset({"AVOID_REVIEW"})
 QUALITY_CLASSES = frozenset({
@@ -48,14 +50,22 @@ def passes_volume_floor(row: Mapping[str, Any], *, min_ratio: float = MIN_VOLUME
     return vol >= float(min_ratio)
 
 
-def pct_below_20d_high(row: Mapping[str, Any]) -> float | None:
-    raw = row.get("pct_below_20d_high")
+def _pct_field(row: Mapping[str, Any], key: str) -> float | None:
+    raw = row.get(key)
     if raw is None or raw == "":
         return None
     try:
         return float(raw)
     except (TypeError, ValueError):
         return None
+
+
+def pct_below_20d_high(row: Mapping[str, Any]) -> float | None:
+    return _pct_field(row, "pct_below_20d_high")
+
+
+def pct_below_52w_high(row: Mapping[str, Any]) -> float | None:
+    return _pct_field(row, "pct_below_52w_high")
 
 
 def live_breakout_intact(row: Mapping[str, Any], *, for_best: bool = False) -> tuple[bool, list[str]]:
@@ -85,8 +95,12 @@ def live_breakout_intact(row: Mapping[str, Any], *, for_best: bool = False) -> t
     elif rsi > 0 and rsi < ROLLOVER_RSI and below > ROLLOVER_20D_PCT:
         reasons.append(f"RSI {rsi:.0f} and {below:.1f}% off 20-day high — rolled over")
 
-    if for_best and bool(row.get("chase_risk")):
-        reasons.append("chase/extension risk")
+    if for_best:
+        below52 = pct_below_52w_high(row)
+        if below52 is not None and below52 > BEST_52W_PCT:
+            reasons.append(f"{below52:.1f}% below 52-week high — not a leading breakout")
+        if bool(row.get("chase_risk")):
+            reasons.append("chase/extension risk")
 
     return not reasons, reasons
 
