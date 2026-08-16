@@ -75,10 +75,32 @@ def test_resolve_sector_prefers_universe_map():
 
 
 def test_sector_wave_no_claim_when_sector_unknown():
-    wave = build_sector_wave("ZZZNOTASECTOR", workspace_sector="", scan_records=[], flows={})
+    from unittest.mock import patch
+    with patch("product.buy_thesis.resolve_sector", return_value={
+        "sector": "", "source": "", "mapped": "", "workspace": "", "identified": False,
+        "nse_sector": "", "nse_industry": "",
+    }):
+        wave = build_sector_wave("ZZZNOTASECTOR", workspace_sector="", scan_records=[], flows={})
     assert wave["wave"] == "NO_CLAIM"
     assert wave["identified"] is False
     assert "inflow" not in wave["headline"].lower() or "not identified" in wave["headline"].lower()
+
+
+def test_nse_industry_aligns_to_mapped_sector():
+    from unittest.mock import patch
+    with patch("scan.sector_heat.sector_of", return_value=""), \
+         patch("data.nse_live.fetch_equity_industry", return_value={
+             "macro": "Industrials",
+             "sector": "Capital Goods",
+             "industry": "Industrial Manufacturing",
+             "basic_industry": "Mining Machinery",
+             "source": "nse_quote_equity",
+             "error": "",
+         }):
+        ident = resolve_sector("EIMCOELECO", workspace_sector="Unclassified")
+    assert ident["identified"]
+    assert ident["source"] == "nse_industry"
+    assert "Capital Goods" in ident["sector"] or ident["sector"] == "Engineering"
 
 
 def test_sector_wave_inflow_from_basket_and_pack():
@@ -167,3 +189,15 @@ def test_earnings_block_reads_quarters_margins_valuations():
     joined = " ".join(block["bullets"])
     assert "P/E" in joined
     assert "Operating margin" in joined
+
+    from_book = _earnings_block(
+        {
+            "key_ratios": [
+                {"name": "Current Price", "value": "2,006"},
+                {"name": "Book Value", "value": "669"},
+            ]
+        },
+        [{"key": "pe", "label": "Price / earnings", "value": 30.2, "unit": "x"}],
+    )
+    pb = next(v for v in from_book["valuations"] if v["key"] == "pb")
+    assert 2.5 < pb["value"] < 4.0

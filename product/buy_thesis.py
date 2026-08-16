@@ -101,6 +101,29 @@ def _series_change(series: Sequence[Mapping[str, Any]], steps: int = 1) -> dict[
     }
 
 
+def _align_to_mapped_sector(nse_name: str) -> str:
+    """Map an NSE industryInfo label onto the scanner's sector-heat names."""
+    needle = str(nse_name or "").strip().lower()
+    if not needle:
+        return ""
+    try:
+        from scan.sector_heat import _load_map
+        names = sorted({sec for sec in (_load_map() or {}).values() if sec})
+    except Exception:
+        names = []
+    for sec in names:
+        low = sec.lower()
+        if needle == low or needle in low or low in needle:
+            return sec
+    tokens = [t for t in needle.replace("&", " ").replace("/", " ").split() if len(t) > 3]
+    best, best_hits = "", 0
+    for sec in names:
+        hits = sum(1 for t in tokens if t in sec.lower())
+        if hits > best_hits:
+            best, best_hits = sec, hits
+    return best if best_hits >= 1 else ""
+
+
 def resolve_sector(symbol: str, workspace_sector: str = "") -> dict[str, Any]:
     """Identify the stock's sector before any wave claim."""
     mapped = ""
@@ -112,9 +135,27 @@ def resolve_sector(symbol: str, workspace_sector: str = "") -> dict[str, Any]:
     ws = str(workspace_sector or "").strip()
     if ws.lower() in {"", "unclassified", "unknown", "other"}:
         ws = ""
-    sector = mapped or ws
+    nse = {}
+    nse_label = ""
+    aligned = ""
+    if not mapped:
+        try:
+            from data.nse_live import fetch_equity_industry
+            nse = fetch_equity_industry(symbol) or {}
+        except Exception:
+            nse = {}
+        for key in ("sector", "industry", "basic_industry", "macro"):
+            nse_label = str(nse.get(key) or "").strip()
+            if nse_label:
+                break
+        aligned = _align_to_mapped_sector(nse.get("sector") or "") or _align_to_mapped_sector(nse_label)
+    sector = mapped or aligned or nse_label or ws
     if mapped:
         source = "nse_universe_map"
+    elif aligned:
+        source = "nse_industry"
+    elif nse_label:
+        source = "nse_industry"
     elif ws:
         source = "workspace"
     else:
@@ -124,6 +165,8 @@ def resolve_sector(symbol: str, workspace_sector: str = "") -> dict[str, Any]:
         "source": source,
         "mapped": mapped,
         "workspace": ws,
+        "nse_sector": str((nse or {}).get("sector") or ""),
+        "nse_industry": str((nse or {}).get("industry") or nse_label),
         "identified": bool(sector),
     }
 
@@ -385,6 +428,12 @@ def build_sector_wave(
         "MIXED": f"{sector} is mixed — some inflow evidence, some outflow. Not a clean wave.",
         "NO_CLAIM": f"{sector} identified, but there is not enough evidence to call a wave.",
     }
+    if wave == "INFLOW" and bulk["net_qty"] > 0 and (chg5 is None or chg5 <= 0):
+        headlines["INFLOW"] = (
+            f"{sector}: NSE bulk/block buying in the pack, even though the basket is not up."
+        )
+    elif wave == "INFLOW" and chg5 is not None and chg5 > 0:
+        headlines["INFLOW"] = f"{sector} basket is ahead of Nifty — money is rotating here."
     return {
         **ident,
         "wave": wave,
@@ -581,13 +630,19 @@ def _earnings_block(raw_data: Mapping[str, Any], fund_metrics: Sequence[Mapping[
         _metric("pe"), _metric("market_cap"), _metric("roe"), _metric("roce"),
     ) if item]
     pb = None
+    price = book = None
     for item in raw_data.get("key_ratios") or []:
         if not isinstance(item, Mapping):
             continue
-        name = str(item.get("name") or "").lower()
-        if "p/b" in name or "price to book" in name or name.strip() in {"pb", "book value"}:
+        name = str(item.get("name") or "").lower().strip()
+        if name in {"p/b", "pb"} or "p/b" in name or "price to book" in name or "price/book" in name:
             pb = _f(item.get("value"))
-            break
+        elif name in {"current price", "price"}:
+            price = _f(item.get("value"))
+        elif name == "book value":
+            book = _f(item.get("value"))
+    if pb is None and price and book and book > 0:
+        pb = round(price / book, 2)
     if pb is not None:
         valuations.append({"key": "pb", "label": "Price / book", "value": pb, "unit": "x"})
 
