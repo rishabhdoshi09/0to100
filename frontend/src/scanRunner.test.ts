@@ -9,6 +9,9 @@ import {
   qualifiedResultLine,
   secondsSinceUpdate,
   staleProgressHint,
+  estimateRemainingSeconds,
+  formatRemaining,
+  jobClock,
   TERMINAL_STATUSES,
 } from './scanRunner'
 import type { OperationRecord } from './types'
@@ -83,6 +86,26 @@ describe('scanRunner semantics', () => {
   it('never invents a percentage without totals', () => {
     expect(progressPercent(baseOperation({ progress_pct: null, progress_total: 0 }))).toBeNull()
     expect(progressPercent(baseOperation({ progress_current: 50, progress_total: 200 }))).toBe(25)
+  })
+
+  it('estimates remaining time from observed scan rate', () => {
+    expect(estimateRemainingSeconds(3, 10, 100, 1000)).toBeNull()
+    expect(estimateRemainingSeconds(40, 25, 800, 3200)).toBe(120)
+    expect(formatRemaining(125)).toBe('~2m 5s left')
+    expect(formatRemaining(null, 120)).toBe('usually ~2m')
+    const clock = jobClock({
+      kind: 'MARKET_SCAN',
+      isActive: true,
+      friendlyPhase: 'Scanning market candidates…',
+      progressLine: '1,200 of 3,191 stocks',
+      percent: 38,
+      elapsedSeconds: 50,
+      current: 1200,
+      total: 3191,
+    })
+    expect(clock.button).toMatch(/Working… 38%/)
+    expect(clock.button).toMatch(/left/)
+    expect(clock.line).toMatch(/elapsed/)
   })
 
   it('surfaces qualified counts from persisted results', () => {

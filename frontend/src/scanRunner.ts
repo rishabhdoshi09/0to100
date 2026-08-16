@@ -124,9 +124,79 @@ export function formatElapsed(seconds: number): string {
   if (s < 60) return `${s}s`
   const m = Math.floor(s / 60)
   const rem = s % 60
-  if (m < 60) return `${m}m ${rem}s`
+  if (m < 60) return rem === 0 ? `${m}m` : `${m}m ${rem}s`
   const h = Math.floor(m / 60)
   return `${h}h ${m % 60}m`
+}
+
+/** Seconds still needed, from observed rate. Null until enough progress exists. */
+export function estimateRemainingSeconds(
+  elapsedSeconds: number,
+  percent: number | null,
+  current = 0,
+  total = 0,
+): number | null {
+  const elapsed = Math.max(0, Number(elapsedSeconds) || 0)
+  if (elapsed < 8) return null
+  if (total > 0 && current > 8) {
+    const rate = current / elapsed
+    if (rate > 0) return Math.max(0, Math.round((total - current) / rate))
+  }
+  if (percent != null && percent >= 3 && percent < 100) {
+    return Math.max(0, Math.round(elapsed * (100 - percent) / percent))
+  }
+  return null
+}
+
+export function formatRemaining(seconds: number | null, typicalSeconds?: number | null): string {
+  if (seconds != null && Number.isFinite(seconds)) {
+    if (seconds <= 5) return 'a few seconds left'
+    return `~${formatElapsed(seconds)} left`
+  }
+  if (typicalSeconds != null && typicalSeconds > 0) {
+    return `usually ~${formatElapsed(typicalSeconds)}`
+  }
+  return ''
+}
+
+export const TYPICAL_JOB_SECONDS: Record<string, number> = {
+  MARKET_SCAN: 120,
+  LONG_TERM_SCAN: 240,
+}
+
+export function jobClock(input: {
+  kind: string
+  isActive: boolean
+  friendlyPhase: string
+  progressLine: string | null
+  percent: number | null
+  elapsedSeconds: number
+  current?: number
+  total?: number
+}): {
+  button: string
+  line: string
+  percent: number | null
+  remaining: number | null
+} {
+  const typical = TYPICAL_JOB_SECONDS[input.kind] || 120
+  const remaining = input.isActive
+    ? estimateRemainingSeconds(
+      input.elapsedSeconds,
+      input.percent,
+      Number(input.current || 0),
+      Number(input.total || 0),
+    )
+    : null
+  const eta = formatRemaining(remaining, typical)
+  const pct = input.percent != null ? `${Math.round(input.percent)}%` : null
+  const button = [pct ? `Working… ${pct}` : 'Working…', eta].filter(Boolean).join(' · ')
+  const line = [
+    input.progressLine || input.friendlyPhase,
+    input.elapsedSeconds > 0 ? `elapsed ${formatElapsed(input.elapsedSeconds)}` : null,
+    eta,
+  ].filter(Boolean).join(' · ')
+  return { button, line, percent: input.percent, remaining }
 }
 
 export function qualifiedResultLine(operation: OperationRecord | null): string | null {

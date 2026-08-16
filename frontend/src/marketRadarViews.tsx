@@ -5,24 +5,23 @@ import {
   addWatchlistItem,
   bootstrapProduct,
   fetchCompareWorkspace,
-  fetchPreTrade,
   fetchProductReadiness,
   fetchRadarHome,
   fetchScannerWorkspace,
   fetchWatchlist,
   removeWatchlistItem,
   type CompareWorkspace,
-  type PreTrade,
   type ProductReadiness,
   type RadarHome,
   type ScannerWorkspaceRow,
   type WatchlistPayload,
 } from './productApi'
-import { RiskLensCard } from './productViews'
 import { LiveScanBanner, type ExperienceViewProps } from './experience'
 import { EvChip } from './evChip'
 import { HomeTodayPath, useTodayFloors } from './HomeTodayPath'
 import { decideNextStep, type FloorContext } from './homeFloorPath'
+import { jobClock } from './scanRunner'
+import { BuyThesisSheet } from './BuyThesisSheet'
 import type { DashboardPayload } from './types'
 
 type RadarRow = ScannerWorkspaceRow & {
@@ -497,7 +496,6 @@ export function RadarHomeView(props: ExperienceViewProps & {
   const { dashboard, selected, setSelected, bars, setActive, depth, marketScan, longTermScan, runControl, onCompare, onWatchlist, onOpenFloor } = props
   const todayPath = useTodayFloors()
   const [radar, setRadar] = useState<RadarHome | null>(null)
-  const [preTrade, setPreTrade] = useState<PreTrade | null>(null)
   const [readiness, setReadiness] = useState<ProductReadiness | null>(null)
   const [bootstrapBusy, setBootstrapBusy] = useState(false)
   const [deskNote, setDeskNote] = useState('')
@@ -520,19 +518,6 @@ export function RadarHomeView(props: ExperienceViewProps & {
     const timer = window.setInterval(load, 20_000)
     return () => { alive = false; window.clearInterval(timer) }
   }, [dashboard.scan.scanned_at, dashboard.long_term.scanned_at, dashboard.generated_at])
-
-  useEffect(() => {
-    if (!selected) { setPreTrade(null); return }
-    let alive = true
-    const load = () => {
-      fetchPreTrade(selected)
-        .then((payload) => { if (alive) setPreTrade(payload) })
-        .catch(() => { if (alive) setPreTrade(null) })
-    }
-    load()
-    const timer = window.setInterval(load, 20_000)
-    return () => { alive = false; window.clearInterval(timer) }
-  }, [selected, dashboard.scan.scanned_at, dashboard.generated_at])
 
   const scanCount = dashboard.scan.records?.length || 0
   const radarCount = (radar?.counts.breakouts || 0) + (radar?.counts.momentum || 0) + (radar?.counts.long_term_picks || 0)
@@ -559,10 +544,30 @@ export function RadarHomeView(props: ExperienceViewProps & {
     readinessScore,
     scanRecords: scanCount,
     longTermRecords: longTermCount,
-    scanBusy: marketScan.isBusy || bootstrapBusy,
-    longTermBusy: longTermScan.isBusy,
+    scanBusy: marketScan.isActive || bootstrapBusy,
+    longTermBusy: longTermScan.isActive,
   })
-  const pathProgress = marketScan.progressLine || longTermScan.progressLine || deskNote
+  const activeScan = marketScan.isActive ? marketScan : longTermScan.isActive ? longTermScan : null
+  const clock = activeScan
+    ? jobClock({
+      kind: activeScan.kind,
+      isActive: activeScan.isActive,
+      friendlyPhase: activeScan.friendlyPhase,
+      progressLine: activeScan.progressLine,
+      percent: activeScan.percent,
+      elapsedSeconds: activeScan.elapsedSeconds,
+      current: activeScan.operation?.progress_current,
+      total: activeScan.operation?.progress_total,
+    })
+    : bootstrapBusy
+      ? {
+        button: 'Working… usually ~2m',
+        line: deskNote || "Filling today's desk — files, then names…",
+        percent: null,
+        remaining: null,
+      }
+      : null
+  const pathProgress = clock?.line || deskNote
 
   const doNext = async () => {
     const step = decideNextStep({
@@ -570,8 +575,8 @@ export function RadarHomeView(props: ExperienceViewProps & {
       readinessScore,
       scanRecords: scanCount,
       longTermRecords: longTermCount,
-      scanBusy: marketScan.isBusy || bootstrapBusy,
-      longTermBusy: longTermScan.isBusy,
+      scanBusy: marketScan.isActive || bootstrapBusy,
+      longTermBusy: longTermScan.isActive,
     })
     if (step.id === 'working') return
     if (step.id === 'see_picture') {
@@ -585,8 +590,8 @@ export function RadarHomeView(props: ExperienceViewProps & {
         const result = await bootstrapProduct()
         setReadiness(result.readiness)
         setDeskNote(result.message || 'Desk is filling…')
-        if (scanCount <= 0 && !marketScan.isBusy) await marketScan.start()
-        if (longTermCount <= 0 && !longTermScan.isBusy) await longTermScan.start()
+        if (scanCount <= 0 && !marketScan.isActive) await marketScan.start()
+        if (longTermCount <= 0 && !longTermScan.isActive) await longTermScan.start()
         if (fnoMapped === 0) {
           try {
             await runControl('REFRESH_FNO_NOW')
@@ -669,6 +674,7 @@ export function RadarHomeView(props: ExperienceViewProps & {
         error={todayPath.error}
         step={nextStep}
         progress={pathProgress || ''}
+        clock={clock}
         onOpen={() => void doNext()}
         onJump={jumpFloor}
       />
@@ -793,58 +799,16 @@ export function RadarHomeView(props: ExperienceViewProps & {
       )}
 
       {selected ? (
-        <section className="reco-sheet">
-          <header className="reco-sheet-hero">
-            <p>{(row as RadarRow)?.sector || 'Selected name'}</p>
-            <h2>{(row as RadarRow)?.company || selected}</h2>
-            <p>{(row as RadarRow)?.reason || preTrade?.plan_summary || preTrade?.meaning || 'Check rupee risk before opening full research.'}</p>
-          </header>
-          <div className="reco-sheet-kpis">
-            <div>
-              <span>Buy</span>
-              <strong>{money(preTrade?.plan?.entry ?? preTrade?.scan?.entry ?? (row as RadarRow)?.entry, 2)}</strong>
-            </div>
-            <div>
-              <span>Stop</span>
-              <strong>{money(preTrade?.plan?.stop ?? preTrade?.scan?.stop ?? (row as RadarRow)?.stop, 2)}</strong>
-            </div>
-            <div>
-              <span>Target</span>
-              <strong>{money(preTrade?.plan?.target ?? preTrade?.scan?.target ?? (row as RadarRow)?.target, 2)}</strong>
-            </div>
-            <div>
-              <span>Pre-trade</span>
-              <strong>{preTrade?.verdict || '—'}</strong>
-            </div>
-          </div>
-          <div className="reco-next">{deskNote || dashboard.market.trade_stance}</div>
-          {(preTrade?.blockers || []).length > 0 ? (
-            <div className="reco-sheet-cols">
-              <div>
-                <h3>What blocks a trade</h3>
-                <ul>{preTrade!.blockers!.slice(0, 4).map((item) => <li key={item}>{item}</li>)}</ul>
-              </div>
-              <div>
-                <h3>Leaders / laggards</h3>
-                <p>
-                  Leading {(radar?.leaders || dashboard.market.leaders).slice(0, 3).join(', ') || '—'}.
-                  Lagging {(radar?.laggards || dashboard.market.laggards).slice(0, 3).join(', ') || '—'}.
-                </p>
-              </div>
-            </div>
-          ) : null}
-          <RiskLensCard plan={preTrade?.plan || null} />
-          <div className="reco-sheet-actions">
-            <button type="button" className="reco-primary" onClick={() => setActive('Stock Intelligence')}>Full research</button>
-            <button type="button" className="reco-ghost" onClick={() => onCompare(selected)}>Compare</button>
-            <button type="button" className="reco-ghost" onClick={() => onWatchlist(selected)}>Watchlist</button>
-          </div>
-          <div className="reco-chart-card">
-            <ChartWorkspace symbol={selected} bars={bars} row={row} />
-          </div>
-        </section>
+        <BuyThesisSheet
+          symbol={selected}
+          bars={bars}
+          row={row as Record<string, unknown> | null}
+          onOpenResearch={() => setActive('Stock Intelligence')}
+          onCompare={() => onCompare(selected)}
+          onWatchlist={() => onWatchlist(selected)}
+        />
       ) : (
-        <p className="reco-foot">Pick one name — then check rupee risk here before opening research.</p>
+        <p className="reco-foot">Click a name for the buy thesis — why it is here, filings, sales, book, and chart.</p>
       )}
 
       <p className="reco-foot">
