@@ -658,15 +658,24 @@ def build_recommendations_workspace(
     scan_rows = [enrich_scan_row(dict(r), scanned_at=scan_at) for r in (scan.get("records") or [])]
     lt_rows = [enrich_long_term_row(dict(r), scanned_at=lt_at) for r in (lt.get("records") or [])]
 
-    if refresh_technicals and scan_rows:
+    if refresh_technicals and (scan_rows or lt_rows):
         try:
             from product.live_technicals import refresh_rows_technicals
-            # Refresh head for CMP/RSI honesty on the desk.
-            head = refresh_rows_technicals(scan_rows[:120], bulk_overlay=True)
-            by = {str(r.get("symbol")).upper(): r for r in head}
-            scan_rows = [by.get(str(r.get("symbol")).upper(), r) for r in scan_rows]
+            # Latest CMP / RSI / entry / target for every row we will show.
+            # Store-local after one live overlay — no per-symbol scrapes.
+            scan_rows = refresh_rows_technicals(scan_rows, bulk_overlay=True)
+            if lt_rows:
+                lt_rows = refresh_rows_technicals(lt_rows, bulk_overlay=False)
         except Exception:
             pass
+
+    try:
+        from product.live_technicals import apply_current_trade_levels
+        for row in (*scan_rows, *lt_rows):
+            if _f(row.get("price") or row.get("cmp")) > 0:
+                apply_current_trade_levels(row, None)
+    except Exception:
+        pass
 
     attach_live_ev(scan_rows)
     desk = build_desk_context(scan_rows)
@@ -686,9 +695,10 @@ def build_recommendations_workspace(
         })
 
     cmp_note = (
-        "CMP uses live Kite/NSE overlay when available; otherwise last official EOD. "
-        "Each scan symbol maps to one primary category (breakout → recovery → trend). "
-        "Scan signals are research snapshots — check scanned_at."
+        "CMP is the latest official/live bar (Kite/NSE overlay when the market "
+        "is open; otherwise last EOD). Missing entry, stop and target are filled "
+        "from that bar. Scanner buy-zone levels that already exist stay intact. "
+        "Each scan symbol maps to one primary category (breakout → recovery → trend)."
     )
     if str(scan.get("records_status") or "") == "PRIOR_DAY_SNAPSHOT":
         cmp_note = "Scan file is a PRIOR-DAY SNAPSHOT — run a fresh market scan before acting. " + cmp_note
@@ -722,11 +732,7 @@ def build_recommendations_workspace(
 
 
 def _persist_pulse(pulse: Mapping[str, Any]) -> Path | None:
-    try:
-        from core.market_clock import today_ist
-        day = today_ist().isoformat()
-    except Exception:
-        day = datetime.now(timezone.utc).date().isoformat()
+    day = str(pulse.get("as_of_ist") or "") or _ist_day()
     REPORTS_DIR.mkdir(parents=True, exist_ok=True)
     path = REPORTS_DIR / f"market_pulse_{day}.json"
     try:
@@ -747,7 +753,73 @@ def _persist_pulse(pulse: Mapping[str, Any]) -> Path | None:
         return None
 
 
-def _list_saved_reports(limit: int = 30) -> list[dict[str, Any]]:
+def _ist_day() -> str:
+    try:
+        from core.market_clock import today_ist
+        return today_ist().isoformat()
+    except Exception:
+        return datetime.now(timezone.utc).date().isoformat()
+
+
+def _compact_movers(rows: Any, limit: int = 5) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    for row in list(rows or [])[:limit]:
+        if not isinstance(row, Mapping):
+            continue
+        symbol = str(row.get("symbol") or "").upper()
+        if not symbol:
+            continue
+        item: dict[str, Any] = {"symbol": symbol}
+        price = _f(row.get("price"))
+        chg = row.get("chg_pct")
+        if price > 0:
+            item["price"] = price
+        if chg is not None:
+            item["chg_pct"] = _f(chg)
+        out.append(item)
+    return out
+
+
+def _report_item(data: Mapping[str, Any], *, path: str = "", today: str = "") -> dict[str, Any]:
+    pulse = dict(data.get("pulse") or {})
+    day = str(data.get("date") or pulse.get("as_of_ist") or "")
+    breakouts = pulse.get("breakouts_today") or []
+    snapshot = dict(pulse.get("snapshot") or {})
+    indices = []
+    for idx in snapshot.get("indices") or []:
+        if not isinstance(idx, Mapping):
+            continue
+        indices.append({
+            "name": str(idx.get("name") or ""),
+            "price": idx.get("price"),
+            "chg_pct": idx.get("chg_pct"),
+        })
+    return {
+        "id": str(data.get("id") or f"market_pulse_{day}"),
+        "title": str(data.get("title") or "Market Pulse"),
+        "kind": str(data.get("kind") or "market_pulse"),
+        "date": day,
+        "created_at": str(data.get("created_at") or ""),
+        "is_new": bool(today and day == today),
+        "badge": "Today" if today and day == today else "",
+        "summary": _pulse_summary(pulse),
+        "takeaways": [str(t) for t in (pulse.get("takeaways") or [])[:6]],
+        "breakouts_today": [
+            str(b.get("symbol") if isinstance(b, Mapping) else b)
+            for b in breakouts if b
+        ],
+        "gainers": _compact_movers(pulse.get("gainers")),
+        "losers": _compact_movers(pulse.get("losers")),
+        "snapshot": {
+            "indices": indices,
+            "commentary": str(snapshot.get("commentary") or ""),
+        },
+        "as_of_ist": str(pulse.get("as_of_ist") or day),
+        "path": path,
+    }
+
+
+def _list_saved_reports(limit: int = 30, *, today: str = "") -> list[dict[str, Any]]:
     if not REPORTS_DIR.exists():
         return []
     import json
@@ -755,20 +827,12 @@ def _list_saved_reports(limit: int = 30) -> list[dict[str, Any]]:
     for path in sorted(REPORTS_DIR.glob("market_pulse_*.json"), reverse=True):
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
-            rows.append({
-                "id": str(data.get("id") or path.stem),
-                "title": str(data.get("title") or "Market Pulse"),
-                "kind": str(data.get("kind") or "market_pulse"),
-                "date": str(data.get("date") or ""),
-                "created_at": str(data.get("created_at") or ""),
-                "is_new": False,
-                "summary": _pulse_summary(data.get("pulse") or {}),
-                "path": str(path),
-            })
+            rows.append(_report_item(data, path=str(path), today=today))
         except Exception:
             continue
         if len(rows) >= limit:
             break
+    rows.sort(key=lambda r: str(r.get("date") or ""), reverse=True)
     return rows
 
 
@@ -789,38 +853,35 @@ def build_market_reports_workspace(*, persist_today: bool = True) -> dict[str, A
     except Exception as exc:
         error = str(exc)[:200]
 
+    today = _ist_day()
     if pulse and persist_today:
+        pulse.setdefault("as_of_ist", today)
         _persist_pulse(pulse)
 
-    reports = _list_saved_reports()
-    if reports:
-        reports[0]["is_new"] = True
-        reports[0]["badge"] = "New market report"
-    elif pulse:
-        try:
-            from core.market_clock import today_ist
-            day = today_ist().isoformat()
-        except Exception:
-            day = datetime.now(timezone.utc).date().isoformat()
-        reports = [{
-            "id": f"market_pulse_{day}",
+    reports = _list_saved_reports(today=today)
+    if pulse and not any(r.get("date") == today for r in reports):
+        reports.insert(0, _report_item({
+            "id": f"market_pulse_{today}",
             "title": "Market Pulse",
             "kind": "market_pulse",
-            "date": day,
+            "date": today,
             "created_at": datetime.now(timezone.utc).isoformat(),
-            "is_new": True,
-            "badge": "New market report",
-            "summary": _pulse_summary(pulse),
-            "path": "",
-        }]
+            "pulse": pulse,
+        }, today=today))
+    today_rows = [r for r in reports if r.get("is_new")]
+    older = [r for r in reports if not r.get("is_new")]
+    older.sort(key=lambda r: str(r.get("date") or ""), reverse=True)
+    reports = today_rows + older
 
+    as_of = str((pulse or {}).get("as_of_ist") or today)
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "generated_at": datetime.now(timezone.utc).isoformat(),
+        "as_of_ist": as_of,
         "title": "Stay on top of the markets",
         "blurb": (
-            "Daily Market Pulse from QuantTerm scanners — trends, sector movers, "
-            "and breakout context. Assembled from live system state, never invented."
+            "Daily Market Pulse from the latest official/live session — "
+            "trends, sector movers and breakout context. Never a prior-day leftover."
         ),
         "reports": reports,
         "today_pulse": pulse,

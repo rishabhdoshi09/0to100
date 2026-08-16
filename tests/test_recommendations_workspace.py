@@ -221,6 +221,168 @@ def test_market_reports_lists_today_pulse(tmp_path, monkeypatch):
     assert payload["reports"][0]["title"] == "Market Pulse"
     assert (tmp_path / list(tmp_path.glob("market_pulse_*.json"))[0]).exists()
     assert "Nifty" in payload["reports"][0]["summary"]
+    assert payload["reports"][0]["is_new"] is True
+    assert payload.get("as_of_ist")
+
+
+def test_old_market_report_is_not_marked_today(tmp_path, monkeypatch):
+    import json
+    import product.recommendations_workspace as rw
+
+    monkeypatch.setattr(rw, "REPORTS_DIR", tmp_path)
+    old = tmp_path / "market_pulse_2026-01-01.json"
+    old.write_text(json.dumps({
+        "id": "market_pulse_2026-01-01",
+        "title": "Market Pulse",
+        "kind": "market_pulse",
+        "date": "2026-01-01",
+        "created_at": "2026-01-01T00:00:00+00:00",
+        "pulse": {"takeaways": ["Ancient tape"], "as_of_ist": "2026-01-01"},
+    }), encoding="utf-8")
+    monkeypatch.setattr(
+        "reports.street_pulse.build_pulse",
+        lambda: {
+            "date": "16 August 2026",
+            "as_of_ist": "2026-08-16",
+            "takeaways": ["Fresh Nifty"],
+            "gainers": [], "losers": [], "breakouts_today": [],
+        },
+    )
+    monkeypatch.setattr(rw, "_ist_day", lambda: "2026-08-16")
+    payload = build_market_reports_workspace(persist_today=True)
+    assert payload["reports"][0]["is_new"] is True
+    assert payload["reports"][0]["date"] == "2026-08-16"
+    assert any(r["date"] == "2026-01-01" and r["is_new"] is False for r in payload["reports"])
+    assert "Ancient" not in payload["reports"][0]["summary"]
+
+
+def test_pulse_uses_ist_day_and_breakout_keys(monkeypatch):
+    from reports import street_pulse as sp
+
+    monkeypatch.setattr(sp, "_ist_today_label", lambda: "16 August 2026")
+    monkeypatch.setattr(sp, "_ist_today_iso", lambda: "2026-08-16")
+    monkeypatch.setattr(sp, "_scan_rows_latest", lambda: (
+        [{"symbol": "AAA", "signals": ["BREAKOUT_52W"], "breakout_grade": "A",
+          "change_pct": 4, "volume_ratio": 2.2, "reasons": ["break"],
+          "categories": [], "entry": 10, "pivot_distance_pct": 0.4}],
+        1,
+    ))
+    monkeypatch.setattr(sp, "_movers_from_bhav", lambda: ([], []))
+    monkeypatch.setattr(sp, "_market_snapshot", lambda: {"indices": [], "commentary": ""})
+    monkeypatch.setattr(sp, "_losing_momentum", lambda: None)
+    monkeypatch.setattr(sp, "_headlines", lambda: [])
+    pulse = sp.build_pulse()
+    assert pulse["as_of_ist"] == "2026-08-16"
+    assert pulse["date"] == "16 August 2026"
+    assert pulse["breakouts_today"][0]["symbol"] == "AAA"
+
+
+def test_prior_day_auto_scan_is_not_used_as_today(monkeypatch):
+    from reports import street_pulse as sp
+
+    monkeypatch.setattr(
+        "scan.auto_scan.get_results",
+        lambda: ([{"symbol": "OLD", "signals": ["BREAKOUT_52W"]}], 1, 1_700_000_000.0, "ready"),
+    )
+    monkeypatch.setattr(sp, "_ts_is_ist_today", lambda ts: False)
+    monkeypatch.setattr(
+        "product.scan_store.load_scan",
+        lambda: {"same_ist_day": False, "records": [{"symbol": "STALE"}], "universe_size": 1},
+    )
+    rows, universe = sp._scan_rows_latest()
+    assert rows == []
+    assert universe == 0
+
+
+def test_report_item_carries_session_movers():
+    from product.recommendations_workspace import _report_item
+
+    item = _report_item({
+        "id": "market_pulse_2026-08-16",
+        "title": "Market Pulse",
+        "kind": "market_pulse",
+        "date": "2026-08-16",
+        "pulse": {
+            "as_of_ist": "2026-08-16",
+            "takeaways": ["NIFTY ▲ 0.40%"],
+            "gainers": [{"symbol": "AAA", "price": 10, "chg_pct": 4.2}],
+            "losers": [{"symbol": "BBB", "price": 8, "chg_pct": -3.1}],
+            "snapshot": {"indices": [{"name": "NIFTY 50", "price": 25000, "chg_pct": 0.4}], "commentary": ""},
+            "breakouts_today": [{"symbol": "CCC"}],
+        },
+    }, today="2026-08-16")
+    assert item["is_new"] is True
+    assert item["gainers"][0]["symbol"] == "AAA"
+    assert item["losers"][0]["chg_pct"] == -3.1
+    assert item["snapshot"]["indices"][0]["name"] == "NIFTY 50"
+    assert item["breakouts_today"] == ["CCC"]
+
+
+def test_missing_scan_entry_uses_current_price():
+    payload = build_recommendations_workspace(
+        scan_payload={
+            "scanned_at": "2026-08-16T04:00:00+00:00",
+            "records": [{
+                "symbol": "TRENDY", "company": "Trendy Co", "score": 70,
+                "signals": ["MOMENTUM"], "verdict": "BUY", "status": "Ready to trade",
+                "chase_risk": False, "price": 200, "rsi": 58, "volume_ratio": 1.5,
+                "avg_vol20": 1e6, "momentum_5d": 5, "above_sma50": True,
+            }],
+        },
+        long_term_payload={"records": []},
+        refresh_technicals=False,
+    )
+    trends = next(c for c in payload["categories"] if c["id"] == "super_trends")
+    assert trends["cards"]
+    card = trends["cards"][0]
+    assert card["entry"] == 200.0
+    assert card["target"] == 220.0
+    assert card["stop"] == 190.0
+    assert card["buy_zone_low"] is not None
+
+
+def test_missing_target_keeps_real_entry():
+    payload = build_recommendations_workspace(
+        scan_payload={
+            "scanned_at": "2026-08-16T04:00:00+00:00",
+            "records": [{
+                "symbol": "TRENDY", "company": "Trendy Co", "score": 70,
+                "signals": ["MOMENTUM"], "verdict": "BUY", "status": "Ready to trade",
+                "chase_risk": False, "price": 200, "entry": 200, "stop": 190,
+                "rsi": 58, "volume_ratio": 1.5, "avg_vol20": 1e6,
+                "momentum_5d": 5, "above_sma50": True,
+            }],
+        },
+        long_term_payload={"records": []},
+        refresh_technicals=False,
+    )
+    trends = next(c for c in payload["categories"] if c["id"] == "super_trends")
+    card = trends["cards"][0]
+    assert card["entry"] == 200.0
+    assert card["stop"] == 190.0
+    assert card["target"] == 220.0
+
+
+def test_existing_scan_entry_is_not_overwritten():
+    payload = build_recommendations_workspace(
+        scan_payload={
+            "scanned_at": "2026-08-16T04:00:00+00:00",
+            "records": [{
+                "symbol": "TRENDY", "company": "Trendy Co", "score": 70,
+                "signals": ["MOMENTUM"], "verdict": "BUY", "status": "Ready to trade",
+                "chase_risk": False, "price": 210, "entry": 200, "target": 240,
+                "stop": 190, "rsi": 58, "volume_ratio": 1.5,
+                "avg_vol20": 1e6, "momentum_5d": 5, "above_sma50": True,
+            }],
+        },
+        long_term_payload={"records": []},
+        refresh_technicals=False,
+    )
+    trends = next(c for c in payload["categories"] if c["id"] == "super_trends")
+    card = trends["cards"][0]
+    assert card["entry"] == 200.0
+    assert card["target"] == 240.0
+    assert card["stop"] == 190.0
 
 
 def test_buy_zone_requires_real_entry_and_uses_atr_when_present():

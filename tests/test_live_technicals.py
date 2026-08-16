@@ -102,6 +102,69 @@ def test_bulk_refresh_skips_per_symbol_network(monkeypatch):
     out = lt.refresh_rows_technicals(rows, bulk_overlay=True)
     assert calls["overlay"] == 0
     assert out[0]["rsi"] is not None
+    assert out[0]["entry"] == pytest.approx(129.0)
+    assert out[0]["target"] > out[0]["entry"]
+    assert out[0]["stop"] < out[0]["entry"]
+
+
+def test_refresh_sets_entry_target_from_latest_close(monkeypatch):
+    from product import live_technicals as lt
+
+    idx = pd.date_range("2026-07-01", periods=30, freq="B")
+    close = list(range(100, 130))
+    frame = pd.DataFrame(
+        {
+            "open": close,
+            "high": [c + 3 for c in close],
+            "low": [c - 3 for c in close],
+            "close": close,
+            "volume": [1_000_000] * 30,
+        },
+        index=idx,
+    )
+    monkeypatch.setattr(lt, "ensure_live_store_overlay", lambda: 0)
+    monkeypatch.setattr("data.bhavcopy_runtime.get_ohlcv", lambda sym: frame.copy())
+    monkeypatch.setattr("core.market_clock.today_ist", lambda: idx[-1].date())
+
+    out = lt.refresh_row_technicals({"symbol": "AAA", "price": 50, "entry": 0, "target": 0})
+    assert out["price"] == pytest.approx(129.0)
+    assert out["entry"] == pytest.approx(129.0)
+    assert out["target"] > 129.0
+    assert out["stop"] < 129.0
+    assert out["levels_source"] == "current_ohlcv"
+
+
+def test_apply_levels_percent_fallback_when_no_frame():
+    from product.live_technicals import apply_current_trade_levels
+
+    row = apply_current_trade_levels({"price": 200.0}, None)
+    assert row["entry"] == 200.0
+    assert row["target"] == 220.0
+    assert row["stop"] == 190.0
+    assert row["levels_source"] == "current_pct"
+
+
+def test_apply_levels_preserves_existing_scanner_zone():
+    from product.live_technicals import apply_current_trade_levels
+
+    row = apply_current_trade_levels(
+        {"price": 210.0, "entry": 200.0, "stop": 190.0, "target": 240.0},
+        None,
+    )
+    assert row["entry"] == 200.0
+    assert row["stop"] == 190.0
+    assert row["target"] == 240.0
+    assert "levels_source" not in row
+
+
+def test_apply_levels_fills_missing_target_only():
+    from product.live_technicals import apply_current_trade_levels
+
+    row = apply_current_trade_levels({"price": 210.0, "entry": 200.0, "stop": 190.0}, None)
+    assert row["entry"] == 200.0
+    assert row["stop"] == 190.0
+    assert row["target"] == 220.0
+    assert row["levels_source"] == "current_pct"
 
 
 def test_radar_home_uses_refreshed_rsi(monkeypatch):

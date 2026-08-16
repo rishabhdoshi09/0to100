@@ -17,7 +17,7 @@ store, unified scanner results, Google Finance quotes, news fetcher.
 """
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 
 import numpy as np
 
@@ -61,8 +61,73 @@ def _market_snapshot() -> dict:
     return out
 
 
+_BREAKOUT_MARKERS = frozenset({
+    "52-week high breakout", "Resistance break on volume",
+    "BREAKOUT_52W", "BREAKOUT_RES",
+})
+
+
+def _ist_today_label() -> str:
+    try:
+        from core.market_clock import today_ist
+        return today_ist().strftime("%d %B %Y")
+    except Exception:
+        return datetime.now(timezone.utc).strftime("%d %B %Y")
+
+
+def _ist_today_iso() -> str:
+    try:
+        from core.market_clock import today_ist
+        return today_ist().isoformat()
+    except Exception:
+        return datetime.now(timezone.utc).date().isoformat()
+
+
+def _ts_is_ist_today(ts: float) -> bool:
+    try:
+        stamp = float(ts or 0)
+        if stamp <= 0:
+            return False
+        from core.market_clock import IST, today_ist
+        return datetime.fromtimestamp(stamp, tz=IST).date() == today_ist()
+    except Exception:
+        return False
+
+
+def _scan_rows_latest() -> tuple[list[dict], int]:
+    """Today's scan only — never present a prior-day tape as this session."""
+    try:
+        from scan.auto_scan import get_results
+        rows, universe, last_ts, _ = get_results()
+        if rows and _ts_is_ist_today(last_ts):
+            return list(rows), int(universe or len(rows))
+    except Exception:
+        pass
+    try:
+        from product.scan_store import load_scan
+        payload = load_scan() or {}
+        if not payload.get("same_ist_day"):
+            return [], 0
+        records = [dict(r) for r in (payload.get("records") or []) if isinstance(r, dict)]
+        return records, int(payload.get("universe_size") or len(records))
+    except Exception:
+        return [], 0
+
+
+def _is_confirmed_breakout(row: dict) -> bool:
+    sigs = {str(s) for s in (row.get("signals") or [])}
+    if sigs & _BREAKOUT_MARKERS:
+        return True
+    return str(row.get("breakout_grade") or "").upper() in {"A", "B"}
+
+
 def _movers_from_bhav(top_n: int = 5) -> tuple[list[dict], list[dict]]:
-    """Top gainers/losers from the latest bhavcopy session (liquid stocks only)."""
+    """Top gainers/losers from the latest session (live overlay + official EOD)."""
+    try:
+        from product.live_technicals import ensure_live_store_overlay
+        ensure_live_store_overlay()
+    except Exception:
+        pass
     try:
         from data.bhavcopy_store import store_symbols, get_ohlcv
         rows = []
@@ -139,9 +204,7 @@ def _headlines(max_n: int = 5) -> list[str]:
 
 def build_pulse() -> dict:
     """Assemble the full Daily Pulse from live system state. Call once per view."""
-    from scan.auto_scan import get_results
-
-    results, universe_size, last_ts, _ = get_results()
+    results, universe_size = _scan_rows_latest()
     gainers, losers = _movers_from_bhav()
     snapshot = _market_snapshot()
 
@@ -162,9 +225,7 @@ def build_pulse() -> dict:
         strength = min(pre, key=lambda r: r.get("pivot_distance_pct") or 99)
 
     # Breakouts today (confirmed) & tomorrow (pre-breakout watch)
-    today_brk = [r for r in results
-                 if any(s in ("52-week high breakout", "Resistance break on volume")
-                        for s in r.get("signals", []))][:4]
+    today_brk = [r for r in results if _is_confirmed_breakout(r)][:4]
     tomorrow_brk = sorted(pre, key=lambda r: r.get("pivot_distance_pct") or 99)[:4]
 
     # Cover takeaways
@@ -183,7 +244,8 @@ def build_pulse() -> dict:
         takeaways.append(f"Options: {opt['note']} · max pain {opt['max_pain']:,.0f}")
 
     return {
-        "date": datetime.now().strftime("%d %B %Y"),
+        "date": _ist_today_label(),
+        "as_of_ist": _ist_today_iso(),
         "takeaways": takeaways[:4],
         "snapshot": snapshot,
         "gainers": gainers,

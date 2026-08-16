@@ -242,6 +242,8 @@ def _scan_payload() -> dict:
             "universe_size": int(payload.get("universe_size", 0) or 0),
             "summary": dict(payload.get("summary", {}) or {}),
             "records": records,
+            "same_ist_day": bool(payload.get("same_ist_day")),
+            "records_status": str(payload.get("records_status") or ""),
         }
     except Exception as exc:
         return {
@@ -250,6 +252,8 @@ def _scan_payload() -> dict:
             "universe_size": 0,
             "summary": {},
             "records": [],
+            "same_ist_day": False,
+            "records_status": "",
             "error": str(exc),
         }
 

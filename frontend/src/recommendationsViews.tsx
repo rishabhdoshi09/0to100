@@ -553,7 +553,25 @@ export function MarketReportsView({ setActive }: ExperienceViewProps) {
   }
 
   const pulse = data.today_pulse || {}
-  const takeaways = (pulse.takeaways as string[] | undefined) || []
+  const selectedTakeaways = selected?.takeaways?.length
+    ? selected.takeaways
+    : (selected?.is_new ? ((pulse.takeaways as string[] | undefined) || []) : [])
+  const selectedBreakouts = selected?.breakouts_today?.length
+    ? selected.breakouts_today
+    : (selected?.is_new && Array.isArray(pulse.breakouts_today)
+      ? (pulse.breakouts_today as { symbol?: string }[]).map((b) => b.symbol).filter(Boolean) as string[]
+      : [])
+  const selectedGainers = selected?.gainers?.length
+    ? selected.gainers
+    : (selected?.is_new && Array.isArray(pulse.gainers) ? pulse.gainers as { symbol: string; price?: number; chg_pct?: number }[] : [])
+  const selectedLosers = selected?.losers?.length
+    ? selected.losers
+    : (selected?.is_new && Array.isArray(pulse.losers) ? pulse.losers as { symbol: string; price?: number; chg_pct?: number }[] : [])
+  const selectedIndices = selected?.snapshot?.indices?.length
+    ? selected.snapshot.indices
+    : (selected?.is_new && Array.isArray((pulse.snapshot as { indices?: unknown[] } | undefined)?.indices)
+      ? ((pulse.snapshot as { indices: Array<{ name: string; price?: number; chg_pct?: number }> }).indices)
+      : [])
 
   return (
     <div className="reco-light market-reports-desk">
@@ -566,6 +584,9 @@ export function MarketReportsView({ setActive }: ExperienceViewProps) {
       <header className="rw-reports-hero">
         <h1>{data.title}</h1>
         <p>{data.blurb}</p>
+        {data.as_of_ist ? (
+          <p className="reco-sheet-cmp">As of {data.as_of_ist} IST — latest session only.</p>
+        ) : null}
       </header>
 
       <div className="reco-controls">
@@ -614,22 +635,43 @@ export function MarketReportsView({ setActive }: ExperienceViewProps) {
         <div className="rw-report-detail">
           <h2>{selected.title}</h2>
           <p className="when">{formatReportDate(selected.date)}</p>
-          {takeaways.length > 0 && selected.is_new ? (
+          {selectedTakeaways.length > 0 ? (
             <ul>
-              {takeaways.map((t) => <li key={t}>{t}</li>)}
+              {selectedTakeaways.map((t) => <li key={t}>{t}</li>)}
             </ul>
           ) : (
             <p>{selected.summary}</p>
           )}
-          {Array.isArray(pulse.breakouts_today) && pulse.breakouts_today.length > 0 ? (
+          {selectedIndices.length > 0 ? (
+            <>
+              <h3>Latest session</h3>
+              <ul>
+                {selectedIndices.map((idx) => (
+                  <li key={idx.name}>
+                    {idx.name}
+                    {idx.chg_pct != null ? ` ${idx.chg_pct >= 0 ? '▲' : '▼'} ${idx.chg_pct.toFixed(2)}%` : ''}
+                    {idx.price != null ? ` at ${money(idx.price, 0)}` : ''}
+                  </li>
+                ))}
+              </ul>
+            </>
+          ) : null}
+          {selectedGainers.length > 0 ? (
+            <>
+              <h3>Top gainers</h3>
+              <p>{selectedGainers.map((g) => `${g.symbol}${g.chg_pct != null ? ` ${g.chg_pct >= 0 ? '+' : ''}${g.chg_pct.toFixed(1)}%` : ''}`).join(', ')}</p>
+            </>
+          ) : null}
+          {selectedLosers.length > 0 ? (
+            <>
+              <h3>Top losers</h3>
+              <p>{selectedLosers.map((g) => `${g.symbol}${g.chg_pct != null ? ` ${g.chg_pct.toFixed(1)}%` : ''}`).join(', ')}</p>
+            </>
+          ) : null}
+          {selectedBreakouts.length > 0 ? (
             <>
               <h3>Breakouts in focus</h3>
-              <p>
-                {pulse.breakouts_today
-                  .map((b: { symbol?: string }) => b.symbol)
-                  .filter(Boolean)
-                  .join(', ')}
-              </p>
+              <p>{selectedBreakouts.join(', ')}</p>
             </>
           ) : null}
         </div>

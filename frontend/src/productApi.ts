@@ -545,6 +545,12 @@ export const fetchRecommendationsWorkspace = (): Promise<RecommendationsWorkspac
   fetch('/api/recommendations-workspace', { headers: { Accept: 'application/json' } })
     .then((response) => json<RecommendationsWorkspace>(response))
 
+export type MarketMover = {
+  symbol: string
+  price?: number
+  chg_pct?: number
+}
+
 export type MarketReportItem = {
   id: string
   title: string
@@ -554,12 +560,22 @@ export type MarketReportItem = {
   is_new: boolean
   badge?: string
   summary: string
+  takeaways?: string[]
+  breakouts_today?: string[]
+  gainers?: MarketMover[]
+  losers?: MarketMover[]
+  snapshot?: {
+    indices?: Array<{ name: string; price?: number; chg_pct?: number }>
+    commentary?: string
+  }
+  as_of_ist?: string
   path?: string
 }
 
 export type MarketReportsWorkspace = {
   schema_version: number
   generated_at: string
+  as_of_ist?: string
   title: string
   blurb: string
   reports: MarketReportItem[]
