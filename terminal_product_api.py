@@ -712,6 +712,18 @@ def stock_intelligence(symbol: str) -> dict[str, Any]:
         raise HTTPException(status_code=500, detail=f"Stock intelligence failed: {exc}") from exc
 
 
+@app.get("/api/buy-thesis/{symbol}")
+def buy_thesis(symbol: str, fetch_missing: bool = False) -> dict[str, Any]:
+    """Why this name is on the desk — plan, filings, sales, order book."""
+    try:
+        from product.buy_thesis import build_buy_thesis
+        return build_buy_thesis(clean_symbol(symbol), fetch_missing=fetch_missing)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Buy thesis failed: {exc}") from exc
+
+
 def _fundamentals_fetch_payload(symbol: str, data: dict[str, Any], *, steps: list | None = None) -> dict[str, Any]:
     from fundamentals.resolver import coverage_score, next_actions
 

@@ -27,6 +27,13 @@ export type NextStep = {
   resultHint: string
 }
 
+export type JobClock = {
+  button: string
+  line: string
+  percent: number | null
+  remaining: number | null
+}
+
 export function decideNextStep(input: {
   dataReady: boolean
   readinessScore: number

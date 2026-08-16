@@ -123,6 +123,14 @@
 }
 .home-path-error { margin: 10px 0 0; color: var(--rw-danger); font-size: 13px; }
 .home-path-why { margin: 10px 0 0; font-size: 14px; line-height: 1.4; }
+.home-path-meter {
+  margin-top: 10px; height: 8px; border-radius: 99px;
+  background: #e7eee9; overflow: hidden;
+}
+.home-path-meter span {
+  display: block; height: 100%; background: var(--rw-green, #2f6b4f);
+  border-radius: 99px;
+}
 .home-path-hint { margin: 6px 0 0; color: var(--rw-muted); font-size: 13px; }
 .home-path-grid {
   display: grid;
@@ -501,7 +509,27 @@
   background: var(--rw-green-soft); border-radius: 12px;
   color: var(--rw-ink); font-size: 14px; line-height: 1.45;
 }
-.reco-sheet-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 12px; }
+.thesis-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin: 12px 0 16px;
+}
+.thesis-grid article {
+  border: 1px solid var(--rw-line);
+  border-radius: 12px;
+  padding: 12px 14px;
+  background: #f8fbf9;
+}
+.thesis-grid h3 { margin: 0 0 8px; font-size: 14px; }
+.thesis-grid ul { margin: 0; padding-left: 18px; line-height: 1.5; font-size: 13px; }
+.thesis-grid p, .thesis-grid small { font-size: 13px; color: var(--rw-muted); }
+.thesis-about { margin-top: 8px; }
+.thesis-book { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 8px; }
+.thesis-book span { display: block; font-size: 12px; }
+@media (max-width: 960px) {
+  .thesis-grid, .thesis-book { grid-template-columns: 1fr; }
+}
 .reco-chart-card {
   margin-top: 12px; padding: 12px;
   background: var(--rw-surface);

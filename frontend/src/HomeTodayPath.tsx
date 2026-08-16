@@ -6,6 +6,7 @@ import {
   optionsFloorCopy,
   type FloorContext,
   type FloorId,
+  type JobClock,
   type NextStep,
 } from './homeFloorPath'
 import {
@@ -62,6 +63,7 @@ export function HomeTodayPath({
   error,
   step,
   progress,
+  clock,
   onOpen,
   onJump,
 }: {
@@ -70,10 +72,13 @@ export function HomeTodayPath({
   error: string
   step: NextStep
   progress: string
+  clock?: JobClock | null
   onOpen: () => void
   onJump: (page: string) => void
 }) {
   const working = busy || step.id === 'working'
+  const buttonLabel = working ? (clock?.button || 'Working…') : step.label
+  const why = working ? (clock?.line || progress || step.why) : step.why
   return (
     <section className="home-path" aria-label="Start here">
       <header className="home-path-head">
@@ -86,11 +91,16 @@ export function HomeTodayPath({
           </em>
         </div>
         <button type="button" className="reco-primary" disabled={working} onClick={onOpen}>
-          {working ? 'Working…' : step.label}
+          {buttonLabel}
         </button>
       </header>
-      <p className="home-path-why">{working && progress ? progress : step.why}</p>
-      {step.resultHint ? <p className="home-path-hint">{step.resultHint}</p> : null}
+      {working && clock?.percent != null ? (
+        <div className="home-path-meter" role="progressbar" aria-valuenow={clock.percent} aria-valuemin={0} aria-valuemax={100}>
+          <span style={{ width: `${Math.max(4, Math.min(100, clock.percent))}%` }} />
+        </div>
+      ) : null}
+      <p className="home-path-why">{why}</p>
+      {step.resultHint ? <p className="home-path-hint">{working ? 'Stay on this page. The bar and the time left update every second.' : step.resultHint}</p> : null}
       {error ? <p className="home-path-error">{error}</p> : null}
       {floors ? (
         <div className="home-path-grid">

@@ -457,6 +457,57 @@ export const fetchRadarHome = (): Promise<RadarHome> =>
   fetch('/api/radar-home', { headers: { Accept: 'application/json' } })
     .then((response) => json<RadarHome>(response))
 
+export type BuyThesis = {
+  symbol: string
+  company: string
+  sector: string
+  state?: string
+  headline: string
+  why: string[]
+  plan: {
+    buy?: number | null
+    stop?: number | null
+    target?: number | null
+    upside_from_buy_pct?: number | null
+    levels_source?: string
+  }
+  technical: Record<string, unknown>
+  fundamentals: {
+    available: boolean
+    coverage_pct: number
+    classification?: string
+    quality_factors?: string[]
+    risk_flags?: string[]
+    metrics?: IntelligenceMetric[]
+    fetched_at?: string
+    about?: string
+  }
+  sales: {
+    available: boolean
+    cagr_3y?: number | null
+    series?: Array<{ period: string; sales_cr: number }>
+    source?: string
+    as_of?: string
+    note?: string
+  }
+  order_book: {
+    available?: boolean
+    status?: string
+    note?: string
+    source?: string
+    bids?: Array<{ price?: number; quantity?: number }>
+    asks?: Array<{ price?: number; quantity?: number }>
+  }
+  gaps?: string[]
+  fetched?: { fundamentals?: boolean; source?: string; message?: string }
+  confidence_pct?: number
+}
+
+export const fetchBuyThesis = (symbol: string, fetchMissing = false): Promise<BuyThesis> =>
+  fetch(`/api/buy-thesis/${encodeURIComponent(symbol)}?fetch_missing=${fetchMissing ? 'true' : 'false'}`, {
+    headers: { Accept: 'application/json' },
+  }).then((response) => json<BuyThesis>(response))
+
 export type RecommendationCard = {
   symbol: string
   company: string

@@ -296,3 +296,83 @@ def live_quotes(symbols: list[str]) -> dict[str, dict]:
         if bar and bar.get("close"):
             out[sym] = {"price": bar["close"], "chg_pct": round(bar.get("pchange", 0), 2)}
     return out
+
+
+_quote_cache: dict[str, tuple[float, dict]] = {}
+_QUOTE_TTL_S = 30.0
+
+
+def fetch_market_depth(symbol: str) -> dict:
+    """Official NSE quote-equity order book. Empty when closed or blocked."""
+    import requests
+    from urllib.parse import quote as urlquote
+
+    sym = str(symbol or "").strip().upper()
+    empty = {
+        "available": False,
+        "status": "unavailable",
+        "note": "No live depth — NSE quote did not return a book.",
+        "bids": [],
+        "asks": [],
+        "source": "nse",
+    }
+    if not sym:
+        return empty
+    now = time.time()
+    cached = _quote_cache.get(sym)
+    if cached and now - cached[0] < _QUOTE_TTL_S:
+        return dict(cached[1])
+    try:
+        s = requests.Session()
+        s.headers.update(_HEADERS)
+        s.get("https://www.nseindia.com", timeout=8)
+        r = s.get(
+            f"https://www.nseindia.com/api/quote-equity?symbol={urlquote(sym)}",
+            timeout=10,
+        )
+        if r.status_code != 200:
+            empty["note"] = f"NSE quote HTTP {r.status_code}"
+            return empty
+        payload = r.json() or {}
+        book = payload.get("marketDeptOrderBook") or {}
+        bids = book.get("bid") or book.get("buy") or []
+        asks = book.get("ask") or book.get("sell") or []
+        last = ((payload.get("priceInfo") or {}).get("lastPrice")
+                or (payload.get("priceInfo") or {}).get("close"))
+        bid_qty = sum(float(level.get("quantity") or 0) for level in bids[:5] if isinstance(level, dict))
+        ask_qty = sum(float(level.get("quantity") or 0) for level in asks[:5] if isinstance(level, dict))
+        if bid_qty <= 0 and ask_qty <= 0:
+            empty["note"] = "NSE book is empty (closed session or no quotes)."
+            empty["last_price"] = last
+            _quote_cache[sym] = (now, empty)
+            return empty
+        imbalance = (bid_qty - ask_qty) / max(bid_qty + ask_qty, 1.0)
+        if imbalance >= 0.15:
+            status, note = "bid_heavy", f"Top-5 bid qty {bid_qty:,.0f} > ask {ask_qty:,.0f}"
+        elif imbalance <= -0.15:
+            status, note = "ask_heavy", f"Top-5 ask qty {ask_qty:,.0f} > bid {bid_qty:,.0f}"
+        else:
+            status, note = "balanced", f"Top-5 bid {bid_qty:,.0f} ≈ ask {ask_qty:,.0f}"
+        out = {
+            "available": True,
+            "status": status,
+            "note": note,
+            "bid_qty": round(bid_qty),
+            "ask_qty": round(ask_qty),
+            "imbalance": round(imbalance, 3),
+            "bids": [
+                {"price": lv.get("price"), "quantity": lv.get("quantity")}
+                for lv in bids[:5] if isinstance(lv, dict)
+            ],
+            "asks": [
+                {"price": lv.get("price"), "quantity": lv.get("quantity")}
+                for lv in asks[:5] if isinstance(lv, dict)
+            ],
+            "last_price": last,
+            "source": "nse",
+        }
+        _quote_cache[sym] = (now, out)
+        return out
+    except Exception as exc:
+        empty["note"] = f"NSE quote failed: {type(exc).__name__}"
+        return empty
