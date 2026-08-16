@@ -166,6 +166,18 @@
   .home-path-grid { grid-template-columns: 1fr 1fr; }
 }
 
+.desk-delivery {
+  margin: 0 0 14px; padding: 12px 14px;
+  border-radius: 12px;
+  background: #eef6f1;
+  border: 1px solid var(--rw-line);
+  color: var(--rw-ink);
+}
+.desk-delivery strong {
+  display: block; font-size: 12px; letter-spacing: .08em;
+  text-transform: uppercase; color: var(--rw-green);
+}
+.desk-delivery p { margin: 4px 0 0; font-size: 14px; line-height: 1.4; }
 .reco-cmp-banner {
   display: flex; gap: 10px; align-items: flex-start;
   margin: 0 0 14px; padding: 12px 14px;
@@ -744,6 +756,7 @@ body > .thesis-sheet.has-close .reco-sheet-hero h2 {
   .reco-sheet-actions .reco-primary,
   .reco-sheet-actions .reco-ghost { flex: 1 1 140px; min-height: 44px; }
   .live-scan-banner:not(.running):not(.failed) { display: none; }
+  .desk-delivery { margin-bottom: 10px; padding: 10px 12px; }
 
   .thesis-sheet.has-close {
     position: fixed;

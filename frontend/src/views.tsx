@@ -763,6 +763,22 @@ export function AutomationView({ dashboard, runControl, setActive }: ViewProps) 
           tone={caTone}
         />
         <MetricCard label="FAILURES" value={String(a.active_failures?.length || 0)} detail={(a.active_failures || []).join(', ') || 'None active'} tone="purple" />
+        <MetricCard
+          label="TELEGRAM"
+          value={
+            !dashboard.data.telegram?.configured
+              ? 'NOT SET'
+              : dashboard.data.telegram.bot_reachable === false
+                ? 'UNREACHABLE'
+                : dashboard.data.telegram.last_send_ok === false
+                  ? 'SEND FAILED'
+                  : dashboard.data.telegram.listener_running
+                    ? 'OPTIONAL LIVE'
+                    : 'INBOX SILENT'
+          }
+          detail={dashboard.data.telegram?.last_error || dashboard.data.telegram?.note || 'The desk is this browser. Telegram is optional.'}
+          tone={dashboard.data.telegram?.bot_reachable === false || dashboard.data.telegram?.last_send_ok === false ? 'amber' : 'cyan'}
+        />
       </div>
       <div className="automation-grid">
         <Panel title="DECISION JOURNAL" subtitle="Taken vs rejected · calibration · no claim below the sample floor">

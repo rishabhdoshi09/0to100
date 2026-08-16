@@ -1,4 +1,4 @@
-"""Phone desk — Telegram-sized Home for someone who only has a phone.
+"""Optional Telegram Home text — the real phone desk is the browser.
 
 Same evidence as the buy-thesis sheet, truncated for a 4096-char chat bubble.
 Never invents prices, flows, or a book. Live orders stay off Telegram.

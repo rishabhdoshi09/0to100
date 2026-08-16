@@ -117,6 +117,11 @@ class AlertEngine:
         on the last chunk). Returns True only if EVERY chunk delivered.
         """
         if not self.enabled:
+            try:
+                from alerts.telegram_status import record_send
+                record_send(False, "not_configured")
+            except Exception:
+                pass
             return False
         url = self._TELEGRAM_API.format(token=self._token)
         chunks = self._split_message(message, self._MAX_LEN)
@@ -131,11 +136,27 @@ class AlertEngine:
                 payload["reply_markup"] = reply_markup
             try:
                 resp = requests.post(url, json=payload, timeout=8)
+                if resp.status_code == 400 and payload.get("parse_mode"):
+                    plain = dict(payload)
+                    plain.pop("parse_mode", None)
+                    resp = requests.post(url, json=plain, timeout=8)
                 resp.raise_for_status()
             except Exception as exc:
+                status = getattr(getattr(exc, "response", None), "status_code", None)
+                try:
+                    from alerts.telegram_status import classify_error, record_send
+                    record_send(False, classify_error(exc, status))
+                except Exception:
+                    pass
                 logger.warning("Telegram send failed (chunk %d/%d): %s",
                                i + 1, len(chunks), exc)
                 ok = False
+        try:
+            from alerts.telegram_status import record_send
+            if ok:
+                record_send(True)
+        except Exception:
+            pass
         return ok
 
     # ------------------------------------------------------------------

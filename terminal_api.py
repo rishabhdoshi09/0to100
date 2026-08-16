@@ -183,6 +183,11 @@ def _queue_message_for_control(kind: str, runtime: dict[str, Any]) -> str:
 @app.on_event("startup")
 def _startup() -> None:
     _ensure_ops_worker()
+    try:
+        from alerts.telegram_actions import start_telegram_listener
+        start_telegram_listener()
+    except Exception:
+        pass
 
 
 @app.on_event("shutdown")
@@ -628,11 +633,24 @@ def _data_payload(scan: dict, long_term: dict, operations: dict, fno: dict, news
         kite = kite_quote_health()
     except Exception as exc:
         kite = {"ok": False, "status": "error", "note": str(exc)[:160]}
+    try:
+        from alerts.telegram_status import snapshot as telegram_snapshot
+        telegram = telegram_snapshot()
+    except Exception as exc:
+        telegram = {
+            "required": False,
+            "desk": "browser",
+            "configured": False,
+            "listener_running": False,
+            "note": "The desk is this browser. Telegram status unread.",
+            "last_error": str(exc)[:160],
+        }
     return {
         "ready": bool(history_current and operations.get("running")),
         "snapshot": snapshot,
         "bhavcopy": bhavcopy,
         "kite": kite,
+        "telegram": telegram,
         "options_eod": options_eod,
         "scan_saved": bool(scan.get("available")),
         "scan_records": len(scan.get("records", []) or []),

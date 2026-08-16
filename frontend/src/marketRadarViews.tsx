@@ -17,6 +17,7 @@ import {
   type WatchlistPayload,
 } from './productApi'
 import { LiveScanBanner, type ExperienceViewProps } from './experience'
+import { deskDeliveryCopy } from './deskDelivery'
 import { EvChip } from './evChip'
 import { HomeTodayPath, useTodayFloors } from './HomeTodayPath'
 import { decideNextStep, type FloorContext } from './homeFloorPath'
@@ -667,6 +668,10 @@ export function RadarHomeView(props: ExperienceViewProps & {
     <div className="reco-light">
       <LiveScanBanner scan={marketScan} depth={depth} label="Market scan" />
       <LiveScanBanner scan={longTermScan} depth={depth} label="Long-term research" />
+      <div className="desk-delivery" role="status">
+        <strong>Phone desk</strong>
+        <p>{deskDeliveryCopy(dashboard.data.telegram)}</p>
+      </div>
 
       <HomeTodayPath
         busy={todayPath.busy || bootstrapBusy}
