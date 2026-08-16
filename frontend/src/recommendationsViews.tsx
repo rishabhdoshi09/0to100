@@ -227,8 +227,8 @@ export function RecommendationsView({
             onChange={(e) => setQuery(e.target.value)}
             aria-label="Search stocks"
           />
-          <button type="button" className="reco-filter-btn" aria-label="Filters" title="Filters">
-            ☰
+          <button type="button" className="reco-filter-btn" onClick={() => setActive('Market Scanner')}>
+            Table
           </button>
         </div>
         <div className="reco-life-toggle" role="tablist" aria-label="Lifecycle">
@@ -289,7 +289,7 @@ function formatReportDate(value: string): string {
   }
 }
 
-export function MarketReportsView({ setActive }: ExperienceViewProps) {
+export function MarketReportsView({ setActive, setSelected: setStock }: ExperienceViewProps) {
   const [data, setData] = useState<MarketReportsWorkspace | null>(null)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(true)
@@ -372,8 +372,8 @@ export function MarketReportsView({ setActive }: ExperienceViewProps) {
             onChange={(e) => setQuery(e.target.value)}
             aria-label="Search reports"
           />
-          <button type="button" className="reco-filter-btn" aria-label="Filters" title="Filters">
-            ☰
+          <button type="button" className="reco-filter-btn" onClick={() => setActive('Education')}>
+            Learn
           </button>
         </div>
       </div>
@@ -419,12 +419,23 @@ export function MarketReportsView({ setActive }: ExperienceViewProps) {
           {Array.isArray(pulse.breakouts_today) && pulse.breakouts_today.length > 0 ? (
             <>
               <h3>Breakouts in focus</h3>
-              <p>
+              <div className="news-symbols">
                 {pulse.breakouts_today
                   .map((b: { symbol?: string }) => b.symbol)
-                  .filter(Boolean)
-                  .join(', ')}
-              </p>
+                  .filter((symbol): symbol is string => Boolean(symbol))
+                  .map((symbol) => (
+                    <button
+                      type="button"
+                      key={symbol}
+                      onClick={() => {
+                        setStock(symbol)
+                        setActive('Stock Intelligence')
+                      }}
+                    >
+                      {symbol}
+                    </button>
+                  ))}
+              </div>
             </>
           ) : null}
         </div>

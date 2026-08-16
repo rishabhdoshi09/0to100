@@ -425,6 +425,11 @@
   padding: 7px 10px;
   font-size: 10px;
 }
+button.positive-tag,
+button.negative-tag {
+  cursor: pointer;
+  font: inherit;
+}
 
 .negative-tag {
   border-color: rgba(255, 104, 127, .32);

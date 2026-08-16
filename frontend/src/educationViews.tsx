@@ -41,9 +41,11 @@ function lensTone(lens: string): string {
 function EducationCardRow({
   card,
   openSymbol,
+  openFno,
 }: {
   card: EducationCard
   openSymbol: (symbol: string) => void
+  openFno: (symbol: string) => void
 }) {
   return (
     <article className="edu-card">
@@ -73,7 +75,7 @@ function EducationCardRow({
             <button key={symbol} type="button" onClick={() => openSymbol(symbol)}>{symbol}</button>
           ))}
           {card.fno_symbols.map((symbol) => (
-            <em key={`fno-${symbol}`}>F&O {symbol}</em>
+            <button key={`fno-${symbol}`} type="button" onClick={() => openFno(symbol)}>F&O {symbol}</button>
           ))}
         </div>
       )}
@@ -117,6 +119,10 @@ export function EducationView({ runControl, setSelected, setActive }: Props) {
     setSelected?.(symbol)
     setActive?.('Stock Intelligence')
   }
+  const openFno = (symbol: string) => {
+    setSelected?.(symbol)
+    setActive?.('F&O Desk')
+  }
 
   const summary = feed?.summary
   const byLens = summary?.by_lens || {}
@@ -144,6 +150,9 @@ export function EducationView({ runControl, setSelected, setActive }: Props) {
         </button>
         <button type="button" onClick={() => setActive?.('News & Events')}>
           Open the news list
+        </button>
+        <button type="button" onClick={() => setActive?.('Market Overview')}>
+          See market weather
         </button>
       </div>
       {error ? <div className="large-empty">{error}</div> : null}
@@ -198,7 +207,7 @@ export function EducationView({ runControl, setSelected, setActive }: Props) {
             </div>
           ) : null}
           {cards.map((card) => (
-            <EducationCardRow key={card.id} card={card} openSymbol={openSymbol} />
+            <EducationCardRow key={card.id} card={card} openSymbol={openSymbol} openFno={openFno} />
           ))}
         </div>
       </Panel>

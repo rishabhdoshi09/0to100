@@ -648,6 +648,7 @@ export function ProductStockIntelligenceView(props: ViewProps) {
                 : 'Not in current F&O universe or master file missing. Open Ideas → F&O to see mapped names.'}
             </div>
             <button type="button" onClick={() => setTab('Options')}>Open Options floor</button>
+            <button type="button" onClick={() => setActive('F&O Desk')}>Open Ideas → F&O</button>
           </Panel>
         </div>
       )}

@@ -249,4 +249,4 @@ export const FIELD_LABELS: Record<string, string> = {
   gauntlet_verdict: 'Past test result',
 }
 
-export const depthLabel = (depth: DisplayDepth) => depth === 'simple' ? 'Simple' : 'Pro'
+export const depthLabel = (depth: DisplayDepth) => depth === 'simple' ? 'Simple desk' : 'Pro desk'

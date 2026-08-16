@@ -271,7 +271,7 @@ export function ChartWorkspace({
   )
 }
 
-export function PositionsTable({ rows, closed = false }: { rows: PaperPosition[]; closed?: boolean }) {
+export function PositionsTable({ rows, closed = false, onSelect }: { rows: PaperPosition[]; closed?: boolean; onSelect?: (symbol: string) => void }) {
   return (
     <div className="positions-table wide-table">
       <div className="positions-head">
@@ -281,7 +281,12 @@ export function PositionsTable({ rows, closed = false }: { rows: PaperPosition[]
       {rows.map((row, index) => {
         const pnl = Number(row.pnl || 0)
         return (
-          <div className="position-row" key={`${row.symbol || 'position'}-${index}`}>
+          <div
+            className="position-row"
+            key={`${row.symbol || 'position'}-${index}`}
+            style={onSelect && row.symbol ? { cursor: 'pointer' } : undefined}
+            onClick={() => { if (onSelect && row.symbol) onSelect(String(row.symbol)) }}
+          >
             <strong>{String(row.symbol || '—')}</strong>
             <span>{String(row.strategy || '—')}</span>
             <span>{money(Number(row.entry_price))}</span>

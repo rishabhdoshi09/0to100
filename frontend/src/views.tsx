@@ -420,7 +420,11 @@ export function PortfolioView({ dashboard, runControl, setSelected, setActive }:
               <tbody>
                 {target.positions.slice(0, 20).map((row, idx) => (
                   <tr key={String(row.symbol ?? idx)}>
-                    <td>{String(row.symbol ?? '—')}</td>
+                    <td>
+                      {row.symbol
+                        ? <button type="button" className="linkish" onClick={() => openHolding(String(row.symbol))}>{String(row.symbol)}</button>
+                        : '—'}
+                    </td>
                     <td>{String(row.desired_quantity ?? row.required_quantity ?? '—')}</td>
                     <td>{String(row.status ?? '—')}</td>
                     <td>{row.target_risk_pct != null ? String(row.target_risk_pct) : '—'}</td>
@@ -431,14 +435,14 @@ export function PortfolioView({ dashboard, runControl, setSelected, setActive }:
           )}
         </Panel>
         <Panel title="RECORDED EQUITY CURVE" subtitle="Paper evidence · no synthetic history"><EquityCurve values={dashboard.paper.equity_curve} /></Panel>
-        <Panel title="OPEN PAPER POSITIONS" subtitle="Secondary paper layer"><PositionsTable rows={dashboard.paper.open_positions} /></Panel>
-        <Panel title="RECENT CLOSED TRADES"><PositionsTable rows={[...dashboard.paper.closed_trades].reverse().slice(0, 50)} closed /></Panel>
+        <Panel title="OPEN PAPER POSITIONS" subtitle="Click a name to open its dossier"><PositionsTable rows={dashboard.paper.open_positions} onSelect={openHolding} /></Panel>
+        <Panel title="RECENT CLOSED TRADES"><PositionsTable rows={[...dashboard.paper.closed_trades].reverse().slice(0, 50)} closed onSelect={openHolding} /></Panel>
       </div>
     </section>
   )
 }
 
-export function MarketInternalsView({ dashboard, runControl }: ViewProps) {
+export function MarketInternalsView({ dashboard, runControl, setSelected, setActive }: ViewProps) {
   const details = dashboard.market.technical_details || {}
   const inst = dashboard.institutional
   const cash = inst?.cash
@@ -463,6 +467,8 @@ export function MarketInternalsView({ dashboard, runControl }: ViewProps) {
         <button type="button" disabled={instBusy} onClick={() => void refreshInstitutional()}>
           {instBusy ? 'Syncing FII/DII…' : 'Refresh FII/DII store'}
         </button>
+        <button type="button" onClick={() => setActive('Home')}>See names on Desk</button>
+        <button type="button" onClick={() => setActive('F&O Desk')}>Open F&O floor</button>
       </div>
       <div className="view-metrics">
         <MetricCard label="REGIME" value={dashboard.market.health} detail={String(details.market_regime || dashboard.market.breadth)} tone={dashboard.market.health.toLowerCase() === 'healthy' ? 'green' : 'amber'} />
@@ -491,15 +497,17 @@ export function MarketInternalsView({ dashboard, runControl }: ViewProps) {
         </Panel>
         <Panel title="SECTOR LEADERS"><div className="tag-cloud">{dashboard.market.leaders.length ? dashboard.market.leaders.map((item) => <span className="positive-tag" key={item}>{item}</span>) : <span>No clear leaders recorded.</span>}</div></Panel>
         <Panel title="SECTOR LAGGARDS"><div className="tag-cloud">{dashboard.market.laggards.length ? dashboard.market.laggards.map((item) => <span className="negative-tag" key={item}>{item}</span>) : <span>No clear laggards recorded.</span>}</div></Panel>
-        <Panel title="BULK DEAL BUYS" subtitle="Symbol-level institutional footprint">
-          <div className="tag-cloud">{inst?.bulk_buy_symbols?.length ? inst.bulk_buy_symbols.slice(0, 24).map((sym) => <span className="positive-tag" key={sym}>{sym}</span>) : <span>No net bulk buys in current cache.</span>}</div>
+        <Panel title="BULK DEAL BUYS" subtitle="Click a name to open its dossier">
+          <div className="tag-cloud">{inst?.bulk_buy_symbols?.length ? inst.bulk_buy_symbols.slice(0, 24).map((sym) => (
+            <button type="button" className="positive-tag" key={sym} onClick={() => { setSelected(sym); setActive('Stock Intelligence') }}>{sym}</button>
+          )) : <span>No net bulk buys in current cache.</span>}</div>
         </Panel>
         <Panel title="BULK DEAL DETAIL" subtitle="NSE largedeal snapshot · client, qty, price">
           {(inst?.bulk_deals?.length ?? 0) > 0 ? (
             <div className="fno-table wide-table">
               <div className="fno-head"><span>SYMBOL</span><span>SIDE</span><span>QTY</span><span>PRICE</span><span>CLIENT</span></div>
               {inst!.bulk_deals!.slice(0, 24).map((deal, idx) => (
-                <div className="fno-row" key={`${deal.symbol}-${idx}`} style={{ display: 'grid', cursor: 'default' }}>
+                <div className="fno-row" key={`${deal.symbol}-${idx}`} style={{ display: 'grid', cursor: deal.symbol ? 'pointer' : 'default' }} onClick={() => { if (deal.symbol) { setSelected(String(deal.symbol)); setActive('Stock Intelligence') } }}>
                   <strong>{String(deal.symbol ?? '—')}</strong>
                   <span className={String(deal.side) === 'BUY' ? 'positive-tag' : 'negative-tag'}>{String(deal.side ?? '—')}</span>
                   <span>{Number(deal.qty ?? 0).toLocaleString('en-IN')}</span>
@@ -512,10 +520,11 @@ export function MarketInternalsView({ dashboard, runControl }: ViewProps) {
             <p className="panel-copy">No bulk deals in cache. Data syncs from NSE when institutional flows refresh (same path as Brain bulk tags).</p>
           )}
         </Panel>
-        <Panel title="NIFTY OPTIONS" subtitle="Nearest expiry · NSE chain when available">
+        <Panel title="NIFTY OPTIONS" subtitle="Nearest expiry · same floor as Ideas → F&O">
           {niftyOpts?.available
             ? <div className="key-value-list"><div><span>PCR</span><strong>{String(niftyOpts.pcr)}</strong></div><div><span>Max pain</span><strong>{String(niftyOpts.max_pain)}</strong></div><div><span>Bias</span><strong>{String(niftyOpts.bias)}</strong></div><div><span>Note</span><strong>{String(niftyOpts.note || '')}</strong></div></div>
-            : <p className="panel-copy">Index option chain unavailable (NSE may block off-hours). Stock options load on Stock Intelligence → Options tab.</p>}
+            : <p className="panel-copy">Index option chain unavailable (NSE may block off-hours). Open the F&O floor for the live desk.</p>}
+          <button type="button" onClick={() => setActive('F&O Desk')}>Open F&O floor</button>
         </Panel>
         <Panel title="REGIME ENGINE DETAILS"><div className="key-value-list">{Object.entries(details).map(([key, value]) => <div key={key}><span>{words(key)}</span><strong>{String(value ?? '—')}</strong></div>)}</div></Panel>
       </div>
@@ -625,7 +634,7 @@ function InstitutionalStackPanel() {
   )
 }
 
-export function AutomationView({ dashboard, runControl }: ViewProps) {
+export function AutomationView({ dashboard, runControl, setActive }: ViewProps) {
   const a = dashboard.autonomy
   const activeJob = a.active_job || {}
   const [bt, setBt] = useState<SignalBacktestStatus | null>(null)
@@ -683,7 +692,15 @@ export function AutomationView({ dashboard, runControl }: ViewProps) {
 
   return (
     <section className="workspace-view">
-      <div className="inline-actions"><button type="button" onClick={() => void runControl('RUN_SCAN_NOW')}>Start market scan</button><button type="button" onClick={() => void runControl('RUN_CYCLE_NOW')}>Request paper cycle</button><button type="button" onClick={() => void runControl('REFRESH_DATA_NOW')}>Prepare market data</button><button type="button" onClick={() => void runControl('RUN_FULL_UNIVERSE_BACKTEST_NOW')}>Backtest all stocks</button><button type="button" onClick={() => void runControl(a.new_paper_entries ? 'PAUSE_NEW_PAPER_ENTRIES' : 'RESUME_NEW_PAPER_ENTRIES')}>{a.new_paper_entries ? 'Pause entries' : 'Resume entries'}</button></div>
+      <div className="inline-actions">
+        <button type="button" onClick={() => void runControl('RUN_SCAN_NOW')}>Start market scan</button>
+        <button type="button" onClick={() => void runControl('RUN_CYCLE_NOW')}>Request paper cycle</button>
+        <button type="button" onClick={() => void runControl('REFRESH_DATA_NOW')}>Prepare market data</button>
+        <button type="button" onClick={() => void runControl('RUN_FULL_UNIVERSE_BACKTEST_NOW')}>Backtest all stocks</button>
+        <button type="button" onClick={() => void runControl(a.new_paper_entries ? 'PAUSE_NEW_PAPER_ENTRIES' : 'RESUME_NEW_PAPER_ENTRIES')}>{a.new_paper_entries ? 'Pause entries' : 'Resume entries'}</button>
+        <button type="button" onClick={() => setActive('Research Data')}>Open file layer</button>
+        <button type="button" onClick={() => setActive('Paper Portfolio')}>Open holdings</button>
+      </div>
       <div className="view-metrics">
         <MetricCard label="PAPER SUPERVISOR" value={a.running ? 'ONLINE' : 'OFFLINE'} detail={`PID ${a.scheduler_owner_pid || '—'}`} tone={a.running ? 'green' : 'amber'} />
         <MetricCard label="STATE" value={a.state} detail={a.plain_state} />

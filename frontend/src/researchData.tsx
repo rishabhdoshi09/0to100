@@ -98,7 +98,7 @@ type ResolveStep = {
 }
 type NextAction = { label: string; url: string; kind: string }
 
-export function ResearchDataView({ symbol }: { symbol: string }) {
+export function ResearchDataView({ symbol, onOpenStock }: { symbol: string; onOpenStock?: () => void }) {
   const [status, setStatus] = useState<EvidenceStatus | null>(null)
   const [error, setError] = useState('')
   const [busy, setBusy] = useState('')
@@ -339,6 +339,7 @@ export function ResearchDataView({ symbol }: { symbol: string }) {
         <div className="evidence-empty">
           <h2>Pick a name to see its file layer</h2>
           <p>Search any NSE share above, or open a card from Ideas. Health is whether workers are alive. This tab is whether the files behind a stock are fresh, stale or missing.</p>
+          <button type="button" onClick={onOpenStock}>Back to Ideas</button>
         </div>
         {platformPanel}
       </section>
@@ -412,6 +413,11 @@ export function ResearchDataView({ symbol }: { symbol: string }) {
         <div><span>STALE DATASETS</span><strong>{staleCount}</strong></div>
         <div><span>DEEP FUNDAMENTALS</span><strong>{status?.raw_fundamentals.freshness || 'UNKNOWN'}</strong></div>
       </div>
+      {onOpenStock && (
+        <div className="inline-actions" style={{ margin: '0 0 12px' }}>
+          <button type="button" onClick={onOpenStock}>Open this stock</button>
+        </div>
+      )}
 
       {platformPanel}
 

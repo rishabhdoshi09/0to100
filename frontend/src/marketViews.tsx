@@ -73,7 +73,7 @@ const canonicalCategory = (article: NewsArticle) => {
   return 'Market'
 }
 
-function NewsCard({ article, openSymbol }: { article: NewsArticle; openSymbol: (symbol: string) => void }) {
+function NewsCard({ article, openSymbol, openFno }: { article: NewsArticle; openSymbol: (symbol: string) => void; openFno: (symbol: string) => void }) {
   return (
     <article className="news-card">
       <header>
@@ -85,7 +85,9 @@ function NewsCard({ article, openSymbol }: { article: NewsArticle; openSymbol: (
       <div className="news-meta"><span>{article.source}</span><span>{article.official ? 'Official source' : `Source tier ${article.source_tier}`}</span><span>{article.corroboration_count} corroborating source(s)</span></div>
       <div className="news-symbols">
         {article.mentioned_symbols.slice(0, 8).map((symbol) => <button type="button" key={symbol} onClick={() => openSymbol(symbol)}>{symbol}</button>)}
-        {article.fno_symbols.length > 0 && <em>F&O linked: {article.fno_symbols.slice(0, 6).join(', ')}</em>}
+        {article.fno_symbols.slice(0, 6).map((symbol) => (
+          <button type="button" key={`fno-${symbol}`} onClick={() => openFno(symbol)}>{`F&O ${symbol}`}</button>
+        ))}
       </div>
       {article.url && <a href={article.url} target="_blank" rel="noreferrer">Open original source ↗</a>}
     </article>
@@ -109,6 +111,10 @@ export function NewsView({ dashboard, runControl, setSelected, setActive }: Prop
     setSelected?.(symbol)
     setActive?.('Stock Intelligence')
   }
+  const openFno = (symbol: string) => {
+    setSelected?.(symbol)
+    setActive?.('F&O Desk')
+  }
   const health = dashboard.news.source_health
   const healthy = health.filter((item) => item.status === 'OK').length
   const failed = health.filter((item) => item.status !== 'OK').length
@@ -121,6 +127,8 @@ export function NewsView({ dashboard, runControl, setSelected, setActive }: Prop
       <div className="inline-actions">
         <button type="button" onClick={() => void runControl('REFRESH_NEWS_NOW')}>Refresh news and filings</button>
         <button type="button" onClick={() => setImportantOnly((value) => !value)}>{importantOnly ? 'Show every impact level' : 'Show impact 70+ only'}</button>
+        <button type="button" onClick={() => setActive?.('Education')}>Open Learn</button>
+        <button type="button" onClick={() => setActive?.('Market Reports')}>Open Pulse</button>
       </div>
       <div className="view-metrics">
         <MetricCard label="24H ARTICLES" value={String(dashboard.news.stats.total || 0)} detail={`${dashboard.news.stats.important || 0} high impact`} />
@@ -131,7 +139,7 @@ export function NewsView({ dashboard, runControl, setSelected, setActive }: Prop
       <div className="mode-tabs">{categories.map((item) => <button type="button" key={item} className={category === item ? 'active' : ''} onClick={() => setCategory(item)}>{item}</button>)}</div>
       <div className="news-layout">
         <Panel title={`CURATED MARKET CONTEXT · ${articles.length}`} subtitle="Every article keeps its source, date, impact and entity mapping">
-          <div className="news-feed">{articles.length ? articles.map((article) => <NewsCard key={article.article_id} article={article} openSymbol={openSymbol} />) : <div className="large-empty">No article matches this view. Refresh the store, then inspect the source-health panel for the exact provider failure.</div>}</div>
+          <div className="news-feed">{articles.length ? articles.map((article) => <NewsCard key={article.article_id} article={article} openSymbol={openSymbol} openFno={openFno} />) : <div className="large-empty">No article matches this view. Refresh the store, then inspect the source-health panel for the exact provider failure.</div>}</div>
         </Panel>
         <Panel title="SOURCE HEALTH" subtitle="Provider failures remain visible">
           <div className="source-health-list">

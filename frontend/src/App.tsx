@@ -464,7 +464,14 @@ function App() {
         />
       )
     }
-    if (active === 'Research Data') return <ResearchDataView symbol={selected} />
+    if (active === 'Research Data') {
+      return (
+        <ResearchDataView
+          symbol={selected}
+          onOpenStock={() => setActive(selected ? 'Stock Intelligence' : 'Recommendations')}
+        />
+      )
+    }
     if (active === 'Paper Portfolio' || active === 'Portfolio') return <PortfolioView {...viewProps} />
     if (active === 'Market Overview' || active === 'Market Internals') return <MarketInternalsView {...viewProps} />
     if (active === 'Long-Term Picks' || active === 'Long-Term') return <EnhancedLongTermView {...viewProps} />
