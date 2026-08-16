@@ -46,9 +46,11 @@ export function BuyThesisSheet({
   const sheetRef = useRef<HTMLElement | null>(null)
 
   useEffect(() => {
-    const sync = () => setPhone(isPhoneLayout())
-    window.addEventListener('resize', sync)
-    return () => window.removeEventListener('resize', sync)
+    const media = window.matchMedia(`(max-width: 820px)`)
+    const sync = () => setPhone(media.matches)
+    sync()
+    media.addEventListener('change', sync)
+    return () => media.removeEventListener('change', sync)
   }, [])
 
   useEffect(() => {
