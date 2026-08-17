@@ -190,7 +190,7 @@ function BestAmongFundamentalsPanel({
           </button>
           {ctx && (
             <p className="radar-empty-li" style={{ paddingTop: 8 }}>
-              Order book: {ctx.order_book?.status || 'unavailable'}
+              Market depth: {ctx.order_book?.status || 'unavailable'}
               {ctx.order_book?.note ? ` — ${ctx.order_book.note}` : ''}
               {' · '}
               Concall: {ctx.concall?.status || 'unavailable'}

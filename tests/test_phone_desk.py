@@ -79,11 +79,13 @@ def test_format_thesis_includes_requested_layers_and_stays_honest():
             "bullets": ["P/E 30.2x", "Operating margin 18.0%"],
         },
         "order_book": {
-            "note": "NSE quote HTTP 403",
-            "source": "nse",
-            "last_price": 2018,
-            "bid_qty": 0,
-            "ask_qty": 0,
+            "kind": "company_backlog",
+            "note": "No company order-book figure in filings.",
+            "source": "company_presentation",
+            "value_cr": 39,
+            "as_of_label": "30 June 2025",
+            "stale": True,
+            "bullets": ["As of 30 June 2025 (stale) company order book ₹39 cr"],
         },
     })
     assert "Sector wave" in text
@@ -93,8 +95,9 @@ def test_format_thesis_includes_requested_layers_and_stays_honest():
     assert yes_at < headline_at
     assert "FII / DII" in text
     assert "P/E 30.2x" in text
-    assert "HTTP 403" in text
-    assert "Last print" in text
+    assert "Company order book" in text
+    assert "₹39 cr" in text or "39 cr" in text
+    assert "Last print" not in text
     assert "not an order" in text.lower() or "research" in text.lower()
 
 

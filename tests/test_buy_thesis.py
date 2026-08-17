@@ -45,12 +45,13 @@ def test_plan_fills_stop_target_from_price_when_scan_blank():
 def test_build_buy_thesis_does_not_invent_a_blank_symbol_book():
     from unittest.mock import patch
     fake_book = {
+        "kind": "company_backlog",
         "available": False,
         "status": "unavailable",
-        "note": "NSE book is empty (closed session or no quotes).",
-        "source": "nse",
-        "bids": [],
-        "asks": [],
+        "note": "No company order-book figure in filings.",
+        "source": "",
+        "value_cr": None,
+        "bullets": [],
     }
     with patch("product.buy_thesis._order_book", return_value=fake_book), \
          patch("product.buy_thesis._load_flows", return_value={}), \
@@ -60,7 +61,8 @@ def test_build_buy_thesis_does_not_invent_a_blank_symbol_book():
     assert payload["symbol"] == "BSE"
     assert payload["why"]
     assert payload["order_book"]["status"] == "unavailable"
-    assert payload["order_book"].get("bids") == []
+    assert payload["order_book"].get("kind") == "company_backlog"
+    assert payload["order_book"].get("value_cr") is None
     assert "sector_wave" in payload
     assert "smart_money" in payload
     assert "earnings" in payload

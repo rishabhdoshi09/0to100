@@ -214,38 +214,36 @@ export function BuyThesisSheet({
           {thesis?.fundamentals.about ? <p className="thesis-about">{thesis.fundamentals.about}</p> : null}
         </article>
         <article>
-          <h3>Order book</h3>
-          <p>{book?.note || 'No live depth.'}</p>
-          {book?.source ? <small>Source: {book.source}{book.as_of ? ` · ${book.as_of}` : ''}</small> : null}
+          <h3>Company order book</h3>
+          <p>{book?.note || 'Unexecuted customer orders already won — not the stock’s bid/ask tape.'}</p>
+          {book?.source ? (
+            <small>
+              Source: {book.source}
+              {book.as_of_label ? ` · as of ${book.as_of_label}` : book.as_of ? ` · ${book.as_of}` : ''}
+            </small>
+          ) : null}
           <div className="reco-sheet-kpis reco-numbers-light thesis-book-kpis">
             <div>
-              <span>Last print</span>
-              <strong>{book?.last_price != null ? money(book.last_price, 2) : '—'}</strong>
+              <span>Backlog</span>
+              <strong>{book?.value_cr != null ? `₹${Number(book.value_cr).toLocaleString('en-IN')} cr` : '—'}</strong>
             </div>
             <div>
-              <span>Buy qty</span>
-              <strong>{book?.bid_qty ? Number(book.bid_qty).toLocaleString('en-IN') : '—'}</strong>
+              <span>vs prior</span>
+              <strong>
+                {book?.change_pct != null
+                  ? `${book.change_pct > 0 ? '+' : ''}${Number(book.change_pct).toFixed(1)}%`
+                  : '—'}
+              </strong>
             </div>
             <div>
-              <span>Sell qty</span>
-              <strong>{book?.ask_qty ? Number(book.ask_qty).toLocaleString('en-IN') : '—'}</strong>
+              <span>Coverage</span>
+              <strong>{book?.coverage_months != null ? `${Number(book.coverage_months).toFixed(1)} mo` : '—'}</strong>
             </div>
           </div>
-          {book?.available && (book.bids?.length || book.asks?.length) ? (
-            <div className="thesis-book">
-              <div>
-                <strong>Bids</strong>
-                {(book.bids || []).slice(0, 5).map((lv, i) => (
-                  <span key={`b${i}`}>{money(lv.price, 2)} × {Number(lv.quantity || 0).toLocaleString('en-IN')}</span>
-                ))}
-              </div>
-              <div>
-                <strong>Asks</strong>
-                {(book.asks || []).slice(0, 5).map((lv, i) => (
-                  <span key={`a${i}`}>{money(lv.price, 2)} × {Number(lv.quantity || 0).toLocaleString('en-IN')}</span>
-                ))}
-              </div>
-            </div>
+          {book?.bullets && book.bullets.length > 0 ? (
+            <ul>
+              {book.bullets.map((item) => <li key={item}>{item}</li>)}
+            </ul>
           ) : null}
         </article>
       </div>

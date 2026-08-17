@@ -183,17 +183,17 @@ def format_thesis(payload: Mapping[str, Any]) -> str:
     lines.append("<b>Earnings / margins / valuations</b>")
     for item in list(earnings.get("bullets") or [])[:6]:
         lines.append("· " + _esc(item)[:140])
-    note = str(book.get("note") or "No live depth.")
-    src = str(book.get("source") or "")
     lines.append("")
-    lines.append(f"<b>Order book</b> — {_esc(note)}" + (f" ({_esc(src)})" if src else ""))
-    last = _f(book.get("last_price"))
-    if last is not None:
-        lines.append(f"Last print {_money(last)}")
-    bid_qty = _f(book.get("bid_qty"))
-    ask_qty = _f(book.get("ask_qty"))
-    if bid_qty or ask_qty:
-        lines.append(f"Buy qty {int(bid_qty or 0):,} · sell qty {int(ask_qty or 0):,}")
+    lines.append("<b>Company order book</b> — " + _esc(
+        book.get("note") or "Unexecuted customer orders, not exchange bid/ask."
+    ))
+    value_cr = _f(book.get("value_cr"))
+    if value_cr is not None:
+        when = _esc(book.get("as_of_label") or book.get("as_of") or "")
+        stale = " (stale)" if book.get("stale") else ""
+        lines.append(f"Backlog ₹{value_cr:,.0f} cr{stale}" + (f" as of {when}" if when else ""))
+    for item in list(book.get("bullets") or [])[:3]:
+        lines.append("· " + _esc(item)[:160])
     lines.append("Paper/watch: Home pe card, ya owner chat ke buttons.")
     text = "\n".join(lines)
     return text[:3900]

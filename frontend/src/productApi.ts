@@ -535,16 +535,20 @@ export type BuyThesis = {
     note?: string
   }
   order_book: {
+    kind?: string
     available?: boolean
     status?: string
     note?: string
     source?: string
-    last_price?: number | null
-    bid_qty?: number | null
-    ask_qty?: number | null
+    source_url?: string
+    value_cr?: number | null
+    prior_cr?: number | null
+    change_pct?: number | null
+    coverage_months?: number | null
     as_of?: string
-    bids?: Array<{ price?: number; quantity?: number }>
-    asks?: Array<{ price?: number; quantity?: number }>
+    as_of_label?: string
+    stale?: boolean
+    bullets?: string[]
   }
   gaps?: string[]
   fetched?: { fundamentals?: boolean; source?: string; message?: string }

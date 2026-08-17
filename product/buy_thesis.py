@@ -1,10 +1,11 @@
 """Buy thesis for one clicked name — why it is on the desk, with live layers.
 
 Never invents prices, sales, flows, or a book. Missing layers stay missing and
-are fetched from the highest-grade source still allowed: Kite depth → NSE
-quote-equity → Screener/Yahoo fundamentals resolver. Sector wave uses the
+are fetched from the highest-grade source still allowed: Screener/Yahoo
+fundamentals, then company presentations for order backlog. Sector wave uses the
 official NSE-universe sector map plus bhavcopy; FII/DII at the stock is
 shareholding change + NSE bulk/block prints, never a guessed print.
+Company order book is unexecuted customer orders from filings, not exchange depth.
 """
 from __future__ import annotations
 
@@ -911,18 +912,19 @@ def _sales_from_raw(raw_record: Mapping[str, Any], *, as_of=None) -> dict[str, A
     }
 
 
-def _order_book(symbol: str) -> dict[str, Any]:
+def _order_book(symbol: str, raw_data: Mapping[str, Any] | None = None, ttm_sales_cr: float | None = None) -> dict[str, Any]:
     try:
-        from data.order_book import fetch_order_book
-        return fetch_order_book(symbol)
+        from product.company_order_book import build_company_order_book
+        return build_company_order_book(symbol, raw_data=raw_data, ttm_sales_cr=ttm_sales_cr)
     except Exception as exc:
         return {
+            "kind": "company_backlog",
             "available": False,
             "status": "unavailable",
-            "note": f"Order book unavailable ({type(exc).__name__})",
+            "value_cr": None,
+            "note": f"Company order book unavailable ({type(exc).__name__}: {exc})",
             "source": "",
-            "bids": [],
-            "asks": [],
+            "bullets": [],
         }
 
 
@@ -997,6 +999,10 @@ def build_buy_thesis(symbol: str, *, fetch_missing: bool = False) -> dict[str, A
         raw = {}
     raw_data = dict((raw or {}).get("data") or {})
     sales = _sales_from_raw(raw)
+    ttm_sales = None
+    q_sales = _table_series(raw_data.get("quarterly_results"), "sales", "revenue", exclude=("growth",))
+    if len(q_sales) >= 2:
+        ttm_sales = sum(float(row["value"]) for row in q_sales[-4:])
     if sales.get("cagr_3y") is None:
         for metric in fund.get("metrics") or []:
             if isinstance(metric, Mapping) and metric.get("key") == "sales_growth_3y" and metric.get("value") is not None:
@@ -1078,7 +1084,7 @@ def build_buy_thesis(symbol: str, *, fetch_missing: bool = False) -> dict[str, A
             "about": (fund.get("company_about") or "")[:400],
         },
         "sales": sales,
-        "order_book": _order_book(symbol),
+        "order_book": _order_book(symbol, raw_data, ttm_sales),
         "gaps": workspace.get("gaps") or [],
         "fetched": fetched,
         "confidence_pct": workspace.get("confidence_pct"),

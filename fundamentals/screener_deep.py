@@ -136,6 +136,7 @@ class ScreenerDeepFetcher:
             "shareholding":      self._parse_shareholding(soup),
             "cash_flow":         self._parse_table_section(soup, "cash_flow"),
             "peer_comparison":   self._parse_table_section(soup, "peer_comparison"),
+            "documents":         self._parse_documents(soup),
         }
         result.update(self._parse_sector_path(soup))
 
@@ -263,6 +264,38 @@ class ScreenerDeepFetcher:
         if sub:
             return sub.get_text(" ", strip=True)[:2000]
         return ""
+
+    def _parse_documents(self, soup: BeautifulSoup) -> List[Dict[str, str]]:
+        """Presentation / concall / announcement PDF links — used for order-book backlog."""
+        docs: List[Dict[str, str]] = []
+        seen: set[str] = set()
+        sections = []
+        for sid in ("documents", "concalls"):
+            found = soup.find(["section", "div"], id=sid)
+            if found is not None:
+                sections.append(found)
+        if not sections:
+            sections = [soup]
+        for section in sections:
+            for link in section.find_all("a"):
+                href = str(link.get("href") or "").strip()
+                title = link.get_text(" ", strip=True)
+                if not href or href.startswith("#"):
+                    continue
+                if href.startswith("/"):
+                    href = "https://www.screener.in" + href
+                blob = f"{title} {href}".lower()
+                keep = any(
+                    token in blob
+                    for token in ("ppt", "presentation", "concall", "transcript")
+                )
+                if not keep:
+                    continue
+                if href in seen:
+                    continue
+                seen.add(href)
+                docs.append({"title": title[:160], "url": href})
+        return docs
 
     def _parse_sector_path(self, soup: BeautifulSoup) -> Dict[str, str]:
         """Peer-header breadcrumb: Broad Sector / Sector / Broad Industry."""
