@@ -31,8 +31,10 @@ Money model (compounding):
 
 Exits: every entry ships with GTT OCO — stop from the signal; under
 thesis_hold (default) the target is a wide runner ceiling and the
-position is held while technicals + fundamentals look good. Optional
-profit_book_* remains available as an explicit scalp AIM.
+position is held while technicals + fundamentals look good. High RSI
+on an OPEN trade is not an exit — tighten a protective GTT 2–3% below
+LTP and hold until structure actually fails. Optional profit_book_*
+remains available as an explicit scalp AIM.
 
 State persists atomically to logs/autopilot.json.
 """
@@ -114,6 +116,7 @@ _DEFAULTS = {
     # Optional profit_book_* remains available if the user wants a scalp AIM.
     "thesis_hold": True,
     "runner_target_pct": 10.0,     # wide GTT ceiling under thesis_hold
+    "rsi_protect_pct": 2.5,        # open-trade RSI extension → GTT 2–3% below LTP
     "profit_book_pct": 0.0,        # OFF by default — thesis hold, not scalp
     "profit_book_rupees": 0.0,     # >0 → absolute ₹ AIM (legacy /book 1500)
     "profit_book_min_pct": 1.5,    # floor as % of pool (pct mode)
@@ -389,6 +392,7 @@ def set_config(**kwargs) -> None:
         "max_hold_days": (2, 30),
         "max_chase_pct": (0.25, 5.0),
         "runner_target_pct": (5.0, 25.0),
+        "rsi_protect_pct": (2.0, 3.0),
         "profit_book_pct": (0.0, 15.0),
         "profit_book_rupees": (0.0, 100000.0),
         "profit_book_min_pct": (0.0, 10.0),
@@ -499,7 +503,7 @@ def arm(confirm_phrase: str = "") -> tuple[bool, str]:
             f"max deploy: ₹{pool * (1 - s['cash_reserve_pct']):,.0f} "
             f"(reserve {s['cash_reserve_pct']*100:.0f}% untouched)\n"
             f"Entries {s['start_time']}–{s['end_time']} · "
-            + ("thesis-hold (exit jab tech/fund tootein)"
+            + ("thesis-hold (exit jab structure toote; high RSI = GTT tighten)"
                if s.get("thesis_hold", True)
                else f"target +{s['target_pct']}%")
             + f" · max {s['max_trades_per_day']} trades/day")
@@ -1666,6 +1670,8 @@ def _book_tick() -> int:
         # ₹/%-booking turant (optional scalp — OFF by default)
         if _booking_enabled(s):
             _profit_book()
+        # Extended RSI: tighten GTT, do not sell the winner
+        _protect_extended_rsi()
         # Thesis hold exits when tech/fund break
         _thesis_exits()
         # 🐕 cross-watch: scan worker mar jaye toh yahan se khabar jaye
@@ -1739,6 +1745,115 @@ def _thesis_status(t: dict, live_px: float) -> tuple[bool, str]:
         scan_row=scan_row,
         fund_row=fund_row,
     )
+
+
+def _orig_stop_value(t: dict, current_stop: float) -> float:
+    raw = t.get("orig_stop")
+    try:
+        if raw not in (None, ""):
+            val = float(raw)
+            if val > 0:
+                return val
+    except (TypeError, ValueError):
+        pass
+    return float(current_stop or 0)
+
+
+def _ensure_live_protective_gtt(t: dict, new_stop: float, ltp: float) -> bool:
+    """Move or place the live GTT stop. True only when the exchange accepts."""
+    gtt_id = str(t.get("gtt_id") or "").strip()
+    if gtt_id and gtt_id.lower() not in ("none", "0"):
+        t["gtt_id"] = gtt_id
+        return _modify_gtt_stop(t, new_stop, ltp)
+    try:
+        from execution.trade_executor import _place_gtt, kite_ready
+        if not kite_ready():
+            return False
+        from data.kite_client import KiteClient
+        kite = KiteClient()
+        placed_id, _msg = _place_gtt(
+            kite, t["symbol"], int(t["qty"] or 0),
+            ltp, new_stop, float(t["target_price"] or 0),
+            t.get("product") or "CNC",
+        )
+        if not placed_id:
+            return False
+        t["gtt_id"] = str(placed_id)
+        return True
+    except Exception as exc:
+        log.warning("autopilot_gtt_protect_place_failed",
+                    symbol=t.get("symbol"), error=str(exc))
+        return False
+
+
+def _protect_extended_rsi() -> None:
+    """Open trade + RSI extended → ratchet a 2–3% GTT below LTP, hold.
+
+    High RSI is an ENTRY filter. On an already-open position it is not a
+    sell: tighten protection and wait for real technical deterioration.
+    Never loosens a stop that is already tighter than the 2–3% band.
+    """
+    from execution.thesis_hold import (
+        clamp_rsi_protect_pct, evaluate_thesis, protective_stop,
+        rsi_is_extended,
+    )
+    s = _load()
+    if not s.get("thesis_hold", True):
+        return
+    pct = clamp_rsi_protect_pct(s.get("rsi_protect_pct"))
+    opens = _open_autopilot_trades()
+    if not opens:
+        return
+    try:
+        from data.live_quotes import get_live_quotes
+        live = get_live_quotes(sorted({t["symbol"] for t in opens}))
+    except Exception:
+        return
+    _ensure_exit_col()
+    for t in opens:
+        q = live.get(t["symbol"])
+        if not (q and q.get("price")):
+            continue
+        px = float(q["price"])
+        scan_row, fund_row = _lookup_thesis_context(str(t.get("symbol") or ""))
+        if not rsi_is_extended(scan_row):
+            continue
+        ok, _why = evaluate_thesis(
+            entry=float(t.get("entry_price") or 0),
+            stop=float(t.get("stop_price") or 0),
+            live_px=px,
+            scan_row=scan_row,
+            fund_row=fund_row,
+        )
+        if not ok:
+            continue  # real break — _thesis_exits handles it
+        current = float(t.get("stop_price") or 0)
+        new_stop = protective_stop(px, current, pct)
+        if new_stop <= current + 1e-9 or new_stop >= px:
+            continue
+        if t.get("mode") == "LIVE" and not _ensure_live_protective_gtt(
+                t, new_stop, px):
+            continue
+        orig = _orig_stop_value(t, current)
+        gtt_set = ", gtt_id=?" if t.get("gtt_id") else ""
+        gtt_param = (str(t["gtt_id"]),) if t.get("gtt_id") else ()
+        note = (f" | RSI-protect GTT ₹{new_stop:,.1f} "
+                f"({pct:g}% below LTP ₹{px:,.1f})")
+        _update_trade(
+            t["id"],
+            f"orig_stop=?, stop_price=?, note=note||?{gtt_set}",
+            (orig, new_stop, note, *gtt_param),
+        )
+        _log_activity(
+            f"🛡 {t['symbol']} RSI-protect stop → ₹{new_stop:,.1f} "
+            f"(RSI extended, hold — not a blow-off exit)"
+        )
+        _notify(
+            f"🛡 <b>{t['symbol']}</b> RSI extended — holding. "
+            f"Protective GTT ₹{new_stop:,.1f} "
+            f"({pct:g}% below LTP ₹{px:,.1f}). "
+            f"Exit only if structure breaks."
+        )
 
 
 def _thesis_exits() -> None:
@@ -1981,6 +2096,7 @@ def review_cycle() -> None:
         _close_crossed_live_trades() # …price-cross estimate as fallback
         _trail_stops()
         _profit_book()
+        _protect_extended_rsi()
         _thesis_exits()
         _time_stop()
         _circuit_breaker()
