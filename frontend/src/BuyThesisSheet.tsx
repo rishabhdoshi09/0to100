@@ -2,7 +2,8 @@ import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { ChartWorkspace } from './components'
 import { money, pct } from './format'
-import { isPhoneLayout, shouldPortalThesis, thesisSheetClassName } from './phoneLayout'
+import { filingsNeedRefresh, sectorWaveFirstLine, sectorWaveVerdict } from './deskThesis'
+import { shouldPortalThesis, thesisSheetClassName, usePhoneLayout } from './phoneLayout'
 import {
   fetchBuyThesis,
   fetchStockFundamentals,
@@ -42,16 +43,9 @@ export function BuyThesisSheet({
   const [loading, setLoading] = useState(false)
   const [fetching, setFetching] = useState(false)
   const [error, setError] = useState('')
-  const [phone, setPhone] = useState(() => isPhoneLayout())
+  const phone = usePhoneLayout()
   const sheetRef = useRef<HTMLElement | null>(null)
-
-  useEffect(() => {
-    const media = window.matchMedia(`(max-width: 820px)`)
-    const sync = () => setPhone(media.matches)
-    sync()
-    media.addEventListener('change', sync)
-    return () => media.removeEventListener('change', sync)
-  }, [])
+  const refreshed = useRef('')
 
   useEffect(() => {
     let alive = true
@@ -61,8 +55,10 @@ export function BuyThesisSheet({
       .then((payload) => {
         if (!alive) return
         setThesis(payload)
-        const thin = !payload.fundamentals.available || Number(payload.fundamentals.coverage_pct || 0) < 40
-        if (!thin) return
+        const needsFetch = filingsNeedRefresh(payload)
+        if (!needsFetch) return
+        if (refreshed.current === symbol) return
+        refreshed.current = symbol
         setFetching(true)
         return fetchStockFundamentals(symbol, false)
           .then(() => fetchBuyThesis(symbol, false))
@@ -107,7 +103,7 @@ export function BuyThesisSheet({
       {onClose ? (
         <div className="thesis-toolbar">
           <button type="button" className="thesis-close" onClick={onClose}>
-            ← Close
+            ← Close thesis
           </button>
           <strong>{symbol}</strong>
         </div>
@@ -118,9 +114,19 @@ export function BuyThesisSheet({
         <p>{thesis?.headline || (loading ? 'Loading why this name is on the desk…' : 'Clicked name — evidence below.')}</p>
       </header>
       {error ? <p className="home-path-error">{error}</p> : null}
-      {fetching ? <p className="home-path-hint">Fetching company filings from Screener / Yahoo — current cache was thin.</p> : null}
+      {fetching ? (
+        <p className="home-path-hint">
+          {thesis?.filings_stale
+            ? `Filings look stale${thesis.filings_as_of ? ` (latest column ${thesis.filings_as_of})` : ''} — fetching a newer Screener pack.`
+            : 'Fetching company filings from Screener / Yahoo — current cache was thin.'}
+        </p>
+      ) : thesis?.filings_stale ? (
+        <p className="home-path-hint">
+          Filings as of {thesis.filings_as_of || 'an old column'} — older than the current reporting season. Not shown as latest.
+        </p>
+      ) : null}
 
-      <div className="reco-sheet-kpis">
+        <div className="reco-sheet-kpis reco-numbers-light">
         <div>
           <span>Buy</span>
           <strong>{money(plan?.buy, 2)}</strong>
@@ -148,6 +154,12 @@ export function BuyThesisSheet({
         </article>
         <article>
           <h3>Sector wave</h3>
+          <p
+            className={`thesis-wave-verdict thesis-wave-verdict-${sectorWaveVerdict(thesis?.sector_wave).toLowerCase()}`}
+            data-testid="sector-wave-verdict"
+          >
+            {loading && !thesis ? '…' : sectorWaveFirstLine(thesis?.sector_wave)}
+          </p>
           <p className={`thesis-wave thesis-wave-${String(thesis?.sector_wave?.wave || 'NO_CLAIM').toLowerCase()}`}>
             {thesis?.sector_wave?.headline || (loading ? 'Identifying sector…' : 'Sector not identified yet.')}
           </p>
@@ -184,7 +196,14 @@ export function BuyThesisSheet({
           ) : (
             <p>Filings not in cache yet. {fetching ? 'Fetching now…' : 'A fetch was attempted from Screener, then Yahoo.'}</p>
           )}
-          {sales?.cagr_3y != null ? <p>3-year sales CAGR {Number(sales.cagr_3y).toFixed(1)}% (annual table)</p> : null}
+          {sales?.cagr_3y != null ? (
+            <p>
+              3-year sales CAGR {Number(sales.cagr_3y).toFixed(1)}%
+              {sales.stale && sales.as_of_period
+                ? ` (annual table as of ${sales.as_of_period}, stale)`
+                : ' (annual table)'}
+            </p>
+          ) : null}
           {sales?.series && sales.series.length > 0 ? (
             <ul>
               {sales.series.map((row) => (
@@ -195,24 +214,36 @@ export function BuyThesisSheet({
           {thesis?.fundamentals.about ? <p className="thesis-about">{thesis.fundamentals.about}</p> : null}
         </article>
         <article>
-          <h3>Order book</h3>
-          <p>{book?.note || 'No live depth.'}</p>
-          {book?.source ? <small>Source: {book.source}</small> : null}
-          {book?.available && (book.bids?.length || book.asks?.length) ? (
-            <div className="thesis-book">
-              <div>
-                <strong>Bids</strong>
-                {(book.bids || []).slice(0, 5).map((lv, i) => (
-                  <span key={`b${i}`}>{money(lv.price, 2)} × {Number(lv.quantity || 0).toLocaleString('en-IN')}</span>
-                ))}
-              </div>
-              <div>
-                <strong>Asks</strong>
-                {(book.asks || []).slice(0, 5).map((lv, i) => (
-                  <span key={`a${i}`}>{money(lv.price, 2)} × {Number(lv.quantity || 0).toLocaleString('en-IN')}</span>
-                ))}
-              </div>
+          <h3>Company order book</h3>
+          <p>{book?.note || 'Unexecuted customer orders already won — not the stock’s bid/ask tape.'}</p>
+          {book?.source ? (
+            <small>
+              Source: {book.source}
+              {book.as_of_label ? ` · as of ${book.as_of_label}` : book.as_of ? ` · ${book.as_of}` : ''}
+            </small>
+          ) : null}
+          <div className="reco-sheet-kpis reco-numbers-light thesis-book-kpis">
+            <div>
+              <span>Backlog</span>
+              <strong>{book?.value_cr != null ? `₹${Number(book.value_cr).toLocaleString('en-IN')} cr` : '—'}</strong>
             </div>
+            <div>
+              <span>vs prior</span>
+              <strong>
+                {book?.change_pct != null
+                  ? `${book.change_pct > 0 ? '+' : ''}${Number(book.change_pct).toFixed(1)}%`
+                  : '—'}
+              </strong>
+            </div>
+            <div>
+              <span>Coverage</span>
+              <strong>{book?.coverage_months != null ? `${Number(book.coverage_months).toFixed(1)} mo` : '—'}</strong>
+            </div>
+          </div>
+          {book?.bullets && book.bullets.length > 0 ? (
+            <ul>
+              {book.bullets.map((item) => <li key={item}>{item}</li>)}
+            </ul>
           ) : null}
         </article>
       </div>
@@ -224,7 +255,7 @@ export function BuyThesisSheet({
       </div>
       <details className="thesis-chart-fold" open={!phone}>
         <summary>Chart</summary>
-        <div className="reco-chart-card">
+        <div className="reco-chart-card reco-numbers-light">
           <ChartWorkspace
             symbol={symbol}
             bars={bars}

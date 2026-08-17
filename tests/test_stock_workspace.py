@@ -4,7 +4,34 @@ from datetime import datetime, timezone
 
 import pandas as pd
 
-from product.stock_workspace import build_stock_workspace
+from product.stock_workspace import (
+    _hydrate_raw_fundamentals,
+    build_stock_workspace,
+)
+
+_USABLE_FUND = {
+    "roe": 18,
+    "roce": 20,
+    "pe": 24,
+    "sales_growth_3y": 12,
+    "profit_growth_3y": 14,
+    "debt_to_equity": 0.4,
+}
+
+
+def _ohlcv_frame(end: str, periods: int = 280) -> pd.DataFrame:
+    index = pd.date_range(end=end, periods=periods, freq="B")
+    close = pd.Series([100 + i * 0.2 for i in range(periods)], index=index)
+    return pd.DataFrame(
+        {
+            "open": close - 0.5,
+            "high": close + 1,
+            "low": close - 1,
+            "close": close,
+            "volume": [100000 + i * 100 for i in range(periods)],
+        },
+        index=index,
+    )
 
 
 def test_stock_workspace_combines_technicals_fundamentals_and_sources():
@@ -132,3 +159,160 @@ def test_stock_workspace_stays_honest_when_data_is_missing():
     assert result["state"] == "DATA_INCOMPLETE"
     assert result["confidence_pct"] == 0
     assert result["gaps"]
+
+
+def test_workspace_names_stale_filings_instead_of_incomplete_coverage():
+    result = build_stock_workspace(
+        "EIMCOELECO",
+        scan_payload={
+            "scanned_at": "2026-08-17T10:00:00+00:00",
+            "records": [{"symbol": "EIMCOELECO", "company": "Eimco Elecon", "score": 70}],
+        },
+        long_term_payload={
+            "scanned_at": "2026-08-16T10:00:00+00:00",
+            "records": [{"symbol": "EIMCOELECO", "sector": "Capital Goods", "fundamentals": _USABLE_FUND}],
+        },
+        raw_fundamentals={
+            "available": True,
+            "fetched_at": "2026-08-17T09:00:00+00:00",
+            "data": {
+                "about": "Mining equipment",
+                "quarterly_results": [{"": "Sales+", "Dec 2023": 48, "Mar 2024": 84}],
+            },
+            "section_as_of": {"financial_history": "2024-03-01"},
+        },
+        frame=_ohlcv_frame("2026-08-14"),
+        news=[],
+        fno_payload={},
+        now=datetime(2026, 8, 17, 12, 0, tzinfo=timezone.utc),
+    )
+    assert result["fundamentals"]["coverage_pct"] >= 40
+    assert result["state"] == "TECHNICAL_ONLY"
+    assert "Mar 2024" in result["summary"]
+    assert "incomplete or stale" not in result["summary"]
+    deep = next(item for item in result["sources"] if item["name"] == "Deep fundamentals")
+    assert deep["status"] == "STALE"
+    assert deep["quarters_behind"] >= 1
+    assert deep["as_of_label"] == "Mar 2024"
+
+
+def test_workspace_marks_june_2026_filings_fresh_in_august():
+    result = build_stock_workspace(
+        "EIMCOELECO",
+        scan_payload={
+            "scanned_at": "2026-08-17T10:00:00+00:00",
+            "records": [{"symbol": "EIMCOELECO", "company": "Eimco Elecon", "score": 70}],
+        },
+        long_term_payload={
+            "scanned_at": "2026-08-16T10:00:00+00:00",
+            "records": [{"symbol": "EIMCOELECO", "sector": "Capital Goods", "fundamentals": _USABLE_FUND}],
+        },
+        raw_fundamentals={
+            "available": True,
+            "fetched_at": "2026-08-17T09:00:00+00:00",
+            "data": {
+                "about": "Mining equipment",
+                "quarterly_results": [{"": "Sales+", "Mar 2026": 70, "Jun 2026": 78}],
+            },
+            "section_as_of": {"financial_history": "2026-06-01"},
+        },
+        frame=_ohlcv_frame("2026-08-14"),
+        news=[{"headline": "Results", "published_at": "2026-08-16T08:00:00+00:00", "impact_score": 70}],
+        fno_payload={"generated_at": "2026-08-17T06:00:00+00:00", "underlyings": [{"symbol": "EIMCOELECO", "lot_size": 1}]},
+        now=datetime(2026, 8, 17, 12, 0, tzinfo=timezone.utc),
+    )
+    deep = next(item for item in result["sources"] if item["name"] == "Deep fundamentals")
+    assert deep["status"] == "FRESH"
+    assert deep["quarters_behind"] == 0
+    assert result["state"] == "RESEARCH_READY"
+    assert "incomplete" not in result["summary"]
+
+
+def test_workspace_does_not_blame_fundamentals_when_other_layers_are_the_gap():
+    result = build_stock_workspace(
+        "TEST",
+        scan_payload={},
+        long_term_payload={
+            "scanned_at": "2025-01-01T10:00:00+00:00",
+            "records": [{"symbol": "TEST", "sector": "Industrials", "fundamentals": _USABLE_FUND}],
+        },
+        raw_fundamentals={
+            "available": True,
+            "fetched_at": "2026-08-17T09:00:00+00:00",
+            "data": {
+                "about": "Makes industrial equipment",
+                "quarterly_results": [{"": "Sales+", "Jun 2026": 78}],
+            },
+            "section_as_of": {"financial_history": "2026-06-01"},
+        },
+        frame=_ohlcv_frame("2026-08-14"),
+        news=[],
+        fno_payload={},
+        now=datetime(2026, 8, 17, 12, 0, tzinfo=timezone.utc),
+    )
+    assert result["fundamentals"]["coverage_pct"] >= 40
+    assert result["confidence_pct"] < 70
+    assert result["state"] == "TECHNICAL_ONLY"
+    assert "other research layers" in result["summary"]
+    assert "incomplete" not in result["summary"]
+
+
+def test_workspace_incomplete_coverage_is_not_called_stale():
+    result = build_stock_workspace(
+        "THIN",
+        scan_payload={
+            "scanned_at": "2026-08-17T10:00:00+00:00",
+            "records": [{"symbol": "THIN", "company": "Thin Ltd"}],
+        },
+        long_term_payload={"records": []},
+        raw_fundamentals={
+            "available": True,
+            "fetched_at": "2026-08-17T09:00:00+00:00",
+            "data": {"about": "Thin coverage", "key_ratios": [{"name": "Stock P/E", "value": "21.2"}]},
+            "section_as_of": {},
+        },
+        frame=_ohlcv_frame("2026-08-14"),
+        news=[],
+        fno_payload={},
+        now=datetime(2026, 8, 17, 12, 0, tzinfo=timezone.utc),
+    )
+    assert result["fundamentals"]["coverage_pct"] < 40
+    assert result["state"] == "TECHNICAL_ONLY"
+    assert result["summary"] == "Price structure is available, but fundamental coverage is incomplete."
+
+
+def test_hydrate_retries_frozen_pack_and_dates_section(monkeypatch):
+    standalone = {
+        "quarterly_results": [{"": "Sales+", "Jun 2026": 78}],
+        "_qt_fetched_at": "2026-08-17T09:00:00+00:00",
+    }
+    monkeypatch.setattr(
+        "fundamentals.lazy.ensure_deep_fundamentals",
+        lambda symbol, force_refresh=False: standalone,
+    )
+    out = _hydrate_raw_fundamentals(
+        "EIMCOELECO",
+        {
+            "available": True,
+            "data": {"quarterly_results": [{"": "Sales+", "Mar 2024": 84}]},
+            "section_as_of": {},
+        },
+    )
+    assert out["section_as_of"]["financial_history"] == "2026-06-01"
+    assert "Jun 2026" in str(out["data"].get("quarterly_results"))
+
+
+def test_hydrate_fills_section_as_of_from_current_pack_without_fetch(monkeypatch):
+    def _fail(*_args, **_kwargs):
+        raise AssertionError("must not refresh a current pack")
+
+    monkeypatch.setattr("fundamentals.lazy.ensure_deep_fundamentals", _fail)
+    out = _hydrate_raw_fundamentals(
+        "EIMCOELECO",
+        {
+            "available": True,
+            "data": {"quarterly_results": [{"": "Sales+", "Jun 2026": 78}]},
+            "section_as_of": {},
+        },
+    )
+    assert out["section_as_of"]["financial_history"] == "2026-06-01"

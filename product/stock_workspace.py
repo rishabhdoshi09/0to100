@@ -84,17 +84,18 @@ def _parse_time(value: Any) -> datetime | None:
 
 
 def _source(name: str, available: bool, as_of: Any, max_age_days: int, meaning: str,
-            *, now: datetime) -> dict[str, Any]:
+            *, now: datetime, status: str | None = None) -> dict[str, Any]:
     stamp = _parse_time(as_of)
     age_days = None if stamp is None else max(0, int((now - stamp.astimezone(timezone.utc)).total_seconds() // 86400))
-    if not available:
-        status = "MISSING"
-    elif age_days is None:
-        status = "UNKNOWN_DATE"
-    elif age_days > max_age_days:
-        status = "STALE"
-    else:
-        status = "FRESH"
+    if status is None:
+        if not available:
+            status = "MISSING"
+        elif age_days is None:
+            status = "UNKNOWN_DATE"
+        elif age_days > max_age_days:
+            status = "STALE"
+        else:
+            status = "FRESH"
     return {
         "name": name,
         "available": bool(available),
@@ -102,6 +103,142 @@ def _source(name: str, available: bool, as_of: Any, max_age_days: int, meaning: 
         "as_of": str(as_of or ""),
         "age_days": age_days,
         "max_age_days": max_age_days,
+        "meaning": meaning,
+    }
+
+
+def _filings_as_of(
+    raw_record: Mapping[str, Any],
+    *,
+    now: datetime | None = None,
+) -> tuple[Any, str, int | None]:
+    """Latest dated filings column and how many reporting quarters it is behind."""
+    try:
+        from fundamentals.period_freshness import pack_latest_period
+
+        stamp, label = pack_latest_period(raw_record)
+    except Exception:
+        stamp, label = None, ""
+    if stamp is None:
+        iso = str((raw_record.get("section_as_of") or {}).get("financial_history") or "")
+        if iso:
+            parsed = _parse_time(iso)
+            stamp = parsed.date() if parsed else None
+            label = label or iso
+    behind = None
+    if stamp is not None:
+        try:
+            from fundamentals.period_freshness import quarters_behind
+
+            behind = quarters_behind(stamp, now)
+        except Exception:
+            behind = None
+    return stamp, str(label or ""), behind
+
+
+def _filings_max_age_days(stamp: Any) -> int:
+    """Days from the period-start until the next reporting-season cutoff."""
+    try:
+        from datetime import date as date_cls
+
+        year = int(stamp.year)
+        month = int(stamp.month)
+        if month <= 3:
+            cutoff = date_cls(year, 8, 16)
+        elif month <= 6:
+            cutoff = date_cls(year, 11, 16)
+        elif month <= 9:
+            cutoff = date_cls(year + 1, 2, 16)
+        else:
+            cutoff = date_cls(year + 1, 5, 16)
+        return max(1, (cutoff - stamp).days)
+    except Exception:
+        return 120
+
+
+def _section_as_of_from_pack(data: Mapping[str, Any]) -> dict[str, str]:
+    try:
+        from fundamentals.period_freshness import pack_latest_period
+    except Exception:
+        return {}
+    stamp, _ = pack_latest_period(data)
+    share_stamp, _ = pack_latest_period({"quarterly_results": list(data.get("shareholding") or [])})
+    out: dict[str, str] = {}
+    if stamp is not None:
+        out["financial_history"] = stamp.isoformat()
+    if share_stamp is not None:
+        out["shareholding_history"] = share_stamp.isoformat()
+    elif stamp is not None:
+        out["shareholding_history"] = stamp.isoformat()
+    return out
+
+
+def _hydrate_raw_fundamentals(symbol: str, raw: Mapping[str, Any] | None) -> dict[str, Any]:
+    """Retry a frozen Screener table once, then date section_as_of from the pack."""
+    payload = dict(raw or {})
+    data = dict(payload.get("data") or {})
+    if not data:
+        return payload
+    try:
+        from fundamentals.period_freshness import pack_needs_filings_retry, prefer_fresher_pack
+    except Exception:
+        return payload
+    if pack_needs_filings_retry(data):
+        try:
+            from fundamentals.lazy import ensure_deep_fundamentals
+
+            fresh = ensure_deep_fundamentals(symbol, force_refresh=True)
+            if isinstance(fresh, dict) and fresh:
+                data = prefer_fresher_pack(data, fresh)
+                payload = {
+                    **payload,
+                    "available": True,
+                    "data": data,
+                    "fetched_at": str(fresh.get("_qt_fetched_at") or payload.get("fetched_at") or ""),
+                }
+        except Exception:
+            pass
+    filled = _section_as_of_from_pack(dict(payload.get("data") or {}))
+    if filled:
+        section = dict(payload.get("section_as_of") or {})
+        section.update(filled)
+        payload = {**payload, "section_as_of": section}
+    return payload
+
+
+def _deep_fundamentals_source(
+    raw_record: Mapping[str, Any],
+    available: bool,
+    *,
+    now: datetime,
+) -> dict[str, Any]:
+    """Filings freshness follows the reporting season, not a 120-day clock from 1 Mar."""
+    stamp, label, behind = _filings_as_of(raw_record, now=now)
+    fetched = raw_record.get("fetched_at") or ""
+    meaning = (
+        "Current cached company description and financial tables; "
+        "freshness follows the latest disclosed quarter, not the scrape clock."
+    )
+    if not available:
+        return _source("Deep fundamentals", False, fetched or label, 120, meaning, now=now)
+    if stamp is None:
+        return _source("Deep fundamentals", True, fetched, 2, meaning, now=now)
+    status = "FRESH" if behind == 0 else "STALE"
+    as_of = stamp.isoformat() if hasattr(stamp, "isoformat") else label
+    age = None
+    try:
+        age = max(0, (now.astimezone(timezone.utc).date() - stamp).days)
+    except Exception:
+        age = None
+    return {
+        "name": "Deep fundamentals",
+        "available": True,
+        "status": status,
+        "as_of": as_of,
+        "as_of_label": label,
+        "age_days": age,
+        "max_age_days": _filings_max_age_days(stamp),
+        "quarters_behind": behind,
         "meaning": meaning,
     }
 
@@ -503,6 +640,7 @@ def _default_inputs(symbol: str) -> dict[str, Any]:
                 }
         except Exception:
             pass
+    raw = _hydrate_raw_fundamentals(symbol, raw)
     try:
         from data.bhavcopy_runtime import get_ohlcv
         frame = get_ohlcv(symbol)
@@ -587,12 +725,9 @@ def build_stock_workspace(
         _source("Official price history", technical.get("available", False), technical.get("latest_date"), 4, "Charts and technical calculations use saved NSE daily OHLCV.", now=now),
         _source("Whole-market scanner", bool(scan_row), (scan_payload or {}).get("scanned_at"), 1, "Current technical setup, entry framework and scanner reasons.", now=now),
         _source("Long-term research", bool(long_row), (long_term_payload or {}).get("scanned_at"), 4, "Current business-quality snapshot combined with technical timing.", now=now),
-        _source(
-            "Deep fundamentals",
-            fundamentals.get("available", False),
-            (fundamentals.get("section_as_of", {}) or {}).get("financial_history") or raw_record.get("fetched_at"),
-            120,
-            "Current cached company description and financial tables; freshness follows the latest disclosed financial period when available.",
+        _deep_fundamentals_source(
+            raw_record,
+            available=bool(fundamentals.get("available")),
             now=now,
         ),
         _source("Company-linked news", bool(news_rows), (news_rows[0].get("published_at") or news_rows[0].get("fetched_at")) if news_rows else "", 7, "Dated context from configured sources; never a standalone order signal.", now=now),
@@ -607,12 +742,26 @@ def build_stock_workspace(
 
     technical_ready = bool(technical.get("available"))
     fundamental_ready = bool(fundamentals.get("available")) and fundamentals.get("coverage_pct", 0) >= 40
-    if technical_ready and fundamental_ready and confidence_pct >= 70:
+    _, filings_label, quarters_behind_n = _filings_as_of(raw_record, now=now)
+    filings_stale = quarters_behind_n is not None and quarters_behind_n >= 1
+    if technical_ready and fundamental_ready and not filings_stale and int(confidence_pct) >= 70:
         state = "RESEARCH_READY"
         summary = "Technicals and a usable fundamental snapshot are both present. Check source dates and invalidation before acting."
     elif technical_ready:
         state = "TECHNICAL_ONLY"
-        summary = "Price structure is available, but fundamental coverage is incomplete or stale."
+        if not fundamental_ready:
+            summary = "Price structure is available, but fundamental coverage is incomplete."
+        elif filings_stale:
+            as_of_label = filings_label or "an older period"
+            summary = (
+                f"Price is current. Filings on file stop at {as_of_label} — "
+                "older than the current reporting season."
+            )
+        else:
+            summary = (
+                "Price structure is available. Fundamentals are usable; "
+                "other research layers are missing or stale."
+            )
     elif fundamental_ready:
         state = "FUNDAMENTAL_ONLY"
         summary = "Fundamental data is available, but official price history or technical context is missing."

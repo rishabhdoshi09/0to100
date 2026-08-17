@@ -46,13 +46,16 @@ def ensure_deep_fundamentals(
     if not force_refresh:
         cached = cache.get(symbol)
         if cached is not None:
-            _last_trail[symbol] = [{
-                "step": 1, "source": "local_cache_fresh", "status": "OK",
-                "message": "Today's IST cache hit — no network fetch (once per day)",
-                "elapsed_ms": 0, "sections": {}, "reputed": True,
-                "official": False, "coverage": 100,
-            }]
-            return cached
+            from fundamentals.period_freshness import pack_needs_filings_retry
+            if not pack_needs_filings_retry(cached):
+                _last_trail[symbol] = [{
+                    "step": 1, "source": "local_cache_fresh", "status": "OK",
+                    "message": "Today's IST cache hit — no network fetch (once per day)",
+                    "elapsed_ms": 0, "sections": {}, "reputed": True,
+                    "official": False, "coverage": 100,
+                }]
+                return cached
+            force_refresh = True
         if not cache.has(symbol):
             fail_ts = _fail_until.get(symbol)
             if fail_ts and time.time() < fail_ts:

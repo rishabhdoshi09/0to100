@@ -28,6 +28,7 @@ openai>=1.30.0          # DeepSeek uses OpenAI-compatible API
 pandas>=2.0.0
 pydantic-settings>=2.2.0
 pydantic>=2.6.0
+pypdf>=5.0.0
 pytest==9.0.3
 python-dotenv>=1.0.0
 requests>=2.31.0

@@ -56,22 +56,30 @@ class AlertEngine:
         token = ""
         chat_id = ""
         try:
-            from config import settings
-            token = str(getattr(settings, "telegram_bot_token", "") or "").strip()
-            chat_id = str(getattr(settings, "telegram_chat_id", "") or "").strip()
+            from alerts.telegram_status import telegram_credentials, usable_telegram_secret
+
+            token, chat_id = telegram_credentials()
+            self._token = token
+            self._chat_id = chat_id
+            self.enabled = usable_telegram_secret(token) and usable_telegram_secret(chat_id)
         except Exception:
-            pass
-        if not (token and chat_id):
             try:
-                from dotenv import load_dotenv
-                load_dotenv(Path(__file__).resolve().parents[1] / ".env", override=False)
+                from config import settings
+                token = str(getattr(settings, "telegram_bot_token", "") or "").strip()
+                chat_id = str(getattr(settings, "telegram_chat_id", "") or "").strip()
             except Exception:
                 pass
-            token = (os.environ.get("TELEGRAM_BOT_TOKEN", "") or token).strip()
-            chat_id = (os.environ.get("TELEGRAM_CHAT_ID", "") or chat_id).strip()
-        self._token = token
-        self._chat_id = chat_id
-        self.enabled = bool(self._token and self._chat_id)
+            if not (token and chat_id):
+                try:
+                    from dotenv import load_dotenv
+                    load_dotenv(Path(__file__).resolve().parents[1] / ".env", override=False)
+                except Exception:
+                    pass
+                token = (os.environ.get("TELEGRAM_BOT_TOKEN", "") or token).strip()
+                chat_id = (os.environ.get("TELEGRAM_CHAT_ID", "") or chat_id).strip()
+            self._token = token
+            self._chat_id = chat_id
+            self.enabled = bool(self._token and self._chat_id)
         if not self.enabled:
             logger.warning(
                 "telegram_not_configured — set TELEGRAM_BOT_TOKEN and "

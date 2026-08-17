@@ -10,6 +10,7 @@ from product.buy_thesis import (
     build_smart_money,
     classify_client,
     resolve_sector,
+    sector_wave_verdict,
 )
 
 
@@ -44,12 +45,13 @@ def test_plan_fills_stop_target_from_price_when_scan_blank():
 def test_build_buy_thesis_does_not_invent_a_blank_symbol_book():
     from unittest.mock import patch
     fake_book = {
+        "kind": "company_backlog",
         "available": False,
         "status": "unavailable",
-        "note": "NSE book is empty (closed session or no quotes).",
-        "source": "nse",
-        "bids": [],
-        "asks": [],
+        "note": "No company order-book figure in filings.",
+        "source": "",
+        "value_cr": None,
+        "bullets": [],
     }
     with patch("product.buy_thesis._order_book", return_value=fake_book), \
          patch("product.buy_thesis._load_flows", return_value={}), \
@@ -59,7 +61,8 @@ def test_build_buy_thesis_does_not_invent_a_blank_symbol_book():
     assert payload["symbol"] == "BSE"
     assert payload["why"]
     assert payload["order_book"]["status"] == "unavailable"
-    assert payload["order_book"].get("bids") == []
+    assert payload["order_book"].get("kind") == "company_backlog"
+    assert payload["order_book"].get("value_cr") is None
     assert "sector_wave" in payload
     assert "smart_money" in payload
     assert "earnings" in payload
@@ -83,6 +86,8 @@ def test_sector_wave_no_claim_when_sector_unknown():
         wave = build_sector_wave("ZZZNOTASECTOR", workspace_sector="", scan_records=[], flows={})
     assert wave["wave"] == "NO_CLAIM"
     assert wave["identified"] is False
+    assert wave["verdict"] == "NO"
+    assert str(wave["verdict_line"]).startswith("NO")
     assert "inflow" not in wave["headline"].lower() or "not identified" in wave["headline"].lower()
 
 
@@ -134,8 +139,18 @@ def test_sector_wave_inflow_from_basket_and_pack():
             flows={},
         )
     assert wave["wave"] == "INFLOW"
+    assert wave["verdict"] == "YES"
+    assert str(wave["verdict_line"]).startswith("YES")
     assert "Capital Goods" in wave["headline"]
     assert any("Nifty" in b for b in wave["bullets"])
+
+
+def test_sector_wave_verdict_is_yes_only_for_inflow():
+    assert sector_wave_verdict("INFLOW")["verdict"] == "YES"
+    for wave in ("OUTFLOW", "MIXED", "NO_CLAIM", ""):
+        bit = sector_wave_verdict(wave)
+        assert bit["verdict"] == "NO"
+        assert bit["verdict_line"].startswith("NO")
 
 
 def test_classify_client_does_not_call_a_desk_influential():
@@ -215,3 +230,76 @@ def test_earnings_block_reads_quarters_margins_valuations():
     )
     pb = next(v for v in from_book["valuations"] if v["key"] == "pb")
     assert 2.5 < pb["value"] < 4.0
+
+
+def test_earnings_never_calls_mar_2024_latest_in_aug_2026():
+    from datetime import date
+    from product.buy_thesis import _sales_from_raw
+
+    raw = {
+        "quarterly_results": [
+            {"": "Sales+", "Dec 2023": 48, "Mar 2024": 84},
+            {"": "Net Profit", "Dec 2023": 8, "Mar 2024": 15},
+        ],
+        "profit_loss": [
+            {"": "Sales+", "Mar 2021": 126, "Mar 2022": 84, "Mar 2023": 173, "Mar 2024": 228},
+            {"": "OPM %", "Mar 2024": 18.0},
+            {"": "NPM %", "Mar 2024": 17.1},
+        ],
+    }
+    block = _earnings_block(raw, [], as_of=date(2026, 8, 17))
+    joined = " ".join(block["bullets"])
+    assert "Latest quarter" not in joined
+    assert "stale" in joined.lower()
+    assert "Mar 2024" in joined
+    assert block["stale"] is True
+    assert block["sales_qoq"]["latest"] == 84
+
+    sales = _sales_from_raw(
+        {
+            "fetched_at": "2026-08-17",
+            "data": {"profit_loss": raw["profit_loss"]},
+        },
+        as_of=date(2026, 8, 17),
+    )
+    assert sales["series"][-1]["period"] == "Mar 2024"
+    assert sales["cagr_3y"] == round(((228 / 126) ** (1 / 3) - 1) * 100, 1)
+    assert sales["stale"] is True
+
+
+def test_earnings_uses_jun_2026_as_latest_on_17_aug():
+    from datetime import date
+
+    raw = {
+        "quarterly_results": [
+            {"": "Sales+", "Jun 2025": 40, "Sep 2025": 50, "Dec 2025": 60, "Mar 2026": 70, "Jun 2026": 78},
+            {"": "Net Profit", "Jun 2025": 8, "Sep 2025": 9, "Dec 2025": 10, "Mar 2026": 12, "Jun 2026": 14},
+        ],
+        "profit_loss": [
+            {"": "Sales+", "Mar 2024": 228, "Mar 2025": 300, "Mar 2026": 350},
+            {"": "OPM %", "Mar 2026": 19.0},
+        ],
+    }
+    block = _earnings_block(raw, [], as_of=date(2026, 8, 17))
+    joined = " ".join(block["bullets"])
+    assert "Latest quarter" in joined
+    assert "Jun 2026" in joined
+    assert "stale" not in joined.lower()
+    assert block["stale"] is False
+    assert block["sales_qoq"]["latest"] == 78
+
+
+def test_earnings_sorts_unsorted_columns_and_ignores_ttm():
+    from datetime import date
+
+    raw = {
+        "quarterly_results": [
+            {"": "Sales+", "TTM": 999, "Jun 2026": 78, "Mar 2024": 84, "Mar 2026": 70},
+        ],
+    }
+    block = _earnings_block(raw, [], as_of=date(2026, 8, 17))
+    assert block["sales_qoq"]["latest"] == 78
+    assert block["sales_qoq"]["latest_period"] == "Jun 2026"
+    assert "Latest quarter" in " ".join(block["bullets"])
+    assert "999" not in " ".join(block["bullets"])
+

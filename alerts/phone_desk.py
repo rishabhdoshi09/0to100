@@ -170,6 +170,7 @@ def format_thesis(payload: Mapping[str, Any]) -> str:
         lines.append(f"Upside +{upside:.1f}% from buy — research, not an order.")
     lines.append("")
     lines.append("<b>Sector wave</b>")
+    lines.append(_esc(wave.get("verdict_line") or wave.get("verdict") or "NO"))
     lines.append(_esc(wave.get("headline") or "Sector not identified."))
     for item in list(wave.get("bullets") or [])[:3]:
         lines.append("· " + _esc(item)[:140])
@@ -182,10 +183,17 @@ def format_thesis(payload: Mapping[str, Any]) -> str:
     lines.append("<b>Earnings / margins / valuations</b>")
     for item in list(earnings.get("bullets") or [])[:6]:
         lines.append("· " + _esc(item)[:140])
-    note = str(book.get("note") or "No live depth.")
-    src = str(book.get("source") or "")
     lines.append("")
-    lines.append(f"<b>Order book</b> — {_esc(note)}" + (f" ({_esc(src)})" if src else ""))
+    lines.append("<b>Company order book</b> — " + _esc(
+        book.get("note") or "Unexecuted customer orders, not exchange bid/ask."
+    ))
+    value_cr = _f(book.get("value_cr"))
+    if value_cr is not None:
+        when = _esc(book.get("as_of_label") or book.get("as_of") or "")
+        stale = " (stale)" if book.get("stale") else ""
+        lines.append(f"Backlog ₹{value_cr:,.0f} cr{stale}" + (f" as of {when}" if when else ""))
+    for item in list(book.get("bullets") or [])[:3]:
+        lines.append("· " + _esc(item)[:160])
     lines.append("Paper/watch: Home pe card, ya owner chat ke buttons.")
     text = "\n".join(lines)
     return text[:3900]

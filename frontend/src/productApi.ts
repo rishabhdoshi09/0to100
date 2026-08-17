@@ -487,6 +487,8 @@ export type BuyThesis = {
     identified?: boolean
     source?: string
     wave?: string
+    verdict?: 'YES' | 'NO' | string
+    verdict_line?: string
     headline?: string
     note?: string
     chg_1d?: number | null
@@ -510,6 +512,8 @@ export type BuyThesis = {
   earnings?: {
     available?: boolean
     bullets?: string[]
+    stale?: boolean
+    latest_period?: string
     quarterly_sales?: Array<{ period: string; value: number }>
     quarterly_profit?: Array<{ period: string; value: number }>
     opm?: Array<{ period: string; value: number }>
@@ -517,21 +521,34 @@ export type BuyThesis = {
     valuations?: Array<{ key: string; label?: string; value?: number; unit?: string }>
     growth?: Array<{ key: string; label?: string; value?: number; unit?: string }>
   }
+  filings_stale?: boolean
+  filings_as_of?: string
+  filings_refresh_attempted?: boolean
   sales: {
     available: boolean
     cagr_3y?: number | null
     series?: Array<{ period: string; sales_cr: number }>
     source?: string
     as_of?: string
+    as_of_period?: string
+    stale?: boolean
     note?: string
   }
   order_book: {
+    kind?: string
     available?: boolean
     status?: string
     note?: string
     source?: string
-    bids?: Array<{ price?: number; quantity?: number }>
-    asks?: Array<{ price?: number; quantity?: number }>
+    source_url?: string
+    value_cr?: number | null
+    prior_cr?: number | null
+    change_pct?: number | null
+    coverage_months?: number | null
+    as_of?: string
+    as_of_label?: string
+    stale?: boolean
+    bullets?: string[]
   }
   gaps?: string[]
   fetched?: { fundamentals?: boolean; source?: string; message?: string }

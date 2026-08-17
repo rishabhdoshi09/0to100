@@ -1,10 +1,11 @@
 """Buy thesis for one clicked name — why it is on the desk, with live layers.
 
 Never invents prices, sales, flows, or a book. Missing layers stay missing and
-are fetched from the highest-grade source still allowed: Kite depth → NSE
-quote-equity → Screener/Yahoo fundamentals resolver. Sector wave uses the
+are fetched from the highest-grade source still allowed: Screener/Yahoo
+fundamentals, then company presentations for order backlog. Sector wave uses the
 official NSE-universe sector map plus bhavcopy; FII/DII at the stock is
 shareholding change + NSE bulk/block prints, never a guessed print.
+Company order book is unexecuted customer orders from filings, not exchange depth.
 """
 from __future__ import annotations
 
@@ -76,7 +77,8 @@ def _table_series(
             if num is None:
                 continue
             series.append({"period": str(key), "value": num})
-        return series
+        from fundamentals.period_freshness import normalize_period_points
+        return normalize_period_points(series)
     return []
 
 
@@ -372,6 +374,34 @@ def _sector_bulk_net(sector: str, deals: Sequence[Mapping[str, Any]] | None) -> 
     }
 
 
+def sector_wave_verdict(wave: str) -> dict[str, str]:
+    """First reply while discussing a sector wave: YES or NO, nothing in between.
+
+    YES only when the tape is a clean INFLOW. OUTFLOW / MIXED / NO_CLAIM stay NO —
+    never dress thin evidence as a supporting wave.
+    """
+    kind = str(wave or "NO_CLAIM").upper()
+    if kind == "INFLOW":
+        return {
+            "verdict": "YES",
+            "verdict_line": "YES — sector money is coming in around this name.",
+        }
+    if kind == "OUTFLOW":
+        return {
+            "verdict": "NO",
+            "verdict_line": "NO — sector money is leaving, not supporting this name.",
+        }
+    if kind == "MIXED":
+        return {
+            "verdict": "NO",
+            "verdict_line": "NO — sector tape is mixed; do not treat this as a supporting wave.",
+        }
+    return {
+        "verdict": "NO",
+        "verdict_line": "NO — not enough current sector evidence to claim a wave.",
+    }
+
+
 def build_sector_wave(
     symbol: str,
     workspace_sector: str = "",
@@ -385,6 +415,7 @@ def build_sector_wave(
         return {
             **ident,
             "wave": "NO_CLAIM",
+            **sector_wave_verdict("NO_CLAIM"),
             "headline": "Sector not identified — no inflow claim.",
             "note": "Sector is unknown in the NSE map, NSE quote, and Screener peer header — no inflow claim.",
             "chg_1d": None,
@@ -469,6 +500,7 @@ def build_sector_wave(
     return {
         **ident,
         "wave": wave,
+        **sector_wave_verdict(wave),
         "headline": headlines[wave],
         "note": (
             "NSE does not publish FII/DII by sector. This wave uses the stock's mapped "
@@ -614,20 +646,47 @@ def build_smart_money(
     }
 
 
-def _earnings_block(raw_data: Mapping[str, Any], fund_metrics: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
-    q_sales = _table_series(raw_data.get("quarterly_results"), "sales", "revenue")
+def _earnings_block(
+    raw_data: Mapping[str, Any],
+    fund_metrics: Sequence[Mapping[str, Any]],
+    *,
+    as_of=None,
+) -> dict[str, Any]:
+    from fundamentals.period_freshness import (
+        expected_latest_quarter,
+        pack_latest_period,
+        quarters_behind,
+    )
+
+    q_sales = _table_series(
+        raw_data.get("quarterly_results"), "sales", "revenue", exclude=("growth",)
+    )
     q_profit = _table_series(raw_data.get("quarterly_results"), "net profit", "profit after tax", "pat")
-    opm = _table_series(raw_data.get("profit_loss"), "opm")
-    npm = _table_series(raw_data.get("profit_loss"), "npm")
+    opm = _table_series(raw_data.get("quarterly_results"), "opm")
+    npm = _table_series(raw_data.get("quarterly_results"), "npm")
+    if not opm:
+        opm = _table_series(raw_data.get("profit_loss"), "opm")
+    if not npm and q_sales and q_profit:
+        by_p = {row["period"]: row["value"] for row in q_profit}
+        computed = []
+        for row in q_sales:
+            s = _f(row.get("value"))
+            p = _f(by_p.get(row["period"]))
+            if s and s > 0 and p is not None:
+                computed.append({"period": row["period"], "value": round(p / s * 100.0, 1)})
+        npm = computed
+    if not npm:
+        npm = _table_series(raw_data.get("profit_loss"), "npm")
     if not opm:
         # Compute latest annual OPM from operating profit / sales when the % row is absent.
         op = _table_series(raw_data.get("profit_loss"), "operating profit", "ebit")
         sales_a = _table_series(raw_data.get("profit_loss"), "sales", "revenue")
-        if op and sales_a and len(op) == len(sales_a):
+        if op and sales_a:
+            by_op = {row["period"]: row["value"] for row in op}
             computed = []
-            for a, b in zip(sales_a, op):
+            for a in sales_a:
                 s = _f(a.get("value"))
-                o = _f(b.get("value"))
+                o = _f(by_op.get(a["period"]))
                 if s and s > 0 and o is not None:
                     computed.append({"period": a["period"], "value": round(o / s * 100.0, 1)})
             opm = computed
@@ -682,13 +741,21 @@ def _earnings_block(raw_data: Mapping[str, Any], fund_metrics: Sequence[Mapping[
         _metric("sales_growth_3y"), _metric("profit_growth_3y"),
     ) if item]
 
+    latest_stamp, latest_label = pack_latest_period(raw_data)
+    behind = quarters_behind(latest_stamp, as_of)
+    stale = behind is not None and behind >= 2
+    current = behind == 0
     bullets: list[str] = []
     if qoq:
-        bullets.append(
-            f"Latest quarter sales ₹{qoq['latest']:,.0f} cr ({qoq['latest_period']}) "
-            f"{qoq['pct']:+.1f}% QoQ" if qoq.get("pct") is not None else
-            f"Latest quarter sales ₹{qoq['latest']:,.0f} cr ({qoq['latest_period']})"
-        )
+        period = qoq["latest_period"]
+        amount = f"₹{qoq['latest']:,.0f} cr"
+        extra = f" {qoq['pct']:+.1f}% QoQ" if qoq.get("pct") is not None else ""
+        if current:
+            bullets.append(f"Latest quarter sales {amount} ({period}){extra}")
+        elif stale:
+            bullets.append(f"As of {period} (stale) sales {amount}{extra}")
+        else:
+            bullets.append(f"As of {period} sales {amount}{extra}")
     if yoy and yoy.get("pct") is not None:
         bullets.append(f"Sales {yoy['pct']:+.1f}% YoY vs {yoy['prior_period']}")
     if profit_qoq:
@@ -705,6 +772,12 @@ def _earnings_block(raw_data: Mapping[str, Any], fund_metrics: Sequence[Mapping[
         bullets.append(f"P/E {pe['value']}x")
     if pb is not None:
         bullets.append(f"P/B {pb}x")
+    if stale:
+        need = expected_latest_quarter(as_of).strftime("%b %Y")
+        bullets.append(
+            f"Filings column is behind — current season expects {need} or later. "
+            "Not treated as the latest quarter."
+        )
     if not bullets:
         bullets.append("Earnings table not in cache yet — fetch fills this from Screener / Yahoo.")
 
@@ -720,6 +793,9 @@ def _earnings_block(raw_data: Mapping[str, Any], fund_metrics: Sequence[Mapping[
         "valuations": valuations,
         "growth": earnings_metrics,
         "bullets": bullets,
+        "stale": stale,
+        "latest_period": latest_label or (qoq or {}).get("latest_period") or "",
+        "quarters_behind": behind,
     }
 
 
@@ -773,7 +849,13 @@ def _why_chosen(scan: Mapping[str, Any], long_row: Mapping[str, Any], tech: Mapp
     return out
 
 
-def _sales_from_raw(raw_record: Mapping[str, Any]) -> dict[str, Any]:
+def _sales_from_raw(raw_record: Mapping[str, Any], *, as_of=None) -> dict[str, Any]:
+    from fundamentals.period_freshness import (
+        normalize_period_points,
+        pack_filings_stale,
+        pack_latest_period,
+    )
+
     data = dict((raw_record or {}).get("data") or {})
     rows = list(data.get("profit_loss") or [])
     series: list[dict[str, Any]] = []
@@ -783,59 +865,66 @@ def _sales_from_raw(raw_record: Mapping[str, Any]) -> dict[str, Any]:
         label = str(row.get("") or row.get("row_label") or "").lower()
         if "sales" not in label and "revenue" not in label:
             continue
+        if "growth" in label:
+            continue
         for key, value in row.items():
             if key in ("", "row_label"):
                 continue
             num = _f(str(value).replace(",", "").replace("₹", "").replace("%", ""))
             if num is None:
                 continue
-            series.append({"period": str(key), "sales_cr": num})
+            series.append({"period": str(key), "value": num, "sales_cr": num})
         break
+    series = [
+        {"period": item["period"], "sales_cr": item["sales_cr"]}
+        for item in normalize_period_points(series)
+    ]
     cagr = None
-    if len(series) >= 2:
-        start, end = series[0]["sales_cr"], series[-1]["sales_cr"]
-        years = max(1, len(series) - 1)
+    window = series[-4:]
+    if len(window) >= 2:
+        start, end = window[0]["sales_cr"], window[-1]["sales_cr"]
+        years = max(1, len(window) - 1)
         if start and start > 0 and end is not None and end >= 0:
             try:
                 cagr = round(((end / start) ** (1.0 / years) - 1.0) * 100.0, 1)
             except Exception:
                 cagr = None
     fetched = str((raw_record or {}).get("fetched_at") or "")
+    _latest_stamp, latest_label = pack_latest_period({"profit_loss": rows})
+    stale = pack_filings_stale({"profit_loss": rows}, as_of=as_of)
+    note = "Annual sales from the company filings pack (Screener)."
+    if stale and latest_label:
+        note = (
+            f"Annual table as of {latest_label} (stale vs current reporting season). "
+            "Not a current-year filing."
+        )
+    elif not series:
+        note = "Sales history not in cache yet — fetch fills this from Screener / Yahoo."
     return {
         "available": bool(series),
         "cagr_3y": cagr,
         "series": series[-6:],
         "source": "screener" if series else "",
         "as_of": fetched,
-        "note": (
-            "Annual sales from the company filings pack (Screener)."
-            if series else
-            "Sales history not in cache yet — fetch fills this from Screener / Yahoo."
-        ),
+        "as_of_period": latest_label,
+        "stale": stale,
+        "note": note,
     }
 
 
-def _order_book(symbol: str) -> dict[str, Any]:
+def _order_book(symbol: str, raw_data: Mapping[str, Any] | None = None, ttm_sales_cr: float | None = None) -> dict[str, Any]:
     try:
-        from product.breakout_quality import enrich_optional_context
-        kite_book = dict((enrich_optional_context(symbol) or {}).get("order_book") or {})
-        if kite_book.get("status") not in (None, "", "unavailable"):
-            kite_book["source"] = kite_book.get("source") or "kite"
-            kite_book["available"] = True
-            return kite_book
-    except Exception:
-        pass
-    try:
-        from data.nse_live import fetch_market_depth
-        return fetch_market_depth(symbol)
+        from product.company_order_book import build_company_order_book
+        return build_company_order_book(symbol, raw_data=raw_data, ttm_sales_cr=ttm_sales_cr)
     except Exception as exc:
         return {
+            "kind": "company_backlog",
             "available": False,
             "status": "unavailable",
-            "note": f"Order book unavailable ({type(exc).__name__})",
+            "value_cr": None,
+            "note": f"Company order book unavailable ({type(exc).__name__}: {exc})",
             "source": "",
-            "bids": [],
-            "asks": [],
+            "bullets": [],
         }
 
 
@@ -910,6 +999,10 @@ def build_buy_thesis(symbol: str, *, fetch_missing: bool = False) -> dict[str, A
         raw = {}
     raw_data = dict((raw or {}).get("data") or {})
     sales = _sales_from_raw(raw)
+    ttm_sales = None
+    q_sales = _table_series(raw_data.get("quarterly_results"), "sales", "revenue", exclude=("growth",))
+    if len(q_sales) >= 2:
+        ttm_sales = sum(float(row["value"]) for row in q_sales[-4:])
     if sales.get("cagr_3y") is None:
         for metric in fund.get("metrics") or []:
             if isinstance(metric, Mapping) and metric.get("key") == "sales_growth_3y" and metric.get("value") is not None:
@@ -948,6 +1041,9 @@ def build_buy_thesis(symbol: str, *, fetch_missing: bool = False) -> dict[str, A
     )
     smart_money = build_smart_money(symbol, shareholding, flows)
     earnings = _earnings_block(raw_data, fund_metrics)
+    filings_stale = bool(earnings.get("stale") or sales.get("stale"))
+    filings_as_of = str(earnings.get("latest_period") or sales.get("as_of_period") or "")
+    filings_refresh_attempted = bool(raw_data.get("_filings_refresh_attempted"))
     headline = (
         str(workspace.get("summary") or "")
         or "Clicked name — evidence layers below. Not a buy instruction."
@@ -964,6 +1060,9 @@ def build_buy_thesis(symbol: str, *, fetch_missing: bool = False) -> dict[str, A
         "sector_wave": sector_wave,
         "smart_money": smart_money,
         "earnings": earnings,
+        "filings_stale": filings_stale,
+        "filings_as_of": filings_as_of,
+        "filings_refresh_attempted": filings_refresh_attempted,
         "technical": {
             "available": bool(tech.get("available")),
             "close": tech.get("close"),
@@ -985,7 +1084,7 @@ def build_buy_thesis(symbol: str, *, fetch_missing: bool = False) -> dict[str, A
             "about": (fund.get("company_about") or "")[:400],
         },
         "sales": sales,
-        "order_book": _order_book(symbol),
+        "order_book": _order_book(symbol, raw_data, ttm_sales),
         "gaps": workspace.get("gaps") or [],
         "fetched": fetched,
         "confidence_pct": workspace.get("confidence_pct"),

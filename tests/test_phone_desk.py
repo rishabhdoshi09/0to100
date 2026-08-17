@@ -66,6 +66,8 @@ def test_format_thesis_includes_requested_layers_and_stays_honest():
         "headline": "Clicked name — evidence below.",
         "plan": {"buy": 2018, "stop": 1875.1, "target": 2303.7, "upside_from_buy_pct": 14.2},
         "sector_wave": {
+            "verdict": "YES",
+            "verdict_line": "YES — sector money is coming in around this name.",
             "headline": "Manufacturing & Capital Goods basket is ahead of Nifty.",
             "bullets": ["Sector: Manufacturing & Capital Goods (from screener)"],
         },
@@ -76,12 +78,26 @@ def test_format_thesis_includes_requested_layers_and_stays_honest():
         "earnings": {
             "bullets": ["P/E 30.2x", "Operating margin 18.0%"],
         },
-        "order_book": {"note": "NSE quote HTTP 403", "source": "nse"},
+        "order_book": {
+            "kind": "company_backlog",
+            "note": "No company order-book figure in filings.",
+            "source": "company_presentation",
+            "value_cr": 39,
+            "as_of_label": "30 June 2025",
+            "stale": True,
+            "bullets": ["As of 30 June 2025 (stale) company order book ₹39 cr"],
+        },
     })
     assert "Sector wave" in text
+    assert "YES — sector money is coming in around this name." in text
+    yes_at = text.index("YES —")
+    headline_at = text.index("ahead of Nifty")
+    assert yes_at < headline_at
     assert "FII / DII" in text
     assert "P/E 30.2x" in text
-    assert "HTTP 403" in text
+    assert "Company order book" in text
+    assert "₹39 cr" in text or "39 cr" in text
+    assert "Last print" not in text
     assert "not an order" in text.lower() or "research" in text.lower()
 
 
