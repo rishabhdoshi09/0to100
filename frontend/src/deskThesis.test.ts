@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   deskSymbol,
+  filingsNeedRefresh,
   sectorWaveFirstLine,
   sectorWaveVerdict,
   thesisReplacesList,
@@ -34,5 +35,25 @@ describe('desk thesis helpers', () => {
     expect(thesisReplacesList(true, 'BSE')).toBe(true)
     expect(thesisReplacesList(true, '')).toBe(false)
     expect(thesisReplacesList(false, 'BSE')).toBe(false)
+  })
+
+  it('refetches filings when the pack is stale, not only when coverage is thin', () => {
+    expect(filingsNeedRefresh({
+      filings_stale: true,
+      fundamentals: { available: true, coverage_pct: 90 },
+    })).toBe(true)
+    expect(filingsNeedRefresh({
+      filings_stale: true,
+      filings_refresh_attempted: true,
+      fundamentals: { available: true, coverage_pct: 90 },
+    })).toBe(false)
+    expect(filingsNeedRefresh({
+      filings_stale: false,
+      fundamentals: { available: true, coverage_pct: 90 },
+    })).toBe(false)
+    expect(filingsNeedRefresh({
+      filings_stale: false,
+      fundamentals: { available: true, coverage_pct: 10 },
+    })).toBe(true)
   })
 })

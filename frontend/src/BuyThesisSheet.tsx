@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { ChartWorkspace } from './components'
 import { money, pct } from './format'
-import { sectorWaveFirstLine, sectorWaveVerdict } from './deskThesis'
+import { filingsNeedRefresh, sectorWaveFirstLine, sectorWaveVerdict } from './deskThesis'
 import { shouldPortalThesis, thesisSheetClassName, usePhoneLayout } from './phoneLayout'
 import {
   fetchBuyThesis,
@@ -45,6 +45,7 @@ export function BuyThesisSheet({
   const [error, setError] = useState('')
   const phone = usePhoneLayout()
   const sheetRef = useRef<HTMLElement | null>(null)
+  const refreshed = useRef('')
 
   useEffect(() => {
     let alive = true
@@ -54,8 +55,10 @@ export function BuyThesisSheet({
       .then((payload) => {
         if (!alive) return
         setThesis(payload)
-        const thin = !payload.fundamentals.available || Number(payload.fundamentals.coverage_pct || 0) < 40
-        if (!thin) return
+        const needsFetch = filingsNeedRefresh(payload)
+        if (!needsFetch) return
+        if (refreshed.current === symbol) return
+        refreshed.current = symbol
         setFetching(true)
         return fetchStockFundamentals(symbol, false)
           .then(() => fetchBuyThesis(symbol, false))
@@ -111,7 +114,17 @@ export function BuyThesisSheet({
         <p>{thesis?.headline || (loading ? 'Loading why this name is on the desk…' : 'Clicked name — evidence below.')}</p>
       </header>
       {error ? <p className="home-path-error">{error}</p> : null}
-      {fetching ? <p className="home-path-hint">Fetching company filings from Screener / Yahoo — current cache was thin.</p> : null}
+      {fetching ? (
+        <p className="home-path-hint">
+          {thesis?.filings_stale
+            ? `Filings look stale${thesis.filings_as_of ? ` (latest column ${thesis.filings_as_of})` : ''} — fetching a newer Screener pack.`
+            : 'Fetching company filings from Screener / Yahoo — current cache was thin.'}
+        </p>
+      ) : thesis?.filings_stale ? (
+        <p className="home-path-hint">
+          Filings as of {thesis.filings_as_of || 'an old column'} — older than the current reporting season. Not shown as latest.
+        </p>
+      ) : null}
 
         <div className="reco-sheet-kpis reco-numbers-light">
         <div>
@@ -183,7 +196,14 @@ export function BuyThesisSheet({
           ) : (
             <p>Filings not in cache yet. {fetching ? 'Fetching now…' : 'A fetch was attempted from Screener, then Yahoo.'}</p>
           )}
-          {sales?.cagr_3y != null ? <p>3-year sales CAGR {Number(sales.cagr_3y).toFixed(1)}% (annual table)</p> : null}
+          {sales?.cagr_3y != null ? (
+            <p>
+              3-year sales CAGR {Number(sales.cagr_3y).toFixed(1)}%
+              {sales.stale && sales.as_of_period
+                ? ` (annual table as of ${sales.as_of_period}, stale)`
+                : ' (annual table)'}
+            </p>
+          ) : null}
           {sales?.series && sales.series.length > 0 ? (
             <ul>
               {sales.series.map((row) => (

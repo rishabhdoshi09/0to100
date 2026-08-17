@@ -228,3 +228,76 @@ def test_earnings_block_reads_quarters_margins_valuations():
     )
     pb = next(v for v in from_book["valuations"] if v["key"] == "pb")
     assert 2.5 < pb["value"] < 4.0
+
+
+def test_earnings_never_calls_mar_2024_latest_in_aug_2026():
+    from datetime import date
+    from product.buy_thesis import _sales_from_raw
+
+    raw = {
+        "quarterly_results": [
+            {"": "Sales+", "Dec 2023": 48, "Mar 2024": 84},
+            {"": "Net Profit", "Dec 2023": 8, "Mar 2024": 15},
+        ],
+        "profit_loss": [
+            {"": "Sales+", "Mar 2021": 126, "Mar 2022": 84, "Mar 2023": 173, "Mar 2024": 228},
+            {"": "OPM %", "Mar 2024": 18.0},
+            {"": "NPM %", "Mar 2024": 17.1},
+        ],
+    }
+    block = _earnings_block(raw, [], as_of=date(2026, 8, 17))
+    joined = " ".join(block["bullets"])
+    assert "Latest quarter" not in joined
+    assert "stale" in joined.lower()
+    assert "Mar 2024" in joined
+    assert block["stale"] is True
+    assert block["sales_qoq"]["latest"] == 84
+
+    sales = _sales_from_raw(
+        {
+            "fetched_at": "2026-08-17",
+            "data": {"profit_loss": raw["profit_loss"]},
+        },
+        as_of=date(2026, 8, 17),
+    )
+    assert sales["series"][-1]["period"] == "Mar 2024"
+    assert sales["cagr_3y"] == round(((228 / 126) ** (1 / 3) - 1) * 100, 1)
+    assert sales["stale"] is True
+
+
+def test_earnings_uses_jun_2026_as_latest_on_17_aug():
+    from datetime import date
+
+    raw = {
+        "quarterly_results": [
+            {"": "Sales+", "Jun 2025": 40, "Sep 2025": 50, "Dec 2025": 60, "Mar 2026": 70, "Jun 2026": 78},
+            {"": "Net Profit", "Jun 2025": 8, "Sep 2025": 9, "Dec 2025": 10, "Mar 2026": 12, "Jun 2026": 14},
+        ],
+        "profit_loss": [
+            {"": "Sales+", "Mar 2024": 228, "Mar 2025": 300, "Mar 2026": 350},
+            {"": "OPM %", "Mar 2026": 19.0},
+        ],
+    }
+    block = _earnings_block(raw, [], as_of=date(2026, 8, 17))
+    joined = " ".join(block["bullets"])
+    assert "Latest quarter" in joined
+    assert "Jun 2026" in joined
+    assert "stale" not in joined.lower()
+    assert block["stale"] is False
+    assert block["sales_qoq"]["latest"] == 78
+
+
+def test_earnings_sorts_unsorted_columns_and_ignores_ttm():
+    from datetime import date
+
+    raw = {
+        "quarterly_results": [
+            {"": "Sales+", "TTM": 999, "Jun 2026": 78, "Mar 2024": 84, "Mar 2026": 70},
+        ],
+    }
+    block = _earnings_block(raw, [], as_of=date(2026, 8, 17))
+    assert block["sales_qoq"]["latest"] == 78
+    assert block["sales_qoq"]["latest_period"] == "Jun 2026"
+    assert "Latest quarter" in " ".join(block["bullets"])
+    assert "999" not in " ".join(block["bullets"])
+

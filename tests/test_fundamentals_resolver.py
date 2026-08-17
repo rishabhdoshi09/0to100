@@ -19,7 +19,7 @@ def _rich(**overrides):
         "about": "Industrial systems company",
         "key_ratios": [{"name": "P/E", "value": "22"}, {"name": "ROE", "value": "18"}],
         "profit_loss": [{"": "Sales", "Mar 2025": 100, "Mar 2026": 120}],
-        "quarterly_results": [{"": "Sales", "Jun 2025": 30, "Sep 2025": 32}],
+        "quarterly_results": [{"": "Sales", "Dec 2025": 30, "Mar 2026": 32, "Jun 2026": 35}],
         "balance_sheet": [{"": "Debt", "Mar 2026": 40}],
         "cash_flow": [{"": "CFO", "Mar 2026": 25}],
         "shareholding": [{"": "FIIs", "Mar 2026": 9.4}],
@@ -143,3 +143,76 @@ def test_next_actions_always_include_official_and_reputed():
     assert "official" in kinds and "reputed" in kinds
     assert any("screener.in" in a["url"] for a in actions)
     assert any("yahoo.com" in a["url"] for a in actions)
+
+
+def _freeze_aug_2026(monkeypatch):
+    from datetime import date, datetime
+
+    def fake_as_of(as_of=None):
+        if as_of is None:
+            return date(2026, 8, 17)
+        if isinstance(as_of, datetime):
+            return as_of.date()
+        return as_of
+
+    monkeypatch.setattr("fundamentals.period_freshness._as_of_date", fake_as_of)
+
+
+def test_fetch_screener_prefers_standalone_when_consolidated_is_frozen(monkeypatch):
+    _freeze_aug_2026(monkeypatch)
+    calls = []
+
+    class FakeFetcher:
+        def fetch_all(self, symbol, *, consolidated=None):
+            calls.append(consolidated)
+            if consolidated is False:
+                return _rich(
+                    url="https://www.screener.in/company/EIMCOELECO/",
+                    about="standalone eimco",
+                    quarterly_results=[{"": "Sales+", "Mar 2026": 70, "Jun 2026": 78}],
+                    profit_loss=[{"": "Sales+", "Mar 2025": 300, "Mar 2026": 350}],
+                )
+            return _rich(
+                url="https://www.screener.in/company/EIMCOELECO/consolidated/",
+                about="consolidated frozen",
+                quarterly_results=[{"": "Sales+", "Dec 2023": 48, "Mar 2024": 84}],
+                profit_loss=[{"": "Sales+", "Mar 2023": 173, "Mar 2024": 228}],
+            )
+
+    monkeypatch.setattr("fundamentals.screener_deep.ScreenerDeepFetcher", FakeFetcher)
+    data = R.fetch_screener("EIMCOELECO")
+    assert calls == [None, False]
+    assert data["about"] == "standalone eimco"
+    assert data["quarterly_results"][0]["Jun 2026"] == 78
+    assert data["_filings_refresh_attempted"] is True
+
+
+def test_fresh_cache_with_frozen_filings_refetches(isolated_cache, monkeypatch):
+    _freeze_aug_2026(monkeypatch)
+    isolated_cache.set("EIMCOELECO", _rich(
+        about="cached frozen",
+        quarterly_results=[{"": "Sales+", "Mar 2024": 84}],
+        profit_loss=[{"": "Sales+", "Mar 2024": 228}],
+    ))
+
+    def screener(_):
+        return _rich(
+            about="refetched standalone",
+            quarterly_results=[{"": "Sales+", "Jun 2026": 78}],
+            profit_loss=[{"": "Sales+", "Mar 2026": 350}],
+        )
+
+    data, steps = R.resolve(
+        "EIMCOELECO",
+        force_refresh=False,
+        write_cache=True,
+        providers={
+            "screener_in": screener,
+            "yahoo_finance": lambda s: (_ for _ in ()).throw(RuntimeError("no")),
+            "user_uploads": lambda s: (_ for _ in ()).throw(RuntimeError("no")),
+        },
+    )
+    assert any(s["source"] == "local_cache_fresh" and s["status"] == "PARTIAL" for s in steps)
+    assert data is not None
+    assert data["about"] == "refetched standalone"
+    assert data["quarterly_results"][0]["Jun 2026"] == 78

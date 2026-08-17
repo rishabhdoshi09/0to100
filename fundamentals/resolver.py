@@ -166,12 +166,25 @@ def fetch_yahoo_finance(symbol: str) -> dict[str, Any]:
 
 
 def fetch_screener(symbol: str) -> dict[str, Any]:
+    from fundamentals.period_freshness import pack_needs_filings_retry, prefer_fresher_pack
     from fundamentals.screener_deep import ScreenerDeepFetcher
 
-    data = ScreenerDeepFetcher().fetch_all(symbol)
-    data = dict(data or {})
+    fetcher = ScreenerDeepFetcher()
+    data = dict(fetcher.fetch_all(symbol) or {})
+    if pack_needs_filings_retry(data):
+        try:
+            standalone = dict(fetcher.fetch_all(symbol, consolidated=False) or {})
+            data = prefer_fresher_pack(data, standalone)
+        except TypeError:
+            pass
+        except Exception as exc:
+            log.warning("screener_standalone_retry_failed", symbol=symbol, error=str(exc))
+        data["_filings_refresh_attempted"] = True
     data.setdefault("_source", "screener_in")
-    data.setdefault("_source_url", f"https://www.screener.in/company/{symbol}/consolidated/")
+    data.setdefault(
+        "_source_url",
+        data.get("url") or f"https://www.screener.in/company/{symbol}/consolidated/",
+    )
     data["_fetched_at"] = datetime.now(timezone.utc).isoformat()
     if not _enough(data, minimum=20):
         raise RuntimeError(f"Screener.in returned insufficient fundamentals for {symbol}")
@@ -283,13 +296,22 @@ def iter_resolve(
         yield _emit("local_cache_fresh", "TRYING", "Checking local fundamentals cache")
         cached = cache.get(symbol)
         if cached is not None and _enough(cached):
-            yield _emit(
-                "local_cache_fresh", "OK",
-                "Fresh cache hit — no network fetch needed",
-                data=cached, reputed=True,
-            )
-            return
-        if cached is not None:
+            from fundamentals.period_freshness import pack_needs_filings_retry
+            if pack_needs_filings_retry(cached):
+                yield _emit(
+                    "local_cache_fresh", "PARTIAL",
+                    "Today's cache exists but the latest filings column is behind "
+                    "the current reporting season — refetching",
+                    data=cached, reputed=True,
+                )
+            else:
+                yield _emit(
+                    "local_cache_fresh", "OK",
+                    "Fresh cache hit — no network fetch needed",
+                    data=cached, reputed=True,
+                )
+                return
+        elif cached is not None:
             yield _emit(
                 "local_cache_fresh", "PARTIAL",
                 "Cache present but coverage too thin — continuing",

@@ -109,16 +109,21 @@ class ScreenerDeepFetcher:
 
     # ── Public API ─────────────────────────────────────────────────────────
 
-    def fetch_all(self, symbol: str) -> Dict[str, Any]:
+    def fetch_all(self, symbol: str, *, consolidated: Optional[bool] = None) -> Dict[str, Any]:
         """
         Fetch and parse all fundamental sections for *symbol*.
 
         Returns a dict with keys: symbol, url, about, key_ratios,
         profit_loss, balance_sheet, quarterly_results, shareholding,
         cash_flow, peer_comparison, metadata.
+
+        ``consolidated``: True = consolidated URL only, False = standalone
+        URL only, None = consolidated then standalone on HTTP 404.
+        Frozen consolidated tables still return 200 — callers that detect
+        a stale latest column should retry with consolidated=False.
         """
         symbol = symbol.upper().strip()
-        url, soup = self._fetch_page(symbol)
+        url, soup = self._fetch_page(symbol, consolidated=consolidated)
 
         result: Dict[str, Any] = {
             "symbol":  symbol,
@@ -187,21 +192,40 @@ class ScreenerDeepFetcher:
         except Exception as exc:
             log.warning("screener_login_error", error=str(exc))
 
-    def _fetch_page(self, symbol: str) -> Tuple[str, BeautifulSoup]:
-        """Warm session, then GET the company page. Falls back to standalone URL on 404."""
+    def _fetch_page(
+        self, symbol: str, *, consolidated: Optional[bool] = None
+    ) -> Tuple[str, BeautifulSoup]:
+        """Warm session, then GET the company page.
+
+        Default: consolidated URL, then standalone on HTTP 404.
+        consolidated=False forces the standalone page even when consolidated
+        HTML is a 200 with a frozen table.
+        """
         self._warm_session()
 
-        url = _BASE_URL.format(symbol=symbol)
-        log.info("screener_fetching", symbol=symbol, url=url)
-        time.sleep(_REQUEST_DELAY)
+        if consolidated is False:
+            urls = [_FALLBACK_URL.format(symbol=symbol)]
+        elif consolidated is True:
+            urls = [_BASE_URL.format(symbol=symbol)]
+        else:
+            urls = [
+                _BASE_URL.format(symbol=symbol),
+                _FALLBACK_URL.format(symbol=symbol),
+            ]
 
-        resp = self._session.get(url, timeout=_TIMEOUT)
-
-        if resp.status_code == 404:
-            url = _FALLBACK_URL.format(symbol=symbol)
-            log.info("screener_fallback_url", symbol=symbol, url=url)
+        resp = None
+        url = urls[0]
+        for index, url in enumerate(urls):
+            log.info("screener_fetching", symbol=symbol, url=url)
             time.sleep(_REQUEST_DELAY)
             resp = self._session.get(url, timeout=_TIMEOUT)
+            if resp.status_code == 404 and index + 1 < len(urls):
+                log.info("screener_fallback_url", symbol=symbol, url=urls[index + 1])
+                continue
+            break
+
+        if resp is None:
+            raise RuntimeError(f"Screener.in request failed for '{symbol}'.")
 
         if resp.status_code == 404:
             raise ValueError(

@@ -21,6 +21,17 @@ export function sectorWaveFirstLine(wave?: {
     : 'NO — not enough current sector evidence to claim a wave.'
 }
 
+export function filingsNeedRefresh(thesis: {
+  filings_stale?: boolean
+  filings_refresh_attempted?: boolean
+  fundamentals?: { available?: boolean; coverage_pct?: number }
+} | null | undefined): boolean {
+  if (!thesis) return false
+  if (thesis.filings_stale && !thesis.filings_refresh_attempted) return true
+  if (!thesis.fundamentals?.available) return true
+  return Number(thesis.fundamentals.coverage_pct || 0) < 40
+}
+
 export function thesisReplacesList(phone: boolean, selected: string): boolean {
   return phone && Boolean(deskSymbol(selected))
 }
