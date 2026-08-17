@@ -86,18 +86,48 @@ def _write(payload: dict[str, Any]) -> None:
         pass
 
 
-def configured() -> bool:
-    token = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
-    chat = os.environ.get("TELEGRAM_CHAT_ID", "").strip()
-    if token and chat:
-        return True
+_EXAMPLE_SECRETS = {
+    "your_bot_token_here",
+    "your_bot_token",
+    "your_chat_id_here",
+    "your_chat_id",
+}
+
+
+def usable_telegram_secret(value: Any) -> bool:
+    """True only for a real token/chat id — example .env placeholders do not count."""
+    text = str(value or "").strip().strip('"').strip("'")
+    if not text:
+        return False
+    low = text.lower()
+    if low in _EXAMPLE_SECRETS or low.startswith("your_"):
+        return False
+    if text.startswith("<") and text.endswith(">"):
+        return False
+    return True
+
+
+def telegram_credentials() -> tuple[str, str]:
+    """Prefer a real process env pair over .env.example placeholders in settings."""
+    env_token = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
+    env_chat = os.environ.get("TELEGRAM_CHAT_ID", "").strip()
+    if usable_telegram_secret(env_token) and usable_telegram_secret(env_chat):
+        return env_token, env_chat
+    file_token, file_chat = "", ""
     try:
         from config import settings
-        token = str(getattr(settings, "telegram_bot_token", "") or "").strip()
-        chat = str(getattr(settings, "telegram_chat_id", "") or "").strip()
+        file_token = str(getattr(settings, "telegram_bot_token", "") or "").strip()
+        file_chat = str(getattr(settings, "telegram_chat_id", "") or "").strip()
     except Exception:
         pass
-    return bool(token and chat)
+    if usable_telegram_secret(file_token) and usable_telegram_secret(file_chat):
+        return file_token, file_chat
+    return env_token or file_token, env_chat or file_chat
+
+
+def configured() -> bool:
+    token, chat = telegram_credentials()
+    return usable_telegram_secret(token) and usable_telegram_secret(chat)
 
 
 def listener_flag() -> bool:
@@ -117,7 +147,11 @@ def snapshot() -> dict[str, Any]:
     payload["listener_running"] = listener_flag()
     payload["note"] = DESK_NOTE
     if not payload["configured"]:
-        payload["last_error"] = payload.get("last_error") or "not_configured"
+        token, chat = telegram_credentials()
+        if (token or chat) and not (usable_telegram_secret(token) and usable_telegram_secret(chat)):
+            payload["last_error"] = "example_placeholder"
+        else:
+            payload["last_error"] = payload.get("last_error") or "not_configured"
     return payload
 
 

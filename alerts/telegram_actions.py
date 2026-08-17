@@ -286,9 +286,15 @@ def start_telegram_listener() -> None:
                 load_dotenv(Path(__file__).resolve().parents[1] / ".env", override=False)
             except Exception:
                 pass
+        try:
+            from alerts.telegram_status import telegram_credentials, usable_telegram_secret
+            token, chat = telegram_credentials()
+            ready = usable_telegram_secret(token) and usable_telegram_secret(chat)
+        except Exception:
             token = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
             chat = os.environ.get("TELEGRAM_CHAT_ID", "").strip()
-        if not (token and chat):
+            ready = bool(token and chat)
+        if not ready:
             try:
                 from alerts.telegram_status import record_listener
                 record_listener(False, "not_configured")

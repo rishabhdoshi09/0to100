@@ -150,7 +150,7 @@ def diagnose_breakout_alerts() -> dict:
     out["sniper"] = sniper
     blockers = []
     if not out.get("telegram_configured"):
-        blockers.append("TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID missing — set both in .env")
+        blockers.append("TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID missing or still the .env.example placeholder")
     if not out.get("kite_ready"):
         blockers.append("Kite not ready — run: python main.py login (then keep stack running)")
     if not out.get("autonomy_running"):
