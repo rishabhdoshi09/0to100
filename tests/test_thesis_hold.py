@@ -93,7 +93,7 @@ def test_autopilot_thesis_hold_uses_runner_not_scalp(tmp_path, monkeypatch):
                   runner_target_pct=10.0, profit_book_pct=0.0)
     ap.arm()
     assert ap.consider("HAL", 1000, 960, 80, 0.2, "Defence", "t",
-                       signal_target=1120) is True
+                       signal_target=1120, volume_ratio=1.5) is True
     t = te.recent_trades(1)[0]
     # Runner ceiling / signal target — NOT a +3% scalp cut
     assert float(t["target_price"]) >= 1100.0
@@ -123,7 +123,8 @@ def test_autopilot_high_rsi_holds_and_tightens_gtt(tmp_path, monkeypatch):
                   profit_book_pct=0.0, profit_book_rupees=0.0,
                   rsi_protect_pct=2.5)
     ap.arm()
-    assert ap.consider("HAL", 1000, 960, 80, 0.2, "Defence", "t") is True
+    assert ap.consider("HAL", 1000, 960, 80, 0.2, "Defence", "t",
+                       volume_ratio=1.5) is True
     prices["HAL"] = 1100.0
     monkeypatch.setattr(
         ap, "_lookup_thesis_context",
@@ -137,11 +138,18 @@ def test_autopilot_high_rsi_holds_and_tightens_gtt(tmp_path, monkeypatch):
     assert "thesis-exit" not in (t.get("note") or "")
     assert abs(float(t["stop_price"]) - round(1100 * 0.975, 1)) < 0.05
     assert "RSI-protect GTT" in (t.get("note") or "")
+    assert float(t.get("orig_stop") or 0) == 960.0
     # Second pass is idempotent — stop does not loosen if LTP dips a bit
     prices["HAL"] = 1090.0
     ap._protect_extended_rsi()
     t2 = te.recent_trades(1)[0]
     assert float(t2["stop_price"]) == float(t["stop_price"])
+    # Higher LTP ratchets the stop up, never back down
+    prices["HAL"] = 1200.0
+    ap._protect_extended_rsi()
+    t3 = te.recent_trades(1)[0]
+    assert abs(float(t3["stop_price"]) - round(1200 * 0.975, 1)) < 0.05
+    assert t3["status"] == "PAPER_OPEN"
 
 
 def test_autopilot_thesis_exit_on_broken_setup_even_with_high_rsi(
@@ -168,7 +176,8 @@ def test_autopilot_thesis_exit_on_broken_setup_even_with_high_rsi(
     ap.set_config(allocation=100000, mode="PAPER", thesis_hold=True,
                   profit_book_pct=0.0, profit_book_rupees=0.0)
     ap.arm()
-    assert ap.consider("HAL", 1000, 960, 80, 0.2, "Defence", "t") is True
+    assert ap.consider("HAL", 1000, 960, 80, 0.2, "Defence", "t",
+                       volume_ratio=1.5) is True
     prices["HAL"] = 1050.0
     monkeypatch.setattr(
         ap, "_lookup_thesis_context",
@@ -207,7 +216,8 @@ def test_autopilot_live_rsi_protect_places_gtt_when_missing(tmp_path, monkeypatc
     ap.set_config(allocation=100000, mode="PAPER", thesis_hold=True,
                   profit_book_pct=0.0, profit_book_rupees=0.0)
     ap.arm()
-    assert ap.consider("HAL", 1000, 960, 80, 0.2, "Defence", "t") is True
+    assert ap.consider("HAL", 1000, 960, 80, 0.2, "Defence", "t",
+                       volume_ratio=1.5) is True
     t = te.recent_trades(1)[0]
     ap._update_trade(t["id"], "mode=?, status=?, gtt_id=?",
                      ("LIVE", "PLACED", ""))
