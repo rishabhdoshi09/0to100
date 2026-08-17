@@ -283,9 +283,10 @@ def _render_india_autopilot() -> None:
         thesis_on = st.toggle(
             "📌 Thesis hold (recommended)",
             value=bool(s.get("thesis_hold", True)), key="ap_thesis",
-            help="Hold while technicals + fundamentals look good. Exit when "
-                 "RSI blows off, setup breaks, or fundamentals collapse. "
-                 "NOT a fixed ₹1500 / 3% scalp.")
+            help="Hold while technicals + fundamentals look good. High RSI "
+                 "on an OPEN trade is not a sell — tighten a GTT 2–3% below "
+                 "LTP and hold until the setup actually breaks. NOT a fixed "
+                 "₹1500 / 3% scalp.")
         # 🎯 Target % — used when thesis_hold is OFF; runner ceiling when ON
         _rec_txt = ""
         try:
@@ -308,6 +309,13 @@ def _render_india_autopilot() -> None:
                     key="ap_runner",
                     help="Wide exchange-side ceiling so a healthy runner is "
                          "not cut early. Real exit = thesis break / trail / stop.")
+                rsi_protect_pct = st.slider(
+                    "RSI-protect GTT (%)", 2.0, 3.0,
+                    float(s.get("rsi_protect_pct", 2.5)), 0.1,
+                    key="ap_rsi_protect",
+                    help="If an open trade's RSI spikes, do NOT sell. "
+                         "Tighten the stop this % below LTP and hold until "
+                         "technicals deteriorate.")
                 target_pct = float(s.get("target_pct", 3.0))
             else:
                 target_pct = st.slider(
@@ -315,6 +323,7 @@ def _render_india_autopilot() -> None:
                     0.5, key="ap_target",
                     help=(_rec_txt or "Scalp mode: GTT target = entry × (1+%)."))
                 runner_pct = float(s.get("runner_target_pct", 10.0))
+                rsi_protect_pct = float(s.get("rsi_protect_pct", 2.5))
         with tg2:
             chase_pct = st.slider(
                 "Max chase (%)", 0.25, 5.0,
@@ -380,6 +389,7 @@ def _render_india_autopilot() -> None:
                        max_hold_days=int(hold_days),
                        thesis_hold=bool(thesis_on),
                        runner_target_pct=float(runner_pct),
+                       rsi_protect_pct=float(rsi_protect_pct),
                        target_pct=float(target_pct),
                        max_chase_pct=float(chase_pct),
                        profit_book_pct=float(book_pct),
