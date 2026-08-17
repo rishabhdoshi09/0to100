@@ -3775,6 +3775,10 @@ class TestSniperConfirmation:
         # fail-closed: zero / unknown avg
         assert volume_confirms(0, 1_000_000, 0.5) is False
         assert volume_confirms(1_200_000, 0, 0.5) is False
+        # Scan already printed real relative volume — missing avg_vol20 must
+        # not mute a live tick that has volume.
+        assert volume_confirms(50_000, 0, 0.5, scan_volume_ratio=1.4) is True
+        assert volume_confirms(0, 0, 0.5, scan_volume_ratio=1.4) is False
         # early session: real open surge (≥0.105×) allowed; tiny print not
         assert volume_confirms(1_000_000, 1_000_000, 0.01) is True
         assert volume_confirms(150_000, 1_000_000, 0.01) is True
@@ -3862,10 +3866,13 @@ class TestSniperConfirmation:
 
     def test_quality_skip_backward_compatible(self):
         """Old scan dicts without chase/rsi flags still pass when volume is known;
-        missing volume is never sniper-suggested."""
+        known-thin tape is never sniper-suggested. Scan-day volume_ratio can
+        stand in for a missing avg_vol20 so Telegram still arms."""
         from scan.breakout_sniper import _quality_skip
         assert _quality_skip({"symbol": "X", "avg_vol20": 500_000}) == ""
+        assert _quality_skip({"symbol": "X", "volume_ratio": 1.2}) == ""
         assert "volume" in _quality_skip({"symbol": "X"}).lower()
+        assert "volume" in _quality_skip({"symbol": "X", "volume_ratio": 0.1}).lower()
 
 
 class TestBreakoutConfirmation:

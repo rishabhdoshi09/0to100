@@ -83,8 +83,36 @@ def test_live_breakout_requires_hold_and_sends_once(tmp_path):
     assert n.observe_live_breakouts(payload, live)["confirmed"] == 1
     assert "BREAKOUT CONFIRMED" in engine.messages[-1][0]
     assert "BBB" in engine.messages[-1][0]
+    assert "ne ₹" in engine.messages[-1][0]
     epoch[0] += 20
     assert n.observe_live_breakouts(payload, live)["confirmed"] == 0
+
+
+def test_live_breakout_sends_plain_message_for_empty_scan_row(tmp_path):
+    """Missing volume_ratio / funds must not mute a held breakout Telegram."""
+    engine = FakeEngine()
+    epoch = [1000.0]
+    n = TelegramNotifier(
+        tmp_path,
+        engine_factory=lambda: engine,
+        now_fn=lambda: datetime(2026, 7, 31, 10, 15),
+        epoch_fn=lambda: epoch[0],
+        breakout_confirmation_s=8,
+        breakout_buffer_bps=10,
+    )
+    payload = {"records": [{
+        "symbol": "BARE", "status": "Watch for breakout",
+        "signals": ["PRE_BREAKOUT"], "entry": 100, "price": 99,
+        "score": 70, "rsi": 55,
+    }]}
+    live = FakeLive(price=101.0, fresh=True)
+    assert n.observe_live_breakouts(payload, live)["confirmed"] == 0
+    epoch[0] += 9
+    assert n.observe_live_breakouts(payload, live)["confirmed"] == 1
+    msg = engine.messages[-1][0]
+    assert "BREAKOUT CONFIRMED" in msg
+    assert "BARE" in msg
+    assert "fundamentals n/a" not in msg
 
 
 def test_paper_open_and_close_alerts_include_ledger_truth(tmp_path):

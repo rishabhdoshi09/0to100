@@ -294,8 +294,11 @@ class TelegramNotifier:
         """Confirm fresh Kite price crossings from the supervisor-owned live feed.
 
         A symbol must remain above its trigger for ``breakout_confirmation_s`` and has a 10 bps
-        default buffer.  This avoids alerting on a one-tick touch and replaces the legacy sniper's
-        separate WebSocket owner.
+        default buffer.  This avoids alerting on a one-tick touch.
+
+        Telegram stays the simple BREAKOUT CONFIRMED card — missing
+        fundamentals / avg volume must not mute a held break. Known-thin
+        tape (0 < vol < 0.7×) and RSI > 82 still skip.
         """
         payload = dict(payload or {})
         records = [dict(r) for r in payload.get("records", []) if isinstance(r, Mapping)]
@@ -303,11 +306,6 @@ class TelegramNotifier:
         arms = self.state.setdefault("arms", {})
         now = float(self._epoch())
         confirmed: list[tuple[dict, float]] = []
-
-        try:
-            from product.breakout_quality import gate_breakout_quality
-        except Exception:
-            gate_breakout_quality = None  # type: ignore
 
         for r in records:
             sym = str(r.get("symbol", "")).upper()
@@ -319,13 +317,13 @@ class TelegramNotifier:
                         or "PRE_BREAKOUT" in signals)
             if not relevant:
                 continue
-            # Same technical gates as sniper — never alert 0.1× / RSI blow-off.
-            if gate_breakout_quality is not None:
-                ok, reasons, _ = gate_breakout_quality(r, for_best=False)
-                if not ok:
-                    arms.pop(sym, None)
-                    continue
-            elif self._f(r.get("volume_ratio")) < 0.7:
+            vol = self._f(r.get("volume_ratio"))
+            rsi = self._f(r.get("rsi"))
+            # Known-thin / blow-off only. Missing volume (khali row) still arms.
+            if 0 < vol < 0.7:
+                arms.pop(sym, None)
+                continue
+            if rsi > 82:
                 arms.pop(sym, None)
                 continue
             try:
@@ -353,24 +351,25 @@ class TelegramNotifier:
             return {"confirmed": 0}
         confirmed.sort(key=lambda x: (-self._f(x[0].get("score")), str(x[0].get("symbol", ""))))
         confirmed = confirmed[:5]
-        lines = ["🚨 <b>BREAKOUT CONFIRMED — fresh Kite ticks</b>"]
+        lines = ["🚨 <b>BREAKOUT CONFIRMED</b>"]
         keys = []
         for r, price in confirmed:
             sym = str(r.get("symbol", "")).upper()
+            entry = self._f(r.get("entry"))
+            vol = self._f(r.get("volume_ratio"))
+            vol_bit = f", volume {vol:.1f}×" if vol > 0 else ""
+            plan = ""
+            stop, target = self._f(r.get("stop")), self._f(r.get("target"))
+            if stop and target:
+                plan = f"\n   plan: stop ₹{stop:,.0f} / target ₹{target:,.0f}"
             lines.append(
-                f"\n⚡ <b>{self._esc(sym)}</b> crossed ₹{self._f(r.get('entry')):,.2f} "
-                f"and held above it\n"
-                f"   LTP ₹{price:,.2f} · Score {self._f(r.get('score')):.0f} · "
-                f"Volume {self._f(r.get('volume_ratio')):.1f}× (≥0.7×)\n"
-                f"   RSI {self._f(r.get('rsi')):.0f} · "
-                f"{self._esc(str(r.get('classification') or 'fundamentals n/a'))}\n"
-                f"   PAPER plan: stop ₹{self._f(r.get('stop')):,.2f} · "
-                f"target ₹{self._f(r.get('target')):,.2f}"
+                f"\n<b>{self._esc(sym)}</b> ne ₹{entry:,.0f} toda "
+                f"(₹{price:,.1f}{vol_bit}){plan}"
             )
             keys.append(f"breakout:{sym}")
         try:
             engine = self._engine()
-            if engine.is_configured() and engine.send("\n".join(lines)):
+            if engine.send("\n".join(lines)):
                 self._mark_sent(keys, day)
                 for r, _ in confirmed:
                     arms.pop(str(r.get("symbol", "")).upper(), None)
