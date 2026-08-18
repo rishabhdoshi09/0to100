@@ -82,20 +82,24 @@ def day_fraction(now_dt=None) -> float:
 def volume_confirms(cum_vol: float, avg_daily_vol: float, frac: float,
                     surge: float = _VOL_SURGE,
                     abs_min: float = _VOL_ABS_MIN,
-                    early_frac: float = _VOL_EARLY_FRAC) -> bool:
+                    early_frac: float = _VOL_EARLY_FRAC,
+                    scan_volume_ratio: float = 0.0) -> bool:
     """Is today's volume strong enough for a real breakout?
 
-    Fail-closed on zero/missing volume. Requires:
+    Fail-closed on zero/missing tick volume. Requires:
       1. Pace-aware absolute floor — need ≥ abs_min × max(session_frac, early_frac)
          of a full average day. Blocks AUROPHARMA-style 0.1× prints, but does
          NOT demand a full day's volume by 11am (that silenced every alert).
       2. After the open (frac ≥ 5%), also keep up with time-of-day pace
          (surge × frac; default surge 1.0 = on-pace is enough).
+
+    If avg-day volume is missing but the scan already printed a real
+    volume_ratio ≥ floor, tick volume > 0 is enough — do not mute Telegram.
     """
     if cum_vol <= 0:
         return False                  # 0-volume break → never suggest
     if not avg_daily_vol or avg_daily_vol <= 0:
-        return False                  # unknown avg → do not invent confirmation
+        return float(scan_volume_ratio or 0) >= float(abs_min)
     session_frac = max(0.0, min(1.0, float(frac)))
     day_ratio = cum_vol / avg_daily_vol
     # Early bar: insist on a meaningful open surge (≥ early_frac × abs_min of
@@ -156,7 +160,10 @@ def process_ticks(ticks: list[dict], watch: dict[int, dict],
         if now - first < hold_seconds:      # not held long enough yet
             continue
         cum_vol = float(t.get("volume_traded") or t.get("volume") or 0)
-        if not volume_confirms(cum_vol, float(w.get("avg_vol") or 0), frac):
+        if not volume_confirms(
+            cum_vol, float(w.get("avg_vol") or 0), frac,
+            scan_volume_ratio=float(w.get("volume_ratio") or 0),
+        ):
             continue                        # break on dead volume → skip
         out.append({**w, "ltp": ltp, "held_s": round(now - first),
                     "cum_vol": cum_vol})
@@ -165,15 +172,17 @@ def process_ticks(ticks: list[dict], watch: dict[int, dict],
 
 def _quality_skip(r: dict) -> str:
     """Non-empty reason if this scan result is too low-quality to snipe —
-    the sniper's version of the scanner's demote gates. '' = fine to watch."""
+    the sniper's version of the scanner's demote gates. '' = fine to watch.
+
+    Known-thin tape (0 < volume_ratio < floor) and RSI blow-off still skip.
+    Missing avg_vol20 is OK when scan-day volume_ratio already clears the
+    floor — those "empty" product rows must still arm so Telegram fires.
+    """
     if r.get("chase_risk") and _SKIP_CHASE:
         return "extended/chase-risk (already run hard, no clean base)"
     rsi = float(r.get("rsi") or 0)
     if rsi > _RSI_BLOWOFF:
         return f"RSI {rsi:.0f} — blow-off-top overbought"
-    avg_vol = float(r.get("avg_vol20") or 0)
-    if avg_vol <= 0:
-        return "0 / unknown volume — sniper will not watch"
     try:
         vratio = float(r.get("volume_ratio") or r.get("rvol") or 0)
     except (TypeError, ValueError):
@@ -181,6 +190,9 @@ def _quality_skip(r: dict) -> str:
     # Scan-day relative volume already thin → do not arm for a "confirmed" fire.
     if 0 < vratio < _VOL_ABS_MIN:
         return f"volume {vratio:.2f}× < {_VOL_ABS_MIN:.1f}× — thin tape, skip"
+    avg_vol = float(r.get("avg_vol20") or 0)
+    if avg_vol <= 0 and vratio < _VOL_ABS_MIN:
+        return "0 / unknown volume — sniper will not watch"
     return ""
 
 
@@ -222,11 +234,16 @@ def build_watch_map(results: list[dict]) -> dict[int, dict]:
         sym = str(r.get("symbol") or "").upper()
         if not sym:
             continue
+        try:
+            vratio = float(r.get("volume_ratio") or r.get("rvol") or 0)
+        except (TypeError, ValueError):
+            vratio = 0.0
         targets[sym] = {
             "trigger": float(r.get("entry") or 0),
             "stop": float(r.get("stop") or 0),
             "target": float(r.get("target") or 0),
             "avg_vol": float(r.get("avg_vol20") or 0),
+            "volume_ratio": vratio,
         }
     try:
         import sqlite3
@@ -256,6 +273,53 @@ def build_watch_map(results: list[dict]) -> dict[int, dict]:
         return {}
 
 
+def _sniper_telegram_text(hits: list[dict]) -> str:
+    """Plain BREAKOUT CONFIRMED — extra fields optional, never required."""
+    lines = ["🚨 <b>BREAKOUT CONFIRMED</b>"]
+    for h in hits[:5]:
+        plan = ""
+        if h.get("stop") and h.get("target"):
+            plan = f"\n   plan: stop ₹{h['stop']:,.0f} / target ₹{h['target']:,.0f}"
+        held = h.get("held_s")
+        hold_bit = f", {held}s tak upar ruka" if held else ""
+        vol_bit = ""
+        if h.get("cum_vol") and h.get("avg_vol"):
+            vr = h["cum_vol"] / h["avg_vol"]
+            vol_bit = f", volume {vr:.1f}× avg-day"
+        elif h.get("volume_ratio"):
+            vol_bit = f", volume {float(h['volume_ratio']):.1f}×"
+        lines.append(f"\n<b>{h['symbol']}</b> ne ₹{h['trigger']:,.0f} toda "
+                     f"(₹{h['ltp']:,.1f}{hold_bit}{vol_bit}){plan}")
+    return "\n".join(lines)
+
+
+def _send_sniper_telegram(fresh: list[dict]) -> bool:
+    """Autonomy already delivers on this bot — never mute sniper on a stale
+    'not configured' snapshot. Reload credentials and try the send."""
+    msg = _sniper_telegram_text(fresh)
+    try:
+        try:
+            from pathlib import Path
+            from dotenv import load_dotenv
+            load_dotenv(Path(__file__).resolve().parents[1] / ".env", override=False)
+        except Exception:
+            pass
+        from alerts.telegram_alerts import AlertEngine
+        engine = AlertEngine()
+        if engine.send(msg):
+            log.info("sniper_fired", symbols=[h["symbol"] for h in fresh])
+            return True
+        if engine.is_configured():
+            log.warning("sniper_telegram_send_failed",
+                        symbols=[h["symbol"] for h in fresh])
+        else:
+            log.warning("sniper_telegram_not_configured")
+    except Exception as exc:
+        log.warning("sniper_telegram_send_failed", error=str(exc),
+                    symbols=[h["symbol"] for h in fresh])
+    return False
+
+
 def _alert(hits: list[dict]) -> None:
     today = datetime.now(IST).strftime("%Y-%m-%d")
     with _lock:
@@ -268,30 +332,8 @@ def _alert(hits: list[dict]) -> None:
     if not fresh:
         return
     try:
-        from alerts.telegram_alerts import AlertEngine
-        engine = AlertEngine()
-        if not engine.is_configured():
-            log.warning("sniper_telegram_not_configured")
-            return
-        lines = ["🚨 <b>BREAKOUT CONFIRMED</b>"]
-        for h in fresh[:5]:
-            plan = ""
-            if h.get("stop") and h.get("target"):
-                plan = f"\n   plan: stop ₹{h['stop']:,.0f} / target ₹{h['target']:,.0f}"
-            held = h.get("held_s")
-            hold_bit = f", {held}s tak upar ruka" if held else ""
-            vol_bit = ""
-            if h.get("cum_vol") and h.get("avg_vol"):
-                vr = h["cum_vol"] / h["avg_vol"]
-                vol_bit = f", volume {vr:.1f}× avg-day"
-            lines.append(f"\n<b>{h['symbol']}</b> ne ₹{h['trigger']:,.0f} toda "
-                         f"(₹{h['ltp']:,.1f}{hold_bit}{vol_bit}){plan}")
-        ok = engine.send("\n".join(lines))
-        if ok:
-            log.info("sniper_fired", symbols=[h["symbol"] for h in fresh])
-        else:
-            log.warning("sniper_telegram_send_failed", symbols=[h["symbol"] for h in fresh])
-        # 🤖 Autopilot hook — off-thread, tick stream kabhi block nahi hota
+        _send_sniper_telegram(fresh)
+        # Autopilot hook is independent of Telegram delivery
         def _feed_autopilot(hits_copy=list(fresh)):
             try:
                 from execution.autopilot import on_breakout

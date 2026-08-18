@@ -53,7 +53,7 @@ def test_scan_alerts_are_durable_and_deduped(tmp_path):
     now = lambda: datetime(2026, 7, 31, 10, 0)
     n = TelegramNotifier(tmp_path, engine_factory=lambda: engine, now_fn=now)
     first = n.notify_scan(_payload(), phase="intraday")
-    assert first["setup"] == 1 and first["prebreakout"] == 1
+    assert first["setup"] == 1 and first["prebreakout"] == 1 and first["breakout"] == 0
     assert len(engine.messages) == 1
     assert "AAA" in engine.messages[0][0] and "BBB" in engine.messages[0][0]
 
@@ -83,8 +83,163 @@ def test_live_breakout_requires_hold_and_sends_once(tmp_path):
     assert n.observe_live_breakouts(payload, live)["confirmed"] == 1
     assert "BREAKOUT CONFIRMED" in engine.messages[-1][0]
     assert "BBB" in engine.messages[-1][0]
+    assert "ne ₹" in engine.messages[-1][0]
     epoch[0] += 20
     assert n.observe_live_breakouts(payload, live)["confirmed"] == 0
+
+
+def test_live_breakout_sends_plain_message_for_empty_scan_row(tmp_path):
+    """Missing volume_ratio / funds must not mute a held breakout Telegram."""
+    engine = FakeEngine()
+    epoch = [1000.0]
+    n = TelegramNotifier(
+        tmp_path,
+        engine_factory=lambda: engine,
+        now_fn=lambda: datetime(2026, 7, 31, 10, 15),
+        epoch_fn=lambda: epoch[0],
+        breakout_confirmation_s=8,
+        breakout_buffer_bps=10,
+    )
+    payload = {"records": [{
+        "symbol": "BARE", "status": "Watch for breakout",
+        "signals": ["PRE_BREAKOUT"], "entry": 100, "price": 99,
+        "score": 70, "rsi": 55,
+    }]}
+    live = FakeLive(price=101.0, fresh=True)
+    assert n.observe_live_breakouts(payload, live)["confirmed"] == 0
+    epoch[0] += 9
+    assert n.observe_live_breakouts(payload, live)["confirmed"] == 1
+    msg = engine.messages[-1][0]
+    assert "BREAKOUT CONFIRMED" in msg
+    assert "BARE" in msg
+    assert "fundamentals n/a" not in msg
+
+
+def test_scan_does_not_confirm_price_sitting_on_pivot(tmp_path):
+    """Exact pivot print is still PRE_BREAKOUT — live quotes catch the real cross."""
+    engine = FakeEngine()
+    n = TelegramNotifier(tmp_path, engine_factory=lambda: engine,
+                         now_fn=lambda: datetime(2026, 7, 31, 10, 0))
+    payload = {"records": [{
+        "symbol": "HAL", "status": "Watch for breakout",
+        "signals": ["PRE_BREAKOUT"], "verdict": "WATCH",
+        "price": 4250, "entry": 4250, "stop": 4100, "target": 4550,
+        "score": 74, "rsi": 58, "volume_ratio": 1.6,
+        "reasons": ["Tight base"],
+    }]}
+    sent = n.notify_scan(payload, phase="intraday")
+    assert sent["breakout"] == 0
+    assert sent["prebreakout"] == 0
+    assert engine.messages == []
+
+
+def test_live_breakout_confirms_from_rest_quotes_without_kite(tmp_path):
+    engine = FakeEngine()
+    epoch = [1000.0]
+    n = TelegramNotifier(
+        tmp_path,
+        engine_factory=lambda: engine,
+        now_fn=lambda: datetime(2026, 7, 31, 10, 15),
+        epoch_fn=lambda: epoch[0],
+        breakout_confirmation_s=8,
+        breakout_buffer_bps=10,
+    )
+    payload = _payload()
+
+    class NoTick:
+        def entry_allowed(self, symbol):
+            return False
+
+        def price(self, symbol):
+            return None
+
+    def quotes_fn(symbols):
+        return {s: {"price": 100.25} for s in symbols if s == "BBB"}
+
+    assert n.observe_live_breakouts(payload, NoTick(), quotes_fn=quotes_fn)["confirmed"] == 0
+    epoch[0] += 9
+    assert n.observe_live_breakouts(payload, NoTick(), quotes_fn=quotes_fn)["confirmed"] == 1
+    assert "BREAKOUT CONFIRMED" in engine.messages[-1][0]
+    assert "BBB" in engine.messages[-1][0]
+
+
+def test_supervisor_observes_breakouts_when_kite_auth_missing(tmp_path):
+    from research.autonomy import health as H
+    from research.autonomy.jobs import Deps
+    from research.autonomy.supervisor import Supervisor
+
+    calls = []
+
+    class Mini(Deps):
+        def __init__(self):
+            self.root = tmp_path
+            self.live_feed = None
+            self.telegram = None
+
+        def holidays(self):
+            return set()
+
+        def observe_live_breakouts(self):
+            calls.append("observe")
+            return {"confirmed": 0}
+
+    sup = Supervisor(tmp_path / "auto", deps=Mini())
+    sup.failures.add(H.AUTH_MISSING)
+    started = []
+    sup.live_feed.start = lambda symbols: started.append(list(symbols or [])) or {
+        "connected": False, "last_error": "no kite",
+    }
+    sup._manage_live_feed(datetime(2026, 7, 31, 10, 0))
+    assert calls == ["observe"]
+    assert started == []
+
+
+def test_scan_sends_plain_breakout_when_price_already_through(tmp_path):
+    engine = FakeEngine()
+    n = TelegramNotifier(tmp_path, engine_factory=lambda: engine,
+                         now_fn=lambda: datetime(2026, 7, 31, 10, 0))
+    payload = {"records": [{
+        "symbol": "KAYNES", "status": "Watch for breakout",
+        "signals": ["PRE_BREAKOUT"], "verdict": "WATCH",
+        "price": 4268.4, "entry": 4250, "stop": 4100, "target": 4550,
+        "score": 74, "rsi": 58, "volume_ratio": 1.6,
+        "reasons": ["Tight base"],
+    }]}
+    sent = n.notify_scan(payload, phase="intraday")
+    assert sent["breakout"] == 1
+    assert sent["prebreakout"] == 0
+    assert "BREAKOUT CONFIRMED" in engine.messages[-1][0]
+    assert "KAYNES" in engine.messages[-1][0]
+    assert "ne ₹" in engine.messages[-1][0]
+    assert n.notify_scan(payload, phase="intraday")["breakout"] == 0
+
+
+def test_missing_live_tick_does_not_disarm_breakout(tmp_path):
+    engine = FakeEngine()
+    epoch = [1000.0]
+    n = TelegramNotifier(
+        tmp_path,
+        engine_factory=lambda: engine,
+        now_fn=lambda: datetime(2026, 7, 31, 10, 15),
+        epoch_fn=lambda: epoch[0],
+        breakout_confirmation_s=8,
+        breakout_buffer_bps=10,
+    )
+    payload = _payload()
+    live = FakeLive(price=100.25, fresh=True)
+    assert n.observe_live_breakouts(payload, live)["confirmed"] == 0
+    assert "BBB" in n.state.get("arms", {})
+
+    class NoTick:
+        def entry_allowed(self, symbol):
+            return False
+
+        def price(self, symbol):
+            return None
+
+    epoch[0] += 9
+    assert n.observe_live_breakouts(payload, NoTick())["confirmed"] == 0
+    assert "BBB" in n.state.get("arms", {})
 
 
 def test_paper_open_and_close_alerts_include_ledger_truth(tmp_path):

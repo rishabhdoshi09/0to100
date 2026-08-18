@@ -3,7 +3,11 @@ from __future__ import annotations
 
 from product.scan_store import build_scan_payload
 from scan.breakout_sniper import build_watch_map
-from research.autonomy.sniper_bridge import ensure_breakout_sniper, records_from_payload
+from research.autonomy.sniper_bridge import (
+    ensure_breakout_sniper,
+    records_from_payload,
+    sniper_watch_symbols,
+)
 
 
 class _Sig:
@@ -66,6 +70,74 @@ def test_build_watch_map_accepts_product_records(monkeypatch):
     assert watch[tok]["trigger"] == 100
 
 
+def test_watch_map_arms_when_only_volume_ratio_present(monkeypatch):
+    """Product rows often have volume_ratio but empty avg_vol20 — still watch."""
+    import data.instruments as INS
+
+    class FakeIM:
+        def tokens_for(self, syms):
+            return {s: 2000 + i for i, s in enumerate(syms)}
+
+    monkeypatch.setattr(INS, "InstrumentManager", FakeIM)
+    rows = [{
+        "symbol": "BARE",
+        "signals": ["PRE_BREAKOUT"],
+        "status": "Watch for breakout",
+        "categories": ["PreBreakout"],
+        "pivot_distance_pct": 0.8,
+        "entry": 50, "stop": 47, "target": 58,
+        "volume_ratio": 1.4, "rsi": 54, "chase_risk": False,
+    }]
+    watch = build_watch_map(rows)
+    assert len(watch) == 1
+    hit = next(iter(watch.values()))
+    assert hit["symbol"] == "BARE"
+    assert hit["volume_ratio"] == 1.4
+
+
+def test_alert_feeds_autopilot_even_if_telegram_send_fails(monkeypatch):
+    import scan.breakout_sniper as bs
+
+    class Eng:
+        def is_configured(self):
+            return False
+
+        def send(self, msg):
+            return False
+
+    fed = []
+
+    class ImmediateThread:
+        def __init__(self, target=None, daemon=None):
+            self.target = target
+
+        def start(self):
+            if self.target:
+                self.target()
+
+    monkeypatch.setattr("alerts.telegram_alerts.AlertEngine", Eng)
+    monkeypatch.setattr(bs, "_fired", {})
+    monkeypatch.setattr(bs.threading, "Thread", ImmediateThread)
+    monkeypatch.setattr(
+        "execution.autopilot.on_breakout",
+        lambda h: fed.append(h["symbol"]),
+        raising=False,
+    )
+    bs._alert([{"symbol": "KAYNES", "trigger": 100, "ltp": 102, "stop": 95, "target": 110}])
+    assert fed == ["KAYNES"]
+
+
+def test_plain_sniper_telegram_does_not_need_plan_or_volume():
+    from scan.breakout_sniper import _sniper_telegram_text
+    text = _sniper_telegram_text([
+        {"symbol": "KAYNES", "trigger": 4250, "ltp": 4268.4},
+    ])
+    assert "BREAKOUT CONFIRMED" in text
+    assert "KAYNES" in text
+    assert "₹4,250" in text
+    assert "plan:" not in text
+
+
 def test_ensure_sniper_kite_unavailable(monkeypatch):
     monkeypatch.setattr(
         "research.autonomy.sniper_bridge.SCH",
@@ -99,3 +171,13 @@ def test_ensure_sniper_kite_unavailable(monkeypatch):
 def test_records_from_payload():
     assert records_from_payload(None) == []
     assert records_from_payload({"records": [{"symbol": "A"}]}) == [{"symbol": "A"}]
+
+
+def test_sniper_watch_symbols_includes_prebreakout_not_just_watchlist():
+    payload = {"records": [
+        {"symbol": "SETUP", "status": "Ready to trade", "signals": ["MOMENTUM"]},
+        {"symbol": "NEAR", "status": "Watch for breakout", "signals": ["PRE_BREAKOUT"]},
+        {"symbol": "SNIPE", "status": "Watch", "sniper_candidate": True},
+        {"symbol": "SKIP", "status": "Watch", "signals": ["RSI"]},
+    ]}
+    assert sniper_watch_symbols(payload) == ["SETUP", "NEAR", "SNIPE"]

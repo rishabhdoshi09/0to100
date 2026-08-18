@@ -281,6 +281,26 @@ def _push_new_setups(picks: list[dict]) -> None:
         log.debug("push_setups_skip", error=str(exc))
 
 
+def _push_breakout_confirmed(picks: list[dict]) -> None:
+    """Plain BREAKOUT CONFIRMED via the shared autonomy notifier + live quotes.
+
+    Does not need Kite WebSocket. Dedupes against autonomy on
+    logs/autonomy/telegram_notifications.json so Streamlit and the
+    supervisor cannot double-send the same symbol/day.
+    """
+    try:
+        from research.autonomy import default_root
+        from research.autonomy.telegram_notifications import TelegramNotifier
+        from data.live_quotes import get_live_quotes
+        notifier = TelegramNotifier(default_root())
+        notifier.notify_scan_breakouts(picks)
+        notifier.observe_live_breakouts(
+            {"records": picks}, None, quotes_fn=get_live_quotes,
+        )
+    except Exception as exc:
+        log.debug("push_breakout_skip", error=str(exc))
+
+
 def _log_buys_for_tracking(results) -> None:
     """Feed BUY signals into the outcome tracker (dedupes per day itself)."""
     try:
@@ -527,6 +547,7 @@ def _scan_once_locked(universe: Optional[list[str]] = None, progress=None) -> No
             log.debug("bulk_tag_skip", error=str(exc))
         # Proactive delivery — user ko dhundhna na pade, setups khud pahunchein
         _push_new_setups(serialized[:15])
+        _push_breakout_confirmed(serialized)
         # 🤖 Autopilot hook — same signals, alert logic untouched
         try:
             from execution.autopilot import on_setups as _ap_setups

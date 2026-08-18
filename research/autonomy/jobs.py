@@ -291,7 +291,10 @@ class Deps:
     def observe_live_breakouts(self):
         try:
             from product.scan_store import load_scan
-            return self.telegram.observe_live_breakouts(load_scan(), self.live_feed)
+            from data.live_quotes import get_live_quotes
+            return self.telegram.observe_live_breakouts(
+                load_scan(), self.live_feed, quotes_fn=get_live_quotes,
+            )
         except Exception:
             return {"confirmed": 0}
 

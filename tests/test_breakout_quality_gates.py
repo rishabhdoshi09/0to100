@@ -101,11 +101,17 @@ def test_telegram_live_breakouts_skip_thin_volume(tmp_path):
                 "status": "Ready to trade", "signals": ["BREAKOUT_52W"],
                 "volume_ratio": 1.8, "rsi": 55, "score": 80,
             },
+            {
+                "symbol": "BARE", "entry": 100, "stop": 95, "target": 120,
+                "status": "Watch for breakout", "signals": ["PRE_BREAKOUT"],
+                "rsi": 52, "score": 70,
+            },
         ]
     }
     n.observe_live_breakouts(payload, _Feed())
     assert "THIN" not in n.state.get("arms", {})
     assert "FAT" in n.state.get("arms", {})
+    assert "BARE" in n.state.get("arms", {})
 
 
 def test_technical_chase_is_soft_best_among_hard():

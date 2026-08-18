@@ -132,6 +132,67 @@ class TelegramNotifier:
     def _esc(value: Any) -> str:
         return html.escape(str(value or ""), quote=False)
 
+    def _through_trigger(self, row: Mapping[str, Any], price: float | None = None) -> bool:
+        entry = self._f(row.get("entry"))
+        px = self._f(price if price is not None else row.get("price"))
+        return entry > 0 and px >= entry
+
+    def _clears_trigger(self, row: Mapping[str, Any], price: float | None = None) -> bool:
+        """True only when price is through the trigger by the live buffer (default 10 bps).
+
+        A scan bar sitting exactly on the pivot is still PRE_BREAKOUT — not a sniper confirm.
+        """
+        entry = self._f(row.get("entry"))
+        px = self._f(price if price is not None else row.get("price"))
+        if entry <= 0 or px <= 0:
+            return False
+        return px >= entry * (1.0 + self.breakout_buffer_bps / 10000.0)
+
+    def _breakout_lane(self, row: Mapping[str, Any]) -> bool:
+        signals = [str(x).upper() for x in (row.get("signals") or [])]
+        status = str(row.get("status") or "")
+        state = str(row.get("breakout_state") or "")
+        cats = [str(x) for x in (row.get("categories") or [])]
+        return (
+            status in ("Watch for breakout", "Ready to trade")
+            or "PRE_BREAKOUT" in signals
+            or any(s.startswith("BREAKOUT") for s in signals)
+            or "PreBreakout" in cats
+            or bool(row.get("sniper_candidate"))
+            or state in ("confirmed_breakout", "near_breakout")
+        )
+
+    def _scan_breakout_confirmed(self, row: Mapping[str, Any]) -> bool:
+        """Scan bar already through the trigger — send the plain sniper card.
+
+        Does not wait for Kite ticks. Known-thin / RSI blow-off still skip.
+        Sitting exactly on the pivot is not a confirm (live quotes catch the real cross).
+        """
+        if not self._breakout_lane(row) or not self._clears_trigger(row):
+            return False
+        vol = self._f(row.get("volume_ratio"))
+        rsi = self._f(row.get("rsi"))
+        if 0 < vol < 0.7 or rsi > 82:
+            return False
+        sym = str(row.get("symbol") or "").upper()
+        if not sym or self._was_sent(f"breakout:{sym}"):
+            return False
+        return True
+
+    def _plain_breakout_line(self, row: Mapping[str, Any], price: float) -> str:
+        sym = str(row.get("symbol") or "").upper()
+        entry = self._f(row.get("entry"))
+        vol = self._f(row.get("volume_ratio"))
+        vol_bit = f", volume {vol:.1f}×" if vol > 0 else ""
+        plan = ""
+        stop, target = self._f(row.get("stop")), self._f(row.get("target"))
+        if stop and target:
+            plan = f"\n   plan: stop ₹{stop:,.0f} / target ₹{target:,.0f}"
+        return (
+            f"\n<b>{self._esc(sym)}</b> ne ₹{entry:,.0f} toda "
+            f"(₹{self._f(price):,.1f}{vol_bit}){plan}"
+        )
+
     def notify_online(self) -> bool:
         return self._send_once(
             "autonomy_online",
@@ -146,7 +207,7 @@ class TelegramNotifier:
         summary = dict(payload.get("summary", {}) or {})
         day = self._day()
         self._prune(day)
-        sent = {"setup": 0, "prebreakout": 0, "briefing": 0, "eod": 0}
+        sent = {"setup": 0, "prebreakout": 0, "breakout": 0, "briefing": 0, "eod": 0}
 
         if phase == "premarket" and not self._was_sent("morning_brief", day):
             try:
@@ -166,11 +227,17 @@ class TelegramNotifier:
         ready = ready[:5]
 
         ready_symbols = {str(r.get("symbol", "")).upper() for r in ready}
+        broken = [r for r in records if self._scan_breakout_confirmed(r)]
+        broken.sort(key=lambda r: (-self._f(r.get("score")), str(r.get("symbol", ""))))
+        broken = broken[:5]
+        broken_symbols = {str(r.get("symbol", "")).upper() for r in broken}
         pre = [r for r in records
                if (str(r.get("status", "")) == "Watch for breakout"
                    or "PRE_BREAKOUT" in [str(x).upper() for x in (r.get("signals") or [])])
                and self._f(r.get("entry")) > 0
                and str(r.get("symbol", "")).upper() not in ready_symbols
+               and str(r.get("symbol", "")).upper() not in broken_symbols
+               and not self._through_trigger(r)
                and not self._was_sent(f"pre:{str(r.get('symbol', '')).upper()}", day)]
         pre.sort(key=lambda r: (-self._f(r.get("score")), str(r.get("symbol", ""))))
         pre = pre[:4]
@@ -221,6 +288,8 @@ class TelegramNotifier:
             except Exception:
                 pass
 
+        sent["breakout"] = self.notify_scan_breakouts(records)
+
         if phase == "eod" and not self._was_sent("eod_scan_summary", day):
             msg = (
                 "📊 <b>QuantTerm EOD scan complete</b>\n\n"
@@ -233,6 +302,31 @@ class TelegramNotifier:
             if self._send_once("eod_scan_summary", msg):
                 sent["eod"] = 1
         return sent
+
+    def notify_scan_breakouts(self, records: list[Mapping[str, Any]] | None) -> int:
+        """Scan-bar BREAKOUT CONFIRMED only — no 🎯 setups. Shared with auto_scan."""
+        day = self._day()
+        self._prune(day)
+        rows = [dict(r) for r in (records or []) if isinstance(r, Mapping)]
+        broken = [r for r in rows if self._scan_breakout_confirmed(r)]
+        broken.sort(key=lambda r: (-self._f(r.get("score")), str(r.get("symbol", ""))))
+        broken = broken[:5]
+        if not broken:
+            return 0
+        try:
+            engine = self._engine()
+            lines = ["🚨 <b>BREAKOUT CONFIRMED</b>"]
+            keys = []
+            for r in broken:
+                sym = str(r.get("symbol", "")).upper()
+                lines.append(self._plain_breakout_line(r, self._f(r.get("price"))))
+                keys.append(f"breakout:{sym}")
+            if engine.send("\n".join(lines)):
+                self._mark_sent(keys, day)
+                return len(broken)
+        except Exception:
+            pass
+        return 0
 
     def notify_paper_cycle(self, result: Mapping[str, Any] | None, *, book=None) -> dict:
         """Notify simulated opens and closes.  This method cannot reach a broker order API."""
@@ -290,12 +384,71 @@ class TelegramNotifier:
                 counts["closed"] += 1
         return counts
 
-    def observe_live_breakouts(self, payload: Mapping[str, Any] | None, live_feed) -> dict:
-        """Confirm fresh Kite price crossings from the supervisor-owned live feed.
+    @staticmethod
+    def _quote_price(raw: Any) -> float:
+        if isinstance(raw, Mapping):
+            for key in ("price", "ltp", "last_price", "last"):
+                try:
+                    px = float(raw.get(key) or 0.0)
+                except Exception:
+                    px = 0.0
+                if px > 0:
+                    return px
+            return 0.0
+        try:
+            return float(raw or 0.0)
+        except Exception:
+            return 0.0
+
+    def _live_or_quote_prices(
+        self,
+        symbols: list[str],
+        live_feed,
+        quotes_fn: Callable[[list[str]], Mapping[str, Any]] | None,
+    ) -> dict[str, float]:
+        """WS tick first; REST/NSE quotes fill gaps so Telegram does not need Kite."""
+        prices: dict[str, float] = {}
+        for sym in symbols:
+            if live_feed is None:
+                continue
+            try:
+                fresh = bool(live_feed.entry_allowed(sym))
+                px = self._f(live_feed.price(sym))
+            except Exception:
+                fresh, px = False, 0.0
+            if fresh and px > 0:
+                prices[sym] = px
+        missing = [s for s in symbols if s not in prices]
+        if not missing or quotes_fn is None:
+            return prices
+        try:
+            qmap = quotes_fn(missing[:80]) or {}
+        except Exception:
+            qmap = {}
+        for sym in missing:
+            raw = qmap.get(sym)
+            if raw is None:
+                raw = qmap.get(sym.upper()) or qmap.get(sym.lower())
+            px = self._quote_price(raw)
+            if px > 0:
+                prices[sym] = px
+        return prices
+
+    def observe_live_breakouts(
+        self,
+        payload: Mapping[str, Any] | None,
+        live_feed,
+        quotes_fn: Callable[[list[str]], Mapping[str, Any]] | None = None,
+    ) -> dict:
+        """Confirm a held cross from the live feed, or from REST/NSE quotes.
 
         A symbol must remain above its trigger for ``breakout_confirmation_s`` and has a 10 bps
-        default buffer.  This avoids alerting on a one-tick touch and replaces the legacy sniper's
-        separate WebSocket owner.
+        default buffer.  This avoids alerting on a one-tick touch.
+
+        Telegram stays the simple BREAKOUT CONFIRMED card — missing
+        fundamentals / avg volume must not mute a held break. Known-thin
+        tape (0 < vol < 0.7×) and RSI > 82 still skip. Kite WebSocket is
+        optional: a quote price > 0 is treated as fresh.
         """
         payload = dict(payload or {})
         records = [dict(r) for r in payload.get("records", []) if isinstance(r, Mapping)]
@@ -304,37 +457,35 @@ class TelegramNotifier:
         now = float(self._epoch())
         confirmed: list[tuple[dict, float]] = []
 
-        try:
-            from product.breakout_quality import gate_breakout_quality
-        except Exception:
-            gate_breakout_quality = None  # type: ignore
-
+        candidates: list[tuple[str, dict, float]] = []
         for r in records:
             sym = str(r.get("symbol", "")).upper()
             entry = self._f(r.get("entry"))
             if not sym or entry <= 0:
                 continue
-            signals = [str(x).upper() for x in (r.get("signals") or [])]
-            relevant = (str(r.get("status", "")) in ("Watch for breakout", "Ready to trade")
-                        or "PRE_BREAKOUT" in signals)
-            if not relevant:
+            if not self._breakout_lane(r):
                 continue
-            # Same technical gates as sniper — never alert 0.1× / RSI blow-off.
-            if gate_breakout_quality is not None:
-                ok, reasons, _ = gate_breakout_quality(r, for_best=False)
-                if not ok:
-                    arms.pop(sym, None)
-                    continue
-            elif self._f(r.get("volume_ratio")) < 0.7:
+            vol = self._f(r.get("volume_ratio"))
+            rsi = self._f(r.get("rsi"))
+            # Known-thin / blow-off only. Missing volume (khali row) still arms.
+            if 0 < vol < 0.7:
                 arms.pop(sym, None)
                 continue
-            try:
-                fresh = bool(live_feed.entry_allowed(sym))
-                price = self._f(live_feed.price(sym))
-            except Exception:
-                fresh, price = False, 0.0
+            if rsi > 82:
+                arms.pop(sym, None)
+                continue
+            candidates.append((sym, r, entry))
+
+        prices = self._live_or_quote_prices(
+            [sym for sym, _, _ in candidates], live_feed, quotes_fn,
+        )
+
+        for sym, r, entry in candidates:
+            price = prices.get(sym, 0.0)
             trigger = entry * (1.0 + self.breakout_buffer_bps / 10000.0)
-            if not fresh or price < trigger:
+            if price <= 0:
+                continue  # not subscribed / no tick yet — don't disarm
+            if price < trigger:
                 arms.pop(sym, None)
                 continue
             key = f"breakout:{sym}"
@@ -353,24 +504,15 @@ class TelegramNotifier:
             return {"confirmed": 0}
         confirmed.sort(key=lambda x: (-self._f(x[0].get("score")), str(x[0].get("symbol", ""))))
         confirmed = confirmed[:5]
-        lines = ["🚨 <b>BREAKOUT CONFIRMED — fresh Kite ticks</b>"]
+        lines = ["🚨 <b>BREAKOUT CONFIRMED</b>"]
         keys = []
         for r, price in confirmed:
             sym = str(r.get("symbol", "")).upper()
-            lines.append(
-                f"\n⚡ <b>{self._esc(sym)}</b> crossed ₹{self._f(r.get('entry')):,.2f} "
-                f"and held above it\n"
-                f"   LTP ₹{price:,.2f} · Score {self._f(r.get('score')):.0f} · "
-                f"Volume {self._f(r.get('volume_ratio')):.1f}× (≥0.7×)\n"
-                f"   RSI {self._f(r.get('rsi')):.0f} · "
-                f"{self._esc(str(r.get('classification') or 'fundamentals n/a'))}\n"
-                f"   PAPER plan: stop ₹{self._f(r.get('stop')):,.2f} · "
-                f"target ₹{self._f(r.get('target')):,.2f}"
-            )
+            lines.append(self._plain_breakout_line(r, price))
             keys.append(f"breakout:{sym}")
         try:
             engine = self._engine()
-            if engine.is_configured() and engine.send("\n".join(lines)):
+            if engine.send("\n".join(lines)):
                 self._mark_sent(keys, day)
                 for r, _ in confirmed:
                     arms.pop(str(r.get("symbol", "")).upper(), None)

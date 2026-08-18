@@ -19,6 +19,37 @@ def records_from_payload(payload: Mapping[str, Any] | None) -> list[dict]:
     return []
 
 
+def sniper_watch_symbols(payload: Mapping[str, Any] | None, limit: int = 80) -> list[str]:
+    """Symbols the live feed must tick so BREAKOUT CONFIRMED can fire.
+
+    Watchlist-only subscriptions miss pre-breakout / sniper names, so the
+    autonomy live-breakout observer never sees a held cross.
+    """
+    out: list[str] = []
+    seen: set[str] = set()
+    for r in records_from_payload(payload):
+        signals = [str(x).upper() for x in (r.get("signals") or [])]
+        status = str(r.get("status") or "")
+        state = str(r.get("breakout_state") or "")
+        relevant = (
+            status in ("Watch for breakout", "Ready to trade")
+            or "PRE_BREAKOUT" in signals
+            or any(s.startswith("BREAKOUT") for s in signals)
+            or bool(r.get("sniper_candidate"))
+            or state in ("confirmed_breakout", "near_breakout")
+        )
+        if not relevant:
+            continue
+        sym = str(r.get("symbol") or "").upper()
+        if not sym or sym in seen:
+            continue
+        seen.add(sym)
+        out.append(sym)
+        if len(out) >= max(0, int(limit)):
+            break
+    return out
+
+
 def ensure_breakout_sniper(payload: Mapping[str, Any] | None = None) -> dict:
     """Start (idempotent) and refresh the sniper watch map.
 
@@ -149,10 +180,9 @@ def diagnose_breakout_alerts() -> dict:
     sniper = ensure_breakout_sniper()
     out["sniper"] = sniper
     blockers = []
+    notes = []
     if not out.get("telegram_configured"):
         blockers.append("TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID missing or still the .env.example placeholder")
-    if not out.get("kite_ready"):
-        blockers.append("Kite not ready — run: python main.py login (then keep stack running)")
     if not out.get("autonomy_running"):
         blockers.append("Autonomy supervisor not running — bash scripts/run_quantterm_complete.sh")
     if not out.get("scan_present"):
@@ -161,19 +191,21 @@ def diagnose_breakout_alerts() -> dict:
         blockers.append("Scan has zero pre-breakout candidates right now")
     elif int(out.get("pre_breakout_quality_ok") or 0) == 0:
         blockers.append("Pre-breakouts exist but all fail quality (RSI/volume/chase) — nothing to watch")
-    elif int(out.get("sniper_watch_tokens") or 0) == 0:
-        blockers.append("Quality OK but instrument tokens missing — refresh instruments after Kite login")
-    if sniper.get("error") == "kite_unavailable":
-        blockers.append("Sniper cannot start WebSocket without Kite")
-    if sniper.get("error") == "market_closed":
+    if sniper.get("error") == "market_closed" or out.get("market_open") is False:
         blockers.append("Market closed — sniper arms only in cash session (09:15–15:30 IST)")
-    if out.get("market_open") and sniper.get("ok") and int(sniper.get("watching") or 0) == 0:
-        blockers.append("Sniper started but watching=0 — no armed names this scan")
+    if not out.get("kite_ready") or sniper.get("error") == "kite_unavailable":
+        notes.append("Kite WS sniper off — Telegram still polls NSE/Kite REST quotes (python main.py login for ticks)")
+    elif int(out.get("sniper_watch_tokens") or 0) == 0:
+        notes.append("Quality OK but instrument tokens missing — WS sniper idle; REST quotes still confirm")
+    elif sniper.get("ok") and int(sniper.get("watching") or 0) == 0:
+        notes.append("WS sniper started but watching=0 — REST quote poll still runs")
     out["blockers"] = blockers
+    out["notes"] = notes
     out["ok"] = not blockers
     out["hint"] = (
-        "BREAKOUT CONFIRMED needs: Telegram + Kite WS + autonomy + pre-breakout "
-        "within 2.5% of pivot that CLEARS and HOLDS with pace-aware volume. "
-        "Scan setup alerts (🎯) are separate and fire after each market scan."
+        "BREAKOUT CONFIRMED needs: Telegram + autonomy running in market hours + "
+        "a pre-breakout that CLEARS and HOLDS (scan bar through trigger, or live "
+        "quotes/ticks above pivot). Kite login is optional for Telegram — it only "
+        "adds the WebSocket sniper. Scan setup alerts (🎯) are separate."
     )
     return out
