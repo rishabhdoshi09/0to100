@@ -22,6 +22,7 @@ import { EvChip } from './evChip'
 import { HomeTodayPath, useTodayFloors } from './HomeTodayPath'
 import { decideNextStep, type FloorContext } from './homeFloorPath'
 import { jobClock } from './scanRunner'
+import { DeskWait } from './DeskWait'
 import { BuyThesisSheet } from './BuyThesisSheet'
 import { deskSymbol, thesisReplacesList } from './deskThesis'
 import { usePhoneLayout } from './phoneLayout'
@@ -1076,7 +1077,7 @@ export function CompareView({ symbols, setSymbols, setActive, setSelected }: {
         <button type="button" onClick={addSymbol}>Add</button>
         <button type="button" onClick={() => setSymbols([])}>Clear</button>
       </div>
-      {loading && <p>Loading comparison…</p>}
+      {loading && <DeskWait kind="COMPARE" />}
       {data && (
         <div className="compare-grid">
           {Object.entries(data.section_labels).map(([key, label]) => (

@@ -15,6 +15,9 @@ import {
 import type { ExperienceViewProps } from './experience'
 import { LiveScanBanner } from './experience'
 import { EvChip } from './evChip'
+import { DeskWait, toDeskWaitScan } from './DeskWait'
+import type { DisplayDepth } from './productLanguage'
+import type { ScanRunnerHandle } from './scanRunner'
 
 const CAT_ICONS: Record<string, string> = {
   wealth_builders: 'W',
@@ -111,6 +114,25 @@ function CardTile({
   )
 }
 
+function RecoWaitPanel({
+  marketScan,
+  longTermScan,
+  depth,
+}: {
+  marketScan: ScanRunnerHandle
+  longTermScan: ScanRunnerHandle
+  depth: DisplayDepth
+}) {
+  const activeScan = marketScan.isActive ? marketScan : (longTermScan.isActive ? longTermScan : null)
+  return (
+    <div className="reco-light">
+      <LiveScanBanner scan={marketScan} depth={depth} label="Market scan" />
+      <LiveScanBanner scan={longTermScan} depth={depth} label="Long-term scan" />
+      <DeskWait kind="RECO_WORKSPACE" scan={toDeskWaitScan(activeScan)} />
+    </div>
+  )
+}
+
 export function RecommendationsView({
   dashboard,
   selected,
@@ -190,9 +212,11 @@ export function RecommendationsView({
 
   if (loading) {
     return (
-      <div className="reco-light">
-        <div className="reco-empty"><strong>Loading recommendations…</strong></div>
-      </div>
+      <RecoWaitPanel
+        marketScan={marketScan}
+        longTermScan={longTermScan}
+        depth={depth}
+      />
     )
   }
   if (error || !data || !category) {
@@ -345,7 +369,9 @@ function formatReportDate(value: string): string {
   }
 }
 
-export function MarketReportsView({ setActive, setSelected: setStock }: ExperienceViewProps) {
+export function MarketReportsView({
+  setActive, setSelected: setStock, marketScan, longTermScan, depth,
+}: ExperienceViewProps) {
   const [data, setData] = useState<MarketReportsWorkspace | null>(null)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(true)
@@ -387,9 +413,12 @@ export function MarketReportsView({ setActive, setSelected: setStock }: Experien
   }, [data, query])
 
   if (loading) {
+    const activeScan = marketScan.isActive ? marketScan : (longTermScan.isActive ? longTermScan : null)
     return (
       <div className="reco-light">
-        <div className="reco-empty"><strong>Loading market reports…</strong></div>
+        <LiveScanBanner scan={marketScan} depth={depth} label="Market scan" />
+        <LiveScanBanner scan={longTermScan} depth={depth} label="Long-term scan" />
+        <DeskWait kind="MARKET_PULSE" scan={toDeskWaitScan(activeScan)} />
       </div>
     )
   }

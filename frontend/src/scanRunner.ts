@@ -162,6 +162,37 @@ export function formatRemaining(seconds: number | null, typicalSeconds?: number 
 export const TYPICAL_JOB_SECONDS: Record<string, number> = {
   MARKET_SCAN: 120,
   LONG_TERM_SCAN: 240,
+  RECO_WORKSPACE: 8,
+  MARKET_PULSE: 8,
+  EDUCATION: 5,
+  COMPARE: 12,
+  STOCK_WORKSPACE: 10,
+}
+
+export type DeskWaitKind = 'RECO_WORKSPACE' | 'MARKET_PULSE' | 'EDUCATION' | 'COMPARE' | 'STOCK_WORKSPACE'
+
+export const DESK_WAIT_DOING: Record<DeskWaitKind, string> = {
+  RECO_WORKSPACE:
+    'Reading the last market scan and grouping names into Wealth Builders, Super Trends, Breakouts and Recovery. Then one live-price stamp on that shortlist.',
+  MARKET_PULSE:
+    'Assembling today\'s Pulse from the last scan — movers, breakouts, headlines. Not walking the whole bhavcopy universe.',
+  EDUCATION:
+    'Turning curated news into learn cards. This page does not fetch new articles.',
+  COMPARE:
+    'Laying saved stock files side by side. Missing fundamentals stay missing.',
+  STOCK_WORKSPACE:
+    'Opening the saved price, technical, fundamental and source files for this name.',
+}
+
+export type DeskWaitScan = {
+  kind: string
+  isActive: boolean
+  friendlyPhase: string
+  progressLine: string | null
+  percent: number | null
+  elapsedSeconds: number
+  current?: number
+  total?: number
 }
 
 export function jobClock(input: {
@@ -197,6 +228,58 @@ export function jobClock(input: {
     eta,
   ].filter(Boolean).join(' · ')
   return { button, line, percent: input.percent, remaining }
+}
+
+export function deskWaitClock(input: {
+  kind: DeskWaitKind
+  elapsedSeconds: number
+  scan?: DeskWaitScan | null
+}): JobClockLike {
+  const scan = input.scan
+  if (scan?.isActive) {
+    const clock = jobClock({
+      kind: scan.kind,
+      isActive: true,
+      friendlyPhase: scan.friendlyPhase,
+      progressLine: scan.progressLine,
+      percent: scan.percent,
+      elapsedSeconds: scan.elapsedSeconds,
+      current: scan.current,
+      total: scan.total,
+    })
+    return {
+      ...clock,
+      doing: scan.progressLine || scan.friendlyPhase,
+    }
+  }
+  const typical = TYPICAL_JOB_SECONDS[input.kind] || 8
+  const elapsed = Math.max(0, Number(input.elapsedSeconds) || 0)
+  const remaining = elapsed >= 5 ? Math.max(0, typical - elapsed) : null
+  const eta = formatRemaining(remaining, typical)
+  const percent = elapsed > 0 ? Math.min(95, Math.round((elapsed / typical) * 100)) : null
+  const doing = DESK_WAIT_DOING[input.kind]
+  return {
+    button: ['Working…', eta].filter(Boolean).join(' · '),
+    line: [doing, elapsed > 0 ? `elapsed ${formatElapsed(elapsed)}` : null, eta].filter(Boolean).join(' · '),
+    percent,
+    remaining,
+    doing,
+  }
+}
+
+export function recoWorkspaceClock(input: {
+  elapsedSeconds: number
+  scan?: DeskWaitScan | null
+}): JobClockLike {
+  return deskWaitClock({ kind: 'RECO_WORKSPACE', elapsedSeconds: input.elapsedSeconds, scan: input.scan })
+}
+
+type JobClockLike = {
+  button: string
+  line: string
+  percent: number | null
+  remaining: number | null
+  doing?: string
 }
 
 export function qualifiedResultLine(operation: OperationRecord | null): string | null {

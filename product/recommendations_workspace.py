@@ -7,7 +7,7 @@ lifecycle strips from long-term + signal-outcome trackers.
 Honest rules:
   - Empty category → empty list (never fabricate picks)
   - Prices/upside from real entry/target/price fields only
-  - CMP freshness tags come from live_technicals when available
+  - CMP freshness tags come from a bulk quote stamp on the shortlist
   - Each scan symbol gets ONE primary category (no multi-bucket spam)
 """
 from __future__ import annotations
@@ -590,13 +590,67 @@ def _tracker_lifecycle() -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     return active, closed
 
 
+def _stamp_live_cmp(categories: Sequence[Mapping[str, Any]]) -> None:
+    """One bulk quote pass on the shortlist — never rebuild RSI for 120 scan rows.
+
+    Ideas used to freeze on `refresh_rows_technicals(scan[:120])`. Category
+    membership already comes from the saved scan; the desk only needs a fresh
+    last print on the cards it will show.
+    """
+    cards: list[dict[str, Any]] = []
+    for cat in categories:
+        if isinstance(cat, dict):
+            cards.extend(c for c in (cat.get("cards") or []) if isinstance(c, dict))
+    symbols: list[str] = []
+    seen: set[str] = set()
+    for card in cards:
+        sym = str(card.get("symbol") or "").strip().upper()
+        if not sym or sym in seen:
+            continue
+        seen.add(sym)
+        symbols.append(sym)
+    if not symbols:
+        return
+    try:
+        from data.live_quotes import get_live_quotes
+        quotes = get_live_quotes(symbols[:80], ttl=8.0) or {}
+    except Exception:
+        return
+    for card in cards:
+        sym = str(card.get("symbol") or "").strip().upper()
+        raw = quotes.get(sym) or {}
+        try:
+            px = float((raw.get("price") if isinstance(raw, Mapping) else raw) or 0.0)
+        except (TypeError, ValueError):
+            px = 0.0
+        if px <= 0:
+            continue
+        card["cmp"] = round(px, 2)
+        src = str(raw.get("source") or "") if isinstance(raw, Mapping) else ""
+        card["price_tag"] = "LIVE" if src in {"kite", "nse"} else (src.upper() or "LIVE")
+        card["tech_source"] = src or "quote"
+        entry = _f(card.get("entry"))
+        target = _f(card.get("target"))
+        if entry > 0:
+            card["upside_from_entry_pct"] = round((px / entry - 1.0) * 100.0, 1)
+        if target > 0 and px > 0:
+            card["upside_to_target_pct"] = round((target / px - 1.0) * 100.0, 1)
+        buy = entry if entry > 0 else px
+        if target > 0 and buy > 0:
+            card["upside_from_buy_pct"] = round((target / buy - 1.0) * 100.0, 1)
+
+
 def build_recommendations_workspace(
     *,
     scan_payload: Mapping[str, Any] | None = None,
     long_term_payload: Mapping[str, Any] | None = None,
     refresh_technicals: bool = True,
 ) -> dict[str, Any]:
-    """Project recommendation categories + lifecycle from persisted product state."""
+    """Project recommendation categories + lifecycle from persisted product state.
+
+    ``refresh_technicals`` stamps live CMP on the shortlist with one quote
+    call. It does not recompute RSI across the scan head.
+    """
     scan = dict(scan_payload or {})
     lt = dict(long_term_payload or {})
     scan_at = str(scan.get("scanned_at") or "")
@@ -604,16 +658,6 @@ def build_recommendations_workspace(
 
     scan_rows = [enrich_scan_row(dict(r), scanned_at=scan_at) for r in (scan.get("records") or [])]
     lt_rows = [enrich_long_term_row(dict(r), scanned_at=lt_at) for r in (lt.get("records") or [])]
-
-    if refresh_technicals and scan_rows:
-        try:
-            from product.live_technicals import refresh_rows_technicals
-            # Refresh head for CMP/RSI honesty on the desk.
-            head = refresh_rows_technicals(scan_rows[:120], bulk_overlay=True)
-            by = {str(r.get("symbol")).upper(): r for r in head}
-            scan_rows = [by.get(str(r.get("symbol")).upper(), r) for r in scan_rows]
-        except Exception:
-            pass
 
     buckets = _bucket_rows(scan_rows, lt_rows)
     active, closed = _tracker_lifecycle()
@@ -630,6 +674,9 @@ def build_recommendations_workspace(
             ),
         })
 
+    if refresh_technicals:
+        _stamp_live_cmp(categories)
+
     cmp_note = (
         "CMP uses live Kite/NSE overlay when available; otherwise last official EOD. "
         "Each scan symbol maps to one primary category (breakout → recovery → trend). "
@@ -641,6 +688,11 @@ def build_recommendations_workspace(
     return {
         "schema_version": 2,
         "generated_at": datetime.now(timezone.utc).isoformat(),
+        "load_note": (
+            "Categories come from the last saved scan. Live CMP is one quote pass "
+            "on the shortlist — not a 120-name RSI rebuild."
+        ),
+        "typical_seconds": 8,
         "scan_scanned_at": scan_at,
         "long_term_scanned_at": lt_at,
         "records_status": str(scan.get("records_status") or ""),
@@ -722,18 +774,34 @@ def _pulse_summary(pulse: Mapping[str, Any]) -> str:
     return str(pulse.get("date") or "Market overview")
 
 
-def build_market_reports_workspace(*, persist_today: bool = True) -> dict[str, Any]:
-    """Chronological Market Pulse list from live street pulse + saved day files."""
+def build_market_reports_workspace(*, persist_today: bool = True, rebuild: bool = False) -> dict[str, Any]:
+    """Chronological Market Pulse list. Reuses today's file when it is fresh."""
+    import json
+    import time
     pulse: dict[str, Any] = {}
     error = ""
     try:
-        from reports.street_pulse import build_pulse
-        pulse = build_pulse() or {}
-    except Exception as exc:
-        error = str(exc)[:200]
-
-    if pulse and persist_today:
-        _persist_pulse(pulse)
+        from core.market_clock import today_ist
+        day = today_ist().isoformat()
+    except Exception:
+        day = datetime.now(timezone.utc).date().isoformat()
+    path = REPORTS_DIR / f"market_pulse_{day}.json"
+    if persist_today and path.exists() and not rebuild:
+        try:
+            age = time.time() - path.stat().st_mtime
+            if age < 900:
+                data = json.loads(path.read_text(encoding="utf-8"))
+                pulse = dict(data.get("pulse") or {})
+        except Exception:
+            pulse = {}
+    if not pulse:
+        try:
+            from reports.street_pulse import build_pulse
+            pulse = build_pulse() or {}
+        except Exception as exc:
+            error = str(exc)[:200]
+        if pulse and persist_today:
+            _persist_pulse(pulse)
 
     reports = _list_saved_reports()
     if reports:
@@ -762,9 +830,11 @@ def build_market_reports_workspace(*, persist_today: bool = True) -> dict[str, A
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "title": "Stay on top of the markets",
         "blurb": (
-            "Daily Market Pulse from QuantTerm scanners — trends, sector movers, "
-            "and breakout context. Assembled from live system state, never invented."
+            "Daily Market Pulse from the last scan — movers, breakouts, headlines. "
+            "Reused for 15 minutes so opening Pulse is a file read, not a market rebuild."
         ),
+        "typical_seconds": 8,
+        "load_note": "Pulse uses the last saved scan; it does not walk every bhavcopy symbol.",
         "reports": reports,
         "today_pulse": pulse,
         "error": error,

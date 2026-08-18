@@ -27,6 +27,7 @@ import type { ChartBar, ControlName, DashboardPayload, FnoUnderlying, OptionsCha
 import { longTermPicks } from './longTermPicks'
 import { fetchMarketOptions, fetchOptionsEodHistory, watchOptionsEod } from './api'
 import { ChainContextPanel } from './marketViews'
+import { DeskWait } from './DeskWait'
 
 // Read-only risk-first "R lens" — exact shares, rupee risk, reward:risk, book heat. No orders.
 export function RiskLensCard({ plan }: { plan: TradePlan | null }) {
@@ -473,7 +474,13 @@ export function ProductStockIntelligenceView(props: ViewProps) {
   }
 
   if (!selected) return <section className="workspace-view"><div className="large-empty">Search a name. Chart, financials, options (F&amp;O) and evidence all live on that stock — not as separate sidebar pages.</div></section>
-  if (loading && !workspace) return <section className="workspace-view"><div className="large-empty">Loading verified price, technical, fundamental and source data for {selected}…</div></section>
+  if (loading && !workspace) {
+    return (
+      <section className="workspace-view">
+        <DeskWait kind="STOCK_WORKSPACE" />
+      </section>
+    )
+  }
 
   return (
     <section className="stock-workspace-v2">

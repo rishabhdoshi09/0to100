@@ -8,6 +8,7 @@ import {
   type EducationFeed,
   type EducationLens,
 } from './productApi'
+import { DeskWait } from './DeskWait'
 
 type Props = {
   runControl: (control: ControlName) => Promise<void>
@@ -199,7 +200,7 @@ export function EducationView({ runControl, setSelected, setActive }: Props) {
         subtitle="Macro weather, micro company context, policy, F&O positioning literacy, and concepts"
       >
         <div className="edu-feed">
-          {loading && !feed ? <div className="large-empty">Loading education cards…</div> : null}
+          {loading && !feed ? <DeskWait kind="EDUCATION" /> : null}
           {!loading && cards.length === 0 ? (
             <div className="large-empty">
               {feed?.empty_hint

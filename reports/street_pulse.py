@@ -4,7 +4,7 @@ Daily Street Pulse — auto-generated daily market report.
 Modelled on analyst-style daily newsletters:
   1. Cover takeaways        — 3 one-liners about today's market
   2. Market snapshot        — NIFTY / BANKNIFTY with plain commentary
-  3. Top gainers / losers   — from the latest NSE bhavcopy session
+  3. Top gainers / losers   — from the latest market scan
   4. Buzzing stock          — biggest move on the biggest volume
   5. Gaining strength       — best accumulation / pre-breakout candidate
   6. Losing momentum        — liquid stock breaking down (warning)
@@ -12,14 +12,12 @@ Modelled on analyst-style daily newsletters:
   8. Breakouts tomorrow     — closest-to-pivot pre-breakout watchlist
   9. Top headlines          — latest market news
 
-Everything is computed from data the system already has: bhavcopy
-store, unified scanner results, Google Finance quotes, news fetcher.
+Everything is computed from data the system already has: last scan file,
+index quotes, regime, and the news curator store.
 """
 from __future__ import annotations
 
 from datetime import datetime
-
-import numpy as np
 
 from logger import get_logger
 
@@ -50,124 +48,146 @@ def _market_snapshot() -> dict:
             getattr(regime, "market_regime", ""), "")
     except Exception:
         pass
-    # Options market read — kya keh raha hai derivatives ka paisa
-    try:
-        from options.analytics import nifty_options_summary
-        opt = nifty_options_summary()
-        if opt:
-            out["options"] = opt
-    except Exception:
-        pass
+    # Option-chain fetch is a network page — skip it on Pulse open.
     return out
 
 
-def _movers_from_bhav(top_n: int = 5) -> tuple[list[dict], list[dict]]:
-    """Top gainers/losers from the latest bhavcopy session (liquid stocks only)."""
+def _f(value, default: float = 0.0) -> float:
     try:
-        from data.bhavcopy_store import store_symbols, get_ohlcv
-        rows = []
-        for sym in store_symbols():
-            df = get_ohlcv(sym)
-            if df is None or len(df) < 21:
-                continue
-            close = df["close"].values
-            vol = df["volume"].values
-            price = float(close[-1])
-            turnover = float(np.nanmean(vol[-20:])) * price
-            if turnover < 5e7:          # ₹5 cr — keep it to liquid names
-                continue
-            # Falling-knife filter — down >60% from 52W high: na gainer
-            # list mein (dead-cat bounce chase nahi), na loser highlight mein
-            from scan.unified_scanner import is_beaten_down_arr
-            if is_beaten_down_arr(df["high"].values[-250:]
-                                  if "high" in df.columns else close[-250:],
-                                  price):
-                continue
-            chg = (close[-1] / close[-2] - 1) * 100
-            rows.append({"symbol": sym, "price": round(price, 1),
-                         "chg_pct": round(chg, 2)})
-        rows.sort(key=lambda r: r["chg_pct"], reverse=True)
-        return rows[:top_n], rows[-top_n:][::-1]
-    except Exception as exc:
-        log.debug("pulse_movers_failed", error=str(exc))
-        return [], []
+        return float(value if value is not None else default)
+    except (TypeError, ValueError):
+        return float(default)
 
 
-def _losing_momentum() -> dict | None:
-    """A liquid stock breaking down — fell hard and closed below its 50-day avg."""
+def _scan_rows() -> tuple[list[dict], int]:
+    """Prefer the product scan file (autonomy). Memory auto_scan is Streamlit-only."""
     try:
-        from data.bhavcopy_store import store_symbols, get_ohlcv
-        worst, worst_score = None, 0.0
-        for sym in store_symbols():
-            df = get_ohlcv(sym)
-            if df is None or len(df) < 60:
-                continue
-            close = df["close"].values
-            vol = df["volume"].values
-            price = float(close[-1])
-            if float(np.nanmean(vol[-20:])) * price < 2e8:   # big names only
-                continue
-            # Already down >60% = already gone, not "losing momentum today"
-            from scan.unified_scanner import is_beaten_down_arr
-            if is_beaten_down_arr(df["high"].values[-250:]
-                                  if "high" in df.columns else close[-250:],
-                                  price):
-                continue
-            sma50 = float(close[-50:].mean())
-            chg5 = (close[-1] / close[-6] - 1) * 100
-            hi20 = float(np.max(close[-20:]))
-            fall_from_high = (hi20 - price) / hi20 * 100
-            if price < sma50 and chg5 < -4 and fall_from_high > worst_score:
-                worst_score = fall_from_high
-                worst = {"symbol": sym, "price": round(price, 1),
-                         "chg_5d": round(chg5, 1),
-                         "note": (f"{fall_from_high:.0f}% gira apne 20-day high se, "
-                                  f"50-day average ke neeche band hua — abhi door raho")}
-        return worst
+        from product.scan_store import load_scan
+        payload = load_scan() or {}
+        rows = [r for r in (payload.get("records") or []) if isinstance(r, dict)]
+        if rows:
+            return rows, int(payload.get("universe_size") or len(rows))
     except Exception:
-        return None
+        pass
+    try:
+        from scan.auto_scan import get_results
+        results, universe, *_ = get_results()
+        return list(results or []), int(universe or 0)
+    except Exception:
+        return [], 0
+
+
+def _movers_from_scan(results: list[dict], top_n: int = 5) -> tuple[list[dict], list[dict]]:
+    rows = []
+    for r in results:
+        price = _f(r.get("price"))
+        if price <= 0:
+            continue
+        rows.append({
+            "symbol": str(r.get("symbol") or "").upper(),
+            "price": round(price, 1),
+            "chg_pct": round(_f(r.get("change_pct")), 2),
+        })
+    rows.sort(key=lambda item: item["chg_pct"], reverse=True)
+    if not rows:
+        return [], []
+    return rows[:top_n], list(reversed(rows[-top_n:]))
+
+
+def _losing_from_scan(results: list[dict]) -> dict | None:
+    worst, worst_score = None, 0.0
+    for r in results:
+        if r.get("above_sma50") is True:
+            continue
+        mom = _f(r.get("momentum_5d"))
+        if mom > -4:
+            continue
+        fall = _f(r.get("pct_below_20d_high"))
+        if fall <= worst_score:
+            continue
+        worst_score = fall
+        price = _f(r.get("price"))
+        worst = {
+            "symbol": str(r.get("symbol") or "").upper(),
+            "price": round(price, 1),
+            "chg_5d": round(mom, 1),
+            "note": (
+                f"{fall:.0f}% gira apne 20-day high se, "
+                f"50-day average ke neeche — abhi door raho"
+            ),
+        }
+    return worst
+
+
+def _is_confirmed_breakout(row: dict) -> bool:
+    sigs = [str(s) for s in (row.get("signals") or [])]
+    joined = " ".join(sigs).upper()
+    return (
+        "52-WEEK HIGH BREAKOUT" in joined
+        or "RESISTANCE BREAK" in joined
+        or "BREAKOUT_52W" in joined
+        or "BREAKOUT_RES" in joined
+        or str(row.get("breakout_grade") or "").upper() in {"A", "B"}
+    )
 
 
 def _headlines(max_n: int = 5) -> list[str]:
+    """Headlines from the curator store — never a live news crawl on page open."""
     try:
-        from news.fetcher import NewsFetcher
-        arts = NewsFetcher().fetch_all(max_age_hours=18)
-        return [a.headline[:120] for a in arts[:max_n]]
+        from pathlib import Path
+        from news.curator_store import NewsCuratorStore
+        root = Path(__file__).resolve().parents[1]
+        store = NewsCuratorStore(root / "logs" / "news_curator.sqlite3")
+        try:
+            arts = store.recent(hours=18, limit=max_n)
+            out = []
+            for a in arts:
+                headline = str(getattr(a, "headline", "") or (a.as_dict().get("headline") if hasattr(a, "as_dict") else "") or "")
+                if headline:
+                    out.append(headline[:120])
+            return out[:max_n]
+        finally:
+            store.close()
     except Exception:
         return []
 
 
-def build_pulse() -> dict:
-    """Assemble the full Daily Pulse from live system state. Call once per view."""
-    from scan.auto_scan import get_results
+_PULSE_CACHE: dict = {"ts": 0.0, "pulse": None}
+_PULSE_TTL_S = 60.0
 
-    results, universe_size, last_ts, _ = get_results()
-    gainers, losers = _movers_from_bhav()
+
+def build_pulse(*, force: bool = False) -> dict:
+    """Assemble Pulse from the last scan + index quotes. No full-universe walk."""
+    import time
+    now = time.time()
+    if not force and _PULSE_CACHE["pulse"] and now - float(_PULSE_CACHE["ts"] or 0) < _PULSE_TTL_S:
+        return dict(_PULSE_CACHE["pulse"])
+
+    results, universe_size = _scan_rows()
+    gainers, losers = _movers_from_scan(results)
     snapshot = _market_snapshot()
 
-    # Buzzing stock: biggest move on biggest relative volume among signals
     buzzing = None
-    movers = [r for r in results if abs(r.get("change_pct", 0)) >= 3
-              and r.get("volume_ratio", 1) >= 2]
+    movers = [r for r in results if abs(_f(r.get("change_pct"))) >= 3
+              and _f(r.get("volume_ratio"), 1) >= 2]
     if movers:
-        b = max(movers, key=lambda r: r["volume_ratio"] * abs(r["change_pct"]))
-        buzzing = {**b, "note": (f"{b['change_pct']:+.1f}% move on "
-                                 f"{b['volume_ratio']:.1f}× volume — "
+        b = max(movers, key=lambda r: _f(r.get("volume_ratio")) * abs(_f(r.get("change_pct"))))
+        buzzing = {**b, "note": (f"{_f(b.get('change_pct')):+.1f}% move on "
+                                 f"{_f(b.get('volume_ratio')):.1f}× volume — "
                                  + (b.get("reasons") or ["strong interest"])[0])}
 
-    # Gaining strength: best pre-breakout / accumulation candidate
     strength = None
-    pre = [r for r in results if "PreBreakout" in r.get("categories", [])]
+    pre = [
+        r for r in results
+        if "PreBreakout" in (r.get("categories") or [])
+        or "PRE_BREAKOUT" in [str(x).upper() for x in (r.get("signals") or [])]
+    ]
     if pre:
-        strength = min(pre, key=lambda r: r.get("pivot_distance_pct") or 99)
+        strength = min(pre, key=lambda r: _f(r.get("pivot_distance_pct"), 99))
 
-    # Breakouts today (confirmed) & tomorrow (pre-breakout watch)
-    today_brk = [r for r in results
-                 if any(s in ("52-week high breakout", "Resistance break on volume")
-                        for s in r.get("signals", []))][:4]
-    tomorrow_brk = sorted(pre, key=lambda r: r.get("pivot_distance_pct") or 99)[:4]
+    today_brk = [r for r in results if _is_confirmed_breakout(r)][:4]
+    tomorrow_brk = sorted(pre, key=lambda r: _f(r.get("pivot_distance_pct"), 99))[:4]
 
-    # Cover takeaways
     takeaways = []
     for idx in snapshot["indices"]:
         arrow = "▲" if idx["chg_pct"] >= 0 else "▼"
@@ -178,11 +198,8 @@ def build_pulse() -> dict:
                          f"({gainers[0]['chg_pct']:+.1f}%)")
     if snapshot["commentary"]:
         takeaways.append(snapshot["commentary"])
-    if snapshot.get("options"):
-        opt = snapshot["options"]
-        takeaways.append(f"Options: {opt['note']} · max pain {opt['max_pain']:,.0f}")
 
-    return {
+    pulse = {
         "date": datetime.now().strftime("%d %B %Y"),
         "takeaways": takeaways[:4],
         "snapshot": snapshot,
@@ -190,12 +207,15 @@ def build_pulse() -> dict:
         "losers": losers,
         "buzzing": buzzing,
         "strength": strength,
-        "weak": _losing_momentum(),
+        "weak": _losing_from_scan(results),
         "breakouts_today": today_brk,
         "breakouts_tomorrow": tomorrow_brk,
         "headlines": _headlines(),
         "scanned": universe_size,
     }
+    _PULSE_CACHE["ts"] = now
+    _PULSE_CACHE["pulse"] = pulse
+    return pulse
 
 
 def pulse_to_telegram(pulse: dict) -> str:
