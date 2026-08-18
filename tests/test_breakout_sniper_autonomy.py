@@ -3,7 +3,11 @@ from __future__ import annotations
 
 from product.scan_store import build_scan_payload
 from scan.breakout_sniper import build_watch_map
-from research.autonomy.sniper_bridge import ensure_breakout_sniper, records_from_payload
+from research.autonomy.sniper_bridge import (
+    ensure_breakout_sniper,
+    records_from_payload,
+    sniper_watch_symbols,
+)
 
 
 class _Sig:
@@ -167,3 +171,13 @@ def test_ensure_sniper_kite_unavailable(monkeypatch):
 def test_records_from_payload():
     assert records_from_payload(None) == []
     assert records_from_payload({"records": [{"symbol": "A"}]}) == [{"symbol": "A"}]
+
+
+def test_sniper_watch_symbols_includes_prebreakout_not_just_watchlist():
+    payload = {"records": [
+        {"symbol": "SETUP", "status": "Ready to trade", "signals": ["MOMENTUM"]},
+        {"symbol": "NEAR", "status": "Watch for breakout", "signals": ["PRE_BREAKOUT"]},
+        {"symbol": "SNIPE", "status": "Watch", "sniper_candidate": True},
+        {"symbol": "SKIP", "status": "Watch", "signals": ["RSI"]},
+    ]}
+    assert sniper_watch_symbols(payload) == ["SETUP", "NEAR", "SNIPE"]

@@ -19,6 +19,37 @@ def records_from_payload(payload: Mapping[str, Any] | None) -> list[dict]:
     return []
 
 
+def sniper_watch_symbols(payload: Mapping[str, Any] | None, limit: int = 80) -> list[str]:
+    """Symbols the live feed must tick so BREAKOUT CONFIRMED can fire.
+
+    Watchlist-only subscriptions miss pre-breakout / sniper names, so the
+    autonomy live-breakout observer never sees a held cross.
+    """
+    out: list[str] = []
+    seen: set[str] = set()
+    for r in records_from_payload(payload):
+        signals = [str(x).upper() for x in (r.get("signals") or [])]
+        status = str(r.get("status") or "")
+        state = str(r.get("breakout_state") or "")
+        relevant = (
+            status in ("Watch for breakout", "Ready to trade")
+            or "PRE_BREAKOUT" in signals
+            or any(s.startswith("BREAKOUT") for s in signals)
+            or bool(r.get("sniper_candidate"))
+            or state in ("confirmed_breakout", "near_breakout")
+        )
+        if not relevant:
+            continue
+        sym = str(r.get("symbol") or "").upper()
+        if not sym or sym in seen:
+            continue
+        seen.add(sym)
+        out.append(sym)
+        if len(out) >= max(0, int(limit)):
+            break
+    return out
+
+
 def ensure_breakout_sniper(payload: Mapping[str, Any] | None = None) -> dict:
     """Start (idempotent) and refresh the sniper watch map.
 

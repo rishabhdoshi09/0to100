@@ -132,6 +132,53 @@ class TelegramNotifier:
     def _esc(value: Any) -> str:
         return html.escape(str(value or ""), quote=False)
 
+    def _through_trigger(self, row: Mapping[str, Any], price: float | None = None) -> bool:
+        entry = self._f(row.get("entry"))
+        px = self._f(price if price is not None else row.get("price"))
+        return entry > 0 and px >= entry
+
+    def _breakout_lane(self, row: Mapping[str, Any]) -> bool:
+        signals = [str(x).upper() for x in (row.get("signals") or [])]
+        status = str(row.get("status") or "")
+        state = str(row.get("breakout_state") or "")
+        return (
+            status in ("Watch for breakout", "Ready to trade")
+            or "PRE_BREAKOUT" in signals
+            or any(s.startswith("BREAKOUT") for s in signals)
+            or bool(row.get("sniper_candidate"))
+            or state in ("confirmed_breakout", "near_breakout")
+        )
+
+    def _scan_breakout_confirmed(self, row: Mapping[str, Any]) -> bool:
+        """Scan bar already through the trigger — send the plain sniper card.
+
+        Does not wait for Kite ticks. Known-thin / RSI blow-off still skip.
+        """
+        if not self._breakout_lane(row) or not self._through_trigger(row):
+            return False
+        vol = self._f(row.get("volume_ratio"))
+        rsi = self._f(row.get("rsi"))
+        if 0 < vol < 0.7 or rsi > 82:
+            return False
+        sym = str(row.get("symbol") or "").upper()
+        if not sym or self._was_sent(f"breakout:{sym}"):
+            return False
+        return True
+
+    def _plain_breakout_line(self, row: Mapping[str, Any], price: float) -> str:
+        sym = str(row.get("symbol") or "").upper()
+        entry = self._f(row.get("entry"))
+        vol = self._f(row.get("volume_ratio"))
+        vol_bit = f", volume {vol:.1f}×" if vol > 0 else ""
+        plan = ""
+        stop, target = self._f(row.get("stop")), self._f(row.get("target"))
+        if stop and target:
+            plan = f"\n   plan: stop ₹{stop:,.0f} / target ₹{target:,.0f}"
+        return (
+            f"\n<b>{self._esc(sym)}</b> ne ₹{entry:,.0f} toda "
+            f"(₹{self._f(price):,.1f}{vol_bit}){plan}"
+        )
+
     def notify_online(self) -> bool:
         return self._send_once(
             "autonomy_online",
@@ -146,7 +193,7 @@ class TelegramNotifier:
         summary = dict(payload.get("summary", {}) or {})
         day = self._day()
         self._prune(day)
-        sent = {"setup": 0, "prebreakout": 0, "briefing": 0, "eod": 0}
+        sent = {"setup": 0, "prebreakout": 0, "breakout": 0, "briefing": 0, "eod": 0}
 
         if phase == "premarket" and not self._was_sent("morning_brief", day):
             try:
@@ -166,11 +213,17 @@ class TelegramNotifier:
         ready = ready[:5]
 
         ready_symbols = {str(r.get("symbol", "")).upper() for r in ready}
+        broken = [r for r in records if self._scan_breakout_confirmed(r)]
+        broken.sort(key=lambda r: (-self._f(r.get("score")), str(r.get("symbol", ""))))
+        broken = broken[:5]
+        broken_symbols = {str(r.get("symbol", "")).upper() for r in broken}
         pre = [r for r in records
                if (str(r.get("status", "")) == "Watch for breakout"
                    or "PRE_BREAKOUT" in [str(x).upper() for x in (r.get("signals") or [])])
                and self._f(r.get("entry")) > 0
                and str(r.get("symbol", "")).upper() not in ready_symbols
+               and str(r.get("symbol", "")).upper() not in broken_symbols
+               and not self._through_trigger(r)
                and not self._was_sent(f"pre:{str(r.get('symbol', '')).upper()}", day)]
         pre.sort(key=lambda r: (-self._f(r.get("score")), str(r.get("symbol", ""))))
         pre = pre[:4]
@@ -218,6 +271,21 @@ class TelegramNotifier:
                     self._mark_sent(keys, day)
                     sent["setup"] = len(ready)
                     sent["prebreakout"] = len(pre)
+            except Exception:
+                pass
+
+        if broken:
+            try:
+                engine = self._engine()
+                lines = ["🚨 <b>BREAKOUT CONFIRMED</b>"]
+                keys = []
+                for r in broken:
+                    sym = str(r.get("symbol", "")).upper()
+                    lines.append(self._plain_breakout_line(r, self._f(r.get("price"))))
+                    keys.append(f"breakout:{sym}")
+                if engine.send("\n".join(lines)):
+                    self._mark_sent(keys, day)
+                    sent["breakout"] = len(broken)
             except Exception:
                 pass
 
@@ -328,11 +396,14 @@ class TelegramNotifier:
                 continue
             try:
                 fresh = bool(live_feed.entry_allowed(sym))
-                price = self._f(live_feed.price(sym))
+                raw_px = live_feed.price(sym)
+                price = self._f(raw_px)
             except Exception:
                 fresh, price = False, 0.0
             trigger = entry * (1.0 + self.breakout_buffer_bps / 10000.0)
-            if not fresh or price < trigger:
+            if not fresh or price <= 0:
+                continue  # not subscribed / no tick yet — don't disarm
+            if price < trigger:
                 arms.pop(sym, None)
                 continue
             key = f"breakout:{sym}"
@@ -355,17 +426,7 @@ class TelegramNotifier:
         keys = []
         for r, price in confirmed:
             sym = str(r.get("symbol", "")).upper()
-            entry = self._f(r.get("entry"))
-            vol = self._f(r.get("volume_ratio"))
-            vol_bit = f", volume {vol:.1f}×" if vol > 0 else ""
-            plan = ""
-            stop, target = self._f(r.get("stop")), self._f(r.get("target"))
-            if stop and target:
-                plan = f"\n   plan: stop ₹{stop:,.0f} / target ₹{target:,.0f}"
-            lines.append(
-                f"\n<b>{self._esc(sym)}</b> ne ₹{entry:,.0f} toda "
-                f"(₹{price:,.1f}{vol_bit}){plan}"
-            )
+            lines.append(self._plain_breakout_line(r, price))
             keys.append(f"breakout:{sym}")
         try:
             engine = self._engine()

@@ -334,9 +334,16 @@ class Supervisor:
 
     def _desired_live_symbols(self) -> set[str]:
         symbols = set()
+        payload = None
         try:
             from product.scan_store import load_scan, watchlist_rows
-            symbols |= {str(r.get("symbol", "")).upper() for r in watchlist_rows(load_scan(), limit=60)}
+            payload = load_scan() or {}
+            symbols |= {str(r.get("symbol", "")).upper() for r in watchlist_rows(payload, limit=60)}
+        except Exception:
+            payload = payload or {}
+        try:
+            from research.autonomy.sniper_bridge import sniper_watch_symbols
+            symbols |= set(sniper_watch_symbols(payload, limit=80))
         except Exception:
             pass
         try:

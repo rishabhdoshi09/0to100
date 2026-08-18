@@ -53,7 +53,7 @@ def test_scan_alerts_are_durable_and_deduped(tmp_path):
     now = lambda: datetime(2026, 7, 31, 10, 0)
     n = TelegramNotifier(tmp_path, engine_factory=lambda: engine, now_fn=now)
     first = n.notify_scan(_payload(), phase="intraday")
-    assert first["setup"] == 1 and first["prebreakout"] == 1
+    assert first["setup"] == 1 and first["prebreakout"] == 1 and first["breakout"] == 0
     assert len(engine.messages) == 1
     assert "AAA" in engine.messages[0][0] and "BBB" in engine.messages[0][0]
 
@@ -113,6 +113,54 @@ def test_live_breakout_sends_plain_message_for_empty_scan_row(tmp_path):
     assert "BREAKOUT CONFIRMED" in msg
     assert "BARE" in msg
     assert "fundamentals n/a" not in msg
+
+
+def test_scan_sends_plain_breakout_when_price_already_through(tmp_path):
+    engine = FakeEngine()
+    n = TelegramNotifier(tmp_path, engine_factory=lambda: engine,
+                         now_fn=lambda: datetime(2026, 7, 31, 10, 0))
+    payload = {"records": [{
+        "symbol": "KAYNES", "status": "Watch for breakout",
+        "signals": ["PRE_BREAKOUT"], "verdict": "WATCH",
+        "price": 4268.4, "entry": 4250, "stop": 4100, "target": 4550,
+        "score": 74, "rsi": 58, "volume_ratio": 1.6,
+        "reasons": ["Tight base"],
+    }]}
+    sent = n.notify_scan(payload, phase="intraday")
+    assert sent["breakout"] == 1
+    assert sent["prebreakout"] == 0
+    assert "BREAKOUT CONFIRMED" in engine.messages[-1][0]
+    assert "KAYNES" in engine.messages[-1][0]
+    assert "ne ₹" in engine.messages[-1][0]
+    assert n.notify_scan(payload, phase="intraday")["breakout"] == 0
+
+
+def test_missing_live_tick_does_not_disarm_breakout(tmp_path):
+    engine = FakeEngine()
+    epoch = [1000.0]
+    n = TelegramNotifier(
+        tmp_path,
+        engine_factory=lambda: engine,
+        now_fn=lambda: datetime(2026, 7, 31, 10, 15),
+        epoch_fn=lambda: epoch[0],
+        breakout_confirmation_s=8,
+        breakout_buffer_bps=10,
+    )
+    payload = _payload()
+    live = FakeLive(price=100.25, fresh=True)
+    assert n.observe_live_breakouts(payload, live)["confirmed"] == 0
+    assert "BBB" in n.state.get("arms", {})
+
+    class NoTick:
+        def entry_allowed(self, symbol):
+            return False
+
+        def price(self, symbol):
+            return None
+
+    epoch[0] += 9
+    assert n.observe_live_breakouts(payload, NoTick())["confirmed"] == 0
+    assert "BBB" in n.state.get("arms", {})
 
 
 def test_paper_open_and_close_alerts_include_ledger_truth(tmp_path):
