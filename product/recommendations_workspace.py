@@ -774,18 +774,34 @@ def _pulse_summary(pulse: Mapping[str, Any]) -> str:
     return str(pulse.get("date") or "Market overview")
 
 
-def build_market_reports_workspace(*, persist_today: bool = True) -> dict[str, Any]:
-    """Chronological Market Pulse list from live street pulse + saved day files."""
+def build_market_reports_workspace(*, persist_today: bool = True, rebuild: bool = False) -> dict[str, Any]:
+    """Chronological Market Pulse list. Reuses today's file when it is fresh."""
+    import json
+    import time
     pulse: dict[str, Any] = {}
     error = ""
     try:
-        from reports.street_pulse import build_pulse
-        pulse = build_pulse() or {}
-    except Exception as exc:
-        error = str(exc)[:200]
-
-    if pulse and persist_today:
-        _persist_pulse(pulse)
+        from core.market_clock import today_ist
+        day = today_ist().isoformat()
+    except Exception:
+        day = datetime.now(timezone.utc).date().isoformat()
+    path = REPORTS_DIR / f"market_pulse_{day}.json"
+    if persist_today and path.exists() and not rebuild:
+        try:
+            age = time.time() - path.stat().st_mtime
+            if age < 900:
+                data = json.loads(path.read_text(encoding="utf-8"))
+                pulse = dict(data.get("pulse") or {})
+        except Exception:
+            pulse = {}
+    if not pulse:
+        try:
+            from reports.street_pulse import build_pulse
+            pulse = build_pulse() or {}
+        except Exception as exc:
+            error = str(exc)[:200]
+        if pulse and persist_today:
+            _persist_pulse(pulse)
 
     reports = _list_saved_reports()
     if reports:
@@ -814,9 +830,11 @@ def build_market_reports_workspace(*, persist_today: bool = True) -> dict[str, A
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "title": "Stay on top of the markets",
         "blurb": (
-            "Daily Market Pulse from QuantTerm scanners — trends, sector movers, "
-            "and breakout context. Assembled from live system state, never invented."
+            "Daily Market Pulse from the last scan — movers, breakouts, headlines. "
+            "Reused for 15 minutes so opening Pulse is a file read, not a market rebuild."
         ),
+        "typical_seconds": 8,
+        "load_note": "Pulse uses the last saved scan; it does not walk every bhavcopy symbol.",
         "reports": reports,
         "today_pulse": pulse,
         "error": error,

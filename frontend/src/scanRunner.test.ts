@@ -12,6 +12,7 @@ import {
   estimateRemainingSeconds,
   formatRemaining,
   jobClock,
+  deskWaitClock,
   recoWorkspaceClock,
   TERMINAL_STATUSES,
 } from './scanRunner'
@@ -107,6 +108,13 @@ describe('scanRunner semantics', () => {
     expect(clock.button).toMatch(/Working… 38%/)
     expect(clock.button).toMatch(/left/)
     expect(clock.line).toMatch(/elapsed/)
+  })
+
+  it('explains Pulse wait with a usual ETA', () => {
+    const waiting = deskWaitClock({ kind: 'MARKET_PULSE', elapsedSeconds: 1 })
+    expect(waiting.doing).toMatch(/Pulse/)
+    expect(waiting.button).toMatch(/usually ~8s/)
+    expect(waiting.doing).toMatch(/last scan/)
   })
 
   it('explains Ideas category wait with a usual ETA', () => {

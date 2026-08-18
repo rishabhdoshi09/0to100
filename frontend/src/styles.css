@@ -593,6 +593,19 @@ body {
 .live-scan-progress{ margin-top:10px; height:6px; border-radius:999px; background:rgba(255,255,255,.08); overflow:hidden; }
 .live-scan-progress b{ display:block; height:100%; background:linear-gradient(90deg, var(--cyan), var(--purple)); transition:width .35s ease; }
 .live-scan-progress-pulse .pulse-bar{ width:35%; animation: live-scan-pulse 1.4s ease-in-out infinite; }
+
+.desk-wait{
+  max-width: 640px;
+  margin: 12px 0 16px;
+  padding: 18px 16px;
+  border-radius: 12px;
+  border: 1px dashed rgba(255,255,255,.18);
+  background: rgba(255,255,255,.04);
+  text-align: left;
+}
+.desk-wait strong{ display:block; font-size:16px; margin-bottom:6px; }
+.desk-wait p{ margin:8px 0 10px; line-height:1.45; font-size:15px; opacity:.9; }
+.desk-wait small{ display:block; margin-bottom:10px; opacity:.65; font-size:13px; }
 @keyframes live-scan-pulse{ 0%,100%{ transform:translateX(0); opacity:.6 } 50%{ transform:translateX(180%); opacity:1 } }
 .live-scan-technical{ display:block; margin-top:8px; color:var(--muted); font-size:11px; }
 .live-scan-notice{ margin-top:8px; display:flex; align-items:center; gap:12px; flex-wrap:wrap; }

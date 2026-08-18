@@ -251,3 +251,25 @@ def test_market_reports_lists_today_pulse(tmp_path, monkeypatch):
     assert payload["reports"][0]["title"] == "Market Pulse"
     assert (tmp_path / list(tmp_path.glob("market_pulse_*.json"))[0]).exists()
     assert "Nifty" in payload["reports"][0]["summary"]
+
+
+def test_market_reports_reuse_fresh_file(tmp_path, monkeypatch):
+    import json
+    import product.recommendations_workspace as rw
+    from core.market_clock import today_ist
+
+    monkeypatch.setattr(rw, "REPORTS_DIR", tmp_path)
+    day = today_ist().isoformat()
+    pulse = {"date": day, "takeaways": ["Saved pulse"], "gainers": []}
+    path = tmp_path / f"market_pulse_{day}.json"
+    path.write_text(json.dumps({
+        "id": f"market_pulse_{day}", "title": "Market Pulse", "kind": "market_pulse",
+        "date": day, "created_at": "2026-08-18T10:00:00+00:00", "pulse": pulse,
+    }))
+    monkeypatch.setattr(
+        "reports.street_pulse.build_pulse",
+        lambda: (_ for _ in ()).throw(AssertionError("should reuse file")),
+    )
+    payload = build_market_reports_workspace(persist_today=True)
+    assert payload["today_pulse"]["takeaways"] == ["Saved pulse"]
+    assert payload["typical_seconds"] == 8

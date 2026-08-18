@@ -15,8 +15,9 @@ import {
 import type { ExperienceViewProps } from './experience'
 import { LiveScanBanner } from './experience'
 import { EvChip } from './evChip'
-import { formatElapsed, recoWorkspaceClock, type ScanRunnerHandle } from './scanRunner'
+import { DeskWait, toDeskWaitScan } from './DeskWait'
 import type { DisplayDepth } from './productLanguage'
+import type { ScanRunnerHandle } from './scanRunner'
 
 const CAT_ICONS: Record<string, string> = {
   wealth_builders: 'W',
@@ -122,51 +123,12 @@ function RecoWaitPanel({
   longTermScan: ScanRunnerHandle
   depth: DisplayDepth
 }) {
-  const [elapsed, setElapsed] = useState(0)
-  useEffect(() => {
-    const id = window.setInterval(() => setElapsed((n) => n + 1), 1000)
-    return () => window.clearInterval(id)
-  }, [])
   const activeScan = marketScan.isActive ? marketScan : (longTermScan.isActive ? longTermScan : null)
-  const clock = recoWorkspaceClock({
-    elapsedSeconds: elapsed,
-    scan: activeScan
-      ? {
-        kind: activeScan.kind,
-        isActive: activeScan.isActive,
-        friendlyPhase: activeScan.friendlyPhase,
-        progressLine: activeScan.progressLine,
-        percent: activeScan.percent,
-        elapsedSeconds: activeScan.elapsedSeconds,
-        current: activeScan.operation?.progress_current ?? undefined,
-        total: activeScan.operation?.progress_total ?? undefined,
-      }
-      : null,
-  })
   return (
     <div className="reco-light">
       <LiveScanBanner scan={marketScan} depth={depth} label="Market scan" />
       <LiveScanBanner scan={longTermScan} depth={depth} label="Long-term scan" />
-      <div className="reco-empty reco-wait" role="status" aria-live="polite">
-        <strong>{clock.button}</strong>
-        <p>{clock.doing || clock.line}</p>
-        <small>
-          {activeScan
-            ? `Scan elapsed ${formatElapsed(activeScan.elapsedSeconds)}`
-            : elapsed > 0
-              ? `elapsed ${formatElapsed(elapsed)}`
-              : 'Starting…'}
-        </small>
-        {clock.percent != null ? (
-          <div className="live-scan-progress" aria-label={`${clock.percent}%`}>
-            <b style={{ width: `${Math.max(4, clock.percent)}%` }} />
-          </div>
-        ) : (
-          <div className="live-scan-progress live-scan-progress-pulse" aria-hidden="true">
-            <b className="pulse-bar" />
-          </div>
-        )}
-      </div>
+      <DeskWait kind="RECO_WORKSPACE" scan={toDeskWaitScan(activeScan)} />
     </div>
   )
 }
@@ -407,7 +369,9 @@ function formatReportDate(value: string): string {
   }
 }
 
-export function MarketReportsView({ setActive, setSelected: setStock }: ExperienceViewProps) {
+export function MarketReportsView({
+  setActive, setSelected: setStock, marketScan, longTermScan, depth,
+}: ExperienceViewProps) {
   const [data, setData] = useState<MarketReportsWorkspace | null>(null)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(true)
@@ -449,9 +413,12 @@ export function MarketReportsView({ setActive, setSelected: setStock }: Experien
   }, [data, query])
 
   if (loading) {
+    const activeScan = marketScan.isActive ? marketScan : (longTermScan.isActive ? longTermScan : null)
     return (
       <div className="reco-light">
-        <div className="reco-empty"><strong>Loading market reports…</strong></div>
+        <LiveScanBanner scan={marketScan} depth={depth} label="Market scan" />
+        <LiveScanBanner scan={longTermScan} depth={depth} label="Long-term scan" />
+        <DeskWait kind="MARKET_PULSE" scan={toDeskWaitScan(activeScan)} />
       </div>
     )
   }
