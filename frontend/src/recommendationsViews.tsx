@@ -15,6 +15,8 @@ import {
 import type { ExperienceViewProps } from './experience'
 import { LiveScanBanner } from './experience'
 import { EvChip } from './evChip'
+import { formatElapsed, recoWorkspaceClock, type ScanRunnerHandle } from './scanRunner'
+import type { DisplayDepth } from './productLanguage'
 
 const CAT_ICONS: Record<string, string> = {
   wealth_builders: 'W',
@@ -111,6 +113,64 @@ function CardTile({
   )
 }
 
+function RecoWaitPanel({
+  marketScan,
+  longTermScan,
+  depth,
+}: {
+  marketScan: ScanRunnerHandle
+  longTermScan: ScanRunnerHandle
+  depth: DisplayDepth
+}) {
+  const [elapsed, setElapsed] = useState(0)
+  useEffect(() => {
+    const id = window.setInterval(() => setElapsed((n) => n + 1), 1000)
+    return () => window.clearInterval(id)
+  }, [])
+  const activeScan = marketScan.isActive ? marketScan : (longTermScan.isActive ? longTermScan : null)
+  const clock = recoWorkspaceClock({
+    elapsedSeconds: elapsed,
+    scan: activeScan
+      ? {
+        kind: activeScan.kind,
+        isActive: activeScan.isActive,
+        friendlyPhase: activeScan.friendlyPhase,
+        progressLine: activeScan.progressLine,
+        percent: activeScan.percent,
+        elapsedSeconds: activeScan.elapsedSeconds,
+        current: activeScan.operation?.progress_current ?? undefined,
+        total: activeScan.operation?.progress_total ?? undefined,
+      }
+      : null,
+  })
+  return (
+    <div className="reco-light">
+      <LiveScanBanner scan={marketScan} depth={depth} label="Market scan" />
+      <LiveScanBanner scan={longTermScan} depth={depth} label="Long-term scan" />
+      <div className="reco-empty reco-wait" role="status" aria-live="polite">
+        <strong>{clock.button}</strong>
+        <p>{clock.doing || clock.line}</p>
+        <small>
+          {activeScan
+            ? `Scan elapsed ${formatElapsed(activeScan.elapsedSeconds)}`
+            : elapsed > 0
+              ? `elapsed ${formatElapsed(elapsed)}`
+              : 'Starting…'}
+        </small>
+        {clock.percent != null ? (
+          <div className="live-scan-progress" aria-label={`${clock.percent}%`}>
+            <b style={{ width: `${Math.max(4, clock.percent)}%` }} />
+          </div>
+        ) : (
+          <div className="live-scan-progress live-scan-progress-pulse" aria-hidden="true">
+            <b className="pulse-bar" />
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
 export function RecommendationsView({
   dashboard,
   selected,
@@ -190,9 +250,11 @@ export function RecommendationsView({
 
   if (loading) {
     return (
-      <div className="reco-light">
-        <div className="reco-empty"><strong>Loading recommendations…</strong></div>
-      </div>
+      <RecoWaitPanel
+        marketScan={marketScan}
+        longTermScan={longTermScan}
+        depth={depth}
+      />
     )
   }
   if (error || !data || !category) {

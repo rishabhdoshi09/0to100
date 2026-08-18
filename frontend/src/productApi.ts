@@ -608,6 +608,8 @@ export type RecommendationCategory = {
 export type RecommendationsWorkspace = {
   schema_version: number
   generated_at: string
+  load_note?: string
+  typical_seconds?: number
   scan_scanned_at: string
   long_term_scanned_at: string
   records_status: string

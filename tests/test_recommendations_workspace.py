@@ -163,6 +163,46 @@ def test_negative_momentum_not_super_trend():
     assert assigned is None or assigned[0] != "super_trends"
 
 
+def test_refresh_stamps_shortlist_quotes_not_scan_head(monkeypatch):
+    import product.recommendations_workspace as rw
+
+    called = {}
+
+    def fake_quotes(symbols, ttl=8.0):
+        called["symbols"] = list(symbols)
+        called["ttl"] = ttl
+        return {symbols[0]: {"price": 210.0, "source": "nse"}}
+
+    monkeypatch.setattr("data.live_quotes.get_live_quotes", fake_quotes)
+    payload = build_recommendations_workspace(
+        scan_payload={
+            "scanned_at": "2026-08-18T10:00:00+00:00",
+            "records": [
+                {
+                    "symbol": "SNIPE", "company": "Snipe Ltd", "score": 80,
+                    "signals": ["PRE_BREAKOUT", "BREAKOUT_52W"], "verdict": "BUY",
+                    "status": "Watch for breakout", "categories": ["PreBreakout"],
+                    "pivot_distance_pct": 1.0, "chase_risk": False,
+                    "price": 200, "entry": 201, "target": 230, "stop": 190,
+                    "rsi": 55, "volume_ratio": 1.8, "avg_vol20": 2e6,
+                    "breakout_grade": "A", "breakout_conviction": 85,
+                },
+            ],
+        },
+        long_term_payload={"records": []},
+        refresh_technicals=True,
+    )
+    assert payload["typical_seconds"] == 8
+    assert "load_note" in payload
+    assert called["symbols"] == ["SNIPE"]
+    card = next(
+        c for cat in payload["categories"] if cat["id"] == "momentum_breakouts"
+        for c in cat["cards"]
+    )
+    assert card["cmp"] == 210.0
+    assert card["price_tag"] == "LIVE"
+
+
 def test_wealth_empty_explains_needs_fundamentals():
     payload = build_recommendations_workspace(
         scan_payload={"records": [], "scanned_at": ""},

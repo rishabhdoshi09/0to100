@@ -12,6 +12,7 @@ import {
   estimateRemainingSeconds,
   formatRemaining,
   jobClock,
+  recoWorkspaceClock,
   TERMINAL_STATUSES,
 } from './scanRunner'
 import type { OperationRecord } from './types'
@@ -106,6 +107,30 @@ describe('scanRunner semantics', () => {
     expect(clock.button).toMatch(/Working… 38%/)
     expect(clock.button).toMatch(/left/)
     expect(clock.line).toMatch(/elapsed/)
+  })
+
+  it('explains Ideas category wait with a usual ETA', () => {
+    const waiting = recoWorkspaceClock({ elapsedSeconds: 1 })
+    expect(waiting.doing).toMatch(/Wealth Builders/)
+    expect(waiting.button).toMatch(/usually ~8s/)
+    expect(waiting.line).toMatch(/elapsed 1s/)
+    const later = recoWorkspaceClock({ elapsedSeconds: 6 })
+    expect(later.button).toMatch(/left|few seconds/)
+    const duringScan = recoWorkspaceClock({
+      elapsedSeconds: 2,
+      scan: {
+        kind: 'MARKET_SCAN',
+        isActive: true,
+        friendlyPhase: 'Scanning market candidates…',
+        progressLine: '1,200 of 3,191 stocks',
+        percent: 38,
+        elapsedSeconds: 50,
+        current: 1200,
+        total: 3191,
+      },
+    })
+    expect(duringScan.doing).toContain('1,200')
+    expect(duringScan.button).toMatch(/Working… 38%/)
   })
 
   it('surfaces qualified counts from persisted results', () => {

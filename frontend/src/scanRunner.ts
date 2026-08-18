@@ -162,6 +162,7 @@ export function formatRemaining(seconds: number | null, typicalSeconds?: number 
 export const TYPICAL_JOB_SECONDS: Record<string, number> = {
   MARKET_SCAN: 120,
   LONG_TERM_SCAN: 240,
+  RECO_WORKSPACE: 8,
 }
 
 export function jobClock(input: {
@@ -197,6 +198,62 @@ export function jobClock(input: {
     eta,
   ].filter(Boolean).join(' · ')
   return { button, line, percent: input.percent, remaining }
+}
+
+export function recoWorkspaceClock(input: {
+  elapsedSeconds: number
+  scan?: {
+    kind: string
+    isActive: boolean
+    friendlyPhase: string
+    progressLine: string | null
+    percent: number | null
+    elapsedSeconds: number
+    current?: number
+    total?: number
+  } | null
+}): JobClockLike {
+  const scan = input.scan
+  if (scan?.isActive) {
+    const clock = jobClock({
+      kind: scan.kind,
+      isActive: true,
+      friendlyPhase: scan.friendlyPhase,
+      progressLine: scan.progressLine,
+      percent: scan.percent,
+      elapsedSeconds: scan.elapsedSeconds,
+      current: scan.current,
+      total: scan.total,
+    })
+    return {
+      ...clock,
+      doing: scan.progressLine || scan.friendlyPhase,
+    }
+  }
+  const typical = TYPICAL_JOB_SECONDS.RECO_WORKSPACE
+  const elapsed = Math.max(0, Number(input.elapsedSeconds) || 0)
+  const remaining = elapsed >= 5 ? Math.max(0, typical - elapsed) : null
+  const eta = formatRemaining(remaining, typical)
+  const percent = elapsed > 0 ? Math.min(95, Math.round((elapsed / typical) * 100)) : null
+  const doing = (
+    'Reading the last market scan and grouping names into Wealth Builders, '
+    + 'Super Trends, Breakouts and Recovery. Then one live-price stamp on that shortlist.'
+  )
+  return {
+    button: ['Working…', eta].filter(Boolean).join(' · '),
+    line: [doing, elapsed > 0 ? `elapsed ${formatElapsed(elapsed)}` : null, eta].filter(Boolean).join(' · '),
+    percent,
+    remaining,
+    doing,
+  }
+}
+
+type JobClockLike = {
+  button: string
+  line: string
+  percent: number | null
+  remaining: number | null
+  doing?: string
 }
 
 export function qualifiedResultLine(operation: OperationRecord | null): string | null {
