@@ -358,27 +358,31 @@ class Supervisor:
         # Only the production dependency set owns a real feed. Injected tests stay network-free.
         if not isinstance(self.deps, JOBS.Deps):
             return
-        if SCH.market_is_open(now_ist, self.deps.holidays()) and not (
-                {H.AUTH_MISSING, H.AUTH_EXPIRED} & self.failures):
+        if not SCH.market_is_open(now_ist, self.deps.holidays()):
+            self.live_feed.stop()
+            self._save_failures()
+            return
+        kite_ok = not ({H.AUTH_MISSING, H.AUTH_EXPIRED} & self.failures)
+        if kite_ok:
             symbols = self._desired_live_symbols()
             health = self.live_feed.start(symbols) if symbols else self.live_feed.health()
             if symbols and (health.get("last_error") or not health.get("connected")):
                 self.failures.add(H.LIVE_FEED_STALE)
             elif health.get("symbols_ticking", 0) > 0:
                 self.failures.discard(H.LIVE_FEED_STALE)
-            if hasattr(self.deps, "observe_live_breakouts"):
-                try:
-                    self.deps.observe_live_breakouts()
-                except Exception:
-                    pass
             # Classic Kite WebSocket sniper — arm/refresh from latest scan
             try:
                 from research.autonomy.sniper_bridge import ensure_breakout_sniper
                 ensure_breakout_sniper()
             except Exception:
                 pass
-        elif not SCH.market_is_open(now_ist, self.deps.holidays()):
-            self.live_feed.stop()
+        # BREAKOUT CONFIRMED Telegram must not wait for Kite WS. REST/NSE quotes
+        # confirm a held cross even when AUTH_MISSING / AUTH_EXPIRED.
+        if hasattr(self.deps, "observe_live_breakouts"):
+            try:
+                self.deps.observe_live_breakouts()
+            except Exception:
+                pass
         self._save_failures()
 
     def tick(self, now_ist=None):

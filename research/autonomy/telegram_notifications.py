@@ -137,14 +137,27 @@ class TelegramNotifier:
         px = self._f(price if price is not None else row.get("price"))
         return entry > 0 and px >= entry
 
+    def _clears_trigger(self, row: Mapping[str, Any], price: float | None = None) -> bool:
+        """True only when price is through the trigger by the live buffer (default 10 bps).
+
+        A scan bar sitting exactly on the pivot is still PRE_BREAKOUT — not a sniper confirm.
+        """
+        entry = self._f(row.get("entry"))
+        px = self._f(price if price is not None else row.get("price"))
+        if entry <= 0 or px <= 0:
+            return False
+        return px >= entry * (1.0 + self.breakout_buffer_bps / 10000.0)
+
     def _breakout_lane(self, row: Mapping[str, Any]) -> bool:
         signals = [str(x).upper() for x in (row.get("signals") or [])]
         status = str(row.get("status") or "")
         state = str(row.get("breakout_state") or "")
+        cats = [str(x) for x in (row.get("categories") or [])]
         return (
             status in ("Watch for breakout", "Ready to trade")
             or "PRE_BREAKOUT" in signals
             or any(s.startswith("BREAKOUT") for s in signals)
+            or "PreBreakout" in cats
             or bool(row.get("sniper_candidate"))
             or state in ("confirmed_breakout", "near_breakout")
         )
@@ -153,8 +166,9 @@ class TelegramNotifier:
         """Scan bar already through the trigger — send the plain sniper card.
 
         Does not wait for Kite ticks. Known-thin / RSI blow-off still skip.
+        Sitting exactly on the pivot is not a confirm (live quotes catch the real cross).
         """
-        if not self._breakout_lane(row) or not self._through_trigger(row):
+        if not self._breakout_lane(row) or not self._clears_trigger(row):
             return False
         vol = self._f(row.get("volume_ratio"))
         rsi = self._f(row.get("rsi"))
@@ -274,20 +288,7 @@ class TelegramNotifier:
             except Exception:
                 pass
 
-        if broken:
-            try:
-                engine = self._engine()
-                lines = ["🚨 <b>BREAKOUT CONFIRMED</b>"]
-                keys = []
-                for r in broken:
-                    sym = str(r.get("symbol", "")).upper()
-                    lines.append(self._plain_breakout_line(r, self._f(r.get("price"))))
-                    keys.append(f"breakout:{sym}")
-                if engine.send("\n".join(lines)):
-                    self._mark_sent(keys, day)
-                    sent["breakout"] = len(broken)
-            except Exception:
-                pass
+        sent["breakout"] = self.notify_scan_breakouts(records)
 
         if phase == "eod" and not self._was_sent("eod_scan_summary", day):
             msg = (
@@ -301,6 +302,31 @@ class TelegramNotifier:
             if self._send_once("eod_scan_summary", msg):
                 sent["eod"] = 1
         return sent
+
+    def notify_scan_breakouts(self, records: list[Mapping[str, Any]] | None) -> int:
+        """Scan-bar BREAKOUT CONFIRMED only — no 🎯 setups. Shared with auto_scan."""
+        day = self._day()
+        self._prune(day)
+        rows = [dict(r) for r in (records or []) if isinstance(r, Mapping)]
+        broken = [r for r in rows if self._scan_breakout_confirmed(r)]
+        broken.sort(key=lambda r: (-self._f(r.get("score")), str(r.get("symbol", ""))))
+        broken = broken[:5]
+        if not broken:
+            return 0
+        try:
+            engine = self._engine()
+            lines = ["🚨 <b>BREAKOUT CONFIRMED</b>"]
+            keys = []
+            for r in broken:
+                sym = str(r.get("symbol", "")).upper()
+                lines.append(self._plain_breakout_line(r, self._f(r.get("price"))))
+                keys.append(f"breakout:{sym}")
+            if engine.send("\n".join(lines)):
+                self._mark_sent(keys, day)
+                return len(broken)
+        except Exception:
+            pass
+        return 0
 
     def notify_paper_cycle(self, result: Mapping[str, Any] | None, *, book=None) -> dict:
         """Notify simulated opens and closes.  This method cannot reach a broker order API."""
@@ -358,15 +384,71 @@ class TelegramNotifier:
                 counts["closed"] += 1
         return counts
 
-    def observe_live_breakouts(self, payload: Mapping[str, Any] | None, live_feed) -> dict:
-        """Confirm fresh Kite price crossings from the supervisor-owned live feed.
+    @staticmethod
+    def _quote_price(raw: Any) -> float:
+        if isinstance(raw, Mapping):
+            for key in ("price", "ltp", "last_price", "last"):
+                try:
+                    px = float(raw.get(key) or 0.0)
+                except Exception:
+                    px = 0.0
+                if px > 0:
+                    return px
+            return 0.0
+        try:
+            return float(raw or 0.0)
+        except Exception:
+            return 0.0
+
+    def _live_or_quote_prices(
+        self,
+        symbols: list[str],
+        live_feed,
+        quotes_fn: Callable[[list[str]], Mapping[str, Any]] | None,
+    ) -> dict[str, float]:
+        """WS tick first; REST/NSE quotes fill gaps so Telegram does not need Kite."""
+        prices: dict[str, float] = {}
+        for sym in symbols:
+            if live_feed is None:
+                continue
+            try:
+                fresh = bool(live_feed.entry_allowed(sym))
+                px = self._f(live_feed.price(sym))
+            except Exception:
+                fresh, px = False, 0.0
+            if fresh and px > 0:
+                prices[sym] = px
+        missing = [s for s in symbols if s not in prices]
+        if not missing or quotes_fn is None:
+            return prices
+        try:
+            qmap = quotes_fn(missing[:80]) or {}
+        except Exception:
+            qmap = {}
+        for sym in missing:
+            raw = qmap.get(sym)
+            if raw is None:
+                raw = qmap.get(sym.upper()) or qmap.get(sym.lower())
+            px = self._quote_price(raw)
+            if px > 0:
+                prices[sym] = px
+        return prices
+
+    def observe_live_breakouts(
+        self,
+        payload: Mapping[str, Any] | None,
+        live_feed,
+        quotes_fn: Callable[[list[str]], Mapping[str, Any]] | None = None,
+    ) -> dict:
+        """Confirm a held cross from the live feed, or from REST/NSE quotes.
 
         A symbol must remain above its trigger for ``breakout_confirmation_s`` and has a 10 bps
         default buffer.  This avoids alerting on a one-tick touch.
 
         Telegram stays the simple BREAKOUT CONFIRMED card — missing
         fundamentals / avg volume must not mute a held break. Known-thin
-        tape (0 < vol < 0.7×) and RSI > 82 still skip.
+        tape (0 < vol < 0.7×) and RSI > 82 still skip. Kite WebSocket is
+        optional: a quote price > 0 is treated as fresh.
         """
         payload = dict(payload or {})
         records = [dict(r) for r in payload.get("records", []) if isinstance(r, Mapping)]
@@ -375,15 +457,13 @@ class TelegramNotifier:
         now = float(self._epoch())
         confirmed: list[tuple[dict, float]] = []
 
+        candidates: list[tuple[str, dict, float]] = []
         for r in records:
             sym = str(r.get("symbol", "")).upper()
             entry = self._f(r.get("entry"))
             if not sym or entry <= 0:
                 continue
-            signals = [str(x).upper() for x in (r.get("signals") or [])]
-            relevant = (str(r.get("status", "")) in ("Watch for breakout", "Ready to trade")
-                        or "PRE_BREAKOUT" in signals)
-            if not relevant:
+            if not self._breakout_lane(r):
                 continue
             vol = self._f(r.get("volume_ratio"))
             rsi = self._f(r.get("rsi"))
@@ -394,14 +474,16 @@ class TelegramNotifier:
             if rsi > 82:
                 arms.pop(sym, None)
                 continue
-            try:
-                fresh = bool(live_feed.entry_allowed(sym))
-                raw_px = live_feed.price(sym)
-                price = self._f(raw_px)
-            except Exception:
-                fresh, price = False, 0.0
+            candidates.append((sym, r, entry))
+
+        prices = self._live_or_quote_prices(
+            [sym for sym, _, _ in candidates], live_feed, quotes_fn,
+        )
+
+        for sym, r, entry in candidates:
+            price = prices.get(sym, 0.0)
             trigger = entry * (1.0 + self.breakout_buffer_bps / 10000.0)
-            if not fresh or price <= 0:
+            if price <= 0:
                 continue  # not subscribed / no tick yet — don't disarm
             if price < trigger:
                 arms.pop(sym, None)
