@@ -212,7 +212,7 @@ function App() {
   const [intelTab, setIntelTab] = useState<string | undefined>(boot?.intelTab)
   const [bars, setBars] = useState<ChartBar[]>([])
   const [controlState, setControlState] = useState('')
-  const [query, setQuery] = useState('')
+  const [query, setQuery] = useState(boot?.query || '')
   const [universeSymbols, setUniverseSymbols] = useState<string[]>([])
   const [remoteSuggestions, setRemoteSuggestions] = useState<string[]>([])
   const [helpOpen, setHelpOpen] = useState(false)
@@ -267,8 +267,9 @@ function App() {
       selected,
       compareSymbols,
       intelTab,
+      query,
     })
-  }, [active, selected, compareSymbols, intelTab])
+  }, [active, selected, compareSymbols, intelTab, query])
 
   useEffect(() => {
     if (!selected) {

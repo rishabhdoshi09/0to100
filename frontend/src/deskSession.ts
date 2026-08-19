@@ -37,6 +37,7 @@ export type DeskSession = {
   ideasLifecycle?: 'Active' | 'Closed'
   scannerTab?: string
   homeLane?: string
+  query?: string
   updatedAt: number
 }
 
@@ -71,6 +72,7 @@ export function loadDeskSession(): DeskSession | null {
     const ideasLifecycle = parsed.ideasLifecycle === 'Closed' ? 'Closed' : parsed.ideasLifecycle === 'Active' ? 'Active' : undefined
     const scannerTab = parsed.scannerTab ? String(parsed.scannerTab) : undefined
     const homeLane = parsed.homeLane ? String(parsed.homeLane) : undefined
+    const query = String(parsed.query || '').slice(0, 32)
     if (active === 'Stock Intelligence' && !selected) {
       return {
         active: 'Recommendations',
@@ -81,6 +83,7 @@ export function loadDeskSession(): DeskSession | null {
         ideasLifecycle,
         scannerTab,
         homeLane,
+        query,
         updatedAt: Number(parsed.updatedAt) || Date.now(),
       }
     }
@@ -93,6 +96,7 @@ export function loadDeskSession(): DeskSession | null {
       ideasLifecycle,
       scannerTab,
       homeLane,
+      query,
       updatedAt: Number(parsed.updatedAt) || Date.now(),
     }
   } catch {

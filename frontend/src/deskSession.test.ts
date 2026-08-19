@@ -53,6 +53,8 @@ describe('desk session', () => {
     expect(session?.selected).toBe('ELGIEQUIP')
     expect(session?.compareSymbols).toEqual(['TCS', 'INFY'])
     expect(session?.ideasCategory).toBe('super_trends')
+    patchDeskSession({ query: 'ELGIEQUIP' })
+    expect(loadDeskSession()?.query).toBe('ELGIEQUIP')
   })
 
   it('does not restore Stock Intelligence without a selected name', () => {
