@@ -79,13 +79,21 @@ def _google_quotes(symbols: list[str]) -> dict[str, dict]:
         return {}
 
 
-def get_live_quotes(symbols: list[str], ttl: float = _QUOTE_TTL_S) -> dict[str, dict]:
+def get_live_quotes(
+    symbols: list[str],
+    ttl: float = _QUOTE_TTL_S,
+    *,
+    allow_google: bool = True,
+) -> dict[str, dict]:
     """
     {symbol: {price, chg_pct, source}} — Kite → NSE → Google, each only
     filling what the previous missed. Logs which source covered how many.
     Offline short-circuit: when Kite AND NSE both return nothing (DNS
     down / no internet), skip the per-symbol Google pass entirely —
     60 doomed requests add minutes of latency and pure log spam.
+
+    ``allow_google=False`` keeps the licensed path only (Kite + NSE).
+    Top Stocks / Ideas uses that so the desk never scrapes to fill CMP.
 
     A symbol fetched within `ttl` seconds is served from the micro-cache
     (pass ttl=0 to force a fresh fetch). Only found quotes are cached —
@@ -115,8 +123,10 @@ def get_live_quotes(symbols: list[str], ttl: float = _QUOTE_TTL_S) -> dict[str, 
     # 2. Network chain for the rest
     t0 = time.perf_counter()
     fetched: dict[str, dict] = {}
-    for name, fn in (("kite", _kite_quotes), ("nse", _nse_quotes),
-                     ("google", _google_quotes)):
+    chain = (("kite", _kite_quotes), ("nse", _nse_quotes))
+    if allow_google:
+        chain = chain + (("google", _google_quotes),)
+    for name, fn in chain:
         missing = [s for s in symbols if s not in quotes and s not in fetched]
         if not missing:
             break

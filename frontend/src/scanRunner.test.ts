@@ -119,6 +119,7 @@ describe('scanRunner semantics', () => {
 
   it('explains Ideas category wait with a usual ETA', () => {
     const waiting = recoWorkspaceClock({ elapsedSeconds: 1 })
+    expect(waiting.doing).toMatch(/SEPA|Best Setups/)
     expect(waiting.doing).toMatch(/Wealth Builders/)
     expect(waiting.button).toMatch(/usually ~8s/)
     expect(waiting.line).toMatch(/elapsed 1s/)

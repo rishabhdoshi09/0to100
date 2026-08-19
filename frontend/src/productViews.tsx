@@ -28,6 +28,7 @@ import { longTermPicks } from './longTermPicks'
 import { fetchMarketOptions, fetchOptionsEodHistory, watchOptionsEod } from './api'
 import { ChainContextPanel } from './marketViews'
 import { DeskWait } from './DeskWait'
+import { SepaMonitor, type SepaPayload } from './SepaMonitor'
 
 // Read-only risk-first "R lens" — exact shares, rupee risk, reward:risk, book heat. No orders.
 export function RiskLensCard({ plan }: { plan: TradePlan | null }) {
@@ -536,6 +537,13 @@ export function ProductStockIntelligenceView(props: ViewProps) {
 
       {tab === 'Overview' && (
         <>
+          <SepaMonitor
+            sepa={workspace?.sepa as SepaPayload | undefined}
+            symbol={selected}
+            company={workspace?.company}
+            changePct={workspace?.technical?.change_pct}
+            fundamentals={workspace?.fundamentals}
+          />
           <div className="stock-overview-grid">
             <Panel title="COMPANY SNAPSHOT" subtitle={workspace?.sector || 'Sector unknown'}>
               {workspace?.fundamentals.company_about

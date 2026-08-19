@@ -208,9 +208,21 @@ def merge_fundamental_context(
         "classification",
         "quality_factors",
         "risk_flags",
+        "fundamentals",
+        "sector",
     ):
-        if key in fund and fund.get(key) is not None and out.get(key) is None:
-            out[key] = fund.get(key)
+        incoming = fund.get(key)
+        if incoming in (None, "", []):
+            continue
+        current = out.get(key)
+        if key == "sector" and str(current or "").strip() in ("", "—"):
+            out[key] = incoming
+            continue
+        if key == "fundamentals" and not current:
+            out[key] = dict(incoming) if isinstance(incoming, Mapping) else incoming
+            continue
+        if current is None:
+            out[key] = incoming
     return out
 
 

@@ -129,7 +129,7 @@ export function IdeasHub({
   const tab = ideasTabOf(active)
   return (
     <HubShell
-      blurb="Find a name. Categories is the research shortlist. Table is the same scan as a dense list. Long-term is quality and valuation. F&O is the derivatives floor of a name — pick a stock, then open it on the Options tab. Indices stay on this floor."
+      blurb="Find a name. Categories opens on Best Setups — Minervini SEPA, seven Stage-2 rules, score out of 100. Table is the same scan as a dense list. Long-term is quality and valuation. F&O is the derivatives floor of a name."
       tabs={IDEAS_TABS}
       active={tab}
       onChange={(next) => setActive(IDEAS_ROUTE[next as (typeof IDEAS_TABS)[number]])}
