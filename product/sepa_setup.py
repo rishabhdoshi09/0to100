@@ -407,9 +407,10 @@ def score_sepa(frame: Any) -> dict[str, Any]:
 
 def _session_label() -> dict[str, Any]:
     try:
-        from core.market_clock import now_ist, is_market_hours
+        from core.market_clock import now_ist
+        from core.market_session import in_market_open
         ts = now_ist()
-        open_now = bool(is_market_hours(ts))
+        open_now = bool(in_market_open(ts))
         return {
             "label": "MARKET OPEN" if open_now else "MARKET CLOSED",
             "open": open_now,
