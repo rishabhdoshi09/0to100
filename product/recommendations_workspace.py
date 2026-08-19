@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from pathlib import Path
+import json
 from typing import Any, Mapping, Sequence
 
 from product.breakout_quality import RSI_HARD, passes_volume_floor
@@ -27,6 +28,7 @@ from product.radar_workspace import (
 
 ROOT = Path(__file__).resolve().parents[1]
 REPORTS_DIR = ROOT / "logs" / "product" / "market_reports"
+WORKSPACE_CACHE = ROOT / "logs" / "product" / "recommendations_workspace.json"
 
 # Reco-Wealth analogues — QuantTerm evidence names (not a brand clone).
 CATEGORIES: tuple[dict[str, str], ...] = (
@@ -819,7 +821,79 @@ def build_recommendations_workspace(
             "Research categories from QuantTerm evidence — not broker recommendations, "
             "not a promise of returns. SEPA is a published trend template, not Reco Wealth."
         ),
+        "served_from_cache": False,
     }
+
+
+def _workspace_cache_key(scan_at: str, lt_at: str) -> str:
+    return f"{scan_at}|{lt_at}"
+
+
+def load_cached_recommendations_workspace(scan_at: str, lt_at: str) -> dict[str, Any] | None:
+    """Last Ideas ranking for this scan file. Empty / mismatch → None (never invent)."""
+    if not scan_at or not WORKSPACE_CACHE.exists():
+        return None
+    try:
+        blob = json.loads(WORKSPACE_CACHE.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    if str(blob.get("cache_key") or "") != _workspace_cache_key(scan_at, lt_at):
+        return None
+    workspace = blob.get("workspace")
+    return dict(workspace) if isinstance(workspace, dict) else None
+
+
+def persist_recommendations_workspace(
+    scan_at: str,
+    lt_at: str,
+    workspace: Mapping[str, Any],
+) -> Path | None:
+    if not scan_at:
+        return None
+    try:
+        WORKSPACE_CACHE.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "cache_key": _workspace_cache_key(scan_at, lt_at),
+            "saved_at": datetime.now(timezone.utc).isoformat(),
+            "workspace": dict(workspace),
+        }
+        tmp = WORKSPACE_CACHE.with_suffix(".tmp")
+        tmp.write_text(json.dumps(payload, default=str), encoding="utf-8")
+        tmp.replace(WORKSPACE_CACHE)
+        return WORKSPACE_CACHE
+    except Exception:
+        return None
+
+
+def serve_recommendations_workspace(
+    *,
+    scan_payload: Mapping[str, Any] | None = None,
+    long_term_payload: Mapping[str, Any] | None = None,
+    refresh_technicals: bool = True,
+    compute_sepa: bool = True,
+    sepa_load_frame: Any = None,
+) -> dict[str, Any]:
+    """Return the last ranking instantly when the scan file has not changed."""
+    scan = dict(scan_payload or {})
+    lt = dict(long_term_payload or {})
+    scan_at = str(scan.get("scanned_at") or "")
+    lt_at = str(lt.get("scanned_at") or "")
+    cached = load_cached_recommendations_workspace(scan_at, lt_at)
+    if cached:
+        if refresh_technicals:
+            _stamp_live_cmp(cached.get("categories") or [])
+        cached["served_from_cache"] = True
+        cached["generated_at"] = datetime.now(timezone.utc).isoformat()
+        return cached
+    payload = build_recommendations_workspace(
+        scan_payload=scan,
+        long_term_payload=lt,
+        refresh_technicals=refresh_technicals,
+        compute_sepa=compute_sepa,
+        sepa_load_frame=sepa_load_frame,
+    )
+    persist_recommendations_workspace(scan_at, lt_at, payload)
+    return payload
 
 
 def _persist_pulse(pulse: Mapping[str, Any]) -> Path | None:

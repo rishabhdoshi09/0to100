@@ -205,8 +205,8 @@ def radar_home_workspace() -> dict[str, Any]:
 
 def recommendations_workspace() -> dict[str, Any]:
     """Reco-style research categories + Active/Closed lifecycle (evidence only)."""
-    from product.recommendations_workspace import build_recommendations_workspace
-    return build_recommendations_workspace(
+    from product.recommendations_workspace import serve_recommendations_workspace
+    return serve_recommendations_workspace(
         scan_payload=core._scan_payload(),
         long_term_payload=core._long_term_payload(),
         refresh_technicals=True,

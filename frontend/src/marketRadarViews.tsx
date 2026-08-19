@@ -27,6 +27,7 @@ import { BuyThesisSheet } from './BuyThesisSheet'
 import { deskSymbol, thesisReplacesList } from './deskThesis'
 import { usePhoneLayout } from './phoneLayout'
 import type { DashboardPayload } from './types'
+import { loadCachedJson, loadDeskSession, patchDeskSession, saveCachedJson } from './deskSession'
 
 type RadarRow = ScannerWorkspaceRow & {
   breakout_state?: string
@@ -512,12 +513,18 @@ export function RadarHomeView(props: ExperienceViewProps & {
   const { dashboard, selected, setSelected, bars, setActive, depth, marketScan, longTermScan, runControl, onCompare, onWatchlist, onOpenFloor } = props
   const phone = usePhoneLayout()
   const todayPath = useTodayFloors()
-  const [radar, setRadar] = useState<RadarHome | null>(null)
+  const [radar, setRadar] = useState<RadarHome | null>(() => loadCachedJson<RadarHome>('radar-home'))
   const [readiness, setReadiness] = useState<ProductReadiness | null>(null)
   const [bootstrapBusy, setBootstrapBusy] = useState(false)
   const [deskNote, setDeskNote] = useState('')
-  const [lane, setLane] = useState<DeskLane>('breakouts')
+  const [lane, setLane] = useState<DeskLane>(
+    () => (loadDeskSession()?.homeLane as DeskLane) || 'breakouts',
+  )
   const [query, setQuery] = useState('')
+
+  useEffect(() => {
+    patchDeskSession({ homeLane: lane })
+  }, [lane])
 
   // Daily fields (RSI/price/vol) must not freeze on last scan — poll the
   // live-refreshed radar payload on a short timer.
@@ -525,7 +532,11 @@ export function RadarHomeView(props: ExperienceViewProps & {
     let alive = true
     const load = () => {
       fetchRadarHome()
-        .then((payload) => { if (alive) setRadar(payload) })
+        .then((payload) => {
+          if (!alive) return
+          setRadar(payload)
+          saveCachedJson('radar-home', payload)
+        })
         .catch(() => undefined)
       fetchProductReadiness()
         .then((payload) => { if (alive) setReadiness(payload) })
@@ -873,8 +884,10 @@ export function MarketScannerView(props: ExperienceViewProps & {
   const scannerTabs = depth === 'professional'
     ? ['Breakouts', 'Momentum', 'Conviction', 'Pre-Breakout', 'Long-Term', 'F&O', 'Avoid']
     : ['Breakouts', 'Momentum', 'Long-Term']
-  const [tab, setTab] = useState('Breakouts')
-  const [rows, setRows] = useState<RadarRow[]>([])
+  const [tab, setTab] = useState(() => loadDeskSession()?.scannerTab || 'Breakouts')
+  const [rows, setRows] = useState<RadarRow[]>(
+    () => loadCachedJson<RadarRow[]>(`scanner:${loadDeskSession()?.scannerTab || 'Breakouts'}`) || [],
+  )
   const [bestBreakout, setBestBreakout] = useState<RadarRow | null>(null)
   const [bestAmongFund, setBestAmongFund] = useState<RadarRow | null>(null)
   const [sniperCount, setSniperCount] = useState(0)
@@ -891,23 +904,24 @@ export function MarketScannerView(props: ExperienceViewProps & {
   }, [depth])
 
   useEffect(() => {
+    patchDeskSession({ scannerTab: tab })
+  }, [tab])
+
+  useEffect(() => {
     let alive = true
     const load = () => {
       fetchScannerWorkspace(tab)
         .then((result) => {
           if (!alive) return
           setRows(result.rows as RadarRow[])
+          saveCachedJson(`scanner:${tab}`, result.rows)
           setMeta({ scanned_at: result.scanned_at, universe: result.universe_size })
           setBestBreakout((result.best_breakout as RadarRow | null | undefined) || null)
           setBestAmongFund((result.best_among_fundamentals as RadarRow | null | undefined) || null)
           setSniperCount(result.sniper_count ?? (result.sniper_rows?.length || 0))
         })
         .catch(() => {
-          if (!alive) return
-          setRows([])
-          setBestBreakout(null)
-          setBestAmongFund(null)
-          setSniperCount(0)
+          /* keep last rows — a failed poll must not wipe the table */
         })
     }
     load()
@@ -1043,16 +1057,24 @@ export function CompareView({ symbols, setSymbols, setActive, setSelected }: {
   setActive: (page: string) => void
   setSelected: (s: string) => void
 }) {
-  const [data, setData] = useState<CompareWorkspace | null>(null)
+  const [data, setData] = useState<CompareWorkspace | null>(
+    () => (symbols.length ? loadCachedJson<CompareWorkspace>(`compare:${symbols.join(',')}`) : null),
+  )
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
 
   useEffect(() => {
     if (symbols.length === 0) { setData(null); return }
-    setLoading(true)
+    const key = `compare:${symbols.join(',')}`
+    const cached = loadCachedJson<CompareWorkspace>(key)
+    if (cached) setData(cached)
+    setLoading(!cached)
     fetchCompareWorkspace(symbols)
-      .then(setData)
-      .catch(() => setData(null))
+      .then((payload) => {
+        setData(payload)
+        saveCachedJson(key, payload)
+      })
+      .catch(() => { if (!cached) setData(null) })
       .finally(() => setLoading(false))
   }, [symbols.join(',')])
 
@@ -1077,7 +1099,7 @@ export function CompareView({ symbols, setSymbols, setActive, setSelected }: {
         <button type="button" onClick={addSymbol}>Add</button>
         <button type="button" onClick={() => setSymbols([])}>Clear</button>
       </div>
-      {loading && <DeskWait kind="COMPARE" />}
+      {loading && !data && <DeskWait kind="COMPARE" />}
       {data && (
         <div className="compare-grid">
           {Object.entries(data.section_labels).map(([key, label]) => (

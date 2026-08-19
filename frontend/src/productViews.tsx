@@ -23,6 +23,7 @@ import {
   type StockWorkspace,
   type TradePlan,
 } from './productApi'
+import { loadCachedJson, saveCachedJson } from './deskSession'
 import type { ChartBar, ControlName, DashboardPayload, FnoUnderlying, OptionsChainPayload, OptionsEodHistoryPayload } from './types'
 import { longTermPicks } from './longTermPicks'
 import { fetchMarketOptions, fetchOptionsEodHistory, watchOptionsEod } from './api'
@@ -324,7 +325,9 @@ function MetricExplanation({ metric }: { metric: IntelligenceMetric }) {
 
 export function ProductStockIntelligenceView(props: ViewProps) {
   const { selected, bars, runControl, setActive, onCompare, onWatchlist, depth, initialTab } = props
-  const [workspace, setWorkspace] = useState<StockWorkspace | null>(null)
+  const [workspace, setWorkspace] = useState<StockWorkspace | null>(
+    () => selected ? loadCachedJson<StockWorkspace>(`stock:${selected}`) : null,
+  )
   const [preTrade, setPreTrade] = useState<PreTrade | null>(null)
   const [ratios, setRatios] = useState<import('./productApi').SymbolRatioRow[]>([])
   const [tab, setTab] = useState('Overview')
@@ -391,8 +394,14 @@ export function ProductStockIntelligenceView(props: ViewProps) {
       setFundamentalsError('')
       return
     }
+    const cached = selected ? loadCachedJson<StockWorkspace>(`stock:${selected}`) : null
     const soft = Boolean(opts?.soft)
-    if (!soft) {
+    if (cached) {
+      setWorkspace(cached)
+    } else if (!soft) {
+      setWorkspace((prev) => (prev?.symbol === selected ? prev : null))
+    }
+    if (!soft && !cached) {
       setLoading(true)
       setFundamentalsError('')
       setRatios([])
@@ -400,6 +409,7 @@ export function ProductStockIntelligenceView(props: ViewProps) {
     try {
       const ws = await fetchStockIntelligence(selected)
       setWorkspace(ws)
+      saveCachedJson(`stock:${selected}`, ws)
       setError('')
       // Clear the full-page loader as soon as the workspace lands. Fundamentals /
       // pre-trade are slower secondary fetches and have their own busy UI.
@@ -416,7 +426,7 @@ export function ProductStockIntelligenceView(props: ViewProps) {
         void loadRatios()
       }
     } catch (reason) {
-      if (!soft) {
+      if (!soft && !cached) {
         setError(reason instanceof Error ? reason.message : 'Stock intelligence unavailable')
         setLoading(false)
       }
