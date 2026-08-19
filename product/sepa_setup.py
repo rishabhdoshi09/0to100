@@ -202,7 +202,7 @@ def _quote_stats(frame: Any) -> dict[str, Any] | None:
         return None
 
 
-def score_sepa(frame: Any) -> dict[str, Any]:
+def score_sepa(frame: Any, *, bench_frame: Any = None) -> dict[str, Any]:
     """Score one OHLCV frame. Never fabricates moving averages or 52-week levels."""
     if frame is None:
         return _unavailable("Official price history is unavailable.")
@@ -376,7 +376,7 @@ def score_sepa(frame: Any) -> dict[str, Any]:
     verdict, headline, advice = _verdict(score, passed_n, unknown_n)
     quote = _quote_stats(data)
     session = _session_label()
-    return {
+    result = {
         "available": True,
         "score": score,
         "max_score": SEPA_MAX_SCORE,
@@ -403,6 +403,23 @@ def score_sepa(frame: Any) -> dict[str, Any]:
             "low_52w": round(low_52w, 2),
         },
     }
+    try:
+        from product.monitor_context import attach_context
+        attach_context(result, data, bench_frame)
+    except Exception:
+        result.setdefault(
+            "stage",
+            {"id": "unknown", "label": "STAGE ?", "note": "Stage unavailable."},
+        )
+        result.setdefault(
+            "rs",
+            {
+                "available": False,
+                "label": "UNKNOWN",
+                "note": "Need official stock and Nifty history for relative strength.",
+            },
+        )
+    return result
 
 
 def _session_label() -> dict[str, Any]:
@@ -424,6 +441,13 @@ def sepa_card_fields(sepa: Mapping[str, Any]) -> dict[str, Any]:
     """Compact fields for Ideas cards — never a fabricated score."""
     if not sepa or not sepa.get("available"):
         return {}
+    stage = dict(sepa.get("stage") or {})
+    rs = dict(sepa.get("rs") or {})
+    excess = rs.get("excess_pp")
+    try:
+        excess_pp = float(excess) if excess is not None else None
+    except (TypeError, ValueError):
+        excess_pp = None
     return {
         "sepa_score": int(sepa.get("score") or 0),
         "sepa_max": int(sepa.get("max_score") or SEPA_MAX_SCORE),
@@ -433,6 +457,15 @@ def sepa_card_fields(sepa: Mapping[str, Any]) -> dict[str, Any]:
         "sepa_headline": str(sepa.get("headline") or ""),
         "sepa_advice": str(sepa.get("advice") or ""),
         "setup_label": str(sepa.get("headline") or ""),
+        "stage_id": stage.get("id"),
+        "stage_label": stage.get("label"),
+        "stage_note": stage.get("note"),
+        "rs_available": bool(rs.get("available")),
+        "rs_label": str(rs.get("label") or ""),
+        "rs_excess_pp": excess_pp,
+        "rs_stock_pct": rs.get("stock_pct"),
+        "rs_benchmark_pct": rs.get("benchmark_pct"),
+        "rs_note": str(rs.get("note") or ""),
     }
 
 
@@ -478,6 +511,11 @@ def rank_best_setups(
         if hit and (time.time() - hit[0]) < _RANK_TTL:
             return hit[1], hit[2]
     loader = load_frame or _default_frame
+    from product.monitor_context import nifty_frame, rs_rank
+    try:
+        bench = nifty_frame()
+    except Exception:
+        bench = None
     scored: list[tuple[int, int, dict[str, Any], dict[str, Any]]] = []
     for row in select_sepa_candidates(rows, limit=score_cap):
         symbol = str(row.get("symbol") or "").upper()
@@ -485,7 +523,7 @@ def rank_best_setups(
             frame = loader(symbol)
         except Exception:
             frame = None
-        sepa = score_sepa(frame)
+        sepa = score_sepa(frame, bench_frame=bench)
         if not sepa.get("available"):
             continue
         score = int(sepa.get("score") or 0)
@@ -510,6 +548,7 @@ def rank_best_setups(
     scored.sort(key=lambda item: (
         -item[0],
         -item[1],
+        -rs_rank(item[2]),
         -_fund_rank(item[3]),
         _below_high(item[2]),
         -float(item[3].get("score") or 0.0),
@@ -519,7 +558,8 @@ def rank_best_setups(
     if top:
         note = (
             "Best Setups = last-scan names ranked on Minervini's 7-rule Stage-2 template "
-            f"(need ≥{min_score}/100). Score is research, not a buy."
+            f"(need ≥{min_score}/100). Stage and RS vs Nifty 50 are official-history "
+            "context. Score is research, not a buy."
         )
         out = [(sepa, row) for _, _, sepa, row in top]
         if cache_key:

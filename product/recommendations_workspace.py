@@ -34,9 +34,9 @@ CATEGORIES: tuple[dict[str, str], ...] = (
         "id": "best_setups",
         "label": "Best Setups",
         "blurb": (
-            "Top Stocks — technical SEPA on official NSE history, then on-file "
-            "valuation metrics (calculated in the long-term pack, not live-scraped). "
-            "A high score is a research qualify, not a buy."
+            "Top Stocks — technical SEPA on official NSE history, stage and RS vs "
+            "Nifty 50 from the same tape, then on-file valuation metrics (calculated "
+            "in the long-term pack, not live-scraped). A high score is a research qualify, not a buy."
         ),
         "icon": "setup",
     },
@@ -697,6 +697,8 @@ def _best_setup_cards(
             evidence_tags=[
                 tag for tag in (
                     extra.get("sepa_verdict") or "",
+                    extra.get("stage_label") or "",
+                    extra.get("rs_label") or "",
                     f"{passed}/{total}" if passed is not None else "",
                 ) if tag
             ],
@@ -764,23 +766,25 @@ def build_recommendations_workspace(
         _stamp_live_cmp(categories)
 
     cmp_note = (
-        "Top Stocks: SEPA technicals on official NSE bhavcopy; last print from Kite or NSE "
-        "(Google is not used here). Valuation metrics are calculated from the on-file "
-        "long-term pack — missing ratios stay missing, no live scrape."
+        "Top Stocks: SEPA + stage + 63-session RS vs Nifty 50 on official NSE history; "
+        "last print from Kite or NSE (Google is not used here). Index strip is the NSE "
+        "index store. Valuation metrics are calculated from the on-file long-term pack — "
+        "missing ratios stay missing, no live scrape."
     )
     if str(scan.get("records_status") or "") == "PRIOR_DAY_SNAPSHOT":
         cmp_note = "Scan file is a PRIOR-DAY SNAPSHOT — run a fresh market scan before acting. " + cmp_note
 
     from product.sepa_setup import _session_label
     from product.top_stocks import tape_policy
+    from product.monitor_context import INDEX_STRIP_NOTE, index_strip
 
     return {
         "schema_version": 3,
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "load_note": (
             "Top Stocks scores a capped scan shortlist on Minervini's 7-rule template "
-            "from official OHLCV, then attaches on-file fundamental ratios. "
-            "Live CMP is Kite/NSE only."
+            "from official OHLCV, then attaches stage, RS vs Nifty 50, and on-file "
+            "fundamental ratios. Live CMP is Kite/NSE only."
         ),
         "typical_seconds": 8,
         "scan_scanned_at": scan_at,
@@ -796,6 +800,8 @@ def build_recommendations_workspace(
         "sepa_note": sepa_note,
         "tape": tape_policy(),
         "session": _session_label(),
+        "indices": index_strip(),
+        "index_strip_note": INDEX_STRIP_NOTE,
         "categories": categories,
         "lifecycle": {
             "active": active[:60],

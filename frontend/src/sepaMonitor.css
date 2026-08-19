@@ -359,6 +359,75 @@
 .sepa-chip.is-weak strong, .sepa-chip.is-weak span,
 .sepa-chip.is-mixed strong, .sepa-chip.is-mixed span { color: #f5b942; }
 
+.sepa-context {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.sepa-context-chip {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  padding: 6px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--sepa-line);
+  background: rgba(255, 255, 255, 0.04);
+  font-size: 0.78rem;
+}
+.sepa-context-chip strong { letter-spacing: 0.04em; }
+.sepa-context-chip span { color: var(--sepa-muted); font-variant-numeric: tabular-nums; }
+.sepa-context-chip.is-leader { color: var(--sepa-green); background: rgba(62, 224, 137, 0.12); }
+.sepa-context-chip.is-laggard { color: var(--sepa-red); background: rgba(255, 107, 122, 0.12); }
+.sepa-context-chip.is-mixed { color: var(--sepa-orange); background: rgba(245, 185, 66, 0.12); }
+.sepa-context-chip.is-inline { color: var(--sepa-cyan); }
+
+.index-strip {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+.index-strip article {
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  display: grid;
+  gap: 2px;
+}
+.index-strip span {
+  font-size: 0.68rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: #93a4b8;
+  font-weight: 800;
+}
+.index-strip strong {
+  font-size: 1.05rem;
+  font-variant-numeric: tabular-nums;
+}
+.index-strip em {
+  font-style: normal;
+  font-size: 0.78rem;
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+}
+.index-strip em.pos { color: #3ee089; }
+.index-strip em.neg { color: #ff6b7a; }
+
+.top-rs {
+  display: inline-flex;
+  margin-top: 2px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+}
+.top-rs.is-leader { color: #3ee089; }
+.top-rs.is-laggard { color: #ff6b7a; }
+.top-rs.is-inline { color: #5eead4; }
+
+@media (max-width: 720px) {
+  .index-strip { grid-template-columns: 1fr; }
+}
+
 @media (max-width: 720px) {
   .sepa-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .sepa-monitor-top, .sepa-identity { flex-direction: column; }

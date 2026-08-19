@@ -49,6 +49,8 @@ def test_uptrend_clears_sepa_template():
     assert by_id["sma200_rising"]["passed"] is True
     assert sepa["quote"]["close"] > 0
     assert sepa["session"]["label"] in {"MARKET OPEN", "MARKET CLOSED"}
+    assert sepa["stage"]["id"] == "stage_2"
+    assert sepa["rs"]["label"] in {"LEADER", "IN LINE", "LAGGARD", "UNKNOWN"}
 
 
 def test_downtrend_is_weak_not_ideal():
