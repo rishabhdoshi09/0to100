@@ -354,6 +354,8 @@ export function RecommendationsView({
           onSelect={onSelect}
           session={data.session}
           tape={data.tape}
+          indices={data.indices}
+          indexNote={data.index_strip_note}
         />
       ) : (
         <div className="reco-card-stack">

@@ -106,7 +106,8 @@ def tape_policy() -> dict[str, str]:
         ),
         "technical": (
             "Minervini SEPA / Trend Template on official NSE daily OHLCV "
-            "(simple 50/150/200 averages and 52-week range)."
+            "(simple 50/150/200 averages and 52-week range), plus Weinstein/Minervini "
+            "stage and 63-session relative strength vs Nifty 50 from the same store."
         ),
         "fundamental": (
             "Valuation metrics are calculated from the on-file long-term pack. "

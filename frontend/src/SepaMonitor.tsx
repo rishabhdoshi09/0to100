@@ -27,6 +27,23 @@ export type SepaSession = {
   clock?: string
 }
 
+export type SepaStage = {
+  id?: string
+  label?: string
+  note?: string
+}
+
+export type SepaRs = {
+  available?: boolean
+  lookback?: number
+  stock_pct?: number | null
+  benchmark_pct?: number | null
+  excess_pp?: number | null
+  label?: string
+  note?: string
+  benchmark?: string
+}
+
 export type SepaPayload = {
   available: boolean
   score: number
@@ -42,6 +59,8 @@ export type SepaPayload = {
   criteria: SepaCriterion[]
   quote?: SepaQuote | null
   session?: SepaSession | null
+  stage?: SepaStage | null
+  rs?: SepaRs | null
 }
 
 function money(value: number | null | undefined, digits = 2): string {
@@ -76,6 +95,25 @@ function ScoreRing({ score, max, tone }: { score: number; max: number; tone: str
       <text className="sepa-ring-score" x="54" y="52">{score}</text>
       <text className="sepa-ring-max" x="54" y="70">/{max}</text>
     </svg>
+  )
+}
+
+function contextTone(label: string | undefined): string {
+  const v = (label || '').toUpperCase()
+  if (v.includes('STAGE 2') && !v.includes('?')) return 'leader'
+  if (v === 'LEADER') return 'leader'
+  if (v.includes('STAGE 4') || v === 'LAGGARD') return 'laggard'
+  if (v.includes('STAGE 3') || v.includes('STAGE 1') || v.includes('?')) return 'mixed'
+  return 'inline'
+}
+
+function ContextChip({ label, detail, note }: { label?: string; detail?: string; note?: string }) {
+  if (!label) return null
+  return (
+    <div className={`sepa-context-chip is-${contextTone(label)}`} title={note || ''}>
+      <strong>{label}</strong>
+      {detail ? <span>{detail}</span> : null}
+    </div>
   )
 }
 
@@ -120,7 +158,7 @@ export function SepaMonitor({
         <div>
           <p className="sepa-kicker">Setup monitor</p>
           <h3>Best stock setups</h3>
-          <em>Minervini SEPA · 7 published Stage-2 rules · official NSE history</em>
+          <em>Minervini SEPA · stage + RS vs Nifty 50 · official NSE history</em>
         </div>
         <div className="sepa-session">
           <span className={openNow ? 'is-open' : 'is-closed'}>
@@ -151,6 +189,15 @@ export function SepaMonitor({
           <p className="sepa-headline">{sepa.headline}</p>
           <small>{sepa.passed}/{sepa.total} criteria passed</small>
         </div>
+      </div>
+
+      <div className="sepa-context" aria-label="Stage and relative strength">
+        <ContextChip label={sepa.stage?.label} note={sepa.stage?.note} />
+        <ContextChip
+          label={sepa.rs?.available ? sepa.rs.label : undefined}
+          detail={sepa.rs?.excess_pp != null ? `${sepa.rs.excess_pp >= 0 ? '+' : ''}${sepa.rs.excess_pp} pp vs Nifty` : undefined}
+          note={sepa.rs?.note}
+        />
       </div>
 
       <aside className="sepa-advice">{sepa.advice}</aside>

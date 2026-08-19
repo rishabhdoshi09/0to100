@@ -75,3 +75,5 @@ def test_best_setups_attach_onfile_funds_from_long_term(monkeypatch):
     assert {m["key"] for m in card["fundamentals"]["metrics"]} >= {"pe", "roe"}
     assert payload["tape"]["fundamental"]
     assert "Google" in payload["tape"]["price"] or "google" in payload["tape"]["price"].lower()
+    assert "indices" in payload
+    assert "stage" in payload["tape"]["technical"].lower() or "Nifty" in payload["tape"]["technical"]
