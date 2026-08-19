@@ -171,7 +171,7 @@ def test_refresh_stamps_shortlist_quotes_not_scan_head(monkeypatch):
 
     called = {}
 
-    def fake_quotes(symbols, ttl=8.0):
+    def fake_quotes(symbols, ttl=8.0, **kwargs):
         called["symbols"] = list(symbols)
         called["ttl"] = ttl
         return {symbols[0]: {"price": 210.0, "source": "nse"}}

@@ -606,6 +606,18 @@ export type RecommendationCard = {
   sepa_verdict?: string
   sepa_headline?: string
   sepa_advice?: string
+  change_pct?: number | null
+  fund_available?: boolean
+  rank_fund?: number
+  fundamentals?: {
+    available: boolean
+    coverage_pct?: number | null
+    classification?: string | null
+    sector?: string | null
+    source?: string
+    note?: string
+    metrics: Array<{ key: string; label: string; value: number; unit: string }>
+  }
 }
 
 export type RecommendationCategory = {
@@ -628,6 +640,8 @@ export type RecommendationsWorkspace = {
   records_status: string
   same_ist_day: boolean
   cmp_note: string
+  tape?: { price: string; technical: string; fundamental: string }
+  session?: { label?: string; open?: boolean | null; clock?: string }
   categories: RecommendationCategory[]
   lifecycle: {
     active: RecommendationCard[]

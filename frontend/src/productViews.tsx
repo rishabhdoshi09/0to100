@@ -542,6 +542,7 @@ export function ProductStockIntelligenceView(props: ViewProps) {
             symbol={selected}
             company={workspace?.company}
             changePct={workspace?.technical?.change_pct}
+            fundamentals={workspace?.fundamentals}
           />
           <div className="stock-overview-grid">
             <Panel title="COMPANY SNAPSHOT" subtitle={workspace?.sector || 'Sector unknown'}>

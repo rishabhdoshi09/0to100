@@ -501,9 +501,16 @@ def rank_best_setups(
                 except (TypeError, ValueError):
                     return 99.0
         return 99.0
+    def _fund_rank(row: Mapping[str, Any]) -> int:
+        try:
+            from product.top_stocks import fund_rank
+            return int(fund_rank(row))
+        except Exception:
+            return 0
     scored.sort(key=lambda item: (
         -item[0],
         -item[1],
+        -_fund_rank(item[3]),
         _below_high(item[2]),
         -float(item[3].get("score") or 0.0),
         str(item[3].get("symbol") or ""),

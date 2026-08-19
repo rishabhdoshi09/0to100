@@ -218,6 +218,122 @@
   line-height: 1.45;
 }
 
+.sepa-fund {
+  display: grid;
+  gap: 8px;
+}
+.sepa-fund-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  align-items: baseline;
+}
+.sepa-fund-head strong { font-size: 0.72rem; letter-spacing: 0.12em; text-transform: uppercase; color: var(--sepa-muted); }
+.sepa-fund-head span { color: var(--sepa-cyan); font-size: 0.78rem; }
+.sepa-fund-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(88px, 1fr));
+  gap: 8px;
+}
+.sepa-fund-empty { margin: 0; color: var(--sepa-muted); font-size: 0.85rem; }
+
+.top-stocks {
+  display: grid;
+  gap: 14px;
+  padding: 16px 16px 18px;
+  border-radius: 18px;
+  color: #eef4fb;
+  background:
+    radial-gradient(800px 240px at 10% -30%, rgba(245, 185, 66, 0.10), transparent 50%),
+    linear-gradient(180deg, #101826 0%, #0b1220 100%);
+  border: 1px solid rgba(255,255,255,0.08);
+}
+.top-stocks-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+}
+.top-stocks-head h3 { margin: 4px 0 2px; font-size: 1.15rem; }
+.top-stocks-head em { color: #93a4b8; font-style: normal; font-size: 0.82rem; }
+.top-stocks-live {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.top-stocks-live strong {
+  letter-spacing: 0.14em;
+  font-size: 0.78rem;
+}
+.top-stocks-live em {
+  font-style: normal;
+  font-size: 0.68rem;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: rgba(255,255,255,0.06);
+  color: #93a4b8;
+}
+.top-stocks-live em.is-live {
+  background: rgba(62, 224, 137, 0.16);
+  color: #3ee089;
+}
+.top-stocks-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 4px;
+}
+.top-stocks-list button {
+  width: 100%;
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr) auto auto;
+  gap: 10px;
+  align-items: center;
+  padding: 10px 8px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  border-radius: 10px;
+  font: inherit;
+}
+.top-stocks-list button:hover,
+.top-stocks-list button.is-active { background: rgba(255,255,255,0.05); }
+.top-rank { color: #7d8b9c; font-variant-numeric: tabular-nums; font-size: 0.85rem; }
+.top-sym { display: grid; gap: 2px; min-width: 0; }
+.top-sym b { font-size: 1.02rem; letter-spacing: 0.02em; }
+.top-sym small { color: #93a4b8; font-size: 0.72rem; }
+.top-fund { display: flex; flex-wrap: wrap; gap: 8px; }
+.top-fund i { font-style: normal; color: #d6c27a; }
+.top-fund.is-missing { color: #6b7787; }
+.top-px { font-variant-numeric: tabular-nums; font-weight: 600; }
+.top-chg {
+  min-width: 72px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  font-weight: 800;
+  font-size: 0.82rem;
+  padding: 4px 8px;
+  border-radius: 6px;
+  background: #f5b942;
+  color: #1a1408;
+}
+.top-stocks-note {
+  margin: 0;
+  color: #93a4b8;
+  font-size: 0.78rem;
+  line-height: 1.45;
+}
+
+@media (max-width: 720px) {
+  .top-stocks-head { flex-direction: column; }
+  .sepa-session { justify-items: start; }
+}
+
 .sepa-chip {
   display: flex;
   flex-wrap: wrap;

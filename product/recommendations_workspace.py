@@ -22,6 +22,7 @@ from product.radar_workspace import (
     enrich_scan_row,
     is_long_term_pick,
     is_sniper_breakout_candidate,
+    merge_fundamental_context,
 )
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -33,8 +34,8 @@ CATEGORIES: tuple[dict[str, str], ...] = (
         "id": "best_setups",
         "label": "Best Setups",
         "blurb": (
-            "Minervini SEPA — Stage-2 swing template. Seven published rules, 100 points. "
-            "Near 52-week highs, rising 200-DMA, price above the moving-average stack. "
+            "Top Stocks — technical SEPA on official NSE history, then on-file "
+            "valuation metrics (calculated in the long-term pack, not live-scraped). "
             "A high score is a research qualify, not a buy."
         ),
         "icon": "setup",
@@ -630,7 +631,7 @@ def _stamp_live_cmp(categories: Sequence[Mapping[str, Any]]) -> None:
         return
     try:
         from data.live_quotes import get_live_quotes
-        quotes = get_live_quotes(symbols[:80], ttl=8.0) or {}
+        quotes = get_live_quotes(symbols[:80], ttl=8.0, allow_google=False) or {}
     except Exception:
         return
     for card in cards:
@@ -644,8 +645,14 @@ def _stamp_live_cmp(categories: Sequence[Mapping[str, Any]]) -> None:
             continue
         card["cmp"] = round(px, 2)
         src = str(raw.get("source") or "") if isinstance(raw, Mapping) else ""
-        card["price_tag"] = "LIVE" if src in {"kite", "nse"} else (src.upper() or "LIVE")
+        card["price_tag"] = "LIVE" if src in {"kite", "nse"} else (src.upper() or "EOD")
         card["tech_source"] = src or "quote"
+        chg = raw.get("chg_pct") if isinstance(raw, Mapping) else None
+        try:
+            if chg is not None:
+                card["change_pct"] = round(float(chg), 2)
+        except (TypeError, ValueError):
+            pass
         entry = _f(card.get("entry"))
         target = _f(card.get("target"))
         if entry > 0:
@@ -698,6 +705,8 @@ def _best_setup_cards(
         if extra.get("setup_label"):
             card["setup_label"] = extra["setup_label"]
         card["action_badge"] = extra.get("sepa_verdict") or card.get("action_badge") or "Watch"
+        from product.top_stocks import attach_to_card
+        attach_to_card(card, row, sepa)
         cards.append(card)
     return cards, note
 
@@ -723,6 +732,12 @@ def build_recommendations_workspace(
 
     scan_rows = [enrich_scan_row(dict(r), scanned_at=scan_at) for r in (scan.get("records") or [])]
     lt_rows = [enrich_long_term_row(dict(r), scanned_at=lt_at) for r in (lt.get("records") or [])]
+    fund_by_symbol = {
+        str(r.get("symbol") or "").upper(): r
+        for r in lt_rows
+        if str(r.get("symbol") or "")
+    }
+    scan_rows = [merge_fundamental_context(r, fund_by_symbol) for r in scan_rows]
 
     buckets = _bucket_rows(scan_rows, lt_rows)
     best_cards, sepa_note = _best_setup_cards(
@@ -749,21 +764,23 @@ def build_recommendations_workspace(
         _stamp_live_cmp(categories)
 
     cmp_note = (
-        "Best Setups is the Stage-2 SEPA shortlist from the last scan. "
-        "CMP uses live Kite/NSE overlay when available; otherwise last official EOD. "
-        "Each scan symbol maps to one primary category (breakout → recovery → trend). "
-        "Scan signals are research snapshots — check scanned_at."
+        "Top Stocks: SEPA technicals on official NSE bhavcopy; last print from Kite or NSE "
+        "(Google is not used here). Valuation metrics are calculated from the on-file "
+        "long-term pack — missing ratios stay missing, no live scrape."
     )
     if str(scan.get("records_status") or "") == "PRIOR_DAY_SNAPSHOT":
         cmp_note = "Scan file is a PRIOR-DAY SNAPSHOT — run a fresh market scan before acting. " + cmp_note
+
+    from product.sepa_setup import _session_label
+    from product.top_stocks import tape_policy
 
     return {
         "schema_version": 3,
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "load_note": (
-            "Best Setups scores a capped scan shortlist on Minervini's 7-rule template "
-            "from official OHLCV. Other categories still come from the last saved scan. "
-            "Live CMP is one quote pass on the shortlist."
+            "Top Stocks scores a capped scan shortlist on Minervini's 7-rule template "
+            "from official OHLCV, then attaches on-file fundamental ratios. "
+            "Live CMP is Kite/NSE only."
         ),
         "typical_seconds": 8,
         "scan_scanned_at": scan_at,
@@ -777,6 +794,8 @@ def build_recommendations_workspace(
             "wealth_builders from long-term quality only"
         ),
         "sepa_note": sepa_note,
+        "tape": tape_policy(),
+        "session": _session_label(),
         "categories": categories,
         "lifecycle": {
             "active": active[:60],

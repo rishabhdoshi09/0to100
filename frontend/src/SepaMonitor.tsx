@@ -93,11 +93,19 @@ export function SepaMonitor({
   symbol,
   company,
   changePct,
+  fundamentals,
 }: {
   sepa: SepaPayload | null | undefined
   symbol: string
   company?: string
   changePct?: number | null
+  fundamentals?: {
+    available?: boolean
+    coverage_pct?: number | null
+    classification?: string
+    fetched_at?: string
+    metrics?: Array<{ key: string; label: string; value: number | string | null; unit?: string }>
+  } | null
 }) {
   if (!sepa) return null
   const tone = verdictTone(sepa.verdict)
@@ -152,6 +160,25 @@ export function SepaMonitor({
         <Stat label="High" value={money(quote.high)} tone="pos" />
         <Stat label="Low" value={money(quote.low)} tone="neg" />
         <Stat label="Prev close" value={money(quote.prev_close)} />
+      </div>
+
+      <div className="sepa-fund">
+        <div className="sepa-fund-head">
+          <strong>On-file fundamentals</strong>
+          <span>{fundamentals?.classification || (fundamentals?.available ? 'On file' : 'Not on file')}</span>
+        </div>
+        {fundamentals?.metrics && fundamentals.metrics.filter((m) => m.value != null && ['pe', 'roe', 'roce', 'debt_to_equity', 'sales_growth_3y', 'profit_growth_3y'].includes(m.key)).length > 0 ? (
+          <div className="sepa-fund-grid">
+            {fundamentals.metrics.filter((m) => m.value != null && ['pe', 'roe', 'roce', 'debt_to_equity', 'sales_growth_3y', 'profit_growth_3y'].includes(m.key)).slice(0, 6).map((m) => (
+              <div className="sepa-stat" key={m.key}>
+                <span>{m.label}</span>
+                <strong>{m.value}{m.unit ? ` ${m.unit}` : ''}</strong>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <p className="sepa-fund-empty">No calculated pack on file. This monitor does not scrape to invent P/E or ROE.</p>
+        )}
       </div>
 
       <h4 className="sepa-break-title">SEPA criteria breakdown</h4>

@@ -17,6 +17,7 @@ import { LiveScanBanner } from './experience'
 import { EvChip } from './evChip'
 import { DeskWait, toDeskWaitScan } from './DeskWait'
 import { SepaScoreChip } from './SepaMonitor'
+import { TopStocksBoard } from './TopStocksBoard'
 import type { DisplayDepth } from './productLanguage'
 import type { ScanRunnerHandle } from './scanRunner'
 
@@ -346,6 +347,14 @@ export function RecommendationsView({
               : 'Closed outcomes appear after tracked picks exit or signals resolve.'}
           </p>
         </div>
+      ) : category.id === 'best_setups' && lifecycle === 'Active' ? (
+        <TopStocksBoard
+          cards={cards}
+          selected={selected}
+          onSelect={onSelect}
+          session={data.session}
+          tape={data.tape}
+        />
       ) : (
         <div className="reco-card-stack">
           {cards.map((card, idx) => (
