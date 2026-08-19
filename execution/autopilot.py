@@ -479,6 +479,13 @@ def arm(confirm_phrase: str = "") -> tuple[bool, str]:
                            "migration interlock — lifting it does NOT graduate a "
                            "strategy; the criteria in "
                            "docs/architecture/EXECUTION_SAFETY.md are a separate gate.")
+        try:
+            from product.production_ladder import live_arm_allowed
+            ok, why = live_arm_allowed()
+        except Exception:
+            ok, why = False, "LIVE locked. Production ladder unread — fail closed."
+        if not ok:
+            return False, why
         if confirm_phrase.strip() != ARM_PHRASE:
             return False, f"LIVE arm karne ke liye exactly '{ARM_PHRASE}' type karo"
         try:

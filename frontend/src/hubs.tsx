@@ -129,7 +129,7 @@ export function IdeasHub({
   const tab = ideasTabOf(active)
   return (
     <HubShell
-      blurb="Find a name. Categories opens on Best Setups — Minervini SEPA, seven Stage-2 rules, score out of 100. Table is the same scan as a dense list. Long-term is quality and valuation. F&O is the derivatives floor of a name."
+      blurb="Research monitor, not the order desk. Best Setups is Minervini SEPA on official NSE history. Paper on System → Health is the production path; live stays locked until the ladder earns it."
       tabs={IDEAS_TABS}
       active={tab}
       onChange={(next) => setActive(IDEAS_ROUTE[next as (typeof IDEAS_TABS)[number]])}
@@ -173,7 +173,7 @@ export function SystemHub({
   const tab = systemTabOf(active)
   return (
     <HubShell
-      blurb="Keep the machine honest. Health is whether workers are alive — including the decision journal. Data is whether the files behind a stock are fresh (served from this same API). Open a name first, then upload a statement if a number is missing."
+      blurb="Keep the machine honest. Health is the orchestra: tape → scan → evidence → brain → risk → paper. Live is earned, not toggled. Data is whether the files behind a stock are fresh."
       tabs={SYSTEM_TABS}
       active={tab}
       onChange={(next) => setActive(SYSTEM_ROUTE[next as (typeof SYSTEM_TABS)[number]])}

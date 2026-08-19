@@ -297,7 +297,7 @@ export function ProductCommandCenterView(props: ViewProps) {
           </div>
         </Panel>
       </div>
-      <div className="secondary-layer-note">Paper trading and automation remain available under System Health and Paper Portfolio, but they are not the heart of the research product.</div>
+      <div className="secondary-layer-note">Ideas is the research monitor. Paper on System → Health is the production path. Live stays locked until the ladder earns it.</div>
     </section>
   )
 }
