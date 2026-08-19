@@ -9,6 +9,9 @@ the exact gate that must be cleared before live trading is restored.
 - `execution/autopilot.py::_live_enabled()` — LIVE arming fails closed unless the
   environment flag `QT_LIVE_ENABLED` is explicitly truthy (`1/true/yes/on`). Default =
   disabled. Paper arming is unaffected.
+- `product/production_ladder.py::live_arm_allowed()` — LIVE arming also fails unless
+  forward-paper ≥300 closed trades, strategy alpha is E4, and institutional live
+  deployment is allowed. Default = locked. Paper arming is unaffected.
 - Invariant retained: LIVE arming additionally requires the exact `ARM LIVE` phrase, a
   working Kite session, and allocation ≤ broker margin.
 - Telegram taps remain paper-only (invariant #4); no live-order path from Telegram.
@@ -33,9 +36,11 @@ pin, at minimum:
 - the evidence status / Evidence Level,
 - the broker-reconciliation status.
 
-Until that manifest exists and is satisfied, `QT_LIVE_ENABLED` alone must never be read
-as permission to trade live capital — it is the operator's temporary migration lock, and
-nothing more.
+Until that manifest exists **and** `product.production_ladder.live_arm_allowed()`
+returns true, `QT_LIVE_ENABLED` alone must never be read as permission to trade
+live capital. The ladder now enforces E4 paper sample, evidence-level E4 on
+strategy alpha, and institutional `deployment.live.allowed` in addition to the
+migration interlock. Autopilot `arm(mode=LIVE)` fails closed on the first blocker.
 
 ## Graduation criteria (all mandatory before live capital)
 

@@ -923,6 +923,33 @@ const safeJson = async <T>(path: string, fallback: T): Promise<T> => {
   }
 }
 
+export type ProductionLadder = {
+  schema_version: number
+  thesis: string
+  rung: { id: string; label: string; next?: string | null }
+  paper_closed: number
+  paper_e4_n: number
+  alpha: { level: number; label: string }
+  live_unlocked: boolean
+  live_blockers: string[]
+  subsystems: Array<{
+    id: string
+    job: string
+    module: string
+    reads: string[]
+    writes: string[]
+    may_order: boolean
+    status: string
+    mode?: string
+  }>
+  handshake: Array<{ from: string; to: string; payload: string }>
+  rules: string[]
+}
+
+export const fetchProductionLadder = (): Promise<ProductionLadder> =>
+  fetch('/api/production-ladder', { headers: { Accept: 'application/json' } })
+    .then((response) => json<ProductionLadder>(response))
+
 export const fetchInstitutionalReadiness = (): Promise<InstitutionalReadiness> =>
   fetch('/api/institutional-readiness', { headers: { Accept: 'application/json' } })
     .then((response) => json<InstitutionalReadiness>(response))

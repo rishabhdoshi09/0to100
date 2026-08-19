@@ -144,10 +144,10 @@ export const PAGE_GUIDE: Record<string, PageGuide> = {
   },
   Automation: {
     title: 'System · Health',
-    purpose: 'Shows worker liveness, job throughput, failures, retries and owner controls. Data is the file layer under a stock.',
-    questions: ['Is the process alive?', 'Is usable data flowing?', 'Which job is active?', 'What exact blocker requires action?'],
-    action: 'Resolve the oldest critical blocker or restart only the failed service.',
-    doesNot: 'A live PID alone does not mean the product is ready.',
+    purpose: 'The production ladder: subsystem jobs, handshake, paper sample, and live lock. Then worker liveness. Data is the file layer under a stock.',
+    questions: ['Which rung are we on (observe / research / paper / transition / live)?', 'Is live locked, and why?', 'Is the paper supervisor alive?', 'What exact blocker requires action?'],
+    action: 'Run paper. Do not arm live until the ladder is unlocked. Resolve the oldest critical blocker.',
+    doesNot: 'A live PID, or QT_LIVE_ENABLED, does not graduate a strategy to real money.',
   },
 }
 

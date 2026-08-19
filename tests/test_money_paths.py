@@ -903,6 +903,18 @@ class TestAutopilot:
         ok2, msg2 = ap.arm("wrong phrase")
         assert not ok2 and "DISABLED" not in msg2.upper()
 
+    def test_live_arm_blocked_by_production_ladder(self, tmp_path, monkeypatch):
+        # QT_LIVE_ENABLED + exact phrase still fail closed until paper E4,
+        # strategy-alpha E4, and institutional live deployment all clear.
+        import product.production_ladder as ladder
+        ap, _ = self._setup(tmp_path, monkeypatch)
+        monkeypatch.setenv("QT_LIVE_ENABLED", "1")
+        monkeypatch.setattr(ladder, "_paper_closed_n", lambda: 5)
+        ap.set_config(mode="LIVE")
+        ok, msg = ap.arm(ap.ARM_PHRASE)
+        assert not ok
+        assert "LIVE locked" in msg
+
     def test_sector_fallback_lookup(self, tmp_path, monkeypatch):
         """Signal without a sector tag must be judged by sector_of(), not
         auto-rejected — a lone strong stock in a top sector still trades."""

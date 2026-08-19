@@ -395,6 +395,19 @@ def institutional_readiness() -> dict[str, Any]:
     )
 
 
+@app.get("/api/production-ladder")
+def production_ladder() -> dict[str, Any]:
+    """Subsystem orchestra + paper→live rung. Read-only; never arms live."""
+    from product.production_ladder import build_production_ladder
+    payloads = _current_product_payloads()
+    return build_production_ladder(
+        data=payloads["data"],
+        scan=payloads["scan"],
+        paper=core._paper_payload(),
+        autonomy=core._autonomy_payload(),
+    )
+
+
 @app.get("/api/target-portfolio")
 def target_portfolio() -> dict[str, Any]:
     """Return the latest immutable target-versus-current portfolio projection."""

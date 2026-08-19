@@ -31,7 +31,7 @@ import {
   type InstitutionalStack,
   type SignalBacktestStatus,
 } from './productApi'
-import { longTermPicks } from './longTermPicks'
+import { ProductionLadderBoard } from './ProductionLadder'
 import type {
   ChartBar,
   ControlName,
@@ -746,6 +746,7 @@ export function AutomationView({ dashboard, runControl, setActive }: ViewProps) 
         <button type="button" onClick={() => setActive('Research Data')}>Open file layer</button>
         <button type="button" onClick={() => setActive('Paper Portfolio')}>Open holdings</button>
       </div>
+      <ProductionLadderBoard />
       <div className="view-metrics">
         <MetricCard label="PAPER SUPERVISOR" value={a.running ? 'ONLINE' : 'OFFLINE'} detail={`PID ${a.scheduler_owner_pid || '—'}`} tone={a.running ? 'green' : 'amber'} />
         <MetricCard label="STATE" value={a.state} detail={a.plain_state} />
