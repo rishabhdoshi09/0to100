@@ -343,3 +343,52 @@ def test_best_setups_ranks_sepa_and_does_not_invent_weak_names():
     assert card["sepa_passed"] >= 6
     assert card["sepa_verdict"] == "STRONG"
     assert not any(c["symbol"] == "LAGGER" for c in best["cards"])
+
+
+def test_serve_recommendations_reuses_disk_cache(tmp_path, monkeypatch):
+    import product.recommendations_workspace as rw
+    monkeypatch.setattr(rw, "WORKSPACE_CACHE", tmp_path / "recommendations_workspace.json")
+    scan = {
+        "scanned_at": "2026-08-19T10:00:00+00:00",
+        "records": [
+            {
+                "symbol": "TRENDY", "company": "Trendy Co", "score": 70,
+                "signals": ["MOMENTUM"], "verdict": "BUY", "status": "Ready to trade",
+                "chase_risk": False, "price": 110, "entry": 100, "target": 125,
+                "stop": 95, "rsi": 58, "volume_ratio": 1.5, "avg_vol20": 1e6,
+            },
+        ],
+    }
+    first = rw.serve_recommendations_workspace(
+        scan_payload=scan,
+        long_term_payload={"scanned_at": "2026-08-19T09:00:00+00:00", "records": []},
+        refresh_technicals=False,
+        compute_sepa=False,
+    )
+    assert first["served_from_cache"] is False
+    assert (tmp_path / "recommendations_workspace.json").exists()
+    second = rw.serve_recommendations_workspace(
+        scan_payload=scan,
+        long_term_payload={"scanned_at": "2026-08-19T09:00:00+00:00", "records": []},
+        refresh_technicals=False,
+        compute_sepa=False,
+    )
+    assert second["served_from_cache"] is True
+    assert second["categories"][0]["id"] == first["categories"][0]["id"]
+    stale = rw.serve_recommendations_workspace(
+        scan_payload={**scan, "scanned_at": "2026-08-20T10:00:00+00:00"},
+        long_term_payload={"scanned_at": "2026-08-19T09:00:00+00:00", "records": []},
+        refresh_technicals=False,
+        compute_sepa=False,
+    )
+    assert stale["served_from_cache"] is False
+
+
+def test_cached_workspace_mismatch_is_ignored(tmp_path, monkeypatch):
+    import product.recommendations_workspace as rw
+    monkeypatch.setattr(rw, "WORKSPACE_CACHE", tmp_path / "recommendations_workspace.json")
+    assert rw.load_cached_recommendations_workspace("a", "b") is None
+    rw.persist_recommendations_workspace("a", "b", {"categories": []})
+    assert rw.load_cached_recommendations_workspace("a", "b")["categories"] == []
+    assert rw.load_cached_recommendations_workspace("other", "b") is None
+

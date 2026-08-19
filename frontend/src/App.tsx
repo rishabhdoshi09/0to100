@@ -27,6 +27,13 @@ import type { DisplayDepth } from './productLanguage'
 import { addWatchlistItem, fetchHoldings, fetchSymbolDirectory } from './productApi'
 import { useScanRunner } from './scanRunner'
 import { ReportPdfViewer } from './ReportPdfViewer'
+import {
+  loadCachedJson,
+  loadDeskSession,
+  patchDeskSession,
+  saveCachedJson,
+  stashDashboard,
+} from './deskSession'
 import type { ChartBar, ControlName, DashboardPayload, OperationRecord } from './types'
 
 /** In dev, Vite proxies /reports to :8766 (PDFs) and /evidence to :8765 (one origin). */
@@ -188,14 +195,21 @@ const pageSubtitles: Record<string, string> = {
   'System Health': 'Workers alive, then the files behind a stock.',
 }
 
+function hydrateDashboard(): DashboardPayload {
+  const cached = loadCachedJson<DashboardPayload>('dashboard')
+  if (cached && cached.scan && cached.data && cached.market) return cached
+  return emptyDashboard
+}
+
 function App() {
-  const [dashboard, setDashboard] = useState<DashboardPayload>(emptyDashboard)
-  const [loading, setLoading] = useState(true)
+  const [boot] = useState(() => loadDeskSession())
+  const [dashboard, setDashboard] = useState<DashboardPayload>(hydrateDashboard)
+  const [loading, setLoading] = useState(() => hydrateDashboard() === emptyDashboard)
   const [error, setError] = useState('')
-  const [active, setActive] = useState('Home')
-  const [compareSymbols, setCompareSymbols] = useState<string[]>([])
-  const [selected, setSelected] = useState('')
-  const [intelTab, setIntelTab] = useState<string | undefined>()
+  const [active, setActive] = useState(boot?.active || 'Home')
+  const [compareSymbols, setCompareSymbols] = useState<string[]>(boot?.compareSymbols || [])
+  const [selected, setSelected] = useState(boot?.selected || '')
+  const [intelTab, setIntelTab] = useState<string | undefined>(boot?.intelTab)
   const [bars, setBars] = useState<ChartBar[]>([])
   const [controlState, setControlState] = useState('')
   const [query, setQuery] = useState('')
@@ -213,6 +227,7 @@ function App() {
     try {
       const payload = await fetchDashboard()
       setDashboard(payload)
+      stashDashboard(payload as unknown as Record<string, unknown>)
       setError('')
       // Do not auto-open scan.records[0]. That list is raw scan rank — a faded
       // name (YATHARTH) can sit on top and then get chart/pre-trade polled forever.
@@ -247,15 +262,30 @@ function App() {
   }, [depth])
 
   useEffect(() => {
+    patchDeskSession({
+      active,
+      selected,
+      compareSymbols,
+      intelTab,
+    })
+  }, [active, selected, compareSymbols, intelTab])
+
+  useEffect(() => {
     if (!selected) {
       setBars([])
       return
     }
+    const cached = loadCachedJson<ChartBar[]>(`chart:${selected}`)
+    if (cached?.length) setBars(cached)
     let alive = true
     const load = () => {
       fetchChart(selected)
-        .then((result) => { if (alive) setBars(result.bars) })
-        .catch(() => { if (alive) setBars([]) })
+        .then((result) => {
+          if (!alive) return
+          setBars(result.bars)
+          saveCachedJson(`chart:${selected}`, result.bars)
+        })
+        .catch(() => { if (alive && !cached?.length) setBars([]) })
     }
     load()
     // Intraday bar changes — don't wait for a new bhavcopy date.

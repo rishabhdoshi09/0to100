@@ -702,6 +702,7 @@ export type RecommendationsWorkspace = {
     active_count: number
     closed_count: number
   }
+  served_from_cache?: boolean
   disclaimer: string
 }
 

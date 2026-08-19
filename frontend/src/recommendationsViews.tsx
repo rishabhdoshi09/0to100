@@ -20,6 +20,7 @@ import { SepaScoreChip } from './SepaMonitor'
 import { TopStocksBoard } from './TopStocksBoard'
 import type { DisplayDepth } from './productLanguage'
 import type { ScanRunnerHandle } from './scanRunner'
+import { loadCachedJson, loadDeskSession, patchDeskSession, saveCachedJson } from './deskSession'
 
 const CAT_ICONS: Record<string, string> = {
   best_setups: '7',
@@ -159,28 +160,35 @@ export function RecommendationsView({
   onCompare?: (symbol: string) => void
   onWatchlist?: (symbol: string) => void
 }) {
-  const [data, setData] = useState<RecommendationsWorkspace | null>(null)
+  const [data, setData] = useState<RecommendationsWorkspace | null>(
+    () => loadCachedJson<RecommendationsWorkspace>('reco-workspace'),
+  )
   const [error, setError] = useState('')
-  const [loading, setLoading] = useState(true)
-  const [categoryId, setCategoryId] = useState('best_setups')
-  const [lifecycle, setLifecycle] = useState<'Active' | 'Closed'>('Active')
+  const [loading, setLoading] = useState(() => !loadCachedJson('reco-workspace'))
+  const [boot] = useState(() => loadDeskSession())
+  const [categoryId, setCategoryId] = useState(boot?.ideasCategory || 'best_setups')
+  const [lifecycle, setLifecycle] = useState<'Active' | 'Closed'>(boot?.ideasLifecycle || 'Active')
   const [query, setQuery] = useState('')
   const phone = usePhoneLayout()
 
   useEffect(() => {
     let cancelled = false
-    setLoading(true)
+    if (!data) setLoading(true)
     fetchRecommendationsWorkspace()
       .then((payload) => {
         if (!cancelled) {
           setData(payload)
-          const firstWithCards = payload.categories.find((c) => c.count > 0)
-          if (firstWithCards) setCategoryId(firstWithCards.id)
+          saveCachedJson('reco-workspace', payload)
+          const saved = loadDeskSession()?.ideasCategory
+          if (!saved) {
+            const firstWithCards = payload.categories.find((c) => c.count > 0)
+            if (firstWithCards) setCategoryId(firstWithCards.id)
+          }
           setError('')
         }
       })
       .catch((err: Error) => {
-        if (!cancelled) setError(err.message || 'Failed to load recommendations')
+        if (!cancelled && !data) setError(err.message || 'Failed to load recommendations')
       })
       .finally(() => {
         if (!cancelled) setLoading(false)
@@ -189,6 +197,10 @@ export function RecommendationsView({
       cancelled = true
     }
   }, [])
+
+  useEffect(() => {
+    patchDeskSession({ ideasCategory: categoryId, ideasLifecycle: lifecycle })
+  }, [categoryId, lifecycle])
 
   const category = useMemo(
     () => data?.categories.find((c) => c.id === categoryId) || data?.categories[0],
@@ -221,7 +233,7 @@ export function RecommendationsView({
     || dashboard.long_term.records.find((row) => deskSymbol(row.symbol) === deskSymbol(selected))
     || dashboard.conviction.find((row) => deskSymbol(row.symbol) === deskSymbol(selected))
 
-  if (loading) {
+  if (loading && !data) {
     return (
       <RecoWaitPanel
         marketScan={marketScan}
@@ -230,7 +242,7 @@ export function RecommendationsView({
       />
     )
   }
-  if (error || !data || !category) {
+  if (!data || !category) {
     return (
       <div className="reco-light">
         <div className="reco-empty">
@@ -261,6 +273,7 @@ export function RecommendationsView({
     <div className="reco-light">
       <LiveScanBanner scan={marketScan} depth={depth} label="Market scan" />
       <LiveScanBanner scan={longTermScan} depth={depth} label="Long-term scan" />
+      {loading ? <p className="secondary-layer-note">Refreshing last print — the list you already ranked stays on screen.</p> : null}
 
       <nav className="reco-crumb" aria-label="Breadcrumb">
         <button type="button" onClick={() => setActive('Recommendations')}>Ideas</button>
@@ -396,20 +409,25 @@ function formatReportDate(value: string): string {
 export function MarketReportsView({
   setActive, setSelected: setStock, marketScan, longTermScan, depth,
 }: ExperienceViewProps) {
-  const [data, setData] = useState<MarketReportsWorkspace | null>(null)
+  const [data, setData] = useState<MarketReportsWorkspace | null>(
+    () => loadCachedJson<MarketReportsWorkspace>('market-reports'),
+  )
   const [error, setError] = useState('')
-  const [loading, setLoading] = useState(true)
+  const [loading, setLoading] = useState(() => !loadCachedJson('market-reports'))
   const [query, setQuery] = useState('')
-  const [selected, setSelected] = useState<MarketReportItem | null>(null)
+  const [selected, setSelected] = useState<MarketReportItem | null>(
+    () => loadCachedJson<MarketReportsWorkspace>('market-reports')?.reports[0] || null,
+  )
 
   useEffect(() => {
     let cancelled = false
-    setLoading(true)
+    if (!data) setLoading(true)
     fetchMarketReportsWorkspace()
       .then((payload) => {
         if (!cancelled) {
           setData(payload)
-          setSelected(payload.reports[0] || null)
+          saveCachedJson('market-reports', payload)
+          setSelected((prev) => prev || payload.reports[0] || null)
           setError('')
         }
       })
@@ -436,7 +454,7 @@ export function MarketReportsView({
     )
   }, [data, query])
 
-  if (loading) {
+  if (loading && !data) {
     const activeScan = marketScan.isActive ? marketScan : (longTermScan.isActive ? longTermScan : null)
     return (
       <div className="reco-light">
