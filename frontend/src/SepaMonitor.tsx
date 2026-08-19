@@ -172,7 +172,7 @@ export function SepaMonitor({
             {fundamentals.metrics.filter((m) => m.value != null && ['pe', 'roe', 'roce', 'debt_to_equity', 'sales_growth_3y', 'profit_growth_3y'].includes(m.key)).slice(0, 6).map((m) => (
               <div className="sepa-stat" key={m.key}>
                 <span>{m.label}</span>
-                <strong>{m.value}{m.unit ? ` ${m.unit}` : ''}</strong>
+                <strong>{typeof m.value === 'number' ? `${Number(m.value).toFixed(m.unit === 'x' ? 2 : 1)}${m.unit ? ` ${m.unit}` : ''}` : `${m.value}${m.unit ? ` ${m.unit}` : ''}`}</strong>
               </div>
             ))}
           </div>
