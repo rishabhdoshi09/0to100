@@ -44,6 +44,31 @@ export type SepaRs = {
   benchmark?: string
 }
 
+export type SepaModule = {
+  id: string
+  n: number
+  title: string
+  detail: string
+  note?: string
+  state?: string
+}
+
+export type SepaVolume = {
+  available?: boolean
+  label?: string
+  note?: string
+  rvol?: number | null
+  up_down?: number | null
+}
+
+export type SepaBreakout = {
+  available?: boolean
+  score?: number
+  max_score?: number
+  label?: string
+  note?: string
+}
+
 export type SepaPayload = {
   available: boolean
   score: number
@@ -61,6 +86,9 @@ export type SepaPayload = {
   session?: SepaSession | null
   stage?: SepaStage | null
   rs?: SepaRs | null
+  volume?: SepaVolume | null
+  breakout?: SepaBreakout | null
+  modules?: SepaModule[]
 }
 
 function money(value: number | null | undefined, digits = 2): string {
@@ -101,8 +129,8 @@ function ScoreRing({ score, max, tone }: { score: number; max: number; tone: str
 function contextTone(label: string | undefined): string {
   const v = (label || '').toUpperCase()
   if (v.includes('STAGE 2') && !v.includes('?')) return 'leader'
-  if (v === 'LEADER') return 'leader'
-  if (v.includes('STAGE 4') || v === 'LAGGARD') return 'laggard'
+  if (v === 'LEADER' || v === 'READY' || v === 'ACCUMULATION') return 'leader'
+  if (v.includes('STAGE 4') || v === 'LAGGARD' || v === 'DISTRIBUTION' || v === 'EARLY') return 'laggard'
   if (v.includes('STAGE 3') || v.includes('STAGE 1') || v.includes('?')) return 'mixed'
   return 'inline'
 }
@@ -158,7 +186,7 @@ export function SepaMonitor({
         <div>
           <p className="sepa-kicker">Setup monitor</p>
           <h3>Best stock setups</h3>
-          <em>Minervini SEPA · stage + RS vs Nifty 50 · official NSE history</em>
+          <em>Minervini SEPA · six-module analyser · official NSE history</em>
         </div>
         <div className="sepa-session">
           <span className={openNow ? 'is-open' : 'is-closed'}>
@@ -198,6 +226,16 @@ export function SepaMonitor({
           detail={sepa.rs?.excess_pp != null ? `${sepa.rs.excess_pp >= 0 ? '+' : ''}${sepa.rs.excess_pp} pp vs Nifty` : undefined}
           note={sepa.rs?.note}
         />
+        <ContextChip
+          label={sepa.volume?.available ? sepa.volume.label : undefined}
+          detail={sepa.volume?.rvol != null ? `${sepa.volume.rvol}× vol` : undefined}
+          note={sepa.volume?.note}
+        />
+        <ContextChip
+          label={sepa.breakout?.available ? sepa.breakout.label : undefined}
+          detail={sepa.breakout?.score != null ? `${sepa.breakout.score}/100 ready` : undefined}
+          note={sepa.breakout?.note}
+        />
       </div>
 
       <aside className="sepa-advice">{sepa.advice}</aside>
@@ -227,6 +265,21 @@ export function SepaMonitor({
           <p className="sepa-fund-empty">No calculated pack on file. This monitor does not scrape to invent P/E or ROE.</p>
         )}
       </div>
+
+      <h4 className="sepa-break-title">SEPA analyser</h4>
+      {(sepa.modules || []).length > 0 ? (
+        <div className="sepa-modules" aria-label="Six SEPA modules">
+          {(sepa.modules || []).map((mod) => (
+            <article key={mod.id} className={`sepa-module is-${mod.state || 'unknown'}`}>
+              <b>{mod.n}</b>
+              <div>
+                <h5>{mod.title}</h5>
+                <p>{mod.detail}</p>
+              </div>
+            </article>
+          ))}
+        </div>
+      ) : null}
 
       <h4 className="sepa-break-title">SEPA criteria breakdown</h4>
       <div className="sepa-criteria">

@@ -35,8 +35,9 @@ CATEGORIES: tuple[dict[str, str], ...] = (
         "label": "Best Setups",
         "blurb": (
             "Top Stocks — technical SEPA on official NSE history, stage and RS vs "
-            "Nifty 50 from the same tape, then on-file valuation metrics (calculated "
-            "in the long-term pack, not live-scraped). A high score is a research qualify, not a buy."
+            "Nifty 50, volume pattern and breakout-readiness from the same tape, "
+            "then on-file valuation metrics (calculated in the long-term pack, not live-scraped). "
+            "A high score is a research qualify, not a buy."
         ),
         "icon": "setup",
     },
@@ -766,10 +767,10 @@ def build_recommendations_workspace(
         _stamp_live_cmp(categories)
 
     cmp_note = (
-        "Top Stocks: SEPA + stage + 63-session RS vs Nifty 50 on official NSE history; "
-        "last print from Kite or NSE (Google is not used here). Index strip is the NSE "
-        "index store. Valuation metrics are calculated from the on-file long-term pack — "
-        "missing ratios stay missing, no live scrape."
+        "Top Stocks: SEPA + stage + RS vs Nifty 50 on official NSE history; "
+        "breadth is A/D and % above 20-/40-DMA from bhavcopy. Last print from Kite or NSE "
+        "(Google is not used here). Valuation metrics are calculated from the on-file "
+        "long-term pack — missing ratios stay missing, no live scrape."
     )
     if str(scan.get("records_status") or "") == "PRIOR_DAY_SNAPSHOT":
         cmp_note = "Scan file is a PRIOR-DAY SNAPSHOT — run a fresh market scan before acting. " + cmp_note
@@ -777,6 +778,7 @@ def build_recommendations_workspace(
     from product.sepa_setup import _session_label
     from product.top_stocks import tape_policy
     from product.monitor_context import INDEX_STRIP_NOTE, index_strip
+    from product.monitor_market import BREADTH_NOTE, NEWS_NOTE, market_breadth, news_tape
 
     return {
         "schema_version": 3,
@@ -802,6 +804,10 @@ def build_recommendations_workspace(
         "session": _session_label(),
         "indices": index_strip(),
         "index_strip_note": INDEX_STRIP_NOTE,
+        "breadth": market_breadth(),
+        "breadth_note": BREADTH_NOTE,
+        "news_tape": news_tape(),
+        "news_note": NEWS_NOTE,
         "categories": categories,
         "lifecycle": {
             "active": active[:60],

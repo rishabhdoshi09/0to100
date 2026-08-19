@@ -616,6 +616,10 @@ export type RecommendationCard = {
   rs_stock_pct?: number | null
   rs_benchmark_pct?: number | null
   rs_note?: string
+  volume_label?: string
+  volume_rvol?: number | null
+  breakout_score?: number | null
+  breakout_label?: string
   fund_available?: boolean
   rank_fund?: number
   fundamentals?: {
@@ -660,6 +664,37 @@ export type RecommendationsWorkspace = {
     source?: string
   }>
   index_strip_note?: string
+  breadth?: {
+    available: boolean
+    n?: number
+    advancers?: number
+    decliners?: number
+    adv_ratio?: number | null
+    pct_above_20?: number | null
+    pct_above_40?: number | null
+    pct_above_50?: number | null
+    up_4pct?: number
+    down_4pct?: number
+    verdict?: string
+    line?: string
+    history?: Array<{
+      date?: string
+      advancers: number
+      decliners: number
+      adv_ratio: number
+      up_4pct: number
+      down_4pct: number
+      pct_above_20?: number | null
+      pct_above_40?: number | null
+      nifty_close?: number | null
+    }>
+  }
+  breadth_note?: string
+  news_tape?: {
+    available: boolean
+    items?: Array<{ headline: string; source?: string; tag?: string; url?: string }>
+  }
+  news_note?: string
   categories: RecommendationCategory[]
   lifecycle: {
     active: RecommendationCard[]

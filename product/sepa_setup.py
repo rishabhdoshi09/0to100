@@ -466,6 +466,10 @@ def sepa_card_fields(sepa: Mapping[str, Any]) -> dict[str, Any]:
         "rs_stock_pct": rs.get("stock_pct"),
         "rs_benchmark_pct": rs.get("benchmark_pct"),
         "rs_note": str(rs.get("note") or ""),
+        "volume_label": str((sepa.get("volume") or {}).get("label") or ""),
+        "volume_rvol": (sepa.get("volume") or {}).get("rvol"),
+        "breakout_score": (sepa.get("breakout") or {}).get("score"),
+        "breakout_label": str((sepa.get("breakout") or {}).get("label") or ""),
     }
 
 

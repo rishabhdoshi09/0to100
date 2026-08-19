@@ -356,6 +356,9 @@ export function RecommendationsView({
           tape={data.tape}
           indices={data.indices}
           indexNote={data.index_strip_note}
+          breadth={data.breadth}
+          breadthNote={data.breadth_note}
+          news={data.news_tape}
         />
       ) : (
         <div className="reco-card-stack">

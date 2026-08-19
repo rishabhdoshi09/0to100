@@ -119,6 +119,8 @@ def test_attach_context_mutates_payload():
     attach_context(payload, _trend(), _trend(start=20000, step=4.0))
     assert payload["stage"]["label"] == "STAGE 2"
     assert payload["rs"]["available"] is True
+    assert payload["volume"]["available"] is True
+    assert len(payload["modules"]) == 6
 
 
 def test_workspace_exposes_indices_and_rs_on_best_setups(monkeypatch):
@@ -131,6 +133,19 @@ def test_workspace_exposes_indices_and_rs_on_best_setups(monkeypatch):
             "id": "^NSEI", "label": "NIFTY 50", "close": 22100.0,
             "change_pct": 0.41, "available": True, "source": "nse_index_store",
         }],
+    )
+    monkeypatch.setattr(
+        "product.monitor_market.market_breadth",
+        lambda: {
+            "available": True, "n": 400, "advancers": 160, "decliners": 240,
+            "adv_ratio": 0.67, "pct_above_20": 37.5, "pct_above_40": 42.0,
+            "pct_above_50": 40.0, "up_4pct": 18, "down_4pct": 40,
+            "verdict": "NARROW", "history": [],
+        },
+    )
+    monkeypatch.setattr(
+        "product.monitor_market.news_tape",
+        lambda: {"available": False, "items": []},
     )
     payload = build_recommendations_workspace(
         scan_payload={
@@ -153,3 +168,4 @@ def test_workspace_exposes_indices_and_rs_on_best_setups(monkeypatch):
     assert card["rs_label"] == "LEADER"
     assert payload["indices"][0]["label"] == "NIFTY 50"
     assert "Nifty" in payload["cmp_note"] or "Nifty" in payload["index_strip_note"]
+    assert payload["breadth"]["pct_above_20"] == 37.5
