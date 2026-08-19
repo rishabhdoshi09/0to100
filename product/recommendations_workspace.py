@@ -30,6 +30,16 @@ REPORTS_DIR = ROOT / "logs" / "product" / "market_reports"
 # Reco-Wealth analogues — QuantTerm evidence names (not a brand clone).
 CATEGORIES: tuple[dict[str, str], ...] = (
     {
+        "id": "best_setups",
+        "label": "Best Setups",
+        "blurb": (
+            "Minervini SEPA — Stage-2 swing template. Seven published rules, 100 points. "
+            "Near 52-week highs, rising 200-DMA, price above the moving-average stack. "
+            "A high score is a research qualify, not a buy."
+        ),
+        "icon": "setup",
+    },
+    {
         "id": "wealth_builders",
         "label": "Wealth Builders",
         "blurb": "Long-term quality / GARP — compounders with ≥50% fundamental coverage.",
@@ -365,9 +375,15 @@ def _empty_detail_for(
     cards: Sequence[Mapping[str, Any]],
     lt_rows: Sequence[Mapping[str, Any]],
     scan_rows: Sequence[Mapping[str, Any]],
+    sepa_note: str = "",
 ) -> str:
     if cards:
         return ""
+    if category_id == "best_setups":
+        return sepa_note or (
+            "Best Setups needs a saved market scan plus official OHLCV. "
+            "Run a scan, then open a stock to see the 7-rule breakdown even when this list is empty."
+        )
     if category_id == "wealth_builders":
         if not lt_rows:
             return "No long-term shortlist on file — run a long-term scan with fundamentals."
@@ -472,6 +488,7 @@ def _bucket_rows(
         c["symbol"],
     ))
     return {
+        "best_setups": [],
         "wealth_builders": wealth[:_BUCKET_CAP],
         "super_trends": trends[:_BUCKET_CAP],
         "momentum_breakouts": breakouts[:_BUCKET_CAP],
@@ -640,16 +657,64 @@ def _stamp_live_cmp(categories: Sequence[Mapping[str, Any]]) -> None:
             card["upside_from_buy_pct"] = round((target / buy - 1.0) * 100.0, 1)
 
 
+def _best_setup_cards(
+    scan_rows: Sequence[Mapping[str, Any]],
+    *,
+    load_frame: Any = None,
+    compute: bool = True,
+    cache_key: str = "",
+) -> tuple[list[dict[str, Any]], str]:
+    if not compute:
+        return [], "SEPA ranking skipped in this call."
+    try:
+        from product.sepa_setup import rank_best_setups, sepa_card_fields
+        ranked, note = rank_best_setups(
+            scan_rows, load_frame=load_frame, cache_key=cache_key,
+        )
+    except Exception as exc:
+        return [], f"SEPA ranking unavailable: {str(exc)[:160]}"
+    cards: list[dict[str, Any]] = []
+    for sepa, row in ranked:
+        extra = sepa_card_fields(sepa)
+        why = extra.get("sepa_headline") or "SEPA template"
+        passed = extra.get("sepa_passed")
+        total = extra.get("sepa_total")
+        score = extra.get("sepa_score")
+        if passed is not None and total and score is not None:
+            why = f"{why} · {passed}/{total} rules · {score}/100"
+        card = card_from_row(
+            row,
+            category_id="best_setups",
+            category_label="Best Setups",
+            qualify_reason=why,
+            evidence_tags=[
+                tag for tag in (
+                    extra.get("sepa_verdict") or "",
+                    f"{passed}/{total}" if passed is not None else "",
+                ) if tag
+            ],
+        )
+        card.update({k: v for k, v in extra.items() if k != "setup_label"})
+        if extra.get("setup_label"):
+            card["setup_label"] = extra["setup_label"]
+        card["action_badge"] = extra.get("sepa_verdict") or card.get("action_badge") or "Watch"
+        cards.append(card)
+    return cards, note
+
+
 def build_recommendations_workspace(
     *,
     scan_payload: Mapping[str, Any] | None = None,
     long_term_payload: Mapping[str, Any] | None = None,
     refresh_technicals: bool = True,
+    compute_sepa: bool = True,
+    sepa_load_frame: Any = None,
 ) -> dict[str, Any]:
     """Project recommendation categories + lifecycle from persisted product state.
 
     ``refresh_technicals`` stamps live CMP on the shortlist with one quote
     call. It does not recompute RSI across the scan head.
+    ``compute_sepa`` ranks Best Setups from official OHLCV (capped shortlist).
     """
     scan = dict(scan_payload or {})
     lt = dict(long_term_payload or {})
@@ -660,6 +725,11 @@ def build_recommendations_workspace(
     lt_rows = [enrich_long_term_row(dict(r), scanned_at=lt_at) for r in (lt.get("records") or [])]
 
     buckets = _bucket_rows(scan_rows, lt_rows)
+    best_cards, sepa_note = _best_setup_cards(
+        scan_rows, load_frame=sepa_load_frame, compute=compute_sepa,
+        cache_key=scan_at,
+    )
+    buckets["best_setups"] = best_cards
     active, closed = _tracker_lifecycle()
 
     categories = []
@@ -671,6 +741,7 @@ def build_recommendations_workspace(
             "cards": cards,
             "empty_detail": _empty_detail_for(
                 meta["id"], cards=cards, lt_rows=lt_rows, scan_rows=scan_rows,
+                sepa_note=sepa_note if meta["id"] == "best_setups" else "",
             ),
         })
 
@@ -678,6 +749,7 @@ def build_recommendations_workspace(
         _stamp_live_cmp(categories)
 
     cmp_note = (
+        "Best Setups is the Stage-2 SEPA shortlist from the last scan. "
         "CMP uses live Kite/NSE overlay when available; otherwise last official EOD. "
         "Each scan symbol maps to one primary category (breakout → recovery → trend). "
         "Scan signals are research snapshots — check scanned_at."
@@ -686,11 +758,12 @@ def build_recommendations_workspace(
         cmp_note = "Scan file is a PRIOR-DAY SNAPSHOT — run a fresh market scan before acting. " + cmp_note
 
     return {
-        "schema_version": 2,
+        "schema_version": 3,
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "load_note": (
-            "Categories come from the last saved scan. Live CMP is one quote pass "
-            "on the shortlist — not a 120-name RSI rebuild."
+            "Best Setups scores a capped scan shortlist on Minervini's 7-rule template "
+            "from official OHLCV. Other categories still come from the last saved scan. "
+            "Live CMP is one quote pass on the shortlist."
         ),
         "typical_seconds": 8,
         "scan_scanned_at": scan_at,
@@ -699,9 +772,11 @@ def build_recommendations_workspace(
         "same_ist_day": bool(scan.get("same_ist_day")),
         "cmp_note": cmp_note,
         "assignment_policy": (
+            "best_setups: SEPA ≥40/100 on a scan shortlist; "
             "exclusive_primary: momentum_breakouts > recovery_setups > super_trends; "
             "wealth_builders from long-term quality only"
         ),
+        "sepa_note": sepa_note,
         "categories": categories,
         "lifecycle": {
             "active": active[:60],
@@ -711,7 +786,7 @@ def build_recommendations_workspace(
         },
         "disclaimer": (
             "Research categories from QuantTerm evidence — not broker recommendations, "
-            "not a promise of returns, not Reco Wealth."
+            "not a promise of returns. SEPA is a published trend template, not Reco Wealth."
         ),
     }
 

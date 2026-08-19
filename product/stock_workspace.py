@@ -330,6 +330,17 @@ def _technical(frame: Any) -> dict[str, Any]:
         low_52w = round(float(data["low"].tail(min(252, len(data))).min()), 2)
         from_high = round((close / high_52w - 1.0) * 100.0, 2) if high_52w else None
         from_low = round((close / low_52w - 1.0) * 100.0, 2) if low_52w else None
+        last = data.iloc[-1]
+        prev = data.iloc[-2] if len(data) >= 2 else None
+        session_open = _f(last.get("open")) if hasattr(last, "get") else _f(last["open"] if "open" in data.columns else None)
+        session_high = _f(last["high"] if "high" in data.columns else None)
+        session_low = _f(last["low"] if "low" in data.columns else None)
+        prev_close = _f(prev["close"]) if prev is not None else None
+        change_pct = (
+            round((close / prev_close - 1.0) * 100.0, 2)
+            if prev_close and prev_close > 0
+            else None
+        )
         avg_volume = _f(data["volume"].tail(20).mean()) if "volume" in data.columns else None
         volume = _f(data["volume"].iloc[-1]) if "volume" in data.columns else None
         volume_ratio = (
@@ -354,6 +365,11 @@ def _technical(frame: Any) -> dict[str, Any]:
             "available": True,
             "latest_date": latest_date,
             "close": round(close, 2),
+            "open": round(session_open, 2) if session_open is not None else None,
+            "high": round(session_high, 2) if session_high is not None else None,
+            "low": round(session_low, 2) if session_low is not None else None,
+            "prev_close": round(prev_close, 2) if prev_close is not None else None,
+            "change_pct": change_pct,
             "ema20": ema20,
             "ema50": ema50,
             "ema200": ema200,
@@ -699,6 +715,21 @@ def build_stock_workspace(
     long_row = _find(long_term_payload, symbol)
     raw_record = dict(raw_fundamentals or {})
     technical = _technical(frame)
+    try:
+        from product.sepa_setup import score_sepa
+        sepa = score_sepa(frame)
+    except Exception as exc:
+        sepa = {
+            "available": False,
+            "score": 0,
+            "max_score": 100,
+            "passed": 0,
+            "total": 7,
+            "verdict": "INCOMPLETE",
+            "headline": "INCOMPLETE — SEPA UNAVAILABLE",
+            "advice": str(exc)[:180],
+            "criteria": [],
+        }
     sector = str(long_row.get("sector") or scan_row.get("sector") or "Unclassified")
     company = str(scan_row.get("company") or long_row.get("company") or symbol)
     fundamentals = _fundamentals(long_row, raw_record, sector)
@@ -793,6 +824,7 @@ def build_stock_workspace(
         "confidence_pct": confidence_pct,
         "gaps": gaps,
         "technical": technical,
+        "sepa": sepa,
         "fundamentals": fundamentals,
         "peers": peers,
         "scanner": scan_row,

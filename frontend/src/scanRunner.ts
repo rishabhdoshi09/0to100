@@ -173,7 +173,7 @@ export type DeskWaitKind = 'RECO_WORKSPACE' | 'MARKET_PULSE' | 'EDUCATION' | 'CO
 
 export const DESK_WAIT_DOING: Record<DeskWaitKind, string> = {
   RECO_WORKSPACE:
-    'Reading the last market scan and grouping names into Wealth Builders, Super Trends, Breakouts and Recovery. Then one live-price stamp on that shortlist.',
+    'Ranking Best Setups on Minervini\'s 7-rule SEPA template from official history, then grouping Wealth Builders, Super Trends, Breakouts and Recovery. One live-price stamp on that shortlist.',
   MARKET_PULSE:
     'Assembling today\'s Pulse from the last scan — movers, breakouts, headlines. Not walking the whole bhavcopy universe.',
   EDUCATION:
@@ -181,7 +181,7 @@ export const DESK_WAIT_DOING: Record<DeskWaitKind, string> = {
   COMPARE:
     'Laying saved stock files side by side. Missing fundamentals stay missing.',
   STOCK_WORKSPACE:
-    'Opening the saved price, technical, fundamental and source files for this name.',
+    'Opening official price history and scoring this name on Minervini\'s 7-rule SEPA template, plus saved fundamentals.',
 }
 
 export type DeskWaitScan = {

@@ -74,10 +74,16 @@ export type StockWorkspace = {
   summary: string
   confidence_pct: number
   gaps: string[]
+  sepa?: import('./SepaMonitor').SepaPayload
   technical: {
     available: boolean
     latest_date?: string
     close?: number
+    open?: number | null
+    high?: number | null
+    low?: number | null
+    prev_close?: number | null
+    change_pct?: number | null
     ema20?: number | null
     ema50?: number | null
     ema200?: number | null
@@ -593,6 +599,13 @@ export type RecommendationCard = {
   ev_n?: number | null
   ev_conf?: string
   p_win?: number | null
+  sepa_score?: number | null
+  sepa_max?: number | null
+  sepa_passed?: number | null
+  sepa_total?: number | null
+  sepa_verdict?: string
+  sepa_headline?: string
+  sepa_advice?: string
 }
 
 export type RecommendationCategory = {

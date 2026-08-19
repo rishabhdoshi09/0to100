@@ -35,14 +35,14 @@ export const PAGE_GUIDE: Record<string, PageGuide> = {
   },
   Recommendations: {
     title: 'Ideas · Categories',
-    purpose: 'Groups QuantTerm evidence into research categories with Active/Closed lifecycle tracking. Table, Long-term and F&O are the other floors of the same Ideas hub.',
+    purpose: 'Best Setups ranks the last scan on Minervini\'s 7-rule Stage-2 template (near 52-week highs, rising 200-DMA). Other tabs are Wealth Builders, Super Trends, Breakouts and Recovery. Table, Long-term and F&O are the other Ideas floors.',
     questions: [
-      'Which category matches my horizon (compound vs breakout)?',
+      'Which names clear SEPA (≥40/100), and which of the 7 rules failed?',
       'Is CMP live or EOD, and how old is the scan?',
       'What is upside from entry vs room to target?',
       'Which tracked picks are still open vs resolved?',
     ],
-    action: 'Open a card in Stock Intelligence, or refresh scan/long-term data if categories are empty.',
+    action: 'Open Best Setups first. Tap a name for the full 7-rule monitor in Stock Intelligence.',
     doesNot: 'A Buy badge is research classification — not a broker order or return promise.',
   },
   'Market Reports': {
@@ -58,7 +58,7 @@ export const PAGE_GUIDE: Record<string, PageGuide> = {
   },
   'Stock Intelligence': {
     title: 'Stock Intelligence',
-    purpose: 'Combines price structure, technicals, current fundamentals, risks, news and source dates.',
+    purpose: 'SEPA setup monitor (7 Stage-2 rules, score /100) plus price structure, fundamentals, risks, news and source dates.',
     questions: [
       'What is the current trend and volatility?',
       'Are fundamentals complete and fresh?',

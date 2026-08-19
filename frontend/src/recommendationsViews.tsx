@@ -16,10 +16,12 @@ import type { ExperienceViewProps } from './experience'
 import { LiveScanBanner } from './experience'
 import { EvChip } from './evChip'
 import { DeskWait, toDeskWaitScan } from './DeskWait'
+import { SepaScoreChip } from './SepaMonitor'
 import type { DisplayDepth } from './productLanguage'
 import type { ScanRunnerHandle } from './scanRunner'
 
 const CAT_ICONS: Record<string, string> = {
+  best_setups: '7',
   wealth_builders: 'W',
   super_trends: 'S',
   momentum_breakouts: 'B',
@@ -28,8 +30,8 @@ const CAT_ICONS: Record<string, string> = {
 
 function badgeClass(action: string): string {
   const a = action.toLowerCase()
-  if (a.includes('buy') || a === 'open' || a === 'tracked' || a === 'win') return ''
-  if (a.includes('closed') || a.includes('loss') || a.includes('void')) return 'is-closed'
+  if (a.includes('buy') || a === 'open' || a === 'tracked' || a === 'win' || a === 'strong') return ''
+  if (a.includes('closed') || a.includes('loss') || a.includes('void') || a === 'weak') return 'is-closed'
   return 'is-watch'
 }
 
@@ -99,6 +101,14 @@ function CardTile({
         </div>
       </div>
       <EvChip row={card} />
+      <SepaScoreChip
+        score={card.sepa_score}
+        max={card.sepa_max}
+        passed={card.sepa_passed}
+        total={card.sepa_total}
+        verdict={card.sepa_verdict}
+        headline={card.sepa_headline}
+      />
       {(card.qualify_reason || card.reason) ? (
         <p className="reco-pick-note">{card.qualify_reason || card.reason}</p>
       ) : null}
@@ -151,7 +161,7 @@ export function RecommendationsView({
   const [data, setData] = useState<RecommendationsWorkspace | null>(null)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(true)
-  const [categoryId, setCategoryId] = useState('wealth_builders')
+  const [categoryId, setCategoryId] = useState('best_setups')
   const [lifecycle, setLifecycle] = useState<'Active' | 'Closed'>('Active')
   const [query, setQuery] = useState('')
   const phone = usePhoneLayout()

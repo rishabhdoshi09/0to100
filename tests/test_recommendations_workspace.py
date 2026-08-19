@@ -86,9 +86,11 @@ def test_categories_project_from_scan_and_long_term_without_invention():
     }
     payload = build_recommendations_workspace(
         scan_payload=scan, long_term_payload=long_term, refresh_technicals=False,
+        compute_sepa=False,
     )
     by_id = {c["id"]: c for c in payload["categories"]}
-    assert payload["schema_version"] == 2
+    assert payload["schema_version"] == 3
+    assert by_id["best_setups"]["count"] == 0
     assert by_id["wealth_builders"]["count"] == 1
     assert by_id["wealth_builders"]["cards"][0]["symbol"] == "QUAL"
     assert "coverage" in (by_id["wealth_builders"]["cards"][0].get("qualify_reason") or "").lower()
@@ -131,6 +133,7 @@ def test_scan_categories_are_exclusive_primary():
     }
     payload = build_recommendations_workspace(
         scan_payload=scan, long_term_payload={"records": []}, refresh_technicals=False,
+        compute_sepa=False,
     )
     by_id = {c["id"]: c for c in payload["categories"]}
     scan_syms = []
@@ -191,6 +194,7 @@ def test_refresh_stamps_shortlist_quotes_not_scan_head(monkeypatch):
         },
         long_term_payload={"records": []},
         refresh_technicals=True,
+        compute_sepa=False,
     )
     assert payload["typical_seconds"] == 8
     assert "load_note" in payload
@@ -215,6 +219,7 @@ def test_wealth_empty_explains_needs_fundamentals():
             ],
         },
         refresh_technicals=False,
+        compute_sepa=False,
     )
     wealth = next(c for c in payload["categories"] if c["id"] == "wealth_builders")
     assert wealth["count"] == 0
@@ -226,6 +231,7 @@ def test_empty_recovery_is_honest_empty():
         scan_payload={"records": [], "scanned_at": ""},
         long_term_payload={"records": []},
         refresh_technicals=False,
+        compute_sepa=False,
     )
     recovery = next(c for c in payload["categories"] if c["id"] == "recovery_setups")
     assert recovery["count"] == 0
@@ -273,3 +279,67 @@ def test_market_reports_reuse_fresh_file(tmp_path, monkeypatch):
     payload = build_market_reports_workspace(persist_today=True)
     assert payload["today_pulse"]["takeaways"] == ["Saved pulse"]
     assert payload["typical_seconds"] == 8
+
+
+def test_best_setups_ranks_sepa_and_does_not_invent_weak_names():
+    import pandas as pd
+
+    index = pd.date_range("2024-01-01", periods=280, freq="B")
+    close = pd.Series([80 + i * 0.6 for i in range(280)], index=index)
+    strong = pd.DataFrame(
+        {
+            "open": close - 0.4,
+            "high": close + 1.2,
+            "low": close - 1.0,
+            "close": close,
+            "volume": [200000] * 280,
+        },
+        index=index,
+    )
+    down = pd.Series([200 - i * 0.4 for i in range(280)], index=index)
+    weak = pd.DataFrame(
+        {
+            "open": down + 0.3,
+            "high": down + 1,
+            "low": down - 1,
+            "close": down,
+            "volume": [150000] * 280,
+        },
+        index=index,
+    )
+    frames = {"LEADER": strong, "LAGGER": weak}
+
+    payload = build_recommendations_workspace(
+        scan_payload={
+            "scanned_at": "2026-08-18T10:00:00+00:00",
+            "records": [
+                {
+                    "symbol": "LEADER", "company": "Leader Ltd", "score": 88,
+                    "signals": ["MOMENTUM"], "verdict": "BUY", "status": "Ready to trade",
+                    "chase_risk": False, "price": float(close.iloc[-1]),
+                    "entry": float(close.iloc[-1]), "target": float(close.iloc[-1]) * 1.1,
+                    "stop": float(close.iloc[-1]) * 0.95, "rsi": 58, "volume_ratio": 1.4,
+                    "avg_vol20": 1e6,
+                },
+                {
+                    "symbol": "LAGGER", "company": "Lagger Ltd", "score": 70,
+                    "signals": ["MOMENTUM"], "verdict": "WATCH", "status": "Watch",
+                    "chase_risk": False, "price": float(down.iloc[-1]),
+                    "rsi": 40, "volume_ratio": 1.1, "avg_vol20": 1e6,
+                },
+            ],
+        },
+        long_term_payload={"records": []},
+        refresh_technicals=False,
+        compute_sepa=True,
+        sepa_load_frame=lambda symbol: frames.get(symbol),
+    )
+    best = next(c for c in payload["categories"] if c["id"] == "best_setups")
+    assert payload["categories"][0]["id"] == "best_setups"
+    assert best["count"] == 1
+    card = best["cards"][0]
+    assert card["symbol"] == "LEADER"
+    assert card["sepa_score"] >= 80
+    assert card["sepa_passed"] >= 6
+    assert card["sepa_verdict"] == "STRONG"
+    assert not any(c["symbol"] == "LAGGER" for c in best["cards"])
