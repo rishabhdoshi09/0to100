@@ -29,6 +29,9 @@ export function TopStocksBoard({
   tape,
   indices,
   indexNote,
+  breadth,
+  breadthNote,
+  news,
 }: {
   cards: RecommendationCard[]
   selected?: string
@@ -37,22 +40,39 @@ export function TopStocksBoard({
   tape?: RecommendationsWorkspace['tape']
   indices?: RecommendationsWorkspace['indices']
   indexNote?: string
+  breadth?: RecommendationsWorkspace['breadth']
+  breadthNote?: string
+  news?: RecommendationsWorkspace['news_tape']
 }) {
   const openNow = session?.open === true
   const strip = (indices || []).filter((row) => row.available)
+  const nifty = strip.find((row) => row.id === '^NSEI')
+  const newsItems = (news?.items || []).slice(0, 8)
+  const history = (breadth?.history || []).slice(0, 6)
   return (
     <section className="top-stocks" aria-label="Top stocks">
       <header className="top-stocks-head">
         <div>
           <p className="sepa-kicker">Market monitor</p>
           <h3>Top Stocks</h3>
-          <em>SEPA · stage · RS vs Nifty 50 on official NSE history</em>
+          <em>News · breadth · SEPA on official NSE history</em>
         </div>
         <div className="sepa-session">
           <span className={openNow ? 'is-open' : 'is-closed'}>{session?.label || 'SESSION'}</span>
           {session?.clock ? <b>{session.clock}</b> : null}
         </div>
       </header>
+      {newsItems.length > 0 ? (
+        <div className="news-tape" aria-label="On-file news">
+          {newsItems.map((item, idx) => (
+            <article key={`${item.tag}-${idx}`}>
+              {item.tag ? <span className={`news-tag is-${(item.tag || '').toLowerCase()}`}>{item.tag}</span> : null}
+              <p>{item.headline}</p>
+              {item.source ? <em>{item.source}</em> : null}
+            </article>
+          ))}
+        </div>
+      ) : null}
       {strip.length > 0 ? (
         <div className="index-strip" aria-label="Official index strip">
           {strip.map((row) => (
@@ -63,6 +83,60 @@ export function TopStocksBoard({
             </article>
           ))}
         </div>
+      ) : null}
+      {breadth?.available ? (
+        <div className="breadth-strip" aria-label="Market breadth">
+          <article>
+            <span>NIFTY</span>
+            <strong>{nifty?.close != null ? nifty.close.toLocaleString('en-IN', { maximumFractionDigits: 1 }) : '—'}</strong>
+            <em className={(nifty?.change_pct ?? 0) >= 0 ? 'pos' : 'neg'}>{changeLabel(nifty?.change_pct)}</em>
+          </article>
+          <article>
+            <span>A/D RATIO</span>
+            <strong>{breadth.adv_ratio != null ? breadth.adv_ratio.toFixed(2) : '—'}</strong>
+            <em>{breadth.advancers}/{breadth.decliners}</em>
+          </article>
+          <article>
+            <span>% ABV 20 DMA</span>
+            <strong>{breadth.pct_above_20 != null ? `${breadth.pct_above_20}%` : '—'}</strong>
+            <em>{breadth.verdict || ''}</em>
+          </article>
+          <article>
+            <span>% ABV 40 DMA</span>
+            <strong>{breadth.pct_above_40 != null ? `${breadth.pct_above_40}%` : '—'}</strong>
+            <em>{breadth.up_4pct != null ? `${breadth.up_4pct} up 4%` : ''}</em>
+          </article>
+        </div>
+      ) : null}
+      {history.length > 1 ? (
+        <table className="breadth-table">
+          <thead>
+            <tr>
+              <th>Day</th>
+              <th>Adv</th>
+              <th>Dec</th>
+              <th>Up 4%</th>
+              <th>Dn 4%</th>
+              <th>%20</th>
+              <th>%40</th>
+              <th>Nifty</th>
+            </tr>
+          </thead>
+          <tbody>
+            {history.map((row, idx) => (
+              <tr key={`${row.date || idx}`}>
+                <td>{row.date ? row.date.slice(5) : idx === 0 ? 'Now' : `-${idx}`}</td>
+                <td>{row.advancers}</td>
+                <td>{row.decliners}</td>
+                <td>{row.up_4pct}</td>
+                <td>{row.down_4pct}</td>
+                <td>{row.pct_above_20 ?? '—'}</td>
+                <td>{row.pct_above_40 ?? '—'}</td>
+                <td>{row.nifty_close != null ? row.nifty_close.toLocaleString('en-IN') : '—'}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
       ) : null}
       <div className="top-stocks-live">
         <strong>TOP STOCKS</strong>
@@ -113,6 +187,7 @@ export function TopStocksBoard({
         })}
       </ol>
       {indexNote ? <p className="top-stocks-note">{indexNote}</p> : null}
+      {breadthNote ? <p className="top-stocks-note">{breadthNote}</p> : null}
       {tape?.technical ? <p className="top-stocks-note">{tape.technical}</p> : null}
       {tape?.fundamental ? <p className="top-stocks-note">{tape.fundamental}</p> : null}
     </section>
