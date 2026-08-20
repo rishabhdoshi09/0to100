@@ -2,7 +2,8 @@ import { describe, expect, it } from 'vitest'
 import { journeyTone, labStatusTone, readyLaneLabel } from './tradeDesk'
 
 describe('trade desk copy', () => {
-  it('labels Prime separately from a complete ticket', () => {
+  it('labels Stage 2, Prime, and a complete ticket', () => {
+    expect(readyLaneLabel('stage2')).toBe('Stage 2')
     expect(readyLaneLabel('prime')).toBe('Prime')
     expect(readyLaneLabel('actionable')).toBe('Ticket')
   })

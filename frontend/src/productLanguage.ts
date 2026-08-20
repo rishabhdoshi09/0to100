@@ -151,15 +151,15 @@ export const PAGE_GUIDE: Record<string, PageGuide> = {
   },
   'Ready Trades': {
     title: 'Trade · Ready',
-    purpose: 'The only names that cleared money gates today: BUY plus a stop, non-negative measured edge, and Prime when every evidence layer passed.',
+    purpose: 'Ticket board: Stage-2 SEPA from the last Ideas ranking, scanner BUY/Ready plans ranked by ATQ, and Prime only when those gates actually pass.',
     questions: [
-      'Is there a Prime name, or is the queue honestly empty?',
+      'Is there a Stage-2 or complete ticket, or is the queue honestly empty?',
       'Does the card have Buy / Stop / Target?',
-      'Is conservative EV positive, or is the sample too thin to claim?',
+      'What is ATQ / SEPA — and is conservative EV missing rather than invented?',
       'What is the next step — Lab or paper Journey?',
     ],
-    action: 'Open a Prime card, confirm the ticket, then paper-trade via Journey. Do not skip to live.',
-    doesNot: 'Prime is not a return promise and not a broker order.',
+    action: 'Open a Stage-2 or ticket card, confirm the plan, then paper-trade via Journey. Do not skip to live.',
+    doesNot: 'ATQ and SEPA are template/structure scores, not a return promise and not a broker order.',
   },
   'Backtest Lab': {
     title: 'Trade · Lab',

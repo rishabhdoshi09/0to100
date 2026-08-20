@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react'
-import { money, pct } from './format'
+import { money } from './format'
 import { EvChip } from './evChip'
 import { deskSymbol } from './deskThesis'
 import { StockPeekPopup } from './StockPeekPopup'
+import { SepaScoreChip } from './SepaMonitor'
 import type { ExperienceViewProps } from './experience'
 import {
   armPaperAutopilot,
@@ -43,12 +44,22 @@ function ReadyCard({
         <div><span>Buy</span><strong>{money(card.entry, 2)}</strong></div>
         <div><span>Stop</span><strong>{money(card.stop, 2)}</strong></div>
         <div><span>Target</span><strong>{money(card.target, 2)}</strong></div>
-        <div><span>Upside</span><strong>{card.upside_from_buy_pct != null ? pct(card.upside_from_buy_pct) : '—'}</strong></div>
+        <div><span>R:R</span><strong>{card.reward_risk != null ? `${card.reward_risk.toFixed(1)}` : '—'}</strong></div>
       </div>
       <div className="trade-meta">
+        {card.atq != null ? <em>ATQ {(card.atq * 100).toFixed(0)}</em> : null}
         {card.edge_r != null ? <em>Edge {card.edge_r >= 0 ? '+' : ''}{card.edge_r.toFixed(2)}R</em> : <em>No measured edge_r</em>}
         <EvChip row={card} />
       </div>
+      {card.sepa_score != null ? (
+        <SepaScoreChip
+          score={card.sepa_score}
+          passed={card.sepa_passed}
+          total={card.sepa_total}
+          verdict={card.sepa_verdict || undefined}
+          headline={card.sepa_headline || card.stage_label || undefined}
+        />
+      ) : null}
       {card.why?.length ? <p className="trade-why">{card.why.join(' · ')}</p> : null}
       <p className="trade-honesty">{card.honesty}</p>
     </article>
@@ -75,7 +86,9 @@ export function ReadyTradesView({ setSelected, setActive }: ExperienceViewProps)
   }, [])
 
   const prime = payload?.prime || []
+  const stage2 = payload?.stage2 || []
   const tickets = payload?.actionable || []
+  const allCards = stage2.concat(tickets, prime)
 
   return (
     <section className="reco-light trade-desk">
@@ -93,15 +106,17 @@ export function ReadyTradesView({ setSelected, setActive }: ExperienceViewProps)
         <div>
           <h2>Ready to trade</h2>
           <p>
-            Prime names cleared every money gate we actually have — verdict, ticket, conservative EV, liquidity, breadth.
-            That is still not a guarantee. Paper on Journey. Live stays locked.
+            Stage-2 SEPA from the last Ideas ranking, plus scanner BUY/Ready tickets with a buy and a stop.
+            Ranked by ATQ — structure, not a win-rate claim. Prime is an overlay when those gates actually pass.
+            Paper on Journey. Live stays locked.
           </p>
         </div>
       </header>
       {error ? <p className="stock-peek-note">{error}</p> : null}
+      {payload?.method ? <p className="trade-lede">{payload.method}</p> : null}
       {payload?.empty ? (
         <div className="trade-empty">
-          <strong>No high-evidence ticket today</strong>
+          <strong>No complete ticket today</strong>
           {(payload.empty_why || []).map((line) => <p key={line}>{line}</p>)}
           <p>{payload.next}</p>
           <div className="trade-actions">
@@ -110,20 +125,30 @@ export function ReadyTradesView({ setSelected, setActive }: ExperienceViewProps)
           </div>
         </div>
       ) : null}
-      {prime.length ? (
+      {stage2.length ? (
         <section className="trade-section">
-          <h3>Prime — high evidence</h3>
+          <h3>Stage 2 — SEPA template</h3>
+          <p className="trade-lede">Minervini 7-rule score on official NSE history. Cached from Ideas. Not a guarantee.</p>
           <div className="trade-grid">
-            {prime.map((card) => <ReadyCard key={card.symbol} card={card} onOpen={setPeek} />)}
+            {stage2.map((card) => <ReadyCard key={`s2-${card.symbol}`} card={card} onOpen={setPeek} />)}
           </div>
         </section>
       ) : null}
       {tickets.length ? (
         <section className="trade-section">
-          <h3>Complete tickets — not a high-chance claim</h3>
-          <p className="trade-lede">Buy + stop exist and the combo is not a proven loser. Sample is thin or below Prime.</p>
+          <h3>Complete tickets — Pattern, PreBreakout, Pullback count</h3>
+          <p className="trade-lede">Buy + stop exist and the combo is not a proven loser. ATQ ranks them. Missing EV stays missing.</p>
           <div className="trade-grid">
-            {tickets.map((card) => <ReadyCard key={card.symbol} card={card} onOpen={setPeek} />)}
+            {tickets.map((card) => <ReadyCard key={`tk-${card.symbol}`} card={card} onOpen={setPeek} />)}
+          </div>
+        </section>
+      ) : null}
+      {prime.length ? (
+        <section className="trade-section">
+          <h3>Prime — every evidence gate passed</h3>
+          <p className="trade-lede">Same gates as Telegram. Rare when conservative EV is still unmeasured.</p>
+          <div className="trade-grid">
+            {prime.map((card) => <ReadyCard key={`pm-${card.symbol}`} card={card} onOpen={setPeek} />)}
           </div>
         </section>
       ) : null}
@@ -131,7 +156,7 @@ export function ReadyTradesView({ setSelected, setActive }: ExperienceViewProps)
       {peek ? (
         <StockPeekPopup
           symbol={peek}
-          card={prime.concat(tickets).find((c) => deskSymbol(c.symbol) === peek) as never}
+          card={allCards.find((c) => deskSymbol(c.symbol) === peek) as never}
           onClose={() => setPeek('')}
           onOpenResearch={() => {
             setSelected(peek)

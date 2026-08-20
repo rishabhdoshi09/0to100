@@ -27,6 +27,9 @@
   text-align: left;
 }
 .trade-card.lane-prime { border-color: #b7e0c8; }
+.trade-card.lane-stage2 { border-color: #c9d4f0; }
+.trade-lane.stage2 { color: #3d5a99; }
+.trade-lane.prime { color: var(--rw-green); }
 .trade-card-top { display: flex; justify-content: space-between; gap: 8px; }
 .trade-lane {
   font-size: 11px;

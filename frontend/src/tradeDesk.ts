@@ -1,6 +1,7 @@
 /** Trade hub helpers — Ready / Lab / Journey. No ticker hard-wires. */
 
 export function readyLaneLabel(lane: string): string {
+  if (lane === 'stage2') return 'Stage 2'
   if (lane === 'prime') return 'Prime'
   if (lane === 'actionable') return 'Ticket'
   return lane || 'Watch'

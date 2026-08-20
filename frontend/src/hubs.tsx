@@ -144,7 +144,7 @@ export function IdeasHub({
   const tab = ideasTabOf(active)
   return (
     <HubShell
-      blurb="Research monitor, not the order desk. Best Setups is Minervini SEPA on official NSE history. Tickets that cleared money gates live on Trade → Ready."
+      blurb="Research monitor, not the order desk. Best Setups is Minervini SEPA on official NSE history. Trade → Ready overlays that ranking onto complete tickets — it is not a Prime-only waiting room."
       tabs={IDEAS_TABS}
       active={tab}
       onChange={(next) => setActive(IDEAS_ROUTE[next as (typeof IDEAS_TABS)[number]])}
@@ -166,7 +166,7 @@ export function TradeHub({
   const tab = tradeTabOf(active)
   return (
     <HubShell
-      blurb="The order path. Ready is evidence-gated tickets. Lab is the walk-forward backtest as four jobs. Journey is paper autopilot until live is earned — this desk never arms live."
+      blurb="The order path. Ready ranks Stage-2 SEPA plus complete scan tickets (ATQ). Lab is the walk-forward backtest as four jobs. Journey is paper autopilot until live is earned — this desk never arms live."
       tabs={TRADE_TABS}
       active={tab}
       onChange={(next) => setActive(TRADE_ROUTE[next as (typeof TRADE_TABS)[number]])}

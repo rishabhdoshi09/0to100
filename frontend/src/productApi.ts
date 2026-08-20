@@ -1091,11 +1091,13 @@ export const fetchSignalBacktestStatus = (): Promise<SignalBacktestStatus> =>
 export type ReadyTradeCard = {
   symbol: string
   company: string
-  lane: 'prime' | 'actionable' | string
+  lane: 'prime' | 'actionable' | 'stage2' | string
   verdict?: string
   status?: string
   sector?: string
   score?: number | null
+  atq?: number | null
+  reward_risk?: number | null
   edge_r?: number | null
   entry?: number | null
   stop?: number | null
@@ -1109,15 +1111,25 @@ export type ReadyTradeCard = {
   ev_n?: number | null
   ev_conf?: string
   p_win?: number | null
+  sepa_score?: number | null
+  sepa_passed?: number | null
+  sepa_total?: number | null
+  sepa_verdict?: string | null
+  sepa_headline?: string | null
+  stage_label?: string | null
+  volume_ratio?: number | null
+  rsi?: number | null
 }
 
 export type ReadyQueuePayload = {
   schema_version: number
   places_orders: boolean
   live_locked: boolean
+  method?: string
   scanned_at?: string
   universe_size?: number
   breadth?: string
+  stage2: ReadyTradeCard[]
   prime: ReadyTradeCard[]
   actionable: ReadyTradeCard[]
   rejected_n?: number

@@ -6,6 +6,7 @@ from product.trade_desk import (
     build_backtest_lab,
     build_live_journey,
     build_ready_queue,
+    ticket_quality,
 )
 
 
@@ -38,10 +39,15 @@ def _buy(symbol: str, **extra):
     return row
 
 
+def _queue(scan, market=None, workspace=None):
+    return build_ready_queue(scan=scan, market=market or {}, workspace=workspace or {})
+
+
 def test_ready_queue_empty_is_honest():
-    out = build_ready_queue(scan={"records": []}, market={})
+    out = _queue({"records": []})
     assert out["empty"] is True
     assert out["prime"] == []
+    assert out["stage2"] == []
     assert out["places_orders"] is False
     assert out["live_locked"] is True
     assert any("scan" in w.lower() for w in out["empty_why"])
@@ -49,7 +55,7 @@ def test_ready_queue_empty_is_honest():
 
 def test_prime_survives_money_gates():
     scan = {"records": [_buy("ALPHA")], "scanned_at": "2026-08-20", "universe_size": 1}
-    out = build_ready_queue(scan=scan, market={"health": "healthy"})
+    out = _queue(scan, {"health": "healthy"})
     assert [c["symbol"] for c in out["prime"]] == ["ALPHA"]
     assert out["prime"][0]["entry"] == 100.0
     assert out["prime"][0]["stop"] == 92.0
@@ -58,33 +64,161 @@ def test_prime_survives_money_gates():
 
 def test_negative_edge_never_makes_ready():
     scan = {"records": [_buy("BETA", edge_r=-0.4, ev_lb_pct=-0.8, ev_pct=-0.2)]}
-    out = build_ready_queue(scan=scan, market={})
+    out = _queue(scan)
     assert out["prime"] == []
     assert all(c["symbol"] != "BETA" for c in out["actionable"])
+    assert all(c["symbol"] != "BETA" for c in out["stage2"])
     assert any(r["symbol"] == "BETA" for r in out["rejected_sample"])
 
 
 def test_chase_is_not_ready():
     scan = {"records": [_buy("ALPHA", chase_risk=True, status="Wait for pullback")]}
-    out = build_ready_queue(scan=scan, market={})
+    out = _queue(scan)
     assert out["prime"] == []
     assert out["actionable"] == []
+    assert out["stage2"] == []
 
 
 def test_missing_stop_is_not_a_ticket():
     scan = {"records": [_buy("ALPHA", stop=0, entry=100)]}
-    out = build_ready_queue(scan=scan, market={})
+    out = _queue(scan)
     assert out["prime"] == []
     assert out["actionable"] == []
+    assert out["stage2"] == []
 
 
 def test_does_not_invent_ev_on_thin_sample():
     scan = {"records": [_buy("ALPHA", ev_pct=None, ev_lb_pct=None, ev_n=8, p_win=None)]}
-    out = build_ready_queue(scan=scan, market={})
-    cards = out["prime"] + out["actionable"]
+    out = _queue(scan)
+    cards = out["prime"] + out["actionable"] + out["stage2"]
     assert cards, "plan can still surface without an EV claim"
     for card in cards:
         assert "ev_pct" not in card or card.get("ev_n", 0) >= 30
+
+
+def test_pattern_prebreakout_is_a_ticket():
+    """Real scans are Pattern/PreBreakout — those used to vanish behind a Momentum veto."""
+    row = _buy(
+        "ALPHA",
+        signals=["TRIANGLE", "CUP_HANDLE", "ACCUMULATION", "POCKET_PIVOT"],
+        categories=["Pattern", "PreBreakout"],
+        high_conviction=False,
+        breakout_conviction=0,
+        edge_r=None,
+        ev_pct=None,
+        ev_lb_pct=None,
+        ev_n=0,
+        p_win=None,
+        rsi=58,
+        volume_ratio=1.4,
+    )
+    out = _queue({"records": [row]})
+    assert out["empty"] is False
+    assert out["prime"] == []
+    assert [c["symbol"] for c in out["actionable"]] == ["ALPHA"]
+    assert out["actionable"][0]["atq"] > 0
+    assert "ev_pct" not in out["actionable"][0]
+
+
+def test_blowoff_rsi_is_not_ready():
+    out = _queue({"records": [_buy("ALPHA", rsi=83, high_conviction=False, breakout_conviction=0)]})
+    assert out["prime"] == []
+    assert out["actionable"] == []
+
+
+def test_sepa_stage2_overlay_from_cache_not_rescan():
+    scan = {
+        "records": [
+            _buy(
+                "ALPHA",
+                signals=["TRIANGLE"],
+                categories=["Pattern"],
+                high_conviction=False,
+                breakout_conviction=0,
+                edge_r=None,
+                ev_pct=None,
+                ev_lb_pct=None,
+                ev_n=0,
+                score=60,
+                rsi=55,
+                volume_ratio=1.5,
+            )
+        ]
+    }
+    workspace = {
+        "categories": [
+            {
+                "id": "best_setups",
+                "cards": [
+                    {
+                        "symbol": "ALPHA",
+                        "company": "Alpha Co",
+                        "sepa_score": 88,
+                        "sepa_passed": 7,
+                        "sepa_total": 7,
+                        "sepa_headline": "Stage 2 SEPA",
+                        "stage_label": "STAGE 2",
+                        "entry": 100.0,
+                        "stop": 92.0,
+                        "target": 118.0,
+                    }
+                ],
+            }
+        ]
+    }
+    out = _queue(scan, workspace=workspace)
+    assert [c["symbol"] for c in out["stage2"]] == ["ALPHA"]
+    assert out["stage2"][0]["sepa_score"] == 88
+    assert out["stage2"][0]["lane"] == "stage2"
+    assert all(c["symbol"] != "ALPHA" for c in out["actionable"])
+
+
+def test_atq_ranks_higher_sepa_ahead_of_weaker_template():
+    a = _buy(
+        "ALPHA",
+        signals=["TRIANGLE"],
+        categories=["Pattern"],
+        high_conviction=False,
+        breakout_conviction=0,
+        edge_r=None,
+        ev_pct=None,
+        ev_lb_pct=None,
+        ev_n=0,
+        score=50,
+        sepa_score=90,
+        volume_ratio=1.8,
+        rsi=55,
+    )
+    b = _buy(
+        "BETA",
+        signals=["TRIANGLE"],
+        categories=["Pattern"],
+        high_conviction=False,
+        breakout_conviction=0,
+        edge_r=None,
+        ev_pct=None,
+        ev_lb_pct=None,
+        ev_n=0,
+        score=50,
+        sepa_score=40,
+        volume_ratio=0.6,
+        rsi=70,
+    )
+    out = _queue({"records": [a, b]})
+    assert [c["symbol"] for c in out["actionable"]] == ["ALPHA", "BETA"]
+    assert out["actionable"][0]["atq"] > out["actionable"][1]["atq"]
+
+
+def test_ticket_quality_is_zero_on_blowoff_and_rewards_sepa():
+    base = {
+        "entry": 100, "stop": 92, "target": 118, "score": 70,
+        "volume_ratio": 1.5, "rsi": 55,
+    }
+    assert ticket_quality({**base, "sepa_score": 90}) > ticket_quality({**base, "sepa_score": 40})
+    assert ticket_quality({**base, "rsi": 83}) == 0.0
+    missing_ev = ticket_quality(base)
+    assert missing_ev > 0
+    assert ticket_quality({**base, "edge_r": -0.4}) == 0.0
 
 
 def test_lab_use_cases_and_no_orders():

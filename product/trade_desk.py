@@ -1,18 +1,22 @@
 """Trade desk: ready queue, backtest lab, paper→live journey.
 
-Research (Ideas) stays a monitor. This module is the production path the
-user asked for:
+Research (Ideas) stays a monitor. This module is the production path.
 
-  Ready  — names that clear money gates (Prime = high-evidence only)
+  Ready  — ticket board: Stage-2 SEPA overlay + scanner BUY/Ready plans,
+           ranked by Asymmetric Ticket Quality (ATQ). Prime is an overlay
+           when those gates actually pass — not the only lane.
   Lab    — walk-forward backtest as use cases, not a dump
   Journey — paper autopilot → live, earned, never toggled
 
 Never invents EV, never arms LIVE, never hard-wires a ticker.
+GET Ready is cache-only: last scan + last Ideas SEPA ranking. It does not
+re-run rank_best_setups.
 """
 from __future__ import annotations
 
 from typing import Any, Mapping, Sequence
 
+from product.breakout_quality import RSI_HARD
 from product.production_ladder import (
     PAPER_E4_N,
     PAPER_TRANSITION_N,
@@ -21,21 +25,92 @@ from product.production_ladder import (
 )
 
 READY_EDGE_FLOOR = 0.05  # R; below this is thin, not a money claim
+RSI_SOFT_DEMOTE = 72.0
+SEPA_READY_FLOOR = 40
+SEPA_WATCH_FLOOR = 70
+STAGE2_TICKET_CAP = 12
+READY_TICKET_CAP = 16
+PRIME_TICKET_CAP = 8
+ATQ_METHOD = (
+    "ATQ v1 — Asymmetric Ticket Quality: reward/risk × scan score × "
+    "SEPA Stage-2 overlay × volume vs 20d × RSI room. Conservative EV "
+    "is an overlay only; missing EV never zeros a complete ticket. "
+    "Not a win-rate claim."
+)
 
 
 def _f(value: Any) -> float | None:
     try:
         if value in (None, ""):
             return None
-        return float(value)
+        n = float(value)
     except (TypeError, ValueError):
         return None
+    if n != n:  # NaN
+        return None
+    return n
+
+
+def _clip(value: float, lo: float, hi: float) -> float:
+    return max(lo, min(hi, value))
 
 
 def _upside(entry: float | None, target: float | None) -> float | None:
     if entry is None or target is None or entry <= 0:
         return None
     return round((target / entry - 1.0) * 100.0, 1)
+
+
+def reward_risk(entry: Any, stop: Any, target: Any) -> float | None:
+    e, s, t = _f(entry), _f(stop), _f(target)
+    if e is None or s is None or t is None:
+        return None
+    risk = e - s
+    reward = t - e
+    if risk <= 0 or reward <= 0:
+        return None
+    return round(reward / risk, 2)
+
+
+def ticket_quality(row: Mapping[str, Any]) -> float:
+    """ATQ in 0..~2. Structure-first; missing EV does not wipe the score."""
+    rr = reward_risk(row.get("entry"), row.get("stop"), row.get("target"))
+    r_star = _clip((rr or 1.0) / 2.0, 0.5, 1.5)
+
+    score = _f(row.get("score")) or 0.0
+    scan_frac = _clip(score / 100.0, 0.0, 1.0)
+
+    sepa = _f(row.get("sepa_score"))
+    sepa_frac = _clip(0.55 + 0.45 * (sepa / 100.0), 0.55, 1.0) if sepa is not None else 0.70
+
+    vol_ratio = _f(row.get("volume_ratio"))
+    if vol_ratio is None:
+        vol_frac = 0.80
+    else:
+        vol_frac = _clip(0.55 + 0.20 * vol_ratio, 0.55, 1.15)
+
+    rsi = _f(row.get("rsi"))
+    if rsi is None:
+        rsi_frac = 0.90
+    elif rsi >= RSI_HARD:
+        rsi_frac = 0.0
+    elif rsi >= RSI_SOFT_DEMOTE:
+        rsi_frac = 0.55
+    else:
+        rsi_frac = 1.0
+
+    edge_r = _f(row.get("edge_r"))
+    if edge_r is None:
+        edge_frac = 1.0
+    elif edge_r <= -READY_EDGE_FLOOR:
+        edge_frac = 0.0
+    else:
+        edge_frac = _clip(0.85 + 0.08 * edge_r, 0.85, 1.20)
+
+    return round(
+        max(0.0, r_star * scan_frac * sepa_frac * vol_frac * rsi_frac * edge_frac),
+        4,
+    )
 
 
 def _breadth_verdict(market: Mapping[str, Any] | None) -> str:
@@ -78,21 +153,51 @@ def _loser_edge(row: Mapping[str, Any]) -> bool:
     return False
 
 
+def _rsi_hard_reject(row: Mapping[str, Any]) -> bool:
+    rsi = _f(row.get("rsi"))
+    return rsi is not None and rsi >= RSI_HARD
+
+
+def _is_chase(row: Mapping[str, Any]) -> bool:
+    return bool(row.get("chase_risk") or row.get("extended"))
+
+
 def _actionable(row: Mapping[str, Any]) -> tuple[bool, str]:
+    """Complete BUY/Ready ticket. Pattern / PreBreakout / Pullback count.
+
+    Prime still requires Momentum/Breakout via prime_check. Ready used to
+    copy that veto and emptied the board on real scans.
+    """
     verdict = str(row.get("verdict") or "").upper()
     status = str(row.get("status") or "")
     if verdict not in {"BUY", "STRONG BUY"} and status != "Ready to trade":
         return False, "Scanner did not mark BUY / Ready to trade"
-    if row.get("chase_risk") or row.get("extended"):
+    if _is_chase(row):
         return False, "Chase / extension — late entry"
     if not _has_plan(row):
         return False, "No entry/stop — no risk plan"
     if _loser_edge(row):
         return False, "Measured edge or conservative EV is not positive"
-    cats = set(row.get("categories") or [])
-    if cats and not (cats & {"Momentum", "Breakout"}):
-        return False, "Not a momentum or breakout ticket"
+    if _rsi_hard_reject(row):
+        return False, "RSI blow-off — no room to run"
     return True, "Complete ticket; not a return promise"
+
+
+def _honesty(lane: str) -> str:
+    if lane == "prime":
+        return (
+            "Prime means every evidence gate passed — not a guarantee. "
+            "Paper first. Live stays locked until the journey earns it."
+        )
+    if lane == "stage2":
+        return (
+            "Stage-2 SEPA overlay from the last Ideas ranking on official "
+            "history. Template fit, not a win rate."
+        )
+    return (
+        "Complete ticket ranked by ATQ. Missing EV is not invented — "
+        "not a high-chance claim."
+    )
 
 
 def _card(row: Mapping[str, Any], *, lane: str, why: Sequence[str]) -> dict[str, Any]:
@@ -109,6 +214,17 @@ def _card(row: Mapping[str, Any], *, lane: str, why: Sequence[str]) -> dict[str,
             "ev_conf": str(row.get("ev_conf") or ""),
             "p_win": _f(row.get("p_win")),
         }
+    sepa = _f(row.get("sepa_score"))
+    passed = row.get("sepa_passed")
+    total = row.get("sepa_total")
+    try:
+        sepa_passed = int(passed) if passed is not None else None
+    except (TypeError, ValueError):
+        sepa_passed = None
+    try:
+        sepa_total = int(total) if total is not None else None
+    except (TypeError, ValueError):
+        sepa_total = None
     return {
         "symbol": str(row.get("symbol") or "").upper(),
         "company": str(row.get("company") or row.get("symbol") or ""),
@@ -117,21 +233,104 @@ def _card(row: Mapping[str, Any], *, lane: str, why: Sequence[str]) -> dict[str,
         "status": str(row.get("status") or ""),
         "sector": str(row.get("sector") or "—"),
         "score": _f(row.get("score")),
+        "atq": ticket_quality(row),
+        "reward_risk": reward_risk(entry, stop, target),
         "edge_r": _f(row.get("edge_r")),
         "entry": entry,
         "stop": stop,
         "target": target,
         "cmp": _f(row.get("price") or row.get("cmp")),
         "upside_from_buy_pct": _upside(entry, target),
+        "volume_ratio": _f(row.get("volume_ratio")),
+        "rsi": _f(row.get("rsi")),
+        "sepa_score": int(sepa) if sepa is not None else None,
+        "sepa_passed": sepa_passed,
+        "sepa_total": sepa_total,
+        "sepa_verdict": str(row.get("sepa_verdict") or "") or None,
+        "sepa_headline": str(row.get("sepa_headline") or "") or None,
+        "stage_label": str(row.get("stage_label") or row.get("sepa_stage") or "") or None,
+        "categories": [str(c) for c in (row.get("categories") or []) if c],
+        "signals": [str(s) for s in (row.get("signals") or []) if s],
+        "source": str(row.get("source") or "scan"),
         "why": [str(x) for x in why if x],
-        "honesty": (
-            "Prime means every evidence gate passed — not a guarantee. "
-            "Paper first. Live stays locked until the journey earns it."
-            if lane == "prime"
-            else "Ticket is complete. Measured sample is thin or below Prime — not a high-chance claim."
-        ),
+        "honesty": _honesty(lane),
         **ev,
     }
+
+
+def _extract_best_setups(workspace: Mapping[str, Any] | None) -> list[dict[str, Any]]:
+    if not workspace:
+        return []
+    for cat in workspace.get("categories") or []:
+        if isinstance(cat, dict) and cat.get("id") == "best_setups":
+            return [c for c in (cat.get("cards") or []) if isinstance(c, dict)]
+    cards = workspace.get("best_setups")
+    if isinstance(cards, list):
+        return [c for c in cards if isinstance(c, dict)]
+    return []
+
+
+_WORKSPACE_UNSET = object()
+
+
+def _load_sepa_workspace(workspace: Any) -> Mapping[str, Any] | None:
+    if workspace is not _WORKSPACE_UNSET:
+        return workspace
+    try:
+        from product.recommendations_workspace import load_last_recommendations_workspace
+        return load_last_recommendations_workspace()
+    except Exception:
+        return None
+
+
+def _merge_sepa_row(card: Mapping[str, Any], scan_by_symbol: Mapping[str, Mapping[str, Any]]) -> dict[str, Any]:
+    symbol = str(card.get("symbol") or "").upper().strip()
+    scan_row = dict(scan_by_symbol.get(symbol) or {})
+    merged = dict(scan_row)
+    merged["symbol"] = symbol
+    merged["company"] = card.get("company") or scan_row.get("company") or symbol
+    merged["source"] = "sepa"
+    for key in ("entry", "stop", "target"):
+        if _f(merged.get(key)) is None:
+            merged[key] = card.get(key)
+    if _f(merged.get("score")) is None:
+        merged["score"] = card.get("score") or card.get("sepa_score")
+    merged["sepa_score"] = card.get("sepa_score")
+    merged["sepa_passed"] = card.get("sepa_passed")
+    merged["sepa_total"] = card.get("sepa_total")
+    merged["sepa_verdict"] = card.get("sepa_verdict")
+    merged["sepa_headline"] = card.get("sepa_headline") or card.get("setup_label")
+    merged["stage_label"] = card.get("stage_label")
+    if not merged.get("sector"):
+        merged["sector"] = card.get("sector")
+    if _f(merged.get("rsi")) is None:
+        merged["rsi"] = card.get("rsi")
+    if _f(merged.get("volume_ratio")) is None:
+        merged["volume_ratio"] = card.get("volume_ratio")
+    return merged
+
+
+def _stage2_ok(row: Mapping[str, Any]) -> bool:
+    sepa = _f(row.get("sepa_score")) or 0.0
+    if sepa < SEPA_READY_FLOOR:
+        return False
+    if not _has_plan(row) or _is_chase(row) or _loser_edge(row) or _rsi_hard_reject(row):
+        return False
+    verdict = str(row.get("verdict") or "").upper()
+    status = str(row.get("status") or "")
+    if verdict in {"BUY", "STRONG BUY"} or status == "Ready to trade":
+        return True
+    return sepa >= SEPA_WATCH_FLOOR
+
+
+def _rank_card(card: Mapping[str, Any]) -> tuple:
+    atq = _f(card.get("atq")) or 0.0
+    sepa = _f(card.get("sepa_score")) or 0.0
+    has_ev = 1 if card.get("ev_pct") is not None and int(card.get("ev_n") or 0) >= 30 else 0
+    lb = _f(card.get("ev_lb_pct"))
+    edge = _f(card.get("edge_r")) or 0.0
+    score = _f(card.get("score")) or 0.0
+    return (atq, sepa, has_ev, lb if lb is not None else -999.0, edge, score)
 
 
 def build_ready_queue(
@@ -139,8 +338,9 @@ def build_ready_queue(
     scan: Mapping[str, Any] | None = None,
     market: Mapping[str, Any] | None = None,
     records: Sequence[Mapping[str, Any]] | None = None,
+    workspace: Any = _WORKSPACE_UNSET,
 ) -> dict[str, Any]:
-    """Evidence-gated ready list. Empty is a valid, honest answer."""
+    """Ticket board from last scan + cached SEPA. Empty is a valid answer."""
     scan = dict(scan or {})
     if records is None:
         records = list(scan.get("records") or [])
@@ -156,6 +356,11 @@ def build_ready_queue(
     prime: list[dict[str, Any]] = []
     actionable: list[dict[str, Any]] = []
     rejected: list[dict[str, str]] = []
+    scan_by_symbol: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        symbol = str(row.get("symbol") or "").upper()
+        if symbol:
+            scan_by_symbol[symbol] = row
 
     try:
         from scan.prime_filter import prime_check
@@ -172,7 +377,13 @@ def build_ready_queue(
         fail = ""
         if prime_check is not None:
             is_prime, prime_why, fail = prime_check(row, breadth, demoted)
-        if is_prime and _has_plan(row) and not _loser_edge(row) and not row.get("chase_risk") and not row.get("extended"):
+        if (
+            is_prime
+            and _has_plan(row)
+            and not _loser_edge(row)
+            and not _is_chase(row)
+            and not _rsi_hard_reject(row)
+        ):
             prime.append(_card(row, lane="prime", why=prime_why))
             continue
         if ok_plan:
@@ -181,51 +392,77 @@ def build_ready_queue(
         if str(row.get("verdict") or "").upper() in {"BUY", "STRONG BUY"} or str(row.get("status") or "") == "Ready to trade":
             rejected.append({"symbol": symbol, "reason": fail or plan_why})
 
-    def _rank(card: Mapping[str, Any]) -> tuple:
-        has_ev = 1 if card.get("ev_pct") is not None and int(card.get("ev_n") or 0) >= 30 else 0
-        lb = _f(card.get("ev_lb_pct"))
-        edge = _f(card.get("edge_r")) or 0.0
-        score = _f(card.get("score")) or 0.0
-        return (has_ev, lb if lb is not None else -999.0, edge, score)
+    sepa_cards = _extract_best_setups(_load_sepa_workspace(workspace))
+    stage2: list[dict[str, Any]] = []
+    prime_symbols = {str(c.get("symbol") or "").upper() for c in prime}
+    for card in sepa_cards:
+        symbol = str(card.get("symbol") or "").upper().strip()
+        if not symbol or symbol in prime_symbols:
+            continue
+        merged = _merge_sepa_row(card, scan_by_symbol)
+        if not _stage2_ok(merged):
+            continue
+        why = [merged.get("sepa_headline") or "SEPA Stage-2"]
+        if merged.get("sepa_passed") is not None and merged.get("sepa_total"):
+            why.append(f"{merged['sepa_passed']}/{merged['sepa_total']} rules")
+        if merged.get("stage_label"):
+            why.append(str(merged["stage_label"]))
+        stage2.append(_card(merged, lane="stage2", why=why))
 
-    prime.sort(key=_rank, reverse=True)
-    actionable.sort(key=_rank, reverse=True)
+    stage2_symbols = {str(c.get("symbol") or "").upper() for c in stage2}
+    actionable = [
+        c for c in actionable if str(c.get("symbol") or "").upper() not in stage2_symbols
+    ]
 
+    prime.sort(key=_rank_card, reverse=True)
+    stage2.sort(key=_rank_card, reverse=True)
+    actionable.sort(key=_rank_card, reverse=True)
+    prime = prime[:PRIME_TICKET_CAP]
+    stage2 = stage2[:STAGE2_TICKET_CAP]
+    actionable = actionable[:READY_TICKET_CAP]
+
+    empty = not prime and not stage2 and not actionable
     empty_why: list[str] = []
-    if not rows:
+    if not rows and not stage2:
         empty_why.append("No scan is on file. Run a market scan first.")
-    elif not prime and not actionable:
+    elif empty:
         empty_why.append(
-            "No name clears the money gates today — BUY + stop + non-negative measured edge."
+            "No complete tickets today — BUY/Ready with entry and stop, "
+            "not a chase, not a measured loser, RSI under 82."
         )
-        if breadth == "NARROW":
-            empty_why.append("Breadth is NARROW — Prime is vetoed.")
         if rejected:
-            empty_why.append(f"{len(rejected)} BUY name(s) failed a gate (chase, missing stop, or loser edge).")
+            empty_why.append(
+                f"{len(rejected)} BUY name(s) failed a gate (chase, missing stop, loser edge, or blow-off RSI)."
+            )
+    if breadth == "NARROW" and not empty:
+        empty_why.append("Breadth is NARROW — size down. Prime stays vetoed.")
 
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "places_orders": False,
         "live_locked": True,
+        "method": ATQ_METHOD,
         "scanned_at": scan.get("scanned_at") or "",
         "universe_size": int(scan.get("universe_size") or len(rows)),
         "breadth": breadth or "—",
-        "prime": prime[:12],
-        "actionable": actionable[:12],
+        "stage2": stage2,
+        "prime": prime,
+        "actionable": actionable,
         "rejected_n": len(rejected),
         "rejected_sample": rejected[:8],
-        "empty": not prime and not actionable,
+        "empty": empty,
         "empty_why": empty_why,
         "disclaimer": (
             "Ready is not a broker order and not a return promise. "
-            "Prime uses the same evidence gates as Telegram 💎 (verdict, type, "
-            "conviction, conservative EV, liquidity, breadth, regime). "
+            "Stage-2 is Minervini SEPA on official history (cached Ideas ranking). "
+            "ATQ ranks structure; it is not a win rate. "
+            "Prime still uses Telegram 💎 gates when they actually pass. "
             "Missing numbers stay missing."
         ),
         "next": (
             "Open Lab to see which signals earned in this tape, then Journey to paper-trade them."
-            if prime or actionable
-            else "Fill the desk (scan + backtest) before expecting a Ready name."
+            if not empty
+            else "Fill the desk (scan + Ideas SEPA) before expecting a Ready name."
         ),
     }
 
