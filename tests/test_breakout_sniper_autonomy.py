@@ -173,7 +173,23 @@ def test_records_from_payload():
     assert records_from_payload({"records": [{"symbol": "A"}]}) == [{"symbol": "A"}]
 
 
-def test_sniper_watch_symbols_includes_prebreakout_not_just_watchlist():
+def test_start_sniper_restarts_when_ticks_go_stale(monkeypatch):
+    import time
+    import scan.breakout_sniper as bs
+
+    class DeadTicker:
+        def close(self):
+            self.closed = True
+
+    dead = DeadTicker()
+    monkeypatch.setattr(bs, "_started", True, raising=False)
+    bs._ticker = dead
+    bs._last_tick_ts = time.time() - 120
+    monkeypatch.setattr("data.nse_live._is_trading_now", lambda: True)
+    monkeypatch.setattr("execution.trade_executor.kite_ready", lambda: False)
+    assert bs.start_sniper() is False
+    assert bs._started is False
+    assert bs._ticker is None
     payload = {"records": [
         {"symbol": "SETUP", "status": "Ready to trade", "signals": ["MOMENTUM"]},
         {"symbol": "NEAR", "status": "Watch for breakout", "signals": ["PRE_BREAKOUT"]},

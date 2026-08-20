@@ -544,7 +544,7 @@ export function RadarHomeView(props: ExperienceViewProps & {
     load()
     const timer = window.setInterval(load, 20_000)
     return () => { alive = false; window.clearInterval(timer) }
-  }, [dashboard.scan.scanned_at, dashboard.long_term.scanned_at, dashboard.generated_at])
+  }, [dashboard.scan.scanned_at, dashboard.long_term.scanned_at])
 
   const scanCount = dashboard.scan.records?.length || 0
   const radarCount = (radar?.counts.breakouts || 0) + (radar?.counts.momentum || 0) + (radar?.counts.long_term_picks || 0)
@@ -912,8 +912,9 @@ export function MarketScannerView(props: ExperienceViewProps & {
       fetchScannerWorkspace(tab)
         .then((result) => {
           if (!alive) return
-          setRows(result.rows as RadarRow[])
-          saveCachedJson(`scanner:${tab}`, result.rows)
+          const next = (result.rows || []) as RadarRow[]
+          setRows((prev) => (next.length === 0 && prev.length > 0 ? prev : next))
+          if (next.length > 0) saveCachedJson(`scanner:${tab}`, next)
           setMeta({ scanned_at: result.scanned_at, universe: result.universe_size })
           setBestBreakout((result.best_breakout as RadarRow | null | undefined) || null)
           setBestAmongFund((result.best_among_fundamentals as RadarRow | null | undefined) || null)
@@ -928,7 +929,7 @@ export function MarketScannerView(props: ExperienceViewProps & {
     const pollMs = (tab === 'Breakouts' || tab === 'Pre-Breakout') ? 20_000 : 60_000
     const timer = window.setInterval(load, pollMs)
     return () => { alive = false; window.clearInterval(timer) }
-  }, [tab, dashboard.scan.scanned_at, dashboard.long_term.scanned_at, dashboard.generated_at])
+  }, [tab, dashboard.scan.scanned_at, dashboard.long_term.scanned_at])
 
   const sectors = useMemo(() => [...new Set(rows.map((r) => r.sector).filter(Boolean))].sort(), [rows])
   const filtered = rows.filter((row) => {

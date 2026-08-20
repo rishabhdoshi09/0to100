@@ -105,6 +105,62 @@ def test_bulk_refresh_skips_per_symbol_network(monkeypatch):
     assert out[0]["rsi"] is not None
 
 
+def test_refresh_limit_keeps_unscanned_tail(monkeypatch):
+    from product import live_technicals as lt
+
+    monkeypatch.setattr(lt, "ensure_live_store_overlay", lambda: 0)
+    monkeypatch.setattr("data.bhavcopy_runtime.get_ohlcv", lambda sym: None)
+    monkeypatch.setattr("data.nse_live._is_trading_now", lambda: False)
+    rows = [{"symbol": f"S{i}", "volume_ratio": 2.0, "rsi": 50} for i in range(5)]
+    out = lt.refresh_rows_technicals(rows, limit=2, bulk_overlay=True)
+    assert len(out) == 5
+    assert [r["symbol"] for r in out] == [f"S{i}" for i in range(5)]
+
+
+def test_partial_session_volume_does_not_demote_scan_ratio(monkeypatch):
+    """A 10am print at 0.3× avg-day must not wipe a scan-time 2.0× sniper lane."""
+    from product import live_technicals as lt
+    import pandas as pd
+
+    idx = pd.date_range("2026-07-01", periods=30, freq="B")
+    live_idx = idx[-1]
+    frame = pd.DataFrame(
+        {
+            "open": list(range(100, 130)),
+            "high": list(range(102, 132)),
+            "low": list(range(98, 128)),
+            "close": list(range(100, 130)),
+            "volume": [1_000_000] * 29 + [300_000],
+        },
+        index=idx,
+    )
+    monkeypatch.setattr(lt, "ensure_live_store_overlay", lambda: 0)
+    monkeypatch.setattr("data.bhavcopy_runtime.get_ohlcv", lambda sym: frame.copy())
+    monkeypatch.setattr("core.market_clock.today_ist", lambda: live_idx.date())
+    monkeypatch.setattr("data.nse_live._is_trading_now", lambda: True)
+    monkeypatch.setattr(lt, "_session_frac", lambda: 0.20)
+    row = {"symbol": "SNIPE", "rsi": 55.0, "price": 129.0, "volume_ratio": 2.0, "avg_vol20": 1_000_000}
+    out = lt.refresh_row_technicals(row)
+    assert out["volume_ratio"] >= 2.0
+
+
+def test_today_spike_is_not_the_20d_high(monkeypatch):
+    from product import live_technicals as lt
+    import pandas as pd
+
+    idx = pd.date_range("2026-07-01", periods=25, freq="B")
+    close = [100.0] * 24 + [100.0]
+    high = [102.0] * 24 + [130.0]  # today's wick
+    frame = pd.DataFrame(
+        {"open": close, "high": high, "low": [98] * 25, "close": close, "volume": [1e6] * 25},
+        index=idx,
+    )
+    monkeypatch.setattr("core.market_clock.today_ist", lambda: idx[-1].date())
+    out = lt._structure_from_frame(frame, 100.0)
+    assert out["high_20d"] == pytest.approx(102.0)
+    assert out["pct_below_20d_high"] < 5.0
+
+
 def test_kite_last_print_overrides_store_close(monkeypatch):
     from product import live_technicals as lt
 

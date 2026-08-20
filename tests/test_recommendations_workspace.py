@@ -384,6 +384,38 @@ def test_serve_recommendations_reuses_disk_cache(tmp_path, monkeypatch):
     assert stale["served_from_cache"] is False
 
 
+def test_serve_keeps_last_ranking_when_scan_file_goes_empty(tmp_path, monkeypatch):
+    import product.recommendations_workspace as rw
+    monkeypatch.setattr(rw, "WORKSPACE_CACHE", tmp_path / "recommendations_workspace.json")
+    scan = {
+        "scanned_at": "2026-08-19T10:00:00+00:00",
+        "records": [
+            {
+                "symbol": "TRENDY", "company": "Trendy Co", "score": 70,
+                "signals": ["MOMENTUM"], "verdict": "BUY", "status": "Ready to trade",
+                "chase_risk": False, "price": 110, "entry": 100, "target": 125,
+                "stop": 95, "rsi": 58, "volume_ratio": 1.5, "avg_vol20": 1e6,
+            },
+        ],
+    }
+    first = rw.serve_recommendations_workspace(
+        scan_payload=scan,
+        long_term_payload={"scanned_at": "2026-08-19T09:00:00+00:00", "records": []},
+        refresh_technicals=False,
+        compute_sepa=False,
+    )
+    assert rw._card_count(first) > 0
+    empty = rw.serve_recommendations_workspace(
+        scan_payload={"scanned_at": "", "records": []},
+        long_term_payload={"scanned_at": "", "records": []},
+        refresh_technicals=False,
+        compute_sepa=False,
+    )
+    assert empty["served_from_cache"] is True
+    assert empty.get("stale_ranking") is True
+    assert rw._card_count(empty) == rw._card_count(first)
+
+
 def test_cached_workspace_mismatch_is_ignored(tmp_path, monkeypatch):
     import product.recommendations_workspace as rw
     monkeypatch.setattr(rw, "WORKSPACE_CACHE", tmp_path / "recommendations_workspace.json")

@@ -36,6 +36,8 @@ _fired: dict[str, set] = {}        # {YYYY-MM-DD: {symbols}}
 _arm: dict[str, float] = {}        # symbol -> ts when it first CLEARED the level
 _ticker = None
 _started = False
+_last_tick_ts = 0.0
+_SNIPER_STALE_S = 90.0
 
 # ── Confirmation thresholds (the false-break killer) ─────────────────────────
 # A tick TOUCHING the level is not a breakout — the intraday false-break is
@@ -370,11 +372,38 @@ def refresh_watch(results: list[dict]) -> int:
 
 
 def start_sniper() -> bool:
-    """Start the tick stream (idempotent). False when Kite/ws unavailable."""
-    global _ticker, _started
+    """Start the tick stream (idempotent). False when Kite/ws unavailable.
+
+    A socket that stays "started" but stops ticking during market hours is
+    treated as dead — daily token expiry and silent WS hangs used to mute
+    Telegram until process restart.
+    """
+    global _ticker, _started, _last_tick_ts
+    stale_ticker = None
     with _lock:
         if _started:
-            return True
+            trading = False
+            try:
+                from data.nse_live import _is_trading_now
+                trading = bool(_is_trading_now())
+            except Exception:
+                trading = False
+            hung = _ticker is None or (
+                trading
+                and _last_tick_ts > 0
+                and (time.time() - _last_tick_ts) > _SNIPER_STALE_S
+            )
+            if not hung:
+                return True
+            stale_ticker = _ticker
+            _ticker = None
+            _started = False
+            log.warning("sniper_stale_restart", idle_s=int(time.time() - _last_tick_ts) if _last_tick_ts else 0)
+    if stale_ticker is not None:
+        try:
+            stale_ticker.close()
+        except Exception:
+            pass
     try:
         from execution.trade_executor import kite_ready
         if not kite_ready():
@@ -382,6 +411,8 @@ def start_sniper() -> bool:
         from data.kite_client import KiteClient
 
         def on_ticks(ws, ticks):
+            global _last_tick_ts
+            _last_tick_ts = time.time()
             try:
                 from core.health import beat as _hb
                 _hb("sniper", note=f"{len(ticks)} ticks")
@@ -418,6 +449,7 @@ def start_sniper() -> bool:
         _ticker = kws
         with _lock:
             _started = True
+            _last_tick_ts = time.time()
         log.info("sniper_started")
         return True
     except Exception as exc:
