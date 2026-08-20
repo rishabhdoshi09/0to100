@@ -23,9 +23,8 @@ import { HomeTodayPath, useTodayFloors } from './HomeTodayPath'
 import { decideNextStep, type FloorContext } from './homeFloorPath'
 import { jobClock } from './scanRunner'
 import { DeskWait } from './DeskWait'
-import { BuyThesisSheet } from './BuyThesisSheet'
-import { deskSymbol, thesisReplacesList } from './deskThesis'
-import { usePhoneLayout } from './phoneLayout'
+import { StockPeekPopup } from './StockPeekPopup'
+import { deskSymbol } from './deskThesis'
 import type { DashboardPayload } from './types'
 import { loadCachedJson, loadDeskSession, patchDeskSession, saveCachedJson } from './deskSession'
 
@@ -510,8 +509,7 @@ export function RadarHomeView(props: ExperienceViewProps & {
   onWatchlist: (symbol: string) => void
   onOpenFloor?: (page: string) => void
 }) {
-  const { dashboard, selected, setSelected, bars, setActive, depth, marketScan, longTermScan, runControl, onCompare, onWatchlist, onOpenFloor } = props
-  const phone = usePhoneLayout()
+  const { dashboard, selected, setSelected, setActive, depth, marketScan, longTermScan, runControl, onCompare, onWatchlist, onOpenFloor } = props
   const todayPath = useTodayFloors()
   const [radar, setRadar] = useState<RadarHome | null>(() => loadCachedJson<RadarHome>('radar-home'))
   const [readiness, setReadiness] = useState<ProductReadiness | null>(null)
@@ -683,10 +681,9 @@ export function RadarHomeView(props: ExperienceViewProps & {
     .slice(0, 8)
 
   const thesisSheet = selected ? (
-    <BuyThesisSheet
+    <StockPeekPopup
       symbol={deskSymbol(selected)}
-      bars={bars}
-      row={row as Record<string, unknown> | null}
+      card={row as Record<string, unknown> | null}
       onClose={() => setSelected('')}
       onOpenResearch={() => setActive('Stock Intelligence')}
       onCompare={() => onCompare(selected)}
@@ -714,10 +711,6 @@ export function RadarHomeView(props: ExperienceViewProps & {
     dashboard.data.options_eod?.symbols,
     dashboard.session?.last_session_label,
   ])
-
-  if (thesisReplacesList(phone, selected) && thesisSheet) {
-    return <div className="reco-light reco-thesis-only">{thesisSheet}</div>
-  }
 
   return (
     <div className="reco-light">
@@ -863,8 +856,9 @@ export function RadarHomeView(props: ExperienceViewProps & {
         </div>
       )}
 
-      {thesisSheet || (
-        <p className="reco-foot">Tap a name for the buy thesis — why it is here, filings, sales, book, and chart.</p>
+      {thesisSheet}
+      {selected ? null : (
+        <p className="reco-foot">Tap a name for fundamentals, ratios and technicals.</p>
       )}
 
       <p className="reco-foot">
@@ -880,7 +874,6 @@ export function MarketScannerView(props: ExperienceViewProps & {
   onWatchlist?: (symbol: string) => void
 }) {
   const { dashboard, selected, setSelected, bars, setActive, depth, marketScan, longTermScan, onCompare, onWatchlist } = props
-  const phone = usePhoneLayout()
   const scannerTabs = depth === 'professional'
     ? ['Breakouts', 'Momentum', 'Conviction', 'Pre-Breakout', 'Long-Term', 'F&O', 'Avoid']
     : ['Breakouts', 'Momentum', 'Long-Term']
@@ -943,21 +936,16 @@ export function MarketScannerView(props: ExperienceViewProps & {
 
   const selectedRow = filtered.find((r) => deskSymbol(r.symbol) === deskSymbol(selected))
     || rows.find((r) => deskSymbol(r.symbol) === deskSymbol(selected))
-  const thesisSheet = selected ? (
-    <BuyThesisSheet
+  const peek = selected ? (
+    <StockPeekPopup
       symbol={deskSymbol(selected)}
-      bars={bars}
-      row={selectedRow as Record<string, unknown> | null}
+      card={selectedRow as Record<string, unknown> | null}
       onClose={() => setSelected('')}
       onOpenResearch={() => setActive('Stock Intelligence')}
       onCompare={() => onCompare(selected)}
       onWatchlist={() => onWatchlist?.(selected)}
     />
   ) : null
-
-  if (thesisReplacesList(phone, selected) && thesisSheet) {
-    return <section className="reco-light reco-thesis-only">{thesisSheet}</section>
-  }
 
   return (
     <section className="reco-light market-scanner">
@@ -1044,8 +1032,9 @@ export function MarketScannerView(props: ExperienceViewProps & {
           </Panel>
         </div>
       </div>
-      {thesisSheet || (
-        <p className="reco-foot">Tap a row for the buy thesis.</p>
+      {peek}
+      {selected ? null : (
+        <p className="reco-foot">Tap a row for fundamentals, ratios and technicals.</p>
       )}
     </section>
   )

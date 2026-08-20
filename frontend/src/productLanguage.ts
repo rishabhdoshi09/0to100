@@ -42,7 +42,7 @@ export const PAGE_GUIDE: Record<string, PageGuide> = {
       'What is upside from entry vs room to target?',
       'Which tracked picks are still open vs resolved?',
     ],
-    action: 'Open Best Setups first. Tap a name for the full 7-rule monitor in Stock Intelligence. Reload keeps the last ranking and the name you had open.',
+    action: 'Open Best Setups first. Tap a name for the numbers popup (technicals, fundamentals, ratios). Full research stays one click away.',
     doesNot: 'A Buy badge is research classification — not a broker order or return promise.',
   },
   'Market Reports': {
