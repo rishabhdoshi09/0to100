@@ -9,7 +9,7 @@ import time
 
 import pandas as pd
 
-from product.stock_peek import build_stock_peek, _upside
+from product.stock_peek import build_stock_peek, fetch_missing_fundamentals_for_peek, _upside, _pack_is_thin
 
 
 def _frame(periods: int = 280) -> pd.DataFrame:
@@ -130,3 +130,121 @@ def test_peek_does_not_wait_on_hung_history_or_scrape(monkeypatch):
     assert payload["upside_from_buy_pct"] == 30.0
     assert payload["technical"]["change_pct"] == 0.8
     assert "history" in (payload.get("history_note") or "").lower()
+
+
+def test_fetch_missing_scrapes_when_pack_is_thin():
+    scan = {"records": [_scan_row("ALPHA", price=110, entry=100, stop=90, target=130)]}
+
+    def resolve(symbol, force_refresh=False, write_cache=True):
+        return (
+            {
+                "key_ratios": [{"name": "P/E", "value": "18.4"}, {"name": "ROE", "value": "22.1"}],
+                "_source": "screener_in",
+            },
+            [{"source": "screener_in", "status": "OK", "message": "ok"}],
+        )
+
+    out = fetch_missing_fundamentals_for_peek(
+        "ALPHA",
+        resolve_fn=resolve,
+        scan_payload=scan,
+        long_term_payload={"records": []},
+    )
+    assert out["scrape"]["outcome"] == "READY"
+    assert out["scrape"]["source"] == "screener_in"
+    filled = {m["key"]: m["value"] for m in out["fundamentals"]["metrics"] if m.get("value") is not None}
+    assert filled.get("pe") == 18.4
+    assert filled.get("roe") == 22.1
+    assert out["pack_thin"] is False
+    ratio_vals = {str(r.get("label") or r.get("key")).lower(): r.get("value") for r in out.get("ratios") or []}
+    assert any("p/e" in k or k == "pe" for k in ratio_vals)
+    assert any("roe" in k for k in ratio_vals)
+
+
+def test_fetch_missing_does_not_invent_when_sources_empty():
+    scan = {"records": [_scan_row("ALPHA", price=110, entry=100, stop=90, target=130)]}
+
+    def empty(*_a, **_k):
+        return (None, [{"source": "screener_in", "status": "EMPTY", "message": "no pack"}])
+
+    out = fetch_missing_fundamentals_for_peek(
+        "ALPHA",
+        resolve_fn=empty,
+        scan_payload=scan,
+        long_term_payload={"records": []},
+    )
+    assert out["scrape"]["outcome"] == "MISSING"
+    filled = {m["key"]: m["value"] for m in out["fundamentals"]["metrics"] if m.get("value") is not None}
+    assert "pe" not in filled
+    assert "roe" not in filled
+    assert out["pack_thin"] is True
+
+
+def test_get_peek_never_calls_resolver(monkeypatch):
+    import product.stock_peek as peek
+
+    def boom(*_a, **_k):
+        raise AssertionError("GET snapshot must not scrape Screener or Yahoo")
+
+    monkeypatch.setattr("fundamentals.resolver.resolve", boom)
+    monkeypatch.setattr(peek, "_cached_raw", lambda _s: {"data": {}})
+    payload = build_stock_peek(
+        "ALPHA",
+        scan_payload={"records": [_scan_row("ALPHA", price=110, entry=100, stop=90, target=130)]},
+        long_term_payload={"records": []},
+        raw_fundamentals={"data": {}},
+        load_history=False,
+        load_live=False,
+    )
+    assert payload["symbol"] == "ALPHA"
+    assert payload["pack_thin"] is True
+    assert payload.get("scrape") in (None, {})
+
+
+def test_fetch_missing_does_not_scrape_when_pack_has_numbers():
+    scan = {
+        "records": [_scan_row("ALPHA", price=110, entry=100, stop=90, target=130)],
+    }
+    lt = {
+        "records": [{
+            "symbol": "ALPHA",
+            "fundamentals": {"pe": 19.0, "roe": 15.0},
+            "classification": "GARP_CANDIDATE",
+        }],
+    }
+
+    def boom(*_a, **_k):
+        raise AssertionError("must not scrape a pack that already has numbers")
+
+    out = fetch_missing_fundamentals_for_peek(
+        "ALPHA",
+        resolve_fn=boom,
+        scan_payload=scan,
+        long_term_payload=lt,
+    )
+    assert out["scrape"]["outcome"] == "CACHE"
+    assert out["scrape"]["ran"] is False
+
+
+def test_fetch_missing_times_out_without_inventing():
+    scan = {"records": [_scan_row("ALPHA", price=110, entry=100, stop=90, target=130)]}
+
+    def hang(*_a, **_k):
+        time.sleep(4)
+        raise AssertionError("scrape must be timed out")
+
+    t0 = time.monotonic()
+    out = fetch_missing_fundamentals_for_peek(
+        "ALPHA",
+        resolve_fn=hang,
+        timeout=0.3,
+        scan_payload=scan,
+        long_term_payload={"records": []},
+    )
+    assert time.monotonic() - t0 < 2.0
+    assert out["scrape"]["outcome"] == "TIMEOUT"
+    assert out["upside_from_buy_pct"] == 30.0
+    assert _pack_is_thin(out) is True
+    filled = {m["key"] for m in out["fundamentals"]["metrics"] if m.get("value") is not None}
+    assert "pe" not in filled
+    assert "roe" not in filled

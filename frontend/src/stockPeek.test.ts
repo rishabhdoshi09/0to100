@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { formatPeekValue, filledPeekMetrics, mergePeekMetrics, orderPeekMetrics, peekNumber, peekUpsidePct, snapshotFromCard } from './stockPeek'
+import { formatPeekValue, filledPeekMetrics, mergePeekMetrics, orderPeekMetrics, peekNumber, peekPackThin, peekUpsidePct, snapshotFromCard } from './stockPeek'
 
 describe('stock peek numbers', () => {
   it('never invents a missing metric', () => {
@@ -30,6 +30,20 @@ describe('stock peek numbers', () => {
       expect(beta.buy).toBe(200)
       expect(peekUpsidePct(0, 100)).toBeNull()
     })
+
+  it('treats a snapshot with no PE/ROE/ratios as thin', () => {
+    expect(peekPackThin({ fundamentals: { metrics: [] }, ratios: [] })).toBe(true)
+    expect(peekPackThin({
+      fundamentals: { metrics: [{ key: 'pe', label: 'P/E', value: 18 }] },
+      ratios: [],
+    })).toBe(false)
+    expect(peekPackThin({ pack_thin: false, fundamentals: { metrics: [] }, ratios: [] })).toBe(false)
+    expect(peekPackThin({ pack_thin: true, fundamentals: { metrics: [{ key: 'pe', label: 'P/E', value: 18 }] } })).toBe(true)
+    expect(peekPackThin({
+      fundamentals: { metrics: [], key_ratios: [{ name: 'P/E', value: '18.4' }] },
+      ratios: [],
+    })).toBe(false)
+  })
 
   it('keeps a fallback metric when the primary value is missing', () => {
     const merged = mergePeekMetrics(

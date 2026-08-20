@@ -74,6 +74,22 @@ export function snapshotFromCard(card: Record<string, unknown> | null | undefine
   }
 }
 
+export function peekPackThin(card: {
+  pack_thin?: boolean
+  fundamentals?: { metrics?: PeekMetric[]; key_ratios?: Array<{ value?: unknown }> }
+  ratios?: Array<{ value?: unknown }>
+} | null | undefined): boolean {
+  if (card?.pack_thin === true) return true
+  if (card?.pack_thin === false) return false
+  const metrics = filledPeekMetrics(card?.fundamentals?.metrics || [])
+  const ratios = (card?.ratios || []).filter((row) => peekNumber(row.value) != null)
+  const keys = (card?.fundamentals?.key_ratios || []).filter((row) => {
+    const n = peekNumber(row.value)
+    return n != null || (typeof row.value === 'string' && row.value.trim() !== '')
+  })
+  return metrics.length === 0 && ratios.length === 0 && keys.length === 0
+}
+
 export function filledPeekMetrics(metrics: PeekMetric[]): PeekMetric[] {
   return metrics.filter((item) => {
     if (peekNumber(item.value) != null) return true
@@ -108,6 +124,7 @@ export function orderPeekMetrics(metrics: PeekMetric[], preferred: string[]): Pe
 }
 
 export const PEEK_FETCH_MS = 8_000
+export const PEEK_SCRAPE_MS = 22_000
 
 export const PEEK_TECHNICAL_KEYS = [
   'close', 'change_pct', 'rsi14', 'ema20', 'ema50', 'ema200',
