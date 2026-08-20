@@ -380,8 +380,11 @@ def test_serve_recommendations_reuses_disk_cache(tmp_path, monkeypatch):
         long_term_payload={"scanned_at": "2026-08-19T09:00:00+00:00", "records": []},
         refresh_technicals=False,
         compute_sepa=False,
+        background_rebuild=False,
     )
-    assert stale["served_from_cache"] is False
+    assert stale["served_from_cache"] is True
+    assert stale.get("stale_ranking") is True
+    assert rw._card_count(stale) == rw._card_count(first)
 
 
 def test_serve_keeps_last_ranking_when_scan_file_goes_empty(tmp_path, monkeypatch):
@@ -414,6 +417,127 @@ def test_serve_keeps_last_ranking_when_scan_file_goes_empty(tmp_path, monkeypatc
     assert empty["served_from_cache"] is True
     assert empty.get("stale_ranking") is True
     assert rw._card_count(empty) == rw._card_count(first)
+
+
+def test_serve_does_not_block_the_request_on_sepa(tmp_path, monkeypatch):
+    import product.recommendations_workspace as rw
+    monkeypatch.setattr(rw, "WORKSPACE_CACHE", tmp_path / "recommendations_workspace.json")
+    calls: list[str] = []
+
+    def hang(symbol: str):
+        calls.append(symbol)
+        raise AssertionError("SEPA must not run on the Ideas request thread")
+
+    scan = {
+        "scanned_at": "2026-08-20T10:00:00+00:00",
+        "records": [
+            {
+                "symbol": "TRENDY", "company": "Trendy Co", "score": 70,
+                "signals": ["MOMENTUM"], "verdict": "BUY", "status": "Ready to trade",
+                "chase_risk": False, "price": 110, "entry": 100, "target": 125,
+                "stop": 95, "rsi": 58, "volume_ratio": 1.5, "avg_vol20": 1e6,
+            },
+        ],
+    }
+    import time
+    t0 = time.monotonic()
+    first = rw.serve_recommendations_workspace(
+        scan_payload=scan,
+        long_term_payload={"scanned_at": "2026-08-20T09:00:00+00:00", "records": []},
+        refresh_technicals=False,
+        compute_sepa=True,
+        sepa_load_frame=hang,
+        background_rebuild=False,
+    )
+    assert time.monotonic() - t0 < 2.0
+    assert calls == []
+    assert first["served_from_cache"] is False
+    assert first.get("sepa_pending") is True
+    assert rw._card_count(first) > 0
+
+    later = rw.serve_recommendations_workspace(
+        scan_payload={**scan, "scanned_at": "2026-08-21T10:00:00+00:00"},
+        long_term_payload={"scanned_at": "2026-08-20T09:00:00+00:00", "records": []},
+        refresh_technicals=False,
+        compute_sepa=True,
+        sepa_load_frame=hang,
+        background_rebuild=False,
+    )
+    assert calls == []
+    assert later["served_from_cache"] is True
+    assert later.get("stale_ranking") is True
+    assert rw._card_count(later) == rw._card_count(first)
+
+
+def test_serve_kicks_background_sepa_when_scan_stamp_moves(tmp_path, monkeypatch):
+    import product.recommendations_workspace as rw
+    monkeypatch.setattr(rw, "WORKSPACE_CACHE", tmp_path / "recommendations_workspace.json")
+    kicked: list[str] = []
+
+    def capture(scan, lt, sepa_load_frame=None):
+        kicked.append(str(scan.get("scanned_at") or ""))
+        return True
+
+    monkeypatch.setattr(rw, "kick_sepa_rebuild", capture)
+    scan = {
+        "scanned_at": "2026-08-19T10:00:00+00:00",
+        "records": [
+            {
+                "symbol": "TRENDY", "company": "Trendy Co", "score": 70,
+                "signals": ["MOMENTUM"], "verdict": "BUY", "status": "Ready to trade",
+                "chase_risk": False, "price": 110, "entry": 100, "target": 125,
+                "stop": 95, "rsi": 58, "volume_ratio": 1.5, "avg_vol20": 1e6,
+            },
+        ],
+    }
+    rw.serve_recommendations_workspace(
+        scan_payload=scan,
+        long_term_payload={"scanned_at": "2026-08-19T09:00:00+00:00", "records": []},
+        refresh_technicals=False,
+        compute_sepa=True,
+        background_rebuild=True,
+    )
+    assert kicked == ["2026-08-19T10:00:00+00:00"]
+    kicked.clear()
+    rw.serve_recommendations_workspace(
+        scan_payload={**scan, "scanned_at": "2026-08-20T10:00:00+00:00"},
+        long_term_payload={"scanned_at": "2026-08-19T09:00:00+00:00", "records": []},
+        refresh_technicals=False,
+        compute_sepa=True,
+        background_rebuild=True,
+    )
+    assert kicked == ["2026-08-20T10:00:00+00:00"]
+
+
+def test_serve_first_paint_does_not_walk_bhavcopy(tmp_path, monkeypatch):
+    import product.recommendations_workspace as rw
+    monkeypatch.setattr(rw, "WORKSPACE_CACHE", tmp_path / "recommendations_workspace.json")
+
+    def boom(*_a, **_k):
+        raise AssertionError("market breadth must not run on the Ideas request thread")
+
+    monkeypatch.setattr("product.monitor_market.market_breadth", boom)
+    monkeypatch.setattr("product.monitor_context.index_strip", boom)
+    out = rw.serve_recommendations_workspace(
+        scan_payload={
+            "scanned_at": "2026-08-20T10:00:00+00:00",
+            "records": [
+                {
+                    "symbol": "TRENDY", "company": "Trendy Co", "score": 70,
+                    "signals": ["MOMENTUM"], "verdict": "BUY", "status": "Ready to trade",
+                    "chase_risk": False, "price": 110, "entry": 100, "target": 125,
+                    "stop": 95, "rsi": 58, "volume_ratio": 1.5, "avg_vol20": 1e6,
+                },
+            ],
+        },
+        long_term_payload={"scanned_at": "2026-08-20T09:00:00+00:00", "records": []},
+        refresh_technicals=False,
+        compute_sepa=True,
+        background_rebuild=False,
+    )
+    assert rw._card_count(out) > 0
+    assert out.get("breadth", {}).get("available") is False
+    assert out.get("indices") == []
 
 
 def test_cached_workspace_mismatch_is_ignored(tmp_path, monkeypatch):

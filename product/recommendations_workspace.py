@@ -15,6 +15,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from pathlib import Path
 import json
+import threading
 from typing import Any, Mapping, Sequence
 
 from product.breakout_quality import RSI_HARD, passes_volume_floor
@@ -29,6 +30,8 @@ from product.radar_workspace import (
 ROOT = Path(__file__).resolve().parents[1]
 REPORTS_DIR = ROOT / "logs" / "product" / "market_reports"
 WORKSPACE_CACHE = ROOT / "logs" / "product" / "recommendations_workspace.json"
+_REBUILD_LOCK = threading.Lock()
+_REBUILD_RUNNING = False
 
 # Reco-Wealth analogues — QuantTerm evidence names (not a brand clone).
 CATEGORIES: tuple[dict[str, str], ...] = (
@@ -686,7 +689,10 @@ def _best_setup_cards(
     cache_key: str = "",
 ) -> tuple[list[dict[str, Any]], str]:
     if not compute:
-        return [], "SEPA ranking skipped in this call."
+        return [], (
+            "Best Setups ranking continues in the background from official history. "
+            "Other categories are ready from the last scan."
+        )
     try:
         from product.sepa_setup import rank_best_setups, sepa_card_fields
         ranked, note = rank_best_setups(
@@ -734,12 +740,15 @@ def build_recommendations_workspace(
     refresh_technicals: bool = True,
     compute_sepa: bool = True,
     sepa_load_frame: Any = None,
+    include_monitor: bool = True,
 ) -> dict[str, Any]:
     """Project recommendation categories + lifecycle from persisted product state.
 
     ``refresh_technicals`` stamps live CMP on the shortlist with one quote
     call. It does not recompute RSI across the scan head.
     ``compute_sepa`` ranks Best Setups from official OHLCV (capped shortlist).
+    ``include_monitor`` attaches breadth / index strip / news. The Ideas
+    request thread skips it so a locked bhav store cannot freeze the page.
     """
     scan = dict(scan_payload or {})
     lt = dict(long_term_payload or {})
@@ -790,8 +799,23 @@ def build_recommendations_workspace(
 
     from product.sepa_setup import _session_label
     from product.top_stocks import tape_policy
-    from product.monitor_context import INDEX_STRIP_NOTE, index_strip
-    from product.monitor_market import BREADTH_NOTE, NEWS_NOTE, market_breadth, news_tape
+
+    if include_monitor:
+        from product.monitor_context import INDEX_STRIP_NOTE, index_strip
+        from product.monitor_market import BREADTH_NOTE, NEWS_NOTE, market_breadth, news_tape
+        indices = index_strip()
+        index_note = INDEX_STRIP_NOTE
+        breadth = market_breadth()
+        breadth_note = BREADTH_NOTE
+        news = news_tape()
+        news_note = NEWS_NOTE
+    else:
+        indices = []
+        index_note = ""
+        breadth = {"available": False}
+        breadth_note = ""
+        news = {"available": False}
+        news_note = ""
 
     return {
         "schema_version": 3,
@@ -815,12 +839,12 @@ def build_recommendations_workspace(
         "sepa_note": sepa_note,
         "tape": tape_policy(),
         "session": _session_label(),
-        "indices": index_strip(),
-        "index_strip_note": INDEX_STRIP_NOTE,
-        "breadth": market_breadth(),
-        "breadth_note": BREADTH_NOTE,
-        "news_tape": news_tape(),
-        "news_note": NEWS_NOTE,
+        "indices": indices,
+        "index_strip_note": index_note,
+        "breadth": breadth,
+        "breadth_note": breadth_note,
+        "news_tape": news,
+        "news_note": news_note,
         "categories": categories,
         "lifecycle": {
             "active": active[:60],
@@ -833,6 +857,8 @@ def build_recommendations_workspace(
             "not a promise of returns. SEPA is a published trend template, not Reco Wealth."
         ),
         "served_from_cache": False,
+        "sepa_pending": not bool(compute_sepa),
+        "stale_ranking": False,
     }
 
 
@@ -898,6 +924,68 @@ def persist_recommendations_workspace(
         return None
 
 
+def _can_rebuild_sepa(scan: Mapping[str, Any]) -> bool:
+    return bool(str(scan.get("scanned_at") or "").strip() and (scan.get("records") or []))
+
+
+def kick_sepa_rebuild(
+    scan: Mapping[str, Any],
+    lt: Mapping[str, Any],
+    sepa_load_frame: Any = None,
+) -> bool:
+    """Start at most one background SEPA ranking. Returns True if a thread started."""
+    global _REBUILD_RUNNING
+    with _REBUILD_LOCK:
+        if _REBUILD_RUNNING:
+            return False
+        _REBUILD_RUNNING = True
+    scan_copy = dict(scan or {})
+    lt_copy = dict(lt or {})
+
+    def _run() -> None:
+        global _REBUILD_RUNNING
+        try:
+            payload = build_recommendations_workspace(
+                scan_payload=scan_copy,
+                long_term_payload=lt_copy,
+                refresh_technicals=True,
+                compute_sepa=True,
+                sepa_load_frame=sepa_load_frame,
+            )
+            payload["sepa_pending"] = False
+            payload["stale_ranking"] = False
+            persist_recommendations_workspace(
+                str(scan_copy.get("scanned_at") or ""),
+                str(lt_copy.get("scanned_at") or ""),
+                payload,
+            )
+        except Exception:
+            pass
+        finally:
+            with _REBUILD_LOCK:
+                _REBUILD_RUNNING = False
+
+    threading.Thread(target=_run, daemon=True, name="ideas-sepa-rebuild").start()
+    return True
+
+
+def _serve_cached_workspace(
+    workspace: dict[str, Any],
+    *,
+    stale: bool,
+    sepa_pending: bool,
+    refresh_technicals: bool,
+) -> dict[str, Any]:
+    out = dict(workspace)
+    out["served_from_cache"] = True
+    out["stale_ranking"] = bool(stale)
+    out["sepa_pending"] = bool(sepa_pending)
+    out["generated_at"] = datetime.now(timezone.utc).isoformat()
+    if refresh_technicals:
+        _stamp_live_cmp(out.get("categories") or [])
+    return out
+
+
 def serve_recommendations_workspace(
     *,
     scan_payload: Mapping[str, Any] | None = None,
@@ -905,37 +993,57 @@ def serve_recommendations_workspace(
     refresh_technicals: bool = True,
     compute_sepa: bool = True,
     sepa_load_frame: Any = None,
+    background_rebuild: bool = True,
 ) -> dict[str, Any]:
-    """Return the last ranking instantly when the scan file has not changed."""
+    """Paint Ideas from disk. SEPA ranking is an upgrade, never a request-thread gate.
+
+    A new scan stamp used to rebuild Best Setups on the HTTP worker (80 OHLCV
+    frames). The browser then sat on 'Working… · a few seconds left' for minutes.
+    """
     scan = dict(scan_payload or {})
     lt = dict(long_term_payload or {})
     scan_at = str(scan.get("scanned_at") or "")
     lt_at = str(lt.get("scanned_at") or "")
+    want_sepa = bool(compute_sepa)
+    kick = want_sepa and bool(background_rebuild) and _can_rebuild_sepa(scan)
+
     cached = load_cached_recommendations_workspace(scan_at, lt_at)
     if cached:
-        if refresh_technicals:
-            _stamp_live_cmp(cached.get("categories") or [])
-        cached["served_from_cache"] = True
-        cached["generated_at"] = datetime.now(timezone.utc).isoformat()
-        return cached
-    records = scan.get("records") or []
-    if not scan_at or not records:
-        last = load_last_recommendations_workspace()
-        if last and _card_count(last) > 0:
-            last["served_from_cache"] = True
-            last["stale_ranking"] = True
-            last["generated_at"] = datetime.now(timezone.utc).isoformat()
-            if refresh_technicals:
-                _stamp_live_cmp(last.get("categories") or [])
-            return last
+        pending = bool(cached.get("sepa_pending")) and want_sepa and _can_rebuild_sepa(scan)
+        if pending and kick:
+            kick_sepa_rebuild(scan, lt, sepa_load_frame)
+        return _serve_cached_workspace(
+            cached,
+            stale=False,
+            sepa_pending=pending,
+            refresh_technicals=refresh_technicals,
+        )
+
+    last = load_last_recommendations_workspace()
+    if last and _card_count(last) > 0:
+        pending = want_sepa and _can_rebuild_sepa(scan)
+        if kick:
+            kick_sepa_rebuild(scan, lt, sepa_load_frame)
+        return _serve_cached_workspace(
+            last,
+            stale=True,
+            sepa_pending=pending,
+            refresh_technicals=refresh_technicals,
+        )
+
     payload = build_recommendations_workspace(
         scan_payload=scan,
         long_term_payload=lt,
         refresh_technicals=refresh_technicals,
-        compute_sepa=compute_sepa,
+        compute_sepa=False,
         sepa_load_frame=sepa_load_frame,
+        include_monitor=False,
     )
+    payload["sepa_pending"] = want_sepa and _can_rebuild_sepa(scan)
+    payload["stale_ranking"] = False
     persist_recommendations_workspace(scan_at, lt_at, payload)
+    if kick:
+        kick_sepa_rebuild(scan, lt, sepa_load_frame)
     return payload
 
 

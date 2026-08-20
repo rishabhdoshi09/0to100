@@ -14,6 +14,7 @@ import {
   jobClock,
   deskWaitClock,
   recoWorkspaceClock,
+  ideasPollMs,
   TERMINAL_STATUSES,
 } from './scanRunner'
 import type { OperationRecord } from './types'
@@ -125,6 +126,12 @@ describe('scanRunner semantics', () => {
     expect(waiting.line).toMatch(/elapsed 1s/)
     const later = recoWorkspaceClock({ elapsedSeconds: 6 })
     expect(later.button).toMatch(/left|few seconds/)
+    const overtime = recoWorkspaceClock({ elapsedSeconds: 20 })
+    expect(overtime.button).toMatch(/taking longer than usual/)
+    expect(overtime.button).not.toMatch(/few seconds left/)
+    expect(ideasPollMs({ sepa_pending: true })).toBe(4000)
+    expect(ideasPollMs({ stale_ranking: true })).toBe(4000)
+    expect(ideasPollMs({})).toBe(60_000)
     const duringScan = recoWorkspaceClock({
       elapsedSeconds: 2,
       scan: {

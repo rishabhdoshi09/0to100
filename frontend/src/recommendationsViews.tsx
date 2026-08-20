@@ -19,6 +19,7 @@ import { SepaScoreChip } from './SepaMonitor'
 import { TopStocksBoard } from './TopStocksBoard'
 import type { DisplayDepth } from './productLanguage'
 import type { ScanRunnerHandle } from './scanRunner'
+import { IDEAS_FETCH_MS, ideasPollMs } from './scanRunner'
 import { loadCachedJson, loadDeskSession, patchDeskSession, saveCachedJson } from './deskSession'
 
 const CAT_ICONS: Record<string, string> = {
@@ -168,9 +169,14 @@ export function RecommendationsView({
   const [query, setQuery] = useState('')
   const [peekSymbol, setPeekSymbol] = useState('')
 
+  const [retryTick, setRetryTick] = useState(0)
+
   useEffect(() => {
     let cancelled = false
-    if (!data) setLoading(true)
+    let pollTimer = 0
+    let inflight: AbortController | null = null
+    const cached = loadCachedJson<RecommendationsWorkspace>('reco-workspace')
+    if (!cached) setLoading(true)
     const apply = (payload: RecommendationsWorkspace) => {
       if (cancelled) return
       setData((prev) => {
@@ -187,23 +193,44 @@ export function RecommendationsView({
       }
       setError('')
     }
-    const load = () => {
-      fetchRecommendationsWorkspace()
+    const load = (mode: 'first' | 'poll') => {
+      const ac = new AbortController()
+      inflight = ac
+      const to = window.setTimeout(() => ac.abort(), IDEAS_FETCH_MS)
+      fetchRecommendationsWorkspace(ac.signal)
         .then(apply)
         .catch((err: Error) => {
-          if (!cancelled && !data) setError(err.message || 'Failed to load recommendations')
+          if (cancelled) return
+          if (err?.name === 'AbortError') {
+            if (mode === 'first' && !loadCachedJson('reco-workspace')) {
+              setError('Ideas took too long to load. Ranking runs in the background — tap retry.')
+            }
+            return
+          }
+          if (mode === 'first' && !loadCachedJson('reco-workspace')) {
+            setError(err.message || 'Failed to load recommendations')
+          }
         })
         .finally(() => {
-          if (!cancelled) setLoading(false)
+          window.clearTimeout(to)
+          if (!cancelled && mode === 'first') setLoading(false)
         })
     }
-    load()
-    const timer = window.setInterval(load, 60_000)
+    load('first')
+    const schedule = () => {
+      const delay = ideasPollMs(loadCachedJson<RecommendationsWorkspace>('reco-workspace'))
+      pollTimer = window.setTimeout(() => {
+        load('poll')
+        if (!cancelled) schedule()
+      }, delay)
+    }
+    schedule()
     return () => {
       cancelled = true
-      window.clearInterval(timer)
+      inflight?.abort()
+      window.clearTimeout(pollTimer)
     }
-  }, [])
+  }, [retryTick])
 
   useEffect(() => {
     patchDeskSession({ ideasCategory: categoryId, ideasLifecycle: lifecycle })
@@ -254,7 +281,17 @@ export function RecommendationsView({
       <div className="reco-light">
         <div className="reco-empty">
           <strong>{error || 'No recommendation data yet'}</strong>
-          <p>Run a market scan and long-term refresh first.</p>
+          <p>Run a market scan and long-term refresh first. Ideas will show the last ranked list as soon as it is on disk.</p>
+          <button
+            type="button"
+            onClick={() => {
+              setError('')
+              setLoading(true)
+              setRetryTick((n) => n + 1)
+            }}
+          >
+            Retry
+          </button>
         </div>
       </div>
     )
@@ -283,6 +320,13 @@ export function RecommendationsView({
       <LiveScanBanner scan={marketScan} depth={depth} label="Market scan" />
       <LiveScanBanner scan={longTermScan} depth={depth} label="Long-term scan" />
       {loading ? <p className="secondary-layer-note">Refreshing last print — the list you already ranked stays on screen.</p> : null}
+      {data.stale_ranking || data.sepa_pending ? (
+        <p className="secondary-layer-note">
+          {data.sepa_pending
+            ? 'Showing the last ranked list while Best Setups updates in the background.'
+            : 'Showing the last ranked list. A newer scan is on file — ranking will catch up.'}
+        </p>
+      ) : null}
 
       <nav className="reco-crumb" aria-label="Breadcrumb">
         <button type="button" onClick={() => setActive('Recommendations')}>Ideas</button>

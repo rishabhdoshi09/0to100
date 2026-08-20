@@ -502,12 +502,17 @@ def rank_best_setups(
     score_cap: int = 80,
     min_score: int = 40,
     cache_key: str = "",
+    max_seconds: float | None = 45.0,
 ) -> tuple[list[dict[str, Any]], str]:
     """Score a scan shortlist on SEPA. Empty list if history cannot be read.
 
     Names below ``min_score`` stay out of the Best Setups lane so a 20/100
     downtrend is not dressed up as a setup. If nobody clears the floor, the
     note explains that — we do not invent winners.
+
+    ``max_seconds`` is a hard budget on OHLCV scoring (default 45s). Ideas
+    must not sit on a request thread while 80 frames load. Incomplete
+    rankings are not cached.
     """
     import time
     if cache_key:
@@ -521,7 +526,16 @@ def rank_best_setups(
     except Exception:
         bench = None
     scored: list[tuple[int, int, dict[str, Any], dict[str, Any]]] = []
+    truncated = False
+    attempted = 0
+    deadline = None
+    if max_seconds is not None and float(max_seconds) > 0:
+        deadline = time.monotonic() + float(max_seconds)
     for row in select_sepa_candidates(rows, limit=score_cap):
+        if deadline is not None and time.monotonic() >= deadline:
+            truncated = True
+            break
+        attempted += 1
         symbol = str(row.get("symbol") or "").upper()
         try:
             frame = loader(symbol)
@@ -559,17 +573,29 @@ def rank_best_setups(
         str(item[3].get("symbol") or ""),
     ))
     top = scored[:limit]
+    budget = f"{float(max_seconds):.0f}s" if max_seconds and float(max_seconds) > 0 else ""
     if top:
         note = (
             "Best Setups = last-scan names ranked on Minervini's 7-rule Stage-2 template "
             f"(need ≥{min_score}/100). Stage and RS vs Nifty 50 are official-history "
             "context. Score is research, not a buy."
         )
+        if truncated:
+            note = (
+                f"{note} Ranking stopped at the {budget} history budget after "
+                f"{attempted} name(s) — the list may still grow."
+            )
         out = [(sepa, row) for _, _, sepa, row in top]
-        if cache_key:
+        if cache_key and not truncated:
             _RANK_CACHE[cache_key] = (time.time(), out, note)
         return out, note
-    n = len(select_sepa_candidates(rows, limit=score_cap))
+    n = attempted if truncated else len(select_sepa_candidates(rows, limit=score_cap))
+    if truncated:
+        note = (
+            f"History budget ({budget}) ended after {n} name(s); none had cleared "
+            f"{min_score}/100 yet. Ranking continues in the background."
+        )
+        return [], note
     note = (
         f"Scored {n} scan name(s) on the SEPA template; none cleared {min_score}/100. "
         "Open a stock to see which of the 7 rules failed."
