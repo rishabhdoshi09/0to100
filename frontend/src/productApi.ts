@@ -827,6 +827,36 @@ export const fetchSymbolRatios = (symbol: string): Promise<{ symbol: string; rat
   fetch(`/api/data/ratios/${encodeURIComponent(symbol)}`, { headers: { Accept: 'application/json' } })
     .then((response) => json(response))
 
+export type StockPeekPayload = {
+  schema_version: number
+  symbol: string
+  company: string
+  sector: string
+  cmp?: number | null
+  change_pct?: number | null
+  price_tag?: string
+  quote_source?: string
+  entry?: number | null
+  stop?: number | null
+  target?: number | null
+  upside_from_buy_pct?: number | null
+  rsi?: number | null
+  volume_ratio?: number | null
+  technical?: StockWorkspace['technical']
+  fundamentals?: StockWorkspace['fundamentals']
+  ratios?: SymbolRatioRow[]
+  sepa?: import('./SepaMonitor').SepaPayload | null
+  history_note?: string
+  fundamentals_cache?: string
+  disclaimer?: string
+}
+
+export const fetchStockPeek = (symbol: string, signal?: AbortSignal): Promise<StockPeekPayload> =>
+  fetch(`/api/stock-peek/${encodeURIComponent(symbol)}`, {
+    headers: { Accept: 'application/json' },
+    signal,
+  }).then((response) => json<StockPeekPayload>(response))
+
 export type InstitutionalDomain = {
   key: string
   label: string

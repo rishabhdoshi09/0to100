@@ -16,9 +16,36 @@ def test_upside_and_risk_from_real_fields_only():
     ups = upside_metrics({"price": 115, "entry": 100, "target": 130})
     assert ups["upside_from_entry_pct"] == 15.0
     assert ups["upside_to_target_pct"] == 13.0
+    assert ups["upside_from_buy_pct"] == 30.0
     assert upside_metrics({"price": 0, "entry": 0})["upside_from_entry_pct"] is None
     assert risk_tier({"chase_risk": True}) == "High"
     assert risk_tier({"rsi": 50, "chase_risk": False}) == "Low"
+
+
+def test_card_from_row_copies_change_and_upside_for_any_symbol():
+    alpha = card_from_row(
+        {
+            "symbol": "ALPHA", "company": "Alpha Co", "price": 110,
+            "entry": 100, "stop": 90, "target": 130, "change_pct": 1.4,
+            "rsi": 55, "volume_ratio": 1.6, "signals": ["MOMENTUM"],
+        },
+        category_id="super_trends",
+        category_label="Super Trends",
+    )
+    beta = card_from_row(
+        {
+            "symbol": "BETA", "company": "Beta Co", "price": 210,
+            "entry": 200, "stop": 180, "target": 240, "chg_pct": -0.5,
+            "rsi": 62, "volume_ratio": 2.1, "signals": ["MOMENTUM"],
+        },
+        category_id="super_trends",
+        category_label="Super Trends",
+    )
+    assert alpha["symbol"] == "ALPHA" and beta["symbol"] == "BETA"
+    assert alpha["change_pct"] == 1.4
+    assert beta["change_pct"] == -0.5
+    assert alpha["upside_from_buy_pct"] == 30.0
+    assert beta["upside_from_buy_pct"] == 20.0
 
 
 def test_categories_project_from_scan_and_long_term_without_invention():

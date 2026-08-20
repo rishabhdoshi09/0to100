@@ -714,11 +714,27 @@ def product_bootstrap() -> dict[str, Any]:
         raise HTTPException(status_code=500, detail=f"Product bootstrap failed: {exc}") from exc
 
 
+@app.get("/api/stock-peek/{symbol}")
+def stock_peek(symbol: str) -> dict[str, Any]:
+    """Fast Ideas snapshot — on-file numbers plus timed CMP. Does not scrape."""
+    try:
+        from product.stock_peek import build_stock_peek
+        return build_stock_peek(clean_symbol(symbol))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Stock snapshot failed: {exc}") from exc
+
+
 @app.get("/api/stock-intelligence/{symbol}")
 def stock_intelligence(symbol: str) -> dict[str, Any]:
-    """Read-only workspace (fundamentals from cache only — use fetch-fundamentals from UI)."""
+    """Read-only workspace from cache and official history. Does not scrape filings.
+    Use POST fetch-fundamentals from Stock Intelligence when a pack is missing."""
     try:
-        return build_stock_workspace(clean_symbol(symbol))
+        return build_stock_workspace(
+            clean_symbol(symbol),
+            hydrate_filings=False,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:

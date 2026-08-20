@@ -316,3 +316,48 @@ def test_hydrate_fills_section_as_of_from_current_pack_without_fetch(monkeypatch
         },
     )
     assert out["section_as_of"]["financial_history"] == "2026-06-01"
+
+
+def test_default_inputs_skips_filings_scrape_on_read_path(monkeypatch):
+    import product.stock_workspace as sw
+
+    called: list[str] = []
+
+    def hydrate(*_a, **_k):
+        called.append("hydrate")
+        return {}
+
+    monkeypatch.setattr(sw, "_hydrate_raw_fundamentals", hydrate)
+    monkeypatch.setattr(sw, "_overlay_live_timed", lambda frame, symbol, seconds=2.5: frame)
+    monkeypatch.setattr("product.scan_store.load_scan", lambda: {"records": []})
+    monkeypatch.setattr("product.long_term_store.load_long_term_scan", lambda: {"records": []})
+    monkeypatch.setattr("reporting.evidence_intake.load_raw_fundamentals", lambda *_a, **_k: {})
+    monkeypatch.setattr("data.bhavcopy_runtime.get_ohlcv", lambda _symbol: None)
+
+    sw._default_inputs("ALPHA", hydrate_filings=False, overlay_live=False)
+    assert called == []
+    sw._default_inputs("ALPHA", hydrate_filings=True, overlay_live=False)
+    assert called == ["hydrate"]
+
+
+def test_default_inputs_does_not_wait_on_hung_ohlcv(monkeypatch):
+    import time
+    import product.stock_workspace as sw
+
+    def hang(_symbol):
+        time.sleep(1)
+        raise AssertionError("OHLCV must be timed out")
+
+    def no_scrape(*_a, **_k):
+        raise AssertionError("no scrape")
+
+    monkeypatch.setattr(sw, "_hydrate_raw_fundamentals", no_scrape)
+    monkeypatch.setattr("product.scan_store.load_scan", lambda: {"records": []})
+    monkeypatch.setattr("product.long_term_store.load_long_term_scan", lambda: {"records": []})
+    monkeypatch.setattr("reporting.evidence_intake.load_raw_fundamentals", lambda *_a, **_k: {})
+    monkeypatch.setattr("data.bhavcopy_runtime.get_ohlcv", hang)
+
+    t0 = time.monotonic()
+    out = sw._default_inputs("ALPHA", hydrate_filings=False, overlay_live=False, ohlcv_seconds=0.3)
+    assert time.monotonic() - t0 < 2.0
+    assert out["frame"] is None

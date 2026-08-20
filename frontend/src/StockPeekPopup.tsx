@@ -4,19 +4,24 @@ import { money, pct } from './format'
 import { deskSymbol } from './deskThesis'
 import { loadCachedJson, saveCachedJson } from './deskSession'
 import {
-  fetchStockIntelligence,
-  fetchSymbolRatios,
+  fetchStockPeek,
   type IntelligenceMetric,
   type RecommendationCard,
+  type StockPeekPayload,
   type StockWorkspace,
   type SymbolRatioRow,
 } from './productApi'
 import { SepaScoreChip } from './SepaMonitor'
 import {
+  filledPeekMetrics,
   formatPeekValue,
+  mergePeekMetrics,
   orderPeekMetrics,
+  PEEK_FETCH_MS,
   PEEK_FUND_KEYS,
   PEEK_TECHNICAL_KEYS,
+  peekNumber,
+  snapshotFromCard,
   type PeekMetric,
 } from './stockPeek'
 import './stockPeek.css'
@@ -32,10 +37,10 @@ function asMetrics(items?: Array<{ key?: string; label?: string; value?: unknown
     }))
 }
 
-function technicalFromWorkspace(ws: StockWorkspace | null): PeekMetric[] {
-  if (!ws?.technical) return []
-  if (ws.technical.metrics?.length) return asMetrics(ws.technical.metrics)
-  const t = ws.technical
+function technicalFromWorkspace(ws: StockWorkspace | StockPeekPayload | null): PeekMetric[] {
+  const t = ws?.technical
+  if (!t) return []
+  if (t.metrics?.length) return asMetrics(t.metrics)
   return [
     { key: 'close', label: 'Close', value: t.close, unit: '' },
     { key: 'change_pct', label: 'Change', value: t.change_pct, unit: '%' },
@@ -48,6 +53,16 @@ function technicalFromWorkspace(ws: StockWorkspace | null): PeekMetric[] {
     { key: 'high_52w', label: '52w high', value: t.high_52w },
     { key: 'from_high_pct', label: 'From 52w high', value: t.from_high_pct, unit: '%' },
   ]
+}
+
+function technicalsFromCard(rec: RecommendationCard): PeekMetric[] {
+  const snap = snapshotFromCard(rec as Record<string, unknown>)
+  return filledPeekMetrics([
+    { key: 'close', label: 'Close', value: snap.cmp },
+    { key: 'change_pct', label: 'Change', value: snap.change, unit: '%' },
+    { key: 'rsi14', label: 'RSI', value: snap.rsi },
+    { key: 'volume_ratio', label: 'Vol vs 20d', value: snap.volumeRatio, unit: 'x' },
+  ])
 }
 
 function MetricGrid({
@@ -95,14 +110,20 @@ export function StockPeekPopup({
   onWatchlist: () => void
 }) {
   const clean = deskSymbol(symbol)
+  const rec = (card || {}) as RecommendationCard
+  const [peek, setPeek] = useState<StockPeekPayload | null>(
+    () => loadCachedJson<StockPeekPayload>(`peek:${clean}`),
+  )
   const [workspace, setWorkspace] = useState<StockWorkspace | null>(
     () => loadCachedJson<StockWorkspace>(`stock:${clean}`),
   )
   const [ratios, setRatios] = useState<SymbolRatioRow[]>(
-    () => loadCachedJson<SymbolRatioRow[]>(`ratios:${clean}`) || [],
+    () => loadCachedJson<SymbolRatioRow[]>(`ratios:${clean}`)
+      || loadCachedJson<StockPeekPayload>(`peek:${clean}`)?.ratios
+      || [],
   )
   const [error, setError] = useState('')
-  const [loading, setLoading] = useState(!workspace)
+  const [loading, setLoading] = useState(!loadCachedJson(`peek:${clean}`) && !workspace)
 
   useEffect(() => {
     document.documentElement.classList.add('stock-peek-open')
@@ -118,57 +139,77 @@ export function StockPeekPopup({
 
   useEffect(() => {
     let alive = true
-    const cached = loadCachedJson<StockWorkspace>(`stock:${clean}`)
-    if (cached) {
-      setWorkspace(cached)
+    const cachedPeek = loadCachedJson<StockPeekPayload>(`peek:${clean}`)
+    const cachedWs = loadCachedJson<StockWorkspace>(`stock:${clean}`)
+    if (cachedPeek) {
+      setPeek(cachedPeek)
+      if (cachedPeek.ratios?.length) setRatios(cachedPeek.ratios)
+      setLoading(false)
+    } else if (cachedWs) {
+      setWorkspace(cachedWs)
       setLoading(false)
     } else {
-      setWorkspace(null)
       setLoading(true)
     }
     const cachedRatios = loadCachedJson<SymbolRatioRow[]>(`ratios:${clean}`)
     if (cachedRatios) setRatios(cachedRatios)
-    Promise.all([
-      fetchStockIntelligence(clean),
-      fetchSymbolRatios(clean).catch(() => ({ symbol: clean, ratios: [] as SymbolRatioRow[] })),
-    ])
-      .then(([ws, ratioPayload]) => {
+    const ac = new AbortController()
+    const to = window.setTimeout(() => ac.abort(), PEEK_FETCH_MS)
+    fetchStockPeek(clean, ac.signal)
+      .then((payload) => {
         if (!alive) return
-        setWorkspace(ws)
-        saveCachedJson(`stock:${clean}`, ws)
-        const nextRatios = ratioPayload.ratios || []
-        setRatios(nextRatios)
-        saveCachedJson(`ratios:${clean}`, nextRatios)
+        setPeek(payload)
+        saveCachedJson(`peek:${clean}`, payload)
+        if (payload.ratios?.length) {
+          setRatios(payload.ratios)
+          saveCachedJson(`ratios:${clean}`, payload.ratios)
+        }
         setError('')
       })
       .catch((reason: Error) => {
-        if (alive && !cached) setError(reason.message || 'Workspace unread')
+        if (!alive) return
+        if (reason?.name === 'AbortError' || /failed to fetch/i.test(reason.message || '')) {
+          return
+        }
+        if (!cachedPeek && !cachedWs) {
+          setError(reason.message || 'Snapshot unread')
+        }
       })
-      .finally(() => { if (alive) setLoading(false) })
-    return () => { alive = false }
+      .finally(() => {
+        window.clearTimeout(to)
+        if (alive) setLoading(false)
+      })
+    return () => {
+      alive = false
+      ac.abort()
+      window.clearTimeout(to)
+    }
   }, [clean])
 
-  const rec = (card || {}) as RecommendationCard
-  const cmp = rec.cmp ?? workspace?.technical.close ?? null
-  const change = rec.change_pct ?? workspace?.technical.change_pct ?? null
-  const buy = rec.entry ?? rec.cmp ?? null
+  const fromCard = snapshotFromCard(rec as Record<string, unknown>)
+  const cmp = peekNumber(peek?.cmp) ?? fromCard.cmp ?? workspace?.technical.close ?? null
+  const change = peekNumber(peek?.change_pct) ?? fromCard.change ?? workspace?.technical.change_pct ?? null
+  const buy = peekNumber(peek?.entry) ?? fromCard.buy
+  const stop = peekNumber(peek?.stop) ?? fromCard.stop
+  const target = peekNumber(peek?.target) ?? fromCard.target
+  const upside = peekNumber(peek?.upside_from_buy_pct) ?? fromCard.upside
   const fundFromCard = asMetrics(rec.fundamentals?.metrics)
+  const fundFromPeek = asMetrics(peek?.fundamentals?.metrics)
   const fundFromWs = asMetrics(workspace?.fundamentals?.metrics)
-  const fundamentals = orderPeekMetrics(
-    fundFromWs.length ? fundFromWs : fundFromCard,
+  const fundamentals = filledPeekMetrics(orderPeekMetrics(
+    mergePeekMetrics(fundFromPeek, mergePeekMetrics(fundFromWs, fundFromCard)),
     PEEK_FUND_KEYS,
-  )
-  const technicals = orderPeekMetrics(
-    technicalFromWorkspace(workspace).length
-      ? technicalFromWorkspace(workspace)
-      : [
-          { key: 'rsi14', label: 'RSI', value: rec.rsi },
-          { key: 'volume_ratio', label: 'Vol vs 20d', value: rec.volume_ratio, unit: 'x' },
-          { key: 'change_pct', label: 'Change', value: rec.change_pct, unit: '%' },
-        ],
+  ))
+  const technicals = filledPeekMetrics(orderPeekMetrics(
+    mergePeekMetrics(
+      technicalFromWorkspace(peek),
+      mergePeekMetrics(technicalFromWorkspace(workspace), technicalsFromCard(rec)),
+    ),
     PEEK_TECHNICAL_KEYS,
-  )
-  const sepa = workspace?.sepa
+  ))
+  const sepa = peek?.sepa || workspace?.sepa
+  const filledRatios = (peek?.ratios?.length ? peek.ratios : ratios).filter((row) => peekNumber(row.value) != null)
+  const showError = error && technicals.length === 0 && fundamentals.length === 0
   const dialog = (
     <div className="stock-peek-backdrop" onClick={onClose} role="presentation">
       <div
@@ -180,9 +221,9 @@ export function StockPeekPopup({
       >
         <header className="stock-peek-head">
           <div>
-            <p>{workspace?.sector || rec.sector || 'Sector not classified'}</p>
-            <h2>{workspace?.company || rec.company || clean}</h2>
-            <em>{clean} · {rec.price_tag || (workspace?.technical.latest_date ? 'EOD' : 'Snapshot')}</em>
+            <p>{peek?.sector || workspace?.sector || rec.sector || 'Sector not classified'}</p>
+            <h2>{peek?.company || workspace?.company || rec.company || clean}</h2>
+            <em>{clean} · {peek?.price_tag || rec.price_tag || (workspace?.technical.latest_date ? 'EOD' : 'Snapshot')}</em>
           </div>
           <div className="stock-peek-last">
             <strong>{money(cmp, 2)}</strong>
@@ -193,12 +234,12 @@ export function StockPeekPopup({
 
         <div className="stock-peek-kpis">
           <article><span>Buy</span><strong>{money(buy, 2)}</strong></article>
-          <article><span>Stop</span><strong>{money(rec.stop, 2)}</strong></article>
-          <article><span>Target</span><strong>{money(rec.target, 2)}</strong></article>
+          <article><span>Stop</span><strong>{money(stop, 2)}</strong></article>
+          <article><span>Target</span><strong>{money(target, 2)}</strong></article>
           <article>
             <span>Upside</span>
-            <strong className={(rec.upside_from_buy_pct ?? 0) < 0 ? 'neg' : ''}>
-              {rec.upside_from_buy_pct != null ? pct(rec.upside_from_buy_pct) : '—'}
+            <strong className={(upside ?? 0) < 0 ? 'neg' : ''}>
+              {upside != null ? pct(upside) : '—'}
             </strong>
           </article>
         </div>
@@ -221,8 +262,10 @@ export function StockPeekPopup({
           ) : null}
         </div>
 
-        {error ? <p className="stock-peek-empty">{error}</p> : null}
-        {loading ? <p className="stock-peek-note">Opening on-file numbers…</p> : null}
+        {showError ? <p className="stock-peek-empty">{error}</p> : null}
+        {error && !showError ? <p className="stock-peek-note">{error}</p> : null}
+        {peek?.history_note ? <p className="stock-peek-note">{peek.history_note}</p> : null}
+        {loading ? <p className="stock-peek-note">Loading on-file numbers…</p> : null}
 
         <MetricGrid
           title="Technicals"
@@ -237,7 +280,7 @@ export function StockPeekPopup({
 
         <section className="stock-peek-section">
           <h3>Ratios</h3>
-          {ratios.length === 0 ? (
+          {filledRatios.length === 0 ? (
             <p className="stock-peek-empty">No ratio table on file for {clean}.</p>
           ) : (
             <table className="stock-peek-ratios">
@@ -245,10 +288,10 @@ export function StockPeekPopup({
                 <tr><th>Ratio</th><th>Value</th><th>Period</th></tr>
               </thead>
               <tbody>
-                {ratios.slice(0, 16).map((row) => (
+                {filledRatios.slice(0, 16).map((row) => (
                   <tr key={row.key}>
                     <td>{row.label}</td>
-                    <td>{row.value != null ? formatPeekValue(row.value) : (row.missing_reason || 'Not on file')}</td>
+                    <td>{formatPeekValue(row.value)}</td>
                     <td>{row.period || '—'}</td>
                   </tr>
                 ))}
