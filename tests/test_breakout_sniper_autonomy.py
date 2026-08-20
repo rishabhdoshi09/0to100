@@ -176,6 +176,9 @@ def test_records_from_payload():
 def test_start_sniper_restarts_when_ticks_go_stale(monkeypatch):
     import time
     import scan.breakout_sniper as bs
+    from data.kite_ws_slot import reset_ticker_slot
+
+    reset_ticker_slot()
 
     class DeadTicker:
         def close(self):
@@ -183,6 +186,7 @@ def test_start_sniper_restarts_when_ticks_go_stale(monkeypatch):
 
     dead = DeadTicker()
     monkeypatch.setattr(bs, "_started", True, raising=False)
+    monkeypatch.setattr(bs, "_mode", "owner", raising=False)
     bs._ticker = dead
     bs._last_tick_ts = time.time() - 120
     monkeypatch.setattr("data.nse_live._is_trading_now", lambda: True)
@@ -197,3 +201,73 @@ def test_start_sniper_restarts_when_ticks_go_stale(monkeypatch):
         {"symbol": "SKIP", "status": "Watch", "signals": ["RSI"]},
     ]}
     assert sniper_watch_symbols(payload) == ["SETUP", "NEAR", "SNIPE"]
+
+
+def test_kite_ws_slot_is_exclusive():
+    from data.kite_ws_slot import claim_ticker, release_ticker, reset_ticker_slot, ticker_owner
+
+    reset_ticker_slot()
+    assert claim_ticker("live_feed") is True
+    assert claim_ticker("live_feed") is True
+    assert claim_ticker("sniper") is False
+    assert ticker_owner() == "live_feed"
+    release_ticker("sniper")
+    assert ticker_owner() == "live_feed"
+    release_ticker("live_feed")
+    assert ticker_owner() is None
+    assert claim_ticker("sniper") is True
+    reset_ticker_slot()
+
+
+def test_start_sniper_attaches_instead_of_second_socket(monkeypatch):
+    import scan.breakout_sniper as bs
+    from data.kite_ws_slot import claim_ticker, reset_ticker_slot
+
+    reset_ticker_slot()
+    assert claim_ticker("live_feed")
+    monkeypatch.setattr(bs, "_started", False, raising=False)
+    monkeypatch.setattr(bs, "_mode", "off", raising=False)
+    monkeypatch.setattr(bs, "_ws_forbidden_until", 0.0, raising=False)
+    bs._ticker = None
+    monkeypatch.setattr("execution.trade_executor.kite_ready", lambda: True)
+
+    def boom(*_a, **_k):
+        raise AssertionError("must not open a second KiteTicker")
+
+    monkeypatch.setattr("data.kite_client.KiteClient", boom)
+    assert bs.start_sniper() is True
+    assert bs._mode == "attached"
+    assert bs._ticker is None
+    reset_ticker_slot()
+
+
+def test_start_sniper_backs_off_after_403(monkeypatch):
+    import time
+    import scan.breakout_sniper as bs
+    from data.kite_ws_slot import reset_ticker_slot
+
+    reset_ticker_slot()
+    monkeypatch.setattr(bs, "_started", False, raising=False)
+    monkeypatch.setattr(bs, "_mode", "off", raising=False)
+    monkeypatch.setattr(bs, "_ws_forbidden_until", time.time() + 60, raising=False)
+    bs._ticker = None
+    monkeypatch.setattr("execution.trade_executor.kite_ready", lambda: True)
+
+    def boom(*_a, **_k):
+        raise AssertionError("must not reconnect during 403 backoff")
+
+    monkeypatch.setattr("data.kite_client.KiteClient", boom)
+    assert bs.start_sniper() is False
+    bs.remember_ws_forbidden(1006, "WebSocket connection upgrade failed (403 - Forbidden)")
+    assert bs._ws_forbidden_until > time.time()
+    assert bs.start_sniper() is False
+    reset_ticker_slot()
+
+
+def test_ingest_ticks_marks_sniper_alive(monkeypatch):
+    import scan.breakout_sniper as bs
+
+    monkeypatch.setattr(bs, "_watch", {}, raising=False)
+    bs._last_tick_ts = 0
+    bs.ingest_ticks([{"instrument_token": 1, "last_price": 10}])
+    assert bs._last_tick_ts > 0
