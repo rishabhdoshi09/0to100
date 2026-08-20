@@ -146,7 +146,6 @@ function RecoWaitPanel({
 
 export function RecommendationsView({
   dashboard,
-  selected,
   setSelected,
   setActive,
   marketScan,
@@ -167,6 +166,7 @@ export function RecommendationsView({
   const [categoryId, setCategoryId] = useState(boot?.ideasCategory || 'best_setups')
   const [lifecycle, setLifecycle] = useState<'Active' | 'Closed'>(boot?.ideasLifecycle || 'Active')
   const [query, setQuery] = useState('')
+  const [peekSymbol, setPeekSymbol] = useState('')
 
   useEffect(() => {
     let cancelled = false
@@ -223,12 +223,12 @@ export function RecommendationsView({
 
   const onSelect = (symbol: string) => {
     const clean = deskSymbol(symbol)
-    if (clean) setSelected(clean)
+    if (clean) setPeekSymbol(clean)
   }
 
-  const selectedRow = dashboard.scan.records.find((row) => deskSymbol(row.symbol) === deskSymbol(selected))
-    || dashboard.long_term.records.find((row) => deskSymbol(row.symbol) === deskSymbol(selected))
-    || dashboard.conviction.find((row) => deskSymbol(row.symbol) === deskSymbol(selected))
+  const selectedRow = dashboard.scan.records.find((row) => deskSymbol(row.symbol) === deskSymbol(peekSymbol))
+    || dashboard.long_term.records.find((row) => deskSymbol(row.symbol) === deskSymbol(peekSymbol))
+    || dashboard.conviction.find((row) => deskSymbol(row.symbol) === deskSymbol(peekSymbol))
 
   if (loading && !data) {
     return (
@@ -250,17 +250,21 @@ export function RecommendationsView({
     )
   }
 
-  const selectedCard = cards.find((card) => deskSymbol(card.symbol) === deskSymbol(selected))
-    || (data?.categories || []).flatMap((cat) => cat.cards || []).find((card) => deskSymbol(card.symbol) === deskSymbol(selected))
+  const selectedCard = cards.find((card) => deskSymbol(card.symbol) === deskSymbol(peekSymbol))
+    || (data?.categories || []).flatMap((cat) => cat.cards || []).find((card) => deskSymbol(card.symbol) === deskSymbol(peekSymbol))
 
-  const peek = selected ? (
+  const peek = peekSymbol ? (
     <StockPeekPopup
-      symbol={deskSymbol(selected)}
+      symbol={deskSymbol(peekSymbol)}
       card={selectedCard || selectedRow || null}
-      onClose={() => setSelected('')}
-      onOpenResearch={() => setActive('Stock Intelligence')}
-      onCompare={() => onCompare?.(selected)}
-      onWatchlist={() => onWatchlist?.(selected)}
+      onClose={() => setPeekSymbol('')}
+      onOpenResearch={() => {
+        setSelected(peekSymbol)
+        setPeekSymbol('')
+        setActive('Stock Intelligence')
+      }}
+      onCompare={() => onCompare?.(peekSymbol)}
+      onWatchlist={() => onWatchlist?.(peekSymbol)}
     />
   ) : null
 
@@ -358,7 +362,7 @@ export function RecommendationsView({
       ) : category.id === 'best_setups' && lifecycle === 'Active' ? (
         <TopStocksBoard
           cards={cards}
-          selected={selected}
+          selected={peekSymbol}
           onSelect={onSelect}
           session={data.session}
           tape={data.tape}
@@ -374,14 +378,14 @@ export function RecommendationsView({
             <CardTile
               key={`${card.lifecycle}-${deskSymbol(card.symbol)}-${card.setup_label}-${card.category_id}-${idx}`}
               card={card}
-              selected={selected}
+              selected={peekSymbol}
               onSelect={onSelect}
             />
           ))}
         </div>
       )}
       {peek}
-      {selected ? null : (
+      {peekSymbol ? null : (
         <p className="reco-foot">Tap a name for fundamentals, ratios and technicals.</p>
       )}
       <p className="reco-foot">{data.disclaimer}</p>
