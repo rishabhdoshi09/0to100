@@ -236,12 +236,20 @@ class KiteClient:
         on_connect,
         on_close,
         on_error=None,
+        *,
+        reconnect: bool = True,
     ) -> KiteTicker:
         """
         Return a configured KiteTicker (not yet connected).
         Caller is responsible for assigning tokens and calling connect().
+        Pass reconnect=False when the caller owns restart (sniper) so a
+        SIGTERM TCP drop does not auto-reconnect after [STOP].
         """
-        ticker = KiteTicker(api_key=self._api_key, access_token=self._access_token)
+        ticker = KiteTicker(
+            api_key=self._api_key,
+            access_token=self._access_token,
+            reconnect=bool(reconnect),
+        )
         ticker.on_ticks = on_ticks
         ticker.on_connect = on_connect
         ticker.on_close = on_close

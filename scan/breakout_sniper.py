@@ -35,9 +35,14 @@ _watch: dict[int, dict] = {}       # token -> {symbol, trigger, stop, target}
 _fired: dict[str, set] = {}        # {YYYY-MM-DD: {symbols}}
 _arm: dict[str, float] = {}        # symbol -> ts when it first CLEARED the level
 _ticker = None
+_owned_tickers: list = []
 _started = False
+_mode = "off"                 # off | owner | attached
+_stopping = False
 _last_tick_ts = 0.0
+_ws_forbidden_until = 0.0
 _SNIPER_STALE_S = 90.0
+_WS_FORBIDDEN_BACKOFF_S = 120.0
 
 # ── Confirmation thresholds (the false-break killer) ─────────────────────────
 # A tick TOUCHING the level is not a breakout — the intraday false-break is
@@ -322,7 +327,9 @@ def _send_sniper_telegram(fresh: list[dict]) -> bool:
     return False
 
 
-def _alert(hits: list[dict]) -> None:
+def _alert(hits: list[dict] | None) -> None:
+    if _stopping:
+        return
     today = datetime.now(IST).strftime("%Y-%m-%d")
     with _lock:
         _fired.setdefault(today, set())
@@ -371,16 +378,142 @@ def refresh_watch(results: list[dict]) -> int:
     return len(new_map)
 
 
+def ingest_ticks(ticks: list[dict] | None) -> None:
+    """Fold ticks from whoever owns the process KiteTicker (live feed or sniper)."""
+    global _last_tick_ts
+    if _stopping:
+        return
+    batch = list(ticks or [])
+    if not batch:
+        return
+    _last_tick_ts = time.time()
+    try:
+        from core.health import beat as _hb
+        _hb("sniper", note=f"{len(batch)} ticks")
+    except Exception:
+        pass
+    with _lock:
+        watch = dict(_watch)
+        today = datetime.now(IST).strftime("%Y-%m-%d")
+        fired = set(_fired.get(today, set()))
+    hits = process_ticks(batch, watch, fired)
+    if hits:
+        _alert(hits)
+
+
+def _ws_forbidden(code, reason) -> bool:
+    text = f"{code} {reason}".lower()
+    return "403" in text or "forbidden" in text
+
+
+def remember_ws_forbidden(code=None, reason: str = "") -> None:
+    """Stop hammering Kite after a 403 upgrade. Attach to the live feed instead."""
+    global _ws_forbidden_until, _started, _ticker, _mode
+    _ws_forbidden_until = time.time() + _WS_FORBIDDEN_BACKOFF_S
+    try:
+        from data.kite_ws_slot import release_ticker
+        release_ticker("sniper")
+    except Exception:
+        pass
+    with _lock:
+        _started = False
+        _ticker = None
+        _mode = "off"
+    log.warning(
+        "sniper_ws_403_backing_off",
+        retry_in_s=int(_WS_FORBIDDEN_BACKOFF_S),
+        code=code,
+        reason=str(reason)[:80],
+    )
+
+
+def _silence_ticker(ticker) -> None:
+    """Stop Autobahn retry then close. Never reactor.stop() — that kills the process loop."""
+    if ticker is None:
+        return
+    for name in ("stop_retry", "close"):
+        try:
+            fn = getattr(ticker, name, None)
+            if callable(fn):
+                fn()
+        except Exception:
+            pass
+
+
+def handle_ws_close(code=None, reason: str = "") -> None:
+    """on_close from KiteTicker. Shutdown and 403 must not schedule a reconnect storm."""
+    global _started, _ticker, _mode
+    if _stopping:
+        log.info("sniper_ws_closed_on_shutdown", code=code, reason=str(reason)[:80])
+        return
+    if _ws_forbidden(code, reason):
+        remember_ws_forbidden(code, reason)
+        return
+    with _lock:
+        _started = False
+        _ticker = None
+        _mode = "off"
+    try:
+        from data.kite_ws_slot import release_ticker
+        release_ticker("sniper")
+    except Exception:
+        pass
+    log.info("sniper_ws_closed_will_restart", code=code, reason=str(reason)[:80])
+
+
+def stop_sniper() -> None:
+    """Owner is stopping the stack. No new sockets, no Telegram, no kite reconnect."""
+    global _stopping, _started, _ticker, _mode
+    _stopping = True
+    owned = []
+    with _lock:
+        if _ticker is not None:
+            owned.append(_ticker)
+        owned.extend(_owned_tickers)
+        _owned_tickers.clear()
+        _ticker = None
+        _started = False
+        _mode = "off"
+    for ticker in owned:
+        _silence_ticker(ticker)
+    try:
+        from data.kite_ws_slot import release_ticker
+        release_ticker("sniper")
+    except Exception:
+        pass
+    log.info("sniper_stopped")
+
+
+def _attach_to_owner(owner: str) -> bool:
+    global _ticker, _started, _mode, _last_tick_ts
+    if _stopping:
+        return False
+    with _lock:
+        _ticker = None
+        _started = True
+        _mode = "attached"
+        _last_tick_ts = time.time()
+    log.info("sniper_attached_to_existing_ticker", owner=owner)
+    return True
+
+
 def start_sniper() -> bool:
     """Start the tick stream (idempotent). False when Kite/ws unavailable.
 
     A socket that stays "started" but stops ticking during market hours is
     treated as dead — daily token expiry and silent WS hangs used to mute
     Telegram until process restart.
+
+    Never opens a second KiteTicker while the autonomy live feed (or anyone
+    else in this process) already owns the slot — that upgrade fails 403.
     """
-    global _ticker, _started, _last_tick_ts
+    global _ticker, _started, _mode, _last_tick_ts
+    if _stopping:
+        return False
     stale_ticker = None
     with _lock:
+        if _started and _mode == "attached":
+            return True
         if _started:
             trading = False
             try:
@@ -398,35 +531,38 @@ def start_sniper() -> bool:
             stale_ticker = _ticker
             _ticker = None
             _started = False
+            _mode = "off"
             log.warning("sniper_stale_restart", idle_s=int(time.time() - _last_tick_ts) if _last_tick_ts else 0)
     if stale_ticker is not None:
         try:
             stale_ticker.close()
         except Exception:
             pass
+        try:
+            from data.kite_ws_slot import release_ticker
+            release_ticker("sniper")
+        except Exception:
+            pass
     try:
         from execution.trade_executor import kite_ready
         if not kite_ready():
             return False
+        from data.kite_ws_slot import claim_ticker, ticker_owner
+
+        owner = ticker_owner()
+        if owner and owner != "sniper":
+            return _attach_to_owner(owner)
+        if time.time() < _ws_forbidden_until:
+            log.info("sniper_ws_403_wait", retry_in_s=int(_ws_forbidden_until - time.time()))
+            return False
+        if not claim_ticker("sniper"):
+            return _attach_to_owner(ticker_owner() or "other")
         from data.kite_client import KiteClient
 
-        def on_ticks(ws, ticks):
-            global _last_tick_ts
-            _last_tick_ts = time.time()
-            try:
-                from core.health import beat as _hb
-                _hb("sniper", note=f"{len(ticks)} ticks")
-            except Exception:
-                pass
-            with _lock:
-                watch = dict(_watch)
-                today = datetime.now(IST).strftime("%Y-%m-%d")
-                fired = set(_fired.get(today, set()))
-            hits = process_ticks(ticks, watch, fired)
-            if hits:
-                _alert(hits)
-
         def on_connect(ws, response):
+            if _stopping:
+                _silence_ticker(ws)
+                return
             with _lock:
                 tokens = list(_watch)
             if tokens:
@@ -435,23 +571,44 @@ def start_sniper() -> bool:
             log.info("sniper_connected", watching=len(tokens))
 
         def on_close(ws, code, reason):
-            # Mark dead so the next scan cycle restarts with a FRESH token —
-            # otherwise a daily token expiry kills the sniper until app restart.
-            global _started, _ticker
-            with _lock:
-                _started = False
-                _ticker = None
-            log.info("sniper_ws_closed_will_restart", code=code,
-                     reason=str(reason)[:80])
+            handle_ws_close(code, reason)
 
-        kws = KiteClient().get_ticker(on_ticks, on_connect, on_close)
+        def on_error(ws, code, reason):
+            if _stopping:
+                return
+            if _ws_forbidden(code, reason):
+                remember_ws_forbidden(code, reason)
+
+        def on_ticks(ws, ticks):
+            ingest_ticks(ticks)
+
+        kws = KiteClient().get_ticker(
+            on_ticks, on_connect, on_close, on_error, reconnect=False,
+        )
         kws.connect(threaded=True)
+        if _stopping:
+            _silence_ticker(kws)
+            return False
         _ticker = kws
+        _owned_tickers.append(kws)
         with _lock:
             _started = True
+            _mode = "owner"
             _last_tick_ts = time.time()
         log.info("sniper_started")
         return True
     except Exception as exc:
         log.debug("sniper_start_failed", error=str(exc))
+        try:
+            from data.kite_ws_slot import release_ticker
+            release_ticker("sniper")
+        except Exception:
+            pass
         return False
+
+
+try:
+    import atexit
+    atexit.register(stop_sniper)
+except Exception:
+    pass

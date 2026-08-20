@@ -136,15 +136,20 @@ class KiteTickerFeed:
         return self._clock()
 
     def _on_ticks(self, ws, ticks) -> None:
-        if not self.overlay:
-            return
-        for tk in ticks:
-            sym = self._t2s.get(tk.get("instrument_token"))
-            price = tk.get("last_price")
-            if not sym or not price:
-                continue
-            ts = tk.get("exchange_timestamp") or tk.get("last_trade_time")
-            self.overlay.on_tick(sym, float(price), self._epoch(ts))
+        if self.overlay:
+            for tk in ticks or []:
+                sym = self._t2s.get(tk.get("instrument_token"))
+                price = tk.get("last_price")
+                if not sym or not price:
+                    continue
+                ts = tk.get("exchange_timestamp") or tk.get("last_trade_time")
+                self.overlay.on_tick(sym, float(price), self._epoch(ts))
+        # One KiteTicker per process — sniper must not open a second socket.
+        try:
+            from scan.breakout_sniper import ingest_ticks
+            ingest_ticks(list(ticks or []))
+        except Exception:
+            pass
 
     def _on_connect(self, ws, response=None) -> None:
         if self.overlay:

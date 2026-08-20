@@ -193,6 +193,11 @@ def _startup() -> None:
 @app.on_event("shutdown")
 def _shutdown() -> None:
     global _ops_process
+    try:
+        from scan.breakout_sniper import stop_sniper
+        stop_sniper()
+    except Exception:
+        pass
     if _ops_process is not None and _ops_process.poll() is None:
         _ops_process.terminate()
         try:

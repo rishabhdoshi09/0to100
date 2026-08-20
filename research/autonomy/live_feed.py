@@ -48,15 +48,23 @@ class LiveFeedController:
                 if not token_to_symbol:
                     raise RuntimeError("no approved subscription tokens resolved")
                 from kiteconnect import KiteTicker
+                from data.kite_ws_slot import claim_ticker, ticker_owner
                 from research.intelligence.data.kite_activation import KiteTickerFeed
                 from research.intelligence.data.kite_live import KiteLiveOverlay
-                self.ticker = KiteTicker(api_key=api_key, access_token=token)
+                if not claim_ticker("live_feed"):
+                    raise RuntimeError(
+                        f"Kite WebSocket already owned by {ticker_owner()} — "
+                        "not opening a second ticker (403 Forbidden)"
+                    )
+                self.ticker = KiteTicker(api_key=api_key, access_token=token, reconnect=False)
                 self.overlay = KiteLiveOverlay()
                 self.feed = KiteTickerFeed(self.ticker, token_to_symbol=token_to_symbol,
                                            overlay=self.overlay)
                 self.overlay.feed = self.feed
             elif self.feed is not None and token_to_symbol:
                 self.feed.add_mappings(token_to_symbol)
+            from data.kite_ws_slot import claim_ticker
+            claim_ticker("live_feed")
             if not getattr(self.overlay, "connected", False):
                 self.overlay.connect()
             self.overlay.subscribe(symbols)
@@ -69,8 +77,18 @@ class LiveFeedController:
 
     def stop(self) -> None:
         try:
-            if self.ticker is not None and hasattr(self.ticker, "close"):
-                self.ticker.close()
+            if self.ticker is not None:
+                try:
+                    self.ticker.stop_retry()
+                except Exception:
+                    pass
+                if hasattr(self.ticker, "close"):
+                    self.ticker.close()
+        except Exception:
+            pass
+        try:
+            from data.kite_ws_slot import release_ticker
+            release_ticker("live_feed")
         except Exception:
             pass
         if self.overlay is not None:
