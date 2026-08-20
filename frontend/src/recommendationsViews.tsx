@@ -171,27 +171,37 @@ export function RecommendationsView({
   useEffect(() => {
     let cancelled = false
     if (!data) setLoading(true)
-    fetchRecommendationsWorkspace()
-      .then((payload) => {
-        if (!cancelled) {
-          setData(payload)
-          saveCachedJson('reco-workspace', payload)
-          const saved = loadDeskSession()?.ideasCategory
-          if (!saved) {
-            const firstWithCards = payload.categories.find((c) => c.count > 0)
-            if (firstWithCards) setCategoryId(firstWithCards.id)
-          }
-          setError('')
-        }
+    const apply = (payload: RecommendationsWorkspace) => {
+      if (cancelled) return
+      setData((prev) => {
+        const incoming = (payload.categories || []).reduce((n, c) => n + (c.cards?.length || 0), 0)
+        const had = (prev?.categories || []).reduce((n, c) => n + (c.cards?.length || 0), 0)
+        if (incoming === 0 && had > 0) return prev
+        saveCachedJson('reco-workspace', payload)
+        return payload
       })
-      .catch((err: Error) => {
-        if (!cancelled && !data) setError(err.message || 'Failed to load recommendations')
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false)
-      })
+      const saved = loadDeskSession()?.ideasCategory
+      if (!saved) {
+        const firstWithCards = payload.categories.find((c) => c.count > 0)
+        if (firstWithCards) setCategoryId(firstWithCards.id)
+      }
+      setError('')
+    }
+    const load = () => {
+      fetchRecommendationsWorkspace()
+        .then(apply)
+        .catch((err: Error) => {
+          if (!cancelled && !data) setError(err.message || 'Failed to load recommendations')
+        })
+        .finally(() => {
+          if (!cancelled) setLoading(false)
+        })
+    }
+    load()
+    const timer = window.setInterval(load, 60_000)
     return () => {
       cancelled = true
+      window.clearInterval(timer)
     }
   }, [])
 

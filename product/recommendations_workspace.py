@@ -632,9 +632,20 @@ def _stamp_live_cmp(categories: Sequence[Mapping[str, Any]]) -> None:
         symbols.append(sym)
     if not symbols:
         return
+    quotes: dict[str, Any] = {}
     try:
+        from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
         from data.live_quotes import get_live_quotes
-        quotes = get_live_quotes(symbols[:80], ttl=8.0, allow_google=False) or {}
+        pool = ThreadPoolExecutor(max_workers=1)
+        try:
+            fut = pool.submit(
+                lambda: get_live_quotes(symbols[:80], ttl=8.0, allow_google=False),
+            )
+            quotes = fut.result(timeout=2.5) or {}
+        except FuturesTimeout:
+            return
+        finally:
+            pool.shutdown(wait=False, cancel_futures=True)
     except Exception:
         return
     for card in cards:
@@ -829,6 +840,28 @@ def _workspace_cache_key(scan_at: str, lt_at: str) -> str:
     return f"{scan_at}|{lt_at}"
 
 
+def _card_count(workspace: Mapping[str, Any] | None) -> int:
+    if not workspace:
+        return 0
+    n = 0
+    for cat in workspace.get("categories") or []:
+        if isinstance(cat, dict):
+            n += len(cat.get("cards") or [])
+    return n
+
+
+def load_last_recommendations_workspace() -> dict[str, Any] | None:
+    """Most recent ranked Ideas payload, even if the scan stamp moved."""
+    if not WORKSPACE_CACHE.exists():
+        return None
+    try:
+        blob = json.loads(WORKSPACE_CACHE.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    workspace = blob.get("workspace")
+    return dict(workspace) if isinstance(workspace, dict) else None
+
+
 def load_cached_recommendations_workspace(scan_at: str, lt_at: str) -> dict[str, Any] | None:
     """Last Ideas ranking for this scan file. Empty / mismatch → None (never invent)."""
     if not scan_at or not WORKSPACE_CACHE.exists():
@@ -885,6 +918,16 @@ def serve_recommendations_workspace(
         cached["served_from_cache"] = True
         cached["generated_at"] = datetime.now(timezone.utc).isoformat()
         return cached
+    records = scan.get("records") or []
+    if not scan_at or not records:
+        last = load_last_recommendations_workspace()
+        if last and _card_count(last) > 0:
+            last["served_from_cache"] = True
+            last["stale_ranking"] = True
+            last["generated_at"] = datetime.now(timezone.utc).isoformat()
+            if refresh_technicals:
+                _stamp_live_cmp(last.get("categories") or [])
+            return last
     payload = build_recommendations_workspace(
         scan_payload=scan,
         long_term_payload=lt,

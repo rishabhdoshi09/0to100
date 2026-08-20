@@ -106,8 +106,23 @@ def refresh_row_technicals(
         if avg20 <= 0 and "volume" in frame.columns and len(frame) >= 21:
             avg20 = float(frame["volume"].astype(float).iloc[-21:-1].mean() or 0)
         # Incomplete live prints sometimes land with volume=0 — keep prior ratio.
+        # A partial session print that IS >0 can still look "thin" vs a full
+        # average day (0.3× by 10:15) and empty the sniper / Ideas breakout
+        # lane. During RTH, never let live volume demote a passing scan ratio.
+        prior_ratio = _f(out.get("volume_ratio"))
         if avg20 > 0 and vol > 0:
-            out["volume_ratio"] = round(vol / avg20, 2)
+            live_ratio = vol / avg20
+            try:
+                from data.nse_live import _is_trading_now
+                trading = bool(_is_trading_now())
+            except Exception:
+                trading = False
+            if trading:
+                frac = max(_session_frac(), 0.15)
+                paced = live_ratio / frac
+                out["volume_ratio"] = round(max(prior_ratio, live_ratio, min(paced, 20.0)), 2)
+            else:
+                out["volume_ratio"] = round(live_ratio, 2)
         out["price_tag"] = meta.get("price_tag") or ("LIVE" if meta.get("live") else "EOD")
         out["tech_source"] = "live" if meta.get("live") else "eod"
         out.update(_structure_from_frame(frame, float(close.iloc[-1])))
@@ -116,15 +131,39 @@ def refresh_row_technicals(
     return out
 
 
+def _session_frac() -> float:
+    """Fraction of the NSE cash session elapsed (0..1). Fail-open at 1.0."""
+    try:
+        from core.market_clock import now_ist
+        now = now_ist()
+        mins = now.hour * 60 + now.minute
+        open_m, close_m = 9 * 60 + 15, 15 * 60 + 30
+        return max(0.0, min(1.0, (mins - open_m) / (close_m - open_m)))
+    except Exception:
+        return 1.0
+
+
 def _structure_from_frame(frame, close: float) -> dict[str, float]:
-    """Distance from recent highs — used to drop faded scan-time breakouts."""
+    """Distance from recent highs — used to drop faded scan-time breakouts.
+
+    Today's incomplete bar must not become the 20-day high. A morning spike
+    that gives back would otherwise mark every live breakout as faded and
+    empty the sniper lane by midday.
+    """
     try:
         high = frame["high"].astype(float) if "high" in frame.columns else frame["close"].astype(float)
         high = high.dropna()
         if high.empty or close <= 0:
             return {}
-        lookback_20 = high.iloc[-20:] if len(high) >= 20 else high
-        lookback_52w = high.iloc[-252:] if len(high) >= 252 else high
+        try:
+            last_day = getattr(frame.index[-1], "date", lambda: frame.index[-1])()
+            from core.market_clock import today_ist
+            exclude_today = str(last_day) == str(today_ist())
+        except Exception:
+            exclude_today = False
+        prior = high.iloc[:-1] if exclude_today and len(high) > 1 else high
+        lookback_20 = prior.iloc[-20:] if len(prior) >= 20 else prior
+        lookback_52w = prior.iloc[-252:] if len(prior) >= 252 else prior
         h20 = float(lookback_20.max())
         h52 = float(lookback_52w.max())
         out: dict[str, float] = {}
@@ -147,14 +186,18 @@ def refresh_rows_technicals(
     allow_network: bool = False,
 ) -> list[dict[str, Any]]:
     items = list(rows)
+    head = items
+    tail: list[dict[str, Any]] = []
     if limit is not None:
-        items = items[: max(0, int(limit))]
-    if bulk_overlay and items:
+        cap = max(0, int(limit))
+        head = items[:cap]
+        tail = [dict(r) for r in items[cap:]]
+    if bulk_overlay and head:
         ensure_live_store_overlay()
     # After a bulk store overlay, never scrape per symbol.
     network = bool(allow_network) and not bulk_overlay
-    refreshed = [refresh_row_technicals(r, allow_network=network) for r in items]
-    return _apply_kite_last(refreshed)
+    refreshed = [refresh_row_technicals(r, allow_network=network) for r in head]
+    return _apply_kite_last(refreshed) + tail
 
 
 def _apply_kite_last(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -175,7 +218,17 @@ def _apply_kite_last(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         from data.live_quotes import _kite_quotes
         symbols = [str(r.get("symbol") or "").strip().upper() for r in rows]
         symbols = [s for s in symbols if s]
-        quotes = _kite_quotes(symbols) if symbols else {}
+        if not symbols:
+            quotes = {}
+        else:
+            from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
+            pool = ThreadPoolExecutor(max_workers=1)
+            try:
+                quotes = pool.submit(_kite_quotes, symbols).result(timeout=2.5) or {}
+            except FuturesTimeout:
+                quotes = {}
+            finally:
+                pool.shutdown(wait=False, cancel_futures=True)
     except Exception:
         return rows
     if not quotes:
