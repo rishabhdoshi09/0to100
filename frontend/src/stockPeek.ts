@@ -23,6 +23,42 @@ export type PeekMetric = {
   unit?: string
 }
 
+export function peekNumber(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isFinite(value)) return value
+  if (typeof value === 'string' && value.trim()) {
+    const n = Number(value.replace(/,/g, ''))
+    return Number.isFinite(n) ? n : null
+  }
+  return null
+}
+
+export function peekUpsidePct(buy: unknown, target: unknown): number | null {
+  const entry = peekNumber(buy)
+  const tgt = peekNumber(target)
+  if (entry == null || tgt == null || entry <= 0) return null
+  return Math.round(((tgt / entry) - 1) * 1000) / 10
+}
+
+export function filledPeekMetrics(metrics: PeekMetric[]): PeekMetric[] {
+  return metrics.filter((item) => {
+    if (peekNumber(item.value) != null) return true
+    return typeof item.value === 'string' && item.value.trim() !== '' && item.value !== 'Not on file'
+  })
+}
+
+export function mergePeekMetrics(primary: PeekMetric[], fallback: PeekMetric[]): PeekMetric[] {
+  const byKey = new Map<string, PeekMetric>()
+  for (const item of fallback) {
+    if (item?.key) byKey.set(item.key, item)
+  }
+  for (const item of primary) {
+    if (!item?.key) continue
+    const n = peekNumber(item.value)
+    if (n != null || !byKey.has(item.key)) byKey.set(item.key, item)
+  }
+  return [...byKey.values()]
+}
+
 export function orderPeekMetrics(metrics: PeekMetric[], preferred: string[]): PeekMetric[] {
   const byKey = new Map(metrics.map((item) => [item.key, item]))
   const out: PeekMetric[] = []
@@ -35,6 +71,8 @@ export function orderPeekMetrics(metrics: PeekMetric[], preferred: string[]): Pe
   }
   return out
 }
+
+export const PEEK_FETCH_MS = 8_000
 
 export const PEEK_TECHNICAL_KEYS = [
   'close', 'change_pct', 'rsi14', 'ema20', 'ema50', 'ema200',
