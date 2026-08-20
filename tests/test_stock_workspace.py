@@ -345,7 +345,7 @@ def test_default_inputs_does_not_wait_on_hung_ohlcv(monkeypatch):
     import product.stock_workspace as sw
 
     def hang(_symbol):
-        time.sleep(30)
+        time.sleep(1)
         raise AssertionError("OHLCV must be timed out")
 
     def no_scrape(*_a, **_k):

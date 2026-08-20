@@ -108,7 +108,7 @@ def test_peek_does_not_wait_on_hung_history_or_scrape(monkeypatch):
     import product.stock_peek as peek
 
     def hang():
-        time.sleep(30)
+        time.sleep(4)
         raise AssertionError("history must be timed out")
 
     def scrape(*_a, **_k):
