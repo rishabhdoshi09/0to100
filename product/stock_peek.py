@@ -26,6 +26,7 @@ from product.stock_workspace import (
 
 OHLCV_SECONDS = 2.5
 QUOTE_SECONDS = 2.0
+SCRAPE_SECONDS = 18.0
 
 
 def _call_with_timeout(fn: Callable[[], Any], seconds: float, default: Any = None) -> Any:
@@ -218,15 +219,40 @@ def _apply_quote(technical: dict[str, Any], quote: Mapping[str, Any]) -> dict[st
 
 
 def _ratios_for(symbol: str, raw: Mapping[str, Any], price: float | None) -> list[dict[str, Any]]:
+    blob = dict(raw.get("data") or raw or {})
+    rows: list[dict[str, Any]] = []
     try:
         from data_platform.ratios import ratios_from_fundamentals
-        blob = dict(raw.get("data") or raw or {})
         if price is not None:
             blob = {**blob, "current_price": price, "price": price}
-        rows = ratios_from_fundamentals(symbol, blob)
-        return [row for row in rows if isinstance(row, Mapping) and row.get("value") is not None]
+        rows = [
+            row for row in ratios_from_fundamentals(symbol, blob)
+            if isinstance(row, Mapping) and row.get("value") is not None
+        ]
     except Exception:
-        return []
+        rows = []
+    seen = {str(row.get("key") or "").lower() for row in rows}
+    for item in blob.get("key_ratios") or []:
+        if not isinstance(item, Mapping):
+            continue
+        name = str(item.get("name") or "").strip()
+        value = _f(item.get("value"))
+        if not name or value is None:
+            continue
+        key = "".join(ch.lower() if ch.isalnum() else "_" for ch in name).strip("_")
+        key = key or name.lower()
+        aliases = {key, name.lower().replace(" ", "_"), "pe" if "p/e" in name.lower() or name.lower() == "pe" else ""}
+        if seen & {a for a in aliases if a}:
+            continue
+        seen.add(key)
+        rows.append({
+            "key": key,
+            "label": name,
+            "value": value,
+            "period": str(blob.get("period") or "Screener.in"),
+            "formula": "Screener.in key ratio",
+        })
+    return rows
 
 
 def build_stock_peek(
@@ -345,7 +371,137 @@ def build_stock_peek(
         "fundamentals_cache": str((raw_fundamentals or {}).get("cache_status") or ""),
         "disclaimer": (
             "Snapshot numbers from the last scan, official history, and on-file packs. "
-            "Missing ratios stay missing — this popup does not scrape."
+            "Missing P/E, ROE and ratio tables are fetched from Screener.in / Yahoo "
+            "in the background — never invented."
         ),
+        "pack_thin": False,
+        "scrape": None,
     }
+    payload["pack_thin"] = _pack_is_thin(payload)
     return _sanitize_json(payload)
+
+
+def _pack_is_thin(payload: Mapping[str, Any]) -> bool:
+    funds = dict(payload.get("fundamentals") or {})
+    metrics = [
+        m for m in (funds.get("metrics") or [])
+        if isinstance(m, Mapping) and _f(m.get("value")) is not None
+    ]
+    ratios = [
+        r for r in (payload.get("ratios") or [])
+        if isinstance(r, Mapping) and r.get("value") not in (None, "")
+    ]
+    keys = [
+        r for r in (funds.get("key_ratios") or [])
+        if isinstance(r, Mapping) and r.get("value") not in (None, "")
+    ]
+    return not metrics and not ratios and not keys
+
+
+def fetch_missing_fundamentals_for_peek(
+    symbol: str,
+    *,
+    resolve_fn: Callable[..., Any] | None = None,
+    timeout: float = SCRAPE_SECONDS,
+    scan_payload: Mapping[str, Any] | None = None,
+    long_term_payload: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Scrape Screener → Yahoo only when the on-file pack has no numbers.
+
+    GET peek stays cache-only. This path is POST, timed, and never invents.
+    """
+    symbol = clean_symbol(symbol)
+    if scan_payload is None or long_term_payload is None:
+        scan_file, lt_file = _scan_and_long_term()
+        scan_payload = scan_file if scan_payload is None else scan_payload
+        long_term_payload = lt_file if long_term_payload is None else long_term_payload
+    existing = build_stock_peek(
+        symbol,
+        scan_payload=scan_payload,
+        long_term_payload=long_term_payload,
+        load_history=False,
+        load_live=False,
+    )
+    if not _pack_is_thin(existing):
+        existing["scrape"] = {
+            "ran": False,
+            "outcome": "CACHE",
+            "message": "On-file pack already has numbers — no scrape.",
+        }
+        existing["pack_thin"] = False
+        return _sanitize_json(existing)
+
+    def _run():
+        try:
+            fn = resolve_fn
+            if fn is None:
+                from fundamentals.resolver import resolve
+                fn = resolve
+            return ("ok", fn(symbol, force_refresh=False, write_cache=True))
+        except Exception as exc:
+            return ("error", str(exc)[:240])
+
+    result = _call_with_timeout(_run, timeout, default=("timeout", None))
+    kind, payload = result if isinstance(result, tuple) else ("timeout", None)
+    if kind == "timeout":
+        existing["scrape"] = {
+            "ran": True,
+            "outcome": "TIMEOUT",
+            "message": "Screener.in / Yahoo did not finish in time. Card numbers stay; nothing was invented.",
+        }
+        existing["pack_thin"] = True
+        return _sanitize_json(existing)
+    if kind == "error":
+        existing["scrape"] = {
+            "ran": True,
+            "outcome": "ERROR",
+            "message": str(payload or "Fundamentals scrape failed"),
+        }
+        existing["pack_thin"] = True
+        return _sanitize_json(existing)
+
+    resolved = payload
+    data: Any = None
+    steps: list[Any] = []
+    if isinstance(resolved, tuple) and len(resolved) >= 1:
+        data = resolved[0]
+        steps = list(resolved[1] or []) if len(resolved) > 1 else []
+    elif isinstance(resolved, Mapping):
+        data = resolved
+
+    raw = {
+        "available": bool(data),
+        "data": dict(data or {}) if isinstance(data, Mapping) else {},
+        "cache_status": "TODAY" if data else "",
+        "fetched_at": str((data or {}).get("_fetched_at") or "") if isinstance(data, Mapping) else "",
+    }
+    peek = build_stock_peek(
+        symbol,
+        scan_payload=scan_payload,
+        long_term_payload=long_term_payload,
+        raw_fundamentals=raw,
+        load_history=False,
+        load_live=False,
+    )
+    source = str((data or {}).get("_source") or "") if isinstance(data, Mapping) else ""
+    if data:
+        peek["disclaimer"] = (
+            f"Missing ratios filled from {source or 'Screener.in / Yahoo'} — not invented."
+        )
+        peek["scrape"] = {
+            "ran": True,
+            "outcome": "READY",
+            "source": source,
+            "steps": steps[-6:],
+            "message": f"Fetched {source or 'fundamentals'} pack.",
+        }
+    else:
+        peek["scrape"] = {
+            "ran": True,
+            "outcome": "MISSING",
+            "source": source,
+            "steps": steps[-6:],
+            "message": "Screener.in and Yahoo did not return a usable pack. Nothing was invented.",
+        }
+    peek["pack_thin"] = _pack_is_thin(peek)
+    return _sanitize_json(peek)

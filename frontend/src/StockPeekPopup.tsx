@@ -4,6 +4,7 @@ import { money, pct } from './format'
 import { deskSymbol } from './deskThesis'
 import { loadCachedJson, saveCachedJson } from './deskSession'
 import {
+  fetchPeekMissing,
   fetchStockPeek,
   type IntelligenceMetric,
   type RecommendationCard,
@@ -18,9 +19,11 @@ import {
   mergePeekMetrics,
   orderPeekMetrics,
   PEEK_FETCH_MS,
+  PEEK_SCRAPE_MS,
   PEEK_FUND_KEYS,
   PEEK_TECHNICAL_KEYS,
   peekNumber,
+  peekPackThin,
   snapshotFromCard,
   type PeekMetric,
 } from './stockPeek'
@@ -124,6 +127,10 @@ export function StockPeekPopup({
   )
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(!loadCachedJson(`peek:${clean}`) && !workspace)
+  const [scraping, setScraping] = useState(false)
+  const [scrapeNote, setScrapeNote] = useState('')
+  const [peekLoaded, setPeekLoaded] = useState(false)
+  const [scrapeNonce, setScrapeNonce] = useState(0)
 
   useEffect(() => {
     document.documentElement.classList.add('stock-peek-open')
@@ -158,9 +165,12 @@ export function StockPeekPopup({
     fetchStockPeek(clean, ac.signal)
       .then((payload) => {
         if (!alive) return
-        setPeek(payload)
-        saveCachedJson(`peek:${clean}`, payload)
-        if (payload.ratios?.length) {
+        setPeek((prev) => {
+          if (prev?.scrape?.outcome === 'READY' && peekPackThin(payload)) return prev
+          saveCachedJson(`peek:${clean}`, payload)
+          return payload
+        })
+        if (payload.ratios?.length && !peekPackThin(payload)) {
           setRatios(payload.ratios)
           saveCachedJson(`ratios:${clean}`, payload.ratios)
         }
@@ -177,14 +187,58 @@ export function StockPeekPopup({
       })
       .finally(() => {
         window.clearTimeout(to)
-        if (alive) setLoading(false)
+        if (alive) {
+          setLoading(false)
+          setPeekLoaded(true)
+        }
+      })
+    return () => {
+      alive = false
+      ac.abort()
+      window.clearTimeout(to)
+      setPeekLoaded(false)
+    }
+  }, [clean])
+
+  useEffect(() => {
+    if (!peekLoaded || !peek) return
+    if (deskSymbol(String(peek.symbol || clean)) !== clean) return
+    if (peek.scrape?.ran) return
+    if (!peekPackThin(peek) && peek.pack_thin !== true) return
+    let alive = true
+    const ac = new AbortController()
+    const to = window.setTimeout(() => ac.abort(), PEEK_SCRAPE_MS)
+    setScraping(true)
+    setScrapeNote('Fetching missing P/E, ROE and ratios from Screener.in / Yahoo…')
+    fetchPeekMissing(clean, ac.signal)
+      .then((payload) => {
+        if (!alive) return
+        setPeek(payload)
+        saveCachedJson(`peek:${clean}`, payload)
+        if (payload.ratios?.length) {
+          setRatios(payload.ratios)
+          saveCachedJson(`ratios:${clean}`, payload.ratios)
+        }
+        setScrapeNote(payload.scrape?.message || '')
+      })
+      .catch((reason: Error) => {
+        if (!alive) return
+        if (reason?.name === 'AbortError' || /failed to fetch/i.test(reason.message || '')) {
+          setScrapeNote('Screener.in / Yahoo did not finish in time. Card numbers stay — nothing was invented.')
+          return
+        }
+        setScrapeNote(reason.message || 'Missing-ratio scrape failed')
+      })
+      .finally(() => {
+        window.clearTimeout(to)
+        if (alive) setScraping(false)
       })
     return () => {
       alive = false
       ac.abort()
       window.clearTimeout(to)
     }
-  }, [clean])
+  }, [clean, peekLoaded, peek?.pack_thin, peek?.scrape?.ran, scrapeNonce])
 
   const fromCard = snapshotFromCard(rec as Record<string, unknown>)
   const cmp = peekNumber(peek?.cmp) ?? fromCard.cmp ?? workspace?.technical.close ?? null
@@ -266,6 +320,8 @@ export function StockPeekPopup({
         {error && !showError ? <p className="stock-peek-note">{error}</p> : null}
         {peek?.history_note ? <p className="stock-peek-note">{peek.history_note}</p> : null}
         {loading ? <p className="stock-peek-note">Loading on-file numbers…</p> : null}
+        {scraping ? <p className="stock-peek-note">{scrapeNote || 'Fetching missing ratios…'}</p> : null}
+        {!scraping && scrapeNote ? <p className="stock-peek-note">{scrapeNote}</p> : null}
 
         <MetricGrid
           title="Technicals"
@@ -275,13 +331,19 @@ export function StockPeekPopup({
         <MetricGrid
           title="Fundamentals"
           items={fundamentals}
-          empty="No calculated pack on file. This popup does not scrape to invent P/E or ROE."
+          empty={scraping
+            ? 'Fetching P/E, ROE and quality ratios from Screener.in / Yahoo…'
+            : 'No calculated pack on file yet. Open Fetch missing or wait for Screener/Yahoo.'}
         />
 
         <section className="stock-peek-section">
           <h3>Ratios</h3>
           {filledRatios.length === 0 ? (
-            <p className="stock-peek-empty">No ratio table on file for {clean}.</p>
+            <p className="stock-peek-empty">
+              {scraping
+                ? 'Fetching the ratio table…'
+                : `No ratio table on file for ${clean} yet.`}
+            </p>
           ) : (
             <table className="stock-peek-ratios">
               <thead>
@@ -317,6 +379,23 @@ export function StockPeekPopup({
 
         <footer className="stock-peek-actions">
           <button type="button" className="reco-primary" onClick={onOpenResearch}>Full research</button>
+          {fundamentals.length === 0 && filledRatios.length === 0 ? (
+            <button
+              type="button"
+              className="reco-ghost"
+              disabled={scraping}
+              onClick={() => {
+                setPeek((prev) => (
+                  prev
+                    ? { ...prev, pack_thin: true, scrape: { ran: false, outcome: '', message: '' } }
+                    : prev
+                ))
+                setScrapeNonce((n) => n + 1)
+              }}
+            >
+              {scraping ? 'Fetching…' : 'Fetch missing ratios'}
+            </button>
+          ) : null}
           <button type="button" className="reco-ghost" onClick={onCompare}>Compare</button>
           <button type="button" className="reco-ghost" onClick={onWatchlist}>Watchlist</button>
         </footer>

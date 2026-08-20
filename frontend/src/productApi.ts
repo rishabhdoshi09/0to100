@@ -849,10 +849,25 @@ export type StockPeekPayload = {
   history_note?: string
   fundamentals_cache?: string
   disclaimer?: string
+  pack_thin?: boolean
+  scrape?: {
+    ran?: boolean
+    outcome?: string
+    source?: string
+    message?: string
+    steps?: Array<Record<string, unknown>>
+  } | null
 }
 
 export const fetchStockPeek = (symbol: string, signal?: AbortSignal): Promise<StockPeekPayload> =>
   fetch(`/api/stock-peek/${encodeURIComponent(symbol)}`, {
+    headers: { Accept: 'application/json' },
+    signal,
+  }).then((response) => json<StockPeekPayload>(response))
+
+export const fetchPeekMissing = (symbol: string, signal?: AbortSignal): Promise<StockPeekPayload> =>
+  fetch(`/api/stock-peek/${encodeURIComponent(symbol)}/fetch-missing`, {
+    method: 'POST',
     headers: { Accept: 'application/json' },
     signal,
   }).then((response) => json<StockPeekPayload>(response))

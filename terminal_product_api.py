@@ -726,6 +726,22 @@ def stock_peek(symbol: str) -> dict[str, Any]:
         raise HTTPException(status_code=500, detail=f"Stock snapshot failed: {exc}") from exc
 
 
+@app.post("/api/stock-peek/{symbol}/fetch-missing")
+def stock_peek_fetch_missing(symbol: str) -> dict[str, Any]:
+    """Scrape Screener.in → Yahoo for missing P/E, ROE and ratio tables only.
+
+    Timed. Does not rebuild the full intelligence workspace. Card numbers stay
+    if the scrape hangs or returns nothing.
+    """
+    try:
+        from product.stock_peek import fetch_missing_fundamentals_for_peek
+        return fetch_missing_fundamentals_for_peek(clean_symbol(symbol))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Missing-ratio scrape failed: {exc}") from exc
+
+
 @app.get("/api/stock-intelligence/{symbol}")
 def stock_intelligence(symbol: str) -> dict[str, Any]:
     """Read-only workspace from cache and official history. Does not scrape filings.
@@ -773,7 +789,17 @@ def _fundamentals_fetch_payload(symbol: str, data: dict[str, Any], *, steps: lis
         },
         "steps": list(steps or []),
         "next_actions": next_actions(symbol),
-        "workspace": build_stock_workspace(symbol),
+        "workspace": build_stock_workspace(
+            symbol,
+            raw_fundamentals={
+                "available": True,
+                "data": dict(data or {}),
+                "fetched_at": str(data.get("_fetched_at") or ""),
+                "cache_status": "TODAY",
+            },
+            hydrate_filings=False,
+            overlay_live=False,
+        ),
     }
 
 
