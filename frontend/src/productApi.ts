@@ -1088,6 +1088,151 @@ export const fetchSignalBacktestStatus = (): Promise<SignalBacktestStatus> =>
   fetch('/api/signal-backtest', { headers: { Accept: 'application/json' } })
     .then((response) => json<SignalBacktestStatus>(response))
 
+export type ReadyTradeCard = {
+  symbol: string
+  company: string
+  lane: 'prime' | 'actionable' | string
+  verdict?: string
+  status?: string
+  sector?: string
+  score?: number | null
+  edge_r?: number | null
+  entry?: number | null
+  stop?: number | null
+  target?: number | null
+  cmp?: number | null
+  upside_from_buy_pct?: number | null
+  why?: string[]
+  honesty?: string
+  ev_pct?: number | null
+  ev_lb_pct?: number | null
+  ev_n?: number | null
+  ev_conf?: string
+  p_win?: number | null
+}
+
+export type ReadyQueuePayload = {
+  schema_version: number
+  places_orders: boolean
+  live_locked: boolean
+  scanned_at?: string
+  universe_size?: number
+  breadth?: string
+  prime: ReadyTradeCard[]
+  actionable: ReadyTradeCard[]
+  rejected_n?: number
+  rejected_sample?: Array<{ symbol: string; reason: string }>
+  empty: boolean
+  empty_why: string[]
+  disclaimer: string
+  next?: string
+}
+
+export const fetchReadyQueue = (): Promise<ReadyQueuePayload> =>
+  fetch('/api/trade-desk/ready', { headers: { Accept: 'application/json' } })
+    .then((response) => json<ReadyQueuePayload>(response))
+
+export type BacktestUseCase = {
+  id: string
+  title: string
+  when: string
+  how: string
+  status: string
+  result: string
+  control?: string
+  best?: Array<Record<string, unknown>>
+  avoid?: string[]
+  goto?: string
+}
+
+export type BacktestLabPayload = {
+  schema_version: number
+  places_orders: boolean
+  live_locked: boolean
+  running: boolean
+  actionable: boolean
+  evidence_note: string
+  generated_at?: string
+  universe?: Record<string, unknown>
+  playbook: {
+    regime?: string | null
+    best?: Array<{ signal: string; expectancy_r?: number; trades?: number; basis?: string }>
+    avoid?: string[]
+    recommended_target_pct?: number | null
+  }
+  signals: Array<{
+    signal: string
+    trades: number
+    closed: number
+    win_rate?: number | null
+    expectancy_r?: number | null
+    verdict: string
+  }>
+  proven_n: number
+  loser_n: number
+  use_cases: BacktestUseCase[]
+  disclaimer: string
+}
+
+export const fetchBacktestLab = (): Promise<BacktestLabPayload> =>
+  fetch('/api/trade-desk/lab', { headers: { Accept: 'application/json' } })
+    .then((response) => json<BacktestLabPayload>(response))
+
+export type JourneyStep = {
+  id: string
+  title: string
+  detail: string
+  status: 'PASS' | 'WAIT' | 'BLOCK' | 'LOCKED' | string
+  next_action?: string
+}
+
+export type LiveJourneyPayload = {
+  schema_version: number
+  places_orders: boolean
+  live_locked: boolean
+  rung: { id?: string; label?: string; next?: string | null }
+  paper_closed: number
+  paper_e4_n: number
+  alpha: { level?: number; label?: string }
+  live_unlocked: boolean
+  ladder_live_unlocked?: boolean
+  live_blockers: string[]
+  autopilot: {
+    armed?: boolean
+    mode?: string
+    allocation?: number
+    trades_today?: number
+    open_trades?: number
+    headline?: string
+    blockers?: string[]
+  }
+  report_card: {
+    verdict?: string
+    verdict_reason?: string
+    stats?: Record<string, number | null | undefined>
+  }
+  scaling?: { action?: string; change_pct?: number; reason?: string } | null
+  steps: JourneyStep[]
+  disclaimer: string
+}
+
+export const fetchLiveJourney = (): Promise<LiveJourneyPayload> =>
+  fetch('/api/trade-desk/journey', { headers: { Accept: 'application/json' } })
+    .then((response) => json<LiveJourneyPayload>(response))
+
+export const armPaperAutopilot = (allocation?: number): Promise<{ ok: boolean; armed: boolean; mode: string; message: string; live_locked: boolean }> =>
+  fetch('/api/autopilot/arm-paper', {
+    method: 'POST',
+    headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+    body: JSON.stringify(allocation != null ? { allocation } : {}),
+  }).then((response) => json(response))
+
+export const disarmAutopilot = (): Promise<{ ok: boolean; armed: boolean; mode: string }> =>
+  fetch('/api/autopilot/disarm', {
+    method: 'POST',
+    headers: { Accept: 'application/json' },
+  }).then((response) => json(response))
+
 export type CorporateActionsStatus = {
   available: boolean
   path?: string

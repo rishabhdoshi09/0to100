@@ -149,6 +149,42 @@ export const PAGE_GUIDE: Record<string, PageGuide> = {
     action: 'Run paper. Do not arm live until the ladder is unlocked. Resolve the oldest critical blocker.',
     doesNot: 'A live PID, or QT_LIVE_ENABLED, does not graduate a strategy to real money.',
   },
+  'Ready Trades': {
+    title: 'Trade · Ready',
+    purpose: 'The only names that cleared money gates today: BUY plus a stop, non-negative measured edge, and Prime when every evidence layer passed.',
+    questions: [
+      'Is there a Prime name, or is the queue honestly empty?',
+      'Does the card have Buy / Stop / Target?',
+      'Is conservative EV positive, or is the sample too thin to claim?',
+      'What is the next step — Lab or paper Journey?',
+    ],
+    action: 'Open a Prime card, confirm the ticket, then paper-trade via Journey. Do not skip to live.',
+    doesNot: 'Prime is not a return promise and not a broker order.',
+  },
+  'Backtest Lab': {
+    title: 'Trade · Lab',
+    purpose: 'Walk-forward signal accuracy as four jobs: trust the scanner, lean on this tape, skip losers, then ask paper if it earned capital.',
+    questions: [
+      'Is the full-universe report actionable?',
+      'Which signals earn in the current regime?',
+      'Which signals are proven losers?',
+      'Did this backtest place any orders? (No.)',
+    ],
+    action: 'Run Backtest all stocks when the report is missing or truncated, then read the playbook before Ready.',
+    doesNot: 'A high win rate on a thin sample is not a claim. Backtest never places paper or live orders.',
+  },
+  'Live Journey': {
+    title: 'Trade · Journey',
+    purpose: 'The paper → live ladder as a checklist. Arm paper here. Live stays locked on this desk even if every gate later clears.',
+    questions: [
+      'Which step is blocking?',
+      'Is paper armed, and is allocation ≥ ₹5,000?',
+      'What does the autopilot report card say?',
+      'Can this page arm live? (No.)',
+    ],
+    action: 'Arm paper, request a cycle, let closed trades accumulate. Do not type ARM LIVE in the browser.',
+    doesNot: 'QT_LIVE_ENABLED, a green rung, or a good week of P&L does not graduate real money on this page.',
+  },
 }
 
 export const GLOSSARY: Record<string, string> = {

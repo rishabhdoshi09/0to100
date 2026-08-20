@@ -19,6 +19,11 @@ import { NewsView, OperationsRibbon, FnoView } from './marketViews'
 import { ProductStockIntelligenceView } from './productViews'
 import { ResearchDataView } from './researchData'
 import {
+  BacktestLabView,
+  LiveJourneyView,
+  ReadyTradesView,
+} from './tradeDeskViews'
+import {
   AutomationView,
   MarketInternalsView,
   PortfolioView,
@@ -453,7 +458,7 @@ function App() {
   }, [active])
 
   const hub = hubOf(active)
-  const hidePageTitle = hub === 'Home' || hub === 'Ideas' || hub === 'Context' || hub === 'System'
+  const hidePageTitle = hub === 'Home' || hub === 'Ideas' || hub === 'Trade' || hub === 'Context' || hub === 'System'
   const showOpsRibbon = hub === 'System'
   const showReportActions = [
     'Stock Intelligence',
@@ -485,6 +490,9 @@ function App() {
     if (active === 'Recommendations') {
       return <RecommendationsView {...viewProps} onCompare={addToCompare} onWatchlist={addToWatchlist} />
     }
+    if (active === 'Ready Trades') return <ReadyTradesView {...viewProps} />
+    if (active === 'Backtest Lab') return <BacktestLabView {...viewProps} />
+    if (active === 'Live Journey') return <LiveJourneyView {...viewProps} />
     if (active === 'Market Reports') {
       return <MarketReportsView {...viewProps} />
     }

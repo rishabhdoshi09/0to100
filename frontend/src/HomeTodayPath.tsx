@@ -51,6 +51,12 @@ function floorCopy(id: FloorId, floors: TodayFloors): { title: string; detail: s
       detail: floors.intel?.message || 'Advice only — never rotates, never picks a stock',
     }
   }
+  if (id === 'trade') {
+    return {
+      title: 'Ready / Lab / Journey',
+      detail: 'Evidence tickets, walk-forward lab, paper until live is earned',
+    }
+  }
   return {
     title: floors.journal?.thin === false ? 'Journal has a claim' : 'No claim yet',
     detail: floors.journal?.message || 'Taken and rejected need ≥10 resolved outcomes',

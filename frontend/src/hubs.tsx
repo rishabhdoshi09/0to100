@@ -3,6 +3,7 @@ import { SectionTabs } from './designSystem'
 
 export const HOME_TABS = ['Desk', 'Internals'] as const
 export const IDEAS_TABS = ['Categories', 'Table', 'Long-term', 'F&O'] as const
+export const TRADE_TABS = ['Ready', 'Lab', 'Journey'] as const
 export const CONTEXT_TABS = ['Pulse', 'News', 'Learn'] as const
 export const SYSTEM_TABS = ['Health', 'Data'] as const
 
@@ -18,6 +19,12 @@ const IDEAS_ROUTE: Record<(typeof IDEAS_TABS)[number], string> = {
   'F&O': 'F&O Desk',
 }
 
+const TRADE_ROUTE: Record<(typeof TRADE_TABS)[number], string> = {
+  Ready: 'Ready Trades',
+  Lab: 'Backtest Lab',
+  Journey: 'Live Journey',
+}
+
 const CONTEXT_ROUTE: Record<(typeof CONTEXT_TABS)[number], string> = {
   Pulse: 'Market Reports',
   News: 'News & Events',
@@ -29,11 +36,12 @@ const SYSTEM_ROUTE: Record<(typeof SYSTEM_TABS)[number], string> = {
   Data: 'Research Data',
 }
 
-export type NavHub = 'Home' | 'Ideas' | 'Context' | 'Watchlist' | 'Holdings' | 'System' | ''
+export type NavHub = 'Home' | 'Ideas' | 'Trade' | 'Context' | 'Watchlist' | 'Holdings' | 'System' | ''
 
 export function hubOf(active: string): NavHub {
   if (['Home', 'Command Center', 'Market Overview', 'Market Internals'].includes(active)) return 'Home'
   if (['Recommendations', 'Market Scanner', 'Scanner', 'Long-Term Picks', 'Long-Term', 'F&O Desk'].includes(active)) return 'Ideas'
+  if (['Ready Trades', 'Backtest Lab', 'Live Journey'].includes(active)) return 'Trade'
   if (['Market Reports', 'News & Events', 'Education'].includes(active)) return 'Context'
   if (active === 'Watchlist') return 'Watchlist'
   if (['Paper Portfolio', 'Portfolio'].includes(active)) return 'Holdings'
@@ -53,6 +61,12 @@ export function ideasTabOf(active: string): (typeof IDEAS_TABS)[number] {
   return 'Categories'
 }
 
+export function tradeTabOf(active: string): (typeof TRADE_TABS)[number] {
+  if (active === 'Backtest Lab') return 'Lab'
+  if (active === 'Live Journey') return 'Journey'
+  return 'Ready'
+}
+
 export function contextTabOf(active: string): (typeof CONTEXT_TABS)[number] {
   if (active === 'News & Events') return 'News'
   if (active === 'Education') return 'Learn'
@@ -67,6 +81,7 @@ export function systemTabOf(active: string): (typeof SYSTEM_TABS)[number] {
 export function routeForHub(hub: Exclude<NavHub, ''>): string {
   if (hub === 'Home') return 'Home'
   if (hub === 'Ideas') return 'Recommendations'
+  if (hub === 'Trade') return 'Ready Trades'
   if (hub === 'Context') return 'News & Events'
   if (hub === 'Watchlist') return 'Watchlist'
   if (hub === 'Holdings') return 'Paper Portfolio'
@@ -129,10 +144,32 @@ export function IdeasHub({
   const tab = ideasTabOf(active)
   return (
     <HubShell
-      blurb="Research monitor, not the order desk. Best Setups is Minervini SEPA on official NSE history. Paper on System → Health is the production path; live stays locked until the ladder earns it."
+      blurb="Research monitor, not the order desk. Best Setups is Minervini SEPA on official NSE history. Tickets that cleared money gates live on Trade → Ready."
       tabs={IDEAS_TABS}
       active={tab}
       onChange={(next) => setActive(IDEAS_ROUTE[next as (typeof IDEAS_TABS)[number]])}
+    >
+      {children}
+    </HubShell>
+  )
+}
+
+export function TradeHub({
+  active,
+  setActive,
+  children,
+}: {
+  active: string
+  setActive: (page: string) => void
+  children: ReactNode
+}) {
+  const tab = tradeTabOf(active)
+  return (
+    <HubShell
+      blurb="The order path. Ready is evidence-gated tickets. Lab is the walk-forward backtest as four jobs. Journey is paper autopilot until live is earned — this desk never arms live."
+      tabs={TRADE_TABS}
+      active={tab}
+      onChange={(next) => setActive(TRADE_ROUTE[next as (typeof TRADE_TABS)[number]])}
     >
       {children}
     </HubShell>
@@ -191,6 +228,7 @@ export function wrapInHub(
   const hub = hubOf(active)
   if (hub === 'Home') return <HomeHub active={active} setActive={setActive}>{children}</HomeHub>
   if (hub === 'Ideas') return <IdeasHub active={active} setActive={setActive}>{children}</IdeasHub>
+  if (hub === 'Trade') return <TradeHub active={active} setActive={setActive}>{children}</TradeHub>
   if (hub === 'Context') return <ContextHub active={active} setActive={setActive}>{children}</ContextHub>
   if (hub === 'System') return <SystemHub active={active} setActive={setActive}>{children}</SystemHub>
   return children

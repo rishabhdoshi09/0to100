@@ -408,6 +408,34 @@ def production_ladder() -> dict[str, Any]:
     )
 
 
+@app.get("/api/trade-desk/ready")
+def trade_desk_ready() -> dict[str, Any]:
+    """Evidence-gated ready queue. Never places orders or invents EV."""
+    from product.trade_desk import build_ready_queue
+    payloads = _current_product_payloads()
+    return build_ready_queue(scan=payloads["scan"], market=payloads["market"])
+
+
+@app.get("/api/trade-desk/lab")
+def trade_desk_lab() -> dict[str, Any]:
+    """Walk-forward backtest as use cases. Research only — no orders."""
+    from product.trade_desk import build_backtest_lab
+    return build_backtest_lab()
+
+
+@app.get("/api/trade-desk/journey")
+def trade_desk_journey() -> dict[str, Any]:
+    """Paper → live checklist. Read-only except separate paper-arm endpoint."""
+    from product.trade_desk import build_live_journey
+    payloads = _current_product_payloads()
+    return build_live_journey(
+        data=payloads["data"],
+        scan=payloads["scan"],
+        paper=core._paper_payload(),
+        autonomy=core._autonomy_payload(),
+    )
+
+
 @app.get("/api/target-portfolio")
 def target_portfolio() -> dict[str, Any]:
     """Return the latest immutable target-versus-current portfolio projection."""
@@ -906,3 +934,36 @@ def autopilot_diagnose() -> dict[str, Any]:
             "blockers": [str(exc)],
             "places_orders": False,
         }
+
+
+@app.post("/api/autopilot/arm-paper")
+def autopilot_arm_paper(payload: dict[str, Any] | None = Body(default=None)) -> dict[str, Any]:
+    """Arm PAPER autopilot only. LIVE in the body is refused."""
+    body = dict(payload or {})
+    if str(body.get("mode") or "").upper() == "LIVE":
+        raise HTTPException(status_code=400, detail="This desk cannot arm LIVE.")
+    from product.trade_desk import arm_paper_only
+    alloc = body.get("allocation")
+    try:
+        alloc_f = float(alloc) if alloc is not None else None
+    except (TypeError, ValueError):
+        alloc_f = None
+    return arm_paper_only(allocation=alloc_f)
+
+
+@app.post("/api/autopilot/disarm")
+def autopilot_disarm() -> dict[str, Any]:
+    """Disarm autopilot. Does not change live locks."""
+    try:
+        from execution.autopilot import disarm, get_status
+        disarm("user")
+        status = get_status()
+        return {
+            "ok": True,
+            "armed": False,
+            "mode": status.get("mode") or "PAPER",
+            "places_orders": False,
+            "live_locked": True,
+        }
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc

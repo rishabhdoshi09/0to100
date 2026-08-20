@@ -4,6 +4,7 @@ import { hubOf, routeForHub, type NavHub } from './hubs'
 const FIND: Array<[string, Exclude<NavHub, ''>, string]> = [
   ['⌂', 'Home', 'Home'],
   ['◎', 'Ideas', 'Ideas'],
+  ['⚡', 'Trade', 'Trade'],
   ['◈', 'Context', 'Context'],
 ]
 
