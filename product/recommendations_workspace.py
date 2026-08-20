@@ -116,19 +116,28 @@ def risk_tier(row: Mapping[str, Any]) -> str:
 
 
 def upside_metrics(row: Mapping[str, Any]) -> dict[str, float | None]:
-    """% move from entry and remaining room to target — None when inputs missing."""
+    """% move from entry, remaining room to target, and % from buy to target.
+
+    Buy is the scanned entry when present, else last price. None when inputs
+    are missing — never a fabricated upside.
+    """
     price = _f(row.get("price"))
     entry = _f(row.get("entry") or row.get("entry_price"))
     target = _f(row.get("target") or row.get("target_price"))
     from_entry = None
     to_target = None
+    from_buy = None
     if entry > 0 and price > 0:
         from_entry = round((price / entry - 1.0) * 100.0, 1)
     if target > 0 and price > 0:
         to_target = round((target / price - 1.0) * 100.0, 1)
+    buy = entry if entry > 0 else price
+    if buy > 0 and target > 0:
+        from_buy = round((target / buy - 1.0) * 100.0, 1)
     return {
         "upside_from_entry_pct": from_entry,
         "upside_to_target_pct": to_target,
+        "upside_from_buy_pct": from_buy,
         "entry": entry or None,
         "target": target or None,
         "cmp": price or None,
@@ -180,7 +189,14 @@ def card_from_row(
             "ev_conf": str(row.get("ev_conf") or ""),
             "p_win": _f(row.get("p_win")) if row.get("p_win") is not None else None,
         }
-    return {
+    chg = row.get("change_pct")
+    if chg is None:
+        chg = row.get("chg_pct")
+    try:
+        change_pct = round(float(chg), 2) if chg is not None and chg != "" else None
+    except (TypeError, ValueError):
+        change_pct = None
+    card = {
         "symbol": str(row.get("symbol") or "").upper(),
         "company": str(row.get("company") or row.get("symbol") or ""),
         "category_id": category_id,
@@ -193,6 +209,7 @@ def card_from_row(
         "score": _f(row.get("score") or row.get("combined_score")),
         "rsi": _f(row.get("rsi")) or None,
         "volume_ratio": _f(row.get("volume_ratio")) or None,
+        "change_pct": change_pct,
         "price_tag": str(row.get("price_tag") or ""),
         "tech_source": str(row.get("tech_source") or ""),
         "reason": reason,
@@ -201,10 +218,20 @@ def card_from_row(
         "lifecycle": "active",
         "stop": _f(row.get("stop")) or None,
         "levels_source": str(row.get("levels_source") or ""),
-        "upside_from_buy_pct": row.get("upside_from_buy_pct"),
         **ups,
         **ev,
     }
+    buy = _f(card.get("entry")) or _f(card.get("cmp"))
+    target = _f(card.get("target"))
+    attached = row.get("upside_from_buy_pct")
+    if attached is not None:
+        try:
+            card["upside_from_buy_pct"] = round(float(attached), 1)
+        except (TypeError, ValueError):
+            pass
+    if card.get("upside_from_buy_pct") is None and buy > 0 and target > 0:
+        card["upside_from_buy_pct"] = round((target / buy - 1.0) * 100.0, 1)
+    return card
 
 
 def _trend_structure_ok(row: Mapping[str, Any]) -> bool:

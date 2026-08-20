@@ -39,6 +39,41 @@ export function peekUpsidePct(buy: unknown, target: unknown): number | null {
   return Math.round(((tgt / entry) - 1) * 1000) / 10
 }
 
+/** Numbers the snapshot can show from the Ideas card alone — any symbol, no fetch. */
+export function snapshotFromCard(card: Record<string, unknown> | null | undefined): {
+  symbol: string
+  company: string
+  sector: string
+  buy: number | null
+  stop: number | null
+  target: number | null
+  cmp: number | null
+  change: number | null
+  upside: number | null
+  rsi: number | null
+  volumeRatio: number | null
+} {
+  const rec = card || {}
+  const cmp = peekNumber(rec.cmp) ?? peekNumber(rec.price) ?? peekNumber(rec.close)
+  const buy = peekNumber(rec.entry) ?? peekNumber(rec.entry_price) ?? cmp
+  const stop = peekNumber(rec.stop) ?? peekNumber(rec.stop_price)
+  const target = peekNumber(rec.target) ?? peekNumber(rec.target_price)
+  const storedUpside = peekNumber(rec.upside_from_buy_pct)
+  return {
+    symbol: String(rec.symbol || '').toUpperCase(),
+    company: String(rec.company || rec.symbol || ''),
+    sector: String(rec.sector || ''),
+    buy,
+    stop,
+    target,
+    cmp,
+    change: peekNumber(rec.change_pct) ?? peekNumber(rec.chg_pct),
+    upside: storedUpside ?? peekUpsidePct(buy, target),
+    rsi: peekNumber(rec.rsi) ?? peekNumber(rec.rsi14),
+    volumeRatio: peekNumber(rec.volume_ratio),
+  }
+}
+
 export function filledPeekMetrics(metrics: PeekMetric[]): PeekMetric[] {
   return metrics.filter((item) => {
     if (peekNumber(item.value) != null) return true

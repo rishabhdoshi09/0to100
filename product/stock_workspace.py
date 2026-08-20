@@ -11,7 +11,8 @@ import json
 import math
 from pathlib import Path
 import re
-from typing import Any, Mapping, Sequence
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
+from typing import Any, Callable, Mapping, Sequence
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -626,7 +627,39 @@ def _fundamentals(long_row: Mapping[str, Any], raw_record: Mapping[str, Any], se
     }
 
 
-def _default_inputs(symbol: str) -> dict[str, Any]:
+OHLCV_SECONDS = 8.0
+OVERLAY_SECONDS = 2.5
+
+
+def _run_timed(fn: Callable[[], Any], seconds: float, default: Any = None) -> Any:
+    """Return default when a store/network call hangs. Never block the HTTP worker."""
+    pool = ThreadPoolExecutor(max_workers=1)
+    try:
+        return pool.submit(fn).result(timeout=max(0.1, float(seconds)))
+    except (FuturesTimeout, Exception):
+        return default
+    finally:
+        pool.shutdown(wait=False, cancel_futures=True)
+
+
+def _overlay_live_timed(frame: Any, symbol: str, seconds: float = OVERLAY_SECONDS) -> Any:
+    """Apply today's tape bar, or keep EOD if NSE/Kite hangs."""
+
+    def _run():
+        from data.nse_live import overlay_live_on_frame
+        out, _ = overlay_live_on_frame(frame, symbol)
+        return out
+
+    return _run_timed(_run, seconds, frame)
+
+
+def _default_inputs(
+    symbol: str,
+    *,
+    hydrate_filings: bool = True,
+    overlay_live: bool = True,
+    ohlcv_seconds: float = OHLCV_SECONDS,
+) -> dict[str, Any]:
     from product.scan_store import load_scan
     from product.long_term_store import load_long_term_scan
     from reporting.evidence_intake import load_raw_fundamentals
@@ -656,20 +689,17 @@ def _default_inputs(symbol: str) -> dict[str, Any]:
                 }
         except Exception:
             pass
-    raw = _hydrate_raw_fundamentals(symbol, raw)
+    if hydrate_filings:
+        raw = _hydrate_raw_fundamentals(symbol, raw)
     try:
         from data.bhavcopy_runtime import get_ohlcv
-        frame = get_ohlcv(symbol)
+        frame = _run_timed(lambda: get_ohlcv(symbol), ohlcv_seconds, None)
     except Exception:
         frame = None
     # Overlay today's live bar when store is still on prior EOD — RSI/price
     # must track the tape, not the last scan or last bhavcopy publish.
-    if frame is not None and getattr(frame, "empty", True) is False:
-        try:
-            from data.nse_live import overlay_live_on_frame
-            frame, _ = overlay_live_on_frame(frame, symbol)
-        except Exception:
-            pass
+    if overlay_live and frame is not None and getattr(frame, "empty", True) is False:
+        frame = _overlay_live_timed(frame, symbol)
     try:
         from news.curator_store import NewsCuratorStore
         store = NewsCuratorStore(ROOT / "logs" / "news_curator.sqlite3")
@@ -698,12 +728,18 @@ def build_stock_workspace(
     news: Sequence[Mapping[str, Any]] | None = None,
     fno_payload: Mapping[str, Any] | None = None,
     now: datetime | None = None,
+    hydrate_filings: bool = True,
+    overlay_live: bool = True,
 ) -> dict[str, Any]:
     """Build a data-packed, source-dated single-stock workspace."""
     symbol = clean_symbol(symbol)
     now = now or datetime.now(timezone.utc)
     if any(value is None for value in (scan_payload, long_term_payload, raw_fundamentals, frame, news, fno_payload)):
-        defaults = _default_inputs(symbol)
+        defaults = _default_inputs(
+            symbol,
+            hydrate_filings=hydrate_filings,
+            overlay_live=overlay_live,
+        )
         scan_payload = defaults["scan"] if scan_payload is None else scan_payload
         long_term_payload = defaults["long_term"] if long_term_payload is None else long_term_payload
         raw_fundamentals = defaults["raw"] if raw_fundamentals is None else raw_fundamentals

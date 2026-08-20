@@ -21,7 +21,7 @@ import {
   PEEK_FUND_KEYS,
   PEEK_TECHNICAL_KEYS,
   peekNumber,
-  peekUpsidePct,
+  snapshotFromCard,
   type PeekMetric,
 } from './stockPeek'
 import './stockPeek.css'
@@ -56,11 +56,12 @@ function technicalFromWorkspace(ws: StockWorkspace | StockPeekPayload | null): P
 }
 
 function technicalsFromCard(rec: RecommendationCard): PeekMetric[] {
+  const snap = snapshotFromCard(rec as Record<string, unknown>)
   return filledPeekMetrics([
-    { key: 'close', label: 'Close', value: rec.cmp },
-    { key: 'change_pct', label: 'Change', value: rec.change_pct, unit: '%' },
-    { key: 'rsi14', label: 'RSI', value: rec.rsi },
-    { key: 'volume_ratio', label: 'Vol vs 20d', value: rec.volume_ratio, unit: 'x' },
+    { key: 'close', label: 'Close', value: snap.cmp },
+    { key: 'change_pct', label: 'Change', value: snap.change, unit: '%' },
+    { key: 'rsi14', label: 'RSI', value: snap.rsi },
+    { key: 'volume_ratio', label: 'Vol vs 20d', value: snap.volumeRatio, unit: 'x' },
   ])
 }
 
@@ -167,10 +168,7 @@ export function StockPeekPopup({
       })
       .catch((reason: Error) => {
         if (!alive) return
-        if (reason?.name === 'AbortError') {
-          if (!cachedPeek && !cachedWs) {
-            setError('Snapshot timed out. Buy/stop/target stay from the card; tap Full research for the full pack.')
-          }
+        if (reason?.name === 'AbortError' || /failed to fetch/i.test(reason.message || '')) {
           return
         }
         if (!cachedPeek && !cachedWs) {
@@ -188,14 +186,13 @@ export function StockPeekPopup({
     }
   }, [clean])
 
-  const cmp = peekNumber(peek?.cmp) ?? rec.cmp ?? workspace?.technical.close ?? null
-  const change = peekNumber(peek?.change_pct) ?? rec.change_pct ?? workspace?.technical.change_pct ?? null
-  const buy = peekNumber(peek?.entry) ?? rec.entry ?? rec.cmp ?? peekNumber(peek?.cmp) ?? null
-  const stop = peekNumber(peek?.stop) ?? rec.stop ?? null
-  const target = peekNumber(peek?.target) ?? rec.target ?? null
-  const upside = peek?.upside_from_buy_pct
-    ?? rec.upside_from_buy_pct
-    ?? peekUpsidePct(buy, target)
+  const fromCard = snapshotFromCard(rec as Record<string, unknown>)
+  const cmp = peekNumber(peek?.cmp) ?? fromCard.cmp ?? workspace?.technical.close ?? null
+  const change = peekNumber(peek?.change_pct) ?? fromCard.change ?? workspace?.technical.change_pct ?? null
+  const buy = peekNumber(peek?.entry) ?? fromCard.buy
+  const stop = peekNumber(peek?.stop) ?? fromCard.stop
+  const target = peekNumber(peek?.target) ?? fromCard.target
+  const upside = peekNumber(peek?.upside_from_buy_pct) ?? fromCard.upside
   const fundFromCard = asMetrics(rec.fundamentals?.metrics)
   const fundFromPeek = asMetrics(peek?.fundamentals?.metrics)
   const fundFromWs = asMetrics(workspace?.fundamentals?.metrics)
