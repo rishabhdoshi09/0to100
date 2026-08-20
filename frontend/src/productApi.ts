@@ -703,11 +703,13 @@ export type RecommendationsWorkspace = {
     closed_count: number
   }
   served_from_cache?: boolean
+  sepa_pending?: boolean
+  stale_ranking?: boolean
   disclaimer: string
 }
 
-export const fetchRecommendationsWorkspace = (): Promise<RecommendationsWorkspace> =>
-  fetch('/api/recommendations-workspace', { headers: { Accept: 'application/json' } })
+export const fetchRecommendationsWorkspace = (signal?: AbortSignal): Promise<RecommendationsWorkspace> =>
+  fetch('/api/recommendations-workspace', { headers: { Accept: 'application/json' }, signal })
     .then((response) => json<RecommendationsWorkspace>(response))
 
 export type MarketReportItem = {

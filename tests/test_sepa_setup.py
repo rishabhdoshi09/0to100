@@ -92,6 +92,39 @@ def test_rank_best_setups_keeps_only_the_floor():
     assert "SEPA" in note or "Stage-2" in note
 
 
+def test_rank_best_setups_respects_time_budget(monkeypatch):
+    import time
+    from product.sepa_setup import _RANK_CACHE
+
+    monkeypatch.setattr("product.monitor_context.nifty_frame", lambda: None)
+    _RANK_CACHE.clear()
+    calls: list[str] = []
+
+    def slow(symbol: str):
+        calls.append(symbol)
+        time.sleep(0.12)
+        return _uptrend()
+
+    rows = [
+        {"symbol": f"S{i}", "score": 90, "verdict": "BUY", "chase_risk": False, "rsi": 55}
+        for i in range(12)
+    ]
+    t0 = time.monotonic()
+    ranked, note = rank_best_setups(
+        rows,
+        load_frame=slow,
+        score_cap=12,
+        max_seconds=0.2,
+        cache_key="budget-test",
+    )
+    elapsed = time.monotonic() - t0
+    assert elapsed < 1.0
+    assert len(calls) < 12
+    assert "budget" in note.lower()
+    assert "budget-test" not in _RANK_CACHE
+    assert ranked is not None
+
+
 def test_stock_workspace_exposes_sepa_monitor():
     result = build_stock_workspace(
         "TEST",

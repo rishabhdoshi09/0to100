@@ -173,7 +173,7 @@ export type DeskWaitKind = 'RECO_WORKSPACE' | 'MARKET_PULSE' | 'EDUCATION' | 'CO
 
 export const DESK_WAIT_DOING: Record<DeskWaitKind, string> = {
   RECO_WORKSPACE:
-    'Ranking Best Setups on Minervini\'s 7-rule SEPA template from official history, then grouping Wealth Builders, Super Trends, Breakouts and Recovery. One live-price stamp on that shortlist.',
+    'Loading the last ranked Ideas list, then grouping Wealth Builders, Super Trends, Breakouts and Recovery. Best Setups on Minervini\'s 7-rule SEPA template updates in the background.',
   MARKET_PULSE:
     'Assembling today\'s Pulse from the last scan — movers, breakouts, headlines. Not walking the whole bhavcopy universe.',
   EDUCATION:
@@ -254,8 +254,11 @@ export function deskWaitClock(input: {
   }
   const typical = TYPICAL_JOB_SECONDS[input.kind] || 8
   const elapsed = Math.max(0, Number(input.elapsedSeconds) || 0)
-  const remaining = elapsed >= 5 ? Math.max(0, typical - elapsed) : null
-  const eta = formatRemaining(remaining, typical)
+  const overtime = elapsed > typical
+  const remaining = overtime || elapsed < 5 ? null : Math.max(0, typical - elapsed)
+  const eta = overtime
+    ? 'taking longer than usual'
+    : formatRemaining(remaining, typical)
   const percent = elapsed > 0 ? Math.min(95, Math.round((elapsed / typical) * 100)) : null
   const doing = DESK_WAIT_DOING[input.kind]
   return {
@@ -272,6 +275,16 @@ export function recoWorkspaceClock(input: {
   scan?: DeskWaitScan | null
 }): JobClockLike {
   return deskWaitClock({ kind: 'RECO_WORKSPACE', elapsedSeconds: input.elapsedSeconds, scan: input.scan })
+}
+
+export const IDEAS_FETCH_MS = 12_000
+
+export function ideasPollMs(workspace: {
+  sepa_pending?: boolean
+  stale_ranking?: boolean
+} | null | undefined): number {
+  if (workspace?.sepa_pending || workspace?.stale_ranking) return 4_000
+  return 60_000
 }
 
 type JobClockLike = {
