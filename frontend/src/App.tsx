@@ -31,6 +31,7 @@ import {
   loadCachedJson,
   loadDeskSession,
   patchDeskSession,
+  pinnedSymbol,
   saveCachedJson,
   stashDashboard,
 } from './deskSession'
@@ -208,11 +209,11 @@ function App() {
   const [error, setError] = useState('')
   const [active, setActive] = useState(boot?.active || 'Home')
   const [compareSymbols, setCompareSymbols] = useState<string[]>(boot?.compareSymbols || [])
-  const [selected, setSelected] = useState(boot?.selected || '')
+  const [selected, setSelected] = useState(pinnedSymbol(boot?.active || 'Home', boot?.selected || ''))
   const [intelTab, setIntelTab] = useState<string | undefined>(boot?.intelTab)
   const [bars, setBars] = useState<ChartBar[]>([])
   const [controlState, setControlState] = useState('')
-  const [query, setQuery] = useState(boot?.query || '')
+  const [query, setQuery] = useState('')
   const [universeSymbols, setUniverseSymbols] = useState<string[]>([])
   const [remoteSuggestions, setRemoteSuggestions] = useState<string[]>([])
   const [helpOpen, setHelpOpen] = useState(false)
@@ -264,12 +265,11 @@ function App() {
   useEffect(() => {
     patchDeskSession({
       active,
-      selected,
+      selected: pinnedSymbol(active, selected),
       compareSymbols,
       intelTab,
-      query,
     })
-  }, [active, selected, compareSymbols, intelTab, query])
+  }, [active, selected, compareSymbols, intelTab])
 
   useEffect(() => {
     if (!selected) {
@@ -369,7 +369,7 @@ function App() {
       || remoteSuggestions.find((symbol) => symbol.startsWith(clean))
       || clean
     setSelected(match)
-    setQuery(match)
+    setQuery('')
     setIntelTab(undefined)
     setActive('Stock Intelligence')
     setControlState(

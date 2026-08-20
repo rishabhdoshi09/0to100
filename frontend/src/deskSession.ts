@@ -28,6 +28,14 @@ export const DESK_PAGES = new Set([
   'Automation',
 ])
 
+/** Only these pages may remember a symbol. Ideas/Home never pin a favorite. */
+export const STOCK_FOCUS_PAGES = new Set([
+  'Stock Intelligence',
+  'F&O Desk',
+  'Research Data',
+  'Compare',
+])
+
 export type DeskSession = {
   active: string
   selected: string
@@ -37,12 +45,16 @@ export type DeskSession = {
   ideasLifecycle?: 'Active' | 'Closed'
   scannerTab?: string
   homeLane?: string
-  query?: string
   updatedAt: number
 }
 
 export function isNseSymbol(value: string): boolean {
   return /^[A-Z0-9&.-]{1,32}$/.test(String(value || '').trim().toUpperCase())
+}
+
+export function pinnedSymbol(active: string, selected: string): string {
+  if (!STOCK_FOCUS_PAGES.has(active)) return ''
+  return isNseSymbol(selected) ? selected.trim().toUpperCase() : ''
 }
 
 function storage(): Storage | null {
@@ -61,9 +73,10 @@ export function loadDeskSession(): DeskSession | null {
   try {
     const parsed = JSON.parse(raw) as Partial<DeskSession>
     const active = DESK_PAGES.has(String(parsed.active || '')) ? String(parsed.active) : 'Home'
-    const selected = isNseSymbol(String(parsed.selected || ''))
+    const rawSelected = isNseSymbol(String(parsed.selected || ''))
       ? String(parsed.selected).trim().toUpperCase()
       : ''
+    const selected = pinnedSymbol(active, rawSelected)
     const compareSymbols = Array.isArray(parsed.compareSymbols)
       ? parsed.compareSymbols.filter((item) => isNseSymbol(String(item))).map((item) => String(item).toUpperCase()).slice(0, 5)
       : []
@@ -72,7 +85,6 @@ export function loadDeskSession(): DeskSession | null {
     const ideasLifecycle = parsed.ideasLifecycle === 'Closed' ? 'Closed' : parsed.ideasLifecycle === 'Active' ? 'Active' : undefined
     const scannerTab = parsed.scannerTab ? String(parsed.scannerTab) : undefined
     const homeLane = parsed.homeLane ? String(parsed.homeLane) : undefined
-    const query = String(parsed.query || '').slice(0, 32)
     if (active === 'Stock Intelligence' && !selected) {
       return {
         active: 'Recommendations',
@@ -83,7 +95,6 @@ export function loadDeskSession(): DeskSession | null {
         ideasLifecycle,
         scannerTab,
         homeLane,
-        query,
         updatedAt: Number(parsed.updatedAt) || Date.now(),
       }
     }
@@ -96,7 +107,6 @@ export function loadDeskSession(): DeskSession | null {
       ideasLifecycle,
       scannerTab,
       homeLane,
-      query,
       updatedAt: Number(parsed.updatedAt) || Date.now(),
     }
   } catch {
@@ -115,6 +125,10 @@ export function patchDeskSession(partial: Partial<DeskSession>): void {
     ...prev,
     ...partial,
     compareSymbols: Array.isArray(partial.compareSymbols) ? partial.compareSymbols : prev.compareSymbols,
+    selected: pinnedSymbol(
+      String(partial.active ?? prev.active),
+      String(partial.selected ?? prev.selected ?? ''),
+    ),
     updatedAt: Date.now(),
   }
   try {

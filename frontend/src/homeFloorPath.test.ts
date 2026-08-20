@@ -21,7 +21,7 @@ describe('decideNextStep', () => {
     const step = decideNextStep({ ...ready, dataReady: false, readinessScore: 40, scanRecords: 0, longTermRecords: 0 })
     expect(step.id).toBe('fill_desk')
     expect(step.label).toBe("Fill today's desk")
-    expect(step.label).not.toMatch(/RPEL|RELIANCE/)
+    expect(step.label).not.toMatch(/RPEL|RELIANCE|ELGIEQUIP/)
   })
 
   it('scans when files are ready but the desk is empty', () => {
@@ -50,7 +50,7 @@ describe('decideNextStep', () => {
       decideNextStep({ ...ready, scanBusy: true }).label,
     ]
     for (const label of labels) {
-      expect(label).not.toMatch(/RPEL|RELIANCE|YATHARTH/)
+      expect(label).not.toMatch(/RPEL|RELIANCE|YATHARTH|ELGIEQUIP/)
     }
   })
 })

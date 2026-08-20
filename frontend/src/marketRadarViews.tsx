@@ -509,7 +509,7 @@ export function RadarHomeView(props: ExperienceViewProps & {
   onWatchlist: (symbol: string) => void
   onOpenFloor?: (page: string) => void
 }) {
-  const { dashboard, selected, setSelected, setActive, depth, marketScan, longTermScan, runControl, onCompare, onWatchlist, onOpenFloor } = props
+  const { dashboard, setSelected, setActive, depth, marketScan, longTermScan, runControl, onCompare, onWatchlist, onOpenFloor } = props
   const todayPath = useTodayFloors()
   const [radar, setRadar] = useState<RadarHome | null>(() => loadCachedJson<RadarHome>('radar-home'))
   const [readiness, setReadiness] = useState<ProductReadiness | null>(null)
@@ -519,6 +519,7 @@ export function RadarHomeView(props: ExperienceViewProps & {
     () => (loadDeskSession()?.homeLane as DeskLane) || 'breakouts',
   )
   const [query, setQuery] = useState('')
+  const [peekSymbol, setPeekSymbol] = useState('')
 
   useEffect(() => {
     patchDeskSession({ homeLane: lane })
@@ -639,9 +640,9 @@ export function RadarHomeView(props: ExperienceViewProps & {
     }
   }
 
-  const row = desk?.lanes.breakouts.find((r) => deskSymbol(r.symbol) === deskSymbol(selected))
-    || desk?.lanes.momentum.find((r) => deskSymbol(r.symbol) === deskSymbol(selected))
-    || desk?.lanes.long_term_picks.find((r) => deskSymbol(r.symbol) === deskSymbol(selected))
+  const row = desk?.lanes.breakouts.find((r) => deskSymbol(r.symbol) === deskSymbol(peekSymbol))
+    || desk?.lanes.momentum.find((r) => deskSymbol(r.symbol) === deskSymbol(peekSymbol))
+    || desk?.lanes.long_term_picks.find((r) => deskSymbol(r.symbol) === deskSymbol(peekSymbol))
 
   const health = desk?.market_health || dashboard.market.health || 'Market'
   const laneRows: Record<DeskLane, RadarRow[]> = {
@@ -680,14 +681,18 @@ export function RadarHomeView(props: ExperienceViewProps & {
     })
     .slice(0, 8)
 
-  const thesisSheet = selected ? (
+  const thesisSheet = peekSymbol ? (
     <StockPeekPopup
-      symbol={deskSymbol(selected)}
+      symbol={deskSymbol(peekSymbol)}
       card={row as Record<string, unknown> | null}
-      onClose={() => setSelected('')}
-      onOpenResearch={() => setActive('Stock Intelligence')}
-      onCompare={() => onCompare(selected)}
-      onWatchlist={() => onWatchlist(selected)}
+      onClose={() => setPeekSymbol('')}
+      onOpenResearch={() => {
+        setSelected(peekSymbol)
+        setPeekSymbol('')
+        setActive('Stock Intelligence')
+      }}
+      onCompare={() => onCompare(peekSymbol)}
+      onWatchlist={() => onWatchlist(peekSymbol)}
     />
   ) : null
 
@@ -813,7 +818,7 @@ export function RadarHomeView(props: ExperienceViewProps & {
         <>
           <p className="reco-featured-label">Best live breakout</p>
           <div className="reco-card-stack">
-            <RadarPickCard row={best} selected={selected} featured onSelect={setSelected} />
+            <RadarPickCard row={best} selected={peekSymbol} featured onSelect={setPeekSymbol} />
           </div>
         </>
       ) : null}
@@ -829,7 +834,7 @@ export function RadarHomeView(props: ExperienceViewProps & {
         <>
           <p className="reco-featured-label">Best among breakouts with fundamentals</p>
           <div className="reco-card-stack">
-            <RadarPickCard row={fundBest} selected={selected} onSelect={setSelected} />
+            <RadarPickCard row={fundBest} selected={peekSymbol} onSelect={setPeekSymbol} />
           </div>
         </>
       ) : null}
@@ -849,15 +854,15 @@ export function RadarHomeView(props: ExperienceViewProps & {
             <RadarPickCard
               key={`${lane}-${deskSymbol(item.symbol)}-${idx}`}
               row={item}
-              selected={selected}
-              onSelect={setSelected}
+              selected={peekSymbol}
+              onSelect={setPeekSymbol}
             />
           ))}
         </div>
       )}
 
       {thesisSheet}
-      {selected ? null : (
+      {peekSymbol ? null : (
         <p className="reco-foot">Tap a name for fundamentals, ratios and technicals.</p>
       )}
 
@@ -889,6 +894,7 @@ export function MarketScannerView(props: ExperienceViewProps & {
   const [sector, setSector] = useState('All')
   const [excludeChase, setExcludeChase] = useState(true)
   const [sniperOnly, setSniperOnly] = useState(false)
+  const [peekSymbol, setPeekSymbol] = useState('')
 
   const activeScan = tab === 'Long-Term' ? longTermScan : marketScan
 
@@ -934,16 +940,29 @@ export function MarketScannerView(props: ExperienceViewProps & {
     return true
   })
 
-  const selectedRow = filtered.find((r) => deskSymbol(r.symbol) === deskSymbol(selected))
+  const focusSymbol = (symbol: string) => {
+    const clean = deskSymbol(symbol)
+    if (!clean) return
+    setPeekSymbol(clean)
+    setSelected(clean)
+  }
+
+  const peekRow = filtered.find((r) => deskSymbol(r.symbol) === deskSymbol(peekSymbol))
+    || rows.find((r) => deskSymbol(r.symbol) === deskSymbol(peekSymbol))
+  const chartRow = filtered.find((r) => deskSymbol(r.symbol) === deskSymbol(selected))
     || rows.find((r) => deskSymbol(r.symbol) === deskSymbol(selected))
-  const peek = selected ? (
+  const peek = peekSymbol ? (
     <StockPeekPopup
-      symbol={deskSymbol(selected)}
-      card={selectedRow as Record<string, unknown> | null}
-      onClose={() => setSelected('')}
-      onOpenResearch={() => setActive('Stock Intelligence')}
-      onCompare={() => onCompare(selected)}
-      onWatchlist={() => onWatchlist?.(selected)}
+      symbol={deskSymbol(peekSymbol)}
+      card={peekRow as Record<string, unknown> | null}
+      onClose={() => setPeekSymbol('')}
+      onOpenResearch={() => {
+        setSelected(peekSymbol)
+        setPeekSymbol('')
+        setActive('Stock Intelligence')
+      }}
+      onCompare={() => onCompare(peekSymbol)}
+      onWatchlist={() => onWatchlist?.(peekSymbol)}
     />
   ) : null
 
@@ -986,11 +1005,11 @@ export function MarketScannerView(props: ExperienceViewProps & {
           <BestSniperPanel
             best={bestBreakout}
             sniperCount={sniperCount}
-            onSelect={setSelected}
+            onSelect={focusSymbol}
           />
           <BestAmongFundamentalsPanel
             best={bestAmongFund}
-            onSelect={setSelected}
+            onSelect={focusSymbol}
           />
         </>
       )}
@@ -1014,10 +1033,10 @@ export function MarketScannerView(props: ExperienceViewProps & {
             ? `Confirmed-first rank · ${sniperCount} intact setup${sniperCount === 1 ? '' : 's'} · thin volume marked red`
             : 'Sorted from persisted backend scan · tape fields refresh live'}
         >
-          <DenseTable rows={filtered} selected={selected} onSelect={setSelected} depth={depth} mode={tab} />
+          <DenseTable rows={filtered} selected={selected} onSelect={focusSymbol} depth={depth} mode={tab} />
         </Panel>
         <div className="scanner-detail-column">
-          <Panel title={`CHART · ${selected || '—'}`}><ChartWorkspace symbol={selected} bars={bars} row={selectedRow} /></Panel>
+          <Panel title={`CHART · ${selected || 'SELECT STOCK'}`}><ChartWorkspace symbol={selected} bars={bars} row={chartRow} /></Panel>
           <Panel title="ACTIONS">
             <div className="radar-action-row">
               <button type="button" disabled={!selected} onClick={() => setActive('Stock Intelligence')}>Stock Intelligence</button>
@@ -1033,7 +1052,7 @@ export function MarketScannerView(props: ExperienceViewProps & {
         </div>
       </div>
       {peek}
-      {selected ? null : (
+      {peekSymbol ? null : (
         <p className="reco-foot">Tap a row for fundamentals, ratios and technicals.</p>
       )}
     </section>

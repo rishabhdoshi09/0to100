@@ -589,10 +589,6 @@ export function LongTermView(props: ViewProps) {
     return all
   }, [classification, dashboard.long_term.records])
 
-  useEffect(() => {
-    if (rows.length && !rows.some((item) => item.symbol === selected)) setSelected(rows[0].symbol)
-  }, [rows, selected, setSelected])
-
   const row = rows.find((item) => item.symbol === selected)
   const viewSymbol = row?.symbol || ''
   const viewBars = viewSymbol === selected ? bars : []
