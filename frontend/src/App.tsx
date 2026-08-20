@@ -263,6 +263,11 @@ function App() {
   }, [depth])
 
   useEffect(() => {
+    const timer = window.setTimeout(() => setQuery(''), 0)
+    return () => window.clearTimeout(timer)
+  }, [])
+
+  useEffect(() => {
     patchDeskSession({
       active,
       selected: pinnedSymbol(active, selected),
@@ -575,6 +580,10 @@ function App() {
             ⌕
             <input
               aria-label="Search NSE symbol"
+              name="quantterm-symbol-lookup"
+              autoComplete="off"
+              autoCorrect="off"
+              spellCheck={false}
               placeholder="Search any NSE share…"
               value={query}
               onChange={(event: { target: { value: string } }) => setQuery(event.target.value)}
