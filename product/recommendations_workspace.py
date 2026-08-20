@@ -740,12 +740,15 @@ def build_recommendations_workspace(
     refresh_technicals: bool = True,
     compute_sepa: bool = True,
     sepa_load_frame: Any = None,
+    include_monitor: bool = True,
 ) -> dict[str, Any]:
     """Project recommendation categories + lifecycle from persisted product state.
 
     ``refresh_technicals`` stamps live CMP on the shortlist with one quote
     call. It does not recompute RSI across the scan head.
     ``compute_sepa`` ranks Best Setups from official OHLCV (capped shortlist).
+    ``include_monitor`` attaches breadth / index strip / news. The Ideas
+    request thread skips it so a locked bhav store cannot freeze the page.
     """
     scan = dict(scan_payload or {})
     lt = dict(long_term_payload or {})
@@ -796,8 +799,23 @@ def build_recommendations_workspace(
 
     from product.sepa_setup import _session_label
     from product.top_stocks import tape_policy
-    from product.monitor_context import INDEX_STRIP_NOTE, index_strip
-    from product.monitor_market import BREADTH_NOTE, NEWS_NOTE, market_breadth, news_tape
+
+    if include_monitor:
+        from product.monitor_context import INDEX_STRIP_NOTE, index_strip
+        from product.monitor_market import BREADTH_NOTE, NEWS_NOTE, market_breadth, news_tape
+        indices = index_strip()
+        index_note = INDEX_STRIP_NOTE
+        breadth = market_breadth()
+        breadth_note = BREADTH_NOTE
+        news = news_tape()
+        news_note = NEWS_NOTE
+    else:
+        indices = []
+        index_note = ""
+        breadth = {"available": False}
+        breadth_note = ""
+        news = {"available": False}
+        news_note = ""
 
     return {
         "schema_version": 3,
@@ -821,12 +839,12 @@ def build_recommendations_workspace(
         "sepa_note": sepa_note,
         "tape": tape_policy(),
         "session": _session_label(),
-        "indices": index_strip(),
-        "index_strip_note": INDEX_STRIP_NOTE,
-        "breadth": market_breadth(),
-        "breadth_note": BREADTH_NOTE,
-        "news_tape": news_tape(),
-        "news_note": NEWS_NOTE,
+        "indices": indices,
+        "index_strip_note": index_note,
+        "breadth": breadth,
+        "breadth_note": breadth_note,
+        "news_tape": news,
+        "news_note": news_note,
         "categories": categories,
         "lifecycle": {
             "active": active[:60],
@@ -1019,6 +1037,7 @@ def serve_recommendations_workspace(
         refresh_technicals=refresh_technicals,
         compute_sepa=False,
         sepa_load_frame=sepa_load_frame,
+        include_monitor=False,
     )
     payload["sepa_pending"] = want_sepa and _can_rebuild_sepa(scan)
     payload["stale_ranking"] = False

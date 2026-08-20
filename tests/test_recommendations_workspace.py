@@ -449,7 +449,7 @@ def test_serve_does_not_block_the_request_on_sepa(tmp_path, monkeypatch):
         sepa_load_frame=hang,
         background_rebuild=False,
     )
-    assert time.monotonic() - t0 < 5.0
+    assert time.monotonic() - t0 < 2.0
     assert calls == []
     assert first["served_from_cache"] is False
     assert first.get("sepa_pending") is True
@@ -507,6 +507,37 @@ def test_serve_kicks_background_sepa_when_scan_stamp_moves(tmp_path, monkeypatch
         background_rebuild=True,
     )
     assert kicked == ["2026-08-20T10:00:00+00:00"]
+
+
+def test_serve_first_paint_does_not_walk_bhavcopy(tmp_path, monkeypatch):
+    import product.recommendations_workspace as rw
+    monkeypatch.setattr(rw, "WORKSPACE_CACHE", tmp_path / "recommendations_workspace.json")
+
+    def boom(*_a, **_k):
+        raise AssertionError("market breadth must not run on the Ideas request thread")
+
+    monkeypatch.setattr("product.monitor_market.market_breadth", boom)
+    monkeypatch.setattr("product.monitor_context.index_strip", boom)
+    out = rw.serve_recommendations_workspace(
+        scan_payload={
+            "scanned_at": "2026-08-20T10:00:00+00:00",
+            "records": [
+                {
+                    "symbol": "TRENDY", "company": "Trendy Co", "score": 70,
+                    "signals": ["MOMENTUM"], "verdict": "BUY", "status": "Ready to trade",
+                    "chase_risk": False, "price": 110, "entry": 100, "target": 125,
+                    "stop": 95, "rsi": 58, "volume_ratio": 1.5, "avg_vol20": 1e6,
+                },
+            ],
+        },
+        long_term_payload={"scanned_at": "2026-08-20T09:00:00+00:00", "records": []},
+        refresh_technicals=False,
+        compute_sepa=True,
+        background_rebuild=False,
+    )
+    assert rw._card_count(out) > 0
+    assert out.get("breadth", {}).get("available") is False
+    assert out.get("indices") == []
 
 
 def test_cached_workspace_mismatch_is_ignored(tmp_path, monkeypatch):
