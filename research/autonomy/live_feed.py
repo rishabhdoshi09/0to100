@@ -56,7 +56,7 @@ class LiveFeedController:
                         f"Kite WebSocket already owned by {ticker_owner()} — "
                         "not opening a second ticker (403 Forbidden)"
                     )
-                self.ticker = KiteTicker(api_key=api_key, access_token=token)
+                self.ticker = KiteTicker(api_key=api_key, access_token=token, reconnect=False)
                 self.overlay = KiteLiveOverlay()
                 self.feed = KiteTickerFeed(self.ticker, token_to_symbol=token_to_symbol,
                                            overlay=self.overlay)
@@ -77,8 +77,13 @@ class LiveFeedController:
 
     def stop(self) -> None:
         try:
-            if self.ticker is not None and hasattr(self.ticker, "close"):
-                self.ticker.close()
+            if self.ticker is not None:
+                try:
+                    self.ticker.stop_retry()
+                except Exception:
+                    pass
+                if hasattr(self.ticker, "close"):
+                    self.ticker.close()
         except Exception:
             pass
         try:

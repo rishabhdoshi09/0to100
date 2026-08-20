@@ -542,6 +542,11 @@ class Supervisor:
         self._running = False
         self._state_persist.save(self.state)
         self._write_status()
+        try:
+            from scan.breakout_sniper import stop_sniper
+            stop_sniper()
+        except Exception:
+            pass
         self.live_feed.stop()
         self.controls.close()
         self.jobs.close()

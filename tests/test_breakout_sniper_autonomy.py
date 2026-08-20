@@ -179,6 +179,7 @@ def test_start_sniper_restarts_when_ticks_go_stale(monkeypatch):
     from data.kite_ws_slot import reset_ticker_slot
 
     reset_ticker_slot()
+    monkeypatch.setattr(bs, "_stopping", False, raising=False)
 
     class DeadTicker:
         def close(self):
@@ -225,6 +226,7 @@ def test_start_sniper_attaches_instead_of_second_socket(monkeypatch):
 
     reset_ticker_slot()
     assert claim_ticker("live_feed")
+    monkeypatch.setattr(bs, "_stopping", False, raising=False)
     monkeypatch.setattr(bs, "_started", False, raising=False)
     monkeypatch.setattr(bs, "_mode", "off", raising=False)
     monkeypatch.setattr(bs, "_ws_forbidden_until", 0.0, raising=False)
@@ -247,6 +249,7 @@ def test_start_sniper_backs_off_after_403(monkeypatch):
     from data.kite_ws_slot import reset_ticker_slot
 
     reset_ticker_slot()
+    monkeypatch.setattr(bs, "_stopping", False, raising=False)
     monkeypatch.setattr(bs, "_started", False, raising=False)
     monkeypatch.setattr(bs, "_mode", "off", raising=False)
     monkeypatch.setattr(bs, "_ws_forbidden_until", time.time() + 60, raising=False)
@@ -271,3 +274,37 @@ def test_ingest_ticks_marks_sniper_alive(monkeypatch):
     bs._last_tick_ts = 0
     bs.ingest_ticks([{"instrument_token": 1, "last_price": 10}])
     assert bs._last_tick_ts > 0
+
+
+def test_stop_sniper_does_not_reconnect_or_alert(monkeypatch):
+    import scan.breakout_sniper as bs
+    from data.kite_ws_slot import reset_ticker_slot
+
+    reset_ticker_slot()
+    monkeypatch.setattr(bs, "_stopping", False, raising=False)
+    monkeypatch.setattr(bs, "_started", True, raising=False)
+    monkeypatch.setattr(bs, "_mode", "owner", raising=False)
+    alerts = []
+    monkeypatch.setattr(bs, "_alert", lambda hits: alerts.append(list(hits or [])))
+    closed = []
+
+    class Tok:
+        def stop_retry(self):
+            closed.append("retry")
+
+        def close(self):
+            closed.append("close")
+
+    bs._ticker = Tok()
+    bs._owned_tickers = [bs._ticker]
+    bs.stop_sniper()
+    assert bs._stopping is True
+    assert "retry" in closed and "close" in closed
+    monkeypatch.setattr("execution.trade_executor.kite_ready", lambda: True)
+    assert bs.start_sniper() is False
+    bs.ingest_ticks([{"instrument_token": 1, "last_price": 99}])
+    assert alerts == []
+    bs.handle_ws_close(1006, "peer dropped the TCP connection without previous WebSocket closing handshake")
+    assert bs.start_sniper() is False
+    monkeypatch.setattr(bs, "_stopping", False, raising=False)
+    reset_ticker_slot()
