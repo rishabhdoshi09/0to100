@@ -1,9 +1,8 @@
 import './recommendations.css'
 import { useEffect, useMemo, useState } from 'react'
 import { money, pct, relativeAge, words } from './format'
-import { BuyThesisSheet } from './BuyThesisSheet'
-import { deskSymbol, thesisReplacesList } from './deskThesis'
-import { usePhoneLayout } from './phoneLayout'
+import { StockPeekPopup } from './StockPeekPopup'
+import { deskSymbol } from './deskThesis'
 import {
   fetchMarketReportsWorkspace,
   fetchRecommendationsWorkspace,
@@ -149,7 +148,6 @@ export function RecommendationsView({
   dashboard,
   selected,
   setSelected,
-  bars,
   setActive,
   marketScan,
   longTermScan,
@@ -169,7 +167,6 @@ export function RecommendationsView({
   const [categoryId, setCategoryId] = useState(boot?.ideasCategory || 'best_setups')
   const [lifecycle, setLifecycle] = useState<'Active' | 'Closed'>(boot?.ideasLifecycle || 'Active')
   const [query, setQuery] = useState('')
-  const phone = usePhoneLayout()
 
   useEffect(() => {
     let cancelled = false
@@ -253,21 +250,19 @@ export function RecommendationsView({
     )
   }
 
-  const thesisSheet = selected ? (
-    <BuyThesisSheet
+  const selectedCard = cards.find((card) => deskSymbol(card.symbol) === deskSymbol(selected))
+    || (data?.categories || []).flatMap((cat) => cat.cards || []).find((card) => deskSymbol(card.symbol) === deskSymbol(selected))
+
+  const peek = selected ? (
+    <StockPeekPopup
       symbol={deskSymbol(selected)}
-      bars={bars}
-      row={selectedRow as Record<string, unknown> | null}
+      card={selectedCard || selectedRow || null}
       onClose={() => setSelected('')}
       onOpenResearch={() => setActive('Stock Intelligence')}
       onCompare={() => onCompare?.(selected)}
       onWatchlist={() => onWatchlist?.(selected)}
     />
   ) : null
-
-  if (thesisReplacesList(phone, selected) && thesisSheet) {
-    return <div className="reco-light reco-thesis-only">{thesisSheet}</div>
-  }
 
   return (
     <div className="reco-light">
@@ -385,8 +380,9 @@ export function RecommendationsView({
           ))}
         </div>
       )}
-      {thesisSheet || (
-        <p className="reco-foot">Tap a name for the buy thesis.</p>
+      {peek}
+      {selected ? null : (
+        <p className="reco-foot">Tap a name for fundamentals, ratios and technicals.</p>
       )}
       <p className="reco-foot">{data.disclaimer}</p>
     </div>
