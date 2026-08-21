@@ -112,3 +112,39 @@ def evaluate_entry(
     else:
         out["reward_status"] = "UNKNOWN"
     return out
+
+
+FILL_VALID = "VALID_FILL"
+FILL_MISSED = "MISSED"
+FILL_GAP_THROUGH = "GAP_THROUGH"
+FILL_EXTENDED = "EXTENDED"
+FILL_INVALIDATED = "INVALIDATED"
+FILL_NO_BAR = "NO_BAR"
+
+
+def classify_next_open_fill(
+    *,
+    open_px: float | None,
+    zone_lo: float | None,
+    zone_hi: float | None,
+    stop: float | None,
+) -> dict[str, Any]:
+    """Next-session open vs the versioned buy-zone. Never chase.
+
+    A print outside the zone is a classification, not a market fill at a
+    worse price. `entry = last price` is not a fallback.
+    """
+    if open_px is None or open_px <= 0:
+        return {"class": FILL_NO_BAR, "fill": None, "reason": "no executable open"}
+    if zone_lo is None or zone_hi is None:
+        return {"class": FILL_NO_BAR, "fill": None, "reason": "buy-zone undefined"}
+    o = float(open_px)
+    lo, hi = float(zone_lo), float(zone_hi)
+    if o > hi:
+        return {"class": FILL_GAP_THROUGH, "fill": None, "reason": "next open gapped through buy-zone"}
+    if o < lo:
+        return {"class": FILL_MISSED, "fill": None, "reason": "next open below buy-zone — not filled"}
+    if stop is not None and o <= float(stop):
+        return {"class": FILL_INVALIDATED, "fill": None, "reason": "next open at or through structural stop"}
+    return {"class": FILL_VALID, "fill": round(o, 4), "reason": "next open inside buy-zone"}
+

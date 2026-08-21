@@ -18,7 +18,9 @@ from research.sepa.frames import (
     pit_universe,
     slice_as_of,
 )
+from research.sepa.integrity import classify_pit
 from research.sepa.rs import build_rs_table, lookup_rs
+from research.sepa.setups import setup_id as make_setup_id
 from research.sepa.trend import evaluate_trend
 from research.sepa.types import SepaEligibility
 from research.sepa.vcp import detect_vcp
@@ -62,6 +64,8 @@ def evaluate_sepa_eligibility(
         ca = ca_status()
         meta["ca_complete"] = bool(ca.get("ca_complete"))
         meta["ca_note"] = ca.get("note") or ""
+        meta["ca_verified"] = bool(ca.get("verified"))
+        meta["ca_n_events"] = int(ca.get("n_events") or 0)
 
     universe_version = str(meta.get("universe_source") or "")
     if meta.get("universe_complete"):
@@ -147,10 +151,20 @@ def evaluate_sepa_eligibility(
 
     eligible = good_stock and good_setup and good_entry
     pit_safe = bool(meta.get("universe_complete")) and bool(meta.get("ca_complete"))
+    pit_class = classify_pit(
+        universe_meta={
+            "universe_complete": meta.get("universe_complete"),
+            "universe_source": meta.get("universe_source") or universe_version,
+            "research_grade": meta.get("research_grade"),
+            "source": meta.get("universe_source") or universe_version,
+        },
+        ca={"ca_complete": meta.get("ca_complete"), "verified": meta.get("ca_verified"),
+            "n_events": meta.get("ca_n_events") or (1 if meta.get("ca_complete") else 0)},
+    )
     if not meta.get("universe_complete"):
         reasons.append("Universe membership is not PIT-complete (survivorship risk).")
     if not meta.get("ca_complete"):
-        reasons.append("Corporate-action table missing — prices may contain phantom gaps.")
+        reasons.append("Corporate-action table missing or unverified — prices may contain phantom gaps.")
 
     if eligible:
         headline = "ELIGIBLE — stock + setup + entry"
@@ -238,9 +252,24 @@ def evaluate_sepa_eligibility(
         universe_complete=bool(meta.get("universe_complete")),
         ca_complete=bool(meta.get("ca_complete")),
         research_grade=pit_safe and eligible,
+        pit_class=pit_class,
+        vcp_state=str(vcp.get("state") or ""),
+        setup_id=make_setup_id(
+            sym, vcp.get("base_start_date"),
+            eligibility_version=cfg.eligibility_version,
+            vcp_version=cfg.vcp_version,
+            pivot_version=cfg.pivot_version,
+        ) if vcp.get("base_start_date") else "",
+        pivot_knowable_date=vcp.get("pivot_knowable_date"),
+        vcp_knowable_date=vcp.get("vcp_knowable_date"),
+        base_start_date=vcp.get("base_start_date"),
+        pivot_version=cfg.pivot_version,
+        vcp_version=cfg.vcp_version,
         evidence={
             "near_sepa": bool(trend.get("near_sepa")),
             "vcp_evidence": vcp.get("evidence") or {},
+            "vcp_state": vcp.get("state"),
+            "broken_out": bool(vcp.get("broken_out")),
             "buy_zone_above_pct": buy_zone_above_pct if buy_zone_above_pct is not None else cfg.buy_zone_above_pct,
             "atr_wide_diagnostic": bool(entry.get("evidence_atr_wide")),
             "pit": {
@@ -248,6 +277,7 @@ def evaluate_sepa_eligibility(
                 "ca_complete": bool(meta.get("ca_complete")),
                 "universe_note": meta.get("universe_note") or "",
                 "ca_note": meta.get("ca_note") or "",
+                "pit_class": pit_class,
             },
             "rs_injected": bool(rs_percentile is not None),
         },

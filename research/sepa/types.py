@@ -114,6 +114,14 @@ class SepaEligibility:
     universe_complete: bool = False
     ca_complete: bool = False
     research_grade: bool = False
+    pit_class: str = "PIT_UNVERIFIED"
+    vcp_state: str = ""
+    setup_id: str = ""
+    pivot_knowable_date: str | None = None
+    vcp_knowable_date: str | None = None
+    base_start_date: str | None = None
+    pivot_version: str = ""
+    vcp_version: str = ""
     evidence: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
