@@ -506,10 +506,13 @@ def start_sniper() -> bool:
 
     Never opens a second KiteTicker while the autonomy live feed (or anyone
     else in this process) already owns the slot — that upgrade fails 403.
+
+    ``stop_sniper()`` is for THIS shutdown (no reconnect storm). A later
+    explicit start — Streamlit rerun, uvicorn reload, supervisor tick —
+    must arm again. Otherwise Telegram breakouts die after every edit.
     """
-    global _ticker, _started, _mode, _last_tick_ts
-    if _stopping:
-        return False
+    global _ticker, _started, _mode, _last_tick_ts, _stopping
+    _stopping = False
     stale_ticker = None
     with _lock:
         if _started and _mode == "attached":

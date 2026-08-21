@@ -278,7 +278,7 @@ def test_ingest_ticks_marks_sniper_alive(monkeypatch):
 
 def test_stop_sniper_does_not_reconnect_or_alert(monkeypatch):
     import scan.breakout_sniper as bs
-    from data.kite_ws_slot import reset_ticker_slot
+    from data.kite_ws_slot import claim_ticker, reset_ticker_slot
 
     reset_ticker_slot()
     monkeypatch.setattr(bs, "_stopping", False, raising=False)
@@ -300,11 +300,17 @@ def test_stop_sniper_does_not_reconnect_or_alert(monkeypatch):
     bs.stop_sniper()
     assert bs._stopping is True
     assert "retry" in closed and "close" in closed
-    monkeypatch.setattr("execution.trade_executor.kite_ready", lambda: True)
-    assert bs.start_sniper() is False
+    bs._last_tick_ts = 0
     bs.ingest_ticks([{"instrument_token": 1, "last_price": 99}])
     assert alerts == []
+    assert bs._last_tick_ts == 0
     bs.handle_ws_close(1006, "peer dropped the TCP connection without previous WebSocket closing handshake")
-    assert bs.start_sniper() is False
-    monkeypatch.setattr(bs, "_stopping", False, raising=False)
+    assert bs._started is False
+    monkeypatch.setattr("execution.trade_executor.kite_ready", lambda: True)
+    assert claim_ticker("live_feed")
+    assert bs.start_sniper() is True
+    assert bs._stopping is False
+    assert bs._mode == "attached"
+    bs.ingest_ticks([{"instrument_token": 1, "last_price": 99}])
+    assert bs._last_tick_ts > 0
     reset_ticker_slot()
