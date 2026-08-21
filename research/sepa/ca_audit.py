@@ -99,41 +99,57 @@ def unresolved_events(
     events: Mapping[str, list] | None = None,
     sample: int | None = None,
 ) -> list[dict[str, Any]]:
-    """Scan as-of-sliced adjusted frames for consecutive-session phantom gaps."""
+    """Unresolved consecutive discontinuities. Does not invent factors.
+
+    Uses ``discontinuity_audit`` so genuine ≥35% market days and suspension
+    spans are not treated as missing CA. Only ``UNRESOLVED`` consecutive
+    events (and demerger/merger subjects when present) are returned.
+    """
     from data.corporate_actions import load_events
+    from research.intelligence.data.discontinuity_audit import audit_symbol
 
     ledger = events if events is not None else load_events()
     out: list[dict[str, Any]] = []
-    items = list(frames.items())
+    symbols = [str(s).upper() for s in frames.keys()]
     if sample:
-        items = items[: int(sample)]
-    for sym, df in items:
-        sliced = slice_as_of(df, as_of) if as_of is not None else df
-        if sliced is None or len(sliced) < 3 or "close" not in sliced.columns:
-            continue
-        gaps = phantom_gaps(sliced["close"].to_numpy(dtype=float))
-        if not gaps:
-            continue
-        ev = list(ledger.get(str(sym).upper(), []) or [])
-        for g in gaps:
-            idx = int(g["index"])
-            try:
-                d1 = iso_date(sliced.index[idx])
-            except Exception:
-                d1 = str(idx)
-            near = []
-            for e in ev:
+        symbols = symbols[: int(sample)]
+    for sym in symbols:
+        df = frames.get(sym)
+        if df is None:
+            df = next((frames[k] for k in frames if str(k).upper() == sym), None)
+        try:
+            rows = audit_symbol(sym, events=dict(ledger))
+        except Exception:
+            rows = []
+        if not rows and df is not None and "close" in getattr(df, "columns", []):
+            # Synthetic / off-store frames (unit tests): consecutive phantom gaps
+            # without a ledger event are unresolved and quarantined.
+            sliced = slice_as_of(df, as_of) if as_of is not None else df
+            if sliced is None or len(sliced) < 3:
+                continue
+            from core.data_integrity import phantom_gaps
+            for g in phantom_gaps(sliced["close"].to_numpy(dtype=float)):
+                idx = int(g["index"])
                 try:
-                    ex = str(pd.Timestamp(e.get("ex_date")).date())
+                    d1 = iso_date(sliced.index[idx])
                 except Exception:
-                    continue
-                if abs((pd.Timestamp(d1) - pd.Timestamp(ex)).days) <= 5:
-                    near.append({
-                        "ex_date": ex, "type": e.get("type"), "factor": e.get("factor"),
-                    })
+                    d1 = str(idx)
+                out.append(classify_gap_event(
+                    symbol=sym, date=d1, pct=float(g.get("pct") or 0), events_near=[],
+                ))
+            continue
+        for disc in rows:
+            if int(getattr(disc, "cal_days", 99) or 99) > 3:
+                continue
+            if str(disc.classification) not in {"UNRESOLVED", "IDENTITY_TRANSITION"}:
+                continue
+            d1 = str(disc.d1)
+            if as_of is not None and d1 > iso_date(as_of):
+                continue
             out.append(classify_gap_event(
-                symbol=str(sym).upper(), date=d1, pct=float(g.get("pct") or 0),
-                events_near=near,
+                symbol=sym, date=d1, pct=float(disc.pct_adj if disc.pct_adj is not None else disc.pct_raw),
+                events_near=list(disc.ca_events_near or []),
+                subjects=[str(disc.notes or "")],
             ))
     return out
 

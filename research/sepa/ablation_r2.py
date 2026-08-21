@@ -201,6 +201,12 @@ def run_ablation_r2(
         funnel["investable"] += len(snap.investable)
         rs_table = build_rs_table(frames, as_of, cfg, universe=snap.investable)
         run_scanner_today = scanner is not None and (di % max(1, int(scanner_step)) == 0)
+        if di % 25 == 0:
+            print(
+                f"SEPA-001R2 {as_of} {di+1}/{len(eval_dates)} "
+                f"investable={len(snap.investable)} F_n={len(rows.get('F') or [])}",
+                flush=True,
+            )
 
         for sym in snap.investable:
             df = fast.frame(sym)

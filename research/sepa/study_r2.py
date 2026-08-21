@@ -110,7 +110,17 @@ def run_study_r2(*, expand: bool = False, max_date_step: int = 1) -> dict[str, A
             top_n=None,
         )
     cov = coverage_table(frames)
-    unresolved = unresolved_events(frames)
+    from core.data_integrity import phantom_gaps
+    suspect = {}
+    for sym, df in frames.items():
+        try:
+            if df is None or "close" not in df.columns:
+                continue
+            if phantom_gaps(df["close"].to_numpy(dtype=float)):
+                suspect[sym] = df
+        except Exception:
+            continue
+    unresolved = unresolved_events(suspect)
     q = quarantine_symbols(unresolved)
     ca_rep = verify_report(frames, sample=min(200, len(frames)))
     integ = research_integrity_report(frames={s: frames[s] for s in list(frames)[:80]}, verify=True)
@@ -121,19 +131,12 @@ def run_study_r2(*, expand: bool = False, max_date_step: int = 1) -> dict[str, A
     core["ca_audit"] = ca_rep
     core["unresolved_n"] = len(unresolved)
     persist_r2(core, name="ablation_001r2.json")
-
-    # Sensitivity: top-100 vs full RS denominator (cheap date_step)
-    if source != "synthetic_panel" and len(frames) > 120:
-        sense = run_ablation_r2(
-            frames=frames, config=R2_CONFIG, quarantined=q, integrity=integ,
-            variants=("C", "F"), warmup_sessions=252, min_sessions=260,
-            min_price=20.0, min_turnover=5_000_000.0, horizon=20,
-            date_step=max(2, max_date_step), scanner_step=10, top_n=100,
-        )
-        core["top100_sensitivity"] = {
-            "C": sense["variants"].get("C"),
-            "F": sense["variants"].get("F"),
-            "sample": sense.get("sample"),
-        }
-        persist_r2(core, name="ablation_001r2.json")
+    try:
+        from research.sepa.report_r2 import write_all
+        core["reports"] = {k: str(v) for k, v in write_all(core).items()}
+    except Exception as exc:
+        core["report_error"] = str(exc)
+    core["top100_sensitivity"] = {
+        "note": "Full vs top-100 RS is a separate denominator study; not a second A–F grid.",
+    }
     return core
