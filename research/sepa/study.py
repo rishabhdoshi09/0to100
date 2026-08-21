@@ -155,7 +155,7 @@ def run_study(*, use_store: bool = True, max_symbols: int | None = 80) -> dict[s
                 source = "official_nse_bhavcopy"
                 from research.sepa.config import DEFAULT_CONFIG
                 cfg = DEFAULT_CONFIG
-                kwargs = dict(sample_step=1, lookback_sessions=250, horizon=20, max_symbols=None)
+                kwargs = dict(sample_step=1, lookback_sessions=220, horizon=20, max_symbols=None)
         except Exception as exc:
             universe_meta = {"store_error": str(exc)}
     if not frames:
@@ -169,10 +169,19 @@ def run_study(*, use_store: bool = True, max_symbols: int | None = 80) -> dict[s
     core["data_source"] = source
     core["universe"] = universe_meta
     core["integrity"] = integ
-    core["buy_zone_study"] = buyzone_study(frames, cfg, **kwargs)
-    core["vcp_component_study"] = vcp_component_study(frames, cfg, **kwargs)
-    core["rs_buckets"] = rs_bucket_study(frames, cfg, horizon=12)
-    core["pivot_compare"] = pivot_compare(frames, cfg, **kwargs)
+    persist_r(core, name="ablation_001r_core.json")
+    # Sensitivity runs use a cheaper subset / step so the canonical daily A–F
+    # book remains the primary evidence.
+    sense_syms = list(frames.keys())[:40] if source != "synthetic_panel" else list(frames.keys())
+    sense = {s: frames[s] for s in sense_syms}
+    sense_kwargs = dict(kwargs)
+    if source != "synthetic_panel":
+        sense_kwargs["sample_step"] = 2
+        sense_kwargs["lookback_sessions"] = 180
+    core["buy_zone_study"] = buyzone_study(sense, cfg, **sense_kwargs)
+    core["vcp_component_study"] = vcp_component_study(sense, cfg, **sense_kwargs)
+    core["rs_buckets"] = rs_bucket_study(frames, cfg, horizon=int(kwargs.get("horizon") or 12))
+    core["pivot_compare"] = pivot_compare(sense, cfg, **sense_kwargs)
     years = sorted({
         y for stats in (core.get("variants") or {}).values()
         for y in (stats.get("by_year") or {})
@@ -193,7 +202,7 @@ def run_study(*, use_store: bool = True, max_symbols: int | None = 80) -> dict[s
     # RS threshold 70/80/90 on C+F
     rs_study = {}
     for thr in (70.0, 80.0, 90.0):
-        p = run_ablation_r(frames=frames, config=cfg, variants=("C", "F"), rs_threshold=thr, **kwargs)
+        p = run_ablation_r(frames=sense, config=cfg, variants=("C", "F"), rs_threshold=thr, **sense_kwargs)
         rs_study[str(int(thr))] = {k: p["variants"][k] for k in p["variants"]}
     core["rs_threshold_study"] = rs_study
     persist_r(core, name="ablation_001r.json")
