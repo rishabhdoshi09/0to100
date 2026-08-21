@@ -128,3 +128,19 @@ hardcoded `False`.
 2. Persist `ablation_001r2.json`, setup/opportunity ledgers, funnel,
    results, walk-forward, and a single decision.
 3. Stop. Do not implement paper integration in this milestone.
+
+---
+
+## 8. Post-run amendment (no threshold change)
+
+After the frozen long-history path was stored, the F deployment labeler
+was corrected so `deployment_eligible` reads the **confirmation block**,
+not pooled E[R]. That is a scoring-gate fix required by §6 of
+`SEPA_001R2_VALIDATION_PROTOCOL.md`. It does **not** change RS, VCP,
+Stage-2, stop, buy-zone, or any simulated path.
+
+The first writer had marked pooled F `STATISTICAL_SIGNAL` as
+`DEPLOYMENT_ELIGIBLE`. That label is **void**. Persisted JSON and
+`SEPA_001R2_DECISION.md` use confirmation evidence (`REJECT`,
+n=975, E[R]=−0.122). Thresholds remain frozen. Paper integration is
+still not in this experiment.

@@ -6,7 +6,12 @@ from types import SimpleNamespace
 import numpy as np
 import pandas as pd
 
-from research.sepa.ablation_r2 import attempt_e_entry, observe_lifecycle_daily, run_ablation_r2
+from research.sepa.ablation_r2 import (
+    annotate_core_f_deployment,
+    attempt_e_entry,
+    observe_lifecycle_daily,
+    run_ablation_r2,
+)
 from research.sepa.ca_audit import CATimeline, build_timeline, ca_research_acceptability
 from research.sepa.embargo import (
     attach_session_path,
@@ -293,6 +298,34 @@ def test_ca_research_acceptable_does_not_set_ca_complete():
     # Global flag is independent.
     st = ca_status()
     assert "ca_complete" in st
+
+
+def test_core_f_deployment_uses_confirmation_not_pooled():
+    """Pooled STATISTICAL_SIGNAL must not paper-qualify F when confirmation REJECTS."""
+    pooled = {
+        "statistical_verdict": "STATISTICAL_SIGNAL",
+        "mean_r": 0.123,
+        "n": 4208,
+        "block_ci": {"ci_lower": 0.004, "ci_upper": 0.23},
+    }
+    confirmation = [
+        SimpleNamespace(net_r=-0.25 + (i % 11) * 0.01) for i in range(80)
+    ]
+    dep = annotate_core_f_deployment(
+        pooled_gate=pooled,
+        confirmation_rows=confirmation,
+        n_trials=7,
+        integ={"overall": "PIT_DEGRADED", "ca_research_acceptable": True},
+        ca={"ca_complete": False},
+        n_years=6.0,
+    )
+    assert dep["deployment_eligible"] is False
+    assert dep["paper_shadow"] is False
+    assert dep["label"] == "NOT_DEPLOYMENT_ELIGIBLE"
+    assert dep["confirmation_n"] == 80
+    assert dep["confirmation_verdict"] != "STATISTICAL_SIGNAL"
+    assert "pooled_STATISTICAL_SIGNAL_is_not_confirmation_evidence" in dep["reasons"]
+    assert "PROMOTE" not in str(dep)
 
 
 def test_g_not_fed_to_r_harness_in_ablation():

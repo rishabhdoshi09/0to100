@@ -71,6 +71,84 @@ CONF_START = "2025-01-01"
 CONF_END = "2026-08-21"
 
 
+def annotate_core_f_deployment(
+    *,
+    pooled_gate: Mapping[str, Any],
+    confirmation_rows,
+    n_trials: int,
+    integ: Mapping[str, Any] | None,
+    ca: Mapping[str, Any],
+    n_years: float,
+) -> dict[str, Any]:
+    """Deployment for core F uses the confirmation block, never pooled E[R].
+
+    Pooled STATISTICAL_SIGNAL is descriptive only. Paper-shadow eligibility
+    must fail closed when the untouched confirmation block is not a signal
+    with a non-negative CI lower bound.
+    """
+    conf = list(confirmation_rows or [])
+    unseen_n = len(conf)
+    has_unseen = unseen_n > 0
+    pit = str((integ or {}).get("overall") or "PIT_UNVERIFIED")
+    ca_complete = bool(ca.get("ca_complete"))
+    if has_unseen:
+        dep_stat = statistical_gate([getattr(x, "net_r") for x in conf], n_trials=n_trials)
+    else:
+        dep_stat = {
+            "statistical_verdict": "UNDERPOWERED",
+            "mean_r": None,
+            "n": 0,
+            "block_ci": None,
+        }
+    dep_ci = dep_stat.get("block_ci") or {}
+    dep_lo = dep_ci.get("ci_lower") if isinstance(dep_ci, dict) else None
+    dep_ci_ok = bool(dep_lo is not None and float(dep_lo) >= 0)
+    dep = deployment_eligible(
+        statistical=dep_stat,
+        pit_class=pit,
+        ca_complete=ca_complete,
+        ca_research_acceptable=bool((integ or {}).get("ca_research_acceptable")),
+        n_post_warmup_years=n_years,
+        has_unseen_block=has_unseen,
+        unseen_n=unseen_n,
+        ci_lower_ok=dep_ci_ok,
+        known_lookahead=False,
+        causality_ok=True,
+    )
+    mean = dep_stat.get("mean_r")
+    verdict = dep_stat.get("statistical_verdict")
+    mean_r = None if mean is None else round(float(mean), 4)
+    extra = [
+        f"confirmation_block_statistical={verdict}",
+        f"confirmation_expectancy_r={mean_r}",
+    ]
+    if not dep_ci_ok:
+        extra.append("confirmation_ci_includes_nonpositive")
+    if (
+        pooled_gate.get("statistical_verdict") == "STATISTICAL_SIGNAL"
+        and verdict != "STATISTICAL_SIGNAL"
+    ):
+        extra.append("pooled_STATISTICAL_SIGNAL_is_not_confirmation_evidence")
+    extra.append(f"pit_class={pit}")
+    if not ca_complete:
+        extra.append("ca_complete=false (global verifier unchanged)")
+    reasons = list(dep.get("reasons") or [])
+    for row in extra:
+        if row not in reasons:
+            reasons.append(row)
+    dep = dict(dep)
+    dep["reasons"] = reasons
+    dep["confirmation_n"] = unseen_n
+    dep["confirmation_expectancy_r"] = mean_r
+    dep["confirmation_verdict"] = verdict
+    dep["confirmation_ci"] = dep_stat.get("block_ci")
+    if verdict != "STATISTICAL_SIGNAL" or not dep_ci_ok or not has_unseen:
+        dep["deployment_eligible"] = False
+        dep["paper_shadow"] = False
+        dep["label"] = "NOT_DEPLOYMENT_ELIGIBLE"
+    return dep
+
+
 def _session_calendar(frames: Mapping[str, pd.DataFrame]) -> list[pd.Timestamp]:
     acc = set()
     for df in frames.values():
@@ -591,21 +669,28 @@ def run_ablation_r2(
         ci = gate.get("block_ci") or stats.get("block_ci") or {}
         lo = ci.get("ci_lower") if isinstance(ci, dict) else None
         wf = _by_block(deduped)
-        conf = wf["confirmation"]
-        unseen_n = len(conf)
-        has_unseen = unseen_n > 0
-        dep = deployment_eligible(
-            statistical=gate,
-            pit_class=str((integ or {}).get("overall") or "PIT_UNVERIFIED"),
-            ca_complete=bool(ca.get("ca_complete")),
-            ca_research_acceptable=bool((integ or {}).get("ca_research_acceptable")),
-            n_post_warmup_years=n_years,
-            has_unseen_block=has_unseen if v == "F" else False,
-            unseen_n=unseen_n if v == "F" else 0,
-            ci_lower_ok=bool(lo is not None and float(lo) >= 0),
-            known_lookahead=False,
-            causality_ok=True,
-        )
+        if v == "F":
+            dep = annotate_core_f_deployment(
+                pooled_gate=gate,
+                confirmation_rows=wf["confirmation"],
+                n_trials=n_trials,
+                integ=integ,
+                ca=ca,
+                n_years=n_years,
+            )
+        else:
+            dep = deployment_eligible(
+                statistical=gate,
+                pit_class=str((integ or {}).get("overall") or "PIT_UNVERIFIED"),
+                ca_complete=bool(ca.get("ca_complete")),
+                ca_research_acceptable=bool((integ or {}).get("ca_research_acceptable")),
+                n_post_warmup_years=n_years,
+                has_unseen_block=False,
+                unseen_n=0,
+                ci_lower_ok=bool(lo is not None and float(lo) >= 0),
+                known_lookahead=False,
+                causality_ok=True,
+            )
         stats["statistical_verdict"] = gate.get("statistical_verdict")
         stats["deployment"] = dep
         stats["fill_attempt_counts"] = dict(fill_counts[v])
