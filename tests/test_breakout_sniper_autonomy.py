@@ -314,3 +314,18 @@ def test_stop_sniper_does_not_reconnect_or_alert(monkeypatch):
     bs.ingest_ticks([{"instrument_token": 1, "last_price": 99}])
     assert bs._last_tick_ts > 0
     reset_ticker_slot()
+
+
+def test_sniper_retries_telegram_if_send_fails(monkeypatch):
+    import scan.breakout_sniper as bs
+
+    monkeypatch.setattr(bs, "_stopping", False, raising=False)
+    monkeypatch.setattr(bs, "_fired", {}, raising=False)
+    sends = [False, True]
+    monkeypatch.setattr(bs, "_send_sniper_telegram", lambda hits: sends.pop(0))
+    hits = [{"symbol": "KAYNES", "trigger": 100, "ltp": 101}]
+    bs._alert(hits)
+    today = __import__("datetime").datetime.now(bs.IST).strftime("%Y-%m-%d")
+    assert "KAYNES" not in bs._fired.get(today, set())
+    bs._alert(hits)
+    assert "KAYNES" in bs._fired.get(today, set())

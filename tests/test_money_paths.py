@@ -3800,6 +3800,18 @@ class TestSniperConfirmation:
                              now=50, hold_seconds=45, frac=0.5)
         assert hits == []
 
+    def test_ltp_tick_confirms_when_scan_volume_ratio_is_real(self):
+        """Shared live-feed socket is LTP — no volume_traded on the tick."""
+        from scan.breakout_sniper import process_ticks
+        watch = {101: {"symbol": "KAYNES", "trigger": 182.0,
+                       "stop": 169.0, "target": 210.0, "avg_vol": 1_000_000,
+                       "volume_ratio": 1.6}}
+        arm, fired = {}, set()
+        ltp = [{"instrument_token": 101, "last_price": 184.0}]  # no volume field
+        assert process_ticks(ltp, watch, fired, arm, now=0, hold_seconds=20, frac=0.5) == []
+        hits = process_ticks(ltp, watch, fired, arm, now=25, hold_seconds=20, frac=0.5)
+        assert len(hits) == 1 and hits[0]["symbol"] == "KAYNES"
+
     def test_volume_confirms_pacing(self):
         from scan.breakout_sniper import volume_confirms
         # Pace-aware absolute floor — AUROPHARMA-style 0.1× never confirms
@@ -3817,7 +3829,9 @@ class TestSniperConfirmation:
         # Scan already printed real relative volume — missing avg_vol20 must
         # not mute a live tick that has volume.
         assert volume_confirms(50_000, 0, 0.5, scan_volume_ratio=1.4) is True
-        assert volume_confirms(0, 0, 0.5, scan_volume_ratio=1.4) is False
+        # LTP packets omit volume_traded — scan ratio still confirms
+        assert volume_confirms(0, 0, 0.5, scan_volume_ratio=1.4) is True
+        assert volume_confirms(0, 1_000_000, 0.5) is False  # no scan ratio, no tick vol
         # early session: real open surge (≥0.105×) allowed; tiny print not
         assert volume_confirms(1_000_000, 1_000_000, 0.01) is True
         assert volume_confirms(150_000, 1_000_000, 0.01) is True

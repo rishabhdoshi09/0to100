@@ -177,6 +177,7 @@ def test_data_only_client_hides_order_methods():
 
 class FakeTicker:
     MODE_LTP = "ltp"
+    MODE_QUOTE = "quote"
 
     def __init__(self):
         self.subscribed, self.mode, self.connected = [], None, False
@@ -198,7 +199,7 @@ def test_ticker_feed_maps_symbols_and_restores_on_reconnect():
     feed = A.KiteTickerFeed(tk, token_to_symbol={111: "WIN", 222: "FLAT"}, overlay=ov)
     feed.connect()
     feed.subscribe(["WIN", "FLAT"])
-    assert set(tk.subscribed) == {111, 222} and tk.mode == "ltp"
+    assert set(tk.subscribed) == {111, 222} and tk.mode == "quote"
     # on_connect handler restores approved subscriptions and marks the overlay connected
     tk.subscribed = []
     tk.on_connect(tk, {})
