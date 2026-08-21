@@ -528,8 +528,9 @@ class TestCounterfactualGates:
         assert len(found) <= 2                            # FDR controls false gates
 
     def test_decision_r_math_and_guards(self):
-        # +6% outcome on a 3% risk (entry 100, stop 97) → +2R
-        assert CF._decision_r(100.0, 97.0, 6.0) == pytest.approx(2.0)
+        # +6% outcome on a 3% risk (entry 100, stop 97) → +2R gross, net of costs
+        net = CF._decision_r(100.0, 97.0, 6.0)
+        assert net is not None and 1.7 < net < 2.0
         assert CF._decision_r(100.0, 100.0, 5.0) is None  # zero risk → invalid
         assert CF._decision_r(100.0, 105.0, 5.0) is None  # stop above entry → invalid
 

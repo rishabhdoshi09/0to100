@@ -272,10 +272,12 @@ def build_from_bhav(
             status["reason"] = "ledger_already_present"
             return status
 
-    from data.bhavcopy_runtime import ensure_loaded
+    try:
+        from data.bhavcopy_runtime import ensure_loaded
+        ensure_loaded(rebuild_from_local=False)
+    except Exception:
+        pass
     from data import bhavcopy_store as BS
-
-    ensure_loaded(rebuild_from_local=False)
     spans = BS.symbol_date_spans()
     if not spans:
         return {

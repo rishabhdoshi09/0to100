@@ -29,7 +29,11 @@ class _State:
         return self.strategy
 
 
-def test_runtime_executes_the_trade_intent_at_brain2_risk_size():
+def test_runtime_executes_the_trade_intent_at_brain2_risk_size(monkeypatch):
+    monkeypatch.setattr(
+        "research.forward_evidence.hooks.may_open_paper",
+        lambda *a, **k: True,
+    )
     ctx = SimpleNamespace(
         as_of_date="2026-08-01",
         clusters={},

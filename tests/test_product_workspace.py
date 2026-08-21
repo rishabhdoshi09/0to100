@@ -82,18 +82,21 @@ def test_breakouts_mode_ranks_best_quality_first():
                 "breakout_grade": "", "breakout_conviction": 40, "chase_risk": False,
                 "rsi": 50, "volume_ratio": 1.2, "avg_vol20": 1e6,
                 "verdict": "BUY", "status": "Ready to trade",
+                "pct_below_20d_high": 1.0, "pct_below_52w_high": 2.0,
             },
             {
                 "symbol": "HOT", "signals": ["BREAKOUT_52W"], "score": 95,
                 "breakout_grade": "A", "breakout_conviction": 90, "chase_risk": False,
                 "rsi": 82, "volume_ratio": 2.5, "avg_vol20": 1e6,
                 "verdict": "BUY", "status": "Ready to trade",
+                "pct_below_20d_high": 0.4, "pct_below_52w_high": 1.0,
             },
             {
                 "symbol": "STRONG", "signals": ["BREAKOUT_52W"], "score": 70,
                 "breakout_grade": "A", "breakout_conviction": 85, "chase_risk": False,
                 "rsi": 55, "volume_ratio": 2.0, "avg_vol20": 1e6,
                 "verdict": "BUY", "status": "Ready to trade",
+                "pct_below_20d_high": 0.3, "pct_below_52w_high": 0.8,
             },
         ]
     }
