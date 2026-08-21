@@ -166,7 +166,7 @@ export function TradeHub({
   const tab = tradeTabOf(active)
   return (
     <HubShell
-      blurb="The order path. Ready ranks Stage-2 SEPA plus complete scan tickets (ATQ). Lab is the walk-forward backtest as four jobs. Journey is paper autopilot until live is earned — this desk never arms live."
+      blurb="The order path. Ready ranks Stage-2 SEPA plus complete scan tickets. Lab is a practice test on official history — passed / failed / too quiet. Journey is paper until live is earned. This desk never arms live."
       tabs={TRADE_TABS}
       active={tab}
       onChange={(next) => setActive(TRADE_ROUTE[next as (typeof TRADE_TABS)[number]])}

@@ -117,6 +117,68 @@
   font: inherit;
 }
 .trade-avoid { color: var(--rw-danger); }
+.lab-steps {
+  list-style: none;
+  padding: 0;
+  margin: 0 0 16px;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 10px;
+}
+.lab-steps li {
+  display: grid;
+  grid-template-columns: 28px 1fr;
+  gap: 8px;
+  background: var(--rw-surface);
+  border: 1px solid var(--rw-line);
+  border-radius: 14px;
+  padding: 12px;
+}
+.lab-steps b {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  background: #eef2ff;
+  color: #3d5a99;
+  font-size: 13px;
+}
+.lab-steps p { margin: 4px 0 0; color: var(--rw-muted); font-size: 13px; }
+.lab-progress {
+  height: 10px;
+  background: var(--rw-line);
+  border-radius: 99px;
+  overflow: hidden;
+  margin: 0 0 16px;
+}
+.lab-progress span {
+  display: block;
+  height: 100%;
+  background: #3d5a99;
+  transition: width .3s ease;
+}
+.lab-scoreboard {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 12px;
+  margin-top: 10px;
+}
+.lab-lane {
+  background: var(--rw-surface);
+  border: 1px solid var(--rw-line);
+  border-radius: 16px;
+  padding: 14px;
+}
+.lab-lane.is-pass { border-color: #b7e0c8; }
+.lab-lane.is-lock { border-color: #f0c4c4; }
+.lab-lane h4 { margin: 0 0 8px; font-size: 15px; }
+.lab-lane ul { list-style: none; padding: 0; margin: 0; }
+.lab-lane li { display: grid; gap: 2px; padding: 6px 0; border-bottom: 1px solid var(--rw-line); }
+.lab-lane span { color: var(--rw-muted); font-size: 12px; }
+.lab-rules { color: var(--rw-muted); font-size: 13px; line-height: 1.45; }
+.trade-table tr.is-pass td:last-child { color: var(--rw-green); font-weight: 700; }
+.trade-table tr.is-lock td:last-child { color: var(--rw-danger); font-weight: 700; }
 @media (max-width: 820px) {
   .trade-kpis { grid-template-columns: repeat(2, 1fr); }
   .trade-steps li { grid-template-columns: 1fr; }

@@ -16,7 +16,7 @@ import {
   type ReadyQueuePayload,
   type ReadyTradeCard,
 } from './productApi'
-import { journeyTone, labStatusTone, readyLaneLabel } from './tradeDesk'
+import { journeyTone, labKidTone, labStatusTone, readyLaneLabel } from './tradeDesk'
 import './tradeDesk.css'
 
 function ReadyCard({
@@ -182,11 +182,13 @@ export function BacktestLabView({ runControl, setActive }: ExperienceViewProps) 
       .catch((reason: Error) => setError(reason.message || 'Lab unread'))
   }
 
+  const running = Boolean(lab?.running || busy)
+
   useEffect(() => {
     load()
-    const t = window.setInterval(load, 12_000)
+    const t = window.setInterval(load, running ? 2_000 : 12_000)
     return () => window.clearInterval(t)
-  }, [])
+  }, [running])
 
   const run = async () => {
     setBusy(true)
@@ -200,6 +202,21 @@ export function BacktestLabView({ runControl, setActive }: ExperienceViewProps) 
     }
   }
 
+  const lesson = lab?.lesson
+  const board = lab?.scoreboard
+  const done = Number(lab?.progress || 0)
+  const total = Number(lab?.total || 0)
+  const pct = total > 0 ? Math.min(100, Math.round((100 * done) / total)) : (running ? 8 : 0)
+  const cta = running
+    ? `${lesson?.cta_running || 'Practicing…'}${total ? ` ${done}/${total}` : ''}`
+    : (lesson?.cta || 'Run the practice test')
+
+  const lanes: Array<{ key: 'keep' | 'skip' | 'quiet'; title: string; rows: NonNullable<BacktestLabPayload['scoreboard']>['keep'] }> = [
+    { key: 'keep', title: 'Passed — keep using', rows: board?.keep || [] },
+    { key: 'skip', title: 'Failed — skip', rows: board?.skip || [] },
+    { key: 'quiet', title: 'Too few tries — stay quiet', rows: board?.quiet || [] },
+  ]
+
   return (
     <section className="reco-light trade-desk">
       <nav className="reco-crumb" aria-label="Breadcrumb">
@@ -212,30 +229,69 @@ export function BacktestLabView({ runControl, setActive }: ExperienceViewProps) 
       <header className="reco-hero">
         <div className="reco-hero-icon">L</div>
         <div>
-          <h2>Backtest lab</h2>
-          <p>
-            Four jobs: trust the scanner, lean on this tape, skip proven losers, then ask paper if it earned capital.
-            Never places an order.
-          </p>
+          <h2>{lesson?.title || 'What is a backtest?'}</h2>
+          <p>{lesson?.plain || 'A practice test on official NSE history. It never places an order.'}</p>
         </div>
       </header>
+      <p className="trade-lede">{lesson?.now}</p>
+      <ol className="lab-steps">
+        {(lesson?.steps || []).map((step) => (
+          <li key={step.n}>
+            <b>{step.n}</b>
+            <div>
+              <strong>{step.title}</strong>
+              <p>{step.body}</p>
+            </div>
+          </li>
+        ))}
+      </ol>
       <div className="trade-actions">
-        <button type="button" className="reco-primary" disabled={busy || lab?.running} onClick={() => void run()}>
-          {lab?.running || busy ? 'Backtest running…' : 'Backtest all stocks'}
+        <button type="button" className="reco-primary" disabled={running} onClick={() => void run()}>
+          {cta}
         </button>
         <span className="trade-note">{lab?.evidence_note || 'no measured backtest yet'}</span>
+        {lab?.live_locked ? <span className="trade-note">Live locked. No orders.</span> : null}
       </div>
+      {running ? (
+        <div className="lab-progress" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={pct}>
+          <span style={{ width: `${pct}%` }} />
+        </div>
+      ) : null}
       {error ? <p className="stock-peek-note">{error}</p> : null}
+      <section className="trade-section">
+        <h3>Scoreboard</h3>
+        <p className="trade-lede">{board?.headline || 'No practice test on file yet.'}</p>
+        {lesson?.r_plain ? <p className="trade-lede">{lesson.r_plain}</p> : null}
+        <div className="lab-scoreboard">
+          {lanes.map((lane) => (
+            <article key={lane.key} className={`lab-lane ${labKidTone(lane.key)}`}>
+              <h4>{lane.title}</h4>
+              {lane.rows.length ? (
+                <ul>
+                  {lane.rows.map((row) => (
+                    <li key={row.signal}>
+                      <strong>{row.signal}</strong>
+                      <span>
+                        {row.closed || row.trades} tries
+                        {row.expectancy_r != null ? ` · ${row.expectancy_r >= 0 ? '+' : ''}${row.expectancy_r}R` : ''}
+                        {row.win_rate != null ? ` · ${row.win_rate}% wins` : ''}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              ) : <p className="trade-note">None yet.</p>}
+            </article>
+          ))}
+        </div>
+      </section>
       <div className="trade-usecases">
         {(lab?.use_cases || []).map((item) => (
           <article key={item.id} className={`trade-usecase ${labStatusTone(item.status)}`}>
             <header>
               <span>{item.status}</span>
-              <h3>{item.title}</h3>
+              <h3>{item.kid_title || item.title}</h3>
             </header>
-            <p><b>When:</b> {item.when}</p>
-            <p><b>How:</b> {item.how}</p>
-            <p><b>Now:</b> {item.result}</p>
+            <p>{item.result}</p>
             {item.best?.length ? (
               <ul>{item.best.map((row) => <li key={String(row.signal)}>{String(row.signal)} · {String(row.expectancy_r)}R</li>)}</ul>
             ) : null}
@@ -248,24 +304,29 @@ export function BacktestLabView({ runControl, setActive }: ExperienceViewProps) 
       </div>
       {lab?.signals?.length ? (
         <section className="trade-section">
-          <h3>Per-signal walk-forward</h3>
+          <h3>The full report card</h3>
           <table className="trade-table">
             <thead>
-              <tr><th>Signal</th><th>Trades</th><th>Win rate</th><th>Expectancy</th><th>Verdict</th></tr>
+              <tr><th>Signal</th><th>Tries</th><th>Wins</th><th>Avg result</th><th>Report card</th></tr>
             </thead>
             <tbody>
               {lab.signals.map((row) => (
-                <tr key={row.signal}>
+                <tr key={row.signal} className={labKidTone(row.kid_lane || '')}>
                   <td>{row.signal}</td>
                   <td>{row.closed || row.trades}</td>
                   <td>{row.win_rate != null ? `${row.win_rate}%` : '—'}</td>
                   <td>{row.expectancy_r != null ? `${row.expectancy_r >= 0 ? '+' : ''}${row.expectancy_r}R` : '—'}</td>
-                  <td>{row.verdict}</td>
+                  <td>{row.kid_label || row.verdict}</td>
                 </tr>
               ))}
             </tbody>
           </table>
         </section>
+      ) : null}
+      {lesson?.rules?.length ? (
+        <ul className="lab-rules">
+          {lesson.rules.map((rule) => <li key={rule}>{rule}</li>)}
+        </ul>
       ) : null}
       {lab?.disclaimer ? <p className="trade-disclaimer">{lab.disclaimer}</p> : null}
     </section>

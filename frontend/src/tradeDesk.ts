@@ -15,6 +15,20 @@ export function journeyTone(status: string): string {
   return 'is-wait'
 }
 
+export function labKidLane(lane: string): string {
+  const s = (lane || '').toLowerCase()
+  if (s === 'keep') return 'Passed'
+  if (s === 'skip') return 'Failed'
+  return 'Too few tries'
+}
+
+export function labKidTone(lane: string): string {
+  const s = (lane || '').toLowerCase()
+  if (s === 'keep') return 'is-pass'
+  if (s === 'skip') return 'is-lock'
+  return 'is-wait'
+}
+
 export function labStatusTone(status: string): string {
   const s = (status || '').toUpperCase()
   if (s === 'READY') return 'is-pass'

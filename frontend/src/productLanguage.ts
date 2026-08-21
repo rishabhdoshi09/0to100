@@ -163,14 +163,14 @@ export const PAGE_GUIDE: Record<string, PageGuide> = {
   },
   'Backtest Lab': {
     title: 'Trade · Lab',
-    purpose: 'Walk-forward signal accuracy as four jobs: trust the scanner, lean on this tape, skip losers, then ask paper if it earned capital.',
+    purpose: 'A practice test on official NSE history. Cricket nets, not the match. Press one button, read passed / failed / too few tries, then paper on Journey.',
     questions: [
-      'Is the full-universe report actionable?',
-      'Which signals earn in the current regime?',
-      'Which signals are proven losers?',
+      'What is a backtest, in one sentence?',
+      'Did we practice on enough stocks?',
+      'Which signals passed, failed, or are too quiet to claim?',
       'Did this backtest place any orders? (No.)',
     ],
-    action: 'Run Backtest all stocks when the report is missing or truncated, then read the playbook before Ready.',
+    action: 'Run the practice test, read the scoreboard, then paper-trade on Journey. Do not skip to live.',
     doesNot: 'A high win rate on a thin sample is not a claim. Backtest never places paper or live orders.',
   },
   'Live Journey': {
@@ -188,6 +188,7 @@ export const PAGE_GUIDE: Record<string, PageGuide> = {
 }
 
 export const GLOSSARY: Record<string, string> = {
+  Backtest: 'A practice test on old official prices. We pretend the scanner fired that day and check if the trade won or lost. Never peeks at tomorrow. Never places an order.',
   Candidate: 'A stock worth reviewing; not an instruction to trade.',
   Conviction: 'A combined evidence score, not certainty.',
   Expectancy: 'Average result per trade after the stated assumptions.',

@@ -251,6 +251,16 @@ def test_lab_use_cases_and_no_orders():
     assert lab["playbook"]["best"][0]["signal"] == "momentum"
     assert "nr7" in lab["playbook"]["avoid"]
     assert lab["loser_n"] == 1
+    lesson = lab["lesson"]
+    assert lesson["title"] == "What is a backtest?"
+    assert "never place an order" in lesson["plain"].lower() or "never places" in lesson["plain"].lower() or "never place" in lesson["plain"]
+    assert len(lesson["steps"]) == 4
+    board = lab["scoreboard"]
+    assert [s["signal"] for s in board["keep"]] == ["momentum"]
+    assert [s["signal"] for s in board["skip"]] == ["nr7"]
+    assert lab["signals"][0]["kid_label"] == "Passed"
+    assert any(s["kid_label"] == "Failed" for s in lab["signals"])
+    assert lab["lesson"]["cta"] == "Run the practice test"
 
 
 def test_lab_missing_report_is_not_actionable():
@@ -258,6 +268,10 @@ def test_lab_missing_report_is_not_actionable():
     assert lab["actionable"] is False
     trust = lab["use_cases"][0]
     assert trust["status"] in {"MISSING", "PARTIAL"}
+    assert "never spends money" in lab["scoreboard"]["headline"]
+    assert lab["lesson"]["cta"] == "Run the practice test"
+    assert lab["places_orders"] is False
+    assert lab["live_locked"] is True
 
 
 def test_journey_never_unlocks_live_click(monkeypatch):

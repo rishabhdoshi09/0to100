@@ -1147,6 +1147,7 @@ export const fetchReadyQueue = (): Promise<ReadyQueuePayload> =>
 export type BacktestUseCase = {
   id: string
   title: string
+  kid_title?: string
   when: string
   how: string
   status: string
@@ -1157,11 +1158,36 @@ export type BacktestUseCase = {
   goto?: string
 }
 
+export type LabSignalRow = {
+  signal: string
+  trades: number
+  closed: number
+  win_rate?: number | null
+  expectancy_r?: number | null
+  verdict: string
+  kid_lane?: 'keep' | 'skip' | 'quiet' | string
+  kid_label?: string
+  kid_hint?: string
+}
+
+export type BacktestLesson = {
+  title: string
+  plain: string
+  r_plain?: string
+  now: string
+  steps: Array<{ n: number; title: string; body: string }>
+  rules: string[]
+  cta: string
+  cta_running: string
+}
+
 export type BacktestLabPayload = {
   schema_version: number
   places_orders: boolean
   live_locked: boolean
   running: boolean
+  progress?: number
+  total?: number
   actionable: boolean
   evidence_note: string
   generated_at?: string
@@ -1172,16 +1198,16 @@ export type BacktestLabPayload = {
     avoid?: string[]
     recommended_target_pct?: number | null
   }
-  signals: Array<{
-    signal: string
-    trades: number
-    closed: number
-    win_rate?: number | null
-    expectancy_r?: number | null
-    verdict: string
-  }>
+  signals: LabSignalRow[]
   proven_n: number
   loser_n: number
+  scoreboard?: {
+    headline: string
+    keep: LabSignalRow[]
+    skip: LabSignalRow[]
+    quiet: LabSignalRow[]
+  }
+  lesson?: BacktestLesson
   use_cases: BacktestUseCase[]
   disclaimer: string
 }

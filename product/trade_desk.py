@@ -467,21 +467,118 @@ def build_ready_queue(
     }
 
 
+def _kid_verdict(verdict: str) -> dict[str, str]:
+    v = str(verdict or "").upper()
+    if v in {"PROVEN", "POSITIVE"}:
+        return {
+            "kid_lane": "keep",
+            "kid_label": "Passed",
+            "kid_hint": "This signal made money in practice. Keep using it.",
+        }
+    if v == "LOSER":
+        return {
+            "kid_lane": "skip",
+            "kid_label": "Failed",
+            "kid_hint": "This signal lost money in practice. Skip it.",
+        }
+    return {
+        "kid_lane": "quiet",
+        "kid_label": "Too few tries",
+        "kid_hint": "Under 30 practice trades we stay quiet. No bragging.",
+    }
+
+
 def _signal_rows(report: Mapping[str, Any]) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     for key, raw in dict(report.get("signals") or {}).items():
         if not isinstance(raw, Mapping):
             continue
-        out.append({
+        verdict = str(raw.get("verdict") or "THIN")
+        row = {
             "signal": str(key),
             "trades": int(raw.get("trades") or 0),
             "closed": int(raw.get("closed") or raw.get("trades") or 0),
             "win_rate": _f(raw.get("win_rate")),
             "expectancy_r": _f(raw.get("expectancy_r")),
-            "verdict": str(raw.get("verdict") or "THIN"),
-        })
+            "verdict": verdict,
+        }
+        row.update(_kid_verdict(verdict))
+        out.append(row)
     out.sort(key=lambda r: (r["verdict"] != "PROVEN", -(r["expectancy_r"] or -99.0)))
     return out
+
+
+def _lab_scoreboard(signals: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    keep = [s for s in signals if s.get("kid_lane") == "keep"]
+    skip = [s for s in signals if s.get("kid_lane") == "skip"]
+    quiet = [s for s in signals if s.get("kid_lane") == "quiet"]
+    if not signals:
+        headline = "No practice test on file yet. Press the button — it never spends money."
+    else:
+        headline = (
+            f"{len(keep)} passed · {len(skip)} failed · {len(quiet)} too quiet to claim. "
+            "R is rupees won per rupee risked, on average."
+        )
+    return {
+        "headline": headline,
+        "keep": list(keep),
+        "skip": list(skip),
+        "quiet": list(quiet),
+    }
+
+
+def _lab_lesson(*, running: bool, actionable: bool, has_report: bool) -> dict[str, Any]:
+    if running:
+        now = "The practice test is running. Wait. Do not treat Ready names as proven yet."
+    elif actionable:
+        now = "Practice is big enough to read. Green = keep. Red = skip. Grey = stay quiet."
+    elif has_report:
+        now = "A report exists, but the sample is too small or truncated. Run it again on all stocks."
+    else:
+        now = "No practice test yet. Press the big button. Official NSE history only — no fake scores."
+    return {
+        "title": "What is a backtest?",
+        "plain": (
+            "A backtest is cricket nets, not the match. We go back in official NSE history, "
+            "pretend the scanner said BUY that day, and check: win, lose, or nowhere in the next "
+            "10 sessions. We never peek at tomorrow. That is cheating. We never place an order. "
+            "That would be the real match."
+        ),
+        "r_plain": (
+            "R means: if you risk ₹1, +0.22R is 22 paise extra on average. "
+            "−0.15R is 15 paise lost on average. Do that 100 times and the loser hurts."
+        ),
+        "now": now,
+        "steps": [
+            {
+                "n": 1,
+                "title": "Press the button",
+                "body": "Run the practice test on all stocks in official history.",
+            },
+            {
+                "n": 2,
+                "title": "Wait for the bar",
+                "body": "It walks day by day. No peeking at the next close.",
+            },
+            {
+                "n": 3,
+                "title": "Read the scoreboard",
+                "body": "Passed = keep. Failed = skip. Too few tries = we do not brag.",
+            },
+            {
+                "n": 4,
+                "title": "Then paper, not live",
+                "body": "Journey still uses fake money. This page cannot arm live.",
+            },
+        ],
+        "rules": [
+            "Under 30 practice trades = no claim.",
+            "A truncated run is homework half-done.",
+            "This never buys or sells. Live stays locked.",
+        ],
+        "cta": "Run the practice test",
+        "cta_running": "Practicing…",
+    }
 
 
 def build_backtest_lab(
@@ -531,6 +628,7 @@ def build_backtest_lab(
         {
             "id": "trust_scanner",
             "title": "Should I trust today's scanner?",
+            "kid_title": "Did we practice enough?",
             "when": "Before you treat any Ready name as money.",
             "how": (
                 "Run Backtest all stocks on official NSE history. "
@@ -548,6 +646,7 @@ def build_backtest_lab(
         {
             "id": "regime_lean",
             "title": "Which signals earn in this tape?",
+            "kid_title": "Who is good on today's pitch?",
             "when": "When two Ready names compete and you need the measured one.",
             "how": "The playbook uses today's regime bucket, not a vibe ranking.",
             "status": "READY" if playbook.get("best") else ("MISSING" if not report else "THIN"),
@@ -557,6 +656,7 @@ def build_backtest_lab(
         {
             "id": "avoid_losers",
             "title": "Which signals should I skip?",
+            "kid_title": "Who failed the practice test?",
             "when": "Whenever a card still looks exciting but the combo is a proven loser.",
             "how": "Loser verdicts auto-demote the next scan. Do not override them by hand.",
             "status": "READY" if losers or playbook.get("avoid") else ("MISSING" if not report else "NONE"),
@@ -566,6 +666,7 @@ def build_backtest_lab(
         {
             "id": "paper_loop",
             "title": "Did paper autopilot earn the next rupee?",
+            "kid_title": "Now try with fake money",
             "when": "Only after Lab is actionable and Ready has (or honestly has not) a name.",
             "how": "Journey reads autopilot's own closed paper trades — not a simulated backtest P&L.",
             "status": "OPEN",
@@ -574,11 +675,14 @@ def build_backtest_lab(
         },
     ]
 
+    has_report = bool(report.get("signals") or report.get("generated_at") or status.get("has_report"))
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "places_orders": False,
         "live_locked": True,
         "running": running,
+        "progress": status.get("progress") or 0,
+        "total": status.get("total") or 0,
         "actionable": actionable,
         "evidence_note": evidence_note,
         "generated_at": report.get("generated_at") or status.get("generated_at") or "",
@@ -592,10 +696,13 @@ def build_backtest_lab(
         "signals": signals[:24],
         "proven_n": len(proven),
         "loser_n": len(losers),
+        "scoreboard": _lab_scoreboard(signals),
+        "lesson": _lab_lesson(running=running, actionable=actionable, has_report=has_report),
         "use_cases": use_cases,
         "disclaimer": (
             "This backtest never places paper or live orders. "
-            "<30 trades on a signal = no claim. Truncated samples stay partial."
+            "<30 trades on a signal = no claim. Truncated samples stay partial. "
+            "It is cricket nets. Live is the match, and the match stays locked."
         ),
     }
 
