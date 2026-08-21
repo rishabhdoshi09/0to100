@@ -48,6 +48,7 @@ class SepaEligibility:
 
     trend_rules: list[RuleResult] = field(default_factory=list)
     trend_template_pass: bool = False
+    structure_pass: bool = False
     trend_passed: int = 0
     trend_total: int = 8
     levels: dict[str, Any] = field(default_factory=dict)

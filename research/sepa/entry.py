@@ -80,9 +80,14 @@ def evaluate_entry(
     if atr and atr > 0:
         out["stop_atr_multiple"] = round(risk / float(atr), 4)
     wide = risk_pct > config.max_stop_pct
-    if out["stop_atr_multiple"] is not None and out["stop_atr_multiple"] > config.max_stop_atr:
-        wide = True
+    atr_wide = (
+        out["stop_atr_multiple"] is not None
+        and out["stop_atr_multiple"] > config.max_stop_atr
+    )
+    # ATR stretch is a diagnostic. Hard reject is percentage risk vs the setup.
+    # A 4% structural stop on a compressed-ATR name is not "too wide".
     out["stop_ok"] = (not wide) and risk > 0
+    out["evidence_atr_wide"] = bool(atr_wide)
     if wide:
         out["entry_rejection"] = out["entry_rejection"] or "WIDE_STRUCTURAL_STOP"
         out["stop_ok"] = False

@@ -177,9 +177,11 @@ def test_near_52w_high_25_percent():
 def test_rs_percentile_injected_threshold():
     trend = evaluate_trend(_stage2(), CFG, rs_percentile=69.9)
     assert trend["trend_template_pass"] is False
+    assert trend["structure_pass"] is True
     assert {r.id: r for r in trend["rules"]}["rs_percentile"].passed is False
     trend_ok = evaluate_trend(_stage2(), CFG, rs_percentile=70.0)
     assert {r.id: r for r in trend_ok["rules"]}["rs_percentile"].passed is True
+    assert trend_ok["structure_pass"] is True
 
 
 def test_rs_rank_no_future_and_stable():
@@ -333,6 +335,21 @@ def test_price_slightly_below_pivot_is_not_a_trade():
     if result.pivot is not None and result.price is not None and result.price < result.buy_zone_low:
         assert result.eligible is False
         assert "ENTRY_BELOW_PIVOT" in result.rejection_codes or result.entry_valid is False
+
+
+def test_atr_multiple_does_not_overwrite_or_reject_a_sane_structural_stop():
+    frame = _plant_vcp(contractions="tight", volume="dry")
+    result = evaluate_sepa_eligibility(
+        "ATR", frame.index[-1], frame=frame, rs_percentile=90.0,
+        config=CFG, pit_meta={"universe_complete": True, "ca_complete": True},
+    )
+    assert "atr_wide_diagnostic" in result.evidence
+    if result.structural_stop is None or result.proposed_entry is None:
+        return
+    risk_pct = (result.proposed_entry - result.structural_stop) / result.proposed_entry * 100.0
+    if risk_pct <= 8.0 and result.entry_valid:
+        assert result.stop_ok is True
+        assert "WIDE_STRUCTURAL_STOP" not in result.rejection_codes
 
 
 def test_structural_stop_not_overwritten_by_atr():

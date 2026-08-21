@@ -160,8 +160,8 @@ This is **not** `_pullback_depths`.
 Ablation will also test upper bounds: 0.25, 0.5, 1.0, 1.5, 2.0, 3.0, 5.0%.
 
 **Stop:** last contraction swing low. If missing → no trade.  
-If `(entry − stop)/entry > 8%` **or** stop distance > **3×ATR** → `WIDE_STRUCTURAL_STOP` (reject; do not tighten).  
-ATR is reported, never the stop.
+Hard reject if `(entry − stop)/entry > 8%` → `WIDE_STRUCTURAL_STOP` (do not tighten).  
+ATR multiple (`max_stop_atr=3`) is a **diagnostic flag only** (`evidence.atr_wide_diagnostic`). A 4% structural stop on a compressed-ATR name is not “too wide.” ATR is never the stop.
 
 **Reward:** measured move = first contraction depth × pivot, projected up from pivot. If first depth missing → `reward_r = null` / `UNKNOWN`. No 4×ATR target.
 

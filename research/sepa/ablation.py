@@ -253,14 +253,23 @@ def run_ablation(
         from data.bhavcopy_runtime import ensure_loaded
         from data.bhavcopy_store import get_ohlcv, store_symbols
         ensure_loaded(rebuild_from_local=False)
-        symbols = list(store_symbols() or [])
-        if max_symbols:
-            symbols = symbols[: int(max_symbols)]
-        frames = {}
-        for sym in symbols:
+        ranked = []
+        for sym in store_symbols() or []:
             df = get_ohlcv(sym)
-            if df is not None and len(df) >= 80 + horizon:
-                frames[str(sym).upper()] = df
+            if df is None or len(df) < 80 + horizon:
+                continue
+            try:
+                px = float(df["close"].iloc[-1])
+                vol = float(df["volume"].iloc[-20:].mean()) if "volume" in df.columns else 0.0
+            except Exception:
+                continue
+            if px < 20:
+                continue
+            ranked.append((px * vol, str(sym).upper(), df))
+        ranked.sort(reverse=True)
+        if max_symbols:
+            ranked = ranked[: int(max_symbols)]
+        frames = {sym: df for _, sym, df in ranked}
     pit_meta = {"universe_complete": False, "ca_complete": False}
     try:
         # as-of last date for status; per-bar RS still uses the as-of slice
@@ -291,8 +300,6 @@ def run_ablation(
             fwd = df.iloc[t: t + horizon]
             as_of = iso_date(hist.index[-1])
             sample_dates.add(as_of)
-            if t < last_exit["A"].get(sym, -1):
-                pass
             scan_hit = None
             try:
                 scan_hit = scanner._analyze(sym, hist)
@@ -310,10 +317,11 @@ def run_ablation(
                 sym, hist.index[-1], frame=hist, rs_table=rs_table, config=cfg,
                 pit_meta=pit_meta, buy_zone_above_pct=buy_zone_above_pct,
             )
-            # Trend 7/8 research uses min_trend_passed
-            trend_ok = sepa.trend_passed >= min_trend_passed and sepa.trend_total == 8
+            # B = scanner + 7 MA/52w rules (RS is variant C). 7/8 study uses min_trend_passed.
             if min_trend_passed >= 8:
-                trend_ok = sepa.trend_template_pass
+                trend_ok = sepa.structure_pass
+            else:
+                trend_ok = sepa.trend_passed >= min_trend_passed
 
             def _take(variant: str, sim: dict[str, Any] | None):
                 if sim is None:
@@ -321,12 +329,13 @@ def run_ablation(
                 if t < last_exit[variant].get(sym, -1):
                     return
                 last_exit[variant][sym] = t + int(sim["hold"])
-                net = _net(sim["gross_r"], sim["entry"], sepa.structural_stop or sim.get("entry", 1) * 0.95)
-                # for scanner, stop is scan stop
-                stop_px = float(scan_hit.stop) if variant != "F" and scan_hit is not None and variant in "ABCDE" else float(sepa.structural_stop or 0)
-                if variant in "ABCDE" and scan_hit is not None:
-                    net = _net(sim["gross_r"], sim["entry"], float(scan_hit.stop))
+                scanner_fill = variant in ("A", "B", "C", "D")
+                if scanner_fill and scan_hit is not None:
                     stop_px = float(scan_hit.stop)
+                    net = _net(sim["gross_r"], sim["entry"], stop_px)
+                else:
+                    stop_px = float(sepa.structural_stop or sim.get("entry", 1) * 0.95)
+                    net = _net(sim["gross_r"], sim["entry"], stop_px)
                 rows[variant].append(SimRow(
                     variant=variant, symbol=sym, as_of=as_of,
                     entry=float(sim["entry"]), stop=stop_px,
@@ -347,8 +356,12 @@ def run_ablation(
                 _take("C", _scanner_sim(fwd, float(scan_hit.entry), float(scan_hit.stop), float(scan_hit.target), horizon))
             if "D" in variants and scanner_ok and trend_ok and sepa.rs_pass and sepa.vcp_detected and scan_hit is not None:
                 _take("D", _scanner_sim(fwd, float(scan_hit.entry), float(scan_hit.stop), float(scan_hit.target), horizon))
-            if "E" in variants and scanner_ok and trend_ok and sepa.rs_pass and sepa.vcp_detected and sepa.entry_valid and sepa.stop_ok and scan_hit is not None:
-                _take("E", _scanner_sim(fwd, float(scan_hit.entry), float(scan_hit.stop), float(scan_hit.target), horizon))
+            if "E" in variants and scanner_ok and trend_ok and sepa.rs_pass and sepa.vcp_detected and sepa.entry_valid and sepa.stop_ok and sepa.structural_stop:
+                # Same gates as D, but fill/stop are structural — not scanner ATR geometry.
+                _take("E", _next_open_sim(
+                    fwd, stop=float(sepa.structural_stop), pivot=sepa.pivot,
+                    buy_zone_high=sepa.buy_zone_high, horizon=horizon,
+                ))
             if "F" in variants:
                 if min_trend_passed >= 8:
                     f_ok = sepa.eligible and sepa.structural_stop

@@ -133,12 +133,15 @@ def _pack(rules: list[RuleResult], levels: dict[str, Any]) -> dict[str, Any]:
     fail = sum(1 for r in rules if r.passed is False)
     strict = passed == 8 and unknown == 0 and fail == 0
     near = (passed == 7 and unknown == 0 and fail == 1)
+    structure_rules = [r for r in rules if r.id != "rs_percentile"]
+    structure_pass = all(r.passed is True for r in structure_rules) and len(structure_rules) == 7
     return {
         "rules": rules,
         "passed": passed,
         "total": 8,
         "unknown": unknown,
         "trend_template_pass": strict,
+        "structure_pass": structure_pass,
         "near_sepa": near and not strict,
         "levels": levels,
     }

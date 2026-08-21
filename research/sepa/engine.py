@@ -179,6 +179,7 @@ def evaluate_sepa_eligibility(
         universe_version=universe_version,
         trend_rules=list(trend["rules"]),
         trend_template_pass=bool(trend["trend_template_pass"]),
+        structure_pass=bool(trend.get("structure_pass")),
         trend_passed=int(trend["passed"]),
         trend_total=8,
         levels=dict(trend["levels"]),
@@ -241,6 +242,7 @@ def evaluate_sepa_eligibility(
             "near_sepa": bool(trend.get("near_sepa")),
             "vcp_evidence": vcp.get("evidence") or {},
             "buy_zone_above_pct": buy_zone_above_pct if buy_zone_above_pct is not None else cfg.buy_zone_above_pct,
+            "atr_wide_diagnostic": bool(entry.get("evidence_atr_wide")),
             "pit": {
                 "universe_complete": bool(meta.get("universe_complete")),
                 "ca_complete": bool(meta.get("ca_complete")),
