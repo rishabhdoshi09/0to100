@@ -76,7 +76,7 @@ export function snapshotFromCard(card: Record<string, unknown> | null | undefine
 
 export function peekPackThin(card: {
   pack_thin?: boolean
-  fundamentals?: { metrics?: PeekMetric[]; key_ratios?: Array<{ value?: unknown }> }
+  fundamentals?: { metrics?: PeekMetric[]; key_ratios?: Array<{ name?: string; value?: unknown }> }
   ratios?: Array<{ value?: unknown }>
 } | null | undefined): boolean {
   if (card?.pack_thin === true) return true

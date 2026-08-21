@@ -490,7 +490,7 @@ body {
   --lift: 0 14px 34px rgba(0,0,0,.45), 0 0 0 1px rgba(139,123,240,.28);
 }
 
-/* Quiet desk — no moving aurora / costume glow. */}
+/* Quiet desk — no moving aurora / costume glow. */
 
 /* cards / panels / tiles come alive on hover */
 .panel, .today-strip>div, .scanner-lane-cards article, .quality-overlay-grid>div,
