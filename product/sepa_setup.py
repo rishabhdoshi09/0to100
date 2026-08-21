@@ -3,6 +3,10 @@
 Seven Stage-2 checks, 100 points. Missing history awards 0 and is not a pass.
 This is a research overlay (Reco-style monitor), not a measured QuantTerm edge
 and never a buy instruction.
+
+Strict 8/8 qualification (AND-gate + cross-sectional RS + structural VCP +
+buy-zone) lives in ``research.sepa`` (SEPA-001). This module stays the Ideas
+scorer; do not treat score >= 40 as SEPA eligibility.
 """
 from __future__ import annotations
 
