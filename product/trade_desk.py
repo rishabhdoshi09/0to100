@@ -595,6 +595,10 @@ def build_backtest_lab(
         except Exception:
             report = {}
     report = dict(report or {})
+    # report_is_actionable({}) currently falls through to disk. An explicit
+    # empty mapping must stay empty (tests + honest Lab).
+    if "signals" not in report:
+        report = {**report, "signals": {}}
     if status is None:
         try:
             from product.full_universe_backtest import backtest_status
