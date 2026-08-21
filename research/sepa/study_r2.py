@@ -110,7 +110,9 @@ def run_study_r2(*, expand: bool = False, max_date_step: int = 1) -> dict[str, A
         )
     cov = coverage_table(frames)
     # Exhaustive unresolved-event audit over the research-relevant store.
+    print(f"SEPA-001R2.1 exhaustive CA audit on {len(frames)} frames", flush=True)
     unresolved = unresolved_events(frames, sample=None)
+    print(f"SEPA-001R2.1 unresolved events enumerated: {len(unresolved)}", flush=True)
     timeline = build_timeline(unresolved)
     # Global verifier: sample is documented and does NOT certify the study.
     ca_rep = verify_report(frames, sample=min(200, len(frames)))

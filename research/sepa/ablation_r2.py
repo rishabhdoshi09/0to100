@@ -257,6 +257,12 @@ def run_ablation_r2(
     integ = integrity if integrity is not None else research_integrity_report(
         frames=frames, as_of=eval_dates[0], exhaustive=True,
     )
+    print(
+        f"SEPA-001R2.1 date loop {evaluation_start}→{evaluation_end} "
+        f"n_as_of={len(eval_dates)} investable_method=FastInvestable "
+        f"ca_events={len(timeline.rows)}",
+        flush=True,
+    )
     ca = (integ.get("ca_integrity") if isinstance(integ, dict) else None) or {}
 
     for di, as_ts in enumerate(eval_dates):

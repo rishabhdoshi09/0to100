@@ -102,53 +102,92 @@ def unresolved_events(
 ) -> list[dict[str, Any]]:
     """Unresolved consecutive discontinuities. Does not invent factors.
 
-    Uses ``discontinuity_audit`` so genuine ≥35% market days and suspension
-    spans are not treated as missing CA. Only ``UNRESOLVED`` consecutive
-    events (and demerger/merger subjects when present) are returned.
+    Scans the **passed** frames in memory. Do not call ``audit_symbol`` here:
+    that helper re-walks the entire raw store per name (O(n²)) and is not
+    an exhaustive research audit.
+
+    Remaining ≥35% adjacent gaps on the research series (already CA-adjusted
+    on official read) are classified with the same discontinuity rules:
+    genuine restored continuity is not quarantined; unresolved consecutive
+    events and identity transitions are.
     """
+    from core.data_integrity import phantom_gaps
     from data.corporate_actions import load_events
-    from research.intelligence.data.discontinuity_audit import audit_symbol
+    from research.intelligence.data.discontinuity_audit import (
+        _CONSEC_CAL_DAYS,
+        _ca_near,
+        classify_discontinuity,
+    )
 
     ledger = events if events is not None else load_events()
+    try:
+        from data.security_identity import load_identity_ledger
+        id_ledger = load_identity_ledger() or {}
+    except Exception:
+        id_ledger = {}
+    changes_all = list((id_ledger or {}).get("symbol_changes") or [])
+
     out: list[dict[str, Any]] = []
     symbols = [str(s).upper() for s in frames.keys()]
     if sample:
         symbols = symbols[: int(sample)]
-    for sym in symbols:
+    n = len(symbols)
+    for i, sym in enumerate(symbols):
+        if i and i % 500 == 0:
+            print(f"CA unresolved audit {i}/{n}", flush=True)
         df = frames.get(sym)
         if df is None:
             df = next((frames[k] for k in frames if str(k).upper() == sym), None)
-        try:
-            rows = audit_symbol(sym, events=dict(ledger))
-        except Exception:
-            rows = []
-        if not rows and df is not None and "close" in getattr(df, "columns", []):
-            # Synthetic / off-store frames (unit tests): consecutive phantom gaps
-            # without a ledger event are unresolved and quarantined.
-            sliced = slice_as_of(df, as_of) if as_of is not None else df
-            if sliced is None or len(sliced) < 3:
-                continue
-            from core.data_integrity import phantom_gaps
-            for g in phantom_gaps(sliced["close"].to_numpy(dtype=float)):
-                idx = int(g["index"])
-                try:
-                    d1 = iso_date(sliced.index[idx])
-                except Exception:
-                    d1 = str(idx)
-                out.append(classify_gap_event(
-                    symbol=sym, date=d1, pct=float(g.get("pct") or 0), events_near=[],
-                ))
+        if df is None or "close" not in getattr(df, "columns", []):
             continue
-        for disc in rows:
-            if int(getattr(disc, "cal_days", 99) or 99) > 3:
+        sliced = slice_as_of(df, as_of) if as_of is not None else df
+        if sliced is None or len(sliced) < 3:
+            continue
+        close = sliced["close"].to_numpy(dtype=float)
+        ev = list(ledger.get(sym, []) or [])
+        changes = [
+            ch for ch in changes_all
+            if str(ch.get("old_symbol") or "").upper() == sym
+            or str(ch.get("new_symbol") or "").upper() == sym
+        ]
+        for g in phantom_gaps(close):
+            idx = int(g["index"])
+            if idx < 1 or idx >= len(sliced):
                 continue
+            d0 = sliced.index[idx - 1]
+            d1 = sliced.index[idx]
+            try:
+                cal = int((pd.Timestamp(d1) - pd.Timestamp(d0)).days)
+            except Exception:
+                cal = 1
+            if cal > int(_CONSEC_CAL_DAYS):
+                continue
+            d1s = iso_date(d1)
+            if as_of is not None and d1s > iso_date(as_of):
+                continue
+            pre = float(sliced["close"].iloc[idx - 1])
+            post = float(sliced["close"].iloc[idx])
+            pct = float(g.get("pct") or 0)
+            ca_near = _ca_near(ev, d0, d1)
+            identity_hit = False
+            for ch in changes:
+                try:
+                    when = pd.Timestamp(ch.get("effective_date"))
+                    if min(abs((when - pd.Timestamp(d0)).days), abs((when - pd.Timestamp(d1)).days)) <= 5:
+                        identity_hit = True
+                        break
+                except Exception:
+                    continue
+            disc = classify_discontinuity(
+                symbol=sym, d0=d0, d1=d1, cal_days=cal,
+                pct_raw=pct, pct_adj=pct,
+                pre_raw=pre, post_raw=post, pre_adj=pre, post_adj=post,
+                ca_near=ca_near, identity_hit=identity_hit,
+            )
             if str(disc.classification) not in {"UNRESOLVED", "IDENTITY_TRANSITION"}:
                 continue
-            d1 = str(disc.d1)
-            if as_of is not None and d1 > iso_date(as_of):
-                continue
             out.append(classify_gap_event(
-                symbol=sym, date=d1, pct=float(disc.pct_adj if disc.pct_adj is not None else disc.pct_raw),
+                symbol=sym, date=d1s, pct=pct,
                 events_near=list(disc.ca_events_near or []),
                 subjects=[str(disc.notes or "")],
             ))
