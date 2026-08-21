@@ -252,6 +252,8 @@ class TestBacktestSimulate:
         monkeypatch.setattr(sb, "current_regime_simple", lambda: "BULL")
         (tmp_path / "bt.json").write_text(json.dumps({
             "generated_at": "2026-07-12", "recommended_target_pct": 3.0,
+            "symbols": 500,
+            "universe": {"run": 500, "available": 500, "truncated": False},
             "target_sweep": {"+3%": {"trades": 500, "hit_rate": 60,
                                      "expectancy_r": 0.2}},
             "signals": {
@@ -279,7 +281,10 @@ class TestBacktestSimulate:
     def test_combo_edge_requires_evidence(self, tmp_path, monkeypatch):
         import scan.signal_backtest as sb
         monkeypatch.setattr(sb, "_OUT", tmp_path / "bt.json")
-        (tmp_path / "bt.json").write_text(json.dumps({"signals": {
+        (tmp_path / "bt.json").write_text(json.dumps({
+            "symbols": 500,
+            "universe": {"run": 500, "available": 500, "truncated": False},
+            "signals": {
             "GOOD":  {"trades": 50, "expectancy_r": 0.30},
             "BAD":   {"trades": 50, "expectancy_r": -0.10},
             "THIN":  {"trades": 5,  "expectancy_r": 5.0},   # hype, no evidence
@@ -417,15 +422,20 @@ class TestUnifiedScanner:
 
     def test_breakout_detected_with_dated_reason(self):
         from scan.unified_scanner import UnifiedScanner
-        close = np.linspace(100, 200, 260)
-        # a few small pullback days so RSI isn't pinned at the theoretical
-        # 100 ceiling (a pure straight-line ramp never happens in real
-        # data) — keeps this test clear of the RSI hard-reject band
-        close[-3] = close[-4] - 2.0
-        close[-8] = close[-9] - 2.0
-        close[-12] = close[-13] - 2.0
-        close[-1] = 212
-        vol = np.full(260, 2e6); vol[-1] = 5e6
+        # Alternating up/down then a cooled pullback + volume break keeps RSI
+        # under the 70 hard overbought gate (a ramp or flat-then-gap does not).
+        px = 100.0
+        close = []
+        for i in range(250):
+            px += 0.28 if i % 2 == 0 else -0.27
+            close.append(px)
+        mx = max(close)
+        close.extend([
+            mx * 0.97, mx * 0.968, mx * 0.972, mx * 0.975, mx * 0.98,
+            mx * 0.982, mx * 0.985, mx * 0.99, mx * 0.995, mx * 1.02,
+        ])
+        close = np.array(close)
+        vol = np.full(len(close), 2e6); vol[-1] = 5e6
         r = UnifiedScanner()._analyze("X", self._df(close, vol))
         assert r and "BREAKOUT_52W" in r.signals
         assert any("close)" in reason for reason in r.reasons)  # session-dated
@@ -796,6 +806,15 @@ class TestAutopilot:
             {"sector": "IT / Software", "chg_1d": 0.8, "chg_5d": 1.0, "members": 5},
         ])
         ap.set_config(allocation=100000, mode="PAPER")
+        # Money-path tests exercise other gates (sector, RSI, brain). Real
+        # volume must still be ≥1× — default 0 would hard-reject every consider().
+        _real_consider = ap.consider
+
+        def _consider_with_volume(*args, **kwargs):
+            kwargs.setdefault("volume_ratio", 1.5)
+            return _real_consider(*args, **kwargs)
+
+        monkeypatch.setattr(ap, "consider", _consider_with_volume)
         return ap, te
 
     def _zero_costs(self, monkeypatch):
@@ -2163,8 +2182,8 @@ class TestTelegramCommands:
         from alerts.telegram_commands import handle_command as h
         assert h("hello kya haal") is None           # normal chat → silent
         assert h("") is None
-        assert "Commands" in h("/help")
-        assert "Commands" in h("/nonsense")          # unknown → help
+        assert "Phone desk" in h("/help")
+        assert "Phone desk" in h("/nonsense")          # unknown → help
         assert "/book 3%" in h("/book abc")        # bad arg → usage hint
 
     def test_chat_guard_blocks_strangers(self, monkeypatch):
@@ -2491,10 +2510,37 @@ class TestMarketClock:
         from datetime import datetime as dt
         monkeypatch.setattr(ap, "_STATE_FILE", tmp_path / "ap.json")
         ap._state = {}
-        ap.set_config(allocation=100000, mode="PAPER")   # window 09:30-14:45
+        ap.set_config(allocation=100000, mode="PAPER")   # window 09:30-14:45; paper extends to 15:20
         assert ap._in_window(dt(2026, 7, 14, 10, 0, tzinfo=IST)) is True
         assert ap._in_window(dt(2026, 7, 14, 9, 0, tzinfo=IST)) is False
         assert ap._in_window(dt(2026, 7, 18, 10, 0, tzinfo=IST)) is False  # Sat
+        assert ap._in_window(dt(2026, 7, 14, 15, 10, tzinfo=IST)) is True  # paper afternoon
+        ap.set_config(mode="LIVE")
+        assert ap._in_window(dt(2026, 7, 14, 15, 10, tzinfo=IST)) is False  # live still cuts off
+
+
+    def test_on_setups_ranks_all_buys_not_first_forty(self, tmp_path, monkeypatch):
+        import execution.autopilot as ap
+        monkeypatch.setattr(ap, "_STATE_FILE", tmp_path / "ap.json")
+        ap._state = {}
+        ap.set_config(allocation=100000, mode="PAPER")
+        monkeypatch.setattr(ap, "_notify", lambda m: None)
+        monkeypatch.setattr(ap, "start_book_monitor", lambda: None)
+        monkeypatch.setattr(ap, "_serial_losers_cached", lambda: set())
+        ap.arm()
+        taken = []
+        monkeypatch.setattr(ap, "consider", lambda symbol, **kw: taken.append(symbol) or True)
+        watch = [
+            {"symbol": f"W{i}", "verdict": "WATCH", "score": 99,
+             "conviction_rank": 99, "price": 100, "stop": 95}
+            for i in range(45)
+        ]
+        watch.append({
+            "symbol": "LATEBUY", "verdict": "BUY", "score": 80,
+            "conviction_rank": 200, "price": 100, "stop": 95,
+        })
+        ap.on_setups(watch)
+        assert taken == ["LATEBUY"]
 
     def test_daily_keys_use_ist_calendar(self, monkeypatch):
         """trades_today / funnel keys IST date se banti hain — UTC date se
@@ -2578,8 +2624,10 @@ class TestDecisionJournal:
                         ev_pct=3.2, p_win=65.0)
         dj.log_decision("X", "REJECTED", "sector strong nahi", "scanner",
                         500, 480, 70, ev_pct=2.0, p_win=62.0)
+        from datetime import datetime, timedelta
+        aged = (datetime.now() - timedelta(days=10)).isoformat(timespec="seconds")
         c = dj._conn()
-        c.execute("UPDATE decisions SET decided_at='2026-07-01T10:00:00'")
+        c.execute("UPDATE decisions SET decided_at=?", (aged,))
         c.commit(); c.close()
         monkeypatch.setattr("data.live_quotes.get_live_quotes",
                             lambda syms: {"HAL": {"price": 4700.0},
@@ -2598,8 +2646,10 @@ class TestDecisionJournal:
         """No price → no outcome written (no fake data), row stays pending."""
         dj = self._setup(tmp_path, monkeypatch)
         dj.log_decision("HAL", "TAKEN", "", "scanner", 4500, 4300, 80)
+        from datetime import datetime, timedelta
+        aged = (datetime.now() - timedelta(days=10)).isoformat(timespec="seconds")
         c = dj._conn()
-        c.execute("UPDATE decisions SET decided_at='2026-07-01T10:00:00'")
+        c.execute("UPDATE decisions SET decided_at=?", (aged,))
         c.commit(); c.close()
         monkeypatch.setattr("data.live_quotes.get_live_quotes",
                             lambda syms: {})
@@ -2629,7 +2679,8 @@ class TestDecisionJournal:
         monkeypatch.setattr(ap, "_in_window", lambda now=None: True)
         # weak sector → rejected, with its prediction journaled
         ap.consider("X", 500, 480, 80, 0.2, "Cement", "scanner",
-                    ev_pct=2.5, p_win=61.0, ev_conf="MEDIUM")
+                    ev_pct=2.5, p_win=61.0, ev_conf="MEDIUM",
+                    volume_ratio=1.5)
         c = dj._conn()
         row = c.execute("SELECT * FROM decisions").fetchone()
         c.close()
@@ -2807,9 +2858,8 @@ class TestInstitutionalFlows:
         assert parsed["stock_futures_net"] == 20.0
         assert parsed["total_net"] == 80.0
 
-    def test_lazy_fundamentals_ensure_mock(self):
+    def test_lazy_fundamentals_ensure_mock(self, monkeypatch):
         from fundamentals.cache import FundamentalsCache
-        from fundamentals import fetcher as fetcher_mod
         from fundamentals.lazy import ensure_deep_fundamentals
 
         sym = "LAZYTEST"
@@ -2819,15 +2869,18 @@ class TestInstitutionalFlows:
             def fetch_all(self, symbol: str) -> dict:
                 return {"about": "mock company", "quarterly_results": [{"": "Q1"}]}
 
-        original = fetcher_mod._scraper
-        fetcher_mod._scraper = _MockScraper()
-        try:
-            data = ensure_deep_fundamentals(sym, force_refresh=False)
-            assert data.get("about") == "mock company"
-            assert FundamentalsCache().has(sym)
-        finally:
-            fetcher_mod._scraper = original
-            FundamentalsCache().invalidate(sym)
+        def _fake_resolve(symbol, force_refresh=False, write_cache=True):
+            pack = _MockScraper().fetch_all(symbol)
+            if write_cache:
+                FundamentalsCache().set(symbol, pack)
+            return pack, [{"step": 1, "source": "mock", "status": "OK",
+                           "message": "unit test"}]
+
+        monkeypatch.setattr("fundamentals.resolver.resolve", _fake_resolve)
+        data = ensure_deep_fundamentals(sym, force_refresh=False)
+        assert data.get("about") == "mock company"
+        assert FundamentalsCache().has(sym)
+        FundamentalsCache().invalidate(sym)
 
     def test_lazy_fundamentals_cache_hit(self):
         from fundamentals.cache import FundamentalsCache
@@ -3536,8 +3589,9 @@ class TestStrictLiveDisplay:
         import ui.scanner as sc
         rows = [
             {"symbol": "STALE", "verdict": "STRONG BUY", "edge_r": 0.3,
-             "live": False},
-            {"symbol": "FRESH", "verdict": "BUY", "edge_r": 0.2, "live": True},
+             "live": False, "volume_ratio": 1.5, "rsi": 55},
+            {"symbol": "FRESH", "verdict": "BUY", "edge_r": 0.2, "live": True,
+             "volume_ratio": 1.5, "rsi": 55},
         ]
         monkeypatch.setattr(sc, "_mkt_open", lambda: True)
         assert sc._pick_best_trade(rows)["symbol"] == "FRESH"
@@ -3773,6 +3827,18 @@ class TestSniperConfirmation:
                              now=50, hold_seconds=45, frac=0.5)
         assert hits == []
 
+    def test_ltp_tick_confirms_when_scan_volume_ratio_is_real(self):
+        """Shared live-feed socket is LTP — no volume_traded on the tick."""
+        from scan.breakout_sniper import process_ticks
+        watch = {101: {"symbol": "KAYNES", "trigger": 182.0,
+                       "stop": 169.0, "target": 210.0, "avg_vol": 1_000_000,
+                       "volume_ratio": 1.6}}
+        arm, fired = {}, set()
+        ltp = [{"instrument_token": 101, "last_price": 184.0}]  # no volume field
+        assert process_ticks(ltp, watch, fired, arm, now=0, hold_seconds=20, frac=0.5) == []
+        hits = process_ticks(ltp, watch, fired, arm, now=25, hold_seconds=20, frac=0.5)
+        assert len(hits) == 1 and hits[0]["symbol"] == "KAYNES"
+
     def test_volume_confirms_pacing(self):
         from scan.breakout_sniper import volume_confirms
         # Pace-aware absolute floor — AUROPHARMA-style 0.1× never confirms
@@ -3790,7 +3856,9 @@ class TestSniperConfirmation:
         # Scan already printed real relative volume — missing avg_vol20 must
         # not mute a live tick that has volume.
         assert volume_confirms(50_000, 0, 0.5, scan_volume_ratio=1.4) is True
-        assert volume_confirms(0, 0, 0.5, scan_volume_ratio=1.4) is False
+        # LTP packets omit volume_traded — scan ratio still confirms
+        assert volume_confirms(0, 0, 0.5, scan_volume_ratio=1.4) is True
+        assert volume_confirms(0, 1_000_000, 0.5) is False  # no scan ratio, no tick vol
         # early session: real open surge (≥0.105×) allowed; tiny print not
         assert volume_confirms(1_000_000, 1_000_000, 0.01) is True
         assert volume_confirms(150_000, 1_000_000, 0.01) is True
@@ -4536,18 +4604,23 @@ class TestUSScanner:
         import pandas as pd
         from scan.unified_scanner import UnifiedScanner
         # a clean confirmed breakout out of a tight base, strong volume
-        n = 120
-        close = np.concatenate([np.full(90, 100.0), np.full(29, 101.0),
-                                [106.0]])
-        # one small pullback day so RSI isn't pinned at the theoretical 100
-        # ceiling (a pure flat-then-flat-then-up series never happens in
-        # real data) — keeps this test clear of the RSI hard-reject band
-        close[-8] -= 1.5
+        px = 90.0
+        close = []
+        for i in range(110):
+            px += 0.28 if i % 2 == 0 else -0.27
+            close.append(px)
+        mx = max(close)
+        close.extend([
+            mx * 0.97, mx * 0.968, mx * 0.972, mx * 0.975, mx * 0.98,
+            mx * 0.982, mx * 0.985, mx * 0.99, mx * 0.995, mx * 1.02,
+        ])
+        close = np.array(close)
+        n = len(close)
         high = close + 0.5
-        high[-1] = 106.5
+        high[-1] = close[-1] + 0.4
         df = pd.DataFrame({
             "open": close - 0.3, "high": high, "low": close - 0.6,
-            "close": close, "volume": [1_000_000] * 119 + [3_000_000]},
+            "close": close, "volume": [1_000_000] * (n - 1) + [3_000_000]},
             index=pd.date_range("2025-01-01", periods=n, freq="D"))
         sc = UnifiedScanner()
         sc._nifty_ret30 = 1.0                            # S&P benchmark (flat)

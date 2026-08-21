@@ -32,7 +32,8 @@ log = get_logger(__name__)
 
 _lock = threading.Lock()
 _watch: dict[int, dict] = {}       # token -> {symbol, trigger, stop, target}
-_fired: dict[str, set] = {}        # {YYYY-MM-DD: {symbols}}
+_fired: dict[str, set] = {}        # {YYYY-MM-DD: {symbols}} telegram-acked
+_autopilot_fed: dict[str, set] = {}  # symbol/day already handed to autopilot
 _arm: dict[str, float] = {}        # symbol -> ts when it first CLEARED the level
 _ticker = None
 _owned_tickers: list = []
@@ -101,10 +102,14 @@ def volume_confirms(cum_vol: float, avg_daily_vol: float, frac: float,
          (surge × frac; default surge 1.0 = on-pace is enough).
 
     If avg-day volume is missing but the scan already printed a real
-    volume_ratio ≥ floor, tick volume > 0 is enough — do not mute Telegram.
+    volume_ratio ≥ floor, that ratio is enough — including when the tick
+    itself has no volume field (shared live-feed MODE_LTP).
     """
     if cum_vol <= 0:
-        return False                  # 0-volume break → never suggest
+        # Shared live-feed socket is MODE_LTP: last_price only, no
+        # volume_traded. That is "field absent", not a 0-volume print.
+        # Scan-day ratio (already required to arm the watch) is the tape.
+        return float(scan_volume_ratio or 0) >= float(abs_min)
     if not avg_daily_vol or avg_daily_vol <= 0:
         return float(scan_volume_ratio or 0) >= float(abs_min)
     session_frac = max(0.0, min(1.0, float(frac)))
@@ -333,17 +338,29 @@ def _alert(hits: list[dict] | None) -> None:
     today = datetime.now(IST).strftime("%Y-%m-%d")
     with _lock:
         _fired.setdefault(today, set())
-        for k in list(_fired):
-            if k != today:
-                del _fired[k]
+        _autopilot_fed.setdefault(today, set())
+        for store in (_fired, _autopilot_fed):
+            for k in list(store):
+                if k != today:
+                    del store[k]
         fresh = [h for h in hits if h["symbol"] not in _fired[today]]
-        _fired[today].update(h["symbol"] for h in fresh)
     if not fresh:
         return
     try:
-        _send_sniper_telegram(fresh)
-        # Autopilot hook is independent of Telegram delivery
-        def _feed_autopilot(hits_copy=list(fresh)):
+        sent = _send_sniper_telegram(fresh)
+        if sent:
+            with _lock:
+                _fired.setdefault(today, set())
+                _fired[today].update(h["symbol"] for h in fresh)
+        ap_fresh = []
+        with _lock:
+            _autopilot_fed.setdefault(today, set())
+            ap_fresh = [h for h in fresh if h["symbol"] not in _autopilot_fed[today]]
+            _autopilot_fed[today].update(h["symbol"] for h in ap_fresh)
+        if not ap_fresh:
+            return
+
+        def _feed_autopilot(hits_copy=list(ap_fresh)):
             try:
                 from execution.autopilot import on_breakout
                 for h in hits_copy:
@@ -506,13 +523,31 @@ def start_sniper() -> bool:
 
     Never opens a second KiteTicker while the autonomy live feed (or anyone
     else in this process) already owns the slot — that upgrade fails 403.
+
+    ``stop_sniper()`` is for THIS shutdown (no reconnect storm). A later
+    explicit start — Streamlit rerun, uvicorn reload, supervisor tick —
+    must arm again. Otherwise Telegram breakouts die after every edit.
     """
-    global _ticker, _started, _mode, _last_tick_ts
-    if _stopping:
-        return False
+    global _ticker, _started, _mode, _last_tick_ts, _stopping
+    _stopping = False
     stale_ticker = None
     with _lock:
         if _started and _mode == "attached":
+            trading = False
+            try:
+                from data.nse_live import _is_trading_now
+                trading = bool(_is_trading_now())
+            except Exception:
+                trading = False
+            if (
+                trading
+                and _last_tick_ts > 0
+                and (time.time() - _last_tick_ts) > _SNIPER_STALE_S
+            ):
+                log.warning(
+                    "sniper_attached_stale",
+                    idle_s=int(time.time() - _last_tick_ts),
+                )
             return True
         if _started:
             trading = False

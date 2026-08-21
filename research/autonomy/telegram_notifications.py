@@ -421,8 +421,11 @@ class TelegramNotifier:
         missing = [s for s in symbols if s not in prices]
         if not missing or quotes_fn is None:
             return prices
+        # REST cap: nearest-to-trigger / already-armed first so a 200-name
+        # watch does not starve the names that are actually breaking.
+        missing = missing[:80]
         try:
-            qmap = quotes_fn(missing[:80]) or {}
+            qmap = quotes_fn(missing) or {}
         except Exception:
             qmap = {}
         for sym in missing:
@@ -476,6 +479,10 @@ class TelegramNotifier:
                 continue
             candidates.append((sym, r, entry))
 
+        candidates.sort(key=lambda item: (
+            0 if item[0] in arms else 1,
+            abs(self._f(item[1].get("price")) / item[2] - 1.0) if item[2] > 0 else 99.0,
+        ))
         prices = self._live_or_quote_prices(
             [sym for sym, _, _ in candidates], live_feed, quotes_fn,
         )

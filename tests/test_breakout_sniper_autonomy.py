@@ -1,6 +1,8 @@
 """Breakout sniper re-armed via autonomy (product scan records)."""
 from __future__ import annotations
 
+import pytest
+
 from product.scan_store import build_scan_payload
 from scan.breakout_sniper import build_watch_map
 from research.autonomy.sniper_bridge import (
@@ -8,6 +10,20 @@ from research.autonomy.sniper_bridge import (
     records_from_payload,
     sniper_watch_symbols,
 )
+
+
+@pytest.fixture(autouse=True)
+def _reset_sniper_runtime():
+    """Supervisor.shutdown() latches the process sniper off. These tests
+    must not inherit that latch (or yesterday's fired/fed sets)."""
+    import scan.breakout_sniper as bs
+
+    bs._stopping = False
+    bs._fired = {}
+    bs._autopilot_fed = {}
+    bs._last_tick_ts = 0.0
+    bs._arm = {}
+    yield
 
 
 class _Sig:
@@ -117,6 +133,8 @@ def test_alert_feeds_autopilot_even_if_telegram_send_fails(monkeypatch):
 
     monkeypatch.setattr("alerts.telegram_alerts.AlertEngine", Eng)
     monkeypatch.setattr(bs, "_fired", {})
+    monkeypatch.setattr(bs, "_autopilot_fed", {})
+    monkeypatch.setattr(bs, "_stopping", False, raising=False)
     monkeypatch.setattr(bs.threading, "Thread", ImmediateThread)
     monkeypatch.setattr(
         "execution.autopilot.on_breakout",
@@ -271,6 +289,7 @@ def test_ingest_ticks_marks_sniper_alive(monkeypatch):
     import scan.breakout_sniper as bs
 
     monkeypatch.setattr(bs, "_watch", {}, raising=False)
+    monkeypatch.setattr(bs, "_stopping", False, raising=False)
     bs._last_tick_ts = 0
     bs.ingest_ticks([{"instrument_token": 1, "last_price": 10}])
     assert bs._last_tick_ts > 0
@@ -278,7 +297,7 @@ def test_ingest_ticks_marks_sniper_alive(monkeypatch):
 
 def test_stop_sniper_does_not_reconnect_or_alert(monkeypatch):
     import scan.breakout_sniper as bs
-    from data.kite_ws_slot import reset_ticker_slot
+    from data.kite_ws_slot import claim_ticker, reset_ticker_slot
 
     reset_ticker_slot()
     monkeypatch.setattr(bs, "_stopping", False, raising=False)
@@ -300,11 +319,32 @@ def test_stop_sniper_does_not_reconnect_or_alert(monkeypatch):
     bs.stop_sniper()
     assert bs._stopping is True
     assert "retry" in closed and "close" in closed
-    monkeypatch.setattr("execution.trade_executor.kite_ready", lambda: True)
-    assert bs.start_sniper() is False
+    bs._last_tick_ts = 0
     bs.ingest_ticks([{"instrument_token": 1, "last_price": 99}])
     assert alerts == []
+    assert bs._last_tick_ts == 0
     bs.handle_ws_close(1006, "peer dropped the TCP connection without previous WebSocket closing handshake")
-    assert bs.start_sniper() is False
-    monkeypatch.setattr(bs, "_stopping", False, raising=False)
+    assert bs._started is False
+    monkeypatch.setattr("execution.trade_executor.kite_ready", lambda: True)
+    assert claim_ticker("live_feed")
+    assert bs.start_sniper() is True
+    assert bs._stopping is False
+    assert bs._mode == "attached"
+    bs.ingest_ticks([{"instrument_token": 1, "last_price": 99}])
+    assert bs._last_tick_ts > 0
     reset_ticker_slot()
+
+
+def test_sniper_retries_telegram_if_send_fails(monkeypatch):
+    import scan.breakout_sniper as bs
+
+    monkeypatch.setattr(bs, "_stopping", False, raising=False)
+    monkeypatch.setattr(bs, "_fired", {}, raising=False)
+    sends = [False, True]
+    monkeypatch.setattr(bs, "_send_sniper_telegram", lambda hits: sends.pop(0))
+    hits = [{"symbol": "KAYNES", "trigger": 100, "ltp": 101}]
+    bs._alert(hits)
+    today = __import__("datetime").datetime.now(bs.IST).strftime("%Y-%m-%d")
+    assert "KAYNES" not in bs._fired.get(today, set())
+    bs._alert(hits)
+    assert "KAYNES" in bs._fired.get(today, set())

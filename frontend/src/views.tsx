@@ -32,6 +32,7 @@ import {
   type SignalBacktestStatus,
 } from './productApi'
 import { ProductionLadderBoard } from './ProductionLadder'
+import { longTermPicks } from './longTermPicks'
 import type {
   ChartBar,
   ControlName,

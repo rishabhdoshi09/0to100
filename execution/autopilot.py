@@ -278,9 +278,15 @@ def diagnose_silence() -> dict:
             "(need ≥ ₹5,000 to arm/size meaningfully)"
         )
     if not _in_window():
+        end = _effective_end_time(s)
+        extra = (
+            " — paper stays open until 15:20 IST"
+            if str(s.get("mode") or "PAPER").upper() == "PAPER"
+            else ""
+        )
         blockers.append(
-            f"Outside entry window {s.get('start_time')}-{s.get('end_time')} IST "
-            "(weekdays only)"
+            f"Outside entry window {s.get('start_time')}-{end} IST "
+            f"(weekdays only{extra})"
         )
     if s.get("brain_gate", True):
         posture, why = _brain_posture()
@@ -306,7 +312,10 @@ def diagnose_silence() -> dict:
         buy_n = sum(
             1
             for r in (scan.get("records") or [])
-            if str(r.get("verdict") or "") in {"BUY", "STRONG BUY"}
+            if (
+                str(r.get("verdict") or "") in {"BUY", "STRONG BUY"}
+                or str(r.get("status") or "") == "Ready to trade"
+            )
             and not r.get("chase_risk")
         )
     except Exception:
@@ -714,13 +723,37 @@ def _net_pnl(t: dict) -> float:
 
 # ── Gates ─────────────────────────────────────────────────────────────────────
 
+# Cash-session close for PAPER only. LIVE keeps the configured cut-off
+# (default 14:45) so it never chases the last half-hour. Paper is the
+# classroom — afternoon Ready tickets still have to be practiced.
+PAPER_SESSION_END = "15:20"
+
+
+def _norm_hm(value: str) -> str:
+    raw = str(value or "").strip()
+    try:
+        parsed = datetime.strptime(raw, "%H:%M")
+        return parsed.strftime("%H:%M")
+    except ValueError:
+        return raw
+
+
+def _effective_end_time(s: dict | None = None) -> str:
+    s = s or _load()
+    end = _norm_hm(str(s.get("end_time") or "14:45"))
+    if str(s.get("mode") or "PAPER").upper() == "PAPER":
+        return end if end >= PAPER_SESSION_END else PAPER_SESSION_END
+    return end
+
+
 def _in_window(now: datetime | None = None) -> bool:
     s = _load()
     now = now or datetime.now(IST)
     if now.weekday() >= 5:
         return False
     hm = now.strftime("%H:%M")
-    return s["start_time"] <= hm <= s["end_time"]
+    start = _norm_hm(str(s.get("start_time") or "09:30"))
+    return start <= hm <= _effective_end_time(s)
 
 
 def _top_sectors() -> tuple[list[str], str]:
@@ -762,7 +795,9 @@ def _passes_gates(symbol: str, score: float, edge, sector: str,
     if not s["armed"]:
         return "not armed"
     if not _in_window():
-        return f"time window ({s['start_time']}-{s['end_time']}) ke bahar"
+        return (
+            f"time window ({s['start_time']}-{_effective_end_time(s)}) ke bahar"
+        )
     # Fewer, higher-win: RSI blow-off ignored (same ceiling as sniper/scanner)
     if rsi > 70:
         return f"RSI {rsi:.0f} — blow-off-top, ignore (win-rate filter)"
@@ -1315,10 +1350,18 @@ def on_setups(results: list[dict]) -> None:
             conv,
         )
 
-    ranked = sorted(results[:40], key=_rank_key, reverse=True)
+    paper = str(s.get("mode") or "PAPER").upper() == "PAPER"
+
+    def _is_candidate(row: dict) -> bool:
+        if row.get("verdict") in ("STRONG BUY", "BUY"):
+            return True
+        # Trade-desk Ready tickets (complete plan). PAPER classroom only —
+        # LIVE still requires an explicit BUY / STRONG BUY.
+        return paper and str(row.get("status") or "") == "Ready to trade"
+
+    candidates = [r for r in results if _is_candidate(r)]
+    ranked = sorted(candidates, key=_rank_key, reverse=True)[:40]
     for r in ranked:
-        if r.get("verdict") not in ("STRONG BUY", "BUY"):
-            continue
         rsi = float(r.get("rsi") or 0)
         if rsi > RSI_BLOWOFF:
             continue  # hard ignore — don't spend a slot

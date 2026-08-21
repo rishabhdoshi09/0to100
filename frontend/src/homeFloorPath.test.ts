@@ -60,6 +60,7 @@ describe('today path is floor-general', () => {
     expect(FLOOR_JUMPS.map((item) => item.page)).toEqual([
       'Home',
       'F&O Desk',
+      'Ready Trades',
       'Research Data',
       'Paper Portfolio',
       'System Health',

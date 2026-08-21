@@ -149,9 +149,46 @@ export const PAGE_GUIDE: Record<string, PageGuide> = {
     action: 'Run paper. Do not arm live until the ladder is unlocked. Resolve the oldest critical blocker.',
     doesNot: 'A live PID, or QT_LIVE_ENABLED, does not graduate a strategy to real money.',
   },
+  'Ready Trades': {
+    title: 'Trade · Ready',
+    purpose: 'Ticket board: Stage-2 SEPA from the last Ideas ranking, scanner BUY/Ready plans ranked by ATQ, and Prime only when those gates actually pass.',
+    questions: [
+      'Is there a Stage-2 or complete ticket, or is the queue honestly empty?',
+      'Does the card have Buy / Stop / Target?',
+      'What is ATQ / SEPA — and is conservative EV missing rather than invented?',
+      'What is the next step — Lab or paper Journey?',
+    ],
+    action: 'Open a Stage-2 or ticket card, confirm the plan, then paper-trade via Journey. Do not skip to live.',
+    doesNot: 'ATQ and SEPA are template/structure scores, not a return promise and not a broker order.',
+  },
+  'Backtest Lab': {
+    title: 'Trade · Lab',
+    purpose: 'A practice test on official NSE history. Cricket nets, not the match. Press one button, read passed / failed / too few tries, then paper on Journey.',
+    questions: [
+      'What is a backtest, in one sentence?',
+      'Did we practice on enough stocks?',
+      'Which signals passed, failed, or are too quiet to claim?',
+      'Did this backtest place any orders? (No.)',
+    ],
+    action: 'Run the practice test, read the scoreboard, then paper-trade on Journey. Do not skip to live.',
+    doesNot: 'A high win rate on a thin sample is not a claim. Backtest never places paper or live orders.',
+  },
+  'Live Journey': {
+    title: 'Trade · Journey',
+    purpose: 'The paper → live ladder as a checklist. Arm paper here. Live stays locked on this desk even if every gate later clears.',
+    questions: [
+      'Which step is blocking?',
+      'Is paper armed, and is allocation ≥ ₹5,000?',
+      'What does the autopilot report card say?',
+      'Can this page arm live? (No.)',
+    ],
+    action: 'Arm paper, request a cycle, let closed trades accumulate. Do not type ARM LIVE in the browser.',
+    doesNot: 'QT_LIVE_ENABLED, a green rung, or a good week of P&L does not graduate real money on this page.',
+  },
 }
 
 export const GLOSSARY: Record<string, string> = {
+  Backtest: 'A practice test on old official prices. We pretend the scanner fired that day and check if the trade won or lost. Never peeks at tomorrow. Never places an order.',
   Candidate: 'A stock worth reviewing; not an instruction to trade.',
   Conviction: 'A combined evidence score, not certainty.',
   Expectancy: 'Average result per trade after the stated assumptions.',

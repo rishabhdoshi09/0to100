@@ -108,3 +108,44 @@ stack_wait_for_health() {
   echo "[STACK] ${label} did not become ready at ${health_url} within $((attempts / 2))s." >&2
   return 1
 }
+
+stack_stop_autonomy() {
+  # PID from autonomy status/runtime only — never pkill by command line.
+  local py pid
+  if [[ -x "${ROOT:-}/venv/bin/python" ]]; then
+    py="${ROOT}/venv/bin/python"
+  else
+    py="${PYTHON:-python}"
+  fi
+  pid="$("$py" - "$ROOT" <<'PY'
+import json, sys
+from pathlib import Path
+root = Path(sys.argv[1]) / "logs" / "autonomy"
+pid = ""
+for name in ("runtime.json", "status.json"):
+    path = root / name
+    if not path.exists():
+        continue
+    try:
+        blob = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        continue
+    raw = blob.get("scheduler_owner_pid") or ""
+    if raw:
+        pid = str(raw)
+        break
+print(pid)
+PY
+)"
+  if [[ -z "$pid" ]]; then
+    return 0
+  fi
+  if kill -0 "$pid" >/dev/null 2>&1; then
+    echo "[STOP] Stopping autonomy supervisor (pid ${pid}) so sniper Telegram reloads…"
+    kill "$pid" >/dev/null 2>&1 || true
+    sleep 1
+    if kill -0 "$pid" >/dev/null 2>&1; then
+      kill -9 "$pid" >/dev/null 2>&1 || true
+    fi
+  fi
+}

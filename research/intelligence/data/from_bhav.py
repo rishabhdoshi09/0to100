@@ -94,10 +94,12 @@ def snapshot_from_bhav_dir(bhav_dir, store: SnapshotStore | None = None, *, inde
 
 def rows_from_bhav_store(*, max_symbols: int | None = None) -> tuple:
     """Materialise equity rows from the in-memory official bhav store."""
-    from data.bhavcopy_runtime import ensure_loaded
+    try:
+        from data.bhavcopy_runtime import ensure_loaded
+        ensure_loaded(rebuild_from_local=False)
+    except Exception:
+        pass
     from data import bhavcopy_store as BS
-
-    ensure_loaded(rebuild_from_local=False)
     rows: list = []
     report = {
         "symbols_seen": 0,

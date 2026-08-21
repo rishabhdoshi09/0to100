@@ -149,8 +149,9 @@ class TestRunGauntlet:
 # ── E4: the abort-on-fail dataset gate ────────────────────────────────────────
 
 class TestValidator:
-    def test_missing_data_aborts(self):
-        # no CA table, no index store, empty bhav store in the test env → must fail
+    def test_missing_data_aborts(self, monkeypatch):
+        # Isolate from whatever index/VIX files the runner has on disk.
+        monkeypatch.setattr(V, "_peek_index", lambda *_a, **_k: None)
         v = V.validate()
         assert v["ok"] is False
         assert "corporate_actions_loaded" in v["failed"]

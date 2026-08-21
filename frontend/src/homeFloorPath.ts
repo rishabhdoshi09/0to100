@@ -1,6 +1,6 @@
 /** Home floor-path chrome. No symbol — the click wires floors, not a stock. */
 
-export type FloorId = 'desk' | 'options' | 'data' | 'holdings' | 'health'
+export type FloorId = 'desk' | 'options' | 'trade' | 'data' | 'holdings' | 'health'
 
 export type FloorJump = {
   id: FloorId
@@ -11,6 +11,7 @@ export type FloorJump = {
 export const FLOOR_JUMPS: FloorJump[] = [
   { id: 'desk', label: 'Desk', page: 'Home' },
   { id: 'options', label: 'Options', page: 'F&O Desk' },
+  { id: 'trade', label: 'Trade', page: 'Ready Trades' },
   { id: 'data', label: 'Data', page: 'Research Data' },
   { id: 'holdings', label: 'Holdings', page: 'Paper Portfolio' },
   { id: 'health', label: 'Health', page: 'System Health' },

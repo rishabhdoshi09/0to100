@@ -121,11 +121,19 @@ class KiteTickerFeed:
         if not toks:
             return
         self._t.subscribe(toks)
-        mode = getattr(self._t, "MODE_LTP", "ltp")
+        # QUOTE carries volume_traded — sniper confirms need it. LTP is last price only.
+        mode = (
+            getattr(self._t, "MODE_QUOTE", None)
+            or getattr(self._t, "MODE_FULL", None)
+            or getattr(self._t, "MODE_LTP", "ltp")
+        )
         try:
             self._t.set_mode(mode, toks)
         except Exception:
-            pass
+            try:
+                self._t.set_mode(getattr(self._t, "MODE_LTP", "ltp"), toks)
+            except Exception:
+                pass
 
     # tick translation ────────────────────────────────────────────────────────────
     def _epoch(self, ts) -> float:

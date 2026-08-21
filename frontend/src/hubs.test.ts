@@ -6,10 +6,11 @@ import {
   ideasTabOf,
   routeForHub,
   systemTabOf,
+  tradeTabOf,
 } from './hubs'
 
 describe('hub routing', () => {
-  it('maps complementary pages onto six sidebar hubs', () => {
+  it('maps complementary pages onto the sidebar hubs', () => {
     expect(hubOf('Home')).toBe('Home')
     expect(hubOf('Market Overview')).toBe('Home')
     expect(hubOf('Market Internals')).toBe('Home')
@@ -17,6 +18,9 @@ describe('hub routing', () => {
     expect(hubOf('Market Scanner')).toBe('Ideas')
     expect(hubOf('Long-Term Picks')).toBe('Ideas')
     expect(hubOf('F&O Desk')).toBe('Ideas')
+    expect(hubOf('Ready Trades')).toBe('Trade')
+    expect(hubOf('Backtest Lab')).toBe('Trade')
+    expect(hubOf('Live Journey')).toBe('Trade')
     expect(hubOf('Market Reports')).toBe('Context')
     expect(hubOf('News & Events')).toBe('Context')
     expect(hubOf('Education')).toBe('Context')
@@ -31,6 +35,7 @@ describe('hub routing', () => {
   it('opens each hub on its default building-block page', () => {
     expect(routeForHub('Home')).toBe('Home')
     expect(routeForHub('Ideas')).toBe('Recommendations')
+    expect(routeForHub('Trade')).toBe('Ready Trades')
     expect(routeForHub('Context')).toBe('News & Events')
     expect(routeForHub('Watchlist')).toBe('Watchlist')
     expect(routeForHub('Holdings')).toBe('Paper Portfolio')
@@ -44,6 +49,9 @@ describe('hub routing', () => {
     expect(ideasTabOf('Scanner')).toBe('Table')
     expect(ideasTabOf('Long-Term')).toBe('Long-term')
     expect(ideasTabOf('F&O Desk')).toBe('F&O')
+    expect(tradeTabOf('Ready Trades')).toBe('Ready')
+    expect(tradeTabOf('Backtest Lab')).toBe('Lab')
+    expect(tradeTabOf('Live Journey')).toBe('Journey')
     expect(contextTabOf('Market Reports')).toBe('Pulse')
     expect(contextTabOf('News & Events')).toBe('News')
     expect(contextTabOf('Education')).toBe('Learn')

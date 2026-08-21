@@ -313,6 +313,24 @@ def cmd_stop() -> int:
             stderr=subprocess.DEVNULL,
         )
     _stop_ports(API_PORT, REPORT_PORT, VITE_PORT)
+    try:
+        import json as _json
+        status = ROOT / "logs" / "autonomy" / "status.json"
+        runtime = ROOT / "logs" / "autonomy" / "runtime.json"
+        blob = {}
+        if runtime.exists():
+            blob = _json.loads(runtime.read_text(encoding="utf-8"))
+        elif status.exists():
+            blob = _json.loads(status.read_text(encoding="utf-8"))
+        pid = int(blob.get("scheduler_owner_pid") or 0)
+        running = bool(blob.get("process_running") or blob.get("supervisor_running") or pid)
+        if running and pid > 0:
+            _log(f"[STOP] Stopping autonomy supervisor (pid {pid}) so sniper Telegram reloads…")
+            _kill_pid(pid, force=_is_windows())
+            time.sleep(0.8)
+            _kill_pid(pid, force=True)
+    except Exception:
+        pass
     _log("[STOP] Done. Restart with: python scripts/quantterm_stack.py run --complete")
     return 0
 

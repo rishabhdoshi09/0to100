@@ -408,12 +408,9 @@ export const fetchStockFundamentals = (
     },
   ).then((response) => json(response))
 
-export const refreshStockFundamentals = (symbol: string): Promise<{
-  accepted: boolean
-  symbol: string
-  sections: Record<string, number | boolean>
-  workspace: StockWorkspace
-}> => fetchStockFundamentals(symbol, true)
+export const refreshStockFundamentals = (
+  symbol: string,
+): ReturnType<typeof fetchStockFundamentals> => fetchStockFundamentals(symbol, true)
 
 export const fetchCommandCenterWorkspace = (): Promise<CommandCenterWorkspace> =>
   fetch('/api/command-center-workspace', { headers: { Accept: 'application/json' } })
@@ -1087,6 +1084,262 @@ export type SignalBacktestStatus = {
 export const fetchSignalBacktestStatus = (): Promise<SignalBacktestStatus> =>
   fetch('/api/signal-backtest', { headers: { Accept: 'application/json' } })
     .then((response) => json<SignalBacktestStatus>(response))
+
+export type ReadyTradeCard = {
+  symbol: string
+  company: string
+  lane: 'prime' | 'actionable' | 'stage2' | string
+  verdict?: string
+  status?: string
+  sector?: string
+  score?: number | null
+  atq?: number | null
+  reward_risk?: number | null
+  edge_r?: number | null
+  entry?: number | null
+  stop?: number | null
+  target?: number | null
+  cmp?: number | null
+  upside_from_buy_pct?: number | null
+  why?: string[]
+  honesty?: string
+  ev_pct?: number | null
+  ev_lb_pct?: number | null
+  ev_n?: number | null
+  ev_conf?: string
+  p_win?: number | null
+  sepa_score?: number | null
+  sepa_passed?: number | null
+  sepa_total?: number | null
+  sepa_verdict?: string | null
+  sepa_headline?: string | null
+  stage_label?: string | null
+  volume_ratio?: number | null
+  rsi?: number | null
+}
+
+export type ReadyQueuePayload = {
+  schema_version: number
+  places_orders: boolean
+  live_locked: boolean
+  method?: string
+  scanned_at?: string
+  universe_size?: number
+  breadth?: string
+  stage2: ReadyTradeCard[]
+  prime: ReadyTradeCard[]
+  actionable: ReadyTradeCard[]
+  rejected_n?: number
+  rejected_sample?: Array<{ symbol: string; reason: string }>
+  empty: boolean
+  empty_why: string[]
+  disclaimer: string
+  next?: string
+  lab_applied?: {
+    applied?: boolean
+    regime?: string
+    keep?: string[]
+    skip?: string[]
+    plain?: string
+  }
+}
+
+export const fetchReadyQueue = (): Promise<ReadyQueuePayload> =>
+  fetch('/api/trade-desk/ready', { headers: { Accept: 'application/json' } })
+    .then((response) => json<ReadyQueuePayload>(response))
+
+export type BacktestUseCase = {
+  id: string
+  title: string
+  kid_title?: string
+  when: string
+  how: string
+  status: string
+  result: string
+  control?: string
+  best?: Array<Record<string, unknown>>
+  avoid?: string[]
+  goto?: string
+}
+
+export type LabSignalRow = {
+  signal: string
+  trades: number
+  closed: number
+  win_rate?: number | null
+  expectancy_r?: number | null
+  verdict: string
+  kid_lane?: 'keep' | 'skip' | 'quiet' | string
+  kid_label?: string
+  kid_hint?: string
+}
+
+export type BacktestLesson = {
+  title: string
+  plain: string
+  r_plain?: string
+  now: string
+  steps: Array<{ n: number; title: string; body: string }>
+  rules: string[]
+  cta: string
+  cta_running: string
+}
+
+export type LabLoopNode = {
+  id: string
+  title: string
+  n?: number
+  state: string
+  detail?: string
+}
+
+export type LabClassroom = {
+  armed?: boolean
+  mode?: string
+  allocation?: number
+  in_window?: boolean
+  headline?: string
+  blockers?: string[]
+  notes?: string[]
+  funnel?: Array<{ reason: string; n: number }>
+  considered_today?: number
+  trades_today?: number
+  buy_setups?: number
+  open_n?: number
+  open?: Array<{
+    symbol: string
+    qty: number
+    entry?: number | null
+    live?: number | null
+    pnl?: number | null
+    stop?: number | null
+    target?: number | null
+  }>
+  closed_n?: number
+  expectancy_r?: number | null
+  win_rate?: number | null
+  profit_factor?: number | null
+  day_pnl?: number | null
+  activity?: string[]
+  next_action?: string
+}
+
+export type LabLearning = {
+  applied?: boolean
+  demote_only?: boolean
+  regime?: string
+  keep?: string[]
+  skip?: string[]
+  best?: Array<{ signal: string; expectancy_r?: number; trades?: number; basis?: string }>
+  live?: { n?: number; expectancy_r?: number | null; win_rate?: number | null; claim?: boolean; plain?: string }
+  plain?: string
+}
+
+export type BacktestLabPayload = {
+  schema_version: number
+  places_orders: boolean
+  live_locked: boolean
+  running: boolean
+  progress?: number
+  total?: number
+  current?: string
+  actionable: boolean
+  evidence_note: string
+  generated_at?: string
+  universe?: Record<string, unknown>
+  playbook: {
+    regime?: string | null
+    best?: Array<{ signal: string; expectancy_r?: number; trades?: number; basis?: string }>
+    avoid?: string[]
+    recommended_target_pct?: number | null
+  }
+  signals: LabSignalRow[]
+  proven_n: number
+  loser_n: number
+  scoreboard?: {
+    headline: string
+    keep: LabSignalRow[]
+    skip: LabSignalRow[]
+    quiet: LabSignalRow[]
+  }
+  lesson?: BacktestLesson
+  pulse?: { label: string; tone: string; hint?: string }
+  loop?: LabLoopNode[]
+  learning?: LabLearning
+  classroom?: LabClassroom
+  use_cases: BacktestUseCase[]
+  disclaimer: string
+}
+
+export const fetchBacktestLab = (): Promise<BacktestLabPayload> =>
+  fetch('/api/trade-desk/lab', { headers: { Accept: 'application/json' } })
+    .then((response) => json<BacktestLabPayload>(response))
+
+export type JourneyStep = {
+  id: string
+  title: string
+  detail: string
+  status: 'PASS' | 'WAIT' | 'BLOCK' | 'LOCKED' | string
+  next_action?: string
+}
+
+export type LiveJourneyPayload = {
+  schema_version: number
+  places_orders: boolean
+  live_locked: boolean
+  rung: { id?: string; label?: string; next?: string | null }
+  paper_closed: number
+  paper_e4_n: number
+  alpha: { level?: number; label?: string }
+  live_unlocked: boolean
+  ladder_live_unlocked?: boolean
+  live_blockers: string[]
+  autopilot: {
+    armed?: boolean
+    mode?: string
+    allocation?: number
+    trades_today?: number
+    open_trades?: number
+    headline?: string
+    blockers?: string[]
+    in_window?: boolean
+    considered_today?: number
+    buy_setups?: number
+  }
+  classroom?: LabClassroom
+  report_card: {
+    verdict?: string
+    verdict_reason?: string
+    stats?: Record<string, number | null | undefined>
+  }
+  scaling?: { action?: string; change_pct?: number; reason?: string } | null
+  steps: JourneyStep[]
+  next_action?: string
+  disclaimer: string
+}
+
+export const fetchLiveJourney = (): Promise<LiveJourneyPayload> =>
+  fetch('/api/trade-desk/journey', { headers: { Accept: 'application/json' } })
+    .then((response) => json<LiveJourneyPayload>(response))
+
+export const armPaperAutopilot = (allocation?: number): Promise<{ ok: boolean; armed: boolean; mode: string; message: string; live_locked: boolean; fed?: number }> =>
+  fetch('/api/autopilot/arm-paper', {
+    method: 'POST',
+    headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+    body: JSON.stringify(allocation != null ? { allocation } : {}),
+  }).then((response) => json(response))
+
+export const feedPaperClassroom = (): Promise<{ ok: boolean; armed?: boolean; fed?: number; message: string; blockers?: string[] }> =>
+  fetch('/api/trade-desk/paper-feed', {
+    method: 'POST',
+    headers: { Accept: 'application/json' },
+  }).then((response) => json(response))
+
+export const disarmAutopilot = (): Promise<{ ok: boolean; armed: boolean; mode: string }> =>
+  fetch('/api/autopilot/disarm', {
+    method: 'POST',
+    headers: { Accept: 'application/json' },
+  }).then((response) => json(response))
 
 export type CorporateActionsStatus = {
   available: boolean

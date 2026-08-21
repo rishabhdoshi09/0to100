@@ -38,7 +38,7 @@ def test_sector_gate_fail_open_when_heat_unavailable(monkeypatch, tmp_path):
     monkeypatch.setattr(ap, "_in_window", lambda: True)
     monkeypatch.setattr(ap, "_open_autopilot_trades", lambda: [])
     monkeypatch.setattr(ap, "_top_sectors", lambda: ([], "unavailable"))
-    assert ap._passes_gates("RELIANCE", 70.0, 0.2, "Energy") is None
+    assert ap._passes_gates("RELIANCE", 70.0, 0.2, "Energy", volume_ratio=1.5) is None
 
 
 def test_sector_gate_blocks_when_all_sectors_red(monkeypatch, tmp_path):
@@ -54,7 +54,7 @@ def test_sector_gate_blocks_when_all_sectors_red(monkeypatch, tmp_path):
     monkeypatch.setattr(ap, "_in_window", lambda: True)
     monkeypatch.setattr(ap, "_open_autopilot_trades", lambda: [])
     monkeypatch.setattr(ap, "_top_sectors", lambda: ([], "ok"))
-    reason = ap._passes_gates("RELIANCE", 70.0, 0.2, "Energy")
+    reason = ap._passes_gates("RELIANCE", 70.0, 0.2, "Energy", volume_ratio=1.5)
     assert reason and "no positive sector" in reason
 
 

@@ -104,13 +104,18 @@ def test_control_enqueues_full_universe_backtest(monkeypatch):
     calls = {}
 
     class FakeStore:
-        def enqueue(self, kind, lane=None, requested_by=None):
+        def enqueue(self, kind, lane=None, requested_by=None, message=None):
             calls["kind"] = kind
             calls["lane"] = lane
             calls["requested_by"] = requested_by
+            calls["message"] = message
             return {"operation_id": "op-1", "status": "PENDING"}, True
 
-    monkeypatch.setattr(api, "_ensure_ops_worker", lambda: None)
+    monkeypatch.setattr(
+        api,
+        "_ensure_ops_worker",
+        lambda **_k: {"running": True, "ensure_ok": True, "worker_pid": 1},
+    )
     monkeypatch.setattr("operations.store.OperationStore", lambda *a, **k: FakeStore())
 
     client = TestClient(api.app)
