@@ -121,23 +121,46 @@ def pit_universe(as_of) -> dict[str, Any]:
 
 
 def ca_status() -> dict[str, Any]:
+    """Honest CA flag: events on disk are not enough. Verify must PASS."""
     try:
-        from data.corporate_actions import load_events, ledger_status
+        from data.corporate_actions import events_path, load_events, ledger_status
     except Exception:
-        return {"ca_complete": False, "n_symbols": 0, "note": "corporate_actions unread"}
+        return {
+            "ca_complete": False, "n_symbols": 0, "n_events": 0,
+            "verified": False, "source": "", "path": "",
+            "note": "corporate_actions unread",
+        }
     try:
         events = load_events() or {}
     except Exception:
         events = {}
-    n = len(events)
-    note = ""
+    n_symbols = len(events)
+    n_events = sum(len(v) for v in events.values())
     try:
-        status = ledger_status()
-        note = str((status or {}).get("note") or "")
+        status = ledger_status() or {}
     except Exception:
         status = {}
+    verified = bool(status.get("adjustment_verified"))
+    # ca_complete is earned only when share-count events exist AND verify PASS.
+    ca_complete = bool(n_events) and verified
+    path = ""
+    try:
+        path = str(events_path())
+    except Exception:
+        path = str(status.get("path") or "")
+    note = str(status.get("verify_note") or status.get("note") or "")
+    if not n_events:
+        note = note or "logs/ca_events.json absent — prices are raw/unadjusted"
+    elif not verified:
+        note = note or "CA ledger present but adjustment_verified is false"
     return {
-        "ca_complete": n > 0,
-        "n_symbols": n,
-        "note": note or ("CA table loaded" if n else "logs/ca_events.json absent — prices are raw/unadjusted"),
+        "ca_complete": ca_complete,
+        "n_symbols": n_symbols,
+        "n_events": n_events,
+        "verified": verified,
+        "source": str(status.get("source") or ""),
+        "path": path,
+        "research_grade": bool(status.get("research_grade")),
+        "gap_rate": status.get("gap_rate"),
+        "note": note,
     }

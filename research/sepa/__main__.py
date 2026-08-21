@@ -8,7 +8,7 @@ import sys
 
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(description="SEPA-001 research runner (no live orders)")
-    p.add_argument("cmd", nargs="?", default="ablation", choices=("ablation", "replay", "eval"))
+    p.add_argument("cmd", nargs="?", default="ablation", choices=("ablation", "replay", "eval", "001r"))
     p.add_argument("--max-symbols", type=int, default=80)
     p.add_argument("--sample-step", type=int, default=10)
     p.add_argument("--lookback", type=int, default=320)
@@ -29,6 +29,28 @@ def main(argv: list[str] | None = None) -> int:
         from research.sepa.replay import format_replay, try_live_examples
         rows = try_live_examples()
         print(format_replay(rows) if rows else "No bhavcopy frames loaded.")
+        return 0
+    if args.cmd == "001r":
+        from research.sepa.ablation_r import persist_r, run_ablation_r
+        from research.sepa.report_r import write_all_deliverables
+        payload = run_ablation_r(
+            max_symbols=args.max_symbols,
+            sample_step=args.sample_step,
+            lookback_sessions=args.lookback,
+            horizon=args.horizon,
+        )
+        path = persist_r(payload)
+        docs = write_all_deliverables(payload)
+        print(json.dumps({
+            "wrote": str(path),
+            "docs": {k: str(v) for k, v in docs.items()},
+            "sample": payload.get("sample"),
+            "pit": payload.get("pit"),
+            "integrity_class": (payload.get("integrity") or {}).get("overall"),
+            "variants": {k: {"n": v.get("n"), "expectancy_r": v.get("expectancy_r"),
+                             "harness": (v.get("harness") or {}).get("verdict")}
+                         for k, v in payload.get("variants", {}).items()},
+        }, indent=2, default=str))
         return 0
     from research.sepa.ablation import persist, run_ablation
     payload = run_ablation(
