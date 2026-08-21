@@ -2,8 +2,9 @@
 from __future__ import annotations
 
 import re
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
 
+import numpy as np
 import pandas as pd
 
 from core.data_integrity import phantom_gaps
@@ -218,6 +219,174 @@ def verify_report(
         "threshold_unchanged": True,
         "note": (
             "PASS requires official share-count ledger AND unresolved consecutive "
-            "gap rate ≤ 0.002. Quarantine is exclusion, not a fabricated factor."
+            "gap rate ≤ 0.002. Quarantine is exclusion, not a fabricated factor. "
+            "Static quarantine_symbols is an event catalogue, not a historical "
+            "as-of membership filter — use CATimeline for causal segments."
         ),
+    }
+
+
+# Longest canonical SEPA lookback (Stage-2 / RS 252) plus one prior close.
+CANONICAL_FEATURE_SESSIONS = 252
+
+
+def _date_ns(value) -> int:
+    return int(np.datetime64(iso_date(value), "ns").astype(np.int64))
+
+
+class CATimeline:
+    """Date/segment-aware unresolved CA map. Never a static symbol blacklist.
+
+    For each unresolved event D:
+    - observations strictly before D remain valid if lookback and forward
+      outcome do not cross D
+    - a forward path that includes D is CA_CENSORED_OUTCOME
+    - at/after D, indicators may only use bars strictly after D, and the
+      name re-enters only after CANONICAL_FEATURE_SESSIONS of clean history
+    """
+
+    def __init__(self, events: Sequence[Mapping[str, Any]] | None = None):
+        self.rows: list[dict[str, Any]] = []
+        self.by_symbol: dict[str, list[str]] = {}
+        seen: dict[str, set[str]] = {}
+        for raw in events or []:
+            if raw.get("resolved"):
+                continue
+            sym = str(raw.get("symbol") or "").upper()
+            d = str(raw.get("date") or "")
+            if not sym or not d:
+                continue
+            if d in seen.setdefault(sym, set()):
+                continue
+            seen[sym].add(d)
+            row = {
+                "symbol": sym,
+                "event_date": d,
+                "event_classification": raw.get("event_classification") or raw.get("classification") or "unknown_discontinuity",
+                "treatment": raw.get("treatment") or "quarantine_no_inferred_factor",
+                "discontinuity_pct": raw.get("discontinuity_pct"),
+                "never_infers_factor": True,
+                "clean_pre_end": None,
+                "clean_post_start": None,
+            }
+            self.rows.append(row)
+            self.by_symbol.setdefault(sym, []).append(d)
+        for sym in self.by_symbol:
+            self.by_symbol[sym] = sorted(set(self.by_symbol[sym]))
+
+    def annotate_calendar(self, calendar: Sequence) -> "CATimeline":
+        """Fill clean_pre_end / clean_post_start from an exchange session list."""
+        cal = [iso_date(t) for t in calendar]
+        loc = {d: i for i, d in enumerate(cal)}
+        for row in self.rows:
+            d = row["event_date"]
+            i = loc.get(d)
+            if i is None:
+                # Event date may fall on a non-session; bind to first session ≥ D.
+                later = [j for j, s in enumerate(cal) if s >= d]
+                i = later[0] if later else None
+            if i is None:
+                continue
+            row["clean_pre_end"] = cal[i - 1] if i > 0 else None
+            row["clean_post_start"] = cal[i + 1] if i + 1 < len(cal) else None
+        return self
+
+    def event_dates(self, symbol: str) -> list[str]:
+        return list(self.by_symbol.get(str(symbol).upper(), []))
+
+    def last_event_on_or_before(self, symbol: str, as_of) -> str | None:
+        as_s = iso_date(as_of)
+        last = None
+        for d in self.event_dates(symbol):
+            if d <= as_s:
+                last = d
+            else:
+                break
+        return last
+
+    def clean_start_index(self, symbol: str, dates_ns: np.ndarray, as_of_ns: int) -> int:
+        """First index that may be used for indicators at as_of (0 = full history)."""
+        last = None
+        for d in self.event_dates(symbol):
+            dns = _date_ns(d)
+            if dns <= as_of_ns:
+                last = dns
+            else:
+                break
+        if last is None:
+            return 0
+        return int(np.searchsorted(dates_ns, last, side="right"))
+
+    def n_clean_sessions(self, symbol: str, dates_ns: np.ndarray, as_of_ns: int, j: int) -> int:
+        start = self.clean_start_index(symbol, dates_ns, as_of_ns)
+        return int(j - start + 1) if j >= start else 0
+
+    def lookback_contaminated(
+        self, symbol: str, dates_ns: np.ndarray, as_of_ns: int, j: int, lookback: int,
+    ) -> bool:
+        return self.n_clean_sessions(symbol, dates_ns, as_of_ns, j) < int(lookback)
+
+    def horizon_crosses(self, symbol: str, start_exclusive, end_inclusive) -> bool:
+        """True if an unresolved D satisfies start < D ≤ end."""
+        lo = iso_date(start_exclusive)
+        hi = iso_date(end_inclusive)
+        for d in self.event_dates(symbol):
+            if lo < d <= hi:
+                return True
+        return False
+
+    def would_static_quarantine(self, symbol: str) -> bool:
+        """Old (incorrect) behaviour: any future unresolved event banned the name forever."""
+        return str(symbol).upper() in self.by_symbol
+
+    def to_audit(self) -> list[dict[str, Any]]:
+        return [dict(r) for r in self.rows]
+
+
+def build_timeline(
+    unresolved: Sequence[Mapping[str, Any]] | None,
+    calendar: Sequence | None = None,
+) -> CATimeline:
+    tl = CATimeline(unresolved)
+    if calendar is not None:
+        tl.annotate_calendar(calendar)
+    return tl
+
+
+def ca_research_acceptability(
+    *,
+    unresolved: Sequence[Mapping[str, Any]],
+    exhaustive: bool,
+    inferred_factors: bool = False,
+    unknown_path_crossings: int = 0,
+    future_leak_removed_prior: int = 0,
+    audit_persisted: bool,
+    contaminated_uncensored: int = 0,
+) -> dict[str, Any]:
+    """Research-CA gate. Does **not** change global ``ca_complete``."""
+    reasons: list[str] = []
+    if not exhaustive:
+        reasons.append("ca_audit_not_exhaustive")
+    if inferred_factors:
+        reasons.append("inferred_adjustment_factor")
+    if int(unknown_path_crossings) > 0:
+        reasons.append(f"unknown_discontinuity_on_eval_path={unknown_path_crossings}")
+    if int(contaminated_uncensored) > 0:
+        reasons.append(f"contaminated_uncensored={contaminated_uncensored}")
+    if int(future_leak_removed_prior) > 0:
+        reasons.append(f"future_ca_removed_prior_obs={future_leak_removed_prior}")
+    if not audit_persisted:
+        reasons.append("audit_not_persisted")
+    return {
+        "ca_research_acceptable": len(reasons) == 0,
+        "reasons": reasons,
+        "n_unresolved_enumerated": len(list(unresolved or [])),
+        "exhaustive": bool(exhaustive),
+        "inferred_factors": bool(inferred_factors),
+        "unknown_path_crossings": int(unknown_path_crossings),
+        "future_leak_removed_prior": int(future_leak_removed_prior),
+        "contaminated_uncensored": int(contaminated_uncensored),
+        "audit_persisted": bool(audit_persisted),
+        "never_infers_factor": True,
+        "does_not_set_ca_complete": True,
     }

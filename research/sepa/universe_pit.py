@@ -8,7 +8,21 @@ from typing import Any, Mapping, Sequence
 import numpy as np
 import pandas as pd
 
+from research.sepa.ca_audit import CATimeline
 from research.sepa.frames import iso_date, pit_universe, slice_as_of
+
+
+def _index_ns(idx) -> np.ndarray:
+    """Session dates as UTC-naive midnight epoch nanoseconds."""
+    di = pd.DatetimeIndex(idx)
+    if getattr(di, "tz", None) is not None:
+        di = di.tz_localize(None)
+    di = di.normalize()
+    return np.asarray(di, dtype="datetime64[ns]").astype(np.int64)
+
+
+def _asof_ns(as_of) -> int:
+    return int(np.datetime64(iso_date(as_of), "ns").astype(np.int64))
 
 
 def membership_hash(symbols: Sequence[str]) -> str:
@@ -97,6 +111,7 @@ def screen_investable_as_of(
     min_turnover: float = 5_000_000.0,
     min_sessions: int = 260,
     quarantined: set[str] | None = None,
+    ca_timeline: CATimeline | None = None,
     membership: Sequence[str] | None = None,
     top_n: int | None = None,
 ) -> UniverseSnapshot:
@@ -104,8 +119,13 @@ def screen_investable_as_of(
 
     ``top_n`` is an optional liquidity cap for sensitivity studies. Canonical
     SEPA RS uses ``top_n=None`` (full as-of investable set).
+
+    ``ca_timeline`` is the causal unresolved-event map. A 2025 discontinuity
+    does not remove a valid 2024 observation. ``quarantined`` is a legacy
+    static symbol set retained for tests; canonical R2.1 does not pass it.
     """
     as_of_s = iso_date(as_of)
+    as_ns = _asof_ns(as_of_s)
     qset = {s.upper() for s in (quarantined or set())}
     if membership is None:
         mem = membership_as_of(as_of, frames=frames)
@@ -128,14 +148,28 @@ def screen_investable_as_of(
         sym = str(raw).upper()
         df = frames.get(sym)
         if df is None:
-            # frames may be keyed mixed-case
             df = next((frames[k] for k in frames if str(k).upper() == sym), None)
         sliced = slice_as_of(df, as_of) if df is not None else None
         if sliced is None or len(sliced) == 0:
             reasons[sym] = "no_bars"
             _bump("no_bars")
             continue
-        if len(sliced) < min_sessions:
+        idx = pd.DatetimeIndex(sliced.index)
+        if getattr(idx, "tz", None) is not None:
+            idx = idx.tz_localize(None)
+        dates_ns = _index_ns(idx)
+        j = len(sliced) - 1
+        clean_start = 0
+        if ca_timeline is not None:
+            clean_start = ca_timeline.clean_start_index(sym, dates_ns, as_ns)
+        n_clean = j - clean_start + 1 if j >= clean_start else 0
+        if ca_timeline is not None and ca_timeline.last_event_on_or_before(sym, as_of_s) is not None:
+            if n_clean < min_sessions:
+                reasons[sym] = "ca_segment_quarantine"
+                _bump("ca_segment_quarantine")
+                continue
+            sliced = sliced.iloc[clean_start:]
+        elif n_clean < min_sessions or len(sliced) < min_sessions:
             reasons[sym] = "short_history"
             _bump("short_history")
             continue
@@ -239,24 +273,34 @@ class FastInvestable:
                 roll[win - 1:] = (csum[win - 1:] - np.concatenate([[0.0], csum[:-win]])) / win
             self._pos[sym] = len(self.symbols)
             self.symbols.append(sym)
-            self._dates.append(idx.asi8)
+            self._dates.append(_index_ns(idx))
             self._close.append(close)
             self._turn.append(roll)
 
-    def hist_fwd(self, symbol: str, as_of, horizon: int):
-        """Return (hist_df, fwd_df) using only bars ≤ as_of for hist."""
+    def hist_fwd(self, symbol: str, as_of, horizon: int, *, timeline: CATimeline | None = None):
+        """Return (hist_df, fwd_df) using only bars ≤ as_of for hist.
+
+        When ``timeline`` is supplied, hist is sliced to the clean post-event
+        segment so Stage-2 / RS / VCP cannot see pre-discontinuity prices.
+        Forward bars are the raw next sessions (CA-censor happens on the path).
+        """
         from research.sepa.frames import iso_date
         import pandas as pd
         sym = str(symbol).upper()
         i = self._pos.get(sym)
         if i is None:
             return None, None
-        as_ns = int(pd.Timestamp(iso_date(as_of)).normalize().value)
+        as_ns = _asof_ns(as_of)
         j = self.loc_as_of(self._dates[i], as_ns)
         if j < 0:
             return None, None
         df = self._frames[sym]
-        hist = df.iloc[: j + 1]
+        start = 0
+        if timeline is not None:
+            start = timeline.clean_start_index(sym, self._dates[i], as_ns)
+            if start > j:
+                return None, None
+        hist = df.iloc[start: j + 1]
         fwd = df.iloc[j + 1: j + 1 + int(horizon)]
         return hist, fwd if len(fwd) else None
 
@@ -276,12 +320,18 @@ class FastInvestable:
         min_turnover: float = 5_000_000.0,
         min_sessions: int = 260,
         quarantined: set[str] | None = None,
+        ca_timeline: CATimeline | None = None,
         top_n: int | None = None,
         source: str = "bhav_inferred",
         mem_hash: str = "",
     ) -> UniverseSnapshot:
+        """As-of candidates = names with at least one official bar ≤ as_of.
+
+        Future listings that only exist later in the 2019–2026 store are not
+        candidates, are not hashed, and are not counted as ``no_bars``.
+        """
         as_of_s = iso_date(as_of)
-        as_ns = int(pd.Timestamp(as_of_s).normalize().value)
+        as_ns = _asof_ns(as_of_s)
         qset = {s.upper() for s in (quarantined or set())}
         reasons: dict[str, str] = {}
         exclusions: dict[str, int] = {}
@@ -290,15 +340,23 @@ class FastInvestable:
         def bump(key: str) -> None:
             exclusions[key] = exclusions.get(key, 0) + 1
 
-        candidates = list(self.symbols)
+        candidates: list[str] = []
         for i, sym in enumerate(self.symbols):
             j = self.loc_as_of(self._dates[i], as_ns)
             if j < 0:
-                reasons[sym] = "no_bars"
-                bump("no_bars")
                 continue
-            n = j + 1
-            if n < min_sessions:
+            candidates.append(sym)
+            n_listed = j + 1
+            clean_start = 0
+            n_clean = n_listed
+            if ca_timeline is not None:
+                clean_start = ca_timeline.clean_start_index(sym, self._dates[i], as_ns)
+                n_clean = j - clean_start + 1 if j >= clean_start else 0
+                if ca_timeline.last_event_on_or_before(sym, as_of_s) is not None and n_clean < min_sessions:
+                    reasons[sym] = "ca_segment_quarantine"
+                    bump("ca_segment_quarantine")
+                    continue
+            if n_clean < min_sessions:
                 reasons[sym] = "short_history"
                 bump("short_history")
                 continue
@@ -325,6 +383,7 @@ class FastInvestable:
                 bump("not_top_n")
             scored = scored[: int(top_n)]
         investable = [s for _, s in scored]
+        cand_hash = mem_hash or membership_hash(candidates)
         return UniverseSnapshot(
             as_of=as_of_s,
             candidates=candidates,
@@ -332,7 +391,7 @@ class FastInvestable:
             reasons=reasons,
             exclusions=exclusions,
             source=source,
-            membership_hash=mem_hash or membership_hash(candidates),
+            membership_hash=cand_hash,
             investable_hash=membership_hash(investable),
             min_price=min_price,
             min_turnover=min_turnover,
@@ -340,4 +399,69 @@ class FastInvestable:
             top_n=top_n,
             rs_denominator=len(investable),
         )
+
+    def rs_table(
+        self,
+        as_of,
+        universe: Sequence[str],
+        config,
+        *,
+        timeline: CATimeline | None = None,
+    ) -> dict[str, Any]:
+        """As-of RS using only clean-segment closes. Fail-closed on short lookback."""
+        from research.sepa.rs import percentile_rank
+        as_of_s = iso_date(as_of)
+        as_ns = _asof_ns(as_of_s)
+        horizons = tuple(int(n) for n in config.rs_horizons)
+        weights = tuple(float(w) for w in config.rs_weights)
+        need = max(horizons) + 1
+        scores: dict[str, float] = {}
+        components: dict[str, dict[str, float]] = {}
+        for raw in universe:
+            sym = str(raw).upper()
+            i = self._pos.get(sym)
+            if i is None:
+                continue
+            j = self.loc_as_of(self._dates[i], as_ns)
+            if j < 0:
+                continue
+            start = 0
+            if timeline is not None:
+                start = timeline.clean_start_index(sym, self._dates[i], as_ns)
+            close = self._close[i][start: j + 1]
+            if close.size < need:
+                continue
+            last = float(close[-1])
+            if last <= 0:
+                continue
+            comps: dict[str, float] = {}
+            acc = 0.0
+            ok = True
+            for n, w in zip(horizons, weights):
+                start_px = float(close[-n - 1])
+                if start_px <= 0:
+                    ok = False
+                    break
+                r = last / start_px - 1.0
+                comps[f"r{n}"] = r
+                acc += w * r
+            if not ok:
+                continue
+            scores[sym] = acc
+            components[sym] = comps
+        values = list(scores.values())
+        percentiles = {sym: percentile_rank(sc, values) for sym, sc in scores.items()}
+        return {
+            "as_of": as_of_s,
+            "n_ranked": len(percentiles),
+            "n_universe": len(list(universe)),
+            "version": config.rs_version,
+            "scores": scores,
+            "percentiles": percentiles,
+            "components": components,
+            "formula": (
+                "0.40*r63 + 0.20*r126 + 0.20*r189 + 0.20*r252 ; "
+                "percentile = 100 * count(universe_score < score) / N"
+            ),
+        }
 

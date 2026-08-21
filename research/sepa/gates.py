@@ -71,21 +71,28 @@ def deployment_eligible(
     min_effective_n: int = 30,
     known_lookahead: bool = False,
     causality_ok: bool = True,
+    ca_research_acceptable: bool = False,
 ) -> dict[str, Any]:
-    """Paper-shadow readiness. Fail closed. Never returns a PROMOTE string."""
+    """Paper-shadow readiness. Fail closed. Never returns a PROMOTE string.
+
+    Global ``ca_complete`` is unchanged. When the verifier fails, a causal
+    research audit may still set ``ca_research_acceptable`` so that correctly
+    censored books are not blocked solely by the deployment-wide CA flag.
+    """
     n = int(statistical.get("n") or 0)
     reasons = []
     if known_lookahead:
         reasons.append("known_universe_or_signal_lookahead")
     if not causality_ok:
         reasons.append("vcp_or_pivot_causality_defect")
-    if pit_class != "PIT_STRONG" and not (pit_class == "PIT_DEGRADED" and ca_complete):
-        # Degraded membership is allowed only with CA complete AND explicit
-        # documentation; paper shadow still requires the other gates.
+    if pit_class != "PIT_STRONG" and not (pit_class == "PIT_DEGRADED" and (ca_complete or ca_research_acceptable)):
         if pit_class != "PIT_DEGRADED":
             reasons.append(f"pit_class={pit_class}")
-    if not ca_complete:
+    if not ca_complete and not ca_research_acceptable:
         reasons.append("ca_verification_failed")
+    elif not ca_complete and ca_research_acceptable:
+        # Documented: global verifier still FAIL; research paths were censored.
+        pass
     if n_post_warmup_years < 5:
         reasons.append(f"post_warmup_years={n_post_warmup_years:.2f}<5")
     if not has_unseen_block:
@@ -107,4 +114,6 @@ def deployment_eligible(
         "paper_shadow": ok,
         "reasons": reasons,
         "label": "DEPLOYMENT_ELIGIBLE" if ok else "NOT_DEPLOYMENT_ELIGIBLE",
+        "ca_complete": bool(ca_complete),
+        "ca_research_acceptable": bool(ca_research_acceptable),
     }

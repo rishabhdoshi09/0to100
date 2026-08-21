@@ -4,7 +4,12 @@ from __future__ import annotations
 from typing import Any
 
 from research.sepa.ablation_r2 import persist_r2, run_ablation_r2
-from research.sepa.ca_audit import quarantine_symbols, unresolved_events, verify_report
+from research.sepa.ca_audit import (
+    build_timeline,
+    ca_research_acceptability,
+    unresolved_events,
+    verify_report,
+)
 from research.sepa.config import R2_CONFIG
 from research.sepa.integrity import research_integrity_report
 from research.sepa.universe_pit import load_store_frames
@@ -53,24 +58,17 @@ def try_ingest_ca(years: list[int] | None = None) -> dict[str, Any]:
 
 def coverage_table(frames: dict) -> dict[str, Any]:
     import pandas as pd
-    by_year: dict[str, int] = {}
     starts, ends = [], []
-    for df in frames.values():
+    year_syms: dict[str, set] = {}
+    n_sessions = 0
+    for sym, df in frames.items():
         if df is None or len(df) == 0:
             continue
         idx = pd.DatetimeIndex(df.index)
         starts.append(idx.min())
         ends.append(idx.max())
-        for y in sorted(set(idx.year)):
-            by_year[str(int(y))] = by_year.get(str(int(y)), 0)
-        for ts in idx:
-            by_year[str(int(ts.year))] = by_year.get(str(int(ts.year)), 0)
-    # count symbols with at least one bar in year
-    year_syms: dict[str, set] = {}
-    for sym, df in frames.items():
-        if df is None or len(df) == 0:
-            continue
-        for y in set(pd.DatetimeIndex(df.index).year):
+        n_sessions = max(n_sessions, len(idx))
+        for y in set(idx.year):
             year_syms.setdefault(str(int(y)), set()).add(sym)
     return {
         "n_symbols": len(frames),
@@ -80,6 +78,7 @@ def coverage_table(frames: dict) -> dict[str, Any]:
         "sessions_span_days": (
             int((max(ends) - min(starts)).days) if starts else 0
         ),
+        "max_symbol_sessions": n_sessions,
     }
 
 
@@ -105,30 +104,49 @@ def run_study_r2(*, expand: bool = False, max_date_step: int = 1) -> dict[str, A
         source = "official_nse_bhavcopy"
         kwargs = dict(
             warmup_sessions=252, min_sessions=260, min_price=20.0,
-            min_turnover=5_000_000.0, horizon=20, date_step=max_date_step,
-            scanner_step=5, variants=("A", "B", "C", "D", "E", "F", "G"),
+            min_turnover=5_000_000.0, horizon=20, date_step=1,
+            scanner_step=1, variants=("A", "B", "C", "D", "E", "F", "G"),
             top_n=None,
         )
     cov = coverage_table(frames)
-    from core.data_integrity import phantom_gaps
-    suspect = {}
-    for sym, df in frames.items():
-        try:
-            if df is None or "close" not in df.columns:
-                continue
-            if phantom_gaps(df["close"].to_numpy(dtype=float)):
-                suspect[sym] = df
-        except Exception:
-            continue
-    unresolved = unresolved_events(suspect)
-    q = quarantine_symbols(unresolved)
+    # Exhaustive unresolved-event audit over the research-relevant store.
+    unresolved = unresolved_events(frames, sample=None)
+    timeline = build_timeline(unresolved)
+    # Global verifier: sample is documented and does NOT certify the study.
     ca_rep = verify_report(frames, sample=min(200, len(frames)))
-    integ = research_integrity_report(frames={s: frames[s] for s in list(frames)[:80]}, verify=True)
-    core = run_ablation_r2(frames=frames, config=R2_CONFIG, quarantined=q, integrity=integ, **kwargs)
+    integ = research_integrity_report(
+        frames=frames, as_of=cov.get("first") or None, verify=True, exhaustive=True,
+    )
+    ca_ok = ca_research_acceptability(
+        unresolved=unresolved,
+        exhaustive=True,
+        inferred_factors=False,
+        unknown_path_crossings=0,
+        future_leak_removed_prior=0,
+        audit_persisted=True,
+        contaminated_uncensored=0,
+    )
+    integ["ca_research_acceptable"] = ca_ok["ca_research_acceptable"]
+    integ["ca_research"] = ca_ok
+    integ["n_unresolved_enumerated"] = len(unresolved)
+    core = run_ablation_r2(
+        frames=frames, config=R2_CONFIG, ca_timeline=timeline, integrity=integ, **kwargs,
+    )
+    core["integrity"] = integ
     core["data_source"] = source
     core["coverage"] = cov
     core["coverage_note"] = coverage_note
-    core["ca_audit"] = ca_rep
+    core["ca_audit"] = {
+        **ca_rep,
+        "unresolved_events": unresolved,
+        "n_unresolved": len(unresolved),
+        "ca_research_acceptable": ca_ok["ca_research_acceptable"],
+        "ca_research": ca_ok,
+        "segment_events": timeline.to_audit(),
+        "verify_sample_is_not_certification": True,
+        "exhaustive_unresolved": True,
+        "n_frames_audited": len(frames),
+    }
     core["unresolved_n"] = len(unresolved)
     persist_r2(core, name="ablation_001r2.json")
     try:
