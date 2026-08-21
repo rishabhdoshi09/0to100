@@ -224,6 +224,26 @@ def test_genuine_new_base_gets_new_id():
     assert r1["setup_id"] != r2["setup_id"]
 
 
+def test_new_coil_after_left_censor_can_become_opportunity():
+    versions = {"eligibility_version": "x", "vcp_version": "y", "pivot_version": "z"}
+    ledger = PersistentSetupLedger(versions=versions)
+    frame = _plant_vcp(contractions="tight", volume="dry", extend=0.08)
+    vcp = detect_vcp(frame, CFG)
+    as_of = str(pd.Timestamp(frame.index[-1]).date())
+    rec = ledger.observe(
+        symbol="LC2", vcp=vcp, as_of=as_of, evaluation_start=as_of,
+        price=float(frame["close"].iloc[-1]), zone_hi=float(vcp["pivot"]) * 1.015,
+    )
+    assert rec["left_censored"] is True
+    later = _plant_vcp(contractions="two", volume="dry", extend=0.0)
+    later.index = pd.bdate_range("2023-01-03", periods=len(later))
+    v2 = detect_vcp(later, CFG)
+    rec2 = ledger.observe(symbol="LC2", vcp=v2, as_of="2023-06-01")
+    assert rec2["setup_id"] != rec["setup_id"]
+    assert rec2.get("left_censored") is not True
+    assert ledger.is_core_opportunity("LC2") is True
+
+
 def test_left_censored_setup_excluded_from_opportunity_stats():
     versions = {"eligibility_version": "x", "vcp_version": "y", "pivot_version": "z"}
     ledger = PersistentSetupLedger(versions=versions)

@@ -38,6 +38,7 @@ def evaluate_sepa_eligibility(
     config: SepaConfig | None = None,
     pit_meta: Mapping[str, Any] | None = None,
     buy_zone_above_pct: float | None = None,
+    compute_vcp: bool = True,
 ) -> SepaEligibility:
     """Is this stock a SEPA-style *trade* at this exact as-of date?"""
     cfg = config or DEFAULT_CONFIG
@@ -92,7 +93,11 @@ def evaluate_sepa_eligibility(
         }
 
     trend = evaluate_trend(sliced, cfg, rs_percentile=rs_info.get("percentile"))
-    vcp = detect_vcp(sliced, cfg) if sliced is not None else detect_vcp(None, cfg)
+    if compute_vcp:
+        vcp = detect_vcp(sliced, cfg) if sliced is not None else detect_vcp(None, cfg)
+    else:
+        from research.sepa.vcp import detect_vcp as _dv
+        vcp = _dv(None, cfg)
     close = close_series(sliced)
     price = float(close.iloc[-1]) if close is not None and len(close) else None
     atr_val = atr(sliced, cfg.atr_period) if sliced is not None else None

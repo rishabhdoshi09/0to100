@@ -211,6 +211,7 @@ class FastInvestable:
 
     def __init__(self, frames: Mapping[str, pd.DataFrame], *, turnover_window: int = 20):
         self.turnover_window = int(turnover_window)
+        self._pos: dict[str, int] = {}
         self.symbols: list[str] = []
         self._dates: list[np.ndarray] = []
         self._close: list[np.ndarray] = []
@@ -236,10 +237,28 @@ class FastInvestable:
             roll = np.full(len(turn), np.nan)
             if len(turn) >= win:
                 roll[win - 1:] = (csum[win - 1:] - np.concatenate([[0.0], csum[:-win]])) / win
+            self._pos[sym] = len(self.symbols)
             self.symbols.append(sym)
             self._dates.append(idx.asi8)
             self._close.append(close)
             self._turn.append(roll)
+
+    def hist_fwd(self, symbol: str, as_of, horizon: int):
+        """Return (hist_df, fwd_df) using only bars ≤ as_of for hist."""
+        from research.sepa.frames import iso_date
+        import pandas as pd
+        sym = str(symbol).upper()
+        i = self._pos.get(sym)
+        if i is None:
+            return None, None
+        as_ns = int(pd.Timestamp(iso_date(as_of)).normalize().value)
+        j = self.loc_as_of(self._dates[i], as_ns)
+        if j < 0:
+            return None, None
+        df = self._frames[sym]
+        hist = df.iloc[: j + 1]
+        fwd = df.iloc[j + 1: j + 1 + int(horizon)]
+        return hist, fwd if len(fwd) else None
 
     def frame(self, symbol: str) -> pd.DataFrame | None:
         return self._frames.get(str(symbol).upper())

@@ -9,6 +9,7 @@ from research.sepa.setups import setup_id as hash_setup_id
 CORE_TERMINAL = frozenset({
     "FILLED", "GAP_THROUGH", "MISSED", "EXTENDED", "INVALIDATED", "FAILED", "EXPIRED",
 })
+CLOSED = CORE_TERMINAL | {"LEFT_CENSORED"}
 RESEARCH_ONLY = frozenset({"PIVOT_RETEST", "LEFT_CENSORED"})
 
 
@@ -87,7 +88,7 @@ class PersistentSetupLedger:
         open_row = self._open.get(sym)
 
         continuing = False
-        if open_row is not None and open_row.get("status") not in CORE_TERMINAL:
+        if open_row is not None and open_row.get("status") not in CLOSED:
             prev = set(open_row.get("contraction_dates") or [])
             if prev & cur_dates or (last_high and last_high in prev):
                 continuing = True
@@ -96,18 +97,20 @@ class PersistentSetupLedger:
             elif open_row.get("status") == "FORMING" and vcp.get("state") in {
                 "PIVOT_DEFINED", "ENTRY_READY", "VCP_FORMING", "CONTRACTION_2", "BASE_FORMING",
             }:
-                # Rolling window dropped the first high but the live coil continues.
                 continuing = True
 
-        if open_row is not None and open_row.get("status") in CORE_TERMINAL:
-            # After a canonical breakout/fail, a return to the zone is a retest.
-            if vcp.get("state") == "ENTRY_READY" and open_row.get("status") == "EXTENDED":
+        if open_row is not None and open_row.get("status") in CLOSED:
+            same_coil = bool(last_high and last_high in set(open_row.get("contraction_dates") or []))
+            if open_row.get("status") == "EXTENDED" and vcp.get("state") == "ENTRY_READY" and same_coil:
                 rec = dict(open_row)
                 rec["status"] = "PIVOT_RETEST"
                 rec["state"] = "PIVOT_RETEST"
                 rec["as_of"] = as_of
                 rec["core_sepa_entry"] = False
                 return rec
+            if open_row.get("status") == "LEFT_CENSORED" and same_coil:
+                open_row["as_of"] = as_of
+                return open_row
             continuing = False
 
         if continuing and open_row is not None:

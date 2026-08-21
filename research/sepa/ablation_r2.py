@@ -199,21 +199,14 @@ def run_ablation_r2(
 
         funnel["candidates"] += len(snap.candidates)
         funnel["investable"] += len(snap.investable)
+        s2 = rs_n = vcp_n = 0
         rs_table = build_rs_table(frames, as_of, cfg, universe=snap.investable)
         run_scanner_today = scanner is not None and (di % max(1, int(scanner_step)) == 0)
-        if di % 25 == 0:
-            print(
-                f"SEPA-001R2 {as_of} {di+1}/{len(eval_dates)} "
-                f"investable={len(snap.investable)} F_n={len(rows.get('F') or [])}",
-                flush=True,
-            )
 
         for sym in snap.investable:
-            df = fast.frame(sym)
-            hist = slice_as_of(df, as_of)
+            hist, fwd = fast.hist_fwd(sym, as_of, horizon)
             if hist is None or len(hist) < min(80, min_sessions):
                 continue
-            fwd = _fwd_after(df, as_of, horizon)
             meta = {
                 "universe_complete": bool(pit_u.get("universe_complete")),
                 "universe_source": snap.source,
@@ -227,8 +220,13 @@ def run_ablation_r2(
             }
             sepa = evaluate_sepa_eligibility(
                 sym, as_of, frame=hist, frames=frames, universe=snap.investable,
-                rs_table=rs_table, config=cfg, pit_meta=meta,
+                rs_table=rs_table, config=cfg, pit_meta=meta, compute_vcp=False,
             )
+            if sepa.structure_pass:
+                sepa = evaluate_sepa_eligibility(
+                    sym, as_of, frame=hist, frames=frames, universe=snap.investable,
+                    rs_table=rs_table, config=cfg, pit_meta=meta, compute_vcp=True,
+                )
             if sepa.rs_percentile is not None and fwd is not None and len(fwd) >= horizon:
                 r0 = float(hist["close"].iloc[-1])
                 r1 = float(fwd["close"].iloc[-1])
@@ -248,12 +246,15 @@ def run_ablation_r2(
 
             if sepa.structure_pass:
                 funnel["stage2"] += 1
+                s2 += 1
             if sepa.structure_pass and sepa.rs_pass:
                 funnel["rs_pass"] += 1
-            if sepa.vcp_state in {"BASE_FORMING", "CONTRACTION_1", "CONTRACTION_2", "VCP_FORMING"}:
-                funnel["vcp_forming"] += 1
+                rs_n += 1
             if sepa.vcp_detected:
                 funnel["vcp_confirmed"] += 1
+                vcp_n += 1
+            if sepa.vcp_state in {"BASE_FORMING", "CONTRACTION_1", "CONTRACTION_2", "VCP_FORMING"}:
+                funnel["vcp_forming"] += 1
             if sepa.vcp_state in {"PIVOT_DEFINED", "ENTRY_READY"} or sepa.pivot:
                 funnel["pivot_defined"] += 1
             if sepa.entry_valid:
@@ -393,6 +394,14 @@ def run_ablation_r2(
                            and sepa.rs_pass and sepa.vcp_detected)
             if "F" in variants:
                 _sepa_once("F", sepa.trend_template_pass and sepa.vcp_detected)
+
+        if di % 25 == 0:
+            print(
+                f"SEPA-001R2 {as_of} {di+1}/{len(eval_dates)} "
+                f"investable={len(snap.investable)} stage2={s2} rs={rs_n} vcp={vcp_n} "
+                f"F_n={len(rows.get('F') or [])}",
+                flush=True,
+            )
 
     n_years = max(0.01, n_as_of / 252.0)
     n_trials = max(7, len(variants))
