@@ -1,0 +1,139 @@
+"""SEPA-001R2 study orchestration — validity-first, then long history."""
+from __future__ import annotations
+
+from typing import Any
+
+from research.sepa.ablation_r2 import persist_r2, run_ablation_r2
+from research.sepa.ca_audit import quarantine_symbols, unresolved_events, verify_report
+from research.sepa.config import R2_CONFIG
+from research.sepa.integrity import research_integrity_report
+from research.sepa.universe_pit import load_store_frames
+
+
+def try_expand_bhav(*, days: int = 1800) -> dict[str, Any]:
+    """Best-effort official bhav download. Never fabricates missing sessions."""
+    try:
+        from data.bhavcopy_store import build_store
+        n = build_store(days=int(days))
+        from data.bhavcopy_runtime import status
+        st = status(load_cache=True)
+        return {"symbols": n, **st}
+    except Exception as exc:
+        return {"error": str(exc)}
+
+
+def try_ingest_ca(years: list[int] | None = None) -> dict[str, Any]:
+    """Merge official NSE share-count events. Does not invent factors."""
+    from data.corporate_actions import merge_events
+    from data.nse_ca_ingest import fetch_ca_range, rows_from_nse_payload
+
+    years = years or list(range(2018, 2027))
+    adjusting: list[dict] = []
+    metas: list[dict] = []
+    errors: list[str] = []
+    import requests
+    sess = requests.Session()
+    for y in years:
+        fr, to = f"01-01-{y}", f"31-12-{y}"
+        try:
+            payload, meta = fetch_ca_range(fr, to, session=sess)
+            packed = rows_from_nse_payload(payload, source_sha256=meta.get("source_sha256") or "")
+            adjusting.extend(packed["adjusting"])
+            metas.append({"year": y, **{k: meta[k] for k in meta if k != "raw"}})
+        except Exception as exc:
+            errors.append(f"{y}: {exc}")
+    if adjusting:
+        merge_events(
+            [{"symbol": e["symbol"], "ex_date": e["ex_date"], "factor": e["factor"], "type": e["type"]}
+             for e in adjusting],
+            source="nse_corporates_api",
+        )
+    return {"n_adjusting_fetched": len(adjusting), "years": years, "errors": errors, "metas": metas}
+
+
+def coverage_table(frames: dict) -> dict[str, Any]:
+    import pandas as pd
+    by_year: dict[str, int] = {}
+    starts, ends = [], []
+    for df in frames.values():
+        if df is None or len(df) == 0:
+            continue
+        idx = pd.DatetimeIndex(df.index)
+        starts.append(idx.min())
+        ends.append(idx.max())
+        for y in sorted(set(idx.year)):
+            by_year[str(int(y))] = by_year.get(str(int(y)), 0)
+        for ts in idx:
+            by_year[str(int(ts.year))] = by_year.get(str(int(ts.year)), 0)
+    # count symbols with at least one bar in year
+    year_syms: dict[str, set] = {}
+    for sym, df in frames.items():
+        if df is None or len(df) == 0:
+            continue
+        for y in set(pd.DatetimeIndex(df.index).year):
+            year_syms.setdefault(str(int(y)), set()).add(sym)
+    return {
+        "n_symbols": len(frames),
+        "first": str(min(starts).date()) if starts else "",
+        "last": str(max(ends).date()) if ends else "",
+        "symbols_by_year": {y: len(s) for y, s in sorted(year_syms.items())},
+        "sessions_span_days": (
+            int((max(ends) - min(starts)).days) if starts else 0
+        ),
+    }
+
+
+def run_study_r2(*, expand: bool = False, max_date_step: int = 1) -> dict[str, Any]:
+    coverage_note = {}
+    if expand:
+        coverage_note["bhav"] = try_expand_bhav()
+        coverage_note["ca"] = try_ingest_ca()
+        try:
+            from data.bhavcopy_store import reload_corporate_actions
+            reload_corporate_actions()
+        except Exception:
+            pass
+    frames = load_store_frames(min_bars=80)
+    if not frames:
+        from research.sepa.study import synthetic_panel
+        frames = synthetic_panel()
+        source = "synthetic_panel"
+        kwargs = dict(warmup_sessions=80, min_sessions=80, min_price=1.0,
+                      min_turnover=1.0, horizon=12, date_step=1, scanner_step=99,
+                      variants=("F", "G"))
+    else:
+        source = "official_nse_bhavcopy"
+        kwargs = dict(
+            warmup_sessions=252, min_sessions=260, min_price=20.0,
+            min_turnover=5_000_000.0, horizon=20, date_step=max_date_step,
+            scanner_step=5, variants=("A", "B", "C", "D", "E", "F", "G"),
+            top_n=None,
+        )
+    cov = coverage_table(frames)
+    unresolved = unresolved_events(frames)
+    q = quarantine_symbols(unresolved)
+    ca_rep = verify_report(frames, sample=min(200, len(frames)))
+    integ = research_integrity_report(frames={s: frames[s] for s in list(frames)[:80]}, verify=True)
+    core = run_ablation_r2(frames=frames, config=R2_CONFIG, quarantined=q, integrity=integ, **kwargs)
+    core["data_source"] = source
+    core["coverage"] = cov
+    core["coverage_note"] = coverage_note
+    core["ca_audit"] = ca_rep
+    core["unresolved_n"] = len(unresolved)
+    persist_r2(core, name="ablation_001r2.json")
+
+    # Sensitivity: top-100 vs full RS denominator (cheap date_step)
+    if source != "synthetic_panel" and len(frames) > 120:
+        sense = run_ablation_r2(
+            frames=frames, config=R2_CONFIG, quarantined=q, integrity=integ,
+            variants=("C", "F"), warmup_sessions=252, min_sessions=260,
+            min_price=20.0, min_turnover=5_000_000.0, horizon=20,
+            date_step=max(2, max_date_step), scanner_step=10, top_n=100,
+        )
+        core["top100_sensitivity"] = {
+            "C": sense["variants"].get("C"),
+            "F": sense["variants"].get("F"),
+            "sample": sense.get("sample"),
+        }
+        persist_r2(core, name="ablation_001r2.json")
+    return core

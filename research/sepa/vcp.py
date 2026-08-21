@@ -147,8 +147,15 @@ def _contractions_from_swings(
     vol: np.ndarray,
     dates: list[str],
     min_rev: float,
-    max_contractions: int,
+    max_contractions: int | None = None,
 ) -> list[dict[str, Any]]:
+    """All causally confirmed high→low contraction legs in the window.
+
+    Do **not** stop at ``max_contractions``. Truncating here selected the
+    *earliest* coils and made ``pivot_last_contraction_v1`` stale.
+    ``max_contractions`` is accepted for call-site compatibility and ignored.
+    """
+    del max_contractions
     sh = [s for s in swings if s["kind"] == "high"]
     sl = [s for s in swings if s["kind"] == "low"]
     contractions: list[dict[str, Any]] = []
@@ -187,9 +194,46 @@ def _contractions_from_swings(
             "duration": int(l_idx - h_idx),
         })
         lo_i += 1
-        if len(contractions) >= max_contractions:
-            break
     return contractions
+
+
+def _tightening_fail_reasons(seq: list[dict[str, Any]], config: SepaConfig) -> list[str]:
+    if len(seq) < 2:
+        return []
+    depths = [c["depth"] for c in seq]
+    fail: list[str] = []
+    expanding = sum(1 for a, b in zip(depths, depths[1:]) if b > a * config.depth_expand_tol)
+    if depths[-1] > depths[0] * config.final_vs_first:
+        fail.append("NOT_TIGHTENING")
+    if expanding > max(0, len(depths) - 2):
+        fail.append("EXPANDING_PULLBACKS")
+    if depths[-1] > config.max_final_depth_pct:
+        fail.append("FINAL_CONTRACTION_LOOSE")
+    return fail
+
+
+def select_active_sequence(
+    contractions: list[dict[str, Any]],
+    config: SepaConfig,
+) -> list[dict[str, Any]]:
+    """Most recent consecutive contractions ending at the latest low.
+
+    Windows are always anchored on the last confirmed contraction. An older
+    valid coil is never preferred over a newer invalid live structure.
+    Among windows that pass tightening, the longest (≤ max_contractions) wins.
+    """
+    if not contractions:
+        return []
+    n = len(contractions)
+    max_n = max(1, int(config.max_contractions))
+    min_n = max(1, int(config.min_contractions))
+    if n < min_n:
+        return list(contractions)
+    for k in range(min(max_n, n), min_n - 1, -1):
+        cand = contractions[-k:]
+        if not _tightening_fail_reasons(cand, config):
+            return cand
+    return contractions[-min(max_n, n):]
 
 
 def _choose_pivot(seq: list[dict[str, Any]], pivot_version: str) -> dict[str, Any]:
@@ -260,15 +304,9 @@ def _evaluate_structure(
             empty["base_start_date"] = contractions[0]["high_date"]
         return empty
 
-    seq = contractions[-config.max_contractions:]
+    seq = select_active_sequence(contractions, config)
     depths = [c["depth"] for c in seq]
-    expanding = sum(1 for a, b in zip(depths, depths[1:]) if b > a * config.depth_expand_tol)
-    if depths[-1] > depths[0] * config.final_vs_first:
-        fail.append("NOT_TIGHTENING")
-    if expanding > max(0, len(depths) - 2):
-        fail.append("EXPANDING_PULLBACKS")
-    if depths[-1] > config.max_final_depth_pct:
-        fail.append("FINAL_CONTRACTION_LOOSE")
+    fail.extend(_tightening_fail_reasons(seq, config))
 
     first_i = seq[0]["high_index"]
     last_low_i = seq[-1]["low_index"]
@@ -339,14 +377,17 @@ def _evaluate_structure(
     evidence = dict(evidence)
     evidence.update({
         "raw_contraction_count": len(contractions),
+        "active_sequence_count": len(seq),
         "far_below_pivot": far_below,
         "pattern_high": round(float(pattern_high["high"]), 4),
         "pattern_high_date": pattern_high["high_date"],
         "last_contraction_high": round(float(last_c["high"]), 4),
         "last_contraction_high_date": last_c["high_date"],
+        "active_last_high_date": last_c["high_date"],
         "pivot_version": config.pivot_version,
         "volume_dry_up_required": config.volume_dry_up_required,
         "legacy_too_far_below_would_fail": far_below,
+        "min_recovery_bounce_unused": True,
     })
     return {
         "detected": detected,

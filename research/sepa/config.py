@@ -8,10 +8,12 @@ from dataclasses import asdict, dataclass
 
 LEGACY_ELIGIBILITY_VERSION = "sepa-001.v1"
 ELIGIBILITY_VERSION = "sepa-001r.v1"
+ELIGIBILITY_VERSION_R2 = "sepa-001r2.v1"
 TREND_VERSION = "trend_template_v1"
 RS_VERSION = "rs_cs_v1"
 LEGACY_VCP_VERSION = "vcp_swing_v1"
 VCP_VERSION = "vcp_causal_v1"
+VCP_VERSION_R2 = "vcp_causal_v2"
 BUY_ZONE_VERSION = "buy_zone_v1"
 PIVOT_PATTERN_HIGH = "pivot_pattern_high_v1"
 PIVOT_LAST_CONTRACTION = "pivot_last_contraction_v1"
@@ -42,6 +44,7 @@ class SepaConfig:
     rs_horizons: tuple[int, ...] = (63, 126, 189, 252)
     rs_weights: tuple[float, ...] = (0.40, 0.20, 0.20, 0.20)
 
+    # Diagnostic only: fractal find_swings. Causal zigzag ignores these.
     swing_left: int = 3
     swing_right: int = 3
     min_reversal_pct: float = 2.5
@@ -52,7 +55,11 @@ class SepaConfig:
     final_vs_first: float = 0.75
     max_final_depth_pct: float = 12.0
     max_base_depth_pct: float = 35.0
+    # Unused on the money path (recovery is implied by zigzag confirmation).
+    # Kept so sepa-001r.v1 config hashes stay stable. R2 does not read it.
     min_recovery_bounce: float = 1.02
+    # Diagnostic: far_below_pivot evidence. Not a VCP fail unless
+    # fail_vcp_if_far_below_pivot (001R/R2 default False).
     near_pivot_frac: float = 0.92
     volume_dry_up_max: float = 0.90
     volume_dry_up_required: bool = True
@@ -77,4 +84,10 @@ LEGACY_CONFIG = SepaConfig(
     vcp_version=LEGACY_VCP_VERSION,
     pivot_version=PIVOT_PATTERN_HIGH,
     fail_vcp_if_far_below_pivot=True,
+)
+R2_CONFIG = SepaConfig(
+    eligibility_version=ELIGIBILITY_VERSION_R2,
+    vcp_version=VCP_VERSION_R2,
+    pivot_version=PIVOT_LAST_CONTRACTION,
+    fail_vcp_if_far_below_pivot=False,
 )
