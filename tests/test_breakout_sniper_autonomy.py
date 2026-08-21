@@ -1,6 +1,8 @@
 """Breakout sniper re-armed via autonomy (product scan records)."""
 from __future__ import annotations
 
+import pytest
+
 from product.scan_store import build_scan_payload
 from scan.breakout_sniper import build_watch_map
 from research.autonomy.sniper_bridge import (
@@ -8,6 +10,20 @@ from research.autonomy.sniper_bridge import (
     records_from_payload,
     sniper_watch_symbols,
 )
+
+
+@pytest.fixture(autouse=True)
+def _reset_sniper_runtime():
+    """Supervisor.shutdown() latches the process sniper off. These tests
+    must not inherit that latch (or yesterday's fired/fed sets)."""
+    import scan.breakout_sniper as bs
+
+    bs._stopping = False
+    bs._fired = {}
+    bs._autopilot_fed = {}
+    bs._last_tick_ts = 0.0
+    bs._arm = {}
+    yield
 
 
 class _Sig:
@@ -117,6 +133,8 @@ def test_alert_feeds_autopilot_even_if_telegram_send_fails(monkeypatch):
 
     monkeypatch.setattr("alerts.telegram_alerts.AlertEngine", Eng)
     monkeypatch.setattr(bs, "_fired", {})
+    monkeypatch.setattr(bs, "_autopilot_fed", {})
+    monkeypatch.setattr(bs, "_stopping", False, raising=False)
     monkeypatch.setattr(bs.threading, "Thread", ImmediateThread)
     monkeypatch.setattr(
         "execution.autopilot.on_breakout",
@@ -271,6 +289,7 @@ def test_ingest_ticks_marks_sniper_alive(monkeypatch):
     import scan.breakout_sniper as bs
 
     monkeypatch.setattr(bs, "_watch", {}, raising=False)
+    monkeypatch.setattr(bs, "_stopping", False, raising=False)
     bs._last_tick_ts = 0
     bs.ingest_ticks([{"instrument_token": 1, "last_price": 10}])
     assert bs._last_tick_ts > 0
