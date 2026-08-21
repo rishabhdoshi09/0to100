@@ -8,7 +8,7 @@ import sys
 
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(description="SEPA-001 research runner (no live orders)")
-    p.add_argument("cmd", nargs="?", default="ablation", choices=("ablation", "replay", "eval", "001r"))
+    p.add_argument("cmd", nargs="?", default="ablation", choices=("ablation", "replay", "eval", "001r", "001r2"))
     p.add_argument("--max-symbols", type=int, default=80)
     p.add_argument("--sample-step", type=int, default=10)
     p.add_argument("--lookback", type=int, default=320)
@@ -29,6 +29,19 @@ def main(argv: list[str] | None = None) -> int:
         from research.sepa.replay import format_replay, try_live_examples
         rows = try_live_examples()
         print(format_replay(rows) if rows else "No bhavcopy frames loaded.")
+        return 0
+    if args.cmd == "001r2":
+        from research.sepa.study_r2 import run_study_r2
+        payload = run_study_r2(expand=True)
+        print(json.dumps({
+            "sample": payload.get("sample"),
+            "coverage": payload.get("coverage"),
+            "ca_complete": (payload.get("ca_audit") or {}).get("ca_complete"),
+            "variants": {k: {"n": v.get("n"), "expectancy_r": v.get("expectancy_r"),
+                             "statistical": v.get("statistical_verdict"),
+                             "deploy": (v.get("deployment") or {}).get("label")}
+                         for k, v in payload.get("variants", {}).items()},
+        }, indent=2, default=str))
         return 0
     if args.cmd == "001r":
         from research.sepa.ablation_r import persist_r, run_ablation_r

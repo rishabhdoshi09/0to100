@@ -90,7 +90,11 @@ def ca_ledger_fingerprint() -> dict[str, Any]:
 
 
 def unresolved_gap_symbols(frames: Mapping[str, Any] | None, *, sample: int | None = None) -> list[dict[str, Any]]:
-    """Symbols whose RAW (or passed) close still has consecutive-session phantom gaps."""
+    """Symbols whose RAW (or passed) close still has consecutive-session phantom gaps.
+
+    ``sample`` is an optional documented diagnostic. Canonical integrity
+    passes ``sample=None`` (exhaustive).
+    """
     from core.data_integrity import phantom_gaps
 
     flagged: list[dict[str, Any]] = []
@@ -120,15 +124,19 @@ def research_integrity_report(
     frames: Mapping[str, Any] | None = None,
     as_of=None,
     verify: bool = False,
+    exhaustive: bool = True,
+    secondary_sample: int | None = None,
 ) -> dict[str, Any]:
     ca = ca_status()
     if verify:
         try:
             from data.corporate_actions import refresh_adjustment_verify
-            v = refresh_adjustment_verify(sample=80)
+            # Global verifier sample is unchanged — this does not certify the study.
+            v = refresh_adjustment_verify(sample=int(secondary_sample or 80))
             ca["verified"] = bool(v.get("passed"))
             ca["ca_complete"] = bool(ca.get("n_events")) and bool(v.get("passed"))
             ca["verify_result"] = v
+            ca["verify_sample_is_not_certification"] = True
         except Exception as exc:
             ca["verify_error"] = str(exc)
             ca["ca_complete"] = False
@@ -139,19 +147,29 @@ def research_integrity_report(
             u = pit_universe(as_of)
         except Exception as exc:
             u = {"universe_complete": False, "note": str(exc), "symbols": []}
-    gaps = unresolved_gap_symbols(frames)
+        # Honest: bhav-inferred membership is PIT_DEGRADED, even if the helper
+        # sets survivorship_complete on an inferred ledger.
+        src = str(u.get("source") or "")
+        if src.startswith("bhav_") or src in _INFERRED:
+            u["research_grade"] = False
+            u["note"] = (u.get("note") or "") + " source=bhav_inferred — not an official listing archive."
+    gap_sample = None if exhaustive else secondary_sample
+    gaps = unresolved_gap_symbols(frames, sample=gap_sample)
     pit = classify_pit(universe_meta=u, ca=ca)
     if gaps and pit == PIT_STRONG:
         pit = PIT_DEGRADED
     return {
         "pit_class": pit,
+        "exhaustive": bool(exhaustive),
+        "n_frames_audited": 0 if not frames else len(frames),
         "price_integrity": {
             "source": "official_nse_bhavcopy_on_read",
             "unresolved_gap_symbols": [g["symbol"] for g in gaps],
             "n_unresolved": len(gaps),
+            "sampled": gap_sample is not None,
             "note": (
                 "Unresolved consecutive-session gaps remain — those names must "
-                "be excluded from the research book."
+                "be date/segment quarantined, not factor-adjusted."
                 if gaps else
                 "No consecutive-session phantom gaps in the passed frames "
                 "(does not prove CA completeness)."

@@ -122,6 +122,15 @@ class SepaEligibility:
     base_start_date: str | None = None
     pivot_version: str = ""
     vcp_version: str = ""
+    original_base_start: str | None = None
+    left_censored: bool = False
+    lifecycle_status: str = ""
+    universe_date: str = ""
+    candidate_count: int | None = None
+    investable_count: int | None = None
+    rs_denominator: int | None = None
+    membership_hash: str = ""
+    selection_reason: str = ""
     evidence: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:

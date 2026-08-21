@@ -38,6 +38,7 @@ def evaluate_sepa_eligibility(
     config: SepaConfig | None = None,
     pit_meta: Mapping[str, Any] | None = None,
     buy_zone_above_pct: float | None = None,
+    compute_vcp: bool = True,
 ) -> SepaEligibility:
     """Is this stock a SEPA-style *trade* at this exact as-of date?"""
     cfg = config or DEFAULT_CONFIG
@@ -92,7 +93,11 @@ def evaluate_sepa_eligibility(
         }
 
     trend = evaluate_trend(sliced, cfg, rs_percentile=rs_info.get("percentile"))
-    vcp = detect_vcp(sliced, cfg) if sliced is not None else detect_vcp(None, cfg)
+    if compute_vcp:
+        vcp = detect_vcp(sliced, cfg) if sliced is not None else detect_vcp(None, cfg)
+    else:
+        from research.sepa.vcp import detect_vcp as _dv
+        vcp = _dv(None, cfg)
     close = close_series(sliced)
     price = float(close.iloc[-1]) if close is not None and len(close) else None
     atr_val = atr(sliced, cfg.atr_period) if sliced is not None else None
@@ -265,6 +270,15 @@ def evaluate_sepa_eligibility(
         base_start_date=vcp.get("base_start_date"),
         pivot_version=cfg.pivot_version,
         vcp_version=cfg.vcp_version,
+        original_base_start=vcp.get("base_start_date"),
+        left_censored=False,
+        lifecycle_status=str(vcp.get("state") or ""),
+        universe_date=str(meta.get("universe_date") or as_of),
+        candidate_count=meta.get("candidate_count"),
+        investable_count=meta.get("investable_count"),
+        rs_denominator=meta.get("rs_denominator") if meta.get("rs_denominator") is not None else rs_info.get("n_ranked"),
+        membership_hash=str(meta.get("membership_hash") or ""),
+        selection_reason=str(meta.get("selection_reason") or ""),
         evidence={
             "near_sepa": bool(trend.get("near_sepa")),
             "vcp_evidence": vcp.get("evidence") or {},
@@ -280,5 +294,14 @@ def evaluate_sepa_eligibility(
                 "pit_class": pit_class,
             },
             "rs_injected": bool(rs_percentile is not None),
+            "universe": {
+                "universe_date": meta.get("universe_date") or as_of,
+                "candidate_count": meta.get("candidate_count"),
+                "investable_count": meta.get("investable_count"),
+                "rs_denominator": meta.get("rs_denominator") or rs_info.get("n_ranked"),
+                "universe_source": meta.get("universe_source") or universe_version,
+                "membership_hash": meta.get("membership_hash"),
+                "selection_reason": meta.get("selection_reason"),
+            },
         },
     )

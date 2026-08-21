@@ -40,6 +40,14 @@ class SimRowR(SimRow):
     vcp_state: str = ""
     rs_percentile: float | None = None
     unique_setup: bool = True
+    entry_date: str = ""
+    exit_date: str = ""
+    entry_index: int = 0
+    exit_index: int = 0
+    hold_sessions: int = 0
+    universe_date: str = ""
+    membership_hash: str = ""
+    membership_source: str = ""
 
 
 def _sector(sym: str) -> str:
@@ -125,6 +133,7 @@ def sepa_fill_sim(
                 "outcome": "LOSS", "mae_r": mae, "mfe_r": mfe,
                 "reached_1r": mfe >= 1, "reached_2r": mfe >= 2,
                 "stop_before_1r": mfe < 1, "failed_break": True,
+                "entry_index": 0, "exit_index": i, "hold_sessions": i + 1,
             }}
     last = float(fwd["close"].iloc[n - 1])
     gross = (last - entry) / risk
@@ -134,6 +143,7 @@ def sepa_fill_sim(
         "mae_r": mae, "mfe_r": mfe,
         "reached_1r": mfe >= 1, "reached_2r": mfe >= 2,
         "stop_before_1r": False, "failed_break": failed,
+        "entry_index": 0, "exit_index": n - 1, "hold_sessions": n,
     }}
 
 
