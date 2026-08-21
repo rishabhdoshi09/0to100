@@ -1,0 +1,6939 @@
+{
+  "experiment": "SEPA-001R",
+  "generated_at": "2026-08-21T12:12:33Z",
+  "config_hash": "a7761753fb28dbf1",
+  "eligibility_version": "sepa-001r.v1",
+  "pivot_version": "pivot_last_contraction_v1",
+  "vcp_version": "vcp_causal_v1",
+  "pit": {
+    "universe_complete": true,
+    "ca_complete": false,
+    "research_grade": false,
+    "universe_note": "Inferred from local NSE bhav first/last sessions. Replace with an official listing/delisting archive for research-grade survivorship.",
+    "universe_source": "bhav_inferred",
+    "ca_note": "FAIL \u2014 unresolved consecutive-session discontinuities remain (suspension/sparse spans are classified separately and do not alone fail this gate)",
+    "ca_verified": false,
+    "ca_n_events": 290
+  },
+  "integrity": {
+    "pit_class": "PIT_DEGRADED",
+    "price_integrity": {
+      "source": "official_nse_bhavcopy_on_read",
+      "unresolved_gap_symbols": [],
+      "n_unresolved": 0,
+      "note": "No consecutive-session phantom gaps in the passed frames (does not prove CA completeness)."
+    },
+    "ca_integrity": {
+      "ca_complete": false,
+      "n_symbols": 254,
+      "n_events": 290,
+      "verified": false,
+      "source": "",
+      "path": "/workspace/logs/ca_events.json",
+      "research_grade": false,
+      "gap_rate": 0.0125,
+      "note": "FAIL \u2014 unresolved consecutive-session discontinuities remain (suspension/sparse spans are classified separately and do not alone fail this gate)",
+      "verify_result": {
+        "checked": 80,
+        "still_flagged": 1,
+        "gap_rate": 0.0125,
+        "ca_events_loaded": 254,
+        "flagged": [
+          "ABFRL"
+        ],
+        "passed": false,
+        "metric": "unresolved_consecutive_session_symbol_rate",
+        "legacy_note": "Previous gap_rate counted symbols with any \u226535% adjacent-bar move, including suspension/sparse spans. That inflated the failure rate.",
+        "by_class": {
+          "SUPPORTED_CA": 3,
+          "GENUINE_MARKET_MOVE": 0,
+          "SUSPENSION_OR_RELISTING": 3,
+          "IDENTITY_TRANSITION": 0,
+          "DATA_ERROR": 0,
+          "UNRESOLVED": 1
+        },
+        "verified_ca_events": 3,
+        "sparse_or_suspension_events": 3,
+        "note": "FAIL \u2014 unresolved consecutive-session discontinuities remain (suspension/sparse spans are classified separately and do not alone fail this gate)",
+        "unresolved_consecutive_events": 1
+      },
+      "hash": "e260673881d9e5c3",
+      "sha256": "e260673881d9e5c35fc76e62192a67b0eef7c732dea43d5e9ecc78fb23d3938d",
+      "coverage_start": "2024-01-02 00:00:00",
+      "coverage_end": "2026-08-21 00:00:00",
+      "policy": "ca_sharecount_v1",
+      "never_invents": true
+    },
+    "universe_integrity": {
+      "universe_complete": true,
+      "research_grade": false,
+      "source": "bhav_inferred",
+      "n_symbols": 2487,
+      "note": "Inferred from local NSE bhav first/last sessions. Replace with an official listing/delisting archive for research-grade survivorship.",
+      "class": "PIT_DEGRADED",
+      "survivorship_claim": "PIT membership is inferred or missing \u2014 do not set survivorship_complete=true as a research claim."
+    },
+    "rs_integrity": {
+      "formula": "rs_cs_v1 0.40*r63+0.20*r126+0.20*r189+0.20*r252",
+      "cross_sectional": true,
+      "fail_closed_on_missing_horizon": true
+    },
+    "timestamp_integrity": {
+      "as_of_slice": "frame.index <= as_of",
+      "swing_confirmation": "causal zigzag \u2014 confirmed_index, never back-dated",
+      "fill": "next session open vs buy-zone; no future-known stop"
+    },
+    "limitations": [
+      "Corporate-action verification did not pass; prices may contain phantom gaps.",
+      "Universe membership is not an official listing archive.",
+      "Overall PIT class is PIT_DEGRADED \u2014 results must not be labelled PIT-safe."
+    ],
+    "overall": "PIT_DEGRADED"
+  },
+  "universe": {
+    "as_of": "",
+    "starting_universe": 2660,
+    "eligible_universe": 100,
+    "exclusions": {
+      "min_turnover": 338,
+      "short_history": 501,
+      "min_price": 194,
+      "unresolved_ca_gap": 38
+    },
+    "excluded": [
+      {
+        "symbol": "21STCENMGM",
+        "reason": "min_turnover",
+        "turnover": 509404.11050000007
+      },
+      {
+        "symbol": "3BBLACKBIO",
+        "reason": "short_history",
+        "sessions": 90
+      },
+      {
+        "symbol": "3PLAND",
+        "reason": "min_turnover",
+        "turnover": 174771.82050000003
+      },
+      {
+        "symbol": "A2ZINFRA",
+        "reason": "short_history",
+        "sessions": 210
+      },
+      {
+        "symbol": "AAATECH",
+        "reason": "min_turnover",
+        "turnover": 2667308.5175000005
+      },
+      {
+        "symbol": "AAKASH",
+        "reason": "min_price",
+        "close": 8.71
+      },
+      {
+        "symbol": "AAREYDRUGS",
+        "reason": "short_history",
+        "sessions": 184
+      },
+      {
+        "symbol": "AARNAV",
+        "reason": "short_history",
+        "sessions": 127
+      },
+      {
+        "symbol": "AARTECH",
+        "reason": "unresolved_ca_gap"
+      },
+      {
+        "symbol": "ABAN",
+        "reason": "short_history",
+        "sessions": 112
+      },
+      {
+        "symbol": "ABCOTS",
+        "reason": "short_history",
+        "sessions": 237
+      },
+      {
+        "symbol": "ABFRL",
+        "reason": "unresolved_ca_gap"
+      },
+      {
+        "symbol": "ABGSEC",
+        "reason": "min_turnover",
+        "turnover": 187299.3095
+      },
+      {
+        "symbol": "ABINFRA",
+        "reason": "min_price",
+        "close": 12.63
+      },
+      {
+        "symbol": "ABMINTLLTD",
+        "reason": "short_history",
+        "sessions": 214
+      },
+      {
+        "symbol": "ABMKNO",
+        "reason": "short_history",
+        "sessions": 90
+      },
+      {
+        "symbol": "ABSL10BANK",
+        "reason": "short_history",
+        "sessions": 123
+      },
+      {
+        "symbol": "ABSLBANETF",
+        "reason": "min_turnover",
+        "turnover": 3862276.0369999995
+      },
+      {
+        "symbol": "ABSLLIQUID",
+        "reason": "min_turnover",
+        "turnover": 4386485.468499999
+      },
+      {
+        "symbol": "ABSLMSCIN",
+        "reason": "short_history",
+        "sessions": 130
+      },
+      {
+        "symbol": "ABSLNN50ET",
+        "reason": "min_turnover",
+        "turnover": 1476502.8804999997
+      },
+      {
+        "symbol": "ABSLPSE",
+        "reason": "min_price",
+        "close": 10.18
+      },
+      {
+        "symbol": "ACCURACY",
+        "reason": "min_price",
+        "close": 5.47
+      },
+      {
+        "symbol": "ACEINTEG",
+        "reason": "min_price",
+        "close": 17.89
+      },
+      {
+        "symbol": "ACL",
+        "reason": "min_turnover",
+        "turnover": 805849.8640000001
+      },
+      {
+        "symbol": "ACLGATI",
+        "reason": "short_history",
+        "sessions": 221
+      },
+      {
+        "symbol": "ACSTECH",
+        "reason": "short_history",
+        "sessions": 90
+      },
+      {
+        "symbol": "ADL",
+        "reason": "min_turnover",
+        "turnover": 79910.66850000001
+      },
+      {
+        "symbol": "ADROITINFO",
+        "reason": "min_price",
+        "close": 10.04
+      },
+      {
+        "symbol": "ADVAIT",
+        "reason": "short_history",
+        "sessions": 154
+      },
+      {
+        "symbol": "ADVANCE",
+        "reason": "short_history",
+        "sessions": 216
+      },
+      {
+        "symbol": "ADVANIHOTR",
+        "reason": "min_turnover",
+        "turnover": 1898744.7529999998
+      },
+      {
+        "symbol": "ADVENTHTL",
+        "reason": "short_history",
+        "sessions": 192
+      },
+      {
+        "symbol": "AEPL",
+        "reason": "short_history",
+        "sessions": 95
+      },
+      {
+        "symbol": "AEQUS",
+        "reason": "short_history",
+        "sessions": 183
+      },
+      {
+        "symbol": "AERONEU",
+        "reason": "short_history",
+        "sessions": 249
+      },
+      {
+        "symbol": "AFIL",
+        "reason": "min_price",
+        "close": 9.33
+      },
+      {
+        "symbol": "AFSL",
+        "reason": "min_turnover",
+        "turnover": 4890878.5475
+      },
+      {
+        "symbol": "AGRITECH",
+        "reason": "unresolved_ca_gap"
+      },
+      {
+        "symbol": "AGROPHOS",
+        "reason": "min_turnover",
+        "turnover": 554478.0669999999
+      },
+      {
+        "symbol": "AHCL",
+        "reason": "short_history",
+        "sessions": 176
+      },
+      {
+        "symbol": "AHLADA",
+        "reason": "min_turnover",
+        "turnover": 1013368.1254999998
+      },
+      {
+        "symbol": "AHLEAST",
+        "reason": "min_turnover",
+        "turnover": 367614.5775
+      },
+      {
+        "symbol": "AIRAN",
+        "reason": "min_price",
+        "close": 15.03
+      },
+      {
+        "symbol": "AIROLAM",
+        "reason": "min_turnover",
+        "turnover": 319498.31200000003
+      },
+      {
+        "symbol": "AJOONI",
+        "reason": "min_price",
+        "close": 3.72
+      },
+      {
+        "symbol": "AKASH",
+        "reason": "min_turnover",
+        "turnover": 255374.42400000003
+      },
+      {
+        "symbol": "AKCAPIT",
+        "reason": "short_history",
+        "sessions": 90
+      },
+      {
+        "symbol": "AKG",
+        "reason": "min_price",
+        "close": 8.99
+      },
+      {
+        "symbol": "AKI",
+        "reason": "short_history",
+        "sessions": 235
+      },
+      {
+        "symbol": "AKSHAR",
+        "reason": "short_history",
+        "sessions": 239
+      },
+      {
+        "symbol": "AKSHOPTFBR",
+        "reason": "short_history",
+        "sessions": 230
+      },
+      {
+        "symbol": "ALANKIT",
+        "reason": "min_price",
+        "close": 8.16
+      },
+      {
+        "symbol": "ALGOQUANT",
+        "reason": "short_history",
+        "sessions": 164
+      },
+      {
+        "symbol": "ALLCARGO",
+        "reason": "min_price",
+        "close": 12.17
+      },
+      {
+        "symbol": "ALMONDZ",
+        "reason": "min_price",
+        "close": 14.16
+      },
+      {
+        "symbol": "ALOKINDS",
+        "reason": "min_price",
+        "close": 11.57
+      },
+      {
+        "symbol": "ALPA",
+        "reason": "min_turnover",
+        "turnover": 1088384.6570000001
+      },
+      {
+        "symbol": "AMAGI",
+        "reason": "short_history",
+        "sessions": 153
+      },
+      {
+        "symbol": "AMANTA",
+        "reason": "short_history",
+        "sessions": 190
+      },
+      {
+        "symbol": "AMBALALSA",
+        "reason": "short_history",
+        "sessions": 89
+      },
+      {
+        "symbol": "AMBICAAGAR",
+        "reason": "min_turnover",
+        "turnover": 111997.348
+      },
+      {
+        "symbol": "AMDIND",
+        "reason": "min_turnover",
+        "turnover": 2323398.4779999997
+      },
+      {
+        "symbol": "AMIORG",
+        "reason": "short_history",
+        "sessions": 107
+      },
+      {
+        "symbol": "AMJLAND",
+        "reason": "min_turnover",
+        "turnover": 639345.5244999999
+      },
+      {
+        "symbol": "AMNPLST",
+        "reason": "min_turnover",
+        "turnover": 2593185.711
+      },
+      {
+        "symbol": "ANIKINDS",
+        "reason": "min_turnover",
+        "turnover": 390624.1375
+      },
+      {
+        "symbol": "ANMOL",
+        "reason": "min_price",
+        "close": 10.02
+      },
+      {
+        "symbol": "ANTELOPUS",
+        "reason": "short_history",
+        "sessions": 239
+      },
+      {
+        "symbol": "ANTGRAPHIC",
+        "reason": "min_price",
+        "close": 0.74
+      },
+      {
+        "symbol": "ANUHPHR",
+        "reason": "min_turnover",
+        "turnover": 3619825.5644999994
+      },
+      {
+        "symbol": "AONEGOLD",
+        "reason": "short_history",
+        "sessions": 247
+      },
+      {
+        "symbol": "AONENIFTY",
+        "reason": "min_price",
+        "close": 10.0
+      },
+      {
+        "symbol": "AONESILVER",
+        "reason": "short_history",
+        "sessions": 125
+      },
+      {
+        "symbol": "AONETMMQ50",
+        "reason": "short_history",
+        "sessions": 192
+      },
+      {
+        "symbol": "AONETOTAL",
+        "reason": "min_price",
+        "close": 12.01
+      },
+      {
+        "symbol": "APCL",
+        "reason": "min_turnover",
+        "turnover": 944652.2365
+      },
+      {
+        "symbol": "APOLSINHOT",
+        "reason": "min_turnover",
+        "turnover": 1153872.815
+      },
+      {
+        "symbol": "AQYLON",
+        "reason": "short_history",
+        "sessions": 130
+      },
+      {
+        "symbol": "ARCHIDPLY",
+        "reason": "min_turnover",
+        "turnover": 3621497.704
+      },
+      {
+        "symbol": "ARCHIES",
+        "reason": "min_price",
+        "close": 13.68
+      },
+      {
+        "symbol": "ARENTERP",
+        "reason": "min_turnover",
+        "turnover": 279667.98299999995
+      },
+      {
+        "symbol": "ARFIN",
+        "reason": "short_history",
+        "sessions": 213
+      },
+      {
+        "symbol": "ARIHANT",
+        "reason": "short_history",
+        "sessions": 90
+      },
+      {
+        "symbol": "ARIHANTSUP",
+        "reason": "min_turnover",
+        "turnover": 2545971.3225000002
+      },
+      {
+        "symbol": "ARIS",
+        "reason": "short_history",
+        "sessions": 140
+      },
+      {
+        "symbol": "ARISINFRA",
+        "reason": "short_history",
+        "sessions": 160
+      },
+      {
+        "symbol": "AROGRANITE",
+        "reason": "min_turnover",
+        "turnover": 280648.87600000005
+      },
+      {
+        "symbol": "ARSSBL",
+        "reason": "short_history",
+        "sessions": 233
+      },
+      {
+        "symbol": "ARTNIRMAN",
+        "reason": "short_history",
+        "sessions": 257
+      },
+      {
+        "symbol": "ARVEE",
+        "reason": "min_turnover",
+        "turnover": 1049815.955
+      },
+      {
+        "symbol": "ASHIMASYN",
+        "reason": "min_price",
+        "close": 18.46
+      },
+      {
+        "symbol": "ASHOKAMET",
+        "reason": "min_price",
+        "close": 13.75
+      },
+      {
+        "symbol": "ASMS",
+        "reason": "min_price",
+        "close": 7.96
+      },
+      {
+        "symbol": "ASPINWALL",
+        "reason": "min_turnover",
+        "turnover": 516801.54800000007
+      },
+      {
+        "symbol": "ASTAR",
+        "reason": "short_history",
+        "sessions": 80
+      },
+      {
+        "symbol": "ASTRON",
+        "reason": "min_price",
+        "close": 4.63
+      },
+      {
+        "symbol": "ATAM",
+        "reason": "min_turnover",
+        "turnover": 1237730.2195000001
+      },
+      {
+        "symbol": "ATL",
+        "reason": "min_turnover",
+        "turnover": 4953467.563
+      },
+      {
+        "symbol": "ATLANTAELE",
+        "reason": "short_history",
+        "sessions": 215
+      },
+      {
+        "symbol": "ATLASCYCLE",
+        "reason": "min_turnover",
+        "turnover": 697762.4789999999
+      },
+      {
+        "symbol": "AURIGROW",
+        "reason": "short_history",
+        "sessions": 123
+      },
+      {
+        "symbol": "AUSOMENT",
+        "reason": "short_history",
+        "sessions": 200
+      },
+      {
+        "symbol": "AVONMORE",
+        "reason": "min_price",
+        "close": 13.23
+      },
+      {
+        "symbol": "AVROIND",
+        "reason": "min_price",
+        "close": 8.59
+      },
+      {
+        "symbol": "AXISBNKETF",
+        "reason": "min_turnover",
+        "turnover": 2109471.6050000004
+      },
+      {
+        "symbol": "AXISBPSETF",
+        "reason": "min_price",
+        "close": 13.33
+      },
+      {
+        "symbol": "AXISCADES",
+        "reason": "short_history",
+        "sessions": 186
+      },
+      {
+        "symbol": "AXISCETF",
+        "reason": "min_turnover",
+        "turnover": 244587.98599999998
+      },
+      {
+        "symbol": "AXISHCETF",
+        "reason": "min_turnover",
+        "turnover": 1239019.2625
+      },
+      {
+        "symbol": "AXISVALUE",
+        "reason": "min_turnover",
+        "turnover": 4886137.4305
+      },
+      {
+        "symbol": "AXITA",
+        "reason": "min_price",
+        "close": 7.67
+      },
+      {
+        "symbol": "AXSENSEX",
+        "reason": "min_turnover",
+        "turnover": 472472.4365
+      },
+      {
+        "symbol": "AYE",
+        "reason": "short_history",
+        "sessions": 135
+      },
+      {
+        "symbol": "BAFNAPH",
+        "reason": "short_history",
+        "sessions": 108
+      },
+      {
+        "symbol": "BAGFILMS",
+        "reason": "min_price",
+        "close": 4.35
+      },
+      {
+        "symbol": "BAIDFIN",
+        "reason": "min_price",
+        "close": 9.92
+      },
+      {
+        "symbol": "BAJAJINDEF",
+        "reason": "min_turnover",
+        "turnover": 4849231.821500001
+      },
+      {
+        "symbol": "BAJAJST",
+        "reason": "short_history",
+        "sessions": 90
+      },
+      {
+        "symbol": "BALAJEE",
+        "reason": "min_turnover",
+        "turnover": 777792.7810000001
+      },
+      {
+        "symbol": "BALAJITELE",
+        "reason": "unresolved_ca_gap"
+      },
+      {
+        "symbol": "BALAXI",
+        "reason": "min_turnover",
+        "turnover": 858369.4469999999
+      },
+      {
+        "symbol": "BALKRISHNA",
+        "reason": "min_price",
+        "close": 17.27
+      },
+      {
+        "symbol": "BALPHARMA",
+        "reason": "min_turnover",
+        "turnover": 2221476.2505
+      },
+      {
+        "symbol": "BANARBEADS",
+        "reason": "min_turnover",
+        "turnover": 309647.20499999996
+      },
+      {
+        "symbol": "BANG",
+        "reason": "min_turnover",
+        "turnover": 471178.238
+      },
+      {
+        "symbol": "BANK10ADD",
+        "reason": "short_history",
+        "sessions": 117
+      },
+      {
+        "symbol": "BANKA",
+        "reason": "min_turnover",
+        "turnover": 1128944.3424999998
+      },
+      {
+        "symbol": "BANKADD",
+        "reason": "short_history",
+        "sessions": 180
+      },
+      {
+        "symbol": "BANKBETA",
+        "reason": "short_history",
+        "sessions": 173
+      },
+      {
+        "symbol": "BANKBETF",
+        "reason": "min_turnover",
+        "turnover": 941206.0955
+      },
+      {
+        "symbol": "BANKETFADD",
+        "reason": "short_history",
+        "sessions": 244
+      },
+      {
+        "symbol": "BANKNIFTY1",
+        "reason": "unresolved_ca_gap"
+      },
+      {
+        "symbol": "BANKPSU",
+        "reason": "min_turnover",
+        "turnover": 1112215.7825000002
+      },
+      {
+        "symbol": "BANSWRAS",
+        "reason": "min_turnover",
+        "turnover": 4625617.920999999
+      },
+      {
+        "symbol": "BARBEQUE",
+        "reason": "short_history",
+        "sessions": 199
+      },
+      {
+        "symbol": "BATLIBOI",
+        "reason": "short_history",
+        "sessions": 90
+      },
+      {
+        "symbol": "BBETF0432",
+        "reason": "min_turnover",
+        "turnover": 3146109.939500001
+      },
+      {
+        "symbol": "BBNPNBETF",
+        "reason": "min_turnover",
+        "turnover": 48655.6665
+      },
+      {
+        "symbol": "BBNPPGOLD",
+        "reason": "min_turnover",
+        "turnover": 1524233.5825
+      },
+      {
+        "symbol": "BCG",
+        "reason": "short_history",
+        "sessions": 222
+      },
+      {
+        "symbol": "BCONCEPTS",
+        "reason": "min_turnover",
+        "turnover": 2236288.721
+      },
+      {
+        "symbol": "BCPL",
+        "reason": "short_history",
+        "sessions": 106
+      },
+      {
+        "symbol": "BEARDSELL",
+        "reason": "min_turnover",
+        "turnover": 486031.59349999996
+      },
+      {
+        "symbol": "BEDMUTHA",
+        "reason": "min_turnover",
+        "turnover": 461541.1035
+      },
+      {
+        "symbol": "BEEKAY",
+        "reason": "short_history",
+        "sessions": 90
+      },
+      {
+        "symbol": "BELLACASA",
+        "reason": "min_turnover",
+        "turnover": 2601587.755
+      },
+      {
+        "symbol": "BENGALASM",
+        "reason": "short_history",
+        "sessions": 90
+      },
+      {
+        "symbol": "BESTAGRO",
+        "reason": "min_price",
+        "close": 18.24
+      },
+      {
+        "symbol": "BETA",
+        "reason": "short_history",
+        "sessions": 195
+      },
+      {
+        "symbol": "BHAGYANGR",
+        "reason": "short_history",
+        "sessions": 220
+      },
+      {
+        "symbol": "BHANDARI",
+        "reason": "min_price",
+        "close": 3.05
+      },
+      {
+        "symbol": "BHARATCOAL",
+        "reason": "short_history",
+        "sessions": 155
+      },
+      {
+        "symbol": "BI",
+        "reason": "short_history",
+        "sessions": 88
+      },
+      {
+        "symbol": "BIGBLOC",
+        "reason": "min_turnover",
+        "turnover": 2316558.3189999997
+      },
+      {
+        "symbol": "BIMETAL",
+        "reason": "short_history",
+        "sessions": 90
+      },
+      {
+        "symbol": "BIOFILCHEM",
+        "reason": "min_turnover",
+        "turnover": 244496.85150000002
+      },
+      {
+        "symbol": "BIRLAMONEY",
+        "reason": "unresolved_ca_gap"
+      },
+      {
+        "symbol": "BIRLAPREC",
+        "reason": "short_history",
+        "sessions": 90
+      },
+      {
+        "symbol": "BLAL",
+        "reason": "min_turnover",
+        "turnover": 2960079.2545
+      },
+      {
+        "symbol": "BLBLIMITED",
+        "reason": "min_price",
+        "close": 16.0
+      },
+      {
+        "symbol": "BLIL",
+        "reason": "short_history",
+        "sessions": 90
+      },
+      {
+        "symbol": "BLUECOAST",
+        "reason": "short_history",
+        "sessions": 88
+      },
+      {
+        "symbol": "BMWVENTLTD",
+        "reason": "short_history",
+        "sessions": 222
+      },
+      {
+        "symbol": "BOHRAIND",
+        "reason": "short_history",
+        "sessions": 208
+      },
+      {
+        "symbol": "BONLON",
+        "reason": "short_history",
+        "sessions": 95
+      },
+      {
+        "symbol": "BORANA",
+        "reason": "short_history",
+        "sessions": 202
+      },
+      {
+        "symbol": "BOSCH-HCIL",
+        "reason": "short_history",
+        "sessions": 173
+      },
+      {
+        "symbol": "BPL",
+        "reason": "min_turnover",
+        "turnover": 2437652.1574999997
+      },
+      {
+        "symbol": "BRNL",
+        "reason": "min_price",
+        "close": 17.24
+      },
+      {
+        "symbol": "BROOKS",
+        "reason": "short_history",
+        "sessions": 202
+      },
+      {
+        "symbol": "BSHSL",
+        "reason": "min_turnover",
+        "turnover": 1337109.143
+      },
+      {
+        "symbol": "BSL",
+        "reason": "min_turnover",
+        "turnover": 301688.63300000003
+      },
+      {
+        "symbol": "BSLSENETFG",
+        "reason": "min_turnover",
+        "turnover": 382160.44299999997
+      },
+      {
+        "symbol": "BTML",
+        "reason": "min_price",
+        "close": 7.86
+      },
+      {
+        "symbol": "BUILDPRO",
+        "reason": "short_history",
+        "sessions": 149
+      },
+      {
+        "symbol": "BVCL",
+        "reason": "min_turnover",
+        "turnover": 606388.4755
+      },
+      {
+        "symbol": "BYKE",
+        "reason": "short_history",
+        "sessions": 225
+      },
+      {
+        "symbol": "CALSOFT",
+        "reason": "short_history",
+        "sessions": 193
+      },
+      {
+        "symbol": "CAMLINFINE",
+        "reason": "unresolved_ca_gap"
+      },
+      {
+        "symbol": "CANHLIFE",
+        "reason": "short_history",
+        "sessions": 221
+      },
+      {
+        "symbol": "CAPILLARY",
+        "reason": "short_history",
+        "sessions": 196
+      },
+      {
+        "symbol": "CAPTRUST",
+        "reason": "short_history",
+        "sessions": 222
+      },
+      {
+        "symbol": "CCAVENUE",
+        "reason": "short_history",
+        "sessions": 144
+      },
+      {
+        "symbol": "CCCL",
+        "reason": "min_price",
+        "close": 15.49
+      },
+      {
+        "symbol": "CCHHL",
+        "reason": "min_price",
+        "close": 12.99
+      },
+      {
+        "symbol": "CEINSYS",
+        "reason": "short_history",
+        "sessions": 132
+      },
+      {
+        "symbol": "CELEBRITY",
+        "reason": "min_price",
+        "close": 6.75
+      },
+      {
+        "symbol": "CEMPRO",
+        "reason": "short_history",
+        "sessions": 242
+      },
+      {
+        "symbol": "CHEMBOND",
+        "reason": "min_turnover",
+        "turnover": 3795459.893499999
+      },
+      {
+        "symbol": "CHEMBONDCH",
+        "reason": "short_history",
+        "sessions": 196
+      },
+      {
+        "symbol": "CHEMICAL",
+        "reason": "short_history",
+        "sessions": 198
+      },
+      {
+        "symbol": "CHOICEGOLD",
+        "reason": "short_history",
+        "sessions": 205
+      },
+      {
+        "symbol": "CIFL",
+        "reason": "min_turnover",
+        "turnover": 1951829.55
+      },
+      {
+        "symbol": "CINELINE",
+        "reason": "min_turnover",
+        "turnover": 2226844.5094999997
+      },
+      {
+        "symbol": "CINEVISTA",
+        "reason": "min_price",
+        "close": 14.21
+      },
+      {
+        "symbol": "CLEANMAX",
+        "reason": "short_history",
+        "sessions": 125
+      },
+      {
+        "symbol": "CLEDUCATE",
+        "reason": "min_turnover",
+        "turnover": 4284084.492999999
+      },
+      {
+        "symbol": "CMPDI",
+        "reason": "short_history",
+        "sessions": 105
+      },
+      {
+        "symbol": "CNL",
+        "reason": "short_history",
+        "sessions": 183
+      },
+      {
+        "symbol": "COCKERILL",
+        "reason": "short_history",
+        "sessions": 90
+      },
+      {
+        "symbol": "COFFEEDAY",
+        "reason": "short_history",
+        "sessions": 191
+      },
+      {
+        "symbol": "COMFINTE",
+        "reason": "short_history",
+        "sessions": 90
+      },
+      {
+        "symbol": "COMPUSOFT",
+        "reason": "min_price",
+        "close": 13.98
+      },
+      {
+        "symbol": "CONS",
+        "reason": "min_price",
+        "close": 12.38
+      },
+      {
+        "symbol": "CONSUMER",
+        "reason": "min_price",
+        "close": 12.28
+      },
+      {
+        "symbol": "CONSUMIETF",
+        "reason": "min_turnover",
+        "turnover": 4887664.380000001
+      },
+      {
+        "symbol": "CORONA",
+        "reason": "short_history",
+        "sessions": 180
+      },
+      {
+        "symbol": "COUNCODOS",
+        "reason": "min_price",
+        "close": 6.07
+      },
+      {
+        "symbol": "CPCAP",
+        "reason": "unresolved_ca_gap"
+      },
+      {
+        "symbol": "CPEDU",
+        "reason": "short_history",
+        "sessions": 240
+      },
+      {
+        "symbol": "CRAMC",
+        "reason": "short_history",
+        "sessions": 222
+      },
+      {
+        "symbol": "CREATIVE",
+        "reason": "short_history",
+        "sessions": 241
+      },
+      {
+        "symbol": "CREATIVEYE",
+        "reason": "min_price",
+        "close": 6.36
+      },
+      {
+        "symbol": "CREST",
+        "reason": "min_turnover",
+        "turnover": 1963534.6724999999
+      },
+      {
+        "symbol": "CROWN",
+        "reason": "min_turnover",
+        "turnover": 1056687.5055
+      },
+      {
+        "symbol": "CTE",
+        "reason": "min_turnover",
+        "turnover": 1347495.8514999999
+      },
+      {
+        "symbol": "CUBEXTUB",
+        "reason": "min_turnover",
+        "turnover": 3823427.861
+      },
+      {
+        "symbol": "CYBERMEDIA",
+        "reason": "short_history",
+        "sessions": 228
+      },
+      {
+        "symbol": "CYBERTECH",
+        "reason": "short_history",
+        "sessions": 229
+      },
+      {
+        "symbol": "DAMODARIND",
+        "reason": "min_turnover",
+        "turnover": 223503.3545
+      },
+      {
+        "symbol": "DANGEE",
+        "reason": "min_price",
+        "close": 2.87
+      },
+      {
+        "symbol": "DAVANGERE",
+        "reason": "min_price",
+        "close": 2.99
+      },
+      {
+        "symbol": "DBEIL",
+        "reason": "min_price",
+        "close": 8.266
+      },
+      {
+        "symbol": "DBOL",
+        "reason": "unresolved_ca_gap"
+      },
+      {
+        "symbol": "DCM",
+        "reason": "min_turnover",
+        "turnover": 1998552.6630000002
+      },
+      {
+        "symbol": "DCMFINSERV",
+        "reason": "short_history",
+        "sessions": 225
+      },
+      {
+        "symbol": "DCMSRIND",
+        "reason": "unresolved_ca_gap"
+      },
+      {
+        "symbol": "DECNGOLD",
+        "reason": "short_history",
+        "sessions": 90
+      },
+      {
+        "symbol": "DEFENCE",
+        "reason": "short_history",
+        "sessions": 132
+      },
+      {
+        "symbol": "DELPHIFX",
+        "reason": "short_history",
+        "sessions": 200
+      },
+      {
+        "symbol": "DELTAMAGNT",
+        "reason": "min_turnover",
+        "turnover": 1356210.18
+      },
+      {
+        "symbol": "DEVIT",
+        "reason": "min_turnover",
+        "turnover": 2123757.813
+      },
+      {
+        "symbol": "DEVX",
+        "reason": "short_history",
+        "sessions": 232
+      },
+      {
+        "symbol": "DGCONTENT",
+        "reason": "min_turnover",
+        "turnover": 889230.1824999999
+      },
+      {
+        "symbol": "DHANI",
+        "reason": "short_history",
+        "sessions": 210
+      },
+      {
+        "symbol": "DHRUV",
+        "reason": "short_history",
+        "sessions": 215
+      },
+      {
+        "symbol": "DHUNINV",
+        "reason": "min_turnover",
+        "turnover": 2838441.9524999997
+      },
+      {
+        "symbol": "DIAMINESQ",
+        "reason": "min_turnover",
+        "turnover": 4817235.0200000005
+      },
+      {
+        "symbol": "DIGIDRIVE",
+        "reason": "min_price",
+        "close": 17.9
+      },
+      {
+        "symbol": "DIGISPICE",
+        "reason": "min_price",
+        "close": 16.99
+      },
+      {
+        "symbol": "DIGJAMLMTD",
+        "reason": "short_history",
+        "sessions": 188
+      },
+      {
+        "symbol": "DIL",
+        "reason": "short_history",
+        "sessions": 101
+      },
+      {
+        "symbol": "DISAQ",
+        "reason": "short_history",
+        "sessions": 90
+      },
+      {
+        "symbol": "DISHTV",
+        "reason": "min_price",
+        "close": 2.77
+      },
+      {
+        "symbol": "DIVIDEND",
+        "reason": "short_history",
+        "sessions": 176
+      },
+      {
+        "symbol": "DIVOPPBEES",
+        "reason": "min_turnover",
+        "turnover": 4993663.393499999
+      },
+      {
+        "symbol": "DNAMEDIA",
+        "reason": "min_price",
+        "close": 2.6
+      },
+      {
+        "symbol": "DOLPHIN",
+        "reason": "unresolved_ca_gap"
+      },
+      {
+        "symbol": "DONEAR",
+        "reason": "min_turnover",
+        "turnover": 1808058.5269999995
+      },
+      {
+        "symbol": "DPSCLTD",
+        "reason": "min_price",
+        "close": 9.37
+      },
+      {
+        "symbol": "DRAGARWQ",
+        "reason": "short_history",
+        "sessions": 90
+      },
+      {
+        "symbol": "DRCSYSTEMS",
+        "reason": "min_price",
+        "close": 12.6
+      },
+      {
+        "symbol": "DREAMFOLKS",
+        "reason": "min_turnover",
+        "turnover": 4344272.532000001
+      },
+      {
+        "symbol": "DTIL",
+        "reason": "min_turnover",
+        "turnover": 947404.1555
+      },
+      {
+        "symbol": "DUCON",
+        "reason": "min_price",
+        "close": 3.35
+      },
+      {
+        "symbol": "DYNPRO",
+        "reason": "min_turnover",
+        "turnover": 4449897.7
+      },
+      {
+        "symbol": "EASEMYTRIP",
+        "reason": "min_price",
+        "close": 6.25
+      },
+      {
+        "symbol": "EBANKNIFTY",
+        "reason": "min_turnover",
+        "turnover": 65710.32850000002
+      },
+      {
+        "symbol": "ECAPINSURE",
+        "reason": "min_turnover",
+        "turnover": 1532345.1515000002
+      },
+      {
+        "symbol": "ELANTAS",
+        "reason": "short_history",
+        "sessions": 90
+      },
+      {
+        "symbol": "ELCIDIN",
+        "reason": "short_history",
+        "sessions": 90
+      },
+      {
+        "symbol": "ELGIRUBCO",
+        "reason": "short_history",
+        "sessions": 198
+      },
+      {
+        "symbol": "ELIQUID",
+        "reason": "short_history",
+        "sessions": 209
+      },
+      {
+        "symbol": "ELITECON",
+        "reason": "short_history",
+        "sessions": 90
+      },
+      {
+        "symbol": "ELM250",
+        "reason": "short_history",
+        "sessions": 248
+      },
+      {
+        "symbol": "ELPROINTL",
+        "reason": "short_history",
+        "sessions": 90
+      },
+      {
+        "symbol": "EMAMIREAL",
+        "reason": "short_history",
+        "sessions": 222
+      },
+      {
+        "symbol": "EMKAY",
+        "reason": "short_history",
+        "sessions": 222
+      },
+      {
+        "symbol": "EMMVEE",
+        "reason": "short_history",
+        "sessions": 199
+      },
+      {
+        "symbol": "EMULTIMQ",
+        "reason": "min_turnover",
+        "turnover": 1902064.2495000002
+      },
+      {
+        "symbol": "ENERGY",
+        "reason": "short_history",
+        "sessions": 202
+      },
+      {
+        "symbol": "ENERGYDEV",
+        "reason": "short_history",
+        "sessions": 235
+      },
+      {
+        "symbol": "ENIFTY",
+        "reason": "short_history",
+        "sessions": 192
+      },
+      {
+        "symbol": "ENIL",
+        "reason": "min_turnover",
+        "turnover": 3493065.8049999997
+      },
+      {
+        "symbol": "EPACKPEB",
+        "reason": "short_history",
+        "sessions": 232
+      },
+      {
+        "symbol": "EQUAL200",
+        "reason": "min_price",
+        "close": 13.97
+      },
+      {
+        "symbol": "EQUAL50",
+        "reason": "min_turnover",
+        "turnover": 2408383.499
+      },
+      {
+        "symbol": "ESENSEX",
+        "reason": "short_history",
+        "sessions": 191
+      },
+      {
+        "symbol": "ESG",
+        "reason": "min_turnover",
+        "turnover": 1180023.361
+      },
+      {
+        "symbol": "ESSARSHPNG",
+        "reason": "short_history",
+        "sessions": 225
+      },
+      {
+        "symbol": "ESSENTIA",
+        "reason": "min_price",
+        "close": 1.14
+      },
+      {
+        "symbol": "EUROBOND",
+        "reason": "min_turnover",
+        "turnover": 1443001.9615
+      },
+      {
+        "symbol": "EUROPRATIK",
+        "reason": "short_history",
+        "sessions": 238
+      },
+      {
+        "symbol": "EUROTEXIND",
+        "reason": "short_history",
+        "sessions": 217
+      },
+      {
+        "symbol": "EVERESTIND",
+        "reason": "short_history",
+        "sessions": 256
+      },
+      {
+        "symbol": "EXCEL",
+        "reason": "short_history",
+        "sessions": 155
+      },
+      {
+        "symbol": "EXCELSOFT",
+        "reason": "short_history",
+        "sessions": 193
+      },
+      {
+        "symbol": "EXXARO",
+        "reason": "min_price",
+        "close": 6.09
+      },
+      {
+        "symbol": "FABTECH",
+        "reason": "short_history",
+        "sessions": 217
+      },
+      {
+        "symbol": "FCSSOFT",
+        "reason": "min_price",
+        "close": 1.49
+      },
+      {
+        "symbol": "FEDDERSHOL",
+        "reason": "short_history",
+        "sessions": 90
+      },
+      {
+        "symbol": "FERMENTA",
+        "reason": "short_history",
+        "sessions": 90
+      },
+      {
+        "symbol": "FIBERWEB",
+        "reason": "min_turnover",
+        "turnover": 1082282.22
+      },
+      {
+        "symbol": "FILATFASH",
+        "reason": "short_history",
+        "sessions": 215
+      },
+      {
+        "symbol": "FINKURVE",
+        "reason": "short_history",
+        "sessions": 232
+      },
+      {
+        "symbol": "FLEXIADD",
+        "reason": "short_history",
+        "sessions": 222
+      },
+      {
+        "symbol": "FLEXITUFF",
+        "reason": "short_history",
+        "sessions": 219
+      },
+      {
+        "symbol": "FMNL",
+        "reason": "short_history",
+        "sessions": 184
+      },
+      {
+        "symbol": "FRACTAL",
+        "reason": "short_history",
+        "sessions": 135
+      },
+      {
+        "symbol": "FRONTSP",
+        "reason": "short_history",
+        "sessions": 90
+      },
+      {
+        "symbol": "GANESHCP",
+        "reason": "short_history",
+        "sessions": 234
+      },
+      {
+        "symbol": "GANESHHOU",
+        "reason": "short_history",
+        "sessions": 244
+      },
+      {
+        "symbol": "GANESHHOUC",
+        "reason": "short_history",
+        "sessions": 180
+      },
+      {
+        "symbol": "GANGAFORGE",
+        "reason": "min_price",
+        "close": 2.05
+      },
+      {
+        "symbol": "GANGESSECU",
+        "reason": "min_turnover",
+        "turnover": 323934.02749999997
+      },
+      {
+        "symbol": "GATECH",
+        "reason": "min_price",
+        "close": 0.62
+      },
+      {
+        "symbol": "GATECHDVR",
+        "reason": "min_price",
+        "close": 0.53
+      },
+      {
+        "symbol": "GAYAHWS",
+        "reason": "short_history",
+        "sessions": 151
+      },
+      {
+        "symbol": "GCSL",
+        "reason": "short_history",
+        "sessions": 157
+      },
+      {
+        "symbol": "GEECEE",
+        "reason": "min_turnover",
+        "turnover": 2394924.0700000003
+      },
+      {
+        "symbol": "GEEKAYWIRE",
+        "reason": "min_turnover",
+        "turnover": 2193111.923
+      },
+      {
+        "symbol": "GEMAROMA",
+        "reason": "short_history",
+        "sessions": 190
+      },
+      {
+        "symbol": "GENUSPAPER",
+        "reason": "min_price",
+        "close": 11.23
+      },
+      {
+        "symbol": "GEPIL",
+        "reason": "short_history",
+        "sessions": 168
+      },
+      {
+        "symbol": "GICL",
+        "reason": "short_history",
+        "sessions": 110
+      },
+      {
+        "symbol": "GILLANDERS",
+        "reason": "min_turnover",
+        "turnover": 720439.65
+      },
+      {
+        "symbol": "GILT10BETA",
+        "reason": "short_history",
+        "sessions": 173
+      },
+      {
+        "symbol": "GILT5BETA",
+        "reason": "short_history",
+        "sessions": 163
+      },
+      {
+        "symbol": "GKENERGY",
+        "reason": "short_history",
+        "sessions": 235
+      },
+      {
+        "symbol": "GKSL",
+        "reason": "short_history",
+        "sessions": 169
+      },
+      {
+        "symbol": "GKWLIMITED",
+        "reason": "min_turnover",
+        "turnover": 808850.675
+      },
+      {
+        "symbol": "GLOBALE",
+        "reason": "short_history",
+        "sessions": 199
+      },
+      {
+        "symbol": "GLOBALVECT",
+        "reason": "min_turnover",
+        "turnover": 3813723.5065000006
+      },
+      {
+        "symbol": "GLOBE",
+        "reason": "min_price",
+        "close": 1.97
+      },
+      {
+        "symbol": "GLOBECIVIL",
+        "reason": "short_history",
+        "sessions": 220
+      },
+      {
+        "symbol": "GLOSTERLTD",
+        "reason": "min_turnover",
+        "turnover": 1649838.9274999998
+      },
+      {
+        "symbol": "GLOTTIS",
+        "reason": "short_history",
+        "sessions": 164
+      },
+      {
+        "symbol": "GNRL",
+        "reason": "short_history",
+        "sessions": 90
+      },
+      {
+        "symbol": "GOACARBON",
+        "reason": "min_turnover",
+        "turnover": 4893448.7575
+      },
+      {
+        "symbol": "GOLD360",
+        "reason": "min_turnover",
+        "turnover": 3182198.2575000003
+      },
+      {
+        "symbol": "GOLDADD",
+        "reason": "short_history",
+        "sessions": 180
+      },
+      {
+        "symbol": "GOLDBETA",
+        "reason": "short_history",
+        "sessions": 173
+      },
+      {
+        "symbol": "GOLDBND",
+        "reason": "short_history",
+        "sessions": 181
+      },
+      {
+        "symbol": "GOLDETFADD",
+        "reason": "short_history",
+        "sessions": 244
+      },
+      {
+        "symbol": "GOLDSHARE",
+        "reason": "short_history",
+        "sessions": 251
+      },
+      {
+        "symbol": "GOODYEAR",
+        "reason": "short_history",
+        "sessions": 90
+      },
+      {
+        "symbol": "GOYALALUM",
+        "reason": "min_price",
+        "close": 6.41
+      },
+      {
+        "symbol": "GRANDOAK",
+        "reason": "short_history",
+        "sessions": 90
+      },
+      {
+        "symbol": "GRAUWEIL",
+        "reason": "short_history",
+        "sessions": 90
+      },
+      {
+        "symbol": "GRAVISSHO",
+        "reason": "short_history",
+        "sessions": 89
+      },
+      {
+        "symbol": "GREENPOWER",
+        "reason": "min_price",
+        "close": 9.48
+      },
+      {
+        "symbol": "GROBTEA",
+        "reason": "min_turnover",
+        "turnover": 205326.55749999997
+      },
+      {
+        "symbol": "GROWW",
+        "reason": "short_history",
+        "sessions": 203
+      },
+      {
+        "symbol": "GROWWCAPM",
+        "reason": "short_history",
+        "sessions": 187
+      },
+      {
+        "symbol": "GROWWCHEM",
+        "reason": "short_history",
+        "sessions": 156
+      },
+      {
+        "symbol": "GROWWGOLD",
+        "reason": "min_price",
+        "close": 15.49
+      },
+      {
+        "symbol": "GROWWHOSPI",
+        "reason": "short_history",
+        "sessions": 122
+      },
+      {
+        "symbol": "GROWWLOVOL",
+        "reason": "min_price",
+        "close": 10.37
+      },
+      {
+        "symbol": "GROWWMC150",
+        "reason": "short_history",
+        "sessions": 200
+      },
+      {
+        "symbol": "GROWWMETAL",
+        "reason": "short_history",
+        "sessions": 174
+      },
+      {
+        "symbol": "GROWWMOM50",
+        "reason": "min_price",
+        "close": 10.97
+      },
+      {
+        "symbol": "GROWWN200",
+        "reason": "min_price",
+        "close": 11.48
+      },
+      {
+        "symbol": "GROWWNET",
+        "reason": "min_price",
+        "close": 10.76
+      },
+      {
+        "symbol": "GROWWNIFTY",
+        "reason": "min_price",
+        "close": 9.81
+      },
+      {
+        "symbol": "GROWWNXT50",
+        "reason": "short_history",
+        "sessions": 257
+      },
+      {
+        "symbol": "GROWWPOWER",
+        "reason": "min_price",
+        "close": 11.33
+      },
+      {
+        "symbol": "GROWWPSE",
+        "reason": "short_history",
+        "sessions": 138
+      },
+      {
+        "symbol": "GROWWPSUBK",
+        "reason": "short_history",
+        "sessions": 106
+      },
+      {
+        "symbol": "GROWWRLTY",
+        "reason": "short_history",
+        "sessions": 227
+      },
+      {
+        "symbol": "GROWWSC250",
+        "reason": "short_history",
+        "sessions": 212
+      },
+      {
+        "symbol": "GROWWSLVR",
+        "reason": "unresolved_ca_gap"
+      },
+      {
+        "symbol": "GRPLTD",
+        "reason": "min_turnover",
+        "turnover": 4989366.315
+      },
+      {
+        "symbol": "GSEC10ABSL",
+        "reason": "min_turnover",
+        "turnover": 161982.48249999998
+      },
+      {
+        "symbol": "GSEC10IETF",
+        "reason": "min_turnover",
+        "turnover": 221426.44199999998
+      },
+      {
+        "symbol": "GSEC10YEAR",
+        "reason": "min_turnover",
+        "turnover": 118461.06100000002
+      },
+      {
+        "symbol": "GSEC5IETF",
+        "reason": "min_turnover",
+        "turnover": 777186.117
+      },
+      {
+        "symbol": "GSLSU",
+        "reason": "min_turnover",
+        "turnover": 3300606.4555
+      },
+      {
+        "symbol": "GSPCROP",
+        "reason": "short_history",
+        "sessions": 109
+      },
+      {
+        "symbol": "GSS",
+        "reason": "min_price",
+        "close": 12.68
+      },
+      {
+        "symbol": "GTECJAINX",
+        "reason": "short_history",
+        "sessions": 245
+      },
+      {
+        "symbol": "GTL",
+        "reason": "min_price",
+        "close": 7.28
+      },
+      {
+        "symbol": "GTLINFRA",
+        "reason": "min_price",
+        "close": 1.23
+      },
+      {
+        "symbol": "GTPL",
+        "reason": "min_turnover",
+        "turnover": 4413809.23
+      },
+      {
+        "symbol": "GUJAPOLLO",
+        "reason": "min_turnover",
+        "turnover": 3240631.2875
+      },
+      {
+        "symbol": "GUJRAFFIA",
+        "reason": "short_history",
+        "sessions": 204
+      },
+      {
+        "symbol": "GVPIL",
+        "reason": "short_history",
+        "sessions": 196
+      },
+      {
+        "symbol": "GVPTECH",
+        "reason": "min_price",
+        "close": 7.34
+      },
+      {
+        "symbol": "HALDER",
+        "reason": "short_history",
+        "sessions": 128
+      },
+      {
+        "symbol": "HALEOSLABS",
+        "reason": "short_history",
+        "sessions": 132
+      },
+      {
+        "symbol": "HARDWYN",
+        "reason": "short_history",
+        "sessions": 227
+      },
+      {
+        "symbol": "HARRMALAYA",
+        "reason": "min_turnover",
+        "turnover": 4209953.665
+      },
+      {
+        "symbol": "HATHWAY",
+        "reason": "min_price",
+        "close": 10.68
+      },
+      {
+        "symbol": "HAVISHA",
+        "reason": "min_price",
+        "close": 1.42
+      },
+      {
+        "symbol": "HAWKINCOOK",
+        "reason": "short_history",
+        "sessions": 90
+      },
+      {
+        "symbol": "HBESD",
+        "reason": "short_history",
+        "sessions": 90
+      },
+      {
+        "symbol": "HBSL",
+        "reason": "short_history",
+        "sessions": 217
+      },
+      {
+        "symbol": "HCL-INSYS",
+        "reason": "min_price",
+        "close": 11.09
+      },
+      {
+        "symbol": "HDFCLOWVOL",
+        "reason": "min_turnover",
+        "turnover": 427551.8354999999
+      },
+      {
+        "symbol": "HDFCMOMENT",
+        "reason": "min_turnover",
+        "turnover": 4835438.9065
+      },
+      {
+        "symbol": "HDFCNIF100",
+        "reason": "min_turnover",
+        "turnover": 1358464.137
+      },
+      {
+        "symbol": "HDFCQUAL",
+        "reason": "min_turnover",
+        "turnover": 1450378.2535
+      },
+      {
+        "symbol": "HDFCSENSEX",
+        "reason": "min_turnover",
+        "turnover": 3953328.7024999997
+      },
+      {
+        "symbol": "HDFCVALUE",
+        "reason": "min_turnover",
+        "turnover": 895902.4145
+      },
+      {
+        "symbol": "HEADSUP",
+        "reason": "min_price",
+        "close": 6.69
+      },
+      {
+        "symbol": "HEALTHADD",
+        "reason": "min_price",
+        "close": 16.57
+      },
+      {
+        "symbol": "HEALTHCARE",
+        "reason": "short_history",
+        "sessions": 135
+      },
+      {
+        "symbol": "HEALTHX",
+        "reason": "short_history",
+        "sessions": 82
+      },
+      {
+        "symbol": "HEALTHY",
+        "reason": "min_price",
+        "close": 16.89
+      },
+      {
+        "symbol": "HECPROJECT",
+        "reason": "min_turnover",
+        "turnover": 2487999.8710000003
+      },
+      {
+        "symbol": "HERANBA",
+        "reason": "unresolved_ca_gap"
+      },
+      {
+        "symbol": "HERCULES",
+        "reason": "short_history",
+        "sessions": 150
+      },
+      {
+        "symbol": "HEUBACHIND",
+        "reason": "min_turnover",
+        "turnover": 3904865.6049999995
+      },
+      {
+        "symbol": "HEXATRADEX",
+        "reason": "min_turnover",
+        "turnover": 995383.4965
+      },
+      {
+        "symbol": "HGM",
+        "reason": "short_history",
+        "sessions": 189
+      },
+      {
+        "symbol": "HILINFRA",
+        "reason": "short_history",
+        "sessions": 188
+      },
+      {
+        "symbol": "HINDCOMPOS",
+        "reason": "min_turnover",
+        "turnover": 1441652.645
+      },
+      {
+        "symbol": "HINDCON",
+        "reason": "min_turnover",
+        "turnover": 528091.3335
+      },
+      {
+        "symbol": "HINDMOTORS",
+        "reason": "short_history",
+        "sessions": 126
+      },
+      {
+        "symbol": "HISARMETAL",
+        "reason": "min_turnover",
+        "turnover": 419466.9234999999
+      },
+      {
+        "symbol": "HLVLTD",
+        "reason": "min_price",
+        "close": 6.58
+      },
+      {
+        "symbol": "HOVS",
+        "reason": "short_history",
+        "sessions": 116
+      },
+      {
+        "symbol": "HPIL",
+        "reason": "min_turnover",
+        "turnover": 555150.2315
+      },
+      {
+        "symbol": "HSBCGOLD",
+        "reason": "short_history",
+        "sessions": 106
+      },
+      {
+        "symbol": "HYBRIDFIN",
+        "reason": "short_history",
+        "sessions": 209
+      },
+      {
+        "symbol": "IBULLSLTD",
+        "reason": "short_history",
+        "sessions": 124
+      },
+      {
+        "symbol": "ICDSLTD",
+        "reason": "short_history",
+        "sessions": 197
+      },
+      {
+        "symbol": "ICICIAMC",
+        "reason": "short_history",
+        "sessions": 176
+      },
+      {
+        "symbol": "IDEA",
+        "reason": "min_price",
+        "close": 13.94
+      },
+      {
+        "symbol": "IDFNIFTYET",
+        "reason": "min_turnover",
+        "turnover": 451901.9570000001
+      },
+      {
+        "symbol": "IMPAL",
+        "reason": "min_turnover",
+        "turnover": 2470354.1900000004
+      },
+      {
+        "symbol": "INA",
+        "reason": "short_history",
+        "sessions": 120
+      },
+      {
+        "symbol": "INCREDIBLE",
+        "reason": "min_turnover",
+        "turnover": 189853.994
+      },
+      {
+        "symbol": "INDBANK",
+        "reason": "min_turnover",
+        "turnover": 947480.4820000001
+      },
+      {
+        "symbol": "INDIANCARD",
+        "reason": "min_turnover",
+        "turnover": 722890.2900000002
+      },
+      {
+        "symbol": "INDOFARM",
+        "reason": "unresolved_ca_gap"
+      },
+      {
+        "symbol": "INDOTECH",
+        "reason": "unresolved_ca_gap"
+      },
+      {
+        "symbol": "INDOTHAI",
+        "reason": "short_history",
+        "sessions": 189
+      },
+      {
+        "symbol": "INDOUS",
+        "reason": "min_turnover",
+        "turnover": 1662245.9170000001
+      },
+      {
+        "symbol": "INDOWIND",
+        "reason": "min_price",
+        "close": 9.17
+      },
+      {
+        "symbol": "INDPRUD",
+        "reason": "short_history",
+        "sessions": 85
+      },
+      {
+        "symbol": "INDSWFTLTD",
+        "reason": "short_history",
+        "sessions": 82
+      },
+      {
+        "symbol": "INDTERRAIN",
+        "reason": "min_turnover",
+        "turnover": 2333265.0565
+      },
+      {
+        "symbol": "INFIBEAM",
+        "reason": "min_price",
+        "close": 16.9
+      },
+      {
+        "symbol": "INFOMEDIA",
+        "reason": "min_price",
+        "close": 5.11
+      },
+      {
+        "symbol": "INFRA",
+        "reason": "short_history",
+        "sessions": 133
+      },
+      {
+        "symbol": "INNOVANA",
+        "reason": "min_turnover",
+        "turnover": 1634583.415
+      },
+      {
+        "symbol": "INNOVISION",
+        "reason": "short_history",
+        "sessions": 110
+      },
+      {
+        "symbol": "INSPIRISYS",
+        "reason": "short_history",
+        "sessions": 239
+      },
+      {
+        "symbol": "INTENTECH",
+        "reason": "min_turnover",
+        "turnover": 4079690.4255000004
+      },
+      {
+        "symbol": "INTERNET",
+        "reason": "min_price",
+        "close": 14.58
+      },
+      {
+        "symbol": "INTLCONV",
+        "reason": "min_turnover",
+        "turnover": 4892569.726
+      },
+      {
+        "symbol": "INVENTURE",
+        "reason": "min_price",
+        "close": 0.86
+      },
+      {
+        "symbol": "IRB",
+        "reason": "min_price",
+        "close": 18.95
+      },
+      {
+        "symbol": "IRIS",
+        "reason": "short_history",
+        "sessions": 243
+      },
+      {
+        "symbol": "ISFT",
+        "reason": "min_turnover",
+        "turnover": 4425737.0975
+      },
+      {
+        "symbol": "ISHANCH",
+        "reason": "min_turnover",
+        "turnover": 4730666.93
+      },
+      {
+        "symbol": "ITADD",
+        "reason": "short_history",
+        "sessions": 180
+      },
+      {
+        "symbol": "ITBETA",
+        "reason": "short_history",
+        "sessions": 173
+      },
+      {
+        "symbol": "ITDCEM",
+        "reason": "short_history",
+        "sessions": 182
+      },
+      {
+        "symbol": "ITETFADD",
+        "reason": "short_history",
+        "sessions": 244
+      },
+      {
+        "symbol": "ITI",
+        "reason": "unresolved_ca_gap"
+      },
+      {
+        "symbol": "IVALUE",
+        "reason": "short_history",
+        "sessions": 236
+      },
+      {
+        "symbol": "IVC",
+        "reason": "min_price",
+        "close": 8.2
+      },
+      {
+        "symbol": "IVZINGOLD",
+        "reason": "min_turnover",
+        "turnover": 3879710.7024999997
+      },
+      {
+        "symbol": "IVZINNIFTY",
+        "reason": "min_turnover",
+        "turnover": 1014079.0229999998
+      },
+      {
+        "symbol": "IWEL",
+        "reason": "short_history",
+        "sessions": 121
+      },
+      {
+        "symbol": "IWP",
+        "reason": "short_history",
+        "sessions": 90
+      },
+      {
+        "symbol": "IZMO",
+        "reason": "short_history",
+        "sessions": 171
+      },
+      {
+        "symbol": "JAINREC",
+        "reason": "short_history",
+        "sessions": 232
+      },
+      {
+        "symbol": "JAIPURKURT",
+        "reason": "min_turnover",
+        "turnover": 1223736.325
+      },
+      {
+        "symbol": "JARO",
+        "reason": "short_history",
+        "sessions": 233
+      },
+      {
+        "symbol": "JAYAGROGN",
+        "reason": "min_turnover",
+        "turnover": 2855030.9760000007
+      },
+      {
+        "symbol": "JAYKAY",
+        "reason": "short_history",
+        "sessions": 188
+      },
+      {
+        "symbol": "JCHAC",
+        "reason": "short_history",
+        "sessions": 251
+      },
+      {
+        "symbol": "JETFREIGHT",
+        "reason": "min_turnover",
+        "turnover": 4803166.606999999
+      },
+      {
+        "symbol": "JHS",
+        "reason": "min_price",
+        "close": 8.29
+      },
+      {
+        "symbol": "JINDALPHOT",
+        "reason": "min_turnover",
+        "turnover": 2167205.8600000003
+      },
+      {
+        "symbol": "JISLDVREQS",
+        "reason": "min_turnover",
+        "turnover": 1121839.7200000002
+      },
+      {
+        "symbol": "JITFINFRA",
+        "reason": "short_history",
+        "sessions": 201
+      },
+      {
+        "symbol": "JKIPL",
+        "reason": "short_history",
+        "sessions": 141
+      },
+      {
+        "symbol": "JMA",
+        "reason": "min_turnover",
+        "turnover": 1152010.5990000002
+      },
+      {
+        "symbol": "JPPOWER",
+        "reason": "min_price",
+        "close": 17.1
+      },
+      {
+        "symbol": "JSWDULUX",
+        "reason": "short_history",
+        "sessions": 93
+      },
+      {
+        "symbol": "JYOTISTRUC",
+        "reason": "min_price",
+        "close": 10.57
+      },
+      {
+        "symbol": "KALYANIFRG",
+        "reason": "min_turnover",
+        "turnover": 4394635.630000001
+      },
+      {
+        "symbol": "KAMAHOLD",
+        "reason": "short_history",
+        "sessions": 90
+      },
+      {
+        "symbol": "KAMOPAINTS",
+        "reason": "short_history",
+        "sessions": 250
+      },
+      {
+        "symbol": "KANANIIND",
+        "reason": "min_price",
+        "close": 1.5
+      },
+      {
+        "symbol": "KANORICHEM",
+        "reason": "min_turnover",
+        "turnover": 4314934.5335
+      },
+      {
+        "symbol": "KARMAENG",
+        "reason": "min_turnover",
+        "turnover": 252109.49999999994
+      },
+      {
+        "symbol": "KAUSHALYA",
+        "reason": "min_turnover",
+        "turnover": 3681270.125
+      },
+      {
+        "symbol": "KAVDEFENCE",
+        "reason": "short_history",
+        "sessions": 113
+      },
+      {
+        "symbol": "KEEPLEARN",
+        "reason": "min_price",
+        "close": 1.91
+      },
+      {
+        "symbol": "KELLTONTEC",
+        "reason": "min_price",
+        "close": 13.56
+      },
+      {
+        "symbol": "KENNAMET",
+        "reason": "short_history",
+        "sessions": 90
+      },
+      {
+        "symbol": "KESORAMIND",
+        "reason": "short_history",
+        "sessions": 166
+      },
+      {
+        "symbol": "KEYFINSERV",
+        "reason": "min_turnover",
+        "turnover": 416369.46550000005
+      },
+      {
+        "symbol": "KHAICHEM",
+        "reason": "unresolved_ca_gap"
+      },
+      {
+        "symbol": "KHAITANLTD",
+        "reason": "min_turnover",
+        "turnover": 3285532.069
+      },
+      {
+        "symbol": "KHANDSE",
+        "reason": "min_price",
+        "close": 17.5
+      },
+      {
+        "symbol": "KIRANVYPAR",
+        "reason": "short_history",
+        "sessions": 88
+      },
+      {
+        "symbol": "KIRLFER",
+        "reason": "short_history",
+        "sessions": 90
+      },
+      {
+        "symbol": "KLBRENG-B",
+        "reason": "short_history",
+        "sessions": 90
+      },
+      {
+        "symbol": "KNAGRI",
+        "reason": "short_history",
+        "sessions": 184
+      },
+      {
+        "symbol": "KOKUYOCMLN",
+        "reason": "min_turnover",
+        "turnover": 4664345.977500001
+      },
+      {
+        "symbol": "KOTHARIPRO",
+        "reason": "min_turnover",
+        "turnover": 747905.311
+      },
+      {
+        "symbol": "KOTIC",
+        "reason": "short_history",
+        "sessions": 90
+      },
+      {
+        "symbol": "KOVAI",
+        "reason": "short_history",
+        "sessions": 90
+      },
+      {
+        "symbol": "KPL",
+        "reason": "short_history",
+        "sessions": 90
+      }
+    ],
+    "n_excluded_listed": 500,
+    "n_excluded": 1071,
+    "turnover": {
+      "min_required": 5000000.0,
+      "p25": 12196467.9,
+      "p50": 88799213.89,
+      "p75": 406082905.08,
+      "p90": 1486380157.73
+    },
+    "min_price": 20.0,
+    "min_sessions": 260,
+    "symbols": [
+      "20MICRONS",
+      "360ONE",
+      "3IINFOLTD",
+      "3MINDIA",
+      "5PAISA",
+      "63MOONS",
+      "AADHARHFC",
+      "AARON",
+      "AARTIDRUGS",
+      "AARTIIND",
+      "AARTIPHARM",
+      "AARTISURF",
+      "AARVI",
+      "AAVAS",
+      "ABB",
+      "ABBOTINDIA",
+      "ABCAPITAL",
+      "ABDL",
+      "ABLBL",
+      "ABREL",
+      "ABSLAMC",
+      "ACC",
+      "ACCELYA",
+      "ACE",
+      "ACI",
+      "ACMESOLAR",
+      "ACUTAAS",
+      "ADANIENSOL",
+      "ADANIENT",
+      "ADANIGREEN",
+      "ADANIPORTS",
+      "ADANIPOWER",
+      "ADFFOODS",
+      "ADOR",
+      "ADSL",
+      "ADVENZYMES",
+      "AEGISLOG",
+      "AEGISVOPAK",
+      "AEROENTER",
+      "AEROFLEX",
+      "AETHER",
+      "AFCONS",
+      "AFFLE",
+      "AFFORDABLE",
+      "AGARIND",
+      "AGARWALEYE",
+      "AGI",
+      "AGIIL",
+      "AHLUCONT",
+      "AIAENG",
+      "AIIL",
+      "AJANTPHARM",
+      "AJAXENGG",
+      "AJMERA",
+      "AKSHARCHEM",
+      "AKUMS",
+      "AKZOINDIA",
+      "ALBERTDAVD",
+      "ALEMBICLTD",
+      "ALICON",
+      "ALIVUS",
+      "ALKALI",
+      "ALKEM",
+      "ALKYLAMINE",
+      "ALLDIGI",
+      "ALLTIME",
+      "ALPHA",
+      "ALPHAETF",
+      "ALPHAGEO",
+      "ALPL30IETF",
+      "AMBER",
+      "AMBIKCO",
+      "AMBUJACEM",
+      "AMRUTANJAN",
+      "ANANDRATHI",
+      "ANANTRAJ",
+      "ANDHRAPAP",
+      "ANDHRSUGAR",
+      "ANGELONE",
+      "ANTHEM",
+      "ANUP",
+      "ANURAS",
+      "AONELIQUID",
+      "APARINDS",
+      "APCOTEXIND",
+      "APEX",
+      "APLAPOLLO",
+      "APLLTD",
+      "APOLLO",
+      "APOLLOHOSP",
+      "APOLLOPIPE",
+      "APOLLOTYRE",
+      "APTECHT",
+      "APTUS",
+      "ARE&M",
+      "ARIES",
+      "ARIHANTCAP",
+      "ARKADE",
+      "ARMANFIN",
+      "ARROWGREEN",
+      "ARTEMISMED",
+      "ARVIND",
+      "ARVINDFASN",
+      "ARVSMART",
+      "ASAHIINDIA",
+      "ASAHISONG",
+      "ASAL",
+      "ASALCBR",
+      "ASHAPURMIN",
+      "ASHIANA",
+      "ASHOKA",
+      "ASHOKLEY",
+      "ASIANENE",
+      "ASIANHOTNR",
+      "ASIANPAINT",
+      "ASIANTILES",
+      "ASKAUTOLTD",
+      "ASTEC",
+      "ASTERDM",
+      "ASTRAL",
+      "ASTRAMICRO",
+      "ASTRAZEN",
+      "ATALREAL",
+      "ATGL",
+      "ATHERENERG",
+      "ATLANTAA",
+      "ATUL",
+      "ATULAUTO",
+      "AUBANK",
+      "AURIONPRO",
+      "AUROPHARMA",
+      "AURUM",
+      "AUTOAXLES",
+      "AUTOBEES",
+      "AUTOIETF",
+      "AUTOIND",
+      "AVADHSUGAR",
+      "AVALON",
+      "AVANTEL",
+      "AVANTIFEED",
+      "AVG",
+      "AVL",
+      "AVTNPL",
+      "AWFIS",
+      "AWHCL",
+      "AWL",
+      "AXISBANK",
+      "AXISGOLD",
+      "AXISILVER",
+      "AXISNIFTY",
+      "AXISTECETF",
+      "AYMSYNTEX",
+      "AZAD",
+      "BAJAJ-AUTO",
+      "BAJAJCON",
+      "BAJAJELEC",
+      "BAJAJFINSV",
+      "BAJAJHCARE",
+      "BAJAJHFL",
+      "BAJAJHIND",
+      "BAJAJHLDNG",
+      "BAJEL",
+      "BAJFINANCE",
+      "BALAMINES",
+      "BALKRISIND",
+      "BALMLAWRIE",
+      "BALRAMCHIN",
+      "BALUFORGE",
+      "BANARISUG",
+      "BANCOINDIA",
+      "BANDHANBNK",
+      "BANKBARODA",
+      "BANKBEES",
+      "BANKETF",
+      "BANKIETF",
+      "BANKINDIA",
+      "BANSALWIRE",
+      "BASF",
+      "BASML",
+      "BATAINDIA",
+      "BAYERCROP",
+      "BBL",
+      "BBOX",
+      "BBTC",
+      "BBTCL",
+      "BCLIND",
+      "BDL",
+      "BECTORFOOD",
+      "BEL",
+      "BELRISE",
+      "BEML",
+      "BEPL",
+      "BERGEPAINT",
+      "BFINVEST",
+      "BFSI",
+      "BFUTILITIE",
+      "BHAGCHEM",
+      "BHAGERIA",
+      "BHARATFORG",
+      "BHARATGEAR",
+      "BHARATRAS",
+      "BHARATSE",
+      "BHARATWIRE",
+      "BHARTIARTL",
+      "BHARTIHEXA",
+      "BHEL",
+      "BIKAJI",
+      "BIL",
+      "BIOCON",
+      "BIRLACABLE",
+      "BIRLACORPN",
+      "BIRLANU",
+      "BLACKBUCK",
+      "BLISSGVS",
+      "BLKASHYAP",
+      "BLS",
+      "BLSE",
+      "BLUEDART",
+      "BLUEJET",
+      "BLUESTARCO",
+      "BLUESTONE",
+      "BLUSPRING",
+      "BODALCHEM",
+      "BOMDYEING",
+      "BOROLTD",
+      "BORORENEW",
+      "BOROSCI",
+      "BOSCHLTD",
+      "BPCL",
+      "BRIGADE",
+      "BRIGHOTEL",
+      "BRITANNIA",
+      "BSE",
+      "BSE500IETF",
+      "BSLGOLDETF",
+      "BSLNIFTY",
+      "BSOFT",
+      "BUTTERFLY",
+      "CAMPUS",
+      "CAMS",
+      "CANBK",
+      "CANFINHOME",
+      "CANTABIL",
+      "CAPACITE",
+      "CAPITALSFB",
+      "CAPLIPOINT",
+      "CARBORUNIV",
+      "CARERATING",
+      "CARRARO",
+      "CARTRADE",
+      "CARYSIL",
+      "CASHIETF",
+      "CASTROLIND",
+      "CCL",
+      "CDSL",
+      "CEATLTD",
+      "CEIGALL",
+      "CELLO",
+      "CENTENKA",
+      "CENTEXT",
+      "CENTRALBK",
+      "CENTRUM",
+      "CENTUM",
+      "CENTURYPLY",
+      "CERA",
+      "CESC",
+      "CEWATER",
+      "CGCL",
+      "CGPOWER",
+      "CHALET",
+      "CHAMBLFERT",
+      "CHEMCON",
+      "CHEMFAB",
+      "CHEMPLASTS",
+      "CHENNPETRO",
+      "CHEVIOT",
+      "CHOICEIN",
+      "CHOLAFIN",
+      "CHOLAHLDNG",
+      "CIEINDIA",
+      "CIGNITITEC",
+      "CIPLA",
+      "CLEAN",
+      "CLSEL",
+      "CMSINFO",
+      "COALINDIA",
+      "COASTCORP",
+      "COCHINSHIP",
+      "COFORGE",
+      "COHANCE",
+      "COLPAL",
+      "COMMOIETF",
+      "COMSYN",
+      "CONCOR",
+      "CONCORDBIO",
+      "CONFIPET",
+      "CONSOFINVT",
+      "CONSUMBEES",
+      "CONTROLPR",
+      "CORALFINAC",
+      "CORDSCABLE",
+      "COROMANDEL",
+      "COSMOFIRST",
+      "CPPLUS",
+      "CPSEETF",
+      "CRAFTSMAN",
+      "CREDITACC",
+      "CRISIL",
+      "CRIZAC",
+      "CROMPTON",
+      "CSBBANK",
+      "CSLFINANCE",
+      "CUB",
+      "CUMMINSIND",
+      "CUPID",
+      "CYIENT",
+      "CYIENTDLM",
+      "DABUR",
+      "DALBHARAT",
+      "DALMIASUG",
+      "DAMCAPITAL",
+      "DATAMATICS",
+      "DATAPATTNS",
+      "DBCORP",
+      "DBL",
+      "DBREALTY",
+      "DBSTOCKBRO",
+      "DCAL",
+      "DCBBANK",
+      "DCI",
+      "DCMNVL",
+      "DCMSHRIRAM",
+      "DCW",
+      "DCXINDIA",
+      "DDEVPLSTIK",
+      "DECCANCE",
+      "DEEDEV",
+      "DEEPAKFERT",
+      "DEEPAKNTR",
+      "DEEPINDS",
+      "DELHIVERY",
+      "DELTACORP",
+      "DEN",
+      "DENORA",
+      "DENTA",
+      "DEVYANI",
+      "DHAMPURSUG",
+      "DHANBANK",
+      "DHANUKA",
+      "DHARMAJ",
+      "DIACABS",
+      "DIAMONDYD",
+      "DICIND",
+      "DIFFNKG",
+      "DIGITIDE",
+      "DIVGIITTS",
+      "DIVISLAB",
+      "DIXON",
+      "DJML",
+      "DLF",
+      "DLINKINDIA",
+      "DMART",
+      "DMCC",
+      "DODLA",
+      "DOLATALGO",
+      "DOLLAR",
+      "DOMS",
+      "DPABHUSHAN",
+      "DPWIRES",
+      "DREDGECORP",
+      "DRREDDY",
+      "DSSL",
+      "DVL",
+      "DWARKESH",
+      "DYCL",
+      "DYNAMATECH",
+      "E2E",
+      "EBBETF0430",
+      "EBBETF0431",
+      "EBBETF0433",
+      "EBGNG",
+      "ECLERX",
+      "ECOSMOBLTY",
+      "EDELWEISS",
+      "EFCIL",
+      "EGOLD",
+      "EICHERMOT",
+      "EIDPARRY",
+      "EIEL",
+      "EIFFL",
+      "EIHAHOTELS",
+      "EIHOTEL",
+      "EIMCOELECO",
+      "EKC",
+      "ELDEHSG",
+      "ELECON",
+      "ELECTCAST",
+      "ELECTHERM",
+      "ELGIEQUIP",
+      "ELIN",
+      "ELLEN",
+      "EMAMILTD",
+      "EMAMIPAP",
+      "EMBDL",
+      "EMCURE",
+      "EMIL",
+      "EMMBI",
+      "EMSLIMITED",
+      "EMUDHRA",
+      "ENDURANCE",
+      "ENGINERSIN",
+      "ENRIN",
+      "ENTERO",
+      "EPACK",
+      "EPIGRAL",
+      "EPL",
+      "EQUAL50ADD",
+      "EQUITASBNK",
+      "ERIS",
+      "ESABINDIA",
+      "ESAFSFB",
+      "ESCORTS",
+      "ESILVER",
+      "ESTER",
+      "ETERNAL",
+      "ETHOSLTD",
+      "EUREKAFORB",
+      "EVEREADY",
+      "EVIETF",
+      "EVINDIA",
+      "EXCELINDUS",
+      "EXICOM",
+      "EXIDEIND",
+      "EXPLEOSOL",
+      "FACT",
+      "FAIRCHEMOR",
+      "FAZE3Q",
+      "FCL",
+      "FDC",
+      "FEDERALBNK",
+      "FEDFINA",
+      "FIEMIND",
+      "FILATEX",
+      "FINCABLES",
+      "FINEORG",
+      "FINIETF",
+      "FINOPB",
+      "FINPIPE",
+      "FIRSTCRY",
+      "FISCHER",
+      "FIVESTAR",
+      "FLAIR",
+      "FLUOROCHEM",
+      "FMCGIETF",
+      "FMGOETZE",
+      "FOCUS",
+      "FOODSIN",
+      "FORCEMOT",
+      "FORTIS",
+      "FOSECOIND",
+      "FSL",
+      "FUSION",
+      "GABRIEL",
+      "GAEL",
+      "GAIL",
+      "GALAPREC",
+      "GALAXYSURF",
+      "GALLANTT",
+      "GANDHAR",
+      "GANDHITUBE",
+      "GANECOS",
+      "GANESHBE",
+      "GARFIBRES",
+      "GARUDA",
+      "GATEWAY",
+      "GENCON",
+      "GENESYS",
+      "GENUSPOWER",
+      "GEOJITFSL",
+      "GESHIP",
+      "GFLLIMITED",
+      "GHCL",
+      "GHCLTEXTIL",
+      "GICHSGFIN",
+      "GICRE",
+      "GILLETTE",
+      "GILT5YBEES",
+      "GINNIFILA",
+      "GIPCL",
+      "GLAND",
+      "GLAXO",
+      "GLENMARK",
+      "GLOBAL",
+      "GLOBUSSPR",
+      "GMBREW",
+      "GMDCLTD",
+      "GMMPFAUDLR",
+      "GMRAIRPORT",
+      "GMRP&UI",
+      "GNA",
+      "GNFC",
+      "GOCLCORP",
+      "GOCOLORS",
+      "GODAVARIB",
+      "GODFRYPHLP",
+      "GODIGIT",
+      "GODREJAGRO",
+      "GODREJCP",
+      "GODREJIND",
+      "GODREJPROP",
+      "GOKEX",
+      "GOKUL",
+      "GOKULAGRO",
+      "GOLD1",
+      "GOLDBEES",
+      "GOLDCASE",
+      "GOLDETF",
+      "GOLDIAM",
+      "GOLDIETF",
+      "GOLDTECH",
+      "GOODLUCK",
+      "GOPAL",
+      "GPIL",
+      "GPPL",
+      "GPTHEALTH",
+      "GPTINFRA",
+      "GRANULES",
+      "GRAPHITE",
+      "GRASIM",
+      "GRAVITA",
+      "GREAVESCOT",
+      "GREENLAM",
+      "GREENPANEL",
+      "GREENPLY",
+      "GRINDWELL",
+      "GRINFRA",
+      "GRMOVER",
+      "GROWWDEFNC",
+      "GROWWEV",
+      "GROWWLIQID",
+      "GROWWRAIL",
+      "GRSE",
+      "GRWRHITECH",
+      "GSFC",
+      "GSPL",
+      "GUFICBIO",
+      "GUJALKALI",
+      "GUJGASLTD",
+      "GUJTHEM",
+      "GULFOILLUB",
+      "GULFPETRO",
+      "GULPOLY",
+      "GVT&D",
+      "HAL",
+      "HAPPSTMNDS",
+      "HAPPYFORGE",
+      "HARIOMPIPE",
+      "HARSHA",
+      "HATSUN",
+      "HAVELLS",
+      "HBLENGINE",
+      "HCC",
+      "HCG",
+      "HCLTECH",
+      "HDBFS",
+      "HDFCAMC",
+      "HDFCBANK",
+      "HDFCBSE500",
+      "HDFCGOLD",
+      "HDFCGROWTH",
+      "HDFCLIFE",
+      "HDFCLIQUID",
+      "HDFCMID150",
+      "HDFCNEXT50",
+      "HDFCNIFBAN",
+      "HDFCNIFIT",
+      "HDFCNIFTY",
+      "HDFCPSUBK",
+      "HDFCPVTBAN",
+      "HDFCSILVER",
+      "HDFCSML250",
+      "HEALTHIETF",
+      "HEG",
+      "HEIDELBERG",
+      "HEMIPROP",
+      "HERITGFOOD",
+      "HEROMOTOCO",
+      "HESTERBIO",
+      "HEXT",
+      "HFCL",
+      "HGINFRA",
+      "HGS",
+      "HIKAL",
+      "HILTON",
+      "HIMATSEIDE",
+      "HINDALCO",
+      "HINDCOPPER",
+      "HINDOILEXP",
+      "HINDPETRO",
+      "HINDUNILVR",
+      "HINDWAREAP",
+      "HINDZINC",
+      "HIRECT",
+      "HITECH",
+      "HITECHCORP",
+      "HLEGLAS",
+      "HMAAGRO",
+      "HMVL",
+      "HNDFDS",
+      "HNGSNGBEES",
+      "HOMEFIRST",
+      "HONASA",
+      "HONAUT",
+      "HONDAPOWER",
+      "HPAL",
+      "HPL",
+      "HSCL",
+      "HTMEDIA",
+      "HUBTOWN",
+      "HUDCO",
+      "HUHTAMAKI",
+      "HYUNDAI",
+      "ICEMAKE",
+      "ICICIB22",
+      "ICICIBANK",
+      "ICICIGI",
+      "ICICIPRULI",
+      "ICIL",
+      "ICRA",
+      "IDBI",
+      "IDEAFORGE",
+      "IDFCFIRSTB",
+      "IEX",
+      "IFBAGRO",
+      "IFBIND",
+      "IFCI",
+      "IFGLEXPOR",
+      "IGARASHI",
+      "IGCL",
+      "IGIL",
+      "IGL",
+      "IGPL",
+      "IIFL",
+      "IIFLCAPS",
+      "IITL",
+      "IKIO",
+      "IKS",
+      "IMAGICAA",
+      "IMFA",
+      "INDGN",
+      "INDHOTEL",
+      "INDIACEM",
+      "INDIAGLYCO",
+      "INDIAMART",
+      "INDIANB",
+      "INDIANHUME",
+      "INDIASHLTR",
+      "INDIGO",
+      "INDIGOPNTS",
+      "INDIQUBE",
+      "INDNIPPON",
+      "INDOAMIN",
+      "INDOBORAX",
+      "INDOCO",
+      "INDORAMA",
+      "INDOSTAR",
+      "INDRAMEDCO",
+      "INDSWFTLAB",
+      "INDUSINDBK",
+      "INDUSTOWER",
+      "INFOBEAN",
+      "INFRABEES",
+      "INFRAIETF",
+      "INFY",
+      "INGERRAND",
+      "INNOVACAP",
+      "INOXGREEN",
+      "INOXINDIA",
+      "INOXWIND",
+      "INSECTICID",
+      "INTELLECT",
+      "INTERARCH",
+      "IOB",
+      "IOC",
+      "IOLCP",
+      "IONEXCHANG",
+      "IPCALAB",
+      "IPL",
+      "IRCON",
+      "IRCTC",
+      "IREDA",
+      "IRFC",
+      "IRISDOREME",
+      "IRMENERGY",
+      "ISGEC",
+      "IT",
+      "ITBEES",
+      "ITC",
+      "ITCHOTELS",
+      "ITDC",
+      "ITETF",
+      "ITIETF",
+      "IVP",
+      "IXIGO",
+      "J&KBANK",
+      "JAGRAN",
+      "JAGSNPHARM",
+      "JAIBALAJI",
+      "JAICORPLTD",
+      "JAMNAAUTO",
+      "JASH",
+      "JAYBARMARU",
+      "JAYNECOIND",
+      "JAYSREETEA",
+      "JBCHEPHARM",
+      "JBMA",
+      "JGCHEM",
+      "JINDALPOLY",
+      "JINDALSAW",
+      "JINDALSTEL",
+      "JINDRILL",
+      "JINDWORLD",
+      "JIOFIN",
+      "JISLJALEQS",
+      "JKCEMENT",
+      "JKIL",
+      "JKLAKSHMI",
+      "JKPAPER",
+      "JKTYRE",
+      "JLHL",
+      "JMFINANCIL",
+      "JNKINDIA",
+      "JOCIL",
+      "JPOLYINVST",
+      "JSFB",
+      "JSL",
+      "JSLL",
+      "JSWCEMENT",
+      "JSWENERGY",
+      "JSWHL",
+      "JSWINFRA",
+      "JSWSTEEL",
+      "JTEKTINDIA",
+      "JTLIND",
+      "JUBLCPL",
+      "JUBLFOOD",
+      "JUBLINGREA",
+      "JUBLPHARMA",
+      "JUNIORBEES",
+      "JUNIPER",
+      "JUSTDIAL",
+      "JWL",
+      "JYOTHYLAB",
+      "JYOTICNC",
+      "KABRAEXTRU",
+      "KAJARIACER",
+      "KAKATCEM",
+      "KALAMANDIR",
+      "KALPATARU",
+      "KALYANKJIL",
+      "KAMATHOTEL",
+      "KAMDHENU",
+      "KANPRPLA",
+      "KANSAINER",
+      "KAPSTON",
+      "KARURVYSYA",
+      "KAYA",
+      "KAYNES",
+      "KCP",
+      "KCPSUGIND",
+      "KDDL",
+      "KEC",
+      "KECL",
+      "KEI",
+      "KERNEX",
+      "KFINTECH",
+      "KHADIM",
+      "KICL",
+      "KILITCH",
+      "KIMS",
+      "KINGFA",
+      "KIOCL",
+      "KIRIINDUS",
+      "KIRLOSBROS",
+      "KIRLOSENG",
+      "KIRLOSIND",
+      "KIRLPNU",
+      "KITEX",
+      "KKCL",
+      "KMEW",
+      "KMSUGAR",
+      "KNRCON",
+      "KOHINOOR",
+      "KOLTEPATIL",
+      "KOPRAN",
+      "KOTAKBANK",
+      "KOTARISUG",
+      "KOTHARIPET",
+      "KPEL",
+      "KPIGREEN",
+      "KPIL",
+      "KPITTECH",
+      "KPRMILL",
+      "KRBL",
+      "KRISHANA",
+      "KRITI",
+      "KRN",
+      "KRONOX",
+      "KROSS",
+      "KRSNAA",
+      "KRYSTAL",
+      "KSB",
+      "KSCL",
+      "KSL",
+      "KSOLVES",
+      "KTKBANK",
+      "KUANTUM",
+      "LALPATHLAB",
+      "LANCORHOL",
+      "LANDMARK",
+      "LAOPALA",
+      "LATENTVIEW",
+      "LAURUSLABS",
+      "LAXMIDENTL",
+      "LEMONTREE",
+      "LGBBROSLTD",
+      "LIBERTSHOE",
+      "LICHSGFIN",
+      "LICI",
+      "LIKHITHA",
+      "LINCOLN",
+      "LINDEINDIA",
+      "LIQGRWBEES",
+      "LIQUID",
+      "LIQUID1",
+      "LIQUIDADD",
+      "LIQUIDBEES",
+      "LIQUIDBETF",
+      "LIQUIDCASE",
+      "LIQUIDETF",
+      "LIQUIDIETF",
+      "LIQUIDPLUS",
+      "LIQUIDSBI",
+      "LIQUIDSHRI",
+      "LLOYDSENGG",
+      "LLOYDSENT",
+      "LLOYDSME",
+      "LMW",
+      "LODHA",
+      "LOTUSDEV",
+      "LOWVOL1",
+      "LOWVOLIETF",
+      "LT",
+      "LTF",
+      "LTFOODS",
+      "LTGILTBEES",
+      "LTIM",
+      "LTTS",
+      "LUMAXIND",
+      "LUMAXTECH",
+      "LUPIN",
+      "LUXIND",
+      "LXCHEM",
+      "LYKALABS",
+      "M&M",
+      "M&MFIN",
+      "MACPOWER",
+      "MAFANG",
+      "MAGADSUGAR",
+      "MAHABANK",
+      "MAHKTECH",
+      "MAHLIFE",
+      "MAHLOG",
+      "MAHSCOOTER",
+      "MAHSEAMLES",
+      "MAITHANALL",
+      "MAKEINDIA",
+      "MAMATA",
+      "MANAKCOAT",
+      "MANAKSTEEL",
+      "MANALIPETC",
+      "MANAPPURAM",
+      "MANBA",
+      "MANCREDIT",
+      "MANGLMCEM",
+      "MANINDS",
+      "MANINFRA",
+      "MANKIND",
+      "MANOMAY",
+      "MANORAMA",
+      "MANORG",
+      "MANYAVAR",
+      "MAPMYINDIA",
+      "MARATHON",
+      "MARICO",
+      "MARKSANS",
+      "MARUTI",
+      "MASFIN",
+      "MASPTOP50",
+      "MASTEK",
+      "MASTERTR",
+      "MATRIMONY",
+      "MAWANASUG",
+      "MAXESTATES",
+      "MAXHEALTH",
+      "MAXIND",
+      "MAYURUNIQ",
+      "MAZDA",
+      "MAZDOCK",
+      "MBAPL",
+      "MBEL",
+      "MCLOUD",
+      "MCX",
+      "MEDANTA",
+      "MEDIASSIST",
+      "MEDICO",
+      "MEDPLUS",
+      "MENONBE",
+      "METROBRAND",
+      "METROPOLIS",
+      "MFSL",
+      "MGL",
+      "MHLXMIRU",
+      "MHRIL",
+      "MICEL",
+      "MID150BEES",
+      "MIDCAPETF",
+      "MIDCAPIETF",
+      "MIDHANI",
+      "MIDSELIETF",
+      "MIDSMALL",
+      "MINDACORP",
+      "MINDTECK",
+      "MIRZAINT",
+      "MMFL",
+      "MMP",
+      "MMTC",
+      "MOBIKWIK",
+      "MOCAPITAL",
+      "MODEFENCE",
+      "MODISONLTD",
+      "MOGOLD",
+      "MOGSEC",
+      "MOIL",
+      "MOL",
+      "MOLDTECH",
+      "MOLDTKPAC",
+      "MOLOWVOL",
+      "MOM100",
+      "MOM30IETF",
+      "MOMENTUM50",
+      "MOMIDMTM",
+      "MON100",
+      "MONARCH",
+      "MONIFTY500",
+      "MONQ50",
+      "MONTECARLO",
+      "MOQUALITY",
+      "MOREALTY",
+      "MOREPENLAB",
+      "MOSCHIP",
+      "MOSILVER",
+      "MOTHERSON",
+      "MOTILALOFS",
+      "MOVALUE",
+      "MPHASIS",
+      "MPSLTD",
+      "MRF",
+      "MRPL",
+      "MSPL",
+      "MSTCLTD",
+      "MSUMI",
+      "MTARTECH",
+      "MTNL",
+      "MUFIN",
+      "MUFTI",
+      "MUKANDLTD",
+      "MUKKA",
+      "MUNJALAU",
+      "MUNJALSHOW",
+      "MUTHOOTCAP",
+      "MUTHOOTFIN",
+      "MUTHOOTMF",
+      "MVGJL",
+      "NAHARINDUS",
+      "NAHARPOLY",
+      "NAHARSPING",
+      "NAM-INDIA",
+      "NATCOPHARM",
+      "NATIONALUM",
+      "NAUKRI",
+      "NAVA",
+      "NAVINFLUOR",
+      "NAVKARCORP",
+      "NAVNETEDUL",
+      "NAZARA",
+      "NBCC",
+      "NCC",
+      "NCLIND",
+      "NDRAUTO",
+      "NDTV",
+      "NELCAST",
+      "NELCO",
+      "NEOGEN",
+      "NESCO",
+      "NESTLEIND",
+      "NETWEB",
+      "NETWORK18",
+      "NEULANDLAB",
+      "NEWGEN",
+      "NEXT50",
+      "NEXT50IETF",
+      "NFL",
+      "NGLFINE",
+      "NH",
+      "NHPC",
+      "NIACL",
+      "NIBE",
+      "NIF100BEES",
+      "NIFTY1",
+      "NIFTYBEES",
+      "NIFTYETF",
+      "NIFTYIETF",
+      "NIITLTD",
+      "NIITMTS",
+      "NILKAMAL",
+      "NITCO",
+      "NITINSPIN",
+      "NIVABUPA",
+      "NLCINDIA",
+      "NMDC",
+      "NOCIL",
+      "NORTHARC",
+      "NPST",
+      "NRAIL",
+      "NRBBEARING",
+      "NRL",
+      "NSIL",
+      "NSLNISP",
+      "NTPC",
+      "NTPCGREEN",
+      "NUCLEUS",
+      "NUVAMA",
+      "NUVOCO",
+      "NYKAA",
+      "OAL",
+      "OBEROIRLTY",
+      "OCCLLTD",
+      "OFSS",
+      "OIL",
+      "OILCOUNTUB",
+      "OLAELEC",
+      "OLECTRA",
+      "OMAXAUTO",
+      "OMAXE",
+      "OMINFRAL",
+      "ONEPOINT",
+      "ONESOURCE",
+      "ONGC",
+      "ONMOBILE",
+      "ONWARDTEC",
+      "OPTIEMUS",
+      "ORCHPHARMA",
+      "ORICONENT",
+      "ORIENTBELL",
+      "ORIENTCEM",
+      "ORIENTELEC",
+      "ORIENTHOT",
+      "ORIENTTECH",
+      "ORISSAMINE",
+      "OSWALGREEN",
+      "OSWALPUMPS",
+      "PAGEIND",
+      "PAISALO",
+      "PAKKA",
+      "PANACEABIO",
+      "PANAMAPET",
+      "PARACABLES",
+      "PARADEEP",
+      "PARAGMILK",
+      "PARAS",
+      "PARKHOTELS",
+      "PASHUPATI",
+      "PASUPTAC",
+      "PATANJALI",
+      "PATELENG",
+      "PAYTM",
+      "PCBL",
+      "PDMJEPAPER",
+      "PDSL",
+      "PENIND",
+      "PERSISTENT",
+      "PETRONET",
+      "PFC",
+      "PFIZER",
+      "PFOCUS",
+      "PFS",
+      "PGEL",
+      "PGHH",
+      "PGHL",
+      "PGIL",
+      "PHARMABEES",
+      "PHOENIXLTD",
+      "PICCADIL",
+      "PIDILITIND",
+      "PIIND",
+      "PILANIINVS",
+      "PITTIENG",
+      "PIXTRANS",
+      "PLASTIBLEN",
+      "PLATIND",
+      "PLAZACABLE",
+      "PNB",
+      "PNBGILTS",
+      "PNBHOUSING",
+      "PNCINFRA",
+      "PNGJL",
+      "POCL",
+      "POKARNA",
+      "POLICYBZR",
+      "POLYCAB",
+      "POLYMED",
+      "POLYPLEX",
+      "PONNIERODE",
+      "POONAWALLA",
+      "POWERGRID",
+      "POWERINDIA",
+      "POWERMECH",
+      "PPAP",
+      "PPL",
+      "PPLPHARMA",
+      "PRABHA",
+      "PRAJIND",
+      "PRAKASH",
+      "PRECAM",
+      "PRECWIRE",
+      "PREMEXPLN",
+      "PREMIERENE",
+      "PREMIERPOL",
+      "PRESTIGE",
+      "PRICOLLTD",
+      "PRIMESECU",
+      "PRIMO",
+      "PRINCEPIPE",
+      "PRIVISCL",
+      "PROSTARM",
+      "PROTEAN",
+      "PRSMJOHNSN",
+      "PRUDENT",
+      "PSB",
+      "PSPPROJECT",
+      "PSUBANKADD",
+      "PSUBNKBEES",
+      "PSUBNKIETF",
+      "PTC",
+      "PTCIL",
+      "PUNJABCHEM",
+      "PURVA",
+      "PVP",
+      "PVRINOX",
+      "PVSL",
+      "PVTBANIETF",
+      "PVTBANKADD",
+      "PYRAMID",
+      "QGOLDHALF",
+      "QPOWER",
+      "QUADFUTURE",
+      "QUICKHEAL",
+      "RACLGEAR",
+      "RADHIKAJWE",
+      "RADICO",
+      "RAILTEL",
+      "RAIN",
+      "RAINBOW",
+      "RAJOOENG",
+      "RAJRATAN",
+      "RALLIS",
+      "RAMCOCEM",
+      "RAMCOIND",
+      "RAMCOSYS",
+      "RAMKY",
+      "RAMRAT",
+      "RANEHOLDIN",
+      "RATEGAIN",
+      "RATNAMANI",
+      "RATNAVEER",
+      "RAYMONDLSL",
+      "RAYMONDREL",
+      "RBA",
+      "RBLBANK",
+      "RBZJEWEL",
+      "RCF",
+      "RECLTD",
+      "REDINGTON",
+      "REDTAPE",
+      "REFEX",
+      "RELAXO",
+      "RELIABLE",
+      "RELIANCE",
+      "RELIGARE",
+      "RELTD",
+      "REMSONSIND",
+      "RENUKA",
+      "REPCOHOME",
+      "REPRO",
+      "RESPONIND",
+      "RGL",
+      "RHIM",
+      "RICOAUTO",
+      "RIIL",
+      "RISHABH",
+      "RITCO",
+      "RITES",
+      "RKFORGE",
+      "RKSWAMY",
+      "RML",
+      "ROHLTD",
+      "ROLEXRINGS",
+      "ROSSARI",
+      "ROTO",
+      "ROUTE",
+      "RPEL",
+      "RPGLIFE",
+      "RPOWER",
+      "RPPINFRA",
+      "RPSGVENT",
+      "RPTECH",
+      "RRKABEL",
+      "RSWM",
+      "RSYSTEMS",
+      "RTNINDIA",
+      "RUBYMILLS",
+      "RUPA",
+      "RUSTOMJEE",
+      "RVNL",
+      "SAFARI",
+      "SAGCEM",
+      "SAGILITY",
+      "SAHYADRI",
+      "SAIL",
+      "SAILIFE",
+      "SAKAR",
+      "SAKHTISUG",
+      "SAKSOFT",
+      "SALZERELEC",
+      "SAMBHV",
+      "SAMHI",
+      "SAMMAANCAP",
+      "SANATHAN",
+      "SANDESH",
+      "SANDHAR",
+      "SANDUMA",
+      "SANGAMIND",
+      "SANGHIIND",
+      "SANGHVIMOV",
+      "SANOFI",
+      "SANOFICONR",
+      "SANSERA",
+      "SANSTAR",
+      "SAPPHIRE",
+      "SARDAEN",
+      "SAREGAMA",
+      "SARLAPOLY",
+      "SASKEN",
+      "SATIA",
+      "SATIN",
+      "SAURASHCEM",
+      "SBC",
+      "SBCL",
+      "SBFC",
+      "SBIBPB",
+      "SBICARD",
+      "SBIETFIT",
+      "SBIETFPB",
+      "SBILIFE",
+      "SBILIQETF",
+      "SBIN",
+      "SBISILVER",
+      "SCHAEFFLER",
+      "SCHAND",
+      "SCI",
+      "SCILAL",
+      "SCODATUBES",
+      "SDBL",
+      "SDL26BEES",
+      "SEAMECLTD",
+      "SENCO",
+      "SENORES",
+      "SENSEXIETF",
+      "SEQUENT",
+      "SERVOTECH",
+      "SESHAPAPER",
+      "SETFGOLD",
+      "SETFNIF50",
+      "SETFNIFBK",
+      "SETFNN50",
+      "SFL",
+      "SGFIN",
+      "SGIL",
+      "SHAILY",
+      "SHAKTIPUMP",
+      "SHALBY",
+      "SHALPAINTS",
+      "SHANTIGEAR",
+      "SHANTIGOLD",
+      "SHARDACROP",
+      "SHARDAMOTR",
+      "SHAREINDIA",
+      "SHILPAMED",
+      "SHIVALIK",
+      "SHK",
+      "SHOPERSTOP",
+      "SHREDIGCEM",
+      "SHREECEM",
+      "SHREEPUSHK",
+      "SHREERAMA",
+      "SHRIPISTON",
+      "SHRIRAMFIN",
+      "SHRIRAMPPS",
+      "SHYAMMETL",
+      "SIGACHI",
+      "SIGIND",
+      "SIGMA",
+      "SIGNATURE",
+      "SIGNPOST",
+      "SILGO",
+      "SILVER",
+      "SILVER360",
+      "SILVERADD",
+      "SILVERBEES",
+      "SILVERCASE",
+      "SILVERIETF",
+      "SILVERTUC",
+      "SIMPLEXINF",
+      "SINDHUTRAD",
+      "SIRCA",
+      "SIS",
+      "SIYSIL",
+      "SJS",
+      "SJVN",
+      "SKIPPER",
+      "SKYGOLD",
+      "SMALLCAP",
+      "SMARTLINK",
+      "SMARTWORKS",
+      "SMCGLOBAL",
+      "SMSPHARMA",
+      "SNOWMAN",
+      "SOBHA",
+      "SOLARA",
+      "SOLARINDS",
+      "SOMANYCERA",
+      "SOMICONVEY",
+      "SONACOMS",
+      "SONAMLTD",
+      "SONATSOFTW",
+      "SOTL",
+      "SOUTHBANK",
+      "SOUTHWEST",
+      "SPAL",
+      "SPANDANA",
+      "SPARC",
+      "SPECIALITY",
+      "SPECTRUM",
+      "SPIC",
+      "SPLPETRO",
+      "SPORTKING",
+      "SRF",
+      "SRM",
+      "SSDL",
+      "SSWL",
+      "STANLEY",
+      "STAR",
+      "STARCEMENT",
+      "STARHEALTH",
+      "STCINDIA",
+      "STEELCAS",
+      "STERTOOLS",
+      "STLTECH",
+      "STOVEKRAFT",
+      "STYLAMIND",
+      "STYLEBAAZA",
+      "STYRENIX",
+      "SUBROS",
+      "SUDARSCHEM",
+      "SULA",
+      "SUMICHEM",
+      "SUMMITSEC",
+      "SUNCLAY",
+      "SUNDARMFIN",
+      "SUNDRMFAST",
+      "SUNDROP",
+      "SUNFLAG",
+      "SUNPHARMA",
+      "SUNTECK",
+      "SUNTV",
+      "SUPRAJIT",
+      "SUPREMEIND",
+      "SUPRIYA",
+      "SURAJEST",
+      "SURAKSHA",
+      "SURYAROSNI",
+      "SURYODAY",
+      "SUVEN",
+      "SUYOG",
+      "SUZLON",
+      "SWARAJENG",
+      "SWELECTES",
+      "SWIGGY",
+      "SWSOLAR",
+      "SYMPHONY",
+      "SYNGENE",
+      "SYRMA",
+      "TAJGVK",
+      "TALBROAUTO",
+      "TANLA",
+      "TARACHAND",
+      "TARC",
+      "TARIL",
+      "TARSONS",
+      "TASTYBITE",
+      "TATACHEM",
+      "TATACOMM",
+      "TATACONSUM",
+      "TATAELXSI",
+      "TATAINVEST",
+      "TATAPOWER",
+      "TATASTEEL",
+      "TATATECH",
+      "TATSILV",
+      "TATVA",
+      "TBOTEK",
+      "TBZ",
+      "TCI",
+      "TCIEXP",
+      "TCPLPACK",
+      "TCS",
+      "TDPOWERSYS",
+      "TEAMLEASE",
+      "TECH",
+      "TECHM",
+      "TECHNOE",
+      "TEGA",
+      "TEJASNET",
+      "TEXINFRA",
+      "TEXRAIL",
+      "TFCILTD",
+      "THANGAMAYL",
+      "THEJO",
+      "THELEELA",
+      "THEMISMED",
+      "THERMAX",
+      "THOMASCOOK",
+      "THOMASCOTT",
+      "THYROCARE",
+      "TI",
+      "TIIL",
+      "TIINDIA",
+      "TIL",
+      "TIMETECHNO",
+      "TIMKEN",
+      "TINNARUBR",
+      "TIPSFILMS",
+      "TIPSMUSIC",
+      "TIRUMALCHM",
+      "TITAGARH",
+      "TITAN",
+      "TMB",
+      "TNIDETF",
+      "TNPETRO",
+      "TNPL",
+      "TOKYOPLAST",
+      "TOP10ADD",
+      "TORNTPHARM",
+      "TORNTPOWER",
+      "TPLPLASTEH",
+      "TRANSRAILL",
+      "TRANSWORLD",
+      "TRAVELFOOD",
+      "TRENT",
+      "TRF",
+      "TRIDENT",
+      "TRITURBINE",
+      "TTKHLTCARE",
+      "TTKPRESTIG",
+      "TTML",
+      "TVSELECT",
+      "TVSHLTD",
+      "TVSMOTOR",
+      "TVSSCS",
+      "TVSSRICHAK",
+      "UBL",
+      "UCAL",
+      "UCOBANK",
+      "UDS",
+      "UFLEX",
+      "UGARSUGAR",
+      "UGROCAP",
+      "UJJIVANSFB",
+      "ULTRACEMCO",
+      "UNICHEMLAB",
+      "UNIDT",
+      "UNIECOM",
+      "UNIMECH",
+      "UNIONBANK",
+      "UNIPARTS",
+      "UNITDSPR",
+      "UNIVASTU",
+      "UNIVCABLES",
+      "UNOMINDA",
+      "UPL",
+      "USHAMART",
+      "UTIAMC",
+      "UTTAMSUGAR",
+      "UYFINCORP",
+      "V2RETAIL",
+      "VADILALIND",
+      "VAIBHAVGBL",
+      "VALIANTLAB",
+      "VALIANTORG",
+      "VARROC",
+      "VASCONEQ",
+      "VBL",
+      "VEEDOL",
+      "VENKEYS",
+      "VENTIVE",
+      "VENUSPIPES",
+      "VERANDA",
+      "VESUVIUS",
+      "VETO",
+      "VGUARD",
+      "VIDHIING",
+      "VIJAYA",
+      "VIMTALABS",
+      "VINATIORGA",
+      "VINCOFE",
+      "VINDHYATEL",
+      "VIPCLOTHNG",
+      "VIPIND",
+      "VISAKAIND",
+      "VISHNU",
+      "VMART",
+      "VMM",
+      "VOLTAMP",
+      "VOLTAS",
+      "VPRPL",
+      "VRLLOG",
+      "VSSL",
+      "VSTIND",
+      "VSTTILLERS",
+      "VTL",
+      "WAAREEENER",
+      "WAAREERTL",
+      "WABAG",
+      "WALCHANNAG",
+      "WANBURY",
+      "WEL",
+      "WELCORP",
+      "WELENT",
+      "WELSPUNLIV",
+      "WENDT",
+      "WESTLIFE",
+      "WHEELS",
+      "WHIRLPOOL",
+      "WINDLAS",
+      "WINDMACHIN",
+      "WIPRO",
+      "WOCKPHARMA",
+      "WONDERLA",
+      "WSTCSTPAPR",
+      "XCHANGING",
+      "XPROINDIA",
+      "YASHO",
+      "YATHARTH",
+      "YATRA",
+      "YESBANK",
+      "YUKEN",
+      "ZAGGLE",
+      "ZEEL",
+      "ZENSARTECH",
+      "ZENTEC",
+      "ZFCVINDIA",
+      "ZIMLAB",
+      "ZODIAC",
+      "ZOTA",
+      "ZUARI",
+      "ZUARIIND",
+      "ZYDUSLIFE",
+      "ZYDUSWELL"
+    ],
+    "capped_at": 100,
+    "unresolved_gaps": [
+      {
+        "symbol": "AARTECH",
+        "n_gaps": 1,
+        "first_pct": -37.0
+      },
+      {
+        "symbol": "ABFRL",
+        "n_gaps": 1,
+        "first_pct": -66.6
+      },
+      {
+        "symbol": "ABINFRA",
+        "n_gaps": 1,
+        "first_pct": 61.0
+      },
+      {
+        "symbol": "ABMINTLLTD",
+        "n_gaps": 1,
+        "first_pct": -40.5
+      },
+      {
+        "symbol": "AGRITECH",
+        "n_gaps": 1,
+        "first_pct": -38.3
+      },
+      {
+        "symbol": "AKI",
+        "n_gaps": 1,
+        "first_pct": -41.6
+      },
+      {
+        "symbol": "ALLCARGO",
+        "n_gaps": 1,
+        "first_pct": -62.0
+      },
+      {
+        "symbol": "AMIORG",
+        "n_gaps": 1,
+        "first_pct": -51.4
+      },
+      {
+        "symbol": "ARFIN",
+        "n_gaps": 1,
+        "first_pct": 50.7
+      },
+      {
+        "symbol": "ARVEE",
+        "n_gaps": 1,
+        "first_pct": -45.4
+      },
+      {
+        "symbol": "ASTRON",
+        "n_gaps": 1,
+        "first_pct": 47.8
+      },
+      {
+        "symbol": "AURIGROW",
+        "n_gaps": 1,
+        "first_pct": -68.5
+      },
+      {
+        "symbol": "AXISCADES",
+        "n_gaps": 1,
+        "first_pct": 130.5
+      },
+      {
+        "symbol": "BAGFILMS",
+        "n_gaps": 1,
+        "first_pct": -39.8
+      },
+      {
+        "symbol": "BALAJITELE",
+        "n_gaps": 1,
+        "first_pct": 42.3
+      },
+      {
+        "symbol": "BANKNIFTY1",
+        "n_gaps": 1,
+        "first_pct": -90.1
+      },
+      {
+        "symbol": "BHAGYANGR",
+        "n_gaps": 1,
+        "first_pct": 42.8
+      },
+      {
+        "symbol": "BIOFILCHEM",
+        "n_gaps": 1,
+        "first_pct": 44.0
+      },
+      {
+        "symbol": "BIRLAMONEY",
+        "n_gaps": 1,
+        "first_pct": -38.7
+      },
+      {
+        "symbol": "BLUECOAST",
+        "n_gaps": 1,
+        "first_pct": 113.6
+      },
+      {
+        "symbol": "CALSOFT",
+        "n_gaps": 1,
+        "first_pct": -39.3
+      },
+      {
+        "symbol": "CAMLINFINE",
+        "n_gaps": 1,
+        "first_pct": -35.6
+      },
+      {
+        "symbol": "CAPTRUST",
+        "n_gaps": 1,
+        "first_pct": -56.6
+      },
+      {
+        "symbol": "CHEMBOND",
+        "n_gaps": 1,
+        "first_pct": -51.8
+      },
+      {
+        "symbol": "CINELINE",
+        "n_gaps": 1,
+        "first_pct": -36.4
+      },
+      {
+        "symbol": "CONS",
+        "n_gaps": 1,
+        "first_pct": -90.1
+      },
+      {
+        "symbol": "COUNCODOS",
+        "n_gaps": 1,
+        "first_pct": -43.0
+      },
+      {
+        "symbol": "CPCAP",
+        "n_gaps": 1,
+        "first_pct": -50.4
+      },
+      {
+        "symbol": "CUBEXTUB",
+        "n_gaps": 1,
+        "first_pct": -35.9
+      },
+      {
+        "symbol": "DBOL",
+        "n_gaps": 1,
+        "first_pct": 51.3
+      },
+      {
+        "symbol": "DCMFINSERV",
+        "n_gaps": 1,
+        "first_pct": -35.5
+      },
+      {
+        "symbol": "DCMSRIND",
+        "n_gaps": 1,
+        "first_pct": -71.5
+      },
+      {
+        "symbol": "DHRUV",
+        "n_gaps": 1,
+        "first_pct": -55.7
+      },
+      {
+        "symbol": "DIGJAMLMTD",
+        "n_gaps": 1,
+        "first_pct": 41.3
+      },
+      {
+        "symbol": "DOLPHIN",
+        "n_gaps": 1,
+        "first_pct": 77.5
+      },
+      {
+        "symbol": "ELGIRUBCO",
+        "n_gaps": 2,
+        "first_pct": -61.0
+      },
+      {
+        "symbol": "ESSARSHPNG",
+        "n_gaps": 1,
+        "first_pct": -35.8
+      },
+      {
+        "symbol": "EUROTEXIND",
+        "n_gaps": 1,
+        "first_pct": -44.2
+      },
+      {
+        "symbol": "GATECH",
+        "n_gaps": 1,
+        "first_pct": -35.9
+      },
+      {
+        "symbol": "GAYAHWS",
+        "n_gaps": 1,
+        "first_pct": 117.0
+      },
+      {
+        "symbol": "GROWWGOLD",
+        "n_gaps": 1,
+        "first_pct": -90.1
+      },
+      {
+        "symbol": "GROWWSLVR",
+        "n_gaps": 1,
+        "first_pct": -90.5
+      },
+      {
+        "symbol": "GUJRAFFIA",
+        "n_gaps": 1,
+        "first_pct": -47.9
+      },
+      {
+        "symbol": "HEALTHADD",
+        "n_gaps": 1,
+        "first_pct": -89.7
+      },
+      {
+        "symbol": "HERANBA",
+        "n_gaps": 1,
+        "first_pct": 45.5
+      },
+      {
+        "symbol": "HINDMOTORS",
+        "n_gaps": 1,
+        "first_pct": -36.7
+      },
+      {
+        "symbol": "IBULLSLTD",
+        "n_gaps": 1,
+        "first_pct": 52.4
+      },
+      {
+        "symbol": "INDOFARM",
+        "n_gaps": 1,
+        "first_pct": 45.4
+      },
+      {
+        "symbol": "INDOTECH",
+        "n_gaps": 1,
+        "first_pct": 50.8
+      },
+      {
+        "symbol": "INDOUS",
+        "n_gaps": 1,
+        "first_pct": -51.4
+      },
+      {
+        "symbol": "INDSWFTLTD",
+        "n_gaps": 1,
+        "first_pct": -57.8
+      },
+      {
+        "symbol": "INSPIRISYS",
+        "n_gaps": 1,
+        "first_pct": 36.5
+      },
+      {
+        "symbol": "ITI",
+        "n_gaps": 1,
+        "first_pct": -42.3
+      },
+      {
+        "symbol": "IVZINGOLD",
+        "n_gaps": 1,
+        "first_pct": -99.0
+      },
+      {
+        "symbol": "IVZINNIFTY",
+        "n_gaps": 1,
+        "first_pct": -89.9
+      },
+      {
+        "symbol": "KAUSHALYA",
+        "n_gaps": 1,
+        "first_pct": -48.3
+      },
+      {
+        "symbol": "KESORAMIND",
+        "n_gaps": 2,
+        "first_pct": -97.3
+      },
+      {
+        "symbol": "KEYFINSERV",
+        "n_gaps": 1,
+        "first_pct": -42.2
+      },
+      {
+        "symbol": "KHAICHEM",
+        "n_gaps": 1,
+        "first_pct": 54.2
+      },
+      {
+        "symbol": "LEXUS",
+        "n_gaps": 1,
+        "first_pct": -50.5
+      },
+      {
+        "symbol": "LICMFGOLD",
+        "n_gaps": 1,
+        "first_pct": -99.0
+      },
+      {
+        "symbol": "MAHAPEXLTD",
+        "n_gaps": 1,
+        "first_pct": -55.5
+      },
+      {
+        "symbol": "MANAKALUCO",
+        "n_gaps": 1,
+        "first_pct": -45.8
+      },
+      {
+        "symbol": "MARINE",
+        "n_gaps": 1,
+        "first_pct": -35.3
+      },
+      {
+        "symbol": "MIDCAP",
+        "n_gaps": 1,
+        "first_pct": -90.1
+      },
+      {
+        "symbol": "MIDQ50ADD",
+        "n_gaps": 1,
+        "first_pct": -90.0
+      },
+      {
+        "symbol": "MOHITIND",
+        "n_gaps": 1,
+        "first_pct": -45.7
+      },
+      {
+        "symbol": "NAGAFERT",
+        "n_gaps": 1,
+        "first_pct": 50.6
+      },
+      {
+        "symbol": "NAGREEKCAP",
+        "n_gaps": 1,
+        "first_pct": -36.1
+      },
+      {
+        "symbol": "NECLIFE",
+        "n_gaps": 1,
+        "first_pct": -41.6
+      },
+      {
+        "symbol": "NINSYS",
+        "n_gaps": 1,
+        "first_pct": 48.2
+      },
+      {
+        "symbol": "NITIRAJ",
+        "n_gaps": 1,
+        "first_pct": -44.2
+      },
+      {
+        "symbol": "NURECA",
+        "n_gaps": 2,
+        "first_pct": -42.1
+      },
+      {
+        "symbol": "NV20",
+        "n_gaps": 1,
+        "first_pct": -90.1
+      },
+      {
+        "symbol": "ODIGMA",
+        "n_gaps": 2,
+        "first_pct": -46.3
+      },
+      {
+        "symbol": "ORTINGLOBE",
+        "n_gaps": 1,
+        "first_pct": -35.9
+      },
+      {
+        "symbol": "PALREDTEC",
+        "n_gaps": 2,
+        "first_pct": -36.1
+      },
+      {
+        "symbol": "PAR",
+        "n_gaps": 1,
+        "first_pct": -45.0
+      },
+      {
+        "symbol": "PSUBANK",
+        "n_gaps": 1,
+        "first_pct": -89.6
+      },
+      {
+        "symbol": "QNIFTY",
+        "n_gaps": 1,
+        "first_pct": -90.1
+      },
+      {
+        "symbol": "QUESS",
+        "n_gaps": 1,
+        "first_pct": -45.3
+      },
+      {
+        "symbol": "RAYMOND",
+        "n_gaps": 1,
+        "first_pct": -60.4
+      },
+      {
+        "symbol": "REPL",
+        "n_gaps": 1,
+        "first_pct": -39.6
+      },
+      {
+        "symbol": "RNBDENIMS",
+        "n_gaps": 1,
+        "first_pct": -82.2
+      },
+      {
+        "symbol": "ROLLT",
+        "n_gaps": 1,
+        "first_pct": -49.6
+      },
+      {
+        "symbol": "ROSSTECH",
+        "n_gaps": 1,
+        "first_pct": 70.5
+      },
+      {
+        "symbol": "SADBHAV",
+        "n_gaps": 1,
+        "first_pct": -52.6
+      },
+      {
+        "symbol": "SADHNANIQ",
+        "n_gaps": 2,
+        "first_pct": -77.0
+      },
+      {
+        "symbol": "SCHNEIDER",
+        "n_gaps": 1,
+        "first_pct": 36.1
+      },
+      {
+        "symbol": "SCPL",
+        "n_gaps": 1,
+        "first_pct": 55.0
+      },
+      {
+        "symbol": "SHANKARA",
+        "n_gaps": 1,
+        "first_pct": -85.3
+      },
+      {
+        "symbol": "SHANTI",
+        "n_gaps": 1,
+        "first_pct": -49.3
+      },
+      {
+        "symbol": "SHEMAROO",
+        "n_gaps": 1,
+        "first_pct": 52.9
+      },
+      {
+        "symbol": "SIEMENS",
+        "n_gaps": 1,
+        "first_pct": -42.9
+      },
+      {
+        "symbol": "SILVER1",
+        "n_gaps": 1,
+        "first_pct": -89.7
+      },
+      {
+        "symbol": "SKFINDIA",
+        "n_gaps": 1,
+        "first_pct": -57.3
+      },
+      {
+        "symbol": "SKMEGGPROD",
+        "n_gaps": 1,
+        "first_pct": 66.5
+      },
+      {
+        "symbol": "SOFTTECH",
+        "n_gaps": 1,
+        "first_pct": 39.9
+      },
+      {
+        "symbol": "SOMATEX",
+        "n_gaps": 1,
+        "first_pct": 35.7
+      },
+      {
+        "symbol": "SPCENET",
+        "n_gaps": 1,
+        "first_pct": -47.6
+      },
+      {
+        "symbol": "SPMLINFRA",
+        "n_gaps": 1,
+        "first_pct": -37.1
+      },
+      {
+        "symbol": "STALLION",
+        "n_gaps": 2,
+        "first_pct": 58.4
+      },
+      {
+        "symbol": "SUMEETINDS",
+        "n_gaps": 1,
+        "first_pct": 63.2
+      },
+      {
+        "symbol": "SUNDRMBRAK",
+        "n_gaps": 1,
+        "first_pct": -39.8
+      },
+      {
+        "symbol": "SVPGLOB",
+        "n_gaps": 1,
+        "first_pct": -67.5
+      },
+      {
+        "symbol": "TATAMOTORS",
+        "n_gaps": 1,
+        "first_pct": -40.2
+      },
+      {
+        "symbol": "TCIFINANCE",
+        "n_gaps": 1,
+        "first_pct": -41.6
+      },
+      {
+        "symbol": "TECILCHEM",
+        "n_gaps": 1,
+        "first_pct": -63.3
+      },
+      {
+        "symbol": "TIJARIA",
+        "n_gaps": 1,
+        "first_pct": -39.2
+      },
+      {
+        "symbol": "TIRUPATIFL",
+        "n_gaps": 1,
+        "first_pct": 35.3
+      },
+      {
+        "symbol": "TREJHARA",
+        "n_gaps": 1,
+        "first_pct": -36.7
+      },
+      {
+        "symbol": "TRIVENI",
+        "n_gaps": 1,
+        "first_pct": -50.1
+      },
+      {
+        "symbol": "TVVISION",
+        "n_gaps": 1,
+        "first_pct": -56.4
+      },
+      {
+        "symbol": "UFBL",
+        "n_gaps": 1,
+        "first_pct": 39.4
+      },
+      {
+        "symbol": "UNITEDPOLY",
+        "n_gaps": 2,
+        "first_pct": 57.4
+      },
+      {
+        "symbol": "VEDL",
+        "n_gaps": 1,
+        "first_pct": -64.9
+      },
+      {
+        "symbol": "VERTOZ",
+        "n_gaps": 1,
+        "first_pct": 7116.6
+      },
+      {
+        "symbol": "VLEGOV",
+        "n_gaps": 1,
+        "first_pct": -55.5
+      },
+      {
+        "symbol": "WEBELSOLAR",
+        "n_gaps": 1,
+        "first_pct": -39.0
+      },
+      {
+        "symbol": "WEWIN",
+        "n_gaps": 1,
+        "first_pct": -37.1
+      }
+    ],
+    "starting_store": 2660,
+    "pit_universe": {
+      "n": 2487,
+      "complete": true,
+      "source": "bhav_inferred",
+      "note": "Inferred from local NSE bhav first/last sessions. Replace with an official listing/delisting archive for research-grade survivorship.",
+      "research_grade": false
+    }
+  },
+  "sample": {
+    "symbols": 100,
+    "sample_step": 1,
+    "lookback_sessions": 220,
+    "horizon": 20,
+    "n_as_of": 262,
+    "scanner_signals": 11492,
+    "unique_setups": 944
+  },
+  "variants": {
+    "A": {
+      "n": 1463,
+      "eligible_trades": 1463,
+      "trades_per_year": 1407.16,
+      "expectancy_r": -0.2475,
+      "total_r": -362.1475,
+      "median_r": -0.6678,
+      "avg_winner": 1.2292,
+      "avg_loser": -1.1874,
+      "win_rate": 38.89,
+      "profit_factor": 0.659,
+      "max_dd_r": -430.2781,
+      "max_dd_pct": null,
+      "sharpe": -0.157,
+      "sortino": -0.206,
+      "payoff": 1.035,
+      "avg_hold": 7.62,
+      "mae": 1.156,
+      "mfe": 1.8152,
+      "failed_breakout_rate": 47.71,
+      "pct_1r": 39.78,
+      "pct_2r": 19.75,
+      "pct_stop_before_1r": 41.29,
+      "by_year": {
+        "2025": {
+          "n": 588,
+          "expectancy_r": -0.3607610490542263
+        },
+        "2026": {
+          "n": 875,
+          "expectancy_r": -0.1714514368252976
+        }
+      },
+      "by_sector": {
+        "Auto & Auto Ancillary": {
+          "n": 25,
+          "expectancy_r": 0.17392837257930222
+        },
+        "Banking & Finance": {
+          "n": 24,
+          "expectancy_r": -0.09190175587627296
+        },
+        "Capital Markets": {
+          "n": 35,
+          "expectancy_r": 0.3078965671867818
+        },
+        "Digital / New Economy": {
+          "n": 16,
+          "expectancy_r": 0.24101451379982605
+        },
+        "Energy & Power": {
+          "n": 59,
+          "expectancy_r": -0.28183756280500405
+        },
+        "FMCG / Consumer Staples": {
+          "n": 10,
+          "expectancy_r": -0.111748656748304
+        },
+        "Gems & Jewellery": {
+          "n": 20,
+          "expectancy_r": 0.12233761154249416
+        },
+        "IT / Software": {
+          "n": 22,
+          "expectancy_r": -0.47926136286540993
+        },
+        "Manufacturing & Capital Goods": {
+          "n": 64,
+          "expectancy_r": 0.25533433357193824
+        },
+        "Metals & Mining": {
+          "n": 55,
+          "expectancy_r": 0.219056383427755
+        },
+        "Miscellaneous": {
+          "n": 17,
+          "expectancy_r": -0.43437845393034913
+        },
+        "NBFC": {
+          "n": 45,
+          "expectancy_r": 0.2866178608502341
+        },
+        "Pharma & Healthcare": {
+          "n": 38,
+          "expectancy_r": 0.445294256478879
+        },
+        "Real Estate": {
+          "n": 9,
+          "expectancy_r": 0.6885487639527609
+        },
+        "Specialty Chemicals": {
+          "n": 14,
+          "expectancy_r": 0.19255712659520632
+        },
+        "Telecom & Media": {
+          "n": 17,
+          "expectancy_r": 0.14848368091634798
+        },
+        "Textiles": {
+          "n": 16,
+          "expectancy_r": -0.26369150611675957
+        },
+        "UNKNOWN": {
+          "n": 967,
+          "expectancy_r": -0.423504989641321
+        },
+        "White Goods / Consumer Durables": {
+          "n": 10,
+          "expectancy_r": -0.15724051338723316
+        }
+      },
+      "by_regime": {
+        "unknown": {
+          "n": 1463,
+          "expectancy_r": -0.24753759676419718
+        }
+      },
+      "harness": {
+        "verdict": "REJECT",
+        "insight": "No edge \u2014 -0.25R over 1463 trades. Not worth acting on.",
+        "n": 1463,
+        "mean_r": -0.2475,
+        "p_value": 0.9999999989057234,
+        "psr": 0.0,
+        "dsr": 0.0
+      },
+      "block_ci": {
+        "mean_r": -0.24753759676419718,
+        "ci_lower": -0.5231153846027016,
+        "ci_upper": -0.05701876262431541,
+        "excludes_zero": false,
+        "block": 11.0,
+        "n_eff": 67.358168885439,
+        "n_boot": 800
+      },
+      "fill_classes": {
+        "SCANNER": 1463
+      },
+      "unique_setups": 1207,
+      "avg_extension_at_fill": 14.997,
+      "fill_attempt_counts": {
+        "SCANNER": 4650
+      },
+      "unique_setups_seen": 944
+    },
+    "B": {
+      "n": 483,
+      "eligible_trades": 483,
+      "trades_per_year": 464.56,
+      "expectancy_r": 0.1072,
+      "total_r": 51.7902,
+      "median_r": -0.2131,
+      "avg_winner": 1.3256,
+      "avg_loser": -0.8702,
+      "win_rate": 44.51,
+      "profit_factor": 1.222,
+      "max_dd_r": -24.5719,
+      "max_dd_pct": null,
+      "sharpe": 0.088,
+      "sortino": 0.309,
+      "payoff": 1.523,
+      "avg_hold": 9.14,
+      "mae": 0.828,
+      "mfe": 1.0549,
+      "failed_breakout_rate": 40.79,
+      "pct_1r": 42.44,
+      "pct_2r": 22.36,
+      "pct_stop_before_1r": 36.44,
+      "by_year": {
+        "2025": {
+          "n": 146,
+          "expectancy_r": 0.18092847318201508
+        },
+        "2026": {
+          "n": 337,
+          "expectancy_r": 0.07529558728297038
+        }
+      },
+      "by_sector": {
+        "Auto & Auto Ancillary": {
+          "n": 18,
+          "expectancy_r": 0.4193672234796573
+        },
+        "Banking & Finance": {
+          "n": 10,
+          "expectancy_r": 0.23177217007825526
+        },
+        "Capital Markets": {
+          "n": 23,
+          "expectancy_r": 0.34768149041530194
+        },
+        "Digital / New Economy": {
+          "n": 3,
+          "expectancy_r": -0.7190895271435963
+        },
+        "Energy & Power": {
+          "n": 14,
+          "expectancy_r": 0.5386199630186851
+        },
+        "FMCG / Consumer Staples": {
+          "n": 2,
+          "expectancy_r": -1.0617130355133337
+        },
+        "Gems & Jewellery": {
+          "n": 14,
+          "expectancy_r": -0.18791162958847135
+        },
+        "IT / Software": {
+          "n": 5,
+          "expectancy_r": -0.6982271124522805
+        },
+        "Manufacturing & Capital Goods": {
+          "n": 27,
+          "expectancy_r": 0.197254556047146
+        },
+        "Metals & Mining": {
+          "n": 31,
+          "expectancy_r": 0.29499558469990944
+        },
+        "Miscellaneous": {
+          "n": 8,
+          "expectancy_r": -0.21442975281508214
+        },
+        "NBFC": {
+          "n": 15,
+          "expectancy_r": 0.21487096100011063
+        },
+        "Pharma & Healthcare": {
+          "n": 11,
+          "expectancy_r": 0.6694041907663487
+        },
+        "Specialty Chemicals": {
+          "n": 13,
+          "expectancy_r": -0.3958099812455167
+        },
+        "Telecom & Media": {
+          "n": 6,
+          "expectancy_r": 0.6976939979531883
+        },
+        "UNKNOWN": {
+          "n": 283,
+          "expectancy_r": 0.050906836329520755
+        }
+      },
+      "by_regime": {
+        "unknown": {
+          "n": 483,
+          "expectancy_r": 0.10722602484251596
+        }
+      },
+      "harness": {
+        "verdict": "PROMOTE",
+        "insight": "Real edge: +0.11R over 483 trades, 98% confident it beats zero (deflated for 6 trials).",
+        "n": 483,
+        "mean_r": 0.1072,
+        "p_value": 0.026673010525806614,
+        "psr": 0.9759,
+        "dsr": 0.9759
+      },
+      "block_ci": {
+        "mean_r": 0.10722602484251596,
+        "ci_lower": -0.05146859157664058,
+        "ci_upper": 0.2427732299795996,
+        "excludes_zero": false,
+        "block": 8.0,
+        "n_eff": 238.90554947269683,
+        "n_boot": 800
+      },
+      "fill_classes": {
+        "SCANNER": 483
+      },
+      "unique_setups": 432,
+      "avg_extension_at_fill": 28.191,
+      "fill_attempt_counts": {
+        "SCANNER": 1300
+      },
+      "unique_setups_seen": 944
+    },
+    "C": {
+      "n": 291,
+      "eligible_trades": 291,
+      "trades_per_year": 279.89,
+      "expectancy_r": 0.1277,
+      "total_r": 37.165,
+      "median_r": -0.2695,
+      "avg_winner": 1.35,
+      "avg_loser": -0.9012,
+      "win_rate": 45.7,
+      "profit_factor": 1.261,
+      "max_dd_r": -10.9471,
+      "max_dd_pct": null,
+      "sharpe": 0.103,
+      "sortino": 0.413,
+      "payoff": 1.498,
+      "avg_hold": 9.46,
+      "mae": 0.8287,
+      "mfe": 1.1541,
+      "failed_breakout_rate": 42.27,
+      "pct_1r": 48.45,
+      "pct_2r": 24.05,
+      "pct_stop_before_1r": 35.05,
+      "by_year": {
+        "2025": {
+          "n": 28,
+          "expectancy_r": -0.04452209684943216
+        },
+        "2026": {
+          "n": 263,
+          "expectancy_r": 0.14605165287092986
+        }
+      },
+      "by_sector": {
+        "Auto & Auto Ancillary": {
+          "n": 11,
+          "expectancy_r": 0.017792591060017463
+        },
+        "Banking & Finance": {
+          "n": 5,
+          "expectancy_r": -0.5233061335389161
+        },
+        "Capital Markets": {
+          "n": 18,
+          "expectancy_r": 0.47528489896747544
+        },
+        "Digital / New Economy": {
+          "n": 1,
+          "expectancy_r": -1.0586312586445368
+        },
+        "Energy & Power": {
+          "n": 7,
+          "expectancy_r": 0.4080462319784675
+        },
+        "Gems & Jewellery": {
+          "n": 5,
+          "expectancy_r": -0.0075293381048079314
+        },
+        "Manufacturing & Capital Goods": {
+          "n": 23,
+          "expectancy_r": 0.045637707452631286
+        },
+        "Metals & Mining": {
+          "n": 17,
+          "expectancy_r": 0.18816766862496792
+        },
+        "Miscellaneous": {
+          "n": 8,
+          "expectancy_r": -0.21442975281508214
+        },
+        "NBFC": {
+          "n": 10,
+          "expectancy_r": -0.7314873597560687
+        },
+        "Pharma & Healthcare": {
+          "n": 8,
+          "expectancy_r": 0.7076559316990394
+        },
+        "Specialty Chemicals": {
+          "n": 9,
+          "expectancy_r": -0.1064078011458911
+        },
+        "Telecom & Media": {
+          "n": 6,
+          "expectancy_r": 0.6976939979531883
+        },
+        "UNKNOWN": {
+          "n": 163,
+          "expectancy_r": 0.15437212916722412
+        }
+      },
+      "by_regime": {
+        "unknown": {
+          "n": 291,
+          "expectancy_r": 0.12771465977068885
+        }
+      },
+      "harness": {
+        "verdict": "PROMOTE",
+        "insight": "Real edge: +0.13R over 291 trades, 96% confident it beats zero (deflated for 6 trials).",
+        "n": 291,
+        "mean_r": 0.1277,
+        "p_value": 0.039644421292660395,
+        "psr": 0.9639,
+        "dsr": 0.9639
+      },
+      "block_ci": {
+        "mean_r": 0.12771465977068885,
+        "ci_lower": -0.02788895630290008,
+        "ci_upper": 0.27317213121809064,
+        "excludes_zero": false,
+        "block": 7.0,
+        "n_eff": 202.33699807891185,
+        "n_boot": 800
+      },
+      "fill_classes": {
+        "SCANNER": 291
+      },
+      "unique_setups": 267,
+      "avg_extension_at_fill": 36.2405,
+      "fill_attempt_counts": {
+        "SCANNER": 664
+      },
+      "unique_setups_seen": 944
+    },
+    "D": {
+      "n": 62,
+      "eligible_trades": 62,
+      "trades_per_year": 59.63,
+      "expectancy_r": 0.1315,
+      "total_r": 8.1557,
+      "median_r": -0.2768,
+      "avg_winner": 1.3493,
+      "avg_loser": -0.9386,
+      "win_rate": 46.77,
+      "profit_factor": 1.263,
+      "max_dd_r": -5.3212,
+      "max_dd_pct": null,
+      "sharpe": 0.104,
+      "sortino": 0.494,
+      "payoff": 1.438,
+      "avg_hold": 11.4,
+      "mae": 0.8789,
+      "mfe": 1.1939,
+      "failed_breakout_rate": 43.55,
+      "pct_1r": 53.23,
+      "pct_2r": 24.19,
+      "pct_stop_before_1r": 33.87,
+      "by_year": {
+        "2025": {
+          "n": 5,
+          "expectancy_r": -0.9043529109655273
+        },
+        "2026": {
+          "n": 57,
+          "expectancy_r": 0.22241100222303795
+        }
+      },
+      "by_sector": {
+        "Auto & Auto Ancillary": {
+          "n": 2,
+          "expectancy_r": -0.3189923154701719
+        },
+        "Banking & Finance": {
+          "n": 2,
+          "expectancy_r": -1.0462227861341338
+        },
+        "Capital Markets": {
+          "n": 3,
+          "expectancy_r": -0.04863352866645528
+        },
+        "Energy & Power": {
+          "n": 3,
+          "expectancy_r": -0.4987025518621553
+        },
+        "Manufacturing & Capital Goods": {
+          "n": 4,
+          "expectancy_r": 0.6419248319053337
+        },
+        "Metals & Mining": {
+          "n": 1,
+          "expectancy_r": -1.0610973451327432
+        },
+        "NBFC": {
+          "n": 4,
+          "expectancy_r": -0.7186194075567839
+        },
+        "Pharma & Healthcare": {
+          "n": 2,
+          "expectancy_r": 0.4356212436974797
+        },
+        "Specialty Chemicals": {
+          "n": 2,
+          "expectancy_r": -0.005236037349621636
+        },
+        "Telecom & Media": {
+          "n": 1,
+          "expectancy_r": 0.604108108108109
+        },
+        "UNKNOWN": {
+          "n": 38,
+          "expectancy_r": 0.3271341616740708
+        }
+      },
+      "by_regime": {
+        "unknown": {
+          "n": 62,
+          "expectancy_r": 0.1315429447078311
+        }
+      },
+      "harness": {
+        "verdict": "UNDERPOWERED",
+        "insight": "Promising (+0.13R) but not enough evidence yet \u2014 62 trades, need ~985 to trust a +0.10R edge. Holding the claim.",
+        "n": 62,
+        "mean_r": 0.1315,
+        "p_value": 0.2074339956819302,
+        "psr": 0.7974,
+        "dsr": 0.7974
+      },
+      "block_ci": {
+        "mean_r": 0.1315429447078311,
+        "ci_lower": -0.11297790639666343,
+        "ci_upper": 0.3681677764823267,
+        "excludes_zero": false,
+        "block": 4.0,
+        "n_eff": 62.0,
+        "n_boot": 800
+      },
+      "fill_classes": {
+        "SCANNER": 62
+      },
+      "unique_setups": 58,
+      "avg_extension_at_fill": 43.8575,
+      "fill_attempt_counts": {
+        "SCANNER": 109
+      },
+      "unique_setups_seen": 944
+    },
+    "E": {
+      "n": 2,
+      "eligible_trades": 2,
+      "trades_per_year": 1.92,
+      "expectancy_r": -1.0863,
+      "total_r": -2.1726,
+      "median_r": -1.0863,
+      "avg_winner": null,
+      "avg_loser": -1.0863,
+      "win_rate": 0.0,
+      "profit_factor": null,
+      "max_dd_r": -1.0916,
+      "max_dd_pct": null,
+      "sharpe": -146.467,
+      "sortino": -146.467,
+      "payoff": null,
+      "avg_hold": 7.5,
+      "mae": 1.3413,
+      "mfe": 1.0911,
+      "failed_breakout_rate": 100.0,
+      "pct_1r": 50.0,
+      "pct_2r": 0.0,
+      "pct_stop_before_1r": 50.0,
+      "by_year": {
+        "2026": {
+          "n": 2,
+          "expectancy_r": -1.0863111111111112
+        }
+      },
+      "by_sector": {
+        "UNKNOWN": {
+          "n": 2,
+          "expectancy_r": -1.0863111111111112
+        }
+      },
+      "by_regime": {
+        "unknown": {
+          "n": 2,
+          "expectancy_r": -1.0863111111111112
+        }
+      },
+      "harness": {
+        "verdict": "UNDERPOWERED",
+        "insight": "Only 2 trades \u2014 below the 30-trade floor for any claim (a great-looking edge on a handful of trades is usually luck). Keep tracking.",
+        "n": 2,
+        "mean_r": -1.0863,
+        "p_value": 0.9984632896341162,
+        "psr": 0.0787,
+        "dsr": 0.0787
+      },
+      "block_ci": {
+        "mean_r": -1.0863111111111112,
+        "ci_lower": -1.0915555555555556,
+        "ci_upper": -1.0810666666666666,
+        "excludes_zero": false,
+        "block": 1.0,
+        "n_eff": 2.0,
+        "n_boot": 800
+      },
+      "fill_classes": {
+        "VALID_FILL": 2
+      },
+      "unique_setups": 2,
+      "avg_extension_at_fill": 0.8753,
+      "fill_attempt_counts": {
+        "EXTENDED": 126,
+        "VALID_FILL": 2,
+        "GAP_THROUGH": 1
+      },
+      "unique_setups_seen": 944
+    },
+    "F": {
+      "n": 4,
+      "eligible_trades": 4,
+      "trades_per_year": 3.85,
+      "expectancy_r": -0.6168,
+      "total_r": -2.4671,
+      "median_r": -1.0802,
+      "avg_winner": 0.7849,
+      "avg_loser": -1.084,
+      "win_rate": 25.0,
+      "profit_factor": 0.241,
+      "max_dd_r": -1.386,
+      "max_dd_pct": null,
+      "sharpe": -0.66,
+      "sortino": -93.253,
+      "payoff": 0.724,
+      "avg_hold": 9.5,
+      "mae": 1.2935,
+      "mfe": 1.3295,
+      "failed_breakout_rate": 75.0,
+      "pct_1r": 50.0,
+      "pct_2r": 25.0,
+      "pct_stop_before_1r": 50.0,
+      "by_year": {
+        "2026": {
+          "n": 4,
+          "expectancy_r": -0.6167688224578205
+        }
+      },
+      "by_sector": {
+        "Auto & Auto Ancillary": {
+          "n": 1,
+          "expectancy_r": 0.7848780487804887
+        },
+        "Pharma & Healthcare": {
+          "n": 1,
+          "expectancy_r": -1.0793311163895487
+        },
+        "UNKNOWN": {
+          "n": 2,
+          "expectancy_r": -1.0863111111111112
+        }
+      },
+      "by_regime": {
+        "unknown": {
+          "n": 4,
+          "expectancy_r": -0.6167688224578205
+        }
+      },
+      "harness": {
+        "verdict": "UNDERPOWERED",
+        "insight": "Only 4 trades \u2014 below the 30-trade floor for any claim (a great-looking edge on a handful of trades is usually luck). Keep tracking.",
+        "n": 4,
+        "mean_r": -0.6168,
+        "p_value": 0.8607515491889831,
+        "psr": 0.2039,
+        "dsr": 0.2039
+      },
+      "block_ci": {
+        "mean_r": -0.6167688224578205,
+        "ci_lower": -1.0858772235418317,
+        "ci_upper": -0.14722653380453,
+        "excludes_zero": false,
+        "block": 2.0,
+        "n_eff": 4.0,
+        "n_boot": 800
+      },
+      "fill_classes": {
+        "VALID_FILL": 4
+      },
+      "unique_setups": 4,
+      "avg_extension_at_fill": 0.4607,
+      "fill_attempt_counts": {
+        "EXTENDED": 3,
+        "VALID_FILL": 4,
+        "MISSED": 1,
+        "GAP_THROUGH": 1
+      },
+      "unique_setups_seen": 944
+    }
+  },
+  "buy_zone_above_pct": 1.5,
+  "rs_threshold": 70.0,
+  "min_trend_passed": 8,
+  "data_source": "official_nse_bhavcopy",
+  "buy_zone_study": {
+    "0.25": {
+      "n": 0,
+      "eligible_trades": 0,
+      "trades_per_year": 0.0,
+      "expectancy_r": null,
+      "total_r": 0.0,
+      "median_r": null,
+      "avg_winner": null,
+      "avg_loser": null,
+      "win_rate": null,
+      "profit_factor": null,
+      "max_dd_r": 0.0,
+      "max_dd_pct": null,
+      "sharpe": null,
+      "sortino": null,
+      "payoff": null,
+      "avg_hold": null,
+      "mae": null,
+      "mfe": null,
+      "failed_breakout_rate": null,
+      "pct_1r": null,
+      "pct_2r": null,
+      "pct_stop_before_1r": null,
+      "by_year": {},
+      "by_sector": {},
+      "by_regime": {},
+      "harness": null,
+      "note": "no trades",
+      "fill_classes": {},
+      "block_ci": null,
+      "unique_setups": 0,
+      "fill_attempt_counts": {
+        "EXTENDED": 2
+      },
+      "unique_setups_seen": 236
+    },
+    "0.5": {
+      "n": 0,
+      "eligible_trades": 0,
+      "trades_per_year": 0.0,
+      "expectancy_r": null,
+      "total_r": 0.0,
+      "median_r": null,
+      "avg_winner": null,
+      "avg_loser": null,
+      "win_rate": null,
+      "profit_factor": null,
+      "max_dd_r": 0.0,
+      "max_dd_pct": null,
+      "sharpe": null,
+      "sortino": null,
+      "payoff": null,
+      "avg_hold": null,
+      "mae": null,
+      "mfe": null,
+      "failed_breakout_rate": null,
+      "pct_1r": null,
+      "pct_2r": null,
+      "pct_stop_before_1r": null,
+      "by_year": {},
+      "by_sector": {},
+      "by_regime": {},
+      "harness": null,
+      "note": "no trades",
+      "fill_classes": {},
+      "block_ci": null,
+      "unique_setups": 0,
+      "fill_attempt_counts": {
+        "EXTENDED": 2
+      },
+      "unique_setups_seen": 236
+    },
+    "1.0": {
+      "n": 0,
+      "eligible_trades": 0,
+      "trades_per_year": 0.0,
+      "expectancy_r": null,
+      "total_r": 0.0,
+      "median_r": null,
+      "avg_winner": null,
+      "avg_loser": null,
+      "win_rate": null,
+      "profit_factor": null,
+      "max_dd_r": 0.0,
+      "max_dd_pct": null,
+      "sharpe": null,
+      "sortino": null,
+      "payoff": null,
+      "avg_hold": null,
+      "mae": null,
+      "mfe": null,
+      "failed_breakout_rate": null,
+      "pct_1r": null,
+      "pct_2r": null,
+      "pct_stop_before_1r": null,
+      "by_year": {},
+      "by_sector": {},
+      "by_regime": {},
+      "harness": null,
+      "note": "no trades",
+      "fill_classes": {},
+      "block_ci": null,
+      "unique_setups": 0,
+      "fill_attempt_counts": {
+        "EXTENDED": 2
+      },
+      "unique_setups_seen": 236
+    },
+    "1.5": {
+      "n": 1,
+      "eligible_trades": 1,
+      "trades_per_year": 1.0,
+      "expectancy_r": -1.0811,
+      "total_r": -1.0811,
+      "median_r": -1.0811,
+      "avg_winner": null,
+      "avg_loser": -1.0811,
+      "win_rate": 0.0,
+      "profit_factor": null,
+      "max_dd_r": 0.0,
+      "max_dd_pct": null,
+      "sharpe": null,
+      "sortino": null,
+      "payoff": null,
+      "avg_hold": 1.0,
+      "mae": 1.5714,
+      "mfe": 0.7238,
+      "failed_breakout_rate": 100.0,
+      "pct_1r": 0.0,
+      "pct_2r": 0.0,
+      "pct_stop_before_1r": 100.0,
+      "by_year": {
+        "2026": {
+          "n": 1,
+          "expectancy_r": -1.0810666666666666
+        }
+      },
+      "by_sector": {
+        "UNKNOWN": {
+          "n": 1,
+          "expectancy_r": -1.0810666666666666
+        }
+      },
+      "by_regime": {
+        "unknown": {
+          "n": 1,
+          "expectancy_r": -1.0810666666666666
+        }
+      },
+      "harness": {
+        "verdict": "UNDERPOWERED",
+        "insight": "Only 1 trades \u2014 below the 30-trade floor for any claim (a great-looking edge on a handful of trades is usually luck). Keep tracking.",
+        "n": 1,
+        "mean_r": -1.0811,
+        "p_value": 1.0,
+        "psr": 0.0,
+        "dsr": 0.0
+      },
+      "block_ci": {
+        "mean_r": -1.0810666666666666,
+        "ci_lower": 0.0,
+        "ci_upper": 0.0,
+        "excludes_zero": false,
+        "block": 1.0,
+        "n_eff": 1.0,
+        "n_boot": 0
+      },
+      "fill_classes": {
+        "VALID_FILL": 1
+      },
+      "unique_setups": 1,
+      "avg_extension_at_fill": 1.1647,
+      "fill_attempt_counts": {
+        "EXTENDED": 1,
+        "VALID_FILL": 1
+      },
+      "unique_setups_seen": 236
+    },
+    "2.0": {
+      "n": 1,
+      "eligible_trades": 1,
+      "trades_per_year": 1.0,
+      "expectancy_r": -1.0811,
+      "total_r": -1.0811,
+      "median_r": -1.0811,
+      "avg_winner": null,
+      "avg_loser": -1.0811,
+      "win_rate": 0.0,
+      "profit_factor": null,
+      "max_dd_r": 0.0,
+      "max_dd_pct": null,
+      "sharpe": null,
+      "sortino": null,
+      "payoff": null,
+      "avg_hold": 1.0,
+      "mae": 1.5714,
+      "mfe": 0.7238,
+      "failed_breakout_rate": 100.0,
+      "pct_1r": 0.0,
+      "pct_2r": 0.0,
+      "pct_stop_before_1r": 100.0,
+      "by_year": {
+        "2026": {
+          "n": 1,
+          "expectancy_r": -1.0810666666666666
+        }
+      },
+      "by_sector": {
+        "UNKNOWN": {
+          "n": 1,
+          "expectancy_r": -1.0810666666666666
+        }
+      },
+      "by_regime": {
+        "unknown": {
+          "n": 1,
+          "expectancy_r": -1.0810666666666666
+        }
+      },
+      "harness": {
+        "verdict": "UNDERPOWERED",
+        "insight": "Only 1 trades \u2014 below the 30-trade floor for any claim (a great-looking edge on a handful of trades is usually luck). Keep tracking.",
+        "n": 1,
+        "mean_r": -1.0811,
+        "p_value": 1.0,
+        "psr": 0.0,
+        "dsr": 0.0
+      },
+      "block_ci": {
+        "mean_r": -1.0810666666666666,
+        "ci_lower": 0.0,
+        "ci_upper": 0.0,
+        "excludes_zero": false,
+        "block": 1.0,
+        "n_eff": 1.0,
+        "n_boot": 0
+      },
+      "fill_classes": {
+        "VALID_FILL": 1
+      },
+      "unique_setups": 1,
+      "avg_extension_at_fill": 1.1647,
+      "fill_attempt_counts": {
+        "EXTENDED": 1,
+        "VALID_FILL": 1
+      },
+      "unique_setups_seen": 236
+    },
+    "3.0": {
+      "n": 1,
+      "eligible_trades": 1,
+      "trades_per_year": 1.0,
+      "expectancy_r": -1.0811,
+      "total_r": -1.0811,
+      "median_r": -1.0811,
+      "avg_winner": null,
+      "avg_loser": -1.0811,
+      "win_rate": 0.0,
+      "profit_factor": null,
+      "max_dd_r": 0.0,
+      "max_dd_pct": null,
+      "sharpe": null,
+      "sortino": null,
+      "payoff": null,
+      "avg_hold": 1.0,
+      "mae": 1.5714,
+      "mfe": 0.7238,
+      "failed_breakout_rate": 100.0,
+      "pct_1r": 0.0,
+      "pct_2r": 0.0,
+      "pct_stop_before_1r": 100.0,
+      "by_year": {
+        "2026": {
+          "n": 1,
+          "expectancy_r": -1.0810666666666666
+        }
+      },
+      "by_sector": {
+        "UNKNOWN": {
+          "n": 1,
+          "expectancy_r": -1.0810666666666666
+        }
+      },
+      "by_regime": {
+        "unknown": {
+          "n": 1,
+          "expectancy_r": -1.0810666666666666
+        }
+      },
+      "harness": {
+        "verdict": "UNDERPOWERED",
+        "insight": "Only 1 trades \u2014 below the 30-trade floor for any claim (a great-looking edge on a handful of trades is usually luck). Keep tracking.",
+        "n": 1,
+        "mean_r": -1.0811,
+        "p_value": 1.0,
+        "psr": 0.0,
+        "dsr": 0.0
+      },
+      "block_ci": {
+        "mean_r": -1.0810666666666666,
+        "ci_lower": 0.0,
+        "ci_upper": 0.0,
+        "excludes_zero": false,
+        "block": 1.0,
+        "n_eff": 1.0,
+        "n_boot": 0
+      },
+      "fill_classes": {
+        "VALID_FILL": 1
+      },
+      "unique_setups": 1,
+      "avg_extension_at_fill": 1.1647,
+      "fill_attempt_counts": {
+        "GAP_THROUGH": 1,
+        "VALID_FILL": 1
+      },
+      "unique_setups_seen": 236
+    },
+    "5.0": {
+      "n": 2,
+      "eligible_trades": 2,
+      "trades_per_year": 2.0,
+      "expectancy_r": -0.867,
+      "total_r": -1.7339,
+      "median_r": -0.867,
+      "avg_winner": null,
+      "avg_loser": -0.867,
+      "win_rate": 0.0,
+      "profit_factor": null,
+      "max_dd_r": -1.0811,
+      "max_dd_pct": null,
+      "sharpe": -2.863,
+      "sortino": -2.863,
+      "payoff": null,
+      "avg_hold": 10.5,
+      "mae": 1.156,
+      "mfe": 0.9142,
+      "failed_breakout_rate": 50.0,
+      "pct_1r": 50.0,
+      "pct_2r": 0.0,
+      "pct_stop_before_1r": 50.0,
+      "by_year": {
+        "2026": {
+          "n": 2,
+          "expectancy_r": -0.8669650450450448
+        }
+      },
+      "by_sector": {
+        "UNKNOWN": {
+          "n": 2,
+          "expectancy_r": -0.8669650450450448
+        }
+      },
+      "by_regime": {
+        "unknown": {
+          "n": 2,
+          "expectancy_r": -0.8669650450450448
+        }
+      },
+      "harness": {
+        "verdict": "UNDERPOWERED",
+        "insight": "Only 2 trades \u2014 below the 30-trade floor for any claim (a great-looking edge on a handful of trades is usually luck). Keep tracking.",
+        "n": 2,
+        "mean_r": -0.867,
+        "p_value": 0.9229336668055883,
+        "psr": 0.1024,
+        "dsr": 0.1024
+      },
+      "block_ci": {
+        "mean_r": -0.8669650450450448,
+        "ci_lower": -1.0810666666666666,
+        "ci_upper": -0.6528634234234231,
+        "excludes_zero": false,
+        "block": 1.0,
+        "n_eff": 2.0,
+        "n_boot": 800
+      },
+      "fill_classes": {
+        "VALID_FILL": 2
+      },
+      "unique_setups": 2,
+      "avg_extension_at_fill": 2.1307,
+      "fill_attempt_counts": {
+        "VALID_FILL": 2
+      },
+      "unique_setups_seen": 236
+    }
+  },
+  "vcp_component_study": {
+    "min_contractions_2": {
+      "n": 1,
+      "eligible_trades": 1,
+      "trades_per_year": 1.0,
+      "expectancy_r": -1.0811,
+      "total_r": -1.0811,
+      "median_r": -1.0811,
+      "avg_winner": null,
+      "avg_loser": -1.0811,
+      "win_rate": 0.0,
+      "profit_factor": null,
+      "max_dd_r": 0.0,
+      "max_dd_pct": null,
+      "sharpe": null,
+      "sortino": null,
+      "payoff": null,
+      "avg_hold": 1.0,
+      "mae": 1.5714,
+      "mfe": 0.7238,
+      "failed_breakout_rate": 100.0,
+      "pct_1r": 0.0,
+      "pct_2r": 0.0,
+      "pct_stop_before_1r": 100.0,
+      "by_year": {
+        "2026": {
+          "n": 1,
+          "expectancy_r": -1.0810666666666666
+        }
+      },
+      "by_sector": {
+        "UNKNOWN": {
+          "n": 1,
+          "expectancy_r": -1.0810666666666666
+        }
+      },
+      "by_regime": {
+        "unknown": {
+          "n": 1,
+          "expectancy_r": -1.0810666666666666
+        }
+      },
+      "harness": {
+        "verdict": "UNDERPOWERED",
+        "insight": "Only 1 trades \u2014 below the 30-trade floor for any claim (a great-looking edge on a handful of trades is usually luck). Keep tracking.",
+        "n": 1,
+        "mean_r": -1.0811,
+        "p_value": 1.0,
+        "psr": 0.0,
+        "dsr": 0.0
+      },
+      "block_ci": {
+        "mean_r": -1.0810666666666666,
+        "ci_lower": 0.0,
+        "ci_upper": 0.0,
+        "excludes_zero": false,
+        "block": 1.0,
+        "n_eff": 1.0,
+        "n_boot": 0
+      },
+      "fill_classes": {
+        "VALID_FILL": 1
+      },
+      "unique_setups": 1,
+      "avg_extension_at_fill": 1.1647,
+      "fill_attempt_counts": {
+        "EXTENDED": 1,
+        "VALID_FILL": 1
+      },
+      "unique_setups_seen": 236
+    },
+    "min_contractions_3": {
+      "n": 1,
+      "eligible_trades": 1,
+      "trades_per_year": 1.0,
+      "expectancy_r": -1.0811,
+      "total_r": -1.0811,
+      "median_r": -1.0811,
+      "avg_winner": null,
+      "avg_loser": -1.0811,
+      "win_rate": 0.0,
+      "profit_factor": null,
+      "max_dd_r": 0.0,
+      "max_dd_pct": null,
+      "sharpe": null,
+      "sortino": null,
+      "payoff": null,
+      "avg_hold": 1.0,
+      "mae": 1.5714,
+      "mfe": 0.7238,
+      "failed_breakout_rate": 100.0,
+      "pct_1r": 0.0,
+      "pct_2r": 0.0,
+      "pct_stop_before_1r": 100.0,
+      "by_year": {
+        "2026": {
+          "n": 1,
+          "expectancy_r": -1.0810666666666666
+        }
+      },
+      "by_sector": {
+        "UNKNOWN": {
+          "n": 1,
+          "expectancy_r": -1.0810666666666666
+        }
+      },
+      "by_regime": {
+        "unknown": {
+          "n": 1,
+          "expectancy_r": -1.0810666666666666
+        }
+      },
+      "harness": {
+        "verdict": "UNDERPOWERED",
+        "insight": "Only 1 trades \u2014 below the 30-trade floor for any claim (a great-looking edge on a handful of trades is usually luck). Keep tracking.",
+        "n": 1,
+        "mean_r": -1.0811,
+        "p_value": 1.0,
+        "psr": 0.0,
+        "dsr": 0.0
+      },
+      "block_ci": {
+        "mean_r": -1.0810666666666666,
+        "ci_lower": 0.0,
+        "ci_upper": 0.0,
+        "excludes_zero": false,
+        "block": 1.0,
+        "n_eff": 1.0,
+        "n_boot": 0
+      },
+      "fill_classes": {
+        "VALID_FILL": 1
+      },
+      "unique_setups": 1,
+      "avg_extension_at_fill": 1.1647,
+      "fill_attempt_counts": {
+        "EXTENDED": 1,
+        "VALID_FILL": 1
+      },
+      "unique_setups_seen": 236
+    },
+    "volume_dryup_removed": {
+      "n": 2,
+      "eligible_trades": 2,
+      "trades_per_year": 2.0,
+      "expectancy_r": -1.0897,
+      "total_r": -2.1794,
+      "median_r": -1.0897,
+      "avg_winner": null,
+      "avg_loser": -1.0897,
+      "win_rate": 0.0,
+      "profit_factor": null,
+      "max_dd_r": -1.0811,
+      "max_dd_pct": null,
+      "sharpe": -89.046,
+      "sortino": -89.046,
+      "payoff": null,
+      "avg_hold": 2.5,
+      "mae": 1.5071,
+      "mfe": 0.3877,
+      "failed_breakout_rate": 100.0,
+      "pct_1r": 0.0,
+      "pct_2r": 0.0,
+      "pct_stop_before_1r": 100.0,
+      "by_year": {
+        "2026": {
+          "n": 2,
+          "expectancy_r": -1.089720049200492
+        }
+      },
+      "by_sector": {
+        "UNKNOWN": {
+          "n": 2,
+          "expectancy_r": -1.089720049200492
+        }
+      },
+      "by_regime": {
+        "unknown": {
+          "n": 2,
+          "expectancy_r": -1.089720049200492
+        }
+      },
+      "harness": {
+        "verdict": "UNDERPOWERED",
+        "insight": "Only 2 trades \u2014 below the 30-trade floor for any claim (a great-looking edge on a handful of trades is usually luck). Keep tracking.",
+        "n": 2,
+        "mean_r": -1.0897,
+        "p_value": 0.9974723789687332,
+        "psr": 0.0787,
+        "dsr": 0.0787
+      },
+      "block_ci": {
+        "mean_r": -1.089720049200492,
+        "ci_lower": -1.0983734317343172,
+        "ci_upper": -1.0810666666666666,
+        "excludes_zero": false,
+        "block": 1.0,
+        "n_eff": 2.0,
+        "n_boot": 800
+      },
+      "fill_classes": {
+        "VALID_FILL": 2
+      },
+      "unique_setups": 2,
+      "avg_extension_at_fill": 0.7026,
+      "fill_attempt_counts": {
+        "VALID_FILL": 2,
+        "EXTENDED": 4,
+        "GAP_THROUGH": 1
+      },
+      "unique_setups_seen": 414
+    },
+    "final_contraction_le_8": {
+      "n": 1,
+      "eligible_trades": 1,
+      "trades_per_year": 1.0,
+      "expectancy_r": -1.0811,
+      "total_r": -1.0811,
+      "median_r": -1.0811,
+      "avg_winner": null,
+      "avg_loser": -1.0811,
+      "win_rate": 0.0,
+      "profit_factor": null,
+      "max_dd_r": 0.0,
+      "max_dd_pct": null,
+      "sharpe": null,
+      "sortino": null,
+      "payoff": null,
+      "avg_hold": 1.0,
+      "mae": 1.5714,
+      "mfe": 0.7238,
+      "failed_breakout_rate": 100.0,
+      "pct_1r": 0.0,
+      "pct_2r": 0.0,
+      "pct_stop_before_1r": 100.0,
+      "by_year": {
+        "2026": {
+          "n": 1,
+          "expectancy_r": -1.0810666666666666
+        }
+      },
+      "by_sector": {
+        "UNKNOWN": {
+          "n": 1,
+          "expectancy_r": -1.0810666666666666
+        }
+      },
+      "by_regime": {
+        "unknown": {
+          "n": 1,
+          "expectancy_r": -1.0810666666666666
+        }
+      },
+      "harness": {
+        "verdict": "UNDERPOWERED",
+        "insight": "Only 1 trades \u2014 below the 30-trade floor for any claim (a great-looking edge on a handful of trades is usually luck). Keep tracking.",
+        "n": 1,
+        "mean_r": -1.0811,
+        "p_value": 1.0,
+        "psr": 0.0,
+        "dsr": 0.0
+      },
+      "block_ci": {
+        "mean_r": -1.0810666666666666,
+        "ci_lower": 0.0,
+        "ci_upper": 0.0,
+        "excludes_zero": false,
+        "block": 1.0,
+        "n_eff": 1.0,
+        "n_boot": 0
+      },
+      "fill_classes": {
+        "VALID_FILL": 1
+      },
+      "unique_setups": 1,
+      "avg_extension_at_fill": 1.1647,
+      "fill_attempt_counts": {
+        "EXTENDED": 1,
+        "VALID_FILL": 1
+      },
+      "unique_setups_seen": 221
+    },
+    "max_base_depth_25": {
+      "n": 0,
+      "eligible_trades": 0,
+      "trades_per_year": 0.0,
+      "expectancy_r": null,
+      "total_r": 0.0,
+      "median_r": null,
+      "avg_winner": null,
+      "avg_loser": null,
+      "win_rate": null,
+      "profit_factor": null,
+      "max_dd_r": 0.0,
+      "max_dd_pct": null,
+      "sharpe": null,
+      "sortino": null,
+      "payoff": null,
+      "avg_hold": null,
+      "mae": null,
+      "mfe": null,
+      "failed_breakout_rate": null,
+      "pct_1r": null,
+      "pct_2r": null,
+      "pct_stop_before_1r": null,
+      "by_year": {},
+      "by_sector": {},
+      "by_regime": {},
+      "harness": null,
+      "note": "no trades",
+      "fill_classes": {},
+      "block_ci": null,
+      "unique_setups": 0,
+      "fill_attempt_counts": {
+        "EXTENDED": 1
+      },
+      "unique_setups_seen": 213
+    }
+  },
+  "rs_buckets": {
+    "50-69": {
+      "n": 298,
+      "mean_fwd_20d": 1.718,
+      "median_fwd_20d": 1.041
+    },
+    "70-79": {
+      "n": 143,
+      "mean_fwd_20d": 2.958,
+      "median_fwd_20d": 2.001
+    },
+    "80-89": {
+      "n": 148,
+      "mean_fwd_20d": 3.621,
+      "median_fwd_20d": 2.533
+    },
+    "90-94": {
+      "n": 77,
+      "mean_fwd_20d": 4.751,
+      "median_fwd_20d": 3.536
+    },
+    "95-99": {
+      "n": 55,
+      "mean_fwd_20d": 9.795,
+      "median_fwd_20d": 7.185
+    }
+  },
+  "pivot_compare": {
+    "last_contraction": {
+      "n": 1,
+      "expectancy_r": -1.0811,
+      "unique_setups": 236,
+      "fill_attempts": {
+        "EXTENDED": 1,
+        "VALID_FILL": 1
+      }
+    },
+    "pattern_high": {
+      "n": 1,
+      "expectancy_r": -1.0811,
+      "unique_setups": 236,
+      "fill_attempts": {
+        "EXTENDED": 1,
+        "VALID_FILL": 1
+      }
+    },
+    "rationale": "last_contraction is the resistance the coil is under; pattern_high is the SEPA-001 earliest/highest high. Chosen for structure, not max R."
+  },
+  "walk_forward": {
+    "train_years": [
+      "2025"
+    ],
+    "test_years": [
+      "2026"
+    ],
+    "by_variant": {
+      "A": {
+        "train": {
+          "n": 588,
+          "expectancy_r": -0.3608
+        },
+        "test": {
+          "n": 875,
+          "expectancy_r": -0.1715
+        }
+      },
+      "B": {
+        "train": {
+          "n": 146,
+          "expectancy_r": 0.1809
+        },
+        "test": {
+          "n": 337,
+          "expectancy_r": 0.0753
+        }
+      },
+      "C": {
+        "train": {
+          "n": 28,
+          "expectancy_r": -0.0445
+        },
+        "test": {
+          "n": 263,
+          "expectancy_r": 0.1461
+        }
+      },
+      "D": {
+        "train": {
+          "n": 5,
+          "expectancy_r": -0.9044
+        },
+        "test": {
+          "n": 57,
+          "expectancy_r": 0.2224
+        }
+      },
+      "E": {
+        "train": {
+          "n": 0,
+          "expectancy_r": null
+        },
+        "test": {
+          "n": 2,
+          "expectancy_r": -1.0863
+        }
+      },
+      "F": {
+        "train": {
+          "n": 0,
+          "expectancy_r": null
+        },
+        "test": {
+          "n": 4,
+          "expectancy_r": -0.6168
+        }
+      }
+    }
+  },
+  "timing_live": [
+    {
+      "symbol": "ADANIENSOL",
+      "setup_start": "2025-09-22",
+      "first_knowable_vcp": "2025-11-10",
+      "pivot_knowable": "2025-11-06",
+      "pivot_price": 1011.0,
+      "breakout": "2026-02-09",
+      "first_valid_entry": "2026-03-10",
+      "old_detection": "2026-03-04",
+      "old_dist_to_pivot": -4.995,
+      "new_detection": "2026-03-04",
+      "new_dist_to_pivot": -4.995,
+      "new_in_buy_zone_at_detection": false,
+      "legacy_later_by_calendar_days": 0,
+      "legacy_pivot": 1011.0,
+      "trace_n": 13
+    },
+    {
+      "symbol": "ADANIENT",
+      "setup_start": "2025-11-03",
+      "first_knowable_vcp": "2025-12-22",
+      "pivot_knowable": "2025-12-16",
+      "pivot_price": 2300.0,
+      "breakout": "2026-04-23",
+      "first_valid_entry": "2026-04-24",
+      "old_detection": "2026-04-28",
+      "old_dist_to_pivot": -5.533,
+      "new_detection": "2026-04-17",
+      "new_dist_to_pivot": -3.552,
+      "new_in_buy_zone_at_detection": false,
+      "legacy_later_by_calendar_days": 11,
+      "legacy_pivot": 2553.7,
+      "trace_n": 12
+    },
+    {
+      "symbol": "ADANIPORTS",
+      "setup_start": "2026-02-26",
+      "first_knowable_vcp": "2026-04-01",
+      "pivot_knowable": "2026-03-27",
+      "pivot_price": 1392.7,
+      "breakout": "2026-02-09",
+      "first_valid_entry": null,
+      "old_detection": "2026-08-12",
+      "old_dist_to_pivot": 7.102,
+      "new_detection": "2026-08-12",
+      "new_dist_to_pivot": 19.552,
+      "new_in_buy_zone_at_detection": false,
+      "legacy_later_by_calendar_days": 0,
+      "legacy_pivot": 1554.6,
+      "trace_n": 2
+    },
+    {
+      "symbol": "ADANIPOWER",
+      "setup_start": "2025-10-22",
+      "first_knowable_vcp": "2025-12-12",
+      "pivot_knowable": "2025-12-11",
+      "pivot_price": 143.5,
+      "breakout": "2026-02-09",
+      "first_valid_entry": null,
+      "old_detection": "2026-04-06",
+      "old_dist_to_pivot": -6.382,
+      "new_detection": "2026-03-25",
+      "new_dist_to_pivot": 7.073,
+      "new_in_buy_zone_at_detection": false,
+      "legacy_later_by_calendar_days": 12,
+      "legacy_pivot": 174.39,
+      "trace_n": 30
+    },
+    {
+      "symbol": "APARINDS",
+      "setup_start": "2025-08-22",
+      "first_knowable_vcp": "2025-10-14",
+      "pivot_knowable": "2025-10-13",
+      "pivot_price": 8573.0,
+      "breakout": "2026-02-09",
+      "first_valid_entry": null,
+      "old_detection": "2026-02-09",
+      "old_dist_to_pivot": 6.463,
+      "new_detection": "2026-02-09",
+      "new_dist_to_pivot": 11.63,
+      "new_in_buy_zone_at_detection": false,
+      "legacy_later_by_calendar_days": 0,
+      "legacy_pivot": 8989.0,
+      "trace_n": 17
+    },
+    {
+      "symbol": "APOLLOHOSP",
+      "setup_start": null,
+      "first_knowable_vcp": null,
+      "pivot_knowable": null,
+      "pivot_price": null,
+      "breakout": "2026-02-09",
+      "first_valid_entry": null,
+      "old_detection": null,
+      "old_dist_to_pivot": null,
+      "new_detection": null,
+      "new_dist_to_pivot": null,
+      "new_in_buy_zone_at_detection": false,
+      "legacy_later_by_calendar_days": null,
+      "legacy_pivot": null,
+      "trace_n": 0
+    },
+    {
+      "symbol": "ASHOKLEY",
+      "setup_start": "2025-09-08",
+      "first_knowable_vcp": "2025-10-27",
+      "pivot_knowable": "2025-10-24",
+      "pivot_price": 139.45,
+      "breakout": "2026-02-09",
+      "first_valid_entry": null,
+      "old_detection": "2026-02-20",
+      "old_dist_to_pivot": 44.533,
+      "new_detection": "2026-02-20",
+      "new_dist_to_pivot": 49.767,
+      "new_in_buy_zone_at_detection": false,
+      "legacy_later_by_calendar_days": 0,
+      "legacy_pivot": 144.5,
+      "trace_n": 16
+    },
+    {
+      "symbol": "ASIANPAINT",
+      "setup_start": "2026-01-26",
+      "first_knowable_vcp": "2026-03-17",
+      "pivot_knowable": "2026-03-11",
+      "pivot_price": 2305.1,
+      "breakout": "2026-05-06",
+      "first_valid_entry": null,
+      "old_detection": "2026-07-07",
+      "old_dist_to_pivot": -1.851,
+      "new_detection": "2026-07-07",
+      "new_dist_to_pivot": 18.494,
+      "new_in_buy_zone_at_detection": false,
+      "legacy_later_by_calendar_days": 0,
+      "legacy_pivot": 2782.9,
+      "trace_n": 7
+    }
+  ],
+  "rs_threshold_study": {
+    "70": {
+      "C": {
+        "n": 97,
+        "eligible_trades": 97,
+        "trades_per_year": 97.0,
+        "expectancy_r": 0.4151,
+        "total_r": 40.2661,
+        "median_r": 0.576,
+        "avg_winner": 1.3836,
+        "avg_loser": -0.9077,
+        "win_rate": 57.73,
+        "profit_factor": 2.082,
+        "max_dd_r": -5.6249,
+        "max_dd_pct": null,
+        "sharpe": 0.327,
+        "sortino": 1.402,
+        "payoff": 1.524,
+        "avg_hold": 10.25,
+        "mae": 0.7452,
+        "mfe": 1.3887,
+        "failed_breakout_rate": 32.99,
+        "pct_1r": 62.89,
+        "pct_2r": 32.99,
+        "pct_stop_before_1r": 24.74,
+        "by_year": {
+          "2025": {
+            "n": 7,
+            "expectancy_r": -0.22434907575240975
+          },
+          "2026": {
+            "n": 90,
+            "expectancy_r": 0.46485050226743535
+          }
+        },
+        "by_sector": {
+          "Auto & Auto Ancillary": {
+            "n": 2,
+            "expectancy_r": 1.9304274436090205
+          },
+          "Banking & Finance": {
+            "n": 1,
+            "expectancy_r": -1.0571166163141994
+          },
+          "Capital Markets": {
+            "n": 6,
+            "expectancy_r": 0.9479706669517322
+          },
+          "Energy & Power": {
+            "n": 7,
+            "expectancy_r": 0.2949702549318403
+          },
+          "Manufacturing & Capital Goods": {
+            "n": 13,
+            "expectancy_r": 0.10741790930869612
+          },
+          "Telecom & Media": {
+            "n": 5,
+            "expectancy_r": 0.6033635080213895
+          },
+          "UNKNOWN": {
+            "n": 63,
+            "expectancy_r": 0.4015317024689714
+          }
+        },
+        "by_regime": {
+          "unknown": {
+            "n": 97,
+            "expectancy_r": 0.41511445024538474
+          }
+        },
+        "harness": {
+          "verdict": "PROMOTE",
+          "insight": "Real edge: +0.42R over 97 trades, 100% confident it beats zero (deflated for 6 trials).",
+          "n": 97,
+          "mean_r": 0.4151,
+          "p_value": 0.000870229637221205,
+          "psr": 0.9994,
+          "dsr": 0.9994
+        },
+        "block_ci": {
+          "mean_r": 0.41511445024538474,
+          "ci_lower": 0.16499421815580786,
+          "ci_upper": 0.6714785510489886,
+          "excludes_zero": true,
+          "block": 5.0,
+          "n_eff": 68.16395662722103,
+          "n_boot": 800
+        },
+        "fill_classes": {
+          "SCANNER": 97
+        },
+        "unique_setups": 92,
+        "avg_extension_at_fill": 42.335,
+        "fill_attempt_counts": {
+          "SCANNER": 170
+        },
+        "unique_setups_seen": 236
+      },
+      "F": {
+        "n": 1,
+        "eligible_trades": 1,
+        "trades_per_year": 1.0,
+        "expectancy_r": -1.0811,
+        "total_r": -1.0811,
+        "median_r": -1.0811,
+        "avg_winner": null,
+        "avg_loser": -1.0811,
+        "win_rate": 0.0,
+        "profit_factor": null,
+        "max_dd_r": 0.0,
+        "max_dd_pct": null,
+        "sharpe": null,
+        "sortino": null,
+        "payoff": null,
+        "avg_hold": 1.0,
+        "mae": 1.5714,
+        "mfe": 0.7238,
+        "failed_breakout_rate": 100.0,
+        "pct_1r": 0.0,
+        "pct_2r": 0.0,
+        "pct_stop_before_1r": 100.0,
+        "by_year": {
+          "2026": {
+            "n": 1,
+            "expectancy_r": -1.0810666666666666
+          }
+        },
+        "by_sector": {
+          "UNKNOWN": {
+            "n": 1,
+            "expectancy_r": -1.0810666666666666
+          }
+        },
+        "by_regime": {
+          "unknown": {
+            "n": 1,
+            "expectancy_r": -1.0810666666666666
+          }
+        },
+        "harness": {
+          "verdict": "UNDERPOWERED",
+          "insight": "Only 1 trades \u2014 below the 30-trade floor for any claim (a great-looking edge on a handful of trades is usually luck). Keep tracking.",
+          "n": 1,
+          "mean_r": -1.0811,
+          "p_value": 1.0,
+          "psr": 0.0,
+          "dsr": 0.0
+        },
+        "block_ci": {
+          "mean_r": -1.0810666666666666,
+          "ci_lower": 0.0,
+          "ci_upper": 0.0,
+          "excludes_zero": false,
+          "block": 1.0,
+          "n_eff": 1.0,
+          "n_boot": 0
+        },
+        "fill_classes": {
+          "VALID_FILL": 1
+        },
+        "unique_setups": 1,
+        "avg_extension_at_fill": 1.1647,
+        "fill_attempt_counts": {
+          "EXTENDED": 1,
+          "VALID_FILL": 1
+        },
+        "unique_setups_seen": 236
+      }
+    },
+    "80": {
+      "C": {
+        "n": 81,
+        "eligible_trades": 81,
+        "trades_per_year": 81.0,
+        "expectancy_r": 0.3323,
+        "total_r": 26.9191,
+        "median_r": 0.0211,
+        "avg_winner": 1.5296,
+        "avg_loser": -0.9571,
+        "win_rate": 51.85,
+        "profit_factor": 1.721,
+        "max_dd_r": -6.6786,
+        "max_dd_pct": null,
+        "sharpe": 0.247,
+        "sortino": 1.467,
+        "payoff": 1.598,
+        "avg_hold": 9.95,
+        "mae": 0.7989,
+        "mfe": 1.3495,
+        "failed_breakout_rate": 39.51,
+        "pct_1r": 58.02,
+        "pct_2r": 34.57,
+        "pct_stop_before_1r": 29.63,
+        "by_year": {
+          "2025": {
+            "n": 5,
+            "expectancy_r": 0.11412841065143184
+          },
+          "2026": {
+            "n": 76,
+            "expectancy_r": 0.3466908044555093
+          }
+        },
+        "by_sector": {
+          "Auto & Auto Ancillary": {
+            "n": 2,
+            "expectancy_r": 1.9304274436090205
+          },
+          "Capital Markets": {
+            "n": 6,
+            "expectancy_r": 0.4500417797780855
+          },
+          "Energy & Power": {
+            "n": 5,
+            "expectancy_r": 0.07915037763586485
+          },
+          "Manufacturing & Capital Goods": {
+            "n": 10,
+            "expectancy_r": -0.10129096246047302
+          },
+          "Telecom & Media": {
+            "n": 5,
+            "expectancy_r": 0.6033635080213895
+          },
+          "UNKNOWN": {
+            "n": 53,
+            "expectancy_r": 0.3388373174020335
+          }
+        },
+        "by_regime": {
+          "unknown": {
+            "n": 81,
+            "expectancy_r": 0.33233510113427
+          }
+        },
+        "harness": {
+          "verdict": "PROMOTE",
+          "insight": "Real edge: +0.33R over 81 trades, 99% confident it beats zero (deflated for 6 trials).",
+          "n": 81,
+          "mean_r": 0.3323,
+          "p_value": 0.014560607283783509,
+          "psr": 0.9878,
+          "dsr": 0.9878
+        },
+        "block_ci": {
+          "mean_r": 0.33233510113427,
+          "ci_lower": 0.04348870426054553,
+          "ci_upper": 0.6236499213716239,
+          "excludes_zero": true,
+          "block": 4.0,
+          "n_eff": 56.34958360945638,
+          "n_boot": 800
+        },
+        "fill_classes": {
+          "SCANNER": 81
+        },
+        "unique_setups": 76,
+        "avg_extension_at_fill": 46.1081,
+        "fill_attempt_counts": {
+          "SCANNER": 131
+        },
+        "unique_setups_seen": 236
+      },
+      "F": {
+        "n": 1,
+        "eligible_trades": 1,
+        "trades_per_year": 1.0,
+        "expectancy_r": -1.0811,
+        "total_r": -1.0811,
+        "median_r": -1.0811,
+        "avg_winner": null,
+        "avg_loser": -1.0811,
+        "win_rate": 0.0,
+        "profit_factor": null,
+        "max_dd_r": 0.0,
+        "max_dd_pct": null,
+        "sharpe": null,
+        "sortino": null,
+        "payoff": null,
+        "avg_hold": 1.0,
+        "mae": 1.5714,
+        "mfe": 0.7238,
+        "failed_breakout_rate": 100.0,
+        "pct_1r": 0.0,
+        "pct_2r": 0.0,
+        "pct_stop_before_1r": 100.0,
+        "by_year": {
+          "2026": {
+            "n": 1,
+            "expectancy_r": -1.0810666666666666
+          }
+        },
+        "by_sector": {
+          "UNKNOWN": {
+            "n": 1,
+            "expectancy_r": -1.0810666666666666
+          }
+        },
+        "by_regime": {
+          "unknown": {
+            "n": 1,
+            "expectancy_r": -1.0810666666666666
+          }
+        },
+        "harness": {
+          "verdict": "UNDERPOWERED",
+          "insight": "Only 1 trades \u2014 below the 30-trade floor for any claim (a great-looking edge on a handful of trades is usually luck). Keep tracking.",
+          "n": 1,
+          "mean_r": -1.0811,
+          "p_value": 1.0,
+          "psr": 0.0,
+          "dsr": 0.0
+        },
+        "block_ci": {
+          "mean_r": -1.0810666666666666,
+          "ci_lower": 0.0,
+          "ci_upper": 0.0,
+          "excludes_zero": false,
+          "block": 1.0,
+          "n_eff": 1.0,
+          "n_boot": 0
+        },
+        "fill_classes": {
+          "VALID_FILL": 1
+        },
+        "unique_setups": 1,
+        "avg_extension_at_fill": 1.1647,
+        "fill_attempt_counts": {
+          "VALID_FILL": 1
+        },
+        "unique_setups_seen": 236
+      }
+    },
+    "90": {
+      "C": {
+        "n": 41,
+        "eligible_trades": 41,
+        "trades_per_year": 41.0,
+        "expectancy_r": 0.6285,
+        "total_r": 25.7678,
+        "median_r": 0.9903,
+        "avg_winner": 1.7273,
+        "avg_loser": -0.9227,
+        "win_rate": 58.54,
+        "profit_factor": 2.643,
+        "max_dd_r": -3.73,
+        "max_dd_pct": null,
+        "sharpe": 0.451,
+        "sortino": 2.137,
+        "payoff": 1.872,
+        "avg_hold": 9.73,
+        "mae": 0.6986,
+        "mfe": 1.5011,
+        "failed_breakout_rate": 34.15,
+        "pct_1r": 65.85,
+        "pct_2r": 46.34,
+        "pct_stop_before_1r": 21.95,
+        "by_year": {
+          "2025": {
+            "n": 3,
+            "expectancy_r": -0.08071382694023439
+          },
+          "2026": {
+            "n": 38,
+            "expectancy_r": 0.6844712243764406
+          }
+        },
+        "by_sector": {
+          "Auto & Auto Ancillary": {
+            "n": 2,
+            "expectancy_r": 1.9304274436090205
+          },
+          "Manufacturing & Capital Goods": {
+            "n": 2,
+            "expectancy_r": 0.4670886453947707
+          },
+          "Telecom & Media": {
+            "n": 5,
+            "expectancy_r": 0.6033635080213895
+          },
+          "UNKNOWN": {
+            "n": 32,
+            "expectancy_r": 0.5611223539802971
+          }
+        },
+        "by_regime": {
+          "unknown": {
+            "n": 41,
+            "expectancy_r": 0.6284820742800985
+          }
+        },
+        "harness": {
+          "verdict": "PROMOTE",
+          "insight": "Real edge: +0.63R over 41 trades, 100% confident it beats zero (deflated for 6 trials).",
+          "n": 41,
+          "mean_r": 0.6285,
+          "p_value": 0.003103070381234426,
+          "psr": 0.9966,
+          "dsr": 0.9966
+        },
+        "block_ci": {
+          "mean_r": 0.6284820742800985,
+          "ci_lower": 0.22839979117904313,
+          "ci_upper": 0.9720993006509278,
+          "excludes_zero": true,
+          "block": 3.0,
+          "n_eff": 41.0,
+          "n_boot": 800
+        },
+        "fill_classes": {
+          "SCANNER": 41
+        },
+        "unique_setups": 38,
+        "avg_extension_at_fill": 65.6396,
+        "fill_attempt_counts": {
+          "SCANNER": 56
+        },
+        "unique_setups_seen": 236
+      },
+      "F": {
+        "n": 1,
+        "eligible_trades": 1,
+        "trades_per_year": 1.0,
+        "expectancy_r": -1.0811,
+        "total_r": -1.0811,
+        "median_r": -1.0811,
+        "avg_winner": null,
+        "avg_loser": -1.0811,
+        "win_rate": 0.0,
+        "profit_factor": null,
+        "max_dd_r": 0.0,
+        "max_dd_pct": null,
+        "sharpe": null,
+        "sortino": null,
+        "payoff": null,
+        "avg_hold": 1.0,
+        "mae": 1.5714,
+        "mfe": 0.7238,
+        "failed_breakout_rate": 100.0,
+        "pct_1r": 0.0,
+        "pct_2r": 0.0,
+        "pct_stop_before_1r": 100.0,
+        "by_year": {
+          "2026": {
+            "n": 1,
+            "expectancy_r": -1.0810666666666666
+          }
+        },
+        "by_sector": {
+          "UNKNOWN": {
+            "n": 1,
+            "expectancy_r": -1.0810666666666666
+          }
+        },
+        "by_regime": {
+          "unknown": {
+            "n": 1,
+            "expectancy_r": -1.0810666666666666
+          }
+        },
+        "harness": {
+          "verdict": "UNDERPOWERED",
+          "insight": "Only 1 trades \u2014 below the 30-trade floor for any claim (a great-looking edge on a handful of trades is usually luck). Keep tracking.",
+          "n": 1,
+          "mean_r": -1.0811,
+          "p_value": 1.0,
+          "psr": 0.0,
+          "dsr": 0.0
+        },
+        "block_ci": {
+          "mean_r": -1.0810666666666666,
+          "ci_lower": 0.0,
+          "ci_upper": 0.0,
+          "excludes_zero": false,
+          "block": 1.0,
+          "n_eff": 1.0,
+          "n_boot": 0
+        },
+        "fill_classes": {
+          "VALID_FILL": 1
+        },
+        "unique_setups": 1,
+        "avg_extension_at_fill": 1.1647,
+        "fill_attempt_counts": {
+          "VALID_FILL": 1
+        },
+        "unique_setups_seen": 236
+      }
+    }
+  }
+}
