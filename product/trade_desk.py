@@ -457,12 +457,37 @@ def build_ready_queue(
             "Stage-2 is Minervini SEPA on official history (cached Ideas ranking). "
             "ATQ ranks structure; it is not a win rate. "
             "Prime still uses Telegram 💎 gates when they actually pass. "
-            "Missing numbers stay missing."
+            "Missing numbers stay missing. Lab losers are demoted on the scan — never inflated."
         ),
         "next": (
-            "Open Lab to see which signals earned in this tape, then Journey to paper-trade them."
+            "Open Lab to see which signals earned in this tape, then start the paper classroom."
             if not empty
             else "Fill the desk (scan + Ideas SEPA) before expecting a Ready name."
+        ),
+        "lab_applied": _ready_lab_applied(),
+    }
+
+
+def _ready_lab_applied() -> dict[str, Any]:
+    """Tiny strip for Ready: Lab keep/skip already in the scan. Never invents."""
+    try:
+        from scan.signal_backtest import trading_playbook
+        playbook = dict(trading_playbook() or {})
+    except Exception:
+        playbook = {}
+    keep = [str(r.get("signal") or r) for r in (playbook.get("best") or []) if r][:5]
+    skip = [str(x) for x in (playbook.get("avoid") or []) if x][:8]
+    applied = bool(keep or skip)
+    return {
+        "applied": applied,
+        "regime": playbook.get("regime") or "",
+        "keep": keep,
+        "skip": skip,
+        "plain": (
+            "Lab learning is already in this board: proven losers were demoted on the scan. "
+            "Missing EV stays missing."
+            if applied
+            else "No Lab keep/skip list yet — this board is structure-only, not a win-rate claim."
         ),
     }
 
@@ -513,7 +538,10 @@ def _lab_scoreboard(signals: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     skip = [s for s in signals if s.get("kid_lane") == "skip"]
     quiet = [s for s in signals if s.get("kid_lane") == "quiet"]
     if not signals:
-        headline = "No practice test on file yet. Press the button — it never spends money."
+        headline = (
+            "No practice test on file yet. Press Run the practice test — "
+            "official NSE history, never spends money."
+        )
     else:
         headline = (
             f"{len(keep)} passed · {len(skip)} failed · {len(quiet)} too quiet to claim. "
@@ -578,6 +606,371 @@ def _lab_lesson(*, running: bool, actionable: bool, has_report: bool) -> dict[st
         ],
         "cta": "Run the practice test",
         "cta_running": "Practicing…",
+    }
+
+
+def _live_edge_snapshot() -> dict[str, Any]:
+    """Demote-only live outcomes. Empty when the sample is thin — never invented."""
+    try:
+        from scan.live_edge import profile_edge
+
+        prof = profile_edge() or {}
+    except Exception:
+        return {"n": 0, "expectancy_r": None, "win_rate": None, "signals": []}
+    overall = dict(prof.get("overall") or {})
+    n = int(overall.get("n") or 0)
+    signals = []
+    for key, raw in dict(prof.get("signals") or {}).items():
+        if not isinstance(raw, Mapping):
+            continue
+        sn = int(raw.get("n") or 0)
+        if sn < 30:
+            continue
+        signals.append({
+            "signal": str(key),
+            "n": sn,
+            "win_rate": _f(raw.get("win_rate")),
+            "expectancy_r": _f(raw.get("expectancy_r")),
+        })
+    signals.sort(key=lambda r: (r.get("expectancy_r") is None, -(r.get("expectancy_r") or -99)))
+    return {
+        "n": n,
+        "expectancy_r": _f(overall.get("expectancy_r")) if n else None,
+        "win_rate": _f(overall.get("win_rate")) if n else None,
+        "claim": n >= 30,
+        "signals": signals[:8],
+        "plain": (
+            f"{n} closed tracked outcomes — demote-only into the next scan."
+            if n >= 30
+            else (
+                f"{n} closed tracked outcomes — under 30 we stay quiet. "
+                "No live learning claim yet."
+                if n
+                else "No closed tracked outcomes yet. Paper classroom fills this."
+            )
+        ),
+    }
+
+
+def _lab_learning(*, playbook: Mapping[str, Any], signals: Sequence[Mapping[str, Any]],
+                  live: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    keep = [s["signal"] for s in signals if s.get("kid_lane") == "keep"]
+    skip = [s["signal"] for s in signals if s.get("kid_lane") == "skip"]
+    avoid = [str(x) for x in (playbook.get("avoid") or skip) if x]
+    best = list(playbook.get("best") or [])[:5]
+    live = dict(live or {})
+    applied = bool(keep or avoid or live.get("claim"))
+    return {
+        "applied": applied,
+        "demote_only": True,
+        "regime": playbook.get("regime") or "UNKNOWN",
+        "keep": keep[:8],
+        "skip": avoid[:12],
+        "best": best,
+        "live": live,
+        "plain": (
+            "Next Ideas / Ready scan already uses this. Proven losers are "
+            "demoted. Missing numbers stay missing — we never inflate a win rate."
+            if applied
+            else (
+                "No Lab learning on file yet. Run the practice test, then paper. "
+                "Recommendations will not invent a win rate in the meantime."
+            )
+        ),
+    }
+
+
+def _lab_pulse(*, running: bool, actionable: bool, classroom: Mapping[str, Any]) -> dict[str, Any]:
+    cls = dict(classroom or {})
+    if running:
+        return {"label": "Practice test running", "tone": "run", "hint": "Official NSE history. No orders."}
+    if cls.get("open_n"):
+        return {"label": "Paper classroom in session", "tone": "live", "hint": "Fake money. Live stays locked."}
+    if cls.get("armed") and cls.get("in_window"):
+        return {"label": "Armed — waiting for a Ready ticket", "tone": "live", "hint": "Gates still apply."}
+    if cls.get("armed"):
+        return {"label": "Armed — waiting for the next session", "tone": "wait", "hint": cls.get("headline") or ""}
+    if actionable:
+        return {"label": "Learning on file — start paper", "tone": "ready", "hint": "Practice passed. Paper is the match."}
+    return {"label": "Classroom idle", "tone": "idle", "hint": "Run the practice test, then arm paper."}
+
+
+def _lab_loop(*, running: bool, actionable: bool, evidence_note: str,
+              learning: Mapping[str, Any], classroom: Mapping[str, Any]) -> list[dict[str, Any]]:
+    learn = dict(learning or {})
+    cls = dict(classroom or {})
+    paper_state = "WAIT"
+    if cls.get("open_n") or (cls.get("armed") and cls.get("in_window")):
+        paper_state = "LIVE"
+    elif cls.get("armed"):
+        paper_state = "ARMED"
+    elif cls.get("closed_n"):
+        paper_state = "READY"
+    return [
+        {
+            "id": "practice",
+            "title": "Practice test",
+            "n": 1,
+            "state": "RUN" if running else ("READY" if actionable else "IDLE"),
+            "detail": evidence_note,
+        },
+        {
+            "id": "teach",
+            "title": "What we learned",
+            "n": 2,
+            "state": "READY" if learn.get("applied") else "IDLE",
+            "detail": (
+                f"{len(learn.get('keep') or [])} keep · {len(learn.get('skip') or [])} skip"
+                if learn.get("applied")
+                else "No keep/skip list yet"
+            ),
+        },
+        {
+            "id": "paper",
+            "title": "Paper classroom",
+            "n": 3,
+            "state": paper_state,
+            "detail": cls.get("headline") or "Disarmed — default OFF",
+        },
+        {
+            "id": "recos",
+            "title": "Next recommendations",
+            "n": 4,
+            "state": "READY" if learn.get("applied") else "IDLE",
+            "detail": learn.get("plain") or "",
+        },
+    ]
+
+
+def _lab_classroom(
+    *,
+    diagnose: Mapping[str, Any] | None = None,
+    autopilot: Mapping[str, Any] | None = None,
+    report_card: Mapping[str, Any] | None = None,
+    pnl: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    if diagnose is None:
+        try:
+            from execution.autopilot import diagnose_silence
+            diagnose = diagnose_silence()
+        except Exception:
+            diagnose = {}
+    diagnose = dict(diagnose or {})
+    if autopilot is None:
+        try:
+            from execution.autopilot import get_status
+            autopilot = get_status()
+        except Exception:
+            autopilot = {}
+    autopilot = dict(autopilot or {})
+    if report_card is None:
+        try:
+            from execution.autopilot import report_card as _rc
+            report_card = _rc()
+        except Exception:
+            report_card = {}
+    report_card = dict(report_card or {})
+    if pnl is None:
+        try:
+            from execution.autopilot import pnl_snapshot
+            pnl = pnl_snapshot()
+        except Exception:
+            pnl = {}
+    pnl = dict(pnl or {})
+    stats = dict(report_card.get("stats") or {})
+    positions = [p for p in (pnl.get("positions") or []) if isinstance(p, Mapping)]
+    closed_n = int(stats.get("n") or stats.get("paper_n") or 0)
+    armed = bool(autopilot.get("armed"))
+    mode = str(autopilot.get("mode") or "PAPER").upper()
+    in_window = bool(diagnose.get("in_window"))
+    blockers = [str(b) for b in (diagnose.get("blockers") or []) if b]
+    notes = [str(n) for n in (diagnose.get("notes") or []) if n]
+    activity = [str(a) for a in (diagnose.get("activity") or autopilot.get("activity") or []) if a][:8]
+    rejects = dict(diagnose.get("rejects_today") or {})
+    funnel = [{"reason": str(k), "n": int(v)} for k, v in sorted(rejects.items(), key=lambda kv: -int(kv[1] or 0))[:6]]
+    next_action = ""
+    if not armed:
+        next_action = "Arm paper on this page. Default is OFF so nothing auto-trades."
+    elif mode != "PAPER":
+        next_action = "Mode is not PAPER — this desk will not arm live."
+    elif not in_window:
+        next_action = "Window is closed. Paper takes Ready tickets 09:30–15:20 IST on weekdays."
+    elif blockers:
+        next_action = blockers[0]
+    elif int(diagnose.get("considered_today") or 0) == 0:
+        next_action = "Armed, but no ticket has been fed yet. Press Feed Ready tickets."
+    else:
+        next_action = diagnose.get("headline") or "Waiting for a Ready ticket that clears gates."
+    return {
+        "armed": armed,
+        "mode": mode,
+        "allocation": _f(autopilot.get("allocation")) or 0.0,
+        "in_window": in_window,
+        "headline": diagnose.get("headline") or ("Armed" if armed else "Disarmed — default OFF"),
+        "blockers": blockers,
+        "notes": notes,
+        "funnel": funnel,
+        "considered_today": int(diagnose.get("considered_today") or 0),
+        "trades_today": int(diagnose.get("trades_today") or autopilot.get("trades_today_count") or 0),
+        "buy_setups": int(diagnose.get("buy_setups_in_last_scan") or 0),
+        "open_n": len(positions),
+        "open": [
+            {
+                "symbol": str(p.get("symbol") or ""),
+                "qty": int(p.get("qty") or 0),
+                "entry": _f(p.get("entry")),
+                "live": _f(p.get("live")),
+                "pnl": _f(p.get("pnl")),
+                "stop": _f(p.get("stop")),
+                "target": _f(p.get("target")),
+            }
+            for p in positions[:8]
+        ],
+        "closed_n": closed_n,
+        "expectancy_r": _f(stats.get("expectancy_r")) if closed_n else None,
+        "win_rate": _f(stats.get("win_rate")) if closed_n else None,
+        "profit_factor": _f(stats.get("profit_factor")) if closed_n else None,
+        "day_pnl": _f(pnl.get("day_pnl")),
+        "activity": activity,
+        "next_action": next_action,
+        "places_orders": False,
+        "live_locked": True,
+    }
+
+
+def _ready_rows_for_paper(scan: Mapping[str, Any] | None) -> list[dict[str, Any]]:
+    """Ready tickets as scanner-shaped rows. Never invents volume, EV, or prices."""
+    out: list[dict[str, Any]] = []
+    try:
+        ready = build_ready_queue(scan=scan, workspace=_WORKSPACE_UNSET)
+    except Exception:
+        return out
+    seen: set[str] = set()
+    for card in list(ready.get("prime") or []) + list(ready.get("actionable") or []) + list(ready.get("stage2") or []):
+        if not isinstance(card, Mapping):
+            continue
+        symbol = str(card.get("symbol") or "").upper().strip()
+        if not symbol or symbol in seen:
+            continue
+        entry = _f(card.get("entry"))
+        stop = _f(card.get("stop"))
+        if entry is None or stop is None or entry <= 0 or stop <= 0 or stop >= entry:
+            continue
+        score = _f(card.get("score")) or _f(card.get("sepa_score"))
+        seen.add(symbol)
+        row: dict[str, Any] = {
+            "symbol": symbol,
+            "verdict": "BUY",
+            "status": "Ready to trade",
+            "entry": entry,
+            "stop": stop,
+            "target": card.get("target"),
+            "price": card.get("cmp") or entry,
+            "score": score if score is not None else 0.0,
+            "edge_r": card.get("edge_r"),
+            "sector": card.get("sector") or "",
+            "rsi": card.get("rsi"),
+            "ev_pct": card.get("ev_pct"),
+            "p_win": card.get("p_win"),
+            "ev_conf": card.get("ev_conf"),
+        }
+        vol = _f(card.get("volume_ratio"))
+        if vol is not None:
+            row["volume_ratio"] = vol
+        out.append(row)
+    return out
+
+
+def feed_paper_classroom() -> dict[str, Any]:
+    """Push last scan + Ready tickets into armed PAPER autopilot.
+
+    No-op if disarmed or not PAPER. Never invents quotes, volume, or EV.
+    """
+    try:
+        from execution.autopilot import diagnose_silence, get_status, on_setups
+    except Exception as exc:
+        return {
+            "ok": False,
+            "fed": 0,
+            "message": f"Autopilot unread: {exc}",
+            "places_orders": False,
+            "live_locked": True,
+        }
+    status = get_status()
+    mode = str(status.get("mode") or "PAPER").upper()
+    if mode != "PAPER":
+        return {
+            "ok": False,
+            "armed": bool(status.get("armed")),
+            "mode": mode,
+            "fed": 0,
+            "message": "Paper feed aborted — mode is not PAPER.",
+            "places_orders": False,
+            "live_locked": True,
+        }
+    if not status.get("armed"):
+        return {
+            "ok": False,
+            "armed": False,
+            "mode": "PAPER",
+            "fed": 0,
+            "message": "Arm paper first. Default is OFF so nothing auto-trades.",
+            "places_orders": False,
+            "live_locked": True,
+        }
+    scan: dict[str, Any] = {}
+    try:
+        from product.scan_store import load_scan
+        scan = dict(load_scan() or {})
+    except Exception:
+        scan = {}
+    rows: list[dict[str, Any]] = [
+        dict(r) for r in (scan.get("records") or []) if isinstance(r, Mapping)
+    ]
+    overlay = _ready_rows_for_paper(scan)
+    have_buy = {
+        str(r.get("symbol") or "").upper()
+        for r in rows
+        if str(r.get("verdict") or "") in {"BUY", "STRONG BUY"}
+        or str(r.get("status") or "") == "Ready to trade"
+    }
+    for row in overlay:
+        if row["symbol"] not in have_buy:
+            rows.append(row)
+            have_buy.add(row["symbol"])
+    buy_n = len(have_buy)
+    if rows:
+        on_setups(rows)
+    diagnose = diagnose_silence()
+    after = get_status()
+    taken = int(after.get("trades_today_count") or 0)
+    if not rows:
+        message = "No scan or Ready ticket on file. Fill the desk first."
+    elif not diagnose.get("in_window"):
+        message = (
+            f"Fed {buy_n} Ready/BUY name(s). Window is closed — "
+            "paper takes them 09:30–15:20 IST on weekdays."
+        )
+    elif taken:
+        message = (
+            f"Fed {buy_n} Ready/BUY name(s). Paper book today: {taken} trade(s). "
+            "Live stays locked."
+        )
+    else:
+        headline = diagnose.get("headline") or "waiting on gates"
+        message = f"Fed {buy_n} Ready/BUY name(s). No fill yet — {headline}"
+    return {
+        "ok": True,
+        "armed": True,
+        "mode": "PAPER",
+        "fed": buy_n,
+        "trades_today": taken,
+        "open_trades": len(after.get("open_trades") or []),
+        "headline": diagnose.get("headline") or "",
+        "blockers": list(diagnose.get("blockers") or []),
+        "message": message,
+        "places_orders": False,
+        "live_locked": True,
     }
 
 
@@ -680,13 +1073,51 @@ def build_backtest_lab(
     ]
 
     has_report = bool(report.get("signals") or report.get("generated_at") or status.get("has_report"))
+    live = _live_edge_snapshot()
+    learning = _lab_learning(playbook=playbook, signals=signals, live=live)
+    classroom = _lab_classroom()
+    lesson = _lab_lesson(running=running, actionable=actionable, has_report=has_report)
+    if running:
+        current = str(status.get("current") or "")
+        done = int(status.get("progress") or 0)
+        total = int(status.get("total") or 0)
+        lesson["now"] = (
+            f"Testing {current or 'the next stock'} · {done}/{total or '—'}. "
+            "Official NSE history only. No order is placed."
+        )
+    elif classroom.get("armed"):
+        lesson["now"] = (
+            (lesson.get("now") or "")
+            + " Paper classroom is armed — Ready tickets are practiced with fake money."
+        ).strip()
+    pulse = _lab_pulse(running=running, actionable=actionable, classroom=classroom)
+    loop = _lab_loop(
+        running=running, actionable=actionable, evidence_note=evidence_note,
+        learning=learning, classroom=classroom,
+    )
+    for item in use_cases:
+        if item.get("id") != "paper_loop":
+            continue
+        if classroom.get("open_n"):
+            item["status"] = "LIVE"
+            item["result"] = f"{classroom['open_n']} open paper trade(s). Live locked."
+        elif classroom.get("armed"):
+            item["status"] = "ARMED"
+            item["result"] = classroom.get("headline") or "Armed in PAPER"
+        elif classroom.get("closed_n"):
+            item["status"] = "READY"
+            item["result"] = f"{classroom['closed_n']} closed paper trade(s) on the report card."
+        else:
+            item["status"] = "WAIT"
+            item["result"] = classroom.get("next_action") or "Arm paper. Default is OFF."
     return {
-        "schema_version": 2,
+        "schema_version": 3,
         "places_orders": False,
         "live_locked": True,
         "running": running,
         "progress": status.get("progress") or 0,
         "total": status.get("total") or 0,
+        "current": status.get("current") or "",
         "actionable": actionable,
         "evidence_note": evidence_note,
         "generated_at": report.get("generated_at") or status.get("generated_at") or "",
@@ -701,12 +1132,18 @@ def build_backtest_lab(
         "proven_n": len(proven),
         "loser_n": len(losers),
         "scoreboard": _lab_scoreboard(signals),
-        "lesson": _lab_lesson(running=running, actionable=actionable, has_report=has_report),
+        "lesson": lesson,
+        "pulse": pulse,
+        "loop": loop,
+        "learning": learning,
+        "classroom": classroom,
         "use_cases": use_cases,
         "disclaimer": (
-            "This backtest never places paper or live orders. "
+            "The practice test never places paper or live orders. "
+            "Paper classroom uses fake money on Ready tickets. "
             "<30 trades on a signal = no claim. Truncated samples stay partial. "
-            "It is cricket nets. Live is the match, and the match stays locked."
+            "Learning is demote-only — losers drop on the next scan, winners are never inflated. "
+            "Live stays locked."
         ),
     }
 
@@ -888,8 +1325,11 @@ def build_live_journey(
             "on the Streamlit/CLI autopilot — not this browser desk."
         )
 
+    classroom = _lab_classroom(
+        diagnose=diagnose, autopilot=autopilot, report_card=report_card,
+    )
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "places_orders": False,
         "live_locked": True,
         "rung": rung,
@@ -904,10 +1344,14 @@ def build_live_journey(
             "mode": mode,
             "allocation": allocation,
             "trades_today": autopilot.get("trades_today_count") or autopilot.get("trades_today"),
-            "open_trades": len(autopilot.get("open_trades") or []),
+            "open_trades": len(autopilot.get("open_trades") or []) or classroom.get("open_n") or 0,
             "headline": diagnose.get("headline") or "",
             "blockers": list(diagnose.get("blockers") or []),
+            "in_window": bool(diagnose.get("in_window")),
+            "considered_today": int(diagnose.get("considered_today") or 0),
+            "buy_setups": int(diagnose.get("buy_setups_in_last_scan") or 0),
         },
+        "classroom": classroom,
         "report_card": {
             "verdict": verdict,
             "verdict_reason": report_card.get("verdict_reason") or "",
@@ -922,6 +1366,7 @@ def build_live_journey(
         },
         "scaling": scaling,
         "steps": steps,
+        "next_action": classroom.get("next_action") or "",
         "disclaimer": (
             "Paper is the production path. Live is earned by closed paper sample, "
             "E4 alpha, institutional certification, and a typed ARM LIVE — "
@@ -967,12 +1412,23 @@ def arm_paper_only(*, allocation: float | None = None) -> dict[str, Any]:
             "places_orders": False,
             "live_locked": True,
         }
+    feed = {"fed": 0, "message": ""}
+    if after.get("armed"):
+        try:
+            feed = feed_paper_classroom()
+        except Exception:
+            feed = {"fed": 0, "message": "Armed, but last-scan feed failed — press Feed Ready tickets."}
+        extra = str(feed.get("message") or "")
+        if extra and extra not in message:
+            message = f"{message}. {extra}"
     return {
         "ok": bool(ok),
         "armed": bool(after.get("armed")),
         "mode": "PAPER",
         "message": message,
         "allocation": after.get("allocation"),
+        "fed": int(feed.get("fed") or 0),
+        "trades_today": feed.get("trades_today"),
         "places_orders": False,
         "live_locked": True,
     }

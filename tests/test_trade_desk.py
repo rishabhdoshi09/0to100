@@ -6,6 +6,7 @@ from product.trade_desk import (
     build_backtest_lab,
     build_live_journey,
     build_ready_queue,
+    feed_paper_classroom,
     ticket_quality,
 )
 
@@ -261,6 +262,13 @@ def test_lab_use_cases_and_no_orders():
     assert lab["signals"][0]["kid_label"] == "Passed"
     assert any(s["kid_label"] == "Failed" for s in lab["signals"])
     assert lab["lesson"]["cta"] == "Run the practice test"
+    assert lab["schema_version"] >= 3
+    assert [n["id"] for n in lab["loop"]] == ["practice", "teach", "paper", "recos"]
+    assert lab["learning"]["demote_only"] is True
+    assert "momentum" in lab["learning"]["keep"]
+    assert "nr7" in lab["learning"]["skip"]
+    assert lab["classroom"]["live_locked"] is True
+    assert lab["pulse"]["tone"] in {"idle", "ready", "wait", "live", "run"}
 
 
 def test_lab_missing_report_is_not_actionable():
@@ -272,6 +280,21 @@ def test_lab_missing_report_is_not_actionable():
     assert lab["lesson"]["cta"] == "Run the practice test"
     assert lab["places_orders"] is False
     assert lab["live_locked"] is True
+    assert lab["pulse"]["tone"] in {"idle", "ready", "wait", "live", "run"}
+    assert lab["classroom"]["armed"] in {True, False}
+
+
+def test_lab_running_progress_is_honest():
+    lab = build_backtest_lab(
+        report={},
+        status={"running": True, "progress": 12, "total": 80, "current": "RELIANCE"},
+        playbook={},
+    )
+    assert lab["running"] is True
+    assert lab["current"] == "RELIANCE"
+    assert lab["pulse"]["tone"] == "run"
+    assert "RELIANCE" in lab["lesson"]["now"]
+    assert lab["loop"][0]["state"] == "RUN"
 
 
 def test_journey_never_unlocks_live_click(monkeypatch):
@@ -320,6 +343,9 @@ def test_arm_paper_refuses_to_leave_paper_mode(tmp_path, monkeypatch):
     monkeypatch.setattr(ap, "_notify", lambda *_a, **_k: None)
     monkeypatch.setattr(ap, "_log_activity", lambda *_a, **_k: None)
     monkeypatch.setattr(ap, "start_book_monitor", lambda: None)
+    monkeypatch.setattr("product.trade_desk.feed_paper_classroom", lambda: {
+        "ok": True, "fed": 0, "message": "no scan", "live_locked": True,
+    })
     out = arm_paper_only(allocation=25_000)
     assert out["ok"] is True
     assert out["mode"] == "PAPER"
@@ -342,3 +368,80 @@ def test_arm_paper_http_rejects_live_mode(tmp_path, monkeypatch):
     r = client.post("/api/autopilot/arm-paper", json={"mode": "LIVE", "allocation": 25000})
     assert r.status_code == 400
     assert "LIVE" in (r.json().get("detail") or "")
+
+
+def test_feed_paper_classroom_noop_when_disarmed(tmp_path, monkeypatch):
+    import execution.autopilot as ap
+
+    monkeypatch.setattr(ap, "_STATE_FILE", tmp_path / "autopilot.json")
+    monkeypatch.setattr(ap, "_state", {}, raising=False)
+    ap._state = {}
+    out = feed_paper_classroom()
+    assert out["ok"] is False
+    assert out["fed"] == 0
+    assert out["live_locked"] is True
+    assert "Arm paper" in out["message"]
+
+
+def test_feed_paper_classroom_sends_ready_rows(tmp_path, monkeypatch):
+    import execution.autopilot as ap
+
+    monkeypatch.setattr(ap, "_STATE_FILE", tmp_path / "autopilot.json")
+    monkeypatch.setattr(ap, "_state", {}, raising=False)
+    ap._state = {}
+    ap.set_config(mode="PAPER", allocation=25_000)
+    monkeypatch.setattr(ap, "_notify", lambda *_a, **_k: None)
+    monkeypatch.setattr(ap, "_log_activity", lambda *_a, **_k: None)
+    monkeypatch.setattr(ap, "start_book_monitor", lambda: None)
+    ap.arm("")
+    fed = []
+    monkeypatch.setattr(ap, "on_setups", lambda rows: fed.append(list(rows)))
+    monkeypatch.setattr(
+        "product.scan_store.load_scan",
+        lambda: {
+            "scanned_at": "2026-08-21",
+            "records": [
+                {
+                    "symbol": "ALPHA",
+                    "verdict": "BUY",
+                    "status": "Ready to trade",
+                    "entry": 100,
+                    "stop": 92,
+                    "score": 70,
+                    "volume_ratio": 1.4,
+                    "rsi": 55,
+                    "chase_risk": False,
+                }
+            ],
+        },
+    )
+    monkeypatch.setattr(ap, "diagnose_silence", lambda: {
+        "headline": "armed", "in_window": True, "blockers": [], "considered_today": 1,
+    })
+    out = feed_paper_classroom()
+    assert out["ok"] is True
+    assert out["fed"] >= 1
+    assert out["live_locked"] is True
+    assert fed and any(r.get("symbol") == "ALPHA" for r in fed[0])
+
+
+def test_ready_queue_exposes_lab_applied():
+    out = _queue({"records": []})
+    assert "lab_applied" in out
+    assert out["lab_applied"]["plain"]
+
+
+def test_paper_feed_http_requires_arm(tmp_path, monkeypatch):
+    from fastapi.testclient import TestClient
+    import execution.autopilot as ap
+    import terminal_product_api as api
+
+    monkeypatch.setattr(ap, "_STATE_FILE", tmp_path / "autopilot.json")
+    monkeypatch.setattr(ap, "_state", {}, raising=False)
+    ap._state = {}
+    client = TestClient(api.app)
+    r = client.post("/api/trade-desk/paper-feed")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["ok"] is False
+    assert body["live_locked"] is True

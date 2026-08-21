@@ -2510,10 +2510,37 @@ class TestMarketClock:
         from datetime import datetime as dt
         monkeypatch.setattr(ap, "_STATE_FILE", tmp_path / "ap.json")
         ap._state = {}
-        ap.set_config(allocation=100000, mode="PAPER")   # window 09:30-14:45
+        ap.set_config(allocation=100000, mode="PAPER")   # window 09:30-14:45; paper extends to 15:20
         assert ap._in_window(dt(2026, 7, 14, 10, 0, tzinfo=IST)) is True
         assert ap._in_window(dt(2026, 7, 14, 9, 0, tzinfo=IST)) is False
         assert ap._in_window(dt(2026, 7, 18, 10, 0, tzinfo=IST)) is False  # Sat
+        assert ap._in_window(dt(2026, 7, 14, 15, 10, tzinfo=IST)) is True  # paper afternoon
+        ap.set_config(mode="LIVE")
+        assert ap._in_window(dt(2026, 7, 14, 15, 10, tzinfo=IST)) is False  # live still cuts off
+
+
+    def test_on_setups_ranks_all_buys_not_first_forty(self, tmp_path, monkeypatch):
+        import execution.autopilot as ap
+        monkeypatch.setattr(ap, "_STATE_FILE", tmp_path / "ap.json")
+        ap._state = {}
+        ap.set_config(allocation=100000, mode="PAPER")
+        monkeypatch.setattr(ap, "_notify", lambda m: None)
+        monkeypatch.setattr(ap, "start_book_monitor", lambda: None)
+        monkeypatch.setattr(ap, "_serial_losers_cached", lambda: set())
+        ap.arm()
+        taken = []
+        monkeypatch.setattr(ap, "consider", lambda symbol, **kw: taken.append(symbol) or True)
+        watch = [
+            {"symbol": f"W{i}", "verdict": "WATCH", "score": 99,
+             "conviction_rank": 99, "price": 100, "stop": 95}
+            for i in range(45)
+        ]
+        watch.append({
+            "symbol": "LATEBUY", "verdict": "BUY", "score": 80,
+            "conviction_rank": 200, "price": 100, "stop": 95,
+        })
+        ap.on_setups(watch)
+        assert taken == ["LATEBUY"]
 
     def test_daily_keys_use_ist_calendar(self, monkeypatch):
         """trades_today / funnel keys IST date se banti hain — UTC date se

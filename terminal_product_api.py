@@ -951,6 +951,13 @@ def autopilot_arm_paper(payload: dict[str, Any] | None = Body(default=None)) -> 
     return arm_paper_only(allocation=alloc_f)
 
 
+@app.post("/api/trade-desk/paper-feed")
+def trade_desk_paper_feed() -> dict[str, Any]:
+    """Push last scan + Ready tickets into armed PAPER autopilot. Never LIVE."""
+    from product.trade_desk import feed_paper_classroom
+    return feed_paper_classroom()
+
+
 @app.post("/api/autopilot/disarm")
 def autopilot_disarm() -> dict[str, Any]:
     """Disarm autopilot. Does not change live locks."""

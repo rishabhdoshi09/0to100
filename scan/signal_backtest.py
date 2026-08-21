@@ -44,7 +44,7 @@ try:
 except Exception:
     _SLIPPAGE_NOTE = 0.10
 
-_state = {"running": False, "progress": 0, "total": 0}
+_state = {"running": False, "progress": 0, "total": 0, "current": ""}
 _state_lock = threading.Lock()
 
 
@@ -269,7 +269,7 @@ def run_backtest(sample_step: int = 5, lookback_sessions: int = 250,
         truncated = len(available) > len(run_symbols)
 
     with _state_lock:
-        _state.update(running=True, progress=0, total=len(run_symbols))
+        _state.update(running=True, progress=0, total=len(run_symbols), current="")
 
     t0 = time.time()
     try:
@@ -300,6 +300,7 @@ def run_backtest(sample_step: int = 5, lookback_sessions: int = 250,
     finally:
         with _state_lock:
             _state["running"] = False
+            _state["current"] = ""
 
 
 def _run_backtest_inner(sc, stats, symbols, sample_step, lookback_sessions,
@@ -312,6 +313,9 @@ def _run_backtest_inner(sc, stats, symbols, sample_step, lookback_sessions,
     tgt_stats: dict[str, dict] = {}             # target label → aggregate
 
     for si, sym in enumerate(symbols):
+        with _state_lock:
+            _state["progress"] = si + 1
+            _state["current"] = str(sym)
         df = get_ohlcv(sym)
         if df is None or len(df) < 60 + horizon + 20:
             continue
@@ -398,8 +402,6 @@ def _run_backtest_inner(sc, stats, symbols, sample_step, lookback_sessions,
                         rg["closed"] += 1
                     elif outcome == "LOSS":
                         rg["closed"] += 1
-        with _state_lock:
-            _state["progress"] = si + 1
 
     # Derive rates & expectancy — true average R across ALL filled trades
     # (wins, losses, AND flats marked at horizon), no survivorship bias.

@@ -29,11 +29,18 @@ export function labKidTone(lane: string): string {
   return 'is-wait'
 }
 
+export function labLoopTone(state: string): string {
+  const s = (state || '').toUpperCase()
+  if (s === 'READY' || s === 'LIVE' || s === 'ARMED') return 'is-live'
+  if (s === 'RUN') return 'is-run'
+  if (s === 'IDLE') return 'is-idle'
+  return 'is-wait'
+}
+
 export function labStatusTone(status: string): string {
   const s = (status || '').toUpperCase()
-  if (s === 'READY') return 'is-pass'
+  if (s === 'READY' || s === 'LIVE' || s === 'ARMED' || s === 'NONE') return 'is-pass'
   if (s === 'RUNNING') return 'is-wait'
-  if (s === 'MISSING' || s === 'PARTIAL' || s === 'THIN') return 'is-wait'
-  if (s === 'NONE') return 'is-pass'
+  if (s === 'MISSING' || s === 'PARTIAL' || s === 'THIN' || s === 'WAIT' || s === 'IDLE') return 'is-wait'
   return 'is-wait'
 }

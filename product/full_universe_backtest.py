@@ -116,6 +116,7 @@ def backtest_status() -> dict[str, Any]:
         "running": bool(state.get("running")),
         "progress": state.get("progress"),
         "total": state.get("total"),
+        "current": state.get("current") or "",
         "has_report": bool(report),
         "generated_at": report.get("generated_at"),
         "symbols_run": report.get("symbols"),

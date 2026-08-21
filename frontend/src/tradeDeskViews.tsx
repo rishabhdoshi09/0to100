@@ -8,15 +8,17 @@ import type { ExperienceViewProps } from './experience'
 import {
   armPaperAutopilot,
   disarmAutopilot,
+  feedPaperClassroom,
   fetchBacktestLab,
   fetchLiveJourney,
   fetchReadyQueue,
   type BacktestLabPayload,
+  type LabClassroom,
   type LiveJourneyPayload,
   type ReadyQueuePayload,
   type ReadyTradeCard,
 } from './productApi'
-import { journeyTone, labKidTone, labStatusTone, readyLaneLabel } from './tradeDesk'
+import { journeyTone, labKidTone, labLoopTone, labStatusTone, readyLaneLabel } from './tradeDesk'
 import './tradeDesk.css'
 
 function ReadyCard({
@@ -113,7 +115,14 @@ export function ReadyTradesView({ setSelected, setActive }: ExperienceViewProps)
         </div>
       </header>
       {error ? <p className="stock-peek-note">{error}</p> : null}
-      {payload?.method ? <p className="trade-lede">{payload.method}</p> : null}
+      {payload?.lab_applied?.plain ? (
+        <p className={`trade-learning ${payload.lab_applied.applied ? 'is-on' : ''}`}>
+          {payload.lab_applied.applied ? 'Lab learning on this board' : 'Lab learning'}
+          {' — '}
+          {payload.lab_applied.plain}
+          {(payload.lab_applied.skip || []).length ? ` Skip: ${payload.lab_applied.skip?.join(', ')}.` : ''}
+        </p>
+      ) : null}
       {payload?.empty ? (
         <div className="trade-empty">
           <strong>No complete ticket today</strong>
@@ -171,10 +180,92 @@ export function ReadyTradesView({ setSelected, setActive }: ExperienceViewProps)
   )
 }
 
+function ClassroomBook({ classroom, onArm, onDisarm, onFeed, busy, note }: {
+  classroom?: LabClassroom
+  onArm: () => void
+  onDisarm: () => void
+  onFeed: () => void
+  busy: boolean
+  note?: string
+}) {
+  const armed = Boolean(classroom?.armed)
+  return (
+    <section className="trade-section lab-classroom">
+      <h3>Paper classroom</h3>
+      <p className="trade-lede">
+        Fake money on Ready tickets. Every right and wrong is recorded. The next scan
+        demotes proven losers — it never inflates a win rate. Live stays locked.
+      </p>
+      <div className="lab-class-kpis">
+        <article>
+          <span>Status</span>
+          <strong>{armed ? (classroom?.in_window ? 'In session' : 'Armed · waiting') : 'Disarmed'}</strong>
+        </article>
+        <article>
+          <span>Open paper</span>
+          <strong>{classroom?.open_n ?? 0}</strong>
+        </article>
+        <article>
+          <span>Closed paper</span>
+          <strong>{classroom?.closed_n ?? 0}</strong>
+        </article>
+        <article>
+          <span>Today</span>
+          <strong>{classroom?.trades_today ?? 0} taken · {classroom?.considered_today ?? 0} seen</strong>
+        </article>
+      </div>
+      <p className="lab-next">{classroom?.next_action || classroom?.headline}</p>
+      <div className="trade-actions">
+        <button type="button" className="reco-primary" disabled={busy} onClick={onArm}>
+          {armed ? 'Re-arm + feed Ready tickets' : 'Start paper classroom'}
+        </button>
+        <button type="button" className="reco-ghost" disabled={busy || !armed} onClick={onFeed}>
+          Feed Ready tickets now
+        </button>
+        <button type="button" className="reco-ghost" disabled={busy || !armed} onClick={onDisarm}>
+          Disarm
+        </button>
+      </div>
+      {note ? <p className="trade-note">{note}</p> : null}
+      {(classroom?.blockers || []).length ? (
+        <ul className="lab-blockers">
+          {(classroom?.blockers || []).map((line) => <li key={line}>{line}</li>)}
+        </ul>
+      ) : null}
+      {(classroom?.funnel || []).length ? (
+        <p className="trade-lede">
+          Why tickets were skipped today:{' '}
+          {(classroom?.funnel || []).map((row) => `${row.reason} ×${row.n}`).join(' · ')}
+        </p>
+      ) : null}
+      {(classroom?.open || []).length ? (
+        <ul className="lab-open">
+          {(classroom?.open || []).map((row) => (
+            <li key={row.symbol}>
+              <strong>{row.symbol}</strong>
+              <span>
+                {row.qty} @ {money(row.entry, 2)}
+                {row.live != null ? ` · live ${money(row.live, 2)}` : ''}
+                {row.pnl != null ? ` · ${row.pnl >= 0 ? '+' : ''}₹${Math.round(row.pnl)}` : ''}
+              </span>
+            </li>
+          ))}
+        </ul>
+      ) : null}
+      {(classroom?.activity || []).length ? (
+        <ul className="lab-activity">
+          {(classroom?.activity || []).slice(0, 6).map((line) => <li key={line}>{line}</li>)}
+        </ul>
+      ) : null}
+    </section>
+  )
+}
+
 export function BacktestLabView({ runControl, setActive }: ExperienceViewProps) {
   const [lab, setLab] = useState<BacktestLabPayload | null>(null)
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
+  const [note, setNote] = useState('')
 
   const load = () => {
     fetchBacktestLab()
@@ -186,7 +277,7 @@ export function BacktestLabView({ runControl, setActive }: ExperienceViewProps) 
 
   useEffect(() => {
     load()
-    const t = window.setInterval(load, running ? 2_000 : 12_000)
+    const t = window.setInterval(load, running ? 2_000 : 8_000)
     return () => window.clearInterval(t)
   }, [running])
 
@@ -202,23 +293,67 @@ export function BacktestLabView({ runControl, setActive }: ExperienceViewProps) 
     }
   }
 
+  const arm = async () => {
+    setBusy(true)
+    try {
+      const alloc = Number(lab?.classroom?.allocation || 0)
+      const out = await armPaperAutopilot(alloc >= 5000 ? alloc : 25_000)
+      setNote(out.message)
+      load()
+    } catch (reason) {
+      setNote(reason instanceof Error ? reason.message : 'Paper arm failed')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const feed = async () => {
+    setBusy(true)
+    try {
+      const out = await feedPaperClassroom()
+      setNote(out.message)
+      load()
+    } catch (reason) {
+      setNote(reason instanceof Error ? reason.message : 'Feed failed')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const disarm = async () => {
+    setBusy(true)
+    try {
+      await disarmAutopilot()
+      setNote('Paper classroom disarmed')
+      load()
+    } finally {
+      setBusy(false)
+    }
+  }
+
   const lesson = lab?.lesson
   const board = lab?.scoreboard
   const done = Number(lab?.progress || 0)
   const total = Number(lab?.total || 0)
-  const pct = total > 0 ? Math.min(100, Math.round((100 * done) / total)) : (running ? 8 : 0)
+  const pct = total > 0
+    ? Math.min(100, Math.round((100 * done) / total))
+    : (running ? 8 : (lab?.actionable ? 100 : 0))
   const cta = running
     ? `${lesson?.cta_running || 'Practicing…'}${total ? ` ${done}/${total}` : ''}`
     : (lesson?.cta || 'Run the practice test')
+  const pulse = lab?.pulse
+  const keepN = board?.keep?.length || 0
+  const skipN = board?.skip?.length || 0
+  const quietN = board?.quiet?.length || 0
 
-  const lanes: Array<{ key: 'keep' | 'skip' | 'quiet'; title: string; rows: NonNullable<BacktestLabPayload['scoreboard']>['keep'] }> = [
-    { key: 'keep', title: 'Passed — keep using', rows: board?.keep || [] },
-    { key: 'skip', title: 'Failed — skip', rows: board?.skip || [] },
-    { key: 'quiet', title: 'Too few tries — stay quiet', rows: board?.quiet || [] },
+  const lanes: Array<{ key: 'keep' | 'skip' | 'quiet'; title: string; empty: string; rows: NonNullable<BacktestLabPayload['scoreboard']>['keep'] }> = [
+    { key: 'keep', title: 'Passed — keep using', empty: 'No signal has earned this yet. That is honest.', rows: board?.keep || [] },
+    { key: 'skip', title: 'Failed — skip next scan', empty: 'No proven loser on file. Nothing to demote.', rows: board?.skip || [] },
+    { key: 'quiet', title: 'Too few tries — stay quiet', empty: 'Under 30 practice trades we do not brag.', rows: board?.quiet || [] },
   ]
 
   return (
-    <section className="reco-light trade-desk">
+    <section className="reco-light trade-desk lab-alive">
       <nav className="reco-crumb" aria-label="Breadcrumb">
         <button type="button" onClick={() => setActive('Ready Trades')}>Trade</button>
         <span>/</span>
@@ -227,21 +362,25 @@ export function BacktestLabView({ runControl, setActive }: ExperienceViewProps) 
         <button type="button" onClick={() => setActive('Live Journey')}>Journey</button>
       </nav>
       <header className="reco-hero">
-        <div className="reco-hero-icon">L</div>
+        <div className={`reco-hero-icon lab-pulse-icon ${pulse?.tone || 'idle'}`}>L</div>
         <div>
           <h2>{lesson?.title || 'What is a backtest?'}</h2>
           <p>{lesson?.plain || 'A practice test on official NSE history. It never places an order.'}</p>
         </div>
+        <div className={`lab-pulse-pill ${pulse?.tone || 'idle'}`}>
+          <i />
+          <strong>{pulse?.label || 'Classroom idle'}</strong>
+          <span>{pulse?.hint || 'Run the practice test, then arm paper.'}</span>
+        </div>
       </header>
       <p className="trade-lede">{lesson?.now}</p>
-      <ol className="lab-steps">
-        {(lesson?.steps || []).map((step) => (
-          <li key={step.n}>
-            <b>{step.n}</b>
-            <div>
-              <strong>{step.title}</strong>
-              <p>{step.body}</p>
-            </div>
+      <ol className="lab-loop" aria-label="Learning loop">
+        {(lab?.loop || []).map((node) => (
+          <li key={node.id} className={labLoopTone(node.state)}>
+            <b>{node.n}</b>
+            <strong>{node.title}</strong>
+            <em>{node.state}</em>
+            <p>{node.detail}</p>
           </li>
         ))}
       </ol>
@@ -249,23 +388,38 @@ export function BacktestLabView({ runControl, setActive }: ExperienceViewProps) 
         <button type="button" className="reco-primary" disabled={running} onClick={() => void run()}>
           {cta}
         </button>
+        <button type="button" className="reco-ghost" disabled={busy} onClick={() => void arm()}>
+          {lab?.classroom?.armed ? 'Re-arm paper classroom' : 'Start paper classroom'}
+        </button>
         <span className="trade-note">{lab?.evidence_note || 'no measured backtest yet'}</span>
-        {lab?.live_locked ? <span className="trade-note">Live locked. No orders.</span> : null}
+        {lab?.live_locked ? <span className="trade-note">Live locked.</span> : null}
       </div>
-      {running ? (
+      <div className="lab-progress-wrap">
         <div className="lab-progress" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={pct}>
-          <span style={{ width: `${pct}%` }} />
+          <span style={{ width: `${Math.max(running ? 4 : 0, pct)}%` }} />
         </div>
-      ) : null}
+        <p className="lab-progress-label">
+          {running
+            ? `Testing ${lab?.current || 'the next stock'} · ${done}/${total || '—'}`
+            : (lab?.actionable ? 'Practice test on file' : 'No practice test on file yet')}
+        </p>
+      </div>
       {error ? <p className="stock-peek-note">{error}</p> : null}
       <section className="trade-section">
         <h3>Scoreboard</h3>
+        <div className="lab-tally">
+          <article className="is-pass"><span>Keep</span><strong>{keepN}</strong></article>
+          <article className="is-lock"><span>Skip</span><strong>{skipN}</strong></article>
+          <article className="is-wait"><span>Quiet</span><strong>{quietN}</strong></article>
+        </div>
         <p className="trade-lede">{board?.headline || 'No practice test on file yet.'}</p>
         {lesson?.r_plain ? <p className="trade-lede">{lesson.r_plain}</p> : null}
+        {lab?.learning?.plain ? <p className={`trade-learning ${lab.learning.applied ? 'is-on' : ''}`}>{lab.learning.plain}</p> : null}
         <div className="lab-scoreboard">
           {lanes.map((lane) => (
             <article key={lane.key} className={`lab-lane ${labKidTone(lane.key)}`}>
               <h4>{lane.title}</h4>
+              <em>{lane.rows.length}</em>
               {lane.rows.length ? (
                 <ul>
                   {lane.rows.map((row) => (
@@ -279,11 +433,19 @@ export function BacktestLabView({ runControl, setActive }: ExperienceViewProps) 
                     </li>
                   ))}
                 </ul>
-              ) : <p className="trade-note">None yet.</p>}
+              ) : <p className="trade-note">{lane.empty}</p>}
             </article>
           ))}
         </div>
       </section>
+      <ClassroomBook
+        classroom={lab?.classroom}
+        onArm={() => void arm()}
+        onDisarm={() => void disarm()}
+        onFeed={() => void feed()}
+        busy={busy}
+        note={note}
+      />
       <div className="trade-usecases">
         {(lab?.use_cases || []).map((item) => (
           <article key={item.id} className={`trade-usecase ${labStatusTone(item.status)}`}>
@@ -333,11 +495,12 @@ export function BacktestLabView({ runControl, setActive }: ExperienceViewProps) 
   )
 }
 
-export function LiveJourneyView({ runControl, setActive }: ExperienceViewProps) {
+export function LiveJourneyView({ setActive }: ExperienceViewProps) {
   const [journey, setJourney] = useState<LiveJourneyPayload | null>(null)
   const [alloc, setAlloc] = useState('25000')
   const [note, setNote] = useState('')
   const [busy, setBusy] = useState(false)
+  const armedPoll = Boolean(journey?.autopilot.armed)
 
   const load = () => {
     fetchLiveJourney()
@@ -350,9 +513,9 @@ export function LiveJourneyView({ runControl, setActive }: ExperienceViewProps) 
 
   useEffect(() => {
     load()
-    const t = window.setInterval(load, 15_000)
+    const t = window.setInterval(load, armedPoll ? 5_000 : 12_000)
     return () => window.clearInterval(t)
-  }, [])
+  }, [armedPoll])
 
   const arm = async () => {
     setBusy(true)
@@ -363,6 +526,19 @@ export function LiveJourneyView({ runControl, setActive }: ExperienceViewProps) 
       load()
     } catch (reason) {
       setNote(reason instanceof Error ? reason.message : 'Paper arm failed')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const feed = async () => {
+    setBusy(true)
+    try {
+      const out = await feedPaperClassroom()
+      setNote(out.message)
+      load()
+    } catch (reason) {
+      setNote(reason instanceof Error ? reason.message : 'Feed failed')
     } finally {
       setBusy(false)
     }
@@ -381,9 +557,10 @@ export function LiveJourneyView({ runControl, setActive }: ExperienceViewProps) 
 
   const stats = journey?.report_card.stats || {}
   const armed = Boolean(journey?.autopilot.armed)
+  const classroom = journey?.classroom
 
   return (
-    <section className="reco-light trade-desk">
+    <section className="reco-light trade-desk lab-alive">
       <nav className="reco-crumb" aria-label="Breadcrumb">
         <button type="button" onClick={() => setActive('Ready Trades')}>Trade</button>
         <span>/</span>
@@ -392,13 +569,18 @@ export function LiveJourneyView({ runControl, setActive }: ExperienceViewProps) 
         <strong>Journey</strong>
       </nav>
       <header className="reco-hero">
-        <div className="reco-hero-icon">J</div>
+        <div className={`reco-hero-icon lab-pulse-icon ${armed ? 'live' : 'idle'}`}>J</div>
         <div>
           <h2>Paper → live journey</h2>
           <p>
             {journey?.rung.label || 'Paper is production. Live is earned.'}
             {' '}This page can arm paper. It cannot arm live.
           </p>
+        </div>
+        <div className={`lab-pulse-pill ${armed ? 'live' : 'idle'}`}>
+          <i />
+          <strong>{armed ? (classroom?.in_window ? 'Paper in session' : 'Armed · waiting') : 'Disarmed'}</strong>
+          <span>{journey?.next_action || classroom?.next_action || 'Arm paper to auto-take Ready tickets.'}</span>
         </div>
       </header>
       <div className="trade-journey-hero">
@@ -409,6 +591,10 @@ export function LiveJourneyView({ runControl, setActive }: ExperienceViewProps) 
         <article>
           <span>Paper closed</span>
           <strong>{journey?.paper_closed ?? 0}/{journey?.paper_e4_n ?? 300}</strong>
+        </article>
+        <article>
+          <span>Open now</span>
+          <strong>{classroom?.open_n ?? journey?.autopilot.open_trades ?? 0}</strong>
         </article>
         <article>
           <span>Report card</span>
@@ -431,10 +617,19 @@ export function LiveJourneyView({ runControl, setActive }: ExperienceViewProps) 
           </li>
         ))}
       </ol>
+      <ClassroomBook
+        classroom={classroom}
+        onArm={() => void arm()}
+        onDisarm={() => void disarm()}
+        onFeed={() => void feed()}
+        busy={busy}
+        note={note}
+      />
       <section className="trade-section">
         <h3>Arm paper autopilot</h3>
         <p className="trade-lede">
           {journey?.autopilot.headline || 'Default is disarmed. Allocation compounds from closed paper P&L.'}
+          {' '}Arming immediately feeds the last Ready/BUY tickets. Paper window is 09:30–15:20 IST.
         </p>
         <div className="trade-arm">
           <label>
@@ -448,20 +643,20 @@ export function LiveJourneyView({ runControl, setActive }: ExperienceViewProps) 
             />
           </label>
           <button type="button" className="reco-primary" disabled={busy} onClick={() => void arm()}>
-            {armed ? 'Re-arm paper' : 'Arm paper'}
+            {armed ? 'Re-arm + feed' : 'Arm paper'}
+          </button>
+          <button type="button" className="reco-ghost" disabled={busy || !armed} onClick={() => void feed()}>
+            Feed Ready tickets
           </button>
           <button type="button" className="reco-ghost" disabled={busy || !armed} onClick={() => void disarm()}>
             Disarm
           </button>
-          <button type="button" className="reco-ghost" onClick={() => void runControl('RUN_CYCLE_NOW')}>
-            Request paper cycle
-          </button>
         </div>
-        {note ? <p className="trade-note">{note}</p> : null}
         <p className="trade-lede">
           Expectancy {stats.expectancy_r != null ? `${Number(stats.expectancy_r) >= 0 ? '+' : ''}${stats.expectancy_r}R` : '—'}
           {' · '}PF {stats.profit_factor ?? '—'}
           {' · '}n {stats.n ?? 0}
+          {' · '}seen today {journey?.autopilot.considered_today ?? 0}
         </p>
         {journey?.scaling?.reason ? <p className="trade-note">{journey.scaling.action}: {journey.scaling.reason}</p> : null}
       </section>
