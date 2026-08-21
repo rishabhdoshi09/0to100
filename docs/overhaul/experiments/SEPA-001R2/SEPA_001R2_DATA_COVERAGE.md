@@ -10,7 +10,7 @@ Official NSE `sec_bhavdata_full` CSVs via `data.bhavcopy_store`. No fabricated b
 | First session | **2019-08-23** |
 | Last session | **2026-08-21** |
 | 2018 / early-2019 | NSE `sec_bhavdata_full` 404 — not invented |
-| Warm-up | 252 sessions (~2020-09-16 first eval date) |
+| Warm-up | 252 sessions (~2020-09-16 first *indicator* date; canonical eval starts at **260** sessions so min_sessions and Stage-2 252 can both be known) |
 | Post-warm-up calendar years | **2021, 2022, 2023, 2024, 2025** complete; 2020 remainder; 2026 through 21 Aug |
 
 ## Sessions by year (CSV)

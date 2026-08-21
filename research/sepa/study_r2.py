@@ -103,7 +103,7 @@ def run_study_r2(*, expand: bool = False, max_date_step: int = 1) -> dict[str, A
     else:
         source = "official_nse_bhavcopy"
         kwargs = dict(
-            warmup_sessions=252, min_sessions=260, min_price=20.0,
+            warmup_sessions=260, min_sessions=260, min_price=20.0,
             min_turnover=5_000_000.0, horizon=20, date_step=1,
             scanner_step=1, variants=("A", "B", "C", "D", "E", "F", "G"),
             top_n=None,
