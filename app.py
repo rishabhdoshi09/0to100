@@ -29,6 +29,14 @@ from ui.retail_pages_v2 import (
 
 st.set_page_config(page_title="QuantTerm", page_icon="⚡", layout="wide", initial_sidebar_state="expanded")
 
+try:
+    import scan.market_scan_service as _mss
+    from research.feature002.observe import try_observe_production_scan
+    if getattr(_mss, "_feature002_hook", None) is None:
+        _mss._feature002_hook = try_observe_production_scan
+except Exception:
+    pass
+
 pages = {
     "Everyday": [
         st.Page(render_home, title="Home", icon="🏠", default=True),

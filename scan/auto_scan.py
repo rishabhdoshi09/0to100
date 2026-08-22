@@ -527,7 +527,13 @@ def _scan_once_locked(universe: Optional[list[str]] = None, progress=None) -> No
             _scanned_count = len(universe)
             _last_scan_ts = time.time()
             _status = "ready"
+            ts_for_hook = _last_scan_ts
         _save_state()   # restart pe results turant wapas milenge
+        try:
+            from research.feature002.observe import try_observe_production_scan
+            try_observe_production_scan(serialized, last_scan_ts=ts_for_hook)
+        except Exception as exc:
+            log.debug("feature002_shadow_skip", error=str(exc))
         log.info("auto_scan_complete", universe=len(universe), signals=len(serialized))
     except Exception as exc:
         with _lock:

@@ -15,6 +15,11 @@ NO_SETUPS = "NO_SETUPS"
 DATA_UNAVAILABLE = "DATA_UNAVAILABLE"
 FAILED = "FAILED"
 
+try:
+    from research.feature002.observe import try_observe_production_scan as _feature002_hook
+except Exception:
+    _feature002_hook = None
+
 
 @dataclass(frozen=True)
 class MarketScanReport:
@@ -125,6 +130,12 @@ def run_whole_market_scan(
     payload["scan_status"] = SUCCEEDED
     if save:
         save_scan(payload)
+        # FEATURE-002 is observe-only and runs AFTER production results are final.
+        if _feature002_hook is not None:
+            try:
+                _feature002_hook(payload.get("records") or [])
+            except Exception:
+                pass
     summary = dict(payload.get("summary", {}))
     n_setups = int(summary.get("with_any_setup", 0) or 0)
     status = SUCCEEDED if n_setups else NO_SETUPS
