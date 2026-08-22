@@ -5,6 +5,7 @@ from datetime import date
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
 
 from research.edge001.analyze import classify
 from research.edge001.calendar import cost_fraction, holding_window, month_ends, next_session
@@ -113,6 +114,25 @@ def test_feature002_and_production_paths_untouched():
         cwd=root,
     )
     assert diff == b"", diff.decode()[:1000]
+
+
+def test_stale_last_print_is_not_live():
+    from research.edge001.study import live_on_session
+    from research.sepa.universe_pit import FastInvestable
+
+    idx = pd.date_range("2020-01-01", periods=300, freq="B")
+    dead = pd.DataFrame(
+        {"open": 10.0, "high": 11.0, "low": 9.0, "close": 10.0, "volume": 1_000_000},
+        index=idx,
+    )
+    live = dead.copy()
+    live.index = pd.date_range("2024-01-01", periods=300, freq="B")
+    fast = FastInvestable({"DEAD": dead, "LIVE": live})
+    as_of = date(2026, 6, 15)
+    assert live_on_session(fast, "DEAD", as_of) is False
+    assert live_on_session(fast, "LIVE", as_of) is False
+    last = live.index[-1].date()
+    assert live_on_session(fast, "LIVE", last) is True
 
 
 def test_edge001_does_not_import_live_execution():

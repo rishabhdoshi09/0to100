@@ -58,6 +58,18 @@ SPECS_MONTHLY_SIZE = {
 
 
 def _sessions_from_frames(frames: dict[str, pd.DataFrame]) -> list[date]:
+    """Official bhav session files, not the union of every symbol's index.
+
+    A renamed/delisted name can carry a stray date that is not an exchange
+    session for the rest of the book. Using that date as T+1 drops fills.
+    """
+    try:
+        from data.bhavcopy_store import _dates_on_disk
+        days = list(_dates_on_disk() or [])
+        if len(days) >= 200:
+            return sorted(days)
+    except Exception:
+        pass
     found: set[date] = set()
     for df in frames.values():
         idx = pd.DatetimeIndex(df.index)
@@ -65,6 +77,21 @@ def _sessions_from_frames(frames: dict[str, pd.DataFrame]) -> list[date]:
             idx = idx.tz_localize(None)
         found.update(d.date() for d in idx.normalize())
     return sorted(found)
+
+
+def _bar_date(fast: FastInvestable, symbol: str, t: date) -> date | None:
+    i = fast._pos.get(symbol)
+    if i is None:
+        return None
+    j = fast.loc_as_of(fast._dates[i], _asof_ns(t))
+    if j < 0:
+        return None
+    return pd.Timestamp(int(fast._dates[i][j])).date()
+
+
+def live_on_session(fast: FastInvestable, symbol: str, t: date) -> bool:
+    """True only if the name has an official bar on T. Stale last prints do not count."""
+    return _bar_date(fast, symbol, t) == t
 
 
 class OpenCache:
@@ -156,7 +183,9 @@ def rank_one_date(
     sector_of: dict[str, str],
 ) -> dict[str, Any] | None:
     snap = fast.snapshot(t, min_price=MIN_PRICE, min_turnover=MIN_TURNOVER, min_sessions=MIN_SESSIONS)
-    investable = list(snap.investable)
+    # FastInvestable.loc_as_of reuses a name's last print forever after
+    # delist/rename. Require a same-session bar so MAGMA-2021 cannot rank in 2026.
+    investable = [s for s in snap.investable if live_on_session(fast, s, t)]
     table = rs.table(t, investable) if investable else {"scores": {}}
     rows = []
     for sym in investable:
@@ -189,7 +218,8 @@ def rank_one_date(
         "candidate_count": len(snap.candidates),
         "investable_count": len(snap.investable),
         "ranked_count": int(len(df)),
-        "exclusions": dict(snap.exclusions),
+        "stale_dropped": int(len(snap.investable) - len(investable)),
+        "exclusions": {**dict(snap.exclusions), "stale_last_print": int(len(snap.investable) - len(investable))},
         "membership_hash": snap.membership_hash,
         "investable_hash": snap.investable_hash,
         "data_quality": "PIT_DEGRADED_LISTING_SECTOR",
@@ -401,6 +431,8 @@ def prod_momentum_compare(
         snap = fast.snapshot(t, min_price=MIN_PRICE, min_turnover=MIN_TURNOVER, min_sessions=MIN_SESSIONS)
         scored = []
         for s in snap.investable:
+            if not live_on_session(fast, s, t):
+                continue
             pos = fast._pos.get(s)
             if pos is None:
                 continue
@@ -447,6 +479,16 @@ def run_study(*, artifacts=None) -> dict[str, Any]:
     sector_of = {str(k).upper(): str(v) for k, v in (load_sector_map_v1().get("map") or {}).items()}
     rt_pct = float(round_trip_cost_pct("CNC"))
     nifty_level, nifty_src = build_index_level(frames)
+    official_level = None
+    try:
+        from data.index_store import get_index_ohlcv
+        odf = get_index_ohlcv("^NSEI")
+        if odf is not None and len(odf) >= 60:
+            col = next((c for c in odf.columns if str(c).lower() == "close"), None)
+            if col is not None:
+                official_level = pd.to_numeric(odf[col], errors="coerce").dropna()
+    except Exception:
+        official_level = None
     regime_tbl = classify_regime_level(nifty_level) if nifty_level is not None and len(nifty_level) else None
 
     ends = month_ends(sessions)
@@ -542,13 +584,16 @@ def run_study(*, artifacts=None) -> dict[str, Any]:
         entry = date.fromisoformat(p["entry_session"])
         exit_d = date.fromisoformat(p["exit_session"])
         br = nifty_period_return(nifty_level, entry, exit_d)
+        off = nifty_period_return(official_level, entry, exit_d) if official_level is not None else None
         ew_row = next((x for x in ew if x["rebalance"] == p["rebalance"]), None)
         ewg = None if ew_row is None else ew_row["gross"]
         bench.append({
             **{kk: vv for kk, vv in p.items() if kk not in ("picks", "advs")},
             "nifty": br,
+            "official_nifty": off,
             "ew_universe": ewg,
             "excess_net_vs_nifty": (p["net"] - br) if br is not None else None,
+            "excess_net_vs_official_nifty": (p["net"] - off) if off is not None else None,
             "excess_net_vs_ew": (p["net"] - ewg) if ewg is not None else None,
             "excess_gross_vs_nifty": (p["gross"] - br) if br is not None else None,
             "nifty_source": nifty_src,
@@ -589,6 +634,11 @@ def run_study(*, artifacts=None) -> dict[str, Any]:
         "dsr_n_trials": DSR_N_TRIALS,
         "n_primary_periods": len(prim),
         "nifty_source": nifty_src,
+        "official_nifty_sessions": int(len(official_level)) if official_level is not None else 0,
+        "official_nifty_start": (
+            str(pd.Timestamp(official_level.index.min()).date())
+            if official_level is not None and len(official_level) else None
+        ),
         "nifty500_available": bool(nifty500 is not None and len(nifty500)),
         "adv_lookback": ADV_LOOKBACK,
         "feature002_untouched": True,
