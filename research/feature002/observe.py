@@ -14,6 +14,7 @@ from research.feature002.constants import (
     FEATURE_SET_VERSION,
     FORWARD_START_DATE,
     FORWARD_START_TS_IST,
+    LEDGER_DIR,
     PRIMARY_SOURCE,
     PRODUCTION_RANK_VERSION,
     SHADOW_RANK_VERSION,
@@ -23,6 +24,20 @@ from research.feature002.constants import (
 )
 from research.feature002.ledger import insert_candidate_set, insert_observation
 from research.feature002.ranks import apply_shadow_ranks
+
+HOOK_LOG = LEDGER_DIR / "hook_log.jsonl"
+
+
+def _write_hook_event(event: dict[str, Any]) -> None:
+    """Best-effort receipt. Must never break the scan worker."""
+    try:
+        LEDGER_DIR.mkdir(parents=True, exist_ok=True)
+        row = dict(event)
+        row.setdefault("ts", _ist_now_iso())
+        with HOOK_LOG.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(row, default=str) + "\n")
+    except Exception:
+        pass
 
 _enabled = True
 _lock = threading.Lock()
@@ -166,10 +181,12 @@ def build_shadow_records(
     symbols = [str(c.get("symbol") or "").upper() for c in detached if c.get("symbol")]
     hists = {sym: _hist(sym) for sym in symbols}
     as_ofs = [_as_of_from_hist(h) for h in hists.values() if h is not None]
-    as_of = session_date
+    # Feature bars are last official/hist date. Session date stays the IST
+    # scan calendar so weekend/Monday scans do not collide with Friday event_ids.
+    hist_as_of = session_date
     if as_ofs:
-        as_of = max(as_ofs)
-    rs_table = _build_rs_table(symbols, as_of)
+        hist_as_of = max(as_ofs)
+    rs_table = _build_rs_table(symbols, hist_as_of)
 
     rows: list[dict[str, Any]] = []
     fam_counter: Counter[str] = Counter()
@@ -184,6 +201,9 @@ def build_shadow_records(
         feat = _features_for(sym, hist, rs_table) if hist is not None else {
             "trend": {"available": False}, "rs": {"available": False},
         }
+        if isinstance(feat, dict):
+            feat = dict(feat)
+            feat["hist_as_of"] = hist_as_of
         trend = feat.get("trend") or {}
         rs = feat.get("rs") or {}
         verdict = str(card.get("verdict") or "")
@@ -191,7 +211,7 @@ def build_shadow_records(
         rows.append({
             "symbol": sym,
             "exchange": EXCHANGE,
-            "session_date": as_of or session_date,
+            "session_date": session_date,
             "families": families,
             "primary_family": _primary_family(families),
             "production_score": card.get("score"),
@@ -234,7 +254,7 @@ def build_shadow_records(
     cset = {
         "candidate_set_id": set_id,
         "scan_cycle_id": scan_cycle_id,
-        "session_date": as_of or session_date,
+        "session_date": session_date,
         "recorded_at": recorded_at,
         "n_candidates": len(rows),
         "family_composition": dict(fam_counter),
@@ -258,8 +278,12 @@ def persist_shadow(cset: dict[str, Any], rows: Sequence[dict[str, Any]], *, path
             n_exist += 1
         elif out.get("status") == "pre_freeze_refused":
             n_refused += 1
-    return {"inserted": n_new, "exists": n_exist, "pre_freeze_refused": n_refused,
-            "candidate_set_id": cset["candidate_set_id"]}
+    result = {"inserted": n_new, "exists": n_exist, "pre_freeze_refused": n_refused,
+              "candidate_set_id": cset["candidate_set_id"],
+              "n_rows": len(rows), "session_date": cset.get("session_date"),
+              "source": cset.get("source")}
+    _write_hook_event({"kind": "persist_result", **result})
+    return result
 
 
 def observe_production_scan(
@@ -271,13 +295,27 @@ def observe_production_scan(
 ) -> dict[str, Any] | None:
     """Entry point from auto_scan. Deepcopies immediately. Never writes back."""
     if not is_enabled() or not serialized:
+        _write_hook_event({
+            "kind": "hook_skipped",
+            "reason": "disabled" if not is_enabled() else "empty_serialized",
+            "source": source,
+            "n_cards": 0 if not serialized else len(serialized),
+        })
         return None
     snapshot = copy.deepcopy(list(serialized))
+    _write_hook_event({
+        "kind": "hook_received",
+        "source": source,
+        "n_cards": len(snapshot),
+        "background": background,
+    })
 
     def _run() -> dict[str, Any]:
         session = _session_date(snapshot)
         if source == PRIMARY_SOURCE and session < FORWARD_START_DATE:
-            return {"skipped": "pre_freeze_session", "session_date": session}
+            out = {"skipped": "pre_freeze_session", "session_date": session}
+            _write_hook_event({"kind": "pre_freeze_session", **out})
+            return out
         recorded = _ist_now_iso()
         if source == PRIMARY_SOURCE and recorded < FORWARD_START_TS_IST:
             # Clock before protocol activation: still persist as test, not primary.
@@ -308,7 +346,8 @@ def observe_production_scan(
 def _safe_run(fn) -> None:
     try:
         fn()
-    except Exception:
+    except Exception as exc:
+        _write_hook_event({"kind": "observe_failed", "error": str(exc)})
         try:
             from logger import get_logger
             get_logger(__name__).debug("feature002_shadow_failed")
