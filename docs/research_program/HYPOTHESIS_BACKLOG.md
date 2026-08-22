@@ -14,7 +14,7 @@ Independence notes matter: EDGE-001 consumed CS 12-1; FEATURE-001 consumed Trend
 | H-91 | 9-1 CS momentum Top20 | 3 | 1 | 5 | 4 | 3 | 4 | 1 | 2 | 4 | 5 — EDGE-001 sensitivity; consumed |
 | H-REV1M | 1-month CS reversal | 3 | 3 | 5 | 4 | 3 | 3 | 3 | 3 | 4 | **DONE EDGE-004 REJECT** |
 | H-52W | Names nearest 52-week high outperform (George–Hwang) | 4 | 3 | 5 | 4 | 3 | 4 | 3 | 4 | 5 | **DONE EDGE-005 RESEARCH-ONLY** |
-| H-LIQ | Highest 20d ADV names outperform (liquidity as CS quality rank) | 3 | 4 | 5 | 4 | 4 | 5 | 4 | 5 | 5 | **1 — EDGE-006** |
+| H-LIQ | Highest 20d ADV names outperform (liquidity as CS quality rank) | 3 | 4 | 5 | 4 | 4 | 5 | 4 | 5 | 5 | **DONE EDGE-006 REJECT** |
 | H-BREADTH | Breadth / %above-200 as a cash vs equity allocator | 3 | 4 | 4 | 4 | 5 | 4 | 3 | 3 | 4 | 7 |
 | H-QUAL | Quality / profitability long-only | 4 | 5 | 1 | 1 | 4 | 4 | 4 | 3 | 3 | postponed — no PIT fundamentals |
 | H-ERN | Post-earnings drift | 4 | 5 | 1 | 1 | 3 | 3 | 4 | 3 | 3 | postponed — no PIT earnings tape |
