@@ -17,9 +17,10 @@ embargo pass, MISSED/GAP_THROUGH refusals not forced into R.
 
 ## Files
 
-- `sepa_003_features.parquet`
-- `sepa_003_controls.jsonl`
-- `sepa_003_g_panel.jsonl`
+- `sepa_003_features.parquet` (committed)
+- `sepa_003_stats.json` (committed)
+- `sepa_003_controls.jsonl` / `sepa_003_g_panel.jsonl` (local rebuild;
+  36MB combined, regenerable via `python -m research.sepa003`)
 - `sepa_003_stats.json`
 - `sepa_003_hypotheses.json` (predeclared)
 - `sepa_003_feature_manifest.json`
