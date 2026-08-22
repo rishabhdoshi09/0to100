@@ -12,7 +12,8 @@ Independence notes matter: EDGE-001 consumed CS 12-1; FEATURE-001 consumed Trend
 | H-OVN | Close-to-open vs open-to-close contribution after costs | 3 | 5 | 5 | 4 | 2 | 2 | 5 | 5 | 5 | postponed — daily CNC 0.32% RT is a priori fatal |
 | H-RES | Residual CS momentum after market (and sector if map allows) | 4 | 2 | 5 | 3 | 3 | 4 | 2 | 3 | 4 | 4 — born from EDGE-001; consumed |
 | H-91 | 9-1 CS momentum Top20 | 3 | 1 | 5 | 4 | 3 | 4 | 1 | 2 | 4 | 5 — EDGE-001 sensitivity; consumed |
-| H-REV1M | 1-month CS reversal | 3 | 3 | 5 | 4 | 3 | 3 | 3 | 3 | 4 | **1 — EDGE-004** |
+| H-REV1M | 1-month CS reversal | 3 | 3 | 5 | 4 | 3 | 3 | 3 | 3 | 4 | **DONE EDGE-004 REJECT** |
+| H-52W | Names nearest 52-week high outperform (George–Hwang) | 4 | 3 | 5 | 4 | 3 | 4 | 3 | 4 | 5 | **1 — EDGE-005** |
 | H-BREADTH | Breadth / %above-200 as a cash vs equity allocator | 3 | 4 | 4 | 4 | 5 | 4 | 3 | 3 | 4 | 7 |
 | H-QUAL | Quality / profitability long-only | 4 | 5 | 1 | 1 | 4 | 4 | 4 | 3 | 3 | postponed — no PIT fundamentals |
 | H-ERN | Post-earnings drift | 4 | 5 | 1 | 1 | 3 | 3 | 4 | 3 | 3 | postponed — no PIT earnings tape |
@@ -34,6 +35,16 @@ Not selected now:
 - H-91 / H-RES: mutating EDGE-001 on consumed history.
 - H-TS: reserved; Trend was already studied as a *feature on fires*.
 - H-QUAL / H-ERN: fabricate-nothing rule.
+
+## Selection for EDGE-005
+
+**H-52W** (George–Hwang proximity to 52-week high).
+
+- Simple: one number (close / 252-session max), one rank, one book.
+- Orthogonal to 12-1 *return* (EDGE-001), realized vol (EDGE-002), SMA200 inclusion (EDGE-003), and 21d losers (EDGE-004).
+- Scanner already *demotes* laggards (>30% below 52w high) on fires. That is not a test of a standalone near-high Top20 book. FEATURE-001 did not isolate this as a portfolio.
+- Independence is 3, not 5: the scanner quality gate consumed the *direction* of the idea on fires. Confirmation cannot be sold as a first look at “near highs are good.”
+- H-BREADTH is an allocator (§25) and uses `%above-SMA200` already described in EDGE-003.
 
 ## Selection for EDGE-004
 

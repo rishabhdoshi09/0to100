@@ -1,7 +1,7 @@
 {
   "program": "QuantTerm autonomous research",
   "updated": "2026-08-22",
-  "new_edge_budget_remaining": 3,
+  "new_edge_budget_remaining": 2,
   "experiments": [
     {
       "id": "SEPA-003",
@@ -103,6 +103,19 @@
       "verdict": "RESEARCH-ONLY",
       "status": "completed",
       "next_implication": "Do not open an inclusion shadow. Do not retune SMA/cadence/Top20. Next: independent 1-month reversal."
+    },
+    {
+      "id": "EDGE-004",
+      "title": "One-month cross-sectional reversal",
+      "hypothesis": "Lowest 21-session return Top20 monthly has positive net excess vs EW after CNC costs.",
+      "protocol_commit": "bad05b7",
+      "code_commit": "822816d",
+      "data_range": "ranks 2020-09-30 to 2026-08-21; 70 complete holds",
+      "pit_classification": "PIT_DEGRADED_listing_sector; same-session print; inclusive 21d <= T",
+      "result": "Net CAGR 12.55% vs EW 25.62% (−13.07%); Spearman −0.14; D10≈D1; R0/R2/R3/WIN all negative excess.",
+      "verdict": "REJECT",
+      "status": "completed",
+      "next_implication": "Do not switch to 10d or a 2025-only gate. Next: 52-week-high proximity."
     }
   ]
 }
