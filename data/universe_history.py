@@ -216,6 +216,9 @@ def ledger_status(path: str | Path | None = None) -> dict:
 
     if "survivorship_complete" in completeness:
         survivorship_complete = bool(completeness.get("survivorship_complete"))
+        # Official files that omit undated delists are not complete.
+        if int(completeness.get("delisted_omitted_no_listed_date") or 0) > 0:
+            survivorship_complete = False
     elif source == "bhav_inferred":
         # Operational PIT intervals from local bhav — NOT research-grade.
         survivorship_complete = bool(cleaned)

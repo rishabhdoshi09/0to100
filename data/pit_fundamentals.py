@@ -22,6 +22,7 @@ _DEFAULT_PATH = Path(__file__).resolve().parent.parent / "logs" / "pit_fundament
 _NUMERIC = (
     "revenue_from_operations",
     "other_income",
+    "operating_profit",
     "profit_before_tax",
     "profit_after_tax",
     "comprehensive_income",
@@ -91,6 +92,8 @@ def validate_rows(rows) -> list[dict]:
             "xbrl_url", "seq_id", "security_id", "unit", "currency",
             "revision_status", "first_known_at", "source_id", "source_hash",
             "filing_id", "superseded_by_row_id",
+            "period_kind", "quarterly_usable", "consol_basis", "reporting_frequency",
+            "parser_version", "raw_hash", "ingested_at", "field_quality",
         ):
             if row.get(key) not in (None, ""):
                 item[key] = row[key]
@@ -237,14 +240,27 @@ def _asof_str(as_of) -> str:
         return str(as_of).strip()[:10]
 
 
+_ROWS_CACHE: dict[str, tuple[float, list[dict]]] = {}
+
+
 def _load_rows(path: str | Path | None = None) -> list[dict]:
     p = ledger_path(path)
     if not p.exists():
         return []
+    key = str(p.resolve())
     try:
-        return validate_rows(_coerce_rows(json.loads(p.read_text(encoding="utf-8"))))
+        mtime = p.stat().st_mtime
+    except OSError:
+        mtime = 0.0
+    hit = _ROWS_CACHE.get(key)
+    if hit and hit[0] == mtime:
+        return hit[1]
+    try:
+        rows = validate_rows(_coerce_rows(json.loads(p.read_text(encoding="utf-8"))))
     except Exception:
-        return []
+        rows = []
+    _ROWS_CACHE[key] = (mtime, rows)
+    return rows
 
 
 def known_as_of(symbol: str, as_of, path: str | Path | None = None) -> list[dict]:
@@ -275,8 +291,14 @@ def get_period_as_of(
     for row in known_as_of(symbol, as_of, path=path):
         if _asof_str(row.get("period_end") or "") != pe:
             continue
-        if best is None or row["available_at"] >= best["available_at"]:
+        if best is None or row["available_at"] > best["available_at"]:
             best = dict(row)
+        elif row["available_at"] == best["available_at"]:
+            # Canonical preference: CONSOLIDATED over STANDALONE on the same day.
+            if str(row.get("consol_basis") or "") == "CONSOLIDATED" and str(
+                best.get("consol_basis") or ""
+            ) != "CONSOLIDATED":
+                best = dict(row)
     return best
 
 
@@ -286,8 +308,17 @@ def get_fundamentals(symbol: str, as_of, path: str | Path | None = None) -> dict
     best = None
     for row in known_as_of(symbol, as_of, path=path):
         avail = row["available_at"]
-        if avail <= asof and (best is None or avail >= best["available_at"]):
+        if avail > asof:
+            continue
+        if best is None or avail > best["available_at"]:
             best = dict(row)
+        elif avail == best["available_at"]:
+            row_pe = str(row.get("period_end") or "")
+            best_pe = str(best.get("period_end") or "")
+            row_c = str(row.get("consol_basis") or "") == "CONSOLIDATED"
+            best_c = str(best.get("consol_basis") or "") == "CONSOLIDATED"
+            if row_pe > best_pe or (row_pe == best_pe and row_c and not best_c):
+                best = dict(row)
     return best
 
 

@@ -88,6 +88,16 @@ def normalize_event(row: dict[str, Any]) -> dict[str, Any]:
         "source": row.get("source"),
         "filing_id": row.get("seq_id") or row.get("event_id") or row.get("xbrl_url"),
         "session_class": classify_session(ts if isinstance(ts, str) else None),
+        "time_quality": (
+            "EVENT_TIMESTAMP_STRONG"
+            if ts and "T" in str(ts) and len(str(ts)) >= 16
+            else ("EVENT_DATE_ONLY" if row.get("available_at") else "EVENT_MISSING")
+        ),
+        "causal_effective": (
+            "ANNOUNCEMENT_TS"
+            if ts and "T" in str(ts) and len(str(ts)) >= 16
+            else "NEXT_SESSION"
+        ),
         "data_quality": _quality(row),
         "event_id": row.get("event_id"),
         "not_earnings_surprise": True,

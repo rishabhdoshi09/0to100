@@ -23,19 +23,51 @@ def _iso_today() -> str:
     return datetime.now(timezone.utc).date().isoformat()
 
 
+def _official_industry_from_cache() -> dict[str, str]:
+    """Current NSE index-constituent Industry column, if ingested. Not history."""
+    import csv
+    import io
+    d = Path(__file__).resolve().parent.parent / "logs" / "acquisition" / "raw" / "sector"
+    if not d.exists():
+        return {}
+    out: dict[str, str] = {}
+    for p in sorted(d.glob("*.csv")):
+        try:
+            text = p.read_text(encoding="utf-8", errors="replace")
+            reader = csv.DictReader(io.StringIO(text))
+            for r in reader:
+                r = {str(k).strip(): (v.strip() if isinstance(v, str) else v) for k, v in r.items()}
+                sym = str(r.get("Symbol") or r.get("SYMBOL") or "").strip().upper()
+                industry = str(r.get("Industry") or r.get("industry") or "").strip()
+                if sym and industry and sym not in out:
+                    out[sym] = industry
+        except Exception:
+            continue
+    return out
+
+
 def build_static_map() -> dict[str, Any]:
-    """Reuse SEPA-003 comment parser + overlays. Not a historical archive."""
+    """Reuse SEPA-003 comment parser + optional official current industry.
+
+    Official industry raises coverage. It does not upgrade PIT class.
+    """
     from research.sepa003.sector import load_sector_map_v1
 
     v1 = load_sector_map_v1()
     mapping = dict(v1.get("map") or {})
+    official = _official_industry_from_cache()
+    for sym, industry in official.items():
+        mapping.setdefault(sym, industry)
     rows = []
     for sym, sec in sorted(mapping.items()):
+        industry = official.get(sym) or sec
         rows.append({
             "symbol": sym,
             "sector": sec,
-            "industry": sec,  # no finer official industry archive on disk
-            "classification_source": v1.get("source"),
+            "industry": industry,
+            "classification_source": (
+                "nse_index_constituent_industry" if sym in official else v1.get("source")
+            ),
             "valid_from": None,
             "valid_to": None,
             "source_timestamp": None,
@@ -48,8 +80,11 @@ def build_static_map() -> dict[str, Any]:
         "pit_class": STATIC_BACKFILL,
         "sector_identity_pit": False,
         "n_mapped": len(rows),
+        "n_official_industry": len(official),
         "n_unknown_policy": "unmapped stays UNKNOWN",
-        "source": v1.get("source"),
+        "source": (
+            "sepa003+nse_index_constituent_industry" if official else v1.get("source")
+        ),
         "never_projects_silently": True,
         "content_hash": hashlib.sha256(blob).hexdigest(),
         "rows": rows,

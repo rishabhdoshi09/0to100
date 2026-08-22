@@ -1,0 +1,175 @@
+{
+  "generated_from": "data.acquisition.coverage.build_report",
+  "fundamentals": {
+    "rows": 19151,
+    "symbols_with_ge1": 2057,
+    "symbols_with_ge4_quarters": 1571,
+    "symbols_with_ge8_quarters": 1261,
+    "symbols_with_ge12_quarters": 32,
+    "median_quarters_per_company": 9,
+    "earliest_filing": "2019-04-10",
+    "latest_filing": "2025-06-17",
+    "annual_vs_quarterly": {
+      "quarterly": 15324,
+      "annual": 3827
+    },
+    "by_year": {
+      "2019": 2164,
+      "2020": 411,
+      "2021": 402,
+      "2022": 2759,
+      "2023": 6500,
+      "2024": 6915
+    },
+    "quality": {
+      "FUNDAMENTAL_PIT_STRONG": 19151
+    }
+  },
+  "earnings_events": {
+    "event_count": 137212,
+    "symbols": 2489,
+    "earliest": "2016-01-08",
+    "latest": "2026-08-06",
+    "by_year": {
+      "2016": 12420,
+      "2017": 14625,
+      "2018": 15268,
+      "2019": 12947,
+      "2020": 14169,
+      "2021": 14433,
+      "2022": 14926,
+      "2023": 16491,
+      "2024": 17887,
+      "2025": 4015,
+      "2026": 31
+    },
+    "timestamp_quality": {
+      "EVENT_TIMESTAMP_STRONG": 137212
+    },
+    "consensus_series": false,
+    "may_compute_surprise": false,
+    "date_only_causal_policy": "NEXT_SESSION"
+  },
+  "universe": {
+    "default": {
+      "path": "/workspace/logs/universe_history.json",
+      "rows": 3156,
+      "source": "bhav_inferred",
+      "research_grade": false,
+      "pit_class": "PIT_DEGRADED",
+      "point_in_time_universe_v2": false,
+      "status": "DESCRIPTIVE_ONLY",
+      "omitted_undated_delists": 0,
+      "note": "Inferred first/last bhav session is not an official listing/delisting/suspension/symbol-change archive.",
+      "generated_at": "2026-08-22T10:59:16.745472+00:00"
+    },
+    "official_v2": {
+      "rows": 2293,
+      "source": "nse_equity_l+nse_delisted",
+      "research_grade": false,
+      "completeness": {
+        "has_official_listings": true,
+        "has_official_delistings": true,
+        "survivorship_complete": true,
+        "reconstructed_from_survivors_only": false,
+        "delisted_membership_rows": 4,
+        "delisted_omitted_no_listed_date": 324,
+        "bhav_delisted_undated": 0
+      }
+    },
+    "bhav_inferred_sidecar": {
+      "rows": 3156,
+      "source": "bhav_inferred",
+      "research_grade": false
+    }
+  },
+  "sector": {
+    "version": "sector_map.v2",
+    "n_mapped": 845,
+    "pit_class": "STATIC_BACKFILL",
+    "status": "RESEARCH_READY_WITH_LIMITATIONS",
+    "content_hash": "6dba3707e969a58eb28caa30640113a83ecb7a5858ba9dec4f32c543362af0f4",
+    "note": "Static modern / comment-derived classification. Descriptive use only. Not PIT_SECTOR_STRONG. Do not back-project as historical truth."
+  },
+  "ca": {
+    "available": true,
+    "path": "/workspace/logs/ca_events.json",
+    "symbols": 462,
+    "events": 607,
+    "research_grade": false,
+    "share_adjust_types": [
+      "bonus",
+      "consolidation",
+      "split"
+    ],
+    "rejected_types": {
+      "dividend": 0,
+      "invalid": 0
+    },
+    "todo_path": "/workspace/logs/ca_events.todo.csv",
+    "never_invents": true,
+    "honesty": "QuantTerm never invents corporate actions from price gaps. Fill factor/type from official NSE filings into the todo CSV, then ca-ingest.",
+    "adjustment_verified": false,
+    "verify_note": "verify not run yet \u2014 python main.py ca-ingest --verify",
+    "todo_available": false,
+    "todo_gaps": 0,
+    "next_action": "Ledger has events but adjustment is not verified \u2014 python main.py ca-ingest --verify  (or add more rows from --from-gaps)",
+    "ca_complete": false,
+    "ca_research_acceptable": true,
+    "label": "CA_RESEARCH_ACCEPTABLE",
+    "status": "RESEARCH_READY_WITH_LIMITATIONS",
+    "unresolved_classes": {
+      "rights": "quarantine",
+      "demerger": "quarantine",
+      "merger": "quarantine",
+      "special_distribution": "quarantine",
+      "symbol_restructuring": "research_segmentation",
+      "unknown_discontinuity": "quarantine"
+    },
+    "never_infers_from_gaps": true,
+    "verifier_unchanged": true,
+    "note": "Share-count bonus/split/consolidation rows may be used when present. The global CA verifier is not weakened. Completeness requires official treatment of rights, demergers, mergers, and symbol transitions."
+  },
+  "benchmarks": {
+    "files": {
+      "n_files": 2864,
+      "first": "2015-01-01",
+      "last": "2026-08-21",
+      "source": "nsearchives.nseindia.com/content/indices/ind_close_all_DDMMYYYY.csv",
+      "files_hash": "55ab30b843e82a09",
+      "network": false
+    },
+    "nifty50": {
+      "first": "2015-11-09",
+      "last": "2026-08-21",
+      "n": 2660,
+      "return_kind": "price_return",
+      "available": true
+    },
+    "nifty500": {
+      "first": "2015-11-09",
+      "last": "2026-08-21",
+      "n": 2660,
+      "return_kind": "price_return",
+      "available": true
+    },
+    "nifty_total_market": {
+      "first": "2016-07-07",
+      "last": "2026-08-21",
+      "n": 1199,
+      "return_kind": "price_return",
+      "available": true
+    }
+  },
+  "feature002": {
+    "operational": {
+      "operational_state": "NO_POST_ACTIVATION_SCAN",
+      "research_maturity": "FORWARD VALIDATION ACTIVE \u2014 INSUFFICIENT NEW DATA",
+      "combined": "NO_POST_ACTIVATION_SCAN + FORWARD VALIDATION ACTIVE \u2014 INSUFFICIENT NEW DATA",
+      "is_logging_bug": false,
+      "alerts": []
+    },
+    "first_real_scan_accepted": false,
+    "note": "Synthetic/E2E rows are not primary. Do not insert replay into primary stats. Call again after a genuine weekday production scan."
+  }
+}
