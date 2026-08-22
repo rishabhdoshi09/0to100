@@ -1,0 +1,22 @@
+{
+  "experiment": "EDGE-004",
+  "primary_ranker": "R1_21_INCLUSIVE_LOSERS",
+  "primary_n": 20,
+  "primary_rebalance": "monthly_last_session",
+  "sort": "ascending_prior_return",
+  "lookback_sessions": 21,
+  "skip": 0,
+  "fill": "next_open",
+  "stop": "none_scheduled_rebalance_only",
+  "cost_model": "core.costs.round_trip_cost_pct.CNC",
+  "hypotheses": ["H1", "H2", "H3_descriptive"],
+  "blocks": {
+    "development_end": "2022-12-31",
+    "validation_end": "2024-12-31",
+    "confirmation_end": "2026-08-21"
+  },
+  "dsr_n_trials": 24,
+  "parent_fail": "EXP-NEXT-01",
+  "feature_002_frozen": true,
+  "production_untouched": true
+}
