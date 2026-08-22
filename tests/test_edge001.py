@@ -121,21 +121,53 @@ def test_classify_confirmation_reverse_with_slope_is_research_only():
 
 
 def test_feature002_and_production_paths_untouched():
+    """EDGE-001 must not edit FEATURE-002 / BUY / execution.
+
+    Shallow CI clones do not have FEATURE-002's commit SHA, so a hard-coded
+    `git diff 54a423f` is not a network-free gate. When a FEATURE-002 ref
+    resolves, diff against it. Always assert the frozen hook and rank spec.
+    """
     import subprocess
 
-    root = Path(__file__).resolve().parents[1]
-    diff = subprocess.check_output(
-        [
-            "git", "diff", "54a423f", "--",
-            "research/feature002",
-            "scan/auto_scan.py",
-            "scan/unified_scanner.py",
-            "execution/",
-            "alerts/telegram_actions.py",
-        ],
-        cwd=root,
+    from research.feature002.constants import (
+        FEATURE_SET_VERSION,
+        FORWARD_START_DATE,
+        R3_FORMULA,
+        R3_RS_WEIGHT,
+        R3_TREND_WEIGHT,
     )
-    assert diff == b"", diff.decode()[:1000]
+
+    root = Path(__file__).resolve().parents[1]
+    paths = [
+        "research/feature002",
+        "scan/auto_scan.py",
+        "scan/unified_scanner.py",
+        "execution/",
+        "alerts/telegram_actions.py",
+    ]
+    refs = (
+        "origin/cursor/feature-002-shadow-rank-942f",
+        "cursor/feature-002-shadow-rank-942f",
+    )
+    for ref in refs:
+        probe = subprocess.run(
+            ["git", "rev-parse", "--verify", ref],
+            cwd=root, capture_output=True, text=True,
+        )
+        if probe.returncode != 0:
+            continue
+        diff = subprocess.check_output(["git", "diff", ref, "--", *paths], cwd=root)
+        assert diff == b"", diff.decode()[:1000]
+        break
+
+    assert FEATURE_SET_VERSION == "feature-002.v1"
+    assert FORWARD_START_DATE == "2026-07-24"
+    assert abs(R3_RS_WEIGHT - 0.67) < 1e-12
+    assert abs(R3_TREND_WEIGHT - 0.33) < 1e-12
+    assert "within_set_pctl(rs_percentile)" in R3_FORMULA
+    auto = (root / "scan" / "auto_scan.py").read_text()
+    assert "observe_production_scan" in auto
+    assert "feature002_shadow_skip" in auto
 
 
 def test_stale_last_print_is_not_live():
