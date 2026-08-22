@@ -1,0 +1,82 @@
+{
+  "program": "QuantTerm autonomous research",
+  "updated": "2026-08-22",
+  "new_edge_budget_remaining": 5,
+  "experiments": [
+    {
+      "id": "SEPA-003",
+      "title": "Core SEPA decay and component survival",
+      "hypothesis": "Core F remains a usable eligibility rule after costs and confirmation.",
+      "result": "Confirmation Core F E[R] negative; components do not survive as a stack.",
+      "verdict": "RETIRE CORE SEPA; RETAIN SELECT FEATURES",
+      "status": "completed",
+      "next_implication": "Trend and CS-RS may be studied as features, not Core F."
+    },
+    {
+      "id": "FEATURE-001",
+      "title": "Trend and RS attribution on scanner families",
+      "hypothesis": "trend_features_v1 and rs_cs_v1 explain forward R on existing fires.",
+      "protocol_commit": "b5f2aa1",
+      "code_commit": "aa2dc3b",
+      "data_range": "2020-09-28 to 2026-07-23",
+      "pit_classification": "PIT_DEGRADED_listing_consumed_history",
+      "result": "Explanatory rank association on several families; not a standalone edge.",
+      "verdict": "FORWARD-VALIDATE AS RANK FEATURE",
+      "status": "completed",
+      "next_implication": "FEATURE-002 future-only shadow ranks."
+    },
+    {
+      "id": "FEATURE-002",
+      "title": "Future shadow ranking validation",
+      "hypothesis": "R1 RS / R2 Trend / R3 blend beat R0 production rank on new live_scan rows.",
+      "protocol_commit": "23df846",
+      "code_commit": "54a423f",
+      "data_range": "forward from 2026-07-24; protocol 2026-08-22T00:00:00+05:30",
+      "pit_classification": "future_only",
+      "result": "0 primary observations at last evaluation.",
+      "verdict": "FORWARD VALIDATION ACTIVE — INSUFFICIENT NEW DATA",
+      "status": "active_forward",
+      "next_implication": "Wait for frozen maturity gates. Do not retune."
+    },
+    {
+      "id": "EDGE-001",
+      "title": "NSE cross-sectional momentum",
+      "hypothesis": "M1 12-1 Top20 monthly long-only has positive net excess after CNC costs.",
+      "protocol_commit": "a00b5c9",
+      "code_commit": "99bf01d",
+      "data_range": "ranks 2020-09-30 to 2026-08-21; 70 complete holds",
+      "pit_classification": "PIT_DEGRADED_listing_sector; same-session print required",
+      "result": "Net CAGR 30.0% vs EW 25.6%; confirmation excess -5.4%; monthly excess CI includes 0.",
+      "verdict": "RESEARCH-ONLY",
+      "status": "completed",
+      "next_implication": "Do not retune M1/Top20/monthly. Move to an independent hypothesis."
+    },
+    {
+      "id": "EXP-NEXT-01",
+      "title": "Short-horizon reversal (29-name panel)",
+      "hypothesis": "1/3/5d losers outperform winners on 5d/10d holds after costs.",
+      "result": "FAIL on certified 29-name panel.",
+      "verdict": "FAIL",
+      "status": "completed",
+      "next_implication": "Do not promote. Full-universe 1-month reversal is a different ID if ever tested."
+    },
+    {
+      "id": "EXP-NEXT-02",
+      "title": "Low-vol L/S (29-name panel, 20d)",
+      "hypothesis": "Lowest 20d vol quintile beats highest on 21d hold after costs.",
+      "result": "INCONCLUSIVE / NET_POSITIVE_UNCONFIRMED; confirmation not passed.",
+      "verdict": "INCONCLUSIVE",
+      "status": "completed",
+      "next_implication": "A full-universe long-only monthly low-vol book is a new experiment (EDGE-002), not a silent retune."
+    },
+    {
+      "id": "EXP-NEXT-03",
+      "title": "Volatility compression risk diagnostic",
+      "hypothesis": "Compressed short/long vol ratio forecasts material downside.",
+      "result": "FAIL",
+      "verdict": "FAIL",
+      "status": "completed",
+      "next_implication": "Closed."
+    }
+  ]
+}
