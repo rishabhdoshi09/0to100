@@ -1,0 +1,25 @@
+{
+  "experiment": "EDGE-006",
+  "protocol_sha": "a9c5c731ac3a2587",
+  "protocol_activated_ist": "2026-08-22T00:00:00+05:30",
+  "primary": {
+    "ranker": "L1_20D_HIGH_ADV",
+    "n": 20,
+    "rebalance": "monthly_last_session"
+  },
+  "rt_cost_pct": 0.32,
+  "n_month_ends_ranked": 72,
+  "first_rank": "2020-09-30",
+  "last_rank": "2026-08-21",
+  "n_primary_periods": 70,
+  "nifty_source": "NIFTY50_EQUALWEIGHT_PROXY_BHAV",
+  "dsr_n_trials": 12,
+  "feature002_untouched": true,
+  "production_buy_untouched": true,
+  "listing_pit": "PIT_DEGRADED_bhav_inferred_same_session_print",
+  "sector_pit": "PIT_DEGRADED_contemporaneous_map",
+  "store_sessions": 1788,
+  "store_first": "2019-08-23",
+  "store_last": "2026-08-21",
+  "last_budget_slot": true
+}

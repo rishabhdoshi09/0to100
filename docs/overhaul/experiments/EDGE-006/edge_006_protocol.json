@@ -1,0 +1,20 @@
+{
+  "experiment": "EDGE-006",
+  "primary_ranker": "L1_20D_HIGH_ADV",
+  "primary_n": 20,
+  "primary_rebalance": "monthly_last_session",
+  "sort": "descending_adv",
+  "lookback_sessions": 20,
+  "fill": "next_open",
+  "stop": "none_scheduled_rebalance_only",
+  "cost_model": "core.costs.round_trip_cost_pct.CNC",
+  "blocks": {
+    "development_end": "2022-12-31",
+    "validation_end": "2024-12-31",
+    "confirmation_end": "2026-08-21"
+  },
+  "dsr_n_trials": 12,
+  "feature_002_frozen": true,
+  "production_untouched": true,
+  "last_budget_slot": true
+}

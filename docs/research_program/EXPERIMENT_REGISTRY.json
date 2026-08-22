@@ -1,7 +1,7 @@
 {
   "program": "QuantTerm autonomous research",
   "updated": "2026-08-22",
-  "new_edge_budget_remaining": 1,
+  "new_edge_budget_remaining": 0,
   "experiments": [
     {
       "id": "SEPA-003",
@@ -129,6 +129,19 @@
       "verdict": "RESEARCH-ONLY",
       "status": "completed",
       "next_implication": "Slope is explanatory. Do not open a near-high shadow. Last slot: high-ADV rank."
+    },
+    {
+      "id": "EDGE-006",
+      "title": "High 20d ADV as CS rank",
+      "hypothesis": "Highest 20-session rupee-ADV Top20 monthly has positive net excess vs EW after CNC costs.",
+      "protocol_commit": "ee9ef79",
+      "code_commit": "ee9ef79",
+      "data_range": "ranks ~2020-09 to 2026-08; 70 complete holds",
+      "pit_classification": "PIT_DEGRADED_listing_sector; ADV window <= T",
+      "result": "Net CAGR 18.13% vs EW 25.62% (−7.49%); Spearman −0.87; L0 +1.35% (not a 2pp MODIFY).",
+      "verdict": "REJECT",
+      "status": "completed",
+      "next_implication": "Budget exhausted. Synthesis. Do not switch to illiquids inside EDGE-006."
     }
   ]
 }
