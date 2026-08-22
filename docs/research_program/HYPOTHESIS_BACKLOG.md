@@ -7,8 +7,8 @@ Independence notes matter: EDGE-001 consumed CS 12-1; FEATURE-001 consumed Trend
 
 | ID | Hypothesis | Econ | Indep | Data | PIT | TO | Retail | Redund | DoF | Falsify | Priority |
 |---|---|---|---|---|---|---|---|---|---|---|---|
-| H-LV | Low trailing realized vol names outperform high-vol names (long-only, full PIT universe, monthly) | 5 | 4 | 5 | 4 | 4 | 5 | 3 | 4 | 5 | **1 — EDGE-002** |
-| H-TS | Own-history trend inclusion (price>SMA200 and SMA200 rising) beats EW investable | 4 | 3 | 5 | 4 | 4 | 4 | 3 | 4 | 5 | 2 |
+| H-LV | Low trailing realized vol names outperform high-vol names (long-only, full PIT universe, monthly) | 5 | 4 | 5 | 4 | 4 | 5 | 3 | 4 | 5 | **DONE EDGE-002 REJECT** |
+| H-TS | Own-history trend inclusion (price>SMA200 and SMA200 rising) beats EW investable | 4 | 3 | 5 | 4 | 4 | 4 | 3 | 4 | 5 | **1 — EDGE-003** |
 | H-OVN | Close-to-open vs open-to-close contribution after costs | 3 | 5 | 5 | 4 | 2 | 2 | 5 | 5 | 5 | 3 (costs may kill daily) |
 | H-RES | Residual CS momentum after market (and sector if map allows) | 4 | 2 | 5 | 3 | 3 | 4 | 2 | 3 | 4 | 4 — born from EDGE-001; consumed |
 | H-91 | 9-1 CS momentum Top20 | 3 | 1 | 5 | 4 | 3 | 4 | 1 | 2 | 4 | 5 — EDGE-001 sensitivity; consumed |
