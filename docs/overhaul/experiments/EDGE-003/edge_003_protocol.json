@@ -1,0 +1,17 @@
+{
+  "experiment": "EDGE-003",
+  "primary_signal": "T1_PRICE_GT_SMA200_AND_SMA200_RISING",
+  "primary_book": "all_qualifiers_equal_weight",
+  "primary_rebalance": "monthly_last_session",
+  "fill": "next_open",
+  "stop": "none_scheduled_rebalance_only",
+  "cost_model": "core.costs.round_trip_cost_pct.CNC",
+  "blocks": {
+    "development_end": "2022-12-31",
+    "validation_end": "2024-12-31",
+    "confirmation_end": "2026-08-21"
+  },
+  "dsr_n_trials": 16,
+  "feature_002_frozen": true,
+  "production_untouched": true
+}
