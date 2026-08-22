@@ -91,6 +91,8 @@ def validate_rows(rows) -> list[dict]:
             "xbrl_url", "seq_id", "security_id", "unit", "currency",
             "revision_status", "first_known_at", "source_id", "source_hash",
             "filing_id", "superseded_by_row_id",
+            "period_kind", "quarterly_usable", "consol_basis", "reporting_frequency",
+            "parser_version", "raw_hash", "ingested_at", "field_quality",
         ):
             if row.get(key) not in (None, ""):
                 item[key] = row[key]
@@ -275,8 +277,14 @@ def get_period_as_of(
     for row in known_as_of(symbol, as_of, path=path):
         if _asof_str(row.get("period_end") or "") != pe:
             continue
-        if best is None or row["available_at"] >= best["available_at"]:
+        if best is None or row["available_at"] > best["available_at"]:
             best = dict(row)
+        elif row["available_at"] == best["available_at"]:
+            # Canonical preference: CONSOLIDATED over STANDALONE on the same day.
+            if str(row.get("consol_basis") or "") == "CONSOLIDATED" and str(
+                best.get("consol_basis") or ""
+            ) != "CONSOLIDATED":
+                best = dict(row)
     return best
 
 
@@ -286,8 +294,17 @@ def get_fundamentals(symbol: str, as_of, path: str | Path | None = None) -> dict
     best = None
     for row in known_as_of(symbol, as_of, path=path):
         avail = row["available_at"]
-        if avail <= asof and (best is None or avail >= best["available_at"]):
+        if avail > asof:
+            continue
+        if best is None or avail > best["available_at"]:
             best = dict(row)
+        elif avail == best["available_at"]:
+            row_pe = str(row.get("period_end") or "")
+            best_pe = str(best.get("period_end") or "")
+            row_c = str(row.get("consol_basis") or "") == "CONSOLIDATED"
+            best_c = str(best.get("consol_basis") or "") == "CONSOLIDATED"
+            if row_pe > best_pe or (row_pe == best_pe and row_c and not best_c):
+                best = dict(row)
     return best
 
 

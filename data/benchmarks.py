@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 _DIR = Path(__file__).resolve().parent.parent / "logs" / "indices"
+_RESEARCH_PKL = _DIR / "research_index_store.pkl"
 
 # Official names as printed in NSE ind_close_all_*.csv
 PRICE_RETURN = {
@@ -81,11 +82,69 @@ def file_coverage(index_dir: Path | None = None) -> dict[str, Any]:
     }
 
 
+def build_research_cache(index_dir: Path | None = None) -> dict[str, Any]:
+    """One-time ingest consolidate. Research reads the pickle, not 2000 CSVs."""
+    import pickle
+    d = Path(index_dir) if index_dir is not None else _DIR
+    wanted = set(PRICE_RETURN) | set(ALIASES.values())
+    series: dict[str, list] = {n: [] for n in wanted}
+    files = list_local_files(d)
+    import pandas as pd
+    for p in files:
+        day = _parse_stem(p.name)
+        if day is None:
+            continue
+        try:
+            df = pd.read_csv(p, dtype=str)
+            df.columns = [c.strip() for c in df.columns]
+            if "Index Name" not in df.columns:
+                continue
+            for _, row in df.iterrows():
+                nm = str(row.get("Index Name") or "").strip()
+                if nm not in wanted:
+                    continue
+                close = _num(row.get("Closing Index Value"))
+                if close is None:
+                    continue
+                series[nm].append({
+                    "date": str(day),
+                    "open": _num(row.get("Open Index Value")),
+                    "high": _num(row.get("High Index Value")),
+                    "low": _num(row.get("Low Index Value")),
+                    "close": close,
+                })
+        except Exception:
+            continue
+    for nm in series:
+        series[nm].sort(key=lambda r: r["date"])
+    dest = (d / "research_index_store.pkl") if index_dir is not None else _RESEARCH_PKL
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_bytes(pickle.dumps({"series": series, "n_files": len(files)}))
+    return {"path": str(dest), "n_files": len(files), "names": {k: len(v) for k, v in series.items() if v}}
+
+
 def load_index(name: str, *, as_of: str | None = None, index_dir: Path | None = None) -> dict[str, Any]:
-    """OHLC for one official index from local CSVs only."""
+    """OHLC for one official index from local CSVs or the research pickle."""
     import pandas as pd
 
     official = ALIASES.get(name, name)
+    pkl = (Path(index_dir) / "research_index_store.pkl") if index_dir is not None else _RESEARCH_PKL
+    if pkl.exists() and index_dir is None:
+        import pickle
+        try:
+            blob = pickle.loads(pkl.read_bytes())
+            frames = list((blob.get("series") or {}).get(official) or [])
+            if as_of:
+                frames = [r for r in frames if r["date"] <= str(as_of)[:10]]
+            return {
+                "name": official, "alias": name, "return_kind": _return_kind(official),
+                "source": "nse_ind_close_all_local", "rows": frames, "n": len(frames),
+                "first": frames[0]["date"] if frames else None,
+                "last": frames[-1]["date"] if frames else None,
+                "available": bool(frames),
+            }
+        except Exception:
+            pass
     frames = []
     for p in list_local_files(index_dir):
         d = _parse_stem(p.name)
