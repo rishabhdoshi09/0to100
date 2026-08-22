@@ -2,14 +2,14 @@
 
 Research (Ideas) stays a monitor. This module is the production path.
 
-  Ready  — ticket board: Stage-2 SEPA overlay + scanner BUY/Ready plans,
+  Ready  — ticket board: Trend Quality overlay + scanner BUY/Ready plans,
            ranked by Asymmetric Ticket Quality (ATQ). Prime is an overlay
            when those gates actually pass — not the only lane.
   Lab    — walk-forward backtest as use cases, not a dump
   Journey — paper autopilot → live, earned, never toggled
 
 Never invents EV, never arms LIVE, never hard-wires a ticker.
-GET Ready is cache-only: last scan + last Ideas SEPA ranking. It does not
+GET Ready is cache-only: last scan + last Ideas Trend Quality ranking. It does not
 re-run rank_best_setups.
 """
 from __future__ import annotations
@@ -454,7 +454,8 @@ def build_ready_queue(
         "empty_why": empty_why,
         "disclaimer": (
             "Ready is not a broker order and not a return promise. "
-            "Stage-2 is Minervini SEPA on official history (cached Ideas ranking). "
+            "Trend Quality is a 7-rule Stage-2 template on official history "
+            "(cached Ideas ranking; research context, not Core SEPA). "
             "ATQ ranks structure; it is not a win rate. "
             "Prime still uses Telegram 💎 gates when they actually pass. "
             "Missing numbers stay missing. Lab losers are demoted on the scan — never inflated."
@@ -462,7 +463,7 @@ def build_ready_queue(
         "next": (
             "Open Lab to see which signals earned in this tape, then start the paper classroom."
             if not empty
-            else "Fill the desk (scan + Ideas SEPA) before expecting a Ready name."
+            else "Fill the desk (scan + Ideas Trend Quality) before expecting a Ready name."
         ),
         "lab_applied": _ready_lab_applied(),
     }

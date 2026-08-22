@@ -61,7 +61,7 @@ def render_vcp_page(universe: list[str]) -> None:
         "font-size:1.3rem;letter-spacing:2px;margin-bottom:2px'>"
         "🎯 VCP &amp; BASE FORMATION SCANNER</h2>"
         "<p style='color:#4a5568;font-size:.78rem;margin-top:0'>"
-        "Minervini VCP · Wyckoff Accumulation · Stage 2 Breakouts</p>",
+        "VCP / base-formation research scanner · not Core SEPA · not a buy licence</p>",
         unsafe_allow_html=True,
     )
 

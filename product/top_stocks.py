@@ -105,9 +105,10 @@ def tape_policy() -> dict[str, str]:
             "Otherwise official NSE bhavcopy EOD. Google is not used on this desk."
         ),
         "technical": (
-            "Minervini SEPA / Trend Template on official NSE daily OHLCV "
-            "(simple 50/150/200 averages and 52-week range), plus Weinstein/Minervini "
-            "stage and 63-session relative strength vs Nifty 50 from the same store."
+            "Trend Quality (7-rule Stage-2 template) on official NSE daily OHLCV "
+            "(simple 50/150/200 averages and 52-week range), plus stage context "
+            "and 63-session relative strength vs Nifty 50 from the same store. "
+            "Not Core SEPA and not a buy licence."
         ),
         "fundamental": (
             "Valuation metrics are calculated from the on-file long-term pack. "
