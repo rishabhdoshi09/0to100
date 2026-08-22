@@ -1,0 +1,11 @@
+{
+  "feature_set": "sepa-003.v1",
+  "eligibility_version": "sepa-001r2.v1",
+  "vcp_version": "vcp_causal_v2",
+  "pivot_version": "pivot_last_contraction_v1",
+  "regime_version": "regime_pit_v1",
+  "sector_version": "sector_map_v1",
+  "index_source": "NIFTY50_EQUALWEIGHT_PROXY_BHAV",
+  "not_validated_edge": true,
+  "n_fills": 3432
+}

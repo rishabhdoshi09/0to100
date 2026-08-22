@@ -1,0 +1,27 @@
+{
+  "experiment": "SEPA-003",
+  "index_source": "NIFTY50_EQUALWEIGHT_PROXY_BHAV",
+  "regime_version": "regime_pit_v1",
+  "sector": {
+    "version": "sector_map_v1",
+    "sector_identity_pit": false,
+    "source": "nse_universe NIFTY500 comments + documented large-cap overlay",
+    "n_mapped": 408,
+    "n_from_comments": 337,
+    "n_from_overlay": 71,
+    "never_infers_from_price": true
+  },
+  "n_f_setups_ledger": 5797,
+  "n_f_rows": 3434,
+  "n_f_fills": 3432,
+  "n_controls": 7932,
+  "n_g_annotated": 20813,
+  "skipped": {
+    "MISSED": 1731,
+    "GAP_THROUGH": 628,
+    "NO_FILL": 4,
+    "CA_CENSORED_OUTCOME": 2
+  },
+  "not_validated_edge": true,
+  "confirmation_already_observed": true
+}
