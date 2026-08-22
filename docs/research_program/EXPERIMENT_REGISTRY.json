@@ -1,7 +1,7 @@
 {
   "program": "QuantTerm autonomous research",
   "updated": "2026-08-22",
-  "new_edge_budget_remaining": 5,
+  "new_edge_budget_remaining": 4,
   "experiments": [
     {
       "id": "SEPA-003",
@@ -68,6 +68,19 @@
       "verdict": "INCONCLUSIVE",
       "status": "completed",
       "next_implication": "A full-universe long-only monthly low-vol book is a new experiment (EDGE-002), not a silent retune."
+    },
+    {
+      "id": "EDGE-002",
+      "title": "NSE cross-sectional low volatility",
+      "hypothesis": "Lowest 126-session realized-vol Top20 monthly has positive net excess vs EW after CNC costs.",
+      "protocol_commit": "e514205",
+      "code_commit": "e331b97",
+      "data_range": "ranks ~2020-09 to 2026-08; 70 complete holds",
+      "pit_classification": "PIT_DEGRADED_listing_sector; same-session print",
+      "result": "Net CAGR 6.38% vs EW 25.62%; Spearman -0.54; all lookbacks negative excess.",
+      "verdict": "REJECT",
+      "status": "completed",
+      "next_implication": "Do not retune lookback or add stops. Mid-vol is a new ID if ever tested. Next: TS trend inclusion."
     },
     {
       "id": "EXP-NEXT-03",

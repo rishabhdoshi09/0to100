@@ -9,8 +9,8 @@
 ## Current research priority
 
 1. Monitor FEATURE-002 only on its frozen schedule (do not retune).
-2. Run up to **five new primary EDGE hypotheses** on the full PIT investable universe (EDGE-001 already used; does not count).
-3. First new primary: **EDGE-002 — Cross-Sectional Low Volatility** (see backlog). Completes the INCONCLUSIVE 29-name EXP-NEXT-02 on research-grade membership, as a **new** protocol.
+2. New-EDGE budget remaining after EDGE-002 REJECT: **4**.
+3. Next primary: **EDGE-003 — Time-series trend inclusion** (H-TS). Do not rescue low-vol or 12-1 momentum.
 
 ---
 
@@ -36,6 +36,7 @@
 | SEPA-003 | A: RETIRE CORE SEPA; RETAIN SELECT FEATURES | Keep Trend / CS-RS as research concepts only |
 | FEATURE-001 | Trend + RS = FORWARD-VALIDATE AS RANK FEATURE | Explanatory, not VALIDATED_EDGE |
 | EDGE-001 | RESEARCH-ONLY | CS 12-1 Top20 monthly: full-sample excess, confirmation reverse, excess CI includes 0 |
+| EDGE-002 | REJECT | 126d low-vol Top20 monthly: net CAGR 6.4% vs EW 25.6%; decile Spearman −0.54 |
 | EXP-NEXT-01 | FAIL | Short-horizon reversal on 29-name panel |
 | EXP-NEXT-02 | INCONCLUSIVE | 20d L/S low-vol on 29-name panel; not a full-universe retail book |
 | EXP-NEXT-03 | FAIL | Vol compression risk diagnostic on 29-name panel |
@@ -60,6 +61,7 @@
 ## Rejected / research-only archives
 
 - EDGE-001 primary M1/Top20/monthly — archived RESEARCH-ONLY
+- EDGE-002 V1/Top20/monthly low-vol — REJECT
 - EXP-NEXT-01 reversal (29-name) — FAIL
 - EXP-NEXT-03 vol compression — FAIL
 
