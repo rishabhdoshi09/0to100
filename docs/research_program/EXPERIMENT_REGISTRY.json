@@ -1,7 +1,7 @@
 {
   "program": "QuantTerm autonomous research",
   "updated": "2026-08-22",
-  "new_edge_budget_remaining": 4,
+  "new_edge_budget_remaining": 3,
   "experiments": [
     {
       "id": "SEPA-003",
@@ -90,6 +90,19 @@
       "verdict": "FAIL",
       "status": "completed",
       "next_implication": "Closed."
+    },
+    {
+      "id": "EDGE-003",
+      "title": "Time-series trend inclusion",
+      "hypothesis": "PIT-investable names with close>SMA200 and SMA200 rising, EW all qualifiers, monthly, beat EW investable after CNC costs.",
+      "protocol_commit": "fef1d1c",
+      "code_commit": "cd50344",
+      "data_range": "ranks 2020-09-30 to 2026-08-21; 70 complete holds",
+      "pit_classification": "PIT_DEGRADED_listing_sector; same-session print; SMA bars <= T",
+      "result": "Net CAGR 26.89% vs EW 25.62% (+1.27%); monthly excess CI includes 0; harness INCONCLUSIVE; confirmation +0.17% vs EW.",
+      "verdict": "RESEARCH-ONLY",
+      "status": "completed",
+      "next_implication": "Do not open an inclusion shadow. Do not retune SMA/cadence/Top20. Next: independent 1-month reversal."
     }
   ]
 }

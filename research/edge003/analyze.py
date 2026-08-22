@@ -269,16 +269,44 @@ def analyse(artifacts: Path | None = None) -> dict[str, Any]:
             m["excess_cagr_nifty"] = _ann_from_monthly(nr) - _ann_from_monthly(nf)
         blocks[name] = m
 
-    sensitivities = {k: _spec_metrics(v, "net") for k, v in periods.items() if k != "primary_T1_all_monthly"}
+    def _ann_calendar(rows: list[dict], key: str = "net") -> float:
+        rets = _arr([p.get(key) for p in rows])
+        if rets.size == 0 or not rows:
+            return float("nan")
+        try:
+            from datetime import date as _date
+            t0 = _date.fromisoformat(str(rows[0]["entry_session"]))
+            t1 = _date.fromisoformat(str(rows[-1]["exit_session"]))
+        except Exception:
+            return float("nan")
+        years = (t1 - t0).days / 365.25
+        if years <= 0:
+            return float("nan")
+        nav = float(np.prod(1.0 + rets))
+        if nav <= 0:
+            return float("nan")
+        return nav ** (1.0 / years) - 1.0
+
+    sensitivities = {}
+    for k, v in periods.items():
+        if k == "primary_T1_all_monthly":
+            continue
+        sm = _spec_metrics(v, "net")
+        sm["cagr_net_calendar"] = _ann_calendar(v, "net")
+        sm["annualization"] = (
+            "calendar_span"
+            if k in ("sens_T1_all_2month", "sens_T1_all_quarterly")
+            else "monthly_12"
+        )
+        sensitivities[k] = sm
     formula_excess = {}
+    # Only monthly-aligned books vs monthly EW. 2m/q vs monthly EW is invalid.
     keymap = {
         "T1": "primary_T1_all_monthly",
         "T2": "sens_T2_all_monthly",
         "T3": "sens_T3_all_monthly",
         "T1_TOP20": "sens_T1_top20_dist",
         "T1_4W": "sens_T1_all_4week",
-        "T1_2M": "sens_T1_all_2month",
-        "T1_Q": "sens_T1_all_quarterly",
     }
     for key, col in keymap.items():
         sl = periods.get(col) or []

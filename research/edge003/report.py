@@ -50,15 +50,19 @@ def write_all(stats: dict[str, Any], out_dir: Path | None = None) -> dict[str, s
     ]
     yn, yg = p.get("by_year_net") or {}, p.get("by_year_gross") or {}
     sens = stats.get("sensitivities") or {}
-    srows = [[k, v.get("n"), _pct(v.get("cagr_net")), _num(v.get("sharpe")), _pct(v.get("max_dd"))]
-             for k, v in sorted(sens.items())]
+    srows = []
+    for k, v in sorted(sens.items()):
+        cagr = v.get("cagr_net_calendar") if v.get("annualization") == "calendar_span" else v.get("cagr_net")
+        srows.append([k, v.get("n"), _pct(cagr), _num(v.get("sharpe")), _pct(v.get("max_dd")), v.get("annualization") or "monthly_12"])
     (out / "EDGE_003_PORTFOLIO_RESULTS.md").write_text(
         "# EDGE-003 — Portfolio Results (T1 all-qualifiers monthly)\n\n"
         + _md_table(["Metric", "T1 All Monthly"], metrics) + "\n\n## By year\n\n"
         + _md_table(["Year", "Net", "Gross"], [[y, _pct(yn.get(y)), _pct(yg.get(y))] for y in sorted(set(yn) | set(yg))])
         + "\n\n## Sensitivities (not for winner-picking)\n\n"
-        + _md_table(["Spec", "n", "CAGR net", "Sharpe", "Max DD"], srows)
-        + "\n\nFormula excess vs EW: "
+        + _md_table(["Spec", "n", "CAGR net", "Sharpe", "Max DD", "Ann."], srows)
+        + "\n\n2-month and quarterly CAGRs use calendar span, not 12/year "
+        "(a monthly annualizer would inflate them). Formula excess vs EW is "
+        "only computed for monthly-aligned books.\n\nFormula excess vs EW: "
         + ", ".join(f"{k}={_pct(v)}" for k, v in (stats.get("formula_excess_ew") or {}).items()) + ".\n"
     )
 

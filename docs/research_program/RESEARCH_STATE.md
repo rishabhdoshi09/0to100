@@ -1,6 +1,6 @@
 # QuantTerm Research Program — State
 
-**As of:** 2026-08-22 (IST program start of autonomous mandate)  
+**As of:** 2026-08-22  
 **Production firewall:** no BUY / ranking / autopilot / GTT / broker / Telegram changes.  
 **FEATURE-002:** frozen, passive, insufficient new data.
 
@@ -9,8 +9,8 @@
 ## Current research priority
 
 1. Monitor FEATURE-002 only on its frozen schedule (do not retune).
-2. New-EDGE budget remaining after EDGE-002 REJECT: **4**.
-3. Next primary: **EDGE-003 — Time-series trend inclusion** (H-TS). Do not rescue low-vol or 12-1 momentum.
+2. New-EDGE budget remaining after EDGE-003 RESEARCH-ONLY: **3**.
+3. Next primary: **EDGE-004 — 1-month cross-sectional reversal** (H-REV1M). Independent of 12-1 continuation, low-vol, and trend inclusion. Do not rescue T1 with a breadth gate.
 
 ---
 
@@ -37,6 +37,7 @@
 | FEATURE-001 | Trend + RS = FORWARD-VALIDATE AS RANK FEATURE | Explanatory, not VALIDATED_EDGE |
 | EDGE-001 | RESEARCH-ONLY | CS 12-1 Top20 monthly: full-sample excess, confirmation reverse, excess CI includes 0 |
 | EDGE-002 | REJECT | 126d low-vol Top20 monthly: net CAGR 6.4% vs EW 25.6%; decile Spearman −0.54 |
+| EDGE-003 | RESEARCH-ONLY | T1 inclusion all-qualifiers: +1.27% vs EW; CI includes 0; harness INCONCLUSIVE; confirmation +0.17% |
 | EXP-NEXT-01 | FAIL | Short-horizon reversal on 29-name panel |
 | EXP-NEXT-02 | INCONCLUSIVE | 20d L/S low-vol on 29-name panel; not a full-universe retail book |
 | EXP-NEXT-03 | FAIL | Vol compression risk diagnostic on 29-name panel |
@@ -48,6 +49,8 @@
 - Core SEPA / binary VCP / “SEPA Ready” as money eligibility
 - Silently retuning EDGE-001 to 9-1, adding stops, or adding a regime gate
 - Resurrecting Core F on 2025–2026
+- Rescuing EDGE-002 with mid-vol or 20d lookback
+- Rescuing EDGE-003 with Top20-by-distance, SMA150, 2-month cadence, or a breadth/regime gate
 
 ---
 
@@ -55,6 +58,7 @@
 
 - Trend and RS as **rank features** — only FEATURE-002 future data can promote
 - EDGE-001 pooled decile slope (not a tradable primary)
+- EDGE-003 inclusion *content* (54% share; included beat excluded ~68 bps) — not a portfolio edge
 
 ---
 
@@ -62,6 +66,7 @@
 
 - EDGE-001 primary M1/Top20/monthly — archived RESEARCH-ONLY
 - EDGE-002 V1/Top20/monthly low-vol — REJECT
+- EDGE-003 T1/all-qualifiers/monthly — RESEARCH-ONLY
 - EXP-NEXT-01 reversal (29-name) — FAIL
 - EXP-NEXT-03 vol compression — FAIL
 
@@ -72,13 +77,14 @@
 | Item | Grade |
 |---|---|
 | Official bhav OHLCV + CA-on-read | Operational / usable |
-| Listing identity | PIT_DEGRADED (bhav-inferred; EDGE-001 requires same-session print) |
-| Sector map | PIT_DEGRADED (contemporaneous NIFTY 500 comments) |
+| Listing identity | PIT_DEGRADED (bhav-inferred; EDGE-001+ require same-session print) |
+| Sector map | PIT_DEGRADED (contemporaneous NIFTY 500 comments; UNKNOWN dominates) |
 | Official Nifty 50 local | 2024-04-08 → 2026-08-21 only; full-sample bench uses Nifty-50 EW proxy |
 | Nifty 500 official | Absent |
 | Yahoo / restated fundamentals | Not PIT — do not use as historical fundamentals |
 | News / DeepSeek conviction | Not PIT for 2019–2026 |
 | EXP-NEXT 29-name panel | Verified identity, too small for retail-book claims |
+| Daily overnight as a CNC book | A priori non-viable: 0.32% RT × ~250 sessions |
 
 ---
 
