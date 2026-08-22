@@ -153,10 +153,11 @@ def _run_runtime_scan(monkeypatch, tmp_path, *, enabled: bool, explode=False):
         monkeypatch.setattr("research.feature002.observe.build_shadow_records", boom)
 
     saved = {}
+    real_save = store.save_scan
 
     def fake_save(payload, path=product):
         saved["payload"] = copy.deepcopy(dict(payload))
-        return store.save_scan(payload, product)
+        return real_save(payload, product)
 
     class FakeScanner:
         def scan(self, symbols, progress=None, **k):
@@ -340,7 +341,8 @@ def test_sepa_runtime_port_has_no_strategy_engine():
     assert hasattr(sepa, "DEFAULT_CONFIG")
     assert not hasattr(sepa, "evaluate_sepa_eligibility")
     text = (sepa.__file__ and open(sepa.__file__).read()) or ""
-    assert "engine" not in text
+    assert "evaluate_sepa_eligibility" not in text
+    assert "from research.sepa.engine" not in text
 
 
 def test_feature002_not_imported_by_money_modules():

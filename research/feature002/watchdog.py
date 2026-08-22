@@ -112,7 +112,18 @@ def evaluate(health: dict[str, Any] | None = None, *, ledger_path=None) -> dict[
     latest_obs = health.get("latest_feature002_observation_timestamp")
     if n_pri and n_unres and latest_obs:
         # Stale resolver: primary rows exist, none resolved, observation older than 10 sessions.
-        if int(health.get("resolved_outcomes") or 0) == 0:
+        stale = False
+        try:
+            from core.market_clock import today_ist
+            obs_day = str(latest_obs)[:10]
+            today = today_ist().isoformat()
+            stale = (today > obs_day) and (
+                (__import__("datetime").date.fromisoformat(today)
+                 - __import__("datetime").date.fromisoformat(obs_day)).days >= 10
+            )
+        except Exception:
+            stale = False
+        if stale and int(health.get("resolved_outcomes") or 0) == 0:
             alerts.append({
                 "code": "STALE_OUTCOME_RESOLVER",
                 "severity": "warn",

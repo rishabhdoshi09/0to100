@@ -329,7 +329,7 @@ def test_market_scan_service_calls_shadow_after_save():
     src = Path(__file__).resolve().parents[1] / "scan" / "market_scan_service.py"
     text = src.read_text()
     saved = text.index("save_scan(payload)")
-    hook = text.index("try_observe_production_scan")
+    hook = text.index("_feature002_hook(payload.get(\"records\")")
     assert saved < hook
 
 

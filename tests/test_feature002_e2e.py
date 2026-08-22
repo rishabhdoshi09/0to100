@@ -135,7 +135,7 @@ def test_production_scan_path_to_ledger_and_resolver(monkeypatch, tmp_path, db):
 
     real_observe = observe_production_scan
 
-    def fake_observe(serialized, source="live_scan"):
+    def fake_observe(serialized, source="live_scan", **kwargs):
         before = copy.deepcopy(serialized)
         out = real_observe(
             serialized, source=source, background=False, path=db,
