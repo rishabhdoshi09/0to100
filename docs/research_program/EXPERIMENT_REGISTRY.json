@@ -1,7 +1,7 @@
 {
   "program": "QuantTerm autonomous research",
   "updated": "2026-08-22",
-  "new_edge_budget_remaining": 2,
+  "new_edge_budget_remaining": 1,
   "experiments": [
     {
       "id": "SEPA-003",
@@ -116,6 +116,19 @@
       "verdict": "REJECT",
       "status": "completed",
       "next_implication": "Do not switch to 10d or a 2025-only gate. Next: 52-week-high proximity."
+    },
+    {
+      "id": "EDGE-005",
+      "title": "52-week-high proximity",
+      "hypothesis": "Highest close/252d-max Top20 monthly has positive net excess vs EW after CNC costs.",
+      "protocol_commit": "69e43cd",
+      "code_commit": "67d1414",
+      "data_range": "ranks 2020-09-30 to 2026-08-21; 70 complete holds",
+      "pit_classification": "PIT_DEGRADED_listing_sector; same-session print; max window <= T",
+      "result": "Net CAGR 19.45% vs EW 25.62% (−6.17%); Spearman 0.73; D10 < D9; harness REJECT.",
+      "verdict": "RESEARCH-ONLY",
+      "status": "completed",
+      "next_implication": "Slope is explanatory. Do not open a near-high shadow. Last slot: high-ADV rank."
     }
   ]
 }
