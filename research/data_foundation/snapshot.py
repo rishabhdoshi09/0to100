@@ -60,9 +60,35 @@ class EvidenceSnapshot:
             return out if len(out) else None
 
     def universe(self) -> dict:
+        """Membership as of T, plus freshness-filtered tradable names.
+
+        Listing membership is not the same as current tradability. A name
+        that once printed must still have an appropriate session bar.
+        """
         with self._guard():
+            from data.listing_archive import apply_freshness
             from data.nse_universe import point_in_time_universe
-            return point_in_time_universe(self.as_of, path=self.universe_path)
+            pit = point_in_time_universe(self.as_of, path=self.universe_path)
+            members = list(pit.get("symbols") or [])
+            cal = None
+            if self.index_dir is not None:
+                try:
+                    from data.benchmarks import load_index
+                    idx = load_index("Nifty 50", as_of=self.as_of, index_dir=self.index_dir)
+                    cal = [r["date"] for r in (idx.get("rows") or [])]
+                except Exception:
+                    cal = None
+            fresh = apply_freshness(
+                members, self.as_of, path=self.universe_path,
+                frames=self.price_frames, calendar=cal,
+            )
+            return {
+                **pit,
+                "tradable": fresh.get("tradable") or [],
+                "freshness_dropped": len(fresh.get("dropped") or []),
+                "fresh_bar_requirement": fresh.get("fresh_bar_requirement"),
+                "investability": "membership_plus_session_freshness",
+            }
 
     def fundamentals(self, symbol: str) -> dict | None:
         with self._guard():

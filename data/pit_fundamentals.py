@@ -22,6 +22,7 @@ _DEFAULT_PATH = Path(__file__).resolve().parent.parent / "logs" / "pit_fundament
 _NUMERIC = (
     "revenue_from_operations",
     "other_income",
+    "operating_profit",
     "profit_before_tax",
     "profit_after_tax",
     "comprehensive_income",
@@ -239,14 +240,27 @@ def _asof_str(as_of) -> str:
         return str(as_of).strip()[:10]
 
 
+_ROWS_CACHE: dict[str, tuple[float, list[dict]]] = {}
+
+
 def _load_rows(path: str | Path | None = None) -> list[dict]:
     p = ledger_path(path)
     if not p.exists():
         return []
+    key = str(p.resolve())
     try:
-        return validate_rows(_coerce_rows(json.loads(p.read_text(encoding="utf-8"))))
+        mtime = p.stat().st_mtime
+    except OSError:
+        mtime = 0.0
+    hit = _ROWS_CACHE.get(key)
+    if hit and hit[0] == mtime:
+        return hit[1]
+    try:
+        rows = validate_rows(_coerce_rows(json.loads(p.read_text(encoding="utf-8"))))
     except Exception:
-        return []
+        rows = []
+    _ROWS_CACHE[key] = (mtime, rows)
+    return rows
 
 
 def known_as_of(symbol: str, as_of, path: str | Path | None = None) -> list[dict]:

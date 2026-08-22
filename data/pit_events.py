@@ -233,6 +233,29 @@ def ledger_status(path: str | Path | None = None) -> dict:
     }
 
 
+_ROWS_CACHE: dict[str, tuple[float, list[dict]]] = {}
+
+
+def _load_rows(path: str | Path | None = None) -> list[dict]:
+    p = ledger_path(path)
+    if not p.exists():
+        return []
+    key = str(p.resolve())
+    try:
+        mtime = p.stat().st_mtime
+    except OSError:
+        mtime = 0.0
+    hit = _ROWS_CACHE.get(key)
+    if hit and hit[0] == mtime:
+        return hit[1]
+    try:
+        rows = validate_rows(_coerce_rows(json.loads(p.read_text(encoding="utf-8"))))
+    except Exception:
+        rows = []
+    _ROWS_CACHE[key] = (mtime, rows)
+    return rows
+
+
 def get_events(
     symbol: str | None,
     as_of,
@@ -244,12 +267,8 @@ def get_events(
     """Return events with ``available_at <= as_of`` (optional symbol / type / since)."""
     import pandas as pd
 
-    p = ledger_path(path)
-    if not p.exists():
-        return []
-    try:
-        rows = validate_rows(_coerce_rows(json.loads(p.read_text(encoding="utf-8"))))
-    except Exception:
+    rows = _load_rows(path)
+    if not rows:
         return []
     try:
         asof = str(pd.Timestamp(as_of).date())

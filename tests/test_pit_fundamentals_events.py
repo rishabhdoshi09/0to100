@@ -70,6 +70,22 @@ def test_parse_xbrl_metrics_minimal():
     assert m["basic_eps"] == 2.5
 
 
+def test_xbrl_prefers_oned_over_fourd_ytd():
+    """FourD often reuses the quarter dates for a YTD total. Do not take it."""
+    xml = b"""<?xml version='1.0'?>
+    <xbrl xmlns='http://www.xbrl.org/2003/instance'
+          xmlns:in='http://www.bseindia.com/xbrl/fin/2020-03-31/in-bse-fin'>
+      <in:RevenueFromOperations contextRef='FourD' unitRef='u'>900</in:RevenueFromOperations>
+      <in:RevenueFromOperations contextRef='OneD' unitRef='u'>300</in:RevenueFromOperations>
+      <in:ProfitBeforeTax contextRef='FourD' unitRef='u'>90</in:ProfitBeforeTax>
+      <in:ProfitBeforeTax contextRef='OneD' unitRef='u'>30</in:ProfitBeforeTax>
+    </xbrl>
+    """
+    m = parse_xbrl_metrics(xml)
+    assert m["revenue_from_operations"] == 300.0
+    assert m["profit_before_tax"] == 30.0
+
+
 def test_pit_contract_fundamentals_and_events(tmp_path):
     # Minimal OHLCV snapshot
     store = SnapshotStore(tmp_path / "snaps")

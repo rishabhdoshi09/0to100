@@ -40,6 +40,8 @@ XBRL_CACHE = Path(__file__).resolve().parent.parent / "logs" / "xbrl_cache"
 _XBRL_MAP = {
     "RevenueFromOperations": "revenue_from_operations",
     "OtherIncome": "other_income",
+    "ProfitFromOperationsBeforeOtherIncomeFinanceCostsAndExceptionalItems": "operating_profit",
+    "ProfitFromOrdinaryActivitiesBeforeFinanceCostsAndExceptionalItems": "operating_profit",
     "ProfitBeforeTax": "profit_before_tax",
     "ProfitLossForPeriod": "profit_after_tax",
     "ProfitLossForPeriodFromContinuingOperations": "profit_after_tax",
@@ -173,27 +175,47 @@ def _local_name(tag: str) -> str:
     return tag.split("}")[-1] if "}" in tag else tag
 
 
+def _context_rank(context_ref: str | None) -> int:
+    """Prefer the current reporting duration (NSE OneD) over YTD/comparatives.
+
+    NSE result instances typically use OneD = this quarter/year and FourD =
+    a same-dated cumulative/YTD bucket. Document order is not a contract.
+    """
+    ref = str(context_ref or "")
+    if ref == "OneD":
+        return 0
+    if ref.startswith("One"):
+        return 1
+    if ref == "FourD" or ref.startswith("Four"):
+        return 50
+    return 10
+
+
 def parse_xbrl_metrics(xml_bytes: bytes) -> dict[str, float]:
     """Extract a small set of Ind-AS metrics from an NSE XBRL instance.
 
-    Prefers contexts without segment scenario when multiple values exist by
-    taking the first non-empty value per mapped tag (document order).
+    When the same tag appears in several contexts, prefer NSE ``OneD``
+    (current period) over ``FourD`` (often YTD/cumulative with reused dates).
     """
     root = ET.fromstring(xml_bytes)
-    found: dict[str, float] = {}
+    scored: dict[str, tuple[int, float]] = {}
     for el in root.iter():
         name = _local_name(el.tag)
         field = _XBRL_MAP.get(name)
-        if not field or field in found:
+        if not field:
             continue
         text = (el.text or "").strip()
         if not text:
             continue
         try:
-            found[field] = float(text)
+            val = float(text)
         except ValueError:
             continue
-    return found
+        rank = _context_rank(el.get("contextRef"))
+        prev = scored.get(field)
+        if prev is None or rank < prev[0]:
+            scored[field] = (rank, val)
+    return {k: v[1] for k, v in scored.items()}
 
 
 def _xbrl_cache_path(url: str) -> Path:

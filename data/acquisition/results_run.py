@@ -94,6 +94,8 @@ def _enrich_fund_row(raw: dict, metrics: dict[str, float], xbrl_hash: str) -> di
     row["raw_hash"] = xbrl_hash
     row["ingested_at"] = datetime.now(timezone.utc).isoformat()
     row["source_id"] = raw.get("xbrl") or raw.get("seqNumber")
+    from research.data_foundation.quality import fundamental_quality
+    row["field_quality"] = fundamental_quality(row)
     if not align["quarterly_usable"] and str(raw.get("period") or "").lower() == "quarterly":
         record_anomaly(
             source="nse_xbrl",

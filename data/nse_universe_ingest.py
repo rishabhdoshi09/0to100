@@ -100,7 +100,13 @@ def materialize_universe_from_nse(
     for d in delisted_rows:
         if d["symbol"] in spans and d["symbol"] not in by_sym:
             bhav_delisted_undated += 1
-    surv = bool(has_delist_rows) and bhav_delisted_undated == 0
+    # Official listing dates for *current* EQ do not complete historical
+    # survivorship while undated delists remain omitted.
+    surv = (
+        bool(has_delist_rows)
+        and omitted_no_listed == 0
+        and bhav_delisted_undated == 0
+    )
 
     completeness = {
         "has_official_listings": True,

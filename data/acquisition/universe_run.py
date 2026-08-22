@@ -40,9 +40,20 @@ def ingest_official_identity_and_universe() -> dict[str, Any]:
     ident = materialize_from_nse()
     uni = materialize_universe_from_nse(session=sess, path=v2_path)
     ust = ledger_status(v2_path)
-    # Promote to default only when official ingest is research-grade.
-    if ust.get("research_grade"):
+    # Official v2 is a listing-date improvement for *current* EQ, not a
+    # complete survivorship archive. Do not overwrite the default research
+    # membership file unless official completeness is actually complete.
+    if ust.get("research_grade") and (ust.get("completeness") or {}).get("survivorship_complete"):
         materialize_universe_from_nse(session=sess)
+        promoted = True
+    else:
+        promoted = False
+    bhav_sidecar = Path(__file__).resolve().parents[2] / "logs" / "universe_history_bhav_inferred.json"
+    try:
+        from data.universe_history import build_from_bhav
+        bhav_st = build_from_bhav(path=bhav_sidecar, force=True)
+    except Exception as exc:
+        bhav_st = {"built": False, "error": str(exc)}
     man = {
         "source": "nse_equity_l+delisted+symbolchange",
         "acquired_at": datetime.now(timezone.utc).isoformat(),
@@ -53,7 +64,8 @@ def ingest_official_identity_and_universe() -> dict[str, Any]:
         "universe_status": ust,
         "v2_created": True,
         "v2_research_grade": bool(ust.get("research_grade")),
-        "promoted_to_default": bool(ust.get("research_grade")),
+        "promoted_to_default": promoted,
+        "bhav_inferred_sidecar": bhav_st,
         "ingest": {k: uni.get(k) for k in ("rows", "source", "research_grade", "note") if k in (uni or {})},
     }
     write_manifest("universe_official", man)
