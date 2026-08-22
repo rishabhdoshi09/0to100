@@ -268,7 +268,11 @@ def build_health(*, ledger_path: Path | None = None) -> dict[str, Any]:
     hook_today = 0
     for ev in hooks:
         kind = str(ev.get("kind") or "")
+        src = str(ev.get("source") or "")
         ts = str(ev.get("ts") or "")
+        # Implementation-test / unit-test receipts are not production health.
+        if src in {"implementation_test", "synthetic", "replay"}:
+            continue
         if ts.startswith(today) or str(ev.get("session_date") or "") == today:
             hook_today += 1
         if kind in {"persist_result", "hook_skipped", "pre_freeze_session"}:
