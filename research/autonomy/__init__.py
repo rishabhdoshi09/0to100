@@ -49,6 +49,13 @@ def run_supervisor(*, root=None, interval_s: float = 15.0, max_iterations=None) 
 
     from research.autonomy.operational_guards import install_operational_guards
     install_operational_guards()
+    try:
+        import scan.market_scan_service as _mss
+        from research.feature002.observe import try_observe_production_scan
+        if getattr(_mss, "_feature002_hook", None) is None:
+            _mss._feature002_hook = try_observe_production_scan
+    except Exception:
+        pass
 
     from research.autonomy.supervisor import Supervisor
     from research.autonomy.console_runtime import run_visible_loop

@@ -2458,7 +2458,7 @@ class TestDecisionJournal:
         dj.log_decision("X", "REJECTED", "sector strong nahi", "scanner",
                         500, 480, 70, ev_pct=2.0, p_win=62.0)
         c = dj._conn()
-        c.execute("UPDATE decisions SET decided_at='2026-07-01T10:00:00'")
+        c.execute("UPDATE decisions SET decided_at='2026-08-01T10:00:00'")
         c.commit(); c.close()
         monkeypatch.setattr("data.live_quotes.get_live_quotes",
                             lambda syms: {"HAL": {"price": 4700.0},
@@ -2478,7 +2478,7 @@ class TestDecisionJournal:
         dj = self._setup(tmp_path, monkeypatch)
         dj.log_decision("HAL", "TAKEN", "", "scanner", 4500, 4300, 80)
         c = dj._conn()
-        c.execute("UPDATE decisions SET decided_at='2026-07-01T10:00:00'")
+        c.execute("UPDATE decisions SET decided_at='2026-08-01T10:00:00'")
         c.commit(); c.close()
         monkeypatch.setattr("data.live_quotes.get_live_quotes",
                             lambda syms: {})
