@@ -13,9 +13,20 @@ from research.feature002.resolve import resolve_due
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(description="FEATURE-002 resolver / status")
     p.add_argument("--resolve", action="store_true")
+    p.add_argument("--health", action="store_true")
+    p.add_argument("--watchdog", action="store_true")
     args = p.parse_args(argv)
     if args.resolve:
         print(resolve_due(), flush=True)
+    if args.health or args.watchdog:
+        from research.feature002.health import write_health, write_status_md
+        from research.feature002.watchdog import run as run_watchdog
+        h = write_health()
+        write_status_md(h)
+        print(h.get("user_summary"), flush=True)
+        if args.watchdog:
+            print(run_watchdog(persist=False, alert=False), flush=True)
+        return 0
     write_all()
     summary = summarize()
     print(summary.get("status") or UNTIL_MATURE, flush=True)

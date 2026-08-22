@@ -72,6 +72,13 @@ Primary comparisons (R0 vs R1 vs R2) are withheld while the sample is below INTE
 Rank metrics: `{summary.get("rank_metrics")}`.
 """)
 
+    try:
+        from research.feature002.health import write_health, write_status_md
+        write_health(ledger_path=path)
+        write_status_md(ledger_path=path)
+    except Exception:
+        pass
+
     w("FEATURE_002_DECISION.md", f"""# FEATURE-002 — Decision
 
 **{status}**

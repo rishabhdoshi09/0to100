@@ -567,6 +567,12 @@ def _scan_once_locked(universe: Optional[list[str]] = None, progress=None) -> No
             observe_production_scan(serialized, source="live_scan")
         except Exception as exc:
             log.debug("feature002_shadow_skip", error=str(exc))
+        # FEATURE-002 watchdog — log/alert only; never changes Ready or ranks.
+        try:
+            from research.feature002.watchdog import note_production_scan
+            note_production_scan(n_cards=len(serialized), last_scan_ts=_last_scan_ts)
+        except Exception as exc:
+            log.debug("feature002_watchdog_skip", error=str(exc))
         log.info("auto_scan_complete", universe=len(universe), signals=len(serialized))
     except Exception as exc:
         with _lock:

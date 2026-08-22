@@ -89,9 +89,22 @@ def validate_rows(rows) -> list[dict]:
             "isin", "period", "period_start", "period_end", "relating_to",
             "financial_year", "consolidated", "audited", "source", "source_url",
             "xbrl_url", "seq_id", "security_id", "unit", "currency",
+            "revision_status", "first_known_at", "source_id", "source_hash",
+            "filing_id", "superseded_by_row_id",
         ):
             if row.get(key) not in (None, ""):
                 item[key] = row[key]
+        if "source_hash" not in item:
+            blob_src = json.dumps(
+                {k: row.get(k) for k in (
+                    "symbol", "available_at", "period_end", "xbrl_url", "seq_id",
+                    "revenue_from_operations", "profit_after_tax", "basic_eps",
+                )},
+                sort_keys=True, default=str,
+            )
+            item["source_hash"] = hashlib.sha256(blob_src.encode()).hexdigest()[:16]
+        item.setdefault("first_known_at", avail)
+        item.setdefault("revision_status", row.get("revision_status") or "original")
         n_metrics = 0
         for key in _NUMERIC:
             if row.get(key) in (None, ""):
@@ -216,32 +229,108 @@ def ledger_status(path: str | Path | None = None) -> dict:
     }
 
 
-def get_fundamentals(symbol: str, as_of, path: str | Path | None = None) -> dict | None:
-    """Latest fundamentals row for symbol with available_at <= as_of."""
+def _asof_str(as_of) -> str:
     import pandas as pd
+    try:
+        return str(pd.Timestamp(as_of).date())
+    except Exception:
+        return str(as_of).strip()[:10]
 
-    sym = str(symbol or "").strip().upper()
-    if not sym:
-        return None
+
+def _load_rows(path: str | Path | None = None) -> list[dict]:
     p = ledger_path(path)
     if not p.exists():
-        return None
+        return []
     try:
-        rows = validate_rows(_coerce_rows(json.loads(p.read_text(encoding="utf-8"))))
+        return validate_rows(_coerce_rows(json.loads(p.read_text(encoding="utf-8"))))
     except Exception:
-        return None
-    try:
-        asof = str(pd.Timestamp(as_of).date())
-    except Exception:
-        asof = str(as_of).strip()[:10]
-    best = None
-    for row in rows:
+        return []
+
+
+def known_as_of(symbol: str, as_of, path: str | Path | None = None) -> list[dict]:
+    """Every fundamentals row for symbol with available_at <= as_of (original + later restatements)."""
+    sym = str(symbol or "").strip().upper()
+    asof = _asof_str(as_of)
+    out = []
+    for row in _load_rows(path):
         if row["symbol"] != sym:
             continue
+        if row["available_at"] <= asof:
+            out.append(dict(row))
+    return out
+
+
+def get_period_as_of(
+    symbol: str,
+    period_end,
+    as_of,
+    path: str | Path | None = None,
+) -> dict | None:
+    """Version of one fiscal period that was public as of ``as_of``.
+
+    A later restatement (newer available_at) is invisible before it was filed.
+    """
+    pe = _asof_str(period_end)
+    best = None
+    for row in known_as_of(symbol, as_of, path=path):
+        if _asof_str(row.get("period_end") or "") != pe:
+            continue
+        if best is None or row["available_at"] >= best["available_at"]:
+            best = dict(row)
+    return best
+
+
+def get_fundamentals(symbol: str, as_of, path: str | Path | None = None) -> dict | None:
+    """Latest fundamentals row for symbol with available_at <= as_of."""
+    asof = _asof_str(as_of)
+    best = None
+    for row in known_as_of(symbol, as_of, path=path):
         avail = row["available_at"]
         if avail <= asof and (best is None or avail >= best["available_at"]):
             best = dict(row)
     return best
+
+
+def get_prior_period(
+    current: dict | None,
+    as_of,
+    path: str | Path | None = None,
+) -> dict | None:
+    """Most recent earlier period for the same symbol known by ``as_of``."""
+    if not current:
+        return None
+    pe = str(current.get("period_end") or "")
+    best = None
+    for row in known_as_of(current["symbol"], as_of, path=path):
+        other = str(row.get("period_end") or "")
+        if not other or other >= pe:
+            continue
+        if best is None or other > str(best.get("period_end") or ""):
+            best = dict(row)
+        elif other == str(best.get("period_end") or "") and row["available_at"] >= best["available_at"]:
+            best = dict(row)
+    return best
+
+
+def fundamentals_with_ratios(symbol: str, as_of, path: str | Path | None = None) -> dict | None:
+    """Current known row + read-time ratios + lineage. No surprise field."""
+    from data.pit_ratios import derive_ratios, lineage_for
+
+    cur = get_fundamentals(symbol, as_of, path=path)
+    if not cur:
+        return None
+    prior = get_prior_period(cur, as_of, path=path)
+    derived = derive_ratios(cur, prior)
+    return {
+        "as_of": _asof_str(as_of),
+        "current": cur,
+        "prior": prior,
+        "ratios": derived,
+        "lineage": {
+            name: lineage_for(name, derived)
+            for name in ("revenue_growth", "eps_growth", "pat_margin")
+        },
+    }
 
 
 def content_hash(path: str | Path | None = None) -> str | None:
