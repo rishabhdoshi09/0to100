@@ -848,9 +848,9 @@ def build_recommendations_workspace(
         "schema_version": 3,
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "load_note": (
-            "Top Stocks scores a capped scan shortlist on Minervini's 7-rule template "
-            "from official OHLCV, then attaches stage, RS vs Nifty 50, and on-file "
-            "fundamental ratios. Live CMP is Kite/NSE only."
+            "Top Stocks scores a capped scan shortlist on the 7-rule Trend Quality "
+            "template from official OHLCV, then attaches stage, RS vs Nifty 50, and on-file "
+            "fundamental ratios. Research setup context, not Core SEPA. Live CMP is Kite/NSE only."
         ),
         "typical_seconds": 8,
         "scan_scanned_at": scan_at,
@@ -859,7 +859,7 @@ def build_recommendations_workspace(
         "same_ist_day": bool(scan.get("same_ist_day")),
         "cmp_note": cmp_note,
         "assignment_policy": (
-            "best_setups: SEPA ≥40/100 on a scan shortlist; "
+            "best_setups: Trend Quality ≥40/100 on a scan shortlist (not Core SEPA); "
             "exclusive_primary: momentum_breakouts > recovery_setups > super_trends; "
             "wealth_builders from long-term quality only"
         ),

@@ -1,0 +1,85 @@
+{
+  "experiment": "FEATURE-001",
+  "claim_class": "EXPLANATORY",
+  "frozen_before_results": true,
+  "core_sepa_status": "RETIRED_RESEARCH_BENCHMARK",
+  "forbidden_labels": [
+    "VALIDATED_EDGE",
+    "DEPLOYMENT_ELIGIBLE",
+    "untouched confirmation",
+    "final OOS",
+    "production validated"
+  ],
+  "fdr_q": 0.10,
+  "min_n": 30,
+  "primary": [
+    {
+      "id": "H1",
+      "statement": "Trend strength improves breakout-family outcomes (higher E[R] and/or better rank spread when a Breakout SIGNAL_META key fires).",
+      "families": ["BREAKOUT_52W", "BREAKOUT_RES", "GOLDEN_CROSS", "VOL_SQUEEZE"],
+      "feature": "trend_features_v1",
+      "status": "PREDECLARED",
+      "result_status": "FDR_REJECT_POOLED",
+      "result_note": "Pooled breakout Spearman(n_passed, R)=0.166, n=18281. Family-heterogeneous: VOL_SQUEEZE carries the lift; BREAKOUT_52W does not."
+    },
+    {
+      "id": "H2",
+      "statement": "rs_cs_v1 improves breakout and momentum family outcomes.",
+      "families": ["BREAKOUT_52W", "BREAKOUT_RES", "GOLDEN_CROSS", "VOL_SQUEEZE", "MOMENTUM"],
+      "feature": "rs_features_v1",
+      "status": "PREDECLARED",
+      "result_status": "FDR_REJECT_POOLED",
+      "result_note": "Pooled breakout+momentum Spearman(RS, R)=0.306, n=32816. VOL_SQUEEZE and MOMENTUM drive it; BREAKOUT_52W is UNSTABLE."
+    },
+    {
+      "id": "H3",
+      "statement": "Trend and/or RS reduce adverse-selection tails (bottom-decile R, stop-before-1R, large MAE). Report as RISK_FILTER_VALUE, not automatically ALPHA.",
+      "families": ["ALL"],
+      "feature": "trend_features_v1+rs_features_v1",
+      "status": "PREDECLARED",
+      "result_status": "FDR_REJECT",
+      "result_note": "Bottom-decile rate lower for structure_pass than non-trend (delta -0.068). Label RISK_FILTER_VALUE where mean E[R] does not lift."
+    },
+    {
+      "id": "H4",
+      "statement": "Trend and RS add information beyond existing momentum scoring (mom_score, momentum_5d) and the production technical score.",
+      "families": ["ALL"],
+      "feature": "incremental_after_momentum",
+      "status": "PREDECLARED",
+      "result_status": "FDR_REJECT_SMALL_EFFECT",
+      "result_note": "Residual Spearman after mom_score is 0.052 (Trend) and 0.071 (RS). Detectable at n=120270; economically small. After production score, RS residual rho=0.215."
+    },
+    {
+      "id": "H5",
+      "statement": "The value of Trend/RS differs materially by strategy family (not one universal policy).",
+      "families": ["ALL"],
+      "feature": "family_heterogeneity",
+      "status": "PREDECLARED",
+      "result_status": "DESCRIPTIVE_HETEROGENEITY",
+      "result_note": "Std of family Trend deltas=0.101 (15 families with n>=30). No p-value; FDR does not reject. Policy table is the evidence."
+    }
+  ],
+  "exploratory": [
+    "Joint A/B/C/D attribution inside each family (strategy alone / +strong trend / +strong RS / +both).",
+    "RS bucket monotonicity including 95-99 vs 70-79 (descriptive; do not move the 70 cutoff).",
+    "Within-day top-minus-bottom ranking spreads.",
+    "Year-by-year 2020-2026 and rolling-block stability.",
+    "Nifty-relative 63d return if official index history exists."
+  ],
+  "classification_vocab": [
+    "POSITIVE_RANK_FEATURE",
+    "RISK_FILTER_VALUE",
+    "REDUNDANT",
+    "NEGATIVE",
+    "UNSTABLE",
+    "INSUFFICIENT_DATA"
+  ],
+  "final_feature_status_vocab": [
+    "FORWARD-VALIDATE AS RANK FEATURE",
+    "FORWARD-VALIDATE AS RISK FILTER",
+    "KEEP RESEARCH-ONLY",
+    "RETIRE"
+  ],
+  "n_primary": 5,
+  "n_tested_filled_after_run": 6
+}

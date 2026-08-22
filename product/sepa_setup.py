@@ -1,12 +1,12 @@
-"""Minervini SEPA / Trend Template — published rules, scored from official OHLCV.
+"""Trend Quality (7-rule Stage-2 template) — official OHLCV, research context.
 
 Seven Stage-2 checks, 100 points. Missing history awards 0 and is not a pass.
 This is a research overlay (Reco-style monitor), not a measured QuantTerm edge
 and never a buy instruction.
 
-Strict 8/8 qualification (AND-gate + cross-sectional RS + structural VCP +
-buy-zone) lives in ``research.sepa`` (SEPA-001). This module stays the Ideas
-scorer; do not treat score >= 40 as SEPA eligibility.
+Core SEPA (AND-gate + rs_cs_v1 + VCP + buy-zone) lives in ``research.sepa``
+and is a RETIRED_RESEARCH_BENCHMARK. This module is Trend Quality context;
+do not treat score >= 40 as Core SEPA eligibility or a trade licence.
 """
 from __future__ import annotations
 
@@ -138,8 +138,9 @@ def _unavailable(reason: str) -> dict[str, Any]:
         "advice": reason,
         "method": "minervini_trend_template_7",
         "disclaimer": (
-            "SEPA here is Mark Minervini's published Stage-2 trend template "
-            "scored on NSE bhavcopy. It is not a QuantTerm backtest edge and not a buy order."
+            "Trend Quality is a 7-rule Stage-2 template scored on NSE bhavcopy. "
+            "It is research context, not Core SEPA, not a QuantTerm backtest edge, "
+            "and not a buy order."
         ),
         "criteria": criteria,
         "quote": None,
@@ -156,9 +157,10 @@ def _verdict(score: int, passed: int, unknown: int) -> tuple[str, str, str]:
     if score >= 80 and passed >= 6:
         return (
             "STRONG",
-            "STRONG — MEETS SEPA",
-            "Stage-2 template is intact: price is behaving like a leadership name near highs. "
-            "This is a research qualify, not a buy ticket — still check stop, volume and chase risk.",
+            "STRONG — TREND QUALITY INTACT",
+            "Trend Quality template is intact: price is behaving like a leadership name near highs. "
+            "This is research setup context, not Core SEPA and not a buy ticket — "
+            "still check stop, volume and chase risk.",
         )
     if score >= 60 and passed >= 5:
         return (
@@ -171,15 +173,15 @@ def _verdict(score: int, passed: int, unknown: int) -> tuple[str, str, str]:
         return (
             "MIXED",
             "MIXED — WAIT FOR STRUCTURE",
-            "Some Stage-2 pieces are present, but this is not a clean Minervini setup yet. "
+            "Some Trend Quality pieces are present, but this is not a clean Stage-2 structure yet. "
             "Better candidates sit closer to 52-week highs with a rising 200-day average.",
         )
     return (
         "WEAK",
         "WEAK — NOT IDEAL FOR SWING",
-        "This stock currently does not meet Minervini's SEPA criteria. "
-        "Either wait for it to set up properly or look for better candidates near "
-        "52-week highs with strong relative strength.",
+        "Trend Quality is not intact on this name. "
+        "Either wait for structure or look for better candidates near "
+        "52-week highs with stronger relative strength. This is not a Core SEPA licence.",
     )
 
 
@@ -392,8 +394,9 @@ def score_sepa(frame: Any, *, bench_frame: Any = None) -> dict[str, Any]:
         "advice": advice,
         "method": "minervini_trend_template_7",
         "disclaimer": (
-            "SEPA here is Mark Minervini's published Stage-2 trend template "
-            "scored on NSE bhavcopy. It is not a QuantTerm backtest edge and not a buy order."
+            "Trend Quality is a 7-rule Stage-2 template scored on NSE bhavcopy. "
+            "It is research context, not Core SEPA, not a QuantTerm backtest edge, "
+            "and not a buy order."
         ),
         "criteria": criteria,
         "quote": quote,
@@ -580,9 +583,9 @@ def rank_best_setups(
     budget = f"{float(max_seconds):.0f}s" if max_seconds and float(max_seconds) > 0 else ""
     if top:
         note = (
-            "Best Setups = last-scan names ranked on Minervini's 7-rule Stage-2 template "
+            "Best Setups = last-scan names ranked on the 7-rule Stage-2 / Trend Quality template "
             f"(need ≥{min_score}/100). Stage and RS vs Nifty 50 are official-history "
-            "context. Score is research, not a buy."
+            "research setup context, not Core SEPA. Score is research, not a buy."
         )
         if truncated:
             note = (
