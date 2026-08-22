@@ -1,0 +1,39 @@
+{
+  "experiment": "FEATURE-002",
+  "feature_set_version": "feature-002.v1",
+  "shadow_rank_version": "feature-002.ranks.v1",
+  "production_rank_version": "auto_scan.final_order.v1",
+  "trend_version": "trend_features_v1",
+  "rs_version": "rs_features_v1",
+  "rs_source": "rs_cs_v1",
+  "feature_001_final_commit": "aa2dc3b3ef5ff611b2cdd25faeabff93f80dae58",
+  "feature_001_last_sample_date": "2026-07-23",
+  "forward_start_date": "2026-07-24",
+  "forward_start_ts_ist": "2026-08-22T00:00:00+05:30",
+  "exchange": "NSE",
+  "primary_rankings": ["R0", "R1", "R2"],
+  "exploratory_rankings": ["R3"],
+  "r3_formula": "0.67 * within_set_pctl(rs_percentile) + 0.33 * within_set_pctl(n_structure_passed)",
+  "r3_justification": "FEATURE-001 top-minus-bottom E[R] RS 0.395 vs Trend 0.141; not tuned on FEATURE-002.",
+  "forbidden_blend": "score + RS/10",
+  "maturity": {
+    "quiet": "<100 resolved primary",
+    "early": "100-499",
+    "interim": "500-1999",
+    "decision_capable": {
+      "resolved_obs": 2000,
+      "multi_candidate_sets": 250,
+      "per_family_min": 100,
+      "min_calendar_months": 6
+    }
+  },
+  "final_labels": [
+    "GRADUATE_RANK_FEATURE",
+    "EXTEND_FORWARD_VALIDATION",
+    "KEEP_RESEARCH_ONLY",
+    "RETIRE"
+  ],
+  "until_mature": "FORWARD VALIDATION ACTIVE — INSUFFICIENT NEW DATA",
+  "primary_source": "live_scan",
+  "claim_class": "FORWARD_VALIDATION"
+}
