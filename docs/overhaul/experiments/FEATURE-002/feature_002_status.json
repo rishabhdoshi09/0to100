@@ -1,0 +1,27 @@
+{
+  "maturity": {
+    "stage": "QUIET",
+    "n_primary": 0,
+    "n_resolved_5d": 0,
+    "n_multi_candidate_sets": 0,
+    "n_months": 0,
+    "family_resolved": {},
+    "decision_capable": false,
+    "gates": {
+      "resolved": 2000,
+      "multi_sets": 250,
+      "per_family": 100,
+      "months": 6
+    },
+    "verdict": "FORWARD VALIDATION ACTIVE \u2014 INSUFFICIENT NEW DATA"
+  },
+  "ledger": {
+    "observations": 0,
+    "primary": 0,
+    "resolved_primary_5d": 0,
+    "candidate_sets": 0
+  },
+  "status": "FORWARD VALIDATION ACTIVE \u2014 INSUFFICIENT NEW DATA",
+  "rank_metrics": null,
+  "note": "Primary FEATURE-002 statistics require live_scan rows recorded on or after the protocol timestamp. Implementation-test rows are excluded."
+}
