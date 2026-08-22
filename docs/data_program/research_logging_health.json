@@ -1,0 +1,73 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-08-22T11:47:42.068888+05:30",
+  "latest_production_scan_timestamp": null,
+  "latest_feature002_observation_timestamp": null,
+  "observations_today": 0,
+  "candidate_sets_today": 0,
+  "primary_today": 0,
+  "rejected_rows": 0,
+  "rejection_reasons": {},
+  "duplicate_count": 0,
+  "logging_exceptions": [],
+  "logging_exception_count": 0,
+  "unresolved_outcomes": 0,
+  "resolved_outcomes": 0,
+  "feature_version": "feature-002.v1",
+  "protocol_version": "a1b17c7b38d56a9b",
+  "protocol_activation_ist": "2026-08-22T00:00:00+05:30",
+  "forward_start_date": "2026-07-24",
+  "primary_source": "live_scan",
+  "ledger_path": "/workspace/logs/feature002/shadow.db",
+  "ledger_version": "feature002.shadow.sqlite.v1",
+  "ledger": {
+    "ledger_exists": true,
+    "ledger_path": "/workspace/logs/feature002/shadow.db",
+    "observations": 0,
+    "primary": 0,
+    "candidate_sets": 0,
+    "outcomes": 0,
+    "resolved_outcomes": 0,
+    "unresolved_outcomes": 0,
+    "duplicates_suppressed": 0,
+    "pre_freeze_refused": 0,
+    "latest_observation_ts": null,
+    "observations_today": 0,
+    "candidate_sets_today": 0,
+    "primary_today": 0,
+    "by_source": {},
+    "corrupt": false,
+    "corrupt_reason": null,
+    "feature_versions": [],
+    "protocol_hashes": []
+  },
+  "scan_state": {
+    "scan_store_exists": false,
+    "latest_production_scan_ts_unix": null,
+    "latest_production_scan_ts_ist": null,
+    "n_results": 0,
+    "scanned_count": 0
+  },
+  "hook_events_today": 0,
+  "clock": {
+    "ok": true,
+    "now_ist": "2026-08-22T11:47:42.068167+05:30",
+    "today_ist": "2026-08-22",
+    "tz": "Asia/Kolkata"
+  },
+  "empty_primary": {
+    "is_bug": false,
+    "reason": "no_post_activation_production_scan",
+    "severity": "info",
+    "detail": "No scan_store.json (or no timestamp). Protocol activated 2026-08-22T00:00:00+05:30. Empty primary ledger is expected until a market-hours production scan runs after that instant."
+  },
+  "status": "FORWARD VALIDATION ACTIVE \u2014 INSUFFICIENT NEW DATA",
+  "maturity": {
+    "stage": "QUIET",
+    "n_primary": 0,
+    "n_resolved_5d": 0,
+    "n_months": 0,
+    "decision_capable": false
+  },
+  "user_summary": "FEATURE-002 is active and isolated. Primary live_scan rows: 0. Reason: no_post_activation_production_scan. FORWARD VALIDATION ACTIVE \u2014 INSUFFICIENT NEW DATA."
+}

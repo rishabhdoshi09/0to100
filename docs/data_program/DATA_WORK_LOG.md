@@ -14,18 +14,19 @@ Append-only. No strategy results. No EDGE-007.
 
 - Health report + watchdog + `FEATURE_002_STATUS.md`.
 - Session date = IST scan calendar; `hist_as_of` on snapshot only.
-- E2E production-path test with broker/paper disabled.
+- E2E production-path test with broker/paper disabled. pytest green.
 
-## 2026-08-22 — workstreams 2–8
+## 2026-08-22 — workstreams 2–16
 
 - PIT fundamentals restatement + ratio provenance (read-time).
 - Earnings event timeline (no surprise without consensus).
 - Versioned sector map with STATIC_BACKFILL disclosure.
-- CA research acceptability vs completeness.
+- CA research acceptability vs completeness (verifier unchanged).
 - Universe remains PIT_DEGRADED (no v2).
-- Offline benchmark catalog from local official CSVs.
-- EvidenceSnapshot + gates + catalog + parity + missing-data policy.
+- Offline benchmark catalog from local official CSVs (Nifty 50/500/Total Market).
+- EvidenceSnapshot + gates + catalog + parity + missing-data policy + lineage + audit.
 
 ## 2026-08-22 — synthesis
 
-- `DATA_FOUNDATION_SYNTHESIS.md` written. Mandate stops. No next phase started.
+- `DATA_FOUNDATION_SYNTHESIS.md` written.
+- Recommendation: **CONTINUE DATA FOUNDATION**. Mandate stops. No next phase started.
