@@ -1,0 +1,596 @@
+{
+  "fundamentals": {
+    "rows": 19151,
+    "symbols_with_ge1": 2057,
+    "symbols_with_ge4_quarters": 1571,
+    "symbols_with_ge8_quarters": 1261,
+    "symbols_with_ge12_quarters": 32,
+    "median_quarters_per_company": 9,
+    "earliest_filing": "2019-04-10",
+    "latest_filing": "2025-06-17",
+    "annual_vs_quarterly": {
+      "quarterly": 15324,
+      "annual": 3827
+    },
+    "by_year": {
+      "2019": 2164,
+      "2020": 411,
+      "2021": 402,
+      "2022": 2759,
+      "2023": 6500,
+      "2024": 6915
+    },
+    "quality": {
+      "FUNDAMENTAL_PIT_STRONG": 19151
+    }
+  },
+  "events": {
+    "event_count": 137212,
+    "symbols": 2489,
+    "earliest": "2016-01-08",
+    "latest": "2026-08-06",
+    "by_year": {
+      "2016": 12420,
+      "2017": 14625,
+      "2018": 15268,
+      "2019": 12947,
+      "2020": 14169,
+      "2021": 14433,
+      "2022": 14926,
+      "2023": 16491,
+      "2024": 17887,
+      "2025": 4015,
+      "2026": 31
+    },
+    "timestamp_quality": {
+      "EVENT_TIMESTAMP_STRONG": 137212
+    },
+    "consensus_series": false,
+    "may_compute_surprise": false,
+    "date_only_causal_policy": "NEXT_SESSION"
+  },
+  "validation": {
+    "sample_size": 80,
+    "compared_with_raw": 80,
+    "missing_raw": 0,
+    "fields_compared": [
+      "revenue_from_operations",
+      "profit_before_tax",
+      "profit_after_tax",
+      "basic_eps",
+      "operating_profit"
+    ],
+    "exact_match_rate": 1.0,
+    "tolerance_match_rate": 1.0,
+    "disagreement_rate": 0.0,
+    "field_stats": {
+      "revenue_from_operations": {
+        "exact": 79,
+        "both_missing": 1
+      },
+      "profit_before_tax": {
+        "exact": 79,
+        "both_missing": 1
+      },
+      "profit_after_tax": {
+        "exact": 79,
+        "both_missing": 1
+      },
+      "basic_eps": {
+        "exact": 79,
+        "both_missing": 1
+      },
+      "operating_profit": {
+        "both_missing": 80
+      }
+    },
+    "common_causes": {
+      "first_vs_last_tag_differs": 281
+    },
+    "unresolved_discrepancies": [],
+    "unresolved_count": 0,
+    "secondary_source": "Independent last-wins XBRL tag pass on the same official instance. Not a vendor restatement. Ledger is not auto-repaired.",
+    "seed": "qt-phase2-validation",
+    "sample_hash": "7c559a317ddc6282"
+  },
+  "ca": {
+    "events": 607,
+    "symbols": 462,
+    "ca_research_acceptable": true,
+    "ca_complete": false,
+    "label": "CA_RESEARCH_ACCEPTABLE",
+    "status": "RESEARCH_READY_WITH_LIMITATIONS",
+    "dividends_provenance_rows": 0,
+    "todo_rows": 0,
+    "todo_subject_classes": {},
+    "unresolved_disposition": {
+      "rights": {
+        "event_class": "rights",
+        "choice": "quarantine",
+        "usable_in_price_series": false,
+        "note": "Do not infer a factor from the gap. Segment or censor the name."
+      },
+      "demerger": {
+        "event_class": "demerger",
+        "choice": "quarantine",
+        "usable_in_price_series": false,
+        "note": "Do not infer a factor from the gap. Segment or censor the name."
+      },
+      "merger": {
+        "event_class": "merger",
+        "choice": "quarantine",
+        "usable_in_price_series": false,
+        "note": "Do not infer a factor from the gap. Segment or censor the name."
+      },
+      "special_distribution": {
+        "event_class": "special_distribution",
+        "choice": "quarantine",
+        "usable_in_price_series": false,
+        "note": "Do not infer a factor from the gap. Segment or censor the name."
+      },
+      "symbol_restructuring": {
+        "event_class": "symbol_restructuring",
+        "choice": "research_segmentation",
+        "usable_in_price_series": false,
+        "note": "Do not infer a factor from the gap. Segment or censor the name."
+      },
+      "unknown_discontinuity": {
+        "event_class": "unknown_discontinuity",
+        "choice": "quarantine",
+        "usable_in_price_series": false,
+        "note": "Do not infer a factor from the gap. Segment or censor the name."
+      }
+    },
+    "never_infers_from_gaps": true,
+    "note": "CA_RESEARCH_ACCEPTABLE unchanged. CA_COMPLETE still false. Rights/demergers/mergers remain quarantine/segment. Dividends stored as provenance only."
+  },
+  "anomalies": {
+    "n": 2870,
+    "types": {
+      "xbrl_download_failed": 2870
+    }
+  },
+  "manual_audit": [
+    {
+      "symbol": "RELIANCE",
+      "bucket": "large/energy",
+      "n_known_now": 14,
+      "n_events_now": 98,
+      "n_known_asof_2022-12-31": 3,
+      "n_filings_after_2022-12-31": 11,
+      "future_leak_at_2022-12-31": 0,
+      "first_available": "2019-05-06",
+      "last_available": "2025-01-16",
+      "qualities": {
+        "FUNDAMENTAL_PIT_STRONG": 14
+      },
+      "researcher_would_see_only_then": true
+    },
+    {
+      "symbol": "TCS",
+      "bucket": "large/IT",
+      "n_known_now": 14,
+      "n_events_now": 104,
+      "n_known_asof_2022-12-31": 3,
+      "n_filings_after_2022-12-31": 11,
+      "future_leak_at_2022-12-31": 0,
+      "first_available": "2019-04-23",
+      "last_available": "2025-01-09",
+      "qualities": {
+        "FUNDAMENTAL_PIT_STRONG": 14
+      },
+      "researcher_would_see_only_then": true
+    },
+    {
+      "symbol": "HDFCBANK",
+      "bucket": "large/financial",
+      "n_known_now": 13,
+      "n_events_now": 76,
+      "n_known_asof_2022-12-31": 2,
+      "n_filings_after_2022-12-31": 11,
+      "future_leak_at_2022-12-31": 0,
+      "first_available": "2019-04-23",
+      "last_available": "2025-01-23",
+      "qualities": {
+        "FUNDAMENTAL_PIT_STRONG": 13
+      },
+      "researcher_would_see_only_then": true
+    },
+    {
+      "symbol": "INFY",
+      "bucket": "large/IT",
+      "n_known_now": 12,
+      "n_events_now": 97,
+      "n_known_asof_2022-12-31": 1,
+      "n_filings_after_2022-12-31": 11,
+      "future_leak_at_2022-12-31": 0,
+      "first_available": "2022-10-13",
+      "last_available": "2025-01-16",
+      "qualities": {
+        "FUNDAMENTAL_PIT_STRONG": 12
+      },
+      "researcher_would_see_only_then": true
+    },
+    {
+      "symbol": "MARUTI",
+      "bucket": "mid-large/auto",
+      "n_known_now": 13,
+      "n_events_now": 84,
+      "n_known_asof_2022-12-31": 2,
+      "n_filings_after_2022-12-31": 11,
+      "future_leak_at_2022-12-31": 0,
+      "first_available": "2019-05-24",
+      "last_available": "2025-01-29",
+      "qualities": {
+        "FUNDAMENTAL_PIT_STRONG": 13
+      },
+      "researcher_would_see_only_then": true
+    },
+    {
+      "symbol": "PIDILITIND",
+      "bucket": "mid/industrial-chem",
+      "n_known_now": 14,
+      "n_events_now": 102,
+      "n_known_asof_2022-12-31": 3,
+      "n_filings_after_2022-12-31": 11,
+      "future_leak_at_2022-12-31": 0,
+      "first_available": "2019-06-25",
+      "last_available": "2025-01-23",
+      "qualities": {
+        "FUNDAMENTAL_PIT_STRONG": 14
+      },
+      "researcher_would_see_only_then": true
+    },
+    {
+      "symbol": "TRENT",
+      "bucket": "mid/consumer",
+      "n_known_now": 11,
+      "n_events_now": 84,
+      "n_known_asof_2022-12-31": 3,
+      "n_filings_after_2022-12-31": 8,
+      "future_leak_at_2022-12-31": 0,
+      "first_available": "2019-05-06",
+      "last_available": "2025-02-06",
+      "qualities": {
+        "FUNDAMENTAL_PIT_STRONG": 11
+      },
+      "researcher_would_see_only_then": true
+    },
+    {
+      "symbol": "PERSISTENT",
+      "bucket": "mid/IT",
+      "n_known_now": 14,
+      "n_events_now": 99,
+      "n_known_asof_2022-12-31": 3,
+      "n_filings_after_2022-12-31": 11,
+      "future_leak_at_2022-12-31": 0,
+      "first_available": "2019-05-06",
+      "last_available": "2025-01-22",
+      "qualities": {
+        "FUNDAMENTAL_PIT_STRONG": 14
+      },
+      "researcher_would_see_only_then": true
+    },
+    {
+      "symbol": "ASTRAL",
+      "bucket": "mid/industrial",
+      "n_known_now": 14,
+      "n_events_now": 102,
+      "n_known_asof_2022-12-31": 3,
+      "n_filings_after_2022-12-31": 11,
+      "future_leak_at_2022-12-31": 0,
+      "first_available": "2019-06-25",
+      "last_available": "2025-01-30",
+      "qualities": {
+        "FUNDAMENTAL_PIT_STRONG": 14
+      },
+      "researcher_would_see_only_then": true
+    },
+    {
+      "symbol": "KAYNES",
+      "bucket": "small-mid/industrial",
+      "n_known_now": 11,
+      "n_events_now": 22,
+      "n_known_asof_2022-12-31": 0,
+      "n_filings_after_2022-12-31": 11,
+      "future_leak_at_2022-12-31": 0,
+      "first_available": "2023-01-31",
+      "last_available": "2025-01-28",
+      "qualities": {
+        "FUNDAMENTAL_PIT_STRONG": 11
+      },
+      "researcher_would_see_only_then": true
+    },
+    {
+      "symbol": "TATAMOTORS",
+      "bucket": "large/auto+CA",
+      "n_known_now": 0,
+      "n_events_now": 0,
+      "n_known_asof_2022-12-31": 0,
+      "n_filings_after_2022-12-31": 0,
+      "future_leak_at_2022-12-31": 0,
+      "first_available": null,
+      "last_available": null,
+      "qualities": {},
+      "researcher_would_see_only_then": true
+    },
+    {
+      "symbol": "WIPRO",
+      "bucket": "large/IT",
+      "n_known_now": 14,
+      "n_events_now": 99,
+      "n_known_asof_2022-12-31": 3,
+      "n_filings_after_2022-12-31": 11,
+      "future_leak_at_2022-12-31": 0,
+      "first_available": "2019-04-23",
+      "last_available": "2025-01-17",
+      "qualities": {
+        "FUNDAMENTAL_PIT_STRONG": 14
+      },
+      "researcher_would_see_only_then": true
+    }
+  ],
+  "performance": {
+    "single_symbol_asof_s": 0.0006,
+    "cross_section_500_s": 0.2713,
+    "snapshot_accessors_s": 0.3349,
+    "benchmark_nifty500_s": 0.009,
+    "rebalance_5x100_fund_joins_s": 0.2685,
+    "rebalance_hits": 320,
+    "nifty500_n": 1919,
+    "reliance_asof_2023-08-17": true,
+    "cross_section_non_null": 454,
+    "note": "Local files/indexes only. No network."
+  },
+  "universe_default": {
+    "path": "/workspace/logs/universe_history.json",
+    "rows": 3156,
+    "source": "bhav_inferred",
+    "research_grade": false,
+    "pit_class": "PIT_DEGRADED",
+    "point_in_time_universe_v2": false,
+    "status": "DESCRIPTIVE_ONLY",
+    "omitted_undated_delists": 0,
+    "note": "Inferred first/last bhav session is not an official listing/delisting/suspension/symbol-change archive.",
+    "generated_at": "2026-08-22T10:59:16.745472+00:00"
+  },
+  "universe_v2": {
+    "path": "/workspace/logs/universe_history_v2.json",
+    "rows": 2293,
+    "source": "nse_equity_l+nse_delisted",
+    "research_grade": false,
+    "pit_class": "PIT_DEGRADED",
+    "point_in_time_universe_v2": true,
+    "status": "RESEARCH_READY_WITH_LIMITATIONS",
+    "omitted_undated_delists": 324,
+    "note": "Official EQUITY_L listing dates for current EQ plus official delist dates where a listing date is known. 324 official delists omitted (no listing date). Not a complete 2019\u20132024 dead-name archive. Bhav-inferred sidecar remains the historical membership fallback.",
+    "generated_at": "2026-08-22T10:47:05.452436+00:00"
+  },
+  "sector": {
+    "version": "sector_map.v2",
+    "n_mapped": 845,
+    "pit_class": "STATIC_BACKFILL",
+    "status": "RESEARCH_READY_WITH_LIMITATIONS",
+    "content_hash": "6dba3707e969a58eb28caa30640113a83ecb7a5858ba9dec4f32c543362af0f4",
+    "note": "Static modern / comment-derived classification. Descriptive use only. Not PIT_SECTOR_STRONG. Do not back-project as historical truth.",
+    "n_official_industry": 752
+  },
+  "benchmarks": {
+    "n_files": 2864,
+    "first": "2015-01-01",
+    "last": "2026-08-21",
+    "source": "nsearchives.nseindia.com/content/indices/ind_close_all_DDMMYYYY.csv",
+    "files_hash": "55ab30b843e82a09",
+    "network": false
+  },
+  "feature002": {
+    "operational": {
+      "operational_state": "NO_POST_ACTIVATION_SCAN",
+      "research_maturity": "FORWARD VALIDATION ACTIVE \u2014 INSUFFICIENT NEW DATA",
+      "combined": "NO_POST_ACTIVATION_SCAN + FORWARD VALIDATION ACTIVE \u2014 INSUFFICIENT NEW DATA",
+      "is_logging_bug": false,
+      "alerts": []
+    },
+    "acceptance": {
+      "accepted": false,
+      "checks": {
+        "production_scan_occurred": false,
+        "hook_receipt_exists": false,
+        "candidate_set_persisted": false,
+        "primary_live_scan_rows": false,
+        "source_live_scan": false,
+        "feature_version_ok": true,
+        "recorded_after_activation": false,
+        "unresolved_null_not_zero": true,
+        "watchdog_left_no_scan_state": false
+      },
+      "primary_source_required": "live_scan",
+      "note": "Synthetic/E2E rows are not primary. Do not insert replay into primary stats. Call again after a genuine weekday production scan.",
+      "operational": {
+        "operational_state": "NO_POST_ACTIVATION_SCAN",
+        "research_maturity": "FORWARD VALIDATION ACTIVE \u2014 INSUFFICIENT NEW DATA",
+        "combined": "NO_POST_ACTIVATION_SCAN + FORWARD VALIDATION ACTIVE \u2014 INSUFFICIENT NEW DATA",
+        "is_logging_bug": false,
+        "alerts": []
+      }
+    },
+    "protocol_hash": "a1b17c7b38d56a9b",
+    "feature_set_version": "feature-002.v1",
+    "forward_start_ts_ist": "2026-08-22T00:00:00+05:30"
+  },
+  "coverage_report": {
+    "generated_from": "data.acquisition.coverage.build_report",
+    "fundamentals": {
+      "rows": 19151,
+      "symbols_with_ge1": 2057,
+      "symbols_with_ge4_quarters": 1571,
+      "symbols_with_ge8_quarters": 1261,
+      "symbols_with_ge12_quarters": 32,
+      "median_quarters_per_company": 9,
+      "earliest_filing": "2019-04-10",
+      "latest_filing": "2025-06-17",
+      "annual_vs_quarterly": {
+        "quarterly": 15324,
+        "annual": 3827
+      },
+      "by_year": {
+        "2019": 2164,
+        "2020": 411,
+        "2021": 402,
+        "2022": 2759,
+        "2023": 6500,
+        "2024": 6915
+      },
+      "quality": {
+        "FUNDAMENTAL_PIT_STRONG": 19151
+      }
+    },
+    "earnings_events": {
+      "event_count": 137212,
+      "symbols": 2489,
+      "earliest": "2016-01-08",
+      "latest": "2026-08-06",
+      "by_year": {
+        "2016": 12420,
+        "2017": 14625,
+        "2018": 15268,
+        "2019": 12947,
+        "2020": 14169,
+        "2021": 14433,
+        "2022": 14926,
+        "2023": 16491,
+        "2024": 17887,
+        "2025": 4015,
+        "2026": 31
+      },
+      "timestamp_quality": {
+        "EVENT_TIMESTAMP_STRONG": 137212
+      },
+      "consensus_series": false,
+      "may_compute_surprise": false,
+      "date_only_causal_policy": "NEXT_SESSION"
+    },
+    "universe": {
+      "default": {
+        "path": "/workspace/logs/universe_history.json",
+        "rows": 3156,
+        "source": "bhav_inferred",
+        "research_grade": false,
+        "pit_class": "PIT_DEGRADED",
+        "point_in_time_universe_v2": false,
+        "status": "DESCRIPTIVE_ONLY",
+        "omitted_undated_delists": 0,
+        "note": "Inferred first/last bhav session is not an official listing/delisting/suspension/symbol-change archive.",
+        "generated_at": "2026-08-22T10:59:16.745472+00:00"
+      },
+      "official_v2": {
+        "rows": 2293,
+        "source": "nse_equity_l+nse_delisted",
+        "research_grade": false,
+        "completeness": {
+          "has_official_listings": true,
+          "has_official_delistings": true,
+          "survivorship_complete": true,
+          "reconstructed_from_survivors_only": false,
+          "delisted_membership_rows": 4,
+          "delisted_omitted_no_listed_date": 324,
+          "bhav_delisted_undated": 0
+        }
+      },
+      "bhav_inferred_sidecar": {
+        "rows": 3156,
+        "source": "bhav_inferred",
+        "research_grade": false
+      }
+    },
+    "sector": {
+      "version": "sector_map.v2",
+      "n_mapped": 845,
+      "pit_class": "STATIC_BACKFILL",
+      "status": "RESEARCH_READY_WITH_LIMITATIONS",
+      "content_hash": "6dba3707e969a58eb28caa30640113a83ecb7a5858ba9dec4f32c543362af0f4",
+      "note": "Static modern / comment-derived classification. Descriptive use only. Not PIT_SECTOR_STRONG. Do not back-project as historical truth."
+    },
+    "ca": {
+      "available": true,
+      "path": "/workspace/logs/ca_events.json",
+      "symbols": 462,
+      "events": 607,
+      "research_grade": false,
+      "share_adjust_types": [
+        "bonus",
+        "consolidation",
+        "split"
+      ],
+      "rejected_types": {
+        "dividend": 0,
+        "invalid": 0
+      },
+      "todo_path": "/workspace/logs/ca_events.todo.csv",
+      "never_invents": true,
+      "honesty": "QuantTerm never invents corporate actions from price gaps. Fill factor/type from official NSE filings into the todo CSV, then ca-ingest.",
+      "adjustment_verified": false,
+      "verify_note": "verify not run yet \u2014 python main.py ca-ingest --verify",
+      "todo_available": false,
+      "todo_gaps": 0,
+      "next_action": "Ledger has events but adjustment is not verified \u2014 python main.py ca-ingest --verify  (or add more rows from --from-gaps)",
+      "ca_complete": false,
+      "ca_research_acceptable": true,
+      "label": "CA_RESEARCH_ACCEPTABLE",
+      "status": "RESEARCH_READY_WITH_LIMITATIONS",
+      "unresolved_classes": {
+        "rights": "quarantine",
+        "demerger": "quarantine",
+        "merger": "quarantine",
+        "special_distribution": "quarantine",
+        "symbol_restructuring": "research_segmentation",
+        "unknown_discontinuity": "quarantine"
+      },
+      "never_infers_from_gaps": true,
+      "verifier_unchanged": true,
+      "note": "Share-count bonus/split/consolidation rows may be used when present. The global CA verifier is not weakened. Completeness requires official treatment of rights, demergers, mergers, and symbol transitions."
+    },
+    "benchmarks": {
+      "files": {
+        "n_files": 2864,
+        "first": "2015-01-01",
+        "last": "2026-08-21",
+        "source": "nsearchives.nseindia.com/content/indices/ind_close_all_DDMMYYYY.csv",
+        "files_hash": "55ab30b843e82a09",
+        "network": false
+      },
+      "nifty50": {
+        "first": "2015-11-09",
+        "last": "2026-08-21",
+        "n": 2660,
+        "return_kind": "price_return",
+        "available": true
+      },
+      "nifty500": {
+        "first": "2015-11-09",
+        "last": "2026-08-21",
+        "n": 2660,
+        "return_kind": "price_return",
+        "available": true
+      },
+      "nifty_total_market": {
+        "first": "2016-07-07",
+        "last": "2026-08-21",
+        "n": 1199,
+        "return_kind": "price_return",
+        "available": true
+      }
+    },
+    "feature002": {
+      "operational": {
+        "operational_state": "NO_POST_ACTIVATION_SCAN",
+        "research_maturity": "FORWARD VALIDATION ACTIVE \u2014 INSUFFICIENT NEW DATA",
+        "combined": "NO_POST_ACTIVATION_SCAN + FORWARD VALIDATION ACTIVE \u2014 INSUFFICIENT NEW DATA",
+        "is_logging_bug": false,
+        "alerts": []
+      },
+      "first_real_scan_accepted": false,
+      "note": "Synthetic/E2E rows are not primary. Do not insert replay into primary stats. Call again after a genuine weekday production scan."
+    }
+  }
+}

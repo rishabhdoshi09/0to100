@@ -34,10 +34,10 @@ Authoritative inventory. Status uses exactly one of:
 ## Universe / listing history
 
 - **Purpose:** Point-in-time membership.
-- **Source:** `logs/universe_history.json` source=`bhav_inferred` (2751 rows, 264 inferred exits).
-- **Coverage:** First-seen dates from local bhav (listed range starts 2024-12-24 in this file — not 2019 listing truth).
-- **Refresh:** Re-infer from bhav or ingest an official archive (new file).
-- **PIT quality:** PIT_DEGRADED. `point_in_time_universe_v2` **not** created.
+- **Source:** default `logs/universe_history.json` = `bhav_inferred` (3156). Official overlay `logs/universe_history_v2.json` (2293).
+- **Coverage:** Official EQUITY_L listing dates for current EQ; 324 official delists omitted (no listing date).
+- **Refresh:** Re-infer from bhav or refresh official v2 (new file).
+- **PIT quality:** PIT_DEGRADED default. Limited official v2 exists; not survivorship-complete.
 - **Versioning:** File hash.
 - **Known defects:** First appearance ≠ listing date; missing suspensions/symbol changes.
 - **Consumers:** `point_in_time_universe`, EvidenceSnapshot.universe, EDGE studies.
@@ -48,33 +48,33 @@ Authoritative inventory. Status uses exactly one of:
 
 - **Purpose:** Statement metrics knowable as of T.
 - **Source:** NSE results API + XBRL (`data/nse_results_ingest.py`) → `logs/pit_fundamentals.json`.
-- **Coverage:** **0 rows on disk.**
+- **Coverage:** 19,151 rows / 2,057 symbols (2019-04-10 → 2025-06-17) on this host.
 - **Refresh:** Ingest stage only; freeze snapshot; never fetch inside a backtest.
-- **PIT quality:** Architecture PIT_STRONG for filing-dated XBRL fields; ledger empty.
+- **PIT quality:** FUNDAMENTAL_PIT_STRONG for OneD XBRL + broadcast date; year depth limited.
 - **Versioning:** `content_hash()`; restatements are new rows.
-- **Known defects:** No cash-flow/EBITDA map; live Screener/Yahoo cache is a different, UNUSABLE dataset.
+- **Known defects:** Thin 2020–21; CFO/operating profit unmapped; 34k XBRL not downloaded.
 - **Consumers:** EvidenceSnapshot.fundamentals, pit_ratios, future (not current) experiments.
-- **Status:** DESCRIPTIVE_ONLY (empty) / schema RESEARCH_READY_WITH_LIMITATIONS
+- **Status:** RESEARCH_READY_WITH_LIMITATIONS
 - **Cadence:** After each official results season; new version file.
 
 ## Earnings / result events
 
 - **Purpose:** Announcement timeline (not surprise).
 - **Source:** Same NSE results broadcast times → `logs/pit_events.json`.
-- **Coverage:** **0 rows on disk.**
+- **Coverage:** 137,212 `EARNINGS_RESULT` rows / 2,489 symbols (2016-01-08 → 2026-08-06).
 - **Refresh:** Ingest then freeze.
-- **PIT quality:** Broadcast timestamp can be PIT_STRONG; none loaded.
+- **PIT quality:** Broadcast timestamp EVENT_TIMESTAMP_STRONG on this dump.
 - **Versioning:** Event id + content hash.
 - **Known defects:** No historical consensus series ⇒ no earnings surprise.
 - **Consumers:** EvidenceSnapshot.earnings_events; post-result *infrastructure* only.
-- **Status:** DESCRIPTIVE_ONLY
+- **Status:** RESEARCH_READY_WITH_LIMITATIONS
 - **Cadence:** With fundamentals ingest.
 
 ## Sector / industry map
 
 - **Purpose:** Descriptive sector labels + sector-index context.
-- **Source:** NIFTY500 comment parser + large-cap overlay (`data/sector_map.py` v2). 408 mapped names.
-- **Coverage:** Static modern map. Official `ind_close_all` sector indices 2024-04-08 → 2026-08-21.
+- **Source:** SEPA-003 overlay + official Nifty constituent Industry (`sector_map` + cached CSVs). 845 mapped names.
+- **Coverage:** Static modern map. Official `ind_close_all` sector indices 2015-11-09 → 2026-08-21.
 - **Refresh:** New frozen snapshot file (`logs/sector_maps/…`); never rewrite an old freeze.
 - **PIT quality:** STATIC_BACKFILL. Not PIT_SECTOR_STRONG.
 - **Versioning:** `content_hash` + filename.
@@ -86,12 +86,12 @@ Authoritative inventory. Status uses exactly one of:
 ## Official index / benchmarks
 
 - **Purpose:** Comparable market and sector benchmarks.
-- **Source:** Local NSE `logs/indices/ind_close_all_*.csv` (586 files, 2024-04-08 → 2026-08-21).
-- **Coverage:** Nifty 50, Nifty 500, Nifty Total Market, sector indices present. Price-return unless name contains TR.
+- **Source:** Local NSE `logs/indices/ind_close_all_*.csv` (2,864 files, 2015-01-01 → 2026-08-21) + `research_index_store.pkl`.
+- **Coverage:** Nifty 50/500: 2,660 sessions from 2015-11-09. Nifty Total Market from 2016-07-07. Price-return unless name contains TR.
 - **Refresh:** Download missing official daily files in the *ingest* stage only (`data.index_store` build is production; research uses `data.benchmarks` offline).
-- **PIT quality:** Official PR from 2024-04-08. No deep 2019 official Nifty. No cash TRI.
+- **PIT quality:** Official PR from 2015-11-09. No cash TRI.
 - **Versioning:** `files_hash` of local CSV names+sizes.
-- **Known defects:** Short history; TR names in the file are mostly futures/leverage, not Nifty 50 TRI.
+- **Known defects:** No cash TRI; TR names in the file are mostly futures/leverage.
 - **Consumers:** EvidenceSnapshot.benchmark, EDGE Nifty comparisons (label PR vs TR).
 - **Status:** RESEARCH_READY_WITH_LIMITATIONS
 - **Cadence:** Daily official file; do not treat missing return as 0.

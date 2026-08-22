@@ -1,10 +1,10 @@
 # PIT fundamentals coverage
 
-**As of:** 2026-08-22  
-**Ledger:** `logs/pit_fundamentals.json` — **absent**  
-**Status:** schema `RESEARCH_READY_WITH_LIMITATIONS`; dataset **DESCRIPTIVE_ONLY** until official ingest.
+**As of:** 2026-08-22 (Phase II)  
+**Ledger:** `logs/pit_fundamentals.json`  
+**Status:** dataset **RESEARCH_READY_WITH_LIMITATIONS**
 
-Yahoo / Screener `.info` and the live `fundamentals/` cache are **UNUSABLE** as historical truth. They answer “what does the website say now?”, not “what was public as of T?”.
+Yahoo / Screener `.info` remain **UNUSABLE** as historical truth.
 
 ---
 
@@ -12,36 +12,36 @@ Yahoo / Screener `.info` and the live `fundamentals/` cache are **UNUSABLE** as 
 
 | Item | Value |
 |---|---|
-| Symbols with research-grade PIT rows | **0** (0% of ~3156 bhav names; 0% of NSE EQ) |
-| First available date | none |
-| Years covered | 0 |
-| Quarters covered | 0 |
-| Restatement pairs on file | 0 |
+| Symbols with research-grade PIT rows | **2057** (65% of 3156 bhav names; 90% of 2293 official EQ) |
+| First available date | 2019-04-10 |
+| Last available date | 2025-06-17 |
+| Rows | 19151 |
+| Median quarters / company | 9 |
+| ≥4 / ≥8 / ≥12 quarters | 1571 / 1261 / 32 |
+| Restatement pairs | preserved by `available_at` + `row_id` (not overwritten) |
 
-The ingest path (`data.nse_results_ingest`) already maps NSE financial-results broadcast time → `available_at` and XBRL tags → statement fields. It was **not** executed under this mandate (network ingest is a separate stage; historical loops must not fetch).
+Ingest: NSE corporates-financial-results broadcast time → `available_at`; NSE XBRL → statement fields. Parser prefers context `OneD`.
 
 ---
 
-## Field confidence (architecture, not this empty ledger)
+## Field confidence (this ledger)
 
-| Field | PIT class if sourced from NSE XBRL + broadcast time | If sourced from Yahoo/Screener live cache |
+| Field | PIT class | Notes |
 |---|---|---|
-| revenue, PBT, PAT, basic/diluted EPS | PIT_STRONG | UNUSABLE |
-| other income, face value, paid-up equity | PIT_STRONG | UNUSABLE |
-| debt/equity (XBRL ratio) | PIT_DEGRADED (definition varies) | UNUSABLE |
-| EBITDA / EBIT / CFO / capex / FCF | UNUSABLE (not in current XBRL map) | UNUSABLE |
-| revenue growth, EPS growth, PAT margin | PIT_STRONG when both periods known by T | UNUSABLE |
-| ROE (paid-up equity denominator) | PIT_DEGRADED | UNUSABLE |
-| ROCE, CFO/PAT, FCF margin | UNUSABLE until cash-flow ledger | UNUSABLE |
-
-Do not label the dataset PIT_STRONG. Empty ledger ⇒ nothing is research-grade yet.
+| revenue, PBT, PAT, basic/diluted EPS | FUNDAMENTAL_PIT_STRONG | Official XBRL + broadcast date + raw hash |
+| other income, face value, paid-up equity | FUNDAMENTAL_PIT_STRONG | Present on nearly all rows |
+| debt/equity (XBRL ratio) | FUNDAMENTAL_PIT_DEGRADED | 5432 / 19151; definition varies |
+| operating profit | FUNDAMENTAL_MISSING | 0 rows; tags not in these instances |
+| EBITDA / EBIT / CFO / capex / FCF | UNUSABLE | not mapped |
+| revenue / PAT growth, margins | PIT_STRONG when both periods known by T and alignment is YoY or QoQ | Nine-month ≠ quarter |
+| ROE (paid-up equity) | PIT_DEGRADED | not book equity |
+| ROCE, CFO/PAT | UNUSABLE | until cash-flow + capital-employed ledger |
 
 ---
 
 ## Restatements
 
-Schema keeps original and later restated rows (distinct `available_at` / `seq_id` / `source_hash`).  
-`get_period_as_of(symbol, period_end, as_of)` returns the version **known at T**. Tests prove a 2025-02-10 restatement cannot change a 2024-12-01 read.
+Schema keeps original and later restated rows. `get_period_as_of(symbol, period_end, as_of)` returns the version **known at T**.
 
 ---
 
@@ -49,12 +49,5 @@ Schema keeps original and later restated rows (distinct `available_at` / `seq_id
 
 | Source | Rows | Role |
 |---|---|---|
-| nse_xbrl / nse_financial_results | 0 | intended research source |
-| operator ingest | 0 | allowed if `available_at` is honest |
-| Yahoo / Screener | not ingested here | forbidden as historical PIT |
-
----
-
-## Next action (not started)
-
-Offline (or operator) ingest of NSE corporates-financial-results + XBRL into `logs/pit_fundamentals.json`. Refresh must create a new file/version, not rewrite a snapshot already cited by an experiment manifest.
+| nse_xbrl / nse_xbrl_financial_results | 19151 | research source |
+| Yahoo / Screener | not ingested | forbidden as historical PIT |
