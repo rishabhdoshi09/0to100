@@ -272,23 +272,25 @@ def reconstruct(
                 flush=True,
             )
 
-    # Attach repaired regime/sector to G panel (no R, diagnosis only).
+    # Attach repaired regime/sector to G panel (labels only; no per-row scan).
+    from research.sepa003.constants import rs_bucket
+    from research.sepa003.sector import sector_of
     g_annot = []
+    g_rank_cache: dict[str, dict[str, float]] = {}
     for g in load_g_rows():
         as_of = str(g.get("as_of") or "")
         re = regime_at(regime_table, as_of)
-        sec = sector_context(str(g.get("symbol") or ""), as_of, frames, smap, stock_rs=g.get("rs_percentile"))
+        sec = sector_of(str(g.get("symbol") or ""), smap)
+        if as_of not in g_rank_cache:
+            g_rank_cache[as_of] = sector_ranks_as_of(as_of, frames, smap)
         g_annot.append({
             **{k: g[k] for k in g if k not in {"regime", "sector"}},
             "regime": re.get("regime"),
-            "sector": sec.get("sector"),
-            "sector_rs": sec.get("sector_rs"),
+            "sector": sec,
+            "sector_rs": g_rank_cache[as_of].get(sec) if sec != "UNKNOWN" else None,
             "era": "winning_era" if as_of <= "2023-12-31" else "weak_era",
-            "rs_bucket": None,
+            "rs_bucket": rs_bucket(g.get("rs_percentile")),
         })
-    from research.sepa003.constants import rs_bucket
-    for g in g_annot:
-        g["rs_bucket"] = rs_bucket(g.get("rs_percentile"))
 
     payload = {
         "experiment": "SEPA-003",
