@@ -13,7 +13,8 @@ Independence notes matter: EDGE-001 consumed CS 12-1; FEATURE-001 consumed Trend
 | H-RES | Residual CS momentum after market (and sector if map allows) | 4 | 2 | 5 | 3 | 3 | 4 | 2 | 3 | 4 | 4 — born from EDGE-001; consumed |
 | H-91 | 9-1 CS momentum Top20 | 3 | 1 | 5 | 4 | 3 | 4 | 1 | 2 | 4 | 5 — EDGE-001 sensitivity; consumed |
 | H-REV1M | 1-month CS reversal | 3 | 3 | 5 | 4 | 3 | 3 | 3 | 3 | 4 | **DONE EDGE-004 REJECT** |
-| H-52W | Names nearest 52-week high outperform (George–Hwang) | 4 | 3 | 5 | 4 | 3 | 4 | 3 | 4 | 5 | **1 — EDGE-005** |
+| H-52W | Names nearest 52-week high outperform (George–Hwang) | 4 | 3 | 5 | 4 | 3 | 4 | 3 | 4 | 5 | **DONE EDGE-005 RESEARCH-ONLY** |
+| H-LIQ | Highest 20d ADV names outperform (liquidity as CS quality rank) | 3 | 4 | 5 | 4 | 4 | 5 | 4 | 5 | 5 | **1 — EDGE-006** |
 | H-BREADTH | Breadth / %above-200 as a cash vs equity allocator | 3 | 4 | 4 | 4 | 5 | 4 | 3 | 3 | 4 | 7 |
 | H-QUAL | Quality / profitability long-only | 4 | 5 | 1 | 1 | 4 | 4 | 4 | 3 | 3 | postponed — no PIT fundamentals |
 | H-ERN | Post-earnings drift | 4 | 5 | 1 | 1 | 3 | 3 | 4 | 3 | 3 | postponed — no PIT earnings tape |
@@ -35,6 +36,15 @@ Not selected now:
 - H-91 / H-RES: mutating EDGE-001 on consumed history.
 - H-TS: reserved; Trend was already studied as a *feature on fires*.
 - H-QUAL / H-ERN: fabricate-nothing rule.
+
+## Selection for EDGE-006 (final budget slot)
+
+**H-LIQ** — highest 20d rupee ADV among already-investable names.
+
+- ADV is already computed for the liquidity floor and capacity flags; it has **never** been the ranker.
+- Orthogonal to return, vol, SMA, losers, and 52w-high.
+- Flat CNC cost model will not credit tighter spreads, so this tests whether liquid names have higher *returns*, not cheaper execution.
+- H-BREADTH postponed: allocator (§25) and `%above-SMA200` was described in EDGE-003 (consumed threshold risk).
 
 ## Selection for EDGE-005
 
