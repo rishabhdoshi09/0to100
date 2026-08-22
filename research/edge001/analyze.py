@@ -361,18 +361,15 @@ def classify(stats: dict[str, Any]) -> dict[str, Any]:
         h3.get("excess_cagr_ew") is not None
         and prim.get("excess_cagr_ew") is not None
         and h3["excess_cagr_ew"] > (prim["excess_cagr_ew"] + 0.03)
-        and (prim["excess_cagr_ew"] or 0) <= 0
     )
+    if h3_better:
+        notes.append("H3 falsified: including the last month beat 12-1. Do not switch inside EDGE-001.")
 
     label = "RESEARCH-ONLY"
-    if conf_reverse or h3_better:
-        label = "MODIFY HYPOTHESIS"
-        notes.append("Structural issue noted; do not retune M1/Top20/monthly inside EDGE-001.")
     hard = {
         "net_does_not_beat_ew_or_nifty",
         "deciles_not_ordered",
         "costs_destroy_edge",
-        "confirmation_reverses_development",
     }
     if len(hard & set(failures)) >= 2 or (
         "net_does_not_beat_ew_or_nifty" in failures and "deciles_not_ordered" in failures
@@ -388,8 +385,11 @@ def classify(stats: dict[str, Any]) -> dict[str, Any]:
         and valconf_n >= 12
     ):
         label = "PROMISING — FORWARD VALIDATION WARRANTED"
+    elif h3_better and not beat_ew and (spearman is None or spearman != spearman or spearman < 0.35):
+        label = "MODIFY HYPOTHESIS"
+        notes.append("Structural issue noted; do not retune M1/Top20/monthly inside EDGE-001.")
     elif failures:
-        label = "RESEARCH-ONLY" if label != "MODIFY HYPOTHESIS" and label != "REJECT" else label
+        label = "RESEARCH-ONLY"
 
     return {
         "label": label,

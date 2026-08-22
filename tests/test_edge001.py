@@ -98,6 +98,28 @@ def test_classify_rejects_unordered_and_no_excess():
     assert d["feature002_change_authorised"] is False
 
 
+def test_classify_confirmation_reverse_with_slope_is_research_only():
+    stats = {
+        "primary": {
+            "cagr_net": 0.30, "cagr_gross": 0.32, "ew_cagr": 0.25,
+            "nifty_cagr": 0.21, "excess_cagr_ew": 0.05, "excess_cagr_nifty": 0.09,
+            "calmar": 0.8, "by_year_net": {"2021": 1.0, "2022": -0.2, "2023": 0.9, "2025": -0.13},
+        },
+        "deciles": {"M1": {"spearman": 0.91, "d10_only": False}},
+        "blocks": {
+            "development": {"n": 28, "excess_cagr_ew": 0.06, "excess_cagr_nifty": 0.12},
+            "validation": {"n": 24, "excess_cagr_ew": 0.12, "excess_cagr_nifty": 0.19},
+            "confirmation": {"n": 18, "excess_cagr_ew": -0.05, "excess_cagr_nifty": -0.07},
+        },
+        "h3": {"excess_cagr_ew": 0.09},
+        "formula_excess_ew": {"M1": 0.04, "M2": 0.09, "M3": 0.03, "M4": 0.16},
+    }
+    d = classify(stats)
+    assert d["label"] == "RESEARCH-ONLY"
+    assert "confirmation_reverses_development" in d["failures"]
+    assert d["live_trading_authorised"] is False
+
+
 def test_feature002_and_production_paths_untouched():
     import subprocess
 

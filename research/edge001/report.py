@@ -68,11 +68,17 @@ def write_data_integrity(stats: dict[str, Any], path: Path) -> None:
         f"{_num(m.get('rt_cost_pct'), 2)} percent points per round-trip, applied to "
         "one-way turnover (`cost = one_way × rt_pct / 100`).\n"
         f"- Protocol SHA: `{m.get('protocol_sha')}` activated "
-        f"{m.get('protocol_activated_ist')}.\n\n"
+        f"{m.get('protocol_activated_ist')}.\n"
+        f"- Official Nifty 50 local series: `{m.get('official_nifty_sessions')}` sessions "
+        f"from `{m.get('official_nifty_start')}`. Too short for a full-sample official "
+        "benchmark, so the primary Nifty comparison is the Nifty-50 equal-weight bhav proxy.\n\n"
         "## Honest limitations\n\n"
         "1. Survivorship: names that never appear in the 2019–2026 store cannot enter. "
-        "Delisted names **with** historical bars remain as-of investable — that is the "
-        "correct direction — but the store is not a complete exchange membership tape.\n"
+        "`FastInvestable.snapshot` reuses a delisted/renamed name’s last print forever. "
+        "EDGE-001 drops those stale last prints (`live_on_session`): a name must have an "
+        "official bar **on T**. Mean stale drops are in `universe_snapshots.json` "
+        f"(`stale_dropped`). Ranked < investable: {_num(u.get('avg_ranked'), 1)} vs "
+        f"{_num(u.get('avg_investable'), 1)}.\n"
         "2. FEATURE-001 / SEPA already mined this window. Confirmation 2025–2026 is "
         "held-out **for this protocol**, not philosophically pristine lifetime OOS.\n"
         "3. Index period returns use the local Nifty close series (entry date ≤ t ≤ exit "
@@ -108,7 +114,11 @@ def write_deciles(stats: dict[str, Any], path: Path) -> None:
             rows,
         ) + "\n\n"
     body += (
-        "Primary evidence question: does return generally improve as momentum rank improves?\n\n"
+        "Primary evidence question: does return generally improve as momentum rank improves? "
+        "Pooled means: mostly yes (D1 weakest, D9/D10 strongest). "
+        "D10 **median** is weaker than D9 — the extreme bucket is right-tailed, not steadily better. "
+        "Year-by-year: 2020 and 2026 invert; 2022 and 2024 are flat. "
+        "The slope is an average, not a reliable annual law.\n\n"
         "Year-by-year decile means (monthly average, not compounded):\n\n"
     )
     byy = d.get("by_year") or {}
@@ -170,7 +180,12 @@ def write_portfolio(stats: dict[str, Any], path: Path) -> None:
     body += (
         "\n\nFormula excess CAGR vs EW (net): "
         + ", ".join(f"{k}={_pct(v)}" for k, v in (stats.get("formula_excess_ew") or {}).items())
-        + ".\n"
+        + ".\n\n"
+        "Sector weights use the contemporaneous NIFTY 500 comment map. Most Top-20 "
+        "names are **UNKNOWN** (small/mid caps outside that map). Reported "
+        f"average max-sector weight {_pct(p.get('avg_max_sector'))} is therefore "
+        "mostly the unmapped bucket, not a single industry bet. Do not add sector "
+        "caps in this milestone.\n"
     )
     path.write_text(body)
 
@@ -304,9 +319,17 @@ def write_decision(stats: dict[str, Any], path: Path) -> None:
         f"- Live authorised: `{d.get('live_trading_authorised')}`\n"
         f"- Paper authorised: `{d.get('paper_trading_authorised')}`\n"
         f"- FEATURE-002 change authorised: `{d.get('feature002_change_authorised')}`\n\n"
-        "If the label is REJECT or RESEARCH-ONLY, do **not** rescue the hypothesis "
-        "with stops, sector caps, news, or AI inside this milestone. "
-        "A stop overlay would be EDGE-002 only after a surviving primary effect.\n"
+        "H1 is not rejected on full-sample CAGR, but monthly net excess vs the "
+        "equal-weight investable universe has a block-bootstrap CI that includes zero "
+        "and a hit rate below 50%. Confirmation 2025–2026 reverses development. "
+        "H2 holds on the pooled decile means (ordered slope) and fails as a "
+        "year-by-year law. H3 (skip last month) does not improve on 12-0. "
+        "H4 is descriptive: bull months are stronger; correction months are negative. "
+        "No regime gate is added.\n\n"
+        "Do **not** rescue this milestone with stops, sector caps, news, or AI. "
+        "A 9-1 or crash-aware variant would be a **new** protocol, not a silent "
+        "retune of M1/Top20/monthly. A stop overlay would be EDGE-002 only after "
+        "a surviving primary effect.\n"
     )
 
 

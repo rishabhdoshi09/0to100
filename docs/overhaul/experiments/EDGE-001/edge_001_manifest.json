@@ -1,0 +1,32 @@
+{
+  "experiment": "EDGE-001",
+  "protocol_sha": "4a9ac87fc31bbd59",
+  "protocol_activated_ist": "2026-08-22T00:00:00+05:30",
+  "primary": {
+    "ranker": "M1_12_1",
+    "n": 20,
+    "rebalance": "monthly_last_session"
+  },
+  "rt_cost_pct": 0.32,
+  "n_month_ends_ranked": 72,
+  "first_rank": "2020-09-30",
+  "last_rank": "2026-08-21",
+  "store_sessions": 1788,
+  "store_first": "2019-08-23",
+  "store_last": "2026-08-21",
+  "n_frames": 3126,
+  "dsr_n_trials": 64,
+  "n_primary_periods": 70,
+  "nifty_source": "NIFTY50_EQUALWEIGHT_PROXY_BHAV",
+  "official_nifty_sessions": 586,
+  "official_nifty_start": "2024-04-08",
+  "nifty500_available": false,
+  "adv_lookback": 20,
+  "feature002_untouched": true,
+  "production_buy_untouched": true,
+  "ca_policy": "adjustment_on_read_plus_min_sessions; no exhaustive unresolved quarantine in EDGE-001",
+  "listing_pit": "PIT_DEGRADED_bhav_inferred",
+  "sector_pit": "PIT_DEGRADED_contemporaneous_map",
+  "fill": "next_open",
+  "stop": "none_scheduled_rebalance_only"
+}
