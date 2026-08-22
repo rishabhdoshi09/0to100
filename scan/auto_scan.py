@@ -560,6 +560,13 @@ def _scan_once_locked(universe: Optional[list[str]] = None, progress=None) -> No
             _last_scan_ts = time.time()
             _status = "ready"
         _save_state()   # restart pe results turant wapas milenge
+        # FEATURE-002 shadow ranks — after production store + autopilot.
+        # Fail-open: must never change serialized, Ready, or the next cycle.
+        try:
+            from research.feature002.observe import observe_production_scan
+            observe_production_scan(serialized, source="live_scan")
+        except Exception as exc:
+            log.debug("feature002_shadow_skip", error=str(exc))
         log.info("auto_scan_complete", universe=len(universe), signals=len(serialized))
     except Exception as exc:
         with _lock:

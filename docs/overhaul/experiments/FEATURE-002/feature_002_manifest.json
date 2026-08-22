@@ -1,0 +1,16 @@
+{
+  "experiment": "FEATURE-002",
+  "feature_set_version": "feature-002.v1",
+  "protocol_hash": "a1b17c7b38d56a9b",
+  "feature_001_final_commit": "aa2dc3b3ef5ff611b2cdd25faeabff93f80dae58",
+  "feature_001_last_sample": "2026-07-23",
+  "forward_start_date": "2026-07-24",
+  "forward_start_ts_ist": "2026-08-22T00:00:00+05:30",
+  "status": "FORWARD VALIDATION ACTIVE \u2014 INSUFFICIENT NEW DATA",
+  "ledger": {
+    "observations": 0,
+    "primary": 0,
+    "resolved_primary_5d": 0,
+    "candidate_sets": 0
+  }
+}
