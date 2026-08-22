@@ -1,0 +1,70 @@
+{
+  "experiment": "SEPA-003",
+  "status": "predeclared",
+  "declared_before_results": true,
+  "consumed_confirmation": "2025-01-01/2026-08-21",
+  "forbidden_labels": [
+    "untouched confirmation",
+    "final OOS",
+    "production validated",
+    "VALIDATED_EDGE",
+    "DEPLOYMENT_ELIGIBLE"
+  ],
+  "primary": [
+    {
+      "id": "H1",
+      "claim": "Stage-2 strength reduces adverse outcomes versus otherwise comparable baseline candidates.",
+      "exploratory": false
+    },
+    {
+      "id": "H2",
+      "claim": "Cross-sectional RS has a stable positive relationship with outcome.",
+      "exploratory": false,
+      "prespecified_buckets": ["50-69", "70-79", "80-89", "90-94", "95-99"]
+    },
+    {
+      "id": "H3",
+      "claim": "VCP binary status adds incremental predictive value beyond Stage-2 + RS.",
+      "exploratory": false
+    },
+    {
+      "id": "H4",
+      "claim": "Tighter final contractions improve breakout outcomes.",
+      "exploratory": false
+    },
+    {
+      "id": "H5",
+      "claim": "Volume dry-up improves breakout outcomes.",
+      "exploratory": false
+    },
+    {
+      "id": "H6",
+      "claim": "Lower pivot-entry extension improves MAE and failure rate.",
+      "exploratory": false
+    },
+    {
+      "id": "H7",
+      "claim": "SEPA performance is materially conditional on broader market regime.",
+      "exploratory": false
+    },
+    {
+      "id": "H8",
+      "claim": "Sector/group leadership adds information beyond stock RS.",
+      "exploratory": false,
+      "insufficient_label": "INSUFFICIENT_PIT_SECTOR_DATA"
+    }
+  ],
+  "exploratory": [
+    "contraction_count",
+    "base_depth",
+    "base_duration",
+    "tightness_composite",
+    "sma_distances",
+    "distance_52w",
+    "stop_width",
+    "breakout_clv",
+    "liquidity",
+    "individual_trend_rules",
+    "shallow_tree_interactions"
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "choice": "A",
+  "label": "A \u2014 RETIRE CORE SEPA; RETAIN SELECT FEATURES",
+  "reason": "Core F failed consumed confirmation. Binary VCP did not earn an incremental gate. Selected continuous/quality features may be retained as NEW_HYPOTHESIS inputs to a later ensemble.",
+  "retain": [
+    "trend_template_as_quality_feature",
+    "rs_percentile_as_ranking_feature"
+  ],
+  "retire": [
+    "core_F_standalone",
+    "VCP_binary_as_hard_gate"
+  ],
+  "h8_label": "INSUFFICIENT_PIT_SECTOR_DATA",
+  "further_historical_optimization": false,
+  "new_hypothesis_only": true
+}
