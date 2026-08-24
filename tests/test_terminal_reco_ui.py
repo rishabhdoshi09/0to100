@@ -40,3 +40,11 @@ def test_today_hides_quantterm_radar_chrome():
     assert "RecoWealth desk is waiting for the market API" in app
     sidebar = (ROOT / "frontend" / "src" / "MarketSidebar.tsx").read_text(encoding="utf-8")
     assert "QUANTTERM" not in sidebar
+
+
+def test_empty_proxy_500_tells_owner_to_start_the_stack():
+    src = (ROOT / "frontend" / "src" / "http.ts").read_text(encoding="utf-8")
+    assert "Market API is not running on :8765" in src
+    assert "run_quantterm_complete.sh" in src
+    radar = (ROOT / "frontend" / "src" / "marketRadarViews.tsx").read_text(encoding="utf-8")
+    assert "setInterval(load" in radar

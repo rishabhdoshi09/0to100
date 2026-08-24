@@ -216,13 +216,19 @@ export function RadarHomeView(props: ExperienceViewProps & {
   const [plan, setPlan] = useState<TradePlan | null>(null)
 
   useEffect(() => {
-    fetchRadarHome().then(setRadar).catch(() => setRadar(null))
+    let cancelled = false
+    const load = () => {
+      fetchRadarHome()
+        .then((home) => { if (!cancelled) setRadar(home) })
+        .catch(() => { if (!cancelled) setRadar(null) })
+    }
+    load()
     const watching = marketScan.isActive || Boolean(dashboard.scan_progress?.active)
-    if (!watching) return
-    const timer = window.setInterval(() => {
-      fetchRadarHome().then(setRadar).catch(() => undefined)
-    }, 4000)
-    return () => window.clearInterval(timer)
+    const timer = window.setInterval(load, watching ? 4000 : 12000)
+    return () => {
+      cancelled = true
+      window.clearInterval(timer)
+    }
   }, [dashboard.scan.scanned_at, dashboard.long_term.scanned_at, dashboard.scan_progress?.updated_at, dashboard.scan_progress?.current, marketScan.isActive])
 
   useEffect(() => {

@@ -1,3 +1,4 @@
+import { readJson } from './http'
 import type { ControlName, ConvictionRecord, LongTermRecord, NewsArticle, ScanRecord } from './types'
 
 export type ProductLane = {
@@ -132,13 +133,7 @@ export type ScannerWorkspace = {
   rows: ScannerWorkspaceRow[]
 }
 
-const json = async <T>(response: Response): Promise<T> => {
-  if (!response.ok) {
-    const body = await response.text()
-    throw new Error(body || `Request failed with ${response.status}`)
-  }
-  return response.json() as Promise<T>
-}
+const json = readJson
 
 export const fetchProductReadiness = (): Promise<ProductReadiness> =>
   fetch('/api/product-readiness', { headers: { Accept: 'application/json' } })

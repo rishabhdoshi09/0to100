@@ -153,23 +153,45 @@ def scanner_workspace(mode: str) -> dict[str, Any]:
 
 
 def radar_home_workspace() -> dict[str, Any]:
-    market = core._market_payload()
-    scan = core._scan_payload()
-    long_term = core._long_term_payload()
-    from product.radar_workspace import build_radar_home
-    home = build_radar_home(
-        scan_payload=scan,
-        long_term_payload=long_term,
-        market=market,
-    )
+    """Today/Setups bootstrap. Empty cards until the last scan JSON is readable."""
+    scan: dict[str, Any] = {}
+    try:
+        market = core._market_payload()
+        scan = core._scan_payload()
+        long_term = core._long_term_payload()
+        from product.radar_workspace import build_radar_home
+        home = build_radar_home(
+            scan_payload=scan,
+            long_term_payload=long_term,
+            market=market,
+        )
+    except Exception as exc:
+        home = {
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "market_session": "",
+            "market_health": "Unavailable",
+            "breadth": "—",
+            "nifty_change_1d": None,
+            "vix": None,
+            "leaders": [],
+            "laggards": [],
+            "scan_scanned_at": str((scan or {}).get("scanned_at", "") or ""),
+            "long_term_scanned_at": "",
+            "universe_size": int((scan or {}).get("universe_size", 0) or 0),
+            "lanes": {"breakouts": [], "momentum": [], "long_term_picks": []},
+            "counts": {"breakouts": 0, "momentum": 0, "long_term_picks": 0},
+            "best_setups": [],
+            "best_setups_note": "Last scan is not readable yet.",
+            "error": str(exc),
+        }
     try:
         from product.sepa_setup import public_best_setups
         cards, note = public_best_setups(scan, limit=8, score_cap=24, max_seconds=2.0)
         home["best_setups"] = cards
         home["best_setups_note"] = note
     except Exception:
-        home["best_setups"] = []
-        home["best_setups_note"] = "SEPA ranking is temporarily unavailable."
+        home["best_setups"] = list(home.get("best_setups") or [])
+        home["best_setups_note"] = str(home.get("best_setups_note") or "SEPA ranking is temporarily unavailable.")
     try:
         from product.scan_progress import read_progress
         home["scan_progress"] = read_progress()

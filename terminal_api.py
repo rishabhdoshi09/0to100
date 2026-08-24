@@ -53,6 +53,109 @@ def _json_file(path: Path, default: Any) -> Any:
         return default
 
 
+def _json_safe(value: Any) -> Any:
+    """JSON-encode without NaN/Inf so the RecoWealth desk never 500s on a float."""
+    if isinstance(value, dict):
+        return {str(key): _json_safe(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(item) for item in value]
+    if isinstance(value, float) and (value != value or value in (float("inf"), float("-inf"))):
+        return None
+    return value
+
+
+def _empty_dashboard(error: str, scan: dict[str, Any] | None = None) -> dict[str, Any]:
+    payload = scan if isinstance(scan, dict) else _scan_payload()
+    return {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "market": {
+            "available": False,
+            "health": "Unavailable",
+            "summary": "Market API is degraded; cards use the last readable scan.",
+            "trade_stance": "Do not infer a market stance from missing data.",
+            "breadth": "—",
+            "leaders": [],
+            "laggards": [],
+            "nifty_change_1d": None,
+            "nifty_change_5d": None,
+            "vix": None,
+            "technical_details": {},
+        },
+        "scan": payload,
+        "long_term": {"available": False, "summary": {}, "records": [], "job": {}},
+        "paper": {
+            "available": False,
+            "enabled": False,
+            "supervisor_running": False,
+            "capital": 0.0,
+            "equity": 0.0,
+            "equity_curve": [],
+            "open_risk": 0.0,
+            "risk_per_trade_pct": 0.01,
+            "max_positions": 0,
+            "open_positions": [],
+            "closed_trades": [],
+            "refusals": [],
+            "last_cycle": {},
+        },
+        "autonomy": {
+            "available": False,
+            "running": False,
+            "process_running": False,
+            "state": "UNKNOWN",
+            "plain_state": "Autonomy status unavailable.",
+            "explanation": error,
+            "heartbeat_ist": "",
+            "scheduler_owner_pid": None,
+            "active_job": {},
+            "new_paper_entries": False,
+            "existing_exits": False,
+            "research_enabled": False,
+            "capability_notes": [],
+            "active_failures": [],
+            "recent_dialogue": [],
+            "recent_transitions": [],
+            "jobs": {},
+            "jobs_recent": [],
+            "owner_state": {},
+            "live_feed": {},
+            "last_cycle": {},
+        },
+        "operations": {
+            "available": False,
+            "running": False,
+            "worker_pid": None,
+            "heartbeat": "",
+            "active_lanes": {},
+            "counts": {},
+            "active": [],
+            "recent": [],
+            "latest": {},
+        },
+        "news": {
+            "available": False,
+            "stats": {"total": 0, "important": 0, "fno_linked": 0, "macro": 0, "sources": 0},
+            "articles": [],
+            "source_health": [],
+            "latest_refresh": {},
+        },
+        "fno": {"available": False, "source": "unavailable", "mapped_underlyings": 0, "underlyings": [], "exclusions": []},
+        "data": {
+            "ready": False,
+            "snapshot": {"ready": False, "snapshot_id": "", "latest_date": "", "source": ""},
+            "bhavcopy": {"ready": False, "symbols": 0, "sessions": 0, "latest_date": "", "csv_files": 0, "cache_exists": False},
+            "scan_saved": bool(payload.get("available")),
+            "scan_records": len(payload.get("records", []) or []),
+            "long_term_saved": False,
+            "long_term_records": 0,
+            "blockers": [error] if error else [],
+        },
+        "conviction": [],
+        "scan_progress": {"active": False, "eta_label": "", "current": 0, "total": 0},
+        "error": error,
+    }
+
+
 def _fresh_epoch(value: Any, max_age_s: float = 10.0) -> bool:
     try:
         age = time.time() - float(value)
@@ -580,29 +683,46 @@ def health() -> dict:
 
 @app.get("/api/dashboard")
 def dashboard() -> dict:
-    market = _market_payload()
+    """RecoWealth desk bootstrap. Last readable scan survives a subsystem failure."""
     scan = _scan_payload()
-    long_term = _long_term_payload()
-    paper = _paper_payload()
-    autonomy = _autonomy_payload()
-    operations = _operations_payload()
-    news = _news_payload()
-    fno = _fno_payload()
-    data = _data_payload(scan, long_term, operations, fno, news)
-    return {
-        "generated_at": datetime.now(timezone.utc).isoformat(),
-        "market": market,
-        "scan": scan,
-        "long_term": long_term,
-        "paper": paper,
-        "autonomy": autonomy,
-        "operations": operations,
-        "news": news,
-        "fno": fno,
-        "data": data,
-        "conviction": _conviction(scan, market),
-        "scan_progress": _scan_progress_payload(),
-    }
+    try:
+        market = _market_payload()
+        long_term = _long_term_payload()
+        paper = _paper_payload()
+        autonomy = _autonomy_payload()
+        operations = _operations_payload()
+        news = _news_payload()
+        fno = _fno_payload()
+        data = _data_payload(scan, long_term, operations, fno, news)
+        return _json_safe({
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "market": market,
+            "scan": scan,
+            "long_term": long_term,
+            "paper": paper,
+            "autonomy": autonomy,
+            "operations": operations,
+            "news": news,
+            "fno": fno,
+            "data": data,
+            "conviction": _conviction(scan, market),
+            "scan_progress": _scan_progress_payload(),
+        })
+    except Exception as exc:
+        degraded = _empty_dashboard(f"Dashboard degraded: {exc}", scan)
+        try:
+            degraded["market"] = _market_payload()
+        except Exception:
+            pass
+        try:
+            degraded["long_term"] = _long_term_payload()
+        except Exception:
+            pass
+        try:
+            degraded["operations"] = _operations_payload()
+        except Exception:
+            pass
+        return _json_safe(degraded)
 
 
 @app.get("/api/operations")
