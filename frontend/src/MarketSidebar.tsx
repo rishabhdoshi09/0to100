@@ -11,7 +11,7 @@ const DESK_NAV = [
 ] as const
 
 function Logo() {
-  return <div className="brand-mark" aria-hidden="true">QT</div>
+  return <div className="brand-mark" aria-hidden="true">RW</div>
 }
 
 export function MarketSidebar({
@@ -47,7 +47,7 @@ export function MarketSidebar({
 
   return (
     <aside className="sidebar">
-      <div className="brand"><Logo /><div><strong>QUANTTERM</strong><small>NSE DESK</small></div></div>
+      <div className="brand"><Logo /><div><strong>RECOWEALTH</strong><small>NSE DESK</small></div></div>
       <nav>
         <div className="nav-section-label">Desk</div>
         {DESK_NAV.map(([icon, route, display]) => (

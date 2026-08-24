@@ -184,6 +184,8 @@ def build_radar_home(
             "momentum": len(momentum),
             "long_term_picks": len(long_picks),
         },
+        "best_setups": [],
+        "best_setups_note": "",
     }
 
 

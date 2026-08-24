@@ -70,6 +70,26 @@
   background: rgba(56, 189, 248, 0.1);
 }
 
+.reco-section {
+  padding: 8px 24px 0;
+}
+.reco-section h3 {
+  margin: .2rem 0 0;
+  font-size: 1.08rem;
+  font-weight: 750;
+}
+.reco-note {
+  margin: .25rem 0 .7rem;
+  color: var(--muted);
+  font-size: .82rem;
+  line-height: 1.4;
+}
+.empty-row {
+  margin: 0 24px 16px;
+  color: var(--muted);
+  font-size: .88rem;
+}
+
 .radar-hero span { font-family: var(--qt-mono); letter-spacing: .16em; color: var(--qt-dim) !important; }
 .radar-lane-card header span { color: var(--cyan) !important; }
 .radar-tab-row button.active {

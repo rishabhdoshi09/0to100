@@ -4,7 +4,7 @@ from __future__ import annotations
 import pandas as pd
 import pytest
 
-from product.sepa_setup import rank_best_setups, score_sepa
+from product.sepa_setup import public_best_setups, rank_best_setups, score_sepa
 from ui.desk_board import reco_card_html, sepa_card_row, setup_badge
 
 
@@ -139,3 +139,23 @@ def test_sepa_card_says_qualified_not_buy_order():
     assert "SEPA qualified" in html
     assert "SEPA" in html and "/100" in html
     assert "not a buy order" in sepa["disclaimer"].lower() or "not a buy" in sepa["disclaimer"].lower()
+
+
+def test_public_best_setups_returns_cards_not_pairs():
+    frames = {"UP": _uptrend(), "DOWN": _downtrend()}
+    cards, note = public_best_setups(
+        {
+            "scanned_at": "2026-08-24T00:00:00+00:00",
+            "records": [
+                {"symbol": "UP", "score": 90, "verdict": "BUY", "chase_risk": False, "rsi": 55, "price": 210},
+                {"symbol": "DOWN", "score": 80, "verdict": "BUY", "chase_risk": False, "rsi": 40},
+            ],
+        },
+        load_frame=lambda symbol: frames[symbol],
+        max_seconds=None,
+    )
+    assert len(cards) == 1
+    assert cards[0]["symbol"] == "UP"
+    assert cards[0]["sepa_score"] >= 80
+    assert cards[0]["sepa_verdict"] == "STRONG"
+    assert "Stage-2" in note or "SEPA" in note

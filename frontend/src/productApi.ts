@@ -232,6 +232,8 @@ export type RadarHome = {
     long_term_picks: ScannerWorkspaceRow[]
   }
   counts: { breakouts: number; momentum: number; long_term_picks: number }
+  best_setups?: ScannerWorkspaceRow[]
+  best_setups_note?: string
 }
 
 export const fetchRadarHome = (): Promise<RadarHome> =>

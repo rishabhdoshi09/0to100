@@ -616,6 +616,40 @@ def rank_best_setups(
     return [], note
 
 
+def public_best_setups(
+    scan_payload: Mapping[str, Any] | None,
+    *,
+    limit: int = 8,
+    score_cap: int = 24,
+    max_seconds: float = 8.0,
+    min_score: int = 40,
+    load_frame: Callable[[str], Any] | None = None,
+) -> tuple[list[dict[str, Any]], str]:
+    """RecoWealth Today cards from the saved scan. Research overlay only."""
+    records = list((scan_payload or {}).get("records") or [])
+    if not records:
+        return [], "No saved scan yet — SEPA ranking needs the last whole-market scan."
+    cache_key = f"{scan_payload.get('scanned_at')}:{limit}:{score_cap}:{min_score}"
+    ranked, note = rank_best_setups(
+        records,
+        load_frame=load_frame,
+        limit=limit,
+        score_cap=score_cap,
+        min_score=min_score,
+        max_seconds=max_seconds,
+        cache_key=cache_key,
+    )
+    cards: list[dict[str, Any]] = []
+    for sepa, row in ranked:
+        card = dict(row)
+        card.update(sepa_card_fields(sepa))
+        quote = dict(sepa.get("quote") or {})
+        if quote.get("close") and not card.get("price"):
+            card["price"] = quote.get("close")
+        cards.append(card)
+    return cards, note
+
+
 def _default_frame(symbol: str) -> Any:
     from data.bhavcopy_runtime import get_ohlcv
     return get_ohlcv(symbol)

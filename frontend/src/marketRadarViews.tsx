@@ -29,6 +29,55 @@ type RadarRow = ScannerWorkspaceRow & {
   company?: string
   classification?: string
   combined_score?: number
+  why?: string
+  sepa_score?: number
+  sepa_passed?: number
+  sepa_total?: number
+  sepa_verdict?: string
+}
+
+function recoBadge(row: RadarRow): [string, string] {
+  const verdict = String(row.sepa_verdict || '').toUpperCase()
+  if (verdict === 'STRONG') return ['SEPA qualified', 'buy']
+  if (verdict === 'CONSTRUCTIVE') return ['Setup forming', 'watch']
+  if (row.chase_risk) return ['Avoid', 'avoid']
+  if (row.status === 'Ready to trade' || String(row.verdict || '').toUpperCase() === 'BUY') return ['Buy Setup', 'buy']
+  if (row.status === 'Wait for pullback') return ['Wait', 'wait']
+  return ['Watch', 'watch']
+}
+
+function RecoCard({
+  row,
+  selected,
+  onSelect,
+}: {
+  row: RadarRow
+  selected: boolean
+  onSelect: (symbol: string) => void
+}) {
+  const [label, kind] = recoBadge(row)
+  const sepa = row.sepa_score != null
+    ? `SEPA ${row.sepa_score}/100${row.sepa_passed != null && row.sepa_total ? `  ·  ${row.sepa_passed}/${row.sepa_total} rules` : ''}`
+    : ''
+  const levels = [
+    sepa,
+    row.entry ? `Entry ₹${Number(row.entry).toLocaleString('en-IN')}` : '',
+    row.stop ? `Stop ₹${Number(row.stop).toLocaleString('en-IN')}` : '',
+    row.target ? `Target ₹${Number(row.target).toLocaleString('en-IN')}` : '',
+  ].filter(Boolean).join('  ·  ')
+  return (
+    <button
+      type="button"
+      className={selected ? 'reco-card active' : 'reco-card'}
+      onClick={() => onSelect(row.symbol)}
+    >
+      <div className="row"><span className="sym">{row.symbol}</span><span className={`reco-badge ${kind}`}>{label}</span></div>
+      <div className="co">{row.company || row.sector || row.setup_label || 'NSE'}</div>
+      <div className="px">{row.price ? `₹${Number(row.price).toLocaleString('en-IN')}` : 'Price n/a'}</div>
+      <div className="lv">{levels || row.status || 'Watch'}</div>
+      <div className="why">{row.sepa_headline || row.reason || row.why || row.setup_label || 'From the last whole-market scan.'}</div>
+    </button>
+  )
 }
 
 const breakoutLabel: Record<string, string> = {
@@ -152,33 +201,19 @@ export function RadarHomeView(props: ExperienceViewProps & {
     fetchTradePlan(selected).then(setPlan).catch(() => setPlan(null))
   }, [selected, dashboard.scan.scanned_at])
 
-  const laneCard = (title: string, rows: RadarRow[], count: number) => (
-    <section className="radar-lane-card">
-      <header><span>{title}</span><strong>{count}</strong></header>
-      <ul>
-        {rows.slice(0, 6).map((row) => (
-          <li key={row.symbol}>
-            <button type="button" className={selected === row.symbol ? 'active' : ''} onClick={() => setSelected(row.symbol)}>
-              <b>{row.symbol}</b>
-              <span>{row.setup_label || row.status}</span>
-              <small>{row.sector} · {row.reason?.slice(0, 48) || '—'}</small>
-            </button>
-          </li>
-        ))}
-        {rows.length === 0 && <li className="radar-empty-li">No saved matches</li>}
-      </ul>
-    </section>
-  )
-
-  const row = radar?.lanes.breakouts.find((r) => r.symbol === selected)
+  const row = (radar?.best_setups || []).find((r) => r.symbol === selected)
+    || radar?.lanes.breakouts.find((r) => r.symbol === selected)
     || radar?.lanes.momentum.find((r) => r.symbol === selected)
     || radar?.lanes.long_term_picks.find((r) => r.symbol === selected)
 
+  const sepaCards = (radar?.best_setups || []) as RadarRow[]
+  const watchlist = ((radar?.lanes.breakouts?.length ? radar.lanes.breakouts : radar?.lanes.momentum) || []).slice(0, 6) as RadarRow[]
+
   return (
-    <section className="radar-home">
+    <section className="radar-home reco-desk">
       <header className="radar-hero">
         <div>
-          <span>TODAY · NSE DESK</span>
+          <span>TODAY · RECOWEALTH</span>
           <h2>{radar?.market_health || dashboard.market.health}</h2>
           <p>{dashboard.market.summary}</p>
         </div>
@@ -203,77 +238,70 @@ export function RadarHomeView(props: ExperienceViewProps & {
       <div className="reco-how">
         <div className="qt-eyebrow">How to use this desk</div>
         <ol>
-          <li><span className="k">Today</span> — Best Setups first, then the scanner lanes.</li>
-          <li><span className="k">Setups</span> — Breakouts, Momentum, Long-term. Do not mix them.</li>
+          <li><span className="k">Today</span> — SEPA-qualified Top Stocks first, then the scanner watchlist. If SEPA is empty, the scan names did not clear the Stage-2 floor.</li>
+          <li><span className="k">Setups</span> — Best Setups (SEPA), Momentum, Conviction, Long-term. Do not mix them.</li>
           <li><span className="k">Paper Desk</span> — simulated trades. The bot learns daily. No broker orders here.</li>
           <li><span className="k">Backtest</span> — inspect a paper loss. It does not change today’s BUY list.</li>
         </ol>
       </div>
 
-      <div className="reco-card-grid">
-        {((radar?.lanes.breakouts?.length ? radar.lanes.breakouts : radar?.lanes.momentum) || []).slice(0, 6).map((row) => {
-          const badge = row.chase_risk ? ['Avoid', 'avoid'] : row.status === 'Ready to trade' || row.verdict === 'BUY' ? ['Buy Setup', 'buy'] : ['Watch', 'watch']
-          return (
-            <button
-              key={row.symbol}
-              type="button"
-              className={selected === row.symbol ? 'reco-card active' : 'reco-card'}
-              onClick={() => setSelected(row.symbol)}
-            >
-              <div className="row"><span className="sym">{row.symbol}</span><span className={`reco-badge ${badge[1]}`}>{badge[0]}</span></div>
-              <div className="co">{row.company || row.sector || row.setup_label || 'NSE'}</div>
-              <div className="px">{row.price ? `₹${Number(row.price).toLocaleString('en-IN')}` : 'Price n/a'}</div>
-              <div className="lv">
-                {row.entry ? `Entry ₹${Number(row.entry).toLocaleString('en-IN')}` : 'Entry n/a'}
-                {row.stop ? `  ·  Stop ₹${Number(row.stop).toLocaleString('en-IN')}` : ''}
-                {row.target ? `  ·  Target ₹${Number(row.target).toLocaleString('en-IN')}` : ''}
-              </div>
-              <div className="why">{row.reason || row.setup_label || 'From the last whole-market scan.'}</div>
-            </button>
-          )
-        })}
+      <div className="reco-section">
+        <div className="qt-eyebrow">Top stocks</div>
+        <h3>Best Setups · SEPA qualified</h3>
+        <p className="reco-note">{radar?.best_setups_note || 'Minervini 7-rule Stage-2 template on official NSE history. A qualify is research — not a buy order.'}</p>
       </div>
-      {!(radar?.lanes.breakouts || []).length && (
-        <p className="empty-row">No Best Setups in the last scan yet. Run a scan or keep autonomy running.</p>
+      <div className="reco-card-grid">
+        {sepaCards.map((item) => (
+          <RecoCard key={item.symbol} row={item} selected={selected === item.symbol} onSelect={setSelected} />
+        ))}
+      </div>
+      {!sepaCards.length && (
+        <p className="empty-row">No SEPA-qualified names in the last scan yet. Keep autonomy running, or open Setups and queue a scan.</p>
+      )}
+
+      <div className="reco-section">
+        <div className="qt-eyebrow">Scanner watchlist</div>
+        <h3>What the momentum scan is watching</h3>
+        <p className="reco-note">Saved whole-market scan. Not the same as SEPA-qualified Best Setups above.</p>
+      </div>
+      <div className="reco-card-grid">
+        {watchlist.map((item) => (
+          <RecoCard key={`watch-${item.symbol}`} row={item} selected={selected === item.symbol} onSelect={setSelected} />
+        ))}
+      </div>
+      {!watchlist.length && (
+        <p className="empty-row">No saved scan yet. An empty list is not the same as “no trade today”.</p>
       )}
 
       <BotLearningPanel dashboard={dashboard} />
 
-      <div className="radar-three-lanes">
-        {laneCard('Breakouts', radar?.lanes.breakouts || [], radar?.counts.breakouts || 0)}
-        {laneCard('Momentum', radar?.lanes.momentum || [], radar?.counts.momentum || 0)}
-        {laneCard('Long-Term Picks', radar?.lanes.long_term_picks || [], radar?.counts.long_term_picks || 0)}
-      </div>
-
-      <div className="radar-workspace">
-        <Panel title={`CHART · ${selected || 'SELECT STOCK'}`} subtitle={`Official history · ${dashboard.data.bhavcopy.latest_date || '—'}`}>
-          <ChartWorkspace symbol={selected} bars={bars} row={row} />
-        </Panel>
-        <Panel title="DECISION PREVIEW">
-          {selected ? (
+      {selected && (
+        <div className="radar-workspace">
+          <Panel title={`CHART · ${selected}`} subtitle={`Official history · ${dashboard.data.bhavcopy.latest_date || '—'}`}>
+            <ChartWorkspace symbol={selected} bars={bars} row={row} />
+          </Panel>
+          <Panel title="DECISION PREVIEW">
             <div className="radar-decision-preview">
-              <p><strong>{(row as RadarRow)?.reason || plan?.summary || 'Select a stock from a lane above.'}</strong></p>
+              <p><strong>{(row as RadarRow)?.reason || plan?.summary || 'Select a stock from a card above.'}</strong></p>
               {plan?.entry != null && <div>Entry zone: {money(plan.entry)}</div>}
               {plan?.stop != null && <div>Invalidation: {money(plan.stop)}</div>}
               {plan?.target != null && <div>Target: {money(plan.target)}</div>}
               <div className="radar-action-row">
-                <button type="button" onClick={() => setActive('Stock Intelligence')}>Stock Intelligence</button>
+                <button type="button" onClick={() => setActive('Desk')}>Open on Desk</button>
                 <button type="button" onClick={() => onCompare(selected)}>Compare</button>
                 <button type="button" onClick={() => onWatchlist(selected)}>Watchlist</button>
               </div>
             </div>
-          ) : (
-            <p className="radar-empty-li">Select a stock to preview the trade plan and next steps.</p>
-          )}
-        </Panel>
-      </div>
+          </Panel>
+        </div>
+      )}
     </section>
   )
 }
 
 export function MarketScannerView(props: ExperienceViewProps & { onCompare: (symbol: string) => void }) {
   const { dashboard, selected, setSelected, bars, setActive, depth, marketScan, longTermScan, onCompare } = props
-  const [tab, setTab] = useState<'Breakouts' | 'Momentum' | 'Long-Term'>('Breakouts')
+  const [tab, setTab] = useState<'Best Setups' | 'Breakouts' | 'Momentum' | 'Long-Term'>('Best Setups')
   const [rows, setRows] = useState<RadarRow[]>([])
   const [meta, setMeta] = useState({ scanned_at: '', universe: 0 })
   const [search, setSearch] = useState('')
@@ -283,6 +311,15 @@ export function MarketScannerView(props: ExperienceViewProps & { onCompare: (sym
   const activeScan = tab === 'Long-Term' ? longTermScan : marketScan
 
   useEffect(() => {
+    if (tab === 'Best Setups') {
+      fetchRadarHome()
+        .then((result) => {
+          setRows((result.best_setups || []) as RadarRow[])
+          setMeta({ scanned_at: result.scan_scanned_at, universe: result.universe_size })
+        })
+        .catch(() => setRows([]))
+      return
+    }
     fetchScannerWorkspace(tab)
       .then((result) => {
         setRows(result.rows as RadarRow[])
@@ -306,8 +343,8 @@ export function MarketScannerView(props: ExperienceViewProps & { onCompare: (sym
     <section className="market-scanner">
       <header className="scanner-command-bar">
         <div>
-          <span>MARKET SCANNER</span>
-          <h2>Breakouts · Momentum · Long-Term</h2>
+          <span>SETUPS · RECOWEALTH</span>
+          <h2>Best Setups · Momentum · Long-Term</h2>
           <p>{filtered.length} matches · universe {meta.universe.toLocaleString('en-IN')} · scan {meta.scanned_at || '—'}</p>
         </div>
         <button type="button" disabled={activeScan.isBusy} onClick={() => void activeScan.start()}>
@@ -318,7 +355,7 @@ export function MarketScannerView(props: ExperienceViewProps & { onCompare: (sym
       <LiveScanBanner scan={activeScan} depth={depth} label={tab === 'Long-Term' ? 'Long-term scan' : 'Market scan'} />
 
       <div className="radar-tab-row">
-        {(['Breakouts', 'Momentum', 'Long-Term'] as const).map((item) => (
+        {(['Best Setups', 'Breakouts', 'Momentum', 'Long-Term'] as const).map((item) => (
           <button key={item} type="button" className={tab === item ? 'active' : ''} onClick={() => setTab(item)}>{item}</button>
         ))}
       </div>

@@ -15,6 +15,14 @@ export type ScanRecord = {
   signals?: string[]
   reasons?: string[]
   chase_risk?: boolean
+  why?: string
+  sepa_score?: number
+  sepa_max?: number
+  sepa_passed?: number
+  sepa_total?: number
+  sepa_verdict?: string
+  sepa_headline?: string
+  sepa_advice?: string
 }
 
 export type ConvictionRecord = ScanRecord & {

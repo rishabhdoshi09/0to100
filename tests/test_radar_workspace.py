@@ -74,6 +74,8 @@ def test_radar_home_builds_three_lanes():
     assert payload["counts"]["breakouts"] >= 1
     assert payload["counts"]["long_term_picks"] == 1
     assert payload["lanes"]["momentum"][0]["symbol"] == "AAA"
+    assert payload["best_setups"] == []
+    assert payload["best_setups_note"] == ""
 
 
 def test_enrich_scan_row_never_fakes_daily_change_label():

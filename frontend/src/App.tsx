@@ -154,8 +154,8 @@ const pageTitles: Record<string, string> = {
 }
 
 const pageSubtitles: Record<string, string> = {
-  Today: 'SEPA-style Best Setups first, then the scanner watchlist. Paper memory is below.',
-  Setups: 'Breakouts, Momentum, Long-term. Four jobs — do not mix them.',
+  Today: 'SEPA-qualified Top Stocks first, then the scanner watchlist. Paper memory is below.',
+  Setups: 'Best Setups (SEPA), Momentum, Conviction, Long-term. Do not mix them.',
   'Paper Desk': 'Simulated book. The bot learns from closed trades. Live orders stay locked.',
   Backtest: 'Inspect a paper-loss style on past data. This does not change today’s BUY list.',
   Portfolio: 'Paper positions, equity and what the bot learned.',
@@ -316,8 +316,9 @@ function App() {
     longTermScan,
   }
 
-  const primaryPages = ['Today', 'Setups', 'Home', 'Market Scanner', 'Command Center', 'Scanner']
+  const primaryPages = ['Today', 'Setups', 'Home', 'Market Scanner', 'Command Center', 'Scanner', 'Paper Desk', 'Backtest', 'Portfolio', 'Paper Portfolio']
   const showOpsRibbon = !primaryPages.includes(active)
+  const recoDesk = ['Today', 'Setups', 'Paper Desk', 'Backtest', 'Portfolio', 'Home', 'Command Center', 'Paper Portfolio'].includes(active)
 
   const renderView = () => {
     if (active === 'Today' || active === 'Home' || active === 'Command Center') {
@@ -390,10 +391,10 @@ function App() {
             <button type="button" onClick={openSearch}>Open stock</button>
           </div>
           <div className="top-status">
-            <DisplayDepthToggle depth={depth} onChange={setDepth} />
+            {!recoDesk && <DisplayDepthToggle depth={depth} onChange={setDepth} />}
             <button type="button" className="experience-help-trigger" onClick={() => setHelpOpen(true)}>What is this?</button>
-            <span className={dashboard.data.ready ? 'live-pill' : 'offline-pill'}><i /> {dashboard.data.ready ? 'CORE DATA READY' : 'DATA INCOMPLETE'}</span>
-            <span className={dashboard.operations.running ? 'live-pill' : 'offline-pill'}><i /> {dashboard.operations.running ? 'MARKET OPS ONLINE' : 'MARKET OPS OFFLINE'}</span>
+            <span className={dashboard.data.ready ? 'live-pill' : 'offline-pill'}><i /> {dashboard.data.ready ? 'DATA READY' : 'DATA INCOMPLETE'}</span>
+            <span className={dashboard.autonomy.running || dashboard.operations.running ? 'live-pill' : 'offline-pill'}><i /> {dashboard.autonomy.running ? 'BOT ONLINE' : dashboard.operations.running ? 'OPS ONLINE' : 'BOT OFFLINE'}</span>
             <button type="button" onClick={() => void refresh()} aria-label="Refresh dashboard">↻</button>
           </div>
         </header>
@@ -401,16 +402,20 @@ function App() {
         <section className="page-title">
           <div><h1>{pageTitles[active] || active}</h1><p>{pageSubtitles[active]}</p></div>
           <div className="page-actions">
-            <button type="button" disabled={!selected} onClick={openEquityReport}>Equity Evidence PDF</button>
-            <button type="button" onClick={openBasketReport}>Top-3 Basket PDF</button>
+            {!recoDesk && (
+              <>
+                <button type="button" disabled={!selected} onClick={openEquityReport}>Equity Evidence PDF</button>
+                <button type="button" onClick={openBasketReport}>Top-3 Basket PDF</button>
+              </>
+            )}
             <span>{controlState || (loading ? 'Loading real state…' : `Updated ${dashboard.generated_at ? new Date(dashboard.generated_at).toLocaleTimeString('en-IN') : '—'}`)}</span>
           </div>
         </section>
 
         {error && (
           <div className="api-degraded-banner" role="alert">
-            <strong>QuantTerm backend is unavailable.</strong>
-            <p>Existing information may be incomplete. Reconnect or start the backend, then retry.</p>
+            <strong>RecoWealth desk is waiting for the market API.</strong>
+            <p>Start the QuantTerm stack, then retry. Cards stay empty until the last scan is readable.</p>
             <details>
               <summary>Technical details</summary>
               <pre>{error}</pre>

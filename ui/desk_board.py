@@ -106,22 +106,15 @@ def rank_sepa_from_scan(
     min_score: int = 40,
 ) -> tuple[list[dict[str, Any]], str]:
     """Best Setups from the saved scan. Never starts a scanner."""
-    from product.sepa_setup import rank_best_setups
+    from product.sepa_setup import public_best_setups
 
-    records = list((payload or {}).get("records") or [])
-    if not records:
-        return [], "No saved scan yet — SEPA ranking needs the last whole-market scan."
-    cache_key = f"{payload.get('scanned_at')}:{limit}:{score_cap}:{min_score}"
-    ranked, note = rank_best_setups(
-        records,
+    return public_best_setups(
+        payload,
         limit=limit,
         score_cap=score_cap,
-        min_score=min_score,
         max_seconds=max_seconds,
-        cache_key=cache_key,
+        min_score=min_score,
     )
-    cards = [sepa_card_row(sepa, row) for sepa, row in ranked]
-    return cards, note
 
 
 def render_sepa_best_setups(

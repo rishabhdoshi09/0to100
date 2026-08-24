@@ -157,11 +157,20 @@ def radar_home_workspace() -> dict[str, Any]:
     scan = core._scan_payload()
     long_term = core._long_term_payload()
     from product.radar_workspace import build_radar_home
-    return build_radar_home(
+    home = build_radar_home(
         scan_payload=scan,
         long_term_payload=long_term,
         market=market,
     )
+    try:
+        from product.sepa_setup import public_best_setups
+        cards, note = public_best_setups(scan, limit=8, score_cap=24, max_seconds=8.0)
+        home["best_setups"] = cards
+        home["best_setups_note"] = note
+    except Exception:
+        home["best_setups"] = []
+        home["best_setups_note"] = "SEPA ranking is temporarily unavailable."
+    return home
 
 
 def compare_workspace(symbols: str = Query("", description="Comma-separated NSE symbols")) -> dict[str, Any]:
