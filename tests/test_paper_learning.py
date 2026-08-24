@@ -223,6 +223,14 @@ def test_remember_round_trip(tmp_path, monkeypatch):
     assert LIVE_STILL_LOCKED in loaded["disclaimer"]
 
 
+def test_learning_job_summary_includes_paper_memory_counts():
+    from research.autonomy import jobs as JOBS
+    src = Path(JOBS.__file__).read_text(encoding="utf-8")
+    assert "paper_cooldown" in src
+    assert "paper_prefer" in src
+    assert "place_order" not in src
+
+
 def test_live_stays_locked_and_no_broker_or_workers():
     assert LIVE_EXECUTION_LOCKED is True
     src = (ROOT / "product" / "paper_learning.py").read_text(encoding="utf-8")

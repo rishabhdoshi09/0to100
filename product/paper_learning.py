@@ -193,6 +193,25 @@ def remember_paper_book(closed_trades: Iterable[Any], *, as_of: str,
     return memory
 
 
+def public_memory(memory: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    """Safe payload for the terminal API and bash-stack UI. Fail-open."""
+    try:
+        payload = dict(memory) if memory is not None else load_paper_memory()
+    except Exception:
+        payload = dict(EMPTY_MEMORY)
+    return {
+        "available": True,
+        "as_of": str(payload.get("as_of") or ""),
+        "closed_trades": int(payload.get("closed_trades") or 0),
+        "cooldown": list(payload.get("cooldown") or []),
+        "prefer": [str(s) for s in (payload.get("prefer") or [])],
+        "summary": str(payload.get("summary") or EMPTY_MEMORY["summary"]),
+        "live_locked": True,
+        "disclaimer": LIVE_STILL_LOCKED,
+        "ladder": PROMOTION_LADDER,
+    }
+
+
 def on_cooldown(memory: Mapping[str, Any] | None, symbol: str, *, as_of: str) -> str:
     """Return the cooldown reason if this name is blocked for new paper entries."""
     if not memory:

@@ -512,7 +512,11 @@ def run_learning_cycle(ctx) -> JobResult:
     except Exception as exc:
         return JobResult(JS.RETRYABLE_FAILED, "learning cycle failed", error_code="LEARNING_ERROR",
                          error_message=str(exc), failures={H.LEARNING_FAILED}, state_hint=ST.DEGRADED)
-    return JobResult(JS.SUCCEEDED, f"learning complete · {result.get('diagnostics', 0)} diagnostics",
+    return JobResult(JS.SUCCEEDED,
+                     f"learning complete · {result.get('diagnostics', 0)} diagnostics · "
+                     f"{result.get('paper_closed', 0)} paper trades · "
+                     f"{result.get('paper_cooldown', 0)} cooldown · "
+                     f"{result.get('paper_prefer', 0)} preferred",
                      clears={H.LEARNING_FAILED}, state_hint=ST.RESEARCHING,
                      unblocks=(f"{DEP_LEARNING}:{session_date}",), metadata=result)
 

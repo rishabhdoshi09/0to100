@@ -232,6 +232,25 @@ def _paper_equity_curve() -> list[float]:
     return curve[-240:]
 
 
+def _paper_learning_payload() -> dict:
+    """Daily paper-memory overlay for the bash terminal. Never raises."""
+    try:
+        from product.paper_learning import public_memory
+        return public_memory()
+    except Exception as exc:
+        return {
+            "available": False,
+            "as_of": "",
+            "closed_trades": 0,
+            "cooldown": [],
+            "prefer": [],
+            "summary": "Paper memory unavailable.",
+            "live_locked": True,
+            "disclaimer": str(exc),
+            "ladder": "",
+        }
+
+
 def _paper_payload() -> dict:
     try:
         from product.paper_status import read_paper_status
@@ -251,6 +270,7 @@ def _paper_payload() -> dict:
             "refusals": list(paper.refusals)[-50:],
             "last_cycle": dict(paper.last_cycle or {}),
             "last_error": paper.last_error,
+            "learning": _paper_learning_payload(),
         }
     except Exception as exc:
         return {
@@ -269,6 +289,7 @@ def _paper_payload() -> dict:
             "last_cycle": {},
             "last_error": str(exc),
             "error": str(exc),
+            "learning": _paper_learning_payload(),
         }
 
 

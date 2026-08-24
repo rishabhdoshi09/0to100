@@ -219,6 +219,17 @@ export type DashboardPayload = {
     refusals?: Array<Record<string, unknown> | unknown[]>
     last_cycle?: Record<string, unknown>
     last_error?: string
+    learning?: {
+      available?: boolean
+      as_of?: string
+      closed_trades?: number
+      cooldown?: Array<{ symbol?: string; until?: string; reason?: string }>
+      prefer?: string[]
+      summary?: string
+      live_locked?: boolean
+      disclaimer?: string
+      ladder?: string
+    }
   }
   autonomy: {
     available?: boolean
