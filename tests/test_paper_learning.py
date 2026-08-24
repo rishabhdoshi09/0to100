@@ -242,3 +242,8 @@ def test_live_stays_locked_and_no_broker_or_workers():
     ui = (ROOT / "ui" / "desk_board.py").read_text(encoding="utf-8")
     assert "render_bot_learning" in ui
     assert "start_background_scan" not in ui
+    terminal = (ROOT / "frontend" / "src" / "views.tsx").read_text(encoding="utf-8")
+    radar = (ROOT / "frontend" / "src" / "marketRadarViews.tsx").read_text(encoding="utf-8")
+    assert "BotLearningPanel" in terminal and "WHAT THE BOT LEARNED" in terminal
+    assert "BotLearningPanel" in radar
+    assert "place_order" not in terminal and "place_order" not in radar

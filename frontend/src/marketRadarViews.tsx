@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { ChartWorkspace, Panel } from './components'
+import { BotLearningPanel } from './views'
 import { money, pct, words } from './format'
 import {
   addWatchlistItem,
@@ -198,6 +199,7 @@ export function RadarHomeView(props: ExperienceViewProps & {
       </div>
 
       <LiveScanBanner scan={marketScan} depth={depth} label="Market scan" />
+      <BotLearningPanel dashboard={dashboard} />
 
       <div className="radar-three-lanes">
         {laneCard('Breakouts', radar?.lanes.breakouts || [], radar?.counts.breakouts || 0)}
