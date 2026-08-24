@@ -621,6 +621,21 @@ def best_setups_path() -> Any:
     return default_scan_path().parent / "best_setups.json"
 
 
+def _write_persisted_best_setups(scanned_at: str, cards: list[dict[str, Any]], note: str) -> None:
+    import json
+    import os
+    target = best_setups_path()
+    target.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "scanned_at": str(scanned_at or ""),
+        "cards": cards,
+        "note": note,
+    }
+    tmp = target.with_suffix(".tmp")
+    tmp.write_text(json.dumps(payload, indent=2, default=str), encoding="utf-8")
+    os.replace(tmp, target)
+
+
 def persist_public_best_setups(scan_payload: Mapping[str, Any] | None) -> tuple[list[dict[str, Any]], str]:
     """Rank once after a finished scan so Today does not re-score OHLCV on every load."""
     cards, note = public_best_setups(
@@ -631,18 +646,7 @@ def persist_public_best_setups(scan_payload: Mapping[str, Any] | None) -> tuple[
         skip_persist_read=True,
     )
     try:
-        import json
-        import os
-        target = best_setups_path()
-        target.parent.mkdir(parents=True, exist_ok=True)
-        payload = {
-            "scanned_at": str((scan_payload or {}).get("scanned_at") or ""),
-            "cards": cards,
-            "note": note,
-        }
-        tmp = target.with_suffix(".tmp")
-        tmp.write_text(json.dumps(payload, indent=2, default=str), encoding="utf-8")
-        os.replace(tmp, target)
+        _write_persisted_best_setups(str((scan_payload or {}).get("scanned_at") or ""), cards, note)
     except Exception:
         pass
     return cards, note

@@ -27,6 +27,7 @@ import type { DisplayDepth } from './productLanguage'
 import { GLOSSARY, PAGE_GUIDE } from './productLanguage'
 import { fetchTradePlan, type TradePlan } from './productApi'
 import type { ScanRunnerHandle } from './scanRunner'
+import { scannerFallbackRows as fallbackRows } from './scannerFallback'
 
 export { DisplayDepthToggle } from './displayDepth'
 
@@ -50,24 +51,6 @@ const selectedRecord = (dashboard: DashboardPayload, symbol: string) =>
   dashboard.conviction.find((row) => row.symbol === symbol)
   || dashboard.scan.records.find((row) => row.symbol === symbol)
   || dashboard.long_term.records.find((row) => row.symbol === symbol)
-
-const fallbackRows = (mode: string, dashboard: DashboardPayload): ScannerWorkspaceRow[] => {
-  if (mode === 'Conviction') return [...dashboard.conviction]
-  if (mode === 'Long-Term') return [...dashboard.long_term.records] as ScannerWorkspaceRow[]
-  if (mode === 'Breakouts') {
-    return dashboard.scan.records.filter((row) => row.signals?.some((signal) => signal.includes('BREAKOUT')) || row.status === 'Ready to trade')
-  }
-  if (mode === 'Pre-Breakout') {
-    return dashboard.scan.records.filter((row) => row.signals?.includes('PRE_BREAKOUT') || row.status === 'Watch for breakout')
-  }
-  if (mode === 'Avoid') {
-    return dashboard.scan.records.filter((row) => row.chase_risk || row.status === 'Wait for pullback')
-  }
-  if (mode === 'F&O Coverage') {
-    return dashboard.scan.records.filter((row) => Boolean((row as ScanRecord & { fno_available?: boolean }).fno_available))
-  }
-  return dashboard.scan.records.filter((row) => row.signals?.includes('MOMENTUM') || row.verdict === 'BUY')
-}
 
 const operationFor = (dashboard: DashboardPayload, kind: string) =>
   dashboard.operations.active.find((item) => item.kind === kind)
@@ -488,19 +471,32 @@ export function EnhancedScannerView(props: ExperienceViewProps) {
   useEffect(() => {
     let alive = true
     const apiMode = mode === 'F&O Coverage' ? 'F&O' : mode
+    const seed = fallbackRows(mode, dashboard)
+    if (seed.length) {
+      setRows(seed)
+      setSourceMessage('Saved scan')
+    }
     fetchScannerWorkspace(apiMode)
       .then((result) => {
         if (!alive) return
-        setRows(result.rows)
-        setSourceMessage(`${result.source} · ${result.scanned_at || 'preparing'}`)
+        if (result.rows.length) {
+          setRows(result.rows)
+          setSourceMessage(`${result.source} · ${result.scanned_at || 'preparing'}`)
+        } else if (seed.length) {
+          setRows(seed)
+          setSourceMessage('Saved scan')
+        } else {
+          setRows([])
+          setSourceMessage(`${result.source} · ${result.scanned_at || 'preparing'}`)
+        }
       })
       .catch(() => {
         if (!alive) return
-        setRows(fallbackRows(mode, dashboard))
-        setSourceMessage('Local dashboard fallback')
+        setRows(seed)
+        setSourceMessage(seed.length ? 'Saved scan' : 'Local dashboard fallback')
       })
     return () => { alive = false }
-  }, [mode, dashboard.scan.scanned_at, dashboard.long_term.scanned_at])
+  }, [mode, dashboard.scan.scanned_at, dashboard.long_term.scanned_at, dashboard.scan.records.length, dashboard.long_term.records.length, marketScan.succeeded, longTermScan.succeeded])
 
   const sectors = useMemo(() => [...new Set(rows.map((row) => row.sector).filter(Boolean) as string[])].sort(), [rows])
   const filtered = useMemo(() => rows.filter((row) => {

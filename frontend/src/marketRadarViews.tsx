@@ -21,6 +21,12 @@ import {
 import { RiskLensCard } from './productViews'
 import { LiveScanBanner, type ExperienceViewProps } from './experience'
 import { keepRicher, recall, remember } from './sessionMemory'
+import {
+  bestSetupsFromRadar,
+  scannerEmptyHint,
+  scannerFallbackRows,
+  scannerMetaFromDashboard,
+} from './scannerFallback'
 
 type RadarRow = ScannerWorkspaceRow & {
   breakout_state?: string
@@ -202,12 +208,14 @@ function DenseTable({
   onSelect,
   depth,
   mode,
+  emptyHint,
 }: {
   rows: RadarRow[]
   selected: string
   onSelect: (symbol: string) => void
   depth: ExperienceViewProps['depth']
   mode: string
+  emptyHint: string
 }) {
   const [sortKey, setSortKey] = useState('score')
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc')
@@ -252,7 +260,7 @@ function DenseTable({
         </thead>
         <tbody>
           {sorted.length === 0 && (
-            <tr><td colSpan={cols.length} className="radar-empty">No matches in saved scan data. Run Scan Now.</td></tr>
+            <tr><td colSpan={cols.length} className="radar-empty">{emptyHint}</td></tr>
           )}
           {sorted.map((row) => (
             <tr key={row.symbol} className={selected === row.symbol ? 'selected' : ''} onClick={() => onSelect(row.symbol)}>
@@ -560,49 +568,74 @@ export function RadarHomeView(props: ExperienceViewProps & {
 export function MarketScannerView(props: ExperienceViewProps & { onCompare: (symbol: string) => void }) {
   const { dashboard, selected, setSelected, bars, setActive, depth, marketScan, longTermScan, onCompare } = props
   const [tab, setTab] = useState<'Best Setups' | 'Breakouts' | 'Momentum' | 'Long-Term'>('Best Setups')
-  const [rows, setRows] = useState<RadarRow[]>(() => recall<RadarRow[]>('scanner:Best Setups') ?? [])
-  const [meta, setMeta] = useState(() => recall<{ scanned_at: string; universe: number }>('scanner-meta:Best Setups') ?? { scanned_at: '', universe: 0 })
+  const [rows, setRows] = useState<RadarRow[]>(() => {
+    const cached = recall<RadarRow[]>('scanner:Best Setups')
+    if (cached?.length) return cached
+    return scannerFallbackRows('Best Setups', dashboard) as RadarRow[]
+  })
+  const [meta, setMeta] = useState(() => {
+    const cached = recall<{ scanned_at: string; universe: number }>('scanner-meta:Best Setups')
+    if (cached?.universe || cached?.scanned_at) return cached
+    return scannerMetaFromDashboard('Best Setups', dashboard)
+  })
   const [search, setSearch] = useState('')
   const [sector, setSector] = useState('All')
   const [excludeChase, setExcludeChase] = useState(true)
 
   const activeScan = tab === 'Long-Term' ? longTermScan : marketScan
+  const hasScan = Boolean(dashboard.scan.scanned_at || dashboard.scan.records.length || meta.universe || meta.scanned_at)
 
   useEffect(() => {
+    const seed = scannerFallbackRows(tab, dashboard) as RadarRow[]
+    const seedMeta = scannerMetaFromDashboard(tab, dashboard)
     const cachedRows = recall<RadarRow[]>(`scanner:${tab}`)
     const cachedMeta = recall<{ scanned_at: string; universe: number }>(`scanner-meta:${tab}`)
-    if (cachedRows) setRows(cachedRows)
-    if (cachedMeta) setMeta(cachedMeta)
+    const opening = (cachedRows?.length ? cachedRows : seed)
+    if (opening.length) setRows(opening)
+    const openingMeta = (cachedMeta?.universe || cachedMeta?.scanned_at) ? cachedMeta : seedMeta
+    if (openingMeta.universe || openingMeta.scanned_at) setMeta(openingMeta)
+
+    const apply = (next: RadarRow[], nextMeta: { scanned_at: string; universe: number }) => {
+      const kept = keepRicher(`scanner:${tab}`, next, (items) => items.length === 0)
+      const metaToKeep = nextMeta.scanned_at || nextMeta.universe
+        ? nextMeta
+        : (recall<{ scanned_at: string; universe: number }>(`scanner-meta:${tab}`) || openingMeta)
+      remember(`scanner-meta:${tab}`, metaToKeep)
+      setRows(kept)
+      setMeta(metaToKeep)
+    }
+
     if (tab === 'Best Setups') {
       fetchRadarHome()
         .then((result) => {
-          const next = (result.best_setups || []) as RadarRow[]
-          const nextMeta = { scanned_at: result.scan_scanned_at, universe: result.universe_size }
-          const kept = keepRicher('scanner:Best Setups', next, (rows) => rows.length === 0)
-          remember('scanner-meta:Best Setups', nextMeta.scanned_at ? nextMeta : (recall('scanner-meta:Best Setups') || nextMeta))
-          setRows(kept)
-          setMeta(nextMeta.scanned_at ? nextMeta : (recall('scanner-meta:Best Setups') || nextMeta))
+          const next = bestSetupsFromRadar(result, dashboard) as RadarRow[]
+          apply(next, {
+            scanned_at: result.scan_scanned_at || seedMeta.scanned_at,
+            universe: result.universe_size || seedMeta.universe,
+          })
         })
-        .catch(() => {
-          const cached = recall<RadarRow[]>('scanner:Best Setups')
-          if (!cached) setRows([])
-        })
+        .catch(() => apply(opening, openingMeta))
       return
     }
     fetchScannerWorkspace(tab)
       .then((result) => {
-        const next = result.rows as RadarRow[]
-        const nextMeta = { scanned_at: result.scanned_at, universe: result.universe_size }
-        const kept = keepRicher(`scanner:${tab}`, next, (rows) => rows.length === 0)
-        remember(`scanner-meta:${tab}`, nextMeta.scanned_at ? nextMeta : (recall(`scanner-meta:${tab}`) || nextMeta))
-        setRows(kept)
-        setMeta(nextMeta.scanned_at ? nextMeta : (recall(`scanner-meta:${tab}`) || nextMeta))
+        const next = (result.rows?.length ? result.rows : seed) as RadarRow[]
+        apply(next, {
+          scanned_at: result.scanned_at || seedMeta.scanned_at,
+          universe: result.universe_size || seedMeta.universe,
+        })
       })
-      .catch(() => {
-        const cached = recall<RadarRow[]>(`scanner:${tab}`)
-        if (!cached) setRows([])
-      })
-  }, [tab, dashboard.scan.scanned_at, dashboard.long_term.scanned_at])
+      .catch(() => apply(opening, openingMeta))
+  }, [
+    tab,
+    dashboard.scan.scanned_at,
+    dashboard.long_term.scanned_at,
+    dashboard.scan.records.length,
+    dashboard.long_term.records.length,
+    dashboard.scan.universe_size,
+    marketScan.succeeded,
+    longTermScan.succeeded,
+  ])
 
   const sectors = useMemo(() => [...new Set(rows.map((r) => r.sector).filter(Boolean))].sort(), [rows])
   const filtered = rows.filter((row) => {
@@ -646,7 +679,14 @@ export function MarketScannerView(props: ExperienceViewProps & { onCompare: (sym
 
       <div className="scanner-workspace-grid">
         <Panel title={`${tab.toUpperCase()} · ${filtered.length}`} subtitle="Sorted from persisted backend scan">
-          <DenseTable rows={filtered} selected={selected} onSelect={setSelected} depth={depth} mode={tab} />
+          <DenseTable
+            rows={filtered}
+            selected={selected}
+            onSelect={setSelected}
+            depth={depth}
+            mode={tab}
+            emptyHint={scannerEmptyHint(rows.length, filtered.length, hasScan)}
+          />
         </Panel>
         <div className="scanner-detail-column">
           <Panel title={`CHART · ${selected || '—'}`}><ChartWorkspace symbol={selected} bars={bars} row={selectedRow} /></Panel>
