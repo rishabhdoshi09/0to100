@@ -99,7 +99,7 @@ def test_real_sebi_rss_and_distinctive_needles_win():
             summary="Order book visibility from a Middle East gas compression contract.",
             source="Business Standard",
             url="https://www.business-standard.com/lt-gas",
-            mentioned_symbols=["LT"],
+            mentioned_symbols=["LT", "GKENERGY", "KPEL"],
             impact_score="88",
         ),
         _article(
@@ -108,7 +108,7 @@ def test_real_sebi_rss_and_distinctive_needles_win():
             summary="Gold-loan NBFCs rally with bullion.",
             source="Economic Times",
             url="https://economictimes.indiatimes.com/gold-loan",
-            mentioned_symbols=["MUTHOOTFIN", "MANAPPURAM", "IIFL"],
+            mentioned_symbols=["MUTHOOTFIN", "MANAPPURAM", "IIFL", "DOLLAR", "LTF"],
         ),
         _article(
             article_id="fed",
@@ -141,6 +141,10 @@ def test_real_sebi_rss_and_distinctive_needles_win():
     muthoot = next(d for d in note["desks"] if d["symbol"] == "MUTHOOTFIN")
     assert muthoot["available"] is True
     assert muthoot["is_recommendation"] is False
+    extras = {d["symbol"] for d in note["desks"]}
+    assert "LT" in extras
+    assert "DOLLAR" not in extras
+    assert "GKENERGY" not in extras
 
 
 def test_sswl_stays_empty_without_news_or_scan_and_does_not_invent_numbers():

@@ -365,9 +365,9 @@ def build_desk_note(
     order_hit = next((b for b in wrap if b["id"] == "orders" and b["available"]), None)
     extra = []
     if order_hit:
-        extra.extend(order_hit.get("symbols") or ["LT"])
-    if gold_hit:
-        extra.extend(gold_hit.get("symbols") or [])
+        known = {"LT"}
+        have = [s for s in (order_hit.get("symbols") or []) if s in known]
+        extra.extend(have or ["LT"])
     desks = company_desks(articles=news, scan_payload=scan_payload, extra_symbols=extra)
     sourced = sum(1 for b in wrap if b["available"])
     explainers = []
