@@ -357,12 +357,39 @@ body::before { display: none !important; }
   border-color: rgba(255,255,255,.25);
   color: #fff;
 }
-.rw-app .radar-hero, .rw-app .scanner-command-bar {
+.rw-app .radar-hero, .rw-app .scanner-command-bar, .rw-app .long-term-hero {
   color: var(--rw-text);
+  background: #fff !important;
+  border: 1px solid var(--rw-line) !important;
+  box-shadow: none !important;
+  margin: 0 24px 16px;
+  padding: 16px 18px;
+  border-radius: 16px;
 }
 .rw-app .radar-hero h2, .rw-app .scanner-command-bar h2 {
   font-family: var(--rw-serif);
-  color: #111;
+  color: #111 !important;
+  background: none !important;
+  -webkit-background-clip: unset !important;
+}
+.rw-app .scanner-command-bar span,
+.rw-app .scanner-command-bar p {
+  background: none !important;
+  -webkit-background-clip: unset !important;
+  color: var(--rw-muted) !important;
+}
+.rw-app .scanner-command-bar button {
+  background: var(--rw-green) !important;
+  border-color: var(--rw-green) !important;
+  color: #fff !important;
+}
+.rw-app .scanner-filter-row {
+  background: #fff !important;
+  border: 1px solid var(--rw-line);
+  margin: 0 24px 16px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  color: var(--rw-text);
 }
 .rw-app .radar-market-strip {
   margin: 0 24px 16px;
