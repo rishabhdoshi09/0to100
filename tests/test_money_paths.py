@@ -2490,6 +2490,24 @@ class TestDecisionJournal:
         assert got["DDD"][0] == "WAIT"              # plain watch is not a fake rejection
         assert set(eee) == {"EXTENSION", "BLOWOFF_RSI"}
 
+    def test_two_gates_are_one_rejected_opportunity(self, tmp_path, monkeypatch):
+        dj = self._setup(tmp_path, monkeypatch)
+        dj.log_decision("BLUSPRING", "REJECTED", "EXTENSION", "scanner", 100, 96, 40,
+                        p_win=55.0)
+        dj.log_decision("BLUSPRING", "REJECTED", "WEAK_CLOSE", "scanner", 100, 96, 40,
+                        p_win=55.0)
+        c = dj._conn()
+        c.execute("UPDATE decisions SET decided_at='2026-08-01T10:00:00', "
+                  "outcome_pct=-2.0, outcome_price=98.0")
+        c.commit(); c.close()
+        rep = dj.decision_report(min_n=1)
+        assert rep["rejected"]["n"] == 1
+        assert set(rep["by_reason"]) == {"EXTENSION", "WEAK_CLOSE"}
+        assert all(v["n"] == 1 for v in rep["by_reason"].values())
+        cal = dj.calibration_report(min_n=1)
+        scored = [b for b in cal["buckets"] if b["predicted"] is not None]
+        assert scored[0]["n"] == 1
+
     def test_outcomes_and_gate_audit(self, tmp_path, monkeypatch):
         dj = self._setup(tmp_path, monkeypatch)
         dj.log_decision("HAL", "TAKEN", "", "scanner", 4500, 4300, 80,

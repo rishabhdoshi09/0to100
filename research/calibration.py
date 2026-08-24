@@ -205,15 +205,18 @@ def _resolved_predictions() -> dict:
         c = _conn()
         try:
             rows = c.execute(
-                "SELECT p_win, outcome_pct, reason, source FROM decisions "
+                "SELECT symbol, decided_at, decision, p_win, outcome_pct, reason, source "
+                "FROM decisions "
                 "WHERE p_win IS NOT NULL AND outcome_pct IS NOT NULL").fetchall()
         finally:
             c.close()
     except Exception:
         return {"probs": np.zeros(0), "success": np.zeros(0),
                 "reason": [], "source": []}
+    from core.decision_journal import fold_opportunities, WIN_PCT
+    unique = fold_opportunities([dict(r) for r in rows])
     probs, success, reason, source = [], [], [], []
-    for r in rows:
+    for r in unique:
         try:
             pw = float(r["p_win"])
         except Exception:

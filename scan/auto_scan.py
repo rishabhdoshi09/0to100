@@ -343,7 +343,8 @@ def _scan_decision_stance(row) -> tuple[str, list[str]]:
         from core.decision_journal import _norm_reason
         mapped = _norm_reason(text, "REJECTED")
         if mapped in {"EXTENSION", "BLOWOFF_RSI", "POOR_BREADTH", "CORRELATION",
-                      "LIQUIDITY", "LAGGARD", "DRIFT", "MACRO", "RISK_LIMIT"}:
+                      "LIQUIDITY", "LAGGARD", "DRIFT", "MACRO", "RISK_LIMIT",
+                      "WEAK_CLOSE"}:
             if mapped not in reasons:
                 reasons.append(mapped)
     if reasons:

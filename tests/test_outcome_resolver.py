@@ -97,3 +97,49 @@ def test_first_touch_stays_open_inside_horizon(monkeypatch):
     )
     monkeypatch.setattr("data.bhavcopy_store.get_ohlcv", lambda s: df)
     assert first_touch_path("HAL", "2026-08-03", 100.0, 96.0, 106.0) is None
+
+
+def _wait_frame(highs, lows, closes, start="2026-08-03"):
+    idx = pd.bdate_range(start, periods=len(closes))
+    return pd.DataFrame({"high": highs, "low": lows, "close": closes}, index=idx)
+
+
+def test_wait_patience_offered_later_entry(monkeypatch):
+    from core.outcome_resolver import WAIT_OFFERED, wait_patience
+
+    # decision day 100, next session pulls back to 96 (< 97), then drifts
+    highs = [102, 101, 101, 101, 101, 101]
+    lows = [99, 96, 98, 98, 98, 98]
+    closes = [100, 97, 98, 98, 98, 99]
+    monkeypatch.setattr("data.bhavcopy_store.get_ohlcv",
+                        lambda s: _wait_frame(highs, lows, closes))
+    got = wait_patience("HAL", "2026-08-03", 100.0, horizon=5)
+    assert got is not None
+    _px, _pct, result = got
+    assert result == WAIT_OFFERED
+
+
+def test_wait_patience_ran_away_without_entry(monkeypatch):
+    from core.outcome_resolver import WAIT_RAN_AWAY, wait_patience
+
+    highs = [101, 103, 106, 108, 110, 112]
+    lows = [99, 100, 101, 102, 103, 104]
+    closes = [100, 102, 105, 107, 109, 111]
+    monkeypatch.setattr("data.bhavcopy_store.get_ohlcv",
+                        lambda s: _wait_frame(highs, lows, closes))
+    got = wait_patience("HAL", "2026-08-03", 100.0, horizon=5)
+    assert got is not None
+    assert got[2] == WAIT_RAN_AWAY
+
+
+def test_wait_patience_failed_setup(monkeypatch):
+    from core.outcome_resolver import WAIT_FAILED, wait_patience
+
+    highs = [101, 101, 101, 101, 101, 101]
+    lows = [99, 99, 98.5, 99, 99, 99]
+    closes = [100, 100, 99.5, 100, 100, 99.8]
+    monkeypatch.setattr("data.bhavcopy_store.get_ohlcv",
+                        lambda s: _wait_frame(highs, lows, closes))
+    got = wait_patience("HAL", "2026-08-03", 100.0, horizon=5)
+    assert got is not None
+    assert got[2] == WAIT_FAILED

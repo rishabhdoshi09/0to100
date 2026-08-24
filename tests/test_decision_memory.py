@@ -119,3 +119,59 @@ def test_stance_and_attach_do_not_place_orders():
     assert case["stance"] == "YES"
     assert case["setup_quality"]["not_probability"] is True
     assert case["places_orders"] is False
+
+
+def test_two_rejection_reasons_count_once_in_shadow_book(tmp_path, monkeypatch):
+    import core.decision_journal as dj
+    from product.decision_memory import shadow_book
+
+    monkeypatch.setattr(dj, "_DB_PATH", str(tmp_path / "dec.db"))
+    for reason in ("EXTENSION", "WEAK_CLOSE"):
+        dj.log_decision("BLUSPRING", "REJECTED", reason, "scanner", 100, 96, 40,
+                        p_win=55.0)
+    c = dj._conn()
+    c.execute("UPDATE decisions SET decided_at='2026-08-01T10:00:00', "
+              "outcome_pct=-2.0, outcome_price=98.0, outcome_checked_at='2026-08-10'")
+    c.commit(); c.close()
+    rep = dj.decision_report(min_n=1)
+    assert rep["rejected"]["n"] == 1
+    assert rep["rejected"]["unit"] == "opportunity"
+    assert rep["by_reason"]["EXTENSION"]["n"] == 1
+    assert rep["by_reason"]["WEAK_CLOSE"]["n"] == 1
+    cal = dj.calibration_report(min_n=1)
+    scored = [b for b in cal["buckets"] if b["predicted"] is not None]
+    assert scored and scored[0]["n"] == 1
+    shadow = shadow_book(min_n=30)
+    assert shadow["rejected"]["n"] == 1
+    assert shadow["proven"] is False
+
+
+def test_wait_is_timing_not_a_second_no(tmp_path, monkeypatch):
+    import pandas as pd
+    import core.decision_journal as dj
+    from research.counterfactual import _load_decisions
+
+    monkeypatch.setattr(dj, "_DB_PATH", str(tmp_path / "dec.db"))
+    dj.log_decision("TRENT", "WAIT", "", "scanner", 100, 96, 55)
+    c = dj._conn()
+    c.execute("UPDATE decisions SET decided_at='2026-08-01T10:00:00'")
+    c.commit(); c.close()
+    idx = pd.bdate_range("2026-08-01", periods=16)
+    highs = [101] + [103] * 15
+    lows = [99] + [100] * 15
+    closes = [100] + [102] * 15
+    df = pd.DataFrame({"high": highs, "low": lows, "close": closes}, index=idx)
+    monkeypatch.setattr("data.bhavcopy_store.get_ohlcv", lambda s: df)
+    assert dj.update_outcomes(lookback_days=400) == 1
+    c = dj._conn()
+    row = c.execute("SELECT wait_result, decision FROM decisions").fetchone()
+    c.close()
+    assert row["decision"] == "WAIT"
+    assert row["wait_result"] == "RAN_AWAY"
+    rejected, taken = _load_decisions()
+    assert taken == []
+    assert rejected == {}
+    rep = dj.decision_report(min_n=1)
+    assert rep["wait"]["n"] == 1
+    assert rep["wait"]["timing"]["RAN_AWAY"] == 1
+    assert rep["rejected"]["n"] == 0

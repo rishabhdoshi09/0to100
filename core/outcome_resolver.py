@@ -11,6 +11,11 @@ Two measurements, one clock:
   first_touch_path      — stop before target, same spirit as the backtest
                           (Cases and signal_log when geometry exists)
 
+WAIT is a different experiment from YES/NO close-to-close:
+
+  wait_patience — after we refused to buy at P, did the name later
+                  offer a cheaper entry, run away without us, or fail?
+
 A row is due only when the bar series actually contains the horizon-th
 session after the decision date. Missing history stays pending. Places no
 orders.
@@ -22,6 +27,12 @@ from typing import Any, Mapping
 
 DECISION_HORIZON_SESSIONS = int(os.getenv("QT_DECISION_HORIZON", "5") or 5)
 PATH_HORIZON_SESSIONS = int(os.getenv("QT_OUTCOME_HORIZON", "15") or 15)
+WAIT_PULLBACK_PCT = float(os.getenv("QT_WAIT_PULLBACK", "3") or 3)
+WAIT_RUN_PCT = float(os.getenv("QT_WAIT_RUN", "2") or 2)
+
+WAIT_OFFERED = "OFFERED"
+WAIT_RAN_AWAY = "RAN_AWAY"
+WAIT_FAILED = "FAILED"
 
 
 def _ohlcv(symbol: str):
@@ -122,6 +133,65 @@ def first_touch_path(
         last = float(closes[cap - 1])
         return (last, (last - entry_f) / entry_f * 100.0, 1 if last >= entry_f else 0)
     return None
+
+
+def wait_patience(
+    symbol: str,
+    from_date: str,
+    entry: float,
+    *,
+    horizon: int = PATH_HORIZON_SESSIONS,
+    pullback_pct: float = WAIT_PULLBACK_PCT,
+    run_pct: float = WAIT_RUN_PCT,
+) -> tuple[float, float, str] | None:
+    """Timing-patience experiment for WAIT — not a second NO.
+
+    We refused to buy at `entry`. Over the next `horizon` sessions:
+
+      OFFERED   — price later tagged a valid cheaper entry (default 3% pullback)
+      RAN_AWAY  — never offered that entry, and price ran without us
+      FAILED    — never offered, never ran: the setup died or went nowhere
+
+    Uses the session after the decision day, not the decision bar itself.
+    None if official history is short. Never live quotes.
+    """
+    try:
+        entry_f = float(entry)
+        pull = float(pullback_pct) / 100.0
+        run = float(run_pct) / 100.0
+    except (TypeError, ValueError):
+        return None
+    if entry_f <= 0 or pull <= 0 or run <= 0:
+        return None
+    df = _ohlcv(symbol)
+    if df is None or getattr(df, "empty", True):
+        return None
+    if not {"high", "low", "close"} <= set(df.columns):
+        return None
+    after = _after(df, from_date)
+    if after is None or len(after) < int(horizon) + 1:
+        return None
+    try:
+        window = after.iloc[1: int(horizon) + 1]
+        lows = window["low"].to_numpy(dtype=float)
+        highs = window["high"].to_numpy(dtype=float)
+        last = float(window["close"].iloc[-1])
+    except Exception:
+        return None
+    if len(lows) < int(horizon):
+        return None
+    offered_px = entry_f * (1.0 - pull)
+    ran_px = entry_f * (1.0 + run)
+    offered = bool((lows <= offered_px).any())
+    ran = bool((highs >= ran_px).any())
+    if offered:
+        result = WAIT_OFFERED
+    elif ran:
+        result = WAIT_RAN_AWAY
+    else:
+        result = WAIT_FAILED
+    pct = (last - entry_f) / entry_f * 100.0
+    return last, pct, result
 
 
 def row_session_return(row: Mapping[str, Any], *, horizon: int = DECISION_HORIZON_SESSIONS):

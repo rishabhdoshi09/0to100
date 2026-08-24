@@ -114,7 +114,8 @@ def _load_decisions() -> tuple[dict, list]:
         c = _conn()
         try:
             rows = c.execute(
-                "SELECT decision, reason, entry_ref, stop_ref, outcome_pct "
+                "SELECT decision, reason, symbol, decided_at, "
+                "entry_ref, stop_ref, outcome_pct "
                 "FROM decisions WHERE outcome_pct IS NOT NULL "
                 "AND entry_ref > 0 AND stop_ref > 0").fetchall()
         finally:
@@ -123,17 +124,55 @@ def _load_decisions() -> tuple[dict, list]:
         return {}, []
     rejected: dict[str, list] = {}
     taken: list = []
+    taken_seen: set[tuple[str, str]] = set()
     for row in rows:
         r = _decision_r(float(row["entry_ref"]), float(row["stop_ref"]),
                         float(row["outcome_pct"]))
         if r is None:
             continue
-        if str(row["decision"]).upper() == "TAKEN":
+        kind = str(row["decision"]).upper()
+        if kind == "WAIT":
+            continue                   # timing experiment — not a rejected trade
+        if kind == "TAKEN":
+            ident = (str(row["symbol"] or "").upper(), str(row["decided_at"] or "")[:10])
+            if ident in taken_seen:
+                continue
+            taken_seen.add(ident)
             taken.append(r)
-        else:
-            gate = str(row["reason"] or "—").strip() or "—"
-            rejected.setdefault(gate, []).append(r)
+            continue
+        if kind != "REJECTED":
+            continue
+        gate = str(row["reason"] or "—").strip() or "—"
+        rejected.setdefault(gate, []).append(r)
     return rejected, taken
+
+
+def _load_opportunity_rs(kind: str) -> list[float]:
+    """One R-multiple per symbol × day for TAKEN or REJECTED. WAIT excluded."""
+    try:
+        from core.decision_journal import _conn
+        c = _conn()
+        try:
+            rows = c.execute(
+                "SELECT symbol, decided_at, entry_ref, stop_ref, outcome_pct "
+                "FROM decisions WHERE outcome_pct IS NOT NULL "
+                "AND decision=? AND entry_ref > 0 AND stop_ref > 0",
+                (str(kind or "").upper(),)).fetchall()
+        finally:
+            c.close()
+    except Exception:
+        return []
+    seen: dict[tuple[str, str], float] = {}
+    for row in rows:
+        ident = (str(row["symbol"] or "").upper(), str(row["decided_at"] or "")[:10])
+        if ident in seen:
+            continue
+        r = _decision_r(float(row["entry_ref"]), float(row["stop_ref"]),
+                        float(row["outcome_pct"]))
+        if r is None:
+            continue
+        seen[ident] = r
+    return list(seen.values())
 
 
 def gate_attribution_report() -> list[dict]:

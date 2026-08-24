@@ -200,7 +200,8 @@ def shadow_book(*, min_n: int = PROVEN_N) -> dict[str, Any]:
         "proven": False,
         "taken": {"n": 0, "avg_r": None, "avg_pct": None, "win_rate": None},
         "rejected": {"n": 0, "avg_r": None, "avg_pct": None, "win_rate": None},
-        "wait": {"n": 0},
+        "wait": {"n": 0, "timing": {"OFFERED": 0, "RAN_AWAY": 0, "FAILED": 0},
+                 "unit": "opportunity"},
         "gates": [],
         "line": (
             "Shadow book is still gathering. Taken and rejected both need "
@@ -211,10 +212,12 @@ def shadow_book(*, min_n: int = PROVEN_N) -> dict[str, Any]:
     }
     try:
         from core.decision_journal import decision_report
-        from research.counterfactual import _load_decisions, _decision_r
+        from research.counterfactual import _load_decisions, _load_opportunity_rs
         from research.counterfactual import gate_attribution
         report = decision_report(min_n=1)
-        rejected_r, taken_r = _load_decisions()
+        rejected_r, _taken_rows = _load_decisions()
+        taken_r = _load_opportunity_rs("TAKEN")
+        unique_rej_r = _load_opportunity_rs("REJECTED")
     except Exception:
         return empty
     taken_pct = report.get("taken") or {}
@@ -223,8 +226,7 @@ def shadow_book(*, min_n: int = PROVEN_N) -> dict[str, Any]:
     taken_n = int(taken_pct.get("n") or 0)
     rej_n = int(rej_pct.get("n") or 0)
     taken_avg_r = round(sum(taken_r) / len(taken_r), 3) if taken_r else None
-    all_rej = [r for rs in rejected_r.values() for r in rs]
-    rej_avg_r = round(sum(all_rej) / len(all_rej), 3) if all_rej else None
+    rej_avg_r = round(sum(unique_rej_r) / len(unique_rej_r), 3) if unique_rej_r else None
     proven = taken_n >= min_n and rej_n >= min_n
     gates: list[dict[str, Any]] = []
     if proven:
@@ -263,6 +265,9 @@ def shadow_book(*, min_n: int = PROVEN_N) -> dict[str, Any]:
             extra.append(f"taken n={taken_n}")
         if rej_n:
             extra.append(f"rejected n={rej_n}")
+        wait_n = int(wait_pct.get("n") or 0)
+        if wait_n:
+            extra.append(f"wait n={wait_n}")
         if extra:
             line += " So far: " + ", ".join(extra) + "."
     return {
@@ -279,7 +284,15 @@ def shadow_book(*, min_n: int = PROVEN_N) -> dict[str, Any]:
             "avg_pct": rej_pct.get("avg_outcome_pct") if rej_n else None,
             "win_rate": rej_pct.get("win_rate") if rej_n else None,
         },
-        "wait": {"n": int(wait_pct.get("n") or 0)},
+        "wait": {
+            "n": int(wait_pct.get("n") or 0),
+            "timing": (wait_pct.get("timing") or {"OFFERED": 0, "RAN_AWAY": 0, "FAILED": 0}),
+            "unit": "opportunity",
+            "experiment": (
+                "WAIT is timing patience: did a later cheaper entry appear, "
+                "did the name run away without us, or did the setup fail?"
+            ),
+        },
         "gates": gates,
         "line": line,
         "places_orders": False,
@@ -411,8 +424,10 @@ def morning_strip() -> dict[str, Any]:
     return {
         "title": "Decision Memory",
         "blurb": (
-            "Every YES, NO and WAIT is an experiment. Fewer than 30 settled "
-            "outcomes stays unproven. Empty means nothing has been remembered yet."
+            "Every YES, NO and WAIT is an experiment. YES selects winners. "
+            "NO avoids losers. WAIT is timing patience (later entry, ran away, "
+            "or failed). Fewer than 30 settled outcomes stays unproven. "
+            "Empty means nothing has been remembered yet."
         ),
         "shadow": shadow,
         "trust": trust,
