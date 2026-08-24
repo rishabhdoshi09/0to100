@@ -99,3 +99,10 @@ def test_education_never_fabricates_article_urls():
         if card["kind"] == "CONCEPT":
             assert card["url"] == ""
             assert card["source"] == "QuantTerm concept library"
+
+
+def test_education_includes_gold_loan_and_mix_shift_concepts():
+    payload = build_education_feed(articles=[], include_concepts=True)
+    ids = {c["id"] for c in payload["cards"]}
+    assert "concept-gold-loan-collateral" in ids
+    assert "concept-mix-shift" in ids

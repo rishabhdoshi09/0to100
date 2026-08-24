@@ -72,3 +72,20 @@ def test_recommendations_are_exclusive_decision_cards():
     assert "wealth_builders" in py
     assert "recovery_setups" in py
     assert "one primary category" in py.lower() or "ONE primary category" in py
+
+
+def test_market_reports_renders_sourced_desk_note_not_a_blog():
+    src = (ROOT / "frontend" / "src" / "recommendationsViews.tsx").read_text(encoding="utf-8")
+    assert "DeskNoteMagazine" in src
+    assert "desk_note" in src
+    assert "not a buy list" in src.lower()
+    assert "Stock Intelligence" in src
+    css = (ROOT / "frontend" / "src" / "recommendations.css").read_text(encoding="utf-8")
+    assert ".desk-note" in css
+    assert ".desk-tile" in css
+    py = (ROOT / "product" / "desk_note.py").read_text(encoding="utf-8")
+    assert "WRAP_SLOTS" in py
+    assert "MIX_SHIFT_DESKS" in py
+    assert "places_orders" in py
+    for banned in ("₹600 crore", "20,000 MTPA", "65% pre-booked", "Q1 FY27"):
+        assert banned not in py

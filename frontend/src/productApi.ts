@@ -374,6 +374,61 @@ export type MarketReportItem = {
   path?: string
 }
 
+export type DeskNoteBullet = {
+  id: string
+  label: string
+  available: boolean
+  headline: string
+  summary: string
+  source: string
+  url: string
+  official: boolean
+  published_at: string
+  symbols: string[]
+  empty_detail: string
+}
+
+export type DeskNoteExplainer = {
+  id: string
+  title: string
+  teach_point: string
+  why_it_matters: string
+  attached_to?: string
+}
+
+export type DeskNoteCompany = {
+  symbol: string
+  name: string
+  lens: string
+  watch: string[]
+  risks: string[]
+  available: boolean
+  source_headline: string
+  source_summary: string
+  source: string
+  url: string
+  scan_status: string
+  scan_reason: string
+  empty_detail: string
+  is_recommendation: boolean
+}
+
+export type DeskNote = {
+  schema_version?: number
+  generated_at?: string
+  title?: string
+  blurb?: string
+  wrap?: DeskNoteBullet[]
+  wrap_sourced?: number
+  wrap_empty?: number
+  explainers?: DeskNoteExplainer[]
+  desks?: DeskNoteCompany[]
+  theme?: { id: string; title: string; body: string }
+  disclaimer?: string
+  places_orders?: boolean
+  error?: string
+}
+
 export type MarketReportsWorkspace = {
   schema_version: number
   generated_at: string
@@ -382,6 +437,7 @@ export type MarketReportsWorkspace = {
   blurb: string
   reports: MarketReportItem[]
   today_pulse: Record<string, unknown>
+  desk_note?: DeskNote
   error: string
   disclaimer: string
 }

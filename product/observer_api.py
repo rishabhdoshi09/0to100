@@ -216,7 +216,16 @@ def recommendations_workspace() -> dict[str, Any]:
 def market_reports_workspace() -> dict[str, Any]:
     """Chronological Market Pulse desk from street_pulse + saved day files."""
     from product.recommendations_workspace import build_market_reports_workspace
-    return build_market_reports_workspace(persist_today=True)
+    news: dict[str, Any] = {}
+    try:
+        news = core._news_payload()
+    except Exception:
+        news = {}
+    return build_market_reports_workspace(
+        persist_today=True,
+        news_payload=news,
+        scan_payload=core._scan_payload(),
+    )
 
 
 def compare_workspace(symbols: str = Query("", description="Comma-separated NSE symbols")) -> dict[str, Any]:

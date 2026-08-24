@@ -843,15 +843,28 @@ def _pulse_summary(pulse: Mapping[str, Any]) -> str:
     return str(pulse.get("date") or "Market overview")
 
 
-def build_market_reports_workspace(*, persist_today: bool = True) -> dict[str, Any]:
+def build_market_reports_workspace(
+    *,
+    persist_today: bool = True,
+    news_payload: Mapping[str, Any] | None = None,
+    scan_payload: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
     """Chronological Market Pulse list from live street pulse + saved day files."""
     pulse: dict[str, Any] = {}
     error = ""
     try:
         from reports.street_pulse import build_pulse
         pulse = build_pulse() or {}
-    except Exception as exc:
-        error = str(exc)[:200]
+    except Exception as exec_pulse:
+        error = str(exec_pulse)[:200]
+
+    desk_note: dict[str, Any] = {}
+    try:
+        from product.desk_note import build_desk_note
+        articles = list((news_payload or {}).get("articles") or [])
+        desk_note = build_desk_note(articles=articles, scan_payload=scan_payload)
+    except Exception as exec_note:
+        desk_note = {"error": str(exec_note)[:200], "wrap": [], "desks": [], "explainers": []}
 
     today = _ist_day()
     if pulse and persist_today:
@@ -880,11 +893,12 @@ def build_market_reports_workspace(*, persist_today: bool = True) -> dict[str, A
         "as_of_ist": as_of,
         "title": "Stay on top of the markets",
         "blurb": (
-            "Daily Market Pulse from the latest official/live session — "
-            "trends, sector movers and breakout context. Never a prior-day leftover."
+            "Daily Market Pulse plus a sourced desk note — wrap, teach-ins and company "
+            "watch desks. Headlines stay sourced. Empty stays empty."
         ),
         "reports": reports,
         "today_pulse": pulse,
+        "desk_note": desk_note,
         "error": error,
         "disclaimer": "Market reports are research summaries, not trade instructions.",
     }

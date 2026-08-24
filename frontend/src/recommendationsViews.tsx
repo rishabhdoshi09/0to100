@@ -4,6 +4,8 @@ import { money, pct, relativeAge, words } from './format'
 import {
   fetchMarketReportsWorkspace,
   fetchRecommendationsWorkspace,
+  type DeskNote,
+  type DeskNoteCompany,
   type MarketReportItem,
   type RecommendationCard,
   type RecommendationsWorkspace,
@@ -494,12 +496,151 @@ function formatReportDate(value: string): string {
   }
 }
 
-export function MarketReportsView({ setActive }: ExperienceViewProps) {
+function DeskNoteMagazine({
+  note,
+  onSymbol,
+}: {
+  note: DeskNote
+  onSymbol: (symbol: string) => void
+}) {
+  const wrap = note.wrap || []
+  const explainers = note.explainers || []
+  const desks = note.desks || []
+  const sourced = note.wrap_sourced ?? wrap.filter((b) => b.available).length
+  const empty = note.wrap_empty ?? wrap.filter((b) => !b.available).length
+
+  return (
+    <section className="desk-note" aria-label="Today’s market wrap">
+      <header className="desk-note-hero">
+        <p className="desk-kicker">Desk note · sourced, not invented</p>
+        <h2>{note.title || 'Today’s market wrap'}</h2>
+        <p>{note.blurb}</p>
+        <p className="desk-tally">
+          {sourced} sourced wrap line{sourced === 1 ? '' : 's'}
+          {empty ? ` · ${empty} empty slot${empty === 1 ? '' : 's'}` : ''}
+        </p>
+      </header>
+
+      <ol className="desk-wrap">
+        {wrap.map((bullet) => (
+          <li key={bullet.id} className={bullet.available ? '' : 'is-empty'}>
+            <article>
+              <span className="desk-label">{bullet.label}</span>
+              {bullet.available ? (
+                <>
+                  <h3>{bullet.headline}</h3>
+                  {bullet.summary ? <p>{bullet.summary}</p> : null}
+                  <div className="desk-meta">
+                    {bullet.source ? <span>{bullet.source}</span> : null}
+                    {bullet.official ? <em>Official</em> : null}
+                    {bullet.symbols.map((sym) => (
+                      <button key={sym} type="button" onClick={() => onSymbol(sym)}>{sym}</button>
+                    ))}
+                    {bullet.url ? (
+                      <a href={bullet.url} target="_blank" rel="noreferrer">Open source</a>
+                    ) : null}
+                  </div>
+                </>
+              ) : (
+                <p className="desk-empty">{bullet.empty_detail || 'No sourced headline yet.'}</p>
+              )}
+            </article>
+          </li>
+        ))}
+      </ol>
+
+      {explainers.length > 0 ? (
+        <div className="desk-explainers">
+          {explainers.map((item) => (
+            <article key={item.id}>
+              <span className="desk-label">Concept</span>
+              <h3>{item.title}</h3>
+              <p>{item.teach_point}</p>
+              {item.why_it_matters ? <p className="desk-why">{item.why_it_matters}</p> : null}
+            </article>
+          ))}
+        </div>
+      ) : null}
+
+      {desks.length > 0 ? (
+        <>
+          <h3 className="desk-section">Company desks · watch questions, not a buy list</h3>
+          <div className="desk-desks">
+            {desks.map((desk) => (
+              <DeskTile key={desk.symbol} desk={desk} onSymbol={onSymbol} />
+            ))}
+          </div>
+        </>
+      ) : null}
+
+      {note.theme ? (
+        <aside className="desk-theme">
+          <span className="desk-label">Common theme</span>
+          <h3>{note.theme.title}</h3>
+          <p>{note.theme.body}</p>
+        </aside>
+      ) : null}
+
+      {note.disclaimer ? <p className="reco-foot">{note.disclaimer}</p> : null}
+      {note.error ? <p className="reco-foot">Desk note: {note.error}</p> : null}
+    </section>
+  )
+}
+
+function DeskTile({
+  desk,
+  onSymbol,
+}: {
+  desk: DeskNoteCompany
+  onSymbol: (symbol: string) => void
+}) {
+  return (
+    <article className={`desk-tile ${desk.available ? '' : 'is-empty'}`}>
+      <header>
+        <button type="button" className="desk-sym" onClick={() => onSymbol(desk.symbol)}>
+          {desk.symbol}
+        </button>
+        <strong>{desk.name}</strong>
+        {desk.is_recommendation ? null : <em>Not a pick</em>}
+      </header>
+      <p className="desk-lens">{desk.lens}</p>
+      {desk.available ? (
+        <>
+          {desk.source_headline ? <p className="desk-src">{desk.source_headline}</p> : null}
+          {desk.scan_status ? (
+            <p className="desk-scan">Scan {desk.scan_status}{desk.scan_reason ? ` · ${desk.scan_reason}` : ''}</p>
+          ) : null}
+        </>
+      ) : (
+        <p className="desk-empty">{desk.empty_detail}</p>
+      )}
+      {desk.watch.length > 0 ? (
+        <>
+          <h4>Watch</h4>
+          <ul>{desk.watch.map((item) => <li key={item}>{item}</li>)}</ul>
+        </>
+      ) : null}
+      {desk.risks.length > 0 ? (
+        <>
+          <h4>Risks</h4>
+          <ul>{desk.risks.map((item) => <li key={item}>{item}</li>)}</ul>
+        </>
+      ) : null}
+      <div className="desk-meta">
+        {desk.source ? <span>{desk.source}</span> : null}
+        {desk.url ? <a href={desk.url} target="_blank" rel="noreferrer">Open source</a> : null}
+        <button type="button" onClick={() => onSymbol(desk.symbol)}>Stock Intelligence</button>
+      </div>
+    </article>
+  )
+}
+
+export function MarketReportsView({ setActive, setSelected }: ExperienceViewProps) {
   const [data, setData] = useState<MarketReportsWorkspace | null>(null)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(true)
   const [query, setQuery] = useState('')
-  const [selected, setSelected] = useState<MarketReportItem | null>(null)
+  const [selected, setSelectedReport] = useState<MarketReportItem | null>(null)
 
   useEffect(() => {
     let cancelled = false
@@ -508,7 +649,7 @@ export function MarketReportsView({ setActive }: ExperienceViewProps) {
       .then((payload) => {
         if (!cancelled) {
           setData(payload)
-          setSelected(payload.reports[0] || null)
+          setSelectedReport(payload.reports[0] || null)
           setError('')
         }
       })
@@ -534,6 +675,11 @@ export function MarketReportsView({ setActive }: ExperienceViewProps) {
         || r.date.includes(q),
     )
   }, [data, query])
+
+  const openSymbol = (symbol: string) => {
+    setSelected(symbol)
+    setActive('Stock Intelligence')
+  }
 
   if (loading) {
     return (
@@ -589,6 +735,10 @@ export function MarketReportsView({ setActive }: ExperienceViewProps) {
         ) : null}
       </header>
 
+      {data.desk_note ? (
+        <DeskNoteMagazine note={data.desk_note} onSymbol={openSymbol} />
+      ) : null}
+
       <div className="reco-controls">
         <div className="reco-search-wrap">
           <input
@@ -617,7 +767,7 @@ export function MarketReportsView({ setActive }: ExperienceViewProps) {
               <button
                 type="button"
                 className={`${selected?.id === r.id ? 'active' : ''} ${r.is_new ? 'is-new' : ''}`}
-                onClick={() => setSelected(r)}
+                onClick={() => setSelectedReport(r)}
               >
                 <strong>{r.title}</strong>
                 <span className="date">{formatReportDate(r.date)}</span>

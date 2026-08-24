@@ -12,6 +12,8 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any, Mapping, Sequence
 
+from product.desk_note import GOLD_LOAN_CONCEPT, MIX_SHIFT_CONCEPT
+
 # Evergreen teach-ins — fixed copy, not generated "blogs".
 _CONCEPT_CARDS: list[dict[str, Any]] = [
     {
@@ -103,6 +105,24 @@ _CONCEPT_CARDS: list[dict[str, Any]] = [
         ),
         "tags": ["sebi", "policy", "regulation"],
         "level": "beginner",
+    },
+    {
+        "id": GOLD_LOAN_CONCEPT["id"],
+        "lens": "CONCEPT",
+        "title": GOLD_LOAN_CONCEPT["title"],
+        "teach_point": GOLD_LOAN_CONCEPT["teach_point"],
+        "why_it_matters": GOLD_LOAN_CONCEPT["why_it_matters"],
+        "tags": ["gold", "nbfc", "collateral"],
+        "level": "intermediate",
+    },
+    {
+        "id": MIX_SHIFT_CONCEPT["id"],
+        "lens": "CONCEPT",
+        "title": MIX_SHIFT_CONCEPT["title"],
+        "teach_point": MIX_SHIFT_CONCEPT["teach_point"],
+        "why_it_matters": MIX_SHIFT_CONCEPT["why_it_matters"],
+        "tags": ["mix", "margins", "speciality"],
+        "level": "intermediate",
     },
 ]
 
