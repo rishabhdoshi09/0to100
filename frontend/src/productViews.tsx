@@ -358,6 +358,20 @@ export function ProductStockIntelligenceView(props: ViewProps) {
                   )}
                 </aside>
               ) : null}
+              {workspace?.decision_memory ? (
+                <aside className="hud-memory" aria-label="Decision memory">
+                  <span>Decision memory · {workspace.decision_memory.stance || 'WAIT'}</span>
+                  {workspace.decision_memory.setup_quality?.score != null ? (
+                    <p>Setup Quality: {workspace.decision_memory.setup_quality.score}/100 — not a win probability.</p>
+                  ) : null}
+                  {workspace.decision_memory.why_not?.line ? <p>{workspace.decision_memory.why_not.line}</p> : null}
+                  {workspace.decision_memory.similar?.line ? <p>{workspace.decision_memory.similar.line}</p> : null}
+                  {workspace.decision_memory.trust?.line ? <p>{workspace.decision_memory.trust.line}</p> : null}
+                  {workspace.decision_memory.edge?.line && workspace.decision_memory.edge.profile !== 'UNKNOWN' ? (
+                    <p>{workspace.decision_memory.edge.line}</p>
+                  ) : null}
+                </aside>
+              ) : null}
               <EvidenceList title="Why it qualified" items={[...((workspace?.scanner.reasons as string[] | undefined) || []), ...(workspace?.fundamentals.quality_factors || [])]} tone="green" />
               <EvidenceList title="What can go wrong" items={[...(workspace?.fundamentals.risk_flags || []), ...(workspace?.gaps || []).map((item) => `${item} is missing or stale.`)]} tone="red" />
               <p className="panel-copy"><strong>Monitor:</strong> invalidation levels in Trade Plan, breadth and sector context on Home.</p>

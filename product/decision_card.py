@@ -408,4 +408,6 @@ def decision_surface(
         "what_changes_mind": what_changes_mind(row, category_id=category_id),
         "next_step": next_step(badge, chase_risk=bool(row.get("chase_risk"))),
         "evidence_panel": evidence_panel(row),
+        "setup_quality": round(_f(row.get("score") or row.get("combined_score") or row.get("conviction_score"))) or None,
+        "setup_quality_label": "Setup Quality",
     }

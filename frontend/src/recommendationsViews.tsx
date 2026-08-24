@@ -63,10 +63,18 @@ function CaseMemoryBox({ memory }: { memory?: RecommendationCase | null }) {
   const n = memory.n_similar ?? 0
   const verdict = (memory.verdict || 'unmeasured').replace(/_/g, ' ')
   const invalidation = (memory.invalidation || []).filter(Boolean)
+  const similar = memory.similar
+  const edge = memory.edge
+  const quality = memory.setup_quality
   return (
     <aside className={`reco-case is-${memory.verdict || 'unmeasured'}`} aria-label="Case memory">
-      <span>Case memory · {n} similar · {verdict}</span>
+      <span>Case memory · {n} similar · {verdict}{memory.stance ? ` · ${memory.stance}` : ''}</span>
       <p>{memory.memory_line || memory.idea}</p>
+      {similar?.found && similar.line ? <p>{similar.line}</p> : null}
+      {edge && edge.profile && edge.profile !== 'UNKNOWN' ? <p>{edge.line}</p> : null}
+      {quality?.score != null ? (
+        <p className="reco-case-invalid">{quality.label || 'Setup Quality'}: {quality.score}/100 — not a win probability.</p>
+      ) : null}
       {invalidation.length > 0 ? (
         <p className="reco-case-invalid">What proves it wrong: {invalidation[0]}</p>
       ) : null}
@@ -152,6 +160,7 @@ function CardTile({
           </div>
         </div>
         <div className="reco-status-row" aria-label="Decision status">
+          <StatusChip label="Setup Quality" value={card.setup_quality != null ? `${Math.round(card.setup_quality)}/100` : '—'} />
           <StatusChip label="Payoff" value={card.expected_payoff} />
           <StatusChip label="Evidence" value={card.evidence} />
           <StatusChip label="Health" value={card.strategy_health} />
@@ -276,6 +285,7 @@ function DecisionSheet({
         </p>
       ) : null}
       <div className="reco-status-row reco-status-row-lg">
+        <StatusChip label="Setup Quality" value={card.setup_quality != null ? `${Math.round(card.setup_quality)}/100` : '—'} />
         <StatusChip label="Expected payoff" value={card.expected_payoff} />
         <StatusChip label="Evidence" value={card.evidence} />
         <StatusChip label="Strategy health" value={card.strategy_health} />
@@ -642,6 +652,22 @@ function DeskNoteMagazine({
           ) : (
             <p className="desk-empty">No settled cases yet — tonight’s check is how memory starts.</p>
           )}
+        </aside>
+      ) : null}
+
+      {note.decision_memory ? (
+        <aside className="desk-theme reco-case-morning" aria-label="Decision memory">
+          <span className="desk-label">{note.decision_memory.title || 'Decision Memory'}</span>
+          <p>{note.decision_memory.blurb}</p>
+          {note.decision_memory.shadow?.line ? <p>{note.decision_memory.shadow.line}</p> : null}
+          {note.decision_memory.trust?.line ? <p>{note.decision_memory.trust.line}</p> : null}
+          {(note.decision_memory.shadow?.gates || []).length > 0 ? (
+            <ul>
+              {(note.decision_memory.shadow?.gates || []).map((g) => (
+                <li key={g.gate}>{g.line}</li>
+              ))}
+            </ul>
+          ) : null}
         </aside>
       ) : null}
 

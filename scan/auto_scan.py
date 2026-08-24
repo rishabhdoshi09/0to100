@@ -299,27 +299,56 @@ def _log_buys_for_tracking(results) -> None:
 
 
 def _log_decisions_for_calibration(serialized) -> None:
-    """📓 Journal EVERY scan verdict with its prediction — TAKEN (a buy) or
-    REJECTED (a watch) — so Confidence Accuracy (calibration) and gate attribution
-    get data for MANUAL users too, not only when autopilot is running. Deduped per
-    symbol×day×decision by the journal; outcomes settle 5 days later. Fail-open."""
+    """Journal every scan verdict as TAKEN / WAIT / REJECTED so calibration
+    and the shadow book learn from YES, NO and WAIT — not only autopilot fills.
+    Multiple same-day rejection reasons are preserved. Fail-open."""
     try:
         from core.decision_journal import log_decision
         for r in serialized:
             entry = float(r.get("entry") or 0)
             if entry <= 0:
                 continue                         # no reference price → no claim
-            verdict = r.get("verdict", "")
-            decision = "TAKEN" if verdict in ("BUY", "STRONG BUY") else "REJECTED"
-            reason = "" if decision == "TAKEN" else (
-                (r.get("reasons") or [""])[0][:120])
-            log_decision(r["symbol"], decision, reason=reason, source="scanner",
-                         entry_ref=entry, stop_ref=float(r.get("stop") or 0),
-                         score=float(r.get("score") or 0),
-                         ev_pct=r.get("ev_pct"), p_win=r.get("p_win"),
-                         confidence=r.get("confidence"))
+            decision, reasons = _scan_decision_stance(r)
+            payload = dict(
+                source="scanner",
+                entry_ref=entry,
+                stop_ref=float(r.get("stop") or 0),
+                score=float(r.get("score") or 0),
+                ev_pct=r.get("ev_pct"),
+                p_win=r.get("p_win"),
+                confidence=r.get("confidence"),
+            )
+            if not reasons:
+                log_decision(r["symbol"], decision, reason="", **payload)
+                continue
+            for why in reasons:
+                log_decision(r["symbol"], decision, reason=why, **payload)
     except Exception as exc:
         log.debug("decision_log_skip", error=str(exc))
+
+
+def _scan_decision_stance(row) -> tuple[str, list[str]]:
+    """YES / WAIT / NO from a scan row. Chase and explicit gates are REJECTED;
+    a plain WATCH is WAIT — it is not a fake LOW_CONVICTION rejection."""
+    verdict = str(row.get("verdict") or "").upper()
+    if verdict in {"BUY", "STRONG BUY"}:
+        return "TAKEN", []
+    reasons: list[str] = []
+    if row.get("chase_risk"):
+        reasons.append("EXTENSION")
+    for item in row.get("reasons") or []:
+        text = str(item or "")
+        if not text.strip():
+            continue
+        from core.decision_journal import _norm_reason
+        mapped = _norm_reason(text, "REJECTED")
+        if mapped in {"EXTENSION", "BLOWOFF_RSI", "POOR_BREADTH", "CORRELATION",
+                      "LIQUIDITY", "LAGGARD", "DRIFT", "MACRO", "RISK_LIMIT"}:
+            if mapped not in reasons:
+                reasons.append(mapped)
+    if reasons:
+        return "REJECTED", reasons
+    return "WAIT", []
 
 
 def _log_non_events_for_learning(results) -> None:

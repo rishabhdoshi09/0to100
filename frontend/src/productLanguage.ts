@@ -45,7 +45,7 @@ export const PAGE_GUIDE: Record<string, PageGuide> = {
   },
   Scanner: {
     title: 'Discover',
-    purpose: 'Ranks saved whole-market research by momentum, breakout, conviction or avoidance state.',
+    purpose: 'Ranks saved whole-market research by momentum, breakout, setup quality or avoidance state.',
     questions: [
       'When was the universe last scanned?',
       'How many symbols were processed?',
@@ -214,7 +214,8 @@ export const PAGE_GUIDE: Record<string, PageGuide> = {
 
 export const GLOSSARY: Record<string, string> = {
   Candidate: 'A stock worth reviewing; not an instruction to trade.',
-  Conviction: 'A combined evidence score, not certainty.',
+  'Setup Quality': 'A 0–100 checklist of how complete this setup looks (score, regime, volume, RSI). It is not the chance the trade works. Observed hit-rate lives on Evidence / n.',
+  Conviction: 'Legacy name for Setup Quality — a weighted checklist, not a win probability.',
   Expectancy: 'Average result per trade after the stated assumptions.',
   Drawdown: 'The fall from a previous portfolio high.',
   Slippage: 'Difference between the expected and actual fill price.',

@@ -93,6 +93,16 @@ export type StockWorkspace = {
   sources: IntelligenceSource[]
   next_actions: Array<{ control: ControlName | 'REFRESH_STOCK_FUNDAMENTALS'; label: string }>
   case?: RecommendationCase
+  decision_memory?: {
+    symbol?: string
+    stance?: string
+    setup_quality?: { score?: number | null; label?: string }
+    similar?: RecommendationCase['similar']
+    why_not?: { found?: boolean; line?: string; label?: string; verdict?: string; n_observations?: number }
+    trust?: { n?: number; line?: string; status?: string }
+    edge?: { profile?: string; line?: string }
+    places_orders?: boolean
+  }
 }
 
 export type CommandCenterWorkspace = {
@@ -297,6 +307,8 @@ export type RecommendationCard = {
   expected_payoff?: string
   expected_payoff_detail?: string
   evidence?: string
+  setup_quality?: number | null
+  setup_quality_label?: string
   strategy_health?: string
   strategy_health_detail?: string
   market_support?: string
@@ -324,6 +336,20 @@ export type RecommendationCase = {
   win_rate?: number | null
   expectancy_r?: number | null
   places_orders?: boolean
+  stance?: string
+  setup_quality?: { score?: number | null; label?: string; not_probability?: boolean }
+  similar?: {
+    found?: boolean
+    n_similar?: number
+    win_rate?: number | null
+    avg_r?: number | null
+    avg_mae?: number | null
+    avg_mfe?: number | null
+    median_hold?: number | null
+    environment?: string[]
+    line?: string
+  }
+  edge?: { setup?: string; profile?: string; line?: string }
 }
 
 export type RecommendationDesk = {
@@ -450,6 +476,13 @@ export type DeskNote = {
     setups?: Array<{ setup: string; n_similar: number; proven: boolean; memory_line: string }>
     open_count?: number
     settled_count?: number
+    places_orders?: boolean
+  }
+  decision_memory?: {
+    title?: string
+    blurb?: string
+    shadow?: { proven?: boolean; line?: string; taken?: { n?: number }; rejected?: { n?: number }; gates?: Array<{ gate: string; line: string; verdict?: string }> }
+    trust?: { n?: number; line?: string; status?: string; predicted_pct?: number | null; actual_pct?: number | null; calibration_error_pct?: number | null }
     places_orders?: boolean
   }
   disclaimer?: string

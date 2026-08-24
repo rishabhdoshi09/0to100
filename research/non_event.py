@@ -168,19 +168,9 @@ def _forward_return(symbol: str, from_date: str, horizon: int = _HORIZON_DAYS):
     """% change from the close on/after `from_date` to `horizon` trading days
     later, from official bhavcopy. None if history is missing (never simulated)."""
     try:
-        import pandas as pd
-        from data.bhavcopy_store import get_ohlcv
-        df = get_ohlcv(symbol)
-        if df is None or df.empty or "close" not in df.columns:
-            return None
-        after = df[df.index >= pd.Timestamp(str(from_date)[:10])]
-        if len(after) < horizon + 1:
-            return None
-        entry = float(after["close"].iloc[0])
-        exit_ = float(after["close"].iloc[horizon])
-        if entry <= 0:
-            return None
-        return (exit_ - entry) / entry * 100.0
+        from core.outcome_resolver import session_close_return
+        got = session_close_return(symbol, from_date, horizon=horizon)
+        return None if got is None else got[1]
     except Exception:
         return None
 

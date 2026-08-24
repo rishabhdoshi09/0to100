@@ -436,7 +436,7 @@ export function EnhancedCommandCenterView(props: ExperienceViewProps) {
           <OpportunityLane title="Momentum" count={momentumRows.length} rows={momentumRows} selected={selected} onSelect={setSelected} />
           <OpportunityLane title="Breakouts" count={breakoutRows.length} rows={breakoutRows} selected={selected} onSelect={setSelected} />
           <OpportunityLane title="Pre-breakout" count={preBreakoutRows.length} rows={preBreakoutRows} selected={selected} onSelect={setSelected} />
-          <OpportunityLane title="Conviction" count={convictionRows.length} rows={convictionRows} selected={selected} onSelect={setSelected} />
+          <OpportunityLane title="Setup Quality" count={convictionRows.length} rows={convictionRows} selected={selected} onSelect={setSelected} />
           <OpportunityLane title="Long-term" count={longTermQuality.length} rows={longTermQuality as ScanRecord[]} selected={selected} onSelect={setSelected} />
           <OpportunityLane title="Avoid / extended" count={avoidRows.length} rows={avoidRows} selected={selected} onSelect={setSelected} />
         </div>
@@ -545,7 +545,7 @@ export function EnhancedScannerView(props: ExperienceViewProps) {
         <article><span>PRICE DATA</span><strong>{dashboard.data.bhavcopy.latest_date || 'MISSING'}</strong><small>{dashboard.data.bhavcopy.sessions} official sessions</small></article>
       </div>
 
-      <div className="scanner-mode-row">{modes.map((item) => <button type="button" key={item} className={mode === item ? 'active' : ''} onClick={() => setMode(item)}>{item}</button>)}</div>
+      <div className="scanner-mode-row">{modes.map((item) => <button type="button" key={item} className={mode === item ? 'active' : ''} onClick={() => setMode(item)}>{item === 'Conviction' ? 'Setup Quality' : item}</button>)}</div>
       <div className="scanner-filter-row">
         <label>Search<input value={query} onChange={(event: { target: { value: string } }) => setQuery(event.target.value)} placeholder="Symbol or company" /></label>
         <label>Sector<select value={sector} onChange={(event: { target: { value: string } }) => setSector(event.target.value)}><option>All</option>{sectors.map((item) => <option key={item}>{item}</option>)}</select></label>
@@ -554,7 +554,7 @@ export function EnhancedScannerView(props: ExperienceViewProps) {
       </div>
 
       <div className="scanner-workspace-grid">
-        <Panel title={`${mode.toUpperCase()} · ${filtered.length} MATCHES`} subtitle={`Scan ${dashboard.scan.scanned_at || 'not run'} · sorted by backend score`}>
+        <Panel title={`${(mode === 'Conviction' ? 'Setup Quality' : mode).toUpperCase()} · ${filtered.length} MATCHES`} subtitle={`Scan ${dashboard.scan.scanned_at || 'not run'} · sorted by backend score`}>
           {mode === 'Long-Term'
             ? <LongTermTable rows={filtered as LongTermRecord[]} selected={selected} onSelect={setSelected} />
             : <SecurityTable rows={filtered as Array<ScanRecord | ConvictionRecord>} selected={selected} onSelect={setSelected} />}

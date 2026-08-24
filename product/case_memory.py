@@ -405,6 +405,11 @@ def remember_case(
     }
     if persist and symbol:
         case["case_id"] = open_case(card, row=row, db_path=db_path)
+    try:
+        from product.decision_memory import attach_to_case
+        attach_to_case(case, row=row or card)
+    except Exception:
+        pass
     return case
 
 
@@ -456,46 +461,15 @@ def open_case(
 
 def _resolve_path(row: Mapping[str, Any]) -> tuple[float, float, int] | None:
     """First-touch target vs stop on official bhavcopy. None = still open / no path."""
-    entry, stop, target = _f(row.get("entry")), _f(row.get("stop")), _f(row.get("target"))
-    if entry <= 0 or stop <= 0 or target <= entry or stop >= entry:
-        return None
-    try:
-        import pandas as pd
-        from data.bhavcopy_store import get_ohlcv
-        df = get_ohlcv(str(row["symbol"]))
-    except Exception:
-        return None
-    if df is None or getattr(df, "empty", True) or not {"high", "low", "close"} <= set(df.columns):
-        return None
-    opened = str(row.get("opened_at") or "")[:10]
-    try:
-        since = df[df.index >= pd.Timestamp(opened)]
-    except Exception:
-        return None
-    if since is None or since.empty:
-        return None
-    highs = since["high"].to_numpy(dtype=float)
-    lows = since["low"].to_numpy(dtype=float)
-    closes = since["close"].to_numpy(dtype=float)
-    n = len(highs)
-    horizon = min(n, _HORIZON_SESSIONS)
-    filled = False
-    for i in range(horizon):
-        if not filled:
-            if highs[i] >= entry:
-                filled = True
-            else:
-                continue
-        if lows[i] <= stop:
-            return (stop, (stop - entry) / entry * 100.0, 0)
-        if highs[i] >= target:
-            return (target, (target - entry) / entry * 100.0, 1)
-    if not filled:
-        return (0.0, 0.0, -1) if n >= _HORIZON_SESSIONS else None
-    if n >= _HORIZON_SESSIONS:
-        last = float(closes[horizon - 1])
-        return (last, (last - entry) / entry * 100.0, 1 if last >= entry else 0)
-    return None
+    from core.outcome_resolver import first_touch_path
+    return first_touch_path(
+        str(row.get("symbol") or ""),
+        str(row.get("opened_at") or "")[:10],
+        _f(row.get("entry")),
+        _f(row.get("stop")),
+        _f(row.get("target")),
+        horizon=_HORIZON_SESSIONS,
+    )
 
 
 def settle_due_cases(*, db_path: Path | None = None, limit: int = 400) -> int:

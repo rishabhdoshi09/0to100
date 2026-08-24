@@ -460,6 +460,13 @@ def build_stock_workspace(
             "places_orders": False,
         }
 
+    decision_mem: dict[str, Any] = {}
+    try:
+        from product.decision_memory import for_symbol
+        decision_mem = for_symbol(symbol, row=scan_row or long_row, frame=frame)
+    except Exception:
+        decision_mem = {"stance": "WAIT", "places_orders": False}
+
     return {
         "schema_version": 1,
         "generated_at": now.isoformat(),
@@ -479,4 +486,5 @@ def build_stock_workspace(
         "sources": sources,
         "next_actions": next_actions,
         "case": case,
+        "decision_memory": decision_mem,
     }

@@ -415,3 +415,22 @@
 .hud-case em { display: block; margin-top: 6px; color: #8ba0b8; font-size: 0.78rem; }
 .hud-case.is-remembered_positive { border-color: rgba(65, 222, 146, 0.4); background: rgba(65, 222, 146, 0.08); }
 .hud-case.is-remembered_positive > span { color: #41de92; }
+
+.hud-memory {
+  margin: 0 0 12px;
+  padding: 12px 14px;
+  border: 1px dashed rgba(54, 217, 255, 0.28);
+  border-radius: 12px;
+  background: rgba(3, 7, 15, 0.55);
+}
+.hud-memory > span {
+  display: block;
+  color: #36d9ff;
+  font-size: 0.68rem;
+  font-weight: 800;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  margin-bottom: 6px;
+}
+.hud-memory p { margin: 0 0 6px; color: #d7e6f5; font-size: 0.88rem; line-height: 1.5; }
+.hud-memory p:last-child { margin-bottom: 0; }

@@ -389,6 +389,17 @@ def build_desk_note(
             "error": str(exec_mem)[:200],
             "places_orders": False,
         }
+    decision_mem: dict[str, Any] = {}
+    try:
+        from product.decision_memory import morning_strip
+        decision_mem = morning_strip()
+    except Exception as exec_dm:
+        decision_mem = {
+            "title": "Decision Memory",
+            "blurb": "Decision memory unavailable.",
+            "error": str(exec_dm)[:200],
+            "places_orders": False,
+        }
     return {
         "schema_version": 1,
         "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -408,6 +419,7 @@ def build_desk_note(
             "body": MIX_SHIFT_CONCEPT["teach_point"],
         },
         "memory": memory,
+        "decision_memory": decision_mem,
         "disclaimer": (
             "Desk note is assembled from the news curator and saved scan — not a broker "
             "note, not Reco Wealth, not an order. Do not treat empty slots as “nothing happened”; "

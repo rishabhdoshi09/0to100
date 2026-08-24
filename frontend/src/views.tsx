@@ -177,11 +177,11 @@ export function ScannerView(props: ViewProps) {
     <section className="workspace-view">
       {!dashboard.data.bhavcopy.ready && <DataReadinessPanel dashboard={dashboard} />}
       <div className="mode-tabs">
-        {['Momentum', 'Conviction', 'Breakouts', 'Pre-Breakout', 'Avoid'].map((item) => <button type="button" key={item} className={mode === item ? 'active' : ''} onClick={() => setMode(item)}>{item}</button>)}
+        {['Momentum', 'Conviction', 'Breakouts', 'Pre-Breakout', 'Avoid'].map((item) => <button type="button" key={item} className={mode === item ? 'active' : ''} onClick={() => setMode(item)}>{item === 'Conviction' ? 'Setup Quality' : item}</button>)}
         <button className="mode-action" type="button" onClick={() => void runControl('RUN_SCAN_NOW')}>Scan whole market now</button>
       </div>
       <div className="split-workspace">
-        <Panel title={`${mode.toUpperCase()} · ${rows.length} MATCHES`} subtitle={`Saved scan ${dashboard.scan.scanned_at || 'not available'}`}>
+        <Panel title={`${(mode === 'Conviction' ? 'Setup Quality' : mode).toUpperCase()} · ${rows.length} MATCHES`} subtitle={`Saved scan ${dashboard.scan.scanned_at || 'not available'}`}>
           <SecurityTable rows={rows} selected={selected} onSelect={setSelected} />
         </Panel>
         <div className="detail-stack">

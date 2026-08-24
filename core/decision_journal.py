@@ -1,21 +1,20 @@
 """
-Decision Journal — every decision becomes a prediction market.
+Decision Journal — every YES, NO and WAIT becomes an experiment.
 
 Trades were already logged; DECISIONS were not. This records every candidate
-the autopilot evaluated — TAKEN or REJECTED, with the reason and whatever
-prediction the system held at that moment (EV%, P(win), confidence) — and
-then resolves the outcome 5 sessions later exactly like the signal tracker.
+the desk evaluated — TAKEN, REJECTED, or WAIT — with the reason and whatever
+prediction the system held, then resolves the outcome on the horizon-th
+official trading session (canonical `outcome_resolver`, never a live quote).
 
 Six months from now this answers the questions that actually build trust:
 
   • Were rejected trades better than accepted ones? (Which gates EARN money
     and which gates COST money — per rejection reason.)
-  • When the system said "70% win", did ~70% actually win? (Calibration —
-    can the probabilities be trusted?)
+  • When the system said "70% win", did ~70% actually win? (Calibration.)
 
-Read-only measurement infrastructure: nothing here changes a gate or places
-a trade. One row per symbol × day × decision (a candidate re-scanned every
-15 min doesn't flood the journal).
+Read-only measurement. Places no orders.
+One row per symbol × day × decision × reason (a 15-min rescan doesn't flood
+the journal; two different gates on the same name the same day both survive).
 """
 from __future__ import annotations
 
@@ -46,7 +45,7 @@ CREATE TABLE IF NOT EXISTS decisions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     symbol TEXT NOT NULL,
     decided_at TEXT NOT NULL,
-    decision TEXT NOT NULL,          -- TAKEN | REJECTED
+    decision TEXT NOT NULL,          -- TAKEN | REJECTED | WAIT
     reason TEXT,                     -- rejection reason category ('' for TAKEN)
     source TEXT,
     entry_ref REAL,                  -- reference price at decision time
@@ -79,22 +78,65 @@ def _conn() -> sqlite3.Connection:
     return c
 
 
+def _norm_reason(reason: str, decision: str) -> str:
+    text = str(reason or "").strip()
+    kind = str(decision or "").upper()
+    if kind in {"TAKEN", "WAIT"}:
+        return text[:120]
+    if not text:
+        return "OTHER"
+    key = text.upper().replace(" ", "_")
+    known = {
+        "EXTENSION", "LOW_CONVICTION", "WEAK_CLOSE", "BLOWOFF_RSI",
+        "LAGGARD", "POOR_BREADTH", "RISK_LIMIT", "CORRELATION",
+        "LIQUIDITY", "MACRO", "ALREADY_OWNED", "DRIFT", "OTHER",
+    }
+    if key in known:
+        return key
+    t = text.lower()
+    if "extend" in t or "chase" in t:
+        return "EXTENSION"
+    if "rsi" in t or "blow" in t or "overheat" in t:
+        return "BLOWOFF_RSI"
+    if "breadth" in t or "narrow" in t:
+        return "POOR_BREADTH"
+    if "corr" in t:
+        return "CORRELATION"
+    if "liquid" in t:
+        return "LIQUIDITY"
+    if "laggard" in t:
+        return "LAGGARD"
+    if "decay" in t or "drift" in t:
+        return "DRIFT"
+    if "macro" in t or "risk_off" in t or "risk-off" in t:
+        return "MACRO"
+    if "convic" in t:
+        return "LOW_CONVICTION"
+    return text[:120]
+
+
 def log_decision(symbol: str, decision: str, reason: str = "",
                  source: str = "", entry_ref: float = 0.0,
                  stop_ref: float = 0.0, score: float = 0.0,
                  ev_pct: float | None = None, p_win: float | None = None,
                  confidence: str | None = None) -> None:
-    """One row per symbol × day × decision type (dedup — scans repeat)."""
+    """One row per symbol × day × decision × reason.
+
+    Scans repeat every few minutes — those collapse. Two different rejection
+    reasons on the same name the same day do NOT: gate attribution needs both.
+    """
     try:
         if entry_ref <= 0:
             return                              # no reference price → no claim
         today = _now().strftime("%Y-%m-%d")
+        kind = str(decision or "").strip().upper() or "REJECTED"
+        why = _norm_reason(reason, kind)
         c = _conn()
         try:
             dup = c.execute(
                 "SELECT id FROM decisions WHERE symbol=? AND decision=? "
-                "AND decided_at LIKE ?",
-                (symbol.upper(), decision, f"{today}%")).fetchone()
+                "AND IFNULL(reason,'')=? AND decided_at LIKE ?",
+                (symbol.upper(), kind, why, f"{today}%")).fetchone()
             if dup:
                 return
             c.execute(
@@ -103,7 +145,7 @@ def log_decision(symbol: str, decision: str, reason: str = "",
                 "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
                 (symbol.upper(),
                  _now().isoformat(timespec="seconds"),
-                 decision, reason[:120], source, float(entry_ref),
+                 kind, why, source, float(entry_ref),
                  float(stop_ref), float(score), ev_pct, p_win, confidence))
             c.commit()
         finally:
@@ -113,35 +155,39 @@ def log_decision(symbol: str, decision: str, reason: str = "",
 
 
 def update_outcomes(check_after_days: int = 5, lookback_days: int = 40) -> int:
-    """Resolve outcomes for decisions ≥5 sessions old (same convention as the
-    signal tracker). Returns rows updated. Quote misses stay pending — a
-    missing price is never written as an outcome (no fake data)."""
+    """Resolve outcomes after the horizon-th official trading session.
+
+    `check_after_days` is kept for call-site compatibility and is NOT the
+    resolution clock — a delayed runner must not mark day-8 as day-5.
+    Missing bars stay pending. Never writes a live quote as an outcome.
+    """
     try:
-        cutoff = (_now() - timedelta(days=check_after_days)) \
-            .isoformat(timespec="seconds")
         too_old = (_now() - timedelta(days=lookback_days)) \
             .isoformat(timespec="seconds")
         c = _conn()
         try:
             rows = c.execute(
-                "SELECT id, symbol, entry_ref FROM decisions "
-                "WHERE outcome_pct IS NULL AND decided_at <= ? "
-                "AND decided_at >= ?", (cutoff, too_old)).fetchall()
+                "SELECT id, symbol, decided_at, entry_ref FROM decisions "
+                "WHERE outcome_pct IS NULL AND decided_at >= ?",
+                (too_old,),
+            ).fetchall()
             if not rows:
                 return 0
-            from data.live_quotes import get_live_quotes
-            quotes = get_live_quotes(sorted({r["symbol"] for r in rows}))
+            from core.outcome_resolver import session_close_return
             n = 0
             now_iso = _now().isoformat(timespec="seconds")
             for r in rows:
-                q = quotes.get(r["symbol"]) or {}
-                px = float(q.get("price") or 0)
-                if px <= 0 or not r["entry_ref"]:
+                resolved = session_close_return(r["symbol"], str(r["decided_at"])[:10])
+                if resolved is None or not r["entry_ref"]:
                     continue
-                pct = (px - r["entry_ref"]) / r["entry_ref"] * 100
+                _px, pct = resolved
+                # Journal reference is the decision-time price; report vs that.
+                entry = float(r["entry_ref"])
+                if entry > 0:
+                    pct = (_px - entry) / entry * 100.0
                 c.execute("UPDATE decisions SET outcome_checked_at=?, "
                           "outcome_price=?, outcome_pct=? WHERE id=?",
-                          (now_iso, px, round(pct, 2), r["id"]))
+                          (now_iso, float(_px), round(pct, 2), r["id"]))
                 n += 1
             c.commit()
             if n:
@@ -182,6 +228,7 @@ def decision_report(min_n: int = 10) -> dict:
 
     taken = _agg([r for r in rows if r["decision"] == "TAKEN"])
     rejected = _agg([r for r in rows if r["decision"] == "REJECTED"])
+    waited = _agg([r for r in rows if r["decision"] == "WAIT"])
     by_reason: dict[str, dict] = {}
     for r in rows:
         if r["decision"] == "REJECTED" and r.get("reason"):
@@ -202,8 +249,8 @@ def decision_report(min_n: int = 10) -> dict:
                        f"raha hai, breakdown dekho.")
         else:
             verdict = "➖ Taken vs rejected mein abhi koi meaningful gap nahi."
-    return {"taken": taken, "rejected": rejected, "by_reason": by_reason,
-            "verdict": verdict}
+    return {"taken": taken, "rejected": rejected, "wait": waited,
+            "by_reason": by_reason, "verdict": verdict}
 
 
 def calibration_report(min_n: int = 20) -> dict:

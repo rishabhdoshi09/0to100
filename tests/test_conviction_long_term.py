@@ -22,6 +22,8 @@ def test_conviction_shortlist_requires_market_stock_and_entry_alignment():
                                       sector_lookup=lambda _s: "Technology")
     assert rows[0]["classification"] == "HIGH_CONVICTION"
     assert rows[0]["conviction_score"] >= 75
+    assert rows[0]["setup_quality"] == rows[0]["conviction_score"]
+    assert rows[0]["setup_quality_label"] == "Setup Quality"
     assert "Leading sector: Technology" in rows[0]["reasons"]
 
     weak = build_conviction_shortlist(payload, _market("Weak"),
