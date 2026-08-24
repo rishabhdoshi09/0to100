@@ -169,7 +169,7 @@ def card_from_row(
         evidence_tags=tags,
         market_ctx=market_ctx,
     )
-    return {
+    card = {
         "symbol": str(row.get("symbol") or "").upper(),
         "company": str(row.get("company") or row.get("symbol") or ""),
         "category_id": category_id,
@@ -191,6 +191,7 @@ def card_from_row(
         **ups,
         **surface,
     }
+    return _attach_key_points(card)
 
 
 def _trend_structure_ok(row: Mapping[str, Any]) -> bool:
@@ -415,6 +416,44 @@ def _empty_detail_for(
     return "No matching setups in the current scan / long-term shortlist."
 
 
+def _key_points_for_card(symbol: str, seeds: Sequence[str] | None = None) -> list[str]:
+    """Plain-language points shown next to the stock — never invented prints."""
+    points: list[str] = []
+    seen: set[str] = set()
+
+    def add(text: str) -> None:
+        line = " ".join(str(text or "").split())
+        if not line or line.lower() in seen:
+            return
+        seen.add(line.lower())
+        points.append(line)
+
+    for item in seeds or []:
+        add(str(item))
+    try:
+        from product.desk_note import MIX_SHIFT_DESKS
+        frame = next(
+            (f for f in MIX_SHIFT_DESKS if str(f.get("symbol") or "").upper() == symbol.upper()),
+            None,
+        )
+    except Exception:
+        frame = None
+    if frame:
+        add(str(frame.get("lens") or ""))
+        for watch in list(frame.get("watch") or [])[:2]:
+            add(str(watch))
+    return points[:6]
+
+
+def _attach_key_points(card: dict[str, Any]) -> dict[str, Any]:
+    seeds = list(card.get("why_now") or [])
+    reason = str(card.get("reason") or "").strip()
+    if reason:
+        seeds.append(reason)
+    card["key_points"] = _key_points_for_card(str(card.get("symbol") or ""), seeds)
+    return card
+
+
 def _empty_decision_fields(action_badge: str, category_id: str) -> dict[str, Any]:
     """Lifecycle rows still render on the Reco card without inventing prices/EV."""
     return {
@@ -435,6 +474,7 @@ def _empty_decision_fields(action_badge: str, category_id: str) -> dict[str, Any
         "market_support": "Unmeasured",
         "market_support_detail": "",
         "why_now": [],
+        "key_points": [],
         "what_changes_mind": [],
         "next_step": "Open the deeper research for the live plan.",
         "evidence_panel": {
@@ -556,11 +596,11 @@ def _tracker_lifecycle() -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
                 "reason": str(p.get("thesis") or "")[:160],
                 **_empty_decision_fields("Tracked", "wealth_builders"),
             }
-            active.append(card)
+            active.append(_attach_key_points(card))
         for p in exited_picks(limit=40):
             entry = _f(p.get("entry_price"))
             exit_px = _f(p.get("exit_price") or p.get("last_price"))
-            closed.append({
+            closed.append(_attach_key_points({
                 "symbol": str(p.get("symbol") or "").upper(),
                 "company": str(p.get("symbol") or ""),
                 "category_id": "wealth_builders",
@@ -582,7 +622,7 @@ def _tracker_lifecycle() -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
                 "upside_to_target_pct": None,
                 "reason": str(p.get("exit_reason") or p.get("thesis") or "")[:160],
                 **_empty_decision_fields("Closed", "wealth_builders"),
-            })
+            }))
     except Exception:
         pass
 
@@ -610,7 +650,7 @@ def _tracker_lifecycle() -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
                 **_empty_decision_fields("Open", "momentum_breakouts"),
             }
             if worked is None:
-                active.append({
+                active.append(_attach_key_points({
                     **base,
                     "action_badge": "Open",
                     "lifecycle": "active",
@@ -619,9 +659,9 @@ def _tracker_lifecycle() -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
                     "upside_to_target_pct": (
                         round((target / entry - 1.0) * 100.0, 1) if entry > 0 and target > 0 else None
                     ),
-                })
+                }))
             else:
-                closed.append({
+                closed.append(_attach_key_points({
                     **base,
                     "action_badge": "Win" if worked == 1 else ("Void" if worked == -1 else "Loss"),
                     "lifecycle": "closed",
@@ -634,7 +674,7 @@ def _tracker_lifecycle() -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
                         "Win" if worked == 1 else ("Void" if worked == -1 else "Loss"),
                         "momentum_breakouts",
                     ),
-                })
+                }))
     except Exception:
         pass
 

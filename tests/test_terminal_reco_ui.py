@@ -67,6 +67,8 @@ def test_recommendations_are_exclusive_decision_cards():
     src = (ROOT / "frontend" / "src" / "recommendationsViews.tsx").read_text(encoding="utf-8")
     assert "Wealth Builders" in src or "wealth_builders" in src
     assert "See evidence" in src
+    assert "Key points" in src
+    assert "key_points" in src
     assert "Full research" in src
     py = (ROOT / "product" / "recommendations_workspace.py").read_text(encoding="utf-8")
     assert "wealth_builders" in py

@@ -68,6 +68,9 @@ function CardTile({
   const risk = (card.risk_tier || 'Medium').toLowerCase()
   const zone = buyZoneLabel(card)
   const why = (card.why_now && card.why_now[0]) || card.qualify_reason || card.reason
+  const points = (card.key_points && card.key_points.length > 0)
+    ? card.key_points
+    : (card.why_now || []).filter(Boolean)
   return (
     <article className="reco-pick">
       <button type="button" className="reco-pick-hit" onClick={() => onSelect(card)}>
@@ -86,6 +89,18 @@ function CardTile({
           {card.horizon ? <span>{card.horizon}</span> : null}
           {card.price_tag ? <span>{card.price_tag}</span> : null}
         </div>
+        {points.length > 0 ? (
+          <div className="reco-key-points">
+            <span>Key points</span>
+            <ul>
+              {points.slice(0, 4).map((item) => (
+                <li key={item}>{item}</li>
+              ))}
+            </ul>
+          </div>
+        ) : (
+          why ? <p className="reco-pick-note">{why}</p> : null
+        )}
         <div className="reco-pick-kpis">
           <div>
             <span>{zone.label}</span>
@@ -117,7 +132,6 @@ function CardTile({
           <StatusChip label="Health" value={card.strategy_health} />
           <StatusChip label="Market" value={card.market_support} />
         </div>
-        {why ? <p className="reco-pick-note">{why}</p> : null}
       </button>
     </article>
   )
@@ -171,6 +185,9 @@ function DecisionSheet({
   const zone = buyZoneLabel(card)
   const upside = card.upside_to_target_pct ?? card.upside_from_entry_pct
   const risk = (card.risk_tier || 'Medium').toLowerCase()
+  const points = (card.key_points && card.key_points.length > 0)
+    ? card.key_points
+    : (card.why_now || [])
   return (
     <section className="reco-sheet" aria-label={`${card.symbol} decision`}>
       <nav className="reco-crumb" aria-label="Breadcrumb">
@@ -230,9 +247,9 @@ function DecisionSheet({
       ) : null}
       <div className="reco-sheet-cols">
         <div>
-          <h3>Why now</h3>
-          {(card.why_now && card.why_now.length > 0) ? (
-            <ul>{card.why_now.map((item) => <li key={item}>{item}</li>)}</ul>
+          <h3>Key points</h3>
+          {points.length > 0 ? (
+            <ul>{points.map((item) => <li key={item}>{item}</li>)}</ul>
           ) : (
             <p>No plain-language confirms on this snapshot.</p>
           )}

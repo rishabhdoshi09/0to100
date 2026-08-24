@@ -109,6 +109,14 @@ def test_categories_project_from_scan_and_long_term_without_invention():
     assert card["expected_payoff"] == "Unproven"
     assert card["evidence"] == "Thin"
     assert "Momentum improving" in card["why_now"]
+    assert "Momentum improving" in card["key_points"]
+    sswl = card_from_row(
+        {"symbol": "SSWL", "signals": ["MOMENTUM"], "volume_ratio": 1.4, "above_sma50": True, "reasons": ["RS leadership"]},
+        category_id="super_trends",
+        category_label="Super Trends",
+    )
+    assert any("higher-value" in p.lower() or "alloy" in p.lower() or "mix" in p.lower() for p in sswl["key_points"])
+    assert "₹600" not in " ".join(sswl["key_points"])
     assert any("95" in item for item in card["what_changes_mind"])
     assert "lifecycle" in payload
     assert payload["disclaimer"]

@@ -301,6 +301,7 @@ export type RecommendationCard = {
   market_support?: string
   market_support_detail?: string
   why_now?: string[]
+  key_points?: string[]
   what_changes_mind?: string[]
   next_step?: string
   evidence_panel?: RecommendationEvidencePanel
