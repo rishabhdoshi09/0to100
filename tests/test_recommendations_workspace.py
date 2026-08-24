@@ -1,6 +1,8 @@
 """Tests for Reco-style recommendations / market-reports projections."""
 from __future__ import annotations
 
+import pytest
+
 from product.recommendations_workspace import (
     build_market_reports_workspace,
     build_recommendations_workspace,
@@ -10,6 +12,12 @@ from product.recommendations_workspace import (
     upside_metrics,
 )
 from product.radar_workspace import enrich_scan_row
+
+
+@pytest.fixture(autouse=True)
+def _isolate_case_db(tmp_path, monkeypatch):
+    import product.case_memory as cm
+    monkeypatch.setattr(cm, "CASES_DB", tmp_path / "cases.db")
 
 
 def test_upside_and_risk_from_real_fields_only():

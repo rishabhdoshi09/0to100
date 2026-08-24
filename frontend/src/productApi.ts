@@ -305,6 +305,24 @@ export type RecommendationCard = {
   what_changes_mind?: string[]
   next_step?: string
   evidence_panel?: RecommendationEvidencePanel
+  case?: RecommendationCase
+}
+
+export type RecommendationCase = {
+  schema_version?: number
+  case_id?: string
+  symbol?: string
+  setup?: string
+  idea?: string
+  why_now?: string[]
+  invalidation?: string[]
+  n_similar?: number
+  proven?: boolean
+  verdict?: string
+  memory_line?: string
+  win_rate?: number | null
+  expectancy_r?: number | null
+  places_orders?: boolean
 }
 
 export type RecommendationDesk = {
@@ -425,6 +443,14 @@ export type DeskNote = {
   explainers?: DeskNoteExplainer[]
   desks?: DeskNoteCompany[]
   theme?: { id: string; title: string; body: string }
+  memory?: {
+    title?: string
+    blurb?: string
+    setups?: Array<{ setup: string; n_similar: number; proven: boolean; memory_line: string }>
+    open_count?: number
+    settled_count?: number
+    places_orders?: boolean
+  }
   disclaimer?: string
   places_orders?: boolean
   error?: string

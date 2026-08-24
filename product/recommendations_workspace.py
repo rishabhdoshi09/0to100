@@ -451,6 +451,17 @@ def _attach_key_points(card: dict[str, Any]) -> dict[str, Any]:
     if reason:
         seeds.append(reason)
     card["key_points"] = _key_points_for_card(str(card.get("symbol") or ""), seeds)
+    try:
+        from product.case_memory import attach_case
+        attach_case(card)
+    except Exception:
+        card.setdefault("case", {
+            "n_similar": 0,
+            "proven": False,
+            "verdict": "unmeasured",
+            "memory_line": "Case memory is unavailable on this snapshot.",
+            "places_orders": False,
+        })
     return card
 
 
@@ -718,6 +729,11 @@ def build_recommendations_workspace(
         pass
 
     attach_live_ev(scan_rows)
+    try:
+        from product.case_memory import settle_due_cases
+        settle_due_cases()
+    except Exception:
+        pass
     desk = build_desk_context(scan_rows)
     buckets = _bucket_rows(scan_rows, lt_rows, market_ctx=desk)
     active, closed = _tracker_lifecycle()

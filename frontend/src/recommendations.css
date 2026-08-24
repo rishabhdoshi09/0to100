@@ -278,6 +278,31 @@
   line-height: 1.45;
   color: var(--rw-ink);
 }
+.reco-case {
+  margin: 10px 0 0;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px dashed var(--rw-amber-line);
+  background: var(--rw-amber-bg);
+  text-align: left;
+}
+.reco-case > span {
+  display: block;
+  font-size: 11px;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  color: var(--rw-amber-ink);
+  font-weight: 700;
+  margin-bottom: 4px;
+}
+.reco-case p { margin: 0; font-size: 13.5px; line-height: 1.45; color: var(--rw-ink); }
+.reco-case em { display: block; margin-top: 4px; font-size: 12px; color: var(--rw-muted); }
+.reco-case.is-remembered_positive {
+  border-color: #cfe6d8;
+  background: var(--rw-green-soft);
+}
+.reco-case.is-remembered_positive > span { color: var(--rw-green); }
+.reco-case-morning ul { margin: 8px 0 0; padding-left: 18px; }
 .reco-pick-sub {
   display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
   margin-top: 6px; color: var(--rw-muted); font-size: 13px;

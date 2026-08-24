@@ -377,6 +377,18 @@ def build_desk_note(
         explainers.append({**GOLD_LOAN_CONCEPT, "attached_to": "gold_loan"})
     # Mix-shift theme is always the reading frame for the watch pack — not a signal.
     explainers.append({**MIX_SHIFT_CONCEPT, "attached_to": "mix_shift"})
+    memory: dict[str, Any] = {}
+    try:
+        from product.case_memory import morning_digest
+        memory = morning_digest()
+    except Exception as exec_mem:
+        memory = {
+            "title": "What QuantTerm remembers this morning",
+            "blurb": "Case memory unavailable.",
+            "setups": [],
+            "error": str(exec_mem)[:200],
+            "places_orders": False,
+        }
     return {
         "schema_version": 1,
         "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -395,6 +407,7 @@ def build_desk_note(
             "title": MIX_SHIFT_CONCEPT["title"],
             "body": MIX_SHIFT_CONCEPT["teach_point"],
         },
+        "memory": memory,
         "disclaimer": (
             "Desk note is assembled from the news curator and saved scan — not a broker "
             "note, not Reco Wealth, not an order. Do not treat empty slots as “nothing happened”; "

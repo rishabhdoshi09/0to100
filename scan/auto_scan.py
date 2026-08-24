@@ -738,6 +738,12 @@ def _maybe_update_outcomes() -> None:
         update_outcomes()
         _outcomes_checked_date = today
         log.info("signal_outcomes_updated")
+        try:
+            from product.case_memory import settle_due_cases
+            n_cases = settle_due_cases()
+            log.info("case_memory_settled", settled=n_cases)
+        except Exception as case_exc:
+            log.debug("case_memory_settle_skip", error=str(case_exc))
     except Exception as exc:
         log.debug("outcomes_update_skip", error=str(exc))
     # ONE-TIME back-data correction: re-judge old crude-labelled outcomes by true

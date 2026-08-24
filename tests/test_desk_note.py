@@ -1,6 +1,8 @@
 """Desk note honesty: sourced wrap, empty slots, no invented blog numbers."""
 from __future__ import annotations
 
+import pytest
+
 from product.desk_note import MIX_SHIFT_DESKS, build_desk_note, wrap_from_news
 from product.education_feed import build_education_feed
 from product.recommendations_workspace import build_market_reports_workspace
@@ -24,6 +26,12 @@ def _article(**kwargs):
     }
     base.update(kwargs)
     return base
+
+
+@pytest.fixture(autouse=True)
+def _isolate_case_db(tmp_path, monkeypatch):
+    import product.case_memory as cm
+    monkeypatch.setattr(cm, "CASES_DB", tmp_path / "cases.db")
 
 
 INVENTED = (

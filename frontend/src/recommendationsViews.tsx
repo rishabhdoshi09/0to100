@@ -8,6 +8,7 @@ import {
   type DeskNoteCompany,
   type MarketReportItem,
   type RecommendationCard,
+  type RecommendationCase,
   type RecommendationsWorkspace,
   type MarketReportsWorkspace,
 } from './productApi'
@@ -54,6 +55,21 @@ function StatusChip({ label, value }: { label: string; value?: string | null }) 
       <small>{label}</small>
       <strong>{value || '—'}</strong>
     </span>
+  )
+}
+
+function CaseMemoryBox({ memory }: { memory?: RecommendationCase | null }) {
+  if (!memory) return null
+  const n = memory.n_similar ?? 0
+  const verdict = (memory.verdict || 'unmeasured').replace(/_/g, ' ')
+  return (
+    <aside className={`reco-case is-${memory.verdict || 'unmeasured'}`} aria-label="Case memory">
+      <span>Case memory · {n} similar · {verdict}</span>
+      <p>{memory.memory_line || memory.idea}</p>
+      {memory.proven ? null : (
+        <em>{n > 0 ? 'Not proven yet — fewer than 30 comparable outcomes.' : 'Not remembered yet. Tonight’s check writes the first outcome.'}</em>
+      )}
+    </aside>
   )
 }
 
@@ -137,6 +153,7 @@ function CardTile({
           <StatusChip label="Health" value={card.strategy_health} />
           <StatusChip label="Market" value={card.market_support} />
         </div>
+        <CaseMemoryBox memory={card.case} />
       </button>
     </article>
   )
@@ -227,6 +244,7 @@ function DecisionSheet({
           </div>
         ) : null}
       </header>
+      <CaseMemoryBox memory={card.case} />
       <div className="reco-sheet-kpis">
         <div>
           <span>{zone.label}</span>
@@ -605,6 +623,22 @@ function DeskNoteMagazine({
             ))}
           </div>
         </>
+      ) : null}
+
+      {note.memory ? (
+        <aside className="desk-theme reco-case-morning">
+          <span className="desk-label">{note.memory.title || 'What QuantTerm remembers'}</span>
+          <p>{note.memory.blurb}</p>
+          {(note.memory.setups || []).length > 0 ? (
+            <ul>
+              {(note.memory.setups || []).map((item) => (
+                <li key={item.setup}>{item.memory_line}</li>
+              ))}
+            </ul>
+          ) : (
+            <p className="desk-empty">No settled cases yet — tonight’s check is how memory starts.</p>
+          )}
+        </aside>
       ) : null}
 
       {note.theme ? (

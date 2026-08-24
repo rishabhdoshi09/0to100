@@ -70,6 +70,8 @@ def test_recommendations_are_exclusive_decision_cards():
     assert "Key points" in src
     assert "reco-pick-together" in src
     assert "key_points" in src
+    assert "Case memory" in src
+    assert "reco-case" in src
     assert "Full research" in src
     css = (ROOT / "frontend" / "src" / "recommendations.css").read_text(encoding="utf-8")
     assert ".reco-pick-together" in css
