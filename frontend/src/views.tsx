@@ -181,7 +181,7 @@ export function ScannerView(props: ViewProps) {
         <button className="mode-action" type="button" onClick={() => void runControl('RUN_SCAN_NOW')}>Scan whole market now</button>
       </div>
       <div className="split-workspace">
-        <Panel title={`${(mode === 'Conviction' ? 'Setup Quality' : mode).toUpperCase()} · ${rows.length} MATCHES`} subtitle={`Saved scan ${dashboard.scan.scanned_at || 'not available'}`}>
+        <Panel title={`${(mode === 'Conviction' ? 'Setup Quality' : mode).toUpperCase()} · ${rows.length} MATCHES`} subtitle={`Saved scan ${dashboard.scan.scanned_at || 'preparing'}`}>
           <SecurityTable rows={rows} selected={selected} onSelect={setSelected} />
         </Panel>
         <div className="detail-stack">

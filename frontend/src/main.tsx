@@ -12,7 +12,7 @@ import './design-tokens.css'
 import './radar.css'
 import './reco.css'
 import './recommendations.css'
-import './ironman-hud.css'
+import './reco-desk.css'
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>

@@ -1,5 +1,5 @@
 /* Light research-desk surface — Reco-Wealth layout language, QuantTerm brand.
-   Scoped under .reco-light so the rest of the dark terminal is unchanged. */
+   Page islands use .reco-light. The whole terminal chrome uses .reco-desk. */
 
 @import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,560;9..144,700&family=Source+Sans+3:wght@400;500;600;700&display=swap');
 
@@ -303,6 +303,25 @@
   background: var(--rw-green-soft);
 }
 .reco-case.is-remembered_positive > span { color: var(--rw-green); }
+.reco-memory {
+  margin: 10px 0 0;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px dashed var(--rw-line);
+  background: var(--rw-green-soft);
+  text-align: left;
+}
+.reco-memory > span {
+  display: block;
+  font-size: 11px;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  color: var(--rw-green);
+  font-weight: 700;
+  margin-bottom: 4px;
+}
+.reco-memory p { margin: 0 0 6px; font-size: 13.5px; line-height: 1.45; color: var(--rw-ink); }
+.reco-memory p:last-child { margin-bottom: 0; }
 .reco-case-morning ul { margin: 8px 0 0; padding-left: 18px; }
 .reco-pick-sub {
   display: flex; flex-wrap: wrap; gap: 8px; align-items: center;

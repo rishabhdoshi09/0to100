@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { fetchChart, fetchDashboard, sendControl } from './api'
 import {
   CompareView,
@@ -24,7 +24,7 @@ import {
   RecoBacktestView,
 } from './views'
 import type { DisplayDepth } from './productLanguage'
-import { addWatchlistItem } from './productApi'
+import { addWatchlistItem, bootstrapProduct } from './productApi'
 import { useScanRunner } from './scanRunner'
 import type { ChartBar, ControlName, DashboardPayload, OperationRecord } from './types'
 
@@ -38,8 +38,8 @@ const emptyDashboard: DashboardPayload = {
   market: {
     available: false,
     health: 'Unavailable',
-    summary: 'Market state is not available yet.',
-    trade_stance: 'Start the QuantTerm API and market-operations worker.',
+    summary: 'Preparing official market history…',
+    trade_stance: 'QuantTerm is completing data lanes.',
     breadth: '—',
     leaders: [],
     laggards: [],
@@ -70,7 +70,7 @@ const emptyDashboard: DashboardPayload = {
     running: false,
     process_running: false,
     state: 'UNKNOWN',
-    plain_state: 'Autonomy status unavailable.',
+    plain_state: 'Checking autonomy status…',
     explanation: '',
     heartbeat_ist: '',
     scheduler_owner_pid: null,
@@ -202,6 +202,7 @@ function App() {
   const [controlState, setControlState] = useState('')
   const [query, setQuery] = useState('')
   const [helpOpen, setHelpOpen] = useState(false)
+  const autoPrepareRef = useRef(false)
   const istClock = useIstClock()
   const [depth, setDepth] = useState<DisplayDepth>(() => {
     const saved = window.localStorage.getItem('quantterm-display-depth')
@@ -221,7 +222,7 @@ function App() {
       const first = allSymbols[0] || ''
       setSelected((current) => current || first)
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : 'Dashboard API unavailable')
+      setError(reason instanceof Error ? reason.message : 'Waiting for the market API')
     } finally {
       setLoading(false)
     }
@@ -245,6 +246,19 @@ function App() {
     const timer = window.setInterval(() => void refresh(), interval)
     return () => window.clearInterval(timer)
   }, [refresh, scanPollingActive])
+
+  useEffect(() => {
+    if (autoPrepareRef.current || loading || error) return
+    const scanReady = Boolean(dashboard.scan.available && dashboard.scan.records.length > 0)
+    if (dashboard.data.ready && scanReady) {
+      autoPrepareRef.current = true
+      return
+    }
+    autoPrepareRef.current = true
+    void bootstrapProduct()
+      .then(() => { void refresh() })
+      .catch(() => { autoPrepareRef.current = false })
+  }, [loading, error, dashboard.data.ready, dashboard.scan.available, dashboard.scan.records.length, refresh])
 
   useEffect(() => {
     window.localStorage.setItem('quantterm-display-depth', depth)
@@ -416,7 +430,7 @@ function App() {
   }
 
   return (
-    <div className="terminal-root hud-shell">
+    <div className="terminal-root reco-desk">
       <MarketSidebar active={active} setActive={setActive} dashboard={dashboard} />
       <main className="workspace">
         <header className="topbar">
@@ -434,10 +448,10 @@ function App() {
             <button type="button" onClick={openSearch}>Open stock</button>
           </div>
           <div className="top-status">
-            <span className="hud-clock" title="Asia/Kolkata">{istClock || '—:—:—'} IST</span>
+            <span className="reco-clock" title="Asia/Kolkata">{istClock || '—:—:—'} IST</span>
             <DisplayDepthToggle depth={depth} onChange={setDepth} />
             <button type="button" className="experience-help-trigger" onClick={() => setHelpOpen(true)}>What is this?</button>
-            <span className={dashboard.data.ready ? 'live-pill' : 'offline-pill'}><i /> {dashboard.data.ready ? 'DATA READY' : 'DATA INCOMPLETE'}</span>
+            <span className={dashboard.data.ready ? 'live-pill' : 'work-pill'}><i /> {dashboard.data.ready ? 'DATA READY' : 'PREPARING DATA'}</span>
             <span className={kiteOk ? 'live-pill' : 'offline-pill'} title={dashboard.autonomy.plain_state || ''}>
               <i /> {kiteOk ? 'ZERODHA OK' : 'ZERODHA LOGIN'}
             </span>
@@ -460,8 +474,8 @@ function App() {
 
         {error && (
           <div className="api-degraded-banner" role="alert">
-            <strong>QuantTerm desk is waiting for the market API.</strong>
-            <p>Start the stack with <code>bash scripts/run_quantterm_complete.sh</code>, then retry. Cards stay empty until the last scan is readable.</p>
+            <strong>Connecting to the market API…</strong>
+            <p>QuantTerm is starting the data lanes. Retry if this stays for more than a minute.</p>
             <details>
               <summary>Technical details</summary>
               <pre>{error}</pre>

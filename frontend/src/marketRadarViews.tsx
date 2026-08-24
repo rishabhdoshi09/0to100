@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { ChartWorkspace, Panel } from './components'
 import { money, pct, relativeAge, words } from './format'
 import {
@@ -284,6 +284,7 @@ export function RadarHomeView(props: ExperienceViewProps & {
   const [readiness, setReadiness] = useState<ProductReadiness | null>(null)
   const [bootstrapBusy, setBootstrapBusy] = useState(false)
   const [deskNote, setDeskNote] = useState('')
+  const autoBootRef = useRef(false)
 
   useEffect(() => {
     let alive = true
@@ -314,25 +315,33 @@ export function RadarHomeView(props: ExperienceViewProps & {
   const kiteOk = dashboard.autonomy.state !== 'AUTH_REQUIRED'
     && !(dashboard.autonomy.active_failures || []).some((f) => String(f).includes('auth'))
   const emptyDesk = !scanAt
-    || ((radar?.counts.breakouts || 0) + (radar?.counts.momentum || 0) + (radar?.counts.long_term_picks || 0) === 0)
+    || (radar != null && ((radar.counts.breakouts || 0) + (radar.counts.momentum || 0) + (radar.counts.long_term_picks || 0) === 0))
   const readinessScore = readiness?.score ?? 0
   const needsBootstrap = emptyDesk || readinessScore < 70 || !dashboard.data.ready
 
   const runBootstrap = async () => {
     setBootstrapBusy(true)
-    setDeskNote('Preparing data lanes…')
+    setDeskNote('Preparing official history, news and scan…')
     try {
       const result = await bootstrapProduct()
       setReadiness(result.readiness)
-      setDeskNote(result.message || 'Bootstrap queued')
+      setDeskNote(result.message || 'Data lanes queued')
       if (!marketScan.isBusy) void marketScan.start()
     } catch (reason) {
-      setDeskNote(reason instanceof Error ? reason.message : 'Bootstrap failed')
+      setDeskNote(reason instanceof Error ? reason.message : 'Could not start data lanes')
     } finally {
       setBootstrapBusy(false)
       window.setTimeout(() => setDeskNote(''), 4000)
     }
   }
+
+  useEffect(() => {
+    if (autoBootRef.current) return
+    const deskNeedsWork = emptyDesk || !dashboard.data.ready
+    if (!deskNeedsWork) return
+    autoBootRef.current = true
+    void runBootstrap()
+  }, [emptyDesk, dashboard.data.ready])
 
   const laneCard = (title: string, rows: RadarRow[], count: number, qualityHint?: number) => (
     <section className="radar-lane-card">
@@ -372,7 +381,7 @@ export function RadarHomeView(props: ExperienceViewProps & {
         })}
         {rows.length === 0 && (
           <li className="radar-empty-li">
-            No matches yet — use Make ready / Scan now above.
+            Preparing official history and scan…
           </li>
         )}
       </ul>
@@ -394,7 +403,7 @@ export function RadarHomeView(props: ExperienceViewProps & {
         <div className="radar-hero-actions">
           {needsBootstrap && (
             <button type="button" disabled={bootstrapBusy} onClick={() => void runBootstrap()}>
-              {bootstrapBusy ? 'Preparing…' : readinessScore >= 90 ? 'Refresh desk' : 'Make ready'}
+              {bootstrapBusy ? 'Preparing…' : 'Refresh desk'}
             </button>
           )}
           <button type="button" disabled={marketScan.isBusy} onClick={() => void marketScan.start()}>
@@ -409,12 +418,12 @@ export function RadarHomeView(props: ExperienceViewProps & {
         <div>
           <span>SCAN</span>
           <strong>{relativeAge(scanAt)}</strong>
-          <small>{scanAt ? 'signals from last scan · prices refresh live' : 'run Scan now'}</small>
+          <small>{scanAt ? 'signals from last scan · prices refresh live' : 'scan queued on start'}</small>
         </div>
         <div>
           <span>PRICE DATA</span>
-          <strong>{dashboard.data.bhavcopy.latest_date || 'MISSING'}</strong>
-          <small>{dashboard.data.ready ? 'official bhavcopy ready' : 'data incomplete'}</small>
+          <strong>{dashboard.data.bhavcopy.latest_date || 'Preparing…'}</strong>
+          <small>{dashboard.data.ready ? 'official bhavcopy ready' : 'preparing official bhavcopy'}</small>
         </div>
         <div>
           <span>ZERODHA</span>
@@ -429,9 +438,9 @@ export function RadarHomeView(props: ExperienceViewProps & {
           <span>NEXT</span>
           <strong>
             {!dashboard.data.ready || readinessScore < 70
-              ? 'Make ready'
+              ? 'Preparing data'
               : !scanAt
-                ? 'Scan now'
+                ? 'Scanning'
                 : selected
                   ? 'Check ₹ risk'
                   : 'Pick one name'}

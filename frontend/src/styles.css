@@ -163,10 +163,11 @@ body {
 .search-box input::placeholder { color: #60718e; }
 .top-status { display: flex; align-items: center; gap: 14px; color: #8999b4; font-size: 12px; }
 .top-status button { border: 1px solid #263550; background: #0c1423; border-radius: 6px; width: 34px; height: 34px; cursor: pointer; }
-.live-pill, .offline-pill { display: inline-flex; align-items: center; gap: 8px; border: 1px solid #1e334a; border-radius: 7px; padding: 7px 10px; background: #08111f; }
+.live-pill, .offline-pill, .work-pill { display: inline-flex; align-items: center; gap: 8px; border: 1px solid #1e334a; border-radius: 7px; padding: 7px 10px; background: #08111f; }
 .live-pill { color: var(--green); }
 .offline-pill { color: var(--red); }
-.live-pill i, .offline-pill i { width: 8px; height: 8px; border-radius: 50%; background: currentColor; box-shadow: 0 0 8px currentColor; }
+.work-pill { color: var(--amber); }
+.live-pill i, .offline-pill i, .work-pill i { width: 8px; height: 8px; border-radius: 50%; background: currentColor; box-shadow: 0 0 8px currentColor; }
 
 .page-title {
   padding: 18px 24px 12px;

@@ -1,4 +1,4 @@
-"""The 5173 terminal keeps HUD chrome + Reco-light research islands."""
+"""The 5173 terminal is a Reco-light research desk, not an Iron Man HUD."""
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -7,7 +7,8 @@ ROOT = Path(__file__).resolve().parents[1]
 def test_terminal_sidebar_is_quantterm_discovery_desk():
     src = (ROOT / "frontend" / "src" / "MarketSidebar.tsx").read_text(encoding="utf-8")
     assert "QUANTTERM" in src
-    assert "JARVIS DESK" in src
+    assert "RESEARCH DESK" in src
+    assert "JARVIS DESK" not in src
     assert "DISCOVERY" in src
     assert "TOOLS & EVIDENCE" in src
     for route in (
@@ -30,23 +31,30 @@ def test_terminal_sidebar_is_quantterm_discovery_desk():
     assert "place_order" not in src
 
 
-def test_terminal_uses_hud_chrome_and_reco_light_islands():
+def test_terminal_uses_reco_desk_not_hud_chrome():
     main = (ROOT / "frontend" / "src" / "main.tsx").read_text(encoding="utf-8")
-    assert "ironman-hud.css" in main
+    assert "reco-desk.css" in main
     assert "recommendations.css" in main
+    assert "ironman-hud.css" not in main
     assert "recoWealth.css" not in main
-    hud = (ROOT / "frontend" / "src" / "ironman-hud.css").read_text(encoding="utf-8")
-    assert "#03070f" in hud
-    assert "#3de7ff" in hud
-    assert "#f0c14b" in hud
     reco = (ROOT / "frontend" / "src" / "recommendations.css").read_text(encoding="utf-8")
     assert ".reco-light" in reco
     assert "#f4f7f5" in reco
     assert "#1b6b45" in reco
+    desk = (ROOT / "frontend" / "src" / "reco-desk.css").read_text(encoding="utf-8")
+    assert ".terminal-root.reco-desk" in desk
+    assert "#f4f7f5" in desk
+    assert "#1b6b45" in desk
     html = (ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
     assert "QuantTerm" in html
-    assert "Orbitron" in html
     assert "Fraunces" in html
+    assert "Orbitron" not in html
+    app = (ROOT / "frontend" / "src" / "App.tsx").read_text(encoding="utf-8")
+    assert "reco-desk" in app
+    assert "hud-shell" not in app
+    assert "DATA INCOMPLETE" not in app
+    assert "PREPARING DATA" in app
+    assert "bootstrapProduct" in app
 
 
 def test_home_is_three_lane_radar_with_two_best_of_panels():
@@ -56,11 +64,11 @@ def test_home_is_three_lane_radar_with_two_best_of_panels():
     assert "Breakouts" in src and "Momentum" in src and "Long-Term Picks" in src
     assert "TODAY · RECO WEALTH" not in src
     assert "rw-stock-card" not in src
+    assert "Make ready" not in src
+    assert "Preparing official history and scan" in src
     app = (ROOT / "frontend" / "src" / "App.tsx").read_text(encoding="utf-8")
-    assert "hud-shell" in app
     assert "Search any NSE share" in app
     assert "ZERODHA OK" in app
-    assert "run_quantterm_complete.sh" in app
 
 
 def test_recommendations_are_exclusive_decision_cards():

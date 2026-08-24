@@ -34,10 +34,6 @@ const ROUTE_ALIAS: Record<string, string> = {
   Desk: 'System Health',
 }
 
-function ArcReactor() {
-  return <div className="hud-arc" aria-hidden="true" />
-}
-
 function NavigationGroup({
   label,
   rows,
@@ -59,12 +55,20 @@ function NavigationGroup({
           type="button"
           onClick={() => setActive(route)}
         >
-          <span className="hud-ico" aria-hidden="true">{icon}</span>
+          <span className="reco-ico" aria-hidden="true">{icon}</span>
           {display}
         </button>
       ))}
     </>
   )
+}
+
+function dataCopy(dashboard: DashboardPayload): string {
+  if (dashboard.data.ready) {
+    return `READY · ${dashboard.data.bhavcopy.latest_date || '—'}`
+  }
+  const busy = dashboard.operations.running || (dashboard.operations.active || []).length > 0
+  return busy ? 'Preparing official history…' : 'Starting data lanes…'
 }
 
 export function MarketSidebar({
@@ -79,12 +83,12 @@ export function MarketSidebar({
   const operations = dashboard.operations.running
   const current = ROUTE_ALIAS[active] || active
   return (
-    <aside className="sidebar hud-sidebar">
-      <div className="hud-brand">
-        <ArcReactor />
-        <div className="hud-brand-copy">
+    <aside className="sidebar reco-sidebar">
+      <div className="reco-brand">
+        <div className="reco-mark" aria-hidden="true">QT</div>
+        <div className="reco-brand-copy">
           <strong>QUANTTERM</strong>
-          <small>JARVIS DESK</small>
+          <small>RESEARCH DESK</small>
         </div>
       </div>
       <nav aria-label="Primary navigation">
@@ -92,16 +96,12 @@ export function MarketSidebar({
         <NavigationGroup label="TOOLS & EVIDENCE" rows={SECONDARY_NAV} active={current} setActive={setActive} />
       </nav>
       <div className="sidebar-spacer" />
-      <div className="hud-telemetry broker-card">
+      <div className="reco-telemetry broker-card">
         <div className="broker-row">
           <strong>MARKET DATA</strong>
           <span className={dashboard.data.ready ? 'status-dot' : 'status-dot status-dot-off'} />
         </div>
-        <small>
-          {dashboard.data.ready
-            ? `READY · ${dashboard.data.bhavcopy.latest_date || '—'}`
-            : 'INCOMPLETE'}
-        </small>
+        <small>{dataCopy(dashboard)}</small>
         <div className="broker-stats">
           <div>
             <span>Sessions</span>
@@ -113,16 +113,16 @@ export function MarketSidebar({
           </div>
         </div>
       </div>
-      <div className="hud-telemetry broker-card compact-service-card">
+      <div className="reco-telemetry broker-card compact-service-card">
         <div className="broker-row">
           <strong>SCAN ENGINE</strong>
           <span className={operations ? 'status-dot' : 'status-dot status-dot-off'} />
         </div>
         <small>
-          {operations ? 'ONLINE' : 'OFFLINE'} · last scan{' '}
+          {operations ? 'WORKING' : 'READY'} · last scan{' '}
           {dashboard.scan.scanned_at
             ? new Date(dashboard.scan.scanned_at).toLocaleDateString('en-IN')
-            : '—'}
+            : 'queued'}
         </small>
       </div>
     </aside>

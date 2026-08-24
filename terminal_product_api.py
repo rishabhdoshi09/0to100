@@ -7,6 +7,7 @@ Run Uvicorn with ``terminal_product_api:app`` so the original endpoints remain u
 """
 from __future__ import annotations
 
+import os
 from typing import Any
 
 from fastapi import HTTPException
@@ -451,45 +452,68 @@ def product_dashboard() -> dict[str, Any]:
     return dashboard_payload
 
 
+def queue_product_bootstrap(*, requested_by: str = "product_bootstrap") -> dict[str, Any]:
+    """Enqueue data, news, scan and long-term work. Dedupes active jobs. Does not invent data."""
+    from operations.market_ops import (
+        DATA_PREPARE,
+        LANES,
+        LONG_TERM_REFRESH,
+        MARKET_SCAN,
+        NEWS_REFRESH,
+    )
+    from operations.store import OperationStore
+
+    core._ensure_ops_worker()
+    store = OperationStore(core.OPS_DB)
+    operations = []
+    for kind in (DATA_PREPARE, NEWS_REFRESH, MARKET_SCAN, LONG_TERM_REFRESH):
+        item, created = store.enqueue(
+            kind,
+            lane=LANES[kind],
+            requested_by=requested_by,
+        )
+        operations.append(
+            {
+                "kind": kind,
+                "operation_id": item.get("operation_id"),
+                "status": item.get("status"),
+                "created": created,
+            }
+        )
+    return {
+        "accepted": True,
+        "message": (
+            "QuantTerm preparation queued across independent data, news, scan and "
+            "long-term lanes."
+        ),
+        "operations": operations,
+    }
+
+
+def _startup_prepare_product() -> None:
+    """Put data lanes to work as soon as the API process starts. Fail-open. Skip pytest."""
+    if os.environ.get("PYTEST_CURRENT_TEST"):
+        return
+    if os.environ.get("QUANTTERM_SKIP_STARTUP_BOOTSTRAP") == "1":
+        return
+    try:
+        queue_product_bootstrap(requested_by="api_startup")
+    except Exception:
+        return
+
+
+@app.on_event("startup")
+def _product_startup() -> None:
+    _startup_prepare_product()
+
+
 @app.post("/api/product-bootstrap")
 def product_bootstrap() -> dict[str, Any]:
     """Queue the independent operations that make the retail product usable."""
     try:
-        from operations.market_ops import (
-            DATA_PREPARE,
-            LANES,
-            LONG_TERM_REFRESH,
-            MARKET_SCAN,
-            NEWS_REFRESH,
-        )
-        from operations.store import OperationStore
-
-        core._ensure_ops_worker()
-        store = OperationStore(core.OPS_DB)
-        operations = []
-        for kind in (DATA_PREPARE, NEWS_REFRESH, MARKET_SCAN, LONG_TERM_REFRESH):
-            item, created = store.enqueue(
-                kind,
-                lane=LANES[kind],
-                requested_by="product_bootstrap",
-            )
-            operations.append(
-                {
-                    "kind": kind,
-                    "operation_id": item.get("operation_id"),
-                    "status": item.get("status"),
-                    "created": created,
-                }
-            )
-        return {
-            "accepted": True,
-            "message": (
-                "QuantTerm preparation queued across independent data, news, scan and "
-                "long-term lanes."
-            ),
-            "operations": operations,
-            "readiness": product_readiness(),
-        }
+        payload = queue_product_bootstrap(requested_by="product_bootstrap")
+        payload["readiness"] = product_readiness()
+        return payload
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Product bootstrap failed: {exc}") from exc
 

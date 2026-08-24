@@ -243,3 +243,99 @@
 @media (prefers-reduced-motion: reduce) {
   .radar-home, .market-scanner, .compare-view, .watchlist-view { animation: none; }
 }
+
+/* Reco desk: mint cards instead of dark radar panels */
+.reco-desk .radar-hero span { color: var(--rw-muted); }
+.reco-desk .radar-hero h2 {
+  font-family: 'Fraunces', Georgia, serif;
+  color: var(--rw-ink);
+}
+.reco-desk .radar-hero p { color: var(--rw-muted); }
+.reco-desk .radar-hero-actions button {
+  border: 1px solid #cfe7d8;
+  background: var(--rw-green);
+  color: #fff;
+  border-radius: 10px;
+  padding: 10px 16px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.reco-desk .radar-hero-actions button:disabled {
+  background: var(--rw-green-soft);
+  color: var(--rw-green);
+}
+.reco-desk .radar-desk-strip > div,
+.reco-desk .radar-market-strip > div,
+.reco-desk .radar-lane-card,
+.reco-desk .radar-sniper-pool {
+  background: var(--rw-surface);
+  border-color: var(--rw-line);
+  box-shadow: var(--rw-shadow);
+  color: var(--rw-ink);
+}
+.reco-desk .radar-desk-strip.desk-warn > div:nth-child(3) {
+  border-color: var(--rw-amber-line);
+  background: var(--rw-amber-bg);
+}
+.reco-desk .radar-desk-strip span,
+.reco-desk .radar-market-strip span,
+.reco-desk .radar-lane-card header span,
+.reco-desk .radar-sniper-pool header span {
+  color: var(--rw-green);
+}
+.reco-desk .radar-desk-strip small,
+.reco-desk .radar-lane-card span,
+.reco-desk .radar-lane-card small {
+  color: var(--rw-muted);
+}
+.reco-desk .radar-lane-card li button {
+  background: var(--rw-green-soft);
+  color: var(--rw-ink);
+}
+.reco-desk .radar-lane-card li button.active {
+  border-color: var(--rw-green);
+  background: #d9f0e4;
+}
+.reco-desk .radar-lane-card li button.thin-volume {
+  border-color: var(--rw-amber-line);
+  background: var(--rw-amber-bg);
+}
+.reco-desk .thin-tag { color: var(--rw-danger); }
+.reco-desk .radar-tab-row button {
+  background: var(--rw-surface);
+  border-color: var(--rw-line);
+  color: var(--rw-ink);
+}
+.reco-desk .radar-tab-row button.active {
+  border-color: var(--rw-green);
+  background: var(--rw-green-soft);
+  color: var(--rw-green);
+}
+.reco-desk .radar-table th { color: var(--rw-muted); border-bottom-color: var(--rw-line); }
+.reco-desk .radar-table td { border-bottom-color: var(--rw-line); color: var(--rw-ink); }
+.reco-desk .radar-table tbody tr:hover { background: var(--rw-green-soft); }
+.reco-desk .radar-table tbody tr.selected { background: #d9f0e4; }
+.reco-desk .radar-best-breakout {
+  border-color: #cfe7d8;
+  background: linear-gradient(180deg, var(--rw-green-soft), var(--rw-surface));
+}
+.reco-desk .radar-best-fundamentals {
+  border-color: var(--rw-amber-line);
+  background: linear-gradient(180deg, var(--rw-amber-bg), var(--rw-surface));
+}
+.reco-desk .radar-best-empty {
+  border-color: var(--rw-line);
+  background: var(--rw-surface);
+}
+.reco-desk .radar-empty,
+.reco-desk .radar-empty-li { color: var(--rw-muted); }
+.reco-desk .compare-chip {
+  background: var(--rw-green-soft);
+  border-color: #cfe7d8;
+  color: var(--rw-green);
+}
+.reco-desk .radar-table tbody tr.sniper-row td:first-child {
+  box-shadow: inset 2px 0 0 var(--rw-green);
+}
+.reco-desk .radar-decision-blockers { color: var(--rw-danger); }
+

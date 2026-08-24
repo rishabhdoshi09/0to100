@@ -74,7 +74,7 @@ const operationFor = (dashboard: DashboardPayload, kind: string) =>
   || dashboard.operations.latest[kind]
 
 function relativeDate(value?: string) {
-  if (!value) return 'not available'
+  if (!value) return 'preparing'
   const stamp = new Date(value)
   if (Number.isNaN(stamp.getTime())) return value
   const hours = Math.max(0, (Date.now() - stamp.getTime()) / 3_600_000)
@@ -406,7 +406,7 @@ export function EnhancedCommandCenterView(props: ExperienceViewProps) {
       <header className="experience-hero">
         <div>
           <span>QUANTTERM DAILY BOARD</span>
-          <h2>{dashboard.market.health || 'Market state unavailable'}</h2>
+          <h2>{dashboard.market.health || 'Preparing market state…'}</h2>
           <p>{dashboard.market.summary}</p>
         </div>
         <div className="experience-hero-actions">
@@ -426,7 +426,7 @@ export function EnhancedCommandCenterView(props: ExperienceViewProps) {
         <div><span>SESSION</span><strong>{dashboard.market.trade_stance}</strong><small>{dashboard.market.breadth}</small></div>
         <div><span>LEADERS</span><strong>{dashboard.market.leaders.slice(0, 3).join(', ') || '—'}</strong><small>Sector leadership</small></div>
         <div><span>LAST SCAN</span><strong>{dashboard.scan.scanned_at || 'Not run'}</strong><small>{dashboard.scan.universe_size.toLocaleString('en-IN')} universe</small></div>
-        <div><span>DATA</span><strong>{dashboard.data.bhavcopy.latest_date || 'MISSING'}</strong><small>{dashboard.data.ready ? 'Core data ready' : 'Incomplete'}</small></div>
+        <div><span>DATA</span><strong>{dashboard.data.bhavcopy.latest_date || 'Preparing…'}</strong><small>{dashboard.data.ready ? 'Core data ready' : 'Preparing official history'}</small></div>
         {blocker && <div className="strip-blocker"><span>BLOCKER</span><strong>{blocker}</strong></div>}
       </section>
 
@@ -446,7 +446,7 @@ export function EnhancedCommandCenterView(props: ExperienceViewProps) {
         <Panel title="TOP SETUPS" subtitle={`${dashboard.scan.universe_size.toLocaleString('en-IN')} evaluated · ${dashboard.scan.scanned_at || 'no scan'}`} action={<button type="button" onClick={() => setActive('Scanner')}>Open Discover</button>}>
           <SecurityTable rows={momentum as Array<ScanRecord | ConvictionRecord>} selected={selected} onSelect={setSelected} limit={depth === 'simple' ? 5 : 8} />
         </Panel>
-        <Panel title={`PRICE STRUCTURE · ${selected || 'SELECT STOCK'}`} subtitle={`Official daily history · ${dashboard.data.bhavcopy.latest_date || 'date unavailable'}`}>
+        <Panel title={`PRICE STRUCTURE · ${selected || 'SELECT STOCK'}`} subtitle={`Official daily history · ${dashboard.data.bhavcopy.latest_date || 'preparing'}`}>
           <ChartWorkspace symbol={selected} bars={bars} row={row} />
           <footer className="experience-chart-footer"><button type="button" disabled={!selected} onClick={() => setActive('Stock Intelligence')}>Open Stock Intelligence</button></footer>
         </Panel>
@@ -492,7 +492,7 @@ export function EnhancedScannerView(props: ExperienceViewProps) {
       .then((result) => {
         if (!alive) return
         setRows(result.rows)
-        setSourceMessage(`${result.source} · ${result.scanned_at || 'date unavailable'}`)
+        setSourceMessage(`${result.source} · ${result.scanned_at || 'preparing'}`)
       })
       .catch(() => {
         if (!alive) return
@@ -560,7 +560,7 @@ export function EnhancedScannerView(props: ExperienceViewProps) {
             : <SecurityTable rows={filtered as Array<ScanRecord | ConvictionRecord>} selected={selected} onSelect={setSelected} />}
         </Panel>
         <div className="scanner-detail-column">
-          <Panel title={`PRICE STRUCTURE · ${selected || 'SELECT STOCK'}`} subtitle={`Official daily history · ${dashboard.data.bhavcopy.latest_date || 'date unavailable'}`}><ChartWorkspace symbol={selected} bars={bars} row={selectedRow} /></Panel>
+          <Panel title={`PRICE STRUCTURE · ${selected || 'SELECT STOCK'}`} subtitle={`Official daily history · ${dashboard.data.bhavcopy.latest_date || 'preparing'}`}><ChartWorkspace symbol={selected} bars={bars} row={selectedRow} /></Panel>
           <Panel title="WHY IT IS HERE">
             <div className="evidence-grid">
               <EvidenceList title="Qualification evidence" items={reasons} tone="green" />
@@ -635,7 +635,7 @@ export function EnhancedLongTermView(props: ExperienceViewProps) {
       </div>
 
       <div className="long-term-workspace-grid">
-        <Panel title={`FILTERED RESEARCH · ${filtered.length}`} subtitle={`Saved run ${dashboard.long_term.scanned_at || 'not available'}`}><LongTermTable rows={filtered} selected={selected} onSelect={setSelected} /></Panel>
+        <Panel title={`FILTERED RESEARCH · ${filtered.length}`} subtitle={`Saved run ${dashboard.long_term.scanned_at || 'preparing'}`}><LongTermTable rows={filtered} selected={selected} onSelect={setSelected} /></Panel>
         <div className="long-term-detail-column">
           <Panel title={`PRICE & TIMING · ${selected || 'SELECT STOCK'}`}><ChartWorkspace symbol={selected} bars={bars} row={current} /></Panel>
           <Panel title="QUALITY OVERLAYS"><div className="quality-overlay-grid"><div><span>Classification</span><strong>{words(current?.classification || 'Unavailable')}</strong></div><div><span>Fundamental score</span><strong>{score(current?.fundamental_score)}</strong></div><div><span>Technical score</span><strong>{score(current?.technical_score)}</strong></div><div><span>Combined score</span><strong>{score(current?.combined_score)}</strong></div><div><span>Coverage</span><strong>{current?.fundamental_coverage == null ? '—' : `${(Number(current.fundamental_coverage) * 100).toFixed(0)}%`}</strong></div><div><span>Timing</span><strong>{words(current?.timing || 'Unavailable')}</strong></div></div></Panel>

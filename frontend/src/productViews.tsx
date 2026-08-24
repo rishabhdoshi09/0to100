@@ -137,7 +137,7 @@ export function ProductCommandCenterView(props: ViewProps) {
     try {
       setReadiness(await fetchProductReadiness())
     } catch (reason) {
-      setMessage(reason instanceof Error ? reason.message : 'Readiness API unavailable')
+      setMessage(reason instanceof Error ? reason.message : 'Readiness check is still starting')
     }
   }
 
@@ -269,7 +269,7 @@ export function ProductStockIntelligenceView(props: ViewProps) {
       }
       setError('')
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : 'Stock intelligence unavailable')
+      setError(reason instanceof Error ? reason.message : 'Stock intelligence is still loading')
     } finally {
       setLoading(false)
     }
@@ -305,7 +305,7 @@ export function ProductStockIntelligenceView(props: ViewProps) {
   if (loading && !workspace) return <section className="workspace-view"><div className="large-empty">Loading verified price, technical, fundamental and source data for {selected}…</div></section>
 
   return (
-    <section className="stock-workspace-v2">
+    <section className="stock-workspace-v2 reco-light">
       {error && <div className="api-warning">{error}</div>}
       <header className="stock-workspace-hero">
         <div><span>{workspace?.sector || 'Sector not classified'}</span><h2>{workspace?.company || selected}</h2><p>{selected} · {workspace?.summary || 'Verified research is still loading.'}</p></div>
@@ -347,11 +347,11 @@ export function ProductStockIntelligenceView(props: ViewProps) {
             </Panel>
             <Panel title="DECISION SUMMARY" subtitle="Deterministic scan evidence — not investment advice">
               {workspace?.case ? (
-                <aside className={`hud-case is-${workspace.case.verdict || 'unmeasured'}`} aria-label="Case memory">
+                <aside className={`reco-case is-${workspace.case.verdict || 'unmeasured'}`} aria-label="Case memory">
                   <span>Case memory · {workspace.case.n_similar ?? 0} similar · {(workspace.case.verdict || 'unmeasured').replace(/_/g, ' ')}</span>
                   <p>{workspace.case.memory_line || workspace.case.idea}</p>
                   {workspace.case.invalidation?.[0] ? (
-                    <p className="hud-case-invalid">What proves it wrong: {workspace.case.invalidation?.[0]}</p>
+                    <p className="reco-case-invalid">What proves it wrong: {workspace.case.invalidation?.[0]}</p>
                   ) : null}
                   {workspace.case.proven ? null : (
                     <em>{(workspace.case.n_similar ?? 0) > 0 ? 'Not proven yet — fewer than 30 comparable outcomes.' : 'Not remembered yet. Tonight’s check writes the first outcome.'}</em>
@@ -359,7 +359,7 @@ export function ProductStockIntelligenceView(props: ViewProps) {
                 </aside>
               ) : null}
               {workspace?.decision_memory ? (
-                <aside className="hud-memory" aria-label="Decision memory">
+                <aside className="reco-memory" aria-label="Decision memory">
                   <span>Decision memory · {workspace.decision_memory.stance || 'WAIT'}</span>
                   {workspace.decision_memory.setup_quality?.score != null ? (
                     <p>Setup Quality: {workspace.decision_memory.setup_quality.score}/100 — not a win probability.</p>
@@ -408,7 +408,7 @@ export function ProductStockIntelligenceView(props: ViewProps) {
       {tab === 'Ratios' && (
         <Panel title="KEY RATIOS" subtitle="Computed centrally from cached fundamentals — missing inputs stay empty">
           {ratios.length === 0
-            ? <EmptyState title="Ratios unavailable" detail="Fundamentals cache missing or inputs incomplete." />
+            ? <EmptyState title="Ratios still loading" detail="Fundamentals cache is filling in. Stay on this page — QuantTerm will not invent missing ratios." />
             : <div className="explain-metric-grid">
               {ratios.map((row) => (
                 <article className={`explain-metric ${row.value == null ? 'unavailable' : ''}`} key={row.key}>
