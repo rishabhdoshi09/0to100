@@ -156,6 +156,17 @@ class Deps:
         from data.nse_universe import point_in_time_universe
         return point_in_time_universe(self.now_ist().date())
 
+    def live_market_ready(self):
+        from data.nse_live import live_session_ready
+        info = live_session_ready()
+        if info.get("ready"):
+            print(
+                f"[KITE] latest session ready · {int(info.get('symbols') or 0)} symbols · "
+                f"{info.get('source') or 'kite'} · {info.get('session_date') or ''}",
+                flush=True,
+            )
+        return info
+
     def warm_indices(self):
         from data.index_store import build_index_store
         return {"indices": int(build_index_store()), "source": "official_nse"}
@@ -335,6 +346,36 @@ def run_instrument_refresh(ctx) -> JobResult:
                          error_code="INSTRUMENT_REFRESH_ERROR", error_message=str(exc))
 
 
+def _live_market(ctx) -> dict:
+    if hasattr(ctx.deps, "live_market_ready"):
+        try:
+            return dict(ctx.deps.live_market_ready() or {})
+        except Exception:
+            return {}
+    return {}
+
+
+def _kite_live_ready_result(ctx, *, sid=None, quality=None, live=None) -> JobResult | None:
+    live = dict(live or _live_market(ctx) or {})
+    if not live.get("ready"):
+        return None
+    quality = dict(quality or {})
+    latest = str(live.get("session_date") or quality.get("latest_date") or "")
+    unblocks = [DEP_DATA]
+    if latest:
+        unblocks.append(f"EOD_DATA_READY:{latest}")
+    return JobResult(
+        JS.SUCCEEDED,
+        f"Kite latest session ready · {int(live.get('symbols') or 0)} symbols · "
+        f"{live.get('source') or 'kite_quotes'}",
+        output_snapshot_id=sid,
+        clears={H.SNAPSHOT_STALE, H.AUTH_MISSING, H.AUTH_EXPIRED, H.PROVIDER_UNAVAILABLE},
+        state_hint=ST.DATA_READY,
+        unblocks=tuple(unblocks),
+        metadata={**quality, **live, "latest_date": latest or live.get("session_date", "")},
+    )
+
+
 def run_data_refresh(ctx) -> JobResult:
     if not _auth_health(ctx.deps).valid:
         return JobResult(JS.BLOCKED, "auth required before data refresh",
@@ -343,6 +384,9 @@ def run_data_refresh(ctx) -> JobResult:
     try:
         report = ctx.deps.activate()
     except Exception as exc:
+        kite = _kite_live_ready_result(ctx)
+        if kite is not None:
+            return kite
         return JobResult(JS.RETRYABLE_FAILED, "data refresh error", error_code="ACTIVATE_ERROR",
                          error_message=str(exc), failures={H.SNAPSHOT_STALE}, state_hint=ST.DATA_BLOCKED)
     ok = report.status("GENUINE_SNAPSHOT_ACTIVE") == "PASS" if hasattr(report, "status") else False
@@ -357,6 +401,11 @@ def run_data_refresh(ctx) -> JobResult:
             latest = str((ctx.deps.active_snapshot_info() or {}).get("latest_date") or "")
         required = str(getattr(ctx, "required_session_date", "") or "")
         if required and latest < required:
+            live = _live_market(ctx)
+            if live.get("ready") and str(live.get("session_date") or "") >= required:
+                kite = _kite_live_ready_result(ctx, sid=sid, quality={**quality, "latest_date": latest}, live=live)
+                if kite is not None:
+                    return kite
             return JobResult(JS.RETRYABLE_FAILED,
                              f"EOD data pending · active snapshot latest={latest or 'unknown'} · required={required}",
                              output_snapshot_id=sid, error_code="EOD_DATA_PENDING",
@@ -371,6 +420,13 @@ def run_data_refresh(ctx) -> JobResult:
                          clears={H.SNAPSHOT_STALE, H.AUTH_MISSING, H.AUTH_EXPIRED,
                                  H.PROVIDER_UNAVAILABLE}, state_hint=ST.DATA_READY,
                          unblocks=tuple(unblocks), metadata={**quality, "latest_date": latest})
+    kite = _kite_live_ready_result(
+        ctx,
+        sid=getattr(report, "active_pointer", None) or getattr(report, "snapshot_id", None),
+        quality=dict(getattr(report, "quality", {}) or {}),
+    )
+    if kite is not None:
+        return kite
     blocker = getattr(report, "blocker", "") or "snapshot not forward-eligible"
     return JobResult(JS.BLOCKED, f"data not ready: {blocker}", failures={H.SNAPSHOT_STALE},
                      state_hint=ST.DATA_BLOCKED, new_entries_allowed=False,
@@ -472,10 +528,18 @@ def run_long_term_refresh_job(ctx) -> JobResult:
 
 
 def run_market_scan(ctx) -> JobResult:
-    if not ctx.deps.active_snapshot_id():
+    snap = ctx.deps.active_snapshot_id()
+    live = {} if snap else _live_market(ctx)
+    if not snap and not live.get("ready"):
         return JobResult(JS.BLOCKED, "verified active snapshot required before market scan",
                          failures={H.SNAPSHOT_STALE}, blocked_on=DEP_DATA,
                          state_hint=ST.DATA_BLOCKED, new_entries_allowed=False)
+    if not snap and live.get("ready"):
+        print(
+            f"[SCAN] using latest Kite session · {int(live.get('symbols') or 0)} symbols · "
+            f"{live.get('source') or 'kite_quotes'}",
+            flush=True,
+        )
     try:
         report = ctx.deps.run_scan()
     except Exception as exc:

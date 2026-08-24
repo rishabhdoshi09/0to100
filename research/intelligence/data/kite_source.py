@@ -154,6 +154,7 @@ class KiteDataSource:
         self._q_invalid = 0                             # malformed candles this refresh
         self._q_future = 0                              # future-dated candles this refresh
         self._progress: dict = self._load_progress()
+        self._progress_dirty = 0
 
     # ── session ────────────────────────────────────────────────────────────────────
     def session_valid(self) -> bool:
@@ -173,6 +174,16 @@ class KiteDataSource:
         eq = [i for i in raw if str(i.get("instrument_type", "EQ")).upper() in ("EQ", "INDEX")
               and (self.universe is None or str(i.get("tradingsymbol", "")).upper() in self.universe
                    or str(i.get("name", "")).upper() == self.benchmark_name.upper())]
+        if self.universe is None:
+            try:
+                from data.nse_universe import get_nse_universe
+                approved = {str(s).upper() for s in (get_nse_universe() or [])}
+            except Exception:
+                approved = set()
+            if approved:
+                eq = [i for i in eq if str(i.get("tradingsymbol", "")).upper() in approved
+                      or str(i.get("name", "")).upper() == self.benchmark_name.upper()
+                      or str(i.get("instrument_type", "")).upper() == "INDEX"]
         prev = {r["canonical_id"]: r for r in self.master.values()} if self.master else {}
         self.master, changes = reconcile_instruments(eq, prev)
         self.last_changes = changes
@@ -201,7 +212,8 @@ class KiteDataSource:
                 backoff = (2 ** attempt) * 0.01 + self.rng.random() * 0.01   # jitter
                 self._sleep(backoff)
 
-    def bootstrap_symbol(self, cid: str, token, want_from: str, want_to: str) -> int:
+    def bootstrap_symbol(self, cid: str, token, want_from: str, want_to: str,
+                         *, persist_progress: bool = True) -> int:
         """Fetch ONLY the missing date range for one security; append to its persisted history.
         Resumable + idempotent: re-running fetches nothing already stored."""
         hist = self._load_history(cid)
@@ -225,7 +237,7 @@ class KiteDataSource:
         if hist:
             self._progress[cid] = max(hist)
             self._save_history(cid, hist)
-            self._save_progress()
+            self._save_progress(force=persist_progress)
         return added
 
     # ── daily refresh → snapshot commit + atomic activation ──────────────────────
@@ -250,7 +262,8 @@ class KiteDataSource:
             token = rec["instrument_token"]
             is_bench = (token == bench_token)
             try:
-                rep.candles_fetched += self.bootstrap_symbol(cid, token, want_from, want_to)
+                rep.candles_fetched += self.bootstrap_symbol(
+                    cid, token, want_from, want_to, persist_progress=False)
             except Exception:
                 rep.incidents.append({"severity": "WARNING", "code": "FETCH_FAILED", "cid": cid})
                 continue
@@ -266,6 +279,7 @@ class KiteDataSource:
         rep.future_bars = self._q_future
         rep.quarantined = self._q_invalid
         rep.benchmark_ok = bool(index_rows)
+        self._save_progress(force=True)
         if equity_rows:
             _ds = [r[1] for r in equity_rows]
             rep.date_range = (min(_ds), max(_ds))
@@ -337,7 +351,11 @@ class KiteDataSource:
                 return {}
         return {}
 
-    def _save_progress(self) -> None:
+    def _save_progress(self, *, force: bool = False) -> None:
+        self._progress_dirty = getattr(self, "_progress_dirty", 0) + 1
+        if not force and self._progress_dirty < 25:
+            return
+        self._progress_dirty = 0
         if self.progress_path:
             self.progress_path.parent.mkdir(parents=True, exist_ok=True)
             self.progress_path.write_text(json.dumps(self._progress))

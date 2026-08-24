@@ -374,7 +374,7 @@ class MarketOperationsWorker:
         while not self.stop_event.is_set():
             operation = self.store.lease_next(lane, worker_pid=os.getpid())
             if operation is None:
-                self.stop_event.wait(0.5)
+                self.stop_event.wait(2.0)
                 continue
             self._set_active(lane, operation)
             operation_id = str(operation["operation_id"])
