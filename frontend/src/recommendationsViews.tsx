@@ -62,10 +62,14 @@ function CaseMemoryBox({ memory }: { memory?: RecommendationCase | null }) {
   if (!memory) return null
   const n = memory.n_similar ?? 0
   const verdict = (memory.verdict || 'unmeasured').replace(/_/g, ' ')
+  const invalidation = (memory.invalidation || []).filter(Boolean)
   return (
     <aside className={`reco-case is-${memory.verdict || 'unmeasured'}`} aria-label="Case memory">
       <span>Case memory · {n} similar · {verdict}</span>
       <p>{memory.memory_line || memory.idea}</p>
+      {invalidation.length > 0 ? (
+        <p className="reco-case-invalid">What proves it wrong: {invalidation[0]}</p>
+      ) : null}
       {memory.proven ? null : (
         <em>{n > 0 ? 'Not proven yet — fewer than 30 comparable outcomes.' : 'Not remembered yet. Tonight’s check writes the first outcome.'}</em>
       )}

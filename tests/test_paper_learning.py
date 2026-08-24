@@ -4,6 +4,8 @@ from __future__ import annotations
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from product.paper_learning import (
     LIVE_STILL_LOCKED,
     PROMOTION_LADDER,
@@ -23,6 +25,12 @@ from research.intelligence.runtime.target_portfolio import (
 )
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+@pytest.fixture(autouse=True)
+def _isolate_case_db(tmp_path, monkeypatch):
+    import product.case_memory as cm
+    monkeypatch.setattr(cm, "CASES_DB", tmp_path / "cases.db")
 
 
 def _ctx(**overrides):

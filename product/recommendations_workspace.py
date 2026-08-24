@@ -187,11 +187,12 @@ def card_from_row(
         "reason": reason,
         "qualify_reason": reason,
         "evidence_tags": tags,
+        "signals": sorted(_signals(row)),
         "lifecycle": "active",
         **ups,
         **surface,
     }
-    return _attach_key_points(card)
+    return _attach_key_points(card, row=row)
 
 
 def _trend_structure_ok(row: Mapping[str, Any]) -> bool:
@@ -445,7 +446,7 @@ def _key_points_for_card(symbol: str, seeds: Sequence[str] | None = None) -> lis
     return points[:6]
 
 
-def _attach_key_points(card: dict[str, Any]) -> dict[str, Any]:
+def _attach_key_points(card: dict[str, Any], *, row: Mapping[str, Any] | None = None) -> dict[str, Any]:
     seeds = list(card.get("why_now") or [])
     reason = str(card.get("reason") or "").strip()
     if reason:
@@ -453,7 +454,7 @@ def _attach_key_points(card: dict[str, Any]) -> dict[str, Any]:
     card["key_points"] = _key_points_for_card(str(card.get("symbol") or ""), seeds)
     try:
         from product.case_memory import attach_case
-        attach_case(card)
+        attach_case(card, row=row)
     except Exception:
         card.setdefault("case", {
             "n_similar": 0,
@@ -605,6 +606,7 @@ def _tracker_lifecycle() -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
                 ),
                 "upside_to_target_pct": None,
                 "reason": str(p.get("thesis") or "")[:160],
+                "signals": [],
                 **_empty_decision_fields("Tracked", "wealth_builders"),
             }
             active.append(_attach_key_points(card))
@@ -658,6 +660,7 @@ def _tracker_lifecycle() -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
                 "entry": entry or None,
                 "target": target or None,
                 "reason": f"Logged {s.get('logged_at') or ''}".strip(),
+                "signals": [str(s.get("signal_type") or "").upper()] if s.get("signal_type") else [],
                 **_empty_decision_fields("Open", "momentum_breakouts"),
             }
             if worked is None:

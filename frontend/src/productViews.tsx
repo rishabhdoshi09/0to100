@@ -346,6 +346,18 @@ export function ProductStockIntelligenceView(props: ViewProps) {
               </div>
             </Panel>
             <Panel title="DECISION SUMMARY" subtitle="Deterministic scan evidence — not investment advice">
+              {workspace?.case ? (
+                <aside className={`hud-case is-${workspace.case.verdict || 'unmeasured'}`} aria-label="Case memory">
+                  <span>Case memory · {workspace.case.n_similar ?? 0} similar · {(workspace.case.verdict || 'unmeasured').replace(/_/g, ' ')}</span>
+                  <p>{workspace.case.memory_line || workspace.case.idea}</p>
+                  {workspace.case.invalidation?.[0] ? (
+                    <p className="hud-case-invalid">What proves it wrong: {workspace.case.invalidation?.[0]}</p>
+                  ) : null}
+                  {workspace.case.proven ? null : (
+                    <em>{(workspace.case.n_similar ?? 0) > 0 ? 'Not proven yet — fewer than 30 comparable outcomes.' : 'Not remembered yet. Tonight’s check writes the first outcome.'}</em>
+                  )}
+                </aside>
+              ) : null}
               <EvidenceList title="Why it qualified" items={[...((workspace?.scanner.reasons as string[] | undefined) || []), ...(workspace?.fundamentals.quality_factors || [])]} tone="green" />
               <EvidenceList title="What can go wrong" items={[...(workspace?.fundamentals.risk_flags || []), ...(workspace?.gaps || []).map((item) => `${item} is missing or stale.`)]} tone="red" />
               <p className="panel-copy"><strong>Monitor:</strong> invalidation levels in Trade Plan, breadth and sector context on Home.</p>

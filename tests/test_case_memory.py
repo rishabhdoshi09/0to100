@@ -95,6 +95,7 @@ def test_open_and_settle_writes_real_outcomes(tmp_path, monkeypatch):
     }, index=idx)
     monkeypatch.setattr("data.bhavcopy_store.get_ohlcv", lambda symbol: df)
     monkeypatch.setattr(cm, "_today", lambda: "2026-08-01")
+    monkeypatch.setattr(cm, "ingest_paper_trades", lambda **kwargs: 0)
     case_id = open_case(
         {"symbol": "AAA", "category_id": "momentum_breakouts", "entry": 100, "stop": 95, "target": 110,
          "why_now": ["break"], "what_changes_mind": ["stop"]},
@@ -124,8 +125,90 @@ def test_reco_card_carries_a_case(tmp_path, monkeypatch):
     )
     assert card["case"]["n_similar"] == 18
     assert card["case"]["verdict"] == "unproven"
+    assert card["case"]["setup"] == "BREAKOUT_52W"
+    assert "strong breakout" in card["case"]["idea"].lower()
     assert "not proven" in card["case"]["memory_line"].lower()
     assert card["case"]["places_orders"] is False
+
+
+def test_primary_setup_prefers_breakout_over_status_labels():
+    from product.case_memory import primary_setup
+
+    assert primary_setup(
+        {"signals": ["STRONG_ACTIONABLE", "BREAKOUT_52W"], "evidence_tags": ["grade_A"]},
+        "momentum_breakouts",
+    ) == "BREAKOUT_52W"
+    assert primary_setup(
+        {"signals": ["STRONG_ACTIONABLE"], "evidence_tags": ["near_breakout"]},
+        "momentum_breakouts",
+    ) == "MOMENTUM_BREAKOUTS"
+    assert primary_setup(
+        {"signals": ["MOMENTUM", "STEADY_LEADERSHIP"]},
+        "super_trends",
+    ) == "MOMENTUM"
+
+
+def test_status_only_card_still_reads_as_a_breakout(tmp_path, monkeypatch):
+    import product.case_memory as cm
+
+    monkeypatch.setattr(cm, "CASES_DB", tmp_path / "cases.db")
+    monkeypatch.setattr(cm, "_live_stats", lambda setup: {"n": 0, "regimes": {}})
+    case = remember_case(
+        {"symbol": "CARBORUNIV", "category_id": "momentum_breakouts",
+         "setup_label": "Ready to trade", "why_now": ["Volume confirmation"],
+         "what_changes_mind": ["Price closes below stop"]},
+        row={"symbol": "CARBORUNIV", "signals": ["STRONG_ACTIONABLE"]},
+        persist=False,
+    )
+    assert case["setup"] == "MOMENTUM_BREAKOUTS"
+    assert "strong breakout" in case["idea"].lower()
+    assert "18" not in case["memory_line"]
+
+
+def test_paper_close_is_remembered_without_inventing_counts(tmp_path, monkeypatch):
+    import product.case_memory as cm
+    from product.case_memory import ingest_paper_trades, setup_memory
+
+    db = tmp_path / "cases.db"
+    monkeypatch.setattr(cm, "CASES_DB", db)
+    monkeypatch.setattr(cm, "_live_stats", lambda setup: {"n": 0, "regimes": {}})
+    n = ingest_paper_trades(
+        db_path=db,
+        trades=[{
+            "symbol": "HAL",
+            "strategy_id": "BREAKOUT_52W",
+            "entry_price": 100,
+            "stop_price": 95,
+            "target_price": 110,
+            "exit_price": 110,
+            "entry_date": "2026-08-01",
+            "exit_date": "2026-08-05",
+            "exit_reason": "TARGET",
+            "realized_R": 1.8,
+            "regime": "HEALTHY",
+        }],
+    )
+    assert n == 1
+    mem = setup_memory("BREAKOUT_52W", db_path=db)
+    assert mem["desk_n"] == 1
+    assert mem["n"] == 1
+    assert mem["regimes"]["HEALTHY"]["n"] == 1
+
+
+def test_live_stats_do_not_borrow_global_regimes(monkeypatch):
+    import product.case_memory as cm
+
+    monkeypatch.setattr(
+        "scan.live_edge.profile_edge",
+        lambda: {
+            "signals": {"BREAKOUT_52W": {"n": 18, "wins": 10, "win_rate": 55.6, "expectancy_r": 0.1}},
+            "regimes": {"HEALTHY": {"n": 400, "win_rate": 70.0}},
+        },
+    )
+    monkeypatch.setattr("scan.live_edge.setup_regime_stats", lambda setup: {})
+    stats = cm._live_stats("BREAKOUT_52W")
+    assert stats["n"] == 18
+    assert stats["regimes"] == {}
 
 
 def test_proven_floor_matches_ev_engine():

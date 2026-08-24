@@ -87,31 +87,82 @@ def _f(value: Any, default: float = 0.0) -> float:
         return float(default)
 
 
+# Real setup families first. Status labels (STRONG_ACTIONABLE, GRADE_A, …)
+# describe readiness, not the idea being remembered.
+_SETUP_FAMILY = (
+    "BREAKOUT_52W", "BREAKOUT_RES", "PRE_BREAKOUT",
+    "DOUBLE_BOTTOM", "ACCUMULATION",
+    "GOLDEN_CROSS", "MOMENTUM",
+    "CUP_HANDLE", "POCKET_PIVOT", "VOL_SQUEEZE",
+    "VCP", "FLAT_BASE", "HIGH_TIGHT_FLAG", "ASC_TRIANGLE",
+    "PULLBACK_SUPPORT", "DELIVERY_SPIKE", "NR7_COIL",
+)
+_STATUS_KEYS = frozenset({
+    "STRONG_ACTIONABLE", "STEADY_LEADERSHIP", "IMPROVING",
+    "GRADE_A", "GRADE_B", "GRADE_C",
+    "NEAR_BREAKOUT", "CONFIRMED_BREAKOUT", "BREAKOUT_UNDER_OBSERVATION",
+    "NOT_IN_BREAKOUT_LANE", "NOT_MOMENTUM",
+    "READY_TO_TRADE", "WATCH_FOR_BREAKOUT", "WATCH", "BUY", "HOLD",
+    "WAIT_FOR_PULLBACK",
+})
+_CATEGORY_SETUP = {
+    "momentum_breakouts": "MOMENTUM_BREAKOUTS",
+    "recovery_setups": "RECOVERY_SETUPS",
+    "super_trends": "SUPER_TRENDS",
+    "wealth_builders": "WEALTH_BUILDERS",
+}
+
+
+def _collect_keys(row: Mapping[str, Any] | None) -> list[str]:
+    keys: list[str] = []
+    seen: set[str] = set()
+    panel = (row or {}).get("evidence_panel") or {}
+    if not isinstance(panel, Mapping):
+        panel = {}
+    for source in (
+        (row or {}).get("signals"),
+        panel.get("signals"),
+        (row or {}).get("evidence_tags"),
+    ):
+        for item in source or []:
+            key = str(item or "").strip().upper()
+            if key and key not in seen:
+                seen.add(key)
+                keys.append(key)
+    return keys
+
+
 def primary_setup(row: Mapping[str, Any] | None, category_id: str = "") -> str:
-    """One setup name per case — first real signal, else the bucket."""
-    for item in (row or {}).get("signals") or []:
-        key = str(item or "").strip().upper()
-        if key:
-            return key
-    for tag in (row or {}).get("evidence_tags") or []:
-        key = str(tag or "").strip().upper()
-        if key and "_" in key:
+    """One setup name per case — the idea family, not a status chip."""
+    keys = _collect_keys(row)
+    ranked = {k: i for i, k in enumerate(_SETUP_FAMILY)}
+    family = [k for k in keys if k in ranked]
+    if family:
+        family.sort(key=lambda k: ranked[k])
+        return family[0]
+    for key in keys:
+        if key not in _STATUS_KEYS and "_" in key:
             return key
     cat = str(category_id or (row or {}).get("category_id") or "").strip()
-    return cat.upper() or "UNTYPED"
+    return _CATEGORY_SETUP.get(cat, cat.upper() or "UNTYPED")
 
 
 def _plain_setup(setup: str) -> str:
     return str(setup or "setup").replace("_", " ").strip().lower()
 
 
-def _idea_line(symbol: str, setup: str, setup_label: str = "") -> str:
-    label = str(setup_label or "").strip()
-    if "breakout" in (label + " " + setup).lower():
+def _idea_line(symbol: str, setup: str, setup_label: str = "", category_id: str = "") -> str:
+    blob = f"{setup_label} {setup} {category_id}".lower()
+    if "breakout" in blob or category_id == "momentum_breakouts":
         return f"{symbol} looks like a strong breakout."
-    if "recover" in (label + " " + setup).lower() or "DOUBLE_BOTTOM" in setup:
+    if "recover" in blob or "DOUBLE_BOTTOM" in setup or category_id == "recovery_setups":
         return f"{symbol} looks like a recovery setup."
-    if setup_label:
+    if category_id == "super_trends" or setup in {"MOMENTUM", "GOLDEN_CROSS", "SUPER_TRENDS"}:
+        return f"{symbol} looks like a trend-momentum case."
+    if category_id == "wealth_builders" or setup == "WEALTH_BUILDERS":
+        return f"{symbol} is a long-term quality case."
+    label = str(setup_label or "").strip()
+    if label:
         return f"{symbol} is a {label} case."
     return f"{symbol} is a {_plain_setup(setup)} case."
 
@@ -140,11 +191,18 @@ def _agg_rows(pairs: Sequence[tuple[float, int]]) -> dict[str, Any]:
 
 
 def _desk_pairs(setup: str, *, db_path: Path | None = None) -> list[tuple[float, int]]:
-    out: list[tuple[float, int]] = []
+    return [pair for pair, _reg in _desk_rows(setup, db_path=db_path)]
+
+
+def _desk_rows(
+    setup: str, *, db_path: Path | None = None
+) -> list[tuple[tuple[float, int], str]]:
+    """Settled desk/paper rows as ((R, worked), regime). Paper R is already net of costs."""
+    out: list[tuple[tuple[float, int], str]] = []
     try:
         conn = _conn(db_path)
         rows = conn.execute(
-            """SELECT entry, stop, outcome_pct, worked
+            """SELECT entry, stop, outcome_pct, worked, source, regime
                FROM cases WHERE setup=? AND worked IS NOT NULL
                  AND outcome_pct IS NOT NULL AND entry > 0 AND stop > 0""",
             (setup,),
@@ -160,26 +218,64 @@ def _desk_pairs(setup: str, *, db_path: Path | None = None) -> list[tuple[float,
         if risk <= 0:
             continue
         r = (_f(row["outcome_pct"]) / 100.0) / risk
-        try:
-            from core.costs import cost_in_r
-            r -= cost_in_r(risk, "CNC")
-        except Exception:
-            pass
-        out.append((max(-1.5, min(4.0, r)), int(row["worked"] or 0)))
+        source = str(row["source"] or "")
+        if source != "paper":
+            try:
+                from core.costs import cost_in_r
+                r -= cost_in_r(risk, "CNC")
+            except Exception:
+                pass
+        out.append(((max(-1.5, min(4.0, r)), int(row["worked"] or 0)), str(row["regime"] or "")))
+    return out
+
+
+def _desk_regimes(setup: str, *, db_path: Path | None = None) -> dict[str, Any]:
+    buckets: dict[str, list[tuple[float, int]]] = {}
+    for pair, regime in _desk_rows(setup, db_path=db_path):
+        if not regime:
+            continue
+        buckets.setdefault(regime, []).append(pair)
+    return {name: _agg_rows(pairs) for name, pairs in buckets.items()}
+
+
+def _merge_regimes(*groups: Mapping[str, Any]) -> dict[str, Any]:
+    names: set[str] = set()
+    for group in groups:
+        names.update(str(k) for k in (group or {}))
+    out: dict[str, Any] = {}
+    for name in names:
+        n = wins = 0
+        exp_num = 0.0
+        exp_den = 0
+        for group in groups:
+            stats = (group or {}).get(name) or {}
+            rn = int(stats.get("n") or 0)
+            if rn <= 0:
+                continue
+            n += rn
+            wins += int(stats.get("wins") or 0)
+            if stats.get("expectancy_r") is not None:
+                exp_num += float(stats["expectancy_r"]) * rn
+                exp_den += rn
+        if n <= 0:
+            continue
+        out[name] = {
+            "n": n,
+            "wins": wins,
+            "win_rate": round(wins / n * 100.0, 1),
+            "expectancy_r": round(exp_num / exp_den, 3) if exp_den else None,
+        }
     return out
 
 
 def _live_stats(setup: str) -> dict[str, Any]:
     try:
-        from scan.live_edge import profile_edge
+        from scan.live_edge import profile_edge, setup_regime_stats
         prof = profile_edge() or {}
+        regimes = setup_regime_stats(setup) or {}
     except Exception:
         return {"n": 0, "regimes": {}}
     sig = (prof.get("signals") or {}).get(setup) or {}
-    regimes = {}
-    for name, stats in (prof.get("regimes") or {}).items():
-        if int((stats or {}).get("n") or 0) > 0:
-            regimes[str(name)] = dict(stats)
     return {
         "n": int(sig.get("n") or 0),
         "wins": int(sig.get("wins") or 0),
@@ -210,7 +306,7 @@ def setup_memory(setup: str, *, db_path: Path | None = None) -> dict[str, Any]:
         "wins": wins,
         "win_rate": win_rate,
         "expectancy_r": exp if n else None,
-        "regimes": live.get("regimes") or {},
+        "regimes": _merge_regimes(live.get("regimes") or {}, _desk_regimes(setup, db_path=db_path)),
         "live_n": int(live.get("n") or 0),
         "desk_n": int(desk.get("n") or 0),
     }
@@ -276,7 +372,9 @@ def remember_case(
     symbol = str(card.get("symbol") or (row or {}).get("symbol") or "").upper()
     category_id = str(card.get("category_id") or "")
     setup = primary_setup(row or card, category_id)
-    idea = _idea_line(symbol or "This name", setup, str(card.get("setup_label") or ""))
+    idea = _idea_line(
+        symbol or "This name", setup, str(card.get("setup_label") or ""), category_id,
+    )
     why = list(card.get("why_now") or card.get("key_points") or [])
     invalidation = list(card.get("what_changes_mind") or [])
     mem = setup_memory(setup, db_path=db_path)
@@ -339,7 +437,8 @@ def open_case(
                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
                 case_id, symbol, setup, str(card.get("category_id") or ""),
-                _idea_line(symbol, setup, str(card.get("setup_label") or "")),
+                _idea_line(symbol, setup, str(card.get("setup_label") or ""),
+                           str(card.get("category_id") or "")),
                 why, inv, f"{day}T00:00:00",
                 _f(src.get("entry") or src.get("entry_price") or card.get("entry")) or None,
                 _f(src.get("stop") or src.get("stop_price") or card.get("stop")) or None,
@@ -401,6 +500,7 @@ def _resolve_path(row: Mapping[str, Any]) -> tuple[float, float, int] | None:
 
 def settle_due_cases(*, db_path: Path | None = None, limit: int = 400) -> int:
     """Night path: resolve open cases from official bars. Returns settled count."""
+    ingest_paper_trades(db_path=db_path)
     settled = 0
     try:
         conn = _conn(db_path)
@@ -426,6 +526,91 @@ def settle_due_cases(*, db_path: Path | None = None, limit: int = 400) -> int:
     except Exception:
         return settled
     return settled
+
+
+def _trade_get(trade: Any, name: str, default: Any = None) -> Any:
+    if isinstance(trade, Mapping):
+        return trade.get(name, default)
+    return getattr(trade, name, default)
+
+
+def ingest_paper_trades(
+    *,
+    db_path: Path | None = None,
+    trades: Sequence[Any] | None = None,
+) -> int:
+    """Fold closed paper-book trades into the Case ledger as already-settled rows.
+
+    Paper R is already net of the book's costs — `_desk_rows` must not cost them again.
+    Does not place orders. Does not rewrite the BUY list.
+    """
+    if trades is None:
+        try:
+            from product.paper_status import read_paper_status
+            trades = list(read_paper_status().closed_trades or [])
+        except Exception:
+            trades = []
+    written = 0
+    for trade in trades or []:
+        symbol = str(_trade_get(trade, "symbol") or "").upper()
+        if not symbol:
+            continue
+        setup = str(
+            _trade_get(trade, "strategy_id")
+            or _trade_get(trade, "signal_type")
+            or "PAPER"
+        ).strip().upper() or "PAPER"
+        entry_date = str(_trade_get(trade, "entry_date") or "")[:10]
+        exit_date = str(_trade_get(trade, "exit_date") or "")[:10]
+        case_id = f"PAPER|{symbol}|{setup}|{entry_date}|{exit_date}"
+        entry = _f(_trade_get(trade, "entry_price") or _trade_get(trade, "entry"))
+        stop = _f(_trade_get(trade, "stop_price") or _trade_get(trade, "stop"))
+        exit_px = _f(_trade_get(trade, "exit_price") or _trade_get(trade, "exit"))
+        if entry <= 0 or stop <= 0 or exit_px <= 0:
+            continue
+        reason = str(_trade_get(trade, "exit_reason") or "").upper()
+        if "TARGET" in reason:
+            worked = 1
+        elif "STOP" in reason:
+            worked = 0
+        else:
+            try:
+                worked = 1 if float(_trade_get(trade, "realized_R") or 0) > 0 else 0
+            except (TypeError, ValueError):
+                worked = 1 if exit_px >= entry else 0
+        pct = (exit_px - entry) / entry * 100.0
+        try:
+            conn = _conn(db_path)
+            existing = conn.execute("SELECT case_id FROM cases WHERE case_id=?", (case_id,)).fetchone()
+            if existing:
+                conn.close()
+                continue
+            conn.execute(
+                """INSERT INTO cases
+                   (case_id, symbol, setup, category_id, idea, why_now, invalidation,
+                    opened_at, entry, stop, target, regime, source,
+                    settled_at, outcome_pct, worked)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (
+                    case_id, symbol, setup, "",
+                    _idea_line(symbol, setup),
+                    json.dumps(["Closed paper trade"], ensure_ascii=False),
+                    json.dumps([f"Paper exit: {reason or 'unknown'}"], ensure_ascii=False),
+                    f"{entry_date or _today()}T00:00:00",
+                    entry, stop,
+                    _f(_trade_get(trade, "target_price") or _trade_get(trade, "target")) or None,
+                    str(_trade_get(trade, "regime") or ""),
+                    "paper",
+                    f"{exit_date or _today()}T00:00:00",
+                    float(pct), int(worked),
+                ),
+            )
+            conn.commit()
+            conn.close()
+            written += 1
+        except Exception:
+            continue
+    return written
 
 
 def attach_case(card: dict[str, Any], *, row: Mapping[str, Any] | None = None) -> dict[str, Any]:

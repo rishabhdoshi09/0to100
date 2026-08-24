@@ -92,6 +92,7 @@ export type StockWorkspace = {
   fno: Record<string, unknown>
   sources: IntelligenceSource[]
   next_actions: Array<{ control: ControlName | 'REFRESH_STOCK_FUNDAMENTALS'; label: string }>
+  case?: RecommendationCase
 }
 
 export type CommandCenterWorkspace = {

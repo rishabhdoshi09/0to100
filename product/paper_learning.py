@@ -190,6 +190,11 @@ def remember_paper_book(closed_trades: Iterable[Any], *, as_of: str,
                         path: str | Path | None = None) -> dict[str, Any]:
     memory = build_paper_memory(closed_trades, as_of=as_of)
     save_paper_memory(memory, path)
+    try:
+        from product.case_memory import ingest_paper_trades
+        ingest_paper_trades(trades=list(closed_trades or []))
+    except Exception:
+        pass
     return memory
 
 

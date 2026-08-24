@@ -296,6 +296,7 @@
   margin-bottom: 4px;
 }
 .reco-case p { margin: 0; font-size: 13.5px; line-height: 1.45; color: var(--rw-ink); }
+.reco-case-invalid { margin-top: 6px !important; color: var(--rw-muted); }
 .reco-case em { display: block; margin-top: 4px; font-size: 12px; color: var(--rw-muted); }
 .reco-case.is-remembered_positive {
   border-color: #cfe6d8;
