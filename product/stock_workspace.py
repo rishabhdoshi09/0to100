@@ -430,6 +430,15 @@ def build_stock_workspace(
             cat = "wealth_builders"
         if cat:
             seed.setdefault("category_id", cat)
+        inv = [
+            flag for flag in (fundamentals.get("risk_flags") or []) if flag
+        ][:4]
+        if not inv:
+            try:
+                from product.decision_card import what_changes_mind
+                inv = what_changes_mind(seed, category_id=cat or str(seed.get("category_id") or ""))
+            except Exception:
+                inv = []
         case = remember_case(
             {
                 "symbol": symbol,
@@ -437,9 +446,7 @@ def build_stock_workspace(
                 "category_id": seed.get("category_id") or cat,
                 "setup_label": str(seed.get("status") or seed.get("classification") or ""),
                 "why_now": list(seed.get("reasons") or [])[:4],
-                "what_changes_mind": [
-                    flag for flag in (fundamentals.get("risk_flags") or []) if flag
-                ][:4],
+                "what_changes_mind": inv,
             },
             row=seed,
             persist=bool(scan_row or long_row),
