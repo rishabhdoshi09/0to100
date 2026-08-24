@@ -22,7 +22,7 @@ import {
   type StockWorkspace,
   type TradePlan,
 } from './productApi'
-import { recall, remember } from './sessionMemory'
+import { keepRicher, recall } from './sessionMemory'
 import type { ChartBar, ControlName, DashboardPayload } from './types'
 
 // Read-only risk-first "R lens" — exact shares, rupee risk, reward:risk, book heat. No orders.
@@ -263,8 +263,8 @@ export function ProductStockIntelligenceView(props: ViewProps) {
     setLoading(!recall(`stock:${selected}`))
     try {
       const next = await fetchStockIntelligence(selected)
-      remember(`stock:${selected}`, next)
-      setWorkspace(next)
+      const kept = keepRicher(`stock:${selected}`, next, (row) => !row.company && !row.summary)
+      setWorkspace(kept)
       try { setPlan(await fetchTradePlan(selected)) } catch { setPlan(null) }
       try {
         const ratioPayload = await fetchSymbolRatios(selected)

@@ -20,7 +20,7 @@ import {
 } from './productApi'
 import { RiskLensCard } from './productViews'
 import { LiveScanBanner, type ExperienceViewProps } from './experience'
-import { recall, remember } from './sessionMemory'
+import { keepRicher, recall, remember } from './sessionMemory'
 
 type RadarRow = ScannerWorkspaceRow & {
   breakout_state?: string
@@ -292,8 +292,11 @@ export function RadarHomeView(props: ExperienceViewProps & {
     const load = () => {
       fetchRadarHome()
         .then((payload) => {
-          remember('radar-home', payload)
-          if (alive) setRadar(payload)
+          const kept = keepRicher('radar-home', payload, (row) => {
+            const counts = (row.counts?.breakouts || 0) + (row.counts?.momentum || 0) + (row.counts?.long_term_picks || 0)
+            return counts === 0 && !(row.best_setups || []).length && !row.best_breakout
+          })
+          if (alive) setRadar(kept)
         })
         .catch(() => { if (alive && !recall('radar-home')) setRadar(null) })
       fetchProductReadiness()
@@ -344,11 +347,17 @@ export function RadarHomeView(props: ExperienceViewProps & {
 
   useEffect(() => {
     if (autoBootRef.current) return
+    const cached = recall<RadarHome>('radar-home')
+    const cachedCount = (cached?.counts.breakouts || 0) + (cached?.counts.momentum || 0) + (cached?.counts.long_term_picks || 0)
+    if (cachedCount > 0 || dashboard.scan.scanned_at) {
+      autoBootRef.current = true
+      return
+    }
     const deskNeedsWork = emptyDesk || !dashboard.data.ready
     if (!deskNeedsWork) return
     autoBootRef.current = true
     void runBootstrap()
-  }, [emptyDesk, dashboard.data.ready])
+  }, [emptyDesk, dashboard.data.ready, dashboard.scan.scanned_at])
 
   const laneCard = (title: string, rows: RadarRow[], count: number, qualityHint?: number) => (
     <section className="radar-lane-card">
@@ -569,10 +578,10 @@ export function MarketScannerView(props: ExperienceViewProps & { onCompare: (sym
         .then((result) => {
           const next = (result.best_setups || []) as RadarRow[]
           const nextMeta = { scanned_at: result.scan_scanned_at, universe: result.universe_size }
-          remember('scanner:Best Setups', next)
-          remember('scanner-meta:Best Setups', nextMeta)
-          setRows(next)
-          setMeta(nextMeta)
+          const kept = keepRicher('scanner:Best Setups', next, (rows) => rows.length === 0)
+          remember('scanner-meta:Best Setups', nextMeta.scanned_at ? nextMeta : (recall('scanner-meta:Best Setups') || nextMeta))
+          setRows(kept)
+          setMeta(nextMeta.scanned_at ? nextMeta : (recall('scanner-meta:Best Setups') || nextMeta))
         })
         .catch(() => {
           const cached = recall<RadarRow[]>('scanner:Best Setups')
@@ -584,10 +593,10 @@ export function MarketScannerView(props: ExperienceViewProps & { onCompare: (sym
       .then((result) => {
         const next = result.rows as RadarRow[]
         const nextMeta = { scanned_at: result.scanned_at, universe: result.universe_size }
-        remember(`scanner:${tab}`, next)
-        remember(`scanner-meta:${tab}`, nextMeta)
-        setRows(next)
-        setMeta(nextMeta)
+        const kept = keepRicher(`scanner:${tab}`, next, (rows) => rows.length === 0)
+        remember(`scanner-meta:${tab}`, nextMeta.scanned_at ? nextMeta : (recall(`scanner-meta:${tab}`) || nextMeta))
+        setRows(kept)
+        setMeta(nextMeta.scanned_at ? nextMeta : (recall(`scanner-meta:${tab}`) || nextMeta))
       })
       .catch(() => {
         const cached = recall<RadarRow[]>(`scanner:${tab}`)

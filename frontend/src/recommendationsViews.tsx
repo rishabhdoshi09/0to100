@@ -14,7 +14,7 @@ import {
 } from './productApi'
 import type { ExperienceViewProps } from './experience'
 import { LiveScanBanner } from './experience'
-import { recall, remember } from './sessionMemory'
+import { keepRicher, recall } from './sessionMemory'
 
 const CAT_ICONS: Record<string, string> = {
   wealth_builders: 'W',
@@ -353,9 +353,9 @@ export function RecommendationsView({
     fetchRecommendationsWorkspace()
       .then((payload) => {
         if (!cancelled) {
-          remember('reco-workspace', payload)
-          setData(payload)
-          const firstWithCards = payload.categories.find((c) => c.count > 0)
+          const kept = keepRicher('reco-workspace', payload, (row) => !(row.categories || []).some((c) => (c.count || 0) > 0 || (c.cards || []).length > 0))
+          setData(kept)
+          const firstWithCards = kept.categories.find((c) => c.count > 0)
           if (firstWithCards) setCategoryId(firstWithCards.id)
           setError('')
         }
@@ -402,7 +402,7 @@ export function RecommendationsView({
     setActive('Stock Intelligence')
   }
 
-  if (loading) {
+  if (loading && !data) {
     return (
       <div className="reco-light">
         <div className="reco-empty"><strong>Loading recommendations…</strong></div>
@@ -748,9 +748,9 @@ export function MarketReportsView({ setActive, setSelected }: ExperienceViewProp
     fetchMarketReportsWorkspace()
       .then((payload) => {
         if (!cancelled) {
-          remember('market-reports', payload)
-          setData(payload)
-          setSelectedReport(payload.reports[0] || null)
+          const kept = keepRicher('market-reports', payload, (row) => !(row.reports || []).length)
+          setData(kept)
+          setSelectedReport(kept.reports[0] || payload.reports[0] || null)
           setError('')
         }
       })
@@ -782,7 +782,7 @@ export function MarketReportsView({ setActive, setSelected }: ExperienceViewProp
     setActive('Stock Intelligence')
   }
 
-  if (loading) {
+  if (loading && !data) {
     return (
       <div className="reco-light">
         <div className="reco-empty"><strong>Loading market reports…</strong></div>

@@ -54,7 +54,8 @@ def test_terminal_uses_reco_desk_not_hud_chrome():
     assert "hud-shell" not in app
     assert "DATA INCOMPLETE" not in app
     assert "PREPARING DATA" in app
-    assert "bootstrapProduct" in app
+    assert "KeepPage" in app
+    assert "quantterm-nav" in app or "readDeskNav" in app
     assert "sessionMemory" in app or "readSessionJson" in app
     radar = (ROOT / "frontend" / "src" / "marketRadarViews.tsx").read_text(encoding="utf-8")
     assert "recall" in radar and "remember" in radar
