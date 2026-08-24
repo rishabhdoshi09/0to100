@@ -613,27 +613,41 @@ class TestTradeCoach:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# 13. Outcome tracker — the feedback loop must resolve via bulk quotes
+# 13. Outcome tracker — canonical session resolver, never live quotes
 # ══════════════════════════════════════════════════════════════════════════════
 
 class TestOutcomeTracker:
-    def test_outcomes_resolve_via_bulk_quotes(self, tmp_path, monkeypatch):
+    def test_outcomes_resolve_via_session_close_when_no_geometry(self, tmp_path, monkeypatch):
         from datetime import datetime, timedelta
+        import pandas as pd
         import core.signal_outcome_tracker as tr
-        import data.live_quotes as lq
+        import data.bhavcopy_store as bs
         monkeypatch.setattr(tr, "_DB_PATH", str(tmp_path / "outcomes.db"))
         conn = tr._get_conn()
-        six_days = (datetime.now() - timedelta(days=6)).isoformat(timespec="seconds")
+        logged = "2026-08-01T10:00:00"
         for sym, entry in [("WINSYM", 100), ("LOSESYM", 200), ("FLATSYM", 300)]:
             conn.execute(
                 "INSERT INTO signal_log (symbol, logged_at, signal_type, "
                 "entry_price, stop_price) VALUES (?,?,?,?,?)",
-                (sym, six_days, "UNIFIED_BUY", entry, entry * 0.96))
+                (sym, logged, "UNIFIED_BUY", entry, entry * 0.96))
         conn.commit(); conn.close()
-        monkeypatch.setattr(lq, "get_live_quotes", lambda syms: {
-            "WINSYM": {"price": 105.0}, "LOSESYM": {"price": 194.0},
-            "FLATSYM": {"price": 301.5}})
-        tr.update_outcomes()
+        idx = pd.bdate_range("2026-08-01", periods=8)
+
+        def _df(entry, end):
+            closes = [entry] * 5 + [end, end, end]
+            return pd.DataFrame(
+                {"high": [c + 1 for c in closes], "low": [c - 1 for c in closes],
+                 "close": closes, "open": closes, "volume": 1},
+                index=idx,
+            )
+
+        paths = {
+            "WINSYM": _df(100, 105.0),
+            "LOSESYM": _df(200, 194.0),
+            "FLATSYM": _df(300, 301.5),
+        }
+        monkeypatch.setattr(bs, "get_ohlcv", lambda s: paths.get(str(s).upper()))
+        tr.update_outcomes(lookback_days=400)
         conn = tr._get_conn()
         d = {r["symbol"]: r["worked"] for r in conn.execute(
             "SELECT symbol, worked FROM signal_log").fetchall()}
@@ -718,7 +732,6 @@ class TestOutcomeTracker:
     def test_fresh_signals_not_judged_early(self, tmp_path, monkeypatch):
         from datetime import datetime
         import core.signal_outcome_tracker as tr
-        import data.live_quotes as lq
         monkeypatch.setattr(tr, "_DB_PATH", str(tmp_path / "o2.db"))
         conn = tr._get_conn()
         conn.execute(
@@ -727,13 +740,14 @@ class TestOutcomeTracker:
             ("FRESH", datetime.now().isoformat(timespec="seconds"),
              "UNIFIED_BUY", 100, 96))
         conn.commit(); conn.close()
-        monkeypatch.setattr(lq, "get_live_quotes",
+        monkeypatch.setattr("data.bhavcopy_store.get_ohlcv", lambda s: None)
+        monkeypatch.setattr("data.live_quotes.get_live_quotes",
                             lambda syms: {"FRESH": {"price": 150.0}})
         tr.update_outcomes()
         conn = tr._get_conn()
         row = conn.execute("SELECT worked FROM signal_log").fetchone()
         conn.close()
-        assert row["worked"] is None   # <5 days old — too early to judge
+        assert row["worked"] is None   # no horizon bars yet — live quote ignored
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -2427,7 +2441,24 @@ class TestDecisionJournal:
         c = dj._conn()
         n = c.execute("SELECT COUNT(*) FROM decisions").fetchone()[0]
         c.close()
-        assert n == 2            # dedup per symbol×day×decision; ZERO skipped
+        assert n == 2            # TAKEN + one REJECTED; ZERO skipped; rescan collapsed
+
+    def test_two_rejection_reasons_same_day_both_survive(self, tmp_path, monkeypatch):
+        dj = self._setup(tmp_path, monkeypatch)
+        dj.log_decision("HAL", "TAKEN", "", "scanner", 4500, 4300, 80)
+        dj.log_decision("HAL", "REJECTED", "too extended", "scanner", 4500, 4300, 40)
+        dj.log_decision("HAL", "REJECTED", "overheated RSI", "scanner", 4500, 4300, 40)
+        dj.log_decision("HAL", "REJECTED", "too extended", "scanner", 4500, 4300, 40)
+        c = dj._conn()
+        rows = c.execute(
+            "SELECT decision, reason FROM decisions WHERE symbol='HAL'"
+        ).fetchall()
+        c.close()
+        got = {(r["decision"], r["reason"]) for r in rows}
+        assert ("TAKEN", "") in got
+        assert ("REJECTED", "EXTENSION") in got
+        assert ("REJECTED", "BLOWOFF_RSI") in got
+        assert len(got) == 3
 
     def test_scanner_logs_decisions_for_calibration(self, tmp_path, monkeypatch):
         # the scan path must journal verdicts + predictions so calibration works
@@ -2441,15 +2472,41 @@ class TestDecisionJournal:
             {"symbol": "BBB", "verdict": "WATCH", "entry": 50, "stop": 48,
              "score": 40, "reasons": ["too extended"]},
             {"symbol": "CCC", "verdict": "WATCH", "entry": 0, "reasons": []},
+            {"symbol": "DDD", "verdict": "WATCH", "entry": 40, "stop": 38,
+             "score": 55, "reasons": ["momentum improving"]},
+            {"symbol": "EEE", "verdict": "WATCH", "entry": 60, "stop": 58,
+             "score": 42, "chase_risk": True, "reasons": ["overheated RSI"]},
         ]
         a._log_decisions_for_calibration(serialized)
         c = dj._conn()
         got = {r["symbol"]: (r["decision"], r["p_win"]) for r in
                c.execute("SELECT symbol, decision, p_win FROM decisions")}
+        eee = [r["reason"] for r in c.execute(
+            "SELECT reason FROM decisions WHERE symbol='EEE'")]
         c.close()
         assert got["AAA"] == ("TAKEN", 64.0)        # buy, with its prediction
-        assert got["BBB"][0] == "REJECTED"          # watch → rejected decision
+        assert got["BBB"][0] == "REJECTED"          # too extended → EXTENSION
         assert "CCC" not in got                     # no entry price → no claim
+        assert got["DDD"][0] == "WAIT"              # plain watch is not a fake rejection
+        assert set(eee) == {"EXTENSION", "BLOWOFF_RSI"}
+
+    def test_two_gates_are_one_rejected_opportunity(self, tmp_path, monkeypatch):
+        dj = self._setup(tmp_path, monkeypatch)
+        dj.log_decision("BLUSPRING", "REJECTED", "EXTENSION", "scanner", 100, 96, 40,
+                        p_win=55.0)
+        dj.log_decision("BLUSPRING", "REJECTED", "WEAK_CLOSE", "scanner", 100, 96, 40,
+                        p_win=55.0)
+        c = dj._conn()
+        c.execute("UPDATE decisions SET decided_at='2026-08-01T10:00:00', "
+                  "outcome_pct=-2.0, outcome_price=98.0")
+        c.commit(); c.close()
+        rep = dj.decision_report(min_n=1)
+        assert rep["rejected"]["n"] == 1
+        assert set(rep["by_reason"]) == {"EXTENSION", "WEAK_CLOSE"}
+        assert all(v["n"] == 1 for v in rep["by_reason"].values())
+        cal = dj.calibration_report(min_n=1)
+        scored = [b for b in cal["buckets"] if b["predicted"] is not None]
+        assert scored[0]["n"] == 1
 
     def test_outcomes_and_gate_audit(self, tmp_path, monkeypatch):
         dj = self._setup(tmp_path, monkeypatch)
@@ -2460,10 +2517,30 @@ class TestDecisionJournal:
         c = dj._conn()
         c.execute("UPDATE decisions SET decided_at='2026-08-01T10:00:00'")
         c.commit(); c.close()
+        idx = pd.bdate_range("2026-08-01", periods=8)
+
+        def _bars(end):
+            closes = [100.0] * 5 + [end, 9999.0, 9999.0]
+            return pd.DataFrame(
+                {"open": closes, "high": closes, "low": closes, "close": closes,
+                 "volume": 1},
+                index=idx,
+            )
+
+        monkeypatch.setattr(
+            "data.bhavcopy_store.get_ohlcv",
+            lambda s: _bars(4700.0 if str(s).upper() == "HAL" else 490.0),
+        )
         monkeypatch.setattr("data.live_quotes.get_live_quotes",
-                            lambda syms: {"HAL": {"price": 4700.0},
-                                          "X": {"price": 490.0}})
+                            lambda syms: {"HAL": {"price": 9999.0},
+                                          "X": {"price": 9999.0}})
         assert dj.update_outcomes() == 2
+        c = dj._conn()
+        prices = {r["symbol"]: r["outcome_price"] for r in c.execute(
+            "SELECT symbol, outcome_price FROM decisions")}
+        c.close()
+        assert prices["HAL"] == 4700.0
+        assert prices["X"] == 490.0
         rep = dj.decision_report(min_n=1)
         assert rep["taken"]["n"] == 1 and rep["taken"]["win_rate"] == 100.0
         assert rep["rejected"]["avg_outcome_pct"] == -2.0
@@ -2480,8 +2557,9 @@ class TestDecisionJournal:
         c = dj._conn()
         c.execute("UPDATE decisions SET decided_at='2026-08-01T10:00:00'")
         c.commit(); c.close()
+        monkeypatch.setattr("data.bhavcopy_store.get_ohlcv", lambda s: None)
         monkeypatch.setattr("data.live_quotes.get_live_quotes",
-                            lambda syms: {})
+                            lambda syms: {"HAL": {"price": 9999.0}})
         assert dj.update_outcomes() == 0
         assert dj.decision_report()["taken"]["n"] == 0     # still unresolved
 

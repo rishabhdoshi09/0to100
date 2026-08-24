@@ -111,10 +111,29 @@ def run_whole_market_scan(
 
     try:
         prefetch_fn(symbols, progress=progress_callback)
-        results = list(scanner.scan(symbols) or [])
+        try:
+            results = list(scanner.scan(symbols, progress=progress_callback, prefetch=False) or [])
+        except TypeError:
+            results = list(scanner.scan(symbols) or [])
     except Exception as exc:
         return MarketScanReport(FAILED, universe_size=len(symbols), error_code="SCAN_ERROR",
                                 error_message=str(exc), source_snapshot_id=snapshot_id or "")
+
+    if not results:
+        warm: list[str] = []
+        try:
+            from scan.bulk_fetcher import cached_symbols
+            warm = [str(s).upper() for s in (cached_symbols() or [])]
+        except Exception:
+            warm = []
+        if not warm:
+            return MarketScanReport(
+                DATA_UNAVAILABLE,
+                universe_size=len(symbols),
+                error_code="OHLCV_CACHE_EMPTY",
+                error_message="OHLCV cache was empty; the last readable scan was kept.",
+                source_snapshot_id=snapshot_id or _active_snapshot_id(),
+            )
 
     try:
         fno_symbols = set(fno_provider() or ())
@@ -130,6 +149,11 @@ def run_whole_market_scan(
     payload["scan_status"] = SUCCEEDED
     if save:
         save_scan(payload)
+        try:
+            from product.sepa_setup import persist_public_best_setups
+            persist_public_best_setups(payload)
+        except Exception:
+            pass
         # FEATURE-002 is observe-only and runs AFTER production results are final.
         if _feature002_hook is not None:
             try:

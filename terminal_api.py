@@ -53,6 +53,109 @@ def _json_file(path: Path, default: Any) -> Any:
         return default
 
 
+def _json_safe(value: Any) -> Any:
+    """JSON-encode without NaN/Inf so the RecoWealth desk never 500s on a float."""
+    if isinstance(value, dict):
+        return {str(key): _json_safe(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(item) for item in value]
+    if isinstance(value, float) and (value != value or value in (float("inf"), float("-inf"))):
+        return None
+    return value
+
+
+def _empty_dashboard(error: str, scan: dict[str, Any] | None = None) -> dict[str, Any]:
+    payload = scan if isinstance(scan, dict) else _scan_payload()
+    return {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "market": {
+            "available": False,
+            "health": "Unavailable",
+            "summary": "Market API is degraded; cards use the last readable scan.",
+            "trade_stance": "Do not infer a market stance from missing data.",
+            "breadth": "—",
+            "leaders": [],
+            "laggards": [],
+            "nifty_change_1d": None,
+            "nifty_change_5d": None,
+            "vix": None,
+            "technical_details": {},
+        },
+        "scan": payload,
+        "long_term": {"available": False, "summary": {}, "records": [], "job": {}},
+        "paper": {
+            "available": False,
+            "enabled": False,
+            "supervisor_running": False,
+            "capital": 0.0,
+            "equity": 0.0,
+            "equity_curve": [],
+            "open_risk": 0.0,
+            "risk_per_trade_pct": 0.01,
+            "max_positions": 0,
+            "open_positions": [],
+            "closed_trades": [],
+            "refusals": [],
+            "last_cycle": {},
+        },
+        "autonomy": {
+            "available": False,
+            "running": False,
+            "process_running": False,
+            "state": "UNKNOWN",
+            "plain_state": "Autonomy status unavailable.",
+            "explanation": error,
+            "heartbeat_ist": "",
+            "scheduler_owner_pid": None,
+            "active_job": {},
+            "new_paper_entries": False,
+            "existing_exits": False,
+            "research_enabled": False,
+            "capability_notes": [],
+            "active_failures": [],
+            "recent_dialogue": [],
+            "recent_transitions": [],
+            "jobs": {},
+            "jobs_recent": [],
+            "owner_state": {},
+            "live_feed": {},
+            "last_cycle": {},
+        },
+        "operations": {
+            "available": False,
+            "running": False,
+            "worker_pid": None,
+            "heartbeat": "",
+            "active_lanes": {},
+            "counts": {},
+            "active": [],
+            "recent": [],
+            "latest": {},
+        },
+        "news": {
+            "available": False,
+            "stats": {"total": 0, "important": 0, "fno_linked": 0, "macro": 0, "sources": 0},
+            "articles": [],
+            "source_health": [],
+            "latest_refresh": {},
+        },
+        "fno": {"available": False, "source": "unavailable", "mapped_underlyings": 0, "underlyings": [], "exclusions": []},
+        "data": {
+            "ready": False,
+            "snapshot": {"ready": False, "snapshot_id": "", "latest_date": "", "source": ""},
+            "bhavcopy": {"ready": False, "symbols": 0, "sessions": 0, "latest_date": "", "csv_files": 0, "cache_exists": False},
+            "scan_saved": bool(payload.get("available")),
+            "scan_records": len(payload.get("records", []) or []),
+            "long_term_saved": False,
+            "long_term_records": 0,
+            "blockers": [error] if error else [],
+        },
+        "conviction": [],
+        "scan_progress": {"active": False, "eta_label": "", "current": 0, "total": 0},
+        "error": error,
+    }
+
+
 def _fresh_epoch(value: Any, max_age_s: float = 10.0) -> bool:
     try:
         age = time.time() - float(value)
@@ -232,6 +335,25 @@ def _paper_equity_curve() -> list[float]:
     return curve[-240:]
 
 
+def _paper_learning_payload() -> dict:
+    """Daily paper-memory overlay for the bash terminal. Never raises."""
+    try:
+        from product.paper_learning import public_memory
+        return public_memory()
+    except Exception as exc:
+        return {
+            "available": False,
+            "as_of": "",
+            "closed_trades": 0,
+            "cooldown": [],
+            "prefer": [],
+            "summary": "Paper memory unavailable.",
+            "live_locked": True,
+            "disclaimer": str(exc),
+            "ladder": "",
+        }
+
+
 def _paper_payload() -> dict:
     try:
         from product.paper_status import read_paper_status
@@ -251,6 +373,7 @@ def _paper_payload() -> dict:
             "refusals": list(paper.refusals)[-50:],
             "last_cycle": dict(paper.last_cycle or {}),
             "last_error": paper.last_error,
+            "learning": _paper_learning_payload(),
         }
     except Exception as exc:
         return {
@@ -269,6 +392,7 @@ def _paper_payload() -> dict:
             "last_cycle": {},
             "last_error": str(exc),
             "error": str(exc),
+            "learning": _paper_learning_payload(),
         }
 
 
@@ -367,6 +491,14 @@ def _snapshot_payload() -> dict:
         }
     except Exception as exc:
         return {"ready": False, "snapshot_id": "", "latest_date": "", "source": "", "error": str(exc)}
+
+
+def _scan_progress_payload() -> dict[str, Any]:
+    try:
+        from product.scan_progress import read_progress
+        return read_progress()
+    except Exception:
+        return {"active": False, "eta_label": "", "current": 0, "total": 0}
 
 
 def _operations_payload() -> dict[str, Any]:
@@ -551,28 +683,46 @@ def health() -> dict:
 
 @app.get("/api/dashboard")
 def dashboard() -> dict:
-    market = _market_payload()
+    """RecoWealth desk bootstrap. Last readable scan survives a subsystem failure."""
     scan = _scan_payload()
-    long_term = _long_term_payload()
-    paper = _paper_payload()
-    autonomy = _autonomy_payload()
-    operations = _operations_payload()
-    news = _news_payload()
-    fno = _fno_payload()
-    data = _data_payload(scan, long_term, operations, fno, news)
-    return {
-        "generated_at": datetime.now(timezone.utc).isoformat(),
-        "market": market,
-        "scan": scan,
-        "long_term": long_term,
-        "paper": paper,
-        "autonomy": autonomy,
-        "operations": operations,
-        "news": news,
-        "fno": fno,
-        "data": data,
-        "conviction": _conviction(scan, market),
-    }
+    try:
+        market = _market_payload()
+        long_term = _long_term_payload()
+        paper = _paper_payload()
+        autonomy = _autonomy_payload()
+        operations = _operations_payload()
+        news = _news_payload()
+        fno = _fno_payload()
+        data = _data_payload(scan, long_term, operations, fno, news)
+        return _json_safe({
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "market": market,
+            "scan": scan,
+            "long_term": long_term,
+            "paper": paper,
+            "autonomy": autonomy,
+            "operations": operations,
+            "news": news,
+            "fno": fno,
+            "data": data,
+            "conviction": _conviction(scan, market),
+            "scan_progress": _scan_progress_payload(),
+        })
+    except Exception as exc:
+        degraded = _empty_dashboard(f"Dashboard degraded: {exc}", scan)
+        try:
+            degraded["market"] = _market_payload()
+        except Exception:
+            pass
+        try:
+            degraded["long_term"] = _long_term_payload()
+        except Exception:
+            pass
+        try:
+            degraded["operations"] = _operations_payload()
+        except Exception:
+            pass
+        return _json_safe(degraded)
 
 
 @app.get("/api/operations")
@@ -592,6 +742,19 @@ def operation_status(operation_id: str) -> dict:
 @app.get("/api/news")
 def news_status() -> dict:
     return _news_payload()
+
+
+@app.get("/api/education")
+def education_feed(min_impact: int = 40, limit: int = 40) -> dict:
+    """Educational cards projected from curated news — never invents articles."""
+    from product.education_feed import build_education_feed
+
+    news = _news_payload()
+    return build_education_feed(
+        articles=list(news.get("articles") or []),
+        min_impact=max(0, min(int(min_impact or 40), 100)),
+        limit=max(1, min(int(limit or 40), 100)),
+    )
 
 
 @app.get("/api/fno")

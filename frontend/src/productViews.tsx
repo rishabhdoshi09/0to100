@@ -22,6 +22,7 @@ import {
   type StockWorkspace,
   type TradePlan,
 } from './productApi'
+import { keepRicher, recall } from './sessionMemory'
 import type { ChartBar, ControlName, DashboardPayload } from './types'
 
 // Read-only risk-first "R lens" — exact shares, rupee risk, reward:risk, book heat. No orders.
@@ -137,7 +138,7 @@ export function ProductCommandCenterView(props: ViewProps) {
     try {
       setReadiness(await fetchProductReadiness())
     } catch (reason) {
-      setMessage(reason instanceof Error ? reason.message : 'Readiness API unavailable')
+      setMessage(reason instanceof Error ? reason.message : 'Readiness check is still starting')
     }
   }
 
@@ -239,8 +240,10 @@ function MetricExplanation({ metric }: { metric: IntelligenceMetric }) {
 }
 
 export function ProductStockIntelligenceView(props: ViewProps) {
-  const { selected, bars, runControl, setActive, onCompare, onWatchlist, depth } = props
-  const [workspace, setWorkspace] = useState<StockWorkspace | null>(null)
+  const { dashboard, selected, bars, runControl, setActive, onCompare, onWatchlist, depth } = props
+  const [workspace, setWorkspace] = useState<StockWorkspace | null>(() => (
+    selected ? recall<StockWorkspace>(`stock:${selected}`) ?? null : null
+  ))
   const [plan, setPlan] = useState<TradePlan | null>(null)
   const [ratios, setRatios] = useState<import('./productApi').SymbolRatioRow[]>([])
   const [tab, setTab] = useState('Overview')
@@ -257,9 +260,11 @@ export function ProductStockIntelligenceView(props: ViewProps) {
       setRatios([])
       return
     }
-    setLoading(true)
+    setLoading(!recall(`stock:${selected}`))
     try {
-      setWorkspace(await fetchStockIntelligence(selected))
+      const next = await fetchStockIntelligence(selected)
+      const kept = keepRicher(`stock:${selected}`, next, (row) => !row.company && !row.summary)
+      setWorkspace(kept)
       try { setPlan(await fetchTradePlan(selected)) } catch { setPlan(null) }
       try {
         const ratioPayload = await fetchSymbolRatios(selected)
@@ -269,15 +274,18 @@ export function ProductStockIntelligenceView(props: ViewProps) {
       }
       setError('')
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : 'Stock intelligence unavailable')
+      setError(reason instanceof Error ? reason.message : 'Stock intelligence is still loading')
     } finally {
       setLoading(false)
     }
   }
 
   useEffect(() => {
+    const cached = selected ? recall<StockWorkspace>(`stock:${selected}`) : undefined
+    if (cached) setWorkspace(cached)
+    else if (!selected) setWorkspace(null)
     void load()
-  }, [selected])
+  }, [selected, dashboard.scan.scanned_at])
 
   useEffect(() => {
     setTab('Overview')
@@ -305,7 +313,7 @@ export function ProductStockIntelligenceView(props: ViewProps) {
   if (loading && !workspace) return <section className="workspace-view"><div className="large-empty">Loading verified price, technical, fundamental and source data for {selected}…</div></section>
 
   return (
-    <section className="stock-workspace-v2">
+    <section className="stock-workspace-v2 reco-light">
       {error && <div className="api-warning">{error}</div>}
       <header className="stock-workspace-hero">
         <div><span>{workspace?.sector || 'Sector not classified'}</span><h2>{workspace?.company || selected}</h2><p>{selected} · {workspace?.summary || 'Verified research is still loading.'}</p></div>
@@ -346,6 +354,32 @@ export function ProductStockIntelligenceView(props: ViewProps) {
               </div>
             </Panel>
             <Panel title="DECISION SUMMARY" subtitle="Deterministic scan evidence — not investment advice">
+              {workspace?.case ? (
+                <aside className={`reco-case is-${workspace.case.verdict || 'unmeasured'}`} aria-label="Case memory">
+                  <span>Case memory · {workspace.case.n_similar ?? 0} similar · {(workspace.case.verdict || 'unmeasured').replace(/_/g, ' ')}</span>
+                  <p>{workspace.case.memory_line || workspace.case.idea}</p>
+                  {workspace.case.invalidation?.[0] ? (
+                    <p className="reco-case-invalid">What proves it wrong: {workspace.case.invalidation?.[0]}</p>
+                  ) : null}
+                  {workspace.case.proven ? null : (
+                    <em>{(workspace.case.n_similar ?? 0) > 0 ? 'Not proven yet — fewer than 30 comparable outcomes.' : 'Not remembered yet. Tonight’s check writes the first outcome.'}</em>
+                  )}
+                </aside>
+              ) : null}
+              {workspace?.decision_memory ? (
+                <aside className="reco-memory" aria-label="Decision memory">
+                  <span>Decision memory · {workspace.decision_memory.stance || 'WAIT'}</span>
+                  {workspace.decision_memory.setup_quality?.score != null ? (
+                    <p>Setup Quality: {workspace.decision_memory.setup_quality.score}/100 — not a win probability.</p>
+                  ) : null}
+                  {workspace.decision_memory.why_not?.line ? <p>{workspace.decision_memory.why_not.line}</p> : null}
+                  {workspace.decision_memory.similar?.line ? <p>{workspace.decision_memory.similar.line}</p> : null}
+                  {workspace.decision_memory.trust?.line ? <p>{workspace.decision_memory.trust.line}</p> : null}
+                  {workspace.decision_memory.edge?.line && workspace.decision_memory.edge.profile !== 'UNKNOWN' ? (
+                    <p>{workspace.decision_memory.edge.line}</p>
+                  ) : null}
+                </aside>
+              ) : null}
               <EvidenceList title="Why it qualified" items={[...((workspace?.scanner.reasons as string[] | undefined) || []), ...(workspace?.fundamentals.quality_factors || [])]} tone="green" />
               <EvidenceList title="What can go wrong" items={[...(workspace?.fundamentals.risk_flags || []), ...(workspace?.gaps || []).map((item) => `${item} is missing or stale.`)]} tone="red" />
               <p className="panel-copy"><strong>Monitor:</strong> invalidation levels in Trade Plan, breadth and sector context on Home.</p>
@@ -382,7 +416,7 @@ export function ProductStockIntelligenceView(props: ViewProps) {
       {tab === 'Ratios' && (
         <Panel title="KEY RATIOS" subtitle="Computed centrally from cached fundamentals — missing inputs stay empty">
           {ratios.length === 0
-            ? <EmptyState title="Ratios unavailable" detail="Fundamentals cache missing or inputs incomplete." />
+            ? <EmptyState title="Ratios still loading" detail="Fundamentals cache is filling in. Stay on this page — QuantTerm will not invent missing ratios." />
             : <div className="explain-metric-grid">
               {ratios.map((row) => (
                 <article className={`explain-metric ${row.value == null ? 'unavailable' : ''}`} key={row.key}>

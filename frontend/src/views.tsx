@@ -19,7 +19,7 @@ import type {
   ScanRecord,
 } from './types'
 
-type ViewProps = {
+export type ViewProps = {
   dashboard: DashboardPayload
   selected: string
   setSelected: (symbol: string) => void
@@ -154,6 +154,7 @@ export function CommandCenterView(props: ViewProps) {
         <Panel title="PAPER PORTFOLIO · SECONDARY EXECUTION LAYER" subtitle={`${dashboard.paper.open_positions.length} open · equity ${money(dashboard.paper.equity)}`} className="positions-panel" action={<button type="button" onClick={() => setActive('Portfolio')}>Open portfolio</button>}>
           <PositionsTable rows={dashboard.paper.open_positions.slice(0, 8)} />
         </Panel>
+        <BotLearningPanel dashboard={dashboard} />
       </section>
       {!dashboard.data.ready && <section className="workspace-view"><DataReadinessPanel dashboard={dashboard} /></section>}
     </>
@@ -176,11 +177,11 @@ export function ScannerView(props: ViewProps) {
     <section className="workspace-view">
       {!dashboard.data.bhavcopy.ready && <DataReadinessPanel dashboard={dashboard} />}
       <div className="mode-tabs">
-        {['Momentum', 'Conviction', 'Breakouts', 'Pre-Breakout', 'Avoid'].map((item) => <button type="button" key={item} className={mode === item ? 'active' : ''} onClick={() => setMode(item)}>{item}</button>)}
+        {['Momentum', 'Conviction', 'Breakouts', 'Pre-Breakout', 'Avoid'].map((item) => <button type="button" key={item} className={mode === item ? 'active' : ''} onClick={() => setMode(item)}>{item === 'Conviction' ? 'Setup Quality' : item}</button>)}
         <button className="mode-action" type="button" onClick={() => void runControl('RUN_SCAN_NOW')}>Scan whole market now</button>
       </div>
       <div className="split-workspace">
-        <Panel title={`${mode.toUpperCase()} · ${rows.length} MATCHES`} subtitle={`Saved scan ${dashboard.scan.scanned_at || 'not available'}`}>
+        <Panel title={`${(mode === 'Conviction' ? 'Setup Quality' : mode).toUpperCase()} · ${rows.length} MATCHES`} subtitle={`Saved scan ${dashboard.scan.scanned_at || 'preparing'}`}>
           <SecurityTable rows={rows} selected={selected} onSelect={setSelected} />
         </Panel>
         <div className="detail-stack">
@@ -219,12 +220,38 @@ export function StockIntelligenceView(props: ViewProps) {
   )
 }
 
+export function BotLearningPanel({ dashboard }: { dashboard: DashboardPayload }) {
+  const learning = dashboard.paper.learning || {}
+  const cooldown = learning.cooldown || []
+  const prefer = learning.prefer || []
+  return (
+    <Panel title="WHAT THE BOT LEARNED" subtitle="Daily paper memory from closed simulated trades. Live stays locked.">
+      <div className="fact-grid">
+        <div><span>Closed paper trades</span><strong>{Number(learning.closed_trades || 0)}</strong></div>
+        <div><span>On cooldown</span><strong>{cooldown.length}</strong></div>
+        <div><span>Preferred names</span><strong>{prefer.length}</strong></div>
+        <div><span>Live orders</span><strong className="negative">LOCKED</strong></div>
+      </div>
+      {cooldown.length > 0 && (
+        <EvidenceList
+          title="Cooldown — skip new paper entries"
+          items={cooldown.map((row) => `${row.symbol || '?'} until ${row.until || '?'} — ${row.reason || 'paper lesson'}`)}
+          tone="red"
+        />
+      )}
+      {prefer.length > 0 && <p className="panel-copy">Preferred among the same strategy’s other signals: {prefer.join(', ')}</p>}
+      <p className="panel-copy">{learning.ladder || learning.disclaimer || 'Live orders stay locked until the owner approves a capital envelope.'}</p>
+    </Panel>
+  )
+}
+
 export function PortfolioView({ dashboard, runControl }: ViewProps) {
   const paperReturn = dashboard.paper.capital > 0 ? ((dashboard.paper.equity / dashboard.paper.capital) - 1) * 100 : null
   return (
     <section className="workspace-view">
       <div className="inline-actions"><button type="button" onClick={() => void runControl('RUN_CYCLE_NOW')}>Request paper cycle</button><button type="button" onClick={() => void runControl(dashboard.autonomy.new_paper_entries ? 'PAUSE_NEW_PAPER_ENTRIES' : 'RESUME_NEW_PAPER_ENTRIES')}>{dashboard.autonomy.new_paper_entries ? 'Pause new entries' : 'Resume new entries'}</button></div>
       <div className="view-metrics"><MetricCard label="PAPER CAPITAL" value={money(dashboard.paper.capital)} /><MetricCard label="PAPER EQUITY" value={money(dashboard.paper.equity)} detail={pct(paperReturn)} tone="green" /><MetricCard label="OPEN RISK" value={money(dashboard.paper.open_risk)} detail={`${(dashboard.paper.risk_per_trade_pct * 100).toFixed(1)}% risk/trade`} tone="amber" /><MetricCard label="POSITIONS" value={String(dashboard.paper.open_positions.length)} detail={`Max ${dashboard.paper.max_positions}`} tone="purple" /></div>
+      <BotLearningPanel dashboard={dashboard} />
       <div className="portfolio-workspace">
         <Panel title="RECORDED EQUITY CURVE" subtitle="No synthetic history"><EquityCurve values={dashboard.paper.equity_curve} /></Panel>
         <Panel title="OPEN PAPER POSITIONS"><PositionsTable rows={dashboard.paper.open_positions} /></Panel>
@@ -281,6 +308,38 @@ export function LongTermView(props: ViewProps) {
   )
 }
 
+export function RecoBacktestView({ dashboard, setActive }: ViewProps) {
+  const losses = [...dashboard.paper.closed_trades]
+    .filter((row) => Number(row.pnl ?? 0) < 0)
+    .reverse()
+    .slice(0, 8)
+  return (
+    <section className="workspace-view">
+      <div className="reco-how">
+        <div className="qt-eyebrow">After paper losses</div>
+        <p>Backtest answers one business question: did this style make or lose money on past data after costs? A result does not change today’s BUY list, ranking, or paper autopilot.</p>
+      </div>
+      <BotLearningPanel dashboard={dashboard} />
+      <Panel title="PAPER LOSSES TO INSPECT" subtitle="Pick a name, then open Stock Intelligence. The bot already recorded these for the next paper cycle.">
+        {losses.length === 0 && <div className="empty-row">No closed paper losses yet.</div>}
+        {losses.map((row, index) => (
+          <div className="insight" key={`${row.symbol}-${index}`}>
+            <i className="amber" />
+            <div>
+              <strong>{row.symbol}</strong>
+              <span>{row.exit_reason || 'exit'} · {Number(row.pnl || 0).toLocaleString('en-IN')}</span>
+            </div>
+          </div>
+        ))}
+        <div className="inline-actions" style={{ padding: '12px' }}>
+          <button type="button" onClick={() => setActive('Market Scanner')}>Open Market Scanner</button>
+          <button type="button" onClick={() => setActive('Paper Portfolio')}>Open Paper Portfolio</button>
+        </div>
+      </Panel>
+    </section>
+  )
+}
+
 export function AutomationView({ dashboard, runControl }: ViewProps) {
   const a = dashboard.autonomy
   const activeJob = a.active_job || {}
@@ -288,6 +347,7 @@ export function AutomationView({ dashboard, runControl }: ViewProps) {
     <section className="workspace-view">
       <div className="inline-actions"><button type="button" onClick={() => void runControl('RUN_SCAN_NOW')}>Start market scan</button><button type="button" onClick={() => void runControl('RUN_CYCLE_NOW')}>Request paper cycle</button><button type="button" onClick={() => void runControl('REFRESH_DATA_NOW')}>Prepare market data</button><button type="button" onClick={() => void runControl(a.new_paper_entries ? 'PAUSE_NEW_PAPER_ENTRIES' : 'RESUME_NEW_PAPER_ENTRIES')}>{a.new_paper_entries ? 'Pause entries' : 'Resume entries'}</button></div>
       <div className="view-metrics"><MetricCard label="PAPER SUPERVISOR" value={a.running ? 'ONLINE' : 'OFFLINE'} detail={`PID ${a.scheduler_owner_pid || '—'}`} tone={a.running ? 'green' : 'amber'} /><MetricCard label="STATE" value={a.state} detail={a.plain_state} /><MetricCard label="ACTIVE PAPER JOB" value={String(activeJob.job_type || 'IDLE').toUpperCase()} detail={activeJob.elapsed_s ? `${activeJob.elapsed_s}s elapsed` : 'No paper worker job reported'} tone="cyan" /><MetricCard label="FAILURES" value={String(a.active_failures?.length || 0)} detail={(a.active_failures || []).join(', ') || 'None active'} tone="purple" /></div>
+      <BotLearningPanel dashboard={dashboard} />
       <div className="automation-grid">
         <Panel title="PAPER-AUTONOMY JOB LEDGER" subtitle="Execution and learning only · market scans use separate lanes" className="job-panel"><JobLedger jobs={a.jobs_recent || []} /></Panel>
         <Panel title="OPERATING STATE"><div className="key-value-list"><div><span>Heartbeat</span><strong>{a.heartbeat_ist || '—'}</strong></div><div><span>Live feed</span><strong>{String(a.live_feed?.connected ?? 'Unavailable')}</strong></div><div><span>Subscriptions</span><strong>{String(a.live_feed?.subscriptions ?? '—')}</strong></div><div><span>Existing exits</span><strong>{boolLabel(a.existing_exits)}</strong></div><div><span>Research</span><strong>{boolLabel(a.research_enabled)}</strong></div></div><p className="panel-copy">{a.explanation || a.plain_state}</p></Panel>

@@ -411,6 +411,62 @@ def build_stock_workspace(
     if not news_rows or sources[4]["status"] != "FRESH":
         next_actions.append({"control": "REFRESH_NEWS_NOW", "label": "Refresh news and filings"})
 
+    case: dict[str, Any] = {}
+    try:
+        from product.case_memory import remember_case
+        seed = dict(scan_row or long_row or {})
+        seed.setdefault("symbol", symbol)
+        seed.setdefault("company", company)
+        seed.setdefault("sector", sector)
+        cat = ""
+        if scan_row:
+            try:
+                from product.recommendations_workspace import primary_scan_category
+                assigned = primary_scan_category(scan_row)
+                cat = assigned[0] if assigned else ""
+            except Exception:
+                cat = ""
+        elif long_row:
+            cat = "wealth_builders"
+        if cat:
+            seed.setdefault("category_id", cat)
+        inv = [
+            flag for flag in (fundamentals.get("risk_flags") or []) if flag
+        ][:4]
+        if not inv:
+            try:
+                from product.decision_card import what_changes_mind
+                inv = what_changes_mind(seed, category_id=cat or str(seed.get("category_id") or ""))
+            except Exception:
+                inv = []
+        case = remember_case(
+            {
+                "symbol": symbol,
+                "company": company,
+                "category_id": seed.get("category_id") or cat,
+                "setup_label": str(seed.get("status") or seed.get("classification") or ""),
+                "why_now": list(seed.get("reasons") or [])[:4],
+                "what_changes_mind": inv,
+            },
+            row=seed,
+            persist=bool(scan_row or long_row),
+        )
+    except Exception:
+        case = {
+            "n_similar": 0,
+            "proven": False,
+            "verdict": "unmeasured",
+            "memory_line": "Case memory is unavailable on this snapshot.",
+            "places_orders": False,
+        }
+
+    decision_mem: dict[str, Any] = {}
+    try:
+        from product.decision_memory import for_symbol
+        decision_mem = for_symbol(symbol, row=scan_row or long_row, frame=frame)
+    except Exception:
+        decision_mem = {"stance": "WAIT", "places_orders": False}
+
     return {
         "schema_version": 1,
         "generated_at": now.isoformat(),
@@ -429,4 +485,6 @@ def build_stock_workspace(
         "fno": fno_match,
         "sources": sources,
         "next_actions": next_actions,
+        "case": case,
+        "decision_memory": decision_mem,
     }

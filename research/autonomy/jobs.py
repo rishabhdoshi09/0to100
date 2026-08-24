@@ -9,6 +9,7 @@ from __future__ import annotations
 import csv
 import json
 import os
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -155,13 +156,65 @@ class Deps:
         from data.nse_universe import point_in_time_universe
         return point_in_time_universe(self.now_ist().date())
 
+    def live_market_ready(self):
+        from data.nse_live import live_session_ready
+        info = live_session_ready()
+        if info.get("ready"):
+            print(
+                f"[KITE] latest session ready · {int(info.get('symbols') or 0)} symbols · "
+                f"{info.get('source') or 'kite'} · {info.get('session_date') or ''}",
+                flush=True,
+            )
+        return info
+
     def warm_indices(self):
         from data.index_store import build_index_store
         return {"indices": int(build_index_store()), "source": "official_nse"}
 
     def run_scan(self):
+        from product.scan_progress import eta_label, finish_progress, write_progress
         from scan.market_scan_service import run_whole_market_scan
-        return run_whole_market_scan(snapshot_id=str(self.active_snapshot_id() or ""))
+        started = time.time()
+        last_print = 0.0
+
+        def progress(current, total=0, **_kw):
+            nonlocal last_print
+            payload = write_progress(
+                current=int(current or 0),
+                total=int(total or 0),
+                stage="SCANNING",
+                source="autonomy",
+            )
+            now = time.time()
+            if int(current or 0) in (0, 1) or int(current or 0) == int(total or 0) or now - last_print >= 5:
+                remain = payload.get("eta_label") or eta_label(
+                    ((int(total or 0) - int(current or 0)) / max(int(current or 1), 1)) * max(0.1, now - started)
+                )
+                extra = f" · {remain} left" if remain else ""
+                print(
+                    f"[SCAN] {int(current or 0)}/{int(total or 0)} · "
+                    f"{payload.get('pct') or 0:.0f}%{extra}",
+                    flush=True,
+                )
+                last_print = now
+
+        write_progress(current=0, total=0, stage="STARTING", source="autonomy")
+        try:
+            report = run_whole_market_scan(
+                progress_callback=progress,
+                snapshot_id=str(self.active_snapshot_id() or ""),
+                save=True,
+            )
+            payload = dict(getattr(report, "payload", {}) or {})
+            summary = dict(payload.get("summary", {}) or {})
+            finish_progress(
+                records=len(payload.get("records") or []),
+                setups=int(summary.get("with_any_setup") or 0),
+            )
+            return report
+        except Exception:
+            finish_progress(error="scan_failed")
+            raise
 
     def notify_scan(self, payload, *, phase=""):
         return self.telegram.notify_scan(payload, phase=phase)
@@ -176,12 +229,74 @@ class Deps:
     def observe_live_breakouts(self):
         try:
             from product.scan_store import load_scan
-            return self.telegram.observe_live_breakouts(load_scan(), self.live_feed)
-        except Exception:
+            out = self.telegram.observe_live_breakouts(load_scan(), self.live_feed) or {}
+            confirmed = int(out.get("confirmed") or 0)
+            if confirmed > 0:
+                print(f"[SNIPER] Telegram sent {confirmed} breakout alert(s)", flush=True)
+            self._log_sniper(out)
+            return out
+        except Exception as exc:
+            print(f"[SNIPER] observe failed: {type(exc).__name__}: {exc}", flush=True)
             return {"confirmed": 0}
 
+    def _log_sniper(self, out: dict) -> None:
+        now = time.time()
+        last = float(getattr(self, "_sniper_log_at", 0.0) or 0.0)
+        if now - last < 60.0 and int(out.get("confirmed") or 0) == 0:
+            return
+        self._sniper_log_at = now
+        health = {}
+        try:
+            health = self.live_feed.health() if self.live_feed is not None else {}
+        except Exception:
+            health = {}
+        telegram = "ON" if self.telegram.configured() else "OFF"
+        err = str(health.get("last_error") or "").strip()
+        if "sendMessage" in err:
+            err = "websocket connecting"
+        extra = f" · feed={err}" if err else ""
+        reason = str(out.get("reason") or "idle")
+        if reason == "no_live_ticks" and telegram == "ON":
+            reason = "no_live_ticks · waiting for Kite LTP or websocket"
+        print(
+            f"[SNIPER] telegram {telegram} · watching {int(out.get('watching') or 0)} · "
+            f"ticks {int(out.get('fresh') or health.get('symbols_ticking') or 0)} · "
+            f"armed {int(out.get('armed') or 0)} · {reason}{extra}",
+            flush=True,
+        )
+
+    def replay_scan_alerts(self):
+        from product.scan_store import load_scan
+        if not self.telegram.configured():
+            print("[TELEGRAM] OFF · set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID in .env", flush=True)
+            return {"setup": 0, "prebreakout": 0}
+        payload = load_scan()
+        if not payload:
+            print("[TELEGRAM] no saved scan to alert yet — keep autonomy running", flush=True)
+            return {"setup": 0, "prebreakout": 0}
+        from research.autonomy.telegram_notifications import sniper_symbols
+        watch = sorted(sniper_symbols(payload))
+        sent = self.telegram.notify_scan(payload, phase="intraday") or {}
+        reason = str(sent.get("reason") or "").strip()
+        print(
+            f"[TELEGRAM] last-scan alerts · setups={int(sent.get('setup') or 0)} · "
+            f"near-breakout={int(sent.get('prebreakout') or 0)} · "
+            f"sniper-watch {len(watch)}"
+            + (f" · {', '.join(watch[:8])}" if watch else " · no Watch-for-breakout/Ready names with an entry")
+            + (f" · {reason}" if reason else ""),
+            flush=True,
+        )
+        return sent
+
     def notify_online(self):
-        return self.telegram.notify_online()
+        ok = self.telegram.notify_online()
+        if ok:
+            print("[TELEGRAM] autonomy-online message sent", flush=True)
+        elif not self.telegram.configured():
+            print("[TELEGRAM] OFF · set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID in .env", flush=True)
+        else:
+            print("[TELEGRAM] autonomy-online send failed", flush=True)
+        return ok
 
     def notify_incident(self, code, message):
         return self.telegram.notify_incident(code, message)
@@ -277,6 +392,36 @@ def run_instrument_refresh(ctx) -> JobResult:
                          error_code="INSTRUMENT_REFRESH_ERROR", error_message=str(exc))
 
 
+def _live_market(ctx) -> dict:
+    if hasattr(ctx.deps, "live_market_ready"):
+        try:
+            return dict(ctx.deps.live_market_ready() or {})
+        except Exception:
+            return {}
+    return {}
+
+
+def _kite_live_ready_result(ctx, *, sid=None, quality=None, live=None) -> JobResult | None:
+    live = dict(live or _live_market(ctx) or {})
+    if not live.get("ready"):
+        return None
+    quality = dict(quality or {})
+    latest = str(live.get("session_date") or quality.get("latest_date") or "")
+    unblocks = [DEP_DATA]
+    if latest:
+        unblocks.append(f"EOD_DATA_READY:{latest}")
+    return JobResult(
+        JS.SUCCEEDED,
+        f"Kite latest session ready · {int(live.get('symbols') or 0)} symbols · "
+        f"{live.get('source') or 'kite_quotes'}",
+        output_snapshot_id=sid,
+        clears={H.SNAPSHOT_STALE, H.AUTH_MISSING, H.AUTH_EXPIRED, H.PROVIDER_UNAVAILABLE},
+        state_hint=ST.DATA_READY,
+        unblocks=tuple(unblocks),
+        metadata={**quality, **live, "latest_date": latest or live.get("session_date", "")},
+    )
+
+
 def run_data_refresh(ctx) -> JobResult:
     if not _auth_health(ctx.deps).valid:
         return JobResult(JS.BLOCKED, "auth required before data refresh",
@@ -285,6 +430,9 @@ def run_data_refresh(ctx) -> JobResult:
     try:
         report = ctx.deps.activate()
     except Exception as exc:
+        kite = _kite_live_ready_result(ctx)
+        if kite is not None:
+            return kite
         return JobResult(JS.RETRYABLE_FAILED, "data refresh error", error_code="ACTIVATE_ERROR",
                          error_message=str(exc), failures={H.SNAPSHOT_STALE}, state_hint=ST.DATA_BLOCKED)
     ok = report.status("GENUINE_SNAPSHOT_ACTIVE") == "PASS" if hasattr(report, "status") else False
@@ -299,6 +447,11 @@ def run_data_refresh(ctx) -> JobResult:
             latest = str((ctx.deps.active_snapshot_info() or {}).get("latest_date") or "")
         required = str(getattr(ctx, "required_session_date", "") or "")
         if required and latest < required:
+            live = _live_market(ctx)
+            if live.get("ready") and str(live.get("session_date") or "") >= required:
+                kite = _kite_live_ready_result(ctx, sid=sid, quality={**quality, "latest_date": latest}, live=live)
+                if kite is not None:
+                    return kite
             return JobResult(JS.RETRYABLE_FAILED,
                              f"EOD data pending · active snapshot latest={latest or 'unknown'} · required={required}",
                              output_snapshot_id=sid, error_code="EOD_DATA_PENDING",
@@ -313,6 +466,13 @@ def run_data_refresh(ctx) -> JobResult:
                          clears={H.SNAPSHOT_STALE, H.AUTH_MISSING, H.AUTH_EXPIRED,
                                  H.PROVIDER_UNAVAILABLE}, state_hint=ST.DATA_READY,
                          unblocks=tuple(unblocks), metadata={**quality, "latest_date": latest})
+    kite = _kite_live_ready_result(
+        ctx,
+        sid=getattr(report, "active_pointer", None) or getattr(report, "snapshot_id", None),
+        quality=dict(getattr(report, "quality", {}) or {}),
+    )
+    if kite is not None:
+        return kite
     blocker = getattr(report, "blocker", "") or "snapshot not forward-eligible"
     return JobResult(JS.BLOCKED, f"data not ready: {blocker}", failures={H.SNAPSHOT_STALE},
                      state_hint=ST.DATA_BLOCKED, new_entries_allowed=False,
@@ -414,10 +574,18 @@ def run_long_term_refresh_job(ctx) -> JobResult:
 
 
 def run_market_scan(ctx) -> JobResult:
-    if not ctx.deps.active_snapshot_id():
+    snap = ctx.deps.active_snapshot_id()
+    live = {} if snap else _live_market(ctx)
+    if not snap and not live.get("ready"):
         return JobResult(JS.BLOCKED, "verified active snapshot required before market scan",
                          failures={H.SNAPSHOT_STALE}, blocked_on=DEP_DATA,
                          state_hint=ST.DATA_BLOCKED, new_entries_allowed=False)
+    if not snap and live.get("ready"):
+        print(
+            f"[SCAN] using latest Kite session · {int(live.get('symbols') or 0)} symbols · "
+            f"{live.get('source') or 'kite_quotes'}",
+            flush=True,
+        )
     try:
         report = ctx.deps.run_scan()
     except Exception as exc:
@@ -438,8 +606,15 @@ def run_market_scan(ctx) -> JobResult:
         try:
             phase = SCH.session_phase(ctx.deps.now_ist(), ctx.deps.holidays())
             telegram = ctx.deps.notify_scan(payload, phase=phase) or {}
+            print(
+                f"[TELEGRAM] scan alerts · setups={int(telegram.get('setup') or 0)} · "
+                f"near-breakout={int(telegram.get('prebreakout') or 0)}"
+                + (f" · {telegram.get('reason')}" if telegram.get("reason") else ""),
+                flush=True,
+            )
         except Exception:
             telegram = {"error": "notification_failed"}
+            print("[TELEGRAM] scan alert send failed", flush=True)
     return JobResult(JS.SUCCEEDED,
                      f"scan complete · {n} setups · {summary.get('momentum', 0)} momentum",
                      state_hint=ST.OBSERVING, unblocks=(DEP_SCAN,),
@@ -512,7 +687,11 @@ def run_learning_cycle(ctx) -> JobResult:
     except Exception as exc:
         return JobResult(JS.RETRYABLE_FAILED, "learning cycle failed", error_code="LEARNING_ERROR",
                          error_message=str(exc), failures={H.LEARNING_FAILED}, state_hint=ST.DEGRADED)
-    return JobResult(JS.SUCCEEDED, f"learning complete · {result.get('diagnostics', 0)} diagnostics",
+    return JobResult(JS.SUCCEEDED,
+                     f"learning complete · {result.get('diagnostics', 0)} diagnostics · "
+                     f"{result.get('paper_closed', 0)} paper trades · "
+                     f"{result.get('paper_cooldown', 0)} cooldown · "
+                     f"{result.get('paper_prefer', 0)} preferred",
                      clears={H.LEARNING_FAILED}, state_hint=ST.RESEARCHING,
                      unblocks=(f"{DEP_LEARNING}:{session_date}",), metadata=result)
 

@@ -11,7 +11,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
-DEFAULT_SCAN_PATH = Path("logs/product/latest_momentum_scan.json")
+def default_scan_path() -> Path:
+    return Path(__file__).resolve().parents[1] / "logs" / "product" / "latest_momentum_scan.json"
+
+
+DEFAULT_SCAN_PATH = default_scan_path()
 
 
 def _value(obj: Any, name: str, default: Any = None) -> Any:

@@ -1,0 +1,67 @@
+/** In-session + sessionStorage memory so tab changes and reloads keep the last desk. */
+
+const memory = new Map<string, unknown>()
+
+export function remember<T>(key: string, value: T): T {
+  memory.set(key, value)
+  writeSessionJson(`qt:${key}`, value)
+  return value
+}
+
+export function recall<T>(key: string): T | undefined {
+  if (memory.has(key)) return memory.get(key) as T
+  const stored = readSessionJson<T>(`qt:${key}`)
+  if (stored != null) {
+    memory.set(key, stored)
+    return stored
+  }
+  return undefined
+}
+
+export function keepRicher<T>(key: string, next: T, isEmpty: (value: T) => boolean): T {
+  const prev = recall<T>(key)
+  if (prev !== undefined && isEmpty(next) && !isEmpty(prev)) return prev
+  return remember(key, next)
+}
+
+export function readSessionJson<T>(key: string): T | null {
+  try {
+    const raw = window.sessionStorage.getItem(key)
+    if (!raw) return null
+    return JSON.parse(raw) as T
+  } catch {
+    return null
+  }
+}
+
+export function writeSessionJson(key: string, value: unknown): boolean {
+  try {
+    window.sessionStorage.setItem(key, JSON.stringify(value))
+    return true
+  } catch {
+    if (key.startsWith('qt:') || key === 'quantterm-dashboard') {
+      try {
+        window.sessionStorage.removeItem('quantterm-dashboard')
+        window.sessionStorage.setItem(key, JSON.stringify(value))
+        return true
+      } catch {
+        return false
+      }
+    }
+    return false
+  }
+}
+
+export type DeskNav = {
+  active: string
+  selected: string
+  compare: string[]
+}
+
+export function readDeskNav(): DeskNav {
+  return readSessionJson<DeskNav>('quantterm-nav') || { active: 'Home', selected: '', compare: [] }
+}
+
+export function writeDeskNav(nav: DeskNav): void {
+  writeSessionJson('quantterm-nav', nav)
+}

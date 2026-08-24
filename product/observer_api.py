@@ -14,6 +14,7 @@ from fastapi import Body, HTTPException, Query
 
 import terminal_api as core
 from product.data_api import install_data_routes
+from product.workspace import SCANNER_MODES, build_command_center_state, scanner_rows
 
 RUNTIME_PATH = core.ROOT / "logs" / "reconciliation" / "observer_runtime.json"
 SNAPSHOT_DB = core.ROOT / "logs" / "reconciliation" / "broker_snapshots.db"
@@ -153,14 +154,78 @@ def scanner_workspace(mode: str) -> dict[str, Any]:
 
 
 def radar_home_workspace() -> dict[str, Any]:
-    market = core._market_payload()
-    scan = core._scan_payload()
-    long_term = core._long_term_payload()
-    from product.radar_workspace import build_radar_home
-    return build_radar_home(
-        scan_payload=scan,
-        long_term_payload=long_term,
-        market=market,
+    """Today/Setups bootstrap. Empty cards until the last scan JSON is readable."""
+    scan: dict[str, Any] = {}
+    try:
+        market = core._market_payload()
+        scan = core._scan_payload()
+        long_term = core._long_term_payload()
+        from product.radar_workspace import build_radar_home
+        home = build_radar_home(
+            scan_payload=scan,
+            long_term_payload=long_term,
+            market=market,
+        )
+    except Exception as exc:
+        home = {
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "market_session": "",
+            "market_health": "Unavailable",
+            "breadth": "—",
+            "nifty_change_1d": None,
+            "vix": None,
+            "leaders": [],
+            "laggards": [],
+            "scan_scanned_at": str((scan or {}).get("scanned_at", "") or ""),
+            "long_term_scanned_at": "",
+            "universe_size": int((scan or {}).get("universe_size", 0) or 0),
+            "lanes": {"breakouts": [], "momentum": [], "long_term_picks": []},
+            "counts": {"breakouts": 0, "momentum": 0, "long_term_picks": 0, "sniper_breakouts": 0},
+            "best_breakout": None,
+            "best_among_fundamentals": None,
+            "sniper_candidates": [],
+            "best_setups": [],
+            "best_setups_note": "Last scan is not readable yet.",
+            "error": str(exc),
+        }
+    try:
+        from product.sepa_setup import public_best_setups
+        cards, note = public_best_setups(scan, limit=8, score_cap=24, max_seconds=2.0)
+        home["best_setups"] = cards
+        home["best_setups_note"] = note
+    except Exception:
+        home["best_setups"] = list(home.get("best_setups") or [])
+        home["best_setups_note"] = str(home.get("best_setups_note") or "SEPA ranking is temporarily unavailable.")
+    try:
+        from product.scan_progress import read_progress
+        home["scan_progress"] = read_progress()
+    except Exception:
+        home["scan_progress"] = {"active": False}
+    return home
+
+
+def recommendations_workspace() -> dict[str, Any]:
+    """Reco-style research categories + Active/Closed lifecycle (evidence only)."""
+    from product.recommendations_workspace import build_recommendations_workspace
+    return build_recommendations_workspace(
+        scan_payload=core._scan_payload(),
+        long_term_payload=core._long_term_payload(),
+        refresh_technicals=True,
+    )
+
+
+def market_reports_workspace() -> dict[str, Any]:
+    """Chronological Market Pulse desk from street_pulse + saved day files."""
+    from product.recommendations_workspace import build_market_reports_workspace
+    news: dict[str, Any] = {}
+    try:
+        news = core._news_payload()
+    except Exception:
+        news = {}
+    return build_market_reports_workspace(
+        persist_today=True,
+        news_payload=news,
+        scan_payload=core._scan_payload(),
     )
 
 
@@ -288,6 +353,18 @@ def install(app) -> None:
         radar_home_workspace,
         methods=["GET"],
         name="radar_home_workspace",
+    )
+    app.add_api_route(
+        "/api/recommendations-workspace",
+        recommendations_workspace,
+        methods=["GET"],
+        name="recommendations_workspace",
+    )
+    app.add_api_route(
+        "/api/market-reports-workspace",
+        market_reports_workspace,
+        methods=["GET"],
+        name="market_reports_workspace",
     )
     app.add_api_route(
         "/api/compare",

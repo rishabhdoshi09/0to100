@@ -1,12 +1,7 @@
+import { readJson } from './http'
 import type { ChartBar, ControlName, DashboardPayload, OperationRecord } from './types'
 
-const json = async <T>(response: Response): Promise<T> => {
-  if (!response.ok) {
-    const body = await response.text()
-    throw new Error(body || `Request failed with ${response.status}`)
-  }
-  return response.json() as Promise<T>
-}
+const json = readJson
 
 export const fetchDashboard = (): Promise<DashboardPayload> =>
   fetch('/api/dashboard', { headers: { Accept: 'application/json' } })

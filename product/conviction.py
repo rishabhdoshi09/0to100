@@ -2,8 +2,9 @@
 
 This module does not scan, trade, or mutate state.  It combines the scanner's
 stock-level evidence with the current market/sector context and makes the
-remaining risks explicit.  The word "conviction" therefore means multiple
-independent confirmations, not certainty.
+    remaining risks explicit.  User-facing copy is Setup Quality (0–100 checklist),
+    not a win probability. The field name `conviction_score` is kept for
+    compatibility with saved scan payloads.
 """
 from __future__ import annotations
 
@@ -34,6 +35,8 @@ class ConvictionCandidate:
         data = asdict(self)
         data["reasons"] = list(self.reasons)
         data["risks"] = list(self.risks)
+        data["setup_quality"] = self.conviction_score
+        data["setup_quality_label"] = "Setup Quality"
         return data
 
 

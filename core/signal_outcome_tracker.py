@@ -2,17 +2,16 @@
 Signal Outcome Tracker — the self-improving loop.
 
 Every time the scanner marks a stock READY_TO_TRADE, we log it.
-5 days later we check the actual price outcome and mark it as WIN/LOSS/OPEN.
-Over time this builds a dataset of what actually works vs what the system thinks works.
-The accuracy report feeds back into JARVIS context and the quality engine thresholds.
+The canonical outcome resolver settles it on official bhavcopy: first-touch
+stop-before-target when geometry exists, otherwise the horizon-th session
+close. Never a live quote. Never “five calendar days then today’s price.”
 """
 from __future__ import annotations
 
 import sqlite3
 import os
 import threading
-from datetime import datetime, timedelta
-from typing import Optional
+from datetime import datetime, timedelta  # noqa: F401 — kept for callers that import the name
 
 _DB_PATH = os.path.join(os.path.dirname(__file__), "..", "logs", "signal_outcomes.db")
 _DB_PATH = os.path.normpath(_DB_PATH)
@@ -127,23 +126,21 @@ def log_signal(
         pass  # never crash on tracker errors
 
 
-# ── True target-vs-stop first-touch resolution (matches the backtest) ─────────
-# The point-in-time quote method below marks a signal win/loss by ±band at check
-# time — a noisy proxy that over-counts losses (a −1% wiggle looks like a loss
-# even when the real stop is −6%) and caps wins near +2%. When we have a valid
-# target/stop and official bhavcopy bars, we instead judge the outcome the way
-# the trade was actually set up and the way the backtest measures it: did the
-# target hit before the stop? Everything downstream (live-edge, EV, drift,
-# beliefs, calibration) inherits this accuracy.
+# ── Canonical resolution (same clock as decision_journal / Cases) ─────────────
+# Geometry present → first-touch stop-before-target on official bars.
+# No geometry → close-to-close at the horizon-th trading session.
+# Never a live quote. A delayed runner must not mark day-8 as day-5.
 _OPEN = object()                         # sentinel: trade still live, leave NULL
 _HORIZON_SESSIONS = int(os.getenv("QT_OUTCOME_HORIZON", "15") or 15)
 
 
 def _resolve_via_path(row) -> object | None:
-    """First-touch outcome from bhavcopy OHLC. Returns (id, price, pct, worked),
-    the _OPEN sentinel (still live within horizon), or None (no target/path data
-    → caller falls back to the point-in-time quote method). Conservative within a
-    bar: the stop is checked before the target (never overstates a win)."""
+    """First-touch outcome from official bars via the canonical resolver.
+
+    Returns (id, price, pct, worked), the _OPEN sentinel (still live or
+    missing bars), or None (no usable geometry — caller may use the
+    session-close path). Stop is checked before target.
+    """
     try:
         entry = float(row["entry_price"] or 0)
         stop = float(row["stop_price"] or 0)
@@ -151,56 +148,30 @@ def _resolve_via_path(row) -> object | None:
     except Exception:
         return None
     if entry <= 0 or stop <= 0 or target <= entry or stop >= entry:
-        return None                      # need real geometry to path-resolve
+        return None
     try:
-        import pandas as pd
-        from data.bhavcopy_store import get_ohlcv
-        df = get_ohlcv(row["symbol"])
+        from core.outcome_resolver import first_touch_path
+        got = first_touch_path(
+            row["symbol"],
+            str(row["logged_at"] or "")[:10],
+            entry, stop, target,
+        )
     except Exception:
-        return None
-    if df is None or df.empty or not {"high", "low", "close"} <= set(df.columns):
-        return None
-    since = df[df.index >= pd.Timestamp(str(row["logged_at"])[:10])]
-    if since.empty:
-        return None
-    highs = since["high"].to_numpy(dtype=float)
-    lows = since["low"].to_numpy(dtype=float)
-    closes = since["close"].to_numpy(dtype=float)
-    n = len(highs)
-    horizon = min(n, _HORIZON_SESSIONS)
-    filled = False
-    for i in range(horizon):
-        if not filled:                   # breakout entries sit above the market
-            if highs[i] >= entry:
-                filled = True
-            else:
-                continue
-        if lows[i] <= stop:              # stop first (pessimistic)
-            return (row["id"], stop, (stop - entry) / entry * 100.0, 0)
-        if highs[i] >= target:
-            return (row["id"], target, (target - entry) / entry * 100.0, 1)
-    if not filled:
-        # never triggered — NO_FILL only once the horizon has fully elapsed
-        return (row["id"], 0.0, 0.0, -1) if n >= _HORIZON_SESSIONS else _OPEN
-    if n >= _HORIZON_SESSIONS:           # filled, no touch → mark to market
-        last = float(closes[horizon - 1])
-        return (row["id"], last, (last - entry) / entry * 100.0,
-                1 if last >= entry else 0)
-    return _OPEN                         # still live, leave it open
+        return _OPEN
+    if got is None:
+        return _OPEN
+    price, pct, worked = got
+    return (row["id"], price, pct, worked)
 
 
 def update_outcomes(lookback_days: int = 30) -> None:
-    """
-    Check outcomes for signals logged > 5 days ago that are still OPEN (worked=NULL).
-    Prices come from the unified quote chain in ONE bulk call (Kite→NSE→Google);
-    the slow per-symbol path survives only as fallback for misses.
-    outcome_pct = (current_price - entry_price) / entry_price * 100
-    worked = 1 if outcome_pct >= 2.0 else (0 if outcome_pct <= -1.0 else None)
-    """
-    from concurrent.futures import ThreadPoolExecutor
+    """Settle OPEN signals through the canonical outcome resolver.
 
+    Lookback is only a search window. A row is due when official bars
+    actually contain the horizon-th session — never because five
+    calendar days have passed and a live quote exists.
+    """
     try:
-        cutoff = (_now() - timedelta(days=5)).isoformat(timespec="seconds")
         too_old = (_now() - timedelta(days=lookback_days)).isoformat(timespec="seconds")
 
         conn = _get_conn()
@@ -210,10 +181,9 @@ def update_outcomes(lookback_days: int = 30) -> None:
                 SELECT id, symbol, entry_price, stop_price, target_price, logged_at
                 FROM signal_log
                 WHERE worked IS NULL
-                  AND logged_at <= ?
                   AND logged_at >= ?
                 """,
-                (cutoff, too_old),
+                (too_old,),
             ).fetchall()
         finally:
             conn.close()
@@ -221,23 +191,8 @@ def update_outcomes(lookback_days: int = 30) -> None:
         if not rows:
             return
 
-        # One bulk quote call covers most symbols cheaply
-        _bulk_prices: dict[str, float] = {}
-        try:
-            from data.live_quotes import get_live_quotes
-            _bulk = get_live_quotes(sorted({r["symbol"] for r in rows}))
-            _bulk_prices = {s: float(q["price"]) for s, q in _bulk.items()
-                            if q.get("price")}
-        except Exception:
-            pass
-
         def _entry_was_triggered(symbol: str, entry: float, logged_at: str) -> bool:
-            """
-            Fill-awareness: a breakout entry sits ABOVE the market. If the
-            high since the signal never reached it, the trade never existed —
-            judging it by today's price would poison the accuracy stats.
-            Unknown history → assume triggered (fail open, never lose data).
-            """
+            """Fill-awareness: a breakout entry sits ABOVE the market."""
             try:
                 import pandas as pd
                 from data.bhavcopy_store import get_ohlcv
@@ -251,80 +206,42 @@ def update_outcomes(lookback_days: int = 30) -> None:
             except Exception:
                 return True
 
-        # Filter out recently errored symbols
-        def _should_skip(symbol: str) -> bool:
-            with _error_lock:
-                ts = _error_cache.get(symbol)
-            if ts and (datetime.now() - ts).total_seconds() < _ERROR_COOLDOWN_MIN * 60:
-                return True
-            return False
-
-        def _fetch_price(row) -> Optional[tuple[int, float, float, int | None]]:
-            """Returns (id, outcome_price, outcome_pct, worked) or None on error."""
+        results: list[tuple[int, float, float, int | None]] = []
+        for row in rows:
             symbol = row["symbol"]
             entry = row["entry_price"]
-            # Delisted symbol can NEVER resolve — close it as VOID (worked=-1,
-            # excluded from accuracy math) instead of retrying every cycle
             try:
                 from data.dead_symbols import is_dead
                 if is_dead(symbol):
-                    return (row["id"], 0.0, 0.0, -1)
+                    results.append((row["id"], 0.0, 0.0, -1))
+                    continue
             except Exception:
                 pass
-            # PREFERRED: true target-vs-stop first-touch from official bhavcopy
-            # (accurate, matches the backtest). Falls through to the point-in-time
-            # quote method only when there's no target / no path data.
             pv = _resolve_via_path(row)
             if pv is _OPEN:
-                return None              # still live — leave the row open (NULL)
+                continue
             if pv is not None:
-                return pv                # definitive first-touch resolution
-            # No-fill check first: order never triggered = not a trade.
-            # worked=-1 marks NO_FILL (excluded from all accuracy math).
+                results.append(pv)
+                continue
             if entry and not _entry_was_triggered(symbol, float(entry),
                                                   row["logged_at"]):
-                return (row["id"], 0.0, 0.0, -1)
-            # Bulk-quote fast path — no per-symbol HTTP
-            price = _bulk_prices.get(symbol, 0.0)
-            if price > 0 and entry > 0:
-                pct = (price - entry) / entry * 100.0
-                worked = 1 if pct >= 2.0 else (0 if pct <= -1.0 else None)
-                return (row["id"], price, pct, worked)
-            if _should_skip(symbol):
-                return None
+                results.append((row["id"], 0.0, 0.0, -1))
+                continue
+            if not entry or float(entry) <= 0:
+                continue
             try:
-                from agents.tools import get_technical_indicators
-                data = get_technical_indicators(symbol)
-                if "error" in data:
-                    with _error_lock:
-                        _error_cache[symbol] = datetime.now()
-                    return None
-                price = float(data.get("ltp") or data.get("price") or 0)
-                if price <= 0 or entry <= 0:
-                    return None
-                pct = (price - entry) / entry * 100.0
-                if pct >= 2.0:
-                    worked = 1
-                elif pct <= -1.0:
-                    worked = 0
-                else:
-                    worked = None
-                return (row["id"], price, pct, worked)
+                from core.outcome_resolver import session_close_return
+                resolved = session_close_return(
+                    symbol, str(row["logged_at"] or "")[:10],
+                )
             except Exception:
-                with _error_lock:
-                    _error_cache[symbol] = datetime.now()
-                return None
-
-        with ThreadPoolExecutor(max_workers=5) as ex:
-            futures = [ex.submit(_fetch_price, row) for row in rows]
-            results = []
-            for f in futures:
-                try:
-                    res = f.result(timeout=30)
-                    if res is not None:
-                        results.append(res)
-                except Exception:
-                    pass
+                continue
+            if resolved is None:
+                continue
+            price, _ = resolved
+            pct = (float(price) - float(entry)) / float(entry) * 100.0
+            worked = 1 if pct >= 2.0 else (0 if pct <= -1.0 else None)
+            results.append((row["id"], float(price), pct, worked))
 
         if not results:
             return
@@ -333,8 +250,6 @@ def update_outcomes(lookback_days: int = 30) -> None:
         conn = _get_conn()
         try:
             for (row_id, price, pct, worked) in results:
-                # NO_FILL rows carry NULL price/pct — they must never look
-                # like flat trades to the Report Card or accuracy math.
                 _price = None if worked == -1 else price
                 _pct = None if worked == -1 else pct
                 conn.execute(

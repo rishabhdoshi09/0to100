@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import {
   buildProgressLine,
+  estimateEtaSeconds,
+  formatEta,
   friendlyStageLabel,
   isActiveStatus,
   isTerminalStatus,
@@ -52,6 +54,14 @@ describe('scanRunner semantics', () => {
   it('never invents a percentage without totals', () => {
     expect(progressPercent(baseOperation({ progress_pct: null, progress_total: 0 }))).toBeNull()
     expect(progressPercent(baseOperation({ progress_current: 50, progress_total: 200 }))).toBe(25)
+  })
+
+  it('estimates ETA from observed scan pace and never invents one early', () => {
+    expect(estimateEtaSeconds(baseOperation({ progress_current: 0, progress_total: 2000 }), 10)).toBeNull()
+    expect(estimateEtaSeconds(baseOperation({ progress_current: 400, progress_total: 2000 }), 40)).toBe(160)
+    expect(formatEta(160)).toBe('about 3 min')
+    expect(formatEta(12)).toBe('under 15s')
+    expect(formatEta(null)).toBeNull()
   })
 
   it('surfaces qualified counts from persisted results', () => {

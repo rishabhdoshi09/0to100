@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import threading
 import time
 import uuid
 from pathlib import Path
@@ -17,6 +18,29 @@ CANCELLED = "CANCELLED"
 TERMINAL = frozenset({SUCCEEDED, FAILED, BLOCKED, CANCELLED})
 
 
+class _BorrowedConnection:
+    """Keep one SQLite connection per worker thread instead of opening a new FD each poll."""
+
+    def __init__(self, con: sqlite3.Connection) -> None:
+        self._con = con
+
+    def __enter__(self) -> sqlite3.Connection:
+        return self._con
+
+    def __exit__(self, exc_type, exc, tb) -> bool:
+        if exc_type is None:
+            try:
+                self._con.commit()
+            except Exception:
+                pass
+        else:
+            try:
+                self._con.rollback()
+            except Exception:
+                pass
+        return False
+
+
 class OperationStore:
     """SQLite-backed queue shared by the API and the market-operations worker.
 
@@ -28,15 +52,38 @@ class OperationStore:
     def __init__(self, path: str | Path = "logs/market_ops/jobs.db") -> None:
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
+        self._local = threading.local()
         self._init_schema()
 
-    def _connect(self) -> sqlite3.Connection:
-        con = sqlite3.connect(str(self.path), timeout=5.0)
-        con.row_factory = sqlite3.Row
-        con.execute("PRAGMA journal_mode=WAL")
-        con.execute("PRAGMA synchronous=NORMAL")
-        con.execute("PRAGMA busy_timeout=5000")
-        return con
+    def _connect(self):
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        cached = getattr(self._local, "con", None)
+        if cached is not None and getattr(self._local, "path", None) == str(self.path):
+            try:
+                cached.execute("SELECT 1")
+                return _BorrowedConnection(cached)
+            except Exception:
+                try:
+                    cached.close()
+                except Exception:
+                    pass
+                self._local.con = None
+        last_exc: Exception | None = None
+        for _ in range(3):
+            try:
+                con = sqlite3.connect(str(self.path), timeout=5.0)
+                con.row_factory = sqlite3.Row
+                con.execute("PRAGMA journal_mode=WAL")
+                con.execute("PRAGMA synchronous=NORMAL")
+                con.execute("PRAGMA busy_timeout=5000")
+                self._local.con = con
+                self._local.path = str(self.path)
+                return _BorrowedConnection(con)
+            except sqlite3.OperationalError as exc:
+                last_exc = exc
+                time.sleep(0.05)
+                self.path.parent.mkdir(parents=True, exist_ok=True)
+        raise last_exc if last_exc is not None else sqlite3.OperationalError("unable to open database file")
 
     def _init_schema(self) -> None:
         with self._connect() as con:

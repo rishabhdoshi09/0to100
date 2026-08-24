@@ -126,6 +126,43 @@ def profile_edge() -> dict:
     }
 
 
+def setup_regime_stats(setup: str) -> dict[str, dict]:
+    """Per-tape stats for ONE signal. Never the global regime blend.
+
+    A setup that paid in HEALTHY tape and leaked in NARROW must not inherit
+    the book-wide regime averages. Empty when this signal has no closed rows
+    in that tape.
+    """
+    key = str(setup or "").strip()
+    if not key:
+        return {}
+    buckets: dict[str, list[tuple[float, int]]] = {}
+    for row in _closed_rows():
+        parts = {p.strip() for p in str(row.get("archetype") or "").split("|") if p.strip()}
+        if key not in parts:
+            continue
+        r = _row_r(row)
+        if r is None:
+            continue
+        reg = str(row.get("regime") or "").strip()
+        if not reg:
+            continue
+        buckets.setdefault(reg, []).append((r, int(row.get("worked") or 0)))
+    out: dict[str, dict] = {}
+    for name, pairs in buckets.items():
+        n = len(pairs)
+        if not n:
+            continue
+        wins = sum(w for _, w in pairs)
+        out[name] = {
+            "n": n,
+            "wins": wins,
+            "win_rate": round(wins / n * 100.0, 1),
+            "expectancy_r": round(sum(r for r, _ in pairs) / n, 3),
+        }
+    return out
+
+
 def symbol_edge(min_n: int = 5) -> dict[str, dict]:
     """🧠 SYMBOL MEMORY — har stock ka apna charitra hota hai. Kuch naam
     breakout respect karte hain; kuch SERIAL FALSE-BREAKERS hain jo har

@@ -1,9 +1,10 @@
 import type { DashboardPayload } from './types'
-import { money } from './format'
 
 const PRIMARY_NAV = [
   ['⌂', 'Home', 'Home'],
   ['◎', 'Market Scanner', 'Market Scanner'],
+  ['▣', 'Recommendations', 'Recommendations'],
+  ['▤', 'Market Reports', 'Market Reports'],
   ['◉', 'Stock Intelligence', 'Stock Intelligence'],
   ['◇', 'Long-Term Picks', 'Long-Term Picks'],
   ['⇔', 'Compare', 'Compare'],
@@ -13,13 +14,24 @@ const PRIMARY_NAV = [
 const SECONDARY_NAV = [
   ['↗', 'Market Overview', 'Market Overview'],
   ['◈', 'News & Events', 'News & Events'],
+  ['✎', 'Education', 'Education'],
   ['▤', 'Research Data', 'Research Data'],
-  ['▣', 'Paper Portfolio', 'Paper Portfolio'],
+  ['🧪', 'Backtest', 'Backtest'],
+  ['⬡', 'F&O Desk', 'F&O Desk'],
+  ['▣', 'My Holdings', 'Paper Portfolio'],
   ['◌', 'System Health', 'System Health'],
 ] as const
 
-function Logo() {
-  return <div className="brand-mark" aria-hidden="true"><span /><span /><span /></div>
+const ROUTE_ALIAS: Record<string, string> = {
+  'Command Center': 'Home',
+  Scanner: 'Market Scanner',
+  'Long-Term': 'Long-Term Picks',
+  Portfolio: 'Paper Portfolio',
+  'Market Internals': 'Market Overview',
+  Automation: 'System Health',
+  Today: 'Home',
+  Setups: 'Market Scanner',
+  Desk: 'System Health',
 }
 
 function NavigationGroup({
@@ -43,11 +55,20 @@ function NavigationGroup({
           type="button"
           onClick={() => setActive(route)}
         >
-          <span>{icon}</span>{display}
+          <span className="reco-ico" aria-hidden="true">{icon}</span>
+          {display}
         </button>
       ))}
     </>
   )
+}
+
+function dataCopy(dashboard: DashboardPayload): string {
+  if (dashboard.data.ready) {
+    return `READY · ${dashboard.data.bhavcopy.latest_date || '—'}`
+  }
+  const busy = dashboard.operations.running || (dashboard.operations.active || []).length > 0
+  return busy ? 'Preparing official history…' : 'Starting data lanes…'
 }
 
 export function MarketSidebar({
@@ -60,28 +81,49 @@ export function MarketSidebar({
   dashboard: DashboardPayload
 }) {
   const operations = dashboard.operations.running
+  const current = ROUTE_ALIAS[active] || active
   return (
-    <aside className="sidebar">
-      <div className="brand"><Logo /><div><strong>QUANTTERM</strong><small>MARKET RADAR</small></div></div>
-      <nav>
-        <NavigationGroup label="DISCOVERY" rows={PRIMARY_NAV} active={active} setActive={setActive} />
-        <NavigationGroup label="TOOLS & EVIDENCE" rows={SECONDARY_NAV} active={active} setActive={setActive} />
+    <aside className="sidebar reco-sidebar">
+      <div className="reco-brand">
+        <div className="reco-mark" aria-hidden="true">QT</div>
+        <div className="reco-brand-copy">
+          <strong>QUANTTERM</strong>
+          <small>RESEARCH DESK</small>
+        </div>
+      </div>
+      <nav aria-label="Primary navigation">
+        <NavigationGroup label="DISCOVERY" rows={PRIMARY_NAV} active={current} setActive={setActive} />
+        <NavigationGroup label="TOOLS & EVIDENCE" rows={SECONDARY_NAV} active={current} setActive={setActive} />
       </nav>
       <div className="sidebar-spacer" />
-      <div className="broker-card">
+      <div className="reco-telemetry broker-card">
         <div className="broker-row">
           <strong>MARKET DATA</strong>
           <span className={dashboard.data.ready ? 'status-dot' : 'status-dot status-dot-off'} />
         </div>
-        <small>{dashboard.data.ready ? `READY · ${dashboard.data.bhavcopy.latest_date || '—'}` : 'INCOMPLETE'}</small>
+        <small>{dataCopy(dashboard)}</small>
         <div className="broker-stats">
-          <div><span>Sessions</span><strong>{dashboard.data.bhavcopy.sessions || 0}</strong></div>
-          <div><span>Universe</span><strong>{dashboard.scan.universe_size.toLocaleString('en-IN')}</strong></div>
+          <div>
+            <span>Sessions</span>
+            <strong>{dashboard.data.bhavcopy.sessions || 0}</strong>
+          </div>
+          <div>
+            <span>Universe</span>
+            <strong>{dashboard.scan.universe_size.toLocaleString('en-IN')}</strong>
+          </div>
         </div>
       </div>
-      <div className="broker-card compact-service-card">
-        <div className="broker-row"><strong>SCAN ENGINE</strong><span className={operations ? 'status-dot' : 'status-dot status-dot-off'} /></div>
-        <small>{operations ? 'ONLINE' : 'OFFLINE'} · last scan {dashboard.scan.scanned_at ? new Date(dashboard.scan.scanned_at).toLocaleDateString('en-IN') : '—'}</small>
+      <div className="reco-telemetry broker-card compact-service-card">
+        <div className="broker-row">
+          <strong>SCAN ENGINE</strong>
+          <span className={operations ? 'status-dot' : 'status-dot status-dot-off'} />
+        </div>
+        <small>
+          {operations ? 'WORKING' : 'READY'} · last scan{' '}
+          {dashboard.scan.scanned_at
+            ? new Date(dashboard.scan.scanned_at).toLocaleDateString('en-IN')
+            : 'queued'}
+        </small>
       </div>
     </aside>
   )

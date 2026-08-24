@@ -240,23 +240,80 @@ class MarketOperationsWorker:
                 )
             return current
 
+    def _notify_scan_telegram(self, payload: dict[str, Any]) -> dict[str, Any]:
+        try:
+            from research.autonomy import default_root
+            from research.autonomy.telegram_notifications import TelegramNotifier
+            sent = TelegramNotifier(default_root()).notify_scan(payload, phase="intraday") or {}
+            print(
+                f"[TELEGRAM] scan alerts · setups={int(sent.get('setup') or 0)} · "
+                f"near-breakout={int(sent.get('prebreakout') or 0)}"
+                + (f" · {sent.get('reason')}" if sent.get("reason") else ""),
+                flush=True,
+            )
+            return sent
+        except Exception as exc:
+            print(f"[TELEGRAM] scan alert send failed: {type(exc).__name__}: {exc}", flush=True)
+            return {"error": str(exc)}
+
     def _run_market_scan(self, operation: dict[str, Any]) -> dict[str, Any]:
         operation_id = str(operation["operation_id"])
         history = self._ensure_history(operation_id)
         self._progress(operation_id, "LOADING_UNIVERSE", "Loading approved NSE cash universe")
+        from product.scan_progress import eta_label, finish_progress, write_progress
         from scan.market_scan_service import run_whole_market_scan
 
         def prepared_prefetch(symbols, *, progress=None):
-            return len(symbols)
+            from scan.bulk_fetcher import prefetch as warm_ohlcv
+            # Do not pass scan_progress here: build_store reports missing
+            # bhav days (e.g. 11), which was shown as "Scanning 11 stocks".
+            return warm_ohlcv(symbols)
+
+        started = time.monotonic()
+        last_store = 0.0
+
+        def scan_progress(current, total=0, **_kw):
+            nonlocal last_store
+            now = time.monotonic()
+            payload = write_progress(
+                current=int(current or 0),
+                total=int(total or 0),
+                stage="SCANNING",
+                source="market_ops",
+            )
+            remain = payload.get("eta_label") or ""
+            message = (
+                f"Scanning {int(current or 0)}/{int(total or 0)} stocks"
+                + (f" · ETA {remain}" if remain else "")
+            )
+            if int(current or 0) <= 1 or int(current or 0) == int(total or 0) or now - last_store >= 0.8:
+                self._progress(
+                    operation_id,
+                    "SCANNING",
+                    message,
+                    current=int(current or 0),
+                    total=int(total or 0) or None,
+                )
+                last_store = now
 
         self._progress(
             operation_id,
             "SCANNING",
             f"Evaluating whole NSE universe with {history.get('sessions', 0)} official sessions",
         )
-        report = run_whole_market_scan(prefetch_fn=prepared_prefetch, save=True)
+        write_progress(current=0, total=0, stage="STARTING", source="market_ops")
+        try:
+            report = run_whole_market_scan(
+                prefetch_fn=prepared_prefetch,
+                progress_callback=scan_progress,
+                save=True,
+            )
+        except Exception:
+            finish_progress(error="scan_failed")
+            raise
         result = _operation_result(report)
         if not getattr(report, "ok", False):
+            finish_progress(error=str(getattr(report, "error_code", "") or "scan_failed"))
             code = str(getattr(report, "error_code", "SCAN_FAILED") or "SCAN_FAILED")
             message = str(getattr(report, "error_message", "Whole-market scan failed") or "Whole-market scan failed")
             if str(getattr(report, "status", "")) == "DATA_UNAVAILABLE":
@@ -267,6 +324,10 @@ class MarketOperationsWorker:
         result["summary"] = summary
         result["records"] = len(payload.get("records", []) or [])
         result["history"] = history
+        finish_progress(records=result["records"], setups=int(summary.get("with_any_setup") or 0))
+        result["telegram"] = self._notify_scan_telegram(payload)
+        elapsed = time.monotonic() - started
+        _emit("DONE", f"MARKET_SCAN ranked · {result['records']} rows · {elapsed:.1f}s")
         return result
 
     def _run_long_term(self, operation: dict[str, Any], *, refresh: bool) -> dict[str, Any]:
@@ -374,7 +435,7 @@ class MarketOperationsWorker:
         while not self.stop_event.is_set():
             operation = self.store.lease_next(lane, worker_pid=os.getpid())
             if operation is None:
-                self.stop_event.wait(0.5)
+                self.stop_event.wait(2.0)
                 continue
             self._set_active(lane, operation)
             operation_id = str(operation["operation_id"])

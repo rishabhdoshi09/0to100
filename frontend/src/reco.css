@@ -1,0 +1,98 @@
+.reco-how {
+  background: rgba(56, 189, 248, 0.06);
+  border: 1px solid rgba(56, 189, 248, 0.18);
+  border-radius: 12px;
+  padding: 1rem 1.15rem;
+  margin: 0 24px 16px;
+}
+.reco-how .qt-eyebrow,
+.qt-eyebrow {
+  font-size: .62rem;
+  letter-spacing: .16em;
+  text-transform: uppercase;
+  color: var(--qt-dim);
+  font-weight: 700;
+  font-family: var(--qt-mono);
+}
+.reco-how ol { margin: .35rem 0 0 1.1rem; padding: 0; color: var(--text); }
+.reco-how li { margin: .22rem 0; font-size: .88rem; line-height: 1.4; }
+.reco-how .k { color: var(--cyan); font-weight: 700; }
+
+.reco-card-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  padding: 0 24px 16px;
+}
+.reco-card {
+  appearance: none;
+  width: 100%;
+  text-align: left;
+  background: rgba(13, 20, 33, .92);
+  border: 1px solid #1e293b;
+  border-radius: 12px;
+  padding: 1.05rem 1.2rem;
+  color: inherit;
+  cursor: pointer;
+}
+.reco-card.active,
+.reco-card:hover { border-color: rgba(56, 189, 248, 0.35); }
+.reco-card .row { display: flex; justify-content: space-between; align-items: center; }
+.reco-card .sym { font-family: var(--qt-mono); font-weight: 700; font-size: 1.02rem; }
+.reco-card .co { font-size: .72rem; color: var(--muted); margin-top: .12rem; }
+.reco-card .px { font-size: .9rem; font-weight: 650; margin: .35rem 0 .2rem; }
+.reco-card .lv { font-size: .75rem; color: var(--muted); font-family: var(--qt-mono); }
+.reco-card .why { font-size: .78rem; color: #c9d1d9; margin-top: .4rem; line-height: 1.35; }
+.reco-badge { font-size: .8rem; font-weight: 750; }
+.reco-badge.buy { color: var(--green); }
+.reco-badge.watch { color: var(--amber); }
+.reco-badge.wait { color: #fb923c; }
+.reco-badge.avoid { color: var(--red); }
+
+.reco-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 0 24px 16px;
+}
+.reco-tabs button {
+  padding: 8px 14px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: rgba(255,255,255,.03);
+  color: var(--muted);
+  cursor: pointer;
+  font-weight: 650;
+}
+.reco-tabs button.active {
+  color: var(--cyan);
+  border-color: rgba(56, 189, 248, 0.4);
+  background: rgba(56, 189, 248, 0.1);
+}
+
+.reco-section {
+  padding: 8px 24px 0;
+}
+.reco-section h3 {
+  margin: .2rem 0 0;
+  font-size: 1.08rem;
+  font-weight: 750;
+}
+.reco-note {
+  margin: .25rem 0 .7rem;
+  color: var(--muted);
+  font-size: .82rem;
+  line-height: 1.4;
+}
+.empty-row {
+  margin: 0 24px 16px;
+  color: var(--muted);
+  font-size: .88rem;
+}
+
+.radar-hero span { font-family: var(--qt-mono); letter-spacing: .16em; color: var(--qt-dim) !important; }
+.radar-lane-card header span { color: var(--cyan) !important; }
+.radar-tab-row button.active {
+  border-color: rgba(56, 189, 248, .4) !important;
+  background: rgba(56, 189, 248, .12) !important;
+}

@@ -37,14 +37,25 @@ def _show_backtest_result(result: dict) -> None:
 
 
 def render_backtest() -> None:
+    from product.paper_lessons import BACKTEST_DOES_NOT_CHANGE, BACKTEST_PURPOSE, PAPER_TO_BACKTEST
+
+    st.markdown("<div class='qt-eyebrow'>Research  ·  after paper, before size</div>", unsafe_allow_html=True)
     st.title("Backtest")
-    st.caption("Four simple choices. The existing event-driven engine handles next-bar fills, slippage, costs, portfolio state and risk checks.")
+    st.caption(BACKTEST_PURPOSE)
+    st.info(PAPER_TO_BACKTEST)
+    st.warning(BACKTEST_DOES_NOT_CHANGE)
+
+    suggested = str(st.session_state.get("qt_backtest_symbol") or "RELIANCE").upper()
+    default_universe = st.session_state.get("qt_backtest_universe") or "Selected stock"
+    universes = ["Selected stock", "Nifty 50", "Current F&O stocks"]
+    universe_index = universes.index(default_universe) if default_universe in universes else 0
+
     with st.form("beginner_backtest_form"):
         c1, c2 = st.columns(2)
         strategy = c1.selectbox("Strategy", ["Core technical strategy", "Core technical + walk-forward reliability check"])
-        universe = c2.selectbox("Universe", ["Selected stock", "Nifty 50", "Current F&O stocks"])
+        universe = c2.selectbox("Universe", universes, index=universe_index)
         c3, c4, c5 = st.columns(3)
-        symbol = c3.text_input("Stock", value="RELIANCE", disabled=universe != "Selected stock")
+        symbol = c3.text_input("Stock", value=suggested, disabled=universe != "Selected stock")
         period = c4.selectbox("Period", ["1 year", "2 years", "3 years", "5 years"], index=2)
         capital = c5.number_input("Starting paper capital", min_value=10_000.0, value=100_000.0, step=10_000.0)
         run = st.form_submit_button("Run Backtest", type="primary", width="stretch")

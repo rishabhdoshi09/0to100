@@ -1,18 +1,18 @@
 /* QuantTerm design tokens — professional terminal surfaces */
 :root {
-  --qt-bg-base: #070d17;
-  --qt-bg-surface: #0c1828;
-  --qt-bg-elevated: #122236;
-  --qt-border: rgba(72, 98, 128, 0.35);
-  --qt-border-accent: rgba(54, 217, 255, 0.28);
-  --qt-text-primary: #eef4fb;
-  --qt-text-secondary: #9cb0c8;
-  --qt-text-muted: #6d8299;
-  --qt-accent-cyan: #36d9ff;
-  --qt-accent-violet: #977cff;
-  --qt-positive: #3dd68c;
-  --qt-negative: #f07178;
-  --qt-warning: #e6b450;
+  --qt-bg-base: #0a0e17;
+  --qt-bg-surface: #0d1420;
+  --qt-bg-elevated: #111827;
+  --qt-border: rgba(255, 255, 255, 0.07);
+  --qt-border-accent: rgba(56, 189, 248, 0.28);
+  --qt-text-primary: #e6e9ef;
+  --qt-text-secondary: #8b94a7;
+  --qt-text-muted: #525c6e;
+  --qt-accent-cyan: #38bdf8;
+  --qt-accent-violet: #2dd4bf;
+  --qt-positive: #34d399;
+  --qt-negative: #fb7185;
+  --qt-warning: #fbbf24;
   --qt-radius-sm: 6px;
   --qt-radius-md: 10px;
   --qt-radius-lg: 14px;

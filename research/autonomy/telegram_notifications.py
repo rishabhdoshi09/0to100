@@ -21,6 +21,55 @@ try:
 except Exception:  # pragma: no cover
     _IST = None
 
+# Same quality floor as scan/breakout_sniper: do not Telegram a chase or blow-off.
+_SNIPER_RSI_BLOWOFF = 82.0
+
+
+def is_sniper_watch(row: Mapping[str, Any] | None) -> bool:
+    """True if this scan row is a live sniper candidate for Telegram."""
+    if not row:
+        return False
+    if bool(row.get("chase_risk")):
+        return False
+    try:
+        rsi = float(row.get("rsi") or 0.0)
+    except (TypeError, ValueError):
+        rsi = 0.0
+    if rsi >= _SNIPER_RSI_BLOWOFF:
+        return False
+    try:
+        entry = float(row.get("entry") or 0.0)
+    except (TypeError, ValueError):
+        entry = 0.0
+    if entry <= 0:
+        return False
+    status = str(row.get("status") or "")
+    signals = [str(x).upper() for x in (row.get("signals") or [])]
+    categories = [str(x) for x in (row.get("categories") or [])]
+    if status in ("Watch for breakout", "Ready to trade"):
+        return True
+    if "PRE_BREAKOUT" in signals:
+        return True
+    if "PreBreakout" in categories:
+        try:
+            dist = float(row.get("pivot_distance_pct") or 99.0)
+        except (TypeError, ValueError):
+            dist = 99.0
+        if 0 < dist <= 2.5:
+            return True
+    return False
+
+
+def sniper_symbols(payload: Mapping[str, Any] | None) -> set[str]:
+    out: set[str] = set()
+    for row in (payload or {}).get("records") or []:
+        if not isinstance(row, Mapping) or not is_sniper_watch(row):
+            continue
+        symbol = str(row.get("symbol") or "").upper()
+        if symbol:
+            out.add(symbol)
+    return out
+
 
 class TelegramNotifier:
     """Durable, restart-safe Telegram notifier owned by the autonomy process."""
@@ -69,10 +118,20 @@ class TelegramNotifier:
         if self._engine_factory is not None:
             return self._engine_factory()
         try:
-            from dotenv import load_dotenv
-            load_dotenv(".env", override=False)
+            from alerts.telegram_alerts import _telegram_cred
+            token = _telegram_cred("TELEGRAM_BOT_TOKEN")
+            chat = _telegram_cred("TELEGRAM_CHAT_ID")
+            if token:
+                os.environ["TELEGRAM_BOT_TOKEN"] = token
+            if chat:
+                os.environ["TELEGRAM_CHAT_ID"] = chat
         except Exception:
-            pass
+            try:
+                from dotenv import load_dotenv
+                repo = Path(__file__).resolve().parents[2]
+                load_dotenv(repo / ".env", override=True)
+            except Exception:
+                pass
         from alerts.telegram_alerts import AlertEngine
         return AlertEngine()
 
@@ -114,9 +173,13 @@ class TelegramNotifier:
             return False
         try:
             engine = self._engine()
-            if not engine.is_configured() or not engine.send(message):
+            if not engine.is_configured():
                 return False
-        except Exception:
+            if not engine.send(message):
+                print(f"[TELEGRAM] send failed for {key}", flush=True)
+                return False
+        except Exception as exc:
+            print(f"[TELEGRAM] send error for {key}: {type(exc).__name__}: {exc}", flush=True)
             return False
         self._mark_sent([key], day)
         return True
@@ -166,14 +229,16 @@ class TelegramNotifier:
         ready = ready[:5]
 
         ready_symbols = {str(r.get("symbol", "")).upper() for r in ready}
-        pre = [r for r in records
+        pre_all = [r for r in records
                if (str(r.get("status", "")) == "Watch for breakout"
                    or "PRE_BREAKOUT" in [str(x).upper() for x in (r.get("signals") or [])])
                and self._f(r.get("entry")) > 0
                and str(r.get("symbol", "")).upper() not in ready_symbols
                and not self._was_sent(f"pre:{str(r.get('symbol', '')).upper()}", day)]
-        pre.sort(key=lambda r: (-self._f(r.get("score")), str(r.get("symbol", ""))))
-        pre = pre[:4]
+        pre_all.sort(key=lambda r: (-self._f(r.get("score")), str(r.get("symbol", ""))))
+        sniper_pre = [r for r in pre_all if is_sniper_watch(r)]
+        chase_pre = [r for r in pre_all if not is_sniper_watch(r)]
+        pre = (sniper_pre + chase_pre)[:4]
 
         lines: list[str] = []
         keys: list[str] = []
@@ -185,6 +250,9 @@ class TelegramNotifier:
                 emoji = "🔥" if verdict == "STRONG BUY" else "⚡"
                 reasons = [self._esc(x) for x in (r.get("reasons") or []) if str(x).strip()]
                 why = "\n".join(f"   ✓ {x}" for x in reasons[:3]) or "   ✓ Scanner gates passed"
+                sniper_note = ""
+                if not is_sniper_watch(r):
+                    sniper_note = "\n   Sniper will not confirm — chase/extended or RSI blow-off"
                 lines.append(
                     f"\n{emoji} <b>{self._esc(sym)}</b> ₹{self._f(r.get('price')):,.2f} — {self._esc(verdict)}\n"
                     f"{why}\n"
@@ -192,6 +260,7 @@ class TelegramNotifier:
                     f"Vol {self._f(r.get('volume_ratio')):.1f}×\n"
                     f"   Entry ₹{self._f(r.get('entry')):,.2f} · Stop ₹{self._f(r.get('stop')):,.2f} · "
                     f"Target ₹{self._f(r.get('target')):,.2f}"
+                    f"{sniper_note}"
                 )
                 keys.append(f"setup:{sym}")
         if pre:
@@ -203,23 +272,58 @@ class TelegramNotifier:
                 if entry > 0:
                     gap = max(0.0, (entry - price) / entry * 100.0)
                 reason = self._esc((r.get("reasons") or ["Structure near trigger"])[0])
+                if is_sniper_watch(r):
+                    follow = "Sniper watching — confirm alert if LTP holds 8s above trigger"
+                else:
+                    follow = "Sniper will not confirm — chase/extended. Pullback ka wait"
                 lines.append(
                     f"\n👀 <b>{self._esc(sym)}</b> ₹{price:,.2f} · trigger ₹{entry:,.2f} "
                     f"({gap:.1f}% neeche)\n"
                     f"   {reason}\n"
-                    f"   Confirm hone par alert · stop ₹{self._f(r.get('stop')):,.2f}"
+                    f"   {follow} · stop ₹{self._f(r.get('stop')):,.2f}"
                 )
                 keys.append(f"pre:{sym}")
+
+        watch = sorted(sniper_symbols(payload))
+        if watch and lines:
+            extra = f" +{len(watch) - 8}" if len(watch) > 8 else ""
+            lines.append(
+                "\n🎯 <b>Sniper live watch</b> (not chase): "
+                + ", ".join(self._esc(s) for s in watch[:8])
+                + extra
+                + "\nConfirm Telegram only if LTP holds 8s above entry · 09:15–15:30 IST"
+            )
 
         if lines:
             try:
                 engine = self._engine()
-                if engine.is_configured() and engine.send("\n".join(lines)):
+                if not engine.is_configured():
+                    sent["reason"] = "not_configured"
+                elif engine.send("\n".join(lines)):
                     self._mark_sent(keys, day)
                     sent["setup"] = len(ready)
                     sent["prebreakout"] = len(pre)
-            except Exception:
-                pass
+                    sent["reason"] = "sent"
+                else:
+                    sent["reason"] = "send_failed"
+                    print("[TELEGRAM] scan/breakout send failed — check token, chat id, bot start", flush=True)
+            except Exception as exc:
+                sent["reason"] = "send_failed"
+                print(f"[TELEGRAM] scan/breakout send error: {type(exc).__name__}: {exc}", flush=True)
+        else:
+            had_setup = any(
+                str(r.get("verdict", "")).upper() in ("BUY", "STRONG BUY")
+                and not bool(r.get("chase_risk"))
+                and self._f(r.get("entry")) > 0
+                for r in records
+            )
+            had_pre = any(
+                (str(r.get("status", "")) == "Watch for breakout"
+                 or "PRE_BREAKOUT" in [str(x).upper() for x in (r.get("signals") or [])])
+                and self._f(r.get("entry")) > 0
+                for r in records
+            )
+            sent["reason"] = "already_sent" if (had_setup or had_pre) else "no_candidates"
 
         if phase == "eod" and not self._was_sent("eod_scan_summary", day):
             msg = (
@@ -303,22 +407,24 @@ class TelegramNotifier:
         arms = self.state.setdefault("arms", {})
         now = float(self._epoch())
         confirmed: list[tuple[dict, float]] = []
+        watching = 0
+        fresh_n = 0
 
         for r in records:
+            if not is_sniper_watch(r):
+                continue
+            watching += 1
             sym = str(r.get("symbol", "")).upper()
             entry = self._f(r.get("entry"))
             if not sym or entry <= 0:
-                continue
-            signals = [str(x).upper() for x in (r.get("signals") or [])]
-            relevant = (str(r.get("status", "")) in ("Watch for breakout", "Ready to trade")
-                        or "PRE_BREAKOUT" in signals)
-            if not relevant:
                 continue
             try:
                 fresh = bool(live_feed.entry_allowed(sym))
                 price = self._f(live_feed.price(sym))
             except Exception:
                 fresh, price = False, 0.0
+            if fresh:
+                fresh_n += 1
             trigger = entry * (1.0 + self.breakout_buffer_bps / 10000.0)
             if not fresh or price < trigger:
                 arms.pop(sym, None)
@@ -336,10 +442,16 @@ class TelegramNotifier:
 
         self._save()
         if not confirmed:
-            return {"confirmed": 0}
+            reason = "holding_for_confirm" if arms else "no_fresh_cross"
+            if watching == 0:
+                reason = "no_sniper_candidates"
+            elif fresh_n == 0:
+                reason = "no_live_ticks"
+            return {"confirmed": 0, "watching": watching, "armed": len(arms),
+                    "fresh": fresh_n, "reason": reason}
         confirmed.sort(key=lambda x: (-self._f(x[0].get("score")), str(x[0].get("symbol", ""))))
         confirmed = confirmed[:5]
-        lines = ["🚨 <b>BREAKOUT CONFIRMED — fresh Kite ticks</b>"]
+        lines = ["🚨 <b>SNIPER BREAKOUT CONFIRMED — live ticks</b>"]
         keys = []
         for r, price in confirmed:
             sym = str(r.get("symbol", "")).upper()
@@ -359,10 +471,12 @@ class TelegramNotifier:
                 for r, _ in confirmed:
                     arms.pop(str(r.get("symbol", "")).upper(), None)
                 self._save()
-                return {"confirmed": len(confirmed)}
-        except Exception:
-            pass
-        return {"confirmed": 0}
+                return {"confirmed": len(confirmed), "watching": watching,
+                        "armed": 0, "fresh": fresh_n, "reason": "sent"}
+        except Exception as exc:
+            print(f"[TELEGRAM] sniper send error: {type(exc).__name__}: {exc}", flush=True)
+        return {"confirmed": 0, "watching": watching, "armed": len(arms),
+                "fresh": fresh_n, "reason": "send_failed"}
 
     def notify_long_term(self, payload: Mapping[str, Any] | None) -> dict:
         """Send the current weekly long-term shortlist once per symbol/day."""

@@ -1,8 +1,15 @@
 from datetime import datetime, timezone
 
 import pandas as pd
+import pytest
 
 from product.stock_workspace import build_stock_workspace
+
+
+@pytest.fixture(autouse=True)
+def _isolate_case_db(tmp_path, monkeypatch):
+    import product.case_memory as cm
+    monkeypatch.setattr(cm, "CASES_DB", tmp_path / "cases.db")
 
 
 def test_stock_workspace_combines_technicals_fundamentals_and_sources():
@@ -33,6 +40,11 @@ def test_stock_workspace_combines_technicals_fundamentals_and_sources():
     assert result["fundamentals"]["coverage_pct"] > 0
     assert result["company"] == "Test Ltd"
     assert result["sources"][0]["status"] == "FRESH"
+    assert result["case"]["places_orders"] is False
+    assert result["case"]["n_similar"] == 0
+    assert "18" not in (result["case"].get("memory_line") or "")
+    assert result["decision_memory"]["places_orders"] is False
+    assert result["decision_memory"]["stance"] in {"YES", "NO", "WAIT"}
 
 
 def test_stock_workspace_stays_honest_when_data_is_missing():

@@ -15,6 +15,14 @@ export type ScanRecord = {
   signals?: string[]
   reasons?: string[]
   chase_risk?: boolean
+  why?: string
+  sepa_score?: number
+  sepa_max?: number
+  sepa_passed?: number
+  sepa_total?: number
+  sepa_verdict?: string
+  sepa_headline?: string
+  sepa_advice?: string
 }
 
 export type ConvictionRecord = ScanRecord & {
@@ -219,6 +227,17 @@ export type DashboardPayload = {
     refusals?: Array<Record<string, unknown> | unknown[]>
     last_cycle?: Record<string, unknown>
     last_error?: string
+    learning?: {
+      available?: boolean
+      as_of?: string
+      closed_trades?: number
+      cooldown?: Array<{ symbol?: string; until?: string; reason?: string }>
+      prefer?: string[]
+      summary?: string
+      live_locked?: boolean
+      disclaimer?: string
+      ladder?: string
+    }
   }
   autonomy: {
     available?: boolean
@@ -245,6 +264,17 @@ export type DashboardPayload = {
     owner_state?: Record<string, boolean>
     live_feed?: Record<string, unknown>
     last_cycle?: Record<string, unknown>
+  }
+  scan_progress?: {
+    active?: boolean
+    stage?: string
+    current?: number
+    total?: number
+    pct?: number | null
+    eta_s?: number | null
+    eta_label?: string
+    error?: string
+    updated_at?: number
   }
   operations: {
     available: boolean

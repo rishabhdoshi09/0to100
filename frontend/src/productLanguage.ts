@@ -9,6 +9,17 @@ export type PageGuide = {
 }
 
 export const PAGE_GUIDE: Record<string, PageGuide> = {
+  Home: {
+    title: 'Home',
+    purpose: 'Three-lane radar — Breakouts, Momentum and Long-Term Picks — plus two distinct “best of” panels from the saved scan.',
+    questions: [
+      'Is official NSE bhavcopy ready?',
+      'Which names are sniper breakouts vs quality-among-breakouts?',
+      'Did the current scan actually finish?',
+    ],
+    action: 'Scan now if the desk is empty, then open one name in Stock Intelligence.',
+    doesNot: 'A green market or a sniper tag is not an instruction to buy.',
+  },
   'Command Center': {
     title: 'Home',
     purpose: 'Shows whether QuantTerm has usable data and what deserves attention now.',
@@ -21,9 +32,20 @@ export const PAGE_GUIDE: Record<string, PageGuide> = {
     action: 'Start the missing data lane or open one stock for evidence review.',
     doesNot: 'A green market or high score is not an instruction to buy.',
   },
+  'Market Scanner': {
+    title: 'Market Scanner',
+    purpose: 'Ranks saved whole-market research by SEPA Best Setups, momentum, breakout or long-term state.',
+    questions: [
+      'When was the universe last scanned?',
+      'How many symbols were processed?',
+      'Why did a stock qualify?',
+    ],
+    action: 'Run a fresh scan, filter the result, then inspect one stock in Stock Intelligence.',
+    doesNot: 'A scanner match is a research candidate, not a guaranteed trade.',
+  },
   Scanner: {
     title: 'Discover',
-    purpose: 'Ranks saved whole-market research by momentum, breakout, conviction or avoidance state.',
+    purpose: 'Ranks saved whole-market research by momentum, breakout, setup quality or avoidance state.',
     questions: [
       'When was the universe last scanned?',
       'How many symbols were processed?',
@@ -32,6 +54,29 @@ export const PAGE_GUIDE: Record<string, PageGuide> = {
     ],
     action: 'Run a fresh scan, filter the result, then inspect one stock in Stock Intelligence.',
     doesNot: 'A scanner match is a research candidate, not a guaranteed trade.',
+  },
+  Recommendations: {
+    title: 'Recommendations',
+    purpose: 'Groups QuantTerm evidence into exclusive research categories with Active/Closed lifecycle tracking.',
+    questions: [
+      'Which category matches my horizon (compound vs breakout)?',
+      'Is CMP live or EOD, and how old is the scan?',
+      'What is upside from entry vs room to target?',
+      'Which tracked picks are still open vs resolved?',
+    ],
+    action: 'Open a card, read why now, then Full research in Stock Intelligence.',
+    doesNot: 'A Buy badge is research classification — not a broker order or return promise.',
+  },
+  'Market Reports': {
+    title: 'Market Reports',
+    purpose: 'Daily Market Pulse assembled from live scanners — movers, breadth notes and breakout context.',
+    questions: [
+      'What changed in the market today?',
+      'Which names are buzzing or near breakouts?',
+      'Is this report from today IST or an older saved pulse?',
+    ],
+    action: 'Read takeaways, then jump to Recommendations or Scanner for names mentioned.',
+    doesNot: 'A pulse summary is context, not a trade ticket.',
   },
   'Stock Intelligence': {
     title: 'Stock Intelligence',
@@ -81,6 +126,25 @@ export const PAGE_GUIDE: Record<string, PageGuide> = {
     action: 'Open the original source and treat the item as context for the stock thesis.',
     doesNot: 'News is never a standalone order signal.',
   },
+  Education: {
+    title: 'Education',
+    purpose: 'Crunches curated market news into learnable micro/macro/policy/F&O cards plus evergreen concepts — without inventing articles.',
+    questions: [
+      'Is this macro weather or company micro?',
+      'What is the teach point, not just the headline?',
+      'Is there an original source URL to verify?',
+      'Am I treating education as context instead of a trade tip?',
+    ],
+    action: 'Read the teach point, open the source when present, then review linked symbols in Stock Intelligence.',
+    doesNot: 'Education never invents blogs and never places or recommends orders.',
+  },
+  Backtest: {
+    title: 'Backtest',
+    purpose: 'Inspect a paper-loss style on past data after costs.',
+    questions: ['Did this style pay historically?'],
+    action: 'Open a closed paper loss, then review Stock Intelligence.',
+    doesNot: 'A backtest does not change today’s BUY list or paper autopilot.',
+  },
   'F&O Desk': {
     title: 'F&O Coverage',
     purpose: 'Shows current derivative eligibility, nearest futures contract, expiry and lot size.',
@@ -99,6 +163,13 @@ export const PAGE_GUIDE: Record<string, PageGuide> = {
     action: 'Use the market state as a portfolio constraint, not as a stock recommendation.',
     doesNot: 'A healthy index does not make every individual setup safe.',
   },
+  'Paper Portfolio': {
+    title: 'My Holdings',
+    purpose: 'Records demat holdings plus simulated positions, risk and outcomes so the system can be judged honestly.',
+    questions: ['How much open risk exists?', 'Are exits protected?', 'How many closed trades exist?', 'Is the sample large enough for performance statistics?'],
+    action: 'Review position-level risk and refusals before looking at headline P&L.',
+    doesNot: 'Paper equity is evidence plumbing, not the brain or heart of QuantTerm.',
+  },
   Portfolio: {
     title: 'Paper Portfolio',
     purpose: 'Records simulated positions, risk and outcomes so the system can be judged honestly.',
@@ -113,11 +184,38 @@ export const PAGE_GUIDE: Record<string, PageGuide> = {
     action: 'Resolve the oldest critical blocker or restart only the failed service.',
     doesNot: 'A live PID alone does not mean the product is ready.',
   },
+  'System Health': {
+    title: 'System Health',
+    purpose: 'Shows worker liveness, job throughput, failures, retries and owner controls.',
+    questions: ['Is the process alive?', 'Is usable data flowing?', 'Which job is active?', 'What exact blocker requires action?'],
+    action: 'Resolve the oldest critical blocker or restart only the failed service.',
+    doesNot: 'A live PID alone does not mean the product is ready.',
+  },
+  'Long-Term Picks': {
+    title: 'Long-Term Research',
+    purpose: 'Filters technically eligible companies using current quality, growth, leverage and valuation evidence.',
+    questions: [
+      'Is fundamental coverage adequate?',
+      'Is the company quality-backed or only technically strong?',
+      'Is price timing favourable or extended?',
+      'Which risk flag needs manual review?',
+    ],
+    action: 'Run the long-term refresh, filter by quality and coverage, then inspect the company dossier.',
+    doesNot: 'A long-term classification is not a promise of compounding or future returns.',
+  },
+  'Market Overview': {
+    title: 'Market & Breadth',
+    purpose: 'Explains the environment in which stock signals are being interpreted.',
+    questions: ['Is breadth supportive?', 'Which sectors lead or lag?', 'Is volatility expanding?', 'Does the regime support new risk?'],
+    action: 'Use the market state as a portfolio constraint, not as a stock recommendation.',
+    doesNot: 'A healthy index does not make every individual setup safe.',
+  },
 }
 
 export const GLOSSARY: Record<string, string> = {
   Candidate: 'A stock worth reviewing; not an instruction to trade.',
-  Conviction: 'A combined evidence score, not certainty.',
+  'Setup Quality': 'A 0–100 checklist of how complete this setup looks (score, regime, volume, RSI). It is not the chance the trade works. Observed hit-rate lives on Evidence / n.',
+  Conviction: 'Legacy name for Setup Quality — a weighted checklist, not a win probability.',
   Expectancy: 'Average result per trade after the stated assumptions.',
   Drawdown: 'The fall from a previous portfolio high.',
   Slippage: 'Difference between the expected and actual fill price.',

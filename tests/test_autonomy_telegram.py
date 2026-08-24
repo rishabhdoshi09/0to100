@@ -56,6 +56,8 @@ def test_scan_alerts_are_durable_and_deduped(tmp_path):
     assert first["setup"] == 1 and first["prebreakout"] == 1
     assert len(engine.messages) == 1
     assert "AAA" in engine.messages[0][0] and "BBB" in engine.messages[0][0]
+    assert "Sniper watching" in engine.messages[0][0]
+    assert "Sniper live watch" in engine.messages[0][0]
 
     # A process restart must not repeat the same symbol/day alerts.
     n2 = TelegramNotifier(tmp_path, engine_factory=lambda: engine, now_fn=now)
@@ -81,10 +83,68 @@ def test_live_breakout_requires_hold_and_sends_once(tmp_path):
     assert n.observe_live_breakouts(payload, live)["confirmed"] == 0
     epoch[0] += 9
     assert n.observe_live_breakouts(payload, live)["confirmed"] == 1
-    assert "BREAKOUT CONFIRMED" in engine.messages[-1][0]
+    assert "SNIPER BREAKOUT CONFIRMED" in engine.messages[-1][0]
     assert "BBB" in engine.messages[-1][0]
     epoch[0] += 20
     assert n.observe_live_breakouts(payload, live)["confirmed"] == 0
+
+
+def test_sniper_skips_chase_and_blowoff(tmp_path):
+    from research.autonomy.telegram_notifications import is_sniper_watch
+    assert is_sniper_watch({"symbol": "AAA", "status": "Watch for breakout",
+                            "entry": 100, "rsi": 60, "chase_risk": False}) is True
+    assert is_sniper_watch({"symbol": "BBB", "status": "Watch for breakout",
+                            "entry": 100, "rsi": 60, "chase_risk": True}) is False
+    assert is_sniper_watch({"symbol": "CCC", "status": "Watch for breakout",
+                            "entry": 100, "rsi": 88, "chase_risk": False}) is False
+    engine = FakeEngine()
+    epoch = [1000.0]
+    n = TelegramNotifier(
+        tmp_path,
+        engine_factory=lambda: engine,
+        now_fn=lambda: datetime(2026, 7, 31, 10, 15),
+        epoch_fn=lambda: epoch[0],
+        breakout_confirmation_s=8,
+    )
+    payload = {"records": [
+        {"symbol": "CHASE", "status": "Watch for breakout", "entry": 100,
+         "score": 90, "rsi": 60, "chase_risk": True, "signals": ["PRE_BREAKOUT"]},
+    ]}
+    live = FakeLive(price=102, fresh=True)
+    assert n.observe_live_breakouts(payload, live)["confirmed"] == 0
+    epoch[0] += 9
+    assert n.observe_live_breakouts(payload, live)["confirmed"] == 0
+    assert engine.messages == []
+
+
+def test_chase_watch_does_not_promise_a_sniper_confirm(tmp_path):
+    engine = FakeEngine()
+    n = TelegramNotifier(tmp_path, engine_factory=lambda: engine,
+                         now_fn=lambda: datetime(2026, 8, 24, 14, 0))
+    payload = {
+        "records": [
+            {"symbol": "URBANCO", "status": "Ready to trade", "verdict": "BUY",
+             "price": 168.2, "entry": 168.2, "stop": 155.6, "target": 193.3,
+             "score": 55, "rsi": 82, "volume_ratio": 4.5, "chase_risk": False,
+             "signals": ["MOMENTUM"], "reasons": ["Broke resistance"]},
+            {"symbol": "DPABHUSHAN", "status": "Watch for breakout", "verdict": "WATCH",
+             "price": 1536.1, "entry": 1548, "stop": 1414.9, "target": 1700,
+             "score": 80, "rsi": 70, "volume_ratio": 2.0, "chase_risk": True,
+             "signals": ["PRE_BREAKOUT"],
+             "reasons": ["Extended (24% above 50-DMA — late-stage, base se door)"]},
+            {"symbol": "CLEAN", "status": "Watch for breakout", "verdict": "WATCH",
+             "price": 100, "entry": 101, "stop": 95, "target": 110,
+             "score": 40, "rsi": 55, "volume_ratio": 1.4, "chase_risk": False,
+             "signals": ["PRE_BREAKOUT"], "reasons": ["Tight base"]},
+        ]
+    }
+    n.notify_scan(payload, phase="intraday")
+    text = engine.messages[0][0]
+    assert "Confirm hone par alert" not in text
+    assert "Sniper will not confirm" in text
+    assert "CLEAN" in text
+    assert "Sniper watching" in text
+    assert "URBANCO" in text and "RSI blow-off" in text
 
 
 def test_paper_open_and_close_alerts_include_ledger_truth(tmp_path):
@@ -119,6 +179,23 @@ def test_live_feed_controller_exposes_read_only_price():
     assert controller.price("AAA") == 123.45
 
 
+def test_quote_overlay_feeds_sniper_when_websocket_has_no_ticks(tmp_path, monkeypatch):
+    from research.intelligence.data.kite_live import KiteLiveOverlay
+    overlay = KiteLiveOverlay()
+    controller = LiveFeedController(tmp_path / "live.json", overlay=overlay)
+
+    class FakeKite:
+        def get_ltp(self, symbols):
+            return {"BBB": 101.2}
+
+    monkeypatch.setattr("data.kite_client.KiteClient", lambda: FakeKite())
+    monkeypatch.setattr("data.kite_client._fresh_env", lambda name, default="": "present")
+    health = controller.start({"BBB"})
+    assert controller.price("BBB") == 101.2
+    assert controller.entry_allowed("BBB") is True
+    assert int(health.get("symbols_ticking") or 0) >= 1
+
+
 def test_market_scan_job_invokes_supervisor_owned_notifier():
     from research.autonomy import jobs as JOBS
 
@@ -139,6 +216,98 @@ def test_market_scan_job_invokes_supervisor_owned_notifier():
     assert result.status == "SUCCEEDED"
     assert deps.calls and deps.calls[0][1] == "intraday"
     assert result.metadata["telegram"] == {"setup": 1}
+
+
+def test_observe_reports_why_no_breakout_fired(tmp_path):
+    engine = FakeEngine()
+    n = TelegramNotifier(tmp_path, engine_factory=lambda: engine,
+                         now_fn=lambda: datetime(2026, 8, 24, 10, 15))
+    out = n.observe_live_breakouts(_payload(), FakeLive(price=90, fresh=False))
+    assert out["confirmed"] == 0
+    assert out["watching"] == 2
+    assert out["reason"] == "no_live_ticks"
+
+
+def test_alert_engine_reads_telegram_from_repo_env(tmp_path, monkeypatch):
+    env_file = tmp_path / ".env"
+    env_file.write_text("TELEGRAM_BOT_TOKEN=filetok\nTELEGRAM_CHAT_ID=42\n", encoding="utf-8")
+    monkeypatch.setattr("alerts.telegram_alerts._ENV_PATH", env_file)
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "")
+    monkeypatch.setenv("TELEGRAM_CHAT_ID", "")
+    from alerts.telegram_alerts import AlertEngine, _telegram_cred
+    assert _telegram_cred("TELEGRAM_BOT_TOKEN") == "filetok"
+    assert _telegram_cred("TELEGRAM_CHAT_ID") == "42"
+    engine = AlertEngine()
+    assert engine.is_configured() is True
+    assert engine._token == "filetok"
+    assert engine._chat_id == "42"
+
+
+def test_default_scan_path_is_repo_absolute():
+    from product.scan_store import DEFAULT_SCAN_PATH, default_scan_path
+    path = default_scan_path()
+    assert path.is_absolute()
+    assert path.name == "latest_momentum_scan.json"
+    assert path == DEFAULT_SCAN_PATH
+    assert "logs" in path.parts and "product" in path.parts
+
+
+def test_notify_scan_says_already_sent(tmp_path):
+    engine = FakeEngine()
+    now = lambda: datetime(2026, 7, 31, 10, 0)
+    n = TelegramNotifier(tmp_path, engine_factory=lambda: engine, now_fn=now)
+    first = n.notify_scan(_payload(), phase="intraday")
+    assert first["reason"] == "sent"
+    second = TelegramNotifier(tmp_path, engine_factory=lambda: engine, now_fn=now)
+    again = second.notify_scan(_payload(), phase="intraday")
+    assert again["setup"] == 0 and again["prebreakout"] == 0
+    assert again["reason"] == "already_sent"
+
+
+def test_live_feed_still_observes_when_auth_expired(tmp_path, monkeypatch):
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    from research.autonomy import health as H
+    from research.autonomy import jobs as JOBS
+    from research.autonomy.supervisor import Supervisor
+
+    calls = []
+
+    class Deps(JOBS.Deps):
+        def holidays(self):
+            return set()
+
+        def now_ist(self):
+            return datetime(2026, 8, 24, 10, 30, tzinfo=ZoneInfo("Asia/Kolkata"))
+
+        def observe_live_breakouts(self):
+            calls.append("observe")
+            return {"confirmed": 0}
+
+    deps = Deps(tmp_path)
+    sup = Supervisor(tmp_path, deps=deps)
+    sup.failures.add(H.AUTH_EXPIRED)
+    monkeypatch.setattr(sup, "_desired_live_symbols", lambda: {"AAA"})
+    monkeypatch.setattr(sup.live_feed, "start", lambda symbols: {
+        "connected": True, "last_error": "", "symbols_ticking": 1,
+    })
+    monkeypatch.setattr("research.autonomy.schedules.market_is_open", lambda *a, **k: True)
+    sup._manage_live_feed(deps.now_ist())
+    assert calls == ["observe"]
+
+
+def test_replay_scan_alerts_uses_saved_scan(tmp_path, monkeypatch):
+    from research.autonomy.jobs import Deps
+
+    engine = FakeEngine()
+    deps = Deps(tmp_path)
+    deps.telegram = TelegramNotifier(tmp_path, engine_factory=lambda: engine,
+                                     now_fn=lambda: datetime(2026, 8, 24, 10, 30))
+    monkeypatch.setattr("product.scan_store.load_scan", lambda: _payload())
+    sent = deps.replay_scan_alerts()
+    assert sent["setup"] == 1
+    assert sent["prebreakout"] == 1
+    assert engine.messages
 
 
 def test_supervisor_telegram_notifier_has_no_execution_or_broker_imports():
