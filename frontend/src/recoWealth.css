@@ -391,6 +391,14 @@ body::before { display: none !important; }
   border-radius: 12px;
   color: var(--rw-text);
 }
+.rw-app .scanner-filter-row input,
+.rw-app .scanner-filter-row select,
+.rw-app .workspace input,
+.rw-app .workspace select {
+  background: #fff !important;
+  color: var(--rw-text) !important;
+  border: 1px solid var(--rw-line) !important;
+}
 .rw-app .radar-market-strip {
   margin: 0 24px 16px;
   display: grid;
