@@ -336,12 +336,15 @@ def render_help() -> None:
 1. Connect Zerodha once a day. Market data is owned by the autonomy service.
 2. **Today** — SEPA-qualified Best Setups first, then the scanner watchlist.
 3. **Setups** — Best Setups (SEPA), Momentum, Conviction, Long-term.
-4. **Paper Desk** — enable once. QuantTerm takes, manages and closes simulated trades. You do not place broker orders here.
-5. **Backtest** — after a paper loss, test that stock on past data. A backtest does not change today's BUY list, ranking, or paper autopilot.
+4. **Paper Desk** — enable once. The bot takes, manages and closes simulated trades, then learns from them daily. You do not place broker orders here.
+5. **Backtest** — after a paper loss, inspect that stock on past data. A backtest does not change today's BUY list, ranking, or paper autopilot.
 6. **Portfolio** — holdings and P&L. **Desk** holds Market, News, Data, Alerts, Settings, and the lab.
 
+### Path to real money
+Paper auto → daily paper memory (skip repeat losers, prefer proven names) → Brain 1 evidence once the sample is large enough → live still locked until the owner approves a capital envelope. The bot cannot open that door.
+
 ### After a paper loss
-Open Backtest with that stock. If the style lost historically after costs, do not keep repeating it in size. If it historically paid, keep risk small — one loss is one outcome.
+The bot records it. Two consecutive losses on the same name pause new paper entries on that name for five days. Also open Backtest with that stock. If the style lost historically after costs, do not keep repeating it in size. If it historically paid, keep risk small — one loss is one outcome.
 
 ### Important
 A day with no trade is not a failure. It means no setup passed the evidence and safety checks. An empty scan list means the scan has not run yet — that is different from a no-trade day.

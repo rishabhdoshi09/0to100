@@ -93,6 +93,13 @@ def test_help_explains_backtest_after_paper_loss():
     home = (ROOT / "ui" / "retail_home_momentum.py").read_text(encoding="utf-8")
     assert "render_today_board" in home
     assert "render_sepa_best_setups" in home
+    assert "render_bot_learning" in home
+    paper = (ROOT / "ui" / "retail_trade_market.py").read_text(encoding="utf-8")
+    assert "render_bot_learning" in paper
     pages = (ROOT / "ui" / "desk_pages.py").read_text(encoding="utf-8")
     assert "Best Setups" in pages
     assert "render_sepa_setups" in pages
+    assert "render_bot_learning" in pages
+    help_src = (ROOT / "ui" / "retail_pages.py").read_text(encoding="utf-8")
+    assert "Path to real money" in help_src
+    assert "the bot cannot open that door" in help_src.lower()

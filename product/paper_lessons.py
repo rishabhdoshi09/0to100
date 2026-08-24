@@ -19,9 +19,11 @@ BACKTEST_DOES_NOT_CHANGE = (
 )
 
 PAPER_TO_BACKTEST = (
-    "After a paper loss, test that stock in Backtest. If the pattern lost "
-    "historically too, do not keep repeating it in size. If it historically "
-    "paid, the paper loss is one outcome — still keep risk small."
+    "After a paper loss, the bot records it for the next paper cycle. Two "
+    "consecutive losses on the same name pause new paper entries on that name "
+    "for five days. Backtest is still useful to see whether the style paid "
+    "historically. If it lost after costs, do not keep repeating it in size. "
+    "If it historically paid, keep risk small — one loss is one outcome."
 )
 
 
@@ -100,8 +102,10 @@ def paper_loss_lessons(closed_trades: Iterable[Any], *, limit: int = 5) -> tuple
             "exit_date": str(_get(trade, "exit_date", "") or ""),
             "headline": f"{symbol} paper loss — {_exit_label(reason)}{r_bit}",
             "next_step": (
-                f"Open Backtest, keep universe on this stock, and run {symbol}. "
-                "Check whether this entry style paid after costs."
+                f"The bot recorded this. Two consecutive losses on {symbol} pause "
+                f"new paper entries on that name for five days. Also open Backtest, "
+                f"keep universe on this stock, and run {symbol}. Check whether this "
+                "entry style paid after costs."
             ),
             "does_not_change": BACKTEST_DOES_NOT_CHANGE,
         })

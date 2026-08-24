@@ -63,7 +63,9 @@ def render_desk_backtest() -> None:
     with test:
         render_backtest()
     with learned:
-        st.caption("Research memory only. It does not change today's BUY list or paper autopilot.")
+        st.caption("Paper-memory overlay plus research memory. Neither unlocks live. The overlay only changes which PAPER names are skipped or preferred.")
+        from ui.desk_board import render_bot_learning
+        render_bot_learning()
         render_learned()
 
 

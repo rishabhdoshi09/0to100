@@ -102,18 +102,35 @@ def run_learning(brain, *, session_date: str, dialogue=None) -> dict:
     except Exception:
         pass
 
+    paper_memory: dict = {}
+    try:
+        from product.paper_learning import remember_paper_book
+        book = getattr(brain, "intel_book", None)
+        closed = list(getattr(book, "closed", []) or []) if book is not None else []
+        paper_memory = remember_paper_book(closed, as_of=session_date)
+    except Exception:
+        paper_memory = {}
+
     gaps = HYP.plan_gaps(diagnostics)
     for gap in gaps:
         _append(dialogue, Record(
             record_type=EVIDENCE_GAP, producer="research_planner", consumer="hypothesis_engine",
             as_of=session_date, strategy_id=gap.strategy_id, claim=gap.diagnosis,
             evidence=asdict(gap), requested_action=gap.recommended_action))
+    paper_cooldown = len(paper_memory.get("cooldown") or [])
+    paper_prefer = len(paper_memory.get("prefer") or [])
+    paper_closed = int(paper_memory.get("closed_trades") or 0)
     _append(dialogue, Record(
         record_type=LEARNING_UPDATE, producer="learning_brain", consumer="supervisor",
         as_of=session_date, claim=f"Derived {len(diagnostics)} diagnostics and {len(gaps)} evidence gaps.",
-        evidence={"diagnostics": len(diagnostics), "gaps": len(gaps)}, decision="LEARNING_COMPLETE"))
+        evidence={"diagnostics": len(diagnostics), "gaps": len(gaps),
+                  "paper_cooldown": paper_cooldown, "paper_prefer": paper_prefer,
+                  "paper_closed": paper_closed},
+        decision="LEARNING_COMPLETE"))
     return {"session_date": session_date, "diagnostics": len(diagnostics), "gaps": len(gaps),
-            "ranked_gaps": [asdict(g) for g in gaps]}
+            "ranked_gaps": [asdict(g) for g in gaps],
+            "paper_cooldown": paper_cooldown, "paper_prefer": paper_prefer,
+            "paper_closed": paper_closed}
 
 
 def _changes_for(parent, gap: HYP.EvidenceGap) -> dict:

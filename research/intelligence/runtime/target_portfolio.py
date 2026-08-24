@@ -11,6 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Mapping
 
+from product.paper_learning import select_paper_signal
 from research.intelligence import schemas as SC
 from research.intelligence.runtime.position_sizing import size_long_cash
 
@@ -138,6 +139,19 @@ def build_target_portfolio(
         if not signals:
             continue
         signal = dict(signals[0])
+        skipped_lessons: tuple[str, ...] = ()
+        blockers_pre: list[str] = []
+        try:
+            as_of = str(getattr(ctx, "as_of_date", "") or "")
+            memory = getattr(ctx, "paper_memory", None)
+            picked, skipped_lessons = select_paper_signal(signals, memory, as_of=as_of)
+            if picked is None:
+                blockers_pre = ["PAPER_LESSON_COOLDOWN"]
+            else:
+                signal = dict(picked)
+        except Exception:
+            skipped_lessons = ()
+            blockers_pre = []
         symbol = str(signal.get("symbol", "")).upper()
         if not symbol:
             continue
@@ -147,7 +161,9 @@ def build_target_portfolio(
         family = str(getattr(decision, "family", "") or getattr(spec, "family", ""))
         cluster = str(getattr(ctx, "clusters", {}).get(strategy_id, "") or "")
         reasons = list(getattr(decision, "reasons", ()) or ())
+        reasons.extend(skipped_lessons)
         blockers: list[str] = []
+        blockers.extend(blockers_pre)
 
         entry = float(signal.get("entry", 0.0) or 0.0)
         stop = float(signal.get("stop", 0.0) or 0.0)

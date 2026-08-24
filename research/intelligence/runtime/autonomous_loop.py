@@ -248,6 +248,12 @@ def _apply_non_entry_decision(d, store, cid, state, res, ctx) -> None:
 def _open_new_positions(ctx, store, book, state, res, decisions, today_signals, cards,
                         alloc_cfg) -> None:
     """Persist one Target Portfolio and execute only its approved quantity deltas."""
+    if getattr(ctx, "paper_memory", None) is None:
+        try:
+            from product.paper_learning import load_paper_memory
+            setattr(ctx, "paper_memory", load_paper_memory())
+        except Exception:
+            pass
     cid = ctx.cycle_id()
     for name in ("target_portfolios", "target_positions", "blocked_target_positions"):
         if not hasattr(res, name):

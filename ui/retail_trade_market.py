@@ -24,7 +24,7 @@ def render_paper_trading() -> None:
 
     st.markdown("<div class='qt-eyebrow'>Simulated book  ·  no broker orders</div>", unsafe_allow_html=True)
     st.title("Paper Desk")
-    st.info("The autonomy service takes and manages simulated trades. This page only reads state and queues owner controls. After a closed loss, use Backtest — do not increase size because a name feels right.")
+    st.info("The autonomy service takes and manages simulated trades, then learns from closed ones every day so the next paper cycle skips repeat losers. This page only reads state and queues owner controls. Live orders stay locked. After a closed loss, Backtest is still how you inspect the style — do not increase size because a name feels right.")
     status = ("PAUSED" if paused else ("RUNNING" if paper.enabled and paper.supervisor_running
               else ("READY FOR SUPERVISOR" if paper.enabled else "OFF")))
     c1, c2, c3, c4 = st.columns(4)
@@ -60,7 +60,8 @@ def render_paper_trading() -> None:
     else:
         st.info("No open paper positions.")
 
-    from ui.desk_board import render_paper_loss_followup
+    from ui.desk_board import render_bot_learning, render_paper_loss_followup
+    render_bot_learning()
     render_paper_loss_followup(paper.closed_trades)
 
     st.subheader("Why no new trade?")

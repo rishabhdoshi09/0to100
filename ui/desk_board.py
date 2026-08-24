@@ -18,8 +18,9 @@ from product.scan_store import load_scan, scan_age_hours, watchlist_rows
 
 HOW_THE_DESK_WORKS = (
     "Today shows SEPA-qualified Best Setups from the last scan, then the "
-    "scanner watchlist. Paper Desk takes simulated trades. After a paper loss, "
-    "Backtest is how you decide whether that style deserves another attempt."
+    "scanner watchlist. Paper Desk takes simulated trades. Closed paper trades "
+    "feed daily memory so the next paper cycle skips repeat losers. Live stays "
+    "locked until the owner approves. Backtest is still how you inspect a style."
 )
 
 
@@ -220,13 +221,48 @@ def render_how_the_desk_works() -> None:
         "<li><span class='k'>Today</span> — SEPA-qualified Best Setups first, then the scanner watchlist. "
         "If SEPA is empty, the scan names did not clear the Stage-2 floor — that is not 'no scan yet'.</li>"
         "<li><span class='k'>Setups</span> — Best Setups (SEPA), Momentum, Conviction, Long-term. Do not mix them.</li>"
-        "<li><span class='k'>Paper Desk</span> — the system takes simulated trades. You enable, pause, "
-        "and review. You do not click broker orders here.</li>"
-        "<li><span class='k'>Backtest</span> — after a paper loss, test that stock on past data. "
+        "<li><span class='k'>Paper Desk</span> — the bot takes simulated trades and learns from "
+        "closed ones every day. You enable, pause, and review. You do not click broker orders here.</li>"
+        "<li><span class='k'>Backtest</span> — after a paper loss, inspect that stock on past data. "
         f"{BACKTEST_DOES_NOT_CHANGE}</li>"
         "</ol></div>",
         unsafe_allow_html=True,
     )
+
+
+def render_bot_learning() -> None:
+    """Read-only paper-memory panel. Does not start workers or place orders."""
+    import streamlit as st
+    from product.paper_learning import LIVE_STILL_LOCKED, PROMOTION_LADDER, load_paper_memory
+
+    try:
+        memory = load_paper_memory()
+    except Exception:
+        memory = {"cooldown": [], "prefer": [], "closed_trades": 0, "summary": LIVE_STILL_LOCKED}
+    cooldown = list(memory.get("cooldown") or [])
+    prefer = [str(s) for s in (memory.get("prefer") or [])]
+    closed_n = int(memory.get("closed_trades") or 0)
+    st.markdown(
+        "<div class='qt-section'><div class='qt-eyebrow'>Autonomous bot</div>"
+        "<div class='t'>What the bot learned</div>"
+        f"<div class='s'>{PROMOTION_LADDER}</div></div>",
+        unsafe_allow_html=True,
+    )
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Closed paper trades", closed_n)
+    c2.metric("On cooldown", len(cooldown))
+    c3.metric("Preferred names", len(prefer))
+    if cooldown:
+        st.caption("Cooldown — skip new paper entries")
+        st.dataframe(
+            [{"Symbol": row.get("symbol"), "Until": row.get("until"), "Why": row.get("reason")}
+             for row in cooldown],
+            hide_index=True,
+            width="stretch",
+        )
+    if prefer:
+        st.caption("Preferred among the same strategy's other signals: " + ", ".join(prefer))
+    st.caption(str(memory.get("summary") or LIVE_STILL_LOCKED))
 
 
 def render_paper_loss_followup(closed_trades) -> None:

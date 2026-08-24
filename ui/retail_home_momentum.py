@@ -61,6 +61,7 @@ def _watchlist_frame(rows: list[dict]) -> pd.DataFrame:
 
 def render_home() -> None:
     from ui.desk_board import (
+        render_bot_learning,
         render_how_the_desk_works,
         render_market_strip,
         render_paper_loss_followup,
@@ -109,6 +110,7 @@ def render_home() -> None:
         st.success(state.primary_action)
 
     render_how_the_desk_works()
+    render_bot_learning()
     render_market_strip()
     payload = load_scan()
     render_sepa_best_setups(scan_payload=payload, limit=8, score_cap=24, max_seconds=8.0)
@@ -127,7 +129,7 @@ def render_home() -> None:
     if not inputs.market_open:
         st.divider()
         st.subheader("After the close")
-        st.write("1. Review Paper Desk losses.  2. Open Backtest on those names.  3. Keep tomorrow's watchlist — do not chase.")
+        st.write("1. Review Paper Desk — the bot already recorded closed trades for tomorrow's paper picks.  2. Open Backtest on losses if you want the history.  3. Keep tomorrow's watchlist — do not chase. Live stays locked.")
 
 
 def _run_and_save_momentum() -> dict:

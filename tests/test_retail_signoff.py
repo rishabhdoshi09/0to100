@@ -251,6 +251,7 @@ def test_no_broker_order_in_retail_paths():
     mods = ["ui.retail_pages_v2", "ui.retail_home_momentum", "ui.retail_trade_market",
             "ui.retail_backtest_data", "ui.retail_pages", "ui.fno_momentum_page",
             "ui.desk_board", "ui.desk_pages", "product.paper_lessons",
+            "product.paper_learning",
             "product.sepa_setup", "product.monitor_context", "product.top_stocks",
             "product.projection", "product.gather", "product.no_trade", "product.market_view",
             "product.scan_store", "product.retail_backtest", "product.runtime", "data.fno_universe"]
