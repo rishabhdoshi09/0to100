@@ -133,6 +133,9 @@ def test_real_sebi_rss_and_distinctive_needles_win():
     assert by_id["gold_loan"]["available"] is True
     assert "muthoot" in by_id["gold_loan"]["headline"].lower()
     assert "1.63 lakh" in by_id["gold_loan"]["headline"]
+    assert set(by_id["gold_loan"]["symbols"]) <= {"MUTHOOTFIN", "MANAPPURAM", "IIFL"}
+    assert "DOLLAR" not in by_id["gold_loan"]["symbols"]
+    assert by_id["orders"]["symbols"] == ["LT"]
     assert by_id["global"]["available"] is True
     assert by_id["flows"]["available"] is True
     gold_explainer = next(e for e in note["explainers"] if e["id"] == "concept-gold-loan-collateral")

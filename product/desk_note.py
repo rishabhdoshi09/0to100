@@ -218,6 +218,8 @@ def _score_article(article: Mapping[str, Any], slot: Mapping[str, Any]) -> int:
 def _bullet_from_article(article: Mapping[str, Any], slot: Mapping[str, Any]) -> dict[str, Any]:
     headline = str(article.get("headline") or "").strip()
     summary = str(article.get("summary") or article.get("why_it_matters") or "").strip()
+    want = {str(s).upper() for s in (slot.get("symbols") or ())}
+    symbols = [s for s in _syms(article) if s in want][:8] if want else []
     return {
         "id": slot["id"],
         "label": slot["label"],
@@ -228,7 +230,7 @@ def _bullet_from_article(article: Mapping[str, Any], slot: Mapping[str, Any]) ->
         "url": str(article.get("url") or ""),
         "official": bool(article.get("official")),
         "published_at": str(article.get("published_at") or ""),
-        "symbols": _syms(article)[:8],
+        "symbols": symbols,
         "empty_detail": "",
     }
 
