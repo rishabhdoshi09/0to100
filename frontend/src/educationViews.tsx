@@ -13,6 +13,7 @@ type Props = {
   runControl: (control: ControlName) => Promise<void>
   setSelected?: (symbol: string) => void
   setActive?: (page: string) => void
+  newsRevision?: number
 }
 
 const LENS_LABELS: Record<EducationLens | 'ALL', string> = {
@@ -84,7 +85,7 @@ function EducationCardRow({
   )
 }
 
-export function EducationView({ runControl, setSelected, setActive }: Props) {
+export function EducationView({ runControl, setSelected, setActive, newsRevision = 0 }: Props) {
   const [feed, setFeed] = useState<EducationFeed | null>(null)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(true)
@@ -105,7 +106,7 @@ export function EducationView({ runControl, setSelected, setActive }: Props) {
 
   useEffect(() => {
     void load()
-  }, [load])
+  }, [load, newsRevision])
 
   const cards = useMemo(() => {
     const rows = feed?.cards || []

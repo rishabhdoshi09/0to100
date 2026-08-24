@@ -486,9 +486,21 @@ function App() {
           setSymbols={setCompareSymbols}
           setActive={openPage}
           setSelected={setSelected}
+          seedSymbols={[
+            selected,
+            ...dashboard.scan.records.map((row) => row.symbol),
+            ...dashboard.long_term.records.map((row) => row.symbol),
+          ]}
         />
       ))}
-      {keep(['Watchlist'], <WatchlistView setActive={openPage} setSelected={setSelected} onCompare={addToCompare} />)}
+      {keep(['Watchlist'], (
+        <WatchlistView
+          setActive={openPage}
+          setSelected={setSelected}
+          onCompare={addToCompare}
+          selected={selected}
+        />
+      ))}
       {keep(['Market Overview', 'Market Internals'], <MarketInternalsView {...viewProps} />)}
       {keep(['News & Events'], <NewsView {...viewProps} />)}
       {keep(['Education'], (
@@ -496,6 +508,7 @@ function App() {
           runControl={viewProps.runControl}
           setSelected={setSelected}
           setActive={openPage}
+          newsRevision={dashboard.news.articles.length}
         />
       ))}
       {keep(['Research Data'], <ResearchDataView symbol={selected} />)}

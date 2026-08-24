@@ -240,7 +240,7 @@ function MetricExplanation({ metric }: { metric: IntelligenceMetric }) {
 }
 
 export function ProductStockIntelligenceView(props: ViewProps) {
-  const { selected, bars, runControl, setActive, onCompare, onWatchlist, depth } = props
+  const { dashboard, selected, bars, runControl, setActive, onCompare, onWatchlist, depth } = props
   const [workspace, setWorkspace] = useState<StockWorkspace | null>(() => (
     selected ? recall<StockWorkspace>(`stock:${selected}`) ?? null : null
   ))
@@ -285,7 +285,7 @@ export function ProductStockIntelligenceView(props: ViewProps) {
     if (cached) setWorkspace(cached)
     else if (!selected) setWorkspace(null)
     void load()
-  }, [selected])
+  }, [selected, dashboard.scan.scanned_at])
 
   useEffect(() => {
     setTab('Overview')

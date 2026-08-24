@@ -332,8 +332,8 @@ export function RecoBacktestView({ dashboard, setActive }: ViewProps) {
           </div>
         ))}
         <div className="inline-actions" style={{ padding: '12px' }}>
-          <button type="button" onClick={() => setActive('Setups')}>Open Setups</button>
-          <button type="button" onClick={() => setActive('Paper Desk')}>Open Paper Desk</button>
+          <button type="button" onClick={() => setActive('Market Scanner')}>Open Market Scanner</button>
+          <button type="button" onClick={() => setActive('Paper Portfolio')}>Open Paper Portfolio</button>
         </div>
       </Panel>
     </section>

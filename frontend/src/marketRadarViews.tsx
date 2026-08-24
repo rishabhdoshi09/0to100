@@ -332,8 +332,19 @@ export function RadarHomeView(props: ExperienceViewProps & {
   const scanAt = radar?.scan_scanned_at || dashboard.scan.scanned_at || ''
   const kiteOk = dashboard.autonomy.state !== 'AUTH_REQUIRED'
     && !(dashboard.autonomy.active_failures || []).some((f) => String(f).includes('auth'))
-  const emptyDesk = !scanAt
-    || (radar != null && ((radar.counts.breakouts || 0) + (radar.counts.momentum || 0) + (radar.counts.long_term_picks || 0) === 0))
+  const breakoutRows = ((radar?.lanes.breakouts?.length
+    ? radar.lanes.breakouts
+    : scannerFallbackRows('Breakouts', dashboard)) || []) as RadarRow[]
+  const momentumRows = ((radar?.lanes.momentum?.length
+    ? radar.lanes.momentum
+    : scannerFallbackRows('Momentum', dashboard)) || []) as RadarRow[]
+  const longTermRows = ((radar?.lanes.long_term_picks?.length
+    ? radar.lanes.long_term_picks
+    : scannerFallbackRows('Long-Term', dashboard)) || []) as RadarRow[]
+  const breakoutCount = radar?.counts.breakouts || breakoutRows.length
+  const momentumCount = radar?.counts.momentum || momentumRows.length
+  const longTermCount = radar?.counts.long_term_picks || longTermRows.length
+  const emptyDesk = !scanAt && dashboard.scan.records.length === 0 && longTermRows.length === 0
   const readinessScore = readiness?.score ?? 0
   const needsBootstrap = emptyDesk || readinessScore < 70 || !dashboard.data.ready
 
@@ -412,9 +423,9 @@ export function RadarHomeView(props: ExperienceViewProps & {
     </section>
   )
 
-  const row = radar?.lanes.breakouts.find((r) => r.symbol === selected)
-    || radar?.lanes.momentum.find((r) => r.symbol === selected)
-    || radar?.lanes.long_term_picks.find((r) => r.symbol === selected)
+  const row = breakoutRows.find((r) => r.symbol === selected)
+    || momentumRows.find((r) => r.symbol === selected)
+    || longTermRows.find((r) => r.symbol === selected)
 
   return (
     <section className="radar-home">
@@ -530,12 +541,12 @@ export function RadarHomeView(props: ExperienceViewProps & {
       <div className="radar-three-lanes">
         {laneCard(
           'Breakouts',
-          radar?.lanes.breakouts || [],
-          radar?.counts.breakouts || 0,
+          breakoutRows,
+          breakoutCount,
           radar?.counts.sniper_breakouts,
         )}
-        {laneCard('Momentum', radar?.lanes.momentum || [], radar?.counts.momentum || 0)}
-        {laneCard('Long-Term Picks', radar?.lanes.long_term_picks || [], radar?.counts.long_term_picks || 0)}
+        {laneCard('Momentum', momentumRows, momentumCount)}
+        {laneCard('Long-Term Picks', longTermRows, longTermCount)}
       </div>
 
       <div className="radar-workspace">
@@ -702,15 +713,25 @@ export function MarketScannerView(props: ExperienceViewProps & { onCompare: (sym
   )
 }
 
-export function CompareView({ symbols, setSymbols, setActive, setSelected }: {
+export function CompareView({ symbols, setSymbols, setActive, setSelected, seedSymbols = [] }: {
   symbols: string[]
   setSymbols: (s: string[]) => void
   setActive: (page: string) => void
   setSelected: (s: string) => void
+  seedSymbols?: string[]
 }) {
   const [data, setData] = useState<CompareWorkspace | null>(null)
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
+  const seededRef = useRef(false)
+
+  useEffect(() => {
+    if (seededRef.current || symbols.length) return
+    const unique = [...new Set(seedSymbols.map((item) => item.trim().toUpperCase()).filter(Boolean))].slice(0, 3)
+    if (unique.length < 2) return
+    seededRef.current = true
+    setSymbols(unique)
+  }, [seedSymbols, setSymbols, symbols.length])
 
   useEffect(() => {
     if (symbols.length === 0) { setData(null); return }
@@ -769,10 +790,11 @@ export function CompareView({ symbols, setSymbols, setActive, setSelected }: {
   )
 }
 
-export function WatchlistView({ setActive, setSelected, onCompare }: {
+export function WatchlistView({ setActive, setSelected, onCompare, selected = '' }: {
   setActive: (page: string) => void
   setSelected: (s: string) => void
   onCompare: (symbol: string) => void
+  selected?: string
 }) {
   const [payload, setPayload] = useState<WatchlistPayload | null>(() => recall<WatchlistPayload>('watchlist') ?? null)
   const [symbol, setSymbol] = useState('')
@@ -785,12 +807,12 @@ export function WatchlistView({ setActive, setSelected, onCompare }: {
 
   useEffect(() => { void reload() }, [])
 
-  const add = async () => {
-    const sym = symbol.trim().toUpperCase()
+  const add = async (explicit?: string) => {
+    const sym = (explicit || symbol).trim().toUpperCase()
     if (!sym) return
     setBusy(true)
     try {
-      await addWatchlistItem({ symbol: sym, notes })
+      await addWatchlistItem({ symbol: sym, notes: notes || (explicit ? 'From current stock' : '') })
       setSymbol('')
       setNotes('')
       await reload()
@@ -806,6 +828,11 @@ export function WatchlistView({ setActive, setSelected, onCompare }: {
         <input value={symbol} onChange={(e) => setSymbol(e.target.value)} placeholder="NSE symbol" />
         <input value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Why watching" />
         <button type="button" disabled={busy} onClick={() => void add()}>Add</button>
+        {selected ? (
+          <button type="button" disabled={busy} onClick={() => void add(selected)}>
+            Add {selected}
+          </button>
+        ) : null}
       </div>
       <table className="radar-table">
         <thead><tr><th>Symbol</th><th>Added</th><th>Setup</th><th>Notes</th><th>Actions</th></tr></thead>
