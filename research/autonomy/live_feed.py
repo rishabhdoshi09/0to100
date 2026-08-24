@@ -4,6 +4,7 @@ from __future__ import annotations
 import csv
 import json
 import os
+import time
 from pathlib import Path
 
 
@@ -15,6 +16,8 @@ class LiveFeedController:
         self.ticker = None
         self.last_error = ""
         self.subscribed: set[str] = set()
+        self._quote_at = 0.0
+        self._quote_log_at = 0.0
 
     def _tokens(self, symbols) -> dict[int, str]:
         cache = Path(__file__).resolve().parents[2] / "logs" / "instruments_cache.csv"
@@ -32,6 +35,52 @@ class LiveFeedController:
                 except Exception:
                     continue
         return out
+
+    def _ticking(self) -> int:
+        if self.overlay is None:
+            return 0
+        try:
+            return int((self.overlay.health() or {}).get("symbols_ticking") or 0)
+        except Exception:
+            return 0
+
+    def _quote_overlay(self, symbols) -> int:
+        """REST LTP into the overlay when the websocket has no ticks. Data only."""
+        if self.overlay is None or not callable(getattr(self.overlay, "on_tick", None)):
+            return 0
+        if self._ticking() > 0:
+            return self._ticking()
+        now = time.time()
+        if now - float(self._quote_at or 0.0) < 8.0:
+            return self._ticking()
+        try:
+            from data.kite_client import KiteClient, _fresh_env
+            if not _fresh_env("KITE_API_KEY") or not _fresh_env("KITE_ACCESS_TOKEN"):
+                return 0
+            prices = KiteClient().get_ltp(sorted(symbols)[:80]) or {}
+        except Exception as exc:
+            if not self.last_error:
+                self.last_error = str(exc)[:240]
+            return 0
+        stamped = time.time()
+        filled = 0
+        for sym, raw in prices.items():
+            try:
+                price = float(raw)
+            except (TypeError, ValueError):
+                continue
+            if price <= 0:
+                continue
+            self.overlay.on_tick(str(sym).upper(), price, stamped)
+            filled += 1
+        self._quote_at = stamped
+        if filled:
+            self.last_error = ""
+            self.overlay.connected = True
+            if stamped - float(self._quote_log_at or 0.0) >= 60.0:
+                self._quote_log_at = stamped
+                print(f"[KITE] quote overlay · {filled} symbols · sniper uses LTP until websocket ticks", flush=True)
+        return filled
 
     def start(self, symbols) -> dict:
         symbols = {str(s).upper() for s in symbols if str(s).strip()}
@@ -61,9 +110,14 @@ class LiveFeedController:
                 self.overlay.connect()
             self.overlay.subscribe(symbols)
             self.subscribed |= symbols
-            self.last_error = ""
+            if "sendMessage" not in str(self.last_error or ""):
+                self.last_error = ""
         except Exception as exc:
             self.last_error = str(exc)[:240]
+        try:
+            self._quote_overlay(self.subscribed or symbols)
+        except Exception:
+            pass
         self._persist()
         return self.health()
 

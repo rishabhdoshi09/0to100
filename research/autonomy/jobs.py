@@ -255,10 +255,13 @@ class Deps:
         if "sendMessage" in err:
             err = "websocket connecting"
         extra = f" · feed={err}" if err else ""
+        reason = str(out.get("reason") or "idle")
+        if reason == "no_live_ticks" and telegram == "ON":
+            reason = "no_live_ticks · waiting for Kite LTP or websocket"
         print(
             f"[SNIPER] telegram {telegram} · watching {int(out.get('watching') or 0)} · "
             f"ticks {int(out.get('fresh') or health.get('symbols_ticking') or 0)} · "
-            f"armed {int(out.get('armed') or 0)} · {out.get('reason') or 'idle'}{extra}",
+            f"armed {int(out.get('armed') or 0)} · {reason}{extra}",
             flush=True,
         )
 

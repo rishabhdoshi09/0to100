@@ -147,6 +147,23 @@ def test_live_feed_controller_exposes_read_only_price():
     assert controller.price("AAA") == 123.45
 
 
+def test_quote_overlay_feeds_sniper_when_websocket_has_no_ticks(tmp_path, monkeypatch):
+    from research.intelligence.data.kite_live import KiteLiveOverlay
+    overlay = KiteLiveOverlay()
+    controller = LiveFeedController(tmp_path / "live.json", overlay=overlay)
+
+    class FakeKite:
+        def get_ltp(self, symbols):
+            return {"BBB": 101.2}
+
+    monkeypatch.setattr("data.kite_client.KiteClient", lambda: FakeKite())
+    monkeypatch.setattr("data.kite_client._fresh_env", lambda name, default="": "present")
+    health = controller.start({"BBB"})
+    assert controller.price("BBB") == 101.2
+    assert controller.entry_allowed("BBB") is True
+    assert int(health.get("symbols_ticking") or 0) >= 1
+
+
 def test_market_scan_job_invokes_supervisor_owned_notifier():
     from research.autonomy import jobs as JOBS
 
