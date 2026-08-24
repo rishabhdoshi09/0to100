@@ -333,6 +333,7 @@ function DecisionSheet({
 }
 
 export function RecommendationsView({
+  dashboard,
   setSelected,
   setActive,
   marketScan,
@@ -369,7 +370,7 @@ export function RecommendationsView({
     return () => {
       cancelled = true
     }
-  }, [])
+  }, [dashboard.scan.scanned_at, dashboard.long_term.scanned_at, marketScan.succeeded, longTermScan.succeeded])
 
   const category = useMemo(
     () => data?.categories.find((c) => c.id === categoryId) || data?.categories[0],
@@ -735,7 +736,7 @@ function DeskTile({
   )
 }
 
-export function MarketReportsView({ setActive, setSelected }: ExperienceViewProps) {
+export function MarketReportsView({ dashboard, setActive, setSelected, marketScan }: ExperienceViewProps) {
   const [data, setData] = useState<MarketReportsWorkspace | null>(() => recall<MarketReportsWorkspace>('market-reports') ?? null)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(() => !recall('market-reports'))
@@ -763,7 +764,7 @@ export function MarketReportsView({ setActive, setSelected }: ExperienceViewProp
     return () => {
       cancelled = true
     }
-  }, [])
+  }, [dashboard.scan.scanned_at, marketScan.succeeded])
 
   const reports = useMemo(() => {
     if (!data) return []
