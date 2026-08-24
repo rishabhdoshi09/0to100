@@ -9,6 +9,45 @@ export type PageGuide = {
 }
 
 export const PAGE_GUIDE: Record<string, PageGuide> = {
+  Today: {
+    title: 'Today',
+    purpose: 'Best Setups and the scanner watchlist from the last official scan.',
+    questions: [
+      'Which names cleared a setup today?',
+      'Is market data ready?',
+      'What did the bot learn from paper?',
+    ],
+    action: 'Open a setup card, then Paper Desk or Backtest after a paper loss.',
+    doesNot: 'A qualify is research, not a broker order.',
+  },
+  Setups: {
+    title: 'Setups',
+    purpose: 'Breakouts, Momentum and Long-term lists. Four jobs — do not mix them.',
+    questions: ['When did the scan run?', 'Why did this name qualify?'],
+    action: 'Filter the list, then inspect one name.',
+    doesNot: 'A scanner match is not a guaranteed trade.',
+  },
+  'Paper Desk': {
+    title: 'Paper Desk',
+    purpose: 'Simulated book. The bot learns from closed trades every day.',
+    questions: ['What is open?', 'What is on cooldown?', 'Is live still locked?'],
+    action: 'Enable paper auto from autonomy, then review closed trades.',
+    doesNot: 'This page never places a broker order.',
+  },
+  Backtest: {
+    title: 'Backtest',
+    purpose: 'Inspect a paper-loss style on past data after costs.',
+    questions: ['Did this style pay historically?'],
+    action: 'Open a closed paper loss, then review Stock Intelligence.',
+    doesNot: 'A backtest does not change today’s BUY list or paper autopilot.',
+  },
+  Desk: {
+    title: 'Desk',
+    purpose: 'Market, news, data, stock workspace and system health.',
+    questions: ['Is autonomy online?', 'Is history fresh?'],
+    action: 'Use the inner tabs. Daily trading lives on Today and Paper Desk.',
+    doesNot: 'Desk tools do not unlock live orders.',
+  },
   'Command Center': {
     title: 'Home',
     purpose: 'Shows whether QuantTerm has usable data and what deserves attention now.',

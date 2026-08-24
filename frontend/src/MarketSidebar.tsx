@@ -1,53 +1,17 @@
 import type { DashboardPayload } from './types'
 import { money } from './format'
 
-const PRIMARY_NAV = [
-  ['⌂', 'Home', 'Home'],
-  ['◎', 'Market Scanner', 'Market Scanner'],
-  ['◉', 'Stock Intelligence', 'Stock Intelligence'],
-  ['◇', 'Long-Term Picks', 'Long-Term Picks'],
-  ['⇔', 'Compare', 'Compare'],
-  ['★', 'Watchlist', 'Watchlist'],
-] as const
-
-const SECONDARY_NAV = [
-  ['↗', 'Market Overview', 'Market Overview'],
-  ['◈', 'News & Events', 'News & Events'],
-  ['▤', 'Research Data', 'Research Data'],
-  ['▣', 'Paper Portfolio', 'Paper Portfolio'],
-  ['◌', 'System Health', 'System Health'],
+const DESK_NAV = [
+  ['⚡', 'Today', 'Today'],
+  ['📈', 'Setups', 'Setups'],
+  ['📋', 'Paper Desk', 'Paper Desk'],
+  ['🧪', 'Backtest', 'Backtest'],
+  ['💼', 'Portfolio', 'Portfolio'],
+  ['🖥️', 'Desk', 'Desk'],
 ] as const
 
 function Logo() {
-  return <div className="brand-mark" aria-hidden="true"><span /><span /><span /></div>
-}
-
-function NavigationGroup({
-  label,
-  rows,
-  active,
-  setActive,
-}: {
-  label: string
-  rows: ReadonlyArray<readonly [string, string, string]>
-  active: string
-  setActive: (value: string) => void
-}) {
-  return (
-    <>
-      <div className="nav-section-label">{label}</div>
-      {rows.map(([icon, route, display]) => (
-        <button
-          key={route}
-          className={active === route ? 'nav-item active' : 'nav-item'}
-          type="button"
-          onClick={() => setActive(route)}
-        >
-          <span>{icon}</span>{display}
-        </button>
-      ))}
-    </>
-  )
+  return <div className="brand-mark" aria-hidden="true">QT</div>
 }
 
 export function MarketSidebar({
@@ -60,12 +24,42 @@ export function MarketSidebar({
   dashboard: DashboardPayload
 }) {
   const operations = dashboard.operations.running
+  const current = (
+    {
+      Home: 'Today',
+      'Command Center': 'Today',
+      'Market Scanner': 'Setups',
+      Scanner: 'Setups',
+      'Long-Term Picks': 'Setups',
+      'Long-Term': 'Setups',
+      'Paper Portfolio': 'Paper Desk',
+      Automation: 'Desk',
+      'System Health': 'Desk',
+      'Market Overview': 'Desk',
+      'Market Internals': 'Desk',
+      'News & Events': 'Desk',
+      'Research Data': 'Desk',
+      'Stock Intelligence': 'Desk',
+      Compare: 'Desk',
+      Watchlist: 'Desk',
+    } as Record<string, string>
+  )[active] || active
+
   return (
     <aside className="sidebar">
-      <div className="brand"><Logo /><div><strong>QUANTTERM</strong><small>MARKET RADAR</small></div></div>
+      <div className="brand"><Logo /><div><strong>QUANTTERM</strong><small>NSE DESK</small></div></div>
       <nav>
-        <NavigationGroup label="DISCOVERY" rows={PRIMARY_NAV} active={active} setActive={setActive} />
-        <NavigationGroup label="TOOLS & EVIDENCE" rows={SECONDARY_NAV} active={active} setActive={setActive} />
+        <div className="nav-section-label">Desk</div>
+        {DESK_NAV.map(([icon, route, display]) => (
+          <button
+            key={route}
+            className={current === route ? 'nav-item active' : 'nav-item'}
+            type="button"
+            onClick={() => setActive(route)}
+          >
+            <span>{icon}</span>{display}
+          </button>
+        ))}
       </nav>
       <div className="sidebar-spacer" />
       <div className="broker-card">
@@ -75,13 +69,13 @@ export function MarketSidebar({
         </div>
         <small>{dashboard.data.ready ? `READY · ${dashboard.data.bhavcopy.latest_date || '—'}` : 'INCOMPLETE'}</small>
         <div className="broker-stats">
-          <div><span>Sessions</span><strong>{dashboard.data.bhavcopy.sessions || 0}</strong></div>
+          <div><span>Paper equity</span><strong>{money(dashboard.paper.equity)}</strong></div>
           <div><span>Universe</span><strong>{dashboard.scan.universe_size.toLocaleString('en-IN')}</strong></div>
         </div>
       </div>
       <div className="broker-card compact-service-card">
-        <div className="broker-row"><strong>SCAN ENGINE</strong><span className={operations ? 'status-dot' : 'status-dot status-dot-off'} /></div>
-        <small>{operations ? 'ONLINE' : 'OFFLINE'} · last scan {dashboard.scan.scanned_at ? new Date(dashboard.scan.scanned_at).toLocaleDateString('en-IN') : '—'}</small>
+        <div className="broker-row"><strong>AUTONOMY</strong><span className={operations || dashboard.autonomy.running ? 'status-dot' : 'status-dot status-dot-off'} /></div>
+        <small>{dashboard.autonomy.running ? 'ONLINE' : operations ? 'OPS ONLINE' : 'OFFLINE'} · live locked</small>
       </div>
     </aside>
   )

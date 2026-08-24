@@ -7,18 +7,16 @@ import {
   WatchlistView,
 } from './marketRadarViews'
 import { DisplayDepthToggle } from './displayDepth'
-import {
-  EnhancedLongTermView,
-  ExperienceHelpDrawer,
-} from './experience'
+import { ExperienceHelpDrawer } from './experience'
 import { MarketSidebar } from './MarketSidebar'
 import { NewsView, OperationsRibbon } from './marketViews'
 import { ProductStockIntelligenceView } from './productViews'
 import { ResearchDataView } from './researchData'
+import { DeskHub } from './deskHub'
 import {
-  AutomationView,
   MarketInternalsView,
   PortfolioView,
+  RecoBacktestView,
 } from './views'
 import type { DisplayDepth } from './productLanguage'
 import { addWatchlistItem } from './productApi'
@@ -131,45 +129,47 @@ const emptyDashboard: DashboardPayload = {
 }
 
 const pageTitles: Record<string, string> = {
-  Home: 'Home',
-  'Market Scanner': 'Market Scanner',
+  Today: 'Today',
+  Setups: 'Setups',
+  'Paper Desk': 'Paper Desk',
+  Backtest: 'Backtest',
+  Portfolio: 'Portfolio',
+  Desk: 'Desk',
+  Home: 'Today',
+  'Market Scanner': 'Setups',
   'Stock Intelligence': 'Stock Intelligence',
-  'Long-Term Picks': 'Long-Term Picks',
+  'Long-Term Picks': 'Setups',
   Compare: 'Compare',
   Watchlist: 'Watchlist',
-  'Market Overview': 'Market Overview',
-  'News & Events': 'News & Events',
-  'Research Data': 'Research Data',
-  'Paper Portfolio': 'Paper Portfolio',
-  'System Health': 'System Health',
-  // legacy route keys
-  'Command Center': 'Home',
-  Scanner: 'Market Scanner',
-  'Long-Term': 'Long-Term Picks',
-  Portfolio: 'Paper Portfolio',
-  'Market Internals': 'Market Overview',
-  Automation: 'System Health',
+  'Market Overview': 'Market',
+  'News & Events': 'News',
+  'Research Data': 'Data',
+  'Paper Portfolio': 'Paper Desk',
+  'System Health': 'Desk',
+  'Command Center': 'Today',
+  Scanner: 'Setups',
+  'Long-Term': 'Setups',
+  'Market Internals': 'Market',
+  Automation: 'Desk',
 }
 
 const pageSubtitles: Record<string, string> = {
-  Home: 'Daily command centre — Breakouts, Momentum and Long-Term Picks from the saved market scan.',
-  'Market Scanner': 'Professional scanner tables for breakouts, momentum and long-term quality.',
-  'Stock Intelligence': 'Company workspace — chart, financials, ratios and read-only trade plan.',
-  'Long-Term Picks': 'Business quality, valuation and timing without fabricated model performance.',
-  Compare: 'Side-by-side comparison across market, growth, quality and technical dimensions.',
-  Watchlist: 'Names you are tracking with latest scan context.',
-  'Market Overview': 'Regime, breadth, volatility and sector leadership.',
-  'News & Events': 'Dated market context with source health.',
-  'Research Data': 'Verified snapshots and evidence uploads.',
-  'Paper Portfolio': 'Recorded paper positions and outcomes — secondary evidence.',
-  'System Health': 'Operations, autonomy and infrastructure detail.',
+  Today: 'SEPA-style Best Setups first, then the scanner watchlist. Paper memory is below.',
+  Setups: 'Breakouts, Momentum, Long-term. Four jobs — do not mix them.',
+  'Paper Desk': 'Simulated book. The bot learns from closed trades. Live orders stay locked.',
+  Backtest: 'Inspect a paper-loss style on past data. This does not change today’s BUY list.',
+  Portfolio: 'Paper positions, equity and what the bot learned.',
+  Desk: 'Market, news, data, stock workspace and system health.',
+  Home: 'SEPA-style Best Setups first, then the scanner watchlist.',
+  'Market Scanner': 'Breakouts, Momentum, Long-term.',
+  'Paper Portfolio': 'Simulated book. Live orders stay locked.',
 }
 
 function App() {
   const [dashboard, setDashboard] = useState<DashboardPayload>(emptyDashboard)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
-  const [active, setActive] = useState('Home')
+  const [active, setActive] = useState('Today')
   const [compareSymbols, setCompareSymbols] = useState<string[]>([])
   const [selected, setSelected] = useState('')
   const [bars, setBars] = useState<ChartBar[]>([])
@@ -316,10 +316,32 @@ function App() {
     longTermScan,
   }
 
-  const primaryPages = ['Home', 'Market Scanner', 'Stock Intelligence', 'Long-Term Picks', 'Compare', 'Watchlist', 'Command Center', 'Scanner']
+  const primaryPages = ['Today', 'Setups', 'Home', 'Market Scanner', 'Command Center', 'Scanner']
   const showOpsRibbon = !primaryPages.includes(active)
 
   const renderView = () => {
+    if (active === 'Today' || active === 'Home' || active === 'Command Center') {
+      return <RadarHomeView {...viewProps} onCompare={addToCompare} onWatchlist={addToWatchlist} />
+    }
+    if (active === 'Setups' || active === 'Market Scanner' || active === 'Scanner' || active === 'Long-Term Picks' || active === 'Long-Term') {
+      return <MarketScannerView {...viewProps} onCompare={addToCompare} />
+    }
+    if (active === 'Paper Desk' || active === 'Paper Portfolio' || active === 'Portfolio') {
+      return <PortfolioView {...viewProps} />
+    }
+    if (active === 'Backtest') return <RecoBacktestView {...viewProps} />
+    if (active === 'Desk' || active === 'System Health' || active === 'Automation') {
+      return (
+        <DeskHub
+          {...viewProps}
+          compareSymbols={compareSymbols}
+          setCompareSymbols={setCompareSymbols}
+          onCompare={addToCompare}
+          onWatchlist={addToWatchlist}
+          depth={depth}
+        />
+      )
+    }
     if (active === 'Compare') {
       return (
         <CompareView
@@ -333,12 +355,6 @@ function App() {
     if (active === 'Watchlist') {
       return <WatchlistView setActive={setActive} setSelected={setSelected} onCompare={addToCompare} />
     }
-    if (active === 'Market Scanner' || active === 'Scanner') {
-      return <MarketScannerView {...viewProps} onCompare={addToCompare} />
-    }
-    if (active === 'Home' || active === 'Command Center') {
-      return <RadarHomeView {...viewProps} onCompare={addToCompare} onWatchlist={addToWatchlist} />
-    }
     if (active === 'Stock Intelligence') {
       return (
         <ProductStockIntelligenceView
@@ -350,11 +366,8 @@ function App() {
       )
     }
     if (active === 'Research Data') return <ResearchDataView symbol={selected} />
-    if (active === 'Paper Portfolio' || active === 'Portfolio') return <PortfolioView {...viewProps} />
     if (active === 'Market Overview' || active === 'Market Internals') return <MarketInternalsView {...viewProps} />
-    if (active === 'Long-Term Picks' || active === 'Long-Term') return <EnhancedLongTermView {...viewProps} />
     if (active === 'News & Events') return <NewsView {...viewProps} />
-    if (active === 'System Health' || active === 'Automation') return <AutomationView {...viewProps} />
     return <RadarHomeView {...viewProps} onCompare={addToCompare} onWatchlist={addToWatchlist} />
   }
 

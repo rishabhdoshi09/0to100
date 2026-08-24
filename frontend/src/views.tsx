@@ -19,7 +19,7 @@ import type {
   ScanRecord,
 } from './types'
 
-type ViewProps = {
+export type ViewProps = {
   dashboard: DashboardPayload
   selected: string
   setSelected: (symbol: string) => void
@@ -304,6 +304,38 @@ export function LongTermView(props: ViewProps) {
       <div className="mode-tabs">{['All', 'Quality', 'Expensive', 'Needs Data', 'Avoid'].map((item) => <button type="button" key={item} className={classification === item ? 'active' : ''} onClick={() => setClassification(item)}>{item}</button>)}<button className="mode-action" type="button" onClick={() => void runControl('RUN_LONG_TERM_SCAN_NOW')}>{runLabel}</button><button className="mode-action" type="button" disabled={!dashboard.long_term.records.length} onClick={() => void runControl('REFRESH_LONG_TERM_NOW')}>Refresh fundamentals</button></div>
       {!dashboard.long_term.available && <div className="api-warning">Latest long-term operation: {String(latestOperation?.status || 'not run')} · {String(latestOperation?.error_message || latestOperation?.message || 'waiting for the dedicated long-term lane')}</div>}
       <div className="split-workspace"><Panel title={`${classification.toUpperCase()} · ${rows.length} RECORDS`} subtitle={`Coverage ${dashboard.long_term.summary.coverage_pct ?? 0}% · ${dashboard.long_term.fundamentals_source || 'current snapshot'}`}><LongTermTable rows={rows} selected={viewSymbol} onSelect={setSelected} /></Panel><div className="detail-stack"><Panel title={`LONG-TERM CHART · ${viewSymbol || 'SELECT STOCK'}`}><ChartWorkspace symbol={viewSymbol} bars={viewBars} row={row} /></Panel><Panel title="QUALITY & RISKS"><div className="evidence-grid"><EvidenceList title="Quality factors" items={row?.quality_factors} tone="green" /><EvidenceList title="Risk flags" items={row?.risk_flags} tone="red" /></div></Panel></div></div>
+    </section>
+  )
+}
+
+export function RecoBacktestView({ dashboard, setActive }: ViewProps) {
+  const losses = [...dashboard.paper.closed_trades]
+    .filter((row) => Number(row.pnl ?? 0) < 0)
+    .reverse()
+    .slice(0, 8)
+  return (
+    <section className="workspace-view">
+      <div className="reco-how">
+        <div className="qt-eyebrow">After paper losses</div>
+        <p>Backtest answers one business question: did this style make or lose money on past data after costs? A result does not change today’s BUY list, ranking, or paper autopilot.</p>
+      </div>
+      <BotLearningPanel dashboard={dashboard} />
+      <Panel title="PAPER LOSSES TO INSPECT" subtitle="Pick a name, then open Stock Intelligence. The bot already recorded these for the next paper cycle.">
+        {losses.length === 0 && <div className="empty-row">No closed paper losses yet.</div>}
+        {losses.map((row, index) => (
+          <div className="insight" key={`${row.symbol}-${index}`}>
+            <i className="amber" />
+            <div>
+              <strong>{row.symbol}</strong>
+              <span>{row.exit_reason || 'exit'} · {Number(row.pnl || 0).toLocaleString('en-IN')}</span>
+            </div>
+          </div>
+        ))}
+        <div className="inline-actions" style={{ padding: '12px' }}>
+          <button type="button" onClick={() => setActive('Setups')}>Open Setups</button>
+          <button type="button" onClick={() => setActive('Paper Desk')}>Open Paper Desk</button>
+        </div>
+      </Panel>
     </section>
   )
 }

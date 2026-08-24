@@ -178,7 +178,7 @@ export function RadarHomeView(props: ExperienceViewProps & {
     <section className="radar-home">
       <header className="radar-hero">
         <div>
-          <span>MARKET COMMAND</span>
+          <span>TODAY · NSE DESK</span>
           <h2>{radar?.market_health || dashboard.market.health}</h2>
           <p>{dashboard.market.summary}</p>
         </div>
@@ -199,6 +199,44 @@ export function RadarHomeView(props: ExperienceViewProps & {
       </div>
 
       <LiveScanBanner scan={marketScan} depth={depth} label="Market scan" />
+
+      <div className="reco-how">
+        <div className="qt-eyebrow">How to use this desk</div>
+        <ol>
+          <li><span className="k">Today</span> — Best Setups first, then the scanner lanes.</li>
+          <li><span className="k">Setups</span> — Breakouts, Momentum, Long-term. Do not mix them.</li>
+          <li><span className="k">Paper Desk</span> — simulated trades. The bot learns daily. No broker orders here.</li>
+          <li><span className="k">Backtest</span> — inspect a paper loss. It does not change today’s BUY list.</li>
+        </ol>
+      </div>
+
+      <div className="reco-card-grid">
+        {((radar?.lanes.breakouts?.length ? radar.lanes.breakouts : radar?.lanes.momentum) || []).slice(0, 6).map((row) => {
+          const badge = row.chase_risk ? ['Avoid', 'avoid'] : row.status === 'Ready to trade' || row.verdict === 'BUY' ? ['Buy Setup', 'buy'] : ['Watch', 'watch']
+          return (
+            <button
+              key={row.symbol}
+              type="button"
+              className={selected === row.symbol ? 'reco-card active' : 'reco-card'}
+              onClick={() => setSelected(row.symbol)}
+            >
+              <div className="row"><span className="sym">{row.symbol}</span><span className={`reco-badge ${badge[1]}`}>{badge[0]}</span></div>
+              <div className="co">{row.company || row.sector || row.setup_label || 'NSE'}</div>
+              <div className="px">{row.price ? `₹${Number(row.price).toLocaleString('en-IN')}` : 'Price n/a'}</div>
+              <div className="lv">
+                {row.entry ? `Entry ₹${Number(row.entry).toLocaleString('en-IN')}` : 'Entry n/a'}
+                {row.stop ? `  ·  Stop ₹${Number(row.stop).toLocaleString('en-IN')}` : ''}
+                {row.target ? `  ·  Target ₹${Number(row.target).toLocaleString('en-IN')}` : ''}
+              </div>
+              <div className="why">{row.reason || row.setup_label || 'From the last whole-market scan.'}</div>
+            </button>
+          )
+        })}
+      </div>
+      {!(radar?.lanes.breakouts || []).length && (
+        <p className="empty-row">No Best Setups in the last scan yet. Run a scan or keep autonomy running.</p>
+      )}
+
       <BotLearningPanel dashboard={dashboard} />
 
       <div className="radar-three-lanes">

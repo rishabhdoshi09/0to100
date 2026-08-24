@@ -10,6 +10,7 @@ import './productViews.css'
 import './experience.css'
 import './design-tokens.css'
 import './radar.css'
+import './reco.css'
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
