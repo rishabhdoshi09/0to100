@@ -442,6 +442,11 @@ class UnifiedScanner:
         if prefetch:
             do_prefetch(symbols, progress=progress)
         available = [s for s in symbols if s in set(cached_symbols())]
+        if not available:
+            # History can already be on disk while bulk_fetcher._bhav_ok is still
+            # false (market-ops loads bhavcopy_runtime, then used to skip prefetch).
+            do_prefetch(symbols, progress=progress)
+            available = [s for s in symbols if s in set(cached_symbols())]
         self._nifty_ret30 = _nifty_return_30d()      # RS benchmark, once/scan
         # Current market tape → regime-conditional demotion for this scan only.
         # compute_regime is cached (15 min) + streamlit-free; one call/scan.

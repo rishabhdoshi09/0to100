@@ -115,6 +115,20 @@ else
   echo "[STACK] Starting local API at http://127.0.0.1:8765 …"
   python -u -m uvicorn terminal_product_api:app --host 127.0.0.1 --port 8765 &
   API_PID=$!
+  for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+    if url_ok "http://127.0.0.1:8765/api/health"; then
+      break
+    fi
+    if ! kill -0 "$API_PID" >/dev/null 2>&1; then
+      echo "[STACK] Market API exited before becoming healthy." >&2
+      exit 1
+    fi
+    sleep 0.5
+  done
+  if ! url_ok "http://127.0.0.1:8765/api/health"; then
+    echo "[STACK] Market API on :8765 did not become healthy. RecoWealth cards stay empty until it does." >&2
+    exit 1
+  fi
 fi
 
 if port_open 5173; then

@@ -264,7 +264,8 @@ class MarketOperationsWorker:
         from scan.market_scan_service import run_whole_market_scan
 
         def prepared_prefetch(symbols, *, progress=None):
-            return len(symbols)
+            from scan.bulk_fetcher import prefetch as warm_ohlcv
+            return warm_ohlcv(symbols, progress=progress)
 
         started = time.monotonic()
         last_store = 0.0

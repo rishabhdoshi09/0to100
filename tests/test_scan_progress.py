@@ -74,3 +74,34 @@ def test_market_scan_passes_progress_into_analyze():
     )
     assert report.ok
     assert seen == [(1, 2), (2, 2)]
+
+
+def test_empty_ohlcv_cache_keeps_last_scan(monkeypatch):
+    from scan.market_scan_service import DATA_UNAVAILABLE, run_whole_market_scan
+
+    saved: list[dict] = []
+
+    class EmptyScanner:
+        def scan(self, symbols, progress=None, prefetch=True):
+            return []
+
+    monkeypatch.setattr("scan.bulk_fetcher.cached_symbols", lambda: [])
+    monkeypatch.setattr("product.scan_store.save_scan", lambda payload, path=None: saved.append(payload))
+    report = run_whole_market_scan(
+        universe_provider=lambda: {"AAA": "Alpha", "BBB": "Beta"},
+        prefetch_fn=lambda symbols, progress=None: len(symbols),
+        scanner=EmptyScanner(),
+        fno_provider=lambda: set(),
+        save=True,
+    )
+    assert report.status == DATA_UNAVAILABLE
+    assert report.error_code == "OHLCV_CACHE_EMPTY"
+    assert saved == []
+
+
+def test_market_ops_prefetch_warms_ohlcv():
+    import inspect
+    from operations.market_ops import MarketOperationsWorker
+    source = inspect.getsource(MarketOperationsWorker._run_market_scan)
+    assert "warm_ohlcv" in source
+    assert "return len(symbols)" not in source

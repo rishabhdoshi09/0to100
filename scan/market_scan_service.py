@@ -119,6 +119,22 @@ def run_whole_market_scan(
         return MarketScanReport(FAILED, universe_size=len(symbols), error_code="SCAN_ERROR",
                                 error_message=str(exc), source_snapshot_id=snapshot_id or "")
 
+    if not results:
+        warm: list[str] = []
+        try:
+            from scan.bulk_fetcher import cached_symbols
+            warm = [str(s).upper() for s in (cached_symbols() or [])]
+        except Exception:
+            warm = []
+        if not warm:
+            return MarketScanReport(
+                DATA_UNAVAILABLE,
+                universe_size=len(symbols),
+                error_code="OHLCV_CACHE_EMPTY",
+                error_message="OHLCV cache was empty; the last readable scan was kept.",
+                source_snapshot_id=snapshot_id or _active_snapshot_id(),
+            )
+
     try:
         fno_symbols = set(fno_provider() or ())
     except Exception:
