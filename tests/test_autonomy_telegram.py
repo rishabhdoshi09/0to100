@@ -56,6 +56,8 @@ def test_scan_alerts_are_durable_and_deduped(tmp_path):
     assert first["setup"] == 1 and first["prebreakout"] == 1
     assert len(engine.messages) == 1
     assert "AAA" in engine.messages[0][0] and "BBB" in engine.messages[0][0]
+    assert "Sniper watching" in engine.messages[0][0]
+    assert "Sniper live watch" in engine.messages[0][0]
 
     # A process restart must not repeat the same symbol/day alerts.
     n2 = TelegramNotifier(tmp_path, engine_factory=lambda: engine, now_fn=now)
@@ -113,6 +115,36 @@ def test_sniper_skips_chase_and_blowoff(tmp_path):
     epoch[0] += 9
     assert n.observe_live_breakouts(payload, live)["confirmed"] == 0
     assert engine.messages == []
+
+
+def test_chase_watch_does_not_promise_a_sniper_confirm(tmp_path):
+    engine = FakeEngine()
+    n = TelegramNotifier(tmp_path, engine_factory=lambda: engine,
+                         now_fn=lambda: datetime(2026, 8, 24, 14, 0))
+    payload = {
+        "records": [
+            {"symbol": "URBANCO", "status": "Ready to trade", "verdict": "BUY",
+             "price": 168.2, "entry": 168.2, "stop": 155.6, "target": 193.3,
+             "score": 55, "rsi": 82, "volume_ratio": 4.5, "chase_risk": False,
+             "signals": ["MOMENTUM"], "reasons": ["Broke resistance"]},
+            {"symbol": "DPABHUSHAN", "status": "Watch for breakout", "verdict": "WATCH",
+             "price": 1536.1, "entry": 1548, "stop": 1414.9, "target": 1700,
+             "score": 80, "rsi": 70, "volume_ratio": 2.0, "chase_risk": True,
+             "signals": ["PRE_BREAKOUT"],
+             "reasons": ["Extended (24% above 50-DMA — late-stage, base se door)"]},
+            {"symbol": "CLEAN", "status": "Watch for breakout", "verdict": "WATCH",
+             "price": 100, "entry": 101, "stop": 95, "target": 110,
+             "score": 40, "rsi": 55, "volume_ratio": 1.4, "chase_risk": False,
+             "signals": ["PRE_BREAKOUT"], "reasons": ["Tight base"]},
+        ]
+    }
+    n.notify_scan(payload, phase="intraday")
+    text = engine.messages[0][0]
+    assert "Confirm hone par alert" not in text
+    assert "Sniper will not confirm" in text
+    assert "CLEAN" in text
+    assert "Sniper watching" in text
+    assert "URBANCO" in text and "RSI blow-off" in text
 
 
 def test_paper_open_and_close_alerts_include_ledger_truth(tmp_path):

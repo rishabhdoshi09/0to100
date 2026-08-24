@@ -229,14 +229,16 @@ class TelegramNotifier:
         ready = ready[:5]
 
         ready_symbols = {str(r.get("symbol", "")).upper() for r in ready}
-        pre = [r for r in records
+        pre_all = [r for r in records
                if (str(r.get("status", "")) == "Watch for breakout"
                    or "PRE_BREAKOUT" in [str(x).upper() for x in (r.get("signals") or [])])
                and self._f(r.get("entry")) > 0
                and str(r.get("symbol", "")).upper() not in ready_symbols
                and not self._was_sent(f"pre:{str(r.get('symbol', '')).upper()}", day)]
-        pre.sort(key=lambda r: (-self._f(r.get("score")), str(r.get("symbol", ""))))
-        pre = pre[:4]
+        pre_all.sort(key=lambda r: (-self._f(r.get("score")), str(r.get("symbol", ""))))
+        sniper_pre = [r for r in pre_all if is_sniper_watch(r)]
+        chase_pre = [r for r in pre_all if not is_sniper_watch(r)]
+        pre = (sniper_pre + chase_pre)[:4]
 
         lines: list[str] = []
         keys: list[str] = []
@@ -248,6 +250,9 @@ class TelegramNotifier:
                 emoji = "🔥" if verdict == "STRONG BUY" else "⚡"
                 reasons = [self._esc(x) for x in (r.get("reasons") or []) if str(x).strip()]
                 why = "\n".join(f"   ✓ {x}" for x in reasons[:3]) or "   ✓ Scanner gates passed"
+                sniper_note = ""
+                if not is_sniper_watch(r):
+                    sniper_note = "\n   Sniper will not confirm — chase/extended or RSI blow-off"
                 lines.append(
                     f"\n{emoji} <b>{self._esc(sym)}</b> ₹{self._f(r.get('price')):,.2f} — {self._esc(verdict)}\n"
                     f"{why}\n"
@@ -255,6 +260,7 @@ class TelegramNotifier:
                     f"Vol {self._f(r.get('volume_ratio')):.1f}×\n"
                     f"   Entry ₹{self._f(r.get('entry')):,.2f} · Stop ₹{self._f(r.get('stop')):,.2f} · "
                     f"Target ₹{self._f(r.get('target')):,.2f}"
+                    f"{sniper_note}"
                 )
                 keys.append(f"setup:{sym}")
         if pre:
@@ -266,13 +272,27 @@ class TelegramNotifier:
                 if entry > 0:
                     gap = max(0.0, (entry - price) / entry * 100.0)
                 reason = self._esc((r.get("reasons") or ["Structure near trigger"])[0])
+                if is_sniper_watch(r):
+                    follow = "Sniper watching — confirm alert if LTP holds 8s above trigger"
+                else:
+                    follow = "Sniper will not confirm — chase/extended. Pullback ka wait"
                 lines.append(
                     f"\n👀 <b>{self._esc(sym)}</b> ₹{price:,.2f} · trigger ₹{entry:,.2f} "
                     f"({gap:.1f}% neeche)\n"
                     f"   {reason}\n"
-                    f"   Confirm hone par alert · stop ₹{self._f(r.get('stop')):,.2f}"
+                    f"   {follow} · stop ₹{self._f(r.get('stop')):,.2f}"
                 )
                 keys.append(f"pre:{sym}")
+
+        watch = sorted(sniper_symbols(payload))
+        if watch and lines:
+            extra = f" +{len(watch) - 8}" if len(watch) > 8 else ""
+            lines.append(
+                "\n🎯 <b>Sniper live watch</b> (not chase): "
+                + ", ".join(self._esc(s) for s in watch[:8])
+                + extra
+                + "\nConfirm Telegram only if LTP holds 8s above entry · 09:15–15:30 IST"
+            )
 
         if lines:
             try:
