@@ -52,6 +52,22 @@ def test_empty_shadow_and_trust_do_not_invent_sample_size(monkeypatch):
     assert strip["shadow"]["proven"] is False
 
 
+def test_live_no_explains_current_gate_without_inventing_history(monkeypatch):
+    from product.decision_memory import why_not
+
+    monkeypatch.setattr(
+        "research.explainability.explain_rejection",
+        lambda symbol: {"found": False, "summary": f"No recorded rejection for {symbol}."},
+    )
+    got = why_not("BLUSPRING", row={"chase_risk": True, "verdict": "WATCH"})
+    assert got["found"] is True
+    assert got["reason"] == "EXTENSION"
+    assert got["n_observations"] == 0
+    assert got["avg_fwd_pct"] is None
+    assert "will not" in got["line"].lower()
+    assert "extension" in got["line"].lower()
+
+
 def test_unproven_why_not_does_not_claim_the_rule_earned_its_keep(monkeypatch):
     from product.decision_memory import why_not
 

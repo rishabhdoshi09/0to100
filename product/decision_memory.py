@@ -286,7 +286,38 @@ def shadow_book(*, min_n: int = PROVEN_N) -> dict[str, Any]:
     }
 
 
-def why_not(symbol: str) -> dict[str, Any]:
+def _current_gate(row: Mapping[str, Any] | None) -> tuple[str | None, str | None]:
+    """Gate on the live scan row, if any. Does not invent a track record."""
+    src = row or {}
+    reason = None
+    if src.get("chase_risk"):
+        reason = "EXTENSION"
+    else:
+        try:
+            from core.decision_journal import _norm_reason
+        except Exception:
+            def _norm_reason(text, decision):  # type: ignore[no-redef]
+                return str(text or "")
+        known = {
+            "EXTENSION", "BLOWOFF_RSI", "POOR_BREADTH", "CORRELATION",
+            "LIQUIDITY", "LAGGARD", "DRIFT", "MACRO", "RISK_LIMIT",
+        }
+        for item in src.get("reasons") or []:
+            mapped = _norm_reason(str(item), "REJECTED")
+            if mapped in known:
+                reason = mapped
+                break
+    if not reason:
+        return None, None
+    try:
+        from research.explainability import REASON_LABELS
+        label = REASON_LABELS.get(reason, reason.replace("_", " ").title())
+    except Exception:
+        label = reason.replace("_", " ").title()
+    return reason, label
+
+
+def why_not(symbol: str, row: Mapping[str, Any] | None = None) -> dict[str, Any]:
     """Why didn't QuantTerm recommend this name? Fail-open, never invented."""
     try:
         from research.explainability import explain_rejection
@@ -297,8 +328,22 @@ def why_not(symbol: str) -> dict[str, Any]:
     n = int(got.get("n_observations") or 0)
     proven = n >= PROVEN_N
     line = str(got.get("summary") or "")
-    if found and not proven:
-        label = got.get("label") or got.get("reason") or "This filter"
+    reason = got.get("reason")
+    label = got.get("label")
+    live_reason, live_label = _current_gate(row)
+    if live_reason and not found:
+        found = True
+        reason = live_reason
+        label = live_label
+        n = 0
+        proven = False
+        line = (
+            f"{str(symbol or '').upper()} is a NO right now — {live_label}. "
+            "No settled rejections for this reason yet. QuantTerm will not "
+            "say this rule saved money."
+        )
+    elif found and not proven:
+        label = label or reason or "This filter"
         line = (
             f"{str(symbol or '').upper()} was passed — {label}. "
             f"QuantTerm has only {n} settled rejections for this reason. "
@@ -307,8 +352,8 @@ def why_not(symbol: str) -> dict[str, Any]:
     return {
         "found": found,
         "symbol": str(symbol or "").upper(),
-        "reason": got.get("reason"),
-        "label": got.get("label"),
+        "reason": reason,
+        "label": label,
         "n_observations": n if found else 0,
         "avg_fwd_pct": got.get("avg_fwd_pct") if proven else None,
         "verdict": got.get("verdict") if proven else ("unproven" if found else "unmeasured"),
@@ -385,7 +430,7 @@ def for_symbol(
     src = dict(row or {})
     src.setdefault("symbol", str(symbol or "").upper())
     stance = stance_for_row(src)
-    why = why_not(symbol) if stance != "YES" else {
+    why = why_not(symbol, row=src) if stance != "YES" else {
         "found": False, "line": "", "places_orders": False,
     }
     return {
