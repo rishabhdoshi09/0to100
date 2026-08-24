@@ -129,3 +129,16 @@ def test_market_ops_prefetch_warms_ohlcv():
     source = inspect.getsource(MarketOperationsWorker._run_market_scan)
     assert "warm_ohlcv" in source
     assert "return len(symbols)" not in source
+    assert "warm_ohlcv(symbols, progress=progress)" not in source
+
+
+def test_stack_scripts_restart_children_instead_of_stopping_the_desk():
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[1]
+    inner = (root / "scripts" / "run_quantterm.sh").read_text(encoding="utf-8")
+    complete = (root / "scripts" / "run_quantterm_complete.sh").read_text(encoding="utf-8")
+    assert "Ctrl-C is the stop signal" in inner
+    assert "restarting" in inner.lower()
+    assert 'exit 1' not in inner.split("QuantTerm is running")[-1]
+    assert "exited unexpectedly" not in complete
+    assert "restarting it" in complete.lower()

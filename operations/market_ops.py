@@ -265,7 +265,9 @@ class MarketOperationsWorker:
 
         def prepared_prefetch(symbols, *, progress=None):
             from scan.bulk_fetcher import prefetch as warm_ohlcv
-            return warm_ohlcv(symbols, progress=progress)
+            # Do not pass scan_progress here: build_store reports missing
+            # bhav days (e.g. 11), which was shown as "Scanning 11 stocks".
+            return warm_ohlcv(symbols)
 
         started = time.monotonic()
         last_store = 0.0

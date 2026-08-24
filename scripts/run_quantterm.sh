@@ -48,14 +48,26 @@ except Exception:
 PY
 }
 
+alive() {
+  local pid="${1:-}"
+  [[ -n "$pid" ]] && kill -0 "$pid" >/dev/null 2>&1
+}
+
 AUTONOMY_PID=""
 API_PID=""
 FRONTEND_PID=""
 AUTONOMY_EXTERNAL=0
 API_EXTERNAL=0
 FRONTEND_EXTERNAL=0
+STOP=0
+CLEANED=0
 
 cleanup() {
+  if [[ "$CLEANED" == "1" ]]; then
+    return
+  fi
+  CLEANED=1
+  STOP=1
   echo
   echo "[STACK] Stopping QuantTerm child services…"
   for pid in "$FRONTEND_PID" "$API_PID" "$AUTONOMY_PID"; do
@@ -75,7 +87,69 @@ cleanup() {
   fi
   echo "[STACK] Child services stopped."
 }
-trap cleanup EXIT INT TERM
+
+on_stop() {
+  cleanup
+  exit 0
+}
+
+trap on_stop INT TERM
+trap cleanup EXIT
+
+start_autonomy() {
+  echo "[STACK] Starting autonomy supervisor…"
+  python -u main.py autonomy &
+  AUTONOMY_PID=$!
+  sleep 1 || true
+  if alive "$AUTONOMY_PID"; then
+    return 0
+  fi
+  if python - <<'PY' >/dev/null 2>&1
+from product.autonomy_status import read_autonomy_status
+raise SystemExit(0 if read_autonomy_status().get("running") else 1)
+PY
+  then
+    AUTONOMY_PID=""
+    AUTONOMY_EXTERNAL=1
+    echo "[STACK] Another healthy supervisor acquired the lock; reusing it."
+    return 0
+  fi
+  echo "[STACK] Autonomy failed to stay alive; will retry." >&2
+  AUTONOMY_PID=""
+  return 1
+}
+
+start_api() {
+  echo "[STACK] Starting local API at http://127.0.0.1:8765 …"
+  python -u -m uvicorn terminal_product_api:app --host 127.0.0.1 --port 8765 &
+  API_PID=$!
+  local _i
+  for _i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+    if url_ok "http://127.0.0.1:8765/api/health"; then
+      return 0
+    fi
+    if ! alive "$API_PID"; then
+      echo "[STACK] Market API exited before becoming healthy; will retry." >&2
+      API_PID=""
+      return 1
+    fi
+    sleep 0.5 || true
+  done
+  if url_ok "http://127.0.0.1:8765/api/health"; then
+    return 0
+  fi
+  echo "[STACK] Market API on :8765 is still starting; watchdog will keep it." >&2
+  return 0
+}
+
+start_frontend() {
+  echo "[STACK] Starting dedicated terminal at http://127.0.0.1:5173 …"
+  (
+    cd frontend
+    npm run dev -- --host 127.0.0.1
+  ) &
+  FRONTEND_PID=$!
+}
 
 if python - <<'PY' >/dev/null 2>&1
 from product.autonomy_status import read_autonomy_status
@@ -85,78 +159,59 @@ then
   AUTONOMY_EXTERNAL=1
   echo "[STACK] A healthy autonomy supervisor is already running; reusing it."
 else
-  echo "[STACK] Starting autonomy supervisor…"
-  python -u main.py autonomy &
-  AUTONOMY_PID=$!
-  sleep 1
-  if ! kill -0 "$AUTONOMY_PID" >/dev/null 2>&1; then
-    if python - <<'PY' >/dev/null 2>&1
-from product.autonomy_status import read_autonomy_status
-raise SystemExit(0 if read_autonomy_status().get("running") else 1)
-PY
-    then
-      echo "[STACK] Another healthy supervisor acquired the lock; reusing it."
-      AUTONOMY_PID=""
-      AUTONOMY_EXTERNAL=1
-    else
-      echo "[STACK] Autonomy failed to stay alive. Review the visible error above."
-      exit 1
-    fi
-  fi
+  start_autonomy || true
 fi
 
 if url_ok "http://127.0.0.1:8765/api/health"; then
   API_EXTERNAL=1
   echo "[STACK] Reusing market API at http://127.0.0.1:8765"
 elif port_open 8765; then
-  echo "[STACK] Port 8765 is occupied but /api/health is not ready." >&2
-  exit 1
+  echo "[STACK] Port 8765 is occupied but /api/health is not ready yet; waiting." >&2
 else
-  echo "[STACK] Starting local API at http://127.0.0.1:8765 …"
-  python -u -m uvicorn terminal_product_api:app --host 127.0.0.1 --port 8765 &
-  API_PID=$!
-  for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
-    if url_ok "http://127.0.0.1:8765/api/health"; then
-      break
-    fi
-    if ! kill -0 "$API_PID" >/dev/null 2>&1; then
-      echo "[STACK] Market API exited before becoming healthy." >&2
-      exit 1
-    fi
-    sleep 0.5
-  done
-  if ! url_ok "http://127.0.0.1:8765/api/health"; then
-    echo "[STACK] Market API on :8765 did not become healthy. RecoWealth cards stay empty until it does." >&2
-    exit 1
-  fi
+  start_api || true
 fi
 
 if port_open 5173; then
   FRONTEND_EXTERNAL=1
   echo "[STACK] Reusing dedicated terminal at http://127.0.0.1:5173"
 else
-  echo "[STACK] Starting dedicated terminal at http://127.0.0.1:5173 …"
-  (
-    cd frontend
-    npm run dev -- --host 127.0.0.1
-  ) &
-  FRONTEND_PID=$!
+  start_frontend
 fi
 
-echo "[STACK] QuantTerm is starting. Keep this terminal open; Ctrl-C stops local child services."
+echo "[STACK] QuantTerm is running. Leave this terminal open."
+echo "[STACK] Ctrl-C is the stop signal. A child crash is restarted; it does not stop the desk."
 
-while true; do
-  if [[ -n "$API_PID" ]] && ! kill -0 "$API_PID" >/dev/null 2>&1; then
-    echo "[STACK] API process exited unexpectedly (pid=$API_PID)."
-    exit 1
+while [[ "$STOP" != "1" ]]; do
+  if [[ "$API_EXTERNAL" != "1" ]]; then
+    if url_ok "http://127.0.0.1:8765/api/health"; then
+      :
+    elif ! alive "$API_PID"; then
+      echo "[STACK] Market API is down; restarting."
+      start_api || true
+    fi
   fi
-  if [[ -n "$FRONTEND_PID" ]] && ! kill -0 "$FRONTEND_PID" >/dev/null 2>&1; then
-    echo "[STACK] FRONTEND process exited unexpectedly (pid=$FRONTEND_PID)."
-    exit 1
+  if [[ "$FRONTEND_EXTERNAL" != "1" ]] && ! alive "$FRONTEND_PID"; then
+    if port_open 5173; then
+      FRONTEND_EXTERNAL=1
+      FRONTEND_PID=""
+      echo "[STACK] RecoWealth desk is already on :5173; reusing it."
+    else
+      echo "[STACK] RecoWealth desk is down; restarting."
+      start_frontend
+    fi
   fi
-  if [[ -n "$AUTONOMY_PID" ]] && ! kill -0 "$AUTONOMY_PID" >/dev/null 2>&1; then
-    echo "[STACK] AUTONOMY process exited unexpectedly (pid=$AUTONOMY_PID)."
-    exit 1
+  if [[ "$AUTONOMY_EXTERNAL" != "1" ]] && ! alive "$AUTONOMY_PID"; then
+    if python - <<'PY' >/dev/null 2>&1
+from product.autonomy_status import read_autonomy_status
+raise SystemExit(0 if read_autonomy_status().get("running") else 1)
+PY
+    then
+      AUTONOMY_EXTERNAL=1
+      AUTONOMY_PID=""
+    else
+      echo "[STACK] Autonomy is down; restarting."
+      start_autonomy || true
+    fi
   fi
-  sleep 3
+  sleep 3 || true
 done
