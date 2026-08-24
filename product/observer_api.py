@@ -164,12 +164,17 @@ def radar_home_workspace() -> dict[str, Any]:
     )
     try:
         from product.sepa_setup import public_best_setups
-        cards, note = public_best_setups(scan, limit=8, score_cap=24, max_seconds=8.0)
+        cards, note = public_best_setups(scan, limit=8, score_cap=24, max_seconds=2.0)
         home["best_setups"] = cards
         home["best_setups_note"] = note
     except Exception:
         home["best_setups"] = []
         home["best_setups_note"] = "SEPA ranking is temporarily unavailable."
+    try:
+        from product.scan_progress import read_progress
+        home["scan_progress"] = read_progress()
+    except Exception:
+        home["scan_progress"] = {"active": False}
     return home
 
 

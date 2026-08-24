@@ -111,7 +111,10 @@ def run_whole_market_scan(
 
     try:
         prefetch_fn(symbols, progress=progress_callback)
-        results = list(scanner.scan(symbols) or [])
+        try:
+            results = list(scanner.scan(symbols, progress=progress_callback, prefetch=False) or [])
+        except TypeError:
+            results = list(scanner.scan(symbols) or [])
     except Exception as exc:
         return MarketScanReport(FAILED, universe_size=len(symbols), error_code="SCAN_ERROR",
                                 error_message=str(exc), source_snapshot_id=snapshot_id or "")
@@ -130,6 +133,11 @@ def run_whole_market_scan(
     payload["scan_status"] = SUCCEEDED
     if save:
         save_scan(payload)
+        try:
+            from product.sepa_setup import persist_public_best_setups
+            persist_public_best_setups(payload)
+        except Exception:
+            pass
         # FEATURE-002 is observe-only and runs AFTER production results are final.
         if _feature002_hook is not None:
             try:

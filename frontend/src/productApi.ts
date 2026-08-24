@@ -234,6 +234,15 @@ export type RadarHome = {
   counts: { breakouts: number; momentum: number; long_term_picks: number }
   best_setups?: ScannerWorkspaceRow[]
   best_setups_note?: string
+  scan_progress?: {
+    active?: boolean
+    stage?: string
+    current?: number
+    total?: number
+    pct?: number | null
+    eta_s?: number | null
+    eta_label?: string
+  }
 }
 
 export const fetchRadarHome = (): Promise<RadarHome> =>

@@ -436,10 +436,11 @@ class UnifiedScanner:
         if self._calib:
             log.info("scanner_calibrated", signals=len(self._calib))
 
-    def scan(self, symbols: list[str], progress=None) -> list[StockSignal]:
-        from scan.bulk_fetcher import prefetch, get_cached, cached_symbols
+    def scan(self, symbols: list[str], progress=None, *, prefetch: bool = True) -> list[StockSignal]:
+        from scan.bulk_fetcher import prefetch as do_prefetch, get_cached, cached_symbols
 
-        prefetch(symbols, progress=progress)
+        if prefetch:
+            do_prefetch(symbols, progress=progress)
         available = [s for s in symbols if s in set(cached_symbols())]
         self._nifty_ret30 = _nifty_return_30d()      # RS benchmark, once/scan
         # Current market tape → regime-conditional demotion for this scan only.
@@ -459,16 +460,29 @@ class UnifiedScanner:
         log.info("unified_scan_start", requested=len(symbols), with_data=len(available))
 
         results: list[StockSignal] = []
+        done = 0
+        total = len(available)
+        if progress and total:
+            try:
+                progress(0, total)
+            except Exception:
+                pass
         with ThreadPoolExecutor(max_workers=self._max_workers) as pool:
             futures = {pool.submit(self._analyze, sym, get_cached(sym)): sym
                        for sym in available}
             for fut in as_completed(futures):
+                done += 1
                 try:
                     r = fut.result()
                     if r and r.signals:
                         results.append(r)
                 except Exception as exc:
                     log.debug("unified_analyze_failed", symbol=futures[fut], error=str(exc))
+                if progress:
+                    try:
+                        progress(done, total)
+                    except Exception:
+                        pass
 
         results.sort(key=lambda r: r.score, reverse=True)
         log.info("unified_scan_done", scanned=len(available), with_signals=len(results))

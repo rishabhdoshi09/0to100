@@ -68,6 +68,27 @@ export function qualifiedResultLine(operation: OperationRecord | null): string |
   return null
 }
 
+export function formatEta(seconds: number | null | undefined): string | null {
+  if (seconds == null || !Number.isFinite(seconds) || seconds < 0) return null
+  if (seconds < 15) return 'under 15s'
+  if (seconds < 60) return `about ${Math.round(seconds / 5) * 5}s`
+  const minutes = Math.max(1, Math.round(seconds / 60))
+  return minutes === 1 ? 'about 1 min' : `about ${minutes} min`
+}
+
+export function estimateEtaSeconds(
+  operation: OperationRecord | null,
+  elapsedSeconds: number,
+): number | null {
+  if (!operation) return null
+  const total = Number(operation.progress_total || 0)
+  const current = Number(operation.progress_current || 0)
+  if (total <= 0 || current <= 0 || elapsedSeconds <= 0) return null
+  const rate = current / elapsedSeconds
+  if (rate <= 0) return null
+  return Math.max(0, Math.round((total - current) / rate))
+}
+
 export function progressPercent(operation: OperationRecord | null): number | null {
   if (!operation) return null
   if (operation.progress_pct != null && Number.isFinite(operation.progress_pct)) {
@@ -88,6 +109,7 @@ export type ScanRunnerHandle = {
   progressLine: string | null
   qualifiedLine: string | null
   percent: number | null
+  etaLine: string | null
   elapsedSeconds: number
   notice: string | null
   failed: boolean
@@ -245,6 +267,10 @@ export function useScanRunner(kind: ScanKind, options: ScanRunnerOptions = {}): 
   const progressLine = useMemo(() => buildProgressLine(operation), [operation])
   const qualifiedLine = useMemo(() => qualifiedResultLine(operation), [operation])
   const percent = useMemo(() => progressPercent(operation), [operation])
+  const etaLine = useMemo(
+    () => formatEta(estimateEtaSeconds(operation, elapsedSeconds)),
+    [elapsedSeconds, operation],
+  )
 
   const isActive = Boolean(
     isBusy || (operation && isActiveStatus(operation.status)),
@@ -259,6 +285,7 @@ export function useScanRunner(kind: ScanKind, options: ScanRunnerOptions = {}): 
     progressLine,
     qualifiedLine,
     percent,
+    etaLine,
     elapsedSeconds,
     notice,
     failed: operation?.status === 'FAILED' || operation?.status === 'BLOCKED',

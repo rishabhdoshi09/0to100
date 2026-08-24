@@ -265,6 +265,17 @@ export type DashboardPayload = {
     live_feed?: Record<string, unknown>
     last_cycle?: Record<string, unknown>
   }
+  scan_progress?: {
+    active?: boolean
+    stage?: string
+    current?: number
+    total?: number
+    pct?: number | null
+    eta_s?: number | null
+    eta_label?: string
+    error?: string
+    updated_at?: number
+  }
   operations: {
     available: boolean
     running: boolean

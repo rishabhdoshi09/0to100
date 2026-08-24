@@ -217,7 +217,13 @@ export function RadarHomeView(props: ExperienceViewProps & {
 
   useEffect(() => {
     fetchRadarHome().then(setRadar).catch(() => setRadar(null))
-  }, [dashboard.scan.scanned_at, dashboard.long_term.scanned_at])
+    const watching = marketScan.isActive || Boolean(dashboard.scan_progress?.active)
+    if (!watching) return
+    const timer = window.setInterval(() => {
+      fetchRadarHome().then(setRadar).catch(() => undefined)
+    }, 4000)
+    return () => window.clearInterval(timer)
+  }, [dashboard.scan.scanned_at, dashboard.long_term.scanned_at, dashboard.scan_progress?.updated_at, dashboard.scan_progress?.current, marketScan.isActive])
 
   useEffect(() => {
     if (!selected) { setPlan(null); return }
@@ -243,7 +249,9 @@ export function RadarHomeView(props: ExperienceViewProps & {
         </div>
         <div className="radar-hero-actions">
           <button type="button" disabled={marketScan.isBusy} onClick={() => void marketScan.start()}>
-            {marketScan.isBusy ? 'Scanning…' : 'Scan now'}
+            {marketScan.isBusy
+              ? `Scanning… ${marketScan.percent != null ? `${marketScan.percent}%` : ''}${marketScan.etaLine ? ` · ETA ${marketScan.etaLine}` : ''}`
+              : 'Scan now'}
           </button>
         </div>
       </header>
@@ -286,7 +294,11 @@ export function RadarHomeView(props: ExperienceViewProps & {
         ))}
       </div>
       {!sepaCards.length && (
-        <p className="empty-row">No SEPA-qualified names in the last scan yet. Keep autonomy running, or open Setups and queue a scan.</p>
+        <p className="empty-row">
+          {radar?.scan_progress?.active || marketScan.isActive
+            ? `Top Stocks after this scan · ${radar?.scan_progress?.current || marketScan.operation?.progress_current || 0}/${radar?.scan_progress?.total || marketScan.operation?.progress_total || 0} · ETA ${radar?.scan_progress?.eta_label || marketScan.etaLine || 'calculating…'}`
+            : 'No SEPA-qualified names in the last scan yet. Keep autonomy running, or open Setups and queue a scan.'}
+        </p>
       )}
 
       <div className="reco-section">
@@ -300,7 +312,11 @@ export function RadarHomeView(props: ExperienceViewProps & {
         ))}
       </div>
       {!watchlist.length && (
-        <p className="empty-row">No saved scan yet. An empty list is not the same as “no trade today”.</p>
+        <p className="empty-row">
+          {radar?.scan_progress?.active || marketScan.isActive
+            ? `Watchlist after this scan · ETA ${radar?.scan_progress?.eta_label || marketScan.etaLine || 'calculating…'}`
+            : 'No saved scan yet. An empty list is not the same as “no trade today”.'}
+        </p>
       )}
 
       <BotLearningPanel dashboard={dashboard} />

@@ -190,7 +190,10 @@ export function LiveScanBanner({
           <span>{scan.friendlyPhase}</span>
         </div>
         {scan.isActive && (
-          <small className="live-scan-elapsed">{scan.elapsedSeconds}s</small>
+          <small className="live-scan-elapsed">
+            {scan.elapsedSeconds}s
+            {scan.etaLine ? ` · ETA ${scan.etaLine}` : ''}
+          </small>
         )}
         {(showFailed || showNotice && !scan.isActive) && (
           <button type="button" className="live-scan-dismiss" onClick={() => scan.dismissNotice()} aria-label="Dismiss">×</button>
@@ -200,6 +203,7 @@ export function LiveScanBanner({
         <>
           <p className="live-scan-detail">
             {scan.progressLine || scan.friendlyPhase}
+            {scan.etaLine ? ` · ETA ${scan.etaLine}` : ''}
             {scan.qualifiedLine ? ` · ${scan.qualifiedLine}` : ''}
           </p>
           {scan.percent != null ? (

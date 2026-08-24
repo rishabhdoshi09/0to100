@@ -616,6 +616,51 @@ def rank_best_setups(
     return [], note
 
 
+def best_setups_path() -> Any:
+    from product.scan_store import default_scan_path
+    return default_scan_path().parent / "best_setups.json"
+
+
+def persist_public_best_setups(scan_payload: Mapping[str, Any] | None) -> tuple[list[dict[str, Any]], str]:
+    """Rank once after a finished scan so Today does not re-score OHLCV on every load."""
+    cards, note = public_best_setups(
+        scan_payload,
+        limit=8,
+        score_cap=24,
+        max_seconds=20.0,
+        skip_persist_read=True,
+    )
+    try:
+        import json
+        import os
+        target = best_setups_path()
+        target.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "scanned_at": str((scan_payload or {}).get("scanned_at") or ""),
+            "cards": cards,
+            "note": note,
+        }
+        tmp = target.with_suffix(".tmp")
+        tmp.write_text(json.dumps(payload, indent=2, default=str), encoding="utf-8")
+        os.replace(tmp, target)
+    except Exception:
+        pass
+    return cards, note
+
+
+def load_persisted_best_setups(scanned_at: str) -> tuple[list[dict[str, Any]], str] | None:
+    try:
+        import json
+        raw = json.loads(best_setups_path().read_text(encoding="utf-8"))
+        if str(raw.get("scanned_at") or "") != str(scanned_at or ""):
+            return None
+        cards = list(raw.get("cards") or [])
+        note = str(raw.get("note") or "")
+        return cards, note
+    except Exception:
+        return None
+
+
 def public_best_setups(
     scan_payload: Mapping[str, Any] | None,
     *,
@@ -624,11 +669,16 @@ def public_best_setups(
     max_seconds: float = 8.0,
     min_score: int = 40,
     load_frame: Callable[[str], Any] | None = None,
+    skip_persist_read: bool = False,
 ) -> tuple[list[dict[str, Any]], str]:
     """RecoWealth Today cards from the saved scan. Research overlay only."""
     records = list((scan_payload or {}).get("records") or [])
     if not records:
         return [], "No saved scan yet — SEPA ranking needs the last whole-market scan."
+    if not skip_persist_read:
+        persisted = load_persisted_best_setups(str(scan_payload.get("scanned_at") or ""))
+        if persisted is not None:
+            return persisted
     cache_key = f"{scan_payload.get('scanned_at')}:{limit}:{score_cap}:{min_score}"
     ranked, note = rank_best_setups(
         records,

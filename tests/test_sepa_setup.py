@@ -141,6 +141,29 @@ def test_sepa_card_says_qualified_not_buy_order():
     assert "not a buy order" in sepa["disclaimer"].lower() or "not a buy" in sepa["disclaimer"].lower()
 
 
+def test_persisted_best_setups_skip_rescoring(tmp_path, monkeypatch):
+    import json
+    from product import sepa_setup as SEPA
+
+    path = tmp_path / "best_setups.json"
+    monkeypatch.setattr(SEPA, "best_setups_path", lambda: path)
+    cards = [{"symbol": "UP", "sepa_score": 82}]
+    path.write_text(json.dumps({
+        "scanned_at": "2026-08-24T10:00:00+00:00",
+        "cards": cards,
+        "note": "cached SEPA rank",
+    }), encoding="utf-8")
+    again, note = SEPA.public_best_setups(
+        {
+            "scanned_at": "2026-08-24T10:00:00+00:00",
+            "records": [{"symbol": "UP", "score": 90, "verdict": "BUY"}],
+        },
+        load_frame=lambda symbol: (_ for _ in ()).throw(AssertionError("should use persist")),
+    )
+    assert again == cards
+    assert note == "cached SEPA rank"
+
+
 def test_public_best_setups_returns_cards_not_pairs():
     frames = {"UP": _uptrend(), "DOWN": _downtrend()}
     cards, note = public_best_setups(

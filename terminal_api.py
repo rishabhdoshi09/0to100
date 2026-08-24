@@ -390,6 +390,14 @@ def _snapshot_payload() -> dict:
         return {"ready": False, "snapshot_id": "", "latest_date": "", "source": "", "error": str(exc)}
 
 
+def _scan_progress_payload() -> dict[str, Any]:
+    try:
+        from product.scan_progress import read_progress
+        return read_progress()
+    except Exception:
+        return {"active": False, "eta_label": "", "current": 0, "total": 0}
+
+
 def _operations_payload() -> dict[str, Any]:
     try:
         from operations.market_ops import LANES
@@ -593,6 +601,7 @@ def dashboard() -> dict:
         "fno": fno,
         "data": data,
         "conviction": _conviction(scan, market),
+        "scan_progress": _scan_progress_payload(),
     }
 
 

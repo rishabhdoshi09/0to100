@@ -172,8 +172,49 @@ class Deps:
         return {"indices": int(build_index_store()), "source": "official_nse"}
 
     def run_scan(self):
+        from product.scan_progress import eta_label, finish_progress, write_progress
         from scan.market_scan_service import run_whole_market_scan
-        return run_whole_market_scan(snapshot_id=str(self.active_snapshot_id() or ""))
+        started = time.time()
+        last_print = 0.0
+
+        def progress(current, total=0, **_kw):
+            nonlocal last_print
+            payload = write_progress(
+                current=int(current or 0),
+                total=int(total or 0),
+                stage="SCANNING",
+                source="autonomy",
+            )
+            now = time.time()
+            if int(current or 0) in (0, 1) or int(current or 0) == int(total or 0) or now - last_print >= 5:
+                remain = payload.get("eta_label") or eta_label(
+                    ((int(total or 0) - int(current or 0)) / max(int(current or 1), 1)) * max(0.1, now - started)
+                )
+                extra = f" · {remain} left" if remain else ""
+                print(
+                    f"[SCAN] {int(current or 0)}/{int(total or 0)} · "
+                    f"{payload.get('pct') or 0:.0f}%{extra}",
+                    flush=True,
+                )
+                last_print = now
+
+        write_progress(current=0, total=0, stage="STARTING", source="autonomy")
+        try:
+            report = run_whole_market_scan(
+                progress_callback=progress,
+                snapshot_id=str(self.active_snapshot_id() or ""),
+                save=True,
+            )
+            payload = dict(getattr(report, "payload", {}) or {})
+            summary = dict(payload.get("summary", {}) or {})
+            finish_progress(
+                records=len(payload.get("records") or []),
+                setups=int(summary.get("with_any_setup") or 0),
+            )
+            return report
+        except Exception:
+            finish_progress(error="scan_failed")
+            raise
 
     def notify_scan(self, payload, *, phase=""):
         return self.telegram.notify_scan(payload, phase=phase)
