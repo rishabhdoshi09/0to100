@@ -11,6 +11,7 @@ import './experience.css'
 import './design-tokens.css'
 import './radar.css'
 import './reco.css'
+import './recoWealth.css'
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>

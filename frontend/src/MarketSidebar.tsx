@@ -2,17 +2,13 @@ import type { DashboardPayload } from './types'
 import { money } from './format'
 
 const DESK_NAV = [
-  ['⚡', 'Today', 'Today'],
-  ['📈', 'Setups', 'Setups'],
-  ['📋', 'Paper Desk', 'Paper Desk'],
+  ['⌂', 'Today', 'Home'],
+  ['↗', 'Setups', 'Recommendations'],
+  ['⚡', 'Paper Desk', 'Momentum'],
   ['🧪', 'Backtest', 'Backtest'],
-  ['💼', 'Portfolio', 'Portfolio'],
-  ['🖥️', 'Desk', 'Desk'],
+  ['$', 'Portfolio', 'Wealth Builders'],
+  ['☰', 'Desk', 'Market Reports'],
 ] as const
-
-function Logo() {
-  return <div className="brand-mark" aria-hidden="true">RW</div>
-}
 
 export function MarketSidebar({
   active,
@@ -47,9 +43,9 @@ export function MarketSidebar({
 
   return (
     <aside className="sidebar">
-      <div className="brand"><Logo /><div><strong>RECOWEALTH</strong><small>NSE DESK</small></div></div>
+      <div className="brand"><div className="brand-mark" aria-hidden="true">R</div><div><strong>Reco Wealth</strong><small>Recommendations</small></div></div>
       <nav>
-        <div className="nav-section-label">Desk</div>
+        <div className="nav-section-label">Menu</div>
         {DESK_NAV.map(([icon, route, display]) => (
           <button
             key={route}

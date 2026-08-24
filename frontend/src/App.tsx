@@ -128,13 +128,38 @@ const emptyDashboard: DashboardPayload = {
   conviction: [],
 }
 
+function useIstClock() {
+  const [now, setNow] = useState('')
+  useEffect(() => {
+    const tick = () => {
+      setNow(new Date().toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour12: false }))
+    }
+    tick()
+    const id = window.setInterval(tick, 1000)
+    return () => window.clearInterval(id)
+  }, [])
+  return now
+}
+
+function istSessionOpen() {
+  const parts = new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Asia/Kolkata', weekday: 'short', hour: '2-digit', minute: '2-digit', hour12: false,
+  }).formatToParts(new Date())
+  const week = parts.find((p) => p.type === 'weekday')?.value || ''
+  const hour = Number(parts.find((p) => p.type === 'hour')?.value || 0)
+  const minute = Number(parts.find((p) => p.type === 'minute')?.value || 0)
+  if (['Sat', 'Sun'].includes(week)) return false
+  const mins = hour * 60 + minute
+  return mins >= 9 * 60 + 15 && mins <= 15 * 60 + 30
+}
+
 const pageTitles: Record<string, string> = {
-  Today: 'Today',
-  Setups: 'Setups',
-  'Paper Desk': 'Paper Desk',
+  Today: 'Top Stocks',
+  Setups: 'Recommendations',
+  'Paper Desk': 'Momentum',
   Backtest: 'Backtest',
-  Portfolio: 'Portfolio',
-  Desk: 'Desk',
+  Portfolio: 'Wealth Builders',
+  Desk: 'Market Reports',
   Home: 'Today',
   'Market Scanner': 'Setups',
   'Stock Intelligence': 'Stock Intelligence',
@@ -154,12 +179,12 @@ const pageTitles: Record<string, string> = {
 }
 
 const pageSubtitles: Record<string, string> = {
-  Today: 'SEPA-qualified Top Stocks first, then the scanner watchlist. Paper memory is below.',
-  Setups: 'Best Setups (SEPA), Momentum, Conviction, Long-term. Do not mix them.',
+  Today: 'SEPA-qualified names first, then the scanner watchlist. CMP can be delayed.',
+  Setups: 'Best Setups, Momentum and Long-term. Do not mix them.',
   'Paper Desk': 'Simulated book. The bot learns from closed trades. Live orders stay locked.',
   Backtest: 'Inspect a paper-loss style on past data. This does not change today’s BUY list.',
   Portfolio: 'Paper positions, equity and what the bot learned.',
-  Desk: 'Market, news, data, stock workspace and system health.',
+  Desk: 'Market, news, data and system health.',
   Home: 'SEPA-style Best Setups first, then the scanner watchlist.',
   'Market Scanner': 'Breakouts, Momentum, Long-term.',
   'Paper Portfolio': 'Simulated book. Live orders stay locked.',
@@ -176,6 +201,8 @@ function App() {
   const [controlState, setControlState] = useState('')
   const [query, setQuery] = useState('')
   const [helpOpen, setHelpOpen] = useState(false)
+  const istClock = useIstClock()
+  const sessionOpen = istSessionOpen()
   const [depth, setDepth] = useState<DisplayDepth>(() => {
     const saved = window.localStorage.getItem('quantterm-display-depth')
     return saved === 'professional' ? 'professional' : 'simple'
@@ -373,31 +400,36 @@ function App() {
   }
 
   return (
-    <div className="terminal-root">
+    <div className="rw-app">
+      <header className="rw-topbar">
+        <div className="rw-wordmark">Reco Wealth</div>
+        <div className="search-box">
+          ⌕
+          <input
+            aria-label="Search NSE symbol"
+            placeholder="Search stocks"
+            value={query}
+            onChange={(event: { target: { value: string } }) => setQuery(event.target.value)}
+            onKeyDown={(event: { key: string }) => { if (event.key === 'Enter') openSearch() }}
+            list="quantterm-symbols"
+          />
+          <datalist id="quantterm-symbols">{symbols.slice(0, 800).map((symbol) => <option value={symbol} key={symbol} />)}</datalist>
+          <button type="button" onClick={openSearch}>Search</button>
+        </div>
+        <div className="rw-top-meta">
+          <span className="rw-clock">{istClock || '—:—:—'} IST</span>
+          <span className={sessionOpen ? 'rw-session open' : 'rw-session closed'}>
+            ● {sessionOpen ? 'MARKET OPEN' : 'MARKET CLOSED'}
+          </span>
+          {!recoDesk && <DisplayDepthToggle depth={depth} onChange={setDepth} />}
+          <button type="button" className="experience-help-trigger" onClick={() => setHelpOpen(true)}>What is this?</button>
+          <button type="button" onClick={() => void refresh()} aria-label="Refresh dashboard">↻</button>
+          <div className="rw-avatar" aria-hidden="true">R</div>
+        </div>
+      </header>
+      <div className="rw-shell">
       <MarketSidebar active={active} setActive={setActive} dashboard={dashboard} />
       <main className="workspace">
-        <header className="topbar">
-          <div className="search-box">
-            ⌕
-            <input
-              aria-label="Search NSE symbol"
-              placeholder="Open any NSE symbol…"
-              value={query}
-              onChange={(event: { target: { value: string } }) => setQuery(event.target.value)}
-              onKeyDown={(event: { key: string }) => { if (event.key === 'Enter') openSearch() }}
-              list="quantterm-symbols"
-            />
-            <datalist id="quantterm-symbols">{symbols.slice(0, 800).map((symbol) => <option value={symbol} key={symbol} />)}</datalist>
-            <button type="button" onClick={openSearch}>Open stock</button>
-          </div>
-          <div className="top-status">
-            {!recoDesk && <DisplayDepthToggle depth={depth} onChange={setDepth} />}
-            <button type="button" className="experience-help-trigger" onClick={() => setHelpOpen(true)}>What is this?</button>
-            <span className={dashboard.data.ready ? 'live-pill' : 'offline-pill'}><i /> {dashboard.data.ready ? 'DATA READY' : 'DATA INCOMPLETE'}</span>
-            <span className={dashboard.autonomy.running || dashboard.operations.running ? 'live-pill' : 'offline-pill'}><i /> {dashboard.autonomy.running ? 'BOT ONLINE' : dashboard.operations.running ? 'OPS ONLINE' : 'BOT OFFLINE'}</span>
-            <button type="button" onClick={() => void refresh()} aria-label="Refresh dashboard">↻</button>
-          </div>
-        </header>
 
         <section className="page-title">
           <div><h1>{pageTitles[active] || active}</h1><p>{pageSubtitles[active]}</p></div>
@@ -427,6 +459,7 @@ function App() {
         {renderView()}
       </main>
       <ExperienceHelpDrawer page={active} open={helpOpen} onClose={() => setHelpOpen(false)} />
+      </div>
     </div>
   )
 }

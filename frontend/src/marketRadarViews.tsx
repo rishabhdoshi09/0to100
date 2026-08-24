@@ -56,26 +56,49 @@ function RecoCard({
   onSelect: (symbol: string) => void
 }) {
   const [label, kind] = recoBadge(row)
-  const sepa = row.sepa_score != null
-    ? `SEPA ${row.sepa_score}/100${row.sepa_passed != null && row.sepa_total ? `  ·  ${row.sepa_passed}/${row.sepa_total} rules` : ''}`
-    : ''
-  const levels = [
-    sepa,
-    row.entry ? `Entry ₹${Number(row.entry).toLocaleString('en-IN')}` : '',
-    row.stop ? `Stop ₹${Number(row.stop).toLocaleString('en-IN')}` : '',
-    row.target ? `Target ₹${Number(row.target).toLocaleString('en-IN')}` : '',
-  ].filter(Boolean).join('  ·  ')
+  const buy = kind === 'buy' ? 'Buy' : kind === 'avoid' ? 'Avoid' : kind === 'wait' ? 'Wait' : 'Watch'
+  const entry = Number(row.entry || 0)
+  const target = Number(row.target || 0)
+  const price = Number(row.price || 0)
+  const upside = entry > 0 && target > entry ? ((target - entry) / entry) * 100 : null
+  const fromNow = price > 0 && target > 0 ? ((target - price) / price) * 100 : null
+  const risk = row.chase_risk ? 'High Risk' : kind === 'buy' ? 'Setup' : 'Medium Risk'
+  const inr = (value: number) => `₹${value.toLocaleString('en-IN', { maximumFractionDigits: 2 })}`
   return (
     <button
       type="button"
-      className={selected ? 'reco-card active' : 'reco-card'}
+      className={selected ? 'reco-card rw-stock-card active' : 'reco-card rw-stock-card'}
       onClick={() => onSelect(row.symbol)}
     >
-      <div className="row"><span className="sym">{row.symbol}</span><span className={`reco-badge ${kind}`}>{label}</span></div>
-      <div className="co">{row.company || row.sector || row.setup_label || 'NSE'}</div>
-      <div className="px">{row.price ? `₹${Number(row.price).toLocaleString('en-IN')}` : 'Price n/a'}</div>
-      <div className="lv">{levels || row.status || 'Watch'}</div>
-      <div className="why">{row.sepa_headline || row.reason || row.why || row.setup_label || 'From the last whole-market scan.'}</div>
+      <span className={`rw-buy ${kind}`}>{buy}</span>
+      <div className="rw-stock-id">
+        <div className="rw-logo">{row.symbol.slice(0, 1)}</div>
+        <div>
+          <strong>{row.company || row.symbol}</strong>
+          <small>{row.symbol}</small>
+        </div>
+      </div>
+      <div className="rw-tags">
+        <span>{label}</span>
+        <span className="risk">{risk}</span>
+        {row.sepa_score != null && <span>SEPA {row.sepa_score}/100</span>}
+      </div>
+      <div className="rw-money">
+        <div>
+          <span>Target</span>
+          <b>{target ? inr(target) : '—'}</b>
+          <small>Entry Price: {entry ? inr(entry) : 'n/a'}</small>
+        </div>
+        <div className="upside">
+          <b>{upside != null ? `↗ ${upside.toFixed(1)}%` : '—'}</b>
+          <small>Upside from entry</small>
+          {fromNow != null && <small>{fromNow.toFixed(1)}% from current</small>}
+        </div>
+      </div>
+      <div className="rw-cmp">
+        <span>Current Price</span>
+        <strong>{price ? inr(price) : 'n/a'}</strong>
+      </div>
     </button>
   )
 }
@@ -211,11 +234,12 @@ export function RadarHomeView(props: ExperienceViewProps & {
 
   return (
     <section className="radar-home reco-desk">
+      <div className="rw-crumb">Home &gt; Recommendations &gt; Top Stocks</div>
       <header className="radar-hero">
         <div>
-          <span>TODAY · RECOWEALTH</span>
-          <h2>{radar?.market_health || dashboard.market.health}</h2>
-          <p>{dashboard.market.summary}</p>
+          <span>TODAY · RECO WEALTH</span>
+          <h2>Top Stocks</h2>
+          <p>{radar?.market_health || dashboard.market.health} · {dashboard.market.summary}</p>
         </div>
         <div className="radar-hero-actions">
           <button type="button" disabled={marketScan.isBusy} onClick={() => void marketScan.start()}>
@@ -223,6 +247,12 @@ export function RadarHomeView(props: ExperienceViewProps & {
           </button>
         </div>
       </header>
+      <div className="rw-delay">⚠ CMP is delayed by up to 15 minutes.</div>
+      <div className="rw-quote">
+        <div className="mark">“</div>
+        <p>The stock market is a device for transferring money from the impatient to the patient.</p>
+        <cite>— Warren Buffett</cite>
+      </div>
 
       <div className="radar-market-strip">
         <div><span>NIFTY 1D</span><strong>{pct(radar?.nifty_change_1d ?? dashboard.market.nifty_change_1d)}</strong></div>
@@ -247,7 +277,7 @@ export function RadarHomeView(props: ExperienceViewProps & {
 
       <div className="reco-section">
         <div className="qt-eyebrow">Top stocks</div>
-        <h3>Best Setups · SEPA qualified</h3>
+        <h3>Best Setups · SEPA qualified <span className="rw-live">● LIVE</span></h3>
         <p className="reco-note">{radar?.best_setups_note || 'Minervini 7-rule Stage-2 template on official NSE history. A qualify is research — not a buy order.'}</p>
       </div>
       <div className="reco-card-grid">
@@ -343,8 +373,8 @@ export function MarketScannerView(props: ExperienceViewProps & { onCompare: (sym
     <section className="market-scanner">
       <header className="scanner-command-bar">
         <div>
-          <span>SETUPS · RECOWEALTH</span>
-          <h2>Best Setups · Momentum · Long-Term</h2>
+          <span>SETUPS · RECO WEALTH</span>
+          <h2>Recommendations</h2>
           <p>{filtered.length} matches · universe {meta.universe.toLocaleString('en-IN')} · scan {meta.scanned_at || '—'}</p>
         </div>
         <button type="button" disabled={activeScan.isBusy} onClick={() => void activeScan.start()}>
