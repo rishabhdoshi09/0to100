@@ -26,6 +26,7 @@ import {
 import type { DisplayDepth } from './productLanguage'
 import { addWatchlistItem, bootstrapProduct } from './productApi'
 import { useScanRunner } from './scanRunner'
+import { readSessionJson, writeSessionJson } from './sessionMemory'
 import type { ChartBar, ControlName, DashboardPayload, OperationRecord } from './types'
 
 function activeSeed(dashboard: DashboardPayload, kind: string): OperationRecord | null {
@@ -192,8 +193,10 @@ const pageSubtitles: Record<string, string> = {
 }
 
 function App() {
-  const [dashboard, setDashboard] = useState<DashboardPayload>(emptyDashboard)
-  const [loading, setLoading] = useState(true)
+  const [dashboard, setDashboard] = useState<DashboardPayload>(() => (
+    readSessionJson<DashboardPayload>('quantterm-dashboard') || emptyDashboard
+  ))
+  const [loading, setLoading] = useState(() => !readSessionJson('quantterm-dashboard'))
   const [error, setError] = useState('')
   const [active, setActive] = useState('Home')
   const [compareSymbols, setCompareSymbols] = useState<string[]>([])
@@ -213,6 +216,7 @@ function App() {
     try {
       const payload = await fetchDashboard()
       setDashboard(payload)
+      writeSessionJson('quantterm-dashboard', payload)
       setError('')
       const allSymbols = [
         ...payload.scan.records.map((row) => row.symbol),

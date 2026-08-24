@@ -22,6 +22,7 @@ import {
   type StockWorkspace,
   type TradePlan,
 } from './productApi'
+import { recall, remember } from './sessionMemory'
 import type { ChartBar, ControlName, DashboardPayload } from './types'
 
 // Read-only risk-first "R lens" — exact shares, rupee risk, reward:risk, book heat. No orders.
@@ -240,7 +241,9 @@ function MetricExplanation({ metric }: { metric: IntelligenceMetric }) {
 
 export function ProductStockIntelligenceView(props: ViewProps) {
   const { selected, bars, runControl, setActive, onCompare, onWatchlist, depth } = props
-  const [workspace, setWorkspace] = useState<StockWorkspace | null>(null)
+  const [workspace, setWorkspace] = useState<StockWorkspace | null>(() => (
+    selected ? recall<StockWorkspace>(`stock:${selected}`) ?? null : null
+  ))
   const [plan, setPlan] = useState<TradePlan | null>(null)
   const [ratios, setRatios] = useState<import('./productApi').SymbolRatioRow[]>([])
   const [tab, setTab] = useState('Overview')
@@ -257,9 +260,11 @@ export function ProductStockIntelligenceView(props: ViewProps) {
       setRatios([])
       return
     }
-    setLoading(true)
+    setLoading(!recall(`stock:${selected}`))
     try {
-      setWorkspace(await fetchStockIntelligence(selected))
+      const next = await fetchStockIntelligence(selected)
+      remember(`stock:${selected}`, next)
+      setWorkspace(next)
       try { setPlan(await fetchTradePlan(selected)) } catch { setPlan(null) }
       try {
         const ratioPayload = await fetchSymbolRatios(selected)
@@ -276,6 +281,9 @@ export function ProductStockIntelligenceView(props: ViewProps) {
   }
 
   useEffect(() => {
+    const cached = selected ? recall<StockWorkspace>(`stock:${selected}`) : undefined
+    if (cached) setWorkspace(cached)
+    else if (!selected) setWorkspace(null)
     void load()
   }, [selected])
 

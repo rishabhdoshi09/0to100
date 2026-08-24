@@ -20,6 +20,7 @@ import {
 } from './productApi'
 import { RiskLensCard } from './productViews'
 import { LiveScanBanner, type ExperienceViewProps } from './experience'
+import { recall, remember } from './sessionMemory'
 
 type RadarRow = ScannerWorkspaceRow & {
   breakout_state?: string
@@ -279,9 +280,9 @@ export function RadarHomeView(props: ExperienceViewProps & {
   onWatchlist: (symbol: string) => void
 }) {
   const { dashboard, selected, setSelected, bars, setActive, depth, marketScan, longTermScan, onCompare, onWatchlist } = props
-  const [radar, setRadar] = useState<RadarHome | null>(null)
+  const [radar, setRadar] = useState<RadarHome | null>(() => recall<RadarHome>('radar-home') ?? null)
   const [plan, setPlan] = useState<TradePlan | null>(null)
-  const [readiness, setReadiness] = useState<ProductReadiness | null>(null)
+  const [readiness, setReadiness] = useState<ProductReadiness | null>(() => recall<ProductReadiness>('product-readiness') ?? null)
   const [bootstrapBusy, setBootstrapBusy] = useState(false)
   const [deskNote, setDeskNote] = useState('')
   const autoBootRef = useRef(false)
@@ -290,10 +291,16 @@ export function RadarHomeView(props: ExperienceViewProps & {
     let alive = true
     const load = () => {
       fetchRadarHome()
-        .then((payload) => { if (alive) setRadar(payload) })
-        .catch(() => { if (alive) setRadar(null) })
+        .then((payload) => {
+          remember('radar-home', payload)
+          if (alive) setRadar(payload)
+        })
+        .catch(() => { if (alive && !recall('radar-home')) setRadar(null) })
       fetchProductReadiness()
-        .then((payload) => { if (alive) setReadiness(payload) })
+        .then((payload) => {
+          remember('product-readiness', payload)
+          if (alive) setReadiness(payload)
+        })
         .catch(() => undefined)
     }
     load()
@@ -544,8 +551,8 @@ export function RadarHomeView(props: ExperienceViewProps & {
 export function MarketScannerView(props: ExperienceViewProps & { onCompare: (symbol: string) => void }) {
   const { dashboard, selected, setSelected, bars, setActive, depth, marketScan, longTermScan, onCompare } = props
   const [tab, setTab] = useState<'Best Setups' | 'Breakouts' | 'Momentum' | 'Long-Term'>('Best Setups')
-  const [rows, setRows] = useState<RadarRow[]>([])
-  const [meta, setMeta] = useState({ scanned_at: '', universe: 0 })
+  const [rows, setRows] = useState<RadarRow[]>(() => recall<RadarRow[]>('scanner:Best Setups') ?? [])
+  const [meta, setMeta] = useState(() => recall<{ scanned_at: string; universe: number }>('scanner-meta:Best Setups') ?? { scanned_at: '', universe: 0 })
   const [search, setSearch] = useState('')
   const [sector, setSector] = useState('All')
   const [excludeChase, setExcludeChase] = useState(true)
@@ -553,21 +560,39 @@ export function MarketScannerView(props: ExperienceViewProps & { onCompare: (sym
   const activeScan = tab === 'Long-Term' ? longTermScan : marketScan
 
   useEffect(() => {
+    const cachedRows = recall<RadarRow[]>(`scanner:${tab}`)
+    const cachedMeta = recall<{ scanned_at: string; universe: number }>(`scanner-meta:${tab}`)
+    if (cachedRows) setRows(cachedRows)
+    if (cachedMeta) setMeta(cachedMeta)
     if (tab === 'Best Setups') {
       fetchRadarHome()
         .then((result) => {
-          setRows((result.best_setups || []) as RadarRow[])
-          setMeta({ scanned_at: result.scan_scanned_at, universe: result.universe_size })
+          const next = (result.best_setups || []) as RadarRow[]
+          const nextMeta = { scanned_at: result.scan_scanned_at, universe: result.universe_size }
+          remember('scanner:Best Setups', next)
+          remember('scanner-meta:Best Setups', nextMeta)
+          setRows(next)
+          setMeta(nextMeta)
         })
-        .catch(() => setRows([]))
+        .catch(() => {
+          const cached = recall<RadarRow[]>('scanner:Best Setups')
+          if (!cached) setRows([])
+        })
       return
     }
     fetchScannerWorkspace(tab)
       .then((result) => {
-        setRows(result.rows as RadarRow[])
-        setMeta({ scanned_at: result.scanned_at, universe: result.universe_size })
+        const next = result.rows as RadarRow[]
+        const nextMeta = { scanned_at: result.scanned_at, universe: result.universe_size }
+        remember(`scanner:${tab}`, next)
+        remember(`scanner-meta:${tab}`, nextMeta)
+        setRows(next)
+        setMeta(nextMeta)
       })
-      .catch(() => setRows([]))
+      .catch(() => {
+        const cached = recall<RadarRow[]>(`scanner:${tab}`)
+        if (!cached) setRows([])
+      })
   }, [tab, dashboard.scan.scanned_at, dashboard.long_term.scanned_at])
 
   const sectors = useMemo(() => [...new Set(rows.map((r) => r.sector).filter(Boolean))].sort(), [rows])
@@ -700,12 +725,14 @@ export function WatchlistView({ setActive, setSelected, onCompare }: {
   setSelected: (s: string) => void
   onCompare: (symbol: string) => void
 }) {
-  const [payload, setPayload] = useState<WatchlistPayload | null>(null)
+  const [payload, setPayload] = useState<WatchlistPayload | null>(() => recall<WatchlistPayload>('watchlist') ?? null)
   const [symbol, setSymbol] = useState('')
   const [notes, setNotes] = useState('')
   const [busy, setBusy] = useState(false)
 
-  const reload = () => fetchWatchlist().then(setPayload).catch(() => setPayload(null))
+  const reload = () => fetchWatchlist()
+    .then((next) => { remember('watchlist', next); setPayload(next) })
+    .catch(() => { if (!recall('watchlist')) setPayload(null) })
 
   useEffect(() => { void reload() }, [])
 

@@ -14,6 +14,7 @@ import {
 } from './productApi'
 import type { ExperienceViewProps } from './experience'
 import { LiveScanBanner } from './experience'
+import { recall, remember } from './sessionMemory'
 
 const CAT_ICONS: Record<string, string> = {
   wealth_builders: 'W',
@@ -338,9 +339,9 @@ export function RecommendationsView({
   longTermScan,
   depth,
 }: ExperienceViewProps) {
-  const [data, setData] = useState<RecommendationsWorkspace | null>(null)
+  const [data, setData] = useState<RecommendationsWorkspace | null>(() => recall<RecommendationsWorkspace>('reco-workspace') ?? null)
   const [error, setError] = useState('')
-  const [loading, setLoading] = useState(true)
+  const [loading, setLoading] = useState(() => !recall('reco-workspace'))
   const [categoryId, setCategoryId] = useState('wealth_builders')
   const [lifecycle, setLifecycle] = useState<'Active' | 'Closed'>('Active')
   const [query, setQuery] = useState('')
@@ -348,10 +349,11 @@ export function RecommendationsView({
 
   useEffect(() => {
     let cancelled = false
-    setLoading(true)
+    if (!recall('reco-workspace')) setLoading(true)
     fetchRecommendationsWorkspace()
       .then((payload) => {
         if (!cancelled) {
+          remember('reco-workspace', payload)
           setData(payload)
           const firstWithCards = payload.categories.find((c) => c.count > 0)
           if (firstWithCards) setCategoryId(firstWithCards.id)
@@ -734,18 +736,19 @@ function DeskTile({
 }
 
 export function MarketReportsView({ setActive, setSelected }: ExperienceViewProps) {
-  const [data, setData] = useState<MarketReportsWorkspace | null>(null)
+  const [data, setData] = useState<MarketReportsWorkspace | null>(() => recall<MarketReportsWorkspace>('market-reports') ?? null)
   const [error, setError] = useState('')
-  const [loading, setLoading] = useState(true)
+  const [loading, setLoading] = useState(() => !recall('market-reports'))
   const [query, setQuery] = useState('')
   const [selected, setSelectedReport] = useState<MarketReportItem | null>(null)
 
   useEffect(() => {
     let cancelled = false
-    setLoading(true)
+    if (!recall('market-reports')) setLoading(true)
     fetchMarketReportsWorkspace()
       .then((payload) => {
         if (!cancelled) {
+          remember('market-reports', payload)
           setData(payload)
           setSelectedReport(payload.reports[0] || null)
           setError('')
