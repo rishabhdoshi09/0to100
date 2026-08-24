@@ -465,3 +465,106 @@ body:has(.reco-desk) {
   background: var(--rw-green-soft);
 }
 .reco-desk .hud-case.is-remembered_positive > span { color: var(--rw-green); }
+
+.reco-desk .experience-hero,
+.reco-desk .scanner-command-bar,
+.reco-desk .long-term-hero {
+  border-color: var(--rw-line) !important;
+  background:
+    radial-gradient(circle at 12% 0%, rgba(27, 107, 69, 0.08), transparent 42%),
+    linear-gradient(135deg, #ffffff, #f4f7f5) !important;
+  box-shadow: var(--rw-shadow) !important;
+  color: var(--rw-ink);
+}
+
+.reco-desk .experience-hero h2,
+.reco-desk .scanner-command-bar h2,
+.reco-desk .long-term-hero h2 {
+  font-family: 'Fraunces', Georgia, serif;
+  color: var(--rw-ink) !important;
+}
+
+.reco-desk .experience-hero span,
+.reco-desk .scanner-command-bar span,
+.reco-desk .long-term-hero span {
+  color: var(--rw-green) !important;
+  background: none !important;
+  -webkit-background-clip: unset !important;
+  background-clip: unset !important;
+}
+
+.reco-desk .experience-hero p,
+.reco-desk .scanner-command-bar p,
+.reco-desk .long-term-hero p {
+  color: var(--rw-muted) !important;
+}
+
+.reco-desk .experience-hero button,
+.reco-desk .scanner-command-bar button,
+.reco-desk .long-term-hero button {
+  background: var(--rw-green) !important;
+  border-color: var(--rw-green) !important;
+  color: #fff !important;
+  box-shadow: none !important;
+}
+
+.reco-desk .scanner-filter-row,
+.reco-desk .long-term-filter-row {
+  background: var(--rw-surface) !important;
+  border-color: var(--rw-line) !important;
+  color: var(--rw-ink);
+}
+
+.reco-desk .scanner-filter-row label,
+.reco-desk .long-term-filter-row label {
+  color: var(--rw-muted) !important;
+}
+
+.reco-desk .scanner-filter-row input,
+.reco-desk .scanner-filter-row select,
+.reco-desk .long-term-filter-row input,
+.reco-desk .long-term-filter-row select {
+  background: var(--rw-surface) !important;
+  color: var(--rw-ink) !important;
+  border-color: var(--rw-line) !important;
+}
+
+.reco-desk .ohlc-strip {
+  border-top-color: var(--rw-line);
+}
+
+.reco-desk .ohlc-strip div {
+  background: var(--rw-green-soft);
+  border-color: var(--rw-line);
+  color: var(--rw-ink);
+}
+
+.reco-desk .ohlc-strip span { color: var(--rw-muted); }
+.reco-desk .ohlc-strip strong { color: var(--rw-ink); }
+
+.reco-desk .display-depth-toggle {
+  background: var(--rw-surface);
+  border-color: var(--rw-line);
+}
+
+.reco-desk .display-depth-toggle button { color: var(--rw-muted); }
+.reco-desk .display-depth-toggle button.active {
+  background: var(--rw-green-soft);
+  color: var(--rw-green);
+}
+
+.reco-desk .experience-help-trigger {
+  background: var(--rw-surface);
+  border-color: var(--rw-line);
+  color: var(--rw-green);
+}
+
+.reco-desk .today-strip strong,
+.reco-desk .scanner-lane-cards strong,
+.reco-desk .long-term-metric-strip strong {
+  background: none !important;
+  -webkit-background-clip: unset !important;
+  background-clip: unset !important;
+  color: var(--rw-ink) !important;
+}
+
