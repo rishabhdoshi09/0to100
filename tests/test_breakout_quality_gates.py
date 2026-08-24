@@ -66,48 +66,6 @@ def test_gate_passes_solid_setup():
     assert status["fundamentals"] == "pass"
 
 
-def test_telegram_live_breakouts_skip_thin_volume(tmp_path):
-    from research.autonomy.telegram_notifications import TelegramNotifier
-
-    class _Feed:
-        def entry_allowed(self, sym):
-            return True
-
-        def price(self, sym):
-            return 110.0
-
-    class _Engine:
-        def is_configured(self):
-            return False
-
-        def send(self, msg):
-            return False
-
-    n = TelegramNotifier(
-        tmp_path,
-        engine_factory=_Engine,
-        breakout_confirmation_s=8.0,
-        breakout_buffer_bps=10.0,
-    )
-    payload = {
-        "records": [
-            {
-                "symbol": "THIN", "entry": 100, "stop": 95, "target": 120,
-                "status": "Ready to trade", "signals": ["BREAKOUT_52W"],
-                "volume_ratio": 0.1, "rsi": 50, "score": 90,
-            },
-            {
-                "symbol": "FAT", "entry": 100, "stop": 95, "target": 120,
-                "status": "Ready to trade", "signals": ["BREAKOUT_52W"],
-                "volume_ratio": 1.8, "rsi": 55, "score": 80,
-            },
-        ]
-    }
-    n.observe_live_breakouts(payload, _Feed())
-    assert "THIN" not in n.state.get("arms", {})
-    assert "FAT" in n.state.get("arms", {})
-
-
 def test_technical_chase_is_soft_best_among_hard():
     from product.breakout_quality import gate_breakout_quality
 

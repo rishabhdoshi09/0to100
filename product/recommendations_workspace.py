@@ -695,9 +695,9 @@ def build_recommendations_workspace(
         })
 
     cmp_note = (
-        "CMP is the latest official/live bar (Kite/NSE overlay when the market "
-        "is open; otherwise last EOD). Missing entry, stop and target are filled "
-        "from that bar. Scanner buy-zone levels that already exist stay intact. "
+        "CMP is the latest official NSE bar (Kite overlay when the market is open; "
+        "otherwise last EOD). Entry, stop and target are shown only when the scan "
+        "already stored them — this desk does not invent 5%/10% plans. "
         "Each scan symbol maps to one primary category (breakout → recovery → trend)."
     )
     if str(scan.get("records_status") or "") == "PRIOR_DAY_SNAPSHOT":
