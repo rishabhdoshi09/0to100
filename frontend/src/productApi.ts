@@ -226,7 +226,10 @@ export type RadarHome = {
     momentum: ScannerWorkspaceRow[]
     long_term_picks: ScannerWorkspaceRow[]
   }
-  counts: { breakouts: number; momentum: number; long_term_picks: number }
+  counts: { breakouts: number; momentum: number; long_term_picks: number; sniper_breakouts?: number }
+  best_breakout?: ScannerWorkspaceRow | null
+  best_among_fundamentals?: ScannerWorkspaceRow | null
+  sniper_candidates?: ScannerWorkspaceRow[]
   best_setups?: ScannerWorkspaceRow[]
   best_setups_note?: string
   scan_progress?: {
@@ -243,6 +246,203 @@ export type RadarHome = {
 export const fetchRadarHome = (): Promise<RadarHome> =>
   fetch('/api/radar-home', { headers: { Accept: 'application/json' } })
     .then((response) => json<RadarHome>(response))
+
+export type RecommendationEvidencePanel = {
+  sample_size?: number | null
+  ev_pct?: number | null
+  ev_lb_pct?: number | null
+  p_win?: number | null
+  confidence?: string | null
+  score?: number | null
+  rsi?: number | null
+  volume_ratio?: number | null
+  signals?: string[]
+  price_tag?: string
+  tech_source?: string
+  fundamental_coverage?: number | null
+  provenance?: string
+}
+
+export type RecommendationCard = {
+  symbol: string
+  company: string
+  category_id: string
+  category_label: string
+  action_badge: string
+  risk_tier: string
+  risk_label: string
+  setup_label: string
+  sector: string
+  score: number
+  rsi?: number | null
+  volume_ratio?: number | null
+  price_tag?: string
+  tech_source?: string
+  reason?: string
+  qualify_reason?: string
+  evidence_tags?: string[]
+  lifecycle: string
+  upside_from_entry_pct?: number | null
+  upside_to_target_pct?: number | null
+  entry?: number | null
+  target?: number | null
+  cmp?: number | null
+  source?: string
+  stop?: number | null
+  buy_zone_low?: number | null
+  buy_zone_high?: number | null
+  horizon?: string
+  opportunity_label?: string
+  expected_payoff?: string
+  expected_payoff_detail?: string
+  evidence?: string
+  strategy_health?: string
+  strategy_health_detail?: string
+  market_support?: string
+  market_support_detail?: string
+  why_now?: string[]
+  what_changes_mind?: string[]
+  next_step?: string
+  evidence_panel?: RecommendationEvidencePanel
+}
+
+export type RecommendationDesk = {
+  market_support: string
+  market_support_detail: string
+  strategy_health: string
+  strategy_health_detail: string
+  live_n?: number
+}
+
+export type RecommendationCategory = {
+  id: string
+  label: string
+  blurb: string
+  icon: string
+  count: number
+  cards: RecommendationCard[]
+  empty_detail: string
+}
+
+export type RecommendationsWorkspace = {
+  schema_version: number
+  generated_at: string
+  scan_scanned_at: string
+  long_term_scanned_at: string
+  records_status: string
+  same_ist_day: boolean
+  cmp_note: string
+  desk?: RecommendationDesk
+  categories: RecommendationCategory[]
+  lifecycle: {
+    active: RecommendationCard[]
+    closed: RecommendationCard[]
+    active_count: number
+    closed_count: number
+  }
+  disclaimer: string
+}
+
+export const fetchRecommendationsWorkspace = (): Promise<RecommendationsWorkspace> =>
+  fetch('/api/recommendations-workspace', { headers: { Accept: 'application/json' } })
+    .then((response) => json<RecommendationsWorkspace>(response))
+
+export type MarketMover = {
+  symbol: string
+  price?: number
+  chg_pct?: number
+}
+
+export type MarketReportItem = {
+  id: string
+  title: string
+  kind: string
+  date: string
+  created_at: string
+  is_new: boolean
+  badge?: string
+  summary: string
+  takeaways?: string[]
+  breakouts_today?: string[]
+  gainers?: MarketMover[]
+  losers?: MarketMover[]
+  snapshot?: {
+    indices?: Array<{ name: string; price?: number; chg_pct?: number }>
+    commentary?: string
+  }
+  as_of_ist?: string
+  path?: string
+}
+
+export type MarketReportsWorkspace = {
+  schema_version: number
+  generated_at: string
+  as_of_ist?: string
+  title: string
+  blurb: string
+  reports: MarketReportItem[]
+  today_pulse: Record<string, unknown>
+  error: string
+  disclaimer: string
+}
+
+export const fetchMarketReportsWorkspace = (): Promise<MarketReportsWorkspace> =>
+  fetch('/api/market-reports-workspace', { headers: { Accept: 'application/json' } })
+    .then((response) => json<MarketReportsWorkspace>(response))
+
+export type EducationLens = 'MACRO' | 'MICRO' | 'POLICY' | 'DERIVATIVES' | 'CONCEPT'
+
+export type EducationCard = {
+  id: string
+  lens: EducationLens | string
+  kind: string
+  title: string
+  teach_point: string
+  why_it_matters: string
+  summary?: string
+  level: string
+  impact_score: number
+  direction: string
+  category?: string
+  event_type?: string
+  source: string
+  source_tier?: number
+  official: boolean
+  url: string
+  published_at: string
+  fetched_at?: string
+  symbols: string[]
+  fno_symbols: string[]
+  sectors?: string[]
+  tags?: string[]
+  corroboration_count: number
+  places_orders?: boolean
+  is_signal?: boolean
+}
+
+export type EducationFeed = {
+  schema_version: number
+  generated_at: string
+  available: boolean
+  honesty: string
+  places_orders: boolean
+  summary: {
+    news_lessons: number
+    macro_themes: number
+    concepts: number
+    by_lens: Record<string, number>
+    articles_considered: number
+  }
+  lenses: EducationLens[]
+  cards: EducationCard[]
+  empty_hint?: string | null
+}
+
+export const fetchEducation = (minImpact = 40, limit = 40): Promise<EducationFeed> =>
+  fetch(
+    `/api/education?min_impact=${encodeURIComponent(String(minImpact))}&limit=${encodeURIComponent(String(limit))}`,
+    { headers: { Accept: 'application/json' } },
+  ).then((response) => json<EducationFeed>(response))
 
 export type CompareMetric = {
   label: string

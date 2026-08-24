@@ -1,14 +1,71 @@
 import type { DashboardPayload } from './types'
-import { money } from './format'
 
-const DESK_NAV = [
-  ['⌂', 'Today', 'Home'],
-  ['↗', 'Setups', 'Recommendations'],
-  ['⚡', 'Paper Desk', 'Momentum'],
-  ['🧪', 'Backtest', 'Backtest'],
-  ['$', 'Portfolio', 'Wealth Builders'],
-  ['☰', 'Desk', 'Market Reports'],
+const PRIMARY_NAV = [
+  ['⌂', 'Home', 'Home'],
+  ['◎', 'Market Scanner', 'Market Scanner'],
+  ['▣', 'Recommendations', 'Recommendations'],
+  ['▤', 'Market Reports', 'Market Reports'],
+  ['◉', 'Stock Intelligence', 'Stock Intelligence'],
+  ['◇', 'Long-Term Picks', 'Long-Term Picks'],
+  ['⇔', 'Compare', 'Compare'],
+  ['★', 'Watchlist', 'Watchlist'],
 ] as const
+
+const SECONDARY_NAV = [
+  ['↗', 'Market Overview', 'Market Overview'],
+  ['◈', 'News & Events', 'News & Events'],
+  ['✎', 'Education', 'Education'],
+  ['▤', 'Research Data', 'Research Data'],
+  ['🧪', 'Backtest', 'Backtest'],
+  ['⬡', 'F&O Desk', 'F&O Desk'],
+  ['▣', 'My Holdings', 'Paper Portfolio'],
+  ['◌', 'System Health', 'System Health'],
+] as const
+
+const ROUTE_ALIAS: Record<string, string> = {
+  'Command Center': 'Home',
+  Scanner: 'Market Scanner',
+  'Long-Term': 'Long-Term Picks',
+  Portfolio: 'Paper Portfolio',
+  'Market Internals': 'Market Overview',
+  Automation: 'System Health',
+  Today: 'Home',
+  Setups: 'Market Scanner',
+  Desk: 'System Health',
+}
+
+function ArcReactor() {
+  return <div className="hud-arc" aria-hidden="true" />
+}
+
+function NavigationGroup({
+  label,
+  rows,
+  active,
+  setActive,
+}: {
+  label: string
+  rows: ReadonlyArray<readonly [string, string, string]>
+  active: string
+  setActive: (value: string) => void
+}) {
+  return (
+    <>
+      <div className="nav-section-label">{label}</div>
+      {rows.map(([icon, route, display]) => (
+        <button
+          key={route}
+          className={active === route ? 'nav-item active' : 'nav-item'}
+          type="button"
+          onClick={() => setActive(route)}
+        >
+          <span className="hud-ico" aria-hidden="true">{icon}</span>
+          {display}
+        </button>
+      ))}
+    </>
+  )
+}
 
 export function MarketSidebar({
   active,
@@ -20,58 +77,53 @@ export function MarketSidebar({
   dashboard: DashboardPayload
 }) {
   const operations = dashboard.operations.running
-  const current = (
-    {
-      Home: 'Today',
-      'Command Center': 'Today',
-      'Market Scanner': 'Setups',
-      Scanner: 'Setups',
-      'Long-Term Picks': 'Setups',
-      'Long-Term': 'Setups',
-      'Paper Portfolio': 'Paper Desk',
-      Automation: 'Desk',
-      'System Health': 'Desk',
-      'Market Overview': 'Desk',
-      'Market Internals': 'Desk',
-      'News & Events': 'Desk',
-      'Research Data': 'Desk',
-      'Stock Intelligence': 'Desk',
-      Compare: 'Desk',
-      Watchlist: 'Desk',
-    } as Record<string, string>
-  )[active] || active
-
+  const current = ROUTE_ALIAS[active] || active
   return (
-    <aside className="sidebar">
-      <div className="brand"><div className="brand-mark" aria-hidden="true">R</div><div><strong>Reco Wealth</strong><small>Recommendations</small></div></div>
-      <nav>
-        <div className="nav-section-label">Menu</div>
-        {DESK_NAV.map(([icon, route, display]) => (
-          <button
-            key={route}
-            className={current === route ? 'nav-item active' : 'nav-item'}
-            type="button"
-            onClick={() => setActive(route)}
-          >
-            <span>{icon}</span>{display}
-          </button>
-        ))}
+    <aside className="sidebar hud-sidebar">
+      <div className="hud-brand">
+        <ArcReactor />
+        <div className="hud-brand-copy">
+          <strong>QUANTTERM</strong>
+          <small>JARVIS DESK</small>
+        </div>
+      </div>
+      <nav aria-label="Primary navigation">
+        <NavigationGroup label="DISCOVERY" rows={PRIMARY_NAV} active={current} setActive={setActive} />
+        <NavigationGroup label="TOOLS & EVIDENCE" rows={SECONDARY_NAV} active={current} setActive={setActive} />
       </nav>
       <div className="sidebar-spacer" />
-      <div className="broker-card">
+      <div className="hud-telemetry broker-card">
         <div className="broker-row">
           <strong>MARKET DATA</strong>
           <span className={dashboard.data.ready ? 'status-dot' : 'status-dot status-dot-off'} />
         </div>
-        <small>{dashboard.data.ready ? `READY · ${dashboard.data.bhavcopy.latest_date || '—'}` : 'INCOMPLETE'}</small>
+        <small>
+          {dashboard.data.ready
+            ? `READY · ${dashboard.data.bhavcopy.latest_date || '—'}`
+            : 'INCOMPLETE'}
+        </small>
         <div className="broker-stats">
-          <div><span>Paper equity</span><strong>{money(dashboard.paper.equity)}</strong></div>
-          <div><span>Universe</span><strong>{dashboard.scan.universe_size.toLocaleString('en-IN')}</strong></div>
+          <div>
+            <span>Sessions</span>
+            <strong>{dashboard.data.bhavcopy.sessions || 0}</strong>
+          </div>
+          <div>
+            <span>Universe</span>
+            <strong>{dashboard.scan.universe_size.toLocaleString('en-IN')}</strong>
+          </div>
         </div>
       </div>
-      <div className="broker-card compact-service-card">
-        <div className="broker-row"><strong>AUTONOMY</strong><span className={operations || dashboard.autonomy.running ? 'status-dot' : 'status-dot status-dot-off'} /></div>
-        <small>{dashboard.autonomy.running ? 'ONLINE' : operations ? 'OPS ONLINE' : 'OFFLINE'} · live locked</small>
+      <div className="hud-telemetry broker-card compact-service-card">
+        <div className="broker-row">
+          <strong>SCAN ENGINE</strong>
+          <span className={operations ? 'status-dot' : 'status-dot status-dot-off'} />
+        </div>
+        <small>
+          {operations ? 'ONLINE' : 'OFFLINE'} · last scan{' '}
+          {dashboard.scan.scanned_at
+            ? new Date(dashboard.scan.scanned_at).toLocaleDateString('en-IN')
+            : '—'}
+        </small>
       </div>
     </aside>
   )

@@ -179,7 +179,10 @@ def radar_home_workspace() -> dict[str, Any]:
             "long_term_scanned_at": "",
             "universe_size": int((scan or {}).get("universe_size", 0) or 0),
             "lanes": {"breakouts": [], "momentum": [], "long_term_picks": []},
-            "counts": {"breakouts": 0, "momentum": 0, "long_term_picks": 0},
+            "counts": {"breakouts": 0, "momentum": 0, "long_term_picks": 0, "sniper_breakouts": 0},
+            "best_breakout": None,
+            "best_among_fundamentals": None,
+            "sniper_candidates": [],
             "best_setups": [],
             "best_setups_note": "Last scan is not readable yet.",
             "error": str(exc),
@@ -198,6 +201,22 @@ def radar_home_workspace() -> dict[str, Any]:
     except Exception:
         home["scan_progress"] = {"active": False}
     return home
+
+
+def recommendations_workspace() -> dict[str, Any]:
+    """Reco-style research categories + Active/Closed lifecycle (evidence only)."""
+    from product.recommendations_workspace import build_recommendations_workspace
+    return build_recommendations_workspace(
+        scan_payload=core._scan_payload(),
+        long_term_payload=core._long_term_payload(),
+        refresh_technicals=True,
+    )
+
+
+def market_reports_workspace() -> dict[str, Any]:
+    """Chronological Market Pulse desk from street_pulse + saved day files."""
+    from product.recommendations_workspace import build_market_reports_workspace
+    return build_market_reports_workspace(persist_today=True)
 
 
 def compare_workspace(symbols: str = Query("", description="Comma-separated NSE symbols")) -> dict[str, Any]:
@@ -324,6 +343,18 @@ def install(app) -> None:
         radar_home_workspace,
         methods=["GET"],
         name="radar_home_workspace",
+    )
+    app.add_api_route(
+        "/api/recommendations-workspace",
+        recommendations_workspace,
+        methods=["GET"],
+        name="recommendations_workspace",
+    )
+    app.add_api_route(
+        "/api/market-reports-workspace",
+        market_reports_workspace,
+        methods=["GET"],
+        name="market_reports_workspace",
     )
     app.add_api_route(
         "/api/compare",

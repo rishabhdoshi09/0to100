@@ -6,14 +6,19 @@ import {
   RadarHomeView,
   WatchlistView,
 } from './marketRadarViews'
+import { MarketReportsView, RecommendationsView } from './recommendationsViews'
 import { DisplayDepthToggle } from './displayDepth'
-import { ExperienceHelpDrawer } from './experience'
+import {
+  EnhancedLongTermView,
+  ExperienceHelpDrawer,
+} from './experience'
 import { MarketSidebar } from './MarketSidebar'
-import { NewsView, OperationsRibbon } from './marketViews'
+import { EducationView } from './educationViews'
+import { NewsView, OperationsRibbon, FnoView } from './marketViews'
 import { ProductStockIntelligenceView } from './productViews'
 import { ResearchDataView } from './researchData'
-import { DeskHub } from './deskHub'
 import {
+  AutomationView,
   MarketInternalsView,
   PortfolioView,
   RecoBacktestView,
@@ -141,60 +146,56 @@ function useIstClock() {
   return now
 }
 
-function istSessionOpen() {
-  const parts = new Intl.DateTimeFormat('en-GB', {
-    timeZone: 'Asia/Kolkata', weekday: 'short', hour: '2-digit', minute: '2-digit', hour12: false,
-  }).formatToParts(new Date())
-  const week = parts.find((p) => p.type === 'weekday')?.value || ''
-  const hour = Number(parts.find((p) => p.type === 'hour')?.value || 0)
-  const minute = Number(parts.find((p) => p.type === 'minute')?.value || 0)
-  if (['Sat', 'Sun'].includes(week)) return false
-  const mins = hour * 60 + minute
-  return mins >= 9 * 60 + 15 && mins <= 15 * 60 + 30
-}
-
 const pageTitles: Record<string, string> = {
-  Today: 'Top Stocks',
-  Setups: 'Recommendations',
-  'Paper Desk': 'Momentum',
-  Backtest: 'Backtest',
-  Portfolio: 'Wealth Builders',
-  Desk: 'Market Reports',
-  Home: 'Today',
-  'Market Scanner': 'Setups',
+  Home: 'Home',
+  'Market Scanner': 'Market Scanner',
+  Recommendations: 'Recommendations',
+  'Market Reports': 'Market Reports',
   'Stock Intelligence': 'Stock Intelligence',
-  'Long-Term Picks': 'Setups',
+  'Long-Term Picks': 'Long-Term Picks',
   Compare: 'Compare',
   Watchlist: 'Watchlist',
-  'Market Overview': 'Market',
-  'News & Events': 'News',
-  'Research Data': 'Data',
-  'Paper Portfolio': 'Paper Desk',
-  'System Health': 'Desk',
-  'Command Center': 'Today',
-  Scanner: 'Setups',
-  'Long-Term': 'Setups',
-  'Market Internals': 'Market',
-  Automation: 'Desk',
+  'Market Overview': 'Market Overview',
+  'News & Events': 'News & Events',
+  Education: 'Education',
+  'Research Data': 'Research Data',
+  Backtest: 'Backtest',
+  'F&O Desk': 'F&O Desk',
+  'Paper Portfolio': 'My Holdings',
+  'System Health': 'System Health',
+  'Command Center': 'Home',
+  Scanner: 'Market Scanner',
+  'Long-Term': 'Long-Term Picks',
+  Portfolio: 'My Holdings',
+  'Market Internals': 'Market Overview',
+  Automation: 'System Health',
 }
 
 const pageSubtitles: Record<string, string> = {
-  Today: 'SEPA-qualified names first, then the scanner watchlist. CMP can be delayed.',
-  Setups: 'Best Setups, Momentum and Long-term. Do not mix them.',
-  'Paper Desk': 'Simulated book. The bot learns from closed trades. Live orders stay locked.',
+  Home: 'Daily command centre — Breakouts, Momentum and Long-Term Picks from the saved market scan.',
+  'Market Scanner': 'Professional scanner tables for breakouts, momentum, SEPA Best Setups and long-term quality.',
+  Recommendations: 'Simple decisions on the outside — buy zone, target, stop, why now — with QuantTerm evidence underneath.',
+  'Market Reports': 'Daily Market Pulse archive — trends, sector movers and breakout context from live system state.',
+  'Stock Intelligence': 'Company workspace — chart, financials, ratios and pre-trade GO/CAUTION/NO_GO cockpit.',
+  'Long-Term Picks': 'Business quality, valuation and timing without fabricated model performance.',
+  Compare: 'Side-by-side comparison across market, growth, quality and technical dimensions.',
+  Watchlist: 'Names you are tracking with latest scan context.',
+  'Market Overview': 'Regime, breadth, volatility and sector leadership.',
+  'News & Events': 'Dated market context with source health.',
+  Education: 'Crunched news + macro/micro teach-ins for the share market — never invented blogs, never a signal.',
+  'Research Data': 'Verified snapshots, data platform jobs, and evidence uploads.',
   Backtest: 'Inspect a paper-loss style on past data. This does not change today’s BUY list.',
-  Portfolio: 'Paper positions, equity and what the bot learned.',
-  Desk: 'Market, news, data and system health.',
-  Home: 'SEPA-style Best Setups first, then the scanner watchlist.',
-  'Market Scanner': 'Breakouts, Momentum, Long-term.',
-  'Paper Portfolio': 'Simulated book. Live orders stay locked.',
+  'F&O Desk': 'Mapped futures plus live OI / IV / PCR / max-pain context for a selected underlying.',
+  'Paper Portfolio': 'Demat holdings + paper book — sync Zerodha or paste your shares.',
+  Portfolio: 'Demat holdings + paper book — sync Zerodha or paste your shares.',
+  'System Health': 'Operations, autonomy and infrastructure detail.',
 }
 
 function App() {
   const [dashboard, setDashboard] = useState<DashboardPayload>(emptyDashboard)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
-  const [active, setActive] = useState('Today')
+  const [active, setActive] = useState('Home')
   const [compareSymbols, setCompareSymbols] = useState<string[]>([])
   const [selected, setSelected] = useState('')
   const [bars, setBars] = useState<ChartBar[]>([])
@@ -202,7 +203,6 @@ function App() {
   const [query, setQuery] = useState('')
   const [helpOpen, setHelpOpen] = useState(false)
   const istClock = useIstClock()
-  const sessionOpen = istSessionOpen()
   const [depth, setDepth] = useState<DisplayDepth>(() => {
     const saved = window.localStorage.getItem('quantterm-display-depth')
     return saved === 'professional' ? 'professional' : 'simple'
@@ -343,33 +343,23 @@ function App() {
     longTermScan,
   }
 
-  const primaryPages = ['Today', 'Setups', 'Home', 'Market Scanner', 'Command Center', 'Scanner', 'Paper Desk', 'Backtest', 'Portfolio', 'Paper Portfolio']
+  const primaryPages = [
+    'Home', 'Market Scanner', 'Stock Intelligence', 'Long-Term Picks',
+    'Compare', 'Watchlist', 'Command Center', 'Scanner', 'Recommendations', 'Market Reports',
+  ]
   const showOpsRibbon = !primaryPages.includes(active)
-  const recoDesk = ['Today', 'Setups', 'Paper Desk', 'Backtest', 'Portfolio', 'Home', 'Command Center', 'Paper Portfolio'].includes(active)
+  const showReportActions = [
+    'Stock Intelligence',
+    'Research Data',
+    'Long-Term Picks',
+    'Long-Term',
+    'Market Overview',
+    'Market Internals',
+  ].includes(active)
+  const kiteOk = dashboard.autonomy.state !== 'AUTH_REQUIRED'
+    && !(dashboard.autonomy.active_failures || []).some((f) => String(f).includes('auth'))
 
   const renderView = () => {
-    if (active === 'Today' || active === 'Home' || active === 'Command Center') {
-      return <RadarHomeView {...viewProps} onCompare={addToCompare} onWatchlist={addToWatchlist} />
-    }
-    if (active === 'Setups' || active === 'Market Scanner' || active === 'Scanner' || active === 'Long-Term Picks' || active === 'Long-Term') {
-      return <MarketScannerView {...viewProps} onCompare={addToCompare} />
-    }
-    if (active === 'Paper Desk' || active === 'Paper Portfolio' || active === 'Portfolio') {
-      return <PortfolioView {...viewProps} />
-    }
-    if (active === 'Backtest') return <RecoBacktestView {...viewProps} />
-    if (active === 'Desk' || active === 'System Health' || active === 'Automation') {
-      return (
-        <DeskHub
-          {...viewProps}
-          compareSymbols={compareSymbols}
-          setCompareSymbols={setCompareSymbols}
-          onCompare={addToCompare}
-          onWatchlist={addToWatchlist}
-          depth={depth}
-        />
-      )
-    }
     if (active === 'Compare') {
       return (
         <CompareView
@@ -383,6 +373,18 @@ function App() {
     if (active === 'Watchlist') {
       return <WatchlistView setActive={setActive} setSelected={setSelected} onCompare={addToCompare} />
     }
+    if (active === 'Market Scanner' || active === 'Scanner') {
+      return <MarketScannerView {...viewProps} onCompare={addToCompare} />
+    }
+    if (active === 'Recommendations') {
+      return <RecommendationsView {...viewProps} />
+    }
+    if (active === 'Market Reports') {
+      return <MarketReportsView {...viewProps} />
+    }
+    if (active === 'Home' || active === 'Command Center') {
+      return <RadarHomeView {...viewProps} onCompare={addToCompare} onWatchlist={addToWatchlist} />
+    }
     if (active === 'Stock Intelligence') {
       return (
         <ProductStockIntelligenceView
@@ -394,50 +396,62 @@ function App() {
       )
     }
     if (active === 'Research Data') return <ResearchDataView symbol={selected} />
+    if (active === 'Paper Portfolio' || active === 'Portfolio') return <PortfolioView {...viewProps} />
+    if (active === 'Backtest') return <RecoBacktestView {...viewProps} />
     if (active === 'Market Overview' || active === 'Market Internals') return <MarketInternalsView {...viewProps} />
+    if (active === 'Long-Term Picks' || active === 'Long-Term') return <EnhancedLongTermView {...viewProps} />
     if (active === 'News & Events') return <NewsView {...viewProps} />
+    if (active === 'Education') {
+      return (
+        <EducationView
+          runControl={viewProps.runControl}
+          setSelected={setSelected}
+          setActive={setActive}
+        />
+      )
+    }
+    if (active === 'F&O Desk') return <FnoView {...viewProps} />
+    if (active === 'System Health' || active === 'Automation') return <AutomationView {...viewProps} />
     return <RadarHomeView {...viewProps} onCompare={addToCompare} onWatchlist={addToWatchlist} />
   }
 
   return (
-    <div className="rw-app">
-      <header className="rw-topbar">
-        <div className="rw-wordmark">Reco Wealth</div>
-        <div className="search-box">
-          ⌕
-          <input
-            aria-label="Search NSE symbol"
-            placeholder="Search stocks"
-            value={query}
-            onChange={(event: { target: { value: string } }) => setQuery(event.target.value)}
-            onKeyDown={(event: { key: string }) => { if (event.key === 'Enter') openSearch() }}
-            list="quantterm-symbols"
-          />
-          <datalist id="quantterm-symbols">{symbols.slice(0, 800).map((symbol) => <option value={symbol} key={symbol} />)}</datalist>
-          <button type="button" onClick={openSearch}>Search</button>
-        </div>
-        <div className="rw-top-meta">
-          <span className="rw-clock">{istClock || '—:—:—'} IST</span>
-          <span className={sessionOpen ? 'rw-session open' : 'rw-session closed'}>
-            ● {sessionOpen ? 'MARKET OPEN' : 'MARKET CLOSED'}
-          </span>
-          {!recoDesk && <DisplayDepthToggle depth={depth} onChange={setDepth} />}
-          <button type="button" className="experience-help-trigger" onClick={() => setHelpOpen(true)}>What is this?</button>
-          <button type="button" onClick={() => void refresh()} aria-label="Refresh dashboard">↻</button>
-          <div className="rw-avatar" aria-hidden="true">R</div>
-        </div>
-      </header>
-      <div className="rw-shell">
+    <div className="terminal-root hud-shell">
       <MarketSidebar active={active} setActive={setActive} dashboard={dashboard} />
       <main className="workspace">
+        <header className="topbar">
+          <div className="search-box">
+            ⌕
+            <input
+              aria-label="Search NSE symbol"
+              placeholder="Search any NSE share…"
+              value={query}
+              onChange={(event: { target: { value: string } }) => setQuery(event.target.value)}
+              onKeyDown={(event: { key: string }) => { if (event.key === 'Enter') openSearch() }}
+              list="quantterm-symbols"
+            />
+            <datalist id="quantterm-symbols">{symbols.slice(0, 800).map((symbol) => <option value={symbol} key={symbol} />)}</datalist>
+            <button type="button" onClick={openSearch}>Open stock</button>
+          </div>
+          <div className="top-status">
+            <span className="hud-clock" title="Asia/Kolkata">{istClock || '—:—:—'} IST</span>
+            <DisplayDepthToggle depth={depth} onChange={setDepth} />
+            <button type="button" className="experience-help-trigger" onClick={() => setHelpOpen(true)}>What is this?</button>
+            <span className={dashboard.data.ready ? 'live-pill' : 'offline-pill'}><i /> {dashboard.data.ready ? 'DATA READY' : 'DATA INCOMPLETE'}</span>
+            <span className={kiteOk ? 'live-pill' : 'offline-pill'} title={dashboard.autonomy.plain_state || ''}>
+              <i /> {kiteOk ? 'ZERODHA OK' : 'ZERODHA LOGIN'}
+            </span>
+            <button type="button" onClick={() => void refresh()} aria-label="Refresh dashboard">↻</button>
+          </div>
+        </header>
 
         <section className="page-title">
           <div><h1>{pageTitles[active] || active}</h1><p>{pageSubtitles[active]}</p></div>
           <div className="page-actions">
-            {!recoDesk && (
+            {showReportActions && (
               <>
-                <button type="button" disabled={!selected} onClick={openEquityReport}>Equity Evidence PDF</button>
-                <button type="button" onClick={openBasketReport}>Top-3 Basket PDF</button>
+                <button type="button" disabled={!selected} onClick={openEquityReport}>Equity evidence PDF</button>
+                <button type="button" onClick={openBasketReport}>Top-3 basket PDF</button>
               </>
             )}
             <span>{controlState || (loading ? 'Loading real state…' : `Updated ${dashboard.generated_at ? new Date(dashboard.generated_at).toLocaleTimeString('en-IN') : '—'}`)}</span>
@@ -446,8 +460,8 @@ function App() {
 
         {error && (
           <div className="api-degraded-banner" role="alert">
-            <strong>RecoWealth desk is waiting for the market API.</strong>
-            <p>Start the QuantTerm stack, then retry. Cards stay empty until the last scan is readable.</p>
+            <strong>QuantTerm desk is waiting for the market API.</strong>
+            <p>Start the stack with <code>bash scripts/run_quantterm_complete.sh</code>, then retry. Cards stay empty until the last scan is readable.</p>
             <details>
               <summary>Technical details</summary>
               <pre>{error}</pre>
@@ -459,7 +473,6 @@ function App() {
         {renderView()}
       </main>
       <ExperienceHelpDrawer page={active} open={helpOpen} onClose={() => setHelpOpen(false)} />
-      </div>
     </div>
   )
 }

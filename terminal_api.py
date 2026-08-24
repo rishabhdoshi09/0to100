@@ -744,6 +744,19 @@ def news_status() -> dict:
     return _news_payload()
 
 
+@app.get("/api/education")
+def education_feed(min_impact: int = 40, limit: int = 40) -> dict:
+    """Educational cards projected from curated news — never invents articles."""
+    from product.education_feed import build_education_feed
+
+    news = _news_payload()
+    return build_education_feed(
+        articles=list(news.get("articles") or []),
+        min_impact=max(0, min(int(min_impact or 40), 100)),
+        limit=max(1, min(int(limit or 40), 100)),
+    )
+
+
 @app.get("/api/fno")
 def fno_status() -> dict:
     return _fno_payload()

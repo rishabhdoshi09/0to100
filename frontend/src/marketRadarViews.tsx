@@ -1,21 +1,25 @@
 import { useEffect, useMemo, useState } from 'react'
 import { ChartWorkspace, Panel } from './components'
-import { BotLearningPanel } from './views'
-import { money, pct, words } from './format'
+import { money, pct, relativeAge, words } from './format'
 import {
   addWatchlistItem,
+  bootstrapProduct,
   fetchCompareWorkspace,
+  fetchProductReadiness,
   fetchRadarHome,
   fetchScannerWorkspace,
+  fetchTradePlan,
   fetchWatchlist,
   removeWatchlistItem,
   type CompareWorkspace,
+  type ProductReadiness,
   type RadarHome,
   type ScannerWorkspaceRow,
+  type TradePlan,
   type WatchlistPayload,
 } from './productApi'
+import { RiskLensCard } from './productViews'
 import { LiveScanBanner, type ExperienceViewProps } from './experience'
-import { fetchTradePlan, type TradePlan } from './productApi'
 
 type RadarRow = ScannerWorkspaceRow & {
   breakout_state?: string
@@ -34,73 +38,15 @@ type RadarRow = ScannerWorkspaceRow & {
   sepa_passed?: number
   sepa_total?: number
   sepa_verdict?: string
-}
-
-function recoBadge(row: RadarRow): [string, string] {
-  const verdict = String(row.sepa_verdict || '').toUpperCase()
-  if (verdict === 'STRONG') return ['SEPA qualified', 'buy']
-  if (verdict === 'CONSTRUCTIVE') return ['Setup forming', 'watch']
-  if (row.chase_risk) return ['Avoid', 'avoid']
-  if (row.status === 'Ready to trade' || String(row.verdict || '').toUpperCase() === 'BUY') return ['Buy Setup', 'buy']
-  if (row.status === 'Wait for pullback') return ['Wait', 'wait']
-  return ['Watch', 'watch']
-}
-
-function RecoCard({
-  row,
-  selected,
-  onSelect,
-}: {
-  row: RadarRow
-  selected: boolean
-  onSelect: (symbol: string) => void
-}) {
-  const [label, kind] = recoBadge(row)
-  const buy = kind === 'buy' ? 'Buy' : kind === 'avoid' ? 'Avoid' : kind === 'wait' ? 'Wait' : 'Watch'
-  const entry = Number(row.entry || 0)
-  const target = Number(row.target || 0)
-  const price = Number(row.price || 0)
-  const upside = entry > 0 && target > entry ? ((target - entry) / entry) * 100 : null
-  const fromNow = price > 0 && target > 0 ? ((target - price) / price) * 100 : null
-  const risk = row.chase_risk ? 'High Risk' : kind === 'buy' ? 'Setup' : 'Medium Risk'
-  const inr = (value: number) => `₹${value.toLocaleString('en-IN', { maximumFractionDigits: 2 })}`
-  return (
-    <button
-      type="button"
-      className={selected ? 'reco-card rw-stock-card active' : 'reco-card rw-stock-card'}
-      onClick={() => onSelect(row.symbol)}
-    >
-      <span className={`rw-buy ${kind}`}>{buy}</span>
-      <div className="rw-stock-id">
-        <div className="rw-logo">{row.symbol.slice(0, 1)}</div>
-        <div>
-          <strong>{row.company || row.symbol}</strong>
-          <small>{row.symbol}</small>
-        </div>
-      </div>
-      <div className="rw-tags">
-        <span>{label}</span>
-        <span className="risk">{risk}</span>
-        {row.sepa_score != null && <span>SEPA {row.sepa_score}/100</span>}
-      </div>
-      <div className="rw-money">
-        <div>
-          <span>Target</span>
-          <b>{target ? inr(target) : '—'}</b>
-          <small>Entry Price: {entry ? inr(entry) : 'n/a'}</small>
-        </div>
-        <div className="upside">
-          <b>{upside != null ? `↗ ${upside.toFixed(1)}%` : '—'}</b>
-          <small>Upside from entry</small>
-          {fromNow != null && <small>{fromNow.toFixed(1)}% from current</small>}
-        </div>
-      </div>
-      <div className="rw-cmp">
-        <span>Current Price</span>
-        <strong>{price ? inr(price) : 'n/a'}</strong>
-      </div>
-    </button>
-  )
+  breakout_grade?: string
+  breakout_conviction?: number
+  breakout_quality?: number
+  fundamental_score?: number
+  sniper_candidate?: boolean
+  volume_ratio?: number
+  rsi?: number
+  tech_source?: string
+  price_tag?: string
 }
 
 const breakoutLabel: Record<string, string> = {
@@ -126,6 +72,127 @@ const momentumLabel: Record<string, string> = {
   insufficient_history: 'Short history',
   watch_momentum: 'Watch',
   not_momentum: '—',
+}
+
+function BestSniperPanel({
+  best,
+  sniperCount,
+  onSelect,
+}: {
+  best: RadarRow | null | undefined
+  sniperCount: number
+  onSelect: (symbol: string) => void
+}) {
+  if (best) {
+    const volOk = best.volume_ratio == null || Number(best.volume_ratio) >= 1
+    return (
+      <div className="radar-best-breakout">
+        <Panel
+          title={`BEST TECHNICAL BREAKOUT · ${best.symbol}`}
+          subtitle={
+            [
+              sniperCount > 0 ? `${sniperCount} sniper candidate${sniperCount === 1 ? '' : 's'}` : null,
+              best.breakout_grade ? `Grade ${best.breakout_grade}` : null,
+              best.rsi != null
+                ? `RSI ${Math.round(Number(best.rsi))}${best.tech_source === 'live' || best.price_tag === 'LIVE' ? ' LIVE' : ' EOD'}`
+                : null,
+              best.volume_ratio != null
+                ? `Vol ${Number(best.volume_ratio).toFixed(1)}×${volOk ? '' : ' THIN'}`
+                : null,
+            ].filter(Boolean).join(' · ') || 'Volume ≥1× · not chasing · RSI ≤82 — fundamentals not required'
+          }
+        >
+          <button
+            type="button"
+            className="radar-best-pick-btn"
+            onClick={() => onSelect(String(best.symbol || ''))}
+          >
+            Score {best.score ?? '—'}
+            {best.breakout_quality != null
+              ? ` · Quality ${Number(best.breakout_quality).toFixed(0)}`
+              : ''}
+            {' · '}
+            {breakoutLabel[String(best.breakout_state || '')]
+              || words(String(best.breakout_state || best.status || ''))}
+          </button>
+        </Panel>
+      </div>
+    )
+  }
+  return (
+    <div className="radar-best-breakout radar-best-empty">
+      <Panel
+        title="BEST TECHNICAL BREAKOUT"
+        subtitle="Volume ≥1.0× · not extended · RSI ≤82 — tape only, no fund gate"
+      >
+        <p className="radar-empty-li">
+          {sniperCount === 0
+            ? 'No sniper breakouts yet — thin volume / extended names stay out.'
+            : 'Sniper pool has names but none ranked as technical best.'}
+        </p>
+      </Panel>
+    </div>
+  )
+}
+
+function BestAmongFundamentalsPanel({
+  best,
+  onSelect,
+}: {
+  best: RadarRow | null | undefined
+  onSelect: (symbol: string) => void
+}) {
+  if (best) {
+    const gates = (best as RadarRow & { quality_gates?: Record<string, string> }).quality_gates || {}
+    return (
+      <div className="radar-best-fundamentals">
+        <Panel
+          title={`BEST AMONG BREAKOUTS · ${best.symbol}`}
+          subtitle={
+            [
+              'Fundamentals filter',
+              best.classification ? String(best.classification).replace(/_/g, ' ') : null,
+              best.fundamental_score != null ? `Fund score ${Math.round(Number(best.fundamental_score))}` : null,
+              gates.fundamentals ? `Fund ${gates.fundamentals}` : null,
+              best.rsi != null ? `RSI ${Math.round(Number(best.rsi))}` : null,
+              best.volume_ratio != null ? `Vol ${Number(best.volume_ratio).toFixed(1)}×` : null,
+            ].filter(Boolean).join(' · ')
+          }
+        >
+          <button
+            type="button"
+            className="radar-best-pick-btn"
+            onClick={() => onSelect(String(best.symbol || ''))}
+          >
+            Score {best.score ?? '—'}
+            {best.breakout_quality != null
+              ? ` · Quality ${Number(best.breakout_quality).toFixed(0)}`
+              : ''}
+            {' · '}
+            {breakoutLabel[String(best.breakout_state || '')]
+              || words(String(best.breakout_state || best.status || ''))}
+          </button>
+        </Panel>
+      </div>
+    )
+  }
+  return (
+    <div className="radar-best-fundamentals radar-best-empty">
+      <Panel
+        title="BEST AMONG BREAKOUTS"
+        subtitle="Only uses fundamentals among already-valid breakout candidates"
+      >
+        <p className="radar-empty-li">
+          No breakout candidate has usable fundamental coverage yet — run long-term scan, or wait for fund data. Technical sniper lane above is independent.
+        </p>
+      </Panel>
+    </div>
+  )
+}
+
+function thinVolume(row: RadarRow): boolean {
+  const vol = Number(row.volume_ratio)
+  return Number.isFinite(vol) && vol > 0 && vol < 1
 }
 
 function DenseTable({
@@ -214,46 +281,122 @@ export function RadarHomeView(props: ExperienceViewProps & {
   const { dashboard, selected, setSelected, bars, setActive, depth, marketScan, longTermScan, onCompare, onWatchlist } = props
   const [radar, setRadar] = useState<RadarHome | null>(null)
   const [plan, setPlan] = useState<TradePlan | null>(null)
+  const [readiness, setReadiness] = useState<ProductReadiness | null>(null)
+  const [bootstrapBusy, setBootstrapBusy] = useState(false)
+  const [deskNote, setDeskNote] = useState('')
 
   useEffect(() => {
-    let cancelled = false
+    let alive = true
     const load = () => {
       fetchRadarHome()
-        .then((home) => { if (!cancelled) setRadar(home) })
-        .catch(() => { if (!cancelled) setRadar(null) })
+        .then((payload) => { if (alive) setRadar(payload) })
+        .catch(() => { if (alive) setRadar(null) })
+      fetchProductReadiness()
+        .then((payload) => { if (alive) setReadiness(payload) })
+        .catch(() => undefined)
     }
     load()
     const watching = marketScan.isActive || Boolean(dashboard.scan_progress?.active)
-    const timer = window.setInterval(load, watching ? 4000 : 12000)
-    return () => {
-      cancelled = true
-      window.clearInterval(timer)
-    }
-  }, [dashboard.scan.scanned_at, dashboard.long_term.scanned_at, dashboard.scan_progress?.updated_at, dashboard.scan_progress?.current, marketScan.isActive])
+    const timer = window.setInterval(load, watching ? 4000 : 20_000)
+    return () => { alive = false; window.clearInterval(timer) }
+  }, [dashboard.scan.scanned_at, dashboard.long_term.scanned_at, dashboard.generated_at, dashboard.scan_progress?.updated_at, marketScan.isActive])
 
   useEffect(() => {
     if (!selected) { setPlan(null); return }
-    fetchTradePlan(selected).then(setPlan).catch(() => setPlan(null))
-  }, [selected, dashboard.scan.scanned_at])
+    let alive = true
+    fetchTradePlan(selected)
+      .then((payload) => { if (alive) setPlan(payload) })
+      .catch(() => { if (alive) setPlan(null) })
+    return () => { alive = false }
+  }, [selected, dashboard.scan.scanned_at, dashboard.generated_at])
 
-  const row = (radar?.best_setups || []).find((r) => r.symbol === selected)
-    || radar?.lanes.breakouts.find((r) => r.symbol === selected)
+  const scanAt = radar?.scan_scanned_at || dashboard.scan.scanned_at || ''
+  const kiteOk = dashboard.autonomy.state !== 'AUTH_REQUIRED'
+    && !(dashboard.autonomy.active_failures || []).some((f) => String(f).includes('auth'))
+  const emptyDesk = !scanAt
+    || ((radar?.counts.breakouts || 0) + (radar?.counts.momentum || 0) + (radar?.counts.long_term_picks || 0) === 0)
+  const readinessScore = readiness?.score ?? 0
+  const needsBootstrap = emptyDesk || readinessScore < 70 || !dashboard.data.ready
+
+  const runBootstrap = async () => {
+    setBootstrapBusy(true)
+    setDeskNote('Preparing data lanes…')
+    try {
+      const result = await bootstrapProduct()
+      setReadiness(result.readiness)
+      setDeskNote(result.message || 'Bootstrap queued')
+      if (!marketScan.isBusy) void marketScan.start()
+    } catch (reason) {
+      setDeskNote(reason instanceof Error ? reason.message : 'Bootstrap failed')
+    } finally {
+      setBootstrapBusy(false)
+      window.setTimeout(() => setDeskNote(''), 4000)
+    }
+  }
+
+  const laneCard = (title: string, rows: RadarRow[], count: number, qualityHint?: number) => (
+    <section className="radar-lane-card">
+      <header>
+        <span>{title}</span>
+        <strong>
+          {count}
+          {qualityHint != null ? ` · ${qualityHint} sniper` : ''}
+        </strong>
+      </header>
+      <ul>
+        {rows.slice(0, 6).map((item) => {
+          const thin = thinVolume(item)
+          return (
+          <li key={item.symbol}>
+            <button
+              type="button"
+              className={[selected === item.symbol ? 'active' : '', thin ? 'thin-volume' : ''].filter(Boolean).join(' ')}
+              onClick={() => setSelected(item.symbol)}
+            >
+              <b>
+                {item.symbol}
+                {item.sniper_candidate ? <em className="sniper-tag"> SNIPER</em> : null}
+                {thin ? <em className="thin-tag"> THIN VOL</em> : null}
+              </b>
+              <span>{thin ? 'No volume confirm' : (item.setup_label || item.status)}</span>
+              <small>
+                {item.sector}
+                {item.volume_ratio != null ? ` · ${Number(item.volume_ratio).toFixed(1)}×` : ''}
+                {item.rsi != null ? ` · RSI ${Math.round(Number(item.rsi))}` : ''}
+                {' · '}
+                {item.reason?.slice(0, 36) || '—'}
+              </small>
+            </button>
+          </li>
+          )
+        })}
+        {rows.length === 0 && (
+          <li className="radar-empty-li">
+            No matches yet — use Make ready / Scan now above.
+          </li>
+        )}
+      </ul>
+    </section>
+  )
+
+  const row = radar?.lanes.breakouts.find((r) => r.symbol === selected)
     || radar?.lanes.momentum.find((r) => r.symbol === selected)
     || radar?.lanes.long_term_picks.find((r) => r.symbol === selected)
 
-  const sepaCards = (radar?.best_setups || []) as RadarRow[]
-  const watchlist = ((radar?.lanes.breakouts?.length ? radar.lanes.breakouts : radar?.lanes.momentum) || []).slice(0, 6) as RadarRow[]
-
   return (
-    <section className="radar-home reco-desk">
-      <div className="rw-crumb">Home &gt; Recommendations &gt; Top Stocks</div>
+    <section className="radar-home">
       <header className="radar-hero">
         <div>
-          <span>TODAY · RECO WEALTH</span>
-          <h2>Top Stocks</h2>
-          <p>{radar?.market_health || dashboard.market.health} · {dashboard.market.summary}</p>
+          <span>MARKET DESK</span>
+          <h2>{radar?.market_health || dashboard.market.health}</h2>
+          <p>{dashboard.market.summary}</p>
         </div>
         <div className="radar-hero-actions">
+          {needsBootstrap && (
+            <button type="button" disabled={bootstrapBusy} onClick={() => void runBootstrap()}>
+              {bootstrapBusy ? 'Preparing…' : readinessScore >= 90 ? 'Refresh desk' : 'Make ready'}
+            </button>
+          )}
           <button type="button" disabled={marketScan.isBusy} onClick={() => void marketScan.start()}>
             {marketScan.isBusy
               ? `Scanning… ${marketScan.percent != null ? `${marketScan.percent}%` : ''}${marketScan.etaLine ? ` · ETA ${marketScan.etaLine}` : ''}`
@@ -261,11 +404,40 @@ export function RadarHomeView(props: ExperienceViewProps & {
           </button>
         </div>
       </header>
-      <div className="rw-delay">⚠ CMP is delayed by up to 15 minutes.</div>
-      <div className="rw-quote">
-        <div className="mark">“</div>
-        <p>The stock market is a device for transferring money from the impatient to the patient.</p>
-        <cite>— Warren Buffett</cite>
+
+      <div className={`radar-desk-strip ${kiteOk ? '' : 'desk-warn'}`}>
+        <div>
+          <span>SCAN</span>
+          <strong>{relativeAge(scanAt)}</strong>
+          <small>{scanAt ? 'signals from last scan · prices refresh live' : 'run Scan now'}</small>
+        </div>
+        <div>
+          <span>PRICE DATA</span>
+          <strong>{dashboard.data.bhavcopy.latest_date || 'MISSING'}</strong>
+          <small>{dashboard.data.ready ? 'official bhavcopy ready' : 'data incomplete'}</small>
+        </div>
+        <div>
+          <span>ZERODHA</span>
+          <strong>{kiteOk ? 'SESSION OK' : 'LOGIN NEEDED'}</strong>
+          <small>
+            {kiteOk
+              ? 'live quotes / depth available when market is open'
+              : (dashboard.autonomy.plain_state || 'python main.py login')}
+          </small>
+        </div>
+        <div>
+          <span>NEXT</span>
+          <strong>
+            {!dashboard.data.ready || readinessScore < 70
+              ? 'Make ready'
+              : !scanAt
+                ? 'Scan now'
+                : selected
+                  ? 'Check ₹ risk'
+                  : 'Pick one name'}
+          </strong>
+          <small>{deskNote || dashboard.market.trade_stance}</small>
+        </div>
       </div>
 
       <div className="radar-market-strip">
@@ -273,80 +445,89 @@ export function RadarHomeView(props: ExperienceViewProps & {
         <div><span>BREADTH</span><strong>{radar?.breadth || dashboard.market.breadth}</strong></div>
         <div><span>VIX</span><strong>{radar?.vix ?? dashboard.market.vix ?? '—'}</strong></div>
         <div><span>LEADERS</span><strong>{(radar?.leaders || dashboard.market.leaders).slice(0, 3).join(', ') || '—'}</strong></div>
-        <div><span>LAST SCAN</span><strong>{radar?.scan_scanned_at || dashboard.scan.scanned_at || 'Not run'}</strong></div>
-        <div><span>DATA</span><strong>{dashboard.data.bhavcopy.latest_date || '—'}</strong></div>
+        <div><span>SCAN AGE</span><strong>{relativeAge(scanAt)}</strong></div>
+        <div><span>STANCE</span><strong>{dashboard.market.trade_stance?.split(';')[0] || '—'}</strong></div>
       </div>
 
       <LiveScanBanner scan={marketScan} depth={depth} label="Market scan" />
+      {longTermScan.isActive || longTermScan.notice ? (
+        <LiveScanBanner scan={longTermScan} depth={depth} label="Long-term scan" />
+      ) : null}
 
-      <div className="reco-how">
-        <div className="qt-eyebrow">How to use this desk</div>
-        <ol>
-          <li><span className="k">Today</span> — SEPA-qualified Top Stocks first, then the scanner watchlist. If SEPA is empty, the scan names did not clear the Stage-2 floor.</li>
-          <li><span className="k">Setups</span> — Best Setups (SEPA), Momentum, Conviction, Long-term. Do not mix them.</li>
-          <li><span className="k">Paper Desk</span> — simulated trades. The bot learns daily. No broker orders here.</li>
-          <li><span className="k">Backtest</span> — inspect a paper loss. It does not change today’s BUY list.</li>
-        </ol>
-      </div>
+      <BestSniperPanel
+        best={radar?.best_breakout as RadarRow | null | undefined}
+        sniperCount={radar?.counts.sniper_breakouts || radar?.sniper_candidates?.length || 0}
+        onSelect={setSelected}
+      />
 
-      <div className="reco-section">
-        <div className="qt-eyebrow">Top stocks</div>
-        <h3>Best Setups · SEPA qualified <span className="rw-live">● LIVE</span></h3>
-        <p className="reco-note">{radar?.best_setups_note || 'Minervini 7-rule Stage-2 template on official NSE history. A qualify is research — not a buy order.'}</p>
-      </div>
-      <div className="reco-card-grid">
-        {sepaCards.map((item) => (
-          <RecoCard key={item.symbol} row={item} selected={selected === item.symbol} onSelect={setSelected} />
-        ))}
-      </div>
-      {!sepaCards.length && (
-        <p className="empty-row">
-          {radar?.scan_progress?.active || marketScan.isActive
-            ? `Top Stocks after this scan · ${radar?.scan_progress?.current || marketScan.operation?.progress_current || 0}/${radar?.scan_progress?.total || marketScan.operation?.progress_total || 0} · ETA ${radar?.scan_progress?.eta_label || marketScan.etaLine || 'calculating…'}`
-            : 'No SEPA-qualified names in the last scan yet. Keep autonomy running, or open Setups and queue a scan.'}
-        </p>
+      <BestAmongFundamentalsPanel
+        best={radar?.best_among_fundamentals as RadarRow | null | undefined}
+        onSelect={setSelected}
+      />
+
+      {(radar?.sniper_candidates?.length || 0) > 0 && (
+        <section className="radar-sniper-pool">
+          <header>
+            <span>SNIPER BREAKOUT CANDIDATES</span>
+            <strong>{radar?.sniper_candidates?.length}</strong>
+          </header>
+          <ul>
+            {(radar?.sniper_candidates || []).slice(0, 8).map((item) => (
+              <li key={item.symbol}>
+                <button
+                  type="button"
+                  className={selected === item.symbol ? 'active' : ''}
+                  onClick={() => setSelected(item.symbol)}
+                >
+                  <b>{item.symbol}</b>
+                  <span>
+                    {(item as RadarRow).breakout_grade ? `G${(item as RadarRow).breakout_grade}` : '—'}
+                    {item.volume_ratio != null ? ` · ${Number(item.volume_ratio).toFixed(1)}×` : ''}
+                    {(item as RadarRow).rsi != null
+                      ? ` · RSI ${Math.round(Number((item as RadarRow).rsi))}${(item as RadarRow).tech_source === 'live' || (item as RadarRow).price_tag === 'LIVE' ? ' LIVE' : ''}`
+                      : ''}
+                  </span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        </section>
       )}
 
-      <div className="reco-section">
-        <div className="qt-eyebrow">Scanner watchlist</div>
-        <h3>What the momentum scan is watching</h3>
-        <p className="reco-note">Saved whole-market scan. Not the same as SEPA-qualified Best Setups above.</p>
+      <div className="radar-three-lanes">
+        {laneCard(
+          'Breakouts',
+          radar?.lanes.breakouts || [],
+          radar?.counts.breakouts || 0,
+          radar?.counts.sniper_breakouts,
+        )}
+        {laneCard('Momentum', radar?.lanes.momentum || [], radar?.counts.momentum || 0)}
+        {laneCard('Long-Term Picks', radar?.lanes.long_term_picks || [], radar?.counts.long_term_picks || 0)}
       </div>
-      <div className="reco-card-grid">
-        {watchlist.map((item) => (
-          <RecoCard key={`watch-${item.symbol}`} row={item} selected={selected === item.symbol} onSelect={setSelected} />
-        ))}
-      </div>
-      {!watchlist.length && (
-        <p className="empty-row">
-          {radar?.scan_progress?.active || marketScan.isActive
-            ? `Watchlist after this scan · ETA ${radar?.scan_progress?.eta_label || marketScan.etaLine || 'calculating…'}`
-            : 'No saved scan yet. An empty list is not the same as “no trade today”.'}
-        </p>
-      )}
 
-      <BotLearningPanel dashboard={dashboard} />
-
-      {selected && (
-        <div className="radar-workspace">
-          <Panel title={`CHART · ${selected}`} subtitle={`Official history · ${dashboard.data.bhavcopy.latest_date || '—'}`}>
-            <ChartWorkspace symbol={selected} bars={bars} row={row} />
-          </Panel>
-          <Panel title="DECISION PREVIEW">
+      <div className="radar-workspace">
+        <Panel title={`CHART · ${selected || 'SELECT STOCK'}`} subtitle={`Official history · ${dashboard.data.bhavcopy.latest_date || '—'}`}>
+          <ChartWorkspace symbol={selected} bars={bars} row={row} />
+        </Panel>
+        <Panel title="DECISION PREVIEW" subtitle="Risk before reward · read-only">
+          {selected ? (
             <div className="radar-decision-preview">
-              <p><strong>{(row as RadarRow)?.reason || plan?.summary || 'Select a stock from a card above.'}</strong></p>
+              <p><strong>{(row as RadarRow)?.reason || plan?.summary || 'Select a stock from a lane above.'}</strong></p>
               {plan?.entry != null && <div>Entry zone: {money(plan.entry)}</div>}
               {plan?.stop != null && <div>Invalidation: {money(plan.stop)}</div>}
               {plan?.target != null && <div>Target: {money(plan.target)}</div>}
+              <RiskLensCard plan={plan} />
               <div className="radar-action-row">
-                <button type="button" onClick={() => setActive('Desk')}>Open on Desk</button>
+                <button type="button" onClick={() => setActive('Stock Intelligence')}>Full research</button>
                 <button type="button" onClick={() => onCompare(selected)}>Compare</button>
                 <button type="button" onClick={() => onWatchlist(selected)}>Watchlist</button>
               </div>
             </div>
-          </Panel>
-        </div>
-      )}
+          ) : (
+            <p className="radar-empty-li">Pick one name above — then check ₹ risk here before opening research.</p>
+          )}
+        </Panel>
+      </div>
     </section>
   )
 }
@@ -395,12 +576,14 @@ export function MarketScannerView(props: ExperienceViewProps & { onCompare: (sym
     <section className="market-scanner">
       <header className="scanner-command-bar">
         <div>
-          <span>SETUPS · RECO WEALTH</span>
-          <h2>Recommendations</h2>
+          <span>MARKET SCANNER</span>
+          <h2>Breakouts, momentum, SEPA and long-term</h2>
           <p>{filtered.length} matches · universe {meta.universe.toLocaleString('en-IN')} · scan {meta.scanned_at || '—'}</p>
         </div>
         <button type="button" disabled={activeScan.isBusy} onClick={() => void activeScan.start()}>
-          {activeScan.isBusy ? 'Scanning…' : tab === 'Long-Term' ? 'Run long-term scan' : 'Scan now'}
+          {activeScan.isBusy
+              ? `Scanning… ${activeScan.percent != null ? `${activeScan.percent}%` : ''}${activeScan.etaLine ? ` · ETA ${activeScan.etaLine}` : ''}`
+              : tab === 'Long-Term' ? 'Run long-term scan' : 'Scan now'}
         </button>
       </header>
 
