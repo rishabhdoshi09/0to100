@@ -92,4 +92,7 @@ def test_help_explains_backtest_after_paper_loss():
     assert "does not change today's BUY list" in src
     home = (ROOT / "ui" / "retail_home_momentum.py").read_text(encoding="utf-8")
     assert "render_today_board" in home
-    assert "render_how_the_desk_works" in home
+    assert "render_sepa_best_setups" in home
+    pages = (ROOT / "ui" / "desk_pages.py").read_text(encoding="utf-8")
+    assert "Best Setups" in pages
+    assert "render_sepa_setups" in pages

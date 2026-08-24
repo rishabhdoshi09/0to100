@@ -17,13 +17,18 @@ from product.paper_lessons import (
 from product.scan_store import load_scan, scan_age_hours, watchlist_rows
 
 HOW_THE_DESK_WORKS = (
-    "Today shows the saved market scan. Paper Desk lets the system take "
-    "simulated trades. After a paper loss, Backtest is how you decide whether "
-    "that style of trade deserves another attempt — not more sidebar clicking."
+    "Today shows SEPA-qualified Best Setups from the last scan, then the "
+    "scanner watchlist. Paper Desk takes simulated trades. After a paper loss, "
+    "Backtest is how you decide whether that style deserves another attempt."
 )
 
 
 def setup_badge(row: Mapping[str, Any]) -> tuple[str, str]:
+    sepa_verdict = str(row.get("sepa_verdict") or "").upper()
+    if sepa_verdict == "STRONG":
+        return "SEPA qualified", "buy"
+    if sepa_verdict == "CONSTRUCTIVE":
+        return "Setup forming", "watch"
     status = str(row.get("status") or "")
     if status == "Ready to trade":
         return "Buy Setup", "buy"
@@ -47,6 +52,9 @@ def reco_card_html(row: Mapping[str, Any]) -> str:
     badge, kind = setup_badge(row)
     risk = entry - stop if entry and stop and entry > stop else 0.0
     rr = ((target - entry) / risk) if risk > 0 and target else 0.0
+    sepa_score = row.get("sepa_score")
+    sepa_passed = row.get("sepa_passed")
+    sepa_total = row.get("sepa_total")
     if entry and stop:
         levels = (
             f"Entry ₹{entry:,.0f}  ·  Stop ₹{stop:,.0f}  ·  "
@@ -54,6 +62,11 @@ def reco_card_html(row: Mapping[str, Any]) -> str:
         )
     else:
         levels = str(row.get("status") or "Watch")
+    if sepa_score is not None:
+        extra = f"SEPA {int(sepa_score)}/100"
+        if sepa_passed is not None and sepa_total:
+            extra += f"  ·  {int(sepa_passed)}/{int(sepa_total)} rules"
+        levels = f"{extra}  ·  {levels}" if levels else extra
     price_html = f"₹{price:,.2f}" if price else "Price n/a"
     why_html = f"<div class='why'>{why}</div>" if why else ""
     return (
@@ -71,6 +84,81 @@ def _money(value: float) -> str:
     return f"₹{float(value):,.0f}"
 
 
+def sepa_card_row(sepa: Mapping[str, Any], scan_row: Mapping[str, Any]) -> dict[str, Any]:
+    """Merge a SEPA score onto a scan row for Reco cards. Display only."""
+    from product.sepa_setup import sepa_card_fields
+
+    card = dict(scan_row)
+    card.update(sepa_card_fields(sepa))
+    quote = dict(sepa.get("quote") or {})
+    if quote.get("close") and not card.get("price"):
+        card["price"] = quote.get("close")
+    return card
+
+
+def rank_sepa_from_scan(
+    payload: Mapping[str, Any] | None,
+    *,
+    limit: int = 8,
+    score_cap: int = 24,
+    max_seconds: float = 8.0,
+    min_score: int = 40,
+) -> tuple[list[dict[str, Any]], str]:
+    """Best Setups from the saved scan. Never starts a scanner."""
+    from product.sepa_setup import rank_best_setups
+
+    records = list((payload or {}).get("records") or [])
+    if not records:
+        return [], "No saved scan yet — SEPA ranking needs the last whole-market scan."
+    cache_key = f"{payload.get('scanned_at')}:{limit}:{score_cap}:{min_score}"
+    ranked, note = rank_best_setups(
+        records,
+        limit=limit,
+        score_cap=score_cap,
+        min_score=min_score,
+        max_seconds=max_seconds,
+        cache_key=cache_key,
+    )
+    cards = [sepa_card_row(sepa, row) for sepa, row in ranked]
+    return cards, note
+
+
+def render_sepa_best_setups(
+    *,
+    scan_payload: Mapping[str, Any] | None = None,
+    limit: int = 8,
+    score_cap: int = 24,
+    max_seconds: float = 8.0,
+    heading: str = "Best Setups · SEPA qualified",
+) -> None:
+    """Reco cards for Minervini Stage-2 names. Research overlay, not a buy list."""
+    import streamlit as st
+
+    payload = dict(scan_payload) if scan_payload is not None else load_scan()
+    st.markdown(
+        "<div class='qt-section'><div class='qt-eyebrow'>Top stocks</div>"
+        f"<div class='t'>{escape(heading)}</div>"
+        "<div class='s'>Minervini 7-rule Stage-2 template on official NSE history. "
+        "A qualify is research — it does not change today's BUY list or paper autopilot.</div></div>",
+        unsafe_allow_html=True,
+    )
+    if not payload or not payload.get("records"):
+        st.info("No saved scan yet. Keep autonomy running, or open Setups → Momentum and queue a scan. "
+                "SEPA ranking cannot run without that list.")
+        return
+    with st.spinner("Ranking last-scan names on the SEPA template…"):
+        cards, note = rank_sepa_from_scan(
+            payload, limit=limit, score_cap=score_cap, max_seconds=max_seconds,
+        )
+    st.caption(note)
+    if not cards:
+        return
+    cols = st.columns(2)
+    for idx, row in enumerate(cards):
+        with cols[idx % 2]:
+            st.markdown(reco_card_html(row), unsafe_allow_html=True)
+
+
 def render_today_board(*, scan_payload: Mapping[str, Any] | None = None, limit: int = 6) -> None:
     """Today's Reco cards from the saved scan. Optional payload is for tests/callers."""
     import streamlit as st
@@ -78,9 +166,9 @@ def render_today_board(*, scan_payload: Mapping[str, Any] | None = None, limit: 
     payload = dict(scan_payload) if scan_payload is not None else load_scan()
     rows = watchlist_rows(payload, limit=limit)
     st.markdown(
-        "<div class='qt-section'><div class='qt-eyebrow'>Today's setups</div>"
-        "<div class='t'>What the desk is watching</div>"
-        "<div class='s'>Saved whole-market scan. Autonomy runs the scan; this page only reads it.</div></div>",
+        "<div class='qt-section'><div class='qt-eyebrow'>Scanner watchlist</div>"
+        "<div class='t'>What the momentum scan is watching</div>"
+        "<div class='s'>Saved whole-market scan. Not the same as SEPA-qualified Best Setups above.</div></div>",
         unsafe_allow_html=True,
     )
     if not rows:
@@ -129,10 +217,9 @@ def render_how_the_desk_works() -> None:
     st.markdown(
         "<div class='reco-how'><div class='qt-eyebrow'>How to use this desk</div>"
         "<ol>"
-        "<li><span class='k'>Today</span> — market condition and today's setups. If the list is empty, "
-        "the scan has not run yet. If setups exist but Paper takes nothing, that is a no-trade day.</li>"
-        "<li><span class='k'>Setups</span> — Momentum for today, Conviction for extra confirmation, "
-        "Long-term for weeks-to-months. Do not mix them.</li>"
+        "<li><span class='k'>Today</span> — SEPA-qualified Best Setups first, then the scanner watchlist. "
+        "If SEPA is empty, the scan names did not clear the Stage-2 floor — that is not 'no scan yet'.</li>"
+        "<li><span class='k'>Setups</span> — Best Setups (SEPA), Momentum, Conviction, Long-term. Do not mix them.</li>"
         "<li><span class='k'>Paper Desk</span> — the system takes simulated trades. You enable, pause, "
         "and review. You do not click broker orders here.</li>"
         "<li><span class='k'>Backtest</span> — after a paper loss, test that stock on past data. "

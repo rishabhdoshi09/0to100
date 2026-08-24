@@ -334,8 +334,8 @@ def render_help() -> None:
     st.markdown("""
 ### The desk, in order
 1. Connect Zerodha once a day. Market data is owned by the autonomy service.
-2. **Today** — market condition and today's setups from the saved scan.
-3. **Setups** — Momentum for today, Conviction for extra confirmation, Long-term for weeks-to-months.
+2. **Today** — SEPA-qualified Best Setups first, then the scanner watchlist.
+3. **Setups** — Best Setups (SEPA), Momentum, Conviction, Long-term.
 4. **Paper Desk** — enable once. QuantTerm takes, manages and closes simulated trades. You do not place broker orders here.
 5. **Backtest** — after a paper loss, test that stock on past data. A backtest does not change today's BUY list, ranking, or paper autopilot.
 6. **Portfolio** — holdings and P&L. **Desk** holds Market, News, Data, Alerts, Settings, and the lab.

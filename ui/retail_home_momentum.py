@@ -64,6 +64,7 @@ def render_home() -> None:
         render_how_the_desk_works,
         render_market_strip,
         render_paper_loss_followup,
+        render_sepa_best_setups,
         render_today_board,
     )
 
@@ -110,6 +111,7 @@ def render_home() -> None:
     render_how_the_desk_works()
     render_market_strip()
     payload = load_scan()
+    render_sepa_best_setups(scan_payload=payload, limit=8, score_cap=24, max_seconds=8.0)
     render_today_board(scan_payload=payload, limit=6)
     rows = watchlist_rows(payload, limit=8)
     if rows:

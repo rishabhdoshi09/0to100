@@ -21,14 +21,35 @@ from ui.retail_pages_v2 import (
 )
 
 
+def render_sepa_setups() -> None:
+    from ui.desk_board import render_sepa_best_setups
+    from product.scan_store import load_scan
+
+    st.caption(
+        "Best Setups ranks the last scan on Minervini's 7-rule Stage-2 template "
+        "(near 52-week highs, rising 200-DMA). This does not change paper or live orders."
+    )
+    render_sepa_best_setups(
+        scan_payload=load_scan(),
+        limit=24,
+        score_cap=80,
+        max_seconds=20.0,
+        heading="Best Setups · SEPA qualified",
+    )
+
+
 def render_setups() -> None:
     st.markdown("<div class='qt-eyebrow'>Trade ideas</div>", unsafe_allow_html=True)
     st.title("Setups")
     st.caption(
-        "Three lists, three jobs. Momentum is for today's tape. Conviction needs extra "
-        "confirmation. Long-term is weeks-to-months — not a day trade."
+        "Four lists, four jobs. Best Setups is SEPA-qualified Stage-2. Momentum is today's tape. "
+        "Conviction needs extra confirmation. Long-term is weeks-to-months — not a day trade."
     )
-    momentum, conviction, long_term = st.tabs(["Momentum", "Conviction", "Long-term"])
+    sepa, momentum, conviction, long_term = st.tabs(
+        ["Best Setups", "Momentum", "Conviction", "Long-term"]
+    )
+    with sepa:
+        render_sepa_setups()
     with momentum:
         render_momentum()
     with conviction:
