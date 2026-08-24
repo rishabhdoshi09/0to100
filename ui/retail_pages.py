@@ -332,15 +332,19 @@ def render_settings() -> None:
 def render_help() -> None:
     st.title("Help")
     st.markdown("""
-### The simple workflow
-1. Log in to Zerodha once each day.
-2. Open **Data and Zerodha** and update market data.
-3. Use **Momentum Stocks** or **Backtest** while the market is closed.
-4. Enable **Automatic Paper Trading** once.
-5. QuantTerm takes, manages and closes qualified paper trades without per-trade approval.
+### The desk, in order
+1. Connect Zerodha once a day. Market data is owned by the autonomy service.
+2. **Today** — market condition and today's setups from the saved scan.
+3. **Setups** — Momentum for today, Conviction for extra confirmation, Long-term for weeks-to-months.
+4. **Paper Desk** — enable once. QuantTerm takes, manages and closes simulated trades. You do not place broker orders here.
+5. **Backtest** — after a paper loss, test that stock on past data. A backtest does not change today's BUY list, ranking, or paper autopilot.
+6. **Portfolio** — holdings and P&L. **Desk** holds Market, News, Data, Alerts, Settings, and the lab.
+
+### After a paper loss
+Open Backtest with that stock. If the style lost historically after costs, do not keep repeating it in size. If it historically paid, keep risk small — one loss is one outcome.
 
 ### Important
-A day with no trade is not a failure. It means no setup passed the evidence and safety checks.
+A day with no trade is not a failure. It means no setup passed the evidence and safety checks. An empty scan list means the scan has not run yet — that is different from a no-trade day.
 """)
 
 

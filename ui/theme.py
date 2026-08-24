@@ -27,6 +27,7 @@ CYAN, WHITE, NAVY, CARD = ACCENT, TEXT, BASE, PANEL
 
 DEVBLOOM_CSS = """
 <style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;600;700&display=swap');
 :root{
   --qt-accent:#38bdf8; --qt-teal:#2dd4bf; --qt-green:#34d399; --qt-red:#fb7185;
   --qt-amber:#fbbf24; --qt-text:#e6e9ef; --qt-muted:#8b94a7; --qt-dim:#525c6e;
@@ -181,6 +182,52 @@ hr, [data-testid="stDivider"]{ border-color: var(--qt-border) !important; opacit
 .palette-item:hover,.palette-item.active{ background:rgba(56,189,248,0.08); color:var(--qt-accent); }
 .palette-item .badge{ font-size:.65rem; padding:.15rem .4rem; border-radius:4px;
   background:rgba(56,189,248,0.12); color:var(--qt-accent); flex-shrink:0; }
+
+/* ─── Sidebar brand + Reco desk nav ───────────────────────── */
+[data-testid="stSidebar"] > div:first-child::before{
+  content:"QUANTTERM  ·  NSE DESK";
+  display:block; font-family:'JetBrains Mono',monospace;
+  font-size:.62rem; letter-spacing:.18em; color:var(--qt-dim);
+  padding:1.05rem 1.05rem .15rem; font-weight:700;
+}
+[data-testid="stSidebarNav"] ul{ padding-top:.35rem; }
+[data-testid="stSidebarNav"] li a{
+  border-radius:10px !important; padding:.45rem .7rem !important;
+  font-weight:600 !important; letter-spacing:.01em;
+}
+[data-testid="stSidebarNav"] li a[aria-current="page"]{
+  background:rgba(56,189,248,0.12) !important; color:var(--qt-accent) !important;
+}
+section[data-testid="stSidebar"] [data-testid="stSidebarNavSeparator"]{ display:none; }
+
+/* ─── Reco / Moneycontrol setup cards ─────────────────────── */
+.reco-strip{
+  background:rgba(13,20,33,.92); border:1px solid var(--qt-border);
+  border-radius:12px; padding:.85rem 1.1rem; margin-bottom:.9rem;
+}
+.reco-card{
+  background:rgba(13,20,33,.92); border:1px solid #1e293b;
+  border-radius:12px; padding:1.05rem 1.2rem; margin-bottom:.75rem;
+}
+.reco-card .row{ display:flex; justify-content:space-between; align-items:center; }
+.reco-card .sym{ font-family:'JetBrains Mono',monospace; font-weight:700;
+  font-size:1.02rem; color:var(--qt-text); }
+.reco-card .co{ font-size:.72rem; color:var(--qt-muted); margin-top:.12rem; }
+.reco-card .px{ font-size:.9rem; font-weight:650; color:var(--qt-text); margin:.35rem 0 .2rem; }
+.reco-card .lv{ font-size:.75rem; color:var(--qt-muted); font-family:'JetBrains Mono',monospace; }
+.reco-card .why{ font-size:.78rem; color:#c9d1d9; margin-top:.4rem; line-height:1.35; }
+.reco-badge{ font-size:.8rem; font-weight:750; }
+.reco-badge.buy{ color:var(--qt-green); }
+.reco-badge.watch{ color:var(--qt-amber); }
+.reco-badge.wait{ color:#fb923c; }
+.reco-badge.avoid{ color:var(--qt-red); }
+.reco-how{
+  background:rgba(56,189,248,0.06); border:1px solid rgba(56,189,248,0.18);
+  border-radius:12px; padding:1rem 1.15rem; margin:1rem 0 1.2rem;
+}
+.reco-how ol{ margin:.35rem 0 0 1.1rem; padding:0; color:var(--qt-text); }
+.reco-how li{ margin:.22rem 0; font-size:.88rem; line-height:1.4; }
+.reco-how .k{ color:var(--qt-accent); font-weight:700; }
 
 /* scrollbars */
 ::-webkit-scrollbar{ width:7px; height:7px; }

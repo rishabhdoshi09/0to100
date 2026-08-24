@@ -60,11 +60,19 @@ def _watchlist_frame(rows: list[dict]) -> pd.DataFrame:
 
 
 def render_home() -> None:
+    from ui.desk_board import (
+        render_how_the_desk_works,
+        render_market_strip,
+        render_paper_loss_followup,
+        render_today_board,
+    )
+
     inputs = gather_product_inputs()
     _maybe_auto_activate(inputs)
     state = build_product_state(inputs)
 
-    st.title("QuantTerm")
+    st.markdown("<div class='qt-eyebrow'>QuantTerm  ·  NSE desk</div>", unsafe_allow_html=True)
+    st.title("Today")
     st.subheader(state.headline)
     st.caption(state.readiness)
     st.write(state.activity)
@@ -74,7 +82,7 @@ def render_home() -> None:
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Zerodha", "Connected" if inputs.kite_connected else "Login needed")
     c2.metric("Market data", "Ready" if inputs.data_ready else "Not ready", inputs.latest_market_date or None)
-    c3.metric("Automatic paper trading", "ON" if inputs.paper_auto_enabled else "OFF")
+    c3.metric("Paper trading", "ON" if inputs.paper_auto_enabled else "OFF")
     c4.metric("Open paper positions", inputs.open_positions)
 
     if state.primary_key == "connect":
@@ -95,25 +103,29 @@ def render_home() -> None:
     elif state.primary_key == "start_worker":
         st.warning("The autonomy service is not running. Start `python main.py autonomy` or the installed service.")
     elif state.primary_key == "backtest":
-        st.success("Research mode is ready. Open Backtest or Momentum Stocks from the sidebar.")
+        st.success("Research mode is ready. Open Backtest from the sidebar — that is how paper losses become better next trades.")
     else:
         st.success(state.primary_action)
 
+    render_how_the_desk_works()
+    render_market_strip()
     payload = load_scan()
-    st.divider()
-    st.subheader("Tomorrow's watchlist")
+    render_today_board(scan_payload=payload, limit=6)
     rows = watchlist_rows(payload, limit=8)
     if rows:
-        age = scan_age_hours(payload)
-        st.caption(f"From the saved whole-market scan" + (f" · {age:.1f} hours old" if age is not None else ""))
-        st.dataframe(_watchlist_frame(rows), hide_index=True, width="stretch")
-    else:
-        st.info("No saved scan yet. Open Momentum Stocks and run the first whole-market scan.")
+        with st.expander("Watchlist table"):
+            st.dataframe(_watchlist_frame(rows), hide_index=True, width="stretch")
+
+    try:
+        from product.paper_status import read_paper_status
+        render_paper_loss_followup(read_paper_status().closed_trades)
+    except Exception:
+        pass
 
     if not inputs.market_open:
         st.divider()
-        st.subheader("Useful after-market work")
-        st.write("Run a backtest · Prepare tomorrow's watchlist · Review paper trades · Check market condition")
+        st.subheader("After the close")
+        st.write("1. Review Paper Desk losses.  2. Open Backtest on those names.  3. Keep tomorrow's watchlist — do not chase.")
 
 
 def _run_and_save_momentum() -> dict:

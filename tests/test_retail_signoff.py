@@ -104,7 +104,9 @@ def test_retail_home_is_default_route():
     from pathlib import Path
     src = Path(__file__).resolve().parents[1].joinpath("app.py").read_text(encoding="utf-8")
     assert "st.Page(render_home" in src and "default=True" in src
-    assert '"Everyday"' in src and "render_advanced" in src
+    assert 'title="Today"' in src and "DEVBLOOM_CSS" in src
+    assert "render_desk_backtest" in src
+    assert '"Everyday"' not in src
 
 
 # ── 3: advanced view remains reachable ───────────────────────────────────────────
@@ -248,6 +250,7 @@ def test_repeated_evaluation_is_stable():
 def test_no_broker_order_in_retail_paths():
     mods = ["ui.retail_pages_v2", "ui.retail_home_momentum", "ui.retail_trade_market",
             "ui.retail_backtest_data", "ui.retail_pages", "ui.fno_momentum_page",
+            "ui.desk_board", "ui.desk_pages", "product.paper_lessons",
             "product.projection", "product.gather", "product.no_trade", "product.market_view",
             "product.scan_store", "product.retail_backtest", "product.runtime", "data.fno_universe"]
     banned = ("place_order", "place_gtt", "modify_order", "cancel_order", "cancel_gtt")

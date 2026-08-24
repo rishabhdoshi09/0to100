@@ -22,8 +22,9 @@ def render_paper_trading() -> None:
     owner = dict(autonomy.get("owner_state", {}))
     paused = bool(owner.get("new_entries_paused", False))
 
-    st.title("Automatic Paper Trading")
-    st.info("The autonomy service takes and manages simulated trades. This page only reads state and queues owner controls.")
+    st.markdown("<div class='qt-eyebrow'>Simulated book  ·  no broker orders</div>", unsafe_allow_html=True)
+    st.title("Paper Desk")
+    st.info("The autonomy service takes and manages simulated trades. This page only reads state and queues owner controls. After a closed loss, use Backtest — do not increase size because a name feels right.")
     status = ("PAUSED" if paused else ("RUNNING" if paper.enabled and paper.supervisor_running
               else ("READY FOR SUPERVISOR" if paper.enabled else "OFF")))
     c1, c2, c3, c4 = st.columns(4)
@@ -59,6 +60,9 @@ def render_paper_trading() -> None:
     else:
         st.info("No open paper positions.")
 
+    from ui.desk_board import render_paper_loss_followup
+    render_paper_loss_followup(paper.closed_trades)
+
     st.subheader("Why no new trade?")
     explanation = build_no_trade_explanation(
         load_scan(), list(paper.refusals)[-200:], paper.last_cycle or {}, len(paper.open_positions)
@@ -72,11 +76,11 @@ def render_paper_trading() -> None:
         st.caption("Most common final safety refusals")
         st.dataframe(pd.DataFrame(explanation.top_reasons, columns=["Reason", "Count"]), hide_index=True)
 
-    with st.expander("Recent closed paper trades"):
-        if paper.closed_trades:
-            st.dataframe(pd.DataFrame(list(paper.closed_trades)[-50:]), hide_index=True, width="stretch")
-        else:
-            st.caption("No paper trades have closed yet.")
+    st.subheader("Recent closed paper trades")
+    if paper.closed_trades:
+        st.dataframe(pd.DataFrame(list(paper.closed_trades)[-50:]), hide_index=True, width="stretch")
+    else:
+        st.caption("No paper trades have closed yet. A quiet book is not a failure.")
 
 
 def render_market() -> None:
