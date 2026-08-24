@@ -318,7 +318,13 @@ class Supervisor:
         symbols = set()
         try:
             from product.scan_store import load_scan, watchlist_rows
-            symbols |= {str(r.get("symbol", "")).upper() for r in watchlist_rows(load_scan(), limit=60)}
+            payload = load_scan()
+            symbols |= {str(r.get("symbol", "")).upper() for r in watchlist_rows(payload, limit=60)}
+            try:
+                from research.autonomy.telegram_notifications import sniper_symbols
+                symbols |= sniper_symbols(payload)
+            except Exception:
+                pass
         except Exception:
             pass
         try:

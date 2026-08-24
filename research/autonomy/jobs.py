@@ -176,7 +176,11 @@ class Deps:
     def observe_live_breakouts(self):
         try:
             from product.scan_store import load_scan
-            return self.telegram.observe_live_breakouts(load_scan(), self.live_feed)
+            out = self.telegram.observe_live_breakouts(load_scan(), self.live_feed) or {}
+            confirmed = int(out.get("confirmed") or 0)
+            if confirmed > 0:
+                print(f"[SNIPER] Telegram sent {confirmed} breakout alert(s)", flush=True)
+            return out
         except Exception:
             return {"confirmed": 0}
 

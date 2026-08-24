@@ -21,6 +21,55 @@ try:
 except Exception:  # pragma: no cover
     _IST = None
 
+# Same quality floor as scan/breakout_sniper: do not Telegram a chase or blow-off.
+_SNIPER_RSI_BLOWOFF = 82.0
+
+
+def is_sniper_watch(row: Mapping[str, Any] | None) -> bool:
+    """True if this scan row is a live sniper candidate for Telegram."""
+    if not row:
+        return False
+    if bool(row.get("chase_risk")):
+        return False
+    try:
+        rsi = float(row.get("rsi") or 0.0)
+    except (TypeError, ValueError):
+        rsi = 0.0
+    if rsi >= _SNIPER_RSI_BLOWOFF:
+        return False
+    try:
+        entry = float(row.get("entry") or 0.0)
+    except (TypeError, ValueError):
+        entry = 0.0
+    if entry <= 0:
+        return False
+    status = str(row.get("status") or "")
+    signals = [str(x).upper() for x in (row.get("signals") or [])]
+    categories = [str(x) for x in (row.get("categories") or [])]
+    if status in ("Watch for breakout", "Ready to trade"):
+        return True
+    if "PRE_BREAKOUT" in signals:
+        return True
+    if "PreBreakout" in categories:
+        try:
+            dist = float(row.get("pivot_distance_pct") or 99.0)
+        except (TypeError, ValueError):
+            dist = 99.0
+        if 0 < dist <= 2.5:
+            return True
+    return False
+
+
+def sniper_symbols(payload: Mapping[str, Any] | None) -> set[str]:
+    out: set[str] = set()
+    for row in (payload or {}).get("records") or []:
+        if not isinstance(row, Mapping) or not is_sniper_watch(row):
+            continue
+        symbol = str(row.get("symbol") or "").upper()
+        if symbol:
+            out.add(symbol)
+    return out
+
 
 class TelegramNotifier:
     """Durable, restart-safe Telegram notifier owned by the autonomy process."""
@@ -309,10 +358,7 @@ class TelegramNotifier:
             entry = self._f(r.get("entry"))
             if not sym or entry <= 0:
                 continue
-            signals = [str(x).upper() for x in (r.get("signals") or [])]
-            relevant = (str(r.get("status", "")) in ("Watch for breakout", "Ready to trade")
-                        or "PRE_BREAKOUT" in signals)
-            if not relevant:
+            if not is_sniper_watch(r):
                 continue
             try:
                 fresh = bool(live_feed.entry_allowed(sym))
@@ -339,7 +385,7 @@ class TelegramNotifier:
             return {"confirmed": 0}
         confirmed.sort(key=lambda x: (-self._f(x[0].get("score")), str(x[0].get("symbol", ""))))
         confirmed = confirmed[:5]
-        lines = ["🚨 <b>BREAKOUT CONFIRMED — fresh Kite ticks</b>"]
+        lines = ["🚨 <b>SNIPER BREAKOUT CONFIRMED — live ticks</b>"]
         keys = []
         for r, price in confirmed:
             sym = str(r.get("symbol", "")).upper()

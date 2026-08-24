@@ -79,12 +79,18 @@ def run_supervisor(*, root=None, interval_s: float = 15.0, max_iterations=None) 
         )
         return 1
 
+    telegram_ok = False
+    try:
+        telegram_ok = bool(sup.deps.telegram.configured())
+    except Exception:
+        telegram_ok = False
     print(
         "\n=== QuantTerm Autonomy Supervisor ===\n"
         f"PID       : {os.getpid()}\n"
         f"Root      : {sup.root}\n"
         f"Interval  : {float(interval_s):.1f}s\n"
         "Mode      : PAPER only · LIVE broker orders locked\n"
+        f"Telegram  : {'ON · sniper breakouts + scan alerts' if telegram_ok else 'OFF · set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID in .env'}\n"
         "Console   : heartbeat every 30s + every completed job\n"
         "Stop      : Ctrl-C\n",
         flush=True,

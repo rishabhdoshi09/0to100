@@ -81,10 +81,38 @@ def test_live_breakout_requires_hold_and_sends_once(tmp_path):
     assert n.observe_live_breakouts(payload, live)["confirmed"] == 0
     epoch[0] += 9
     assert n.observe_live_breakouts(payload, live)["confirmed"] == 1
-    assert "BREAKOUT CONFIRMED" in engine.messages[-1][0]
+    assert "SNIPER BREAKOUT CONFIRMED" in engine.messages[-1][0]
     assert "BBB" in engine.messages[-1][0]
     epoch[0] += 20
     assert n.observe_live_breakouts(payload, live)["confirmed"] == 0
+
+
+def test_sniper_skips_chase_and_blowoff(tmp_path):
+    from research.autonomy.telegram_notifications import is_sniper_watch
+    assert is_sniper_watch({"symbol": "AAA", "status": "Watch for breakout",
+                            "entry": 100, "rsi": 60, "chase_risk": False}) is True
+    assert is_sniper_watch({"symbol": "BBB", "status": "Watch for breakout",
+                            "entry": 100, "rsi": 60, "chase_risk": True}) is False
+    assert is_sniper_watch({"symbol": "CCC", "status": "Watch for breakout",
+                            "entry": 100, "rsi": 88, "chase_risk": False}) is False
+    engine = FakeEngine()
+    epoch = [1000.0]
+    n = TelegramNotifier(
+        tmp_path,
+        engine_factory=lambda: engine,
+        now_fn=lambda: datetime(2026, 7, 31, 10, 15),
+        epoch_fn=lambda: epoch[0],
+        breakout_confirmation_s=8,
+    )
+    payload = {"records": [
+        {"symbol": "CHASE", "status": "Watch for breakout", "entry": 100,
+         "score": 90, "rsi": 60, "chase_risk": True, "signals": ["PRE_BREAKOUT"]},
+    ]}
+    live = FakeLive(price=102, fresh=True)
+    assert n.observe_live_breakouts(payload, live)["confirmed"] == 0
+    epoch[0] += 9
+    assert n.observe_live_breakouts(payload, live)["confirmed"] == 0
+    assert engine.messages == []
 
 
 def test_paper_open_and_close_alerts_include_ledger_truth(tmp_path):
