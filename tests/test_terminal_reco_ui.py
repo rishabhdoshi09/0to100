@@ -68,8 +68,11 @@ def test_recommendations_are_exclusive_decision_cards():
     assert "Wealth Builders" in src or "wealth_builders" in src
     assert "See evidence" in src
     assert "Key points" in src
+    assert "reco-pick-together" in src
     assert "key_points" in src
     assert "Full research" in src
+    css = (ROOT / "frontend" / "src" / "recommendations.css").read_text(encoding="utf-8")
+    assert ".reco-pick-together" in css
     py = (ROOT / "product" / "recommendations_workspace.py").read_text(encoding="utf-8")
     assert "wealth_builders" in py
     assert "recovery_setups" in py

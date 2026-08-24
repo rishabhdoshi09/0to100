@@ -82,25 +82,30 @@ function CardTile({
             {card.risk_tier} Risk
           </span>
         </div>
-        <h3 className="reco-pick-name">{card.company || card.symbol}</h3>
-        <div className="reco-pick-sub">
-          <span>{card.symbol}</span>
-          <span className="reco-tag">{card.category_label}</span>
-          {card.horizon ? <span>{card.horizon}</span> : null}
-          {card.price_tag ? <span>{card.price_tag}</span> : null}
-        </div>
-        {points.length > 0 ? (
-          <div className="reco-key-points">
-            <span>Key points</span>
-            <ul>
-              {points.slice(0, 4).map((item) => (
-                <li key={item}>{item}</li>
-              ))}
-            </ul>
+        <div className="reco-pick-together">
+          <div className="reco-pick-identity">
+            <h3 className="reco-pick-name">{card.company || card.symbol}</h3>
+            <div className="reco-pick-sub">
+              <span>{card.symbol}</span>
+              <span className="reco-tag">{card.category_label}</span>
+              {card.horizon ? <span>{card.horizon}</span> : null}
+              {card.price_tag ? <span>{card.price_tag}</span> : null}
+            </div>
+            {card.setup_label ? <p className="reco-pick-setup">{card.setup_label}</p> : null}
           </div>
-        ) : (
-          why ? <p className="reco-pick-note">{why}</p> : null
-        )}
+          {points.length > 0 ? (
+            <div className="reco-key-points">
+              <span>Key points</span>
+              <ul>
+                {points.slice(0, 5).map((item) => (
+                  <li key={item}>{item}</li>
+                ))}
+              </ul>
+            </div>
+          ) : (
+            why ? <p className="reco-pick-note">{why}</p> : <p className="reco-pick-note">No key points on this snapshot.</p>
+          )}
+        </div>
         <div className="reco-pick-kpis">
           <div>
             <span>{zone.label}</span>
@@ -197,18 +202,30 @@ function DecisionSheet({
         <span>›</span>
         <strong>{card.symbol}</strong>
       </nav>
-      <header className="reco-sheet-hero">
-        <div className="reco-pick-row1">
-          <span className={`reco-buy ${badgeClass(card.action_badge)}`}>{card.action_badge}</span>
-          <span className="reco-opp">{card.opportunity_label || 'WATCH'}</span>
-          <span className={`reco-risk-chip ${risk}`}>{card.risk_tier} Risk</span>
+      <header className="reco-sheet-hero reco-pick-together">
+        <div className="reco-pick-identity">
+          <div className="reco-pick-row1">
+            <span className={`reco-buy ${badgeClass(card.action_badge)}`}>{card.action_badge}</span>
+            <span className="reco-opp">{card.opportunity_label || 'WATCH'}</span>
+            <span className={`reco-risk-chip ${risk}`}>{card.risk_tier} Risk</span>
+          </div>
+          <h2>{card.company || card.symbol}</h2>
+          <p>
+            {card.symbol}
+            {card.sector && card.sector !== '—' ? ` · ${card.sector}` : ''}
+            {card.horizon ? ` · Horizon ${card.horizon}` : ''}
+          </p>
         </div>
-        <h2>{card.company || card.symbol}</h2>
-        <p>
-          {card.symbol}
-          {card.sector && card.sector !== '—' ? ` · ${card.sector}` : ''}
-          {card.horizon ? ` · Horizon ${card.horizon}` : ''}
-        </p>
+        {points.length > 0 ? (
+          <div className="reco-key-points">
+            <span>Key points</span>
+            <ul>
+              {points.slice(0, 5).map((item) => (
+                <li key={item}>{item}</li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
       </header>
       <div className="reco-sheet-kpis">
         <div>

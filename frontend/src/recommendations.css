@@ -156,7 +156,39 @@
 
 .reco-card-stack {
   display: flex; flex-direction: column; gap: 12px;
-  max-width: 720px;
+  max-width: 880px;
+}
+.reco-pick {
+  width: 100%; text-align: left;
+  border: 1px solid var(--rw-line);
+  border-radius: var(--rw-radius);
+  background: var(--rw-surface);
+  box-shadow: var(--rw-shadow);
+  color: var(--rw-ink);
+  transition: transform 160ms ease, box-shadow 160ms ease;
+  overflow: hidden;
+}
+.reco-pick-hit {
+  width: 100%; text-align: left; cursor: pointer;
+  border: 0; background: transparent; color: inherit; font: inherit;
+  padding: 16px 16px 14px;
+}
+.reco-pick:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 12px 28px rgba(20, 32, 26, 0.12);
+}
+.reco-pick-together {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) minmax(220px, 1.2fr);
+  gap: 10px 16px;
+  align-items: start;
+  margin: 2px 0 10px;
+}
+.reco-pick-identity { min-width: 0; }
+.reco-pick-setup {
+  margin: 6px 0 0;
+  color: var(--rw-muted);
+  font-size: 13px;
 }
 .reco-pick {
   width: 100%; text-align: left;
@@ -224,7 +256,7 @@
   line-height: 1.2;
 }
 .reco-key-points {
-  margin: 10px 0 4px;
+  margin: 0;
   padding: 10px 12px;
   border-radius: 12px;
   background: var(--rw-green-soft);
@@ -545,6 +577,9 @@
   }
   .reco-desk-strip p { grid-column: 1 / -1; }
   .reco-gain { text-align: left; }
+  .reco-pick-together, .reco-sheet-hero.reco-pick-together {
+    grid-template-columns: 1fr;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
