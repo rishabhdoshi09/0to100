@@ -129,6 +129,11 @@ class Supervisor:
                 self.deps.notify_online()
             except Exception:
                 pass
+        if hasattr(self.deps, "replay_scan_alerts"):
+            try:
+                self.deps.replay_scan_alerts()
+            except Exception:
+                pass
         return True
 
     def _transition(self, to_state, reason, explanation, trigger, snapshot_id=None):
@@ -339,8 +344,7 @@ class Supervisor:
         # Only the production dependency set owns a real feed. Injected tests stay network-free.
         if not isinstance(self.deps, JOBS.Deps):
             return
-        if SCH.market_is_open(now_ist, self.deps.holidays()) and not (
-                {H.AUTH_MISSING, H.AUTH_EXPIRED} & self.failures):
+        if SCH.market_is_open(now_ist, self.deps.holidays()):
             symbols = self._desired_live_symbols()
             health = self.live_feed.start(symbols) if symbols else self.live_feed.health()
             if symbols and (health.get("last_error") or not health.get("connected")):

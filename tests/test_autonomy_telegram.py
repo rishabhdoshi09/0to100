@@ -169,6 +169,74 @@ def test_market_scan_job_invokes_supervisor_owned_notifier():
     assert result.metadata["telegram"] == {"setup": 1}
 
 
+def test_observe_reports_why_no_breakout_fired(tmp_path):
+    engine = FakeEngine()
+    n = TelegramNotifier(tmp_path, engine_factory=lambda: engine,
+                         now_fn=lambda: datetime(2026, 8, 24, 10, 15))
+    out = n.observe_live_breakouts(_payload(), FakeLive(price=90, fresh=False))
+    assert out["confirmed"] == 0
+    assert out["watching"] == 2
+    assert out["reason"] == "no_live_ticks"
+
+
+def test_alert_engine_reads_telegram_from_repo_env(monkeypatch):
+    monkeypatch.setattr(
+        "data.kite_client._fresh_env",
+        lambda name, default="": {"TELEGRAM_BOT_TOKEN": "tok", "TELEGRAM_CHAT_ID": "42"}.get(name, default),
+    )
+    from alerts.telegram_alerts import AlertEngine
+    engine = AlertEngine()
+    assert engine.is_configured() is True
+    assert engine._token == "tok"
+    assert engine._chat_id == "42"
+
+
+def test_live_feed_still_observes_when_auth_expired(tmp_path, monkeypatch):
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    from research.autonomy import health as H
+    from research.autonomy import jobs as JOBS
+    from research.autonomy.supervisor import Supervisor
+
+    calls = []
+
+    class Deps(JOBS.Deps):
+        def holidays(self):
+            return set()
+
+        def now_ist(self):
+            return datetime(2026, 8, 24, 10, 30, tzinfo=ZoneInfo("Asia/Kolkata"))
+
+        def observe_live_breakouts(self):
+            calls.append("observe")
+            return {"confirmed": 0}
+
+    deps = Deps(tmp_path)
+    sup = Supervisor(tmp_path, deps=deps)
+    sup.failures.add(H.AUTH_EXPIRED)
+    monkeypatch.setattr(sup, "_desired_live_symbols", lambda: {"AAA"})
+    monkeypatch.setattr(sup.live_feed, "start", lambda symbols: {
+        "connected": True, "last_error": "", "symbols_ticking": 1,
+    })
+    monkeypatch.setattr("research.autonomy.schedules.market_is_open", lambda *a, **k: True)
+    sup._manage_live_feed(deps.now_ist())
+    assert calls == ["observe"]
+
+
+def test_replay_scan_alerts_uses_saved_scan(tmp_path, monkeypatch):
+    from research.autonomy.jobs import Deps
+
+    engine = FakeEngine()
+    deps = Deps(tmp_path)
+    deps.telegram = TelegramNotifier(tmp_path, engine_factory=lambda: engine,
+                                     now_fn=lambda: datetime(2026, 8, 24, 10, 30))
+    monkeypatch.setattr("product.scan_store.load_scan", lambda: _payload())
+    sent = deps.replay_scan_alerts()
+    assert sent["setup"] == 1
+    assert sent["prebreakout"] == 1
+    assert engine.messages
+
+
 def test_supervisor_telegram_notifier_has_no_execution_or_broker_imports():
     from pathlib import Path
     source = Path("research/autonomy/telegram_notifications.py").read_text(encoding="utf-8")

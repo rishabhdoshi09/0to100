@@ -118,10 +118,20 @@ class TelegramNotifier:
         if self._engine_factory is not None:
             return self._engine_factory()
         try:
-            from dotenv import load_dotenv
-            load_dotenv(".env", override=False)
+            from data.kite_client import _fresh_env
+            token = str(_fresh_env("TELEGRAM_BOT_TOKEN", "") or "").strip()
+            chat = str(_fresh_env("TELEGRAM_CHAT_ID", "") or "").strip()
+            if token:
+                os.environ["TELEGRAM_BOT_TOKEN"] = token
+            if chat:
+                os.environ["TELEGRAM_CHAT_ID"] = chat
         except Exception:
-            pass
+            try:
+                from dotenv import load_dotenv
+                repo = Path(__file__).resolve().parents[2]
+                load_dotenv(repo / ".env", override=False)
+            except Exception:
+                pass
         from alerts.telegram_alerts import AlertEngine
         return AlertEngine()
 
@@ -163,9 +173,13 @@ class TelegramNotifier:
             return False
         try:
             engine = self._engine()
-            if not engine.is_configured() or not engine.send(message):
+            if not engine.is_configured():
                 return False
-        except Exception:
+            if not engine.send(message):
+                print(f"[TELEGRAM] send failed for {key}", flush=True)
+                return False
+        except Exception as exc:
+            print(f"[TELEGRAM] send error for {key}: {type(exc).__name__}: {exc}", flush=True)
             return False
         self._mark_sent([key], day)
         return True
@@ -352,19 +366,24 @@ class TelegramNotifier:
         arms = self.state.setdefault("arms", {})
         now = float(self._epoch())
         confirmed: list[tuple[dict, float]] = []
+        watching = 0
+        fresh_n = 0
 
         for r in records:
+            if not is_sniper_watch(r):
+                continue
+            watching += 1
             sym = str(r.get("symbol", "")).upper()
             entry = self._f(r.get("entry"))
             if not sym or entry <= 0:
-                continue
-            if not is_sniper_watch(r):
                 continue
             try:
                 fresh = bool(live_feed.entry_allowed(sym))
                 price = self._f(live_feed.price(sym))
             except Exception:
                 fresh, price = False, 0.0
+            if fresh:
+                fresh_n += 1
             trigger = entry * (1.0 + self.breakout_buffer_bps / 10000.0)
             if not fresh or price < trigger:
                 arms.pop(sym, None)
@@ -382,7 +401,13 @@ class TelegramNotifier:
 
         self._save()
         if not confirmed:
-            return {"confirmed": 0}
+            reason = "holding_for_confirm" if arms else "no_fresh_cross"
+            if watching == 0:
+                reason = "no_sniper_candidates"
+            elif fresh_n == 0:
+                reason = "no_live_ticks"
+            return {"confirmed": 0, "watching": watching, "armed": len(arms),
+                    "fresh": fresh_n, "reason": reason}
         confirmed.sort(key=lambda x: (-self._f(x[0].get("score")), str(x[0].get("symbol", ""))))
         confirmed = confirmed[:5]
         lines = ["🚨 <b>SNIPER BREAKOUT CONFIRMED — live ticks</b>"]
@@ -405,10 +430,12 @@ class TelegramNotifier:
                 for r, _ in confirmed:
                     arms.pop(str(r.get("symbol", "")).upper(), None)
                 self._save()
-                return {"confirmed": len(confirmed)}
-        except Exception:
-            pass
-        return {"confirmed": 0}
+                return {"confirmed": len(confirmed), "watching": watching,
+                        "armed": 0, "fresh": fresh_n, "reason": "sent"}
+        except Exception as exc:
+            print(f"[TELEGRAM] sniper send error: {type(exc).__name__}: {exc}", flush=True)
+        return {"confirmed": 0, "watching": watching, "armed": len(arms),
+                "fresh": fresh_n, "reason": "send_failed"}
 
     def notify_long_term(self, payload: Mapping[str, Any] | None) -> dict:
         """Send the current weekly long-term shortlist once per symbol/day."""

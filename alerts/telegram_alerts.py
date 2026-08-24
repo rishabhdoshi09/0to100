@@ -44,14 +44,23 @@ class AlertRule:
 # Telegram engine
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _telegram_cred(name: str) -> str:
+    """Read Telegram secrets from the live .env, same rule as Kite tokens."""
+    try:
+        from data.kite_client import _fresh_env
+        return str(_fresh_env(name, "") or "").strip()
+    except Exception:
+        return os.environ.get(name, "").strip()
+
+
 class AlertEngine:
     """Sends Telegram messages via the Bot API."""
 
     _TELEGRAM_API = "https://api.telegram.org/bot{token}/sendMessage"
 
     def __init__(self) -> None:
-        self._token   = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
-        self._chat_id = os.environ.get("TELEGRAM_CHAT_ID", "").strip()
+        self._token   = _telegram_cred("TELEGRAM_BOT_TOKEN")
+        self._chat_id = _telegram_cred("TELEGRAM_CHAT_ID")
         self.enabled  = bool(self._token and self._chat_id)
 
     # ------------------------------------------------------------------

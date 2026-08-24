@@ -9,6 +9,7 @@ from __future__ import annotations
 import csv
 import json
 import os
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -180,12 +181,59 @@ class Deps:
             confirmed = int(out.get("confirmed") or 0)
             if confirmed > 0:
                 print(f"[SNIPER] Telegram sent {confirmed} breakout alert(s)", flush=True)
+            self._log_sniper(out)
             return out
-        except Exception:
+        except Exception as exc:
+            print(f"[SNIPER] observe failed: {type(exc).__name__}: {exc}", flush=True)
             return {"confirmed": 0}
 
+    def _log_sniper(self, out: dict) -> None:
+        now = time.time()
+        last = float(getattr(self, "_sniper_log_at", 0.0) or 0.0)
+        if now - last < 60.0 and int(out.get("confirmed") or 0) == 0:
+            return
+        self._sniper_log_at = now
+        health = {}
+        try:
+            health = self.live_feed.health() if self.live_feed is not None else {}
+        except Exception:
+            health = {}
+        telegram = "ON" if self.telegram.configured() else "OFF"
+        err = str(health.get("last_error") or "").strip()
+        extra = f" · feed={err}" if err else ""
+        print(
+            f"[SNIPER] telegram {telegram} · watching {int(out.get('watching') or 0)} · "
+            f"ticks {int(out.get('fresh') or health.get('symbols_ticking') or 0)} · "
+            f"armed {int(out.get('armed') or 0)} · {out.get('reason') or 'idle'}{extra}",
+            flush=True,
+        )
+
+    def replay_scan_alerts(self):
+        from product.scan_store import load_scan
+        if not self.telegram.configured():
+            print("[TELEGRAM] OFF · set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID in .env", flush=True)
+            return {"setup": 0, "prebreakout": 0}
+        payload = load_scan()
+        if not payload:
+            print("[TELEGRAM] no saved scan to alert yet — keep autonomy running", flush=True)
+            return {"setup": 0, "prebreakout": 0}
+        sent = self.telegram.notify_scan(payload, phase="intraday") or {}
+        print(
+            f"[TELEGRAM] last-scan alerts · setups={int(sent.get('setup') or 0)} · "
+            f"near-breakout={int(sent.get('prebreakout') or 0)}",
+            flush=True,
+        )
+        return sent
+
     def notify_online(self):
-        return self.telegram.notify_online()
+        ok = self.telegram.notify_online()
+        if ok:
+            print("[TELEGRAM] autonomy-online message sent", flush=True)
+        elif not self.telegram.configured():
+            print("[TELEGRAM] OFF · set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID in .env", flush=True)
+        else:
+            print("[TELEGRAM] autonomy-online send failed", flush=True)
+        return ok
 
     def notify_incident(self, code, message):
         return self.telegram.notify_incident(code, message)
@@ -442,8 +490,14 @@ def run_market_scan(ctx) -> JobResult:
         try:
             phase = SCH.session_phase(ctx.deps.now_ist(), ctx.deps.holidays())
             telegram = ctx.deps.notify_scan(payload, phase=phase) or {}
+            print(
+                f"[TELEGRAM] scan alerts · setups={int(telegram.get('setup') or 0)} · "
+                f"near-breakout={int(telegram.get('prebreakout') or 0)}",
+                flush=True,
+            )
         except Exception:
             telegram = {"error": "notification_failed"}
+            print("[TELEGRAM] scan alert send failed", flush=True)
     return JobResult(JS.SUCCEEDED,
                      f"scan complete · {n} setups · {summary.get('momentum', 0)} momentum",
                      state_hint=ST.OBSERVING, unblocks=(DEP_SCAN,),
