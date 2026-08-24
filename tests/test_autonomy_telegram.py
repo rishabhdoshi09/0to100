@@ -179,16 +179,40 @@ def test_observe_reports_why_no_breakout_fired(tmp_path):
     assert out["reason"] == "no_live_ticks"
 
 
-def test_alert_engine_reads_telegram_from_repo_env(monkeypatch):
-    monkeypatch.setattr(
-        "data.kite_client._fresh_env",
-        lambda name, default="": {"TELEGRAM_BOT_TOKEN": "tok", "TELEGRAM_CHAT_ID": "42"}.get(name, default),
-    )
-    from alerts.telegram_alerts import AlertEngine
+def test_alert_engine_reads_telegram_from_repo_env(tmp_path, monkeypatch):
+    env_file = tmp_path / ".env"
+    env_file.write_text("TELEGRAM_BOT_TOKEN=filetok\nTELEGRAM_CHAT_ID=42\n", encoding="utf-8")
+    monkeypatch.setattr("alerts.telegram_alerts._ENV_PATH", env_file)
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "")
+    monkeypatch.setenv("TELEGRAM_CHAT_ID", "")
+    from alerts.telegram_alerts import AlertEngine, _telegram_cred
+    assert _telegram_cred("TELEGRAM_BOT_TOKEN") == "filetok"
+    assert _telegram_cred("TELEGRAM_CHAT_ID") == "42"
     engine = AlertEngine()
     assert engine.is_configured() is True
-    assert engine._token == "tok"
+    assert engine._token == "filetok"
     assert engine._chat_id == "42"
+
+
+def test_default_scan_path_is_repo_absolute():
+    from product.scan_store import DEFAULT_SCAN_PATH, default_scan_path
+    path = default_scan_path()
+    assert path.is_absolute()
+    assert path.name == "latest_momentum_scan.json"
+    assert path == DEFAULT_SCAN_PATH
+    assert "logs" in path.parts and "product" in path.parts
+
+
+def test_notify_scan_says_already_sent(tmp_path):
+    engine = FakeEngine()
+    now = lambda: datetime(2026, 7, 31, 10, 0)
+    n = TelegramNotifier(tmp_path, engine_factory=lambda: engine, now_fn=now)
+    first = n.notify_scan(_payload(), phase="intraday")
+    assert first["reason"] == "sent"
+    second = TelegramNotifier(tmp_path, engine_factory=lambda: engine, now_fn=now)
+    again = second.notify_scan(_payload(), phase="intraday")
+    assert again["setup"] == 0 and again["prebreakout"] == 0
+    assert again["reason"] == "already_sent"
 
 
 def test_live_feed_still_observes_when_auth_expired(tmp_path, monkeypatch):

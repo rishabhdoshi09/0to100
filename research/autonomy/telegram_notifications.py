@@ -118,9 +118,9 @@ class TelegramNotifier:
         if self._engine_factory is not None:
             return self._engine_factory()
         try:
-            from data.kite_client import _fresh_env
-            token = str(_fresh_env("TELEGRAM_BOT_TOKEN", "") or "").strip()
-            chat = str(_fresh_env("TELEGRAM_CHAT_ID", "") or "").strip()
+            from alerts.telegram_alerts import _telegram_cred
+            token = _telegram_cred("TELEGRAM_BOT_TOKEN")
+            chat = _telegram_cred("TELEGRAM_CHAT_ID")
             if token:
                 os.environ["TELEGRAM_BOT_TOKEN"] = token
             if chat:
@@ -129,7 +129,7 @@ class TelegramNotifier:
             try:
                 from dotenv import load_dotenv
                 repo = Path(__file__).resolve().parents[2]
-                load_dotenv(repo / ".env", override=False)
+                load_dotenv(repo / ".env", override=True)
             except Exception:
                 pass
         from alerts.telegram_alerts import AlertEngine
@@ -277,12 +277,33 @@ class TelegramNotifier:
         if lines:
             try:
                 engine = self._engine()
-                if engine.is_configured() and engine.send("\n".join(lines)):
+                if not engine.is_configured():
+                    sent["reason"] = "not_configured"
+                elif engine.send("\n".join(lines)):
                     self._mark_sent(keys, day)
                     sent["setup"] = len(ready)
                     sent["prebreakout"] = len(pre)
-            except Exception:
-                pass
+                    sent["reason"] = "sent"
+                else:
+                    sent["reason"] = "send_failed"
+                    print("[TELEGRAM] scan/breakout send failed — check token, chat id, bot start", flush=True)
+            except Exception as exc:
+                sent["reason"] = "send_failed"
+                print(f"[TELEGRAM] scan/breakout send error: {type(exc).__name__}: {exc}", flush=True)
+        else:
+            had_setup = any(
+                str(r.get("verdict", "")).upper() in ("BUY", "STRONG BUY")
+                and not bool(r.get("chase_risk"))
+                and self._f(r.get("entry")) > 0
+                for r in records
+            )
+            had_pre = any(
+                (str(r.get("status", "")) == "Watch for breakout"
+                 or "PRE_BREAKOUT" in [str(x).upper() for x in (r.get("signals") or [])])
+                and self._f(r.get("entry")) > 0
+                for r in records
+            )
+            sent["reason"] = "already_sent" if (had_setup or had_pre) else "no_candidates"
 
         if phase == "eod" and not self._was_sent("eod_scan_summary", day):
             msg = (

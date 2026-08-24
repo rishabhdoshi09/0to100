@@ -217,10 +217,16 @@ class Deps:
         if not payload:
             print("[TELEGRAM] no saved scan to alert yet — keep autonomy running", flush=True)
             return {"setup": 0, "prebreakout": 0}
+        from research.autonomy.telegram_notifications import sniper_symbols
+        watch = sorted(sniper_symbols(payload))
         sent = self.telegram.notify_scan(payload, phase="intraday") or {}
+        reason = str(sent.get("reason") or "").strip()
         print(
             f"[TELEGRAM] last-scan alerts · setups={int(sent.get('setup') or 0)} · "
-            f"near-breakout={int(sent.get('prebreakout') or 0)}",
+            f"near-breakout={int(sent.get('prebreakout') or 0)} · "
+            f"sniper-watch {len(watch)}"
+            + (f" · {', '.join(watch[:8])}" if watch else " · no Watch-for-breakout/Ready names with an entry")
+            + (f" · {reason}" if reason else ""),
             flush=True,
         )
         return sent
@@ -492,7 +498,8 @@ def run_market_scan(ctx) -> JobResult:
             telegram = ctx.deps.notify_scan(payload, phase=phase) or {}
             print(
                 f"[TELEGRAM] scan alerts · setups={int(telegram.get('setup') or 0)} · "
-                f"near-breakout={int(telegram.get('prebreakout') or 0)}",
+                f"near-breakout={int(telegram.get('prebreakout') or 0)}"
+                + (f" · {telegram.get('reason')}" if telegram.get("reason") else ""),
                 flush=True,
             )
         except Exception:

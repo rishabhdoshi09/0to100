@@ -44,13 +44,25 @@ class AlertRule:
 # Telegram engine
 # ─────────────────────────────────────────────────────────────────────────────
 
+_ENV_PATH = Path(__file__).resolve().parent.parent / ".env"
+
+
 def _telegram_cred(name: str) -> str:
-    """Read Telegram secrets from the live .env, same rule as Kite tokens."""
+    """Prefer a non-empty .env value. An empty process env must not hide the file."""
+    file_value = ""
     try:
-        from data.kite_client import _fresh_env
-        return str(_fresh_env(name, "") or "").strip()
+        for raw in _ENV_PATH.read_text(encoding="utf-8").splitlines():
+            line = raw.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, val = line.split("=", 1)
+            if key.strip() == name:
+                file_value = val.strip().strip('"').strip("'")
+                break
     except Exception:
-        return os.environ.get(name, "").strip()
+        pass
+    env_value = (os.environ.get(name) or "").strip()
+    return file_value or env_value
 
 
 class AlertEngine:
@@ -116,10 +128,17 @@ class AlertEngine:
                 payload["reply_markup"] = reply_markup
             try:
                 resp = requests.post(url, json=payload, timeout=8)
-                resp.raise_for_status()
+                if not resp.ok:
+                    detail = (resp.text or "")[:180]
+                    logger.warning("Telegram send failed (chunk %d/%d): HTTP %s %s",
+                                   i + 1, len(chunks), resp.status_code, detail)
+                    print(f"[TELEGRAM] send HTTP {resp.status_code}: {detail}", flush=True)
+                    ok = False
+                    continue
             except Exception as exc:
                 logger.warning("Telegram send failed (chunk %d/%d): %s",
                                i + 1, len(chunks), exc)
+                print(f"[TELEGRAM] send error: {type(exc).__name__}: {exc}", flush=True)
                 ok = False
         return ok
 
