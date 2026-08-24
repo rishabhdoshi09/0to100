@@ -205,6 +205,32 @@ def test_ticker_feed_maps_symbols_and_restores_on_reconnect():
     assert set(tk.subscribed) == {111, 222} and ov.connected is True
 
 
+class PendingTicker(FakeTicker):
+    def __init__(self):
+        super().__init__()
+        self.ws = None
+
+    def subscribe(self, toks):
+        if self.ws is None:
+            raise AttributeError("'NoneType' object has no attribute 'sendMessage'")
+        super().subscribe(toks)
+
+
+def test_ticker_feed_does_not_subscribe_before_websocket():
+    ov = KL.KiteLiveOverlay(sleep_fn=lambda s: None)
+    tk = PendingTicker()
+    feed = A.KiteTickerFeed(tk, token_to_symbol={111: "WIN"}, overlay=ov)
+    ov.feed = feed
+    ov.connect()
+    ov.subscribe(["WIN"])
+    assert tk.subscribed == []
+    assert ov.connected is False
+    tk.ws = object()
+    tk.on_connect(tk, {})
+    assert ov.connected is True
+    assert 111 in tk.subscribed
+
+
 def test_ticker_feed_translates_ist_timestamps():
     from datetime import timezone, timedelta
     ist = timezone(timedelta(hours=5, minutes=30))

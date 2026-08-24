@@ -252,6 +252,8 @@ class Deps:
             health = {}
         telegram = "ON" if self.telegram.configured() else "OFF"
         err = str(health.get("last_error") or "").strip()
+        if "sendMessage" in err:
+            err = "websocket connecting"
         extra = f" · feed={err}" if err else ""
         print(
             f"[SNIPER] telegram {telegram} · watching {int(out.get('watching') or 0)} · "

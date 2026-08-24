@@ -96,7 +96,8 @@ class KiteTickerFeed:
         self._clock = clock
         # wire the tick callbacks (all read-only)
         for name, fn in (("on_ticks", self._on_ticks), ("on_connect", self._on_connect),
-                         ("on_close", self._on_close), ("on_reconnect", self._on_reconnect)):
+                         ("on_close", self._on_close), ("on_reconnect", self._on_reconnect),
+                         ("on_error", self._on_error)):
             try:
                 setattr(self._t, name, fn)
             except Exception:
@@ -120,7 +121,14 @@ class KiteTickerFeed:
         toks = [self._s2t[s] for s in symbols if s in self._s2t]
         if not toks:
             return
-        self._t.subscribe(toks)
+        if hasattr(self._t, "ws") and getattr(self._t, "ws", None) is None:
+            return
+        try:
+            self._t.subscribe(toks)
+        except Exception as exc:
+            if getattr(self._t, "ws", None) is None or "sendMessage" in str(exc):
+                return
+            raise
         mode = getattr(self._t, "MODE_LTP", "ltp")
         try:
             self._t.set_mode(mode, toks)
@@ -152,6 +160,10 @@ class KiteTickerFeed:
         self.subscribe(list(self._s2t))                   # install approved subscriptions
 
     def _on_close(self, ws, code=None, reason=None) -> None:
+        if self.overlay:
+            self.overlay.connected = False
+
+    def _on_error(self, ws, code=None, reason=None) -> None:
         if self.overlay:
             self.overlay.connected = False
 

@@ -22,6 +22,17 @@ class _Tick:
     ts: float                                # epoch seconds (monotonic-ish); provenance
 
 
+def _feed_socket_pending(feed) -> bool:
+    """True for a real KiteTicker whose websocket is not open yet.
+
+    Duck-typed test feeds have no ``ws`` attribute, so they stay synchronous.
+    """
+    ticker = getattr(feed, "_t", None)
+    if ticker is None:
+        return False
+    return hasattr(ticker, "ws") and getattr(ticker, "ws", None) is None
+
+
 class KiteLiveOverlay:
     def __init__(self, feed=None, *, max_stale_s: float = 30.0, clock=time.time,
                  sleep_fn=time.sleep, max_reconnect_backoff: float = 8.0):
@@ -41,6 +52,11 @@ class KiteLiveOverlay:
     def connect(self) -> None:
         if self.feed is not None:
             self.feed.connect(self._subs)
+            if _feed_socket_pending(self.feed):
+                # Threaded KiteTicker.connect() returns before ws exists. Claiming
+                # connected here made subscribe() call ws.sendMessage on None.
+                self.last_connect_ts = self._clock()
+                return
         self.connected = True
         self.last_connect_ts = self._clock()
 

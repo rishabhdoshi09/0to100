@@ -48,6 +48,30 @@ def test_unified_scanner_reports_analyze_progress(monkeypatch):
     assert seen[-1] == (2, 2)
 
 
+def test_unified_scanner_warms_cache_when_outer_prefetch_was_skipped(monkeypatch):
+    from scan.unified_scanner import UnifiedScanner
+
+    state = {"warm": False}
+
+    class Fast(UnifiedScanner):
+        def _analyze(self, symbol, df):
+            return SimpleNamespace(symbol=symbol, signals=["MOMENTUM"], score=50)
+
+    def cached():
+        return ["AAA", "BBB"] if state["warm"] else []
+
+    def prefetch(symbols, progress=None):
+        state["warm"] = True
+        return 2
+
+    monkeypatch.setattr("scan.bulk_fetcher.cached_symbols", cached)
+    monkeypatch.setattr("scan.bulk_fetcher.prefetch", prefetch)
+    monkeypatch.setattr("scan.bulk_fetcher.get_cached", lambda symbol: object())
+    out = Fast(max_workers=2).scan(["AAA", "BBB"], prefetch=False)
+    assert {row.symbol for row in out} == {"AAA", "BBB"}
+    assert state["warm"] is True
+
+
 def test_market_scan_passes_progress_into_analyze():
     from scan.market_scan_service import run_whole_market_scan
 
