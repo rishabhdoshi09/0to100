@@ -209,6 +209,33 @@ def test_it_framework_does_not_ask_for_gnpa():
     assert sales["trend"] == "improving"
 
 
+def test_opm_does_not_use_operating_profit_rupees():
+    raw = {
+        "available": True, "fetched_at": "", "data": {
+            "about": "Test Pharma manufactures formulations",
+            "quarterly_results": [
+                _q_row("Sales+", **{"Jun 2025": 100, "Sep 2025": 110, "Dec 2025": 120, "Mar 2026": 130, "Jun 2026": 140}),
+                _q_row("Operating Profit", **{"Jun 2025": 20, "Sep 2025": 22, "Dec 2025": 24, "Mar 2026": 26, "Jun 2026": 424}),
+                _q_row("OPM %", **{"Jun 2025": 20, "Sep 2025": 21, "Dec 2025": 21, "Mar 2026": 22, "Jun 2026": 26}),
+                _q_row("Net Profit+", **{"Jun 2025": 10, "Sep 2025": 11, "Dec 2025": 12, "Mar 2026": 13, "Jun 2026": 14}),
+            ],
+            "shareholding": [_q_row("Promoters+", **{"Jun 2025": 66, "Sep 2025": 66, "Dec 2025": 66, "Mar 2026": 66, "Jun 2026": 66})],
+            "cash_flow": [],
+        },
+    }
+    payload = build_due_diligence(
+        "TESTPHARMA",
+        scan_payload={"records": [{"symbol": "TESTPHARMA", "status": "Ready to trade", "score": 85}]},
+        long_term_payload={"records": [{"symbol": "TESTPHARMA", "sector": "Pharma & Healthcare"}]},
+        raw_fundamentals=raw,
+        news=[],
+    )
+    opm = next(k for k in payload["kpis"] if k["id"] == "opm")
+    assert opm["available"] is True
+    assert opm["snapshot"]["current"] == 26
+    assert "424" not in opm["fact"]
+
+
 def test_no_scan_row_keeps_vs_setup_unmeasured():
     payload = build_due_diligence(
         "TESTIT",

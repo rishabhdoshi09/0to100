@@ -53,14 +53,24 @@ def row_label(row: Mapping[str, Any]) -> str:
 
 def find_row(rows: Sequence[Mapping[str, Any]] | None, needles: Sequence[str]) -> dict[str, Any] | None:
     want = [normalize_label(n) for n in needles if n]
+    candidates: list[dict[str, Any]] = []
     for row in rows or []:
         if not isinstance(row, Mapping):
             continue
         label = normalize_label(row_label(row))
         if not label or label == "raw pdf":
             continue
-        if any(n == label or n in label or label in n for n in want):
-            return dict(row)
+        candidates.append(dict(row))
+    for row in candidates:
+        label = normalize_label(row_label(row))
+        if label in want:
+            return row
+    for row in candidates:
+        label = normalize_label(row_label(row))
+        # Needle in label ("opm" in "opm", "gross npa" in "gross npa"). Never the reverse:
+        # "operating profit" must not match the needle "operating profit margin".
+        if any(n and n in label for n in want):
+            return row
     return None
 
 
