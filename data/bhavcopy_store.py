@@ -350,6 +350,19 @@ def get_ohlcv(symbol: str) -> Optional[pd.DataFrame]:
     return df
 
 
+def latest_two_eq_sessions():
+    """Last two EQ bhavcopy days already on disk (newest, previous).
+
+    Pulse/report movers use this instead of copying every in-memory OHLCV
+    frame. Returns (today_df, prev_df, session_date) — any part may be None.
+    """
+    dates = _dates_on_disk()
+    if len(dates) < 2:
+        return None, None, None
+    newest, prev = dates[-1], dates[-2]
+    return _read_day(newest), _read_day(prev), newest
+
+
 def store_symbols() -> list[str]:
     with _lock:
         return list(_store.keys())

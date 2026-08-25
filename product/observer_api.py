@@ -234,17 +234,33 @@ def radar_home_workspace() -> dict[str, Any]:
     return home
 
 
-def recommendations_workspace() -> dict[str, Any]:
+_reco_memo: dict[str, Any] = {"key": None, "payload": None}
+
+
+def recommendations_workspace(
+    refresh: bool = Query(False, description="Recompute live technicals (slow)"),
+) -> dict[str, Any]:
     """Reco-style research categories + Active/Closed lifecycle (evidence only)."""
     from product.recommendations_workspace import build_recommendations_workspace
-    return build_recommendations_workspace(
-        scan_payload=core._scan_payload(),
-        long_term_payload=core._long_term_payload(),
-        refresh_technicals=True,
+    scan = core._scan_payload()
+    long_term = core._long_term_payload()
+    key = (scan.get("scanned_at"), long_term.get("scanned_at"), bool(refresh))
+    if not refresh and _reco_memo.get("key") == key and _reco_memo.get("payload"):
+        return _reco_memo["payload"]
+    payload = build_recommendations_workspace(
+        scan_payload=scan,
+        long_term_payload=long_term,
+        refresh_technicals=bool(refresh),
+        settle_cases=False,
     )
+    _reco_memo["key"] = key
+    _reco_memo["payload"] = payload
+    return payload
 
 
-def market_reports_workspace() -> dict[str, Any]:
+def market_reports_workspace(
+    rebuild: bool = Query(False, description="Ignore the 15-minute pulse file"),
+) -> dict[str, Any]:
     """Chronological Market Pulse desk from street_pulse + saved day files."""
     from product.recommendations_workspace import build_market_reports_workspace
     news: dict[str, Any] = {}
@@ -256,6 +272,7 @@ def market_reports_workspace() -> dict[str, Any]:
         persist_today=True,
         news_payload=news,
         scan_payload=core._scan_payload(),
+        rebuild=bool(rebuild),
     )
 
 

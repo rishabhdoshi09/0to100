@@ -701,9 +701,14 @@ def build_recommendations_workspace(
     *,
     scan_payload: Mapping[str, Any] | None = None,
     long_term_payload: Mapping[str, Any] | None = None,
-    refresh_technicals: bool = True,
+    refresh_technicals: bool = False,
+    settle_cases: bool = False,
 ) -> dict[str, Any]:
-    """Project recommendation categories + lifecycle from persisted product state."""
+    """Project recommendation categories + lifecycle from persisted product state.
+
+    Page-open defaults skip live technical refresh and case settlement so the
+    desk reads the last scan instead of recomputing hundreds of rows.
+    """
     scan = dict(scan_payload or {})
     lt = dict(long_term_payload or {})
     scan_at = str(scan.get("scanned_at") or "")
@@ -732,11 +737,12 @@ def build_recommendations_workspace(
         pass
 
     attach_live_ev(scan_rows)
-    try:
-        from product.case_memory import settle_due_cases
-        settle_due_cases()
-    except Exception:
-        pass
+    if settle_cases:
+        try:
+            from product.case_memory import settle_due_cases
+            settle_due_cases()
+        except Exception:
+            pass
     desk = build_desk_context(scan_rows)
     buckets = _bucket_rows(scan_rows, lt_rows, market_ctx=desk)
     active, closed = _tracker_lifecycle()
@@ -902,20 +908,41 @@ def _pulse_summary(pulse: Mapping[str, Any]) -> str:
     return str(pulse.get("date") or "Market overview")
 
 
+_PULSE_FILE_TTL_S = 15 * 60
+
+
 def build_market_reports_workspace(
     *,
     persist_today: bool = True,
     news_payload: Mapping[str, Any] | None = None,
     scan_payload: Mapping[str, Any] | None = None,
+    rebuild: bool = False,
 ) -> dict[str, Any]:
-    """Chronological Market Pulse list from live street pulse + saved day files."""
+    """Chronological Market Pulse list. Reuses today's file when it is fresh."""
+    import json
+    import time
+
     pulse: dict[str, Any] = {}
     error = ""
-    try:
-        from reports.street_pulse import build_pulse
-        pulse = build_pulse() or {}
-    except Exception as exec_pulse:
-        error = str(exec_pulse)[:200]
+    today = _ist_day()
+    path = REPORTS_DIR / f"market_pulse_{today}.json"
+    if persist_today and path.exists() and not rebuild:
+        try:
+            age = time.time() - path.stat().st_mtime
+            if 0 <= age < _PULSE_FILE_TTL_S:
+                data = json.loads(path.read_text(encoding="utf-8"))
+                pulse = dict(data.get("pulse") or {})
+        except Exception:
+            pulse = {}
+    if not pulse:
+        try:
+            from reports.street_pulse import build_pulse
+            pulse = build_pulse(force=rebuild) or {}
+        except Exception as exec_pulse:
+            error = str(exec_pulse)[:200]
+        if pulse and persist_today:
+            pulse.setdefault("as_of_ist", today)
+            _persist_pulse(pulse)
 
     desk_note: dict[str, Any] = {}
     try:
@@ -924,11 +951,6 @@ def build_market_reports_workspace(
         desk_note = build_desk_note(articles=articles, scan_payload=scan_payload)
     except Exception as exec_note:
         desk_note = {"error": str(exec_note)[:200], "wrap": [], "desks": [], "explainers": []}
-
-    today = _ist_day()
-    if pulse and persist_today:
-        pulse.setdefault("as_of_ist", today)
-        _persist_pulse(pulse)
 
     reports = _list_saved_reports(today=today)
     if pulse and not any(r.get("date") == today for r in reports):
@@ -953,8 +975,10 @@ def build_market_reports_workspace(
         "title": "Stay on top of the markets",
         "blurb": (
             "Daily Market Pulse plus a sourced desk note — wrap, teach-ins and company "
-            "watch desks. Headlines stay sourced. Empty stays empty."
+            "watch desks. Built from the last scan, official session files and saved news. "
+            "Headlines stay sourced. Empty stays empty."
         ),
+        "load_note": "Pulse reuses today's file for 15 minutes; it does not walk every bhavcopy symbol.",
         "reports": reports,
         "today_pulse": pulse,
         "desk_note": desk_note,

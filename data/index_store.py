@@ -243,6 +243,47 @@ def build_from_local() -> int:
     return len(new_store)
 
 
+def load_index_store_from_cache() -> bool:
+    """Load the pickle into memory. Never hits the NSE download path."""
+    global _store, _last_day
+    with _lock:
+        if _store:
+            return True
+    if not _PKL.exists():
+        return False
+    try:
+        import pickle
+        with open(_PKL, "rb") as f:
+            data = pickle.load(f)
+        sample = next(iter(data.get("store", {}).values()), None)
+        if sample is not None and "Volume" not in sample.columns:
+            return False
+        with _lock:
+            _store = data["store"]
+            _last_day = data.get("last_day")
+        return bool(_store)
+    except Exception:
+        return False
+
+
+def latest_index_print(ticker: str) -> Optional[dict]:
+    """Last close + 1-day % from the cached official index store. No network."""
+    name = TICKER_MAP.get(ticker.upper())
+    if not name:
+        return None
+    load_index_store_from_cache()
+    with _lock:
+        df = _store.get(name)
+        if df is None or len(df) < 2 or "Close" not in df.columns:
+            return None
+        close = float(df["Close"].iloc[-1])
+        prev = float(df["Close"].iloc[-2])
+    if close <= 0:
+        return None
+    chg = (close / prev - 1.0) * 100.0 if prev else 0.0
+    return {"price": close, "chg_pct": round(chg, 2), "source": "nse_index_store"}
+
+
 def get_index_ohlcv(ticker: str) -> Optional[pd.DataFrame]:
     """yfinance-shaped OHLC for a ^TICKER. Builds the store on first use."""
     name = TICKER_MAP.get(ticker.upper())

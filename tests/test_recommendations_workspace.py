@@ -225,7 +225,7 @@ def test_market_reports_lists_today_pulse(tmp_path, monkeypatch):
     monkeypatch.setattr(rw, "REPORTS_DIR", tmp_path)
     monkeypatch.setattr(
         "reports.street_pulse.build_pulse",
-        lambda: {
+        lambda **_k: {
             "date": "15 August 2026",
             "takeaways": ["Nifty steady", "Breadth mixed"],
             "gainers": [], "losers": [], "breakouts_today": [],
@@ -239,6 +239,44 @@ def test_market_reports_lists_today_pulse(tmp_path, monkeypatch):
     assert "Nifty" in payload["reports"][0]["summary"]
     assert payload["reports"][0]["is_new"] is True
     assert payload.get("as_of_ist")
+    assert "does not walk every bhavcopy" in payload.get("load_note", "")
+
+
+def test_market_reports_reuse_fresh_file(tmp_path, monkeypatch):
+    import json
+    import product.recommendations_workspace as rw
+    from core.market_clock import today_ist
+
+    monkeypatch.setattr(rw, "REPORTS_DIR", tmp_path)
+    day = today_ist().isoformat()
+    pulse = {"date": day, "takeaways": ["Saved pulse"], "gainers": [], "as_of_ist": day}
+    path = tmp_path / f"market_pulse_{day}.json"
+    path.write_text(json.dumps({
+        "id": f"market_pulse_{day}", "title": "Market Pulse", "kind": "market_pulse",
+        "date": day, "created_at": "2026-08-18T10:00:00+00:00", "pulse": pulse,
+    }), encoding="utf-8")
+    monkeypatch.setattr(
+        "reports.street_pulse.build_pulse",
+        lambda **_k: (_ for _ in ()).throw(AssertionError("should reuse file")),
+    )
+    payload = build_market_reports_workspace(persist_today=True)
+    assert payload["today_pulse"]["takeaways"] == ["Saved pulse"]
+
+
+def test_recommendations_default_skips_case_settle(monkeypatch):
+    called = {"n": 0}
+
+    def boom(*_a, **_k):
+        called["n"] += 1
+        raise AssertionError("settle_due_cases must not run on page open")
+
+    monkeypatch.setattr("product.case_memory.settle_due_cases", boom)
+    payload = build_recommendations_workspace(
+        scan_payload={"records": [], "scanned_at": "2026-08-25T00:00:00+00:00"},
+        long_term_payload={"records": []},
+    )
+    assert called["n"] == 0
+    assert payload["categories"]
 
 
 def test_old_market_report_is_not_marked_today(tmp_path, monkeypatch):
@@ -257,7 +295,7 @@ def test_old_market_report_is_not_marked_today(tmp_path, monkeypatch):
     }), encoding="utf-8")
     monkeypatch.setattr(
         "reports.street_pulse.build_pulse",
-        lambda: {
+        lambda **_k: {
             "date": "16 August 2026",
             "as_of_ist": "2026-08-16",
             "takeaways": ["Fresh Nifty"],
@@ -290,7 +328,9 @@ def test_pulse_uses_ist_day_and_breakout_keys(monkeypatch):
     monkeypatch.setattr(sp, "_market_snapshot", lambda: {"indices": [], "commentary": ""})
     monkeypatch.setattr(sp, "_losing_momentum", lambda: None)
     monkeypatch.setattr(sp, "_headlines", lambda: [])
-    pulse = sp.build_pulse()
+    sp._PULSE_CACHE["pulse"] = None
+    sp._PULSE_CACHE["ts"] = 0
+    pulse = sp.build_pulse(force=True)
     assert pulse["as_of_ist"] == "2026-08-16"
     assert pulse["date"] == "16 August 2026"
     assert pulse["breakouts_today"][0]["symbol"] == "AAA"
