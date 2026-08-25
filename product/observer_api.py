@@ -157,15 +157,30 @@ def scanner_workspace(mode: str) -> dict[str, Any]:
 def radar_home_workspace() -> dict[str, Any]:
     """Today/Setups bootstrap. Empty cards until the last scan JSON is readable."""
     scan: dict[str, Any] = {}
+    sepa_cards: list[dict[str, Any]] = []
+    sepa_note = "Last scan is not readable yet."
+    try:
+        scan = core._scan_payload()
+    except Exception:
+        scan = {}
+    try:
+        from product.sepa_setup import public_best_setups
+
+        sepa_cards, sepa_note = public_best_setups(scan, limit=8, score_cap=24, max_seconds=2.0)
+    except Exception:
+        sepa_cards = []
+        sepa_note = "SEPA ranking is temporarily unavailable."
     try:
         market = core._market_payload()
-        scan = core._scan_payload()
+        if not scan:
+            scan = core._scan_payload()
         long_term = core._long_term_payload()
         from product.radar_workspace import build_radar_home
         home = build_radar_home(
             scan_payload=scan,
             long_term_payload=long_term,
             market=market,
+            sepa_cards=sepa_cards,
         )
     except Exception as exc:
         home = {
@@ -184,19 +199,15 @@ def radar_home_workspace() -> dict[str, Any]:
             "counts": {"breakouts": 0, "momentum": 0, "long_term_picks": 0, "sniper_breakouts": 0},
             "best_breakout": None,
             "best_among_fundamentals": None,
+            "best_among_note": "Radar ranking is temporarily unavailable.",
             "sniper_candidates": [],
-            "best_setups": [],
-            "best_setups_note": "Last scan is not readable yet.",
+            "ranking_legend": {},
+            "scan_shared_note": "",
+            "sepa_rank_used": False,
             "error": str(exc),
         }
-    try:
-        from product.sepa_setup import public_best_setups
-        cards, note = public_best_setups(scan, limit=8, score_cap=24, max_seconds=2.0)
-        home["best_setups"] = cards
-        home["best_setups_note"] = note
-    except Exception:
-        home["best_setups"] = list(home.get("best_setups") or [])
-        home["best_setups_note"] = str(home.get("best_setups_note") or "SEPA ranking is temporarily unavailable.")
+    home["best_setups"] = list(sepa_cards)
+    home["best_setups_note"] = str(sepa_note or "")
     try:
         from product.scan_progress import read_progress
         home["scan_progress"] = read_progress()

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import time
 from pathlib import Path
 
 from operations.store import OperationStore, PENDING, RUNNING, SUCCEEDED
@@ -91,3 +92,28 @@ def test_bootstrap_queues_missing_product_inputs_without_network(tmp_path: Path,
     # A restart/click must reuse the pending work rather than duplicate it.
     assert worker._bootstrap() == []
     assert len(store.active()) == 4
+
+
+def test_bootstrap_skips_market_scan_when_momentum_artifact_is_fresh(tmp_path: Path, monkeypatch):
+    from data import bhavcopy_runtime
+    from operations import market_ops as MO
+
+    monkeypatch.setattr(MO, "ROOT", tmp_path)
+    monkeypatch.setattr(MO, "LOCK_PATH", tmp_path / "market_ops" / "worker.lock")
+    monkeypatch.setattr(
+        bhavcopy_runtime,
+        "status",
+        lambda load_cache=False: {"ready": True, "sessions": 500, "symbols": 3000},
+    )
+    product = tmp_path / "logs" / "product"
+    product.mkdir(parents=True)
+    scan_path = product / "latest_momentum_scan.json"
+    scan_path.write_text('{"schema_version": 1, "records": []}', encoding="utf-8")
+    now = time.time()
+    os.utime(scan_path, (now - 60, now - 60))
+
+    store = OperationStore(tmp_path / "market_ops" / "jobs.db")
+    worker = MO.MarketOperationsWorker(store)
+    queued = set(worker._bootstrap())
+    assert MO.MARKET_SCAN not in queued
+    assert MO.LONG_TERM_SCAN in queued

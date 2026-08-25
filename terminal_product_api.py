@@ -452,6 +452,17 @@ def product_dashboard() -> dict[str, Any]:
     return dashboard_payload
 
 
+def _market_scan_is_fresh() -> bool:
+    """Skip a second whole-market scan when the canonical artifact is still fresh."""
+    try:
+        from operations.market_ops import SCAN_FRESH_S
+        from product.scan_store import scan_artifact_is_fresh
+
+        return bool(scan_artifact_is_fresh(max_age_s=SCAN_FRESH_S))
+    except Exception:
+        return False
+
+
 def queue_product_bootstrap(*, requested_by: str = "product_bootstrap") -> dict[str, Any]:
     """Enqueue data, news, scan and long-term work. Dedupes active jobs. Does not invent data."""
     from operations.market_ops import (
@@ -465,8 +476,13 @@ def queue_product_bootstrap(*, requested_by: str = "product_bootstrap") -> dict[
 
     core._ensure_ops_worker()
     store = OperationStore(core.OPS_DB)
+    kinds = [DATA_PREPARE, NEWS_REFRESH]
+    scan_fresh = _market_scan_is_fresh()
+    if not scan_fresh:
+        kinds.append(MARKET_SCAN)
+    kinds.append(LONG_TERM_REFRESH)
     operations = []
-    for kind in (DATA_PREPARE, NEWS_REFRESH, MARKET_SCAN, LONG_TERM_REFRESH):
+    for kind in kinds:
         item, created = store.enqueue(
             kind,
             lane=LANES[kind],
@@ -480,12 +496,21 @@ def queue_product_bootstrap(*, requested_by: str = "product_bootstrap") -> dict[
                 "created": created,
             }
         )
-    return {
-        "accepted": True,
-        "message": (
+    if scan_fresh:
+        message = (
+            "QuantTerm preparation queued for data, news and long-term. "
+            "Whole-market scan reused — Home and Market Scanner already share "
+            "latest_momentum_scan.json."
+        )
+    else:
+        message = (
             "QuantTerm preparation queued across independent data, news, scan and "
             "long-term lanes."
-        ),
+        )
+    return {
+        "accepted": True,
+        "message": message,
+        "scan_reused": scan_fresh,
         "operations": operations,
     }
 

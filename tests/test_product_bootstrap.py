@@ -11,9 +11,11 @@ def test_queue_product_bootstrap_enqueues_four_lanes(tmp_path: Path, monkeypatch
     store_path = tmp_path / "jobs.db"
     monkeypatch.setattr(tpa.core, "OPS_DB", store_path)
     monkeypatch.setattr(tpa.core, "_ensure_ops_worker", lambda: {"running": True})
+    monkeypatch.setattr(tpa, "_market_scan_is_fresh", lambda: False)
 
     payload = tpa.queue_product_bootstrap(requested_by="api_startup")
     assert payload["accepted"] is True
+    assert payload["scan_reused"] is False
     kinds = {item["kind"] for item in payload["operations"]}
     assert kinds == {DATA_PREPARE, NEWS_REFRESH, MARKET_SCAN, LONG_TERM_REFRESH}
     assert all(item["created"] for item in payload["operations"])
@@ -21,6 +23,20 @@ def test_queue_product_bootstrap_enqueues_four_lanes(tmp_path: Path, monkeypatch
 
     again = tpa.queue_product_bootstrap(requested_by="api_startup")
     assert all(item["created"] is False for item in again["operations"])
+
+
+def test_queue_product_bootstrap_skips_fresh_market_scan(tmp_path: Path, monkeypatch):
+    store_path = tmp_path / "jobs.db"
+    monkeypatch.setattr(tpa.core, "OPS_DB", store_path)
+    monkeypatch.setattr(tpa.core, "_ensure_ops_worker", lambda: {"running": True})
+    monkeypatch.setattr(tpa, "_market_scan_is_fresh", lambda: True)
+
+    payload = tpa.queue_product_bootstrap(requested_by="api_startup")
+    kinds = {item["kind"] for item in payload["operations"]}
+    assert MARKET_SCAN not in kinds
+    assert kinds == {DATA_PREPARE, NEWS_REFRESH, LONG_TERM_REFRESH}
+    assert payload["scan_reused"] is True
+    assert "reused" in payload["message"].lower()
 
 
 def test_startup_prepare_skips_under_pytest(monkeypatch):
@@ -46,3 +62,20 @@ def test_startup_prepare_honours_skip_flag(monkeypatch):
     monkeypatch.setattr(tpa, "queue_product_bootstrap", lambda **kwargs: called.append(kwargs) or {})
     tpa._startup_prepare_product()
     assert called == []
+
+
+def test_scan_artifact_is_fresh_uses_scanned_at(tmp_path: Path):
+    from datetime import datetime, timedelta, timezone
+
+    from product.scan_store import save_scan, scan_artifact_is_fresh
+
+    path = tmp_path / "latest_momentum_scan.json"
+    now = datetime(2026, 8, 25, 12, 0, tzinfo=timezone.utc)
+    save_scan({"schema_version": 1, "scanned_at": now.isoformat(), "records": []}, path)
+    assert scan_artifact_is_fresh(path, max_age_s=6 * 3600, now=now) is True
+    save_scan(
+        {"schema_version": 1, "scanned_at": (now - timedelta(hours=8)).isoformat(), "records": []},
+        path,
+    )
+    assert scan_artifact_is_fresh(path, max_age_s=6 * 3600, now=now) is False
+    assert scan_artifact_is_fresh(tmp_path / "missing.json", max_age_s=6 * 3600, now=now) is False

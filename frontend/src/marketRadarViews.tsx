@@ -23,6 +23,7 @@ import { LiveScanBanner, type ExperienceViewProps } from './experience'
 import { keepRicher, recall, remember } from './sessionMemory'
 import {
   bestSetupsFromRadar,
+  dashCell,
   scannerEmptyHint,
   scannerFallbackRows,
   scannerMetaFromDashboard,
@@ -54,6 +55,9 @@ type RadarRow = ScannerWorkspaceRow & {
   rsi?: number
   tech_source?: string
   price_tag?: string
+  best_among_why?: string
+  sepa_used?: boolean
+  funds_used?: boolean
 }
 
 const breakoutLabel: Record<string, string> = {
@@ -106,7 +110,7 @@ function BestSniperPanel({
               best.volume_ratio != null
                 ? `Vol ${Number(best.volume_ratio).toFixed(1)}×${volOk ? '' : ' THIN'}`
                 : null,
-            ].filter(Boolean).join(' · ') || 'Volume ≥1× · not chasing · RSI ≤82 — fundamentals not required'
+            ].filter(Boolean).join(' · ') || 'Volume floor · not chasing · RSI ≤82 — tape only, not SEPA'
           }
         >
           <button
@@ -130,7 +134,7 @@ function BestSniperPanel({
     <div className="radar-best-breakout radar-best-empty">
       <Panel
         title="BEST TECHNICAL BREAKOUT"
-        subtitle="Volume ≥1.0× · not extended · RSI ≤82 — tape only, no fund gate"
+        subtitle="Volume floor · not extended · RSI ≤82 — tape only, SEPA is not used here"
       >
         <p className="radar-empty-li">
           {sniperCount === 0
@@ -144,9 +148,11 @@ function BestSniperPanel({
 
 function BestAmongFundamentalsPanel({
   best,
+  note,
   onSelect,
 }: {
   best: RadarRow | null | undefined
+  note?: string
   onSelect: (symbol: string) => void
 }) {
   if (best) {
@@ -157,9 +163,9 @@ function BestAmongFundamentalsPanel({
           title={`BEST AMONG BREAKOUTS · ${best.symbol}`}
           subtitle={
             [
-              'Fundamentals filter',
-              best.classification ? String(best.classification).replace(/_/g, ' ') : null,
-              best.fundamental_score != null ? `Fund score ${Math.round(Number(best.fundamental_score))}` : null,
+              best.best_among_why || 'Sniper plus a second screen',
+              best.sepa_used ? 'SEPA overlay' : null,
+              best.funds_used ? 'long-term funds' : null,
               gates.fundamentals ? `Fund ${gates.fundamentals}` : null,
               best.rsi != null ? `RSI ${Math.round(Number(best.rsi))}` : null,
               best.volume_ratio != null ? `Vol ${Number(best.volume_ratio).toFixed(1)}×` : null,
@@ -175,10 +181,12 @@ function BestAmongFundamentalsPanel({
             {best.breakout_quality != null
               ? ` · Quality ${Number(best.breakout_quality).toFixed(0)}`
               : ''}
+            {best.sepa_score != null ? ` · SEPA ${best.sepa_score}/100` : ''}
             {' · '}
             {breakoutLabel[String(best.breakout_state || '')]
-              || words(String(best.breakout_state || best.status || ''))}
+              || words(dashCell(best.breakout_state || best.status || ''))}
           </button>
+          {note ? <p className="radar-rank-note">{note}</p> : null}
         </Panel>
       </div>
     )
@@ -187,13 +195,86 @@ function BestAmongFundamentalsPanel({
     <div className="radar-best-fundamentals radar-best-empty">
       <Panel
         title="BEST AMONG BREAKOUTS"
-        subtitle="Only uses fundamentals among already-valid breakout candidates"
+        subtitle="Sniper names that also have SEPA overlay ≥40 and/or usable long-term funds. Not a buy."
       >
         <p className="radar-empty-li">
-          No breakout candidate has usable fundamental coverage yet — run long-term scan, or wait for fund data. Technical sniper lane above is independent.
+          {note
+            || 'No sniper candidate has a second screen yet — run long-term scan, or wait for the SEPA overlay. Technical sniper lane is independent.'}
         </p>
       </Panel>
     </div>
+  )
+}
+
+function RankingLegend({
+  legend,
+}: {
+  legend?: RadarHome['ranking_legend']
+}) {
+  const items = [
+    { key: 'best_setups', title: 'Best Setups', body: legend?.best_setups || 'SEPA 7-rule overlay ≥40/100. Not a buy.' },
+    { key: 'best_technical_breakout', title: 'Best Technical', body: legend?.best_technical_breakout || 'Tape rank among snipers. SEPA is not used here.' },
+    { key: 'best_among_breakouts', title: 'Best Among', body: legend?.best_among_breakouts || 'Sniper plus SEPA overlay and/or long-term funds.' },
+  ]
+  return (
+    <div className="radar-rank-legend">
+      {items.map((item) => (
+        <div key={item.key}>
+          <span>{item.title}</span>
+          <p>{item.body}</p>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function BestSetupsSepaPanel({
+  cards,
+  note,
+  used,
+  onSelect,
+  selected,
+}: {
+  cards: RadarRow[]
+  note?: string
+  used?: boolean
+  onSelect: (symbol: string) => void
+  selected: string
+}) {
+  return (
+    <section className="radar-sepa-strip">
+      <header>
+        <span>BEST SETUPS · SEPA 7-RULE</span>
+        <strong>{cards.length ? `${cards.length} ≥40/100` : used ? 'overlay empty' : 'overlay not ranked yet'}</strong>
+      </header>
+      <p className="radar-rank-note">
+        {note || 'Minervini Stage 2 overlay on the saved scan. Research rank only — not a buy.'}
+      </p>
+      {cards.length ? (
+        <ul>
+          {cards.slice(0, 8).map((item) => (
+            <li key={item.symbol}>
+              <button
+                type="button"
+                className={selected === item.symbol ? 'active' : ''}
+                onClick={() => onSelect(String(item.symbol || ''))}
+              >
+                <b>{item.symbol}</b>
+                <span>
+                  {item.sepa_score != null ? `${item.sepa_score}/100` : '—'}
+                  {item.sepa_passed != null && item.sepa_total != null
+                    ? ` · ${item.sepa_passed}/${item.sepa_total}`
+                    : ''}
+                  {item.sepa_verdict ? ` · ${String(item.sepa_verdict).replace(/_/g, ' ')}` : ''}
+                </span>
+              </button>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="radar-empty-li">SEPA overlay has not ranked this scan yet.</p>
+      )}
+    </section>
   )
 }
 
@@ -267,12 +348,16 @@ function DenseTable({
               {cols.map((col) => {
                 const raw = (row as Record<string, unknown>)[col]
                 let cell: string
-                if (col === 'breakout_state') cell = breakoutLabel[String(raw)] || words(String(raw))
-                else if (col === 'momentum_state') cell = momentumLabel[String(raw)] || words(String(raw))
-                else if (col === 'price') cell = money(raw as number)
+                if (col === 'breakout_state') {
+                  const key = dashCell(raw)
+                  cell = key === '—' ? '—' : (breakoutLabel[key] || words(key))
+                } else if (col === 'momentum_state') {
+                  const key = dashCell(raw)
+                  cell = key === '—' ? '—' : (momentumLabel[key] || words(key))
+                } else if (col === 'price') cell = money(raw as number)
                 else if (col === 'change_5d_pct') cell = pct(raw as number)
-                else if (col === 'combined_score' || col === 'relative_strength') cell = raw != null ? String(raw) : '—'
-                else cell = String(raw ?? '—')
+                else if (col === 'combined_score' || col === 'relative_strength') cell = raw != null && raw !== '' ? String(raw) : '—'
+                else cell = dashCell(raw)
                 return <td key={col}>{cell}</td>
               })}
             </tr>
@@ -358,7 +443,7 @@ export function RadarHomeView(props: ExperienceViewProps & {
       const result = await bootstrapProduct()
       setReadiness(result.readiness)
       setDeskNote(result.message || 'Data lanes queued')
-      if (!marketScan.isBusy) void marketScan.start()
+      if (!scanAt && !marketScan.isBusy) void marketScan.start()
     } catch (reason) {
       setDeskNote(reason instanceof Error ? reason.message : 'Could not start data lanes')
     } finally {
@@ -456,7 +541,7 @@ export function RadarHomeView(props: ExperienceViewProps & {
         <div>
           <span>SCAN</span>
           <strong>{relativeAge(scanAt)}</strong>
-          <small>{scanAt ? 'signals from last scan · prices refresh live' : 'scan queued on start'}</small>
+          <small>{scanAt ? 'one saved scan · Home and Scanner share it' : 'scan queued only if the last file is stale'}</small>
         </div>
         <div>
           <span>PRICE DATA</span>
@@ -494,10 +579,24 @@ export function RadarHomeView(props: ExperienceViewProps & {
         <div><span>STANCE</span><strong>{dashboard.market.trade_stance?.split(';')[0] || '—'}</strong></div>
       </div>
 
-      <LiveScanBanner scan={marketScan} depth={depth} label="Market scan" />
+      <LiveScanBanner scan={marketScan} depth={depth} label="Shared market scan" />
       {longTermScan.isActive || longTermScan.notice ? (
         <LiveScanBanner scan={longTermScan} depth={depth} label="Long-term scan" />
       ) : null}
+      <p className="radar-scan-share">
+        {radar?.scan_shared_note
+          || 'Home and Market Scanner read the same saved whole-market scan. Names can appear in more than one lane. Scan Now is the only intentional rescan.'}
+      </p>
+
+      <RankingLegend legend={radar?.ranking_legend} />
+
+      <BestSetupsSepaPanel
+        cards={(radar?.best_setups || []) as RadarRow[]}
+        note={radar?.best_setups_note}
+        used={radar?.sepa_rank_used}
+        onSelect={setSelected}
+        selected={selected}
+      />
 
       <BestSniperPanel
         best={radar?.best_breakout as RadarRow | null | undefined}
@@ -507,6 +606,7 @@ export function RadarHomeView(props: ExperienceViewProps & {
 
       <BestAmongFundamentalsPanel
         best={radar?.best_among_fundamentals as RadarRow | null | undefined}
+        note={radar?.best_among_note}
         onSelect={setSelected}
       />
 
@@ -669,7 +769,7 @@ export function MarketScannerView(props: ExperienceViewProps & { onCompare: (sym
         <div>
           <span>MARKET SCANNER</span>
           <h2>Breakouts, momentum, SEPA and long-term</h2>
-          <p>{filtered.length} matches · universe {meta.universe.toLocaleString('en-IN')} · scan {meta.scanned_at || '—'}</p>
+          <p>{filtered.length} matches · universe {meta.universe.toLocaleString('en-IN')} · same scan as Home · {meta.scanned_at || '—'}</p>
         </div>
         <button type="button" disabled={activeScan.isBusy} onClick={() => void activeScan.start()}>
           {activeScan.isBusy
@@ -678,7 +778,12 @@ export function MarketScannerView(props: ExperienceViewProps & { onCompare: (sym
         </button>
       </header>
 
-      <LiveScanBanner scan={activeScan} depth={depth} label={tab === 'Long-Term' ? 'Long-term scan' : 'Market scan'} />
+      <LiveScanBanner scan={activeScan} depth={depth} label={tab === 'Long-Term' ? 'Long-term scan' : 'Shared market scan'} />
+      {tab !== 'Long-Term' ? (
+        <p className="radar-scan-share">
+          This table reads the same saved scan as Home. Overlap across Breakouts and Momentum is expected. Scan Now rescans the whole market once.
+        </p>
+      ) : null}
 
       <div className="radar-tab-row">
         {(['Best Setups', 'Breakouts', 'Momentum', 'Long-Term'] as const).map((item) => (
@@ -693,7 +798,7 @@ export function MarketScannerView(props: ExperienceViewProps & { onCompare: (sym
       </div>
 
       <div className="scanner-workspace-grid">
-        <Panel title={`${tab.toUpperCase()} · ${filtered.length}`} subtitle="Sorted from persisted backend scan">
+        <Panel title={`${tab.toUpperCase()} · ${filtered.length}`} subtitle={tab === 'Best Setups' ? 'SEPA 7-rule overlay ≥40/100 on the saved scan — not a buy' : 'Sorted from the same persisted scan Home uses'}>
           <DenseTable
             rows={filtered}
             selected={selected}

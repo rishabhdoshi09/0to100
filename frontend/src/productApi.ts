@@ -240,9 +240,23 @@ export type RadarHome = {
   counts: { breakouts: number; momentum: number; long_term_picks: number; sniper_breakouts?: number }
   best_breakout?: ScannerWorkspaceRow | null
   best_among_fundamentals?: ScannerWorkspaceRow | null
+  best_among_note?: string
   sniper_candidates?: ScannerWorkspaceRow[]
   best_setups?: ScannerWorkspaceRow[]
   best_setups_note?: string
+  ranking_legend?: {
+    best_setups?: string
+    best_technical_breakout?: string
+    best_among_breakouts?: string
+  }
+  scan_shared_note?: string
+  sepa_rank_used?: boolean
+  second_screen_counts?: {
+    sniper?: number
+    sepa_overlay?: number
+    long_term_funds?: number
+    sniper_with_second_screen?: number
+  }
   scan_progress?: {
     active?: boolean
     stage?: string

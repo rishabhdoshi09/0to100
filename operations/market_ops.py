@@ -498,7 +498,7 @@ class MarketOperationsWorker:
             _item, created = self.store.enqueue(NEWS_REFRESH, lane=LANES[NEWS_REFRESH], requested_by="bootstrap")
             if created:
                 queued.append(NEWS_REFRESH)
-        if _stale(ROOT / "logs" / "product" / "latest_scan.json", SCAN_FRESH_S):
+        if _stale(ROOT / "logs" / "product" / "latest_momentum_scan.json", SCAN_FRESH_S):
             _item, created = self.store.enqueue(MARKET_SCAN, lane=LANES[MARKET_SCAN], requested_by="bootstrap")
             if created:
                 queued.append(MARKET_SCAN)

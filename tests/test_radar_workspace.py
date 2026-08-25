@@ -160,6 +160,11 @@ def test_radar_home_builds_three_lanes():
     assert classify_breakout_state(thin_raw) == "breakout_without_volume"
     assert is_sniper_breakout_candidate(thin_raw) is False
     assert "THIN" not in [r["symbol"] for r in payload["lanes"]["breakouts"]]
+    assert payload["best_among_fundamentals"]["symbol"] == "BEST"
+    assert payload["best_among_fundamentals"]["funds_used"] is True
+    assert "SEPA" in payload["ranking_legend"]["best_setups"]
+    assert payload["sepa_rank_used"] is False
+    assert "same saved" in payload["scan_shared_note"].lower() or "same" in payload["scan_shared_note"].lower()
 
 
 def test_breakout_quality_prefers_grade_and_fundamentals():
@@ -211,11 +216,13 @@ def test_high_rsi_and_thin_volume_hard_rejected_from_best():
     assert best["symbol"] in {"SOLID", "AVOID", "WARM"}
     assert best["quality_ok"] is True
     assert best["quality_gates"]["volume"] == "pass"
-    assert "breakout_context" in best
+    assert "breakout_context" not in best
 
     fund_best = pick_best_among_fundamentals([hot, thin, avoid, elevated, solid])
     assert fund_best is not None and fund_best["symbol"] == "SOLID"
-    assert fund_best.get("best_among_kind") == "fundamentals"
+    assert fund_best.get("best_among_kind") == "second_screen"
+    assert fund_best.get("funds_used") is True
+    assert fund_best.get("sepa_used") is False
 
 
 def test_enrich_scan_row_never_fakes_daily_change_label():
@@ -244,3 +251,56 @@ def test_enrich_marks_graded_breakout_as_sniper_candidate():
     )
     assert row["sniper_candidate"] is True
     assert row["breakout_quality"] > 0
+
+
+def test_best_among_ranks_sepa_overlay_without_inventing_funds():
+    from product.radar_workspace import build_radar_home, pick_best_among_fundamentals
+
+    sniper = {
+        "symbol": "SEPA1",
+        "score": 70,
+        "verdict": "BUY",
+        "status": "Ready to trade",
+        "signals": ["BREAKOUT_52W"],
+        "chase_risk": False,
+        "volume_ratio": 1.8,
+        "rsi": 55,
+        "breakout_grade": "A",
+        "breakout_conviction": 80,
+        "avg_vol20": 1_000_000,
+    }
+    tape_only = {**sniper, "symbol": "TAPE", "score": 90, "breakout_conviction": 90}
+    both = {
+        **sniper,
+        "symbol": "BOTH",
+        "score": 60,
+        "classification": "QUALITY_COMPOUNDER",
+        "fundamental_coverage": 0.9,
+        "fundamental_score": 70,
+        "sepa_score": 85,
+    }
+    sepa_only = pick_best_among_fundamentals([
+        {**sniper, "sepa_score": 80},
+        tape_only,
+    ])
+    assert sepa_only is not None and sepa_only["symbol"] == "SEPA1"
+    assert sepa_only["sepa_used"] is True
+    assert sepa_only["funds_used"] is False
+    assert "SEPA 80/100" in sepa_only["best_among_why"]
+
+    dual = pick_best_among_fundamentals([{**sniper, "sepa_score": 80}, both, tape_only])
+    assert dual is not None and dual["symbol"] == "BOTH"
+    assert dual["second_screens"] == 2
+
+    market = {"health": "Healthy", "breadth": "ok", "trade_stance": "Open", "leaders": [], "laggards": []}
+    payload = build_radar_home(
+        scan_payload={"scanned_at": "2026-08-01T00:00:00+00:00", "universe_size": 3, "records": [sniper, tape_only]},
+        long_term_payload={"records": []},
+        market=market,
+        sepa_cards=[{"symbol": "SEPA1", "sepa_score": 80, "sepa_passed": 6, "sepa_total": 7, "sepa_verdict": "Stage 2"}],
+    )
+    assert payload["best_among_fundamentals"]["symbol"] == "SEPA1"
+    assert payload["sepa_rank_used"] is True
+    assert payload["second_screen_counts"]["sepa_overlay"] == 1
+    assert payload["best_breakout"]["symbol"] in {"SEPA1", "TAPE"}
+
