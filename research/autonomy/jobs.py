@@ -265,28 +265,37 @@ class Deps:
             flush=True,
         )
 
-    def replay_scan_alerts(self):
+    def drain_telegram_alerts(self, *, min_interval_s: float = 45.0):
         from product.scan_store import load_scan
+        from research.autonomy.telegram_notifications import sniper_symbols
         if not self.telegram.configured():
-            print("[TELEGRAM] OFF · set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID in .env", flush=True)
-            return {"setup": 0, "prebreakout": 0}
+            now = time.time()
+            last = float(getattr(self, "_tg_off_log_at", 0.0) or 0.0)
+            if now - last >= 60.0:
+                self._tg_off_log_at = now
+                print("[TELEGRAM] OFF · set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID in .env", flush=True)
+            return {"setup": 0, "prebreakout": 0, "reason": "not_configured"}
         payload = load_scan()
         if not payload:
             print("[TELEGRAM] no saved scan to alert yet — keep autonomy running", flush=True)
-            return {"setup": 0, "prebreakout": 0}
-        from research.autonomy.telegram_notifications import sniper_symbols
+            return {"setup": 0, "prebreakout": 0, "reason": "no_scan"}
         watch = sorted(sniper_symbols(payload))
-        sent = self.telegram.notify_scan(payload, phase="intraday") or {}
+        sent = self.telegram.drain_last_scan(payload, min_interval_s=min_interval_s) or {}
         reason = str(sent.get("reason") or "").strip()
-        print(
-            f"[TELEGRAM] last-scan alerts · setups={int(sent.get('setup') or 0)} · "
-            f"near-breakout={int(sent.get('prebreakout') or 0)} · "
-            f"sniper-watch {len(watch)}"
-            + (f" · {', '.join(watch[:8])}" if watch else " · no Watch-for-breakout/Ready names with an entry")
-            + (f" · {reason}" if reason else ""),
-            flush=True,
-        )
+        quiet = reason in {"retry_wait", "already_sent", "in_progress", "no_candidates"}
+        if min_interval_s == 0 or not quiet:
+            print(
+                f"[TELEGRAM] last-scan alerts · setups={int(sent.get('setup') or 0)} · "
+                f"near-breakout={int(sent.get('prebreakout') or 0)} · "
+                f"sniper-watch {len(watch)}"
+                + (f" · {', '.join(watch[:8])}" if watch else " · no Watch-for-breakout/Ready names with an entry")
+                + (f" · {reason}" if reason else ""),
+                flush=True,
+            )
         return sent
+
+    def replay_scan_alerts(self):
+        return self.drain_telegram_alerts(min_interval_s=0.0)
 
     def notify_online(self):
         ok = self.telegram.notify_online()

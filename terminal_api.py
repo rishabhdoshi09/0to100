@@ -412,6 +412,13 @@ def _autonomy_payload() -> dict:
         entry_capability = _capability(status.get("new_paper_entries"))
         exit_capability = _capability(status.get("existing_exits"))
         research_capability = _capability(status.get("research"))
+        live_feed = dict(raw.get("live_feed", {}) or {})
+        telegram = {}
+        try:
+            from product.telegram_delivery import delivery_status
+            telegram = delivery_status()
+        except Exception as exc:
+            telegram = {"configured": False, "state": "unavailable", "detail": str(exc)}
         return {
             "available": True,
             "running": bool(status.get("running")),
@@ -435,7 +442,8 @@ def _autonomy_payload() -> dict:
             "jobs": dict(status.get("jobs", {}) or {}),
             "jobs_recent": _recent_autonomy_jobs(),
             "owner_state": dict(status.get("owner_state", {}) or {}),
-            "live_feed": dict(raw.get("live_feed", {}) or {}),
+            "live_feed": live_feed,
+            "telegram": telegram,
             "last_cycle": dict(status.get("last_cycle", {}) or {}),
         }
     except Exception as exc:
@@ -463,6 +471,7 @@ def _autonomy_payload() -> dict:
             "jobs_recent": [],
             "owner_state": {},
             "live_feed": {},
+            "telegram": {"configured": False, "state": "unavailable"},
             "last_cycle": {},
             "error": str(exc),
         }

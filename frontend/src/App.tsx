@@ -93,6 +93,7 @@ const emptyDashboard: DashboardPayload = {
     jobs_recent: [],
     owner_state: {},
     live_feed: {},
+    telegram: { configured: false, state: 'unavailable', headline: '', detail: '' },
     last_cycle: {},
   },
   operations: {

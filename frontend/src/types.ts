@@ -263,6 +263,16 @@ export type DashboardPayload = {
     jobs_recent?: AutonomyJob[]
     owner_state?: Record<string, boolean>
     live_feed?: Record<string, unknown>
+    telegram?: {
+      configured?: boolean
+      state?: string
+      headline?: string
+      detail?: string
+      scan_reason?: string
+      sniper_reason?: string
+      sniper_watch?: number
+      live_ticks?: boolean
+    }
     last_cycle?: Record<string, unknown>
   }
   scan_progress?: {

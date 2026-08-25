@@ -10,10 +10,13 @@ import hashlib
 import html
 import json
 import os
+import threading
 import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Mapping
+
+_DRAIN_LOCK = threading.Lock()
 
 try:
     from zoneinfo import ZoneInfo
@@ -100,10 +103,12 @@ class TelegramNotifier:
             if isinstance(data, dict):
                 data.setdefault("sent", {})
                 data.setdefault("arms", {})
+                data.setdefault("delivery", {})
+                data.setdefault("drain", {})
                 return data
         except Exception:
             pass
-        return {"sent": {}, "arms": {}}
+        return {"sent": {}, "arms": {}, "delivery": {}, "drain": {}}
 
     def _save(self) -> None:
         try:
@@ -166,6 +171,18 @@ class TelegramNotifier:
         self.state["sent"][day] = sorted(bucket)
         self._save()
 
+    def _engine_error(self, engine: Any) -> str:
+        return str(getattr(engine, "last_error", "") or "").strip()
+
+    def _record_delivery(self, kind: str, payload: Mapping[str, Any]) -> None:
+        bucket = self.state.setdefault("delivery", {})
+        bucket[kind] = {
+            "day": self._day(),
+            "updated_at": self._now_fn().isoformat(),
+            **{str(k): v for k, v in dict(payload).items()},
+        }
+        self._save()
+
     def _send_once(self, key: str, message: str) -> bool:
         day = self._day()
         self._prune(day)
@@ -176,13 +193,98 @@ class TelegramNotifier:
             if not engine.is_configured():
                 return False
             if not engine.send(message):
-                print(f"[TELEGRAM] send failed for {key}", flush=True)
+                err = self._engine_error(engine)
+                print(f"[TELEGRAM] send failed for {key}" + (f" · {err}" if err else ""), flush=True)
                 return False
         except Exception as exc:
             print(f"[TELEGRAM] send error for {key}: {type(exc).__name__}: {exc}", flush=True)
             return False
         self._mark_sent([key], day)
         return True
+
+    def scan_keys_pending(self, payload: Mapping[str, Any] | None) -> bool:
+        """True when last-scan setups or near-breakouts have not been marked sent today."""
+        day = self._day()
+        records = [r for r in (payload or {}).get("records") or [] if isinstance(r, Mapping)]
+        if not records:
+            return False
+        for row in records:
+            sym = str(row.get("symbol", "")).upper()
+            if not sym:
+                continue
+            verdict = str(row.get("verdict", "")).upper()
+            if (
+                verdict in ("BUY", "STRONG BUY")
+                and not bool(row.get("chase_risk"))
+                and self._f(row.get("entry")) > 0
+                and not self._was_sent(f"setup:{sym}", day)
+            ):
+                return True
+            pre = (
+                str(row.get("status", "")) == "Watch for breakout"
+                or "PRE_BREAKOUT" in [str(x).upper() for x in (row.get("signals") or [])]
+            )
+            if pre and self._f(row.get("entry")) > 0 and not self._was_sent(f"pre:{sym}", day):
+                return True
+        return False
+
+    def drain_last_scan(
+        self,
+        payload: Mapping[str, Any] | None = None,
+        *,
+        min_interval_s: float = 45.0,
+    ) -> dict:
+        """Retry last-scan setup / breakout watches if Telegram is on and today's keys are empty."""
+        if not _DRAIN_LOCK.acquire(blocking=False):
+            return {"setup": 0, "prebreakout": 0, "reason": "in_progress"}
+        try:
+            drain = self.state.setdefault("drain", {})
+            now = float(self._epoch())
+            last = float(drain.get("last_epoch") or 0.0)
+            last_reason = str(drain.get("last_reason") or "")
+            if (
+                last_reason == "send_failed"
+                and min_interval_s > 0
+                and (now - last) < float(min_interval_s)
+            ):
+                return {"setup": 0, "prebreakout": 0, "reason": "retry_wait"}
+            if payload is None:
+                try:
+                    from product.scan_store import load_scan
+                    payload = load_scan() or {}
+                except Exception:
+                    payload = {}
+            day = self._day()
+            sent_keys = list(self.state.get("sent", {}).get(day, []) or [])
+            if any(str(k).startswith(("setup:", "pre:")) for k in sent_keys):
+                out = {"setup": 0, "prebreakout": 0, "reason": "already_sent"}
+                drain["last_epoch"] = now
+                drain["last_reason"] = "already_sent"
+                self._save()
+                return out
+            sent = self.notify_scan(payload, phase="intraday") or {}
+            drain["last_epoch"] = now
+            drain["last_reason"] = str(sent.get("reason") or "")
+            self._save()
+            return sent
+        finally:
+            _DRAIN_LOCK.release()
+
+    def notify_sniper_waiting(self, watching: int, reason: str) -> bool:
+        """One-shot honesty notice: connected Telegram is not the same as a live confirm."""
+        if int(watching or 0) <= 0:
+            return False
+        if reason not in {"no_live_ticks", "no_fresh_cross"}:
+            return False
+        return self._send_once(
+            "sniper_waiting",
+            "🎯 <b>QuantTerm sniper armed</b>\n\n"
+            f"Watching {int(watching)} names from the last scan.\n"
+            "Setup and near-breakout watches send after each market scan.\n"
+            "<b>SNIPER BREAKOUT CONFIRMED</b> needs fresh Zerodha LTP "
+            "(login + autonomy running) during 09:15–15:30 IST, "
+            "and price must hold 8s above the trigger.",
+        )
 
     @staticmethod
     def _f(value: Any) -> float:
@@ -299,6 +401,7 @@ class TelegramNotifier:
                 engine = self._engine()
                 if not engine.is_configured():
                     sent["reason"] = "not_configured"
+                    sent["last_error"] = "not_configured"
                 elif engine.send("\n".join(lines)):
                     self._mark_sent(keys, day)
                     sent["setup"] = len(ready)
@@ -306,9 +409,15 @@ class TelegramNotifier:
                     sent["reason"] = "sent"
                 else:
                     sent["reason"] = "send_failed"
-                    print("[TELEGRAM] scan/breakout send failed — check token, chat id, bot start", flush=True)
+                    sent["last_error"] = self._engine_error(engine) or "send_failed"
+                    print(
+                        "[TELEGRAM] scan/breakout send failed — check token, chat id, bot start"
+                        + (f" · {sent['last_error']}" if sent.get("last_error") else ""),
+                        flush=True,
+                    )
             except Exception as exc:
                 sent["reason"] = "send_failed"
+                sent["last_error"] = f"{type(exc).__name__}: {exc}"
                 print(f"[TELEGRAM] scan/breakout send error: {type(exc).__name__}: {exc}", flush=True)
         else:
             had_setup = any(
@@ -324,6 +433,9 @@ class TelegramNotifier:
                 for r in records
             )
             sent["reason"] = "already_sent" if (had_setup or had_pre) else "no_candidates"
+
+        sent["sniper_watch"] = len(sniper_symbols(payload))
+        self._record_delivery("scan", sent)
 
         if phase == "eod" and not self._was_sent("eod_scan_summary", day):
             msg = (
@@ -447,8 +559,13 @@ class TelegramNotifier:
                 reason = "no_sniper_candidates"
             elif fresh_n == 0:
                 reason = "no_live_ticks"
-            return {"confirmed": 0, "watching": watching, "armed": len(arms),
-                    "fresh": fresh_n, "reason": reason}
+            waiting = False
+            if reason == "no_live_ticks" and watching > 0:
+                waiting = self.notify_sniper_waiting(watching, reason)
+            out = {"confirmed": 0, "watching": watching, "armed": len(arms),
+                    "fresh": fresh_n, "reason": reason, "waiting_notice": waiting}
+            self._record_delivery("sniper", out)
+            return out
         confirmed.sort(key=lambda x: (-self._f(x[0].get("score")), str(x[0].get("symbol", ""))))
         confirmed = confirmed[:5]
         lines = ["🚨 <b>SNIPER BREAKOUT CONFIRMED — live ticks</b>"]
@@ -464,6 +581,7 @@ class TelegramNotifier:
                 f"target ₹{self._f(r.get('target')):,.2f}"
             )
             keys.append(f"breakout:{sym}")
+        last_error = ""
         try:
             engine = self._engine()
             if engine.is_configured() and engine.send("\n".join(lines)):
@@ -471,12 +589,18 @@ class TelegramNotifier:
                 for r, _ in confirmed:
                     arms.pop(str(r.get("symbol", "")).upper(), None)
                 self._save()
-                return {"confirmed": len(confirmed), "watching": watching,
+                out = {"confirmed": len(confirmed), "watching": watching,
                         "armed": 0, "fresh": fresh_n, "reason": "sent"}
+                self._record_delivery("sniper", out)
+                return out
+            last_error = self._engine_error(engine)
         except Exception as exc:
-            print(f"[TELEGRAM] sniper send error: {type(exc).__name__}: {exc}", flush=True)
-        return {"confirmed": 0, "watching": watching, "armed": len(arms),
-                "fresh": fresh_n, "reason": "send_failed"}
+            last_error = f"{type(exc).__name__}: {exc}"
+            print(f"[TELEGRAM] sniper send error: {last_error}", flush=True)
+        out = {"confirmed": 0, "watching": watching, "armed": len(arms),
+                "fresh": fresh_n, "reason": "send_failed", "last_error": last_error}
+        self._record_delivery("sniper", out)
+        return out
 
     def notify_long_term(self, payload: Mapping[str, Any] | None) -> dict:
         """Send the current weekly long-term shortlist once per symbol/day."""

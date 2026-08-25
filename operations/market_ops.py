@@ -244,7 +244,11 @@ class MarketOperationsWorker:
         try:
             from research.autonomy import default_root
             from research.autonomy.telegram_notifications import TelegramNotifier
-            sent = TelegramNotifier(default_root()).notify_scan(payload, phase="intraday") or {}
+            notifier = TelegramNotifier(default_root())
+            sent = notifier.notify_scan(payload, phase="intraday") or {}
+            if str(sent.get("reason") or "") == "send_failed":
+                time.sleep(1.0)
+                sent = notifier.drain_last_scan(payload, min_interval_s=0.0) or sent
             print(
                 f"[TELEGRAM] scan alerts · setups={int(sent.get('setup') or 0)} · "
                 f"near-breakout={int(sent.get('prebreakout') or 0)}"
@@ -254,7 +258,7 @@ class MarketOperationsWorker:
             return sent
         except Exception as exc:
             print(f"[TELEGRAM] scan alert send failed: {type(exc).__name__}: {exc}", flush=True)
-            return {"error": str(exc)}
+            return {"error": str(exc), "reason": "send_failed"}
 
     def _run_market_scan(self, operation: dict[str, Any]) -> dict[str, Any]:
         operation_id = str(operation["operation_id"])

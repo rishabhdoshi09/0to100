@@ -365,6 +365,11 @@ class Supervisor:
         self._process_controls()
         current = now_ist or self.deps.now_ist()
         self._manage_live_feed(current)
+        if hasattr(self.deps, "drain_telegram_alerts"):
+            try:
+                self.deps.drain_telegram_alerts(min_interval_s=45.0)
+            except Exception:
+                pass
         if self.owner_state.get("halted"):
             self.heartbeat()
             return None
