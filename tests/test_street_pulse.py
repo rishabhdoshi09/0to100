@@ -46,14 +46,14 @@ def test_session_movers_use_two_csvs_not_get_ohlcv(monkeypatch):
         raise AssertionError("store_symbols must not run on Pulse open")
 
     today = pd.DataFrame({
-        "symbol": ["LIQ", "THIN", "DROP"],
-        "close": [100.0, 10.0, 50.0],
-        "volume": [1_000_000.0, 100.0, 2_000_000.0],
+        "symbol": ["LIQ", "THIN", "DROP", "CA"],
+        "close": [100.0, 10.0, 50.0, 5.0],
+        "volume": [1_000_000.0, 100.0, 2_000_000.0, 5_000_000.0],
     })
     prev = pd.DataFrame({
-        "symbol": ["LIQ", "THIN", "DROP"],
-        "close": [90.0, 9.0, 60.0],
-        "volume": [800_000.0, 100.0, 2_000_000.0],
+        "symbol": ["LIQ", "THIN", "DROP", "CA"],
+        "close": [90.0, 9.0, 60.0, 50.0],
+        "volume": [800_000.0, 100.0, 2_000_000.0, 5_000_000.0],
     })
     monkeypatch.setattr(
         "data.bhavcopy_store.latest_two_eq_sessions",
@@ -68,6 +68,7 @@ def test_session_movers_use_two_csvs_not_get_ohlcv(monkeypatch):
     assert gainers[0]["chg_pct"] == 11.11
     assert losers[0]["symbol"] == "DROP"
     assert losers[0]["chg_pct"] == round((50 / 60 - 1) * 100, 2)
+    assert all(row["symbol"] != "CA" for row in gainers + losers)
 
 
 def test_build_pulse_uses_scan_file_not_store(monkeypatch):

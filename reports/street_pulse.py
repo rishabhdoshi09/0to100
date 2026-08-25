@@ -159,10 +159,14 @@ def _movers_from_session(top_n: int = 5) -> tuple[list[dict], list[dict]]:
         turnover = volume * close
         liquid = valid & (turnover >= 5e7)
         chg = ((close / prev_close) - 1.0) * 100.0
+        # Cash-market daily circuit is 20%. Larger gaps are almost always
+        # corporate-action / listing artifacts from pairing two CSVs, not a
+        # session loser the desk should highlight.
+        sane = chg.abs() <= 21.0
         ranked = [
             {"symbol": str(sym), "price": round(float(close.loc[sym]), 1),
              "chg_pct": round(float(chg.loc[sym]), 2)}
-            for sym in chg[liquid].sort_values(ascending=False).index
+            for sym in chg[liquid & sane].sort_values(ascending=False).index
         ]
         if not ranked:
             return [], []
