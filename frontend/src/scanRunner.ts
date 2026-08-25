@@ -19,6 +19,11 @@ export function isActiveStatus(status: string): boolean {
   return status === 'PENDING' || status === 'RUNNING'
 }
 
+export function seedKindMatches(seedKind: string, runnerKind: ScanKind): boolean {
+  if (seedKind === runnerKind) return true
+  return runnerKind === 'LONG_TERM_SCAN' && seedKind === 'LONG_TERM_REFRESH'
+}
+
 const STAGE_LABELS: Record<string, string> = {
   PENDING: 'Starting the scan…',
   PREPARING_HISTORY: 'Preparing market history…',
@@ -201,7 +206,7 @@ export function useScanRunner(kind: ScanKind, options: ScanRunnerOptions = {}): 
 
   useEffect(() => {
     const seed = seedOperation
-    if (!seed || seed.kind !== kind) return
+    if (!seed || !seedKindMatches(seed.kind, kind)) return
     if (trackedIdRef.current === seed.operation_id) {
       setOperation(seed)
       return

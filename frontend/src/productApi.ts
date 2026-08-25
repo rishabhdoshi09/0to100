@@ -153,7 +153,11 @@ export const fetchProductReadiness = (): Promise<ProductReadiness> =>
 export const bootstrapProduct = (): Promise<{
   accepted: boolean
   message: string
+  sequential?: boolean
+  queued_kind?: string | null
+  scan_reused?: boolean
   operations: Array<{ kind: string; operation_id: string; status: string; created: boolean }>
+  pipeline?: DeskPipeline
   readiness: ProductReadiness
 }> => fetch('/api/product-bootstrap', {
   method: 'POST',
@@ -220,6 +224,36 @@ export const fetchScannerWorkspace = (mode: string): Promise<ScannerWorkspace> =
     headers: { Accept: 'application/json' },
   }).then((response) => json<ScannerWorkspace>(response))
 
+export type DeskPipelineStep = {
+  id: string
+  title: string
+  page: string
+  why: string
+  kind?: string | null
+  state: string
+  latest_status?: string | null
+}
+
+export type DeskPipeline = {
+  sequential: boolean
+  queued_kind?: string | null
+  queued_created?: boolean
+  current?: {
+    id: string
+    title: string
+    kind?: string | null
+    status: string
+    why: string
+    page: string
+  } | null
+  steps: DeskPipelineStep[]
+  message: string
+  page?: string
+  scan_reused?: boolean
+  operations?: Array<{ kind?: string; operation_id?: string; status?: string; created?: boolean }>
+  active_kind?: string | null
+}
+
 export type RadarHome = {
   generated_at: string
   market_session: string
@@ -240,9 +274,24 @@ export type RadarHome = {
   counts: { breakouts: number; momentum: number; long_term_picks: number; sniper_breakouts?: number }
   best_breakout?: ScannerWorkspaceRow | null
   best_among_fundamentals?: ScannerWorkspaceRow | null
+  best_of_best?: ScannerWorkspaceRow[]
+  best_among_note?: string
   sniper_candidates?: ScannerWorkspaceRow[]
   best_setups?: ScannerWorkspaceRow[]
   best_setups_note?: string
+  ranking_legend?: {
+    best_setups?: string
+    best_technical_breakout?: string
+    best_among_breakouts?: string
+  }
+  scan_shared_note?: string
+  sepa_rank_used?: boolean
+  second_screen_counts?: {
+    sniper?: number
+    sepa_overlay?: number
+    long_term_funds?: number
+    sniper_with_second_screen?: number
+  }
   scan_progress?: {
     active?: boolean
     stage?: string
@@ -263,6 +312,7 @@ export type RadarHome = {
     live_ticks?: boolean
     last_error?: string
   }
+  desk_pipeline?: DeskPipeline | null
 }
 
 export const fetchRadarHome = (): Promise<RadarHome> =>

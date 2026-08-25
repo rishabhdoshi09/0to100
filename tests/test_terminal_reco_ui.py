@@ -64,12 +64,14 @@ def test_terminal_uses_reco_desk_not_hud_chrome():
 def test_home_is_three_lane_radar_with_two_best_of_panels():
     src = (ROOT / "frontend" / "src" / "marketRadarViews.tsx").read_text(encoding="utf-8")
     assert "BEST TECHNICAL BREAKOUT" in src
-    assert "BEST AMONG BREAKOUTS" in src
+    assert "BEST AMONG THE BEST" in src
     assert "Breakouts" in src and "Momentum" in src and "Long-Term Picks" in src
     assert "TODAY · RECO WEALTH" not in src
     assert "rw-stock-card" not in src
     assert "Make ready" not in src
     assert "Preparing official history and scan" in src
+    assert "Official prices" in src
+    assert "radar-pipeline" in src
     app = (ROOT / "frontend" / "src" / "App.tsx").read_text(encoding="utf-8")
     assert "Search any NSE share" in app
     assert "ZERODHA OK" in app

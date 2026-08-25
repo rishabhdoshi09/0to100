@@ -135,3 +135,19 @@ def scan_age_hours(payload: Mapping[str, Any] | None, *, now: datetime | None = 
         return max(0.0, (current - stamp).total_seconds() / 3600.0)
     except Exception:
         return None
+
+
+def scan_artifact_is_fresh(
+    path: str | Path = DEFAULT_SCAN_PATH,
+    *,
+    max_age_s: float,
+    now: datetime | None = None,
+) -> bool:
+    """True when the canonical scan JSON exists and scanned_at is within max_age_s."""
+    age_h = scan_age_hours(load_scan(path), now=now)
+    if age_h is None:
+        return False
+    try:
+        return age_h * 3600.0 <= float(max_age_s)
+    except (TypeError, ValueError):
+        return False

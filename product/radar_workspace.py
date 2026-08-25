@@ -20,6 +20,38 @@ from product.breakout_quality import (
 BREAKOUT_TAGS = frozenset({"BREAKOUT_52W", "BREAKOUT_RES", "GOLDEN_CROSS", "VOL_SQUEEZE"})
 QUALITY_CLASSES = frozenset({"QUALITY_COMPOUNDER", "GARP_CANDIDATE", "QUALITY_BUT_EXPENSIVE"})
 MIN_LT_FUNDAMENTAL_COVERAGE = 0.50
+SEPA_OVERLAY_MIN = 40
+SEPA_MERGE_KEYS = (
+    "sepa_score",
+    "sepa_max",
+    "sepa_passed",
+    "sepa_total",
+    "sepa_verdict",
+    "sepa_headline",
+    "sepa_advice",
+)
+RANKING_LEGEND = {
+    "best_setups": (
+        "SEPA 7-rule overlay (Minervini Stage 2) on the saved scan. Need ≥40/100. "
+        "Research rank only — not a buy, not 8/8 eligibility."
+    ),
+    "best_technical_breakout": (
+        "Tape rank among sniper-confirm names: volume floor, not chasing, RSI ≤82. "
+        "SEPA is not used here."
+    ),
+    "best_among_breakouts": (
+        "Best among the best: snipers with a second screen (SEPA overlay ≥40 and/or "
+        "usable long-term funds). Sort: more independent confirms first, then "
+        "0.45·SEPA + 0.30·funds + 0.25·tape. Missing inputs score 0 — never invented. "
+        "Not a buy."
+    ),
+}
+BEST_OF_BEST_WEIGHTS = {"sepa": 0.45, "funds": 0.30, "tape": 0.25}
+SCAN_SHARED_NOTE = (
+    "Home and Market Scanner read the same saved whole-market scan "
+    "(latest_momentum_scan.json). Names can appear in more than one lane. "
+    "Scan Now is the only intentional rescan."
+)
 # Re-export shared floors so callers keep importing from this module.
 # Volume < 1× is a HARD reject for sniper/best — never just a sort demote.
 
@@ -136,16 +168,134 @@ def pick_best_sniper_breakout(rows: Sequence[Mapping[str, Any]]) -> dict[str, An
         -_f(r.get("score")),
         str(r.get("symbol", "")),
     ))
-    return attach_best_pick_meta(pool[0], with_context=True, for_best=False)
+    return attach_best_pick_meta(pool[0], with_context=False, for_best=False)
 
 
-def pick_best_among_fundamentals(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any] | None:
-    """Best among breakout candidates that also have usable fundamentals.
+def _sepa_score(row: Mapping[str, Any]) -> int:
+    try:
+        return int(row.get("sepa_score") or 0)
+    except (TypeError, ValueError):
+        return 0
 
-    Separate from the technical sniper lane — fund context never empties breakouts.
-    """
+
+def has_sepa_overlay(row: Mapping[str, Any]) -> bool:
+    """True when the persisted Minervini overlay already scored this name ≥40/100."""
+    return _sepa_score(row) >= SEPA_OVERLAY_MIN
+
+
+def has_second_screen(row: Mapping[str, Any]) -> bool:
+    """Independent confirm on top of sniper tape: SEPA overlay and/or usable funds."""
     from product.breakout_quality import has_usable_fundamentals
 
+    return has_usable_fundamentals(row) or has_sepa_overlay(row)
+
+
+def second_screen_count(row: Mapping[str, Any]) -> int:
+    from product.breakout_quality import has_usable_fundamentals
+
+    return int(has_usable_fundamentals(row)) + int(has_sepa_overlay(row))
+
+
+def best_among_why(row: Mapping[str, Any]) -> str:
+    from product.breakout_quality import has_usable_fundamentals
+
+    parts: list[str] = []
+    if has_sepa_overlay(row):
+        parts.append(f"SEPA {_sepa_score(row)}/100")
+    if has_usable_fundamentals(row):
+        cls = str(row.get("classification") or "").replace("_", " ") or "fundamentals"
+        fund = row.get("fundamental_score")
+        if fund is not None:
+            parts.append(f"{cls} · fund {round(_f(fund))}")
+        else:
+            parts.append(cls)
+    return " · ".join(parts) or "second screen"
+
+
+def desk_action_badge(row: Mapping[str, Any]) -> str:
+    verdict = str(row.get("verdict") or "").upper()
+    status = str(row.get("status") or "")
+    if verdict in {"BUY", "STRONG BUY"} or status == "Ready to trade":
+        return "Buy"
+    return "Watch"
+
+
+def desk_risk_tier(row: Mapping[str, Any]) -> str:
+    """Low / Medium / High from flags already on the row. Never invented."""
+    if bool(row.get("chase_risk")):
+        return "High"
+    label = str(row.get("risk_label") or "").lower()
+    if "chase" in label or "avoid" in label or "high" in label:
+        return "High"
+    rsi = _f(row.get("rsi"))
+    if rsi >= 75:
+        return "High"
+    if rsi >= 65 or "pullback" in label or "review" in label or "medium" in label:
+        return "Medium"
+    if row.get("risk_flags"):
+        return "Medium"
+    return "Low"
+
+
+def desk_upside_metrics(row: Mapping[str, Any]) -> dict[str, float | None]:
+    """% from entry and room to target. None when price/entry/target are missing."""
+    price = _f(row.get("price"))
+    entry = _f(row.get("entry") or row.get("entry_price"))
+    target = _f(row.get("target") or row.get("target_price"))
+    stop = _f(row.get("stop") or row.get("stop_price"))
+    from_entry = round((price / entry - 1.0) * 100.0, 1) if entry > 0 and price > 0 else None
+    to_target = round((target / price - 1.0) * 100.0, 1) if target > 0 and price > 0 else None
+    return {
+        "upside_from_entry_pct": from_entry,
+        "upside_to_target_pct": to_target,
+        "entry": entry or None,
+        "target": target or None,
+        "stop": stop or None,
+        "cmp": price or None,
+    }
+
+
+def best_of_best_parts(row: Mapping[str, Any]) -> dict[str, Any]:
+    """Transparent 0–100 composite. Missing SEPA/funds contribute 0, never a fill-in."""
+    from product.breakout_quality import has_usable_fundamentals
+
+    sepa = float(_sepa_score(row)) if has_sepa_overlay(row) else 0.0
+    fund = min(100.0, _f(row.get("fundamental_score"))) if has_usable_fundamentals(row) else 0.0
+    tape_raw = breakout_quality_score(row, for_best=True)
+    tape = max(0.0, min(100.0, tape_raw / 1.5)) if tape_raw > 0 else 0.0
+    w = BEST_OF_BEST_WEIGHTS
+    composite = round(w["sepa"] * sepa + w["funds"] * fund + w["tape"] * tape, 2)
+    return {
+        "sepa": round(sepa, 2),
+        "funds": round(fund, 2),
+        "tape": round(tape, 2),
+        "composite": composite,
+        "weights": dict(w),
+    }
+
+
+def decorate_best_of_best(row: Mapping[str, Any], rank: int) -> dict[str, Any]:
+    from product.breakout_quality import has_usable_fundamentals
+
+    out = attach_best_pick_meta(dict(row), with_context=False, for_best=True)
+    parts = dict(out.get("best_of_best_parts") or best_of_best_parts(out))
+    out.update(desk_upside_metrics(out))
+    out["rank"] = int(rank)
+    out["best_of_best_score"] = parts.get("composite")
+    out["best_of_best_parts"] = parts
+    out["action_badge"] = desk_action_badge(out)
+    out["risk_tier"] = desk_risk_tier(out)
+    out["best_among_kind"] = "second_screen"
+    out["best_among_why"] = best_among_why(out)
+    out["sepa_used"] = has_sepa_overlay(out)
+    out["funds_used"] = has_usable_fundamentals(out)
+    if out.get("change_5d_pct") is None and out.get("momentum_5d") is not None:
+        out["change_5d_pct"] = _f(out.get("momentum_5d"))
+    return out
+
+
+def rank_best_of_best(rows: Sequence[Mapping[str, Any]], *, limit: int = 8) -> list[dict[str, Any]]:
+    """Rank snipers that already cleared a second screen. Empty when none qualify."""
     pool: list[dict[str, Any]] = []
     for r in rows:
         if not is_sniper_breakout_candidate(r) or not passes_volume_floor(r):
@@ -153,23 +303,30 @@ def pick_best_among_fundamentals(rows: Sequence[Mapping[str, Any]]) -> dict[str,
         ok, _, _ = gate_breakout_quality(r, for_best=True)
         if not ok:
             continue
-        if not has_usable_fundamentals(r):
+        if not has_second_screen(r):
             continue
         row = dict(r)
         row["breakout_quality"] = breakout_quality_score(row, for_best=True)
+        row["second_screens"] = second_screen_count(row)
+        parts = best_of_best_parts(row)
+        row["best_of_best_score"] = parts["composite"]
+        row["best_of_best_parts"] = parts
         pool.append(row)
-    if not pool:
-        return None
     pool.sort(key=lambda r: (
-        str(r.get("classification") or "") not in QUALITY_CLASSES,
+        -int(r.get("second_screens") or 0),
+        -_f(r.get("best_of_best_score")),
+        -_sepa_score(r),
         -_f(r.get("fundamental_score")),
         -_f(r.get("breakout_quality")),
-        -_f(r.get("score")),
-        str(r.get("symbol", "")),
+        str(r.get("symbol") or ""),
     ))
-    out = attach_best_pick_meta(pool[0], with_context=True, for_best=True)
-    out["best_among_kind"] = "fundamentals"
-    return out
+    return [decorate_best_of_best(row, i) for i, row in enumerate(pool[: max(0, int(limit))], start=1)]
+
+
+def pick_best_among_fundamentals(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any] | None:
+    """#1 of rank_best_of_best. None when no sniper has a second screen."""
+    ranked = rank_best_of_best(rows, limit=1)
+    return ranked[0] if ranked else None
 
 
 def merge_fundamental_context(
@@ -194,6 +351,63 @@ def merge_fundamental_context(
         if key in fund and fund.get(key) is not None and out.get(key) is None:
             out[key] = fund.get(key)
     return out
+
+
+def merge_sepa_overlay(
+    row: Mapping[str, Any],
+    sepa_by_symbol: Mapping[str, Mapping[str, Any]] | None,
+) -> dict[str, Any]:
+    """Attach persisted SEPA overlay fields. Missing overlay stays missing — never invented."""
+    out = dict(row)
+    if not sepa_by_symbol:
+        return out
+    sepa = sepa_by_symbol.get(str(out.get("symbol", "") or "").upper())
+    if not sepa:
+        return out
+    for key in SEPA_MERGE_KEYS:
+        if key in sepa and sepa.get(key) is not None and out.get(key) is None:
+            out[key] = sepa.get(key)
+    return out
+
+
+def load_sepa_overlay_cards(
+    scanned_at: str,
+    sepa_cards: Sequence[Mapping[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
+    cards = [dict(c) for c in (sepa_cards or []) if isinstance(c, Mapping) and c.get("symbol")]
+    if cards:
+        return cards
+    try:
+        from product.sepa_setup import load_persisted_best_setups
+
+        persisted = load_persisted_best_setups(str(scanned_at or ""))
+        if persisted:
+            return [dict(c) for c in persisted[0] if isinstance(c, Mapping) and c.get("symbol")]
+    except Exception:
+        return []
+    return []
+
+
+def best_among_note(
+    *,
+    pick: Mapping[str, Any] | None,
+    sniper_count: int,
+    fund_count: int,
+    sepa_count: int,
+    overlap_count: int,
+) -> str:
+    if pick:
+        why = str(pick.get("best_among_why") or pick.get("symbol") or "")
+        return (
+            f"Picked {pick.get('symbol')} — sniper plus {why}. "
+            f"{overlap_count} sniper name(s) had a second screen "
+            f"({sepa_count} SEPA overlay, {fund_count} long-term funds)."
+        )
+    return (
+        f"No overlap yet: {sniper_count} sniper names, {sepa_count} SEPA overlay cards, "
+        f"{fund_count} long-term quality names. Run long-term scan if funds are empty; "
+        "SEPA cards come from the saved scan overlay. Tape lane above is independent."
+    )
 
 
 def classify_breakout_state(row: Mapping[str, Any]) -> str:
@@ -308,6 +522,7 @@ def build_radar_home(
     long_term_payload: Mapping[str, Any] | None,
     market: Any,
     sector_lookup: Callable[[str], str] | None = None,
+    sepa_cards: Sequence[Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
     scan_rows = [dict(r) for r in (scan_payload or {}).get("records", []) or [] if isinstance(r, Mapping)]
     long_rows = [dict(r) for r in (long_term_payload or {}).get("records", []) or [] if isinstance(r, Mapping)]
@@ -319,9 +534,15 @@ def build_radar_home(
         for r in long_rows
         if str(r.get("symbol", "") or "")
     }
+    sepa_overlay = load_sepa_overlay_cards(scan_at, sepa_cards)
+    sepa_by_symbol = {
+        str(r.get("symbol", "") or "").upper(): r
+        for r in sepa_overlay
+        if str(r.get("symbol", "") or "")
+    }
     enriched = [
         enrich_scan_row(
-            merge_fundamental_context(r, fund_by_symbol),
+            merge_sepa_overlay(merge_fundamental_context(r, fund_by_symbol), sepa_by_symbol),
             sector_lookup=sector_lookup,
             scanned_at=scan_at,
         )
@@ -413,12 +634,28 @@ def build_radar_home(
     long_picks.sort(key=lambda r: (-_f(r.get("combined_score")), r.get("symbol", "")))
 
     best_breakout = pick_best_sniper_breakout(breakouts)
-    best_among_fundamentals = pick_best_among_fundamentals(breakouts)
+    best_of_best = rank_best_of_best(breakouts, limit=8)
+    best_among_fundamentals = best_of_best[0] if best_of_best else None
     sniper_breakouts = [
         attach_best_pick_meta(r, with_context=False, for_best=False)
         for r in breakouts
         if r.get("sniper_candidate") and passes_volume_floor(r)
     ]
+    sniper_syms = {str(r.get("symbol", "") or "").upper() for r in sniper_breakouts}
+    sepa_syms = {str(r.get("symbol", "") or "").upper() for r in sepa_overlay}
+    fund_syms = {str(r.get("symbol", "") or "").upper() for r in long_picks}
+    second_screen_syms = {
+        str(r.get("symbol", "") or "").upper()
+        for r in sniper_breakouts
+        if has_second_screen(r)
+    }
+    among_note = best_among_note(
+        pick=best_among_fundamentals,
+        sniper_count=len(sniper_breakouts),
+        fund_count=len(fund_syms),
+        sepa_count=len(sepa_syms),
+        overlap_count=len(second_screen_syms),
+    )
     health = str(getattr(market, "health", "") or (market or {}).get("health", "Unavailable") if isinstance(market, Mapping) else "Unavailable")
     return {
         "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -434,7 +671,18 @@ def build_radar_home(
         "universe_size": int((scan_payload or {}).get("universe_size", 0) or 0),
         "best_breakout": best_breakout,
         "best_among_fundamentals": best_among_fundamentals,
+        "best_of_best": best_of_best,
+        "best_among_note": among_note,
         "sniper_candidates": sniper_breakouts[:12],
+        "ranking_legend": dict(RANKING_LEGEND),
+        "scan_shared_note": SCAN_SHARED_NOTE,
+        "sepa_rank_used": bool(sepa_overlay),
+        "second_screen_counts": {
+            "sniper": len(sniper_syms),
+            "sepa_overlay": len(sepa_syms),
+            "long_term_funds": len(fund_syms),
+            "sniper_with_second_screen": len(second_screen_syms),
+        },
         "lanes": {
             "breakouts": breakouts[:12],
             "momentum": momentum[:12],

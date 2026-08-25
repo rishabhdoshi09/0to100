@@ -8,6 +8,7 @@ import {
   isTerminalStatus,
   progressPercent,
   qualifiedResultLine,
+  seedKindMatches,
   TERMINAL_STATUSES,
 } from './scanRunner'
 import type { OperationRecord } from './types'
@@ -43,6 +44,12 @@ describe('scanRunner semantics', () => {
     expect(isActiveStatus('PENDING')).toBe(true)
     expect(isActiveStatus('SUCCEEDED')).toBe(false)
     TERMINAL_STATUSES.forEach((status) => expect(isTerminalStatus(status)).toBe(true))
+  })
+
+  it('attaches long-term refresh jobs to the long-term scan runner', () => {
+    expect(seedKindMatches('LONG_TERM_REFRESH', 'LONG_TERM_SCAN')).toBe(true)
+    expect(seedKindMatches('LONG_TERM_SCAN', 'LONG_TERM_SCAN')).toBe(true)
+    expect(seedKindMatches('MARKET_SCAN', 'LONG_TERM_SCAN')).toBe(false)
   })
 
   it('builds progress line only with a real denominator', () => {

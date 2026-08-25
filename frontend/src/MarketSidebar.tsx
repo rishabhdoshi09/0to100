@@ -68,7 +68,7 @@ function dataCopy(dashboard: DashboardPayload): string {
     return `READY · ${dashboard.data.bhavcopy.latest_date || '—'}`
   }
   const busy = dashboard.operations.running || (dashboard.operations.active || []).length > 0
-  return busy ? 'Preparing official history…' : 'Starting data lanes…'
+  return busy ? 'Preparing official history…' : 'Starting official prices…'
 }
 
 export function MarketSidebar({

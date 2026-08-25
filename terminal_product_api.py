@@ -452,41 +452,37 @@ def product_dashboard() -> dict[str, Any]:
     return dashboard_payload
 
 
+def _market_scan_is_fresh() -> bool:
+    """Skip a second whole-market scan when the canonical artifact is still fresh."""
+    try:
+        from product.desk_pipeline import scan_is_fresh
+
+        return bool(scan_is_fresh())
+    except Exception:
+        return False
+
+
 def queue_product_bootstrap(*, requested_by: str = "product_bootstrap") -> dict[str, Any]:
-    """Enqueue data, news, scan and long-term work. Dedupes active jobs. Does not invent data."""
-    from operations.market_ops import (
-        DATA_PREPARE,
-        LANES,
-        LONG_TERM_REFRESH,
-        MARKET_SCAN,
-        NEWS_REFRESH,
-    )
+    """Start the next due desk download only. Later steps wait until this one finishes."""
     from operations.store import OperationStore
+    from product.desk_pipeline import advance_desk_pipeline
 
     core._ensure_ops_worker()
     store = OperationStore(core.OPS_DB)
-    operations = []
-    for kind in (DATA_PREPARE, NEWS_REFRESH, MARKET_SCAN, LONG_TERM_REFRESH):
-        item, created = store.enqueue(
-            kind,
-            lane=LANES[kind],
-            requested_by=requested_by,
-        )
-        operations.append(
-            {
-                "kind": kind,
-                "operation_id": item.get("operation_id"),
-                "status": item.get("status"),
-                "created": created,
-            }
-        )
+    pipeline = advance_desk_pipeline(store, requested_by=requested_by)
+    queued = pipeline.get("queued_kind")
+    if queued:
+        message = str(pipeline.get("message") or f"Queued {queued} — next desk step starts after this finishes.")
+    else:
+        message = str(pipeline.get("message") or "Desk data is current.")
     return {
         "accepted": True,
-        "message": (
-            "QuantTerm preparation queued across independent data, news, scan and "
-            "long-term lanes."
-        ),
-        "operations": operations,
+        "message": message,
+        "scan_reused": bool(pipeline.get("scan_reused")),
+        "sequential": True,
+        "queued_kind": queued,
+        "operations": list(pipeline.get("operations") or []),
+        "pipeline": pipeline,
     }
 
 
@@ -507,9 +503,18 @@ def _product_startup() -> None:
     _startup_prepare_product()
 
 
+@app.get("/api/desk-pipeline")
+def desk_pipeline_status() -> dict[str, Any]:
+    """Read-only viewing-order snapshot. Does not enqueue downloads."""
+    from operations.store import OperationStore
+    from product.desk_pipeline import describe_desk_pipeline
+
+    return describe_desk_pipeline(OperationStore(core.OPS_DB))
+
+
 @app.post("/api/product-bootstrap")
 def product_bootstrap() -> dict[str, Any]:
-    """Queue the independent operations that make the retail product usable."""
+    """Start the next due desk download only. Later steps wait until this one finishes."""
     try:
         payload = queue_product_bootstrap(requested_by="product_bootstrap")
         payload["readiness"] = product_readiness()
