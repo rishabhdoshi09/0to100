@@ -64,7 +64,7 @@ export const PAGE_GUIDE: Record<string, PageGuide> = {
       'What is upside from entry vs room to target?',
       'Which tracked picks are still open vs resolved?',
     ],
-    action: 'Open a card, read why now, then Full research in Stock Intelligence.',
+    action: 'Open a card, read why now, then Investigate for fundamentals vs the setup.',
     doesNot: 'A Buy badge is research classification — not a broker order or return promise.',
   },
   'Market Reports': {
@@ -80,15 +80,15 @@ export const PAGE_GUIDE: Record<string, PageGuide> = {
   },
   'Stock Intelligence': {
     title: 'Stock Intelligence',
-    purpose: 'Combines price structure, technicals, current fundamentals, risks, news and source dates.',
+    purpose: 'Combines price structure, technicals, current fundamentals, risks, news and source dates. Investigate is the second-stage due-diligence view on a scanner candidate.',
     questions: [
       'What is the current trend and volatility?',
       'Are fundamentals complete and fresh?',
-      'Which evidence supports the shortlist?',
+      'Does the sector-framework evidence support, leave unchanged, or contradict the technical setup?',
       'Which missing fact could change the conclusion?',
     ],
-    action: 'Refresh missing fundamentals or complete the source pack in Research Data.',
-    doesNot: 'Current fundamentals are not point-in-time historical evidence unless explicitly labelled.',
+    action: 'Open Investigate on a shortlisted name, then refresh missing fundamentals in Research Data if coverage is thin.',
+    doesNot: 'Investigate is not a new scanner and does not place or recommend orders. Empty stays empty.',
   },
   'Long-Term': {
     title: 'Long-Term Research',

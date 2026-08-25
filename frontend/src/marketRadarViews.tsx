@@ -22,7 +22,7 @@ import {
 } from './productApi'
 import { RiskLensCard } from './productViews'
 import { LiveScanBanner, type ExperienceViewProps } from './experience'
-import { keepRicher, recall, remember } from './sessionMemory'
+import { keepRicher, markInvestigate, recall, remember } from './sessionMemory'
 import {
   bestSetupsFromRadar,
   dashCell,
@@ -733,6 +733,7 @@ export function RadarHomeView(props: ExperienceViewProps & {
               {plan?.target != null && <div>Target: {money(plan.target)}</div>}
               <RiskLensCard plan={plan} />
               <div className="radar-action-row">
+                <button type="button" onClick={() => { markInvestigate(selected); setActive('Stock Intelligence') }}>Investigate</button>
                 <button type="button" onClick={() => setActive('Stock Intelligence')}>Full research</button>
                 <button type="button" onClick={() => onCompare(selected)}>Compare</button>
                 <button type="button" onClick={() => onWatchlist(selected)}>Watchlist</button>
@@ -879,6 +880,7 @@ export function MarketScannerView(props: ExperienceViewProps & { onCompare: (sym
           <Panel title={`CHART · ${selected || '—'}`}><ChartWorkspace symbol={selected} bars={bars} row={selectedRow} /></Panel>
           <Panel title="ACTIONS">
             <div className="radar-action-row">
+              <button type="button" disabled={!selected} onClick={() => { if (selected) { markInvestigate(selected); setActive('Stock Intelligence') } }}>Investigate</button>
               <button type="button" disabled={!selected} onClick={() => setActive('Stock Intelligence')}>Stock Intelligence</button>
               <button type="button" disabled={!selected} onClick={() => selected && onCompare(selected)}>Compare</button>
             </div>

@@ -169,6 +169,106 @@ export const fetchStockIntelligence = (symbol: string): Promise<StockWorkspace> 
     headers: { Accept: 'application/json' },
   }).then((response) => json<StockWorkspace>(response))
 
+export type DueDiligenceKpi = {
+  id: string
+  label: string
+  pillar: string
+  available: boolean
+  trend: string
+  fact: string
+  interpretation: string
+  implication: string
+  source: string
+  source_url: string
+  source_date: string
+  confidence: string
+  snapshot?: {
+    current: number | null
+    current_period?: string
+    previous?: number | null
+    previous_period?: string
+    year_ago?: number | null
+    year_ago_period?: string
+    points?: { period: string; value: number }[]
+  }
+}
+
+export type DueDiligenceEvent = {
+  headline: string
+  published_at: string
+  source: string
+  url: string
+  official: boolean
+  verified: boolean
+  event_type: string
+  impact: string
+  summary: string
+}
+
+export type DueDiligenceReport = {
+  schema_version: number
+  symbol: string
+  company: string
+  profile: {
+    sector: string
+    industry: string
+    framework_id: string
+    framework_reason: string
+    business_model: string
+    revenue_drivers: string
+    about: string
+  }
+  framework: { id: string; label: string; blurb: string }
+  technical_context: {
+    available: boolean
+    scanner_status: string
+    scanner_score: number | null
+    sepa_score: number | null
+    breakout_grade: string | null
+    breakout_quality: string
+    chase_risk: boolean
+    detail: string
+  }
+  fundamental_quality: {
+    score: number | null
+    label: string
+    coverage_pct: number
+    explain: string
+  }
+  business_trend: string
+  financial_strength: string
+  earnings_quality: string
+  balance_sheet_quality: string
+  governance_risk: string
+  news_event_impact: string
+  vs_technical_setup: string
+  vs_detail: string
+  strengths: string[]
+  concerns: string[]
+  unavailable: string[]
+  what_changed: string[]
+  red_flags: { id: string; title: string; kind: string; fact: string; source?: string; source_date?: string; url?: string }[]
+  watch_next: string[]
+  kpis: DueDiligenceKpi[]
+  events: DueDiligenceEvent[]
+  as_of: {
+    latest_financial_period: string
+    fundamentals_fetched_at: string
+    fundamentals_freshness: string
+    latest_material_news: string
+    scan_scanned_at: string
+    generated_at: string
+  }
+  places_orders: boolean
+  disclaimer: string
+  question: string
+}
+
+export const fetchDueDiligence = (symbol: string): Promise<DueDiligenceReport> =>
+  fetch(`/api/due-diligence/${encodeURIComponent(symbol)}`, {
+    headers: { Accept: 'application/json' },
+  }).then((response) => json<DueDiligenceReport>(response))
+
 export type TradePlan = {
   available: boolean
   symbol: string

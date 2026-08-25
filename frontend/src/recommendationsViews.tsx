@@ -14,7 +14,7 @@ import {
 } from './productApi'
 import type { ExperienceViewProps } from './experience'
 import { LiveScanBanner } from './experience'
-import { keepRicher, recall } from './sessionMemory'
+import { keepRicher, markInvestigate, recall } from './sessionMemory'
 
 const CAT_ICONS: Record<string, string> = {
   wealth_builders: 'W',
@@ -211,11 +211,13 @@ function DecisionSheet({
   categoryLabel,
   onBack,
   onResearch,
+  onInvestigate,
 }: {
   card: RecommendationCard
   categoryLabel: string
   onBack: () => void
   onResearch: () => void
+  onInvestigate: () => void
 }) {
   const [showEvidence, setShowEvidence] = useState(false)
   const zone = buyZoneLabel(card)
@@ -323,7 +325,10 @@ function DecisionSheet({
         >
           {showEvidence ? 'Hide evidence' : 'See evidence'}
         </button>
-        <button type="button" className="reco-primary" onClick={onResearch}>
+        <button type="button" className="reco-primary" onClick={onInvestigate}>
+          Investigate
+        </button>
+        <button type="button" className="reco-ghost" onClick={onResearch}>
           Full research
         </button>
       </div>
@@ -429,6 +434,10 @@ export function RecommendationsView({
           categoryLabel={category.label}
           onBack={() => setSelectedCard(null)}
           onResearch={() => openResearch(selectedCard.symbol)}
+          onInvestigate={() => {
+            markInvestigate(selectedCard.symbol)
+            openResearch(selectedCard.symbol)
+          }}
         />
         <p className="reco-foot">{data.disclaimer}</p>
       </div>

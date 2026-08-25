@@ -14,15 +14,18 @@ import {
   bootstrapProduct,
   fetchProductReadiness,
   fetchStockIntelligence,
+  fetchDueDiligence,
   fetchTradePlan,
   refreshStockFundamentals,
   fetchSymbolRatios,
+  type DueDiligenceKpi,
+  type DueDiligenceReport,
   type IntelligenceMetric,
   type ProductReadiness,
   type StockWorkspace,
   type TradePlan,
 } from './productApi'
-import { keepRicher, recall } from './sessionMemory'
+import { keepRicher, markInvestigate, recall, wantsInvestigate } from './sessionMemory'
 import type { ChartBar, ControlName, DashboardPayload } from './types'
 
 // Read-only risk-first "R lens" — exact shares, rupee risk, reward:risk, book heat. No orders.
@@ -240,6 +243,165 @@ function MetricExplanation({ metric }: { metric: IntelligenceMetric }) {
   )
 }
 
+function sparkHeights(points: { period: string; value: number }[] | undefined): number[] {
+  const values = (points || []).map((item) => item.value)
+  if (!values.length) return []
+  const min = Math.min(...values)
+  const max = Math.max(...values)
+  const span = max - min || 1
+  return values.map((value) => 18 + ((value - min) / span) * 82)
+}
+
+function verdictTone(value: string): string {
+  const v = (value || '').toUpperCase()
+  if (v.includes('STRONGLY SUPPORTS') || v === 'SUPPORTS') return 'is-supports'
+  if (v.includes('CONTRADICTS')) return 'is-contradicts'
+  return 'is-neutral'
+}
+
+function InvestigatePanel({ report, loading, error }: {
+  report: DueDiligenceReport | null
+  loading: boolean
+  error: string
+}) {
+  const [openId, setOpenId] = useState<string | null>(null)
+  useEffect(() => { setOpenId(null) }, [report?.symbol])
+  if (loading && !report) {
+    return <div className="large-empty">Loading sector-framework due diligence from files on disk…</div>
+  }
+  if (error && !report) {
+    return <EmptyState title="Due diligence did not load" detail={error} />
+  }
+  if (!report) {
+    return <EmptyState title="Investigate is empty" detail="No due-diligence report is on file for this symbol." />
+  }
+  const scoreLabel = report.fundamental_quality.score == null
+    ? 'Unmeasured'
+    : `${report.fundamental_quality.score} / 100 — ${report.fundamental_quality.label}`
+  return (
+    <div className="dd-root">
+      <p className="dd-question">{report.question}</p>
+      <aside className={`dd-verdict ${verdictTone(report.vs_technical_setup)}`} aria-label="Fundamental versus technical setup">
+        <span>Fundamental vs technical setup</span>
+        <strong>{report.vs_technical_setup}</strong>
+        <p>{report.vs_detail}</p>
+      </aside>
+      <div className="dd-score-grid">
+        <article><span>Fundamental quality</span><strong>{scoreLabel}</strong><small>{report.fundamental_quality.explain}</small></article>
+        <article><span>Business trend</span><strong>{report.business_trend}</strong></article>
+        <article><span>Financial strength</span><strong>{report.financial_strength}</strong></article>
+        <article><span>Earnings quality</span><strong>{report.earnings_quality}</strong></article>
+        <article><span>Balance-sheet quality</span><strong>{report.balance_sheet_quality}</strong></article>
+        <article><span>Governance risk</span><strong>{report.governance_risk}</strong></article>
+        <article><span>News / event impact</span><strong>{report.news_event_impact}</strong></article>
+      </div>
+      <p className="dd-framework">{report.framework.label}. {report.framework.blurb} Sector: {report.profile.sector || 'Unclassified'}.</p>
+      <div className="stock-overview-grid">
+        <Panel title="KEY STRENGTHS" subtitle="Measured improving KPIs only">
+          {(report.strengths || []).length
+            ? <ul className="dd-watch">{report.strengths.map((item) => <li key={item}>{item}</li>)}</ul>
+            : <EmptyState title="No measured strength" detail="Improving KPIs will appear here when values exist." />}
+        </Panel>
+        <Panel title="CONCERNS" subtitle="Measured deteriorating KPIs — not red flags">
+          {(report.concerns || []).length
+            ? <ul className="dd-watch">{report.concerns.map((item) => <li key={item}>{item}</li>)}</ul>
+            : <EmptyState title="No measured concern" />}
+        </Panel>
+      </div>
+      <Panel title="RED FLAGS" subtitle="True flags only — not ordinary weakness">
+        {(report.red_flags || []).length
+          ? (
+            <ul className="dd-flag-list">
+              {report.red_flags.map((flag) => (
+                <li key={flag.id}>
+                  <strong>{flag.title}</strong>
+                  <span>{flag.fact}</span>
+                  <small>{flag.source || 'Source unavailable'} · {flag.source_date || 'date unavailable'}</small>
+                </li>
+              ))}
+            </ul>
+          )
+          : <EmptyState title="No red flag on file" />}
+      </Panel>
+      <Panel title="WHAT CHANGED RECENTLY" subtitle="Meaningful items only">
+        {(report.what_changed || []).length
+          ? <ul className="dd-watch">{report.what_changed.map((item) => <li key={item}>{item}</li>)}</ul>
+          : <EmptyState title="No material quarter-to-quarter change measured" />}
+      </Panel>
+      <Panel title={`${report.framework.label.toUpperCase()} KPIs`} subtitle="Click a row for fact, interpretation, implication and source">
+        <div className="dd-kpi-table">
+          {report.kpis.map((kpi: DueDiligenceKpi) => {
+            const open = openId === kpi.id
+            const heights = sparkHeights(kpi.snapshot?.points)
+            return (
+              <article key={kpi.id} className={`dd-kpi ${kpi.available ? '' : 'unavailable'} ${open ? 'open' : ''}`}>
+                <button type="button" onClick={() => setOpenId(open ? null : kpi.id)}>
+                  <div>
+                    <span>{kpi.label}</span>
+                    <strong>{kpi.available ? kpi.fact : 'Data unavailable'}</strong>
+                    <small>{kpi.available ? `${kpi.trend} · ${kpi.pillar}` : 'Missing from cache — not estimated.'}</small>
+                  </div>
+                  {heights.length > 1 ? (
+                    <div className="dd-spark" aria-hidden="true">
+                      {heights.map((height, index) => (
+                        <i key={`${kpi.id}-${index}`} style={{ height: `${height}%` }} />
+                      ))}
+                    </div>
+                  ) : null}
+                </button>
+                {open ? (
+                  <dl className="dd-kpi-detail">
+                    <div><dt>Fact</dt><dd>{kpi.fact}</dd></div>
+                    <div><dt>Interpretation</dt><dd>{kpi.interpretation}</dd></div>
+                    <div><dt>Implication</dt><dd>{kpi.implication}</dd></div>
+                    <div>
+                      <dt>Source</dt>
+                      <dd>
+                        {kpi.source_url
+                          ? <a href={kpi.source_url} target="_blank" rel="noreferrer">{kpi.source}</a>
+                          : kpi.source}
+                        {kpi.source_date ? ` · ${kpi.source_date}` : ''} · confidence {kpi.confidence}
+                      </dd>
+                    </div>
+                  </dl>
+                ) : null}
+              </article>
+            )
+          })}
+        </div>
+        {(report.unavailable || []).length > 0 && (
+          <p className="dd-missing">Data unavailable: {report.unavailable.join(', ')}.</p>
+        )}
+      </Panel>
+      <Panel title="MATERIAL NEWS AND FILINGS" subtitle="Broker roundups are dropped; empty stays empty">
+        {(report.events || []).length
+          ? (
+            <ul className="dd-events">
+              {report.events.map((event) => (
+                <li key={`${event.published_at}-${event.headline}`}>
+                  <strong>{event.headline}</strong>
+                  <span>{event.event_type} · {event.impact} · {event.source || 'source unavailable'} · {event.published_at || 'date unavailable'}{event.verified ? ' · verified' : ''}</span>
+                  {event.url ? <a href={event.url} target="_blank" rel="noreferrer">Open source</a> : <small>No URL on file</small>}
+                </li>
+              ))}
+            </ul>
+          )
+          : <EmptyState title="No material company-tagged development on file" />}
+      </Panel>
+      <Panel title="WHAT TO WATCH NEXT" subtitle="Measurable follow-ups, not forecasts">
+        <ul className="dd-watch">{(report.watch_next || []).map((item) => <li key={item}>{item}</li>)}</ul>
+      </Panel>
+      <p className="dd-fresh">
+        Latest financial period: {report.as_of.latest_financial_period || 'Data unavailable'}
+        {' · '}fundamentals fetched: {report.as_of.fundamentals_fetched_at || 'Data unavailable'}
+        {' · '}freshness: {report.as_of.fundamentals_freshness || 'MISSING'}
+        {' · '}latest material news: {report.as_of.latest_material_news || 'Data unavailable'}
+      </p>
+      <p className="dd-disclaimer">{report.disclaimer}</p>
+    </div>
+  )
+}
+
 export function ProductStockIntelligenceView(props: ViewProps) {
   const { dashboard, selected, bars, runControl, setActive, onCompare, onWatchlist, depth } = props
   const [workspace, setWorkspace] = useState<StockWorkspace | null>(() => (
@@ -247,12 +409,15 @@ export function ProductStockIntelligenceView(props: ViewProps) {
   ))
   const [plan, setPlan] = useState<TradePlan | null>(null)
   const [ratios, setRatios] = useState<import('./productApi').SymbolRatioRow[]>([])
-  const [tab, setTab] = useState('Overview')
+  const [tab, setTab] = useState(() => (selected && wantsInvestigate(selected) ? 'Investigate' : 'Overview'))
   const [loading, setLoading] = useState(false)
   const [busy, setBusy] = useState('')
   const [error, setError] = useState('')
+  const [dd, setDd] = useState<DueDiligenceReport | null>(null)
+  const [ddLoading, setDdLoading] = useState(false)
+  const [ddError, setDdError] = useState('')
 
-  const intelTabs = ['Overview', 'Chart', 'Financials', 'Ratios', 'Ownership', 'Events', 'Peers', 'Evidence']
+  const intelTabs = ['Investigate', 'Overview', 'Chart', 'Financials', 'Ratios', 'Ownership', 'Events', 'Peers', 'Evidence']
 
   const load = async () => {
     if (!selected) {
@@ -289,8 +454,30 @@ export function ProductStockIntelligenceView(props: ViewProps) {
   }, [selected, dashboard.scan.scanned_at])
 
   useEffect(() => {
-    setTab('Overview')
+    if (selected && wantsInvestigate(selected)) setTab('Investigate')
+    else setTab('Overview')
   }, [selected])
+
+  const loadDd = async () => {
+    if (!selected) {
+      setDd(null)
+      return
+    }
+    setDdLoading(true)
+    try {
+      const next = await fetchDueDiligence(selected)
+      setDd(next)
+      setDdError('')
+    } catch (reason) {
+      setDdError(reason instanceof Error ? reason.message : 'Due diligence failed')
+    } finally {
+      setDdLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    if (tab === 'Investigate' && selected) void loadDd()
+  }, [tab, selected, dashboard.scan.scanned_at])
 
   const runAction = async (control: ControlName | 'REFRESH_STOCK_FUNDAMENTALS') => {
     if (!selected) return
@@ -319,6 +506,15 @@ export function ProductStockIntelligenceView(props: ViewProps) {
       <header className="stock-workspace-hero">
         <div><span>{workspace?.sector || 'Sector not classified'}</span><h2>{workspace?.company || selected}</h2><p>{selected} · {workspace?.summary || 'Verified research is still loading.'}</p></div>
         <div className="stock-workspace-actions">
+          <button
+            type="button"
+            onClick={() => {
+              markInvestigate(selected)
+              setTab('Investigate')
+            }}
+          >
+            Investigate
+          </button>
           {onWatchlist && (
             <button type="button" onClick={() => onWatchlist(selected)}>★ Watchlist</button>
           )}
@@ -339,6 +535,10 @@ export function ProductStockIntelligenceView(props: ViewProps) {
       </div>
 
       <SectionTabs tabs={intelTabs} active={tab} onChange={setTab} />
+
+      {tab === 'Investigate' && (
+        <InvestigatePanel report={dd} loading={ddLoading} error={ddError} />
+      )}
 
       {tab === 'Overview' && (
         <>
