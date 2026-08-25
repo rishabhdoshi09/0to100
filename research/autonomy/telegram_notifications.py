@@ -254,6 +254,14 @@ class TelegramNotifier:
                     payload = load_scan() or {}
                 except Exception:
                     payload = {}
+            day = self._day()
+            sent_keys = list(self.state.get("sent", {}).get(day, []) or [])
+            if any(str(k).startswith(("setup:", "pre:")) for k in sent_keys):
+                out = {"setup": 0, "prebreakout": 0, "reason": "already_sent"}
+                drain["last_epoch"] = now
+                drain["last_reason"] = "already_sent"
+                self._save()
+                return out
             sent = self.notify_scan(payload, phase="intraday") or {}
             drain["last_epoch"] = now
             drain["last_reason"] = str(sent.get("reason") or "")

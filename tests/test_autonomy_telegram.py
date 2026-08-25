@@ -328,6 +328,31 @@ def test_drain_sends_when_telegram_connects_after_scan(tmp_path):
     assert sent["setup"] == 1 and sent["prebreakout"] == 1
     assert engine.messages
     assert "Sniper live watch" in engine.messages[0][0]
+    again = n.drain_last_scan(_payload(), min_interval_s=0)
+    assert again["reason"] == "already_sent"
+    assert len(engine.messages) == 1
+
+
+def test_drain_does_not_send_next_batch_the_same_day(tmp_path):
+    engine = FakeEngine()
+    now = lambda: datetime(2026, 8, 24, 10, 30)
+    n = TelegramNotifier(tmp_path, engine_factory=lambda: engine, now_fn=now)
+    payload = {
+        "records": [
+            {"symbol": f"S{i}", "status": "Ready to trade", "verdict": "BUY",
+             "price": 100, "entry": 101, "stop": 95, "target": 110,
+             "score": 90 - i, "rsi": 55, "volume_ratio": 1.5,
+             "signals": ["MOMENTUM"], "reasons": ["Volume confirmed"]}
+            for i in range(12)
+        ]
+    }
+    first = n.drain_last_scan(payload, min_interval_s=0)
+    assert first["reason"] == "sent" and first["setup"] == 5
+    second = n.drain_last_scan(payload, min_interval_s=0)
+    assert second["reason"] == "already_sent"
+    assert len(engine.messages) == 1
+    assert "<b>S0</b>" in engine.messages[0][0]
+    assert "<b>S10</b>" not in engine.messages[0][0]
 
 
 def test_drain_throttles_failed_sends(tmp_path):
