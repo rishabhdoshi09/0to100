@@ -533,6 +533,19 @@ def stock_intelligence(symbol: str) -> dict[str, Any]:
         raise HTTPException(status_code=500, detail=f"Stock intelligence failed: {exc}") from exc
 
 
+@app.get("/api/due-diligence/{symbol}")
+def due_diligence(symbol: str) -> dict[str, Any]:
+    """Second-stage research on a scanner candidate. Cache and files only — never scrapes."""
+    try:
+        from product.due_diligence import build_due_diligence
+
+        return build_due_diligence(clean_symbol(symbol))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Due diligence failed: {exc}") from exc
+
+
 @app.post("/api/stock-intelligence/{symbol}/refresh-fundamentals")
 def refresh_stock_fundamentals(symbol: str) -> dict[str, Any]:
     try:
