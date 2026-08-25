@@ -253,6 +253,8 @@ def test_live_stays_locked_and_no_broker_or_workers():
     terminal = (ROOT / "frontend" / "src" / "views.tsx").read_text(encoding="utf-8")
     radar = (ROOT / "frontend" / "src" / "marketRadarViews.tsx").read_text(encoding="utf-8")
     assert "BotLearningPanel" in terminal and "WHAT THE BOT LEARNED" in terminal
+    assert "SEPA BEST EXAM" in terminal
+    assert "CANDIDATE TESTS" in terminal
     # Paper learning lives on Holdings / Backtest / System Health — Home is a radar, not a feed.
     assert "BotLearningPanel" not in radar
     assert "place_order" not in terminal and "place_order" not in radar

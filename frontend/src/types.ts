@@ -233,6 +233,32 @@ export type DashboardPayload = {
       closed_trades?: number
       cooldown?: Array<{ symbol?: string; until?: string; reason?: string }>
       prefer?: string[]
+      shadow_prefer?: string[]
+      self_feed?: {
+        as_of?: string
+        slot?: string
+        summary?: string
+        taken?: Array<{ symbol?: string; strategy_id?: string; status?: string }>
+        skipped?: Array<{ symbol?: string; status?: string; reason?: string }>
+        sepa_best?: Array<{
+          symbol?: string
+          sepa_score?: number | null
+          sepa_verdict?: string
+          paper_status?: string
+          skip_reason?: string
+          not_a_buy?: boolean
+        }>
+        candidate_tests?: Array<{
+          symbol?: string
+          outcome?: string
+          r_multiple?: number | null
+          n_forward_bars?: number
+          role?: string
+          paper_status?: string
+        }>
+        disclaimer?: string
+        live_locked?: boolean
+      }
       summary?: string
       live_locked?: boolean
       disclaimer?: string

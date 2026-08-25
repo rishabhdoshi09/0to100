@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from dataclasses import asdict
 from typing import Callable
+import os
 
 from research.autonomy import hypotheses as HYP
 from research.autonomy import challenge as CH
@@ -110,6 +111,13 @@ def run_learning(brain, *, session_date: str, dialogue=None) -> dict:
         paper_memory = remember_paper_book(closed, as_of=session_date)
     except Exception:
         paper_memory = {}
+    if not os.environ.get("PYTEST_CURRENT_TEST"):
+        try:
+            from product.paper_self_feed import fold_latest_into_memory
+
+            paper_memory = fold_latest_into_memory(paper_memory)
+        except Exception:
+            pass
 
     gaps = HYP.plan_gaps(diagnostics)
     for gap in gaps:

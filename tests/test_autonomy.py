@@ -271,7 +271,7 @@ def test_ui_source_does_not_start_workers():
                 "ui/retail_trade_market.py", "ui/news_curator_page.py",
                 "ui/auto_research_page.py", "ui/desk_board.py", "ui/desk_pages.py",
                 "product/sepa_setup.py", "product/monitor_context.py",
-                "product/paper_learning.py"):
+                "product/paper_learning.py", "product/paper_self_feed.py"):
         text = (root / rel).read_text(encoding="utf-8")
         assert ".start()" not in text, rel
         assert "start_worker=True" not in text, rel
