@@ -7,7 +7,9 @@ Chat ID: message the bot, then GET https://api.telegram.org/bot<token>/getUpdate
 """
 from __future__ import annotations
 
+import html
 import os
+import re
 import sqlite3
 import logging
 from dataclasses import dataclass, field
@@ -47,21 +49,39 @@ class AlertRule:
 _ENV_PATH = Path(__file__).resolve().parent.parent / ".env"
 
 
+_PLACEHOLDER_CREDS = {
+    "",
+    "your_bot_token_here",
+    "your_chat_id_here",
+    "changeme",
+    "...",
+}
+
+
+def _clean_cred(value: str) -> str:
+    text = str(value or "").strip().strip('"').strip("'")
+    if text.lower() in _PLACEHOLDER_CREDS:
+        return ""
+    return text
+
+
 def _telegram_cred(name: str) -> str:
     """Prefer a non-empty .env value. An empty process env must not hide the file."""
     file_value = ""
     try:
         for raw in _ENV_PATH.read_text(encoding="utf-8").splitlines():
             line = raw.strip()
+            if line.lower().startswith("export "):
+                line = line[7:].strip()
             if not line or line.startswith("#") or "=" not in line:
                 continue
             key, val = line.split("=", 1)
             if key.strip() == name:
-                file_value = val.strip().strip('"').strip("'")
+                file_value = _clean_cred(val)
                 break
     except Exception:
         pass
-    env_value = (os.environ.get(name) or "").strip()
+    env_value = _clean_cred(os.environ.get(name) or "")
     return file_value or env_value
 
 
@@ -74,6 +94,7 @@ class AlertEngine:
         self._token   = _telegram_cred("TELEGRAM_BOT_TOKEN")
         self._chat_id = _telegram_cred("TELEGRAM_CHAT_ID")
         self.enabled  = bool(self._token and self._chat_id)
+        self.last_error = ""
 
     # ------------------------------------------------------------------
     # Public helpers
@@ -106,14 +127,42 @@ class AlertEngine:
             chunks.append(current)
         return chunks
 
+    @staticmethod
+    def _html_to_plain(message: str) -> str:
+        text = re.sub(r"<br\s*/?>", "\n", str(message or ""), flags=re.I)
+        text = re.sub(r"</p>", "\n", text, flags=re.I)
+        text = re.sub(r"<[^>]+>", "", text)
+        return html.unescape(text)
+
+    def _post_chunk(self, url: str, payload: dict) -> bool:
+        try:
+            resp = requests.post(url, json=payload, timeout=8)
+            if resp.ok:
+                self.last_error = ""
+                return True
+            detail = (resp.text or "")[:180]
+            self.last_error = f"HTTP {resp.status_code}: {detail}"
+            logger.warning("Telegram send failed: %s", self.last_error)
+            print(f"[TELEGRAM] send {self.last_error}", flush=True)
+            return False
+        except Exception as exc:
+            self.last_error = f"{type(exc).__name__}: {exc}"
+            logger.warning("Telegram send failed: %s", self.last_error)
+            print(f"[TELEGRAM] send error: {self.last_error}", flush=True)
+            return False
+
     def send(self, message: str, reply_markup: dict | None = None) -> bool:
         """
         POST *message* to Telegram sendMessage. Optional reply_markup
         attaches inline action buttons (see alerts/telegram_actions.py).
         Long messages auto-split at the 4096-char API cap (buttons ride
         on the last chunk). Returns True only if EVERY chunk delivered.
+        HTML parse failures retry the same chunk as plain text so a markup
+        reject cannot silence setups / breakout watches.
         """
+        self.last_error = ""
         if not self.enabled:
+            self.last_error = "not_configured"
             return False
         url = self._TELEGRAM_API.format(token=self._token)
         chunks = self._split_message(message, self._MAX_LEN)
@@ -123,23 +172,19 @@ class AlertEngine:
                 "chat_id":    self._chat_id,
                 "text":       chunk,
                 "parse_mode": "HTML",
+                "disable_web_page_preview": True,
             }
             if reply_markup and i == len(chunks) - 1:
                 payload["reply_markup"] = reply_markup
-            try:
-                resp = requests.post(url, json=payload, timeout=8)
-                if not resp.ok:
-                    detail = (resp.text or "")[:180]
-                    logger.warning("Telegram send failed (chunk %d/%d): HTTP %s %s",
-                                   i + 1, len(chunks), resp.status_code, detail)
-                    print(f"[TELEGRAM] send HTTP {resp.status_code}: {detail}", flush=True)
-                    ok = False
-                    continue
-            except Exception as exc:
-                logger.warning("Telegram send failed (chunk %d/%d): %s",
-                               i + 1, len(chunks), exc)
-                print(f"[TELEGRAM] send error: {type(exc).__name__}: {exc}", flush=True)
-                ok = False
+            if self._post_chunk(url, payload):
+                continue
+            # Telegram rejects unmatched HTML — deliver the same chunk as text.
+            plain = dict(payload)
+            plain.pop("parse_mode", None)
+            plain["text"] = self._html_to_plain(chunk)
+            if self._post_chunk(url, plain):
+                continue
+            ok = False
         return ok
 
     # ------------------------------------------------------------------

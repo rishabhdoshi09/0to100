@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import threading
 import time
 from typing import Any
 
@@ -201,6 +202,16 @@ def radar_home_workspace() -> dict[str, Any]:
         home["scan_progress"] = read_progress()
     except Exception:
         home["scan_progress"] = {"active": False}
+    try:
+        from product.telegram_delivery import delivery_status
+        home["telegram"] = delivery_status()
+    except Exception as exc:
+        home["telegram"] = {
+            "configured": False,
+            "state": "unavailable",
+            "headline": "Telegram status unavailable",
+            "detail": str(exc),
+        }
     return home
 
 
@@ -285,6 +296,30 @@ def watchlist_remove(row_id: int) -> dict[str, Any]:
     return {"accepted": True, "removed_id": row_id}
 
 
+def drain_telegram_on_startup() -> None:
+    """Replay last-scan Telegram alerts once the desk API is up.
+
+    Autonomy also drains on start/tick. This catches the case where Telegram
+    was connected after the scan and the supervisor is not running.
+    """
+    def _run() -> None:
+        time.sleep(2.0)
+        try:
+            from product.telegram_delivery import drain_scan_alerts
+            sent = drain_scan_alerts(min_interval_s=0.0) or {}
+            reason = str(sent.get("reason") or "")
+            if reason and reason not in {"already_sent", "no_candidates", "no_scan", "in_progress"}:
+                print(
+                    f"[TELEGRAM] desk drain · setups={int(sent.get('setup') or 0)} · "
+                    f"near-breakout={int(sent.get('prebreakout') or 0)} · {reason}",
+                    flush=True,
+                )
+        except Exception as exc:
+            print(f"[TELEGRAM] desk drain failed: {type(exc).__name__}: {exc}", flush=True)
+
+    threading.Thread(target=_run, name="telegram-scan-drain", daemon=True).start()
+
+
 def ensure_observer_worker() -> dict[str, Any]:
     global _observer_process
     payload = observer_payload()
@@ -329,6 +364,7 @@ def install(app) -> None:
     if router is None or not hasattr(router, "add_event_handler"):
         raise RuntimeError("terminal FastAPI router does not support lifecycle handlers")
     router.add_event_handler("startup", ensure_observer_worker)
+    router.add_event_handler("startup", drain_telegram_on_startup)
     router.add_event_handler("shutdown", stop_observer_worker)
     app.add_api_route(
         "/api/broker-observer",

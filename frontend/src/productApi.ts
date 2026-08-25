@@ -252,6 +252,17 @@ export type RadarHome = {
     eta_s?: number | null
     eta_label?: string
   }
+  telegram?: {
+    configured?: boolean
+    state?: string
+    headline?: string
+    detail?: string
+    scan_reason?: string
+    sniper_reason?: string
+    sniper_watch?: number
+    live_ticks?: boolean
+    last_error?: string
+  }
 }
 
 export const fetchRadarHome = (): Promise<RadarHome> =>

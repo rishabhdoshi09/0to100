@@ -9,12 +9,14 @@ class FakeEngine:
     def __init__(self):
         self.messages = []
         self.configured = True
+        self.last_error = ""
 
     def is_configured(self):
         return self.configured
 
     def send(self, message, reply_markup=None):
         self.messages.append((message, reply_markup))
+        self.last_error = ""
         return True
 
 
@@ -226,6 +228,8 @@ def test_observe_reports_why_no_breakout_fired(tmp_path):
     assert out["confirmed"] == 0
     assert out["watching"] == 2
     assert out["reason"] == "no_live_ticks"
+    assert out["waiting_notice"] is True
+    assert "sniper armed" in engine.messages[-1][0].lower()
 
 
 def test_alert_engine_reads_telegram_from_repo_env(tmp_path, monkeypatch):
@@ -308,6 +312,108 @@ def test_replay_scan_alerts_uses_saved_scan(tmp_path, monkeypatch):
     assert sent["setup"] == 1
     assert sent["prebreakout"] == 1
     assert engine.messages
+
+
+def test_drain_sends_when_telegram_connects_after_scan(tmp_path):
+    engine = FakeEngine()
+    engine.configured = False
+    now = lambda: datetime(2026, 8, 24, 10, 30)
+    n = TelegramNotifier(tmp_path, engine_factory=lambda: engine, now_fn=now)
+    first = n.notify_scan(_payload(), phase="intraday")
+    assert first["reason"] == "not_configured"
+    assert engine.messages == []
+    engine.configured = True
+    sent = n.drain_last_scan(_payload(), min_interval_s=0)
+    assert sent["reason"] == "sent"
+    assert sent["setup"] == 1 and sent["prebreakout"] == 1
+    assert engine.messages
+    assert "Sniper live watch" in engine.messages[0][0]
+
+
+def test_drain_throttles_failed_sends(tmp_path):
+    class FailEngine(FakeEngine):
+        def send(self, message, reply_markup=None):
+            self.last_error = "HTTP 400: can't parse entities"
+            return False
+
+    epoch = [1_000.0]
+    n = TelegramNotifier(
+        tmp_path,
+        engine_factory=lambda: FailEngine(),
+        now_fn=lambda: datetime(2026, 8, 24, 10, 30),
+        epoch_fn=lambda: epoch[0],
+    )
+    first = n.drain_last_scan(_payload(), min_interval_s=45)
+    assert first["reason"] == "send_failed"
+    epoch[0] += 10
+    second = n.drain_last_scan(_payload(), min_interval_s=45)
+    assert second["reason"] == "retry_wait"
+    epoch[0] += 50
+    third = n.drain_last_scan(_payload(), min_interval_s=45)
+    assert third["reason"] == "send_failed"
+
+
+def test_delivery_status_explains_unpushed_scan(tmp_path, monkeypatch):
+    from product import telegram_delivery as TD
+
+    engine = FakeEngine()
+    engine.configured = True
+    n = TelegramNotifier(
+        tmp_path,
+        engine_factory=lambda: engine,
+        now_fn=lambda: datetime(2026, 8, 24, 10, 30),
+    )
+    engine.configured = False
+    n.notify_scan(_payload(), phase="intraday")
+    monkeypatch.setattr(TD.TelegramNotifier, "configured", lambda self: True)
+    monkeypatch.setattr(TD, "sniper_symbols", lambda payload: {"AAA", "BBB"})
+    monkeypatch.setattr("product.scan_store.load_scan", lambda: _payload())
+    status = TD.delivery_status(tmp_path)
+    assert status["configured"] is True
+    assert status["state"] == "pending"
+    assert "not pushed" in status["headline"].lower()
+
+
+def test_alert_engine_retries_plain_text_when_html_rejected(tmp_path, monkeypatch):
+    env_file = tmp_path / ".env"
+    env_file.write_text("TELEGRAM_BOT_TOKEN=filetok\nTELEGRAM_CHAT_ID=42\n", encoding="utf-8")
+    monkeypatch.setattr("alerts.telegram_alerts._ENV_PATH", env_file)
+    monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
+    monkeypatch.delenv("TELEGRAM_CHAT_ID", raising=False)
+    calls = []
+
+    class Resp:
+        def __init__(self, ok, text=""):
+            self.ok = ok
+            self.status_code = 200 if ok else 400
+            self.text = text
+
+    def post(url, json=None, timeout=8):
+        calls.append(dict(json or {}))
+        if json and json.get("parse_mode") == "HTML":
+            return Resp(False, '{"description":"can\'t parse entities"}')
+        return Resp(True)
+
+    monkeypatch.setattr("alerts.telegram_alerts.requests.post", post)
+    from alerts.telegram_alerts import AlertEngine
+    engine = AlertEngine()
+    assert engine.send("<b>hello</b> & world") is True
+    assert any(c.get("parse_mode") == "HTML" for c in calls)
+    assert any("parse_mode" not in c for c in calls)
+
+
+def test_telegram_cred_ignores_placeholders_and_export_prefix(tmp_path, monkeypatch):
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "export TELEGRAM_BOT_TOKEN=real-token\nTELEGRAM_CHAT_ID=your_chat_id_here\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("alerts.telegram_alerts._ENV_PATH", env_file)
+    monkeypatch.setenv("TELEGRAM_CHAT_ID", "99")
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "")
+    from alerts.telegram_alerts import _telegram_cred
+    assert _telegram_cred("TELEGRAM_BOT_TOKEN") == "real-token"
+    assert _telegram_cred("TELEGRAM_CHAT_ID") == "99"
 
 
 def test_supervisor_telegram_notifier_has_no_execution_or_broker_imports():

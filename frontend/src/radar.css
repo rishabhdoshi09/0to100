@@ -27,9 +27,14 @@
   border-radius: 10px;
   background: linear-gradient(180deg, rgba(14, 24, 40, .98), rgba(8, 14, 27, .96));
 }
-.radar-desk-strip.desk-warn > div:nth-child(3) {
+.radar-desk-strip.telegram-warn > div:nth-child(4) {
   border-color: rgba(255, 184, 77, .45);
   background: rgba(90, 60, 10, .28);
+}
+.radar-desk-note {
+  margin: -4px 0 12px;
+  color: var(--muted);
+  font-size: 12px;
 }
 .radar-desk-strip span { font-size: 9px; letter-spacing: .12em; color: var(--muted); display: block; }
 .radar-desk-strip strong { font-variant-numeric: tabular-nums; font-size: 14px; }
@@ -273,10 +278,12 @@
   box-shadow: var(--rw-shadow);
   color: var(--rw-ink);
 }
-.reco-desk .radar-desk-strip.desk-warn > div:nth-child(3) {
+.reco-desk .radar-desk-strip.desk-warn > div:nth-child(3),
+.reco-desk .radar-desk-strip.telegram-warn > div:nth-child(4) {
   border-color: var(--rw-amber-line);
   background: var(--rw-amber-bg);
 }
+.reco-desk .radar-desk-note { color: var(--rw-muted); }
 .reco-desk .radar-desk-strip span,
 .reco-desk .radar-market-strip span,
 .reco-desk .radar-lane-card header span,

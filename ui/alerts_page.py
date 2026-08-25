@@ -61,7 +61,12 @@ Then restart the app.
     else:
         _c1, _c2 = st.columns([3, 1])
         with _c1:
-            st.success("✅ **Telegram connected** — alerts will be delivered to your chat.", icon="✅")
+            st.success(
+                "✅ **Telegram connected.** Setup and near-breakout watches send after each "
+                "market scan. **SNIPER BREAKOUT CONFIRMED** still needs Zerodha live ticks "
+                "(login + `python main.py autonomy`) during market hours.",
+                icon="✅",
+            )
         with _c2:
             if st.button("📤 Send Test Alert", key="tg_test_btn", width="stretch"):
                 with st.spinner("Sending…"):
@@ -70,6 +75,29 @@ Then restart the app.
                     st.success("Test alert sent!", icon="✅")
                 else:
                     st.error("Failed to send — check your token/chat ID.", icon="❌")
+            if st.button("📡 Push last scan", key="tg_push_scan_btn", width="stretch"):
+                with st.spinner("Pushing last-scan setups and breakout watches…"):
+                    try:
+                        from product.telegram_delivery import drain_scan_alerts
+                        sent = drain_scan_alerts(min_interval_s=0.0) or {}
+                    except Exception as exc:
+                        sent = {"reason": "send_failed", "error": str(exc)}
+                reason = str(sent.get("reason") or "")
+                if reason == "sent":
+                    st.success(
+                        f"Sent {int(sent.get('setup') or 0)} setups and "
+                        f"{int(sent.get('prebreakout') or 0)} near-breakout watches.",
+                        icon="✅",
+                    )
+                elif reason == "already_sent":
+                    st.info("Today's scan/breakout watches were already sent.", icon="ℹ️")
+                elif reason == "not_configured":
+                    st.error("Bot token or chat id missing in `.env`.", icon="❌")
+                else:
+                    st.error(
+                        f"Could not push last scan ({reason or 'unknown'}).",
+                        icon="❌",
+                    )
 
     st.markdown("---")
 

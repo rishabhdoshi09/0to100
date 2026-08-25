@@ -332,6 +332,9 @@ export function RadarHomeView(props: ExperienceViewProps & {
   const scanAt = radar?.scan_scanned_at || dashboard.scan.scanned_at || ''
   const kiteOk = dashboard.autonomy.state !== 'AUTH_REQUIRED'
     && !(dashboard.autonomy.active_failures || []).some((f) => String(f).includes('auth'))
+  const telegram = radar?.telegram || dashboard.autonomy.telegram
+  const telegramOn = Boolean(telegram?.configured)
+  const telegramWarn = telegramOn && telegram?.state !== 'live' && telegram?.state !== 'scan_sent'
   const breakoutRows = ((radar?.lanes.breakouts?.length
     ? radar.lanes.breakouts
     : scannerFallbackRows('Breakouts', dashboard)) || []) as RadarRow[]
@@ -449,7 +452,7 @@ export function RadarHomeView(props: ExperienceViewProps & {
         </div>
       </header>
 
-      <div className={`radar-desk-strip ${kiteOk ? '' : 'desk-warn'}`}>
+      <div className={`radar-desk-strip ${kiteOk ? '' : 'desk-warn'} ${telegramWarn ? 'telegram-warn' : ''}`}>
         <div>
           <span>SCAN</span>
           <strong>{relativeAge(scanAt)}</strong>
@@ -470,19 +473,17 @@ export function RadarHomeView(props: ExperienceViewProps & {
           </small>
         </div>
         <div>
-          <span>NEXT</span>
-          <strong>
-            {!dashboard.data.ready || readinessScore < 70
-              ? 'Preparing data'
-              : !scanAt
-                ? 'Scanning'
-                : selected
-                  ? 'Check ₹ risk'
-                  : 'Pick one name'}
-          </strong>
-          <small>{deskNote || dashboard.market.trade_stance}</small>
+          <span>TELEGRAM</span>
+          <strong>{telegramOn ? (telegram?.headline || 'CONNECTED') : 'OFF'}</strong>
+          <small>
+            {telegram?.detail
+              || (telegramOn
+                ? 'Setups and breakout watches send after each market scan'
+                : 'Set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID in .env')}
+          </small>
         </div>
       </div>
+      {deskNote ? <p className="radar-desk-note">{deskNote}</p> : null}
 
       <div className="radar-market-strip">
         <div><span>NIFTY 1D</span><strong>{pct(radar?.nifty_change_1d ?? dashboard.market.nifty_change_1d)}</strong></div>
@@ -513,7 +514,10 @@ export function RadarHomeView(props: ExperienceViewProps & {
         <section className="radar-sniper-pool">
           <header>
             <span>SNIPER BREAKOUT CANDIDATES</span>
-            <strong>{radar?.sniper_candidates?.length}</strong>
+            <strong>
+              {radar?.sniper_candidates?.length}
+              {telegramOn && !telegram?.live_ticks ? ' · confirms need live ticks' : ''}
+            </strong>
           </header>
           <ul>
             {(radar?.sniper_candidates || []).slice(0, 8).map((item) => (
