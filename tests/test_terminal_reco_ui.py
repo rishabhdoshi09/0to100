@@ -64,7 +64,7 @@ def test_terminal_uses_reco_desk_not_hud_chrome():
 def test_home_is_three_lane_radar_with_two_best_of_panels():
     src = (ROOT / "frontend" / "src" / "marketRadarViews.tsx").read_text(encoding="utf-8")
     assert "BEST TECHNICAL BREAKOUT" in src
-    assert "BEST AMONG BREAKOUTS" in src
+    assert "BEST AMONG THE BEST" in src
     assert "Breakouts" in src and "Momentum" in src and "Long-Term Picks" in src
     assert "TODAY · RECO WEALTH" not in src
     assert "rw-stock-card" not in src
