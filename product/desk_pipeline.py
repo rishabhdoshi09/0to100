@@ -24,7 +24,7 @@ from operations.market_ops import (
     SCAN_FRESH_S,
     _stale,
 )
-from operations.store import BLOCKED, FAILED, PENDING, RUNNING, OperationStore
+from operations.store import BLOCKED, FAILED, PENDING, RUNNING, SUCCEEDED, OperationStore
 
 RETRY_AFTER_FAIL_S = 10 * 60
 
@@ -112,16 +112,46 @@ def news_is_fresh() -> bool:
     return not _stale(_root() / "logs" / "news_curator.sqlite3", NEWS_FRESH_S)
 
 
-def _kind_for_step(step_id: str) -> str | None:
+def _fresh_s(step_id: str) -> float:
     if step_id == "prices":
-        return prices_kind_due()
+        return FNO_FRESH_S
     if step_id == "scan":
-        return None if scan_is_fresh() else MARKET_SCAN
+        return SCAN_FRESH_S
     if step_id == "long_term":
-        return None if long_term_is_fresh() else LONG_TERM_REFRESH
+        return LONG_TERM_FRESH_S
     if step_id == "news":
-        return None if news_is_fresh() else NEWS_REFRESH
-    return None
+        return NEWS_FRESH_S
+    return 0.0
+
+
+def _recently_succeeded(store: OperationStore, kinds: set[str], max_age_s: float) -> bool:
+    for kind in kinds:
+        latest = store.latest(kind)
+        if not latest or str(latest.get("status") or "") != SUCCEEDED:
+            continue
+        try:
+            age = time.time() - float(latest.get("updated_at") or 0)
+        except (TypeError, ValueError):
+            continue
+        if 0 <= age < max_age_s:
+            return True
+    return False
+
+
+def _kind_for_step(step_id: str, store: OperationStore | None = None) -> str | None:
+    if step_id == "prices":
+        kind = prices_kind_due()
+    elif step_id == "scan":
+        kind = None if scan_is_fresh() else MARKET_SCAN
+    elif step_id == "long_term":
+        kind = None if long_term_is_fresh() else LONG_TERM_REFRESH
+    elif step_id == "news":
+        kind = None if news_is_fresh() else NEWS_REFRESH
+    else:
+        kind = None
+    if kind and store is not None and _recently_succeeded(store, _kinds_for_id(step_id), _fresh_s(step_id)):
+        return None
+    return kind
 
 
 def _recently_failed(store: OperationStore, kind: str) -> bool:
@@ -172,7 +202,7 @@ def advance_desk_pipeline(
         return _snapshot(ops, queued_kind=None, queued_op=active, created=False)
 
     for step in DESK_STEPS:
-        kind = _kind_for_step(step["id"])
+        kind = _kind_for_step(step["id"], ops)
         if not kind:
             continue
         if _recently_failed(ops, kind):
@@ -202,7 +232,7 @@ def _snapshot(
     seen_due = False
     steps: list[dict[str, Any]] = []
     for spec in DESK_STEPS:
-        kind = _kind_for_step(spec["id"])
+        kind = _kind_for_step(spec["id"], store)
         latest = store.latest(kind) if kind else None
         if spec["id"] == "long_term" and latest is None:
             latest = store.latest(LONG_TERM_SCAN)

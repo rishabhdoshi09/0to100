@@ -3,8 +3,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from operations.market_ops import DATA_PREPARE, FNO_REFRESH, LONG_TERM_REFRESH, MARKET_SCAN
-from operations.store import FAILED, OperationStore
+from operations.market_ops import DATA_PREPARE, FNO_REFRESH, LONG_TERM_REFRESH, MARKET_SCAN, NEWS_REFRESH
+from operations.store import FAILED, SUCCEEDED, OperationStore
 from product.desk_pipeline import advance_desk_pipeline, describe_desk_pipeline
 
 
@@ -99,3 +99,18 @@ def test_fno_is_the_prices_step_when_history_is_ready(tmp_path: Path, monkeypatc
     payload = advance_desk_pipeline(store, requested_by="test")
     assert payload["queued_kind"] == FNO_REFRESH
     assert payload["current"]["id"] == "prices"
+
+
+def test_recent_success_does_not_requeue_the_same_step(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr("product.desk_pipeline.prices_kind_due", lambda: None)
+    monkeypatch.setattr("product.desk_pipeline.scan_is_fresh", lambda: True)
+    monkeypatch.setattr("product.desk_pipeline.long_term_is_fresh", lambda: True)
+    monkeypatch.setattr("product.desk_pipeline.news_is_fresh", lambda: False)
+
+    store = _store(tmp_path)
+    item, _ = store.enqueue(NEWS_REFRESH, lane="news", requested_by="test")
+    store.finish(item["operation_id"], status=SUCCEEDED, message="done", result={"articles": 3})
+    payload = advance_desk_pipeline(store, requested_by="test")
+    assert payload["queued_kind"] is None
+    assert {row["id"]: row["state"] for row in payload["steps"]}["news"] == "ready"
+    assert "current" in payload
