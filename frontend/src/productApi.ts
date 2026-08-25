@@ -240,6 +240,7 @@ export type RadarHome = {
   counts: { breakouts: number; momentum: number; long_term_picks: number; sniper_breakouts?: number }
   best_breakout?: ScannerWorkspaceRow | null
   best_among_fundamentals?: ScannerWorkspaceRow | null
+  best_of_best?: ScannerWorkspaceRow[]
   best_among_note?: string
   sniper_candidates?: ScannerWorkspaceRow[]
   best_setups?: ScannerWorkspaceRow[]

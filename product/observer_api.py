@@ -199,6 +199,7 @@ def radar_home_workspace() -> dict[str, Any]:
             "counts": {"breakouts": 0, "momentum": 0, "long_term_picks": 0, "sniper_breakouts": 0},
             "best_breakout": None,
             "best_among_fundamentals": None,
+            "best_of_best": [],
             "best_among_note": "Radar ranking is temporarily unavailable.",
             "sniper_candidates": [],
             "ranking_legend": {},

@@ -162,6 +162,8 @@ def test_radar_home_builds_three_lanes():
     assert "THIN" not in [r["symbol"] for r in payload["lanes"]["breakouts"]]
     assert payload["best_among_fundamentals"]["symbol"] == "BEST"
     assert payload["best_among_fundamentals"]["funds_used"] is True
+    assert payload["best_of_best"][0]["symbol"] == "BEST"
+    assert payload["best_of_best"][0]["rank"] == 1
     assert "SEPA" in payload["ranking_legend"]["best_setups"]
     assert payload["sepa_rank_used"] is False
     assert "same saved" in payload["scan_shared_note"].lower() or "same" in payload["scan_shared_note"].lower()
@@ -303,4 +305,43 @@ def test_best_among_ranks_sepa_overlay_without_inventing_funds():
     assert payload["sepa_rank_used"] is True
     assert payload["second_screen_counts"]["sepa_overlay"] == 1
     assert payload["best_breakout"]["symbol"] in {"SEPA1", "TAPE"}
+    assert [r["symbol"] for r in payload["best_of_best"]] == ["SEPA1"]
+    assert payload["best_of_best"][0]["rank"] == 1
+    assert payload["best_of_best"][0]["action_badge"] == "Buy"
+    assert payload["best_of_best"][0]["best_of_best_parts"]["funds"] == 0
+    assert payload["best_of_best"][0]["best_of_best_parts"]["sepa"] == 80
+
+
+def test_best_of_best_composite_uses_existing_screens_only():
+    from product.radar_workspace import BEST_OF_BEST_WEIGHTS, best_of_best_parts, rank_best_of_best
+
+    base = {
+        "verdict": "BUY", "status": "Ready to trade", "signals": ["BREAKOUT_52W"],
+        "breakout_grade": "A", "breakout_conviction": 80, "score": 70,
+        "avg_vol20": 1e6, "chase_risk": False, "volume_ratio": 2.0, "rsi": 55,
+        "price": 100, "entry": 95, "target": 120, "stop": 90, "momentum_5d": 3.2,
+    }
+    dual = {
+        **base, "symbol": "DUAL", "sepa_score": 80,
+        "classification": "QUALITY_COMPOUNDER", "fundamental_coverage": 0.9, "fundamental_score": 70,
+    }
+    sepa = {**base, "symbol": "SEPA", "sepa_score": 100, "score": 90}
+    fund = {
+        **base, "symbol": "FUND", "score": 88,
+        "classification": "QUALITY_COMPOUNDER", "fundamental_coverage": 0.9, "fundamental_score": 90,
+    }
+    tape = {**base, "symbol": "TAPE", "score": 99, "breakout_conviction": 99}
+    ranked = rank_best_of_best([dual, sepa, fund, tape], limit=8)
+    assert [r["symbol"] for r in ranked] == ["DUAL", "SEPA", "FUND"]
+    assert ranked[0]["rank"] == 1 and ranked[0]["second_screens"] == 2
+    parts = ranked[0]["best_of_best_parts"]
+    assert parts["weights"] == BEST_OF_BEST_WEIGHTS
+    expected = round(0.45 * 80 + 0.30 * 70 + 0.25 * parts["tape"], 2)
+    assert parts["composite"] == expected
+    sepa_parts = best_of_best_parts(sepa)
+    assert sepa_parts["funds"] == 0
+    assert sepa_parts["sepa"] == 100
+    assert ranked[1]["upside_to_target_pct"] == 20.0
+    assert ranked[1]["change_5d_pct"] == 3.2
+    assert ranked[1]["risk_tier"] in {"Low", "Medium", "High"}
 

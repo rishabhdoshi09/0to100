@@ -58,6 +58,17 @@ type RadarRow = ScannerWorkspaceRow & {
   best_among_why?: string
   sepa_used?: boolean
   funds_used?: boolean
+  rank?: number
+  action_badge?: string
+  risk_tier?: string
+  entry?: number | null
+  target?: number | null
+  stop?: number | null
+  cmp?: number | null
+  upside_from_entry_pct?: number | null
+  upside_to_target_pct?: number | null
+  best_of_best_score?: number
+  best_of_best_parts?: { sepa?: number; funds?: number; tape?: number; composite?: number }
 }
 
 const breakoutLabel: Record<string, string> = {
@@ -146,75 +157,15 @@ function BestSniperPanel({
   )
 }
 
-function BestAmongFundamentalsPanel({
-  best,
-  note,
-  onSelect,
-}: {
-  best: RadarRow | null | undefined
-  note?: string
-  onSelect: (symbol: string) => void
-}) {
-  if (best) {
-    const gates = (best as RadarRow & { quality_gates?: Record<string, string> }).quality_gates || {}
-    return (
-      <div className="radar-best-fundamentals">
-        <Panel
-          title={`BEST AMONG BREAKOUTS · ${best.symbol}`}
-          subtitle={
-            [
-              best.best_among_why || 'Sniper plus a second screen',
-              best.sepa_used ? 'SEPA overlay' : null,
-              best.funds_used ? 'long-term funds' : null,
-              gates.fundamentals ? `Fund ${gates.fundamentals}` : null,
-              best.rsi != null ? `RSI ${Math.round(Number(best.rsi))}` : null,
-              best.volume_ratio != null ? `Vol ${Number(best.volume_ratio).toFixed(1)}×` : null,
-            ].filter(Boolean).join(' · ')
-          }
-        >
-          <button
-            type="button"
-            className="radar-best-pick-btn"
-            onClick={() => onSelect(String(best.symbol || ''))}
-          >
-            Score {best.score ?? '—'}
-            {best.breakout_quality != null
-              ? ` · Quality ${Number(best.breakout_quality).toFixed(0)}`
-              : ''}
-            {best.sepa_score != null ? ` · SEPA ${best.sepa_score}/100` : ''}
-            {' · '}
-            {breakoutLabel[String(best.breakout_state || '')]
-              || words(dashCell(best.breakout_state || best.status || ''))}
-          </button>
-          {note ? <p className="radar-rank-note">{note}</p> : null}
-        </Panel>
-      </div>
-    )
-  }
-  return (
-    <div className="radar-best-fundamentals radar-best-empty">
-      <Panel
-        title="BEST AMONG BREAKOUTS"
-        subtitle="Sniper names that also have SEPA overlay ≥40 and/or usable long-term funds. Not a buy."
-      >
-        <p className="radar-empty-li">
-          {note
-            || 'No sniper candidate has a second screen yet — run long-term scan, or wait for the SEPA overlay. Technical sniper lane is independent.'}
-        </p>
-      </Panel>
-    </div>
-  )
-}
-
 function RankingLegend({
   legend,
 }: {
   legend?: RadarHome['ranking_legend']
 }) {
   const items = [
-    { key: 'best_setups', title: 'Best Setups', body: legend?.best_setups || 'SEPA 7-rule overlay ≥40/100. Not a buy.' },
-    { key: 'best_technical_breakout', title: 'Best Technical', body: legend?.best_technical_breakout || 'Tape rank among snipers. SEPA is not used here.' },
-    { key: 'best_among_breakouts', title: 'Best Among', body: legend?.best_among_breakouts || 'Sniper plus SEPA overlay and/or long-term funds.' },
+    { key: 'best_among_breakouts', title: 'Best among the best', body: legend?.best_among_breakouts || 'Sniper plus SEPA overlay and/or long-term funds. 0.45 SEPA · 0.30 funds · 0.25 tape.' },
+    { key: 'best_setups', title: 'SEPA overlay', body: legend?.best_setups || 'SEPA 7-rule overlay ≥40/100. Not a buy.' },
+    { key: 'best_technical_breakout', title: 'Tape only', body: legend?.best_technical_breakout || 'Sniper tape rank. SEPA is not used here.' },
   ]
   return (
     <div className="radar-rank-legend">
@@ -228,51 +179,112 @@ function RankingLegend({
   )
 }
 
-function BestSetupsSepaPanel({
-  cards,
+function BestOfBestHero({
+  row,
   note,
-  used,
   onSelect,
-  selected,
 }: {
-  cards: RadarRow[]
+  row: RadarRow | null | undefined
   note?: string
-  used?: boolean
   onSelect: (symbol: string) => void
+}) {
+  if (!row) {
+    return (
+      <div className="radar-bob-hero radar-best-empty">
+        <Panel title="BEST AMONG THE BEST" subtitle="Sniper plus SEPA overlay ≥40 and/or usable long-term funds. Not a buy.">
+          <p className="radar-empty-li">
+            {note || 'No sniper has a second screen yet. Tape lane below is independent.'}
+          </p>
+        </Panel>
+      </div>
+    )
+  }
+  const parts = row.best_of_best_parts || {}
+  const upside = row.upside_to_target_pct ?? row.upside_from_entry_pct
+  const risk = String(row.risk_tier || 'Medium').toLowerCase()
+  const badge = row.action_badge || 'Watch'
+  return (
+    <article className="radar-bob-hero">
+      <button type="button" className="radar-bob-hit" onClick={() => onSelect(String(row.symbol || ''))}>
+        <div className="radar-bob-row1">
+          <span className={`reco-buy ${badge.toLowerCase().includes('buy') ? '' : 'is-watch'}`}>{badge}</span>
+          <span className="reco-opp">Best among the best</span>
+          <span className={`reco-risk-chip ${risk}`}>{row.risk_tier || 'Medium'} Risk</span>
+        </div>
+        <h3>{row.company && row.company !== row.symbol ? row.company : row.symbol}</h3>
+        <p className="radar-bob-sub">
+          {row.symbol}
+          {row.sepa_score != null ? ` · SEPA ${row.sepa_score}/100` : ''}
+          {row.best_among_why ? ` · ${row.best_among_why}` : ''}
+        </p>
+        <div className="radar-bob-kpis">
+          <div><span>Entry</span><strong>{row.entry != null ? money(row.entry, 2) : '—'}</strong></div>
+          <div><span>Target</span><strong>{row.target != null ? money(row.target, 2) : '—'}</strong></div>
+          <div><span>Stop</span><strong>{row.stop != null ? money(row.stop, 2) : '—'}</strong></div>
+          <div>
+            <span>Upside to target</span>
+            <strong>{upside != null ? pct(upside) : '—'}</strong>
+          </div>
+        </div>
+        <div className="radar-bob-weights">
+          <span>SEPA {parts.sepa ?? '—'}</span>
+          <span>Funds {parts.funds ?? '—'}</span>
+          <span>Tape {parts.tape != null ? Number(parts.tape).toFixed(0) : '—'}</span>
+          <span>Score {row.best_of_best_score ?? '—'}</span>
+        </div>
+      </button>
+      {note ? <p className="radar-rank-note">{note}</p> : null}
+    </article>
+  )
+}
+
+function TopStocksList({
+  rows,
+  selected,
+  onSelect,
+}: {
+  rows: RadarRow[]
   selected: string
+  onSelect: (symbol: string) => void
 }) {
   return (
-    <section className="radar-sepa-strip">
+    <section className="radar-top-stocks">
       <header>
-        <span>BEST SETUPS · SEPA 7-RULE</span>
-        <strong>{cards.length ? `${cards.length} ≥40/100` : used ? 'overlay empty' : 'overlay not ranked yet'}</strong>
+        <span>TOP STOCKS</span>
+        <strong>{rows.length ? `${rows.length} ranked` : 'no second-screen names'}</strong>
       </header>
       <p className="radar-rank-note">
-        {note || 'Minervini Stage 2 overlay on the saved scan. Research rank only — not a buy.'}
+        Numbered by independent confirms, then 0.45·SEPA + 0.30·funds + 0.25·tape. Not sorted by today’s %. Not a buy.
       </p>
-      {cards.length ? (
-        <ul>
-          {cards.slice(0, 8).map((item) => (
-            <li key={item.symbol}>
-              <button
-                type="button"
-                className={selected === item.symbol ? 'active' : ''}
-                onClick={() => onSelect(String(item.symbol || ''))}
-              >
-                <b>{item.symbol}</b>
-                <span>
-                  {item.sepa_score != null ? `${item.sepa_score}/100` : '—'}
-                  {item.sepa_passed != null && item.sepa_total != null
-                    ? ` · ${item.sepa_passed}/${item.sepa_total}`
-                    : ''}
-                  {item.sepa_verdict ? ` · ${String(item.sepa_verdict).replace(/_/g, ' ')}` : ''}
-                </span>
-              </button>
-            </li>
-          ))}
-        </ul>
+      {rows.length === 0 ? (
+        <p className="radar-empty-li">Nothing cleared sniper plus a second screen on this scan.</p>
       ) : (
-        <p className="radar-empty-li">SEPA overlay has not ranked this scan yet.</p>
+        <ol>
+          {rows.map((row) => {
+            const change = row.change_5d_pct
+            const up = change != null && Number(change) >= 0
+            return (
+              <li key={row.symbol}>
+                <button
+                  type="button"
+                  className={selected === row.symbol ? 'active' : ''}
+                  onClick={() => onSelect(String(row.symbol || ''))}
+                >
+                  <em>{row.rank ?? ''}</em>
+                  <b>{row.symbol}</b>
+                  <span className="radar-top-meta">
+                    {row.sepa_score != null ? `SEPA ${row.sepa_score}` : 'SEPA —'}
+                    {row.funds_used && row.fundamental_score != null ? ` · fund ${Math.round(Number(row.fundamental_score))}` : ''}
+                  </span>
+                  <strong className="radar-top-px">{row.price != null || row.cmp != null ? money((row.price ?? row.cmp) as number) : '—'}</strong>
+                  <span className={`radar-top-chg ${change == null ? '' : up ? 'up' : 'down'}`}>
+                    {change == null ? '—' : pct(Number(change))}
+                  </span>
+                </button>
+              </li>
+            )
+          })}
+        </ol>
       )}
     </section>
   )
@@ -590,23 +602,24 @@ export function RadarHomeView(props: ExperienceViewProps & {
 
       <RankingLegend legend={radar?.ranking_legend} />
 
-      <BestSetupsSepaPanel
-        cards={(radar?.best_setups || []) as RadarRow[]}
-        note={radar?.best_setups_note}
-        used={radar?.sepa_rank_used}
+      <BestOfBestHero
+        row={(radar?.best_of_best?.[0] || radar?.best_among_fundamentals) as RadarRow | null | undefined}
+        note={radar?.best_among_note}
         onSelect={setSelected}
+      />
+      <TopStocksList
+        rows={((radar?.best_of_best && radar.best_of_best.length
+          ? radar.best_of_best
+          : radar?.best_among_fundamentals
+            ? [radar.best_among_fundamentals]
+            : []) as RadarRow[])}
         selected={selected}
+        onSelect={setSelected}
       />
 
       <BestSniperPanel
         best={radar?.best_breakout as RadarRow | null | undefined}
         sniperCount={radar?.counts.sniper_breakouts || radar?.sniper_candidates?.length || 0}
-        onSelect={setSelected}
-      />
-
-      <BestAmongFundamentalsPanel
-        best={radar?.best_among_fundamentals as RadarRow | null | undefined}
-        note={radar?.best_among_note}
         onSelect={setSelected}
       />
 

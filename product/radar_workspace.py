@@ -40,11 +40,13 @@ RANKING_LEGEND = {
         "SEPA is not used here."
     ),
     "best_among_breakouts": (
-        "Best among snipers that also have a second independent screen: persisted "
-        "SEPA overlay ≥40 and/or usable long-term funds. Rank: more confirms, then "
-        "SEPA, then fund score, then tape. Not a buy."
+        "Best among the best: snipers with a second screen (SEPA overlay ≥40 and/or "
+        "usable long-term funds). Sort: more independent confirms first, then "
+        "0.45·SEPA + 0.30·funds + 0.25·tape. Missing inputs score 0 — never invented. "
+        "Not a buy."
     ),
 }
+BEST_OF_BEST_WEIGHTS = {"sepa": 0.45, "funds": 0.30, "tape": 0.25}
 SCAN_SHARED_NOTE = (
     "Home and Market Scanner read the same saved whole-market scan "
     "(latest_momentum_scan.json). Names can appear in more than one lane. "
@@ -210,14 +212,90 @@ def best_among_why(row: Mapping[str, Any]) -> str:
     return " · ".join(parts) or "second screen"
 
 
-def pick_best_among_fundamentals(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any] | None:
-    """Best sniper that also has SEPA overlay and/or usable long-term funds.
+def desk_action_badge(row: Mapping[str, Any]) -> str:
+    verdict = str(row.get("verdict") or "").upper()
+    status = str(row.get("status") or "")
+    if verdict in {"BUY", "STRONG BUY"} or status == "Ready to trade":
+        return "Buy"
+    return "Watch"
 
-    Separate from the technical sniper lane — missing funds never empties breakouts.
-    Does not invent a pick when no sniper has a second screen.
-    """
+
+def desk_risk_tier(row: Mapping[str, Any]) -> str:
+    """Low / Medium / High from flags already on the row. Never invented."""
+    if bool(row.get("chase_risk")):
+        return "High"
+    label = str(row.get("risk_label") or "").lower()
+    if "chase" in label or "avoid" in label or "high" in label:
+        return "High"
+    rsi = _f(row.get("rsi"))
+    if rsi >= 75:
+        return "High"
+    if rsi >= 65 or "pullback" in label or "review" in label or "medium" in label:
+        return "Medium"
+    if row.get("risk_flags"):
+        return "Medium"
+    return "Low"
+
+
+def desk_upside_metrics(row: Mapping[str, Any]) -> dict[str, float | None]:
+    """% from entry and room to target. None when price/entry/target are missing."""
+    price = _f(row.get("price"))
+    entry = _f(row.get("entry") or row.get("entry_price"))
+    target = _f(row.get("target") or row.get("target_price"))
+    stop = _f(row.get("stop") or row.get("stop_price"))
+    from_entry = round((price / entry - 1.0) * 100.0, 1) if entry > 0 and price > 0 else None
+    to_target = round((target / price - 1.0) * 100.0, 1) if target > 0 and price > 0 else None
+    return {
+        "upside_from_entry_pct": from_entry,
+        "upside_to_target_pct": to_target,
+        "entry": entry or None,
+        "target": target or None,
+        "stop": stop or None,
+        "cmp": price or None,
+    }
+
+
+def best_of_best_parts(row: Mapping[str, Any]) -> dict[str, Any]:
+    """Transparent 0–100 composite. Missing SEPA/funds contribute 0, never a fill-in."""
     from product.breakout_quality import has_usable_fundamentals
 
+    sepa = float(_sepa_score(row)) if has_sepa_overlay(row) else 0.0
+    fund = min(100.0, _f(row.get("fundamental_score"))) if has_usable_fundamentals(row) else 0.0
+    tape_raw = breakout_quality_score(row, for_best=True)
+    tape = max(0.0, min(100.0, tape_raw / 1.5)) if tape_raw > 0 else 0.0
+    w = BEST_OF_BEST_WEIGHTS
+    composite = round(w["sepa"] * sepa + w["funds"] * fund + w["tape"] * tape, 2)
+    return {
+        "sepa": round(sepa, 2),
+        "funds": round(fund, 2),
+        "tape": round(tape, 2),
+        "composite": composite,
+        "weights": dict(w),
+    }
+
+
+def decorate_best_of_best(row: Mapping[str, Any], rank: int) -> dict[str, Any]:
+    from product.breakout_quality import has_usable_fundamentals
+
+    out = attach_best_pick_meta(dict(row), with_context=False, for_best=True)
+    parts = dict(out.get("best_of_best_parts") or best_of_best_parts(out))
+    out.update(desk_upside_metrics(out))
+    out["rank"] = int(rank)
+    out["best_of_best_score"] = parts.get("composite")
+    out["best_of_best_parts"] = parts
+    out["action_badge"] = desk_action_badge(out)
+    out["risk_tier"] = desk_risk_tier(out)
+    out["best_among_kind"] = "second_screen"
+    out["best_among_why"] = best_among_why(out)
+    out["sepa_used"] = has_sepa_overlay(out)
+    out["funds_used"] = has_usable_fundamentals(out)
+    if out.get("change_5d_pct") is None and out.get("momentum_5d") is not None:
+        out["change_5d_pct"] = _f(out.get("momentum_5d"))
+    return out
+
+
+def rank_best_of_best(rows: Sequence[Mapping[str, Any]], *, limit: int = 8) -> list[dict[str, Any]]:
+    """Rank snipers that already cleared a second screen. Empty when none qualify."""
     pool: list[dict[str, Any]] = []
     for r in rows:
         if not is_sniper_breakout_candidate(r) or not passes_volume_floor(r):
@@ -230,23 +308,25 @@ def pick_best_among_fundamentals(rows: Sequence[Mapping[str, Any]]) -> dict[str,
         row = dict(r)
         row["breakout_quality"] = breakout_quality_score(row, for_best=True)
         row["second_screens"] = second_screen_count(row)
+        parts = best_of_best_parts(row)
+        row["best_of_best_score"] = parts["composite"]
+        row["best_of_best_parts"] = parts
         pool.append(row)
-    if not pool:
-        return None
     pool.sort(key=lambda r: (
         -int(r.get("second_screens") or 0),
+        -_f(r.get("best_of_best_score")),
         -_sepa_score(r),
         -_f(r.get("fundamental_score")),
         -_f(r.get("breakout_quality")),
-        -_f(r.get("score")),
         str(r.get("symbol") or ""),
     ))
-    out = attach_best_pick_meta(pool[0], with_context=False, for_best=True)
-    out["best_among_kind"] = "second_screen"
-    out["best_among_why"] = best_among_why(out)
-    out["sepa_used"] = has_sepa_overlay(out)
-    out["funds_used"] = has_usable_fundamentals(out)
-    return out
+    return [decorate_best_of_best(row, i) for i, row in enumerate(pool[: max(0, int(limit))], start=1)]
+
+
+def pick_best_among_fundamentals(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any] | None:
+    """#1 of rank_best_of_best. None when no sniper has a second screen."""
+    ranked = rank_best_of_best(rows, limit=1)
+    return ranked[0] if ranked else None
 
 
 def merge_fundamental_context(
@@ -554,7 +634,8 @@ def build_radar_home(
     long_picks.sort(key=lambda r: (-_f(r.get("combined_score")), r.get("symbol", "")))
 
     best_breakout = pick_best_sniper_breakout(breakouts)
-    best_among_fundamentals = pick_best_among_fundamentals(breakouts)
+    best_of_best = rank_best_of_best(breakouts, limit=8)
+    best_among_fundamentals = best_of_best[0] if best_of_best else None
     sniper_breakouts = [
         attach_best_pick_meta(r, with_context=False, for_best=False)
         for r in breakouts
@@ -590,6 +671,7 @@ def build_radar_home(
         "universe_size": int((scan_payload or {}).get("universe_size", 0) or 0),
         "best_breakout": best_breakout,
         "best_among_fundamentals": best_among_fundamentals,
+        "best_of_best": best_of_best,
         "best_among_note": among_note,
         "sniper_candidates": sniper_breakouts[:12],
         "ranking_legend": dict(RANKING_LEGEND),
