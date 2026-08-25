@@ -215,7 +215,7 @@ def test_market_reports_workspace_embeds_desk_note(tmp_path, monkeypatch):
     monkeypatch.setattr(rw, "REPORTS_DIR", tmp_path)
     monkeypatch.setattr(
         "reports.street_pulse.build_pulse",
-        lambda: {"date": "24 August 2026", "takeaways": ["Nifty steady"], "gainers": [], "losers": [], "breakouts_today": []},
+        lambda **_k: {"date": "24 August 2026", "takeaways": ["Nifty steady"], "gainers": [], "losers": [], "breakouts_today": []},
     )
     payload = build_market_reports_workspace(
         persist_today=True,
