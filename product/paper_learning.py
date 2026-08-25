@@ -46,6 +46,8 @@ EMPTY_MEMORY: dict[str, Any] = {
     "symbols": [],
     "cooldown": [],
     "prefer": [],
+    "shadow_prefer": [],
+    "self_feed": {},
     "closed_trades": 0,
     "summary": "No closed paper trades yet — nothing to learn.",
     "live_locked": True,
@@ -179,6 +181,8 @@ def load_paper_memory(path: str | Path | None = None) -> dict[str, Any]:
             return dict(EMPTY_MEMORY)
         payload.setdefault("cooldown", [])
         payload.setdefault("prefer", [])
+        payload.setdefault("shadow_prefer", [])
+        payload.setdefault("self_feed", {})
         payload.setdefault("symbols", [])
         payload.setdefault("live_locked", True)
         return payload
@@ -210,6 +214,8 @@ def public_memory(memory: Mapping[str, Any] | None = None) -> dict[str, Any]:
         "closed_trades": int(payload.get("closed_trades") or 0),
         "cooldown": list(payload.get("cooldown") or []),
         "prefer": [str(s) for s in (payload.get("prefer") or [])],
+        "shadow_prefer": [str(s) for s in (payload.get("shadow_prefer") or [])],
+        "self_feed": dict(payload.get("self_feed") or {}),
         "summary": str(payload.get("summary") or EMPTY_MEMORY["summary"]),
         "live_locked": True,
         "disclaimer": LIVE_STILL_LOCKED,
@@ -248,6 +254,10 @@ def select_paper_signal(signals: Iterable[Mapping[str, Any]], memory: Mapping[st
     if not eligible:
         return None, tuple(skipped)
     prefer = {str(s).upper() for s in (memory or {}).get("prefer") or []}
-    if prefer:
-        eligible.sort(key=lambda row: (0 if str(row.get("symbol") or "").upper() in prefer else 1))
+    shadow_prefer = {str(s).upper() for s in (memory or {}).get("shadow_prefer") or []}
+    if prefer or shadow_prefer:
+        eligible.sort(key=lambda row: (
+            0 if str(row.get("symbol") or "").upper() in prefer else 1,
+            0 if str(row.get("symbol") or "").upper() in shadow_prefer else 1,
+        ))
     return eligible[0], tuple(skipped)

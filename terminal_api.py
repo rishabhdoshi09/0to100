@@ -347,6 +347,8 @@ def _paper_learning_payload() -> dict:
             "closed_trades": 0,
             "cooldown": [],
             "prefer": [],
+            "shadow_prefer": [],
+            "self_feed": {},
             "summary": "Paper memory unavailable.",
             "live_locked": True,
             "disclaimer": str(exc),

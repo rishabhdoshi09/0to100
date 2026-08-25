@@ -224,6 +224,12 @@ export function BotLearningPanel({ dashboard }: { dashboard: DashboardPayload })
   const learning = dashboard.paper.learning || {}
   const cooldown = learning.cooldown || []
   const prefer = learning.prefer || []
+  const shadowPrefer = learning.shadow_prefer || []
+  const feed = learning.self_feed || {}
+  const taken = feed.taken || []
+  const skipped = feed.skipped || []
+  const sepaBest = feed.sepa_best || []
+  const tests = feed.candidate_tests || []
   return (
     <Panel title="WHAT THE BOT LEARNED" subtitle="Daily paper memory from closed simulated trades. Live stays locked.">
       <div className="fact-grid">
@@ -240,6 +246,20 @@ export function BotLearningPanel({ dashboard }: { dashboard: DashboardPayload })
         />
       )}
       {prefer.length > 0 && <p className="panel-copy">Preferred among the same strategy’s other signals: {prefer.join(', ')}</p>}
+      {shadowPrefer.length > 0 && (
+        <p className="panel-copy">
+          Missed SEPA names preferred only if they already have a paper signal: {shadowPrefer.join(', ')}. Not a buy. Not a proven sample.
+        </p>
+      )}
+      {(taken.length > 0 || skipped.length > 0 || sepaBest.length > 0) && (
+        <div className="fact-grid">
+          <div><span>Paper taken</span><strong>{taken.length}</strong></div>
+          <div><span>Paper skipped</span><strong>{skipped.length}</strong></div>
+          <div><span>SEPA best examined</span><strong>{sepaBest.length}</strong></div>
+          <div><span>Candidate tests</span><strong>{tests.length}</strong></div>
+        </div>
+      )}
+      {feed.summary ? <p className="panel-copy">{feed.summary}</p> : null}
       <p className="panel-copy">{learning.ladder || learning.disclaimer || 'Live orders stay locked until the owner approves a capital envelope.'}</p>
     </Panel>
   )
@@ -313,13 +333,82 @@ export function RecoBacktestView({ dashboard, setActive }: ViewProps) {
     .filter((row) => Number(row.pnl ?? 0) < 0)
     .reverse()
     .slice(0, 8)
+  const feed = dashboard.paper.learning?.self_feed || {}
+  const taken = feed.taken || []
+  const skipped = feed.skipped || []
+  const sepaBest = feed.sepa_best || []
+  const tests = feed.candidate_tests || []
   return (
     <section className="workspace-view">
       <div className="reco-how">
-        <div className="qt-eyebrow">After paper losses</div>
-        <p>Backtest answers one business question: did this style make or lose money on past data after costs? A result does not change today’s BUY list, ranking, or paper autopilot.</p>
+        <div className="qt-eyebrow">After-action blotter</div>
+        <p>
+          This page is the desk diary, not a whole-market backtest. Autonomy already writes taken vs skipped paper names,
+          examines SEPA best candidates, and tests those names on official bars. A result does not change today’s BUY list,
+          ranking, or unlock live orders.
+        </p>
       </div>
       <BotLearningPanel dashboard={dashboard} />
+      <Panel title="PAPER TAKEN" subtitle="Simulated fills from the last autonomy cycle. Live stays locked.">
+        {taken.length === 0 && <div className="empty-row">No paper fills in the last self-feed.</div>}
+        {taken.map((row, index) => (
+          <div className="insight" key={`${row.symbol}-taken-${index}`}>
+            <i className="green" />
+            <div>
+              <strong>{row.symbol}</strong>
+              <span>{row.strategy_id || 'paper'} · taken</span>
+            </div>
+          </div>
+        ))}
+      </Panel>
+      <Panel title="PAPER SKIPPED" subtitle="Names the book saw and did not open, with the recorded reason.">
+        {skipped.length === 0 && <div className="empty-row">No skipped paper names in the last self-feed.</div>}
+        {skipped.map((row, index) => (
+          <div className="insight" key={`${row.symbol}-skip-${index}`}>
+            <i className="amber" />
+            <div>
+              <strong>{row.symbol}</strong>
+              <span>{row.reason || 'skipped'}</span>
+            </div>
+          </div>
+        ))}
+      </Panel>
+      <Panel title="SEPA BEST EXAM" subtitle="Research overlay. Score ≥40 is not 8/8 eligibility and is not a buy.">
+        {sepaBest.length === 0 && <div className="empty-row">No persisted SEPA ranking in the last self-feed.</div>}
+        {sepaBest.map((row, index) => (
+          <div className="insight" key={`${row.symbol}-sepa-${index}`}>
+            <i className="cyan" />
+            <div>
+              <strong>{row.symbol}</strong>
+              <span>
+                SEPA {row.sepa_score ?? '—'}
+                {row.sepa_verdict ? ` · ${row.sepa_verdict}` : ''}
+                {' · paper '}
+                {row.paper_status || 'not_signaled'}
+                {row.skip_reason ? ` · ${row.skip_reason}` : ''}
+              </span>
+            </div>
+          </div>
+        ))}
+      </Panel>
+      <Panel title="CANDIDATE TESTS" subtitle="Official bhavcopy first-touch on names already ranked. n_forward_bars is a window, not a proven sample.">
+        {tests.length === 0 && <div className="empty-row">No candidate tests yet. Keep autonomy running through a paper cycle.</div>}
+        {tests.map((row, index) => (
+          <div className="insight" key={`${row.symbol}-test-${index}`}>
+            <i className={String(row.outcome || '') === 'WIN' ? 'green' : String(row.outcome || '') === 'LOSS' ? 'amber' : 'cyan'} />
+            <div>
+              <strong>{row.symbol}</strong>
+              <span>
+                {row.outcome || '—'}
+                {row.r_multiple != null ? ` · ${Number(row.r_multiple).toFixed(2)}R` : ''}
+                {` · ${row.n_forward_bars ?? 0} bars`}
+                {row.role ? ` · ${row.role}` : ''}
+                {row.paper_status ? ` · ${row.paper_status}` : ''}
+              </span>
+            </div>
+          </div>
+        ))}
+      </Panel>
       <Panel title="PAPER LOSSES TO INSPECT" subtitle="Pick a name, then open Stock Intelligence. The bot already recorded these for the next paper cycle.">
         {losses.length === 0 && <div className="empty-row">No closed paper losses yet.</div>}
         {losses.map((row, index) => (

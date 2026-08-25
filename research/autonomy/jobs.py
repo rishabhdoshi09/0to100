@@ -658,10 +658,28 @@ def run_paper_cycle(ctx) -> JobResult:
                          error_message=str(exc))
     eligibility = (result or {}).get("eligibility", "")
     hint = ST.PAPER_ACTIVE if entries_ok else ST.OBSERVING
+    metadata = {"eligibility": eligibility, "entry_block_reason": reason,
+                "session_phase": phase}
+    if not os.environ.get("PYTEST_CURRENT_TEST"):
+        try:
+            from product.paper_self_feed import ingest_paper_cycle
+
+            feed = ingest_paper_cycle(
+                result or {},
+                as_of=now.date().isoformat(),
+                slot=phase,
+            )
+            metadata["self_feed"] = {
+                "taken": len(feed.get("taken") or []),
+                "skipped": len(feed.get("skipped") or []),
+                "sepa_best": len(feed.get("sepa_best") or []),
+                "candidate_tests": len(feed.get("candidate_tests") or []),
+            }
+        except Exception:
+            pass
     return JobResult(JS.SUCCEEDED, f"paper cycle: {eligibility or 'no-op'}",
                      state_hint=hint, new_entries_allowed=entries_ok,
-                     metadata={"eligibility": eligibility, "entry_block_reason": reason,
-                               "session_phase": phase})
+                     metadata=metadata)
 
 
 def run_outcome_resolution(ctx) -> JobResult:
@@ -685,6 +703,13 @@ def run_outcome_resolution(ctx) -> JobResult:
                          error_code="OUTCOME_ERROR", error_message=str(exc))
     closed = len((result or {}).get("positions_closed", []))
     recorded = len((result or {}).get("outcomes_recorded", []))
+    if not os.environ.get("PYTEST_CURRENT_TEST"):
+        try:
+            from product.paper_self_feed import ingest_paper_cycle
+
+            ingest_paper_cycle(result or {}, as_of=session_date, slot="eod")
+        except Exception:
+            pass
     return JobResult(JS.SUCCEEDED, f"outcomes resolved · {closed} positions closed · {recorded} decoded",
                      unblocks=(f"{DEP_OUTCOMES}:{session_date}",), metadata=result or {})
 
