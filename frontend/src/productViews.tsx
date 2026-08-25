@@ -259,10 +259,24 @@ function verdictTone(value: string): string {
   return 'is-neutral'
 }
 
-function InvestigatePanel({ report, loading, error }: {
+function InvestigatePanel({
+  report,
+  loading,
+  error,
+  caseMemory,
+  decision,
+  onResearchData,
+  onRefresh,
+  busy,
+}: {
   report: DueDiligenceReport | null
   loading: boolean
   error: string
+  caseMemory?: StockWorkspace['case']
+  decision?: StockWorkspace['decision_memory']
+  onResearchData: () => void
+  onRefresh: () => void
+  busy: string
 }) {
   const [openId, setOpenId] = useState<string | null>(null)
   useEffect(() => { setOpenId(null) }, [report?.symbol])
@@ -296,6 +310,20 @@ function InvestigatePanel({ report, loading, error }: {
         <article><span>News / event impact</span><strong>{report.news_event_impact}</strong></article>
       </div>
       <p className="dd-framework">{report.framework.label}. {report.framework.blurb} Sector: {report.profile.sector || 'Unclassified'}.</p>
+      {(report.profile.revenue_drivers && report.profile.revenue_drivers !== 'Data unavailable — no segment table on file.') ? (
+        <p className="dd-framework">Revenue drivers: {report.profile.revenue_drivers}</p>
+      ) : null}
+      {(caseMemory || decision || report.long_term_overlay?.classification) ? (
+        <aside className="dd-overlay" aria-label="Already-wired QuantTerm layers">
+          {report.long_term_overlay?.classification ? (
+            <p><strong>Long-term overlay.</strong> {report.long_term_overlay.classification}. {report.long_term_overlay.note}</p>
+          ) : null}
+          {decision?.setup_quality?.score != null ? (
+            <p><strong>Setup quality.</strong> {decision.setup_quality.score}/100 — from decision memory, not the Investigate score.</p>
+          ) : null}
+          {caseMemory?.memory_line ? <p><strong>Case memory.</strong> {caseMemory.memory_line}</p> : null}
+        </aside>
+      ) : null}
       <div className="stock-overview-grid">
         <Panel title="KEY STRENGTHS" subtitle="Measured improving KPIs only">
           {(report.strengths || []).length
@@ -390,6 +418,65 @@ function InvestigatePanel({ report, loading, error }: {
       </Panel>
       <Panel title="WHAT TO WATCH NEXT" subtitle="Measurable follow-ups, not forecasts">
         <ul className="dd-watch">{(report.watch_next || []).map((item) => <li key={item}>{item}</li>)}</ul>
+      </Panel>
+      <Panel title="CURRENT SNAPSHOT (NOT SCORED)" subtitle="Same extractor Stock Intelligence already uses — not a quarterly trend">
+        <div className="dd-kpi-table">
+          {(report.evidence_pack?.snapshot_metrics || []).map((item) => (
+            <article key={item.id} className={`dd-kpi ${item.available ? '' : 'unavailable'}`}>
+              <div className="dd-kpi-static">
+                <span>{item.label}</span>
+                <strong>{item.available ? item.fact : 'Data unavailable'}</strong>
+                <small>{item.interpretation}</small>
+              </div>
+            </article>
+          ))}
+        </div>
+      </Panel>
+      <Panel title="MANAGEMENT COMMENTARY" subtitle="Structured Research Data uploads only — never inferred">
+        {(report.evidence_pack?.management_commentary || []).length
+          ? (
+            <ul className="dd-events">
+              {report.evidence_pack!.management_commentary.map((item) => (
+                <li key={`${item.event_date}-${item.commentary.slice(0, 24)}`}>
+                  <strong>{item.speaker}{item.topic ? ` · ${item.topic}` : ''}</strong>
+                  <span>{item.commentary}</span>
+                  <small>{item.event_date || 'date unavailable'}</small>
+                </li>
+              ))}
+            </ul>
+          )
+          : <EmptyState title="Data unavailable" detail="No concall / guidance rows on file. Upload them in Research Data." />}
+      </Panel>
+      <Panel title="ORDER BOOK / GUIDANCE" subtitle="Only from uploaded structured rows">
+        {(report.evidence_pack?.order_book || []).length
+          ? <ul className="dd-watch">{report.evidence_pack!.order_book.map((item) => <li key={item.fact}>{item.fact}</li>)}</ul>
+          : <EmptyState title="Data unavailable" detail="No order-book or forward-guidance table on file." />}
+      </Panel>
+      <Panel title="PEERS ON FILE" subtitle="Screener peer table if present — no estimated relative scores">
+        {(report.evidence_pack?.peers || []).length
+          ? <ul className="dd-watch">{report.evidence_pack!.peers.map((item) => <li key={item.name}>{item.fact}</li>)}</ul>
+          : <EmptyState title="Data unavailable" detail="Peer comparison table is empty in this cache." />}
+      </Panel>
+      <Panel title="EVIDENCE PACK GAPS" subtitle={`Research Data coverage ${report.evidence_pack?.coverage_pct ?? 0}% — complete here, not by guessing`}>
+        {(report.evidence_pack?.gaps || []).length
+          ? (
+            <ul className="dd-flag-list">
+              {report.evidence_pack!.gaps.map((gap) => (
+                <li key={gap.key}>
+                  <strong>{gap.label} · {gap.status}</strong>
+                  <span>{gap.why || gap.instructions}</span>
+                  {gap.link_url ? <a href={gap.link_url} target="_blank" rel="noreferrer">{gap.link_label || 'Source'}</a> : null}
+                </li>
+              ))}
+            </ul>
+          )
+          : <EmptyState title="Required evidence rows that this desk already tracks are present" />}
+        <div className="dd-actions">
+          <button type="button" className="reco-primary" onClick={onResearchData}>Complete missing research data</button>
+          <button type="button" className="reco-ghost" disabled={busy === 'REFRESH_STOCK_FUNDAMENTALS'} onClick={onRefresh}>
+            {busy === 'REFRESH_STOCK_FUNDAMENTALS' ? 'Refreshing…' : 'Refresh this stock’s fundamentals'}
+          </button>
+        </div>
       </Panel>
       <p className="dd-fresh">
         Latest financial period: {report.as_of.latest_financial_period || 'Data unavailable'}
@@ -487,6 +574,7 @@ export function ProductStockIntelligenceView(props: ViewProps) {
       if (control === 'REFRESH_STOCK_FUNDAMENTALS') {
         const result = await refreshStockFundamentals(selected)
         setWorkspace(result.workspace)
+        if (tab === 'Investigate') await loadDd()
       } else {
         await runControl(control)
       }
@@ -537,7 +625,16 @@ export function ProductStockIntelligenceView(props: ViewProps) {
       <SectionTabs tabs={intelTabs} active={tab} onChange={setTab} />
 
       {tab === 'Investigate' && (
-        <InvestigatePanel report={dd} loading={ddLoading} error={ddError} />
+        <InvestigatePanel
+          report={dd}
+          loading={ddLoading}
+          error={ddError}
+          caseMemory={workspace?.case}
+          decision={workspace?.decision_memory}
+          onResearchData={() => setActive('Research Data')}
+          onRefresh={() => void runAction('REFRESH_STOCK_FUNDAMENTALS')}
+          busy={busy}
+        />
       )}
 
       {tab === 'Overview' && (

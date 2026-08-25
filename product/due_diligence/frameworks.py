@@ -59,6 +59,10 @@ _PROMOTER = _k(
     "promoter", "Promoter holding", "shareholding", ("promoters",),
     higher_is_better=True, kind="rate", unit="%", pillar="governance", weight=10,
 )
+_PLEDGE = _k(
+    "pledge", "Promoter pledge", "shareholding", ("pledge",),
+    higher_is_better=False, kind="rate", unit="%", pillar="governance", weight=8,
+)
 _CFO = _k(
     "cfo", "Cash from operations", "cash_flow", ("cash from operating",),
     higher_is_better=True, kind="level", unit="₹ cr", pillar="cash", weight=12,
@@ -85,13 +89,14 @@ BANK = (
     ),
     _PAT,
     _PROMOTER,
+    _PLEDGE,
 )
 
 NBFC = BANK
-IT = (_GROWTH_SALES, _OPM, _PAT, _EPS, _PROMOTER, _CFO)
-PHARMA = (_GROWTH_SALES, _OPM, _PAT, _EPS, _PROMOTER, _CFO)
-INDUSTRIALS = (_GROWTH_SALES, _OPM, _PAT, _CFO, _PROMOTER)
-GENERIC = (_GROWTH_SALES, _OPM, _PAT, _PROMOTER, _CFO)
+IT = (_GROWTH_SALES, _OPM, _PAT, _EPS, _PROMOTER, _PLEDGE, _CFO)
+PHARMA = (_GROWTH_SALES, _OPM, _PAT, _EPS, _PROMOTER, _PLEDGE, _CFO)
+INDUSTRIALS = (_GROWTH_SALES, _OPM, _PAT, _CFO, _PROMOTER, _PLEDGE)
+GENERIC = (_GROWTH_SALES, _OPM, _PAT, _PROMOTER, _PLEDGE, _CFO)
 
 FRAMEWORKS: dict[str, dict[str, Any]] = {
     "bank": {

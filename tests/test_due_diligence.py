@@ -296,3 +296,80 @@ def test_due_diligence_endpoint_rejects_invalid_symbol():
     client = TestClient(tpa.app)
     response = client.get("/api/due-diligence/%40%40%40")
     assert response.status_code == 400
+
+
+def test_evidence_pack_stays_empty_when_uploads_are_missing():
+    payload = build_due_diligence(
+        "TESTIT",
+        scan_payload={"records": [{"symbol": "TESTIT", "status": "Watch for breakout", "score": 70}]},
+        long_term_payload={"records": [{"symbol": "TESTIT", "sector": "IT / Software", "classification": "QUALITY_COMPOUNDER"}]},
+        raw_fundamentals=IT_RAW,
+        news=[],
+    )
+    pack = payload["evidence_pack"]
+    assert pack["management_commentary"] == []
+    assert pack["order_book"] == []
+    assert pack["peers"] == []
+    keys = {gap["key"] for gap in pack["gaps"]}
+    assert "management_commentary" in keys
+    assert "order_book_guidance" in keys
+    assert payload["long_term_overlay"]["classification"] == "QUALITY_COMPOUNDER"
+    assert payload["profile"]["revenue_drivers"].startswith("Data unavailable")
+    assert any("Research Data" in item for item in payload["watch_next"])
+    pledge = next(k for k in payload["kpis"] if k["id"] == "pledge")
+    assert pledge["available"] is False
+    assert pledge["fact"] == "Data unavailable"
+
+
+def test_snapshot_extractor_is_shown_not_scored():
+    raw = {
+        **IT_RAW,
+        "data": {
+            **IT_RAW["data"],
+            "key_ratios": [
+                {"name": "ROE", "value": "22.5"},
+                {"name": "Stock P/E", "value": "29.8"},
+            ],
+        },
+    }
+    payload = build_due_diligence(
+        "TESTIT",
+        scan_payload={"records": [{"symbol": "TESTIT", "status": "Watch for breakout", "score": 70}]},
+        long_term_payload={"records": [{"symbol": "TESTIT", "sector": "IT / Software"}]},
+        raw_fundamentals=raw,
+        news=[],
+    )
+    roe = next(item for item in payload["evidence_pack"]["snapshot_metrics"] if item["id"] == "roe")
+    assert roe["available"] is True
+    assert roe["value"] == 22.5
+    assert roe["used_in_score"] is False
+    assert "22.5" in roe["fact"]
+
+
+def test_uploaded_commentary_and_segments_are_wired(monkeypatch):
+    def fake_rows(symbol, kind):
+        if kind == "management_commentary":
+            return [{
+                "speaker": "CFO",
+                "commentary": "NIM stays under pressure for one to two quarters.",
+                "event_date": "2026-08-01",
+                "source_url": "https://example.com/call",
+            }]
+        if kind == "business_segments":
+            return [{"segment": "Retail", "revenue_cr": 80, "revenue_mix_pct": 70}]
+        if kind == "order_book_guidance":
+            return [{"metric": "Order book", "value": 12000, "unit": "₹ cr", "period": "Q1 FY27", "as_of_date": "2026-06-30", "source_url": "https://example.com/ob"}]
+        return []
+
+    monkeypatch.setattr("reporting.evidence_intake.structured_rows", fake_rows)
+    payload = build_due_diligence(
+        "TESTIT",
+        scan_payload={"records": [{"symbol": "TESTIT", "status": "Watch for breakout", "score": 70}]},
+        long_term_payload={"records": [{"symbol": "TESTIT", "sector": "IT / Software"}]},
+        raw_fundamentals=IT_RAW,
+        news=[],
+    )
+    assert payload["profile"]["revenue_drivers"].startswith("Retail")
+    assert payload["evidence_pack"]["management_commentary"][0]["commentary"].startswith("NIM stays")
+    assert payload["evidence_pack"]["order_book"][0]["metric"] == "Order book"
+    assert "Order-book / guidance on file" in payload["watch_next"][0]

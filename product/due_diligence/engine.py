@@ -9,6 +9,7 @@ from product.due_diligence.classify import classify_company
 from product.due_diligence.frameworks import KpiSpec, get_framework
 from product.due_diligence.news_layer import material_events, news_verdict
 from product.due_diligence.series import dated_series, direction, find_row, snapshot
+from product.due_diligence.wiring import load_evidence_pack
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -177,6 +178,17 @@ def _red_flags(findings: Sequence[Mapping[str, Any]], events: Sequence[Mapping[s
                 "source": finding.get("source"),
                 "source_date": finding.get("source_date"),
             })
+        if finding.get("id") == "pledge" and finding.get("available"):
+            current = (finding.get("snapshot") or {}).get("current")
+            if finding.get("trend") == "deteriorating" or (current is not None and current > 20):
+                flags.append({
+                    "id": "flag-pledge",
+                    "title": "Promoter pledge is elevated or rising",
+                    "kind": "governance",
+                    "fact": finding["fact"],
+                    "source": finding.get("source"),
+                    "source_date": finding.get("source_date"),
+                })
         if finding.get("id") == "promoter" and finding.get("trend") == "deteriorating":
             qoq = (finding.get("snapshot") or {}).get("qoq_change")
             if qoq is not None and qoq <= -3:
@@ -324,7 +336,24 @@ def build_due_diligence(
     score, coverage, score_meta = _score(findings)
     events = material_events(list(news or []), symbol)
     news_label, news_detail = news_verdict(events)
+    pack = load_evidence_pack(
+        symbol,
+        raw=raw,
+        scan_as_of=str((scan_payload or {}).get("scanned_at") or ""),
+        long_term_as_of=str((long_term_payload or {}).get("scanned_at") or ""),
+        news_as_of=str(events[0]["published_at"] if events else ""),
+        long_row=long_row,
+    )
+    if pack.get("revenue_drivers") and pack["revenue_drivers"] != "Data unavailable — no segment table on file.":
+        profile["revenue_drivers"] = pack["revenue_drivers"]
+    if pack.get("business_model") and pack["business_model"] != "Data unavailable":
+        profile["business_model"] = pack["business_model"]
+        if not profile.get("about"):
+            profile["about"] = pack["business_model"]
     flags = _red_flags(findings, events)
+    for extra in pack.get("flags") or []:
+        if extra.get("id") not in {item.get("id") for item in flags}:
+            flags.append(extra)
     technical = _technical_context(scan_row, long_row)
     trend_label = _pillar_label([str(f.get("trend")) for f in findings if f.get("available")])
     vs_setup, vs_detail = _vs_setup(
@@ -369,6 +398,12 @@ def build_due_diligence(
     ])
     financial = quality_label if quality_label != "Unmeasured" else "Unmeasured"
 
+    watch = list(framework["watch"])
+    if any(gap.get("key") == "management_commentary" for gap in pack.get("gaps") or []):
+        watch = ["Upload a concall / results commentary in Research Data — tone is not inferred."] + watch[:3]
+    if pack.get("order_book"):
+        watch = [f"Order-book / guidance on file: {pack['order_book'][0]['fact']}"] + list(watch[:3])
+
     as_of = {
         "latest_financial_period": next(
             (f.get("snapshot", {}).get("current_period") for f in findings if f.get("available")),
@@ -379,10 +414,11 @@ def build_due_diligence(
         "latest_material_news": events[0]["published_at"] if events else "Data unavailable",
         "scan_scanned_at": str((scan_payload or {}).get("scanned_at") or ""),
         "generated_at": now.isoformat(),
+        "evidence_pack_coverage_pct": pack.get("coverage_pct"),
     }
 
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "symbol": symbol,
         "company": company,
         "profile": profile,
@@ -392,6 +428,7 @@ def build_due_diligence(
             "blurb": framework["blurb"],
         },
         "technical_context": technical,
+        "long_term_overlay": pack.get("long_term_overlay") or {},
         "fundamental_quality": {
             "score": score,
             "label": quality_label,
@@ -415,9 +452,10 @@ def build_due_diligence(
         "unavailable": unavailable,
         "what_changed": changed[:4],
         "red_flags": flags,
-        "watch_next": list(framework["watch"]),
+        "watch_next": watch,
         "kpis": findings,
         "events": events,
+        "evidence_pack": pack,
         "as_of": as_of,
         "places_orders": False,
         "disclaimer": (

@@ -258,6 +258,23 @@ export type DueDiligenceReport = {
     latest_material_news: string
     scan_scanned_at: string
     generated_at: string
+    evidence_pack_coverage_pct?: number
+  }
+  evidence_pack?: {
+    coverage_pct: number
+    empty_note?: string
+    gaps: { key: string; label: string; status: string; why: string; instructions: string; source_attached: boolean; link_label: string; link_url: string }[]
+    management_commentary: { speaker: string; topic: string; commentary: string; event_date: string; source_url: string }[]
+    order_book: { metric: string; fact: string; as_of: string; source_url: string }[]
+    peers: { name: string; fact: string }[]
+    snapshot_metrics: { id: string; label: string; available: boolean; fact: string; interpretation: string; implication: string; source: string }[]
+    next_actions: { id: string; label: string; page?: string; control?: string; detail: string }[]
+  }
+  long_term_overlay?: {
+    classification?: string | null
+    quality_factors?: string[]
+    risk_flags?: string[]
+    note?: string
   }
   places_orders: boolean
   disclaimer: string

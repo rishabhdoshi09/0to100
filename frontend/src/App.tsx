@@ -358,6 +358,10 @@ function App() {
       .catch(() => setBars([]))
   }, [selected, dashboard.data.bhavcopy.ready, dashboard.data.bhavcopy.latest_date])
 
+  useEffect(() => {
+    if (selected) setQuery(selected)
+  }, [selected])
+
   const openPage = useCallback((page: string) => {
     setActive(page)
     setSeen((prev) => (prev.includes(page) ? prev : [...prev, page]))

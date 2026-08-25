@@ -64,6 +64,10 @@ def test_terminal_uses_reco_desk_not_hud_chrome():
     assert "Investigate" in views
     assert "fetchDueDiligence" in views
     assert "vs_technical_setup" in views
+    assert "evidence_pack" in views
+    assert "Complete missing research data" in views
+    app = (ROOT / "frontend" / "src" / "App.tsx").read_text(encoding="utf-8")
+    assert "if (selected) setQuery(selected)" in app
 
 
 def test_home_is_three_lane_radar_with_two_best_of_panels():
