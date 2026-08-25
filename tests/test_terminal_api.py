@@ -149,3 +149,4 @@ def test_radar_home_keeps_watchlist_when_sepa_ranking_fails(monkeypatch):
     assert "unavailable" in home["best_setups_note"].lower()
     assert "telegram" in home
     assert "headline" in home["telegram"]
+    assert "desk_pipeline" in home

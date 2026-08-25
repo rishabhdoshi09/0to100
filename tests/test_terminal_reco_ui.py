@@ -70,6 +70,8 @@ def test_home_is_three_lane_radar_with_two_best_of_panels():
     assert "rw-stock-card" not in src
     assert "Make ready" not in src
     assert "Preparing official history and scan" in src
+    assert "Official prices" in src
+    assert "radar-pipeline" in src
     app = (ROOT / "frontend" / "src" / "App.tsx").read_text(encoding="utf-8")
     assert "Search any NSE share" in app
     assert "ZERODHA OK" in app

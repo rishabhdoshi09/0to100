@@ -150,12 +150,13 @@ export function ProductCommandCenterView(props: ViewProps) {
 
   const bootstrap = async () => {
     setBootstrapBusy(true)
-    setMessage('Queueing data, news, scanner and long-term lanes…')
+    setMessage('Starting the next desk download…')
     try {
       const result = await bootstrapProduct()
       setReadiness(result.readiness)
-      const created = result.operations.filter((item) => item.created).length
-      setMessage(`${created} preparation operation(s) queued. Progress is visible below.`)
+      setMessage(result.message || (result.queued_kind
+        ? `Queued ${result.queued_kind}. The next download waits until this one finishes.`
+        : 'Desk data is current.'))
     } catch (reason) {
       setMessage(reason instanceof Error ? reason.message : 'Product preparation failed')
     } finally {

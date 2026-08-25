@@ -224,6 +224,13 @@ def radar_home_workspace() -> dict[str, Any]:
             "headline": "Telegram status unavailable",
             "detail": str(exc),
         }
+    try:
+        from operations.store import OperationStore
+        from product.desk_pipeline import describe_desk_pipeline
+
+        home["desk_pipeline"] = describe_desk_pipeline(OperationStore(core.OPS_DB))
+    except Exception:
+        home["desk_pipeline"] = None
     return home
 
 

@@ -477,36 +477,28 @@ class MarketOperationsWorker:
             finally:
                 self._set_active(lane, None)
                 _atomic_json(RUNTIME_PATH, self._runtime_payload(running=True))
+                try:
+                    from product.desk_pipeline import advance_desk_pipeline
+
+                    nxt = advance_desk_pipeline(self.store, requested_by="pipeline")
+                    kind = nxt.get("queued_kind")
+                    if kind and nxt.get("queued_created"):
+                        _emit("QUEUE", f"next desk step {kind} · {nxt.get('message', '')}")
+                except Exception as exc:
+                    _emit("INFO", f"desk pipeline advance skipped · {type(exc).__name__}: {exc}")
 
     def _bootstrap(self) -> list[str]:
-        queued: list[str] = []
         try:
-            from data.bhavcopy_runtime import status as history_status
-            history = history_status(load_cache=True)
-        except Exception:
-            history = {"ready": False, "sessions": 0}
-        history_missing = not history.get("ready") or int(history.get("sessions", 0) or 0) < 60
-        if history_missing:
-            _item, created = self.store.enqueue(DATA_PREPARE, lane=LANES[DATA_PREPARE], requested_by="bootstrap")
-            if created:
-                queued.append(DATA_PREPARE)
-        elif _stale(ROOT / "logs" / "product" / "fno_universe.json", FNO_FRESH_S):
-            _item, created = self.store.enqueue(FNO_REFRESH, lane=LANES[FNO_REFRESH], requested_by="bootstrap")
-            if created:
-                queued.append(FNO_REFRESH)
-        if _stale(ROOT / "logs" / "news_curator.sqlite3", NEWS_FRESH_S):
-            _item, created = self.store.enqueue(NEWS_REFRESH, lane=LANES[NEWS_REFRESH], requested_by="bootstrap")
-            if created:
-                queued.append(NEWS_REFRESH)
-        if _stale(ROOT / "logs" / "product" / "latest_momentum_scan.json", SCAN_FRESH_S):
-            _item, created = self.store.enqueue(MARKET_SCAN, lane=LANES[MARKET_SCAN], requested_by="bootstrap")
-            if created:
-                queued.append(MARKET_SCAN)
-        if _stale(ROOT / "logs" / "product" / "latest_long_term_scan.json", LONG_TERM_FRESH_S):
-            _item, created = self.store.enqueue(LONG_TERM_SCAN, lane=LANES[LONG_TERM_SCAN], requested_by="bootstrap")
-            if created:
-                queued.append(LONG_TERM_SCAN)
-        return queued
+            from product.desk_pipeline import advance_desk_pipeline
+
+            result = advance_desk_pipeline(self.store, requested_by="bootstrap")
+        except Exception as exc:
+            _emit("INFO", f"desk pipeline bootstrap skipped · {type(exc).__name__}: {exc}")
+            return []
+        kind = result.get("queued_kind")
+        if kind and result.get("queued_created"):
+            return [str(kind)]
+        return []
 
     def run(self) -> int:
         if not self.lock.acquire():

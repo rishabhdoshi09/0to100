@@ -302,10 +302,18 @@ function App() {
 
   const longTermScan = useScanRunner('LONG_TERM_SCAN', {
     onComplete: () => void refresh(),
-    seedOperation: activeSeed(dashboard, 'LONG_TERM_SCAN'),
+    seedOperation: activeSeed(dashboard, 'LONG_TERM_SCAN') || activeSeed(dashboard, 'LONG_TERM_REFRESH'),
   })
 
-  const scanPollingActive = marketScan.isActive || longTermScan.isActive
+  const pipelineBusy = (dashboard.operations.active || []).some((item) => (
+    item.kind === 'DATA_PREPARE'
+    || item.kind === 'FNO_REFRESH'
+    || item.kind === 'MARKET_SCAN'
+    || item.kind === 'LONG_TERM_SCAN'
+    || item.kind === 'LONG_TERM_REFRESH'
+    || item.kind === 'NEWS_REFRESH'
+  ))
+  const scanPollingActive = marketScan.isActive || longTermScan.isActive || pipelineBusy
 
   useEffect(() => {
     void refresh()

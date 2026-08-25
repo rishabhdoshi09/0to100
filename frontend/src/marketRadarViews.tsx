@@ -12,6 +12,8 @@ import {
   fetchWatchlist,
   removeWatchlistItem,
   type CompareWorkspace,
+  type DeskPipeline,
+  type DeskPipelineStep,
   type ProductReadiness,
   type RadarHome,
   type ScannerWorkspaceRow,
@@ -94,6 +96,46 @@ const momentumLabel: Record<string, string> = {
   insufficient_history: 'Short history',
   watch_momentum: 'Watch',
   not_momentum: '—',
+}
+
+const DESK_PIPELINE_FALLBACK: DeskPipelineStep[] = [
+  { id: 'prices', title: 'Official prices', page: 'Home', why: 'Download bhavcopy history so charts and the market scan have bars.', state: 'waiting' },
+  { id: 'scan', title: 'Market scan', page: 'Home', why: 'One whole-market scan for Home, Scanner and recommendation setups.', state: 'waiting' },
+  { id: 'long_term', title: 'Long-term / funds', page: 'Recommendations', why: 'Fundamentals for Best Among and Wealth Builders.', state: 'waiting' },
+  { id: 'news', title: 'Market reports', page: 'Market Reports', why: 'Street pulse and news for Market Reports.', state: 'waiting' },
+]
+
+const PIPELINE_STATE_LABEL: Record<string, string> = {
+  ready: 'Ready',
+  running: 'Downloading',
+  queued: 'Queued',
+  waiting: 'Waiting',
+  failed: 'Failed',
+  skipped_failed: 'Skipped',
+}
+
+function DeskPipelineStrip({ pipeline }: { pipeline?: DeskPipeline | null }) {
+  const steps = pipeline?.steps?.length ? pipeline.steps : DESK_PIPELINE_FALLBACK
+  return (
+    <div className="radar-pipeline-wrap">
+      <div className="radar-pipeline" aria-label="Desk downloads, one at a time">
+        {steps.map((step, index) => {
+          const state = step.state || 'waiting'
+          const active = state === 'running' || state === 'queued'
+          return (
+            <div key={step.id} className={`radar-pipeline-step is-${state}${active ? ' is-active' : ''}`}>
+              <span>{index + 1}. {step.page}</span>
+              <strong>{step.title}</strong>
+              <small>{PIPELINE_STATE_LABEL[state] || state}{step.why && active ? ` · ${step.why}` : ''}</small>
+            </div>
+          )
+        })}
+      </div>
+      {pipeline?.message ? <p className="radar-pipeline-msg">{pipeline.message}</p> : (
+        <p className="radar-pipeline-msg">Downloads run one at a time: prices, then the shared market scan, then long-term funds, then market reports. Scan Now still refreshes the scan on demand.</p>
+      )}
+    </div>
+  )
 }
 
 function BestSniperPanel({
@@ -412,10 +454,19 @@ export function RadarHomeView(props: ExperienceViewProps & {
         .catch(() => undefined)
     }
     load()
-    const watching = marketScan.isActive || Boolean(dashboard.scan_progress?.active)
+    const watching = marketScan.isActive
+      || Boolean(dashboard.scan_progress?.active)
+      || (dashboard.operations.active || []).some((item) => (
+        item.kind === 'DATA_PREPARE'
+        || item.kind === 'FNO_REFRESH'
+        || item.kind === 'MARKET_SCAN'
+        || item.kind === 'LONG_TERM_SCAN'
+        || item.kind === 'LONG_TERM_REFRESH'
+        || item.kind === 'NEWS_REFRESH'
+      ))
     const timer = window.setInterval(load, watching ? 4000 : 20_000)
     return () => { alive = false; window.clearInterval(timer) }
-  }, [dashboard.scan.scanned_at, dashboard.long_term.scanned_at, dashboard.generated_at, dashboard.scan_progress?.updated_at, marketScan.isActive])
+  }, [dashboard.scan.scanned_at, dashboard.long_term.scanned_at, dashboard.generated_at, dashboard.scan_progress?.updated_at, dashboard.operations.active, marketScan.isActive])
 
   useEffect(() => {
     if (!selected) { setPlan(null); return }
@@ -450,17 +501,18 @@ export function RadarHomeView(props: ExperienceViewProps & {
 
   const runBootstrap = async () => {
     setBootstrapBusy(true)
-    setDeskNote('Preparing official history, news and scan…')
+    setDeskNote('Starting the next desk download…')
     try {
       const result = await bootstrapProduct()
       setReadiness(result.readiness)
-      setDeskNote(result.message || 'Data lanes queued')
-      if (!scanAt && !marketScan.isBusy) void marketScan.start()
+      setDeskNote(result.message || (result.queued_kind
+        ? `Queued ${result.queued_kind} — the next step waits until this finishes.`
+        : 'Desk data is current.'))
     } catch (reason) {
       setDeskNote(reason instanceof Error ? reason.message : 'Could not start data lanes')
     } finally {
       setBootstrapBusy(false)
-      window.setTimeout(() => setDeskNote(''), 4000)
+      window.setTimeout(() => setDeskNote(''), 6000)
     }
   }
 
@@ -548,6 +600,8 @@ export function RadarHomeView(props: ExperienceViewProps & {
           </button>
         </div>
       </header>
+
+      <DeskPipelineStrip pipeline={radar?.desk_pipeline} />
 
       <div className={`radar-desk-strip ${kiteOk ? '' : 'desk-warn'} ${telegramWarn ? 'telegram-warn' : ''}`}>
         <div>

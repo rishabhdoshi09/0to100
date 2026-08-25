@@ -153,7 +153,11 @@ export const fetchProductReadiness = (): Promise<ProductReadiness> =>
 export const bootstrapProduct = (): Promise<{
   accepted: boolean
   message: string
+  sequential?: boolean
+  queued_kind?: string | null
+  scan_reused?: boolean
   operations: Array<{ kind: string; operation_id: string; status: string; created: boolean }>
+  pipeline?: DeskPipeline
   readiness: ProductReadiness
 }> => fetch('/api/product-bootstrap', {
   method: 'POST',
@@ -220,6 +224,36 @@ export const fetchScannerWorkspace = (mode: string): Promise<ScannerWorkspace> =
     headers: { Accept: 'application/json' },
   }).then((response) => json<ScannerWorkspace>(response))
 
+export type DeskPipelineStep = {
+  id: string
+  title: string
+  page: string
+  why: string
+  kind?: string | null
+  state: string
+  latest_status?: string | null
+}
+
+export type DeskPipeline = {
+  sequential: boolean
+  queued_kind?: string | null
+  queued_created?: boolean
+  current?: {
+    id: string
+    title: string
+    kind?: string | null
+    status: string
+    why: string
+    page: string
+  } | null
+  steps: DeskPipelineStep[]
+  message: string
+  page?: string
+  scan_reused?: boolean
+  operations?: Array<{ kind?: string; operation_id?: string; status?: string; created?: boolean }>
+  active_kind?: string | null
+}
+
 export type RadarHome = {
   generated_at: string
   market_session: string
@@ -278,6 +312,7 @@ export type RadarHome = {
     live_ticks?: boolean
     last_error?: string
   }
+  desk_pipeline?: DeskPipeline | null
 }
 
 export const fetchRadarHome = (): Promise<RadarHome> =>
