@@ -27,13 +27,21 @@ def _ratio(num: float | None, den: float | None) -> float | None:
     return round(num / den, 3)
 
 
+def _skip_cfo_conversion(framework_id: str) -> bool:
+    try:
+        from product.due_diligence.frameworks import get_framework
+        return bool(get_framework(framework_id).get("skip_cfo_conversion"))
+    except Exception:
+        return framework_id in {"bank", "nbfc"}
+
+
 def cash_flow_quality(raw: Mapping[str, Any], *, framework_id: str) -> dict[str, Any]:
-    """Banks skip CFO/PAT style cash conversion — it is the wrong picture."""
-    if framework_id in {"bank", "nbfc"}:
+    """Banks / NBFCs / insurers skip CFO/PAT cash conversion — it is the wrong picture."""
+    if _skip_cfo_conversion(framework_id):
         return {
             "applicable": False,
             "label": "Not applicable",
-            "detail": "Cash-conversion ratios are not scored for banks / NBFCs.",
+            "detail": "Cash-conversion ratios are not scored for banks / NBFCs / insurers.",
             "flags": [],
             "metrics": [],
         }
@@ -194,7 +202,7 @@ def balance_sheet_quality(raw: Mapping[str, Any], *, framework_id: str) -> dict[
 
     add("debt", "Borrowings", debt, "₹ cr")
     add("inventory", "Inventory", inventory, "₹ cr")
-    de = _ratio(debt.get("current"), equity.get("current")) if framework_id not in {"bank", "nbfc"} else None
+    de = _ratio(debt.get("current"), equity.get("current")) if not _skip_cfo_conversion(framework_id) else None
     metrics.append({
         "id": "debt_equity",
         "label": "Debt / equity",
@@ -202,7 +210,7 @@ def balance_sheet_quality(raw: Mapping[str, Any], *, framework_id: str) -> dict[
         "current": de,
         "unit": "x",
         "fact": f"Debt/equity = {de}x" if de is not None else (
-            "Not used for banks / NBFCs" if framework_id in {"bank", "nbfc"} else "Calculation not possible"
+            "Not used for banks / NBFCs / insurers" if _skip_cfo_conversion(framework_id) else "Calculation not possible"
         ),
     })
     coverage = _ratio(ebit.get("current"), interest.get("current"))
@@ -220,7 +228,7 @@ def balance_sheet_quality(raw: Mapping[str, Any], *, framework_id: str) -> dict[
         ),
     })
 
-    if framework_id not in {"bank", "nbfc"}:
+    if not _skip_cfo_conversion(framework_id):
         if debt.get("yoy_change") is not None and debt["yoy_change"] > 40:
             flags.append({
                 "id": "bs-debt-spike",
@@ -260,7 +268,7 @@ def balance_sheet_quality(raw: Mapping[str, Any], *, framework_id: str) -> dict[
             label = "Watch"
         else:
             label = "Strong" if (coverage is None or coverage >= 4) else "Adequate"
-    if framework_id in {"bank", "nbfc"}:
+    if _skip_cfo_conversion(framework_id):
         label = "See sector KPIs" if label == "Unmeasured" else label
     return {
         "applicable": True,

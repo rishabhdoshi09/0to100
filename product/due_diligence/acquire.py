@@ -6,7 +6,7 @@ import re
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
 from urllib.parse import urljoin, urlparse
 
 from product.due_diligence.extract import (
@@ -573,6 +573,35 @@ def _framework_id_for(symbol: str, raw: Mapping[str, Any]) -> str:
     return str(profile.get("framework_id") or "generic")
 
 
+def _framework_for(symbol: str, raw: Mapping[str, Any]) -> dict[str, Any]:
+    from product.due_diligence.frameworks import get_framework
+    return get_framework(_framework_id_for(symbol, raw))
+
+
+_ACQUIRE_LANE_DATASETS = {
+    "financials": ("quarterly_results", "annual_financials", "shareholding", "promoter_pledge"),
+    "ir": ("exchange_filings", "sector_kpis", "valuation", "peer_data"),
+    "filings": ("exchange_filings", "corporate_announcements", "credit_ratings"),
+    "news": ("recent_news",),
+}
+
+
+def _order_to_fetch(to_fetch: list[str], acquire_priority: Sequence[str] | None) -> list[str]:
+    if not to_fetch:
+        return []
+    order: list[str] = []
+    seen: set[str] = set()
+    for lane in acquire_priority or ():
+        for ds_id in _ACQUIRE_LANE_DATASETS.get(str(lane), ()):
+            if ds_id in to_fetch and ds_id not in seen:
+                order.append(ds_id)
+                seen.add(ds_id)
+    for ds_id in to_fetch:
+        if ds_id not in seen:
+            order.append(ds_id)
+    return order
+
+
 def inspect_symbol_coverage(symbol: str, *, now: datetime | None = None) -> dict[str, Any]:
     """Cache-only dataset inventory used by the acquire planner."""
     from product.due_diligence.coverage import inspect_research_coverage
@@ -617,6 +646,13 @@ def plan_acquire(
         to_fetch = list(REQUIRED_FOR_COVERAGE)
     else:
         to_fetch = list(coverage.get("to_fetch") or [])
+    try:
+        from reporting.evidence_intake import load_raw_fundamentals
+        raw_record = load_raw_fundamentals(symbol) or {}
+        raw = dict(raw_record.get("data") or {})
+        to_fetch = _order_to_fetch(to_fetch, _framework_for(symbol, raw).get("acquire_priority"))
+    except Exception:
+        pass
     lanes = provider_lanes(to_fetch)
     lanes["option_chain"] = bool(force) or "option_chain" in (datasets or [])
     return {
@@ -939,9 +975,10 @@ def acquire_symbol(
         text_kpis,
     )
 
+    framework = _framework_for(symbol, raw)
     if (
         lanes.get("sector_fallback")
-        and _framework_id_for(symbol, raw) in {"bank", "nbfc"}
+        and framework.get("lending")
         and not any(kpis.get(key) for key in ("casa", "cet1", "gnpa", "nim", "pcr", "crar"))
     ):
         try:
@@ -973,7 +1010,13 @@ def acquire_symbol(
                 fetched=True,
             )
     elif "sector_kpis" in to_fetch or force:
-        sector_ok = any(kpis.get(key) for key in ("gnpa", "nnpa", "nim", "casa", "cet1", "advances", "nii"))
+        sector_ids = [
+            spec.id for spec in framework["kpis"]
+            if spec.importance in {"critical", "important"} and spec.id not in {
+                "pat", "sales", "opm", "eps", "promoter", "pledge", "fii", "dii", "public", "cfo", "roe", "roce", "borrowings",
+            }
+        ] or [spec.id for spec in framework["kpis"] if spec.importance in {"critical", "important"}]
+        sector_ok = any(kpis.get(key) for key in sector_ids)
         _stamp_meta(
             dataset_meta, "sector_kpis", now=now,
             status="current" if sector_ok else "not_yet_acquired",
@@ -997,7 +1040,10 @@ def acquire_symbol(
             break
 
     option_chain = dict(chain.get("snapshot") or previous.get("option_chain") or {})
-    missing = [key for key in ("gnpa", "nnpa", "pledge") if key not in kpis]
+    missing = [
+        spec.id for spec in framework["kpis"]
+        if spec.importance in {"critical", "important"} and spec.id not in kpis
+    ][:12]
     if not commentary:
         missing.append("commentary")
     if not order_book:

@@ -38,12 +38,14 @@ def collect_red_flags(
     findings: Sequence[Mapping[str, Any]],
     events: Sequence[Mapping[str, Any]],
     extra: Sequence[Mapping[str, Any]] | None = None,
+    *,
+    lending: bool = False,
 ) -> list[dict[str, Any]]:
     flags: list[dict[str, Any]] = []
     for finding in findings:
         snap = dict(finding.get("snapshot") or {})
         current = snap.get("current")
-        if finding.get("id") in {"gnpa", "nnpa"} and finding.get("trend") == "deteriorating":
+        if lending and finding.get("id") in {"gnpa", "nnpa"} and finding.get("trend") == "deteriorating":
             yoy = snap.get("yoy_change")
             severity = "critical" if yoy is not None and abs(float(yoy)) >= 0.5 else "warning"
             flags.append(_flag(

@@ -28,6 +28,16 @@ SECTOR_WEIGHTS: dict[str, dict[str, float]] = {
         "Capital strength": 10, "Funding / deposits": 15,
         "Cash flow": 5, "Consistency": 10, "Governance": 10,
     },
+    "nbfc_gold": {
+        "Growth": 15, "Asset quality": 20, "Profitability": 15,
+        "Capital strength": 10, "Funding / deposits": 15,
+        "Cash flow": 5, "Consistency": 10, "Governance": 10,
+    },
+    "nbfc_housing": {
+        "Growth": 15, "Asset quality": 20, "Profitability": 15,
+        "Capital strength": 10, "Funding / deposits": 15,
+        "Cash flow": 5, "Consistency": 10, "Governance": 10,
+    },
     "default": {
         "Growth": 20, "Profitability": 20, "Balance sheet": 15,
         "Cash flow": 15, "Consistency": 10, "Governance": 10,

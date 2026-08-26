@@ -88,6 +88,9 @@ def company_snapshot(
         "data_freshness": as_of.get("fundamentals_freshness") or "MISSING",
         "about": about or "Data unavailable",
         "selected_by": _selected_by(technical),
+        "sub_sector": str(profile.get("sub_sector") or ""),
+        "business_model": str(profile.get("business_model") or "Data unavailable"),
+        "framework_id": str(profile.get("framework_id") or ""),
     }
 
 
@@ -130,6 +133,8 @@ def first_screen(report: Mapping[str, Any]) -> dict[str, Any]:
         ),
         "sector_kpi_framework": report.get("framework", {}).get("label"),
         "sector_kpi_detail": report.get("sector_kpi_detail"),
+        "sub_sector": snapshot.get("sub_sector") or report.get("profile", {}).get("sub_sector") or "",
+        "business_model": snapshot.get("business_model") or report.get("profile", {}).get("business_model") or "",
         "critical_metrics_missing": list(report.get("critical_metrics_missing") or []),
         "missing_evidence": missing,
         "deeper_acquire_available": bool(report.get("deeper_acquire_available")),

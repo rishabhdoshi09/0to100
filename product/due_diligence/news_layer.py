@@ -9,9 +9,18 @@ _MATERIAL_EVENTS = frozenset({
     "order_or_contract", "merger_or_acquisition", "regulatory",
     "promoter_or_insider", "rating", "fund_raising",
 })
-_RED_TOKENS = (
-    "investigation", "raid", "fraud", "auditor resign", "warning letter",
-    "usfda", "import alert", "pledge increase", "downgrade", "penalty",
+# Headlines that are material only for named frameworks. A USFDA letter is
+# not a bank event; an RBI PCA item is not a pharma event.
+_LOCKED_TOKENS: tuple[tuple[str, frozenset[str]], ...] = (
+    ("usfda", frozenset({"pharma"})),
+    ("import alert", frozenset({"pharma"})),
+    ("form 483", frozenset({"pharma"})),
+    ("anda", frozenset({"pharma"})),
+    ("prompt corrective", frozenset({"bank", "nbfc", "nbfc_gold", "nbfc_housing"})),
+)
+_GLOBAL_RED = (
+    "investigation", "raid", "fraud", "auditor resign",
+    "pledge increase", "downgrade", "penalty",
     "show cause", "sebi ban", "rbi ban", "litigation", "default",
 )
 _BROKER_NOISE = ("picks ", "target price", "upside", "overweight", "initiate")
@@ -21,16 +30,33 @@ def _headline(article: Mapping[str, Any]) -> str:
     return str(article.get("headline") or "").strip()
 
 
-def is_material(article: Mapping[str, Any], symbol: str) -> bool:
+def _framework_tokens(framework_id: str) -> tuple[str, ...]:
+    if not framework_id:
+        return ()
+    try:
+        from product.due_diligence.frameworks import get_framework
+        return tuple(get_framework(framework_id).get("material_tokens") or ())
+    except Exception:
+        return ()
+
+
+def is_material(article: Mapping[str, Any], symbol: str, *, framework_id: str = "") -> bool:
     text = _headline(article).lower()
     mentioned = [str(s).upper() for s in (article.get("mentioned_symbols") or [])]
     want = str(symbol or "").upper()
     if mentioned and want and want not in mentioned:
         return False
+    if framework_id:
+        for token, allowed in _LOCKED_TOKENS:
+            if token in text and framework_id not in allowed:
+                return False
     if any(tok in text for tok in _BROKER_NOISE) and not article.get("official"):
         if len(mentioned) > 2:
             return False
-    if any(tok in text for tok in _RED_TOKENS):
+    if any(tok in text for tok in _GLOBAL_RED):
+        return True
+    sector_tokens = _framework_tokens(framework_id)
+    if sector_tokens and any(tok in text for tok in sector_tokens):
         return True
     if bool(article.get("official")):
         return True
@@ -43,10 +69,11 @@ def is_material(article: Mapping[str, Any], symbol: str) -> bool:
     return False
 
 
-def event_impact(article: Mapping[str, Any]) -> str:
+def event_impact(article: Mapping[str, Any], *, framework_id: str = "") -> str:
     direction = str(article.get("direction") or "").lower()
     text = _headline(article).lower()
-    if any(tok in text for tok in _RED_TOKENS) or direction in {"negative", "bearish"}:
+    tokens = _GLOBAL_RED + _framework_tokens(framework_id)
+    if any(tok in text for tok in tokens) or direction in {"negative", "bearish"}:
         return "negative"
     if direction in {"positive", "bullish"}:
         return "positive"
@@ -56,7 +83,7 @@ def event_impact(article: Mapping[str, Any]) -> str:
 def classify_event(article: Mapping[str, Any]) -> str:
     event = str(article.get("event_type") or "company").strip() or "company"
     text = _headline(article).lower()
-    if any(tok in text for tok in ("usfda", "warning letter", "import alert")):
+    if any(tok in text for tok in ("usfda", "warning letter", "import alert", "form 483")):
         return "regulatory_action"
     if "pledge" in text:
         return "pledge"
@@ -71,15 +98,16 @@ def material_events(
     *,
     limit: int = 12,
     context: Mapping[str, Any] | None = None,
+    framework_id: str = "",
 ) -> list[dict[str, Any]]:
     ctx = dict(context or {})
     out: list[dict[str, Any]] = []
     for article in articles:
         if not isinstance(article, Mapping):
             continue
-        if not is_material(article, symbol):
+        if not is_material(article, symbol, framework_id=framework_id):
             continue
-        impact = event_impact(article)
+        impact = event_impact(article, framework_id=framework_id)
         event_type = classify_event(article)
         meta = materiality(
             {**dict(article), "event_type": event_type, "headline": _headline(article)},

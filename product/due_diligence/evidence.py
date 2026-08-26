@@ -118,6 +118,7 @@ def sector_kpi_verdict(
     *,
     min_critical: int = DEFAULT_MIN_CRITICAL,
     min_decision_coverage: float = DEFAULT_MIN_DECISION_COVERAGE,
+    cycle_aware: bool = False,
 ) -> dict[str, Any]:
     """Emit Strong/Healthy/Mixed/Weak only when enough important evidence exists."""
     decision = decision_coverage(findings)
@@ -170,6 +171,9 @@ def sector_kpi_verdict(
     else:
         label = "Healthy"
         reason = "Fundamentally Neutral"
+    if cycle_aware and label == "Strong":
+        label = "Healthy"
+        reason = "Positive Confirmation"
     return {
         "label": label,
         "reason": reason,

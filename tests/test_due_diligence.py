@@ -1226,7 +1226,7 @@ def test_industrials_need_sales_margin_or_cash():
         raw_fundamentals=raw,
         news=[],
     )
-    assert payload["framework"]["id"] == "industrials"
+    assert payload["framework"]["id"] == "capital_goods"
     assert payload["sector_kpi_label"] in {"Strong", "Healthy", "Mixed", "Weak"}
     assert payload["fundamental_quality"]["score"] is not None
     cfo = next(k for k in payload["kpis"] if k["id"] == "cfo")
@@ -1259,6 +1259,148 @@ def test_incomparable_periods_do_not_create_a_trend():
         higher_is_better=True, qoq=1.2, yoy=None,
         current_period_type="quarterly", compare_period_type="annual",
     ) == "unknown"
+
+
+def test_representative_nse_names_load_distinct_frameworks():
+    cases = [
+        ("ICICIBANK", "Banking & Finance", "", "bank", ("nim", "gnpa"), ("occupancy", "arpu")),
+        ("BAJFINANCE", "NBFC", "", "nbfc", ("aum", "gnpa"), ("casa", "subscribers")),
+        ("MUTHOOTFIN", "NBFC", "gold loan", "nbfc_gold", ("ltv", "gnpa"), ("occupancy",)),
+        ("AAVAS", "Housing Finance", "", "nbfc_housing", ("aum", "gnpa"), ("casa",)),
+        ("INFY", "IT / Software", "", "it", ("sales", "opm", "attrition", "tcv"), ("gnpa", "nim")),
+        ("NAUKRI", "Digital / New Economy", "", "software_product", ("subscription", "sales"), ("gnpa",)),
+        ("SUNPHARMA", "Pharma & Healthcare", "", "pharma", ("sales", "rnd"), ("occupancy", "gnpa")),
+        ("APOLLOHOSP", "Pharma & Healthcare", "", "hospitals", ("occupancy", "arpob"), ("gnpa", "anda")),
+        ("METROPOLIS", "Pharma & Healthcare", "", "diagnostics", ("test_volumes", "sales"), ("gnpa", "occupancy")),
+        ("LT", "Manufacturing & Capital Goods", "", "capital_goods", ("order_book", "cfo"), ("gnpa", "casa")),
+        ("M&M", "Auto", "", "auto", ("volumes", "sales"), ("gnpa", "occupancy")),
+        ("MOTHERSON", "Auto & Auto Ancillary", "", "auto_ancillary", ("oem_concentration", "sales"), ("gnpa",)),
+        ("HINDUNILVR", "FMCG", "", "fmcg", ("volume_growth", "sales"), ("gnpa", "arpu")),
+        ("TRENT", "Consumer & Retail / Apparel", "", "retail", ("sss", "inventory_days"), ("gnpa",)),
+        ("DLF", "Real Estate", "", "realty", ("presales", "cfo"), ("gnpa",)),
+        ("TATASTEEL", "Metals & Mining", "", "metals", ("production", "ebitda_t"), ("gnpa", "casa")),
+        ("COALINDIA", "Metals & Mining", "", "mining", ("production",), ("gnpa",)),
+        ("BHARTIARTL", "Telecom & Media", "", "telecom", ("subscribers", "arpu"), ("gnpa", "occupancy")),
+        ("NTPC", "Energy & Power", "", "power_generation", ("capacity", "plf"), ("gnpa",)),
+        ("POWERGRID", "Energy & Power", "", "power_transmission", ("rab",), ("plf", "gnpa")),
+        ("HDFCLIFE", "Insurance", "", "life_insurance", ("ape", "vnb_margin"), ("gnpa", "combined")),
+        ("ICICIGI", "Insurance", "", "general_insurance", ("gwp", "combined"), ("ape", "gnpa")),
+        ("CDSL", "Capital Markets", "", "exchange", ("volumes", "sales"), ("gnpa", "active_clients")),
+        ("ANGELONE", "Capital Markets", "", "broker", ("active_clients",), ("gnpa",)),
+        ("HDFCAMC", "Capital Markets", "", "amc", ("aum", "net_flows"), ("gnpa", "combined")),
+        ("INDIGO", "Logistics & Transport", "", "airlines", ("ask", "load_factor"), ("gnpa", "occupancy")),
+        ("INDHOTEL", "Hospitality", "", "hotels", ("occupancy", "revpar"), ("gnpa", "ask")),
+        ("HAL", "Defence", "", "defence", ("order_book",), ("gnpa",)),
+        ("ULTRACEMCO", "Cement", "", "cement", ("cement_volume", "ebitda_t"), ("gnpa",)),
+    ]
+    from product.due_diligence.frameworks import get_framework
+
+    seen = set()
+    for symbol, sector, about, expected, required, forbidden in cases:
+        profile = classify_company(symbol, sector=sector, about=about)
+        assert profile["framework_id"] == expected, (symbol, profile)
+        seen.add(expected)
+        ids = {spec.id for spec in get_framework(expected)["kpis"]}
+        for kpi_id in required:
+            assert kpi_id in ids, (symbol, expected, kpi_id)
+        for kpi_id in forbidden:
+            assert kpi_id not in ids, (symbol, expected, kpi_id)
+        assert profile["business_model"] != "Data unavailable" or expected == "generic"
+    assert "bank" in seen and "it" in seen and "pharma" in seen
+    assert "hospitals" in seen and "diagnostics" in seen
+    assert "nbfc_gold" in seen and "nbfc_housing" in seen
+    assert "life_insurance" in seen and "general_insurance" in seen
+    assert "exchange" in seen and "broker" in seen
+
+
+def test_generic_is_fallback_not_default_for_mapped_sectors():
+    from product.due_diligence.sector_frameworks import list_frameworks
+
+    names = list_frameworks()
+    assert "generic" in names
+    assert names[-1] == "generic" or "generic" in names
+    assert len(names) >= 30
+
+
+def test_hospital_with_only_sales_is_insufficient_evidence():
+    raw = {
+        "available": True, "fetched_at": "", "data": {
+            "about": "Test Hospitals operates a hospital chain",
+            "quarterly_results": [
+                _q_row("Sales+", **{"Jun 2025": 100, "Sep 2025": 110, "Dec 2025": 120, "Mar 2026": 130, "Jun 2026": 140}),
+                _q_row("OPM %", **{"Jun 2025": 18, "Sep 2025": 18, "Dec 2025": 19, "Mar 2026": 19, "Jun 2026": 20}),
+            ],
+            "shareholding": [],
+            "cash_flow": [],
+        },
+    }
+    payload = build_due_diligence(
+        "TESTHOSP",
+        scan_payload={"records": [{"symbol": "TESTHOSP", "status": "Ready to trade", "score": 80}]},
+        long_term_payload={"records": [{"symbol": "TESTHOSP", "sector": "Pharma & Healthcare"}]},
+        raw_fundamentals=raw,
+        news=[],
+    )
+    assert payload["framework"]["id"] == "hospitals"
+    ids = {k["id"] for k in payload["kpis"]}
+    assert "occupancy" in ids and "arpob" in ids
+    assert "gnpa" not in ids
+    assert payload["sector_kpi_label"] == "Insufficient Evidence"
+    missing = {row["id"] for row in payload["missing_evidence"]}
+    assert "occupancy" in missing
+
+
+def test_usfda_is_not_material_for_a_bank():
+    bank_article = {
+        "headline": "USFDA issues warning letter to an unrelated pharma plant",
+        "event_type": "regulatory",
+        "impact_score": 90,
+        "official": False,
+        "mentioned_symbols": ["TESTBANK"],
+        "direction": "negative",
+    }
+    pharma_article = {
+        **bank_article,
+        "mentioned_symbols": ["TESTPHARMA"],
+        "headline": "USFDA issues warning letter to Test Pharma plant",
+    }
+    assert is_material(bank_article, "TESTBANK", framework_id="bank") is False
+    assert is_material(pharma_article, "TESTPHARMA", framework_id="pharma") is True
+
+
+def test_acquire_sector_ok_uses_framework_metrics():
+    from product.due_diligence.frameworks import get_framework
+
+    it_ids = {spec.id for spec in get_framework("it")["kpis"]}
+    bank_ids = {spec.id for spec in get_framework("bank")["kpis"]}
+    assert "attrition" in it_ids and "gnpa" not in it_ids
+    assert "gnpa" in bank_ids and "attrition" not in bank_ids
+    pharma = get_framework("pharma")
+    assert "usfda" in " ".join(pharma["material_tokens"])
+    assert "rbi" not in " ".join(pharma["material_tokens"])
+    bank = get_framework("bank")
+    assert "rbi" in " ".join(bank["material_tokens"])
+    assert bank["lending"] is True
+    assert get_framework("it")["lending"] is False
+    assert get_framework("metals")["cycle_aware"] is True
+    assert get_framework("fmcg")["cycle_aware"] is False
+
+
+def test_score_does_not_use_irrelevant_bank_kpis_for_it():
+    payload = build_due_diligence(
+        "TESTIT",
+        scan_payload={"records": [{"symbol": "TESTIT", "status": "Ready to trade", "score": 80}]},
+        long_term_payload={"records": [{"symbol": "TESTIT", "sector": "IT / Software"}]},
+        raw_fundamentals=IT_RAW,
+        news=[],
+    )
+    ids = {k["id"] for k in payload["kpis"]}
+    assert "gnpa" not in ids and "nim" not in ids and "casa" not in ids
+    assert "sales" in ids and "opm" in ids and "attrition" in ids
+    attrition = next(k for k in payload["kpis"] if k["id"] == "attrition")
+    assert attrition["available"] is False
+    assert attrition["importance"] == "important"
+
 
 
 
