@@ -409,6 +409,9 @@ function InvestigatePanel({
           <span>{String(snap.sector || report.profile.sector || 'Unclassified')}</span>
           <h2>{report.company}</h2>
           <p>{report.symbol} · {String(snap.selected_by || screen?.selected_by || 'Manual investigator')}</p>
+          {(screen?.business_model || report.profile.business_model) && (screen?.business_model || report.profile.business_model) !== 'Data unavailable' ? (
+            <p>{String(screen?.sub_sector || report.profile.sub_sector || report.framework.label)} · {String(screen?.business_model || report.profile.business_model)}</p>
+          ) : null}
         </div>
         <aside className={`dd-verdict ${verdictTone(confirmation)}`} aria-label="Fundamental confirmation">
           <span>Fundamental confirmation</span>
@@ -534,7 +537,7 @@ function InvestigatePanel({
           </Panel>
         </div>
       ) : null}
-      <p className="dd-framework">{report.framework.label}. {report.framework.blurb} Sector: {report.profile.sector || 'Unclassified'}.</p>
+      <p className="dd-framework">{report.framework.label}. {report.framework.blurb} Sector: {report.profile.sector || 'Unclassified'}{report.profile.sub_sector ? ` · ${report.profile.sub_sector}` : ''}. Business model: {report.profile.business_model || 'Data unavailable'}.</p>
       {(report.profile.revenue_drivers && report.profile.revenue_drivers !== 'Data unavailable — no segment table on file.') ? (
         <p className="dd-framework">Revenue drivers: {report.profile.revenue_drivers}</p>
       ) : null}

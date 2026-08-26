@@ -21,7 +21,14 @@ def _quartile(rank: int, n: int) -> str:
     return "Bottom quartile"
 
 
-def rank_peers(rows: Sequence[Mapping[str, Any]], *, company: str, symbol: str) -> dict[str, Any]:
+def rank_peers(
+    rows: Sequence[Mapping[str, Any]],
+    *,
+    company: str,
+    symbol: str,
+    framework_id: str = "",
+    peer_note: str = "",
+) -> dict[str, Any]:
     """Quartile vs names already on the Screener peer table. Empty stays empty."""
     parsed: list[dict[str, Any]] = []
     for row in rows:
@@ -43,8 +50,34 @@ def rank_peers(rows: Sequence[Mapping[str, Any]], *, company: str, symbol: str) 
             "detail": "Data unavailable — no peer comparison table on file.",
             "rows": [],
             "ranks": [],
-            "note": "Peers are not inferred from sector membership alone.",
+            "note": peer_note or "Peers are not inferred from sector membership alone.",
+            "peer_basis": peer_note or "",
+            "framework_id": framework_id,
         }
+
+    if framework_id:
+        try:
+            from product.due_diligence.sector_frameworks.classify_rules import framework_for_peer_name
+        except Exception:
+            framework_for_peer_name = None  # type: ignore[assignment]
+        tagged: list[dict[str, Any]] = []
+        mixed = False
+        for row in parsed:
+            other = framework_for_peer_name(row["name"]) if framework_for_peer_name else None
+            row["framework_id"] = other
+            if other and other != framework_id:
+                mixed = True
+            else:
+                tagged.append(row)
+        # Keep the file table if we cannot identify enough same-model names.
+        if len(tagged) >= 2:
+            parsed = tagged
+        note_bits = [peer_note] if peer_note else []
+        if mixed and len(tagged) >= 2:
+            note_bits.append("Peer names from a different business model were dropped.")
+        elif mixed:
+            note_bits.append("Peer table mixes business models — ranks are shown as filed, not as comparables.")
+        peer_note = " ".join(x for x in note_bits if x)
 
     want = {company.lower(), symbol.lower()}
     self_row = next(
@@ -103,5 +136,7 @@ def rank_peers(rows: Sequence[Mapping[str, Any]], *, company: str, symbol: str) 
         "rows": parsed[:12],
         "self": (self_row or {}).get("name") or "Data unavailable",
         "ranks": ranks,
-        "note": "Avoid reading a shared-sector name as a true business comparable without the table.",
+        "note": peer_note or "Avoid reading a shared-sector name as a true business comparable without the table.",
+        "peer_basis": peer_note or "",
+        "framework_id": framework_id,
     }

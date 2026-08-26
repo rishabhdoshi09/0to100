@@ -348,8 +348,10 @@ def _red_flags(
     findings: Sequence[Mapping[str, Any]],
     events: Sequence[Mapping[str, Any]],
     extra: Sequence[Mapping[str, Any]] | None = None,
+    *,
+    lending: bool = False,
 ) -> list[dict[str, Any]]:
-    return collect_red_flags(findings, events, extra)
+    return collect_red_flags(findings, events, extra, lending=lending)
 
 
 def _technical_context(scan_row: Mapping[str, Any], long_row: Mapping[str, Any]) -> dict[str, Any]:
@@ -500,6 +502,7 @@ def build_due_diligence(
     events = material_events(
         list(news or []),
         symbol,
+        framework_id=str(framework.get("id") or ""),
         context={
             "revenue_cr": _kpi_current("sales") or _kpi_current("nii"),
             "pat_cr": _kpi_current("pat"),
@@ -562,15 +565,17 @@ def build_due_diligence(
     )
     if pack.get("revenue_drivers") and pack["revenue_drivers"] != "Data unavailable — no segment table on file.":
         profile["revenue_drivers"] = pack["revenue_drivers"]
-    if pack.get("business_model") and pack["business_model"] != "Data unavailable":
-        profile["business_model"] = pack["business_model"]
-        if not profile.get("about"):
-            profile["about"] = pack["business_model"]
+    # Classifier owns sector / sub-sector / business_model. Pack may fill about
+    # text only when the company description is empty — never overwrite the model.
+    if not profile.get("about") and pack.get("business_model") and pack["business_model"] != "Data unavailable":
+        profile["about"] = pack["business_model"]
     cash = cash_flow_quality(raw, framework_id=framework["id"])
     balance_rules = balance_sheet_quality(raw, framework_id=framework["id"])
     growth = growth_quality(findings)
     extra_flags = list(pack.get("flags") or []) + list(cash.get("flags") or []) + list(balance_rules.get("flags") or [])
-    flags = _red_flags(findings, events, extra_flags)
+    flags = collect_red_flags(
+        findings, events, extra_flags, lending=bool(framework.get("lending")),
+    )
     flag_groups = partition_flags(flags)
     technical = _technical_context(scan_row, long_row)
     trend_label = _pillar_label([str(f.get("trend")) for f in findings if f.get("available")])
@@ -578,6 +583,7 @@ def build_due_diligence(
         findings,
         min_critical=int(framework.get("min_critical") or 2),
         min_decision_coverage=float(framework.get("min_decision_coverage") or 0.45),
+        cycle_aware=bool(framework.get("cycle_aware")),
     )
     sector_kpi_label = sector_verdict["label"]
     missing_rows = missing_evidence(findings)
@@ -696,7 +702,13 @@ def build_due_diligence(
     breakdown = score_breakdown(
         findings, framework_id=framework["id"], coverage=coverage, overall=score,
     )
-    peers = rank_peers(list(pack.get("peers") or []), company=company, symbol=symbol)
+    peers = rank_peers(
+        list(pack.get("peers") or []),
+        company=company,
+        symbol=symbol,
+        framework_id=str(framework.get("id") or ""),
+        peer_note=str(framework.get("peer_note") or ""),
+    )
     filings = []
     for item in list(autonomy.get("downloads") or [])[:20]:
         url = str(item.get("url") or "")
@@ -764,7 +776,7 @@ def build_due_diligence(
     ]
 
     report = {
-        "schema_version": 5,
+        "schema_version": 6,
         "engine": "StockResearchEngine",
         "symbol": symbol,
         "company": company,
@@ -773,6 +785,9 @@ def build_due_diligence(
             "id": framework["id"],
             "label": framework["label"],
             "blurb": framework["blurb"],
+            "sub_sector": profile.get("sub_sector") or framework.get("default_sub_sector") or "",
+            "business_model": profile.get("business_model") or framework.get("default_business_model") or "",
+            "peer_note": framework.get("peer_note") or "",
         },
         "technical_context": technical,
         "long_term_overlay": pack.get("long_term_overlay") or {},

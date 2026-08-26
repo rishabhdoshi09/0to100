@@ -272,10 +272,31 @@ def extract_kpis_from_raw(raw: Mapping[str, Any] | None) -> dict[str, dict[str, 
         ("roa", _ROA_NEEDLES, "key_ratios"),
         ("roe", _ROE_NEEDLES, "key_ratios"),
         ("loan_deposit", _LDR_NEEDLES, "quarterly_results"),
+        ("occupancy", ("occupancy", "bed occupancy"), "quarterly_results"),
+        ("attrition", ("attrition",), "quarterly_results"),
+        ("combined", ("combined ratio",), "quarterly_results"),
+        ("vnb_margin", ("vnb margin", "new business margin"), "quarterly_results"),
+        ("load_factor", ("load factor", "passenger load"), "quarterly_results"),
+        ("persistency", ("persistency",), "quarterly_results"),
+        ("plf", ("plf", "plant load factor"), "quarterly_results"),
+        ("sss", ("same store", "sss", "like for like"), "quarterly_results"),
+        ("churn", ("churn",), "quarterly_results"),
     )
     level_specs = (
         ("advances", _ADVANCES_NEEDLES, "balance_sheet"),
         ("deposits", _DEPOSITS_NEEDLES, "balance_sheet"),
+        ("aum", ("aum", "assets under management"), "quarterly_results"),
+        ("ape", ("ape", "annualized premium"), "quarterly_results"),
+        ("gwp", ("gross written", "gwp"), "quarterly_results"),
+        ("subscribers", ("subscriber", "customers"), "quarterly_results"),
+        ("arpu", ("arpu",), "quarterly_results"),
+        ("order_book", ("order book", "order-book"), "quarterly_results"),
+        ("presales", ("pre-sales", "presales", "bookings"), "quarterly_results"),
+        ("test_volumes", ("test volume", "tests performed"), "quarterly_results"),
+        ("arpob", ("arpob", "revenue per occupied bed"), "quarterly_results"),
+        ("revpar", ("revpar", "revenue per available room"), "quarterly_results"),
+        ("grm", ("grm", "gross refining margin"), "quarterly_results"),
+        ("ask", ("available seat kilometre", "ask"), "quarterly_results"),
     )
     for kpi_id, needles, prefer in rate_specs:
         snap = series_from_tables(tables, needles, kind="rate", prefer=prefer)
@@ -375,6 +396,14 @@ def extract_rates_from_text(
         ("roa", _ROA_LABEL),
         ("roe", _ROE_LABEL),
         ("loan_deposit", re.compile(r"(?:credit[\s-]*deposit|c[\s-]*d\s+ratio|loan[\s-]*deposit)", re.I)),
+        ("occupancy", re.compile(r"(?:bed\s+)?occupancy(?:\s+rate)?", re.I)),
+        ("attrition", re.compile(r"\battrition\b", re.I)),
+        ("vnb_margin", re.compile(r"vnb\s+margin|new\s+business\s+margin", re.I)),
+        ("load_factor", re.compile(r"(?:passenger\s+)?load\s+factor", re.I)),
+        ("persistency", re.compile(r"persistency", re.I)),
+        ("plf", re.compile(r"plant\s+load\s+factor|\bplf\b", re.I)),
+        ("sss", re.compile(r"same[\s-]*store|like[\s-]*for[\s-]*like|\bsss\b", re.I)),
+        ("churn", re.compile(r"\bchurn\b", re.I)),
     )
     for kpi_id, pattern in mapping:
         current, period, basis = _last_percent(
@@ -654,6 +683,8 @@ def extract_from_uploads(symbol: str, uploads: Sequence[Mapping[str, Any]] | Non
 _RATE_KPI_IDS = {
     "gnpa", "nnpa", "pledge", "casa", "nim", "cet1", "crar", "pcr",
     "slippages", "credit_cost", "roa", "roe", "loan_deposit", "opm",
+    "occupancy", "attrition", "combined", "vnb_margin", "load_factor",
+    "persistency", "plf", "sss", "churn",
 }
 _RATE_BOUNDS = {
     "nim": (0.5, 10.0),
@@ -670,6 +701,15 @@ _RATE_BOUNDS = {
     "loan_deposit": (40.0, 130.0),
     "opm": (0.0, 100.0),
     "pledge": (0.0, 100.0),
+    "occupancy": (0.0, 100.0),
+    "attrition": (0.0, 50.0),
+    "combined": (50.0, 160.0),
+    "vnb_margin": (0.0, 80.0),
+    "load_factor": (40.0, 100.0),
+    "persistency": (40.0, 100.0),
+    "plf": (0.0, 100.0),
+    "sss": (-40.0, 80.0),
+    "churn": (0.0, 40.0),
 }
 
 

@@ -287,10 +287,11 @@ export type DueDiligenceReport = {
     framework_id: string
     framework_reason: string
     business_model: string
+    sub_sector?: string
     revenue_drivers: string
     about: string
   }
-  framework: { id: string; label: string; blurb: string }
+  framework: { id: string; label: string; blurb: string; sub_sector?: string; business_model?: string; peer_note?: string }
   technical_context: {
     available: boolean
     scanner_status: string
@@ -465,6 +466,8 @@ export type DueDiligenceReport = {
     research_coverage_needs_acquire?: boolean
     sector_kpis?: string
     sector_kpi_framework?: string
+    sub_sector?: string
+    business_model?: string
     improving?: string[]
     deteriorating?: string[]
     recent_material_events?: { date?: string; headline?: string; category?: string; materiality?: string; source?: string; url?: string }[]
