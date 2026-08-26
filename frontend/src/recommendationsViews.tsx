@@ -382,6 +382,11 @@ export function RecommendationsView({
     [data, categoryId],
   )
 
+  const totalActive = useMemo(
+    () => (data?.categories || []).reduce((n, c) => n + (c.count || 0), 0),
+    [data],
+  )
+
   const cards = useMemo(() => {
     if (!data || !category) return []
     const q = query.trim().toUpperCase()
@@ -496,6 +501,34 @@ export function RecommendationsView({
         </div>
       ) : null}
 
+      <p className="reco-scan-meta">
+        Market scan: {data.scan_meta?.market_row_count ?? 0} name{data.scan_meta?.market_row_count === 1 ? '' : 's'}
+        {data.scan_scanned_at ? ` · ${relativeAge(data.scan_scanned_at)}` : ' · not run'}
+        {' · '}
+        Long-term: {data.scan_meta?.long_term_row_count ?? 0} name{data.scan_meta?.long_term_row_count === 1 ? '' : 's'}
+        {data.long_term_scanned_at ? ` · ${relativeAge(data.long_term_scanned_at)}` : ' · not run'}
+        {typeof data.scan_meta?.assigned_count === 'number' ? ` · ${data.scan_meta.assigned_count} in categories` : ''}
+      </p>
+
+      {totalActive === 0 && lifecycle === 'Active' ? (
+        <div className="reco-empty">
+          <strong>No recommendation cards from the saved scan yet.</strong>
+          <p>
+            {(data.scan_meta?.market_row_count || 0) > 0
+              ? (category?.empty_detail || 'The current scan did not match a research category.')
+              : 'Run a market scan (and a long-term refresh for Wealth Builders). Sidebar navigation only opens this page — it does not start those jobs.'}
+          </p>
+          <div className="reco-hero-actions">
+            <button type="button" className="reco-primary" disabled={marketScan.isBusy} onClick={() => void marketScan.start()}>
+              {marketScan.isBusy ? 'Scanning market…' : 'Scan market'}
+            </button>
+            <button type="button" className="reco-ghost" disabled={longTermScan.isBusy} onClick={() => void longTermScan.start()}>
+              {longTermScan.isBusy ? 'Refreshing long-term…' : 'Refresh long-term'}
+            </button>
+          </div>
+        </div>
+      ) : null}
+
       <div className="reco-cat-rail" role="tablist" aria-label="Recommendation categories">
         {data.categories.map((c) => (
           <button
@@ -554,6 +587,7 @@ export function RecommendationsView({
       </div>
 
       {cards.length === 0 ? (
+        (totalActive === 0 && lifecycle === 'Active') ? null : (
         <div className="reco-empty">
           <strong>
             {lifecycle === 'Closed'
@@ -566,6 +600,7 @@ export function RecommendationsView({
               : 'Closed outcomes appear after tracked picks exit or signals resolve.'}
           </p>
         </div>
+        )
       ) : (
         <div className="reco-card-stack">
           {cards.map((card) => (
@@ -766,7 +801,7 @@ function DeskTile({
   )
 }
 
-export function MarketReportsView({ dashboard, setActive, setSelected, marketScan, runControl }: ExperienceViewProps) {
+export function MarketReportsView({ dashboard, setActive, setSelected, marketScan, depth, runControl }: ExperienceViewProps) {
   const [data, setData] = useState<MarketReportsWorkspace | null>(() => recall<MarketReportsWorkspace>('market-reports') ?? null)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(() => !recall('market-reports'))
@@ -782,7 +817,11 @@ export function MarketReportsView({ dashboard, setActive, setSelected, marketSca
     fetchMarketReportsWorkspace()
       .then((payload) => {
         if (!cancelled) {
-          const kept = keepRicher('market-reports', payload, (row) => !(row.reports || []).length)
+          const kept = keepRicher('market-reports', payload, (row) => {
+            const highlights = row.scan_highlights?.row_count || 0
+            const sourced = row.desk_note?.wrap_sourced || 0
+            return !(row.reports || []).length && highlights === 0 && sourced === 0
+          })
           setData(kept)
           setSelectedReport(kept.reports[0] || payload.reports[0] || null)
           setError('')
@@ -835,11 +874,15 @@ export function MarketReportsView({ dashboard, setActive, setSelected, marketSca
   if (error || !data) {
     return (
       <div className="reco-light">
+        <LiveScanBanner scan={marketScan} depth={depth} label="Market scan" />
         <div className="reco-empty">
           <strong>{error || 'No reports yet'}</strong>
-          <p>Refresh news to build Market Reports. Opening this page does not fetch anything by itself.</p>
+          <p>Scan market and refresh news to build Market Reports. Opening this page does not fetch anything by itself.</p>
           <div className="reco-hero-actions">
-            <button type="button" className="reco-primary" disabled={newsBusy} onClick={() => void refreshNews()}>
+            <button type="button" className="reco-primary" disabled={marketScan.isBusy} onClick={() => void marketScan.start()}>
+              {marketScan.isBusy ? 'Scanning market…' : 'Scan market'}
+            </button>
+            <button type="button" className="reco-ghost" disabled={newsBusy} onClick={() => void refreshNews()}>
               {newsBusy ? 'Refreshing news…' : 'Refresh news and filings'}
             </button>
           </div>
@@ -871,6 +914,7 @@ export function MarketReportsView({ dashboard, setActive, setSelected, marketSca
 
   return (
     <div className="reco-light market-reports-desk">
+      <LiveScanBanner scan={marketScan} depth={depth} label="Market scan" />
       <nav className="reco-crumb" aria-label="Breadcrumb">
         <button type="button" onClick={() => setActive('Home')}>Home</button>
         <span>›</span>
@@ -883,12 +927,58 @@ export function MarketReportsView({ dashboard, setActive, setSelected, marketSca
         {data.as_of_ist ? (
           <p className="reco-sheet-cmp">As of {data.as_of_ist} IST — latest session only.</p>
         ) : null}
+        <p className="reco-scan-meta">
+          Last scan: {data.scan_highlights?.row_count ?? 0} name{(data.scan_highlights?.row_count ?? 0) === 1 ? '' : 's'}
+          {data.scan_highlights?.scanned_at ? ` · ${relativeAge(data.scan_highlights.scanned_at)}` : ' · not run'}
+          {' · '}
+          News: {data.news_meta?.article_count ?? 0} sourced article{(data.news_meta?.article_count ?? 0) === 1 ? '' : 's'}
+          {' · '}
+          Wrap: {data.desk_note?.wrap_sourced ?? 0} sourced / {data.desk_note?.wrap_empty ?? 0} empty
+        </p>
         <div className="reco-hero-actions">
-          <button type="button" className="reco-primary" disabled={newsBusy} onClick={() => void refreshNews()}>
+          <button type="button" className="reco-primary" disabled={marketScan.isBusy} onClick={() => void marketScan.start()}>
+            {marketScan.isBusy
+              ? `Scanning…${marketScan.percent != null ? ` ${marketScan.percent}%` : ''}`
+              : 'Scan market'}
+          </button>
+          <button type="button" className="reco-ghost" disabled={newsBusy} onClick={() => void refreshNews()}>
             {newsBusy ? 'Refreshing news…' : 'Refresh news and filings'}
           </button>
         </div>
       </header>
+
+      {data.empty_detail ? (
+        <div className="reco-empty">
+          <strong>Nothing sourced yet</strong>
+          <p>{data.empty_detail}</p>
+        </div>
+      ) : null}
+
+      {data.scan_highlights && (data.scan_highlights.row_count || 0) > 0 ? (
+        <section className="scan-highlights" aria-label="From the last market scan">
+          <h2>From the last market scan</h2>
+          <p>
+            {data.scan_highlights.ready_to_trade || 0} ready to trade
+            {(data.scan_highlights.breakout_symbols || []).length
+              ? ` · breakouts ${(data.scan_highlights.breakout_symbols || []).join(', ')}`
+              : ' · no BREAKOUT tags on file'}
+          </p>
+          {(data.scan_highlights.pre_breakout_symbols || []).length ? (
+            <p>Near pivot: {(data.scan_highlights.pre_breakout_symbols || []).join(', ')}</p>
+          ) : null}
+          {(data.scan_highlights.session_gainers || []).length ? (
+            <p>
+              Session gainers:{' '}
+              {(data.scan_highlights.session_gainers || []).map((g) => (
+                `${g.symbol}${g.chg_pct != null ? ` ${g.chg_pct >= 0 ? '+' : ''}${g.chg_pct.toFixed(1)}%` : ''}`
+              )).join(', ')}
+            </p>
+          ) : (
+            <p>No 1-day change_pct on the scan file — session movers stay empty rather than using 5-day momentum.</p>
+          )}
+          {data.scan_highlights.empty_detail ? <p>{data.scan_highlights.empty_detail}</p> : null}
+        </section>
+      ) : null}
 
       {data.desk_note ? (
         <DeskNoteMagazine note={data.desk_note} onSymbol={openSymbol} />

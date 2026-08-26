@@ -56,7 +56,7 @@ CATEGORIES: tuple[dict[str, str], ...] = (
     {
         "id": "momentum_breakouts",
         "label": "Momentum Breakouts",
-        "blurb": "Sniper / graded breakouts with volume floor — near pivot or confirmed.",
+        "blurb": "Sniper / graded Buy cards, plus Watch cards for Home-visible breakouts on the last scan.",
         "icon": "breakout",
     },
     {
@@ -130,6 +130,44 @@ def upside_metrics(row: Mapping[str, Any]) -> dict[str, float | None]:
     }
 
 
+def _known_volume_ratio(row: Mapping[str, Any]) -> float | None:
+    """Positive volume_ratio only. Stored 0 / missing is unknown, not a reject."""
+    raw = row.get("volume_ratio")
+    if raw is None or raw == "":
+        return None
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return None
+    if value <= 0:
+        return None
+    return value
+
+
+def _listing_volume_ok(row: Mapping[str, Any]) -> bool:
+    """Known volume below 0.7× rejects. Unknown volume does not hide the name."""
+    vol = _known_volume_ratio(row)
+    if vol is None:
+        return True
+    return vol >= 0.7
+
+
+def _home_breakout_visible(row: Mapping[str, Any]) -> bool:
+    """Same breakout names Home already lists — not every Ready-to-trade momentum BUY."""
+    if bool(row.get("chase_risk")):
+        return False
+    sigs = _signals(row)
+    status = str(row.get("status") or "")
+    grade = str(row.get("breakout_grade") or "").upper()
+    if sigs & {"PRE_BREAKOUT", "BREAKOUT_52W", "BREAKOUT_RES"}:
+        return True
+    if status == "Watch for breakout":
+        return True
+    if grade in {"A", "B"}:
+        return True
+    return False
+
+
 def _action_badge(row: Mapping[str, Any], *, category_id: str = "") -> str:
     cls = str(row.get("classification") or "")
     if category_id == "wealth_builders":
@@ -139,9 +177,16 @@ def _action_badge(row: Mapping[str, Any], *, category_id: str = "") -> str:
             return "Hold / Research"
     verdict = str(row.get("verdict") or "").upper()
     status = str(row.get("status") or "")
+    grade = str(row.get("breakout_grade") or "").upper()
+    if category_id == "momentum_breakouts":
+        # Buy only when sniper/grade already cleared volume. Ungraded scan rows stay Watch.
+        if is_sniper_breakout_candidate(row) or grade in {"A", "B"}:
+            if verdict in {"BUY", "STRONG BUY"} or status == "Ready to trade":
+                return "Buy"
+        return "Watch"
     if verdict in {"BUY", "STRONG BUY"} or status == "Ready to trade":
         return "Buy"
-    if "breakout" in status.lower() or str(row.get("breakout_grade") or "").upper() in {"A", "B"}:
+    if "breakout" in status.lower() or grade in {"A", "B"}:
         return "Watch"
     if cls in {"QUALITY_COMPOUNDER", "GARP_CANDIDATE"}:
         return "Hold / Research"
@@ -205,17 +250,22 @@ def _trend_structure_ok(row: Mapping[str, Any]) -> bool:
 
 
 def _is_momentum_breakout(row: Mapping[str, Any]) -> tuple[bool, str, list[str]]:
-    """Sniper / graded breakouts — volume floor, no chase on the research desk."""
+    """Sniper / graded Buy, or Home-visible breakout Watch. Unknown volume does not hide."""
     if bool(row.get("chase_risk")):
         return False, "", []
-    rsi = _f(row.get("rsi"))
-    if rsi > RSI_HARD:
-        return False, "", []
-    if not passes_volume_floor(row):
+    rsi_raw = row.get("rsi")
+    if rsi_raw not in (None, ""):
+        try:
+            if float(rsi_raw) > RSI_HARD:
+                return False, "", []
+        except (TypeError, ValueError):
+            pass
+    if not _listing_volume_ok(row):
         return False, "", []
     grade = str(row.get("breakout_grade") or "").upper()
     sniper = is_sniper_breakout_candidate(row)
-    if not sniper and grade not in {"A", "B"}:
+    visible = _home_breakout_visible(row)
+    if not sniper and grade not in {"A", "B"} and not visible:
         return False, "", []
     state = str(row.get("breakout_state") or "")
     sigs = _signals(row)
@@ -236,6 +286,7 @@ def _is_momentum_breakout(row: Mapping[str, Any]) -> tuple[bool, str, list[str]]
         or grade in {"A", "B"}
         or near_pivot
         or bool(sigs & {"PRE_BREAKOUT", "BREAKOUT_52W", "BREAKOUT_RES"})
+        or visible
     )
     # Reject ghost sniper hits with no breakout structure (state=not_in_breakout_lane).
     if not structure_ok:
@@ -248,17 +299,31 @@ def _is_momentum_breakout(row: Mapping[str, Any]) -> tuple[bool, str, list[str]]
     display_state = state
     if (not display_state or display_state == "not_in_breakout_lane") and near_pivot:
         display_state = "near_breakout"
+    if (not display_state or display_state == "not_in_breakout_lane") and visible:
+        display_state = "breakout_under_observation"
     if display_state and display_state != "not_in_breakout_lane":
         tags.append(display_state)
-    why = (
-        f"Sniper breakout · vol {_f(row.get('volume_ratio')):.1f}×"
-        + (f" · grade {grade}" if grade else "")
-        + (
-            f" · {display_state.replace('_', ' ')}"
-            if display_state and display_state != "not_in_breakout_lane"
-            else ""
+    vol = _known_volume_ratio(row)
+    vol_bit = f" · vol {vol:.1f}×" if vol is not None else " · volume not on file"
+    if sniper or grade in {"A", "B"}:
+        why = (
+            f"Sniper breakout{vol_bit}"
+            + (f" · grade {grade}" if grade else "")
+            + (
+                f" · {display_state.replace('_', ' ')}"
+                if display_state and display_state != "not_in_breakout_lane"
+                else ""
+            )
         )
-    )
+    else:
+        why = (
+            f"Breakout on last scan{vol_bit} — Watch until sniper/grade confirms"
+            + (
+                f" · {display_state.replace('_', ' ')}"
+                if display_state and display_state != "not_in_breakout_lane"
+                else ""
+            )
+        )
     return True, why, tags
 
 
@@ -401,8 +466,9 @@ def _empty_detail_for(
         )
     if category_id == "momentum_breakouts":
         return (
-            "No sniper/graded breakouts with volume floor and without chase risk "
-            f"in this scan ({len(scan_rows)} rows)."
+            "No BREAKOUT_52W / BREAKOUT_RES / PRE_BREAKOUT names (and no sniper/graded "
+            f"breakouts) in this scan ({len(scan_rows)} rows). Known volume below 0.7× is "
+            "excluded; missing volume is not treated as a fail."
         )
     if category_id == "recovery_setups":
         return (
@@ -748,8 +814,10 @@ def build_recommendations_workspace(
     active, closed = _tracker_lifecycle()
 
     categories = []
+    assigned = 0
     for meta in CATEGORIES:
         cards = list(buckets.get(meta["id"]) or [])
+        assigned += len(cards)
         categories.append({
             **meta,
             "count": len(cards),
@@ -775,6 +843,13 @@ def build_recommendations_workspace(
         "long_term_scanned_at": lt_at,
         "records_status": str(scan.get("records_status") or ""),
         "same_ist_day": bool(scan.get("same_ist_day")),
+        "scan_meta": {
+            "market_scanned_at": scan_at,
+            "market_row_count": len(scan_rows),
+            "long_term_scanned_at": lt_at,
+            "long_term_row_count": len(lt_rows),
+            "assigned_count": assigned,
+        },
         "cmp_note": cmp_note,
         "assignment_policy": (
             "exclusive_primary: momentum_breakouts > recovery_setups > super_trends; "
@@ -824,6 +899,101 @@ def _ist_day() -> str:
         return today_ist().isoformat()
     except Exception:
         return datetime.now(timezone.utc).date().isoformat()
+
+
+def _session_movers_from_scan(records: Sequence[Mapping[str, Any]], limit: int = 5) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """1-day movers only. Missing change_pct stays empty — never substitute 5-day momentum."""
+    rows: list[dict[str, Any]] = []
+    for row in records:
+        if not isinstance(row, Mapping):
+            continue
+        symbol = str(row.get("symbol") or "").upper()
+        price = _f(row.get("price"))
+        chg = row.get("change_pct")
+        if not symbol or price <= 0 or chg is None or chg == "":
+            continue
+        try:
+            chg_f = float(chg)
+        except (TypeError, ValueError):
+            continue
+        rows.append({"symbol": symbol, "price": round(price, 1), "chg_pct": round(chg_f, 2)})
+    if not rows:
+        return [], []
+    rows.sort(key=lambda item: item["chg_pct"], reverse=True)
+    return rows[:limit], list(reversed(rows[-limit:]))
+
+
+def _scan_highlights(scan_payload: Mapping[str, Any] | None) -> dict[str, Any]:
+    """Project the saved market scan onto Market Reports. Empty stays empty."""
+    scan = dict(scan_payload or {})
+    records = [r for r in (scan.get("records") or []) if isinstance(r, Mapping)]
+    scanned_at = str(scan.get("scanned_at") or "")
+    breakout_symbols: list[str] = []
+    pre_symbols: list[str] = []
+    ready = 0
+    for row in records:
+        symbol = str(row.get("symbol") or "").upper()
+        if not symbol:
+            continue
+        sigs = {str(x).upper() for x in (row.get("signals") or [])}
+        status = str(row.get("status") or "")
+        grade = str(row.get("breakout_grade") or "").upper()
+        if (sigs & {"BREAKOUT_52W", "BREAKOUT_RES"} or grade in {"A", "B"}) and symbol not in breakout_symbols:
+            breakout_symbols.append(symbol)
+        if (sigs & {"PRE_BREAKOUT"} or status == "Watch for breakout") and symbol not in pre_symbols:
+            pre_symbols.append(symbol)
+        if status == "Ready to trade":
+            ready += 1
+    gainers, losers = _session_movers_from_scan(records)
+    empty_detail = ""
+    if not records:
+        empty_detail = (
+            "No market scan on file. Scan market fills breakout context and session movers. "
+            "This page does not invent headlines, index prints, or prices."
+        )
+    elif not breakout_symbols and not gainers:
+        empty_detail = (
+            f"Market scan has {len(records)} name(s) but no BREAKOUT tags and no 1-day "
+            "change_pct for session movers. Refresh news separately for wrap headlines."
+        )
+    return {
+        "scanned_at": scanned_at,
+        "row_count": len(records),
+        "same_ist_day": bool(scan.get("same_ist_day")),
+        "ready_to_trade": ready,
+        "breakout_symbols": breakout_symbols[:12],
+        "pre_breakout_symbols": pre_symbols[:12],
+        "session_gainers": gainers,
+        "session_losers": losers,
+        "empty_detail": empty_detail,
+    }
+
+
+def _enrich_pulse_from_scan(pulse: Mapping[str, Any], highlights: Mapping[str, Any]) -> dict[str, Any]:
+    """Fill empty pulse slots from the saved scan. Never invent Nifty prints or news."""
+    out = dict(pulse or {})
+    if not (out.get("gainers") or []) and highlights.get("session_gainers"):
+        out["gainers"] = list(highlights["session_gainers"])
+    if not (out.get("losers") or []) and highlights.get("session_losers"):
+        out["losers"] = list(highlights["session_losers"])
+    existing_brk = out.get("breakouts_today") or []
+    if not existing_brk and highlights.get("breakout_symbols"):
+        out["breakouts_today"] = [{"symbol": s} for s in highlights["breakout_symbols"]]
+    takes = [str(t).strip() for t in (out.get("takeaways") or []) if str(t).strip()]
+    if not takes:
+        extra: list[str] = []
+        n = int(highlights.get("row_count") or 0)
+        if n:
+            extra.append(f"Last market scan has {n} name(s).")
+        brk = list(highlights.get("breakout_symbols") or [])
+        if brk:
+            extra.append("Breakouts on last scan: " + ", ".join(brk[:6]))
+        pre = list(highlights.get("pre_breakout_symbols") or [])
+        if pre:
+            extra.append("Near pivot: " + ", ".join(pre[:6]))
+        if extra:
+            out["takeaways"] = extra
+    return out
 
 
 def _compact_movers(rows: Any, limit: int = 5) -> list[dict[str, Any]]:
@@ -944,16 +1114,31 @@ def build_market_reports_workspace(
             pulse.setdefault("as_of_ist", today)
             _persist_pulse(pulse)
 
+    highlights = _scan_highlights(scan_payload)
+    pulse = _enrich_pulse_from_scan(pulse, highlights)
+
+    articles = list((news_payload or {}).get("articles") or [])
+    news_meta = {
+        "article_count": len(articles),
+        "available": bool((news_payload or {}).get("available")),
+    }
+
     desk_note: dict[str, Any] = {}
     try:
         from product.desk_note import build_desk_note
-        articles = list((news_payload or {}).get("articles") or [])
         desk_note = build_desk_note(articles=articles, scan_payload=scan_payload)
     except Exception as exec_note:
         desk_note = {"error": str(exec_note)[:200], "wrap": [], "desks": [], "explainers": []}
 
     reports = _list_saved_reports(today=today)
-    if pulse and not any(r.get("date") == today for r in reports):
+    has_today = any(r.get("date") == today for r in reports)
+    pulse_has_rows = bool(
+        (pulse.get("takeaways") or [])
+        or (pulse.get("gainers") or [])
+        or (pulse.get("breakouts_today") or [])
+        or int(highlights.get("row_count") or 0)
+    )
+    if not has_today and pulse_has_rows:
         reports.insert(0, _report_item({
             "id": f"market_pulse_{today}",
             "title": "Market Pulse",
@@ -962,12 +1147,40 @@ def build_market_reports_workspace(
             "created_at": datetime.now(timezone.utc).isoformat(),
             "pulse": pulse,
         }, today=today))
+    elif has_today:
+        # Re-project today's list item from the scan-enriched pulse so breakouts
+        # from the saved scan show even when the 15-minute file had empty slots.
+        reports = [
+            _report_item({
+                "id": r.get("id") or f"market_pulse_{today}",
+                "title": r.get("title") or "Market Pulse",
+                "kind": r.get("kind") or "market_pulse",
+                "date": today,
+                "created_at": r.get("created_at") or "",
+                "pulse": pulse,
+            }, today=today)
+            if r.get("date") == today else r
+            for r in reports
+        ]
     today_rows = [r for r in reports if r.get("is_new")]
     older = [r for r in reports if not r.get("is_new")]
     older.sort(key=lambda r: str(r.get("date") or ""), reverse=True)
     reports = today_rows + older
 
-    as_of = str((pulse or {}).get("as_of_ist") or today)
+    as_of = str((pulse or {}).get("as_of_ist") or highlights.get("scanned_at") or today)
+    sourced = int((desk_note or {}).get("wrap_sourced") or 0)
+    empty_detail = ""
+    if not sourced and not int(highlights.get("row_count") or 0) and not (pulse.get("takeaways") or []):
+        empty_detail = (
+            "No sourced wrap and no market scan on file. Scan market and refresh news "
+            "to fill this archive. Opening the page does not start those jobs, and "
+            "empty slots are not filled with invented headlines."
+        )
+    elif not sourced:
+        empty_detail = (
+            "No sourced wrap headlines yet — refresh news and filings. Breakout context "
+            "below comes from the last market scan, not from invented copy."
+        )
     return {
         "schema_version": 2,
         "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -982,6 +1195,9 @@ def build_market_reports_workspace(
         "reports": reports,
         "today_pulse": pulse,
         "desk_note": desk_note,
+        "scan_highlights": highlights,
+        "news_meta": news_meta,
+        "empty_detail": empty_detail,
         "error": error,
         "disclaimer": "Market reports are research summaries, not trade instructions.",
     }

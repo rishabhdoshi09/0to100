@@ -482,6 +482,18 @@
   background: rgba(255,255,255,.7); color: var(--rw-muted);
 }
 .reco-empty strong { display: block; color: var(--rw-ink); margin-bottom: 6px; font-size: 16px; }
+.reco-scan-meta {
+  margin: 0 0 14px; color: var(--rw-muted); font-size: 13px; max-width: 72ch; line-height: 1.45;
+}
+.scan-highlights {
+  margin: 0 0 22px; padding: 16px 18px;
+  background: var(--rw-surface); border: 1px solid var(--rw-line);
+  border-radius: 14px; box-shadow: var(--rw-shadow);
+}
+.scan-highlights h2 {
+  margin: 0 0 8px; font-family: 'Fraunces', Georgia, serif; font-size: 20px;
+}
+.scan-highlights p { margin: 0 0 6px; color: var(--rw-muted); font-size: 14px; line-height: 1.45; }
 .reco-foot {
   margin-top: 18px; font-size: 12px; color: var(--rw-muted); max-width: 720px;
 }

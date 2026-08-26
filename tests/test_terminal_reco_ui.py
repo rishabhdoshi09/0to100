@@ -113,6 +113,8 @@ def test_market_reports_renders_sourced_desk_note_not_a_blog():
     assert "desk_note" in src
     assert "not a buy list" in src.lower()
     assert "Stock Intelligence" in src
+    assert "From the last market scan" in src
+    assert "Scan market" in src
     css = (ROOT / "frontend" / "src" / "recommendations.css").read_text(encoding="utf-8")
     assert ".desk-note" in css
     assert ".desk-tile" in css

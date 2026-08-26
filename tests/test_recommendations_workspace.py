@@ -528,3 +528,158 @@ def test_desk_context_breadth_gate_and_healthy_tape():
     ]
     healthy = build_desk_context(healthy_rows)
     assert healthy["market_support"] == "Positive"
+
+
+def test_ungraded_scan_breakout_is_watch_when_volume_unknown():
+    """Home-visible BREAKOUT names must still appear. Missing volume ≠ hide. Not a Buy."""
+    payload = build_recommendations_workspace(
+        scan_payload={
+            "scanned_at": "2026-08-26T04:00:00+00:00",
+            "records": [{
+                "symbol": "HOMEBRK", "company": "Home Breakout", "score": 68,
+                "signals": ["BREAKOUT_52W"], "verdict": "BUY", "status": "Ready to trade",
+                "chase_risk": False, "price": 140, "rsi": 58,
+                "volume_ratio": 0, "momentum_5d": 3.2,
+            }],
+        },
+        long_term_payload={"records": []},
+        refresh_technicals=False,
+    )
+    by_id = {c["id"]: c for c in payload["categories"]}
+    assert payload["scan_meta"]["market_row_count"] == 1
+    cards = by_id["momentum_breakouts"]["cards"]
+    assert any(c["symbol"] == "HOMEBRK" for c in cards)
+    card = next(c for c in cards if c["symbol"] == "HOMEBRK")
+    assert card["action_badge"] == "Watch"
+    assert card["target"] is None
+    assert "invent" in payload["cmp_note"]
+    assert not any(c["symbol"] == "HOMEBRK" for c in by_id["super_trends"]["cards"])
+
+
+def test_known_thin_volume_is_excluded_from_momentum_breakouts():
+    row = enrich_scan_row({
+        "symbol": "THINVOL", "signals": ["BREAKOUT_52W"], "verdict": "BUY",
+        "status": "Ready to trade", "chase_risk": False, "rsi": 55,
+        "volume_ratio": 0.4, "score": 70,
+    })
+    assigned = primary_scan_category(row)
+    assert assigned is None or assigned[0] != "momentum_breakouts"
+
+
+def test_chase_breakout_is_not_listed():
+    row = enrich_scan_row({
+        "symbol": "CHASEBRK", "signals": ["BREAKOUT_52W"], "verdict": "WATCH",
+        "status": "Wait for pullback", "chase_risk": True, "rsi": 80,
+        "volume_ratio": 2.0, "score": 90, "breakout_grade": "A",
+    })
+    assigned = primary_scan_category(row)
+    assert assigned is None
+
+
+def test_graded_breakout_with_volume_stays_buy():
+    payload = build_recommendations_workspace(
+        scan_payload={
+            "scanned_at": "2026-08-26T04:00:00+00:00",
+            "records": [{
+                "symbol": "GRADED", "score": 80,
+                "signals": ["BREAKOUT_52W"], "verdict": "BUY", "status": "Ready to trade",
+                "categories": ["Breakout"], "chase_risk": False, "rsi": 55,
+                "volume_ratio": 1.6, "avg_vol20": 2e6, "breakout_grade": "A",
+                "price": 200, "entry": 198, "stop": 190, "target": 230,
+            }],
+        },
+        long_term_payload={"records": []},
+        refresh_technicals=False,
+    )
+    by_id = {c["id"]: c for c in payload["categories"]}
+    card = next(c for c in by_id["momentum_breakouts"]["cards"] if c["symbol"] == "GRADED")
+    assert card["action_badge"] == "Buy"
+    assert card["entry"] == 198.0
+    assert card["stop"] == 190.0
+    assert card["target"] == 230.0
+
+
+def test_market_reports_project_scan_without_inventing_news(tmp_path, monkeypatch):
+    import product.recommendations_workspace as rw
+
+    monkeypatch.setattr(rw, "REPORTS_DIR", tmp_path)
+    monkeypatch.setattr(
+        "reports.street_pulse.build_pulse",
+        lambda **_k: {
+            "date": "26 August 2026",
+            "as_of_ist": "2026-08-26",
+            "takeaways": [],
+            "gainers": [],
+            "losers": [],
+            "breakouts_today": [],
+            "snapshot": {"indices": [], "commentary": ""},
+        },
+    )
+    payload = build_market_reports_workspace(
+        persist_today=True,
+        news_payload={"articles": [], "available": False},
+        scan_payload={
+            "scanned_at": "2026-08-26T04:00:00+00:00",
+            "same_ist_day": True,
+            "records": [
+                {
+                    "symbol": "AAA", "signals": ["BREAKOUT_52W"], "status": "Ready to trade",
+                    "price": 120, "change_pct": 4.2, "breakout_grade": "A",
+                },
+                {
+                    "symbol": "BBB", "signals": ["PRE_BREAKOUT"], "status": "Watch for breakout",
+                    "price": 80, "change_pct": -1.1,
+                },
+            ],
+        },
+    )
+    highlights = payload["scan_highlights"]
+    assert highlights["row_count"] == 2
+    assert "AAA" in highlights["breakout_symbols"]
+    assert "BBB" in highlights["pre_breakout_symbols"]
+    assert highlights["session_gainers"][0]["symbol"] == "AAA"
+    assert payload["today_pulse"]["breakouts_today"][0]["symbol"] == "AAA"
+    assert "Last market scan" in " ".join(payload["today_pulse"]["takeaways"])
+    note = payload["desk_note"]
+    assert note["wrap_sourced"] == 0
+    for bullet in note["wrap"]:
+        assert bullet["available"] is False
+        assert bullet["headline"] == ""
+    blob = str(payload)
+    assert "Nifty jumped" not in blob
+    assert "₹600 crore" not in blob
+
+
+def test_scan_store_persists_breakout_and_session_fields():
+    from product.scan_store import build_scan_payload
+
+    class Sig:
+        symbol = "ZZZ"
+        signals = ["BREAKOUT_52W"]
+        reasons = ["52w high"]
+        score = 77
+        verdict = "BUY"
+        chase_risk = False
+        price = 150.0
+        momentum_5d = 4.0
+        rsi = 61.0
+        volume_ratio = 1.4
+        entry = 151.0
+        stop = 140.0
+        target = 170.0
+        change_pct = 3.5
+        breakout_grade = "B"
+        breakout_conviction = 70.0
+        pivot_distance_pct = 0.4
+        avg_vol20 = 1_000_000.0
+        above_sma50 = True
+        above_sma200 = True
+        categories = {"Breakout"}
+
+    payload = build_scan_payload({"ZZZ": "Zed"}, [Sig()])
+    row = payload["records"][0]
+    assert row["change_pct"] == 3.5
+    assert row["breakout_grade"] == "B"
+    assert row["above_sma50"] is True
+    assert row["avg_vol20"] == 1_000_000.0
+    assert "Breakout" in row["categories"]
