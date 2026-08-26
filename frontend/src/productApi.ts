@@ -207,6 +207,8 @@ export type DueDiligenceKpi = {
     yoy_change?: number | null
     points?: { period: string; value: number }[]
   }
+  availability_state?: string
+  availability_label?: string
 }
 
 export type DueDiligenceEvent = {
@@ -303,6 +305,26 @@ export type DueDiligenceReport = {
       pillars?: { id: string; label: string; awarded: number | null; max: number; display: string; explain?: string; formula?: string }[]
     }
   }
+  research_coverage?: {
+    coverage_pct: number
+    available_n?: number
+    required_n?: number
+    summary?: string
+    needs_acquire?: boolean
+    to_fetch?: string[]
+    latest_data_refresh?: string | null
+    not_a_quality_score?: boolean
+    datasets?: {
+      id: string
+      label: string
+      status: string
+      required?: boolean
+      present?: boolean
+      age_label?: string | null
+      checked_at?: string | null
+    }[]
+  }
+  sector_kpi_label?: string
   business_trend: string
   financial_strength: string
   earnings_quality: string
@@ -337,6 +359,7 @@ export type DueDiligenceReport = {
     generated_at: string
     evidence_pack_coverage_pct?: number
     autonomy_acquired_at?: string
+    latest_data_refresh?: string
   }
   extracted_guidance?: {
     tone: string
@@ -397,10 +420,16 @@ export type DueDiligenceReport = {
     critical_red_flags?: number
     warnings?: number
     latest_financial_quarter?: string
+    latest_data_refresh?: string
     data_freshness?: string
+    research_coverage_pct?: number
+    research_coverage_summary?: string
+    research_coverage_needs_acquire?: boolean
+    sector_kpis?: string
+    sector_kpi_framework?: string
     improving?: string[]
     deteriorating?: string[]
-    recent_material_events?: { date?: string; headline?: string; category?: string; materiality?: string; source?: string }[]
+    recent_material_events?: { date?: string; headline?: string; category?: string; materiality?: string; source?: string; url?: string }[]
     technical_reason?: string[]
     fundamental_evidence?: string[]
     sections?: string[]
@@ -421,13 +450,17 @@ export const fetchDueDiligence = (symbol: string): Promise<DueDiligenceReport> =
     headers: { Accept: 'application/json' },
   }).then((response) => json<DueDiligenceReport>(response))
 
-export const acquireDueDiligence = (symbol: string): Promise<{
+export const acquireDueDiligence = (
+  symbol: string,
+  mode: 'missing_or_stale' | 'all' = 'missing_or_stale',
+): Promise<{
   accepted: boolean
   symbol: string
+  mode?: string
   acquire: Record<string, unknown>
   report: DueDiligenceReport
   places_orders: boolean
-}> => fetch(`/api/due-diligence/${encodeURIComponent(symbol)}/acquire`, {
+}> => fetch(`/api/due-diligence/${encodeURIComponent(symbol)}/acquire?mode=${encodeURIComponent(mode)}`, {
   method: 'POST',
   headers: { Accept: 'application/json' },
 }).then((response) => json(response))

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import re
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -31,6 +32,8 @@ _ALLOWED_HOSTS = {
     "nseindia.com",
     "nsearchives.nseindia.com",
     "archives.nseindia.com",
+    "www.moneycontrol.com",
+    "moneycontrol.com",
 }
 _BROWSER_HEADERS = {
     "User-Agent": (
@@ -506,68 +509,332 @@ def _news_snippets(symbol: str) -> list[tuple[str, str, str]]:
     return out
 
 
-def acquire_symbol(symbol: str, *, force: bool = True, now: datetime | None = None) -> dict[str, Any]:
-    """Download official sources for one symbol, extract facts, persist, never invent."""
+def _news_items(symbol: str) -> list[dict[str, Any]]:
+    items: list[dict[str, Any]] = []
+    try:
+        from news.curator_store import NewsCuratorStore
+        store = NewsCuratorStore(ROOT / "logs" / "news_curator.sqlite3")
+        try:
+            for item in store.recent(hours=24 * 90, limit=40, symbol=symbol):
+                payload = item.as_dict() if hasattr(item, "as_dict") else dict(item)
+                if isinstance(payload, dict):
+                    items.append(payload)
+        finally:
+            store.close()
+    except Exception:
+        return items
+    return items
+
+
+def _framework_id_for(symbol: str, raw: Mapping[str, Any]) -> str:
+    from product.due_diligence.classify import classify_company
+
+    profile = classify_company(
+        symbol,
+        sector=str(raw.get("sector") or ""),
+        about=str(raw.get("about") or ""),
+        quarterly_rows=list(raw.get("quarterly_results") or []),
+    )
+    return str(profile.get("framework_id") or "generic")
+
+
+def inspect_symbol_coverage(symbol: str, *, now: datetime | None = None) -> dict[str, Any]:
+    """Cache-only dataset inventory used by the acquire planner."""
+    from product.due_diligence.coverage import inspect_research_coverage
+    from reporting.evidence_intake import load_raw_fundamentals
+
+    raw_record = load_raw_fundamentals(symbol) or {}
+    raw = dict(raw_record.get("data") or {})
+    facts = load_autonomy_facts(symbol)
+    measured = merge_kpi_maps(extract_kpis_from_raw(raw), dict(facts.get("kpis") or {}))
+    findings = [
+        {"id": key, "available": True, "latest": snap.get("current")}
+        for key, snap in measured.items()
+        if isinstance(snap, Mapping)
+    ]
+    return inspect_research_coverage(
+        symbol=symbol,
+        raw=raw,
+        autonomy=facts,
+        news=_news_items(symbol),
+        framework_id=_framework_id_for(symbol, raw),
+        findings=findings,
+        events=list(facts.get("announcements") or []),
+        fetched_at=str(raw_record.get("fetched_at") or ""),
+        now=now,
+    )
+
+
+def plan_acquire(
+    symbol: str,
+    *,
+    force: bool = False,
+    datasets: list[str] | None = None,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    """Decide which provider lanes to run. Does not hit the internet."""
+    from product.due_diligence.coverage import DATASET_IDS, REQUIRED_FOR_COVERAGE, provider_lanes
+
+    coverage = inspect_symbol_coverage(symbol, now=now)
+    if datasets:
+        to_fetch = [item for item in datasets if item in DATASET_IDS or item == "option_chain"]
+    elif force:
+        to_fetch = list(REQUIRED_FOR_COVERAGE)
+    else:
+        to_fetch = list(coverage.get("to_fetch") or [])
+    lanes = provider_lanes(to_fetch)
+    lanes["option_chain"] = bool(force) or "option_chain" in (datasets or [])
+    return {
+        "to_fetch": to_fetch,
+        "lanes": lanes,
+        "coverage": coverage,
+        "force": bool(force),
+    }
+
+
+def _stamp_meta(
+    meta: dict[str, Any],
+    dataset_id: str,
+    *,
+    now: datetime,
+    status: str,
+    provider: str = "",
+    error: str = "",
+    fetched: bool = False,
+) -> None:
+    prev = dict(meta.get(dataset_id) or {})
+    row = {
+        **prev,
+        "checked_at": now.isoformat(),
+        "status": status,
+        "provider": provider or prev.get("provider") or "",
+    }
+    if fetched:
+        row["fetched_at"] = now.isoformat()
+    if error:
+        row["error"] = error[:240]
+    elif status in {"current", "stale"}:
+        row.pop("error", None)
+    meta[dataset_id] = row
+
+
+def _announcements_from_headlines(headlines: list[tuple[str, str]]) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    for text, url in headlines:
+        headline = re.sub(r"\s+", " ", str(text or "")).strip()
+        if not headline:
+            continue
+        out.append({
+            "headline": headline[:280],
+            "url": url,
+            "source": "NSE announcements",
+            "source_kind": "exchange",
+        })
+        if len(out) >= 40:
+            break
+    return out
+
+
+def _ratings_from_announcements(announcements: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    for item in announcements:
+        blob = str(item.get("headline") or "").lower()
+        if "rating" in blob and any(
+            tok in blob for tok in ("credit", "outlook", "upgrade", "downgrade", "crisil", "icra", "care", "fitch")
+        ):
+            out.append({**item, "kind": "credit_rating"})
+    return out
+
+
+def acquire_symbol(
+    symbol: str,
+    *,
+    force: bool = False,
+    datasets: list[str] | None = None,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    """Download only the datasets that are missing or stale. Never invent numbers."""
     from product.stock_workspace import clean_symbol
 
     symbol = clean_symbol(symbol)
     now = now or datetime.now(timezone.utc)
-    steps: list[dict[str, Any]] = []
-    downloads: list[dict[str, Any]] = []
-
-    screener = _fetch_screener(symbol, force=force)
-    steps.append(screener["step"])
-    raw = dict(screener.get("data") or {})
-
-    session = None
+    previous = load_autonomy_facts(symbol)
     try:
-        session = _nse_session()
+        plan = plan_acquire(symbol, force=force, datasets=datasets, now=now)
     except Exception as exc:
-        session = None
-        nse_error = str(exc)[:240]
-    else:
-        nse_error = ""
-    if session is None:
-        nse = _empty_nse()
-        if nse_error:
-            nse["step"]["error"] = nse_error
-        annual = {"step": {"id": "nse_annual_reports", "ok": False, "error": nse_error or "no NSE session"}, "downloads": [], "texts": []}
-        chain = {
-            "step": {"id": "option_chain", "ok": False, "error": nse_error or "no NSE session"},
-            "download": {},
-            "snapshot": {"available": False, "acquired": False, "reason": nse_error or "no NSE session", "not_a_signal": True, "places_orders": False},
-        }
-    else:
-        try:
-            nse = _fetch_nse(symbol, session)
-        except Exception as exc:
-            nse = _empty_nse()
-            nse["step"]["error"] = str(exc)[:240]
-        try:
-            annual = _fetch_annual_reports(symbol, session)
-        except Exception as exc:
-            annual = {"step": {"id": "nse_annual_reports", "ok": False, "error": str(exc)[:240]}, "downloads": [], "texts": []}
-        try:
-            chain = _fetch_option_chain(symbol, session)
-        except Exception as exc:
-            chain = {
-                "step": {"id": "option_chain", "ok": False, "error": str(exc)[:240]},
-                "download": {},
-                "snapshot": {"available": False, "acquired": True, "reason": str(exc)[:240], "not_a_signal": True, "places_orders": False},
-            }
-    steps.append(nse["step"])
-    steps.append(annual["step"])
-    steps.append(chain["step"])
-    downloads.extend(nse.get("downloads") or [])
-    downloads.extend(annual.get("downloads") or [])
-    if chain.get("download"):
-        downloads.append(chain["download"])
+        from product.due_diligence.coverage import REQUIRED_FOR_COVERAGE, provider_lanes
 
-    text_kpis: dict[str, dict[str, Any]] = {}
-    guidance: list[dict[str, Any]] = []
-    commentary: list[dict[str, Any]] = []
-    order_book: list[dict[str, Any]] = []
-    segments: list[dict[str, Any]] = []
+        to_fetch = list(datasets or REQUIRED_FOR_COVERAGE)
+        plan = {
+            "to_fetch": to_fetch,
+            "lanes": {**provider_lanes(to_fetch), "option_chain": bool(force)},
+            "coverage": {},
+            "force": bool(force),
+            "plan_error": str(exc)[:240],
+        }
+    lanes = dict(plan["lanes"])
+    to_fetch = list(plan["to_fetch"])
+    steps: list[dict[str, Any]] = []
+    downloads: list[dict[str, Any]] = list(previous.get("downloads") or []) if not force else []
+    dataset_meta: dict[str, Any] = dict(previous.get("dataset_meta") or {})
+    skipped: list[str] = []
+
+    raw: dict[str, Any] = {}
+    if lanes.get("screener"):
+        screener = _fetch_screener(symbol, force=force or "quarterly_results" in to_fetch)
+        steps.append(screener["step"])
+        raw = dict(screener.get("data") or {})
+        screener_ok = bool(screener["step"].get("ok"))
+        screener_err = str(screener["step"].get("error") or screener["step"].get("error_on_refresh") or "")
+        status = "current" if screener_ok else ("acquisition_failed" if screener_err else "source_unavailable")
+        for ds_id in (
+            "company_master", "quarterly_results", "annual_financials",
+            "shareholding", "promoter_pledge", "valuation", "peer_data",
+        ):
+            if ds_id in to_fetch or force:
+                _stamp_meta(
+                    dataset_meta, ds_id, now=now, status=status,
+                    provider="screener.in", error=screener_err, fetched=True,
+                )
+    else:
+        from reporting.evidence_intake import load_raw_fundamentals
+
+        raw = dict((load_raw_fundamentals(symbol) or {}).get("data") or {})
+        steps.append({"id": "screener", "ok": True, "skipped": True, "reason": "datasets current"})
+        skipped.append("screener")
+        for ds_id in (
+            "company_master", "quarterly_results", "annual_financials",
+            "shareholding", "promoter_pledge", "valuation", "peer_data",
+        ):
+            if ds_id not in to_fetch:
+                _stamp_meta(dataset_meta, ds_id, now=now, status="current", provider="cache")
+
+    nse = dict(previous.get("_nse_cache") or {}) or _empty_nse()
+    annual = {"step": {"id": "nse_annual_reports", "ok": False, "skipped": True}, "downloads": [], "texts": []}
+    chain = {
+        "step": {"id": "option_chain", "ok": False, "skipped": True},
+        "download": {},
+        "snapshot": dict(previous.get("option_chain") or {})
+        or {"available": False, "acquired": False, "not_a_signal": True, "places_orders": False},
+    }
+    nse_error = ""
+    session = None
+    need_nse = lanes.get("nse_filings") or lanes.get("nse_annual") or lanes.get("option_chain")
+    if need_nse:
+        try:
+            session = _nse_session()
+        except Exception as exc:
+            session = None
+            nse_error = str(exc)[:240]
+        if session is None:
+            if lanes.get("nse_filings"):
+                nse = _empty_nse()
+                nse["step"]["error"] = nse_error or "no NSE session"
+                nse["step"]["status"] = "source_unavailable"
+            if lanes.get("nse_annual"):
+                annual = {
+                    "step": {
+                        "id": "nse_annual_reports",
+                        "ok": False,
+                        "error": nse_error or "no NSE session",
+                        "status": "source_unavailable",
+                    },
+                    "downloads": [],
+                    "texts": [],
+                }
+            if lanes.get("option_chain"):
+                chain = {
+                    "step": {"id": "option_chain", "ok": False, "error": nse_error or "no NSE session"},
+                    "download": {},
+                    "snapshot": {
+                        "available": False,
+                        "acquired": False,
+                        "reason": nse_error or "no NSE session",
+                        "not_a_signal": True,
+                        "places_orders": False,
+                    },
+                }
+        else:
+            if lanes.get("nse_filings"):
+                try:
+                    nse = _fetch_nse(symbol, session)
+                except Exception as exc:
+                    nse = _empty_nse()
+                    nse["step"]["error"] = str(exc)[:240]
+            else:
+                nse = _empty_nse()
+                nse["step"]["skipped"] = True
+                skipped.append("nse_filings")
+            if lanes.get("nse_annual"):
+                try:
+                    annual = _fetch_annual_reports(symbol, session)
+                except Exception as exc:
+                    annual = {"step": {"id": "nse_annual_reports", "ok": False, "error": str(exc)[:240]}, "downloads": [], "texts": []}
+            else:
+                skipped.append("nse_annual")
+            if lanes.get("option_chain"):
+                try:
+                    chain = _fetch_option_chain(symbol, session)
+                except Exception as exc:
+                    chain = {
+                        "step": {"id": "option_chain", "ok": False, "error": str(exc)[:240]},
+                        "download": {},
+                        "snapshot": {
+                            "available": False,
+                            "acquired": True,
+                            "reason": str(exc)[:240],
+                            "not_a_signal": True,
+                            "places_orders": False,
+                        },
+                    }
+            else:
+                skipped.append("option_chain")
+    else:
+        skipped.extend(["nse_filings", "nse_annual", "option_chain"])
+        steps.append({"id": "nse_filings", "ok": True, "skipped": True, "reason": "datasets current"})
+        steps.append({"id": "nse_annual_reports", "ok": True, "skipped": True, "reason": "datasets current"})
+        steps.append({"id": "option_chain", "ok": True, "skipped": True, "reason": "not requested"})
+
+    if need_nse:
+        steps.append(nse["step"])
+        steps.append(annual["step"])
+        steps.append(chain["step"])
+        if nse.get("downloads"):
+            downloads.extend(nse.get("downloads") or [])
+        if annual.get("downloads"):
+            downloads.extend(annual.get("downloads") or [])
+        if chain.get("download"):
+            downloads.append(chain["download"])
+
+    filing_status = "current" if nse.get("step", {}).get("ok") else (
+        "source_unavailable" if (nse.get("step") or {}).get("status") == "source_unavailable" or nse_error
+        else "acquisition_failed" if (nse.get("step") or {}).get("error") else "current"
+    )
+    if lanes.get("nse_filings"):
+        err = str((nse.get("step") or {}).get("error") or nse_error or "")
+        if not nse.get("step", {}).get("ok") and not err:
+            err = "NSE filings were not downloaded"
+        for ds_id in ("exchange_filings", "corporate_announcements"):
+            _stamp_meta(
+                dataset_meta, ds_id, now=now,
+                status="current" if nse.get("step", {}).get("ok") else (filing_status if err else "not_yet_acquired"),
+                provider="nseindia.com", error=err, fetched=True,
+            )
+    if lanes.get("nse_annual"):
+        err = str((annual.get("step") or {}).get("error") or "")
+        _stamp_meta(
+            dataset_meta, "annual_financials", now=now,
+            status="current" if annual.get("step", {}).get("ok") or _quarterly_has_values({"quarterly_results": raw.get("profit_loss") or []}) else (
+                "acquisition_failed" if err else "source_unavailable"
+            ),
+            provider="nseindia.com", error=err, fetched=True,
+        )
+
+    text_kpis: dict[str, dict[str, Any]] = dict(previous.get("kpis") or {}) if not force else {}
+    guidance: list[dict[str, Any]] = list(previous.get("guidance") or []) if not force else []
+    commentary: list[dict[str, Any]] = list(previous.get("commentary") or []) if not force else []
+    order_book: list[dict[str, Any]] = list(previous.get("order_book") or []) if not force else []
+    segments: list[dict[str, Any]] = list(previous.get("segments") or []) if not force else []
 
     def _ingest(text: str, url: str, source: str) -> None:
         nonlocal text_kpis, guidance, commentary, order_book, segments
@@ -583,8 +850,20 @@ def acquire_symbol(symbol: str, *, force: bool = True, now: datetime | None = No
         _ingest(text, url, "NSE filing")
     for text, url in annual.get("texts") or []:
         _ingest(text, url, "NSE annual report")
-    for text, url in nse.get("headlines") or []:
+    nse_headlines = list(nse.get("headlines") or [])
+    for text, url in nse_headlines:
         guidance.extend(extract_guidance(text, source="NSE announcement", source_url=url))
+
+    announcements = list(previous.get("announcements") or [])
+    if nse_headlines:
+        announcements = _announcements_from_headlines(nse_headlines)
+    credit_ratings = _ratings_from_announcements(announcements)
+    if lanes.get("nse_filings"):
+        _stamp_meta(
+            dataset_meta, "credit_ratings", now=now,
+            status="current" if credit_ratings else "not_yet_acquired",
+            provider="nseindia.com", fetched=True,
+        )
 
     uploads = extract_from_uploads(symbol)
     for item in uploads.get("guidance") or []:
@@ -594,14 +873,64 @@ def acquire_symbol(symbol: str, *, force: bool = True, now: datetime | None = No
     segments = _extend_unique(list(uploads.get("segments") or []), segments, lambda row: str(row.get("segment") or "").lower(), 6)
 
     news_guidance: list[dict[str, Any]] = []
-    for text, source, url in _news_snippets(symbol):
-        news_guidance.extend(extract_guidance(text, source=f"Curated news ({source})", source_url=url))
+    news_items = _news_snippets(symbol)
+    if lanes.get("news") or True:
+        for text, source, url in news_items:
+            news_guidance.extend(extract_guidance(text, source=f"Curated news ({source})", source_url=url))
+        _stamp_meta(
+            dataset_meta, "recent_news", now=now,
+            status="current" if news_items else "not_yet_acquired",
+            provider="news_curator", fetched=False,
+        )
 
     kpis = merge_kpi_maps(
         extract_kpis_from_raw(raw),
         uploads.get("kpis") or {},
         text_kpis,
     )
+
+    if (
+        lanes.get("sector_fallback")
+        and _framework_id_for(symbol, raw) in {"bank", "nbfc"}
+        and not any(kpis.get(key) for key in ("casa", "cet1", "gnpa", "nim", "pcr", "crar"))
+    ):
+        try:
+            from product.due_diligence.providers.moneycontrol import fetch_moneycontrol_kpis
+
+            mc = fetch_moneycontrol_kpis(symbol)
+            steps.append({
+                "id": "moneycontrol",
+                "ok": bool(mc.get("ok")),
+                "error": mc.get("error") or None,
+                "status": mc.get("status"),
+            })
+            if mc.get("kpis"):
+                kpis = merge_kpi_maps(kpis, mc.get("kpis") or {})
+            _stamp_meta(
+                dataset_meta, "sector_kpis", now=now,
+                status=str(mc.get("status") or "acquisition_failed"),
+                provider="moneycontrol.com",
+                error=str(mc.get("error") or ""),
+                fetched=True,
+            )
+        except Exception as exc:
+            steps.append({"id": "moneycontrol", "ok": False, "error": str(exc)[:240]})
+            _stamp_meta(
+                dataset_meta, "sector_kpis", now=now,
+                status="acquisition_failed",
+                provider="moneycontrol.com",
+                error=str(exc)[:240],
+                fetched=True,
+            )
+    elif "sector_kpis" in to_fetch or force:
+        sector_ok = any(kpis.get(key) for key in ("gnpa", "nnpa", "nim", "casa", "cet1", "advances", "nii"))
+        _stamp_meta(
+            dataset_meta, "sector_kpis", now=now,
+            status="current" if sector_ok else "not_yet_acquired",
+            provider="nseindia.com / screener.in",
+            fetched=bool(lanes.get("nse_filings") or lanes.get("screener")),
+        )
+
     gnpa = (kpis.get("gnpa") or {}).get("current")
     nnpa = (kpis.get("nnpa") or {}).get("current")
     if gnpa is not None and nnpa is not None and nnpa > gnpa:
@@ -617,7 +946,7 @@ def acquire_symbol(symbol: str, *, force: bool = True, now: datetime | None = No
         if len(unique_guidance) >= 8:
             break
 
-    option_chain = dict(chain.get("snapshot") or {})
+    option_chain = dict(chain.get("snapshot") or previous.get("option_chain") or {})
     missing = [key for key in ("gnpa", "nnpa", "pledge") if key not in kpis]
     if not commentary:
         missing.append("commentary")
@@ -627,11 +956,18 @@ def acquire_symbol(symbol: str, *, force: bool = True, now: datetime | None = No
         missing.append("segments")
     if not option_chain.get("available"):
         missing.append("option_chain")
+    acquired_at = now.isoformat() if any(not s.get("skipped") for s in steps if isinstance(s, dict)) else (
+        str(previous.get("acquired_at") or now.isoformat())
+    )
     payload = {
-        "schema_version": 2,
+        "schema_version": 3,
         "symbol": symbol,
-        "acquired_at": now.isoformat(),
+        "acquired_at": acquired_at,
+        "inspected_at": now.isoformat(),
         "method": "autonomy_download",
+        "mode": "all" if force else "missing_or_stale",
+        "to_fetch": to_fetch,
+        "skipped": skipped,
         "not_an_llm": True,
         "kpis": kpis,
         "guidance": unique_guidance,
@@ -639,11 +975,25 @@ def acquire_symbol(symbol: str, *, force: bool = True, now: datetime | None = No
         "order_book": order_book,
         "segments": segments,
         "option_chain": option_chain,
+        "announcements": announcements,
+        "filings": [
+            {
+                "title": d.get("url") or d.get("path"),
+                "url": d.get("url"),
+                "path": d.get("path"),
+                "ok": d.get("ok"),
+            }
+            for d in downloads
+            if isinstance(d, dict)
+        ],
+        "credit_ratings": credit_ratings,
         "downloads": downloads,
         "steps": steps,
+        "dataset_meta": dataset_meta,
         "still_missing": missing,
         "files_on_disk": [d.get("path") for d in downloads if d.get("ok")],
         "places_orders": False,
+        "sector": _framework_id_for(symbol, raw),
     }
     save_autonomy_facts(symbol, payload)
     return payload

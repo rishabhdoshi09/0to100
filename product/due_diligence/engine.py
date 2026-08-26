@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from product.due_diligence.classify import classify_company
+from product.due_diligence.coverage import availability_state_for_kpi, inspect_research_coverage
 from product.due_diligence.dashboard import (
     cache_schedule,
     company_snapshot,
@@ -230,7 +231,7 @@ def _evaluate_kpis(raw: Mapping[str, Any], specs: Sequence[KpiSpec], source_url:
     for spec in specs:
         row = find_row(tables.get(spec.table), spec.needles)
         series = dated_series(row)
-        if not series and spec.id in {"gnpa", "nnpa", "pledge", "promoter"}:
+        if not series:
             for other in tables.values():
                 row = find_row(other, spec.needles)
                 series = dated_series(row)
@@ -464,6 +465,46 @@ def build_due_diligence(
         },
     )
     news_label, news_detail = news_verdict(events)
+    try:
+        research_coverage = inspect_research_coverage(
+            symbol=symbol,
+            raw=raw,
+            autonomy=autonomy,
+            news=list(news or []),
+            framework_id=framework["id"],
+            findings=findings,
+            events=events,
+            fetched_at=fetched_at,
+            now=now,
+        )
+    except Exception:
+        research_coverage = {
+            "coverage_pct": 0.0,
+            "available_n": 0,
+            "required_n": 0,
+            "summary": "Coverage inspect failed",
+            "needs_acquire": False,
+            "to_fetch": [],
+            "datasets": [],
+            "not_a_quality_score": True,
+        }
+    _STATE_LABEL = {
+        "reported": "Reported",
+        "not_yet_acquired": "Not yet acquired",
+        "acquisition_failed": "Acquisition failed",
+        "source_unavailable": "Source unavailable",
+        "metric_not_reported": "Metric not reported",
+        "not_applicable": "Not applicable",
+    }
+    for finding in findings:
+        state = availability_state_for_kpi(
+            kpi_id=str(finding.get("id") or ""),
+            has_value=bool(finding.get("available")),
+            missing_ok=bool(finding.get("missing_ok")),
+            coverage=research_coverage,
+        )
+        finding["availability_state"] = state
+        finding["availability_label"] = _STATE_LABEL.get(state, "Data unavailable")
     pack = apply_autonomy_pack(
         load_evidence_pack(
             symbol,
@@ -489,6 +530,22 @@ def build_due_diligence(
     flag_groups = partition_flags(flags)
     technical = _technical_context(scan_row, long_row)
     trend_label = _pillar_label([str(f.get("trend")) for f in findings if f.get("available")])
+    generic_ids = {
+        "pat", "sales", "opm", "eps", "promoter", "pledge", "fii", "dii", "public",
+        "cfo", "roe", "roce", "borrowings",
+    }
+    sector_findings = [
+        f for f in findings
+        if str(f.get("id") or "") not in generic_ids and f.get("available")
+    ]
+    sector_trend = _pillar_label([str(f.get("trend")) for f in sector_findings])
+    sector_kpi_label = {
+        "Improving": "Strong",
+        "Stable": "Adequate",
+        "Weakening": "Mixed",
+        "Deteriorating": "Weak",
+        "Unmeasured": "Unmeasured",
+    }.get(sector_trend, sector_trend)
     vs_setup, vs_detail = _vs_setup(
         technical=technical, score=score, coverage=coverage,
         trend_label=trend_label, flags=flags, news_label=news_label,
@@ -587,6 +644,8 @@ def build_due_diligence(
             ),
             "Data unavailable",
         ),
+        "latest_data_refresh": research_coverage.get("latest_data_refresh") or autonomy.get("acquired_at") or fetched_at or "Data unavailable",
+        "research_coverage_pct": research_coverage.get("coverage_pct"),
     }
 
     breakdown = score_breakdown(
@@ -679,10 +738,12 @@ def build_due_diligence(
             "explain": (
                 f"{score_meta['n']} sector KPIs with values, "
                 f"{score_meta['used_weight']:.0f}/{score_meta['total_weight']:.0f} weight. "
-                "Missing KPIs are skipped, never filled."
+                "Missing KPIs are skipped, never filled. This is quality, not research coverage."
             ),
             "breakdown": breakdown,
         },
+        "research_coverage": research_coverage,
+        "sector_kpi_label": sector_kpi_label,
         "business_trend": trend_label,
         "financial_strength": financial,
         "earnings_quality": earnings,
@@ -719,6 +780,9 @@ def build_due_diligence(
             "still_missing": list(autonomy.get("still_missing") or []),
             "files_on_disk": list(autonomy.get("files_on_disk") or []),
             "option_chain": dict(autonomy.get("option_chain") or {}) or None,
+            "dataset_meta": dict(autonomy.get("dataset_meta") or {}),
+            "mode": autonomy.get("mode"),
+            "to_fetch": list(autonomy.get("to_fetch") or []),
             "not_an_llm": True,
         },
         "as_of": as_of,

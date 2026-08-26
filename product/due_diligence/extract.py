@@ -14,11 +14,36 @@ from product.due_diligence.series import _f, dated_series, find_row, normalize_l
 _GNPA_NEEDLES = ("gross npa", "gnpa", "gross non performing")
 _NNPA_NEEDLES = ("net npa", "nnpa", "net non performing")
 _PLEDGE_NEEDLES = ("pledge", "encumbrance")
+_CASA_NEEDLES = ("casa", "current account savings")
+_NIM_NEEDLES = ("nim", "net interest margin", "financing margin")
+_CET1_NEEDLES = ("cet1", "cet 1", "common equity tier")
+_CRAR_NEEDLES = ("crar", "capital adequacy", "capital adequacy ratio")
+_PCR_NEEDLES = ("pcr", "provision coverage")
+_SLIPPAGE_NEEDLES = ("slippage", "slippages")
+_CREDIT_COST_NEEDLES = ("credit cost", "credit costs")
+_ROA_NEEDLES = ("roa", "return on assets")
+_ROE_NEEDLES = ("roe", "return on equity")
+_ADVANCES_NEEDLES = ("advances", "gross advances", "net advances")
+_DEPOSITS_NEEDLES = ("deposits", "total deposits")
+_LDR_NEEDLES = ("credit deposit", "cd ratio", "loan deposit", "loan to deposit")
 
 _GNPA_LABEL = re.compile(r"(?:gross\s*npa[s]?|gnpa|gross\s*non[\s-]*performing)", re.I)
 _NNPA_LABEL = re.compile(r"(?:net\s*npa[s]?|nnpa|net\s*non[\s-]*performing)", re.I)
 _PLEDGE_LABEL = re.compile(r"(?:promoter\s*)?pledged?(?:\s+shares?|\s+equity|\s+holding)?", re.I)
+_CASA_LABEL = re.compile(r"\bcasa(?:\s+ratio)?\b", re.I)
+_NIM_LABEL = re.compile(r"(?:net\s+interest\s+margin|\bnim\b)", re.I)
+_CET1_LABEL = re.compile(r"(?:cet-?1|common\s+equity\s+tier(?:\s*1)?)", re.I)
+_CRAR_LABEL = re.compile(r"(?:crar|capital\s+adequacy(?:\s+ratio)?)", re.I)
+_PCR_LABEL = re.compile(r"(?:provision\s+coverage(?:\s+ratio)?|\bpcr\b)", re.I)
+_SLIPPAGE_LABEL = re.compile(r"slippages?", re.I)
+_CREDIT_COST_LABEL = re.compile(r"credit\s+costs?", re.I)
+_ROA_LABEL = re.compile(r"(?:return\s+on\s+assets|\broa\b)", re.I)
+_ROE_LABEL = re.compile(r"(?:return\s+on\s+equity|\broe\b)", re.I)
 _PERCENT_RE = re.compile(r"(\d{1,2}(?:\.\s*\d+)?)\s*%")
+_AMOUNT_RE = re.compile(
+    r"(?:rs\.?|inr|₹)?\s*([\d,]+(?:\.\d+)?)\s*(crore|cr)\b",
+    re.I,
+)
 _SKIP_PREFIX = ("below", "under", "above", "over", "upto", "up to", "within", "least")
 _GUIDANCE_LINE = re.compile(
     r".{0,100}(?:guidance|outlook|we expect|we guide|we maintain|order book|"
@@ -85,6 +110,38 @@ def key_ratio_value(rows: Sequence[Mapping[str, Any]] | None, needles: Sequence[
     return None
 
 
+def key_level_value(rows: Sequence[Mapping[str, Any]] | None, needles: Sequence[str]) -> float | None:
+    want = [normalize_label(n) for n in needles if n]
+    for row in rows or []:
+        if not isinstance(row, Mapping):
+            continue
+        name = normalize_label(row.get("name") or row.get("row_label") or "")
+        if not name:
+            continue
+        if name in want or any(n and n in name for n in want):
+            number = _f(row.get("value") or row.get("current"))
+            if number is not None and number >= 0:
+                return number
+    return None
+
+
+def _last_amount(label: re.Pattern[str], text: str) -> float | None:
+    found: list[float] = []
+    blob = text or ""
+    for match in label.finditer(blob):
+        window = blob[match.end(): match.end() + 120]
+        item = _AMOUNT_RE.search(window)
+        if not item:
+            continue
+        try:
+            number = float(item.group(1).replace(",", ""))
+        except ValueError:
+            continue
+        if number > 0:
+            found.append(number)
+    return found[-1] if found else None
+
+
 def series_from_tables(
     tables: Mapping[str, Sequence[Mapping[str, Any]]],
     needles: Sequence[str],
@@ -107,7 +164,7 @@ def series_from_tables(
 
 
 def extract_kpis_from_raw(raw: Mapping[str, Any] | None) -> dict[str, dict[str, Any]]:
-    """Fill GNPA / NNPA / pledge from any table or key-ratio snapshot in the cache."""
+    """Fill sector KPIs from any table or key-ratio snapshot in the cache."""
     raw = dict(raw or {})
     tables = {
         "quarterly_results": list(raw.get("quarterly_results") or []),
@@ -118,12 +175,26 @@ def extract_kpis_from_raw(raw: Mapping[str, Any] | None) -> dict[str, dict[str, 
         "key_ratios": list(raw.get("key_ratios") or []),
     }
     out: dict[str, dict[str, Any]] = {}
-    specs = (
+    rate_specs = (
         ("gnpa", _GNPA_NEEDLES, "quarterly_results"),
         ("nnpa", _NNPA_NEEDLES, "quarterly_results"),
         ("pledge", _PLEDGE_NEEDLES, "shareholding"),
+        ("casa", _CASA_NEEDLES, "quarterly_results"),
+        ("nim", _NIM_NEEDLES, "quarterly_results"),
+        ("cet1", _CET1_NEEDLES, "quarterly_results"),
+        ("crar", _CRAR_NEEDLES, "quarterly_results"),
+        ("pcr", _PCR_NEEDLES, "quarterly_results"),
+        ("slippages", _SLIPPAGE_NEEDLES, "quarterly_results"),
+        ("credit_cost", _CREDIT_COST_NEEDLES, "quarterly_results"),
+        ("roa", _ROA_NEEDLES, "key_ratios"),
+        ("roe", _ROE_NEEDLES, "key_ratios"),
+        ("loan_deposit", _LDR_NEEDLES, "quarterly_results"),
     )
-    for kpi_id, needles, prefer in specs:
+    level_specs = (
+        ("advances", _ADVANCES_NEEDLES, "balance_sheet"),
+        ("deposits", _DEPOSITS_NEEDLES, "balance_sheet"),
+    )
+    for kpi_id, needles, prefer in rate_specs:
         snap = series_from_tables(tables, needles, kind="rate", prefer=prefer)
         if snap:
             out[kpi_id] = {**snap, "source": "Screener.in cache / company results table"}
@@ -142,30 +213,72 @@ def extract_kpis_from_raw(raw: Mapping[str, Any] | None) -> dict[str, dict[str, 
                 "points": [{"period": "key-ratio snapshot", "value": current}],
                 "source": "Screener.in key-ratio snapshot",
             }
+    for kpi_id, needles, prefer in level_specs:
+        snap = series_from_tables(tables, needles, kind="level", prefer=prefer)
+        if snap:
+            out[kpi_id] = {**snap, "source": "Screener.in cache / company results table"}
+            continue
+        current = key_level_value(tables["key_ratios"], needles)
+        if current is not None:
+            out[kpi_id] = {
+                "current": current,
+                "current_period": "key-ratio snapshot",
+                "previous": None,
+                "previous_period": "",
+                "year_ago": None,
+                "year_ago_period": "",
+                "qoq_change": None,
+                "yoy_change": None,
+                "points": [{"period": "key-ratio snapshot", "value": current}],
+                "source": "Screener.in key-ratio snapshot",
+            }
     return out
+
+
+def _print_snap(current: float, *, source: str, source_url: str = "") -> dict[str, Any]:
+    return {
+        "current": current,
+        "current_period": "extracted print",
+        "previous": None,
+        "previous_period": "",
+        "year_ago": None,
+        "year_ago_period": "",
+        "qoq_change": None,
+        "yoy_change": None,
+        "points": [{"period": "extracted print", "value": current}],
+        "source": source,
+        "source_url": source_url,
+    }
 
 
 def extract_rates_from_text(text: str, *, source: str, source_url: str = "") -> dict[str, dict[str, Any]]:
     blob = html_to_text(text) if "<" in (text or "") and ">" in (text or "") else (text or "")
     out: dict[str, dict[str, Any]] = {}
-    mapping = (("gnpa", _GNPA_LABEL), ("nnpa", _NNPA_LABEL), ("pledge", _PLEDGE_LABEL))
+    mapping = (
+        ("gnpa", _GNPA_LABEL),
+        ("nnpa", _NNPA_LABEL),
+        ("pledge", _PLEDGE_LABEL),
+        ("casa", _CASA_LABEL),
+        ("nim", _NIM_LABEL),
+        ("cet1", _CET1_LABEL),
+        ("crar", _CRAR_LABEL),
+        ("pcr", _PCR_LABEL),
+        ("slippages", _SLIPPAGE_LABEL),
+        ("credit_cost", _CREDIT_COST_LABEL),
+        ("roa", _ROA_LABEL),
+        ("roe", _ROE_LABEL),
+        ("loan_deposit", re.compile(r"(?:credit[\s-]*deposit|c[\s-]*d\s+ratio|loan[\s-]*deposit)", re.I)),
+    )
     for kpi_id, pattern in mapping:
         current = _last_percent(pattern, blob)
         if current is None:
             continue
-        out[kpi_id] = {
-            "current": current,
-            "current_period": "extracted print",
-            "previous": None,
-            "previous_period": "",
-            "year_ago": None,
-            "year_ago_period": "",
-            "qoq_change": None,
-            "yoy_change": None,
-            "points": [{"period": "extracted print", "value": current}],
-            "source": source,
-            "source_url": source_url,
-        }
+        out[kpi_id] = _print_snap(current, source=source, source_url=source_url)
+    for kpi_id, pattern in (("advances", re.compile(r"(?:gross\s+)?advances", re.I)), ("deposits", re.compile(r"(?:total\s+)?deposits", re.I))):
+        current = _last_amount(pattern, blob)
+        if current is None:
+            continue
+        out[kpi_id] = _print_snap(current, source=source, source_url=source_url)
     return out
 
 

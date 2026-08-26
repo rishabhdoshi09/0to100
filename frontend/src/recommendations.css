@@ -721,6 +721,28 @@
 .dd-kpi-static strong { display: block; margin: 3px 0 2px; }
 .dd-kpi-static small { color: var(--rw-muted); }
 .dd-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 12px; }
+.dd-acquire-banner {
+  padding: 10px 14px; border-radius: 12px; background: var(--rw-green-soft);
+  border: 1px solid var(--rw-line); color: var(--rw-ink); font-size: 13px;
+}
+.dd-coverage-strip {
+  padding: 14px 16px; border-radius: 14px; background: var(--rw-surface);
+  border: 1px solid var(--rw-line); display: grid; gap: 10px;
+}
+.dd-coverage-strip header { display: grid; gap: 2px; }
+.dd-coverage-strip header span { color: var(--rw-muted); font-size: 13px; }
+.dd-coverage-strip ul {
+  list-style: none; margin: 0; padding: 0;
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 8px;
+}
+.dd-ds {
+  padding: 8px 10px; border-radius: 10px; border: 1px solid var(--rw-line); display: grid; gap: 2px;
+}
+.dd-ds span { font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--rw-muted); }
+.dd-ds-current { border-color: #2f6f4a; }
+.dd-ds-stale { border-color: #b5812a; }
+.dd-ds-not_yet_acquired, .dd-ds-missing { opacity: .78; }
+.dd-ds-acquisition_failed, .dd-ds-source_unavailable { border-color: #a33; }
 .dd-thesis {
   padding: 14px 16px; border-radius: 14px; background: var(--rw-surface);
   border: 1px solid var(--rw-line); display: grid; gap: 6px;

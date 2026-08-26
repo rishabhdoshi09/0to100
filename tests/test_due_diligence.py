@@ -505,12 +505,12 @@ def test_acquire_endpoint_downloads_then_rebuilds(monkeypatch):
     from fastapi.testclient import TestClient
     import terminal_product_api as tpa
 
-    called = {"n": 0}
+    called = {"n": 0, "force": None}
 
-    def fake_acquire(symbol, force=True):
+    def fake_acquire(symbol, force=False, **_k):
         called["n"] += 1
-        assert force is True
-        return {"symbol": symbol, "steps": [{"id": "screener", "ok": True}], "kpis": {}}
+        called["force"] = force
+        return {"symbol": symbol, "steps": [{"id": "screener", "ok": True}], "kpis": {}, "mode": "missing_or_stale"}
 
     monkeypatch.setattr("product.due_diligence.acquire.acquire_symbol", fake_acquire)
     monkeypatch.setattr(
@@ -522,9 +522,15 @@ def test_acquire_endpoint_downloads_then_rebuilds(monkeypatch):
     assert response.status_code == 200
     body = response.json()
     assert called["n"] == 1
+    assert called["force"] is False
+    assert body["mode"] == "missing_or_stale"
     assert body["accepted"] is True
     assert body["report"]["thesis"]["not_an_llm"] is True
     assert body["places_orders"] is False
+    all_resp = client.post("/api/due-diligence/TESTBANK/acquire?mode=all")
+    assert all_resp.status_code == 200
+    assert called["force"] is True
+    assert all_resp.json()["mode"] == "all"
 
 
 def test_shortlist_and_acquire_do_not_gate_the_scanner():
@@ -874,6 +880,149 @@ def test_suggest_endpoint_does_not_scrape(monkeypatch):
     assert body["engine"] == "StockResearchEngine"
     assert any(row["symbol"] == "ICICIBANK" for row in body["matches"])
     assert scraped["called"] is False
+
+
+def test_research_coverage_is_not_quality_score():
+    payload = build_due_diligence(
+        "TESTBANK",
+        scan_payload={"records": [{"symbol": "TESTBANK", "status": "Ready to trade", "score": 89.4}]},
+        long_term_payload={"records": [{"symbol": "TESTBANK", "sector": "Banking & Finance"}]},
+        raw_fundamentals=BANK_RAW,
+        news=[],
+    )
+    coverage = payload["research_coverage"]
+    assert coverage["not_a_quality_score"] is True
+    assert coverage["required_n"] == 11
+    assert payload["fundamental_quality"]["score"] is not None
+    assert payload["fundamental_quality"]["label"] != "Unmeasured"
+    assert coverage["coverage_pct"] < payload["fundamental_quality"]["coverage_pct"]
+    by_id = {row["id"]: row for row in coverage["datasets"]}
+    assert by_id["quarterly_results"]["status"] == "current"
+    assert by_id["peer_data"]["status"] == "not_yet_acquired"
+    assert by_id["recent_news"]["status"] == "not_yet_acquired"
+    assert payload["first_screen"]["research_coverage_pct"] == coverage["coverage_pct"]
+    pledge = next(k for k in payload["kpis"] if k["id"] == "pledge")
+    assert pledge["available"] is False
+    assert pledge["availability_state"] == "not_yet_acquired"
+    assert payload["sector_kpi_label"] in {"Strong", "Adequate", "Mixed", "Weak", "Unmeasured"}
+
+
+def test_thin_research_coverage_stays_unmeasured():
+    payload = build_due_diligence(
+        "EMPTYBANK",
+        scan_payload={"records": [{"symbol": "EMPTYBANK", "status": "Ready to trade", "score": 80}]},
+        long_term_payload={"records": [{"symbol": "EMPTYBANK", "sector": "Banking & Finance"}]},
+        raw_fundamentals={
+            "available": True, "fetched_at": "", "data": {
+                "about": "A bank",
+                "quarterly_results": [_q_row("Gross NPA %")],
+                "shareholding": [],
+            },
+        },
+        news=[],
+    )
+    assert payload["fundamental_quality"]["score"] is None
+    assert payload["fundamental_quality"]["label"] == "Unmeasured"
+    assert payload["research_coverage"]["coverage_pct"] < 30
+    assert payload["fundamental_confirmation"] == "NEUTRAL"
+    gnpa = next(k for k in payload["kpis"] if k["id"] == "gnpa")
+    assert gnpa["fact"] == "Data unavailable"
+    assert gnpa["availability_state"] == "not_yet_acquired"
+
+
+def test_extract_bank_kpis_from_results_text():
+    from product.due_diligence.extract import extract_rates_from_text
+
+    parsed = extract_rates_from_text(
+        "CASA ratio was 42.1%. NIM stood at 4.35%. CET1 is 16.2%. CRAR 17.8%. "
+        "PCR at 78%. Slippages 1.1%. Credit cost 0.45%. ROA 2.1%. ROE 16.4%. "
+        "Advances stood at 12,450 crore. Deposits were 14,200 crore. "
+        "Gross NPA % as of June 2026 was 1.35%.",
+        source="NSE filing",
+        source_url="https://nsearchives.nseindia.com/x.pdf",
+    )
+    assert parsed["casa"]["current"] == 42.1
+    assert parsed["nim"]["current"] == 4.35
+    assert parsed["cet1"]["current"] == 16.2
+    assert parsed["crar"]["current"] == 17.8
+    assert parsed["pcr"]["current"] == 78
+    assert parsed["gnpa"]["current"] == 1.35
+    assert parsed["advances"]["current"] == 12450
+    assert parsed["deposits"]["current"] == 14200
+    assert parsed["casa"]["source"] == "NSE filing"
+
+
+def test_smart_acquire_skips_fresh_lanes(tmp_path, monkeypatch):
+    monkeypatch.setattr("product.due_diligence.acquire.EVIDENCE_ROOT", tmp_path)
+    hits = {"screener": 0, "nse": 0, "session": 0}
+
+    complete = {
+        **BANK_RAW,
+        "data": {
+            **BANK_RAW["data"],
+            "profit_loss": [_q_row("Net Profit+", **{"Mar 2025": 90, "Mar 2026": 100})],
+            "key_ratios": [{"name": "Stock P/E", "value": "18.2"}, {"name": "ROE", "value": "16.1"}],
+            "peer_comparison": [{"row_label": "HDFCBANK", "Mar 2026": 1}],
+            "shareholding": [
+                _q_row("Promoters+", **{"Jun 2026": 14.0}),
+                _q_row("Pledge", **{"Jun 2026": 0.0}),
+            ],
+        },
+    }
+    monkeypatch.setattr("reporting.evidence_intake.load_raw_fundamentals", lambda _s: complete)
+    monkeypatch.setattr("product.due_diligence.acquire._news_items", lambda _s: [{"headline": "Q1 results", "published_at": "2026-08-26T00:00:00+00:00"}])
+    monkeypatch.setattr("product.due_diligence.acquire._news_snippets", lambda _s: [])
+
+    def boom_screener(*_a, **_k):
+        hits["screener"] += 1
+        raise AssertionError("fresh cache must not scrape screener")
+
+    def boom_nse(*_a, **_k):
+        hits["nse"] += 1
+        raise AssertionError("fresh filings must not hit NSE")
+
+    def boom_session(*_a, **_k):
+        hits["session"] += 1
+        raise AssertionError("fresh cache must not open an NSE session")
+
+    monkeypatch.setattr("fundamentals.fetcher.get_deep_fundamentals", boom_screener)
+    monkeypatch.setattr("product.due_diligence.acquire._fetch_nse", boom_nse)
+    monkeypatch.setattr("product.due_diligence.acquire._nse_session", boom_session)
+    monkeypatch.setattr(
+        "product.due_diligence.acquire.extract_from_uploads",
+        lambda _s: {"kpis": {}, "guidance": [], "commentary": [], "order_book": [], "segments": [], "files_read": 0},
+    )
+
+    from product.due_diligence.acquire import acquire_symbol, save_autonomy_facts
+
+    save_autonomy_facts("TESTBANK", {
+        "acquired_at": "2026-08-26T00:00:00+00:00",
+        "kpis": {"gnpa": {"current": 1.8, "source": "cache"}},
+        "announcements": [{"headline": "Financial results", "url": "https://www.nseindia.com/x"}],
+        "downloads": [{"ok": True, "path": "logs/research_evidence/TESTBANK/autonomy/nse_0.json", "url": "https://www.nseindia.com/api/corporate-announcements"}],
+        "dataset_meta": {
+            ds: {"checked_at": "2026-08-26T00:00:00+00:00", "status": "current"}
+            for ds in (
+                "company_master", "quarterly_results", "annual_financials", "sector_kpis",
+                "shareholding", "promoter_pledge", "valuation", "peer_data",
+                "exchange_filings", "corporate_announcements", "recent_news",
+            )
+        },
+    })
+    payload = acquire_symbol("TESTBANK", force=False)
+    assert hits["screener"] == 0
+    assert hits["nse"] == 0
+    assert hits["session"] == 0
+    assert payload["kpis"]["gnpa"]["current"] == 1.8
+    assert any(step.get("skipped") for step in payload["steps"])
+
+
+def test_bank_framework_lists_operating_kpis():
+    from product.due_diligence.frameworks import get_framework
+
+    ids = {spec.id for spec in get_framework("bank")["kpis"]}
+    for kpi_id in ("casa", "cet1", "crar", "advances", "deposits", "pcr", "slippages", "credit_cost", "roa", "nim", "gnpa"):
+        assert kpi_id in ids
 
 
 

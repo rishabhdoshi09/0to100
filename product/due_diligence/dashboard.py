@@ -98,6 +98,8 @@ def first_screen(report: Mapping[str, Any]) -> dict[str, Any]:
     vs = str(report.get("vs_technical_setup") or "UNMEASURED")
     confirmation = str(report.get("fundamental_confirmation") or confirmation_label(vs))
     snapshot = dict(report.get("company_snapshot") or {})
+    coverage = dict(report.get("research_coverage") or {})
+    as_of = dict(report.get("as_of") or {})
     return {
         "company": snapshot.get("company") or report.get("company"),
         "ticker": report.get("symbol"),
@@ -107,15 +109,22 @@ def first_screen(report: Mapping[str, Any]) -> dict[str, Any]:
         "breakout_quality": technical.get("breakout_quality"),
         "fundamental_quality": quality.get("score"),
         "fundamental_quality_label": quality.get("label"),
+        "research_coverage_pct": coverage.get("coverage_pct"),
+        "research_coverage_summary": coverage.get("summary"),
+        "research_coverage_needs_acquire": bool(coverage.get("needs_acquire")),
         "fundamental_confirmation": confirmation,
         "vs_detail": report.get("vs_detail"),
         "business_trend": report.get("business_trend"),
         "earnings_trend": report.get("earnings_quality"),
-        "sector_kpis": report.get("framework", {}).get("label") if report.get("kpis") else "Unmeasured",
+        "sector_kpis": report.get("sector_kpi_label") or (
+            report.get("framework", {}).get("label") if report.get("kpis") else "Unmeasured"
+        ),
+        "sector_kpi_framework": report.get("framework", {}).get("label"),
         "balance_sheet": report.get("balance_sheet_quality"),
         "critical_red_flags": flags.get("n_critical", 0),
         "warnings": flags.get("n_warnings", 0),
         "latest_financial_quarter": snapshot.get("latest_reported_quarter") or "Data unavailable",
+        "latest_data_refresh": as_of.get("latest_data_refresh") or "Data unavailable",
         "data_freshness": snapshot.get("data_freshness") or "MISSING",
         "improving": list(report.get("strengths") or []),
         "deteriorating": list(report.get("concerns") or []),
@@ -126,6 +135,7 @@ def first_screen(report: Mapping[str, Any]) -> dict[str, Any]:
                 "category": e.get("category") or e.get("event_type"),
                 "materiality": e.get("materiality") or "Unmeasured",
                 "source": e.get("source"),
+                "url": e.get("url"),
             }
             for e in list(report.get("events") or [])[:5]
         ],

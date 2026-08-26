@@ -571,17 +571,19 @@ def stock_investigator_suggest(q: str = "", limit: int = 8) -> dict[str, Any]:
 
 
 @app.post("/api/due-diligence/{symbol}/acquire")
-def acquire_due_diligence(symbol: str) -> dict[str, Any]:
-    """Download official sources for this symbol, persist them, then rebuild Investigate from files."""
+def acquire_due_diligence(symbol: str, mode: str = "missing_or_stale") -> dict[str, Any]:
+    """Download missing/stale datasets (or all, if mode=all), persist, then rebuild Investigate from files."""
     try:
         from product.due_diligence import build_due_diligence
         from product.due_diligence.acquire import acquire_symbol
 
         clean = clean_symbol(symbol)
-        acquired = acquire_symbol(clean, force=True)
+        force_all = str(mode or "").lower() in {"all", "force", "refresh_all"}
+        acquired = acquire_symbol(clean, force=force_all)
         return {
             "accepted": True,
             "symbol": clean,
+            "mode": "all" if force_all else "missing_or_stale",
             "acquire": acquired,
             "report": build_due_diligence(clean),
             "places_orders": False,

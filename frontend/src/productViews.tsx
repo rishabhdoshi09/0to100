@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { SectionTabs, StatusBadge, EmptyState } from './designSystem'
 import {
   ChartWorkspace,
@@ -306,7 +306,7 @@ function InvestigatePanel({
   decision?: StockWorkspace['decision_memory']
   onResearchData: () => void
   onRefresh: () => void
-  onAcquire: () => void
+  onAcquire: (mode?: 'missing_or_stale' | 'all') => void
   busy: string
 }) {
   const [openId, setOpenId] = useState<string | null>(null)
@@ -348,7 +348,7 @@ function InvestigatePanel({
               <div>
                 <span>{kpi.label}</span>
                 <strong>{kpi.available ? kpi.fact : 'Data unavailable'}</strong>
-                <small>{kpi.available ? `${kpi.trend} · ${kpi.pillar}` : 'Missing from cache — not estimated.'}</small>
+                <small>{kpi.available ? `${kpi.trend} · ${kpi.pillar}` : `${kpi.availability_label || 'Not yet acquired'} — not estimated.`}</small>
               </div>
               {heights.length > 1 ? (
                 <div className="dd-spark" aria-hidden="true">
@@ -385,9 +385,16 @@ function InvestigatePanel({
       })}
     </div>
   )
+  const coverage = report.research_coverage
+  const coveragePct = coverage?.coverage_pct
+  const acquiring = busy === 'ACQUIRE_DUE_DILIGENCE' || busy === 'ACQUIRE_DUE_DILIGENCE_ALL'
   return (
     <div className="dd-root">
       <p className="dd-question">{report.question}</p>
+      {acquiring ? (
+        <aside className="dd-acquire-banner" aria-live="polite">Refreshing missing/stale research data… Investigate GET stays cache-only; this is an explicit acquire.</aside>
+      ) : null}
+      {error && report ? <div className="api-warning">{error}</div> : null}
       <header className="dd-hero">
         <div>
           <span>{String(snap.sector || report.profile.sector || 'Unclassified')}</span>
@@ -401,14 +408,36 @@ function InvestigatePanel({
         </aside>
       </header>
       <div className="dd-score-grid dd-first-grid">
-        <article><span>Technical score</span><strong>{screen?.technical_score != null ? `${screen.technical_score}/100` : (report.technical_context.scanner_score != null ? `${report.technical_context.scanner_score}/100` : 'Data unavailable')}</strong></article>
+        <article><span>Technical score</span><strong>{screen?.technical_score != null ? `${screen.technical_score}` : (report.technical_context.scanner_score != null ? `${report.technical_context.scanner_score}` : 'Data unavailable')}</strong></article>
         <article><span>Fundamental quality</span><strong>{scoreLabel}</strong><small>{report.fundamental_quality.explain}</small></article>
+        <article><span>Research coverage</span><strong>{coveragePct == null ? 'Unmeasured' : `${coveragePct}%`}</strong><small>{coverage?.summary || 'How much of the sector-required dataset is on file — not a quality score.'}</small></article>
         <article><span>Business trend</span><strong>{report.business_trend}</strong></article>
-        <article><span>Earnings trend</span><strong>{report.earnings_quality}</strong></article>
-        <article><span>Balance sheet</span><strong>{report.balance_sheet_quality}</strong></article>
+        <article><span>{report.framework.label || 'Sector'} KPIs</span><strong>{screen?.sector_kpis || report.sector_kpi_label || 'Unmeasured'}</strong></article>
         <article><span>Critical red flags</span><strong>{report.flag_groups?.n_critical ?? 0}</strong></article>
         <article><span>Warnings</span><strong>{report.flag_groups?.n_warnings ?? report.red_flags.length}</strong></article>
-        <article><span>Latest quarter</span><strong>{screen?.latest_financial_quarter || report.as_of.latest_financial_period || 'Data unavailable'}</strong><small>Freshness: {report.as_of.fundamentals_freshness || 'MISSING'}</small></article>
+        <article><span>Latest results</span><strong>{screen?.latest_financial_quarter || report.as_of.latest_financial_period || 'Data unavailable'}</strong><small>Refresh: {screen?.latest_data_refresh || report.as_of.latest_data_refresh || report.as_of.fundamentals_fetched_at || 'Data unavailable'}</small></article>
+      </div>
+      <div className="dd-coverage-strip" aria-label="Research dataset inventory">
+        <header>
+          <strong>Research data: {coverage?.summary || '0/0 datasets available'}</strong>
+          <span>Acquire only what is missing or stale. Failures stay Data unavailable.</span>
+        </header>
+        <ul>
+          {(coverage?.datasets || []).map((row) => (
+            <li key={row.id} className={`dd-ds dd-ds-${row.status}`}>
+              <span>{row.label}</span>
+              <strong>{row.age_label || row.status}</strong>
+            </li>
+          ))}
+        </ul>
+        <div className="dd-actions">
+          <button type="button" className="reco-primary" disabled={acquiring || !coverage?.needs_acquire} onClick={() => onAcquire('missing_or_stale')}>
+            {busy === 'ACQUIRE_DUE_DILIGENCE' ? 'Refreshing missing/stale data…' : 'Refresh Missing/Stale Data'}
+          </button>
+          <button type="button" className="reco-ghost" disabled={acquiring} onClick={() => onAcquire('all')}>
+            {busy === 'ACQUIRE_DUE_DILIGENCE_ALL' ? 'Re-downloading all sources…' : 'Re-download all sources'}
+          </button>
+        </div>
       </div>
       <div className="dd-snapshot-grid">
         <div><span>Market cap</span><strong>{String(snap.market_cap_display || 'Data unavailable')}</strong></div>
@@ -458,6 +487,7 @@ function InvestigatePanel({
                     <li key={`${event.date}-${event.headline}`}>
                       <strong>{event.headline}</strong>
                       <span>{event.date} · {event.category} · {event.materiality} · {event.source || 'source unavailable'}</span>
+                      {event.url ? <a href={event.url} target="_blank" rel="noreferrer">Original source</a> : null}
                     </li>
                   ))}
                 </ul>
@@ -715,12 +745,15 @@ function InvestigatePanel({
           )
           : <EmptyState title="Required evidence rows that this desk already tracks are present" />}
         <div className="dd-actions">
-          <button type="button" className="reco-primary" disabled={busy === 'ACQUIRE_DUE_DILIGENCE'} onClick={onAcquire}>
-            {busy === 'ACQUIRE_DUE_DILIGENCE' ? 'Acquiring from the internet…' : 'Acquire from the internet'}
+          <button type="button" className="reco-primary" disabled={acquiring || !coverage?.needs_acquire} onClick={() => onAcquire('missing_or_stale')}>
+            {busy === 'ACQUIRE_DUE_DILIGENCE' ? 'Refreshing missing/stale data…' : 'Refresh Missing/Stale Data'}
           </button>
           <button type="button" className="reco-primary" onClick={onResearchData}>Complete missing research data</button>
           <button type="button" className="reco-ghost" disabled={busy === 'REFRESH_STOCK_FUNDAMENTALS'} onClick={onRefresh}>
             {busy === 'REFRESH_STOCK_FUNDAMENTALS' ? 'Refreshing…' : 'Refresh this stock’s fundamentals'}
+          </button>
+          <button type="button" className="reco-ghost" disabled={acquiring} onClick={() => onAcquire('all')}>
+            {busy === 'ACQUIRE_DUE_DILIGENCE_ALL' ? 'Re-downloading all sources…' : 'Re-download all sources'}
           </button>
         </div>
       </Panel>
@@ -749,6 +782,7 @@ export function ProductStockIntelligenceView(props: ViewProps) {
   const [dd, setDd] = useState<DueDiligenceReport | null>(null)
   const [ddLoading, setDdLoading] = useState(false)
   const [ddError, setDdError] = useState('')
+  const autoAcquired = useRef(new Set<string>())
 
   const intelTabs = ['Investigate', 'Overview', 'Chart', 'Financials', 'Ratios', 'Ownership', 'Events', 'Peers', 'Evidence']
 
@@ -800,9 +834,21 @@ export function ProductStockIntelligenceView(props: ViewProps) {
       const next = await fetchDueDiligence(selected)
       setDd(next)
       setDdError('')
+      setDdLoading(false)
+      if (next.research_coverage?.needs_acquire && !autoAcquired.current.has(selected)) {
+        autoAcquired.current.add(selected)
+        setBusy('ACQUIRE_DUE_DILIGENCE')
+        try {
+          const result = await acquireDueDiligence(selected, 'missing_or_stale')
+          if (result.report) setDd(result.report)
+        } catch (reason) {
+          setDdError(reason instanceof Error ? reason.message : 'Acquire failed — showing files on disk.')
+        } finally {
+          setBusy('')
+        }
+      }
     } catch (reason) {
       setDdError(reason instanceof Error ? reason.message : 'Due diligence failed')
-    } finally {
       setDdLoading(false)
     }
   }
@@ -811,7 +857,7 @@ export function ProductStockIntelligenceView(props: ViewProps) {
     if (tab === 'Investigate' && selected) void loadDd()
   }, [tab, selected, dashboard.scan.scanned_at])
 
-  const runAction = async (control: ControlName | 'REFRESH_STOCK_FUNDAMENTALS' | 'ACQUIRE_DUE_DILIGENCE') => {
+  const runAction = async (control: ControlName | 'REFRESH_STOCK_FUNDAMENTALS' | 'ACQUIRE_DUE_DILIGENCE' | 'ACQUIRE_DUE_DILIGENCE_ALL') => {
     if (!selected) return
     setBusy(control)
     setError('')
@@ -820,8 +866,8 @@ export function ProductStockIntelligenceView(props: ViewProps) {
         const result = await refreshStockFundamentals(selected)
         setWorkspace(result.workspace)
         if (tab === 'Investigate') await loadDd()
-      } else if (control === 'ACQUIRE_DUE_DILIGENCE') {
-        const result = await acquireDueDiligence(selected)
+      } else if (control === 'ACQUIRE_DUE_DILIGENCE' || control === 'ACQUIRE_DUE_DILIGENCE_ALL') {
+        const result = await acquireDueDiligence(selected, control === 'ACQUIRE_DUE_DILIGENCE_ALL' ? 'all' : 'missing_or_stale')
         if (result.report) setDd(result.report)
         else await loadDd()
       } else {
@@ -882,7 +928,7 @@ export function ProductStockIntelligenceView(props: ViewProps) {
           decision={workspace?.decision_memory}
           onResearchData={() => setActive('Research Data')}
           onRefresh={() => void runAction('REFRESH_STOCK_FUNDAMENTALS')}
-          onAcquire={() => void runAction('ACQUIRE_DUE_DILIGENCE')}
+          onAcquire={(mode) => void runAction(mode === 'all' ? 'ACQUIRE_DUE_DILIGENCE_ALL' : 'ACQUIRE_DUE_DILIGENCE')}
           busy={busy}
         />
       )}
@@ -1050,6 +1096,7 @@ export function StockInvestigatorView(props: ViewProps) {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [busy, setBusy] = useState('')
+  const autoAcquired = useRef(new Set<string>())
 
   useEffect(() => {
     const needle = query.trim()
@@ -1071,10 +1118,22 @@ export function StockInvestigatorView(props: ViewProps) {
       const next = await fetchDueDiligence(symbol)
       setReport(next)
       setError('')
+      setLoading(false)
+      if (next.research_coverage?.needs_acquire && !autoAcquired.current.has(symbol)) {
+        autoAcquired.current.add(symbol)
+        setBusy('ACQUIRE_DUE_DILIGENCE')
+        try {
+          const result = await acquireDueDiligence(symbol, 'missing_or_stale')
+          if (result.report) setReport(result.report)
+        } catch (reason) {
+          setError(reason instanceof Error ? reason.message : 'Acquire failed — showing files on disk.')
+        } finally {
+          setBusy('')
+        }
+      }
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : 'Due diligence failed')
       setReport(null)
-    } finally {
       setLoading(false)
     }
   }
@@ -1091,11 +1150,11 @@ export function StockInvestigatorView(props: ViewProps) {
     setMatches([])
   }
 
-  const runAcquire = async () => {
+  const runAcquire = async (mode: 'missing_or_stale' | 'all' = 'missing_or_stale') => {
     if (!selected) return
-    setBusy('ACQUIRE_DUE_DILIGENCE')
+    setBusy(mode === 'all' ? 'ACQUIRE_DUE_DILIGENCE_ALL' : 'ACQUIRE_DUE_DILIGENCE')
     try {
-      const result = await acquireDueDiligence(selected)
+      const result = await acquireDueDiligence(selected, mode)
       if (result.report) setReport(result.report)
       else await load(selected)
     } catch (reason) {
@@ -1138,7 +1197,7 @@ export function StockInvestigatorView(props: ViewProps) {
         error={error}
         onResearchData={() => setActive('Research Data')}
         onRefresh={() => { if (selected) void load(selected) }}
-        onAcquire={() => void runAcquire()}
+        onAcquire={(mode) => void runAcquire(mode)}
         busy={busy}
       />
     </section>

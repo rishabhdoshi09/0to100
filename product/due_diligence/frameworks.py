@@ -80,6 +80,10 @@ _PUBLIC = _k(
     "public", "Public holding", "shareholding", ("public",),
     higher_is_better=False, kind="rate", unit="%", pillar="governance", weight=2, missing_ok=True,
 )
+_ROA = _k(
+    "roa", "Return on assets", "key_ratios", ("roa", "return on assets"),
+    higher_is_better=True, kind="rate", unit="%", pillar="profitability", weight=6, missing_ok=True,
+)
 _ROE = _k(
     "roe", "Return on equity", "key_ratios", ("roe", "return on equity"),
     higher_is_better=True, kind="rate", unit="%", pillar="profitability", weight=6, missing_ok=True,
@@ -123,15 +127,46 @@ BANK = (
         higher_is_better=True, kind="rate", unit="%", pillar="funding", weight=8, missing_ok=True,
     ),
     _k(
-        "cet1", "CET1 / capital adequacy", "quarterly_results",
-        ("cet1", "capital adequacy", "crar", "tier 1"),
+        "cet1", "CET1", "quarterly_results",
+        ("cet1", "common equity tier"),
         higher_is_better=True, kind="rate", unit="%", pillar="capital", weight=8, missing_ok=True,
+    ),
+    _k(
+        "crar", "CRAR / capital adequacy", "quarterly_results",
+        ("crar", "capital adequacy"),
+        higher_is_better=True, kind="rate", unit="%", pillar="capital", weight=6, missing_ok=True,
     ),
     _k(
         "advances", "Advances / loans", "quarterly_results",
         ("advances", "loans", "credit growth"),
         higher_is_better=True, kind="level", unit="₹ cr", pillar="growth", weight=6, missing_ok=True,
     ),
+    _k(
+        "deposits", "Deposits", "quarterly_results",
+        ("deposits", "total deposits"),
+        higher_is_better=True, kind="level", unit="₹ cr", pillar="funding", weight=6, missing_ok=True,
+    ),
+    _k(
+        "pcr", "Provision coverage (PCR)", "quarterly_results",
+        ("pcr", "provision coverage"),
+        higher_is_better=True, kind="rate", unit="%", pillar="asset_quality", weight=6, missing_ok=True,
+    ),
+    _k(
+        "slippages", "Slippages", "quarterly_results",
+        ("slippage", "slippages"),
+        higher_is_better=False, kind="rate", unit="%", pillar="asset_quality", weight=5, missing_ok=True,
+    ),
+    _k(
+        "credit_cost", "Credit cost", "quarterly_results",
+        ("credit cost", "credit costs"),
+        higher_is_better=False, kind="rate", unit="%", pillar="asset_quality", weight=5, missing_ok=True,
+    ),
+    _k(
+        "loan_deposit", "Loan / deposit ratio", "quarterly_results",
+        ("credit deposit", "cd ratio", "loan deposit", "loan to deposit"),
+        higher_is_better=False, kind="rate", unit="%", pillar="funding", weight=4, missing_ok=True,
+    ),
+    _ROA, _ROE,
     _FII, _DII, _PUBLIC,
 )
 
