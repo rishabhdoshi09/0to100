@@ -24,6 +24,31 @@ def _value(obj: Any, name: str, default: Any = None) -> Any:
     return getattr(obj, name, default)
 
 
+def _opt_float(obj: Any, name: str) -> float | None:
+    """Persist a number only when the scanner actually set it. Missing stays missing."""
+    if isinstance(obj, Mapping) and name not in obj:
+        return None
+    if not isinstance(obj, Mapping) and not hasattr(obj, name):
+        return None
+    raw = _value(obj, name, None)
+    if raw is None or raw == "":
+        return None
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return None
+
+
+def _opt_bool(obj: Any, name: str) -> bool | None:
+    if isinstance(obj, Mapping):
+        if name not in obj:
+            return None
+        return bool(obj.get(name))
+    if not hasattr(obj, name):
+        return None
+    return bool(getattr(obj, name))
+
+
 def _record(signal: Any, names: Mapping[str, str], fno_symbols: set[str]) -> dict[str, Any]:
     symbol = str(_value(signal, "symbol", "") or "").upper()
     signals = [str(x) for x in (_value(signal, "signals", []) or [])]
@@ -38,7 +63,12 @@ def _record(signal: Any, names: Mapping[str, str], fno_symbols: set[str]) -> dic
         status = "Watch for breakout"
     else:
         status = "Watch"
-    return {
+    cats_raw = _value(signal, "categories", None)
+    if isinstance(cats_raw, (set, tuple, list)):
+        categories = sorted({str(c) for c in cats_raw if c})
+    else:
+        categories = []
+    row = {
         "symbol": symbol,
         "company": str(names.get(symbol, symbol)),
         "status": status,
@@ -56,7 +86,20 @@ def _record(signal: Any, names: Mapping[str, str], fno_symbols: set[str]) -> dic
         "signals": signals,
         "reasons": reasons,
         "why": reasons[0] if reasons else "No explanation recorded",
+        "breakout_grade": str(_value(signal, "breakout_grade", "") or ""),
+        "categories": categories,
     }
+    for key in (
+        "change_pct", "pivot_distance_pct", "breakout_conviction", "avg_vol20",
+    ):
+        value = _opt_float(signal, key)
+        if value is not None:
+            row[key] = value
+    for key in ("above_sma50", "above_sma200"):
+        flag = _opt_bool(signal, key)
+        if flag is not None:
+            row[key] = flag
+    return row
 
 
 def build_scan_payload(

@@ -773,6 +773,19 @@ export type RecommendationCard = {
   next_step?: string
   evidence_panel?: RecommendationEvidencePanel
   case?: RecommendationCase
+  methods?: RecoMethod[]
+  method_confirms?: number
+  method_fails?: number
+  quality_score?: number | null
+  method_line?: string
+}
+
+export type RecoMethod = {
+  id: string
+  label: string
+  status: 'pass' | 'fail' | 'unknown' | string
+  detail?: string
+  points?: number | null
 }
 
 export type RecommendationCase = {
@@ -832,6 +845,14 @@ export type RecommendationsWorkspace = {
   records_status: string
   same_ist_day: boolean
   cmp_note: string
+  scan_meta?: {
+    market_scanned_at?: string
+    market_row_count?: number
+    long_term_scanned_at?: string
+    long_term_row_count?: number
+    assigned_count?: number
+  }
+  methods_note?: string
   desk?: RecommendationDesk
   categories: RecommendationCategory[]
   lifecycle: {
@@ -841,6 +862,7 @@ export type RecommendationsWorkspace = {
     closed_count: number
   }
   disclaimer: string
+  error?: string
 }
 
 export const fetchRecommendationsWorkspace = (): Promise<RecommendationsWorkspace> =>
@@ -944,6 +966,18 @@ export type DeskNote = {
   error?: string
 }
 
+export type ScanHighlights = {
+  scanned_at?: string
+  row_count?: number
+  same_ist_day?: boolean
+  ready_to_trade?: number
+  breakout_symbols?: string[]
+  pre_breakout_symbols?: string[]
+  session_gainers?: MarketMover[]
+  session_losers?: MarketMover[]
+  empty_detail?: string
+}
+
 export type MarketReportsWorkspace = {
   schema_version: number
   generated_at: string
@@ -953,6 +987,9 @@ export type MarketReportsWorkspace = {
   reports: MarketReportItem[]
   today_pulse: Record<string, unknown>
   desk_note?: DeskNote
+  scan_highlights?: ScanHighlights
+  news_meta?: { article_count?: number; available?: boolean }
+  empty_detail?: string
   error: string
   disclaimer: string
 }

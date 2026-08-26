@@ -471,10 +471,12 @@
 .reco-pick-tags {
   display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px;
 }
-.reco-evidence-tag {
-  font-size: 11px; letter-spacing: 0.02em; color: var(--rw-muted);
-  border-bottom: 1px solid var(--rw-line); padding: 0 0 1px;
-  text-transform: lowercase;
+.reco-evidence-tag.is-pass {
+  color: var(--rw-green);
+  border-bottom-color: var(--rw-green);
+  text-transform: none;
+  letter-spacing: 0.01em;
+  font-weight: 600;
 }
 .reco-empty {
   max-width: 720px; padding: 36px 20px; text-align: center;
@@ -482,6 +484,18 @@
   background: rgba(255,255,255,.7); color: var(--rw-muted);
 }
 .reco-empty strong { display: block; color: var(--rw-ink); margin-bottom: 6px; font-size: 16px; }
+.reco-scan-meta {
+  margin: 0 0 14px; color: var(--rw-muted); font-size: 13px; max-width: 72ch; line-height: 1.45;
+}
+.scan-highlights {
+  margin: 0 0 22px; padding: 16px 18px;
+  background: var(--rw-surface); border: 1px solid var(--rw-line);
+  border-radius: 14px; box-shadow: var(--rw-shadow);
+}
+.scan-highlights h2 {
+  margin: 0 0 8px; font-family: 'Fraunces', Georgia, serif; font-size: 20px;
+}
+.scan-highlights p { margin: 0 0 6px; color: var(--rw-muted); font-size: 14px; line-height: 1.45; }
 .reco-foot {
   margin-top: 18px; font-size: 12px; color: var(--rw-muted); max-width: 720px;
 }

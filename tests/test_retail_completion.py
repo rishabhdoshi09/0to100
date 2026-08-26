@@ -31,6 +31,23 @@ def test_saved_scan_preserves_full_universe_and_watchlist(tmp_path):
     assert watchlist_rows(loaded)[0]["status"] == "Ready to trade"
 
 
+def test_saved_scan_keeps_breakout_grade_and_change_pct():
+    class Graded(Signal):
+        def __init__(self):
+            super().__init__("GRD", signals=["BREAKOUT_52W"], verdict="BUY", score=82)
+            self.change_pct = 2.4
+            self.breakout_grade = "A"
+            self.above_sma50 = True
+            self.avg_vol20 = 800000
+
+    payload = build_scan_payload({"GRD": "Graded"}, [Graded()])
+    row = payload["records"][0]
+    assert row["breakout_grade"] == "A"
+    assert row["change_pct"] == 2.4
+    assert row["above_sma50"] is True
+    assert row["avg_vol20"] == 800000
+
+
 def test_market_view_uses_plain_language():
     view = build_market_view({
         "regime_score": 72, "risk_mode": "RISK_ON", "breakout_environment": "FAVORABLE",

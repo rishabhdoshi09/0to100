@@ -247,12 +247,22 @@ def recommendations_workspace(
     key = (scan.get("scanned_at"), long_term.get("scanned_at"), bool(refresh))
     if not refresh and _reco_memo.get("key") == key and _reco_memo.get("payload"):
         return _reco_memo["payload"]
-    payload = build_recommendations_workspace(
-        scan_payload=scan,
-        long_term_payload=long_term,
-        refresh_technicals=bool(refresh),
-        settle_cases=False,
-    )
+    try:
+        payload = build_recommendations_workspace(
+            scan_payload=scan,
+            long_term_payload=long_term,
+            refresh_technicals=bool(refresh),
+            settle_cases=False,
+        )
+    except Exception as exc:
+        fallback = build_recommendations_workspace(
+            scan_payload={"records": [], "scanned_at": ""},
+            long_term_payload={"records": []},
+            refresh_technicals=False,
+            settle_cases=False,
+        )
+        fallback["error"] = str(exc)[:200]
+        return fallback
     _reco_memo["key"] = key
     _reco_memo["payload"] = payload
     return payload
@@ -268,12 +278,33 @@ def market_reports_workspace(
         news = core._news_payload()
     except Exception:
         news = {}
-    return build_market_reports_workspace(
-        persist_today=True,
-        news_payload=news,
-        scan_payload=core._scan_payload(),
-        rebuild=bool(rebuild),
-    )
+    try:
+        return build_market_reports_workspace(
+            persist_today=True,
+            news_payload=news,
+            scan_payload=core._scan_payload(),
+            rebuild=bool(rebuild),
+        )
+    except Exception as exc:
+        return {
+            "schema_version": 2,
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "as_of_ist": "",
+            "title": "Stay on top of the markets",
+            "blurb": (
+                "Daily Market Pulse plus a sourced desk note. Headlines stay sourced. "
+                "Empty stays empty."
+            ),
+            "load_note": "",
+            "reports": [],
+            "today_pulse": {},
+            "desk_note": {"wrap": [], "desks": [], "explainers": [], "error": str(exc)[:200]},
+            "scan_highlights": {"row_count": 0, "breakout_symbols": [], "empty_detail": str(exc)[:200]},
+            "news_meta": {"article_count": 0, "available": False},
+            "empty_detail": "Market reports could not be assembled from the current files.",
+            "error": str(exc)[:200],
+            "disclaimer": "Market reports are research summaries, not trade instructions.",
+        }
 
 
 def compare_workspace(symbols: str = Query("", description="Comma-separated NSE symbols")) -> dict[str, Any]:
