@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from research.autonomy import default_root
-from research.autonomy.telegram_notifications import TelegramNotifier, sniper_symbols
+from research.autonomy.telegram_notifications import TelegramNotifier, live_sniper_symbols
 
 
 def _live_feed_health(root: Path) -> dict[str, Any]:
@@ -44,7 +44,7 @@ def delivery_status(root: Path | None = None) -> dict[str, Any]:
     try:
         from product.scan_store import load_scan
         payload = load_scan() or {}
-        watch = len(sniper_symbols(payload))
+        watch = len(live_sniper_symbols(payload, limit=40))
         if not watch:
             watch = int(scan.get("sniper_watch") or 0)
     except Exception:

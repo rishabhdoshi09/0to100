@@ -436,7 +436,7 @@ def test_delivery_status_explains_unpushed_scan(tmp_path, monkeypatch):
     engine.configured = False
     n.notify_scan(_payload(), phase="intraday")
     monkeypatch.setattr(TD.TelegramNotifier, "configured", lambda self: True)
-    monkeypatch.setattr(TD, "sniper_symbols", lambda payload: {"AAA", "BBB"})
+    monkeypatch.setattr(TD, "live_sniper_symbols", lambda payload, limit=40: ["AAA", "BBB"])
     monkeypatch.setattr("product.scan_store.load_scan", lambda: _payload())
     status = TD.delivery_status(tmp_path)
     assert status["configured"] is True
