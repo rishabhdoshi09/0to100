@@ -145,6 +145,6 @@ def score_breakdown(
             f"Overall {overall}/100 from measured sector KPIs. "
             f"Bucket weights are {framework_id}-specific. Missing buckets are skipped."
             if overall is not None else
-            "Fundamental quality is Unmeasured — coverage below 30% or no KPI values."
+            "Fundamental quality is Unmeasured — score coverage below 40% or no KPI values."
         ),
     }

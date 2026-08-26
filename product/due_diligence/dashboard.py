@@ -99,7 +99,11 @@ def first_screen(report: Mapping[str, Any]) -> dict[str, Any]:
     confirmation = str(report.get("fundamental_confirmation") or confirmation_label(vs))
     snapshot = dict(report.get("company_snapshot") or {})
     coverage = dict(report.get("research_coverage") or {})
+    decision = dict(report.get("decision_coverage") or {})
     as_of = dict(report.get("as_of") or {})
+    missing = list(report.get("missing_evidence") or [])
+    confirmation_reason = str(report.get("confirmation_reason") or "")
+    qualifier = str(report.get("confirmation_qualifier") or "")
     return {
         "company": snapshot.get("company") or report.get("company"),
         "ticker": report.get("symbol"),
@@ -109,10 +113,15 @@ def first_screen(report: Mapping[str, Any]) -> dict[str, Any]:
         "breakout_quality": technical.get("breakout_quality"),
         "fundamental_quality": quality.get("score"),
         "fundamental_quality_label": quality.get("label"),
+        "score_coverage_pct": quality.get("score_coverage_pct") if quality.get("score_coverage_pct") is not None else quality.get("coverage_pct"),
         "research_coverage_pct": coverage.get("coverage_pct"),
         "research_coverage_summary": coverage.get("summary"),
         "research_coverage_needs_acquire": bool(coverage.get("needs_acquire")),
+        "data_coverage_pct": coverage.get("coverage_pct"),
+        "decision_coverage_pct": decision.get("coverage_pct") if decision.get("coverage_pct") is not None else report.get("decision_coverage_pct"),
         "fundamental_confirmation": confirmation,
+        "confirmation_reason": confirmation_reason,
+        "confirmation_qualifier": qualifier,
         "vs_detail": report.get("vs_detail"),
         "business_trend": report.get("business_trend"),
         "earnings_trend": report.get("earnings_quality"),
@@ -120,6 +129,10 @@ def first_screen(report: Mapping[str, Any]) -> dict[str, Any]:
             report.get("framework", {}).get("label") if report.get("kpis") else "Unmeasured"
         ),
         "sector_kpi_framework": report.get("framework", {}).get("label"),
+        "sector_kpi_detail": report.get("sector_kpi_detail"),
+        "critical_metrics_missing": list(report.get("critical_metrics_missing") or []),
+        "missing_evidence": missing,
+        "deeper_acquire_available": bool(report.get("deeper_acquire_available")),
         "balance_sheet": report.get("balance_sheet_quality"),
         "critical_red_flags": flags.get("n_critical", 0),
         "warnings": flags.get("n_warnings", 0),

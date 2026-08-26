@@ -20,7 +20,7 @@ BANK_RAW = {
         "about": "Test Bank Limited is engaged in commercial banking and treasury operations.",
         "quarterly_results": [
             _q_row("Revenue+", **{"Jun 2025": 90, "Sep 2025": 95, "Dec 2025": 100, "Mar 2026": 108, "Jun 2026": 112}),
-            _q_row("Financing Margin %", **{"Jun 2025": 34, "Sep 2025": 33, "Dec 2025": 32, "Mar 2026": 31, "Jun 2026": 30}),
+            _q_row("Net Interest Margin %", **{"Jun 2025": 3.60, "Sep 2025": 3.50, "Dec 2025": 3.40, "Mar 2026": 3.30, "Jun 2026": 3.20}),
             _q_row("Gross NPA %", **{"Jun 2025": 2.4, "Sep 2025": 2.2, "Dec 2025": 2.1, "Mar 2026": 1.9, "Jun 2026": 1.8}),
             _q_row("Net NPA %", **{"Jun 2025": 0.9, "Sep 2025": 0.8, "Dec 2025": 0.7, "Mar 2026": 0.6, "Jun 2026": 0.5}),
             _q_row("Net Profit+", **{"Jun 2025": 20, "Sep 2025": 22, "Dec 2025": 24, "Mar 2026": 25, "Jun 2026": 27}),
@@ -140,7 +140,7 @@ def test_nim_pressure_is_a_concern_not_invented():
     )
     nim = next(k for k in payload["kpis"] if k["id"] == "nim")
     assert nim["trend"] == "deteriorating"
-    assert any("Financing margin" in c or "margin" in c.lower() for c in payload["concerns"])
+    assert any("NIM" in c or "interest margin" in c.lower() for c in payload["concerns"])
 
 
 def test_broker_roundup_is_not_material():
@@ -560,7 +560,8 @@ def test_attachment_rank_prefers_result_filings():
     from product.due_diligence.extract import extract_rates_from_text
 
     assert _attachment_rank("submitted the financial results for the period ended Jun 30, 2026") == 0
-    assert _attachment_rank("informed the Exchange about Transcript") == 1
+    assert _attachment_rank("informed the Exchange about Transcript") == 2
+    assert _attachment_rank("Q1 FY27 investor presentation") == 1
     assert _attachment_rank("Schedule of investor meet") == 99
     assert _attachment_rank("Audited financial results newspaper advertisement under Regulation 47") == 99
     parsed = extract_rates_from_text(
@@ -571,7 +572,7 @@ def test_attachment_rank_prefers_result_filings():
     assert parsed["gnpa"]["current"] == 1.35
     assert parsed["nnpa"]["current"] == 0.42
     assert _attachment_rank("Annual Report for FY 2025") == 4
-    assert _attachment_rank("Audio recording of concall") == 1
+    assert _attachment_rank("Audio recording of concall") == 2
 
 
 def test_extract_research_pack_fills_order_book_segments_commentary():
@@ -752,7 +753,10 @@ def test_stock_research_engine_is_the_same_builder():
     assert payload["engine"] == "StockResearchEngine"
     assert payload["uses_llm"] is False
     assert payload["fundamental_confirmation"] in {
-        "STRONG SUPPORT", "SUPPORT", "NEUTRAL", "CAUTION", "CONTRADICTS",
+        "STRONG SUPPORT", "SUPPORT", "SUPPORT (Low Evidence)",
+        "NEUTRAL", "NEUTRAL — insufficient fundamental evidence",
+        "NEUTRAL — mixed fundamentals", "CAUTION", "CONTRADICTS",
+        "CONTRADICTS (Low Evidence)",
     }
     assert payload["first_screen"]["ticker"] == "TESTIT"
     assert payload["kpis"] == alias["kpis"]
@@ -904,7 +908,9 @@ def test_research_coverage_is_not_quality_score():
     pledge = next(k for k in payload["kpis"] if k["id"] == "pledge")
     assert pledge["available"] is False
     assert pledge["availability_state"] == "not_yet_acquired"
-    assert payload["sector_kpi_label"] in {"Strong", "Adequate", "Mixed", "Weak", "Unmeasured"}
+    assert payload["sector_kpi_label"] in {"Strong", "Healthy", "Mixed", "Weak", "Insufficient Evidence"}
+    assert payload["first_screen"]["decision_coverage_pct"] is not None
+    assert payload["confirmation_reason"]
 
 
 def test_thin_research_coverage_stays_unmeasured():
@@ -924,7 +930,7 @@ def test_thin_research_coverage_stays_unmeasured():
     assert payload["fundamental_quality"]["score"] is None
     assert payload["fundamental_quality"]["label"] == "Unmeasured"
     assert payload["research_coverage"]["coverage_pct"] < 30
-    assert payload["fundamental_confirmation"] == "NEUTRAL"
+    assert payload["fundamental_confirmation"] in {"NEUTRAL", "NEUTRAL — insufficient fundamental evidence"}
     gnpa = next(k for k in payload["kpis"] if k["id"] == "gnpa")
     assert gnpa["fact"] == "Data unavailable"
     assert gnpa["availability_state"] == "not_yet_acquired"
@@ -950,6 +956,23 @@ def test_extract_bank_kpis_from_results_text():
     assert parsed["advances"]["current"] == 12450
     assert parsed["deposits"]["current"] == 14200
     assert parsed["casa"]["source"] == "NSE filing"
+    for wording in (
+        "Gross NPA ratio as of June 2026 was 1.42%.",
+        "Gross non-performing assets stood at 1.42%.",
+        "GNPA was 1.42%.",
+    ):
+        alias = extract_rates_from_text(wording, source="NSE filing")
+        assert alias["gnpa"]["current"] == 1.42
+    assert "nim" not in extract_rates_from_text(
+        "The chemicals segment operating margin was 24.1% this quarter.",
+        source="filing",
+    )
+    lakh = extract_rates_from_text(
+        "Total deposits were ₹18.3 lakh crore as of Jun 2026.",
+        source="NSE filing",
+    )
+    assert lakh["deposits"]["current"] == 1_830_000
+    assert "Jun 2026" in (lakh["deposits"]["current_period"] or "")
     loose = extract_rates_from_text(
         "The bank sanctioned advances of 13,100 crore under a special scheme.",
         source="press",
@@ -1030,6 +1053,213 @@ def test_bank_framework_lists_operating_kpis():
     ids = {spec.id for spec in get_framework("bank")["kpis"]}
     for kpi_id in ("casa", "cet1", "crar", "advances", "deposits", "pcr", "slippages", "credit_cost", "roa", "nim", "gnpa"):
         assert kpi_id in ids
+    by_id = {spec.id: spec for spec in get_framework("bank")["kpis"]}
+    assert by_id["gnpa"].importance == "critical"
+    assert by_id["nim"].importance == "critical"
+    assert by_id["casa"].importance == "important"
+    assert by_id["promoter"].importance == "optional"
+
+
+def _icici_like_raw():
+    return {
+        "available": True,
+        "fetched_at": "2026-08-20T00:00:00+00:00",
+        "freshness": "FRESH",
+        "data": {
+            "url": "https://www.screener.in/company/ICICILIKE/",
+            "about": "ICICI-like Bank Limited is engaged in commercial banking.",
+            "quarterly_results": [
+                _q_row("Revenue+", **{"Jun 2025": 90, "Sep 2025": 95, "Dec 2025": 100, "Mar 2026": 108, "Jun 2026": 112}),
+                _q_row("Net NPA %", **{"Jun 2025": 0.42, "Sep 2025": 0.40, "Dec 2025": 0.38, "Mar 2026": 0.36, "Jun 2026": 0.35}),
+                _q_row("Net Profit+", **{"Jun 2025": 20, "Sep 2025": 22, "Dec 2025": 24, "Mar 2026": 25, "Jun 2026": 27}),
+            ],
+            "balance_sheet": [
+                _q_row("Deposits+", **{"Mar 2025": 16400000, "Mar 2026": 18300000}),
+            ],
+            "key_ratios": [
+                {"name": "ROE", "value": "15.9"},
+                {"name": "CET1", "value": "16.19"},
+                {"name": "CRAR", "value": "16.84"},
+            ],
+            "shareholding": [],
+        },
+    }
+
+
+def test_partial_bank_evidence_is_not_strong():
+    payload = build_due_diligence(
+        "ICICILIKE",
+        scan_payload={"records": [{
+            "symbol": "ICICILIKE", "company": "ICICI-like Bank", "status": "Ready to trade",
+            "score": 89.4, "sepa_score": 91, "breakout_grade": "A", "chase_risk": False,
+        }]},
+        long_term_payload={"records": [{"symbol": "ICICILIKE", "sector": "Banking & Finance"}]},
+        raw_fundamentals=_icici_like_raw(),
+        news=[],
+    )
+    assert payload["framework"]["id"] == "bank"
+    assert payload["sector_kpi_label"] == "Insufficient Evidence"
+    assert payload["decision_coverage_pct"] < payload["research_coverage"]["coverage_pct"] or payload["decision_coverage_pct"] < 70
+    missing_ids = {row["id"] for row in payload["missing_evidence"]}
+    for kpi_id in ("gnpa", "nim", "casa", "advances"):
+        assert kpi_id in missing_ids
+    assert payload["fundamental_confirmation"] not in {"STRONG SUPPORT", "STRONGLY SUPPORTS"}
+    assert payload["confirmation_reason"] in {"Insufficient Evidence", "Positive Confirmation", "Mixed Fundamentals", "Fundamentally Neutral"}
+    gnpa = next(k for k in payload["kpis"] if k["id"] == "gnpa")
+    assert gnpa["available"] is False
+    assert gnpa["points"] is None
+    screen = payload["first_screen"]
+    assert screen["sector_kpis"] == "Insufficient Evidence"
+    assert "Gross NPA" in " ".join(screen["critical_metrics_missing"]) or "GNPA" in " ".join(screen["critical_metrics_missing"]) or any("NPA" in x for x in screen["critical_metrics_missing"])
+    assert screen["decision_coverage_pct"] < 70
+    if payload["fundamental_quality"]["score"] is not None:
+        assert payload["fundamental_quality"]["score_coverage_pct"] < 100
+
+
+def test_missing_is_not_scored_as_zero():
+    from product.due_diligence.evidence import score_evidence
+
+    findings = [
+        {"id": "gnpa", "importance": "critical", "weight": 20, "available": True, "points": 88},
+        {"id": "nim", "importance": "critical", "weight": 16, "available": False, "points": None},
+    ]
+    meta = score_evidence(findings, min_score_coverage=0.10)
+    assert meta["score"] == 88
+    assert meta["evaluated_weight"] == 20
+    thin = score_evidence(findings, min_score_coverage=0.80)
+    assert thin["score"] is None
+    assert thin["unmeasured_because"]
+
+
+def test_it_without_sales_and_margin_is_insufficient():
+    raw = {
+        "available": True, "fetched_at": "", "data": {
+            "about": "Test IT Ltd provides financial software",
+            "quarterly_results": [],
+            "cash_flow": [_q_row("Cash from Operating Activity+", **{"Mar 2025": 900, "Mar 2026": 1000})],
+            "shareholding": [],
+        },
+    }
+    payload = build_due_diligence(
+        "THINIT",
+        scan_payload={"records": [{"symbol": "THINIT", "status": "Ready to trade", "score": 80, "company": "Thin IT"}]},
+        long_term_payload={"records": [{"symbol": "THINIT", "sector": "IT / Software"}]},
+        raw_fundamentals=raw,
+        news=[],
+    )
+    assert payload["framework"]["id"] == "it"
+    assert payload["sector_kpi_label"] == "Insufficient Evidence"
+    assert payload["fundamental_quality"]["label"] == "Unmeasured"
+    assert payload["confirmation_reason"] == "Insufficient Evidence"
+
+
+def test_it_with_revenue_and_margins_can_be_classified():
+    payload = build_due_diligence(
+        "TESTIT",
+        scan_payload={"records": [{"symbol": "TESTIT", "status": "Ready to trade", "score": 80, "company": "Test IT"}]},
+        long_term_payload={"records": [{"symbol": "TESTIT", "sector": "IT / Software"}]},
+        raw_fundamentals=IT_RAW,
+        news=[],
+    )
+    assert payload["framework"]["id"] == "it"
+    assert payload["sector_kpi_label"] in {"Strong", "Healthy", "Mixed", "Weak"}
+    assert payload["fundamental_quality"]["score"] is not None
+    assert payload["decision_coverage_pct"] >= 50
+
+
+def test_pharma_growth_plus_usfda_news_is_sourced_not_inferred():
+    news = [{
+        "headline": "USFDA issues warning letter to Test Pharma plant",
+        "event_type": "regulatory",
+        "impact_score": 90,
+        "official": False,
+        "published_at": "2026-08-20T00:00:00+00:00",
+        "source": "Exchange filing recap",
+        "url": "https://example.com/usfda",
+        "direction": "negative",
+        "mentioned_symbols": ["TESTPHARMA"],
+    }]
+    raw = {
+        "available": True, "fetched_at": "", "data": {
+            "about": "Test Pharma manufactures formulations",
+            "quarterly_results": [
+                _q_row("Sales+", **{"Jun 2025": 100, "Sep 2025": 110, "Dec 2025": 120, "Mar 2026": 130, "Jun 2026": 140}),
+                _q_row("OPM %", **{"Jun 2025": 20, "Sep 2025": 21, "Dec 2025": 21, "Mar 2026": 22, "Jun 2026": 22}),
+                _q_row("Net Profit+", **{"Jun 2025": 10, "Sep 2025": 11, "Dec 2025": 12, "Mar 2026": 13, "Jun 2026": 14}),
+            ],
+            "shareholding": [_q_row("Promoters+", **{"Jun 2025": 66, "Sep 2025": 66, "Dec 2025": 66, "Mar 2026": 66, "Jun 2026": 66})],
+            "cash_flow": [_q_row("Cash from Operating Activity+", **{"Mar 2025": 40, "Mar 2026": 50})],
+        },
+    }
+    payload = build_due_diligence(
+        "TESTPHARMA",
+        scan_payload={"records": [{"symbol": "TESTPHARMA", "status": "Ready to trade", "score": 80}]},
+        long_term_payload={"records": [{"symbol": "TESTPHARMA", "sector": "Pharma & Healthcare"}]},
+        raw_fundamentals=raw,
+        news=news,
+    )
+    assert payload["framework"]["id"] == "pharma"
+    assert payload["sector_kpi_label"] in {"Strong", "Healthy", "Mixed", "Weak"}
+    assert payload["fundamental_quality"]["score"] is not None
+    assert payload["vs_technical_setup"] in {"CONTRADICTS", "STRONGLY CONTRADICTS", "CAUTION"}
+    assert payload["confirmation_reason"] in {"Fundamental Contradiction", "Fundamental Caution"}
+
+
+def test_industrials_need_sales_margin_or_cash():
+    raw = {
+        "available": True, "fetched_at": "", "data": {
+            "about": "Test Industrials manufactures capital goods and executes large contracts",
+            "quarterly_results": [
+                _q_row("Sales+", **{"Jun 2025": 500, "Sep 2025": 520, "Dec 2025": 540, "Mar 2026": 560, "Jun 2026": 600}),
+                _q_row("OPM %", **{"Jun 2025": 12, "Sep 2025": 12.2, "Dec 2025": 12.4, "Mar 2026": 12.5, "Jun 2026": 13}),
+                _q_row("Net Profit+", **{"Jun 2025": 40, "Sep 2025": 42, "Dec 2025": 44, "Mar 2026": 45, "Jun 2026": 50}),
+            ],
+            "cash_flow": [_q_row("Cash from Operating Activity+", **{"Mar 2024": 80, "Mar 2025": 90, "Mar 2026": 110})],
+            "balance_sheet": [_q_row("Borrowings+", **{"Mar 2025": 200, "Mar 2026": 180})],
+            "shareholding": [_q_row("Promoters+", **{"Jun 2026": 51})],
+        },
+    }
+    payload = build_due_diligence(
+        "TESTIND",
+        scan_payload={"records": [{"symbol": "TESTIND", "status": "Ready to trade", "score": 80}]},
+        long_term_payload={"records": [{"symbol": "TESTIND", "sector": "Capital Goods"}]},
+        raw_fundamentals=raw,
+        news=[],
+    )
+    assert payload["framework"]["id"] == "industrials"
+    assert payload["sector_kpi_label"] in {"Strong", "Healthy", "Mixed", "Weak"}
+    assert payload["fundamental_quality"]["score"] is not None
+    cfo = next(k for k in payload["kpis"] if k["id"] == "cfo")
+    assert cfo["importance"] == "critical"
+
+
+def test_source_consensus_confirms_and_does_not_average():
+    from product.due_diligence.extract import merge_kpi_maps
+
+    merged = merge_kpi_maps(
+        {"nnpa": {"current": 0.35, "source": "NSE filing"}},
+        {"nnpa": {"current": 0.35, "source": "Screener.in cache"}},
+        {"nnpa": {"current": 0.90, "source": "Media recap"}},
+    )
+    assert merged["nnpa"]["current"] == 0.35
+    assert merged["nnpa"]["source_consensus"] == "conflict"
+    assert merged["nnpa"]["source_count"] >= 2
+    agree = merge_kpi_maps(
+        {"cet1": {"current": 16.19, "source": "NSE filing"}},
+        {"cet1": {"current": 16.19, "source": "Investor presentation"}},
+    )
+    assert agree["cet1"]["source_consensus"] == "confirmed"
+    assert agree["cet1"]["source_count"] == 2
+
+
+def test_incomparable_periods_do_not_create_a_trend():
+    from product.due_diligence.series import direction
+
+    assert direction(
+        higher_is_better=True, qoq=1.2, yoy=None,
+        current_period_type="quarterly", compare_period_type="annual",
+    ) == "unknown"
+
 
 
 

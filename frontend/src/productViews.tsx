@@ -348,7 +348,7 @@ function InvestigatePanel({
               <div>
                 <span>{kpi.label}</span>
                 <strong>{kpi.available ? kpi.fact : 'Data unavailable'}</strong>
-                <small>{kpi.available ? `${kpi.trend} · ${kpi.pillar}` : `${kpi.availability_label || 'Not yet acquired'} — not estimated.`}</small>
+                <small>{kpi.available ? `${kpi.trend} · ${kpi.pillar}${kpi.importance ? ` · ${kpi.importance}` : ''}` : `${kpi.availability_label || 'Not yet acquired'} — not estimated.`}</small>
               </div>
               {heights.length > 1 ? (
                 <div className="dd-spark" aria-hidden="true">
@@ -376,6 +376,10 @@ function InvestigatePanel({
                     {kpi.source_date ? ` · ${kpi.source_date}` : ''} · confidence {kpi.confidence}
                     {kpi.provenance?.source_type_label ? ` · ${kpi.provenance.source_type_label}` : ''}
                     {kpi.provenance?.retrieved_at ? ` · retrieved ${kpi.provenance.retrieved_at}` : ''}
+                    {kpi.period_type ? ` · ${kpi.period_type}` : ''}
+                    {kpi.reporting_basis ? ` · ${kpi.reporting_basis}` : ''}
+                    {kpi.source_consensus === 'confirmed' && (kpi.source_count || 0) >= 2 ? ` · Confirmed by ${kpi.source_count} sources` : ''}
+                    {kpi.source_consensus === 'conflict' ? ' · Source Conflict' : ''}
                   </dd>
                 </div>
               </dl>
@@ -387,6 +391,11 @@ function InvestigatePanel({
   )
   const coverage = report.research_coverage
   const coveragePct = coverage?.coverage_pct
+  const decisionPct = screen?.decision_coverage_pct ?? report.decision_coverage_pct
+  const scoreCov = screen?.score_coverage_pct ?? report.fundamental_quality.score_coverage_pct ?? report.fundamental_quality.coverage_pct
+  const missingCritical = screen?.critical_metrics_missing || report.critical_metrics_missing || []
+  const missingEvidence = screen?.missing_evidence || report.missing_evidence || []
+  const confirmationReason = screen?.confirmation_reason || report.confirmation_reason
   const acquiring = busy === 'ACQUIRE_DUE_DILIGENCE' || busy === 'ACQUIRE_DUE_DILIGENCE_ALL'
   return (
     <div className="dd-root">
@@ -404,19 +413,43 @@ function InvestigatePanel({
         <aside className={`dd-verdict ${verdictTone(confirmation)}`} aria-label="Fundamental confirmation">
           <span>Fundamental confirmation</span>
           <strong>{confirmation}</strong>
-          <p>{report.vs_detail}</p>
+          <p>{confirmationReason ? `${confirmationReason}. ` : ''}{report.vs_detail}</p>
         </aside>
       </header>
       <div className="dd-score-grid dd-first-grid">
         <article><span>Technical score</span><strong>{screen?.technical_score != null ? `${screen.technical_score}` : (report.technical_context.scanner_score != null ? `${report.technical_context.scanner_score}` : 'Data unavailable')}</strong></article>
         <article><span>Fundamental quality</span><strong>{scoreLabel}</strong><small>{report.fundamental_quality.explain}</small></article>
-        <article><span>Research coverage</span><strong>{coveragePct == null ? 'Unmeasured' : `${coveragePct}%`}</strong><small>{coverage?.summary || 'How much of the sector-required dataset is on file — not a quality score.'}</small></article>
+        <article><span>Score coverage</span><strong>{scoreCov == null ? 'Unmeasured' : `${scoreCov}%`}</strong><small>Share of the scoring framework that had enough data to evaluate. Missing is unknown, not zero.</small></article>
+        <article><span>Data coverage</span><strong>{coveragePct == null ? 'Unmeasured' : `${coveragePct}%`}</strong><small>{coverage?.summary || 'Datasets acquired — not decision confidence.'}</small></article>
+        <article><span>Decision coverage</span><strong>{decisionPct == null ? 'Unmeasured' : `${decisionPct}%`}</strong><small>Important sector evidence actually available to judge the company.</small></article>
         <article><span>Business trend</span><strong>{report.business_trend}</strong></article>
-        <article><span>{report.framework.label || 'Sector'} KPIs</span><strong>{screen?.sector_kpis || report.sector_kpi_label || 'Unmeasured'}</strong></article>
+        <article><span>{report.framework.label || 'Sector'} KPIs</span><strong>{screen?.sector_kpis || report.sector_kpi_label || 'Unmeasured'}</strong><small>{screen?.sector_kpi_detail || report.sector_kpi_detail || ''}</small></article>
+        <article><span>Critical metrics missing</span><strong>{missingCritical.length ? missingCritical.join(', ') : 'None'}</strong></article>
         <article><span>Critical red flags</span><strong>{report.flag_groups?.n_critical ?? 0}</strong></article>
         <article><span>Warnings</span><strong>{report.flag_groups?.n_warnings ?? report.red_flags.length}</strong></article>
         <article><span>Latest results</span><strong>{screen?.latest_financial_quarter || report.as_of.latest_financial_period || 'Data unavailable'}</strong><small>Refresh: {screen?.latest_data_refresh || report.as_of.latest_data_refresh || report.as_of.fundamentals_fetched_at || 'Data unavailable'}</small></article>
       </div>
+      {missingEvidence.length ? (
+        <aside className="dd-missing-evidence" aria-label="Important missing evidence">
+          <header>
+            <strong>Important missing evidence</strong>
+            <span>The system likes what it has seen only if those prints are actually on file. Missing stays missing.</span>
+          </header>
+          <ul>
+            {missingEvidence.map((row) => (
+              <li key={String(row.id || row.label)}>
+                <strong>{row.label || row.id}</strong>
+                <span>{row.reason || 'Metric not reliably extracted'}{row.importance ? ` · ${row.importance}` : ''}</span>
+              </li>
+            ))}
+          </ul>
+          {(screen?.deeper_acquire_available || report.deeper_acquire_available) ? (
+            <p>Try deeper source acquisition — additional official providers remain unqueried.</p>
+          ) : (
+            <p>Already-queried sources that reported no value are not re-scraped.</p>
+          )}
+        </aside>
+      ) : null}
       <div className="dd-coverage-strip" aria-label="Research dataset inventory">
         <header>
           <strong>Research data: {coverage?.summary || '0/0 datasets available'}</strong>

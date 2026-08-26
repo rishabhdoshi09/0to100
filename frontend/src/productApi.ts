@@ -209,6 +209,12 @@ export type DueDiligenceKpi = {
   }
   availability_state?: string
   availability_label?: string
+  importance?: string
+  source_count?: number
+  source_consensus?: string
+  agreeing_sources?: string[]
+  period_type?: string
+  reporting_basis?: string
 }
 
 export type DueDiligenceEvent = {
@@ -299,6 +305,10 @@ export type DueDiligenceReport = {
     score: number | null
     label: string
     coverage_pct: number
+    score_coverage_pct?: number
+    raw_awarded?: number
+    evaluated_weight?: number
+    scoring_weight?: number
     explain: string
     breakdown?: {
       explain?: string
@@ -325,6 +335,25 @@ export type DueDiligenceReport = {
     }[]
   }
   sector_kpi_label?: string
+  sector_kpi_detail?: string
+  decision_coverage?: {
+    coverage?: number
+    coverage_pct?: number
+    critical_n?: number
+    critical_available?: number
+  }
+  decision_coverage_pct?: number
+  missing_evidence?: {
+    id?: string
+    label?: string
+    importance?: string
+    availability_state?: string
+    reason?: string
+  }[]
+  critical_metrics_missing?: string[]
+  confirmation_reason?: string
+  confirmation_qualifier?: string
+  deeper_acquire_available?: boolean
   business_trend: string
   financial_strength: string
   earnings_quality: string
@@ -412,6 +441,15 @@ export type DueDiligenceReport = {
     breakout_quality?: string
     fundamental_quality?: number | null
     fundamental_quality_label?: string
+    score_coverage_pct?: number
+    data_coverage_pct?: number
+    decision_coverage_pct?: number
+    confirmation_reason?: string
+    confirmation_qualifier?: string
+    critical_metrics_missing?: string[]
+    missing_evidence?: { id?: string; label?: string; importance?: string; reason?: string; availability_state?: string }[]
+    deeper_acquire_available?: boolean
+    sector_kpi_detail?: string
     fundamental_confirmation?: string
     vs_detail?: string
     business_trend?: string

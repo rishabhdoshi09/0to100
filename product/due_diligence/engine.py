@@ -13,7 +13,15 @@ from product.due_diligence.dashboard import (
     confirmation_label,
     first_screen,
 )
-from product.due_diligence.extract import extract_guidance, extract_kpis_from_raw, merge_kpi_maps
+from product.due_diligence.evidence import (
+    confirmation_from_evidence,
+    critical_metrics_missing,
+    decision_coverage,
+    missing_evidence,
+    score_evidence,
+    sector_kpi_verdict,
+)
+from product.due_diligence.extract import extract_guidance, extract_kpis_from_raw, merge_kpi_maps, _in_bounds
 from product.due_diligence.frameworks import KpiSpec, get_framework
 from product.due_diligence.news_layer import material_events, news_verdict
 from product.due_diligence.peers import rank_peers
@@ -45,8 +53,8 @@ def _find(payload: Mapping[str, Any] | None, symbol: str) -> dict[str, Any]:
     return {}
 
 
-def _quality_label(score: int | None, coverage: float) -> str:
-    if score is None or coverage < 0.30:
+def _quality_label(score: int | None, coverage: float, *, min_coverage: float = 0.40) -> str:
+    if score is None or coverage < min_coverage:
         return "Unmeasured"
     if score >= 80:
         return "Strong"
@@ -109,14 +117,23 @@ def _fact_line(spec: KpiSpec, snap: Mapping[str, Any]) -> str:
         return "Data unavailable"
     period = snap.get("current_period") or "latest period"
     unit = spec.unit
-    line = f"{spec.label}: {current} {unit} ({period})"
+    bits = [f"{spec.label}: {current} {unit} ({period})"]
+    basis = str(snap.get("reporting_basis") or "")
+    period_type = str(snap.get("period_type") or "")
+    extra = []
+    if basis:
+        extra.append(basis)
+    if period_type and period_type not in {"unknown", ""}:
+        extra.append(period_type)
+    if extra:
+        bits[0] += f" [{' · '.join(extra)}]"
     prev = snap.get("previous")
     if prev is not None and snap.get("previous_period"):
-        line += f"; previous {snap['previous_period']}: {prev} {unit}"
+        bits.append(f"previous {snap['previous_period']}: {prev} {unit}")
     year = snap.get("year_ago")
     if year is not None and snap.get("year_ago_period"):
-        line += f"; year-ago {snap['year_ago_period']}: {year} {unit}"
-    return line
+        bits.append(f"year-ago {snap['year_ago_period']}: {year} {unit}")
+    return "; ".join(bits)
 
 
 def _interpretation(spec: KpiSpec, snap: Mapping[str, Any], trend: str) -> str:
@@ -174,11 +191,27 @@ def _apply_overlay(
                     raw_reference=str(snap.get("raw_reference") or spec.table),
                 )
                 conflicts.append(conflict_record(str(finding.get("id")), preferred, other))
+                finding["source_consensus"] = "conflict"
+                finding["conflicting_sources"] = list(finding.get("conflicting_sources") or []) + [{
+                    "value": snap.get("current"),
+                    "source": str(snap.get("source") or "Secondary source"),
+                    "period": snap.get("current_period"),
+                }]
+            else:
+                agreeing = list(finding.get("agreeing_sources") or [])
+                extra = str(snap.get("source") or "")
+                if extra and extra not in agreeing:
+                    agreeing.append(extra)
+                    finding["agreeing_sources"] = agreeing
+                    finding["source_count"] = len(agreeing)
+                    finding["source_consensus"] = "confirmed" if len(agreeing) >= 2 else "single"
             continue
         trend = direction(
             higher_is_better=spec.higher_is_better,
             qoq=snap.get("qoq_change"),
             yoy=snap.get("yoy_change"),
+            current_period_type=str(snap.get("period_type") or ""),
+            compare_period_type=str(snap.get("year_ago_period_type") or snap.get("previous_period_type") or ""),
         )
         source = str(snap.get("source") or "Downloaded filing / extra table")
         finding.update({
@@ -204,6 +237,11 @@ def _apply_overlay(
             "source_url": str(snap.get("source_url") or finding.get("source_url") or ""),
             "source_date": str(snap.get("source_date") or snap.get("current_period") or finding.get("source_date") or ""),
             "confidence": "medium",
+            "period_type": snap.get("period_type") or finding.get("period_type") or "",
+            "reporting_basis": snap.get("reporting_basis") or finding.get("reporting_basis") or "",
+            "source_count": int(snap.get("source_count") or 1),
+            "source_consensus": str(snap.get("source_consensus") or "single"),
+            "agreeing_sources": list(snap.get("agreeing_sources") or ([source] if source else [])),
             "provenance": provenance(
                 value=snap.get("current"),
                 period=str(snap.get("current_period") or ""),
@@ -238,15 +276,18 @@ def _evaluate_kpis(raw: Mapping[str, Any], specs: Sequence[KpiSpec], source_url:
                 if series:
                     break
         year_steps = 1 if spec.table in {"profit_loss", "balance_sheet", "cash_flow"} else 4
-        snap = snapshot(series, kind=spec.kind, year_steps=year_steps)
+        snap = snapshot(series, kind=spec.kind, year_steps=year_steps, table=spec.table)
         if spec.kind == "rate" and snap.get("current") is not None:
-            if float(snap["current"]) < 0 or float(snap["current"]) > 100:
+            if not _in_bounds(spec.id, snap["current"]):
                 series = []
-                snap = snapshot([], kind=spec.kind)
+                snap = snapshot([], kind=spec.kind, table=spec.table)
+        compare_type = str(snap.get("year_ago_period_type") or snap.get("previous_period_type") or "")
         trend = direction(
             higher_is_better=spec.higher_is_better,
             qoq=snap.get("qoq_change"),
             yoy=snap.get("yoy_change"),
+            current_period_type=str(snap.get("period_type") or ""),
+            compare_period_type=compare_type,
         )
         available = snap.get("current") is not None
         source = "Screener.in cache / company results table"
@@ -258,6 +299,7 @@ def _evaluate_kpis(raw: Mapping[str, Any], specs: Sequence[KpiSpec], source_url:
             "unit": spec.unit,
             "table": spec.table,
             "missing_ok": spec.missing_ok,
+            "importance": spec.importance,
             "available": available,
             "higher_is_better": spec.higher_is_better,
             "trend": trend if available else "unknown",
@@ -272,6 +314,11 @@ def _evaluate_kpis(raw: Mapping[str, Any], specs: Sequence[KpiSpec], source_url:
             "source_date": snap.get("current_period") or fetched_at,
             "retrieved_at": fetched_at,
             "confidence": "high" if len(series) >= 5 else "medium" if len(series) >= 2 else "low",
+            "period_type": snap.get("period_type") or "",
+            "reporting_basis": snap.get("reporting_basis") or "",
+            "source_count": 1 if available else 0,
+            "source_consensus": "single" if available else "",
+            "agreeing_sources": [source] if available else [],
             "provenance": provenance(
                 value=snap.get("current"),
                 period=str(snap.get("current_period") or ""),
@@ -292,20 +339,9 @@ def _evaluate_kpis(raw: Mapping[str, Any], specs: Sequence[KpiSpec], source_url:
     return findings
 
 
-def _score(findings: Sequence[Mapping[str, Any]]) -> tuple[int | None, float, dict[str, Any]]:
-    usable = [f for f in findings if f.get("points") is not None]
-    counted = [
-        f for f in findings
-        if f.get("points") is not None or not f.get("missing_ok")
-    ]
-    total_w = sum(float(f.get("weight") or 0) for f in counted)
-    used_w = sum(float(f.get("weight") or 0) for f in usable)
-    coverage = (used_w / total_w) if total_w else 0.0
-    if not usable or coverage < 0.30:
-        return None, coverage, {"used_weight": used_w, "total_weight": total_w, "n": len(usable)}
-    weighted = sum(float(f["points"]) * float(f["weight"]) for f in usable)
-    score = int(round(weighted / used_w))
-    return score, coverage, {"used_weight": used_w, "total_weight": total_w, "n": len(usable)}
+def _score(findings: Sequence[Mapping[str, Any]], *, min_score_coverage: float = 0.40) -> tuple[int | None, float, dict[str, Any]]:
+    meta = score_evidence(findings, min_score_coverage=min_score_coverage)
+    return meta["score"], meta["coverage"], meta
 
 
 def _red_flags(
@@ -352,6 +388,7 @@ def _vs_setup(
     trend_label: str,
     flags: Sequence[Mapping[str, Any]],
     news_label: str,
+    decision_coverage_pct: float = 100.0,
 ) -> tuple[str, str]:
     if not technical.get("available"):
         return "UNMEASURED", "No current scanner setup to compare against."
@@ -363,8 +400,8 @@ def _vs_setup(
         )
         if severe:
             return "STRONGLY CONTRADICTS" if technical.get("chase_risk") else "CONTRADICTS", flags[0]["title"]
-    if score is None or coverage < 0.30:
-        return "NEUTRAL", "Fundamental coverage is too thin to raise or cut conviction."
+    if score is None or coverage < 0.40 or decision_coverage_pct < 40.0:
+        return "NEUTRAL", "Insufficient fundamental evidence to raise or cut conviction."
     if news_label == "Negative" and score < 60:
         return "CONTRADICTS", "Material negative news plus mixed fundamentals."
     warnings = [f for f in flags if f.get("severity") == "warning"]
@@ -452,7 +489,9 @@ def build_due_diligence(
         autonomy = {}
     measured = merge_kpi_maps(extract_kpis_from_raw(raw), dict(autonomy.get("kpis") or {}))
     conflicts = _apply_overlay(findings, framework["kpis"], measured)
-    score, coverage, score_meta = _score(findings)
+    min_score_coverage = float(framework.get("min_score_coverage") or 0.40)
+    score, coverage, score_meta = _score(findings, min_score_coverage=min_score_coverage)
+    decision = decision_coverage(findings)
     by_id = {str(f.get("id")): f for f in findings}
 
     def _kpi_current(kpi_id: str) -> float | None:
@@ -535,26 +574,27 @@ def build_due_diligence(
     flag_groups = partition_flags(flags)
     technical = _technical_context(scan_row, long_row)
     trend_label = _pillar_label([str(f.get("trend")) for f in findings if f.get("available")])
-    generic_ids = {
-        "pat", "sales", "opm", "eps", "promoter", "pledge", "fii", "dii", "public",
-        "cfo", "roe", "roce", "borrowings",
-    }
-    sector_findings = [
-        f for f in findings
-        if str(f.get("id") or "") not in generic_ids and f.get("available")
-    ]
-    sector_trend = _pillar_label([str(f.get("trend")) for f in sector_findings])
-    sector_kpi_label = {
-        "Improving": "Strong",
-        "Stable": "Adequate",
-        "Weakening": "Mixed",
-        "Deteriorating": "Weak",
-        "Unmeasured": "Unmeasured",
-    }.get(sector_trend, sector_trend)
+    sector_verdict = sector_kpi_verdict(
+        findings,
+        min_critical=int(framework.get("min_critical") or 2),
+        min_decision_coverage=float(framework.get("min_decision_coverage") or 0.45),
+    )
+    sector_kpi_label = sector_verdict["label"]
+    missing_rows = missing_evidence(findings)
+    missing_critical = critical_metrics_missing(findings)
     vs_setup, vs_detail = _vs_setup(
         technical=technical, score=score, coverage=coverage,
         trend_label=trend_label, flags=flags, news_label=news_label,
+        decision_coverage_pct=decision["coverage_pct"],
     )
+    confirmation = confirmation_from_evidence(
+        vs_setup=vs_setup,
+        vs_detail=vs_detail,
+        score=score,
+        decision_coverage_pct=decision["coverage_pct"],
+    )
+    vs_setup = confirmation["vs_setup"]
+    vs_detail = confirmation["vs_detail"]
     for finding in findings:
         finding["implication"] = _implication(str(finding.get("trend")), vs_setup)
 
@@ -579,7 +619,7 @@ def build_due_diligence(
     if not changed:
         changed.append("No material quarter-to-quarter change could be measured from files on disk.")
 
-    quality_label = _quality_label(score, coverage)
+    quality_label = _quality_label(score, coverage, min_coverage=min_score_coverage)
     governance = "Low"
     if any(f.get("kind") == "governance" or f.get("severity") == "critical" for f in flags if f.get("kind") == "governance"):
         governance = "Elevated"
@@ -724,7 +764,7 @@ def build_due_diligence(
     ]
 
     report = {
-        "schema_version": 4,
+        "schema_version": 5,
         "engine": "StockResearchEngine",
         "symbol": symbol,
         "company": company,
@@ -740,15 +780,33 @@ def build_due_diligence(
             "score": score,
             "label": quality_label,
             "coverage_pct": round(coverage * 100.0, 1),
+            "score_coverage_pct": score_meta.get("coverage_pct"),
+            "raw_awarded": score_meta.get("raw_awarded"),
+            "evaluated_weight": score_meta.get("evaluated_weight"),
+            "scoring_weight": score_meta.get("scoring_weight"),
             "explain": (
-                f"{score_meta['n']} sector KPIs with values, "
-                f"{score_meta['used_weight']:.0f}/{score_meta['total_weight']:.0f} weight. "
-                "Missing KPIs are skipped, never filled. This is quality, not research coverage."
+                (
+                    f"{score_meta['n']} measurable KPIs scored {score_meta.get('raw_awarded')} "
+                    f"/ {score_meta.get('evaluated_weight')} evaluated weight "
+                    f"(score coverage {score_meta.get('coverage_pct')}%). "
+                    "Missing KPIs are skipped, never scored as zero."
+                )
+                if score is not None else
+                (
+                    score_meta.get("unmeasured_because")
+                    or "Fundamental quality is Unmeasured — evaluated weight is too thin to display a /100 score."
+                )
             ),
             "breakdown": breakdown,
         },
         "research_coverage": research_coverage,
+        "decision_coverage": decision,
+        "decision_coverage_pct": decision.get("coverage_pct"),
+        "missing_evidence": missing_rows,
+        "critical_metrics_missing": missing_critical,
+        "deeper_acquire_available": bool(research_coverage.get("needs_acquire")),
         "sector_kpi_label": sector_kpi_label,
+        "sector_kpi_detail": sector_verdict.get("detail"),
         "business_trend": trend_label,
         "financial_strength": financial,
         "earnings_quality": earnings,
@@ -759,7 +817,9 @@ def build_due_diligence(
         "governance_risk": governance,
         "news_event_impact": news_label,
         "vs_technical_setup": vs_setup,
-        "fundamental_confirmation": confirmation_label(vs_setup),
+        "fundamental_confirmation": confirmation.get("display") or confirmation_label(vs_setup),
+        "confirmation_reason": confirmation.get("reason"),
+        "confirmation_qualifier": confirmation.get("qualifier") or "",
         "vs_detail": vs_detail,
         "strengths": strengths,
         "concerns": concerns,

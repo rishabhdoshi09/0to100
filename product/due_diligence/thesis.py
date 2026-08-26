@@ -41,19 +41,31 @@ def compose_thesis(payload: Mapping[str, Any]) -> dict[str, Any]:
 
     score = quality.get("score")
     coverage = quality.get("coverage_pct")
+    decision_pct = (payload.get("decision_coverage") or {}).get("coverage_pct")
+    if decision_pct is None:
+        decision_pct = payload.get("decision_coverage_pct")
     if score is None:
         miss = ", ".join(unavailable) if unavailable else "sector KPIs"
         parts.append(
             f"Fundamental quality is Unmeasured"
-            f"{f' ({coverage}% coverage)' if coverage is not None else ''}. "
+            f"{f' ({coverage}% score coverage)' if coverage is not None else ''}. "
             f"Still missing: {miss}."
         )
     else:
+        extra = f"; decision coverage {decision_pct}%" if decision_pct is not None else ""
         parts.append(
             f"Fundamental quality is {score}/100 ({quality.get('label')}); "
-            f"business trend is {trend}."
+            f"score coverage {coverage}%; business trend is {trend}{extra}."
         )
         basis.append("sector_kpis")
+
+    missing_ev = [str(x.get("label") or x.get("id") or "") for x in (payload.get("missing_evidence") or []) if x][:6]
+    if missing_ev:
+        parts.append("Important missing evidence: " + ", ".join(missing_ev) + ".")
+        basis.append("missing_evidence")
+    sector_label = str(payload.get("sector_kpi_label") or "")
+    if sector_label:
+        parts.append(f"{framework.get('label') or 'Sector'} KPIs: {sector_label}.")
 
     if strengths:
         parts.append("Measured strengths: " + "; ".join(strengths) + ".")

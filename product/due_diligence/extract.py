@@ -9,13 +9,17 @@ import html
 import re
 from typing import Any, Mapping, Sequence
 
-from product.due_diligence.series import _f, dated_series, find_row, normalize_label, snapshot
+from product.due_diligence.series import _f, dated_series, find_row, infer_period_type, normalize_label, snapshot
 
 _GNPA_NEEDLES = ("gross npa", "gnpa", "gross non performing")
 _NNPA_NEEDLES = ("net npa", "nnpa", "net non performing")
 _PLEDGE_NEEDLES = ("pledge", "encumbrance")
 _CASA_NEEDLES = ("casa", "current account savings")
-_NIM_NEEDLES = ("nim", "net interest margin", "financing margin")
+_NIM_NEEDLES = ("nim", "net interest margin")
+_NIM_COLLISION = (
+    "financing margin", "operating margin", "ebitda margin", "ebit margin",
+    "gross margin", "yield on", "investment yield", "treasury yield",
+)
 _CET1_NEEDLES = ("cet1", "cet 1", "common equity tier")
 _CRAR_NEEDLES = ("crar", "capital adequacy", "capital adequacy ratio")
 _PCR_NEEDLES = ("pcr", "provision coverage")
@@ -44,9 +48,16 @@ _PERCENT_RE = re.compile(
     re.I,
 )
 _AMOUNT_RE = re.compile(
-    r"(?:rs\.?|inr|₹)?\s*([\d,]+(?:\.\d+)?)\s*(crore|cr)\b",
+    r"(?:rs\.?|inr|₹)?\s*([\d,]+(?:\.\d+)?)\s*(lakh\s+crore|lakh\s+cr|crore|cr)\b",
     re.I,
 )
+_PERIOD_NEAR_RE = re.compile(
+    r"(?:Q[1-4]\s*FY\s*\d{2,4}|FY\s*\d{2}(?:-?\d{2,4})?|"
+    r"(?:quarter|year|period)\s+ended\s+[A-Za-z]{3,9}\s+\d{2,4}|"
+    r"(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?\s+\d{4})",
+    re.I,
+)
+_BASIS_NEAR_RE = re.compile(r"\b(standalone|consolidated)\b", re.I)
 _SKIP_PREFIX = ("below", "under", "above", "over", "upto", "up to", "within", "least")
 _ADVANCES_LABEL = re.compile(r"(?:gross|net|total)\s+advances", re.I)
 _DEPOSITS_LABEL = re.compile(r"(?:total|customer)\s+deposits", re.I)
@@ -86,20 +97,75 @@ def _rate(value: Any) -> float | None:
     return number
 
 
-def _last_percent(label: re.Pattern[str], text: str) -> float | None:
-    found: list[float] = []
+def _context_ok(kpi_id: str, left: str, right: str, document_type: str = "") -> bool:
+    window = f"{left} {right}".lower()
+    if kpi_id == "nim":
+        if any(tok in window for tok in _NIM_COLLISION):
+            return False
+        if "net interest margin" in window or re.search(r"\bnim\b", window):
+            return True
+        return False
+    if kpi_id == "gnpa":
+        if re.search(r"\bnet\s+npa|\bnnpa\b", left) and "gross" not in left:
+            return False
+        if "coverage" in window and "gross" not in left:
+            return False
+        return True
+    if kpi_id == "nnpa":
+        if re.search(r"\bgross\s+npa|\bgnpa\b", left) and "net" not in left:
+            return False
+        return True
+    if kpi_id == "advances":
+        if any(tok in window for tok in ("sanctioned", "under a special", "scheme advances")):
+            return False
+        return True
+    if document_type in {"financial_media"} and kpi_id in {"nim", "gnpa", "nnpa", "casa", "cet1"}:
+        # Media copy is a fallback; still require an explicit label already matched.
+        return True
+    return True
+
+
+def _period_from_context(left: str, right: str) -> str:
+    blob = f"{left} {right}"
+    match = _PERIOD_NEAR_RE.search(blob)
+    return re.sub(r"\s+", " ", match.group(0)).strip() if match else ""
+
+
+def _basis_from_context(left: str, right: str) -> str:
+    blob = f"{left} {right}"
+    match = _BASIS_NEAR_RE.search(blob)
+    return match.group(1).lower() if match else ""
+
+
+def _last_percent(
+    label: re.Pattern[str],
+    text: str,
+    *,
+    kpi_id: str = "",
+    document_type: str = "",
+) -> tuple[float | None, str, str]:
+    found: list[tuple[float, str, str]] = []
     blob = text or ""
     for match in label.finditer(blob):
+        left = blob[max(0, match.start() - 80): match.start()]
+        matched = match.group(0)
         window = blob[match.end(): match.end() + 96]
+        if kpi_id and not _context_ok(kpi_id, f"{left} {matched}", window, document_type):
+            continue
         for item in _PERCENT_RE.finditer(window):
             prefix = window[max(0, item.start() - 12): item.start()].lower()
             if any(tok in prefix for tok in _SKIP_PREFIX):
                 continue
             number = _rate(item.group(1).replace(" ", ""))
-            if number is not None:
-                found.append(number)
-                break
-    return found[-1] if found else None
+            if number is None:
+                continue
+            period = _period_from_context(left, window)
+            basis = _basis_from_context(left, window)
+            found.append((number, period, basis))
+            break
+    if not found:
+        return None, "", ""
+    return found[-1]
 
 
 def key_ratio_value(rows: Sequence[Mapping[str, Any]] | None, needles: Sequence[str]) -> float | None:
@@ -130,11 +196,14 @@ def key_level_value(rows: Sequence[Mapping[str, Any]] | None, needles: Sequence[
     return None
 
 
-def _last_amount(label: re.Pattern[str], text: str) -> float | None:
-    found: list[float] = []
+def _last_amount(label: re.Pattern[str], text: str, *, kpi_id: str = "") -> tuple[float | None, str, str]:
+    found: list[tuple[float, str, str]] = []
     blob = text or ""
     for match in label.finditer(blob):
-        window = blob[match.end(): match.end() + 48]
+        left = blob[max(0, match.start() - 80): match.start()]
+        window = blob[match.end(): match.end() + 64]
+        if kpi_id and not _context_ok(kpi_id, f"{left} {match.group(0)}", window):
+            continue
         item = _AMOUNT_RE.match(window.lstrip(" :,-")) or _AMOUNT_RE.search(window)
         if not item:
             continue
@@ -142,9 +211,14 @@ def _last_amount(label: re.Pattern[str], text: str) -> float | None:
             number = float(item.group(1).replace(",", ""))
         except ValueError:
             continue
+        unit = item.group(2).lower()
+        if "lakh" in unit:
+            number *= 100_000.0
         if number > 0:
-            found.append(number)
-    return max(found) if found else None
+            found.append((number, _period_from_context(left, window), _basis_from_context(left, window)))
+    if not found:
+        return None, "", ""
+    return max(found, key=lambda row: row[0])
 
 
 def series_from_tables(
@@ -162,7 +236,7 @@ def series_from_tables(
         row = find_row(tables.get(key), needles)
         series = dated_series(row)
         if series:
-            snap = snapshot(series, kind=kind, year_steps=1 if key in {"profit_loss", "balance_sheet", "cash_flow"} else 4)
+            snap = snapshot(series, kind=kind, year_steps=1 if key in {"profit_loss", "balance_sheet", "cash_flow"} else 4, table=key)
             current = snap.get("current")
             if current is None:
                 continue
@@ -244,23 +318,47 @@ def extract_kpis_from_raw(raw: Mapping[str, Any] | None) -> dict[str, dict[str, 
     return out
 
 
-def _print_snap(current: float, *, source: str, source_url: str = "") -> dict[str, Any]:
+def _print_snap(
+    current: float,
+    *,
+    source: str,
+    source_url: str = "",
+    period: str = "",
+    reporting_basis: str = "",
+    document_type: str = "",
+) -> dict[str, Any]:
+    period_label = period or "extracted print"
+    period_type = infer_period_type(period_label, "")
     return {
         "current": current,
-        "current_period": "extracted print",
+        "current_period": period_label,
         "previous": None,
         "previous_period": "",
         "year_ago": None,
         "year_ago_period": "",
         "qoq_change": None,
         "yoy_change": None,
-        "points": [{"period": "extracted print", "value": current}],
+        "points": [{"period": period_label, "value": current, "period_type": period_type}],
         "source": source,
         "source_url": source_url,
+        "period_type": period_type,
+        "previous_period_type": "",
+        "year_ago_period_type": "",
+        "reporting_basis": reporting_basis,
+        "document_type": document_type,
+        "source_count": 1,
+        "source_consensus": "single",
+        "agreeing_sources": [source] if source else [],
     }
 
 
-def extract_rates_from_text(text: str, *, source: str, source_url: str = "") -> dict[str, dict[str, Any]]:
+def extract_rates_from_text(
+    text: str,
+    *,
+    source: str,
+    source_url: str = "",
+    document_type: str = "",
+) -> dict[str, dict[str, Any]]:
     blob = html_to_text(text) if "<" in (text or "") and ">" in (text or "") else (text or "")
     out: dict[str, dict[str, Any]] = {}
     mapping = (
@@ -279,15 +377,23 @@ def extract_rates_from_text(text: str, *, source: str, source_url: str = "") -> 
         ("loan_deposit", re.compile(r"(?:credit[\s-]*deposit|c[\s-]*d\s+ratio|loan[\s-]*deposit)", re.I)),
     )
     for kpi_id, pattern in mapping:
-        current = _last_percent(pattern, blob)
+        current, period, basis = _last_percent(
+            pattern, blob, kpi_id=kpi_id, document_type=document_type,
+        )
         if current is None or not _in_bounds(kpi_id, current):
             continue
-        out[kpi_id] = _print_snap(current, source=source, source_url=source_url)
+        out[kpi_id] = _print_snap(
+            current, source=source, source_url=source_url,
+            period=period, reporting_basis=basis, document_type=document_type,
+        )
     for kpi_id, pattern in (("advances", _ADVANCES_LABEL), ("deposits", _DEPOSITS_LABEL)):
-        current = _last_amount(pattern, blob)
+        current, period, basis = _last_amount(pattern, blob, kpi_id=kpi_id)
         if current is None:
             continue
-        out[kpi_id] = _print_snap(current, source=source, source_url=source_url)
+        out[kpi_id] = _print_snap(
+            current, source=source, source_url=source_url,
+            period=period, reporting_basis=basis, document_type=document_type,
+        )
     return out
 
 
@@ -458,10 +564,19 @@ def extract_commentary(text: str, *, source: str, source_url: str = "", source_d
     return out
 
 
-def extract_research_pack(text: str, *, source: str, source_url: str = "", source_date: str = "") -> dict[str, Any]:
+def extract_research_pack(
+    text: str,
+    *,
+    source: str,
+    source_url: str = "",
+    source_date: str = "",
+    document_type: str = "",
+) -> dict[str, Any]:
     blob = html_to_text(text) if "<" in (text or "") and ">" in (text or "") else (text or "")
     return {
-        "kpis": extract_rates_from_text(blob, source=source, source_url=source_url),
+        "kpis": extract_rates_from_text(
+            blob, source=source, source_url=source_url, document_type=document_type,
+        ),
         "guidance": extract_guidance(blob, source=source, source_url=source_url, source_date=source_date),
         "commentary": extract_commentary(blob, source=source, source_url=source_url, source_date=source_date),
         "order_book": extract_order_book(blob, source=source, source_url=source_url, source_date=source_date),
@@ -568,7 +683,13 @@ def _in_bounds(kpi_id: str, current: Any) -> bool:
 
 
 def merge_kpi_maps(*maps: Mapping[str, Mapping[str, Any]]) -> dict[str, dict[str, Any]]:
-    """First measured value wins. Later maps only fill holes. Invalid rates are dropped."""
+    """First measured value wins. Later maps only fill holes or confirm.
+
+    Agreeing prints increment source_count. Disagreements are flagged — never averaged.
+    Invalid rates are dropped.
+    """
+    from product.due_diligence.provenance import material_disagreement
+
     out: dict[str, dict[str, Any]] = {}
     for payload in maps:
         for key, snap in dict(payload or {}).items():
@@ -578,7 +699,32 @@ def merge_kpi_maps(*maps: Mapping[str, Mapping[str, Any]]) -> dict[str, dict[str
             if key in _RATE_KPI_IDS:
                 if not _in_bounds(key, current):
                     continue
-            if key in out:
+            incoming = dict(snap)
+            source = str(incoming.get("source") or "")
+            if key not in out:
+                incoming.setdefault("source_count", 1)
+                incoming.setdefault("source_consensus", "single")
+                incoming.setdefault("agreeing_sources", [source] if source else [])
+                out[key] = incoming
                 continue
-            out[key] = dict(snap)
+            existing = out[key]
+            kind = "rate" if key in _RATE_KPI_IDS else "level"
+            if material_disagreement(existing.get("current"), current, kind=kind):
+                existing["source_consensus"] = "conflict"
+                conflicts = list(existing.get("conflicting_sources") or [])
+                conflicts.append({
+                    "value": current,
+                    "source": source,
+                    "period": incoming.get("current_period"),
+                    "source_url": incoming.get("source_url") or "",
+                })
+                existing["conflicting_sources"] = conflicts
+                continue
+            # Same figure from another source — record consensus, keep the first print.
+            agreeing = list(existing.get("agreeing_sources") or [])
+            if source and source not in agreeing:
+                agreeing.append(source)
+                existing["agreeing_sources"] = agreeing
+                existing["source_count"] = len(agreeing)
+                existing["source_consensus"] = "confirmed" if len(agreeing) >= 2 else "single"
     return out

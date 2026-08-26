@@ -147,13 +147,15 @@ def _attachment_rank(text: str) -> int:
     low = (text or "").lower()
     if any(tok in low for tok in ("advertisement", "newspaper", "reg 47", "reg. 47", "regulation 47")):
         return 99
-    if any(tok in low for tok in ("financial result", "results for the period", "un-audited financial", "audited financial")):
+    if any(tok in low for tok in ("financial result", "results for the period", "un-audited financial", "audited financial", "quarterly result")):
         return 0
-    if "transcript" in low or "concall" in low or "conference call" in low:
+    if "investor presentation" in low or "earnings presentation" in low or "investor deck" in low:
         return 1
-    if "investor presentation" in low:
+    if "transcript" in low or "concall" in low or "conference call" in low:
         return 2
     if "press release" in low and any(tok in low for tok in ("result", "profit", "npa")):
+        return 3
+    if "basel" in low or "pillar 3" in low or "pillar-3" in low:
         return 3
     if "annual report" in low or "annual-report" in low:
         return 4
@@ -182,6 +184,39 @@ def bytes_to_text(content: bytes, ext: str, *, max_pages: int = 12) -> str:
     if ext in {".html", ".htm", ".txt", ".xml", ".csv", ".json", ".vtt", ".srt"}:
         return content.decode("utf-8", errors="ignore")
     return ""
+
+
+def _document_type(source: str, url: str = "") -> str:
+    blob = f"{source} {url}".lower()
+    if "investor presentation" in blob or "earnings presentation" in blob:
+        return "investor_presentation"
+    if "annual report" in blob:
+        return "annual_report"
+    if "nse" in blob or "filing" in blob or "result" in blob:
+        return "exchange_filing"
+    return "unknown"
+
+
+def _archive_texts(symbol: str) -> list[tuple[str, str, str]]:
+    """Re-read already-downloaded filings. Does not hit the network."""
+    folder = _symbol_dir(symbol)
+    if not folder.exists():
+        return []
+    out: list[tuple[str, str, str]] = []
+    files = sorted(folder.glob("nse_att_*")) + sorted(folder.glob("nse_ar_*"))
+    for path in files:
+        ext = path.suffix.lower()
+        try:
+            blob = path.read_bytes()
+        except OSError:
+            continue
+        max_pages = 40 if "ar_" in path.name else 28
+        text = bytes_to_text(blob, ext, max_pages=max_pages)
+        if not text.strip():
+            continue
+        source = "NSE annual report" if "ar_" in path.name else "NSE filing"
+        out.append((text, str(path), source))
+    return out
 
 
 def _extend_unique(dst: list[dict[str, Any]], src: list[dict[str, Any]], key, cap: int) -> list[dict[str, Any]]:
@@ -354,7 +389,7 @@ def _fetch_nse(symbol: str, session) -> dict[str, Any]:
             blob = file_path.read_bytes()
         except OSError:
             continue
-        extracted = bytes_to_text(blob, ext, max_pages=16)
+        extracted = bytes_to_text(blob, ext, max_pages=28)
         if extracted.strip():
             bodies.append((extracted, attachment))
     return {
@@ -846,7 +881,12 @@ def acquire_symbol(
 
     def _ingest(text: str, url: str, source: str) -> None:
         nonlocal text_kpis, guidance, commentary, order_book, segments
-        parsed = extract_research_pack(text, source=source, source_url=url)
+        parsed = extract_research_pack(
+            text,
+            source=source,
+            source_url=url,
+            document_type=_document_type(source, url),
+        )
         text_kpis = merge_kpi_maps(text_kpis, parsed.get("kpis") or {})
         if "annual report" not in source.lower():
             guidance.extend(parsed.get("guidance") or [])
@@ -858,6 +898,8 @@ def acquire_symbol(
         _ingest(text, url, "NSE filing")
     for text, url in annual.get("texts") or []:
         _ingest(text, url, "NSE annual report")
+    for text, path, source in _archive_texts(symbol):
+        _ingest(text, path, source)
     nse_headlines = list(nse.get("headlines") or [])
     for text, url in nse_headlines:
         guidance.extend(extract_guidance(text, source="NSE announcement", source_url=url))
