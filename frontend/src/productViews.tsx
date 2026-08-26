@@ -22,6 +22,7 @@ import {
   type DueDiligenceKpi,
   type DueDiligenceReport,
   type IntelligenceMetric,
+  type OptionChainSnapshot,
   type ProductReadiness,
   type StockWorkspace,
   type TradePlan,
@@ -260,6 +261,30 @@ function verdictTone(value: string): string {
   return 'is-neutral'
 }
 
+function OptionChainFacts({ chain }: { chain?: OptionChainSnapshot | null }) {
+  if (!chain?.available) {
+    return (
+      <EmptyState
+        title="Data unavailable"
+        detail={chain?.reason || 'No nearest-expiry option-chain snapshot on file. Acquire on an F&O name, or this stays empty.'}
+      />
+    )
+  }
+  const calls = (chain.top_call_oi || []).map((row) => `${row.strike} (${row.oi})`).join(', ')
+  const puts = (chain.top_put_oi || []).map((row) => `${row.strike} (${row.oi})`).join(', ')
+  return (
+    <ul className="dd-watch">
+      <li>Expiry: {chain.expiry || 'unavailable'}</li>
+      <li>Spot: {chain.spot == null ? 'unavailable' : chain.spot}</li>
+      <li>Call OI: {chain.call_oi ?? 'unavailable'} · Put OI: {chain.put_oi ?? 'unavailable'} · PCR: {chain.pcr ?? 'unavailable'}</li>
+      <li>Max pain: {chain.max_pain ?? 'unavailable'} · ATM strike: {chain.atm_strike ?? 'unavailable'} · ATM IV: {chain.atm_iv == null ? 'unavailable' : `${chain.atm_iv}%`}</li>
+      {calls ? <li>Highest call OI: {calls}</li> : null}
+      {puts ? <li>Highest put OI: {puts}</li> : null}
+      <li>{chain.note || 'Nearest-expiry snapshot. Not a buy/sell signal.'}</li>
+    </ul>
+  )
+}
+
 function InvestigatePanel({
   report,
   loading,
@@ -471,7 +496,7 @@ function InvestigatePanel({
           <EmptyState title="No autonomous download on file yet" detail="Acquire from the internet fills Screener and NSE filings, then this page reloads from disk." />
         )}
       </Panel>
-      <Panel title="MANAGEMENT COMMENTARY" subtitle="Structured Research Data uploads, plus rule extracts from those files">
+      <Panel title="MANAGEMENT COMMENTARY" subtitle="Structured uploads first; Acquire fills holes from filing / annual-report text">
         {(report.evidence_pack?.management_commentary || []).length
           ? (
             <ul className="dd-events">
@@ -484,12 +509,15 @@ function InvestigatePanel({
               ))}
             </ul>
           )
-          : <EmptyState title="Data unavailable" detail="No concall / guidance rows on file. Upload them in Research Data." />}
+          : <EmptyState title="Data unavailable" detail="No concall / guidance wording on file yet. Run Acquire or upload a transcript in Research Data." />}
       </Panel>
-      <Panel title="ORDER BOOK / GUIDANCE" subtitle="Only from uploaded structured rows">
+      <Panel title="ORDER BOOK / GUIDANCE" subtitle="Structured uploads first; Acquire fills holes from filing text">
         {(report.evidence_pack?.order_book || []).length
           ? <ul className="dd-watch">{report.evidence_pack!.order_book.map((item) => <li key={item.fact}>{item.fact}</li>)}</ul>
-          : <EmptyState title="Data unavailable" detail="No order-book or forward-guidance table on file." />}
+          : <EmptyState title="Data unavailable" detail="No order-book or forward-guidance figure on file." />}
+      </Panel>
+      <Panel title="OPTION CHAIN SNAPSHOT" subtitle="Nearest expiry from last Acquire — not live depth, not Greeks, not a signal">
+        <OptionChainFacts chain={report.evidence_pack?.option_chain || report.autonomy?.option_chain} />
       </Panel>
       <Panel title="PEERS ON FILE" subtitle="Screener peer table if present — no estimated relative scores">
         {(report.evidence_pack?.peers || []).length
@@ -800,10 +828,11 @@ export function ProductStockIntelligenceView(props: ViewProps) {
           </Panel>
           <Panel title="F&O ELIGIBILITY — NOT A SIGNAL">
             <div className="panel-copy">
-              {Object.keys(workspace?.fno || {}).length
+              {Object.keys(workspace?.fno || {}).filter((key) => key !== 'option_chain').length
                 ? `Maps to ${(workspace?.fno.future_symbol as string) || 'stock future'} · lot ${(workspace?.fno.lot_size as number) || '—'} · expiry ${(workspace?.fno.expiry as string) || '—'}`
                 : 'Not in current F&O universe or master file missing.'}
             </div>
+            <OptionChainFacts chain={(workspace?.fno?.option_chain as OptionChainSnapshot | undefined) || null} />
           </Panel>
         </div>
       )}

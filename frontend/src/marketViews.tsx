@@ -159,7 +159,7 @@ export function FnoView({ dashboard, runControl, setSelected, setActive }: Props
     <section className="workspace-view">
       <div className="feature-purpose">
         <strong>What F&O Coverage does—and does not do</strong>
-        <p>It answers whether a stock has current derivatives contracts, the nearest future, expiry and lot size. It does not yet calculate option-chain OI, IV, PCR, Greeks or trade direction, so this page is deliberately not called an F&O signal desk.</p>
+        <p>It answers whether a stock has current derivatives contracts, the nearest future, expiry and lot size. Acquire on Investigate can store a nearest-expiry OI / IV / PCR / max-pain snapshot for a mapped name. This page still does not calculate Greeks or trade direction, so it is not an F&O signal desk.</p>
       </div>
       <div className="inline-actions">
         <button type="button" onClick={() => void runControl('REFRESH_FNO_NOW')}>Refresh instrument master</button>

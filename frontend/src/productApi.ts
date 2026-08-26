@@ -205,6 +205,28 @@ export type DueDiligenceEvent = {
   summary: string
 }
 
+export type OptionChainSnapshot = {
+  available: boolean
+  acquired?: boolean
+  expiry?: string | null
+  spot?: number | null
+  call_oi?: number | null
+  put_oi?: number | null
+  pcr?: number | null
+  max_pain?: number | null
+  atm_strike?: number | null
+  atm_iv?: number | null
+  top_call_oi?: { strike: number; oi: number }[]
+  top_put_oi?: { strike: number; oi: number }[]
+  n_strikes?: number
+  source?: string
+  source_url?: string
+  reason?: string
+  note?: string
+  not_a_signal?: boolean
+  places_orders?: boolean
+}
+
 export type DueDiligenceReport = {
   schema_version: number
   symbol: string
@@ -283,6 +305,7 @@ export type DueDiligenceReport = {
     downloads?: { ok?: boolean; url?: string; path?: string; error?: string }[]
     still_missing?: string[]
     files_on_disk?: string[]
+    option_chain?: OptionChainSnapshot | null
     not_an_llm?: boolean
   }
   evidence_pack?: {
@@ -293,6 +316,7 @@ export type DueDiligenceReport = {
     order_book: { metric: string; fact: string; as_of: string; source_url: string }[]
     peers: { name: string; fact: string }[]
     snapshot_metrics: { id: string; label: string; available: boolean; fact: string; interpretation: string; implication: string; source: string }[]
+    option_chain?: OptionChainSnapshot
     next_actions: { id: string; label: string; page?: string; control?: string; detail: string }[]
   }
   long_term_overlay?: {

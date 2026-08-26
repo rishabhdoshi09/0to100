@@ -558,5 +558,166 @@ def test_attachment_rank_prefers_result_filings():
     )
     assert parsed["gnpa"]["current"] == 1.35
     assert parsed["nnpa"]["current"] == 0.42
+    assert _attachment_rank("Annual Report for FY 2025") == 4
+    assert _attachment_rank("Audio recording of concall") == 1
+
+
+def test_extract_research_pack_fills_order_book_segments_commentary():
+    from product.due_diligence.extract import extract_research_pack
+
+    text = (
+        "The order book stood at 12,450 crore as of June 2026. "
+        "The energy segment contributed 42% of revenue. "
+        "The CEO said demand remains robust across industrial pipes this quarter."
+    )
+    parsed = extract_research_pack(text, source="NSE filing", source_url="https://nsearchives.nseindia.com/x.pdf")
+    assert parsed["order_book"][0]["value"] == 12450
+    assert parsed["segments"][0]["segment"].lower() == "energy"
+    assert parsed["segments"][0]["revenue_mix_pct"] == 42
+    assert "robust" in parsed["commentary"][0]["commentary"].lower()
+
+
+def test_option_chain_summary_is_descriptive_not_a_signal():
+    from product.due_diligence.option_chain import summarize_option_chain
+
+    empty = summarize_option_chain({})
+    assert empty["available"] is False
+    assert empty["places_orders"] is False
+    payload = {
+        "records": {
+            "expiryDates": ["28-Aug-2026", "25-Sep-2026"],
+            "underlyingValue": 100,
+            "data": [
+                {"strikePrice": 90, "expiryDate": "28-Aug-2026", "CE": {"openInterest": 10, "impliedVolatility": 20}, "PE": {"openInterest": 50, "impliedVolatility": 22}},
+                {"strikePrice": 100, "expiryDate": "28-Aug-2026", "CE": {"openInterest": 40, "impliedVolatility": 18}, "PE": {"openInterest": 40, "impliedVolatility": 18}},
+                {"strikePrice": 110, "expiryDate": "28-Aug-2026", "CE": {"openInterest": 80, "impliedVolatility": 25}, "PE": {"openInterest": 5, "impliedVolatility": 24}},
+                {"strikePrice": 100, "expiryDate": "25-Sep-2026", "CE": {"openInterest": 999}, "PE": {"openInterest": 999}},
+            ],
+        }
+    }
+    snap = summarize_option_chain(payload, source_url="https://www.nseindia.com/api/option-chain-equities?symbol=TEST")
+    assert snap["available"] is True
+    assert snap["expiry"] == "28-Aug-2026"
+    assert snap["call_oi"] == 130
+    assert snap["put_oi"] == 95
+    assert snap["pcr"] == 0.731
+    assert snap["max_pain"] == 90
+    assert snap["atm_strike"] == 100
+    assert snap["atm_iv"] == 18
+    assert snap["not_a_signal"] is True
+    assert snap["places_orders"] is False
+
+
+def test_autonomy_overlay_fills_commentary_order_book_and_chain(tmp_path, monkeypatch):
+    monkeypatch.setattr("product.due_diligence.acquire.EVIDENCE_ROOT", tmp_path)
+    from product.due_diligence.acquire import save_autonomy_facts
+
+    save_autonomy_facts("PIPECO", {
+        "acquired_at": "2026-08-25T00:00:00+00:00",
+        "kpis": {},
+        "guidance": [],
+        "commentary": [{
+            "speaker": "CEO",
+            "topic": "",
+            "commentary": "Demand remains robust across industrial pipes this quarter.",
+            "event_date": "2026-07-20",
+            "source_url": "https://nsearchives.nseindia.com/x.pdf",
+        }],
+        "order_book": [{
+            "metric": "Order Book",
+            "value": 12450,
+            "unit": "₹ cr",
+            "period": "Jun 2026",
+            "as_of_date": "Jun 2026",
+        }],
+        "segments": [{"segment": "Energy", "revenue_mix_pct": 42}],
+        "option_chain": {
+            "available": True,
+            "expiry": "28-Aug-2026",
+            "pcr": 0.9,
+            "not_a_signal": True,
+            "places_orders": False,
+        },
+        "still_missing": [],
+    })
+    payload = build_due_diligence(
+        "PIPECO",
+        scan_payload={"records": [{"symbol": "PIPECO", "status": "Ready to trade", "score": 80}]},
+        long_term_payload={"records": [{"symbol": "PIPECO", "sector": "Metals & Mining"}]},
+        raw_fundamentals={"available": True, "fetched_at": "", "data": {"about": "Makes SAW pipes", "quarterly_results": [], "shareholding": []}},
+        news=[],
+    )
+    pack = payload["evidence_pack"]
+    assert "robust" in pack["management_commentary"][0]["commentary"].lower()
+    assert pack["order_book"][0]["value"] == 12450
+    assert "Energy" in pack["revenue_drivers"]
+    assert pack["option_chain"]["pcr"] == 0.9
+    assert pack["option_chain"]["not_a_signal"] is True
+    assert payload["autonomy"]["option_chain"]["available"] is True
+
+
+def test_acquire_symbol_persists_research_pack_and_chain(tmp_path, monkeypatch):
+    monkeypatch.setattr("product.due_diligence.acquire.EVIDENCE_ROOT", tmp_path)
+    monkeypatch.setattr("reporting.evidence_intake.load_raw_fundamentals", lambda _s: {"data": {}})
+    monkeypatch.setattr(
+        "fundamentals.fetcher.get_deep_fundamentals",
+        lambda symbol, force_refresh=False: {
+            "about": "Makes SAW pipes",
+            "url": "https://www.screener.in/company/PIPECO/",
+            "quarterly_results": [],
+            "shareholding": [],
+        },
+    )
+    monkeypatch.setattr("product.due_diligence.acquire._nse_session", lambda: object())
+    monkeypatch.setattr(
+        "product.due_diligence.acquire._fetch_nse",
+        lambda *_a, **_k: {
+            "step": {"id": "nse_filings", "ok": True},
+            "downloads": [],
+            "texts": [(
+                "The order book stood at 12,450 crore. The energy segment contributed 42%. "
+                "The CEO said demand remains robust across industrial pipes this quarter.",
+                "https://nsearchives.nseindia.com/x.pdf",
+            )],
+            "headlines": [],
+        },
+    )
+    monkeypatch.setattr(
+        "product.due_diligence.acquire._fetch_annual_reports",
+        lambda *_a, **_k: {"step": {"id": "nse_annual_reports", "ok": False}, "downloads": [], "texts": []},
+    )
+    monkeypatch.setattr(
+        "product.due_diligence.acquire._fetch_option_chain",
+        lambda *_a, **_k: {
+            "step": {"id": "option_chain", "ok": True, "expiry": "28-Aug-2026"},
+            "download": {"ok": True, "path": "logs/research_evidence/PIPECO/autonomy/nse_option_chain.json"},
+            "snapshot": {
+                "available": True,
+                "expiry": "28-Aug-2026",
+                "pcr": 1.1,
+                "not_a_signal": True,
+                "places_orders": False,
+            },
+        },
+    )
+    monkeypatch.setattr("product.due_diligence.acquire._news_snippets", lambda _s: [])
+    monkeypatch.setattr(
+        "product.due_diligence.acquire.extract_from_uploads",
+        lambda _s: {"kpis": {}, "guidance": [], "commentary": [], "order_book": [], "segments": [], "files_read": 0},
+    )
+    from product.due_diligence.acquire import acquire_symbol
+
+    payload = acquire_symbol("PIPECO", force=True)
+    assert payload["order_book"][0]["value"] == 12450
+    assert payload["segments"][0]["revenue_mix_pct"] == 42
+    assert "robust" in payload["commentary"][0]["commentary"].lower()
+    assert payload["option_chain"]["pcr"] == 1.1
+    assert payload["option_chain"]["not_a_signal"] is True
+    assert "option_chain" not in payload["still_missing"]
+    src = (__import__("pathlib").Path(__file__).resolve().parents[1] / "product" / "due_diligence" / "acquire.py").read_text(encoding="utf-8")
+    assert "options.analytics" not in src
+    chain_src = (__import__("pathlib").Path(__file__).resolve().parents[1] / "product" / "due_diligence" / "option_chain.py").read_text(encoding="utf-8")
+    assert "streamlit" not in chain_src
+
 
 

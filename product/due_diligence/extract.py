@@ -216,12 +216,138 @@ def extract_guidance(text: str, *, source: str, source_url: str = "", source_dat
     }]
 
 
-def extract_from_html(html_blob: str, *, source: str, source_url: str = "") -> dict[str, Any]:
-    text = html_to_text(html_blob)
+_ORDER_RE = re.compile(
+    r"(order[\s-]?book|order\s+inflow|order\s+intake|total\s+contract\s+value|\btcv\b)"
+    r"[^\d%]{0,48}(\d[\d,]*(?:\.\d+)?)\s*(crore|cr|billion|bn)",
+    re.I,
+)
+_SEGMENT_RE = re.compile(
+    r"([A-Za-z][A-Za-z0-9& /.-]{2,40}?)\s+(?:segment|division|business)\s+"
+    r"(?:contributed|accounted for|stood at|was|is)\s+(\d{1,2}(?:\.\d+)?)\s*%",
+    re.I,
+)
+_SPEAKER_RE = re.compile(
+    r"(?:(?:the\s+)?(?:md|ceo|cfo|chairman|management)|we)\s+"
+    r"(?:said|stated|added|noted|commented)[,:]?\s+(.{20,280})",
+    re.I,
+)
+
+
+def extract_order_book(text: str, *, source: str, source_url: str = "", source_date: str = "") -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    seen = set()
+    for match in _ORDER_RE.finditer(text or ""):
+        metric = re.sub(r"\s+", " ", match.group(1)).strip().title()
+        raw = match.group(2).replace(",", "")
+        unit = "₹ cr" if match.group(3).lower() in {"crore", "cr"} else match.group(3)
+        try:
+            value = float(raw)
+        except ValueError:
+            continue
+        if value <= 0:
+            continue
+        key = (metric.lower(), value)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append({
+            "metric": metric,
+            "value": value,
+            "unit": unit,
+            "period": "",
+            "wording": re.sub(r"\s+", " ", match.group(0)).strip()[:240],
+            "as_of": source_date,
+            "source_url": source_url,
+            "source": source,
+            "fact": f"{metric}: {value} {unit} ({source_date or 'date unavailable'})".strip(),
+        })
+        if len(out) >= 6:
+            break
+    return out
+
+
+def extract_segments(text: str, *, source: str, source_url: str = "") -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    seen = set()
+    for match in _SEGMENT_RE.finditer(text or ""):
+        name = re.sub(r"\s+", " ", match.group(1)).strip(" -")
+        name = re.sub(r"^(?:the|a|an)\s+", "", name, flags=re.I).strip()
+        if len(name) < 3 or name.lower() in {"the", "this", "our", "its"}:
+            continue
+        try:
+            mix = float(match.group(2))
+        except ValueError:
+            continue
+        key = name.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append({
+            "segment": name,
+            "revenue_cr": None,
+            "revenue_mix_pct": mix,
+            "source_url": source_url,
+            "source": source,
+        })
+        if len(out) >= 6:
+            break
+    return out
+
+
+def extract_commentary(text: str, *, source: str, source_url: str = "", source_date: str = "") -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    seen = set()
+    for match in _SPEAKER_RE.finditer(text or ""):
+        speaker = re.sub(r"\s+", " ", match.group(0).split("said")[0] if "said" in match.group(0).lower() else "Management")
+        speaker = speaker.strip(" :,") or "Management"
+        if len(speaker) > 48:
+            speaker = "Management"
+        commentary = re.sub(r"\s+", " ", match.group(1)).strip()
+        cap = re.search(r"[A-Z]", commentary)
+        if cap and cap.start() < 24:
+            commentary = commentary[cap.start():]
+        if len(commentary) < 24:
+            continue
+        key = commentary[:80]
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append({
+            "speaker": speaker[:48],
+            "topic": "",
+            "commentary": commentary[:400],
+            "event_date": source_date,
+            "source_url": source_url,
+            "source": source,
+        })
+        if len(out) >= 6:
+            break
+    if not out:
+        for item in extract_guidance(text, source=source, source_url=source_url, source_date=source_date):
+            out.append({
+                "speaker": "Management",
+                "topic": item.get("tone") or "",
+                "commentary": item.get("excerpt") or "",
+                "event_date": source_date,
+                "source_url": source_url,
+                "source": source,
+            })
+    return out
+
+
+def extract_research_pack(text: str, *, source: str, source_url: str = "", source_date: str = "") -> dict[str, Any]:
+    blob = html_to_text(text) if "<" in (text or "") and ">" in (text or "") else (text or "")
     return {
-        "kpis": extract_rates_from_text(text, source=source, source_url=source_url),
-        "guidance": extract_guidance(text, source=source, source_url=source_url),
+        "kpis": extract_rates_from_text(blob, source=source, source_url=source_url),
+        "guidance": extract_guidance(blob, source=source, source_url=source_url, source_date=source_date),
+        "commentary": extract_commentary(blob, source=source, source_url=source_url, source_date=source_date),
+        "order_book": extract_order_book(blob, source=source, source_url=source_url, source_date=source_date),
+        "segments": extract_segments(blob, source=source, source_url=source_url),
     }
+
+
+def extract_from_html(html_blob: str, *, source: str, source_url: str = "") -> dict[str, Any]:
+    return extract_research_pack(html_blob, source=source, source_url=source_url)
 
 
 def _read_local(path: str) -> str:
@@ -252,10 +378,13 @@ def extract_from_uploads(symbol: str, uploads: Sequence[Mapping[str, Any]] | Non
             items = []
     kpis: dict[str, dict[str, Any]] = {}
     guidance: list[dict[str, Any]] = []
+    commentary: list[dict[str, Any]] = []
+    order_book: list[dict[str, Any]] = []
+    segments: list[dict[str, Any]] = []
     scanned = 0
     for item in items:
         kind = str(item.get("kind") or "")
-        if kind not in {"management_commentary", "order_book_guidance", "annual_report", "financial_history"}:
+        if kind not in {"management_commentary", "order_book_guidance", "annual_report", "financial_history", "business_segments"}:
             continue
         rel = str(item.get("path") or "")
         text = _read_local(str(root / rel)) if rel else ""
@@ -267,10 +396,21 @@ def extract_from_uploads(symbol: str, uploads: Sequence[Mapping[str, Any]] | Non
         source = f"Uploaded {kind} ({item.get('filename') or 'file'})"
         url = str(item.get("source_url") or "")
         date = str(item.get("as_of") or item.get("uploaded_at") or "")
-        for kpi_id, snap in extract_rates_from_text(text, source=source, source_url=url).items():
+        parsed = extract_research_pack(text, source=source, source_url=url, source_date=date)
+        for kpi_id, snap in (parsed.get("kpis") or {}).items():
             kpis.setdefault(kpi_id, {**snap, "source_date": date})
-        guidance.extend(extract_guidance(text, source=source, source_url=url, source_date=date))
-    return {"kpis": kpis, "guidance": guidance[:8], "files_read": scanned}
+        guidance.extend(parsed.get("guidance") or [])
+        commentary.extend(parsed.get("commentary") or [])
+        order_book.extend(parsed.get("order_book") or [])
+        segments.extend(parsed.get("segments") or [])
+    return {
+        "kpis": kpis,
+        "guidance": guidance[:8],
+        "commentary": commentary[:6],
+        "order_book": order_book[:6],
+        "segments": segments[:6],
+        "files_read": scanned,
+    }
 
 
 def merge_kpi_maps(*maps: Mapping[str, Mapping[str, Any]]) -> dict[str, dict[str, Any]]:

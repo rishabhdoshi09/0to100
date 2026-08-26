@@ -9,14 +9,14 @@ from typing import Any, Mapping
 from urllib.parse import urljoin, urlparse
 
 from product.due_diligence.extract import (
-    extract_from_html,
     extract_from_uploads,
     extract_guidance,
     extract_kpis_from_raw,
-    extract_rates_from_text,
+    extract_research_pack,
     html_to_text,
     merge_kpi_maps,
 )
+from product.due_diligence.option_chain import summarize_option_chain
 
 ROOT = Path(__file__).resolve().parents[2]
 EVIDENCE_ROOT = ROOT / "logs" / "research_evidence"
@@ -144,16 +144,18 @@ def _attachment_rank(text: str) -> int:
     low = (text or "").lower()
     if any(tok in low for tok in ("financial result", "results for the period", "un-audited financial", "audited financial")):
         return 0
-    if "transcript" in low:
+    if "transcript" in low or "concall" in low or "conference call" in low:
         return 1
     if "investor presentation" in low:
         return 2
     if "press release" in low and any(tok in low for tok in ("result", "profit", "npa")):
         return 3
+    if "annual report" in low or "annual-report" in low:
+        return 4
     return 99
 
 
-def pdf_to_text(content: bytes) -> str:
+def pdf_to_text(content: bytes, *, max_pages: int = 12) -> str:
     if not content:
         return ""
     try:
@@ -161,20 +163,37 @@ def pdf_to_text(content: bytes) -> str:
         from pypdf import PdfReader
         reader = PdfReader(BytesIO(content))
         pages = []
-        for page in list(reader.pages)[:12]:
+        for page in list(reader.pages)[:max_pages]:
             pages.append(page.extract_text() or "")
         return "\n".join(pages)
     except Exception:
         return ""
 
 
-def bytes_to_text(content: bytes, ext: str) -> str:
+def bytes_to_text(content: bytes, ext: str, *, max_pages: int = 12) -> str:
     ext = (ext or "").lower()
     if ext == ".pdf":
-        return pdf_to_text(content)
+        return pdf_to_text(content, max_pages=max_pages)
     if ext in {".html", ".htm", ".txt", ".xml", ".csv", ".json", ".vtt", ".srt"}:
         return content.decode("utf-8", errors="ignore")
     return ""
+
+
+def _extend_unique(dst: list[dict[str, Any]], src: list[dict[str, Any]], key, cap: int) -> list[dict[str, Any]]:
+    seen = {key(item) for item in dst}
+    for item in src:
+        token = key(item)
+        if not token or token in seen:
+            continue
+        seen.add(token)
+        dst.append(item)
+        if len(dst) >= cap:
+            break
+    return dst
+
+
+def _empty_nse() -> dict[str, Any]:
+    return {"step": {"id": "nse_filings", "ok": False}, "downloads": [], "texts": [], "headlines": []}
 
 
 def _nse_session():
@@ -316,7 +335,7 @@ def _fetch_nse(symbol: str, session) -> dict[str, Any]:
             continue
         seen.add(item[2])
         picked.append(item)
-        if len(picked) >= 4:
+        if len(picked) >= 6:
             break
     for index, (_rank, _when, attachment, _desc) in enumerate(picked, start=1):
         ext = Path(urlparse(attachment).path).suffix.lower() or ".bin"
@@ -329,7 +348,7 @@ def _fetch_nse(symbol: str, session) -> dict[str, Any]:
             blob = file_path.read_bytes()
         except OSError:
             continue
-        extracted = bytes_to_text(blob, ext)
+        extracted = bytes_to_text(blob, ext, max_pages=16)
         if extracted.strip():
             bodies.append((extracted, attachment))
     return {
@@ -343,6 +362,105 @@ def _fetch_nse(symbol: str, session) -> dict[str, Any]:
         "downloads": downloads,
         "texts": bodies,
         "headlines": headlines,
+    }
+
+
+def _fetch_annual_reports(symbol: str, session) -> dict[str, Any]:
+    url = f"https://www.nseindia.com/api/annual-reports?index=equities&symbol={symbol}"
+    downloads: list[dict[str, Any]] = []
+    bodies: list[tuple[str, str]] = []
+    item = _download(session, url, symbol=symbol, name="nse_annual_reports.json")
+    downloads.append(item)
+    rows: list[Mapping[str, Any]] = []
+    if item.get("ok"):
+        path = ROOT / str(item["path"])
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8", errors="ignore"))
+        except (OSError, json.JSONDecodeError):
+            payload = None
+        if isinstance(payload, list):
+            rows = [row for row in payload if isinstance(row, Mapping)]
+        elif isinstance(payload, dict):
+            raw_rows = payload.get("data") or payload.get("annualReports") or payload.get("reports") or []
+            rows = [row for row in list(raw_rows) if isinstance(row, Mapping)]
+            if not rows and payload.get("fileName"):
+                rows = [payload]
+    picked: list[str] = []
+    seen: set[str] = set()
+    for row in rows[:8]:
+        attachment = str(row.get("fileName") or row.get("attchmntFile") or row.get("file") or "")
+        if not attachment:
+            continue
+        if not attachment.startswith("http"):
+            attachment = urljoin("https://nsearchives.nseindia.com/annual_reports/", attachment)
+        if not _allowed(attachment) or attachment in seen:
+            continue
+        seen.add(attachment)
+        picked.append(attachment)
+        if len(picked) >= 2:
+            break
+    for index, attachment in enumerate(picked, start=1):
+        ext = Path(urlparse(attachment).path).suffix.lower() or ".pdf"
+        downloaded = _download(session, attachment, symbol=symbol, name=f"nse_ar_{index}{ext}")
+        downloads.append(downloaded)
+        if not downloaded.get("ok"):
+            continue
+        file_path = ROOT / str(downloaded["path"])
+        try:
+            blob = file_path.read_bytes()
+        except OSError:
+            continue
+        extracted = bytes_to_text(blob, ext, max_pages=24)
+        if extracted.strip():
+            bodies.append((extracted, attachment))
+    return {
+        "step": {
+            "id": "nse_annual_reports",
+            "ok": any(d.get("ok") for d in downloads),
+            "rows": len(rows),
+            "picked": picked,
+        },
+        "downloads": downloads,
+        "texts": bodies,
+    }
+
+
+def _fetch_option_chain(symbol: str, session) -> dict[str, Any]:
+    url = f"https://www.nseindia.com/api/option-chain-equities?symbol={symbol}"
+    try:
+        session.get("https://www.nseindia.com/option-chain", timeout=12)
+    except Exception:
+        pass
+    downloaded = _download(session, url, symbol=symbol, name="nse_option_chain.json")
+    snapshot: dict[str, Any] = {
+        "available": False,
+        "source": "NSE option-chain-equities",
+        "source_url": url,
+        "not_a_signal": True,
+        "places_orders": False,
+    }
+    if downloaded.get("ok"):
+        path = ROOT / str(downloaded["path"])
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8", errors="ignore"))
+        except (OSError, json.JSONDecodeError):
+            payload = None
+        if isinstance(payload, dict):
+            snapshot = summarize_option_chain(payload, source_url=url)
+        else:
+            snapshot["reason"] = "Option-chain response was not JSON."
+    else:
+        snapshot["reason"] = str(downloaded.get("error") or "download failed")
+    snapshot["acquired"] = True
+    return {
+        "step": {
+            "id": "option_chain",
+            "ok": bool(snapshot.get("available")),
+            "expiry": snapshot.get("expiry"),
+            "error": None if snapshot.get("available") else snapshot.get("reason"),
+        },
+        "download": downloaded,
+        "snapshot": snapshot,
     }
 
 
@@ -379,28 +497,78 @@ def acquire_symbol(symbol: str, *, force: bool = True, now: datetime | None = No
     steps.append(screener["step"])
     raw = dict(screener.get("data") or {})
 
+    session = None
     try:
         session = _nse_session()
-        nse = _fetch_nse(symbol, session)
     except Exception as exc:
-        nse = {"step": {"id": "nse_filings", "ok": False, "error": str(exc)[:240]}, "downloads": [], "texts": [], "headlines": []}
+        session = None
+        nse_error = str(exc)[:240]
+    else:
+        nse_error = ""
+    if session is None:
+        nse = _empty_nse()
+        if nse_error:
+            nse["step"]["error"] = nse_error
+        annual = {"step": {"id": "nse_annual_reports", "ok": False, "error": nse_error or "no NSE session"}, "downloads": [], "texts": []}
+        chain = {
+            "step": {"id": "option_chain", "ok": False, "error": nse_error or "no NSE session"},
+            "download": {},
+            "snapshot": {"available": False, "acquired": False, "reason": nse_error or "no NSE session", "not_a_signal": True, "places_orders": False},
+        }
+    else:
+        try:
+            nse = _fetch_nse(symbol, session)
+        except Exception as exc:
+            nse = _empty_nse()
+            nse["step"]["error"] = str(exc)[:240]
+        try:
+            annual = _fetch_annual_reports(symbol, session)
+        except Exception as exc:
+            annual = {"step": {"id": "nse_annual_reports", "ok": False, "error": str(exc)[:240]}, "downloads": [], "texts": []}
+        try:
+            chain = _fetch_option_chain(symbol, session)
+        except Exception as exc:
+            chain = {
+                "step": {"id": "option_chain", "ok": False, "error": str(exc)[:240]},
+                "download": {},
+                "snapshot": {"available": False, "acquired": True, "reason": str(exc)[:240], "not_a_signal": True, "places_orders": False},
+            }
     steps.append(nse["step"])
+    steps.append(annual["step"])
+    steps.append(chain["step"])
     downloads.extend(nse.get("downloads") or [])
+    downloads.extend(annual.get("downloads") or [])
+    if chain.get("download"):
+        downloads.append(chain["download"])
 
     text_kpis: dict[str, dict[str, Any]] = {}
     guidance: list[dict[str, Any]] = []
-    for text, url in nse.get("texts") or []:
-        parsed = extract_from_html(text, source="NSE filing", source_url=url)
+    commentary: list[dict[str, Any]] = []
+    order_book: list[dict[str, Any]] = []
+    segments: list[dict[str, Any]] = []
+
+    def _ingest(text: str, url: str, source: str) -> None:
+        nonlocal text_kpis, guidance, commentary, order_book, segments
+        parsed = extract_research_pack(text, source=source, source_url=url)
         text_kpis = merge_kpi_maps(text_kpis, parsed.get("kpis") or {})
         guidance.extend(parsed.get("guidance") or [])
-        extra = extract_rates_from_text(text, source="NSE filing", source_url=url)
-        text_kpis = merge_kpi_maps(text_kpis, extra)
+        commentary = _extend_unique(commentary, list(parsed.get("commentary") or []), lambda row: (row.get("commentary") or "")[:80], 6)
+        order_book = _extend_unique(order_book, list(parsed.get("order_book") or []), lambda row: (row.get("metric"), row.get("value")), 6)
+        segments = _extend_unique(segments, list(parsed.get("segments") or []), lambda row: str(row.get("segment") or "").lower(), 6)
+
+    for text, url in nse.get("texts") or []:
+        _ingest(text, url, "NSE filing")
+    for text, url in annual.get("texts") or []:
+        _ingest(text, url, "NSE annual report")
     for text, url in nse.get("headlines") or []:
         guidance.extend(extract_guidance(text, source="NSE announcement", source_url=url))
 
     uploads = extract_from_uploads(symbol)
     for item in uploads.get("guidance") or []:
         guidance.append(item)
+    commentary = _extend_unique(list(uploads.get("commentary") or []), commentary, lambda row: (row.get("commentary") or "")[:80], 6)
+    order_book = _extend_unique(list(uploads.get("order_book") or []), order_book, lambda row: (row.get("metric"), row.get("value")), 6)
+    segments = _extend_unique(list(uploads.get("segments") or []), segments, lambda row: str(row.get("segment") or "").lower(), 6)
 
     news_guidance: list[dict[str, Any]] = []
     for text, source, url in _news_snippets(symbol):
@@ -426,15 +594,28 @@ def acquire_symbol(symbol: str, *, force: bool = True, now: datetime | None = No
         if len(unique_guidance) >= 8:
             break
 
+    option_chain = dict(chain.get("snapshot") or {})
     missing = [key for key in ("gnpa", "nnpa", "pledge") if key not in kpis]
+    if not commentary:
+        missing.append("commentary")
+    if not order_book:
+        missing.append("order_book")
+    if not segments:
+        missing.append("segments")
+    if not option_chain.get("available"):
+        missing.append("option_chain")
     payload = {
-        "schema_version": 1,
+        "schema_version": 2,
         "symbol": symbol,
         "acquired_at": now.isoformat(),
         "method": "autonomy_download",
         "not_an_llm": True,
         "kpis": kpis,
         "guidance": unique_guidance,
+        "commentary": commentary,
+        "order_book": order_book,
+        "segments": segments,
+        "option_chain": option_chain,
         "downloads": downloads,
         "steps": steps,
         "still_missing": missing,

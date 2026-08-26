@@ -267,6 +267,27 @@ def load_evidence_pack(
         "flags": flags,
         "next_actions": next_actions,
         "empty_note": (
-            "Management commentary, segments, order-book and peers stay Data unavailable until a structured upload or cache row exists."
+            "Management commentary, segments, order-book, peers and option-chain stay Data unavailable until a structured upload, an Acquire download, or a cache row exists."
         ),
     }
+
+
+def apply_autonomy_pack(pack: Mapping[str, Any] | None, autonomy: Mapping[str, Any] | None) -> dict[str, Any]:
+    """Fill Investigate holes from Acquire files. Uploads and cache rows win."""
+    out = dict(pack or {})
+    facts = dict(autonomy or {})
+    if not out.get("management_commentary"):
+        out["management_commentary"] = _commentary(list(facts.get("commentary") or []))
+    if not out.get("order_book"):
+        out["order_book"] = _order_book(list(facts.get("order_book") or []))
+    drivers = str(out.get("revenue_drivers") or "")
+    if (not drivers or drivers.startswith("Data unavailable")) and facts.get("segments"):
+        line = _segments_line(list(facts.get("segments") or []))
+        if line and not line.startswith("Data unavailable"):
+            out["revenue_drivers"] = line
+    chain = facts.get("option_chain")
+    if isinstance(chain, Mapping) and chain:
+        out["option_chain"] = dict(chain)
+    elif "option_chain" not in out:
+        out["option_chain"] = {}
+    return out

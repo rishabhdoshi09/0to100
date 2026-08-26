@@ -232,7 +232,7 @@ const pageSubtitles: Record<string, string> = {
   Education: 'Crunched news + macro/micro teach-ins for the share market — never invented blogs, never a signal.',
   'Research Data': 'Verified snapshots, data platform jobs, and evidence uploads.',
   Backtest: 'Inspect a paper-loss style on past data. This does not change today’s BUY list.',
-  'F&O Desk': 'Mapped futures plus live OI / IV / PCR / max-pain context for a selected underlying.',
+  'F&O Desk': 'Mapped futures, plus an acquired nearest-expiry OI / IV / PCR snapshot when present.',
   'Paper Portfolio': 'Demat holdings + paper book — sync Zerodha or paste your shares.',
   Portfolio: 'Demat holdings + paper book — sync Zerodha or paste your shares.',
   'System Health': 'Operations, autonomy and infrastructure detail.',

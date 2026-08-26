@@ -154,7 +154,7 @@ export const PAGE_GUIDE: Record<string, PageGuide> = {
       'Which underlyings were excluded and why?',
     ],
     action: 'Refresh the instrument master and inspect mapping exclusions.',
-    doesNot: 'This is not yet an option-chain, OI, IV, Greeks or directional strategy engine.',
+    doesNot: 'This is not a directional F&O signal desk and does not calculate Greeks. An Acquire snapshot can show nearest-expiry OI, IV, PCR and max pain on Stock Intelligence / Investigate.',
   },
   'Market Internals': {
     title: 'Market & Breadth',

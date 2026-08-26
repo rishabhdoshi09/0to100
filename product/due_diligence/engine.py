@@ -11,7 +11,7 @@ from product.due_diligence.frameworks import KpiSpec, get_framework
 from product.due_diligence.news_layer import material_events, news_verdict
 from product.due_diligence.series import dated_series, direction, find_row, snapshot
 from product.due_diligence.thesis import compose_thesis
-from product.due_diligence.wiring import load_evidence_pack
+from product.due_diligence.wiring import apply_autonomy_pack, load_evidence_pack
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -397,13 +397,16 @@ def build_due_diligence(
     score, coverage, score_meta = _score(findings)
     events = material_events(list(news or []), symbol)
     news_label, news_detail = news_verdict(events)
-    pack = load_evidence_pack(
-        symbol,
-        raw=raw,
-        scan_as_of=str((scan_payload or {}).get("scanned_at") or ""),
-        long_term_as_of=str((long_term_payload or {}).get("scanned_at") or ""),
-        news_as_of=str(events[0]["published_at"] if events else ""),
-        long_row=long_row,
+    pack = apply_autonomy_pack(
+        load_evidence_pack(
+            symbol,
+            raw=raw,
+            scan_as_of=str((scan_payload or {}).get("scanned_at") or ""),
+            long_term_as_of=str((long_term_payload or {}).get("scanned_at") or ""),
+            news_as_of=str(events[0]["published_at"] if events else ""),
+            long_row=long_row,
+        ),
+        autonomy,
     )
     if pack.get("revenue_drivers") and pack["revenue_drivers"] != "Data unavailable — no segment table on file.":
         profile["revenue_drivers"] = pack["revenue_drivers"]
@@ -551,6 +554,7 @@ def build_due_diligence(
             "downloads": list(autonomy.get("downloads") or [])[:12],
             "still_missing": list(autonomy.get("still_missing") or []),
             "files_on_disk": list(autonomy.get("files_on_disk") or []),
+            "option_chain": dict(autonomy.get("option_chain") or {}) or None,
             "not_an_llm": True,
         },
         "as_of": as_of,
