@@ -573,7 +573,8 @@ def acquire_symbol(symbol: str, *, force: bool = True, now: datetime | None = No
         nonlocal text_kpis, guidance, commentary, order_book, segments
         parsed = extract_research_pack(text, source=source, source_url=url)
         text_kpis = merge_kpi_maps(text_kpis, parsed.get("kpis") or {})
-        guidance.extend(parsed.get("guidance") or [])
+        if "annual report" not in source.lower():
+            guidance.extend(parsed.get("guidance") or [])
         commentary = _extend_unique(commentary, list(parsed.get("commentary") or []), lambda row: (row.get("commentary") or "")[:80], 6)
         order_book = _extend_unique(order_book, list(parsed.get("order_book") or []), lambda row: (row.get("metric"), row.get("value")), 6)
         segments = _extend_unique(segments, list(parsed.get("segments") or []), lambda row: str(row.get("segment") or "").lower(), 6)

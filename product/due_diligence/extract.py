@@ -323,7 +323,7 @@ def extract_commentary(text: str, *, source: str, source_url: str = "", source_d
         })
         if len(out) >= 6:
             break
-    if not out:
+    if not out and "annual report" not in (source or "").lower():
         for item in extract_guidance(text, source=source, source_url=source_url, source_date=source_date):
             out.append({
                 "speaker": "Management",
