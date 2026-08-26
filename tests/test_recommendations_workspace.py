@@ -586,6 +586,7 @@ def test_graded_breakout_with_volume_stays_buy():
                 "categories": ["Breakout"], "chase_risk": False, "rsi": 55,
                 "volume_ratio": 1.6, "avg_vol20": 2e6, "breakout_grade": "A",
                 "price": 200, "entry": 198, "stop": 190, "target": 230,
+                "sepa_score": 72, "above_sma50": True, "above_sma200": True,
             }],
         },
         long_term_payload={"records": []},
@@ -594,6 +595,7 @@ def test_graded_breakout_with_volume_stays_buy():
     by_id = {c["id"]: c for c in payload["categories"]}
     card = next(c for c in by_id["momentum_breakouts"]["cards"] if c["symbol"] == "GRADED")
     assert card["action_badge"] == "Buy"
+    assert card["method_confirms"] >= 2
     assert card["entry"] == 198.0
     assert card["stop"] == 190.0
     assert card["target"] == 230.0

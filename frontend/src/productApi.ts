@@ -773,6 +773,19 @@ export type RecommendationCard = {
   next_step?: string
   evidence_panel?: RecommendationEvidencePanel
   case?: RecommendationCase
+  methods?: RecoMethod[]
+  method_confirms?: number
+  method_fails?: number
+  quality_score?: number | null
+  method_line?: string
+}
+
+export type RecoMethod = {
+  id: string
+  label: string
+  status: 'pass' | 'fail' | 'unknown' | string
+  detail?: string
+  points?: number | null
 }
 
 export type RecommendationCase = {
@@ -839,6 +852,7 @@ export type RecommendationsWorkspace = {
     long_term_row_count?: number
     assigned_count?: number
   }
+  methods_note?: string
   desk?: RecommendationDesk
   categories: RecommendationCategory[]
   lifecycle: {

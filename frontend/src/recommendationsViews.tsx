@@ -121,6 +121,16 @@ function CardTile({
               {card.price_tag ? <span>{card.price_tag}</span> : null}
             </div>
             {card.setup_label ? <p className="reco-pick-setup">{card.setup_label}</p> : null}
+            {(card.methods || []).some((m) => m.status === 'pass') ? (
+              <div className="reco-pick-tags" aria-label="Research methods">
+                {(card.methods || []).filter((m) => m.status === 'pass').map((m) => (
+                  <span key={m.id} className="reco-evidence-tag is-pass">{m.label}</span>
+                ))}
+                {card.method_confirms != null ? (
+                  <span className="reco-evidence-tag">{card.method_confirms} methods</span>
+                ) : null}
+              </div>
+            ) : null}
           </div>
           {points.length > 0 ? (
             <div className="reco-key-points">
@@ -190,6 +200,9 @@ function EvidencePanel({ card }: { card: RecommendationCard }) {
     ['Coverage', panel.fundamental_coverage != null ? `${panel.fundamental_coverage}%` : '—'],
     ['Source', [panel.tech_source, panel.price_tag].filter(Boolean).join(' · ') || 'Saved scan'],
     ['Signals', (panel.signals || []).join(', ') || '—'],
+    ['Methods', (card.method_line || (card.methods || []).filter((m) => m.status === 'pass').map((m) => m.label).join(' + ')) || '—'],
+    ['Confirms', card.method_confirms != null ? String(card.method_confirms) : '—'],
+    ['Quality composite', card.quality_score != null ? String(card.quality_score) : '—'],
   ]
   return (
     <div className="reco-evidence-panel">
@@ -247,6 +260,7 @@ function DecisionSheet({
             {card.symbol}
             {card.sector && card.sector !== '—' ? ` · ${card.sector}` : ''}
             {card.horizon ? ` · Horizon ${card.horizon}` : ''}
+            {card.method_line ? ` · ${card.method_confirms || 0} methods: ${card.method_line}` : ''}
           </p>
         </div>
         {points.length > 0 ? (
@@ -551,6 +565,7 @@ export function RecommendationsView({
         <span className="ico" aria-hidden="true">!</span>
         <div>
           <div>{data.cmp_note}</div>
+          {data.methods_note ? <div>{data.methods_note}</div> : null}
           {data.scan_scanned_at ? (
             <em>Last scan {relativeAge(data.scan_scanned_at)}</em>
           ) : null}

@@ -471,10 +471,12 @@
 .reco-pick-tags {
   display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px;
 }
-.reco-evidence-tag {
-  font-size: 11px; letter-spacing: 0.02em; color: var(--rw-muted);
-  border-bottom: 1px solid var(--rw-line); padding: 0 0 1px;
-  text-transform: lowercase;
+.reco-evidence-tag.is-pass {
+  color: var(--rw-green);
+  border-bottom-color: var(--rw-green);
+  text-transform: none;
+  letter-spacing: 0.01em;
+  font-weight: 600;
 }
 .reco-empty {
   max-width: 720px; padding: 36px 20px; text-align: center;

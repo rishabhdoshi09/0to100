@@ -35,6 +35,12 @@ from product.radar_workspace import (
     is_long_term_pick,
     is_sniper_breakout_candidate,
 )
+from product.reco_methods import (
+    allows_buy,
+    attach_method_scores,
+    attach_research_overlays,
+    sort_key as method_sort_key,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 REPORTS_DIR = ROOT / "logs" / "product" / "market_reports"
@@ -44,25 +50,25 @@ CATEGORIES: tuple[dict[str, str], ...] = (
     {
         "id": "wealth_builders",
         "label": "Wealth Builders",
-        "blurb": "Long-term quality / GARP — compounders with ≥50% fundamental coverage.",
+        "blurb": "Long-term quality / GARP — compounders with ≥50% fundamental coverage, ranked by independent methods not SEPA alone.",
         "icon": "compound",
     },
     {
         "id": "super_trends",
         "label": "Super Trends",
-        "blurb": "Momentum without chase — trend + RS leadership, not extended.",
+        "blurb": "Momentum without chase — Buy needs two methods (tape, trend, RS, funds, SEPA, live EV).",
         "icon": "trend",
     },
     {
         "id": "momentum_breakouts",
         "label": "Momentum Breakouts",
-        "blurb": "Sniper / graded Buy cards, plus Watch cards for Home-visible breakouts on the last scan.",
+        "blurb": "Sniper/graded tape plus a second method (funds, SEPA, RS, trend, live EV). SEPA alone is not a Buy.",
         "icon": "breakout",
     },
     {
         "id": "recovery_setups",
         "label": "Recovery Setups",
-        "blurb": "True turnarounds only — double-bottom / accumulation (not coils).",
+        "blurb": "True turnarounds only — double-bottom / accumulation (not coils), ranked by independent methods.",
         "icon": "recovery",
     },
 )
@@ -179,13 +185,13 @@ def _action_badge(row: Mapping[str, Any], *, category_id: str = "") -> str:
     status = str(row.get("status") or "")
     grade = str(row.get("breakout_grade") or "").upper()
     if category_id == "momentum_breakouts":
-        # Buy only when sniper/grade already cleared volume. Ungraded scan rows stay Watch.
+        # Tape (sniper/grade) can nominate; Buy still needs two independent methods.
         if is_sniper_breakout_candidate(row) or grade in {"A", "B"}:
             if verdict in {"BUY", "STRONG BUY"} or status == "Ready to trade":
-                return "Buy"
+                return "Buy" if allows_buy(row) else "Watch"
         return "Watch"
     if verdict in {"BUY", "STRONG BUY"} or status == "Ready to trade":
-        return "Buy"
+        return "Buy" if allows_buy(row) else "Watch"
     if "breakout" in status.lower() or grade in {"A", "B"}:
         return "Watch"
     if cls in {"QUALITY_COMPOUNDER", "GARP_CANDIDATE"}:
@@ -202,12 +208,22 @@ def card_from_row(
     evidence_tags: Sequence[str] | None = None,
     market_ctx: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    ups = upside_metrics(row)
+    scored = attach_method_scores(row) if row.get("methods") is None else dict(row)
+    ups = upside_metrics(scored)
     tags = [str(t) for t in (evidence_tags or []) if t]
-    reason = qualify_reason or str(row.get("reason") or "")
-    badge = _action_badge(row, category_id=category_id)
+    for item in scored.get("methods") or []:
+        if item.get("status") == "pass" and item.get("label"):
+            tags.append(str(item["label"]))
+    tags = list(dict.fromkeys(tags))
+    reason = qualify_reason or str(scored.get("reason") or "")
+    confirms = int(scored.get("method_confirms") or 0)
+    if confirms:
+        line = str(scored.get("method_line") or "")
+        extra = f"{confirms} methods: {line}" if line else f"{confirms} independent methods"
+        reason = f"{reason} · {extra}" if reason else extra
+    badge = _action_badge(scored, category_id=category_id)
     surface = decision_surface(
-        row,
+        scored,
         category_id=category_id,
         action_badge=badge,
         qualify_reason=reason,
@@ -215,29 +231,34 @@ def card_from_row(
         market_ctx=market_ctx,
     )
     card = {
-        "symbol": str(row.get("symbol") or "").upper(),
-        "company": str(row.get("company") or row.get("symbol") or ""),
+        "symbol": str(scored.get("symbol") or "").upper(),
+        "company": str(scored.get("company") or scored.get("symbol") or ""),
         "category_id": category_id,
         "category_label": category_label,
         "action_badge": badge,
-        "risk_tier": risk_tier(row),
-        "risk_label": str(row.get("risk_label") or risk_tier(row)),
-        "setup_label": str(row.get("setup_label") or row.get("status") or row.get("classification") or ""),
-        "sector": str(row.get("sector") or "—"),
-        "score": _f(row.get("score") or row.get("combined_score")),
-        "rsi": _f(row.get("rsi")) or None,
-        "volume_ratio": _f(row.get("volume_ratio")) or None,
-        "price_tag": str(row.get("price_tag") or ""),
-        "tech_source": str(row.get("tech_source") or ""),
+        "risk_tier": risk_tier(scored),
+        "risk_label": str(scored.get("risk_label") or risk_tier(scored)),
+        "setup_label": str(scored.get("setup_label") or scored.get("status") or scored.get("classification") or ""),
+        "sector": str(scored.get("sector") or "—"),
+        "score": _f(scored.get("score") or scored.get("combined_score")),
+        "rsi": _f(scored.get("rsi")) or None,
+        "volume_ratio": _f(scored.get("volume_ratio")) or None,
+        "price_tag": str(scored.get("price_tag") or ""),
+        "tech_source": str(scored.get("tech_source") or ""),
         "reason": reason,
         "qualify_reason": reason,
         "evidence_tags": tags,
-        "signals": sorted(_signals(row)),
+        "signals": sorted(_signals(scored)),
         "lifecycle": "active",
+        "methods": list(scored.get("methods") or []),
+        "method_confirms": confirms,
+        "method_fails": int(scored.get("method_fails") or 0),
+        "quality_score": scored.get("quality_score"),
+        "method_line": str(scored.get("method_line") or ""),
         **ups,
         **surface,
     }
-    return _attach_key_points(card, row=row)
+    return _attach_key_points(card, row=scored)
 
 
 def _trend_structure_ok(row: Mapping[str, Any]) -> bool:
@@ -594,8 +615,7 @@ def _bucket_rows(
     wealth.sort(key=lambda c: (
         0 if "COMPOUNDER" in str(c.get("setup_label") or "") else
         1 if "GARP" in str(c.get("setup_label") or "") else 2,
-        -_f(c.get("score")),
-        c["symbol"],
+        *method_sort_key(c),
     ))
 
     trends: list[dict[str, Any]] = []
@@ -623,17 +643,11 @@ def _bucket_rows(
         else:
             trends.append(card)
 
-    trends.sort(key=lambda c: (-_f(c.get("score")), c["symbol"]))
-    breakouts.sort(key=lambda c: (
-        -_f(c.get("score")),
-        c["symbol"],
-    ))
-    # Prefer higher breakout_quality when present on source rows — score already
-    # embeds sniper boost after enrich; keep symbol tie-break stable.
+    trends.sort(key=method_sort_key)
+    breakouts.sort(key=method_sort_key)
     recovery.sort(key=lambda c: (
         0 if "DOUBLE_BOTTOM" in (c.get("evidence_tags") or []) else 1,
-        -_f(c.get("score")),
-        c["symbol"],
+        *method_sort_key(c),
     ))
     return {
         "wealth_builders": wealth[:_BUCKET_CAP],
@@ -803,6 +817,9 @@ def build_recommendations_workspace(
         pass
 
     attach_live_ev(scan_rows)
+    scan_rows, lt_rows = attach_research_overlays(
+        scan_rows, lt_rows, scanned_at=scan_at,
+    )
     if settle_cases:
         try:
             from product.case_memory import settle_due_cases
@@ -831,7 +848,9 @@ def build_recommendations_workspace(
         "CMP is the latest official NSE bar (Kite overlay when the market is open; "
         "otherwise last EOD). Entry, stop and target are shown only when the scan "
         "already stored them — this desk does not invent 5%/10% plans. "
-        "Each scan symbol maps to one primary category (breakout → recovery → trend)."
+        "Each scan symbol maps to one primary category (breakout → recovery → trend). "
+        "Buy requires two independent methods (tape, SEPA, funds, trend, RS, live EV, "
+        "conviction, case memory, sector). SEPA alone is not a Buy. Missing methods stay empty."
     )
     if str(scan.get("records_status") or "") == "PRIOR_DAY_SNAPSHOT":
         cmp_note = "Scan file is a PRIOR-DAY SNAPSHOT — run a fresh market scan before acting. " + cmp_note
@@ -853,7 +872,14 @@ def build_recommendations_workspace(
         "cmp_note": cmp_note,
         "assignment_policy": (
             "exclusive_primary: momentum_breakouts > recovery_setups > super_trends; "
-            "wealth_builders from long-term quality only"
+            "wealth_builders from long-term quality only; "
+            "buy_requires_two_independent_methods"
+        ),
+        "methods_note": (
+            "Nine research methods, all from saved system state: tape, SEPA overlay, "
+            "long-term funds, trend structure, relative strength, live EV (≥30), "
+            "conviction shortlist, case memory, sector leadership. Missing stays unknown. "
+            "A Buy needs two passes — SEPA 100 with funds 0 is not enough."
         ),
         "desk": desk,
         "categories": categories,
