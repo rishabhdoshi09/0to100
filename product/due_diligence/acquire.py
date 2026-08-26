@@ -23,7 +23,7 @@ EVIDENCE_ROOT = ROOT / "logs" / "research_evidence"
 ACQUIRE_CAP = 6
 FACTS_NAME = "autonomy_facts.json"
 FRESH_S = 24 * 60 * 60
-MAX_ATTACHMENT_BYTES = 4_000_000
+MAX_ATTACHMENT_BYTES = 16_000_000
 _ALLOWED_HOSTS = {
     "www.screener.in",
     "screener.in",
@@ -142,6 +142,8 @@ def _allowed(url: str) -> bool:
 
 def _attachment_rank(text: str) -> int:
     low = (text or "").lower()
+    if any(tok in low for tok in ("advertisement", "newspaper", "reg 47", "reg. 47", "regulation 47")):
+        return 99
     if any(tok in low for tok in ("financial result", "results for the period", "un-audited financial", "audited financial")):
         return 0
     if "transcript" in low or "concall" in low or "conference call" in low:
@@ -226,7 +228,7 @@ def _download(session, url: str, *, symbol: str, name: str) -> dict[str, Any]:
         return {"ok": False, "url": url, "error": f"HTTP {response.status_code}"}
     content = response.content or b""
     if len(content) > MAX_ATTACHMENT_BYTES:
-        return {"ok": False, "url": url, "error": "file larger than 4 MB — skipped"}
+        return {"ok": False, "url": url, "error": "file larger than 16 MB — skipped"}
     path = _save_bytes(symbol, name, content)
     return {
         "ok": True,
@@ -427,11 +429,6 @@ def _fetch_annual_reports(symbol: str, session) -> dict[str, Any]:
 
 def _fetch_option_chain(symbol: str, session) -> dict[str, Any]:
     url = f"https://www.nseindia.com/api/option-chain-equities?symbol={symbol}"
-    try:
-        session.get("https://www.nseindia.com/option-chain", timeout=12)
-    except Exception:
-        pass
-    downloaded = _download(session, url, symbol=symbol, name="nse_option_chain.json")
     snapshot: dict[str, Any] = {
         "available": False,
         "source": "NSE option-chain-equities",
@@ -439,18 +436,42 @@ def _fetch_option_chain(symbol: str, session) -> dict[str, Any]:
         "not_a_signal": True,
         "places_orders": False,
     }
-    if downloaded.get("ok"):
+    downloaded: dict[str, Any] = {"ok": False, "url": url, "error": "not attempted"}
+    last_error = ""
+    try:
+        session.get("https://www.nseindia.com/option-chain", timeout=12)
+        session.get(f"https://www.nseindia.com/option-chain?symbol={symbol}", timeout=12)
+    except Exception:
+        pass
+    for attempt in range(3):
+        if attempt:
+            time.sleep(0.6 * attempt)
+        downloaded = _download(session, url, symbol=symbol, name="nse_option_chain.json")
+        if not downloaded.get("ok"):
+            last_error = str(downloaded.get("error") or "download failed")
+            if "HTTP 401" in last_error or "HTTP 403" in last_error:
+                try:
+                    session.get("https://www.nseindia.com/option-chain", timeout=12)
+                except Exception:
+                    pass
+            continue
         path = ROOT / str(downloaded["path"])
         try:
-            payload = json.loads(path.read_text(encoding="utf-8", errors="ignore"))
+            blob = path.read_text(encoding="utf-8", errors="ignore")
+            payload = json.loads(blob)
         except (OSError, json.JSONDecodeError):
-            payload = None
-        if isinstance(payload, dict):
-            snapshot = summarize_option_chain(payload, source_url=url)
-        else:
-            snapshot["reason"] = "Option-chain response was not JSON."
-    else:
-        snapshot["reason"] = str(downloaded.get("error") or "download failed")
+            last_error = "Option-chain response was not JSON."
+            continue
+        if not isinstance(payload, dict) or payload == {}:
+            last_error = "NSE returned an empty option-chain payload (no contracts, or the API stubbed this session)."
+            continue
+        snapshot = summarize_option_chain(payload, source_url=url)
+        if snapshot.get("available"):
+            last_error = ""
+            break
+        last_error = str(snapshot.get("reason") or "NSE returned no option-chain rows for this symbol.")
+    if last_error and not snapshot.get("available"):
+        snapshot["reason"] = last_error
     snapshot["acquired"] = True
     return {
         "step": {

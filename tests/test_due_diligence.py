@@ -551,6 +551,7 @@ def test_attachment_rank_prefers_result_filings():
     assert _attachment_rank("submitted the financial results for the period ended Jun 30, 2026") == 0
     assert _attachment_rank("informed the Exchange about Transcript") == 1
     assert _attachment_rank("Schedule of investor meet") == 99
+    assert _attachment_rank("Audited financial results newspaper advertisement under Regulation 47") == 99
     parsed = extract_rates_from_text(
         "Gross NPA % as of June 2026 was 1.35%. Net NPA % was 0.42%.",
         source="NSE results PDF",
