@@ -217,7 +217,7 @@ def _save_bytes(symbol: str, name: str, content: bytes) -> Path:
     return path
 
 
-def _download(session, url: str, *, symbol: str, name: str) -> dict[str, Any]:
+def _download(session, url: str, *, symbol: str, name: str, max_bytes: int | None = None) -> dict[str, Any]:
     if not _allowed(url):
         return {"ok": False, "url": url, "error": "host not on the official allow-list"}
     try:
@@ -227,8 +227,9 @@ def _download(session, url: str, *, symbol: str, name: str) -> dict[str, Any]:
     if response.status_code != 200:
         return {"ok": False, "url": url, "error": f"HTTP {response.status_code}"}
     content = response.content or b""
-    if len(content) > MAX_ATTACHMENT_BYTES:
-        return {"ok": False, "url": url, "error": "file larger than 16 MB — skipped"}
+    limit = MAX_ATTACHMENT_BYTES if max_bytes is None else max_bytes
+    if len(content) > limit:
+        return {"ok": False, "url": url, "error": f"file larger than {limit // 1_000_000} MB — skipped"}
     path = _save_bytes(symbol, name, content)
     return {
         "ok": True,
@@ -403,7 +404,7 @@ def _fetch_annual_reports(symbol: str, session) -> dict[str, Any]:
             break
     for index, attachment in enumerate(picked, start=1):
         ext = Path(urlparse(attachment).path).suffix.lower() or ".pdf"
-        downloaded = _download(session, attachment, symbol=symbol, name=f"nse_ar_{index}{ext}")
+        downloaded = _download(session, attachment, symbol=symbol, name=f"nse_ar_{index}{ext}", max_bytes=32_000_000)
         downloads.append(downloaded)
         if not downloaded.get("ok"):
             continue
@@ -412,7 +413,7 @@ def _fetch_annual_reports(symbol: str, session) -> dict[str, Any]:
             blob = file_path.read_bytes()
         except OSError:
             continue
-        extracted = bytes_to_text(blob, ext, max_pages=24)
+        extracted = bytes_to_text(blob, ext, max_pages=40)
         if extracted.strip():
             bodies.append((extracted, attachment))
     return {

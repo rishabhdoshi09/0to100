@@ -459,6 +459,11 @@ def test_extract_gnpa_and_guidance_from_filing_text():
     )
     assert spaced["gnpa"]["current"] == 0.74
     assert spaced["nnpa"]["current"] == 0.19
+    charity = extract_rates_from_text(
+        "Promoters are LivingMyPromise signatories; they have pledged to give away at least 50% to charity.",
+        source="press",
+    )
+    assert "pledge" not in charity
     assert parsed["guidance"][0]["tone"] == "Constructive"
     empty = extract_guidance("No tokens here about the weather.", source="x")
     assert empty == []

@@ -19,7 +19,7 @@ _GNPA_LABEL = re.compile(r"(?:gross\s*npa[s]?|gnpa|gross\s*non[\s-]*performing)"
 _NNPA_LABEL = re.compile(r"(?:net\s*npa[s]?|nnpa|net\s*non[\s-]*performing)", re.I)
 _PLEDGE_LABEL = re.compile(r"(?:promoter\s*)?pledged?(?:\s+shares?|\s+equity|\s+holding)?", re.I)
 _PERCENT_RE = re.compile(r"(\d{1,2}(?:\.\s*\d+)?)\s*%")
-_SKIP_PREFIX = ("below", "under", "above", "over", "upto", "up to", "within")
+_SKIP_PREFIX = ("below", "under", "above", "over", "upto", "up to", "within", "least")
 _GUIDANCE_LINE = re.compile(
     r".{0,100}(?:guidance|outlook|we expect|we guide|we maintain|order book|"
     r"order[- ]book|raise(?:d)? guidance|cut guidance|lower(?:ed)? guidance|"
@@ -228,7 +228,7 @@ _SEGMENT_RE = re.compile(
     re.I,
 )
 _SPEAKER_RE = re.compile(
-    r"(?:(?:the\s+)?(?:md|ceo|cfo|chairman|management)|we)\s+"
+    r"(?:(?:the\s+)?(?:md|ceo|cfo|chairman|management))\s+"
     r"(?:said|stated|added|noted|commented)[,:]?\s+(.{20,280})",
     re.I,
 )
