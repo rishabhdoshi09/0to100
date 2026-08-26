@@ -61,3 +61,36 @@ def test_stock_workspace_stays_honest_when_data_is_missing():
     assert result["state"] == "DATA_INCOMPLETE"
     assert result["confidence_pct"] == 0
     assert result["gaps"]
+
+
+def test_stock_workspace_attaches_acquired_option_chain(tmp_path, monkeypatch):
+    monkeypatch.setattr("product.due_diligence.acquire.EVIDENCE_ROOT", tmp_path)
+    from product.due_diligence.acquire import save_autonomy_facts
+
+    save_autonomy_facts("TEST", {
+        "acquired_at": "2026-01-28T11:00:00+00:00",
+        "option_chain": {
+            "available": True,
+            "expiry": "28-Jan-2026",
+            "pcr": 0.88,
+            "max_pain": 100,
+            "not_a_signal": True,
+            "places_orders": False,
+        },
+    })
+    result = build_stock_workspace(
+        "TEST",
+        scan_payload={},
+        long_term_payload={},
+        raw_fundamentals={},
+        frame=[],
+        news=[],
+        fno_payload={"generated_at": "2026-01-28T06:00:00+00:00", "underlyings": [{"symbol": "TEST", "lot_size": 100, "future_symbol": "TEST26JANFUT"}]},
+        now=datetime(2026, 1, 28, 12, 0, tzinfo=timezone.utc),
+    )
+    chain = result["fno"]["option_chain"]
+    assert chain["available"] is True
+    assert chain["pcr"] == 0.88
+    assert chain["not_a_signal"] is True
+    assert any(source["name"] == "Option-chain snapshot" for source in result["sources"])
+    assert result["fno"]["lot_size"] == 100

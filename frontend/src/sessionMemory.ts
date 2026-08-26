@@ -18,6 +18,16 @@ export function recall<T>(key: string): T | undefined {
   return undefined
 }
 
+/** Open Stock Intelligence on the Investigate tab for this symbol. */
+export function markInvestigate(symbol: string): string {
+  return remember('stock-investigate', String(symbol || '').toUpperCase())
+}
+
+export function wantsInvestigate(symbol: string): boolean {
+  const want = recall<string>('stock-investigate')
+  return Boolean(want && symbol && want.toUpperCase() === String(symbol).toUpperCase())
+}
+
 export function keepRicher<T>(key: string, next: T, isEmpty: (value: T) => boolean): T {
   const prev = recall<T>(key)
   if (prev !== undefined && isEmpty(next) && !isEmpty(prev)) return prev

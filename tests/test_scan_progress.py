@@ -11,6 +11,19 @@ def test_eta_needs_a_real_pace():
     assert eta_label(None) == ""
 
 
+def test_stale_active_progress_does_not_keep_a_fake_eta(tmp_path):
+    path = tmp_path / "scan_progress.json"
+    path.write_text(
+        '{"active": true, "stage": "SCANNING", "current": 11, "total": 47, '
+        '"eta_label": "about 20 min", "updated_at": 1}',
+        encoding="utf-8",
+    )
+    saved = read_progress(path)
+    assert saved["active"] is False
+    assert saved["eta_label"] == ""
+    assert saved.get("stale") is True
+
+
 def test_progress_file_carries_eta(tmp_path, monkeypatch):
     path = tmp_path / "scan_progress.json"
     write_progress(current=0, total=2000, stage="STARTING", path=path, now=1000.0)
@@ -130,6 +143,78 @@ def test_market_ops_prefetch_warms_ohlcv():
     assert "warm_ohlcv" in source
     assert "return len(symbols)" not in source
     assert "warm_ohlcv(symbols, progress=progress)" not in source
+    history = inspect.getsource(MarketOperationsWorker._ensure_history)
+    assert "not scanning stocks yet" in history
+    assert "Downloading official NSE bhavcopy" in history
+    assert "current_count,\n                    total," not in history
+
+
+def test_market_scan_does_not_forward_prefetch_days_as_stocks():
+    from scan.market_scan_service import run_whole_market_scan
+
+    seen: list[tuple[int, int]] = []
+    prefetch_progress: list = []
+
+    def prefetch(symbols, progress=None):
+        if progress:
+            progress(11, 47)
+            prefetch_progress.append((11, 47))
+        return len(symbols)
+
+    class Scanner:
+        def scan(self, symbols, progress=None, prefetch=True):
+            if progress:
+                progress(1, 2)
+                progress(2, 2)
+            return [SimpleNamespace(symbol="AAA", signals=["MOMENTUM"], score=80,
+                                    verdict="BUY", chase_risk=False, price=100,
+                                    momentum_5d=2, rsi=55, volume_ratio=1.5,
+                                    entry=101, stop=95, target=120, reasons=["ok"])]
+
+    report = run_whole_market_scan(
+        universe_provider=lambda: {"AAA": "Alpha", "BBB": "Beta"},
+        prefetch_fn=prefetch,
+        scanner=Scanner(),
+        fno_provider=lambda: set(),
+        progress_callback=lambda current, total=0, **k: seen.append((int(current), int(total))),
+        save=False,
+    )
+    assert report.ok
+    assert (11, 47) not in seen
+    assert prefetch_progress == []
+    assert seen == [(1, 2), (2, 2)]
+
+
+def test_unified_scanner_does_not_report_prefetch_days(monkeypatch):
+    from scan.unified_scanner import UnifiedScanner
+
+    seen: list[tuple[int, int]] = []
+    state = {"warm": False}
+
+    class Fast(UnifiedScanner):
+        def _analyze(self, symbol, df):
+            return SimpleNamespace(symbol=symbol, signals=["MOMENTUM"], score=50)
+
+    def cached():
+        return ["AAA", "BBB"] if state["warm"] else []
+
+    def prefetch(symbols, progress=None):
+        if progress:
+            progress(11, 47)
+        state["warm"] = True
+        return 2
+
+    monkeypatch.setattr("scan.bulk_fetcher.cached_symbols", cached)
+    monkeypatch.setattr("scan.bulk_fetcher.prefetch", prefetch)
+    monkeypatch.setattr("scan.bulk_fetcher.get_cached", lambda symbol: object())
+    Fast(max_workers=2).scan(
+        ["AAA", "BBB"],
+        progress=lambda current, total: seen.append((current, total)),
+        prefetch=False,
+    )
+    assert (11, 47) not in seen
+    assert seen[0] == (0, 2)
+    assert seen[-1] == (2, 2)
 
 
 def test_stack_scripts_restart_children_instead_of_stopping_the_desk():

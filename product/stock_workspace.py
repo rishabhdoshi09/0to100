@@ -359,7 +359,21 @@ def build_stock_workspace(
     fundamentals = _fundamentals(long_row, raw_record, sector)
     news_rows = [dict(item) for item in (news or []) if isinstance(item, Mapping)]
     news_rows.sort(key=lambda item: (str(item.get("published_at") or item.get("fetched_at") or ""), int(item.get("impact_score", 0) or 0)), reverse=True)
-    fno_match = next((dict(item) for item in list((fno_payload or {}).get("underlyings", []) or []) if isinstance(item, Mapping) and str(item.get("symbol", "")).upper() == symbol), {})
+    instrument = next((dict(item) for item in list((fno_payload or {}).get("underlyings", []) or []) if isinstance(item, Mapping) and str(item.get("symbol", "")).upper() == symbol), {})
+    option_chain: dict[str, Any] = {}
+    autonomy_acquired_at = ""
+    try:
+        from product.due_diligence.acquire import load_autonomy_facts
+        facts = load_autonomy_facts(symbol)
+        autonomy_acquired_at = str(facts.get("acquired_at") or "")
+        chain = facts.get("option_chain")
+        if isinstance(chain, Mapping) and chain:
+            option_chain = dict(chain)
+    except Exception:
+        option_chain = {}
+    fno_out = dict(instrument)
+    if option_chain:
+        fno_out["option_chain"] = option_chain
 
     sources = [
         _source("Official price history", technical.get("available", False), technical.get("latest_date"), 4, "Charts and technical calculations use saved NSE daily OHLCV.", now=now),
@@ -374,8 +388,17 @@ def build_stock_workspace(
             now=now,
         ),
         _source("Company-linked news", bool(news_rows), (news_rows[0].get("published_at") or news_rows[0].get("fetched_at")) if news_rows else "", 7, "Dated context from configured sources; never a standalone order signal.", now=now),
-        _source("F&O instrument master", bool(fno_match), (fno_payload or {}).get("generated_at"), 2, "Current derivatives eligibility, nearest future, expiry and lot size.", now=now),
+        _source("F&O instrument master", bool(instrument), (fno_payload or {}).get("generated_at"), 2, "Current derivatives eligibility, nearest future, expiry and lot size.", now=now),
     ]
+    if option_chain:
+        sources.append(_source(
+            "Option-chain snapshot",
+            bool(option_chain.get("available")),
+            autonomy_acquired_at,
+            1,
+            "Nearest-expiry OI / IV / PCR from last Investigate acquire. Not a trade signal.",
+            now=now,
+        ))
     weights = {"Official price history": 30, "Whole-market scanner": 15, "Long-term research": 20, "Deep fundamentals": 25, "Company-linked news": 5, "F&O instrument master": 5}
     confidence = 0.0
     for source in sources:
@@ -482,7 +505,7 @@ def build_stock_workspace(
         "scanner": scan_row,
         "long_term": long_row,
         "news": news_rows[:10],
-        "fno": fno_match,
+        "fno": fno_out,
         "sources": sources,
         "next_actions": next_actions,
         "case": case,

@@ -131,6 +131,20 @@ def read_progress(path: str | Path | None = None) -> dict[str, Any]:
     try:
         data = json.loads(target.read_text(encoding="utf-8"))
         if isinstance(data, dict):
+            if data.get("active"):
+                try:
+                    age = time.time() - float(data.get("updated_at") or 0)
+                except (TypeError, ValueError):
+                    age = 9999.0
+                # A crashed scan used to leave active=true and a leftover ETA.
+                if age > 90:
+                    data = {
+                        **data,
+                        "active": False,
+                        "eta_s": None,
+                        "eta_label": "",
+                        "stale": True,
+                    }
             return data
     except Exception:
         pass

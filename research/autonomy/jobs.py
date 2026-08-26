@@ -172,9 +172,8 @@ class Deps:
         return {"indices": int(build_index_store()), "source": "official_nse"}
 
     def run_scan(self):
-        from product.scan_progress import eta_label, finish_progress, write_progress
+        from product.scan_progress import finish_progress, write_progress
         from scan.market_scan_service import run_whole_market_scan
-        started = time.time()
         last_print = 0.0
 
         def progress(current, total=0, **_kw):
@@ -187,9 +186,7 @@ class Deps:
             )
             now = time.time()
             if int(current or 0) in (0, 1) or int(current or 0) == int(total or 0) or now - last_print >= 5:
-                remain = payload.get("eta_label") or eta_label(
-                    ((int(total or 0) - int(current or 0)) / max(int(current or 1), 1)) * max(0.1, now - started)
-                )
+                remain = str(payload.get("eta_label") or "").strip()
                 extra = f" · {remain} left" if remain else ""
                 print(
                     f"[SCAN] {int(current or 0)}/{int(total or 0)} · "

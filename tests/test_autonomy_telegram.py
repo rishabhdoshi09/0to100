@@ -91,6 +91,51 @@ def test_live_breakout_requires_hold_and_sends_once(tmp_path):
     assert n.observe_live_breakouts(payload, live)["confirmed"] == 0
 
 
+def test_live_sniper_symbols_prefer_quality_and_cap():
+    from research.autonomy.telegram_notifications import live_sniper_symbols, sniper_symbols
+
+    records = []
+    for i in range(60):
+        records.append({
+            "symbol": f"WIDE{i:02d}",
+            "status": "Watch for breakout",
+            "entry": 100,
+            "rsi": 55,
+            "chase_risk": False,
+            "signals": ["PRE_BREAKOUT"],
+            "score": i,
+            "volume_ratio": 0.2,
+            "avg_vol20": 0,
+        })
+    records.append({
+        "symbol": "BESTSNIP",
+        "status": "Watch for breakout",
+        "entry": 100,
+        "rsi": 58,
+        "chase_risk": False,
+        "signals": ["PRE_BREAKOUT"],
+        "categories": ["PreBreakout"],
+        "pivot_distance_pct": 1.0,
+        "score": 99,
+        "volume_ratio": 1.8,
+        "avg_vol20": 200000,
+        "breakout_grade": "A",
+    })
+    payload = {"records": records}
+    assert len(sniper_symbols(payload)) >= 50
+    live = live_sniper_symbols(payload, limit=8)
+    assert live[0] == "BESTSNIP"
+    assert len(live) <= 8
+
+
+def test_quote_overlay_uses_call_order_not_alpha_sort():
+    import inspect
+    from research.autonomy.live_feed import LiveFeedController
+    source = inspect.getsource(LiveFeedController._quote_overlay)
+    assert "sorted(symbols)" not in source
+    assert "list(symbols)[:80]" in source
+
+
 def test_sniper_skips_chase_and_blowoff(tmp_path):
     from research.autonomy.telegram_notifications import is_sniper_watch
     assert is_sniper_watch({"symbol": "AAA", "status": "Watch for breakout",
@@ -391,7 +436,7 @@ def test_delivery_status_explains_unpushed_scan(tmp_path, monkeypatch):
     engine.configured = False
     n.notify_scan(_payload(), phase="intraday")
     monkeypatch.setattr(TD.TelegramNotifier, "configured", lambda self: True)
-    monkeypatch.setattr(TD, "sniper_symbols", lambda payload: {"AAA", "BBB"})
+    monkeypatch.setattr(TD, "live_sniper_symbols", lambda payload, limit=40: ["AAA", "BBB"])
     monkeypatch.setattr("product.scan_store.load_scan", lambda: _payload())
     status = TD.delivery_status(tmp_path)
     assert status["configured"] is True

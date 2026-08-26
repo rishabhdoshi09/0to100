@@ -169,6 +169,345 @@ export const fetchStockIntelligence = (symbol: string): Promise<StockWorkspace> 
     headers: { Accept: 'application/json' },
   }).then((response) => json<StockWorkspace>(response))
 
+export type DueDiligenceKpi = {
+  id: string
+  label: string
+  pillar: string
+  available: boolean
+  trend: string
+  fact: string
+  interpretation: string
+  implication: string
+  formula?: string
+  source: string
+  source_url: string
+  source_date: string
+  confidence: string
+  table?: string
+  provenance?: {
+    value?: number | string | null
+    period?: string
+    source?: string
+    source_url?: string
+    retrieved_at?: string
+    published_at?: string
+    source_type?: string
+    source_type_label?: string
+    confidence?: string
+    raw_reference?: string
+  }
+  snapshot?: {
+    current: number | null
+    current_period?: string
+    previous?: number | null
+    previous_period?: string
+    year_ago?: number | null
+    year_ago_period?: string
+    qoq_change?: number | null
+    yoy_change?: number | null
+    points?: { period: string; value: number }[]
+  }
+  availability_state?: string
+  availability_label?: string
+  importance?: string
+  source_count?: number
+  source_consensus?: string
+  agreeing_sources?: string[]
+  period_type?: string
+  reporting_basis?: string
+}
+
+export type DueDiligenceEvent = {
+  headline: string
+  published_at: string
+  source: string
+  url: string
+  official: boolean
+  verified: boolean
+  event_type: string
+  category?: string
+  impact: string
+  summary: string
+  materiality?: string
+  materiality_basis?: string
+  original_source?: string
+}
+
+export type OptionChainSnapshot = {
+  available: boolean
+  acquired?: boolean
+  expiry?: string | null
+  spot?: number | null
+  call_oi?: number | null
+  put_oi?: number | null
+  pcr?: number | null
+  max_pain?: number | null
+  atm_strike?: number | null
+  atm_iv?: number | null
+  top_call_oi?: { strike: number; oi: number }[]
+  top_put_oi?: { strike: number; oi: number }[]
+  n_strikes?: number
+  source?: string
+  source_url?: string
+  reason?: string
+  note?: string
+  not_a_signal?: boolean
+  places_orders?: boolean
+}
+
+export type DueDiligenceFlag = {
+  id: string
+  title: string
+  kind: string
+  fact: string
+  source?: string
+  source_date?: string
+  url?: string
+  severity?: string
+  rule?: string
+  triggered_value?: unknown
+  threshold?: unknown
+  evidence?: string
+}
+
+export type InvestigatorMatch = {
+  symbol: string
+  company: string
+  label: string
+  match?: string
+}
+
+export type DueDiligenceReport = {
+  schema_version: number
+  symbol: string
+  company: string
+  profile: {
+    sector: string
+    industry: string
+    framework_id: string
+    framework_reason: string
+    business_model: string
+    revenue_drivers: string
+    about: string
+  }
+  framework: { id: string; label: string; blurb: string }
+  technical_context: {
+    available: boolean
+    scanner_status: string
+    scanner_score: number | null
+    sepa_score: number | null
+    breakout_grade: string | null
+    breakout_quality: string
+    chase_risk: boolean
+    detail: string
+  }
+  fundamental_quality: {
+    score: number | null
+    label: string
+    coverage_pct: number
+    score_coverage_pct?: number
+    raw_awarded?: number
+    evaluated_weight?: number
+    scoring_weight?: number
+    explain: string
+    breakdown?: {
+      explain?: string
+      pillars?: { id: string; label: string; awarded: number | null; max: number; display: string; explain?: string; formula?: string }[]
+    }
+  }
+  research_coverage?: {
+    coverage_pct: number
+    available_n?: number
+    required_n?: number
+    summary?: string
+    needs_acquire?: boolean
+    to_fetch?: string[]
+    latest_data_refresh?: string | null
+    not_a_quality_score?: boolean
+    datasets?: {
+      id: string
+      label: string
+      status: string
+      required?: boolean
+      present?: boolean
+      age_label?: string | null
+      checked_at?: string | null
+    }[]
+  }
+  sector_kpi_label?: string
+  sector_kpi_detail?: string
+  decision_coverage?: {
+    coverage?: number
+    coverage_pct?: number
+    critical_n?: number
+    critical_available?: number
+  }
+  decision_coverage_pct?: number
+  missing_evidence?: {
+    id?: string
+    label?: string
+    importance?: string
+    availability_state?: string
+    reason?: string
+  }[]
+  critical_metrics_missing?: string[]
+  confirmation_reason?: string
+  confirmation_qualifier?: string
+  deeper_acquire_available?: boolean
+  business_trend: string
+  financial_strength: string
+  earnings_quality: string
+  balance_sheet_quality: string
+  governance_risk: string
+  news_event_impact: string
+  vs_technical_setup: string
+  fundamental_confirmation?: string
+  vs_detail: string
+  strengths: string[]
+  concerns: string[]
+  unavailable: string[]
+  what_changed: string[]
+  red_flags: DueDiligenceFlag[]
+  flag_groups?: {
+    critical?: DueDiligenceFlag[]
+    warnings?: DueDiligenceFlag[]
+    monitor?: DueDiligenceFlag[]
+    n_critical?: number
+    n_warnings?: number
+    n_monitor?: number
+  }
+  watch_next: string[]
+  kpis: DueDiligenceKpi[]
+  events: DueDiligenceEvent[]
+  as_of: {
+    latest_financial_period: string
+    fundamentals_fetched_at: string
+    fundamentals_freshness: string
+    latest_material_news: string
+    scan_scanned_at: string
+    generated_at: string
+    evidence_pack_coverage_pct?: number
+    autonomy_acquired_at?: string
+    latest_data_refresh?: string
+  }
+  extracted_guidance?: {
+    tone: string
+    excerpt: string
+    excerpts?: string[]
+    source: string
+    source_url?: string
+    source_date?: string
+    method?: string
+    not_an_llm?: boolean
+  }[]
+  thesis?: {
+    kind: string
+    not_an_llm: boolean
+    text: string
+    basis: string[]
+  }
+  autonomy?: {
+    acquired_at?: string | null
+    steps?: { id: string; ok?: boolean; error?: string }[]
+    downloads?: { ok?: boolean; url?: string; path?: string; error?: string }[]
+    still_missing?: string[]
+    files_on_disk?: string[]
+    option_chain?: OptionChainSnapshot | null
+    not_an_llm?: boolean
+  }
+  evidence_pack?: {
+    coverage_pct: number
+    empty_note?: string
+    gaps: { key: string; label: string; status: string; why: string; instructions: string; source_attached: boolean; link_label: string; link_url: string }[]
+    management_commentary: { speaker: string; topic: string; commentary: string; event_date: string; source_url: string }[]
+    order_book: { metric: string; fact: string; as_of: string; source_url: string }[]
+    peers: { name: string; fact: string }[]
+    snapshot_metrics: { id: string; label: string; available: boolean; fact: string; interpretation: string; implication: string; source: string }[]
+    option_chain?: OptionChainSnapshot
+    next_actions: { id: string; label: string; page?: string; control?: string; detail: string }[]
+  }
+  long_term_overlay?: {
+    classification?: string | null
+    quality_factors?: string[]
+    risk_flags?: string[]
+    note?: string
+  }
+  first_screen?: {
+    company?: string
+    ticker?: string
+    selected_by?: string
+    technical_score?: number | null
+    sepa_score?: number | null
+    breakout_quality?: string
+    fundamental_quality?: number | null
+    fundamental_quality_label?: string
+    score_coverage_pct?: number
+    data_coverage_pct?: number
+    decision_coverage_pct?: number
+    confirmation_reason?: string
+    confirmation_qualifier?: string
+    critical_metrics_missing?: string[]
+    missing_evidence?: { id?: string; label?: string; importance?: string; reason?: string; availability_state?: string }[]
+    deeper_acquire_available?: boolean
+    sector_kpi_detail?: string
+    fundamental_confirmation?: string
+    vs_detail?: string
+    business_trend?: string
+    earnings_trend?: string
+    balance_sheet?: string
+    critical_red_flags?: number
+    warnings?: number
+    latest_financial_quarter?: string
+    latest_data_refresh?: string
+    data_freshness?: string
+    research_coverage_pct?: number
+    research_coverage_summary?: string
+    research_coverage_needs_acquire?: boolean
+    sector_kpis?: string
+    sector_kpi_framework?: string
+    improving?: string[]
+    deteriorating?: string[]
+    recent_material_events?: { date?: string; headline?: string; category?: string; materiality?: string; source?: string; url?: string }[]
+    technical_reason?: string[]
+    fundamental_evidence?: string[]
+    sections?: string[]
+  }
+  company_snapshot?: Record<string, unknown>
+  cash_flow_quality?: { applicable?: boolean; label?: string; detail?: string; flags?: DueDiligenceFlag[]; metrics?: { id: string; label: string; available: boolean; fact: string; formula?: string }[] }
+  peers?: { available?: boolean; detail?: string; ranks?: { metric: string; quartile: string; formula?: string; rank?: number; n?: number; value?: number }[]; rows?: { name: string; fact?: string }[] }
+  filings?: { title?: string; category?: string; url?: string; source?: string; published_at?: string }[]
+  sources?: { source?: string; source_url?: string; period?: string; source_type_label?: string; retrieved_at?: string }[]
+  source_conflicts?: { field?: string; status?: string; note?: string; preferred?: { value?: unknown; source?: string }; other?: { value?: unknown; source?: string } }[]
+  places_orders: boolean
+  disclaimer: string
+  question: string
+}
+
+export const fetchDueDiligence = (symbol: string): Promise<DueDiligenceReport> =>
+  fetch(`/api/due-diligence/${encodeURIComponent(symbol)}`, {
+    headers: { Accept: 'application/json' },
+  }).then((response) => json<DueDiligenceReport>(response))
+
+export const acquireDueDiligence = (
+  symbol: string,
+  mode: 'missing_or_stale' | 'all' = 'missing_or_stale',
+): Promise<{
+  accepted: boolean
+  symbol: string
+  mode?: string
+  acquire: Record<string, unknown>
+  report: DueDiligenceReport
+  places_orders: boolean
+}> => fetch(`/api/due-diligence/${encodeURIComponent(symbol)}/acquire?mode=${encodeURIComponent(mode)}`, {
+  method: 'POST',
+  headers: { Accept: 'application/json' },
+}).then((response) => json(response))
+
+export const fetchInvestigatorSuggest = (query: string): Promise<{ query: string; matches: InvestigatorMatch[]; engine: string }> =>
+  fetch(`/api/stock-investigator/suggest?q=${encodeURIComponent(query)}&limit=8`, {
+    headers: { Accept: 'application/json' },
+  }).then((response) => json(response))
+
 export type TradePlan = {
   available: boolean
   symbol: string

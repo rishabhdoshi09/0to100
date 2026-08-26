@@ -59,6 +59,17 @@ def test_terminal_uses_reco_desk_not_hud_chrome():
     assert "sessionMemory" in app or "readSessionJson" in app
     radar = (ROOT / "frontend" / "src" / "marketRadarViews.tsx").read_text(encoding="utf-8")
     assert "recall" in radar and "remember" in radar
+    assert "Investigate" in radar
+    views = (ROOT / "frontend" / "src" / "productViews.tsx").read_text(encoding="utf-8")
+    assert "Investigate" in views
+    assert "fetchDueDiligence" in views
+    assert "acquireDueDiligence" in views
+    assert "Acquire from the internet" in views
+    assert "vs_technical_setup" in views
+    assert "evidence_pack" in views
+    assert "Complete missing research data" in views
+    app = (ROOT / "frontend" / "src" / "App.tsx").read_text(encoding="utf-8")
+    assert "if (selected) setQuery(selected)" in app
 
 
 def test_home_is_three_lane_radar_with_two_best_of_panels():
@@ -87,6 +98,7 @@ def test_recommendations_are_exclusive_decision_cards():
     assert "Case memory" in src
     assert "reco-case" in src
     assert "Full research" in src
+    assert "Investigate" in src
     css = (ROOT / "frontend" / "src" / "recommendations.css").read_text(encoding="utf-8")
     assert ".reco-pick-together" in css
     py = (ROOT / "product" / "recommendations_workspace.py").read_text(encoding="utf-8")

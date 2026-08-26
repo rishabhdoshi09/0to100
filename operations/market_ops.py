@@ -28,6 +28,7 @@ LONG_TERM_REFRESH = "LONG_TERM_REFRESH"
 NEWS_REFRESH = "NEWS_REFRESH"
 FNO_REFRESH = "FNO_REFRESH"
 DATA_PREPARE = "DATA_PREPARE"
+DUE_DILIGENCE_ACQUIRE = "DUE_DILIGENCE_ACQUIRE"
 
 LANES = {
     MARKET_SCAN: "market_scan",
@@ -36,6 +37,7 @@ LANES = {
     NEWS_REFRESH: "news",
     FNO_REFRESH: "data",
     DATA_PREPARE: "data",
+    DUE_DILIGENCE_ACQUIRE: "due_diligence",
 }
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -47,6 +49,7 @@ NEWS_FRESH_S = 20 * 60
 FNO_FRESH_S = 24 * 60 * 60
 SCAN_FRESH_S = 6 * 60 * 60
 LONG_TERM_FRESH_S = 3 * 24 * 60 * 60
+DUE_DILIGENCE_FRESH_S = 24 * 60 * 60
 HISTORY_DAYS = 500
 
 
@@ -190,6 +193,10 @@ class MarketOperationsWorker:
 
     def _heartbeat_loop(self) -> None:
         while not self.stop_event.wait(2.0):
+            try:
+                self.store.recover_dead_running(keep_pid=os.getpid())
+            except Exception:
+                pass
             _atomic_json(RUNTIME_PATH, self._runtime_payload(running=True))
 
     def _progress(self, operation_id: str, stage: str, message: str,
@@ -208,7 +215,15 @@ class MarketOperationsWorker:
             _emit("PROGRESS", f"{operation_id[:8]} · {stage} · {message}")
 
     def _ensure_history(self, operation_id: str, *, days: int = HISTORY_DAYS) -> dict[str, Any]:
-        with self._history_lock:
+        acquired = self._history_lock.acquire(timeout=0)
+        if not acquired:
+            self._progress(
+                operation_id,
+                "WAITING_FOR_HISTORY",
+                "Waiting for the official price download already in progress",
+            )
+            self._history_lock.acquire()
+        try:
             from data.bhavcopy_runtime import status as history_status
             current = history_status(load_cache=True)
             if current.get("ready") and int(current.get("sessions", 0) or 0) >= 60:
@@ -216,18 +231,27 @@ class MarketOperationsWorker:
                     operation_id,
                     "HISTORY_READY",
                     f"Official history ready · {current.get('sessions', 0)} sessions · {current.get('symbols', 0)} symbols",
+                    current=0,
+                    total=0,
                 )
                 return current
-            self._progress(operation_id, "PREPARING_HISTORY", f"Preparing {days}-session official NSE history")
+            self._progress(
+                operation_id,
+                "PREPARING_HISTORY",
+                f"Preparing {days}-session official NSE history — not scanning stocks yet",
+                current=0,
+                total=0,
+            )
             from data.bhavcopy_store import build_store
 
             def progress(current_count: int, total: int) -> None:
+                # Days on disk, never stock counts. The desk ETA only uses SCANNING.
                 self._progress(
                     operation_id,
                     "PREPARING_HISTORY",
-                    "Downloading/loading missing official NSE bhavcopy sessions",
-                    current_count,
-                    total,
+                    f"Downloading official NSE bhavcopy · {int(current_count)}/{int(total)} sessions",
+                    current=0,
+                    total=0,
                 )
 
             build_store(days=days, progress=progress)
@@ -239,6 +263,8 @@ class MarketOperationsWorker:
                     result=current,
                 )
             return current
+        finally:
+            self._history_lock.release()
 
     def _notify_scan_telegram(self, payload: dict[str, Any]) -> dict[str, Any]:
         try:
@@ -269,6 +295,13 @@ class MarketOperationsWorker:
 
         def prepared_prefetch(symbols, *, progress=None):
             from scan.bulk_fetcher import prefetch as warm_ohlcv
+            self._progress(
+                operation_id,
+                "WARMING_HISTORY",
+                f"Warming official OHLCV for {len(list(symbols or []))} names — not scanning yet",
+                current=0,
+                total=0,
+            )
             # Do not pass scan_progress here: build_store reports missing
             # bhav days (e.g. 11), which was shown as "Scanning 11 stocks".
             return warm_ohlcv(symbols)
@@ -304,6 +337,8 @@ class MarketOperationsWorker:
             operation_id,
             "SCANNING",
             f"Evaluating whole NSE universe with {history.get('sessions', 0)} official sessions",
+            current=0,
+            total=0,
         )
         write_progress(current=0, total=0, stage="STARTING", source="market_ops")
         try:
@@ -377,6 +412,19 @@ class MarketOperationsWorker:
             )
         return result
 
+    def _run_due_diligence_acquire(self, operation: dict[str, Any]) -> dict[str, Any]:
+        operation_id = str(operation["operation_id"])
+        self._progress(operation_id, "ACQUIRING", "Downloading filings and fundamentals for shortlisted names")
+        from product.due_diligence.acquire import acquire_shortlist
+
+        result = acquire_shortlist(force=False)
+        self._progress(
+            operation_id,
+            "ACQUIRED",
+            f"Investigate acquire finished for {result.get('n_ok', 0)} name(s)",
+        )
+        return result
+
     def _run_fno(self, operation: dict[str, Any]) -> dict[str, Any]:
         operation_id = str(operation["operation_id"])
         self._progress(operation_id, "LOADING_INSTRUMENTS", "Refreshing NSE/NFO instrument master")
@@ -429,6 +477,8 @@ class MarketOperationsWorker:
             return self._run_long_term(operation, refresh=True)
         if kind == NEWS_REFRESH:
             return self._run_news(operation)
+        if kind == DUE_DILIGENCE_ACQUIRE:
+            return self._run_due_diligence_acquire(operation)
         if kind == FNO_REFRESH:
             return self._run_fno(operation)
         if kind == DATA_PREPARE:
@@ -437,6 +487,10 @@ class MarketOperationsWorker:
 
     def _lane_loop(self, lane: str) -> None:
         while not self.stop_event.is_set():
+            try:
+                self.store.recover_dead_running(keep_pid=os.getpid())
+            except Exception:
+                pass
             operation = self.store.lease_next(lane, worker_pid=os.getpid())
             if operation is None:
                 self.stop_event.wait(2.0)
@@ -541,6 +595,11 @@ class MarketOperationsWorker:
 
 
 def run_worker() -> int:
+    try:
+        from dotenv import load_dotenv
+        load_dotenv(ROOT / ".env", override=False)
+    except Exception:
+        pass
     worker = MarketOperationsWorker()
     signal.signal(signal.SIGINT, worker.stop)
     signal.signal(signal.SIGTERM, worker.stop)

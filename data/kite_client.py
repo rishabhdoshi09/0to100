@@ -25,6 +25,20 @@ from logger import get_logger
 log = get_logger(__name__)
 
 
+def parse_request_token(raw: str) -> str:
+    """Accept a bare token or the full Kite redirect URL."""
+    text = (raw or "").strip().strip('"').strip("'")
+    if not text:
+        return ""
+    if "request_token=" in text:
+        from urllib.parse import parse_qs, unquote, urlparse
+
+        query = urlparse(text).query if "://" in text else text.split("?", 1)[-1].lstrip("?")
+        token = (parse_qs(query).get("request_token") or [""])[0]
+        return unquote(token).strip()
+    return text
+
+
 def _fresh_env(name: str, default: str = "") -> str:
     """Read current credentials without relying on the process-lifetime Settings object.
 

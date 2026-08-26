@@ -533,6 +533,67 @@ def stock_intelligence(symbol: str) -> dict[str, Any]:
         raise HTTPException(status_code=500, detail=f"Stock intelligence failed: {exc}") from exc
 
 
+@app.get("/api/due-diligence/{symbol}")
+def due_diligence(symbol: str) -> dict[str, Any]:
+    """Second-stage research on a scanner candidate. Cache and files only — never scrapes."""
+    try:
+        from product.due_diligence import build_due_diligence
+
+        return build_due_diligence(clean_symbol(symbol))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Due diligence failed: {exc}") from exc
+
+
+@app.get("/api/stock-research/{symbol}")
+def stock_research(symbol: str) -> dict[str, Any]:
+    """Alias of due-diligence. Same StockResearchEngine, still cache-only — never scrapes."""
+    return due_diligence(symbol)
+
+
+@app.get("/api/stock-investigator/suggest")
+def stock_investigator_suggest(q: str = "", limit: int = 8) -> dict[str, Any]:
+    """Typeahead for the manual Stock Investigator. Does not fetch fundamentals."""
+    try:
+        from product.due_diligence import suggest_tickers
+
+        cap = max(1, min(int(limit or 8), 20))
+        matches = suggest_tickers(q, limit=cap)
+        return {
+            "query": q,
+            "matches": matches,
+            "engine": "StockResearchEngine",
+            "places_orders": False,
+        }
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Investigator suggest failed: {exc}") from exc
+
+
+@app.post("/api/due-diligence/{symbol}/acquire")
+def acquire_due_diligence(symbol: str, mode: str = "missing_or_stale") -> dict[str, Any]:
+    """Download missing/stale datasets (or all, if mode=all), persist, then rebuild Investigate from files."""
+    try:
+        from product.due_diligence import build_due_diligence
+        from product.due_diligence.acquire import acquire_symbol
+
+        clean = clean_symbol(symbol)
+        force_all = str(mode or "").lower() in {"all", "force", "refresh_all"}
+        acquired = acquire_symbol(clean, force=force_all)
+        return {
+            "accepted": True,
+            "symbol": clean,
+            "mode": "all" if force_all else "missing_or_stale",
+            "acquire": acquired,
+            "report": build_due_diligence(clean),
+            "places_orders": False,
+        }
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Investigate acquire failed: {exc}") from exc
+
+
 @app.post("/api/stock-intelligence/{symbol}/refresh-fundamentals")
 def refresh_stock_fundamentals(symbol: str) -> dict[str, Any]:
     try:

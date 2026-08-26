@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 import threading
 import time
@@ -16,6 +17,23 @@ FAILED = "FAILED"
 BLOCKED = "BLOCKED"
 CANCELLED = "CANCELLED"
 TERMINAL = frozenset({SUCCEEDED, FAILED, BLOCKED, CANCELLED})
+
+
+def pid_is_alive(pid: int | None) -> bool:
+    """True when this OS still has a process for ``pid``."""
+    try:
+        value = int(pid or 0)
+    except (TypeError, ValueError):
+        return False
+    if value <= 0:
+        return False
+    try:
+        os.kill(value, 0)
+        return True
+    except OSError:
+        return False
+    except Exception:
+        return False
 
 
 class _BorrowedConnection:
@@ -304,6 +322,42 @@ class OperationStore:
                 ),
             )
         return int(cur.rowcount or 0)
+
+    def recover_dead_running(self, *, keep_pid: int | None = None) -> int:
+        """Requeue RUNNING jobs whose worker process is gone. Leave ``keep_pid`` alone."""
+        now = time.time()
+        recovered = 0
+        with self._connect() as con:
+            rows = list(
+                con.execute(
+                    "SELECT operation_id, worker_pid FROM operations WHERE status=?",
+                    (RUNNING,),
+                )
+            )
+            for row in rows:
+                pid = row["worker_pid"]
+                try:
+                    pid_i = int(pid) if pid is not None else 0
+                except (TypeError, ValueError):
+                    pid_i = 0
+                if keep_pid is not None and pid_i == int(keep_pid):
+                    continue
+                if pid_i and pid_is_alive(pid_i):
+                    continue
+                con.execute(
+                    "UPDATE operations SET status=?,updated_at=?,stage=?,message=?,worker_pid=NULL "
+                    "WHERE operation_id=? AND status=?",
+                    (
+                        PENDING,
+                        now,
+                        "RECOVERED",
+                        "Scan worker process died; operation requeued",
+                        row["operation_id"],
+                        RUNNING,
+                    ),
+                )
+                recovered += 1
+        return recovered
 
     def get(self, operation_id: str) -> dict[str, Any] | None:
         with self._connect() as con:

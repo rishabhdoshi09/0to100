@@ -12,6 +12,8 @@ from typing import Any
 
 from operations.market_ops import (
     DATA_PREPARE,
+    DUE_DILIGENCE_ACQUIRE,
+    DUE_DILIGENCE_FRESH_S,
     FNO_FRESH_S,
     FNO_REFRESH,
     LANES,
@@ -54,6 +56,12 @@ DESK_STEPS: tuple[dict[str, str], ...] = (
         "page": "Market Reports",
         "why": "Street pulse and news for Market Reports.",
     },
+    {
+        "id": "investigate",
+        "title": "Investigate acquire",
+        "page": "Stock Intelligence",
+        "why": "Download filings and fundamentals for shortlisted names, then Investigate reads the files.",
+    },
 )
 
 PIPELINE_KINDS = frozenset(
@@ -64,6 +72,7 @@ PIPELINE_KINDS = frozenset(
         LONG_TERM_REFRESH,
         LONG_TERM_SCAN,
         NEWS_REFRESH,
+        DUE_DILIGENCE_ACQUIRE,
     }
 )
 
@@ -112,6 +121,15 @@ def news_is_fresh() -> bool:
     return not _stale(_root() / "logs" / "news_curator.sqlite3", NEWS_FRESH_S)
 
 
+def acquire_is_fresh() -> bool:
+    try:
+        from product.due_diligence.acquire import acquire_is_fresh as facts_fresh
+
+        return bool(facts_fresh())
+    except Exception:
+        return True
+
+
 def _fresh_s(step_id: str) -> float:
     if step_id == "prices":
         return FNO_FRESH_S
@@ -121,6 +139,8 @@ def _fresh_s(step_id: str) -> float:
         return LONG_TERM_FRESH_S
     if step_id == "news":
         return NEWS_FRESH_S
+    if step_id == "investigate":
+        return DUE_DILIGENCE_FRESH_S
     return 0.0
 
 
@@ -147,6 +167,8 @@ def _kind_for_step(step_id: str, store: OperationStore | None = None) -> str | N
         kind = None if long_term_is_fresh() else LONG_TERM_REFRESH
     elif step_id == "news":
         kind = None if news_is_fresh() else NEWS_REFRESH
+    elif step_id == "investigate":
+        kind = None if acquire_is_fresh() else DUE_DILIGENCE_ACQUIRE
     else:
         kind = None
     if kind and store is not None and _recently_succeeded(store, _kinds_for_id(step_id), _fresh_s(step_id)):
@@ -181,6 +203,8 @@ def _step_from_kind(kind: str) -> dict[str, str] | None:
         return dict(DESK_STEPS[2])
     if kind == NEWS_REFRESH:
         return dict(DESK_STEPS[3])
+    if kind == DUE_DILIGENCE_ACQUIRE:
+        return dict(DESK_STEPS[4])
     return None
 
 
@@ -322,4 +346,6 @@ def _kinds_for_id(step_id: str) -> set[str]:
         return {LONG_TERM_REFRESH, LONG_TERM_SCAN}
     if step_id == "news":
         return {NEWS_REFRESH}
+    if step_id == "investigate":
+        return {DUE_DILIGENCE_ACQUIRE}
     return set()

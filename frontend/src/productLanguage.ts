@@ -64,7 +64,7 @@ export const PAGE_GUIDE: Record<string, PageGuide> = {
       'What is upside from entry vs room to target?',
       'Which tracked picks are still open vs resolved?',
     ],
-    action: 'Open a card, read why now, then Full research in Stock Intelligence.',
+    action: 'Open a card, read why now, then Investigate for fundamentals vs the setup.',
     doesNot: 'A Buy badge is research classification — not a broker order or return promise.',
   },
   'Market Reports': {
@@ -80,15 +80,27 @@ export const PAGE_GUIDE: Record<string, PageGuide> = {
   },
   'Stock Intelligence': {
     title: 'Stock Intelligence',
-    purpose: 'Combines price structure, technicals, current fundamentals, risks, news and source dates.',
+    purpose: 'Combines price structure, technicals, current fundamentals, risks, news and source dates. Investigate is the second-stage due-diligence view — it is not a new scanner.',
     questions: [
       'What is the current trend and volatility?',
       'Are fundamentals complete and fresh?',
-      'Which evidence supports the shortlist?',
+      'Does the sector-framework evidence support, leave unchanged, or contradict the technical setup?',
       'Which missing fact could change the conclusion?',
     ],
-    action: 'Refresh missing fundamentals or complete the source pack in Research Data.',
-    doesNot: 'Current fundamentals are not point-in-time historical evidence unless explicitly labelled.',
+    action: 'Open Investigate on a shortlisted name, then refresh missing fundamentals in Research Data if coverage is thin.',
+    doesNot: 'Investigate is not a new scanner and does not place or recommend orders. Empty stays empty.',
+  },
+  'Stock Investigator': {
+    title: 'Stock Investigator',
+    purpose: 'Manually look up any supported NSE name. Typing ICICI should suggest ICICIBANK — ICICI Bank. The same StockResearchEngine as scanner Investigate runs.',
+    questions: [
+      'What exactly am I buying?',
+      'Are fundamentals improving or deteriorating?',
+      'Are there hidden financial or governance risks?',
+      'Do the fundamentals support or weaken a technical setup if one exists?',
+    ],
+    action: 'Type a ticker or company name, pick the match, then Acquire if files are missing.',
+    doesNot: 'This is not a scanner, not a buy list, and never uses a language model for scoring or verdicts.',
   },
   'Long-Term': {
     title: 'Long-Term Research',
@@ -154,7 +166,7 @@ export const PAGE_GUIDE: Record<string, PageGuide> = {
       'Which underlyings were excluded and why?',
     ],
     action: 'Refresh the instrument master and inspect mapping exclusions.',
-    doesNot: 'This is not yet an option-chain, OI, IV, Greeks or directional strategy engine.',
+    doesNot: 'This is not a directional F&O signal desk and does not calculate Greeks. An Acquire snapshot can show nearest-expiry OI, IV, PCR and max pain on Stock Intelligence / Investigate.',
   },
   'Market Internals': {
     title: 'Market & Breadth',

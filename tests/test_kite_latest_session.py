@@ -152,3 +152,13 @@ def test_operation_store_reuses_thread_connection(tmp_path):
     assert store._local.con is cached
     again = store.get(leased["operation_id"])
     assert again["stage"] == "SCANNING"
+
+
+def test_parse_request_token_accepts_full_redirect_url():
+    from data.kite_client import parse_request_token
+
+    assert parse_request_token("abc123") == "abc123"
+    assert parse_request_token(
+        "http://127.0.0.1/?request_token=abc123&action=login&status=success"
+    ) == "abc123"
+    assert parse_request_token("") == ""

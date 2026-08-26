@@ -57,7 +57,7 @@ class LiveFeedController:
             from data.kite_client import KiteClient, _fresh_env
             if not _fresh_env("KITE_API_KEY") or not _fresh_env("KITE_ACCESS_TOKEN"):
                 return 0
-            prices = KiteClient().get_ltp(sorted(symbols)[:80]) or {}
+            prices = KiteClient().get_ltp(list(symbols)[:80]) or {}
         except Exception as exc:
             if not self.last_error:
                 self.last_error = str(exc)[:240]
@@ -83,11 +83,17 @@ class LiveFeedController:
         return filled
 
     def start(self, symbols) -> dict:
-        symbols = {str(s).upper() for s in symbols if str(s).strip()}
-        if not symbols:
+        ordered: list[str] = []
+        seen: set[str] = set()
+        for raw in symbols or []:
+            symbol = str(raw).upper()
+            if symbol and symbol not in seen:
+                seen.add(symbol)
+                ordered.append(symbol)
+        if not ordered:
             return self.health()
         try:
-            token_to_symbol = self._tokens(symbols)
+            token_to_symbol = self._tokens(ordered)
             if self.overlay is None:
                 from data.kite_client import _fresh_env
                 api_key = _fresh_env("KITE_API_KEY")
@@ -108,14 +114,14 @@ class LiveFeedController:
                 self.feed.add_mappings(token_to_symbol)
             if not getattr(self.overlay, "connected", False):
                 self.overlay.connect()
-            self.overlay.subscribe(symbols)
-            self.subscribed |= symbols
+            self.overlay.subscribe(ordered)
+            self.subscribed |= set(ordered)
             if "sendMessage" not in str(self.last_error or ""):
                 self.last_error = ""
         except Exception as exc:
             self.last_error = str(exc)[:240]
         try:
-            self._quote_overlay(self.subscribed or symbols)
+            self._quote_overlay(ordered)
         except Exception:
             pass
         self._persist()
