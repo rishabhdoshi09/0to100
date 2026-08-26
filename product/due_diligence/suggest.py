@@ -62,7 +62,13 @@ def suggest_tickers(query: str, *, limit: int = 8) -> list[dict[str, Any]]:
         return []
     q = needle.upper()
     ql = needle.lower()
-    scored: list[tuple[int, str, str]] = []
+    nifty: set[str] = set()
+    try:
+        from data.nse_universe import NIFTY50
+        nifty = {str(s).upper() for s in NIFTY50}
+    except Exception:
+        nifty = {"ICICIBANK", "HDFCBANK", "TCS", "INFY", "RELIANCE"}
+    scored: list[tuple[int, int, str, str]] = []
     for symbol, name in _universe_names().items():
         name_u = name.upper()
         name_l = name.lower()
@@ -76,11 +82,11 @@ def suggest_tickers(query: str, *, limit: int = 8) -> list[dict[str, Any]]:
             rank = 3
         else:
             continue
-        scored.append((rank, symbol, name or symbol))
-    scored.sort(key=lambda item: (item[0], item[1]))
+        scored.append((rank, 0 if symbol in nifty else 1, symbol, name or symbol))
+    scored.sort(key=lambda item: (item[0], item[1], item[2]))
     out: list[dict[str, Any]] = []
     seen = set()
-    for rank, symbol, name in scored:
+    for rank, _boost, symbol, name in scored:
         if symbol in seen:
             continue
         seen.add(symbol)

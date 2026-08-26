@@ -77,6 +77,9 @@ def classify_company(
     if _mentions_bank(about_l):
         framework = "bank"
         reason = "Company description classifies this as a bank."
+    elif str(symbol or "").upper().endswith(("BANK", "BNK")) and not _mentions_nbfc(about_l):
+        framework = "bank"
+        reason = "Ticker suffix identifies a bank."
     elif _mentions_nbfc(about_l) or mapped == "nbfc" or (
         has_npa and not _mentions_bank(about_l)
     ):

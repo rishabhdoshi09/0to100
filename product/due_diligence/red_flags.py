@@ -107,14 +107,17 @@ def collect_red_flags(
         category = str(event.get("category") or event.get("event_type") or "")
         material = str(event.get("materiality") or "")
         impact = str(event.get("impact") or "")
-        severe_cat = category in {
-            "Regulatory Action", "regulatory_action", "Auditor Change", "Plant Shutdown",
-            "governance", "pledge",
-        }
-        if severe_cat or (impact == "negative" and event.get("thesis_change")):
-            severity = "critical" if material in {"Very High", "High"} or category in {
-                "Regulatory Action", "regulatory_action", "Auditor Change",
-            } else "warning"
+        headline = str(event.get("headline") or "").lower()
+        enforcement = any(tok in headline for tok in (
+            "investigation", "raid", "fraud", "warning letter", "usfda",
+            "import alert", "show cause", "sebi ban", "rbi ban", "auditor resign",
+            "penalty",
+        ))
+        severe_cat = category in {"Auditor Change", "Plant Shutdown"} or (
+            category in {"Regulatory Action", "regulatory_action"} and enforcement
+        )
+        if severe_cat or (impact == "negative" and event.get("thesis_change") and enforcement):
+            severity = "critical" if material in {"Very High", "High"} or enforcement else "warning"
             flags.append(_flag(
                 flag_id=f"flag-news-{event.get('event_type')}",
                 title=str(event.get("headline") or "Material event"),

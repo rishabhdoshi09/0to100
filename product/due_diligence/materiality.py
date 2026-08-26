@@ -5,8 +5,14 @@ import re
 from typing import Any, Mapping
 
 # User-facing taxonomy. Mapped from curator event_type + headline tokens.
+_ENFORCEMENT = (
+    "investigation", "raid", "fraud", "auditor resign", "warning letter",
+    "usfda", "import alert", "show cause", "sebi ban", "rbi ban",
+    "penalty", "fine imposed", "fine of",
+)
+
 TAXONOMY: tuple[tuple[str, tuple[str, ...]], ...] = (
-    ("Results", ("result", "earnings", "quarterly", "q1", "q2", "q3", "q4", "profit")),
+    ("Results", ("result", "earnings", "quarterly", "q1 fy", "q2 fy", "q3 fy", "q4 fy", "profit")),
     ("Guidance", ("guidance", "outlook", "forecast")),
     ("Order Win", ("order win", "wins order", "bagged", "secures order", "purchase order")),
     ("Order Cancellation", ("cancel", "terminated contract", "order loss")),
@@ -16,7 +22,10 @@ TAXONOMY: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("Fundraising", ("qip", "preferential", "rights issue", "fund raise", "fpo")),
     ("Debt", ("bond", "ncd", "debenture", "borrow", "refinanc")),
     ("Credit Rating", ("rating", "outlook revised", "creditwatch", "downgrade", "upgrade")),
-    ("Regulatory Action", ("sebi", "rbi", "usfda", "warning letter", "show cause", "penalty", "ban")),
+    ("Regulatory Action", (
+        "sebi ban", "rbi ban", "usfda", "warning letter", "show cause",
+        "penalty", "investigation", "raid", "import alert",
+    )),
     ("Management Change", ("ceo", "cfo", "managing director", "resigns", "appointed")),
     ("Auditor Change", ("auditor", "statutory audit")),
     ("Promoter Transaction", ("promoter", "pledge")),
@@ -55,6 +64,10 @@ def classify_taxonomy(headline: str, event_type: str = "") -> str:
         if any(tok in text for tok in tokens):
             return label
     mapped = _LEGACY_TO_TAXONOMY.get(str(event_type or "").strip())
+    if mapped == "Regulatory Action" and not any(tok in text for tok in _ENFORCEMENT):
+        if "regulation 30" in text or "lodr" in text or "allotment" in text:
+            return "Others"
+        return "Others"
     return mapped or "Others"
 
 
