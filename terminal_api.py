@@ -177,15 +177,21 @@ def _ops_runtime_payload() -> dict[str, Any]:
 def _ensure_ops_worker() -> dict[str, Any]:
     """Start the dedicated market-operations worker when it is not healthy."""
     global _ops_process
+    from operations.store import pid_is_alive
+
     runtime = _ops_runtime_payload()
-    if runtime.get("running"):
+    pid = runtime.get("worker_pid")
+    if runtime.get("running") and pid_is_alive(pid):
         return runtime
-    if _ops_process is not None and _ops_process.poll() is None:
+    if _ops_process is not None and _ops_process.poll() is None and pid_is_alive(_ops_process.pid):
         return runtime
+    env = os.environ.copy()
+    existing = str(env.get("PYTHONPATH") or "").strip()
+    env["PYTHONPATH"] = os.pathsep.join([str(ROOT)] + ([existing] if existing else []))
     _ops_process = subprocess.Popen(
         [sys.executable, "-u", "-m", "operations.market_ops"],
         cwd=str(ROOT),
-        env=os.environ.copy(),
+        env=env,
     )
     deadline = time.time() + 2.5
     while time.time() < deadline:
@@ -835,9 +841,14 @@ def control(control_name: str) -> dict:
     if name in _OPERATION_CONTROLS:
         from operations.market_ops import LANES
         from operations.store import OperationStore
+        store = OperationStore(OPS_DB)
+        try:
+            store.recover_dead_running()
+        except Exception:
+            pass
         _ensure_ops_worker()
         kind = _OPERATION_CONTROLS[name]
-        operation, created = OperationStore(OPS_DB).enqueue(
+        operation, created = store.enqueue(
             kind,
             lane=LANES[kind],
             requested_by="terminal",

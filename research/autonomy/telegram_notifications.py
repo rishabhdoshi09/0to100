@@ -74,6 +74,43 @@ def sniper_symbols(payload: Mapping[str, Any] | None) -> set[str]:
     return out
 
 
+def live_sniper_symbols(payload: Mapping[str, Any] | None, *, limit: int = 40) -> list[str]:
+    """Names the live feed should actually tick for confirmed-breakout Telegram.
+
+    ``is_sniper_watch`` is a wide net (every Watch-for-breakout row). Subscribing
+    all of them starved Kite LTP (REST overlay only fetches 80 names) so confirmed
+    sniper messages never fired. Prefer radar-quality sniper candidates, score order.
+    """
+    records = [r for r in (payload or {}).get("records") or [] if isinstance(r, Mapping)]
+    preferred: list[Mapping[str, Any]] = []
+    try:
+        from product.radar_workspace import is_sniper_breakout_candidate
+        preferred = [r for r in records if is_sniper_breakout_candidate(r) and is_sniper_watch(r)]
+    except Exception:
+        preferred = []
+    pool = preferred or [r for r in records if is_sniper_watch(r)]
+
+    def _score(row: Mapping[str, Any]) -> float:
+        try:
+            return float(row.get("score") or row.get("breakout_conviction") or 0.0)
+        except (TypeError, ValueError):
+            return 0.0
+
+    pool.sort(key=lambda r: (-_score(r), str(r.get("symbol") or "")))
+    out: list[str] = []
+    seen: set[str] = set()
+    cap = max(1, min(int(limit or 40), 80))
+    for row in pool:
+        symbol = str(row.get("symbol") or "").upper()
+        if not symbol or symbol in seen:
+            continue
+        seen.add(symbol)
+        out.append(symbol)
+        if len(out) >= cap:
+            break
+    return out
+
+
 class TelegramNotifier:
     """Durable, restart-safe Telegram notifier owned by the autonomy process."""
 

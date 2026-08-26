@@ -319,26 +319,35 @@ class Supervisor:
                 self._incident("CONTROL_FAILED", f"{control.control_type}: {exc}")
 
 
-    def _desired_live_symbols(self) -> set[str]:
-        symbols = set()
+    def _desired_live_symbols(self) -> list[str]:
+        ordered: list[str] = []
+        seen: set[str] = set()
+
+        def add(items) -> None:
+            for raw in items or []:
+                symbol = str(raw or "").upper()
+                if symbol and symbol not in seen:
+                    seen.add(symbol)
+                    ordered.append(symbol)
+
         try:
             from product.scan_store import load_scan, watchlist_rows
             payload = load_scan()
-            symbols |= {str(r.get("symbol", "")).upper() for r in watchlist_rows(payload, limit=60)}
             try:
-                from research.autonomy.telegram_notifications import sniper_symbols
-                symbols |= sniper_symbols(payload)
+                from research.autonomy.telegram_notifications import live_sniper_symbols
+                add(live_sniper_symbols(payload, limit=40))
             except Exception:
                 pass
+            add(str(r.get("symbol", "")).upper() for r in watchlist_rows(payload, limit=60))
         except Exception:
             pass
         try:
             repo = Path(__file__).resolve().parents[2]
             book = json.loads((repo / "logs" / "intelligence" / "intel_book.json").read_text())
-            symbols |= {str(p.get("symbol", "")).upper() for p in book.get("open", [])}
+            add(str(p.get("symbol", "")).upper() for p in book.get("open", []))
         except Exception:
             pass
-        return {s for s in symbols if s}
+        return ordered[:80]
 
     def _manage_live_feed(self, now_ist) -> None:
         # Only the production dependency set owns a real feed. Injected tests stay network-free.

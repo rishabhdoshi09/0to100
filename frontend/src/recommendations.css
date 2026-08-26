@@ -46,10 +46,19 @@
 
 .reco-hero {
   display: grid;
-  grid-template-columns: auto 1fr;
+  grid-template-columns: auto 1fr auto;
   gap: 14px;
   align-items: start;
   margin-bottom: 16px;
+}
+.reco-hero-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+}
+.reco-hero-actions button {
+  white-space: nowrap;
 }
 .reco-hero-icon {
   width: 56px; height: 56px; border-radius: 50%;
@@ -613,6 +622,8 @@
 .desk-section { margin: 8px 0 0; }
 
 @media (max-width: 720px) {
+  .reco-hero { grid-template-columns: auto 1fr; }
+  .reco-hero-actions { grid-column: 1 / -1; justify-content: flex-start; }
   .reco-controls { grid-template-columns: 1fr; }
   .reco-life-toggle { width: 100%; }
   .reco-life-toggle button { flex: 1; }

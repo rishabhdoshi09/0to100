@@ -27,6 +27,8 @@ export function seedKindMatches(seedKind: string, runnerKind: ScanKind): boolean
 const STAGE_LABELS: Record<string, string> = {
   PENDING: 'Starting the scan…',
   PREPARING_HISTORY: 'Preparing market history…',
+  WAITING_FOR_HISTORY: 'Waiting for official prices…',
+  WARMING_HISTORY: 'Warming official price cache…',
   HISTORY_READY: 'Market history ready…',
   LOADING_UNIVERSE: 'Loading the NSE universe…',
   SCANNING: 'Scanning market candidates…',
@@ -37,11 +39,18 @@ const STAGE_LABELS: Record<string, string> = {
   RECOVERED: 'Recovering interrupted job…',
 }
 
-export function friendlyStageLabel(stage: string, status: string): string {
+const STOCK_PROGRESS_STAGES = new Set(['SCANNING', 'RANKING', 'SAVING'])
+
+export function isStockScanStage(stage: string): boolean {
+  return STOCK_PROGRESS_STAGES.has(String(stage || '').trim().toUpperCase())
+}
+
+export function friendlyStageLabel(stage: string, status: string, elapsedSeconds = 0): string {
   if (status === 'SUCCEEDED') return 'Scan complete'
   if (status === 'FAILED') return 'Scan failed'
   if (status === 'CANCELLED') return 'Scan stopped'
   if (status === 'BLOCKED') return 'Scan blocked'
+  if (status === 'PENDING' && elapsedSeconds >= 15) return 'Waiting for the scan worker…'
   const key = String(stage || '').trim().toUpperCase()
   if (key && STAGE_LABELS[key]) return STAGE_LABELS[key]
   if (!key && status === 'PENDING') return 'Starting the scan…'
@@ -52,9 +61,11 @@ export function friendlyStageLabel(stage: string, status: string): string {
 
 export function buildProgressLine(operation: OperationRecord | null): string | null {
   if (!operation) return null
+  const stage = String(operation.stage || '').trim().toUpperCase()
+  if (!isStockScanStage(stage)) return null
   const total = Number(operation.progress_total || 0)
   const current = Number(operation.progress_current || 0)
-  if (total > 0) {
+  if (total >= 100) {
     return `Scanning ${current.toLocaleString('en-IN')} of ${total.toLocaleString('en-IN')} stocks`
   }
   return null
@@ -86,9 +97,10 @@ export function estimateEtaSeconds(
   elapsedSeconds: number,
 ): number | null {
   if (!operation) return null
+  if (!isStockScanStage(String(operation.stage || ''))) return null
   const total = Number(operation.progress_total || 0)
   const current = Number(operation.progress_current || 0)
-  if (total <= 0 || current <= 0 || elapsedSeconds <= 0) return null
+  if (total < 100 || current <= 0 || elapsedSeconds <= 0) return null
   const rate = current / elapsedSeconds
   if (rate <= 0) return null
   return Math.max(0, Math.round((total - current) / rate))
@@ -96,12 +108,13 @@ export function estimateEtaSeconds(
 
 export function progressPercent(operation: OperationRecord | null): number | null {
   if (!operation) return null
+  if (!isStockScanStage(String(operation.stage || ''))) return null
   if (operation.progress_pct != null && Number.isFinite(operation.progress_pct)) {
     return Math.max(0, Math.min(100, Number(operation.progress_pct)))
   }
   const total = Number(operation.progress_total || 0)
   const current = Number(operation.progress_current || 0)
-  if (total > 0) return Math.round((current / total) * 100)
+  if (total >= 100) return Math.round((current / total) * 100)
   return null
 }
 
@@ -139,6 +152,7 @@ export function useScanRunner(kind: ScanKind, options: ScanRunnerOptions = {}): 
   const trackedIdRef = useRef<string | null>(null)
   const completedIdRef = useRef<string | null>(null)
   const startedAtRef = useRef<number | null>(null)
+  const scanPaceIdRef = useRef<string | null>(null)
   const [elapsedSeconds, setElapsedSeconds] = useState(0)
 
   const clearPoll = useCallback(() => {
@@ -155,6 +169,7 @@ export function useScanRunner(kind: ScanKind, options: ScanRunnerOptions = {}): 
     trackedIdRef.current = null
     setIsBusy(false)
     startedAtRef.current = null
+    scanPaceIdRef.current = null
     if (op.status === 'SUCCEEDED') {
       setNotice('Scan complete — refreshing results…')
       onComplete?.()
@@ -171,6 +186,11 @@ export function useScanRunner(kind: ScanKind, options: ScanRunnerOptions = {}): 
     try {
       const op = await fetchOperation(operationId)
       if (!mountedRef.current) return
+      if (isStockScanStage(op.stage) && scanPaceIdRef.current !== op.operation_id) {
+        scanPaceIdRef.current = op.operation_id
+        startedAtRef.current = Date.now()
+        setElapsedSeconds(0)
+      }
       setOperation(op)
       if (isTerminalStatus(op.status)) handleTerminal(op)
     } catch {
@@ -230,6 +250,7 @@ export function useScanRunner(kind: ScanKind, options: ScanRunnerOptions = {}): 
     setIsBusy(true)
     setNotice(null)
     completedIdRef.current = null
+    scanPaceIdRef.current = null
     try {
       const result = await sendControl(KIND_CONTROL[kind])
       if (!result.accepted) {
@@ -265,8 +286,12 @@ export function useScanRunner(kind: ScanKind, options: ScanRunnerOptions = {}): 
   const dismissNotice = useCallback(() => setNotice(null), [])
 
   const friendlyPhase = useMemo(
-    () => friendlyStageLabel(operation?.stage || '', operation?.status || (isBusy ? 'PENDING' : '')),
-    [isBusy, operation?.stage, operation?.status],
+    () => friendlyStageLabel(
+      operation?.stage || '',
+      operation?.status || (isBusy ? 'PENDING' : ''),
+      elapsedSeconds,
+    ),
+    [elapsedSeconds, isBusy, operation?.stage, operation?.status],
   )
 
   const progressLine = useMemo(() => buildProgressLine(operation), [operation])

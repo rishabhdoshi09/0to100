@@ -110,7 +110,12 @@ def run_whole_market_scan(
                                 source_snapshot_id=snapshot_id or "")
 
     try:
-        prefetch_fn(symbols, progress=progress_callback)
+        # Prefetch warms OHLCV. Do not pass the stock-scan callback — bulk
+        # prefetch reports bhavcopy days, not symbols.
+        try:
+            prefetch_fn(symbols, progress=None)
+        except TypeError:
+            prefetch_fn(symbols)
         try:
             results = list(scanner.scan(symbols, progress=progress_callback, prefetch=False) or [])
         except TypeError:

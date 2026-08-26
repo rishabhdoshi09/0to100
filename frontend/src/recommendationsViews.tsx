@@ -418,9 +418,19 @@ export function RecommendationsView({
   if (error || !data || !category) {
     return (
       <div className="reco-light">
+        <LiveScanBanner scan={marketScan} depth={depth} label="Market scan" />
+        <LiveScanBanner scan={longTermScan} depth={depth} label="Long-term scan" />
         <div className="reco-empty">
           <strong>{error || 'No recommendation data yet'}</strong>
-          <p>Run a market scan and long-term refresh first.</p>
+          <p>Run a market scan and long-term refresh. Sidebar navigation only opens this page — it does not start those jobs.</p>
+          <div className="reco-hero-actions">
+            <button type="button" className="reco-primary" disabled={marketScan.isBusy} onClick={() => void marketScan.start()}>
+              {marketScan.isBusy ? 'Scanning market…' : 'Scan market'}
+            </button>
+            <button type="button" className="reco-ghost" disabled={longTermScan.isBusy} onClick={() => void longTermScan.start()}>
+              {longTermScan.isBusy ? 'Refreshing long-term…' : 'Refresh long-term'}
+            </button>
+          </div>
         </div>
       </div>
     )
@@ -464,6 +474,16 @@ export function RecommendationsView({
         <div>
           <h2>{category.label}</h2>
           <p>{category.blurb}</p>
+        </div>
+        <div className="reco-hero-actions">
+          <button type="button" className="reco-primary" disabled={marketScan.isBusy} onClick={() => void marketScan.start()}>
+            {marketScan.isBusy
+              ? `Scanning…${marketScan.percent != null ? ` ${marketScan.percent}%` : ''}${marketScan.etaLine ? ` · ${marketScan.etaLine}` : ''}`
+              : 'Scan market'}
+          </button>
+          <button type="button" className="reco-ghost" disabled={longTermScan.isBusy} onClick={() => void longTermScan.start()}>
+            {longTermScan.isBusy ? 'Refreshing long-term…' : 'Refresh long-term'}
+          </button>
         </div>
       </header>
 
@@ -745,12 +765,15 @@ function DeskTile({
   )
 }
 
-export function MarketReportsView({ dashboard, setActive, setSelected, marketScan }: ExperienceViewProps) {
+export function MarketReportsView({ dashboard, setActive, setSelected, marketScan, runControl }: ExperienceViewProps) {
   const [data, setData] = useState<MarketReportsWorkspace | null>(() => recall<MarketReportsWorkspace>('market-reports') ?? null)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(() => !recall('market-reports'))
   const [query, setQuery] = useState('')
   const [selected, setSelectedReport] = useState<MarketReportItem | null>(null)
+  const [newsBusy, setNewsBusy] = useState(false)
+  const newsStamp = dashboard.operations?.latest?.NEWS_REFRESH?.updated_at
+    || dashboard.news?.latest_refresh?.updated_at
 
   useEffect(() => {
     let cancelled = false
@@ -773,7 +796,16 @@ export function MarketReportsView({ dashboard, setActive, setSelected, marketSca
     return () => {
       cancelled = true
     }
-  }, [dashboard.scan.scanned_at, marketScan.succeeded])
+  }, [dashboard.scan.scanned_at, marketScan.succeeded, newsStamp])
+
+  const refreshNews = async () => {
+    setNewsBusy(true)
+    try {
+      await runControl('REFRESH_NEWS_NOW')
+    } finally {
+      setNewsBusy(false)
+    }
+  }
 
   const reports = useMemo(() => {
     if (!data) return []
@@ -804,6 +836,12 @@ export function MarketReportsView({ dashboard, setActive, setSelected, marketSca
       <div className="reco-light">
         <div className="reco-empty">
           <strong>{error || 'No reports yet'}</strong>
+          <p>Refresh news to build Market Reports. Opening this page does not fetch anything by itself.</p>
+          <div className="reco-hero-actions">
+            <button type="button" className="reco-primary" disabled={newsBusy} onClick={() => void refreshNews()}>
+              {newsBusy ? 'Refreshing news…' : 'Refresh news and filings'}
+            </button>
+          </div>
         </div>
       </div>
     )
@@ -844,6 +882,11 @@ export function MarketReportsView({ dashboard, setActive, setSelected, marketSca
         {data.as_of_ist ? (
           <p className="reco-sheet-cmp">As of {data.as_of_ist} IST — latest session only.</p>
         ) : null}
+        <div className="reco-hero-actions">
+          <button type="button" className="reco-primary" disabled={newsBusy} onClick={() => void refreshNews()}>
+            {newsBusy ? 'Refreshing news…' : 'Refresh news and filings'}
+          </button>
+        </div>
       </header>
 
       {data.desk_note ? (

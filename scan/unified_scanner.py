@@ -439,13 +439,16 @@ class UnifiedScanner:
     def scan(self, symbols: list[str], progress=None, *, prefetch: bool = True) -> list[StockSignal]:
         from scan.bulk_fetcher import prefetch as do_prefetch, get_cached, cached_symbols
 
+        # Never forward the stock-scan progress callback into prefetch.
+        # prefetch → build_store reports missing bhavcopy *days*, which the desk
+        # used to render as "Scanning 11 of 47 stocks" with a fake ETA.
         if prefetch:
-            do_prefetch(symbols, progress=progress)
+            do_prefetch(symbols)
         available = [s for s in symbols if s in set(cached_symbols())]
         if not available:
             # History can already be on disk while bulk_fetcher._bhav_ok is still
             # false (market-ops loads bhavcopy_runtime, then used to skip prefetch).
-            do_prefetch(symbols, progress=progress)
+            do_prefetch(symbols)
             available = [s for s in symbols if s in set(cached_symbols())]
         self._nifty_ret30 = _nifty_return_30d()      # RS benchmark, once/scan
         # Current market tape → regime-conditional demotion for this scan only.

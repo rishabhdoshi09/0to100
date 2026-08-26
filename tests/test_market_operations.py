@@ -60,6 +60,20 @@ def test_worker_restart_requeues_orphans(tmp_path: Path):
     assert recovered["status"] == PENDING
 
 
+def test_dead_running_worker_is_requeued_without_touching_a_live_pid(tmp_path: Path):
+    store = OperationStore(tmp_path / "ops.db")
+    dead, _ = store.enqueue("MARKET_SCAN", lane="market_scan")
+    live, _ = store.enqueue("NEWS_REFRESH", lane="news")
+    assert store.lease_next("market_scan", worker_pid=9_999_999) is not None
+    live_pid = os.getpid()
+    assert store.lease_next("news", worker_pid=live_pid) is not None
+
+    recovered = store.recover_dead_running(keep_pid=live_pid)
+    assert recovered == 1
+    assert store.get(dead["operation_id"])["status"] == PENDING
+    assert store.get(live["operation_id"])["status"] == RUNNING
+
+
 def test_staleness_uses_persisted_file_age(tmp_path: Path):
     from operations.market_ops import _stale
 

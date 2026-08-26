@@ -32,10 +32,12 @@ const baseOperation = (overrides: Partial<OperationRecord> = {}): OperationRecor
 describe('scanRunner semantics', () => {
   it('maps backend stages to friendly retail language', () => {
     expect(friendlyStageLabel('PREPARING_HISTORY', 'RUNNING')).toBe('Preparing market history…')
+    expect(friendlyStageLabel('WARMING_HISTORY', 'RUNNING')).toBe('Warming official price cache…')
     expect(friendlyStageLabel('SCANNING', 'RUNNING')).toBe('Scanning market candidates…')
     expect(friendlyStageLabel('', 'SUCCEEDED')).toBe('Scan complete')
     expect(friendlyStageLabel('', 'FAILED')).toBe('Scan failed')
     expect(friendlyStageLabel('', 'CANCELLED')).toBe('Scan stopped')
+    expect(friendlyStageLabel('', 'PENDING', 20)).toBe('Waiting for the scan worker…')
   })
 
   it('detects terminal and active statuses', () => {
@@ -56,16 +58,32 @@ describe('scanRunner semantics', () => {
     expect(buildProgressLine(baseOperation({ progress_current: 487, progress_total: 1842 })))
       .toBe('Scanning 487 of 1,842 stocks')
     expect(buildProgressLine(baseOperation({ progress_current: 10, progress_total: 0 }))).toBeNull()
+    expect(buildProgressLine(baseOperation({
+      stage: 'PREPARING_HISTORY',
+      progress_current: 11,
+      progress_total: 500,
+    }))).toBeNull()
   })
 
   it('never invents a percentage without totals', () => {
     expect(progressPercent(baseOperation({ progress_pct: null, progress_total: 0 }))).toBeNull()
     expect(progressPercent(baseOperation({ progress_current: 50, progress_total: 200 }))).toBe(25)
+    expect(progressPercent(baseOperation({
+      stage: 'PREPARING_HISTORY',
+      progress_current: 11,
+      progress_total: 500,
+      progress_pct: 2.2,
+    }))).toBeNull()
   })
 
   it('estimates ETA from observed scan pace and never invents one early', () => {
     expect(estimateEtaSeconds(baseOperation({ progress_current: 0, progress_total: 2000 }), 10)).toBeNull()
     expect(estimateEtaSeconds(baseOperation({ progress_current: 400, progress_total: 2000 }), 40)).toBe(160)
+    expect(estimateEtaSeconds(baseOperation({
+      stage: 'PREPARING_HISTORY',
+      progress_current: 11,
+      progress_total: 500,
+    }), 60)).toBeNull()
     expect(formatEta(160)).toBe('about 3 min')
     expect(formatEta(12)).toBe('under 15s')
     expect(formatEta(null)).toBeNull()
