@@ -13,7 +13,7 @@ _SECTOR_TO_FRAMEWORK: dict[str, str] = {
     "pharma & healthcare": "pharma",
     "manufacturing & capital goods": "industrials",
     "infrastructure & construction": "industrials",
-    "metals & mining": "industrials",
+    "metals & mining": "metals",
     "auto": "auto",
     "fmcg": "fmcg",
     "consumer & retail / apparel": "fmcg",
@@ -32,6 +32,10 @@ _BANKING_RE = re.compile(r"(?<!non-)(?<!non )banking")
 _IT_WORDS = ("software", "it services", "information technology", "saas")
 _PHARMA_WORDS = ("pharma", "pharmaceutical", "drug", "formulation")
 _INDUSTRIAL_WORDS = ("capital goods", "engineering", "industrial", "pipes", "order book", "infrastructure")
+_AUTO_WORDS = ("automobile", "passenger vehicle", "two wheeler", "commercial vehicle", "auto ancillary", "tyre")
+_FMCG_WORDS = ("fmcg", "packaged food", "personal care", "consumer staple", "household product")
+_REALTY_WORDS = ("real estate", "residential project", "developer", "rera")
+_METALS_WORDS = ("steel", "aluminium", "copper", "mining", "oil and gas", "power generation")
 
 
 def _mentions_nbfc(about: str) -> bool:
@@ -87,6 +91,18 @@ def classify_company(
     elif mapped == "industrials" or any(w in blob for w in _INDUSTRIAL_WORDS):
         framework = "industrials"
         reason = "Capital-goods / industrials sector map or description."
+    elif mapped == "auto" or any(w in blob for w in _AUTO_WORDS):
+        framework = "auto"
+        reason = "Auto / auto-ancillary sector map or description."
+    elif mapped == "fmcg" or any(w in blob for w in _FMCG_WORDS):
+        framework = "fmcg"
+        reason = "FMCG / consumer sector map or description."
+    elif mapped == "realty" or any(w in blob for w in _REALTY_WORDS):
+        framework = "realty"
+        reason = "Real-estate sector map or description."
+    elif mapped == "metals" or any(w in blob for w in _METALS_WORDS):
+        framework = "metals"
+        reason = "Metals / energy sector map or description."
     elif mapped:
         framework = mapped
         reason = f"Sector map '{sector_name}'."

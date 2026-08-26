@@ -729,3 +729,43 @@
   font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--rw-muted);
 }
 .dd-thesis p { margin: 0; line-height: 1.5; color: var(--rw-ink); }
+.dd-hero {
+  display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(240px, .8fr); gap: 14px; align-items: stretch;
+}
+.dd-hero h2 { margin: 4px 0; letter-spacing: -0.03em; }
+.dd-hero p { margin: 0; color: var(--rw-muted); }
+.dd-hero > div > span {
+  font-size: 11px; letter-spacing: .12em; text-transform: uppercase; color: var(--rw-muted); font-weight: 700;
+}
+.dd-snapshot-grid {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 8px;
+}
+.dd-snapshot-grid div {
+  padding: 10px 12px; border-radius: 10px; background: var(--rw-surface); border: 1px solid var(--rw-line);
+}
+.dd-snapshot-grid span {
+  display: block; font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--rw-muted);
+}
+.dd-investigator-search {
+  position: relative; display: grid; gap: 8px; margin-bottom: 16px;
+}
+.dd-investigator-search label {
+  font-size: 11px; letter-spacing: .12em; text-transform: uppercase; color: var(--rw-muted); font-weight: 700;
+}
+.dd-investigator-search input {
+  width: 100%; padding: 12px 14px; border-radius: 12px; border: 1px solid var(--rw-line);
+  font: inherit; background: var(--rw-surface); color: inherit;
+}
+.dd-investigator-search p { margin: 0; color: var(--rw-muted); font-size: 13px; }
+.dd-suggest {
+  list-style: none; margin: 0; padding: 6px; border: 1px solid var(--rw-line); border-radius: 12px;
+  background: var(--rw-surface); display: grid; gap: 4px;
+}
+.dd-suggest button {
+  width: 100%; text-align: left; border: 0; background: transparent; padding: 8px 10px;
+  font: inherit; color: inherit; cursor: pointer; border-radius: 8px;
+}
+.dd-suggest button:hover { background: var(--rw-green-soft); }
+@media (max-width: 800px) {
+  .dd-hero { grid-template-columns: 1fr; }
+}

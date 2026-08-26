@@ -16,7 +16,7 @@ class KpiSpec:
     unit: str
     pillar: str
     weight: float
-    missing_ok: bool = True
+    missing_ok: bool = False
 
 
 def _k(
@@ -30,11 +30,12 @@ def _k(
     unit: str,
     pillar: str,
     weight: float,
+    missing_ok: bool = False,
 ) -> KpiSpec:
     return KpiSpec(
         id=kpi_id, label=label, table=table, needles=needles,
         higher_is_better=higher_is_better, kind=kind, unit=unit,
-        pillar=pillar, weight=weight,
+        pillar=pillar, weight=weight, missing_ok=missing_ok,
     )
 
 
@@ -67,6 +68,30 @@ _CFO = _k(
     "cfo", "Cash from operations", "cash_flow", ("cash from operating",),
     higher_is_better=True, kind="level", unit="₹ cr", pillar="cash", weight=12,
 )
+_FII = _k(
+    "fii", "FII holding", "shareholding", ("fiis", "fii", "foreign institutional"),
+    higher_is_better=True, kind="rate", unit="%", pillar="governance", weight=4, missing_ok=True,
+)
+_DII = _k(
+    "dii", "DII holding", "shareholding", ("diis", "dii", "domestic institutional"),
+    higher_is_better=True, kind="rate", unit="%", pillar="governance", weight=3, missing_ok=True,
+)
+_PUBLIC = _k(
+    "public", "Public holding", "shareholding", ("public",),
+    higher_is_better=False, kind="rate", unit="%", pillar="governance", weight=2, missing_ok=True,
+)
+_ROE = _k(
+    "roe", "Return on equity", "key_ratios", ("roe", "return on equity"),
+    higher_is_better=True, kind="rate", unit="%", pillar="profitability", weight=6, missing_ok=True,
+)
+_ROCE = _k(
+    "roce", "Return on capital employed", "key_ratios", ("roce", "return on capital"),
+    higher_is_better=True, kind="rate", unit="%", pillar="profitability", weight=6, missing_ok=True,
+)
+_DEBT = _k(
+    "borrowings", "Borrowings", "balance_sheet", ("borrowings",),
+    higher_is_better=False, kind="level", unit="₹ cr", pillar="leverage", weight=8, missing_ok=True,
+)
 
 BANK = (
     _k(
@@ -92,13 +117,65 @@ BANK = (
     _PAT,
     _PROMOTER,
     _PLEDGE,
+    _k(
+        "casa", "CASA ratio", "quarterly_results",
+        ("casa", "current account savings"),
+        higher_is_better=True, kind="rate", unit="%", pillar="funding", weight=8, missing_ok=True,
+    ),
+    _k(
+        "cet1", "CET1 / capital adequacy", "quarterly_results",
+        ("cet1", "capital adequacy", "crar", "tier 1"),
+        higher_is_better=True, kind="rate", unit="%", pillar="capital", weight=8, missing_ok=True,
+    ),
+    _k(
+        "advances", "Advances / loans", "quarterly_results",
+        ("advances", "loans", "credit growth"),
+        higher_is_better=True, kind="level", unit="₹ cr", pillar="growth", weight=6, missing_ok=True,
+    ),
+    _FII, _DII, _PUBLIC,
 )
 
-NBFC = BANK
-IT = (_GROWTH_SALES, _OPM, _PAT, _EPS, _PROMOTER, _PLEDGE, _CFO)
-PHARMA = (_GROWTH_SALES, _OPM, _PAT, _EPS, _PROMOTER, _PLEDGE, _CFO)
-INDUSTRIALS = (_GROWTH_SALES, _OPM, _PAT, _CFO, _PROMOTER, _PLEDGE)
-GENERIC = (_GROWTH_SALES, _OPM, _PAT, _PROMOTER, _PLEDGE, _CFO)
+NBFC = (
+    _k(
+        "nii", "Financing / NII income", "quarterly_results",
+        ("revenue", "financing profit", "sales"),
+        higher_is_better=True, kind="level", unit="₹ cr", pillar="growth", weight=16,
+    ),
+    _k(
+        "nim", "Financing margin / spread", "quarterly_results",
+        ("financing margin", "nim"),
+        higher_is_better=True, kind="rate", unit="%", pillar="profitability", weight=14,
+    ),
+    _k(
+        "gnpa", "Gross NPA", "quarterly_results",
+        ("gross npa", "gnpa", "gross non performing"),
+        higher_is_better=False, kind="rate", unit="%", pillar="asset_quality", weight=18,
+    ),
+    _k(
+        "nnpa", "Net NPA", "quarterly_results",
+        ("net npa", "nnpa", "net non performing"),
+        higher_is_better=False, kind="rate", unit="%", pillar="asset_quality", weight=14,
+    ),
+    _PAT,
+    _PROMOTER,
+    _PLEDGE,
+    _DEBT,
+    _k(
+        "aum", "AUM", "quarterly_results",
+        ("aum", "assets under management"),
+        higher_is_better=True, kind="level", unit="₹ cr", pillar="growth", weight=8, missing_ok=True,
+    ),
+    _FII, _DII, _PUBLIC,
+)
+
+IT = (_GROWTH_SALES, _OPM, _PAT, _EPS, _PROMOTER, _PLEDGE, _CFO, _ROE, _FII, _DII, _PUBLIC)
+PHARMA = (_GROWTH_SALES, _OPM, _PAT, _EPS, _PROMOTER, _PLEDGE, _CFO, _ROE, _FII, _DII, _PUBLIC)
+INDUSTRIALS = (_GROWTH_SALES, _OPM, _PAT, _CFO, _PROMOTER, _PLEDGE, _DEBT, _ROE, _ROCE, _FII, _DII, _PUBLIC)
+AUTO = (_GROWTH_SALES, _OPM, _PAT, _EPS, _CFO, _PROMOTER, _PLEDGE, _DEBT, _ROE, _FII, _DII, _PUBLIC)
+FMCG = (_GROWTH_SALES, _OPM, _PAT, _EPS, _CFO, _PROMOTER, _PLEDGE, _ROE, _ROCE, _FII, _DII, _PUBLIC)
+REALTY = (_GROWTH_SALES, _OPM, _PAT, _CFO, _PROMOTER, _PLEDGE, _DEBT, _ROE, _FII, _DII, _PUBLIC)
+METALS = (_GROWTH_SALES, _OPM, _PAT, _CFO, _PROMOTER, _PLEDGE, _DEBT, _ROE, _FII, _DII, _PUBLIC)
+GENERIC = (_GROWTH_SALES, _OPM, _PAT, _PROMOTER, _PLEDGE, _CFO, _FII, _DII, _PUBLIC)
 
 FRAMEWORKS: dict[str, dict[str, Any]] = {
     "bank": {
@@ -159,6 +236,54 @@ FRAMEWORKS: dict[str, dict[str, Any]] = {
             "Working-capital / CFO versus PAT.",
             "Margin versus the last two quarters.",
             "Large contract wins or cancellations in curated news.",
+        ),
+    },
+    "auto": {
+        "id": "auto",
+        "label": "Auto / auto ancillary",
+        "blurb": "Volume-linked sales, margins, cash and leverage. Volumes stay Data unavailable unless a filing table exists.",
+        "kpis": AUTO,
+        "watch": (
+            "Monthly volume print versus this quarter's sales.",
+            "Margin versus commodity / RM headlines if sourced.",
+            "Dealer-inventory commentary in results.",
+            "EV mix only if a segment table is on file.",
+        ),
+    },
+    "fmcg": {
+        "id": "fmcg",
+        "label": "FMCG / consumer",
+        "blurb": "Sales, gross/operating margin, cash conversion. Volume vs realisation stays Data unavailable unless filed.",
+        "kpis": FMCG,
+        "watch": (
+            "Volume versus realisation split in the next result.",
+            "Gross margin versus commodity costs if disclosed.",
+            "Rural/urban mix only from a sourced segment table.",
+            "Promoter holding / pledge.",
+        ),
+    },
+    "realty": {
+        "id": "realty",
+        "label": "Real estate",
+        "blurb": "Sales, margin, cash and borrowings. Pre-sales / collections stay Data unavailable unless filed.",
+        "kpis": REALTY,
+        "watch": (
+            "Pre-sales / collections if a filing table appears.",
+            "Borrowings versus cash from operations.",
+            "Promoter pledge.",
+            "Project-delay or RERA headlines if sourced.",
+        ),
+    },
+    "metals": {
+        "id": "metals",
+        "label": "Metals / energy",
+        "blurb": "Realisation-sensitive sales and margins, cash and leverage. Commodity prices are not guessed.",
+        "kpis": METALS,
+        "watch": (
+            "Next-quarter realisation / spread commentary.",
+            "Net debt versus CFO.",
+            "Power/RM cost if a segment note is uploaded.",
+            "Any regulatory or mine-related headline tagged to this symbol.",
         ),
     },
     "generic": {

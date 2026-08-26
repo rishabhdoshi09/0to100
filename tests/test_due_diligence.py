@@ -726,4 +726,155 @@ def test_acquire_symbol_persists_research_pack_and_chain(tmp_path, monkeypatch):
     assert "streamlit" not in chain_src
 
 
+def test_stock_research_engine_is_the_same_builder():
+    from product.due_diligence import StockResearchEngine, investigate_stock
+
+    payload = StockResearchEngine().investigate(
+        "TESTIT",
+        scan_payload={"records": [{"symbol": "TESTIT", "status": "Watch for breakout", "score": 70}]},
+        long_term_payload={"records": [{"symbol": "TESTIT", "sector": "IT / Software"}]},
+        raw_fundamentals=IT_RAW,
+        news=[],
+    )
+    alias = investigate_stock(
+        "TESTIT",
+        scan_payload={"records": [{"symbol": "TESTIT", "status": "Watch for breakout", "score": 70}]},
+        long_term_payload={"records": [{"symbol": "TESTIT", "sector": "IT / Software"}]},
+        raw_fundamentals=IT_RAW,
+        news=[],
+    )
+    assert payload["engine"] == "StockResearchEngine"
+    assert payload["uses_llm"] is False
+    assert payload["fundamental_confirmation"] in {
+        "STRONG SUPPORT", "SUPPORT", "NEUTRAL", "CAUTION", "CONTRADICTS",
+    }
+    assert payload["first_screen"]["ticker"] == "TESTIT"
+    assert payload["kpis"] == alias["kpis"]
+    sales = next(k for k in payload["kpis"] if k["id"] == "sales")
+    assert sales["formula"]
+    assert sales["provenance"]["source"]
+    assert payload["fundamental_quality"]["breakdown"]["pillars"]
+
+
+def test_auto_and_fmcg_frameworks_are_configured():
+    auto = classify_company("TATAMOTORS", sector="Auto", about="Tata Motors manufactures passenger vehicles")
+    assert auto["framework_id"] == "auto"
+    fmcg = classify_company("HINDUNILVR", sector="FMCG", about="Hindustan Unilever is an FMCG company")
+    assert fmcg["framework_id"] == "fmcg"
+    payload = build_due_diligence(
+        "TATAMOTORS",
+        scan_payload={"records": []},
+        long_term_payload={"records": [{"symbol": "TATAMOTORS", "sector": "Auto"}]},
+        raw_fundamentals={"available": True, "fetched_at": "", "data": {"about": "passenger vehicles", "quarterly_results": []}},
+        news=[],
+    )
+    assert payload["framework"]["id"] == "auto"
+    assert payload["vs_technical_setup"] == "UNMEASURED"
+    ids = {k["id"] for k in payload["kpis"]}
+    assert "sales" in ids
+    assert "gnpa" not in ids
+
+
+def test_suggest_icici_returns_icicibank():
+    from product.due_diligence.suggest import suggest_tickers
+
+    matches = suggest_tickers("ICICI")
+    symbols = [row["symbol"] for row in matches]
+    assert "ICICIBANK" in symbols
+    assert matches[0]["label"].startswith("ICICI")
+    assert suggest_tickers("x") == []
+
+
+def test_cfo_below_pat_is_a_warning_not_invented():
+    raw = {
+        "available": True, "fetched_at": "", "data": {
+            "about": "Test IT Ltd provides financial software",
+            "quarterly_results": [
+                _q_row("Sales+", **{"Jun 2025": 100, "Sep 2025": 110, "Dec 2025": 120, "Mar 2026": 130, "Jun 2026": 140}),
+                _q_row("OPM %", **{"Jun 2025": 20, "Sep 2025": 21, "Dec 2025": 21, "Mar 2026": 22, "Jun 2026": 22}),
+                _q_row("Net Profit+", **{"Jun 2025": 40, "Sep 2025": 42, "Dec 2025": 44, "Mar 2026": 46, "Jun 2026": 50}),
+            ],
+            "profit_loss": [
+                _q_row("Net Profit+", **{"Mar 2024": 80, "Mar 2025": 90, "Mar 2026": 100}),
+                _q_row("Sales+", **{"Mar 2024": 400, "Mar 2025": 450, "Mar 2026": 500}),
+            ],
+            "cash_flow": [
+                _q_row("Cash from Operating Activity+", **{"Mar 2024": 20, "Mar 2025": 25, "Mar 2026": 30}),
+            ],
+            "shareholding": [_q_row("Promoters+", **{"Jun 2026": 50})],
+        },
+    }
+    payload = build_due_diligence(
+        "TESTIT",
+        scan_payload={"records": [{"symbol": "TESTIT", "status": "Ready to trade", "score": 80}]},
+        long_term_payload={"records": [{"symbol": "TESTIT", "sector": "IT / Software"}]},
+        raw_fundamentals=raw,
+        news=[],
+    )
+    assert payload["cash_flow_quality"]["applicable"] is True
+    cfo_pat = next(m for m in payload["cash_flow_quality"]["metrics"] if m["id"] == "cfo_to_pat")
+    assert cfo_pat["available"] is True
+    assert cfo_pat["current"] == 0.3
+    assert any(f["id"] == "cf-cfo-below-pat" for f in payload["red_flags"])
+    warned = next(f for f in payload["red_flags"] if f["id"] == "cf-cfo-below-pat")
+    assert warned["severity"] == "warning"
+    assert warned["threshold"] == 0.5
+    assert payload["vs_technical_setup"] in {"CAUTION", "SUPPORTS", "STRONGLY SUPPORTS", "NEUTRAL", "CONTRADICTS"}
+
+
+def test_source_conflict_keeps_both_prints():
+    from product.due_diligence.engine import _apply_overlay
+    from product.due_diligence.frameworks import GENERIC
+
+    findings = [{
+        "id": "sales",
+        "available": True,
+        "snapshot": {"current": 2540},
+        "provenance": {"value": 2540, "source": "NSE filing", "source_type": "exchange_filing"},
+    }]
+    measured = {"sales": {"current": 2590, "source": "Secondary website", "current_period": "Jun 2026"}}
+    conflicts = _apply_overlay(findings, GENERIC, measured)
+    assert findings[0]["snapshot"]["current"] == 2540
+    assert conflicts
+    assert conflicts[0]["status"] == "Source discrepancy detected"
+    assert conflicts[0]["other"]["value"] == 2590
+
+
+def test_order_materiality_uses_revenue_ratio():
+    from product.due_diligence.materiality import materiality
+
+    low = materiality(
+        {"headline": "Wins order worth ₹1 crore from state agency", "event_type": "order_or_contract"},
+        revenue_cr=50000,
+    )
+    high = materiality(
+        {"headline": "Wins order worth ₹5,000 crore from state agency", "event_type": "order_or_contract"},
+        revenue_cr=50000,
+    )
+    assert low["materiality"] == "Low"
+    assert high["materiality"] in {"High", "Very High"}
+    assert high["ratio"] == 0.1
+
+
+def test_suggest_endpoint_does_not_scrape(monkeypatch):
+    from fastapi.testclient import TestClient
+    import terminal_product_api as tpa
+
+    scraped = {"called": False}
+
+    def boom(*_a, **_k):
+        scraped["called"] = True
+        raise AssertionError("suggest must not scrape")
+
+    monkeypatch.setattr("fundamentals.fetcher.get_deep_fundamentals", boom)
+    client = TestClient(tpa.app)
+    response = client.get("/api/stock-investigator/suggest", params={"q": "ICICI"})
+    assert response.status_code == 200
+    body = response.json()
+    assert body["engine"] == "StockResearchEngine"
+    assert any(row["symbol"] == "ICICIBANK" for row in body["matches"])
+    assert scraped["called"] is False
+
+
+
 

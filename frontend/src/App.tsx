@@ -15,7 +15,7 @@ import {
 import { MarketSidebar } from './MarketSidebar'
 import { EducationView } from './educationViews'
 import { NewsView, OperationsRibbon, FnoView } from './marketViews'
-import { ProductStockIntelligenceView } from './productViews'
+import { ProductStockIntelligenceView, StockInvestigatorView } from './productViews'
 import { ResearchDataView } from './researchData'
 import {
   AutomationView,
@@ -27,6 +27,7 @@ import type { DisplayDepth } from './productLanguage'
 import { addWatchlistItem, bootstrapProduct } from './productApi'
 import { useScanRunner } from './scanRunner'
 import {
+  markInvestigate,
   readDeskNav,
   readSessionJson,
   writeDeskNav,
@@ -199,6 +200,7 @@ const pageTitles: Record<string, string> = {
   Recommendations: 'Recommendations',
   'Market Reports': 'Market Reports',
   'Stock Intelligence': 'Stock Intelligence',
+  'Stock Investigator': 'Stock Investigator',
   'Long-Term Picks': 'Long-Term Picks',
   Compare: 'Compare',
   Watchlist: 'Watchlist',
@@ -223,7 +225,8 @@ const pageSubtitles: Record<string, string> = {
   'Market Scanner': 'Professional scanner tables for breakouts, momentum, SEPA Best Setups and long-term quality.',
   Recommendations: 'Simple decisions on the outside — buy zone, target, stop, why now — with QuantTerm evidence underneath.',
   'Market Reports': 'Daily Market Pulse archive — trends, sector movers and breakout context from live system state.',
-  'Stock Intelligence': 'Company workspace — chart, financials, ratios and pre-trade GO/CAUTION/NO_GO cockpit.',
+  'Stock Intelligence': 'Company workspace — chart, financials, ratios and the due-diligence Investigate view.',
+  'Stock Investigator': 'Type any NSE ticker or company name. The same research engine as scanner Investigate runs — not a new scanner.',
   'Long-Term Picks': 'Business quality, valuation and timing without fabricated model performance.',
   Compare: 'Side-by-side comparison across market, growth, quality and technical dimensions.',
   Watchlist: 'Names you are tracking with latest scan context.',
@@ -396,6 +399,7 @@ function App() {
       || clean
     setSelected(match)
     setQuery(match)
+    markInvestigate(match)
     openPage('Stock Intelligence')
     setControlState(`Opening verified workspace for ${match}`)
     window.setTimeout(() => setControlState(''), 2500)
@@ -459,7 +463,7 @@ function App() {
   }
 
   const primaryPages = [
-    'Home', 'Market Scanner', 'Stock Intelligence', 'Long-Term Picks',
+    'Home', 'Market Scanner', 'Stock Intelligence', 'Stock Investigator', 'Long-Term Picks',
     'Compare', 'Watchlist', 'Command Center', 'Scanner', 'Recommendations', 'Market Reports',
   ]
   const showOpsRibbon = !primaryPages.includes(active)
@@ -486,6 +490,14 @@ function App() {
       {keep(['Market Reports'], <MarketReportsView {...viewProps} />)}
       {keep(['Stock Intelligence'], (
         <ProductStockIntelligenceView
+          {...viewProps}
+          depth={depth}
+          onCompare={addToCompare}
+          onWatchlist={addToWatchlist}
+        />
+      ))}
+      {keep(['Stock Investigator'], (
+        <StockInvestigatorView
           {...viewProps}
           depth={depth}
           onCompare={addToCompare}

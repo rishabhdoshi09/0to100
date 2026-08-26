@@ -16,18 +16,20 @@ import {
   fetchStockIntelligence,
   fetchDueDiligence,
   acquireDueDiligence,
+  fetchInvestigatorSuggest,
   fetchTradePlan,
   refreshStockFundamentals,
   fetchSymbolRatios,
   type DueDiligenceKpi,
   type DueDiligenceReport,
+  type InvestigatorMatch,
   type IntelligenceMetric,
   type OptionChainSnapshot,
   type ProductReadiness,
   type StockWorkspace,
   type TradePlan,
 } from './productApi'
-import { keepRicher, markInvestigate, recall, wantsInvestigate } from './sessionMemory'
+import { keepRicher, markInvestigate, recall } from './sessionMemory'
 import type { ChartBar, ControlName, DashboardPayload } from './types'
 
 // Read-only risk-first "R lens" — exact shares, rupee risk, reward:risk, book heat. No orders.
@@ -256,8 +258,9 @@ function sparkHeights(points: { period: string; value: number }[] | undefined): 
 
 function verdictTone(value: string): string {
   const v = (value || '').toUpperCase()
-  if (v.includes('STRONGLY SUPPORTS') || v === 'SUPPORTS') return 'is-supports'
+  if (v.includes('STRONGLY SUPPORT') || v.includes('STRONG SUPPORT') || v === 'SUPPORTS' || v === 'SUPPORT') return 'is-supports'
   if (v.includes('CONTRADICTS')) return 'is-contradicts'
+  if (v.includes('CAUTION')) return 'is-neutral'
   return 'is-neutral'
 }
 
@@ -307,7 +310,8 @@ function InvestigatePanel({
   busy: string
 }) {
   const [openId, setOpenId] = useState<string | null>(null)
-  useEffect(() => { setOpenId(null) }, [report?.symbol])
+  const [section, setSection] = useState('Overview')
+  useEffect(() => { setOpenId(null); setSection('Overview') }, [report?.symbol])
   if (loading && !report) {
     return <div className="large-empty">Loading sector-framework due diligence from files on disk…</div>
   }
@@ -317,37 +321,161 @@ function InvestigatePanel({
   if (!report) {
     return <EmptyState title="Investigate is empty" detail="No due-diligence report is on file for this symbol." />
   }
+  const screen = report.first_screen
+  const confirmation = report.fundamental_confirmation || report.vs_technical_setup
   const scoreLabel = report.fundamental_quality.score == null
     ? 'Unmeasured'
     : `${report.fundamental_quality.score} / 100 — ${report.fundamental_quality.label}`
+  const snap = report.company_snapshot || {}
+  const kpisFor = (want: string) => {
+    if (want === 'Sector KPIs') return report.kpis
+    if (want === 'Quarterly') return report.kpis.filter((k) => (k.table || 'quarterly_results') === 'quarterly_results')
+    if (want === 'Annual') return report.kpis.filter((k) => k.table === 'profit_loss' || k.table === 'cash_flow')
+    if (want === 'Shareholding') return report.kpis.filter((k) => k.table === 'shareholding' || ['promoter', 'pledge', 'fii', 'dii', 'public'].includes(k.id))
+    if (want === 'Fundamentals') return report.kpis.filter((k) => ['growth', 'profitability', 'cash', 'leverage'].includes(k.pillar))
+    return report.kpis
+  }
+  const is = (name: string) => section === name
+  const kpiSection = ['Fundamentals', 'Sector KPIs', 'Quarterly', 'Annual', 'Shareholding'].includes(section)
+  const kpiTable = (rows: DueDiligenceKpi[]) => (
+    <div className="dd-kpi-table">
+      {rows.map((kpi) => {
+        const open = openId === kpi.id
+        const heights = sparkHeights(kpi.snapshot?.points)
+        return (
+          <article key={kpi.id} className={`dd-kpi ${kpi.available ? '' : 'unavailable'} ${open ? 'open' : ''}`}>
+            <button type="button" onClick={() => setOpenId(open ? null : kpi.id)}>
+              <div>
+                <span>{kpi.label}</span>
+                <strong>{kpi.available ? kpi.fact : 'Data unavailable'}</strong>
+                <small>{kpi.available ? `${kpi.trend} · ${kpi.pillar}` : 'Missing from cache — not estimated.'}</small>
+              </div>
+              {heights.length > 1 ? (
+                <div className="dd-spark" aria-hidden="true">
+                  {heights.map((height, index) => (
+                    <i key={`${kpi.id}-${index}`} style={{ height: `${height}%` }} />
+                  ))}
+                </div>
+              ) : null}
+            </button>
+            {open ? (
+              <dl className="dd-kpi-detail">
+                <div><dt>Fact</dt><dd>{kpi.fact}</dd></div>
+                {kpi.snapshot?.current != null && kpi.snapshot.year_ago != null ? (
+                  <div><dt>Prints</dt><dd>{kpi.snapshot.current} vs {kpi.snapshot.year_ago} ({kpi.snapshot.current_period} vs {kpi.snapshot.year_ago_period})</dd></div>
+                ) : null}
+                <div><dt>Formula</dt><dd>{kpi.formula || 'Calculation not possible'}</dd></div>
+                <div><dt>Interpretation</dt><dd>{kpi.interpretation}</dd></div>
+                <div><dt>Implication</dt><dd>{kpi.implication}</dd></div>
+                <div>
+                  <dt>Source</dt>
+                  <dd>
+                    {kpi.source_url
+                      ? <a href={kpi.source_url} target="_blank" rel="noreferrer">{kpi.source}</a>
+                      : kpi.source}
+                    {kpi.source_date ? ` · ${kpi.source_date}` : ''} · confidence {kpi.confidence}
+                    {kpi.provenance?.source_type_label ? ` · ${kpi.provenance.source_type_label}` : ''}
+                    {kpi.provenance?.retrieved_at ? ` · retrieved ${kpi.provenance.retrieved_at}` : ''}
+                  </dd>
+                </div>
+              </dl>
+            ) : null}
+          </article>
+        )
+      })}
+    </div>
+  )
   return (
     <div className="dd-root">
       <p className="dd-question">{report.question}</p>
-      <aside className={`dd-verdict ${verdictTone(report.vs_technical_setup)}`} aria-label="Fundamental versus technical setup">
-        <span>Fundamental vs technical setup</span>
-        <strong>{report.vs_technical_setup}</strong>
-        <p>{report.vs_detail}</p>
-      </aside>
+      <header className="dd-hero">
+        <div>
+          <span>{String(snap.sector || report.profile.sector || 'Unclassified')}</span>
+          <h2>{report.company}</h2>
+          <p>{report.symbol} · {String(snap.selected_by || screen?.selected_by || 'Manual investigator')}</p>
+        </div>
+        <aside className={`dd-verdict ${verdictTone(confirmation)}`} aria-label="Fundamental confirmation">
+          <span>Fundamental confirmation</span>
+          <strong>{confirmation}</strong>
+          <p>{report.vs_detail}</p>
+        </aside>
+      </header>
+      <div className="dd-score-grid dd-first-grid">
+        <article><span>Technical score</span><strong>{screen?.technical_score != null ? `${screen.technical_score}/100` : (report.technical_context.scanner_score != null ? `${report.technical_context.scanner_score}/100` : 'Data unavailable')}</strong></article>
+        <article><span>Fundamental quality</span><strong>{scoreLabel}</strong><small>{report.fundamental_quality.explain}</small></article>
+        <article><span>Business trend</span><strong>{report.business_trend}</strong></article>
+        <article><span>Earnings trend</span><strong>{report.earnings_quality}</strong></article>
+        <article><span>Balance sheet</span><strong>{report.balance_sheet_quality}</strong></article>
+        <article><span>Critical red flags</span><strong>{report.flag_groups?.n_critical ?? 0}</strong></article>
+        <article><span>Warnings</span><strong>{report.flag_groups?.n_warnings ?? report.red_flags.length}</strong></article>
+        <article><span>Latest quarter</span><strong>{screen?.latest_financial_quarter || report.as_of.latest_financial_period || 'Data unavailable'}</strong><small>Freshness: {report.as_of.fundamentals_freshness || 'MISSING'}</small></article>
+      </div>
+      <div className="dd-snapshot-grid">
+        <div><span>Market cap</span><strong>{String(snap.market_cap_display || 'Data unavailable')}</strong></div>
+        <div><span>Price</span><strong>{String(snap.current_price_display || 'Data unavailable')}</strong></div>
+        <div><span>52w high</span><strong>{String(snap.high_52w_display || 'Data unavailable')}</strong></div>
+        <div><span>52w low</span><strong>{String(snap.low_52w_display || 'Data unavailable')}</strong></div>
+        <div><span>Promoter</span><strong>{snap.promoter_holding == null ? 'Data unavailable' : `${snap.promoter_holding}%`}</strong></div>
+        <div><span>FII</span><strong>{snap.fii_holding == null ? 'Data unavailable' : `${snap.fii_holding}%`}</strong></div>
+        <div><span>DII</span><strong>{snap.dii_holding == null ? 'Data unavailable' : `${snap.dii_holding}%`}</strong></div>
+        <div><span>Pledge</span><strong>{snap.promoter_pledge == null ? 'Data unavailable' : `${snap.promoter_pledge}%`}</strong></div>
+      </div>
+      {(typeof snap.about === 'string' && snap.about && snap.about !== 'Data unavailable') ? (
+        <p className="dd-framework">{snap.about}</p>
+      ) : null}
       {report.thesis?.text ? (
         <aside className="dd-thesis" aria-label="Rule-based desk synthesis">
           <span>Desk synthesis · rules, not a language model</span>
           <p>{report.thesis.text}</p>
         </aside>
       ) : null}
-      <div className="dd-score-grid">
-        <article><span>Fundamental quality</span><strong>{scoreLabel}</strong><small>{report.fundamental_quality.explain}</small></article>
-        <article><span>Business trend</span><strong>{report.business_trend}</strong></article>
-        <article><span>Financial strength</span><strong>{report.financial_strength}</strong></article>
-        <article><span>Earnings quality</span><strong>{report.earnings_quality}</strong></article>
-        <article><span>Balance-sheet quality</span><strong>{report.balance_sheet_quality}</strong></article>
-        <article><span>Governance risk</span><strong>{report.governance_risk}</strong></article>
-        <article><span>News / event impact</span><strong>{report.news_event_impact}</strong></article>
-      </div>
+      <SectionTabs
+        tabs={screen?.sections || ['Overview', 'Fundamentals', 'Sector KPIs', 'Quarterly', 'Cash Flow', 'Peers', 'Shareholding', 'News', 'Filings', 'Red Flags', 'Sources']}
+        active={section}
+        onChange={setSection}
+      />
+      {is('Overview') ? (
+        <div className="stock-overview-grid">
+          <Panel title="IMPROVING" subtitle="Measured numerical trends only">
+            {(screen?.improving || report.strengths || []).length
+              ? <ul className="dd-watch">{(screen?.improving || report.strengths).map((item) => <li key={item}>{item}</li>)}</ul>
+              : <EmptyState title="No measured improvement" detail="Improving KPIs will appear here when values exist." />}
+          </Panel>
+          <Panel title="DETERIORATING" subtitle="Measured numerical trends only">
+            {(screen?.deteriorating || report.concerns || []).length
+              ? <ul className="dd-watch">{(screen?.deteriorating || report.concerns).map((item) => <li key={item}>{item}</li>)}</ul>
+              : <EmptyState title="No measured deterioration" />}
+          </Panel>
+        </div>
+      ) : null}
+      {is('Overview') ? (
+        <div className="stock-overview-grid">
+          <Panel title="RECENT MATERIAL EVENTS" subtitle="Taxonomy + materiality — no LLM sentiment">
+            {(screen?.recent_material_events || []).length
+              ? (
+                <ul className="dd-events">
+                  {screen!.recent_material_events!.map((event) => (
+                    <li key={`${event.date}-${event.headline}`}>
+                      <strong>{event.headline}</strong>
+                      <span>{event.date} · {event.category} · {event.materiality} · {event.source || 'source unavailable'}</span>
+                    </li>
+                  ))}
+                </ul>
+              )
+              : <EmptyState title="No material company-tagged development on file" />}
+          </Panel>
+          <Panel title="TECHNICAL REASON FOR SELECTION" subtitle="From the saved scan — this engine does not rescan">
+            {(screen?.technical_reason || []).length
+              ? <ul className="dd-watch">{screen!.technical_reason!.map((item) => <li key={item}>{item}</li>)}</ul>
+              : <EmptyState title="Not on the current scanner shortlist" detail={report.technical_context.detail} />}
+          </Panel>
+        </div>
+      ) : null}
       <p className="dd-framework">{report.framework.label}. {report.framework.blurb} Sector: {report.profile.sector || 'Unclassified'}.</p>
       {(report.profile.revenue_drivers && report.profile.revenue_drivers !== 'Data unavailable — no segment table on file.') ? (
         <p className="dd-framework">Revenue drivers: {report.profile.revenue_drivers}</p>
       ) : null}
-      {(caseMemory || decision || report.long_term_overlay?.classification) ? (
+      {is('Overview') && (caseMemory || decision || report.long_term_overlay?.classification) ? (
         <aside className="dd-overlay" aria-label="Already-wired QuantTerm layers">
           {report.long_term_overlay?.classification ? (
             <p><strong>Long-term overlay.</strong> {report.long_term_overlay.classification}. {report.long_term_overlay.note}</p>
@@ -358,172 +486,220 @@ function InvestigatePanel({
           {caseMemory?.memory_line ? <p><strong>Case memory.</strong> {caseMemory.memory_line}</p> : null}
         </aside>
       ) : null}
-      <div className="stock-overview-grid">
-        <Panel title="KEY STRENGTHS" subtitle="Measured improving KPIs only">
-          {(report.strengths || []).length
-            ? <ul className="dd-watch">{report.strengths.map((item) => <li key={item}>{item}</li>)}</ul>
-            : <EmptyState title="No measured strength" detail="Improving KPIs will appear here when values exist." />}
+      {kpiSection ? (
+        <Panel title={section.toUpperCase()} subtitle="Click a row for formula, prints and source. Missing stays Data unavailable.">
+          {kpiTable(kpisFor(section))}
+          {(report.unavailable || []).length > 0 && section === 'Sector KPIs' && (
+            <p className="dd-missing">Data unavailable: {report.unavailable.join(', ')}.</p>
+          )}
         </Panel>
-        <Panel title="CONCERNS" subtitle="Measured deteriorating KPIs — not red flags">
-          {(report.concerns || []).length
-            ? <ul className="dd-watch">{report.concerns.map((item) => <li key={item}>{item}</li>)}</ul>
-            : <EmptyState title="No measured concern" />}
-        </Panel>
-      </div>
-      <Panel title="RED FLAGS" subtitle="True flags only — not ordinary weakness">
-        {(report.red_flags || []).length
-          ? (
-            <ul className="dd-flag-list">
-              {report.red_flags.map((flag) => (
-                <li key={flag.id}>
-                  <strong>{flag.title}</strong>
-                  <span>{flag.fact}</span>
-                  <small>{flag.source || 'Source unavailable'} · {flag.source_date || 'date unavailable'}</small>
-                </li>
-              ))}
-            </ul>
-          )
-          : <EmptyState title="No red flag on file" />}
-      </Panel>
-      <Panel title="WHAT CHANGED RECENTLY" subtitle="Meaningful items only">
-        {(report.what_changed || []).length
-          ? <ul className="dd-watch">{report.what_changed.map((item) => <li key={item}>{item}</li>)}</ul>
-          : <EmptyState title="No material quarter-to-quarter change measured" />}
-      </Panel>
-      <Panel title={`${report.framework.label.toUpperCase()} KPIs`} subtitle="Click a row for fact, interpretation, implication and source">
-        <div className="dd-kpi-table">
-          {report.kpis.map((kpi: DueDiligenceKpi) => {
-            const open = openId === kpi.id
-            const heights = sparkHeights(kpi.snapshot?.points)
-            return (
-              <article key={kpi.id} className={`dd-kpi ${kpi.available ? '' : 'unavailable'} ${open ? 'open' : ''}`}>
-                <button type="button" onClick={() => setOpenId(open ? null : kpi.id)}>
-                  <div>
-                    <span>{kpi.label}</span>
-                    <strong>{kpi.available ? kpi.fact : 'Data unavailable'}</strong>
-                    <small>{kpi.available ? `${kpi.trend} · ${kpi.pillar}` : 'Missing from cache — not estimated.'}</small>
-                  </div>
-                  {heights.length > 1 ? (
-                    <div className="dd-spark" aria-hidden="true">
-                      {heights.map((height, index) => (
-                        <i key={`${kpi.id}-${index}`} style={{ height: `${height}%` }} />
-                      ))}
-                    </div>
-                  ) : null}
-                </button>
-                {open ? (
-                  <dl className="dd-kpi-detail">
-                    <div><dt>Fact</dt><dd>{kpi.fact}</dd></div>
-                    <div><dt>Interpretation</dt><dd>{kpi.interpretation}</dd></div>
-                    <div><dt>Implication</dt><dd>{kpi.implication}</dd></div>
-                    <div>
-                      <dt>Source</dt>
-                      <dd>
-                        {kpi.source_url
-                          ? <a href={kpi.source_url} target="_blank" rel="noreferrer">{kpi.source}</a>
-                          : kpi.source}
-                        {kpi.source_date ? ` · ${kpi.source_date}` : ''} · confidence {kpi.confidence}
-                      </dd>
-                    </div>
-                  </dl>
-                ) : null}
-              </article>
+      ) : null}
+      {is('Fundamentals') ? (
+        <Panel title="SCORE BREAKDOWN" subtitle="Every point is inspectable. Missing buckets are skipped.">
+          {(report.fundamental_quality.breakdown?.pillars || []).length
+            ? (
+              <ul className="dd-flag-list">
+                {report.fundamental_quality.breakdown!.pillars!.map((pillar) => (
+                  <li key={pillar.id}>
+                    <strong>{pillar.label} · {pillar.display}</strong>
+                    <span>{pillar.explain}</span>
+                    {pillar.formula ? <small>{pillar.formula}</small> : null}
+                  </li>
+                ))}
+              </ul>
             )
-          })}
-        </div>
-        {(report.unavailable || []).length > 0 && (
-          <p className="dd-missing">Data unavailable: {report.unavailable.join(', ')}.</p>
-        )}
-      </Panel>
-      <Panel title="MATERIAL NEWS AND FILINGS" subtitle="Broker roundups are dropped; empty stays empty">
-        {(report.events || []).length
-          ? (
-            <ul className="dd-events">
-              {report.events.map((event) => (
-                <li key={`${event.published_at}-${event.headline}`}>
-                  <strong>{event.headline}</strong>
-                  <span>{event.event_type} · {event.impact} · {event.source || 'source unavailable'} · {event.published_at || 'date unavailable'}{event.verified ? ' · verified' : ''}</span>
-                  {event.url ? <a href={event.url} target="_blank" rel="noreferrer">Open source</a> : <small>No URL on file</small>}
-                </li>
-              ))}
-            </ul>
-          )
-          : <EmptyState title="No material company-tagged development on file" />}
-      </Panel>
-      <Panel title="WHAT TO WATCH NEXT" subtitle="Measurable follow-ups, not forecasts">
-        <ul className="dd-watch">{(report.watch_next || []).map((item) => <li key={item}>{item}</li>)}</ul>
-      </Panel>
-      <Panel title="CURRENT SNAPSHOT (NOT SCORED)" subtitle="Same extractor Stock Intelligence already uses — not a quarterly trend">
-        <div className="dd-kpi-table">
-          {(report.evidence_pack?.snapshot_metrics || []).map((item) => (
-            <article key={item.id} className={`dd-kpi ${item.available ? '' : 'unavailable'}`}>
-              <div className="dd-kpi-static">
-                <span>{item.label}</span>
-                <strong>{item.available ? item.fact : 'Data unavailable'}</strong>
-                <small>{item.interpretation}</small>
-              </div>
-            </article>
-          ))}
-        </div>
-      </Panel>
-      <Panel title="FILING / COMMENTARY TONE" subtitle="Rule-extracted from files on disk — never invented">
-        {(report.extracted_guidance || []).length
-          ? (
-            <ul className="dd-events">
-              {report.extracted_guidance!.map((item) => (
-                <li key={`${item.source}-${item.excerpt.slice(0, 24)}`}>
-                  <strong>{item.tone}</strong>
-                  <span>{item.excerpt}</span>
-                  <small>{item.source}{item.source_date ? ` · ${item.source_date}` : ''}</small>
-                </li>
-              ))}
-            </ul>
-          )
-          : <EmptyState title="Data unavailable" detail="No guidance tokens in a concall, filing or commentary file yet. Run Acquire or upload a transcript." />}
-      </Panel>
-      <Panel title="AUTONOMY DOWNLOADS" subtitle="Internet fetch writes files here; Investigate GET only reads them">
-        {report.autonomy?.acquired_at ? (
-          <ul className="dd-watch">
-            <li>Last acquire: {report.autonomy.acquired_at}</li>
-            {(report.autonomy.steps || []).map((step) => (
-              <li key={step.id}>{step.id}: {step.ok ? 'downloaded' : (step.error || 'not downloaded')}</li>
+            : <EmptyState title="Unmeasured" detail={report.fundamental_quality.explain} />}
+        </Panel>
+      ) : null}
+      {is('Red Flags') ? (
+        <Panel title="RED FLAGS" subtitle="Critical / Warnings / Monitor — each with rule, threshold and evidence">
+          {(report.red_flags || []).length
+            ? (
+              <ul className="dd-flag-list">
+                {report.red_flags.map((flag) => (
+                  <li key={flag.id}>
+                    <strong>{(flag.severity || 'monitor').toUpperCase()} · {flag.title}</strong>
+                    <span>{flag.evidence || flag.fact}</span>
+                    <small>
+                      Rule: {flag.rule || flag.kind}
+                      {flag.triggered_value != null ? ` · triggered ${typeof flag.triggered_value === 'object' ? JSON.stringify(flag.triggered_value) : String(flag.triggered_value)}` : ''}
+                      {flag.threshold != null ? ` · threshold ${typeof flag.threshold === 'object' ? JSON.stringify(flag.threshold) : String(flag.threshold)}` : ''}
+                      {' · '}{flag.source || 'Source unavailable'} · {flag.source_date || 'date unavailable'}
+                    </small>
+                  </li>
+                ))}
+              </ul>
+            )
+            : <EmptyState title="No red flag on file" />}
+        </Panel>
+      ) : null}
+      {is('Overview') ? (
+        <Panel title="WHAT CHANGED RECENTLY" subtitle="Meaningful items only">
+          {(report.what_changed || []).length
+            ? <ul className="dd-watch">{report.what_changed.map((item) => <li key={item}>{item}</li>)}</ul>
+            : <EmptyState title="No material quarter-to-quarter change measured" />}
+        </Panel>
+      ) : null}
+      {is('News') ? (
+        <Panel title="NEWS & EVENTS" subtitle="Broker roundups are dropped; empty stays empty">
+          {(report.events || []).length
+            ? (
+              <ul className="dd-events">
+                {report.events.map((event) => (
+                  <li key={`${event.published_at}-${event.headline}`}>
+                    <strong>{event.headline}</strong>
+                    <span>{event.published_at || 'date unavailable'} · {event.category || event.event_type} · {event.materiality || 'Unmeasured'} · {event.source || 'source unavailable'}{event.verified ? ' · verified' : ''}</span>
+                    {event.materiality_basis ? <small>{event.materiality_basis}</small> : null}
+                    {event.url ? <a href={event.url} target="_blank" rel="noreferrer">Original source</a> : <small>No URL on file</small>}
+                  </li>
+                ))}
+              </ul>
+            )
+            : <EmptyState title="No material company-tagged development on file" />}
+        </Panel>
+      ) : null}
+      {is('Cash Flow') ? (
+        <Panel title="CASH FLOW QUALITY" subtitle={report.cash_flow_quality?.detail || 'Rule-based. Missing stays missing.'}>
+          {(report.cash_flow_quality?.metrics || []).length
+            ? (
+              <ul className="dd-watch">
+                {report.cash_flow_quality!.metrics!.map((item) => (
+                  <li key={item.id}>{item.available ? item.fact : `${item.label}: Data unavailable`}{item.formula ? ` · ${item.formula}` : ''}</li>
+                ))}
+              </ul>
+            )
+            : <EmptyState title={report.cash_flow_quality?.label || 'Data unavailable'} />}
+        </Panel>
+      ) : null}
+      {is('Peers') ? (
+        <Panel title="PEERS" subtitle={report.peers?.detail || 'Peer table on file only — no inferred comparables'}>
+          {(report.peers?.ranks || []).length
+            ? <ul className="dd-watch">{report.peers!.ranks!.map((row) => <li key={row.metric}>{row.metric}: {row.quartile} ({row.formula})</li>)}</ul>
+            : (report.evidence_pack?.peers || []).length
+              ? <ul className="dd-watch">{report.evidence_pack!.peers.map((item) => <li key={item.name}>{item.fact}</li>)}</ul>
+              : <EmptyState title="Data unavailable" detail="Peer comparison table is empty in this cache." />}
+        </Panel>
+      ) : null}
+      {is('Valuation') ? (
+        <Panel title="CURRENT SNAPSHOT (NOT SCORED)" subtitle="Same extractor Stock Intelligence already uses — not a quarterly trend">
+          <div className="dd-kpi-table">
+            {(report.evidence_pack?.snapshot_metrics || []).map((item) => (
+              <article key={item.id} className={`dd-kpi ${item.available ? '' : 'unavailable'}`}>
+                <div className="dd-kpi-static">
+                  <span>{item.label}</span>
+                  <strong>{item.available ? item.fact : 'Data unavailable'}</strong>
+                  <small>{item.interpretation}</small>
+                </div>
+              </article>
             ))}
-            {(report.autonomy.still_missing || []).length
-              ? <li>Still missing after acquire: {report.autonomy.still_missing!.join(', ')}</li>
-              : null}
-          </ul>
-        ) : (
-          <EmptyState title="No autonomous download on file yet" detail="Acquire from the internet fills Screener and NSE filings, then this page reloads from disk." />
-        )}
-      </Panel>
-      <Panel title="MANAGEMENT COMMENTARY" subtitle="Structured uploads first; Acquire fills holes from filing / annual-report text">
-        {(report.evidence_pack?.management_commentary || []).length
-          ? (
-            <ul className="dd-events">
-              {report.evidence_pack!.management_commentary.map((item) => (
-                <li key={`${item.event_date}-${item.commentary.slice(0, 24)}`}>
-                  <strong>{item.speaker}{item.topic ? ` · ${item.topic}` : ''}</strong>
-                  <span>{item.commentary}</span>
-                  <small>{item.event_date || 'date unavailable'}</small>
-                </li>
+          </div>
+        </Panel>
+      ) : null}
+      {is('Filings') ? (
+        <Panel title="EXCHANGE FILINGS" subtitle="Acquire archive + official curator items. No LLM summary.">
+          {(report.filings || []).length
+            ? (
+              <ul className="dd-events">
+                {report.filings!.map((item, index) => (
+                  <li key={`${item.title}-${index}`}>
+                    <strong>{item.title}</strong>
+                    <span>{item.category} · {item.source || 'source unavailable'}{item.published_at ? ` · ${item.published_at}` : ''}</span>
+                    {item.url ? <a href={item.url} target="_blank" rel="noreferrer">Open original</a> : <small>No URL on file</small>}
+                  </li>
+                ))}
+              </ul>
+            )
+            : <EmptyState title="No filing on file yet" detail="Acquire from the internet or wait for the desk pipeline." />}
+        </Panel>
+      ) : null}
+      {is('Sources') ? (
+        <Panel title="SOURCES" subtitle="Provenance that survived the pipeline">
+          {(report.source_conflicts || []).length
+            ? (
+              <ul className="dd-flag-list">
+                {report.source_conflicts!.map((item, index) => (
+                  <li key={`${item.field}-${index}`}>
+                    <strong>Source conflict · {item.field}</strong>
+                    <span>{item.status}. Preferred: {String(item.preferred?.value)} ({item.preferred?.source}). Other: {String(item.other?.value)} ({item.other?.source}).</span>
+                    <small>{item.note}</small>
+                  </li>
+                ))}
+              </ul>
+            )
+            : null}
+          {(report.sources || []).length
+            ? <ul className="dd-watch">{report.sources!.map((item, index) => <li key={`${item.source}-${index}`}>{item.source} · {item.source_type_label || ''} · {item.period || ''}{item.source_url ? ` · ${item.source_url}` : ''}</li>)}</ul>
+            : <EmptyState title="No sourced print on file" />}
+        </Panel>
+      ) : null}
+      {is('Overview') ? (
+        <Panel title="WHAT TO WATCH NEXT" subtitle="Measurable follow-ups, not forecasts">
+          <ul className="dd-watch">{(report.watch_next || []).map((item) => <li key={item}>{item}</li>)}</ul>
+        </Panel>
+      ) : null}
+      {is('Overview') ? (
+        <Panel title="FILING / COMMENTARY TONE" subtitle="Rule-extracted from files on disk — never invented">
+          {(report.extracted_guidance || []).length
+            ? (
+              <ul className="dd-events">
+                {report.extracted_guidance!.map((item) => (
+                  <li key={`${item.source}-${item.excerpt.slice(0, 24)}`}>
+                    <strong>{item.tone}</strong>
+                    <span>{item.excerpt}</span>
+                    <small>{item.source}{item.source_date ? ` · ${item.source_date}` : ''}</small>
+                  </li>
+                ))}
+              </ul>
+            )
+            : <EmptyState title="Data unavailable" detail="No guidance tokens in a concall, filing or commentary file yet. Run Acquire or upload a transcript." />}
+        </Panel>
+      ) : null}
+      {is('Filings') ? (
+        <Panel title="AUTONOMY DOWNLOADS" subtitle="Internet fetch writes files here; Investigate GET only reads them">
+          {report.autonomy?.acquired_at ? (
+            <ul className="dd-watch">
+              <li>Last acquire: {report.autonomy.acquired_at}</li>
+              {(report.autonomy.steps || []).map((step) => (
+                <li key={step.id}>{step.id}: {step.ok ? 'downloaded' : (step.error || 'not downloaded')}</li>
               ))}
+              {(report.autonomy.still_missing || []).length
+                ? <li>Still missing after acquire: {report.autonomy.still_missing!.join(', ')}</li>
+                : null}
             </ul>
-          )
-          : <EmptyState title="Data unavailable" detail="No concall / guidance wording on file yet. Run Acquire or upload a transcript in Research Data." />}
-      </Panel>
-      <Panel title="ORDER BOOK / GUIDANCE" subtitle="Structured uploads first; Acquire fills holes from filing text">
-        {(report.evidence_pack?.order_book || []).length
-          ? <ul className="dd-watch">{report.evidence_pack!.order_book.map((item) => <li key={item.fact}>{item.fact}</li>)}</ul>
-          : <EmptyState title="Data unavailable" detail="No order-book or forward-guidance figure on file." />}
-      </Panel>
-      <Panel title="OPTION CHAIN SNAPSHOT" subtitle="Nearest expiry from last Acquire — not live depth, not Greeks, not a signal">
-        <OptionChainFacts chain={report.evidence_pack?.option_chain || report.autonomy?.option_chain} />
-      </Panel>
-      <Panel title="PEERS ON FILE" subtitle="Screener peer table if present — no estimated relative scores">
-        {(report.evidence_pack?.peers || []).length
-          ? <ul className="dd-watch">{report.evidence_pack!.peers.map((item) => <li key={item.name}>{item.fact}</li>)}</ul>
-          : <EmptyState title="Data unavailable" detail="Peer comparison table is empty in this cache." />}
-      </Panel>
+          ) : (
+            <EmptyState title="No autonomous download on file yet" detail="Acquire from the internet fills Screener and NSE filings, then this page reloads from disk." />
+          )}
+        </Panel>
+      ) : null}
+      {is('Overview') ? (
+        <Panel title="MANAGEMENT COMMENTARY" subtitle="Structured uploads first; Acquire fills holes from filing / annual-report text">
+          {(report.evidence_pack?.management_commentary || []).length
+            ? (
+              <ul className="dd-events">
+                {report.evidence_pack!.management_commentary.map((item) => (
+                  <li key={`${item.event_date}-${item.commentary.slice(0, 24)}`}>
+                    <strong>{item.speaker}{item.topic ? ` · ${item.topic}` : ''}</strong>
+                    <span>{item.commentary}</span>
+                    <small>{item.event_date || 'date unavailable'}</small>
+                  </li>
+                ))}
+              </ul>
+            )
+            : <EmptyState title="Data unavailable" detail="No concall / guidance wording on file yet. Run Acquire or upload a transcript in Research Data." />}
+        </Panel>
+      ) : null}
+      {is('Overview') ? (
+        <Panel title="ORDER BOOK / GUIDANCE" subtitle="Structured uploads first; Acquire fills holes from filing text">
+          {(report.evidence_pack?.order_book || []).length
+            ? <ul className="dd-watch">{report.evidence_pack!.order_book.map((item) => <li key={item.fact}>{item.fact}</li>)}</ul>
+            : <EmptyState title="Data unavailable" detail="No order-book or forward-guidance figure on file." />}
+        </Panel>
+      ) : null}
+      {is('Overview') ? (
+        <Panel title="OPTION CHAIN SNAPSHOT" subtitle="Nearest expiry from last Acquire — not live depth, not Greeks, not a signal">
+          <OptionChainFacts chain={report.evidence_pack?.option_chain || report.autonomy?.option_chain} />
+        </Panel>
+      ) : null}
       <Panel title="EVIDENCE PACK GAPS" subtitle={`Research Data coverage ${report.evidence_pack?.coverage_pct ?? 0}% — complete here, not by guessing`}>
         {(report.evidence_pack?.gaps || []).length
           ? (
@@ -566,7 +742,7 @@ export function ProductStockIntelligenceView(props: ViewProps) {
   ))
   const [plan, setPlan] = useState<TradePlan | null>(null)
   const [ratios, setRatios] = useState<import('./productApi').SymbolRatioRow[]>([])
-  const [tab, setTab] = useState(() => (selected && wantsInvestigate(selected) ? 'Investigate' : 'Overview'))
+  const [tab, setTab] = useState('Investigate')
   const [loading, setLoading] = useState(false)
   const [busy, setBusy] = useState('')
   const [error, setError] = useState('')
@@ -611,8 +787,7 @@ export function ProductStockIntelligenceView(props: ViewProps) {
   }, [selected, dashboard.scan.scanned_at])
 
   useEffect(() => {
-    if (selected && wantsInvestigate(selected)) setTab('Investigate')
-    else setTab('Overview')
+    setTab('Investigate')
   }, [selected])
 
   const loadDd = async () => {
@@ -863,6 +1038,109 @@ export function ProductStockIntelligenceView(props: ViewProps) {
         </>
       )}
 
+    </section>
+  )
+}
+
+export function StockInvestigatorView(props: ViewProps) {
+  const { selected, setSelected, setActive, dashboard } = props
+  const [query, setQuery] = useState('')
+  const [matches, setMatches] = useState<InvestigatorMatch[]>([])
+  const [report, setReport] = useState<DueDiligenceReport | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState('')
+  const [busy, setBusy] = useState('')
+
+  useEffect(() => {
+    const needle = query.trim()
+    if (needle.length < 2) {
+      setMatches([])
+      return
+    }
+    const timer = window.setTimeout(() => {
+      void fetchInvestigatorSuggest(needle)
+        .then((payload) => setMatches(payload.matches || []))
+        .catch(() => setMatches([]))
+    }, 180)
+    return () => window.clearTimeout(timer)
+  }, [query])
+
+  const load = async (symbol: string) => {
+    setLoading(true)
+    try {
+      const next = await fetchDueDiligence(symbol)
+      setReport(next)
+      setError('')
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : 'Due diligence failed')
+      setReport(null)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    if (selected) void load(selected)
+  }, [selected, dashboard.scan.scanned_at])
+
+  const pick = (symbol: string) => {
+    const clean = symbol.toUpperCase()
+    setSelected(clean)
+    markInvestigate(clean)
+    setQuery(clean)
+    setMatches([])
+  }
+
+  const runAcquire = async () => {
+    if (!selected) return
+    setBusy('ACQUIRE_DUE_DILIGENCE')
+    try {
+      const result = await acquireDueDiligence(selected)
+      if (result.report) setReport(result.report)
+      else await load(selected)
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : 'Acquire failed')
+    } finally {
+      setBusy('')
+    }
+  }
+
+  return (
+    <section className="workspace-view reco-light">
+      <header className="dd-investigator-search">
+        <label htmlFor="stock-investigator-q">Stock Investigator</label>
+        <input
+          id="stock-investigator-q"
+          value={query}
+          onChange={(event) => setQuery(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter' && (matches[0]?.symbol || query.trim())) {
+              pick(matches[0]?.symbol || query.trim().toUpperCase())
+            }
+          }}
+          placeholder="Enter ticker or company name — ICICIBANK, DIXON, TRENT, CDSL"
+          autoComplete="off"
+        />
+        {matches.length > 0 ? (
+          <ul className="dd-suggest">
+            {matches.map((item) => (
+              <li key={item.symbol}>
+                <button type="button" onClick={() => pick(item.symbol)}>{item.label}</button>
+              </li>
+            ))}
+          </ul>
+        ) : null}
+        <p>Same research engine as scanner Investigate. This is not a new scanner. Empty stays empty. No language model.</p>
+      </header>
+      <InvestigatePanel
+        report={report}
+        loading={loading}
+        error={error}
+        onResearchData={() => setActive('Research Data')}
+        onRefresh={() => { if (selected) void load(selected) }}
+        onAcquire={() => void runAcquire()}
+        busy={busy}
+      />
     </section>
   )
 }

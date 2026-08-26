@@ -178,10 +178,24 @@ export type DueDiligenceKpi = {
   fact: string
   interpretation: string
   implication: string
+  formula?: string
   source: string
   source_url: string
   source_date: string
   confidence: string
+  table?: string
+  provenance?: {
+    value?: number | string | null
+    period?: string
+    source?: string
+    source_url?: string
+    retrieved_at?: string
+    published_at?: string
+    source_type?: string
+    source_type_label?: string
+    confidence?: string
+    raw_reference?: string
+  }
   snapshot?: {
     current: number | null
     current_period?: string
@@ -189,6 +203,8 @@ export type DueDiligenceKpi = {
     previous_period?: string
     year_ago?: number | null
     year_ago_period?: string
+    qoq_change?: number | null
+    yoy_change?: number | null
     points?: { period: string; value: number }[]
   }
 }
@@ -201,8 +217,12 @@ export type DueDiligenceEvent = {
   official: boolean
   verified: boolean
   event_type: string
+  category?: string
   impact: string
   summary: string
+  materiality?: string
+  materiality_basis?: string
+  original_source?: string
 }
 
 export type OptionChainSnapshot = {
@@ -225,6 +245,28 @@ export type OptionChainSnapshot = {
   note?: string
   not_a_signal?: boolean
   places_orders?: boolean
+}
+
+export type DueDiligenceFlag = {
+  id: string
+  title: string
+  kind: string
+  fact: string
+  source?: string
+  source_date?: string
+  url?: string
+  severity?: string
+  rule?: string
+  triggered_value?: unknown
+  threshold?: unknown
+  evidence?: string
+}
+
+export type InvestigatorMatch = {
+  symbol: string
+  company: string
+  label: string
+  match?: string
 }
 
 export type DueDiligenceReport = {
@@ -256,6 +298,10 @@ export type DueDiligenceReport = {
     label: string
     coverage_pct: number
     explain: string
+    breakdown?: {
+      explain?: string
+      pillars?: { id: string; label: string; awarded: number | null; max: number; display: string; explain?: string; formula?: string }[]
+    }
   }
   business_trend: string
   financial_strength: string
@@ -264,12 +310,21 @@ export type DueDiligenceReport = {
   governance_risk: string
   news_event_impact: string
   vs_technical_setup: string
+  fundamental_confirmation?: string
   vs_detail: string
   strengths: string[]
   concerns: string[]
   unavailable: string[]
   what_changed: string[]
-  red_flags: { id: string; title: string; kind: string; fact: string; source?: string; source_date?: string; url?: string }[]
+  red_flags: DueDiligenceFlag[]
+  flag_groups?: {
+    critical?: DueDiligenceFlag[]
+    warnings?: DueDiligenceFlag[]
+    monitor?: DueDiligenceFlag[]
+    n_critical?: number
+    n_warnings?: number
+    n_monitor?: number
+  }
   watch_next: string[]
   kpis: DueDiligenceKpi[]
   events: DueDiligenceEvent[]
@@ -325,6 +380,37 @@ export type DueDiligenceReport = {
     risk_flags?: string[]
     note?: string
   }
+  first_screen?: {
+    company?: string
+    ticker?: string
+    selected_by?: string
+    technical_score?: number | null
+    sepa_score?: number | null
+    breakout_quality?: string
+    fundamental_quality?: number | null
+    fundamental_quality_label?: string
+    fundamental_confirmation?: string
+    vs_detail?: string
+    business_trend?: string
+    earnings_trend?: string
+    balance_sheet?: string
+    critical_red_flags?: number
+    warnings?: number
+    latest_financial_quarter?: string
+    data_freshness?: string
+    improving?: string[]
+    deteriorating?: string[]
+    recent_material_events?: { date?: string; headline?: string; category?: string; materiality?: string; source?: string }[]
+    technical_reason?: string[]
+    fundamental_evidence?: string[]
+    sections?: string[]
+  }
+  company_snapshot?: Record<string, unknown>
+  cash_flow_quality?: { applicable?: boolean; label?: string; detail?: string; flags?: DueDiligenceFlag[]; metrics?: { id: string; label: string; available: boolean; fact: string; formula?: string }[] }
+  peers?: { available?: boolean; detail?: string; ranks?: { metric: string; quartile: string; formula?: string; rank?: number; n?: number; value?: number }[]; rows?: { name: string; fact?: string }[] }
+  filings?: { title?: string; category?: string; url?: string; source?: string; published_at?: string }[]
+  sources?: { source?: string; source_url?: string; period?: string; source_type_label?: string; retrieved_at?: string }[]
+  source_conflicts?: { field?: string; status?: string; note?: string; preferred?: { value?: unknown; source?: string }; other?: { value?: unknown; source?: string } }[]
   places_orders: boolean
   disclaimer: string
   question: string
@@ -345,6 +431,11 @@ export const acquireDueDiligence = (symbol: string): Promise<{
   method: 'POST',
   headers: { Accept: 'application/json' },
 }).then((response) => json(response))
+
+export const fetchInvestigatorSuggest = (query: string): Promise<{ query: string; matches: InvestigatorMatch[]; engine: string }> =>
+  fetch(`/api/stock-investigator/suggest?q=${encodeURIComponent(query)}&limit=8`, {
+    headers: { Accept: 'application/json' },
+  }).then((response) => json(response))
 
 export type TradePlan = {
   available: boolean

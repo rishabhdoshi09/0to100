@@ -546,6 +546,30 @@ def due_diligence(symbol: str) -> dict[str, Any]:
         raise HTTPException(status_code=500, detail=f"Due diligence failed: {exc}") from exc
 
 
+@app.get("/api/stock-research/{symbol}")
+def stock_research(symbol: str) -> dict[str, Any]:
+    """Alias of due-diligence. Same StockResearchEngine, still cache-only — never scrapes."""
+    return due_diligence(symbol)
+
+
+@app.get("/api/stock-investigator/suggest")
+def stock_investigator_suggest(q: str = "", limit: int = 8) -> dict[str, Any]:
+    """Typeahead for the manual Stock Investigator. Does not fetch fundamentals."""
+    try:
+        from product.due_diligence import suggest_tickers
+
+        cap = max(1, min(int(limit or 8), 20))
+        matches = suggest_tickers(q, limit=cap)
+        return {
+            "query": q,
+            "matches": matches,
+            "engine": "StockResearchEngine",
+            "places_orders": False,
+        }
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Investigator suggest failed: {exc}") from exc
+
+
 @app.post("/api/due-diligence/{symbol}/acquire")
 def acquire_due_diligence(symbol: str) -> dict[str, Any]:
     """Download official sources for this symbol, persist them, then rebuild Investigate from files."""

@@ -80,7 +80,7 @@ export const PAGE_GUIDE: Record<string, PageGuide> = {
   },
   'Stock Intelligence': {
     title: 'Stock Intelligence',
-    purpose: 'Combines price structure, technicals, current fundamentals, risks, news and source dates. Investigate is the second-stage due-diligence view on a scanner candidate.',
+    purpose: 'Combines price structure, technicals, current fundamentals, risks, news and source dates. Investigate is the second-stage due-diligence view — it is not a new scanner.',
     questions: [
       'What is the current trend and volatility?',
       'Are fundamentals complete and fresh?',
@@ -89,6 +89,18 @@ export const PAGE_GUIDE: Record<string, PageGuide> = {
     ],
     action: 'Open Investigate on a shortlisted name, then refresh missing fundamentals in Research Data if coverage is thin.',
     doesNot: 'Investigate is not a new scanner and does not place or recommend orders. Empty stays empty.',
+  },
+  'Stock Investigator': {
+    title: 'Stock Investigator',
+    purpose: 'Manually look up any supported NSE name. Typing ICICI should suggest ICICIBANK — ICICI Bank. The same StockResearchEngine as scanner Investigate runs.',
+    questions: [
+      'What exactly am I buying?',
+      'Are fundamentals improving or deteriorating?',
+      'Are there hidden financial or governance risks?',
+      'Do the fundamentals support or weaken a technical setup if one exists?',
+    ],
+    action: 'Type a ticker or company name, pick the match, then Acquire if files are missing.',
+    doesNot: 'This is not a scanner, not a buy list, and never uses a language model for scoring or verdicts.',
   },
   'Long-Term': {
     title: 'Long-Term Research',

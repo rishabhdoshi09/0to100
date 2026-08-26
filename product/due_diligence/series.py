@@ -45,7 +45,7 @@ def parse_period(key: str) -> datetime | None:
 
 
 def row_label(row: Mapping[str, Any]) -> str:
-    for key in ("row_label", "Particulars", "particulars", "Particular", ""):
+    for key in ("row_label", "Particulars", "particulars", "Particular", "name", "Name", ""):
         if row.get(key) not in (None, ""):
             return str(row.get(key))
     return ""

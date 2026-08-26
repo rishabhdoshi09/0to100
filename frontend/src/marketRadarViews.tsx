@@ -548,7 +548,7 @@ export function RadarHomeView(props: ExperienceViewProps & {
             <button
               type="button"
               className={[selected === item.symbol ? 'active' : '', thin ? 'thin-volume' : ''].filter(Boolean).join(' ')}
-              onClick={() => setSelected(item.symbol)}
+              onClick={() => { setSelected(item.symbol); markInvestigate(item.symbol); setActive('Stock Intelligence') }}
             >
               <b>
                 {item.symbol}
@@ -693,7 +693,7 @@ export function RadarHomeView(props: ExperienceViewProps & {
                 <button
                   type="button"
                   className={selected === item.symbol ? 'active' : ''}
-                  onClick={() => setSelected(item.symbol)}
+                  onClick={() => { setSelected(item.symbol); markInvestigate(item.symbol); setActive('Stock Intelligence') }}
                 >
                   <b>{item.symbol}</b>
                   <span>
@@ -871,7 +871,7 @@ export function MarketScannerView(props: ExperienceViewProps & { onCompare: (sym
           <DenseTable
             rows={filtered}
             selected={selected}
-            onSelect={setSelected}
+            onSelect={(symbol) => { setSelected(symbol); markInvestigate(symbol); setActive('Stock Intelligence') }}
             depth={depth}
             mode={tab}
             emptyHint={scannerEmptyHint(rows.length, filtered.length, hasScan)}
@@ -936,7 +936,7 @@ export function CompareView({ symbols, setSymbols, setActive, setSelected, seedS
       </header>
       <div className="compare-chips">
         {symbols.map((sym) => (
-          <button key={sym} type="button" className="compare-chip" onClick={() => { setSelected(sym); setActive('Stock Intelligence') }}>{sym}</button>
+          <button key={sym} type="button" className="compare-chip" onClick={() => { setSelected(sym); markInvestigate(sym); setActive('Stock Intelligence') }}>{sym}</button>
         ))}
         <input value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && addSymbol()} placeholder="Add symbol" />
         <button type="button" onClick={addSymbol}>Add</button>
@@ -1018,7 +1018,7 @@ export function WatchlistView({ setActive, setSelected, onCompare, selected = ''
         <tbody>
           {(payload?.items || []).map((item) => (
             <tr key={item.id}>
-              <td><button type="button" onClick={() => { setSelected(item.symbol); setActive('Stock Intelligence') }}>{item.symbol}</button></td>
+              <td><button type="button" onClick={() => { setSelected(item.symbol); markInvestigate(item.symbol); setActive('Stock Intelligence') }}>{item.symbol}</button></td>
               <td>{item.added_date}</td>
               <td>{String((item.snapshot as RadarRow)?.setup_label || item.snapshot?.status || '—')}</td>
               <td>{item.notes || '—'}</td>

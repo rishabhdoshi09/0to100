@@ -404,6 +404,7 @@ export function RecommendationsView({
   }
 
   const openResearch = (symbol: string) => {
+    markInvestigate(symbol)
     setSelected(symbol)
     setActive('Stock Intelligence')
   }

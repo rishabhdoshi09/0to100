@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from typing import Any, Mapping, Sequence
 
+from product.due_diligence.materiality import classify_taxonomy, materiality
+
 _MATERIAL_EVENTS = frozenset({
     "order_or_contract", "merger_or_acquisition", "regulatory",
     "promoter_or_insider", "rating", "fund_raising",
@@ -63,7 +65,14 @@ def classify_event(article: Mapping[str, Any]) -> str:
     return event
 
 
-def material_events(articles: Sequence[Mapping[str, Any]], symbol: str, *, limit: int = 12) -> list[dict[str, Any]]:
+def material_events(
+    articles: Sequence[Mapping[str, Any]],
+    symbol: str,
+    *,
+    limit: int = 12,
+    context: Mapping[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    ctx = dict(context or {})
     out: list[dict[str, Any]] = []
     for article in articles:
         if not isinstance(article, Mapping):
@@ -71,6 +80,15 @@ def material_events(articles: Sequence[Mapping[str, Any]], symbol: str, *, limit
         if not is_material(article, symbol):
             continue
         impact = event_impact(article)
+        event_type = classify_event(article)
+        meta = materiality(
+            {**dict(article), "event_type": event_type, "headline": _headline(article)},
+            revenue_cr=ctx.get("revenue_cr"),
+            market_cap_cr=ctx.get("market_cap_cr"),
+            pat_cr=ctx.get("pat_cr"),
+            debt_cr=ctx.get("debt_cr"),
+            promoter_pct=ctx.get("promoter_pct"),
+        )
         out.append({
             "headline": _headline(article) or "Data unavailable",
             "published_at": str(article.get("published_at") or article.get("fetched_at") or ""),
@@ -78,13 +96,18 @@ def material_events(articles: Sequence[Mapping[str, Any]], symbol: str, *, limit
             "url": str(article.get("url") or ""),
             "official": bool(article.get("official")),
             "verified": bool(article.get("official")),
-            "event_type": classify_event(article),
+            "event_type": event_type,
+            "category": meta["category"] or classify_taxonomy(_headline(article), event_type),
             "impact": impact,
             "impact_score": int(article.get("impact_score") or 0),
             "summary": str(article.get("summary") or article.get("why_it_matters") or ""),
             "material": True,
+            "materiality": meta["materiality"],
+            "materiality_basis": meta["basis"],
+            "amount_cr": meta.get("amount_cr"),
+            "original_source": meta.get("original_source"),
             "thesis_change": impact == "negative" or (
-                classify_event(article) in {"regulatory_action", "pledge", "governance"}
+                event_type in {"regulatory_action", "pledge", "governance"}
             ),
         })
         if len(out) >= limit:

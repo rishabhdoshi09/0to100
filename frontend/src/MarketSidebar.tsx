@@ -6,6 +6,7 @@ const PRIMARY_NAV = [
   ['▣', 'Recommendations', 'Recommendations'],
   ['▤', 'Market Reports', 'Market Reports'],
   ['◉', 'Stock Intelligence', 'Stock Intelligence'],
+  ['⌕', 'Stock Investigator', 'Stock Investigator'],
   ['◇', 'Long-Term Picks', 'Long-Term Picks'],
   ['⇔', 'Compare', 'Compare'],
   ['★', 'Watchlist', 'Watchlist'],
