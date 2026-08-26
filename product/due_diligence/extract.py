@@ -222,7 +222,8 @@ _ORDER_RE = re.compile(
     re.I,
 )
 _SEGMENT_RE = re.compile(
-    r"([A-Za-z][A-Za-z0-9& /.-]{2,40}?)\s+(?:segment|division|business)\s+"
+    r"\b((?:[A-Za-z][A-Za-z0-9&/-]*\s+){0,2}[A-Za-z][A-Za-z0-9&/-]*)\s+"
+    r"(?:segment|division|business)\s+"
     r"(?:contributed|accounted for|stood at|was|is)\s+(\d{1,2}(?:\.\d+)?)\s*%",
     re.I,
 )

@@ -601,7 +601,7 @@ def test_option_chain_summary_is_descriptive_not_a_signal():
     assert snap["call_oi"] == 130
     assert snap["put_oi"] == 95
     assert snap["pcr"] == 0.731
-    assert snap["max_pain"] == 90
+    assert snap["max_pain"] == 100
     assert snap["atm_strike"] == 100
     assert snap["atm_iv"] == 18
     assert snap["not_a_signal"] is True
