@@ -956,6 +956,7 @@ def test_extract_bank_kpis_from_results_text():
     )
     assert "advances" not in loose
     assert "nim" not in extract_rates_from_text("Financing Margin % was -12%.", source="screener")
+    assert "nim" not in extract_rates_from_text("NIM commentary mentioned 12.7% yield on investments.", source="filing")
 
 
 def test_smart_acquire_skips_fresh_lanes(tmp_path, monkeypatch):

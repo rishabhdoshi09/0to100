@@ -280,7 +280,7 @@ def extract_rates_from_text(text: str, *, source: str, source_url: str = "") -> 
     )
     for kpi_id, pattern in mapping:
         current = _last_percent(pattern, blob)
-        if current is None:
+        if current is None or not _in_bounds(kpi_id, current):
             continue
         out[kpi_id] = _print_snap(current, source=source, source_url=source_url)
     for kpi_id, pattern in (("advances", _ADVANCES_LABEL), ("deposits", _DEPOSITS_LABEL)):
@@ -540,6 +540,31 @@ _RATE_KPI_IDS = {
     "gnpa", "nnpa", "pledge", "casa", "nim", "cet1", "crar", "pcr",
     "slippages", "credit_cost", "roa", "roe", "loan_deposit", "opm",
 }
+_RATE_BOUNDS = {
+    "nim": (0.5, 10.0),
+    "casa": (5.0, 80.0),
+    "cet1": (5.0, 25.0),
+    "crar": (8.0, 30.0),
+    "gnpa": (0.0, 30.0),
+    "nnpa": (0.0, 20.0),
+    "pcr": (20.0, 100.0),
+    "roa": (0.0, 10.0),
+    "roe": (0.0, 50.0),
+    "slippages": (0.0, 20.0),
+    "credit_cost": (0.0, 10.0),
+    "loan_deposit": (40.0, 130.0),
+    "opm": (0.0, 100.0),
+    "pledge": (0.0, 100.0),
+}
+
+
+def _in_bounds(kpi_id: str, current: Any) -> bool:
+    try:
+        number = float(current)
+    except (TypeError, ValueError):
+        return False
+    lo, hi = _RATE_BOUNDS.get(kpi_id, (0.0, 100.0))
+    return lo <= number <= hi
 
 
 def merge_kpi_maps(*maps: Mapping[str, Mapping[str, Any]]) -> dict[str, dict[str, Any]]:
@@ -551,11 +576,7 @@ def merge_kpi_maps(*maps: Mapping[str, Mapping[str, Any]]) -> dict[str, dict[str
                 continue
             current = snap.get("current")
             if key in _RATE_KPI_IDS:
-                try:
-                    number = float(current)
-                except (TypeError, ValueError):
-                    continue
-                if number < 0 or number > 100:
+                if not _in_bounds(key, current):
                     continue
             if key in out:
                 continue
