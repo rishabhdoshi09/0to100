@@ -105,8 +105,9 @@ def test_recommendations_are_exclusive_decision_cards():
     assert "wealth_builders" in py
     assert "recovery_setups" in py
     assert "one primary category" in py.lower() or "ONE primary category" in py
-    assert "two independent methods" in py.lower() or "buy_requires_two_independent_methods" in py
-    assert "method_confirms" in src or "methods" in src
+    assert "two independent evidence families" in py.lower() or "buy_requires_two_independent_evidence_families" in py
+    assert "NO HIGH-CONVICTION" in (ROOT / "frontend" / "src" / "recommendationsViews.tsx").read_text(encoding="utf-8")
+    assert "family_confirms" in src or "families" in src
 
 
 def test_market_reports_renders_sourced_desk_note_not_a_blog():

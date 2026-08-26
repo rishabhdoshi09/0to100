@@ -36,10 +36,15 @@ from product.radar_workspace import (
     is_sniper_breakout_candidate,
 )
 from product.reco_methods import (
-    allows_buy,
     attach_method_scores,
     attach_research_overlays,
     sort_key as method_sort_key,
+)
+from product.reco_ensemble import (
+    allows_buy,
+    attach_expert_layer,
+    confirm_finalists,
+    ensemble_summary,
 )
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -50,25 +55,25 @@ CATEGORIES: tuple[dict[str, str], ...] = (
     {
         "id": "wealth_builders",
         "label": "Wealth Builders",
-        "blurb": "Long-term quality / GARP — compounders with ≥50% fundamental coverage, ranked by independent methods not SEPA alone.",
+        "blurb": "Long-term quality / GARP — compounders with ≥50% fundamental coverage. Ranked by independent evidence families, not SEPA alone.",
         "icon": "compound",
     },
     {
         "id": "super_trends",
         "label": "Super Trends",
-        "blurb": "Momentum without chase — Buy needs two methods (tape, trend, RS, funds, SEPA, live EV).",
+        "blurb": "Momentum without chase — Buy needs two independent evidence families and a why-now. SEPA alone is not a Buy.",
         "icon": "trend",
     },
     {
         "id": "momentum_breakouts",
         "label": "Momentum Breakouts",
-        "blurb": "Sniper/graded tape plus a second method (funds, SEPA, RS, trend, live EV). SEPA alone is not a Buy.",
+        "blurb": "Breakout quality plus a second evidence family (quality, sector, earnings, SEPA). Tape + RS + breakout count as one price/structure pair, not three.",
         "icon": "breakout",
     },
     {
         "id": "recovery_setups",
         "label": "Recovery Setups",
-        "blurb": "True turnarounds only — double-bottom / accumulation (not coils), ranked by independent methods.",
+        "blurb": "True turnarounds only — double-bottom / accumulation (not coils), ranked by independent evidence families.",
         "icon": "recovery",
     },
 )
@@ -185,7 +190,7 @@ def _action_badge(row: Mapping[str, Any], *, category_id: str = "") -> str:
     status = str(row.get("status") or "")
     grade = str(row.get("breakout_grade") or "").upper()
     if category_id == "momentum_breakouts":
-        # Tape (sniper/grade) can nominate; Buy still needs two independent methods.
+        # Tape (sniper/grade) can nominate; Buy still needs two independent families + why-now.
         if is_sniper_breakout_candidate(row) or grade in {"A", "B"}:
             if verdict in {"BUY", "STRONG BUY"} or status == "Ready to trade":
                 return "Buy" if allows_buy(row) else "Watch"
@@ -208,18 +213,26 @@ def card_from_row(
     evidence_tags: Sequence[str] | None = None,
     market_ctx: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    scored = attach_method_scores(row) if row.get("methods") is None else dict(row)
+    scored = dict(row)
+    if scored.get("methods") is None:
+        scored = attach_method_scores(scored)
+    if scored.get("experts") is None:
+        scored = attach_expert_layer([scored])[0]
     ups = upside_metrics(scored)
     tags = [str(t) for t in (evidence_tags or []) if t]
-    for item in scored.get("methods") or []:
-        if item.get("status") == "pass" and item.get("label"):
-            tags.append(str(item["label"]))
+    for fam in scored.get("families") or []:
+        if fam.get("status") == "pass" and fam.get("label"):
+            tags.append(str(fam["label"]))
     tags = list(dict.fromkeys(tags))
     reason = qualify_reason or str(scored.get("reason") or "")
-    confirms = int(scored.get("method_confirms") or 0)
-    if confirms:
-        line = str(scored.get("method_line") or "")
-        extra = f"{confirms} methods: {line}" if line else f"{confirms} independent methods"
+    thesis = str(scored.get("primary_thesis") or "")
+    confirms = int(scored.get("family_confirms") or scored.get("method_confirms") or 0)
+    if thesis:
+        extra = f"{thesis} · {confirms} evidence families"
+        reason = f"{reason} · {extra}" if reason else extra
+    elif confirms:
+        line = str(scored.get("family_line") or scored.get("method_line") or "")
+        extra = f"{confirms} evidence families: {line}" if line else f"{confirms} evidence families"
         reason = f"{reason} · {extra}" if reason else extra
     badge = _action_badge(scored, category_id=category_id)
     surface = decision_surface(
@@ -230,6 +243,14 @@ def card_from_row(
         evidence_tags=tags,
         market_ctx=market_ctx,
     )
+    why = list(scored.get("ensemble_why_now") or []) + list(surface.get("why_now") or [])
+    why = list(dict.fromkeys(why))[:5]
+    surface["why_now"] = why
+    horizon = str(scored.get("thesis_horizon_label") or surface.get("horizon") or "")
+    if scored.get("thesis_horizon"):
+        surface["horizon"] = (
+            f"{scored.get('thesis_horizon')} · {scored.get('thesis_horizon_label')}"
+        )
     card = {
         "symbol": str(scored.get("symbol") or "").upper(),
         "company": str(scored.get("company") or scored.get("symbol") or ""),
@@ -252,11 +273,26 @@ def card_from_row(
         "lifecycle": "active",
         "methods": list(scored.get("methods") or []),
         "method_confirms": confirms,
-        "method_fails": int(scored.get("method_fails") or 0),
+        "method_fails": int(scored.get("family_fails") or scored.get("method_fails") or 0),
         "quality_score": scored.get("quality_score"),
-        "method_line": str(scored.get("method_line") or ""),
+        "method_line": str(scored.get("family_line") or scored.get("method_line") or ""),
+        "experts": list(scored.get("experts") or []),
+        "families": list(scored.get("families") or []),
+        "family_confirms": confirms,
+        "primary_thesis": thesis,
+        "reco_tier": scored.get("reco_tier") or "watch",
+        "reco_tier_label": scored.get("reco_tier_label") or "Watch",
+        "entry_state": scored.get("entry_state") or "watch",
+        "stock_quality": scored.get("stock_quality") or "Unmeasured",
+        "timing": scored.get("timing") or "Not ready",
+        "conflicts": list(scored.get("conflicts") or []),
+        "deep_confirm": bool(scored.get("deep_confirm")),
+        "fundamental_confirmation": scored.get("fundamental_confirmation"),
+        "research_decision_coverage": scored.get("research_decision_coverage"),
+        "research_quality_label": scored.get("research_quality_label"),
         **ups,
         **surface,
+        "horizon": surface.get("horizon") or horizon,
     }
     return _attach_key_points(card, row=scored)
 
@@ -594,6 +630,31 @@ def _empty_decision_fields(action_badge: str, category_id: str) -> dict[str, Any
     }
 
 
+def _paint_deep_confirm(
+    buckets: Mapping[str, list[dict[str, Any]]],
+    *,
+    scan_payload: Mapping[str, Any] | None,
+    long_term_payload: Mapping[str, Any] | None,
+) -> dict[str, list[dict[str, Any]]]:
+    combined: list[dict[str, Any]] = []
+    for cards in buckets.values():
+        combined.extend(cards)
+    painted = confirm_finalists(
+        combined, scan_payload=scan_payload, long_term_payload=long_term_payload, limit=8,
+    )
+    by_key = {
+        (c.get("symbol"), c.get("category_id"), c.get("setup_label")): c
+        for c in painted
+    }
+    out: dict[str, list[dict[str, Any]]] = {}
+    for cat_id, cards in buckets.items():
+        out[cat_id] = [
+            by_key.get((c.get("symbol"), c.get("category_id"), c.get("setup_label")), c)
+            for c in cards
+        ]
+    return out
+
+
 def _bucket_rows(
     scan_rows: Sequence[Mapping[str, Any]],
     lt_rows: Sequence[Mapping[str, Any]],
@@ -783,6 +844,8 @@ def build_recommendations_workspace(
     long_term_payload: Mapping[str, Any] | None = None,
     refresh_technicals: bool = False,
     settle_cases: bool = False,
+    deep_confirm: bool = False,
+    persist_ledger: bool = False,
 ) -> dict[str, Any]:
     """Project recommendation categories + lifecycle from persisted product state.
 
@@ -828,13 +891,19 @@ def build_recommendations_workspace(
             pass
     desk = build_desk_context(scan_rows)
     buckets = _bucket_rows(scan_rows, lt_rows, market_ctx=desk)
+    if deep_confirm:
+        buckets = _paint_deep_confirm(
+            buckets, scan_payload=scan, long_term_payload=lt,
+        )
     active, closed = _tracker_lifecycle()
 
     categories = []
     assigned = 0
+    all_cards: list[dict[str, Any]] = []
     for meta in CATEGORIES:
         cards = list(buckets.get(meta["id"]) or [])
         assigned += len(cards)
+        all_cards.extend(cards)
         categories.append({
             **meta,
             "count": len(cards),
@@ -844,19 +913,29 @@ def build_recommendations_workspace(
             ),
         })
 
+    ensemble = ensemble_summary(all_cards)
+    if persist_ledger:
+        try:
+            from product.reco_ledger import append_recommendations
+            append_recommendations(all_cards, scan_scanned_at=scan_at)
+        except Exception:
+            pass
+
     cmp_note = (
         "CMP is the latest official NSE bar (Kite overlay when the market is open; "
         "otherwise last EOD). Entry, stop and target are shown only when the scan "
         "already stored them — this desk does not invent 5%/10% plans. "
         "Each scan symbol maps to one primary category (breakout → recovery → trend). "
-        "Buy requires two independent methods (tape, SEPA, funds, trend, RS, live EV, "
-        "conviction, case memory, sector). SEPA alone is not a Buy. Missing methods stay empty."
+        "Buy requires two independent evidence families (price leadership, structure, "
+        "quality, earnings change, sector, participation, catalyst), a why-now, and a "
+        "ready non-extended entry. SEPA alone is not a Buy. Correlated tape / RS / "
+        "momentum count as one Price Leadership family. Missing stays unknown."
     )
     if str(scan.get("records_status") or "") == "PRIOR_DAY_SNAPSHOT":
         cmp_note = "Scan file is a PRIOR-DAY SNAPSHOT — run a fresh market scan before acting. " + cmp_note
 
     return {
-        "schema_version": 3,
+        "schema_version": 4,
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "scan_scanned_at": scan_at,
         "long_term_scanned_at": lt_at,
@@ -868,19 +947,25 @@ def build_recommendations_workspace(
             "long_term_scanned_at": lt_at,
             "long_term_row_count": len(lt_rows),
             "assigned_count": assigned,
+            "high_conviction_count": ensemble["high_conviction_count"],
+            "good_setup_count": ensemble["good_setup_count"],
         },
         "cmp_note": cmp_note,
         "assignment_policy": (
             "exclusive_primary: momentum_breakouts > recovery_setups > super_trends; "
             "wealth_builders from long-term quality only; "
-            "buy_requires_two_independent_methods"
+            "buy_requires_two_independent_evidence_families"
         ),
         "methods_note": (
-            "Nine research methods, all from saved system state: tape, SEPA overlay, "
-            "long-term funds, trend structure, relative strength, live EV (≥30), "
-            "conviction shortlist, case memory, sector leadership. Missing stays unknown. "
-            "A Buy needs two passes — SEPA 100 with funds 0 is not enough."
+            "Mixture of experts over saved evidence: SEPA, cross-sectional momentum, "
+            "RS, breakout quality, VCP, trend pullback, earnings momentum, business "
+            "quality, momentum+quality, sector leadership, participation, catalyst. "
+            "Confidence is agreement across evidence families, not indicator count. "
+            "Tape, RS and momentum are one Price Leadership family. "
+            "A Buy needs two families, a why-now, and a ready non-extended entry. "
+            "SEPA 100 with funds 0 is not enough. Empty high-conviction is success."
         ),
+        "ensemble": ensemble,
         "desk": desk,
         "categories": categories,
         "lifecycle": {

@@ -1,4 +1,4 @@
-"""Multi-method Reco overlay: SEPA is one vote, never the whole decision."""
+"""Mixture-of-experts Reco layer: families, not indicator soup."""
 from __future__ import annotations
 
 import pytest

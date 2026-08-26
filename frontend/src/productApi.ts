@@ -778,6 +778,20 @@ export type RecommendationCard = {
   method_fails?: number
   quality_score?: number | null
   method_line?: string
+  experts?: RecoExpert[]
+  families?: RecoFamily[]
+  family_confirms?: number
+  primary_thesis?: string
+  reco_tier?: string
+  reco_tier_label?: string
+  entry_state?: string
+  stock_quality?: string
+  timing?: string
+  conflicts?: string[]
+  deep_confirm?: boolean
+  fundamental_confirmation?: string | null
+  research_decision_coverage?: number | null
+  research_quality_label?: string | null
 }
 
 export type RecoMethod = {
@@ -786,6 +800,29 @@ export type RecoMethod = {
   status: 'pass' | 'fail' | 'unknown' | string
   detail?: string
   points?: number | null
+}
+
+export type RecoExpert = {
+  id: string
+  label: string
+  family?: string
+  family_label?: string
+  status: string
+  eligible?: boolean
+  score?: number | null
+  rank?: number | null
+  thesis?: string
+  horizon?: string
+  evidence?: string[]
+}
+
+export type RecoFamily = {
+  id: string
+  label: string
+  status: string
+  strength?: string
+  experts?: string[]
+  evidence?: string[]
 }
 
 export type RecommendationCase = {
@@ -851,8 +888,19 @@ export type RecommendationsWorkspace = {
     long_term_scanned_at?: string
     long_term_row_count?: number
     assigned_count?: number
+    high_conviction_count?: number
+    good_setup_count?: number
   }
   methods_note?: string
+  ensemble?: {
+    high_conviction_count: number
+    good_setup_count: number
+    watch_count?: number
+    avoid_count?: number
+    empty_high_conviction: boolean
+    empty_line: string
+    empty_detail?: string
+  }
   desk?: RecommendationDesk
   categories: RecommendationCategory[]
   lifecycle: {

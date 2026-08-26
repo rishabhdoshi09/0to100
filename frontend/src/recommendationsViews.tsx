@@ -105,7 +105,7 @@ function CardTile({
       <button type="button" className="reco-pick-hit" onClick={() => onSelect(card)}>
         <div className="reco-pick-row1">
           <span className={`reco-buy ${badgeClass(card.action_badge)}`}>{card.action_badge}</span>
-          <span className="reco-opp">{card.opportunity_label || 'WATCH'}</span>
+          <span className="reco-opp">{card.reco_tier_label || card.opportunity_label || 'WATCH'}</span>
           <span className={`reco-risk-chip ${risk}`}>
             <span className="reco-risk-meter" aria-hidden="true" />
             {card.risk_tier} Risk
@@ -120,8 +120,20 @@ function CardTile({
               {card.horizon ? <span>{card.horizon}</span> : null}
               {card.price_tag ? <span>{card.price_tag}</span> : null}
             </div>
-            {card.setup_label ? <p className="reco-pick-setup">{card.setup_label}</p> : null}
-            {(card.methods || []).some((m) => m.status === 'pass') ? (
+            {card.primary_thesis ? <p className="reco-pick-setup">{card.primary_thesis}</p> : (card.setup_label ? <p className="reco-pick-setup">{card.setup_label}</p> : null)}
+            {(card.families || []).some((f) => f.status === 'pass') ? (
+              <div className="reco-pick-tags" aria-label="Evidence families">
+                {(card.families || []).filter((f) => f.status === 'pass').map((f) => (
+                  <span key={f.id} className="reco-evidence-tag is-pass">{f.label}</span>
+                ))}
+                {card.family_confirms != null ? (
+                  <span className="reco-evidence-tag">{card.family_confirms} families</span>
+                ) : null}
+                {card.reco_tier_label ? (
+                  <span className="reco-evidence-tag">{card.reco_tier_label}</span>
+                ) : null}
+              </div>
+            ) : (card.methods || []).some((m) => m.status === 'pass') ? (
               <div className="reco-pick-tags" aria-label="Research methods">
                 {(card.methods || []).filter((m) => m.status === 'pass').map((m) => (
                   <span key={m.id} className="reco-evidence-tag is-pass">{m.label}</span>
@@ -200,9 +212,15 @@ function EvidencePanel({ card }: { card: RecommendationCard }) {
     ['Coverage', panel.fundamental_coverage != null ? `${panel.fundamental_coverage}%` : '—'],
     ['Source', [panel.tech_source, panel.price_tag].filter(Boolean).join(' · ') || 'Saved scan'],
     ['Signals', (panel.signals || []).join(', ') || '—'],
-    ['Methods', (card.method_line || (card.methods || []).filter((m) => m.status === 'pass').map((m) => m.label).join(' + ')) || '—'],
-    ['Confirms', card.method_confirms != null ? String(card.method_confirms) : '—'],
-    ['Quality composite', card.quality_score != null ? String(card.quality_score) : '—'],
+    ['Thesis', card.primary_thesis || '—'],
+    ['Tier', card.reco_tier_label || '—'],
+    ['Entry', card.entry_state || '—'],
+    ['Stock quality', card.stock_quality || '—'],
+    ['Timing', card.timing || '—'],
+    ['Families', card.method_line || (card.families || []).filter((f) => f.status === 'pass').map((f) => f.label).join(' + ') || '—'],
+    ['Family confirms', card.family_confirms != null ? String(card.family_confirms) : (card.method_confirms != null ? String(card.method_confirms) : '—')],
+    ['Fundamental confirm', card.fundamental_confirmation || '—'],
+    ['Decision coverage', card.research_decision_coverage != null ? `${card.research_decision_coverage}%` : '—'],
   ]
   return (
     <div className="reco-evidence-panel">
@@ -252,15 +270,16 @@ function DecisionSheet({
         <div className="reco-pick-identity">
           <div className="reco-pick-row1">
             <span className={`reco-buy ${badgeClass(card.action_badge)}`}>{card.action_badge}</span>
-            <span className="reco-opp">{card.opportunity_label || 'WATCH'}</span>
+            <span className="reco-opp">{card.reco_tier_label || card.opportunity_label || 'WATCH'}</span>
             <span className={`reco-risk-chip ${risk}`}>{card.risk_tier} Risk</span>
           </div>
           <h2>{card.company || card.symbol}</h2>
           <p>
             {card.symbol}
             {card.sector && card.sector !== '—' ? ` · ${card.sector}` : ''}
+            {card.primary_thesis ? ` · ${card.primary_thesis}` : ''}
             {card.horizon ? ` · Horizon ${card.horizon}` : ''}
-            {card.method_line ? ` · ${card.method_confirms || 0} methods: ${card.method_line}` : ''}
+            {card.method_line ? ` · ${card.family_confirms || card.method_confirms || 0} families: ${card.method_line}` : ''}
           </p>
         </div>
         {points.length > 0 ? (
@@ -302,26 +321,27 @@ function DecisionSheet({
         </p>
       ) : null}
       <div className="reco-status-row reco-status-row-lg">
+        <StatusChip label="Tier" value={card.reco_tier_label} />
+        <StatusChip label="Thesis" value={card.primary_thesis} />
+        <StatusChip label="Stock quality" value={card.stock_quality} />
+        <StatusChip label="Timing" value={card.timing} />
         <StatusChip label="Setup Quality" value={card.setup_quality != null ? `${Math.round(card.setup_quality)}/100` : '—'} />
         <StatusChip label="Expected payoff" value={card.expected_payoff} />
-        <StatusChip label="Evidence" value={card.evidence} />
-        <StatusChip label="Strategy health" value={card.strategy_health} />
-        <StatusChip label="Market support" value={card.market_support} />
       </div>
       {card.expected_payoff_detail ? (
         <p className="reco-pick-note">{card.expected_payoff_detail}</p>
       ) : null}
       <div className="reco-sheet-cols">
         <div>
-          <h3>Key points</h3>
+          <h3>Why now</h3>
           {points.length > 0 ? (
             <ul>{points.map((item) => <li key={item}>{item}</li>)}</ul>
           ) : (
-            <p>No plain-language confirms on this snapshot.</p>
+            <p>No timing confirm on this snapshot — quality is not a trade today.</p>
           )}
         </div>
         <div>
-          <h3>What changes our mind</h3>
+          <h3>What could invalidate it</h3>
           {(card.what_changes_mind && card.what_changes_mind.length > 0) ? (
             <ul>{card.what_changes_mind.map((item) => <li key={item}>{item}</li>)}</ul>
           ) : (
@@ -329,6 +349,12 @@ function DecisionSheet({
           )}
         </div>
       </div>
+      {(card.conflicts || []).length > 0 ? (
+        <div>
+          <h3>Risks / conflicts</h3>
+          <ul>{(card.conflicts || []).map((item) => <li key={item}>{item}</li>)}</ul>
+        </div>
+      ) : null}
       {card.next_step ? <p className="reco-next"><strong>Next step.</strong> {card.next_step}</p> : null}
       <div className="reco-sheet-actions">
         <button
@@ -506,6 +532,22 @@ export function RecommendationsView({
           </button>
         </div>
       </header>
+
+      {data.ensemble?.empty_high_conviction ? (
+        <div className="reco-empty reco-hc-empty" role="status">
+          <strong>{data.ensemble.empty_line || 'NO HIGH-CONVICTION OPPORTUNITY'}</strong>
+          <p>
+            {data.ensemble.empty_detail
+              || 'Independent evidence families did not agree on a ready, non-extended setup. Empty is a successful output.'}
+          </p>
+        </div>
+      ) : data.ensemble && data.ensemble.high_conviction_count > 0 ? (
+        <p className="reco-scan-meta">
+          High conviction: {data.ensemble.high_conviction_count}
+          {' · '}
+          Good setups: {data.ensemble.good_setup_count}
+        </p>
+      ) : null}
 
       {data.desk ? (
         <div className="reco-desk-strip" aria-label="Market and strategy snapshot">

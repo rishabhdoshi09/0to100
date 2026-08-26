@@ -253,6 +253,8 @@ def recommendations_workspace(
             long_term_payload=long_term,
             refresh_technicals=bool(refresh),
             settle_cases=False,
+            deep_confirm=True,
+            persist_ledger=True,
         )
     except Exception as exc:
         fallback = build_recommendations_workspace(
