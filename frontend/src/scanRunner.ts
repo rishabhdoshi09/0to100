@@ -163,13 +163,13 @@ export function useScanRunner(kind: ScanKind, options: ScanRunnerOptions = {}): 
   }, [])
 
   const handleTerminal = useCallback((op: OperationRecord) => {
+    setIsBusy(false)
+    startedAtRef.current = null
+    scanPaceIdRef.current = null
     if (completedIdRef.current === op.operation_id) return
     completedIdRef.current = op.operation_id
     clearPoll()
     trackedIdRef.current = null
-    setIsBusy(false)
-    startedAtRef.current = null
-    scanPaceIdRef.current = null
     if (op.status === 'SUCCEEDED') {
       setNotice('Scan complete — refreshing results…')
       onComplete?.()
@@ -229,10 +229,11 @@ export function useScanRunner(kind: ScanKind, options: ScanRunnerOptions = {}): 
     if (!seed || !seedKindMatches(seed.kind, kind)) return
     if (trackedIdRef.current === seed.operation_id) {
       setOperation(seed)
+      if (isTerminalStatus(seed.status)) handleTerminal(seed)
       return
     }
     if (isActiveStatus(seed.status)) attachOperation(seed)
-  }, [attachOperation, kind, seedOperation?.operation_id, seedOperation?.status, seedOperation?.progress_current])
+  }, [attachOperation, handleTerminal, kind, seedOperation?.operation_id, seedOperation?.status, seedOperation?.progress_current])
 
   useEffect(() => {
     const active = Boolean(
