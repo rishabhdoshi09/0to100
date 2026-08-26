@@ -132,7 +132,7 @@ def _context_ok(kpi_id: str, left: str, right: str, document_type: str = "") -> 
             return False
         return "attrition" in window
     if kpi_id == "cc_growth":
-        return "constant currency" in window
+        return "constant currency" in window or "constant-currency" in window
     if kpi_id == "rnd":
         return "r&d" in window or "research and development" in window or "research & development" in window
     if kpi_id == "us_sales":
@@ -713,7 +713,8 @@ def extract_segments(text: str, *, source: str, source_url: str = "") -> list[di
     for match in _SEGMENT_RE.finditer(text or ""):
         name = re.sub(r"\s+", " ", match.group(1)).strip(" -")
         name = re.sub(r"^(?:the|a|an)\s+", "", name, flags=re.I).strip()
-        if len(name) < 3 or name.lower() in {"the", "this", "our", "its"}:
+        geo = {"us", "uk", "eu", "uae"}
+        if (len(name) < 3 and name.lower() not in geo) or name.lower() in {"the", "this", "our", "its"}:
             continue
         try:
             mix = float(match.group(2))
