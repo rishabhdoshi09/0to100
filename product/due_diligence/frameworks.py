@@ -80,11 +80,13 @@ BANK = (
         higher_is_better=True, kind="rate", unit="%", pillar="profitability", weight=16,
     ),
     _k(
-        "gnpa", "Gross NPA", "quarterly_results", ("gross npa",),
+        "gnpa", "Gross NPA", "quarterly_results",
+        ("gross npa", "gnpa", "gross non performing"),
         higher_is_better=False, kind="rate", unit="%", pillar="asset_quality", weight=20,
     ),
     _k(
-        "nnpa", "Net NPA", "quarterly_results", ("net npa",),
+        "nnpa", "Net NPA", "quarterly_results",
+        ("net npa", "nnpa", "net non performing"),
         higher_is_better=False, kind="rate", unit="%", pillar="asset_quality", weight=16,
     ),
     _PAT,

@@ -103,6 +103,7 @@ const DESK_PIPELINE_FALLBACK: DeskPipelineStep[] = [
   { id: 'scan', title: 'Market scan', page: 'Home', why: 'One whole-market scan for Home, Scanner and recommendation setups.', state: 'waiting' },
   { id: 'long_term', title: 'Long-term / funds', page: 'Recommendations', why: 'Fundamentals for Best Among and Wealth Builders.', state: 'waiting' },
   { id: 'news', title: 'Market reports', page: 'Market Reports', why: 'Street pulse and news for Market Reports.', state: 'waiting' },
+  { id: 'investigate', title: 'Investigate acquire', page: 'Stock Intelligence', why: 'Download filings and fundamentals for shortlisted names, then Investigate reads the files.', state: 'waiting' },
 ]
 
 const PIPELINE_STATE_LABEL: Record<string, string> = {

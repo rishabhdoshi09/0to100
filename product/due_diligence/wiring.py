@@ -226,6 +226,12 @@ def load_evidence_pack(
 
     next_actions = [
         {
+            "id": "acquire",
+            "label": "Acquire missing data from the internet",
+            "control": "ACQUIRE_DUE_DILIGENCE",
+            "detail": "Downloads Screener tables and official NSE filings for this symbol, extracts facts with rules, then Investigate re-reads the files. GET still does not scrape.",
+        },
+        {
             "id": "research-data",
             "label": "Complete missing research data",
             "page": "Research Data",

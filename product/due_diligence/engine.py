@@ -6,9 +6,11 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from product.due_diligence.classify import classify_company
+from product.due_diligence.extract import extract_guidance, extract_kpis_from_raw, merge_kpi_maps
 from product.due_diligence.frameworks import KpiSpec, get_framework
 from product.due_diligence.news_layer import material_events, news_verdict
 from product.due_diligence.series import dated_series, direction, find_row, snapshot
+from product.due_diligence.thesis import compose_thesis
 from product.due_diligence.wiring import load_evidence_pack
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -112,6 +114,51 @@ def _implication(trend: str, vs_setup: str) -> str:
     return "This leaves conviction unchanged on this metric."
 
 
+def _apply_overlay(
+    findings: list[dict[str, Any]],
+    specs: Sequence[KpiSpec],
+    measured: Mapping[str, Mapping[str, Any]],
+) -> None:
+    """Fill Data unavailable KPIs from extra tables, key-ratios or downloaded filings."""
+    spec_by_id = {spec.id: spec for spec in specs}
+    for finding in findings:
+        if finding.get("available"):
+            continue
+        spec = spec_by_id.get(str(finding.get("id")))
+        snap = dict(measured.get(str(finding.get("id"))) or {})
+        if spec is None or snap.get("current") is None:
+            continue
+        trend = direction(
+            higher_is_better=spec.higher_is_better,
+            qoq=snap.get("qoq_change"),
+            yoy=snap.get("yoy_change"),
+        )
+        source = str(snap.get("source") or "Downloaded filing / extra table")
+        finding.update({
+            "available": True,
+            "trend": trend,
+            "points": _kpi_points(spec, snap, trend),
+            "snapshot": {
+                "current": snap.get("current"),
+                "current_period": snap.get("current_period") or "",
+                "previous": snap.get("previous"),
+                "previous_period": snap.get("previous_period") or "",
+                "year_ago": snap.get("year_ago"),
+                "year_ago_period": snap.get("year_ago_period") or "",
+                "qoq_change": snap.get("qoq_change"),
+                "yoy_change": snap.get("yoy_change"),
+                "points": list(snap.get("points") or []),
+            },
+            "fact": _fact_line(spec, snap),
+            "interpretation": _interpretation(spec, snap, trend),
+            "implication": _implication(trend, "pending"),
+            "source": source,
+            "source_url": str(snap.get("source_url") or finding.get("source_url") or ""),
+            "source_date": str(snap.get("source_date") or snap.get("current_period") or finding.get("source_date") or ""),
+            "confidence": "medium",
+        })
+
+
 def _evaluate_kpis(raw: Mapping[str, Any], specs: Sequence[KpiSpec], source_url: str, fetched_at: str) -> list[dict[str, Any]]:
     findings: list[dict[str, Any]] = []
     tables = {
@@ -125,6 +172,12 @@ def _evaluate_kpis(raw: Mapping[str, Any], specs: Sequence[KpiSpec], source_url:
     for spec in specs:
         row = find_row(tables.get(spec.table), spec.needles)
         series = dated_series(row)
+        if not series and spec.id in {"gnpa", "nnpa", "pledge", "promoter"}:
+            for other in tables.values():
+                row = find_row(other, spec.needles)
+                series = dated_series(row)
+                if series:
+                    break
         snap = snapshot(series, kind=spec.kind)
         trend = direction(
             higher_is_better=spec.higher_is_better,
@@ -333,6 +386,14 @@ def build_due_diligence(
     source_url = str(raw.get("url") or "")
     fetched_at = str(raw_record.get("fetched_at") or "")
     findings = _evaluate_kpis(raw, framework["kpis"], source_url, fetched_at)
+    autonomy: dict[str, Any] = {}
+    try:
+        from product.due_diligence.acquire import load_autonomy_facts
+        autonomy = load_autonomy_facts(symbol)
+    except Exception:
+        autonomy = {}
+    measured = merge_kpi_maps(extract_kpis_from_raw(raw), dict(autonomy.get("kpis") or {}))
+    _apply_overlay(findings, framework["kpis"], measured)
     score, coverage, score_meta = _score(findings)
     events = material_events(list(news or []), symbol)
     news_label, news_detail = news_verdict(events)
@@ -398,9 +459,35 @@ def build_due_diligence(
     ])
     financial = quality_label if quality_label != "Unmeasured" else "Unmeasured"
 
+    extracted_guidance: list[dict[str, Any]] = []
+    for row in pack.get("management_commentary") or []:
+        extracted_guidance.extend(
+            extract_guidance(
+                " ".join(str(row.get(k) or "") for k in ("commentary", "guidance_metric", "guidance_value", "topic")),
+                source=f"Research Data commentary ({row.get('speaker') or 'Management'})",
+                source_url=str(row.get("source_url") or ""),
+                source_date=str(row.get("event_date") or ""),
+            )
+        )
+    for item in list(autonomy.get("guidance") or []):
+        if isinstance(item, dict):
+            extracted_guidance.append(item)
+    seen_g = set()
+    unique_guidance: list[dict[str, Any]] = []
+    for item in extracted_guidance:
+        key = (item.get("excerpt"), item.get("source"))
+        if key in seen_g:
+            continue
+        seen_g.add(key)
+        unique_guidance.append(item)
+        if len(unique_guidance) >= 8:
+            break
+
     watch = list(framework["watch"])
-    if any(gap.get("key") == "management_commentary" for gap in pack.get("gaps") or []):
-        watch = ["Upload a concall / results commentary in Research Data — tone is not inferred."] + watch[:3]
+    if unique_guidance:
+        watch = [f"Filing/commentary tone on file is {unique_guidance[0].get('tone')}."] + watch[:3]
+    elif any(gap.get("key") == "management_commentary" for gap in pack.get("gaps") or []):
+        watch = ["Upload a concall / results commentary in Research Data, or run Acquire — tone is not guessed."] + watch[:3]
     if pack.get("order_book"):
         watch = [f"Order-book / guidance on file: {pack['order_book'][0]['fact']}"] + list(watch[:3])
 
@@ -415,10 +502,11 @@ def build_due_diligence(
         "scan_scanned_at": str((scan_payload or {}).get("scanned_at") or ""),
         "generated_at": now.isoformat(),
         "evidence_pack_coverage_pct": pack.get("coverage_pct"),
+        "autonomy_acquired_at": str(autonomy.get("acquired_at") or ""),
     }
 
-    return {
-        "schema_version": 2,
+    report = {
+        "schema_version": 3,
         "symbol": symbol,
         "company": company,
         "profile": profile,
@@ -455,12 +543,22 @@ def build_due_diligence(
         "watch_next": watch,
         "kpis": findings,
         "events": events,
+        "extracted_guidance": unique_guidance,
         "evidence_pack": pack,
+        "autonomy": {
+            "acquired_at": autonomy.get("acquired_at") or None,
+            "steps": list(autonomy.get("steps") or []),
+            "downloads": list(autonomy.get("downloads") or [])[:12],
+            "still_missing": list(autonomy.get("still_missing") or []),
+            "files_on_disk": list(autonomy.get("files_on_disk") or []),
+            "not_an_llm": True,
+        },
         "as_of": as_of,
         "places_orders": False,
         "disclaimer": (
             "Due diligence on a scanner candidate — not a buy list, not a new scan, "
-            "not a broker recommendation. Empty stays empty."
+            "not a broker recommendation. Empty stays empty. The desk synthesis is "
+            "rule-based, not a language model."
         ),
         "question": (
             "QuantTerm identified a technical setup. After sector KPIs, filings-on-file "
@@ -468,3 +566,5 @@ def build_due_diligence(
             "or argue to reduce it?"
         ),
     }
+    report["thesis"] = compose_thesis(report)
+    return report

@@ -546,6 +546,28 @@ def due_diligence(symbol: str) -> dict[str, Any]:
         raise HTTPException(status_code=500, detail=f"Due diligence failed: {exc}") from exc
 
 
+@app.post("/api/due-diligence/{symbol}/acquire")
+def acquire_due_diligence(symbol: str) -> dict[str, Any]:
+    """Download official sources for this symbol, persist them, then rebuild Investigate from files."""
+    try:
+        from product.due_diligence import build_due_diligence
+        from product.due_diligence.acquire import acquire_symbol
+
+        clean = clean_symbol(symbol)
+        acquired = acquire_symbol(clean, force=True)
+        return {
+            "accepted": True,
+            "symbol": clean,
+            "acquire": acquired,
+            "report": build_due_diligence(clean),
+            "places_orders": False,
+        }
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Investigate acquire failed: {exc}") from exc
+
+
 @app.post("/api/stock-intelligence/{symbol}/refresh-fundamentals")
 def refresh_stock_fundamentals(symbol: str) -> dict[str, Any]:
     try:

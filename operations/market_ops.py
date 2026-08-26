@@ -28,6 +28,7 @@ LONG_TERM_REFRESH = "LONG_TERM_REFRESH"
 NEWS_REFRESH = "NEWS_REFRESH"
 FNO_REFRESH = "FNO_REFRESH"
 DATA_PREPARE = "DATA_PREPARE"
+DUE_DILIGENCE_ACQUIRE = "DUE_DILIGENCE_ACQUIRE"
 
 LANES = {
     MARKET_SCAN: "market_scan",
@@ -36,6 +37,7 @@ LANES = {
     NEWS_REFRESH: "news",
     FNO_REFRESH: "data",
     DATA_PREPARE: "data",
+    DUE_DILIGENCE_ACQUIRE: "due_diligence",
 }
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -47,6 +49,7 @@ NEWS_FRESH_S = 20 * 60
 FNO_FRESH_S = 24 * 60 * 60
 SCAN_FRESH_S = 6 * 60 * 60
 LONG_TERM_FRESH_S = 3 * 24 * 60 * 60
+DUE_DILIGENCE_FRESH_S = 24 * 60 * 60
 HISTORY_DAYS = 500
 
 
@@ -377,6 +380,19 @@ class MarketOperationsWorker:
             )
         return result
 
+    def _run_due_diligence_acquire(self, operation: dict[str, Any]) -> dict[str, Any]:
+        operation_id = str(operation["operation_id"])
+        self._progress(operation_id, "ACQUIRING", "Downloading filings and fundamentals for shortlisted names")
+        from product.due_diligence.acquire import acquire_shortlist
+
+        result = acquire_shortlist(force=False)
+        self._progress(
+            operation_id,
+            "ACQUIRED",
+            f"Investigate acquire finished for {result.get('n_ok', 0)} name(s)",
+        )
+        return result
+
     def _run_fno(self, operation: dict[str, Any]) -> dict[str, Any]:
         operation_id = str(operation["operation_id"])
         self._progress(operation_id, "LOADING_INSTRUMENTS", "Refreshing NSE/NFO instrument master")
@@ -429,6 +445,8 @@ class MarketOperationsWorker:
             return self._run_long_term(operation, refresh=True)
         if kind == NEWS_REFRESH:
             return self._run_news(operation)
+        if kind == DUE_DILIGENCE_ACQUIRE:
+            return self._run_due_diligence_acquire(operation)
         if kind == FNO_REFRESH:
             return self._run_fno(operation)
         if kind == DATA_PREPARE:

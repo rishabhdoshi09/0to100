@@ -710,3 +710,11 @@
 .dd-kpi-static strong { display: block; margin: 3px 0 2px; }
 .dd-kpi-static small { color: var(--rw-muted); }
 .dd-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 12px; }
+.dd-thesis {
+  padding: 14px 16px; border-radius: 14px; background: var(--rw-surface);
+  border: 1px solid var(--rw-line); display: grid; gap: 6px;
+}
+.dd-thesis span {
+  font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--rw-muted);
+}
+.dd-thesis p { margin: 0; line-height: 1.5; color: var(--rw-ink); }

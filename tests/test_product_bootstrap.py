@@ -15,6 +15,7 @@ def test_queue_product_bootstrap_enqueues_first_due_step_only(tmp_path: Path, mo
     monkeypatch.setattr("product.desk_pipeline.scan_is_fresh", lambda: False)
     monkeypatch.setattr("product.desk_pipeline.long_term_is_fresh", lambda: False)
     monkeypatch.setattr("product.desk_pipeline.news_is_fresh", lambda: False)
+    monkeypatch.setattr("product.desk_pipeline.acquire_is_fresh", lambda: True)
 
     payload = tpa.queue_product_bootstrap(requested_by="api_startup")
     assert payload["accepted"] is True
@@ -39,6 +40,7 @@ def test_queue_product_bootstrap_skips_fresh_market_scan(tmp_path: Path, monkeyp
     monkeypatch.setattr("product.desk_pipeline.scan_is_fresh", lambda: True)
     monkeypatch.setattr("product.desk_pipeline.long_term_is_fresh", lambda: False)
     monkeypatch.setattr("product.desk_pipeline.news_is_fresh", lambda: False)
+    monkeypatch.setattr("product.desk_pipeline.acquire_is_fresh", lambda: True)
 
     payload = tpa.queue_product_bootstrap(requested_by="api_startup")
     kinds = {item["kind"] for item in payload["operations"]}
@@ -60,6 +62,7 @@ def test_desk_pipeline_get_does_not_enqueue(tmp_path: Path, monkeypatch):
     monkeypatch.setattr("product.desk_pipeline.scan_is_fresh", lambda: False)
     monkeypatch.setattr("product.desk_pipeline.long_term_is_fresh", lambda: False)
     monkeypatch.setattr("product.desk_pipeline.news_is_fresh", lambda: False)
+    monkeypatch.setattr("product.desk_pipeline.acquire_is_fresh", lambda: True)
 
     client = TestClient(tpa.app)
     response = client.get("/api/desk-pipeline")

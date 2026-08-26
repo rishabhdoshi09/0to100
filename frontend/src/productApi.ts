@@ -259,6 +259,31 @@ export type DueDiligenceReport = {
     scan_scanned_at: string
     generated_at: string
     evidence_pack_coverage_pct?: number
+    autonomy_acquired_at?: string
+  }
+  extracted_guidance?: {
+    tone: string
+    excerpt: string
+    excerpts?: string[]
+    source: string
+    source_url?: string
+    source_date?: string
+    method?: string
+    not_an_llm?: boolean
+  }[]
+  thesis?: {
+    kind: string
+    not_an_llm: boolean
+    text: string
+    basis: string[]
+  }
+  autonomy?: {
+    acquired_at?: string | null
+    steps?: { id: string; ok?: boolean; error?: string }[]
+    downloads?: { ok?: boolean; url?: string; path?: string; error?: string }[]
+    still_missing?: string[]
+    files_on_disk?: string[]
+    not_an_llm?: boolean
   }
   evidence_pack?: {
     coverage_pct: number
@@ -285,6 +310,17 @@ export const fetchDueDiligence = (symbol: string): Promise<DueDiligenceReport> =
   fetch(`/api/due-diligence/${encodeURIComponent(symbol)}`, {
     headers: { Accept: 'application/json' },
   }).then((response) => json<DueDiligenceReport>(response))
+
+export const acquireDueDiligence = (symbol: string): Promise<{
+  accepted: boolean
+  symbol: string
+  acquire: Record<string, unknown>
+  report: DueDiligenceReport
+  places_orders: boolean
+}> => fetch(`/api/due-diligence/${encodeURIComponent(symbol)}/acquire`, {
+  method: 'POST',
+  headers: { Accept: 'application/json' },
+}).then((response) => json(response))
 
 export type TradePlan = {
   available: boolean

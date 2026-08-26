@@ -15,6 +15,7 @@ import {
   fetchProductReadiness,
   fetchStockIntelligence,
   fetchDueDiligence,
+  acquireDueDiligence,
   fetchTradePlan,
   refreshStockFundamentals,
   fetchSymbolRatios,
@@ -267,6 +268,7 @@ function InvestigatePanel({
   decision,
   onResearchData,
   onRefresh,
+  onAcquire,
   busy,
 }: {
   report: DueDiligenceReport | null
@@ -276,6 +278,7 @@ function InvestigatePanel({
   decision?: StockWorkspace['decision_memory']
   onResearchData: () => void
   onRefresh: () => void
+  onAcquire: () => void
   busy: string
 }) {
   const [openId, setOpenId] = useState<string | null>(null)
@@ -300,6 +303,12 @@ function InvestigatePanel({
         <strong>{report.vs_technical_setup}</strong>
         <p>{report.vs_detail}</p>
       </aside>
+      {report.thesis?.text ? (
+        <aside className="dd-thesis" aria-label="Rule-based desk synthesis">
+          <span>Desk synthesis · rules, not a language model</span>
+          <p>{report.thesis.text}</p>
+        </aside>
+      ) : null}
       <div className="dd-score-grid">
         <article><span>Fundamental quality</span><strong>{scoreLabel}</strong><small>{report.fundamental_quality.explain}</small></article>
         <article><span>Business trend</span><strong>{report.business_trend}</strong></article>
@@ -432,7 +441,37 @@ function InvestigatePanel({
           ))}
         </div>
       </Panel>
-      <Panel title="MANAGEMENT COMMENTARY" subtitle="Structured Research Data uploads only — never inferred">
+      <Panel title="FILING / COMMENTARY TONE" subtitle="Rule-extracted from files on disk — never invented">
+        {(report.extracted_guidance || []).length
+          ? (
+            <ul className="dd-events">
+              {report.extracted_guidance!.map((item) => (
+                <li key={`${item.source}-${item.excerpt.slice(0, 24)}`}>
+                  <strong>{item.tone}</strong>
+                  <span>{item.excerpt}</span>
+                  <small>{item.source}{item.source_date ? ` · ${item.source_date}` : ''}</small>
+                </li>
+              ))}
+            </ul>
+          )
+          : <EmptyState title="Data unavailable" detail="No guidance tokens in a concall, filing or commentary file yet. Run Acquire or upload a transcript." />}
+      </Panel>
+      <Panel title="AUTONOMY DOWNLOADS" subtitle="Internet fetch writes files here; Investigate GET only reads them">
+        {report.autonomy?.acquired_at ? (
+          <ul className="dd-watch">
+            <li>Last acquire: {report.autonomy.acquired_at}</li>
+            {(report.autonomy.steps || []).map((step) => (
+              <li key={step.id}>{step.id}: {step.ok ? 'downloaded' : (step.error || 'not downloaded')}</li>
+            ))}
+            {(report.autonomy.still_missing || []).length
+              ? <li>Still missing after acquire: {report.autonomy.still_missing!.join(', ')}</li>
+              : null}
+          </ul>
+        ) : (
+          <EmptyState title="No autonomous download on file yet" detail="Acquire from the internet fills Screener and NSE filings, then this page reloads from disk." />
+        )}
+      </Panel>
+      <Panel title="MANAGEMENT COMMENTARY" subtitle="Structured Research Data uploads, plus rule extracts from those files">
         {(report.evidence_pack?.management_commentary || []).length
           ? (
             <ul className="dd-events">
@@ -472,6 +511,9 @@ function InvestigatePanel({
           )
           : <EmptyState title="Required evidence rows that this desk already tracks are present" />}
         <div className="dd-actions">
+          <button type="button" className="reco-primary" disabled={busy === 'ACQUIRE_DUE_DILIGENCE'} onClick={onAcquire}>
+            {busy === 'ACQUIRE_DUE_DILIGENCE' ? 'Acquiring from the internet…' : 'Acquire from the internet'}
+          </button>
           <button type="button" className="reco-primary" onClick={onResearchData}>Complete missing research data</button>
           <button type="button" className="reco-ghost" disabled={busy === 'REFRESH_STOCK_FUNDAMENTALS'} onClick={onRefresh}>
             {busy === 'REFRESH_STOCK_FUNDAMENTALS' ? 'Refreshing…' : 'Refresh this stock’s fundamentals'}
@@ -566,7 +608,7 @@ export function ProductStockIntelligenceView(props: ViewProps) {
     if (tab === 'Investigate' && selected) void loadDd()
   }, [tab, selected, dashboard.scan.scanned_at])
 
-  const runAction = async (control: ControlName | 'REFRESH_STOCK_FUNDAMENTALS') => {
+  const runAction = async (control: ControlName | 'REFRESH_STOCK_FUNDAMENTALS' | 'ACQUIRE_DUE_DILIGENCE') => {
     if (!selected) return
     setBusy(control)
     setError('')
@@ -575,6 +617,10 @@ export function ProductStockIntelligenceView(props: ViewProps) {
         const result = await refreshStockFundamentals(selected)
         setWorkspace(result.workspace)
         if (tab === 'Investigate') await loadDd()
+      } else if (control === 'ACQUIRE_DUE_DILIGENCE') {
+        const result = await acquireDueDiligence(selected)
+        if (result.report) setDd(result.report)
+        else await loadDd()
       } else {
         await runControl(control)
       }
@@ -633,6 +679,7 @@ export function ProductStockIntelligenceView(props: ViewProps) {
           decision={workspace?.decision_memory}
           onResearchData={() => setActive('Research Data')}
           onRefresh={() => void runAction('REFRESH_STOCK_FUNDAMENTALS')}
+          onAcquire={() => void runAction('ACQUIRE_DUE_DILIGENCE')}
           busy={busy}
         />
       )}

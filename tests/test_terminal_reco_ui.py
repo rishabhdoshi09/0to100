@@ -63,6 +63,8 @@ def test_terminal_uses_reco_desk_not_hud_chrome():
     views = (ROOT / "frontend" / "src" / "productViews.tsx").read_text(encoding="utf-8")
     assert "Investigate" in views
     assert "fetchDueDiligence" in views
+    assert "acquireDueDiligence" in views
+    assert "Acquire from the internet" in views
     assert "vs_technical_setup" in views
     assert "evidence_pack" in views
     assert "Complete missing research data" in views

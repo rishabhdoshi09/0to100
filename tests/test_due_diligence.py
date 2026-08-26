@@ -373,3 +373,166 @@ def test_uploaded_commentary_and_segments_are_wired(monkeypatch):
     assert payload["evidence_pack"]["management_commentary"][0]["commentary"].startswith("NIM stays")
     assert payload["evidence_pack"]["order_book"][0]["metric"] == "Order book"
     assert "Order-book / guidance on file" in payload["watch_next"][0]
+    assert payload["extracted_guidance"]
+    assert payload["extracted_guidance"][0]["tone"] == "Cautious"
+    assert payload["thesis"]["not_an_llm"] is True
+    assert "not a language model" in payload["thesis"]["text"].lower()
+
+
+def test_key_ratio_snapshot_fills_empty_gnpa_row():
+    raw = {
+        "available": True, "fetched_at": "", "data": {
+            "about": "A commercial bank",
+            "url": "https://www.screener.in/company/SNAPBANK/",
+            "quarterly_results": [_q_row("Gross NPA %"), _q_row("Net Profit+", **{"Jun 2026": 10})],
+            "key_ratios": [{"name": "Gross NPA %", "value": "1.8%"}],
+            "shareholding": [_q_row("Promoters+", **{"Jun 2026": 14.0})],
+        },
+    }
+    payload = build_due_diligence(
+        "SNAPBANK",
+        scan_payload={"records": [{"symbol": "SNAPBANK", "status": "Ready to trade", "score": 80}]},
+        long_term_payload={"records": [{"symbol": "SNAPBANK", "sector": "Banking & Finance"}]},
+        raw_fundamentals=raw,
+        news=[],
+    )
+    gnpa = next(k for k in payload["kpis"] if k["id"] == "gnpa")
+    assert gnpa["available"] is True
+    assert gnpa["snapshot"]["current"] == 1.8
+    assert "key-ratio" in gnpa["source"].lower() or "snapshot" in gnpa["source"].lower()
+
+
+def test_autonomy_overlay_fills_gnpa_from_downloaded_filing(tmp_path, monkeypatch):
+    monkeypatch.setattr("product.due_diligence.acquire.EVIDENCE_ROOT", tmp_path)
+    from product.due_diligence.acquire import save_autonomy_facts
+
+    save_autonomy_facts("GAPBANK", {
+        "acquired_at": "2026-08-25T00:00:00+00:00",
+        "kpis": {
+            "gnpa": {
+                "current": 2.1,
+                "current_period": "Jun 2026",
+                "source": "NSE filing / announcement",
+                "source_url": "https://nsearchives.nseindia.com/corporate/GAPBANK.pdf",
+            }
+        },
+        "guidance": [],
+        "still_missing": ["nnpa"],
+    })
+    raw = {
+        "available": True, "fetched_at": "", "data": {
+            "about": "A commercial bank",
+            "quarterly_results": [_q_row("Gross NPA %")],
+            "shareholding": [],
+        },
+    }
+    payload = build_due_diligence(
+        "GAPBANK",
+        scan_payload={"records": [{"symbol": "GAPBANK", "status": "Ready to trade", "score": 80}]},
+        long_term_payload={"records": [{"symbol": "GAPBANK", "sector": "Banking & Finance"}]},
+        raw_fundamentals=raw,
+        news=[],
+    )
+    gnpa = next(k for k in payload["kpis"] if k["id"] == "gnpa")
+    assert gnpa["available"] is True
+    assert gnpa["snapshot"]["current"] == 2.1
+    assert "NSE" in gnpa["source"]
+    assert payload["autonomy"]["still_missing"] == ["nnpa"]
+
+
+def test_extract_gnpa_and_guidance_from_filing_text():
+    from product.due_diligence.extract import extract_from_html, extract_guidance
+
+    html = """
+    <html><body>
+    <p>Gross NPA % as of June 2026 was 1.35%. Net NPA % was 0.42%.</p>
+    <p>Management said we expect credit costs to stay contained and raised guidance for FY27.</p>
+    </body></html>
+    """
+    parsed = extract_from_html(html, source="NSE filing", source_url="https://nsearchives.nseindia.com/x")
+    assert parsed["kpis"]["gnpa"]["current"] == 1.35
+    assert parsed["kpis"]["nnpa"]["current"] == 0.42
+    assert parsed["guidance"][0]["tone"] == "Constructive"
+    empty = extract_guidance("No tokens here about the weather.", source="x")
+    assert empty == []
+
+
+def test_acquire_symbol_writes_facts_and_does_not_invent(tmp_path, monkeypatch):
+    monkeypatch.setattr("product.due_diligence.acquire.EVIDENCE_ROOT", tmp_path)
+    monkeypatch.setattr(
+        "reporting.evidence_intake.load_raw_fundamentals",
+        lambda _s: {"data": {}},
+    )
+    monkeypatch.setattr(
+        "fundamentals.fetcher.get_deep_fundamentals",
+        lambda symbol, force_refresh=False: {
+            "about": "Test commercial bank",
+            "url": "https://www.screener.in/company/TESTBANK/",
+            "quarterly_results": [_q_row("Gross NPA %", **{"Mar 2026": 2.0, "Jun 2026": 1.8})],
+            "shareholding": [],
+        },
+    )
+    monkeypatch.setattr("product.due_diligence.acquire._nse_session", lambda: None)
+    monkeypatch.setattr(
+        "product.due_diligence.acquire._fetch_nse",
+        lambda *_a, **_k: {"step": {"id": "nse_filings", "ok": False}, "downloads": [], "texts": []},
+    )
+    monkeypatch.setattr("product.due_diligence.acquire._news_snippets", lambda _s: [])
+    monkeypatch.setattr("product.due_diligence.acquire.extract_from_uploads", lambda _s: {"kpis": {}, "guidance": [], "files_read": 0})
+    from product.due_diligence.acquire import acquire_symbol, load_autonomy_facts
+
+    payload = acquire_symbol("TESTBANK", force=True)
+    assert payload["kpis"]["gnpa"]["current"] == 1.8
+    assert payload["not_an_llm"] is True
+    saved = load_autonomy_facts("TESTBANK")
+    assert saved["kpis"]["gnpa"]["current"] == 1.8
+    assert (tmp_path / "TESTBANK" / "autonomy" / "autonomy_facts.json").exists()
+
+
+def test_acquire_endpoint_downloads_then_rebuilds(monkeypatch):
+    from fastapi.testclient import TestClient
+    import terminal_product_api as tpa
+
+    called = {"n": 0}
+
+    def fake_acquire(symbol, force=True):
+        called["n"] += 1
+        assert force is True
+        return {"symbol": symbol, "steps": [{"id": "screener", "ok": True}], "kpis": {}}
+
+    monkeypatch.setattr("product.due_diligence.acquire.acquire_symbol", fake_acquire)
+    monkeypatch.setattr(
+        "product.due_diligence.build_due_diligence",
+        lambda symbol, **_k: {"symbol": symbol, "thesis": {"not_an_llm": True}, "places_orders": False},
+    )
+    client = TestClient(tpa.app)
+    response = client.post("/api/due-diligence/TESTBANK/acquire")
+    assert response.status_code == 200
+    body = response.json()
+    assert called["n"] == 1
+    assert body["accepted"] is True
+    assert body["report"]["thesis"]["not_an_llm"] is True
+    assert body["places_orders"] is False
+
+
+def test_shortlist_and_acquire_do_not_gate_the_scanner():
+    from product.due_diligence.acquire import acquire_shortlist, shortlist_symbols
+
+    names = shortlist_symbols(
+        scan_payload={"records": [
+            {"symbol": "AAA", "sepa_score": 55, "score": 80, "status": "Watch"},
+            {"symbol": "BBB", "sepa_score": 10, "score": 90, "status": "Watch"},
+            {"symbol": "CCC", "sepa_score": None, "score": 99, "status": "Ready to trade"},
+        ]}
+    )
+    assert names[0] == "AAA"
+    assert "BBB" not in names
+    assert "CCC" in names
+    src = (__import__("pathlib").Path(__file__).resolve().parents[1] / "product" / "due_diligence" / "acquire.py").read_text(encoding="utf-8")
+    assert "MARKET_SCAN" not in src
+    assert acquire_shortlist.__doc__ is None or True
+    engine = (__import__("pathlib").Path(__file__).resolve().parents[1] / "product" / "due_diligence" / "engine.py").read_text(encoding="utf-8")
+    assert "get_deep_fundamentals" not in engine
+    assert "dual_llm" not in engine
+    assert "compose_thesis" in engine
+
