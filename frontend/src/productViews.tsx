@@ -348,7 +348,7 @@ function InvestigatePanel({
               <div>
                 <span>{kpi.label}</span>
                 <strong>{kpi.available ? kpi.fact : 'Data unavailable'}</strong>
-                <small>{kpi.available ? `${kpi.trend} · ${kpi.pillar}${kpi.importance ? ` · ${kpi.importance}` : ''}` : `${kpi.availability_label || 'Not yet acquired'} — not estimated.`}</small>
+                <small>{kpi.available ? `${kpi.trend} · ${kpi.pillar}${kpi.importance ? ` · ${kpi.importance}` : ''}` : `${kpi.availability_label || (kpi.implemented === false ? 'No validated acquisition path' : 'Not yet acquired')} — not estimated.`}</small>
               </div>
               {heights.length > 1 ? (
                 <div className="dd-spark" aria-hidden="true">
@@ -382,6 +382,9 @@ function InvestigatePanel({
                     {kpi.source_consensus === 'conflict' ? ' · Source Conflict' : ''}
                   </dd>
                 </div>
+                {kpi.definition ? <div><dt>Definition</dt><dd>{kpi.definition}</dd></div> : null}
+                {kpi.period_policy ? <div><dt>Period</dt><dd>{kpi.period_policy}</dd></div> : null}
+                {kpi.reliability_label ? <div><dt>Acquisition</dt><dd>{kpi.implemented ? kpi.reliability_label : 'Not implemented — listed in the framework only'}</dd></div> : null}
               </dl>
             ) : null}
           </article>
@@ -392,6 +395,9 @@ function InvestigatePanel({
   const coverage = report.research_coverage
   const coveragePct = coverage?.coverage_pct
   const decisionPct = screen?.decision_coverage_pct ?? report.decision_coverage_pct
+  const implPct = screen?.implementation_coverage_pct ?? report.implementation_coverage_pct
+  const audit = report.framework_audit
+  const auditMetrics = screen?.framework_audit_metrics || audit?.decision_metrics || []
   const scoreCov = screen?.score_coverage_pct ?? report.fundamental_quality.score_coverage_pct ?? report.fundamental_quality.coverage_pct
   const missingCritical = screen?.critical_metrics_missing || report.critical_metrics_missing || []
   const missingEvidence = screen?.missing_evidence || report.missing_evidence || []
@@ -412,6 +418,7 @@ function InvestigatePanel({
           {(screen?.business_model || report.profile.business_model) && (screen?.business_model || report.profile.business_model) !== 'Data unavailable' ? (
             <p>{String(screen?.sub_sector || report.profile.sub_sector || report.framework.label)} · {String(screen?.business_model || report.profile.business_model)}</p>
           ) : null}
+          {report.profile.classification_note ? <p>{report.profile.classification_note}</p> : null}
         </div>
         <aside className={`dd-verdict ${verdictTone(confirmation)}`} aria-label="Fundamental confirmation">
           <span>Fundamental confirmation</span>
@@ -424,6 +431,7 @@ function InvestigatePanel({
         <article><span>Fundamental quality</span><strong>{scoreLabel}</strong><small>{report.fundamental_quality.explain}</small></article>
         <article><span>Score coverage</span><strong>{scoreCov == null ? 'Unmeasured' : `${scoreCov}%`}</strong><small>Share of the scoring framework that had enough data to evaluate. Missing is unknown, not zero.</small></article>
         <article><span>Data coverage</span><strong>{coveragePct == null ? 'Unmeasured' : `${coveragePct}%`}</strong><small>{coverage?.summary || 'Datasets acquired — not decision confidence.'}</small></article>
+        <article><span>Implementation coverage</span><strong>{implPct == null ? 'Unmeasured' : `${implPct}%`}</strong><small>{screen?.implementation_coverage_summary || audit?.summary || 'Validated acquisition paths for this framework — not this company\'s Decision Coverage.'}</small></article>
         <article><span>Decision coverage</span><strong>{decisionPct == null ? 'Unmeasured' : `${decisionPct}%`}</strong><small>Important sector evidence actually available to judge the company.</small></article>
         <article><span>Business trend</span><strong>{report.business_trend}</strong></article>
         <article><span>{report.framework.label || 'Sector'} KPIs</span><strong>{screen?.sector_kpis || report.sector_kpi_label || 'Unmeasured'}</strong><small>{screen?.sector_kpi_detail || report.sector_kpi_detail || ''}</small></article>
@@ -442,16 +450,32 @@ function InvestigatePanel({
             {missingEvidence.map((row) => (
               <li key={String(row.id || row.label)}>
                 <strong>{row.label || row.id}</strong>
-                <span>{row.reason || 'Metric not reliably extracted'}{row.importance ? ` · ${row.importance}` : ''}</span>
+                <span>{row.reason || 'Metric not reliably extracted'}{row.importance ? ` · ${row.importance}` : ''}{row.availability_state === 'not_implemented' ? ' · listed in the framework, not implemented' : ''}</span>
               </li>
             ))}
           </ul>
           {(screen?.deeper_acquire_available || report.deeper_acquire_available) ? (
-            <p>Try deeper source acquisition — additional official providers remain unqueried.</p>
+            <p>Try deeper source acquisition — additional official providers remain unqueried. Metrics with no validated acquisition path are not re-scraped.</p>
           ) : (
-            <p>Already-queried sources that reported no value are not re-scraped.</p>
+            <p>Already-queried sources that reported no value are not re-scraped. A listed framework metric is implemented only when QuantTerm has a validated path, definition, period handling, provenance and tests.</p>
           )}
         </aside>
+      ) : null}
+      {auditMetrics.length ? (
+        <div className="dd-audit-strip" aria-label="Framework coverage audit">
+          <header>
+            <strong>{audit?.label || report.framework.label} framework coverage</strong>
+            <span>A metric is implemented only with a validated acquisition path, canonical definition, period handling, provenance and tests. This is system capability, not this company&apos;s Decision Coverage.</span>
+          </header>
+          <ul>
+            {auditMetrics.map((row) => (
+              <li key={String(row.id || row.label)} className={`dd-ds dd-ds-${row.implemented ? (row.company_state === 'populated' ? 'current' : 'stale') : 'not_implemented'}`}>
+                <span>{row.label || row.id}</span>
+                <strong>{row.company_state && row.company_state !== 'not evaluated' ? row.company_state : (row.reliability_label || (row.implemented ? 'obtainable' : 'no acquisition path'))}</strong>
+              </li>
+            ))}
+          </ul>
+        </div>
       ) : null}
       <div className="dd-coverage-strip" aria-label="Research dataset inventory">
         <header>

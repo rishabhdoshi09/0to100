@@ -16,7 +16,13 @@ _LOCKED_TOKENS: tuple[tuple[str, frozenset[str]], ...] = (
     ("import alert", frozenset({"pharma"})),
     ("form 483", frozenset({"pharma"})),
     ("anda", frozenset({"pharma"})),
+    ("warning letter", frozenset({"pharma"})),
     ("prompt corrective", frozenset({"bank", "nbfc", "nbfc_gold", "nbfc_housing"})),
+    ("gross npa", frozenset({"bank", "nbfc", "nbfc_gold", "nbfc_housing"})),
+    ("gnpa", frozenset({"bank", "nbfc", "nbfc_gold", "nbfc_housing"})),
+    ("same-store", frozenset({"retail", "consumer_discretionary", "fmcg"})),
+    ("same store", frozenset({"retail", "consumer_discretionary", "fmcg"})),
+    ("constant currency", frozenset({"it", "software_product"})),
 )
 _GLOBAL_RED = (
     "investigation", "raid", "fraud", "auditor resign",

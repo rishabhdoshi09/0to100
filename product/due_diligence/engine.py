@@ -21,15 +21,25 @@ from product.due_diligence.evidence import (
     score_evidence,
     sector_kpi_verdict,
 )
-from product.due_diligence.extract import extract_guidance, extract_kpis_from_raw, merge_kpi_maps, _in_bounds
+from product.due_diligence.extract import (
+    extract_guidance,
+    extract_kpis_from_raw,
+    kpis_from_order_prints,
+    kpis_from_segments,
+    merge_kpi_maps,
+    _context_ok,
+    _in_bounds,
+)
+from product.due_diligence.framework_audit import audit_framework
 from product.due_diligence.frameworks import KpiSpec, get_framework
+from product.due_diligence.metric_impl import get_impl, reliability_label
 from product.due_diligence.news_layer import material_events, news_verdict
 from product.due_diligence.peers import rank_peers
 from product.due_diligence.provenance import conflict_record, material_disagreement, provenance
 from product.due_diligence.quality_rules import balance_sheet_quality, cash_flow_quality, growth_quality
 from product.due_diligence.red_flags import collect_red_flags, partition_flags
 from product.due_diligence.score_breakdown import score_breakdown
-from product.due_diligence.series import dated_series, direction, find_row, snapshot
+from product.due_diligence.series import dated_series, direction, find_row, row_label, snapshot
 from product.due_diligence.thesis import compose_thesis
 from product.due_diligence.wiring import apply_autonomy_pack, load_evidence_pack
 
@@ -178,6 +188,8 @@ def _apply_overlay(
         snap = dict(measured.get(str(finding.get("id"))) or {})
         if spec is None or snap.get("current") is None:
             continue
+        if not get_impl(spec.id).implemented:
+            continue
         if finding.get("available"):
             existing = (finding.get("snapshot") or {}).get("current")
             if material_disagreement(existing, snap.get("current"), kind=spec.kind):
@@ -256,6 +268,18 @@ def _apply_overlay(
     return conflicts
 
 
+def _impl_fields(spec: KpiSpec) -> dict[str, Any]:
+    impl = get_impl(spec.id)
+    return {
+        "implemented": impl.implemented,
+        "reliability": impl.reliability,
+        "reliability_label": reliability_label(impl.reliability),
+        "period_policy": impl.period_policy,
+        "definition": impl.definition,
+        "false_positive_guard": impl.false_positive_guard,
+    }
+
+
 def _evaluate_kpis(raw: Mapping[str, Any], specs: Sequence[KpiSpec], source_url: str, fetched_at: str) -> list[dict[str, Any]]:
     findings: list[dict[str, Any]] = []
     tables = {
@@ -267,14 +291,23 @@ def _evaluate_kpis(raw: Mapping[str, Any], specs: Sequence[KpiSpec], source_url:
         "key_ratios": list(raw.get("key_ratios") or []),
     }
     for spec in specs:
-        row = find_row(tables.get(spec.table), spec.needles)
-        series = dated_series(row)
-        if not series:
-            for other in tables.values():
-                row = find_row(other, spec.needles)
-                series = dated_series(row)
-                if series:
-                    break
+        impl = get_impl(spec.id)
+        row = None
+        series: list[Any] = []
+        if impl.implemented:
+            row = find_row(tables.get(spec.table), spec.needles)
+            if row and not _context_ok(spec.id, row_label(row), ""):
+                row = None
+            series = dated_series(row)
+            if not series:
+                for other in tables.values():
+                    row = find_row(other, spec.needles)
+                    if row and not _context_ok(spec.id, row_label(row), ""):
+                        row = None
+                        continue
+                    series = dated_series(row)
+                    if series:
+                        break
         year_steps = 1 if spec.table in {"profit_loss", "balance_sheet", "cash_flow"} else 4
         snap = snapshot(series, kind=spec.kind, year_steps=year_steps, table=spec.table)
         if spec.kind == "rate" and snap.get("current") is not None:
@@ -289,7 +322,7 @@ def _evaluate_kpis(raw: Mapping[str, Any], specs: Sequence[KpiSpec], source_url:
             current_period_type=str(snap.get("period_type") or ""),
             compare_period_type=compare_type,
         )
-        available = snap.get("current") is not None
+        available = bool(impl.implemented and snap.get("current") is not None)
         source = "Screener.in cache / company results table"
         findings.append({
             "id": spec.id,
@@ -300,6 +333,7 @@ def _evaluate_kpis(raw: Mapping[str, Any], specs: Sequence[KpiSpec], source_url:
             "table": spec.table,
             "missing_ok": spec.missing_ok,
             "importance": spec.importance,
+            **_impl_fields(spec),
             "available": available,
             "higher_is_better": spec.higher_is_better,
             "trend": trend if available else "unknown",
@@ -489,7 +523,12 @@ def build_due_diligence(
         autonomy = load_autonomy_facts(symbol)
     except Exception:
         autonomy = {}
-    measured = merge_kpi_maps(extract_kpis_from_raw(raw), dict(autonomy.get("kpis") or {}))
+    measured = merge_kpi_maps(
+        extract_kpis_from_raw(raw),
+        dict(autonomy.get("kpis") or {}),
+        kpis_from_order_prints(list(autonomy.get("order_book") or [])),
+        kpis_from_segments(list(autonomy.get("segments") or [])),
+    )
     conflicts = _apply_overlay(findings, framework["kpis"], measured)
     min_score_coverage = float(framework.get("min_score_coverage") or 0.40)
     score, coverage, score_meta = _score(findings, min_score_coverage=min_score_coverage)
@@ -541,6 +580,7 @@ def build_due_diligence(
         "acquisition_failed": "Acquisition failed",
         "source_unavailable": "Source unavailable",
         "metric_not_reported": "Metric not reported",
+        "not_implemented": "No validated acquisition path",
         "not_applicable": "Not applicable",
     }
     for finding in findings:
@@ -549,6 +589,7 @@ def build_due_diligence(
             has_value=bool(finding.get("available")),
             missing_ok=bool(finding.get("missing_ok")),
             coverage=research_coverage,
+            implemented=bool(finding.get("implemented", True)),
         )
         finding["availability_state"] = state
         finding["availability_label"] = _STATE_LABEL.get(state, "Data unavailable")
@@ -775,8 +816,10 @@ def build_due_diligence(
         if item.get("id") in {"pe", "pb", "ev_ebitda", "dividend_yield"} or item.get("pillar") == "valuation"
     ]
 
+    framework_audit = audit_framework(framework["id"], findings=findings)
+
     report = {
-        "schema_version": 6,
+        "schema_version": 7,
         "engine": "StockResearchEngine",
         "symbol": symbol,
         "company": company,
@@ -815,6 +858,8 @@ def build_due_diligence(
             "breakdown": breakdown,
         },
         "research_coverage": research_coverage,
+        "framework_audit": framework_audit,
+        "implementation_coverage_pct": framework_audit.get("implementation_coverage_pct"),
         "decision_coverage": decision,
         "decision_coverage_pct": decision.get("coverage_pct"),
         "missing_evidence": missing_rows,
