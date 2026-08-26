@@ -133,7 +133,15 @@ export type CommandCenterWorkspace = {
 export type ScannerWorkspaceRow = ScanRecord
   & Partial<ConvictionRecord>
   & Partial<LongTermRecord>
-  & { _source?: string }
+  & {
+    _source?: string
+    change_5d_pct?: number | null
+    breakout_state?: string | null
+    momentum_state?: string | null
+    setup_label?: string | null
+    relative_strength?: number | null
+    risk_label?: string | null
+  }
 
 export type ScannerWorkspace = {
   generated_at: string
