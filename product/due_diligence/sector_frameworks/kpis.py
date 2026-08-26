@@ -230,6 +230,11 @@ IT = (
     _GROWTH_SALES, _OPM, _PAT, _EPS, _CFO, _ROE,
     extra("tcv", "TCV / large-deal bookings", ("tcv", "total contract value", "large deal"), kind="level", unit="₹ cr"),
     extra("attrition", "Attrition", ("attrition",), higher_is_better=False),
+    extra(
+        "cc_growth", "Constant-currency growth",
+        ("constant currency growth", "constant currency"),
+        weight=8,
+    ),
     extra("utilization", "Utilization", ("utilization", "utilisation"), importance="supporting", weight=5),
     extra("client_concentration", "Top-client concentration", ("top 10 client", "top-10 client", "client concentration"), higher_is_better=False, importance="supporting", weight=6),
     *_OWN,

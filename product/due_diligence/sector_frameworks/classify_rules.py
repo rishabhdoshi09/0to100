@@ -314,6 +314,26 @@ def match_about(about: str) -> tuple[str, str, str, str] | None:
         return "capital_goods", "Capital goods", "Engineering / capital goods", "About-text identifies capital goods."
     if _hit(text, "industrial", "order book"):
         return "industrials", "Industrials", "Industrial manufacturer", "About-text identifies industrials."
+    if _hit(
+        text,
+        "holding company",
+        "investment holding",
+        "core investment company",
+        "registered as a cic",
+    ):
+        return (
+            "generic",
+            "Holding company",
+            "Holding company",
+            "About-text identifies a holding / investment company — generic checks only.",
+        )
+    if _hit(text, "conglomerate", "diversified group", "multiple major segments", "multi-segment"):
+        return (
+            "generic",
+            "Conglomerate",
+            "Multi-segment conglomerate",
+            "About-text identifies a conglomerate without a single dominant operating model — generic checks only.",
+        )
     return None
 
 
@@ -342,7 +362,12 @@ def classify_business(
     about_hit = match_about(about)
     if about_hit:
         framework, sub, model, reason = about_hit
-        return _result(ticker, sector_name, about, framework, reason, sub, model)
+        note = ""
+        if framework != "generic" and _hit(
+            about_l, "conglomerate", "diversified group", "multiple major segments", "multi-segment",
+        ):
+            note = "About-text also mentions a diversified mix — the more specific operating model still wins."
+        return _result(ticker, sector_name, about, framework, reason, sub, model, classification_note=note)
 
     known = known_issuer(ticker)
     if known:
@@ -406,6 +431,7 @@ def _result(
     reason: str,
     sub_sector: str,
     business_model: str,
+    classification_note: str = "",
 ) -> dict[str, Any]:
     about_text = str(about or "").strip()
     return {
@@ -418,6 +444,7 @@ def _result(
         "business_model": business_model or "Data unavailable",
         "about": about_text,
         "revenue_drivers": "Data unavailable — no segment table on file.",
+        "classification_note": classification_note,
     }
 
 

@@ -10,6 +10,7 @@ Statuses are kept distinct on purpose:
   acquisition_failed   — we tried; provider errored
   source_unavailable   — provider could not be reached / blocked
   metric_not_reported  — dataset exists; this particular metric is absent
+  not_implemented      — framework lists the KPI; no validated acquisition path yet
   not_applicable       — sector does not need this dataset
   missing              — generic absent (legacy alias of not_yet_acquired)
 """
@@ -104,6 +105,7 @@ STATUS_LABEL = {
     "acquisition_failed": "Acquisition failed",
     "source_unavailable": "Source unavailable",
     "metric_not_reported": "Metric not reported",
+    "not_implemented": "No validated acquisition path",
     "not_applicable": "Not applicable",
     "missing": "Not yet acquired",
 }
@@ -471,10 +473,13 @@ def availability_state_for_kpi(
     has_value: bool,
     missing_ok: bool,
     coverage: Mapping[str, Any],
+    implemented: bool = True,
 ) -> str:
     """Map a KPI onto the user-facing availability vocabulary."""
     if has_value:
         return "reported"
+    if not implemented:
+        return "not_implemented"
     by_id = {
         str(d.get("id")): d
         for d in list(coverage.get("datasets") or [])

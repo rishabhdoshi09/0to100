@@ -756,6 +756,17 @@
 .dd-ds-stale { border-color: #b5812a; }
 .dd-ds-not_yet_acquired, .dd-ds-missing { opacity: .78; }
 .dd-ds-acquisition_failed, .dd-ds-source_unavailable { border-color: #a33; }
+.dd-ds-not_implemented { opacity: .72; border-style: dashed; }
+.dd-audit-strip {
+  padding: 12px 14px; border-radius: 12px; background: var(--rw-surface);
+  border: 1px solid var(--rw-line); display: grid; gap: 8px;
+}
+.dd-audit-strip header { display: grid; gap: 2px; }
+.dd-audit-strip header span { color: var(--rw-muted); font-size: 13px; }
+.dd-audit-strip ul {
+  margin: 0; padding: 0; list-style: none; display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 8px;
+}
 .dd-thesis {
   padding: 14px 16px; border-radius: 14px; background: var(--rw-surface);
   border: 1px solid var(--rw-line); display: grid; gap: 6px;

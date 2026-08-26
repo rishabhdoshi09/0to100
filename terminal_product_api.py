@@ -533,6 +533,20 @@ def stock_intelligence(symbol: str) -> dict[str, Any]:
         raise HTTPException(status_code=500, detail=f"Stock intelligence failed: {exc}") from exc
 
 
+@app.get("/api/due-diligence/framework-audit")
+def due_diligence_framework_audit(framework: str = "") -> dict[str, Any]:
+    """Static capability table. Cache-only — never scrapes, never scores a company."""
+    try:
+        from product.due_diligence.framework_audit import audit_all_frameworks, audit_framework
+
+        fid = str(framework or "").strip()
+        if fid:
+            return audit_framework(fid)
+        return audit_all_frameworks()
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Framework audit failed: {exc}") from exc
+
+
 @app.get("/api/due-diligence/{symbol}")
 def due_diligence(symbol: str) -> dict[str, Any]:
     """Second-stage research on a scanner candidate. Cache and files only — never scrapes."""

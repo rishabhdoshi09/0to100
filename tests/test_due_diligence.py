@@ -1402,6 +1402,333 @@ def test_score_does_not_use_irrelevant_bank_kpis_for_it():
     assert attrition["importance"] == "important"
 
 
+def _investigate(symbol: str, sector: str, raw: dict, *, company: str = ""):
+    return build_due_diligence(
+        symbol,
+        scan_payload={"records": [{
+            "symbol": symbol, "company": company or symbol, "status": "Ready to trade",
+            "score": 80, "sepa_score": 85, "breakout_grade": "B", "chase_risk": False,
+        }]},
+        long_term_payload={"records": [{"symbol": symbol, "sector": sector, "company": company or symbol}]},
+        raw_fundamentals=raw,
+        news=[],
+    )
+
+
+def _full_raw(about: str, **tables):
+    data = {"about": about, "url": "https://www.screener.in/company/TEST/", **tables}
+    data.setdefault("shareholding", [_q_row("Promoters+", **{"Jun 2026": 51})])
+    return {
+        "available": True,
+        "fetched_at": "2026-08-20T00:00:00+00:00",
+        "freshness": "FRESH",
+        "data": data,
+    }
+
+
+BANK_FULL = _full_raw(
+    "Full Bank Limited is engaged in commercial banking.",
+    quarterly_results=[
+        _q_row("Revenue+", **{"Jun 2025": 90, "Sep 2025": 95, "Dec 2025": 100, "Mar 2026": 108, "Jun 2026": 112}),
+        _q_row("Net Interest Margin %", **{"Jun 2025": 3.60, "Sep 2025": 3.55, "Dec 2025": 3.50, "Mar 2026": 3.48, "Jun 2026": 3.52}),
+        _q_row("Gross NPA %", **{"Jun 2025": 2.4, "Sep 2025": 2.2, "Dec 2025": 2.1, "Mar 2026": 1.9, "Jun 2026": 1.8}),
+        _q_row("Net NPA %", **{"Jun 2025": 0.9, "Sep 2025": 0.8, "Dec 2025": 0.7, "Mar 2026": 0.6, "Jun 2026": 0.5}),
+        _q_row("Net Profit+", **{"Jun 2025": 20, "Sep 2025": 22, "Dec 2025": 24, "Mar 2026": 25, "Jun 2026": 27}),
+        _q_row("CASA %", **{"Jun 2025": 41, "Sep 2025": 41.5, "Dec 2025": 42, "Mar 2026": 42.2, "Jun 2026": 42.5}),
+        _q_row("CET1 %", **{"Jun 2025": 15.1, "Sep 2025": 15.3, "Dec 2025": 15.5, "Mar 2026": 15.8, "Jun 2026": 16.1}),
+        _q_row("CRAR %", **{"Jun 2025": 16.2, "Sep 2025": 16.4, "Dec 2025": 16.6, "Mar 2026": 16.8, "Jun 2026": 17.0}),
+        _q_row("Slippages %", **{"Jun 2025": 1.4, "Sep 2025": 1.3, "Dec 2025": 1.2, "Mar 2026": 1.1, "Jun 2026": 1.0}),
+        _q_row("Credit cost %", **{"Jun 2025": 0.55, "Sep 2025": 0.52, "Dec 2025": 0.50, "Mar 2026": 0.48, "Jun 2026": 0.45}),
+    ],
+    balance_sheet=[
+        _q_row("Gross advances+", **{"Mar 2025": 12000, "Mar 2026": 13500}),
+        _q_row("Total deposits+", **{"Mar 2025": 15000, "Mar 2026": 16800}),
+    ],
+    key_ratios=[{"name": "ROA", "value": "1.8"}, {"name": "ROE", "value": "16.2"}],
+)
+
+IT_FULL = _full_raw(
+    "Full IT Ltd provides IT services and outsourcing.",
+    quarterly_results=[
+        _q_row("Sales+", **{"Jun 2025": 1400, "Sep 2025": 1500, "Dec 2025": 1600, "Mar 2026": 1700, "Jun 2026": 1800}),
+        _q_row("OPM %", **{"Jun 2025": 42, "Sep 2025": 43, "Dec 2025": 44, "Mar 2026": 44, "Jun 2026": 45}),
+        _q_row("Net Profit+", **{"Jun 2025": 400, "Sep 2025": 420, "Dec 2025": 440, "Mar 2026": 460, "Jun 2026": 500}),
+        _q_row("Constant currency growth %", **{"Jun 2025": 6.0, "Sep 2025": 6.5, "Dec 2025": 7.0, "Mar 2026": 7.2, "Jun 2026": 8.0}),
+        _q_row("Attrition %", **{"Jun 2025": 14.0, "Sep 2025": 13.5, "Dec 2025": 13.0, "Mar 2026": 12.5, "Jun 2026": 12.0}),
+        _q_row("TCV", **{"Jun 2025": 900, "Sep 2025": 950, "Dec 2025": 1000, "Mar 2026": 1100, "Jun 2026": 1200}),
+    ],
+    cash_flow=[_q_row("Cash from Operating Activity+", **{"Mar 2024": 800, "Mar 2025": 900, "Mar 2026": 1000})],
+    key_ratios=[{"name": "ROE", "value": "28.0"}],
+)
+
+PHARMA_FULL = _full_raw(
+    "Full Pharma manufactures formulations.",
+    quarterly_results=[
+        _q_row("Sales+", **{"Jun 2025": 100, "Sep 2025": 110, "Dec 2025": 120, "Mar 2026": 130, "Jun 2026": 140}),
+        _q_row("OPM %", **{"Jun 2025": 20, "Sep 2025": 21, "Dec 2025": 21, "Mar 2026": 22, "Jun 2026": 22}),
+        _q_row("Net Profit+", **{"Jun 2025": 10, "Sep 2025": 11, "Dec 2025": 12, "Mar 2026": 13, "Jun 2026": 14}),
+        _q_row("US sales %", **{"Jun 2025": 38, "Sep 2025": 39, "Dec 2025": 40, "Mar 2026": 41, "Jun 2026": 42}),
+    ],
+    profit_loss=[_q_row("R&D %", **{"Mar 2024": 7.1, "Mar 2025": 7.4, "Mar 2026": 7.8})],
+    cash_flow=[_q_row("Cash from Operating Activity+", **{"Mar 2025": 40, "Mar 2026": 50})],
+    key_ratios=[{"name": "ROE", "value": "18.0"}],
+)
+
+CAPITAL_FULL = _full_raw(
+    "Full Capital manufactures capital goods and executes large contracts.",
+    quarterly_results=[
+        _q_row("Sales+", **{"Jun 2025": 500, "Sep 2025": 520, "Dec 2025": 540, "Mar 2026": 560, "Jun 2026": 600}),
+        _q_row("OPM %", **{"Jun 2025": 12, "Sep 2025": 12.2, "Dec 2025": 12.4, "Mar 2026": 12.5, "Jun 2026": 13}),
+        _q_row("Net Profit+", **{"Jun 2025": 40, "Sep 2025": 42, "Dec 2025": 44, "Mar 2026": 45, "Jun 2026": 50}),
+        _q_row("Order book", **{"Jun 2025": 9000, "Sep 2025": 9500, "Dec 2025": 10000, "Mar 2026": 10800, "Jun 2026": 12000}),
+        _q_row("Order inflow", **{"Jun 2025": 800, "Sep 2025": 850, "Dec 2025": 900, "Mar 2026": 950, "Jun 2026": 1100}),
+    ],
+    cash_flow=[_q_row("Cash from Operating Activity+", **{"Mar 2024": 80, "Mar 2025": 90, "Mar 2026": 110})],
+    balance_sheet=[_q_row("Borrowings+", **{"Mar 2025": 200, "Mar 2026": 180})],
+    key_ratios=[{"name": "ROE", "value": "14.0"}],
+)
+
+RETAIL_FULL = _full_raw(
+    "Full Retail operates a supermarket retail chain.",
+    quarterly_results=[
+        _q_row("Sales+", **{"Jun 2025": 800, "Sep 2025": 820, "Dec 2025": 860, "Mar 2026": 900, "Jun 2026": 940}),
+        _q_row("OPM %", **{"Jun 2025": 7.0, "Sep 2025": 7.1, "Dec 2025": 7.3, "Mar 2026": 7.4, "Jun 2026": 7.6}),
+        _q_row("Net Profit+", **{"Jun 2025": 30, "Sep 2025": 32, "Dec 2025": 34, "Mar 2026": 36, "Jun 2026": 38}),
+        _q_row("Same store sales %", **{"Jun 2025": -3.2, "Sep 2025": -2.1, "Dec 2025": -0.8, "Mar 2026": 0.4, "Jun 2026": 1.6}),
+        _q_row("Store count", **{"Jun 2025": 400, "Sep 2025": 410, "Dec 2025": 420, "Mar 2026": 430, "Jun 2026": 440}),
+        _q_row("Inventory days", **{"Jun 2025": 58, "Sep 2025": 56, "Dec 2025": 54, "Mar 2026": 52, "Jun 2026": 50}),
+    ],
+    cash_flow=[_q_row("Cash from Operating Activity+", **{"Mar 2025": 90, "Mar 2026": 110})],
+    balance_sheet=[_q_row("Borrowings+", **{"Mar 2025": 120, "Mar 2026": 110})],
+    key_ratios=[{"name": "ROE", "value": "19.0"}],
+)
+
+
+def test_framework_audit_table():
+    from product.due_diligence.framework_audit import audit_all_frameworks, coverage_table
+    from product.due_diligence.sector_frameworks import list_frameworks
+
+    payload = audit_all_frameworks()
+    assert payload["not_a_quality_score"] is True
+    assert payload["not_an_llm"] is True
+    assert len(payload["rows"]) == len(list_frameworks())
+    assert payload["point_in_time"] is True
+    for row in payload["rows"]:
+        assert row["decision_n"] >= 1
+        assert 0 <= row["implemented_n"] <= row["decision_n"]
+        assert row["implementation_coverage_pct"] == round(
+            100.0 * row["implemented_n"] / row["decision_n"], 1
+        )
+    table = coverage_table(payload)
+    assert "Bank" in table and "IT" in table
+    assert "get_deep_fundamentals" not in open("product/due_diligence/framework_audit.py", encoding="utf-8").read()
+
+
+def test_priority_frameworks_are_implemented():
+    from product.due_diligence.framework_audit import audit_framework
+    from product.due_diligence.metric_impl import PRIORITY_FRAMEWORKS
+
+    for fid in PRIORITY_FRAMEWORKS:
+        row = audit_framework(fid)
+        assert row["implementation_coverage_pct"] >= 75, (fid, row["summary"])
+        assert row["implemented_n"] >= 5
+
+
+def test_priority_framework_full_sources_reach_high_decision_coverage():
+    cases = (
+        ("FULLBANK", "Banking & Finance", BANK_FULL, "bank", ("nim", "gnpa", "casa", "cet1")),
+        ("FULLIT", "IT / Software", IT_FULL, "it", ("sales", "opm", "tcv", "cc_growth", "attrition")),
+        ("FULLPHARMA", "Pharma & Healthcare", PHARMA_FULL, "pharma", ("sales", "rnd", "us_sales")),
+        ("FULLCAP", "Capital Goods", CAPITAL_FULL, "capital_goods", ("order_book", "order_inflow", "cfo")),
+        ("FULLRETAIL", "Consumer & Retail / Apparel", RETAIL_FULL, "retail", ("sss", "store_count", "inventory_days")),
+    )
+    for symbol, sector, raw, framework_id, required in cases:
+        payload = _investigate(symbol, sector, raw)
+        assert payload["framework"]["id"] == framework_id, (symbol, payload["framework"])
+        assert payload["decision_coverage_pct"] >= 70, (symbol, payload["decision_coverage_pct"], payload["missing_evidence"])
+        assert payload["sector_kpi_label"] in {"Strong", "Healthy", "Mixed", "Weak"}
+        assert payload["sector_kpi_label"] != "Insufficient Evidence"
+        assert payload["fundamental_quality"]["score"] is not None
+        by_id = {k["id"]: k for k in payload["kpis"]}
+        for kpi_id in required:
+            assert by_id[kpi_id]["available"] is True, (symbol, kpi_id)
+            assert by_id[kpi_id]["implemented"] is True
+            assert by_id[kpi_id]["points"] is not None
+        for kpi in payload["kpis"]:
+            if not kpi["available"]:
+                assert kpi["points"] is None
+                assert kpi["fact"] == "Data unavailable"
+                assert kpi.get("snapshot", {}).get("current") in (None, "") or kpi["fact"] == "Data unavailable"
+
+
+def test_priority_extractors_reject_false_positives():
+    from product.due_diligence.extract import extract_kpis_from_raw, extract_rates_from_text, extract_research_pack
+
+    assert "nim" not in extract_rates_from_text(
+        "The chemicals segment financing margin was 24.1% this quarter.", source="filing",
+    )
+    assert "attrition" not in extract_rates_from_text(
+        "NPA attrition of deposits was 12% this quarter.", source="filing",
+    )
+    assert "us_sales" not in extract_rates_from_text(
+        "USFDA warning letter at the US plant; formulations remain under review.", source="filing",
+    )
+    assert "store_count" not in extract_rates_from_text(
+        "The chain restored stores after the flood; 12 were restored.", source="filing",
+    )
+    assert "cc_growth" not in extract_rates_from_text(
+        "CC growth was 12% this quarter.", source="filing",
+    )
+    cc = extract_rates_from_text("Constant-currency growth was 12.5% in Q1 FY27.", source="filing")
+    assert cc["cc_growth"]["current"] == 12.5
+    sss = extract_rates_from_text("Same-store sales were -3.2% in Q1 FY27.", source="filing")
+    assert sss["sss"]["current"] == -3.2
+    occupancy = extract_rates_from_text("Bed occupancy was 74% in Q1 FY27.", source="filing")
+    assert occupancy["occupancy"]["current"] == 74
+    tables = extract_kpis_from_raw({
+        "quarterly_results": [
+            _q_row("Restored stores", **{"Jun 2026": 12}),
+            _q_row("NPA attrition %", **{"Jun 2026": 12}),
+            _q_row("Same store sales %", **{"Jun 2026": -2.4}),
+            _q_row("Bed occupancy %", **{"Jun 2026": 71}),
+        ],
+    })
+    assert "store_count" not in tables
+    assert "attrition" not in tables
+    assert tables["sss"]["current"] == -2.4
+    assert tables["occupancy"]["current"] == 71
+    pack = extract_research_pack(
+        "The order book stood at 12,450 crore. The energy segment contributed 42%. "
+        "The US segment contributed 38%. TCV was 1,200 crore.",
+        source="NSE filing",
+    )
+    assert pack["kpis"]["order_book"]["current"] == 12450
+    assert pack["kpis"]["tcv"]["current"] == 1200
+    assert pack["kpis"]["us_sales"]["current"] == 38
+    assert pack["kpis"]["us_sales"]["current"] != 42
+
+
+def test_framework_audit_endpoint_is_cache_only(monkeypatch):
+    from fastapi.testclient import TestClient
+    import terminal_product_api as tpa
+
+    scraped = {"called": False}
+
+    def boom(*_a, **_k):
+        scraped["called"] = True
+        raise AssertionError("Framework audit must not scrape")
+
+    monkeypatch.setattr("fundamentals.fetcher.get_deep_fundamentals", boom)
+    client = TestClient(tpa.app)
+    response = client.get("/api/due-diligence/framework-audit")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["not_a_quality_score"] is True
+    assert body["places_orders"] is False
+    assert len(body["rows"]) >= 30
+    assert scraped["called"] is False
+    one = client.get("/api/due-diligence/framework-audit?framework=hospitals")
+    assert one.status_code == 200
+    hospitals = one.json()
+    assert hospitals["id"] == "hospitals"
+    by_id = {row["id"]: row for row in hospitals["decision_metrics"]}
+    assert by_id["occupancy"]["reliability"] == "obtainable"
+    assert by_id["beds"]["implemented"] is False
+    src = (tpa.__file__ and open("product/due_diligence/framework_audit.py", encoding="utf-8").read())
+    assert "get_deep_fundamentals" not in src
+
+
+def test_holding_company_is_generic():
+    holding = classify_company(
+        "HOLDCO",
+        sector="Diversified / Conglomerates",
+        about="XYZ Holdings is an investment holding company and a core investment company.",
+    )
+    assert holding["framework_id"] == "generic"
+    assert holding["business_model"] == "Holding company"
+    conglomerate = classify_company(
+        "CONGLO",
+        sector="Diversified / Conglomerates",
+        about="ABC Ltd is a diversified conglomerate with multiple major segments and no single operating model.",
+    )
+    assert conglomerate["framework_id"] == "generic"
+    assert "conglomerate" in conglomerate["business_model"].lower()
+    bank = classify_company("ICICIBANK", sector="Banking & Finance", about="")
+    assert bank["framework_id"] == "bank"
+    mixed = classify_company(
+        "INFYLIKE",
+        sector="IT / Software",
+        about="Infosys-like Ltd is an IT services conglomerate providing outsourcing.",
+    )
+    assert mixed["framework_id"] == "it"
+    assert mixed.get("classification_note")
+
+
+def test_unimplemented_metric_is_not_scored():
+    from product.due_diligence.evidence import score_evidence
+
+    meta = score_evidence(
+        [
+            {"id": "sales", "importance": "critical", "weight": 18, "available": True, "points": 80, "implemented": True},
+            {"id": "utilization", "importance": "supporting", "weight": 50, "available": True, "points": 10, "implemented": False},
+        ],
+        min_score_coverage=0.10,
+    )
+    assert meta["score"] == 80
+    assert meta["evaluated_weight"] == 18
+    raw = {
+        **IT_RAW,
+        "data": {
+            **IT_RAW["data"],
+            "quarterly_results": list(IT_RAW["data"]["quarterly_results"]) + [
+                _q_row("Utilization %", **{"Jun 2025": 80, "Sep 2025": 81, "Dec 2025": 82, "Mar 2026": 83, "Jun 2026": 84}),
+            ],
+        },
+    }
+    payload = _investigate("TESTIT", "IT / Software", raw)
+    utilization = next(k for k in payload["kpis"] if k["id"] == "utilization")
+    assert utilization["implemented"] is False
+    assert utilization["available"] is False
+    assert utilization["points"] is None
+    assert utilization["availability_state"] == "not_implemented"
+    missing = {row["id"]: row for row in payload["missing_evidence"]}
+    assert "utilization" not in missing  # supporting, not a decision metric
+
+
+def test_peers_drop_different_business_models():
+    from product.due_diligence.peers import rank_peers
+
+    ranked = rank_peers(
+        [
+            {"name": "Test Bank", "cells": {"ROE": 16}},
+            {"name": "HDFC Bank", "cells": {"ROE": 17}},
+            {"name": "Sun Pharma", "cells": {"ROE": 20}},
+        ],
+        company="Test Bank",
+        symbol="TESTBANK",
+        framework_id="bank",
+        peer_note="Private-bank peers, not the NSE finance bucket.",
+    )
+    names = {row["name"] for row in ranked["rows"]}
+    assert "Sun Pharma" not in names
+    assert "HDFC Bank" in names
+    assert "different business model" in ranked["note"].lower() or "dropped" in ranked["note"].lower()
+
+
+def test_warning_letter_is_not_material_for_a_bank():
+    article = {
+        "headline": "USFDA warning letter to an unrelated pharma plant",
+        "event_type": "regulatory",
+        "impact_score": 90,
+        "official": False,
+        "mentioned_symbols": ["TESTBANK"],
+        "direction": "negative",
+    }
+    assert is_material(article, "TESTBANK", framework_id="bank") is False
+    assert is_material({**article, "mentioned_symbols": ["TESTPHARMA"], "headline": "USFDA warning letter to Test Pharma plant"}, "TESTPHARMA", framework_id="pharma") is True
+
+
+
 
 
 

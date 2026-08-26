@@ -21,6 +21,7 @@ MISSING_REASON = {
     "acquisition_failed": "Acquisition failed",
     "source_unavailable": "Source unavailable",
     "metric_not_reported": "Metric not reported in acquired structured source",
+    "not_implemented": "No validated acquisition path yet",
     "not_applicable": "Not applicable for this issuer",
     "reported": "Reported",
 }
@@ -84,7 +85,10 @@ def score_evidence(
 
     Display a /100 score only when evaluated weight clears min_score_coverage.
     """
-    pool = [f for f in findings if importance_of(f) in SCORE_IMPORTANCE]
+    pool = [
+        f for f in findings
+        if importance_of(f) in SCORE_IMPORTANCE and f.get("implemented", True)
+    ]
     usable = [f for f in pool if _available(f)]
     total_w = sum(_weight(f) for f in pool)
     used_w = sum(_weight(f) for f in usable)

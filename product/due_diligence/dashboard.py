@@ -91,6 +91,7 @@ def company_snapshot(
         "sub_sector": str(profile.get("sub_sector") or ""),
         "business_model": str(profile.get("business_model") or "Data unavailable"),
         "framework_id": str(profile.get("framework_id") or ""),
+        "classification_note": str(profile.get("classification_note") or ""),
     }
 
 
@@ -103,6 +104,7 @@ def first_screen(report: Mapping[str, Any]) -> dict[str, Any]:
     snapshot = dict(report.get("company_snapshot") or {})
     coverage = dict(report.get("research_coverage") or {})
     decision = dict(report.get("decision_coverage") or {})
+    audit = dict(report.get("framework_audit") or {})
     as_of = dict(report.get("as_of") or {})
     missing = list(report.get("missing_evidence") or [])
     confirmation_reason = str(report.get("confirmation_reason") or "")
@@ -121,6 +123,13 @@ def first_screen(report: Mapping[str, Any]) -> dict[str, Any]:
         "research_coverage_summary": coverage.get("summary"),
         "research_coverage_needs_acquire": bool(coverage.get("needs_acquire")),
         "data_coverage_pct": coverage.get("coverage_pct"),
+        "implementation_coverage_pct": (
+            audit.get("implementation_coverage_pct")
+            if audit.get("implementation_coverage_pct") is not None
+            else report.get("implementation_coverage_pct")
+        ),
+        "implementation_coverage_summary": audit.get("summary") or "",
+        "framework_audit_metrics": list(audit.get("decision_metrics") or []),
         "decision_coverage_pct": decision.get("coverage_pct") if decision.get("coverage_pct") is not None else report.get("decision_coverage_pct"),
         "fundamental_confirmation": confirmation,
         "confirmation_reason": confirmation_reason,

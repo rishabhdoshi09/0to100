@@ -133,7 +133,15 @@ export type CommandCenterWorkspace = {
 export type ScannerWorkspaceRow = ScanRecord
   & Partial<ConvictionRecord>
   & Partial<LongTermRecord>
-  & { _source?: string }
+  & {
+    _source?: string
+    change_5d_pct?: number | null
+    breakout_state?: string | null
+    momentum_state?: string | null
+    setup_label?: string | null
+    relative_strength?: number | null
+    risk_label?: string | null
+  }
 
 export type ScannerWorkspace = {
   generated_at: string
@@ -210,6 +218,11 @@ export type DueDiligenceKpi = {
   availability_state?: string
   availability_label?: string
   importance?: string
+  implemented?: boolean
+  reliability?: string
+  reliability_label?: string
+  period_policy?: string
+  definition?: string
   source_count?: number
   source_consensus?: string
   agreeing_sources?: string[]
@@ -290,6 +303,7 @@ export type DueDiligenceReport = {
     sub_sector?: string
     revenue_drivers: string
     about: string
+    classification_note?: string
   }
   framework: { id: string; label: string; blurb: string; sub_sector?: string; business_model?: string; peer_note?: string }
   technical_context: {
@@ -335,6 +349,26 @@ export type DueDiligenceReport = {
       checked_at?: string | null
     }[]
   }
+  framework_audit?: {
+    id?: string
+    label?: string
+    decision_n?: number
+    implemented_n?: number
+    implementation_coverage_pct?: number
+    summary?: string
+    decision_metrics?: {
+      id?: string
+      label?: string
+      importance?: string
+      implemented?: boolean
+      reliability?: string
+      reliability_label?: string
+      populated?: boolean
+      company_state?: string
+      definition?: string
+    }[]
+  }
+  implementation_coverage_pct?: number
   sector_kpi_label?: string
   sector_kpi_detail?: string
   decision_coverage?: {
@@ -464,6 +498,16 @@ export type DueDiligenceReport = {
     research_coverage_pct?: number
     research_coverage_summary?: string
     research_coverage_needs_acquire?: boolean
+    implementation_coverage_pct?: number
+    implementation_coverage_summary?: string
+    framework_audit_metrics?: {
+      id?: string
+      label?: string
+      importance?: string
+      implemented?: boolean
+      reliability_label?: string
+      company_state?: string
+    }[]
     sector_kpis?: string
     sector_kpi_framework?: string
     sub_sector?: string
@@ -490,6 +534,13 @@ export const fetchDueDiligence = (symbol: string): Promise<DueDiligenceReport> =
   fetch(`/api/due-diligence/${encodeURIComponent(symbol)}`, {
     headers: { Accept: 'application/json' },
   }).then((response) => json<DueDiligenceReport>(response))
+
+export const fetchFrameworkAudit = (framework = ''): Promise<Record<string, unknown>> => {
+  const query = framework ? `?framework=${encodeURIComponent(framework)}` : ''
+  return fetch(`/api/due-diligence/framework-audit${query}`, {
+    headers: { Accept: 'application/json' },
+  }).then((response) => json(response))
+}
 
 export const acquireDueDiligence = (
   symbol: string,
