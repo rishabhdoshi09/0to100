@@ -57,9 +57,10 @@ export const PAGE_GUIDE: Record<string, PageGuide> = {
   },
   Recommendations: {
     title: 'Recommendations',
-    purpose: 'Groups QuantTerm evidence into exclusive research categories with Active/Closed lifecycle tracking.',
+    purpose: 'Mixture of independent experts over QuantTerm evidence. Buy needs two evidence families, a why-now, and a ready entry — not the highest SEPA score.',
     questions: [
-      'Which category matches my horizon (compound vs breakout)?',
+      'Which thesis generated this card, and which evidence families agree?',
+      'Is this High Conviction, a Good Setup, or Watch / not ready?',
       'Is CMP live or EOD, and how old is the scan?',
       'What is upside from entry vs room to target?',
       'Which tracked picks are still open vs resolved?',

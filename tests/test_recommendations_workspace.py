@@ -96,7 +96,7 @@ def test_categories_project_from_scan_and_long_term_without_invention():
         scan_payload=scan, long_term_payload=long_term, refresh_technicals=False,
     )
     by_id = {c["id"]: c for c in payload["categories"]}
-    assert payload["schema_version"] == 3
+    assert payload["schema_version"] == 4
     assert by_id["wealth_builders"]["count"] == 1
     assert by_id["wealth_builders"]["cards"][0]["symbol"] == "QUAL"
     assert "coverage" in (by_id["wealth_builders"]["cards"][0].get("qualify_reason") or "").lower()
@@ -108,9 +108,9 @@ def test_categories_project_from_scan_and_long_term_without_invention():
     assert any(c["symbol"] == "RECOV" for c in by_id["recovery_setups"]["cards"])
     assert not any(c["symbol"] == "COIL" for c in by_id["recovery_setups"]["cards"])
     card = card_from_row(scan["records"][0], category_id="super_trends", category_label="Super Trends")
-    assert card["action_badge"] == "Buy"
+    assert card["action_badge"] == "Watch"
     assert card["upside_from_entry_pct"] == 10.0
-    assert card["opportunity_label"] == "OPPORTUNITY"
+    assert card["opportunity_label"] == "WATCH"
     assert card["buy_zone_low"] == 100.0
     assert card["buy_zone_high"] == 100.0
     assert card["stop"] == 95.0

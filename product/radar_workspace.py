@@ -347,9 +347,15 @@ def merge_fundamental_context(
         "classification",
         "quality_factors",
         "risk_flags",
+        "fundamentals",
+        "sales_growth_3y",
+        "profit_growth_3y",
     ):
         if key in fund and fund.get(key) is not None and out.get(key) is None:
             out[key] = fund.get(key)
+    nested = fund.get("fundamentals")
+    if isinstance(nested, Mapping) and out.get("fundamentals") is None:
+        out["fundamentals"] = dict(nested)
     return out
 
 

@@ -483,6 +483,15 @@
   border: 1px dashed var(--rw-line); border-radius: var(--rw-radius);
   background: rgba(255,255,255,.7); color: var(--rw-muted);
 }
+.reco-hc-empty {
+  text-align: left;
+  margin-bottom: 16px;
+  border-style: solid;
+  border-color: var(--rw-amber-line);
+  background: var(--rw-amber-bg);
+  color: var(--rw-amber-ink);
+}
+.reco-hc-empty strong { color: var(--rw-amber-ink); }
 .reco-empty strong { display: block; color: var(--rw-ink); margin-bottom: 6px; font-size: 16px; }
 .reco-scan-meta {
   margin: 0 0 14px; color: var(--rw-muted); font-size: 13px; max-width: 72ch; line-height: 1.45;

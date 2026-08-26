@@ -223,7 +223,7 @@ const pageTitles: Record<string, string> = {
 const pageSubtitles: Record<string, string> = {
   Home: 'Daily command centre — Breakouts, Momentum and Long-Term Picks from the saved market scan.',
   'Market Scanner': 'Professional scanner tables for breakouts, momentum, SEPA Best Setups and long-term quality.',
-  Recommendations: 'Simple decisions on the outside — buy zone, target, stop, why now — with QuantTerm evidence underneath.',
+  Recommendations: 'Independent experts compete — only high-quality, evidence-backed setups; empty high-conviction is a valid day.',
   'Market Reports': 'Daily Market Pulse archive — trends, sector movers and breakout context from live system state.',
   'Stock Intelligence': 'Company workspace — chart, financials, ratios and the due-diligence Investigate view.',
   'Stock Investigator': 'Type any NSE ticker or company name. The same research engine as scanner Investigate runs — not a new scanner.',

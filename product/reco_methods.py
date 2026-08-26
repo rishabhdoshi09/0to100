@@ -1,16 +1,14 @@
 """Multi-method research overlay for Recommendations.
 
-SEPA is one method. Reco Buy requires two independent confirms from evidence
-already on disk — never a new scanner, never invented scores.
-
-Methods (missing stays unknown, unknown scores 0 on the composite):
-  tape, sepa, funds, trend, rs, live EV, conviction, case memory, sector.
+SEPA is one expert. Reco Buy requires two independent *evidence families*
+from persisted engines — never a new scanner, never a weighted score soup,
+never an LLM money-path.
 
 Honesty:
-  • Page-open reads persisted overlays (best_setups.json, long-term scan,
-    FEATURE-002 ledger, live EV tags, case memory). It does not rescore OHLCV.
+  • Page-open reads persisted overlays. It does not rescore OHLCV.
   • n < 30 never counts as a Live EV or Case pass.
-  • SEPA-only is one confirm — not a Buy.
+  • SEPA-only is one family — not a Buy.
+  • Tape + RS + momentum collapse into Price Leadership.
 """
 from __future__ import annotations
 
@@ -26,6 +24,11 @@ from product.radar_workspace import (
     load_sepa_overlay_cards,
     merge_fundamental_context,
     merge_sepa_overlay,
+)
+from product.reco_ensemble import (
+    allows_buy as ensemble_allows_buy,
+    attach_expert_layer,
+    sort_key as ensemble_sort_key,
 )
 
 MIN_CONFIRMS_FOR_BUY = 2
@@ -258,14 +261,17 @@ def score_methods(row: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def allows_buy(row: Mapping[str, Any]) -> bool:
-    """Buy needs two independent passes. SEPA alone is not enough."""
-    panel = row.get("method_confirms")
-    if panel is None:
-        panel = score_methods(row)["method_confirms"]
-    try:
-        return int(panel) >= MIN_CONFIRMS_FOR_BUY
-    except (TypeError, ValueError):
-        return False
+    """Buy needs two independent *families*, a why-now, and a ready entry.
+
+    Method chips still exist for the evidence panel. The money-path gate is
+    the mixture-of-experts ensemble, not a weighted SEPA/momentum soup.
+    """
+    if row.get("allows_recommend") is not None:
+        return bool(row.get("allows_recommend"))
+    if row.get("experts") is not None:
+        return ensemble_allows_buy(row)
+    painted = attach_expert_layer([dict(row)])
+    return ensemble_allows_buy(painted[0]) if painted else False
 
 
 def attach_method_scores(row: Mapping[str, Any]) -> dict[str, Any]:
@@ -418,18 +424,11 @@ def attach_research_overlays(
         out.update(_case_fields(out, case_cache))
         return attach_method_scores(out)
 
-    painted_scan = [_paint(r) for r in scan_rows]
-    painted_lt = [_paint(r) for r in lt_rows]
+    painted_scan = attach_expert_layer([_paint(r) for r in scan_rows])
+    painted_lt = attach_expert_layer([_paint(r) for r in lt_rows])
     return painted_scan, painted_lt
 
 
 def sort_key(card: Mapping[str, Any]) -> tuple:
-    """Higher confirms, then quality composite, then scanner score, then symbol."""
-    confirms = 0
-    try:
-        confirms = int(card.get("method_confirms") or 0)
-    except (TypeError, ValueError):
-        confirms = 0
-    quality = _f(card.get("quality_score")) or 0.0
-    score = _f(card.get("score")) or 0.0
-    return (-confirms, -quality, -score, str(card.get("symbol") or ""))
+    """Tier, then independent families, then scanner score — not a weighted soup."""
+    return ensemble_sort_key(card)
