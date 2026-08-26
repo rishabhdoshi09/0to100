@@ -18,7 +18,8 @@ _PLEDGE_NEEDLES = ("pledge", "encumbrance")
 _GNPA_LABEL = re.compile(r"(?:gross\s*npa[s]?|gnpa|gross\s*non[\s-]*performing)", re.I)
 _NNPA_LABEL = re.compile(r"(?:net\s*npa[s]?|nnpa|net\s*non[\s-]*performing)", re.I)
 _PLEDGE_LABEL = re.compile(r"(?:promoter\s*)?pledged?(?:\s+shares?|\s+equity|\s+holding)?", re.I)
-_PERCENT_RE = re.compile(r"(\d{1,2}(?:\.\d+)?)\s*%")
+_PERCENT_RE = re.compile(r"(\d{1,2}(?:\.\s*\d+)?)\s*%")
+_SKIP_PREFIX = ("below", "under", "above", "over", "upto", "up to", "within")
 _GUIDANCE_LINE = re.compile(
     r".{0,100}(?:guidance|outlook|we expect|we guide|we maintain|order book|"
     r"order[- ]book|raise(?:d)? guidance|cut guidance|lower(?:ed)? guidance|"
@@ -61,7 +62,10 @@ def _last_percent(label: re.Pattern[str], text: str) -> float | None:
     for match in label.finditer(blob):
         window = blob[match.end(): match.end() + 96]
         for item in _PERCENT_RE.finditer(window):
-            number = _rate(item.group(1))
+            prefix = window[max(0, item.start() - 12): item.start()].lower()
+            if any(tok in prefix for tok in _SKIP_PREFIX):
+                continue
+            number = _rate(item.group(1).replace(" ", ""))
             if number is not None:
                 found.append(number)
                 break
@@ -187,6 +191,9 @@ def extract_guidance(text: str, *, source: str, source_url: str = "", source_dat
     lines: list[str] = []
     for match in _GUIDANCE_LINE.finditer(blob):
         line = re.sub(r"\s+", " ", match.group(0)).strip()
+        cap = re.search(r"[A-Z]", line)
+        if cap and cap.start() < 48:
+            line = line[cap.start():]
         if line and line not in lines:
             lines.append(line)
         if len(lines) >= 6:

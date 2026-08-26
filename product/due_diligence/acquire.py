@@ -140,6 +140,43 @@ def _allowed(url: str) -> bool:
     return host in _ALLOWED_HOSTS
 
 
+def _attachment_rank(text: str) -> int:
+    low = (text or "").lower()
+    if any(tok in low for tok in ("financial result", "results for the period", "un-audited financial", "audited financial")):
+        return 0
+    if "transcript" in low:
+        return 1
+    if "investor presentation" in low:
+        return 2
+    if "press release" in low and any(tok in low for tok in ("result", "profit", "npa")):
+        return 3
+    return 99
+
+
+def pdf_to_text(content: bytes) -> str:
+    if not content:
+        return ""
+    try:
+        from io import BytesIO
+        from pypdf import PdfReader
+        reader = PdfReader(BytesIO(content))
+        pages = []
+        for page in list(reader.pages)[:12]:
+            pages.append(page.extract_text() or "")
+        return "\n".join(pages)
+    except Exception:
+        return ""
+
+
+def bytes_to_text(content: bytes, ext: str) -> str:
+    ext = (ext or "").lower()
+    if ext == ".pdf":
+        return pdf_to_text(content)
+    if ext in {".html", ".htm", ".txt", ".xml", ".csv", ".json", ".vtt", ".srt"}:
+        return content.decode("utf-8", errors="ignore")
+    return ""
+
+
 def _nse_session():
     import requests
 
@@ -223,8 +260,10 @@ def _fetch_nse(symbol: str, session) -> dict[str, Any]:
         f"https://www.nseindia.com/api/corporates-financial-results?index=equities&symbol={symbol}",
     )
     downloads: list[dict[str, Any]] = []
-    texts: list[tuple[str, str]] = []
+    bodies: list[tuple[str, str]] = []
+    headlines: list[tuple[str, str]] = []
     rows_kept = 0
+    candidates: list[tuple[int, int, str, str]] = []
     for index, url in enumerate(urls):
         item = _download(session, url, symbol=symbol, name=f"nse_{index}.json")
         downloads.append(item)
@@ -234,47 +273,76 @@ def _fetch_nse(symbol: str, session) -> dict[str, Any]:
         try:
             payload = json.loads(path.read_text(encoding="utf-8", errors="ignore"))
         except (OSError, json.JSONDecodeError):
-            texts.append((html_to_text(path.read_text(encoding="utf-8", errors="ignore")), url))
+            bodies.append((html_to_text(path.read_text(encoding="utf-8", errors="ignore")), url))
             continue
         rows = payload if isinstance(payload, list) else payload.get("data") or payload.get("financialResults") or []
         if isinstance(payload, dict) and not rows:
             rows = [payload]
-        interesting = 0
-        for row in list(rows)[:80]:
+        kept_rows = []
+        for row in list(rows)[:400]:
             if not isinstance(row, Mapping):
                 continue
             row_symbol = str(row.get("symbol") or row.get("sm_symbol") or "").upper()
             if row_symbol and row_symbol != symbol:
                 continue
+            kept_rows.append(row)
             desc = " ".join(
                 str(row.get(k) or "")
-                for k in ("attchmntText", "desc", "subject", "details", "remarks", "sm_name")
+                for k in ("attchmntText", "desc", "subject", "details", "remarks", "resultDescription")
             )
-            texts.append((desc, url))
+            headlines.append((desc, url))
             rows_kept += 1
-            attachment = str(row.get("attchmntFile") or row.get("attachment") or row.get("fileName") or "")
-            low = desc.lower()
-            want = any(tok in low for tok in ("result", "npa", "transcript", "concall", "investor", "financial"))
-            if not attachment or not want or interesting >= 3:
+            attachment = str(
+                row.get("attchmntFile")
+                or row.get("attachment")
+                or row.get("resultDetailedDataLink")
+                or row.get("fileName")
+                or ""
+            )
+            rank = _attachment_rank(desc)
+            if not attachment or rank >= 99:
                 continue
             if not attachment.startswith("http"):
                 attachment = urljoin("https://nsearchives.nseindia.com/corporate/", attachment)
-            interesting += 1
-            ext = Path(urlparse(attachment).path).suffix.lower() or ".bin"
-            downloaded = _download(session, attachment, symbol=symbol, name=f"nse_att_{interesting}{ext}")
-            downloads.append(downloaded)
-            if downloaded.get("ok"):
-                file_path = ROOT / str(downloaded["path"])
-                try:
-                    blob = file_path.read_bytes()
-                except OSError:
-                    continue
-                if ext in {".html", ".htm", ".txt", ".xml", ".csv", ".json"}:
-                    texts.append((blob.decode("utf-8", errors="ignore"), attachment))
+            candidates.append((rank, len(candidates), attachment, desc[:80]))
+        if kept_rows and kept_rows != rows:
+            tmp = path.with_suffix(".json.tmp")
+            tmp.write_text(json.dumps(kept_rows, indent=2, ensure_ascii=False), encoding="utf-8")
+            tmp.replace(path)
+    seen = set()
+    picked: list[tuple[int, str, str, str]] = []
+    for item in sorted(candidates, key=lambda row: (row[0], row[1])):
+        if item[2] in seen:
+            continue
+        seen.add(item[2])
+        picked.append(item)
+        if len(picked) >= 4:
+            break
+    for index, (_rank, _when, attachment, _desc) in enumerate(picked, start=1):
+        ext = Path(urlparse(attachment).path).suffix.lower() or ".bin"
+        downloaded = _download(session, attachment, symbol=symbol, name=f"nse_att_{index}{ext}")
+        downloads.append(downloaded)
+        if not downloaded.get("ok"):
+            continue
+        file_path = ROOT / str(downloaded["path"])
+        try:
+            blob = file_path.read_bytes()
+        except OSError:
+            continue
+        extracted = bytes_to_text(blob, ext)
+        if extracted.strip():
+            bodies.append((extracted, attachment))
     return {
-        "step": {"id": "nse_filings", "ok": any(d.get("ok") for d in downloads), "rows": rows_kept, "files": len(downloads)},
+        "step": {
+            "id": "nse_filings",
+            "ok": any(d.get("ok") for d in downloads),
+            "rows": rows_kept,
+            "files": len(downloads),
+            "picked": [row[2] for row in picked],
+        },
         "downloads": downloads,
-        "texts": texts,
+        "texts": bodies,
+        "headlines": headlines,
     }
 
 
@@ -315,18 +383,20 @@ def acquire_symbol(symbol: str, *, force: bool = True, now: datetime | None = No
         session = _nse_session()
         nse = _fetch_nse(symbol, session)
     except Exception as exc:
-        nse = {"step": {"id": "nse_filings", "ok": False, "error": str(exc)[:240]}, "downloads": [], "texts": []}
+        nse = {"step": {"id": "nse_filings", "ok": False, "error": str(exc)[:240]}, "downloads": [], "texts": [], "headlines": []}
     steps.append(nse["step"])
     downloads.extend(nse.get("downloads") or [])
 
     text_kpis: dict[str, dict[str, Any]] = {}
     guidance: list[dict[str, Any]] = []
     for text, url in nse.get("texts") or []:
-        parsed = extract_from_html(text, source="NSE filing / announcement", source_url=url)
+        parsed = extract_from_html(text, source="NSE filing", source_url=url)
         text_kpis = merge_kpi_maps(text_kpis, parsed.get("kpis") or {})
         guidance.extend(parsed.get("guidance") or [])
-        extra = extract_rates_from_text(text, source="NSE filing / announcement", source_url=url)
+        extra = extract_rates_from_text(text, source="NSE filing", source_url=url)
         text_kpis = merge_kpi_maps(text_kpis, extra)
+    for text, url in nse.get("headlines") or []:
+        guidance.extend(extract_guidance(text, source="NSE announcement", source_url=url))
 
     uploads = extract_from_uploads(symbol)
     for item in uploads.get("guidance") or []:
@@ -341,6 +411,10 @@ def acquire_symbol(symbol: str, *, force: bool = True, now: datetime | None = No
         uploads.get("kpis") or {},
         text_kpis,
     )
+    gnpa = (kpis.get("gnpa") or {}).get("current")
+    nnpa = (kpis.get("nnpa") or {}).get("current")
+    if gnpa is not None and nnpa is not None and nnpa > gnpa:
+        kpis.pop("nnpa", None)
     seen = set()
     unique_guidance = []
     for item in guidance + news_guidance:

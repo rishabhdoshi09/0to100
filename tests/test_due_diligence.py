@@ -452,6 +452,13 @@ def test_extract_gnpa_and_guidance_from_filing_text():
     parsed = extract_from_html(html, source="NSE filing", source_url="https://nsearchives.nseindia.com/x")
     assert parsed["kpis"]["gnpa"]["current"] == 1.35
     assert parsed["kpis"]["nnpa"]["current"] == 0.42
+    from product.due_diligence.extract import extract_rates_from_text
+    spaced = extract_rates_from_text(
+        "GNPA at 0.74%, NNPA is below 1% and stands at 0. 19% of net advances.",
+        source="press",
+    )
+    assert spaced["gnpa"]["current"] == 0.74
+    assert spaced["nnpa"]["current"] == 0.19
     assert parsed["guidance"][0]["tone"] == "Constructive"
     empty = extract_guidance("No tokens here about the weather.", source="x")
     assert empty == []
@@ -535,4 +542,21 @@ def test_shortlist_and_acquire_do_not_gate_the_scanner():
     assert "get_deep_fundamentals" not in engine
     assert "dual_llm" not in engine
     assert "compose_thesis" in engine
+
+
+def test_attachment_rank_prefers_result_filings():
+    from product.due_diligence.acquire import _attachment_rank
+    from product.due_diligence.extract import extract_rates_from_text
+
+    assert _attachment_rank("submitted the financial results for the period ended Jun 30, 2026") == 0
+    assert _attachment_rank("informed the Exchange about Transcript") == 1
+    assert _attachment_rank("Schedule of investor meet") == 99
+    parsed = extract_rates_from_text(
+        "Gross NPA % as of June 2026 was 1.35%. Net NPA % was 0.42%.",
+        source="NSE results PDF",
+        source_url="https://nsearchives.nseindia.com/x.pdf",
+    )
+    assert parsed["gnpa"]["current"] == 1.35
+    assert parsed["nnpa"]["current"] == 0.42
+
 
