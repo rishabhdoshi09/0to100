@@ -37,11 +37,18 @@ log = get_logger("main")
 
 def cmd_login(args) -> None:
     """Generate a Kite access token interactively."""
-    from data.kite_client import KiteClient
+    from data.kite_client import KiteClient, parse_request_token
     kite = KiteClient()
+    login_url = kite.login_url()
     print("\n=== Kite Login ===")
-    print(f"Open this URL in your browser:\n\n  {kite.login_url()}\n")
-    request_token = input("Paste the request_token from the redirect URL: ").strip()
+    print(f"Opening this URL in your browser:\n\n  {login_url}\n")
+    try:
+        import webbrowser
+        webbrowser.open(login_url)
+    except Exception:
+        pass
+    pasted = input("After login, paste the full redirect URL (or just request_token): ").strip()
+    request_token = parse_request_token(pasted)
     if not request_token:
         print("No token provided. Aborting.")
         sys.exit(1)

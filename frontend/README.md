@@ -11,16 +11,10 @@ This is the dedicated product frontend for QuantTerm. It is intentionally separa
 
 ## Run
 
-Keep the autonomy supervisor running in one terminal:
+One terminal, from the repo root:
 
 ```bash
-python main.py autonomy
-```
-
-Start the dedicated UI in another terminal:
-
-```bash
-bash scripts/run_terminal.sh
+bash scripts/run_desk.sh
 ```
 
 Then open:
@@ -28,6 +22,8 @@ Then open:
 ```text
 http://127.0.0.1:5173
 ```
+
+That starts `terminal_product_api` on :8765, the Vite desk on :5173, and autonomy. Zerodha login runs in the same terminal when the daily token is missing.
 
 ## Manual development
 

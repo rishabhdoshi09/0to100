@@ -37,17 +37,24 @@ data → signals → EV ranking → risk gates → execution → outcomes → le
   posture (GREEN LIGHT / NORMAL / DEFENSIVE / STAND ASIDE) + a prioritised
   to-do — on the Pulse tab and in a morning Telegram briefing.
 
-## Quickstart
+## RecoWealth desk (one command)
+
+From the repo folder, one terminal is enough:
 
 ```bash
-git clone <repo> && cd 0to100
-python3 -m venv venv && source venv/bin/activate
-pip install -r requirements.txt
-cp .env.example .env          # Kite / Telegram / DeepSeek keys
-streamlit run app.py
+cd ~/0to100
+bash scripts/run_desk.sh
 ```
 
-Daily: `python main.py login` (Kite token — Telegram reminds you at 08:30).
+That creates `venv` if needed, installs deps, does the daily Zerodha login if the token is missing or expired, then starts the API, the desk UI, and autonomy together. Ctrl-C stops all of them.
+
+Open `http://127.0.0.1:5173`. Paste the full Kite redirect URL when asked — you do not need to pick out `request_token` by hand.
+
+```bash
+git clone https://github.com/rishabhdoshi09/0to100.git && cd 0to100
+cp .env.example .env          # put KITE_API_KEY and KITE_API_SECRET in it once
+bash scripts/run_desk.sh
+```
 
 ## Run it 24/7
 
