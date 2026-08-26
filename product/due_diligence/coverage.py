@@ -410,6 +410,8 @@ def inspect_research_coverage(
             status = "source_unavailable"
         elif error_kind == "acquisition_failed":
             status = "acquisition_failed"
+        elif str(_dataset_meta(facts, ds_id).get("status") or "") == "current" or _dataset_meta(facts, ds_id).get("fetched_at"):
+            status = "metric_not_reported"
         else:
             status = "not_yet_acquired"
 

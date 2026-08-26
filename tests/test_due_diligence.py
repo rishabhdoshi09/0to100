@@ -936,8 +936,8 @@ def test_extract_bank_kpis_from_results_text():
     parsed = extract_rates_from_text(
         "CASA ratio was 42.1%. NIM stood at 4.35%. CET1 is 16.2%. CRAR 17.8%. "
         "PCR at 78%. Slippages 1.1%. Credit cost 0.45%. ROA 2.1%. ROE 16.4%. "
-        "Advances stood at 12,450 crore. Deposits were 14,200 crore. "
-        "Gross NPA % as of June 2026 was 1.35%.",
+        "Gross NPA % as of June 2026 was 1.35%. "
+        "Gross advances stood at 12,450 crore. Total deposits were 14,200 crore. ",
         source="NSE filing",
         source_url="https://nsearchives.nseindia.com/x.pdf",
     )
@@ -950,6 +950,12 @@ def test_extract_bank_kpis_from_results_text():
     assert parsed["advances"]["current"] == 12450
     assert parsed["deposits"]["current"] == 14200
     assert parsed["casa"]["source"] == "NSE filing"
+    loose = extract_rates_from_text(
+        "The bank sanctioned advances of 13,100 crore under a special scheme.",
+        source="press",
+    )
+    assert "advances" not in loose
+    assert "nim" not in extract_rates_from_text("Financing Margin % was -12%.", source="screener")
 
 
 def test_smart_acquire_skips_fresh_lanes(tmp_path, monkeypatch):

@@ -23,8 +23,8 @@ _SLIPPAGE_NEEDLES = ("slippage", "slippages")
 _CREDIT_COST_NEEDLES = ("credit cost", "credit costs")
 _ROA_NEEDLES = ("roa", "return on assets")
 _ROE_NEEDLES = ("roe", "return on equity")
-_ADVANCES_NEEDLES = ("advances", "gross advances", "net advances")
-_DEPOSITS_NEEDLES = ("deposits", "total deposits")
+_ADVANCES_NEEDLES = ("gross advances", "net advances", "total advances")
+_DEPOSITS_NEEDLES = ("total deposits", "deposits")
 _LDR_NEEDLES = ("credit deposit", "cd ratio", "loan deposit", "loan to deposit")
 
 _GNPA_LABEL = re.compile(r"(?:gross\s*npa[s]?|gnpa|gross\s*non[\s-]*performing)", re.I)
@@ -39,12 +39,17 @@ _SLIPPAGE_LABEL = re.compile(r"slippages?", re.I)
 _CREDIT_COST_LABEL = re.compile(r"credit\s+costs?", re.I)
 _ROA_LABEL = re.compile(r"(?:return\s+on\s+assets|\broa\b)", re.I)
 _ROE_LABEL = re.compile(r"(?:return\s+on\s+equity|\broe\b)", re.I)
-_PERCENT_RE = re.compile(r"(\d{1,2}(?:\.\s*\d+)?)\s*%")
+_PERCENT_RE = re.compile(
+    r"(\d{1,2}(?:\.\s*\d+)?)\s*(?:%|(?:per\s*cent|percent)\b)",
+    re.I,
+)
 _AMOUNT_RE = re.compile(
     r"(?:rs\.?|inr|₹)?\s*([\d,]+(?:\.\d+)?)\s*(crore|cr)\b",
     re.I,
 )
 _SKIP_PREFIX = ("below", "under", "above", "over", "upto", "up to", "within", "least")
+_ADVANCES_LABEL = re.compile(r"(?:gross|net|total)\s+advances", re.I)
+_DEPOSITS_LABEL = re.compile(r"(?:total|customer)\s+deposits", re.I)
 _GUIDANCE_LINE = re.compile(
     r".{0,100}(?:guidance|outlook|we expect|we guide|we maintain|order book|"
     r"order[- ]book|raise(?:d)? guidance|cut guidance|lower(?:ed)? guidance|"
@@ -129,8 +134,8 @@ def _last_amount(label: re.Pattern[str], text: str) -> float | None:
     found: list[float] = []
     blob = text or ""
     for match in label.finditer(blob):
-        window = blob[match.end(): match.end() + 120]
-        item = _AMOUNT_RE.search(window)
+        window = blob[match.end(): match.end() + 48]
+        item = _AMOUNT_RE.match(window.lstrip(" :,-")) or _AMOUNT_RE.search(window)
         if not item:
             continue
         try:
@@ -139,7 +144,7 @@ def _last_amount(label: re.Pattern[str], text: str) -> float | None:
             continue
         if number > 0:
             found.append(number)
-    return found[-1] if found else None
+    return max(found) if found else None
 
 
 def series_from_tables(
@@ -157,9 +162,13 @@ def series_from_tables(
         row = find_row(tables.get(key), needles)
         series = dated_series(row)
         if series:
-            snap = snapshot(series, kind=kind)
-            if snap.get("current") is not None:
-                return {**snap, "table": key, "source": "results table on file"}
+            snap = snapshot(series, kind=kind, year_steps=1 if key in {"profit_loss", "balance_sheet", "cash_flow"} else 4)
+            current = snap.get("current")
+            if current is None:
+                continue
+            if kind == "rate" and (current < 0 or current > 100):
+                continue
+            return {**snap, "table": key, "source": "results table on file"}
     return None
 
 
@@ -274,7 +283,7 @@ def extract_rates_from_text(text: str, *, source: str, source_url: str = "") -> 
         if current is None:
             continue
         out[kpi_id] = _print_snap(current, source=source, source_url=source_url)
-    for kpi_id, pattern in (("advances", re.compile(r"(?:gross\s+)?advances", re.I)), ("deposits", re.compile(r"(?:total\s+)?deposits", re.I))):
+    for kpi_id, pattern in (("advances", _ADVANCES_LABEL), ("deposits", _DEPOSITS_LABEL)):
         current = _last_amount(pattern, blob)
         if current is None:
             continue
@@ -527,13 +536,27 @@ def extract_from_uploads(symbol: str, uploads: Sequence[Mapping[str, Any]] | Non
     }
 
 
+_RATE_KPI_IDS = {
+    "gnpa", "nnpa", "pledge", "casa", "nim", "cet1", "crar", "pcr",
+    "slippages", "credit_cost", "roa", "roe", "loan_deposit", "opm",
+}
+
+
 def merge_kpi_maps(*maps: Mapping[str, Mapping[str, Any]]) -> dict[str, dict[str, Any]]:
-    """First measured value wins. Later maps only fill holes."""
+    """First measured value wins. Later maps only fill holes. Invalid rates are dropped."""
     out: dict[str, dict[str, Any]] = {}
     for payload in maps:
         for key, snap in dict(payload or {}).items():
             if not isinstance(snap, Mapping) or snap.get("current") is None:
                 continue
+            current = snap.get("current")
+            if key in _RATE_KPI_IDS:
+                try:
+                    number = float(current)
+                except (TypeError, ValueError):
+                    continue
+                if number < 0 or number > 100:
+                    continue
             if key in out:
                 continue
             out[key] = dict(snap)

@@ -237,7 +237,12 @@ def _evaluate_kpis(raw: Mapping[str, Any], specs: Sequence[KpiSpec], source_url:
                 series = dated_series(row)
                 if series:
                     break
-        snap = snapshot(series, kind=spec.kind)
+        year_steps = 1 if spec.table in {"profit_loss", "balance_sheet", "cash_flow"} else 4
+        snap = snapshot(series, kind=spec.kind, year_steps=year_steps)
+        if spec.kind == "rate" and snap.get("current") is not None:
+            if float(snap["current"]) < 0 or float(snap["current"]) > 100:
+                series = []
+                snap = snapshot([], kind=spec.kind)
         trend = direction(
             higher_is_better=spec.higher_is_better,
             qoq=snap.get("qoq_change"),

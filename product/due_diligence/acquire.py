@@ -831,6 +831,14 @@ def acquire_symbol(
         )
 
     text_kpis: dict[str, dict[str, Any]] = dict(previous.get("kpis") or {}) if not force else {}
+    if lanes.get("nse_filings") or lanes.get("nse_annual"):
+        text_kpis = {
+            key: value
+            for key, value in text_kpis.items()
+            if "nse" not in str(value.get("source") or "").lower()
+            and "filing" not in str(value.get("source") or "").lower()
+            and "annual report" not in str(value.get("source") or "").lower()
+        }
     guidance: list[dict[str, Any]] = list(previous.get("guidance") or []) if not force else []
     commentary: list[dict[str, Any]] = list(previous.get("commentary") or []) if not force else []
     order_book: list[dict[str, Any]] = list(previous.get("order_book") or []) if not force else []

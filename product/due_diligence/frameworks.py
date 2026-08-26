@@ -104,7 +104,7 @@ BANK = (
         higher_is_better=True, kind="level", unit="₹ cr", pillar="growth", weight=16,
     ),
     _k(
-        "nim", "Financing margin (NIM proxy)", "quarterly_results",
+        "nim", "Net interest margin (NIM)", "quarterly_results",
         ("financing margin",),
         higher_is_better=True, kind="rate", unit="%", pillar="profitability", weight=16,
     ),
@@ -137,12 +137,12 @@ BANK = (
         higher_is_better=True, kind="rate", unit="%", pillar="capital", weight=6, missing_ok=True,
     ),
     _k(
-        "advances", "Advances / loans", "quarterly_results",
-        ("advances", "loans", "credit growth"),
+        "advances", "Advances / loans", "balance_sheet",
+        ("gross advances", "net advances", "total advances"),
         higher_is_better=True, kind="level", unit="₹ cr", pillar="growth", weight=6, missing_ok=True,
     ),
     _k(
-        "deposits", "Deposits", "quarterly_results",
+        "deposits", "Deposits", "balance_sheet",
         ("deposits", "total deposits"),
         higher_is_better=True, kind="level", unit="₹ cr", pillar="funding", weight=6, missing_ok=True,
     ),

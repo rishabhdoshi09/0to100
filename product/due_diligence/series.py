@@ -90,8 +90,11 @@ def dated_series(row: Mapping[str, Any] | None) -> list[tuple[str, float]]:
     return [(label, number) for _stamp, label, number in items]
 
 
-def snapshot(series: Sequence[tuple[str, float]], *, kind: str = "level") -> dict[str, Any]:
-    """kind=level → percent change; kind=rate → percentage-point change."""
+def snapshot(series: Sequence[tuple[str, float]], *, kind: str = "level", year_steps: int = 4) -> dict[str, Any]:
+    """kind=level → percent change; kind=rate → percentage-point change.
+
+    year_steps is how many points back counts as a year (4 for quarterly, 1 for annual).
+    """
     if not series:
         return {
             "current": None, "current_period": "",
@@ -102,7 +105,8 @@ def snapshot(series: Sequence[tuple[str, float]], *, kind: str = "level") -> dic
         }
     current_label, current = series[-1]
     previous_label, previous = series[-2] if len(series) >= 2 else ("", None)
-    year_label, year_ago = series[-5] if len(series) >= 5 else ("", None)
+    year_idx = -(int(year_steps) + 1)
+    year_label, year_ago = series[year_idx] if len(series) >= (int(year_steps) + 1) else ("", None)
 
     def delta(latest: float | None, base: float | None) -> float | None:
         if latest is None or base is None:
