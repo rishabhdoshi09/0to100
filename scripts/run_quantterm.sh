@@ -167,26 +167,7 @@ kick_scan() {
     return 1
   fi
   echo "[STACK] Queueing whole-market scan in this terminal…"
-  if python - <<'PY'
-import urllib.error
-import urllib.request
-
-req = urllib.request.Request(
-    "http://127.0.0.1:8765/api/controls/RUN_SCAN_NOW",
-    data=b"",
-    method="POST",
-)
-try:
-    with urllib.request.urlopen(req, timeout=8) as response:
-        body = response.read().decode("utf-8", "replace")
-        if int(response.status) >= 400:
-            raise SystemExit(1)
-        print("[STACK] Market scan queued.", body[:300])
-except Exception as exc:
-    print("[STACK] Market scan not queued yet:", exc)
-    raise SystemExit(1)
-PY
-  then
+  if python scripts/local_stack.py scan; then
     SCAN_KICKED=1
     return 0
   fi

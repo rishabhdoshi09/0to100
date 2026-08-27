@@ -244,7 +244,7 @@ def test_stack_scripts_restart_children_instead_of_stopping_the_desk():
     assert "run_quantterm_complete.sh --restart" in inner
     assert "scripts/local_stack.py" in complete
     assert "does not reload Python after git pull" in inner
-    assert "RUN_SCAN_NOW" in inner
+    assert "scripts/local_stack.py scan" in inner
     assert "Queueing whole-market scan in this terminal" in inner
     assert "Do not start a second terminal" in complete
     assert "curl" not in inner

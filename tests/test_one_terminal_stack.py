@@ -18,7 +18,7 @@ def test_complete_script_starts_every_local_service_in_one_process_tree():
     assert "terminal_product_api:app" in inner
     assert "npm run dev" in inner
     assert "python -u main.py autonomy" in inner
-    assert "RUN_SCAN_NOW" in inner
+    assert "scripts/local_stack.py scan" in inner
     assert "curl" not in complete
     assert "curl" not in inner
     assert "Do not start a second terminal" in complete
