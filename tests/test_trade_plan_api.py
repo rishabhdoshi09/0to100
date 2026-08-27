@@ -40,3 +40,19 @@ def test_trade_plan_endpoint_missing_stop_is_honest(monkeypatch):
     rec = {"symbol": "ACME", "entry": 100.0, "stop": 0.0, "target": 115.0}
     body = _client(monkeypatch, records=[rec]).get("/api/trade-plan/ACME").json()
     assert body["available"] is False and "no entry/stop" in body["message"].lower()
+
+
+def test_portfolio_risk_source_has_no_streamlit():
+    from pathlib import Path
+    source = Path("risk/portfolio_risk.py").read_text(encoding="utf-8")
+    assert "streamlit" not in source
+
+
+def test_trade_plan_endpoint_does_not_import_streamlit(monkeypatch):
+    import sys
+    monkeypatch.delitem(sys.modules, "streamlit", raising=False)
+    rec = {"symbol": "ACME", "entry": 100.0, "stop": 95.0, "target": 115.0}
+    r = _client(monkeypatch, records=[rec]).get("/api/trade-plan/ACME")
+    assert r.status_code == 200
+    assert r.json()["available"] is True
+    assert "streamlit" not in sys.modules
