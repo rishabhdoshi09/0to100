@@ -19,12 +19,15 @@ from typing import Any
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
+from logger import quiet_uvicorn_health_access
+
 ROOT = Path(__file__).resolve().parent
 OPS_ROOT = ROOT / "logs" / "market_ops"
 OPS_RUNTIME = OPS_ROOT / "runtime.json"
 OPS_DB = OPS_ROOT / "jobs.db"
 
 app = FastAPI(title="QuantTerm Terminal API", version="0.4.0")
+quiet_uvicorn_health_access()
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://127.0.0.1:5173", "http://localhost:5173"],

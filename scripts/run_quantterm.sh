@@ -211,9 +211,7 @@ echo "[STACK] Ctrl-C is the stop signal. A child crash is restarted; it does not
 
 while [[ "$STOP" != "1" ]]; do
   if [[ "$API_EXTERNAL" != "1" ]]; then
-    if url_ok "http://127.0.0.1:8765/api/health"; then
-      :
-    elif ! alive "$API_PID"; then
+    if [[ -z "${API_PID:-}" ]] || ! alive "$API_PID"; then
       echo "[STACK] Market API is down; restarting."
       start_api || true
     fi

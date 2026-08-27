@@ -33,5 +33,8 @@ def test_complete_script_always_stops_old_stack_then_starts_everything():
     assert "One command, one terminal" in complete
     assert "scripts/local_stack.py scan" in inner
     assert "run_quantterm_complete.sh --restart" not in inner
+    assert 'url_ok "http://127.0.0.1:8766/health"' in complete
+    assert complete.count('url_ok "http://127.0.0.1:8766/health"') == 1
+    assert 'alive "$REPORT_PID"' in complete
     assert "Use --restart" not in inner
     assert "Use --restart" not in complete

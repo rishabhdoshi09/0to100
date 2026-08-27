@@ -112,6 +112,19 @@ def _read_day(d: date) -> Optional[pd.DataFrame]:
         return None
 
 
+def _days_to_download(
+    candidates: list[date],
+    *,
+    last_day: Optional[date],
+    have_store: bool,
+) -> list[date]:
+    """CSV days still worth fetching. Historical holes behind a current pickle stay on disk."""
+    missing = [x for x in candidates if not _day_path(x).exists()]
+    if have_store and last_day is not None:
+        return [x for x in missing if x > last_day]
+    return missing
+
+
 _build_lock = threading.Lock()   # 8 parallel regime fetches must build ONCE
 
 
@@ -156,7 +169,10 @@ def _build_index_store_locked(days: int = 400) -> int:
             pass
 
     global _last_build_attempt
-    missing = [x for x in candidates if not _day_path(x).exists()]
+    with _lock:
+        have_store = bool(_store)
+        last = _last_day
+    missing = _days_to_download(candidates, last_day=last, have_store=have_store)
     if missing and (time.time() - _last_build_attempt) < _BUILD_COOLDOWN_S:
         missing = []                     # a recent attempt already found the feed unreachable
     if missing:
@@ -170,8 +186,14 @@ def _build_index_store_locked(days: int = 400) -> int:
             for _ in as_completed(futures, timeout=_BUILD_BUDGET_S):
                 pass
         except TimeoutError:
-            log.warning("index_store_build_timeout",
-                        done=sum(1 for f in futures if f.done()), of=len(futures))
+            payload = {
+                "done": sum(1 for f in futures if f.done()),
+                "of": len(futures),
+            }
+            if have_store:
+                log.debug("index_store_build_timeout", **payload)
+            else:
+                log.warning("index_store_build_timeout", **payload)
         finally:
             pool.shutdown(wait=False, cancel_futures=True)
 

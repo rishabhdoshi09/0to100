@@ -7,7 +7,10 @@ from fastapi import FastAPI, HTTPException, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 
+from logger import quiet_uvicorn_health_access
+
 app = FastAPI(title="QuantTerm Research Report API", version="0.3.0")
+quiet_uvicorn_health_access()
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://127.0.0.1:5173", "http://localhost:5173"],

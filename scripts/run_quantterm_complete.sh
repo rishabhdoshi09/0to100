@@ -157,9 +157,7 @@ echo "[COMPLETE STACK] Leave this terminal open. Ctrl-C stops everything. Do not
 
 while [[ "$STOP" != "1" ]]; do
   if [[ "$REPORT_EXTERNAL" != "1" ]]; then
-    if url_ok "http://127.0.0.1:8766/health"; then
-      :
-    elif ! alive "$REPORT_PID"; then
+    if [[ -z "${REPORT_PID:-}" ]] || ! alive "$REPORT_PID"; then
       echo "[COMPLETE STACK] Report API is down; restarting."
       start_report || true
     fi
