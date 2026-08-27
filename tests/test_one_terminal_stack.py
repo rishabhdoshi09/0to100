@@ -25,11 +25,13 @@ def test_complete_script_starts_every_local_service_in_one_process_tree():
     assert 'exec bash "$ROOT/scripts/run_quantterm_complete.sh" "$@"' in desk
 
 
-def test_restart_flag_stops_local_pids_before_start():
+def test_complete_script_always_stops_old_stack_then_starts_everything():
     complete = (ROOT / "scripts" / "run_quantterm_complete.sh").read_text(encoding="utf-8")
     inner = (ROOT / "scripts" / "run_quantterm.sh").read_text(encoding="utf-8")
-    assert 'if [[ "${1:-}" == "--restart" ]]; then' in complete
     assert "python scripts/local_stack.py stop --ports 5173,8765,8766" in complete
-    assert "QT_RESTART=1 bash scripts/run_quantterm.sh --restart" in complete
-    assert "RESTART=0" in complete
     assert "python scripts/local_stack.py stop --ports 5173,8765" in inner
+    assert "One command, one terminal" in complete
+    assert "scripts/local_stack.py scan" in inner
+    assert "run_quantterm_complete.sh --restart" not in inner
+    assert "Use --restart" not in inner
+    assert "Use --restart" not in complete

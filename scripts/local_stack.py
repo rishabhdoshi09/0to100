@@ -1,10 +1,10 @@
 """Stop the local QuantTerm listeners by PID, or queue a market scan.
 
-``bash scripts/run_quantterm_complete.sh`` is the one-terminal start. After git
-pull, operators pass ``--restart`` which calls this module. ``scan`` POSTs
-``RUN_SCAN_NOW`` to the local API. It never uses ``pkill -f``; it only signals
-the PIDs it resolved from TCP listen tables, ``lsof`` on macOS, and autonomy /
-market-ops runtime files.
+``bash scripts/run_quantterm_complete.sh`` is the one-terminal start. It stops
+any previous local desk, then starts API, UI, reports, autonomy and a market
+scan. ``scan`` POSTs ``RUN_SCAN_NOW`` to the local API. It never uses
+``pkill -f``; it only signals the PIDs it resolved from TCP listen tables,
+``lsof`` on macOS, and autonomy / market-ops runtime files.
 """
 from __future__ import annotations
 

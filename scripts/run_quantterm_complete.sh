@@ -5,9 +5,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 export PYTHONPATH="$ROOT"
 
-RESTART=0
-if [[ "${1:-}" == "--restart" ]]; then
-  RESTART=1
+if [[ "${1:-}" == "--restart" || "${1:-}" == "--reuse" ]]; then
   shift || true
 fi
 
@@ -135,20 +133,13 @@ start_report() {
 
 start_stack() {
   echo "[COMPLETE STACK] Starting QuantTerm terminal, market operations, autonomy and market scan…"
-  if [[ "$RESTART" == "1" ]]; then
-    QT_RESTART=1 bash scripts/run_quantterm.sh --restart &
-    RESTART=0
-  else
-    bash scripts/run_quantterm.sh &
-  fi
+  bash scripts/run_quantterm.sh &
   STACK_PID=$!
 }
 
-if [[ "$RESTART" == "1" ]]; then
-  echo "[COMPLETE STACK] --restart: stopping the local desk, API, reports and autonomy so this run loads current code."
-  python scripts/local_stack.py stop --ports 5173,8765,8766 || true
-  sleep 1 || true
-fi
+echo "[COMPLETE STACK] One command, one terminal. Stopping any previous local desk so this run owns everything."
+python scripts/local_stack.py stop --ports 5173,8765,8766 || true
+sleep 1 || true
 
 if url_ok "http://127.0.0.1:8766/health"; then
   REPORT_EXTERNAL=1
@@ -161,9 +152,8 @@ fi
 
 start_stack
 
-echo "[COMPLETE STACK] One terminal. Desk http://127.0.0.1:5173  · API :8765  · reports :8766  · autonomy  · market scan"
+echo "[COMPLETE STACK] Running in this terminal: desk http://127.0.0.1:5173  · API :8765  · reports :8766  · autonomy  · market scan"
 echo "[COMPLETE STACK] Leave this terminal open. Ctrl-C stops everything. Do not start a second terminal."
-echo "[COMPLETE STACK] After git pull, re-run: bash scripts/run_quantterm_complete.sh --restart"
 
 while [[ "$STOP" != "1" ]]; do
   if [[ "$REPORT_EXTERNAL" != "1" ]]; then
