@@ -4,13 +4,16 @@ The retail UI and the autonomy supervisor run as **separate supervised processes
 operates without a browser; the UI is a read-only control room over the supervisor's status snapshot.
 One service failing does not corrupt the other, and each restarts independently.
 
-Branch of record: **`overhaul/evidence-lab`**.
+Canonical local launcher: **`bash scripts/run_quantterm_complete.sh`**
+(Vite/React desk at http://127.0.0.1:5173). Streamlit is not started.
+Historical research branch `overhaul/evidence-lab` is not the current
+product path.
 
 ## Processes
 | Process | Command | Role |
 |---------|---------|------|
 | Autonomy supervisor | `python main.py autonomy --interval 15` | durable job loop, paper-only, live locked |
-| Desk UI | `bash scripts/run_quantterm.sh` | Vite :5173 + API :8765 (never starts Streamlit) |
+| Desk UI | `bash scripts/run_quantterm_complete.sh` | Vite :5173 + API :8765 + report API + autonomy + market-ops (never starts Streamlit). systemd units still exec the inner `scripts/run_quantterm.sh` as the long-running process. |
 
 The daily human action is the normal Zerodha login (`python main.py login`) — Zerodha's auth model
 requires it. After the token is persisted, the supervisor picks it up on its next auth-health job (or

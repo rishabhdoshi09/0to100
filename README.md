@@ -37,23 +37,27 @@ data → signals → EV ranking → risk gates → execution → outcomes → le
   posture (GREEN LIGHT / NORMAL / DEFENSIVE / STAND ASIDE) + a prioritised
   to-do — on the Pulse tab and in a morning Telegram briefing.
 
-## RecoWealth desk (one command)
+## Canonical product path (one command)
 
-From the repo folder, one terminal is enough:
+The product UI is the **Vite/React desk**. Streamlit is not the product path
+and is not started. One command owns the local stack (desk, terminal API,
+report API, autonomy, and the market-operations worker):
 
 ```bash
 cd ~/0to100
-bash scripts/run_desk.sh
+bash scripts/run_quantterm_complete.sh
 ```
 
-That creates `venv` if needed, installs deps, does the daily Zerodha login if the token is missing or expired, then starts the API, the desk UI, and autonomy together. Ctrl-C stops all of them.
-
 Open `http://127.0.0.1:5173`. Paste the full Kite redirect URL when asked — you do not need to pick out `request_token` by hand.
+
+`scripts/run_desk.sh` is only a compatibility wrapper. It execs
+`scripts/run_quantterm_complete.sh`. Do not start Streamlit, and do not start
+a second terminal for the same stack.
 
 ```bash
 git clone https://github.com/rishabhdoshi09/0to100.git && cd 0to100
 cp .env.example .env          # put KITE_API_KEY and KITE_API_SECRET in it once
-bash scripts/run_desk.sh
+bash scripts/run_quantterm_complete.sh
 ```
 
 ## Run it 24/7
@@ -85,13 +89,25 @@ python -m pytest tests/            # money-critical suite, network-free
 CI runs the suite + `compileall` on every push. New money-path code lands
 with tests in `tests/test_money_paths.py` — no exceptions.
 
+Issue #92 live Definition of Done (stack must already be running):
+
+```bash
+python scripts/verify_issue92_dod.py
+```
+
+That writes `docs/issue92_live_dod_proof.md` and
+`docs/issue92_live_dod_proof.json` against the real local API, including
+the tested git SHA. It does not mock handlers.
+
 ## Architecture
 
 The full map lives in [`CLAUDE.md`](CLAUDE.md) — data layer (bhavcopy/Kite/
 NSE/US), signal layer (scanner, EV engine, live edge, breadth), risk layer
 (sizer, portfolio risk, correlation), execution (Kite + GTT, autopilot),
-core (Brain, decision journal, sim lab, market clock), and the Streamlit UI
-(Pulse cockpit · Markets · Autopilot · JARVIS).
+core (Brain, decision journal, sim lab, market clock), and the **Vite/React
+desk** (Home · Market Scanner · Recommendations · Market Reports · Stock
+Intelligence). Archived Streamlit pages under `ui/` are not started.
 
-*Build: see `VERSION` · Branch of record:
-`overhaul/evidence-lab`*
+*Build: see `VERSION`. Canonical launcher: `bash scripts/run_quantterm_complete.sh`.
+Historical research branches such as `overhaul/evidence-lab` are not the
+current product path.*

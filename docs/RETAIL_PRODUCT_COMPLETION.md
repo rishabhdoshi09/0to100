@@ -1,5 +1,9 @@
 # QuantTerm Retail Product Completion
 
+> **Historical record** (branch `overhaul/evidence-lab` at the time of writing).
+> Not the current product path. Canonical launcher:
+> `bash scripts/run_quantterm_complete.sh` (Vite/React desk). Streamlit is not started.
+
 Authoritative completion record for the React retail terminal on branch `overhaul/evidence-lab`.
 
 ## Navigation (final)

@@ -1,20 +1,21 @@
 # QuantTerm Terminal
 
-This is the dedicated product frontend for QuantTerm. It is intentionally separate from Streamlit.
+This is the dedicated product frontend for QuantTerm. Streamlit is not the
+product UI and is not started.
 
 ## Architecture
 
-- `terminal_api.py` projects existing QuantTerm state and forwards a small whitelist of owner controls.
-- `frontend/` is a React + TypeScript + Vite application.
+- `terminal_api.py` / `terminal_product_api.py` project existing QuantTerm state and enqueue durable market-operations jobs.
+- `frontend/` is a React + TypeScript + Vite application — the only product UI.
 - Scanner, paper book, market regime, long-term shortlist and autonomy stores remain authoritative.
-- The frontend never submits broker orders and does not run scanners or trading loops.
+- The frontend never submits broker orders. Primary clicks enqueue real backend jobs and poll them.
 
 ## Run
 
 One terminal, from the repo root:
 
 ```bash
-bash scripts/run_desk.sh
+bash scripts/run_quantterm_complete.sh
 ```
 
 Then open:

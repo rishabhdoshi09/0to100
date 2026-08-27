@@ -18,6 +18,7 @@ def test_app_points_at_the_vite_desk():
     src = (ROOT / "app.py").read_text(encoding="utf-8")
     assert "import streamlit" not in src
     assert "st.Page" not in src
+    assert "run_quantterm_complete.sh" in src
     assert "run_desk.sh" in src
     assert "127.0.0.1:5173" in src
     nav = (ROOT / "frontend" / "src" / "MarketSidebar.tsx").read_text(encoding="utf-8")

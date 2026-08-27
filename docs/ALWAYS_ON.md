@@ -1,5 +1,10 @@
 # QuantTerm ko 24/7 Chalana (Always-On Setup)
 
+Canonical product: the **Vite/React desk**. One command owns the local stack:
+`bash scripts/run_quantterm_complete.sh` → http://127.0.0.1:5173.
+Streamlit is not the product path. Historical research branches such as
+`overhaul/evidence-lab` are not the current checkout.
+
 Mac sleep hote hi background scans, Telegram alerts, breakout sniper —
 sab ruk jaata hai. Full-time trading ke liye system ko hamesha jaagna
 chahiye. Do raste:
@@ -26,7 +31,6 @@ apt update && apt install -y python3.11 python3.11-venv git
 ```bash
 git clone https://github.com/rishabhdoshi09/0to100.git
 cd 0to100
-git checkout overhaul/evidence-lab
 python3.11 -m venv venv && source venv/bin/activate
 pip install -r requirements.txt
 cp .env.example .env && nano .env    # keys bharo
@@ -117,7 +121,7 @@ bhool gaye.
 
 ## Updates lena
 ```bash
-cd 0to100 && git pull origin overhaul/evidence-lab
+cd 0to100 && git pull
 systemctl restart quantterm
 ```
 

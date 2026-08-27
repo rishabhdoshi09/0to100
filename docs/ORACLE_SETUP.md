@@ -41,11 +41,14 @@ ssh ubuntu@YOUR_PUBLIC_IP
 # private repo hai, isliye GitHub token ke saath (Settings → Developer
 # settings → Personal access tokens → repo read):
 export QT_REPO_URL=https://YOUR_TOKEN@github.com/rishabhdoshi09/0to100.git
-curl -fsSL https://raw.githubusercontent.com/rishabhdoshi09/0to100/overhaul/evidence-lab/deploy/setup_server.sh -o setup.sh
-bash setup.sh
+git clone "$QT_REPO_URL" ~/0to100
+cd ~/0to100
+bash deploy/setup_server.sh
 ```
 
-(Ya repo pehle clone karke `bash deploy/setup_server.sh`.)
+Canonical product after setup: Vite/React desk via
+`bash scripts/run_quantterm_complete.sh`. Streamlit is not started.
+Do not check out historical research branches such as `overhaul/evidence-lab`.
 
 Script khud karta hai: packages → 2G swap → clone/pull → venv →
 `pip install` → **systemd service** (crash pe 10s mein auto-restart,
@@ -96,7 +99,7 @@ Phone/Mac pe bhi Tailscale app → phir kahin se bhi:
 
 ```bash
 # update
-cd ~/0to100 && git pull origin overhaul/evidence-lab
+cd ~/0to100 && git pull
 sudo systemctl restart quantterm
 
 # logs

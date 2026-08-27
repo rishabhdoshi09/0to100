@@ -103,6 +103,7 @@ def test_retail_home_is_default_route():
     from pathlib import Path
     src = Path(__file__).resolve().parents[1].joinpath("app.py").read_text(encoding="utf-8")
     assert "import streamlit" not in src
+    assert "run_quantterm_complete.sh" in src
     assert "run_desk.sh" in src
     assert "127.0.0.1:5173" in src
     assert "st.Page" not in src

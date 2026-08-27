@@ -2,8 +2,10 @@
 
 NSE India trading terminal: whole-market scanning, evidence-calibrated
 signals, risk-managed execution via Zerodha, proactive Telegram delivery.
-Vite/React desk (`bash scripts/run_desk.sh` → http://127.0.0.1:5173),
-branch of record: `overhaul/evidence-lab`.
+Canonical product UI: Vite/React desk
+(`bash scripts/run_quantterm_complete.sh` → http://127.0.0.1:5173).
+Streamlit is not started and is not a fallback. Historical research
+branches such as `overhaul/evidence-lab` are not the current product path.
 
 ## Architecture (data → signal → risk → execution → feedback)
 
@@ -125,12 +127,11 @@ terminal_product_api.py   # FastAPI :8765
 │   └── trade_coach.py    # Weekly behavioral review (overtrading, revenge,
 │                         #   risk inconsistency) — rule-based + DeepSeek polish
 │
-├── ui/                   # Streamlit pages
-│   ├── scanner.py        # Smart Scanner: Best Trade hero, sector pulse,
-│   │                     #   freshness banner, health strip, trade ticket,
-│   │                     #   positions panel, backtest panel
-│   ├── command_center.py # Today page (top picks from auto_scan store)
-│   └── street_pulse_page.py# Daily Pulse newsletter + Report Card + Coach
+├── ui/                   # Archived Streamlit pages — not started by the
+│   │                     #   product launcher. Do not treat as the desk.
+│   ├── scanner.py        # Legacy scanner page (not the React Market Scanner)
+│   ├── command_center.py # Legacy Today page
+│   └── street_pulse_page.py# Legacy Daily Pulse page
 │
 ├── ai/jarvis_orchestrator.py # JARVIS: DeepSeek chat with FULL live context
 │                         #   (setups, sectors, backtest, positions, portfolio)
@@ -214,7 +215,7 @@ terminal_product_api.py   # FastAPI :8765
 7. **Every BUY is outcome-tracked** — Report Card equity curve decides
    whether the system deserves real money.
 
-## Background daemons (started once in app.py)
+## Background daemons (started by the complete stack, not by `app.py`)
 
 - `auto_scan._worker`: scan → sector heat → conviction → edge → live overlay
   → Telegram push; plus morning pulse (8:30-10), Kite-login reminder
@@ -232,7 +233,7 @@ must never be a primary dependency again.
 ## Daily Ops
 
 1. Morning: `python main.py login` (Telegram reminds at 8:30 if forgotten)
-2. `bash scripts/run_desk.sh` then open http://127.0.0.1:5173 — everything else is automatic
+2. `bash scripts/run_quantterm_complete.sh` then open http://127.0.0.1:5173 — one command owns the stack
 3. 24/7 hosting: see `docs/ALWAYS_ON.md`
 
 ## Testing / CI

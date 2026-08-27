@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# One terminal: venv, deps, daily Zerodha login if needed, then API + desk + autonomy.
+# Compatibility wrapper: execs scripts/run_quantterm_complete.sh (the canonical launcher).
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

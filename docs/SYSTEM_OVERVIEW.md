@@ -26,7 +26,9 @@ worker). Streamlit `app.py` is not the product path and is not started. A two-wa
 runs 24/7 as a background service. Everything is narrated in plain Hinglish
 (Hindi-English mix) because that's the primary user's language.
 
-**Branch of record:** `overhaul/evidence-lab`.
+**Canonical launcher:** `bash scripts/run_quantterm_complete.sh`.
+Historical research branches such as `overhaul/evidence-lab` are not the
+current product path.
 
 ---
 
