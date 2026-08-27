@@ -10,9 +10,10 @@ import terminal_api as api
 
 
 @pytest.fixture()
-def client(tmp_path: Path) -> TestClient:
+def client(tmp_path: Path, monkeypatch) -> TestClient:
     jobs_db = tmp_path / "jobs.db"
-    api.OPS_DB = str(jobs_db)
+    monkeypatch.setattr(api, "OPS_DB", str(jobs_db))
+    monkeypatch.setattr(api, "_ensure_ops_worker", lambda *a, **k: {"running": True})
     return TestClient(api.app)
 
 
@@ -30,6 +31,36 @@ def test_operation_status_endpoint_returns_durable_record(client: TestClient):
     assert payload["operation_id"] == record["operation_id"]
     assert payload["kind"] == "MARKET_SCAN"
     assert payload["status"] in {"PENDING", "RUNNING"}
+
+
+def test_scan_control_enqueues_without_waiting_for_worker(tmp_path: Path, monkeypatch):
+    import time
+    from fastapi.testclient import TestClient
+
+    import terminal_api as api
+    from operations.store import OperationStore
+
+    jobs_db = tmp_path / "jobs.db"
+    monkeypatch.setattr(api, "OPS_DB", str(jobs_db))
+    waited: list[bool] = []
+
+    def ensure(*, wait: bool = True):
+        waited.append(wait)
+        return {"running": True}
+
+    monkeypatch.setattr(api, "_ensure_ops_worker", ensure)
+    client = TestClient(api.app)
+    started = time.monotonic()
+    response = client.post("/api/controls/RUN_SCAN_NOW")
+    elapsed = time.monotonic() - started
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["accepted"] is True
+    assert payload["operation_id"]
+    assert False in waited
+    assert elapsed < 1.0
+    store = OperationStore(jobs_db)
+    assert any(item.get("kind") == "MARKET_SCAN" for item in store.active())
 
 
 def test_scan_control_deduplicates_active_market_scan(client: TestClient):

@@ -27,6 +27,42 @@ _CHUNK = 200         # symbols per yf.download() call
 _bhav_ok: bool = False
 
 
+def _overlay_live_quiet() -> None:
+    try:
+        from data.nse_live import apply_live_to_store
+        apply_live_to_store()
+    except Exception:
+        pass
+
+
+def adopt_ready_store(*, overlay_live: bool = True) -> int:
+    """Use the official bhavcopy already in this process. Do not block a scan on a rebuild.
+
+    Live Kite/NSE overlay runs in the background so the parallel stock walk can start
+    immediately on the bars already loaded.
+    """
+    global _bhav_ok
+    try:
+        from data.bhavcopy_runtime import status as history_status
+        from data.bhavcopy_store import store_symbols
+
+        info = history_status(load_cache=True)
+        n = int(info.get("symbols") or 0)
+        sessions = int(info.get("sessions") or 0)
+        if not info.get("ready") or n < 200 or sessions < 60:
+            return 0
+        with _lock:
+            _bhav_ok = True
+        if overlay_live:
+            threading.Thread(
+                target=_overlay_live_quiet, name="live-overlay", daemon=True,
+            ).start()
+        covered = store_symbols()
+        return len(covered) if covered else n
+    except Exception:
+        return 0
+
+
 def prefetch(
     symbols: list[str],
     period: str = "260d",
@@ -38,6 +74,15 @@ def prefetch(
     if the store can't be built. Returns number of symbols covered.
     """
     global _bhav_ok
+
+    ready = adopt_ready_store(overlay_live=True)
+    if ready >= 200:
+        try:
+            from data.bhavcopy_store import store_symbols
+            have = set(store_symbols())
+            return sum(1 for s in symbols if str(s).upper() in have) or ready
+        except Exception:
+            return ready
 
     # ── Primary: NSE bhavcopy (no Yahoo) ──────────────────────────────────────
     try:

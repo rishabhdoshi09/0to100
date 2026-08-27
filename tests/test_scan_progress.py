@@ -85,7 +85,11 @@ def test_unified_scanner_warms_cache_when_outer_prefetch_was_skipped(monkeypatch
     assert state["warm"] is True
 
 
-def test_market_scan_passes_progress_into_analyze():
+def test_default_market_scanner_uses_parallel_workers():
+    from scan.market_scan_service import _default_scanner
+
+    scanner = _default_scanner()
+    assert scanner._max_workers >= 8
     from scan.market_scan_service import run_whole_market_scan
 
     seen: list[tuple[int, int]] = []

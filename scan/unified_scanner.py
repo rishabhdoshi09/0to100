@@ -448,6 +448,13 @@ class UnifiedScanner:
         if not available:
             # History can already be on disk while bulk_fetcher._bhav_ok is still
             # false (market-ops loads bhavcopy_runtime, then used to skip prefetch).
+            try:
+                from scan.bulk_fetcher import adopt_ready_store
+                adopt_ready_store(overlay_live=False)
+            except Exception:
+                pass
+            available = [s for s in symbols if s in set(cached_symbols())]
+        if not available:
             do_prefetch(symbols)
             available = [s for s in symbols if s in set(cached_symbols())]
         self._nifty_ret30 = _nifty_return_30d()      # RS benchmark, once/scan

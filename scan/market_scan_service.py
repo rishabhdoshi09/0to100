@@ -159,8 +159,9 @@ def _default_prefetch(symbols, *, progress=None):
 
 
 def _default_scanner():
+    from core.eco import workers
     from scan.unified_scanner import UnifiedScanner
-    return UnifiedScanner()
+    return UnifiedScanner(max_workers=workers(12))
 
 
 def _default_fno_symbols() -> set[str]:

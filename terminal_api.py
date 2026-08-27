@@ -174,7 +174,7 @@ def _ops_runtime_payload() -> dict[str, Any]:
     }
 
 
-def _ensure_ops_worker() -> dict[str, Any]:
+def _ensure_ops_worker(*, wait: bool = True) -> dict[str, Any]:
     """Start the dedicated market-operations worker when it is not healthy."""
     global _ops_process
     from operations.store import pid_is_alive
@@ -193,6 +193,8 @@ def _ensure_ops_worker() -> dict[str, Any]:
         cwd=str(ROOT),
         env=env,
     )
+    if not wait:
+        return _ops_runtime_payload()
     deadline = time.time() + 2.5
     while time.time() < deadline:
         time.sleep(0.1)
@@ -847,7 +849,6 @@ def control(control_name: str) -> dict:
             store.recover_dead_running()
         except Exception:
             pass
-        _ensure_ops_worker()
         kind = _OPERATION_CONTROLS[name]
         operation, created = store.enqueue(
             kind,
@@ -855,6 +856,7 @@ def control(control_name: str) -> dict:
             requested_by="terminal",
             priority=_USER_OPERATION_PRIORITY,
         )
+        _ensure_ops_worker(wait=False)
         return {
             "accepted": True,
             "control": name,
