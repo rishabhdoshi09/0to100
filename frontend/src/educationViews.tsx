@@ -14,6 +14,7 @@ type Props = {
   setSelected?: (symbol: string) => void
   setActive?: (page: string) => void
   newsRevision?: number
+  openStock?: (symbol: string) => void
 }
 
 const LENS_LABELS: Record<EducationLens | 'ALL', string> = {
@@ -85,7 +86,7 @@ function EducationCardRow({
   )
 }
 
-export function EducationView({ runControl, setSelected, setActive, newsRevision = 0 }: Props) {
+export function EducationView({ runControl, setSelected, setActive, newsRevision = 0, openStock }: Props) {
   const [feed, setFeed] = useState<EducationFeed | null>(null)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(true)
@@ -115,6 +116,10 @@ export function EducationView({ runControl, setSelected, setActive, newsRevision
   }, [feed, lens])
 
   const openSymbol = (symbol: string) => {
+    if (openStock) {
+      openStock(symbol)
+      return
+    }
     setSelected?.(symbol)
     setActive?.('Stock Intelligence')
   }

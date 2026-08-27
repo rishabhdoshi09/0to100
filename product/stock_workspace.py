@@ -490,6 +490,24 @@ def build_stock_workspace(
     except Exception:
         decision_mem = {"stance": "WAIT", "places_orders": False}
 
+    analyser: dict[str, Any] = {}
+    try:
+        from product.stock_analyser import analyse_stock
+        analyser = analyse_stock(frame)
+    except Exception as exc:
+        analyser = {
+            "available": False,
+            "score": 0,
+            "max_score": 100,
+            "passed": 0,
+            "total": 7,
+            "verdict": "INCOMPLETE",
+            "headline": "INCOMPLETE — ANALYSER UNAVAILABLE",
+            "advice": str(exc),
+            "criteria": [],
+            "quote": None,
+        }
+
     return {
         "schema_version": 1,
         "generated_at": now.isoformat(),
@@ -510,4 +528,5 @@ def build_stock_workspace(
         "next_actions": next_actions,
         "case": case,
         "decision_memory": decision_mem,
+        "analyser": analyser,
     }

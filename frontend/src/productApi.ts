@@ -103,6 +103,60 @@ export type StockWorkspace = {
     edge?: { profile?: string; line?: string }
     places_orders?: boolean
   }
+  analyser?: StockAnalyser
+}
+
+export type StockAnalyserCriterion = {
+  id: string
+  title: string
+  rule: string
+  points: number
+  awarded: number
+  passed: boolean | null
+  detail: string
+  note: string
+  values?: Record<string, unknown>
+}
+
+export type StockAnalyserQuote = {
+  open?: number | null
+  high?: number | null
+  low?: number | null
+  close?: number | null
+  prev_close?: number | null
+  change_pct?: number | null
+  high_52w?: number | null
+  low_52w?: number | null
+  volume?: number | null
+  volume_lakh?: number | null
+  turnover_cr?: number | null
+  as_of?: string
+}
+
+export type StockAnalyser = {
+  available: boolean
+  score: number
+  max_score: number
+  passed: number
+  total: number
+  unknown?: number
+  verdict: string
+  headline: string
+  advice: string
+  method?: string
+  disclaimer?: string
+  criteria: StockAnalyserCriterion[]
+  quote?: StockAnalyserQuote | null
+  stage?: { id?: string; label?: string; note?: string }
+  benchmark?: string | null
+  trend_template?: {
+    available?: boolean
+    score?: number
+    passed?: number
+    total?: number
+    headline?: string
+    criteria?: StockAnalyserCriterion[]
+  } | null
 }
 
 export type CommandCenterWorkspace = {

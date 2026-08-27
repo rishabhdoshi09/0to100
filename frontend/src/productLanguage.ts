@@ -81,7 +81,7 @@ export const PAGE_GUIDE: Record<string, PageGuide> = {
   },
   'Stock Intelligence': {
     title: 'Stock Intelligence',
-    purpose: 'Combines price structure, technicals, current fundamentals, risks, news and source dates. Investigate is the second-stage due-diligence view — it is not a new scanner.',
+    purpose: 'Clicking a stock opens the live Minervini analyser first. Investigate is the second-stage due-diligence view — it is not a new scanner.',
     questions: [
       'What is the current trend and volatility?',
       'Are fundamentals complete and fresh?',

@@ -20,7 +20,33 @@ export function recall<T>(key: string): T | undefined {
 
 /** Open Stock Intelligence on the Investigate tab for this symbol. */
 export function markInvestigate(symbol: string): string {
+  remember('stock-tab', { symbol: String(symbol || '').toUpperCase(), tab: 'Investigate' })
   return remember('stock-investigate', String(symbol || '').toUpperCase())
+}
+
+/** Open Stock Intelligence on the Analyser tab for this symbol. */
+export function markAnalyser(symbol: string): string {
+  remember('stock-tab', { symbol: String(symbol || '').toUpperCase(), tab: 'Analyser' })
+  return String(symbol || '').toUpperCase()
+}
+
+export function wantedStockTab(symbol: string): string {
+  const want = recall<{ symbol?: string; tab?: string }>('stock-tab')
+  if (want && symbol && String(want.symbol || '').toUpperCase() === String(symbol).toUpperCase()) {
+    return String(want.tab || 'Analyser')
+  }
+  return 'Analyser'
+}
+
+export function rememberRecentSymbol(symbol: string): string[] {
+  const clean = String(symbol || '').toUpperCase()
+  if (!clean) return recall<string[]>('stock-recents') || []
+  const prev = (recall<string[]>('stock-recents') || []).filter((item) => item !== clean)
+  return remember('stock-recents', [clean, ...prev].slice(0, 6))
+}
+
+export function recentSymbols(): string[] {
+  return recall<string[]>('stock-recents') || []
 }
 
 export function wantsInvestigate(symbol: string): boolean {

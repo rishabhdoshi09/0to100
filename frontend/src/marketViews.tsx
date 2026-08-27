@@ -8,6 +8,7 @@ type Props = {
   runControl: (control: ControlName) => Promise<void>
   setSelected?: (symbol: string) => void
   setActive?: (page: string) => void
+  openStock?: (symbol: string) => void
 }
 
 const operationLabel = (kind: string) => words(kind.replace('MARKET_', ''))
@@ -81,7 +82,7 @@ function NewsCard({ article, openSymbol }: { article: NewsArticle; openSymbol: (
   )
 }
 
-export function NewsView({ dashboard, runControl, setSelected, setActive }: Props) {
+export function NewsView({ dashboard, runControl, setSelected, setActive, openStock }: Props) {
   const [category, setCategory] = useState('All')
   const [importantOnly, setImportantOnly] = useState(false)
   const categories = useMemo(() => {
@@ -95,6 +96,10 @@ export function NewsView({ dashboard, runControl, setSelected, setActive }: Prop
     return true
   }), [category, dashboard.news.articles, importantOnly])
   const openSymbol = (symbol: string) => {
+    if (openStock) {
+      openStock(symbol)
+      return
+    }
     setSelected?.(symbol)
     setActive?.('Stock Intelligence')
   }
@@ -143,7 +148,7 @@ function FnoTable({ rows, onSelect }: { rows: FnoUnderlying[]; onSelect: (symbol
   )
 }
 
-export function FnoView({ dashboard, runControl, setSelected, setActive }: Props) {
+export function FnoView({ dashboard, runControl, setSelected, setActive, openStock }: Props) {
   const [query, setQuery] = useState('')
   const rows = useMemo(() => {
     const clean = query.trim().toUpperCase()
@@ -151,6 +156,10 @@ export function FnoView({ dashboard, runControl, setSelected, setActive }: Props
     return dashboard.fno.underlyings.filter((row) => row.symbol.includes(clean) || row.company_name.toUpperCase().includes(clean))
   }, [dashboard.fno.underlyings, query])
   const select = (symbol: string) => {
+    if (openStock) {
+      openStock(symbol)
+      return
+    }
     setSelected?.(symbol)
     setActive?.('Stock Intelligence')
   }

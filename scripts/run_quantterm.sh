@@ -6,6 +6,11 @@ cd "$ROOT"
 
 export PYTHONPATH="$ROOT"
 
+RESTART=0
+if [[ "${1:-}" == "--restart" || "${QT_RESTART:-}" == "1" ]]; then
+  RESTART=1
+fi
+
 if [[ ! -d venv ]]; then
   echo "Missing venv. Create the QuantTerm Python environment first." >&2
   exit 1
@@ -153,6 +158,12 @@ start_frontend() {
   FRONTEND_PID=$!
 }
 
+if [[ "$RESTART" == "1" ]]; then
+  echo "[STACK] --restart: stopping local autonomy, API :8765 and desk :5173 so this run loads current code."
+  python scripts/local_stack.py stop --ports 5173,8765 || true
+  sleep 1 || true
+fi
+
 if python - <<'PY' >/dev/null 2>&1
 from product.autonomy_status import read_autonomy_status
 raise SystemExit(0 if read_autonomy_status().get("running") else 1)
@@ -160,6 +171,7 @@ PY
 then
   AUTONOMY_EXTERNAL=1
   echo "[STACK] A healthy autonomy supervisor is already running; reusing it."
+  echo "[STACK] That process does not reload Python after git pull. Ctrl-C the old stack, or: bash scripts/run_quantterm_complete.sh --restart"
 else
   start_autonomy || true
 fi
@@ -167,6 +179,7 @@ fi
 if url_ok "http://127.0.0.1:8765/api/health"; then
   API_EXTERNAL=1
   echo "[STACK] Reusing market API at http://127.0.0.1:8765"
+  echo "[STACK] That process does not reload Python after git pull. Use --restart to load current code."
 elif port_open 8765; then
   echo "[STACK] Port 8765 is occupied but /api/health is not ready yet; waiting." >&2
 else
@@ -176,6 +189,7 @@ fi
 if port_open 5173; then
   FRONTEND_EXTERNAL=1
   echo "[STACK] Reusing dedicated terminal at http://127.0.0.1:5173"
+  echo "[STACK] That Vite process does not reload a new checkout. Use --restart after git pull."
 else
   start_frontend
 fi

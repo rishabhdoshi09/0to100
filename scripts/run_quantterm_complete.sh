@@ -4,6 +4,12 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
+RESTART=0
+if [[ "${1:-}" == "--restart" ]]; then
+  RESTART=1
+  shift || true
+fi
+
 if [[ ! -d venv ]]; then
   echo "Missing venv. Create the QuantTerm Python environment first." >&2
   exit 1
@@ -98,9 +104,19 @@ start_report() {
 
 start_stack() {
   echo "[COMPLETE STACK] Starting QuantTerm terminal, market operations and autonomy…"
-  bash scripts/run_quantterm.sh &
+  if [[ "$RESTART" == "1" ]]; then
+    QT_RESTART=1 bash scripts/run_quantterm.sh --restart &
+  else
+    bash scripts/run_quantterm.sh &
+  fi
   STACK_PID=$!
 }
+
+if [[ "$RESTART" == "1" ]]; then
+  echo "[COMPLETE STACK] --restart: stopping the local desk, API, reports and autonomy so this run loads current code."
+  python scripts/local_stack.py stop --ports 5173,8765,8766 || true
+  sleep 1 || true
+fi
 
 if url_ok "http://127.0.0.1:8766/health"; then
   REPORT_EXTERNAL=1
@@ -113,7 +129,9 @@ fi
 
 start_stack
 
-echo "[COMPLETE STACK] Running. Leave this terminal open. Ctrl-C stops the stack."
+echo "[COMPLETE STACK] Running. Desk http://127.0.0.1:5173  · API :8765  · reports :8766"
+echo "[COMPLETE STACK] Leave this terminal open. Ctrl-C stops the stack."
+echo "[COMPLETE STACK] After git pull, re-run: bash scripts/run_quantterm_complete.sh --restart"
 
 while [[ "$STOP" != "1" ]]; do
   if [[ "$REPORT_EXTERNAL" != "1" ]]; then

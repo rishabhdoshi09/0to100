@@ -10,6 +10,8 @@ from product.stock_workspace import build_stock_workspace
 def _isolate_case_db(tmp_path, monkeypatch):
     import product.case_memory as cm
     monkeypatch.setattr(cm, "CASES_DB", tmp_path / "cases.db")
+    monkeypatch.setattr("product.stock_analyser.analyser_benchmark_frame", lambda: (None, "Nifty 50"))
+    monkeypatch.setattr("product.monitor_context.nifty_frame", lambda: None)
 
 
 def test_stock_workspace_combines_technicals_fundamentals_and_sources():
@@ -45,6 +47,9 @@ def test_stock_workspace_combines_technicals_fundamentals_and_sources():
     assert "18" not in (result["case"].get("memory_line") or "")
     assert result["decision_memory"]["places_orders"] is False
     assert result["decision_memory"]["stance"] in {"YES", "NO", "WAIT"}
+    assert result["analyser"]["available"] is True
+    assert result["analyser"]["total"] == 7
+    assert result["analyser"]["quote"]["close"]
 
 
 def test_stock_workspace_stays_honest_when_data_is_missing():

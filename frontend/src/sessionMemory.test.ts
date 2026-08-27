@@ -1,5 +1,5 @@
 import { describe, expect, it, beforeEach } from 'vitest'
-import { keepRicher, keepRicherMemory, markInvestigate, recall, recallMemory, remember, wantsInvestigate, writeSessionJson, readSessionJson } from './sessionMemory'
+import { keepRicher, keepRicherMemory, markAnalyser, markInvestigate, recall, recallMemory, remember, wantedStockTab, wantsInvestigate, writeSessionJson, readSessionJson } from './sessionMemory'
 
 class MemoryStorage {
   store = new Map<string, string>()
@@ -35,6 +35,14 @@ describe('sessionMemory', () => {
     keepRicherMemory('reco-workspace', { categories: [{ count: 2, cards: [{}] }] }, (row) => !(row.categories || []).length)
     expect(recallMemory('reco-workspace')).toEqual({ categories: [{ count: 2, cards: [{}] }] })
     expect(readSessionJson('qt:reco-workspace')).toBeNull()
+  })
+
+  it('opens the analyser tab by default for a clicked symbol', () => {
+    markAnalyser('aeroenter')
+    expect(wantedStockTab('AEROENTER')).toBe('Analyser')
+    markInvestigate('TCS')
+    expect(wantedStockTab('TCS')).toBe('Investigate')
+    expect(wantsInvestigate('TCS')).toBe(true)
   })
 
   it('marks Investigate for a selected symbol', () => {

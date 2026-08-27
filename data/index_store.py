@@ -53,6 +53,7 @@ TICKER_MAP = {
     "^CNXENERGY": "Nifty Energy",
     "^CNXREALTY": "Nifty Realty",
     "^CNXSC":     "Nifty Smallcap 100",
+    "NIFTY500":   "Nifty 500",
 }
 
 _lock = threading.Lock()

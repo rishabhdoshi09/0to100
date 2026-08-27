@@ -236,3 +236,7 @@ def test_stack_scripts_restart_children_instead_of_stopping_the_desk():
     assert 'exit 1' not in inner.split("QuantTerm is running")[-1]
     assert "exited unexpectedly" not in complete
     assert "restarting it" in complete.lower()
+    assert "--restart" in complete
+    assert "run_quantterm_complete.sh --restart" in inner
+    assert "scripts/local_stack.py" in complete
+    assert "does not reload Python after git pull" in inner
