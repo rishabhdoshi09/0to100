@@ -337,8 +337,8 @@ def test_runtime_startup_binds_feature002_hook():
     import scan.market_scan_service as mss
     assert mss._feature002_hook is not None
     assert mss._feature002_hook.__name__ == "try_observe_production_scan"
-    auto = Path(__file__).resolve().parents[1] / "app.py"
-    text = auto.read_text()
+    api = Path(__file__).resolve().parents[1] / "terminal_product_api.py"
+    text = api.read_text()
     assert "try_observe_production_scan" in text
     aut = Path(__file__).resolve().parents[1] / "research" / "autonomy" / "__init__.py"
     assert "try_observe_production_scan" in aut.read_text()

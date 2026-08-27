@@ -22,6 +22,14 @@ app = core.app
 app.version = "0.11.0"
 install_observer_api(app)
 
+try:
+    import scan.market_scan_service as _mss
+    from research.feature002.observe import try_observe_production_scan
+    if getattr(_mss, "_feature002_hook", None) is None:
+        _mss._feature002_hook = try_observe_production_scan
+except Exception:
+    pass
+
 INSTITUTIONAL_CERTIFICATIONS = (
     core.ROOT / "logs" / "institutional_readiness" / "certifications.json"
 )
