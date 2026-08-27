@@ -84,6 +84,7 @@ class Supervisor:
             self.failures.discard(H.OWNER_PAUSED)
         self._stop = False
         self._running = False
+        self._started_at = None
 
     def _load_failures(self) -> set:
         try:
@@ -123,6 +124,7 @@ class Supervisor:
             return False
         os.environ["QT_AUTONOMY_OWNER"] = "1"
         self._running = True
+        self._started_at = self.clock()
         self._transition(ST.STARTING, "boot", "Supervisor acquired the single mutation-owner lock.", "start")
         if hasattr(self.deps, "notify_online"):
             try:
@@ -383,8 +385,8 @@ class Supervisor:
             self.heartbeat()
             return None
         self.enqueue_due(current)
-        self._check_overdue()
         job = self.jobs.lease_due(self.owner, lease_seconds=300.0)
+        self._check_overdue()
         if job is None:
             self.heartbeat()
             return None
@@ -461,6 +463,11 @@ class Supervisor:
                                    error_code=error_code, error_message=error_message)
 
     def _check_overdue(self):
+        # Historical PENDING rows from while the desk was down are queue, not an
+        # outage. Give this process one grace window to run them before paging.
+        started = self._started_at
+        if started is not None and (self.clock() - float(started)) < 3600.0:
+            return
         overdue = self.jobs.overdue_critical(grace_seconds=3600.0)
         if overdue and self.state.state not in (ST.DEGRADED, ST.HALTED):
             names = ", ".join(sorted({j.job_type for j in overdue}))

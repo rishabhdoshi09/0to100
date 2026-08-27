@@ -73,6 +73,9 @@ must never be inserted into historical backtests.
 - old intraday paper cycles remain visible in the ledger but do not degrade the whole organisation as
   a critical infrastructure outage;
 - a genuinely current overdue authentication/data/risk dependency still raises an incident.
+- leftover PENDING rows from while the desk was down are re-dated when the same daily job is
+  enqueued again, and `CRITICAL_OVERDUE` waits one hour after supervisor boot so an evening
+  restart does not page Telegram for work that is about to run.
 
 ## Terminal Automation workspace
 

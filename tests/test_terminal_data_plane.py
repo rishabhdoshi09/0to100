@@ -95,3 +95,26 @@ def test_genuinely_current_overdue_critical_job_is_reported(tmp_path):
         assert [job.job_id for job in overdue] == [expected.job_id]
     finally:
         store.close()
+
+
+def test_reenqueue_redates_stale_pending_critical_job(tmp_path):
+    clk = [1_000.0]
+    store = JS.JobStore(tmp_path / "jobs.db", clock=lambda: clk[0])
+    try:
+        first = store.enqueue(
+            "data_refresh",
+            scheduled_for=1_000.0,
+            idempotency_key="data_refresh:2026-08-27",
+            critical=True,
+        )
+        clk[0] = 20_000.0
+        again = store.enqueue(
+            "data_refresh",
+            idempotency_key="data_refresh:2026-08-27",
+            critical=True,
+        )
+        assert again.job_id == first.job_id
+        assert again.scheduled_for == 20_000.0
+        assert store.overdue_critical(grace_seconds=3_600.0) == []
+    finally:
+        store.close()
