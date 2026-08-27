@@ -234,29 +234,46 @@ def radar_home_workspace() -> dict[str, Any]:
     return home
 
 
-_reco_memo: dict[str, Any] = {"key": None, "payload": None}
-
-
 def recommendations_workspace(
     refresh: bool = Query(False, description="Recompute live technicals (slow)"),
 ) -> dict[str, Any]:
-    """Reco-style research categories + Active/Closed lifecycle (evidence only)."""
-    from product.recommendations_workspace import build_recommendations_workspace
+    """Reco-style research categories + Active/Closed lifecycle (evidence only).
+
+    Page-open is cache-only: the last Scan Now already wrote this file.
+    """
+    from product.recommendations_store import (
+        load_recommendations,
+        reco_matches_scan,
+        save_recommendations,
+    )
+    from product.recommendations_workspace import (
+        build_recommendations_workspace,
+        slim_workspace_for_desk,
+    )
     scan = core._scan_payload()
     long_term = core._long_term_payload()
-    key = (scan.get("scanned_at"), long_term.get("scanned_at"), bool(refresh))
-    if not refresh and _reco_memo.get("key") == key and _reco_memo.get("payload"):
-        return _reco_memo["payload"]
+    scan_at = str(scan.get("scanned_at") or "")
+    lt_at = str(long_term.get("scanned_at") or "")
+    saved = load_recommendations()
+    if not refresh:
+        if reco_matches_scan(saved, scan_scanned_at=scan_at, long_term_scanned_at=lt_at):
+            return saved
+        if saved and (not scan_at or not (scan.get("records") or [])):
+            return saved
     try:
         payload = build_recommendations_workspace(
             scan_payload=scan,
             long_term_payload=long_term,
             refresh_technicals=bool(refresh),
             settle_cases=False,
-            deep_confirm=True,
-            persist_ledger=True,
+            deep_confirm=False,
+            persist_ledger=False,
         )
     except Exception as exc:
+        if saved:
+            out = dict(saved)
+            out["error"] = str(exc)[:200]
+            return out
         fallback = build_recommendations_workspace(
             scan_payload={"records": [], "scanned_at": ""},
             long_term_payload={"records": []},
@@ -265,15 +282,22 @@ def recommendations_workspace(
         )
         fallback["error"] = str(exc)[:200]
         return fallback
-    _reco_memo["key"] = key
-    _reco_memo["payload"] = payload
-    return payload
+    slim = slim_workspace_for_desk(payload)
+    if scan_at:
+        try:
+            save_recommendations(slim)
+        except Exception:
+            pass
+    return slim
 
 
 def market_reports_workspace(
-    rebuild: bool = Query(False, description="Ignore the 15-minute pulse file"),
+    rebuild: bool = Query(False, description="Rebuild today's pulse; page-open leaves this off"),
 ) -> dict[str, Any]:
-    """Chronological Market Pulse desk from street_pulse + saved day files."""
+    """Chronological Market Pulse desk from the last scan and saved pulse file.
+
+    Page-open never rebuilds the pulse. Scan Now writes today's file.
+    """
     from product.recommendations_workspace import build_market_reports_workspace
     news: dict[str, Any] = {}
     try:
@@ -369,22 +393,25 @@ def drain_telegram_on_startup() -> None:
     """Replay last-scan Telegram alerts once the desk API is up.
 
     Autonomy also drains on start/tick. This catches the case where Telegram
-    was connected after the scan and the supervisor is not running.
+    was connected after the scan and the supervisor is not running. The loop
+    also sends the after-close market report once 15:30 IST has passed.
     """
     def _run() -> None:
         time.sleep(2.0)
-        try:
-            from product.telegram_delivery import drain_scan_alerts
-            sent = drain_scan_alerts(min_interval_s=0.0) or {}
-            reason = str(sent.get("reason") or "")
-            if reason and reason not in {"already_sent", "no_candidates", "no_scan", "in_progress"}:
-                print(
-                    f"[TELEGRAM] desk drain · setups={int(sent.get('setup') or 0)} · "
-                    f"near-breakout={int(sent.get('prebreakout') or 0)} · {reason}",
-                    flush=True,
-                )
-        except Exception as exc:
-            print(f"[TELEGRAM] desk drain failed: {type(exc).__name__}: {exc}", flush=True)
+        while True:
+            try:
+                from product.telegram_delivery import drain_scan_alerts
+                sent = drain_scan_alerts(min_interval_s=45.0) or {}
+                reason = str(sent.get("reason") or "")
+                if reason and reason not in {"already_sent", "no_candidates", "no_scan", "in_progress", "retry_wait", "not_configured"}:
+                    print(
+                        f"[TELEGRAM] desk drain · setups={int(sent.get('setup') or 0)} · "
+                        f"near-breakout={int(sent.get('prebreakout') or 0)} · {reason}",
+                        flush=True,
+                    )
+            except Exception as exc:
+                print(f"[TELEGRAM] desk drain failed: {type(exc).__name__}: {exc}", flush=True)
+            time.sleep(60.0)
 
     threading.Thread(target=_run, name="telegram-scan-drain", daemon=True).start()
 

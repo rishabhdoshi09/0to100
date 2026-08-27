@@ -1,5 +1,5 @@
 import { describe, expect, it, beforeEach } from 'vitest'
-import { keepRicher, markInvestigate, recall, remember, wantsInvestigate, writeSessionJson, readSessionJson } from './sessionMemory'
+import { keepRicher, keepRicherMemory, markInvestigate, recall, recallMemory, remember, wantsInvestigate, writeSessionJson, readSessionJson } from './sessionMemory'
 
 class MemoryStorage {
   store = new Map<string, string>()
@@ -29,6 +29,12 @@ describe('sessionMemory', () => {
     )
     expect(kept).toEqual({ counts: { breakouts: 4 } })
     expect(recall('radar-home')).toEqual({ counts: { breakouts: 4 } })
+  })
+
+  it('keeps large desks in memory without writing sessionStorage', () => {
+    keepRicherMemory('reco-workspace', { categories: [{ count: 2, cards: [{}] }] }, (row) => !(row.categories || []).length)
+    expect(recallMemory('reco-workspace')).toEqual({ categories: [{ count: 2, cards: [{}] }] })
+    expect(readSessionJson('qt:reco-workspace')).toBeNull()
   })
 
   it('marks Investigate for a selected symbol', () => {

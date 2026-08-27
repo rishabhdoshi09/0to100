@@ -191,6 +191,7 @@ def test_market_scan_service_overlays_long_term_after_save():
     source = inspect.getsource(run_whole_market_scan)
     assert "overlay_long_term_from_market_scan" in source
     assert "persist_public_best_setups" in source
+    assert "persist_desks_from_market_scan" in source
 
 
 def test_unified_scanner_does_not_report_prefetch_days(monkeypatch):

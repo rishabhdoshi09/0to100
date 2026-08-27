@@ -175,6 +175,11 @@ def run_whole_market_scan(
                 "records": 0,
                 "error_code": type(exc).__name__,
             }
+        try:
+            from product.desk_scan_overlays import persist_desks_from_market_scan
+            payload["desk_overlays"] = persist_desks_from_market_scan(payload)
+        except Exception as exc:
+            payload["desk_overlays"] = {"error": type(exc).__name__}
         # FEATURE-002 is observe-only and runs AFTER production results are final.
         if _feature002_hook is not None:
             try:

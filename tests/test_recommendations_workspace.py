@@ -231,7 +231,7 @@ def test_market_reports_lists_today_pulse(tmp_path, monkeypatch):
             "gainers": [], "losers": [], "breakouts_today": [],
         },
     )
-    payload = build_market_reports_workspace(persist_today=True)
+    payload = build_market_reports_workspace(persist_today=True, rebuild=True)
     assert payload["reports"]
     assert payload["reports"][0]["is_new"] is True
     assert payload["reports"][0]["title"] == "Market Pulse"
@@ -261,6 +261,18 @@ def test_market_reports_reuse_fresh_file(tmp_path, monkeypatch):
     )
     payload = build_market_reports_workspace(persist_today=True)
     assert payload["today_pulse"]["takeaways"] == ["Saved pulse"]
+
+
+def test_market_reports_page_open_does_not_crawl_when_file_missing(tmp_path, monkeypatch):
+    import product.recommendations_workspace as rw
+
+    monkeypatch.setattr(rw, "REPORTS_DIR", tmp_path)
+    monkeypatch.setattr(
+        "reports.street_pulse.build_pulse",
+        lambda **_k: (_ for _ in ()).throw(AssertionError("page-open must not crawl")),
+    )
+    payload = build_market_reports_workspace(persist_today=True, rebuild=False)
+    assert payload["today_pulse"] in ({}, None) or not payload["today_pulse"].get("takeaways")
 
 
 def test_recommendations_default_skips_case_settle(monkeypatch):

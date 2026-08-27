@@ -509,3 +509,116 @@ def test_long_term_alerts_are_ranked_and_deduped(tmp_path):
     assert "current long-term shortlist" in engine.messages[-1][0]
     restarted = TelegramNotifier(tmp_path, engine_factory=lambda: engine, now_fn=now)
     assert restarted.notify_long_term(payload) == {"sent": 0}
+
+
+def _reco_workspace():
+    return {
+        "scan_scanned_at": "2026-08-27T11:04:00",
+        "categories": [
+            {
+                "id": "momentum_breakouts",
+                "cards": [
+                    {
+                        "symbol": "AAA",
+                        "company": "Alpha",
+                        "score": 82,
+                        "action_badge": "Buy",
+                        "reco_tier": "high_conviction",
+                        "reason": "Two families agree on a ready breakout",
+                    },
+                    {
+                        "symbol": "BBB",
+                        "company": "Beta",
+                        "score": 70,
+                        "action_badge": "Watch",
+                        "reco_tier": "good_setup",
+                        "reason": "Structure + participation",
+                    },
+                ],
+            }
+        ],
+        "lifecycle": {"active": [], "closed": []},
+    }
+
+
+def test_notify_recommendations_sends_once_per_scan(tmp_path):
+    engine = FakeEngine()
+    now = lambda: datetime(2026, 8, 27, 11, 4)
+    n = TelegramNotifier(tmp_path, engine_factory=lambda: engine, now_fn=now)
+    first = n.notify_recommendations(_reco_workspace())
+    assert first["sent"] is True
+    assert first["high_conviction"] == 1
+    assert "Recommendations" in engine.messages[-1][0]
+    assert "AAA" in engine.messages[-1][0]
+    assert "Not a broker order" in engine.messages[-1][0]
+    again = TelegramNotifier(tmp_path, engine_factory=lambda: engine, now_fn=now)
+    assert again.notify_recommendations(_reco_workspace())["reason"] == "already_sent"
+
+
+def test_notify_recommendations_empty_sends_once(tmp_path):
+    engine = FakeEngine()
+    now = lambda: datetime(2026, 8, 27, 11, 4)
+    n = TelegramNotifier(tmp_path, engine_factory=lambda: engine, now_fn=now)
+    workspace = {"scan_scanned_at": "2026-08-27T11:04:00", "categories": [], "lifecycle": {"active": []}}
+    first = n.notify_recommendations(workspace)
+    assert first["sent"] is True
+    assert first["kind"] == "recommendations_empty"
+    assert "Empty is empty" in engine.messages[-1][0]
+    restarted = TelegramNotifier(tmp_path, engine_factory=lambda: engine, now_fn=now)
+    assert restarted.notify_recommendations(workspace)["reason"] == "empty"
+
+
+def test_market_report_skips_before_close_and_sends_once_after(tmp_path, monkeypatch):
+    engine = FakeEngine()
+    pulse = {"date": "2026-08-27", "takeaways": ["Nifty steady"], "gainers": []}
+    monkeypatch.setattr("product.recommendations_workspace.load_today_pulse", lambda: pulse)
+    morning = TelegramNotifier(
+        tmp_path, engine_factory=lambda: engine, now_fn=lambda: datetime(2026, 8, 27, 11, 0),
+    )
+    assert morning.notify_market_report_if_due()["reason"] == "before_close"
+    assert engine.messages == []
+
+    after = TelegramNotifier(
+        tmp_path, engine_factory=lambda: engine, now_fn=lambda: datetime(2026, 8, 27, 15, 30),
+    )
+    first = after.notify_market_report_if_due()
+    assert first["sent"] is True
+    assert "Market report — after 15:30 IST" in engine.messages[-1][0]
+    assert "Nifty steady" in engine.messages[-1][0]
+
+    again = TelegramNotifier(
+        tmp_path, engine_factory=lambda: engine, now_fn=lambda: datetime(2026, 8, 27, 16, 0),
+    )
+    assert again.notify_market_report_if_due()["reason"] == "already_sent"
+
+
+def test_market_report_skips_weekend(tmp_path, monkeypatch):
+    engine = FakeEngine()
+    monkeypatch.setattr(
+        "product.recommendations_workspace.load_today_pulse",
+        lambda: {"date": "2026-08-29", "takeaways": ["unused"]},
+    )
+    n = TelegramNotifier(
+        tmp_path, engine_factory=lambda: engine, now_fn=lambda: datetime(2026, 8, 29, 16, 0),
+    )
+    assert n.notify_market_report_if_due()["reason"] == "weekend"
+    assert engine.messages == []
+
+
+def test_drain_desk_alerts_retries_recos_and_report(tmp_path, monkeypatch):
+    engine = FakeEngine()
+    monkeypatch.setattr(
+        "product.recommendations_store.load_recommendations",
+        lambda: _reco_workspace(),
+    )
+    monkeypatch.setattr(
+        "product.recommendations_workspace.load_today_pulse",
+        lambda: {"date": "2026-08-27", "takeaways": ["Breadth mixed"]},
+    )
+    n = TelegramNotifier(
+        tmp_path, engine_factory=lambda: engine, now_fn=lambda: datetime(2026, 8, 27, 15, 45),
+    )
+    out = n.drain_desk_alerts()
+    assert out["recommendations"]["sent"] is True
+    assert out["market_report"]["sent"] is True
+    assert len(engine.messages) == 2

@@ -104,6 +104,10 @@ def test_market_scan_save_writes_long_term_overlay(monkeypatch, tmp_path):
     monkeypatch.setattr("product.scan_store.save_scan", lambda payload, path=None: tmp_path / "scan.json")
     monkeypatch.setattr("product.sepa_setup.persist_public_best_setups", lambda payload: ([], ""))
     monkeypatch.setattr(
+        "product.desk_scan_overlays.persist_desks_from_market_scan",
+        lambda payload: {"recommendations": "skipped", "market_reports": "skipped"},
+    )
+    monkeypatch.setattr(
         "product.long_term_store.save_long_term_scan",
         lambda payload, path=None: saved_lt.append(dict(payload)) or tmp_path / "lt.json",
     )
@@ -137,6 +141,10 @@ def test_market_scan_save_writes_long_term_overlay(monkeypatch, tmp_path):
 def test_overlay_failure_does_not_fail_the_market_scan(monkeypatch, tmp_path):
     monkeypatch.setattr("product.scan_store.save_scan", lambda payload, path=None: tmp_path / "scan.json")
     monkeypatch.setattr("product.sepa_setup.persist_public_best_setups", lambda payload: ([], ""))
+    monkeypatch.setattr(
+        "product.desk_scan_overlays.persist_desks_from_market_scan",
+        lambda payload: {"recommendations": "skipped", "market_reports": "skipped"},
+    )
 
     def boom(*_a, **_k):
         raise RuntimeError("overlay exploded")
@@ -165,6 +173,78 @@ def test_overlay_failure_does_not_fail_the_market_scan(monkeypatch, tmp_path):
     assert report.payload["long_term_overlay"]["error_code"] == "RuntimeError"
 
 
+def test_market_scan_save_persists_recommendation_and_report_desks(monkeypatch, tmp_path):
+    called = {"n": 0}
+
+    def persist(payload):
+        called["n"] += 1
+        assert payload.get("records")
+        return {"recommendations": "saved", "recommendation_cards": 1, "market_reports": "saved"}
+
+    monkeypatch.setattr("product.scan_store.save_scan", lambda payload, path=None: tmp_path / "scan.json")
+    monkeypatch.setattr("product.sepa_setup.persist_public_best_setups", lambda payload: ([], ""))
+    monkeypatch.setattr(
+        "scan.long_term_service.overlay_long_term_from_market_scan",
+        lambda payload, **_k: SimpleNamespace(status="SUCCEEDED", payload={"records": []}, error_code=""),
+    )
+    monkeypatch.setattr("product.desk_scan_overlays.persist_desks_from_market_scan", persist)
+
+    class Scanner:
+        def scan(self, symbols, progress=None, prefetch=True):
+            return [
+                SimpleNamespace(
+                    symbol="AAA", signals=["MOMENTUM"], score=80, verdict="BUY",
+                    chase_risk=False, price=100, momentum_5d=2, rsi=55, volume_ratio=1.5,
+                    entry=101, stop=95, target=120, reasons=["ok"],
+                )
+            ]
+
+    report = run_whole_market_scan(
+        universe_provider=lambda: {"AAA": "Alpha"},
+        prefetch_fn=lambda symbols, progress=None: 1,
+        scanner=Scanner(),
+        fno_provider=lambda: set(),
+        save=True,
+    )
+    assert report.ok
+    assert called["n"] == 1
+    assert report.payload["desk_overlays"]["recommendations"] == "saved"
+    assert report.payload["desk_overlays"]["market_reports"] == "saved"
+
+
+def test_desk_overlay_failure_does_not_fail_the_market_scan(monkeypatch, tmp_path):
+    monkeypatch.setattr("product.scan_store.save_scan", lambda payload, path=None: tmp_path / "scan.json")
+    monkeypatch.setattr("product.sepa_setup.persist_public_best_setups", lambda payload: ([], ""))
+    monkeypatch.setattr(
+        "scan.long_term_service.overlay_long_term_from_market_scan",
+        lambda payload, **_k: SimpleNamespace(status="SUCCEEDED", payload={"records": []}, error_code=""),
+    )
+    monkeypatch.setattr(
+        "product.desk_scan_overlays.persist_desks_from_market_scan",
+        lambda payload: (_ for _ in ()).throw(RuntimeError("desk overlay exploded")),
+    )
+
+    class Scanner:
+        def scan(self, symbols, progress=None, prefetch=True):
+            return [
+                SimpleNamespace(
+                    symbol="AAA", signals=["MOMENTUM"], score=80, verdict="BUY",
+                    chase_risk=False, price=100, momentum_5d=2, rsi=55, volume_ratio=1.5,
+                    entry=101, stop=95, target=120, reasons=["ok"],
+                )
+            ]
+
+    report = run_whole_market_scan(
+        universe_provider=lambda: {"AAA": "Alpha"},
+        prefetch_fn=lambda symbols, progress=None: 1,
+        scanner=Scanner(),
+        fno_provider=lambda: set(),
+        save=True,
+    )
+    assert report.ok
+    assert report.payload["desk_overlays"]["error"] == "RuntimeError"
+
+
 def test_desk_ui_uses_one_scan_now_for_every_setup():
     root = Path(__file__).resolve().parents[1]
     scanner = (root / "frontend" / "src" / "marketRadarViews.tsx").read_text(encoding="utf-8")
@@ -176,6 +256,7 @@ def test_desk_ui_uses_one_scan_now_for_every_setup():
     assert "one scan fills every tab" in scanner
     assert "tab === 'Long-Term' ? longTermScan : marketScan" not in scanner
     assert "Refresh funds" in reco
+    assert "keepRicherMemory" in reco
     assert "Refresh long-term" not in reco
     assert "Run one market scan" in reco
     assert "mode === 'Long-Term' ? longTermScan : marketScan" not in experience

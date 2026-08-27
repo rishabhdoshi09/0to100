@@ -679,6 +679,159 @@ class TelegramNotifier:
             pass
         return {"sent": 0}
 
+    def notify_recommendations(self, workspace: Mapping[str, Any] | None) -> dict[str, Any]:
+        """Send the recommendations desk after a market scan. Not a second scan."""
+        payload = dict(workspace or {})
+        if not payload:
+            return {"sent": False, "reason": "no_workspace"}
+        now = self._now_fn()
+        scan_at = str(payload.get("scan_scanned_at") or payload.get("scan_at") or "")[:19]
+        kind = f"reco_desk:{scan_at}" if scan_at else "reco_desk"
+        if self._was_sent(kind):
+            return {"sent": False, "reason": "already_sent"}
+        high, good = self._reco_tiers(payload)
+        if not high and not good:
+            empty_kind = f"reco_empty:{scan_at}" if scan_at else "reco_empty"
+            if self._was_sent(empty_kind):
+                return {"sent": False, "reason": "empty"}
+            text = (
+                f"<b>Recommendations — {now.strftime('%d %b %Y %H:%M')} IST</b>\n"
+                "No high-conviction names from this scan.\n"
+                "<i>Not a broker order. Empty is empty.</i>"
+            )
+            try:
+                engine = self._engine()
+                if engine.is_configured() and engine.send(text):
+                    self._mark_sent([empty_kind])
+                    return {"sent": True, "kind": "recommendations_empty"}
+            except Exception:
+                pass
+            return {"sent": False, "reason": "send_failed"}
+        lines = [
+            f"<b>Recommendations — {now.strftime('%d %b %Y %H:%M')} IST</b>",
+            "<i>Same market scan as the desk. Not a broker order.</i>",
+            "",
+            "<b>High conviction</b>",
+        ]
+        if not high:
+            lines.append("None.")
+        for card in high[:8]:
+            lines.append(self._reco_line(card))
+        if good:
+            lines.extend(["", "<b>Good setups</b>"])
+            for card in good[:8]:
+                lines.append(self._reco_line(card))
+        try:
+            engine = self._engine()
+            if engine.is_configured() and engine.send("\n".join(lines)):
+                self._mark_sent([kind])
+                return {
+                    "sent": True,
+                    "kind": "recommendations",
+                    "high_conviction": len(high),
+                    "good_setups": len(good),
+                }
+        except Exception:
+            pass
+        return {"sent": False, "reason": "send_failed"}
+
+    def notify_market_report_if_due(self, pulse: Mapping[str, Any] | None = None) -> dict[str, Any]:
+        """Send today's saved market pulse after 15:30 IST. Does not crawl."""
+        now = self._now_fn()
+        if now.weekday() >= 5:
+            return {"sent": False, "reason": "weekend"}
+        if now.hour < 15 or (now.hour == 15 and now.minute < 30):
+            return {"sent": False, "reason": "before_close"}
+        if self._was_sent("market_report"):
+            return {"sent": False, "reason": "already_sent"}
+        payload = dict(pulse) if isinstance(pulse, Mapping) and pulse else None
+        if payload is None:
+            try:
+                from product.recommendations_workspace import load_today_pulse
+                payload = load_today_pulse()
+            except Exception:
+                payload = None
+        if not payload:
+            return {"sent": False, "reason": "no_pulse"}
+        try:
+            from reports.street_pulse import pulse_to_telegram
+            body = str(pulse_to_telegram(dict(payload)) or "").strip()
+        except Exception as exc:
+            return {"sent": False, "reason": "format_failed", "error": str(exc)[:200]}
+        if not body:
+            return {"sent": False, "reason": "empty"}
+        text = (
+            f"📊 <b>Market report — after 15:30 IST</b>\n"
+            f"{body}"
+        )
+        try:
+            engine = self._engine()
+            if engine.is_configured() and engine.send(text):
+                self._mark_sent(["market_report"])
+                return {"sent": True, "kind": "market_report"}
+        except Exception:
+            pass
+        return {"sent": False, "reason": "send_failed"}
+
+    def drain_desk_alerts(self) -> dict[str, Any]:
+        """Retry saved recommendations and the after-close market report."""
+        recos: dict[str, Any] = {"sent": False, "reason": "skipped"}
+        report: dict[str, Any] = {"sent": False, "reason": "skipped"}
+        try:
+            from product.recommendations_store import load_recommendations
+            recos = self.notify_recommendations(load_recommendations())
+        except Exception as exc:
+            recos = {"sent": False, "reason": "error", "error": str(exc)[:200]}
+        try:
+            report = self.notify_market_report_if_due()
+        except Exception as exc:
+            report = {"sent": False, "reason": "error", "error": str(exc)[:200]}
+        return {"recommendations": recos, "market_report": report}
+
+    @staticmethod
+    def _reco_tiers(workspace: Mapping[str, Any]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+        cards: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        buckets = list(workspace.get("categories") or [])
+        lifecycle = dict(workspace.get("lifecycle") or {})
+        buckets.append({"cards": list(lifecycle.get("active") or [])})
+        for cat in buckets:
+            if not isinstance(cat, Mapping):
+                continue
+            for raw in cat.get("cards") or []:
+                if not isinstance(raw, Mapping):
+                    continue
+                symbol = str(raw.get("symbol") or "").upper()
+                if not symbol or symbol in seen:
+                    continue
+                seen.add(symbol)
+                cards.append(dict(raw))
+        high = [c for c in cards if str(c.get("reco_tier") or "") == "high_conviction"]
+        good = [c for c in cards if str(c.get("reco_tier") or "") == "good_setup"]
+        return high, good
+
+    @classmethod
+    def _reco_line(cls, card: Mapping[str, Any]) -> str:
+        symbol = cls._esc(card.get("symbol") or "?")
+        name = cls._esc(card.get("company") or card.get("name") or "")
+        action = cls._esc(card.get("action_badge") or card.get("action") or "")
+        try:
+            score_txt = f"{int(round(float(card.get('score'))))}/100"
+        except (TypeError, ValueError):
+            score_txt = "n/a"
+        why = cls._esc(
+            str(card.get("reason") or card.get("primary_thesis") or card.get("why") or "").strip()
+        )
+        head = f"• <b>{symbol}</b>"
+        if name:
+            head += f" {name}"
+        head += f" — {score_txt}"
+        if action:
+            head += f" · {action}"
+        if why:
+            return f"{head}\n  {why[:220]}"
+        return head
+
     def notify_incident(self, code: str, message: str) -> bool:
         important = {
             "CRITICAL_OVERDUE", "HANDLER_EXCEPTION", "AUTH_EXPIRED", "TOKEN_MISSING",
