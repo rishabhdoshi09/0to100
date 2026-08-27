@@ -143,15 +143,12 @@ start_api() {
   echo "[STACK] Starting local API at http://127.0.0.1:8765 …"
   python -u -m uvicorn terminal_product_api:app --host 127.0.0.1 --port 8765 &
   API_PID=$!
-  if wait_for_api 90; then
-    return 0
-  fi
+  sleep 0.5 || true
   if ! alive "$API_PID"; then
     echo "[STACK] Market API exited before becoming healthy; will retry." >&2
     API_PID=""
     return 1
   fi
-  echo "[STACK] Market API on :8765 is still starting; watchdog will keep it." >&2
   return 0
 }
 
@@ -201,11 +198,6 @@ elif port_open 8765; then
   echo "[STACK] Port 8765 is occupied but /api/health is not ready yet; waiting." >&2
 else
   start_api || true
-fi
-
-if ! url_ok "http://127.0.0.1:8765/api/health"; then
-  echo "[STACK] Waiting for market API before opening the desk…"
-  wait_for_api 90 || true
 fi
 
 if port_open 5173; then
