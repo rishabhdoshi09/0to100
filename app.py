@@ -1,12 +1,13 @@
 """QuantTerm entrypoint. The product desk is Vite/React, not Streamlit.
 
-Start: bash scripts/run_desk.sh
+Start: bash scripts/run_quantterm_complete.sh
+Also: bash scripts/run_desk.sh
 Open:  http://127.0.0.1:5173
 """
 from __future__ import annotations
 
 _DESK = "http://127.0.0.1:5173"
-_START = "bash scripts/run_desk.sh"
+_START = "bash scripts/run_quantterm_complete.sh"
 
 _MESSAGE = (
     "QuantTerm does not use Streamlit.\n"
