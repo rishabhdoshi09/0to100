@@ -220,24 +220,34 @@ class TelegramNotifier:
         }
         self._save()
 
-    def _send_once(self, key: str, message: str) -> bool:
+    def _send_status(self, key: str, message: str) -> str:
+        """Deliver ``message`` once per day. Returns sent / already_sent / failed."""
         day = self._day()
         self._prune(day)
         if self._was_sent(key, day):
-            return False
+            return "already_sent"
         try:
             engine = self._engine()
             if not engine.is_configured():
-                return False
+                return "failed"
             if not engine.send(message):
                 err = self._engine_error(engine)
+                if "429" in err:
+                    time.sleep(2.0)
+                    if engine.send(message):
+                        self._mark_sent([key], day)
+                        return "sent"
+                    err = self._engine_error(engine) or err
                 print(f"[TELEGRAM] send failed for {key}" + (f" · {err}" if err else ""), flush=True)
-                return False
+                return "failed"
         except Exception as exc:
             print(f"[TELEGRAM] send error for {key}: {type(exc).__name__}: {exc}", flush=True)
-            return False
+            return "failed"
         self._mark_sent([key], day)
-        return True
+        return "sent"
+
+    def _send_once(self, key: str, message: str) -> bool:
+        return self._send_status(key, message) == "sent"
 
     def scan_keys_pending(self, payload: Mapping[str, Any] | None) -> bool:
         """True when last-scan setups or near-breakouts have not been marked sent today."""
@@ -334,8 +344,8 @@ class TelegramNotifier:
     def _esc(value: Any) -> str:
         return html.escape(str(value or ""), quote=False)
 
-    def notify_online(self) -> bool:
-        return self._send_once(
+    def notify_online(self) -> str:
+        return self._send_status(
             "autonomy_online",
             "🟢 <b>QuantTerm autonomy online</b>\n\n"
             "Single supervisor active · Telegram alerts enabled · LIVE orders locked.",

@@ -82,15 +82,17 @@ class Supervisor:
             self.failures.add(H.OWNER_PAUSED)
         else:
             self.failures.discard(H.OWNER_PAUSED)
+        self._save_failures()
         self._stop = False
         self._running = False
         self._started_at = None
 
     def _load_failures(self) -> set:
         try:
-            return set(json.loads(self._failures_path.read_text(encoding="utf-8")))
+            raw = set(json.loads(self._failures_path.read_text(encoding="utf-8")))
         except Exception:
-            return set()
+            raw = set()
+        return H.canonicalize_failures(raw)
 
     def _save_failures(self) -> None:
         tmp = self._failures_path.with_suffix(".tmp")
