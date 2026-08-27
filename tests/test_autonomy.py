@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import inspect
 import io
+import threading
 import time
 import tokenize
 from datetime import datetime
@@ -252,6 +253,56 @@ def test_tick_leases_scan_ahead_of_news(tmp_path):
     sup.jobs.enqueue(SCH.MARKET_SCAN, idempotency_key="s1")
     job = sup.tick(_NOW)
     assert job is not None and job.job_type == SCH.MARKET_SCAN
+    sup.shutdown()
+
+
+def test_force_lease_skips_queue_order(tmp_path):
+    store = JS.JobStore(tmp_path / "j.db")
+    news = store.enqueue(SCH.NEWS_REFRESH, idempotency_key="n1")
+    scan = store.enqueue(SCH.MARKET_SCAN, idempotency_key="s1")
+    got = store.force_lease(scan.job_id, "owner")
+    assert got is not None and got.job_id == scan.job_id
+    assert store.get(news.job_id).status == JS.PENDING
+    store.close()
+
+
+def test_owner_scan_click_runs_now_ahead_of_news_and_data(tmp_path):
+    from research.autonomy import controls as CTRL
+    sup = _sup(tmp_path)
+    sup.start()
+    sup.enqueue_due = lambda now_ist=None: None
+    sup.jobs.enqueue(SCH.NEWS_REFRESH, idempotency_key="n1")
+    sup.jobs.enqueue(SCH.DATA_REFRESH, idempotency_key="d1", critical=True)
+    CTRL.request_control(CTRL.RUN_SCAN_NOW, root=sup.root, reason="close-of-market click")
+    job = sup.tick(_NOW)
+    assert job is not None and job.job_type == SCH.MARKET_SCAN
+    assert bool(job.critical)
+    news = next(j for j in sup.jobs.list() if j.job_type == SCH.NEWS_REFRESH)
+    assert news.status == JS.PENDING
+    sup.shutdown()
+
+
+def test_scan_click_runs_while_news_is_in_flight(tmp_path):
+    from research.autonomy import controls as CTRL
+    hold = threading.Event()
+
+    class BlockingNews(FakeDeps):
+        def refresh_news(self):
+            hold.wait(timeout=5)
+            return {"status": "OK"}
+
+    sup = _sup(tmp_path, deps=BlockingNews())
+    sup.start()
+    sup.enqueue_due = lambda now_ist=None: None
+    sup.jobs.enqueue(SCH.NEWS_REFRESH, idempotency_key="n1")
+    first = sup.tick(_NOW)
+    assert first is not None and first.job_type == SCH.NEWS_REFRESH
+    CTRL.request_control(CTRL.RUN_SCAN_NOW, root=sup.root, reason="click")
+    second = sup.tick(_NOW)
+    assert second is not None and second.job_type == SCH.MARKET_SCAN
+    hold.set()
+    for thread in list(getattr(sup, "_bg_threads", [])):
+        thread.join(timeout=2)
     sup.shutdown()
 
 

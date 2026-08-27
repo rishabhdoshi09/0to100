@@ -20,8 +20,11 @@ RETRYABLE_FAILED = "RETRYABLE_FAILED"
 PERMANENT_FAILED = "PERMANENT_FAILED"
 SKIPPED_IDEMPOTENT = "SKIPPED_IDEMPOTENT"
 CANCELLED = "CANCELLED"
-# Recurring context work. These stay runnable, but never jump a due scan/data job.
-_YIELD_TO_FOREGROUND = frozenset({"news_refresh"})
+# Recurring context work. These stay runnable, but never jump a due scan.
+_YIELD_TO_FOREGROUND = frozenset({
+    "news_refresh", "index_warmup", "corporate_actions", "universe_history",
+    "bhavcopy_update", "instrument_refresh", "research_cycle", "learning_cycle",
+})
 
 _TERMINAL = {SUCCEEDED, PERMANENT_FAILED, SKIPPED_IDEMPOTENT, CANCELLED}
 _DDL = """
@@ -162,16 +165,17 @@ class JobStore:
                     "SELECT * FROM jobs WHERE status=? AND lease_expires_at IS NOT NULL "
                     "AND lease_expires_at < ? ORDER BY scheduled_for LIMIT 1", (RUNNING, now)).fetchone()
                 if row is None:
-                    # news_refresh is enqueued every 5 minutes, usually before the
-                    # 15-minute market_scan in the same tick. Without this yield,
-                    # a slow news fetch monopolizes the single worker and the scan
-                    # never starts (next=market_scan, active=news_refresh).
+                    # Owner-clicked and scheduled market_scan beat news/warmup work.
+                    # critical DESC still lets a clicked scan (critical=1) beat a
+                    # pending data_refresh: CASE ranks market_scan above other critical rows.
                     yield_types = tuple(_YIELD_TO_FOREGROUND)
                     placeholders = ",".join("?" for _ in yield_types) or "''"
                     row = self._db.execute(
                         "SELECT * FROM jobs WHERE status=? AND scheduled_for<=? "
-                        f"ORDER BY critical DESC, CASE WHEN job_type IN ({placeholders}) "
-                        "THEN 1 ELSE 0 END, scheduled_for, created_at LIMIT 1",
+                        "ORDER BY critical DESC, "
+                        "CASE WHEN job_type='market_scan' THEN 0 "
+                        f"WHEN job_type IN ({placeholders}) THEN 2 ELSE 1 END, "
+                        "scheduled_for, created_at LIMIT 1",
                         (PENDING, now, *yield_types)).fetchone()
                 if row is None:
                     self._db.execute("COMMIT")
@@ -185,6 +189,30 @@ class JobStore:
                 self._db.execute("ROLLBACK")
                 raise
             return self.get(row["job_id"], _locked=True)
+
+    def force_lease(self, job_id: str, owner: str, *, lease_seconds: float = 600.0) -> Job | None:
+        """Lease one specific PENDING job immediately, ignoring queue order."""
+        now = self.clock()
+        with self._lock:
+            self._db.execute("BEGIN IMMEDIATE")
+            try:
+                row = self._db.execute(
+                    "SELECT * FROM jobs WHERE job_id=? AND status=?",
+                    (job_id, PENDING),
+                ).fetchone()
+                if row is None:
+                    self._db.execute("COMMIT")
+                    return None
+                self._db.execute(
+                    "UPDATE jobs SET status=?, lease_owner=?, lease_expires_at=?, started_at=?, "
+                    "attempt=attempt+1 WHERE job_id=?",
+                    (RUNNING, owner, now + lease_seconds, now, job_id),
+                )
+                self._db.execute("COMMIT")
+            except Exception:
+                self._db.execute("ROLLBACK")
+                raise
+            return self.get(job_id, _locked=True)
 
     def renew_lease(self, job_id: str, owner: str, *, lease_seconds: float = 300.0) -> bool:
         """Extend one live worker lease without changing job state or attempt count."""

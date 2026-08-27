@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import threading
 
 from research.autonomy import job_store as JS
 from research.autonomy import schedules as SCH
@@ -16,6 +17,9 @@ from research.autonomy.dialogue import DialogueLog, Record, OPERATIONAL_INCIDENT
 _MAX_ATTEMPTS = 5
 _BASE_BACKOFF_S = 2.0
 _MAX_BACKOFF_S = 300.0
+_ASYNC_JOB_TYPES = {
+    SCH.NEWS_REFRESH, SCH.INDEX_WARMUP, SCH.CORPORATE_ACTIONS, SCH.UNIVERSE_HISTORY,
+}
 
 
 class SingleInstanceLock:
@@ -84,6 +88,10 @@ class Supervisor:
             self.failures.discard(H.OWNER_PAUSED)
         self._stop = False
         self._running = False
+        self._clicked_scan_id = None
+        self._control_lock = threading.RLock()
+        self._result_lock = threading.Lock()
+        self._bg_threads: list[threading.Thread] = []
 
     def _load_failures(self) -> set:
         try:
@@ -246,6 +254,10 @@ class Supervisor:
                                           idempotency_key=SCH.research_key(session_date))
 
     def _process_controls(self):
+        with self._control_lock:
+            self._process_controls_locked()
+
+    def _process_controls_locked(self):
         for control in self.controls.pending():
             try:
                 ctype = control.control_type
@@ -271,8 +283,13 @@ class Supervisor:
                     self.jobs.enqueue(SCH.DATA_REFRESH,
                                       idempotency_key=f"manual:data:{control.control_id}", critical=True)
                 elif ctype == CTRL.RUN_SCAN_NOW:
-                    self.jobs.enqueue(SCH.MARKET_SCAN,
-                                      idempotency_key=f"manual:scan:{snap}:{control.control_id}")
+                    scan_job = self.jobs.enqueue(
+                        SCH.MARKET_SCAN,
+                        idempotency_key=f"manual:scan:{snap}:{control.control_id}",
+                        critical=True,
+                    )
+                    if scan_job.status == JS.PENDING:
+                        self._clicked_scan_id = scan_job.job_id
                 elif ctype == CTRL.RUN_CYCLE_NOW:
                     self.jobs.enqueue(SCH.PAPER_CYCLE,
                                       idempotency_key=f"manual:cycle:{snap}:{control.control_id}", critical=True)
@@ -369,9 +386,42 @@ class Supervisor:
             self.live_feed.stop()
         self._save_failures()
 
+    def pop_clicked_scan(self):
+        """Apply owner controls and force-lease a Scan Now click, ignoring queue order."""
+        with self._control_lock:
+            self._process_controls_locked()
+            job_id = self._clicked_scan_id
+            self._clicked_scan_id = None
+        if not job_id:
+            return None
+        return self.jobs.force_lease(job_id, self.owner, lease_seconds=900.0)
+
+    def has_urgent_work(self) -> bool:
+        try:
+            if self.controls.pending(limit=1):
+                return True
+            if self._clicked_scan_id:
+                return True
+            if self.jobs.list(status=JS.PENDING, job_type=SCH.MARKET_SCAN, limit=1):
+                return True
+        except Exception:
+            return False
+        return False
+
+    def _execute_async(self, job) -> None:
+        self._bg_threads = [t for t in self._bg_threads if t.is_alive()]
+        thread = threading.Thread(
+            target=self._execute,
+            args=(job,),
+            name=f"autonomy-{job.job_type}",
+            daemon=True,
+        )
+        thread.start()
+        self._bg_threads.append(thread)
+
     def tick(self, now_ist=None):
         self.jobs.reclaim_expired()
-        self._process_controls()
+        clicked = self.pop_clicked_scan()
         current = now_ist or self.deps.now_ist()
         self._manage_live_feed(current)
         if hasattr(self.deps, "drain_telegram_alerts"):
@@ -384,10 +434,27 @@ class Supervisor:
             return None
         self.enqueue_due(current)
         self._check_overdue()
+        if clicked:
+            self._execute(clicked)
+            self.heartbeat()
+            return clicked
         job = self.jobs.lease_due(self.owner, lease_seconds=300.0)
         if job is None:
             self.heartbeat()
             return None
+        if job.job_type in _ASYNC_JOB_TYPES:
+            self._execute_async(job)
+            foreground = self.jobs.lease_due(self.owner, lease_seconds=300.0)
+            if foreground is None:
+                self.heartbeat()
+                return job
+            if foreground.job_type in _ASYNC_JOB_TYPES:
+                self._execute_async(foreground)
+                self.heartbeat()
+                return foreground
+            self._execute(foreground)
+            self.heartbeat()
+            return foreground
         self._execute(job)
         self.heartbeat()
         return job
@@ -407,38 +474,40 @@ class Supervisor:
         try:
             result = handler(ctx)
         except Exception as exc:
-            self._retry_or_fail(job, error_code="HANDLER_EXCEPTION", error_message=str(exc))
-            self._incident("HANDLER_EXCEPTION", f"{job.job_type}: {exc}", job)
+            with self._result_lock:
+                self._retry_or_fail(job, error_code="HANDLER_EXCEPTION", error_message=str(exc))
+                self._incident("HANDLER_EXCEPTION", f"{job.job_type}: {exc}", job)
             return
 
-        self.failures |= set(result.failures)
-        self.failures -= set(result.clears)
-        self._save_failures()
+        with self._result_lock:
+            self.failures |= set(result.failures)
+            self.failures -= set(result.clears)
+            self._save_failures()
 
-        if result.status == JS.RETRYABLE_FAILED:
-            self._retry_or_fail(job, error_code=result.error_code, error_message=result.error_message,
-                                summary=result.summary)
-            self._incident(result.error_code or "RETRYABLE", result.summary or result.error_message, job)
-        elif result.status == JS.BLOCKED:
-            dependency = result.blocked_on or "MANUAL_REVIEW"
-            self.jobs.block(job.job_id, dependency=dependency,
-                            reason=result.error_message or result.summary,
-                            dependency_version=result.dependency_version or None,
-                            result_summary=result.summary)
-            self._incident("BLOCKED", result.summary, job)
-        else:
-            self.jobs.complete(job.job_id, result.status, result_summary=result.summary,
-                               output_snapshot_id=result.output_snapshot_id,
-                               error_code=result.error_code, error_message=result.error_message)
-            if result.status == JS.SUCCEEDED:
-                for dependency in result.unblocks:
-                    self.jobs.unblock_dependency(dependency)
+            if result.status == JS.RETRYABLE_FAILED:
+                self._retry_or_fail(job, error_code=result.error_code, error_message=result.error_message,
+                                    summary=result.summary)
+                self._incident(result.error_code or "RETRYABLE", result.summary or result.error_message, job)
+            elif result.status == JS.BLOCKED:
+                dependency = result.blocked_on or "MANUAL_REVIEW"
+                self.jobs.block(job.job_id, dependency=dependency,
+                                reason=result.error_message or result.summary,
+                                dependency_version=result.dependency_version or None,
+                                result_summary=result.summary)
+                self._incident("BLOCKED", result.summary, job)
+            else:
+                self.jobs.complete(job.job_id, result.status, result_summary=result.summary,
+                                   output_snapshot_id=result.output_snapshot_id,
+                                   error_code=result.error_code, error_message=result.error_message)
+                if result.status == JS.SUCCEEDED:
+                    for dependency in result.unblocks:
+                        self.jobs.unblock_dependency(dependency)
 
-        target = self._gated_state(result.state_hint)
-        if target and target != self.state.state:
-            self._transition(target, reason=job.job_type,
-                             explanation=result.summary or job.job_type, trigger=job.job_id,
-                             snapshot_id=result.output_snapshot_id)
+            target = self._gated_state(result.state_hint)
+            if target and target != self.state.state:
+                self._transition(target, reason=job.job_type,
+                                 explanation=result.summary or job.job_type, trigger=job.job_id,
+                                 snapshot_id=result.output_snapshot_id)
 
     def _gated_state(self, hint):
         if self.owner_state.get("halted"):

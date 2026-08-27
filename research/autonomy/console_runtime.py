@@ -128,6 +128,15 @@ def _heartbeat(
     return now
 
 
+def _primary_active(active_map: dict) -> dict:
+    if not active_map:
+        return {}
+    for job in active_map.values():
+        if job.get("job_type") == SCH.MARKET_SCAN:
+            return dict(job)
+    return dict(next(iter(active_map.values())))
+
+
 def run_visible_loop(
     supervisor,
     *,
@@ -146,7 +155,46 @@ def run_visible_loop(
 
     def active_snapshot() -> dict:
         with active_lock:
-            return dict(active)
+            return _primary_active(active)
+
+    original_execute = supervisor._execute
+    elapsed_by_job: dict[str, float] = {}
+
+    def visible_execute(job):
+        started = time.monotonic()
+        current = {
+            "job_id": job.job_id,
+            "job_type": job.job_type,
+            "attempt": job.attempt,
+            "critical": bool(getattr(job, "critical", False)),
+            "started_ist": ST._now_ist_iso(),
+            "started_monotonic": started,
+        }
+        with active_lock:
+            active[job.job_id] = current
+            snapshot = _primary_active(active)
+        try:
+            _write_runtime_status(supervisor, process_running=True, active_job=snapshot)
+        except Exception:
+            pass
+        _emit(
+            "JOB START",
+            f"{job.job_type} · id={job.job_id} · attempt={job.attempt}"
+            + (" · critical" if getattr(job, "critical", False) else ""),
+        )
+        try:
+            return original_execute(job)
+        finally:
+            elapsed_by_job[job.job_id] = time.monotonic() - started
+            with active_lock:
+                active.pop(job.job_id, None)
+                snapshot = _primary_active(active)
+            try:
+                _write_runtime_status(supervisor, process_running=True, active_job=snapshot)
+            except Exception:
+                pass
+
+    supervisor._execute = visible_execute
 
     _write_runtime_status(supervisor, process_running=True, active_job={})
     last_heartbeat = _heartbeat(
@@ -159,11 +207,23 @@ def run_visible_loop(
 
     # Independent process-liveness pulse. It continues while ``tick()`` is blocked inside a long
     # scan/data refresh, which prevents the web terminal from falsely declaring autonomy offline.
-    runtime_interval = max(1.0, min(15.0, float(heartbeat_s or 30.0) / 2.0))
+    # It also force-starts an owner Scan Now click so news cannot hold the button hostage.
+    runtime_interval = max(0.4, min(2.0, float(heartbeat_s or 30.0) / 8.0))
 
     def runtime_worker() -> None:
         next_console = time.monotonic() + max(1.0, float(heartbeat_s or 30.0))
         while not runtime_stop.wait(runtime_interval):
+            try:
+                clicked = supervisor.pop_clicked_scan()
+            except Exception:
+                clicked = None
+            if clicked is not None:
+                threading.Thread(
+                    target=visible_execute,
+                    args=(clicked,),
+                    name="autonomy-owner-scan",
+                    daemon=True,
+                ).start()
             current = active_snapshot()
             try:
                 _write_runtime_status(
@@ -190,44 +250,6 @@ def run_visible_loop(
         daemon=True,
     )
     runtime_thread.start()
-
-    original_execute = supervisor._execute
-    elapsed_by_job: dict[str, float] = {}
-
-    def visible_execute(job):
-        started = time.monotonic()
-        current = {
-            "job_id": job.job_id,
-            "job_type": job.job_type,
-            "attempt": job.attempt,
-            "critical": bool(getattr(job, "critical", False)),
-            "started_ist": ST._now_ist_iso(),
-            "started_monotonic": started,
-        }
-        with active_lock:
-            active.clear()
-            active.update(current)
-        try:
-            _write_runtime_status(supervisor, process_running=True, active_job=current)
-        except Exception:
-            pass
-        _emit(
-            "JOB START",
-            f"{job.job_type} · id={job.job_id} · attempt={job.attempt}"
-            + (" · critical" if getattr(job, "critical", False) else ""),
-        )
-        try:
-            return original_execute(job)
-        finally:
-            elapsed_by_job[job.job_id] = time.monotonic() - started
-            with active_lock:
-                active.clear()
-            try:
-                _write_runtime_status(supervisor, process_running=True, active_job={})
-            except Exception:
-                pass
-
-    supervisor._execute = visible_execute
     try:
         while not supervisor._stop:
             job = None
@@ -242,19 +264,20 @@ def run_visible_loop(
                 if job is not None:
                     final = supervisor.jobs.get(job.job_id)
                     final = final or job
-                    summary = final.result_summary or final.error_message or "no summary"
-                    elapsed = elapsed_by_job.pop(job.job_id, 0.0)
-                    _emit(
-                        "JOB DONE",
-                        f"{final.job_type} → {final.status} · {elapsed:.1f}s · "
-                        f"attempt={final.attempt} · {summary}",
-                    )
+                    if getattr(final, "status", None) != JS.RUNNING:
+                        summary = final.result_summary or final.error_message or "no summary"
+                        elapsed = elapsed_by_job.pop(job.job_id, 0.0)
+                        _emit(
+                            "JOB DONE",
+                            f"{final.job_type} → {final.status} · {elapsed:.1f}s · "
+                            f"attempt={final.attempt} · {summary}",
+                        )
                     last_heartbeat = _heartbeat(
                         supervisor,
                         force=True,
                         last_at=last_heartbeat,
                         every_s=heartbeat_s,
-                        active_job={},
+                        active_job=active_snapshot(),
                     )
                 else:
                     last_heartbeat = _heartbeat(
@@ -305,6 +328,8 @@ def run_visible_loop(
 
             if consecutive_errors:
                 delay = min(60.0, max(1.0, 2.0 ** min(consecutive_errors, 5)))
+            elif hasattr(supervisor, "has_urgent_work") and supervisor.has_urgent_work():
+                delay = 0.2
             else:
                 delay = max(0.1, float(interval_s))
             sleep_fn(delay)

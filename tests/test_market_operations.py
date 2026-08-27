@@ -7,6 +7,38 @@ from pathlib import Path
 from operations.store import OperationStore, PENDING, RUNNING, SUCCEEDED
 
 
+def test_user_scan_does_not_block_on_history_download(monkeypatch, tmp_path: Path):
+    import sys
+    import types
+
+    from operations.market_ops import MarketOperationsWorker
+
+    calls = {"build": 0}
+
+    def fake_status(*, load_cache=True):
+        return {"ready": False, "sessions": 12, "symbols": 100}
+
+    def fake_build_store(**kwargs):
+        calls["build"] += 1
+        raise AssertionError("user scan must not download history")
+
+    runtime = types.ModuleType("data.bhavcopy_runtime")
+    runtime.status = fake_status
+    store_mod = types.ModuleType("data.bhavcopy_store")
+    store_mod.build_store = fake_build_store
+    data_mod = types.ModuleType("data")
+    data_mod.bhavcopy_runtime = runtime
+    data_mod.bhavcopy_store = store_mod
+    monkeypatch.setitem(sys.modules, "data", data_mod)
+    monkeypatch.setitem(sys.modules, "data.bhavcopy_runtime", runtime)
+    monkeypatch.setitem(sys.modules, "data.bhavcopy_store", store_mod)
+
+    worker = MarketOperationsWorker(store=OperationStore(tmp_path / "ops.db"))
+    history = worker._ensure_history("op1", blocking=False)
+    assert history["sessions"] == 12
+    assert calls["build"] == 0
+
+
 def test_user_scan_jumps_ahead_of_pipeline_work(tmp_path: Path):
     store = OperationStore(tmp_path / "ops.db")
     pipeline, created = store.enqueue("MARKET_SCAN", lane="market_scan", requested_by="pipeline", priority=0)
