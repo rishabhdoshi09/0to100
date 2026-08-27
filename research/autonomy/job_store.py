@@ -27,6 +27,10 @@ _YIELD_TO_FOREGROUND = frozenset({
 })
 
 _TERMINAL = {SUCCEEDED, PERMANENT_FAILED, SKIPPED_IDEMPOTENT, CANCELLED}
+
+
+def _placeholders(values) -> str:
+    return ",".join("?" for _ in values)
 _DDL = """
 CREATE TABLE IF NOT EXISTS jobs (
     job_id TEXT PRIMARY KEY,
@@ -156,27 +160,47 @@ class JobStore:
             self._db.commit()
             return self.get(jid, _locked=True)
 
-    def lease_due(self, owner: str, *, lease_seconds: float = 300.0) -> Job | None:
+    def lease_due(self, owner: str, *, lease_seconds: float = 300.0,
+                  only_types=None, ignore_ids=None) -> Job | None:
         now = self.clock()
+        types = tuple(only_types or ())
+        ignore = tuple(ignore_ids or ())
         with self._lock:
             self._db.execute("BEGIN IMMEDIATE")
             try:
-                row = self._db.execute(
+                steal_sql = (
                     "SELECT * FROM jobs WHERE status=? AND lease_expires_at IS NOT NULL "
-                    "AND lease_expires_at < ? ORDER BY scheduled_for LIMIT 1", (RUNNING, now)).fetchone()
+                    "AND lease_expires_at < ?"
+                )
+                steal_params: list = [RUNNING, now]
+                if types:
+                    steal_sql += f" AND job_type IN ({_placeholders(types)})"
+                    steal_params.extend(types)
+                if ignore:
+                    steal_sql += f" AND job_id NOT IN ({_placeholders(ignore)})"
+                    steal_params.extend(ignore)
+                steal_sql += " ORDER BY scheduled_for LIMIT 1"
+                row = self._db.execute(steal_sql, steal_params).fetchone()
                 if row is None:
-                    # Owner-clicked and scheduled market_scan beat news/warmup work.
-                    # critical DESC still lets a clicked scan (critical=1) beat a
-                    # pending data_refresh: CASE ranks market_scan above other critical rows.
+                    # Unfiltered callers still prefer a due market_scan over news/warmup.
+                    # Per-lane callers pass only_types, so this ranking only applies inside the lane.
                     yield_types = tuple(_YIELD_TO_FOREGROUND)
-                    placeholders = ",".join("?" for _ in yield_types) or "''"
-                    row = self._db.execute(
-                        "SELECT * FROM jobs WHERE status=? AND scheduled_for<=? "
-                        "ORDER BY critical DESC, "
+                    pending_sql = "SELECT * FROM jobs WHERE status=? AND scheduled_for<=?"
+                    pending_params: list = [PENDING, now]
+                    if types:
+                        pending_sql += f" AND job_type IN ({_placeholders(types)})"
+                        pending_params.extend(types)
+                    if ignore:
+                        pending_sql += f" AND job_id NOT IN ({_placeholders(ignore)})"
+                        pending_params.extend(ignore)
+                    pending_sql += (
+                        " ORDER BY critical DESC, "
                         "CASE WHEN job_type='market_scan' THEN 0 "
-                        f"WHEN job_type IN ({placeholders}) THEN 2 ELSE 1 END, "
-                        "scheduled_for, created_at LIMIT 1",
-                        (PENDING, now, *yield_types)).fetchone()
+                        f"WHEN job_type IN ({_placeholders(yield_types)}) THEN 2 ELSE 1 END, "
+                        "scheduled_for, created_at LIMIT 1"
+                    )
+                    pending_params.extend(yield_types)
+                    row = self._db.execute(pending_sql, pending_params).fetchone()
                 if row is None:
                     self._db.execute("COMMIT")
                     return None
@@ -362,13 +386,19 @@ class JobStore:
             ).fetchall()
         return [_row_to_job(r) for r in rows]
 
-    def reclaim_expired(self) -> int:
+    def reclaim_expired(self, *, ignore_ids=None) -> int:
         now = self.clock()
+        ignore = tuple(ignore_ids or ())
         with self._lock:
-            cur = self._db.execute(
+            sql = (
                 "UPDATE jobs SET status=?, lease_owner=NULL, lease_expires_at=NULL WHERE status=? "
-                "AND lease_expires_at IS NOT NULL AND lease_expires_at < ?",
-                (PENDING, RUNNING, now))
+                "AND lease_expires_at IS NOT NULL AND lease_expires_at < ?"
+            )
+            params: list = [PENDING, RUNNING, now]
+            if ignore:
+                sql += f" AND job_id NOT IN ({_placeholders(ignore)})"
+                params.extend(ignore)
+            cur = self._db.execute(sql, params)
             self._db.commit()
             return cur.rowcount
 

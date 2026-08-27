@@ -17,9 +17,6 @@ from research.autonomy.dialogue import DialogueLog, Record, OPERATIONAL_INCIDENT
 _MAX_ATTEMPTS = 5
 _BASE_BACKOFF_S = 2.0
 _MAX_BACKOFF_S = 300.0
-_ASYNC_JOB_TYPES = {
-    SCH.NEWS_REFRESH, SCH.INDEX_WARMUP, SCH.CORPORATE_ACTIONS, SCH.UNIVERSE_HISTORY,
-}
 
 
 class SingleInstanceLock:
@@ -91,7 +88,10 @@ class Supervisor:
         self._clicked_scan_id = None
         self._control_lock = threading.RLock()
         self._result_lock = threading.Lock()
-        self._bg_threads: list[threading.Thread] = []
+        self._dispatch_lock = threading.Lock()
+        self._lane_lock = threading.Lock()
+        self._lane_threads: dict[str, threading.Thread] = {}
+        self._lane_jobs: dict[str, str] = {}
 
     def _load_failures(self) -> set:
         try:
@@ -386,15 +386,85 @@ class Supervisor:
             self.live_feed.stop()
         self._save_failures()
 
+    def _lane_busy(self, lane: str) -> bool:
+        with self._lane_lock:
+            thread = self._lane_threads.get(lane)
+            return thread is not None and thread.is_alive()
+
+    def _live_job_ids(self) -> set[str]:
+        with self._lane_lock:
+            live = set()
+            for lane, thread in list(self._lane_threads.items()):
+                if thread is not None and thread.is_alive():
+                    job_id = self._lane_jobs.get(lane)
+                    if job_id:
+                        live.add(job_id)
+            return live
+
+    def _dispatch(self, job, *, lane: str | None = None):
+        lane = lane or SCH.lane_for(job.job_type)
+        thread = threading.Thread(
+            target=self._run_lane,
+            args=(lane, job),
+            name=f"autonomy-{lane}-{job.job_type}",
+            daemon=True,
+        )
+        with self._lane_lock:
+            self._lane_threads[lane] = thread
+            self._lane_jobs[lane] = job.job_id
+        thread.start()
+        return job
+
+    def _run_lane(self, lane: str, job) -> None:
+        try:
+            self._execute(job)
+        finally:
+            with self._lane_lock:
+                if self._lane_jobs.get(lane) == job.job_id:
+                    self._lane_jobs.pop(lane, None)
+                current = self._lane_threads.get(lane)
+                if current is threading.current_thread():
+                    self._lane_threads.pop(lane, None)
+
+    @property
+    def _bg_threads(self) -> list[threading.Thread]:
+        with self._lane_lock:
+            return [t for t in self._lane_threads.values() if t is not None and t.is_alive()]
+
+    def join_workers(self, timeout: float = 8.0) -> bool:
+        import time
+        deadline = time.monotonic() + max(0.0, float(timeout))
+        while True:
+            with self._lane_lock:
+                threads = [t for t in self._lane_threads.values() if t is not None and t.is_alive()]
+            if not threads:
+                return True
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return False
+            threads[0].join(timeout=remaining)
+
     def pop_clicked_scan(self):
         """Apply owner controls and force-lease a Scan Now click, ignoring queue order."""
         with self._control_lock:
             self._process_controls_locked()
             job_id = self._clicked_scan_id
+            if not job_id:
+                return None
+            if self._lane_busy(SCH.LANE_SCAN):
+                return None
             self._clicked_scan_id = None
-        if not job_id:
-            return None
-        return self.jobs.force_lease(job_id, self.owner, lease_seconds=900.0)
+        return self.jobs.force_lease(
+            job_id, self.owner, lease_seconds=SCH.LANE_LEASE_SECONDS[SCH.LANE_SCAN],
+        )
+
+    def kick_clicked_scan(self):
+        """Force-start a Scan Now click on the scan lane if that worker is idle."""
+        with self._dispatch_lock:
+            clicked = self.pop_clicked_scan()
+            if clicked is None:
+                return None
+            return self._dispatch(clicked, lane=SCH.LANE_SCAN)
 
     def has_urgent_work(self) -> bool:
         try:
@@ -408,20 +478,27 @@ class Supervisor:
             return False
         return False
 
-    def _execute_async(self, job) -> None:
-        self._bg_threads = [t for t in self._bg_threads if t.is_alive()]
-        thread = threading.Thread(
-            target=self._execute,
-            args=(job,),
-            name=f"autonomy-{job.job_type}",
-            daemon=True,
-        )
-        thread.start()
-        self._bg_threads.append(thread)
+    def _dispatch_idle_lanes(self, live: set[str]) -> list:
+        dispatched = []
+        for lane in SCH.LANE_ORDER:
+            if self._lane_busy(lane):
+                continue
+            if lane == SCH.LANE_CYCLE and self._lane_busy(SCH.LANE_SCAN):
+                continue
+            job = self.jobs.lease_due(
+                self.owner,
+                lease_seconds=SCH.LANE_LEASE_SECONDS[lane],
+                only_types=SCH.LANE_TYPES[lane],
+                ignore_ids=live,
+            )
+            if job is None:
+                continue
+            self._dispatch(job, lane=lane)
+            dispatched.append(job)
+            live.add(job.job_id)
+        return dispatched
 
     def tick(self, now_ist=None):
-        self.jobs.reclaim_expired()
-        clicked = self.pop_clicked_scan()
         current = now_ist or self.deps.now_ist()
         self._manage_live_feed(current)
         if hasattr(self.deps, "drain_telegram_alerts"):
@@ -432,32 +509,23 @@ class Supervisor:
         if self.owner_state.get("halted"):
             self.heartbeat()
             return None
-        self.enqueue_due(current)
-        self._check_overdue()
-        if clicked:
-            self._execute(clicked)
-            self.heartbeat()
-            return clicked
-        job = self.jobs.lease_due(self.owner, lease_seconds=300.0)
-        if job is None:
-            self.heartbeat()
-            return None
-        if job.job_type in _ASYNC_JOB_TYPES:
-            self._execute_async(job)
-            foreground = self.jobs.lease_due(self.owner, lease_seconds=300.0)
-            if foreground is None:
-                self.heartbeat()
-                return job
-            if foreground.job_type in _ASYNC_JOB_TYPES:
-                self._execute_async(foreground)
-                self.heartbeat()
-                return foreground
-            self._execute(foreground)
-            self.heartbeat()
-            return foreground
-        self._execute(job)
+        with self._dispatch_lock:
+            live = self._live_job_ids()
+            self.jobs.reclaim_expired(ignore_ids=live)
+            clicked = self.pop_clicked_scan()
+            self.enqueue_due(current)
+            self._check_overdue()
+            dispatched = []
+            if clicked is not None:
+                self._dispatch(clicked, lane=SCH.LANE_SCAN)
+                dispatched.append(clicked)
+                live.add(clicked.job_id)
+            dispatched.extend(self._dispatch_idle_lanes(live))
         self.heartbeat()
-        return job
+        for job in dispatched:
+            if job.job_type == SCH.MARKET_SCAN:
+                return job
+        return dispatched[0] if dispatched else None
 
     def _execute(self, job):
         handler = JOBS.HANDLERS.get(job.job_type)
@@ -565,6 +633,7 @@ class Supervisor:
     def shutdown(self):
         self._stop = True
         self._running = False
+        self.join_workers(8.0)
         self._state_persist.save(self.state)
         self._write_status()
         self.live_feed.stop()
