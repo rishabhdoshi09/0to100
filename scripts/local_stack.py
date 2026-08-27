@@ -77,23 +77,34 @@ def _pids_on_port_proc(port: int) -> list[int]:
 
 def _pids_on_port_lsof(port: int) -> list[int]:
     """macOS / BSD: /proc/net/tcp is absent, so use lsof listen PIDs."""
-    try:
-        out = subprocess.check_output(
-            ["lsof", "-nP", f"-iTCP:{int(port)}", "-sTCP:LISTEN", "-t"],
-            text=True,
-            stderr=subprocess.DEVNULL,
-        )
-    except (OSError, subprocess.CalledProcessError):
-        return []
-    found: set[int] = set()
-    for token in out.split():
-        try:
-            pid = int(token)
-        except ValueError:
-            continue
-        if pid > 1:
-            found.add(pid)
-    return sorted(found)
+    port = int(port)
+    binaries = ("lsof", "/usr/sbin/lsof", "/usr/bin/lsof")
+    arg_sets = (
+        ["-nP", f"-iTCP:{port}", "-sTCP:LISTEN", "-t"],
+        ["-nP", f"-iTCP:{port}", "-t"],
+        ["-nP", f"-i:{port}", "-t"],
+    )
+    for binary in binaries:
+        for extra in arg_sets:
+            try:
+                out = subprocess.check_output(
+                    [binary, *extra],
+                    text=True,
+                    stderr=subprocess.DEVNULL,
+                )
+            except (OSError, subprocess.CalledProcessError):
+                continue
+            found: set[int] = set()
+            for token in out.split():
+                try:
+                    pid = int(token)
+                except ValueError:
+                    continue
+                if pid > 1:
+                    found.add(pid)
+            if found:
+                return sorted(found)
+    return []
 
 
 def pids_on_port(port: int) -> list[int]:
@@ -203,6 +214,12 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     stopped = stop_local_stack(ports=ports, autonomy=not args.no_autonomy)
     print(json.dumps({"stopped": stopped}))
+    if not stopped and args.action == "stop":
+        print(json.dumps({
+            "autonomy_pid": autonomy_pid(),
+            "market_ops_pid": market_ops_pid(),
+            "ports": {str(port): pids_on_port(port) for port in ports},
+        }))
     return 0
 
 
