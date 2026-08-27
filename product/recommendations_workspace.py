@@ -1347,9 +1347,9 @@ def build_market_reports_workspace(
         missing_lanes.append("market_scan")
     if not news_meta.get("available") and not int(news_meta.get("article_count") or 0):
         missing_lanes.append("news")
-    if not sourced and not daily_n:
+    if not sourced:
         missing_lanes.append("desk_wrap")
-    needs_refresh = not pulse_has_rows and not sourced and not daily_n
+    needs_refresh = not bool(pulse.get("takeaways") or []) and not sourced
     stale = bool(has_today and not pulse_has_rows and not sourced)
     empty_detail = ""
     if not sourced and not daily_n and not int(highlights.get("row_count") or 0) and not (pulse.get("takeaways") or []):

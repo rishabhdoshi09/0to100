@@ -239,7 +239,7 @@ def test_market_reports_lists_today_pulse(tmp_path, monkeypatch):
     assert "Nifty" in payload["reports"][0]["summary"]
     assert payload["reports"][0]["is_new"] is True
     assert payload.get("as_of_ist")
-    assert "does not walk every bhavcopy" in payload.get("load_note", "")
+    assert "queues a real report job" in payload.get("load_note", "")
 
 
 def test_market_reports_reuse_fresh_file(tmp_path, monkeypatch):
@@ -271,7 +271,12 @@ def test_market_reports_page_open_does_not_crawl_when_file_missing(tmp_path, mon
         "reports.street_pulse.build_pulse",
         lambda **_k: (_ for _ in ()).throw(AssertionError("page-open must not crawl")),
     )
-    payload = build_market_reports_workspace(persist_today=True, rebuild=False)
+    payload = build_market_reports_workspace(
+        persist_today=True,
+        rebuild=False,
+        scan_payload={"records": []},
+        news_payload={"available": False, "articles": []},
+    )
     assert payload["today_pulse"] in ({}, None) or not payload["today_pulse"].get("takeaways")
     assert payload["needs_refresh"] is True
 

@@ -213,7 +213,16 @@ def test_page_open_get_still_does_not_rebuild_report(tmp_path: Path, monkeypatch
         "reports.street_pulse.build_pulse",
         lambda **_k: (_ for _ in ()).throw(AssertionError("GET must not crawl")),
     )
-    payload = rw.build_market_reports_workspace(persist_today=True, rebuild=False)
+    monkeypatch.setattr(
+        "product.desk_note.build_desk_note",
+        lambda **_k: {"wrap": [], "desks": [], "explainers": [], "daily_wrap": [], "wrap_sourced": 0},
+    )
+    payload = rw.build_market_reports_workspace(
+        persist_today=True,
+        rebuild=False,
+        scan_payload={"records": []},
+        news_payload={"available": False, "articles": []},
+    )
     assert payload["needs_refresh"] is True
     assert "market_scan" in payload["missing_lanes"]
 
@@ -228,7 +237,7 @@ def test_empty_high_conviction_explains_what_was_checked():
             "methods": [{"id": "sepa", "label": "SEPA", "status": "fail"}],
         },
         {
-            "reco_tier": "GOOD",
+            "reco_tier": "good_setup",
             "families": [{"id": "quality", "label": "Quality", "status": "pass"}],
             "methods": [{"id": "earnings", "label": "Earnings", "status": "pass"}],
         },
