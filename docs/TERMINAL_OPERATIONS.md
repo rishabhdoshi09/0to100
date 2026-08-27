@@ -4,13 +4,12 @@
 
 ```bash
 cd ~/0to100
-source venv/bin/activate
-chmod +x scripts/run_quantterm.sh
-bash scripts/run_quantterm.sh
+bash scripts/run_quantterm_complete.sh
 ```
 
-The stack launcher starts or reuses the single autonomy supervisor, starts the local FastAPI bridge on
-`127.0.0.1:8765`, and starts the dedicated React terminal on `127.0.0.1:5173`.
+One command owns the local stack: Vite desk on `127.0.0.1:5173`, terminal API on
+`127.0.0.1:8765`, report API on `127.0.0.1:8766`, autonomy, and the
+market-operations worker. The React terminal is the product UI. Streamlit is not started.
 
 ## Visible autonomy contract
 

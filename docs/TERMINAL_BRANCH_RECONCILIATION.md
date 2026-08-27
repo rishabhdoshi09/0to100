@@ -2,7 +2,7 @@
 
 ## Branch of record
 
-`agent/quantterm-terminal-ui` remains the primary retail product branch. The dedicated React terminal is the main user experience; Streamlit remains a fallback and engineering observer.
+`agent/quantterm-terminal-ui` remains the primary retail product branch. The dedicated React terminal is the only product UI. Streamlit is not started by the local stack and is not a fallback.
 
 ## What was selectively merged
 
