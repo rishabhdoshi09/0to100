@@ -11,18 +11,7 @@ export default defineConfig({
     host: '127.0.0.1',
     port: 5173,
     proxy: {
-      '/api': {
-        target: 'http://127.0.0.1:8765',
-        configure(proxy) {
-          proxy.on('error', (err, _req, res) => {
-            const code = (err as NodeJS.ErrnoException).code
-            if (code === 'ECONNREFUSED' && res && !res.writableEnded) {
-              res.writeHead(503, { 'Content-Type': 'application/json' })
-              res.end(JSON.stringify({ detail: 'Market API is still starting on :8765' }))
-            }
-          })
-        },
-      },
+      '/api': 'http://127.0.0.1:8765',
     },
   },
   build: {
