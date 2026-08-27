@@ -1,8 +1,9 @@
 from datetime import datetime, timezone
 from pathlib import Path
+import time
 
-from news.curator import EntityResolver, curate_articles
-from news.curator_models import FetchedNews
+from news.curator import EntityResolver, NewsCurator, curate_articles
+from news.curator_models import FetchedNews, SourceSpec
 from news.curator_store import NewsCuratorStore
 from news.source_catalog import default_sources
 
@@ -76,3 +77,50 @@ def test_source_catalog_contains_official_and_discovery_feeds():
     assert {"nse_announcements", "sebi", "rbi_press", "pib_releases"}.issubset(keys)
     assert any(source.key.startswith("google_") for source in sources)
     assert len({source.url for source in sources}) == len(sources)
+
+
+def test_entity_resolver_matches_special_nse_symbols():
+    resolver = EntityResolver(
+        {"M&M": "Mahindra and Mahindra Limited", "RELIANCE": "Reliance Industries Limited"},
+        {"M&M"},
+    )
+    symbols, fno = resolver.resolve("M&M tractor sales beat estimates; RELIANCE also gains")
+    assert symbols == ("M&M", "RELIANCE")
+    assert fno == ("M&M",)
+
+
+def test_entity_resolver_scales_to_full_universe():
+    names = {f"SYM{i:04d}": f"Company {i} Industries Limited" for i in range(2500)}
+    names["RELIANCE"] = "Reliance Industries Limited"
+    names["M&M"] = "Mahindra and Mahindra Limited"
+    resolver = EntityResolver(names, {"RELIANCE", "M&M"})
+    headlines = [
+        "RELIANCE wins a large order as markets rally",
+        "M&M tractor sales beat estimates this quarter",
+        "Unrelated macro update on inflation and the rupee",
+    ] * 150
+    started = time.monotonic()
+    hits = [resolver.resolve(text) for text in headlines]
+    assert time.monotonic() - started < 1.5
+    assert hits[0] == (("RELIANCE",), ("RELIANCE",))
+    assert hits[1][0] == ("M&M",) and hits[1][1] == ("M&M",)
+    assert hits[2] == ((), ())
+
+
+def test_refresh_respects_fetch_budget(tmp_path: Path):
+    spec = SourceSpec(key="slow", name="Slow Wire", url="https://example.com/rss", category="market")
+    curator = NewsCurator(
+        sources=[spec],
+        store=NewsCuratorStore(tmp_path / "news.sqlite3"),
+        resolver=EntityResolver({}, set()),
+    )
+
+    def hang(_source, _max_age_hours):
+        time.sleep(1)
+        raise AssertionError("hung fetch should have been abandoned")
+
+    curator._fetch_source = hang  # type: ignore[method-assign]
+    started = time.monotonic()
+    report = curator.refresh(budget_s=0.2)
+    assert time.monotonic() - started < 1.5
+    assert any("budget" in error.lower() for error in report.errors)

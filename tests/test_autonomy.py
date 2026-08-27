@@ -10,6 +10,9 @@ from __future__ import annotations
 
 import inspect
 import io
+import json
+import threading
+import time
 import tokenize
 from datetime import datetime
 from pathlib import Path
@@ -164,7 +167,9 @@ def test_data_refresh_failure_preserves_and_blocks(tmp_path):
 def test_stale_data_not_shown_ready(tmp_path):
     sup = _sup(tmp_path, deps=FakeDeps(data_ok=False)); sup.start()
     for _ in range(6):
-        if sup.tick(_NOW) is None: break
+        if sup.tick(_NOW) is None and not sup._bg_threads:
+            break
+        assert sup.join_workers(2.0)
     from product.autonomy_status import read_autonomy_status
     status = read_autonomy_status(root=tmp_path / "auto")
     assert status["state"] == ST.DATA_BLOCKED and status["new_paper_entries"] == H.BLOCKED
@@ -212,6 +217,255 @@ def test_scan_slot_is_deterministic():
     b = SCH.scan_slot(datetime(2026, 7, 31, 10, 14))
     assert a == b == "intraday-1000"          # same 15-min slot → one immutable scan
     assert not SCH.scan_due(datetime(2026, 7, 31, 10, 14), a)
+
+
+def test_lease_due_only_types_stays_inside_the_lane(tmp_path):
+    store = JS.JobStore(tmp_path / "j.db")
+    store.enqueue(SCH.NEWS_REFRESH, idempotency_key="n1")
+    store.enqueue(SCH.MARKET_SCAN, idempotency_key="s1")
+    store.enqueue(SCH.DATA_REFRESH, idempotency_key="d1", critical=True)
+    news = store.lease_due("owner", only_types=SCH.LANE_TYPES[SCH.LANE_NEWS])
+    scan = store.lease_due("owner", only_types=SCH.LANE_TYPES[SCH.LANE_SCAN])
+    data = store.lease_due("owner", only_types=SCH.LANE_TYPES[SCH.LANE_DATA])
+    assert news is not None and news.job_type == SCH.NEWS_REFRESH
+    assert scan is not None and scan.job_type == SCH.MARKET_SCAN
+    assert data is not None and data.job_type == SCH.DATA_REFRESH
+    store.close()
+
+
+def test_reclaim_expired_does_not_steal_live_job_ids(tmp_path):
+    clk = [0.0]
+    store = JS.JobStore(tmp_path / "j.db", clock=lambda: clk[0])
+    job = store.enqueue(SCH.NEWS_REFRESH, idempotency_key="n1")
+    store.lease_due("owner", lease_seconds=10)
+    clk[0] = 100
+    assert store.reclaim_expired(ignore_ids={job.job_id}) == 0
+    assert store.get(job.job_id).status == JS.RUNNING
+    assert store.reclaim_expired() == 1
+    assert store.get(job.job_id).status == JS.PENDING
+    store.close()
+
+
+def test_every_job_type_has_a_worker_lane():
+    assert set(SCH._JOB_LANE) == set(SCH.ALL_JOB_TYPES)
+    assert SCH.lane_for(SCH.MARKET_SCAN) == SCH.LANE_SCAN
+    assert SCH.lane_for(SCH.NEWS_REFRESH) == SCH.LANE_NEWS
+    assert SCH.lane_for(SCH.PAPER_CYCLE) == SCH.LANE_CYCLE
+
+
+def test_lease_due_runs_scan_before_older_news(tmp_path):
+    """News is enqueued first every tick; it must not starve the due market scan."""
+    store = JS.JobStore(tmp_path / "j.db")
+    store.enqueue(SCH.NEWS_REFRESH, idempotency_key="n1", scheduled_for=10.0)
+    store.enqueue(SCH.MARKET_SCAN, idempotency_key="s1", scheduled_for=20.0)
+    got = store.lease_due("owner")
+    assert got is not None and got.job_type == SCH.MARKET_SCAN
+    store.close()
+
+
+def test_lease_due_still_prefers_critical_over_scan(tmp_path):
+    store = JS.JobStore(tmp_path / "j.db")
+    store.enqueue(SCH.MARKET_SCAN, idempotency_key="s1")
+    store.enqueue(SCH.DATA_REFRESH, idempotency_key="d1", critical=True)
+    got = store.lease_due("owner")
+    assert got is not None and got.job_type == SCH.DATA_REFRESH
+    store.close()
+
+
+def test_news_still_runs_when_no_scan_is_due(tmp_path):
+    clk = [15.0]
+    store = JS.JobStore(tmp_path / "j.db", clock=lambda: clk[0])
+    store.enqueue(SCH.NEWS_REFRESH, idempotency_key="n1", scheduled_for=10.0)
+    store.enqueue(SCH.MARKET_SCAN, idempotency_key="s1", scheduled_for=20.0)
+    got = store.lease_due("owner")
+    assert got is not None and got.job_type == SCH.NEWS_REFRESH
+    store.close()
+
+
+def test_tick_leases_scan_ahead_of_news(tmp_path):
+    sup = _sup(tmp_path)
+    sup.start()
+    sup.enqueue_due = lambda now_ist=None: None
+    sup.jobs.enqueue(SCH.NEWS_REFRESH, idempotency_key="n1")
+    sup.jobs.enqueue(SCH.MARKET_SCAN, idempotency_key="s1")
+    job = sup.tick(_NOW)
+    assert job is not None and job.job_type == SCH.MARKET_SCAN
+    assert sup.join_workers(2.0)
+    news = next(j for j in sup.jobs.list() if j.job_type == SCH.NEWS_REFRESH)
+    assert news.status == JS.SUCCEEDED
+    sup.shutdown()
+
+
+def test_concurrent_heartbeats_keep_status_json(tmp_path):
+    """Parallel lanes heartbeat from tick + workers; a shared status.tmp used to vanish."""
+    sup = _sup(tmp_path)
+    sup.start()
+    errors = []
+
+    def beat():
+        try:
+            for _ in range(25):
+                sup.heartbeat()
+        except Exception as exc:
+            errors.append(exc)
+
+    threads = [threading.Thread(target=beat) for _ in range(8)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert errors == []
+    status = json.loads((tmp_path / "auto" / "status.json").read_text(encoding="utf-8"))
+    assert status.get("scheduler_of_record") == "quantterm-autonomy"
+    sup.shutdown()
+
+
+def test_force_lease_skips_queue_order(tmp_path):
+    store = JS.JobStore(tmp_path / "j.db")
+    news = store.enqueue(SCH.NEWS_REFRESH, idempotency_key="n1")
+    scan = store.enqueue(SCH.MARKET_SCAN, idempotency_key="s1")
+    got = store.force_lease(scan.job_id, "owner")
+    assert got is not None and got.job_id == scan.job_id
+    assert store.get(news.job_id).status == JS.PENDING
+    store.close()
+
+
+def test_owner_scan_click_runs_now_ahead_of_news_and_data(tmp_path):
+    from research.autonomy import controls as CTRL
+    sup = _sup(tmp_path)
+    sup.start()
+    sup.enqueue_due = lambda now_ist=None: None
+    sup.jobs.enqueue(SCH.NEWS_REFRESH, idempotency_key="n1")
+    sup.jobs.enqueue(SCH.DATA_REFRESH, idempotency_key="d1", critical=True)
+    CTRL.request_control(CTRL.RUN_SCAN_NOW, root=sup.root, reason="close-of-market click")
+    job = sup.tick(_NOW)
+    assert job is not None and job.job_type == SCH.MARKET_SCAN
+    assert bool(job.critical)
+    assert sup.join_workers(2.0)
+    by_type = {j.job_type: j.status for j in sup.jobs.list()}
+    assert by_type[SCH.MARKET_SCAN] == JS.SUCCEEDED
+    assert by_type[SCH.NEWS_REFRESH] == JS.SUCCEEDED
+    assert by_type[SCH.DATA_REFRESH] in {JS.SUCCEEDED, JS.BLOCKED, JS.RUNNING, JS.PENDING}
+    sup.shutdown()
+
+
+def test_scan_click_runs_while_news_is_in_flight(tmp_path):
+    from research.autonomy import controls as CTRL
+    hold = threading.Event()
+
+    class BlockingNews(FakeDeps):
+        def refresh_news(self):
+            hold.wait(timeout=5)
+            return {"status": "OK"}
+
+    sup = _sup(tmp_path, deps=BlockingNews())
+    sup.start()
+    sup.enqueue_due = lambda now_ist=None: None
+    sup.jobs.enqueue(SCH.NEWS_REFRESH, idempotency_key="n1")
+    first = sup.tick(_NOW)
+    assert first is not None and first.job_type == SCH.NEWS_REFRESH
+    CTRL.request_control(CTRL.RUN_SCAN_NOW, root=sup.root, reason="click")
+    second = sup.tick(_NOW)
+    assert second is not None and second.job_type == SCH.MARKET_SCAN
+    hold.set()
+    assert sup.join_workers(2.0)
+    sup.shutdown()
+
+
+def test_one_tick_runs_scan_and_news_in_parallel(tmp_path):
+    news_started = threading.Event()
+    scan_started = threading.Event()
+    release = threading.Event()
+
+    class Parallel(FakeDeps):
+        def refresh_news(self):
+            news_started.set()
+            assert scan_started.wait(2.0), "scan worker should already be running"
+            release.wait(2.0)
+            return {"status": "OK"}
+
+        def run_scan(self):
+            scan_started.set()
+            assert news_started.wait(2.0), "news worker should already be running"
+            release.wait(2.0)
+            return {"summary": {"with_any_setup": 1, "momentum": 1}}
+
+    sup = _sup(tmp_path, deps=Parallel())
+    sup.start()
+    sup.enqueue_due = lambda now_ist=None: None
+    sup.jobs.enqueue(SCH.NEWS_REFRESH, idempotency_key="n1")
+    sup.jobs.enqueue(SCH.MARKET_SCAN, idempotency_key="s1")
+    job = sup.tick(_NOW)
+    assert job is not None and job.job_type == SCH.MARKET_SCAN
+    assert news_started.wait(2.0) and scan_started.wait(2.0)
+    running = {j.job_type for j in sup.jobs.list(status=JS.RUNNING)}
+    assert SCH.NEWS_REFRESH in running
+    assert SCH.MARKET_SCAN in running
+    release.set()
+    assert sup.join_workers(2.0)
+    by_type = {j.job_type: j.status for j in sup.jobs.list()}
+    assert by_type[SCH.MARKET_SCAN] == JS.SUCCEEDED
+    assert by_type[SCH.NEWS_REFRESH] == JS.SUCCEEDED
+    sup.shutdown()
+
+
+def test_cycle_waits_while_scan_lane_is_busy(tmp_path):
+    scan_started = threading.Event()
+    release = threading.Event()
+    cycle_ran = []
+
+    class HoldScan(FakeDeps):
+        def run_scan(self):
+            scan_started.set()
+            release.wait(3.0)
+            return {"summary": {"with_any_setup": 1}}
+
+        def run_paper_cycle(self, entries_allowed, *args, **kwargs):
+            cycle_ran.append(True)
+            return {"eligibility": "NO_ELIGIBLE_TRADE"}
+
+    sup = _sup(tmp_path, deps=HoldScan())
+    sup.start()
+    sup.enqueue_due = lambda now_ist=None: None
+    sup.jobs.enqueue(SCH.MARKET_SCAN, idempotency_key="s1")
+    sup.jobs.enqueue(SCH.PAPER_CYCLE, idempotency_key="c1", critical=True)
+    sup.tick(_NOW)
+    assert scan_started.wait(2.0)
+    cycle = next(j for j in sup.jobs.list() if j.job_type == SCH.PAPER_CYCLE)
+    assert cycle.status == JS.PENDING
+    assert not cycle_ran
+    release.set()
+    assert sup.join_workers(2.0)
+    sup.tick(_NOW)
+    assert sup.join_workers(2.0)
+    assert cycle_ran
+    sup.shutdown()
+
+
+def test_news_refresh_budget_releases_worker(monkeypatch):
+    monkeypatch.setattr(JOBS, "NEWS_JOB_BUDGET_S", 0.2)
+
+    class Slow:
+        def refresh_news(self):
+            time.sleep(5)
+            return {"status": "OK"}
+
+    started = time.monotonic()
+    result = JOBS.run_news_refresh(JOBS._Ctx(Slow()))
+    assert time.monotonic() - started < 1.5
+    assert result.status == JS.SUCCEEDED
+    assert "background" in result.summary
+    assert not result.failures
+
+
+def test_news_refresh_completes_when_fast():
+    class Fast:
+        def refresh_news(self):
+            return {"status": "OK"}
+
+    result = JOBS.run_news_refresh(JOBS._Ctx(Fast()))
+    assert result.status == JS.SUCCEEDED and "complete" in result.summary
+    assert H.NEWS_UNAVAILABLE in result.clears
 
 
 def test_headless_scan_service_has_no_ui_dependency():

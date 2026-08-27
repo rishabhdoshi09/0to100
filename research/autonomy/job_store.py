@@ -20,8 +20,17 @@ RETRYABLE_FAILED = "RETRYABLE_FAILED"
 PERMANENT_FAILED = "PERMANENT_FAILED"
 SKIPPED_IDEMPOTENT = "SKIPPED_IDEMPOTENT"
 CANCELLED = "CANCELLED"
+# Recurring context work. These stay runnable, but never jump a due scan.
+_YIELD_TO_FOREGROUND = frozenset({
+    "news_refresh", "index_warmup", "corporate_actions", "universe_history",
+    "bhavcopy_update", "instrument_refresh", "research_cycle", "learning_cycle",
+})
 
 _TERMINAL = {SUCCEEDED, PERMANENT_FAILED, SKIPPED_IDEMPOTENT, CANCELLED}
+
+
+def _placeholders(values) -> str:
+    return ",".join("?" for _ in values)
 _DDL = """
 CREATE TABLE IF NOT EXISTS jobs (
     job_id TEXT PRIMARY KEY,
@@ -151,19 +160,47 @@ class JobStore:
             self._db.commit()
             return self.get(jid, _locked=True)
 
-    def lease_due(self, owner: str, *, lease_seconds: float = 300.0) -> Job | None:
+    def lease_due(self, owner: str, *, lease_seconds: float = 300.0,
+                  only_types=None, ignore_ids=None) -> Job | None:
         now = self.clock()
+        types = tuple(only_types or ())
+        ignore = tuple(ignore_ids or ())
         with self._lock:
             self._db.execute("BEGIN IMMEDIATE")
             try:
-                row = self._db.execute(
+                steal_sql = (
                     "SELECT * FROM jobs WHERE status=? AND lease_expires_at IS NOT NULL "
-                    "AND lease_expires_at < ? ORDER BY scheduled_for LIMIT 1", (RUNNING, now)).fetchone()
+                    "AND lease_expires_at < ?"
+                )
+                steal_params: list = [RUNNING, now]
+                if types:
+                    steal_sql += f" AND job_type IN ({_placeholders(types)})"
+                    steal_params.extend(types)
+                if ignore:
+                    steal_sql += f" AND job_id NOT IN ({_placeholders(ignore)})"
+                    steal_params.extend(ignore)
+                steal_sql += " ORDER BY scheduled_for LIMIT 1"
+                row = self._db.execute(steal_sql, steal_params).fetchone()
                 if row is None:
-                    row = self._db.execute(
-                        "SELECT * FROM jobs WHERE status=? AND scheduled_for<=? "
-                        "ORDER BY critical DESC, scheduled_for, created_at LIMIT 1",
-                        (PENDING, now)).fetchone()
+                    # Unfiltered callers still prefer a due market_scan over news/warmup.
+                    # Per-lane callers pass only_types, so this ranking only applies inside the lane.
+                    yield_types = tuple(_YIELD_TO_FOREGROUND)
+                    pending_sql = "SELECT * FROM jobs WHERE status=? AND scheduled_for<=?"
+                    pending_params: list = [PENDING, now]
+                    if types:
+                        pending_sql += f" AND job_type IN ({_placeholders(types)})"
+                        pending_params.extend(types)
+                    if ignore:
+                        pending_sql += f" AND job_id NOT IN ({_placeholders(ignore)})"
+                        pending_params.extend(ignore)
+                    pending_sql += (
+                        " ORDER BY critical DESC, "
+                        "CASE WHEN job_type='market_scan' THEN 0 "
+                        f"WHEN job_type IN ({_placeholders(yield_types)}) THEN 2 ELSE 1 END, "
+                        "scheduled_for, created_at LIMIT 1"
+                    )
+                    pending_params.extend(yield_types)
+                    row = self._db.execute(pending_sql, pending_params).fetchone()
                 if row is None:
                     self._db.execute("COMMIT")
                     return None
@@ -176,6 +213,30 @@ class JobStore:
                 self._db.execute("ROLLBACK")
                 raise
             return self.get(row["job_id"], _locked=True)
+
+    def force_lease(self, job_id: str, owner: str, *, lease_seconds: float = 600.0) -> Job | None:
+        """Lease one specific PENDING job immediately, ignoring queue order."""
+        now = self.clock()
+        with self._lock:
+            self._db.execute("BEGIN IMMEDIATE")
+            try:
+                row = self._db.execute(
+                    "SELECT * FROM jobs WHERE job_id=? AND status=?",
+                    (job_id, PENDING),
+                ).fetchone()
+                if row is None:
+                    self._db.execute("COMMIT")
+                    return None
+                self._db.execute(
+                    "UPDATE jobs SET status=?, lease_owner=?, lease_expires_at=?, started_at=?, "
+                    "attempt=attempt+1 WHERE job_id=?",
+                    (RUNNING, owner, now + lease_seconds, now, job_id),
+                )
+                self._db.execute("COMMIT")
+            except Exception:
+                self._db.execute("ROLLBACK")
+                raise
+            return self.get(job_id, _locked=True)
 
     def renew_lease(self, job_id: str, owner: str, *, lease_seconds: float = 300.0) -> bool:
         """Extend one live worker lease without changing job state or attempt count."""
@@ -325,13 +386,19 @@ class JobStore:
             ).fetchall()
         return [_row_to_job(r) for r in rows]
 
-    def reclaim_expired(self) -> int:
+    def reclaim_expired(self, *, ignore_ids=None) -> int:
         now = self.clock()
+        ignore = tuple(ignore_ids or ())
         with self._lock:
-            cur = self._db.execute(
+            sql = (
                 "UPDATE jobs SET status=?, lease_owner=NULL, lease_expires_at=NULL WHERE status=? "
-                "AND lease_expires_at IS NOT NULL AND lease_expires_at < ?",
-                (PENDING, RUNNING, now))
+                "AND lease_expires_at IS NOT NULL AND lease_expires_at < ?"
+            )
+            params: list = [PENDING, RUNNING, now]
+            if ignore:
+                sql += f" AND job_id NOT IN ({_placeholders(ignore)})"
+                params.extend(ignore)
+            cur = self._db.execute(sql, params)
             self._db.commit()
             return cur.rowcount
 

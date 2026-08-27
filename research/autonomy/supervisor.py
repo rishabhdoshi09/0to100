@@ -4,6 +4,8 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import tempfile
+import threading
 
 from research.autonomy import job_store as JS
 from research.autonomy import schedules as SCH
@@ -16,6 +18,25 @@ from research.autonomy.dialogue import DialogueLog, Record, OPERATIONAL_INCIDENT
 _MAX_ATTEMPTS = 5
 _BASE_BACKOFF_S = 2.0
 _MAX_BACKOFF_S = 300.0
+
+
+def _atomic_write(path: Path, text: str) -> None:
+    """Write ``path`` via a unique temp file so parallel heartbeats cannot steal ``.tmp``."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=str(path.parent))
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(text)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp_name, path)
+    except Exception:
+        try:
+            os.unlink(tmp_name)
+        except OSError:
+            pass
+        raise
 
 
 class SingleInstanceLock:
@@ -84,6 +105,14 @@ class Supervisor:
             self.failures.discard(H.OWNER_PAUSED)
         self._stop = False
         self._running = False
+        self._clicked_scan_id = None
+        self._control_lock = threading.RLock()
+        self._result_lock = threading.Lock()
+        self._dispatch_lock = threading.Lock()
+        self._lane_lock = threading.Lock()
+        self._persist_lock = threading.Lock()
+        self._lane_threads: dict[str, threading.Thread] = {}
+        self._lane_jobs: dict[str, str] = {}
 
     def _load_failures(self) -> set:
         try:
@@ -92,9 +121,8 @@ class Supervisor:
             return set()
 
     def _save_failures(self) -> None:
-        tmp = self._failures_path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(sorted(self.failures)), encoding="utf-8")
-        os.replace(tmp, self._failures_path)
+        with self._persist_lock:
+            _atomic_write(self._failures_path, json.dumps(sorted(self.failures)))
 
     def _load_owner_state(self) -> dict:
         try:
@@ -114,9 +142,8 @@ class Supervisor:
                     "halted": False}
 
     def _save_owner_state(self) -> None:
-        tmp = self._owner_path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(self.owner_state, indent=2), encoding="utf-8")
-        os.replace(tmp, self._owner_path)
+        with self._persist_lock:
+            _atomic_write(self._owner_path, json.dumps(self.owner_state, indent=2))
 
     def start(self) -> bool:
         if not self.lock.acquire():
@@ -163,9 +190,11 @@ class Supervisor:
             "process_running": bool(self._running), "last_cycle": last_cycle,
             "live_feed": self.live_feed.health(),
         })
-        tmp = self._status_path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(d, indent=2, default=str), encoding="utf-8")
-        os.replace(tmp, self._status_path)
+        try:
+            with self._persist_lock:
+                _atomic_write(self._status_path, json.dumps(d, indent=2, default=str))
+        except FileNotFoundError:
+            return
 
     def _job_counts(self) -> dict:
         counts = {}
@@ -246,6 +275,10 @@ class Supervisor:
                                           idempotency_key=SCH.research_key(session_date))
 
     def _process_controls(self):
+        with self._control_lock:
+            self._process_controls_locked()
+
+    def _process_controls_locked(self):
         for control in self.controls.pending():
             try:
                 ctype = control.control_type
@@ -271,8 +304,13 @@ class Supervisor:
                     self.jobs.enqueue(SCH.DATA_REFRESH,
                                       idempotency_key=f"manual:data:{control.control_id}", critical=True)
                 elif ctype == CTRL.RUN_SCAN_NOW:
-                    self.jobs.enqueue(SCH.MARKET_SCAN,
-                                      idempotency_key=f"manual:scan:{snap}:{control.control_id}")
+                    scan_job = self.jobs.enqueue(
+                        SCH.MARKET_SCAN,
+                        idempotency_key=f"manual:scan:{snap}:{control.control_id}",
+                        critical=True,
+                    )
+                    if scan_job.status == JS.PENDING:
+                        self._clicked_scan_id = scan_job.job_id
                 elif ctype == CTRL.RUN_CYCLE_NOW:
                     self.jobs.enqueue(SCH.PAPER_CYCLE,
                                       idempotency_key=f"manual:cycle:{snap}:{control.control_id}", critical=True)
@@ -369,9 +407,119 @@ class Supervisor:
             self.live_feed.stop()
         self._save_failures()
 
+    def _lane_busy(self, lane: str) -> bool:
+        with self._lane_lock:
+            thread = self._lane_threads.get(lane)
+            return thread is not None and thread.is_alive()
+
+    def _live_job_ids(self) -> set[str]:
+        with self._lane_lock:
+            live = set()
+            for lane, thread in list(self._lane_threads.items()):
+                if thread is not None and thread.is_alive():
+                    job_id = self._lane_jobs.get(lane)
+                    if job_id:
+                        live.add(job_id)
+            return live
+
+    def _dispatch(self, job, *, lane: str | None = None):
+        lane = lane or SCH.lane_for(job.job_type)
+        thread = threading.Thread(
+            target=self._run_lane,
+            args=(lane, job),
+            name=f"autonomy-{lane}-{job.job_type}",
+            daemon=True,
+        )
+        with self._lane_lock:
+            self._lane_threads[lane] = thread
+            self._lane_jobs[lane] = job.job_id
+        thread.start()
+        return job
+
+    def _run_lane(self, lane: str, job) -> None:
+        try:
+            self._execute(job)
+        finally:
+            with self._lane_lock:
+                if self._lane_jobs.get(lane) == job.job_id:
+                    self._lane_jobs.pop(lane, None)
+                current = self._lane_threads.get(lane)
+                if current is threading.current_thread():
+                    self._lane_threads.pop(lane, None)
+
+    @property
+    def _bg_threads(self) -> list[threading.Thread]:
+        with self._lane_lock:
+            return [t for t in self._lane_threads.values() if t is not None and t.is_alive()]
+
+    def join_workers(self, timeout: float = 8.0) -> bool:
+        import time
+        deadline = time.monotonic() + max(0.0, float(timeout))
+        while True:
+            with self._lane_lock:
+                threads = [t for t in self._lane_threads.values() if t is not None and t.is_alive()]
+            if not threads:
+                return True
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return False
+            threads[0].join(timeout=remaining)
+
+    def pop_clicked_scan(self):
+        """Apply owner controls and force-lease a Scan Now click, ignoring queue order."""
+        with self._control_lock:
+            self._process_controls_locked()
+            job_id = self._clicked_scan_id
+            if not job_id:
+                return None
+            if self._lane_busy(SCH.LANE_SCAN):
+                return None
+            self._clicked_scan_id = None
+        return self.jobs.force_lease(
+            job_id, self.owner, lease_seconds=SCH.LANE_LEASE_SECONDS[SCH.LANE_SCAN],
+        )
+
+    def kick_clicked_scan(self):
+        """Force-start a Scan Now click on the scan lane if that worker is idle."""
+        with self._dispatch_lock:
+            clicked = self.pop_clicked_scan()
+            if clicked is None:
+                return None
+            return self._dispatch(clicked, lane=SCH.LANE_SCAN)
+
+    def has_urgent_work(self) -> bool:
+        try:
+            if self.controls.pending(limit=1):
+                return True
+            if self._clicked_scan_id:
+                return True
+            if self.jobs.list(status=JS.PENDING, job_type=SCH.MARKET_SCAN, limit=1):
+                return True
+        except Exception:
+            return False
+        return False
+
+    def _dispatch_idle_lanes(self, live: set[str]) -> list:
+        dispatched = []
+        for lane in SCH.LANE_ORDER:
+            if self._lane_busy(lane):
+                continue
+            if lane == SCH.LANE_CYCLE and self._lane_busy(SCH.LANE_SCAN):
+                continue
+            job = self.jobs.lease_due(
+                self.owner,
+                lease_seconds=SCH.LANE_LEASE_SECONDS[lane],
+                only_types=SCH.LANE_TYPES[lane],
+                ignore_ids=live,
+            )
+            if job is None:
+                continue
+            self._dispatch(job, lane=lane)
+            dispatched.append(job)
+            live.add(job.job_id)
+        return dispatched
+
     def tick(self, now_ist=None):
-        self.jobs.reclaim_expired()
-        self._process_controls()
         current = now_ist or self.deps.now_ist()
         self._manage_live_feed(current)
         if hasattr(self.deps, "drain_telegram_alerts"):
@@ -382,15 +530,23 @@ class Supervisor:
         if self.owner_state.get("halted"):
             self.heartbeat()
             return None
-        self.enqueue_due(current)
-        self._check_overdue()
-        job = self.jobs.lease_due(self.owner, lease_seconds=300.0)
-        if job is None:
-            self.heartbeat()
-            return None
-        self._execute(job)
+        with self._dispatch_lock:
+            live = self._live_job_ids()
+            self.jobs.reclaim_expired(ignore_ids=live)
+            clicked = self.pop_clicked_scan()
+            self.enqueue_due(current)
+            self._check_overdue()
+            dispatched = []
+            if clicked is not None:
+                self._dispatch(clicked, lane=SCH.LANE_SCAN)
+                dispatched.append(clicked)
+                live.add(clicked.job_id)
+            dispatched.extend(self._dispatch_idle_lanes(live))
         self.heartbeat()
-        return job
+        for job in dispatched:
+            if job.job_type == SCH.MARKET_SCAN:
+                return job
+        return dispatched[0] if dispatched else None
 
     def _execute(self, job):
         handler = JOBS.HANDLERS.get(job.job_type)
@@ -407,38 +563,40 @@ class Supervisor:
         try:
             result = handler(ctx)
         except Exception as exc:
-            self._retry_or_fail(job, error_code="HANDLER_EXCEPTION", error_message=str(exc))
-            self._incident("HANDLER_EXCEPTION", f"{job.job_type}: {exc}", job)
+            with self._result_lock:
+                self._retry_or_fail(job, error_code="HANDLER_EXCEPTION", error_message=str(exc))
+                self._incident("HANDLER_EXCEPTION", f"{job.job_type}: {exc}", job)
             return
 
-        self.failures |= set(result.failures)
-        self.failures -= set(result.clears)
-        self._save_failures()
+        with self._result_lock:
+            self.failures |= set(result.failures)
+            self.failures -= set(result.clears)
+            self._save_failures()
 
-        if result.status == JS.RETRYABLE_FAILED:
-            self._retry_or_fail(job, error_code=result.error_code, error_message=result.error_message,
-                                summary=result.summary)
-            self._incident(result.error_code or "RETRYABLE", result.summary or result.error_message, job)
-        elif result.status == JS.BLOCKED:
-            dependency = result.blocked_on or "MANUAL_REVIEW"
-            self.jobs.block(job.job_id, dependency=dependency,
-                            reason=result.error_message or result.summary,
-                            dependency_version=result.dependency_version or None,
-                            result_summary=result.summary)
-            self._incident("BLOCKED", result.summary, job)
-        else:
-            self.jobs.complete(job.job_id, result.status, result_summary=result.summary,
-                               output_snapshot_id=result.output_snapshot_id,
-                               error_code=result.error_code, error_message=result.error_message)
-            if result.status == JS.SUCCEEDED:
-                for dependency in result.unblocks:
-                    self.jobs.unblock_dependency(dependency)
+            if result.status == JS.RETRYABLE_FAILED:
+                self._retry_or_fail(job, error_code=result.error_code, error_message=result.error_message,
+                                    summary=result.summary)
+                self._incident(result.error_code or "RETRYABLE", result.summary or result.error_message, job)
+            elif result.status == JS.BLOCKED:
+                dependency = result.blocked_on or "MANUAL_REVIEW"
+                self.jobs.block(job.job_id, dependency=dependency,
+                                reason=result.error_message or result.summary,
+                                dependency_version=result.dependency_version or None,
+                                result_summary=result.summary)
+                self._incident("BLOCKED", result.summary, job)
+            else:
+                self.jobs.complete(job.job_id, result.status, result_summary=result.summary,
+                                   output_snapshot_id=result.output_snapshot_id,
+                                   error_code=result.error_code, error_message=result.error_message)
+                if result.status == JS.SUCCEEDED:
+                    for dependency in result.unblocks:
+                        self.jobs.unblock_dependency(dependency)
 
-        target = self._gated_state(result.state_hint)
-        if target and target != self.state.state:
-            self._transition(target, reason=job.job_type,
-                             explanation=result.summary or job.job_type, trigger=job.job_id,
-                             snapshot_id=result.output_snapshot_id)
+            target = self._gated_state(result.state_hint)
+            if target and target != self.state.state:
+                self._transition(target, reason=job.job_type,
+                                 explanation=result.summary or job.job_type, trigger=job.job_id,
+                                 snapshot_id=result.output_snapshot_id)
 
     def _gated_state(self, hint):
         if self.owner_state.get("halted"):
@@ -496,6 +654,7 @@ class Supervisor:
     def shutdown(self):
         self._stop = True
         self._running = False
+        self.join_workers(8.0)
         self._state_persist.save(self.state)
         self._write_status()
         self.live_feed.stop()

@@ -9,6 +9,7 @@ from __future__ import annotations
 import csv
 import json
 import os
+import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -26,6 +27,7 @@ DEP_OUTCOMES = "OUTCOMES_RESOLVED"
 DEP_LEARNING = "LEARNING_READY"
 DEP_CA_SOURCE = "CORPORATE_ACTIONS_SOURCE"
 DEP_UNIVERSE_SOURCE = "UNIVERSE_HISTORY_SOURCE"
+NEWS_JOB_BUDGET_S = 25.0
 
 
 @dataclass
@@ -751,11 +753,45 @@ def run_research_cycle(ctx) -> JobResult:
                      clears={H.LEARNING_FAILED}, state_hint=ST.OBSERVING, metadata=result)
 
 
+def _invoke_with_budget(fn, budget_s: float):
+    """Run ``fn`` for up to ``budget_s`` seconds.
+
+    The worker thread is daemonized so a hung news fetch cannot keep occupying
+    the single autonomy tick; the fetch may continue in the background.
+    Returns ``(timed_out, value, exc)``.
+    """
+    box: dict = {}
+    done = threading.Event()
+
+    def worker() -> None:
+        try:
+            box["value"] = fn()
+        except Exception as exc:
+            box["exc"] = exc
+        finally:
+            done.set()
+
+    thread = threading.Thread(target=worker, name="quantterm-news-budget", daemon=True)
+    thread.start()
+    if done.wait(timeout=max(0.05, float(budget_s))):
+        return False, box.get("value"), box.get("exc")
+    return True, None, None
+
+
 def run_news_refresh(ctx) -> JobResult:
     try:
         if hasattr(ctx.deps, "refresh_news"):
-            report = ctx.deps.refresh_news() or {}
-            failed = str(report.get("status", "")).upper() == "ERROR"
+            timed_out, report, exc = _invoke_with_budget(
+                ctx.deps.refresh_news, NEWS_JOB_BUDGET_S)
+            if timed_out:
+                return JobResult(JS.SUCCEEDED, "news refresh running in background")
+            if exc is not None:
+                raise exc
+            report = report or {}
+            status = str(report.get("status", "")).upper()
+            if status in {"REFRESH_ALREADY_RUNNING", "REFRESH_IN_PROGRESS"}:
+                return JobResult(JS.SUCCEEDED, "news refresh already running")
+            failed = status == "ERROR"
             error = report.get("error", "")
         else:
             health = ctx.deps.news_health()

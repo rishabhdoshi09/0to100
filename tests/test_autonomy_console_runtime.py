@@ -7,7 +7,8 @@ import time
 
 from research.autonomy import health as H
 from research.autonomy import job_store as JS
-from research.autonomy.console_runtime import run_visible_loop
+from research.autonomy import schedules as SCH
+from research.autonomy.console_runtime import _format_active_text, run_visible_loop
 from research.autonomy.supervisor import Supervisor
 
 
@@ -63,6 +64,19 @@ class _BlockingSupervisor(Supervisor):
         self.release.wait(timeout=30.0)
         self.stop()
         return None
+
+
+def test_heartbeat_lists_scan_and_news_together():
+    text = _format_active_text(
+        {
+            "n": {"job_type": SCH.NEWS_REFRESH, "attempt": 3, "started_monotonic": 100.0},
+            "s": {"job_type": SCH.MARKET_SCAN, "attempt": 0, "started_monotonic": 100.0},
+        },
+        now=1040.0,
+    )
+    assert "market_scan (940s, attempt 0)" in text
+    assert "news_refresh (940s, attempt 3)" in text
+    assert " + " in text
 
 
 def test_visible_loop_recovers_from_tick_exception(tmp_path, capsys):

@@ -30,6 +30,36 @@ ALL_JOB_TYPES = (
 )
 CRITICAL_JOBS = {AUTH_HEALTH, DATA_REFRESH, PAPER_CYCLE, OUTCOME_RESOLUTION}
 
+# Isolated workers so news/data cannot occupy the only thread while a scan is due.
+LANE_SCAN = "scan"
+LANE_NEWS = "news"
+LANE_DATA = "data"
+LANE_LONG_TERM = "long_term"
+LANE_CYCLE = "cycle"
+LANE_TYPES = {
+    LANE_SCAN: (MARKET_SCAN,),
+    LANE_NEWS: (NEWS_REFRESH,),
+    LANE_DATA: (
+        DATA_REFRESH, AUTH_HEALTH, INSTRUMENT_REFRESH, BHAVCOPY_UPDATE,
+        INDEX_WARMUP, CORPORATE_ACTIONS, UNIVERSE_HISTORY,
+    ),
+    LANE_LONG_TERM: (LONG_TERM_SCAN, LONG_TERM_REFRESH),
+    LANE_CYCLE: (PAPER_CYCLE, OUTCOME_RESOLUTION, LEARNING_CYCLE, RESEARCH_CYCLE),
+}
+LANE_ORDER = (LANE_SCAN, LANE_NEWS, LANE_DATA, LANE_LONG_TERM, LANE_CYCLE)
+LANE_LEASE_SECONDS = {
+    LANE_SCAN: 900.0,
+    LANE_NEWS: 1800.0,
+    LANE_DATA: 1800.0,
+    LANE_LONG_TERM: 1800.0,
+    LANE_CYCLE: 900.0,
+}
+_JOB_LANE = {job_type: lane for lane, types in LANE_TYPES.items() for job_type in types}
+
+
+def lane_for(job_type: str) -> str:
+    return _JOB_LANE.get(job_type, LANE_DATA)
+
 AUTH_WINDOW_START = _time(7, 30)
 AUTH_WINDOW_END = _time(10, 0)
 PREMARKET_SCAN_START = _time(9, 0)
