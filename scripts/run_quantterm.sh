@@ -54,6 +54,19 @@ except Exception:
 PY
 }
 
+wait_for_api() {
+  local tries="${1:-90}"
+  local i=0
+  while (( i < tries )); do
+    if url_ok "http://127.0.0.1:8765/api/health"; then
+      return 0
+    fi
+    sleep 0.5 || true
+    i=$((i + 1))
+  done
+  return 1
+}
+
 alive() {
   local pid="${1:-}"
   [[ -n "$pid" ]] && kill -0 "$pid" >/dev/null 2>&1
@@ -130,20 +143,13 @@ start_api() {
   echo "[STACK] Starting local API at http://127.0.0.1:8765 …"
   python -u -m uvicorn terminal_product_api:app --host 127.0.0.1 --port 8765 &
   API_PID=$!
-  local _i
-  for _i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
-    if url_ok "http://127.0.0.1:8765/api/health"; then
-      return 0
-    fi
-    if ! alive "$API_PID"; then
-      echo "[STACK] Market API exited before becoming healthy; will retry." >&2
-      API_PID=""
-      return 1
-    fi
-    sleep 0.5 || true
-  done
-  if url_ok "http://127.0.0.1:8765/api/health"; then
+  if wait_for_api 90; then
     return 0
+  fi
+  if ! alive "$API_PID"; then
+    echo "[STACK] Market API exited before becoming healthy; will retry." >&2
+    API_PID=""
+    return 1
   fi
   echo "[STACK] Market API on :8765 is still starting; watchdog will keep it." >&2
   return 0
@@ -195,6 +201,11 @@ elif port_open 8765; then
   echo "[STACK] Port 8765 is occupied but /api/health is not ready yet; waiting." >&2
 else
   start_api || true
+fi
+
+if ! url_ok "http://127.0.0.1:8765/api/health"; then
+  echo "[STACK] Waiting for market API before opening the desk…"
+  wait_for_api 90 || true
 fi
 
 if port_open 5173; then
