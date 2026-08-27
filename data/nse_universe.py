@@ -444,9 +444,9 @@ def point_in_time_universe(as_of, path=None) -> dict:
 
     HONEST FALLBACK (invariant #1 — no fake data): when no history file exists we
     CANNOT reconstruct the past membership, so we return today's survivors with
-    `survivorship_complete=False` and a note. The caller MUST treat that result as
-    biased. The delisted-symbol history has to come from NSE archives / a vendor;
-    this function will not invent it."""
+    `survivorship_complete=False` and a note. Callers that can fill the table from
+    official NSE bhavcopy (``refresh_universe_history``) should do that instead of
+    inventing listing dates."""
     import pandas as pd
     base = Path(__file__).resolve().parent.parent
     import os as _os
@@ -477,6 +477,66 @@ def point_in_time_universe(as_of, path=None) -> dict:
             continue
     return {"as_of": str(asof.date()), "symbols": sorted(set(live)),
             "survivorship_complete": True, "note": ""}
+
+
+def universe_history_path() -> Path:
+    import os as _os
+    override = _os.getenv("QT_UNIVERSE_HISTORY_FILE")
+    if override:
+        return Path(override)
+    return Path(__file__).resolve().parent.parent / "logs" / "universe_history.json"
+
+
+def refresh_universe_history(*, as_of=None, force: bool = False) -> dict:
+    """Write ``logs/universe_history.json`` from official NSE bhavcopy membership.
+
+    Does not invent IPO dates or delistings. First/last session in the on-disk
+    official EQ archive is the membership window. Shallow stores stay incomplete.
+    """
+    import os as _os
+    import pandas as pd
+    from data.bhavcopy_store import _MIN_DAYS, membership_rows
+
+    path = universe_history_path()
+    asof = as_of if as_of is not None else pd.Timestamp.today().date()
+    rows, meta = membership_rows()
+    sessions = int(meta.get("sessions") or 0)
+    last_day = str(meta.get("last_day") or "")
+    if not rows or sessions < _MIN_DAYS:
+        info = point_in_time_universe(asof, path=path)
+        info.update({
+            "available": bool(info.get("survivorship_complete")),
+            "source": "official_nse_bhavcopy",
+            "written": 0,
+            "sessions": sessions,
+            "last_day": last_day,
+        })
+        if not info.get("survivorship_complete"):
+            info["note"] = (
+                info.get("note")
+                or "official bhavcopy history is not yet deep enough for point-in-time membership"
+            )
+        return info
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(rows, indent=2), encoding="utf-8")
+    _os.replace(tmp, path)
+    info = point_in_time_universe(asof, path=path)
+    info.update({
+        "available": True,
+        "source": "official_nse_bhavcopy",
+        "written": len(rows),
+        "sessions": sessions,
+        "last_day": last_day,
+        "n_symbols": len(rows),
+    })
+    print(
+        f"[UNIVERSE] official NSE bhavcopy membership · {len(rows)} symbols · "
+        f"sessions={sessions} · last={last_day}",
+        flush=True,
+    )
+    return info
 
 
 def get_nse_universe_by_sector() -> Dict[str, List[str]]:

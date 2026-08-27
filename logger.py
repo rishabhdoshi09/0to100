@@ -39,3 +39,20 @@ def configure_logging() -> None:
 
 def get_logger(name: str) -> structlog.BoundLogger:
     return structlog.get_logger(name)
+
+
+class _QuietHealthAccess(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        try:
+            msg = record.getMessage()
+        except Exception:
+            return True
+        return '"GET /health ' not in msg and '"GET /api/health ' not in msg
+
+
+def quiet_uvicorn_health_access() -> None:
+    """Watchdogs poll /health every few seconds — keep that off the desk console."""
+    log = logging.getLogger("uvicorn.access")
+    if any(isinstance(item, _QuietHealthAccess) for item in log.filters):
+        return
+    log.addFilter(_QuietHealthAccess())

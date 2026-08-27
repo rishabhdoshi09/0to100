@@ -89,19 +89,51 @@ class OperationStore:
         last_exc: Exception | None = None
         for _ in range(3):
             try:
-                con = sqlite3.connect(str(self.path), timeout=5.0)
+                con = sqlite3.connect(str(self.path), timeout=30.0, isolation_level=None)
                 con.row_factory = sqlite3.Row
                 con.execute("PRAGMA journal_mode=WAL")
                 con.execute("PRAGMA synchronous=NORMAL")
-                con.execute("PRAGMA busy_timeout=5000")
+                con.execute("PRAGMA busy_timeout=30000")
                 self._local.con = con
                 self._local.path = str(self.path)
                 return _BorrowedConnection(con)
             except sqlite3.OperationalError as exc:
                 last_exc = exc
+                self._drop_cached()
                 time.sleep(0.05)
                 self.path.parent.mkdir(parents=True, exist_ok=True)
         raise last_exc if last_exc is not None else sqlite3.OperationalError("unable to open database file")
+
+    def _drop_cached(self) -> None:
+        cached = getattr(self._local, "con", None)
+        self._local.con = None
+        if cached is None:
+            return
+        try:
+            cached.close()
+        except Exception:
+            pass
+
+    def _begin_immediate(self, con: sqlite3.Connection, *, attempts: int = 10) -> None:
+        delay = 0.05
+        last: sqlite3.OperationalError | None = None
+        for _ in range(max(1, int(attempts))):
+            try:
+                con.execute("BEGIN IMMEDIATE")
+                return
+            except sqlite3.OperationalError as exc:
+                last = exc
+                if "locked" not in str(exc).lower() and "busy" not in str(exc).lower():
+                    self._drop_cached()
+                    raise
+                try:
+                    con.rollback()
+                except Exception:
+                    pass
+                time.sleep(delay)
+                delay = min(1.0, delay * 2)
+        self._drop_cached()
+        raise last if last is not None else sqlite3.OperationalError("database is locked")
 
     def _init_schema(self) -> None:
         with self._connect() as con:
@@ -194,7 +226,7 @@ class OperationStore:
         now = time.time()
         operation_id = uuid.uuid4().hex
         with self._connect() as con:
-            con.execute("BEGIN IMMEDIATE")
+            self._begin_immediate(con)
             if deduplicate:
                 row = con.execute(
                     "SELECT * FROM operations WHERE kind=? AND status IN (?,?) "
@@ -250,7 +282,7 @@ class OperationStore:
     def lease_next(self, lane: str, *, worker_pid: int) -> dict[str, Any] | None:
         now = time.time()
         with self._connect() as con:
-            con.execute("BEGIN IMMEDIATE")
+            self._begin_immediate(con)
             row = con.execute(
                 "SELECT * FROM operations WHERE lane=? AND status=? "
                 "ORDER BY priority DESC, requested_at ASC LIMIT 1",

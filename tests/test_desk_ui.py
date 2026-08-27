@@ -25,7 +25,7 @@ def test_app_points_at_the_vite_desk():
     assert "Recommendations" in nav and "Market Reports" in nav
     assert "Long-Term Picks" in nav
     desk = (ROOT / "scripts" / "run_desk.sh").read_text(encoding="utf-8")
-    assert "run_quantterm.sh" in desk
+    assert "run_quantterm_complete.sh" in desk
     assert "streamlit" not in desk
 
 

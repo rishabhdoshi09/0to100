@@ -22,6 +22,9 @@ SKIPPED_IDEMPOTENT = "SKIPPED_IDEMPOTENT"
 CANCELLED = "CANCELLED"
 
 _TERMINAL = {SUCCEEDED, PERMANENT_FAILED, SKIPPED_IDEMPOTENT, CANCELLED}
+# Re-assert a leftover PENDING intent after this long so an evening restart
+# does not treat this morning's row as a live outage.
+_STALE_PENDING_S = 3600.0
 _DDL = """
 CREATE TABLE IF NOT EXISTS jobs (
     job_id TEXT PRIMARY KEY,
@@ -141,7 +144,20 @@ class JobStore:
                 row = self._db.execute("SELECT * FROM jobs WHERE idempotency_key=?",
                                        (idempotency_key,)).fetchone()
                 if row is not None:
-                    return _row_to_job(row)
+                    job = _row_to_job(row)
+                    if (
+                        job.status == PENDING
+                        and (now - float(job.scheduled_for or 0.0)) >= _STALE_PENDING_S
+                    ):
+                        crit = 1 if critical else (1 if job.critical else 0)
+                        self._db.execute(
+                            "UPDATE jobs SET scheduled_for=?, critical=? "
+                            "WHERE job_id=? AND status=?",
+                            (sched, crit, job.job_id, PENDING),
+                        )
+                        self._db.commit()
+                        return self.get(job.job_id, _locked=True)
+                    return job
             jid = uuid.uuid4().hex[:16]
             self._db.execute(
                 "INSERT INTO jobs(job_id,job_type,scheduled_for,status,attempt,idempotency_key,"

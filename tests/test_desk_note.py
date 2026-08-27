@@ -50,7 +50,15 @@ INVENTED = (
 )
 
 
-def test_empty_news_does_not_invent_the_blog_wrap():
+def test_empty_news_does_not_invent_the_blog_wrap(monkeypatch):
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(
+        "product.market_view.current_market_view",
+        lambda: SimpleNamespace(nifty_change_1d=None, nifty_price=0, summary="", leaders=(), laggards=()),
+    )
+    monkeypatch.setattr("data.index_store.latest_index_print", lambda *_a, **_k: None)
+    monkeypatch.setattr("data.index_store.recent_index_closes", lambda *_a, **_k: [])
     note = build_desk_note(articles=[], scan_payload={})
     assert note["places_orders"] is False
     assert note["wrap_sourced"] == 0
@@ -65,6 +73,112 @@ def test_empty_news_does_not_invent_the_blog_wrap():
     for phrase in INVENTED:
         assert phrase not in blob
         assert phrase not in note["theme"]["body"]
+    for line in note.get("daily_wrap") or []:
+        assert "HDFC Bank" not in line["text"]
+        assert "lawsuit" not in line["text"].lower()
+        assert "Happiest Minds" not in line["text"]
+        assert "nvidia" not in line["text"].lower()
+        assert "490 million" not in line["text"]
+        assert "Sensex dropped" not in line["text"]
+        assert "Last market scan" not in line["text"]
+
+
+def test_daily_wrap_uses_official_session_and_sourced_news(monkeypatch):
+    from types import SimpleNamespace
+
+    from product.desk_note import daily_wrap
+
+    monkeypatch.setattr(
+        "product.market_view.current_market_view",
+        lambda: SimpleNamespace(
+            nifty_change_1d=-0.5,
+            nifty_price=0,
+            summary="Market condition is weak.",
+            leaders=("pharma",),
+            laggards=("banks",),
+        ),
+    )
+    monkeypatch.setattr("data.index_store.latest_index_print", lambda *_a, **_k: None)
+    monkeypatch.setattr("data.index_store.recent_index_closes", lambda *_a, **_k: [])
+    lines = daily_wrap(
+        articles=[
+            _article(
+                article_id="hdfc-news",
+                headline="HDFC Bank fell after a US lawsuit alleged securities violations",
+                summary="The bank denied the claims.",
+                impact_score=90,
+                mentioned_symbols=["HDFCBANK"],
+            )
+        ],
+        scan_payload={"records": [{"symbol": "TATAPOWER", "status": "Ready to trade", "signals": ["BREAKOUT_52W"]}]},
+    )
+    texts = " ".join(item["text"] for item in lines)
+    assert "falling 0.5%" in texts
+    assert "Nifty" in texts
+    assert "HDFC Bank fell after a US lawsuit" in texts
+    assert "Last market scan" not in texts
+    assert "TATAPOWER" not in texts
+    assert "490 million" not in texts
+    assert lines[0]["id"] == "session_indices"
+    assert lines[0]["official"] is True
+
+
+def test_daily_wrap_magazine_tape_from_official_prints(monkeypatch):
+    from types import SimpleNamespace
+
+    from product.desk_note import daily_wrap
+
+    prints = {
+        "^NSEI": {"price": 24087.0, "chg_pct": -0.5},
+        "^NSEBANK": {"price": 51200.0, "chg_pct": -0.8},
+        "^CNXPHARMA": {"price": 22100.0, "chg_pct": 0.6},
+        "^CNXFMCG": {"price": 55000.0, "chg_pct": 0.4},
+    }
+    monkeypatch.setattr(
+        "product.market_view.current_market_view",
+        lambda: SimpleNamespace(
+            nifty_change_1d=-0.5,
+            nifty_price=24087.0,
+            summary="",
+            leaders=(),
+            laggards=(),
+        ),
+    )
+    monkeypatch.setattr("data.index_store.latest_index_print", lambda ticker: prints.get(ticker))
+    monkeypatch.setattr(
+        "data.index_store.recent_index_closes",
+        lambda ticker, n=4: [24350.0, 24208.0, 24087.0] if ticker == "^NSEI" else [],
+    )
+    lines = daily_wrap(
+        articles=[
+            _article(
+                article_id="happiest",
+                headline="Happiest Minds fell 6% on reports that ITC Infotech may acquire the promoter’s stake",
+                summary="The company could be delisted if the deal goes through.",
+                impact_score=80,
+                mentioned_symbols=["HAPPSTMNDS"],
+            ),
+            _article(
+                article_id="us-open",
+                headline="US markets are set for a stronger open after Nvidia earnings",
+                summary="S&P 500 futures were higher.",
+                impact_score=70,
+            ),
+        ],
+        scan_payload={},
+    )
+    texts = [item["text"] for item in lines]
+    session = texts[0]
+    assert "extended losses for the second straight session" in session
+    assert "falling 0.5%" in session
+    assert "24,087" in session
+    assert "slipping below 24,100" in session
+    assert "Bank Nifty fell" in session
+    assert "Pharma" in session and "ended positive" in session
+    assert "Sensex dropped" not in session
+    assert any("Happiest Minds fell 6%" in line for line in texts)
+    assert texts[-1].startswith("US markets are set for a stronger open")
+    assert "Last market scan" not in " ".join(texts)
 
 
 def test_lodr_sebi_filing_does_not_fill_policy_slot():
@@ -205,7 +319,10 @@ def test_desk_note_module_does_not_hardcode_blog_prints():
     from pathlib import Path
 
     src = (Path(__file__).resolve().parents[1] / "product" / "desk_note.py").read_text(encoding="utf-8")
-    for phrase in ("₹600 crore", "20,000 MTPA", "65% pre-booked", "Q1 FY27", "+43%", "₹15,000"):
+    for phrase in (
+        "₹600 crore", "20,000 MTPA", "65% pre-booked", "Q1 FY27", "+43%", "₹15,000",
+        "HDFC Bank fell", "Happiest Minds", "490 million", "Sensex dropped 539",
+    ):
         assert phrase not in src
 
 

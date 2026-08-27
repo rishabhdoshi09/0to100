@@ -3,6 +3,11 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
+export PYTHONPATH="$ROOT"
+
+if [[ "${1:-}" == "--restart" || "${1:-}" == "--reuse" ]]; then
+  shift || true
+fi
 
 if [[ ! -d venv ]]; then
   echo "Missing venv. Create the QuantTerm Python environment first." >&2
@@ -14,6 +19,36 @@ source venv/bin/activate
 if ! python -c 'import reportlab, fastapi, uvicorn' >/dev/null 2>&1; then
   echo "[STACK] Installing professional report dependencies…"
   python -m pip install 'reportlab>=4.2.0' 'fastapi>=0.115.0' 'uvicorn>=0.30.0'
+fi
+
+auth_rc=0
+python - <<'PY' >/dev/null || auth_rc=$?
+from data.kite_client import _fresh_env
+
+if not _fresh_env("KITE_API_KEY") or not _fresh_env("KITE_API_SECRET"):
+    raise SystemExit(2)
+if not _fresh_env("KITE_ACCESS_TOKEN"):
+    raise SystemExit(1)
+try:
+    from research.autonomy.auth import TOKEN_MISSING, SESSION_EXPIRED, probe_auth
+    health = probe_auth()
+    if health.valid:
+        raise SystemExit(0)
+    if health.status in {TOKEN_MISSING, SESSION_EXPIRED}:
+        raise SystemExit(1)
+except Exception:
+    pass
+raise SystemExit(0)
+PY
+
+if [[ "$auth_rc" -eq 2 ]]; then
+  echo "[COMPLETE STACK] Put KITE_API_KEY and KITE_API_SECRET in .env, then run this same command again." >&2
+  exit 2
+fi
+
+if [[ "$auth_rc" -eq 1 ]]; then
+  echo "[COMPLETE STACK] Zerodha login is needed (once per trading day). Browser will open; paste the redirect URL here."
+  python main.py login
 fi
 
 port_open() {
@@ -97,10 +132,14 @@ start_report() {
 }
 
 start_stack() {
-  echo "[COMPLETE STACK] Starting QuantTerm terminal, market operations and autonomy…"
+  echo "[COMPLETE STACK] Starting QuantTerm terminal, market operations, autonomy and market scan…"
   bash scripts/run_quantterm.sh &
   STACK_PID=$!
 }
+
+echo "[COMPLETE STACK] One command, one terminal. Stopping any previous local desk so this run owns everything."
+python scripts/local_stack.py stop --ports 5173,8765,8766 || true
+sleep 1 || true
 
 if url_ok "http://127.0.0.1:8766/health"; then
   REPORT_EXTERNAL=1
@@ -113,13 +152,12 @@ fi
 
 start_stack
 
-echo "[COMPLETE STACK] Running. Leave this terminal open. Ctrl-C stops the stack."
+echo "[COMPLETE STACK] Running in this terminal: desk http://127.0.0.1:5173  · API :8765  · reports :8766  · autonomy  · market scan"
+echo "[COMPLETE STACK] Leave this terminal open. Ctrl-C stops everything. Do not start a second terminal."
 
 while [[ "$STOP" != "1" ]]; do
   if [[ "$REPORT_EXTERNAL" != "1" ]]; then
-    if url_ok "http://127.0.0.1:8766/health"; then
-      :
-    elif ! alive "$REPORT_PID"; then
+    if [[ -z "${REPORT_PID:-}" ]] || ! alive "$REPORT_PID"; then
       echo "[COMPLETE STACK] Report API is down; restarting."
       start_report || true
     fi

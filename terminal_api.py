@@ -19,12 +19,15 @@ from typing import Any
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
+from logger import quiet_uvicorn_health_access
+
 ROOT = Path(__file__).resolve().parent
 OPS_ROOT = ROOT / "logs" / "market_ops"
 OPS_RUNTIME = OPS_ROOT / "runtime.json"
 OPS_DB = OPS_ROOT / "jobs.db"
 
 app = FastAPI(title="QuantTerm Terminal API", version="0.4.0")
+quiet_uvicorn_health_access()
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://127.0.0.1:5173", "http://localhost:5173"],
@@ -79,6 +82,7 @@ def _empty_dashboard(error: str, scan: dict[str, Any] | None = None) -> dict[str
             "nifty_change_1d": None,
             "nifty_change_5d": None,
             "vix": None,
+            "nifty_price": None,
             "technical_details": {},
         },
         "scan": payload,
@@ -152,6 +156,7 @@ def _empty_dashboard(error: str, scan: dict[str, Any] | None = None) -> dict[str
         },
         "conviction": [],
         "scan_progress": {"active": False, "eta_label": "", "current": 0, "total": 0},
+        "daily_wrap": [],
         "error": error,
     }
 
@@ -238,6 +243,7 @@ def _market_payload() -> dict:
             "nifty_change_1d": _safe_float(market.nifty_change_1d),
             "nifty_change_5d": _safe_float(market.nifty_change_5d),
             "vix": _safe_float(market.vix),
+            "nifty_price": _safe_float(getattr(market, "nifty_price", None)),
             "technical_details": dict(getattr(market, "technical_details", {}) or {}),
         }
     except Exception as exc:
@@ -252,6 +258,7 @@ def _market_payload() -> dict:
             "nifty_change_1d": None,
             "nifty_change_5d": None,
             "vix": None,
+            "nifty_price": None,
             "technical_details": {},
             "error": str(exc),
         }
@@ -676,6 +683,7 @@ def _conviction(scan: dict, market: dict) -> list[dict]:
             nifty_change_1d=float(market.get("nifty_change_1d") or 0.0),
             nifty_change_5d=float(market.get("nifty_change_5d") or 0.0),
             vix=float(market.get("vix") or 0.0),
+            nifty_price=float(market.get("nifty_price") or 0.0),
             technical_details=dict(market.get("technical_details", {}) or {}),
         )
         return build_conviction_shortlist(
@@ -713,6 +721,15 @@ def dashboard() -> dict:
         news = _news_payload()
         fno = _fno_payload()
         data = _data_payload(scan, long_term, operations, fno, news)
+        daily_wrap: list = []
+        try:
+            from product.desk_note import daily_wrap as build_daily_wrap
+            daily_wrap = build_daily_wrap(
+                articles=list(news.get("articles") or []),
+                scan_payload=scan,
+            )
+        except Exception:
+            daily_wrap = []
         return _json_safe({
             "generated_at": datetime.now(timezone.utc).isoformat(),
             "market": market,
@@ -726,6 +743,7 @@ def dashboard() -> dict:
             "data": data,
             "conviction": _conviction(scan, market),
             "scan_progress": _scan_progress_payload(),
+            "daily_wrap": daily_wrap,
         })
     except Exception as exc:
         degraded = _empty_dashboard(f"Dashboard degraded: {exc}", scan)

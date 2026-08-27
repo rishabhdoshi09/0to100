@@ -20,6 +20,8 @@ import time
 import traceback
 from typing import Any
 
+import sqlite3
+
 from operations.store import BLOCKED, FAILED, SUCCEEDED, OperationStore
 
 MARKET_SCAN = "MARKET_SCAN"
@@ -550,7 +552,12 @@ class MarketOperationsWorker:
                 self.store.recover_dead_running(keep_pid=os.getpid())
             except Exception:
                 pass
-            operation = self.store.lease_next(lane, worker_pid=os.getpid())
+            try:
+                operation = self.store.lease_next(lane, worker_pid=os.getpid())
+            except sqlite3.OperationalError as exc:
+                _emit("INFO", f"lane {lane} waiting for operations db · {exc}")
+                self.stop_event.wait(1.0)
+                continue
             if operation is None:
                 self.stop_event.wait(float(_LANE_IDLE_S.get(lane, _DEFAULT_IDLE_S)))
                 continue

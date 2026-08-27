@@ -605,6 +605,55 @@ def test_market_report_skips_weekend(tmp_path, monkeypatch):
     assert engine.messages == []
 
 
+def test_notify_online_already_sent_is_not_a_failure(tmp_path, capsys):
+    engine = FakeEngine()
+    now = lambda: datetime(2026, 7, 31, 10, 0)
+    first = TelegramNotifier(tmp_path, engine_factory=lambda: engine, now_fn=now)
+    assert first.notify_online() == "sent"
+    assert "QuantTerm autonomy online" in engine.messages[0][0]
+    restarted = TelegramNotifier(tmp_path, engine_factory=lambda: engine, now_fn=now)
+    assert restarted.notify_online() == "already_sent"
+    assert len(engine.messages) == 1
+
+    from research.autonomy.jobs import Deps
+    deps = Deps(tmp_path)
+    deps.telegram = restarted
+    assert deps.notify_online() is True
+    out = capsys.readouterr().out
+    assert "already sent today" in out
+    assert "send failed" not in out
+
+
+def test_notify_online_retries_http_429(tmp_path, monkeypatch):
+    class Flaky:
+        def __init__(self):
+            self.n = 0
+            self.last_error = ""
+            self.messages = []
+
+        def is_configured(self):
+            return True
+
+        def send(self, message, reply_markup=None):
+            self.n += 1
+            if self.n == 1:
+                self.last_error = "HTTP 429: Too Many Requests"
+                return False
+            self.messages.append(message)
+            self.last_error = ""
+            return True
+
+    sleeps = []
+    monkeypatch.setattr("research.autonomy.telegram_notifications.time.sleep", sleeps.append)
+    engine = Flaky()
+    n = TelegramNotifier(tmp_path, engine_factory=lambda: engine,
+                         now_fn=lambda: datetime(2026, 7, 31, 10, 0))
+    assert n.notify_online() == "sent"
+    assert sleeps == [2.0]
+    assert engine.n == 2
+    assert engine.messages
+
+
 def test_drain_desk_alerts_retries_recos_and_report(tmp_path, monkeypatch):
     engine = FakeEngine()
     monkeypatch.setattr(

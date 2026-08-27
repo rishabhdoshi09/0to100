@@ -118,7 +118,10 @@ def test_market_reports_renders_sourced_desk_note_not_a_blog():
     assert "Stock Intelligence" in src
     assert "From the last market scan" in src
     assert "Scan market" in src
+    assert "DailyWrapList" in src
+    assert "Here's the wrap of the day" in (ROOT / "frontend" / "src" / "dailyWrap.tsx").read_text(encoding="utf-8") or "Here&apos;s the wrap of the day" in (ROOT / "frontend" / "src" / "dailyWrap.tsx").read_text(encoding="utf-8")
     radar = (ROOT / "frontend" / "src" / "marketRadarViews.tsx").read_text(encoding="utf-8")
+    assert "DailyWrapList" in radar
     assert "Run long-term scan" not in radar
     assert "one scan fills every tab" in radar
     reco_src = (ROOT / "frontend" / "src" / "recommendationsViews.tsx").read_text(encoding="utf-8")
@@ -127,6 +130,7 @@ def test_market_reports_renders_sourced_desk_note_not_a_blog():
     css = (ROOT / "frontend" / "src" / "recommendations.css").read_text(encoding="utf-8")
     assert ".desk-note" in css
     assert ".desk-tile" in css
+    assert "counter(wrap)" in css
     py = (ROOT / "product" / "desk_note.py").read_text(encoding="utf-8")
     assert "WRAP_SLOTS" in py
     assert "MIX_SHIFT_DESKS" in py

@@ -148,13 +148,11 @@ class Deps:
 
     def corporate_actions_status(self):
         from data import corporate_actions as CA
-        path = CA._events_path()
-        events = CA.load_events(path)
-        return {"available": path.exists(), "symbols": len(events), "path": str(path)}
+        return CA.refresh_events()
 
     def universe_history_status(self):
-        from data.nse_universe import point_in_time_universe
-        return point_in_time_universe(self.now_ist().date())
+        from data.nse_universe import refresh_universe_history
+        return refresh_universe_history(as_of=self.now_ist().date())
 
     def live_market_ready(self):
         from data.nse_live import live_session_ready
@@ -308,14 +306,23 @@ class Deps:
         return self.drain_telegram_alerts(min_interval_s=0.0)
 
     def notify_online(self):
-        ok = self.telegram.notify_online()
-        if ok:
+        result = self.telegram.notify_online()
+        if result == "sent":
             print("[TELEGRAM] autonomy-online message sent", flush=True)
-        elif not self.telegram.configured():
+            return True
+        if result == "already_sent":
+            print("[TELEGRAM] autonomy-online already sent today", flush=True)
+            return True
+        if not self.telegram.configured():
             print("[TELEGRAM] OFF · set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID in .env", flush=True)
-        else:
-            print("[TELEGRAM] autonomy-online send failed", flush=True)
-        return ok
+            return False
+        err = ""
+        try:
+            err = str(getattr(self.telegram._engine(), "last_error", "") or "").strip()
+        except Exception:
+            err = ""
+        print("[TELEGRAM] autonomy-online send failed" + (f" · {err}" if err else ""), flush=True)
+        return False
 
     def notify_incident(self, code, message):
         return self.telegram.notify_incident(code, message)
@@ -426,7 +433,7 @@ def _kite_live_ready_result(ctx, *, sid=None, quality=None, live=None) -> JobRes
         return None
     quality = dict(quality or {})
     latest = str(live.get("session_date") or quality.get("latest_date") or "")
-    unblocks = [DEP_DATA]
+    unblocks = [DEP_DATA, DEP_CA_SOURCE, DEP_UNIVERSE_SOURCE]
     if latest:
         unblocks.append(f"EOD_DATA_READY:{latest}")
     return JobResult(
@@ -434,7 +441,8 @@ def _kite_live_ready_result(ctx, *, sid=None, quality=None, live=None) -> JobRes
         f"Kite latest session ready · {int(live.get('symbols') or 0)} symbols · "
         f"{live.get('source') or 'kite_quotes'}",
         output_snapshot_id=sid,
-        clears={H.SNAPSHOT_STALE, H.AUTH_MISSING, H.AUTH_EXPIRED, H.PROVIDER_UNAVAILABLE},
+        clears={H.SNAPSHOT_STALE, H.AUTH_MISSING, H.AUTH_EXPIRED, H.PROVIDER_UNAVAILABLE,
+                H.OPTIONS_HISTORY_INCOMPLETE},
         state_hint=ST.DATA_READY,
         unblocks=tuple(unblocks),
         metadata={**quality, **live, "latest_date": latest or live.get("session_date", "")},
@@ -478,12 +486,12 @@ def run_data_refresh(ctx) -> JobResult:
                              failures={H.SNAPSHOT_STALE}, state_hint=ST.DATA_REFRESHING,
                              new_entries_allowed=False, metadata={**quality, "latest_date": latest,
                                                                  "required_date": required})
-        unblocks = [DEP_DATA]
+        unblocks = [DEP_DATA, DEP_CA_SOURCE, DEP_UNIVERSE_SOURCE]
         if latest:
             unblocks.append(f"EOD_DATA_READY:{latest}")
         return JobResult(JS.SUCCEEDED, "genuine snapshot active", output_snapshot_id=sid,
                          clears={H.SNAPSHOT_STALE, H.AUTH_MISSING, H.AUTH_EXPIRED,
-                                 H.PROVIDER_UNAVAILABLE}, state_hint=ST.DATA_READY,
+                                 H.PROVIDER_UNAVAILABLE, H.OPTIONS_HISTORY_INCOMPLETE}, state_hint=ST.DATA_READY,
                          unblocks=tuple(unblocks), metadata={**quality, "latest_date": latest})
     kite = _kite_live_ready_result(
         ctx,
@@ -507,8 +515,18 @@ def run_bhavcopy_update(ctx) -> JobResult:
     if not info.get("ready"):
         return JobResult(JS.BLOCKED, "official bhavcopy history is not yet sufficient",
                          blocked_on="BHAVCOPY_SOURCE", metadata=info)
+    universe = {}
+    if hasattr(ctx.deps, "universe_history_status"):
+        try:
+            universe = dict(ctx.deps.universe_history_status() or {})
+        except Exception:
+            universe = {}
+    clears = set()
+    if universe.get("survivorship_complete"):
+        clears.add(H.UNIVERSE_INCOMPLETE)
     return JobResult(JS.SUCCEEDED, f"official bhavcopy ready · {info.get('symbols', 0)} symbols",
-                     metadata=info)
+                     clears=clears, unblocks=(DEP_UNIVERSE_SOURCE,),
+                     metadata={**info, "universe": universe})
 
 
 def run_corporate_actions(ctx) -> JobResult:
@@ -523,7 +541,7 @@ def run_corporate_actions(ctx) -> JobResult:
                          "official corporate-action table unavailable; affected historical research remains blocked",
                          failures={H.CA_INCOMPLETE}, blocked_on=DEP_CA_SOURCE, metadata=info)
     return JobResult(JS.SUCCEEDED, f"corporate actions loaded · {info.get('symbols', 0)} symbols",
-                     clears={H.CA_INCOMPLETE}, metadata=info)
+                     clears={H.CA_INCOMPLETE, H.OPTIONS_HISTORY_INCOMPLETE}, metadata=info)
 
 
 def run_universe_history(ctx) -> JobResult:

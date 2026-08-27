@@ -26,6 +26,16 @@ UNRECONCILED = "unreconciled_state"
 UNIVERSE_INCOMPLETE = "universe_history_incomplete"
 LEARNING_FAILED = "learning_failed"
 OWNER_PAUSED = "owner_paused"
+OPTIONS_HISTORY_INCOMPLETE = "options_history_incomplete"
+
+KNOWN_FAILURES = frozenset({
+    AUTH_MISSING, AUTH_EXPIRED, PROVIDER_UNAVAILABLE, SNAPSHOT_STALE, NEWS_UNAVAILABLE,
+    CA_INCOMPLETE, LIVE_FEED_STALE, EVENT_STORE_FAILURE, RISK_GOVERNOR_UNHEALTHY,
+    UNRECONCILED, UNIVERSE_INCOMPLETE, LEARNING_FAILED, OWNER_PAUSED,
+    OPTIONS_HISTORY_INCOMPLETE,
+})
+# Leftover snapshot blockers that cash scans do not need. Dropped on load.
+STALE_FAILURES = frozenset({OPTIONS_HISTORY_INCOMPLETE})
 
 # capability levels
 ALLOWED = "allowed"
@@ -44,9 +54,14 @@ _RESEARCH_BLOCK = {EVENT_STORE_FAILURE}
 _RESEARCH_LIMIT = {NEWS_UNAVAILABLE, CA_INCOMPLETE, UNIVERSE_INCOMPLETE, LEARNING_FAILED}
 
 
+def canonicalize_failures(active_failures) -> set:
+    """Keep known codes only and drop leftover snapshot blockers cash scans do not need."""
+    return (set(active_failures or ()) & KNOWN_FAILURES) - STALE_FAILURES
+
+
 def capabilities(active_failures) -> dict:
     """Most-restrictive-wins capability matrix. Returns a plain dict the UI can render."""
-    f = set(active_failures or ())
+    f = canonicalize_failures(active_failures)
     new_entries = BLOCKED if (f & _ENTRY_BLOCK) else (LIMITED if (f & _ENTRY_LIMIT) else ALLOWED)
     exits = LIMITED if (f & _EXIT_LIMIT) else ALLOWED
     research = BLOCKED if (f & _RESEARCH_BLOCK) else (LIMITED if (f & _RESEARCH_LIMIT) else ALLOWED)
@@ -137,7 +152,7 @@ def read_status(*, state_path, jobs_db=None, dialogue_path=None) -> dict:
                     "heartbeat_ist": durable.get("heartbeat_ist", durable.get("updated_ist", "")),
                     "new_risk_permitted": bool(durable.get("new_risk_permitted", False)),
                     "positions_manageable": bool(durable.get("positions_manageable", True)),
-                    "active_failures": list(durable.get("active_failures", [])),
+                    "active_failures": sorted(canonicalize_failures(durable.get("active_failures", []))),
                     "owner_state": dict(durable.get("owner_state", {})),
                     "scheduler_of_record": str(durable.get("scheduler_of_record", "")),
                     "last_cycle": dict(durable.get("last_cycle", {}) or {}),

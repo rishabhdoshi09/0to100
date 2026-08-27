@@ -14,6 +14,7 @@ import {
 } from './productApi'
 import type { ExperienceViewProps } from './experience'
 import { LiveScanBanner } from './experience'
+import { DailyWrapList, magazineWrapLines } from './dailyWrap'
 import { keepRicherMemory, markInvestigate, recallMemory } from './sessionMemory'
 
 const CAT_ICONS: Record<string, string> = {
@@ -395,27 +396,33 @@ export function RecommendationsView({
 
   useEffect(() => {
     let cancelled = false
-    if (!recallMemory('reco-workspace')) setLoading(true)
-    fetchRecommendationsWorkspace()
-      .then((payload) => {
-        if (!cancelled) {
-          const kept = keepRicherMemory('reco-workspace', payload, (row) => !(row.categories || []).some((c) => (c.count || 0) > 0 || (c.cards || []).length > 0))
-          setData(kept)
-          const firstWithCards = kept.categories.find((c) => c.count > 0)
-          if (firstWithCards) setCategoryId(firstWithCards.id)
-          setError('')
-        }
-      })
-      .catch((err: Error) => {
-        if (!cancelled) setError(err.message || 'Failed to load recommendations')
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false)
-      })
+    const load = () => {
+      if (!recallMemory('reco-workspace')) setLoading(true)
+      fetchRecommendationsWorkspace()
+        .then((payload) => {
+          if (!cancelled) {
+            const kept = keepRicherMemory('reco-workspace', payload, (row) => !(row.categories || []).some((c) => (c.count || 0) > 0 || (c.cards || []).length > 0))
+            setData(kept)
+            const firstWithCards = kept.categories.find((c) => c.count > 0)
+            if (firstWithCards) setCategoryId(firstWithCards.id)
+            setError('')
+          }
+        })
+        .catch((err: Error) => {
+          if (!cancelled) setError(err.message || 'Failed to load recommendations')
+        })
+        .finally(() => {
+          if (!cancelled) setLoading(false)
+        })
+    }
+    load()
+    const ms = marketScan.isBusy || longTermScan.isBusy ? 8000 : 20000
+    const timer = window.setInterval(load, ms)
     return () => {
       cancelled = true
+      window.clearInterval(timer)
     }
-  }, [dashboard.scan.scanned_at, dashboard.long_term.scanned_at, marketScan.succeeded, longTermScan.succeeded])
+  }, [dashboard.scan.scanned_at, dashboard.long_term.scanned_at, marketScan.succeeded, longTermScan.succeeded, marketScan.isBusy, longTermScan.isBusy, dashboard.market.available])
 
   const category = useMemo(
     () => data?.categories.find((c) => c.id === categoryId) || data?.categories[0],
@@ -870,30 +877,36 @@ export function MarketReportsView({ dashboard, setActive, setSelected, marketSca
 
   useEffect(() => {
     let cancelled = false
-    if (!recallMemory('market-reports')) setLoading(true)
-    fetchMarketReportsWorkspace()
-      .then((payload) => {
-        if (!cancelled) {
-          const kept = keepRicherMemory('market-reports', payload, (row) => {
-            const highlights = row.scan_highlights?.row_count || 0
-            const sourced = row.desk_note?.wrap_sourced || 0
-            return !(row.reports || []).length && highlights === 0 && sourced === 0
-          })
-          setData(kept)
-          setSelectedReport(kept.reports[0] || payload.reports[0] || null)
-          setError('')
-        }
-      })
-      .catch((err: Error) => {
-        if (!cancelled) setError(err.message || 'Failed to load market reports')
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false)
-      })
+    const load = () => {
+      if (!recallMemory('market-reports')) setLoading(true)
+      fetchMarketReportsWorkspace()
+        .then((payload) => {
+          if (!cancelled) {
+            const kept = keepRicherMemory('market-reports', payload, (row) => {
+              const highlights = row.scan_highlights?.row_count || 0
+              const sourced = row.desk_note?.wrap_sourced || 0
+              const daily = (row.desk_note?.daily_wrap || []).length
+              return !(row.reports || []).length && highlights === 0 && sourced === 0 && daily === 0
+            })
+            setData(kept)
+            setSelectedReport(kept.reports[0] || payload.reports[0] || null)
+            setError('')
+          }
+        })
+        .catch((err: Error) => {
+          if (!cancelled) setError(err.message || 'Failed to load market reports')
+        })
+        .finally(() => {
+          if (!cancelled) setLoading(false)
+        })
+    }
+    load()
+    const timer = window.setInterval(load, marketScan.isBusy ? 8000 : 20000)
     return () => {
       cancelled = true
+      window.clearInterval(timer)
     }
-  }, [dashboard.scan.scanned_at, marketScan.succeeded, newsStamp])
+  }, [dashboard.scan.scanned_at, marketScan.succeeded, newsStamp, marketScan.isBusy, dashboard.news.available, dashboard.market.available])
 
   const refreshNews = async () => {
     setNewsBusy(true)
@@ -1004,7 +1017,12 @@ export function MarketReportsView({ dashboard, setActive, setSelected, marketSca
         </div>
       </header>
 
-      {data.empty_detail ? (
+      <DailyWrapList
+        lines={magazineWrapLines(data.desk_note?.daily_wrap, dashboard)}
+        onSymbol={openSymbol}
+      />
+
+      {data.empty_detail && !magazineWrapLines(data.desk_note?.daily_wrap, dashboard).length ? (
         <div className="reco-empty">
           <strong>Nothing sourced yet</strong>
           <p>{data.empty_detail}</p>

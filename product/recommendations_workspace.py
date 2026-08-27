@@ -1341,14 +1341,15 @@ def build_market_reports_workspace(
 
     as_of = str((pulse or {}).get("as_of_ist") or highlights.get("scanned_at") or today)
     sourced = int((desk_note or {}).get("wrap_sourced") or 0)
+    daily_n = len(list((desk_note or {}).get("daily_wrap") or []))
     empty_detail = ""
-    if not sourced and not int(highlights.get("row_count") or 0) and not (pulse.get("takeaways") or []):
+    if not sourced and not daily_n and not int(highlights.get("row_count") or 0) and not (pulse.get("takeaways") or []):
         empty_detail = (
             "No sourced wrap and no market scan on file. Scan market and refresh news "
             "to fill this archive. Opening the page does not start those jobs, and "
             "empty slots are not filled with invented headlines."
         )
-    elif not sourced:
+    elif not sourced and not daily_n:
         empty_detail = (
             "No sourced wrap headlines yet — refresh news and filings. Breakout context "
             "below comes from the last market scan, not from invented copy."

@@ -117,10 +117,21 @@ def test_retryable_then_permanent(tmp_path):
 def test_critical_overdue_alerts_and_degrades(tmp_path):
     clk = [10_000.0]
     sup = _sup(tmp_path, clock=lambda: clk[0]); sup.start()
+    clk[0] = 14_000.0  # past the one-hour boot grace
     sup.jobs.enqueue(SCH.PAPER_CYCLE, scheduled_for=0.0, idempotency_key="old", critical=True)
     sup._check_overdue()
     assert sup.state.state == ST.DEGRADED
     assert any(r["record_type"] == OPERATIONAL_INCIDENT for r in sup.dialogue.all())
+    sup.shutdown()
+
+
+def test_critical_overdue_does_not_page_during_boot_grace(tmp_path):
+    clk = [10_000.0]
+    sup = _sup(tmp_path, clock=lambda: clk[0]); sup.start()
+    sup.jobs.enqueue(SCH.DATA_REFRESH, scheduled_for=0.0, idempotency_key="stale-data", critical=True)
+    sup._check_overdue()
+    assert sup.state.state == ST.STARTING
+    assert not any(r["decision"] == "CRITICAL_OVERDUE" for r in sup.dialogue.all())
     sup.shutdown()
 
 
