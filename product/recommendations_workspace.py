@@ -1318,7 +1318,7 @@ def build_market_reports_workspace(
         }, today=today))
     elif has_today:
         # Re-project today's list item from the scan-enriched pulse so breakouts
-        # from the saved scan show even when the 15-minute file had empty slots.
+        # from the saved scan show even when the pulse file had empty slots.
         reports = [
             _report_item({
                 "id": r.get("id") or f"market_pulse_{today}",
@@ -1360,7 +1360,7 @@ def build_market_reports_workspace(
             "watch desks. Built from the last scan, official session files and saved news. "
             "Headlines stay sourced. Empty stays empty."
         ),
-        "load_note": "Pulse reuses today's file for 15 minutes; it does not walk every bhavcopy symbol.",
+        "load_note": "Pulse reuses today's saved file from Scan Now; it does not walk every bhavcopy symbol.",
         "reports": reports,
         "today_pulse": pulse,
         "desk_note": desk_note,
