@@ -310,6 +310,11 @@ function App() {
     seedOperation: activeSeed(dashboard, 'LONG_TERM_REFRESH') || activeSeed(dashboard, 'LONG_TERM_SCAN'),
   })
 
+  const marketReport = useScanRunner('MARKET_REPORT', {
+    onComplete: () => void refresh(),
+    seedOperation: activeSeed(dashboard, 'MARKET_REPORT') || activeSeed(dashboard, 'NEWS_REFRESH'),
+  })
+
   const pipelineBusy = (dashboard.operations.active || []).some((item) => (
     item.kind === 'DATA_PREPARE'
     || item.kind === 'FNO_REFRESH'
@@ -317,8 +322,15 @@ function App() {
     || item.kind === 'LONG_TERM_SCAN'
     || item.kind === 'LONG_TERM_REFRESH'
     || item.kind === 'NEWS_REFRESH'
+    || item.kind === 'MARKET_REPORT'
+    || item.kind === 'DUE_DILIGENCE_ACQUIRE'
   ))
-  const scanPollingActive = marketScan.isActive || longTermScan.isActive || pipelineBusy
+  const scanPollingActive = (
+    marketScan.isActive
+    || longTermScan.isActive
+    || marketReport.isActive
+    || pipelineBusy
+  )
 
   useEffect(() => {
     void refresh()
@@ -462,6 +474,7 @@ function App() {
     depth,
     marketScan,
     longTermScan,
+    marketReport,
   }
 
   const primaryPages = [

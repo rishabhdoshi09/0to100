@@ -747,7 +747,24 @@
 .dd-acquire-banner {
   padding: 10px 14px; border-radius: 12px; background: var(--rw-green-soft);
   border: 1px solid var(--rw-line); color: var(--rw-ink); font-size: 13px;
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
 }
+.dd-acquire-banner.is-failed { background: rgba(255,104,127,.08); }
+.dd-acquire-banner p { margin: 0; flex: 1; }
+.dd-conclusion {
+  margin: 0 0 16px; padding: 14px 16px; border-radius: 14px;
+  background: var(--rw-surface); border: 1px solid var(--rw-line);
+}
+.dd-conclusion > p { margin: 0 0 10px; line-height: 1.45; }
+.report-market-meta {
+  display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
+  margin: 0 0 14px;
+}
+.report-market-meta .chip {
+  display: inline-flex; padding: 4px 10px; border-radius: 999px;
+  border: 1px solid var(--rw-line); font-size: 12px;
+}
+.report-market-meta .muted, .muted { color: var(--rw-muted); font-size: 13px; }
 .dd-coverage-strip {
   padding: 14px 16px; border-radius: 14px; background: var(--rw-surface);
   border: 1px solid var(--rw-line); display: grid; gap: 10px;

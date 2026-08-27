@@ -525,6 +525,21 @@ export type DueDiligenceReport = {
   filings?: { title?: string; category?: string; url?: string; source?: string; published_at?: string }[]
   sources?: { source?: string; source_url?: string; period?: string; source_type_label?: string; retrieved_at?: string }[]
   source_conflicts?: { field?: string; status?: string; note?: string; preferred?: { value?: unknown; source?: string }; other?: { value?: unknown; source?: string } }[]
+  named_quality_scores?: {
+    available?: boolean
+    detail?: string
+    scores?: {
+      id: string
+      label: string
+      available?: boolean
+      score?: number | null
+      label_text?: string
+      detail?: string
+      band?: string
+      measured?: number
+      max?: number
+    }[]
+  }
   places_orders: boolean
   disclaimer: string
   question: string
@@ -545,17 +560,26 @@ export const fetchFrameworkAudit = (framework = ''): Promise<Record<string, unkn
 export const acquireDueDiligence = (
   symbol: string,
   mode: 'missing_or_stale' | 'all' = 'missing_or_stale',
+  opts?: { asyncJob?: boolean },
 ): Promise<{
   accepted: boolean
   symbol: string
   mode?: string
-  acquire: Record<string, unknown>
-  report: DueDiligenceReport
+  async?: boolean
+  created?: boolean
+  operation_id?: string
+  operation_status?: string
+  acquire?: Record<string, unknown>
+  report?: DueDiligenceReport
   places_orders: boolean
-}> => fetch(`/api/due-diligence/${encodeURIComponent(symbol)}/acquire?mode=${encodeURIComponent(mode)}`, {
-  method: 'POST',
-  headers: { Accept: 'application/json' },
-}).then((response) => json(response))
+}> => {
+  const params = new URLSearchParams({ mode })
+  if (opts?.asyncJob) params.set('async_job', 'true')
+  return fetch(`/api/due-diligence/${encodeURIComponent(symbol)}/acquire?${params.toString()}`, {
+    method: 'POST',
+    headers: { Accept: 'application/json' },
+  }).then((response) => json(response))
+}
 
 export const fetchInvestigatorSuggest = (query: string): Promise<{ query: string; matches: InvestigatorMatch[]; engine: string }> =>
   fetch(`/api/stock-investigator/suggest?q=${encodeURIComponent(query)}&limit=8`, {
@@ -788,6 +812,9 @@ export type RecommendationCard = {
   stock_quality?: string
   timing?: string
   conflicts?: string[]
+  blockers?: string[]
+  freshness?: string
+  evidence_coverage?: number | null
   deep_confirm?: boolean
   fundamental_confirmation?: string | null
   research_decision_coverage?: number | null
@@ -1045,6 +1072,17 @@ export type MarketReportsWorkspace = {
   desk_note?: DeskNote
   scan_highlights?: ScanHighlights
   news_meta?: { article_count?: number; available?: boolean }
+  market?: {
+    health?: string
+    breadth?: string
+    trade_stance?: string
+    summary?: string
+    leaders?: string[]
+    laggards?: string[]
+  }
+  missing_lanes?: string[]
+  needs_refresh?: boolean
+  stale?: boolean
   empty_detail?: string
   error: string
   disclaimer: string

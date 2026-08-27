@@ -1,9 +1,10 @@
 import './recommendations.css'
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { money, pct, relativeAge, words } from './format'
 import {
   fetchMarketReportsWorkspace,
   fetchRecommendationsWorkspace,
+  bootstrapProduct,
   type DeskNote,
   type DeskNoteCompany,
   type MarketReportItem,
@@ -187,10 +188,17 @@ function CardTile({
           <StatusChip label="Setup Quality" value={card.setup_quality != null ? `${Math.round(card.setup_quality)}/100` : '—'} />
           <StatusChip label="Payoff" value={card.expected_payoff} />
           <StatusChip label="Evidence" value={card.evidence} />
+          <StatusChip label="Coverage" value={card.evidence_coverage != null ? `${Math.round(card.evidence_coverage)}%` : (card.research_decision_coverage != null ? `${Math.round(card.research_decision_coverage)}%` : '—')} />
           <StatusChip label="Health" value={card.strategy_health} />
           <StatusChip label="Market" value={card.market_support} />
+          <StatusChip label="Freshness" value={card.freshness || card.price_tag || 'Saved scan'} />
         </div>
         <CaseMemoryBox memory={card.case} />
+        {(card.blockers || []).length ? (
+          <p className="reco-pick-note">Blockers: {(card.blockers || []).join(' · ')}</p>
+        ) : (card.conflicts || []).length ? (
+          <p className="reco-pick-note">Conflicts: {(card.conflicts || []).join(' · ')}</p>
+        ) : null}
       </button>
     </article>
   )
@@ -328,7 +336,15 @@ function DecisionSheet({
         <StatusChip label="Timing" value={card.timing} />
         <StatusChip label="Setup Quality" value={card.setup_quality != null ? `${Math.round(card.setup_quality)}/100` : '—'} />
         <StatusChip label="Expected payoff" value={card.expected_payoff} />
+        <StatusChip label="Coverage" value={card.evidence_coverage != null ? `${Math.round(card.evidence_coverage)}%` : (card.research_decision_coverage != null ? `${Math.round(card.research_decision_coverage)}%` : '—')} />
+        <StatusChip label="Freshness" value={card.freshness || card.price_tag || 'Saved scan'} />
+        <StatusChip label="Market" value={card.market_support} />
       </div>
+      {(card.blockers || []).length ? (
+        <p className="reco-pick-note">Blockers: {(card.blockers || []).join(' · ')}</p>
+      ) : (card.conflicts || []).length ? (
+        <p className="reco-pick-note">Conflicts: {(card.conflicts || []).join(' · ')}</p>
+      ) : null}
       {card.expected_payoff_detail ? (
         <p className="reco-pick-note">{card.expected_payoff_detail}</p>
       ) : null}
@@ -393,6 +409,22 @@ export function RecommendationsView({
   const [lifecycle, setLifecycle] = useState<'Active' | 'Closed'>('Active')
   const [query, setQuery] = useState('')
   const [selectedCard, setSelectedCard] = useState<RecommendationCard | null>(null)
+  const autoPrep = useRef(false)
+
+  useEffect(() => {
+    if (autoPrep.current) return
+    const hasScan = Boolean(dashboard.scan.scanned_at || (dashboard.scan.records || []).length)
+    if (hasScan || marketScan.isActive || marketScan.isBusy) {
+      autoPrep.current = true
+      return
+    }
+    autoPrep.current = true
+    void bootstrapProduct()
+      .then(() => {
+        if (!marketScan.isActive && !marketScan.isBusy) void marketScan.start()
+      })
+      .catch(() => { autoPrep.current = false })
+  }, [dashboard.scan.scanned_at, dashboard.scan.records.length, marketScan.isActive, marketScan.isBusy, marketScan.start])
 
   useEffect(() => {
     let cancelled = false
@@ -475,7 +507,7 @@ export function RecommendationsView({
         <LiveScanBanner scan={longTermScan} depth={depth} label="Funds refresh" />
         <div className="reco-empty">
           <strong>{error || 'No recommendation data yet'}</strong>
-          <p>Run one market scan. It jumps the queue and fills Home, Scanner (Breakouts, SEPA, Momentum, long-term) and Recommendations together. Opening this page does not start a scan.</p>
+          <p>This page starts the official-price and market-scan jobs if they are missing, then builds recommendations from verified scan evidence. Empty high-conviction is a real result when families do not agree.</p>
           <div className="reco-hero-actions">
             <button type="button" className="reco-primary" disabled={marketScan.isBusy} onClick={() => void marketScan.start()}>
               {marketScan.isBusy ? 'Scanning market…' : 'Scan market'}
@@ -579,7 +611,7 @@ export function RecommendationsView({
           <p>
             {(data.scan_meta?.market_row_count || 0) > 0
               ? (category?.empty_detail || 'The current scan did not match a research category.')
-              : 'Run one market scan. It fills every setup including Wealth Builders. Sidebar navigation only opens this page — it does not start a scan.'}
+              : 'No market scan is on file yet. This page queued the official-price and scan jobs — qualified ideas appear here when that work finishes.'}
           </p>
           <div className="reco-hero-actions">
             <button type="button" className="reco-primary" disabled={marketScan.isBusy} onClick={() => void marketScan.start()}>
@@ -865,15 +897,17 @@ function DeskTile({
   )
 }
 
-export function MarketReportsView({ dashboard, setActive, setSelected, marketScan, depth, runControl }: ExperienceViewProps) {
+export function MarketReportsView({ dashboard, setActive, setSelected, marketScan, marketReport, depth, runControl }: ExperienceViewProps) {
   const [data, setData] = useState<MarketReportsWorkspace | null>(() => recallMemory<MarketReportsWorkspace>('market-reports') ?? null)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(() => !recallMemory('market-reports'))
   const [query, setQuery] = useState('')
   const [selected, setSelectedReport] = useState<MarketReportItem | null>(null)
   const [newsBusy, setNewsBusy] = useState(false)
+  const autoReport = useRef(false)
   const newsStamp = dashboard.operations?.latest?.NEWS_REFRESH?.updated_at
     || dashboard.news?.latest_refresh?.updated_at
+    || dashboard.operations?.latest?.MARKET_REPORT?.updated_at
 
   useEffect(() => {
     let cancelled = false
@@ -891,6 +925,16 @@ export function MarketReportsView({ dashboard, setActive, setSelected, marketSca
             setData(kept)
             setSelectedReport(kept.reports[0] || payload.reports[0] || null)
             setError('')
+            if (
+              !autoReport.current
+              && payload.needs_refresh
+              && marketReport
+              && !marketReport.isActive
+              && !marketReport.isBusy
+            ) {
+              autoReport.current = true
+              void marketReport.start()
+            }
           }
         })
         .catch((err: Error) => {
@@ -901,12 +945,12 @@ export function MarketReportsView({ dashboard, setActive, setSelected, marketSca
         })
     }
     load()
-    const timer = window.setInterval(load, marketScan.isBusy ? 8000 : 20000)
+    const timer = window.setInterval(load, marketScan.isBusy || marketReport?.isBusy ? 4000 : 20000)
     return () => {
       cancelled = true
       window.clearInterval(timer)
     }
-  }, [dashboard.scan.scanned_at, marketScan.succeeded, newsStamp, marketScan.isBusy, dashboard.news.available, dashboard.market.available])
+  }, [dashboard.scan.scanned_at, marketScan.succeeded, marketReport?.succeeded, newsStamp, marketScan.isBusy, marketReport?.isBusy, dashboard.news.available, dashboard.market.available, marketReport])
 
   const refreshNews = async () => {
     setNewsBusy(true)
@@ -945,11 +989,20 @@ export function MarketReportsView({ dashboard, setActive, setSelected, marketSca
     return (
       <div className="reco-light">
         <LiveScanBanner scan={marketScan} depth={depth} label="Market scan" />
+        {marketReport ? <LiveScanBanner scan={marketReport} depth={depth} label="Market report" /> : null}
         <div className="reco-empty">
           <strong>{error || 'No reports yet'}</strong>
-          <p>Scan market and refresh news to build Market Reports. Opening this page does not fetch anything by itself.</p>
+          <p>Opening this page queues a real report job from official session files and sourced news. Empty slots stay empty.</p>
           <div className="reco-hero-actions">
-            <button type="button" className="reco-primary" disabled={marketScan.isBusy} onClick={() => void marketScan.start()}>
+            <button
+              type="button"
+              className="reco-primary"
+              disabled={!marketReport || marketReport.isBusy}
+              onClick={() => void marketReport?.start()}
+            >
+              {marketReport?.isBusy ? 'Building report…' : 'Build report'}
+            </button>
+            <button type="button" className="reco-ghost" disabled={marketScan.isBusy} onClick={() => void marketScan.start()}>
               {marketScan.isBusy ? 'Scanning market…' : 'Scan market'}
             </button>
             <button type="button" className="reco-ghost" disabled={newsBusy} onClick={() => void refreshNews()}>
@@ -985,6 +1038,7 @@ export function MarketReportsView({ dashboard, setActive, setSelected, marketSca
   return (
     <div className="reco-light market-reports-desk">
       <LiveScanBanner scan={marketScan} depth={depth} label="Market scan" />
+      {marketReport ? <LiveScanBanner scan={marketReport} depth={depth} label="Market report" /> : null}
       <nav className="reco-crumb" aria-label="Breadcrumb">
         <button type="button" onClick={() => setActive('Home')}>Home</button>
         <span>›</span>
@@ -1006,7 +1060,15 @@ export function MarketReportsView({ dashboard, setActive, setSelected, marketSca
           Wrap: {data.desk_note?.wrap_sourced ?? 0} sourced / {data.desk_note?.wrap_empty ?? 0} empty
         </p>
         <div className="reco-hero-actions">
-          <button type="button" className="reco-primary" disabled={marketScan.isBusy} onClick={() => void marketScan.start()}>
+          <button
+            type="button"
+            className="reco-primary"
+            disabled={!marketReport || marketReport.isBusy}
+            onClick={() => void marketReport?.start()}
+          >
+            {marketReport?.isBusy ? 'Building report…' : 'Build report'}
+          </button>
+          <button type="button" className="reco-ghost" disabled={marketScan.isBusy} onClick={() => void marketScan.start()}>
             {marketScan.isBusy
               ? `Scanning…${marketScan.percent != null ? ` ${marketScan.percent}%` : ''}`
               : 'Scan market'}
@@ -1016,6 +1078,19 @@ export function MarketReportsView({ dashboard, setActive, setSelected, marketSca
           </button>
         </div>
       </header>
+      {data.market && (data.market.health || data.market.breadth || data.market.summary) ? (
+        <div className="report-market-meta" aria-label="Verified market context">
+          {data.market.health ? <span className="chip">Health {String(data.market.health)}</span> : null}
+          {data.market.breadth ? <span className="chip">Breadth {String(data.market.breadth)}</span> : null}
+          {(data.market.leaders || []).length ? (
+            <span className="chip">Leaders {(data.market.leaders || []).slice(0, 3).join(', ')}</span>
+          ) : null}
+          {data.market.summary ? <p className="muted">{data.market.summary}</p> : null}
+        </div>
+      ) : null}
+      {(data.missing_lanes || []).length ? (
+        <p className="muted">Missing lanes: {(data.missing_lanes || []).join(' · ')}</p>
+      ) : null}
 
       <DailyWrapList
         lines={magazineWrapLines(data.desk_note?.daily_wrap, dashboard)}
