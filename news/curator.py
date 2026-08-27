@@ -43,6 +43,8 @@ _STOP_COMPANY_WORDS = {
     "CORP", "INDUSTRIES", "INDUSTRY", "ENTERPRISES", "HOLDINGS", "PLC",
 }
 _AMBIGUOUS_SYMBOLS = {"IT", "ON", "GO", "ARE", "CAN", "SET", "GET", "ALL", "ONE", "AND"}
+_TOKEN_RE = re.compile(r"[A-Z0-9]+")
+_FETCH_BUDGET_S = 20.0
 
 _CATEGORY_KEYWORDS: dict[str, tuple[str, ...]] = {
     "economy": (
@@ -179,6 +181,18 @@ class EntityResolver:
                 if len(alias) >= 5:
                     self._name_aliases.append((alias, symbol))
         self._name_aliases.sort(key=lambda pair: len(pair[0]), reverse=True)
+        # Token lookup is O(tokens in the headline). Compiling a regex per NSE
+        # symbol per article is what made news_refresh occupy the autonomy worker
+        # for several minutes and starve market_scan.
+        self._simple_symbols = {
+            symbol for symbol in self.symbol_names
+            if symbol not in _AMBIGUOUS_SYMBOLS and symbol.isalnum()
+        }
+        self._special_patterns = tuple(
+            (re.compile(rf"(?<![A-Z0-9]){re.escape(symbol)}(?![A-Z0-9])"), symbol)
+            for symbol in self.symbol_names
+            if symbol not in _AMBIGUOUS_SYMBOLS and not symbol.isalnum()
+        )
 
     @classmethod
     def from_quantterm(cls) -> "EntityResolver":
@@ -203,11 +217,11 @@ class EntityResolver:
     def resolve(self, text: str, hinted_symbols: Iterable[str] = ()) -> tuple[tuple[str, ...], tuple[str, ...]]:
         upper = _clean_text(text).upper()
         found = {str(s).upper() for s in hinted_symbols if str(s).strip()}
-        for symbol in self.symbol_names:
-            if symbol in _AMBIGUOUS_SYMBOLS:
-                continue
-            pattern = rf"(?<![A-Z0-9]){re.escape(symbol)}(?![A-Z0-9])"
-            if re.search(pattern, upper):
+        for token in _TOKEN_RE.findall(upper):
+            if token in self._simple_symbols:
+                found.add(token)
+        for pattern, symbol in self._special_patterns:
+            if pattern.search(upper):
                 found.add(symbol)
         for alias, symbol in self._name_aliases:
             if alias in upper:
@@ -422,18 +436,22 @@ class NewsCurator:
         self.timeout = max(3, int(timeout))
         self.workers = max(1, min(16, int(workers)))
 
-    def refresh(self, *, max_age_hours: int = 168, keep_days: int = 30) -> RefreshReport:
+    def refresh(self, *, max_age_hours: int = 168, keep_days: int = 30,
+                budget_s: float = _FETCH_BUDGET_S) -> RefreshReport:
         started = datetime.now(timezone.utc)
         fetched: list[FetchedNews] = []
         health: list[SourceHealth] = []
         errors: list[str] = []
-        with ThreadPoolExecutor(max_workers=min(self.workers, max(1, len(self.sources)))) as pool:
-            future_map = {
-                pool.submit(self._fetch_source, source, max_age_hours): source
-                for source in self.sources
-            }
-            for future in as_completed(future_map):
+        seen_keys: set[str] = set()
+        pool = ThreadPoolExecutor(max_workers=min(self.workers, max(1, len(self.sources) or 1)))
+        future_map = {
+            pool.submit(self._fetch_source, source, max_age_hours): source
+            for source in self.sources
+        }
+        try:
+            for future in as_completed(future_map, timeout=max(0.1, float(budget_s))):
                 source = future_map[future]
+                seen_keys.add(source.key)
                 try:
                     articles, status = future.result()
                     fetched.extend(articles)
@@ -444,6 +462,17 @@ class NewsCurator:
                     now = datetime.now(timezone.utc).isoformat()
                     health.append(SourceHealth(source.key, source.name, "ERROR", now, error=str(exc)))
                     errors.append(f"{source.name}: {exc}")
+        except TimeoutError:
+            errors.append("source fetch budget exhausted")
+            now = datetime.now(timezone.utc).isoformat()
+            for future, source in future_map.items():
+                if source.key in seen_keys:
+                    continue
+                health.append(SourceHealth(source.key, source.name, "TIMEOUT", now,
+                                           error="fetch budget exhausted"))
+                errors.append(f"{source.name}: fetch budget exhausted")
+        finally:
+            pool.shutdown(wait=False, cancel_futures=True)
         curated = curate_articles(fetched, self.resolver, now=datetime.now(timezone.utc))
         written = self.store.upsert_articles(curated)
         self.store.upsert_source_health(health)

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import inspect
 import io
+import time
 import tokenize
 from datetime import datetime
 from pathlib import Path
@@ -212,6 +213,72 @@ def test_scan_slot_is_deterministic():
     b = SCH.scan_slot(datetime(2026, 7, 31, 10, 14))
     assert a == b == "intraday-1000"          # same 15-min slot → one immutable scan
     assert not SCH.scan_due(datetime(2026, 7, 31, 10, 14), a)
+
+
+def test_lease_due_runs_scan_before_older_news(tmp_path):
+    """News is enqueued first every tick; it must not starve the due market scan."""
+    store = JS.JobStore(tmp_path / "j.db")
+    store.enqueue(SCH.NEWS_REFRESH, idempotency_key="n1", scheduled_for=10.0)
+    store.enqueue(SCH.MARKET_SCAN, idempotency_key="s1", scheduled_for=20.0)
+    got = store.lease_due("owner")
+    assert got is not None and got.job_type == SCH.MARKET_SCAN
+    store.close()
+
+
+def test_lease_due_still_prefers_critical_over_scan(tmp_path):
+    store = JS.JobStore(tmp_path / "j.db")
+    store.enqueue(SCH.MARKET_SCAN, idempotency_key="s1")
+    store.enqueue(SCH.DATA_REFRESH, idempotency_key="d1", critical=True)
+    got = store.lease_due("owner")
+    assert got is not None and got.job_type == SCH.DATA_REFRESH
+    store.close()
+
+
+def test_news_still_runs_when_no_scan_is_due(tmp_path):
+    clk = [15.0]
+    store = JS.JobStore(tmp_path / "j.db", clock=lambda: clk[0])
+    store.enqueue(SCH.NEWS_REFRESH, idempotency_key="n1", scheduled_for=10.0)
+    store.enqueue(SCH.MARKET_SCAN, idempotency_key="s1", scheduled_for=20.0)
+    got = store.lease_due("owner")
+    assert got is not None and got.job_type == SCH.NEWS_REFRESH
+    store.close()
+
+
+def test_tick_leases_scan_ahead_of_news(tmp_path):
+    sup = _sup(tmp_path)
+    sup.start()
+    sup.enqueue_due = lambda now_ist=None: None
+    sup.jobs.enqueue(SCH.NEWS_REFRESH, idempotency_key="n1")
+    sup.jobs.enqueue(SCH.MARKET_SCAN, idempotency_key="s1")
+    job = sup.tick(_NOW)
+    assert job is not None and job.job_type == SCH.MARKET_SCAN
+    sup.shutdown()
+
+
+def test_news_refresh_budget_releases_worker(monkeypatch):
+    monkeypatch.setattr(JOBS, "NEWS_JOB_BUDGET_S", 0.2)
+
+    class Slow:
+        def refresh_news(self):
+            time.sleep(5)
+            return {"status": "OK"}
+
+    started = time.monotonic()
+    result = JOBS.run_news_refresh(JOBS._Ctx(Slow()))
+    assert time.monotonic() - started < 1.5
+    assert result.status == JS.SUCCEEDED
+    assert "background" in result.summary
+    assert not result.failures
+
+
+def test_news_refresh_completes_when_fast():
+    class Fast:
+        def refresh_news(self):
+            return {"status": "OK"}
+
+    result = JOBS.run_news_refresh(JOBS._Ctx(Fast()))
+    assert result.status == JS.SUCCEEDED and "complete" in result.summary
+    assert H.NEWS_UNAVAILABLE in result.clears
 
 
 def test_headless_scan_service_has_no_ui_dependency():

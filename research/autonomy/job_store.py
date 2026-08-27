@@ -20,6 +20,8 @@ RETRYABLE_FAILED = "RETRYABLE_FAILED"
 PERMANENT_FAILED = "PERMANENT_FAILED"
 SKIPPED_IDEMPOTENT = "SKIPPED_IDEMPOTENT"
 CANCELLED = "CANCELLED"
+# Recurring context work. These stay runnable, but never jump a due scan/data job.
+_YIELD_TO_FOREGROUND = frozenset({"news_refresh"})
 
 _TERMINAL = {SUCCEEDED, PERMANENT_FAILED, SKIPPED_IDEMPOTENT, CANCELLED}
 _DDL = """
@@ -160,10 +162,17 @@ class JobStore:
                     "SELECT * FROM jobs WHERE status=? AND lease_expires_at IS NOT NULL "
                     "AND lease_expires_at < ? ORDER BY scheduled_for LIMIT 1", (RUNNING, now)).fetchone()
                 if row is None:
+                    # news_refresh is enqueued every 5 minutes, usually before the
+                    # 15-minute market_scan in the same tick. Without this yield,
+                    # a slow news fetch monopolizes the single worker and the scan
+                    # never starts (next=market_scan, active=news_refresh).
+                    yield_types = tuple(_YIELD_TO_FOREGROUND)
+                    placeholders = ",".join("?" for _ in yield_types) or "''"
                     row = self._db.execute(
                         "SELECT * FROM jobs WHERE status=? AND scheduled_for<=? "
-                        "ORDER BY critical DESC, scheduled_for, created_at LIMIT 1",
-                        (PENDING, now)).fetchone()
+                        f"ORDER BY critical DESC, CASE WHEN job_type IN ({placeholders}) "
+                        "THEN 1 ELSE 0 END, scheduled_for, created_at LIMIT 1",
+                        (PENDING, now, *yield_types)).fetchone()
                 if row is None:
                     self._db.execute("COMMIT")
                     return None
