@@ -116,6 +116,37 @@ def _poll(operation_id: str, *, timeout_s: float) -> dict[str, Any]:
     )
 
 
+def _slim_value(value: Any, *, depth: int = 0) -> Any:
+    """Keep proof JSON auditable without dumping whole scan/filing payloads."""
+    if depth > 3:
+        return type(value).__name__
+    if isinstance(value, dict):
+        out = {}
+        for key, item in list(value.items())[:40]:
+            if key in {"payload", "records", "articles", "downloads", "texts", "raw"} and not isinstance(
+                item, (int, float, bool, str, type(None))
+            ):
+                if isinstance(item, list):
+                    out[key] = f"<{len(item)} items>"
+                elif isinstance(item, dict):
+                    out[key] = {
+                        "keys": sorted(str(k) for k in list(item.keys())[:24]),
+                        "n_keys": len(item),
+                    }
+                else:
+                    out[key] = type(item).__name__
+                continue
+            out[str(key)] = _slim_value(item, depth=depth + 1)
+        return out
+    if isinstance(value, list):
+        if len(value) > 12:
+            return [_slim_value(v, depth=depth + 1) for v in value[:8]] + [f"<{len(value) - 8} more>"]
+        return [_slim_value(v, depth=depth + 1) for v in value]
+    if isinstance(value, str) and len(value) > 500:
+        return value[:500] + "…"
+    return value
+
+
 def _summarize_op(op: dict[str, Any]) -> dict[str, Any]:
     started = op.get("started_at")
     finished = op.get("finished_at")
@@ -136,7 +167,7 @@ def _summarize_op(op: dict[str, Any]) -> dict[str, Any]:
         "error_message": op.get("error_message") or "",
         "progress_current": op.get("progress_current"),
         "progress_total": op.get("progress_total"),
-        "result": op.get("result") or {},
+        "result": _slim_value(op.get("result") or {}),
         "elapsed_s": elapsed,
     }
 
