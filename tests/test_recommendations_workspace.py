@@ -315,7 +315,7 @@ def test_old_market_report_is_not_marked_today(tmp_path, monkeypatch):
         },
     )
     monkeypatch.setattr(rw, "_ist_day", lambda: "2026-08-16")
-    payload = build_market_reports_workspace(persist_today=True)
+    payload = build_market_reports_workspace(persist_today=True, rebuild=True)
     assert payload["reports"][0]["is_new"] is True
     assert payload["reports"][0]["date"] == "2026-08-16"
     assert any(r["date"] == "2026-01-01" and r["is_new"] is False for r in payload["reports"])
