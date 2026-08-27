@@ -159,57 +159,13 @@ def compute_composite_score(
     # Step 5: RS score bonus
     # ------------------------------------------------------------------
     rs_score: Optional[float] = None
-    rs: float = 50.0
-    try:
-        import streamlit as st  # type: ignore
-        cached_rs = st.session_state.get(f"rs_{symbol}", None)
-        if cached_rs is not None:
-            rs = float(cached_rs)
-        rs_score = rs
-        if rs >= 90:
-            score += 8
-            boosters.append(f"RS {rs:.0f} — top 10% strength")
-        elif rs < 40:
-            score -= 8
-            detractors.append(f"RS {rs:.0f} — underperforming")
-        elif rs >= 75:
-            boosters.append(f"RS {rs:.0f} — above-average strength")
-    except Exception:
-        pass
+    # Optional RS used to live in a UI session cache. The desk has none.
 
     # ------------------------------------------------------------------
     # Step 6: Freshness score
     # ------------------------------------------------------------------
     freshness_score: Optional[float] = None
-    try:
-        import streamlit as st  # type: ignore  # noqa: F811
-        fresh = st.session_state.get(f"fresh_{symbol}", {})
-        status = fresh.get("status", "UNKNOWN")
-        freshness_map = {
-            "OPTIMAL": 5,
-            "FRESH":   2,
-            "MATURE":  0,
-            "EARLY":  -3,
-            "STALE": -10,
-        }
-        _freshness_score_map = {
-            "OPTIMAL": 95,
-            "FRESH":   80,
-            "MATURE":  60,
-            "EARLY":   40,
-            "STALE":   15,
-        }
-        delta = freshness_map.get(status, 0)
-        freshness_score = float(_freshness_score_map.get(status, 50))
-        score += delta
-        if status == "STALE":
-            detractors.append(f"Setup is stale ({fresh.get('note', '')})")
-        elif status == "OPTIMAL":
-            boosters.append("Setup in optimal freshness window")
-        elif status == "EARLY":
-            detractors.append(f"Setup too early ({fresh.get('note', '')})")
-    except Exception:
-        pass
+    # Optional freshness used to live in a UI session cache. The desk has none.
 
     # ------------------------------------------------------------------
     # Step 7: Apply multipliers
@@ -264,8 +220,8 @@ def compute_composite_score(
 
     # Kill switch
     try:
-        import streamlit as st  # type: ignore  # noqa: F811
-        if st.session_state.get("kill_switch_active"):
+        import os
+        if os.getenv("QUANTTERM_KILL_SWITCH", "").strip().lower() in {"1", "true", "yes", "on"}:
             blockers.append("Kill switch active")
     except Exception:
         pass
@@ -375,201 +331,4 @@ def render_composite_score(cs: CompositeScore) -> None:
       │  Buy above ₹2,450 · Risk 1.4% of capital    │
       └──────────────────────────────────────────────┘
     """
-    import streamlit as st  # type: ignore
-
-    score = cs.final_score
-    action = cs.action
-
-    # Border / glow based on action
-    if action == "BUY":
-        border_col = "#00d4a0"
-        badge_bg   = "#00d4a022"
-        glow       = "0 0 24px #00d4a033"
-        action_col = "#00d4a0"
-    elif action == "WAIT":
-        border_col = "#f59e0b"
-        badge_bg   = "#f59e0b22"
-        glow       = "0 0 20px #f59e0b22"
-        action_col = "#f59e0b"
-    elif action == "BLOCKED":
-        border_col = "#ff4b4b"
-        badge_bg   = "#ff4b4b22"
-        glow       = "0 0 20px #ff4b4b33"
-        action_col = "#ff4b4b"
-    else:  # SKIP
-        border_col = "#4a5568"
-        badge_bg   = "#4a556822"
-        glow       = "none"
-        action_col = "#4a5568"
-
-    # Dot progress bar (10 dots)
-    filled = int(round(score / 10))
-    dots = "●" * filled + "○" * (10 - filled)
-
-    # Conviction label
-    if score >= 80:
-        conviction = "Strong conviction"
-    elif score >= 65:
-        conviction = "Moderate conviction"
-    elif score >= 50:
-        conviction = "Weak conviction"
-    else:
-        conviction = "Low conviction"
-
-    # ── Build component rows ───────────────────────────────────────────
-    components_html = ""
-
-    # Quality score
-    if cs.quality_score is not None:
-        q_icon = "✅" if cs.quality_score >= 68 else "⚠️" if cs.quality_score >= 50 else "❌"
-        q_col  = "#00d4a0" if cs.quality_score >= 68 else "#f59e0b" if cs.quality_score >= 50 else "#ff4b4b"
-        components_html += (
-            f"<span style='color:{q_col}'>{q_icon} Quality {cs.quality_score:.0f}</span>&nbsp;&nbsp;"
-        )
-
-    # RS score
-    if cs.rs_score is not None:
-        rs_icon = "✅" if cs.rs_score >= 75 else "⚠️" if cs.rs_score >= 50 else "❌"
-        rs_col  = "#00d4a0" if cs.rs_score >= 75 else "#f59e0b" if cs.rs_score >= 50 else "#ff4b4b"
-        components_html += (
-            f"<span style='color:{rs_col}'>{rs_icon} RS {cs.rs_score:.0f}</span>&nbsp;&nbsp;"
-        )
-
-    # Regime score
-    if cs.regime_score is not None:
-        r_icon = "✅" if cs.regime_score >= 60 else "⚠️"
-        r_col  = "#00d4a0" if cs.regime_score >= 60 else "#f59e0b"
-        components_html += (
-            f"<span style='color:{r_col}'>{r_icon} Regime {cs.regime_score:.0f}</span>&nbsp;&nbsp;"
-        )
-
-    # Timing
-    if cs.timing_score is not None:
-        t_icon = "✅" if cs.timing_score >= 70 else "⚠️" if cs.timing_score >= 40 else "❌"
-        t_col  = "#00d4a0" if cs.timing_score >= 70 else "#f59e0b" if cs.timing_score >= 40 else "#ff4b4b"
-        components_html += (
-            f"<span style='color:{t_col}'>{t_icon} Timing {cs.timing_score:.0f}</span>&nbsp;&nbsp;"
-        )
-
-    # Personal edge
-    if cs.personal_edge_score is not None:
-        pe_icon = "✅" if cs.personal_edge_score >= 60 else "⚠️"
-        pe_col  = "#00d4a0" if cs.personal_edge_score >= 60 else "#f59e0b"
-        components_html += (
-            f"<span style='color:{pe_col}'>{pe_icon} Edge {cs.personal_edge_score:.0f}</span>&nbsp;&nbsp;"
-        )
-
-    # Multiplier badges
-    mults_html = ""
-    if cs.earnings_mult < 1.0:
-        mults_html += (
-            f"<span style='color:#f59e0b'>"
-            f"📅 Earnings ×{cs.earnings_mult:.2f}</span>&nbsp;&nbsp;"
-        )
-    if cs.whipsaw_mult < 1.0:
-        mults_html += (
-            f"<span style='color:#fb923c'>"
-            f"🌀 Whipsaw ×{cs.whipsaw_mult:.2f}</span>&nbsp;&nbsp;"
-        )
-    if cs.breakout_memory_mult < 1.0:
-        mults_html += (
-            f"<span style='color:#a78bfa'>"
-            f"⚡ Breakout hist ×{cs.breakout_memory_mult:.2f}</span>&nbsp;&nbsp;"
-        )
-
-    # ── Boosters ──────────────────────────────────────────────────────
-    boosters_html = ""
-    for b in cs.boosters:
-        boosters_html += (
-            f"<div style='color:#00d4a0;font-size:.72rem'>▲ {b}</div>"
-        )
-
-    # ── Detractors ────────────────────────────────────────────────────
-    detractors_html = ""
-    for d in cs.detractors:
-        detractors_html += (
-            f"<div style='color:#f59e0b;font-size:.72rem'>▼ {d}</div>"
-        )
-
-    # ── Blockers ──────────────────────────────────────────────────────
-    blockers_html = ""
-    for bl in cs.blockers:
-        blockers_html += (
-            f"<div style='color:#ff4b4b;font-size:.72rem'>🚫 {bl}</div>"
-        )
-
-    # ── Assemble card ─────────────────────────────────────────────────
-    st.markdown(
-        f"<div style='"
-        f"background:linear-gradient(135deg,#0d1117 0%,#111827 100%);"
-        f"border:1.5px solid {border_col};"
-        f"border-radius:14px;"
-        f"padding:18px 22px;"
-        f"box-shadow:{glow};"
-        f"margin-bottom:14px"
-        f"'>"
-
-        # ── Header row ─────────────────────────────────────────────────
-        f"<div style='display:flex;justify-content:space-between;align-items:flex-start;"
-        f"margin-bottom:12px'>"
-
-        f"<div>"
-        f"<div style='font-size:.55rem;color:#4a5568;text-transform:uppercase;"
-        f"letter-spacing:.14em;margin-bottom:2px'>Composite Score</div>"
-        f"<div style='font-family:JetBrains Mono,monospace;font-size:2rem;"
-        f"font-weight:900;color:{border_col};line-height:1'>"
-        f"{score:.0f}<span style='font-size:.9rem;color:#4a5568'>/100</span>"
-        f"</div>"
-        f"<div style='color:#8892a4;font-size:.7rem;margin-top:3px'>"
-        f"{conviction} &nbsp;·&nbsp; {cs.confidence} confidence"
-        f"</div>"
-        f"</div>"
-
-        f"<div style='text-align:right'>"
-        f"<div style='background:{badge_bg};color:{action_col};"
-        f"font-size:1rem;font-weight:900;padding:6px 16px;"
-        f"border-radius:8px;border:1.5px solid {border_col}44;"
-        f"font-family:JetBrains Mono,monospace;letter-spacing:.12em'>"
-        f"{action}"
-        f"</div>"
-        f"<div style='font-family:JetBrains Mono,monospace;font-size:.65rem;"
-        f"color:{border_col}55;margin-top:6px;letter-spacing:.04em'>"
-        f"{dots}"
-        f"</div>"
-        f"</div>"
-
-        f"</div>"
-
-        # ── Component scores row ───────────────────────────────────────
-        f"<div style='font-size:.72rem;margin-bottom:8px;line-height:1.9'>"
-        f"{components_html}"
-        f"</div>"
-
-        # ── Multipliers row ────────────────────────────────────────────
-        + (
-            f"<div style='font-size:.72rem;margin-bottom:8px;line-height:1.9'>"
-            f"{mults_html}"
-            f"</div>"
-            if mults_html else ""
-        ) +
-
-        # ── Boosters / detractors / blockers ──────────────────────────
-        + (
-            f"<div style='margin:8px 0 4px 0'>{boosters_html}{detractors_html}{blockers_html}</div>"
-            if (cs.boosters or cs.detractors or cs.blockers) else ""
-        ) +
-
-        # ── Verdict footer ────────────────────────────────────────────
-        f"<div style='background:#0d1117;border-radius:8px;padding:10px 14px;"
-        f"margin-top:10px;border-left:3px solid {border_col}'>"
-        f"<div style='font-size:.8rem;color:#c9d1e0;font-weight:600'>"
-        f"{cs.verdict_line}"
-        f"</div>"
-        f"<div style='font-size:.72rem;color:#8892a4;margin-top:3px'>"
-        f"{cs.risk_line}"
-        f"</div>"
-        f"</div>"
-
-        f"</div>",
-        unsafe_allow_html=True,
-    )
+    return

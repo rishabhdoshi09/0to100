@@ -10,8 +10,6 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-import streamlit as st
-
 _DB_PATH = Path("logs/regime_drift.db")
 
 _SCHEMA = """
@@ -219,29 +217,4 @@ def render_drift_alert() -> None:
     Renders a drift warning only if drift is detected.
     Completely silent when regime is stable.
     """
-    try:
-        drift = detect_drift()
-        if drift is None:
-            return
-
-        direction = drift.get("direction", "WEAKENING")
-        speed = drift.get("speed", "GRADUAL")
-        alert = drift.get("alert", "")
-        action = drift.get("recommended_action", "")
-        trend = drift.get("confidence_trend", [])
-
-        icon = "⚠️" if direction in ("TOWARD_BEAR", "WEAKENING") else "📈"
-        speed_badge = " 🔴 FAST" if speed == "FAST" else ""
-
-        trend_str = "→".join(str(c) for c in trend) if trend else ""
-        if trend_str:
-            conf_note = f" (confidence: {trend_str})"
-        else:
-            conf_note = ""
-
-        st.warning(
-            f"{icon} **Regime Drift Detected{speed_badge}**{conf_note} — "
-            f"{alert} **Recommended: {action}**"
-        )
-    except Exception:
-        pass  # Never crash the regime bar
+    return

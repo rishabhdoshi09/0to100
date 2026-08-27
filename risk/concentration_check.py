@@ -117,40 +117,5 @@ def render_concentration_warning(
     open_positions: dict,
     sector_limit: float = _DEFAULT_SECTOR_LIMIT,
 ) -> None:
-    """
-    Renders concentration warnings in Streamlit — silent when all clear.
-
-    Shows:
-    - Sector exposure warning if total would exceed 20% (approaching limit)
-    - Portfolio deployment warning if total capital > 80%
-    """
-    import streamlit as st
-
-    try:
-        result = compute_concentration(symbol, size_pct, open_positions, sector_limit)
-    except Exception:
-        return  # Never break the order form
-
-    # Sector concentration warning
-    threshold_warn = sector_limit * 0.8  # warn at 80% of limit
-    if result["new_total_sector_pct"] >= threshold_warn:
-        sector = result["sector"]
-        new_pct = result["new_total_sector_pct"]
-        limit = result["sector_limit"]
-        if result["exceeds_limit"]:
-            st.warning(
-                f"⚠️ {sector} exposure: {new_pct:.0f}% after this trade. "
-                f"Limit: {limit:.0f}%. Consider reducing size."
-            )
-        else:
-            st.warning(
-                f"⚠️ {sector} exposure: {new_pct:.0f}% after this trade "
-                f"(approaching {limit:.0f}% limit)."
-            )
-
-    # Overall portfolio deployment warning
-    if result["total_capital_used"] > 80.0:
-        st.warning(
-            f"⚠️ Portfolio will be {result['total_capital_used']:.0f}% deployed "
-            f"after this trade. Consider smaller size."
-        )
+    """Unused. Desk UI is Vite/React, not a library render path."""
+    return

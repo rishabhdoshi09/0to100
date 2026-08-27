@@ -88,11 +88,10 @@ try:
 except Exception:
     _signal_memory_available = False
 
-try:
-    import streamlit as _st
-    _streamlit_available = True
-except ImportError:
-    _streamlit_available = False
+
+def _kill_switch_active() -> bool:
+    import os
+    return os.getenv("QUANTTERM_KILL_SWITCH", "").strip().lower() in {"1", "true", "yes", "on"}
 
 try:
     from core.regime_drift import record_regime_snapshot as _record_regime_snapshot
@@ -302,7 +301,7 @@ class TradeEngine:
             consecutive_losses=getattr(self._portfolio, "consecutive_losses", 0),
             open_positions=list(self._portfolio.positions.values()) if hasattr(self._portfolio, "positions") else [],
             candidate_sector=getattr(setup, "sector", None) if 'setup' in dir() else None,
-            kill_switch_active=_st.session_state.get("kill_switch_active", False) if _streamlit_available else False,
+            kill_switch_active=_kill_switch_active(),
             max_open_positions=settings.max_open_positions,
         )
         if not lock_verdict.approved:

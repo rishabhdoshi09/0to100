@@ -42,15 +42,6 @@ def guard(context: str):
         yield
     except Exception as exc:
         log_error(context, exc)
-        try:
-            import streamlit as st
-            st.error(f"⚠️ **{context}** page mein kuch toot gaya — baaki app "
-                     f"theek chal raha hai. Detail neeche, aur logs/errors.log "
-                     f"mein bhi save ho gaya.")
-            with st.expander("🔍 Technical detail (developer ke liye)"):
-                st.code("".join(traceback.format_exception(exc)), language="text")
-        except Exception:
-            raise exc
 
 
 def recent_errors(limit: int = 5) -> list[str]:

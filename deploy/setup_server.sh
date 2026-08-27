@@ -7,7 +7,6 @@ BRANCH="${QT_BRANCH:-overhaul/evidence-lab}"
 APP_DIR="${QT_DIR:-$HOME/0to100}"
 RUN_USER="${QT_USER:-$(id -un)}"
 PYTHON_BIN="$APP_DIR/venv/bin/python"
-STREAMLIT_BIN="$APP_DIR/venv/bin/streamlit"
 
 echo "== QuantTerm two-process install: $BRANCH =="
 sudo timedatectl set-timezone Asia/Kolkata 2>/dev/null || true
@@ -32,7 +31,7 @@ mkdir -p logs/autonomy logs/intelligence logs/snapshots logs/kite_history logs/p
 
 sudo tee /etc/systemd/system/quantterm-ui.service >/dev/null <<UNIT
 [Unit]
-Description=QuantTerm retail UI (read-only control room)
+Description=QuantTerm desk (Vite :5173 + API :8765)
 After=network-online.target
 Wants=network-online.target
 
@@ -42,8 +41,9 @@ User=$RUN_USER
 WorkingDirectory=$APP_DIR
 Environment=TZ=Asia/Kolkata
 Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONPATH=$APP_DIR
 EnvironmentFile=-$APP_DIR/.env
-ExecStart=$STREAMLIT_BIN run app.py --server.port 8501 --server.address 0.0.0.0 --server.headless true
+ExecStart=/bin/bash $APP_DIR/scripts/run_quantterm.sh
 Restart=on-failure
 RestartSec=5
 
@@ -75,7 +75,7 @@ TimeoutStopSec=30
 WantedBy=multi-user.target
 UNIT
 
-# Migrate away from the obsolete combined Streamlit+daemon service.
+# Migrate away from Streamlit and the obsolete combined service.
 sudo systemctl disable --now quantterm.service 2>/dev/null || true
 sudo rm -f /etc/systemd/system/quantterm.service
 sudo systemctl daemon-reload
@@ -88,7 +88,7 @@ cat <<DONE
 
 QuantTerm installed as two services on branch $BRANCH.
 Daily login: cd "$APP_DIR" && "$PYTHON_BIN" main.py login
-UI logs:       journalctl -u quantterm-ui -f
+Desk logs:     journalctl -u quantterm-ui -f
 Autonomy logs: journalctl -u quantterm-autonomy -f
-UI:            http://<server-ip>:8501
+Desk:          http://<server-ip>:5173
 DONE

@@ -24,13 +24,6 @@ log = get_logger(__name__)
 
 def _capital() -> float:
     try:
-        import streamlit as st
-        cap = st.session_state.get("user_capital")
-        if cap:
-            return float(cap)
-    except Exception:
-        pass
-    try:
         from config import settings
         return float(settings.trading_capital)
     except Exception:

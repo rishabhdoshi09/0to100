@@ -1,7 +1,8 @@
 """Derive Recommendations and Market Reports from one saved market scan.
 
-Called after the whole-market scan (and long-term overlay) persist. Failure
-here must never fail the scan. GET endpoints read these files cache-only.
+Called after the whole-market scan (and long-term overlay) persist. Must stay
+fast: no pulse crawl, no StockResearchEngine. Failure must never fail the scan.
+GET endpoints read these files cache-only.
 """
 from __future__ import annotations
 
@@ -29,7 +30,7 @@ def persist_desks_from_market_scan(scan_payload: Mapping[str, Any] | None) -> di
             long_term_payload=lt,
             refresh_technicals=False,
             settle_cases=False,
-            deep_confirm=True,
+            deep_confirm=False,
             persist_ledger=True,
         )
         slim = slim_workspace_for_desk(reco)
@@ -46,7 +47,7 @@ def persist_desks_from_market_scan(scan_payload: Mapping[str, Any] | None) -> di
             persist_today=True,
             news_payload=news,
             scan_payload=scan,
-            rebuild=True,
+            rebuild=False,
         )
         reports_status = "saved"
     except Exception as exc:

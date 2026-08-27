@@ -5,7 +5,6 @@ from datetime import datetime, timedelta
 
 import pandas as pd
 import plotly.graph_objects as go
-import streamlit as st
 import yfinance as yf
 
 TIMEFRAMES = {
@@ -31,7 +30,6 @@ TF_LABELS = {
 }
 
 
-@st.cache_data(ttl=300, show_spinner=False)
 def _fetch_ohlcv(symbol: str, period: str, interval: str) -> pd.DataFrame:
     try:
         ticker = symbol if symbol.endswith(".NS") else symbol + ".NS"
@@ -81,15 +79,4 @@ def _mini_chart(df: pd.DataFrame, label: str) -> go.Figure:
 
 def render_multi_tf_grid(symbol: str, selected_tfs: list[str] | None = None):
     """Render a 2×4 grid of mini charts across timeframes."""
-    tfs = selected_tfs or list(TIMEFRAMES.keys())[:8]
-
-    cols_per_row = 4
-    rows = [tfs[i:i+cols_per_row] for i in range(0, len(tfs), cols_per_row)]
-
-    for row_tfs in rows:
-        cols = st.columns(len(row_tfs))
-        for col, tf in zip(cols, row_tfs):
-            period, interval, _ = TIMEFRAMES[tf]
-            df = _fetch_ohlcv(symbol, period, interval)
-            fig = _mini_chart(df, TF_LABELS[tf])
-            col.plotly_chart(fig, width="stretch", config={"displayModeBar": False})
+    return

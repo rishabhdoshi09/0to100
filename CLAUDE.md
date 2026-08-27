@@ -2,14 +2,16 @@
 
 NSE India trading terminal: whole-market scanning, evidence-calibrated
 signals, risk-managed execution via Zerodha, proactive Telegram delivery.
-Streamlit app (`streamlit run app.py`), branch of record:
-`overhaul/evidence-lab`.
+Vite/React desk (`bash scripts/run_desk.sh` → http://127.0.0.1:5173),
+branch of record: `overhaul/evidence-lab`.
 
 ## Architecture (data → signal → risk → execution → feedback)
 
 ```
-app.py                    # Streamlit shell: nav (Today|Pulse|Stocks|Options|
-                          #   Portfolio|JARVIS), startup daemons, Terminal page
+app.py                    # unused stub — prints the desk start command
+frontend/                 # Vite/React desk (the product UI)
+terminal_product_api.py   # FastAPI :8765
+
 ├── data/                 # Market data layer
 │   ├── bhavcopy_store.py # PRIMARY history: NSE official bhavcopy, ~500
 │   │                     #   sessions, pickle-cached (logs/bhav/), incremental
@@ -230,7 +232,7 @@ must never be a primary dependency again.
 ## Daily Ops
 
 1. Morning: `python main.py login` (Telegram reminds at 8:30 if forgotten)
-2. `streamlit run app.py` — everything else is automatic
+2. `bash scripts/run_desk.sh` then open http://127.0.0.1:5173 — everything else is automatic
 3. 24/7 hosting: see `docs/ALWAYS_ON.md`
 
 ## Testing / CI

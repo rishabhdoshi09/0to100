@@ -123,50 +123,7 @@ def compute_calibration(db_path: Optional[str] = None) -> Optional[CalibrationRe
 
 def render_calibration_ui() -> None:
     """Streamlit UI for calibration report."""
-    import streamlit as st
-
-    st.markdown(
-        "<h3 style='color:#00d4ff'>📐 Conviction Score Calibration</h3>"
-        "<p style='color:#8892a4;font-size:.82rem'>When we say 80% confidence — do we win 80% of the time?</p>",
-        unsafe_allow_html=True,
-    )
-
-    report = compute_calibration()
-    if report is None:
-        st.info("Need at least 20 closed trades to compute calibration. Keep trading!")
-        return
-
-    grade_color = {"WELL_CALIBRATED": "#00d4a0", "OVERCONFIDENT": "#ff4b4b", "UNDERCONFIDENT": "#f59e0b"}
-
-    # Brier score header
-    brier_color = "#00d4a0" if report.overall_brier_score < 0.15 else "#f59e0b" if report.overall_brier_score < 0.22 else "#ff4b4b"
-    col1, col2 = st.columns(2)
-    col1.metric("Brier Score", f"{report.overall_brier_score:.3f}", help="Lower = better. 0.25 = random. 0.0 = perfect.")
-    col2.metric("Sample Size", f"{report.sample_size} trades")
-
-    st.markdown(
-        f"<div style='background:#161b22;border-radius:10px;padding:.7rem 1rem;margin:.5rem 0'>"
-        f"<span style='color:{brier_color};font-weight:700'>{report.verdict}</span></div>",
-        unsafe_allow_html=True,
-    )
-
-    # Per-bucket table
-    for b in report.buckets:
-        color = grade_color.get(b.grade, "#8892a4")
-        error_str = f"+{b.calibration_error:.1%}" if b.calibration_error >= 0 else f"{b.calibration_error:.1%}"
-        st.markdown(
-            f"<div style='display:grid;grid-template-columns:1fr 1fr 1fr 1fr 1fr;gap:.4rem;"
-            f"background:#0d1117;border:1px solid {color}33;border-radius:8px;"
-            f"padding:.5rem .8rem;margin:.25rem 0;font-size:.78rem'>"
-            f"<div style='color:#8892a4'>Score {b.score_lo}–{b.score_hi}</div>"
-            f"<div style='color:#c8cfe0'>{b.trade_count} trades</div>"
-            f"<div style='color:#8892a4'>Claimed: {b.claimed_win_rate:.0%}</div>"
-            f"<div style='color:#c8cfe0'>Actual: {b.actual_win_rate:.0%}</div>"
-            f"<div style='color:{color};font-weight:700'>{error_str} · {b.grade.replace('_',' ')}</div>"
-            f"</div>",
-            unsafe_allow_html=True,
-        )
-
+    return
 
 if __name__ == "__main__":
     report = compute_calibration()

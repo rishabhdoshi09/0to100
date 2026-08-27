@@ -41,7 +41,8 @@ After=network.target
 
 [Service]
 WorkingDirectory=/root/0to100
-ExecStart=/root/0to100/venv/bin/streamlit run app.py --server.port 8501 --server.address 0.0.0.0
+Environment=PYTHONPATH=/root/0to100
+ExecStart=/bin/bash /root/0to100/scripts/run_quantterm.sh
 Restart=always
 RestartSec=10
 
@@ -55,7 +56,7 @@ systemctl status quantterm        # green = zinda
 ```
 
 ### 4. Phone/laptop se kholo
-`http://YOUR_SERVER_IP:8501` — ya Tailscale laga lo (free) taaki
+`http://YOUR_SERVER_IP:5173` — ya Tailscale laga lo (free) taaki
 sirf tumhare devices se khule:
 ```bash
 curl -fsSL https://tailscale.com/install.sh | sh && tailscale up

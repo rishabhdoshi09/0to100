@@ -70,15 +70,15 @@ tailscale ip -4            # yeh IP note karo
 ```
 
 Phone/Mac pe bhi Tailscale app → phir kahin se bhi:
-`http://<tailscale-ip>:8501`
+`http://<tailscale-ip>:5173`
 
 <details>
 <summary>Public port kholna ho toh (kam secure — avoid)</summary>
 
-1. Console → VCN → Security List → Ingress rule: TCP 8501, source 0.0.0.0/0
+1. Console → VCN → Security List → Ingress rule: TCP 5173, source 0.0.0.0/0
 2. Server pe Oracle ka baked-in iptables bhi kholo:
    ```bash
-   sudo iptables -I INPUT -p tcp --dport 8501 -j ACCEPT
+   sudo iptables -I INPUT -p tcp --dport 5173 -j ACCEPT
    sudo netfilter-persistent save
    ```
 </details>

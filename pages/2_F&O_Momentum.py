@@ -1,9 +1,8 @@
-"""Direct retail entry-point for complete F&O momentum discovery."""
+"""Unused archive page. The product desk is Vite/React at :5173."""
 from __future__ import annotations
 
-import streamlit as st
-
-from ui.fno_momentum_page import render_fno_momentum_page
-
-st.set_page_config(page_title="F&O Momentum | QuantTerm", page_icon="⚡", layout="wide")
-render_fno_momentum_page()
+raise SystemExit(
+    "QuantTerm does not use Streamlit. "
+    "Start the desk with: bash scripts/run_desk.sh "
+    "then open http://127.0.0.1:5173"
+)

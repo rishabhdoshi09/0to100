@@ -22,10 +22,10 @@ paper/observation use are operational, not architectural:
 ## Launch command
 
 ```bash
-streamlit run app.py            # retail-first default
-streamlit run legacy_app.py     # Advanced → Research Laboratory (engineering interface, unchanged)
+bash scripts/run_desk.sh        # API :8765 + Vite desk :5173 + autonomy
+# then open http://127.0.0.1:5173
 ```
-Verified: server boots on 127.0.0.1, `/_stcore/health` → HTTP 200, no traceback.
+Verified: desk is the Vite/React app. Streamlit is not started.
 
 ## Canonical architecture (unchanged)
 

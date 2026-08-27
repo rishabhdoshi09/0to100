@@ -14,18 +14,19 @@ from ui.desk_board import reco_card_html, setup_badge
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_app_injects_reco_theme_and_six_desk_pages():
+def test_app_points_at_the_vite_desk():
     src = (ROOT / "app.py").read_text(encoding="utf-8")
-    assert "DEVBLOOM_CSS" in src
-    assert 'title="Today"' in src and "default=True" in src
-    assert 'title="Setups"' in src
-    assert 'title="Paper Desk"' in src
-    assert 'title="Backtest"' in src
-    assert 'title="Portfolio"' in src
-    assert 'title="Desk"' in src
-    assert '"Everyday"' not in src
-    assert "Learn and Test" not in src
-    assert "try_observe_production_scan" in src
+    assert "import streamlit" not in src
+    assert "st.Page" not in src
+    assert "run_desk.sh" in src
+    assert "127.0.0.1:5173" in src
+    nav = (ROOT / "frontend" / "src" / "MarketSidebar.tsx").read_text(encoding="utf-8")
+    assert "Home" in nav and "Market Scanner" in nav
+    assert "Recommendations" in nav and "Market Reports" in nav
+    assert "Long-Term Picks" in nav
+    desk = (ROOT / "scripts" / "run_desk.sh").read_text(encoding="utf-8")
+    assert "run_quantterm.sh" in desk
+    assert "streamlit" not in desk
 
 
 def test_desk_board_does_not_start_scanners():
