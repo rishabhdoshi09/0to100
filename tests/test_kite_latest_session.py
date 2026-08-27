@@ -63,6 +63,7 @@ def test_data_refresh_uses_kite_live_when_snapshot_blocked():
     assert result.status == JS.SUCCEEDED
     assert result.state_hint == ST.DATA_READY
     assert H.SNAPSHOT_STALE in result.clears
+    assert H.OPTIONS_HISTORY_INCOMPLETE in result.clears
     assert result.metadata["source"] == "kite_quotes"
     assert result.metadata["symbols"] == 2633
 
