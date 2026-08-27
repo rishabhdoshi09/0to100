@@ -152,42 +152,4 @@ def _fetch_returns(symbol: str, days: int) -> Optional[np.ndarray]:
 
 def render_correlation_ui() -> None:
     """Streamlit widget for correlation dashboard."""
-    import streamlit as st
-    from portfolio.state import PortfolioState
-
-    try:
-        portfolio = PortfolioState()
-        symbols = list(portfolio.positions.keys())
-    except Exception:
-        symbols = []
-
-    if len(symbols) < 2:
-        st.caption("Need 2+ open positions to compute correlation.")
-        return
-
-    with st.spinner("Computing portfolio correlation…"):
-        report = compute_portfolio_correlation(symbols)
-
-    if report is None:
-        st.caption("Insufficient data for correlation analysis.")
-        return
-
-    color = {"HEALTHY": "#00d4a0", "WARNING": "#f59e0b", "DANGER": "#ff4b4b"}[report.verdict]
-
-    st.markdown(
-        f"<div style='background:{color}11;border:1px solid {color}44;border-radius:12px;"
-        f"padding:.8rem 1rem;margin:.5rem 0'>"
-        f"<div style='color:{color};font-size:.85rem;font-weight:700'>"
-        f"{'✅' if report.verdict == 'HEALTHY' else '⚠️' if report.verdict == 'WARNING' else '🔴'} "
-        f"Portfolio Correlation: {report.verdict}</div>"
-        f"<div style='color:#c8cfe0;font-size:.8rem;margin-top:.3rem'>"
-        f"Avg correlation: {report.avg_pairwise_correlation:.2f} · "
-        f"Effective positions: {report.effective_positions:.1f} of {report.total_positions}</div>"
-        f"</div>",
-        unsafe_allow_html=True,
-    )
-
-    if report.danger_pairs:
-        st.markdown("**Highly correlated pairs** (move together in a crash):")
-        for s1, s2, c in report.danger_pairs:
-            st.markdown(f"- `{s1}` ↔ `{s2}`: **{c:.2f}** correlation")
+    return

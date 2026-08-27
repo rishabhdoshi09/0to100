@@ -1,11 +1,12 @@
 # Template only. deploy/setup_server.sh installs an absolute-path unit.
 [Unit]
-Description=QuantTerm retail UI (read-only control room)
+Description=QuantTerm desk (Vite :5173 + API :8765)
 After=network-online.target
 [Service]
 Type=simple
 WorkingDirectory=__APP_DIR__
-ExecStart=__APP_DIR__/venv/bin/streamlit run app.py --server.port 8501 --server.headless true
+Environment=PYTHONPATH=__APP_DIR__
+ExecStart=/bin/bash __APP_DIR__/scripts/run_quantterm.sh
 Restart=on-failure
 [Install]
 WantedBy=multi-user.target

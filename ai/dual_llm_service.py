@@ -21,9 +21,9 @@ from llm.dual_chat import DualChatEngine, _DECISION_MAKER_BADGE  # noqa: F401
 
 _log = logging.getLogger("devbloom.svc")
 
-_SHARED_HISTORY_KEY = "devbloom_chat"
-_MAX_HISTORY = 40  # messages kept in session (user + assistant pairs)
+_MAX_HISTORY = 40  # messages kept in process (user + assistant pairs)
 _LATENCY_WARN_S = 10.0  # log a warning if any stage exceeds this
+_CHAT_HISTORY: list[dict] = []
 
 
 class DualLLMService:
@@ -55,21 +55,16 @@ class DualLLMService:
 
     @staticmethod
     def get_history() -> list[dict]:
-        import streamlit as st
-        if _SHARED_HISTORY_KEY not in st.session_state:
-            st.session_state[_SHARED_HISTORY_KEY] = []
-        return st.session_state[_SHARED_HISTORY_KEY]
+        return _CHAT_HISTORY
 
     @staticmethod
     def append_user(content: str):
-        import streamlit as st
         history = DualLLMService.get_history()
         history.append({"role": "user", "content": content})
-        st.session_state[_SHARED_HISTORY_KEY] = history[-_MAX_HISTORY * 2:]
+        del history[:-_MAX_HISTORY * 2]
 
     @staticmethod
     def append_assistant(content: str, decision_maker: str, detail: str = ""):
-        import streamlit as st
         history = DualLLMService.get_history()
         history.append({
             "role": "assistant",
@@ -78,12 +73,11 @@ class DualLLMService:
             "detail": detail,
             "ts": datetime.now().strftime("%H:%M"),
         })
-        st.session_state[_SHARED_HISTORY_KEY] = history[-_MAX_HISTORY * 2:]
+        del history[:-_MAX_HISTORY * 2]
 
     @staticmethod
     def clear_history():
-        import streamlit as st
-        st.session_state[_SHARED_HISTORY_KEY] = []
+        _CHAT_HISTORY.clear()
 
     # ── Streaming chat ────────────────────────────────────────────────────────
 

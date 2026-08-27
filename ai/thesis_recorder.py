@@ -217,81 +217,11 @@ def render_thesis_input(symbol: str, archetype: str) -> Optional[str]:
     Streamlit component: text input for trade thesis.
     Returns the thesis string if filled, None if skipped.
     """
-    import streamlit as st
-
-    thesis = st.text_input(
-        "Why are you taking this trade? (one sentence)",
-        placeholder="e.g. Breaking out of 8-week VCP on 2x volume with sector tailwind",
-        key=f"thesis_input_{symbol}_{archetype}",
-        help="Optional — used to track whether your reasoning was correct over time.",
-    )
-    return thesis.strip() if thesis and thesis.strip() else None
-
+    return None
 
 def render_thesis_history(symbol: Optional[str] = None) -> None:
     """
     Shows recent theses in a compact table.
     If symbol is given, filters to that symbol.
     """
-    import pandas as pd
-    import streamlit as st
-
-    conn = _get_conn()
-    try:
-        if symbol:
-            rows = conn.execute(
-                """
-                SELECT symbol, entry_date, thesis, archetype, exit_date,
-                       pnl_r, thesis_correct, thesis_score_reason
-                FROM trade_theses
-                WHERE symbol = ?
-                ORDER BY id DESC LIMIT 20
-                """,
-                (symbol,),
-            ).fetchall()
-        else:
-            rows = conn.execute(
-                """
-                SELECT symbol, entry_date, thesis, archetype, exit_date,
-                       pnl_r, thesis_correct, thesis_score_reason
-                FROM trade_theses
-                ORDER BY id DESC LIMIT 20
-                """
-            ).fetchall()
-    finally:
-        conn.close()
-
-    if not rows:
-        st.caption("No thesis history yet.")
-        return
-
-    cols = [
-        "Symbol", "Entry Date", "Thesis", "Archetype",
-        "Exit Date", "PnL (R)", "Correct?", "Score Reason",
-    ]
-    df = pd.DataFrame(rows, columns=cols)
-
-    # Map thesis_correct int to readable label
-    def _correct_label(val):
-        if val is None or val == "":
-            return "—"
-        try:
-            v = int(val)
-            return "✅ Yes" if v == 1 else "❌ No"
-        except Exception:
-            return "—"
-
-    df["Correct?"] = df["Correct?"].apply(_correct_label)
-
-    st.dataframe(df, width="stretch", hide_index=True)
-
-    # Show metacognition stats
-    stats = get_thesis_accuracy()
-    if stats["total_scored"] > 0:
-        c1, c2, c3, c4 = st.columns(4)
-        c1.metric("Thesis Accuracy", f"{stats['accuracy']:.0f}%")
-        c2.metric("Scored Trades", stats["total_scored"])
-        c3.metric("Lucky Wins", stats["profitable_wrong_thesis"],
-                  help="Won money despite wrong thesis")
-        c4.metric("Right Thesis Lost", stats["correct_thesis_lost"],
-                  help="Correct reasoning, poor execution/timing")
+    return

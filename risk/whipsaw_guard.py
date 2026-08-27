@@ -215,28 +215,4 @@ def render_whipsaw_badge() -> str:
 
 def render_whipsaw_ui() -> None:
     """Streamlit panel for whipsaw analysis."""
-    import streamlit as st
-
-    report = compute_whipsaw_score()
-    colors = {"CLEAN": "#00d4a0", "CHOPPY": "#f59e0b", "WHIPSAW": "#f97316", "SEVERE": "#ff4b4b"}
-    color = colors.get(report.verdict, "#8892a4")
-
-    st.markdown(
-        f"<div style='background:{color}11;border:1px solid {color}44;"
-        f"border-radius:12px;padding:.8rem 1rem;margin:.5rem 0'>"
-        f"<div style='color:{color};font-weight:700'>⚡ Whipsaw Score: {report.score:.0f}/100 — {report.verdict}</div>"
-        f"<div style='color:#c8cfe0;font-size:.8rem;margin-top:.3rem'>{report.action}</div>"
-        f"</div>",
-        unsafe_allow_html=True,
-    )
-
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Regime Flips (10d)", report.regime_flips_10d)
-    c2.metric("Stop Hits (7d)", report.consecutive_stops)
-    c3.metric("Chop Index", f"{report.chop_index:.2f}")
-    c4.metric("ATR Expanding", "YES ⚠️" if report.atr_expanding else "No")
-
-    st.caption(
-        f"Min confidence required: **{report.min_confidence_required:.0f}%** · "
-        f"Size multiplier: **{report.size_multiplier:.0%}**"
-    )
+    return

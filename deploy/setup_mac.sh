@@ -23,12 +23,15 @@ cat > "$UI_PLIST" <<PLIST
 <plist version="1.0"><dict>
 <key>Label</key><string>com.quantterm.ui</string>
 <key>ProgramArguments</key><array>
-<string>$PYTHON_BIN</string><string>-m</string><string>streamlit</string><string>run</string>
-<string>$APP_DIR/app.py</string><string>--server.port</string><string>8501</string>
-<string>--server.headless</string><string>true</string>
+<string>/bin/bash</string>
+<string>$APP_DIR/scripts/run_quantterm.sh</string>
 </array>
 <key>WorkingDirectory</key><string>$APP_DIR</string>
-<key>EnvironmentVariables</key><dict><key>TZ</key><string>Asia/Kolkata</string></dict>
+<key>EnvironmentVariables</key><dict>
+<key>TZ</key><string>Asia/Kolkata</string>
+<key>PYTHONPATH</key><string>$APP_DIR</string>
+<key>PATH</key><string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+</dict>
 <key>RunAtLoad</key><true/><key>KeepAlive</key><true/><key>ThrottleInterval</key><integer>10</integer>
 <key>StandardOutPath</key><string>$APP_DIR/logs/ui.log</string>
 <key>StandardErrorPath</key><string>$APP_DIR/logs/ui.log</string>
@@ -65,7 +68,8 @@ done
 launchctl kickstart -k "gui/$(id -u)/com.quantterm.autonomy" || true
 launchctl kickstart -k "gui/$(id -u)/com.quantterm.ui" || true
 
-echo "QuantTerm UI + autonomy agents installed."
+echo "QuantTerm desk + autonomy agents installed."
 echo "Daily login: cd '$APP_DIR' && '$PYTHON_BIN' main.py login"
+echo "Desk: http://127.0.0.1:5173"
 echo "UI log: $APP_DIR/logs/ui.log"
 echo "Autonomy log: $APP_DIR/logs/autonomy.log"

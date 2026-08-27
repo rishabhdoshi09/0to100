@@ -1,36 +1,24 @@
-"""QuantTerm Reco-style Streamlit entrypoint.
+"""QuantTerm entrypoint. The product desk is Vite/React, not Streamlit.
 
-Six work pages. The previous 16-item consumer sidebar is collapsed. The
-institutional dark theme is injected here so every page looks like a desk,
-not a hobby app. FEATURE-002 remains a fail-open observer only.
+Start: bash scripts/run_desk.sh
+Open:  http://127.0.0.1:5173
 """
 from __future__ import annotations
 
-import streamlit as st
+_DESK = "http://127.0.0.1:5173"
+_START = "bash scripts/run_desk.sh"
 
-from ui.desk_pages import render_desk, render_desk_backtest, render_setups
-from ui.retail_pages_v2 import render_home, render_paper_trading, render_portfolio
-from ui.theme import DEVBLOOM_CSS
+_MESSAGE = (
+    "QuantTerm does not use Streamlit.\n"
+    f"Start the desk with: {_START}\n"
+    f"Then open {_DESK}\n"
+)
 
-st.set_page_config(page_title="QuantTerm", page_icon="⚡", layout="wide", initial_sidebar_state="expanded")
-st.markdown(DEVBLOOM_CSS, unsafe_allow_html=True)
 
-try:
-    import scan.market_scan_service as _mss
-    from research.feature002.observe import try_observe_production_scan
-    if getattr(_mss, "_feature002_hook", None) is None:
-        _mss._feature002_hook = try_observe_production_scan
-except Exception:
-    pass
+def main() -> int:
+    print(_MESSAGE, end="")
+    return 1
 
-pages = [
-    st.Page(render_home, title="Today", icon="⚡", default=True),
-    st.Page(render_setups, title="Setups", icon="📈"),
-    st.Page(render_paper_trading, title="Paper Desk", icon="📋"),
-    st.Page(render_desk_backtest, title="Backtest", icon="🧪"),
-    st.Page(render_portfolio, title="Portfolio", icon="💼"),
-    st.Page(render_desk, title="Desk", icon="🖥️"),
-]
 
-navigation = st.navigation(pages, position="sidebar")
-navigation.run()
+if __name__ == "__main__":
+    raise SystemExit(main())

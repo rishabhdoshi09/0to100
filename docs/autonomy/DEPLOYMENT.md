@@ -10,7 +10,7 @@ Branch of record: **`overhaul/evidence-lab`**.
 | Process | Command | Role |
 |---------|---------|------|
 | Autonomy supervisor | `python main.py autonomy --interval 15` | durable job loop, paper-only, live locked |
-| Retail UI | `streamlit run app.py` | read-only control room (never starts the supervisor) |
+| Desk UI | `bash scripts/run_quantterm.sh` | Vite :5173 + API :8765 (never starts Streamlit) |
 
 The daily human action is the normal Zerodha login (`python main.py login`) — Zerodha's auth model
 requires it. After the token is persisted, the supervisor picks it up on its next auth-health job (or

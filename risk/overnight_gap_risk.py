@@ -249,28 +249,4 @@ def _get_historical_gaps(symbol: str, days: int = 30) -> int:
 
 def render_gap_risk_ui(open_symbols: list[str]) -> None:
     """Streamlit panel showing overnight gap risk for all positions."""
-    import streamlit as st
-
-    if not open_symbols:
-        st.caption("No open positions.")
-        return
-
-    st.markdown("**Overnight Gap Risk by Position**")
-    reports = score_portfolio_overnight_risk(open_symbols)
-
-    colors = {"SAFE": "#00d4a0", "CAUTION": "#f59e0b", "RISKY": "#f97316", "BLOCK": "#ff4b4b"}
-
-    for sym, r in reports.items():
-        color = colors.get(r.verdict, "#8892a4")
-        st.markdown(
-            f"<div style='background:{color}11;border:1px solid {color}44;border-radius:8px;"
-            f"padding:.5rem .8rem;margin:.2rem 0;display:grid;"
-            f"grid-template-columns:80px 60px 60px 60px 1fr;gap:.5rem;align-items:center'>"
-            f"<div style='color:#e8eaf0;font-weight:700'>{sym}</div>"
-            f"<div style='color:{color};font-weight:700'>{r.verdict}</div>"
-            f"<div style='color:#8892a4;font-size:.75rem'>β={r.beta:.1f}</div>"
-            f"<div style='color:#8892a4;font-size:.75rem'>Score {r.gap_risk_score:.0f}</div>"
-            f"<div style='color:#c8cfe0;font-size:.75rem'>{r.reason}</div>"
-            f"</div>",
-            unsafe_allow_html=True,
-        )
+    return

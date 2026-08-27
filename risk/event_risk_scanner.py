@@ -26,8 +26,6 @@ from datetime import date, timedelta
 from pathlib import Path
 from typing import Optional
 
-import streamlit as st
-
 from logger import get_logger
 
 log = get_logger(__name__)
@@ -147,7 +145,6 @@ def get_event_risk(symbols: Optional[list[str]] = None) -> EventRiskReport:
     )
 
 
-@st.cache_data(ttl=3600, show_spinner=False)
 def _fetch_earnings_dates(target_date: date) -> list[tuple[str, str]]:
     """
     Fetch earnings announcements for target_date from NSE.
@@ -179,32 +176,4 @@ def _fetch_earnings_dates(target_date: date) -> list[tuple[str, str]]:
 
 def render_event_risk_banner() -> None:
     """Render a compact event risk banner for the dashboard/scanner."""
-    report = get_event_risk()
-    if report.max_impact == "NONE":
-        return
-
-    cfg = _IMPACT_CONFIG.get(report.max_impact, _IMPACT_CONFIG["LOW"])
-    color = cfg["color"]
-    label = cfg["label"]
-
-    st.markdown(
-        f"<div style='background:{color}15;border:1px solid {color}55;border-radius:10px;"
-        f"padding:.6rem 1rem;margin:.4rem 0;display:flex;justify-content:space-between;"
-        f"align-items:center'>"
-        f"<div style='color:{color};font-weight:700;font-size:.82rem'>"
-        f"📅 EVENT RISK · {label}</div>"
-        f"<div style='color:#c8cfe0;font-size:.78rem'>{report.action}</div>"
-        f"</div>",
-        unsafe_allow_html=True,
-    )
-
-    if report.week_events:
-        with st.expander("📅 Upcoming events this week", expanded=False):
-            for e in report.week_events:
-                impact_color = _IMPACT_CONFIG.get(e.get("impact","LOW"), {}).get("color", "#8892a4")
-                st.markdown(
-                    f"<span style='color:{impact_color};font-weight:600'>{e['date']}</span>"
-                    f" — {e['event']} "
-                    f"<span style='color:{impact_color};font-size:.7rem'>[{e.get('impact','?')}]</span>",
-                    unsafe_allow_html=True,
-                )
+    return

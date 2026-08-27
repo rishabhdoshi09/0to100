@@ -3,11 +3,9 @@ from __future__ import annotations
 
 import pandas as pd
 import numpy as np
-import streamlit as st
 from typing import Optional
 
 
-@st.cache_data(ttl=300, show_spinner=False)
 def get_option_chain(symbol: str = "NIFTY") -> tuple[Optional[pd.DataFrame], Optional[str]]:
     """Fetch option chain. Tries NSE API first, yfinance fallback."""
     # ── Attempt 1: NSE public API ─────────────────────────────────────────────

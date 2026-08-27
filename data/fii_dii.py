@@ -9,7 +9,6 @@ from datetime import datetime, timedelta
 
 import pandas as pd
 import requests
-import streamlit as st
 
 logger = logging.getLogger("quantterm.fii_dii")
 
@@ -39,7 +38,6 @@ def _nse_session() -> requests.Session:
     return s
 
 
-@st.cache_data(ttl=3600)
 def get_fii_dii_activity(days: int = 30) -> pd.DataFrame:
     """
     Fetch FII/DII cash-market activity from NSE.
@@ -134,7 +132,6 @@ def get_fii_dii_activity(days: int = 30) -> pd.DataFrame:
     )
 
 
-@st.cache_data(ttl=3600)
 def get_bulk_deals(days: int = 10) -> pd.DataFrame:
     """
     Fetch bulk deals from NSE.
@@ -184,7 +181,6 @@ def get_bulk_deals(days: int = 10) -> pd.DataFrame:
     return pd.DataFrame(columns=["date", "symbol", "client_name", "buy_sell", "quantity", "price"])
 
 
-@st.cache_data(ttl=3600)
 def get_block_deals(days: int = 10) -> pd.DataFrame:
     """
     Fetch block deals from NSE.
@@ -234,7 +230,6 @@ def get_block_deals(days: int = 10) -> pd.DataFrame:
     return pd.DataFrame(columns=["date", "symbol", "client_name", "buy_sell", "quantity", "price"])
 
 
-@st.cache_data(ttl=3600)
 def get_fii_derivative_stats() -> dict:
     """
     Fetch FII derivatives positioning from NSE.

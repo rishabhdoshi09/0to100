@@ -18,10 +18,11 @@ minutes, turns each stock into a graded "setup," filters those setups through
 quality gates and a **measured Expected-Value** ranking (learned from the
 system's own past trade outcomes, not hunches), sizes and risk-checks each
 trade, executes with an exchange-side stop+target exit, and then tracks every
-outcome to recalibrate itself. It is a **Streamlit** web app (`streamlit run
-app.py`) with a two-way **Telegram** bot and an LLM analyst ("JARVIS"). It runs
-24/7 as a background service. Everything is narrated in plain Hinglish
-(Hindi-English mix) because that's the primary user's language.
+outcome to recalibrate itself. The product UI is the **Vite/React desk**
+(`bash scripts/run_desk.sh` → `http://127.0.0.1:5173`) with a two-way
+**Telegram** bot and an LLM analyst ("JARVIS"). It runs 24/7 as a background
+service. Everything is narrated in plain Hinglish (Hindi-English mix) because
+that's the primary user's language.
 
 **Branch of record:** `overhaul/evidence-lab`.
 
@@ -369,10 +370,10 @@ MAX_POSITION_SIZE_PCT=0.10  MAX_OPEN_POSITIONS=5
 ```
 
 **Daily ops:** (1) morning `python main.py login` (Telegram nags at 8:30 if
-forgotten — the Kite access token expires daily). (2) `streamlit run app.py` —
-everything else is automatic. (3) For 24/7, the Mac runs a sleep-proof launchd
-service (`deploy/setup_mac.sh`), or a Raspberry Pi / VPS (`deploy/setup_server.sh`);
-see `docs/ALWAYS_ON.md`.
+forgotten — the Kite access token expires daily). (2) `bash scripts/run_desk.sh`
+then open `http://127.0.0.1:5173` — everything else is automatic. (3) For 24/7,
+the Mac runs a sleep-proof launchd service (`deploy/setup_mac.sh`), or a
+Raspberry Pi / VPS (`deploy/setup_server.sh`); see `docs/ALWAYS_ON.md`.
 
 ---
 

@@ -100,13 +100,13 @@ def test_boots_without_feedparser(monkeypatch):
 
 # ── 2: retail is the default route ───────────────────────────────────────────────
 def test_retail_home_is_default_route():
-    # read app.py as text — importing it would execute the Streamlit script (navigation.run())
     from pathlib import Path
     src = Path(__file__).resolve().parents[1].joinpath("app.py").read_text(encoding="utf-8")
-    assert "st.Page(render_home" in src and "default=True" in src
-    assert 'title="Today"' in src and "DEVBLOOM_CSS" in src
-    assert "render_desk_backtest" in src
-    assert '"Everyday"' not in src
+    assert "import streamlit" not in src
+    assert "run_desk.sh" in src
+    assert "127.0.0.1:5173" in src
+    assert "st.Page" not in src
+    assert "st.navigation" not in src
 
 
 # ── 3: advanced view remains reachable ───────────────────────────────────────────

@@ -8,7 +8,6 @@ from datetime import date, timedelta
 from typing import Optional
 
 import pandas as pd
-import streamlit as st
 
 # Kite instrument tokens for NSE sector indices
 _SECTOR_KITE_TOKENS: dict[str, int] = {
@@ -57,7 +56,6 @@ def _fetch_sector_kite(sector: str, weeks: int) -> Optional[pd.Series]:
         return None
 
 
-@st.cache_data(ttl=3600, show_spinner=False)
 def _fetch_sector_data(lookback_weeks: int = 4) -> dict[str, pd.Series]:
     """Fetch weekly closing prices for each sector. Kite primary, yfinance fallback."""
     import yfinance as yf
@@ -174,87 +172,4 @@ def render_rotation_matrix() -> None:
         MATURE         → yellow
         TOPPING        → red (avoid)
     """
-    st.markdown("#### 🔄 Sector Rotation Acceleration")
-
-    try:
-        matrix = compute_rotation_matrix()
-    except Exception as exc:
-        st.caption(f"Sector rotation data unavailable ({type(exc).__name__}).")
-        return
-
-    if not matrix:
-        st.caption("Sector data unavailable.")
-        return
-
-    _STAGE_EMOJI = {
-        "EARLY":    "⬆ EARLY",
-        "TRENDING": "⬆ TRENDING",
-        "MATURE":   "⬇ MATURE",
-        "TOPPING":  "⬇ TOPPING",
-    }
-    _STAGE_COLOR = {
-        "EARLY":    "#00d4a0",
-        "TRENDING": "#22c55e",
-        "MATURE":   "#f59e0b",
-        "TOPPING":  "#ef4444",
-    }
-    _ZONE_LABEL = {
-        "EARLY":    "🟢 Buy zone",
-        "TRENDING": "🟢 Buy zone",
-        "MATURE":   "🟡 Caution",
-        "TOPPING":  "🔴 Avoid",
-    }
-
-    # Build HTML table
-    rows_html = ""
-    for i, (sector, data) in enumerate(matrix.items()):
-        stage = data["stage"]
-        color = _STAGE_COLOR.get(stage, "#8892a4")
-        stage_label = _STAGE_EMOJI.get(stage, stage)
-        zone_label = _ZONE_LABEL.get(stage, "")
-        ret_1w = data["return_1w"]
-        ret_4w = data["return_4w"]
-        accel = data["acceleration"]
-        ret1w_color = "#00d4a0" if ret_1w >= 0 else "#ef4444"
-        ret4w_color = "#00d4a0" if ret_4w >= 0 else "#ef4444"
-
-        # Highlight top 3 buy zones and bottom 2 avoid
-        is_top3 = i < 3
-        is_bottom2 = i >= len(matrix) - 2
-        row_bg = "rgba(0,212,160,0.04)" if is_top3 else (
-            "rgba(239,68,68,0.04)" if is_bottom2 else "transparent"
-        )
-
-        rows_html += (
-            f"<tr style='background:{row_bg}'>"
-            f"<td style='padding:4px 8px;color:#e8eaf0;font-weight:600'>{sector}</td>"
-            f"<td style='padding:4px 8px;color:{ret1w_color};font-family:JetBrains Mono,monospace;text-align:right'>"
-            f"{'+'if ret_1w>=0 else ''}{ret_1w:.1f}%</td>"
-            f"<td style='padding:4px 8px;color:{ret4w_color};font-family:JetBrains Mono,monospace;text-align:right'>"
-            f"{'+'if ret_4w>=0 else ''}{ret_4w:.1f}%</td>"
-            f"<td style='padding:4px 8px;color:{color};font-family:JetBrains Mono,monospace;text-align:right'>"
-            f"{'+'if accel>=0 else ''}{accel:.2f}</td>"
-            f"<td style='padding:4px 8px;color:{color};font-weight:600'>{stage_label}</td>"
-            f"<td style='padding:4px 8px'>{zone_label}</td>"
-            f"</tr>"
-        )
-
-    table_html = (
-        "<div style='overflow-x:auto'>"
-        "<table style='width:100%;border-collapse:collapse;font-size:.8rem'>"
-        "<thead>"
-        "<tr style='border-bottom:1px solid rgba(255,255,255,0.1)'>"
-        "<th style='padding:4px 8px;color:#8892a4;text-align:left'>Sector</th>"
-        "<th style='padding:4px 8px;color:#8892a4;text-align:right'>1W%</th>"
-        "<th style='padding:4px 8px;color:#8892a4;text-align:right'>4W%</th>"
-        "<th style='padding:4px 8px;color:#8892a4;text-align:right'>Acceleration</th>"
-        "<th style='padding:4px 8px;color:#8892a4;text-align:left'>Stage</th>"
-        "<th style='padding:4px 8px;color:#8892a4;text-align:left'>Signal</th>"
-        "</tr>"
-        "</thead>"
-        f"<tbody>{rows_html}</tbody>"
-        "</table>"
-        "</div>"
-    )
-    st.markdown(table_html, unsafe_allow_html=True)
-    st.caption("Top 3 = buy zones · Bottom 2 = avoid · Acceleration = 1W% − avg weekly 4W%")
+    return

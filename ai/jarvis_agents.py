@@ -716,7 +716,7 @@ class SystemAgent(BaseJarvisAgent):
             "list_processes": self._list_processes,
             "get_env": self._get_env,
             "disk_usage": self._disk_usage,
-            "restart_streamlit": self._restart_streamlit,
+            "restart_desk": self._restart_desk,
             "pip_install": self._pip_install,
         }
 
@@ -743,7 +743,7 @@ class SystemAgent(BaseJarvisAgent):
             )
             procs = []
             for line in r.stdout.splitlines():
-                if "python" in line.lower() or "streamlit" in line.lower():
+                if "python" in line.lower() or "uvicorn" in line.lower() or "vite" in line.lower():
                     parts = line.split(None, 10)
                     if len(parts) >= 11:
                         procs.append({"pid": parts[1], "cpu": parts[2], "mem": parts[3], "cmd": parts[10][:80]})
@@ -777,14 +777,12 @@ class SystemAgent(BaseJarvisAgent):
         except Exception as e:
             return {"error": str(e)}
 
-    def _restart_streamlit(self) -> dict:
-        """Send restart signal to Streamlit (touches a sentinel file)."""
-        try:
-            sentinel = Path(".streamlit_restart")
-            sentinel.touch()
-            return {"success": True, "message": "Restart signal sent. Refresh your browser."}
-        except Exception as e:
-            return {"success": False, "error": str(e)}
+    def _restart_desk(self) -> dict:
+        """Desk is Vite/React. Restart it with bash scripts/run_desk.sh."""
+        return {
+            "success": False,
+            "error": "The product desk is Vite/React. Restart with: bash scripts/run_desk.sh then open http://127.0.0.1:5173",
+        }
 
     def _pip_install(self, package: str) -> dict:
         """Install a Python package via pip."""
