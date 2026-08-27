@@ -51,6 +51,14 @@ SCAN_FRESH_S = 6 * 60 * 60
 LONG_TERM_FRESH_S = 3 * 24 * 60 * 60
 DUE_DILIGENCE_FRESH_S = 24 * 60 * 60
 HISTORY_DAYS = 500
+_LANE_IDLE_S = {
+    "market_scan": 0.05,
+    "long_term": 0.25,
+    "data": 0.25,
+    "news": 0.5,
+    "due_diligence": 0.5,
+}
+_DEFAULT_IDLE_S = 0.5
 
 
 class OperationBlocked(RuntimeError):
@@ -214,11 +222,13 @@ class MarketOperationsWorker:
         else:
             _emit("PROGRESS", f"{operation_id[:8]} · {stage} · {message}")
 
-    def _ensure_history(self, operation_id: str, *, days: int = HISTORY_DAYS) -> dict[str, Any]:
+    def _ensure_history(self, operation_id: str, *, days: int = HISTORY_DAYS,
+                        blocking: bool = True) -> dict[str, Any]:
         from data.bhavcopy_runtime import status as history_status
         try:
             current = history_status(load_cache=True)
-            if current.get("ready") and int(current.get("sessions", 0) or 0) >= 60:
+            sessions = int(current.get("sessions", 0) or 0)
+            if current.get("ready") and sessions >= 60:
                 self._progress(
                     operation_id,
                     "HISTORY_READY",
@@ -227,8 +237,26 @@ class MarketOperationsWorker:
                     total=0,
                 )
                 return current
+            if not blocking:
+                self._progress(
+                    operation_id,
+                    "HISTORY_READY",
+                    "Using current price cache — user scan does not wait for downloads",
+                    current=0,
+                    total=0,
+                )
+                return current
         except Exception:
-            pass
+            current = {}
+            if not blocking:
+                self._progress(
+                    operation_id,
+                    "HISTORY_READY",
+                    "Scanning without waiting for a history rebuild",
+                    current=0,
+                    total=0,
+                )
+                return current
         acquired = self._history_lock.acquire(timeout=0)
         if not acquired:
             self._progress(
@@ -306,13 +334,25 @@ class MarketOperationsWorker:
 
     def _run_market_scan(self, operation: dict[str, Any]) -> dict[str, Any]:
         operation_id = str(operation["operation_id"])
-        history = self._ensure_history(operation_id)
+        user_click = (
+            str(operation.get("requested_by") or "") == "terminal"
+            or int(operation.get("priority") or 0) >= 100
+        )
+        history = self._ensure_history(operation_id, blocking=not user_click)
+        try:
+            from scan.bulk_fetcher import adopt_ready_store
+            adopt_ready_store(overlay_live=True)
+        except Exception:
+            pass
         self._progress(operation_id, "LOADING_UNIVERSE", "Loading approved NSE cash universe")
         from product.scan_progress import eta_label, finish_progress, write_progress
         from scan.market_scan_service import run_whole_market_scan
 
         def prepared_prefetch(symbols, *, progress=None):
-            from scan.bulk_fetcher import prefetch as warm_ohlcv
+            from scan.bulk_fetcher import adopt_ready_store, prefetch as warm_ohlcv
+            ready = adopt_ready_store(overlay_live=True)
+            if ready >= 200:
+                return ready
             self._progress(
                 operation_id,
                 "WARMING_HISTORY",
@@ -512,7 +552,7 @@ class MarketOperationsWorker:
                 pass
             operation = self.store.lease_next(lane, worker_pid=os.getpid())
             if operation is None:
-                self.stop_event.wait(2.0)
+                self.stop_event.wait(float(_LANE_IDLE_S.get(lane, _DEFAULT_IDLE_S)))
                 continue
             self._set_active(lane, operation)
             operation_id = str(operation["operation_id"])

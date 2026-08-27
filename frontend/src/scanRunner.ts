@@ -10,6 +10,7 @@ const KIND_CONTROL: Record<ScanKind, ControlName> = {
   LONG_TERM_REFRESH: 'REFRESH_LONG_TERM_NOW',
 }
 
+export const SCAN_POLL_MS = 300
 export const TERMINAL_STATUSES = new Set(['SUCCEEDED', 'FAILED', 'BLOCKED', 'CANCELLED'])
 
 export function isTerminalStatus(status: string): boolean {
@@ -207,7 +208,7 @@ export function useScanRunner(kind: ScanKind, options: ScanRunnerOptions = {}): 
     trackedIdRef.current = operationId
     startedAtRef.current = Date.now()
     clearPoll()
-    pollRef.current = window.setInterval(() => void pollOnce(operationId), 1000)
+    pollRef.current = window.setInterval(() => void pollOnce(operationId), SCAN_POLL_MS)
     void pollOnce(operationId)
   }, [clearPoll, pollOnce])
 

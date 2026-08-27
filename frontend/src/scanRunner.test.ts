@@ -9,6 +9,7 @@ import {
   progressPercent,
   qualifiedResultLine,
   seedKindMatches,
+  SCAN_POLL_MS,
   TERMINAL_STATUSES,
 } from './scanRunner'
 import type { OperationRecord } from './types'
@@ -38,6 +39,10 @@ describe('scanRunner semantics', () => {
     expect(friendlyStageLabel('', 'FAILED')).toBe('Scan failed')
     expect(friendlyStageLabel('', 'CANCELLED')).toBe('Scan stopped')
     expect(friendlyStageLabel('', 'PENDING', 20)).toBe('Waiting for the scan worker…')
+  })
+
+  it('polls the scan worker several times a second so a click looks instant', () => {
+    expect(SCAN_POLL_MS).toBeLessThanOrEqual(300)
   })
 
   it('detects terminal and active statuses', () => {

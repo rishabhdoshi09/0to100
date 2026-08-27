@@ -7,6 +7,86 @@ from pathlib import Path
 from operations.store import OperationStore, PENDING, RUNNING, SUCCEEDED
 
 
+def test_user_scan_does_not_block_on_history_download(monkeypatch, tmp_path: Path):
+    import sys
+    import types
+
+    from operations.market_ops import MarketOperationsWorker
+
+    calls = {"build": 0}
+
+    def fake_status(*, load_cache=True):
+        return {"ready": False, "sessions": 12, "symbols": 100}
+
+    def fake_build_store(**kwargs):
+        calls["build"] += 1
+        raise AssertionError("user scan must not download history")
+
+    runtime = types.ModuleType("data.bhavcopy_runtime")
+    runtime.status = fake_status
+    store_mod = types.ModuleType("data.bhavcopy_store")
+    store_mod.build_store = fake_build_store
+    data_mod = types.ModuleType("data")
+    data_mod.bhavcopy_runtime = runtime
+    data_mod.bhavcopy_store = store_mod
+    monkeypatch.setitem(sys.modules, "data", data_mod)
+    monkeypatch.setitem(sys.modules, "data.bhavcopy_runtime", runtime)
+    monkeypatch.setitem(sys.modules, "data.bhavcopy_store", store_mod)
+
+    worker = MarketOperationsWorker(store=OperationStore(tmp_path / "ops.db"))
+    history = worker._ensure_history("op1", blocking=False)
+    assert history["sessions"] == 12
+    assert calls["build"] == 0
+
+
+def test_user_market_scan_leases_while_data_lane_is_busy(tmp_path: Path):
+    store = OperationStore(tmp_path / "ops.db")
+    data, _ = store.enqueue("DATA_PREPARE", lane="data", requested_by="pipeline")
+    scan, _ = store.enqueue(
+        "MARKET_SCAN", lane="market_scan", requested_by="terminal", priority=100,
+    )
+    leased_data = store.lease_next("data", worker_pid=1)
+    leased_scan = store.lease_next("market_scan", worker_pid=1)
+    assert leased_data is not None and leased_data["operation_id"] == data["operation_id"]
+    assert leased_scan is not None and leased_scan["operation_id"] == scan["operation_id"]
+
+
+def test_market_scan_lane_idles_fast_enough_for_a_click():
+    from operations import market_ops as MO
+
+    assert MO._LANE_IDLE_S["market_scan"] <= 0.05
+
+
+def test_prefetch_returns_immediately_when_official_store_is_ready(monkeypatch):
+    from scan import bulk_fetcher as BF
+
+    monkeypatch.setattr(BF, "adopt_ready_store", lambda overlay_live=True: 500)
+    monkeypatch.setattr(
+        "data.bhavcopy_store.store_symbols",
+        lambda: ["AAA", "BBB", "CCC"],
+        raising=False,
+    )
+    built = []
+
+    def boom(*_a, **_k):
+        built.append(1)
+        raise AssertionError("ready store must not rebuild bhavcopy")
+
+    monkeypatch.setattr("data.bhavcopy_store.build_store", boom, raising=False)
+    covered = BF.prefetch(["AAA", "BBB", "ZZZ"])
+    assert built == []
+    assert covered >= 2
+
+
+def test_market_scan_adopts_ready_history_instead_of_warming():
+    import inspect
+    from operations.market_ops import MarketOperationsWorker
+
+    src = inspect.getsource(MarketOperationsWorker._run_market_scan)
+    assert "adopt_ready_store" in src
+    assert src.index("adopt_ready_store") < src.index("WARMING_HISTORY")
+
+
 def test_user_scan_jumps_ahead_of_pipeline_work(tmp_path: Path):
     store = OperationStore(tmp_path / "ops.db")
     pipeline, created = store.enqueue("MARKET_SCAN", lane="market_scan", requested_by="pipeline", priority=0)
