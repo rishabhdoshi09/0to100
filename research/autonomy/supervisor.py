@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import tempfile
 import threading
 
 from research.autonomy import job_store as JS
@@ -17,6 +18,25 @@ from research.autonomy.dialogue import DialogueLog, Record, OPERATIONAL_INCIDENT
 _MAX_ATTEMPTS = 5
 _BASE_BACKOFF_S = 2.0
 _MAX_BACKOFF_S = 300.0
+
+
+def _atomic_write(path: Path, text: str) -> None:
+    """Write ``path`` via a unique temp file so parallel heartbeats cannot steal ``.tmp``."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=str(path.parent))
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(text)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp_name, path)
+    except Exception:
+        try:
+            os.unlink(tmp_name)
+        except OSError:
+            pass
+        raise
 
 
 class SingleInstanceLock:
@@ -90,6 +110,7 @@ class Supervisor:
         self._result_lock = threading.Lock()
         self._dispatch_lock = threading.Lock()
         self._lane_lock = threading.Lock()
+        self._persist_lock = threading.Lock()
         self._lane_threads: dict[str, threading.Thread] = {}
         self._lane_jobs: dict[str, str] = {}
 
@@ -100,9 +121,8 @@ class Supervisor:
             return set()
 
     def _save_failures(self) -> None:
-        tmp = self._failures_path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(sorted(self.failures)), encoding="utf-8")
-        os.replace(tmp, self._failures_path)
+        with self._persist_lock:
+            _atomic_write(self._failures_path, json.dumps(sorted(self.failures)))
 
     def _load_owner_state(self) -> dict:
         try:
@@ -122,9 +142,8 @@ class Supervisor:
                     "halted": False}
 
     def _save_owner_state(self) -> None:
-        tmp = self._owner_path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(self.owner_state, indent=2), encoding="utf-8")
-        os.replace(tmp, self._owner_path)
+        with self._persist_lock:
+            _atomic_write(self._owner_path, json.dumps(self.owner_state, indent=2))
 
     def start(self) -> bool:
         if not self.lock.acquire():
@@ -171,9 +190,11 @@ class Supervisor:
             "process_running": bool(self._running), "last_cycle": last_cycle,
             "live_feed": self.live_feed.health(),
         })
-        tmp = self._status_path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(d, indent=2, default=str), encoding="utf-8")
-        os.replace(tmp, self._status_path)
+        try:
+            with self._persist_lock:
+                _atomic_write(self._status_path, json.dumps(d, indent=2, default=str))
+        except FileNotFoundError:
+            return
 
     def _job_counts(self) -> dict:
         counts = {}

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import inspect
 import io
+import json
 import threading
 import time
 import tokenize
@@ -292,6 +293,30 @@ def test_tick_leases_scan_ahead_of_news(tmp_path):
     assert sup.join_workers(2.0)
     news = next(j for j in sup.jobs.list() if j.job_type == SCH.NEWS_REFRESH)
     assert news.status == JS.SUCCEEDED
+    sup.shutdown()
+
+
+def test_concurrent_heartbeats_keep_status_json(tmp_path):
+    """Parallel lanes heartbeat from tick + workers; a shared status.tmp used to vanish."""
+    sup = _sup(tmp_path)
+    sup.start()
+    errors = []
+
+    def beat():
+        try:
+            for _ in range(25):
+                sup.heartbeat()
+        except Exception as exc:
+            errors.append(exc)
+
+    threads = [threading.Thread(target=beat) for _ in range(8)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert errors == []
+    status = json.loads((tmp_path / "auto" / "status.json").read_text(encoding="utf-8"))
+    assert status.get("scheduler_of_record") == "quantterm-autonomy"
     sup.shutdown()
 
 
