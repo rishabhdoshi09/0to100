@@ -26,6 +26,7 @@ export type ViewProps = {
   bars: ChartBar[]
   setActive: (page: string) => void
   runControl: (control: ControlName) => Promise<void>
+  openStock?: (symbol: string) => void
 }
 
 const findRow = (dashboard: DashboardPayload, symbol: string) =>
@@ -82,7 +83,8 @@ function DataReadinessPanel({ dashboard }: { dashboard: DashboardPayload }) {
 }
 
 export function CommandCenterView(props: ViewProps) {
-  const { dashboard, selected, setSelected, bars, setActive, runControl } = props
+  const { dashboard, selected, setSelected, bars, setActive, runControl, openStock } = props
+  const pick = openStock || setSelected
   const momentum = useMemo(() => momentumRows(dashboard), [dashboard])
   const longTerm = useMemo(() => qualityRows(dashboard), [dashboard])
   const selectedRow = findRow(dashboard, selected)
@@ -113,7 +115,7 @@ export function CommandCenterView(props: ViewProps) {
 
       <section className="dashboard-grid">
         <Panel title="TOP MOMENTUM SETUPS" subtitle={`${dashboard.scan.universe_size.toLocaleString('en-IN')} stocks evaluated`} className="momentum-panel" action={<button type="button" onClick={() => setActive('Scanner')}>View all</button>}>
-          <SecurityTable rows={momentum} selected={selected} onSelect={setSelected} limit={7} />
+          <SecurityTable rows={momentum} selected={selected} onSelect={pick} limit={7} />
           <footer><span>{dashboard.scan.scanned_at ? `Updated ${dashboard.scan.scanned_at.slice(0, 19)}` : 'No saved scan'}</span><button type="button" onClick={() => void runControl('RUN_SCAN_NOW')}>Run scan now</button></footer>
         </Panel>
 
@@ -144,7 +146,7 @@ export function CommandCenterView(props: ViewProps) {
         </aside>
 
         <Panel title="LONG-TERM INTELLIGENCE" subtitle="Current quality + valuation + timing" className="longterm-panel" action={<button type="button" onClick={() => setActive('Long-Term')}>Open</button>}>
-          <LongTermTable rows={longTerm} selected={selected} onSelect={setSelected} limit={6} />
+          <LongTermTable rows={longTerm} selected={selected} onSelect={pick} limit={6} />
         </Panel>
 
         <Panel title="MARKET LEADERSHIP" subtitle={dashboard.market.summary} className="sector-panel" action={<button type="button" onClick={() => setActive('Market Internals')}>Details</button>}>
@@ -162,7 +164,8 @@ export function CommandCenterView(props: ViewProps) {
 }
 
 export function ScannerView(props: ViewProps) {
-  const { dashboard, selected, setSelected, bars, runControl } = props
+  const { dashboard, selected, setSelected, bars, runControl, openStock } = props
+  const pick = openStock || setSelected
   const [mode, setMode] = useState('Momentum')
   const rows = useMemo<Array<ScanRecord | ConvictionRecord>>(() => {
     if (mode === 'Conviction') return [...dashboard.conviction].sort((a, b) => (b.conviction_score || 0) - (a.conviction_score || 0))
@@ -182,7 +185,7 @@ export function ScannerView(props: ViewProps) {
       </div>
       <div className="split-workspace">
         <Panel title={`${(mode === 'Conviction' ? 'Setup Quality' : mode).toUpperCase()} · ${rows.length} MATCHES`} subtitle={`Saved scan ${dashboard.scan.scanned_at || 'preparing'}`}>
-          <SecurityTable rows={rows} selected={selected} onSelect={setSelected} />
+          <SecurityTable rows={rows} selected={selected} onSelect={pick} />
         </Panel>
         <div className="detail-stack">
           <Panel title={`PRICE STRUCTURE · ${selected || 'SELECT STOCK'}`} subtitle="Daily official history; no synthetic candles">
@@ -298,7 +301,8 @@ export function MarketInternalsView({ dashboard }: ViewProps) {
 }
 
 export function LongTermView(props: ViewProps) {
-  const { dashboard, selected, setSelected, bars, runControl } = props
+  const { dashboard, selected, setSelected, bars, runControl, openStock } = props
+  const pick = openStock || setSelected
   const [classification, setClassification] = useState('All')
   const rows = useMemo(() => {
     const all = [...dashboard.long_term.records].sort((a, b) => (b.combined_score || 0) - (a.combined_score || 0))
@@ -323,7 +327,7 @@ export function LongTermView(props: ViewProps) {
       {(!dashboard.data.bhavcopy.ready || !dashboard.long_term.available) && <DataReadinessPanel dashboard={dashboard} />}
       <div className="mode-tabs">{['All', 'Quality', 'Expensive', 'Needs Data', 'Avoid'].map((item) => <button type="button" key={item} className={classification === item ? 'active' : ''} onClick={() => setClassification(item)}>{item}</button>)}<button className="mode-action" type="button" onClick={() => void runControl('RUN_SCAN_NOW')}>{runLabel}</button><button className="mode-action" type="button" onClick={() => void runControl('REFRESH_LONG_TERM_NOW')}>Refresh funds</button></div>
       {!dashboard.long_term.available && <div className="api-warning">Latest long-term operation: {String(latestOperation?.status || 'not run')} · {String(latestOperation?.error_message || latestOperation?.message || 'waiting for the dedicated long-term lane')}</div>}
-      <div className="split-workspace"><Panel title={`${classification.toUpperCase()} · ${rows.length} RECORDS`} subtitle={`Coverage ${dashboard.long_term.summary.coverage_pct ?? 0}% · ${dashboard.long_term.fundamentals_source || 'current snapshot'}`}><LongTermTable rows={rows} selected={viewSymbol} onSelect={setSelected} /></Panel><div className="detail-stack"><Panel title={`LONG-TERM CHART · ${viewSymbol || 'SELECT STOCK'}`}><ChartWorkspace symbol={viewSymbol} bars={viewBars} row={row} /></Panel><Panel title="QUALITY & RISKS"><div className="evidence-grid"><EvidenceList title="Quality factors" items={row?.quality_factors} tone="green" /><EvidenceList title="Risk flags" items={row?.risk_flags} tone="red" /></div></Panel></div></div>
+      <div className="split-workspace"><Panel title={`${classification.toUpperCase()} · ${rows.length} RECORDS`} subtitle={`Coverage ${dashboard.long_term.summary.coverage_pct ?? 0}% · ${dashboard.long_term.fundamentals_source || 'current snapshot'}`}><LongTermTable rows={rows} selected={viewSymbol} onSelect={pick} /></Panel><div className="detail-stack"><Panel title={`LONG-TERM CHART · ${viewSymbol || 'SELECT STOCK'}`}><ChartWorkspace symbol={viewSymbol} bars={viewBars} row={row} /></Panel><Panel title="QUALITY & RISKS"><div className="evidence-grid"><EvidenceList title="Quality factors" items={row?.quality_factors} tone="green" /><EvidenceList title="Risk flags" items={row?.risk_flags} tone="red" /></div></Panel></div></div>
     </section>
   )
 }

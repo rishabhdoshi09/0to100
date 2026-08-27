@@ -384,6 +384,7 @@ export function RecommendationsView({
   marketScan,
   longTermScan,
   depth,
+  openStock,
 }: ExperienceViewProps) {
   const [data, setData] = useState<RecommendationsWorkspace | null>(() => recallMemory<RecommendationsWorkspace>('reco-workspace') ?? null)
   const [error, setError] = useState('')
@@ -449,6 +450,10 @@ export function RecommendationsView({
   }
 
   const openResearch = (symbol: string) => {
+    if (openStock) {
+      openStock(symbol)
+      return
+    }
     markInvestigate(symbol)
     setSelected(symbol)
     setActive('Stock Intelligence')
@@ -492,7 +497,8 @@ export function RecommendationsView({
           onResearch={() => openResearch(selectedCard.symbol)}
           onInvestigate={() => {
             markInvestigate(selectedCard.symbol)
-            openResearch(selectedCard.symbol)
+            setSelected(selectedCard.symbol)
+            setActive('Stock Intelligence')
           }}
         />
         <p className="reco-foot">{data.disclaimer}</p>
@@ -858,7 +864,7 @@ function DeskTile({
   )
 }
 
-export function MarketReportsView({ dashboard, setActive, setSelected, marketScan, depth, runControl }: ExperienceViewProps) {
+export function MarketReportsView({ dashboard, setActive, setSelected, marketScan, depth, runControl, openStock }: ExperienceViewProps) {
   const [data, setData] = useState<MarketReportsWorkspace | null>(() => recallMemory<MarketReportsWorkspace>('market-reports') ?? null)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(() => !recallMemory('market-reports'))
@@ -917,8 +923,11 @@ export function MarketReportsView({ dashboard, setActive, setSelected, marketSca
   }, [data, query])
 
   const openSymbol = (symbol: string) => {
-    setSelected(symbol)
-    setActive('Stock Intelligence')
+    if (openStock) openStock(symbol)
+    else {
+      setSelected(symbol)
+      setActive('Stock Intelligence')
+    }
   }
 
   if (loading && !data) {

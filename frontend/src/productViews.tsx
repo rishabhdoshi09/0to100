@@ -29,7 +29,8 @@ import {
   type StockWorkspace,
   type TradePlan,
 } from './productApi'
-import { keepRicher, markInvestigate, recall } from './sessionMemory'
+import { keepRicher, markInvestigate, recall, wantedStockTab } from './sessionMemory'
+import { StockAnalyserPanel } from './stockAnalyserViews'
 import type { ChartBar, ControlName, DashboardPayload } from './types'
 
 // Read-only risk-first "R lens" — exact shares, rupee risk, reward:risk, book heat. No orders.
@@ -82,6 +83,7 @@ type ViewProps = {
   depth?: import('./productLanguage').DisplayDepth
   onCompare?: (symbol: string) => void
   onWatchlist?: (symbol: string) => void
+  openStock?: (symbol: string) => void
 }
 
 const laneTone = (status: string) => {
@@ -136,7 +138,7 @@ function LaneGrid({ readiness }: { readiness: ProductReadiness | null }) {
 }
 
 export function ProductCommandCenterView(props: ViewProps) {
-  const { dashboard, selected, setSelected, bars, setActive, runControl } = props
+  const { dashboard, selected, setSelected, bars, setActive, runControl, openStock } = props
   const [readiness, setReadiness] = useState<ProductReadiness | null>(null)
   const [bootstrapBusy, setBootstrapBusy] = useState(false)
   const [message, setMessage] = useState('')
@@ -204,14 +206,14 @@ export function ProductCommandCenterView(props: ViewProps) {
 
       <div className="product-decision-grid">
         <Panel title="TOP TECHNICAL OPPORTUNITIES" subtitle={dashboard.scan.scanned_at ? `Scan as of ${dashboard.scan.scanned_at}` : 'No scan has completed'} action={<button type="button" onClick={() => setActive('Scanner')}>Open scanner</button>}>
-          <SecurityTable rows={momentum} selected={selected} onSelect={setSelected} limit={8} />
+          <SecurityTable rows={momentum} selected={selected} onSelect={openStock || setSelected} limit={8} />
         </Panel>
         <Panel title={`SELECTED STOCK · ${selected || 'NONE'}`} subtitle="Official daily history with the saved research record">
           <ChartWorkspace symbol={selected} bars={bars} row={selectedRow} />
-          <footer className="product-panel-footer"><button type="button" disabled={!selected} onClick={() => setActive('Stock Intelligence')}>Explain this stock</button></footer>
+          <footer className="product-panel-footer"><button type="button" disabled={!selected} onClick={() => { if (!selected) return; if (openStock) openStock(selected); else setActive('Stock Intelligence') }}>Explain this stock</button></footer>
         </Panel>
         <Panel title="LONG-TERM RESEARCH" subtitle={dashboard.long_term.scanned_at ? `As of ${dashboard.long_term.scanned_at}` : 'No long-term run has completed'} action={<button type="button" onClick={() => setActive('Long-Term')}>Open research</button>}>
-          <LongTermTable rows={quality} selected={selected} onSelect={setSelected} limit={7} />
+          <LongTermTable rows={quality} selected={selected} onSelect={openStock || setSelected} limit={7} />
         </Panel>
         <Panel title="LATEST MARKET CONTEXT" subtitle="Open-source context; never a standalone trading signal" action={<button type="button" onClick={() => setActive('News & Events')}>Open all</button>}>
           <div className="command-news-list">
@@ -829,13 +831,13 @@ function InvestigatePanel({
 }
 
 export function ProductStockIntelligenceView(props: ViewProps) {
-  const { dashboard, selected, bars, runControl, setActive, onCompare, onWatchlist, depth } = props
+  const { dashboard, selected, bars, runControl, setActive, onCompare, onWatchlist, depth, openStock } = props
   const [workspace, setWorkspace] = useState<StockWorkspace | null>(() => (
     selected ? recall<StockWorkspace>(`stock:${selected}`) ?? null : null
   ))
   const [plan, setPlan] = useState<TradePlan | null>(null)
   const [ratios, setRatios] = useState<import('./productApi').SymbolRatioRow[]>([])
-  const [tab, setTab] = useState('Investigate')
+  const [tab, setTab] = useState(() => wantedStockTab(selected || ''))
   const [loading, setLoading] = useState(false)
   const [busy, setBusy] = useState('')
   const [error, setError] = useState('')
@@ -844,7 +846,7 @@ export function ProductStockIntelligenceView(props: ViewProps) {
   const [ddError, setDdError] = useState('')
   const autoAcquired = useRef(new Set<string>())
 
-  const intelTabs = ['Investigate', 'Overview', 'Chart', 'Financials', 'Ratios', 'Ownership', 'Events', 'Peers', 'Evidence']
+  const intelTabs = ['Analyser', 'Investigate', 'Overview', 'Chart', 'Financials', 'Ratios', 'Ownership', 'Events', 'Peers', 'Evidence']
 
   const load = async () => {
     if (!selected) {
@@ -881,7 +883,7 @@ export function ProductStockIntelligenceView(props: ViewProps) {
   }, [selected, dashboard.scan.scanned_at])
 
   useEffect(() => {
-    setTab('Investigate')
+    setTab(wantedStockTab(selected || ''))
   }, [selected])
 
   const loadDd = async () => {
@@ -978,6 +980,14 @@ export function ProductStockIntelligenceView(props: ViewProps) {
       </div>
 
       <SectionTabs tabs={intelTabs} active={tab} onChange={setTab} />
+
+      {tab === 'Analyser' && (
+        <StockAnalyserPanel
+          analyser={workspace?.analyser}
+          symbol={selected}
+          onOpenSymbol={openStock}
+        />
+      )}
 
       {tab === 'Investigate' && (
         <InvestigatePanel

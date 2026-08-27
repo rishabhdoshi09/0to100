@@ -27,9 +27,10 @@ import type { DisplayDepth } from './productLanguage'
 import { addWatchlistItem, bootstrapProduct } from './productApi'
 import { useScanRunner } from './scanRunner'
 import {
-  markInvestigate,
+  markAnalyser,
   readDeskNav,
   readSessionJson,
+  rememberRecentSymbol,
   writeDeskNav,
   writeSessionJson,
 } from './sessionMemory'
@@ -226,7 +227,7 @@ const pageSubtitles: Record<string, string> = {
   'Long-Term Picks': 'Quality overlay from the same market scan — Refresh funds only reloads Screener.',
   Recommendations: 'Independent experts compete — only high-quality, evidence-backed setups; empty high-conviction is a valid day.',
   'Market Reports': 'Daily Market Pulse archive — trends, sector movers and breakout context from live system state.',
-  'Stock Intelligence': 'Company workspace — chart, financials, ratios and the due-diligence Investigate view.',
+  'Stock Intelligence': 'Live Minervini analyser on every click, then Investigate, chart, financials and evidence.',
   'Stock Investigator': 'Type any NSE ticker or company name. The same research engine as scanner Investigate runs — not a new scanner.',
   Compare: 'Side-by-side comparison across market, growth, quality and technical dimensions.',
   Watchlist: 'Names you are tracking with latest scan context.',
@@ -387,6 +388,16 @@ function App() {
     return [...new Set(values)].sort()
   }, [dashboard.fno.underlyings, dashboard.long_term.records, dashboard.scan.records])
 
+  const openStock = (symbol: string) => {
+    const clean = String(symbol || '').trim().toUpperCase()
+    if (!clean) return
+    setSelected(clean)
+    setQuery(clean)
+    markAnalyser(clean)
+    rememberRecentSymbol(clean)
+    openPage('Stock Intelligence')
+  }
+
   const openSearch = () => {
     const clean = query.trim().toUpperCase()
     if (!clean) return
@@ -397,11 +408,8 @@ function App() {
     const match = symbols.find((symbol) => symbol === clean)
       || symbols.find((symbol) => symbol.startsWith(clean))
       || clean
-    setSelected(match)
-    setQuery(match)
-    markInvestigate(match)
-    openPage('Stock Intelligence')
-    setControlState(`Opening verified workspace for ${match}`)
+    openStock(match)
+    setControlState(`Opening SEPA analyser for ${match}`)
     window.setTimeout(() => setControlState(''), 2500)
   }
 
@@ -460,6 +468,7 @@ function App() {
     depth,
     marketScan,
     longTermScan,
+    openStock,
   }
 
   const primaryPages = [
@@ -510,7 +519,7 @@ function App() {
           symbols={compareSymbols}
           setSymbols={setCompareSymbols}
           setActive={openPage}
-          setSelected={setSelected}
+          setSelected={openStock}
           seedSymbols={[
             selected,
             ...dashboard.scan.records.map((row) => row.symbol),
@@ -521,7 +530,7 @@ function App() {
       {keep(['Watchlist'], (
         <WatchlistView
           setActive={openPage}
-          setSelected={setSelected}
+          setSelected={openStock}
           onCompare={addToCompare}
           selected={selected}
         />
@@ -531,8 +540,9 @@ function App() {
       {keep(['Education'], (
         <EducationView
           runControl={viewProps.runControl}
-          setSelected={setSelected}
+          setSelected={openStock}
           setActive={openPage}
+          openStock={openStock}
           newsRevision={dashboard.news.articles.length}
         />
       ))}

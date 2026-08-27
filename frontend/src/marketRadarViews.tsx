@@ -22,7 +22,7 @@ import {
 } from './productApi'
 import { RiskLensCard } from './productViews'
 import { LiveScanBanner, type ExperienceViewProps } from './experience'
-import { keepRicher, markInvestigate, recall, remember } from './sessionMemory'
+import { keepRicher, markAnalyser, markInvestigate, recall, remember } from './sessionMemory'
 import {
   bestSetupsFromRadar,
   dashCell,
@@ -30,6 +30,19 @@ import {
   scannerFallbackRows,
   scannerMetaFromDashboard,
 } from './scannerFallback'
+
+function openAnalyser(
+  props: { openStock?: (symbol: string) => void; setSelected: (symbol: string) => void; setActive: (page: string) => void },
+  symbol: string,
+) {
+  if (props.openStock) {
+    props.openStock(symbol)
+    return
+  }
+  props.setSelected(symbol)
+  markAnalyser(symbol)
+  props.setActive('Stock Intelligence')
+}
 
 type RadarRow = ScannerWorkspaceRow & {
   breakout_state?: string
@@ -427,7 +440,7 @@ export function RadarHomeView(props: ExperienceViewProps & {
   onCompare: (symbol: string) => void
   onWatchlist: (symbol: string) => void
 }) {
-  const { dashboard, selected, setSelected, bars, setActive, depth, marketScan, longTermScan, onCompare, onWatchlist } = props
+  const { dashboard, selected, setSelected, bars, setActive, depth, marketScan, longTermScan, onCompare, onWatchlist, openStock } = props
   const [radar, setRadar] = useState<RadarHome | null>(() => recall<RadarHome>('radar-home') ?? null)
   const [plan, setPlan] = useState<TradePlan | null>(null)
   const [readiness, setReadiness] = useState<ProductReadiness | null>(() => recall<ProductReadiness>('product-readiness') ?? null)
@@ -548,7 +561,7 @@ export function RadarHomeView(props: ExperienceViewProps & {
             <button
               type="button"
               className={[selected === item.symbol ? 'active' : '', thin ? 'thin-volume' : ''].filter(Boolean).join(' ')}
-              onClick={() => { setSelected(item.symbol); markInvestigate(item.symbol); setActive('Stock Intelligence') }}
+              onClick={() => openAnalyser(props, item.symbol)}
             >
               <b>
                 {item.symbol}
@@ -660,7 +673,7 @@ export function RadarHomeView(props: ExperienceViewProps & {
       <BestOfBestHero
         row={(radar?.best_of_best?.[0] || radar?.best_among_fundamentals) as RadarRow | null | undefined}
         note={radar?.best_among_note}
-        onSelect={setSelected}
+        onSelect={(symbol) => openAnalyser(props, symbol)}
       />
       <TopStocksList
         rows={((radar?.best_of_best && radar.best_of_best.length
@@ -669,13 +682,13 @@ export function RadarHomeView(props: ExperienceViewProps & {
             ? [radar.best_among_fundamentals]
             : []) as RadarRow[])}
         selected={selected}
-        onSelect={setSelected}
+        onSelect={(symbol) => openAnalyser(props, symbol)}
       />
 
       <BestSniperPanel
         best={radar?.best_breakout as RadarRow | null | undefined}
         sniperCount={radar?.counts.sniper_breakouts || radar?.sniper_candidates?.length || 0}
-        onSelect={setSelected}
+        onSelect={(symbol) => openAnalyser(props, symbol)}
       />
 
       {(radar?.sniper_candidates?.length || 0) > 0 && (
@@ -693,7 +706,7 @@ export function RadarHomeView(props: ExperienceViewProps & {
                 <button
                   type="button"
                   className={selected === item.symbol ? 'active' : ''}
-                  onClick={() => { setSelected(item.symbol); markInvestigate(item.symbol); setActive('Stock Intelligence') }}
+                  onClick={() => openAnalyser(props, item.symbol)}
                 >
                   <b>{item.symbol}</b>
                   <span>
@@ -735,7 +748,7 @@ export function RadarHomeView(props: ExperienceViewProps & {
               <RiskLensCard plan={plan} />
               <div className="radar-action-row">
                 <button type="button" onClick={() => { markInvestigate(selected); setActive('Stock Intelligence') }}>Investigate</button>
-                <button type="button" onClick={() => setActive('Stock Intelligence')}>Full research</button>
+                <button type="button" onClick={() => openAnalyser(props, selected)}>Full research</button>
                 <button type="button" onClick={() => onCompare(selected)}>Compare</button>
                 <button type="button" onClick={() => onWatchlist(selected)}>Watchlist</button>
               </div>
@@ -750,7 +763,7 @@ export function RadarHomeView(props: ExperienceViewProps & {
 }
 
 export function MarketScannerView(props: ExperienceViewProps & { onCompare: (symbol: string) => void }) {
-  const { dashboard, selected, setSelected, bars, setActive, depth, marketScan, longTermScan, onCompare } = props
+  const { dashboard, selected, setSelected, bars, setActive, depth, marketScan, longTermScan, onCompare, openStock } = props
   const [tab, setTab] = useState<'Best Setups' | 'Breakouts' | 'Momentum' | 'Long-Term'>('Best Setups')
   const [rows, setRows] = useState<RadarRow[]>(() => {
     const cached = recall<RadarRow[]>('scanner:Best Setups')
@@ -879,7 +892,7 @@ export function MarketScannerView(props: ExperienceViewProps & { onCompare: (sym
           <DenseTable
             rows={filtered}
             selected={selected}
-            onSelect={(symbol) => { setSelected(symbol); markInvestigate(symbol); setActive('Stock Intelligence') }}
+            onSelect={(symbol) => openAnalyser(props, symbol)}
             depth={depth}
             mode={tab}
             emptyHint={scannerEmptyHint(rows.length, filtered.length, hasScan)}
@@ -890,7 +903,7 @@ export function MarketScannerView(props: ExperienceViewProps & { onCompare: (sym
           <Panel title="ACTIONS">
             <div className="radar-action-row">
               <button type="button" disabled={!selected} onClick={() => { if (selected) { markInvestigate(selected); setActive('Stock Intelligence') } }}>Investigate</button>
-              <button type="button" disabled={!selected} onClick={() => setActive('Stock Intelligence')}>Stock Intelligence</button>
+              <button type="button" disabled={!selected} onClick={() => selected && openAnalyser(props, selected)}>Stock Intelligence</button>
               <button type="button" disabled={!selected} onClick={() => selected && onCompare(selected)}>Compare</button>
             </div>
           </Panel>
@@ -944,7 +957,7 @@ export function CompareView({ symbols, setSymbols, setActive, setSelected, seedS
       </header>
       <div className="compare-chips">
         {symbols.map((sym) => (
-          <button key={sym} type="button" className="compare-chip" onClick={() => { setSelected(sym); markInvestigate(sym); setActive('Stock Intelligence') }}>{sym}</button>
+          <button key={sym} type="button" className="compare-chip" onClick={() => { setSelected(sym); markAnalyser(sym); setActive('Stock Intelligence') }}>{sym}</button>
         ))}
         <input value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && addSymbol()} placeholder="Add symbol" />
         <button type="button" onClick={addSymbol}>Add</button>
@@ -1026,7 +1039,7 @@ export function WatchlistView({ setActive, setSelected, onCompare, selected = ''
         <tbody>
           {(payload?.items || []).map((item) => (
             <tr key={item.id}>
-              <td><button type="button" onClick={() => { setSelected(item.symbol); markInvestigate(item.symbol); setActive('Stock Intelligence') }}>{item.symbol}</button></td>
+              <td><button type="button" onClick={() => { setSelected(item.symbol); markAnalyser(item.symbol); setActive('Stock Intelligence') }}>{item.symbol}</button></td>
               <td>{item.added_date}</td>
               <td>{String((item.snapshot as RadarRow)?.setup_label || item.snapshot?.status || '—')}</td>
               <td>{item.notes || '—'}</td>

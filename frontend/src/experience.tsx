@@ -41,6 +41,7 @@ export type ExperienceViewProps = {
   depth: DisplayDepth
   marketScan: ScanRunnerHandle
   longTermScan: ScanRunnerHandle
+  openStock?: (symbol: string) => void
 }
 
 const scoreOf = (row: ScannerWorkspaceRow) => Number(
@@ -352,8 +353,9 @@ function DecisionLens({
 
 export function EnhancedCommandCenterView(props: ExperienceViewProps) {
   const {
-    dashboard, selected, setSelected, bars, setActive, depth, marketScan, longTermScan,
+    dashboard, selected, setSelected, bars, setActive, depth, marketScan, longTermScan, openStock,
   } = props
+  const pick = openStock || setSelected
   const [workspace, setWorkspace] = useState<CommandCenterWorkspace | null>(null)
   const evidence = useMemo(() => closedTradeEvidence(dashboard), [dashboard.paper.closed_trades])
 
@@ -416,22 +418,22 @@ export function EnhancedCommandCenterView(props: ExperienceViewProps) {
       <section className="opportunity-board">
         <header><h3>Opportunity board</h3><p>Real ideas from the last saved scan — not independent rankings</p></header>
         <div className="opportunity-board-grid">
-          <OpportunityLane title="Momentum" count={momentumRows.length} rows={momentumRows} selected={selected} onSelect={setSelected} />
-          <OpportunityLane title="Breakouts" count={breakoutRows.length} rows={breakoutRows} selected={selected} onSelect={setSelected} />
-          <OpportunityLane title="Pre-breakout" count={preBreakoutRows.length} rows={preBreakoutRows} selected={selected} onSelect={setSelected} />
-          <OpportunityLane title="Setup Quality" count={convictionRows.length} rows={convictionRows} selected={selected} onSelect={setSelected} />
-          <OpportunityLane title="Long-term" count={longTermQuality.length} rows={longTermQuality as ScanRecord[]} selected={selected} onSelect={setSelected} />
-          <OpportunityLane title="Avoid / extended" count={avoidRows.length} rows={avoidRows} selected={selected} onSelect={setSelected} />
+          <OpportunityLane title="Momentum" count={momentumRows.length} rows={momentumRows} selected={selected} onSelect={pick} />
+          <OpportunityLane title="Breakouts" count={breakoutRows.length} rows={breakoutRows} selected={selected} onSelect={pick} />
+          <OpportunityLane title="Pre-breakout" count={preBreakoutRows.length} rows={preBreakoutRows} selected={selected} onSelect={pick} />
+          <OpportunityLane title="Setup Quality" count={convictionRows.length} rows={convictionRows} selected={selected} onSelect={pick} />
+          <OpportunityLane title="Long-term" count={longTermQuality.length} rows={longTermQuality as ScanRecord[]} selected={selected} onSelect={pick} />
+          <OpportunityLane title="Avoid / extended" count={avoidRows.length} rows={avoidRows} selected={selected} onSelect={pick} />
         </div>
       </section>
 
       <div className="terminal-triad">
         <Panel title="TOP SETUPS" subtitle={`${dashboard.scan.universe_size.toLocaleString('en-IN')} evaluated · ${dashboard.scan.scanned_at || 'no scan'}`} action={<button type="button" onClick={() => setActive('Scanner')}>Open Discover</button>}>
-          <SecurityTable rows={momentum as Array<ScanRecord | ConvictionRecord>} selected={selected} onSelect={setSelected} limit={depth === 'simple' ? 5 : 8} />
+          <SecurityTable rows={momentum as Array<ScanRecord | ConvictionRecord>} selected={selected} onSelect={pick} limit={depth === 'simple' ? 5 : 8} />
         </Panel>
         <Panel title={`PRICE STRUCTURE · ${selected || 'SELECT STOCK'}`} subtitle={`Official daily history · ${dashboard.data.bhavcopy.latest_date || 'preparing'}`}>
           <ChartWorkspace symbol={selected} bars={bars} row={row} />
-          <footer className="experience-chart-footer"><button type="button" disabled={!selected} onClick={() => setActive('Stock Intelligence')}>Open Stock Intelligence</button></footer>
+          <footer className="experience-chart-footer"><button type="button" disabled={!selected} onClick={() => selected && pick(selected)}>Open Stock Intelligence</button></footer>
         </Panel>
         <DecisionLens symbol={selected} row={row} depth={depth} scanFreshness={dashboard.scan.scanned_at || ''} />
       </div>
@@ -441,7 +443,7 @@ export function EnhancedCommandCenterView(props: ExperienceViewProps) {
           <div className="system-insight-board">{insights.map((item, index) => <div key={`${item}-${index}`}><i /><span>{item}</span></div>)}</div>
         </Panel>
         <Panel title="LONG-TERM QUALITY" subtitle={`${dashboard.long_term.records.length} saved · ${dashboard.long_term.scanned_at || 'not run'}`} action={<button type="button" onClick={() => setActive('Long-Term')}>Open research</button>}>
-          <LongTermTable rows={longTerm} selected={selected} onSelect={setSelected} limit={depth === 'simple' ? 5 : 8} />
+          <LongTermTable rows={longTerm} selected={selected} onSelect={pick} limit={depth === 'simple' ? 5 : 8} />
         </Panel>
         <Panel title="SYSTEM STATE" subtitle="Compact operations summary — details on System Health" action={<button type="button" onClick={() => setActive('Automation')}>System Health</button>}>
           <OperationMiniBoard dashboard={dashboard} />
@@ -452,7 +454,8 @@ export function EnhancedCommandCenterView(props: ExperienceViewProps) {
 }
 
 export function EnhancedScannerView(props: ExperienceViewProps) {
-  const { dashboard, selected, setSelected, bars, setActive, depth, marketScan, longTermScan } = props
+  const { dashboard, selected, setSelected, bars, setActive, depth, marketScan, longTermScan, openStock } = props
+  const pick = openStock || setSelected
   const modes = depth === 'simple'
     ? ['Momentum', 'Breakouts', 'Long-Term', 'Avoid']
     : ['Momentum', 'Conviction', 'Breakouts', 'Pre-Breakout', 'Long-Term', 'F&O Coverage', 'Avoid']
@@ -555,8 +558,8 @@ export function EnhancedScannerView(props: ExperienceViewProps) {
       <div className="scanner-workspace-grid">
         <Panel title={`${(mode === 'Conviction' ? 'Setup Quality' : mode).toUpperCase()} · ${filtered.length} MATCHES`} subtitle={`Scan ${dashboard.scan.scanned_at || 'not run'} · sorted by backend score`}>
           {mode === 'Long-Term'
-            ? <LongTermTable rows={filtered as LongTermRecord[]} selected={selected} onSelect={setSelected} />
-            : <SecurityTable rows={filtered as Array<ScanRecord | ConvictionRecord>} selected={selected} onSelect={setSelected} />}
+            ? <LongTermTable rows={filtered as LongTermRecord[]} selected={selected} onSelect={pick} />
+            : <SecurityTable rows={filtered as Array<ScanRecord | ConvictionRecord>} selected={selected} onSelect={pick} />}
         </Panel>
         <div className="scanner-detail-column">
           <Panel title={`PRICE STRUCTURE · ${selected || 'SELECT STOCK'}`} subtitle={`Official daily history · ${dashboard.data.bhavcopy.latest_date || 'preparing'}`}><ChartWorkspace symbol={selected} bars={bars} row={selectedRow} /></Panel>
@@ -566,7 +569,7 @@ export function EnhancedScannerView(props: ExperienceViewProps) {
               <EvidenceList title="Invalidation and risk" items={risks} tone="red" />
             </div>
             <footer className="scanner-intel-footer">
-              <button type="button" disabled={!selected} onClick={() => setActive('Stock Intelligence')}>Open Stock Intelligence</button>
+              <button type="button" disabled={!selected} onClick={() => selected && pick(selected)}>Open Stock Intelligence</button>
             </footer>
           </Panel>
         </div>
@@ -583,7 +586,8 @@ function median(values: number[]) {
 }
 
 export function EnhancedLongTermView(props: ExperienceViewProps) {
-  const { dashboard, selected, setSelected, bars, depth, marketScan, longTermScan } = props
+  const { dashboard, selected, setSelected, bars, depth, marketScan, longTermScan, openStock } = props
+  const pick = openStock || setSelected
   const [classification, setClassification] = useState('All')
   const [sector, setSector] = useState('All')
   const [minCoverage, setMinCoverage] = useState(depth === 'simple' ? 50 : 0)
@@ -638,7 +642,7 @@ export function EnhancedLongTermView(props: ExperienceViewProps) {
       </div>
 
       <div className="long-term-workspace-grid">
-        <Panel title={`FILTERED RESEARCH · ${filtered.length}`} subtitle={`Saved run ${dashboard.long_term.scanned_at || 'preparing'}`}><LongTermTable rows={filtered} selected={selected} onSelect={setSelected} /></Panel>
+        <Panel title={`FILTERED RESEARCH · ${filtered.length}`} subtitle={`Saved run ${dashboard.long_term.scanned_at || 'preparing'}`}><LongTermTable rows={filtered} selected={selected} onSelect={pick} /></Panel>
         <div className="long-term-detail-column">
           <Panel title={`PRICE & TIMING · ${selected || 'SELECT STOCK'}`}><ChartWorkspace symbol={selected} bars={bars} row={current} /></Panel>
           <Panel title="QUALITY OVERLAYS"><div className="quality-overlay-grid"><div><span>Classification</span><strong>{words(current?.classification || 'Unavailable')}</strong></div><div><span>Fundamental score</span><strong>{score(current?.fundamental_score)}</strong></div><div><span>Technical score</span><strong>{score(current?.technical_score)}</strong></div><div><span>Combined score</span><strong>{score(current?.combined_score)}</strong></div><div><span>Coverage</span><strong>{current?.fundamental_coverage == null ? '—' : `${(Number(current.fundamental_coverage) * 100).toFixed(0)}%`}</strong></div><div><span>Timing</span><strong>{words(current?.timing || 'Unavailable')}</strong></div></div></Panel>
