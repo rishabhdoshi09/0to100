@@ -143,6 +143,7 @@ def test_empty_high_conviction_is_success():
     assert payload["ensemble"]["empty_high_conviction"] is True
     assert payload["ensemble"]["high_conviction_count"] == 0
     assert "NO HIGH-CONVICTION" in payload["ensemble"]["empty_line"]
+    assert "Checked" in (payload["ensemble"].get("empty_detail") or "")
     trends = next(c for c in payload["categories"] if c["id"] == "super_trends")
     assert trends["cards"]
     assert trends["cards"][0]["action_badge"] == "Watch"

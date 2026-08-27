@@ -273,6 +273,7 @@ def test_market_reports_page_open_does_not_crawl_when_file_missing(tmp_path, mon
     )
     payload = build_market_reports_workspace(persist_today=True, rebuild=False)
     assert payload["today_pulse"] in ({}, None) or not payload["today_pulse"].get("takeaways")
+    assert payload["needs_refresh"] is True
 
 
 def test_recommendations_default_skips_case_settle(monkeypatch):
