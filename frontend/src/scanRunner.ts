@@ -6,7 +6,7 @@ export type ScanKind = 'MARKET_SCAN' | 'LONG_TERM_SCAN' | 'LONG_TERM_REFRESH'
 
 const KIND_CONTROL: Record<ScanKind, ControlName> = {
   MARKET_SCAN: 'RUN_SCAN_NOW',
-  LONG_TERM_SCAN: 'RUN_LONG_TERM_SCAN_NOW',
+  LONG_TERM_SCAN: 'RUN_SCAN_NOW',
   LONG_TERM_REFRESH: 'REFRESH_LONG_TERM_NOW',
 }
 
@@ -22,8 +22,9 @@ export function isActiveStatus(status: string): boolean {
 
 export function seedKindMatches(seedKind: string, runnerKind: ScanKind): boolean {
   if (seedKind === runnerKind) return true
-  if (runnerKind === 'LONG_TERM_SCAN' && seedKind === 'LONG_TERM_REFRESH') return true
+  if (runnerKind === 'LONG_TERM_SCAN' && (seedKind === 'LONG_TERM_REFRESH' || seedKind === 'MARKET_SCAN')) return true
   if (runnerKind === 'LONG_TERM_REFRESH' && (seedKind === 'LONG_TERM_SCAN' || seedKind === 'LONG_TERM_REFRESH')) return true
+  if (runnerKind === 'MARKET_SCAN' && seedKind === 'LONG_TERM_SCAN') return true
   return false
 }
 

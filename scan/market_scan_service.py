@@ -49,6 +49,105 @@ class MarketScanReport:
         }
 
 
+def _symbol_list_from_records(payload: Mapping[str, Any] | None, *, setups_only: bool = False) -> list[str]:
+    if not isinstance(payload, Mapping):
+        return []
+    out: list[str] = []
+    for row in payload.get("records") or []:
+        if not isinstance(row, Mapping):
+            continue
+        if setups_only:
+            signals = row.get("signals") or row.get("reasons") or []
+            if not signals:
+                continue
+        symbol = str(row.get("symbol") or "").strip().upper()
+        if symbol:
+            out.append(symbol)
+    return out
+
+
+def _reco_symbols(payload: Mapping[str, Any] | None) -> list[str]:
+    if not isinstance(payload, Mapping):
+        return []
+    out: list[str] = []
+    categories = payload.get("categories")
+    if isinstance(categories, Mapping):
+        for rows in categories.values():
+            if not isinstance(rows, list):
+                continue
+            for row in rows:
+                if isinstance(row, Mapping):
+                    symbol = str(row.get("symbol") or "").strip().upper()
+                    if symbol:
+                        out.append(symbol)
+    out.extend(_symbol_list_from_records(payload))
+    return out
+
+
+def priority_ordered_symbols(
+    symbols: list[str],
+    *,
+    scan_payload: Mapping[str, Any] | None = None,
+    reco_payload: Mapping[str, Any] | None = None,
+    long_term_payload: Mapping[str, Any] | None = None,
+    fno_symbols: set[str] | list[str] | tuple[str, ...] | None = None,
+    watchlist: list[str] | tuple[str, ...] | None = None,
+) -> list[str]:
+    """Scan last-scan setups, recos, SEPA/long-term and F&O names before the rest.
+
+    One walk still covers the full universe. Priority only changes order so
+    category names occupy workers first.
+    """
+    allowed = {str(s).strip().upper() for s in symbols if str(s).strip()}
+    seen: set[str] = set()
+    ordered: list[str] = []
+
+    def _add(seq: list[str] | tuple[str, ...] | set[str] | None) -> None:
+        if not seq:
+            return
+        for raw in seq:
+            symbol = str(raw).strip().upper()
+            if symbol in allowed and symbol not in seen:
+                seen.add(symbol)
+                ordered.append(symbol)
+
+    _add(_symbol_list_from_records(scan_payload, setups_only=True))
+    _add(watchlist)
+    _add(_reco_symbols(reco_payload))
+    _add(_symbol_list_from_records(long_term_payload))
+    _add(list(fno_symbols or []))
+    _add(sorted(allowed))
+    return ordered
+
+
+def _saved_priority_inputs() -> tuple[Mapping[str, Any] | None, Mapping[str, Any] | None, Mapping[str, Any] | None, list[str]]:
+    scan_payload = None
+    reco_payload = None
+    long_term_payload = None
+    watchlist: list[str] = []
+    try:
+        from product.scan_store import load_scan, watchlist_rows
+        scan_payload = load_scan()
+        watchlist = [
+            str(row.get("symbol") or "").strip().upper()
+            for row in watchlist_rows(scan_payload) or []
+            if str(row.get("symbol") or "").strip()
+        ]
+    except Exception:
+        pass
+    try:
+        from product.recommendations_store import load_recommendations
+        reco_payload = load_recommendations()
+    except Exception:
+        pass
+    try:
+        from product.long_term_store import load_long_term_scan
+        long_term_payload = load_long_term_scan()
+    except Exception:
+        pass
+    return scan_payload, reco_payload, long_term_payload, watchlist
+
+
 def _default_universe() -> Mapping[str, str]:
     from data.nse_universe import get_nse_universe_with_names
     return get_nse_universe_with_names()
@@ -109,6 +208,20 @@ def run_whole_market_scan(
                                 error_message="approved NSE universe is empty",
                                 source_snapshot_id=snapshot_id or "")
 
+    scan_payload, reco_payload, long_term_payload, watchlist = _saved_priority_inputs()
+    try:
+        fno_for_order = set(fno_provider() or ())
+    except Exception:
+        fno_for_order = set()
+    symbols = priority_ordered_symbols(
+        symbols,
+        scan_payload=scan_payload,
+        reco_payload=reco_payload,
+        long_term_payload=long_term_payload,
+        fno_symbols=fno_for_order,
+        watchlist=watchlist,
+    )
+
     try:
         # Prefetch warms OHLCV. Do not pass the stock-scan callback — bulk
         # prefetch reports bhavcopy days, not symbols.
@@ -140,12 +253,7 @@ def run_whole_market_scan(
                 source_snapshot_id=snapshot_id or _active_snapshot_id(),
             )
 
-    try:
-        fno_symbols = set(fno_provider() or ())
-    except Exception:
-        # F&O is an overlay, not the cash-universe source of truth.  Its failure is represented by
-        # an empty overlay rather than invalidating a successfully completed cash scan.
-        fno_symbols = set()
+    fno_symbols = set(fno_for_order)
 
     from product.scan_store import build_scan_payload, save_scan
     payload = build_scan_payload(names, results, fno_symbols)

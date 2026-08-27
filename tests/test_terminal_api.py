@@ -51,7 +51,7 @@ def test_paper_payload_exposes_daily_learning_and_keeps_live_locked(tmp_path, mo
 def test_market_controls_are_dispatched_outside_paper_autonomy():
     assert terminal_api._OPERATION_CONTROLS == {
         "RUN_SCAN_NOW": "MARKET_SCAN",
-        "RUN_LONG_TERM_SCAN_NOW": "LONG_TERM_SCAN",
+        "RUN_LONG_TERM_SCAN_NOW": "MARKET_SCAN",
         "REFRESH_LONG_TERM_NOW": "LONG_TERM_REFRESH",
         "REFRESH_NEWS_NOW": "NEWS_REFRESH",
         "REFRESH_FNO_NOW": "FNO_REFRESH",

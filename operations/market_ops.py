@@ -215,6 +215,20 @@ class MarketOperationsWorker:
             _emit("PROGRESS", f"{operation_id[:8]} · {stage} · {message}")
 
     def _ensure_history(self, operation_id: str, *, days: int = HISTORY_DAYS) -> dict[str, Any]:
+        from data.bhavcopy_runtime import status as history_status
+        try:
+            current = history_status(load_cache=True)
+            if current.get("ready") and int(current.get("sessions", 0) or 0) >= 60:
+                self._progress(
+                    operation_id,
+                    "HISTORY_READY",
+                    f"Official history ready · {current.get('sessions', 0)} sessions · {current.get('symbols', 0)} symbols",
+                    current=0,
+                    total=0,
+                )
+                return current
+        except Exception:
+            pass
         acquired = self._history_lock.acquire(timeout=0)
         if not acquired:
             self._progress(
@@ -224,7 +238,6 @@ class MarketOperationsWorker:
             )
             self._history_lock.acquire()
         try:
-            from data.bhavcopy_runtime import status as history_status
             current = history_status(load_cache=True)
             if current.get("ready") and int(current.get("sessions", 0) or 0) >= 60:
                 self._progress(

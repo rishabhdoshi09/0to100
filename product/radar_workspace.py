@@ -49,8 +49,8 @@ RANKING_LEGEND = {
 BEST_OF_BEST_WEIGHTS = {"sepa": 0.45, "funds": 0.30, "tape": 0.25}
 SCAN_SHARED_NOTE = (
     "One whole-market scan fills Home, Scanner (all tabs), Recommendations "
-    "and long-term from the same saved scan. Names can appear in more than one lane. "
-    "Scan Now is the only intentional rescan."
+    "and long-term from the same saved scan. A Scan Now click jumps the queue "
+    "and walks every category in one pass. Names can appear in more than one lane."
 )
 # Re-export shared floors so callers keep importing from this module.
 # Volume < 1× is a HARD reject for sniper/best — never just a sort demote.
