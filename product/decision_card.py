@@ -410,4 +410,7 @@ def decision_surface(
         "evidence_panel": evidence_panel(row),
         "setup_quality": round(_f(row.get("score") or row.get("combined_score") or row.get("conviction_score"))) or None,
         "setup_quality_label": "Setup Quality",
+        "blockers": [str(x) for x in (row.get("conflicts") or []) if x][:6],
+        "freshness": str(row.get("price_tag") or row.get("tech_source") or "Saved scan"),
+        "evidence_coverage": evidence_panel(row).get("fundamental_coverage"),
     }

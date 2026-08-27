@@ -31,12 +31,14 @@ NEWS_REFRESH = "NEWS_REFRESH"
 FNO_REFRESH = "FNO_REFRESH"
 DATA_PREPARE = "DATA_PREPARE"
 DUE_DILIGENCE_ACQUIRE = "DUE_DILIGENCE_ACQUIRE"
+MARKET_REPORT = "MARKET_REPORT"
 
 LANES = {
     MARKET_SCAN: "market_scan",
     LONG_TERM_SCAN: "long_term",
     LONG_TERM_REFRESH: "long_term",
     NEWS_REFRESH: "news",
+    MARKET_REPORT: "news",
     FNO_REFRESH: "data",
     DATA_PREPARE: "data",
     DUE_DILIGENCE_ACQUIRE: "due_diligence",
@@ -346,7 +348,19 @@ class MarketOperationsWorker:
             adopt_ready_store(overlay_live=True)
         except Exception:
             pass
-        self._progress(operation_id, "LOADING_UNIVERSE", "Loading approved NSE cash universe")
+        universe_n = 0
+        try:
+            from data.nse_universe import get_nse_universe
+            universe_n = len(get_nse_universe() or [])
+        except Exception:
+            universe_n = 0
+        self._progress(
+            operation_id,
+            "LOADING_UNIVERSE",
+            f"Loading approved NSE cash universe · {universe_n:,} names" if universe_n else "Loading approved NSE cash universe",
+            current=0,
+            total=universe_n or None,
+        )
         from product.scan_progress import eta_label, finish_progress, write_progress
         from scan.market_scan_service import run_whole_market_scan
 
@@ -420,6 +434,8 @@ class MarketOperationsWorker:
             raise RuntimeError(f"{code}: {message}")
         payload = dict(getattr(report, "payload", {}) or {})
         summary = dict(payload.get("summary", {}) or {})
+        if "qualified" not in summary:
+            summary["qualified"] = int(summary.get("with_any_setup") or 0)
         result["summary"] = summary
         result["records"] = len(payload.get("records", []) or [])
         result["history"] = history
@@ -475,16 +491,86 @@ class MarketOperationsWorker:
 
     def _run_due_diligence_acquire(self, operation: dict[str, Any]) -> dict[str, Any]:
         operation_id = str(operation["operation_id"])
+        payload = dict(operation.get("payload") or {})
+        symbol = str(payload.get("symbol") or "").strip().upper()
+        force = bool(payload.get("force"))
+        if symbol:
+            self._progress(operation_id, "ACQUIRING", f"Downloading filings and fundamentals for {symbol}")
+            from product.due_diligence.acquire import acquire_symbol
+            result = acquire_symbol(symbol, force=force)
+            n_ok = 1 if result.get("ok") or result.get("n_ok") or result else 0
+            self._progress(operation_id, "ACQUIRED", f"Investigate acquire finished for {symbol}")
+            out = dict(result) if isinstance(result, dict) else {"value": str(result)}
+            out["symbol"] = symbol
+            out["n_ok"] = int(out.get("n_ok") or n_ok)
+            return out
         self._progress(operation_id, "ACQUIRING", "Downloading filings and fundamentals for shortlisted names")
         from product.due_diligence.acquire import acquire_shortlist
-
-        result = acquire_shortlist(force=False)
+        result = acquire_shortlist(force=force)
         self._progress(
             operation_id,
             "ACQUIRED",
             f"Investigate acquire finished for {result.get('n_ok', 0)} name(s)",
         )
         return result
+
+    def _run_market_report(self, operation: dict[str, Any]) -> dict[str, Any]:
+        """Assemble today's report from official files. Never invent headlines or prints."""
+        operation_id = str(operation["operation_id"])
+        news_result: dict[str, Any] = {}
+        self._progress(operation_id, "ASSEMBLING", "Assembling today's market report from official files")
+        try:
+            from product.desk_pipeline import news_is_fresh
+            stale_news = not news_is_fresh()
+        except Exception:
+            stale_news = True
+        if stale_news:
+            self._progress(operation_id, "FETCHING_SOURCES", "Refreshing sourced news for the report")
+            try:
+                news_result = self._run_news(operation)
+            except OperationBlocked as exc:
+                news_result = {"blocked": True, "code": exc.code, "error": str(exc), **dict(exc.result or {})}
+            except Exception as exc:
+                news_result = {"error": str(exc)[:200]}
+        self._progress(operation_id, "WRITING", "Writing today's pulse, wrap and missing-lane status")
+        scan: dict[str, Any] = {}
+        try:
+            from product.scan_store import load_scan
+            scan = load_scan() or {}
+        except Exception:
+            scan = {}
+        news: dict[str, Any] = {}
+        try:
+            from news.curator_store import NewsCuratorStore
+            store = NewsCuratorStore(ROOT / "logs" / "news_curator.sqlite3")
+            try:
+                articles = [item.as_dict() for item in store.recent(hours=168, limit=120)]
+            finally:
+                store.close()
+            news = {"available": bool(articles), "articles": articles}
+        except Exception:
+            news = {"available": False, "articles": []}
+        from product.recommendations_workspace import build_market_reports_workspace
+        workspace = build_market_reports_workspace(
+            persist_today=True,
+            rebuild=True,
+            news_payload=news,
+            scan_payload=scan,
+        )
+        pulse = dict(workspace.get("today_pulse") or {})
+        wrap_n = len(list((workspace.get("desk_note") or {}).get("daily_wrap") or []))
+        sourced = int((workspace.get("desk_note") or {}).get("wrap_sourced") or 0)
+        return {
+            "as_of_ist": workspace.get("as_of_ist") or "",
+            "takeaways": len(list(pulse.get("takeaways") or [])),
+            "reports": len(list(workspace.get("reports") or [])),
+            "wrap_lines": wrap_n,
+            "wrap_sourced": sourced,
+            "scan_rows": int((workspace.get("scan_highlights") or {}).get("row_count") or 0),
+            "needs_refresh": bool(workspace.get("needs_refresh")),
+            "missing_lanes": list(workspace.get("missing_lanes") or []),
+            "news": news_result,
+        }
 
     def _run_fno(self, operation: dict[str, Any]) -> dict[str, Any]:
         operation_id = str(operation["operation_id"])
@@ -538,6 +624,8 @@ class MarketOperationsWorker:
             return self._run_long_term(operation, refresh=True)
         if kind == NEWS_REFRESH:
             return self._run_news(operation)
+        if kind == MARKET_REPORT:
+            return self._run_market_report(operation)
         if kind == DUE_DILIGENCE_ACQUIRE:
             return self._run_due_diligence_acquire(operation)
         if kind == FNO_REFRESH:

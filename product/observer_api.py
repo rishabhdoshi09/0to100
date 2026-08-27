@@ -296,7 +296,8 @@ def market_reports_workspace(
 ) -> dict[str, Any]:
     """Chronological Market Pulse desk from the last scan and saved pulse file.
 
-    Page-open never rebuilds the pulse. Scan Now writes today's file.
+    GET is cache-first. Opening Market Reports queues REFRESH_MARKET_REPORT_NOW
+    when today's file is missing or empty — that job rebuilds from official files.
     """
     from product.recommendations_workspace import build_market_reports_workspace
     news: dict[str, Any] = {}

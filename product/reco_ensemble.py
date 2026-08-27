@@ -363,23 +363,43 @@ def ensemble_summary(cards: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     watch = [c for c in cards if c.get("reco_tier") == TIER_WATCH]
     avoid = [c for c in cards if c.get("reco_tier") == TIER_AVOID]
     empty = len(high) == 0
+    family_ids: dict[str, int] = {}
+    method_ids: dict[str, int] = {}
+    checked_rows = 0
+    for card in cards:
+        checked_rows += 1
+        for fam in card.get("families") or []:
+            key = str(fam.get("label") or fam.get("id") or "").strip()
+            if key:
+                family_ids[key] = family_ids.get(key, 0) + (1 if fam.get("status") == "pass" else 0)
+        for method in card.get("methods") or []:
+            key = str(method.get("label") or method.get("id") or "").strip()
+            if key:
+                method_ids[key] = method_ids.get(key, 0) + (1 if method.get("status") == "pass" else 0)
+    family_line = ", ".join(sorted(family_ids)[:8]) or "trend, breakout, quality, volume"
+    empty_detail = ""
+    if empty:
+        empty_detail = (
+            f"Checked {checked_rows} scored name{'s' if checked_rows != 1 else ''} across "
+            f"{family_line}. Independent evidence families did not agree on a ready, "
+            f"non-extended high-conviction setup. Empty is a successful output — the desk "
+            f"does not invent a Buy list. Good setups: {len(good)}; watch: {len(watch)}."
+        )
     return {
         "high_conviction_count": len(high),
         "good_setup_count": len(good),
         "watch_count": len(watch),
         "avoid_count": len(avoid),
+        "checked_rows": checked_rows,
+        "families_checked": sorted(family_ids),
+        "methods_checked": sorted(method_ids),
         "empty_high_conviction": empty,
         "empty_line": (
             "NO HIGH-CONVICTION OPPORTUNITY"
             if empty else
             f"{len(high)} high-conviction name{'s' if len(high) != 1 else ''}"
         ),
-        "empty_detail": (
-            "Independent evidence families did not agree on a ready, non-extended "
-            "setup today. Empty is a successful output — the desk does not invent "
-            "a Buy list to fill the page."
-            if empty else ""
-        ),
+        "empty_detail": empty_detail,
     }
 
 

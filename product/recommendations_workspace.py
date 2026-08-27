@@ -1342,18 +1342,43 @@ def build_market_reports_workspace(
     as_of = str((pulse or {}).get("as_of_ist") or highlights.get("scanned_at") or today)
     sourced = int((desk_note or {}).get("wrap_sourced") or 0)
     daily_n = len(list((desk_note or {}).get("daily_wrap") or []))
+    missing_lanes: list[str] = []
+    if not int(highlights.get("row_count") or 0):
+        missing_lanes.append("market_scan")
+    if not news_meta.get("available") and not int(news_meta.get("article_count") or 0):
+        missing_lanes.append("news")
+    if not sourced and not daily_n:
+        missing_lanes.append("desk_wrap")
+    needs_refresh = not pulse_has_rows and not sourced and not daily_n
+    stale = bool(has_today and not pulse_has_rows and not sourced)
     empty_detail = ""
     if not sourced and not daily_n and not int(highlights.get("row_count") or 0) and not (pulse.get("takeaways") or []):
         empty_detail = (
-            "No sourced wrap and no market scan on file. Scan market and refresh news "
-            "to fill this archive. Opening the page does not start those jobs, and "
-            "empty slots are not filled with invented headlines."
+            "No sourced wrap and no market scan on file yet. The desk is assembling today's "
+            "report from official session files and saved news. Empty slots stay empty — "
+            "no invented headlines."
         )
     elif not sourced and not daily_n:
         empty_detail = (
-            "No sourced wrap headlines yet — refresh news and filings. Breakout context "
-            "below comes from the last market scan, not from invented copy."
+            "No sourced wrap headlines yet — news refresh is in the report job. Breakout "
+            "context below comes from the last market scan, not from invented copy."
         )
+    market_ctx: dict[str, Any] = {}
+    try:
+        from product.market_view import current_market_view
+        view = current_market_view()
+        market_ctx = {
+            "health": getattr(view, "health", "") or "",
+            "breadth": getattr(view, "breadth", "") or "",
+            "trade_stance": getattr(view, "trade_stance", "") or "",
+            "leaders": list(getattr(view, "leaders", ()) or []),
+            "laggards": list(getattr(view, "laggards", ()) or []),
+            "summary": getattr(view, "summary", "") or "",
+        }
+        if not market_ctx.get("health") and not market_ctx.get("breadth"):
+            market_ctx = {}
+    except Exception:
+        market_ctx = {}
     return {
         "schema_version": 2,
         "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -1364,12 +1389,16 @@ def build_market_reports_workspace(
             "watch desks. Built from the last scan, official session files and saved news. "
             "Headlines stay sourced. Empty stays empty."
         ),
-        "load_note": "Pulse reuses today's saved file from Scan Now; it does not walk every bhavcopy symbol.",
+        "load_note": "Opening this page queues a real report job when today's file is missing or stale.",
         "reports": reports,
         "today_pulse": pulse,
         "desk_note": desk_note,
         "scan_highlights": highlights,
         "news_meta": news_meta,
+        "market": market_ctx,
+        "missing_lanes": missing_lanes,
+        "needs_refresh": bool(needs_refresh),
+        "stale": bool(needs_refresh and (has_today or pulse)),
         "empty_detail": empty_detail,
         "error": error,
         "disclaimer": "Market reports are research summaries, not trade instructions.",

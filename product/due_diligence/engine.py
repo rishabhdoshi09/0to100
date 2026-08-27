@@ -612,6 +612,11 @@ def build_due_diligence(
         profile["about"] = pack["business_model"]
     cash = cash_flow_quality(raw, framework_id=framework["id"])
     balance_rules = balance_sheet_quality(raw, framework_id=framework["id"])
+    try:
+        from product.due_diligence.generic_scores import generic_cross_company_scores
+        named_scores = generic_cross_company_scores(raw)
+    except Exception:
+        named_scores = {"available": False, "scores": [], "detail": "Named quality scores unavailable."}
     growth = growth_quality(findings)
     extra_flags = list(pack.get("flags") or []) + list(cash.get("flags") or []) + list(balance_rules.get("flags") or [])
     flags = collect_red_flags(
@@ -873,6 +878,7 @@ def build_due_diligence(
         "balance_sheet_quality": balance,
         "cash_flow_quality": cash,
         "growth_quality": growth,
+        "named_quality_scores": named_scores,
         "balance_sheet_rules": balance_rules,
         "governance_risk": governance,
         "news_event_impact": news_label,
