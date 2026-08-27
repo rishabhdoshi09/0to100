@@ -426,9 +426,9 @@ def build_stock_workspace(
     if not technical_ready:
         next_actions.append({"control": "REFRESH_DATA_NOW", "label": "Prepare official price history"})
     if not scan_row or sources[1]["status"] != "FRESH":
-        next_actions.append({"control": "RUN_SCAN_NOW", "label": "Run whole-market scan"})
-    if not long_row or sources[2]["status"] != "FRESH":
-        next_actions.append({"control": "RUN_LONG_TERM_SCAN_NOW", "label": "Run long-term research"})
+        next_actions.append({"control": "RUN_SCAN_NOW", "label": "Scan market (all setups)"})
+    elif not long_row or sources[2]["status"] != "FRESH":
+        next_actions.append({"control": "REFRESH_LONG_TERM_NOW", "label": "Refresh long-term funds"})
     if not fundamentals.get("available") or sources[3]["status"] != "FRESH":
         next_actions.append({"control": "REFRESH_STOCK_FUNDAMENTALS", "label": f"Refresh {symbol} fundamentals"})
     if not news_rows or sources[4]["status"] != "FRESH":

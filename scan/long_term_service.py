@@ -178,6 +178,189 @@ def _prepare_official_history() -> dict:
     return ensure_loaded(rebuild_from_local=True)
 
 
+def technical_rows_from_market_scan(
+    payload: Mapping[str, Any] | None,
+    *,
+    min_score: float = 45,
+    top: int = 80,
+    include_watch: bool = True,
+    enrich: bool = True,
+    symbols: list[str] | tuple[str, ...] | None = None,
+) -> list[dict]:
+    """Project the saved whole-market scan into long-term technical rows.
+
+    Does not invent 6m/12m/extension. Missing stays missing. Optional enrichment
+    uses the existing ``long_term_score`` on already-warmed official history —
+    not a second scanner engine.
+    """
+    wanted = {str(s).strip().upper() for s in (symbols or []) if str(s).strip()} or None
+    mapped: list[dict] = []
+    for rec in list((payload or {}).get("records") or []):
+        symbol = str(rec.get("symbol") or "").strip().upper()
+        if not symbol:
+            continue
+        if wanted is not None and symbol not in wanted:
+            continue
+        try:
+            score = float(rec.get("score") or 0)
+        except (TypeError, ValueError):
+            score = 0.0
+        if score < float(min_score or 0):
+            continue
+        factors = [str(x) for x in (rec.get("reasons") or rec.get("signals") or []) if x]
+        row = {
+            "symbol": symbol,
+            "score": score,
+            "price": rec.get("price"),
+            "factors": factors,
+            "verdict": rec.get("verdict") or "WATCH",
+            "chase_risk": bool(rec.get("chase_risk")),
+            "from_saved_market_scan": True,
+        }
+        if "extension_pct" in rec and rec.get("extension_pct") not in (None, ""):
+            try:
+                row["extension_pct"] = float(rec.get("extension_pct"))
+            except (TypeError, ValueError):
+                pass
+        mapped.append(row)
+    mapped.sort(key=lambda item: (-float(item.get("score") or 0), item["symbol"]))
+    mapped = mapped[: max(0, int(top))]
+    if not enrich or not mapped:
+        return mapped
+    return _enrich_with_long_term_score(mapped, min_score=min_score, include_watch=include_watch)
+
+
+def _enrich_with_long_term_score(
+    rows: list[dict],
+    *,
+    min_score: float,
+    include_watch: bool,
+) -> list[dict]:
+    try:
+        from data.bhavcopy_store import get_ohlcv
+        from scan.long_term import long_term_score, thesis_line
+    except Exception:
+        return rows
+    accepted = {"LONG_TERM_BUY", "WATCH"} if include_watch else {"LONG_TERM_BUY"}
+    out: list[dict] = []
+    scored_any = False
+    for row in rows:
+        try:
+            df = get_ohlcv(row["symbol"])
+        except Exception:
+            df = None
+        if df is None:
+            out.append(row)
+            continue
+        try:
+            scored = long_term_score(df)
+        except Exception:
+            out.append(row)
+            continue
+        scored_any = True
+        verdict = str(scored.get("verdict") or "")
+        if verdict not in accepted or float(scored.get("score") or 0) < float(min_score or 0):
+            continue
+        merged = {**row, **scored, "symbol": row["symbol"], "from_saved_market_scan": True}
+        merged["thesis"] = thesis_line(merged)
+        out.append(merged)
+    if scored_any:
+        out.sort(key=lambda item: (-float(item.get("score") or 0), item["symbol"]))
+        return out
+    return rows
+
+
+def _technical_from_saved_scan_or_walk(
+    *,
+    symbols=None,
+    min_score: float = 45,
+    top: int = 60,
+    include_watch: bool = True,
+    saved_payload: Mapping[str, Any] | None = None,
+) -> list[dict]:
+    payload = saved_payload
+    if payload is None:
+        try:
+            from product.scan_store import load_scan
+            payload = load_scan()
+        except Exception:
+            payload = None
+    if payload and payload.get("records"):
+        return technical_rows_from_market_scan(
+            payload,
+            min_score=min_score,
+            top=top,
+            include_watch=include_watch,
+            enrich=True,
+            symbols=symbols,
+        )
+    from scan.long_term import scan_long_term
+    try:
+        return scan_long_term(
+            symbols=symbols, min_score=min_score, top=top, include_watch=include_watch,
+        )
+    except TypeError:
+        return scan_long_term(symbols=symbols, min_score=min_score, top=top)
+
+
+def overlay_long_term_from_market_scan(
+    scan_payload: Mapping[str, Any] | None,
+    *,
+    refresh_fundamentals: bool = False,
+    save: bool = True,
+    top: int = 40,
+    fundamental_provider: Callable[[str, bool], Mapping[str, Any] | None] | None = None,
+) -> LongTermScanReport:
+    """Derive the long-term shortlist from one saved whole-market scan.
+
+    Cache-only fundamentals unless ``refresh_fundamentals`` is True. Overlay
+    failure must never invalidate the market scan.
+    """
+    def technical_scanner(symbols=None, min_score=45, top=60, include_watch=True, **_kw):
+        return technical_rows_from_market_scan(
+            scan_payload,
+            min_score=min_score,
+            top=top,
+            include_watch=include_watch,
+            enrich=True,
+            symbols=symbols,
+        )
+
+    return run_long_term_scan(
+        technical_scanner=technical_scanner,
+        refresh_fundamentals=refresh_fundamentals,
+        fundamental_provider=fundamental_provider,
+        save=save,
+        top=top,
+        scope="saved_market_scan",
+    )
+
+
+def _timing_for_technical_row(row: Mapping[str, Any]) -> tuple[float, str]:
+    """Timing from measured extension when present; else qualitative chase_risk.
+
+    Missing extension is not treated as 0%. Chase-risk names wait; others stay
+    technically favourable without inventing a distance-to-200DMA number.
+    """
+    if "extension_pct" in row and row.get("extension_pct") not in (None, ""):
+        try:
+            extension = float(row.get("extension_pct") or 0)
+        except (TypeError, ValueError):
+            extension = 0.0
+            if row.get("chase_risk"):
+                return extension, "WAIT_FOR_BASE"
+            return extension, "TECHNICALLY_FAVORABLE"
+        timing = (
+            "WAIT_FOR_BASE" if extension >= 35 else
+            "ACCUMULATE_ON_PULLBACK" if extension >= 20 else
+            "TECHNICALLY_FAVORABLE"
+        )
+        return extension, timing
+    if row.get("chase_risk"):
+        return 0.0, "WAIT_FOR_BASE"
+    return 0.0, "TECHNICALLY_FAVORABLE"
+
+
 def run_long_term_scan(
     *,
     symbols=None,
@@ -189,9 +372,25 @@ def run_long_term_scan(
     save: bool = True,
     top: int = 40,
 ) -> LongTermScanReport:
-    default_technical = technical_scanner is None
-    technical_scanner = technical_scanner or __import__(
-        "scan.long_term", fromlist=["scan_long_term"]).scan_long_term
+    saved_scan: Mapping[str, Any] | None = None
+    if technical_scanner is None:
+        try:
+            from product.scan_store import load_scan
+            saved_scan = load_scan()
+        except Exception:
+            saved_scan = None
+        if saved_scan and saved_scan.get("records"):
+            technical_scanner = lambda **kwargs: _technical_from_saved_scan_or_walk(
+                saved_payload=saved_scan, **kwargs
+            )
+            default_technical = False
+        else:
+            default_technical = True
+            technical_scanner = lambda **kwargs: _technical_from_saved_scan_or_walk(
+                saved_payload=None, **kwargs
+            )
+    else:
+        default_technical = False
     history: dict = {}
     if default_technical:
         try:
@@ -218,7 +417,8 @@ def run_long_term_scan(
         except Exception:
             sector_lookup = lambda _symbol: ""
 
-    if symbols is None and scope == "nifty500":
+    from_saved_scan = bool(saved_scan and saved_scan.get("records")) or scope == "saved_market_scan"
+    if symbols is None and scope == "nifty500" and not from_saved_scan:
         try:
             from data.nse_universe import get_nifty500_universe
             symbols = get_nifty500_universe()
@@ -234,7 +434,10 @@ def run_long_term_scan(
         return LongTermScanReport(FAILED, error_code="LONG_TERM_TECHNICAL_ERROR",
                                   error_message=str(exc))
     if not technical:
-        payload = _payload([], scope=scope, refresh=refresh_fundamentals, history=history)
+        payload = _payload(
+            [], scope=scope, refresh=refresh_fundamentals, history=history,
+            technical_from_saved_scan=from_saved_scan,
+        )
         if save:
             from product.long_term_store import save_long_term_scan
             save_long_term_scan(payload)
@@ -276,14 +479,12 @@ def run_long_term_scan(
         else:
             classification = "AVOID_REVIEW"
 
-        extension = float(row.get("extension_pct", 0) or 0)
-        timing = ("WAIT_FOR_BASE" if extension >= 35 else
-                  "ACCUMULATE_ON_PULLBACK" if extension >= 20 else
-                  "TECHNICALLY_FAVORABLE")
+        extension, timing = _timing_for_technical_row(row)
         factors = list(dict.fromkeys(list(row.get("factors", []) or [])[:4] + fq["factors"]))
         risks = list(dict.fromkeys(fq["risks"] +
                     (["Current fundamentals unavailable or incomplete"] if fq["coverage"] < 0.50 else []) +
-                    (["Price extended above 200-DMA"] if extension >= 35 else [])))
+                    (["Price extended above 200-DMA"] if extension >= 35 else []) +
+                    (["Price is extended; wait for a base"] if timing == "WAIT_FOR_BASE" and extension < 35 else [])))
         records.append({
             **row, "symbol": symbol, "sector": sector,
             "technical_score": round(technical_score, 1),
@@ -299,7 +500,15 @@ def run_long_term_scan(
                 "NEEDS_FUNDAMENTALS": 4, "AVOID_REVIEW": 5}
     records.sort(key=lambda r: (priority.get(r["classification"], 9),
                                 -float(r["combined_score"]), r["symbol"]))
-    payload = _payload(records[:top], scope=scope, refresh=refresh_fundamentals, history=history)
+    if not from_saved_scan:
+        from_saved_scan = any(bool(r.get("from_saved_market_scan")) for r in records)
+    payload = _payload(
+        records[:top],
+        scope=scope,
+        refresh=refresh_fundamentals,
+        history=history,
+        technical_from_saved_scan=from_saved_scan,
+    )
     if save:
         from product.long_term_store import save_long_term_scan
         save_long_term_scan(payload)
@@ -307,7 +516,8 @@ def run_long_term_scan(
 
 
 def _payload(records: list[dict], *, scope: str, refresh: bool,
-             history: Mapping[str, Any] | None = None) -> dict:
+             history: Mapping[str, Any] | None = None,
+             technical_from_saved_scan: bool = False) -> dict:
     summary = {name.lower(): sum(1 for r in records if r.get("classification") == name)
                for name in ("QUALITY_COMPOUNDER", "GARP_CANDIDATE", "QUALITY_BUT_EXPENSIVE",
                             "LONG_TERM_WATCH", "NEEDS_FUNDAMENTALS", "AVOID_REVIEW")}
@@ -321,6 +531,8 @@ def _payload(records: list[dict], *, scope: str, refresh: bool,
         "history": dict(history or {}),
         "fundamentals_source": "Screener.in current snapshot/cache",
         "fundamentals_refreshed": bool(refresh), "fundamentals_point_in_time": False,
+        "technical_from_saved_scan": bool(technical_from_saved_scan),
         "disclaimer": ("Current long-term shortlist only. Fundamentals are not publication-dated "
-                       "and must never be substituted into historical backtests."),
+                       "and must never be substituted into historical backtests. "
+                       "One whole-market scan fills this shortlist; Refresh funds only reloads Screener cache."),
     }

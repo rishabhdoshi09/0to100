@@ -365,6 +365,7 @@ class MarketOperationsWorker:
         result["history"] = history
         finish_progress(records=result["records"], setups=int(summary.get("with_any_setup") or 0))
         result["telegram"] = self._notify_scan_telegram(payload)
+        result["long_term_overlay"] = dict(payload.get("long_term_overlay") or {})
         elapsed = time.monotonic() - started
         _emit("DONE", f"MARKET_SCAN ranked · {result['records']} rows · {elapsed:.1f}s")
         return result

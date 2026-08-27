@@ -156,7 +156,7 @@ def build_product_readiness(
             as_of=long_term.get("scanned_at"),
             max_age_seconds=4 * 24 * 60 * 60,
             weight=20,
-            action="RUN_LONG_TERM_SCAN_NOW",
+            action="RUN_SCAN_NOW",
             details=f"{len(long_term.get('records', []) or [])} researched candidates · {float((long_term.get('summary', {}) or {}).get('coverage_pct', 0) or 0):.0f}% reported coverage",
             now=now,
         ),

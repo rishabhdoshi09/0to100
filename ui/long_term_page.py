@@ -6,7 +6,7 @@ import streamlit as st
 
 from product.long_term_store import load_long_term_scan
 from research.autonomy.controls import (
-    request_control, RUN_LONG_TERM_SCAN_NOW, REFRESH_LONG_TERM_NOW, TRACK_LONG_TERM_IDEA,
+    request_control, RUN_SCAN_NOW, REFRESH_LONG_TERM_NOW, TRACK_LONG_TERM_IDEA,
 )
 
 
@@ -39,17 +39,17 @@ def _current_price(symbol: str) -> float:
 
 def render_long_term() -> None:
     st.title("Long-Term Picks")
-    st.caption("A separate current-investing lens: official price history plus current fundamental "
+    st.caption("Long-term quality overlay from the same whole-market scan: official price history plus current fundamental "
                "quality, valuation and governance coverage. It never feeds current fundamentals into historical backtests.")
 
     a, b = st.columns(2)
-    if a.button("Run long-term scan", type="primary", width="stretch"):
-        request_control(RUN_LONG_TERM_SCAN_NOW, reason="owner requested current long-term scan")
-        st.success("Long-term scan queued. Refresh this page after the supervisor completes it.")
-    if b.button("Refresh shortlist fundamentals", width="stretch"):
+    if a.button("Scan market", type="primary", width="stretch"):
+        request_control(RUN_SCAN_NOW, reason="owner requested whole-market scan")
+        st.success("Market scan queued. One scan fills long-term too. Refresh this page after it completes.")
+    if b.button("Refresh funds", width="stretch"):
         request_control(REFRESH_LONG_TERM_NOW,
                         reason="owner requested current fundamental refresh for long-term shortlist")
-        st.success("Fundamental refresh and long-term rescan queued.")
+        st.success("Fundamental refresh queued from the saved market scan.")
 
     payload = load_long_term_scan()
     if not payload:

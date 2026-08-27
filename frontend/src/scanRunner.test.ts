@@ -48,10 +48,13 @@ describe('scanRunner semantics', () => {
     TERMINAL_STATUSES.forEach((status) => expect(isTerminalStatus(status)).toBe(true))
   })
 
-  it('attaches long-term refresh jobs to the long-term scan runner', () => {
+  it('attaches long-term refresh jobs to the funds runner', () => {
     expect(seedKindMatches('LONG_TERM_REFRESH', 'LONG_TERM_SCAN')).toBe(true)
     expect(seedKindMatches('LONG_TERM_SCAN', 'LONG_TERM_SCAN')).toBe(true)
     expect(seedKindMatches('MARKET_SCAN', 'LONG_TERM_SCAN')).toBe(false)
+    expect(seedKindMatches('LONG_TERM_SCAN', 'LONG_TERM_REFRESH')).toBe(true)
+    expect(seedKindMatches('LONG_TERM_REFRESH', 'LONG_TERM_REFRESH')).toBe(true)
+    expect(seedKindMatches('MARKET_SCAN', 'LONG_TERM_REFRESH')).toBe(false)
   })
 
   it('builds progress line only with a real denominator', () => {

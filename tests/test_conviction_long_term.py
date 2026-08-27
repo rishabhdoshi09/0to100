@@ -130,7 +130,7 @@ def test_retail_pages_queue_work_instead_of_scanning_or_starting_workers():
     conviction = Path("ui/conviction_page.py").read_text(encoding="utf-8")
     long_term = Path("ui/long_term_page.py").read_text(encoding="utf-8")
     assert "RUN_SCAN_NOW" in conviction
-    assert "RUN_LONG_TERM_SCAN_NOW" in long_term
+    assert "RUN_SCAN_NOW" in long_term
     assert "REFRESH_LONG_TERM_NOW" in long_term
     for source in (conviction, long_term):
         assert "scan_long_term(" not in source

@@ -2,11 +2,12 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { fetchOperation, sendControl } from './api'
 import type { ControlName, OperationRecord } from './types'
 
-export type ScanKind = 'MARKET_SCAN' | 'LONG_TERM_SCAN'
+export type ScanKind = 'MARKET_SCAN' | 'LONG_TERM_SCAN' | 'LONG_TERM_REFRESH'
 
 const KIND_CONTROL: Record<ScanKind, ControlName> = {
   MARKET_SCAN: 'RUN_SCAN_NOW',
   LONG_TERM_SCAN: 'RUN_LONG_TERM_SCAN_NOW',
+  LONG_TERM_REFRESH: 'REFRESH_LONG_TERM_NOW',
 }
 
 export const TERMINAL_STATUSES = new Set(['SUCCEEDED', 'FAILED', 'BLOCKED', 'CANCELLED'])
@@ -21,7 +22,9 @@ export function isActiveStatus(status: string): boolean {
 
 export function seedKindMatches(seedKind: string, runnerKind: ScanKind): boolean {
   if (seedKind === runnerKind) return true
-  return runnerKind === 'LONG_TERM_SCAN' && seedKind === 'LONG_TERM_REFRESH'
+  if (runnerKind === 'LONG_TERM_SCAN' && seedKind === 'LONG_TERM_REFRESH') return true
+  if (runnerKind === 'LONG_TERM_REFRESH' && (seedKind === 'LONG_TERM_SCAN' || seedKind === 'LONG_TERM_REFRESH')) return true
+  return false
 }
 
 const STAGE_LABELS: Record<string, string> = {
@@ -35,6 +38,7 @@ const STAGE_LABELS: Record<string, string> = {
   RANKING: 'Ranking qualified ideas…',
   SAVING: 'Saving the latest results…',
   TECHNICAL_SCREEN: 'Screening long-term candidates…',
+  LONG_TERM_OVERLAY: 'Applying long-term overlay from the same scan…',
   FETCHING_SOURCES: 'Fetching news sources…',
   RECOVERED: 'Recovering interrupted job…',
 }
