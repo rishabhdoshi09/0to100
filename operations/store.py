@@ -126,7 +126,8 @@ class OperationStore:
                     payload_json TEXT NOT NULL DEFAULT '{}',
                     result_json TEXT NOT NULL DEFAULT '{}',
                     error_code TEXT NOT NULL DEFAULT '',
-                    error_message TEXT NOT NULL DEFAULT ''
+                    error_message TEXT NOT NULL DEFAULT '',
+                    priority INTEGER NOT NULL DEFAULT 0
                 )
                 """
             )
@@ -137,6 +138,16 @@ class OperationStore:
             con.execute(
                 "CREATE INDEX IF NOT EXISTS idx_operations_kind_requested "
                 "ON operations(kind, requested_at DESC)"
+            )
+            try:
+                con.execute(
+                    "ALTER TABLE operations ADD COLUMN priority INTEGER NOT NULL DEFAULT 0"
+                )
+            except sqlite3.OperationalError:
+                pass
+            con.execute(
+                "CREATE INDEX IF NOT EXISTS idx_operations_lease "
+                "ON operations(status, lane, priority, requested_at)"
             )
 
     @staticmethod
@@ -163,16 +174,23 @@ class OperationStore:
         requested_by: str = "terminal",
         payload: dict[str, Any] | None = None,
         deduplicate: bool = True,
+        priority: int = 0,
     ) -> tuple[dict[str, Any], bool]:
         """Enqueue one operation and return ``(record, created)``.
 
         Repeated button clicks return the existing pending/running operation rather
         than creating queue spam. A new click after a terminal result creates a new run.
+        A higher ``priority`` promotes a still-pending job so a user click jumps
+        ahead of pipeline work.
         """
         kind = str(kind).strip().upper()
         lane = str(lane).strip().lower()
         if not kind or not lane:
             raise ValueError("kind and lane are required")
+        try:
+            priority_value = int(priority or 0)
+        except (TypeError, ValueError):
+            priority_value = 0
         now = time.time()
         operation_id = uuid.uuid4().hex
         with self._connect() as con:
@@ -180,18 +198,35 @@ class OperationStore:
             if deduplicate:
                 row = con.execute(
                     "SELECT * FROM operations WHERE kind=? AND status IN (?,?) "
-                    "ORDER BY requested_at DESC LIMIT 1",
+                    "ORDER BY priority DESC, requested_at DESC LIMIT 1",
                     (kind, PENDING, RUNNING),
                 ).fetchone()
                 if row is not None:
+                    if str(row["status"]) == PENDING and priority_value > int(row["priority"] or 0):
+                        con.execute(
+                            "UPDATE operations SET priority=?, requested_by=?, updated_at=?, "
+                            "message=? WHERE operation_id=? AND status=?",
+                            (
+                                priority_value,
+                                str(requested_by or "terminal"),
+                                now,
+                                "User click jumped the queue",
+                                str(row["operation_id"]),
+                                PENDING,
+                            ),
+                        )
+                        row = con.execute(
+                            "SELECT * FROM operations WHERE operation_id=?",
+                            (str(row["operation_id"]),),
+                        ).fetchone()
                     con.commit()
                     return self._decode(row) or {}, False
             con.execute(
                 """
                 INSERT INTO operations (
                     operation_id,kind,lane,status,requested_by,requested_at,updated_at,
-                    payload_json,message
-                ) VALUES (?,?,?,?,?,?,?,?,?)
+                    payload_json,message,priority
+                ) VALUES (?,?,?,?,?,?,?,?,?,?)
                 """,
                 (
                     operation_id,
@@ -203,6 +238,7 @@ class OperationStore:
                     now,
                     json.dumps(payload or {}, default=str),
                     "Queued and waiting for the dedicated market-operations worker",
+                    priority_value,
                 ),
             )
             row = con.execute(
@@ -217,7 +253,7 @@ class OperationStore:
             con.execute("BEGIN IMMEDIATE")
             row = con.execute(
                 "SELECT * FROM operations WHERE lane=? AND status=? "
-                "ORDER BY requested_at ASC LIMIT 1",
+                "ORDER BY priority DESC, requested_at ASC LIMIT 1",
                 (lane, PENDING),
             ).fetchone()
             if row is None:

@@ -7,6 +7,38 @@ from pathlib import Path
 from operations.store import OperationStore, PENDING, RUNNING, SUCCEEDED
 
 
+def test_user_scan_jumps_ahead_of_pipeline_work(tmp_path: Path):
+    store = OperationStore(tmp_path / "ops.db")
+    pipeline, created = store.enqueue("MARKET_SCAN", lane="market_scan", requested_by="pipeline", priority=0)
+    assert created is True
+    user, created = store.enqueue(
+        "MARKET_SCAN", lane="market_scan", requested_by="terminal", priority=100,
+    )
+    assert created is False
+    assert user["operation_id"] == pipeline["operation_id"]
+    assert int(user["priority"]) == 100
+    assert user["requested_by"] == "terminal"
+
+    later, _ = store.enqueue("MARKET_SCAN", lane="market_scan", requested_by="other", priority=0, deduplicate=False)
+    assert later["operation_id"] != pipeline["operation_id"]
+    leased = store.lease_next("market_scan", worker_pid=1)
+    assert leased is not None
+    assert leased["operation_id"] == pipeline["operation_id"]
+    assert int(leased["priority"]) == 100
+
+
+def test_higher_priority_pending_job_leases_first(tmp_path: Path):
+    store = OperationStore(tmp_path / "ops.db")
+    low, _ = store.enqueue("NEWS_REFRESH", lane="news", requested_by="pipeline", priority=0)
+    high, _ = store.enqueue(
+        "NEWS_REFRESH", lane="news", requested_by="terminal", priority=100, deduplicate=False,
+    )
+    leased = store.lease_next("news", worker_pid=7)
+    assert leased is not None
+    assert leased["operation_id"] == high["operation_id"]
+    assert low["operation_id"] != high["operation_id"]
+
+
 def test_operation_queue_deduplicates_active_clicks(tmp_path: Path):
     store = OperationStore(tmp_path / "ops.db")
     first, created = store.enqueue("MARKET_SCAN", lane="market_scan")

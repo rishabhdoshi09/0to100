@@ -468,7 +468,7 @@ export function RecommendationsView({
         <LiveScanBanner scan={longTermScan} depth={depth} label="Funds refresh" />
         <div className="reco-empty">
           <strong>{error || 'No recommendation data yet'}</strong>
-          <p>Run one market scan. It fills Home, Scanner, Recommendations and long-term. Sidebar navigation only opens this page — it does not start a scan.</p>
+          <p>Run one market scan. It jumps the queue and fills Home, Scanner (Breakouts, SEPA, Momentum, long-term) and Recommendations together. Opening this page does not start a scan.</p>
           <div className="reco-hero-actions">
             <button type="button" className="reco-primary" disabled={marketScan.isBusy} onClick={() => void marketScan.start()}>
               {marketScan.isBusy ? 'Scanning market…' : 'Scan market'}

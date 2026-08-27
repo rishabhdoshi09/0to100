@@ -51,7 +51,8 @@ describe('scanRunner semantics', () => {
   it('attaches long-term refresh jobs to the funds runner', () => {
     expect(seedKindMatches('LONG_TERM_REFRESH', 'LONG_TERM_SCAN')).toBe(true)
     expect(seedKindMatches('LONG_TERM_SCAN', 'LONG_TERM_SCAN')).toBe(true)
-    expect(seedKindMatches('MARKET_SCAN', 'LONG_TERM_SCAN')).toBe(false)
+    expect(seedKindMatches('MARKET_SCAN', 'LONG_TERM_SCAN')).toBe(true)
+    expect(seedKindMatches('LONG_TERM_SCAN', 'MARKET_SCAN')).toBe(true)
     expect(seedKindMatches('LONG_TERM_SCAN', 'LONG_TERM_REFRESH')).toBe(true)
     expect(seedKindMatches('LONG_TERM_REFRESH', 'LONG_TERM_REFRESH')).toBe(true)
     expect(seedKindMatches('MARKET_SCAN', 'LONG_TERM_REFRESH')).toBe(false)

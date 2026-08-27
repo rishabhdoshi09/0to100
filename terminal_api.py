@@ -819,7 +819,7 @@ def chart(symbol: str, limit: int = 220) -> dict:
 
 _OPERATION_CONTROLS = {
     "RUN_SCAN_NOW": "MARKET_SCAN",
-    "RUN_LONG_TERM_SCAN_NOW": "LONG_TERM_SCAN",
+    "RUN_LONG_TERM_SCAN_NOW": "MARKET_SCAN",
     "REFRESH_LONG_TERM_NOW": "LONG_TERM_REFRESH",
     "REFRESH_NEWS_NOW": "NEWS_REFRESH",
     "REFRESH_FNO_NOW": "FNO_REFRESH",
@@ -831,6 +831,7 @@ _AUTONOMY_CONTROLS = {
     "RESUME_NEW_PAPER_ENTRIES",
 }
 _ALLOWED_CONTROLS = set(_OPERATION_CONTROLS) | _AUTONOMY_CONTROLS
+_USER_OPERATION_PRIORITY = 100
 
 
 @app.post("/api/controls/{control_name}")
@@ -852,6 +853,7 @@ def control(control_name: str) -> dict:
             kind,
             lane=LANES[kind],
             requested_by="terminal",
+            priority=_USER_OPERATION_PRIORITY,
         )
         return {
             "accepted": True,
@@ -859,6 +861,7 @@ def control(control_name: str) -> dict:
             "operation_id": operation.get("operation_id"),
             "operation_status": operation.get("status"),
             "created": created,
+            "priority": operation.get("priority"),
         }
     from research.autonomy.controls import request_control
     queued = request_control(name, reason="owner requested control from dedicated terminal frontend")

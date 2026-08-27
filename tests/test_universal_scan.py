@@ -245,6 +245,22 @@ def test_desk_overlay_failure_does_not_fail_the_market_scan(monkeypatch, tmp_pat
     assert report.payload["desk_overlays"]["error"] == "RuntimeError"
 
 
+def test_priority_ordered_symbols_put_category_names_first():
+    from scan.market_scan_service import priority_ordered_symbols
+
+    ordered = priority_ordered_symbols(
+        ["ZZZ", "AAA", "SEP", "FNO", "REC", "WAT"],
+        scan_payload={"records": [{"symbol": "AAA", "signals": ["BREAKOUT_52W"]}]},
+        reco_payload={"records": [{"symbol": "REC"}]},
+        long_term_payload={"records": [{"symbol": "SEP"}]},
+        fno_symbols={"FNO"},
+        watchlist=["WAT"],
+    )
+    assert ordered[:5] == ["AAA", "WAT", "REC", "SEP", "FNO"]
+    assert ordered[-1] == "ZZZ"
+    assert set(ordered) == {"ZZZ", "AAA", "SEP", "FNO", "REC", "WAT"}
+
+
 def test_desk_ui_uses_one_scan_now_for_every_setup():
     root = Path(__file__).resolve().parents[1]
     scanner = (root / "frontend" / "src" / "marketRadarViews.tsx").read_text(encoding="utf-8")

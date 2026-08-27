@@ -652,7 +652,7 @@ export function RadarHomeView(props: ExperienceViewProps & {
       ) : null}
       <p className="radar-scan-share">
         {radar?.scan_shared_note
-          || 'One scan fills Home, Scanner, Recommendations and long-term. Names can appear in more than one lane. Scan Now is the only intentional rescan.'}
+          || 'One scan fills Home, Scanner, Recommendations and long-term. Scan Now jumps the queue and walks every category once.'}
       </p>
 
       <RankingLegend legend={radar?.ranking_legend} />
@@ -859,7 +859,7 @@ export function MarketScannerView(props: ExperienceViewProps & { onCompare: (sym
         <LiveScanBanner scan={longTermScan} depth={depth} label="Funds refresh" />
       ) : null}
       <p className="radar-scan-share">
-        One scan fills Home, Scanner (all tabs), Recommendations and long-term. Overlap across Breakouts and Momentum is expected. Scan Now rescans the whole market once. Refresh funds only reloads Screener snapshots.
+        One scan fills Home, Scanner (all tabs), Recommendations and long-term. Scan Now jumps the queue and walks every category once. Refresh funds only reloads Screener snapshots.
       </p>
 
       <div className="radar-tab-row">

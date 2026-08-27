@@ -101,6 +101,7 @@ export type OperationRecord = {
   result?: Record<string, unknown>
   error_code?: string
   error_message?: string
+  priority?: number
 }
 
 export type NewsArticle = {
