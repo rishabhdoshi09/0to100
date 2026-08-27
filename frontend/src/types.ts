@@ -280,8 +280,55 @@ export type DashboardPayload = {
     cache_mtime?: number | null
     error?: string
   }
+  institutional?: InstitutionalFlowsPayload
   data: DataReadiness
   conviction: ConvictionRecord[]
+}
+
+export type InstitutionalFlowsPayload = {
+  available: boolean
+  cash?: {
+    available?: boolean
+    sessions?: number
+    history?: Array<{
+      date: string
+      fii_net: number
+      dii_net: number
+      fii_buy?: number
+      fii_sell?: number
+      dii_buy?: number
+      dii_sell?: number
+    }>
+    today?: Record<string, number | string>
+    totals?: { fii_net_cr?: number; dii_net_cr?: number; combined_net_cr?: number }
+    fii_streak?: number
+    dii_streak?: number
+    bias?: string
+    note?: string
+  }
+  derivatives?: Record<string, number | null>
+  bulk_deals?: Array<Record<string, unknown>>
+  bulk_buy_symbols?: string[]
+  nifty_options?: OptionsChainPayload
+  insight?: string
+  generated_at?: string
+  error?: string
+}
+
+export type OptionsChainPayload = {
+  available: boolean
+  symbol?: string
+  expiry?: string
+  pcr?: number
+  max_pain?: number
+  bias?: string
+  note?: string
+  atm_iv?: number
+  spot?: number | null
+  top_call_oi?: Array<{ strike: number; ce_oi: number; ce_coi?: number }>
+  top_put_oi?: Array<{ strike: number; pe_oi: number; pe_coi?: number }>
+  chain?: Array<Record<string, number>>
+  message?: string
 }
 
 export type ChartBar = {

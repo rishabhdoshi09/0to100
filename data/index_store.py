@@ -58,6 +58,7 @@ TICKER_MAP = {
 _lock = threading.Lock()
 _store: dict[str, pd.DataFrame] = {}      # official name -> OHLC df
 _last_day: Optional[date] = None
+_pickup_logged = False
 
 
 def _day_path(d: date) -> Path:
@@ -123,7 +124,7 @@ def build_index_store(days: int = 400) -> int:
 
 
 def _build_index_store_locked(days: int = 400) -> int:
-    global _store, _last_day
+    global _store, _last_day, _pickup_logged
 
     candidates = []
     d = date.today()
@@ -150,8 +151,13 @@ def _build_index_store_locked(days: int = 400) -> int:
                 with _lock:
                     _store = data["store"]
                     _last_day = data["last_day"]
-                log.info("index_store_loaded", indices=len(_store),
-                         latest=str(_last_day))
+                if not _pickup_logged:
+                    log.info("index_store_loaded", indices=len(_store),
+                             latest=str(_last_day))
+                    _pickup_logged = True
+                else:
+                    log.debug("index_store_pickup", indices=len(_store),
+                              latest=str(_last_day))
         except Exception:
             pass
 

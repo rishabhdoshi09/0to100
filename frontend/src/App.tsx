@@ -12,7 +12,7 @@ import {
   ExperienceHelpDrawer,
 } from './experience'
 import { MarketSidebar } from './MarketSidebar'
-import { NewsView, OperationsRibbon } from './marketViews'
+import { NewsView, OperationsRibbon, FnoView } from './marketViews'
 import { ProductStockIntelligenceView } from './productViews'
 import { ResearchDataView } from './researchData'
 import {
@@ -23,7 +23,13 @@ import {
 import type { DisplayDepth } from './productLanguage'
 import { addWatchlistItem } from './productApi'
 import { useScanRunner } from './scanRunner'
+import { ReportPdfViewer } from './ReportPdfViewer'
 import type { ChartBar, ControlName, DashboardPayload, OperationRecord } from './types'
+
+/** In dev, Vite proxies /reports and /evidence to the report API on :8766. */
+const reportApiBase = import.meta.env.DEV
+  ? ''
+  : `${window.location.protocol}//${window.location.hostname}:8766`
 
 function activeSeed(dashboard: DashboardPayload, kind: string): OperationRecord | null {
   const active = dashboard.operations.active.find((item) => item.kind === kind)
@@ -110,6 +116,11 @@ const emptyDashboard: DashboardPayload = {
     underlyings: [],
     exclusions: [],
   },
+  institutional: {
+    available: false,
+    cash: { available: false, history: [], totals: {} },
+    bulk_buy_symbols: [],
+  },
   data: {
     ready: false,
     snapshot: { ready: false, snapshot_id: '', latest_date: '', source: '' },
@@ -140,6 +151,7 @@ const pageTitles: Record<string, string> = {
   'Market Overview': 'Market Overview',
   'News & Events': 'News & Events',
   'Research Data': 'Research Data',
+  'F&O Desk': 'F&O Desk',
   'Paper Portfolio': 'Paper Portfolio',
   'System Health': 'System Health',
   // legacy route keys
@@ -160,7 +172,8 @@ const pageSubtitles: Record<string, string> = {
   Watchlist: 'Names you are tracking with latest scan context.',
   'Market Overview': 'Regime, breadth, volatility and sector leadership.',
   'News & Events': 'Dated market context with source health.',
-  'Research Data': 'Verified snapshots and evidence uploads.',
+  'Research Data': 'Verified snapshots, data platform jobs, and evidence uploads.',
+  'F&O Desk': 'Stock derivative coverage — mapped underlyings, expiries and lot sizes.',
   'Paper Portfolio': 'Recorded paper positions and outcomes — secondary evidence.',
   'System Health': 'Operations, autonomy and infrastructure detail.',
 }
@@ -176,6 +189,7 @@ function App() {
   const [controlState, setControlState] = useState('')
   const [query, setQuery] = useState('')
   const [helpOpen, setHelpOpen] = useState(false)
+  const [pdfViewer, setPdfViewer] = useState<{ title: string; url: string } | null>(null)
   const [depth, setDepth] = useState<DisplayDepth>(() => {
     const saved = window.localStorage.getItem('quantterm-display-depth')
     return saved === 'professional' ? 'professional' : 'simple'
@@ -277,16 +291,22 @@ function App() {
     }
   }
 
-  const reportBase = `${window.location.protocol}//${window.location.hostname}:8766`
+  const reportBase = reportApiBase
+  const openReportViewer = (title: string, path: string) => {
+    setPdfViewer({ title, url: `${reportBase}${path}` })
+  }
   const openEquityReport = () => {
     if (!selected) {
       setControlState('Select a stock before generating an equity evidence PDF')
       return
     }
-    window.open(`${reportBase}/reports/equity/${encodeURIComponent(selected)}`, '_blank', 'noopener,noreferrer')
+    openReportViewer(`${selected} · equity evidence`, `/reports/equity/${encodeURIComponent(selected)}`)
   }
   const openBasketReport = () => {
-    window.open(`${reportBase}/reports/basket/long-term?limit=3`, '_blank', 'noopener,noreferrer')
+    openReportViewer('Top-3 long-term basket', '/reports/basket/long-term?limit=3')
+  }
+  const openInstitutionalReport = () => {
+    openReportViewer('FII/DII market brief', '/reports/market/institutional?days=30&symbol_limit=4')
   }
 
   const addToCompare = (symbol: string) => {
@@ -354,6 +374,7 @@ function App() {
     if (active === 'Market Overview' || active === 'Market Internals') return <MarketInternalsView {...viewProps} />
     if (active === 'Long-Term Picks' || active === 'Long-Term') return <EnhancedLongTermView {...viewProps} />
     if (active === 'News & Events') return <NewsView {...viewProps} />
+    if (active === 'F&O Desk') return <FnoView {...viewProps} />
     if (active === 'System Health' || active === 'Automation') return <AutomationView {...viewProps} />
     return <RadarHomeView {...viewProps} onCompare={addToCompare} onWatchlist={addToWatchlist} />
   }
@@ -388,8 +409,9 @@ function App() {
         <section className="page-title">
           <div><h1>{pageTitles[active] || active}</h1><p>{pageSubtitles[active]}</p></div>
           <div className="page-actions">
-            <button type="button" disabled={!selected} onClick={openEquityReport}>Equity Evidence PDF</button>
-            <button type="button" onClick={openBasketReport}>Top-3 Basket PDF</button>
+            <button type="button" disabled={!selected} onClick={openEquityReport}>View equity evidence PDF</button>
+            <button type="button" onClick={openBasketReport}>View top-3 basket PDF</button>
+            <button type="button" onClick={openInstitutionalReport}>View FII/DII market brief</button>
             <span>{controlState || (loading ? 'Loading real state…' : `Updated ${dashboard.generated_at ? new Date(dashboard.generated_at).toLocaleTimeString('en-IN') : '—'}`)}</span>
           </div>
         </section>
@@ -409,6 +431,12 @@ function App() {
         {renderView()}
       </main>
       <ExperienceHelpDrawer page={active} open={helpOpen} onClose={() => setHelpOpen(false)} />
+      <ReportPdfViewer
+        open={pdfViewer != null}
+        title={pdfViewer?.title ?? 'Research report'}
+        viewUrl={pdfViewer?.url ?? ''}
+        onClose={() => setPdfViewer(null)}
+      />
     </div>
   )
 }

@@ -1,0 +1,76 @@
+# Shared helpers for QuantTerm local stack scripts (macOS + Linux).
+# Sourced by run_quantterm.sh and run_quantterm_complete.sh — not executed directly.
+
+stack_health_ok() {
+  local url="$1"
+  curl -fsS --max-time 2 "$url" >/dev/null 2>&1
+}
+
+stack_pids_on_port() {
+  local port="$1"
+  lsof -ti ":${port}" 2>/dev/null || true
+}
+
+stack_free_port() {
+  local port="$1"
+  local label="${2:-service}"
+  local pids
+  pids="$(stack_pids_on_port "$port")"
+  if [[ -z "$pids" ]]; then
+    return 0
+  fi
+  echo "[STACK] Port ${port} still in use by ${label} (pid(s): ${pids}) — stopping stale process(es)…" >&2
+  # shellcheck disable=SC2086
+  kill ${pids} 2>/dev/null || true
+  sleep 1
+  # shellcheck disable=SC2086
+  kill -9 ${pids} 2>/dev/null || true
+  sleep 0.5
+}
+
+# Start uvicorn or reuse an already-healthy listener on the same port.
+# On stdout: child PID when started; empty when reusing an existing healthy API.
+# Return code: 0 = started, 2 = reused existing healthy API.
+stack_start_or_reuse_uvicorn() {
+  local port="$1"
+  local app="$2"
+  local health_url="$3"
+  local label="$4"
+
+  if stack_health_ok "$health_url"; then
+    echo "[STACK] ${label} already healthy at ${health_url} — reusing existing process." >&2
+    return 2
+  fi
+
+  stack_free_port "$port" "$label"
+
+  if stack_health_ok "$health_url"; then
+    echo "[STACK] ${label} became healthy after freeing port ${port} — reusing." >&2
+    return 2
+  fi
+
+  echo "[STACK] Starting ${label} at http://127.0.0.1:${port} (${app})…" >&2
+  python -u -m uvicorn "${app}" --host 127.0.0.1 --port "${port}" &
+  echo "$!"
+  return 0
+}
+
+stack_wait_for_health() {
+  local health_url="$1"
+  local pid="${2:-}"
+  local label="${3:-API}"
+  local attempts="${4:-240}"
+
+  for _ in $(seq 1 "$attempts"); do
+    if [[ -n "$pid" ]] && ! kill -0 "$pid" >/dev/null 2>&1; then
+      echo "[STACK] ${label} exited during startup. Review errors above." >&2
+      return 1
+    fi
+    if stack_health_ok "$health_url"; then
+      return 0
+    fi
+    sleep 0.5
+  done
+  echo "[STACK] ${label} did not become ready at ${health_url} within $((attempts / 2))s." >&2
+  return 1
+}

@@ -25,6 +25,7 @@ import type {
 import { DisplayDepthToggle } from './displayDepth'
 import type { DisplayDepth } from './productLanguage'
 import { GLOSSARY, PAGE_GUIDE } from './productLanguage'
+import { isLongTermPick, longTermPicks, MIN_LT_FUNDAMENTAL_COVERAGE } from './longTermPicks'
 import { fetchTradePlan, type TradePlan } from './productApi'
 import type { ScanRunnerHandle } from './scanRunner'
 
@@ -383,7 +384,7 @@ export function EnhancedCommandCenterView(props: ExperienceViewProps) {
   const preBreakoutRows = fallbackRows('Pre-Breakout', dashboard)
   const convictionRows = [...dashboard.conviction]
   const avoidRows = fallbackRows('Avoid', dashboard)
-  const longTermQuality = dashboard.long_term.records.filter(
+  const longTermQuality = longTermPicks(dashboard.long_term.records).filter(
     (row) => row.classification === 'QUALITY_COMPOUNDER' || row.classification === 'GARP_CANDIDATE',
   )
 
@@ -392,7 +393,7 @@ export function EnhancedCommandCenterView(props: ExperienceViewProps) {
     : momentumRows.slice(0, 8) as Array<ScanRecord | ConvictionRecord>
   const longTerm = workspace?.top_long_term?.length
     ? workspace.top_long_term
-    : dashboard.long_term.records.slice(0, 8)
+    : longTermPicks(dashboard.long_term.records).slice(0, 8)
   const row = selectedRecord(dashboard, selected)
   const insights = workspace?.insights?.length ? workspace.insights : [dashboard.market.summary, dashboard.market.trade_stance]
   const blocker = dashboard.data.blockers[0]
@@ -583,7 +584,7 @@ export function EnhancedLongTermView(props: ExperienceViewProps) {
   const { dashboard, selected, setSelected, bars, depth, longTermScan } = props
   const [classification, setClassification] = useState('All')
   const [sector, setSector] = useState('All')
-  const [minCoverage, setMinCoverage] = useState(depth === 'simple' ? 50 : 0)
+  const [minCoverage, setMinCoverage] = useState(Math.round(MIN_LT_FUNDAMENTAL_COVERAGE * 100))
   const rows = dashboard.long_term.records
   const classes = [...new Set(rows.map((row) => row.classification).filter(Boolean) as string[])].sort()
   const sectors = [...new Set(rows.map((row) => row.sector).filter(Boolean) as string[])].sort()
@@ -594,7 +595,7 @@ export function EnhancedLongTermView(props: ExperienceViewProps) {
     return coverage >= minCoverage
   }).sort((a, b) => Number(b.combined_score || 0) - Number(a.combined_score || 0))
   const current = filtered.find((row) => row.symbol === selected) || rows.find((row) => row.symbol === selected)
-  const qualityCount = rows.filter((row) => row.classification === 'QUALITY_COMPOUNDER').length
+  const qualityCount = rows.filter((row) => row.classification === 'QUALITY_COMPOUNDER' && isLongTermPick(row)).length
   const garpCount = rows.filter((row) => row.classification === 'GARP_CANDIDATE').length
   const needsData = rows.filter((row) => row.classification === 'NEEDS_FUNDAMENTALS').length
   const medianFundamental = median(rows.map((row) => Number(row.fundamental_score)).filter(Number.isFinite))

@@ -154,7 +154,40 @@ def test_auth_required_when_session_invalid(tmp_path):
     assert ok.status == JS.SUCCEEDED and ok.state_hint == ST.DATA_REFRESHING   # re-probed, not cached
 
 
+def test_auth_optional_on_off_session_weekend(tmp_path):
+    sunday = datetime(2026, 8, 2, 13, 7)
+    r = JOBS.run_auth_health(JOBS._Ctx(FakeDeps(now=sunday, authed=False)))
+    assert r.status == JS.SUCCEEDED
+    assert H.AUTH_MISSING not in r.failures
+    assert r.metadata.get("kite_deferred") is True
+
+
+def test_data_refresh_bhavcopy_when_kite_deferred(tmp_path):
+    sunday = datetime(2026, 8, 2, 13, 7)
+
+    class Deps(FakeDeps):
+        def update_bhavcopy(self):
+            return {"ready": True, "symbols": 500, "sessions": 120}
+
+    r = JOBS.run_data_refresh(JOBS._Ctx(Deps(now=sunday, authed=False)))
+    assert r.status == JS.SUCCEEDED
+    assert "bhavcopy" in r.summary.lower()
+
+
+def test_kite_login_optional_weekend():
+    from datetime import datetime
+
+    sunday = datetime(2026, 8, 2, 13, 0)
+    assert SCH.kite_login_optional(sunday, set()) is True
+    session = datetime(2026, 7, 31, 10, 0)
+    assert SCH.kite_login_optional(session, set()) is False
+
+
 def test_data_refresh_failure_preserves_and_blocks(tmp_path):
+    r = JOBS.run_data_refresh(JOBS._Ctx(FakeDeps(data_ok=False)))
+    assert r.status == JS.BLOCKED and r.output_snapshot_id is None       # previous active preserved
+    assert H.SNAPSHOT_STALE in r.failures and r.state_hint == ST.DATA_BLOCKED
+    assert r.new_entries_allowed is False
     r = JOBS.run_data_refresh(JOBS._Ctx(FakeDeps(data_ok=False)))
     assert r.status == JS.BLOCKED and r.output_snapshot_id is None       # previous active preserved
     assert H.SNAPSHOT_STALE in r.failures and r.state_hint == ST.DATA_BLOCKED

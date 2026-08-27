@@ -301,16 +301,16 @@ def cmd_backtest(args) -> None:
 
 
 def cmd_fundamentals_backfill(args) -> None:
-    """Backfill Screener fundamentals into the local cache for many symbols."""
-    from fundamentals.backfill import backfill_status, run_fundamentals_backfill
+    """Optional maintenance batch — Stock Intelligence fetches each symbol on demand by default."""
+    from fundamentals.lazy import cache_status
+    from fundamentals.backfill import run_fundamentals_backfill
 
     if args.status_only:
-        print(json.dumps(backfill_status(), indent=2, default=str))
+        print(json.dumps(cache_status(), indent=2, default=str))
         return
 
-    print("\n=== Fundamentals backfill ===")
-    print(f"Scope: {args.scope} · force={args.force} · limit={args.limit or 'all'}")
-    print("Source: screener.in (≈1 sec/symbol). ETFs / missing pages will be recorded as failed.\n")
+    print("\n=== Fundamentals maintenance batch (optional) ===")
+    print("Normal use: open Stock Intelligence — each symbol scrapes Screener.in once (~1s) when missing.\n")
 
     report = run_fundamentals_backfill(
         scope=args.scope,
@@ -324,6 +324,21 @@ def cmd_fundamentals_backfill(args) -> None:
         sample = list(report["failed"].items())[:10]
         print("Sample failures:", sample)
     print(f"State file: {report.get('state_path')}\n")
+
+
+def cmd_fii_dii_backfill(args) -> None:
+    """Force-refresh NSE FII/DII cash flows (optional; dashboard syncs lazily by default)."""
+    from data.fii_dii_store import backfill_status, refresh_if_needed
+
+    if args.status_only:
+        print(json.dumps(backfill_status(), indent=2, default=str))
+        return
+
+    print("\n=== FII/DII force refresh ===")
+    print("Normal use: open Market Overview — data syncs automatically when stale.\n")
+    report = refresh_if_needed(force=True)
+    print(json.dumps(report, indent=2, default=str))
+    print()
 
 
 def cmd_screener(args) -> None:
@@ -1027,6 +1042,13 @@ def build_parser() -> argparse.ArgumentParser:
     fb.add_argument("--status", dest="status_only", action="store_true",
                     help="Print backfill progress JSON and exit")
 
+    fii = sub.add_parser(
+        "fii-dii-backfill",
+        help="Backfill NSE FII/DII cash-market history into logs/product/fii_dii.sqlite",
+    )
+    fii.add_argument("--days", type=int, default=90, metavar="N", help="Summary window label (default 90)")
+    fii.add_argument("--status", dest="status_only", action="store_true", help="Print backfill status JSON")
+
     ens = sub.add_parser("ensemble", help="Print ensemble ML signal for a symbol")
     ens.add_argument("--symbol", required=True, metavar="SYMBOL", help="NSE symbol, e.g. RELIANCE")
 
@@ -1082,6 +1104,7 @@ def main() -> None:
         "fnolive":    cmd_fnolive,
         "screener":   cmd_screener,
         "fundamentals-backfill": cmd_fundamentals_backfill,
+        "fii-dii-backfill": cmd_fii_dii_backfill,
         "ensemble":   cmd_ensemble,
         "lgb":        cmd_lgb,
         "multi":      cmd_multi,

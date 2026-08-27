@@ -55,17 +55,48 @@ def jobs_payload() -> dict[str, Any]:
     }
 
 
+def _enqueue_operation_kind(kind: str) -> dict[str, Any]:
+    """Queue a market-operations lane job (same paths as terminal /api/controls)."""
+    try:
+        from operations.market_ops import LANES
+        from operations.store import OperationStore
+
+        import terminal_api as core
+
+        core._ensure_ops_worker()
+        operation, created = OperationStore(core.OPS_DB).enqueue(
+            kind,
+            lane=LANES[kind],
+            requested_by="data_platform_job",
+        )
+        return {
+            "ok": True,
+            "operation_id": operation.get("operation_id"),
+            "created": created,
+            "kind": kind,
+        }
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)}
+
+
+_CONTROL_KIND_MAP = {
+    "PREPARE_MARKET_DATA": "DATA_PREPARE",
+    "MARKET_SCAN": "MARKET_SCAN",
+    "LONG_TERM_SCAN": "LONG_TERM_SCAN",
+}
+
+
 def run_job(job_id: str) -> dict[str, Any]:
     spec = next((j for j in JOBS if j.id == job_id), None)
     if spec is None:
         return {"ok": False, "error": "unknown job", "job_id": job_id}
     if job_id == "fundamentals":
-        try:
-            from fundamentals.backfill import run_fundamentals_backfill
-            report = run_fundamentals_backfill(scope="nse", force=False, limit=50)
-            return {"ok": True, "job_id": job_id, "report": report}
-        except Exception as exc:
-            return {"ok": False, "job_id": job_id, "error": str(exc)}
+        return {
+            "ok": True,
+            "job_id": job_id,
+            "message": "Fundamentals load lazily per symbol when you open Stock Intelligence.",
+            "stats": __import__("fundamentals.lazy", fromlist=["cache_status"]).cache_status(),
+        }
     if job_id == "corporate_actions":
         try:
             from data.corporate_actions import load_events
@@ -89,4 +120,17 @@ def run_job(job_id: str) -> dict[str, Any]:
             return {"ok": True, "job_id": job_id, "count": payload.get("count", 0)}
         except Exception as exc:
             return {"ok": False, "job_id": job_id, "error": str(exc)}
-    return {"ok": False, "job_id": job_id, "error": "use control endpoint", "control": spec.control}
+    if job_id == "ownership":
+        return {"ok": True, "job_id": job_id, "note": "Ownership loads with fundamentals provider when available"}
+    if spec.control:
+        kind = _CONTROL_KIND_MAP.get(spec.control)
+        if not kind:
+            return {
+                "ok": False,
+                "job_id": job_id,
+                "error": "control not mapped to operations lane",
+                "control": spec.control,
+            }
+        payload = _enqueue_operation_kind(kind)
+        return {"job_id": job_id, **payload}
+    return {"ok": False, "job_id": job_id, "error": "job has no runnable action"}

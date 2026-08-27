@@ -1,27 +1,13 @@
 """
-Block deals and bulk deals from NSE India.
-Institutional transactions — informed money moving.
+Block deals and bulk deals — canonical read path via institutional_flows cache.
+
+Streamlit/JARVIS must not fetch NSE independently; use get_flows() so React,
+Brain and legacy UIs see the same bulk/block snapshot.
 """
 
-import time
 from dataclasses import dataclass
-from datetime import datetime, timezone
 
-import requests
-
-_SESSION: requests.Session | None = None
-_BLOCK_CACHE: dict = {}   # {"date": str, "data": list[BlockDeal]}
-_BULK_CACHE: dict = {}    # {"date": str, "data": list[BlockDeal]}
-
-_HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/124.0.0.0 Safari/537.36"
-    ),
-    "Referer": "https://www.nseindia.com/",
-    "Accept": "application/json",
-}
+from data.institutional_flows import get_flows
 
 
 @dataclass
@@ -35,90 +21,27 @@ class BlockDeal:
     value_cr: float
 
 
-def _get_session() -> requests.Session:
-    global _SESSION
-    if _SESSION is None:
-        _SESSION = requests.Session()
-        try:
-            _SESSION.get(
-                "https://www.nseindia.com/",
-                headers=_HEADERS,
-                timeout=10,
-            )
-        except Exception:
-            pass
-    return _SESSION
-
-
-def _today_str() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%d")
-
-
-def _fetch_deals(endpoint: str) -> list[dict]:
-    session = _get_session()
-    try:
-        resp = session.get(endpoint, headers=_HEADERS, timeout=15)
-        resp.raise_for_status()
-        data = resp.json()
-        if isinstance(data, dict):
-            for key in ("data", "BLOCK_DEALS", "BULK_DEALS", "records"):
-                if key in data:
-                    return data[key]
-        if isinstance(data, list):
-            return data
-        return []
-    except Exception:
-        return []
-
-
-def _parse_deals(raw: list[dict]) -> list[BlockDeal]:
+def _deals_from_flows(flow_key: str) -> list[BlockDeal]:
+    flows = get_flows()
+    raw = list(flows.get(flow_key) or [])
     deals: list[BlockDeal] = []
     for rec in raw:
         try:
-            symbol = (
-                rec.get("symbol") or rec.get("Symbol") or rec.get("scrip_name") or ""
-            ).strip().upper()
-            client = (
-                rec.get("client_name")
-                or rec.get("clientName")
-                or rec.get("Client_Name")
-                or ""
-            ).strip()
-            dt = (
-                rec.get("date")
-                or rec.get("deal_date")
-                or rec.get("BD_DT_DATE")
-                or ""
-            ).strip()
-            buy_sell_raw = (
-                rec.get("deal_type")
-                or rec.get("buyOrSell")
-                or rec.get("BD_BUYSELL")
-                or ""
-            ).strip().upper()
-            deal_type = "BUY" if buy_sell_raw.startswith("B") else "SELL"
-            qty = int(
-                rec.get("quantity")
-                or rec.get("BD_QTY_TRD")
-                or rec.get("qty")
-                or 0
-            )
-            price = float(
-                rec.get("price")
-                or rec.get("BD_TP_WATP")
-                or rec.get("tradePrice")
-                or 0.0
-            )
-            value_cr = round(qty * price / 1e7, 2)
+            sym = str(rec.get("symbol") or "").strip().upper()
+            side = str(rec.get("side") or "BUY").strip().upper()
+            qty = int(float(rec.get("qty") or 0))
+            price = float(rec.get("price") or 0)
+            if not sym or qty <= 0:
+                continue
             deals.append(
                 BlockDeal(
-                    date=dt,
-                    symbol=symbol,
-                    client_name=client,
-                    deal_type=deal_type,
+                    date=str(flows.get("fii_dii", {}).get("date") or ""),
+                    symbol=sym,
+                    client_name=str(rec.get("client") or "")[:60],
+                    deal_type=side if side in ("BUY", "SELL") else "BUY",
                     quantity=qty,
                     price=price,
-                    value_cr=value_cr,
+                    value_cr=round(qty * price / 1e7, 2),
                 )
             )
         except Exception:
@@ -127,31 +50,13 @@ def _parse_deals(raw: list[dict]) -> list[BlockDeal]:
 
 
 def get_block_deals(days: int = 3) -> list[BlockDeal]:
-    global _BLOCK_CACHE
-    today = _today_str()
-    if _BLOCK_CACHE.get("date") == today:
-        return _BLOCK_CACHE["data"]
-    try:
-        raw = _fetch_deals("https://www.nseindia.com/api/block-deal")
-        deals = _parse_deals(raw)
-        _BLOCK_CACHE = {"date": today, "data": deals}
-        return deals
-    except Exception:
-        return []
+    """Block deals from canonical NSE largedeal snapshot (BLOCK_DEALS_DATA)."""
+    return _deals_from_flows("block_deals")
 
 
 def get_bulk_deals(days: int = 3) -> list[BlockDeal]:
-    global _BULK_CACHE
-    today = _today_str()
-    if _BULK_CACHE.get("date") == today:
-        return _BULK_CACHE["data"]
-    try:
-        raw = _fetch_deals("https://www.nseindia.com/api/bulk-deal")
-        deals = _parse_deals(raw)
-        _BULK_CACHE = {"date": today, "data": deals}
-        return deals
-    except Exception:
-        return []
+    """Bulk deals from canonical NSE largedeal snapshot (BULK_DEALS_DATA)."""
+    return _deals_from_flows("bulk_deals")
 
 
 def get_significant_deals(

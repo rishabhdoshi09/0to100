@@ -30,3 +30,14 @@ def test_data_ratios_endpoint():
     body = response.json()
     assert body.get("symbol") == "RELIANCE"
     assert isinstance(body.get("ratios"), list)
+
+
+def test_data_job_run_endpoint(monkeypatch):
+    client = TestClient(tpa.app)
+    monkeypatch.setattr(
+        "data_platform.jobs.run_job",
+        lambda job_id: {"ok": True, "job_id": job_id, "note": "test"},
+    )
+    response = client.post("/api/data/jobs/coverage_audit/run")
+    assert response.status_code == 200
+    assert response.json()["ok"] is True

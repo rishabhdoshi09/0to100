@@ -2593,6 +2593,133 @@ class TestInstitutionalFlows:
         assert parse_fii_dii([]) is None                 # no claim
         assert parse_fii_dii([{"category": "FII", "netValue": "5"}]) is None
 
+    def test_fii_dii_store_parse_and_persist(self):
+        from data.fii_dii_store import parse_trade_react_rows, reset_store, upsert_rows, summarize, get_history
+
+        reset_store()
+        rows = parse_trade_react_rows([
+            {
+                "date": "01-Aug-2026",
+                "fiiBuyValue": "12,000",
+                "fiiSellValue": "10,500",
+                "diiBuyValue": "8,000",
+                "diiSellValue": "7,200",
+            },
+            {
+                "date": "31-Jul-2026",
+                "category": "FII/FPI",
+                "buyValue": "9,000",
+                "sellValue": "9,500",
+            },
+            {
+                "date": "31-Jul-2026",
+                "category": "DII",
+                "buyValue": "6,000",
+                "sellValue": "5,500",
+            },
+        ])
+        assert len(rows) == 2
+        assert upsert_rows(rows) == 2
+        hist = get_history(30)
+        assert len(hist) == 2
+        summary = summarize(30)
+        assert summary["available"]
+        assert summary["totals"]["fii_net_cr"] != 0
+        reset_store()
+
+    def test_market_brief_offline(self):
+        from reporting.market_brief import build_institutional_market_brief
+
+        brief = build_institutional_market_brief(days=30, symbol_limit=2)
+        assert brief["report_type"] == "INSTITUTIONAL_MARKET_BRIEF"
+        assert "narrative" in brief
+
+    def test_fii_dii_lazy_refresh_mock(self):
+        from data.fii_dii_store import reset_store, refresh_if_needed, count_rows
+
+        reset_store()
+        payload = refresh_if_needed(
+            force=True,
+            fetcher=lambda: [
+                {
+                    "date": "2026-08-01",
+                    "fii_buy": 100.0,
+                    "fii_sell": 90.0,
+                    "fii_net": 10.0,
+                    "dii_buy": 50.0,
+                    "dii_sell": 40.0,
+                    "dii_net": 10.0,
+                }
+            ],
+        )
+        assert payload.get("fetched")
+        assert count_rows() == 1
+        again = refresh_if_needed(fetcher=lambda: [])
+        assert again.get("fetched") is False
+        assert again.get("reason") == "fresh"
+        reset_store()
+
+    def test_fii_derivative_stats_fail_closed_without_legacy_endpoint(self):
+        from data.fii_dii import (
+            _reset_derivative_stats_cache_for_tests,
+            get_fii_derivative_stats_uncached,
+        )
+
+        _reset_derivative_stats_cache_for_tests()
+        stats = get_fii_derivative_stats_uncached()
+        assert stats["available"] is False
+        assert stats["total_net"] is None
+        assert stats["index_futures_net"] is None
+        assert stats.get("note")
+
+    def test_fii_derivative_stats_parse_rows(self):
+        from data.fii_dii import _parse_derivative_stats_rows
+
+        parsed = _parse_derivative_stats_rows([
+            {"category": "Index Futures", "netAmount": "100"},
+            {"category": "Index Options", "netAmount": "-40"},
+            {"category": "Stock Futures", "buyAmount": "50", "sellAmount": "30"},
+        ])
+        assert parsed["available"] is True
+        assert parsed["index_futures_net"] == 100.0
+        assert parsed["index_options_net"] == -40.0
+        assert parsed["stock_futures_net"] == 20.0
+        assert parsed["total_net"] == 80.0
+
+    def test_lazy_fundamentals_ensure_mock(self):
+        from fundamentals.cache import FundamentalsCache
+        from fundamentals import fetcher as fetcher_mod
+        from fundamentals.lazy import ensure_deep_fundamentals
+
+        sym = "LAZYTEST"
+        FundamentalsCache().invalidate(sym)
+
+        class _MockScraper:
+            def fetch_all(self, symbol: str) -> dict:
+                return {"about": "mock company", "quarterly_results": [{"": "Q1"}]}
+
+        original = fetcher_mod._scraper
+        fetcher_mod._scraper = _MockScraper()
+        try:
+            data = ensure_deep_fundamentals(sym, force_refresh=False)
+            assert data.get("about") == "mock company"
+            assert FundamentalsCache().has(sym)
+        finally:
+            fetcher_mod._scraper = original
+            FundamentalsCache().invalidate(sym)
+
+    def test_lazy_fundamentals_cache_hit(self):
+        from fundamentals.cache import FundamentalsCache
+        from fundamentals.lazy import ensure_deep_fundamentals
+
+        sym = "LAZYHIT"
+        cache = FundamentalsCache()
+        cache.invalidate(sym)
+        cache.set(sym, {"about": "test co", "quarterly_results": []})
+        hit = ensure_deep_fundamentals(sym, force_refresh=False)
+        assert hit.get("about") == "test co"
+        cache.invalidate(sym)
+
     def test_bulk_deals_and_net_buys(self):
         from data.institutional_flows import parse_bulk_deals, bulk_buy_symbols
         deals = parse_bulk_deals({"data": [

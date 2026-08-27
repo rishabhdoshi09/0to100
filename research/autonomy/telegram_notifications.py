@@ -368,8 +368,12 @@ class TelegramNotifier:
         """Send the current weekly long-term shortlist once per symbol/day."""
         payload = dict(payload or {})
         records = [dict(r) for r in payload.get("records", []) if isinstance(r, Mapping)]
-        eligible = [r for r in records if str(r.get("classification", "")) in
-                    ("QUALITY_COMPOUNDER", "GARP_CANDIDATE", "QUALITY_BUT_EXPENSIVE")]
+        eligible = [
+            r for r in records
+            if str(r.get("classification", "")) in
+            ("QUALITY_COMPOUNDER", "GARP_CANDIDATE", "QUALITY_BUT_EXPENSIVE")
+            and self._f(r.get("fundamental_coverage")) >= 0.50
+        ]
         eligible.sort(key=lambda r: (-self._f(r.get("combined_score")),
                                      str(r.get("symbol", ""))))
         eligible = [r for r in eligible

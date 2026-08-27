@@ -296,6 +296,10 @@ class Supervisor:
                     if not row or row.get("classification") not in (
                             "QUALITY_COMPOUNDER", "GARP_CANDIDATE"):
                         raise ValueError("symbol is not in the eligible current long-term shortlist")
+                    if float(row.get("fundamental_coverage") or 0) < 0.50:
+                        raise ValueError(
+                            "symbol lacks sufficient fundamental coverage for a long-term bet"
+                        )
                     from core.long_term_tracker import record_picks
                     record_picks([{**row, "score": row.get("combined_score"),
                                    "thesis": "; ".join(row.get("quality_factors", [])[:3])}])
@@ -419,6 +423,10 @@ class Supervisor:
     def _gated_state(self, hint):
         if self.owner_state.get("halted"):
             return ST.HALTED
+        now = self.deps.now_ist()
+        if SCH.kite_login_optional(now, self.deps.holidays()):
+            if hint in (ST.AUTH_REQUIRED, ST.DATA_REFRESHING, ST.STARTING, None):
+                return ST.OBSERVING
         if H.AUTH_MISSING in self.failures or H.AUTH_EXPIRED in self.failures:
             return ST.AUTH_REQUIRED
         if H.SNAPSHOT_STALE in self.failures:

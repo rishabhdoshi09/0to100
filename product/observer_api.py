@@ -14,6 +14,11 @@ from fastapi import Body, HTTPException, Query
 
 import terminal_api as core
 from product.data_api import install_data_routes
+from product.workspace import (
+    SCANNER_MODES,
+    build_command_center_state,
+    scanner_rows,
+)
 
 RUNTIME_PATH = core.ROOT / "logs" / "reconciliation" / "observer_runtime.json"
 SNAPSHOT_DB = core.ROOT / "logs" / "reconciliation" / "broker_snapshots.db"
@@ -314,3 +319,6 @@ def install(app) -> None:
         name="watchlist_remove",
     )
     install_data_routes(app)
+    from product.market_api import install_market_routes
+
+    install_market_routes(app)

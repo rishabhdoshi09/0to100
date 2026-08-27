@@ -15,14 +15,16 @@ import {
   fetchProductReadiness,
   fetchStockIntelligence,
   fetchTradePlan,
-  refreshStockFundamentals,
+  fetchStockFundamentals,
   fetchSymbolRatios,
   type IntelligenceMetric,
   type ProductReadiness,
   type StockWorkspace,
   type TradePlan,
 } from './productApi'
-import type { ChartBar, ControlName, DashboardPayload } from './types'
+import type { ChartBar, ControlName, DashboardPayload, OptionsChainPayload } from './types'
+import { longTermPicks } from './longTermPicks'
+import { fetchMarketOptions } from './api'
 
 // Read-only risk-first "R lens" — exact shares, rupee risk, reward:risk, book heat. No orders.
 export function RiskLensCard({ plan }: { plan: TradePlan | null }) {
@@ -165,8 +167,7 @@ export function ProductCommandCenterView(props: ViewProps) {
   const momentum = useMemo(() => [...dashboard.scan.records]
     .filter((row) => row.signals?.includes('MOMENTUM') || row.verdict === 'BUY')
     .sort((a, b) => (b.score || 0) - (a.score || 0)), [dashboard.scan.records])
-  const quality = useMemo(() => [...dashboard.long_term.records]
-    .filter((row) => ['QUALITY_COMPOUNDER', 'GARP_CANDIDATE', 'QUALITY_BUT_EXPENSIVE'].includes(row.classification || ''))
+  const quality = useMemo(() => longTermPicks(dashboard.long_term.records)
     .sort((a, b) => (b.combined_score || 0) - (a.combined_score || 0)), [dashboard.long_term.records])
   const selectedRow = dashboard.conviction.find((row) => row.symbol === selected)
     || dashboard.scan.records.find((row) => row.symbol === selected)
@@ -246,28 +247,79 @@ export function ProductStockIntelligenceView(props: ViewProps) {
   const [tab, setTab] = useState('Overview')
   const [loading, setLoading] = useState(false)
   const [busy, setBusy] = useState('')
+  const [fundamentalsError, setFundamentalsError] = useState('')
   const [error, setError] = useState('')
 
-  const intelTabs = ['Overview', 'Chart', 'Financials', 'Ratios', 'Ownership', 'Events', 'Peers', 'Evidence']
+  const [optionsChain, setOptionsChain] = useState<OptionsChainPayload | null>(null)
+  const [optionsLoading, setOptionsLoading] = useState(false)
+  const [optionsForce, setOptionsForce] = useState(0)
+
+  const intelTabs = [
+    'Overview',
+    'Chart',
+    'Financials',
+    'Ratios',
+    'Ownership',
+    'Options',
+    'Events',
+    'Peers',
+    'Evidence',
+  ]
+
+  const fundamentalsBusy = busy === 'FETCH_FUNDAMENTALS' || busy === 'REFRESH_STOCK_FUNDAMENTALS'
+
+  const loadRatios = async () => {
+    if (!selected) {
+      setRatios([])
+      return
+    }
+    try {
+      const ratioPayload = await fetchSymbolRatios(selected)
+      setRatios(ratioPayload.ratios || [])
+    } catch {
+      setRatios([])
+    }
+  }
+
+  const loadFundamentals = async (force: boolean) => {
+    if (!selected) return
+    const token = force ? 'REFRESH_STOCK_FUNDAMENTALS' : 'FETCH_FUNDAMENTALS'
+    setBusy(token)
+    setFundamentalsError('')
+    try {
+      const result = await fetchStockFundamentals(selected, force)
+      setWorkspace(result.workspace)
+      await loadRatios()
+    } catch (reason) {
+      setFundamentalsError(
+        reason instanceof Error ? reason.message : 'Fundamentals fetch failed — try Retry',
+      )
+    } finally {
+      setBusy('')
+    }
+  }
 
   const load = async () => {
     if (!selected) {
       setWorkspace(null)
       setPlan(null)
       setRatios([])
+      setFundamentalsError('')
       return
     }
     setLoading(true)
+    setFundamentalsError('')
     try {
-      setWorkspace(await fetchStockIntelligence(selected))
+      const ws = await fetchStockIntelligence(selected)
+      setWorkspace(ws)
       try { setPlan(await fetchTradePlan(selected)) } catch { setPlan(null) }
-      try {
-        const ratioPayload = await fetchSymbolRatios(selected)
-        setRatios(ratioPayload.ratios || [])
-      } catch {
-        setRatios([])
-      }
+      setRatios([])
       setError('')
+      if (!ws.fundamentals?.available || (ws.fundamentals.coverage_pct ?? 0) < 40) {
+        await loadFundamentals(false)
+      } else {
+        await loadRatios()
+      }
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : 'Stock intelligence unavailable')
     } finally {
@@ -281,19 +333,29 @@ export function ProductStockIntelligenceView(props: ViewProps) {
 
   useEffect(() => {
     setTab('Overview')
+    setOptionsChain(null)
   }, [selected])
+
+  useEffect(() => {
+    if (tab !== 'Options' || !selected) return
+    setOptionsLoading(true)
+    const force = optionsForce > 0
+    fetchMarketOptions(selected, force)
+      .then((payload) => setOptionsChain(payload))
+      .catch(() => setOptionsChain({ available: false, message: 'Option chain fetch failed' }))
+      .finally(() => setOptionsLoading(false))
+  }, [tab, selected, optionsForce])
 
   const runAction = async (control: ControlName | 'REFRESH_STOCK_FUNDAMENTALS') => {
     if (!selected) return
+    if (control === 'REFRESH_STOCK_FUNDAMENTALS') {
+      await loadFundamentals(true)
+      return
+    }
     setBusy(control)
     setError('')
     try {
-      if (control === 'REFRESH_STOCK_FUNDAMENTALS') {
-        const result = await refreshStockFundamentals(selected)
-        setWorkspace(result.workspace)
-      } else {
-        await runControl(control)
-      }
+      await runControl(control)
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : 'Action failed')
     } finally {
@@ -307,6 +369,19 @@ export function ProductStockIntelligenceView(props: ViewProps) {
   return (
     <section className="stock-workspace-v2">
       {error && <div className="api-warning">{error}</div>}
+      {fundamentalsError && (
+        <div className="api-warning">
+          {fundamentalsError}
+          <button type="button" className="mode-action" disabled={fundamentalsBusy} onClick={() => void loadFundamentals(true)}>
+            {fundamentalsBusy ? 'Retrying…' : 'Retry fundamentals'}
+          </button>
+        </div>
+      )}
+      {fundamentalsBusy && !fundamentalsError && (
+        <div className="api-warning" style={{ borderColor: 'var(--accent-cyan, #26d7ff)' }}>
+          Fetching fundamentals from Screener.in for {selected}… (~1s)
+        </div>
+      )}
       <header className="stock-workspace-hero">
         <div><span>{workspace?.sector || 'Sector not classified'}</span><h2>{workspace?.company || selected}</h2><p>{selected} · {workspace?.summary || 'Verified research is still loading.'}</p></div>
         <div className="stock-workspace-actions">
@@ -324,8 +399,18 @@ export function ProductStockIntelligenceView(props: ViewProps) {
 
       <div className="stock-action-row">
         {(workspace?.next_actions || []).map((item) => (
-          <button type="button" key={item.control} disabled={busy === item.control} onClick={() => void runAction(item.control)}>{busy === item.control ? 'Working…' : item.label}</button>
+          <button
+            type="button"
+            key={item.control}
+            disabled={busy === item.control || (item.control === 'REFRESH_STOCK_FUNDAMENTALS' && fundamentalsBusy)}
+            onClick={() => void runAction(item.control)}
+          >
+            {busy === item.control || (item.control === 'REFRESH_STOCK_FUNDAMENTALS' && fundamentalsBusy) ? 'Working…' : item.label}
+          </button>
         ))}
+        <button type="button" disabled={fundamentalsBusy || !selected} onClick={() => void loadFundamentals(true)}>
+          {fundamentalsBusy ? 'Loading…' : 'Retry fundamentals'}
+        </button>
         <button type="button" onClick={() => setActive('Research Data')}>Complete missing research data</button>
       </div>
 
@@ -337,7 +422,7 @@ export function ProductStockIntelligenceView(props: ViewProps) {
             <Panel title="COMPANY SNAPSHOT" subtitle={workspace?.sector || 'Sector unknown'}>
               {workspace?.fundamentals.company_about
                 ? <div className="company-about"><p>{workspace.fundamentals.company_about}</p></div>
-                : <EmptyState title="Company description not in cache" detail="Refresh fundamentals or import company profile." />}
+                : <EmptyState title="Company description not loading" detail={fundamentalsBusy ? 'Fetching from Screener.in…' : 'Use Retry fundamentals if the fetch failed.'} />}
               <div className="fact-grid">
                 <div><span>State</span><strong>{words(workspace?.state || '—')}</strong></div>
                 <div><span>Coverage</span><strong>{workspace?.fundamentals.coverage_pct ?? 0}%</strong></div>
@@ -372,17 +457,33 @@ export function ProductStockIntelligenceView(props: ViewProps) {
       )}
 
       {tab === 'Financials' && (
-        <Panel title="FUNDAMENTALS — CURRENT SNAPSHOT" subtitle={`${workspace?.fundamentals.coverage_pct ?? 0}% coverage · fetched ${workspace?.fundamentals.fetched_at || 'unknown'}`}>
-          {(workspace?.fundamentals.metrics || []).length === 0
-            ? <EmptyState title="No fundamental snapshot" detail="Run fundamentals refresh or import financial data." />
-            : <div className="explain-metric-grid fundamentals">{(workspace?.fundamentals.metrics || []).map((metric) => <MetricExplanation metric={metric} key={metric.key} />)}</div>}
-        </Panel>
+        <>
+          {(workspace?.fundamentals.key_ratios?.length ?? 0) > 0 && (
+            <Panel title="SCREENER KEY RATIOS" subtitle="Top-of-page ratios from Screener.in (includes P/E when published)">
+              <div className="explain-metric-grid fundamentals">
+                {workspace?.fundamentals.key_ratios?.map((row) => (
+                  <article className="explain-metric" key={row.name}>
+                    <span>{row.name}</span>
+                    <strong>{row.value}</strong>
+                  </article>
+                ))}
+              </div>
+            </Panel>
+          )}
+          <Panel title="FUNDAMENTALS — CURRENT SNAPSHOT" subtitle={`${workspace?.fundamentals.coverage_pct ?? 0}% coverage · fetched ${workspace?.fundamentals.fetched_at || 'unknown'}`}>
+            {(workspace?.fundamentals.metrics || []).length === 0
+              ? <EmptyState title="No fundamental snapshot" detail={fundamentalsBusy ? 'Loading from Screener.in…' : 'Tap Retry fundamentals above.'} />
+              : <div className="explain-metric-grid fundamentals">{(workspace?.fundamentals.metrics || []).map((metric) => <MetricExplanation metric={metric} key={metric.key} />)}</div>}
+          </Panel>
+        </>
       )}
 
       {tab === 'Ratios' && (
-        <Panel title="KEY RATIOS" subtitle="Computed centrally from cached fundamentals — missing inputs stay empty">
-          {ratios.length === 0
-            ? <EmptyState title="Ratios unavailable" detail="Fundamentals cache missing or inputs incomplete." />
+        <Panel title="KEY RATIOS" subtitle="From Screener.in cache — computed where inputs exist; top ratios used when tables are thin">
+          {fundamentalsBusy
+            ? <EmptyState title="Loading ratios" detail={`Fetching fundamentals for ${selected}…`} />
+            : ratios.length === 0
+            ? <EmptyState title="Ratios unavailable" detail="Tap Retry fundamentals above. Screener.in must respond (~1s per symbol)." />
             : <div className="explain-metric-grid">
               {ratios.map((row) => (
                 <article className={`explain-metric ${row.value == null ? 'unavailable' : ''}`} key={row.key}>
@@ -404,7 +505,40 @@ export function ProductStockIntelligenceView(props: ViewProps) {
             ))}
           </div>
           {!workspace?.fundamentals.metrics?.some((m) => /promoter|fii|dii/i.test(m.label))
-            && <EmptyState title="Ownership not in cache" detail="Refresh fundamentals or import shareholding data." />}
+            && <EmptyState title="Ownership not in cache" detail="Shareholding loads with fundamentals when you open this stock." />}
+        </Panel>
+      )}
+
+      {tab === 'Options' && (
+        <Panel title="OPTION CHAIN" subtitle="Nearest expiry · NSE then Yahoo fallback · context only">
+          {(!workspace?.fno || !Object.keys(workspace.fno).length) && (
+            <p className="panel-copy">This symbol may not be in the current F&O universe — chain fetch still attempts NSE/Yahoo if contracts exist.</p>
+          )}
+          <div className="inline-actions">
+            <button type="button" disabled={optionsLoading} onClick={() => setOptionsForce((n) => n + 1)}>
+              {optionsLoading ? 'Loading…' : 'Retry option chain'}
+            </button>
+          </div>
+          {optionsLoading && <p className="panel-copy">Loading option chain for {selected}…</p>}
+          {!optionsLoading && !optionsChain?.available && (
+            <EmptyState title="Options unavailable" detail={optionsChain?.message || 'NSE often blocks off-hours — retry or check on a trading day.'} />
+          )}
+          {optionsChain?.available && (
+            <div className="fact-grid">
+              <div><span>Expiry</span><strong>{optionsChain.expiry || '—'}</strong></div>
+              <div><span>PCR (OI)</span><strong>{optionsChain.pcr ?? '—'}</strong></div>
+              <div><span>Max pain</span><strong>{optionsChain.max_pain ?? '—'}</strong></div>
+              <div><span>Bias</span><strong>{optionsChain.bias || '—'}</strong></div>
+              <div><span>ATM IV</span><strong>{optionsChain.atm_iv != null ? `${optionsChain.atm_iv}%` : '—'}</strong></div>
+            </div>
+          )}
+          {optionsChain?.note && <p className="panel-copy">{optionsChain.note}</p>}
+          {optionsChain?.top_call_oi?.length && (
+            <EvidenceList title="Top call OI strikes" items={optionsChain.top_call_oi.map((r) => `${r.strike}: OI ${r.ce_oi}`)} tone="cyan" />
+          )}
+          {optionsChain?.top_put_oi?.length && (
+            <EvidenceList title="Top put OI strikes" items={optionsChain.top_put_oi.map((r) => `${r.strike}: OI ${r.pe_oi}`)} tone="green" />
+          )}
         </Panel>
       )}
 
@@ -430,10 +564,58 @@ export function ProductStockIntelligenceView(props: ViewProps) {
       )}
 
       {tab === 'Peers' && (
-        <Panel title="PEERS" subtitle="Sector context from scanner universe">
-          <p className="panel-copy">Sector: <strong>{workspace?.sector || '—'}</strong>. Use Compare to evaluate peers side-by-side.</p>
-          {onCompare && <button type="button" onClick={() => onCompare(selected)}>Open Compare with {selected}</button>}
-        </Panel>
+        <div className="stock-context-grid">
+          <Panel title="PEER VALUATION" subtitle="Screener peer table + cached peer fundamentals (no fabricated P/E)">
+            <div className="fact-grid">
+              <div><span>Average peer P/E</span><strong>{workspace?.peers?.average_pe != null ? `${workspace.peers.average_pe}x` : '—'}</strong></div>
+              <div><span>P/E vs peer avg</span><strong>{workspace?.peers?.pe_vs_peer_avg != null ? `${workspace.peers.pe_vs_peer_avg}x` : '—'}</strong></div>
+              <div><span>Peer samples</span><strong>{workspace?.peers?.peer_pe_sample_count ?? 0}</strong></div>
+              <div><span>Stock P/E</span><strong>{workspace?.peers?.stock_pe != null ? `${workspace.peers.stock_pe}x` : '—'}</strong></div>
+            </div>
+            {workspace?.peers?.peer_rank != null && (
+              <p className="panel-copy">
+                <strong>Sector rank:</strong> {workspace.peers.peer_rank}/{workspace.peers.total_peers ?? '—'}
+                {workspace.peers.peer_rank_verdict ? ` · ${workspace.peers.peer_rank_verdict}` : ''}
+                {workspace.peers.sector_leader ? ' · sector leader' : ''}
+                {workspace.peers.peer_rank_note ? ` — ${workspace.peers.peer_rank_note}` : ''}
+              </p>
+            )}
+            {workspace?.peers?.peer_pe_note && <p className="panel-copy">{workspace.peers.peer_pe_note}</p>}
+          </Panel>
+          <Panel title="PEERS" subtitle={workspace?.peers?.note || 'Sector context from scan + Screener'}>
+            <p className="panel-copy">Sector: <strong>{workspace?.peers?.sector || workspace?.sector || '—'}</strong></p>
+            {workspace?.peers?.sector_peers?.length
+              ? (
+                <div className="fno-table wide-table">
+                  <div className="fno-head"><span>SYMBOL</span><span>SCORE</span><span>STATUS</span></div>
+                  {workspace.peers.sector_peers.map((peer) => (
+                    <div className="fno-row" key={peer.symbol} style={{ display: 'grid', cursor: 'pointer' }} onClick={() => onCompare?.(peer.symbol)}>
+                      <strong>{peer.symbol}</strong>
+                      <span>{peer.score}</span>
+                      <span>{peer.status || '—'}</span>
+                    </div>
+                  ))}
+                </div>
+              )
+              : <EmptyState title="No sector peers in scan" detail="Run a whole-market scan, or open a symbol in a mapped sector (e.g. banking, IT)." />}
+            {onCompare && <button type="button" onClick={() => onCompare(selected)}>Compare {selected} with another symbol</button>}
+          </Panel>
+          <Panel title="SCREENER PEER TABLE" subtitle="From fundamentals cache when Screener publishes it">
+            {workspace?.peers?.screener_table?.length
+              ? (
+                <div className="fno-table wide-table">
+                  {workspace.peers.screener_table.slice(0, 12).map((row, idx) => (
+                    <div className="fno-row" key={idx} style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr', gap: '8px' }}>
+                      <span>{String(row[''] || row.Company || row.company || row.name || '—')}</span>
+                      <span>{String(row['P/E'] || row.PE || row.pe || '—')}</span>
+                      <span>{String(row.CMP || row.cmp || row.Price || '—')}</span>
+                    </div>
+                  ))}
+                </div>
+              )
+              : <EmptyState title="Screener peer table not loaded" detail="Retry fundamentals — peer comparison is scraped from Screener.in with the company page." />}
+          </Panel>
+        </div>
       )}
 
       {tab === 'Evidence' && (

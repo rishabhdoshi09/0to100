@@ -154,11 +154,20 @@ def score_current_fundamentals(fund: Mapping[str, Any] | None, *, sector: str = 
 
 
 def _default_fundamental_provider(symbol: str, refresh: bool) -> Mapping[str, Any] | None:
-    if refresh:
-        from fundamentals.fetcher import get_deep_fundamentals
-        return get_deep_fundamentals(symbol, force_refresh=True)
+    """Cache-first; ``refresh`` only fills symbols missing from cache (no universe scrape)."""
     from fundamentals.cache import FundamentalsCache
-    return FundamentalsCache().get(symbol)
+    from fundamentals.lazy import ensure_deep_fundamentals
+
+    cache = FundamentalsCache()
+    if refresh and not cache.has(symbol):
+        try:
+            return ensure_deep_fundamentals(symbol, force_refresh=False)
+        except Exception:
+            return cache.get_any(symbol)
+    fresh = cache.get(symbol)
+    if fresh is not None:
+        return fresh
+    return cache.get_any(symbol)
 
 
 def _prepare_official_history() -> dict:

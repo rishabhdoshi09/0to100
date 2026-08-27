@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 import json
+import math
 from pathlib import Path
 import re
 from typing import Any, Mapping, Sequence
@@ -27,9 +28,28 @@ def _f(value: Any) -> float | None:
         if value in (None, ""):
             return None
         result = float(str(value).replace(",", "").replace("%", "").strip())
-        return result if result == result else None
+        if not math.isfinite(result):
+            return None
+        return result
     except (TypeError, ValueError):
         return None
+
+
+def _sanitize_json(value: Any) -> Any:
+    """Ensure FastAPI can serialize the workspace (no NaN/Inf, no numpy scalars)."""
+    if value is None or isinstance(value, (str, bool)):
+        return value
+    if isinstance(value, (int, float)):
+        if isinstance(value, float) and not math.isfinite(value):
+            return None
+        return value
+    if isinstance(value, Mapping):
+        return {str(k): _sanitize_json(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_sanitize_json(item) for item in value]
+    if hasattr(value, "item"):  # numpy scalar
+        return _sanitize_json(value.item())
+    return value
 
 
 def _find(payload: Mapping[str, Any] | None, symbol: str) -> dict[str, Any]:
@@ -173,9 +193,13 @@ def _technical(frame: Any) -> dict[str, Any]:
         low_52w = round(float(data["low"].tail(min(252, len(data))).min()), 2)
         from_high = round((close / high_52w - 1.0) * 100.0, 2) if high_52w else None
         from_low = round((close / low_52w - 1.0) * 100.0, 2) if low_52w else None
-        avg_volume = float(data["volume"].tail(20).mean()) if "volume" in data.columns else None
-        volume = float(data["volume"].iloc[-1]) if "volume" in data.columns else None
-        volume_ratio = round(volume / avg_volume, 2) if volume is not None and avg_volume not in (None, 0) else None
+        avg_volume = _f(data["volume"].tail(20).mean()) if "volume" in data.columns else None
+        volume = _f(data["volume"].iloc[-1]) if "volume" in data.columns else None
+        volume_ratio = (
+            round(volume / avg_volume, 2)
+            if volume is not None and avg_volume is not None and avg_volume > 0
+            else None
+        )
         trend, trend_explanation = _trend(close, ema20, ema50, ema200)
         latest_index = data.index[-1]
         latest_date = str(getattr(latest_index, "date", lambda: latest_index)())
@@ -251,6 +275,149 @@ def _fund_interpretation(key: str, value: float | None, *, financial_sector: boo
     return "Use the metric together with trend, history, peers and source date."
 
 
+def _key_ratios_list(raw: Mapping[str, Any]) -> list[dict[str, str]]:
+    out: list[dict[str, str]] = []
+    for item in raw.get("key_ratios", []) or []:
+        if not isinstance(item, Mapping):
+            continue
+        name = str(item.get("name", "") or "").strip()
+        value = str(item.get("value", "") or "").strip()
+        if name and value:
+            out.append({"name": name, "value": value})
+    return out
+
+
+def _pe_from_key_ratios(raw: Mapping[str, Any]) -> float | None:
+    for item in raw.get("key_ratios", []) or []:
+        if not isinstance(item, Mapping):
+            continue
+        name = str(item.get("name", "") or "").lower()
+        if any(token in name for token in ("p/e", "pe ratio", "price to earning", "price/earning", "price earning")):
+            return _f(item.get("value"))
+    return None
+
+
+def _sector_peers_from_scan(
+    symbol: str,
+    sector: str,
+    scan_payload: Mapping[str, Any] | None,
+    *,
+    limit: int = 15,
+) -> list[dict[str, Any]]:
+    sym = symbol.upper()
+    records = [
+        dict(row)
+        for row in (scan_payload or {}).get("records", []) or []
+        if isinstance(row, Mapping)
+    ]
+    try:
+        from scan.sector_heat import sector_of
+
+        lookup = sector_of
+    except Exception:
+        lookup = lambda _s: ""  # type: ignore[assignment, misc]
+
+    target = str(sector or "").strip()
+    if not target or target.lower() == "unclassified":
+        target = str(lookup(sym) or "").strip()
+
+    peers: list[dict[str, Any]] = []
+    for row in records:
+        peer_sym = str(row.get("symbol", "") or "").upper().strip()
+        if not peer_sym or peer_sym == sym:
+            continue
+        row_sector = str(row.get("sector") or lookup(peer_sym) or "").strip()
+        if target:
+            t = target.lower()
+            rs = row_sector.lower()
+            if t not in rs and rs not in t and not rs:
+                continue
+        peers.append(
+            {
+                "symbol": peer_sym,
+                "company": str(row.get("company") or peer_sym),
+                "score": _f(row.get("score")),
+                "status": str(row.get("status") or ""),
+                "sector": row_sector or target,
+            }
+        )
+    peers.sort(key=lambda item: (-_f(item.get("score")), str(item.get("symbol", ""))))
+    return peers[:limit]
+
+
+def _peers_payload(
+    symbol: str,
+    sector: str,
+    raw: Mapping[str, Any],
+    scan_payload: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    screener_rows = [
+        dict(row)
+        for row in (raw.get("peer_comparison") or [])
+        if isinstance(row, Mapping)
+    ]
+    sector_peers = _sector_peers_from_scan(symbol, sector, scan_payload)
+    try:
+        from data_platform.ratios import compute_peer_average_pe
+
+        peer_stats = compute_peer_average_pe(
+            symbol,
+            raw,
+            [str(p.get("symbol", "")) for p in sector_peers],
+        )
+    except Exception:
+        peer_stats = {
+            "average_pe": None,
+            "sample_count": 0,
+            "pe_vs_peer_avg": None,
+            "note": "Peer P/E could not be computed.",
+        }
+    available = bool(screener_rows or sector_peers)
+    note_parts: list[str] = []
+    if screener_rows:
+        note_parts.append("Screener.in peer table from fundamentals cache.")
+    if sector_peers:
+        note_parts.append("Sector peers ranked by latest whole-market scan score.")
+    if not available:
+        note_parts.append(
+            "Retry fundamentals for Screener peers, or run a market scan for sector-ranked peers."
+        )
+    peer_rank_fields: dict[str, Any] = {}
+    try:
+        from core.peer_ranker import rank_vs_peers
+
+        ranked = rank_vs_peers(symbol.upper())
+        if ranked is not None:
+            peer_rank_fields = {
+                "peer_rank": ranked.rank,
+                "total_peers": ranked.total_peers,
+                "peer_rank_sector": ranked.sector,
+                "peer_rank_score": ranked.score,
+                "peer_rank_verdict": ranked.verdict,
+                "sector_leader": ranked.verdict == "SECTOR_LEADER",
+                "peer_rank_note": (
+                    f"Rank {ranked.rank}/{ranked.total_peers} in {ranked.sector} "
+                    f"on momentum, RS proxy and accumulation vs fixed sector basket."
+                ),
+            }
+    except Exception:
+        pass
+    return {
+        "available": available,
+        "sector": sector,
+        "screener_table": screener_rows[:25],
+        "sector_peers": sector_peers,
+        "average_pe": peer_stats.get("average_pe"),
+        "peer_pe_sample_count": int(peer_stats.get("sample_count") or 0),
+        "pe_vs_peer_avg": peer_stats.get("pe_vs_peer_avg"),
+        "stock_pe": peer_stats.get("stock_pe"),
+        "peer_pe_note": str(peer_stats.get("note") or ""),
+        "peer_pe_sources": list(peer_stats.get("sources") or []),
+        "note": " ".join(note_parts),
+        **peer_rank_fields,
+    }
+
+
 def _fundamentals(long_row: Mapping[str, Any], raw_record: Mapping[str, Any], sector: str) -> dict[str, Any]:
     values = dict(long_row.get("fundamentals", {}) or {})
     raw = dict(raw_record.get("data", {}) or {})
@@ -280,15 +447,25 @@ def _fundamentals(long_row: Mapping[str, Any], raw_record: Mapping[str, Any], se
             "meaning": meaning,
             "interpretation": _fund_interpretation(key, value, financial_sector=financial_sector),
         })
+    pe_direct = _pe_from_key_ratios(raw)
+    if pe_direct is not None:
+        for metric in metrics:
+            if metric["key"] == "pe" and metric["value"] is None:
+                metric["value"] = pe_direct
+                metric["interpretation"] = _fund_interpretation("pe", pe_direct, financial_sector=financial_sector)
+                available_count += 1
+                break
+    key_ratios = _key_ratios_list(raw)
     coverage = round(available_count / len(FUNDAMENTAL_META) * 100) if FUNDAMENTAL_META else 0
     return {
-        "available": bool(available_count),
+        "available": bool(available_count or key_ratios),
         "coverage_pct": coverage,
         "score": _f(long_row.get("fundamental_score")),
         "classification": str(long_row.get("classification") or ""),
         "quality_factors": list(long_row.get("quality_factors", []) or []),
         "risk_flags": list(long_row.get("risk_flags", []) or []),
         "metrics": metrics,
+        "key_ratios": key_ratios,
         "raw_values": values,
         "company_about": str(raw.get("about") or "").strip(),
         "fetched_at": str(raw_record.get("fetched_at") or ""),
@@ -303,7 +480,22 @@ def _default_inputs(symbol: str) -> dict[str, Any]:
 
     scan = load_scan() or {}
     long_term = load_long_term_scan() or {}
-    raw = load_raw_fundamentals(symbol)
+    raw = load_raw_fundamentals(symbol, auto_fetch=False)
+    if not (raw.get("data") or {}):
+        try:
+            from fundamentals.cache import FundamentalsCache
+
+            cache = FundamentalsCache()
+            cached = cache.get(symbol) or cache.get_any(symbol)
+            if cached:
+                raw = {
+                    "available": True,
+                    "data": dict(cached),
+                    "fetched_at": "",
+                    "section_as_of": {},
+                }
+        except Exception:
+            pass
     try:
         from data.bhavcopy_runtime import get_ohlcv
         frame = get_ohlcv(symbol)
@@ -357,6 +549,21 @@ def build_stock_workspace(
     sector = str(long_row.get("sector") or scan_row.get("sector") or "Unclassified")
     company = str(scan_row.get("company") or long_row.get("company") or symbol)
     fundamentals = _fundamentals(long_row, raw_record, sector)
+    peers = _peers_payload(symbol, sector, dict(raw_record.get("data", {}) or {}), scan_payload)
+    try:
+        from data_platform.ratios import peer_pe_fundamental_metrics
+
+        peer_metric_rows = peer_pe_fundamental_metrics(peers)
+        if peer_metric_rows:
+            fundamentals["metrics"].extend(peer_metric_rows)
+            if peers.get("average_pe") is not None:
+                fundamentals["available"] = True
+                filled = sum(1 for m in fundamentals["metrics"] if m.get("value") is not None)
+                fundamentals["coverage_pct"] = round(
+                    filled / len(fundamentals["metrics"]) * 100
+                ) if fundamentals["metrics"] else fundamentals.get("coverage_pct", 0)
+    except Exception:
+        pass
     news_rows = [dict(item) for item in (news or []) if isinstance(item, Mapping)]
     news_rows.sort(key=lambda item: (str(item.get("published_at") or item.get("fetched_at") or ""), int(item.get("impact_score", 0) or 0)), reverse=True)
     fno_match = next((dict(item) for item in list((fno_payload or {}).get("underlyings", []) or []) if isinstance(item, Mapping) and str(item.get("symbol", "")).upper() == symbol), {})
@@ -411,7 +618,7 @@ def build_stock_workspace(
     if not news_rows or sources[4]["status"] != "FRESH":
         next_actions.append({"control": "REFRESH_NEWS_NOW", "label": "Refresh news and filings"})
 
-    return {
+    return _sanitize_json({
         "schema_version": 1,
         "generated_at": now.isoformat(),
         "symbol": symbol,
@@ -423,10 +630,11 @@ def build_stock_workspace(
         "gaps": gaps,
         "technical": technical,
         "fundamentals": fundamentals,
+        "peers": peers,
         "scanner": scan_row,
         "long_term": long_row,
         "news": news_rows[:10],
         "fno": fno_match,
         "sources": sources,
         "next_actions": next_actions,
-    }
+    })

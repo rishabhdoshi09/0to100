@@ -22,14 +22,18 @@ def health() -> dict:
     return {"ok": True, "service": "quantterm-research-report-api", "version": app.version}
 
 
-def _pdf_response(path: Path) -> FileResponse:
+def _pdf_response(path: Path, *, download: bool = False) -> FileResponse:
     if not path.exists() or path.suffix.lower() != ".pdf":
         raise HTTPException(status_code=500, detail="Report generator did not produce a PDF")
+    disposition = "attachment" if download else "inline"
+    safe_name = path.name.replace('"', "")
     return FileResponse(
         path=str(path),
         media_type="application/pdf",
-        filename=path.name,
-        headers={"Cache-Control": "no-store"},
+        headers={
+            "Cache-Control": "no-store",
+            "Content-Disposition": f'{disposition}; filename="{safe_name}"',
+        },
     )
 
 
@@ -78,11 +82,11 @@ def _runtime_as_of(symbol: str) -> dict[str, str]:
 
 
 @app.get("/reports/equity/{symbol}")
-def equity_report(symbol: str) -> FileResponse:
+def equity_report(symbol: str, download: bool = Query(False)) -> FileResponse:
     try:
         from reporting.research_dossier import generate_equity_report
 
-        return _pdf_response(generate_equity_report(symbol))
+        return _pdf_response(generate_equity_report(symbol), download=download)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
@@ -90,21 +94,42 @@ def equity_report(symbol: str) -> FileResponse:
 
 
 @app.get("/reports/basket/long-term")
-def long_term_basket_report(limit: int = Query(default=3, ge=1, le=10)) -> FileResponse:
+def long_term_basket_report(
+    limit: int = Query(default=3, ge=1, le=10),
+    download: bool = Query(False),
+) -> FileResponse:
     try:
         from reporting.research_dossier import generate_basket_report
 
-        return _pdf_response(generate_basket_report(limit=limit))
+        return _pdf_response(generate_basket_report(limit=limit), download=download)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Basket report generation failed: {exc}") from exc
+
+
+@app.get("/reports/market/institutional")
+def institutional_market_report(
+    days: int = Query(default=30, ge=5, le=365),
+    symbol_limit: int = Query(default=4, ge=1, le=8),
+    download: bool = Query(False),
+) -> FileResponse:
+    try:
+        from reporting.market_brief import generate_institutional_market_report
+
+        return _pdf_response(
+            generate_institutional_market_report(days=days, symbol_limit=symbol_limit),
+            download=download,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Institutional market report failed: {exc}") from exc
 
 
 @app.get("/evidence/{symbol}")
 def evidence_status(symbol: str) -> dict:
     try:
-        from reporting.evidence_intake import evidence_requirements
+        from reporting.evidence_intake import clean_symbol, evidence_requirements
 
-        return evidence_requirements(symbol, **_runtime_as_of(symbol))
+        clean = clean_symbol(symbol)
+        return evidence_requirements(clean, **_runtime_as_of(clean))
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:

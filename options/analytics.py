@@ -10,151 +10,9 @@ from typing import Optional
 @st.cache_data(ttl=300, show_spinner=False)
 def get_option_chain(symbol: str = "NIFTY") -> tuple[Optional[pd.DataFrame], Optional[str]]:
     """Fetch option chain. Tries NSE API first, yfinance fallback."""
-    # ── Attempt 1: NSE public API ─────────────────────────────────────────────
-    try:
-        import requests
+    from options.chain_fetch import fetch_option_chain
 
-        headers = {
-            "User-Agent": (
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/120.0.0.0 Safari/537.36"
-            ),
-            "Accept": "application/json, text/plain, */*",
-            "Accept-Language": "en-US,en;q=0.9",
-            "Accept-Encoding": "gzip, deflate, br",
-            "Referer": "https://www.nseindia.com/option-chain",
-        }
-        import time as _time
-
-        session = requests.Session()
-        # Seed cookies first (NSE rejects cookieless API hits), then let them
-        # settle — a hit immediately after priming often still 401s.
-        session.get("https://www.nseindia.com", headers=headers, timeout=8)
-        session.get(
-            "https://www.nseindia.com/option-chain", headers=headers, timeout=8
-        )
-
-        # Index vs equity URL
-        if symbol in ("NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY", "NIFTYNXT50"):
-            url = f"https://www.nseindia.com/api/option-chain-indices?symbol={symbol}"
-        else:
-            url = f"https://www.nseindia.com/api/option-chain-equities?symbol={symbol}"
-
-        # NSE frequently blocks the first hit and yields on a retry — try a few
-        # times with backoff, re-priming cookies if the session gets rejected.
-        data = None
-        for _attempt in range(3):
-            _time.sleep(0.6 * (_attempt + 1))
-            resp = session.get(url, headers=headers, timeout=12)
-            if resp.status_code == 200 and resp.content:
-                try:
-                    data = resp.json()
-                    break
-                except Exception:
-                    data = None
-            if resp.status_code in (401, 403):        # cookies stale → re-prime
-                session.get("https://www.nseindia.com", headers=headers, timeout=8)
-        if data is None:
-            raise RuntimeError("NSE option-chain API unavailable after retries")
-
-        records = data["records"]["data"]
-        expiry = data["records"]["expiryDates"][0]  # nearest expiry
-        rows = []
-        for rec in records:
-            if rec.get("expiryDate") != expiry:
-                continue
-            strike = rec["strikePrice"]
-            ce = rec.get("CE", {})
-            pe = rec.get("PE", {})
-            rows.append(
-                {
-                    "strike": strike,
-                    "ce_oi": ce.get("openInterest", 0),
-                    "ce_coi": ce.get("changeinOpenInterest", 0),
-                    "ce_iv": ce.get("impliedVolatility", 0),
-                    "ce_ltp": ce.get("lastPrice", 0),
-                    "ce_volume": ce.get("totalTradedVolume", 0),
-                    "pe_oi": pe.get("openInterest", 0),
-                    "pe_coi": pe.get("changeinOpenInterest", 0),
-                    "pe_iv": pe.get("impliedVolatility", 0),
-                    "pe_ltp": pe.get("lastPrice", 0),
-                    "pe_volume": pe.get("totalTradedVolume", 0),
-                }
-            )
-        if rows:
-            return pd.DataFrame(rows), expiry
-    except Exception:
-        pass
-
-    # ── Attempt 2: nsepython ──────────────────────────────────────────────────
-    try:
-        from nsepython import nse_optionchain_scrapper  # type: ignore
-
-        raw = nse_optionchain_scrapper(symbol)
-        records = raw["records"]["data"]
-        expiry = raw["records"]["expiryDates"][0]
-        rows = []
-        for rec in records:
-            if rec.get("expiryDate") != expiry:
-                continue
-            strike = rec["strikePrice"]
-            ce = rec.get("CE", {})
-            pe = rec.get("PE", {})
-            rows.append(
-                {
-                    "strike": strike,
-                    "ce_oi": ce.get("openInterest", 0),
-                    "ce_coi": ce.get("changeinOpenInterest", 0),
-                    "ce_iv": ce.get("impliedVolatility", 0),
-                    "ce_ltp": ce.get("lastPrice", 0),
-                    "ce_volume": ce.get("totalTradedVolume", 0),
-                    "pe_oi": pe.get("openInterest", 0),
-                    "pe_coi": pe.get("changeinOpenInterest", 0),
-                    "pe_iv": pe.get("impliedVolatility", 0),
-                    "pe_ltp": pe.get("lastPrice", 0),
-                    "pe_volume": pe.get("totalTradedVolume", 0),
-                }
-            )
-        if rows:
-            return pd.DataFrame(rows), expiry
-    except Exception:
-        pass
-
-    # ── Attempt 3: yfinance fallback ──────────────────────────────────────────
-    try:
-        import yfinance as yf
-
-        _YF_MAP = {
-            "NIFTY": "^NSEI",
-            "BANKNIFTY": "^NSEBANK",
-            "FINNIFTY": "NIFTY_FIN_SERVICE.NS",
-        }
-        yf_sym = _YF_MAP.get(symbol, f"{symbol}.NS")
-        tk = yf.Ticker(yf_sym)
-        exps = tk.options
-        if not exps:
-            return None, None
-        expiry = exps[0]
-        chain = tk.option_chain(expiry)
-        calls = chain.calls[["strike", "openInterest", "impliedVolatility", "lastPrice", "volume"]].copy()
-        puts  = chain.puts[["strike", "openInterest", "impliedVolatility", "lastPrice", "volume"]].copy()
-
-        calls.columns = ["strike", "ce_oi", "ce_iv", "ce_ltp", "ce_volume"]
-        puts.columns  = ["strike", "pe_oi", "pe_iv", "pe_ltp", "pe_volume"]
-        # yfinance IV is a decimal — convert to percentage
-        calls["ce_iv"] = (calls["ce_iv"] * 100).round(2)
-        puts["pe_iv"]  = (puts["pe_iv"]  * 100).round(2)
-
-        df = pd.merge(calls, puts, on="strike", how="outer").fillna(0)
-        df["ce_coi"] = 0
-        df["pe_coi"] = 0
-        df = df.sort_values("strike").reset_index(drop=True)
-        return df, expiry
-    except Exception:
-        pass
-
-    return None, None
+    return fetch_option_chain(symbol)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -167,7 +25,9 @@ def nifty_options_summary() -> Optional[dict]:
     {pcr, max_pain, bias, note}. None when the chain is unavailable.
     """
     try:
-        df, _expiry = get_option_chain("NIFTY")
+        from options.chain_fetch import compute_max_pain, compute_pcr, fetch_option_chain
+
+        df, _expiry = fetch_option_chain("NIFTY")
         if df is None or df.empty:
             return None
         pcr = compute_pcr(df)

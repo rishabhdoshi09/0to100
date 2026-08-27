@@ -10,6 +10,14 @@ import {
   SecurityTable,
 } from './components'
 import { boolLabel, money, pct, score, words } from './format'
+import {
+  fetchInstitutionalStack,
+  fetchTargetPortfolio,
+  refreshFiiDiiStore,
+  type InstitutionalDomain,
+  type InstitutionalStack,
+} from './productApi'
+import { longTermPicks } from './longTermPicks'
 import type {
   ChartBar,
   ControlName,
@@ -37,8 +45,7 @@ const momentumRows = (dashboard: DashboardPayload) => dashboard.scan.records
   .filter((row) => row.signals?.includes('MOMENTUM') || row.verdict === 'BUY')
   .sort((a, b) => (b.score || 0) - (a.score || 0))
 
-const qualityRows = (dashboard: DashboardPayload) => dashboard.long_term.records
-  .filter((row) => ['QUALITY_COMPOUNDER', 'GARP_CANDIDATE', 'QUALITY_BUT_EXPENSIVE'].includes(row.classification || ''))
+const qualityRows = (dashboard: DashboardPayload) => longTermPicks(dashboard.long_term.records)
   .sort((a, b) => (b.combined_score || 0) - (a.combined_score || 0))
 
 function EquityCurve({ values }: { values?: number[] }) {
@@ -220,30 +227,147 @@ export function StockIntelligenceView(props: ViewProps) {
 }
 
 export function PortfolioView({ dashboard, runControl }: ViewProps) {
+  const [target, setTarget] = useState<Awaited<ReturnType<typeof fetchTargetPortfolio>> | null>(null)
   const paperReturn = dashboard.paper.capital > 0 ? ((dashboard.paper.equity / dashboard.paper.capital) - 1) * 100 : null
+
+  useEffect(() => {
+    let alive = true
+    fetchTargetPortfolio()
+      .then((payload) => { if (alive) setTarget(payload) })
+      .catch(() => { if (alive) setTarget(null) })
+    return () => { alive = false }
+  }, [dashboard.autonomy.heartbeat_ist, dashboard.paper.equity])
+
+  const summary = target?.summary
+
   return (
     <section className="workspace-view">
       <div className="inline-actions"><button type="button" onClick={() => void runControl('RUN_CYCLE_NOW')}>Request paper cycle</button><button type="button" onClick={() => void runControl(dashboard.autonomy.new_paper_entries ? 'PAUSE_NEW_PAPER_ENTRIES' : 'RESUME_NEW_PAPER_ENTRIES')}>{dashboard.autonomy.new_paper_entries ? 'Pause new entries' : 'Resume new entries'}</button></div>
-      <div className="view-metrics"><MetricCard label="PAPER CAPITAL" value={money(dashboard.paper.capital)} /><MetricCard label="PAPER EQUITY" value={money(dashboard.paper.equity)} detail={pct(paperReturn)} tone="green" /><MetricCard label="OPEN RISK" value={money(dashboard.paper.open_risk)} detail={`${(dashboard.paper.risk_per_trade_pct * 100).toFixed(1)}% risk/trade`} tone="amber" /><MetricCard label="POSITIONS" value={String(dashboard.paper.open_positions.length)} detail={`Max ${dashboard.paper.max_positions}`} tone="purple" /></div>
+      <div className="view-metrics">
+        <MetricCard label="PAPER CAPITAL" value={money(dashboard.paper.capital)} />
+        <MetricCard label="PAPER EQUITY" value={money(dashboard.paper.equity)} detail={pct(paperReturn)} tone="green" />
+        <MetricCard label="OPEN RISK" value={money(dashboard.paper.open_risk)} detail={`${(dashboard.paper.risk_per_trade_pct * 100).toFixed(1)}% risk/trade`} tone="amber" />
+        <MetricCard label="POSITIONS" value={String(dashboard.paper.open_positions.length)} detail={`Max ${dashboard.paper.max_positions}`} tone="purple" />
+        {summary && (
+          <MetricCard label="TARGET PORTFOLIO" value={target?.available ? `${summary.target_positions} targets` : 'EMPTY'} detail={target?.available ? `Exec ${summary.executable_changes} · blocked ${summary.blocked_changes}` : target?.message || '—'} tone={target?.available ? 'cyan' : 'amber'} />
+        )}
+      </div>
       <div className="portfolio-workspace">
-        <Panel title="RECORDED EQUITY CURVE" subtitle="No synthetic history"><EquityCurve values={dashboard.paper.equity_curve} /></Panel>
-        <Panel title="OPEN PAPER POSITIONS"><PositionsTable rows={dashboard.paper.open_positions} /></Panel>
+        <Panel title="CANONICAL TARGET PORTFOLIO" subtitle="Read-only intelligence target book · not paper">
+          {!target && <p className="panel-copy">Loading target portfolio projection…</p>}
+          {target && !target.available && <p className="panel-copy">{target.message || 'No persisted target portfolio yet.'}</p>}
+          {target?.available && summary && (
+            <div className="key-value-list">
+              <div><span>Current positions</span><strong>{summary.current_positions}</strong></div>
+              <div><span>Target positions</span><strong>{summary.target_positions}</strong></div>
+              <div><span>Open risk (current)</span><strong>{summary.current_open_risk_pct}%</strong></div>
+              <div><span>Open risk (target)</span><strong>{summary.target_open_risk_pct}%</strong></div>
+              <div><span>Available cash</span><strong>{money(summary.available_cash)}</strong></div>
+            </div>
+          )}
+          {target?.positions && target.positions.length > 0 && (
+            <table className="radar-table" style={{ marginTop: '12px' }}>
+              <thead><tr><th>Symbol</th><th>Qty</th><th>Status</th><th>Risk %</th></tr></thead>
+              <tbody>
+                {target.positions.slice(0, 20).map((row, idx) => (
+                  <tr key={String(row.symbol ?? idx)}>
+                    <td>{String(row.symbol ?? '—')}</td>
+                    <td>{String(row.desired_quantity ?? row.required_quantity ?? '—')}</td>
+                    <td>{String(row.status ?? '—')}</td>
+                    <td>{row.target_risk_pct != null ? String(row.target_risk_pct) : '—'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </Panel>
+        <Panel title="RECORDED EQUITY CURVE" subtitle="Paper evidence · no synthetic history"><EquityCurve values={dashboard.paper.equity_curve} /></Panel>
+        <Panel title="OPEN PAPER POSITIONS" subtitle="Secondary paper layer"><PositionsTable rows={dashboard.paper.open_positions} /></Panel>
         <Panel title="RECENT CLOSED TRADES"><PositionsTable rows={[...dashboard.paper.closed_trades].reverse().slice(0, 50)} closed /></Panel>
       </div>
     </section>
   )
 }
 
-export function MarketInternalsView({ dashboard }: ViewProps) {
+export function MarketInternalsView({ dashboard, runControl }: ViewProps) {
   const details = dashboard.market.technical_details || {}
+  const inst = dashboard.institutional
+  const cash = inst?.cash
+  const history = cash?.history || []
+  const niftyOpts = inst?.nifty_options
+  const [instBusy, setInstBusy] = useState(false)
+
+  const refreshInstitutional = async () => {
+    setInstBusy(true)
+    try {
+      await refreshFiiDiiStore()
+      await runControl('REFRESH_DATA_NOW')
+    } finally {
+      setInstBusy(false)
+    }
+  }
+
   return (
     <section className="workspace-view">
       {!dashboard.data.ready && <DataReadinessPanel dashboard={dashboard} />}
-      <div className="view-metrics"><MetricCard label="REGIME" value={dashboard.market.health} detail={String(details.market_regime || dashboard.market.breadth)} tone={dashboard.market.health.toLowerCase() === 'healthy' ? 'green' : 'amber'} /><MetricCard label="NIFTY 1D" value={pct(dashboard.market.nifty_change_1d)} detail={`5D ${pct(dashboard.market.nifty_change_5d)}`} /><MetricCard label="INDIA VIX" value={Number.isFinite(dashboard.market.vix) ? Number(dashboard.market.vix).toFixed(2) : '—'} tone="purple" /><MetricCard label="SCAN COVERAGE" value={dashboard.scan.universe_size.toLocaleString('en-IN')} detail={`${dashboard.scan.summary.with_any_setup ?? 0} with setups`} /></div>
+      <div className="inline-actions">
+        <button type="button" disabled={instBusy} onClick={() => void refreshInstitutional()}>
+          {instBusy ? 'Syncing FII/DII…' : 'Refresh FII/DII store'}
+        </button>
+      </div>
+      <div className="view-metrics">
+        <MetricCard label="REGIME" value={dashboard.market.health} detail={String(details.market_regime || dashboard.market.breadth)} tone={dashboard.market.health.toLowerCase() === 'healthy' ? 'green' : 'amber'} />
+        <MetricCard label="NIFTY 1D" value={pct(dashboard.market.nifty_change_1d)} detail={`5D ${pct(dashboard.market.nifty_change_5d)}`} />
+        <MetricCard label="INDIA VIX" value={Number.isFinite(dashboard.market.vix) ? Number(dashboard.market.vix).toFixed(2) : '—'} tone="purple" />
+        <MetricCard label="FII NET (30D)" value={cash?.totals?.fii_net_cr != null ? `₹${Number(cash.totals.fii_net_cr).toLocaleString('en-IN')} Cr` : '—'} detail={inst?.insight || cash?.note || 'Syncs from NSE when you open this page'} tone={Number(cash?.totals?.fii_net_cr || 0) >= 0 ? 'green' : 'amber'} />
+        <MetricCard label="DII NET (30D)" value={cash?.totals?.dii_net_cr != null ? `₹${Number(cash.totals.dii_net_cr).toLocaleString('en-IN')} Cr` : '—'} detail={`Bias ${cash?.bias || '—'}`} />
+        <MetricCard label="BULK BUYS" value={String(inst?.bulk_buy_symbols?.length || 0)} detail="Net bulk-buy symbols today" tone="cyan" />
+      </div>
       <div className="market-grid">
-        <Panel title="MARKET NARRATIVE"><p className="lead-copy">{dashboard.market.summary}</p><p className="panel-copy">{dashboard.market.trade_stance}</p></Panel>
+        <Panel title="MARKET NARRATIVE"><p className="lead-copy">{dashboard.market.summary}</p><p className="panel-copy">{dashboard.market.trade_stance}</p>{inst?.insight && <p className="panel-copy"><strong>Institutional:</strong> {inst.insight}</p>}</Panel>
+        <Panel title="FII / DII CASH FLOWS" subtitle="NSE official · ₹ Crore · persisted store">
+          {!inst?.available && <p className="panel-copy">FII/DII data loads automatically from NSE on first visit (one quick sync). If NSE is unreachable, numbers stay empty — nothing is fabricated.</p>}
+          {history.length > 0 && (
+            <div className="fno-table wide-table">
+              <div className="fno-head"><span>DATE</span><span>FII NET</span><span>DII NET</span></div>
+              {history.slice(0, 12).map((row) => (
+                <div className="fno-row" key={row.date} style={{ display: 'grid', cursor: 'default' }}>
+                  <strong>{row.date}</strong>
+                  <span>{Number(row.fii_net).toLocaleString('en-IN')} Cr</span>
+                  <span>{Number(row.dii_net).toLocaleString('en-IN')} Cr</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </Panel>
         <Panel title="SECTOR LEADERS"><div className="tag-cloud">{dashboard.market.leaders.length ? dashboard.market.leaders.map((item) => <span className="positive-tag" key={item}>{item}</span>) : <span>No clear leaders recorded.</span>}</div></Panel>
         <Panel title="SECTOR LAGGARDS"><div className="tag-cloud">{dashboard.market.laggards.length ? dashboard.market.laggards.map((item) => <span className="negative-tag" key={item}>{item}</span>) : <span>No clear laggards recorded.</span>}</div></Panel>
+        <Panel title="BULK DEAL BUYS" subtitle="Symbol-level institutional footprint">
+          <div className="tag-cloud">{inst?.bulk_buy_symbols?.length ? inst.bulk_buy_symbols.slice(0, 24).map((sym) => <span className="positive-tag" key={sym}>{sym}</span>) : <span>No net bulk buys in current cache.</span>}</div>
+        </Panel>
+        <Panel title="BULK DEAL DETAIL" subtitle="NSE largedeal snapshot · client, qty, price">
+          {(inst?.bulk_deals?.length ?? 0) > 0 ? (
+            <div className="fno-table wide-table">
+              <div className="fno-head"><span>SYMBOL</span><span>SIDE</span><span>QTY</span><span>PRICE</span><span>CLIENT</span></div>
+              {inst!.bulk_deals!.slice(0, 24).map((deal, idx) => (
+                <div className="fno-row" key={`${deal.symbol}-${idx}`} style={{ display: 'grid', cursor: 'default' }}>
+                  <strong>{String(deal.symbol ?? '—')}</strong>
+                  <span className={String(deal.side) === 'BUY' ? 'positive-tag' : 'negative-tag'}>{String(deal.side ?? '—')}</span>
+                  <span>{Number(deal.qty ?? 0).toLocaleString('en-IN')}</span>
+                  <span>{money(Number(deal.price ?? 0))}</span>
+                  <span>{String(deal.client ?? '').slice(0, 40) || '—'}</span>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="panel-copy">No bulk deals in cache. Data syncs from NSE when institutional flows refresh (same path as Brain bulk tags).</p>
+          )}
+        </Panel>
+        <Panel title="NIFTY OPTIONS" subtitle="Nearest expiry · NSE chain when available">
+          {niftyOpts?.available
+            ? <div className="key-value-list"><div><span>PCR</span><strong>{String(niftyOpts.pcr)}</strong></div><div><span>Max pain</span><strong>{String(niftyOpts.max_pain)}</strong></div><div><span>Bias</span><strong>{String(niftyOpts.bias)}</strong></div><div><span>Note</span><strong>{String(niftyOpts.note || '')}</strong></div></div>
+            : <p className="panel-copy">Index option chain unavailable (NSE may block off-hours). Stock options load on Stock Intelligence → Options tab.</p>}
+        </Panel>
         <Panel title="REGIME ENGINE DETAILS"><div className="key-value-list">{Object.entries(details).map(([key, value]) => <div key={key}><span>{words(key)}</span><strong>{String(value ?? '—')}</strong></div>)}</div></Panel>
       </div>
     </section>
@@ -255,7 +379,11 @@ export function LongTermView(props: ViewProps) {
   const [classification, setClassification] = useState('All')
   const rows = useMemo(() => {
     const all = [...dashboard.long_term.records].sort((a, b) => (b.combined_score || 0) - (a.combined_score || 0))
-    if (classification === 'Quality') return all.filter((row) => ['QUALITY_COMPOUNDER', 'GARP_CANDIDATE'].includes(row.classification || ''))
+    if (classification === 'Quality') {
+      return longTermPicks(all).filter(
+        (row) => row.classification === 'QUALITY_COMPOUNDER' || row.classification === 'GARP_CANDIDATE',
+      )
+    }
     if (classification === 'Expensive') return all.filter((row) => row.classification === 'QUALITY_BUT_EXPENSIVE')
     if (classification === 'Needs Data') return all.filter((row) => row.classification === 'NEEDS_FUNDAMENTALS')
     if (classification === 'Avoid') return all.filter((row) => row.classification === 'AVOID_REVIEW')
@@ -274,10 +402,77 @@ export function LongTermView(props: ViewProps) {
   return (
     <section className="workspace-view">
       {(!dashboard.data.bhavcopy.ready || !dashboard.long_term.available) && <DataReadinessPanel dashboard={dashboard} />}
-      <div className="mode-tabs">{['All', 'Quality', 'Expensive', 'Needs Data', 'Avoid'].map((item) => <button type="button" key={item} className={classification === item ? 'active' : ''} onClick={() => setClassification(item)}>{item}</button>)}<button className="mode-action" type="button" onClick={() => void runControl('RUN_LONG_TERM_SCAN_NOW')}>{runLabel}</button><button className="mode-action" type="button" disabled={!dashboard.long_term.records.length} onClick={() => void runControl('REFRESH_LONG_TERM_NOW')}>Refresh fundamentals</button></div>
+      <div className="mode-tabs">{['All', 'Quality', 'Expensive', 'Needs Data', 'Avoid'].map((item) => <button type="button" key={item} className={classification === item ? 'active' : ''} onClick={() => setClassification(item)}>{item}</button>)}<button className="mode-action" type="button" onClick={() => void runControl('RUN_LONG_TERM_SCAN_NOW')}>{runLabel}</button><button className="mode-action" type="button" disabled={!dashboard.long_term.records.length} onClick={() => void runControl('REFRESH_LONG_TERM_NOW')}>Fill missing fundamentals</button></div>
       {!dashboard.long_term.available && <div className="api-warning">Latest long-term operation: {String(latestOperation?.status || 'not run')} · {String(latestOperation?.error_message || latestOperation?.message || 'waiting for the dedicated long-term lane')}</div>}
       <div className="split-workspace"><Panel title={`${classification.toUpperCase()} · ${rows.length} RECORDS`} subtitle={`Coverage ${dashboard.long_term.summary.coverage_pct ?? 0}% · ${dashboard.long_term.fundamentals_source || 'current snapshot'}`}><LongTermTable rows={rows} selected={viewSymbol} onSelect={setSelected} /></Panel><div className="detail-stack"><Panel title={`LONG-TERM CHART · ${viewSymbol || 'SELECT STOCK'}`}><ChartWorkspace symbol={viewSymbol} bars={viewBars} row={row} /></Panel><Panel title="QUALITY & RISKS"><div className="evidence-grid"><EvidenceList title="Quality factors" items={row?.quality_factors} tone="green" /><EvidenceList title="Risk flags" items={row?.risk_flags} tone="red" /></div></Panel></div></div>
     </section>
+  )
+}
+
+function InstitutionalStackPanel() {
+  const [stack, setStack] = useState<InstitutionalStack | null>(null)
+
+  useEffect(() => {
+    let alive = true
+    fetchInstitutionalStack()
+      .then((payload) => { if (alive) setStack(payload) })
+      .catch(() => { if (alive) setStack(null) })
+    return () => { alive = false }
+  }, [])
+
+  const readiness = stack?.readiness
+  const readinessOk = readiness && 'domains' in readiness ? readiness : null
+  const domains = readinessOk?.domains || []
+  const systemState = readinessOk?.system_state || 'UNAVAILABLE'
+
+  const serviceCards = stack ? [
+    { label: 'OMS', data: stack.oms, detail: String(stack.oms.summary?.orders ?? stack.oms.summary?.open_orders ?? '—') },
+    { label: 'RISK GOVERNOR', data: stack.risk_governor, detail: String(stack.risk_governor.mode ?? stack.risk_governor.summary?.decisions ?? '—') },
+    { label: 'RECONCILIATION', data: stack.reconciliation, detail: String(stack.reconciliation.summary?.latest_status ?? '—') },
+    { label: 'PROTECTION', data: stack.protection, detail: String(stack.protection.summary?.fully_protected ?? '—') },
+    { label: 'TCA', data: stack.tca, detail: String(stack.tca.summary?.assessments ?? '—') },
+    {
+      label: 'BROKER OBSERVER',
+      data: stack.broker_observer,
+      detail: stack.broker_observer.running ? 'RUNNING' : 'OFF',
+      available: Boolean(stack.broker_observer.running) || Boolean(stack.broker_observer.snapshots?.available),
+    },
+  ] : []
+
+  return (
+    <Panel title="INSTITUTIONAL EXECUTION STACK" subtitle="Read-only projections · no live orders from this panel">
+      {!stack && <p className="panel-copy">Loading institutional APIs…</p>}
+      {stack && (
+        <>
+          <div className="view-metrics">
+            <MetricCard label="SYSTEM STATE" value={systemState} detail={String(readinessOk?.summary || '')} tone={systemState.includes('ELIGIBLE') ? 'green' : 'amber'} />
+            <MetricCard label="HARD BLOCKERS" value={String(readinessOk?.hard_blockers?.length ?? 0)} detail={(readinessOk?.hard_blockers || []).slice(0, 3).join(', ') || 'None listed'} tone="purple" />
+          </div>
+          <div className="runtime-grid">
+            {domains.map((domain: InstitutionalDomain) => (
+              <article key={domain.key}>
+                <span>{domain.label}</span>
+                <strong className={`evidence-status ${domain.status === 'READY' ? 'fresh' : domain.status === 'PARTIAL' ? 'stale' : 'missing'}`}>{domain.status}</strong>
+                <small>{domain.summary}</small>
+                {domain.blockers.length > 0 && <small>Blockers: {domain.blockers.join('; ')}</small>}
+              </article>
+            ))}
+          </div>
+          <div className="view-metrics" style={{ marginTop: '12px' }}>
+            {serviceCards.map((card) => (
+              <MetricCard
+                key={card.label}
+                label={card.label}
+                value={(card.available ?? card.data.available) ? 'AVAILABLE' : 'EMPTY'}
+                detail={card.detail}
+                tone={(card.available ?? card.data.available) ? 'cyan' : 'amber'}
+              />
+            ))}
+          </div>
+          {stack.broker_observer.message && <p className="panel-copy">{stack.broker_observer.message}</p>}
+        </>
+      )}
+    </Panel>
   )
 }
 
@@ -293,6 +488,7 @@ export function AutomationView({ dashboard, runControl }: ViewProps) {
         <Panel title="OPERATING STATE"><div className="key-value-list"><div><span>Heartbeat</span><strong>{a.heartbeat_ist || '—'}</strong></div><div><span>Live feed</span><strong>{String(a.live_feed?.connected ?? 'Unavailable')}</strong></div><div><span>Subscriptions</span><strong>{String(a.live_feed?.subscriptions ?? '—')}</strong></div><div><span>Existing exits</span><strong>{boolLabel(a.existing_exits)}</strong></div><div><span>Research</span><strong>{boolLabel(a.research_enabled)}</strong></div></div><p className="panel-copy">{a.explanation || a.plain_state}</p></Panel>
         <Panel title="RECENT SUPERVISOR DIALOGUE"><div className="dialogue-list">{a.recent_dialogue.length === 0 && <div className="empty-row">No dialogue records.</div>}{[...a.recent_dialogue].reverse().slice(0, 20).map((record, index) => <div key={index}><strong>{words(String(record.record_type || record.decision || 'event'))}</strong><span>{String(record.claim || record.explanation || record.summary || JSON.stringify(record))}</span></div>)}</div></Panel>
         <Panel title="CAPABILITY NOTES"><EvidenceList title="Current constraints" items={[...(a.capability_notes || []), ...(a.active_failures || [])]} tone={a.active_failures?.length ? 'red' : 'cyan'} /></Panel>
+        <InstitutionalStackPanel />
         <DataReadinessPanel dashboard={dashboard} />
       </div>
     </section>

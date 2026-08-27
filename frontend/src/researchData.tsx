@@ -1,6 +1,18 @@
 import { useEffect, useMemo, useState } from 'react'
+import {
+  fetchDataCoverage,
+  fetchDataJobs,
+  fetchDataProviders,
+  runDataJob,
+  fetchStockFundamentals,
+  type DataCoveragePayload,
+  type DataJobsPayload,
+  type DataProvidersPayload,
+} from './productApi'
 
-const reportBase = `${window.location.protocol}//${window.location.hostname}:8766`
+const reportBase = import.meta.env.DEV
+  ? ''
+  : `${window.location.protocol}//${window.location.hostname}:8766`
 
 type LinkItem = { label: string; url: string; official: string }
 type Requirement = {
@@ -76,9 +88,42 @@ export function ResearchDataView({ symbol }: { symbol: string }) {
   const [status, setStatus] = useState<EvidenceStatus | null>(null)
   const [error, setError] = useState('')
   const [busy, setBusy] = useState('')
+  const [fundaBusy, setFundaBusy] = useState(false)
   const [drafts, setDrafts] = useState<Record<string, Draft>>({})
+  const [providers, setProviders] = useState<DataProvidersPayload | null>(null)
+  const [jobs, setJobs] = useState<DataJobsPayload | null>(null)
+  const [symbolCoverage, setSymbolCoverage] = useState<DataCoveragePayload | null>(null)
+  const [universeCoverage, setUniverseCoverage] = useState<DataCoveragePayload | null>(null)
+  const [jobBusy, setJobBusy] = useState('')
 
-  const load = async () => {
+  const runPlatformJob = async (jobId: string) => {
+    setJobBusy(jobId)
+    setError('')
+    try {
+      const result = await runDataJob(jobId)
+      if (!result.ok) throw new Error(result.error || result.message || 'Job failed')
+      await loadPlatformData()
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : 'Job run failed')
+    } finally {
+      setJobBusy('')
+    }
+  }
+
+  const loadPlatformData = async () => {
+    const [prov, jobList, symCov, uniCov] = await Promise.all([
+      fetchDataProviders().catch(() => null),
+      fetchDataJobs().catch(() => null),
+      symbol ? fetchDataCoverage(symbol).catch(() => null) : Promise.resolve(null),
+      fetchDataCoverage().catch(() => null),
+    ])
+    setProviders(prov)
+    setJobs(jobList)
+    setSymbolCoverage(symCov)
+    setUniverseCoverage(uniCov)
+  }
+
+  const loadEvidence = async () => {
     if (!symbol) {
       setStatus(null)
       return
@@ -87,13 +132,35 @@ export function ResearchDataView({ symbol }: { symbol: string }) {
       const response = await fetch(`${reportBase}/evidence/${encodeURIComponent(symbol)}`, { headers: { Accept: 'application/json' } })
       if (!response.ok) throw new Error(await response.text())
       setStatus(await response.json() as EvidenceStatus)
-      setError('')
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : 'Evidence service unavailable')
     }
   }
 
-  useEffect(() => { void load() }, [symbol])
+  const loadFundamentals = async (force: boolean) => {
+    if (!symbol) return
+    setFundaBusy(true)
+    if (!force) setError('')
+    try {
+      await fetchStockFundamentals(symbol, force)
+      await loadEvidence()
+      if (force) setError('')
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : 'Fundamentals fetch failed — use Retry')
+    } finally {
+      setFundaBusy(false)
+    }
+  }
+
+  useEffect(() => {
+    if (!symbol) {
+      setStatus(null)
+      setSymbolCoverage(null)
+      return
+    }
+    void loadFundamentals(false)
+    void loadPlatformData()
+  }, [symbol])
 
   const missingCount = useMemo(() => status?.requirements.filter((item) => !item.available).length || 0, [status])
   const staleCount = useMemo(() => status?.requirements.filter((item) => item.status === 'STALE').length || 0, [status])
@@ -106,12 +173,14 @@ export function ResearchDataView({ symbol }: { symbol: string }) {
     setBusy(`auto-${action}`)
     setError('')
     try {
-      const endpoint = action === 'fundamentals'
-        ? `${reportBase}/evidence/${encodeURIComponent(symbol)}/actions/refresh-fundamentals`
-        : `/api/controls/${action === 'history' ? 'REFRESH_DATA_NOW' : action === 'news' ? 'REFRESH_NEWS_NOW' : 'REFRESH_FNO_NOW'}`
-      const response = await fetch(endpoint, { method: 'POST', headers: { Accept: 'application/json' } })
-      if (!response.ok) throw new Error(await response.text())
-      window.setTimeout(() => void load(), action === 'fundamentals' ? 100 : 1500)
+      if (action === 'fundamentals') {
+        await loadFundamentals(true)
+      } else {
+        const endpoint = `/api/controls/${action === 'history' ? 'REFRESH_DATA_NOW' : action === 'news' ? 'REFRESH_NEWS_NOW' : 'REFRESH_FNO_NOW'}`
+        const response = await fetch(endpoint, { method: 'POST', headers: { Accept: 'application/json' } })
+        if (!response.ok) throw new Error(await response.text())
+        window.setTimeout(() => void loadEvidence(), 1500)
+      }
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : `${action} refresh failed`)
     } finally {
@@ -158,7 +227,19 @@ export function ResearchDataView({ symbol }: { symbol: string }) {
 
   return (
     <section className="research-data-view">
-      {error && <div className="api-warning">{error}</div>}
+      {error && (
+        <div className="api-warning">
+          {error}
+          <button type="button" className="mode-action" disabled={fundaBusy} onClick={() => void loadFundamentals(true)}>
+            {fundaBusy ? 'Retrying…' : 'Retry fundamentals'}
+          </button>
+        </div>
+      )}
+      {fundaBusy && !error && (
+        <div className="api-warning" style={{ borderColor: 'var(--accent-cyan, #26d7ff)' }}>
+          Fetching fundamentals from Screener.in for {symbol}…
+        </div>
+      )}
       <div className="evidence-summary">
         <div><span>SYMBOL</span><strong>{symbol}</strong></div>
         <div><span>RESEARCH COVERAGE</span><strong>{status?.coverage_pct ?? 0}%</strong></div>
@@ -169,11 +250,64 @@ export function ResearchDataView({ symbol }: { symbol: string }) {
 
       <div className="evidence-panel">
         <header>
+          <div><h2>Data platform audit</h2><p>Provider registry, refresh jobs, and per-symbol coverage from /api/data/* (not inferred from UI).</p></div>
+          <button type="button" onClick={() => void loadPlatformData()}>Refresh platform</button>
+        </header>
+        {providers && (
+          <div className="runtime-grid">
+            {providers.providers.map((row) => (
+              <article key={row.name}>
+                <span>{row.name}</span>
+                <strong className={statusClass(row.status)}>{row.status}</strong>
+                <small>{row.coverage_note}</small>
+                <small>Auth: {row.authentication_status} · caps: {row.capabilities.join(', ')}</small>
+              </article>
+            ))}
+          </div>
+        )}
+        {jobs && (
+          <div className="fno-table wide-table" style={{ marginTop: '12px' }}>
+            <div className="fno-head"><span>JOB</span><span>CONTROL</span><span>DESCRIPTION</span><span>ACTION</span></div>
+            {jobs.jobs.map((job) => (
+              <div className="fno-row" key={job.id} style={{ display: 'grid', cursor: 'default' }}>
+                <strong>{job.label}</strong>
+                <span>{job.control || job.trigger}</span>
+                <span>{job.description}</span>
+                <button type="button" disabled={jobBusy === job.id} onClick={() => void runPlatformJob(job.id)}>
+                  {jobBusy === job.id ? 'Running…' : 'Run'}
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+        {symbolCoverage?.coverage && (
+          <div className="key-value-list" style={{ marginTop: '12px' }}>
+            <div><span>{symbol} identity</span><strong>{String(symbolCoverage.coverage.identity ?? '—')}</strong></div>
+            <div><span>Price history</span><strong>{String(symbolCoverage.coverage.price_history ?? '—')}</strong></div>
+            <div><span>Fundamentals</span><strong>{String(symbolCoverage.coverage.fundamentals ?? '—')}</strong></div>
+            <div><span>Ratios</span><strong>{String(symbolCoverage.coverage.ratios ?? '—')}</strong></div>
+            <div><span>Long-term eligible</span><strong>{String(symbolCoverage.coverage.long_term_eligible ?? '—')}</strong></div>
+          </div>
+        )}
+        {universeCoverage?.audited != null && (
+          <p className="panel-copy" style={{ marginTop: '12px' }}>
+            Universe sample: {universeCoverage.audited} symbols audited · remediation queue {universeCoverage.remediation_queue?.length ?? 0} items
+            {universeCoverage.status_counts && (
+              <> · counts: {Object.entries(universeCoverage.status_counts).map(([k, v]) => `${k}=${v}`).join(', ')}</>
+            )}
+          </p>
+        )}
+      </div>
+
+      <div className="evidence-panel">
+        <header>
           <div><h2>Automatic data preparation</h2><p>QuantTerm fetches what it can itself. These operations are independent of paper trading.</p></div>
-          <button type="button" onClick={() => void load()}>Refresh status</button>
+          <button type="button" onClick={() => void loadEvidence()}>Refresh status</button>
         </header>
         <div className="resource-links">
-          <button type="button" disabled={busy === 'auto-fundamentals'} onClick={() => void runAutomatic('fundamentals')}>Fetch deep fundamentals</button>
+          <button type="button" disabled={busy === 'auto-fundamentals' || fundaBusy} onClick={() => void runAutomatic('fundamentals')}>
+            {fundaBusy || busy === 'auto-fundamentals' ? 'Fetching…' : 'Retry deep fundamentals'}
+          </button>
           <button type="button" disabled={busy === 'auto-history'} onClick={() => void runAutomatic('history')}>Prepare official price history</button>
           <button type="button" disabled={busy === 'auto-news'} onClick={() => void runAutomatic('news')}>Refresh news and filings</button>
           <button type="button" disabled={busy === 'auto-fno'} onClick={() => void runAutomatic('fno')}>Refresh F&O instruments</button>

@@ -46,34 +46,81 @@ def symbol_ratios_workspace(symbol: str) -> dict[str, Any]:
     if not sym:
         raise HTTPException(status_code=400, detail="symbol required")
     from fundamentals.cache import FundamentalsCache
-    from data_platform.ratios import ratios_from_fundamentals
-    raw = FundamentalsCache().get(sym) or {}
+    from data_platform.ratios import (
+        compute_peer_average_pe,
+        flatten_screener_snapshot,
+        peer_pe_fundamental_metrics,
+        ratios_from_fundamentals,
+    )
+    cache = FundamentalsCache()
+    raw = cache.get(sym) or cache.get_any(sym) or {}
+    flat = flatten_screener_snapshot(raw) if raw else {}
+
+    peer_symbols: list[str] = []
+    try:
+        from product.scan_store import load_scan
+        from product.stock_workspace import _sector_peers_from_scan
+
+        scan = load_scan() or {}
+        sector = ""
+        for row in scan.get("records", []) or []:
+            if str(row.get("symbol", "")).upper() == sym:
+                sector = str(row.get("sector") or "")
+                break
+        peer_symbols = [
+            str(p.get("symbol", "")).upper()
+            for p in _sector_peers_from_scan(sym, sector, scan)
+        ]
+    except Exception:
+        peer_symbols = []
+
+    peer_stats = compute_peer_average_pe(sym, raw, peer_symbols)
     return {
         "symbol": sym,
-        "ratios": ratios_from_fundamentals(sym, raw),
+        "ratios": ratios_from_fundamentals(sym, raw, peer_stats=peer_stats),
         "source": "fundamentals_cache+data_platform.ratios",
+        "fundamentals_cached": bool(raw),
+        "inputs_available": sorted(k for k, v in flat.items() if v is not None and not str(k).startswith("_")),
+        "peer_average_pe": peer_stats,
     }
 
 
 def fundamentals_backfill_status_workspace() -> dict[str, Any]:
-    from fundamentals.backfill import backfill_status
-    return backfill_status()
+    from fundamentals.lazy import cache_status
+
+    return cache_status()
 
 
 def fundamentals_backfill_run(
-    scope: str = Query("nse", description="nse | nifty500 | bhav"),
-    limit: int = Query(50, ge=1, le=500),
+    scope: str = Query("nse", description="nse | nifty500 | bhav (optional maintenance)"),
+    limit: int = Query(5, ge=1, le=50),
     force: bool = Query(False),
 ) -> dict[str, Any]:
-    """Run a bounded backfill batch (use CLI for full universe overnight)."""
+    """Optional maintenance batch — normal use is lazy per-symbol on Stock Intelligence."""
     from fundamentals.backfill import run_fundamentals_backfill
+
     return run_fundamentals_backfill(scope=scope, force=force, limit=limit, resume=True)
+
+
+def run_job_workspace(job_id: str) -> dict[str, Any]:
+    from data_platform.jobs import run_job
+
+    clean = str(job_id or "").strip()
+    if not clean:
+        raise HTTPException(status_code=400, detail="job_id required")
+    return run_job(clean)
 
 
 def install_data_routes(app) -> None:
     app.add_api_route("/api/data/providers", providers_workspace, methods=["GET"], name="data_providers")
     app.add_api_route("/api/data/coverage", coverage_workspace, methods=["GET"], name="data_coverage")
     app.add_api_route("/api/data/jobs", jobs_workspace, methods=["GET"], name="data_jobs")
+    app.add_api_route(
+        "/api/data/jobs/{job_id}/run",
+        run_job_workspace,
+        methods=["POST"],
+        name="data_job_run",
+    )
     app.add_api_route(
         "/api/data/security-master",
         security_master_workspace,
