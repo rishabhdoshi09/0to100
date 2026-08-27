@@ -1307,6 +1307,9 @@ def build_market_reports_workspace(
         or (pulse.get("breakouts_today") or [])
         or int(highlights.get("row_count") or 0)
     )
+    if persist_today and pulse_has_rows:
+        pulse.setdefault("as_of_ist", today)
+        _persist_pulse(pulse)
     if not has_today and pulse_has_rows:
         reports.insert(0, _report_item({
             "id": f"market_pulse_{today}",

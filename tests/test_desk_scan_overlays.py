@@ -34,7 +34,7 @@ def test_persist_desks_saves_recos_and_rebuilds_pulse(monkeypatch, tmp_path):
     saved = {}
 
     def fake_build_reco(**kwargs):
-        assert kwargs.get("deep_confirm") is True
+        assert kwargs.get("deep_confirm") is False
         assert kwargs.get("persist_ledger") is True
         return {
             "schema_version": 4,
@@ -46,7 +46,7 @@ def test_persist_desks_saves_recos_and_rebuilds_pulse(monkeypatch, tmp_path):
         }
 
     def fake_build_reports(**kwargs):
-        assert kwargs.get("rebuild") is True
+        assert kwargs.get("rebuild") is False
         saved["pulse"] = True
         return {"reports": []}
 
