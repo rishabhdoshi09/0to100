@@ -395,27 +395,33 @@ export function RecommendationsView({
 
   useEffect(() => {
     let cancelled = false
-    if (!recallMemory('reco-workspace')) setLoading(true)
-    fetchRecommendationsWorkspace()
-      .then((payload) => {
-        if (!cancelled) {
-          const kept = keepRicherMemory('reco-workspace', payload, (row) => !(row.categories || []).some((c) => (c.count || 0) > 0 || (c.cards || []).length > 0))
-          setData(kept)
-          const firstWithCards = kept.categories.find((c) => c.count > 0)
-          if (firstWithCards) setCategoryId(firstWithCards.id)
-          setError('')
-        }
-      })
-      .catch((err: Error) => {
-        if (!cancelled) setError(err.message || 'Failed to load recommendations')
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false)
-      })
+    const load = () => {
+      if (!recallMemory('reco-workspace')) setLoading(true)
+      fetchRecommendationsWorkspace()
+        .then((payload) => {
+          if (!cancelled) {
+            const kept = keepRicherMemory('reco-workspace', payload, (row) => !(row.categories || []).some((c) => (c.count || 0) > 0 || (c.cards || []).length > 0))
+            setData(kept)
+            const firstWithCards = kept.categories.find((c) => c.count > 0)
+            if (firstWithCards) setCategoryId(firstWithCards.id)
+            setError('')
+          }
+        })
+        .catch((err: Error) => {
+          if (!cancelled) setError(err.message || 'Failed to load recommendations')
+        })
+        .finally(() => {
+          if (!cancelled) setLoading(false)
+        })
+    }
+    load()
+    const ms = marketScan.isBusy || longTermScan.isBusy ? 8000 : 20000
+    const timer = window.setInterval(load, ms)
     return () => {
       cancelled = true
+      window.clearInterval(timer)
     }
-  }, [dashboard.scan.scanned_at, dashboard.long_term.scanned_at, marketScan.succeeded, longTermScan.succeeded])
+  }, [dashboard.scan.scanned_at, dashboard.long_term.scanned_at, marketScan.succeeded, longTermScan.succeeded, marketScan.isBusy, longTermScan.isBusy, dashboard.market.available])
 
   const category = useMemo(
     () => data?.categories.find((c) => c.id === categoryId) || data?.categories[0],
@@ -687,7 +693,84 @@ function formatReportDate(value: string): string {
   }
 }
 
-function DeskNoteMagazine({
+function DailyWrapList({
+  lines,
+  onSymbol,
+}: {
+  lines: Array<{ id?: string; text: string; source?: string; official?: boolean; url?: string; symbols?: string[] }>
+  onSymbol?: (symbol: string) => void
+}) {
+  if (!lines.length) return null
+  return (
+    <section className="daily-wrap" aria-label="Here's the wrap of the day">
+      <p className="desk-kicker">Daily report</p>
+      <h2>Here&apos;s the wrap of the day</h2>
+      <ol>
+        {lines.map((line, index) => (
+          <li key={line.id || `${index}-${line.text.slice(0, 24)}`}>
+            <p>{line.text}</p>
+            <div className="desk-meta">
+              {line.source ? <span>{line.source}</span> : null}
+              {line.official ? <em>Official</em> : null}
+              {(line.symbols || []).map((sym) => (
+                onSymbol ? (
+                  <button key={sym} type="button" onClick={() => onSymbol(sym)}>{sym}</button>
+                ) : <span key={sym}>{sym}</span>
+              ))}
+              {line.url ? (
+                <a href={line.url} target="_blank" rel="noreferrer">Open source</a>
+              ) : null}
+            </div>
+          </li>
+        ))}
+      </ol>
+    </section>
+  )
+}
+
+function dashboardWrapLines(dashboard: ExperienceViewProps['dashboard']): Array<{ id: string; text: string; source: string; official?: boolean; symbols?: string[] }> {
+  const lines: Array<{ id: string; text: string; source: string; official?: boolean; symbols?: string[] }> = []
+  const market = dashboard.market
+  if (market?.available && (market.summary || market.nifty_change_1d != null)) {
+    const chg = market.nifty_change_1d
+    let move = market.summary || 'Official session on file.'
+    if (chg != null) {
+      const verb = chg < -0.05 ? `fell ${Math.abs(chg).toFixed(1)}%` : chg > 0.05 ? `rose ${chg.toFixed(1)}%` : `was little changed (${chg >= 0 ? '+' : ''}${chg.toFixed(1)}%)`
+      move = `Indian markets ${verb} on the official Nifty session. ${market.summary || ''}`.trim()
+    }
+    lines.push({ id: 'session_indices', text: move, source: 'Official NSE session', official: true })
+  }
+  const scan = dashboard.scan
+  if (scan?.available && (scan.records || []).length) {
+    const n = scan.records.length
+    const ready = scan.records.filter((row) => row.status === 'Ready to trade').length
+    const brk = scan.records
+      .filter((row) => (row.signals || []).some((s) => ['BREAKOUT_52W', 'BREAKOUT_RES'].includes(String(s).toUpperCase())))
+      .map((row) => row.symbol)
+      .filter(Boolean)
+      .slice(0, 6)
+    const bits = [`Last market scan has ${n} name${n === 1 ? '' : 's'}`]
+    if (ready) bits.push(`${ready} ready to trade`)
+    if (brk.length) bits.push(`breakouts ${brk.join(', ')}`)
+    lines.push({ id: 'session_scan', text: `${bits.join('. ')}.`, source: 'Saved market scan', official: true, symbols: brk })
+  }
+  const articles = [...(dashboard.news?.articles || [])]
+    .filter((a) => String(a.headline || '').trim())
+    .sort((a, b) => (b.impact_score || 0) - (a.impact_score || 0))
+    .slice(0, 6)
+  for (const article of articles) {
+    const headline = String(article.headline || '').trim()
+    const summary = String(article.summary || article.why_it_matters || '').trim()
+    lines.push({
+      id: article.article_id || headline,
+      text: summary ? `${headline} ${summary}` : headline,
+      source: article.source || 'Sourced news',
+      official: Boolean(article.official),
+      symbols: (article.mentioned_symbols || []).slice(0, 6),
+    })
+  }
+  return lines.slice(0, 8)
+}
   note,
   onSymbol,
 }: {
@@ -870,30 +953,36 @@ export function MarketReportsView({ dashboard, setActive, setSelected, marketSca
 
   useEffect(() => {
     let cancelled = false
-    if (!recallMemory('market-reports')) setLoading(true)
-    fetchMarketReportsWorkspace()
-      .then((payload) => {
-        if (!cancelled) {
-          const kept = keepRicherMemory('market-reports', payload, (row) => {
-            const highlights = row.scan_highlights?.row_count || 0
-            const sourced = row.desk_note?.wrap_sourced || 0
-            return !(row.reports || []).length && highlights === 0 && sourced === 0
-          })
-          setData(kept)
-          setSelectedReport(kept.reports[0] || payload.reports[0] || null)
-          setError('')
-        }
-      })
-      .catch((err: Error) => {
-        if (!cancelled) setError(err.message || 'Failed to load market reports')
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false)
-      })
+    const load = () => {
+      if (!recallMemory('market-reports')) setLoading(true)
+      fetchMarketReportsWorkspace()
+        .then((payload) => {
+          if (!cancelled) {
+            const kept = keepRicherMemory('market-reports', payload, (row) => {
+              const highlights = row.scan_highlights?.row_count || 0
+              const sourced = row.desk_note?.wrap_sourced || 0
+              const daily = (row.desk_note?.daily_wrap || []).length
+              return !(row.reports || []).length && highlights === 0 && sourced === 0 && daily === 0
+            })
+            setData(kept)
+            setSelectedReport(kept.reports[0] || payload.reports[0] || null)
+            setError('')
+          }
+        })
+        .catch((err: Error) => {
+          if (!cancelled) setError(err.message || 'Failed to load market reports')
+        })
+        .finally(() => {
+          if (!cancelled) setLoading(false)
+        })
+    }
+    load()
+    const timer = window.setInterval(load, marketScan.isBusy ? 8000 : 20000)
     return () => {
       cancelled = true
+      window.clearInterval(timer)
     }
-  }, [dashboard.scan.scanned_at, marketScan.succeeded, newsStamp])
+  }, [dashboard.scan.scanned_at, marketScan.succeeded, newsStamp, marketScan.isBusy, dashboard.news.available, dashboard.market.available])
 
   const refreshNews = async () => {
     setNewsBusy(true)
@@ -1004,7 +1093,14 @@ export function MarketReportsView({ dashboard, setActive, setSelected, marketSca
         </div>
       </header>
 
-      {data.empty_detail ? (
+      <DailyWrapList
+        lines={(data.desk_note?.daily_wrap && data.desk_note.daily_wrap.length)
+          ? data.desk_note.daily_wrap
+          : dashboardWrapLines(dashboard)}
+        onSymbol={openSymbol}
+      />
+
+      {data.empty_detail && !(data.desk_note?.daily_wrap || []).length && !dashboardWrapLines(dashboard).length ? (
         <div className="reco-empty">
           <strong>Nothing sourced yet</strong>
           <p>{data.empty_detail}</p>

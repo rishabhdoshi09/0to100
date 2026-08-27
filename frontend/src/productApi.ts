@@ -989,6 +989,14 @@ export type DeskNote = {
   title?: string
   blurb?: string
   wrap?: DeskNoteBullet[]
+  daily_wrap?: Array<{
+    id?: string
+    text: string
+    source?: string
+    official?: boolean
+    url?: string
+    symbols?: string[]
+  }>
   wrap_sourced?: number
   wrap_empty?: number
   explainers?: DeskNoteExplainer[]

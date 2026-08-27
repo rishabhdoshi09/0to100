@@ -251,6 +251,138 @@ def _empty_slot(slot: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+def _fnum(value: Any) -> float | None:
+    try:
+        if value is None or value == "":
+            return None
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def official_session_wrap(*, scan_payload: Mapping[str, Any] | None = None) -> list[dict[str, Any]]:
+    """Numbered wrap lines from official session + last scan. Never invents news."""
+    lines: list[dict[str, Any]] = []
+    try:
+        from product.market_view import current_market_view
+
+        view = current_market_view()
+    except Exception:
+        view = None
+    if view is not None:
+        chg = _fnum(view.nifty_change_1d)
+        if chg is not None:
+            if chg < -0.05:
+                move = f"fell {abs(chg):.1f}%"
+            elif chg > 0.05:
+                move = f"rose {chg:.1f}%"
+            else:
+                move = f"was little changed ({chg:+.1f}%)"
+            text = f"Indian markets {move} on the official Nifty session. {view.summary}"
+            lines.append({
+                "id": "session_indices",
+                "text": " ".join(text.split()),
+                "source": "Official NSE session",
+                "official": True,
+                "url": "",
+                "symbols": [],
+            })
+        elif str(view.summary or "").strip():
+            lines.append({
+                "id": "session_regime",
+                "text": str(view.summary).strip(),
+                "source": "QuantTerm regime on official bars",
+                "official": True,
+                "url": "",
+                "symbols": [],
+            })
+    records = [r for r in list((scan_payload or {}).get("records") or []) if isinstance(r, Mapping)]
+    if records:
+        ready = sum(1 for r in records if str(r.get("status") or "") == "Ready to trade")
+        brk = []
+        for row in records:
+            sigs = {str(x).upper() for x in (row.get("signals") or [])}
+            grade = str(row.get("breakout_grade") or "").upper()
+            if sigs & {"BREAKOUT_52W", "BREAKOUT_RES"} or grade in {"A", "B"}:
+                sym = str(row.get("symbol") or "").upper()
+                if sym and sym not in brk:
+                    brk.append(sym)
+        bits = [f"Last market scan has {len(records)} name(s)"]
+        if ready:
+            bits.append(f"{ready} ready to trade")
+        if brk:
+            bits.append("breakouts " + ", ".join(brk[:6]))
+        lines.append({
+            "id": "session_scan",
+            "text": ". ".join(bits) + ".",
+            "source": "Saved market scan",
+            "official": True,
+            "url": "",
+            "symbols": brk[:6],
+        })
+    return lines
+
+
+def news_wrap_lines(articles: Sequence[Mapping[str, Any]] | None, *, limit: int = 5) -> list[dict[str, Any]]:
+    """Top sourced headlines, ranked by impact. Headline required; no invented copy."""
+    ranked: list[tuple[int, Mapping[str, Any]]] = []
+    for article in articles or []:
+        if not isinstance(article, Mapping):
+            continue
+        headline = str(article.get("headline") or "").strip()
+        if not headline:
+            continue
+        try:
+            score = int(article.get("impact_score") or 0)
+        except (TypeError, ValueError):
+            score = 0
+        ranked.append((score, article))
+    ranked.sort(key=lambda pair: pair[0], reverse=True)
+    out: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for _score, article in ranked:
+        headline = str(article.get("headline") or "").strip()
+        key = headline.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        summary = str(article.get("summary") or article.get("why_it_matters") or "").strip()
+        text = headline if not summary else f"{headline} {summary}"
+        symbols: list[str] = []
+        for item in list(article.get("mentioned_symbols") or [])[:6]:
+            sym = str(item or "").strip().upper()
+            if sym and sym not in symbols:
+                symbols.append(sym)
+        out.append({
+            "id": str(article.get("article_id") or f"news_{len(out)+1}"),
+            "text": " ".join(text.split())[:420],
+            "source": str(article.get("source") or "Sourced news"),
+            "official": bool(article.get("official")),
+            "url": str(article.get("url") or ""),
+            "symbols": symbols,
+        })
+        if len(out) >= max(1, int(limit)):
+            break
+    return out
+
+
+def daily_wrap(
+    *,
+    articles: Sequence[Mapping[str, Any]] | None = None,
+    scan_payload: Mapping[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    """Here's the wrap of the day — official session first, then sourced headlines."""
+    lines = official_session_wrap(scan_payload=scan_payload)
+    existing = {str(item.get("text") or "").lower() for item in lines}
+    for item in news_wrap_lines(articles, limit=6):
+        key = str(item.get("text") or "").lower()
+        if key in existing:
+            continue
+        existing.add(key)
+        lines.append(item)
+    return lines[:8]
+
+
 def wrap_from_news(articles: Sequence[Mapping[str, Any]] | None) -> list[dict[str, Any]]:
     rows = [a for a in (articles or []) if isinstance(a, Mapping) and str(a.get("headline") or "").strip()]
     used: set[str] = set()
@@ -363,6 +495,7 @@ def build_desk_note(
 ) -> dict[str, Any]:
     news = [a for a in (articles or []) if isinstance(a, Mapping)]
     wrap = wrap_from_news(news)
+    daily = daily_wrap(articles=news, scan_payload=scan_payload)
     gold_hit = next((b for b in wrap if b["id"] == "gold_loan" and b["available"]), None)
     order_hit = next((b for b in wrap if b["id"] == "orders" and b["available"]), None)
     extra = []
@@ -403,12 +536,13 @@ def build_desk_note(
     return {
         "schema_version": 1,
         "generated_at": datetime.now(timezone.utc).isoformat(),
-        "title": "Today’s market wrap",
+        "title": "Here's the wrap of the day",
         "blurb": (
-            "Sourced headlines first. Concepts second. Company desks only with a headline "
-            "or a saved scan row. Missing stays missing."
+            "Official session first. Sourced headlines next. Empty slots stay empty — "
+            "QuantTerm does not invent a lawsuit, order, or index print."
         ),
         "wrap": wrap,
+        "daily_wrap": daily,
         "wrap_sourced": sourced,
         "wrap_empty": 5 - sourced,
         "explainers": explainers,

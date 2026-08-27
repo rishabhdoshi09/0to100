@@ -50,7 +50,13 @@ INVENTED = (
 )
 
 
-def test_empty_news_does_not_invent_the_blog_wrap():
+def test_empty_news_does_not_invent_the_blog_wrap(monkeypatch):
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(
+        "product.market_view.current_market_view",
+        lambda: SimpleNamespace(nifty_change_1d=None, summary=""),
+    )
     note = build_desk_note(articles=[], scan_payload={})
     assert note["places_orders"] is False
     assert note["wrap_sourced"] == 0
@@ -65,6 +71,42 @@ def test_empty_news_does_not_invent_the_blog_wrap():
     for phrase in INVENTED:
         assert phrase not in blob
         assert phrase not in note["theme"]["body"]
+    for line in note.get("daily_wrap") or []:
+        assert "HDFC Bank" not in line["text"]
+        assert "lawsuit" not in line["text"].lower()
+        assert "Happiest Minds" not in line["text"]
+
+
+def test_daily_wrap_uses_official_session_and_sourced_news(monkeypatch):
+    from types import SimpleNamespace
+
+    from product.desk_note import daily_wrap
+
+    monkeypatch.setattr(
+        "product.market_view.current_market_view",
+        lambda: SimpleNamespace(
+            nifty_change_1d=-0.5,
+            summary="Market condition is weak. Breadth is negative (40/100). Leading: pharma. Lagging: banks.",
+        ),
+    )
+    lines = daily_wrap(
+        articles=[
+            _article(
+                article_id="hdfc-news",
+                headline="HDFC Bank fell after a US lawsuit alleged securities violations",
+                summary="The bank denied the claims.",
+                impact_score=90,
+                mentioned_symbols=["HDFCBANK"],
+            )
+        ],
+        scan_payload={"records": [{"symbol": "TATAPOWER", "status": "Ready to trade", "signals": ["BREAKOUT_52W"]}]},
+    )
+    texts = " ".join(item["text"] for item in lines)
+    assert "fell 0.5%" in texts
+    assert "official Nifty session" in texts
+    assert "HDFC Bank fell after a US lawsuit" in texts
+    assert "TATAPOWER" in texts
+    assert "490 million" not in texts
 
 
 def test_lodr_sebi_filing_does_not_fill_policy_slot():

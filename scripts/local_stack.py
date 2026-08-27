@@ -201,24 +201,49 @@ def stop_local_stack(*, ports: tuple[int, ...] = (5173, 8765, 8766), autonomy: b
     return stopped
 
 
-def queue_scan_now(*, origin: str = "http://127.0.0.1:8765", timeout_s: float = 8.0) -> dict:
-    """POST RUN_SCAN_NOW to the local market API. Used by the one-terminal stack."""
-    url = origin.rstrip("/") + "/api/controls/RUN_SCAN_NOW"
+def queue_control(control: str, *, origin: str = "http://127.0.0.1:8765", timeout_s: float = 8.0) -> dict:
+    """POST one owner control to the local market API."""
+    name = str(control or "").strip().upper()
+    url = origin.rstrip("/") + f"/api/controls/{name}"
     req = urllib.request.Request(url, data=b"", method="POST")
     try:
         with urllib.request.urlopen(req, timeout=max(1.0, float(timeout_s))) as response:
             raw = response.read().decode("utf-8", "replace")
             status = int(response.status)
     except urllib.error.HTTPError as exc:
-        raise RuntimeError(f"scan control HTTP {exc.code}") from exc
+        raise RuntimeError(f"{name} HTTP {exc.code}") from exc
     except Exception as exc:
         raise RuntimeError(str(exc)) from exc
     if status >= 400:
-        raise RuntimeError(f"scan control HTTP {status}")
+        raise RuntimeError(f"{name} HTTP {status}")
     payload = json.loads(raw) if raw.strip() else {}
     if not isinstance(payload, dict):
         payload = {"raw": raw}
+    payload.setdefault("control", name)
     return payload
+
+
+def queue_scan_now(*, origin: str = "http://127.0.0.1:8765", timeout_s: float = 8.0) -> dict:
+    """POST RUN_SCAN_NOW to the local market API. Used by the one-terminal stack."""
+    return queue_control("RUN_SCAN_NOW", origin=origin, timeout_s=timeout_s)
+
+
+DESK_START_CONTROLS = ("RUN_SCAN_NOW", "REFRESH_NEWS_NOW", "REFRESH_LONG_TERM_NOW")
+
+
+def queue_desk_jobs(*, origin: str = "http://127.0.0.1:8765", timeout_s: float = 8.0) -> dict:
+    """Queue scan, news and long-term funds together so one terminal fills the desk."""
+    jobs: list[dict] = []
+    accepted = 0
+    for name in DESK_START_CONTROLS:
+        try:
+            item = queue_control(name, origin=origin, timeout_s=timeout_s)
+            if item.get("accepted"):
+                accepted += 1
+            jobs.append(item)
+        except Exception as exc:
+            jobs.append({"accepted": False, "control": name, "error": str(exc)})
+    return {"accepted": accepted > 0, "queued": accepted, "jobs": jobs}
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -230,12 +255,12 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.action == "scan":
         try:
-            payload = queue_scan_now(origin=args.origin)
+            payload = queue_desk_jobs(origin=args.origin)
         except Exception as exc:
-            print(f"[STACK] Market scan not queued yet: {exc}", file=sys.stderr)
+            print(f"[STACK] Desk jobs not queued yet: {exc}", file=sys.stderr)
             return 1
         print(json.dumps(payload))
-        return 0
+        return 0 if payload.get("accepted") else 1
     ports = tuple(int(part) for part in args.ports.split(",") if part.strip())
     if args.action == "pids":
         payload = {str(port): pids_on_port(port) for port in ports}

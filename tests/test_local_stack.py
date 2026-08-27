@@ -68,20 +68,37 @@ def test_queue_scan_now_posts_run_scan_now(monkeypatch):
 def test_scan_cli_prints_json(monkeypatch, capsys):
     monkeypatch.setattr(
         LS,
-        "queue_scan_now",
-        lambda **kwargs: {"accepted": True, "control": "RUN_SCAN_NOW", "origin": kwargs.get("origin")},
+        "queue_desk_jobs",
+        lambda **kwargs: {
+            "accepted": True,
+            "queued": 3,
+            "jobs": [{"accepted": True, "control": "RUN_SCAN_NOW"}],
+        },
     )
     assert LS.main(["scan", "--origin", "http://127.0.0.1:8765"]) == 0
     printed = json.loads(capsys.readouterr().out)
     assert printed["accepted"] is True
-    assert printed["control"] == "RUN_SCAN_NOW"
+    assert printed["queued"] == 3
+
+
+def test_queue_desk_jobs_posts_scan_news_and_funds(monkeypatch):
+    seen: list[str] = []
+
+    def fake_control(control, **kwargs):
+        seen.append(control)
+        return {"accepted": True, "control": control}
+
+    monkeypatch.setattr(LS, "queue_control", fake_control)
+    payload = LS.queue_desk_jobs()
+    assert payload["accepted"] is True
+    assert seen == ["RUN_SCAN_NOW", "REFRESH_NEWS_NOW", "REFRESH_LONG_TERM_NOW"]
 
 
 def test_scan_cli_returns_error_when_api_is_down(monkeypatch, capsys):
     def boom(**kwargs):
         raise RuntimeError("connection refused")
 
-    monkeypatch.setattr(LS, "queue_scan_now", boom)
+    monkeypatch.setattr(LS, "queue_desk_jobs", boom)
     assert LS.main(["scan"]) == 1
     err = capsys.readouterr().err
     assert "not queued yet" in err

@@ -838,3 +838,28 @@
 @media (max-width: 800px) {
   .dd-hero { grid-template-columns: 1fr; }
 }
+
+.daily-wrap {
+  background: var(--rw-surface);
+  border: 1px solid var(--rw-line);
+  border-radius: var(--rw-radius);
+  padding: 18px 20px 8px;
+  margin: 0 0 18px;
+  box-shadow: var(--rw-shadow);
+}
+.daily-wrap h2 {
+  font-family: Fraunces, Georgia, serif;
+  font-size: 28px;
+  margin: 4px 0 12px;
+}
+.daily-wrap ol {
+  margin: 0;
+  padding: 0 0 12px 22px;
+  display: grid;
+  gap: 12px;
+}
+.daily-wrap li p {
+  margin: 0 0 4px;
+  font-size: 15px;
+  line-height: 1.45;
+}

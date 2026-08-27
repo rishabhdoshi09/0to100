@@ -165,7 +165,7 @@ kick_scan() {
   if ! url_ok "http://127.0.0.1:8765/api/health"; then
     return 1
   fi
-  echo "[STACK] Queueing whole-market scan in this terminal…"
+  echo "[STACK] Queueing market scan, news and long-term funds in this terminal…"
   if python scripts/local_stack.py scan; then
     SCAN_KICKED=1
     return 0

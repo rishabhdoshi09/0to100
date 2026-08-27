@@ -243,7 +243,7 @@ def test_stack_scripts_restart_children_instead_of_stopping_the_desk():
     assert "scripts/local_stack.py" in complete
     assert "python scripts/local_stack.py stop --ports 5173,8765,8766" in complete
     assert "scripts/local_stack.py scan" in inner
-    assert "Queueing whole-market scan in this terminal" in inner
+    assert "Queueing market scan, news and long-term funds in this terminal" in inner
     assert "Do not start a second terminal" in complete
     assert "curl" not in inner
     assert "curl" not in complete
