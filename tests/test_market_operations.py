@@ -244,3 +244,46 @@ def test_bootstrap_skips_market_scan_when_momentum_artifact_is_fresh(tmp_path: P
     queued = set(worker._bootstrap())
     assert MO.MARKET_SCAN not in queued
     assert queued == {MO.LONG_TERM_REFRESH}
+
+
+def test_begin_immediate_retries_database_locked(tmp_path: Path, monkeypatch):
+    import sqlite3
+
+    monkeypatch.setattr("operations.store.time.sleep", lambda *_a, **_k: None)
+    store = OperationStore(tmp_path / "ops.db")
+    hits = {"n": 0}
+
+    class Fake:
+        def execute(self, sql):
+            hits["n"] += 1
+            if hits["n"] < 3:
+                raise sqlite3.OperationalError("database is locked")
+
+        def rollback(self):
+            return None
+
+    store._begin_immediate(Fake())
+    assert hits["n"] == 3
+
+
+def test_lane_loop_survives_sqlite_lock(tmp_path: Path, monkeypatch):
+    import sqlite3
+
+    from operations.market_ops import MarketOperationsWorker
+
+    worker = MarketOperationsWorker(store=OperationStore(tmp_path / "ops.db"))
+    hits = {"n": 0}
+
+    def lease(lane, worker_pid=0):
+        hits["n"] += 1
+        if hits["n"] == 1:
+            raise sqlite3.OperationalError("database is locked")
+        worker.stop_event.set()
+        return None
+
+    monkeypatch.setattr(worker.store, "lease_next", lease)
+    monkeypatch.setattr(worker.stop_event, "wait", lambda timeout=None: worker.stop_event.is_set())
+    worker._lane_loop("data")
+    assert hits["n"] >= 2
+    assert worker.stop_event.is_set()
+
