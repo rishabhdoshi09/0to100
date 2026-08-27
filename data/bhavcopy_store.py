@@ -368,6 +368,47 @@ def store_symbols() -> list[str]:
         return list(_store.keys())
 
 
+def membership_rows() -> tuple[list[dict], dict]:
+    """Official NSE EQ first/last session per symbol from the bhavcopy store.
+
+    ``listed`` is the first session this process has on file, not an IPO date
+    from before the archive. A name missing from the latest stored session is
+    marked ``delisted`` the calendar day after its last bar. No invented rows.
+    """
+    if not _store:
+        _load_pkl()
+    with _lock:
+        last_day = _store_last_day
+        sessions = int(_store_sessions or 0)
+        items: list[tuple[str, object, object]] = []
+        for sym, df in _store.items():
+            if df is None or len(df) == 0:
+                continue
+            items.append((str(sym).upper(), df.index.min(), df.index.max()))
+    meta = {
+        "last_day": last_day.isoformat() if hasattr(last_day, "isoformat") else (str(last_day) if last_day else ""),
+        "sessions": sessions,
+        "n_symbols": len(items),
+    }
+    if last_day is None or not items:
+        return [], meta
+    last_ts = pd.Timestamp(last_day).normalize()
+    rows: list[dict] = []
+    for sym, first, last in items:
+        rec = {
+            "symbol": sym,
+            "listed": pd.Timestamp(first).date().isoformat(),
+            "source": "official_nse_bhavcopy",
+        }
+        last_bar = pd.Timestamp(last).normalize()
+        if last_bar < last_ts:
+            rec["delisted"] = (last_bar + pd.Timedelta(days=1)).date().isoformat()
+        rows.append(rec)
+    rows.sort(key=lambda r: r["symbol"])
+    meta["n_symbols"] = len(rows)
+    return rows, meta
+
+
 def reset_in_memory_store() -> None:
     """Clear the process-local symbol map (tests and worker isolation)."""
     global _store, _store_last_day, _store_sessions

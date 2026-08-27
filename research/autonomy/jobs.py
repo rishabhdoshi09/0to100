@@ -151,8 +151,8 @@ class Deps:
         return CA.refresh_events()
 
     def universe_history_status(self):
-        from data.nse_universe import point_in_time_universe
-        return point_in_time_universe(self.now_ist().date())
+        from data.nse_universe import refresh_universe_history
+        return refresh_universe_history(as_of=self.now_ist().date())
 
     def live_market_ready(self):
         from data.nse_live import live_session_ready
@@ -433,7 +433,7 @@ def _kite_live_ready_result(ctx, *, sid=None, quality=None, live=None) -> JobRes
         return None
     quality = dict(quality or {})
     latest = str(live.get("session_date") or quality.get("latest_date") or "")
-    unblocks = [DEP_DATA]
+    unblocks = [DEP_DATA, DEP_CA_SOURCE, DEP_UNIVERSE_SOURCE]
     if latest:
         unblocks.append(f"EOD_DATA_READY:{latest}")
     return JobResult(
@@ -486,7 +486,7 @@ def run_data_refresh(ctx) -> JobResult:
                              failures={H.SNAPSHOT_STALE}, state_hint=ST.DATA_REFRESHING,
                              new_entries_allowed=False, metadata={**quality, "latest_date": latest,
                                                                  "required_date": required})
-        unblocks = [DEP_DATA]
+        unblocks = [DEP_DATA, DEP_CA_SOURCE, DEP_UNIVERSE_SOURCE]
         if latest:
             unblocks.append(f"EOD_DATA_READY:{latest}")
         return JobResult(JS.SUCCEEDED, "genuine snapshot active", output_snapshot_id=sid,
@@ -515,8 +515,18 @@ def run_bhavcopy_update(ctx) -> JobResult:
     if not info.get("ready"):
         return JobResult(JS.BLOCKED, "official bhavcopy history is not yet sufficient",
                          blocked_on="BHAVCOPY_SOURCE", metadata=info)
+    universe = {}
+    if hasattr(ctx.deps, "universe_history_status"):
+        try:
+            universe = dict(ctx.deps.universe_history_status() or {})
+        except Exception:
+            universe = {}
+    clears = set()
+    if universe.get("survivorship_complete"):
+        clears.add(H.UNIVERSE_INCOMPLETE)
     return JobResult(JS.SUCCEEDED, f"official bhavcopy ready · {info.get('symbols', 0)} symbols",
-                     metadata=info)
+                     clears=clears, unblocks=(DEP_UNIVERSE_SOURCE,),
+                     metadata={**info, "universe": universe})
 
 
 def run_corporate_actions(ctx) -> JobResult:

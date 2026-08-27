@@ -128,6 +128,13 @@ class Supervisor:
         self._running = True
         self._started_at = self.clock()
         self._transition(ST.STARTING, "boot", "Supervisor acquired the single mutation-owner lock.", "start")
+        # Leftover BLOCKED CA/universe rows from when the ledger files were
+        # missing must retry now that the jobs actually fetch official NSE data.
+        try:
+            self.jobs.unblock_dependency(JOBS.DEP_CA_SOURCE)
+            self.jobs.unblock_dependency(JOBS.DEP_UNIVERSE_SOURCE)
+        except Exception:
+            pass
         if hasattr(self.deps, "notify_online"):
             try:
                 self.deps.notify_online()
