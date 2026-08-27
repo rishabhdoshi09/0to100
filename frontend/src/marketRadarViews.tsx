@@ -648,11 +648,11 @@ export function RadarHomeView(props: ExperienceViewProps & {
 
       <LiveScanBanner scan={marketScan} depth={depth} label="Shared market scan" />
       {longTermScan.isActive || longTermScan.notice ? (
-        <LiveScanBanner scan={longTermScan} depth={depth} label="Long-term scan" />
+        <LiveScanBanner scan={longTermScan} depth={depth} label="Funds refresh" />
       ) : null}
       <p className="radar-scan-share">
         {radar?.scan_shared_note
-          || 'Home and Market Scanner read the same saved whole-market scan. Names can appear in more than one lane. Scan Now is the only intentional rescan.'}
+          || 'One scan fills Home, Scanner, Recommendations and long-term. Names can appear in more than one lane. Scan Now is the only intentional rescan.'}
       </p>
 
       <RankingLegend legend={radar?.ranking_legend} />
@@ -766,7 +766,7 @@ export function MarketScannerView(props: ExperienceViewProps & { onCompare: (sym
   const [sector, setSector] = useState('All')
   const [excludeChase, setExcludeChase] = useState(true)
 
-  const activeScan = tab === 'Long-Term' ? longTermScan : marketScan
+  const activeScan = marketScan
   const hasScan = Boolean(dashboard.scan.scanned_at || dashboard.scan.records.length || meta.universe || meta.scanned_at)
 
   useEffect(() => {
@@ -838,21 +838,29 @@ export function MarketScannerView(props: ExperienceViewProps & { onCompare: (sym
         <div>
           <span>MARKET SCANNER</span>
           <h2>Breakouts, momentum, SEPA and long-term</h2>
-          <p>{filtered.length} matches · universe {meta.universe.toLocaleString('en-IN')} · same scan as Home · {meta.scanned_at || '—'}</p>
+          <p>{filtered.length} matches · universe {meta.universe.toLocaleString('en-IN')} · one scan fills every tab · {meta.scanned_at || '—'}</p>
         </div>
-        <button type="button" disabled={activeScan.isBusy} onClick={() => void activeScan.start()}>
-          {activeScan.isBusy
-              ? `Scanning… ${activeScan.percent != null ? `${activeScan.percent}%` : ''}${activeScan.etaLine ? ` · ETA ${activeScan.etaLine}` : ''}`
-              : tab === 'Long-Term' ? 'Run long-term scan' : 'Scan now'}
-        </button>
+        <div>
+          <button type="button" disabled={marketScan.isBusy} onClick={() => void marketScan.start()}>
+            {marketScan.isBusy
+              ? `Scanning… ${marketScan.percent != null ? `${marketScan.percent}%` : ''}${marketScan.etaLine ? ` · ETA ${marketScan.etaLine}` : ''}`
+              : 'Scan now'}
+          </button>
+          {tab === 'Long-Term' ? (
+            <button type="button" disabled={longTermScan.isBusy} onClick={() => void longTermScan.start()}>
+              {longTermScan.isBusy ? 'Refreshing funds…' : 'Refresh funds'}
+            </button>
+          ) : null}
+        </div>
       </header>
 
-      <LiveScanBanner scan={activeScan} depth={depth} label={tab === 'Long-Term' ? 'Long-term scan' : 'Shared market scan'} />
-      {tab !== 'Long-Term' ? (
-        <p className="radar-scan-share">
-          This table reads the same saved scan as Home. Overlap across Breakouts and Momentum is expected. Scan Now rescans the whole market once.
-        </p>
+      <LiveScanBanner scan={activeScan} depth={depth} label="Shared market scan" />
+      {tab === 'Long-Term' && (longTermScan.isActive || longTermScan.notice) ? (
+        <LiveScanBanner scan={longTermScan} depth={depth} label="Funds refresh" />
       ) : null}
+      <p className="radar-scan-share">
+        One scan fills Home, Scanner (all tabs), Recommendations and long-term. Overlap across Breakouts and Momentum is expected. Scan Now rescans the whole market once. Refresh funds only reloads Screener snapshots.
+      </p>
 
       <div className="radar-tab-row">
         {(['Best Setups', 'Breakouts', 'Momentum', 'Long-Term'] as const).map((item) => (

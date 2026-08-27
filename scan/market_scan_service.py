@@ -159,6 +159,22 @@ def run_whole_market_scan(
             persist_public_best_setups(payload)
         except Exception:
             pass
+        try:
+            from scan.long_term_service import overlay_long_term_from_market_scan
+            overlay = overlay_long_term_from_market_scan(
+                payload, refresh_fundamentals=False, save=True,
+            )
+            payload["long_term_overlay"] = {
+                "status": overlay.status,
+                "records": len((overlay.payload or {}).get("records") or []),
+                "error_code": overlay.error_code,
+            }
+        except Exception as exc:
+            payload["long_term_overlay"] = {
+                "status": FAILED,
+                "records": 0,
+                "error_code": type(exc).__name__,
+            }
         # FEATURE-002 is observe-only and runs AFTER production results are final.
         if _feature002_hook is not None:
             try:

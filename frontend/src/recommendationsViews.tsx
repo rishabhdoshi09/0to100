@@ -465,16 +465,16 @@ export function RecommendationsView({
     return (
       <div className="reco-light">
         <LiveScanBanner scan={marketScan} depth={depth} label="Market scan" />
-        <LiveScanBanner scan={longTermScan} depth={depth} label="Long-term scan" />
+        <LiveScanBanner scan={longTermScan} depth={depth} label="Funds refresh" />
         <div className="reco-empty">
           <strong>{error || 'No recommendation data yet'}</strong>
-          <p>Run a market scan and long-term refresh. Sidebar navigation only opens this page — it does not start those jobs.</p>
+          <p>Run one market scan. It fills Home, Scanner, Recommendations and long-term. Sidebar navigation only opens this page — it does not start a scan.</p>
           <div className="reco-hero-actions">
             <button type="button" className="reco-primary" disabled={marketScan.isBusy} onClick={() => void marketScan.start()}>
               {marketScan.isBusy ? 'Scanning market…' : 'Scan market'}
             </button>
             <button type="button" className="reco-ghost" disabled={longTermScan.isBusy} onClick={() => void longTermScan.start()}>
-              {longTermScan.isBusy ? 'Refreshing long-term…' : 'Refresh long-term'}
+              {longTermScan.isBusy ? 'Refreshing funds…' : 'Refresh funds'}
             </button>
           </div>
         </div>
@@ -503,7 +503,7 @@ export function RecommendationsView({
   return (
     <div className="reco-light">
       <LiveScanBanner scan={marketScan} depth={depth} label="Market scan" />
-      <LiveScanBanner scan={longTermScan} depth={depth} label="Long-term scan" />
+      <LiveScanBanner scan={longTermScan} depth={depth} label="Funds refresh" />
 
       <nav className="reco-crumb" aria-label="Breadcrumb">
         <button type="button" onClick={() => setActive('Home')}>Home</button>
@@ -528,7 +528,7 @@ export function RecommendationsView({
               : 'Scan market'}
           </button>
           <button type="button" className="reco-ghost" disabled={longTermScan.isBusy} onClick={() => void longTermScan.start()}>
-            {longTermScan.isBusy ? 'Refreshing long-term…' : 'Refresh long-term'}
+            {longTermScan.isBusy ? 'Refreshing funds…' : 'Refresh funds'}
           </button>
         </div>
       </header>
@@ -572,14 +572,14 @@ export function RecommendationsView({
           <p>
             {(data.scan_meta?.market_row_count || 0) > 0
               ? (category?.empty_detail || 'The current scan did not match a research category.')
-              : 'Run a market scan (and a long-term refresh for Wealth Builders). Sidebar navigation only opens this page — it does not start those jobs.'}
+              : 'Run one market scan. It fills every setup including Wealth Builders. Sidebar navigation only opens this page — it does not start a scan.'}
           </p>
           <div className="reco-hero-actions">
             <button type="button" className="reco-primary" disabled={marketScan.isBusy} onClick={() => void marketScan.start()}>
               {marketScan.isBusy ? 'Scanning market…' : 'Scan market'}
             </button>
             <button type="button" className="reco-ghost" disabled={longTermScan.isBusy} onClick={() => void longTermScan.start()}>
-              {longTermScan.isBusy ? 'Refreshing long-term…' : 'Refresh long-term'}
+              {longTermScan.isBusy ? 'Refreshing funds…' : 'Refresh funds'}
             </button>
           </div>
         </div>

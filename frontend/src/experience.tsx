@@ -397,13 +397,13 @@ export function EnhancedCommandCenterView(props: ExperienceViewProps) {
             {marketScan.isBusy ? 'Scanning…' : 'Scan now'}
           </button>
           <button type="button" disabled={longTermScan.isBusy} onClick={() => void longTermScan.start()}>
-            {longTermScan.isBusy ? 'Scanning…' : 'Long-term scan'}
+            {longTermScan.isBusy ? 'Refreshing funds…' : 'Refresh funds'}
           </button>
         </div>
       </header>
       <TodayStrip dashboard={dashboard} />
       <LiveScanBanner scan={marketScan} depth={depth} label="Market scan" />
-      <LiveScanBanner scan={longTermScan} depth={depth} label="Long-term scan" />
+      <LiveScanBanner scan={longTermScan} depth={depth} label="Funds refresh" />
 
       <section className="market-command-strip compact">
         <div><span>SESSION</span><strong>{dashboard.market.trade_stance}</strong><small>{dashboard.market.breadth}</small></div>
@@ -511,7 +511,7 @@ export function EnhancedScannerView(props: ExperienceViewProps) {
   const selectedRow = filtered.find((row) => row.symbol === selected)
     || rows.find((row) => row.symbol === selected)
     || selectedRecord(dashboard, selected) as ScannerWorkspaceRow | undefined
-  const activeScan = mode === 'Long-Term' ? longTermScan : marketScan
+  const activeScan = marketScan
   const reasons = selectedRow?.reasons || selectedRow?.quality_factors || []
   const risks = selectedRow?.risks || selectedRow?.risk_flags || (selectedRow?.chase_risk ? ['Price is extended; do not chase.'] : [])
 
@@ -528,11 +528,14 @@ export function EnhancedScannerView(props: ExperienceViewProps) {
           disabled={activeScan.isBusy}
           onClick={() => void activeScan.start()}
         >
-          {activeScan.isBusy ? 'Scanning…' : mode === 'Long-Term' ? 'Run long-term scan' : 'Scan now'}
+          {activeScan.isBusy ? 'Scanning…' : 'Scan now'}
         </button>
       </header>
 
-      <LiveScanBanner scan={activeScan} depth={depth} label={mode === 'Long-Term' ? 'Long-term scan' : 'Market scan'} />
+      <LiveScanBanner scan={activeScan} depth={depth} label="Market scan" />
+      {mode === 'Long-Term' && (longTermScan.isActive || longTermScan.notice) ? (
+        <LiveScanBanner scan={longTermScan} depth={depth} label="Funds refresh" />
+      ) : null}
 
       <div className="scanner-lane-cards">
         <article><span>MOMENTUM LANE</span><strong>{fallbackRows('Momentum', dashboard).length}</strong><small>Current technical-strength matches</small></article>
@@ -580,7 +583,7 @@ function median(values: number[]) {
 }
 
 export function EnhancedLongTermView(props: ExperienceViewProps) {
-  const { dashboard, selected, setSelected, bars, depth, longTermScan } = props
+  const { dashboard, selected, setSelected, bars, depth, marketScan, longTermScan } = props
   const [classification, setClassification] = useState('All')
   const [sector, setSector] = useState('All')
   const [minCoverage, setMinCoverage] = useState(depth === 'simple' ? 50 : 0)
@@ -599,18 +602,22 @@ export function EnhancedLongTermView(props: ExperienceViewProps) {
   const needsData = rows.filter((row) => row.classification === 'NEEDS_FUNDAMENTALS').length
   const medianFundamental = median(rows.map((row) => Number(row.fundamental_score)).filter(Number.isFinite))
   const medianTechnical = median(rows.map((row) => Number(row.technical_score)).filter(Number.isFinite))
-  const operation = operationFor(dashboard, 'LONG_TERM_SCAN')
+  const operation = operationFor(dashboard, 'LONG_TERM_REFRESH') || operationFor(dashboard, 'LONG_TERM_SCAN')
 
   return (
     <section className={`enhanced-long-term ${depth}`}>
       <header className="long-term-hero">
         <div><span>LONG-TERM RESEARCH</span><h2>Quality, valuation and timing without fake model performance</h2><p>Current fundamentals are combined with official daily technical history. Missing historical evidence remains visible.</p></div>
+        <button type="button" disabled={marketScan.isBusy} onClick={() => void marketScan.start()}>
+          {marketScan.isBusy ? 'Scanning…' : 'Scan now'}
+        </button>
         <button type="button" disabled={longTermScan.isBusy} onClick={() => void longTermScan.start()}>
-          {longTermScan.isBusy ? 'Scanning…' : 'Run long-term scan'}
+          {longTermScan.isBusy ? 'Refreshing funds…' : 'Refresh funds'}
         </button>
       </header>
 
-      <LiveScanBanner scan={longTermScan} depth={depth} label="Long-term scan" />
+      <LiveScanBanner scan={marketScan} depth={depth} label="Market scan" />
+      <LiveScanBanner scan={longTermScan} depth={depth} label="Funds refresh" />
 
       <div className="long-term-metric-strip">
         <MetricCard label="QUALITY COMPOUNDERS" value={String(qualityCount)} detail="Passed current quality classification" tone="green" />

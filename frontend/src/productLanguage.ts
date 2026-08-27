@@ -17,7 +17,7 @@ export const PAGE_GUIDE: Record<string, PageGuide> = {
       'Which names are sniper breakouts vs quality-among-breakouts?',
       'Did the current scan actually finish?',
     ],
-    action: 'Scan now if the desk is empty, then open one name in Stock Intelligence.',
+    action: 'Scan now if the desk is empty. One scan fills every setup. Then open one name in Stock Intelligence.',
     doesNot: 'A green market or a sniper tag is not an instruction to buy.',
   },
   'Command Center': {
@@ -40,7 +40,7 @@ export const PAGE_GUIDE: Record<string, PageGuide> = {
       'How many symbols were processed?',
       'Why did a stock qualify?',
     ],
-    action: 'Run a fresh scan, filter the result, then inspect one stock in Stock Intelligence.',
+    action: 'Run a fresh scan once — it fills every tab — then inspect one stock in Stock Intelligence.',
     doesNot: 'A scanner match is a research candidate, not a guaranteed trade.',
   },
   Scanner: {
@@ -52,7 +52,7 @@ export const PAGE_GUIDE: Record<string, PageGuide> = {
       'Why did a stock qualify?',
       'What invalidates or disqualifies it?',
     ],
-    action: 'Run a fresh scan, filter the result, then inspect one stock in Stock Intelligence.',
+    action: 'Run a fresh scan once — it fills every tab — then inspect one stock in Stock Intelligence.',
     doesNot: 'A scanner match is a research candidate, not a guaranteed trade.',
   },
   Recommendations: {
@@ -112,7 +112,7 @@ export const PAGE_GUIDE: Record<string, PageGuide> = {
       'Is price timing favourable or extended?',
       'Which risk flag needs manual review?',
     ],
-    action: 'Run the long-term refresh, filter by quality and coverage, then inspect the company dossier.',
+    action: 'Scan market once. Refresh funds only if Screener snapshots are stale. Then inspect the company dossier.',
     doesNot: 'A long-term classification is not a promise of compounding or future returns.',
   },
   'Research Data': {
@@ -213,7 +213,7 @@ export const PAGE_GUIDE: Record<string, PageGuide> = {
       'Is price timing favourable or extended?',
       'Which risk flag needs manual review?',
     ],
-    action: 'Run the long-term refresh, filter by quality and coverage, then inspect the company dossier.',
+    action: 'Scan market once. Refresh funds only if Screener snapshots are stale. Then inspect the company dossier.',
     doesNot: 'A long-term classification is not a promise of compounding or future returns.',
   },
   'Market Overview': {

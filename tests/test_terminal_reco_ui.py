@@ -118,6 +118,12 @@ def test_market_reports_renders_sourced_desk_note_not_a_blog():
     assert "Stock Intelligence" in src
     assert "From the last market scan" in src
     assert "Scan market" in src
+    radar = (ROOT / "frontend" / "src" / "marketRadarViews.tsx").read_text(encoding="utf-8")
+    assert "Run long-term scan" not in radar
+    assert "one scan fills every tab" in radar
+    reco_src = (ROOT / "frontend" / "src" / "recommendationsViews.tsx").read_text(encoding="utf-8")
+    assert "Refresh funds" in reco_src
+    assert "Refresh long-term" not in reco_src
     css = (ROOT / "frontend" / "src" / "recommendations.css").read_text(encoding="utf-8")
     assert ".desk-note" in css
     assert ".desk-tile" in css

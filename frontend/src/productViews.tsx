@@ -191,7 +191,7 @@ export function ProductCommandCenterView(props: ViewProps) {
       <div className="product-quick-actions">
         <div><strong>Start with a job, not a menu.</strong><span>Every action below produces a visible operation and a dated saved result.</span></div>
         <button type="button" onClick={() => void runControl('RUN_SCAN_NOW')}>Scan market</button>
-        <button type="button" onClick={() => void runControl('RUN_LONG_TERM_SCAN_NOW')}>Find long-term candidates</button>
+        <button type="button" onClick={() => void runControl('REFRESH_LONG_TERM_NOW')}>Refresh funds</button>
         <button type="button" onClick={() => void runControl('REFRESH_NEWS_NOW')}>Refresh context</button>
       </div>
 

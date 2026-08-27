@@ -42,13 +42,13 @@ DESK_STEPS: tuple[dict[str, str], ...] = (
         "id": "scan",
         "title": "Market scan",
         "page": "Home",
-        "why": "One whole-market scan for Home, Scanner and recommendation setups.",
+        "why": "One whole-market scan for Home, Scanner, Recommendations, and long-term.",
     },
     {
         "id": "long_term",
         "title": "Long-term / funds",
         "page": "Recommendations",
-        "why": "Fundamentals for Best Among and Wealth Builders.",
+        "why": "Optional Screener refresh for Wealth Builders. Scan Now already overlays cached funds.",
     },
     {
         "id": "news",

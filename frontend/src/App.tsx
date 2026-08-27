@@ -221,13 +221,13 @@ const pageTitles: Record<string, string> = {
 }
 
 const pageSubtitles: Record<string, string> = {
-  Home: 'Daily command centre — Breakouts, Momentum and Long-Term Picks from the saved market scan.',
-  'Market Scanner': 'Professional scanner tables for breakouts, momentum, SEPA Best Setups and long-term quality.',
+  Home: 'Daily command centre — one market scan fills Breakouts, Momentum, Long-Term and Recommendations.',
+  'Market Scanner': 'One saved scan, four lanes — Breakouts, Momentum, SEPA Best Setups and long-term.',
+  'Long-Term Picks': 'Quality overlay from the same market scan — Refresh funds only reloads Screener.',
   Recommendations: 'Independent experts compete — only high-quality, evidence-backed setups; empty high-conviction is a valid day.',
   'Market Reports': 'Daily Market Pulse archive — trends, sector movers and breakout context from live system state.',
   'Stock Intelligence': 'Company workspace — chart, financials, ratios and the due-diligence Investigate view.',
   'Stock Investigator': 'Type any NSE ticker or company name. The same research engine as scanner Investigate runs — not a new scanner.',
-  'Long-Term Picks': 'Business quality, valuation and timing without fabricated model performance.',
   Compare: 'Side-by-side comparison across market, growth, quality and technical dimensions.',
   Watchlist: 'Names you are tracking with latest scan context.',
   'Market Overview': 'Regime, breadth, volatility and sector leadership.',
@@ -303,9 +303,9 @@ function App() {
     seedOperation: activeSeed(dashboard, 'MARKET_SCAN'),
   })
 
-  const longTermScan = useScanRunner('LONG_TERM_SCAN', {
+  const longTermScan = useScanRunner('LONG_TERM_REFRESH', {
     onComplete: () => void refresh(),
-    seedOperation: activeSeed(dashboard, 'LONG_TERM_SCAN') || activeSeed(dashboard, 'LONG_TERM_REFRESH'),
+    seedOperation: activeSeed(dashboard, 'LONG_TERM_REFRESH') || activeSeed(dashboard, 'LONG_TERM_SCAN'),
   })
 
   const pipelineBusy = (dashboard.operations.active || []).some((item) => (

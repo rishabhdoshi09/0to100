@@ -48,8 +48,8 @@ RANKING_LEGEND = {
 }
 BEST_OF_BEST_WEIGHTS = {"sepa": 0.45, "funds": 0.30, "tape": 0.25}
 SCAN_SHARED_NOTE = (
-    "Home and Market Scanner read the same saved whole-market scan "
-    "(latest_momentum_scan.json). Names can appear in more than one lane. "
+    "One whole-market scan fills Home, Scanner (all tabs), Recommendations "
+    "and long-term from the same saved scan. Names can appear in more than one lane. "
     "Scan Now is the only intentional rescan."
 )
 # Re-export shared floors so callers keep importing from this module.
@@ -411,7 +411,8 @@ def best_among_note(
         )
     return (
         f"No overlap yet: {sniper_count} sniper names, {sepa_count} SEPA overlay cards, "
-        f"{fund_count} long-term quality names. Run long-term scan if funds are empty; "
+        f"{fund_count} long-term quality names. Scan Now fills funds from the same "
+        "saved scan; Refresh funds only reloads Screener. "
         "SEPA cards come from the saved scan overlay. Tape lane above is independent."
     )
 
