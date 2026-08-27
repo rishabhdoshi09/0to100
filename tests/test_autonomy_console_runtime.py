@@ -77,6 +77,9 @@ def test_heartbeat_lists_scan_and_news_together():
     assert "market_scan (940s, attempt 0)" in text
     assert "news_refresh (940s, attempt 3)" in text
     assert " + " in text
+
+
+def test_visible_loop_recovers_from_tick_exception(tmp_path, capsys):
     sup = _ExplodingSupervisor(tmp_path / "auto")
     assert sup.start()
     try:
