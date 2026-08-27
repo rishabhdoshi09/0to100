@@ -80,7 +80,7 @@ def test_screenshot_style_watchlist_headline_when_three_checks_pass():
 
 def _aeroenter_like_frame() -> pd.DataFrame:
     """Last bar matches the public STOCK ANALYSER screenshot numbers."""
-    index = pd.date_range("2024-07-01", periods=280, freq="B")
+    index = pd.date_range("2024-08-01", periods=252, freq="B")
     n = len(index)
     prev_close, last_close = 143.64, 142.65
     closes = [62.2 + (prev_close - 62.2) * i / (n - 2) for i in range(n - 1)] + [last_close]
@@ -94,6 +94,7 @@ def _aeroenter_like_frame() -> pd.DataFrame:
         },
         index=index,
     )
+    data["low"] = data["low"].clip(lower=62.2)
     data.iloc[0, data.columns.get_loc("low")] = 62.2
     peak = n // 2
     data.iloc[peak, data.columns.get_loc("high")] = 149.55
@@ -106,7 +107,7 @@ def _aeroenter_like_frame() -> pd.DataFrame:
 
 
 def test_aeroenter_style_card_is_watchlist_55_of_100():
-    bench_index = pd.date_range("2024-07-01", periods=280, freq="B")
+    bench_index = pd.date_range("2024-08-01", periods=252, freq="B")
     flat = pd.Series([100.0] * len(bench_index), index=bench_index)
     bench = pd.DataFrame(
         {"close": flat, "open": flat, "high": flat + 0.1, "low": flat - 0.1, "volume": [1_000_000] * len(bench_index)},
@@ -120,6 +121,7 @@ def test_aeroenter_style_card_is_watchlist_55_of_100():
     assert by_id["near_52w_high"]["passed"] is True
     assert "4.6% below" in by_id["near_52w_high"]["detail"]
     assert by_id["off_52w_low"]["passed"] is True
+    assert "129.3% above" in by_id["off_52w_low"]["detail"]
     assert "doubled from lows" in by_id["off_52w_low"]["note"]
     assert by_id["relative_strength"]["passed"] is False
     assert "Nifty 500" in by_id["relative_strength"]["title"]
