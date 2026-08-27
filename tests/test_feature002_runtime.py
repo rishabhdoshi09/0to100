@@ -167,6 +167,10 @@ def _run_runtime_scan(monkeypatch, tmp_path, *, enabled: bool, explode=False):
             ]
 
     monkeypatch.setattr(store, "save_scan", fake_save)
+    monkeypatch.setattr(
+        "product.desk_scan_overlays.persist_desks_from_market_scan",
+        lambda payload: {"recommendations": "skipped", "market_reports": "skipped"},
+    )
     report = MSS.run_whole_market_scan(
         universe_provider=lambda: {"AAA": "Aaa", "BBB": "Bbb"},
         prefetch_fn=lambda symbols, progress=None: len(symbols),

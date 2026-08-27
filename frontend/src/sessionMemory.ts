@@ -34,6 +34,24 @@ export function keepRicher<T>(key: string, next: T, isEmpty: (value: T) => boole
   return remember(key, next)
 }
 
+/** In-memory only. Do not sessionStorage large desks (recommendations, reports). */
+export function recallMemory<T>(key: string): T | undefined {
+  if (memory.has(key)) return memory.get(key) as T
+  return undefined
+}
+
+export function keepRicherMemory<T>(key: string, next: T, isEmpty: (value: T) => boolean): T {
+  const prev = recallMemory<T>(key)
+  if (prev !== undefined && isEmpty(next) && !isEmpty(prev)) return prev
+  memory.set(key, next)
+  try {
+    window.sessionStorage.removeItem(`qt:${key}`)
+  } catch {
+    /* quota / private mode */
+  }
+  return next
+}
+
 export function readSessionJson<T>(key: string): T | null {
   try {
     const raw = window.sessionStorage.getItem(key)

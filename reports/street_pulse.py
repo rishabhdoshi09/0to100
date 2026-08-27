@@ -364,23 +364,31 @@ def build_pulse(*, force: bool = False) -> dict:
 
 
 def pulse_to_telegram(pulse: dict) -> str:
-    """Compact HTML version of the pulse for a Telegram morning message."""
-    lines = [f"📰 <b>Daily Street Pulse — {pulse['date']}</b>"]
-    for t in pulse["takeaways"]:
-        lines.append(f"• {t}")
+    """Compact HTML version of the saved pulse for Telegram. Does not crawl."""
+    pulse = dict(pulse or {})
+    date = str(pulse.get("date") or pulse.get("as_of_ist") or "").strip() or "today"
+    lines = [f"📰 <b>Daily Street Pulse — {date}</b>"]
+    for t in pulse.get("takeaways") or []:
+        if str(t).strip():
+            lines.append(f"• {t}")
     if pulse.get("buzzing"):
         b = pulse["buzzing"]
-        lines.append(f"\n🔥 <b>Buzzing:</b> {b['symbol']} — {b['note']}")
+        lines.append(f"\n🔥 <b>Buzzing:</b> {b.get('symbol')} — {b.get('note')}")
     if pulse.get("strength"):
         s = pulse["strength"]
-        lines.append(
-            f"💪 <b>Gaining strength:</b> {s['symbol']} — "
-            f"pivot ₹{s['entry']:,.0f} se {s.get('pivot_distance_pct', 0):.1f}% door"
-        )
+        try:
+            entry = float(s.get("entry") or 0)
+            dist = float(s.get("pivot_distance_pct") or 0)
+            extra = f"pivot ₹{entry:,.0f} se {dist:.1f}% door" if entry else str(s.get("note") or "")
+        except (TypeError, ValueError):
+            extra = str(s.get("note") or "")
+        lines.append(f"💪 <b>Gaining strength:</b> {s.get('symbol')} — {extra}")
     if pulse.get("weak"):
         w = pulse["weak"]
-        lines.append(f"⚠️ <b>Losing momentum:</b> {w['symbol']} — {w['note']}")
-    if pulse.get("breakouts_tomorrow"):
-        syms = ", ".join(r["symbol"] for r in pulse["breakouts_tomorrow"])
-        lines.append(f"\n⏳ <b>Kal ke breakout candidates:</b> {syms}")
+        lines.append(f"⚠️ <b>Losing momentum:</b> {w.get('symbol')} — {w.get('note')}")
+    tomorrow = pulse.get("breakouts_tomorrow") or []
+    if tomorrow:
+        syms = ", ".join(str(r.get("symbol") or "") for r in tomorrow if isinstance(r, dict) and r.get("symbol"))
+        if syms:
+            lines.append(f"\n⏳ <b>Kal ke breakout candidates:</b> {syms}")
     return "\n".join(lines)

@@ -14,7 +14,7 @@ import {
 } from './productApi'
 import type { ExperienceViewProps } from './experience'
 import { LiveScanBanner } from './experience'
-import { keepRicher, markInvestigate, recall } from './sessionMemory'
+import { keepRicherMemory, markInvestigate, recallMemory } from './sessionMemory'
 
 const CAT_ICONS: Record<string, string> = {
   wealth_builders: 'W',
@@ -385,9 +385,9 @@ export function RecommendationsView({
   longTermScan,
   depth,
 }: ExperienceViewProps) {
-  const [data, setData] = useState<RecommendationsWorkspace | null>(() => recall<RecommendationsWorkspace>('reco-workspace') ?? null)
+  const [data, setData] = useState<RecommendationsWorkspace | null>(() => recallMemory<RecommendationsWorkspace>('reco-workspace') ?? null)
   const [error, setError] = useState('')
-  const [loading, setLoading] = useState(() => !recall('reco-workspace'))
+  const [loading, setLoading] = useState(() => !recallMemory('reco-workspace'))
   const [categoryId, setCategoryId] = useState('wealth_builders')
   const [lifecycle, setLifecycle] = useState<'Active' | 'Closed'>('Active')
   const [query, setQuery] = useState('')
@@ -395,11 +395,11 @@ export function RecommendationsView({
 
   useEffect(() => {
     let cancelled = false
-    if (!recall('reco-workspace')) setLoading(true)
+    if (!recallMemory('reco-workspace')) setLoading(true)
     fetchRecommendationsWorkspace()
       .then((payload) => {
         if (!cancelled) {
-          const kept = keepRicher('reco-workspace', payload, (row) => !(row.categories || []).some((c) => (c.count || 0) > 0 || (c.cards || []).length > 0))
+          const kept = keepRicherMemory('reco-workspace', payload, (row) => !(row.categories || []).some((c) => (c.count || 0) > 0 || (c.cards || []).length > 0))
           setData(kept)
           const firstWithCards = kept.categories.find((c) => c.count > 0)
           if (firstWithCards) setCategoryId(firstWithCards.id)
@@ -859,9 +859,9 @@ function DeskTile({
 }
 
 export function MarketReportsView({ dashboard, setActive, setSelected, marketScan, depth, runControl }: ExperienceViewProps) {
-  const [data, setData] = useState<MarketReportsWorkspace | null>(() => recall<MarketReportsWorkspace>('market-reports') ?? null)
+  const [data, setData] = useState<MarketReportsWorkspace | null>(() => recallMemory<MarketReportsWorkspace>('market-reports') ?? null)
   const [error, setError] = useState('')
-  const [loading, setLoading] = useState(() => !recall('market-reports'))
+  const [loading, setLoading] = useState(() => !recallMemory('market-reports'))
   const [query, setQuery] = useState('')
   const [selected, setSelectedReport] = useState<MarketReportItem | null>(null)
   const [newsBusy, setNewsBusy] = useState(false)
@@ -870,11 +870,11 @@ export function MarketReportsView({ dashboard, setActive, setSelected, marketSca
 
   useEffect(() => {
     let cancelled = false
-    if (!recall('market-reports')) setLoading(true)
+    if (!recallMemory('market-reports')) setLoading(true)
     fetchMarketReportsWorkspace()
       .then((payload) => {
         if (!cancelled) {
-          const kept = keepRicher('market-reports', payload, (row) => {
+          const kept = keepRicherMemory('market-reports', payload, (row) => {
             const highlights = row.scan_highlights?.row_count || 0
             const sourced = row.desk_note?.wrap_sourced || 0
             return !(row.reports || []).length && highlights === 0 && sourced === 0

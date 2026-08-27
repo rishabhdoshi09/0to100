@@ -275,6 +275,11 @@ class MarketOperationsWorker:
             if str(sent.get("reason") or "") == "send_failed":
                 time.sleep(1.0)
                 sent = notifier.drain_last_scan(payload, min_interval_s=0.0) or sent
+            try:
+                sent = dict(sent or {})
+                sent["desk"] = notifier.drain_desk_alerts()
+            except Exception:
+                pass
             print(
                 f"[TELEGRAM] scan alerts · setups={int(sent.get('setup') or 0)} · "
                 f"near-breakout={int(sent.get('prebreakout') or 0)}"

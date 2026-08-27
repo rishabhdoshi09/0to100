@@ -116,10 +116,14 @@ def delivery_status(root: Path | None = None) -> dict[str, Any]:
 
 
 def drain_scan_alerts(*, min_interval_s: float = 45.0, root: Path | None = None) -> dict[str, Any]:
-    """Replay last saved scan to Telegram when connected and today's keys are empty."""
+    """Replay last saved scan, recos, and after-close market report when Telegram is on."""
     base = Path(root) if root else default_root()
     notifier = TelegramNotifier(base)
     if not notifier.configured():
         return {"setup": 0, "prebreakout": 0, "reason": "not_configured"}
-    sent = notifier.drain_last_scan(min_interval_s=min_interval_s) or {}
+    sent = dict(notifier.drain_last_scan(min_interval_s=min_interval_s) or {})
+    try:
+        sent["desk"] = notifier.drain_desk_alerts()
+    except Exception as exc:
+        sent["desk"] = {"error": str(exc)[:200]}
     return sent

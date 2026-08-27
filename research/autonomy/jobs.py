@@ -214,7 +214,13 @@ class Deps:
             raise
 
     def notify_scan(self, payload, *, phase=""):
-        return self.telegram.notify_scan(payload, phase=phase)
+        sent = self.telegram.notify_scan(payload, phase=phase) or {}
+        try:
+            sent = dict(sent)
+            sent["desk"] = self.telegram.drain_desk_alerts()
+        except Exception:
+            pass
+        return sent
 
     def run_long_term_scan(self, *, refresh_fundamentals=False):
         from scan.long_term_service import run_long_term_scan
@@ -273,11 +279,18 @@ class Deps:
                 print("[TELEGRAM] OFF · set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID in .env", flush=True)
             return {"setup": 0, "prebreakout": 0, "reason": "not_configured"}
         payload = load_scan()
+        desk: dict = {}
+        try:
+            desk = self.telegram.drain_desk_alerts() or {}
+        except Exception:
+            desk = {}
         if not payload:
             print("[TELEGRAM] no saved scan to alert yet — keep autonomy running", flush=True)
-            return {"setup": 0, "prebreakout": 0, "reason": "no_scan"}
+            return {"setup": 0, "prebreakout": 0, "reason": "no_scan", "desk": desk}
         watch = sorted(sniper_symbols(payload))
         sent = self.telegram.drain_last_scan(payload, min_interval_s=min_interval_s) or {}
+        sent = dict(sent)
+        sent["desk"] = desk
         reason = str(sent.get("reason") or "").strip()
         quiet = reason in {"retry_wait", "already_sent", "in_progress", "no_candidates"}
         if min_interval_s == 0 or not quiet:

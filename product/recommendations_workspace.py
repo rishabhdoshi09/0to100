@@ -982,6 +982,55 @@ def build_recommendations_workspace(
     }
 
 
+def slim_workspace_for_desk(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """Drop bulky nested dumps so the desk GET stays small enough to parse."""
+    out = dict(payload)
+    categories = []
+    for cat in list(out.get("categories") or []):
+        next_cat = dict(cat)
+        next_cat["cards"] = [_slim_card(c) for c in (cat.get("cards") or [])]
+        categories.append(next_cat)
+    out["categories"] = categories
+    lifecycle = dict(out.get("lifecycle") or {})
+    lifecycle["active"] = [_slim_card(c) for c in (lifecycle.get("active") or [])]
+    lifecycle["closed"] = [_slim_card(c) for c in (lifecycle.get("closed") or [])]
+    out["lifecycle"] = lifecycle
+    out["from_saved_market_scan"] = True
+    return out
+
+
+def _slim_card(card: Mapping[str, Any]) -> dict[str, Any]:
+    row = dict(card)
+    row.pop("fundamentals", None)
+    row.pop("methods", None)
+    experts = []
+    for item in row.get("experts") or []:
+        if not isinstance(item, Mapping):
+            continue
+        experts.append({
+            "id": item.get("id"),
+            "family": item.get("family"),
+            "fired": item.get("fired"),
+            "label": item.get("label") or item.get("id"),
+            "why": str(item.get("why") or item.get("detail") or item.get("reason") or "")[:160],
+        })
+    if experts:
+        row["experts"] = experts
+    families = []
+    for item in row.get("families") or []:
+        if not isinstance(item, Mapping):
+            continue
+        families.append({
+            "id": item.get("id"),
+            "label": item.get("label") or item.get("id"),
+            "status": item.get("status"),
+            "detail": str(item.get("detail") or "")[:160],
+        })
+    if families:
+        row["families"] = families
+    return row
+
+
 def _persist_pulse(pulse: Mapping[str, Any]) -> Path | None:
     day = str(pulse.get("as_of_ist") or "") or _ist_day()
     REPORTS_DIR.mkdir(parents=True, exist_ok=True)
@@ -1000,6 +1049,21 @@ def _persist_pulse(pulse: Mapping[str, Any]) -> Path | None:
         tmp.write_text(json.dumps(payload, indent=2, default=str), encoding="utf-8")
         tmp.replace(path)
         return path
+    except Exception:
+        return None
+
+
+def load_today_pulse() -> dict[str, Any] | None:
+    """Today's saved Market Pulse, or None. Does not crawl."""
+    import json
+
+    path = REPORTS_DIR / f"market_pulse_{_ist_day()}.json"
+    if not path.exists():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        pulse = dict(data.get("pulse") or {})
+        return pulse or None
     except Exception:
         return None
 
@@ -1189,9 +1253,6 @@ def _pulse_summary(pulse: Mapping[str, Any]) -> str:
     return str(pulse.get("date") or "Market overview")
 
 
-_PULSE_FILE_TTL_S = 15 * 60
-
-
 def build_market_reports_workspace(
     *,
     persist_today: bool = True,
@@ -1201,7 +1262,6 @@ def build_market_reports_workspace(
 ) -> dict[str, Any]:
     """Chronological Market Pulse list. Reuses today's file when it is fresh."""
     import json
-    import time
 
     pulse: dict[str, Any] = {}
     error = ""
@@ -1209,13 +1269,11 @@ def build_market_reports_workspace(
     path = REPORTS_DIR / f"market_pulse_{today}.json"
     if persist_today and path.exists() and not rebuild:
         try:
-            age = time.time() - path.stat().st_mtime
-            if 0 <= age < _PULSE_FILE_TTL_S:
-                data = json.loads(path.read_text(encoding="utf-8"))
-                pulse = dict(data.get("pulse") or {})
+            data = json.loads(path.read_text(encoding="utf-8"))
+            pulse = dict(data.get("pulse") or {})
         except Exception:
             pulse = {}
-    if not pulse:
+    if not pulse and rebuild:
         try:
             from reports.street_pulse import build_pulse
             pulse = build_pulse(force=rebuild) or {}
@@ -1260,7 +1318,7 @@ def build_market_reports_workspace(
         }, today=today))
     elif has_today:
         # Re-project today's list item from the scan-enriched pulse so breakouts
-        # from the saved scan show even when the 15-minute file had empty slots.
+        # from the saved scan show even when the pulse file had empty slots.
         reports = [
             _report_item({
                 "id": r.get("id") or f"market_pulse_{today}",
@@ -1302,7 +1360,7 @@ def build_market_reports_workspace(
             "watch desks. Built from the last scan, official session files and saved news. "
             "Headlines stay sourced. Empty stays empty."
         ),
-        "load_note": "Pulse reuses today's file for 15 minutes; it does not walk every bhavcopy symbol.",
+        "load_note": "Pulse reuses today's saved file from Scan Now; it does not walk every bhavcopy symbol.",
         "reports": reports,
         "today_pulse": pulse,
         "desk_note": desk_note,
