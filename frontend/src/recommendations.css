@@ -843,23 +843,39 @@
   background: var(--rw-surface);
   border: 1px solid var(--rw-line);
   border-radius: var(--rw-radius);
-  padding: 18px 20px 8px;
+  padding: 18px 20px 12px;
   margin: 0 0 18px;
   box-shadow: var(--rw-shadow);
 }
 .daily-wrap h2 {
   font-family: Fraunces, Georgia, serif;
   font-size: 28px;
-  margin: 4px 0 12px;
+  margin: 4px 0 14px;
 }
 .daily-wrap ol {
+  list-style: none;
   margin: 0;
-  padding: 0 0 12px 22px;
+  padding: 0 0 8px;
   display: grid;
-  gap: 12px;
+  gap: 14px;
+  counter-reset: wrap;
+}
+.daily-wrap li {
+  counter-increment: wrap;
+  display: grid;
+  grid-template-columns: 2.1em 1fr;
+  gap: 8px;
+  align-items: start;
+}
+.daily-wrap li::before {
+  content: counter(wrap) ")";
+  font-weight: 700;
+  color: var(--rw-green);
+  font-variant-numeric: tabular-nums;
+  padding-top: 1px;
 }
 .daily-wrap li p {
   margin: 0 0 4px;
   font-size: 15px;
-  line-height: 1.45;
+  line-height: 1.5;
 }

@@ -16,6 +16,7 @@ class RetailMarketView:
     nifty_change_1d: float
     nifty_change_5d: float
     vix: float
+    nifty_price: float
     technical_details: dict
 
 
@@ -66,6 +67,7 @@ def build_market_view(regime: Any) -> RetailMarketView:
         nifty_change_1d=float(_get(regime, "nifty_change_1d", 0.0) or 0.0),
         nifty_change_5d=float(_get(regime, "nifty_change_5d", 0.0) or 0.0),
         vix=float(_get(regime, "vix", 0.0) or 0.0),
+        nifty_price=float(_get(regime, "nifty_price", 0.0) or 0.0),
         technical_details={
             "market_regime": _get(regime, "market_regime", ""),
             "volatility_regime": _get(regime, "volatility_regime", ""),

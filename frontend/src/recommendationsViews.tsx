@@ -14,6 +14,7 @@ import {
 } from './productApi'
 import type { ExperienceViewProps } from './experience'
 import { LiveScanBanner } from './experience'
+import { DailyWrapList, magazineWrapLines } from './dailyWrap'
 import { keepRicherMemory, markInvestigate, recallMemory } from './sessionMemory'
 
 const CAT_ICONS: Record<string, string> = {
@@ -693,84 +694,7 @@ function formatReportDate(value: string): string {
   }
 }
 
-function DailyWrapList({
-  lines,
-  onSymbol,
-}: {
-  lines: Array<{ id?: string; text: string; source?: string; official?: boolean; url?: string; symbols?: string[] }>
-  onSymbol?: (symbol: string) => void
-}) {
-  if (!lines.length) return null
-  return (
-    <section className="daily-wrap" aria-label="Here's the wrap of the day">
-      <p className="desk-kicker">Daily report</p>
-      <h2>Here&apos;s the wrap of the day</h2>
-      <ol>
-        {lines.map((line, index) => (
-          <li key={line.id || `${index}-${line.text.slice(0, 24)}`}>
-            <p>{line.text}</p>
-            <div className="desk-meta">
-              {line.source ? <span>{line.source}</span> : null}
-              {line.official ? <em>Official</em> : null}
-              {(line.symbols || []).map((sym) => (
-                onSymbol ? (
-                  <button key={sym} type="button" onClick={() => onSymbol(sym)}>{sym}</button>
-                ) : <span key={sym}>{sym}</span>
-              ))}
-              {line.url ? (
-                <a href={line.url} target="_blank" rel="noreferrer">Open source</a>
-              ) : null}
-            </div>
-          </li>
-        ))}
-      </ol>
-    </section>
-  )
-}
-
-function dashboardWrapLines(dashboard: ExperienceViewProps['dashboard']): Array<{ id: string; text: string; source: string; official?: boolean; symbols?: string[] }> {
-  const lines: Array<{ id: string; text: string; source: string; official?: boolean; symbols?: string[] }> = []
-  const market = dashboard.market
-  if (market?.available && (market.summary || market.nifty_change_1d != null)) {
-    const chg = market.nifty_change_1d
-    let move = market.summary || 'Official session on file.'
-    if (chg != null) {
-      const verb = chg < -0.05 ? `fell ${Math.abs(chg).toFixed(1)}%` : chg > 0.05 ? `rose ${chg.toFixed(1)}%` : `was little changed (${chg >= 0 ? '+' : ''}${chg.toFixed(1)}%)`
-      move = `Indian markets ${verb} on the official Nifty session. ${market.summary || ''}`.trim()
-    }
-    lines.push({ id: 'session_indices', text: move, source: 'Official NSE session', official: true })
-  }
-  const scan = dashboard.scan
-  if (scan?.available && (scan.records || []).length) {
-    const n = scan.records.length
-    const ready = scan.records.filter((row) => row.status === 'Ready to trade').length
-    const brk = scan.records
-      .filter((row) => (row.signals || []).some((s) => ['BREAKOUT_52W', 'BREAKOUT_RES'].includes(String(s).toUpperCase())))
-      .map((row) => row.symbol)
-      .filter(Boolean)
-      .slice(0, 6)
-    const bits = [`Last market scan has ${n} name${n === 1 ? '' : 's'}`]
-    if (ready) bits.push(`${ready} ready to trade`)
-    if (brk.length) bits.push(`breakouts ${brk.join(', ')}`)
-    lines.push({ id: 'session_scan', text: `${bits.join('. ')}.`, source: 'Saved market scan', official: true, symbols: brk })
-  }
-  const articles = [...(dashboard.news?.articles || [])]
-    .filter((a) => String(a.headline || '').trim())
-    .sort((a, b) => (b.impact_score || 0) - (a.impact_score || 0))
-    .slice(0, 6)
-  for (const article of articles) {
-    const headline = String(article.headline || '').trim()
-    const summary = String(article.summary || article.why_it_matters || '').trim()
-    lines.push({
-      id: article.article_id || headline,
-      text: summary ? `${headline} ${summary}` : headline,
-      source: article.source || 'Sourced news',
-      official: Boolean(article.official),
-      symbols: (article.mentioned_symbols || []).slice(0, 6),
-    })
-  }
-  return lines.slice(0, 8)
-}
+function DeskNoteMagazine({
   note,
   onSymbol,
 }: {
@@ -1094,13 +1018,11 @@ export function MarketReportsView({ dashboard, setActive, setSelected, marketSca
       </header>
 
       <DailyWrapList
-        lines={(data.desk_note?.daily_wrap && data.desk_note.daily_wrap.length)
-          ? data.desk_note.daily_wrap
-          : dashboardWrapLines(dashboard)}
+        lines={magazineWrapLines(data.desk_note?.daily_wrap, dashboard)}
         onSymbol={openSymbol}
       />
 
-      {data.empty_detail && !(data.desk_note?.daily_wrap || []).length && !dashboardWrapLines(dashboard).length ? (
+      {data.empty_detail && !magazineWrapLines(data.desk_note?.daily_wrap, dashboard).length ? (
         <div className="reco-empty">
           <strong>Nothing sourced yet</strong>
           <p>{data.empty_detail}</p>

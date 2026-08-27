@@ -196,8 +196,17 @@ export type DashboardPayload = {
     nifty_change_1d: number | null
     nifty_change_5d: number | null
     vix: number | null
+    nifty_price?: number | null
     technical_details?: Record<string, unknown>
   }
+  daily_wrap?: Array<{
+    id?: string
+    text: string
+    source?: string
+    official?: boolean
+    url?: string
+    symbols?: string[]
+  }>
   scan: {
     available: boolean
     scanned_at?: string

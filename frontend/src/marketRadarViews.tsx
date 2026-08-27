@@ -23,6 +23,7 @@ import {
 import { RiskLensCard } from './productViews'
 import { LiveScanBanner, type ExperienceViewProps } from './experience'
 import { keepRicher, markInvestigate, recall, remember } from './sessionMemory'
+import { DailyWrapList, magazineWrapLines } from './dailyWrap'
 import {
   bestSetupsFromRadar,
   dashCell,
@@ -645,6 +646,11 @@ export function RadarHomeView(props: ExperienceViewProps & {
         <div><span>SCAN AGE</span><strong>{relativeAge(scanAt)}</strong></div>
         <div><span>STANCE</span><strong>{dashboard.market.trade_stance?.split(';')[0] || '—'}</strong></div>
       </div>
+
+      <DailyWrapList
+        lines={magazineWrapLines(dashboard.daily_wrap, dashboard)}
+        onSymbol={(symbol) => { setSelected(symbol); markInvestigate(symbol); setActive('Stock Intelligence') }}
+      />
 
       <LiveScanBanner scan={marketScan} depth={depth} label="Shared market scan" />
       {longTermScan.isActive || longTermScan.notice ? (

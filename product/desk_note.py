@@ -150,7 +150,10 @@ WRAP_SLOTS: tuple[dict[str, Any], ...] = (
     {
         "id": "global",
         "label": "US / global tape",
-        "needles": ("us inflation", "fed chair", "federal reserve", "treasury yield", "us futures", "bond yield"),
+        "needles": (
+            "us inflation", "fed chair", "federal reserve", "treasury yield",
+            "us futures", "bond yield", "s&p", "nasdaq", "us markets", "nvidia",
+        ),
         "prefer_official": False,
         "reject_if": (),
         "empty": "No sourced US/global tape headline yet.",
@@ -260,77 +263,307 @@ def _fnum(value: Any) -> float | None:
         return None
 
 
+_SECTOR_INDICES: tuple[tuple[str, str], ...] = (
+    ("^CNXPHARMA", "pharma"),
+    ("^CNXFMCG", "FMCG"),
+    ("^CNXAUTO", "auto"),
+    ("^CNXIT", "IT"),
+    ("^CNXMETAL", "metal"),
+    ("^CNXENERGY", "energy"),
+    ("^CNXREALTY", "realty"),
+    ("^NSEBANK", "banking"),
+)
+
+_GLOBAL_NEEDLES: tuple[str, ...] = (
+    "us inflation", "fed chair", "federal reserve", "treasury yield",
+    "us futures", "bond yield", "s&p", "nasdaq", "us markets", "nvidia",
+    "wall street", "dow jones", "s&p 500", "sp 500",
+)
+
+_FILING_REJECT: tuple[str, ...] = (
+    "pursuant to the provisions of regulation",
+    "listing obligations and disclosure",
+)
+
+
+def _join_names(names: Sequence[str]) -> str:
+    items = [str(n).strip() for n in names if str(n).strip()]
+    if not items:
+        return ""
+    if len(items) == 1:
+        return items[0]
+    if len(items) == 2:
+        return f"{items[0]} and {items[1]}"
+    return f"{', '.join(items[:-1])} and {items[-1]}"
+
+
+def _pretty_sector(name: str) -> str:
+    raw = str(name or "").strip()
+    if not raw:
+        return ""
+    if raw.upper() in {"IT", "FMCG", "NBFC"}:
+        return raw.upper()
+    return raw[:1].upper() + raw[1:]
+
+
+def _comma_int(value: float) -> str:
+    return f"{int(round(value)):,}"
+
+
+def _pct_label(chg: float) -> str:
+    if abs(chg) >= 1.0:
+        return f"{abs(chg):.0f}%"
+    return f"{abs(chg):.1f}%"
+
+
+def _move_gerund(chg: float) -> str:
+    if chg < -0.05:
+        return f"falling {_pct_label(chg)}"
+    if chg > 0.05:
+        return f"rising {_pct_label(chg)}"
+    return f"little changed ({chg:+.1f}%)"
+
+
+def _move_past(chg: float) -> str:
+    if chg < -0.05:
+        return f"fell {_pct_label(chg)}"
+    if chg > 0.05:
+        return f"rose {_pct_label(chg)}"
+    return f"was little changed ({chg:+.1f}%)"
+
+
+def _round_cross(close: float, prev: float, *, step: int = 100) -> str:
+    if close <= 0 or prev <= 0 or step <= 0:
+        return ""
+    if close < prev:
+        level = int(close // step + 1) * step
+        if close < level <= prev:
+            return f"slipping below {_comma_int(level)}"
+        return ""
+    level = int(close // step) * step
+    if prev < level <= close:
+        return f"crossing above {_comma_int(level)}"
+    return ""
+
+
+def _index_print(ticker: str) -> dict[str, Any]:
+    try:
+        from data.index_store import latest_index_print
+
+        return dict(latest_index_print(ticker) or {})
+    except Exception:
+        return {}
+
+
+def _recent_closes(ticker: str, n: int = 4) -> list[float]:
+    try:
+        from data.index_store import recent_index_closes
+
+        return [float(x) for x in (recent_index_closes(ticker, n) or []) if float(x) > 0]
+    except Exception:
+        return []
+
+
+def _session_changes(closes: Sequence[float]) -> list[float]:
+    out: list[float] = []
+    for idx in range(1, len(closes)):
+        prev = float(closes[idx - 1])
+        cur = float(closes[idx])
+        if prev > 0:
+            out.append((cur / prev - 1.0) * 100.0)
+    return out
+
+
+def _streak_phrase(changes: Sequence[float]) -> str:
+    if not changes:
+        return ""
+    today = float(changes[-1])
+    yesterday = float(changes[-2]) if len(changes) >= 2 else None
+    if yesterday is not None and today < -0.05 and yesterday < -0.05:
+        return "extended losses for the second straight session"
+    if yesterday is not None and today > 0.05 and yesterday > 0.05:
+        return "extended gains for the second straight session"
+    if today < -0.05:
+        return "ended lower"
+    if today > 0.05:
+        return "ended higher"
+    return "ended little changed"
+
+
+def _is_global_article(article: Mapping[str, Any]) -> bool:
+    text = _blob(article)
+    return any(token in text for token in _GLOBAL_NEEDLES)
+
+
+def _is_filing_article(article: Mapping[str, Any]) -> bool:
+    text = _blob(article)
+    return any(token in text for token in _FILING_REJECT)
+
+
+def _article_kind(article: Mapping[str, Any]) -> str:
+    if _is_filing_article(article):
+        return "skip"
+    if _is_global_article(article):
+        return "global"
+    if _syms(article):
+        return "stock"
+    return "other"
+
+
+def _line_from_article(
+    article: Mapping[str, Any],
+    *,
+    scan_map: Mapping[str, Mapping[str, Any]] | None = None,
+) -> dict[str, Any] | None:
+    headline = str(article.get("headline") or "").strip()
+    if not headline:
+        return None
+    summary = str(article.get("summary") or article.get("why_it_matters") or "").strip()
+    text = headline if not summary else f"{headline} {summary}"
+    symbols = _syms(article)[:6]
+    scan_map = scan_map or {}
+    prefix = ""
+    if symbols and "%" not in text:
+        row = dict(scan_map.get(symbols[0]) or {})
+        chg = _fnum(row.get("change_pct"))
+        if chg is not None and abs(chg) >= 0.4:
+            name = str(row.get("company") or row.get("name") or "").strip() or symbols[0]
+            if name.lower() not in text.lower():
+                prefix = f"{name} {_move_past(chg)}. "
+    return {
+        "id": str(article.get("article_id") or headline[:24]),
+        "text": " ".join((prefix + text).split())[:480],
+        "source": str(article.get("source") or "Sourced news"),
+        "official": bool(article.get("official")),
+        "url": str(article.get("url") or ""),
+        "symbols": symbols,
+    }
+
+
 def official_session_wrap(*, scan_payload: Mapping[str, Any] | None = None) -> list[dict[str, Any]]:
-    """Numbered wrap lines from official session + last scan. Never invents news."""
-    lines: list[dict[str, Any]] = []
+    """Item 1 of the wrap: official India tape. Never invents Sensex, sectors, or news."""
+    del scan_payload  # session line is indices + sectors, not scan counts
     try:
         from product.market_view import current_market_view
 
         view = current_market_view()
     except Exception:
         view = None
-    if view is not None:
-        chg = _fnum(view.nifty_change_1d)
-        if chg is not None:
-            if chg < -0.05:
-                move = f"fell {abs(chg):.1f}%"
-            elif chg > 0.05:
-                move = f"rose {chg:.1f}%"
-            else:
-                move = f"was little changed ({chg:+.1f}%)"
-            text = f"Indian markets {move} on the official Nifty session. {view.summary}"
-            lines.append({
-                "id": "session_indices",
-                "text": " ".join(text.split()),
-                "source": "Official NSE session",
-                "official": True,
-                "url": "",
-                "symbols": [],
-            })
-        elif str(view.summary or "").strip():
-            lines.append({
-                "id": "session_regime",
-                "text": str(view.summary).strip(),
-                "source": "QuantTerm regime on official bars",
-                "official": True,
-                "url": "",
-                "symbols": [],
-            })
-    records = [r for r in list((scan_payload or {}).get("records") or []) if isinstance(r, Mapping)]
-    if records:
-        ready = sum(1 for r in records if str(r.get("status") or "") == "Ready to trade")
-        brk = []
-        for row in records:
-            sigs = {str(x).upper() for x in (row.get("signals") or [])}
-            grade = str(row.get("breakout_grade") or "").upper()
-            if sigs & {"BREAKOUT_52W", "BREAKOUT_RES"} or grade in {"A", "B"}:
-                sym = str(row.get("symbol") or "").upper()
-                if sym and sym not in brk:
-                    brk.append(sym)
-        bits = [f"Last market scan has {len(records)} name(s)"]
-        if ready:
-            bits.append(f"{ready} ready to trade")
-        if brk:
-            bits.append("breakouts " + ", ".join(brk[:6]))
-        lines.append({
-            "id": "session_scan",
-            "text": ". ".join(bits) + ".",
-            "source": "Saved market scan",
+
+    nifty = _index_print("^NSEI")
+    nifty_chg = _fnum((nifty or {}).get("chg_pct"))
+    nifty_px = _fnum((nifty or {}).get("price"))
+    if nifty_chg is None and view is not None:
+        nifty_chg = _fnum(getattr(view, "nifty_change_1d", None))
+    if nifty_px is None and view is not None:
+        nifty_px = _fnum(getattr(view, "nifty_price", None))
+        if nifty_px is not None and nifty_px <= 0:
+            nifty_px = None
+
+    closes = _recent_closes("^NSEI", 4)
+    changes = _session_changes(closes)
+    if nifty_chg is not None:
+        if changes:
+            changes = list(changes[:-1]) + [nifty_chg]
+        else:
+            changes = [nifty_chg]
+    streak = _streak_phrase(changes)
+    if not streak and nifty_chg is None and view is not None and str(getattr(view, "summary", "") or "").strip():
+        return [{
+            "id": "session_regime",
+            "text": str(view.summary).strip(),
+            "source": "QuantTerm regime on official bars",
             "official": True,
             "url": "",
-            "symbols": brk[:6],
-        })
-    return lines
+            "symbols": [],
+        }]
+    if nifty_chg is None and not streak:
+        return []
+
+    head = f"Indian markets {streak or 'ended little changed'}"
+    nifty_bit = ""
+    if nifty_chg is not None:
+        nifty_bit = f"the Nifty {_move_gerund(nifty_chg)}"
+        if nifty_px:
+            nifty_bit += f" to {_comma_int(nifty_px)}"
+            prev = closes[-2] if len(closes) >= 2 else None
+            crossed = _round_cross(nifty_px, prev) if prev else ""
+            if crossed:
+                nifty_bit += f", {crossed}"
+    bank = _index_print("^NSEBANK")
+    bank_chg = _fnum((bank or {}).get("chg_pct"))
+    bank_bit = ""
+    if bank_chg is not None:
+        bank_bit = f"Bank Nifty {_move_past(bank_chg)}"
+
+    clause = head
+    extras = [bit for bit in (nifty_bit, bank_bit) if bit]
+    if extras:
+        if len(extras) == 1:
+            clause = f"{head}, with {extras[0]}"
+        else:
+            clause = f"{head}, with {extras[0]}, while {extras[1]}"
+
+    positive: list[str] = []
+    negative: list[str] = []
+    for ticker, label in _SECTOR_INDICES:
+        if ticker == "^NSEBANK":
+            continue
+        print = _index_print(ticker)
+        chg = _fnum((print or {}).get("chg_pct"))
+        if chg is None:
+            continue
+        pretty = _pretty_sector(label)
+        if chg > 0.05:
+            positive.append(pretty)
+        elif chg < -0.05:
+            negative.append(pretty)
+    sector = ""
+    if positive:
+        sector = f"{_join_names(positive[:3])} stocks ended positive"
+        if negative:
+            sector += f", while {_join_names(negative[:3])} ended lower"
+    elif view is not None:
+        leaders = [_pretty_sector(str(x)) for x in (getattr(view, "leaders", ()) or [])[:3]]
+        laggards = [_pretty_sector(str(x)) for x in (getattr(view, "laggards", ()) or [])[:3]]
+        if leaders:
+            sector = f"{_join_names(leaders)} stocks led"
+            if laggards:
+                sector += f", while {_join_names(laggards)} lagged"
+        elif laggards:
+            sector = f"{_join_names(laggards)} lagged"
+
+    text = clause + "."
+    if sector:
+        text = f"{text} {sector}."
+    return [{
+        "id": "session_indices",
+        "text": " ".join(text.split()),
+        "source": "Official NSE session",
+        "official": True,
+        "url": "",
+        "symbols": [],
+    }]
 
 
-def news_wrap_lines(articles: Sequence[Mapping[str, Any]] | None, *, limit: int = 5) -> list[dict[str, Any]]:
-    """Top sourced headlines, ranked by impact. Headline required; no invented copy."""
+def news_wrap_lines(
+    articles: Sequence[Mapping[str, Any]] | None,
+    *,
+    limit: int = 5,
+    kinds: Sequence[str] | None = None,
+    scan_payload: Mapping[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    """Top sourced headlines. Headline required; no invented copy."""
+    want = {str(k) for k in (kinds or ("stock", "other", "global"))}
+    scan_map = _scan_map(scan_payload)
     ranked: list[tuple[int, Mapping[str, Any]]] = []
     for article in articles or []:
         if not isinstance(article, Mapping):
             continue
-        headline = str(article.get("headline") or "").strip()
-        if not headline:
+        if not str(article.get("headline") or "").strip():
+            continue
+        kind = _article_kind(article)
+        if kind == "skip" or kind not in want:
             continue
         try:
             score = int(article.get("impact_score") or 0)
@@ -346,21 +579,9 @@ def news_wrap_lines(articles: Sequence[Mapping[str, Any]] | None, *, limit: int 
         if key in seen:
             continue
         seen.add(key)
-        summary = str(article.get("summary") or article.get("why_it_matters") or "").strip()
-        text = headline if not summary else f"{headline} {summary}"
-        symbols: list[str] = []
-        for item in list(article.get("mentioned_symbols") or [])[:6]:
-            sym = str(item or "").strip().upper()
-            if sym and sym not in symbols:
-                symbols.append(sym)
-        out.append({
-            "id": str(article.get("article_id") or f"news_{len(out)+1}"),
-            "text": " ".join(text.split())[:420],
-            "source": str(article.get("source") or "Sourced news"),
-            "official": bool(article.get("official")),
-            "url": str(article.get("url") or ""),
-            "symbols": symbols,
-        })
+        item = _line_from_article(article, scan_map=scan_map)
+        if item:
+            out.append(item)
         if len(out) >= max(1, int(limit)):
             break
     return out
@@ -371,16 +592,30 @@ def daily_wrap(
     articles: Sequence[Mapping[str, Any]] | None = None,
     scan_payload: Mapping[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
-    """Here's the wrap of the day — official session first, then sourced headlines."""
+    """Here's the wrap of the day — official tape, then sourced stock stories, US last."""
     lines = official_session_wrap(scan_payload=scan_payload)
     existing = {str(item.get("text") or "").lower() for item in lines}
-    for item in news_wrap_lines(articles, limit=6):
-        key = str(item.get("text") or "").lower()
-        if key in existing:
-            continue
-        existing.add(key)
-        lines.append(item)
-    return lines[:8]
+    seen_ids = {str(item.get("id") or "") for item in lines}
+
+    def _take(kind: str, limit: int) -> None:
+        for item in news_wrap_lines(articles, limit=limit, kinds=(kind,), scan_payload=scan_payload):
+            key = str(item.get("text") or "").lower()
+            aid = str(item.get("id") or "")
+            if key in existing or (aid and aid in seen_ids):
+                continue
+            existing.add(key)
+            if aid:
+                seen_ids.add(aid)
+            lines.append(item)
+
+    _take("stock", 3)
+    remain = max(0, 5 - len(lines) - 1)
+    if remain:
+        _take("other", remain)
+    _take("global", 1)
+    if len(lines) < 5:
+        _take("other", 5 - len(lines))
+    return lines[:5]
 
 
 def wrap_from_news(articles: Sequence[Mapping[str, Any]] | None) -> list[dict[str, Any]]:
@@ -538,8 +773,8 @@ def build_desk_note(
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "title": "Here's the wrap of the day",
         "blurb": (
-            "Official session first. Sourced headlines next. Empty slots stay empty — "
-            "QuantTerm does not invent a lawsuit, order, or index print."
+            "Official Nifty and sector session first. Sourced stock stories next. "
+            "US tape only when the curator has it. Empty stays empty."
         ),
         "wrap": wrap,
         "daily_wrap": daily,

@@ -266,6 +266,28 @@ def load_index_store_from_cache() -> bool:
         return False
 
 
+def recent_index_closes(ticker: str, n: int = 4) -> list[float]:
+    """Oldest-to-newest closes from the cached official store. No network."""
+    name = TICKER_MAP.get((ticker or "").upper())
+    if not name:
+        return []
+    load_index_store_from_cache()
+    with _lock:
+        df = _store.get(name)
+        if df is None or "Close" not in getattr(df, "columns", []):
+            return []
+        values = []
+        for raw in df["Close"].tolist():
+            try:
+                price = float(raw)
+            except (TypeError, ValueError):
+                continue
+            if price > 0:
+                values.append(price)
+    keep = max(1, int(n or 1))
+    return values[-keep:]
+
+
 def latest_index_print(ticker: str) -> Optional[dict]:
     """Last close + 1-day % from the cached official index store. No network."""
     name = TICKER_MAP.get(ticker.upper())

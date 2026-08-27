@@ -54,8 +54,10 @@ const emptyDashboard: DashboardPayload = {
     nifty_change_1d: null,
     nifty_change_5d: null,
     vix: null,
+    nifty_price: null,
     technical_details: {},
   },
+  daily_wrap: [],
   scan: { available: false, universe_size: 0, summary: {}, records: [] },
   long_term: { available: false, summary: {}, records: [], job: {} },
   paper: {
