@@ -76,6 +76,13 @@ def run_supervisor(*, root=None, interval_s: float = 15.0, max_iterations=None) 
     from research.autonomy.parallel_runtime import install_parallel_runtime
     install_parallel_runtime()
 
+    # DATA_REFRESH used to remain inside Supervisor.tick() for the full Kite
+    # history/snapshot catch-up.  Keep the canonical handler and all of its data
+    # gates, but execute that heavy I/O in a background data lane so controls,
+    # health and other due jobs remain responsive while the refresh is running.
+    from research.autonomy.data_refresh_parallel import install_parallel_data_refresh
+    install_parallel_data_refresh()
+
     from research.autonomy.supervisor import Supervisor
     from research.autonomy.console_runtime import run_visible_loop
 
