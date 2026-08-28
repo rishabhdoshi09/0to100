@@ -57,6 +57,12 @@ def run_supervisor(*, root=None, interval_s: float = 15.0, max_iterations=None) 
     except Exception:
         pass
 
+    # Exchange feeds can describe distributions of preference shares as "bonus".
+    # They are genuine corporate actions but do not multiply ordinary-equity share
+    # count, so install the security-type guard before any CA provider is used.
+    from data.corporate_actions_equity_filter import install as install_ca_equity_filter
+    install_ca_equity_filter()
+
     # BSE's official wire format differs from NSE (e.g. "25 Oct 2023").
     # Install the provider adapter before the background CA worker imports the
     # canonical resilient refresh function.
