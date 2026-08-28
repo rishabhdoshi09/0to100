@@ -26,7 +26,10 @@ OPS_RUNTIME = ROOT / "logs" / "market_ops" / "runtime.json"
 CA_RUNTIME = ROOT / "logs" / "ca_refresh_runtime.json"
 
 _BRIDGE_PENDING = {"MARKET_OP_IN_PROGRESS", "LONG_TERM_OP_IN_PROGRESS"}
-_SCAN_REUSE_S = 120.0
+# Autonomy scans are 15-minute observations. Reuse any successful scan from
+# the current slot so a 2-3 minute DATA_REFRESH cannot cause a second full scan
+# after the market-ops lane already finished the first one in parallel.
+_SCAN_REUSE_S = 15 * 60.0
 _LONG_TERM_REUSE_S = 10 * 60.0
 
 _install_lock = threading.Lock()
