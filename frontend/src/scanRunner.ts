@@ -140,6 +140,10 @@ export function progressPercent(operation: OperationRecord | null): number | nul
   return null
 }
 
+export function operationBlocksUserAction(operation: OperationRecord | null): boolean {
+  return operation?.status === 'RUNNING'
+}
+
 export type ScanRunnerHandle = {
   kind: ScanKind
   operation: OperationRecord | null
@@ -215,6 +219,11 @@ export function useScanRunner(kind: ScanKind, options: ScanRunnerOptions = {}): 
         setElapsedSeconds(0)
       }
       setOperation(op)
+      if (isActiveStatus(op.status)) {
+        // PENDING stays user-reassertable. Only a worker-leased RUNNING operation
+        // locks the action button.
+        setIsBusy(operationBlocksUserAction(op))
+      }
       if (isTerminalStatus(op.status)) handleTerminal(op)
     } catch {
       // transient network errors while polling — keep trying until terminal or unmount
@@ -232,7 +241,7 @@ export function useScanRunner(kind: ScanKind, options: ScanRunnerOptions = {}): 
   const attachOperation = useCallback((op: OperationRecord) => {
     setOperation(op)
     if (isActiveStatus(op.status)) {
-      setIsBusy(true)
+      setIsBusy(operationBlocksUserAction(op))
       if (trackedIdRef.current !== op.operation_id) beginPolling(op.operation_id)
     } else if (isTerminalStatus(op.status)) {
       setIsBusy(false)
@@ -252,6 +261,7 @@ export function useScanRunner(kind: ScanKind, options: ScanRunnerOptions = {}): 
     if (!seed || !seedKindMatches(seed.kind, kind)) return
     if (trackedIdRef.current === seed.operation_id) {
       setOperation(seed)
+      if (isActiveStatus(seed.status)) setIsBusy(operationBlocksUserAction(seed))
       if (isTerminalStatus(seed.status)) handleTerminal(seed)
       return
     }
@@ -291,6 +301,7 @@ export function useScanRunner(kind: ScanKind, options: ScanRunnerOptions = {}): 
       if (!mountedRef.current) return
       setOperation(op)
       if (isActiveStatus(op.status)) {
+        setIsBusy(operationBlocksUserAction(op))
         beginPolling(op.operation_id)
       } else if (isTerminalStatus(op.status)) {
         handleTerminal(op)
