@@ -232,6 +232,17 @@ def run_whole_market_scan(
         watchlist=watchlist,
     )
 
+    walked_total = 0
+
+    def _on_progress(current, total=0, **kw):
+        nonlocal walked_total
+        try:
+            walked_total = max(walked_total, int(total or 0))
+        except (TypeError, ValueError):
+            pass
+        if progress_callback:
+            progress_callback(current, total, **kw)
+
     try:
         # Prefetch warms OHLCV. Do not pass the stock-scan callback — bulk
         # prefetch reports bhavcopy days, not symbols.
@@ -240,7 +251,7 @@ def run_whole_market_scan(
         except TypeError:
             prefetch_fn(symbols)
         try:
-            results = list(scanner.scan(symbols, progress=progress_callback, prefetch=False) or [])
+            results = list(scanner.scan(symbols, progress=_on_progress, prefetch=False) or [])
         except TypeError:
             results = list(scanner.scan(symbols) or [])
     except Exception as exc:
@@ -275,11 +286,12 @@ def run_whole_market_scan(
     fno_symbols = set(fno_for_order)
 
     from product.scan_store import build_scan_payload, save_scan
+    scanned_n = walked_total or len(symbols)
     payload = build_scan_payload(
         names,
         results,
         fno_symbols,
-        scanned=len(symbols),
+        scanned=scanned_n,
         approved_universe=approved_n,
     )
     sid = snapshot_id if snapshot_id is not None else _active_snapshot_id()
@@ -327,7 +339,7 @@ def run_whole_market_scan(
         status=status,
         payload=payload,
         approved_universe=approved_n,
-        universe_size=len(symbols),
-        scanned=len(symbols),
+        universe_size=scanned_n,
+        scanned=scanned_n,
         source_snapshot_id=sid,
     )

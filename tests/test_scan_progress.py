@@ -257,6 +257,8 @@ def test_scan_report_separates_approved_universe_from_scanned():
     class Scanner:
         def scan(self, symbols, progress=None, prefetch=True):
             assert set(symbols) == {"AAA", "BBB"}
+            if progress:
+                progress(1, 1)
             return [SimpleNamespace(symbol="AAA", signals=["MOMENTUM"], score=80,
                                     verdict="BUY", chase_risk=False, price=100,
                                     momentum_5d=2, rsi=55, volume_ratio=1.5,
@@ -271,9 +273,9 @@ def test_scan_report_separates_approved_universe_from_scanned():
     )
     assert report.ok
     assert report.approved_universe == 3
-    assert report.scanned == 2
-    assert report.universe_size == 2
+    assert report.scanned == 1
+    assert report.universe_size == 1
     assert report.payload["approved_universe"] == 3
-    assert report.payload["scanned"] == 2
-    assert report.payload["universe_size"] == 2
+    assert report.payload["scanned"] == 1
+    assert report.payload["universe_size"] == 1
     assert report.payload["qualified_rows"] == 1
