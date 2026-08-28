@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 import signal
+import subprocess
 import time
 
 import terminal_api as core
@@ -19,6 +20,25 @@ from operations.store import pid_is_alive
 core._OPERATION_CONTROLS["RUN_LONG_TERM_SCAN_NOW"] = "LONG_TERM_SCAN"
 
 _base_ensure_ops_worker = core._ensure_ops_worker
+
+
+def _is_market_ops_pid(pid: int) -> bool:
+    """Protect against PID reuse: only signal a process that is really our worker."""
+    if pid <= 1 or not pid_is_alive(pid):
+        return False
+    proc = getattr(core, "_ops_process", None)
+    if proc is not None and proc.poll() is None and int(proc.pid) == int(pid):
+        return True
+    try:
+        command = subprocess.check_output(
+            ["ps", "-p", str(pid), "-o", "command="],
+            text=True,
+            stderr=subprocess.DEVNULL,
+            timeout=0.5,
+        ).strip()
+    except Exception:
+        return False
+    return "operations.market_ops" in command
 
 
 def _stop_stale_owner(runtime: dict) -> None:
@@ -34,7 +54,7 @@ def _stop_stale_owner(runtime: dict) -> None:
     if proc is not None and proc.poll() is None and proc.pid > 1:
         candidates.append(int(proc.pid))
     for pid in dict.fromkeys(candidates):
-        if not pid_is_alive(pid):
+        if not _is_market_ops_pid(pid):
             continue
         try:
             os.kill(pid, signal.SIGTERM)
@@ -43,7 +63,7 @@ def _stop_stale_owner(runtime: dict) -> None:
         deadline = time.time() + 0.8
         while time.time() < deadline and pid_is_alive(pid):
             time.sleep(0.04)
-        if pid_is_alive(pid):
+        if pid_is_alive(pid) and _is_market_ops_pid(pid):
             try:
                 os.kill(pid, signal.SIGKILL)
             except OSError:
@@ -60,7 +80,8 @@ def _ensure_ops_worker_strict(*, wait: bool = True) -> dict:
         return runtime
 
     # A prior child can be alive but wedged before/after taking the worker lock.
-    # Kill that stale ownership before asking the canonical starter to replace it.
+    # Kill only a verified stale market-ops owner before asking the canonical
+    # starter to replace it. A reused unrelated PID is never signalled.
     _stop_stale_owner(runtime)
     runtime = _base_ensure_ops_worker(wait=True)
     if runtime.get("running") and pid_is_alive(runtime.get("worker_pid")):
