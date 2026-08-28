@@ -95,6 +95,26 @@ def test_how_to_docs_do_not_checkout_historical_branch():
         assert "git pull origin overhaul/evidence-lab" not in text, rel
 
 
+def test_fresh_server_clone_pins_accepted_product_branch():
+    """A brand-new Oracle/VPS clone must not land on GitHub's historical default."""
+    import re
+
+    accepted = "cursor/live-terminal-contract-858e"
+    always_on = (ROOT / "docs" / "ALWAYS_ON.md").read_text(encoding="utf-8")
+    oracle = (ROOT / "docs" / "ORACLE_SETUP.md").read_text(encoding="utf-8")
+    setup = (ROOT / "deploy" / "setup_server.sh").read_text(encoding="utf-8")
+    clone_pin = f"git clone --branch {accepted}"
+    assert clone_pin in always_on
+    assert clone_pin in oracle
+    assert f'git clone --branch {accepted} "$REPO_URL"' in setup
+    # Obsolete single-unit restart: setup_server.sh removes quantterm.service.
+    assert not re.search(
+        r"systemctl restart quantterm(?:\.service)?(?:\s|$)",
+        oracle,
+    )
+    assert "sudo systemctl restart quantterm-ui.service quantterm-autonomy.service" in oracle
+
+
 def test_issue92_dod_verifier_is_checked_in():
     path = ROOT / "scripts" / "verify_issue92_dod.py"
     src = path.read_text(encoding="utf-8")

@@ -22,7 +22,9 @@ if [ -d "$APP_DIR/.git" ]; then
 elif [ -n "${QT_BRANCH:-}" ]; then
   git clone --branch "$QT_BRANCH" "$REPO_URL" "$APP_DIR"
 else
-  git clone "$REPO_URL" "$APP_DIR"
+  # GitHub default is still a historical research branch. A machine with no
+  # checkout yet must land on the accepted product code.
+  git clone --branch cursor/live-terminal-contract-858e "$REPO_URL" "$APP_DIR"
 fi
 
 BRANCH="$(git -C "$APP_DIR" rev-parse --abbrev-ref HEAD 2>/dev/null || echo current)"

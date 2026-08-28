@@ -297,6 +297,7 @@ def test_deployment_installs_two_services_and_current_branch():
     assert "run_quantterm_complete.sh" in linux
     assert "run_quantterm_complete.sh" in mac
     assert "quantterm-ui.service" in linux and "quantterm-autonomy.service" in linux
+    assert 'git clone --branch cursor/live-terminal-contract-858e "$REPO_URL"' in linux
     assert "com.quantterm.ui" in mac and "com.quantterm.autonomy" in mac
     assert "main.py autonomy" in linux
     assert "<string>autonomy</string>" in mac

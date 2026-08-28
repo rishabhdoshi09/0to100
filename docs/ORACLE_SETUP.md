@@ -41,16 +41,16 @@ ssh ubuntu@YOUR_PUBLIC_IP
 # private repo hai, isliye GitHub token ke saath (Settings → Developer
 # settings → Personal access tokens → repo read):
 export QT_REPO_URL=https://YOUR_TOKEN@github.com/rishabhdoshi09/0to100.git
-git clone "$QT_REPO_URL" ~/0to100
+git clone --branch cursor/live-terminal-contract-858e "$QT_REPO_URL" ~/0to100
 cd ~/0to100
 bash deploy/setup_server.sh
 ```
 
-Canonical product after setup: the **same complete stack** as a local desk —
-`quantterm-ui` runs `bash scripts/run_quantterm_complete.sh` (Vite :5173,
-API :8765, reports :8766). Streamlit is not started. The script deploys the
-current checkout; it does not pin historical research branches such as
-`overhaul/evidence-lab`.
+This clone is the accepted Issue #92 product branch, not GitHub's default
+`claude/build-ai-trading-system-miHHd`. `setup_server.sh` then deploys **that**
+checkout. Canonical product after setup: the **same complete stack** as a
+local desk — `quantterm-ui` runs `bash scripts/run_quantterm_complete.sh`
+(Vite :5173, API :8765, reports :8766). Streamlit is not started.
 
 Script khud karta hai: packages → 2G swap → clone/pull → venv →
 `pip install` → **systemd service** (crash pe 10s mein auto-restart,
@@ -60,7 +60,7 @@ reboot pe auto-start).
 
 ```bash
 nano ~/0to100/.env          # KITE_*, TELEGRAM_*, DEEPSEEK_API_KEY
-sudo systemctl restart quantterm
+sudo systemctl restart quantterm-ui.service quantterm-autonomy.service
 ```
 
 ## Step 5 — Access: Tailscale (recommended)
@@ -102,11 +102,11 @@ Phone/Mac pe bhi Tailscale app → phir kahin se bhi:
 ```bash
 # update
 cd ~/0to100 && git pull
-sudo systemctl restart quantterm-ui quantterm-autonomy
+sudo systemctl restart quantterm-ui.service quantterm-autonomy.service
 
 # logs
 journalctl -u quantterm-ui -f
 
 # service control
-sudo systemctl status|restart|stop quantterm
+sudo systemctl status quantterm-ui quantterm-autonomy
 ```

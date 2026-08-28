@@ -29,12 +29,14 @@ apt update && apt install -y python3.11 python3.11-venv git
 
 ### 2. Project daalo
 ```bash
-git clone https://github.com/rishabhdoshi09/0to100.git
+git clone --branch cursor/live-terminal-contract-858e https://github.com/rishabhdoshi09/0to100.git
 cd 0to100
 ```
 
-The install script deploys **this checkout**. Do not check out historical
-research branches such as `overhaul/evidence-lab`.
+This clone is the accepted Issue #92 product branch, not GitHub's default
+`claude/build-ai-trading-system-miHHd`. The install script then deploys **this**
+checkout. Do not check out historical research branches such as
+`overhaul/evidence-lab`.
 
 ### 3. systemd services (complete stack + autonomy)
 ```bash
