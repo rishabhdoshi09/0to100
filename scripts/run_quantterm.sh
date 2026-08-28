@@ -83,7 +83,7 @@ PY
 
 stop_stale_market_ops() {
   python - <<'PY' >/dev/null 2>&1 || true
-import json, os, signal, time
+import json, os, signal, subprocess, time
 from pathlib import Path
 p = Path("logs/market_ops/runtime.json")
 try:
@@ -91,18 +91,40 @@ try:
     pid = int(r.get("worker_pid") or 0)
 except Exception:
     pid = 0
-if pid > 1 and pid != os.getpid():
+if pid <= 1 or pid == os.getpid():
+    raise SystemExit(0)
+try:
+    command = subprocess.check_output(
+        ["ps", "-p", str(pid), "-o", "command="],
+        text=True,
+        stderr=subprocess.DEVNULL,
+        timeout=0.5,
+    ).strip()
+except Exception:
+    raise SystemExit(0)
+if "operations.market_ops" not in command:
+    raise SystemExit(0)
+try:
+    os.kill(pid, signal.SIGTERM)
+except OSError:
+    raise SystemExit(0)
+deadline = time.time() + 1.5
+while time.time() < deadline:
     try:
-        os.kill(pid, signal.SIGTERM)
+        os.kill(pid, 0)
     except OSError:
         raise SystemExit(0)
-    deadline = time.time() + 1.5
-    while time.time() < deadline:
-        try:
-            os.kill(pid, 0)
-        except OSError:
-            raise SystemExit(0)
-        time.sleep(0.05)
+    time.sleep(0.05)
+try:
+    command = subprocess.check_output(
+        ["ps", "-p", str(pid), "-o", "command="],
+        text=True,
+        stderr=subprocess.DEVNULL,
+        timeout=0.5,
+    ).strip()
+except Exception:
+    command = ""
+if "operations.market_ops" in command:
     try:
         os.kill(pid, signal.SIGKILL)
     except OSError:
