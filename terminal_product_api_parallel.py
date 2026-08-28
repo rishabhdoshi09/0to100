@@ -1,16 +1,18 @@
-"""Canonical terminal API with performance-safe, user-first operation routing.
+"""Canonical terminal API with user-first operation routing and recovery.
 
-The React desk is an interactive control plane. In the canonical one-terminal
-runtime the launcher is the *single owner* of the Market Operations process.
-The API may observe that worker and refuse a user command when it is unhealthy,
-but it must never spawn, terminate, or replace the launcher-owned process.
-
-Running ``terminal_product_api:app`` directly still keeps the legacy standalone
-worker fallback from :mod:`terminal_api`; this wrapper is intentionally the
-launcher-supervised product entry point.
+The launcher normally owns Market Operations. The API remains an observer while
+that worker is healthy, but an explicit user action must never disappear behind a
+stale worker. If the launcher-owned worker is dead/stale, this product wrapper
+cleans up only the verified stale ``operations.market_ops`` PID, invokes the base
+bounded recovery path, and refuses the command if a healthy worker still does not
+appear. This gives the one-terminal product a second safety net without creating a
+second market-data or scan architecture.
 """
 from __future__ import annotations
 
+import os
+import signal
+import subprocess
 import time
 
 import terminal_api as core
@@ -20,6 +22,7 @@ from product.operator_health import enrich_autonomy_payload
 
 # The base API intentionally keeps the control mapping in one mutable registry.
 core._OPERATION_CONTROLS["RUN_LONG_TERM_SCAN_NOW"] = "LONG_TERM_SCAN"
+_base_ensure_ops_worker = core._ensure_ops_worker
 
 
 def _healthy_runtime() -> dict:
@@ -29,44 +32,86 @@ def _healthy_runtime() -> dict:
     return runtime
 
 
+def _market_ops_command(pid: int) -> str:
+    try:
+        return subprocess.check_output(
+            ["ps", "-p", str(pid), "-o", "command="],
+            text=True,
+            stderr=subprocess.DEVNULL,
+            timeout=0.5,
+        ).strip()
+    except Exception:
+        return ""
+
+
+def _stop_stale_owner(runtime: dict) -> bool:
+    """Terminate only a verified stale market-ops process.
+
+    A stale runtime file alone is never enough to kill an arbitrary PID. The
+    command line must still identify ``operations.market_ops``. TERM is bounded;
+    KILL is the final cleanup only when the same verified process survives.
+    """
+    try:
+        pid = int(runtime.get("worker_pid") or 0)
+    except (TypeError, ValueError):
+        return False
+    if pid <= 1 or not pid_is_alive(pid):
+        return False
+    command = _market_ops_command(pid)
+    if "operations.market_ops" not in command:
+        return False
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except OSError:
+        return True
+    deadline = time.time() + 1.5
+    while time.time() < deadline:
+        if not pid_is_alive(pid):
+            return True
+        time.sleep(0.05)
+    if "operations.market_ops" in _market_ops_command(pid):
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except OSError:
+            pass
+    return True
+
+
 def _ensure_ops_worker_strict(*, wait: bool = True) -> dict:
-    """Observe the launcher-owned worker without ever taking lifecycle ownership.
+    """Return only when Market Operations is healthy or fail loudly.
 
-    ``terminal_api`` calls this with ``wait=True`` during FastAPI startup. Startup
-    is allowed to continue while the launcher watchdog is bringing Market Ops up,
-    so the API itself never enters a competing restart loop.
-
-    User controls call this with ``wait=False``. In that path an unhealthy worker
-    fails loudly instead of returning a ghost ``accepted: true`` queue entry.
+    Healthy launcher ownership is reused. Unhealthy ownership is verified and
+    cleaned up, then the existing bounded base recovery starts/reuses exactly the
+    canonical ``operations.market_ops`` worker. The user never receives a ghost
+    ``accepted: true`` solely because a queue row was written.
     """
     runtime = _healthy_runtime()
     if runtime.get("running") and pid_is_alive(runtime.get("worker_pid")):
         return runtime
 
-    if wait:
-        deadline = time.time() + 3.0
-        while time.time() < deadline:
-            time.sleep(0.1)
-            runtime = _healthy_runtime()
-            if runtime.get("running") and pid_is_alive(runtime.get("worker_pid")):
-                return runtime
-        # Startup remains non-owning: the launcher watchdog is the only component
-        # allowed to recover Market Ops. Returning degraded state keeps the API up
-        # so /api/health and the UI can show the blocker while recovery proceeds.
-        return runtime
+    _stop_stale_owner(runtime)
+    recovered = _base_ensure_ops_worker(wait=True)
+    if recovered.get("running") and pid_is_alive(recovered.get("worker_pid")):
+        return recovered
+
+    # One final bounded observation covers the launcher restarting concurrently.
+    deadline = time.time() + (1.5 if wait else 0.5)
+    while time.time() < deadline:
+        time.sleep(0.1)
+        recovered = _healthy_runtime()
+        if recovered.get("running") and pid_is_alive(recovered.get("worker_pid")):
+            return recovered
 
     raise RuntimeError(
-        "Market operations worker is not healthy yet; the launcher watchdog owns "
-        "recovery. The user command was not silently accepted."
+        "Market operations worker did not become ready; the command was not "
+        "silently accepted. Check System Health for the worker blocker."
     )
 
 
-# The existing startup hook and control endpoint resolve this global at runtime.
-# Replacing it therefore removes API-side worker lifecycle ownership without
-# duplicating routes or changing the standalone terminal_api implementation.
+# Startup and the base control endpoint resolve this global at runtime.
 core._ensure_ops_worker = _ensure_ops_worker_strict
 
-# The durable scheduler ledger contains historical failures by design.  Enrich
+# The durable scheduler ledger contains historical failures by design. Enrich
 # only the product-facing projection so the dashboard answers "what is wrong
 # now?" while retaining the full audit rows under jobs_recent.
 _base_autonomy_payload = core._autonomy_payload
