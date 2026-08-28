@@ -13,7 +13,7 @@ product path.
 | Process | Command | Role |
 |---------|---------|------|
 | Autonomy supervisor | `python main.py autonomy --interval 15` | durable job loop, paper-only, live locked |
-| Desk UI | `bash scripts/run_quantterm_complete.sh` | Vite :5173 + API :8765 + report API + autonomy + market-ops (never starts Streamlit). systemd units still exec the inner `scripts/run_quantterm.sh` as the long-running process. |
+| Desk UI | `bash scripts/run_quantterm_complete.sh` | Vite :5173 + API :8765 + report API :8766 + autonomy + market-ops (never starts Streamlit). systemd/launchd units exec this same complete launcher. |
 
 The daily human action is the normal Zerodha login (`python main.py login`) — Zerodha's auth model
 requires it. After the token is persisted, the supervisor picks it up on its next auth-health job (or

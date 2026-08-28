@@ -190,6 +190,17 @@ def main() -> int:
             raise GateFailure(f"[{gate_id}] {name}: {detail}")
 
     try:
+        add(
+            "0p",
+            "Proof certifies a clean exact commit SHA",
+            bool(meta.get("git_sha")) and not bool(meta.get("git_status_short")),
+            (
+                f"sha={meta.get('git_sha')} branch={meta.get('git_branch')} dirty={bool(meta.get('git_status_short'))}"
+                if not meta.get("git_status_short")
+                else f"dirty worktree; will not certify SHA {meta.get('git_sha')}: {meta.get('git_status_short')}"
+            ),
+            {"git_sha": meta.get("git_sha"), "git_branch": meta.get("git_branch")},
+        )
         ops = _get("/api/operations")
         evidence["operations_runtime"] = {
             "available": ops.get("available"),
@@ -242,17 +253,39 @@ def main() -> int:
             scan_records = len(recs) if isinstance(recs, list) else 0
         evidence["scan_records"] = scan_records
         evidence["scan_dashboard_keys"] = sorted(str(k) for k in dash.keys())[:40]
-        scan_ok = str(scan_op.get("status")) == "SUCCEEDED" and scan_records > 0
         result = scan_op.get("result") or {}
+        approved_n = int(result.get("approved_universe") or 0)
+        scanned_n = int(result.get("scanned") or 0)
+        universe_n = int(result.get("universe_size") or 0)
+        qualified_n = int(result.get("records") or 0)
+        if qualified_n == 0:
+            qualified_n = int(((result.get("summary") or {}).get("qualified")) or scan_records or 0)
+        progress_total = int(scan_op.get("progress_total") or 0)
+        counts_ok = (
+            scanned_n > 0
+            and scanned_n == universe_n
+            and (progress_total == 0 or progress_total == scanned_n)
+            and qualified_n == scan_records
+            and (approved_n == 0 or approved_n >= scanned_n)
+        )
+        evidence["scan_counts"] = {
+            "approved_universe": approved_n,
+            "scanned": scanned_n,
+            "universe_size": universe_n,
+            "qualified_rows": qualified_n,
+            "progress_total": progress_total,
+            "dashboard_rows": scan_records,
+        }
+        scan_ok = str(scan_op.get("status")) == "SUCCEEDED" and scan_records > 0 and counts_ok
         add(
             "1",
             "Market Scanner Scan Now runs a real job and rows appear",
             scan_ok,
             (
                 f"status={scan_op.get('status')} elapsed={evidence['scan_terminal'].get('elapsed_s')}s "
-                f"universe={scan_op.get('progress_total')} progress={scan_op.get('progress_current')}/"
-                f"{scan_op.get('progress_total')} dashboard_rows={scan_records} "
-                f"result_records={result.get('records')} qualified={((result.get('summary') or {}).get('qualified'))}"
+                f"approved_universe={approved_n} scanned={scanned_n} universe_size={universe_n} "
+                f"progress={scan_op.get('progress_current')}/{progress_total} "
+                f"qualified={qualified_n} dashboard_rows={scan_records}"
             ),
             evidence["scan_terminal"],
         )
@@ -370,7 +403,9 @@ def main() -> int:
             or dd.get("generic_scores")
             or {}
         )
-        tcs_ok = str(tcs_op.get("status")) in TERMINAL and bool(dd.get("symbol") or dd.get("company") or fq)
+        tcs_ok = str(tcs_op.get("status")) == "SUCCEEDED" and bool(
+            dd.get("symbol") or dd.get("company") or fq
+        )
         evidence["tcs_workspace"] = {
             "symbol": dd.get("symbol") or (dd.get("company") or {}).get("symbol"),
             "framework": (dd.get("framework") or {}).get("id") or (dd.get("framework") or {}).get("label"),
@@ -384,7 +419,11 @@ def main() -> int:
             "decision_coverage_pct": dd.get("decision_coverage_pct"),
             "implementation_coverage_pct": dd.get("implementation_coverage_pct"),
             "named_score_labels": [
-                {"id": row.get("id") or row.get("label"), "label_text": row.get("label_text")}
+                {
+                    "id": row.get("id") or row.get("label"),
+                    "label_text": row.get("label_text"),
+                    "available": row.get("available"),
+                }
                 for row in (named.get("scores") or [])
                 if isinstance(row, dict)
             ],
@@ -486,19 +525,28 @@ def main() -> int:
             coverage_n = float(coverage) if coverage is not None else None
         except (TypeError, ValueError):
             coverage_n = None
-        strong_without_coverage = quality_label.lower() == "strong" and coverage_n is not None and coverage_n < 40
+        strong_without_coverage = quality_label.lower() == "strong" and (
+            coverage_n is None or coverage_n < 40
+        )
         missing_as_bad = False
         if fq.get("score") is None:
             missing_as_bad = "unmeasured" not in quality_label.lower() and "unmeasured" not in explain
-        named_ok = True
-        for row in evidence["tcs_workspace"]["named_score_labels"]:
-            text = str(row.get("label_text") or "")
+        named_rows = list(evidence["tcs_workspace"]["named_score_labels"] or [])
+        required_named = {"piotroski_f", "altman_z", "beneish_m", "dupont_roe"}
+        seen_named = {str(row.get("id") or "") for row in named_rows}
+        named_ok = bool(named_rows) and required_named.issubset(seen_named)
+        for row in named_rows:
+            text = str(row.get("label_text") or "").strip()
+            available = row.get("available")
             if not text:
-                continue
-            if text.lower() in {"weak", "fail", "0", "0.0"} and "unmeasured" not in text.lower():
-                # incomplete named scores must not look like a zero grade
-                if "unmeasured" in json.dumps(named).lower():
-                    continue
+                named_ok = False
+                break
+            if available is False and "unmeasured" not in text.lower():
+                named_ok = False
+                break
+            if text.lower() in {"weak", "fail", "poor", "0", "0.0"}:
+                named_ok = False
+                break
         honesty_ok = (not strong_without_coverage) and (not missing_as_bad) and named_ok
         add(
             "7",
@@ -580,7 +628,12 @@ def _render_markdown(proof: dict[str, Any], gates: list[dict[str, Any]]) -> str:
         "",
         "## Reproduce",
         "",
+        "Move HEAD to the tested commit (do not use `git checkout <ref> -- .`, which",
+        "copies files without switching HEAD):",
+        "",
         "```bash",
+        f"git fetch origin {proof.get('git_branch') or 'cursor/live-terminal-contract-858e'}",
+        f"git switch --detach {proof.get('git_sha')}",
         "bash scripts/run_quantterm_complete.sh",
         "python scripts/verify_issue92_dod.py",
         "```",
@@ -604,7 +657,10 @@ def _render_markdown(proof: dict[str, Any], gates: list[dict[str, Any]]) -> str:
         "## Captured numbers",
         "",
         f"- Market scan: status `{scan.get('status')}`, elapsed `{scan.get('elapsed_s')}s`, "
+        f"approved_universe `{(ev.get('scan_counts') or {}).get('approved_universe')}`, "
+        f"scanned `{(ev.get('scan_counts') or {}).get('scanned')}`, "
         f"progress `{scan.get('progress_current')}/{scan.get('progress_total')}`, "
+        f"qualified `{(ev.get('scan_counts') or {}).get('qualified_rows')}`, "
         f"dashboard rows `{ev.get('scan_records')}`.",
         f"- Recommendations: checked `{rec.get('checked_rows')}`, high-conviction `{rec.get('high_conviction_count')}`, "
         f"good `{rec.get('good_setup_count')}`, watch `{rec.get('watch_count')}`.",

@@ -40,6 +40,22 @@ def test_complete_script_always_stops_old_stack_then_starts_everything():
     assert "npm run dev" in inner
     assert "Use --restart" not in inner
     assert "Use --restart" not in complete
+    assert "python3 -m venv venv" in complete
+    assert "pip install -r requirements.txt" in complete
+    assert "npm install" in complete
+    assert "Missing venv. Create the QuantTerm Python environment first." not in complete
+
+
+def test_deploy_services_own_the_complete_stack():
+    server = (ROOT / "deploy" / "setup_server.sh").read_text(encoding="utf-8")
+    mac = (ROOT / "deploy" / "setup_mac.sh").read_text(encoding="utf-8")
+    unit = (ROOT / "deploy" / "quantterm-ui.service").read_text(encoding="utf-8")
+    for blob, name in ((server, "setup_server.sh"), (mac, "setup_mac.sh"), (unit, "quantterm-ui.service")):
+        assert "run_quantterm_complete.sh" in blob, name
+        assert "QT_NONINTERACTIVE" in blob, name
+    assert "report_api:app" in (ROOT / "scripts" / "run_quantterm_complete.sh").read_text(encoding="utf-8")
+    assert 'BRANCH="${QT_BRANCH:-overhaul/evidence-lab}"' not in server
+    assert "overhaul/evidence-lab" not in server
 
 
 def test_canonical_docs_name_one_product_launcher():
@@ -72,6 +88,7 @@ def test_how_to_docs_do_not_checkout_historical_branch():
         "docs/autonomy/DEPLOYMENT.md",
         "CLAUDE.md",
         "README.md",
+        "deploy/setup_server.sh",
     ):
         text = (ROOT / rel).read_text(encoding="utf-8")
         assert "git checkout overhaul/evidence-lab" not in text, rel
@@ -86,3 +103,7 @@ def test_issue92_dod_verifier_is_checked_in():
     assert "due-diligence" in src
     assert "docs/issue92_live_dod_proof.md" in src
     assert "rev-parse" in src or "git_sha" in src
+    assert '== "SUCCEEDED"' in src
+    assert "switch --detach" in src
+    assert "will not certify SHA" in src
+    assert "required_named" in src or "piotroski_f" in src

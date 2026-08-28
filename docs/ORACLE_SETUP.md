@@ -46,9 +46,11 @@ cd ~/0to100
 bash deploy/setup_server.sh
 ```
 
-Canonical product after setup: Vite/React desk via
-`bash scripts/run_quantterm_complete.sh`. Streamlit is not started.
-Do not check out historical research branches such as `overhaul/evidence-lab`.
+Canonical product after setup: the **same complete stack** as a local desk —
+`quantterm-ui` runs `bash scripts/run_quantterm_complete.sh` (Vite :5173,
+API :8765, reports :8766). Streamlit is not started. The script deploys the
+current checkout; it does not pin historical research branches such as
+`overhaul/evidence-lab`.
 
 Script khud karta hai: packages → 2G swap → clone/pull → venv →
 `pip install` → **systemd service** (crash pe 10s mein auto-restart,
@@ -100,10 +102,10 @@ Phone/Mac pe bhi Tailscale app → phir kahin se bhi:
 ```bash
 # update
 cd ~/0to100 && git pull
-sudo systemctl restart quantterm
+sudo systemctl restart quantterm-ui quantterm-autonomy
 
 # logs
-journalctl -u quantterm -f
+journalctl -u quantterm-ui -f
 
 # service control
 sudo systemctl status|restart|stop quantterm

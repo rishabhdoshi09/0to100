@@ -27,6 +27,7 @@ class MarketScanReport:
     payload: dict = field(default_factory=dict)
     universe_size: int = 0
     scanned: int = 0
+    approved_universe: int = 0
     exclusions: tuple = ()
     source_snapshot_id: str = ""
     error_code: str = ""
@@ -40,6 +41,7 @@ class MarketScanReport:
         return {
             "status": self.status,
             "payload": self.payload,
+            "approved_universe": self.approved_universe,
             "universe_size": self.universe_size,
             "scanned": self.scanned,
             "exclusions": list(self.exclusions),
@@ -203,11 +205,18 @@ def run_whole_market_scan(
     except Exception as exc:
         return MarketScanReport(DATA_UNAVAILABLE, error_code="UNIVERSE_ERROR",
                                 error_message=str(exc), source_snapshot_id=snapshot_id or "")
+    approved_n = len(names)
     symbols = sorted({str(s).strip().upper() for s in names if str(s).strip()})
     if not symbols:
-        return MarketScanReport(DATA_UNAVAILABLE, universe_size=0, error_code="EMPTY_UNIVERSE",
-                                error_message="approved NSE universe is empty",
-                                source_snapshot_id=snapshot_id or "")
+        return MarketScanReport(
+            DATA_UNAVAILABLE,
+            universe_size=0,
+            scanned=0,
+            approved_universe=approved_n,
+            error_code="EMPTY_UNIVERSE",
+            error_message="approved NSE universe is empty",
+            source_snapshot_id=snapshot_id or "",
+        )
 
     scan_payload, reco_payload, long_term_payload, watchlist = _saved_priority_inputs()
     try:
@@ -235,8 +244,15 @@ def run_whole_market_scan(
         except TypeError:
             results = list(scanner.scan(symbols) or [])
     except Exception as exc:
-        return MarketScanReport(FAILED, universe_size=len(symbols), error_code="SCAN_ERROR",
-                                error_message=str(exc), source_snapshot_id=snapshot_id or "")
+        return MarketScanReport(
+            FAILED,
+            universe_size=len(symbols),
+            scanned=0,
+            approved_universe=approved_n,
+            error_code="SCAN_ERROR",
+            error_message=str(exc),
+            source_snapshot_id=snapshot_id or "",
+        )
 
     if not results:
         warm: list[str] = []
@@ -249,6 +265,8 @@ def run_whole_market_scan(
             return MarketScanReport(
                 DATA_UNAVAILABLE,
                 universe_size=len(symbols),
+                scanned=0,
+                approved_universe=approved_n,
                 error_code="OHLCV_CACHE_EMPTY",
                 error_message="OHLCV cache was empty; the last readable scan was kept.",
                 source_snapshot_id=snapshot_id or _active_snapshot_id(),
@@ -257,7 +275,13 @@ def run_whole_market_scan(
     fno_symbols = set(fno_for_order)
 
     from product.scan_store import build_scan_payload, save_scan
-    payload = build_scan_payload(names, results, fno_symbols)
+    payload = build_scan_payload(
+        names,
+        results,
+        fno_symbols,
+        scanned=len(symbols),
+        approved_universe=approved_n,
+    )
     sid = snapshot_id if snapshot_id is not None else _active_snapshot_id()
     payload["source_snapshot_id"] = sid
     payload["scan_status"] = SUCCEEDED
@@ -299,6 +323,11 @@ def run_whole_market_scan(
     n_setups = int(summary.get("with_any_setup", 0) or 0)
     status = SUCCEEDED if n_setups else NO_SETUPS
     payload["scan_status"] = status
-    return MarketScanReport(status=status, payload=payload, universe_size=len(symbols),
-                            scanned=int(payload.get("universe_size", len(symbols)) or len(symbols)),
-                            source_snapshot_id=sid)
+    return MarketScanReport(
+        status=status,
+        payload=payload,
+        approved_universe=approved_n,
+        universe_size=len(symbols),
+        scanned=len(symbols),
+        source_snapshot_id=sid,
+    )

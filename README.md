@@ -64,8 +64,8 @@ bash scripts/run_quantterm_complete.sh
 
 | Where | How |
 |---|---|
-| Your Mac (₹0) | `bash deploy/setup_mac.sh` — launchd service; add `QT_ECO=1` on a shared/fanless machine |
-| Any Ubuntu server / VPS | `bash deploy/setup_server.sh` — systemd, IST timezone, swap, auto-restart |
+| Your Mac (₹0) | `bash deploy/setup_mac.sh` — launchd runs `scripts/run_quantterm_complete.sh` |
+| Any Ubuntu server / VPS | `bash deploy/setup_server.sh` — systemd, same complete stack, IST timezone, auto-restart |
 | Oracle Cloud free tier | see `docs/ORACLE_SETUP.md` |
 
 Details: `docs/ALWAYS_ON.md`.

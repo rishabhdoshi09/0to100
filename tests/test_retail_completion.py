@@ -26,6 +26,9 @@ def test_saved_scan_preserves_full_universe_and_watchlist(tmp_path):
     path = tmp_path / "scan.json"; save_scan(payload, path)
     loaded = load_scan(path)
     assert loaded["universe_size"] == 3
+    assert loaded["scanned"] == 3
+    assert loaded["approved_universe"] == 3
+    assert loaded["qualified_rows"] == 3
     assert loaded["summary"]["momentum"] == 2
     assert [row["symbol"] for row in watchlist_rows(loaded)] == ["AAA", "BBB", "CCC"]
     assert watchlist_rows(loaded)[0]["status"] == "Ready to trade"
@@ -67,6 +70,29 @@ def test_no_trade_funnel_never_invents_unknown_proposal_count():
     assert counts["Stocks scanned"] == 1842
     assert counts["Backend trade proposals"] is None
     assert explanation.top_reasons[0] == ("total risk cap", 2)
+
+
+def test_scan_payload_separates_approved_universe_from_scanned():
+    payload = build_scan_payload(
+        {"AAA": "Alpha", "aaa": "alpha-dup", "BBB": "Beta"},
+        [Signal("AAA", signals=["MOMENTUM"], verdict="BUY", score=80),
+         Signal("BBB", signals=["PRE_BREAKOUT"], score=70)],
+        scanned=2,
+        approved_universe=3,
+    )
+    assert payload["approved_universe"] == 3
+    assert payload["scanned"] == 2
+    assert payload["universe_size"] == 2
+    assert payload["qualified_rows"] == 2
+    assert payload["summary"]["qualified"] == 2
+    auto = build_scan_payload(
+        {"AAA": "Alpha", "aaa": "alpha-dup", "BBB": "Beta"},
+        [Signal("AAA", signals=["MOMENTUM"], score=80)],
+    )
+    assert auto["approved_universe"] == 3
+    assert auto["scanned"] == 2
+    assert auto["universe_size"] == 2
+    assert auto["qualified_rows"] == 1
 
 
 def test_backtest_interpretation_is_negative_when_strategy_loses():

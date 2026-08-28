@@ -108,6 +108,8 @@ def build_scan_payload(
     fno_symbols: Iterable[str] = (),
     *,
     scanned_at: datetime | None = None,
+    scanned: int | None = None,
+    approved_universe: int | None = None,
 ) -> dict[str, Any]:
     fno = {str(s).upper() for s in fno_symbols}
     records = [_record(row, names, fno) for row in results]
@@ -117,13 +119,21 @@ def build_scan_payload(
     near = [r for r in records if "PRE_BREAKOUT" in r["signals"] and "MOMENTUM" not in r["signals"]]
     ready = [r for r in records if r["status"] == "Ready to trade"]
     now = scanned_at or datetime.now(timezone.utc)
+    approved_n = int(approved_universe) if approved_universe is not None else len(names)
+    normalized_n = len({str(s).strip().upper() for s in names if str(s).strip()})
+    scanned_n = int(scanned) if scanned is not None else normalized_n
+    qualified_n = len(records)
     return {
         "schema_version": 1,
         "scanned_at": now.isoformat(),
-        "universe_size": len(names),
+        "approved_universe": approved_n,
+        "scanned": scanned_n,
+        "qualified_rows": qualified_n,
+        "universe_size": scanned_n,
         "records": records,
         "summary": {
-            "with_any_setup": len(records),
+            "with_any_setup": qualified_n,
+            "qualified": qualified_n,
             "momentum": len(momentum),
             "fno_momentum": sum(1 for r in momentum if r["fno_available"]),
             "near_breakout": len(near),
