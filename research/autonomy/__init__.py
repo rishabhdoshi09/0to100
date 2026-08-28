@@ -57,6 +57,12 @@ def run_supervisor(*, root=None, interval_s: float = 15.0, max_iterations=None) 
     except Exception:
         pass
 
+    # BSE's official wire format differs from NSE (e.g. "25 Oct 2023").
+    # Install the provider adapter before the background CA worker imports the
+    # canonical resilient refresh function.
+    from data.corporate_actions_bse_adapter import install as install_bse_ca_adapter
+    install_bse_ca_adapter()
+
     # Heavy read/data work has a separate execution plane. Install this before
     # constructing Supervisor so scheduled scans can start in parallel with a
     # long DATA_REFRESH and corporate-action backfill never monopolises the
