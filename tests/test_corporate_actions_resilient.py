@@ -72,20 +72,26 @@ def test_one_failed_window_does_not_abort_later_windows(tmp_path):
     events = tmp_path / "ca_events.json"
     coverage = tmp_path / "ca_coverage.json"
     seen = []
+    first_start = {"value": None}
+
+    def _is_first(start):
+        if first_start["value"] is None:
+            first_start["value"] = start
+        return start == first_start["value"]
 
     def json_fetch(start, end):
         seen.append((start, end))
-        if len(seen) == 1:
+        if _is_first(start):
             raise RuntimeError("first window unavailable")
         return []
 
     def csv_fetch(start, end):
-        if len(seen) == 1:
+        if _is_first(start):
             raise RuntimeError("csv also unavailable")
         return []
 
     def bse_fetch(start, end):
-        if len(seen) == 1:
+        if _is_first(start):
             raise RuntimeError("bse also unavailable")
         return []
 
@@ -101,7 +107,7 @@ def test_one_failed_window_does_not_abort_later_windows(tmp_path):
         budget_s=30,
     )
 
-    assert len(seen) > 1, "historical walk must continue after an individual window fails"
+    assert len({start for start, _end in seen}) > 1, "historical walk must continue after an individual window fails"
     assert result["coverage_complete"] is False
     raw = json.loads(coverage.read_text())
     assert any(not row["success"] for row in raw["windows"].values())
