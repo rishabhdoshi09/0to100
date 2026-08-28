@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from research.intelligence import schemas as SC
 from research.intelligence.runtime.cycle_result import IntelligenceCycleResult
 from research.intelligence.runtime.decision_accounting import (
     BLOCKED,
@@ -21,6 +22,11 @@ class _Ctx:
 
 class _Store(list):
     pass
+
+
+class _EventStore(list):
+    def all(self):
+        return list(self)
 
 
 def test_every_generated_signal_gets_one_terminal_decision():
@@ -60,3 +66,37 @@ def test_decision_accounting_is_idempotent_for_rejection_projection():
 
     assert result.signals_rejected == [("AAA", "s1", "ALLOCATION_MAINTAIN")]
     assert len(result.decision_outcomes) == 1
+
+
+def test_decision_ledger_preserves_exact_signal_levels_and_provenance():
+    result = IntelligenceCycleResult(cycle_id="cycle-1", as_of_date="2026-08-28", mode="PAPER_AUTO")
+    result.signals_generated = [("s1", "AAA")]
+    result.allocation_decisions = [("s1", "PAUSE")]
+    store = _EventStore([
+        SC.CanonicalSignal(
+            strategy_id="s1",
+            strategy_version=3,
+            rules_hash="rules-3",
+            data_snapshot_id="snap-1",
+            event_ts="2026-08-28",
+            source="signal",
+            symbol="AAA",
+            entry=101.0,
+            stop=96.0,
+            target=114.0,
+            max_hold=10,
+            rationale="breakout with volume",
+        )
+    ])
+
+    finalize_cycle_decisions(_Ctx(), result, store=store)
+
+    row = result.decision_outcomes[0]
+    assert row["decision"] == NOT_SELECTED
+    assert row["entry"] == 101.0
+    assert row["stop"] == 96.0
+    assert row["target"] == 114.0
+    assert row["max_hold"] == 10
+    assert row["rules_hash"] == "rules-3"
+    assert row["strategy_version"] == 3
+    assert row["signal_record_id"]
