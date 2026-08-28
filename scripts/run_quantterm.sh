@@ -141,7 +141,9 @@ PY
 
 start_api() {
   echo "[STACK] Starting local API at http://127.0.0.1:8765 …"
-  python -u -m uvicorn terminal_product_api:app --host 127.0.0.1 --port 8765 &
+  # terminal_product_api_parallel imports the canonical terminal_product_api:app
+  # and only corrects performance-safe operation routing.
+  python -u -m uvicorn terminal_product_api_parallel:app --host 127.0.0.1 --port 8765 &
   API_PID=$!
   sleep 0.5 || true
   if ! alive "$API_PID"; then
