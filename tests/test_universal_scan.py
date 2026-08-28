@@ -274,7 +274,9 @@ def test_desk_ui_uses_one_scan_now_for_every_setup():
     assert "Refresh funds" in reco
     assert "keepRicherMemory" in reco
     assert "Refresh long-term" not in reco
-    assert "Run one market scan" in reco
+    # Contract the actual mechanism, not brittle button copy: Recommendations
+    # must invoke the same canonical market-scan runner used by the rest of desk.
+    assert "marketScan.start()" in reco
     assert "mode === 'Long-Term' ? longTermScan : marketScan" not in experience
     assert "Run long-term scan" not in experience
     assert "RUN_SCAN_NOW" in views
