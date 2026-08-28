@@ -16,6 +16,7 @@ import time
 import terminal_api as core
 import terminal_product_api as product
 from operations.store import pid_is_alive
+from product.operator_health import enrich_autonomy_payload
 
 # The base API intentionally keeps the control mapping in one mutable registry.
 core._OPERATION_CONTROLS["RUN_LONG_TERM_SCAN_NOW"] = "LONG_TERM_SCAN"
@@ -64,5 +65,24 @@ def _ensure_ops_worker_strict(*, wait: bool = True) -> dict:
 # Replacing it therefore removes API-side worker lifecycle ownership without
 # duplicating routes or changing the standalone terminal_api implementation.
 core._ensure_ops_worker = _ensure_ops_worker_strict
+
+# The durable scheduler ledger contains historical failures by design.  Enrich
+# only the product-facing projection so the dashboard answers "what is wrong
+# now?" while retaining the full audit rows under jobs_recent.
+_base_autonomy_payload = core._autonomy_payload
+
+
+def _operator_autonomy_payload() -> dict:
+    return enrich_autonomy_payload(_base_autonomy_payload())
+
+
+core._autonomy_payload = _operator_autonomy_payload
+
+
+@product.app.get("/api/operator-health")
+def operator_health() -> dict:
+    """Current-session health plus historical-ledger separation for diagnostics."""
+    return core._autonomy_payload()
+
 
 app = product.app
