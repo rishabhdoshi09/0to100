@@ -1,13 +1,15 @@
 """Canonical post-cycle accounting for every generated paper signal.
 
 The runtime already records generated signals, portfolio blocks and opened paper
-positions.  This module closes the remaining accounting gap: after the cycle has
+positions. This module closes the remaining accounting gap: after the cycle has
 finished, every generated signal is assigned exactly one terminal decision outcome
-(TAKEN, BLOCKED or NOT_SELECTED).  Non-taken generated signals are mirrored into
+(TAKEN, BLOCKED or NOT_SELECTED). Non-taken generated signals are mirrored into
 ``signals_rejected`` so the existing paper self-feed can shadow-test them.
 
-No signal is invented here.  We only classify signals that the authoritative
-strategy runtime actually generated for the decision-time snapshot.
+No signal is invented here. We only classify signals that the authoritative
+strategy runtime actually generated for the decision-time snapshot. Where the
+canonical EventStore is available, the exact decision-time entry/stop/target and
+signal provenance are copied into the decision ledger as well.
 """
 from __future__ import annotations
 
@@ -58,10 +60,47 @@ def _allocation_actions(result) -> dict[str, str]:
     return actions
 
 
+def _signal_provenance(store, ctx) -> dict[tuple[str, str], dict[str, Any]]:
+    """Project exact CanonicalSignal levels for this cycle from the append-only store."""
+    if store is None or not hasattr(store, "all"):
+        return {}
+    as_of = str(getattr(ctx, "as_of_date", "") or "")
+    snapshot = str(getattr(ctx, "data_snapshot_id", "") or "")
+    out: dict[tuple[str, str], dict[str, Any]] = {}
+    try:
+        events = list(store.all())
+    except Exception:
+        return {}
+    for event in events:
+        if type(event).__name__ != "CanonicalSignal":
+            continue
+        sid = str(getattr(event, "strategy_id", "") or "")
+        symbol = str(getattr(event, "symbol", "") or "").upper()
+        if not sid or not symbol:
+            continue
+        event_ts = str(getattr(event, "event_ts", "") or "")
+        event_snapshot = str(getattr(event, "data_snapshot_id", "") or "")
+        if as_of and event_ts and event_ts[:10] != as_of[:10]:
+            continue
+        if snapshot and event_snapshot and event_snapshot != snapshot:
+            continue
+        out[(sid, symbol)] = {
+            "entry": float(getattr(event, "entry", 0.0) or 0.0),
+            "stop": float(getattr(event, "stop", 0.0) or 0.0),
+            "target": float(getattr(event, "target", 0.0) or 0.0),
+            "max_hold": int(getattr(event, "max_hold", 0) or 0),
+            "rationale": str(getattr(event, "rationale", "") or ""),
+            "strategy_version": int(getattr(event, "strategy_version", 0) or 0),
+            "rules_hash": str(getattr(event, "rules_hash", "") or ""),
+            "signal_record_id": str(getattr(event, "record_id", "") or ""),
+        }
+    return out
+
+
 def finalize_cycle_decisions(ctx, result, store=None):
     """Assign a terminal decision to every generated signal.
 
-    The function is deliberately idempotent.  Re-running it replaces the typed
+    The function is deliberately idempotent. Re-running it replaces the typed
     ``decision_outcomes`` projection and only appends missing rejection tuples.
     Canonical events dedupe in EventStore by content.
     """
@@ -86,7 +125,8 @@ def finalize_cycle_decisions(ctx, result, store=None):
             blocked_map[(sid, symbol)] = reason or "TARGET_BLOCKED"
 
     actions = _allocation_actions(result)
-    outcomes: list[dict[str, str]] = []
+    signals = _signal_provenance(store, ctx)
+    outcomes: list[dict[str, Any]] = []
     rejected = list(getattr(result, "signals_rejected", ()) or ())
     existing_rejected = set()
     for raw in rejected:
@@ -113,7 +153,8 @@ def finalize_cycle_decisions(ctx, result, store=None):
             action = actions.get(sid, "")
             reason = f"ALLOCATION_{action}" if action and action not in {"DEPLOY", "INCREASE"} else NOT_SELECTED
 
-        row = {
+        signal = signals.get(key, {})
+        row: dict[str, Any] = {
             "strategy_id": sid,
             "symbol": symbol,
             "decision": decision,
@@ -121,12 +162,15 @@ def finalize_cycle_decisions(ctx, result, store=None):
             "as_of": str(getattr(ctx, "as_of_date", "") or ""),
             "data_snapshot_id": str(getattr(ctx, "data_snapshot_id", "") or ""),
             "market_regime": str(getattr(ctx, "market_regime", "") or ""),
+            **signal,
         }
         outcomes.append(row)
 
         if decision != TAKEN:
             reject_key = (symbol, sid)
             if reject_key not in existing_rejected:
+                # Keep the legacy tuple projection for compatibility; exact levels
+                # remain in decision_outcomes and the canonical signal event.
                 rejected.append((symbol, sid, reason))
                 existing_rejected.add(reject_key)
             if store is not None:
@@ -140,7 +184,13 @@ def finalize_cycle_decisions(ctx, result, store=None):
                     decision=decision,
                     reason=reason,
                     event_ts=str(getattr(ctx, "as_of_date", "") or ""),
-                    summary={"terminal_decision": decision},
+                    summary={
+                        "terminal_decision": decision,
+                        "signal_record_id": signal.get("signal_record_id", ""),
+                        "entry": signal.get("entry"),
+                        "stop": signal.get("stop"),
+                        "target": signal.get("target"),
+                    },
                 )
 
     result.signals_rejected = rejected
