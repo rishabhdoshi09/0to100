@@ -2,30 +2,36 @@
   "issue": 92,
   "title": "QuantTerm live terminal Definition of Done",
   "api_base": "http://127.0.0.1:8765",
-  "git_sha": "2d089224c643e09118fb8d504268456a0d141150",
-  "git_sha_short": "2d08922",
+  "git_sha": "4542a40db17aa4aa7a9187479b4facc3978fa797",
+  "git_sha_short": "4542a40",
   "git_branch": "cursor/live-terminal-contract-858e",
   "git_status_short": "",
-  "tested_at_utc": "2026-08-27T18:36:44Z",
+  "tested_at_utc": "2026-08-28T03:12:48Z",
   "dirty_worktree": false,
   "gates": [
+    {
+      "id": "0p",
+      "name": "Proof certifies a clean exact commit SHA",
+      "pass": true,
+      "detail": "sha=4542a40db17aa4aa7a9187479b4facc3978fa797 branch=cursor/live-terminal-contract-858e dirty=False"
+    },
     {
       "id": "0",
       "name": "API and market-operations worker are online",
       "pass": true,
-      "detail": "worker_pid=24916 running=True available=True"
+      "detail": "worker_pid=27837 running=True available=True"
     },
     {
       "id": "6a",
       "name": "Repeated Scan Now clicks reuse the pending/running job",
       "pass": true,
-      "detail": "first created=True id=3d1cac1b104c\u2026 second created=False id=3d1cac1b104c\u2026"
+      "detail": "first created=True id=68fa91cee14c\u2026 second created=False id=68fa91cee14c\u2026"
     },
     {
       "id": "1",
       "name": "Market Scanner Scan Now runs a real job and rows appear",
       "pass": true,
-      "detail": "status=SUCCEEDED elapsed=6.03s universe=2335 progress=2335/2335 dashboard_rows=786 result_records=786 qualified=786"
+      "detail": "status=SUCCEEDED elapsed=4.52s approved_universe=2549 scanned=2335 universe_size=2335 progress=2335/2335 qualified=786 dashboard_rows=786"
     },
     {
       "id": "2",
@@ -37,69 +43,69 @@
       "id": "6b",
       "name": "Repeated Market Reports refresh clicks reuse the pending/running job",
       "pass": true,
-      "detail": "first created=True id=b34ce15da89a\u2026 second created=False"
+      "detail": "first created=True id=dbee9a249b45\u2026 second created=False"
     },
     {
       "id": "3",
       "name": "Market Reports generates a real report that then appears",
       "pass": true,
-      "detail": "status=SUCCEEDED elapsed=35.33s takeaways=3 wrap=5 reports=2 result={'as_of_ist': '2026-08-28', 'takeaways': 3, 'reports': 2, 'wrap_lines': 5, 'wrap_sourced': 5, 'scan_rows': 786, 'needs_refresh': False, 'missing_lanes': [], 'news': {'started_at': '2026-08-27T18:37:27.160473+00:00', 'completed_at': '2026-08-27T18:38:02.391095+00:00', 'sources_attempted': 16, 'sources_ok': 13, 'fetched_articles': 379, 'curated_articles': 346, 'inserted_or_updated': 346, 'high_impact_articles': 84, 'errors': ['Google News \u00b7 Company: No recent usable entries', 'Google News \u00b7 Economy: No recent usable entries', 'RBI Speeches: No recent usable entries']}}"
+      "detail": "status=SUCCEEDED elapsed=0.12s takeaways=3 wrap=5 reports=2 result={'as_of_ist': '2026-08-28', 'takeaways': 3, 'reports': 2, 'wrap_lines': 5, 'wrap_sourced': 5, 'scan_rows': 786, 'needs_refresh': False, 'missing_lanes': [], 'news': {}}"
     },
     {
       "id": "6c",
       "name": "Repeated Stock Intelligence acquire clicks reuse the active TCS job",
       "pass": true,
-      "detail": "first created=True status=PENDING id=87531b92f3a6\u2026 second created=False id=87531b92f3a6\u2026"
+      "detail": "first created=True status=PENDING id=063dfec28338\u2026 second created=False id=063dfec28338\u2026"
     },
     {
       "id": "4",
       "name": "Stock Intelligence loads TCS; acquire/refresh is a real job and the page updates",
       "pass": true,
-      "detail": "acquire=SUCCEEDED elapsed=2.04s framework=it quality=Unmeasured score=None score_coverage=0.0 decision_coverage=0.0"
+      "detail": "acquire=SUCCEEDED elapsed=3.17s framework=it quality=Unmeasured score=None score_coverage=0.0 decision_coverage=0.0"
     },
     {
       "id": "5",
       "name": "Failed/blocked job exposes a human-readable blocker and Retry creates a new job",
       "pass": true,
-      "detail": "kind=FNO_REFRESH status=BLOCKED code=FNO_UNIVERSE_UNAVAILABLE blocker=No current stock F&O underlyings could be mapped; Zerodha login or instrument cache is required retry_created=True new_id=27d6070772cf\u2026"
+      "detail": "kind=FNO_REFRESH status=BLOCKED code=FNO_UNIVERSE_UNAVAILABLE blocker=No current stock F&O underlyings could be mapped; Zerodha login or instrument cache is required retry_created=True new_id=3f3307fdf065\u2026"
     },
     {
       "id": "7",
       "name": "Conclusions preserve coverage/honesty (missing evidence is Unmeasured, not automatically bad)",
       "pass": true,
-      "detail": "quality_label=Unmeasured score=None score_coverage=0.0 named=[{'id': 'piotroski_f', 'label_text': 'Unmeasured'}, {'id': 'altman_z', 'label_text': 'Unmeasured'}, {'id': 'beneish_m', 'label_text': 'Unmeasured'}, {'id': 'dupont_roe', 'label_text': 'Unmeasured'}]"
+      "detail": "quality_label=Unmeasured score=None score_coverage=0.0 named=[{'id': 'piotroski_f', 'label_text': 'Unmeasured', 'available': False}, {'id': 'altman_z', 'label_text': 'Unmeasured', 'available': False}, {'id': 'beneish_m', 'label_text': 'Unmeasured', 'available': False}, {'id': 'dupont_roe', 'label_text': 'Unmeasured', 'available': False}]"
     },
     {
       "id": "6d",
       "name": "After a succeeded scan, Retry/Scan Now creates a new job rather than cloning a finished one",
       "pass": true,
-      "detail": "new_created=True new_id=c7af5363cb0a\u2026 old=3d1cac1b104c\u2026"
+      "detail": "new_created=True new_id=e3b09adedf43\u2026 old=68fa91cee14c\u2026"
     }
   ],
   "evidence": {
     "meta": {
-      "git_sha": "2d089224c643e09118fb8d504268456a0d141150",
-      "git_sha_short": "2d08922",
+      "git_sha": "4542a40db17aa4aa7a9187479b4facc3978fa797",
+      "git_sha_short": "4542a40",
       "git_branch": "cursor/live-terminal-contract-858e",
       "git_status_short": "",
-      "tested_at_utc": "2026-08-27T18:36:44Z"
+      "tested_at_utc": "2026-08-28T03:12:48Z"
     },
     "api_base": "http://127.0.0.1:8765",
     "operations_runtime": {
       "available": true,
       "running": true,
-      "worker_pid": 24916,
+      "worker_pid": 27837,
       "counts": {
-        "BLOCKED": 1,
+        "BLOCKED": 3,
         "FAILED": 2,
-        "SUCCEEDED": 9
+        "SUCCEEDED": 18
       }
     },
     "scan_duplicate": {
       "first": {
         "accepted": true,
         "control": "RUN_SCAN_NOW",
-        "operation_id": "3d1cac1b104c4507a69d4790c91f49b2",
+        "operation_id": "68fa91cee14c48649447ab89f0a1cdd6",
         "operation_status": "PENDING",
         "created": true,
         "priority": 100,
@@ -108,7 +114,7 @@
       "second": {
         "accepted": true,
         "control": "RUN_SCAN_NOW",
-        "operation_id": "3d1cac1b104c4507a69d4790c91f49b2",
+        "operation_id": "68fa91cee14c48649447ab89f0a1cdd6",
         "operation_status": "PENDING",
         "created": false,
         "priority": 100,
@@ -116,12 +122,12 @@
       }
     },
     "scan_terminal": {
-      "operation_id": "3d1cac1b104c4507a69d4790c91f49b2",
+      "operation_id": "68fa91cee14c48649447ab89f0a1cdd6",
       "kind": "MARKET_SCAN",
       "status": "SUCCEEDED",
       "created": null,
       "stage": "SUCCEEDED",
-      "message": "MARKET_SCAN completed in 6.0s",
+      "message": "MARKET_SCAN completed in 4.5s",
       "error_code": "",
       "error_message": "",
       "progress_current": 2335,
@@ -130,32 +136,36 @@
         "status": "SUCCEEDED",
         "payload": {
           "keys": [
+            "approved_universe",
             "desk_overlays",
             "long_term_overlay",
+            "qualified_rows",
             "records",
             "scan_status",
+            "scanned",
             "scanned_at",
             "schema_version",
             "source_snapshot_id",
             "summary",
             "universe_size"
           ],
-          "n_keys": 9
+          "n_keys": 12
         },
-        "universe_size": 2549,
-        "scanned": 2549,
+        "approved_universe": 2549,
+        "universe_size": 2335,
+        "scanned": 2335,
         "exclusions": [],
         "source_snapshot_id": "",
         "error_code": "",
         "error_message": "",
         "summary": {
           "with_any_setup": 786,
+          "qualified": 786,
           "momentum": 137,
           "fno_momentum": 0,
           "near_breakout": 63,
           "ready_to_trade": 255,
-          "extended": 305,
-          "qualified": 786
+          "extended": 305
         },
         "records": 786,
         "history": {
@@ -196,7 +206,7 @@
           "error_code": ""
         }
       },
-      "elapsed_s": 6.03
+      "elapsed_s": 4.52
     },
     "scan_records": 786,
     "scan_dashboard_keys": [
@@ -215,6 +225,14 @@
       "scan",
       "scan_progress"
     ],
+    "scan_counts": {
+      "approved_universe": 2549,
+      "scanned": 2335,
+      "universe_size": 2335,
+      "qualified_rows": 786,
+      "progress_total": 2335,
+      "dashboard_rows": 786
+    },
     "recommendations": {
       "high_conviction_count": 0,
       "good_setup_count": 62,
@@ -245,7 +263,7 @@
       "first": {
         "accepted": true,
         "control": "REFRESH_MARKET_REPORT_NOW",
-        "operation_id": "b34ce15da89a4cf9aac9e2b0dbc4a642",
+        "operation_id": "dbee9a249b45462987743c4fe2f52518",
         "operation_status": "PENDING",
         "created": true,
         "priority": 100,
@@ -254,7 +272,7 @@
       "second": {
         "accepted": true,
         "control": "REFRESH_MARKET_REPORT_NOW",
-        "operation_id": "b34ce15da89a4cf9aac9e2b0dbc4a642",
+        "operation_id": "dbee9a249b45462987743c4fe2f52518",
         "operation_status": "PENDING",
         "created": false,
         "priority": 100,
@@ -262,12 +280,12 @@
       }
     },
     "report_terminal": {
-      "operation_id": "b34ce15da89a4cf9aac9e2b0dbc4a642",
+      "operation_id": "dbee9a249b45462987743c4fe2f52518",
       "kind": "MARKET_REPORT",
       "status": "SUCCEEDED",
       "created": null,
       "stage": "SUCCEEDED",
-      "message": "MARKET_REPORT completed in 35.3s",
+      "message": "MARKET_REPORT completed in 0.1s",
       "error_code": "",
       "error_message": "",
       "progress_current": 0,
@@ -281,23 +299,9 @@
         "scan_rows": 786,
         "needs_refresh": false,
         "missing_lanes": [],
-        "news": {
-          "started_at": "2026-08-27T18:37:27.160473+00:00",
-          "completed_at": "2026-08-27T18:38:02.391095+00:00",
-          "sources_attempted": 16,
-          "sources_ok": 13,
-          "fetched_articles": 379,
-          "curated_articles": 346,
-          "inserted_or_updated": 346,
-          "high_impact_articles": 84,
-          "errors": [
-            "Google News \u00b7 Company: No recent usable entries",
-            "Google News \u00b7 Economy: No recent usable entries",
-            "RBI Speeches: No recent usable entries"
-          ]
-        }
+        "news": {}
       },
-      "elapsed_s": 35.33
+      "elapsed_s": 0.12
     },
     "market_reports_workspace": {
       "as_of_ist": "2026-08-28",
@@ -354,16 +358,15 @@
           ]
         },
         {
-          "id": "055c0c4170cc5d3a41079540",
-          "text": "Markets push back BoE rate hike expectations to February 2027 As bond yields fall, markets are revising their expectations for the Bank of England's rate hikes. Investors now foresee a modest quarter-point increase by February 2027, with less than four basis points anticipated for the upcoming September meeting. The persistent inflation coupled with a weakening labor market is adding complexity to the monetary policy landscape, keeping a keen eye on economic indicators and ce",
-          "source": "Markets-Economic Times",
+          "id": "b5cdb8fd8c506b5f3e7dc595",
+          "text": "From Gift Nifty to Fed chair speech, crude oil prices: 7 key things that changed for Indian stock market overnight Gift Nifty was trading around the 24,251 level, down nearly 30.90 points from the Nifty futures\u2019 previous close, indicating a positive start for the Indian stock market indices.",
+          "source": "mint - markets",
           "official": false,
-          "url": "https://economictimes.indiatimes.com/markets/us-stocks/news/markets-push-back-boe-rate-hike-expectations-to-february-2027/articleshow/133565274.cms",
+          "url": "https://www.livemint.com/market/stock-market-news/from-gift-nifty-to-fed-chair-speech-crude-oil-prices-7-key-things-that-changed-for-indian-stock-market-overnight-11787880435786.html",
           "symbols": [
-            "CENTRALBK",
             "FEL",
             "FELDVR",
-            "PERSISTENT"
+            "OIL"
           ]
         }
       ],
@@ -378,7 +381,7 @@
         "symbol": "TCS",
         "mode": "missing_or_stale",
         "async": true,
-        "operation_id": "87531b92f3a6495f841ccd7f98b0f5ad",
+        "operation_id": "063dfec2833845b0894ff9fd70ce4489",
         "operation_status": "PENDING",
         "created": true,
         "places_orders": false,
@@ -389,7 +392,7 @@
         "symbol": "TCS",
         "mode": "missing_or_stale",
         "async": true,
-        "operation_id": "87531b92f3a6495f841ccd7f98b0f5ad",
+        "operation_id": "063dfec2833845b0894ff9fd70ce4489",
         "operation_status": "PENDING",
         "created": false,
         "places_orders": false,
@@ -397,12 +400,12 @@
       }
     },
     "tcs_acquire_terminal": {
-      "operation_id": "87531b92f3a6495f841ccd7f98b0f5ad",
+      "operation_id": "063dfec2833845b0894ff9fd70ce4489",
       "kind": "DUE_DILIGENCE_ACQUIRE",
       "status": "SUCCEEDED",
       "created": null,
       "stage": "SUCCEEDED",
-      "message": "DUE_DILIGENCE_ACQUIRE completed in 2.0s",
+      "message": "DUE_DILIGENCE_ACQUIRE completed in 3.2s",
       "error_code": "",
       "error_message": "",
       "progress_current": 0,
@@ -410,8 +413,8 @@
       "result": {
         "schema_version": 3,
         "symbol": "TCS",
-        "acquired_at": "2026-08-27T18:38:03.455922+00:00",
-        "inspected_at": "2026-08-27T18:38:03.455922+00:00",
+        "acquired_at": "2026-08-28T03:12:55.764856+00:00",
+        "inspected_at": "2026-08-28T03:12:55.764856+00:00",
         "method": "autonomy_download",
         "mode": "missing_or_stale",
         "to_fetch": [
@@ -419,7 +422,8 @@
           "peer_data",
           "quarterly_results",
           "shareholding",
-          "promoter_pledge"
+          "promoter_pledge",
+          "recent_news"
         ],
         "skipped": [
           "nse_filings",
@@ -631,10 +635,10 @@
             "error": "Couldn't find a tree builder with the features you requested: lxml. Do you need to install a parser library?"
           },
           "quarterly_results": {
-            "checked_at": "2026-08-27T18:38:03.455922+00:00",
+            "checked_at": "2026-08-28T03:12:55.764856+00:00",
             "status": "acquisition_failed",
             "provider": "screener.in",
-            "fetched_at": "2026-08-27T18:38:03.455922+00:00",
+            "fetched_at": "2026-08-28T03:12:55.764856+00:00",
             "error": "Couldn't find a tree builder with the features you requested: lxml. Do you need to install a parser library?"
           },
           "annual_financials": {
@@ -644,31 +648,31 @@
             "fetched_at": "2026-08-27T18:06:10.454513+00:00"
           },
           "shareholding": {
-            "checked_at": "2026-08-27T18:38:03.455922+00:00",
+            "checked_at": "2026-08-28T03:12:55.764856+00:00",
             "status": "acquisition_failed",
             "provider": "screener.in",
-            "fetched_at": "2026-08-27T18:38:03.455922+00:00",
+            "fetched_at": "2026-08-28T03:12:55.764856+00:00",
             "error": "Couldn't find a tree builder with the features you requested: lxml. Do you need to install a parser library?"
           },
           "promoter_pledge": {
-            "checked_at": "2026-08-27T18:38:03.455922+00:00",
+            "checked_at": "2026-08-28T03:12:55.764856+00:00",
             "status": "acquisition_failed",
             "provider": "screener.in",
-            "fetched_at": "2026-08-27T18:38:03.455922+00:00",
+            "fetched_at": "2026-08-28T03:12:55.764856+00:00",
             "error": "Couldn't find a tree builder with the features you requested: lxml. Do you need to install a parser library?"
           },
           "valuation": {
-            "checked_at": "2026-08-27T18:38:03.455922+00:00",
+            "checked_at": "2026-08-28T03:12:55.764856+00:00",
             "status": "acquisition_failed",
             "provider": "screener.in",
-            "fetched_at": "2026-08-27T18:38:03.455922+00:00",
+            "fetched_at": "2026-08-28T03:12:55.764856+00:00",
             "error": "Couldn't find a tree builder with the features you requested: lxml. Do you need to install a parser library?"
           },
           "peer_data": {
-            "checked_at": "2026-08-27T18:38:03.455922+00:00",
+            "checked_at": "2026-08-28T03:12:55.764856+00:00",
             "status": "acquisition_failed",
             "provider": "screener.in",
-            "fetched_at": "2026-08-27T18:38:03.455922+00:00",
+            "fetched_at": "2026-08-28T03:12:55.764856+00:00",
             "error": "Couldn't find a tree builder with the features you requested: lxml. Do you need to install a parser library?"
           },
           "exchange_filings": {
@@ -690,7 +694,7 @@
             "fetched_at": "2026-08-27T18:06:10.454513+00:00"
           },
           "recent_news": {
-            "checked_at": "2026-08-27T18:38:03.455922+00:00",
+            "checked_at": "2026-08-28T03:12:55.764856+00:00",
             "status": "current",
             "provider": "news_curator"
           },
@@ -732,7 +736,7 @@
         "sector": "it",
         "n_ok": 1
       },
-      "elapsed_s": 2.04
+      "elapsed_s": 3.17
     },
     "tcs_workspace": {
       "symbol": "TCS",
@@ -749,19 +753,23 @@
       "named_score_labels": [
         {
           "id": "piotroski_f",
-          "label_text": "Unmeasured"
+          "label_text": "Unmeasured",
+          "available": false
         },
         {
           "id": "altman_z",
-          "label_text": "Unmeasured"
+          "label_text": "Unmeasured",
+          "available": false
         },
         {
           "id": "beneish_m",
-          "label_text": "Unmeasured"
+          "label_text": "Unmeasured",
+          "available": false
         },
         {
           "id": "dupont_roe",
-          "label_text": "Unmeasured"
+          "label_text": "Unmeasured",
+          "available": false
         }
       ],
       "intel_keys": [
@@ -795,19 +803,19 @@
         "symbol": "INFY",
         "mode": "missing_or_stale",
         "async": true,
-        "operation_id": "3ec4c6e48af9440ca07cf40b76150410",
+        "operation_id": "5eeac9d3f0db47f2b83b0a4d5d780780",
         "operation_status": "PENDING",
         "created": true,
         "places_orders": false,
         "_http_status": 200
       },
       "terminal": {
-        "operation_id": "3ec4c6e48af9440ca07cf40b76150410",
+        "operation_id": "5eeac9d3f0db47f2b83b0a4d5d780780",
         "kind": "DUE_DILIGENCE_ACQUIRE",
         "status": "SUCCEEDED",
         "created": null,
         "stage": "SUCCEEDED",
-        "message": "DUE_DILIGENCE_ACQUIRE completed in 20.2s",
+        "message": "DUE_DILIGENCE_ACQUIRE completed in 1.4s",
         "error_code": "",
         "error_message": "",
         "progress_current": 0,
@@ -815,23 +823,21 @@
         "result": {
           "schema_version": 3,
           "symbol": "INFY",
-          "acquired_at": "2026-08-27T18:38:06.040211+00:00",
-          "inspected_at": "2026-08-27T18:38:06.040211+00:00",
+          "acquired_at": "2026-08-28T03:12:59.470469+00:00",
+          "inspected_at": "2026-08-28T03:12:59.470469+00:00",
           "method": "autonomy_download",
           "mode": "missing_or_stale",
           "to_fetch": [
-            "exchange_filings",
-            "sector_kpis",
             "valuation",
             "peer_data",
             "quarterly_results",
-            "annual_financials",
             "shareholding",
             "promoter_pledge",
-            "corporate_announcements",
-            "company_master"
+            "recent_news"
           ],
           "skipped": [
+            "nse_filings",
+            "nse_annual",
             "option_chain"
           ],
           "not_an_llm": true,
@@ -977,30 +983,20 @@
             {
               "id": "nse_filings",
               "ok": true,
-              "rows": 413,
-              "files": 8,
-              "picked": [
-                "str",
-                "str",
-                "str",
-                "str",
-                "str",
-                "str"
-              ]
+              "skipped": true,
+              "reason": "datasets current"
             },
             {
               "id": "nse_annual_reports",
               "ok": true,
-              "rows": 17,
-              "picked": [
-                "str",
-                "str"
-              ]
+              "skipped": true,
+              "reason": "datasets current"
             },
             {
               "id": "option_chain",
-              "ok": false,
-              "skipped": true
+              "ok": true,
+              "skipped": true,
+              "reason": "not requested"
             }
           ],
           "dataset_meta": {
@@ -1012,10 +1008,10 @@
               "error": "Couldn't find a tree builder with the features you requested: lxml. Do you need to install a parser library?"
             },
             "quarterly_results": {
-              "checked_at": "2026-08-27T18:38:06.040211+00:00",
+              "checked_at": "2026-08-28T03:12:59.470469+00:00",
               "status": "acquisition_failed",
               "provider": "screener.in",
-              "fetched_at": "2026-08-27T18:38:06.040211+00:00",
+              "fetched_at": "2026-08-28T03:12:59.470469+00:00",
               "error": "Couldn't find a tree builder with the features you requested: lxml. Do you need to install a parser library?"
             },
             "annual_financials": {
@@ -1025,31 +1021,31 @@
               "fetched_at": "2026-08-27T18:38:06.040211+00:00"
             },
             "shareholding": {
-              "checked_at": "2026-08-27T18:38:06.040211+00:00",
+              "checked_at": "2026-08-28T03:12:59.470469+00:00",
               "status": "acquisition_failed",
               "provider": "screener.in",
-              "fetched_at": "2026-08-27T18:38:06.040211+00:00",
+              "fetched_at": "2026-08-28T03:12:59.470469+00:00",
               "error": "Couldn't find a tree builder with the features you requested: lxml. Do you need to install a parser library?"
             },
             "promoter_pledge": {
-              "checked_at": "2026-08-27T18:38:06.040211+00:00",
+              "checked_at": "2026-08-28T03:12:59.470469+00:00",
               "status": "acquisition_failed",
               "provider": "screener.in",
-              "fetched_at": "2026-08-27T18:38:06.040211+00:00",
+              "fetched_at": "2026-08-28T03:12:59.470469+00:00",
               "error": "Couldn't find a tree builder with the features you requested: lxml. Do you need to install a parser library?"
             },
             "valuation": {
-              "checked_at": "2026-08-27T18:38:06.040211+00:00",
+              "checked_at": "2026-08-28T03:12:59.470469+00:00",
               "status": "acquisition_failed",
               "provider": "screener.in",
-              "fetched_at": "2026-08-27T18:38:06.040211+00:00",
+              "fetched_at": "2026-08-28T03:12:59.470469+00:00",
               "error": "Couldn't find a tree builder with the features you requested: lxml. Do you need to install a parser library?"
             },
             "peer_data": {
-              "checked_at": "2026-08-27T18:38:06.040211+00:00",
+              "checked_at": "2026-08-28T03:12:59.470469+00:00",
               "status": "acquisition_failed",
               "provider": "screener.in",
-              "fetched_at": "2026-08-27T18:38:06.040211+00:00",
+              "fetched_at": "2026-08-28T03:12:59.470469+00:00",
               "error": "Couldn't find a tree builder with the features you requested: lxml. Do you need to install a parser library?"
             },
             "exchange_filings": {
@@ -1071,7 +1067,7 @@
               "fetched_at": "2026-08-27T18:38:06.040211+00:00"
             },
             "recent_news": {
-              "checked_at": "2026-08-27T18:38:06.040211+00:00",
+              "checked_at": "2026-08-28T03:12:59.470469+00:00",
               "status": "current",
               "provider": "news_curator"
             },
@@ -1110,21 +1106,21 @@
           "sector": "it",
           "n_ok": 1
         },
-        "elapsed_s": 20.2
+        "elapsed_s": 1.44
       }
     },
     "fno": {
       "enqueue": {
         "accepted": true,
         "control": "REFRESH_FNO_NOW",
-        "operation_id": "ee933455b9614397b853756a2bc5b0e2",
+        "operation_id": "a635c65531024bd98078b83071e6b3cd",
         "operation_status": "PENDING",
         "created": true,
         "priority": 100,
         "_http_status": 200
       },
       "terminal": {
-        "operation_id": "ee933455b9614397b853756a2bc5b0e2",
+        "operation_id": "a635c65531024bd98078b83071e6b3cd",
         "kind": "FNO_REFRESH",
         "status": "BLOCKED",
         "created": null,
@@ -1149,7 +1145,7 @@
     },
     "failed_retry": {
       "original": {
-        "operation_id": "ee933455b9614397b853756a2bc5b0e2",
+        "operation_id": "a635c65531024bd98078b83071e6b3cd",
         "kind": "FNO_REFRESH",
         "status": "BLOCKED",
         "created": null,
@@ -1175,7 +1171,7 @@
       "retry": {
         "accepted": true,
         "control": "REFRESH_FNO_NOW",
-        "operation_id": "27d6070772cf484b91600554ceba9629",
+        "operation_id": "3f3307fdf06541dfb5bed6a0bd484ff3",
         "operation_status": "PENDING",
         "created": true,
         "priority": 100,
@@ -1185,13 +1181,12 @@
     "retry_after_success": {
       "accepted": true,
       "control": "RUN_SCAN_NOW",
-      "operation_id": "c7af5363cb0a491a8ca4216ddb36964a",
+      "operation_id": "e3b09adedf4344808174ccae38d759f6",
       "operation_status": "PENDING",
       "created": true,
       "priority": 100,
       "_http_status": 200
     }
   },
-  "all_passed": true,
-  "payloads_slimed": true
+  "all_passed": true
 }
