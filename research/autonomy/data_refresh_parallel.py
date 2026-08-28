@@ -1,12 +1,12 @@
 """Non-blocking DATA_REFRESH bridge for the autonomy supervisor.
 
 DATA_REFRESH performs genuine network/disk snapshot work and can legitimately take
-minutes on a catch-up day.  It must not monopolise the single mutation-owner loop.
+minutes on a catch-up day. It must not monopolise the single mutation-owner loop.
 This module runs the existing canonical DATA_REFRESH handler in one daemon data
 thread and makes the durable autonomy job poll that work.
 
 The original handler remains the authority for auth, freshness, snapshot validation
-and fail-safe semantics.  This bridge changes execution placement only; it does not
+and fail-safe semantics. This bridge changes execution placement only; it does not
 weaken data gates or allow paper entries before fresh data succeeds.
 """
 from __future__ import annotations
@@ -47,10 +47,13 @@ def _latest_date(result) -> str:
     return str(metadata.get("latest_date") or metadata.get("session_date") or "")[:10]
 
 
-def _success_satisfies(result, required: str) -> bool:
+def _is_success(result) -> bool:
     from research.autonomy import job_store as JS
+    return getattr(result, "status", "") == JS.SUCCEEDED
 
-    if getattr(result, "status", "") != JS.SUCCEEDED:
+
+def _success_satisfies(result, required: str) -> bool:
+    if not _is_success(result):
         return False
     if not required:
         return True
@@ -147,17 +150,21 @@ def make_parallel_data_refresh_handler(
             result = state.get("result")
             finished_at = float(state.get("finished_at") or 0.0)
 
+            # A successful refresh may be reused only when it satisfies the date
+            # required by THIS durable job. A yesterday-success is never returned
+            # as success for a newer EOD requirement.
             if result is not None and _success_satisfies(result, required):
                 if finished_at and 0 <= now - finished_at <= _REUSE_SUCCESS_S:
                     return result
 
             if result is not None and not running:
-                # A failure must be delivered to the durable job once; its retry
-                # policy will decide when to launch another canonical attempt.
-                if not _success_satisfies(result, required):
+                if not _is_success(result):
+                    # Deliver a genuine canonical failure exactly once. The normal
+                    # durable retry policy decides when another attempt starts.
                     state["result"] = None
                     return result
-                # Successful but not fresh enough for this required EOD date.
+                # Success exists but is stale/insufficient for the newly requested
+                # session. Discard it and launch a fresh canonical refresh below.
                 state["result"] = None
 
             if not running:
@@ -191,7 +198,7 @@ def install_parallel_data_refresh() -> None:
 
             def retry_or_fail_nonblocking(self, job, *, error_code, error_message, summary=""):
                 if error_code == IN_PROGRESS:
-                    # Polling background I/O is not a failed attempt.  Attempt count
+                    # Polling background I/O is not a failed attempt. Attempt count
                     # may increase when leased, but it must never exhaust the failure budget.
                     self.jobs.reschedule_retry(
                         job.job_id,
