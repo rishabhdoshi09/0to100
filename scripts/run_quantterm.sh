@@ -81,6 +81,35 @@ raise SystemExit(0)
 PY
 }
 
+stop_stale_market_ops() {
+  python - <<'PY' >/dev/null 2>&1 || true
+import json, os, signal, time
+from pathlib import Path
+p = Path("logs/market_ops/runtime.json")
+try:
+    r = json.loads(p.read_text(encoding="utf-8"))
+    pid = int(r.get("worker_pid") or 0)
+except Exception:
+    pid = 0
+if pid > 1 and pid != os.getpid():
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except OSError:
+        raise SystemExit(0)
+    deadline = time.time() + 1.5
+    while time.time() < deadline:
+        try:
+            os.kill(pid, 0)
+        except OSError:
+            raise SystemExit(0)
+        time.sleep(0.05)
+    try:
+        os.kill(pid, signal.SIGKILL)
+    except OSError:
+        pass
+PY
+}
+
 AUTONOMY_PID=""
 MARKET_OPS_PID=""
 API_PID=""
@@ -205,6 +234,7 @@ if market_ops_healthy; then
   MARKET_OPS_EXTERNAL=1
   echo "[STACK] A healthy market-operations worker is already running; reusing it."
 else
+  stop_stale_market_ops
   start_market_ops || true
 fi
 
@@ -236,6 +266,7 @@ while [[ "$STOP" != "1" ]]; do
         MARKET_OPS_EXTERNAL=1; MARKET_OPS_PID=""
       else
         echo "[STACK] Market operations is down/stale; restarting."
+        stop_stale_market_ops
         start_market_ops || true
         SCAN_KICKED=0
       fi
@@ -243,6 +274,7 @@ while [[ "$STOP" != "1" ]]; do
   elif ! market_ops_healthy; then
     MARKET_OPS_EXTERNAL=0
     echo "[STACK] Reused market-operations worker became stale; taking ownership."
+    stop_stale_market_ops
     start_market_ops || true
     SCAN_KICKED=0
   fi
