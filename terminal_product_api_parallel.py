@@ -1,15 +1,16 @@
 """Canonical terminal API with performance-safe, user-first operation routing.
 
-The React desk is an interactive control plane. A user click must never be
-acknowledged as a ghost queue entry with no healthy consumer. This wrapper keeps
-the canonical product API, corrects long-term routing, and hardens the market-ops
-worker handshake used by all terminal controls.
+The React desk is an interactive control plane. In the canonical one-terminal
+runtime the launcher is the *single owner* of the Market Operations process.
+The API may observe that worker and refuse a user command when it is unhealthy,
+but it must never spawn, terminate, or replace the launcher-owned process.
+
+Running ``terminal_product_api:app`` directly still keeps the legacy standalone
+worker fallback from :mod:`terminal_api`; this wrapper is intentionally the
+launcher-supervised product entry point.
 """
 from __future__ import annotations
 
-import os
-import signal
-import subprocess
 import time
 
 import terminal_api as core
@@ -19,81 +20,49 @@ from operations.store import pid_is_alive
 # The base API intentionally keeps the control mapping in one mutable registry.
 core._OPERATION_CONTROLS["RUN_LONG_TERM_SCAN_NOW"] = "LONG_TERM_SCAN"
 
-_base_ensure_ops_worker = core._ensure_ops_worker
 
-
-def _is_market_ops_pid(pid: int) -> bool:
-    """Protect against PID reuse: only signal a process that is really our worker."""
-    if pid <= 1 or not pid_is_alive(pid):
-        return False
-    proc = getattr(core, "_ops_process", None)
-    if proc is not None and proc.poll() is None and int(proc.pid) == int(pid):
-        return True
-    try:
-        command = subprocess.check_output(
-            ["ps", "-p", str(pid), "-o", "command="],
-            text=True,
-            stderr=subprocess.DEVNULL,
-            timeout=0.5,
-        ).strip()
-    except Exception:
-        return False
-    return "operations.market_ops" in command
-
-
-def _stop_stale_owner(runtime: dict) -> None:
-    """Terminate a stale worker owner before replacement; PID existence is not health."""
-    candidates: list[int] = []
-    try:
-        runtime_pid = int(runtime.get("worker_pid") or 0)
-    except (TypeError, ValueError):
-        runtime_pid = 0
-    if runtime_pid > 1:
-        candidates.append(runtime_pid)
-    proc = getattr(core, "_ops_process", None)
-    if proc is not None and proc.poll() is None and proc.pid > 1:
-        candidates.append(int(proc.pid))
-    for pid in dict.fromkeys(candidates):
-        if not _is_market_ops_pid(pid):
-            continue
-        try:
-            os.kill(pid, signal.SIGTERM)
-        except OSError:
-            continue
-        deadline = time.time() + 0.8
-        while time.time() < deadline and pid_is_alive(pid):
-            time.sleep(0.04)
-        if pid_is_alive(pid) and _is_market_ops_pid(pid):
-            try:
-                os.kill(pid, signal.SIGKILL)
-            except OSError:
-                pass
-    proc = getattr(core, "_ops_process", None)
-    if proc is not None and proc.poll() is not None:
-        core._ops_process = None
-
-
-def _ensure_ops_worker_strict(*, wait: bool = True) -> dict:
-    """Return only with a heartbeat-healthy worker, or fail the user request loudly."""
+def _healthy_runtime() -> dict:
     runtime = core._ops_runtime_payload()
     if runtime.get("running") and pid_is_alive(runtime.get("worker_pid")):
         return runtime
+    return runtime
 
-    # A prior child can be alive but wedged before/after taking the worker lock.
-    # Kill only a verified stale market-ops owner before asking the canonical
-    # starter to replace it. A reused unrelated PID is never signalled.
-    _stop_stale_owner(runtime)
-    runtime = _base_ensure_ops_worker(wait=True)
+
+def _ensure_ops_worker_strict(*, wait: bool = True) -> dict:
+    """Observe the launcher-owned worker without ever taking lifecycle ownership.
+
+    ``terminal_api`` calls this with ``wait=True`` during FastAPI startup. Startup
+    is allowed to continue while the launcher watchdog is bringing Market Ops up,
+    so the API itself never enters a competing restart loop.
+
+    User controls call this with ``wait=False``. In that path an unhealthy worker
+    fails loudly instead of returning a ghost ``accepted: true`` queue entry.
+    """
+    runtime = _healthy_runtime()
     if runtime.get("running") and pid_is_alive(runtime.get("worker_pid")):
         return runtime
+
+    if wait:
+        deadline = time.time() + 3.0
+        while time.time() < deadline:
+            time.sleep(0.1)
+            runtime = _healthy_runtime()
+            if runtime.get("running") and pid_is_alive(runtime.get("worker_pid")):
+                return runtime
+        # Startup remains non-owning: the launcher watchdog is the only component
+        # allowed to recover Market Ops. Returning degraded state keeps the API up
+        # so /api/health and the UI can show the blocker while recovery proceeds.
+        return runtime
+
     raise RuntimeError(
-        "Market operations worker did not become ready; Scan Now was not silently accepted. "
-        "The launcher watchdog will retry it."
+        "Market operations worker is not healthy yet; the launcher watchdog owns "
+        "recovery. The user command was not silently accepted."
     )
 
 
-# The existing control endpoint resolves this global at request time, so every
-# market operation gets the readiness handshake without duplicating API routes.
+# The existing startup hook and control endpoint resolve this global at runtime.
+# Replacing it therefore removes API-side worker lifecycle ownership without
+# duplicating routes or changing the standalone terminal_api implementation.
 core._ensure_ops_worker = _ensure_ops_worker_strict
 
 app = product.app
