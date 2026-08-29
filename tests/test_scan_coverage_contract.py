@@ -143,9 +143,13 @@ def test_scan_audit_accounts_for_qualified_no_setup_policy_missing_and_error(mon
     assert coverage["requested"] == 6
     assert coverage["checked"] == 4  # two technically evaluated + two explicit policy checks
     assert coverage["state"] == "DEGRADED"
-    assert report.universe_size == 6
+    # Existing universe_size/scanned contract remains "actually checked"; the
+    # requested universe is separately visible instead of being conflated.
+    assert report.requested_universe == 6
+    assert report.universe_size == 4
     assert report.scanned == 4
-    assert report.payload["universe_size"] == 6
+    assert report.payload["requested_universe"] == 6
+    assert report.payload["universe_size"] == 4
 
 
 def test_scan_priority_changes_order_not_membership():
