@@ -20,8 +20,10 @@ import terminal_product_api as product
 from operations.store import pid_is_alive
 from product.operator_health import enrich_autonomy_payload
 
-# The base API intentionally keeps the control mapping in one mutable registry.
-core._OPERATION_CONTROLS["RUN_LONG_TERM_SCAN_NOW"] = "LONG_TERM_SCAN"
+# Keep terminal_api's canonical control registry untouched. One whole-market scan
+# fills all setup families; the UI's separate funds action uses LONG_TERM_REFRESH.
+# Mutating this shared dict at import time made terminal_api behavior depend on
+# test/import order and reintroduced a second long-term scan path.
 _base_ensure_ops_worker = core._ensure_ops_worker
 
 
@@ -91,8 +93,9 @@ def _ensure_ops_worker_strict(*, wait: bool = True) -> dict:
             return recovered
 
     raise RuntimeError(
-        "Market operations worker did not become ready; the command was not "
-        "silently accepted. Check System Health for the worker blocker."
+        "Market operations worker did not become ready after bounded recovery; "
+        "the command was not silently accepted. The launcher watchdog owns recovery "
+        "after this attempt. Check System Health for the worker blocker."
     )
 
 
@@ -142,12 +145,21 @@ def market_reports_workspace() -> dict:
     """Canonical read projection for Market Reports."""
     from product.recommendations_workspace import build_market_reports_workspace
 
-    return build_market_reports_workspace(
+    payload = build_market_reports_workspace(
         persist_today=True,
         news_payload=core._news_payload(),
         scan_payload=core._scan_payload(),
         rebuild=False,
     )
+    # Some desk-note implementations can provide generic teaching rows even when
+    # both market scan and sourced news are absent. The route must still explain
+    # that this is an incomplete report rather than leaving an empty status line.
+    if payload.get("needs_refresh") and not payload.get("empty_detail"):
+        payload["empty_detail"] = (
+            "Today's sourced market report is incomplete. Missing scan/news evidence "
+            "stays empty; QuantTerm does not invent headlines, prices, or market facts."
+        )
+    return payload
 
 
 @product.app.get("/api/scan-audit")
