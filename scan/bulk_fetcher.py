@@ -1,25 +1,31 @@
 """
-Bulk OHLCV prefetcher — NSE official bhavcopy first, Yahoo only as backup.
+Bulk OHLCV prefetcher — NSE official bhavcopy first, Kite targeted repair second,
+Yahoo only as a last-resort whole-store backup.
 
-Primary : data/bhavcopy_store.py — one NSE file per day covers the WHOLE
-          market. First run downloads history once to logs/bhav/; after
-          that only the newest day is fetched.
-Backup  : chunked yf.download() — used only when the bhavcopy store
-          can't be built (e.g. NSE archive unreachable).
+Primary : data/bhavcopy_store.py — one NSE file per day covers the whole market.
+Repair  : the EXISTING data-only Zerodha session fetches only requested NSE EQ
+          symbols that are still absent from the official store. This closes the
+          old hole where a generally-ready store caused missing symbols to vanish
+          from the scanner without a repair attempt.
+Backup  : chunked yf.download() — used only when the bhavcopy store itself cannot
+          be built.
 
 Usage:
-    prefetch(symbols)            # call once before pipeline stages
-    df = get_cached("RELIANCE")  # returns pd.DataFrame (lowercase cols) or None
+    prefetch(symbols)            # warm the whole-market store
+    backfill_missing(symbols)    # repair current-master names absent from it
+    df = get_cached("RELIANCE")  # bhavcopy -> Kite repair -> Yahoo backup
 """
 from __future__ import annotations
 
 import threading
 import time
+from datetime import datetime, timedelta
 from typing import Callable, Optional
 
 import pandas as pd
 
 _yf_cache: dict[str, pd.DataFrame] = {}
+_kite_cache: dict[str, pd.DataFrame] = {}
 _yf_cache_ts: float = 0.0
 _lock = threading.Lock()
 _TTL = 300           # seconds (yfinance backup cache)
@@ -35,6 +41,14 @@ def _overlay_live_quiet() -> None:
         pass
 
 
+def _bhav_symbols() -> set[str]:
+    try:
+        from data.bhavcopy_store import store_symbols
+        return {str(s).strip().upper() for s in (store_symbols() or []) if str(s).strip()}
+    except Exception:
+        return set()
+
+
 def adopt_ready_store(*, overlay_live: bool = True) -> int:
     """Use the official bhavcopy already in this process. Do not block a scan on a rebuild.
 
@@ -44,7 +58,6 @@ def adopt_ready_store(*, overlay_live: bool = True) -> int:
     global _bhav_ok
     try:
         from data.bhavcopy_runtime import status as history_status
-        from data.bhavcopy_store import store_symbols
 
         info = history_status(load_cache=True)
         n = int(info.get("symbols") or 0)
@@ -57,7 +70,7 @@ def adopt_ready_store(*, overlay_live: bool = True) -> int:
             threading.Thread(
                 target=_overlay_live_quiet, name="live-overlay", daemon=True,
             ).start()
-        covered = store_symbols()
+        covered = _bhav_symbols()
         return len(covered) if covered else n
     except Exception:
         return 0
@@ -68,29 +81,19 @@ def prefetch(
     period: str = "260d",
     progress: Optional[Callable[[int, int], None]] = None,
 ) -> int:
-    """
-    Make OHLCV available for `symbols`. Tries the NSE bhavcopy store
-    first (whole market, official). Falls back to yfinance chunks only
-    if the store can't be built. Returns number of symbols covered.
-    """
+    """Make OHLCV available for ``symbols`` with official whole-market data first."""
     global _bhav_ok
 
     ready = adopt_ready_store(overlay_live=True)
     if ready >= 200:
-        try:
-            from data.bhavcopy_store import store_symbols
-            have = set(store_symbols())
-            return sum(1 for s in symbols if str(s).upper() in have) or ready
-        except Exception:
-            return ready
+        have = _bhav_symbols()
+        return sum(1 for s in symbols if str(s).upper() in have) or ready
 
     # ── Primary: NSE bhavcopy (no Yahoo) ──────────────────────────────────────
     try:
-        from data.bhavcopy_store import build_store, store_symbols
+        from data.bhavcopy_store import build_store
         n = build_store(days=260, progress=progress)
         if n >= 200:                      # sane whole-market build
-            # During market hours: overlay TODAY's live bar so scans see
-            # today's move, not yesterday's close (bhavcopy is EOD).
             try:
                 from data.nse_live import apply_live_to_store
                 apply_live_to_store()
@@ -98,8 +101,8 @@ def prefetch(
                 pass
             with _lock:
                 _bhav_ok = True
-            covered = set(store_symbols())
-            return sum(1 for s in symbols if s in covered)
+            covered = _bhav_symbols()
+            return sum(1 for s in symbols if str(s).upper() in covered)
     except Exception as exc:
         __import__("logger").get_logger(__name__).warning(
             "bhav_prefetch_failed", error=str(exc))
@@ -110,43 +113,159 @@ def prefetch(
     return _prefetch_yf(symbols, period=period, progress=progress)
 
 
+def _frame_from_kite(candles: list[dict]) -> Optional[pd.DataFrame]:
+    rows = []
+    for candle in candles or []:
+        try:
+            o = float(candle["open"])
+            h = float(candle["high"])
+            l = float(candle["low"])
+            c = float(candle["close"])
+            v = float(candle.get("volume", 0) or 0)
+            stamp = pd.to_datetime(candle.get("date"))
+        except Exception:
+            continue
+        if min(o, h, l, c) <= 0 or l > o or o > h or l > c or c > h or v < 0:
+            continue
+        rows.append((stamp, o, h, l, c, v))
+    if not rows:
+        return None
+    frame = pd.DataFrame(rows, columns=["date", "open", "high", "low", "close", "volume"])
+    frame = frame.drop_duplicates(subset=["date"], keep="last").sort_values("date").set_index("date")
+    return frame
+
+
+def backfill_missing(symbols: list[str], *, client=None, now: datetime | None = None) -> dict:
+    """Targeted repair for current NSE EQ symbols absent from the bhavcopy store.
+
+    This is DATA ONLY. It uses the same authenticated Kite data facade as PAPER_AUTO
+    and exposes no order/GTT surface. Every missing requested symbol is attempted
+    when a valid daily Zerodha session exists; unresolved/failed names remain missing
+    so the scan coverage ledger can report them honestly.
+    """
+    requested = list(dict.fromkeys(
+        str(s).strip().upper() for s in (symbols or []) if str(s).strip()
+    ))
+    with _lock:
+        fallback_have = set(_kite_cache) | set(_yf_cache)
+    have = _bhav_symbols() | fallback_have
+    missing = [s for s in requested if s not in have]
+    if not missing:
+        return {"requested": len(requested), "missing": 0, "attempted": 0, "loaded": 0, "unresolved": 0, "failed": 0}
+
+    try:
+        if client is None:
+            from research.intelligence.data.kite_activation import KiteDataClient
+            client = KiteDataClient.from_config()
+        # profile is the cheapest explicit session validity check and contains no
+        # secret in our logs; only success/failure counts are returned below.
+        if not client.profile():
+            raise RuntimeError("empty Kite profile")
+        instruments = list(client.instruments("NSE"))
+    except Exception as exc:
+        return {
+            "requested": len(requested), "missing": len(missing), "attempted": 0,
+            "loaded": 0, "unresolved": len(missing), "failed": 0,
+            "error_code": "KITE_HISTORY_UNAVAILABLE", "error": f"{type(exc).__name__}: {exc}",
+        }
+
+    token_by_symbol: dict[str, object] = {}
+    for row in instruments:
+        if not isinstance(row, dict):
+            continue
+        if str(row.get("exchange") or "NSE").upper() != "NSE":
+            continue
+        if str(row.get("instrument_type") or "").upper() != "EQ":
+            continue
+        sym = str(row.get("tradingsymbol") or "").strip().upper()
+        token = row.get("instrument_token")
+        if sym and token is not None:
+            token_by_symbol[sym] = token
+
+    resolvable = [s for s in missing if s in token_by_symbol]
+    unresolved = len(missing) - len(resolvable)
+    if not resolvable:
+        return {"requested": len(requested), "missing": len(missing), "attempted": 0,
+                "loaded": 0, "unresolved": unresolved, "failed": 0}
+
+    try:
+        from research.intelligence.data import nse_calendar as CAL
+        from research.intelligence.data.kite_source import RateLimiter
+        required = CAL.latest_required_session(now or CAL._now_ist(), CAL.load_holidays())
+        want_to = required.isoformat()
+        want_from = (required - timedelta(days=400)).isoformat()
+        limiter = RateLimiter(max_per_sec=3.0)
+    except Exception:
+        end = (now or datetime.now()).date()
+        want_to = end.isoformat()
+        want_from = (end - timedelta(days=400)).isoformat()
+        from research.intelligence.data.kite_source import RateLimiter
+        limiter = RateLimiter(max_per_sec=3.0)
+
+    loaded: dict[str, pd.DataFrame] = {}
+    failed = 0
+    for symbol in resolvable:
+        try:
+            limiter.acquire()
+            candles = list(client.historical(token_by_symbol[symbol], want_from, want_to, "day"))
+            frame = _frame_from_kite(candles)
+            if frame is None:
+                failed += 1
+                continue
+            loaded[symbol] = frame
+        except Exception:
+            failed += 1
+
+    if loaded:
+        with _lock:
+            _kite_cache.update(loaded)
+    return {
+        "requested": len(requested),
+        "missing": len(missing),
+        "attempted": len(resolvable),
+        "loaded": len(loaded),
+        "unresolved": unresolved,
+        "failed": failed,
+        "source": "zerodha_kite_data_only",
+    }
+
+
 def get_cached(symbol: str) -> Optional[pd.DataFrame]:
-    """Cached OHLCV for one symbol — bhavcopy store first, then yf cache."""
+    """Cached OHLCV for one symbol — bhavcopy, Kite repair, then Yahoo backup."""
+    clean = str(symbol or "").strip().upper()
     with _lock:
         use_bhav = _bhav_ok
     if use_bhav:
         try:
             from data.bhavcopy_store import get_ohlcv
-            df = get_ohlcv(symbol)
+            df = get_ohlcv(clean)
             if df is not None:
                 return df
         except Exception:
             pass
     with _lock:
-        df = _yf_cache.get(symbol)
+        df = _kite_cache.get(clean)
+        if df is None:
+            df = _yf_cache.get(clean)
     return df.copy() if df is not None else None
 
 
 def cached_symbols() -> list[str]:
+    symbols: set[str] = set()
     with _lock:
         use_bhav = _bhav_ok
+        symbols.update(_kite_cache)
+        symbols.update(_yf_cache)
     if use_bhav:
-        try:
-            from data.bhavcopy_store import store_symbols
-            syms = store_symbols()
-            if syms:
-                return syms
-        except Exception:
-            pass
-    with _lock:
-        return list(_yf_cache.keys())
+        symbols.update(_bhav_symbols())
+    return sorted(symbols)
 
 
 def is_warm() -> bool:
     with _lock:
         if _bhav_ok:
             return True
-        return bool(_yf_cache) and (time.time() - _yf_cache_ts < _TTL)
+        return bool(_kite_cache) or (bool(_yf_cache) and (time.time() - _yf_cache_ts < _TTL))
 
 
 # ── yfinance backup path ──────────────────────────────────────────────────────
