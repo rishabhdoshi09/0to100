@@ -2,7 +2,20 @@ from __future__ import annotations
 
 from datetime import date, timedelta
 
+import pytest
+
 import scan.bulk_fetcher as bulk
+
+
+@pytest.fixture(autouse=True)
+def _clear_repair_caches():
+    with bulk._lock:
+        bulk._kite_cache.clear()
+        bulk._yf_cache.clear()
+    yield
+    with bulk._lock:
+        bulk._kite_cache.clear()
+        bulk._yf_cache.clear()
 
 
 def _candles(days: int = 90):
@@ -42,9 +55,6 @@ class _FakeDataClient:
 
 def test_missing_current_nse_equity_is_repaired_via_data_only_kite(monkeypatch):
     monkeypatch.setattr(bulk, "_bhav_symbols", lambda: {"EXISTING"})
-    with bulk._lock:
-        bulk._kite_cache.clear()
-        bulk._yf_cache.clear()
 
     result = bulk.backfill_missing(
         ["EXISTING", "NEWSTOCK"],
@@ -65,9 +75,6 @@ def test_missing_current_nse_equity_is_repaired_via_data_only_kite(monkeypatch):
 
 def test_history_repair_leaves_unresolvable_symbol_missing(monkeypatch):
     monkeypatch.setattr(bulk, "_bhav_symbols", lambda: set())
-    with bulk._lock:
-        bulk._kite_cache.clear()
-        bulk._yf_cache.clear()
 
     result = bulk.backfill_missing(["NOTINMASTER"], client=_FakeDataClient())
 
