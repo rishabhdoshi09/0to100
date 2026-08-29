@@ -114,6 +114,30 @@ def _operator_autonomy_payload() -> dict:
 
 core._autonomy_payload = _operator_autonomy_payload
 
+# terminal_api historically projected only the recommendation rows from scan.json.
+# That projection used to strip the coverage ledger fields, which meant the
+# scanner could persist truthful requested-vs-checked accounting while the actual
+# React/API product still hid it. Preserve the small base projection, then attach
+# only the compact coverage summary and warning from the same canonical saved scan.
+_base_scan_payload = core._scan_payload
+
+
+def _scan_payload_with_coverage() -> dict:
+    projected = dict(_base_scan_payload() or {})
+    try:
+        from product.scan_store import load_scan
+        raw = load_scan() or {}
+    except Exception:
+        raw = {}
+    projected["requested_universe"] = int(raw.get("requested_universe", projected.get("universe_size", 0)) or 0)
+    projected["coverage_state"] = str(raw.get("coverage_state") or "UNKNOWN")
+    projected["coverage_warning"] = str(raw.get("coverage_warning") or "")
+    projected["coverage"] = dict(raw.get("coverage") or {})
+    return projected
+
+
+core._scan_payload = _scan_payload_with_coverage
+
 
 @product.app.get("/api/operator-health")
 def operator_health() -> dict:
@@ -218,6 +242,8 @@ def product_contract() -> dict:
             "trigger": "RUN_SCAN_NOW",
             "worker_running": bool(operations.get("running")),
             "data_available": bool(scan.get("available")),
+            "requested_universe": int(scan.get("requested_universe") or 0),
+            "checked_universe": int(scan.get("universe_size") or 0),
             "coverage_state": str(scan.get("coverage_state") or "UNKNOWN"),
             "coverage": dict(scan.get("coverage") or {}),
         },
