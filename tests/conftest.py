@@ -18,6 +18,7 @@ To run the integration suite explicitly (may be slow / need network):
 the default run, so the network-free suite cannot stall on their import chain.
 """
 import os
+from datetime import datetime, timezone
 
 import pytest
 
@@ -26,7 +27,7 @@ collect_ignore = [] if os.getenv("QT_INTEGRATION") else ["integration"]
 
 
 @pytest.fixture(autouse=True)
-def isolate_mutable_runtime_state(tmp_path_factory, monkeypatch):
+def isolate_mutable_runtime_state(tmp_path_factory, monkeypatch, request):
     """Hermetic suite: never inherit warmed bhavcopy, analog corpus, or paper memory."""
     from data.bhavcopy_store import reset_in_memory_store
     from research.market_memory import reset_analog_corpus_cache
@@ -35,6 +36,23 @@ def isolate_mutable_runtime_state(tmp_path_factory, monkeypatch):
     reset_analog_corpus_cache()
     paper_mem = tmp_path_factory.mktemp("paper_memory") / "paper_memory.json"
     monkeypatch.setenv("QT_PAPER_MEMORY", str(paper_mem))
+
+    # This legacy smart-acquire test intentionally writes an Aug-26 cache and
+    # asserts that the 3-day filings lane is still fresh. Without an explicit
+    # clock it becomes date-dependent and started failing on Aug-29 even though
+    # production correctly treats >72h exchange data as stale. Freeze ONLY that
+    # test; never weaken the live freshness policy to satisfy a calendar test.
+    if request.node.name == "test_smart_acquire_skips_fresh_lanes":
+        import product.due_diligence.acquire as acquire_module
+
+        class _FrozenDateTime(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                fixed = cls(2026, 8, 26, 12, 0, 0, tzinfo=timezone.utc)
+                return fixed if tz is not None else fixed.replace(tzinfo=None)
+
+        monkeypatch.setattr(acquire_module, "datetime", _FrozenDateTime)
+
     yield
     reset_in_memory_store()
     reset_analog_corpus_cache()
