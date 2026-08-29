@@ -1,7 +1,7 @@
 """Canonical, Streamlit-free whole-market scan service.
 
-The autonomy supervisor and the retail Momentum page call this exact service.  UI code may pass a
-progress callback, but this module never imports Streamlit or any ``ui.*`` module.  A provider failure
+The autonomy supervisor and the retail Momentum page call this exact service. UI code may pass a
+progress callback, but this module never imports Streamlit or any ``ui.*`` module. A provider failure
 is reported as failure; a healthy scan with zero setups is a valid result.
 """
 from __future__ import annotations
@@ -95,11 +95,7 @@ def priority_ordered_symbols(
     fno_symbols: set[str] | list[str] | tuple[str, ...] | None = None,
     watchlist: list[str] | tuple[str, ...] | None = None,
 ) -> list[str]:
-    """Scan last-scan setups, recos, SEPA/long-term and F&O names before the rest.
-
-    One walk still covers the full universe. Priority only changes order so
-    category names occupy workers first.
-    """
+    """Scan prior-interest names first, but still walk the entire approved universe."""
     allowed = {str(s).strip().upper() for s in symbols if str(s).strip()}
     seen: set[str] = set()
     ordered: list[str] = []
@@ -151,8 +147,43 @@ def _saved_priority_inputs() -> tuple[Mapping[str, Any] | None, Mapping[str, Any
 
 
 def _default_universe() -> Mapping[str, str]:
-    from data.nse_universe import get_nse_universe_with_names
-    return get_nse_universe_with_names()
+    """Return every current NSE EQ instrument we can prove, never just rows with names.
+
+    The previous implementation used ``get_nse_universe_with_names()`` as the
+    universe itself. That meant a valid symbol could disappear simply because its
+    company-name field was absent. The Kite instrument master is now preferred and
+    filtered by exchange + instrument_type only; names are metadata and fall back to
+    the symbol. If Kite is unavailable, the authoritative symbol list is still used
+    and the name map is joined onto it instead of defining it.
+    """
+    try:
+        from data.instruments import InstrumentManager
+        manager = InstrumentManager()
+        rows = getattr(manager, "_meta_map", {}) or {}
+        out: dict[str, str] = {}
+        for raw_symbol, row in rows.items():
+            if not isinstance(row, Mapping):
+                continue
+            if str(row.get("exchange") or "").strip().upper() != "NSE":
+                continue
+            if str(row.get("instrument_type") or "").strip().upper() != "EQ":
+                continue
+            symbol = str(raw_symbol or row.get("tradingsymbol") or "").strip().upper()
+            if not symbol:
+                continue
+            out[symbol] = str(row.get("name") or symbol).strip() or symbol
+        if len(out) >= 200:
+            return out
+    except Exception:
+        pass
+
+    from data.nse_universe import get_nse_universe, get_nse_universe_with_names
+    symbols = [str(s).strip().upper() for s in (get_nse_universe() or []) if str(s).strip()]
+    try:
+        names = dict(get_nse_universe_with_names() or {})
+    except Exception:
+        names = {}
+    return {symbol: str(names.get(symbol) or symbol) for symbol in symbols}
 
 
 def _default_prefetch(symbols, *, progress=None):
@@ -179,6 +210,15 @@ def _active_snapshot_id() -> str:
         return ""
 
 
+def _coverage_exclusions(summary: Mapping[str, Any] | None) -> tuple[str, ...]:
+    counts = dict((summary or {}).get("reason_counts") or {})
+    return tuple(
+        f"{key}={int(value or 0)}"
+        for key, value in sorted(counts.items())
+        if key not in {"QUALIFIED", "NO_SETUP"} and int(value or 0) > 0
+    )
+
+
 def run_whole_market_scan(
     *,
     universe_provider: Callable[[], Mapping[str, str]] | None = None,
@@ -191,9 +231,9 @@ def run_whole_market_scan(
 ) -> MarketScanReport:
     """Run and optionally persist one deterministic broad-NSE scan.
 
-    Dependency injection keeps this function network-free in tests.  Results are always ordered by
-    the existing canonical payload builder, and F&O availability is overlaid only after the cash
-    universe has been evaluated.
+    A successful run now also persists a stock-by-stock coverage ledger. A symbol
+    may fail to qualify, be excluded by an explicit policy gate, lack enough data,
+    or raise an analysis error, but it may no longer silently disappear.
     """
     universe_provider = universe_provider or _default_universe
     prefetch_fn = prefetch_fn or _default_prefetch
@@ -207,6 +247,7 @@ def run_whole_market_scan(
                                 error_message=str(exc), source_snapshot_id=snapshot_id or "")
     approved_n = len(names)
     symbols = sorted({str(s).strip().upper() for s in names if str(s).strip()})
+    universe_n = len(symbols)
     if not symbols:
         return MarketScanReport(
             DATA_UNAVAILABLE,
@@ -243,6 +284,7 @@ def run_whole_market_scan(
         if progress_callback:
             progress_callback(current, total, **kw)
 
+    audit: dict[str, Any] = {"summary": {}, "ledger": []}
     try:
         # Prefetch warms OHLCV. Do not pass the stock-scan callback — bulk
         # prefetch reports bhavcopy days, not symbols.
@@ -250,14 +292,24 @@ def run_whole_market_scan(
             prefetch_fn(symbols, progress=None)
         except TypeError:
             prefetch_fn(symbols)
+
+        from scan.scan_coverage import observe_scanner
+        with observe_scanner(scanner, symbols) as probe:
+            try:
+                results = list(scanner.scan(symbols, progress=_on_progress, prefetch=False) or [])
+            except TypeError:
+                results = list(scanner.scan(symbols) or [])
+
         try:
-            results = list(scanner.scan(symbols, progress=_on_progress, prefetch=False) or [])
-        except TypeError:
-            results = list(scanner.scan(symbols) or [])
+            from scan.bulk_fetcher import cached_symbols
+            cached = list(cached_symbols() or [])
+        except Exception:
+            cached = []
+        audit = probe.finalize(results, cached=cached, walked_total=walked_total)
     except Exception as exc:
         return MarketScanReport(
             FAILED,
-            universe_size=len(symbols),
+            universe_size=universe_n,
             scanned=0,
             approved_universe=approved_n,
             error_code="SCAN_ERROR",
@@ -265,6 +317,7 @@ def run_whole_market_scan(
             source_snapshot_id=snapshot_id or "",
         )
 
+    coverage = dict(audit.get("summary") or {})
     if not results:
         warm: list[str] = []
         try:
@@ -273,11 +326,18 @@ def run_whole_market_scan(
         except Exception:
             warm = []
         if not warm:
+            if save:
+                try:
+                    from scan.scan_coverage import save_audit
+                    save_audit(audit)
+                except Exception:
+                    pass
             return MarketScanReport(
                 DATA_UNAVAILABLE,
-                universe_size=len(symbols),
+                universe_size=universe_n,
                 scanned=0,
                 approved_universe=approved_n,
+                exclusions=_coverage_exclusions(coverage),
                 error_code="OHLCV_CACHE_EMPTY",
                 error_message="OHLCV cache was empty; the last readable scan was kept.",
                 source_snapshot_id=snapshot_id or _active_snapshot_id(),
@@ -286,7 +346,10 @@ def run_whole_market_scan(
     fno_symbols = set(fno_for_order)
 
     from product.scan_store import build_scan_payload, save_scan
-    scanned_n = walked_total or len(symbols)
+    if coverage.get("scanner_instrumented"):
+        scanned_n = int(coverage.get("checked") or 0)
+    else:
+        scanned_n = walked_total or universe_n
     payload = build_scan_payload(
         names,
         results,
@@ -294,10 +357,22 @@ def run_whole_market_scan(
         scanned=scanned_n,
         approved_universe=approved_n,
     )
+    payload["universe_size"] = universe_n
+    payload["coverage"] = coverage
+    payload["coverage_state"] = str(coverage.get("state") or "UNKNOWN")
+    payload["coverage_warning"] = (
+        "Some approved NSE equities did not receive a full technical evaluation. Open Scan Coverage for exact symbols and reasons."
+        if coverage.get("state") == "DEGRADED" else ""
+    )
     sid = snapshot_id if snapshot_id is not None else _active_snapshot_id()
     payload["source_snapshot_id"] = sid
     payload["scan_status"] = SUCCEEDED
     if save:
+        try:
+            from scan.scan_coverage import save_audit
+            save_audit(audit)
+        except Exception:
+            pass
         save_scan(payload)
         try:
             from product.sepa_setup import persist_public_best_setups
@@ -339,7 +414,8 @@ def run_whole_market_scan(
         status=status,
         payload=payload,
         approved_universe=approved_n,
-        universe_size=scanned_n,
+        universe_size=universe_n,
         scanned=scanned_n,
+        exclusions=_coverage_exclusions(coverage),
         source_snapshot_id=sid,
     )
