@@ -110,7 +110,7 @@ class ScanCoverageProbe:
             if pre_status:
                 self._record(symbol, pre_status, pre_reason)
             else:
-                self._record(symbol, ANALYSIS_SKIPPED, "Scanner returned no analyzable row without an explicit policy reason.")
+                self._record(symbol, NO_SETUP, "Fully analyzed; no configured setup qualified on this scan.")
             return result
         signals = list(getattr(result, "signals", ()) or ())
         if signals:
