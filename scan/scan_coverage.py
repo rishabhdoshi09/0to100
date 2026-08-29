@@ -1,13 +1,16 @@
-"""Truthful stock-by-stock coverage ledger for the canonical market scan.
+"""Truthful stock-by-stock coverage contract for the canonical market scan.
 
 The scanner intentionally returns only rows that have at least one setup. That is
 useful for ranking but terrible for operator trust: a symbol with missing history,
 a policy exclusion, a clean "no setup" result, or an analysis exception used to
 all disappear from the visible output.
 
-This module instruments the existing UnifiedScanner *without creating a second
-scanner*. It records what happened to each requested symbol while the canonical
-``_analyze`` method still does the work, then persists a compact audit ledger.
+This module does two things around the EXISTING UnifiedScanner, without creating a
+second scanner:
+  1. makes one bounded data-only Kite repair attempt for requested NSE EQ symbols
+     still absent after the official whole-market history preparation;
+  2. records what happened to each requested symbol while the canonical `_analyze`
+     method remains the decision-maker.
 """
 from __future__ import annotations
 
@@ -78,9 +81,10 @@ def _precheck_reason(df) -> tuple[str, str]:
 
 
 class ScanCoverageProbe:
-    def __init__(self, symbols: Iterable[str], *, instrumented: bool):
+    def __init__(self, symbols: Iterable[str], *, instrumented: bool, history_repair: dict | None = None):
         self.requested = [_symbol(s) for s in symbols if _symbol(s)]
         self.instrumented = bool(instrumented)
+        self.history_repair = dict(history_repair or {})
         self._lock = threading.Lock()
         self._rows: dict[str, dict[str, Any]] = {}
 
@@ -135,7 +139,7 @@ class ScanCoverageProbe:
                 rows[sym] = {
                     "symbol": sym,
                     "status": NO_OHLCV,
-                    "reason": "Requested universe symbol had no cached OHLCV after prefetch.",
+                    "reason": "Requested universe symbol still had no OHLCV after official-store preparation and targeted repair.",
                 }
             elif sym in qualified:
                 rows[sym] = {
@@ -187,6 +191,7 @@ class ScanCoverageProbe:
             "accounted_pct": accounted_pct,
             "scanner_instrumented": self.instrumented,
             "walked_total_reported": int(walked_total or 0),
+            "history_repair": self.history_repair,
             "reason_counts": dict(sorted(counts.items())),
         }
         return {
@@ -199,10 +204,23 @@ class ScanCoverageProbe:
 
 @contextmanager
 def observe_scanner(scanner, symbols: Iterable[str]):
-    """Temporarily wrap the canonical scanner's existing ``_analyze`` method."""
+    """Repair missing requested history once, then observe canonical `_analyze`."""
+    requested = [_symbol(s) for s in symbols if _symbol(s)]
+    try:
+        from scan.bulk_fetcher import backfill_missing
+        history_repair = backfill_missing(requested)
+    except Exception as exc:
+        history_repair = {
+            "requested": len(requested),
+            "attempted": 0,
+            "loaded": 0,
+            "error_code": "HISTORY_REPAIR_ERROR",
+            "error": f"{type(exc).__name__}: {exc}",
+        }
+
     original = getattr(scanner, "_analyze", None)
     instrumented = callable(original)
-    probe = ScanCoverageProbe(symbols, instrumented=instrumented)
+    probe = ScanCoverageProbe(requested, instrumented=instrumented, history_repair=history_repair)
     if not instrumented:
         yield probe
         return
