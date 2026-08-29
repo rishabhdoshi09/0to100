@@ -130,16 +130,71 @@ core._scan_payload = _scan_payload_with_coverage
 
 
 def _attach_authority(payload: dict) -> dict:
-    """Decorate recommendations with explanatory evidence; never change ranking/gates."""
-    from product.evidence_authority import build_authority_contract, evidence_scorecard
+    """Decorate recommendations with explanatory evidence; never change ranking/gates.
+
+    Existing React cards already render ``evidence`` and ``evidence_coverage``.
+    Feed the truthful scorecard into those fields so the authority layer is visible
+    immediately without creating a second recommendation or money-path decision.
+    """
+    from product.evidence_authority import (
+        build_authority_contract,
+        build_decision_journal,
+        evidence_scorecard,
+    )
 
     for category in payload.get("categories") or []:
         if not isinstance(category, dict):
             continue
         for card in category.get("cards") or []:
-            if isinstance(card, dict):
-                card["evidence_scorecard"] = evidence_scorecard(card)
-    payload["authority"] = build_authority_contract(core._scan_payload())
+            if not isinstance(card, dict):
+                continue
+            scorecard = evidence_scorecard(card)
+            card["evidence_scorecard"] = scorecard
+            card["evidence_coverage"] = scorecard.get("coverage_pct")
+            score = scorecard.get("score")
+            quality = str(scorecard.get("quality") or "THIN").replace("_", " ").title()
+            card["evidence_grade"] = card.get("evidence")
+            card["evidence"] = (
+                f"{float(score):.0f}/100 · {quality}" if score is not None
+                else f"Unscored · {quality}"
+            )
+
+    authority = build_authority_contract(core._scan_payload())
+    journal = build_decision_journal(limit=12)
+    payload["authority"] = authority
+    payload["decision_journal"] = journal
+
+    cov = dict(authority.get("scan_coverage") or {})
+    requested = int(cov.get("requested") or 0)
+    checked = int(cov.get("checked") or 0)
+    qualified = int(cov.get("qualified") or 0)
+    no_setup = int(cov.get("no_setup") or 0)
+    data_unavailable = int(cov.get("data_unavailable") or 0)
+    coverage_line = (
+        f"Coverage proof: requested {requested:,} NSE EQ · checked {checked:,} · "
+        f"qualified {qualified:,} · no setup {no_setup:,} · data unavailable {data_unavailable:,}."
+        if requested else
+        "Coverage proof will appear after the first whole-market scan."
+    )
+    payload["cmp_note"] = f"{coverage_line} {str(payload.get('cmp_note') or '')}".strip()
+
+    perf = dict(authority.get("performance") or {})
+    sample = int(perf.get("sample_size") or 0)
+    if sample:
+        hit = perf.get("hit_rate_pct")
+        expectancy = perf.get("expectancy_pct")
+        perf_line = (
+            f"Tracked outcome journal: n={sample}"
+            + (f" · hit rate {float(hit):.1f}%" if hit is not None else "")
+            + (f" · expectancy {float(expectancy):+.2f}%" if expectancy is not None else "")
+            + " · paper/tracked research outcomes, not broker-verified live P&L."
+        )
+    else:
+        perf_line = "Tracked outcome journal has no settled sample yet; QuantTerm makes no performance claim."
+    payload["methods_note"] = (
+        f"{authority.get('principle')} {coverage_line} {perf_line} "
+        f"{authority.get('score_semantics')} {str(payload.get('methods_note') or '')}"
+    ).strip()
     return payload
 
 
