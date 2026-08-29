@@ -29,6 +29,13 @@ def test_parallel_api_recovers_market_ops_through_bounded_base_path(monkeypatch)
     monkeypatch.setattr(core, "_ops_runtime_payload", runtime)
     monkeypatch.setattr(parallel, "pid_is_alive", lambda pid: int(pid or 0) == 15168)
     monkeypatch.setattr(parallel.time, "sleep", lambda _seconds: None)
+    # Never start a real subprocess in the network-free unit suite. This test is
+    # about the strict wrapper's hand-off contract, not process creation itself.
+    monkeypatch.setattr(
+        parallel,
+        "_base_ensure_ops_worker",
+        lambda wait=True: {"running": True, "worker_pid": 15168},
+    )
 
     observed = parallel._ensure_ops_worker_strict(wait=True)
     assert observed["worker_pid"] == 15168
@@ -41,6 +48,12 @@ def test_user_control_fails_loudly_when_worker_recovery_still_unhealthy(monkeypa
 
     monkeypatch.setattr(core, "_ops_runtime_payload", lambda: {"running": False, "worker_pid": 15044})
     monkeypatch.setattr(parallel, "pid_is_alive", lambda _pid: False)
+    monkeypatch.setattr(
+        parallel,
+        "_base_ensure_ops_worker",
+        lambda wait=True: {"running": False, "worker_pid": None},
+    )
+    monkeypatch.setattr(parallel.time, "sleep", lambda _seconds: None)
 
     with pytest.raises(RuntimeError, match="launcher watchdog owns recovery"):
         parallel._ensure_ops_worker_strict(wait=False)
