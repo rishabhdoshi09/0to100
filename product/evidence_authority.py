@@ -23,8 +23,6 @@ from product.reco_methods import METHOD_WEIGHTS
 
 ROOT = Path(__file__).resolve().parents[1]
 
-# Component maxima sum to 100 and are deliberately simple enough for an operator
-# to audit. Within each component the already-existing method weights are used.
 _COMPONENTS: tuple[tuple[str, str, float, tuple[str, ...]], ...] = (
     ("price_structure", "Price & structure", 30.0, ("tape", "sepa", "trend", "rs")),
     ("fundamentals", "Fundamentals", 20.0, ("funds",)),
@@ -60,12 +58,22 @@ def evidence_scorecard(card: Mapping[str, Any]) -> dict[str, Any]:
     for cid, label, maximum, member_ids in _COMPONENTS:
         members = [by_id[mid] for mid in member_ids if mid in by_id]
         possible_method_weight = sum(float(METHOD_WEIGHTS.get(mid, 0.0)) for mid in member_ids)
-        known = [m for m in members if str(m.get("status") or "unknown") != "unknown" and _f(m.get("points")) is not None]
-        known_method_weight = sum(float(METHOD_WEIGHTS.get(str(m.get("id") or ""), 0.0)) for m in known)
-        component_coverage = (known_method_weight / possible_method_weight * 100.0) if possible_method_weight else 0.0
+        known = [
+            m for m in members
+            if str(m.get("status") or "unknown") != "unknown"
+            and _f(m.get("points")) is not None
+        ]
+        known_method_weight = sum(
+            float(METHOD_WEIGHTS.get(str(m.get("id") or ""), 0.0)) for m in known
+        )
+        component_coverage = (
+            known_method_weight / possible_method_weight * 100.0
+            if possible_method_weight else 0.0
+        )
         if known_method_weight > 0:
             normalized = sum(
-                float(METHOD_WEIGHTS.get(str(m.get("id") or ""), 0.0)) * max(0.0, min(100.0, float(_f(m.get("points")) or 0.0)))
+                float(METHOD_WEIGHTS.get(str(m.get("id") or ""), 0.0))
+                * max(0.0, min(100.0, float(_f(m.get("points")) or 0.0)))
                 for m in known
             ) / known_method_weight
             earned_known = maximum * normalized / 100.0
@@ -107,8 +115,13 @@ def evidence_scorecard(card: Mapping[str, Any]) -> dict[str, Any]:
         })
 
     total_capacity = sum(item[2] for item in _COMPONENTS)
-    coverage_pct = round((total_known_capacity / total_capacity * 100.0) if total_capacity else 0.0, 1)
-    score = round((total_weighted_score / total_known_capacity * 100.0) if total_known_capacity else 0.0, 1) if total_known_capacity else None
+    coverage_pct = round(
+        (total_known_capacity / total_capacity * 100.0) if total_capacity else 0.0, 1
+    )
+    score = (
+        round(total_weighted_score / total_known_capacity * 100.0, 1)
+        if total_known_capacity else None
+    )
     passed = sum(1 for m in methods if str(m.get("status")) == "pass")
     failed = sum(1 for m in methods if str(m.get("status")) == "fail")
     unknown = max(0, len(METHOD_WEIGHTS) - passed - failed)
@@ -130,7 +143,10 @@ def evidence_scorecard(card: Mapping[str, Any]) -> dict[str, Any]:
         "market_support": card.get("market_support"),
         "entry_state": card.get("entry_state"),
         "blockers": list(card.get("blockers") or []),
-        "disclaimer": "Evidence Score is not a win probability and never overrides entry, risk, portfolio, or live-safety gates.",
+        "disclaimer": (
+            "Evidence Score is not a win probability and never overrides entry, "
+            "risk, portfolio, or live-safety gates."
+        ),
     }
 
 
@@ -165,6 +181,7 @@ def _recommendation_history(symbol: str = "", *, limit: int = 80) -> list[dict[s
             sym = str(raw.get("symbol") or "").upper()
             if not sym or (want and sym != want):
                 continue
+            frozen = dict(raw.get("evidence_scorecard") or {})
             rows.append({
                 "kind": "SURFACED",
                 "symbol": sym,
@@ -178,6 +195,18 @@ def _recommendation_history(symbol: str = "", *, limit: int = 80) -> list[dict[s
                 "family_confirms": raw.get("family_confirms"),
                 "families": list(raw.get("families") or []),
                 "conflicts": list(raw.get("conflicts") or []),
+                "entry": raw.get("entry"),
+                "stop": raw.get("stop"),
+                "target": raw.get("target"),
+                "cmp": raw.get("cmp"),
+                "evidence_score": frozen.get("score"),
+                "evidence_coverage_pct": frozen.get("coverage_pct"),
+                "evidence_quality": frozen.get("quality"),
+                "evidence_passed": frozen.get("passed"),
+                "evidence_failed": frozen.get("failed"),
+                "evidence_unknown": frozen.get("unknown"),
+                "evidence_components": list(frozen.get("components") or []),
+                "score_frozen_at_decision": bool(frozen),
                 "source": "recommendation_ledger",
             })
             if len(rows) >= limit:
@@ -239,7 +268,10 @@ def performance_summary() -> dict[str, Any]:
     wins = int(stats.get("wins") or 0)
     losses = int(stats.get("losses") or 0)
     closed = wins + losses
-    settled = [r for r in recent if r.get("worked") in (0, 1) and _f(r.get("outcome_pct")) is not None]
+    settled = [
+        r for r in recent
+        if r.get("worked") in (0, 1) and _f(r.get("outcome_pct")) is not None
+    ]
     settled.sort(key=lambda r: str(r.get("logged_at") or ""))
     returns = [float(r["outcome_pct"]) for r in settled]
     return {
@@ -255,9 +287,16 @@ def performance_summary() -> dict[str, Any]:
         "avg_loss_pct": _f(stats.get("avg_loss_pct")) if losses else None,
         "max_drawdown_pct": _max_drawdown_from_returns(returns),
         "benchmark_comparison": None,
-        "benchmark_note": "Unavailable until a publication-dated benchmark series is attached to the same settled sample.",
+        "benchmark_note": (
+            "Unavailable until a publication-dated benchmark series is attached "
+            "to the same settled sample."
+        ),
         "sufficient_sample": closed >= 30,
-        "sample_note": "Descriptive only — fewer than 30 settled outcomes." if 0 < closed < 30 else ("No settled outcomes yet." if closed == 0 else "At least 30 settled outcomes available."),
+        "sample_note": (
+            "Descriptive only — fewer than 30 settled outcomes."
+            if 0 < closed < 30 else
+            ("No settled outcomes yet." if closed == 0 else "At least 30 settled outcomes available.")
+        ),
     }
 
 
@@ -266,7 +305,7 @@ def build_decision_journal(*, symbol: str = "", limit: int = 120) -> dict[str, A
     reco_rows = _recommendation_history(symbol, limit=limit)
     combined = (reco_rows + scan_rows)[: max(1, min(int(limit or 120), 1000))]
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "symbol": str(symbol or "").strip().upper(),
         "scan_summary": scan_summary,
@@ -276,7 +315,11 @@ def build_decision_journal(*, symbol: str = "", limit: int = 120) -> dict[str, A
             "surfaced_history": len(reco_rows),
             "latest_scan_decisions": len(scan_rows),
         },
-        "note": "The journal shows both surfaced ideas and the latest scan's rejected, excluded, or unavailable names. Missing evidence remains missing.",
+        "note": (
+            "Surfaced ideas preserve their decision-time score/coverage when the "
+            "ledger version supports it. Latest scan rows include rejected, excluded, "
+            "or unavailable names. Missing evidence remains missing."
+        ),
     }
 
 
@@ -287,7 +330,10 @@ def build_authority_contract(scan_payload: Mapping[str, Any] | None = None) -> d
         "schema_version": 1,
         "product": "QuantTerm",
         "positioning": "Evidence-Driven Market Intelligence for Retail Traders",
-        "principle": "QuantTerm does not predict stocks. It discovers, tests, ranks, and tracks opportunities using evidence.",
+        "principle": (
+            "QuantTerm does not predict stocks. It discovers, tests, ranks, and "
+            "tracks opportunities using evidence."
+        ),
         "methodology": [
             "Build the current NSE cash-equity universe",
             "Verify data coverage and freshness",
@@ -312,6 +358,12 @@ def build_authority_contract(scan_payload: Mapping[str, Any] | None = None) -> d
             "scanned_at": scan.get("scanned_at"),
         },
         "performance": performance_summary(),
-        "score_semantics": "Evidence Score summarizes known research checks. Unknown checks do not become zero; coverage is reported separately. It is not a win probability.",
-        "regulatory_language": "Market intelligence and research tooling; no claim of SEBI approval, certification, or regulatory endorsement.",
+        "score_semantics": (
+            "Evidence Score summarizes known research checks. Unknown checks do not "
+            "become zero; coverage is reported separately. It is not a win probability."
+        ),
+        "regulatory_language": (
+            "Market intelligence and research tooling; no claim of SEBI approval, "
+            "certification, or regulatory endorsement."
+        ),
     }
