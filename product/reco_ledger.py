@@ -1,7 +1,9 @@
 """Append-only recommendation evidence ledger.
 
-Stores enough to answer, months later: why did QuantTerm recommend this
-name at that timestamp? Missing fields stay empty. Never invents outcomes.
+Stores enough to answer, months later: why did QuantTerm surface this name at
+that timestamp? Missing fields stay empty. Never invents outcomes. The evidence
+score snapshot is frozen at decision time so later method/data changes cannot
+rewrite what the system actually knew then.
 """
 from __future__ import annotations
 
@@ -12,7 +14,45 @@ from typing import Any, Mapping, Sequence
 
 ROOT = Path(__file__).resolve().parents[1]
 LEDGER_PATH = ROOT / "logs" / "product" / "reco_ledger.jsonl"
-LEDGER_VERSION = 1
+LEDGER_VERSION = 2
+
+
+def _score_snapshot(card: Mapping[str, Any]) -> dict[str, Any]:
+    try:
+        from product.evidence_authority import evidence_scorecard
+        score = evidence_scorecard(card)
+    except Exception:
+        return {
+            "score": None,
+            "coverage_pct": None,
+            "quality": "UNAVAILABLE",
+            "passed": None,
+            "failed": None,
+            "unknown": None,
+            "components": [],
+        }
+    components = []
+    for row in score.get("components") or []:
+        if not isinstance(row, Mapping):
+            continue
+        components.append({
+            "id": row.get("id"),
+            "label": row.get("label"),
+            "score": row.get("score"),
+            "coverage_pct": row.get("coverage_pct"),
+            "passed": row.get("passed"),
+            "failed": row.get("failed"),
+            "unknown": row.get("unknown"),
+        })
+    return {
+        "score": score.get("score"),
+        "coverage_pct": score.get("coverage_pct"),
+        "quality": score.get("quality"),
+        "passed": score.get("passed"),
+        "failed": score.get("failed"),
+        "unknown": score.get("unknown"),
+        "components": components,
+    }
 
 
 def _compact_card(card: Mapping[str, Any]) -> dict[str, Any]:
@@ -44,6 +84,11 @@ def _compact_card(card: Mapping[str, Any]) -> dict[str, Any]:
         "scan_scanned_at": card.get("scan_scanned_at"),
         "category_id": card.get("category_id"),
         "action_badge": card.get("action_badge"),
+        "entry": card.get("entry"),
+        "stop": card.get("stop"),
+        "target": card.get("target"),
+        "cmp": card.get("cmp"),
+        "evidence_scorecard": _score_snapshot(card),
     }
 
 
