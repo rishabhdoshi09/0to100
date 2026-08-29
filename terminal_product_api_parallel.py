@@ -129,12 +129,31 @@ def _scan_payload_with_coverage() -> dict:
 core._scan_payload = _scan_payload_with_coverage
 
 
+def _component_line(scorecard: dict) -> str:
+    bits: list[str] = []
+    for component in scorecard.get("components") or []:
+        if not isinstance(component, dict):
+            continue
+        label = str(component.get("label") or component.get("id") or "Evidence")
+        score = component.get("score")
+        coverage = component.get("coverage_pct")
+        if score is None:
+            bits.append(f"{label}: unknown")
+        else:
+            bits.append(
+                f"{label}: {float(score):.0f}/100"
+                + (f" @ {float(coverage):.0f}% coverage" if coverage is not None else "")
+            )
+    return " · ".join(bits)
+
+
 def _attach_authority(payload: dict) -> dict:
     """Decorate recommendations with explanatory evidence; never change ranking/gates.
 
     Existing React cards already render ``evidence`` and ``evidence_coverage``.
-    Feed the truthful scorecard into those fields so the authority layer is visible
-    immediately without creating a second recommendation or money-path decision.
+    The existing See Evidence panel renders its provenance paragraph, so the five
+    component scores are injected there as an explanation only. No authority field
+    is read by the recommendation selection or money path.
     """
     from product.evidence_authority import (
         build_authority_contract,
@@ -158,6 +177,24 @@ def _attach_authority(payload: dict) -> dict:
                 f"{float(score):.0f}/100 · {quality}" if score is not None
                 else f"Unscored · {quality}"
             )
+            panel = dict(card.get("evidence_panel") or {})
+            old_provenance = str(panel.get("provenance") or "").strip()
+            components = _component_line(scorecard)
+            headline = (
+                f"QuantTerm Evidence Score {float(score):.0f}/100 · "
+                f"coverage {float(scorecard.get('coverage_pct') or 0):.0f}%"
+                if score is not None else
+                f"QuantTerm Evidence Score unscored · coverage {float(scorecard.get('coverage_pct') or 0):.0f}%"
+            )
+            panel["provenance"] = " ".join(
+                part for part in (
+                    headline + ".",
+                    ("Components — " + components + ".") if components else "",
+                    "Unknown evidence remains unknown; this score is not a win probability.",
+                    old_provenance,
+                ) if part
+            )
+            card["evidence_panel"] = panel
 
     authority = build_authority_contract(core._scan_payload())
     journal = build_decision_journal(limit=12)
@@ -292,6 +329,15 @@ def _registered_paths() -> set[str]:
     }
 
 
+def _all_declared_routes_registered(item: dict) -> bool:
+    route_flags = [
+        bool(value)
+        for key, value in item.items()
+        if key.endswith("route_registered")
+    ]
+    return bool(route_flags) and all(route_flags)
+
+
 @product.app.get("/api/product-contract")
 def product_contract() -> dict:
     """Machine-readable proof that the primary desk surfaces are actually wired."""
@@ -334,15 +380,12 @@ def product_contract() -> dict:
             "supervisor_running": bool(autonomy.get("running")),
         },
     }
-    wired = all(
-        bool(item.get("route_registered", item.get("operator_health_route_registered", False)))
-        for item in checks.values()
-    )
+    wired = all(_all_declared_routes_registered(item) for item in checks.values())
     return {
         "wired": wired,
         "checks": checks,
         "note": (
-            "wired=true proves the canonical API paths and triggers are registered. "
+            "wired=true proves every declared canonical route for each primary capability is registered. "
             "Data availability and provider health are reported separately and are never fabricated."
         ),
     }
