@@ -22,8 +22,6 @@ from product.operator_health import enrich_autonomy_payload
 
 # Keep terminal_api's canonical control registry untouched. One whole-market scan
 # fills all setup families; the UI's separate funds action uses LONG_TERM_REFRESH.
-# Mutating this shared dict at import time made terminal_api behavior depend on
-# test/import order and reintroduced a second long-term scan path.
 _base_ensure_ops_worker = core._ensure_ops_worker
 
 
@@ -99,12 +97,8 @@ def _ensure_ops_worker_strict(*, wait: bool = True) -> dict:
     )
 
 
-# Startup and the base control endpoint resolve this global at runtime.
 core._ensure_ops_worker = _ensure_ops_worker_strict
 
-# The durable scheduler ledger contains historical failures by design. Enrich
-# only the product-facing projection so the dashboard answers "what is wrong
-# now?" while retaining the full audit rows under jobs_recent.
 _base_autonomy_payload = core._autonomy_payload
 
 
@@ -114,11 +108,7 @@ def _operator_autonomy_payload() -> dict:
 
 core._autonomy_payload = _operator_autonomy_payload
 
-# terminal_api historically projected only the recommendation rows from scan.json.
-# That projection used to strip the coverage ledger fields, which meant the
-# scanner could persist truthful requested-vs-checked accounting while the actual
-# React/API product still hid it. Preserve the small base projection, then attach
-# only the compact coverage summary and warning from the same canonical saved scan.
+# Preserve stock-by-stock coverage accounting through the compact dashboard API.
 _base_scan_payload = core._scan_payload
 
 
@@ -139,6 +129,20 @@ def _scan_payload_with_coverage() -> dict:
 core._scan_payload = _scan_payload_with_coverage
 
 
+def _attach_authority(payload: dict) -> dict:
+    """Decorate recommendations with explanatory evidence; never change ranking/gates."""
+    from product.evidence_authority import build_authority_contract, evidence_scorecard
+
+    for category in payload.get("categories") or []:
+        if not isinstance(category, dict):
+            continue
+        for card in category.get("cards") or []:
+            if isinstance(card, dict):
+                card["evidence_scorecard"] = evidence_scorecard(card)
+    payload["authority"] = build_authority_contract(core._scan_payload())
+    return payload
+
+
 @product.app.get("/api/operator-health")
 def operator_health() -> dict:
     """Current-session health plus historical-ledger separation for diagnostics."""
@@ -147,7 +151,7 @@ def operator_health() -> dict:
 
 @product.app.get("/api/recommendations-workspace")
 def recommendations_workspace() -> dict:
-    """Canonical Recommendations projection from the saved scan and long-term evidence."""
+    """Canonical Recommendations projection plus read-only evidence explanations."""
     from product.recommendations_workspace import (
         build_recommendations_workspace,
         slim_workspace_for_desk,
@@ -161,7 +165,21 @@ def recommendations_workspace() -> dict:
         deep_confirm=False,
         persist_ledger=False,
     )
-    return slim_workspace_for_desk(payload)
+    return slim_workspace_for_desk(_attach_authority(payload))
+
+
+@product.app.get("/api/evidence-authority")
+def evidence_authority() -> dict:
+    """Methodology, scan coverage, and measured outcome performance."""
+    from product.evidence_authority import build_authority_contract
+    return build_authority_contract(core._scan_payload())
+
+
+@product.app.get("/api/decision-journal")
+def decision_journal(symbol: str = "", limit: int = 120) -> dict:
+    """Public audit trail for surfaced and non-surfaced market decisions."""
+    from product.evidence_authority import build_decision_journal
+    return build_decision_journal(symbol=symbol, limit=max(1, min(int(limit or 120), 1000)))
 
 
 @product.app.get("/api/market-reports-workspace")
@@ -175,9 +193,6 @@ def market_reports_workspace() -> dict:
         scan_payload=core._scan_payload(),
         rebuild=False,
     )
-    # Some desk-note implementations can provide generic teaching rows even when
-    # both market scan and sourced news are absent. The route must still explain
-    # that this is an incomplete report rather than leaving an empty status line.
     if payload.get("needs_refresh") and not payload.get("empty_detail"):
         payload["empty_detail"] = (
             "Today's sourced market report is incomplete. Missing scan/news evidence "
@@ -188,12 +203,7 @@ def market_reports_workspace() -> dict:
 
 @product.app.get("/api/scan-audit")
 def scan_audit(symbol: str = "", limit: int = 250) -> dict:
-    """Explain exactly what happened to each symbol in the latest market scan.
-
-    This endpoint is deliberately independent of recommendation rows: a stock that
-    had no setup, lacked history, hit a policy exclusion, or errored remains visible
-    here instead of disappearing from the product.
-    """
+    """Explain exactly what happened to each symbol in the latest market scan."""
     from scan.scan_coverage import load_audit, lookup_symbol
 
     payload = load_audit()
@@ -249,6 +259,8 @@ def product_contract() -> dict:
         },
         "recommendations": {
             "route_registered": "/api/recommendations-workspace" in paths,
+            "authority_route_registered": "/api/evidence-authority" in paths,
+            "journal_route_registered": "/api/decision-journal" in paths,
             "depends_on": ["market_scan", "long_term_scan"],
             "data_available": bool(scan.get("available") or long_term.get("available")),
         },
