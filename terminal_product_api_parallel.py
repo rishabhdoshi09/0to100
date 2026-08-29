@@ -45,12 +45,7 @@ def _market_ops_command(pid: int) -> str:
 
 
 def _stop_stale_owner(runtime: dict) -> bool:
-    """Terminate only a verified stale market-ops process.
-
-    A stale runtime file alone is never enough to kill an arbitrary PID. The
-    command line must still identify ``operations.market_ops``. TERM is bounded;
-    KILL is the final cleanup only when the same verified process survives.
-    """
+    """Terminate only a verified stale market-ops process."""
     try:
         pid = int(runtime.get("worker_pid") or 0)
     except (TypeError, ValueError):
@@ -78,13 +73,7 @@ def _stop_stale_owner(runtime: dict) -> bool:
 
 
 def _ensure_ops_worker_strict(*, wait: bool = True) -> dict:
-    """Return only when Market Operations is healthy or fail loudly.
-
-    Healthy launcher ownership is reused. Unhealthy ownership is verified and
-    cleaned up, then the existing bounded base recovery starts/reuses exactly the
-    canonical ``operations.market_ops`` worker. The user never receives a ghost
-    ``accepted: true`` solely because a queue row was written.
-    """
+    """Return only when Market Operations is healthy or fail loudly."""
     runtime = _healthy_runtime()
     if runtime.get("running") and pid_is_alive(runtime.get("worker_pid")):
         return runtime
@@ -94,7 +83,6 @@ def _ensure_ops_worker_strict(*, wait: bool = True) -> dict:
     if recovered.get("running") and pid_is_alive(recovered.get("worker_pid")):
         return recovered
 
-    # One final bounded observation covers the launcher restarting concurrently.
     deadline = time.time() + (1.5 if wait else 0.5)
     while time.time() < deadline:
         time.sleep(0.1)
@@ -132,13 +120,7 @@ def operator_health() -> dict:
 
 @product.app.get("/api/recommendations-workspace")
 def recommendations_workspace() -> dict:
-    """Canonical Recommendations projection from the saved scan and long-term evidence.
-
-    This route intentionally performs no network crawl and no hidden scan. The React
-    page owns the user-visible scan trigger; this GET only projects the latest durable
-    evidence into the multi-method recommendation desk. Empty high-conviction is a
-    valid result, not an exception.
-    """
+    """Canonical Recommendations projection from the saved scan and long-term evidence."""
     from product.recommendations_workspace import (
         build_recommendations_workspace,
         slim_workspace_for_desk,
@@ -157,12 +139,7 @@ def recommendations_workspace() -> dict:
 
 @product.app.get("/api/market-reports-workspace")
 def market_reports_workspace() -> dict:
-    """Canonical read projection for Market Reports.
-
-    Missing/stale report state is returned honestly through ``needs_refresh``; the
-    frontend then queues the durable MARKET_REPORT operation. This GET never fakes a
-    headline and never performs an unbounded network refresh in the request thread.
-    """
+    """Canonical read projection for Market Reports."""
     from product.recommendations_workspace import build_market_reports_workspace
 
     return build_market_reports_workspace(
@@ -171,6 +148,39 @@ def market_reports_workspace() -> dict:
         scan_payload=core._scan_payload(),
         rebuild=False,
     )
+
+
+@product.app.get("/api/scan-audit")
+def scan_audit(symbol: str = "", limit: int = 250) -> dict:
+    """Explain exactly what happened to each symbol in the latest market scan.
+
+    This endpoint is deliberately independent of recommendation rows: a stock that
+    had no setup, lacked history, hit a policy exclusion, or errored remains visible
+    here instead of disappearing from the product.
+    """
+    from scan.scan_coverage import load_audit, lookup_symbol
+
+    payload = load_audit()
+    summary = dict(payload.get("summary") or {})
+    clean = str(symbol or "").strip().upper()
+    if clean:
+        row = lookup_symbol(clean, payload)
+        return {
+            "generated_at": payload.get("generated_at"),
+            "summary": summary,
+            "symbol": clean,
+            "found": row is not None,
+            "result": row,
+        }
+    ledger = list(payload.get("ledger") or [])
+    cap = max(1, min(int(limit or 250), 2500))
+    return {
+        "generated_at": payload.get("generated_at"),
+        "summary": summary,
+        "total": len(ledger),
+        "rows": ledger[:cap],
+        "truncated": len(ledger) > cap,
+    }
 
 
 def _registered_paths() -> set[str]:
@@ -183,11 +193,7 @@ def _registered_paths() -> set[str]:
 
 @product.app.get("/api/product-contract")
 def product_contract() -> dict:
-    """Machine-readable proof that the primary desk surfaces are actually wired.
-
-    This is a wiring/availability contract, not a claim that market data exists. It
-    distinguishes route registration, trigger availability and current durable data.
-    """
+    """Machine-readable proof that the primary desk surfaces are actually wired."""
     paths = _registered_paths()
     scan = core._scan_payload()
     long_term = core._long_term_payload()
@@ -196,9 +202,12 @@ def product_contract() -> dict:
     checks = {
         "market_scan": {
             "route_registered": "/api/controls/{control_name}" in paths,
+            "audit_route_registered": "/api/scan-audit" in paths,
             "trigger": "RUN_SCAN_NOW",
             "worker_running": bool(operations.get("running")),
             "data_available": bool(scan.get("available")),
+            "coverage_state": str(scan.get("coverage_state") or "UNKNOWN"),
+            "coverage": dict(scan.get("coverage") or {}),
         },
         "recommendations": {
             "route_registered": "/api/recommendations-workspace" in paths,
