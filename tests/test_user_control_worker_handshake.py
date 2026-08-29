@@ -13,9 +13,11 @@ def test_parallel_api_never_silently_accepts_without_market_ops_worker():
     assert "core._ensure_ops_worker = _ensure_ops_worker_strict" in src
 
 
-def test_parallel_api_kills_stale_worker_ownership_before_replacement():
+def test_parallel_api_kills_only_verified_stale_worker_before_replacement():
     src = (ROOT / "terminal_product_api_parallel.py").read_text(encoding="utf-8")
     assert "_stop_stale_owner" in src
+    assert "operations.market_ops" in src
     assert "signal.SIGTERM" in src
     assert "signal.SIGKILL" in src
-    assert 'core._OPERATION_CONTROLS["RUN_LONG_TERM_SCAN_NOW"] = "LONG_TERM_SCAN"' in src
+    # Product import order must not silently create a second long-term scanner path.
+    assert 'core._OPERATION_CONTROLS["RUN_LONG_TERM_SCAN_NOW"] = "LONG_TERM_SCAN"' not in src
