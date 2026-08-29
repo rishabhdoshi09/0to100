@@ -25,9 +25,14 @@ except Exception:
 class MarketScanReport:
     status: str
     payload: dict = field(default_factory=dict)
+    # Backward-compatible meaning: stocks that actually reached a scanner decision
+    # (technical evaluation or explicit scanner policy gate).
     universe_size: int = 0
     scanned: int = 0
+    # Raw approved rows before symbol normalization/deduplication.
     approved_universe: int = 0
+    # Distinct NSE symbols requested for this run, including data gaps.
+    requested_universe: int = 0
     exclusions: tuple = ()
     source_snapshot_id: str = ""
     error_code: str = ""
@@ -42,6 +47,7 @@ class MarketScanReport:
             "status": self.status,
             "payload": self.payload,
             "approved_universe": self.approved_universe,
+            "requested_universe": self.requested_universe,
             "universe_size": self.universe_size,
             "scanned": self.scanned,
             "exclusions": list(self.exclusions),
@@ -231,9 +237,9 @@ def run_whole_market_scan(
 ) -> MarketScanReport:
     """Run and optionally persist one deterministic broad-NSE scan.
 
-    A successful run now also persists a stock-by-stock coverage ledger. A symbol
-    may fail to qualify, be excluded by an explicit policy gate, lack enough data,
-    or raise an analysis error, but it may no longer silently disappear.
+    A successful run also persists a stock-by-stock coverage ledger. A symbol may
+    fail to qualify, be excluded by an explicit policy gate, lack enough data, or
+    raise an analysis error, but it may no longer silently disappear.
     """
     universe_provider = universe_provider or _default_universe
     prefetch_fn = prefetch_fn or _default_prefetch
@@ -247,13 +253,14 @@ def run_whole_market_scan(
                                 error_message=str(exc), source_snapshot_id=snapshot_id or "")
     approved_n = len(names)
     symbols = sorted({str(s).strip().upper() for s in names if str(s).strip()})
-    universe_n = len(symbols)
+    requested_n = len(symbols)
     if not symbols:
         return MarketScanReport(
             DATA_UNAVAILABLE,
             universe_size=0,
             scanned=0,
             approved_universe=approved_n,
+            requested_universe=0,
             error_code="EMPTY_UNIVERSE",
             error_message="approved NSE universe is empty",
             source_snapshot_id=snapshot_id or "",
@@ -286,8 +293,6 @@ def run_whole_market_scan(
 
     audit: dict[str, Any] = {"summary": {}, "ledger": []}
     try:
-        # Prefetch warms OHLCV. Do not pass the stock-scan callback — bulk
-        # prefetch reports bhavcopy days, not symbols.
         try:
             prefetch_fn(symbols, progress=None)
         except TypeError:
@@ -309,9 +314,10 @@ def run_whole_market_scan(
     except Exception as exc:
         return MarketScanReport(
             FAILED,
-            universe_size=universe_n,
+            universe_size=walked_total,
             scanned=0,
             approved_universe=approved_n,
+            requested_universe=requested_n,
             error_code="SCAN_ERROR",
             error_message=str(exc),
             source_snapshot_id=snapshot_id or "",
@@ -334,9 +340,10 @@ def run_whole_market_scan(
                     pass
             return MarketScanReport(
                 DATA_UNAVAILABLE,
-                universe_size=universe_n,
+                universe_size=0,
                 scanned=0,
                 approved_universe=approved_n,
+                requested_universe=requested_n,
                 exclusions=_coverage_exclusions(coverage),
                 error_code="OHLCV_CACHE_EMPTY",
                 error_message="OHLCV cache was empty; the last readable scan was kept.",
@@ -349,7 +356,7 @@ def run_whole_market_scan(
     if coverage.get("scanner_instrumented"):
         scanned_n = int(coverage.get("checked") or 0)
     else:
-        scanned_n = walked_total or universe_n
+        scanned_n = walked_total or requested_n
     payload = build_scan_payload(
         names,
         results,
@@ -357,11 +364,14 @@ def run_whole_market_scan(
         scanned=scanned_n,
         approved_universe=approved_n,
     )
-    payload["universe_size"] = universe_n
+    # Preserve the established `universe_size == actually checked` API contract
+    # while exposing the full requested set separately. This is the distinction
+    # the product previously lacked.
+    payload["requested_universe"] = requested_n
     payload["coverage"] = coverage
     payload["coverage_state"] = str(coverage.get("state") or "UNKNOWN")
     payload["coverage_warning"] = (
-        "Some approved NSE equities did not receive a full technical evaluation. Open Scan Coverage for exact symbols and reasons."
+        "Some requested NSE equities did not receive a full technical evaluation. Open Scan Coverage for exact symbols and reasons."
         if coverage.get("state") == "DEGRADED" else ""
     )
     sid = snapshot_id if snapshot_id is not None else _active_snapshot_id()
@@ -400,7 +410,6 @@ def run_whole_market_scan(
             payload["desk_overlays"] = persist_desks_from_market_scan(payload)
         except Exception as exc:
             payload["desk_overlays"] = {"error": type(exc).__name__}
-        # FEATURE-002 is observe-only and runs AFTER production results are final.
         if _feature002_hook is not None:
             try:
                 _feature002_hook(payload.get("records") or [])
@@ -414,7 +423,8 @@ def run_whole_market_scan(
         status=status,
         payload=payload,
         approved_universe=approved_n,
-        universe_size=universe_n,
+        requested_universe=requested_n,
+        universe_size=scanned_n,
         scanned=scanned_n,
         exclusions=_coverage_exclusions(coverage),
         source_snapshot_id=sid,
