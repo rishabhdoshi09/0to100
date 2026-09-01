@@ -198,7 +198,13 @@ def record_measured_outcome(
     floors: Mapping[str, int] | None = None,
     extra: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Increment a policy from one settled observation. Never silent; never invents BUY."""
+    """Increment a policy from one settled observation. Never silent; never invents BUY.
+
+    A gross-only paper observation is retained in policy statistics for audit, but
+    cannot affect selection until a later execution-adjusted observation restores
+    production eligibility. This prevents missing execution evidence from being
+    mistaken for a tradable edge.
+    """
     store = load_policies(path)
     existing = next(
         (dict(p) for p in (store.get("policies") or []) if p.get("policy_id") == policy_id),
@@ -210,6 +216,9 @@ def record_measured_outcome(
     mean = mean_old + (float(realized_R) - mean_old) / n
     payload = dict(extra or {})
     payload["last_observation_R"] = round(float(realized_R), 4)
+    if str(source) == "paper_forward_taken_gross_only":
+        payload["affects_selection"] = False
+        payload["evidence_only_reason"] = "EXECUTION_ADJUSTED_UNAVAILABLE"
     return upsert_policy(
         policy_id=policy_id,
         dimension=dimension,
