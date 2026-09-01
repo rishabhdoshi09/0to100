@@ -40,6 +40,7 @@ def _attach_corporate_actions(report: Mapping[str, Any]) -> dict[str, Any]:
     out["corporate_actions"] = corporate
     events = [dict(x) for x in (out.get("events") or []) if isinstance(x, Mapping)]
     seen = {str(x.get("headline") or "").strip().lower() for x in events if x.get("headline")}
+    added_events: list[dict[str, Any]] = []
     for action in list(corporate.get("actions") or [])[:20]:
         if not isinstance(action, Mapping):
             continue
@@ -47,7 +48,7 @@ def _attach_corporate_actions(report: Mapping[str, Any]) -> dict[str, Any]:
         if not headline or headline.lower() in seen:
             continue
         seen.add(headline.lower())
-        events.append({
+        event = {
             "headline": headline,
             "category": "corporate_action",
             "event_type": str(action.get("action_type") or "OTHER"),
@@ -57,11 +58,49 @@ def _attach_corporate_actions(report: Mapping[str, Any]) -> dict[str, Any]:
             "official": action.get("source_tier") == "official_exchange",
             "verified": bool(action.get("source_tier") in {"official_exchange", "reputable_secondary"}),
             "materiality": "context",
+            "materiality_basis": "Corporate action from an exchange or reputable public source; no sentiment inference.",
             "ex_date": action.get("ex_date"),
             "record_date": action.get("record_date"),
             "source_tier": action.get("source_tier"),
-        })
+        }
+        events.append(event)
+        added_events.append(event)
     out["events"] = events
+
+    # Existing React Company Intelligence already renders these first-screen rows
+    # on Overview, so corporate actions become visible without a second frontend
+    # data model or a hidden dead section.
+    screen = dict(out.get("first_screen") or {})
+    recent = [dict(x) for x in (screen.get("recent_material_events") or []) if isinstance(x, Mapping)]
+    recent_seen = {str(x.get("headline") or "").strip().lower() for x in recent}
+    for event in added_events[:8]:
+        headline = str(event.get("headline") or "")
+        if not headline or headline.lower() in recent_seen:
+            continue
+        recent_seen.add(headline.lower())
+        recent.append({
+            "date": event.get("published_at") or "date unavailable",
+            "headline": headline,
+            "category": "corporate_action",
+            "materiality": "context",
+            "source": event.get("source") or "source unavailable",
+            "url": event.get("url") or "",
+        })
+    if recent:
+        screen["recent_material_events"] = recent[:12]
+        out["first_screen"] = screen
+
+    sources = [dict(x) for x in (out.get("sources") or []) if isinstance(x, Mapping)]
+    source_key = (corporate.get("source"), corporate.get("source_tier"))
+    if corporate.get("source") and not any((x.get("source"), x.get("source_type_label")) == source_key for x in sources):
+        sources.append({
+            "source": corporate.get("source"),
+            "source_url": next((a.get("source_url") for a in corporate.get("actions") or [] if isinstance(a, Mapping) and a.get("source_url")), ""),
+            "period": corporate.get("retrieved_at") or "",
+            "source_type_label": corporate.get("source_tier") or "",
+            "retrieved_at": corporate.get("retrieved_at") or "",
+        })
+    out["sources"] = sources
     return out
 
 
