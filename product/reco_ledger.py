@@ -3,11 +3,14 @@
 Two different questions need two different immutable records:
 
 1. ``reco_ledger.jsonl`` answers: what did QuantTerm surface and why?
-2. ``reco_replay.jsonl`` answers: what point-in-time candidate inputs did the
-   production ensemble actually see, so a later version can be replayed without
-   smuggling future evidence into the test?
+2. ``reco_replay.jsonl`` freezes both the candidate evidence and the scan-wide
+   expert outputs that existed at decision time.
 
-Missing fields stay missing. Outcomes are never invented here.
+The replay tape deliberately separates ``input`` from ``expert_snapshot``. The
+expert snapshot can reproduce family/tier decisions without pretending that a
+truncated candidate list is the original cross-sectional universe. A future
+full-universe archive may replay expert ranking itself; until then that scope
+must remain explicit.
 """
 from __future__ import annotations
 
@@ -20,7 +23,7 @@ ROOT = Path(__file__).resolve().parents[1]
 LEDGER_PATH = ROOT / "logs" / "product" / "reco_ledger.jsonl"
 REPLAY_PATH = ROOT / "logs" / "product" / "reco_replay.jsonl"
 LEDGER_VERSION = 3
-REPLAY_VERSION = 1
+REPLAY_VERSION = 2
 
 _DERIVED_REPLAY_KEYS = frozenset({
     "methods", "experts", "families",
@@ -72,11 +75,7 @@ def _strategy_snapshot() -> dict[str, Any]:
             "rules_hash": ident.get("rules_hash"),
         }
     except Exception:
-        return {
-            "strategy_id": "QT_RECO_ENSEMBLE",
-            "strategy_version": 1,
-            "rules_hash": None,
-        }
+        return {"strategy_id": "QT_RECO_ENSEMBLE", "strategy_version": 1, "rules_hash": None}
 
 
 def _compact_card(card: Mapping[str, Any]) -> dict[str, Any]:
@@ -95,19 +94,14 @@ def _compact_card(card: Mapping[str, Any]) -> dict[str, Any]:
     ]
     return {
         "symbol": str(card.get("symbol") or "").upper(),
-        "tier": card.get("reco_tier"),
-        "thesis": card.get("primary_thesis"),
-        "horizon": card.get("thesis_horizon"),
-        "entry_state": card.get("entry_state"),
-        "family_confirms": card.get("family_confirms"),
-        "families": families,
-        "experts": experts,
-        "timing": card.get("timing"),
+        "tier": card.get("reco_tier"), "thesis": card.get("primary_thesis"),
+        "horizon": card.get("thesis_horizon"), "entry_state": card.get("entry_state"),
+        "family_confirms": card.get("family_confirms"), "families": families,
+        "experts": experts, "timing": card.get("timing"),
         "stock_quality": card.get("stock_quality"),
         "conflicts": list(card.get("conflicts") or [])[:4],
         "scan_scanned_at": card.get("scan_scanned_at"),
-        "category_id": card.get("category_id"),
-        "action_badge": card.get("action_badge"),
+        "category_id": card.get("category_id"), "action_badge": card.get("action_badge"),
         "entry": card.get("entry"), "stop": card.get("stop"),
         "target": card.get("target"), "cmp": card.get("cmp"),
         "evidence_scorecard": _score_snapshot(card),
@@ -116,7 +110,6 @@ def _compact_card(card: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def _json_safe(value: Any) -> Any:
-    """Freeze only values that survive an ordinary JSON round-trip."""
     try:
         return json.loads(json.dumps(value, default=str))
     except Exception:
@@ -124,7 +117,7 @@ def _json_safe(value: Any) -> Any:
 
 
 def _replay_input(card: Mapping[str, Any]) -> dict[str, Any]:
-    """Remove outputs of the ensemble while preserving the evidence it consumed."""
+    """Evidence fields before expert/family/tier outputs are applied."""
     out: dict[str, Any] = {}
     for key, value in card.items():
         if key in _DERIVED_REPLAY_KEYS:
@@ -132,8 +125,19 @@ def _replay_input(card: Mapping[str, Any]) -> dict[str, Any]:
         safe = _json_safe(value)
         if safe is not None:
             out[str(key)] = safe
-    # Symbol is mandatory for cross-sectional ranking and later outcome joining.
     out["symbol"] = str(card.get("symbol") or "").upper()
+    return out
+
+
+def _expert_snapshot(card: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """Frozen scan-wide expert outputs, including cross-sectional rank evidence."""
+    out: list[dict[str, Any]] = []
+    for item in card.get("experts") or []:
+        if not isinstance(item, Mapping):
+            continue
+        safe = _json_safe(dict(item))
+        if isinstance(safe, dict):
+            out.append(safe)
     return out
 
 
@@ -155,11 +159,12 @@ def append_replay_snapshot(
     scan_scanned_at: str = "",
     path: Path | None = None,
 ) -> Path | None:
-    """Freeze every candidate seen by the production recommendation ensemble.
+    """Freeze all candidates seen by the recommendation desk at persistence time.
 
-    These are live-captured point-in-time inputs, not reconstructed historical
-    fundamentals. That makes them suitable for future leakage-safe decision replay.
-    The function does not settle outcomes and does not call any network source.
+    ``captured_live`` means the record was written from the then-current desk,
+    not reconstructed later with future fundamentals. It does NOT claim that the
+    raw candidate subset can independently recreate cross-sectional expert ranks;
+    those are therefore frozen separately in ``expert_snapshot``.
     """
     target = path or REPLAY_PATH
     try:
@@ -171,11 +176,14 @@ def append_replay_snapshot(
             "captured_at": captured_at,
             "scan_scanned_at": scan_scanned_at,
             "captured_live": True,
+            "replay_scope": "FROZEN_EXPERTS_TO_ENSEMBLE_DECISION",
+            "full_expert_replay_available": False,
             "production_strategy": _strategy_snapshot(),
             "n_candidates": len(material),
             "candidates": [
                 {
                     "input": _replay_input(card),
+                    "expert_snapshot": _expert_snapshot(card),
                     "decision_at_capture": _decision_snapshot(card),
                 }
                 for card in material
@@ -198,24 +206,20 @@ def append_recommendations(
     """Append surfaced decisions plus a separate all-candidate replay snapshot."""
     material = [c for c in cards if isinstance(c, Mapping)]
     target = path or LEDGER_PATH
-    if replay_path is None:
-        replay_target = REPLAY_PATH if path is None else target.with_name(target.stem + "_replay.jsonl")
-    else:
-        replay_target = replay_path
+    replay_target = (
+        replay_path
+        if replay_path is not None
+        else (REPLAY_PATH if path is None else target.with_name(target.stem + "_replay.jsonl"))
+    )
     try:
         target.parent.mkdir(parents=True, exist_ok=True)
-        keep = [
-            c for c in material
-            if str(c.get("reco_tier") or "") in {"high_conviction", "good_setup"}
-        ]
-        strategy = _strategy_snapshot()
+        keep = [c for c in material if str(c.get("reco_tier") or "") in {"high_conviction", "good_setup"}]
         record = {
             "schema_version": LEDGER_VERSION,
             "recorded_at": datetime.now(timezone.utc).isoformat(),
             "scan_scanned_at": scan_scanned_at,
-            "production_strategy": strategy,
-            "n_recommend": len(keep),
-            "n_seen": len(material),
+            "production_strategy": _strategy_snapshot(),
+            "n_recommend": len(keep), "n_seen": len(material),
             "cards": [_compact_card(c) for c in keep[:40]],
         }
         with target.open("a", encoding="utf-8") as fh:
