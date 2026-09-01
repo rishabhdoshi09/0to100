@@ -758,6 +758,23 @@ def build_due_diligence(
         if len(unique_guidance) >= 8:
             break
 
+    try:
+        from product.due_diligence.moat_layer import company_intelligence_moat
+        company_moat = company_intelligence_moat(
+            raw,
+            framework_id=framework["id"],
+            findings=findings,
+            guidance=unique_guidance,
+            source_conflicts=conflicts,
+        )
+    except Exception:
+        company_moat = {
+            "invents_buy": False,
+            "cannot_create_buy": True,
+            "dd_effect": "NEUTRAL",
+            "available": False,
+        }
+
     watch = list(framework["watch"])
     if unique_guidance:
         watch = [f"Filing/commentary tone on file is {unique_guidance[0].get('tone')}."] + watch[:3]
@@ -923,6 +940,7 @@ def build_due_diligence(
         "balance_sheet_quality": balance,
         "cash_flow_quality": cash,
         "growth_quality": growth,
+        "company_moat": company_moat,
         "named_quality_scores": named_scores,
         "balance_sheet_rules": balance_rules,
         "governance_risk": governance,
