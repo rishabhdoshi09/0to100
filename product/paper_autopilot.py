@@ -94,6 +94,7 @@ class AutopilotDecision:
     breakdown: dict[str, Any] = field(default_factory=dict)
     why: dict[str, Any] = field(default_factory=dict)
     group: str = ""
+    portfolio: dict[str, Any] = field(default_factory=dict)
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -118,6 +119,7 @@ class AutopilotDecision:
             "dd_status": (self.context or {}).get("dd_status"),
             "entry_quality": (self.context or {}).get("entry_quality"),
             "missing_evidence": (self.context or {}).get("missing_evidence") or [],
+            "portfolio_authority": self.portfolio or None,
         }
 
 
@@ -561,6 +563,21 @@ def run_reco_paper_cycle(
             _freeze(decision, group="REJECTED")
 
     ranked.sort(key=lambda item: (-item[0], item[1].symbol))
+    try:
+        from product.portfolio_selection_authority import apply_portfolio_authority
+        ranked, diverted = apply_portfolio_authority(
+            ranked, book=book, max_new=max_new, regime=regime,
+        )
+        for decision in diverted:
+            row = decision.as_dict() if hasattr(decision, "as_dict") else dict(decision)
+            if str(getattr(decision, "decision", row.get("decision"))) == WAIT:
+                waits.append(row)
+                _freeze(decision, group="RECOMMENDED_BUT_NOT_FILLED")
+            else:
+                rejections.append(row)
+                _freeze(decision, group="REJECTED")
+    except Exception:
+        diverted = []
     snapshot_id = str(payload.get("scan_scanned_at") or day)
     entered = 0
     for _score, decision in ranked:
@@ -717,7 +734,16 @@ def run_reco_paper_cycle(
             "schema_version": 1,
             "note": "Analytics only. Paper fills remain intended-price until promotion.",
         },
+        "regime_intelligence_shadow": None,
+        "portfolio_authority": "after_selection_authority",
     }
+    try:
+        from product.regime_intelligence import shadow_classify
+        cycle["regime_intelligence_shadow"] = shadow_classify(
+            None, production_regime=str(regime or "RISK_ON"),
+        )
+    except Exception:
+        cycle["regime_intelligence_shadow"] = {"state": "UNKNOWN", "affects_production": False}
     if persist_journal:
         try:
             record_cycle(cycle)
