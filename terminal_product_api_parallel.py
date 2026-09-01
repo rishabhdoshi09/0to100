@@ -160,16 +160,21 @@ def _attach_authority(payload: dict) -> dict:
         build_decision_journal,
         evidence_scorecard,
     )
+    from product.strategy_contract import strategy_reference_for_category
 
     for category in payload.get("categories") or []:
         if not isinstance(category, dict):
             continue
+        category_id = str(category.get("id") or "")
+        strategy_ref = strategy_reference_for_category(category_id)
+        category["strategy_ref"] = strategy_ref
         for card in category.get("cards") or []:
             if not isinstance(card, dict):
                 continue
             scorecard = evidence_scorecard(card)
             card["evidence_scorecard"] = scorecard
             card["evidence_coverage"] = scorecard.get("coverage_pct")
+            card["strategy_ref"] = dict(strategy_ref)
             score = scorecard.get("score")
             quality = str(scorecard.get("quality") or "THIN").replace("_", " ").title()
             card["evidence_grade"] = card.get("evidence")
@@ -186,10 +191,18 @@ def _attach_authority(payload: dict) -> dict:
                 if score is not None else
                 f"QuantTerm Evidence Score unscored · coverage {float(scorecard.get('coverage_pct') or 0):.0f}%"
             )
+            strategy_line = (
+                f"Production strategy {strategy_ref.get('strategy_id')} v{strategy_ref.get('strategy_version')} · "
+                f"rules {strategy_ref.get('rules_hash')} · BACKTEST PARITY: {strategy_ref.get('backtest_parity')}."
+                if strategy_ref.get("strategy_id") else
+                "Production strategy identity unavailable · BACKTEST PARITY: UNVERIFIED."
+            )
             panel["provenance"] = " ".join(
                 part for part in (
                     headline + ".",
                     ("Components — " + components + ".") if components else "",
+                    strategy_line,
+                    str(strategy_ref.get("parity_reason") or ""),
                     "Unknown evidence remains unknown; this score is not a win probability.",
                     old_provenance,
                 ) if part
@@ -272,6 +285,20 @@ def decision_journal(symbol: str = "", limit: int = 120) -> dict:
     """Public audit trail for surfaced and non-surfaced market decisions."""
     from product.evidence_authority import build_decision_journal
     return build_decision_journal(symbol=symbol, limit=max(1, min(int(limit or 120), 1000)))
+
+
+@product.app.get("/api/strategy-registry")
+def strategy_registry() -> dict:
+    """Exact production strategy identities and fail-closed backtest parity."""
+    from product.strategy_contract import strategy_registry_contract
+    return strategy_registry_contract()
+
+
+@product.app.get("/api/research-status")
+def research_status() -> dict:
+    """Readable proof of what Research/Learning is actually doing."""
+    from product.research_status import build_research_status
+    return build_research_status()
 
 
 @product.app.get("/api/market-reports-workspace")
@@ -362,6 +389,7 @@ def product_contract() -> dict:
             "route_registered": "/api/recommendations-workspace" in paths,
             "authority_route_registered": "/api/evidence-authority" in paths,
             "journal_route_registered": "/api/decision-journal" in paths,
+            "strategy_route_registered": "/api/strategy-registry" in paths,
             "depends_on": ["market_scan", "long_term_scan"],
             "data_available": bool(scan.get("available") or long_term.get("available")),
         },
@@ -376,6 +404,7 @@ def product_contract() -> dict:
         },
         "learning": {
             "operator_health_route_registered": "/api/operator-health" in paths,
+            "research_status_route_registered": "/api/research-status" in paths,
             "status": str(autonomy.get("learning_status") or "UNKNOWN"),
             "supervisor_running": bool(autonomy.get("running")),
         },
