@@ -605,13 +605,27 @@ def run_reco_paper_cycle(
         family_risk[sector] = family_risk.get(sector, 0.0) + DEFAULT_RISK_PCT
         cluster_risk[sector] = cluster_risk.get(sector, 0.0) + DEFAULT_RISK_PCT
         opened.append((ENSEMBLE_ID, decision.symbol))
-        taken.append({
+        taken_row = {
             **decision.as_dict(),
             "qty": getattr(pos, "qty", None),
             "entry_fill": getattr(pos, "entry_price", None),
             "status": "TAKEN",
             "group": "TAKEN",
-        })
+        }
+        try:
+            from product.execution_reality import shadow_for_paper_fill
+            shadow = shadow_for_paper_fill(
+                qty=taken_row.get("qty"),
+                entry=taken_row.get("entry_fill") or taken_row.get("entry"),
+                target=taken_row.get("target"),
+                stop=taken_row.get("stop"),
+            )
+            if shadow:
+                # Nested analytics only — qty / entry_fill stay the book fill.
+                taken_row["execution_reality_shadow"] = shadow
+        except Exception:
+            pass
+        taken.append(taken_row)
         try:
             from product.paper_learning_loop import note_later_entry
             note_later_entry(decision.symbol, path=policy_path)
@@ -696,6 +710,13 @@ def run_reco_paper_cycle(
         "live_locked": True,
         "adapter": "paper",
         "rules_hash": ident.get("rules_hash"),
+        "execution_reality": {
+            "shadow_mode": True,
+            "affects_paper_orders": False,
+            "engine_version": "1",
+            "schema_version": 1,
+            "note": "Analytics only. Paper fills remain intended-price until promotion.",
+        },
     }
     if persist_journal:
         try:
