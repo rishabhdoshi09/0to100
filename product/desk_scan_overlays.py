@@ -53,8 +53,22 @@ def persist_desks_from_market_scan(scan_payload: Mapping[str, Any] | None) -> di
         # Now settle older same-hash candidates from official bhavcopy. The just-
         # captured scan will normally remain PENDING until enough sessions exist.
         try:
-            from product.production_signal_evidence import refresh_production_signal_evidence
-            evidence = refresh_production_signal_evidence()
+            from product.production_signal_evidence import (
+                build_production_signal_evidence,
+                save_production_signal_evidence,
+            )
+            evidence = build_production_signal_evidence()
+            # Critical honesty gate: the Strategy Catalog recognizes only the
+            # PRODUCTION_SIGNAL_OUTCOMES scope as performance evidence. Until the
+            # minimum sample + distinct-day gates are met, persist an explicitly
+            # non-performance COLLECTING scope so execution alone can never make
+            # Backtests flip to VERIFIED.
+            evidence["scope"] = (
+                "PRODUCTION_SIGNAL_OUTCOMES"
+                if evidence.get("evidence_ready")
+                else "COLLECTING_PRODUCTION_SIGNAL_OUTCOMES"
+            )
+            save_production_signal_evidence(evidence)
             metrics = dict(evidence.get("metrics") or {})
             production_evidence = {
                 "status": "ready" if evidence.get("evidence_ready") else "collecting",
