@@ -23,6 +23,12 @@ def test_complete_script_starts_every_local_service_in_one_process_tree():
     assert "curl" not in inner
     assert "Do not start a second terminal" in complete
     assert 'exec bash "$ROOT/scripts/run_quantterm_complete.sh" "$@"' in desk
+    wrapper = (ROOT / "quantterm.sh").read_text(encoding="utf-8")
+    assert 'exec bash "$ROOT/scripts/run_quantterm_complete.sh" "$@"' in wrapper
+    assert "print_startup_summary" in complete
+    assert "maybe_open_home_browser" in complete
+    assert "HOME_OPENED" in complete
+    assert complete.count("HOME_OPENED") >= 2
 
 
 def test_complete_script_always_stops_old_stack_then_starts_everything():
