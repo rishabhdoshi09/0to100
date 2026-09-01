@@ -35,13 +35,18 @@ def _auth_lane(autonomy: Mapping[str, Any]) -> dict[str, Any]:
             as_of=str(autonomy.get("heartbeat_ist") or ""),
             detail=autonomy.get("plain_state") or "Kite login required",
         )
-    if autonomy.get("running") or state:
+    running = bool(autonomy.get("running"))
+    if running and state not in {"", "UNKNOWN", "STOPPED", "OFFLINE"}:
         return _lane(
             "zerodha_auth", "Zerodha authentication", "HEALTHY",
             as_of=str(autonomy.get("heartbeat_ist") or ""),
             detail=str(autonomy.get("plain_state") or state or "Session present"),
         )
-    return _lane("zerodha_auth", "Zerodha authentication", "UNKNOWN", detail="Autonomy payload unavailable")
+    return _lane(
+        "zerodha_auth", "Zerodha authentication", "UNKNOWN",
+        as_of=str(autonomy.get("heartbeat_ist") or ""),
+        detail=str(autonomy.get("plain_state") or "Autonomy supervisor is not running — auth not verified"),
+    )
 
 
 def _coverage_lane(scan: Mapping[str, Any]) -> dict[str, Any]:
@@ -62,6 +67,17 @@ def _coverage_lane(scan: Mapping[str, Any]) -> dict[str, Any]:
             f"qualified {int(cov.get('qualified') or 0):,}"
         ),
     )
+
+
+def _settlement_status(autonomy: Mapping[str, Any]) -> str:
+    status = str(autonomy.get("learning_status") or "").strip().upper()
+    if not status:
+        return "WAITING"
+    if any(token in status for token in ("WAIT", "YET", "NONE", "UNKNOWN", "NO_EOD", "INSUFFICIENT")):
+        return "WAITING"
+    if any(token in status for token in ("ACTIVE", "SETTLED", "COMPLETE", "LEARNING")):
+        return "HEALTHY"
+    return "WAITING"
 
 
 def build_system_health_contract(
@@ -167,10 +183,7 @@ def build_system_health_contract(
         _lane(
             "paper_outcome_settlement",
             "Paper outcome settlement",
-            "WAITING" if not str(autonomy.get("learning_status") or "") else (
-                "HEALTHY" if "WAIT" not in str(autonomy.get("learning_status") or "").upper()
-                else "WAITING"
-            ),
+            _settlement_status(autonomy),
             detail=str(autonomy.get("learning_status") or "No settlement claim without a status"),
         ),
         _lane(

@@ -66,6 +66,28 @@ def test_health_contract_has_no_collapsed_green_light():
     assert payload["counts"]["MISSING"] >= 1
 
 
+def test_offline_supervisor_does_not_green_auth_or_settlement():
+    payload = build_system_health_contract(
+        scan={"available": False},
+        data={"ready": False, "bhavcopy": {}},
+        news={"available": False},
+        operations={"running": False},
+        autonomy={
+            "running": False,
+            "state": "UNKNOWN",
+            "plain_state": "Autonomy supervisor is offline",
+            "learning_status": "NO_EOD_LEARNING_YET",
+        },
+        product_wired=True,
+    )
+    by_key = {lane["key"]: lane for lane in payload["lanes"]}
+    assert by_key["zerodha_auth"]["status"] != "HEALTHY"
+    assert by_key["paper_outcome_settlement"]["status"] == "WAITING"
+    assert by_key["autonomy_scheduler"]["status"] != "HEALTHY"
+    assert by_key["paper_execution"]["status"] != "HEALTHY"
+    assert by_key["operations_worker"]["status"] == "BROKEN"
+
+
 def test_system_health_contract_endpoint_uses_data_payload_signature(monkeypatch):
     """A green autonomy badge must not 500 the health contract, and lanes stay split."""
     import terminal_product_api_parallel as api
