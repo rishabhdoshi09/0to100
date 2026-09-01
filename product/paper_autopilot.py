@@ -736,6 +736,7 @@ def run_reco_paper_cycle(
         },
         "regime_intelligence_shadow": None,
         "portfolio_authority": "after_selection_authority",
+        "cycle_id": f"{day}:{ident.get('rules_hash') or ''}:{clock.isoformat()}",
     }
     try:
         from product.regime_intelligence import shadow_classify
@@ -752,6 +753,11 @@ def run_reco_paper_cycle(
         try:
             from product.paper_learning_loop import record_taken_evidence
             record_taken_evidence(taken, as_of=day)
+        except Exception:
+            pass
+        try:
+            from product.forward_soak import record_cycle_evidence
+            record_cycle_evidence(cycle)
         except Exception:
             pass
     return cycle

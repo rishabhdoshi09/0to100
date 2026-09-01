@@ -406,6 +406,12 @@ def learning_dashboard(
     journal = load_journal()
     latest = dict(journal.get("latest") or {})
     taken_n = sum(len(list(c.get("taken") or [])) for c in (journal.get("cycles") or []))
+    soak: dict[str, Any] | None
+    try:
+        from product.forward_soak import scoreboard
+        soak = scoreboard()
+    except Exception as exc:
+        soak = {"error": str(exc)[:200], "live_locked": True}
     return {
         "schema_version": 1,
         "live_locked": True,
@@ -441,4 +447,5 @@ def learning_dashboard(
             "waits": [dict(w.get("why") or {}, symbol=w.get("symbol"), reason_code=w.get("reason_code")) for w in (latest.get("waits") or [])[:8]],
         },
         "live_readiness": evaluate_live_readiness(),
+        "forward_soak": soak,
     }

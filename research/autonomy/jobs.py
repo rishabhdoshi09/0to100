@@ -401,6 +401,14 @@ class Deps:
         except Exception as exc:
             if isinstance(result, dict):
                 result["paper_learning"] = {"error": str(exc)[:200]}
+        try:
+            from product.forward_soak import settle_and_report
+            soak = settle_and_report(str(session_date), book=brain.intel_book)
+            if isinstance(result, dict):
+                result["forward_soak"] = soak
+        except Exception as exc:
+            if isinstance(result, dict):
+                result["forward_soak"] = {"error": str(exc)[:200]}
         self.telegram.notify_paper_cycle(result, book=brain.intel_book)
         return result
 
