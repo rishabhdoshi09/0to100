@@ -10,6 +10,9 @@ import {
   fetchScannerWorkspace,
   fetchTradePlan,
   fetchWatchlist,
+  verifyForwardSoakNow,
+  type HomeAction,
+  type HomeOperatingSystem,
   removeWatchlistItem,
   type CompareWorkspace,
   type DeskPipeline,
@@ -21,6 +24,7 @@ import {
   type WatchlistPayload,
 } from './productApi'
 import { RiskLensCard } from './productViews'
+import type { ControlName } from './types'
 import { LiveScanBanner, type ExperienceViewProps } from './experience'
 import { keepRicher, markInvestigate, recall, remember } from './sessionMemory'
 import { DailyWrapList, magazineWrapLines } from './dailyWrap'
@@ -424,11 +428,146 @@ function DenseTable({
   )
 }
 
+function HomeOsCard({
+  os,
+  depth,
+  busy,
+  onAction,
+}: {
+  os: HomeOperatingSystem
+  depth: string
+  busy: boolean
+  onAction: (action: HomeAction) => void
+}) {
+  const system = os.system || {}
+  return (
+    <section className={`home-os-card state-${(os.state || '').toLowerCase()}`}>
+      <div className="home-os-hero">
+        <span>WHAT SHOULD I DO?</span>
+        <h2>{os.headline}</h2>
+        <p>{os.subtext}</p>
+        <div className="home-os-now-next">
+          <div><span>Now</span><strong>{os.now || '—'}</strong></div>
+          <div><span>Next</span><strong>{os.next || '—'}</strong></div>
+        </div>
+        {os.progress?.total ? (
+          <p className="panel-copy">
+            {os.progress.label || 'Working'}
+            {os.progress.current != null ? ` · ${os.progress.current} / ${os.progress.total}` : ''}
+          </p>
+        ) : null}
+        <div className="home-os-actions">
+          {os.primary_action ? (
+            <button type="button" disabled={busy} onClick={() => onAction(os.primary_action as HomeAction)}>
+              {os.primary_action.label}
+            </button>
+          ) : (
+            <em>Nothing to click. Leave it running.</em>
+          )}
+          {(os.secondary_actions || []).map((action) => (
+            <button key={action.label} type="button" className="secondary" disabled={busy} onClick={() => onAction(action)}>
+              {action.label}
+            </button>
+          ))}
+        </div>
+        {os.primary_action?.kind === 'instruction' && os.primary_action.instruction ? (
+          <p className="panel-copy">{os.primary_action.instruction}</p>
+        ) : null}
+      </div>
+      <div className="home-os-grid">
+        <div>
+          <span>TODAY</span>
+          <strong>{os.today?.market_open ? 'Market open' : 'Market closed'}</strong>
+          <small>{os.today?.market_mood || os.today?.market_phase || '—'}</small>
+        </div>
+        <div>
+          <span>PAPER BOT</span>
+          <strong>{os.paper_bot?.paused ? 'PAUSED' : 'ON'}</strong>
+          <small>
+            {os.paper_bot?.positions_open ?? 0} open · {os.paper_bot?.todays_entries ?? 0} today
+            {os.paper_bot?.why ? ` · ${os.paper_bot.why}` : ''}
+          </small>
+        </div>
+        <div>
+          <span>LEARNING</span>
+          <strong>{os.learning?.insufficient_evidence ? 'Too early to judge' : (os.learning?.simple || 'Collecting')}</strong>
+          <small>
+            {depth === 'professional'
+              ? `REAL_FORWARD_N ${os.learning?.real_forward_n ?? 0} · coverage ${os.learning?.execution_adjusted_coverage_pct ?? 'n/a'}`
+              : os.learning?.simple}
+          </small>
+        </div>
+        <div>
+          <span>LIVE MONEY</span>
+          <strong>Locked</strong>
+          <small>Paper only. No live buy button.</small>
+        </div>
+      </div>
+      {(os.opportunities || []).length ? (
+        <div className="home-os-opps">
+          {(os.opportunities || []).slice(0, 4).map((row, index) => (
+            <div key={`${row.found}-${index}`}>
+              <span>{row.label || 'Setup'}</span>
+              <strong>{row.found}</strong>
+              <small>{depth === 'professional' ? (row.technical || row.meaning) : row.meaning}</small>
+            </div>
+          ))}
+        </div>
+      ) : null}
+      <div className="home-os-system">
+        {['data', 'zerodha', 'automation', 'paper_bot', 'learning'].map((key) => {
+          const lane = system[key] || {}
+          return (
+            <div key={key}>
+              <span>{key.replace('_', ' ')}</span>
+              <strong>{lane.status || 'Waiting'}</strong>
+            </div>
+          )
+        })}
+      </div>
+      {(os.recent_activity || []).length ? (
+        <ul className="home-os-activity">
+          {(os.recent_activity || []).slice(0, 8).map((row, index) => (
+            <li key={`${row.text}-${index}`}>
+              {row.at ? <time>{row.at.slice(11, 16) || row.at.slice(0, 10)}</time> : <time>—</time>}
+              <span>{row.text}</span>
+            </li>
+          ))}
+        </ul>
+      ) : null}
+      {os.yesterday ? (
+        <p className="panel-copy">
+          Yesterday:
+          {os.yesterday.scan ? ' scan' : ' scan pending'}
+          {os.yesterday.paper_decisions ? ' · paper decisions' : ' · paper pending'}
+          {os.yesterday.settlement_pending ? ' · settlement pending' : os.yesterday.settlement ? ' · settlement' : ''}
+          {os.yesterday.learning ? ' · learning' : ''}
+          {os.yesterday.forward_evidence ? ' · forward evidence' : ''}
+        </p>
+      ) : null}
+      <details className="home-os-why">
+        <summary>Why?</summary>
+        <p>{os.four_questions?.what}</p>
+        <p>{os.four_questions?.found}</p>
+        <p>{os.four_questions?.meaning}</p>
+        <p>{os.four_questions?.action}</p>
+      </details>
+      {depth === 'professional' ? (
+        <details className="home-os-why">
+          <summary>Technical details</summary>
+          <p>state={os.state} · soak={os.learning?.forward_soak_status} · live_locked={String(os.live_locked)}</p>
+          <p>verify: {JSON.stringify(os.verify?.lanes || {})}</p>
+        </details>
+      ) : null}
+    </section>
+  )
+}
+
 export function RadarHomeView(props: ExperienceViewProps & {
   onCompare: (symbol: string) => void
   onWatchlist: (symbol: string) => void
 }) {
-  const { dashboard, selected, setSelected, bars, setActive, depth, marketScan, longTermScan, onCompare, onWatchlist } = props
+  const { dashboard, selected, setSelected, bars, setActive, depth, marketScan, longTermScan, runControl, onCompare, onWatchlist } = props
   const [radar, setRadar] = useState<RadarHome | null>(() => recall<RadarHome>('radar-home') ?? null)
   const [plan, setPlan] = useState<TradePlan | null>(null)
   const [readiness, setReadiness] = useState<ProductReadiness | null>(() => recall<ProductReadiness>('product-readiness') ?? null)
@@ -581,8 +720,31 @@ export function RadarHomeView(props: ExperienceViewProps & {
     || momentumRows.find((r) => r.symbol === selected)
     || longTermRows.find((r) => r.symbol === selected)
 
+  const homeOs = radar?.home_os || null
+  const runHomeAction = (action: HomeAction) => {
+    if (action.kind === 'instruction') return
+    const control = String(action.control || '')
+    if (control === 'RUN_SCAN_NOW') {
+      void marketScan.start()
+      return
+    }
+    if (control === 'VERIFY_FORWARD_SOAK') {
+      void verifyForwardSoakNow().then(() => { void fetchRadarHome().then(setRadar) }).catch(() => undefined)
+      return
+    }
+    if (control) void runControl(control as ControlName)
+  }
+
   return (
     <section className="radar-home">
+      {homeOs ? (
+        <HomeOsCard
+          os={homeOs}
+          depth={depth}
+          busy={marketScan.isBusy || bootstrapBusy}
+          onAction={runHomeAction}
+        />
+      ) : null}
       <header className="radar-hero">
         <div>
           <span>MARKET DESK</span>

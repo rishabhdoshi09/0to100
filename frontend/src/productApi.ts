@@ -738,6 +738,79 @@ export type RadarHome = {
     last_error?: string
   }
   desk_pipeline?: DeskPipeline | null
+  home_os?: HomeOperatingSystem | null
+}
+
+export type HomeAction = {
+  id?: string
+  control?: string
+  label: string
+  kind?: 'control' | 'instruction' | string
+  instruction?: string
+}
+
+export type HomeOperatingSystem = {
+  schema_version?: number
+  state: string
+  headline: string
+  subtext: string
+  need_me?: boolean
+  primary_action?: HomeAction | null
+  secondary_actions?: HomeAction[]
+  now?: string
+  next?: string
+  progress?: { kind?: string; label?: string; current?: number | null; total?: number | null; status?: string } | null
+  today?: {
+    market_open?: boolean
+    market_phase?: string
+    market_mood?: string
+    scan_age?: string
+    data_fresh?: boolean
+    last_automatic_action?: string
+    next_automatic_action?: string
+  }
+  opportunities?: Array<{
+    what?: string
+    found?: string
+    meaning?: string
+    action?: string
+    label?: string
+    why?: string
+    technical?: string
+  }>
+  paper_bot?: {
+    on?: boolean
+    paused?: boolean
+    positions_open?: number
+    todays_entries?: number
+    exits?: number
+    risk_used?: number | null
+    last_decision?: string
+    why?: string
+    why_technical?: string[]
+  }
+  learning?: {
+    simple?: string
+    real_forward_n?: number
+    execution_adjusted_coverage_pct?: number | null
+    insufficient_evidence?: boolean
+    forward_soak_status?: string
+    live_locked?: boolean
+  }
+  system?: Record<string, { status?: string; detail?: string }>
+  recent_activity?: Array<{ at?: string; text?: string }>
+  yesterday?: {
+    scan?: boolean
+    paper_decisions?: boolean
+    settlement?: boolean
+    settlement_pending?: boolean
+    learning?: boolean
+    forward_evidence?: boolean
+  }
+  recovered?: string[]
+  live_locked?: boolean
+  four_questions?: { what?: string; found?: string; meaning?: string; action?: string }
+  verify?: { lanes?: Record<string, string>; soak_status?: string; generated_at?: string }
 }
 
 export const fetchRadarHome = (): Promise<RadarHome> =>
@@ -1481,6 +1554,10 @@ export const fetchLearningDashboard = (): Promise<LearningDashboard> =>
 
 export const fetchForwardSoak = (): Promise<ForwardSoakScoreboard> =>
   fetch('/api/forward-soak', { headers: { Accept: 'application/json' } })
+    .then((response) => json<ForwardSoakScoreboard>(response))
+
+export const verifyForwardSoakNow = (): Promise<ForwardSoakScoreboard> =>
+  fetch('/api/forward-soak', { method: 'POST', headers: { Accept: 'application/json' } })
     .then((response) => json<ForwardSoakScoreboard>(response))
 
 export type ScanAuditPayload = {
