@@ -92,12 +92,15 @@ def record_taken_evidence(taken: Sequence[Mapping[str, Any]], *, as_of: str) -> 
             "policy_effect": row.get("policy_effect") or "NEUTRAL",
             "selection_score": row.get("selection_score"),
             "entry": row.get("entry"),
+            "entry_fill": row.get("entry_fill"),
+            "qty": row.get("qty"),
             "stop": row.get("stop"),
             "target": row.get("target"),
             "reason_code": row.get("reason_code") or "ELIGIBLE",
             "regime": row.get("regime") or "",
             "dd_status": row.get("dd_status") or "",
             "entry_quality": row.get("entry_quality") or "",
+            "execution_reality_shadow": row.get("execution_reality_shadow"),
             "why": row.get("why") or {},
         })
 
@@ -126,7 +129,12 @@ def ingest_closed_trade(
     path=None,
     floors: Mapping[str, int] | None = None,
 ) -> dict[str, Any] | None:
-    """One settled paper trade updates setup (+ limited conditionals). Not a new BUY."""
+    """One settled paper trade updates setup (+ limited conditionals). Not a new BUY.
+
+    Gross R is always preserved. When execution-adjusted evidence is available,
+    the Policy Layer consumes the more conservative of gross and adjusted R.
+    Paper fills themselves are never repriced here.
+    """
     row = dict(trade.as_dict()) if hasattr(trade, "as_dict") else dict(trade)
     symbol = str(row.get("symbol") or "").upper()
     if not symbol:
@@ -136,19 +144,47 @@ def ingest_closed_trade(
     sector = str(evidence.get("sector") or row.get("sector") or "")
     regime = str(evidence.get("regime") or row.get("regime") or "")
     entry_state = str(evidence.get("entry_state") or row.get("entry_state") or "")
-    realized = float(row.get("realized_R") or 0.0)
+
+    try:
+        from product.evidence_integrity import settled_learning_result
+        integrity = settled_learning_result(row, evidence)
+    except Exception:
+        integrity = {
+            "gross_realized_R": float(row.get("realized_R") or 0.0),
+            "execution_adjusted_R": None,
+            "policy_realized_R": float(row.get("realized_R") or 0.0),
+            "execution_adjusted_available": False,
+            "execution_complete": False,
+            "execution_coverage": 0.0,
+            "quality": "GROSS_ONLY",
+            "paper_fill_unchanged": True,
+        }
+    realized = float(integrity.get("policy_realized_R") if integrity.get("policy_realized_R") is not None else (row.get("realized_R") or 0.0))
+    source = (
+        "paper_forward_taken_execution_adjusted"
+        if integrity.get("execution_adjusted_available")
+        else "paper_forward_taken_gross_only"
+    )
     extra_base = {
         "symbol": symbol,
         "exit_reason": row.get("exit_reason") or "",
         "regime": regime,
         "not_live": True,
+        "gross_realized_R": integrity.get("gross_realized_R"),
+        "execution_adjusted_R": integrity.get("execution_adjusted_R"),
+        "policy_realized_R": realized,
+        "execution_adjusted_available": bool(integrity.get("execution_adjusted_available")),
+        "execution_complete": bool(integrity.get("execution_complete")),
+        "execution_coverage": float(integrity.get("execution_coverage") or 0.0),
+        "evidence_quality": integrity.get("quality") or "GROSS_ONLY",
+        "paper_fill_unchanged": True,
     }
     last = record_measured_outcome(
         policy_id=f"SETUP::{setup}",
         dimension="setup",
         bucket=setup,
         realized_R=realized,
-        source="paper_forward_taken",
+        source=source,
         path=path,
         floors=floors,
         extra=extra_base,
@@ -160,7 +196,7 @@ def ingest_closed_trade(
             dimension="setup|sector",
             bucket=f"{setup}|{sector}",
             realized_R=realized,
-            source="paper_forward_taken",
+            source=source,
             path=path,
             floors=floors,
             extra=extra_base,
@@ -171,7 +207,7 @@ def ingest_closed_trade(
             dimension="setup|regime",
             bucket=f"{setup}|{regime}",
             realized_R=realized,
-            source="paper_forward_taken",
+            source=source,
             path=path,
             floors=floors,
             extra=extra_base,
@@ -182,7 +218,7 @@ def ingest_closed_trade(
             dimension="entry_state",
             bucket=entry_state,
             realized_R=realized,
-            source="paper_forward_taken",
+            source=source,
             path=path,
             floors=floors,
             extra=extra_base,
@@ -195,7 +231,7 @@ def ingest_closed_trade(
             dimension="exit_reason",
             bucket=exit_reason,
             realized_R=realized,
-            source="paper_forward_exit",
+            source="paper_forward_exit_execution_aware",
             path=path,
             floors=floors,
             extra={**extra_base, "affects_selection": False},
