@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from typing import Any, Mapping, Sequence
 
+from product.due_diligence.fundamental_intelligence import build_fundamental_intelligence
+
 CONFIRM_LABEL = {
     "STRONGLY SUPPORTS": "STRONG SUPPORT",
     "SUPPORTS": "SUPPORT",
@@ -95,7 +97,48 @@ def company_snapshot(
     }
 
 
+def attach_fundamental_intelligence(report: Mapping[str, Any]) -> dict[str, Any]:
+    """Attach the investor scorecard to a completed report without creating new evidence.
+
+    ``StockResearchEngine`` already owns acquisition and measurement. This is a pure
+    projection over that completed evidence. The mutation is intentional because the
+    existing Fundamentals panel reads ``fundamental_quality.breakdown.pillars``.
+    """
+    intelligence = build_fundamental_intelligence(report)
+    if not isinstance(report, dict):
+        return intelligence
+
+    report["fundamental_intelligence"] = intelligence
+    quality = report.get("fundamental_quality")
+    if not isinstance(quality, dict):
+        return intelligence
+    breakdown = quality.get("breakdown")
+    if not isinstance(breakdown, dict):
+        return intelligence
+
+    existing = list(breakdown.get("sector_pillars") or breakdown.get("pillars") or [])
+    # Idempotence: if an already-enriched report is projected again, preserve the
+    # original sector pillars instead of nesting the intelligence rows repeatedly.
+    sector_pillars = [
+        p for p in existing
+        if not str((p or {}).get("id") or "").startswith("intelligence_")
+        and str((p or {}).get("id") or "") != "fundamental_intelligence_total"
+    ]
+    breakdown["sector_pillars"] = sector_pillars
+    breakdown["intelligence_score"] = intelligence.get("score")
+    breakdown["intelligence_label"] = intelligence.get("label")
+    breakdown["intelligence_coverage_pct"] = intelligence.get("coverage_pct")
+    breakdown["intelligence_missing_components"] = list(intelligence.get("missing_components") or [])
+    breakdown["pillars"] = [
+        dict(intelligence.get("summary_pillar") or {}),
+        *[dict(x) for x in list(intelligence.get("components") or [])],
+        *sector_pillars,
+    ]
+    return intelligence
+
+
 def first_screen(report: Mapping[str, Any]) -> dict[str, Any]:
+    intelligence = attach_fundamental_intelligence(report)
     quality = dict(report.get("fundamental_quality") or {})
     technical = dict(report.get("technical_context") or {})
     flags = dict(report.get("flag_groups") or {})
@@ -118,6 +161,10 @@ def first_screen(report: Mapping[str, Any]) -> dict[str, Any]:
         "breakout_quality": technical.get("breakout_quality"),
         "fundamental_quality": quality.get("score"),
         "fundamental_quality_label": quality.get("label"),
+        "fundamental_intelligence_score": intelligence.get("score"),
+        "fundamental_intelligence_label": intelligence.get("label"),
+        "fundamental_intelligence_coverage_pct": intelligence.get("coverage_pct"),
+        "fundamental_intelligence_missing": list(intelligence.get("missing_components") or []),
         "score_coverage_pct": quality.get("score_coverage_pct") if quality.get("score_coverage_pct") is not None else quality.get("coverage_pct"),
         "research_coverage_pct": coverage.get("coverage_pct"),
         "research_coverage_summary": coverage.get("summary"),
