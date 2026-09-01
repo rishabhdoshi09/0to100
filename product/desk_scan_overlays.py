@@ -1,17 +1,25 @@
-"""Derive Recommendations and Market Reports from one saved market scan.
+"""Derive durable Recommendations and Market Reports from one saved market scan.
 
-Called after the whole-market scan (and long-term overlay) persist. Must stay
-fast: no pulse crawl, no StockResearchEngine. Failure must never fail the scan.
-GET endpoints read these files cache-only.
+A successful whole-market scan is the production boundary for the retail desk.
+The existing ensemble first nominates candidates. Selection Authority then uses
+already-measured learning plus cache/file-only Due Diligence on the small finalist
+set. Only that post-gate state is persisted and journaled.
 
-The same durable post-scan boundary also captures and settles production
-recommendation evidence. Settlement is store-local: official bhavcopy only, no
-live quotes and no network requirement. A settlement failure is reported but can
-never invalidate a successful market scan.
+No pulse crawl and no new scanner are introduced here. A DD/evidence failure may
+block a recommendation but must never invalidate the successful market scan.
 """
 from __future__ import annotations
 
 from typing import Any, Mapping
+
+
+def _workspace_cards(payload: Mapping[str, Any]) -> list[dict[str, Any]]:
+    cards: list[dict[str, Any]] = []
+    for category in payload.get("categories") or []:
+        if not isinstance(category, Mapping):
+            continue
+        cards.extend(dict(card) for card in (category.get("cards") or []) if isinstance(card, Mapping))
+    return cards
 
 
 def persist_desks_from_market_scan(scan_payload: Mapping[str, Any] | None) -> dict[str, Any]:
@@ -25,6 +33,7 @@ def persist_desks_from_market_scan(scan_payload: Mapping[str, Any] | None) -> di
 
     reco_status = "skipped"
     reco_cards = 0
+    selection_summary: dict[str, Any] = {"applied": False}
     production_evidence: dict[str, Any] = {
         "status": "skipped",
         "sample_size": 0,
@@ -36,33 +45,42 @@ def persist_desks_from_market_scan(scan_payload: Mapping[str, Any] | None) -> di
             build_recommendations_workspace,
             slim_workspace_for_desk,
         )
+        from product.selection_authority import apply_workspace_selection_authority
+
+        # Build first without journaling. The ledger must record the FINAL decision
+        # after learning + DD, not the pre-DD nomination.
         reco = build_recommendations_workspace(
             scan_payload=scan,
             long_term_payload=lt,
             refresh_technicals=False,
             settle_cases=False,
             deep_confirm=False,
-            persist_ledger=True,
+            persist_ledger=False,
         )
+        reco = apply_workspace_selection_authority(reco, max_due_diligence=8)
+        selection_summary = dict(reco.get("selection_authority") or {})
+
+        final_cards = _workspace_cards(reco)
+        try:
+            from product.reco_ledger import append_recommendations
+            append_recommendations(final_cards, scan_scanned_at=str(scan.get("scanned_at") or ""))
+        except Exception:
+            # Ledger failure must be visible through evidence status later, but must
+            # never erase the successfully built desk.
+            pass
+
         slim = slim_workspace_for_desk(reco)
         save_recommendations(slim)
         reco_status = "saved"
-        reco_cards = int((slim.get("scan_meta") or {}).get("assigned_count") or 0)
+        reco_cards = len(final_cards)
 
-        # The ledger call above has frozen this scan's point-in-time candidates.
-        # Now settle older same-hash candidates from official bhavcopy. The just-
-        # captured scan will normally remain PENDING until enough sessions exist.
+        # Settle older same-hash final recommendations from official bhavcopy.
         try:
             from product.production_signal_evidence import (
                 build_production_signal_evidence,
                 save_production_signal_evidence,
             )
             evidence = build_production_signal_evidence()
-            # Critical honesty gate: the Strategy Catalog recognizes only the
-            # PRODUCTION_SIGNAL_OUTCOMES scope as performance evidence. Until the
-            # minimum sample + distinct-day gates are met, persist an explicitly
-            # non-performance COLLECTING scope so execution alone can never make
-            # Backtests flip to VERIFIED.
             evidence["scope"] = (
                 "PRODUCTION_SIGNAL_OUTCOMES"
                 if evidence.get("evidence_ready")
@@ -88,7 +106,7 @@ def persist_desks_from_market_scan(scan_payload: Mapping[str, Any] | None) -> di
                 "error": f"{type(exc).__name__}: {exc}",
             }
     except Exception as exc:
-        reco_status = type(exc).__name__
+        reco_status = f"{type(exc).__name__}: {exc}"
 
     reports_status = "skipped"
     try:
@@ -106,6 +124,7 @@ def persist_desks_from_market_scan(scan_payload: Mapping[str, Any] | None) -> di
     return {
         "recommendations": reco_status,
         "recommendation_cards": reco_cards,
+        "selection_authority": selection_summary,
         "production_signal_evidence": production_evidence,
         "market_reports": reports_status,
     }
