@@ -111,7 +111,9 @@ def apply_due_diligence_gate(card: Mapping[str, Any]) -> dict[str, Any]:
     symbol = str(out.get("symbol") or "").strip().upper()
     try:
         from product.due_diligence import build_due_diligence
-        report = build_due_diligence(symbol)
+        # Whole-market recommendation builds must never fan out to per-symbol web
+        # enrichment. Interactive Company Intelligence attaches corporate actions.
+        report = build_due_diligence(symbol, include_corporate_actions=False)
     except Exception as exc:
         out["deep_confirm"] = False
         out["due_diligence_gate"] = {"status": "unavailable", "passed": False, "reasons": [f"{type(exc).__name__}: {exc}"]}
